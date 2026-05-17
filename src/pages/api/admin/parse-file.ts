@@ -1,17 +1,50 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
 import { parseUpload } from "../../../lib/fileParse";
-import { generateAIProposalFromContent } from "../../../lib/travelOps";
+import { generateAIProposalFromContentBatched } from "../../../lib/travelOps";
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
 
 export const config = {
   api: {
-    bodyParser: { sizeLimit: "20mb" },
+    bodyParser: { sizeLimit: "140mb" },
   },
 };
 
+const MAX_UPLOAD_COUNT = 20;
+
 function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+type UploadPayload = {
+  filename: string;
+  mimeType: string;
+  dataBase64: string;
+};
+
+function collectUploads(body: Record<string, unknown>): UploadPayload[] {
+  if (Array.isArray(body.uploads)) {
+    return body.uploads
+      .map((item) => {
+        const entry = item && typeof item === "object" ? item : {};
+        return {
+          filename: asText((entry as Record<string, unknown>).filename) || "upload",
+          mimeType: asText((entry as Record<string, unknown>).mimeType),
+          dataBase64:
+            typeof (entry as Record<string, unknown>).dataBase64 === "string"
+              ? String((entry as Record<string, unknown>).dataBase64)
+              : "",
+        };
+      })
+      .filter((item) => item.dataBase64);
+  }
+
+  const fallback = {
+    filename: asText(body.filename) || "upload",
+    mimeType: asText(body.mimeType),
+    dataBase64: typeof body.dataBase64 === "string" ? body.dataBase64 : "",
+  };
+  return fallback.dataBase64 ? [fallback] : [];
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -30,29 +63,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (req.method !== "POST") return res.status(405).end();
 
     const body = req.body && typeof req.body === "object" ? req.body : {};
-    const filename = asText(body.filename) || "upload";
-    const mimeType = asText(body.mimeType);
-    const dataBase64 = typeof body.dataBase64 === "string" ? body.dataBase64 : "";
-    const note = asText(body.note);
+    const note = asText((body as Record<string, unknown>).note);
+    const uploads = collectUploads(body as Record<string, unknown>);
 
-    if (!dataBase64) {
-      return res.status(400).json({ error: "Файл хавсаргаагүй байна." });
+    if (uploads.length === 0) {
+      return res.status(400).json({ error: "No uploaded file data was provided." });
     }
-
-    let parsed;
-    try {
-      parsed = await parseUpload({ filename, mimeType, dataBase64 });
-    } catch (error) {
+    if (uploads.length > MAX_UPLOAD_COUNT) {
       return res.status(400).json({
-        error: error instanceof Error ? error.message : "Файлыг уншиж чадсангүй.",
+        error: `Attach up to ${MAX_UPLOAD_COUNT} files per request.`,
       });
     }
 
-    const result = await generateAIProposalFromContent({
-      label: parsed.label,
+    let parsedUploads;
+    try {
+      parsedUploads = await Promise.all(uploads.map((upload) => parseUpload(upload)));
+    } catch (error) {
+      return res.status(400).json({
+        error: error instanceof Error ? error.message : "Failed to parse uploaded file.",
+      });
+    }
+
+    const result = await generateAIProposalFromContentBatched({
       note: note || undefined,
-      contentText: parsed.text || undefined,
-      inline: parsed.inline,
+      sources: parsedUploads.map((parsed) => ({
+        label: parsed.label,
+        contentText: parsed.text || undefined,
+        inline: parsed.inline,
+      })),
     });
 
     return res.status(200).json({
@@ -63,7 +101,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (error) {
     return res.status(500).json({
-      error: error instanceof Error ? error.message : "Дотоод алдаа гарлаа.",
+      error: error instanceof Error ? error.message : "Internal server error.",
     });
   } finally {
     finishRequestTrace(trace, res.statusCode || 500);

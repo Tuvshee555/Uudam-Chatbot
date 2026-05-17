@@ -9,10 +9,9 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test tests/**/*.test.ts",
+    "test": "node scripts/run-tests.mjs",
     "chaos": "node --import tsx scripts/chaos.ts",
     "preflight": "node --import tsx scripts/preflight.ts",
-    "seed": "node --import tsx scripts/seed-from-business-json.ts",
     "validate": "npm run lint && npm run typecheck && npm run test && npm run build",
     "fb:subscribe-page": "node scripts/subscribe-page-app.mjs"
   },

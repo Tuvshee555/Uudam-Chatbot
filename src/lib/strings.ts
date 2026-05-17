@@ -1,3 +1,5 @@
+import { fixMojibake } from "./encoding";
+
 /**
  * SINGLE SOURCE OF TRUTH for all user-facing copy.
  *
@@ -301,5 +303,22 @@ const mn = {
 
 export type Copy = typeof mn;
 
+function deepFixMojibake<T>(value: T): T {
+  if (typeof value === "string") {
+    return fixMojibake(value) as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => deepFixMojibake(item)) as T;
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value).map(([key, entry]) => [
+      key,
+      deepFixMojibake(entry),
+    ]);
+    return Object.fromEntries(entries) as T;
+  }
+  return value;
+}
+
 /** The active translation dictionary. */
-export const t: Copy = mn;
+export const t: Copy = deepFixMojibake(mn);

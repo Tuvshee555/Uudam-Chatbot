@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { askGeminiParts, type GeminiPart } from "./gemini";
 import { getEnv } from "./env";
+import { fixMojibake } from "./encoding";
 import { logError, recordCounter } from "./observability";
 import { queryNeon, withNeonClient } from "./neonDb";
 import type {
@@ -115,6 +116,9 @@ type AIChangeRequestRow = {
 };
 
 const env = getEnv();
+const FILE_PARSE_GEMINI_TIMEOUT_MS = Math.max(env.geminiTimeoutMs, 60_000);
+const FILE_PARSE_GEMINI_MAX_RETRIES = 0;
+const FILE_PARSE_REPAIR_TIMEOUT_MS = 20_000;
 let schemaEnsured = false;
 let schemaPromise: Promise<boolean> | null = null;
 let botControlCache:
@@ -272,10 +276,8 @@ export async function ensureTravelSchema() {
       await client.query(`
         ALTER TABLE travel_bot_settings
           ADD COLUMN IF NOT EXISTS handoff_enabled BOOLEAN NOT NULL DEFAULT TRUE,
-          ADD COLUMN IF NOT EXISTS handoff_keywords TEXT[] NOT NULL DEFAULT
-            ARRAY['хүнтэй ярих','хүнтэй ярья','хүнтэй холбогдъё','хүнтэй холбоо','ажилтантай ярих','ажилтантай холбогдъё','оператортой ярих','жинхэнэ хүн','бодит хүн','хүн рүү холбо','talk to human','talk to a person','real person','customer service','speak to someone','live agent']::text[],
-          ADD COLUMN IF NOT EXISTS handoff_reply TEXT NOT NULL DEFAULT
-            'Таны хүсэлтийг хүлээн авлаа. Манай ажилтан удахгүй тантай холбогдоно. Түр хүлээнэ үү. 🙋',
+          ADD COLUMN IF NOT EXISTS handoff_keywords TEXT[] NOT NULL DEFAULT '{}'::text[],
+          ADD COLUMN IF NOT EXISTS handoff_reply TEXT NOT NULL DEFAULT '',
           ADD COLUMN IF NOT EXISTS handoff_pause_minutes INTEGER NOT NULL DEFAULT 60;
       `);
       await client.query(`
@@ -312,6 +314,32 @@ function asTrimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function normalizeStoredText(value: unknown): string {
+  const trimmed = asTrimmedString(value);
+  if (!trimmed) return "";
+
+  const fixed = fixMojibake(trimmed).replaceAll("\uFFFD", "").trim();
+  const compact = fixed.replace(/\s+/g, "");
+  const questionMarks = (compact.match(/\?/g) || []).length;
+  if (compact.length >= 8 && questionMarks / compact.length > 0.25) {
+    return "";
+  }
+  return fixed;
+}
+
+function normalizeStoredTextArray(value: unknown, max = 120): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    const text = normalizeStoredText(item);
+    if (!text) continue;
+    if (out.includes(text)) continue;
+    out.push(text);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
 function normalizeTextArray(value: unknown, max = 120): string[] {
   if (!Array.isArray(value)) return [];
   const out: string[] = [];
@@ -338,12 +366,12 @@ function normalizeSpecialOffers(value: unknown): SpecialOffer[] {
     .map((entry) => {
       const item = entry as Record<string, unknown>;
       return {
-        name: asTrimmedString(item.name),
-        duration: asTrimmedString(item.duration),
+        name: normalizeStoredText(item.name),
+        duration: normalizeStoredText(item.duration),
         price: normalizeProgramPrice(item.price),
-        target: asTrimmedString(item.target),
-        description: asTrimmedString(item.description),
-        eligibility: asTrimmedString(item.eligibility),
+        target: normalizeStoredText(item.target),
+        description: normalizeStoredText(item.description),
+        eligibility: normalizeStoredText(item.eligibility),
       };
     });
 }
@@ -356,12 +384,12 @@ function normalizeDiscountPolicies(value: unknown): DiscountPolicy[] {
     .map((entry) => {
       const item = entry as Record<string, unknown>;
       return {
-        name: asTrimmedString(item.name),
-        discount: asTrimmedString(item.discount),
-        applies_to: asTrimmedString(item.applies_to),
-        eligibility: asTrimmedString(item.eligibility),
-        description: asTrimmedString(item.description),
-        verification: asTrimmedString(item.verification),
+        name: normalizeStoredText(item.name),
+        discount: normalizeStoredText(item.discount),
+        applies_to: normalizeStoredText(item.applies_to),
+        eligibility: normalizeStoredText(item.eligibility),
+        description: normalizeStoredText(item.description),
+        verification: normalizeStoredText(item.verification),
       };
     });
 }
@@ -374,10 +402,10 @@ function normalizeVerifiedCredentials(value: unknown): VerifiedCredential[] {
     .map((entry) => {
       const item = entry as Record<string, unknown>;
       return {
-        title: asTrimmedString(item.title),
-        issuer: asTrimmedString(item.issuer),
-        issued_on: asTrimmedString(item.issued_on),
-        description: asTrimmedString(item.description),
+        title: normalizeStoredText(item.title),
+        issuer: normalizeStoredText(item.issuer),
+        issued_on: normalizeStoredText(item.issued_on),
+        description: normalizeStoredText(item.description),
       };
     });
 }
@@ -390,8 +418,8 @@ function normalizeFaq(value: unknown): FAQItem[] {
     .map((entry) => {
       const item = entry as Record<string, unknown>;
       return {
-        question: asTrimmedString(item.question),
-        answer: asTrimmedString(item.answer),
+        question: normalizeStoredText(item.question),
+        answer: normalizeStoredText(item.answer),
       };
     })
     .filter((item) => item.question || item.answer);
@@ -427,20 +455,20 @@ function emptyTravelBotSettings(): TravelBotSettings {
 function mapBotSettingsRow(row: Record<string, unknown> | undefined): TravelBotSettings {
   if (!row) return emptyTravelBotSettings();
   return {
-    business_name: asTrimmedString(row.business_name),
-    system_prompt: asTrimmedString(row.system_prompt),
-    quick_info_reply: asTrimmedString(row.quick_info_reply),
-    quick_info_keywords: normalizeTextArray(row.quick_info_keywords),
-    comment_trigger_patterns: normalizeTextArray(row.comment_trigger_patterns),
-    comment_public_reply: asTrimmedString(row.comment_public_reply),
-    comment_dm_reply: asTrimmedString(row.comment_dm_reply),
+    business_name: normalizeStoredText(row.business_name),
+    system_prompt: normalizeStoredText(row.system_prompt),
+    quick_info_reply: normalizeStoredText(row.quick_info_reply),
+    quick_info_keywords: normalizeStoredTextArray(row.quick_info_keywords),
+    comment_trigger_patterns: normalizeStoredTextArray(row.comment_trigger_patterns),
+    comment_public_reply: normalizeStoredText(row.comment_public_reply),
+    comment_dm_reply: normalizeStoredText(row.comment_dm_reply),
     special_offers: normalizeSpecialOffers(row.special_offers),
     discount_policies: normalizeDiscountPolicies(row.discount_policies),
     verified_credentials: normalizeVerifiedCredentials(row.verified_credentials),
     faq: normalizeFaq(row.faq),
     handoff_enabled: row.handoff_enabled == null ? true : Boolean(row.handoff_enabled),
-    handoff_keywords: normalizeTextArray(row.handoff_keywords),
-    handoff_reply: asTrimmedString(row.handoff_reply),
+    handoff_keywords: normalizeStoredTextArray(row.handoff_keywords),
+    handoff_reply: normalizeStoredText(row.handoff_reply),
     handoff_pause_minutes: normalizePauseMinutes(row.handoff_pause_minutes),
     updated_at: String(row.updated_at || new Date().toISOString()),
   };
@@ -595,15 +623,15 @@ export async function updateTravelBotSettings(
 function mapTripRow(row: Record<string, unknown>): TravelTrip {
   return {
     id: String(row.id || ""),
-    category: String(row.category || ""),
-    operator_name: String(row.operator_name || ""),
-    route_name: String(row.route_name || ""),
-    duration_text: String(row.duration_text || ""),
+    category: normalizeStoredText(row.category),
+    operator_name: normalizeStoredText(row.operator_name),
+    route_name: normalizeStoredText(row.route_name),
+    duration_text: normalizeStoredText(row.duration_text),
     adult_price: parseInteger(row.adult_price),
     child_price: parseInteger(row.child_price),
-    currency: String(row.currency || "MNT"),
+    currency: normalizeStoredText(row.currency) || "MNT",
     departure_dates: Array.isArray(row.departure_dates)
-      ? row.departure_dates.map((value) => String(value))
+      ? row.departure_dates.map((value) => normalizeStoredText(value)).filter(Boolean)
       : [],
     seats_total: parseInteger(row.seats_total),
     seats_left: parseInteger(row.seats_left),
@@ -614,8 +642,8 @@ function mapTripRow(row: Record<string, unknown>): TravelTrip {
           ? null
           : Boolean(row.has_food),
     status: coerceTripStatus(row.status),
-    notes: String(row.notes || ""),
-    source_description: String(row.source_description || ""),
+    notes: normalizeStoredText(row.notes),
+    source_description: normalizeStoredText(row.source_description),
     extra:
       row.extra && typeof row.extra === "object" && !Array.isArray(row.extra)
         ? (row.extra as Record<string, unknown>)
@@ -919,6 +947,11 @@ function cleanAIText(text: string): string {
   return text.replace(/```json|```/gi, "").trim();
 }
 
+function estimateInlineBytes(data?: string | null): number {
+  if (!data) return 0;
+  return Math.floor((data.length * 3) / 4);
+}
+
 function parseJsonFromModel(text: string): AIChangeProposal | null {
   const cleaned = cleanAIText(text);
   try {
@@ -935,6 +968,23 @@ function parseJsonFromModel(text: string): AIChangeProposal | null {
     }
     return null;
   }
+}
+
+function proposalFallbackFromRawText(text: string): AIChangeProposal {
+  const cleaned = cleanAIText(text).trim();
+  const preview = cleaned.slice(0, 900);
+  return {
+    summary: preview
+      ? "AI returned text, but it was not valid JSON yet."
+      : "AI did not return valid JSON.",
+    needs_confirmation: true,
+    important_reason:
+      "The uploaded files were read, but the model response could not be converted into the required action format automatically.",
+    conflicts: preview
+      ? [`Raw AI output preview: ${preview}`]
+      : ["AI response was empty or not valid JSON."],
+    actions: [],
+  };
 }
 
 function normalizeProposal(input: AIChangeProposal | null): AIChangeProposal {
@@ -958,6 +1008,51 @@ function normalizeProposal(input: AIChangeProposal | null): AIChangeProposal {
       ? input.actions.filter((action) => action && typeof action === "object")
       : [],
   };
+}
+
+function dedupeStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const cleaned = String(value || "").trim();
+    if (!cleaned || seen.has(cleaned)) continue;
+    seen.add(cleaned);
+    result.push(cleaned);
+  }
+  return result;
+}
+
+function dedupeActions(actions: AITripAction[]): AITripAction[] {
+  const seen = new Set<string>();
+  const result: AITripAction[] = [];
+  for (const action of actions) {
+    if (!action || typeof action !== "object") continue;
+    const key = JSON.stringify(action);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(action);
+  }
+  return result;
+}
+
+function buildProposalRepairGuide(rawText: string): string {
+  return [
+    "Convert the following model output into valid JSON only.",
+    "Return exactly one JSON object with this schema:",
+    "{",
+    '  "summary": "short summary",',
+    '  "needs_confirmation": true,',
+    '  "important_reason": "reason",',
+    '  "conflicts": ["item"],',
+    '  "actions": [',
+    '    { "action": "upsert|patch|cancel", "trip_id": "", "match": { "operator_name": "", "route_name": "" }, "fields": {} }',
+    "  ]",
+    "}",
+    "Do not add markdown fences or explanation text.",
+    "",
+    "Model output to repair:",
+    rawText,
+  ].join("\n");
 }
 
 function buildProposalGuide(condensedTrips: unknown): string {
@@ -1006,10 +1101,171 @@ function buildProposalGuide(condensedTrips: unknown): string {
   ].join("\n");
 }
 
-async function createProposal(opts: {
-  instruction: string;
+function buildBatchSourceParts(input: {
+  note?: string;
+  sources: Array<{
+    label: string;
+    contentText?: string;
+    inline?: { mimeType: string; data: string } | null;
+  }>;
+}) {
+  const parts: GeminiPart[] = [];
+  const sourceLabels = input.sources.map((source) => source.label).join(", ");
+  const guidance = [
+    `Sources: ${sourceLabels}`,
+    input.note ? `Admin note: ${input.note}` : "",
+    "Extract travel information from the attached files, images, or text, including route, operator, price, seats, departure date, meals, and status.",
+    "If possible, match against existing trips to update them; otherwise propose adding new trips.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  parts.push({ text: guidance });
+
+  for (const source of input.sources) {
+    if (source.contentText && source.contentText.trim()) {
+      parts.push({
+        text: `File contents (${source.label}) (HTML/text):\n${source.contentText.trim()}`,
+      });
+    }
+    if (source.inline) {
+      parts.push({ text: `Attached binary file: ${source.label}` });
+      parts.push({ inlineData: source.inline });
+    }
+  }
+
+  return { parts, sourceLabels };
+}
+
+function chunkProposalSources(
+  sources: Array<{
+    label: string;
+    contentText?: string;
+    inline?: { mimeType: string; data: string } | null;
+  }>,
+) {
+  const MAX_INLINE_SOURCES_PER_BATCH = 2;
+  const MAX_INLINE_BYTES_PER_BATCH = 12 * 1024 * 1024;
+  const MAX_TEXT_CHARS_PER_BATCH = 120_000;
+  const batches: Array<typeof sources> = [];
+  let current: typeof sources = [];
+  let inlineCount = 0;
+  let inlineBytes = 0;
+  let textChars = 0;
+
+  const flush = () => {
+    if (current.length > 0) {
+      batches.push(current);
+      current = [];
+      inlineCount = 0;
+      inlineBytes = 0;
+      textChars = 0;
+    }
+  };
+
+  for (const source of sources) {
+    const sourceInlineBytes = estimateInlineBytes(source.inline?.data);
+    const sourceInlineCount = source.inline ? 1 : 0;
+    const sourceTextChars = source.contentText?.length ?? 0;
+    const exceedsCurrentBatch =
+      current.length > 0 &&
+      (inlineCount + sourceInlineCount > MAX_INLINE_SOURCES_PER_BATCH ||
+        inlineBytes + sourceInlineBytes > MAX_INLINE_BYTES_PER_BATCH ||
+        textChars + sourceTextChars > MAX_TEXT_CHARS_PER_BATCH);
+
+    if (exceedsCurrentBatch) {
+      flush();
+    }
+
+    current.push(source);
+    inlineCount += sourceInlineCount;
+    inlineBytes += sourceInlineBytes;
+    textChars += sourceTextChars;
+  }
+
+  flush();
+  return batches;
+}
+
+function mergeBatchProposals(
+  proposals: AIChangeProposal[],
+  batchCount: number,
+): AIChangeProposal {
+  const actions = dedupeActions(proposals.flatMap((proposal) => proposal.actions || []));
+  const conflicts = dedupeStrings(
+    proposals.flatMap((proposal) => proposal.conflicts || []),
+  );
+  const importantReasons = dedupeStrings(
+    proposals
+      .map((proposal) => proposal.important_reason)
+      .filter((value) => String(value || "").trim().length > 0),
+  );
+  const summaries = dedupeStrings(
+    proposals
+      .map((proposal) => proposal.summary)
+      .filter((value) => String(value || "").trim().length > 0),
+  );
+
+  return {
+    summary:
+      summaries[0] && proposals.length === 1
+        ? summaries[0]
+        : actions.length > 0
+          ? `Combined ${batchCount} file batches into ${actions.length} suggested action(s).`
+          : `Processed ${batchCount} file batches, but no safe trip actions were produced automatically.`,
+    needs_confirmation: proposals.some((proposal) => proposal.needs_confirmation),
+    important_reason: importantReasons.join(" | "),
+    conflicts,
+    actions,
+  };
+}
+
+async function requestProposalFromModel(opts: {
+  condensedTrips: unknown;
   userParts: GeminiPart[];
   source: string;
+  timeoutMs?: number;
+  maxRetries?: number;
+  repairTimeoutMs?: number;
+}) {
+  const result = await askGeminiParts(
+    [{ text: buildProposalGuide(opts.condensedTrips) }, ...opts.userParts],
+    {
+      source: opts.source,
+      jsonMode: true,
+      timeoutMs: opts.timeoutMs,
+      maxRetries: opts.maxRetries,
+    },
+  );
+
+  let parsed = parseJsonFromModel(result.text);
+  if (!parsed) {
+    try {
+      const repaired = await askGeminiParts(
+        [{ text: buildProposalRepairGuide(result.text) }],
+        {
+          source: `${opts.source}.repair`,
+          jsonMode: true,
+          timeoutMs: opts.repairTimeoutMs,
+          maxRetries: 0,
+        },
+      );
+      parsed = parseJsonFromModel(repaired.text);
+    } catch (error) {
+      logError("travel.ai.proposal_repair_failed", {
+        source: opts.source,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return parsed ? normalizeProposal(parsed) : proposalFallbackFromRawText(result.text);
+}
+
+async function createProposal(opts: {
+  instruction: string;
+  source: string;
+  userParts?: GeminiPart[];
+  buildProposal?: (condensedTrips: unknown) => Promise<AIChangeProposal>;
 }) {
   const ready = await ensureTravelSchema();
   if (!ready) {
@@ -1035,11 +1291,15 @@ async function createProposal(opts: {
 
   let proposal = normalizeProposal(null);
   try {
-    const result = await askGeminiParts(
-      [{ text: buildProposalGuide(condensedTrips) }, ...opts.userParts],
-      { source: opts.source, jsonMode: true },
-    );
-    proposal = normalizeProposal(parseJsonFromModel(result.text));
+    if (typeof opts.buildProposal === "function") {
+      proposal = normalizeProposal(await opts.buildProposal(condensedTrips));
+    } else {
+      const result = await askGeminiParts(
+        [{ text: buildProposalGuide(condensedTrips) }, ...(opts.userParts || [])],
+        { source: opts.source, jsonMode: true },
+      );
+      proposal = normalizeProposal(parseJsonFromModel(result.text));
+    }
   } catch (error) {
     logError("travel.ai.proposal_failed", {
       source: opts.source,
@@ -1082,39 +1342,131 @@ export async function generateAIProposal(instruction: string) {
 }
 
 export async function generateAIProposalFromContent(input: {
-  label: string;
+  label?: string;
   note?: string;
   contentText?: string;
   inline?: { mimeType: string; data: string } | null;
+  sources?: Array<{
+    label: string;
+    contentText?: string;
+    inline?: { mimeType: string; data: string } | null;
+  }>;
 }) {
   const parts: GeminiPart[] = [];
+  const sources =
+    input.sources && input.sources.length > 0
+      ? input.sources
+      : [
+          {
+            label: input.label || "upload",
+            contentText: input.contentText,
+            inline: input.inline,
+          },
+        ];
+
+  const sourceLabels = sources.map((source) => source.label).join(", ");
   const guidance = [
-    `Эх сурвалж: ${input.label}`,
-    input.note ? `Админы нэмэлт заавар: ${input.note}` : "",
-    "Доорх файл/зураг/текстээс аяллын мэдээллийг (маршрут, оператор, үнэ, суудал, гарах өдөр, хоол, төлөв) гарган ав.",
-    "Боломжтой бол одоо байгаа маршруттай тулгаж шинэчил, шинэ маршрутыг нэм.",
+    `Sources: ${sourceLabels}`,
+    input.note ? `Admin note: ${input.note}` : "",
+    "Extract travel information from the attached files, images, or text, including route, operator, price, seats, departure date, meals, and status.",
+    "If possible, match against existing trips to update them; otherwise propose adding new trips.",
   ]
     .filter(Boolean)
     .join("\n");
   parts.push({ text: guidance });
-  if (input.contentText && input.contentText.trim()) {
-    parts.push({
-      text: `Файлын агуулга (HTML/текст):\n${input.contentText.trim()}`,
-    });
-  }
-  if (input.inline) {
-    parts.push({ inlineData: input.inline });
+
+  for (const source of sources) {
+    if (source.contentText && source.contentText.trim()) {
+      parts.push({
+        text: `File contents (${source.label}) (HTML/text):\n${source.contentText.trim()}`,
+      });
+    }
+    if (source.inline) {
+      parts.push({ text: `Attached binary file: ${source.label}` });
+      parts.push({ inlineData: source.inline });
+    }
   }
 
   return createProposal({
     instruction: input.note
-      ? `[Файл] ${input.label} — ${input.note}`
-      : `[Файл] ${input.label}`,
+      ? `[File] ${sourceLabels} - ${input.note}`
+      : `[File] ${sourceLabels}`,
     userParts: parts,
     source: "travel.ops.file_parse",
   });
 }
 
+export async function generateAIProposalFromContentBatched(input: {
+  label?: string;
+  note?: string;
+  contentText?: string;
+  inline?: { mimeType: string; data: string } | null;
+  sources?: Array<{
+    label: string;
+    contentText?: string;
+    inline?: { mimeType: string; data: string } | null;
+  }>;
+}) {
+  const sources =
+    input.sources && input.sources.length > 0
+      ? input.sources
+      : [
+          {
+            label: input.label || "upload",
+            contentText: input.contentText,
+            inline: input.inline,
+          },
+        ];
+
+  const sourceLabels = sources.map((source) => source.label).join(", ");
+  const batches = chunkProposalSources(sources);
+
+  return createProposal({
+    instruction: input.note
+      ? `[File] ${sourceLabels} - ${input.note}`
+      : `[File] ${sourceLabels}`,
+    source: "travel.ops.file_parse",
+    buildProposal: async (condensedTrips) => {
+      const proposals: AIChangeProposal[] = [];
+
+      for (const batch of batches) {
+        const { parts, sourceLabels: batchLabels } = buildBatchSourceParts({
+          note: input.note,
+          sources: batch,
+        });
+        try {
+          proposals.push(
+            await requestProposalFromModel({
+              condensedTrips,
+              userParts: parts,
+              source: "travel.ops.file_parse",
+              timeoutMs: FILE_PARSE_GEMINI_TIMEOUT_MS,
+              maxRetries: FILE_PARSE_GEMINI_MAX_RETRIES,
+              repairTimeoutMs: FILE_PARSE_REPAIR_TIMEOUT_MS,
+            }),
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          logError("travel.ai.file_batch_failed", {
+            source: "travel.ops.file_parse",
+            batchLabels,
+            message,
+          });
+          proposals.push({
+            summary: `Could not finish reading batch: ${batchLabels}`,
+            needs_confirmation: true,
+            important_reason:
+              "One batch of uploaded files took too long or failed upstream, so the result may be incomplete.",
+            conflicts: [`Batch failed for ${batchLabels}: ${message}`],
+            actions: [],
+          });
+        }
+      }
+
+      return mergeBatchProposals(proposals, batches.length);
+    },
+  });
+}
 async function applyAIAction(action: AITripAction) {
   if (!action || typeof action !== "object") {
     return { ok: false, message: "Invalid action payload." };
@@ -1347,6 +1699,7 @@ export async function getDbDiagnostics() {
 export async function maybeRecordTravelMetric(action: string) {
   recordCounter("travel.ops.action_total", 1, { action });
 }
+
 
 
 

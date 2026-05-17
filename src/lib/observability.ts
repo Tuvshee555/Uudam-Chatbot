@@ -71,7 +71,16 @@ type GaugeMetric = {
 const counters = new Map<string, CounterMetric>();
 const histograms = new Map<string, HistogramMetric>();
 const gauges = new Map<string, GaugeMetric>();
-const startupDiagnosticsFlags = new Set<string>();
+const startupDiagnosticsFlags = (
+  globalThis as typeof globalThis & {
+    __uudamStartupDiagnosticsFlags?: Set<string>;
+  }
+).__uudamStartupDiagnosticsFlags ?? new Set<string>();
+(
+  globalThis as typeof globalThis & {
+    __uudamStartupDiagnosticsFlags?: Set<string>;
+  }
+).__uudamStartupDiagnosticsFlags = startupDiagnosticsFlags;
 const sinkQueue: SinkItem[] = [];
 
 let sinkFlushActive = false;

@@ -5,9 +5,27 @@ import { logError, logInfo, recordCounter } from "./observability";
 const env = getEnv();
 let pool: Pool | null = null;
 
+function normalizeConnectionString(connectionString: string): string {
+  try {
+    const url = new URL(connectionString);
+    const sslmode = url.searchParams.get("sslmode");
+    const useLibpqCompat = url.searchParams.get("uselibpqcompat");
+    if (
+      sslmode &&
+      ["prefer", "require", "verify-ca"].includes(sslmode) &&
+      useLibpqCompat !== "true"
+    ) {
+      url.searchParams.set("sslmode", "verify-full");
+    }
+    return url.toString();
+  } catch {
+    return connectionString;
+  }
+}
+
 function createPool(connectionString: string): Pool {
   return new Pool({
-    connectionString,
+    connectionString: normalizeConnectionString(connectionString),
     max: 6,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,

@@ -52,6 +52,9 @@ export type AskGeminiOptions = {
   correlationId?: string;
   source?: string;
   jsonMode?: boolean;
+  timeoutMs?: number;
+  maxRetries?: number;
+  model?: string;
 };
 
 /**
@@ -89,7 +92,9 @@ export async function askGeminiParts(
   options?: AskGeminiOptions,
 ): Promise<GeminiResult> {
   const key = env.geminiApiKey;
-  const model = process.env.GEMINI_MODEL || DEFAULT_MODEL;
+  const model = options?.model || process.env.GEMINI_MODEL || DEFAULT_MODEL;
+  const timeoutMs = options?.timeoutMs ?? env.geminiTimeoutMs;
+  const maxRetries = options?.maxRetries ?? env.geminiMaxRetries;
   const startedAt = Date.now();
   const source = options?.source || "unknown";
 
@@ -122,8 +127,8 @@ export async function askGeminiParts(
           },
           {
             upstream: "gemini.generateContent",
-            timeoutMs: env.geminiTimeoutMs,
-            maxRetries: env.geminiMaxRetries,
+            timeoutMs,
+            maxRetries,
             retryBaseDelayMs: env.geminiRetryBaseDelayMs,
             requestId: options?.requestId,
             correlationId: options?.correlationId,

@@ -785,7 +785,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext.Provider value={api}>
       {children}
       <div
-        className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center gap-2 p-4 sm:items-end"
+        className="pointer-events-none fixed inset-x-0 bottom-0 z-60 flex flex-col items-center gap-2 p-4 sm:items-end"
         aria-live="polite"
         role="status"
       >
@@ -859,7 +859,7 @@ export class ErrorBoundary extends Component<
   render() {
     if (!this.state.hasError) return this.props.children;
     return (
-      <div className="flex min-h-[100dvh] items-center justify-center px-4">
+      <div className="flex min-h-dvh items-center justify-center px-4">
         <Card className="w-full max-w-md p-6 text-center">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-danger-soft text-danger">
             <Icons.alert size={22} />

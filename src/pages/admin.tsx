@@ -124,7 +124,12 @@ type AIRecentRow = {
   applied_at: string | null;
 };
 
-type AdminMsg = { id: string; role: "admin"; text: string; fileName?: string };
+type AdminMsg = {
+  id: string;
+  role: "admin";
+  text: string;
+  fileNames?: string[];
+};
 type ProposalMsg = {
   id: string;
   role: "assistant";
@@ -144,7 +149,12 @@ type NoteMsg = {
 };
 type ChatMessage = AdminMsg | ProposalMsg | NoteMsg;
 
-type AttachedFile = { name: string; mimeType: string; dataUrl: string };
+type AttachedFile = {
+  id: string;
+  name: string;
+  mimeType: string;
+  dataUrl: string;
+};
 
 type TabKey = "assistant" | "trips" | "bot" | "settings";
 
@@ -152,7 +162,11 @@ type TabKey = "assistant" | "trips" | "bot" | "settings";
    Constants & helpers
    ---------------------------------------------------------------- */
 const SECRET_KEY = "travel_admin_secret";
-const MAX_FILE_BYTES = 12 * 1024 * 1024;
+const MAX_FILE_BYTES = 100 * 1024 * 1024;
+const MAX_TOTAL_FILE_BYTES = 100 * 1024 * 1024;
+const MAX_ATTACH_COUNT = 20;
+const ADMIN_AUTO_REFRESH_MS =
+  process.env.NODE_ENV === "development" ? 0 : 45_000;
 const ACCEPT_FILES =
   ".xlsx,.xlsm,.csv,.pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,image/*,application/pdf";
 
@@ -195,6 +209,15 @@ const DURATIONS: Array<{ label: string; ms: number | null }> = [
   { label: "∞", ms: null },
 ];
 
+const HANDOFF_DURATION_OPTIONS = [
+  { label: "30 min", value: "30" },
+  { label: "1 hour", value: "60" },
+  { label: "2 hours", value: "120" },
+  { label: "Until manual resume", value: "0" },
+] as const;
+
+const HANDOFF_DURATION_CUSTOM = "custom";
+
 const QUICK_ACTIONS: Array<{ label: string; prompt: string }> = [
   { label: "Аялал цуцлах", prompt: "Дараах аяллыг цуцал: " },
   { label: "Суудал шинэчлэх", prompt: "Дараах аяллын үлдсэн суудлыг шинэчил: " },
@@ -218,6 +241,11 @@ function asInt(value: string): number | null {
   if (!trimmed) return null;
   const parsed = Number(trimmed.replace(/,/g, ""));
   return Number.isFinite(parsed) ? Math.trunc(parsed) : null;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function shortId(value: string): string {
@@ -283,6 +311,14 @@ function splitLines(value: string): string[] {
     .split(/\r?\n/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function handoffDurationSelectValue(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "60";
+  return HANDOFF_DURATION_OPTIONS.some((option) => option.value === trimmed)
+    ? trimmed
+    : HANDOFF_DURATION_CUSTOM;
 }
 
 function describeAction(action: AIAction): {
@@ -487,7 +523,7 @@ export default function AdminPage() {
     },
   ]);
   const [aiInput, setAiInput] = useState("");
-  const [attachedFile, setAttachedFile] = useState<AttachedFile | null>(null);
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [dragOver, setDragOver] = useState(false);
 
   const [editingTrip, setEditingTrip] = useState<TravelTrip | null>(null);
@@ -508,6 +544,16 @@ export default function AdminPage() {
     },
     [secret],
   );
+
+  const readJsonSafe = useCallback(async (response: Response) => {
+    const raw = await response.text();
+    if (!raw) return {} as Record<string, unknown>;
+    try {
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return { error: raw.slice(0, 300) } as Record<string, unknown>;
+    }
+  }, []);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -583,10 +629,11 @@ export default function AdminPage() {
   }, []);
 
   useEffect(() => {
+    if (ADMIN_AUTO_REFRESH_MS <= 0) return;
     const refresh = setInterval(() => {
       if (typeof document !== "undefined" && document.hidden) return;
       void loadAll();
-    }, 45000);
+    }, ADMIN_AUTO_REFRESH_MS);
     return () => clearInterval(refresh);
   }, [loadAll]);
 
@@ -616,72 +663,129 @@ export default function AdminPage() {
     setChatMessages((prev) => [...prev, message]);
   }
 
-  async function attachFile(file: File) {
-    if (file.size > MAX_FILE_BYTES) {
-      toast.error("Файл хэт том байна (12MB-ээс бага байх ёстой).");
+  async function readAttachedFile(file: File): Promise<AttachedFile> {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("read failed"));
+      reader.readAsDataURL(file);
+    });
+
+    return {
+      id: `${file.name}:${file.size}:${file.lastModified}`,
+      name: file.name,
+      mimeType: file.type || "",
+      dataUrl,
+    };
+  }
+
+  async function attachFiles(files: FileList | File[]) {
+    const inputFiles = Array.from(files);
+    if (inputFiles.length === 0) return;
+
+    const oversized = inputFiles.filter((file) => file.size > MAX_FILE_BYTES);
+    if (oversized.length > 0) {
+      toast.error("Some files are too large. Keep each upload under 100MB.");
+    }
+
+    const acceptedFiles = inputFiles.filter((file) => file.size <= MAX_FILE_BYTES);
+    if (acceptedFiles.length === 0) return;
+
+    if (attachedFiles.length + acceptedFiles.length > MAX_ATTACH_COUNT) {
+      toast.error(`Keep the total attached files at ${MAX_ATTACH_COUNT} or less.`);
       return;
     }
+
+    const currentAttachedBytes = attachedFiles.reduce(
+      (sum, file) => sum + Math.floor((file.dataUrl.length * 3) / 4),
+      0,
+    );
+    const totalBytes =
+      currentAttachedBytes + acceptedFiles.reduce((sum, file) => sum + file.size, 0);
+    if (totalBytes > MAX_TOTAL_FILE_BYTES) {
+      toast.error(
+        `This batch is too large (${formatBytes(totalBytes)}). Keep one request under ${formatBytes(MAX_TOTAL_FILE_BYTES)}.`,
+      );
+      return;
+    }
+
     try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ""));
-        reader.onerror = () => reject(new Error("read failed"));
-        reader.readAsDataURL(file);
-      });
-      setAttachedFile({
-        name: file.name,
-        mimeType: file.type || "",
-        dataUrl,
+      const nextFiles = await Promise.all(
+        acceptedFiles.map((file) => readAttachedFile(file)),
+      );
+      setAttachedFiles((prev) => {
+        const existing = new Set(prev.map((file) => file.id));
+        const deduped = nextFiles.filter((file) => !existing.has(file.id));
+        return [...prev, ...deduped];
       });
     } catch {
-      toast.error("Файл уншихад алдаа гарлаа.");
+      toast.error("Failed to read one or more files.");
     }
+  }
+
+  function removeAttachedFile(fileId: string) {
+    setAttachedFiles((prev) => prev.filter((file) => file.id !== fileId));
   }
 
   async function sendAssistant() {
     const text = aiInput.trim();
-    const file = attachedFile;
-    if (!text && !file) return;
+    const files = attachedFiles;
+    if (!text && files.length === 0) return;
     if (busyKey === "ai-send") return;
 
     pushMessage({
       id: uid(),
       role: "admin",
-      text: text || "(хавсралт)",
-      fileName: file?.name,
+      text: text || "(attachment only)",
+      fileNames: files.map((file) => file.name),
     });
     setAiInput("");
-    setAttachedFile(null);
+    setAttachedFiles([]);
     setBusyKey("ai-send");
 
     try {
       let data: { proposal?: AIProposal; request_id?: number; error?: string };
-      if (file) {
+      if (files.length > 0) {
         const res = await fetchWithAdmin("/api/admin/parse-file", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            filename: file.name,
-            mimeType: file.mimeType,
-            dataBase64: file.dataUrl,
+            uploads: files.map((file) => ({
+              filename: file.name,
+              mimeType: file.mimeType,
+              dataBase64: file.dataUrl,
+            })),
             note: text,
           }),
         });
-        data = await res.json();
-        if (!res.ok) throw new Error(data?.error || "Файл боловсруулж чадсангүй.");
+        const json = await readJsonSafe(res);
+        data = json as typeof data;
+        if (!res.ok) {
+          if (res.status === 413) {
+            throw new Error(
+              `Upload is too large for one request. Keep the total under ${formatBytes(MAX_TOTAL_FILE_BYTES)}.`,
+            );
+          }
+          throw new Error(data?.error || "Could not process the uploaded files.");
+        }
       } else {
         const res = await fetchWithAdmin("/api/admin/ai-change", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ instruction: text }),
         });
-        data = await res.json();
-        if (!res.ok) throw new Error(data?.error || "AI санал үүсгэж чадсангүй.");
+        const json = await readJsonSafe(res);
+        data = json as typeof data;
+        if (!res.ok) {
+          throw new Error(data?.error || "Could not generate an AI proposal.");
+        }
       }
 
       const proposal = data.proposal;
       if (!proposal || !Array.isArray(proposal.actions)) {
-        throw new Error("AI тодорхой санал гаргаж чадсангүй. Дахин оролдоно уу.");
+        throw new Error(
+          "AI did not return a usable proposal. Please try again with a clearer instruction.",
+        );
       }
       if (proposal.actions.length === 0) {
         pushMessage({
@@ -691,7 +795,7 @@ export default function AdminPage() {
           tone: "info",
           text:
             proposal.summary ||
-            "Өөрчлөх зүйл олдсонгүй. Илүү тодорхой бичиж эсвэл өөр файл оруулна уу.",
+            "No actionable changes were found. Try adding more detail or another file.",
         });
         return;
       }
@@ -711,13 +815,17 @@ export default function AdminPage() {
         role: "assistant",
         kind: "note",
         tone: "error",
-        text: err instanceof Error ? err.message : "Алдаа гарлаа.",
+        text:
+          err instanceof TypeError
+            ? `Upload failed before the server could reply. Try fewer files or keep the total under ${formatBytes(MAX_TOTAL_FILE_BYTES)}.`
+            : err instanceof Error
+              ? err.message
+              : "Something went wrong.",
       });
     } finally {
       setBusyKey("");
     }
   }
-
   function setProposalMessage(id: string, patch: Partial<ProposalMsg>) {
     setChatMessages((prev) =>
       prev.map((message) =>
@@ -928,7 +1036,7 @@ export default function AdminPage() {
 
   if (requiresAuth || (!openAccess && !secret.trim())) {
     return (
-      <div className="flex min-h-[100dvh] items-center justify-center bg-canvas px-4">
+      <div className="flex min-h-dvh items-center justify-center bg-canvas px-4">
         <Head>
           <title>Админ — нэвтрэх</title>
         </Head>
@@ -957,14 +1065,14 @@ export default function AdminPage() {
   }
 
   const tabs: Array<{ key: TabKey; label: string; icon: ReactNode }> = [
-    { key: "assistant", label: "AI Туслах", icon: <Icons.ai size={17} /> },
-    { key: "trips", label: "Аяллууд", icon: <Icons.trips size={17} /> },
-    { key: "bot", label: "Бот", icon: <Icons.control size={17} /> },
-    { key: "settings", label: "Тохиргоо", icon: <Icons.settings size={17} /> },
+    { key: "assistant", label: "AI Updates", icon: <Icons.ai size={17} /> },
+    { key: "trips", label: "Trips Data", icon: <Icons.trips size={17} /> },
+    { key: "bot", label: "Pause / Handoff", icon: <Icons.control size={17} /> },
+    { key: "settings", label: "Bot Settings", icon: <Icons.settings size={17} /> },
   ];
 
   return (
-    <div className="min-h-[100dvh] bg-canvas pb-16">
+    <div className="min-h-dvh bg-canvas pb-16">
       <Head>
         <title>Аяллын удирдлагын самбар</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -983,6 +1091,9 @@ export default function AdminPage() {
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
+              <Button href="/" size="sm" variant="secondary">
+                Test live bot
+              </Button>
               {handoffRows.length > 0 && (
                 <button type="button" onClick={() => setTab("bot")}>
                   <Badge tone="warning" dot>
@@ -1039,13 +1150,26 @@ export default function AdminPage() {
           </div>
         )}
 
+        <div className="mb-4">
+          <Alert tone="info">
+            {tab === "assistant" &&
+              "AI Updates is for changing trip data from text or files. It is not the customer chat. Use 'Test live bot' to test real replies."}
+            {tab === "trips" &&
+              "Trips Data shows the current trip records in your database. Edit them by hand here."}
+            {tab === "bot" &&
+              "Pause / Handoff lets you stop the bot, resume it, or hand a customer over to a human."}
+            {tab === "settings" &&
+              "Bot Settings controls the bot name, rules, fixed replies, comment replies, and human handoff text."}
+          </Alert>
+        </div>
+
         {tab === "assistant" && (
           <AssistantTab
             messages={chatMessages}
             aiInput={aiInput}
             setAiInput={setAiInput}
-            attachedFile={attachedFile}
-            setAttachedFile={setAttachedFile}
+            attachedFiles={attachedFiles}
+            onRemoveAttachedFile={removeAttachedFile}
             dragOver={dragOver}
             setDragOver={setDragOver}
             busy={busyKey === "ai-send"}
@@ -1059,7 +1183,7 @@ export default function AdminPage() {
               setProposalMessage(id, { confirmChecked: value })
             }
             onPickFile={() => fileInputRef.current?.click()}
-            onDropFile={(file) => void attachFile(file)}
+            onDropFiles={(files) => void attachFiles(files)}
             aiRecent={aiRecent}
             chatEndRef={chatEndRef}
             inputRef={inputRef}
@@ -1112,10 +1236,11 @@ export default function AdminPage() {
         ref={fileInputRef}
         type="file"
         accept={ACCEPT_FILES}
+        multiple
         className="hidden"
         onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) void attachFile(file);
+          const files = e.target.files;
+          if (files?.length) void attachFiles(files);
           e.target.value = "";
         }}
       />
@@ -1280,8 +1405,8 @@ function AssistantTab({
   messages,
   aiInput,
   setAiInput,
-  attachedFile,
-  setAttachedFile,
+  attachedFiles,
+  onRemoveAttachedFile,
   dragOver,
   setDragOver,
   busy,
@@ -1291,7 +1416,7 @@ function AssistantTab({
   onCancelProposal,
   onToggleConfirm,
   onPickFile,
-  onDropFile,
+  onDropFiles,
   aiRecent,
   chatEndRef,
   inputRef,
@@ -1299,8 +1424,8 @@ function AssistantTab({
   messages: ChatMessage[];
   aiInput: string;
   setAiInput: (value: string) => void;
-  attachedFile: AttachedFile | null;
-  setAttachedFile: (value: AttachedFile | null) => void;
+  attachedFiles: AttachedFile[];
+  onRemoveAttachedFile: (fileId: string) => void;
   dragOver: boolean;
   setDragOver: (value: boolean) => void;
   busy: boolean;
@@ -1310,13 +1435,41 @@ function AssistantTab({
   onCancelProposal: (id: string) => void;
   onToggleConfirm: (id: string, value: boolean) => void;
   onPickFile: () => void;
-  onDropFile: (file: File) => void;
+  onDropFiles: (files: FileList | File[]) => void;
   aiRecent: AIRecentRow[];
   chatEndRef: React.RefObject<HTMLDivElement | null>;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
 }) {
+  const attachedTotalBytes = attachedFiles.reduce(
+    (sum, file) => sum + Math.floor((file.dataUrl.length * 3) / 4),
+    0,
+  );
+
   return (
     <div className="space-y-4">
+      <Card className="p-4">
+        <SectionHeading
+          title="AI trip updates"
+          description="Use this tab to update trips with AI from text, Excel, CSV, PDF, or photos. Nothing is saved until you approve the proposed changes."
+          action={
+            <Button href="/" size="sm" variant="secondary">
+              Open live bot test
+            </Button>
+          }
+        />
+        <div className="mt-3 grid gap-2 text-sm text-ink-muted sm:grid-cols-3">
+          <div className="rounded-md border border-line bg-surface-sunken px-3 py-2">
+            1. Add a file or type an instruction.
+          </div>
+          <div className="rounded-md border border-line bg-surface-sunken px-3 py-2">
+            2. AI reads it and prepares a safe proposal.
+          </div>
+          <div className="rounded-md border border-line bg-surface-sunken px-3 py-2">
+            3. You approve it before any trip data changes.
+          </div>
+        </div>
+      </Card>
+
       <Card
         className={cx(
           "flex flex-col overflow-hidden",
@@ -1330,12 +1483,11 @@ function AssistantTab({
         onDrop={(e) => {
           e.preventDefault();
           setDragOver(false);
-          const file = e.dataTransfer.files?.[0];
-          if (file) onDropFile(file);
+          const files = e.dataTransfer.files;
+          if (files?.length) onDropFiles(files);
         }}
       >
-        {/* messages */}
-        <div className="scroll-area max-h-[55dvh] min-h-[280px] space-y-3 overflow-y-auto p-3.5">
+        <div className="scroll-area max-h-[55dvh] min-h-70 space-y-3 overflow-y-auto p-3.5">
           {messages.map((message) => (
             <ChatBubble
               key={message.id}
@@ -1355,7 +1507,6 @@ function AssistantTab({
           <div ref={chatEndRef} />
         </div>
 
-        {/* quick actions */}
         <div className="scroll-area flex gap-1.5 overflow-x-auto border-t border-line bg-surface-sunken px-3 py-2">
           {QUICK_ACTIONS.map((action) => (
             <button
@@ -1372,30 +1523,50 @@ function AssistantTab({
           ))}
         </div>
 
-        {/* attached file chip */}
-        {attachedFile && (
-          <div className="flex items-center gap-2 border-t border-line bg-brand-soft px-3 py-2">
-            <Icons.database size={15} className="text-brand" />
-            <span className="min-w-0 flex-1 truncate text-sm text-brand">
-              {attachedFile.name}
-            </span>
-            <button
-              type="button"
-              onClick={() => setAttachedFile(null)}
-              aria-label="Хавсралт хасах"
-              className="text-brand hover:opacity-70"
-            >
-              <Icons.close size={16} />
-            </button>
+        {attachedFiles.length > 0 && (
+          <div className="border-t border-line bg-brand-soft px-3 py-2">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5 text-sm font-medium text-brand">
+                <Icons.database size={15} className="text-brand" />
+                {attachedFiles.length} file{attachedFiles.length === 1 ? "" : "s"} attached
+              </span>
+              <span className="text-xs text-brand/80">
+                approx {formatBytes(attachedTotalBytes)}
+              </span>
+              <button
+                type="button"
+                onClick={() => attachedFiles.forEach((file) => onRemoveAttachedFile(file.id))}
+                className="text-xs font-medium text-brand hover:opacity-70"
+              >
+                Clear all
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {attachedFiles.map((file) => (
+                <span
+                  key={file.id}
+                  className="inline-flex max-w-full items-center gap-2 rounded-full border border-brand/20 bg-white/70 px-3 py-1 text-sm text-brand"
+                >
+                  <span className="truncate">{file.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => onRemoveAttachedFile(file.id)}
+                    aria-label={`Remove ${file.name}`}
+                    className="shrink-0 hover:opacity-70"
+                  >
+                    <Icons.close size={14} />
+                  </button>
+                </span>
+              ))}
+            </div>
           </div>
         )}
 
-        {/* input bar */}
         <div className="flex items-end gap-2 border-t border-line p-2.5">
           <button
             type="button"
             onClick={onPickFile}
-            aria-label="Файл хавсаргах"
+            aria-label="Attach files"
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-line-strong text-ink-muted hover:border-brand hover:text-brand"
           >
             <Icons.plus size={18} />
@@ -1411,22 +1582,21 @@ function AssistantTab({
               }
             }}
             rows={1}
-            placeholder="Жишээ: Бангкок аяллын үлдсэн суудлыг 3 болго…"
+            placeholder="Example: update Bangkok trip seats to 3, or attach price-list files/photos"
             className="scroll-area max-h-32 min-h-10 flex-1 resize-none rounded-md border border-line-strong bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-brand"
           />
           <Button
             onClick={onSend}
-            disabled={busy || (!aiInput.trim() && !attachedFile)}
+            disabled={busy || (!aiInput.trim() && attachedFiles.length === 0)}
             className="h-10 shrink-0"
           >
-            Илгээх
+            Send
           </Button>
         </div>
       </Card>
 
       <p className="px-1 text-xs text-ink-subtle">
-        Excel, PDF, зураг, текст файл дэмжинэ. Хүснэгтэн файлыг шууд уншиж,
-        зургийг ч таньж чадна. Өөрчлөлт бүрийг та зөвшөөрсний дараа л хадгална.
+        Excel and CSV files are converted into HTML tables for easier model reading. You can attach multiple PDFs, photos, and text files too. Keep each file under 100MB and one request under 100MB total.
       </p>
 
       {aiRecent.length > 0 && (
@@ -1470,7 +1640,6 @@ function AssistantTab({
     </div>
   );
 }
-
 function ChatBubble({
   message,
   applyBusy,
@@ -1488,13 +1657,13 @@ function ChatBubble({
     return (
       <div className="flex justify-end">
         <div className="max-w-[85%] rounded-xl rounded-br-sm bg-brand px-3.5 py-2 text-sm text-white">
-          {message.fileName && (
+          {message.fileNames && message.fileNames.length > 0 && (
             <span className="mb-1 flex items-center gap-1.5 text-xs text-white/80">
               <Icons.database size={13} />
-              {message.fileName}
+              {message.fileNames.join(", ")}
             </span>
           )}
-          <p className="whitespace-pre-wrap break-words">{message.text}</p>
+          <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
         </div>
       </div>
     );
@@ -1818,25 +1987,52 @@ function BotTab({
             {handoffRows.map((row) => (
               <div
                 key={row.sender_id}
-                className="flex items-center justify-between gap-2 rounded-md border border-warning/40 bg-surface p-2.5"
+                className="rounded-md border border-warning/40 bg-surface p-2.5"
               >
-                <div className="min-w-0">
-                  <p className="truncate font-mono text-xs text-ink">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-mono text-xs text-ink">
                     {shortId(row.sender_id)}
                   </p>
-                  <p className="text-xs text-ink-subtle">
+                    <p className="text-xs text-ink-subtle">
                     Хүссэн: {formatTime(row.paused_at)} · Дуусах:{" "}
                     {tick >= 0 ? timeLeft(row.expires_at) : ""}
-                  </p>
-                </div>
+                    </p>
+                  </div>
                 <Button
                   size="sm"
                   variant="success"
-                  disabled={busyKey === `resume:${row.sender_id}`}
+                  disabled={
+                    busyKey === `resume:${row.sender_id}` ||
+                    busyKey === `pause:${row.sender_id}`
+                  }
                   onClick={() => onPauseAction("resume", row.sender_id)}
                 >
                   Ботыг сэргээх
                 </Button>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {[
+                    { label: "30 min", ms: 30 * 60 * 1000 },
+                    { label: "1 hour", ms: 60 * 60 * 1000 },
+                    { label: "Manual", ms: null },
+                  ].map((option) => (
+                    <button
+                      key={option.label}
+                      type="button"
+                      disabled={
+                        busyKey === `pause:${row.sender_id}` ||
+                        busyKey === `resume:${row.sender_id}`
+                      }
+                      onClick={() =>
+                        onPauseAction("pause", row.sender_id, option.ms)
+                      }
+                      className="rounded-md border border-warning/40 bg-warning-soft px-2 py-1 text-xs font-medium text-warning hover:border-warning"
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
@@ -1986,37 +2182,62 @@ function SettingsTab({
     setForm((prev) => (prev ? { ...prev, ...partial } : prev));
   }
 
+  const handoffDurationMode = handoffDurationSelectValue(form.handoff_pause_minutes);
+  const [showOptionalData, setShowOptionalData] = useState(false);
+
+  function clearOldText() {
+    patch({
+      quick_info_reply: '',
+      quick_info_keywords: '',
+      comment_trigger_patterns: '',
+      comment_public_reply: '',
+      comment_dm_reply: '',
+      faq: [],
+      special_offers: [],
+      discount_policies: [],
+      verified_credentials: [],
+    });
+  }
+
   return (
     <div className="space-y-3">
       <Card className="p-4">
         <SectionHeading
-          title="Бизнесийн тохиргоо"
+          title="Basic bot info"
           description={
             updatedAt
-              ? `Сүүлд шинэчилсэн: ${formatTime(updatedAt)}`
-              : "Ботын үндсэн мэдээлэл."
+              ? `Last updated: ${formatTime(updatedAt)}`
+              : 'Main business name and core bot rules.'
+          }
+          action={
+            <Button size="sm" variant="ghost" onClick={clearOldText}>
+              Clear old text
+            </Button>
           }
         />
         <div className="mt-3 space-y-3">
           <Input
-            label="Бизнесийн нэр"
+            label="Business name"
             value={form.business_name}
             onChange={(e) => patch({ business_name: e.target.value })}
           />
           <Textarea
-            label="Системийн prompt (ботын зан төлөв)"
+            label="System prompt"
+            hint="Main rules for the customer-facing bot."
             rows={4}
             value={form.system_prompt}
             onChange={(e) => patch({ system_prompt: e.target.value })}
           />
           <Textarea
-            label="Хурдан мэдээллийн хариу"
+            label="Quick keyword reply"
+            hint="If a customer uses one of the keywords below, the bot sends this fixed reply."
             rows={3}
             value={form.quick_info_reply}
             onChange={(e) => patch({ quick_info_reply: e.target.value })}
           />
           <Textarea
-            label="Хурдан мэдээлэл өдөөгч түлхүүр (мөр тус бүр нэг)"
+            label="Quick keywords"
+            hint="One keyword or phrase per line."
             rows={3}
             value={form.quick_info_keywords}
             onChange={(e) => patch({ quick_info_keywords: e.target.value })}
@@ -2026,12 +2247,13 @@ function SettingsTab({
 
       <Card className="p-4">
         <SectionHeading
-          title="Сэтгэгдлийн хариу"
-          description="Facebook постын сэтгэгдэлд хариу өгөх тохиргоо."
+          title="Comment auto-replies"
+          description="Used for Facebook post comments."
         />
         <div className="mt-3 space-y-3">
           <Textarea
-            label="Сэтгэгдэл өдөөгч түлхүүр (мөр тус бүр нэг)"
+            label="Comment trigger keywords"
+            hint="One keyword or phrase per line."
             rows={3}
             value={form.comment_trigger_patterns}
             onChange={(e) =>
@@ -2039,13 +2261,15 @@ function SettingsTab({
             }
           />
           <Textarea
-            label="Нийтэд харагдах хариу"
+            label="Public comment reply"
+            hint="Visible reply posted under the comment."
             rows={2}
             value={form.comment_public_reply}
             onChange={(e) => patch({ comment_public_reply: e.target.value })}
           />
           <Textarea
-            label="Сэтгэгдлийн DM хариу"
+            label="DM reply after comment"
+            hint="Private message sent to the customer."
             rows={3}
             value={form.comment_dm_reply}
             onChange={(e) => patch({ comment_dm_reply: e.target.value })}
@@ -2055,8 +2279,8 @@ function SettingsTab({
 
       <Card className="p-4">
         <SectionHeading
-          title="Хүн рүү шилжүүлэх"
-          description="Хэрэглэгч «хүнтэй ярих» гэж хүсвэл бот түр зогсож, ажилтан хариулна."
+          title="Human handoff"
+          description="If a customer asks for a person, the bot pauses and your staff can take over."
         />
         <div className="mt-3 space-y-3">
           <label className="flex items-center gap-2.5 rounded-md border border-line bg-surface-sunken p-3">
@@ -2067,25 +2291,46 @@ function SettingsTab({
               onChange={(e) => patch({ handoff_enabled: e.target.checked })}
             />
             <span className="text-sm font-medium text-ink">
-              Хүн рүү шилжүүлэх боломжийг идэвхжүүлэх
+              Enable human handoff
             </span>
           </label>
           <Textarea
-            label="Өдөөгч үг/хэллэг (мөр тус бүр нэг)"
-            hint="Хэрэглэгчийн мессеж эдгээрийн алийг нь агуулбал бот ажилтанд шилжүүлнэ."
+            label="Trigger words or phrases"
+            hint="If the customer message contains any of these, the bot pauses and hands over to a person."
             rows={4}
             value={form.handoff_keywords}
             onChange={(e) => patch({ handoff_keywords: e.target.value })}
           />
           <Textarea
-            label="Хэрэглэгчид илгээх хариу"
+            label="Reply sent to customer"
             rows={2}
             value={form.handoff_reply}
             onChange={(e) => patch({ handoff_reply: e.target.value })}
           />
+          <Select
+            label="Quick duration"
+            hint="Pick a ready-made handoff duration, or use the custom minutes field below."
+            value={handoffDurationMode}
+            onChange={(e) => {
+              const next = e.target.value;
+              patch({
+                handoff_pause_minutes:
+                  next === HANDOFF_DURATION_CUSTOM
+                    ? form.handoff_pause_minutes
+                    : next,
+              });
+            }}
+          >
+            {HANDOFF_DURATION_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+            <option value={HANDOFF_DURATION_CUSTOM}>Custom</option>
+          </Select>
           <Input
-            label="Ботыг хэдэн минут зогсоох"
-            hint="Энэ хугацааны дараа бот автоматаар сэргэнэ. 0 = ажилтан өөрөө сэргээх хүртэл."
+            label="Pause minutes"
+            hint="After this time the bot resumes automatically. Use 0 for manual resume only."
             inputMode="numeric"
             value={form.handoff_pause_minutes}
             onChange={(e) => patch({ handoff_pause_minutes: e.target.value })}
@@ -2095,66 +2340,81 @@ function SettingsTab({
 
       <Card className="p-4">
         <SectionHeading
-          title="Нэмэлт мэдээлэл"
-          description="Түгээмэл асуулт, тусгай санал, хөнгөлөлт зэрэг."
+          title="Optional extra bot knowledge"
+          description="Only open this if you want FAQ, offers, discounts, or credentials."
+          action={
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setShowOptionalData((prev) => !prev)}
+            >
+              {showOptionalData ? 'Hide optional data' : 'Show optional data'}
+            </Button>
+          }
         />
-        <div className="mt-3 space-y-3">
-          <StructuredEditor
-            title="Түгээмэл асуулт (FAQ)"
-            addLabel="Асуулт"
-            fields={[
-              { key: "question", label: "Асуулт" },
-              { key: "answer", label: "Хариулт" },
-            ]}
-            rows={form.faq}
-            onChange={(rows) => patch({ faq: rows })}
-          />
-          <StructuredEditor
-            title="Тусгай саналууд"
-            addLabel="Санал"
-            fields={[
-              { key: "name", label: "Нэр" },
-              { key: "duration", label: "Хугацаа" },
-              { key: "price", label: "Үнэ" },
-              { key: "target", label: "Зорилтот бүлэг" },
-              { key: "eligibility", label: "Нөхцөл" },
-              { key: "description", label: "Тайлбар" },
-            ]}
-            rows={form.special_offers}
-            onChange={(rows) => patch({ special_offers: rows })}
-          />
-          <StructuredEditor
-            title="Хөнгөлөлтийн бодлого"
-            addLabel="Бодлого"
-            fields={[
-              { key: "name", label: "Нэр" },
-              { key: "discount", label: "Хөнгөлөлт" },
-              { key: "applies_to", label: "Хамаарах" },
-              { key: "eligibility", label: "Нөхцөл" },
-              { key: "verification", label: "Баталгаажуулалт" },
-              { key: "description", label: "Тайлбар" },
-            ]}
-            rows={form.discount_policies}
-            onChange={(rows) => patch({ discount_policies: rows })}
-          />
-          <StructuredEditor
-            title="Баталгаажсан баримтууд"
-            addLabel="Баримт"
-            fields={[
-              { key: "title", label: "Гарчиг" },
-              { key: "issuer", label: "Олгогч" },
-              { key: "issued_on", label: "Огноо" },
-              { key: "description", label: "Тайлбар" },
-            ]}
-            rows={form.verified_credentials}
-            onChange={(rows) => patch({ verified_credentials: rows })}
-          />
-        </div>
+        {showOptionalData ? (
+          <div className="mt-3 space-y-3">
+            <StructuredEditor
+              title="FAQ"
+              addLabel="Add FAQ"
+              fields={[
+                { key: 'question', label: 'Question' },
+                { key: 'answer', label: 'Answer' },
+              ]}
+              rows={form.faq}
+              onChange={(rows) => patch({ faq: rows })}
+            />
+            <StructuredEditor
+              title="Special offers"
+              addLabel="Add offer"
+              fields={[
+                { key: 'name', label: 'Name' },
+                { key: 'duration', label: 'Duration' },
+                { key: 'price', label: 'Price' },
+                { key: 'target', label: 'Target' },
+                { key: 'eligibility', label: 'Eligibility' },
+                { key: 'description', label: 'Description' },
+              ]}
+              rows={form.special_offers}
+              onChange={(rows) => patch({ special_offers: rows })}
+            />
+            <StructuredEditor
+              title="Discount policies"
+              addLabel="Add discount"
+              fields={[
+                { key: 'name', label: 'Name' },
+                { key: 'discount', label: 'Discount' },
+                { key: 'applies_to', label: 'Applies to' },
+                { key: 'eligibility', label: 'Eligibility' },
+                { key: 'verification', label: 'Verification' },
+                { key: 'description', label: 'Description' },
+              ]}
+              rows={form.discount_policies}
+              onChange={(rows) => patch({ discount_policies: rows })}
+            />
+            <StructuredEditor
+              title="Verified credentials"
+              addLabel="Add credential"
+              fields={[
+                { key: 'title', label: 'Title' },
+                { key: 'issuer', label: 'Issuer' },
+                { key: 'issued_on', label: 'Issued on' },
+                { key: 'description', label: 'Description' },
+              ]}
+              rows={form.verified_credentials}
+              onChange={(rows) => patch({ verified_credentials: rows })}
+            />
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-ink-muted">
+            Hidden to keep this page simple. Open it only if you want the bot to answer from FAQ or special-offer data.
+          </p>
+        )}
       </Card>
 
       <div className="sticky bottom-3 z-10">
         <Button block size="lg" loading={busy} onClick={onSave}>
-          Бүх тохиргоог хадгалах
+          Save settings
         </Button>
       </div>
     </div>
