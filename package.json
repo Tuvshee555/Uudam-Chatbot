@@ -1,0 +1,39 @@
+{
+  "name": "mongolian-ai-receptionist",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --webpack --port 3004",
+    "dev:turbo": "next dev --port 3004",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/**/*.test.ts",
+    "chaos": "node --import tsx scripts/chaos.ts",
+    "preflight": "node --import tsx scripts/preflight.ts",
+    "seed": "node --import tsx scripts/seed-from-business-json.ts",
+    "validate": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "fb:subscribe-page": "node scripts/subscribe-page-app.mjs"
+  },
+  "dependencies": {
+    "@types/pg": "^8.20.0",
+    "exceljs": "^4.4.0",
+    "ioredis": "^5.10.1",
+    "next": "^16.2.6",
+    "pg": "^8.20.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "^16.2.6",
+    "tailwindcss": "^4",
+    "tsx": "^4.20.6",
+    "typescript": "^5"
+  }
+}

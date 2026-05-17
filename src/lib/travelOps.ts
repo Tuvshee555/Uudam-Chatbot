@@ -1,0 +1,1352 @@
+import { randomUUID } from "crypto";
+import { askGeminiParts, type GeminiPart } from "./gemini";
+import { getEnv } from "./env";
+import { logError, recordCounter } from "./observability";
+import { queryNeon, withNeonClient } from "./neonDb";
+import type {
+  DiscountPolicy,
+  FAQItem,
+  KnowledgeData,
+  ProgramPrice,
+  SpecialOffer,
+  VerifiedCredential,
+} from "./businessData";
+
+export type TripStatus = "active" | "cancelled" | "sold_out" | "draft";
+
+export type TravelTrip = {
+  id: string;
+  category: string;
+  operator_name: string;
+  route_name: string;
+  duration_text: string;
+  adult_price: number | null;
+  child_price: number | null;
+  currency: string;
+  departure_dates: string[];
+  seats_total: number | null;
+  seats_left: number | null;
+  has_food: boolean | null;
+  status: TripStatus;
+  notes: string;
+  source_description: string;
+  extra: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BotControl = {
+  bot_paused: boolean;
+  pause_reason: string | null;
+  updated_at: string;
+};
+
+export type TravelBotSettings = {
+  business_name: string;
+  system_prompt: string;
+  quick_info_reply: string;
+  quick_info_keywords: string[];
+  comment_trigger_patterns: string[];
+  comment_public_reply: string;
+  comment_dm_reply: string;
+  special_offers: SpecialOffer[];
+  discount_policies: DiscountPolicy[];
+  verified_credentials: VerifiedCredential[];
+  faq: FAQItem[];
+  handoff_enabled: boolean;
+  handoff_keywords: string[];
+  handoff_reply: string;
+  handoff_pause_minutes: number;
+  updated_at: string;
+};
+
+export type TravelBotSettingsUpdate = Partial<
+  Omit<TravelBotSettings, "updated_at">
+>;
+
+type TripMutationFields = Partial<
+  Pick<
+    TravelTrip,
+    | "category"
+    | "operator_name"
+    | "route_name"
+    | "duration_text"
+    | "adult_price"
+    | "child_price"
+    | "currency"
+    | "departure_dates"
+    | "seats_total"
+    | "seats_left"
+    | "has_food"
+    | "status"
+    | "notes"
+    | "source_description"
+    | "extra"
+  >
+>;
+
+type AITripAction = {
+  action: "upsert" | "patch" | "cancel";
+  trip_id?: string;
+  match?: {
+    operator_name?: string;
+    route_name?: string;
+  };
+  fields?: TripMutationFields;
+};
+
+export type AIChangeProposal = {
+  summary: string;
+  needs_confirmation: boolean;
+  important_reason: string;
+  conflicts: string[];
+  actions: AITripAction[];
+};
+
+type AIChangeRequestRow = {
+  id: number;
+  instruction: string;
+  proposal_json: AIChangeProposal;
+  conflicts: string[];
+  needs_confirmation: boolean;
+  status: string;
+  created_at: string;
+  applied_at: string | null;
+};
+
+const env = getEnv();
+let schemaEnsured = false;
+let schemaPromise: Promise<boolean> | null = null;
+let botControlCache:
+  | { value: BotControl; expiresAt: number }
+  | null = null;
+let botSettingsCache:
+  | { value: TravelBotSettings; expiresAt: number }
+  | null = null;
+
+function parseInteger(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  if (typeof value !== "string") return null;
+  const cleaned = value.replace(/,/g, "").trim();
+  if (!cleaned) return null;
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? Math.trunc(parsed) : null;
+}
+
+function coerceTripStatus(value: unknown): TripStatus {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "cancelled") return "cancelled";
+  if (normalized === "sold_out") return "sold_out";
+  if (normalized === "draft") return "draft";
+  return "active";
+}
+
+function cleanFields(input: TripMutationFields): TripMutationFields {
+  const cleaned: TripMutationFields = {};
+  if (typeof input.category === "string") cleaned.category = input.category.trim();
+  if (typeof input.operator_name === "string") cleaned.operator_name = input.operator_name.trim();
+  if (typeof input.route_name === "string") cleaned.route_name = input.route_name.trim();
+  if (typeof input.duration_text === "string") cleaned.duration_text = input.duration_text.trim();
+  if (typeof input.currency === "string" && input.currency.trim()) {
+    cleaned.currency = input.currency.trim().toUpperCase();
+  }
+  if (Array.isArray(input.departure_dates)) {
+    cleaned.departure_dates = input.departure_dates
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+      .slice(0, 60);
+  }
+  if (input.adult_price === null || typeof input.adult_price === "number") {
+    cleaned.adult_price = input.adult_price;
+  }
+  if (input.child_price === null || typeof input.child_price === "number") {
+    cleaned.child_price = input.child_price;
+  }
+  if (input.seats_total === null || typeof input.seats_total === "number") {
+    cleaned.seats_total = input.seats_total;
+  }
+  if (input.seats_left === null || typeof input.seats_left === "number") {
+    cleaned.seats_left = input.seats_left;
+  }
+  if (input.has_food === null || typeof input.has_food === "boolean") {
+    cleaned.has_food = input.has_food;
+  }
+  if (typeof input.status !== "undefined") {
+    cleaned.status = coerceTripStatus(input.status);
+  }
+  if (typeof input.notes === "string") cleaned.notes = input.notes.trim();
+  if (typeof input.source_description === "string") {
+    cleaned.source_description = input.source_description.trim();
+  }
+  if (input.extra && typeof input.extra === "object" && !Array.isArray(input.extra)) {
+    cleaned.extra = input.extra;
+  }
+  return cleaned;
+}
+
+export async function ensureTravelSchema() {
+  if (schemaEnsured) return true;
+  if (schemaPromise) return schemaPromise;
+
+  schemaPromise = (async () => {
+    const created = await withNeonClient(async (client) => {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_trip_entries (
+          id TEXT PRIMARY KEY,
+          category TEXT NOT NULL DEFAULT '',
+          operator_name TEXT NOT NULL,
+          route_name TEXT NOT NULL,
+          duration_text TEXT NOT NULL DEFAULT '',
+          adult_price INTEGER NULL,
+          child_price INTEGER NULL,
+          currency TEXT NOT NULL DEFAULT 'MNT',
+          departure_dates TEXT[] NOT NULL DEFAULT '{}',
+          seats_total INTEGER NULL,
+          seats_left INTEGER NULL,
+          has_food BOOLEAN NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          notes TEXT NOT NULL DEFAULT '',
+          source_description TEXT NOT NULL DEFAULT '',
+          extra JSONB NOT NULL DEFAULT '{}'::jsonb,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_travel_trip_entries_operator
+          ON travel_trip_entries (operator_name);
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_travel_trip_entries_route
+          ON travel_trip_entries (route_name);
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_travel_trip_entries_status
+          ON travel_trip_entries (status);
+      `);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_bot_control (
+          id BOOLEAN PRIMARY KEY DEFAULT TRUE,
+          bot_paused BOOLEAN NOT NULL DEFAULT FALSE,
+          pause_reason TEXT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+      await client.query(`
+        INSERT INTO travel_bot_control (id, bot_paused, pause_reason)
+        VALUES (TRUE, FALSE, NULL)
+        ON CONFLICT (id) DO NOTHING;
+      `);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_ai_change_requests (
+          id BIGSERIAL PRIMARY KEY,
+          instruction TEXT NOT NULL,
+          proposal_json JSONB NOT NULL,
+          conflicts TEXT[] NOT NULL DEFAULT '{}',
+          needs_confirmation BOOLEAN NOT NULL DEFAULT FALSE,
+          status TEXT NOT NULL DEFAULT 'pending',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          applied_at TIMESTAMPTZ NULL
+        );
+      `);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_bot_settings (
+          id BOOLEAN PRIMARY KEY DEFAULT TRUE,
+          business_name TEXT NOT NULL DEFAULT '',
+          system_prompt TEXT NOT NULL DEFAULT '',
+          quick_info_reply TEXT NOT NULL DEFAULT '',
+          quick_info_keywords TEXT[] NOT NULL DEFAULT '{}',
+          comment_trigger_patterns TEXT[] NOT NULL DEFAULT '{}',
+          comment_public_reply TEXT NOT NULL DEFAULT '',
+          comment_dm_reply TEXT NOT NULL DEFAULT '',
+          special_offers JSONB NOT NULL DEFAULT '[]'::jsonb,
+          discount_policies JSONB NOT NULL DEFAULT '[]'::jsonb,
+          verified_credentials JSONB NOT NULL DEFAULT '[]'::jsonb,
+          faq JSONB NOT NULL DEFAULT '[]'::jsonb,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+      // Human-handoff columns — added via ALTER so existing databases migrate.
+      await client.query(`
+        ALTER TABLE travel_bot_settings
+          ADD COLUMN IF NOT EXISTS handoff_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+          ADD COLUMN IF NOT EXISTS handoff_keywords TEXT[] NOT NULL DEFAULT
+            ARRAY['хүнтэй ярих','хүнтэй ярья','хүнтэй холбогдъё','хүнтэй холбоо','ажилтантай ярих','ажилтантай холбогдъё','оператортой ярих','жинхэнэ хүн','бодит хүн','хүн рүү холбо','talk to human','talk to a person','real person','customer service','speak to someone','live agent']::text[],
+          ADD COLUMN IF NOT EXISTS handoff_reply TEXT NOT NULL DEFAULT
+            'Таны хүсэлтийг хүлээн авлаа. Манай ажилтан удахгүй тантай холбогдоно. Түр хүлээнэ үү. 🙋',
+          ADD COLUMN IF NOT EXISTS handoff_pause_minutes INTEGER NOT NULL DEFAULT 60;
+      `);
+      await client.query(`
+        INSERT INTO travel_bot_settings (id)
+        VALUES (TRUE)
+        ON CONFLICT (id) DO NOTHING;
+      `);
+      return true;
+    });
+
+    if (!created) {
+      schemaEnsured = false;
+      return false;
+    }
+
+    schemaEnsured = true;
+    return true;
+  })()
+    .catch((error) => {
+      schemaEnsured = false;
+      logError("travel.schema.ensure_failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    })
+    .finally(() => {
+      schemaPromise = null;
+    });
+
+  return schemaPromise;
+}
+
+function asTrimmedString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeTextArray(value: unknown, max = 120): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    const text = asTrimmedString(item);
+    if (!text) continue;
+    if (out.includes(text)) continue;
+    out.push(text);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+function normalizeProgramPrice(value: unknown): ProgramPrice {
+  const parsed = parseInteger(value);
+  return parsed == null ? ("NEEDS_MANUAL_FIX" as ProgramPrice) : parsed;
+}
+
+function normalizeSpecialOffers(value: unknown): SpecialOffer[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry) => entry && typeof entry === "object")
+    .slice(0, 500)
+    .map((entry) => {
+      const item = entry as Record<string, unknown>;
+      return {
+        name: asTrimmedString(item.name),
+        duration: asTrimmedString(item.duration),
+        price: normalizeProgramPrice(item.price),
+        target: asTrimmedString(item.target),
+        description: asTrimmedString(item.description),
+        eligibility: asTrimmedString(item.eligibility),
+      };
+    });
+}
+
+function normalizeDiscountPolicies(value: unknown): DiscountPolicy[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry) => entry && typeof entry === "object")
+    .slice(0, 500)
+    .map((entry) => {
+      const item = entry as Record<string, unknown>;
+      return {
+        name: asTrimmedString(item.name),
+        discount: asTrimmedString(item.discount),
+        applies_to: asTrimmedString(item.applies_to),
+        eligibility: asTrimmedString(item.eligibility),
+        description: asTrimmedString(item.description),
+        verification: asTrimmedString(item.verification),
+      };
+    });
+}
+
+function normalizeVerifiedCredentials(value: unknown): VerifiedCredential[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry) => entry && typeof entry === "object")
+    .slice(0, 500)
+    .map((entry) => {
+      const item = entry as Record<string, unknown>;
+      return {
+        title: asTrimmedString(item.title),
+        issuer: asTrimmedString(item.issuer),
+        issued_on: asTrimmedString(item.issued_on),
+        description: asTrimmedString(item.description),
+      };
+    });
+}
+
+function normalizeFaq(value: unknown): FAQItem[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry) => entry && typeof entry === "object")
+    .slice(0, 500)
+    .map((entry) => {
+      const item = entry as Record<string, unknown>;
+      return {
+        question: asTrimmedString(item.question),
+        answer: asTrimmedString(item.answer),
+      };
+    })
+    .filter((item) => item.question || item.answer);
+}
+
+function normalizePauseMinutes(value: unknown): number {
+  const parsed = parseInteger(value);
+  if (parsed == null) return 60;
+  return Math.min(Math.max(parsed, 0), 24 * 60);
+}
+
+function emptyTravelBotSettings(): TravelBotSettings {
+  return {
+    business_name: "",
+    system_prompt: "",
+    quick_info_reply: "",
+    quick_info_keywords: [],
+    comment_trigger_patterns: [],
+    comment_public_reply: "",
+    comment_dm_reply: "",
+    special_offers: [],
+    discount_policies: [],
+    verified_credentials: [],
+    faq: [],
+    handoff_enabled: true,
+    handoff_keywords: [],
+    handoff_reply: "",
+    handoff_pause_minutes: 60,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function mapBotSettingsRow(row: Record<string, unknown> | undefined): TravelBotSettings {
+  if (!row) return emptyTravelBotSettings();
+  return {
+    business_name: asTrimmedString(row.business_name),
+    system_prompt: asTrimmedString(row.system_prompt),
+    quick_info_reply: asTrimmedString(row.quick_info_reply),
+    quick_info_keywords: normalizeTextArray(row.quick_info_keywords),
+    comment_trigger_patterns: normalizeTextArray(row.comment_trigger_patterns),
+    comment_public_reply: asTrimmedString(row.comment_public_reply),
+    comment_dm_reply: asTrimmedString(row.comment_dm_reply),
+    special_offers: normalizeSpecialOffers(row.special_offers),
+    discount_policies: normalizeDiscountPolicies(row.discount_policies),
+    verified_credentials: normalizeVerifiedCredentials(row.verified_credentials),
+    faq: normalizeFaq(row.faq),
+    handoff_enabled: row.handoff_enabled == null ? true : Boolean(row.handoff_enabled),
+    handoff_keywords: normalizeTextArray(row.handoff_keywords),
+    handoff_reply: asTrimmedString(row.handoff_reply),
+    handoff_pause_minutes: normalizePauseMinutes(row.handoff_pause_minutes),
+    updated_at: String(row.updated_at || new Date().toISOString()),
+  };
+}
+
+export async function getTravelBotSettings(): Promise<TravelBotSettings> {
+  if (botSettingsCache && botSettingsCache.expiresAt > Date.now()) {
+    return botSettingsCache.value;
+  }
+
+  const ready = await ensureTravelSchema();
+  if (!ready) return emptyTravelBotSettings();
+
+  const result = await queryNeon<Record<string, unknown>>(
+    `
+      SELECT
+        business_name,
+        system_prompt,
+        quick_info_reply,
+        quick_info_keywords,
+        comment_trigger_patterns,
+        comment_public_reply,
+        comment_dm_reply,
+        special_offers,
+        discount_policies,
+        verified_credentials,
+        faq,
+        handoff_enabled,
+        handoff_keywords,
+        handoff_reply,
+        handoff_pause_minutes,
+        updated_at
+      FROM travel_bot_settings
+      WHERE id = TRUE
+      LIMIT 1
+    `,
+  );
+
+  const value = mapBotSettingsRow(result?.rows?.[0]);
+  botSettingsCache = { value, expiresAt: Date.now() + 5_000 };
+  return value;
+}
+
+export async function updateTravelBotSettings(
+  fields: TravelBotSettingsUpdate,
+): Promise<TravelBotSettings> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return emptyTravelBotSettings();
+
+  const values: unknown[] = [];
+  const sets: string[] = [];
+  const push = (column: string, value: unknown, cast = "") => {
+    values.push(value);
+    sets.push(`${column} = $${values.length}${cast}`);
+  };
+
+  if (typeof fields.business_name === "string") {
+    push("business_name", fields.business_name.trim());
+  }
+  if (typeof fields.system_prompt === "string") {
+    push("system_prompt", fields.system_prompt.trim());
+  }
+  if (typeof fields.quick_info_reply === "string") {
+    push("quick_info_reply", fields.quick_info_reply.trim());
+  }
+  if (typeof fields.comment_public_reply === "string") {
+    push("comment_public_reply", fields.comment_public_reply.trim());
+  }
+  if (typeof fields.comment_dm_reply === "string") {
+    push("comment_dm_reply", fields.comment_dm_reply.trim());
+  }
+  if (typeof fields.quick_info_keywords !== "undefined") {
+    push("quick_info_keywords", normalizeTextArray(fields.quick_info_keywords), "::text[]");
+  }
+  if (typeof fields.comment_trigger_patterns !== "undefined") {
+    push(
+      "comment_trigger_patterns",
+      normalizeTextArray(fields.comment_trigger_patterns),
+      "::text[]",
+    );
+  }
+  if (typeof fields.special_offers !== "undefined") {
+    push("special_offers", JSON.stringify(normalizeSpecialOffers(fields.special_offers)), "::jsonb");
+  }
+  if (typeof fields.discount_policies !== "undefined") {
+    push(
+      "discount_policies",
+      JSON.stringify(normalizeDiscountPolicies(fields.discount_policies)),
+      "::jsonb",
+    );
+  }
+  if (typeof fields.verified_credentials !== "undefined") {
+    push(
+      "verified_credentials",
+      JSON.stringify(normalizeVerifiedCredentials(fields.verified_credentials)),
+      "::jsonb",
+    );
+  }
+  if (typeof fields.faq !== "undefined") {
+    push("faq", JSON.stringify(normalizeFaq(fields.faq)), "::jsonb");
+  }
+  if (typeof fields.handoff_enabled === "boolean") {
+    push("handoff_enabled", fields.handoff_enabled);
+  }
+  if (typeof fields.handoff_reply === "string") {
+    push("handoff_reply", fields.handoff_reply.trim());
+  }
+  if (typeof fields.handoff_keywords !== "undefined") {
+    push("handoff_keywords", normalizeTextArray(fields.handoff_keywords), "::text[]");
+  }
+  if (typeof fields.handoff_pause_minutes !== "undefined") {
+    push("handoff_pause_minutes", normalizePauseMinutes(fields.handoff_pause_minutes));
+  }
+
+  if (!sets.length) {
+    return getTravelBotSettings();
+  }
+
+  const result = await queryNeon<Record<string, unknown>>(
+    `
+      UPDATE travel_bot_settings
+      SET
+        ${sets.join(", ")},
+        updated_at = NOW()
+      WHERE id = TRUE
+      RETURNING
+        business_name,
+        system_prompt,
+        quick_info_reply,
+        quick_info_keywords,
+        comment_trigger_patterns,
+        comment_public_reply,
+        comment_dm_reply,
+        special_offers,
+        discount_policies,
+        verified_credentials,
+        faq,
+        handoff_enabled,
+        handoff_keywords,
+        handoff_reply,
+        handoff_pause_minutes,
+        updated_at
+    `,
+    values,
+  );
+
+  const updated = mapBotSettingsRow(result?.rows?.[0]);
+  botSettingsCache = { value: updated, expiresAt: Date.now() + 5_000 };
+  return updated;
+}
+
+function mapTripRow(row: Record<string, unknown>): TravelTrip {
+  return {
+    id: String(row.id || ""),
+    category: String(row.category || ""),
+    operator_name: String(row.operator_name || ""),
+    route_name: String(row.route_name || ""),
+    duration_text: String(row.duration_text || ""),
+    adult_price: parseInteger(row.adult_price),
+    child_price: parseInteger(row.child_price),
+    currency: String(row.currency || "MNT"),
+    departure_dates: Array.isArray(row.departure_dates)
+      ? row.departure_dates.map((value) => String(value))
+      : [],
+    seats_total: parseInteger(row.seats_total),
+    seats_left: parseInteger(row.seats_left),
+    has_food:
+      typeof row.has_food === "boolean"
+        ? row.has_food
+        : row.has_food == null
+          ? null
+          : Boolean(row.has_food),
+    status: coerceTripStatus(row.status),
+    notes: String(row.notes || ""),
+    source_description: String(row.source_description || ""),
+    extra:
+      row.extra && typeof row.extra === "object" && !Array.isArray(row.extra)
+        ? (row.extra as Record<string, unknown>)
+        : {},
+    created_at: String(row.created_at || ""),
+    updated_at: String(row.updated_at || ""),
+  };
+}
+
+export async function listTrips(options?: {
+  search?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  const ready = await ensureTravelSchema();
+  if (!ready) return [] as TravelTrip[];
+
+  const search = options?.search?.trim() || null;
+  const status = options?.status?.trim() || null;
+  const limit = Math.min(Math.max(Number(options?.limit || 150), 1), 1000);
+  const offset = Math.max(Number(options?.offset || 0), 0);
+
+  const rows = await queryNeon<Record<string, unknown>>(
+    `
+      SELECT
+        id,
+        category,
+        operator_name,
+        route_name,
+        duration_text,
+        adult_price,
+        child_price,
+        currency,
+        departure_dates,
+        seats_total,
+        seats_left,
+        has_food,
+        status,
+        notes,
+        source_description,
+        extra,
+        created_at,
+        updated_at
+      FROM travel_trip_entries
+      WHERE
+        ($1::text IS NULL OR (
+          category ILIKE '%' || $1 || '%' OR
+          operator_name ILIKE '%' || $1 || '%' OR
+          route_name ILIKE '%' || $1 || '%' OR
+          source_description ILIKE '%' || $1 || '%'
+        ))
+        AND ($2::text IS NULL OR status = $2)
+      ORDER BY updated_at DESC, created_at DESC
+      LIMIT $3
+      OFFSET $4
+    `,
+    [search, status, limit, offset],
+  );
+  if (!rows) return [] as TravelTrip[];
+  return rows.rows.map(mapTripRow);
+}
+
+export async function getBotControl(): Promise<BotControl> {
+  if (botControlCache && botControlCache.expiresAt > Date.now()) {
+    return botControlCache.value;
+  }
+  const ready = await ensureTravelSchema();
+  if (!ready) {
+    return {
+      bot_paused: false,
+      pause_reason: null,
+      updated_at: new Date().toISOString(),
+    };
+  }
+  const result = await queryNeon<Record<string, unknown>>(
+    `SELECT bot_paused, pause_reason, updated_at FROM travel_bot_control WHERE id = TRUE LIMIT 1`,
+  );
+  const row = result?.rows?.[0];
+  const value = {
+    bot_paused: Boolean(row?.bot_paused),
+    pause_reason: row?.pause_reason ? String(row.pause_reason) : null,
+    updated_at: String(row?.updated_at || new Date().toISOString()),
+  };
+  botControlCache = { value, expiresAt: Date.now() + 5_000 };
+  return value;
+}
+
+export async function setBotPaused(paused: boolean, reason?: string | null) {
+  const ready = await ensureTravelSchema();
+  if (!ready) return false;
+  const result = await queryNeon(
+    `
+      INSERT INTO travel_bot_control (id, bot_paused, pause_reason, updated_at)
+      VALUES (TRUE, $1, $2, NOW())
+      ON CONFLICT (id)
+      DO UPDATE SET
+        bot_paused = EXCLUDED.bot_paused,
+        pause_reason = EXCLUDED.pause_reason,
+        updated_at = NOW()
+    `,
+    [paused, reason || null],
+  );
+  botControlCache = null;
+  return Boolean(result);
+}
+
+export async function isBotGloballyPaused() {
+  const control = await getBotControl();
+  return control.bot_paused;
+}
+
+export async function upsertTrip(input: {
+  id?: string;
+  fields: TripMutationFields;
+}) {
+  const ready = await ensureTravelSchema();
+  if (!ready) return null;
+
+  const cleaned = cleanFields(input.fields);
+  const id = input.id?.trim() || `trip-${randomUUID()}`;
+  const row: TravelTrip = {
+    id,
+    category: cleaned.category || "",
+    operator_name: cleaned.operator_name || "Unknown operator",
+    route_name: cleaned.route_name || "Unnamed route",
+    duration_text: cleaned.duration_text || "",
+    adult_price:
+      typeof cleaned.adult_price === "number" ? Math.trunc(cleaned.adult_price) : null,
+    child_price:
+      typeof cleaned.child_price === "number" ? Math.trunc(cleaned.child_price) : null,
+    currency: cleaned.currency || "MNT",
+    departure_dates: cleaned.departure_dates || [],
+    seats_total:
+      typeof cleaned.seats_total === "number" ? Math.trunc(cleaned.seats_total) : null,
+    seats_left:
+      typeof cleaned.seats_left === "number" ? Math.trunc(cleaned.seats_left) : null,
+    has_food:
+      typeof cleaned.has_food === "boolean" || cleaned.has_food === null
+        ? cleaned.has_food
+        : null,
+    status: coerceTripStatus(cleaned.status),
+    notes: cleaned.notes || "",
+    source_description: cleaned.source_description || "",
+    extra: cleaned.extra || {},
+    created_at: "",
+    updated_at: "",
+  };
+
+  const result = await queryNeon<Record<string, unknown>>(
+    `
+      INSERT INTO travel_trip_entries (
+        id,
+        category,
+        operator_name,
+        route_name,
+        duration_text,
+        adult_price,
+        child_price,
+        currency,
+        departure_dates,
+        seats_total,
+        seats_left,
+        has_food,
+        status,
+        notes,
+        source_description,
+        extra,
+        updated_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10, $11, $12, $13, $14, $15, $16::jsonb, NOW()
+      )
+      ON CONFLICT (id)
+      DO UPDATE SET
+        category = EXCLUDED.category,
+        operator_name = EXCLUDED.operator_name,
+        route_name = EXCLUDED.route_name,
+        duration_text = EXCLUDED.duration_text,
+        adult_price = EXCLUDED.adult_price,
+        child_price = EXCLUDED.child_price,
+        currency = EXCLUDED.currency,
+        departure_dates = EXCLUDED.departure_dates,
+        seats_total = EXCLUDED.seats_total,
+        seats_left = EXCLUDED.seats_left,
+        has_food = EXCLUDED.has_food,
+        status = EXCLUDED.status,
+        notes = EXCLUDED.notes,
+        source_description = EXCLUDED.source_description,
+        extra = EXCLUDED.extra,
+        updated_at = NOW()
+      RETURNING *
+    `,
+    [
+      row.id,
+      row.category,
+      row.operator_name,
+      row.route_name,
+      row.duration_text,
+      row.adult_price,
+      row.child_price,
+      row.currency,
+      row.departure_dates,
+      row.seats_total,
+      row.seats_left,
+      row.has_food,
+      row.status,
+      row.notes,
+      row.source_description,
+      JSON.stringify(row.extra),
+    ],
+  );
+  return result?.rows?.[0] ? mapTripRow(result.rows[0]) : null;
+}
+
+export async function patchTrip(id: string, fields: TripMutationFields) {
+  const ready = await ensureTravelSchema();
+  if (!ready) return null;
+
+  const cleaned = cleanFields(fields);
+  const keys = Object.keys(cleaned) as Array<keyof TripMutationFields>;
+  if (!keys.length) return null;
+
+  const columnMap: Record<keyof TripMutationFields, string> = {
+    category: "category",
+    operator_name: "operator_name",
+    route_name: "route_name",
+    duration_text: "duration_text",
+    adult_price: "adult_price",
+    child_price: "child_price",
+    currency: "currency",
+    departure_dates: "departure_dates",
+    seats_total: "seats_total",
+    seats_left: "seats_left",
+    has_food: "has_food",
+    status: "status",
+    notes: "notes",
+    source_description: "source_description",
+    extra: "extra",
+  };
+
+  const values: unknown[] = [];
+  const sets: string[] = [];
+
+  keys.forEach((key, index) => {
+    values.push(
+      key === "extra"
+        ? JSON.stringify((cleaned[key] as Record<string, unknown>) || {})
+        : cleaned[key],
+    );
+    const column = columnMap[key];
+    const placeholder = key === "departure_dates" ? `$${index + 1}::text[]` : `$${index + 1}`;
+    const jsonbPlaceholder = key === "extra" ? `${placeholder}::jsonb` : placeholder;
+    sets.push(`${column} = ${jsonbPlaceholder}`);
+  });
+
+  values.push(id);
+  const result = await queryNeon<Record<string, unknown>>(
+    `
+      UPDATE travel_trip_entries
+      SET
+        ${sets.join(", ")},
+        updated_at = NOW()
+      WHERE id = $${values.length}
+      RETURNING *
+    `,
+    values,
+  );
+  return result?.rows?.[0] ? mapTripRow(result.rows[0]) : null;
+}
+
+async function resolveTripIdByMatch(match?: {
+  operator_name?: string;
+  route_name?: string;
+}) {
+  if (!match?.route_name && !match?.operator_name) return { id: null, conflict: null as string | null };
+  const operator = match.operator_name?.trim() || null;
+  const route = match.route_name?.trim() || null;
+  const found = await queryNeon<{ id: string }>(
+    `
+      SELECT id
+      FROM travel_trip_entries
+      WHERE
+        ($1::text IS NULL OR operator_name ILIKE $1)
+        AND ($2::text IS NULL OR route_name ILIKE $2)
+      ORDER BY updated_at DESC
+      LIMIT 2
+    `,
+    [operator, route],
+  );
+  if (!found || found.rows.length === 0) {
+    return { id: null, conflict: "Matching trip not found." };
+  }
+  if (found.rows.length > 1) {
+    return { id: null, conflict: "Multiple trips match the same operator/route." };
+  }
+  return { id: found.rows[0].id, conflict: null as string | null };
+}
+
+function cleanAIText(text: string): string {
+  return text.replace(/```json|```/gi, "").trim();
+}
+
+function parseJsonFromModel(text: string): AIChangeProposal | null {
+  const cleaned = cleanAIText(text);
+  try {
+    return JSON.parse(cleaned) as AIChangeProposal;
+  } catch {
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(cleaned.slice(start, end + 1)) as AIChangeProposal;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+function normalizeProposal(input: AIChangeProposal | null): AIChangeProposal {
+  if (!input) {
+    return {
+      summary: "AI хариуг parse хийж чадсангүй.",
+      needs_confirmation: true,
+      important_reason: "JSON бүтэц буруу байсан тул баталгаажуулалт шаардлагатай.",
+      conflicts: ["AI хариу JSON биш байна."],
+      actions: [],
+    };
+  }
+  return {
+    summary: String(input.summary || "AI саналыг үүсгэлээ."),
+    needs_confirmation: Boolean(input.needs_confirmation),
+    important_reason: String(input.important_reason || ""),
+    conflicts: Array.isArray(input.conflicts)
+      ? input.conflicts.map((value) => String(value))
+      : [],
+    actions: Array.isArray(input.actions)
+      ? input.actions.filter((action) => action && typeof action === "object")
+      : [],
+  };
+}
+
+function buildProposalGuide(condensedTrips: unknown): string {
+  return [
+    "Та travel operations data assistant байна.",
+    "Доорх мэдээллээс trips өгөгдлийн санд хийх өөрчлөлтийг тодорхойлж, ЗӨВХӨН JSON буцаа.",
+    "Тайлбар текст, markdown, ```код```-ийн хашилт БҮҮ нэм.",
+    "",
+    "JSON schema:",
+    "{",
+    '  "summary": "товч дүгнэлт (монголоор)",',
+    '  "needs_confirmation": true/false,',
+    '  "important_reason": "яагаад баталгаажуулах ёстой эсэх",',
+    '  "conflicts": ["зөрчил 1", "зөрчил 2"],',
+    '  "actions": [',
+    "    {",
+    '      "action": "upsert|patch|cancel",',
+    '      "trip_id": "trip id (optional)",',
+    '      "match": { "operator_name": "...", "route_name": "..." },',
+    '      "fields": {',
+    '        "category": "", "operator_name": "", "route_name": "", "duration_text": "",',
+    '        "adult_price": 0, "child_price": 0, "currency": "MNT|CNY",',
+    '        "departure_dates": ["..."], "seats_total": 0, "seats_left": 0,',
+    '        "has_food": true, "status": "active|cancelled|sold_out|draft",',
+    '        "notes": "", "source_description": ""',
+    "      }",
+    "    }",
+    "  ]",
+    "}",
+    "",
+    "Баталгаажуулалт заавал true болгох нөхцөл:",
+    "- Маршрут цуцлах (status=cancelled),",
+    "- Үнийн том өөрчлөлт,",
+    "- Суудал 0 болгох эсвэл sold_out болгох,",
+    "- Нэгээс олон маршрут таарах магадлалтай үед,",
+    "- Файлаас уншсан өгөгдөл бүрхэг/эргэлзээтэй үед.",
+    "",
+    "Дүрэм:",
+    "- Одоо байгаа маршрутыг шинэчлэхдээ trip_id эсвэл match (operator_name+route_name) ашигла.",
+    "- Шинэ маршрут бол action='upsert', trip_id хоосон үлдээ.",
+    "- Мэдээлэл байхгүй талбарыг БҮҮ таа — fields-ээс орхи.",
+    "- Үнийн валют: 'юань'/'yuan' → CNY, 'төгрөг'/'сая' эсвэл 6+ оронтой тоо → MNT.",
+    "- Хэрэв ямар ч өөрчлөлт хийх шаардлагагүй бол actions хоосон массив байг.",
+    "",
+    `Одоогийн trips (JSON): ${JSON.stringify(condensedTrips)}`,
+  ].join("\n");
+}
+
+async function createProposal(opts: {
+  instruction: string;
+  userParts: GeminiPart[];
+  source: string;
+}) {
+  const ready = await ensureTravelSchema();
+  if (!ready) {
+    return { proposal: normalizeProposal(null), request_id: null };
+  }
+
+  const trips = await listTrips({ limit: 250 });
+  const condensedTrips = trips.map((trip) => ({
+    id: trip.id,
+    category: trip.category,
+    operator_name: trip.operator_name,
+    route_name: trip.route_name,
+    status: trip.status,
+    seats_left: trip.seats_left,
+    seats_total: trip.seats_total,
+    has_food: trip.has_food,
+    adult_price: trip.adult_price,
+    child_price: trip.child_price,
+    currency: trip.currency,
+    duration_text: trip.duration_text,
+    departure_dates: trip.departure_dates,
+  }));
+
+  let proposal = normalizeProposal(null);
+  try {
+    const result = await askGeminiParts(
+      [{ text: buildProposalGuide(condensedTrips) }, ...opts.userParts],
+      { source: opts.source, jsonMode: true },
+    );
+    proposal = normalizeProposal(parseJsonFromModel(result.text));
+  } catch (error) {
+    logError("travel.ai.proposal_failed", {
+      source: opts.source,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  const inserted = await queryNeon<{ id: number }>(
+    `
+      INSERT INTO travel_ai_change_requests (
+        instruction,
+        proposal_json,
+        conflicts,
+        needs_confirmation,
+        status
+      )
+      VALUES ($1, $2::jsonb, $3::text[], $4, 'pending')
+      RETURNING id
+    `,
+    [
+      opts.instruction,
+      JSON.stringify(proposal),
+      proposal.conflicts,
+      proposal.needs_confirmation,
+    ],
+  );
+
+  return {
+    proposal,
+    request_id: inserted?.rows?.[0]?.id ?? null,
+  };
+}
+
+export async function generateAIProposal(instruction: string) {
+  return createProposal({
+    instruction,
+    userParts: [{ text: `Хэрэглэгчийн хүсэлт: ${instruction}` }],
+    source: "travel.ops.ai_change",
+  });
+}
+
+export async function generateAIProposalFromContent(input: {
+  label: string;
+  note?: string;
+  contentText?: string;
+  inline?: { mimeType: string; data: string } | null;
+}) {
+  const parts: GeminiPart[] = [];
+  const guidance = [
+    `Эх сурвалж: ${input.label}`,
+    input.note ? `Админы нэмэлт заавар: ${input.note}` : "",
+    "Доорх файл/зураг/текстээс аяллын мэдээллийг (маршрут, оператор, үнэ, суудал, гарах өдөр, хоол, төлөв) гарган ав.",
+    "Боломжтой бол одоо байгаа маршруттай тулгаж шинэчил, шинэ маршрутыг нэм.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  parts.push({ text: guidance });
+  if (input.contentText && input.contentText.trim()) {
+    parts.push({
+      text: `Файлын агуулга (HTML/текст):\n${input.contentText.trim()}`,
+    });
+  }
+  if (input.inline) {
+    parts.push({ inlineData: input.inline });
+  }
+
+  return createProposal({
+    instruction: input.note
+      ? `[Файл] ${input.label} — ${input.note}`
+      : `[Файл] ${input.label}`,
+    userParts: parts,
+    source: "travel.ops.file_parse",
+  });
+}
+
+async function applyAIAction(action: AITripAction) {
+  if (!action || typeof action !== "object") {
+    return { ok: false, message: "Invalid action payload." };
+  }
+
+  const verb = String(action.action || "").trim().toLowerCase();
+  if (!verb) return { ok: false, message: "Missing action verb." };
+
+  if (verb === "upsert") {
+    const updated = await upsertTrip({
+      id: action.trip_id,
+      fields: action.fields || {},
+    });
+    if (!updated) return { ok: false, message: "Upsert failed." };
+    return { ok: true, message: `Upserted ${updated.id}` };
+  }
+
+  let targetId = action.trip_id?.trim() || "";
+  if (!targetId) {
+    const match = await resolveTripIdByMatch(action.match);
+    if (match.conflict) return { ok: false, message: match.conflict };
+    targetId = match.id || "";
+  }
+  if (!targetId) return { ok: false, message: "Target trip not found." };
+
+  if (verb === "cancel") {
+    const updated = await patchTrip(targetId, {
+      status: "cancelled",
+      ...(action.fields || {}),
+    });
+    if (!updated) return { ok: false, message: "Cancel update failed." };
+    return { ok: true, message: `Cancelled ${updated.id}` };
+  }
+
+  if (verb === "patch") {
+    const updated = await patchTrip(targetId, action.fields || {});
+    if (!updated) return { ok: false, message: "Patch update failed." };
+    return { ok: true, message: `Patched ${updated.id}` };
+  }
+
+  return { ok: false, message: `Unsupported action: ${verb}` };
+}
+
+export async function applyAIRequest(requestId: number) {
+  const ready = await ensureTravelSchema();
+  if (!ready) {
+    return { ok: false, message: "Database is not configured." };
+  }
+
+  const reqResult = await queryNeon<{
+    id: number;
+    proposal_json: AIChangeProposal;
+    needs_confirmation: boolean;
+    status: string;
+  }>(
+    `
+      SELECT id, proposal_json, needs_confirmation, status
+      FROM travel_ai_change_requests
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [requestId],
+  );
+  const row = reqResult?.rows?.[0];
+  if (!row) return { ok: false, message: "Change request not found." };
+  if (row.status === "applied") {
+    return { ok: true, message: "Request already applied.", results: [] as string[] };
+  }
+
+  const proposal = normalizeProposal(row.proposal_json);
+  const results: string[] = [];
+  let failed = false;
+
+  for (const action of proposal.actions) {
+    const result = await applyAIAction(action);
+    results.push(result.message);
+    if (!result.ok) failed = true;
+  }
+
+  const status = failed ? "error" : "applied";
+  await queryNeon(
+    `
+      UPDATE travel_ai_change_requests
+      SET status = $2, applied_at = CASE WHEN $2 = 'applied' THEN NOW() ELSE NULL END
+      WHERE id = $1
+    `,
+    [requestId, status],
+  );
+
+  return {
+    ok: !failed,
+    message: failed
+      ? "Some actions failed. Review results."
+      : "All actions applied successfully.",
+    results,
+    proposal,
+  };
+}
+
+export async function listRecentAIRequests(limit = 20) {
+  const ready = await ensureTravelSchema();
+  if (!ready) return [] as AIChangeRequestRow[];
+  const safeLimit = Math.min(Math.max(limit, 1), 200);
+  const result = await queryNeon<Record<string, unknown>>(
+    `
+      SELECT
+        id,
+        instruction,
+        proposal_json,
+        conflicts,
+        needs_confirmation,
+        status,
+        created_at,
+        applied_at
+      FROM travel_ai_change_requests
+      ORDER BY created_at DESC
+      LIMIT $1
+    `,
+    [safeLimit],
+  );
+  if (!result) return [] as AIChangeRequestRow[];
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    instruction: String(row.instruction || ""),
+    proposal_json: normalizeProposal(row.proposal_json as AIChangeProposal),
+    conflicts: Array.isArray(row.conflicts)
+      ? row.conflicts.map((value) => String(value))
+      : [],
+    needs_confirmation: Boolean(row.needs_confirmation),
+    status: String(row.status || "pending"),
+    created_at: String(row.created_at || ""),
+    applied_at: row.applied_at ? String(row.applied_at) : null,
+  }));
+}
+
+export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
+  const trips = await listTrips({ limit: 5000 });
+  const settings = await getTravelBotSettings();
+
+  const categories = new Map<string, string[]>();
+  for (const trip of trips) {
+    const key = trip.category || "Uncategorized";
+    if (!categories.has(key)) categories.set(key, []);
+    categories.get(key)?.push(trip.route_name);
+  }
+
+  const packages = Array.from(categories.entries()).map(([category, routes]) => ({
+    name: category,
+    duration: "Varies by departure date",
+    price: "NEEDS_MANUAL_FIX" as ProgramPrice,
+    target: "Travel category",
+    description: routes.join("; "),
+  }));
+
+  const modules = trips.map((trip) => {
+    const details: string[] = [];
+    if (trip.departure_dates.length) {
+      details.push(`Departure dates: ${trip.departure_dates.join(", ")}`);
+    }
+    if (trip.seats_left != null) {
+      details.push(`Seats left: ${trip.seats_left}`);
+    }
+    if (trip.seats_total != null) {
+      details.push(`Seats total: ${trip.seats_total}`);
+    }
+    if (trip.has_food != null) {
+      details.push(`Food: ${trip.has_food ? "yes" : "no"}`);
+    }
+    if (trip.status !== "active") {
+      details.push(`Status: ${trip.status}`);
+    }
+    if (trip.notes) details.push(`Notes: ${trip.notes}`);
+
+    return {
+      name: trip.route_name,
+      duration: trip.duration_text || "Unknown",
+      price:
+        typeof trip.adult_price === "number"
+          ? trip.adult_price
+          : ("NEEDS_MANUAL_FIX" as ProgramPrice),
+      target: trip.operator_name,
+      description: [trip.source_description, ...details].filter(Boolean).join(" | "),
+    };
+  });
+
+  return {
+    packages,
+    modules,
+    special_offers: settings.special_offers,
+    discount_policies: settings.discount_policies,
+    verified_credentials: settings.verified_credentials,
+    faq: settings.faq,
+    conflicts_found: [],
+  };
+}
+
+export async function getDbDiagnostics() {
+  const ready = await ensureTravelSchema();
+  if (!ready) {
+    return {
+      configured: Boolean(env.neonDatabaseUrl),
+      schemaReady: false,
+      trips: 0,
+      lastUpdatedAt: null as string | null,
+      settingsConfigured: false,
+      settingsUpdatedAt: null as string | null,
+    };
+  }
+  const result = await queryNeon<{ count: string; max_updated_at: string | null }>(
+    `
+      SELECT
+        COUNT(*)::text AS count,
+        MAX(updated_at)::text AS max_updated_at
+      FROM travel_trip_entries
+    `,
+  );
+  const settings = await getTravelBotSettings();
+  return {
+    configured: Boolean(env.neonDatabaseUrl),
+    schemaReady: true,
+    trips: Number(result?.rows?.[0]?.count || 0),
+    lastUpdatedAt: result?.rows?.[0]?.max_updated_at || null,
+    settingsConfigured: Boolean(
+      settings.business_name.trim() && settings.system_prompt.trim(),
+    ),
+    settingsUpdatedAt: settings.updated_at || null,
+  };
+}
+
+export async function maybeRecordTravelMetric(action: string) {
+  recordCounter("travel.ops.action_total", 1, { action });
+}
+
+
+
