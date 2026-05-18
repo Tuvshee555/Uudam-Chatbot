@@ -1,4 +1,4 @@
-import Head from "next/head";
+﻿import Head from "next/head";
 import {
   useCallback,
   useEffect,
@@ -116,12 +116,23 @@ type AIProposal = {
   actions: AIAction[];
 };
 
-type AIRecentRow = {
-  id: number;
-  instruction: string;
-  status: string;
-  created_at: string;
-  applied_at: string | null;
+type ClarificationOption = {
+  label: string;
+  answer: string;
+};
+
+type ClarificationQuestion = {
+  id: string;
+  prompt: string;
+  options: ClarificationOption[];
+  allowCustom?: boolean;
+  customPlaceholder?: string;
+};
+
+type ClarificationAnswer = {
+  questionId: string;
+  prompt: string;
+  answer: string;
 };
 
 type AdminMsg = {
@@ -136,9 +147,14 @@ type ProposalMsg = {
   kind: "proposal";
   proposal: AIProposal;
   requestId: number | null;
+  instruction: string;
   status: "pending" | "applied" | "cancelled" | "error";
   confirmChecked: boolean;
   resultText?: string;
+  clarifications: ClarificationQuestion[];
+  clarificationAnswers: ClarificationAnswer[];
+  answeredClarificationIds: string[];
+  customReply: string;
 };
 type NoteMsg = {
   id: string;
@@ -210,10 +226,10 @@ const DURATIONS: Array<{ label: string; ms: number | null }> = [
 ];
 
 const HANDOFF_DURATION_OPTIONS = [
-  { label: "30 min", value: "30" },
-  { label: "1 hour", value: "60" },
-  { label: "2 hours", value: "120" },
-  { label: "Until manual resume", value: "0" },
+  { label: "30 минут", value: "30" },
+  { label: "1 цаг", value: "60" },
+  { label: "2 цаг", value: "120" },
+  { label: "Гараар сэргээх хүртэл", value: "0" },
 ] as const;
 
 const HANDOFF_DURATION_CUSTOM = "custom";
@@ -361,6 +377,217 @@ function describeAction(action: AIAction): {
     }
   }
   return { verb, target: String(target), changes };
+}
+
+function formatMoneyValue(
+  amount: number | null | undefined,
+  currency?: unknown,
+): string {
+  if (amount == null || !Number.isFinite(amount)) return "unknown";
+  const code = typeof currency === "string" && currency.trim() ? currency.trim() : "";
+  return `${amount.toLocaleString("en-US")}${code ? ` ${code}` : ""}`;
+}
+
+function extractQuotedValues(text: string): string[] {
+  const matches = Array.from(text.matchAll(/['"]([^'"]+)['"]/g));
+  const values = matches
+    .map((match) => match[1]?.trim() || "")
+    .filter(Boolean);
+  return Array.from(new Set(values));
+}
+
+function buildProposalClarifications(
+  proposal: AIProposal,
+  answeredIds: string[] = [],
+): ClarificationQuestion[] {
+  const questions: ClarificationQuestion[] = [];
+  const seen = new Set(answeredIds);
+
+  function pushQuestion(question: ClarificationQuestion | null) {
+    if (!question) return;
+    if (seen.has(question.id)) return;
+    seen.add(question.id);
+    questions.push(question);
+  }
+
+  proposal.actions.forEach((action, index) => {
+    const fields = action.fields || {};
+    const routeName =
+      fields.route_name?.toString().trim() ||
+      action.match?.route_name?.trim() ||
+      `аялал ${index + 1}`;
+    const adultPrice =
+      typeof fields.adult_price === "number" ? fields.adult_price : null;
+    const childPrice =
+      typeof fields.child_price === "number" ? fields.child_price : null;
+    const currency =
+      typeof fields.currency === "string" ? fields.currency : undefined;
+    if (adultPrice != null && childPrice != null && childPrice > adultPrice) {
+      pushQuestion({
+        id: `child-price:${routeName}`,
+        prompt: `"${routeName}" аяллын хүүхдийн үнэ ${formatMoneyValue(childPrice, currency)} байгаа ч том хүний үнэ ${formatMoneyValue(adultPrice, currency)} байна. Ингэж үлдээх үү?`,
+        options: [
+          {
+            label: "Тийм, ингэж үлдээх",
+            answer: `"${routeName}" аяллын хүүхдийн үнийг ${childPrice}, том хүний үнийг ${adultPrice} гэж үлдээ.`,
+          },
+          {
+            label: "Том хүний үнээр тэнцүүлэх",
+            answer: `"${routeName}" аяллын хүүхдийн үнийг ${childPrice}-н оронд ${adultPrice} болгон өөрчил.`,
+          },
+        ],
+        allowCustom: true,
+        customPlaceholder: `"${routeName}" аяллын зөв үнэ эсвэл зааварчилга бичнэ үү`,
+      });
+    }
+  });
+
+  proposal.conflicts.forEach((conflict, index) => {
+    const normalized = conflict.toLowerCase();
+    const quoted = extractQuotedValues(conflict);
+
+    if (
+      normalized.includes("file") ||
+      normalized.includes("файлын нэр") ||
+      normalized.includes("operator")
+    ) {
+      const detected = quoted[0] || "файлын нэр";
+      const operator = quoted[1] || "илэрсэн оператор";
+      pushQuestion({
+        id: `operator-mismatch:${operator}:${detected}`,
+        prompt: `Брэндийн зөрүү илэрлээ: файлд "${detected}" гэж байгаа ч оператор "${operator}" байна. Аль нэрийг хэрэглэх вэ?`,
+        options: [
+          {
+            label: `"${operator}" хэрэглэх`,
+            answer: `Операторыг "${operator}" гэж үлдээж, файлын нэр "${detected}"-г үл тооцно.`,
+          },
+          {
+            label: `"${detected}" хэрэглэх`,
+            answer: `"${operator}"-н оронд "${detected}"-г оператор/брэнд болгон ашиглана.`,
+          },
+        ],
+        allowCustom: true,
+        customPlaceholder: "Зөв оператор эсвэл брэндийн нэрийг бичнэ үү",
+      });
+      return;
+    }
+
+    if (normalized.includes("хөтөлбөртэй") && normalized.includes("чөлөөт")) {
+      pushQuestion({
+        id: `plan-choice:${index}`,
+        prompt: "Нэг аялалд хоёр төрлийн үнэ байна: хөтөлбөртэй болон чөлөөт хөтөлбөр. Аль нэгийг үндсэн аялал болгох вэ?",
+        options: [
+          {
+            label: "Хөтөлбөртэй хувилбар",
+            answer: "Хөтөлбөртэй хувилбарыг үндсэн аялалын үнэ, дэлгэрэнгүй болгон хэрэглэ.",
+          },
+          {
+            label: "Чөлөөт хувилбар",
+            answer: "Чөлөөт хувилбарыг үндсэн аялалын үнэ, дэлгэрэнгүй болгон хэрэглэ.",
+          },
+        ],
+        allowCustom: true,
+        customPlaceholder: "Аль хувилбарыг хэрэглэх талаар бичнэ үү",
+      });
+      return;
+    }
+
+    if (
+      normalized.includes("хоол") ||
+      normalized.includes("meal") ||
+      normalized.includes("day 7")
+    ) {
+      pushQuestion({
+        id: `meal-conflict:${index}`,
+        prompt: "Нэг аяллын хоолны мэдээлэл зөрчилтэй байна. Хоолыг нийтд нь багтсан гэж тэмдэглэх үү?",
+        options: [
+          {
+            label: "Тийм, багтсан",
+            answer: "Аяллын хоолыг нийтд нь багтсан гэж тэмдэглэ.",
+          },
+          {
+            label: "Үгүй, багтаагүй",
+            answer: "Аяллын хоолыг нийтд нь багтаагүй гэж тэмдэглэ.",
+          },
+        ],
+        allowCustom: true,
+        customPlaceholder: "Хоолны зөв дүрмийг бичнэ үү",
+      });
+      return;
+    }
+
+    if (
+      normalized.includes("явах өдөр тодорхойгүй") ||
+      normalized.includes("огноо") ||
+      normalized.includes("departure date")
+    ) {
+      pushQuestion({
+        id: `date-conflict:${index}`,
+        prompt: "Нэг аяллын гарах өдрийг тодорхойлж чадсангүй. Огноогүйгээр үлдээх үү?",
+        options: [
+          {
+            label: "Тийм, огноогүй үлдээх",
+            answer: "Тухайн аяллыг гарах өдөргүйгээр саналд хэвээр нь үлдээ.",
+          },
+          {
+            label: "Үгүй, хасах",
+            answer: "Гарах өдөр нь тодорхойгүй аяллыг санал болгохгүй.",
+          },
+        ],
+        allowCustom: true,
+        customPlaceholder: "Хэрэглэх огноо эсвэл энэ аяллыг хэрхэн зохицуулах талаар бичнэ үү",
+      });
+      return;
+    }
+
+    if (
+      normalized.includes("хоёр маршрут") ||
+      normalized.includes("two route") ||
+      normalized.includes("ижил")
+    ) {
+      pushQuestion({
+        id: `duplicate-route:${index}`,
+        prompt: "Ижил маршруттай боловч зөрчилтэй мэдээлэлтэй хоёр аялал илэрлээ. Тусдаа аялал болгон үлдээх үү?",
+        options: [
+          {
+            label: "Тусдаа үлдээх",
+            answer: "Тэдгээрийг тусдаа аялал болгон хэвээр нь үлдээ.",
+          },
+          {
+            label: "Нэгтгэх",
+            answer: "Тэдгээрийг нэг аялал болгон нэгтгэж, нэгдсэн хувилбарыг хэрэглэ.",
+          },
+        ],
+        allowCustom: true,
+        customPlaceholder: "Ижил аяллыг хэрхэн зохицуулах талаар бичнэ үү",
+      });
+    }
+  });
+
+  if (questions.length === 0 && proposal.needs_confirmation) {
+    const fallbackReason =
+      proposal.important_reason ||
+      proposal.conflicts[0] ||
+      "Нэг зүйл баталгаажуулах шаардлагатай байна.";
+    pushQuestion({
+      id: "final-confirmation",
+      prompt: fallbackReason,
+      options: [
+        {
+          label: "Илэрсэнээр хэрэглэх",
+          answer: "Илэрсэн утгуудыг одоогийн саналд байгаагаар нь хэвээр үлдээ.",
+        },
+        {
+          label: "Болгоомжтой хянан засах",
+          answer: "Тодорхойгүй утгуудыг хэвээр үлдээхгүй; саналыг илүү болгоомжтойгоор засна уу.",
+        },
+      ],
+      allowCustom: true,
+      customPlaceholder: "Хэрэглэх тодруулгыг бичнэ үү",
+    });
+  }
+
+  return questions.slice(0, 4);
 }
 
 /* ----------------------------------------------------------------
@@ -511,7 +738,6 @@ export default function AdminPage() {
   const [settings, setSettings] = useState<TravelBotSettings | null>(null);
   const [settingsForm, setSettingsForm] = useState<SettingsForm | null>(null);
 
-  const [aiRecent, setAiRecent] = useState<AIRecentRow[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     {
       id: "intro",
@@ -597,7 +823,6 @@ export default function AdminPage() {
       setControl(pauseJson?.control || tripJson?.control || null);
       setPausedRows(Array.isArray(pauseJson?.paused) ? pauseJson.paused : []);
       setRecentRows(Array.isArray(pauseJson?.recent) ? pauseJson.recent : []);
-      setAiRecent(Array.isArray(tripJson?.ai_recent) ? tripJson.ai_recent : []);
       if (settingsJson?.settings) {
         setSettings(settingsJson.settings as TravelBotSettings);
         setSettingsForm((prev) =>
@@ -685,14 +910,14 @@ export default function AdminPage() {
 
     const oversized = inputFiles.filter((file) => file.size > MAX_FILE_BYTES);
     if (oversized.length > 0) {
-      toast.error("Some files are too large. Keep each upload under 100MB.");
+      toast.error("Зарим файл хэт том байна. Нэг файл 100MB-аас хэтрэхгүй байх ёстой.");
     }
 
     const acceptedFiles = inputFiles.filter((file) => file.size <= MAX_FILE_BYTES);
     if (acceptedFiles.length === 0) return;
 
     if (attachedFiles.length + acceptedFiles.length > MAX_ATTACH_COUNT) {
-      toast.error(`Keep the total attached files at ${MAX_ATTACH_COUNT} or less.`);
+      toast.error(`Нийт хавсралт ${MAX_ATTACH_COUNT}-аас хэтрэхгүй байх ёстой.`);
       return;
     }
 
@@ -704,7 +929,7 @@ export default function AdminPage() {
       currentAttachedBytes + acceptedFiles.reduce((sum, file) => sum + file.size, 0);
     if (totalBytes > MAX_TOTAL_FILE_BYTES) {
       toast.error(
-        `This batch is too large (${formatBytes(totalBytes)}). Keep one request under ${formatBytes(MAX_TOTAL_FILE_BYTES)}.`,
+        `Нийт хэмжээ хэт их байна (${formatBytes(totalBytes)}). Нэг хүсэлт ${formatBytes(MAX_TOTAL_FILE_BYTES)}-аас хэтрэхгүй байх ёстой.`,
       );
       return;
     }
@@ -719,7 +944,7 @@ export default function AdminPage() {
         return [...prev, ...deduped];
       });
     } catch {
-      toast.error("Failed to read one or more files.");
+      toast.error("Нэг буюу хэд хэдэн файлыг уншиж чадсангүй.");
     }
   }
 
@@ -763,10 +988,10 @@ export default function AdminPage() {
         if (!res.ok) {
           if (res.status === 413) {
             throw new Error(
-              `Upload is too large for one request. Keep the total under ${formatBytes(MAX_TOTAL_FILE_BYTES)}.`,
+              `Нийт хэмжээ хэт их байна. Нэг хүсэлт ${formatBytes(MAX_TOTAL_FILE_BYTES)}-аас хэтрэхгүй байх ёстой.`,
             );
           }
-          throw new Error(data?.error || "Could not process the uploaded files.");
+          throw new Error(data?.error || "Файлуудыг боловсруулж чадсангүй.");
         }
       } else {
         const res = await fetchWithAdmin("/api/admin/ai-change", {
@@ -777,14 +1002,14 @@ export default function AdminPage() {
         const json = await readJsonSafe(res);
         data = json as typeof data;
         if (!res.ok) {
-          throw new Error(data?.error || "Could not generate an AI proposal.");
+          throw new Error(data?.error || "AI санал үүсгэж чадсангүй.");
         }
       }
 
       const proposal = data.proposal;
       if (!proposal || !Array.isArray(proposal.actions)) {
         throw new Error(
-          "AI did not return a usable proposal. Please try again with a clearer instruction.",
+          "AI хэрэгжих санал буцааж чадсангүй. Илүү тодорхой зааварчилгаар дахин оролдоно уу.",
         );
       }
       if (proposal.actions.length === 0) {
@@ -795,10 +1020,16 @@ export default function AdminPage() {
           tone: "info",
           text:
             proposal.summary ||
-            "No actionable changes were found. Try adding more detail or another file.",
+            "Өөрчлөх зүйл олдсонгүй. Илүү дэлгэрэнгүй зааварчилга эсвэл өөр файл оруулна уу.",
         });
         return;
       }
+      const fileInstruction =
+        files.length > 0
+          ? text
+            ? `[File] ${files.map((f) => f.name).join(", ")} - ${text}`
+            : `[File] ${files.map((f) => f.name).join(", ")}`
+          : text;
       pushMessage({
         id: uid(),
         role: "assistant",
@@ -806,8 +1037,13 @@ export default function AdminPage() {
         proposal,
         requestId:
           typeof data.request_id === "number" ? data.request_id : null,
+        instruction: fileInstruction,
         status: "pending",
         confirmChecked: false,
+        clarifications: buildProposalClarifications(proposal),
+        clarificationAnswers: [],
+        answeredClarificationIds: [],
+        customReply: "",
       });
     } catch (err) {
       pushMessage({
@@ -817,10 +1053,10 @@ export default function AdminPage() {
         tone: "error",
         text:
           err instanceof TypeError
-            ? `Upload failed before the server could reply. Try fewer files or keep the total under ${formatBytes(MAX_TOTAL_FILE_BYTES)}.`
+            ? `Сервер хариу өгөхөөс өмнө байршуулалт амжилтгүй болсон. Файл цөөлж ${formatBytes(MAX_TOTAL_FILE_BYTES)}-аас доош байлгана уу.`
             : err instanceof Error
               ? err.message
-              : "Something went wrong.",
+              : "Алдаа гарлаа.",
       });
     } finally {
       setBusyKey("");
@@ -836,21 +1072,112 @@ export default function AdminPage() {
     );
   }
 
-  async function applyProposal(message: ProposalMsg) {
-    if (message.requestId == null) {
-      toast.error("Энэ саналыг хэрэгжүүлэх боломжгүй (ID алга).");
-      return;
+  async function answerClarification(
+    message: ProposalMsg,
+    question: ClarificationQuestion,
+    answer: string,
+  ) {
+    const trimmed = answer.trim();
+    if (!trimmed) return;
+
+    setBusyKey(`clarify-${message.id}`);
+    try {
+      let proposal: AIProposal | undefined;
+      let newRequestId: number | null = message.requestId;
+
+      if (message.requestId != null) {
+        const res = await fetchWithAdmin("/api/admin/ai-change", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            request_id: message.requestId,
+            clarification: trimmed,
+          }),
+        });
+        const json = await readJsonSafe(res);
+        if (!res.ok) {
+          throw new Error(
+            String(json?.message || json?.error || "Саналыг засаж чадсангүй."),
+          );
+        }
+        proposal = json?.proposal as AIProposal | undefined;
+      } else {
+        // No DB record — regenerate with combined instruction + clarification.
+        const combined = [
+          message.instruction,
+          ...message.clarificationAnswers.map(
+            (qa) => `${qa.prompt}: ${qa.answer}`,
+          ),
+          `${question.prompt}: ${trimmed}`,
+        ]
+          .filter(Boolean)
+          .join("\n");
+        const res = await fetchWithAdmin("/api/admin/ai-change", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ instruction: combined }),
+        });
+        const json = await readJsonSafe(res);
+        if (!res.ok) {
+          throw new Error(
+            String(json?.message || json?.error || "Саналыг засаж чадсангүй."),
+          );
+        }
+        proposal = json?.proposal as AIProposal | undefined;
+        if (typeof json?.request_id === "number") {
+          newRequestId = json.request_id as number;
+        }
+      }
+
+      if (!proposal || !Array.isArray(proposal.actions)) {
+        throw new Error("AI засварласан санал буцааж чадсангүй.");
+      }
+
+      const nextAnsweredIds = [
+        ...message.answeredClarificationIds,
+        question.id,
+      ];
+      setProposalMessage(message.id, {
+        proposal,
+        requestId: newRequestId,
+        clarifications: buildProposalClarifications(proposal, nextAnsweredIds),
+        clarificationAnswers: [
+          ...message.clarificationAnswers,
+          {
+            questionId: question.id,
+            prompt: question.prompt,
+            answer: trimmed,
+          },
+        ],
+        answeredClarificationIds: nextAnsweredIds,
+        customReply: "",
+        confirmChecked: false,
+      });
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Саналыг засаж чадсангүй.",
+      );
+    } finally {
+      setBusyKey("");
     }
+  }
+
+  async function applyProposal(message: ProposalMsg) {
     setBusyKey(`apply-${message.id}`);
     try {
+      const body =
+        message.requestId != null
+          ? { request_id: message.requestId, apply: true, confirm: true }
+          : {
+              apply: true,
+              confirm: true,
+              proposal_direct: message.proposal,
+              instruction: message.instruction,
+            };
       const res = await fetchWithAdmin("/api/admin/ai-change", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          request_id: message.requestId,
-          apply: true,
-          confirm: true,
-        }),
+        body: JSON.stringify(body),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -872,6 +1199,25 @@ export default function AdminPage() {
       toast.error("Хэрэгжүүлэхэд алдаа гарлаа.");
     } finally {
       setBusyKey("");
+    }
+  }
+
+  async function submitClarificationForm(
+    message: ProposalMsg,
+    answers: Record<string, string>,
+  ) {
+    // Build a combined clarification string from all answered questions.
+    const combined = message.clarifications
+      .map((q) => `${q.prompt}: ${answers[q.id] ?? ""}`)
+      .filter((line) => line.trim())
+      .join("\n");
+    if (!combined.trim()) return;
+
+    // Re-use answerClarification with the first question as the anchor.
+    // The combined text carries all answers so the AI sees the full picture.
+    const firstQ = message.clarifications[0];
+    if (firstQ) {
+      await answerClarification(message, firstQ, combined);
     }
   }
 
@@ -1065,10 +1411,10 @@ export default function AdminPage() {
   }
 
   const tabs: Array<{ key: TabKey; label: string; icon: ReactNode }> = [
-    { key: "assistant", label: "AI Updates", icon: <Icons.ai size={17} /> },
-    { key: "trips", label: "Trips Data", icon: <Icons.trips size={17} /> },
-    { key: "bot", label: "Pause / Handoff", icon: <Icons.control size={17} /> },
-    { key: "settings", label: "Bot Settings", icon: <Icons.settings size={17} /> },
+    { key: "assistant", label: "AI Туслах", icon: <Icons.ai size={17} /> },
+    { key: "trips", label: "Аяллууд", icon: <Icons.trips size={17} /> },
+    { key: "bot", label: "Бот удирдлага", icon: <Icons.control size={17} /> },
+    { key: "settings", label: "Тохиргоо", icon: <Icons.settings size={17} /> },
   ];
 
   return (
@@ -1091,9 +1437,6 @@ export default function AdminPage() {
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
-              <Button href="/" size="sm" variant="secondary">
-                Test live bot
-              </Button>
               {handoffRows.length > 0 && (
                 <button type="button" onClick={() => setTab("bot")}>
                   <Badge tone="warning" dot>
@@ -1150,19 +1493,6 @@ export default function AdminPage() {
           </div>
         )}
 
-        <div className="mb-4">
-          <Alert tone="info">
-            {tab === "assistant" &&
-              "AI Updates is for changing trip data from text or files. It is not the customer chat. Use 'Test live bot' to test real replies."}
-            {tab === "trips" &&
-              "Trips Data shows the current trip records in your database. Edit them by hand here."}
-            {tab === "bot" &&
-              "Pause / Handoff lets you stop the bot, resume it, or hand a customer over to a human."}
-            {tab === "settings" &&
-              "Bot Settings controls the bot name, rules, fixed replies, comment replies, and human handoff text."}
-          </Alert>
-        </div>
-
         {tab === "assistant" && (
           <AssistantTab
             messages={chatMessages}
@@ -1174,8 +1504,14 @@ export default function AdminPage() {
             setDragOver={setDragOver}
             busy={busyKey === "ai-send"}
             applyBusyId={busyKey.startsWith("apply-") ? busyKey.slice(6) : ""}
+            clarifyBusyId={
+              busyKey.startsWith("clarify-") ? busyKey.slice(8) : ""
+            }
             onSend={() => void sendAssistant()}
             onApply={(message) => void applyProposal(message)}
+            onSubmitClarificationForm={(message, answers) =>
+              void submitClarificationForm(message, answers)
+            }
             onCancelProposal={(id) =>
               setProposalMessage(id, { status: "cancelled" })
             }
@@ -1184,7 +1520,6 @@ export default function AdminPage() {
             }
             onPickFile={() => fileInputRef.current?.click()}
             onDropFiles={(files) => void attachFiles(files)}
-            aiRecent={aiRecent}
             chatEndRef={chatEndRef}
             inputRef={inputRef}
           />
@@ -1411,13 +1746,14 @@ function AssistantTab({
   setDragOver,
   busy,
   applyBusyId,
+  clarifyBusyId,
   onSend,
   onApply,
+  onSubmitClarificationForm,
   onCancelProposal,
   onToggleConfirm,
   onPickFile,
   onDropFiles,
-  aiRecent,
   chatEndRef,
   inputRef,
 }: {
@@ -1430,13 +1766,17 @@ function AssistantTab({
   setDragOver: (value: boolean) => void;
   busy: boolean;
   applyBusyId: string;
+  clarifyBusyId: string;
   onSend: () => void;
   onApply: (message: ProposalMsg) => void;
+  onSubmitClarificationForm: (
+    message: ProposalMsg,
+    answers: Record<string, string>,
+  ) => void;
   onCancelProposal: (id: string) => void;
   onToggleConfirm: (id: string, value: boolean) => void;
   onPickFile: () => void;
   onDropFiles: (files: FileList | File[]) => void;
-  aiRecent: AIRecentRow[];
   chatEndRef: React.RefObject<HTMLDivElement | null>;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
 }) {
@@ -1447,29 +1787,6 @@ function AssistantTab({
 
   return (
     <div className="space-y-4">
-      <Card className="p-4">
-        <SectionHeading
-          title="AI trip updates"
-          description="Use this tab to update trips with AI from text, Excel, CSV, PDF, or photos. Nothing is saved until you approve the proposed changes."
-          action={
-            <Button href="/" size="sm" variant="secondary">
-              Open live bot test
-            </Button>
-          }
-        />
-        <div className="mt-3 grid gap-2 text-sm text-ink-muted sm:grid-cols-3">
-          <div className="rounded-md border border-line bg-surface-sunken px-3 py-2">
-            1. Add a file or type an instruction.
-          </div>
-          <div className="rounded-md border border-line bg-surface-sunken px-3 py-2">
-            2. AI reads it and prepares a safe proposal.
-          </div>
-          <div className="rounded-md border border-line bg-surface-sunken px-3 py-2">
-            3. You approve it before any trip data changes.
-          </div>
-        </div>
-      </Card>
-
       <Card
         className={cx(
           "flex flex-col overflow-hidden",
@@ -1489,19 +1806,30 @@ function AssistantTab({
       >
         <div className="scroll-area max-h-[55dvh] min-h-70 space-y-3 overflow-y-auto p-3.5">
           {messages.map((message) => (
-            <ChatBubble
+            <ChatBubbleV2
               key={message.id}
               message={message}
               applyBusy={applyBusyId === message.id}
+              clarifyBusy={clarifyBusyId === message.id}
               onApply={onApply}
+              onSubmitClarificationForm={onSubmitClarificationForm}
               onCancelProposal={onCancelProposal}
               onToggleConfirm={onToggleConfirm}
             />
           ))}
           {busy && (
-            <div className="flex items-center gap-2 text-sm text-ink-muted">
-              <Spinner />
-              AI боловсруулж байна…
+            <div className="flex justify-start">
+              <div className="rounded-2xl rounded-bl-sm border border-line bg-surface px-4 py-3 shadow-sm">
+                <div className="flex items-center gap-1">
+                  {[0, 1, 2].map((n) => (
+                    <span
+                      key={n}
+                      className="h-2 w-2 animate-bounce rounded-full bg-ink-subtle"
+                      style={{ animationDelay: `${n * 0.15}s` }}
+                    />
+                  ))}
+                </div>
+              </div>
             </div>
           )}
           <div ref={chatEndRef} />
@@ -1528,17 +1856,17 @@ function AssistantTab({
             <div className="mb-2 flex items-center justify-between gap-2">
               <span className="flex items-center gap-1.5 text-sm font-medium text-brand">
                 <Icons.database size={15} className="text-brand" />
-                {attachedFiles.length} file{attachedFiles.length === 1 ? "" : "s"} attached
+                {attachedFiles.length} файл хавсаргасан
               </span>
               <span className="text-xs text-brand/80">
-                approx {formatBytes(attachedTotalBytes)}
+                ~{formatBytes(attachedTotalBytes)}
               </span>
               <button
                 type="button"
                 onClick={() => attachedFiles.forEach((file) => onRemoveAttachedFile(file.id))}
                 className="text-xs font-medium text-brand hover:opacity-70"
               >
-                Clear all
+                Бүгдийг арилгах
               </button>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -1582,7 +1910,7 @@ function AssistantTab({
               }
             }}
             rows={1}
-            placeholder="Example: update Bangkok trip seats to 3, or attach price-list files/photos"
+            placeholder="Ж: «Бангкок аяллыг цуцал» эсвэл прайс жагсаалт файл хавсаргах"
             className="scroll-area max-h-32 min-h-10 flex-1 resize-none rounded-md border border-line-strong bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-brand"
           />
           <Button
@@ -1590,69 +1918,39 @@ function AssistantTab({
             disabled={busy || (!aiInput.trim() && attachedFiles.length === 0)}
             className="h-10 shrink-0"
           >
-            Send
+            Илгээх
           </Button>
         </div>
       </Card>
 
       <p className="px-1 text-xs text-ink-subtle">
-        Excel and CSV files are converted into HTML tables for easier model reading. You can attach multiple PDFs, photos, and text files too. Keep each file under 100MB and one request under 100MB total.
+        Excel болон CSV файлыг AI уншихад тохиромжтой хүснэгт болгоно. PDF, зураг, текст файл нэгэн зэрэг хавсаргаж болно. Нэг файл 100MB-аас, нийт хүсэлт 100MB-аас хэтрэхгүй байх ёстой.
       </p>
 
-      {aiRecent.length > 0 && (
-        <Card className="p-4">
-          <SectionHeading
-            title="Сүүлийн өөрчлөлтүүд"
-            description="AI-аар хийгдсэн хүсэлтийн түүх."
-          />
-          <div className="mt-3 space-y-2">
-            {aiRecent.slice(0, 8).map((row) => (
-              <div
-                key={row.id}
-                className="flex items-start justify-between gap-3 rounded-md border border-line bg-surface-sunken px-3 py-2"
-              >
-                <div className="min-w-0">
-                  <p className="truncate text-sm text-ink">{row.instruction}</p>
-                  <p className="text-xs text-ink-subtle">
-                    {formatTime(row.created_at)}
-                  </p>
-                </div>
-                <Badge
-                  tone={
-                    row.status === "applied"
-                      ? "success"
-                      : row.status === "error"
-                        ? "danger"
-                        : "neutral"
-                  }
-                >
-                  {row.status === "applied"
-                    ? "Хэрэгжсэн"
-                    : row.status === "error"
-                      ? "Алдаа"
-                      : "Хүлээгдэж буй"}
-                </Badge>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
     </div>
   );
 }
-function ChatBubble({
+function ChatBubbleV2({
   message,
   applyBusy,
+  clarifyBusy,
   onApply,
+  onSubmitClarificationForm,
   onCancelProposal,
-  onToggleConfirm,
+  onToggleConfirm: _onToggleConfirm,
 }: {
   message: ChatMessage;
   applyBusy: boolean;
+  clarifyBusy: boolean;
   onApply: (message: ProposalMsg) => void;
+  onSubmitClarificationForm: (
+    message: ProposalMsg,
+    answers: Record<string, string>,
+  ) => void;
   onCancelProposal: (id: string) => void;
   onToggleConfirm: (id: string, value: boolean) => void;
 }) {
+  void _onToggleConfirm;
   if (message.role === "admin") {
     return (
       <div className="flex justify-end">
@@ -1683,86 +1981,168 @@ function ChatBubble({
     );
   }
 
-  // proposal
   const { proposal } = message;
+  const [formDraft, setFormDraft] = useState<Record<string, string>>({});
+  const previewActions = proposal.actions.slice(0, 4).map(describeAction);
+  const hiddenActionCount = Math.max(
+    0,
+    proposal.actions.length - previewActions.length,
+  );
+
   return (
     <div className="max-w-[92%]">
       <div className="rounded-xl rounded-bl-sm border border-line bg-surface-sunken p-3">
         <p className="text-sm font-semibold text-ink">{proposal.summary}</p>
+        <p className="mt-1 text-xs text-ink-muted">
+          {proposal.actions.length} өөрчлөлт илэрсэн.
+          {proposal.conflicts.length > 0
+            ? ` ${proposal.conflicts.length} зүйл шалгах шаардлагатай.`
+            : ""}
+        </p>
 
-        {proposal.actions.map((action, index) => {
-          const described = describeAction(action);
-          return (
-            <div
-              key={index}
-              className="mt-2 rounded-md border border-line bg-surface p-2.5"
-            >
-              <p className="text-sm font-medium text-ink">
-                <span className="text-brand">{described.verb}</span> —{" "}
-                {described.target}
+        {previewActions.length > 0 && (
+          <div className="mt-2 space-y-2">
+            {previewActions.map((described, index) => (
+              <div
+                key={`${described.verb}:${described.target}:${index}`}
+                className="rounded-md border border-line bg-surface px-2.5 py-2"
+              >
+                <p className="text-sm font-medium text-ink">
+                  <span className="text-brand">{described.verb}</span> -{" "}
+                  {described.target}
+                </p>
+                {described.changes.length > 0 && (
+                  <p className="mt-1 text-xs text-ink-muted">
+                    {described.changes.slice(0, 3).join(" • ")}
+                  </p>
+                )}
+              </div>
+            ))}
+            {hiddenActionCount > 0 && (
+              <p className="text-xs text-ink-subtle">
+                +{hiddenActionCount} өөрчлөлт баталгаажуулсны дараа хэрэгжинэ.
               </p>
-              {described.changes.length > 0 && (
-                <ul className="mt-1 space-y-0.5">
-                  {described.changes.map((change, i) => (
-                    <li key={i} className="text-xs text-ink-muted">
-                      • {change}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          );
-        })}
+            )}
+          </div>
+        )}
 
-        {proposal.conflicts.length > 0 && (
-          <div className="mt-2 rounded-md bg-danger-soft px-2.5 py-2">
-            {proposal.conflicts.map((conflict, i) => (
-              <p key={i} className="text-xs text-danger">
-                ⚠ {conflict}
-              </p>
+        {message.clarificationAnswers.length > 0 && (
+          <div className="mt-3 space-y-2 border-t border-line pt-3">
+            {message.clarificationAnswers.map((item) => (
+              <div
+                key={item.questionId}
+                className="rounded-md border border-line bg-brand-soft px-2.5 py-2"
+              >
+                <p className="text-xs font-medium text-brand">Тодруулсан</p>
+                <p className="mt-0.5 text-xs text-ink-muted">{item.prompt}</p>
+                <p className="mt-1 text-sm text-ink">{item.answer}</p>
+              </div>
             ))}
           </div>
         )}
 
         {message.status === "pending" && (
           <div className="mt-3 border-t border-line pt-3">
-            {proposal.needs_confirmation && (
-              <label className="mb-2 flex items-start gap-2 text-xs text-ink-muted">
-                <input
-                  type="checkbox"
-                  className="mt-0.5"
-                  checked={message.confirmChecked}
-                  onChange={(e) =>
-                    onToggleConfirm(message.id, e.target.checked)
+            {message.clarifications.length > 0 ? (
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-ink">
+                  Доорх асуултуудад хариулаад илгээнэ үү:
+                </p>
+                {message.clarifications.map((q) => {
+                  const selected = formDraft[q.id] ?? "";
+                  return (
+                    <div
+                      key={q.id}
+                      className="rounded-md border border-brand/20 bg-brand-soft px-3 py-3"
+                    >
+                      <p className="text-sm text-ink">{q.prompt}</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {q.options.map((opt) => (
+                          <button
+                            key={opt.label}
+                            type="button"
+                            disabled={clarifyBusy}
+                            onClick={() =>
+                              setFormDraft((prev) => ({ ...prev, [q.id]: opt.answer }))
+                            }
+                            className={cx(
+                              "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-60",
+                              selected === opt.answer
+                                ? "border-brand bg-brand text-white"
+                                : "border-brand/30 bg-white text-brand hover:border-brand",
+                            )}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                      {q.allowCustom && (
+                        <input
+                          value={
+                            q.options.some((o) => o.answer === selected) ? "" : selected
+                          }
+                          onChange={(e) =>
+                            setFormDraft((prev) => ({ ...prev, [q.id]: e.target.value }))
+                          }
+                          placeholder={q.customPlaceholder || "Өөрийн хариуг бичнэ үү"}
+                          className="mt-2 h-9 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-ink focus:border-brand"
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+                <Button
+                  size="sm"
+                  loading={clarifyBusy}
+                  disabled={
+                    clarifyBusy ||
+                    message.clarifications.some((q) => !(formDraft[q.id] ?? "").trim())
                   }
-                />
-                <span>
-                  {message.proposal.important_reason ||
-                    "Энэ нь чухал өөрчлөлт. Баталгаажуулна уу."}
-                </span>
-              </label>
+                  onClick={() => {
+                    onSubmitClarificationForm(message, formDraft);
+                    setFormDraft({});
+                  }}
+                >
+                  Хариултуудыг илгээх
+                </Button>
+              </div>
+            ) : (
+              <p className="mb-2 text-xs text-ink-muted">
+                {proposal.conflicts.length > 0
+                  ? "Тодорхойгүй байсан зүйлсийг нарийвчилсан. Зөв харагдвал хэрэгжүүлж болно."
+                  : "Бүх зүйл тодорхой байна. Өөрчлөлтийг хэрэгжүүлж болно."}
+              </p>
             )}
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="success"
-                loading={applyBusy}
-                disabled={
-                  proposal.needs_confirmation && !message.confirmChecked
-                }
-                onClick={() => onApply(message)}
-              >
-                <Icons.check size={15} />
-                Зөвшөөрч хадгалах
-              </Button>
+            {message.clarifications.length === 0 && (
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="success"
+                  loading={applyBusy}
+                  onClick={() => onApply(message)}
+                >
+                  <Icons.check size={15} />
+                  Зөвшөөрч хадгалах
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => onCancelProposal(message.id)}
+                >
+                  Болих
+                </Button>
+              </div>
+            )}
+            {message.clarifications.length > 0 && (
               <Button
                 size="sm"
                 variant="secondary"
+                className="mt-1"
                 onClick={() => onCancelProposal(message.id)}
               >
                 Болих
               </Button>
-            </div>
+            )}
           </div>
         )}
 
@@ -2013,9 +2393,9 @@ function BotTab({
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {[
-                    { label: "30 min", ms: 30 * 60 * 1000 },
-                    { label: "1 hour", ms: 60 * 60 * 1000 },
-                    { label: "Manual", ms: null },
+                    { label: "30 мин", ms: 30 * 60 * 1000 },
+                    { label: "1 цаг", ms: 60 * 60 * 1000 },
+                    { label: "Гараар", ms: null },
                   ].map((option) => (
                     <button
                       key={option.label}
@@ -2203,41 +2583,41 @@ function SettingsTab({
     <div className="space-y-3">
       <Card className="p-4">
         <SectionHeading
-          title="Basic bot info"
+          title="Үндсэн мэдээлэл"
           description={
             updatedAt
-              ? `Last updated: ${formatTime(updatedAt)}`
-              : 'Main business name and core bot rules.'
+              ? `Шинэчилсэн: ${formatTime(updatedAt)}`
+              : 'Бизнесийн нэр болон ботын үндсэн дүрэм.'
           }
           action={
             <Button size="sm" variant="ghost" onClick={clearOldText}>
-              Clear old text
+              Текст цэвэрлэх
             </Button>
           }
         />
         <div className="mt-3 space-y-3">
           <Input
-            label="Business name"
+            label="Бизнесийн нэр"
             value={form.business_name}
             onChange={(e) => patch({ business_name: e.target.value })}
           />
           <Textarea
-            label="System prompt"
-            hint="Main rules for the customer-facing bot."
+            label="Системийн зааварчилга"
+            hint="Хэрэглэгчтэй харилцах ботын үндсэн дүрэм."
             rows={4}
             value={form.system_prompt}
             onChange={(e) => patch({ system_prompt: e.target.value })}
           />
           <Textarea
-            label="Quick keyword reply"
-            hint="If a customer uses one of the keywords below, the bot sends this fixed reply."
+            label="Түлхүүр үгийн хариу"
+            hint="Хэрэглэгч доорх түлхүүр үг бичвэл бот энэ хариуг автоматаар илгээнэ."
             rows={3}
             value={form.quick_info_reply}
             onChange={(e) => patch({ quick_info_reply: e.target.value })}
           />
           <Textarea
-            label="Quick keywords"
-            hint="One keyword or phrase per line."
+            label="Түлхүүр үгс"
+            hint="Нэг мөрт нэг түлхүүр үг эсвэл хэллэг."
             rows={3}
             value={form.quick_info_keywords}
             onChange={(e) => patch({ quick_info_keywords: e.target.value })}
@@ -2247,13 +2627,13 @@ function SettingsTab({
 
       <Card className="p-4">
         <SectionHeading
-          title="Comment auto-replies"
-          description="Used for Facebook post comments."
+          title="Коммент автомат хариу"
+          description="Facebook пост дээрх комментэд хариулах тохиргоо."
         />
         <div className="mt-3 space-y-3">
           <Textarea
-            label="Comment trigger keywords"
-            hint="One keyword or phrase per line."
+            label="Коммент илэрхийлэх түлхүүр үгс"
+            hint="Нэг мөрт нэг түлхүүр үг эсвэл хэллэг."
             rows={3}
             value={form.comment_trigger_patterns}
             onChange={(e) =>
@@ -2261,15 +2641,15 @@ function SettingsTab({
             }
           />
           <Textarea
-            label="Public comment reply"
-            hint="Visible reply posted under the comment."
+            label="Нийтийн хариу (комментэд)"
+            hint="Хэрэглэгчийн комментийн доор харагдах хариу."
             rows={2}
             value={form.comment_public_reply}
             onChange={(e) => patch({ comment_public_reply: e.target.value })}
           />
           <Textarea
-            label="DM reply after comment"
-            hint="Private message sent to the customer."
+            label="Хувийн мессеж (DM)"
+            hint="Хэрэглэгчид шууд илгээх нууц хариу."
             rows={3}
             value={form.comment_dm_reply}
             onChange={(e) => patch({ comment_dm_reply: e.target.value })}
@@ -2279,8 +2659,8 @@ function SettingsTab({
 
       <Card className="p-4">
         <SectionHeading
-          title="Human handoff"
-          description="If a customer asks for a person, the bot pauses and your staff can take over."
+          title="Хүнд шилжүүлэх"
+          description="Хэрэглэгч ажилтантай ярихыг хүсвэл бот зогсож, та хариулна."
         />
         <div className="mt-3 space-y-3">
           <label className="flex items-center gap-2.5 rounded-md border border-line bg-surface-sunken p-3">
@@ -2291,25 +2671,25 @@ function SettingsTab({
               onChange={(e) => patch({ handoff_enabled: e.target.checked })}
             />
             <span className="text-sm font-medium text-ink">
-              Enable human handoff
+              Хүнд шилжүүлэх идэвхжүүлэх
             </span>
           </label>
           <Textarea
-            label="Trigger words or phrases"
-            hint="If the customer message contains any of these, the bot pauses and hands over to a person."
+            label="Илэрхийлэх түлхүүр үгс"
+            hint="Хэрэглэгчийн мессежэд эдгээр үг байвал бот зогсч ажилтанд шилжинэ."
             rows={4}
             value={form.handoff_keywords}
             onChange={(e) => patch({ handoff_keywords: e.target.value })}
           />
           <Textarea
-            label="Reply sent to customer"
+            label="Хэрэглэгчид илгээх хариу"
             rows={2}
             value={form.handoff_reply}
             onChange={(e) => patch({ handoff_reply: e.target.value })}
           />
           <Select
-            label="Quick duration"
-            hint="Pick a ready-made handoff duration, or use the custom minutes field below."
+            label="Зогсоох хугацаа"
+            hint="Тогтмол хугацаа сонгоно уу, эсвэл доорх минутын талбарт өөрийн утга оруулна уу."
             value={handoffDurationMode}
             onChange={(e) => {
               const next = e.target.value;
@@ -2326,11 +2706,11 @@ function SettingsTab({
                 {option.label}
               </option>
             ))}
-            <option value={HANDOFF_DURATION_CUSTOM}>Custom</option>
+            <option value={HANDOFF_DURATION_CUSTOM}>Өөр хугацаа</option>
           </Select>
           <Input
-            label="Pause minutes"
-            hint="After this time the bot resumes automatically. Use 0 for manual resume only."
+            label="Зогсоох минут"
+            hint="Энэ хугацааны дараа бот автоматаар сэргэнэ. 0 оруулбал гараар сэргээх болно."
             inputMode="numeric"
             value={form.handoff_pause_minutes}
             onChange={(e) => patch({ handoff_pause_minutes: e.target.value })}
@@ -2340,66 +2720,66 @@ function SettingsTab({
 
       <Card className="p-4">
         <SectionHeading
-          title="Optional extra bot knowledge"
-          description="Only open this if you want FAQ, offers, discounts, or credentials."
+          title="Нэмэлт ботын мэдлэг"
+          description="FAQ, тусгай санал, хөнгөлөлт, итгэмжлэл нэмэхийг хүсвэл нээнэ үү."
           action={
             <Button
               size="sm"
               variant="secondary"
               onClick={() => setShowOptionalData((prev) => !prev)}
             >
-              {showOptionalData ? 'Hide optional data' : 'Show optional data'}
+              {showOptionalData ? 'Нуух' : 'Нээх'}
             </Button>
           }
         />
         {showOptionalData ? (
           <div className="mt-3 space-y-3">
             <StructuredEditor
-              title="FAQ"
-              addLabel="Add FAQ"
+              title="Түгээмэл асуулт (FAQ)"
+              addLabel="Асуулт нэмэх"
               fields={[
-                { key: 'question', label: 'Question' },
-                { key: 'answer', label: 'Answer' },
+                { key: 'question', label: 'Асуулт' },
+                { key: 'answer', label: 'Хариулт' },
               ]}
               rows={form.faq}
               onChange={(rows) => patch({ faq: rows })}
             />
             <StructuredEditor
-              title="Special offers"
-              addLabel="Add offer"
+              title="Тусгай санал"
+              addLabel="Санал нэмэх"
               fields={[
-                { key: 'name', label: 'Name' },
-                { key: 'duration', label: 'Duration' },
-                { key: 'price', label: 'Price' },
-                { key: 'target', label: 'Target' },
-                { key: 'eligibility', label: 'Eligibility' },
-                { key: 'description', label: 'Description' },
+                { key: 'name', label: 'Нэр' },
+                { key: 'duration', label: 'Хугацаа' },
+                { key: 'price', label: 'Үнэ' },
+                { key: 'target', label: 'Зорилтот' },
+                { key: 'eligibility', label: 'Нөхцөл' },
+                { key: 'description', label: 'Тайлбар' },
               ]}
               rows={form.special_offers}
               onChange={(rows) => patch({ special_offers: rows })}
             />
             <StructuredEditor
-              title="Discount policies"
-              addLabel="Add discount"
+              title="Хөнгөлөлтийн бодлого"
+              addLabel="Хөнгөлөлт нэмэх"
               fields={[
-                { key: 'name', label: 'Name' },
-                { key: 'discount', label: 'Discount' },
-                { key: 'applies_to', label: 'Applies to' },
-                { key: 'eligibility', label: 'Eligibility' },
-                { key: 'verification', label: 'Verification' },
-                { key: 'description', label: 'Description' },
+                { key: 'name', label: 'Нэр' },
+                { key: 'discount', label: 'Хөнгөлөлт' },
+                { key: 'applies_to', label: 'Хамаарах' },
+                { key: 'eligibility', label: 'Нөхцөл' },
+                { key: 'verification', label: 'Баталгаажуулалт' },
+                { key: 'description', label: 'Тайлбар' },
               ]}
               rows={form.discount_policies}
               onChange={(rows) => patch({ discount_policies: rows })}
             />
             <StructuredEditor
-              title="Verified credentials"
-              addLabel="Add credential"
+              title="Итгэмжлэл"
+              addLabel="Итгэмжлэл нэмэх"
               fields={[
-                { key: 'title', label: 'Title' },
-                { key: 'issuer', label: 'Issuer' },
-                { key: 'issued_on', label: 'Issued on' },
-                { key: 'description', label: 'Description' },
+                { key: 'title', label: 'Гарчиг' },
+                { key: 'issuer', label: 'Олгогч' },
+                { key: 'issued_on', label: 'Олгосон огноо' },
+                { key: 'description', label: 'Тайлбар' },
               ]}
               rows={form.verified_credentials}
               onChange={(rows) => patch({ verified_credentials: rows })}
@@ -2407,15 +2787,220 @@ function SettingsTab({
           </div>
         ) : (
           <p className="mt-3 text-sm text-ink-muted">
-            Hidden to keep this page simple. Open it only if you want the bot to answer from FAQ or special-offer data.
+            Хуудсыг энгийн байлгахын тулд нуусан. FAQ эсвэл тусгай санал нэмэхийг хүсвэл нээнэ үү.
           </p>
         )}
       </Card>
 
       <div className="sticky bottom-3 z-10">
         <Button block size="lg" loading={busy} onClick={onSave}>
-          Save settings
+          Тохиргоо хадгалах
         </Button>
+      </div>
+
+      <Card className="overflow-hidden p-0">
+        <div className="flex items-center gap-3 border-b border-line bg-surface px-4 py-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand text-white">
+            <Icons.ai size={16} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-ink">Бот туршиж үзэх</p>
+            <p className="text-xs text-ink-muted">Хэрэглэгч шиг асуугаад хариуг шалгаарай</p>
+          </div>
+          <Badge tone="success" dot className="ml-auto shrink-0">
+            Идэвхтэй
+          </Badge>
+        </div>
+        <EmbeddedTestBot />
+      </Card>
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------
+   Embedded test bot (in SettingsTab) — Messenger style
+   ---------------------------------------------------------------- */
+type TestChatMsg = { from: "user" | "bot"; text: string };
+
+const TEST_SUGGESTIONS = [
+  "Хөх хот аяллын үнэ хэд вэ?",
+  "Ирэх сард ямар аяллууд байгаа вэ?",
+  "Суудал хэд үлдсэн бэ?",
+  "Хоол багтдаг уу?",
+];
+
+function EmbeddedTestBot() {
+  const [messages, setMessages] = useState<TestChatMsg[]>([]);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, sending]);
+
+  async function send(textOverride?: string) {
+    const payload = (textOverride ?? input).trim();
+    if (!payload || sending) return;
+    setMessages((prev) => [...prev, { from: "user", text: payload }]);
+    setInput("");
+    setSending(true);
+    try {
+      const res = await fetch("/api/demo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: payload }),
+      });
+      const json = await res.json();
+      setMessages((prev) => [
+        ...prev,
+        {
+          from: "bot",
+          text:
+            typeof json?.reply === "string" && json.reply.trim()
+              ? json.reply
+              : "Хариу үүсгэх үед алдаа гарлаа.",
+        },
+      ]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        { from: "bot", text: "Уучлаарай, сервертэй холбогдоход алдаа гарлаа." },
+      ]);
+    } finally {
+      setSending(false);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }
+
+  return (
+    <div className="flex flex-col">
+      {/* Suggestion chips */}
+      <div className="scroll-area flex gap-2 overflow-x-auto border-b border-line bg-surface-sunken px-4 py-2.5">
+        {TEST_SUGGESTIONS.map((s) => (
+          <button
+            key={s}
+            type="button"
+            disabled={sending}
+            onClick={() => void send(s)}
+            className="shrink-0 rounded-full border border-line-strong bg-surface px-3 py-1 text-xs font-medium text-ink-muted transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
+          >
+            {s}
+          </button>
+        ))}
+      </div>
+
+      {/* Message area */}
+      <div className="scroll-area h-72 overflow-y-auto bg-[#f0f2f5] px-4 py-4">
+        {messages.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-brand/10 text-brand">
+              <Icons.ai size={24} />
+            </div>
+            <p className="text-sm text-ink-muted">
+              Хэрэглэгч шиг асуулт бичээрэй — бот хэрхэн хариулахыг шалгаарай.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {messages.map((msg, i) => {
+              const isUser = msg.from === "user";
+              const showAvatar =
+                !isUser &&
+                (i === 0 || messages[i - 1]?.from === "user");
+              return (
+                <div
+                  key={i}
+                  className={cx(
+                    "flex items-end gap-2",
+                    isUser ? "justify-end" : "justify-start",
+                  )}
+                >
+                  {!isUser && (
+                    <div
+                      className={cx(
+                        "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand text-white text-xs font-bold",
+                        !showAvatar && "opacity-0",
+                      )}
+                    >
+                      AI
+                    </div>
+                  )}
+                  <div
+                    className={cx(
+                      "max-w-[75%] px-4 py-2.5 text-sm leading-relaxed",
+                      isUser
+                        ? "rounded-[20px] rounded-br-[4px] bg-brand text-white"
+                        : "rounded-[20px] rounded-bl-[4px] bg-white text-ink shadow-sm",
+                    )}
+                  >
+                    <p className="whitespace-pre-wrap">{msg.text}</p>
+                  </div>
+                </div>
+              );
+            })}
+            {sending && (
+              <div className="flex items-end gap-2 justify-start">
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand text-white text-xs font-bold">
+                  AI
+                </div>
+                <div className="rounded-[20px] rounded-bl-[4px] bg-white px-4 py-3 shadow-sm">
+                  <div className="flex items-center gap-1">
+                    {[0, 1, 2].map((n) => (
+                      <span
+                        key={n}
+                        className="h-2 w-2 animate-bounce rounded-full bg-ink-subtle"
+                        style={{ animationDelay: `${n * 0.15}s` }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Input bar — Messenger style */}
+      <div className="flex items-center gap-2 border-t border-line bg-surface px-3 py-2.5">
+        {messages.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setMessages([])}
+            title="Чат цэвэрлэх"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-ink-subtle hover:bg-surface-sunken hover:text-ink"
+          >
+            <Icons.trash size={16} />
+          </button>
+        )}
+        <input
+          ref={inputRef}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); void send(); }
+          }}
+          placeholder="Мессеж бичих…"
+          disabled={sending}
+          className="h-10 min-w-0 flex-1 rounded-full border border-line-strong bg-surface-sunken px-4 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:bg-surface focus:outline-none disabled:opacity-60"
+        />
+        <button
+          type="button"
+          disabled={sending || !input.trim()}
+          onClick={() => void send()}
+          className={cx(
+            "flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors",
+            input.trim() && !sending
+              ? "bg-brand text-white hover:opacity-90"
+              : "bg-surface-sunken text-ink-subtle cursor-not-allowed",
+          )}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+          </svg>
+        </button>
       </div>
     </div>
   );

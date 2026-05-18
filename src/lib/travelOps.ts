@@ -1261,6 +1261,44 @@ async function requestProposalFromModel(opts: {
   return parsed ? normalizeProposal(parsed) : proposalFallbackFromRawText(result.text);
 }
 
+async function requestProposalFromPrompt(opts: {
+  prompt: string;
+  source: string;
+  timeoutMs?: number;
+  maxRetries?: number;
+  repairTimeoutMs?: number;
+}) {
+  const result = await askGeminiParts([{ text: opts.prompt }], {
+    source: opts.source,
+    jsonMode: true,
+    timeoutMs: opts.timeoutMs,
+    maxRetries: opts.maxRetries,
+  });
+
+  let parsed = parseJsonFromModel(result.text);
+  if (!parsed) {
+    try {
+      const repaired = await askGeminiParts(
+        [{ text: buildProposalRepairGuide(result.text) }],
+        {
+          source: `${opts.source}.repair`,
+          jsonMode: true,
+          timeoutMs: opts.repairTimeoutMs,
+          maxRetries: 0,
+        },
+      );
+      parsed = parseJsonFromModel(repaired.text);
+    } catch (error) {
+      logError("travel.ai.proposal_repair_failed", {
+        source: opts.source,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return parsed ? normalizeProposal(parsed) : proposalFallbackFromRawText(result.text);
+}
+
 async function createProposal(opts: {
   instruction: string;
   source: string;
@@ -1294,38 +1332,65 @@ async function createProposal(opts: {
     if (typeof opts.buildProposal === "function") {
       proposal = normalizeProposal(await opts.buildProposal(condensedTrips));
     } else {
-      const result = await askGeminiParts(
-        [{ text: buildProposalGuide(condensedTrips) }, ...(opts.userParts || [])],
-        { source: opts.source, jsonMode: true },
+      // Route through requestProposalFromModel so the text-instruction path
+      // gets the same JSON-repair + graceful fallback as the file path.
+      proposal = normalizeProposal(
+        await requestProposalFromModel({
+          condensedTrips,
+          userParts: opts.userParts || [],
+          source: opts.source,
+        }),
       );
-      proposal = normalizeProposal(parseJsonFromModel(result.text));
     }
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     logError("travel.ai.proposal_failed", {
       source: opts.source,
-      message: error instanceof Error ? error.message : String(error),
+      message,
     });
+    // Surface the real reason instead of a misleading "couldn't parse JSON".
+    const rateLimited = /\b429\b|rate.?limit|quota|resource.?exhausted/i.test(
+      message,
+    );
+    proposal = {
+      summary: rateLimited
+        ? "AI үйлчилгээ түр завгүй байна (хүсэлтийн хязгаар хэтэрсэн). Хэдэн секунд хүлээгээд дахин оролдоно уу."
+        : "AI үйлчилгээтэй холбогдоход алдаа гарлаа. Дахин оролдоно уу.",
+      needs_confirmation: true,
+      important_reason: message.slice(0, 300),
+      conflicts: [],
+      actions: [],
+    };
   }
 
-  const inserted = await queryNeon<{ id: number }>(
-    `
-      INSERT INTO travel_ai_change_requests (
-        instruction,
-        proposal_json,
-        conflicts,
-        needs_confirmation,
-        status
-      )
-      VALUES ($1, $2::jsonb, $3::text[], $4, 'pending')
-      RETURNING id
-    `,
-    [
-      opts.instruction,
-      JSON.stringify(proposal),
-      proposal.conflicts,
-      proposal.needs_confirmation,
-    ],
-  );
+  let inserted: Awaited<ReturnType<typeof queryNeon<{ id: number }>>> = null;
+  try {
+    inserted = await queryNeon<{ id: number }>(
+      `
+        INSERT INTO travel_ai_change_requests (
+          instruction,
+          proposal_json,
+          conflicts,
+          needs_confirmation,
+          status
+        )
+        VALUES ($1, $2::jsonb, $3::text[], $4, 'pending')
+        RETURNING id
+      `,
+      [
+        opts.instruction,
+        JSON.stringify(proposal),
+        proposal.conflicts,
+        proposal.needs_confirmation,
+      ],
+    );
+  } catch (insertError) {
+    logError("travel.ai.proposal_insert_failed", {
+      source: opts.source,
+      message:
+        insertError instanceof Error ? insertError.message : String(insertError),
+    });
+  }
 
   return {
     proposal,
@@ -1467,6 +1532,128 @@ export async function generateAIProposalFromContentBatched(input: {
     },
   });
 }
+
+function buildProposalRevisionGuide(input: {
+  instruction: string;
+  currentProposal: AIChangeProposal;
+  clarification: string;
+  condensedTrips: unknown;
+}) {
+  return [
+    "You are revising an existing travel-ops proposal after a short admin clarification.",
+    "Return JSON only using the same schema as before.",
+    "Keep high-confidence extracted data unless the clarification changes it.",
+    "Resolve only the directly affected uncertainty. Do not invent missing facts.",
+    "If the clarification clearly answers a conflict, remove that conflict from the output.",
+    "If uncertainty still remains, keep needs_confirmation=true and keep only the unresolved conflicts.",
+    "",
+    "JSON schema:",
+    "{",
+    '  "summary": "short summary",',
+    '  "needs_confirmation": true/false,',
+    '  "important_reason": "why confirmation is still needed",',
+    '  "conflicts": ["remaining conflict"],',
+    '  "actions": [',
+    '    { "action": "upsert|patch|cancel", "trip_id": "", "match": { "operator_name": "", "route_name": "" }, "fields": {} }',
+    "  ]",
+    "}",
+    "",
+    `Original admin request: ${input.instruction}`,
+    `Admin clarification: ${input.clarification}`,
+    `Current proposal JSON: ${JSON.stringify(input.currentProposal)}`,
+    `Current trips (JSON): ${JSON.stringify(input.condensedTrips)}`,
+  ].join("\n");
+}
+
+export async function reviseAIRequest(
+  requestId: number,
+  clarification: string,
+) {
+  const ready = await ensureTravelSchema();
+  if (!ready) {
+    return { ok: false, message: "Database is not configured." };
+  }
+
+  const reqResult = await queryNeon<{
+    id: number;
+    instruction: string;
+    proposal_json: AIChangeProposal;
+    status: string;
+  }>(
+    `
+      SELECT id, instruction, proposal_json, status
+      FROM travel_ai_change_requests
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [requestId],
+  );
+  const row = reqResult?.rows?.[0];
+  if (!row) {
+    return { ok: false, message: "Change request not found." };
+  }
+  if (row.status === "applied") {
+    return { ok: false, message: "Request is already applied." };
+  }
+
+  const currentProposal = normalizeProposal(row.proposal_json);
+  const trips = await listTrips({ limit: 250 });
+  const condensedTrips = trips.map((trip) => ({
+    id: trip.id,
+    category: trip.category,
+    operator_name: trip.operator_name,
+    route_name: trip.route_name,
+    status: trip.status,
+    seats_left: trip.seats_left,
+    seats_total: trip.seats_total,
+    has_food: trip.has_food,
+    adult_price: trip.adult_price,
+    child_price: trip.child_price,
+    currency: trip.currency,
+    duration_text: trip.duration_text,
+    departure_dates: trip.departure_dates,
+  }));
+
+  const prompt = buildProposalRevisionGuide({
+    instruction: row.instruction,
+    currentProposal,
+    clarification,
+    condensedTrips,
+  });
+
+  const revisedProposal = await requestProposalFromPrompt({
+    prompt,
+    source: "travel.ops.ai_clarify",
+    timeoutMs: 30_000,
+    maxRetries: 0,
+    repairTimeoutMs: 15_000,
+  });
+
+  await queryNeon(
+    `
+      UPDATE travel_ai_change_requests
+      SET
+        proposal_json = $2::jsonb,
+        conflicts = $3::text[],
+        needs_confirmation = $4
+      WHERE id = $1
+    `,
+    [
+      requestId,
+      JSON.stringify(revisedProposal),
+      revisedProposal.conflicts,
+      revisedProposal.needs_confirmation,
+    ],
+  );
+
+  return {
+    ok: true,
+    proposal: revisedProposal,
+    request_id: requestId,
+    requires_confirmation: Boolean(revisedProposal.needs_confirmation),
+  };
+}
+
 async function applyAIAction(action: AITripAction) {
   if (!action || typeof action !== "object") {
     return { ok: false, message: "Invalid action payload." };
@@ -1563,6 +1750,59 @@ export async function applyAIRequest(requestId: number) {
       : "All actions applied successfully.",
     results,
     proposal,
+  };
+}
+
+export async function applyAIProposalDirect(
+  proposal: AIChangeProposal,
+  instruction: string,
+) {
+  const ready = await ensureTravelSchema();
+  if (!ready) {
+    return { ok: false, message: "Database is not configured.", results: [] as string[] };
+  }
+
+  const normalised = normalizeProposal(proposal);
+  const results: string[] = [];
+  let failed = false;
+
+  for (const action of normalised.actions) {
+    const result = await applyAIAction(action);
+    results.push(result.message);
+    if (!result.ok) failed = true;
+  }
+
+  const status = failed ? "error" : "applied";
+  try {
+    await queryNeon(
+      `
+        INSERT INTO travel_ai_change_requests (
+          instruction, proposal_json, conflicts, needs_confirmation, status, applied_at
+        )
+        VALUES ($1, $2::jsonb, $3::text[], $4, $5, CASE WHEN $5 = 'applied' THEN NOW() ELSE NULL END)
+      `,
+      [
+        instruction,
+        JSON.stringify(normalised),
+        normalised.conflicts,
+        normalised.needs_confirmation,
+        status,
+      ],
+    );
+  } catch (insertError) {
+    logError("travel.ai.direct_apply_insert_failed", {
+      message:
+        insertError instanceof Error ? insertError.message : String(insertError),
+    });
+  }
+
+  return {
+    ok: !failed,
+    message: failed
+      ? "Some actions failed. Review results."
+      : "All actions applied successfully.",
+    results,
+    proposal: normalised,
   };
 }
 

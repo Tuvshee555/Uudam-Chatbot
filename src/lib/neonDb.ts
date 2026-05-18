@@ -24,12 +24,18 @@ function normalizeConnectionString(connectionString: string): string {
 }
 
 function createPool(connectionString: string): Pool {
-  return new Pool({
+  const p = new Pool({
     connectionString: normalizeConnectionString(connectionString),
     max: 6,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
   });
+  // Ensure Mongolian (and all Unicode) text round-trips correctly regardless
+  // of the server's default encoding.
+  p.on("connect", (client) => {
+    client.query("SET client_encoding = 'UTF8'").catch(() => undefined);
+  });
+  return p;
 }
 
 function getPool() {
