@@ -24,6 +24,14 @@ import {
 const env = getEnv();
 const DEMO_MAX_TEXT_CHARS = env.demoMaxTextChars;
 const DEMO_GLOBAL_LIMIT = env.demoGlobalRateLimit;
+const DEMO_CONVERSATION_ID_PATTERN = /^[a-zA-Z0-9_-]{16,80}$/;
+
+function normalizeConversationId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!DEMO_CONVERSATION_ID_PATTERN.test(trimmed)) return null;
+  return trimmed;
+}
 
 export default async function handler(
   req: NextApiRequest,
@@ -42,7 +50,7 @@ export default async function handler(
       return res.status(405).end();
     }
 
-    const { text } = req.body || {};
+    const { text, conversationId } = req.body || {};
     if (typeof text !== "string") return res.status(400).json({ error: "missing text" });
 
     const normalizedText = text.trim();
@@ -53,6 +61,10 @@ export default async function handler(
 
     const clientKey = getClientKey(req);
     const clientHash = hashIdentifier(clientKey);
+    const normalizedConversationId = normalizeConversationId(conversationId);
+    if (!normalizedConversationId) {
+      return res.status(400).json({ error: "invalid_conversation_id" });
+    }
 
     const key = `demo:${clientKey}`;
     const limit = await rateLimitAsync(key, 30, 5 * 60 * 1000); // 30 requests per 5 minutes per IP
@@ -102,7 +114,7 @@ export default async function handler(
 
     try {
       const { systemPrompt, business } = await readBusinessData();
-      const sessionId = `demo:${clientKey}`;
+      const sessionId = `demo:${normalizedConversationId}`;
       const history = await getHistory(sessionId);
 
       const prompt = buildPrompt({
@@ -126,6 +138,7 @@ export default async function handler(
         requestId: trace.requestId,
         correlationId: trace.correlationId,
         clientHash,
+        conversationIdSuffix: normalizedConversationId.slice(-8),
         promptLength: prompt.length,
         replyLength: reply.length,
       });

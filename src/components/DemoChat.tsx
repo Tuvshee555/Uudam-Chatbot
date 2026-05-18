@@ -16,10 +16,26 @@ type DemoChatProps = {
 };
 
 const DEFAULT_SUGGESTIONS = [
-  "Хөх хот аяллын үнэ хэд вэ?",
-  "Ирэх сард ямар аяллууд байгаа вэ?",
-  "2 хүүхэд, 2 том хүн явбал хөнгөлөлт бий юу?",
+  "Хөх хотын аяллын үнэ хэд вэ?",
+  "Ирэх сард ямар аяллууд гарах вэ?",
+  "2 том хүн, 2 хүүхдийн аялалд хөнгөлөлт бий юу?",
 ];
+
+const DEMO_CONVERSATION_KEY = "uudam_demo_conversation_id";
+
+function getConversationId(): string {
+  if (typeof window === "undefined") return "";
+  const existing = window.sessionStorage.getItem(DEMO_CONVERSATION_KEY);
+  if (existing) return existing;
+
+  const nextId =
+    typeof window.crypto?.randomUUID === "function"
+      ? window.crypto.randomUUID().replace(/-/g, "")
+      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 18)}`;
+
+  window.sessionStorage.setItem(DEMO_CONVERSATION_KEY, nextId);
+  return nextId;
+}
 
 function TypingDots() {
   return (
@@ -37,16 +53,21 @@ function TypingDots() {
 
 export default function DemoChat({
   className,
-  title = "Live bot test",
-  description = "Ask the bot the same way a customer would and check the reply instantly.",
+  title = "Шууд хариулт шалгах",
+  description = "Хэрэглэгчийн асуултаар туршаад ботын бодит хариуг шууд шалгана.",
   showHeader = true,
-  placeholder = "Ask about routes, prices, seats, dates, meals, or anything a customer might ask...",
+  placeholder = "Маршрут, үнэ, гарах өдөр, хоол, суудлын талаар асуугаарай...",
   suggestions = DEFAULT_SUGGESTIONS,
 }: DemoChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [conversationId, setConversationId] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setConversationId(getConversationId());
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -54,7 +75,7 @@ export default function DemoChat({
 
   async function send(textOverride?: string) {
     const payload = (textOverride ?? input).trim();
-    if (!payload || sending) return;
+    if (!payload || sending || !conversationId) return;
 
     setMessages((prev) => [...prev, { from: "user", text: payload }]);
     setInput("");
@@ -63,7 +84,7 @@ export default function DemoChat({
       const response = await fetch("/api/demo", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: payload }),
+        body: JSON.stringify({ text: payload, conversationId }),
       });
       const json = await response.json();
       setMessages((prev) => [
@@ -73,13 +94,16 @@ export default function DemoChat({
           text:
             typeof json?.reply === "string" && json.reply.trim()
               ? json.reply
-              : "Хариу үүсгэх үед алдаа гарлаа.",
+              : "Хариу боловсруулах үед алдаа гарлаа.",
         },
       ]);
     } catch {
       setMessages((prev) => [
         ...prev,
-        { from: "bot", text: "Уучлаарай, сервертэй холбогдоход алдаа гарлаа." },
+        {
+          from: "bot",
+          text: "Уучлаарай, сервертэй холбогдоход алдаа гарлаа.",
+        },
       ]);
     } finally {
       setSending(false);
@@ -94,7 +118,7 @@ export default function DemoChat({
             <h3 className="text-base font-semibold text-ink">{title}</h3>
             <p className="mt-1 text-sm text-ink-muted">{description}</p>
           </div>
-          <Badge tone="brand">Live reply check</Badge>
+          <Badge tone="brand">Бодит хариулт</Badge>
         </div>
       )}
 
@@ -104,7 +128,7 @@ export default function DemoChat({
             <button
               key={suggestion}
               type="button"
-              disabled={sending}
+              disabled={sending || !conversationId}
               onClick={() => void send(suggestion)}
               className="shrink-0 rounded-full border border-line-strong bg-surface px-3 py-1.5 text-xs font-medium text-ink-muted transition-colors hover:border-brand hover:text-brand"
             >
@@ -121,27 +145,28 @@ export default function DemoChat({
               <Icons.ai size={18} />
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-ink">Customer reply preview</p>
+              <p className="text-sm font-semibold text-ink">Хэрэглэгчид очих хариулт</p>
               <p className="mt-0.5 text-xs text-ink-muted">
-                This uses the same demo endpoint as the public test page.
+                Энэ нь нийтийн туршилтын чатын яг ижил API-г ашиглаж байна.
               </p>
             </div>
           </div>
         </div>
 
-        <div className="scroll-area h-[28rem] overflow-y-auto bg-canvas/55 px-4 py-4">
+        <div
+          aria-live="polite"
+          className="scroll-area h-[28rem] overflow-y-auto bg-canvas/55 px-4 py-4"
+        >
           {messages.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 rounded-[18px] border border-dashed border-line-strong bg-surface px-6 text-center">
               <div className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-soft text-brand">
                 <Icons.ai size={20} />
               </div>
               <div className="space-y-1">
-                <p className="text-sm font-semibold text-ink">
-                  No test messages yet
-                </p>
+                <p className="text-sm font-semibold text-ink">Одоогоор мессеж алга</p>
                 <p className="max-w-md text-sm text-ink-muted">
-                  Try a real customer question like price, seats left, trip date,
-                  or meal information.
+                  Үнэ, суудал, гарах өдөр, хоол эсвэл маршруттай холбоотой
+                  бодит асуултаар туршаарай.
                 </p>
               </div>
             </div>
@@ -183,7 +208,7 @@ export default function DemoChat({
           <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
             <div className="space-y-2">
               <label className="text-sm font-medium text-ink" htmlFor="demo-chat-input">
-                Test question
+                Туршилтын асуулт
               </label>
               <textarea
                 id="demo-chat-input"
@@ -197,21 +222,21 @@ export default function DemoChat({
                     void send();
                   }
                 }}
-                disabled={sending}
+                disabled={sending || !conversationId}
               />
               <p className="text-xs text-ink-subtle">
-                Press Enter to send. Use Shift+Enter for a new line.
+                `Enter` дарж илгээнэ. Шинэ мөр авах бол `Shift+Enter` ашиглана.
               </p>
             </div>
             <Button
               size="lg"
               loading={sending}
-              disabled={sending || !input.trim()}
+              disabled={sending || !input.trim() || !conversationId}
               onClick={() => void send()}
               className="md:min-w-36"
             >
               <Icons.play size={16} />
-              Send test
+              Илгээх
             </Button>
           </div>
         </div>

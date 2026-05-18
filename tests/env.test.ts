@@ -15,6 +15,19 @@ test("env validation accepts valid configuration", async () => {
   assert.equal(env.demoMaxTextChars, 1000);
   assert.equal(env.geminiMaxRetries, 1);
   assert.equal(env.webhookMaxBodyBytes, 1048576);
+  assert.equal(env.adminOpenAccess, false);
+});
+
+test("env validation rejects open admin access in production", async () => {
+  applyTestEnv({
+    ADMIN_OPEN_ACCESS: "true",
+    NODE_ENV: "production",
+  });
+  const envModule = await loadEnvModule();
+  assert.throws(
+    () => envModule.getEnv(),
+    /ADMIN_OPEN_ACCESS cannot be true in production/i,
+  );
 });
 
 test("env validation rejects NaN values", async () => {

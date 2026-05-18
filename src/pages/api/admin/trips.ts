@@ -1,8 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
 import {
+  deleteTrip,
   getBotControl,
-  listRecentAIRequests,
   listTrips,
   patchTrip,
   upsertTrip,
@@ -31,22 +31,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const status = asText(req.query.status);
       const limit = Number(req.query.limit || 200);
 
-      const [trips, control, aiRecent] = await Promise.all([
+      const [trips, control] = await Promise.all([
         listTrips({
           search: search || undefined,
           status: status || undefined,
           limit: Number.isFinite(limit) ? limit : 200,
         }),
         getBotControl(),
-        listRecentAIRequests(15),
       ]);
 
-      return res.status(200).json({
-        ok: true,
-        trips,
-        control,
-        ai_recent: aiRecent,
-      });
+      return res.status(200).json({ ok: true, trips, control });
     }
 
     if (req.method === "POST") {
@@ -54,7 +48,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!fields || typeof fields !== "object") {
         return res.status(400).json({ error: "fields object is required" });
       }
-
       const saved = await upsertTrip({
         id: typeof id === "string" ? id : undefined,
         fields,
@@ -74,6 +67,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const saved = await patchTrip(id.trim(), fields);
       if (!saved) return res.status(404).json({ error: "trip_not_found_or_no_changes" });
       return res.status(200).json({ ok: true, trip: saved });
+    }
+
+    if (req.method === "DELETE") {
+      const id = asText(req.query.id) || asText((req.body || {}).id);
+      if (!id) return res.status(400).json({ error: "id is required" });
+      const deleted = await deleteTrip(id);
+      if (!deleted) return res.status(404).json({ error: "trip_not_found" });
+      return res.status(200).json({ ok: true });
     }
 
     return res.status(405).end();

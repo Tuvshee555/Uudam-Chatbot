@@ -104,17 +104,6 @@ export type AIChangeProposal = {
   actions: AITripAction[];
 };
 
-type AIChangeRequestRow = {
-  id: number;
-  instruction: string;
-  proposal_json: AIChangeProposal;
-  conflicts: string[];
-  needs_confirmation: boolean;
-  status: string;
-  created_at: string;
-  applied_at: string | null;
-};
-
 const env = getEnv();
 const FILE_PARSE_GEMINI_TIMEOUT_MS = Math.max(env.geminiTimeoutMs, 60_000);
 const FILE_PARSE_GEMINI_MAX_RETRIES = 0;
@@ -913,6 +902,16 @@ export async function patchTrip(id: string, fields: TripMutationFields) {
     values,
   );
   return result?.rows?.[0] ? mapTripRow(result.rows[0]) : null;
+}
+
+export async function deleteTrip(id: string): Promise<boolean> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return false;
+  const result = await queryNeon(
+    `DELETE FROM travel_trip_entries WHERE id = $1`,
+    [id],
+  );
+  return (result?.rowCount ?? 0) > 0;
 }
 
 async function resolveTripIdByMatch(match?: {
@@ -1804,42 +1803,6 @@ export async function applyAIProposalDirect(
     results,
     proposal: normalised,
   };
-}
-
-export async function listRecentAIRequests(limit = 20) {
-  const ready = await ensureTravelSchema();
-  if (!ready) return [] as AIChangeRequestRow[];
-  const safeLimit = Math.min(Math.max(limit, 1), 200);
-  const result = await queryNeon<Record<string, unknown>>(
-    `
-      SELECT
-        id,
-        instruction,
-        proposal_json,
-        conflicts,
-        needs_confirmation,
-        status,
-        created_at,
-        applied_at
-      FROM travel_ai_change_requests
-      ORDER BY created_at DESC
-      LIMIT $1
-    `,
-    [safeLimit],
-  );
-  if (!result) return [] as AIChangeRequestRow[];
-  return result.rows.map((row) => ({
-    id: Number(row.id),
-    instruction: String(row.instruction || ""),
-    proposal_json: normalizeProposal(row.proposal_json as AIChangeProposal),
-    conflicts: Array.isArray(row.conflicts)
-      ? row.conflicts.map((value) => String(value))
-      : [],
-    needs_confirmation: Boolean(row.needs_confirmation),
-    status: String(row.status || "pending"),
-    created_at: String(row.created_at || ""),
-    applied_at: row.applied_at ? String(row.applied_at) : null,
-  }));
 }
 
 export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {

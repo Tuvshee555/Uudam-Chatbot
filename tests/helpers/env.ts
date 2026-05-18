@@ -33,6 +33,7 @@ const DEFAULT_NUMERIC_ENV: Record<string, string> = {
 };
 
 const DEFAULT_BOOLEAN_ENV: Record<string, string> = {
+  ADMIN_OPEN_ACCESS: "false",
   TRUST_PROXY_HEADERS: "true",
   ALLOW_ADMIN_SECRET_QUERY: "false",
   REDIS_STATE_ENABLED: "false",
@@ -43,6 +44,7 @@ const DEFAULT_BOOLEAN_ENV: Record<string, string> = {
 };
 
 const DEFAULT_OPTIONAL_ENV: Record<string, string> = {
+  NODE_ENV: "test",
   REDIS_KEY_PREFIX: "nexonbot-test",
 };
 

@@ -178,6 +178,8 @@ type TabKey = "assistant" | "trips" | "bot" | "settings";
    Constants & helpers
    ---------------------------------------------------------------- */
 const SECRET_KEY = "travel_admin_secret";
+const SECRET_TS_KEY = "travel_admin_secret_ts";
+const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
 const MAX_TOTAL_FILE_BYTES = 100 * 1024 * 1024;
 const MAX_ATTACH_COUNT = 20;
@@ -250,6 +252,25 @@ let idCounter = 0;
 function uid(): string {
   idCounter += 1;
   return `m${Date.now().toString(36)}${idCounter}`;
+}
+
+function getSecretStorage(): Storage | null {
+  if (typeof window === "undefined") return null;
+  return window.sessionStorage;
+}
+
+const TEST_BOT_CONVERSATION_KEY = "uudam_admin_testbot_conversation_id";
+
+function getTestBotConversationId(): string {
+  if (typeof window === "undefined") return "";
+  const existing = window.sessionStorage.getItem(TEST_BOT_CONVERSATION_KEY);
+  if (existing) return existing;
+  const nextId =
+    typeof window.crypto?.randomUUID === "function"
+      ? window.crypto.randomUUID().replace(/-/g, "")
+      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 18)}`;
+  window.sessionStorage.setItem(TEST_BOT_CONVERSATION_KEY, nextId);
+  return nextId;
 }
 
 function asInt(value: string): number | null {
@@ -751,12 +772,15 @@ export default function AdminPage() {
   const [aiInput, setAiInput] = useState("");
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [aiBusyLabel, setAiBusyLabel] = useState("");
 
   const [editingTrip, setEditingTrip] = useState<TravelTrip | null>(null);
   const [isNewTrip, setIsNewTrip] = useState(false);
   const [tripDraft, setTripDraft] = useState<Record<string, string>>(
     BLANK_TRIP_DRAFT,
   );
+  const [deletingTrip, setDeletingTrip] = useState<TravelTrip | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -837,11 +861,16 @@ export default function AdminPage() {
   }, [fetchWithAdmin, search, statusFilter, toast]);
 
   useEffect(() => {
-    const stored =
-      typeof window === "undefined"
-        ? ""
-        : localStorage.getItem(SECRET_KEY) || "";
-    if (stored) setSecret(stored);
+    const storage = getSecretStorage();
+    if (!storage) return;
+    const stored = storage.getItem(SECRET_KEY) || "";
+    const ts = Number(storage.getItem(SECRET_TS_KEY) || "0");
+    if (stored && Date.now() - ts < SESSION_TTL_MS) {
+      setSecret(stored);
+    } else if (stored) {
+      storage.removeItem(SECRET_KEY);
+      storage.removeItem(SECRET_TS_KEY);
+    }
   }, []);
 
   useEffect(() => {
@@ -877,8 +906,10 @@ export default function AdminPage() {
 
   /* ---------------- auth ---------------- */
   async function applySecret() {
-    if (typeof window !== "undefined") {
-      localStorage.setItem(SECRET_KEY, secret.trim());
+    const storage = getSecretStorage();
+    if (storage) {
+      storage.setItem(SECRET_KEY, secret.trim());
+      storage.setItem(SECRET_TS_KEY, String(Date.now()));
     }
     await loadAll();
   }
@@ -967,6 +998,11 @@ export default function AdminPage() {
     setAiInput("");
     setAttachedFiles([]);
     setBusyKey("ai-send");
+    setAiBusyLabel(
+      files.length > 0
+        ? `${files.length} файл уншиж байна… (хэдэн секунд)`
+        : "AI хариу бэлдэж байна…",
+    );
 
     try {
       let data: { proposal?: AIProposal; request_id?: number; error?: string };
@@ -1313,6 +1349,21 @@ export default function AdminPage() {
       toast.error("Маршрут эсвэл операторын нэр оруулна уу.");
       return;
     }
+    if (isNewTrip) {
+      const duplicate = trips.find(
+        (t) =>
+          t.operator_name.trim().toLowerCase() ===
+            fields.operator_name.trim().toLowerCase() &&
+          t.route_name.trim().toLowerCase() ===
+            fields.route_name.trim().toLowerCase(),
+      );
+      if (duplicate) {
+        toast.error(
+          `"${fields.operator_name} — ${fields.route_name}" нэртэй аялал аль хэдийн байна. Засах товч дарж шинэчилнэ үү.`,
+        );
+        return;
+      }
+    }
     setBusyKey("save-trip");
     try {
       const res = await fetchWithAdmin("/api/admin/trips", {
@@ -1329,6 +1380,27 @@ export default function AdminPage() {
       await loadAll();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Хадгалж чадсангүй.");
+    } finally {
+      setBusyKey("");
+    }
+  }
+
+  async function confirmDeleteTrip() {
+    if (!deletingTrip) return;
+    setBusyKey(`delete-trip-${deletingTrip.id}`);
+    const trip = deletingTrip;
+    setDeletingTrip(null);
+    try {
+      const res = await fetchWithAdmin(
+        `/api/admin/trips?id=${encodeURIComponent(trip.id)}`,
+        { method: "DELETE" },
+      );
+      const json = await readJsonSafe(res);
+      if (!res.ok) throw new Error(String(json?.error || "Устгаж чадсангүй."));
+      toast.success(`"${trip.route_name || trip.operator_name}" устгагдлаа.`);
+      await loadAll();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Устгаж чадсангүй.");
     } finally {
       setBusyKey("");
     }
@@ -1503,6 +1575,7 @@ export default function AdminPage() {
             dragOver={dragOver}
             setDragOver={setDragOver}
             busy={busyKey === "ai-send"}
+            busyLabel={aiBusyLabel}
             applyBusyId={busyKey.startsWith("apply-") ? busyKey.slice(6) : ""}
             clarifyBusyId={
               busyKey.startsWith("clarify-") ? busyKey.slice(8) : ""
@@ -1536,6 +1609,7 @@ export default function AdminPage() {
             onRefresh={() => void loadAll()}
             onCreate={beginCreateTrip}
             onEdit={beginEditTrip}
+            onDelete={(trip) => setDeletingTrip(trip)}
           />
         )}
 
@@ -1562,6 +1636,7 @@ export default function AdminPage() {
             updatedAt={settings?.updated_at}
             busy={busyKey === "save-settings"}
             onSave={() => void saveSettings()}
+            onRequestClear={() => setConfirmClear(true)}
           />
         )}
       </main>
@@ -1729,6 +1804,75 @@ export default function AdminPage() {
           />
         </div>
       </Modal>
+
+      {/* Delete trip confirmation modal */}
+      <Modal
+        open={deletingTrip != null}
+        onClose={() => setDeletingTrip(null)}
+        title="Аяллыг устгах уу?"
+        description={`"${deletingTrip?.route_name || deletingTrip?.operator_name}" — энэ үйлдлийг буцаах боломжгүй.`}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setDeletingTrip(null)}>
+              Болих
+            </Button>
+            <Button
+              variant="danger"
+              loading={busyKey.startsWith("delete-trip-")}
+              onClick={() => void confirmDeleteTrip()}
+            >
+              Устгах
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-ink-muted">
+          Устгасны дараа бот энэ аяллын мэдээллийг хариултдаа ашиглахгүй болно.
+        </p>
+      </Modal>
+
+      {/* Clear settings confirmation modal */}
+      <Modal
+        open={confirmClear}
+        onClose={() => setConfirmClear(false)}
+        title="Текст цэвэрлэх үү?"
+        description="Түлхүүр үгийн хариу, FAQ, тусгай санал болон бусад мэдээллийг устгана."
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setConfirmClear(false)}>
+              Болих
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                setConfirmClear(false);
+                setSettingsForm((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        quick_info_reply: "",
+                        quick_info_keywords: "",
+                        comment_trigger_patterns: "",
+                        comment_public_reply: "",
+                        comment_dm_reply: "",
+                        faq: [],
+                        special_offers: [],
+                        discount_policies: [],
+                        verified_credentials: [],
+                      }
+                    : prev,
+                );
+              }}
+            >
+              Цэвэрлэх
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-ink-muted">
+          Системийн зааварчилга болон бизнесийн нэр хадгалагдана.
+        </p>
+      </Modal>
     </div>
   );
 }
@@ -1745,6 +1889,7 @@ function AssistantTab({
   dragOver,
   setDragOver,
   busy,
+  busyLabel,
   applyBusyId,
   clarifyBusyId,
   onSend,
@@ -1765,6 +1910,7 @@ function AssistantTab({
   dragOver: boolean;
   setDragOver: (value: boolean) => void;
   busy: boolean;
+  busyLabel: string;
   applyBusyId: string;
   clarifyBusyId: string;
   onSend: () => void;
@@ -1819,7 +1965,7 @@ function AssistantTab({
           ))}
           {busy && (
             <div className="flex justify-start">
-              <div className="rounded-2xl rounded-bl-sm border border-line bg-surface px-4 py-3 shadow-sm">
+              <div className="flex items-center gap-2 rounded-2xl rounded-bl-sm border border-line bg-surface px-4 py-3 shadow-sm">
                 <div className="flex items-center gap-1">
                   {[0, 1, 2].map((n) => (
                     <span
@@ -1829,6 +1975,9 @@ function AssistantTab({
                     />
                   ))}
                 </div>
+                {busyLabel && (
+                  <span className="text-xs text-ink-muted">{busyLabel}</span>
+                )}
               </div>
             </div>
           )}
@@ -1951,6 +2100,7 @@ function ChatBubbleV2({
   onToggleConfirm: (id: string, value: boolean) => void;
 }) {
   void _onToggleConfirm;
+  const [formDraft, setFormDraft] = useState<Record<string, string>>({});
   if (message.role === "admin") {
     return (
       <div className="flex justify-end">
@@ -1982,7 +2132,6 @@ function ChatBubbleV2({
   }
 
   const { proposal } = message;
-  const [formDraft, setFormDraft] = useState<Record<string, string>>({});
   const previewActions = proposal.actions.slice(0, 4).map(describeAction);
   const hiddenActionCount = Math.max(
     0,
@@ -2180,6 +2329,7 @@ function TripsTab({
   onRefresh,
   onCreate,
   onEdit,
+  onDelete,
 }: {
   trips: TravelTrip[];
   search: string;
@@ -2190,6 +2340,7 @@ function TripsTab({
   onRefresh: () => void;
   onCreate: () => void;
   onEdit: (trip: TravelTrip) => void;
+  onDelete: (trip: TravelTrip) => void;
 }) {
   return (
     <div className="space-y-3">
@@ -2242,7 +2393,12 @@ function TripsTab({
       ) : (
         <div className="space-y-2.5">
           {trips.map((trip) => (
-            <TripCard key={trip.id} trip={trip} onEdit={() => onEdit(trip)} />
+            <TripCard
+              key={trip.id}
+              trip={trip}
+              onEdit={() => onEdit(trip)}
+              onDelete={() => onDelete(trip)}
+            />
           ))}
         </div>
       )}
@@ -2253,9 +2409,11 @@ function TripsTab({
 function TripCard({
   trip,
   onEdit,
+  onDelete,
 }: {
   trip: TravelTrip;
   onEdit: () => void;
+  onDelete: () => void;
 }) {
   const facts: string[] = [];
   if (trip.seats_left != null || trip.seats_total != null) {
@@ -2307,10 +2465,16 @@ function TripCard({
         <span className="text-xs text-ink-subtle">
           Шинэчилсэн: {formatTime(trip.updated_at)}
         </span>
-        <Button size="sm" variant="secondary" onClick={onEdit}>
-          <Icons.edit size={15} />
-          Засах
-        </Button>
+        <div className="flex gap-2">
+          <Button size="sm" variant="secondary" onClick={onEdit}>
+            <Icons.edit size={15} />
+            Засах
+          </Button>
+          <Button size="sm" variant="ghost" className="text-danger" onClick={onDelete}>
+            <Icons.trash size={15} />
+            Устгах
+          </Button>
+        </div>
       </div>
     </Card>
   );
@@ -2551,12 +2715,14 @@ function SettingsTab({
   updatedAt,
   busy,
   onSave,
+  onRequestClear,
 }: {
   form: SettingsForm;
   setForm: React.Dispatch<React.SetStateAction<SettingsForm | null>>;
   updatedAt?: string;
   busy: boolean;
   onSave: () => void;
+  onRequestClear: () => void;
 }) {
   function patch(partial: Partial<SettingsForm>) {
     setForm((prev) => (prev ? { ...prev, ...partial } : prev));
@@ -2564,20 +2730,6 @@ function SettingsTab({
 
   const handoffDurationMode = handoffDurationSelectValue(form.handoff_pause_minutes);
   const [showOptionalData, setShowOptionalData] = useState(false);
-
-  function clearOldText() {
-    patch({
-      quick_info_reply: '',
-      quick_info_keywords: '',
-      comment_trigger_patterns: '',
-      comment_public_reply: '',
-      comment_dm_reply: '',
-      faq: [],
-      special_offers: [],
-      discount_policies: [],
-      verified_credentials: [],
-    });
-  }
 
   return (
     <div className="space-y-3">
@@ -2590,7 +2742,7 @@ function SettingsTab({
               : 'Бизнесийн нэр болон ботын үндсэн дүрэм.'
           }
           action={
-            <Button size="sm" variant="ghost" onClick={clearOldText}>
+            <Button size="sm" variant="ghost" onClick={onRequestClear}>
               Текст цэвэрлэх
             </Button>
           }
@@ -2833,8 +2985,13 @@ function EmbeddedTestBot() {
   const [messages, setMessages] = useState<TestChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [conversationId, setConversationId] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setConversationId(getTestBotConversationId());
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -2842,7 +2999,7 @@ function EmbeddedTestBot() {
 
   async function send(textOverride?: string) {
     const payload = (textOverride ?? input).trim();
-    if (!payload || sending) return;
+    if (!payload || sending || !conversationId) return;
     setMessages((prev) => [...prev, { from: "user", text: payload }]);
     setInput("");
     setSending(true);
@@ -2850,7 +3007,7 @@ function EmbeddedTestBot() {
       const res = await fetch("/api/demo", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: payload }),
+        body: JSON.stringify({ text: payload, conversationId }),
       });
       const json = await res.json();
       setMessages((prev) => [
@@ -2882,7 +3039,7 @@ function EmbeddedTestBot() {
           <button
             key={s}
             type="button"
-            disabled={sending}
+            disabled={sending || !conversationId}
             onClick={() => void send(s)}
             className="shrink-0 rounded-full border border-line-strong bg-surface px-3 py-1 text-xs font-medium text-ink-muted transition-colors hover:border-brand hover:text-brand disabled:opacity-40"
           >
@@ -2983,12 +3140,12 @@ function EmbeddedTestBot() {
             if (e.key === "Enter") { e.preventDefault(); void send(); }
           }}
           placeholder="Мессеж бичих…"
-          disabled={sending}
+          disabled={sending || !conversationId}
           className="h-10 min-w-0 flex-1 rounded-full border border-line-strong bg-surface-sunken px-4 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:bg-surface focus:outline-none disabled:opacity-60"
         />
         <button
           type="button"
-          disabled={sending || !input.trim()}
+          disabled={sending || !input.trim() || !conversationId}
           onClick={() => void send()}
           className={cx(
             "flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors",

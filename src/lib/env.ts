@@ -176,7 +176,7 @@ export function getEnv(): ValidatedEnv {
   const adminOpenAccess = readBoolean(
     "ADMIN_OPEN_ACCESS",
     source,
-    true,
+    false,
     errors,
   );
   const neonDatabaseUrl =
@@ -428,6 +428,11 @@ export function getEnv(): ValidatedEnv {
   if (anyRedisFeatureEnabled && !redisUrl) {
     errors.push(
       "REDIS_URL is required when any REDIS_*_ENABLED feature flag is true",
+    );
+  }
+  if (adminOpenAccess && source.NODE_ENV === "production") {
+    errors.push(
+      "ADMIN_OPEN_ACCESS cannot be true in production. Set ADMIN_OPEN_ACCESS=false and require authenticated admin access.",
     );
   }
 
