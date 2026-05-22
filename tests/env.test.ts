@@ -16,6 +16,8 @@ test("env validation accepts valid configuration", async () => {
   assert.equal(env.geminiMaxRetries, 1);
   assert.equal(env.webhookMaxBodyBytes, 1048576);
   assert.equal(env.adminOpenAccess, false);
+  assert.equal(env.googleDriveSyncEnabled, false);
+  assert.equal(env.googleDriveSyncIntervalMinutes, 30);
 });
 
 test("env validation rejects open admin access in production", async () => {
@@ -67,5 +69,19 @@ test("env validation requires REDIS_URL when redis state flags are enabled", asy
   assert.throws(
     () => envModule.getEnv(),
     /REDIS_URL is required when any REDIS_\*_ENABLED feature flag is true/,
+  );
+});
+
+test("env validation requires full Google Drive sync credentials when enabled", async () => {
+  applyTestEnv({
+    GOOGLE_DRIVE_SYNC_ENABLED: "true",
+    GOOGLE_DRIVE_FOLDER_ID: "folder-123",
+    GOOGLE_DRIVE_SERVICE_ACCOUNT_EMAIL: undefined,
+    GOOGLE_DRIVE_PRIVATE_KEY: undefined,
+  });
+  const envModule = await loadEnvModule();
+  assert.throws(
+    () => envModule.getEnv(),
+    /GOOGLE_DRIVE_SYNC_ENABLED requires GOOGLE_DRIVE_FOLDER_ID, GOOGLE_DRIVE_SERVICE_ACCOUNT_EMAIL, and GOOGLE_DRIVE_PRIVATE_KEY/i,
   );
 });

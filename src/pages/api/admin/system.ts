@@ -1,6 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getEnv } from "../../../lib/env";
 import { hasAdminAccess } from "../../../lib/adminAccess";
+import {
+  getDriveSyncDiagnostics,
+  maybeAutoSyncDriveFolder,
+} from "../../../lib/googleDriveSync";
 import { getDbDiagnostics } from "../../../lib/travelOps";
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
 
@@ -18,12 +22,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     if (req.method !== "GET") return res.status(405).end();
 
-    const diagnostics = await getDbDiagnostics();
+    void maybeAutoSyncDriveFolder({ source: "api.admin.system" });
+    const [diagnostics, driveSync] = await Promise.all([
+      getDbDiagnostics(),
+      getDriveSyncDiagnostics(),
+    ]);
     return res.status(200).json({
       ok: true,
       open_access: env.adminOpenAccess,
       authorized: hasAdminAccess(req),
       db: diagnostics,
+      drive_sync: driveSync,
     });
   } finally {
     finishRequestTrace(trace, res.statusCode || 500);

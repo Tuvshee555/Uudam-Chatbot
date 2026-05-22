@@ -43,6 +43,13 @@ export type ValidatedEnv = {
   metaSubscribeMaxRetries: number;
   metaRetryBaseDelayMs: number;
   webhookMaxPendingConversations: number;
+  staffNotifyPsids: string[];
+  googleDriveSyncEnabled: boolean;
+  googleDriveFolderId: string | null;
+  googleDriveServiceAccountEmail: string | null;
+  googleDrivePrivateKey: string | null;
+  googleDriveSyncIntervalMinutes: number;
+  googleDriveSyncFileLimit: number;
 };
 
 let cachedEnv: ValidatedEnv | null = null;
@@ -419,6 +426,41 @@ export function getEnv(): ValidatedEnv {
     100_000,
     errors,
   );
+  const staffNotifyPsids = (readOptionalString("STAFF_NOTIFY_PSIDS", source) || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const googleDriveSyncEnabled = readBoolean(
+    "GOOGLE_DRIVE_SYNC_ENABLED",
+    source,
+    false,
+    errors,
+  );
+  const googleDriveFolderId = readOptionalString("GOOGLE_DRIVE_FOLDER_ID", source);
+  const googleDriveServiceAccountEmail = readOptionalString(
+    "GOOGLE_DRIVE_SERVICE_ACCOUNT_EMAIL",
+    source,
+  );
+  const googleDrivePrivateKey = readOptionalString(
+    "GOOGLE_DRIVE_PRIVATE_KEY",
+    source,
+  );
+  const googleDriveSyncIntervalMinutes = readPositiveInt(
+    "GOOGLE_DRIVE_SYNC_INTERVAL_MINUTES",
+    source,
+    30,
+    1,
+    24 * 60,
+    errors,
+  );
+  const googleDriveSyncFileLimit = readPositiveInt(
+    "GOOGLE_DRIVE_SYNC_FILE_LIMIT",
+    source,
+    50,
+    1,
+    500,
+    errors,
+  );
 
   const anyRedisFeatureEnabled =
     redisRateLimitEnabled ||
@@ -433,6 +475,16 @@ export function getEnv(): ValidatedEnv {
   if (adminOpenAccess && source.NODE_ENV === "production") {
     errors.push(
       "ADMIN_OPEN_ACCESS cannot be true in production. Set ADMIN_OPEN_ACCESS=false and require authenticated admin access.",
+    );
+  }
+  if (
+    googleDriveSyncEnabled &&
+    (!googleDriveFolderId ||
+      !googleDriveServiceAccountEmail ||
+      !googleDrivePrivateKey)
+  ) {
+    errors.push(
+      "GOOGLE_DRIVE_SYNC_ENABLED requires GOOGLE_DRIVE_FOLDER_ID, GOOGLE_DRIVE_SERVICE_ACCOUNT_EMAIL, and GOOGLE_DRIVE_PRIVATE_KEY",
     );
   }
 
@@ -485,6 +537,13 @@ export function getEnv(): ValidatedEnv {
     metaSubscribeMaxRetries,
     metaRetryBaseDelayMs,
     webhookMaxPendingConversations,
+    staffNotifyPsids,
+    googleDriveSyncEnabled,
+    googleDriveFolderId,
+    googleDriveServiceAccountEmail,
+    googleDrivePrivateKey,
+    googleDriveSyncIntervalMinutes,
+    googleDriveSyncFileLimit,
   };
 
   logStartupDiagnostics("env", {
@@ -513,6 +572,14 @@ export function getEnv(): ValidatedEnv {
     metaApiTimeoutMs: cachedEnv.metaApiTimeoutMs,
     metaSubscribeMaxRetries: cachedEnv.metaSubscribeMaxRetries,
     webhookMaxPendingConversations: cachedEnv.webhookMaxPendingConversations,
+    googleDriveSyncEnabled: cachedEnv.googleDriveSyncEnabled,
+    googleDriveFolderConfigured: Boolean(cachedEnv.googleDriveFolderId),
+    googleDriveServiceAccountConfigured: Boolean(
+      cachedEnv.googleDriveServiceAccountEmail &&
+        cachedEnv.googleDrivePrivateKey,
+    ),
+    googleDriveSyncIntervalMinutes: cachedEnv.googleDriveSyncIntervalMinutes,
+    googleDriveSyncFileLimit: cachedEnv.googleDriveSyncFileLimit,
     runtime: {
       nodeEnv: source.NODE_ENV || null,
       vercel: Boolean(source.VERCEL),

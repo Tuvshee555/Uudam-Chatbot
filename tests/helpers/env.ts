@@ -30,6 +30,8 @@ const DEFAULT_NUMERIC_ENV: Record<string, string> = {
   META_SUBSCRIBE_MAX_RETRIES: "1",
   META_RETRY_BASE_DELAY_MS: "50",
   WEBHOOK_MAX_PENDING_CONVERSATIONS: "5000",
+  GOOGLE_DRIVE_SYNC_INTERVAL_MINUTES: "30",
+  GOOGLE_DRIVE_SYNC_FILE_LIMIT: "50",
 };
 
 const DEFAULT_BOOLEAN_ENV: Record<string, string> = {
@@ -41,6 +43,7 @@ const DEFAULT_BOOLEAN_ENV: Record<string, string> = {
   REDIS_REPLAY_ENABLED: "false",
   REDIS_CONVERSATION_ENABLED: "false",
   REDIS_PAUSE_ENABLED: "false",
+  GOOGLE_DRIVE_SYNC_ENABLED: "false",
 };
 
 const DEFAULT_OPTIONAL_ENV: Record<string, string> = {

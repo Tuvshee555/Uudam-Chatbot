@@ -124,6 +124,7 @@ type ClarificationOption = {
 type ClarificationQuestion = {
   id: string;
   prompt: string;
+  detail?: string;
   options: ClarificationOption[];
   allowCustom?: boolean;
   customPlaceholder?: string;
@@ -172,7 +173,52 @@ type AttachedFile = {
   dataUrl: string;
 };
 
-type TabKey = "assistant" | "trips" | "bot" | "settings";
+type TabKey = "assistant" | "trips" | "bot" | "leads" | "settings";
+
+type TravelLead = {
+  id: number;
+  kind: "handoff" | "booking";
+  platform: string;
+  sender_id: string;
+  customer_message: string;
+  contact_phone: string;
+  context: string;
+  status: "new" | "seen";
+  created_at: string;
+  seen_at: string | null;
+};
+
+type DriveSyncRecentFile = {
+  file_id: string;
+  file_name: string;
+  last_status: string;
+  last_error: string;
+  request_id: number | null;
+  updated_at: string;
+};
+
+type DriveSyncDiagnostics = {
+  enabled: boolean;
+  configured: boolean;
+  folder_id: string | null;
+  service_account_email: string | null;
+  interval_minutes: number;
+  file_limit: number;
+  state: {
+    status: "idle" | "running" | "success" | "warning" | "error";
+    last_checked_at: string | null;
+    last_synced_at: string | null;
+    last_error: string;
+    last_summary: string;
+    last_run_id: string;
+    files_examined: number;
+    files_changed: number;
+    files_applied: number;
+    files_blocked: number;
+    updated_at: string | null;
+  };
+  recent_files: DriveSyncRecentFile[];
+};
 
 /* ----------------------------------------------------------------
    Constants & helpers
@@ -308,6 +354,15 @@ function formatTime(value: string | null | undefined): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function driveSyncTone(
+  status: DriveSyncDiagnostics["state"]["status"] | undefined,
+): "success" | "warning" | "danger" | "neutral" {
+  if (status === "success") return "success";
+  if (status === "warning" || status === "running") return "warning";
+  if (status === "error") return "danger";
+  return "neutral";
 }
 
 function toStructuredRows(value: unknown): StructuredRow[] {
@@ -464,27 +519,35 @@ function buildProposalClarifications(
   });
 
   proposal.conflicts.forEach((conflict, index) => {
-    const normalized = conflict.toLowerCase();
+    const detail = conflict.trim();
+    if (!detail) return;
+    const normalized = detail.toLowerCase();
     const quoted = extractQuotedValues(conflict);
+    // The first quoted value is usually the trip/route the conflict is about.
+    const subject = quoted[0] || "";
+    const subjectTag = subject ? `"${subject}" аяллын ` : "";
 
     if (
       normalized.includes("file") ||
       normalized.includes("файлын нэр") ||
-      normalized.includes("operator")
+      normalized.includes("operator") ||
+      normalized.includes("оператор") ||
+      normalized.includes("брэнд")
     ) {
       const detected = quoted[0] || "файлын нэр";
       const operator = quoted[1] || "илэрсэн оператор";
       pushQuestion({
-        id: `operator-mismatch:${operator}:${detected}`,
-        prompt: `Брэндийн зөрүү илэрлээ: файлд "${detected}" гэж байгаа ч оператор "${operator}" байна. Аль нэрийг хэрэглэх вэ?`,
+        id: `operator-mismatch:${index}`,
+        prompt: "Брэнд/операторын нэр зөрчилтэй байна. Аль нэрийг хэрэглэх вэ?",
+        detail,
         options: [
           {
             label: `"${operator}" хэрэглэх`,
-            answer: `Операторыг "${operator}" гэж үлдээж, файлын нэр "${detected}"-г үл тооцно.`,
+            answer: `Операторыг "${operator}" гэж үлдээнэ үү. (Зөрчил: ${detail})`,
           },
           {
             label: `"${detected}" хэрэглэх`,
-            answer: `"${operator}"-н оронд "${detected}"-г оператор/брэнд болгон ашиглана.`,
+            answer: `Операторыг "${detected}" болгоно уу. (Зөрчил: ${detail})`,
           },
         ],
         allowCustom: true,
@@ -496,19 +559,20 @@ function buildProposalClarifications(
     if (normalized.includes("хөтөлбөртэй") && normalized.includes("чөлөөт")) {
       pushQuestion({
         id: `plan-choice:${index}`,
-        prompt: "Нэг аялалд хоёр төрлийн үнэ байна: хөтөлбөртэй болон чөлөөт хөтөлбөр. Аль нэгийг үндсэн аялал болгох вэ?",
+        prompt: `${subjectTag}аялалд хөтөлбөртэй болон чөлөөт гэсэн хоёр үнэ байна. Аль нь үндсэн үнэ вэ?`,
+        detail,
         options: [
           {
             label: "Хөтөлбөртэй хувилбар",
-            answer: "Хөтөлбөртэй хувилбарыг үндсэн аялалын үнэ, дэлгэрэнгүй болгон хэрэглэ.",
+            answer: `${subjectTag}хөтөлбөртэй хувилбарыг үндсэн үнэ болгон хэрэглэ. (Зөрчил: ${detail})`,
           },
           {
             label: "Чөлөөт хувилбар",
-            answer: "Чөлөөт хувилбарыг үндсэн аялалын үнэ, дэлгэрэнгүй болгон хэрэглэ.",
+            answer: `${subjectTag}чөлөөт хувилбарыг үндсэн үнэ болгон хэрэглэ. (Зөрчил: ${detail})`,
           },
         ],
         allowCustom: true,
-        customPlaceholder: "Аль хувилбарыг хэрэглэх талаар бичнэ үү",
+        customPlaceholder: "Аль хувилбарыг хэрэглэхийг бичнэ үү",
       });
       return;
     }
@@ -520,15 +584,16 @@ function buildProposalClarifications(
     ) {
       pushQuestion({
         id: `meal-conflict:${index}`,
-        prompt: "Нэг аяллын хоолны мэдээлэл зөрчилтэй байна. Хоолыг нийтд нь багтсан гэж тэмдэглэх үү?",
+        prompt: `${subjectTag}хоолны мэдээлэл зөрчилтэй байна. Хоол багтсан уу?`,
+        detail,
         options: [
           {
             label: "Тийм, багтсан",
-            answer: "Аяллын хоолыг нийтд нь багтсан гэж тэмдэглэ.",
+            answer: `${subjectTag}хоолыг багтсан гэж тэмдэглэ. (Зөрчил: ${detail})`,
           },
           {
             label: "Үгүй, багтаагүй",
-            answer: "Аяллын хоолыг нийтд нь багтаагүй гэж тэмдэглэ.",
+            answer: `${subjectTag}хоолыг багтаагүй гэж тэмдэглэ. (Зөрчил: ${detail})`,
           },
         ],
         allowCustom: true,
@@ -544,19 +609,20 @@ function buildProposalClarifications(
     ) {
       pushQuestion({
         id: `date-conflict:${index}`,
-        prompt: "Нэг аяллын гарах өдрийг тодорхойлж чадсангүй. Огноогүйгээр үлдээх үү?",
+        prompt: `${subjectTag}гарах өдрийг тодорхойлж чадсангүй. Юу хийх вэ?`,
+        detail,
         options: [
           {
-            label: "Тийм, огноогүй үлдээх",
-            answer: "Тухайн аяллыг гарах өдөргүйгээр саналд хэвээр нь үлдээ.",
+            label: "Огноогүй үлдээх",
+            answer: `${subjectTag}гарах өдөргүйгээр саналд хэвээр нь үлдээ. (Зөрчил: ${detail})`,
           },
           {
-            label: "Үгүй, хасах",
-            answer: "Гарах өдөр нь тодорхойгүй аяллыг санал болгохгүй.",
+            label: "Энэ аяллыг хасах",
+            answer: `${subjectTag}гарах өдөр нь тодорхойгүй тул санал болгохгүй. (Зөрчил: ${detail})`,
           },
         ],
         allowCustom: true,
-        customPlaceholder: "Хэрэглэх огноо эсвэл энэ аяллыг хэрхэн зохицуулах талаар бичнэ үү",
+        customPlaceholder: "Хэрэглэх гарах өдрийг бичнэ үү (ж: 2026-06-15)",
       });
       return;
     }
@@ -568,21 +634,43 @@ function buildProposalClarifications(
     ) {
       pushQuestion({
         id: `duplicate-route:${index}`,
-        prompt: "Ижил маршруттай боловч зөрчилтэй мэдээлэлтэй хоёр аялал илэрлээ. Тусдаа аялал болгон үлдээх үү?",
+        prompt: "Ижил маршруттай боловч мэдээлэл нь зөрүүтэй хоёр аялал илэрлээ. Юу хийх вэ?",
+        detail,
         options: [
           {
             label: "Тусдаа үлдээх",
-            answer: "Тэдгээрийг тусдаа аялал болгон хэвээр нь үлдээ.",
+            answer: `Эдгээрийг тусдаа аялал болгон үлдээ. (Зөрчил: ${detail})`,
           },
           {
-            label: "Нэгтгэх",
-            answer: "Тэдгээрийг нэг аялал болгон нэгтгэж, нэгдсэн хувилбарыг хэрэглэ.",
+            label: "Нэг болгон нэгтгэх",
+            answer: `Эдгээрийг нэг аялал болгон нэгтгэ. (Зөрчил: ${detail})`,
           },
         ],
         allowCustom: true,
-        customPlaceholder: "Ижил аяллыг хэрхэн зохицуулах талаар бичнэ үү",
+        customPlaceholder: "Хэрхэн зохицуулахыг бичнэ үү",
       });
+      return;
     }
+
+    // Any conflict that doesn't match a known category still gets surfaced —
+    // never silently drop a flagged conflict.
+    pushQuestion({
+      id: `conflict:${index}`,
+      prompt: "Энэ зөрчлийг хэрхэн зохицуулах вэ?",
+      detail,
+      options: [
+        {
+          label: "Илэрсэнээр нь үлдээх",
+          answer: `Дараах зөрчлийг илэрсэн хэвээр нь үлдээ: ${detail}`,
+        },
+        {
+          label: "Болгоомжтой засах",
+          answer: `Дараах зөрчлийг болгоомжтой хянаж засна уу: ${detail}`,
+        },
+      ],
+      allowCustom: true,
+      customPlaceholder: "Хэрхэн зохицуулахыг бичнэ үү",
+    });
   });
 
   if (questions.length === 0 && proposal.needs_confirmation) {
@@ -608,7 +696,7 @@ function buildProposalClarifications(
     });
   }
 
-  return questions.slice(0, 4);
+  return questions.slice(0, 6);
 }
 
 /* ----------------------------------------------------------------
@@ -742,6 +830,7 @@ export default function AdminPage() {
     trips: number;
     lastUpdatedAt: string | null;
   } | null>(null);
+  const [driveSync, setDriveSync] = useState<DriveSyncDiagnostics | null>(null);
 
   const [tab, setTab] = useState<TabKey>("assistant");
   const [loading, setLoading] = useState(false);
@@ -782,6 +871,9 @@ export default function AdminPage() {
   const [deletingTrip, setDeletingTrip] = useState<TravelTrip | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
 
+  const [leads, setLeads] = useState<TravelLead[]>([]);
+  const [newLeadCount, setNewLeadCount] = useState(0);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -818,8 +910,9 @@ export default function AdminPage() {
       setRequiresAuth(false);
       setOpenAccess(Boolean(systemJson?.open_access));
       setDbInfo(systemJson?.db || null);
+      setDriveSync((systemJson?.drive_sync as DriveSyncDiagnostics) || null);
 
-      const [tripRes, pauseRes, settingsRes] = await Promise.all([
+      const [tripRes, pauseRes, settingsRes, leadsRes] = await Promise.all([
         fetchWithAdmin(
           `/api/admin/trips?search=${encodeURIComponent(
             search,
@@ -827,12 +920,14 @@ export default function AdminPage() {
         ),
         fetchWithAdmin("/api/pause"),
         fetchWithAdmin("/api/admin/settings"),
+        fetchWithAdmin("/api/admin/leads"),
       ]);
 
       if (
         tripRes.status === 401 ||
         pauseRes.status === 401 ||
-        settingsRes.status === 401
+        settingsRes.status === 401 ||
+        leadsRes.status === 401
       ) {
         setRequiresAuth(true);
         setLoading(false);
@@ -842,11 +937,16 @@ export default function AdminPage() {
       const tripJson = await tripRes.json();
       const pauseJson = await pauseRes.json().catch(() => ({}));
       const settingsJson = await settingsRes.json().catch(() => ({}));
+      const leadsJson = await leadsRes.json().catch(() => ({}));
 
       setTrips(Array.isArray(tripJson?.trips) ? tripJson.trips : []);
       setControl(pauseJson?.control || tripJson?.control || null);
       setPausedRows(Array.isArray(pauseJson?.paused) ? pauseJson.paused : []);
       setRecentRows(Array.isArray(pauseJson?.recent) ? pauseJson.recent : []);
+      setLeads(Array.isArray(leadsJson?.leads) ? leadsJson.leads : []);
+      setNewLeadCount(
+        typeof leadsJson?.new_count === "number" ? leadsJson.new_count : 0,
+      );
       if (settingsJson?.settings) {
         setSettings(settingsJson.settings as TravelBotSettings);
         setSettingsForm((prev) =>
@@ -859,6 +959,33 @@ export default function AdminPage() {
       setLoading(false);
     }
   }, [fetchWithAdmin, search, statusFilter, toast]);
+
+  const syncDriveNow = useCallback(async () => {
+    setBusyKey("drive-sync");
+    try {
+      const res = await fetchWithAdmin("/api/admin/drive-sync", {
+        method: "POST",
+      });
+      const json = (await readJsonSafe(res)) as {
+        diagnostics?: DriveSyncDiagnostics;
+        summary?: string;
+      };
+      if (json.diagnostics) setDriveSync(json.diagnostics);
+      if (!res.ok) {
+        throw new Error(json.summary || "Google Drive синк хийх үед алдаа гарлаа.");
+      }
+      toast.success(json.summary || "Google Drive синк дууслаа.");
+      await loadAll();
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Google Drive синк хийх үед алдаа гарлаа.",
+      );
+    } finally {
+      setBusyKey("");
+    }
+  }, [fetchWithAdmin, loadAll, readJsonSafe, toast]);
 
   useEffect(() => {
     const storage = getSecretStorage();
@@ -1243,9 +1370,16 @@ export default function AdminPage() {
     answers: Record<string, string>,
   ) {
     // Build a combined clarification string from all answered questions.
+    // Include each question's conflict detail so the AI knows exactly which
+    // trip/conflict the admin's answer applies to.
     const combined = message.clarifications
-      .map((q) => `${q.prompt}: ${answers[q.id] ?? ""}`)
-      .filter((line) => line.trim())
+      .map((q) => {
+        const answer = (answers[q.id] ?? "").trim();
+        if (!answer) return "";
+        const context = q.detail ? ` [Зөрчил: ${q.detail}]` : "";
+        return `${q.prompt}${context} → ${answer}`;
+      })
+      .filter(Boolean)
       .join("\n");
     if (!combined.trim()) return;
 
@@ -1406,6 +1540,27 @@ export default function AdminPage() {
     }
   }
 
+  async function markLeadSeen(lead: TravelLead) {
+    // Optimistic update so the badge/list react instantly.
+    setLeads((prev) =>
+      prev.map((item) =>
+        item.id === lead.id ? { ...item, status: "seen" } : item,
+      ),
+    );
+    setNewLeadCount((count) => Math.max(0, count - 1));
+    try {
+      const res = await fetchWithAdmin("/api/admin/leads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: lead.id }),
+      });
+      if (!res.ok) throw new Error("failed");
+    } catch {
+      toast.error("Тэмдэглэж чадсангүй. Дахин оролдоно уу.");
+      await loadAll();
+    }
+  }
+
   /* ---------------- settings ---------------- */
   async function saveSettings() {
     if (!settingsForm) return;
@@ -1482,10 +1637,21 @@ export default function AdminPage() {
     );
   }
 
-  const tabs: Array<{ key: TabKey; label: string; icon: ReactNode }> = [
+  const tabs: Array<{
+    key: TabKey;
+    label: string;
+    icon: ReactNode;
+    badge?: number;
+  }> = [
     { key: "assistant", label: "AI Туслах", icon: <Icons.ai size={17} /> },
     { key: "trips", label: "Аяллууд", icon: <Icons.trips size={17} /> },
     { key: "bot", label: "Бот удирдлага", icon: <Icons.control size={17} /> },
+    {
+      key: "leads",
+      label: "Хүсэлтүүд",
+      icon: <Icons.alert size={17} />,
+      badge: newLeadCount,
+    },
     { key: "settings", label: "Тохиргоо", icon: <Icons.settings size={17} /> },
   ];
 
@@ -1541,6 +1707,18 @@ export default function AdminPage() {
               >
                 {item.icon}
                 {item.label}
+                {item.badge != null && item.badge > 0 && (
+                  <span
+                    className={cx(
+                      "ml-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-xs font-bold",
+                      tab === item.key
+                        ? "bg-white text-brand"
+                        : "bg-danger text-white",
+                    )}
+                  >
+                    {item.badge}
+                  </span>
+                )}
               </button>
             ))}
           </nav>
@@ -1629,12 +1807,24 @@ export default function AdminPage() {
           />
         )}
 
+        {tab === "leads" && (
+          <LeadsTab
+            leads={leads}
+            loading={loading}
+            onRefresh={() => void loadAll()}
+            onMarkSeen={(lead) => void markLeadSeen(lead)}
+          />
+        )}
+
         {tab === "settings" && settingsForm && (
           <SettingsTab
             form={settingsForm}
             setForm={setSettingsForm}
             updatedAt={settings?.updated_at}
             busy={busyKey === "save-settings"}
+            driveSync={driveSync}
+            syncBusy={busyKey === "drive-sync"}
+            onSyncDriveNow={() => void syncDriveNow()}
             onSave={() => void saveSettings()}
             onRequestClear={() => setConfirmClear(true)}
           />
@@ -2204,7 +2394,12 @@ function ChatBubbleV2({
                       key={q.id}
                       className="rounded-md border border-brand/20 bg-brand-soft px-3 py-3"
                     >
-                      <p className="text-sm text-ink">{q.prompt}</p>
+                      <p className="text-sm font-medium text-ink">{q.prompt}</p>
+                      {q.detail && (
+                        <p className="mt-1.5 rounded border border-line bg-surface px-2.5 py-1.5 text-xs leading-relaxed text-ink-muted">
+                          AI-н тэмдэглэсэн зөрчил: {q.detail}
+                        </p>
+                      )}
                       <div className="mt-2 flex flex-wrap gap-2">
                         {q.options.map((opt) => (
                           <button
@@ -2481,6 +2676,133 @@ function TripCard({
 }
 
 /* ----------------------------------------------------------------
+   Leads tab — human-handoff requests & booking-intent captures
+   ---------------------------------------------------------------- */
+function LeadsTab({
+  leads,
+  loading,
+  onRefresh,
+  onMarkSeen,
+}: {
+  leads: TravelLead[];
+  loading: boolean;
+  onRefresh: () => void;
+  onMarkSeen: (lead: TravelLead) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <Card className="p-3.5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="font-semibold text-ink">Хэрэглэгчийн хүсэлтүүд</p>
+            <p className="text-xs text-ink-subtle">
+              Хүнтэй ярих хүсэлт болон захиалгын сонирхол гаргасан хэрэглэгчид.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onRefresh}
+            aria-label="Шинэчлэх"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-line-strong text-ink-muted hover:border-brand hover:text-brand"
+          >
+            {loading ? <Spinner /> : <Icons.refresh size={17} />}
+          </button>
+        </div>
+      </Card>
+
+      {leads.length === 0 ? (
+        <Card className="p-4">
+          <EmptyState
+            icon={<Icons.alert size={26} />}
+            title="Хүсэлт алга"
+            description="Хэрэглэгч хүнтэй ярих эсвэл захиалга хийх сонирхол гаргавал энд харагдана."
+          />
+        </Card>
+      ) : (
+        <div className="space-y-2.5">
+          {leads.map((lead) => (
+            <LeadCard
+              key={lead.id}
+              lead={lead}
+              onMarkSeen={() => onMarkSeen(lead)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LeadCard({
+  lead,
+  onMarkSeen,
+}: {
+  lead: TravelLead;
+  onMarkSeen: () => void;
+}) {
+  const isNew = lead.status === "new";
+  const isBooking = lead.kind === "booking";
+  const channel = lead.platform === "instagram" ? "Instagram" : "Facebook";
+
+  return (
+    <Card className={cx("p-3.5", !isNew && "opacity-65")}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone={isBooking ? "success" : "warning"} dot>
+            {isBooking ? "Захиалгын сонирхол" : "Хүн ярих хүсэлт"}
+          </Badge>
+          <span className="text-xs text-ink-subtle">{channel}</span>
+        </div>
+        {isNew && (
+          <Badge tone="danger">Шинэ</Badge>
+        )}
+      </div>
+
+      <p className="mt-2 whitespace-pre-wrap rounded-md border border-line bg-surface-sunken px-2.5 py-2 text-sm text-ink">
+        {lead.customer_message || "(хоосон зурвас)"}
+      </p>
+
+      {lead.contact_phone && (
+        <p className="mt-2 text-sm font-semibold text-ink">
+          ☎ Утас:{" "}
+          <a href={`tel:${lead.contact_phone}`} className="text-brand">
+            {lead.contact_phone}
+          </a>
+        </p>
+      )}
+
+      {lead.context && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs font-medium text-ink-muted">
+            Харилцааны түүх
+          </summary>
+          <p className="mt-1 whitespace-pre-wrap rounded-md border border-line bg-canvas/60 px-2.5 py-2 text-xs text-ink-muted">
+            {lead.context}
+          </p>
+        </details>
+      )}
+
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <span className="text-xs text-ink-subtle">
+          {formatTime(lead.created_at)} · ID …{lead.sender_id.slice(-6)}
+        </span>
+        {isNew ? (
+          <Button size="sm" variant="secondary" onClick={onMarkSeen}>
+            <Icons.check size={15} />
+            Хариуцсан
+          </Button>
+        ) : (
+          <span className="flex items-center gap-1 text-xs text-ink-subtle">
+            <Icons.check size={13} />
+            Харсан
+          </span>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/* ----------------------------------------------------------------
    Bot tab
    ---------------------------------------------------------------- */
 function BotTab({
@@ -2714,6 +3036,9 @@ function SettingsTab({
   setForm,
   updatedAt,
   busy,
+  driveSync,
+  syncBusy,
+  onSyncDriveNow,
   onSave,
   onRequestClear,
 }: {
@@ -2721,6 +3046,9 @@ function SettingsTab({
   setForm: React.Dispatch<React.SetStateAction<SettingsForm | null>>;
   updatedAt?: string;
   busy: boolean;
+  driveSync: DriveSyncDiagnostics | null;
+  syncBusy: boolean;
+  onSyncDriveNow: () => void;
   onSave: () => void;
   onRequestClear: () => void;
 }) {
@@ -2733,6 +3061,95 @@ function SettingsTab({
 
   return (
     <div className="space-y-3">
+      <Card className="p-4">
+        <SectionHeading
+          title="Google Drive Sync"
+          description="Drive folder-оос өөрчлөгдсөн файлуудыг автоматаар уншиж, аюулгүй бол шууд хадгална."
+          action={
+            <Button size="sm" loading={syncBusy} onClick={onSyncDriveNow}>
+              <Icons.refresh size={15} />
+              Sync now
+            </Button>
+          }
+        />
+        <div className="mt-3 space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone={driveSync?.enabled ? "success" : "neutral"} dot>
+              {driveSync?.enabled ? "Идэвхтэй" : "Унтраалттай"}
+            </Badge>
+            <Badge tone={driveSyncTone(driveSync?.state.status)}>
+              {driveSync?.state.status || "idle"}
+            </Badge>
+            <span className="text-xs text-ink-subtle">
+              Давтамж: {driveSync?.interval_minutes ?? 30} мин
+            </span>
+            <span className="text-xs text-ink-subtle">
+              Дээд файл: {driveSync?.file_limit ?? 0}
+            </span>
+          </div>
+
+          {!driveSync?.configured ? (
+            <Alert tone="warning">
+              GOOGLE_DRIVE_SYNC_ENABLED-ийг асаахаас гадна folder ID, service account
+              email, private key-гээ env-д тохируулна. Дараа нь тухайн Drive folder-оо
+              service account хаягтай share хийнэ.
+            </Alert>
+          ) : (
+            <div className="rounded-lg border border-line bg-surface-sunken p-3 text-sm text-ink-muted">
+              <p>Folder ID: {driveSync.folder_id || "—"}</p>
+              <p>Service account: {driveSync.service_account_email || "—"}</p>
+              <p>Сүүлд шалгасан: {formatTime(driveSync.state.last_checked_at)}</p>
+              <p>Сүүлд дууссан: {formatTime(driveSync.state.last_synced_at)}</p>
+              <p>
+                Үзсэн {driveSync.state.files_examined} · Өөрчлөгдсөн{" "}
+                {driveSync.state.files_changed} · Автоматаар хадгалсан{" "}
+                {driveSync.state.files_applied} · Хяналт шаардлагатай{" "}
+                {driveSync.state.files_blocked}
+              </p>
+              {driveSync.state.last_summary && (
+                <p className="mt-2 whitespace-pre-wrap text-ink">
+                  {driveSync.state.last_summary}
+                </p>
+              )}
+              {driveSync.state.last_error && (
+                <p className="mt-2 whitespace-pre-wrap text-danger">
+                  {driveSync.state.last_error}
+                </p>
+              )}
+            </div>
+          )}
+
+          {driveSync?.recent_files?.length ? (
+            <div className="space-y-2">
+              {driveSync.recent_files.slice(0, 4).map((file) => (
+                <div
+                  key={file.file_id}
+                  className="rounded-md border border-line bg-surface px-3 py-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate text-sm font-medium text-ink">
+                      {file.file_name || file.file_id}
+                    </p>
+                    <Badge tone={driveSyncTone(file.last_status as DriveSyncDiagnostics["state"]["status"])}>
+                      {file.last_status}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 text-xs text-ink-subtle">
+                    {formatTime(file.updated_at)}
+                    {file.request_id ? ` · Request #${file.request_id}` : ""}
+                  </p>
+                  {file.last_error && (
+                    <p className="mt-1 whitespace-pre-wrap text-xs text-danger">
+                      {file.last_error}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </Card>
+
       <Card className="p-4">
         <SectionHeading
           title="Үндсэн мэдээлэл"

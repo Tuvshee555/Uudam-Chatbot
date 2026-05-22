@@ -6,9 +6,16 @@ import { rateLimitAsync } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPrompt, getHistory } from "../../lib/conversation";
 import { fixMojibake } from "../../lib/encoding";
+import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { enforceWebsiteForPayment, isDuplicateReply, sanitizeAssistantReply } from "../../lib/reply";
 import { isPaused, pauseBot, trackSender } from "../../lib/pause";
-import { getTravelBotSettings, isBotGloballyPaused } from "../../lib/travelOps";
+import {
+  createLead,
+  getTravelBotSettings,
+  hasRecentOpenLead,
+  isBotGloballyPaused,
+} from "../../lib/travelOps";
+import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { getEnv } from "../../lib/env";
 import { withRedis } from "../../lib/redisState";
 import {
@@ -915,6 +922,30 @@ function isHandoffRequest(text: string, keywords: string[]): boolean {
   return false;
 }
 
+// Built-in booking-intent roots (Mongolian). Substring match catches inflected
+// forms — "захиал" covers захиалъя / захиалмаар / захиалга / захиалах.
+const BOOKING_INTENT_KEYWORDS = [
+  "захиал",
+  "бүртгүүл",
+  "суудал ав",
+  "тийз ав",
+  "book",
+  "booking",
+];
+
+function isBookingIntent(text: string): boolean {
+  const normalized = normalizeLowerText(text);
+  if (!normalized) return false;
+  return BOOKING_INTENT_KEYWORDS.some((keyword) => normalized.includes(keyword));
+}
+
+/** Extracts the first Mongolian-style 8-digit mobile number, ignoring spaces/dashes. */
+function extractPhoneNumber(text: string): string {
+  const compact = text.replace(/[\s\-()]/g, "");
+  const match = compact.match(/(?<!\d)[5-9]\d{7}(?!\d)/);
+  return match ? match[0] : "";
+}
+
 function isCommentTriggerMatch(commentText: string, patterns: string[]): boolean {
   const normalized = normalizeLowerText(commentText);
   if (!normalized) return false;
@@ -1021,6 +1052,32 @@ async function handleMessage(
       senderHash: hashIdentifier(senderId),
       pauseMinutes: botSettings.handoff_pause_minutes,
     });
+    // Record the handoff as a lead and ping staff (best-effort — must never
+    // block delivery of the handoff acknowledgement to the customer).
+    try {
+      await createLead({
+        kind: "handoff",
+        platform,
+        senderId,
+        customerMessage: text,
+      });
+      await notifyStaffOfLead(
+        { kind: "handoff", platform, customerMessage: text },
+        {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          source: "api.webhook",
+        },
+      );
+    } catch (error) {
+      logWarn("webhook.handoff_lead_failed", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+        classification: classifyError(error),
+      });
+    }
     const handoffMsg =
       botSettings.handoff_reply ||
       "Таны хүсэлтийг хүлээн авлаа. Манай ажилтан удахгүй тантай холбогдоно.";
@@ -1064,15 +1121,30 @@ async function handleMessage(
   }
 
   // --- Load business data ---
+  void maybeAutoSyncDriveFolder({ source: "api.webhook" });
   const { systemPrompt: fileSystemPrompt, business } = await readBusinessData();
-  const effectiveSystemPrompt = fileSystemPrompt;
 
   const sessionId = `${platform}:${senderId}`;
   await assertLockHealthy();
   const history = await getHistory(sessionId);
   const lastReply = await getLastReplyConsistent(sessionId);
 
+  // --- Booking-intent lead capture ---
+  // Gated on handoff_enabled so the admin keeps a single off switch for all
+  // staff-alert behaviour. Deduped so a chatty customer yields one lead.
+  const customerWantsToBook =
+    botSettings.handoff_enabled && isBookingIntent(text);
+  const freshBookingLead =
+    customerWantsToBook &&
+    !(await hasRecentOpenLead(senderId, "booking"));
+
   await appendMessage(sessionId, "user", text);
+
+  // When a booking lead is fresh, nudge the model to collect contact details
+  // in its normal reply instead of sending a separate follow-up message.
+  const effectiveSystemPrompt = freshBookingLead
+    ? `${fileSystemPrompt}\n\n[Дотоод заавар: Хэрэглэгч захиалга хийх сонирхолтой байна. Хариултдаа эелдэгээр нэр болон утасны дугаараа үлдээхийг хүсээрэй — манай ажилтан холбогдож захиалгыг баталгаажуулна.]`
+    : fileSystemPrompt;
 
   const prompt = buildPrompt({
     systemPrompt: effectiveSystemPrompt,
@@ -1148,6 +1220,49 @@ async function handleMessage(
       senderHash: hashIdentifier(senderId),
       classification: classifyError(error),
     });
+  }
+
+  // --- Booking-intent lead: record + alert staff after the reply is sent ---
+  if (freshBookingLead) {
+    try {
+      let phone = extractPhoneNumber(text);
+      if (!phone) {
+        for (const entry of history.slice(-8)) {
+          if (entry.role !== "user") continue;
+          phone = extractPhoneNumber(entry.text);
+          if (phone) break;
+        }
+      }
+      const context = history
+        .slice(-6)
+        .map((m) => `${m.role === "user" ? "Хэрэглэгч" : "Бот"}: ${m.text}`)
+        .join("\n");
+      await createLead({
+        kind: "booking",
+        platform,
+        senderId,
+        customerMessage: text,
+        contactPhone: phone,
+        context,
+      });
+      recordCounter("webhook.booking_lead_total", 1, { platform });
+      await notifyStaffOfLead(
+        { kind: "booking", platform, customerMessage: text, contactPhone: phone },
+        {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          source: "api.webhook",
+        },
+      );
+    } catch (error) {
+      logWarn("webhook.booking_lead_failed", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+        classification: classifyError(error),
+      });
+    }
   }
 }
 

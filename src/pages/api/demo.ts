@@ -9,6 +9,7 @@ import {
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPrompt, getHistory } from "../../lib/conversation";
 import { fixMojibake } from "../../lib/encoding";
+import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { enforceWebsiteForPayment, sanitizeAssistantReply } from "../../lib/reply";
 import { getEnv } from "../../lib/env";
 import {
@@ -113,6 +114,7 @@ export default async function handler(
     }
 
     try {
+      void maybeAutoSyncDriveFolder({ source: "api.demo" });
       const { systemPrompt, business } = await readBusinessData();
       const sessionId = `demo:${normalizedConversationId}`;
       const history = await getHistory(sessionId);
