@@ -472,12 +472,48 @@ function extractQuotedValues(text: string): string[] {
   return Array.from(new Set(values));
 }
 
+function normalizeReviewText(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function summarizeConflict(detail: string): string {
+  const normalized = normalizeReviewText(detail);
+  const quoted = extractQuotedValues(detail);
+  const subject = quoted[0] || "Энэ аялал";
+
+  if (normalized.includes("хүүхдийн үнэ") || normalized.includes("child price")) {
+    return `${subject}: хүүхдийн болон том хүний үнэ зөрүүтэй байна.`;
+  }
+  if (normalized.includes("юань") || normalized.includes("cny") || normalized.includes("валют")) {
+    return `${subject}: үнэ хэдэн валютаар орж ирсэн байна.`;
+  }
+  if (normalized.includes("хоол") || normalized.includes("meal")) {
+    return `${subject}: хоол багтсан эсэх нь тодорхойгүй байна.`;
+  }
+  if (
+    normalized.includes("batch failed") ||
+    normalized.includes("503") ||
+    normalized.includes("upstream")
+  ) {
+    return "Зарим файл түр уншигдаагүй байна.";
+  }
+  if (
+    normalized.includes("6-р сард") ||
+    normalized.includes("7-р сард") ||
+    normalized.includes("8-р сард")
+  ) {
+    return `${subject}: сар бүрийн үнэ өөр байна.`;
+  }
+  return `${subject}: нэмэлт шалгалт хэрэгтэй.`;
+}
+
 function buildProposalClarifications(
   proposal: AIProposal,
   answeredIds: string[] = [],
 ): ClarificationQuestion[] {
   const questions: ClarificationQuestion[] = [];
   const seen = new Set(answeredIds);
+  const coveredConflictChecks: Array<(normalized: string) => boolean> = [];
 
   function pushQuestion(question: ClarificationQuestion | null) {
     if (!question) return;
@@ -499,6 +535,14 @@ function buildProposalClarifications(
     const currency =
       typeof fields.currency === "string" ? fields.currency : undefined;
     if (adultPrice != null && childPrice != null && childPrice > adultPrice) {
+      const routeKey = normalizeReviewText(routeName);
+      coveredConflictChecks.push(
+        (normalized) =>
+          normalized.includes(routeKey) &&
+          (normalized.includes("хүүхдийн үнэ") ||
+            normalized.includes("child price") ||
+            normalized.includes("том хүний үнэ")),
+      );
       pushQuestion({
         id: `child-price:${routeName}`,
         prompt: `"${routeName}" аяллын хүүхдийн үнэ ${formatMoneyValue(childPrice, currency)} байгаа ч том хүний үнэ ${formatMoneyValue(adultPrice, currency)} байна. Ингэж үлдээх үү?`,
@@ -521,7 +565,8 @@ function buildProposalClarifications(
   proposal.conflicts.forEach((conflict, index) => {
     const detail = conflict.trim();
     if (!detail) return;
-    const normalized = detail.toLowerCase();
+    const normalized = normalizeReviewText(detail);
+    if (coveredConflictChecks.some((check) => check(normalized))) return;
     const quoted = extractQuotedValues(conflict);
     // The first quoted value is usually the trip/route the conflict is about.
     const subject = quoted[0] || "";
@@ -582,10 +627,15 @@ function buildProposalClarifications(
       normalized.includes("meal") ||
       normalized.includes("day 7")
     ) {
+      const subjectKey = normalizeReviewText(subject || detail);
+      coveredConflictChecks.push(
+        (value) =>
+          value.includes(subjectKey) &&
+          (value.includes("хоол") || value.includes("meal")),
+      );
       pushQuestion({
         id: `meal-conflict:${index}`,
         prompt: `${subjectTag}хоолны мэдээлэл зөрчилтэй байна. Хоол багтсан уу?`,
-        detail,
         options: [
           {
             label: "Тийм, багтсан",
@@ -607,10 +657,15 @@ function buildProposalClarifications(
       normalized.includes("огноо") ||
       normalized.includes("departure date")
     ) {
+      const subjectKey = normalizeReviewText(subject || detail);
+      coveredConflictChecks.push(
+        (value) =>
+          value.includes(subjectKey) &&
+          (value.includes("огноо") || value.includes("departure date")),
+      );
       pushQuestion({
         id: `date-conflict:${index}`,
         prompt: `${subjectTag}гарах өдрийг тодорхойлж чадсангүй. Юу хийх вэ?`,
-        detail,
         options: [
           {
             label: "Огноогүй үлдээх",
@@ -628,6 +683,61 @@ function buildProposalClarifications(
     }
 
     if (
+      normalized.includes("юань") ||
+      normalized.includes("cny") ||
+      normalized.includes("валют")
+    ) {
+      const subjectKey = normalizeReviewText(subject || detail);
+      coveredConflictChecks.push(
+        (value) =>
+          value.includes(subjectKey) &&
+          (value.includes("юань") || value.includes("cny") || value.includes("валют")),
+      );
+      pushQuestion({
+        id: `currency-conflict:${index}`,
+        prompt: `${subjectTag}үнэ хэдэн валютаар орж ирсэн байна. Аль валютаар хадгалах вэ?`,
+        options: [
+          {
+            label: "MNT-г үлдээх",
+            answer: `${subjectTag}үнийг MNT-ээр хадгал. CNY үнэ байвал саналд бүү ашигла.`,
+          },
+          {
+            label: "CNY-г үлдээх",
+            answer: `${subjectTag}үнийг CNY-ээр хадгал. MNT үнэ байвал саналд бүү ашигла.`,
+          },
+        ],
+        allowCustom: true,
+        customPlaceholder: "Аль үнэ, аль валютыг хэрэглэхийг бичнэ үү",
+      });
+      return;
+    }
+
+    if (
+      normalized.includes("6-р сард") ||
+      normalized.includes("7-р сард") ||
+      normalized.includes("8-р сард") ||
+      normalized.includes("сард") && normalized.includes("үнэ")
+    ) {
+      pushQuestion({
+        id: `seasonal-price:${index}`,
+        prompt: `${subjectTag}сараас хамаараад өөр үнэтэй байна. Үүнийг яаж хадгалах вэ?`,
+        options: [
+          {
+            label: "Сарын ялгааг үлдээх",
+            answer: `${subjectTag}сарын ялгаатай үнийг тусад нь тайлбар/тэмдэглэлд хадгалж, буруу тэгшлэхгүй.`,
+          },
+          {
+            label: "Нэг үнэ болгох",
+            answer: `${subjectTag}нэг үндсэн үнэ сонгож үлдээ. Сарын ялгаатай үнийг одоохондоо ашиглахгүй.`,
+          },
+        ],
+        allowCustom: true,
+        customPlaceholder: "Сар бүрийн үнийг хэрхэн хадгалахыг бичнэ үү",
+      });
+      return;
+    }
+
+    if (
       normalized.includes("хоёр маршрут") ||
       normalized.includes("two route") ||
       normalized.includes("ижил")
@@ -635,7 +745,6 @@ function buildProposalClarifications(
       pushQuestion({
         id: `duplicate-route:${index}`,
         prompt: "Ижил маршруттай боловч мэдээлэл нь зөрүүтэй хоёр аялал илэрлээ. Юу хийх вэ?",
-        detail,
         options: [
           {
             label: "Тусдаа үлдээх",
@@ -652,12 +761,19 @@ function buildProposalClarifications(
       return;
     }
 
+    if (
+      normalized.includes("batch failed") ||
+      normalized.includes("upstream") ||
+      normalized.includes("503")
+    ) {
+      return;
+    }
+
     // Any conflict that doesn't match a known category still gets surfaced —
     // never silently drop a flagged conflict.
     pushQuestion({
       id: `conflict:${index}`,
       prompt: "Энэ зөрчлийг хэрхэн зохицуулах вэ?",
-      detail,
       options: [
         {
           label: "Илэрсэнээр нь үлдээх",
@@ -696,7 +812,7 @@ function buildProposalClarifications(
     });
   }
 
-  return questions.slice(0, 6);
+  return questions.slice(0, 4);
 }
 
 /* ----------------------------------------------------------------
@@ -1119,7 +1235,7 @@ export default function AdminPage() {
     pushMessage({
       id: uid(),
       role: "admin",
-      text: text || "(attachment only)",
+      text: text || "Файл орууллаа",
       fileNames: files.map((file) => file.name),
     });
     setAiInput("");
@@ -2191,41 +2307,17 @@ function AssistantTab({
         </div>
 
         {attachedFiles.length > 0 && (
-          <div className="border-t border-line bg-brand-soft px-3 py-2">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <span className="flex items-center gap-1.5 text-sm font-medium text-brand">
-                <Icons.database size={15} className="text-brand" />
-                {attachedFiles.length} файл хавсаргасан
-              </span>
-              <span className="text-xs text-brand/80">
-                ~{formatBytes(attachedTotalBytes)}
-              </span>
-              <button
-                type="button"
-                onClick={() => attachedFiles.forEach((file) => onRemoveAttachedFile(file.id))}
-                className="text-xs font-medium text-brand hover:opacity-70"
-              >
-                Бүгдийг арилгах
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {attachedFiles.map((file) => (
-                <span
-                  key={file.id}
-                  className="inline-flex max-w-full items-center gap-2 rounded-full border border-brand/20 bg-white/70 px-3 py-1 text-sm text-brand"
-                >
-                  <span className="truncate">{file.name}</span>
-                  <button
-                    type="button"
-                    onClick={() => onRemoveAttachedFile(file.id)}
-                    aria-label={`Remove ${file.name}`}
-                    className="shrink-0 hover:opacity-70"
-                  >
-                    <Icons.close size={14} />
-                  </button>
-                </span>
-              ))}
-            </div>
+          <div className="flex items-center justify-between border-t border-line bg-surface-sunken px-3 py-2">
+            <span className="text-xs text-ink-muted">
+              {attachedFiles.length} файл бэлэн • ~{formatBytes(attachedTotalBytes)}
+            </span>
+            <button
+              type="button"
+              onClick={() => attachedFiles.forEach((file) => onRemoveAttachedFile(file.id))}
+              className="text-xs font-medium text-brand hover:opacity-70"
+            >
+              Арилгах
+            </button>
           </div>
         )}
 
@@ -2295,12 +2387,6 @@ function ChatBubbleV2({
     return (
       <div className="flex justify-end">
         <div className="max-w-[85%] rounded-xl rounded-br-sm bg-brand px-3.5 py-2 text-sm text-white">
-          {message.fileNames && message.fileNames.length > 0 && (
-            <span className="mb-1 flex items-center gap-1.5 text-xs text-white/80">
-              <Icons.database size={13} />
-              {message.fileNames.join(", ")}
-            </span>
-          )}
           <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
         </div>
       </div>
@@ -2327,79 +2413,106 @@ function ChatBubbleV2({
     0,
     proposal.actions.length - previewActions.length,
   );
+  const compactWarnings = Array.from(
+    new Set(proposal.conflicts.map(summarizeConflict).filter(Boolean)),
+  ).slice(0, 3);
+  const reviewCount = message.clarifications.length;
+  const isReadyToApply = message.status === "pending" && reviewCount === 0;
 
   return (
     <div className="max-w-[92%]">
-      <div className="rounded-xl rounded-bl-sm border border-line bg-surface-sunken p-3">
-        <p className="text-sm font-semibold text-ink">{proposal.summary}</p>
-        <p className="mt-1 text-xs text-ink-muted">
-          {proposal.actions.length} өөрчлөлт илэрсэн.
-          {proposal.conflicts.length > 0
-            ? ` ${proposal.conflicts.length} зүйл шалгах шаардлагатай.`
-            : ""}
-        </p>
+      <div className="rounded-xl rounded-bl-sm border border-line bg-surface p-3.5 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-ink">{proposal.summary}</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <Badge tone="neutral">{proposal.actions.length} өөрчлөлт</Badge>
+              {reviewCount > 0 ? (
+                <Badge tone="warning">{reviewCount} шийдвэр хэрэгтэй</Badge>
+              ) : (
+                <Badge tone="success">Шууд хадгалахад бэлэн</Badge>
+              )}
+            </div>
+          </div>
+          <Badge tone={isReadyToApply ? "success" : "warning"}>
+            {isReadyToApply ? "Ready" : "Review"}
+          </Badge>
+        </div>
 
-        {previewActions.length > 0 && (
-          <div className="mt-2 space-y-2">
-            {previewActions.map((described, index) => (
-              <div
-                key={`${described.verb}:${described.target}:${index}`}
-                className="rounded-md border border-line bg-surface px-2.5 py-2"
-              >
-                <p className="text-sm font-medium text-ink">
-                  <span className="text-brand">{described.verb}</span> -{" "}
-                  {described.target}
+        {compactWarnings.length > 0 && (
+          <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+            <p className="text-xs font-semibold text-amber-900">
+              Товч шалгалт
+            </p>
+            <div className="mt-1 space-y-1">
+              {compactWarnings.map((item) => (
+                <p key={item} className="text-xs text-amber-900/90">
+                  {item}
                 </p>
-                {described.changes.length > 0 && (
-                  <p className="mt-1 text-xs text-ink-muted">
-                    {described.changes.slice(0, 3).join(" • ")}
-                  </p>
-                )}
-              </div>
-            ))}
-            {hiddenActionCount > 0 && (
-              <p className="text-xs text-ink-subtle">
-                +{hiddenActionCount} өөрчлөлт баталгаажуулсны дараа хэрэгжинэ.
-              </p>
-            )}
+              ))}
+            </div>
           </div>
         )}
 
+        {previewActions.length > 0 && (
+          <details className="mt-3 rounded-md border border-line bg-surface-sunken px-3 py-2">
+            <summary className="cursor-pointer text-xs font-semibold text-ink-muted">
+              Өөрчлөлтийн товч жагсаалт
+            </summary>
+            <div className="mt-2 space-y-2">
+              {previewActions.map((described, index) => (
+                <div key={`${described.verb}:${described.target}:${index}`}>
+                  <p className="text-sm font-medium text-ink">
+                    {index + 1}. {described.verb} · {described.target}
+                  </p>
+                  {described.changes.length > 0 && (
+                    <p className="mt-0.5 text-xs text-ink-muted">
+                      {described.changes.slice(0, 2).join(" • ")}
+                    </p>
+                  )}
+                </div>
+              ))}
+              {hiddenActionCount > 0 && (
+                <p className="text-xs text-ink-subtle">
+                  +{hiddenActionCount} нэмэлт өөрчлөлт байна.
+                </p>
+              )}
+            </div>
+          </details>
+        )}
+
         {message.clarificationAnswers.length > 0 && (
-          <div className="mt-3 space-y-2 border-t border-line pt-3">
-            {message.clarificationAnswers.map((item) => (
-              <div
-                key={item.questionId}
-                className="rounded-md border border-line bg-brand-soft px-2.5 py-2"
-              >
-                <p className="text-xs font-medium text-brand">Тодруулсан</p>
-                <p className="mt-0.5 text-xs text-ink-muted">{item.prompt}</p>
-                <p className="mt-1 text-sm text-ink">{item.answer}</p>
-              </div>
-            ))}
-          </div>
+          <details className="mt-3 rounded-md border border-line bg-brand-soft px-3 py-2">
+            <summary className="cursor-pointer text-xs font-semibold text-brand">
+              Өмнө сонгосон хариултууд ({message.clarificationAnswers.length})
+            </summary>
+            <div className="mt-2 space-y-2">
+              {message.clarificationAnswers.map((item) => (
+                <div key={item.questionId} className="rounded-md bg-white/70 px-2.5 py-2">
+                  <p className="text-xs text-ink-muted">{item.prompt}</p>
+                  <p className="mt-1 text-sm text-ink">{item.answer}</p>
+                </div>
+              ))}
+            </div>
+          </details>
         )}
 
         {message.status === "pending" && (
           <div className="mt-3 border-t border-line pt-3">
             {message.clarifications.length > 0 ? (
               <div className="space-y-3">
-                <p className="text-xs font-semibold text-ink">
-                  Доорх асуултуудад хариулаад илгээнэ үү:
-                </p>
+                <p className="text-xs font-semibold text-ink">Шийдвэр гаргах зүйлс</p>
                 {message.clarifications.map((q) => {
                   const selected = formDraft[q.id] ?? "";
                   return (
                     <div
                       key={q.id}
-                      className="rounded-md border border-brand/20 bg-brand-soft px-3 py-3"
+                      className="rounded-md border border-line bg-surface-sunken px-3 py-3"
                     >
-                      <p className="text-sm font-medium text-ink">{q.prompt}</p>
-                      {q.detail && (
-                        <p className="mt-1.5 rounded border border-line bg-surface px-2.5 py-1.5 text-xs leading-relaxed text-ink-muted">
-                          AI-н тэмдэглэсэн зөрчил: {q.detail}
-                        </p>
-                      )}
+                      <p className="text-xs font-semibold text-ink-muted">
+                        Асуулт
+                      </p>
+                      <p className="mt-1 text-sm font-medium text-ink">{q.prompt}</p>
                       <div className="mt-2 flex flex-wrap gap-2">
                         {q.options.map((opt) => (
                           <button
@@ -2413,7 +2526,7 @@ function ChatBubbleV2({
                               "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-60",
                               selected === opt.answer
                                 ? "border-brand bg-brand text-white"
-                                : "border-brand/30 bg-white text-brand hover:border-brand",
+                                : "border-line-strong bg-white text-ink hover:border-brand hover:text-brand",
                             )}
                           >
                             {opt.label}
@@ -2435,20 +2548,29 @@ function ChatBubbleV2({
                     </div>
                   );
                 })}
-                <Button
-                  size="sm"
-                  loading={clarifyBusy}
-                  disabled={
-                    clarifyBusy ||
-                    message.clarifications.some((q) => !(formDraft[q.id] ?? "").trim())
-                  }
-                  onClick={() => {
-                    onSubmitClarificationForm(message, formDraft);
-                    setFormDraft({});
-                  }}
-                >
-                  Хариултуудыг илгээх
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    loading={clarifyBusy}
+                    disabled={
+                      clarifyBusy ||
+                      message.clarifications.some((q) => !(formDraft[q.id] ?? "").trim())
+                    }
+                    onClick={() => {
+                      onSubmitClarificationForm(message, formDraft);
+                      setFormDraft({});
+                    }}
+                  >
+                    Шийдвэрүүдийг хадгалах
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => onCancelProposal(message.id)}
+                  >
+                    Болих
+                  </Button>
+                </div>
               </div>
             ) : (
               <p className="mb-2 text-xs text-ink-muted">
@@ -2476,16 +2598,6 @@ function ChatBubbleV2({
                   Болих
                 </Button>
               </div>
-            )}
-            {message.clarifications.length > 0 && (
-              <Button
-                size="sm"
-                variant="secondary"
-                className="mt-1"
-                onClick={() => onCancelProposal(message.id)}
-              >
-                Болих
-              </Button>
             )}
           </div>
         )}
