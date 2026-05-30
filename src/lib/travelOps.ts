@@ -205,6 +205,25 @@ function cleanFields(input: TripMutationFields): TripMutationFields {
   return cleaned;
 }
 
+function isAgencyHeaderName(value: string | null | undefined): boolean {
+  const normalized = normalizeLookupText(value || "");
+  return (
+    normalized === "uudam travel agency" ||
+    normalized === "uudam travel" ||
+    normalized === "travel agency" ||
+    normalized === "agency"
+  );
+}
+
+function isAgencyHeaderConflict(value: string): boolean {
+  const normalized = normalizeLookupText(value);
+  return (
+    normalized.includes("uudam travel agency") ||
+    normalized === "uudam travel" ||
+    normalized === "travel agency"
+  );
+}
+
 export async function ensureTravelSchema() {
   if (schemaEnsured) return true;
   if (schemaPromise) return schemaPromise;
@@ -1133,6 +1152,31 @@ function normalizeDateText(value: string): string {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
+function isRecurringDepartureText(value: string): boolean {
+  const normalized = normalizeLookupText(value);
+  if (!normalized) return false;
+  return (
+    normalized.includes("гараг бүр") ||
+    normalized.includes("долоо хоног бүр") ||
+    normalized.includes("every week") ||
+    normalized.includes("weekly") ||
+    normalized.includes("monday") ||
+    normalized.includes("tuesday") ||
+    normalized.includes("wednesday") ||
+    normalized.includes("thursday") ||
+    normalized.includes("friday") ||
+    normalized.includes("saturday") ||
+    normalized.includes("sunday") ||
+    normalized.includes("даваа") ||
+    normalized.includes("мягмар") ||
+    normalized.includes("лхагва") ||
+    normalized.includes("пүрэв") ||
+    normalized.includes("баасан") ||
+    normalized.includes("бямба") ||
+    normalized.includes("ням")
+  );
+}
+
 function findTripMatches(
   trips: TripMatchSnapshot[],
   operatorName?: string,
@@ -1166,13 +1210,94 @@ function isReasonableSeats(value: number | null | undefined) {
   return value == null || (Number.isFinite(value) && value >= 0 && value <= 10_000);
 }
 
+function isGenericConfirmationText(value: string | null | undefined): boolean {
+  const normalized = normalizeLookupText(value || "");
+  if (!normalized) return true;
+  return (
+    normalized.includes("файлнаас шинэ аяллын мэдээлэл уншигдсан") ||
+    normalized.includes("шинэ аяллын мэдээлэл уншигдсан") ||
+    normalized.includes("баталгаажуулалт шаардлагатай") ||
+    normalized.includes("баталгаажуулах шаардлагатай") ||
+    (normalized.includes("new trip") && normalized.includes("confirmation")) ||
+    (normalized.includes("file") && normalized.includes("confirmation")) ||
+    (normalized.includes("file") && normalized.includes("review"))
+  );
+}
+
+function isOptionalAddOnCostConflict(value: string): boolean {
+  const normalized = normalizeLookupText(value);
+  const mentionsForeignCost =
+    normalized.includes("cny") ||
+    normalized.includes("yuan") ||
+    normalized.includes("юань");
+  if (!mentionsForeignCost) return false;
+  return (
+    normalized.includes("optional") ||
+    normalized.includes("add-on") ||
+    normalized.includes("addon") ||
+    normalized.includes("extra") ||
+    normalized.includes("нэмэлт төлбөр") ||
+    normalized.includes("өөрийн зардлаар") ||
+    normalized.includes("хөтөлбөрт багтаагүй") ||
+    normalized.includes("ганцаараа орох") ||
+    normalized.includes("single room")
+  );
+}
+
+function isDocumentedMealExceptionConflict(value: string): boolean {
+  const normalized = normalizeLookupText(value);
+  const mentionsMeal =
+    normalized.includes("хоол") ||
+    normalized.includes("цай") ||
+    normalized.includes("meal") ||
+    normalized.includes("breakfast") ||
+    normalized.includes("lunch") ||
+    normalized.includes("dinner");
+  if (!mentionsMeal) return false;
+  return (
+    normalized.includes("өөрийн зардлаар") ||
+    normalized.includes("өөрсдийн зардлаар") ||
+    normalized.includes("өөрөө") ||
+    normalized.includes("чөлөөт өдөр") ||
+    normalized.includes("байдаггүй") ||
+    normalized.includes("байхгүй") ||
+    normalized.includes("not included") ||
+    normalized.includes("own expense") ||
+    normalized.includes("free day")
+  );
+}
+
+function isCompleteCleanAction(action: AITripAction): boolean {
+  const verb = String(action.action || "").trim().toLowerCase();
+  const fields = action.fields || {};
+  const hasTarget = Boolean(action.trip_id || action.match?.route_name || action.match?.operator_name);
+  if (verb === "patch") return hasTarget && Object.keys(fields).length > 0;
+  if (verb !== "upsert") return false;
+
+  const routeName = fields.route_name?.trim() || action.match?.route_name?.trim() || "";
+  const operatorName = fields.operator_name?.trim() || action.match?.operator_name?.trim() || "";
+  const hasPrice =
+    typeof fields.adult_price === "number" || typeof fields.child_price === "number";
+  const hasDates =
+    Array.isArray(fields.departure_dates) && fields.departure_dates.length > 0;
+  const hasDuration = Boolean(fields.duration_text?.trim());
+
+  return Boolean(routeName && operatorName && hasPrice && hasDates && hasDuration);
+}
+
 export function validateAIChangeProposal(
   proposal: AIChangeProposal | null,
   existingTrips: TripMatchSnapshot[] = [],
 ): ProposalValidationReport {
   const normalized = normalizeProposal(proposal);
   const blockingConflicts: string[] = [];
-  const confirmationConflicts = [...normalized.conflicts];
+  const confirmationConflicts = normalized.conflicts.filter(
+    (conflict) =>
+      !isAgencyHeaderConflict(conflict) &&
+      !isGenericConfirmationText(conflict) &&
+      !isOptionalAddOnCostConflict(conflict) &&
+      !isDocumentedMealExceptionConflict(conflict),
+  );
   const sanitizedActions: AITripAction[] = [];
 
   for (const rawAction of normalized.actions) {
@@ -1189,6 +1314,10 @@ export function validateAIChangeProposal(
     const operatorName = cleanedFields.operator_name || match.operator_name || "";
     const label = buildConflictLabel(routeName, operatorName);
     const matchingTrips = findTripMatches(existingTrips, match.operator_name, match.route_name);
+
+    if (isAgencyHeaderName(routeName)) {
+      continue;
+    }
 
     if (verb !== "upsert" && verb !== "patch" && verb !== "cancel") {
       blockingConflicts.push(`${label}: unsupported action "${verb || "unknown"}".`);
@@ -1248,7 +1377,10 @@ export function validateAIChangeProposal(
       for (const value of cleanedFields.departure_dates) {
         const normalizedDate = normalizeDateText(String(value || ""));
         if (!normalizedDate) continue;
-        if (!/\d/.test(normalizedDate) || normalizedDate.length > 40) {
+        if (
+          (!/\d/.test(normalizedDate) && !isRecurringDepartureText(normalizedDate)) ||
+          normalizedDate.length > 60
+        ) {
           invalidDates.push(String(value || "").trim());
           continue;
         }
@@ -1326,14 +1458,24 @@ export function validateAIChangeProposal(
     ...confirmationConflicts,
     ...blockingConflicts,
   ]);
+  const finalActions = dedupeActions(sanitizedActions);
+  const genericOnlyConfirmation =
+    normalized.needs_confirmation &&
+    proposalConflicts.length === 0 &&
+    blockingConflicts.length === 0 &&
+    finalActions.length > 0 &&
+    finalActions.every(isCompleteCleanAction) &&
+    isGenericConfirmationText(normalized.important_reason);
+  const needsConfirmation =
+    proposalConflicts.length > 0 ||
+    blockingConflicts.length > 0 ||
+    (normalized.needs_confirmation && !genericOnlyConfirmation);
   const finalProposal: AIChangeProposal = {
     ...normalized,
-    needs_confirmation:
-      normalized.needs_confirmation ||
-      proposalConflicts.length > 0 ||
-      blockingConflicts.length > 0,
+    needs_confirmation: needsConfirmation,
+    important_reason: genericOnlyConfirmation ? "" : normalized.important_reason,
     conflicts: proposalConflicts,
-    actions: dedupeActions(sanitizedActions),
+    actions: finalActions,
   };
 
   return {
@@ -1447,6 +1589,15 @@ function buildBatchSourceParts(input: {
     `Sources: ${sourceLabels}`,
     input.note ? `Admin note: ${input.note}` : "",
     "Extract travel information from the attached files, images, or text, including route, operator, price, seats, departure date, meals, and status.",
+    "Ignore logos, agency names, headers, footers, contact details, and page decorations unless they are attached to a real trip row.",
+    "Do not create a trip named UUDAM TRAVEL, UUDAM TRAVEL AGENCY, TRAVEL AGENCY, or any other agency/header-only text.",
+    "Do not treat normal adult/child price differences as conflicts. Only flag child price if it is higher than adult price or the source is genuinely unclear.",
+    "When a trip has base prices in MNT plus a medical/exam fee in CNY, store the base adult/child prices as MNT and write the CNY fee clearly in notes/source_description.",
+    "Optional add-on costs in CNY/yuan (нэмэлт төлбөр, өөрийн зардлаар, single room fees, extra attraction tickets) are not conflicts; keep them in notes/source_description.",
+    "Recurring schedules such as 'Пүрэв гараг бүр' are valid departure_dates; do not report them as missing dates.",
+    "If meals are generally included but specific days/meals are self-paid or unavailable, set has_food=true and write the exceptions in notes/source_description instead of raising a meal conflict.",
+    "If a source lists хөтөлбөртэй and чөлөөт package prices for the same route, prefer separate actions with route names that include the variant instead of forcing one base price.",
+    "Do not infer the operator from the uploaded filename when the document content already has a brand/operator.",
     "If possible, match against existing trips to update them; otherwise propose adding new trips.",
   ]
     .filter(Boolean)
@@ -1778,6 +1929,13 @@ export async function generateAIProposalFromContent(input: {
     `Sources: ${sourceLabels}`,
     input.note ? `Admin note: ${input.note}` : "",
     "Extract travel information from the attached files, images, or text, including route, operator, price, seats, departure date, meals, and status.",
+    "Ignore logos, agency names, headers, footers, contact details, and page decorations unless they are attached to a real trip row.",
+    "Do not treat normal adult/child price differences as conflicts. Only flag child price if it is higher than adult price or the source is genuinely unclear.",
+    "Optional add-on costs in CNY/yuan (нэмэлт төлбөр, өөрийн зардлаар, single room fees, extra attraction tickets) are not conflicts; keep them in notes/source_description.",
+    "Recurring schedules such as 'Пүрэв гараг бүр' are valid departure_dates; do not report them as missing dates.",
+    "If meals are generally included but specific days/meals are self-paid or unavailable, set has_food=true and write the exceptions in notes/source_description instead of raising a meal conflict.",
+    "If a source lists хөтөлбөртэй and чөлөөт package prices for the same route, prefer separate actions with route names that include the variant instead of forcing one base price.",
+    "Do not infer the operator from the uploaded filename when the document content already has a brand/operator.",
     "If possible, match against existing trips to update them; otherwise propose adding new trips.",
   ]
     .filter(Boolean)

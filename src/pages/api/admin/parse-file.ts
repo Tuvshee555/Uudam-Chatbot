@@ -24,6 +24,13 @@ type UploadPayload = {
   dataBase64: string;
 };
 
+type ProposalLike = {
+  summary?: string;
+  important_reason?: string;
+  conflicts?: string[];
+  actions?: unknown[];
+};
+
 function collectUploads(body: Record<string, unknown>): UploadPayload[] {
   if (Array.isArray(body.uploads)) {
     return body.uploads
@@ -86,6 +93,17 @@ async function readJsonBody(req: NextApiRequest): Promise<Record<string, unknown
     : {};
 }
 
+function hasTransientAiFailure(proposal: ProposalLike): boolean {
+  const text = [
+    proposal.summary || "",
+    proposal.important_reason || "",
+    ...(Array.isArray(proposal.conflicts) ? proposal.conflicts : []),
+  ].join(" ");
+  return /429|rate.?limit|quota|resource.?exhausted|circuit|upstream|could not finish reading batch/i.test(
+    text,
+  );
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const trace = beginRequestTrace({
     route: "api.admin.parse_file",
@@ -138,6 +156,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         inline: parsed.inline,
       })),
     });
+
+    if (
+      result.proposal.actions.length === 0 &&
+      hasTransientAiFailure(result.proposal)
+    ) {
+      return res.status(429).json({
+        ok: false,
+        error:
+          "AI file reader is temporarily rate limited. The admin UI will retry this file part.",
+        retry_after_ms: 35_000,
+      });
+    }
 
     return res.status(200).json({
       ok: true,

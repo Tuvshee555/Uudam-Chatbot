@@ -121,6 +121,7 @@ type AIProposalResponse = {
   proposal?: AIProposal;
   request_id?: number;
   error?: string;
+  retry_after_ms?: number;
 };
 
 type ClarificationOption = {
@@ -243,7 +244,7 @@ const SECRET_TS_KEY = "travel_admin_secret_ts";
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
 const ADMIN_AUTO_REFRESH_MS =
   process.env.NODE_ENV === "development" ? 0 : 45_000;
-const MAX_PARSE_UPLOAD_BYTES = 2_750_000;
+const MAX_PARSE_UPLOAD_BYTES = 850_000;
 const MAX_TEXT_PARSE_CHARS = 60_000;
 const ACCEPT_FILES =
   ".xlsx,.xlsm,.csv,.pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,image/*,application/pdf";
@@ -382,6 +383,24 @@ function textToDataUrl(text: string): string {
   return bytesToDataUrl(new TextEncoder().encode(text), "text/plain");
 }
 
+function delayMs(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function isTransientAiFailure(proposal: AIProposal | undefined): boolean {
+  if (!proposal) return false;
+  const text = [
+    proposal.summary,
+    proposal.important_reason,
+    ...(proposal.conflicts || []),
+  ].join(" ");
+  return /429|rate.?limit|quota|resource.?exhausted|circuit|upstream|could not finish reading batch/i.test(
+    text,
+  );
+}
+
 function chunkText(text: string, maxChars = MAX_TEXT_PARSE_CHARS): string[] {
   const chunks: string[] = [];
   let remaining = text.trim();
@@ -440,15 +459,30 @@ function pdfTextItemsToText(items: unknown[]): string {
   return lines.join("\n");
 }
 
-async function extractPdfText(file: File): Promise<string> {
+type PdfViewport = { width: number; height: number };
+type PdfRenderPage = {
+  getViewport(input: { scale: number }): PdfViewport;
+  render(input: unknown): { promise: Promise<void> };
+  getTextContent(): Promise<{ items: unknown[] }>;
+};
+type PdfDocumentProxy = {
+  numPages: number;
+  getPage(pageNumber: number): Promise<PdfRenderPage>;
+};
+
+async function loadPdfDocument(bytes: Uint8Array): Promise<PdfDocumentProxy> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const bytes = new Uint8Array(await file.arrayBuffer());
+  pdfjs.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjs.version}/legacy/build/pdf.worker.min.mjs`;
   const loadingTask = pdfjs.getDocument({
-    data: bytes,
-    disableWorker: true,
+    data: bytes.slice(),
     isEvalSupported: false,
   } as unknown as Parameters<typeof pdfjs.getDocument>[0]);
-  const pdf = await loadingTask.promise;
+  return (await loadingTask.promise) as PdfDocumentProxy;
+}
+
+async function extractPdfText(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const pdf = await loadPdfDocument(bytes);
   const pages: string[] = [];
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
@@ -461,6 +495,64 @@ async function extractPdfText(file: File): Promise<string> {
   }
 
   return pages.join("\n\n").trim();
+}
+
+async function canvasToJpegBytes(
+  canvas: HTMLCanvasElement,
+  quality: number,
+): Promise<Uint8Array> {
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, "image/jpeg", quality);
+  });
+  if (!blob) throw new Error("PDF хуудсыг зураг болгож чадсангүй.");
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+async function renderPdfPageAsImageUnit(
+  originalBytes: Uint8Array,
+  filename: string,
+  pageIndex: number,
+  partNumber: number,
+): Promise<ParseUploadUnit> {
+  const pdf = await loadPdfDocument(originalBytes);
+  const page = await pdf.getPage(pageIndex + 1);
+  let scale = 1.45;
+  let quality = 0.82;
+  let bestBytes: Uint8Array | null = null;
+
+  for (let attempt = 0; attempt < 14; attempt += 1) {
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.floor(viewport.width));
+    canvas.height = Math.max(1, Math.floor(viewport.height));
+    const canvasContext = canvas.getContext("2d");
+    if (!canvasContext) throw new Error("PDF хуудсыг зураг болгож чадсангүй.");
+
+    await page.render({ canvasContext, viewport }).promise;
+    const bytes = await canvasToJpegBytes(canvas, quality);
+    if (!bestBytes || bytes.byteLength < bestBytes.byteLength) {
+      bestBytes = bytes;
+    }
+    if (bytes.byteLength <= MAX_PARSE_UPLOAD_BYTES) {
+      return {
+        displayName: `${filename} (${partNumber}, page ${pageIndex + 1})`,
+        filename: `${filename}.part-${String(partNumber).padStart(3, "0")}.page-${String(pageIndex + 1).padStart(3, "0")}.jpg`,
+        mimeType: "image/jpeg",
+        dataUrl: bytesToDataUrl(bytes, "image/jpeg"),
+      };
+    }
+
+    if (quality > 0.46) {
+      quality -= 0.12;
+    } else {
+      scale *= 0.72;
+      quality = 0.72;
+    }
+  }
+
+  throw new Error(
+    `"${filename}" PDF-ийн ${pageIndex + 1}-р хуудсыг request limit-д багтааж жижиглэж чадсангүй (${formatBytes(bestBytes?.byteLength || 0)}).`,
+  );
 }
 
 async function createPdfChunkBytes(
@@ -492,6 +584,16 @@ async function buildPdfUploadUnits(file: File): Promise<ParseUploadUnit[]> {
     ];
   }
 
+  const extractedText = await extractPdfText(file).catch(() => "");
+  if (extractedText.length > 400) {
+    return chunkText(extractedText).map((chunk, index, chunks) => ({
+      displayName: `${file.name} (${index + 1}/${chunks.length})`,
+      filename: `${file.name}.text-${String(index + 1).padStart(3, "0")}.txt`,
+      mimeType: "text/plain",
+      dataUrl: textToDataUrl(chunk),
+    }));
+  }
+
   let sourcePdf: import("pdf-lib").PDFDocument;
   try {
     sourcePdf = await PDFDocument.load(originalBytes, {
@@ -515,6 +617,20 @@ async function buildPdfUploadUnits(file: File): Promise<ParseUploadUnit[]> {
   const flushCurrent = async () => {
     if (currentPages.length === 0) return;
     const chunkBytes = await createPdfChunkBytes(sourcePdf, currentPages);
+    if (chunkBytes.byteLength > MAX_PARSE_UPLOAD_BYTES) {
+      for (const pageIndex of currentPages) {
+        units.push(
+          await renderPdfPageAsImageUnit(
+            originalBytes,
+            file.name,
+            pageIndex,
+            units.length + 1,
+          ),
+        );
+      }
+      currentPages = [];
+      return;
+    }
     units.push({
       displayName: `${file.name} (${units.length + 1})`,
       filename: `${file.name}.part-${String(units.length + 1).padStart(3, "0")}.pdf`,
@@ -533,21 +649,23 @@ async function buildPdfUploadUnits(file: File): Promise<ParseUploadUnit[]> {
     ) {
       await flushCurrent();
       currentPages = [pageIndex];
+      const singlePageBytes = await createPdfChunkBytes(sourcePdf, currentPages);
+      if (singlePageBytes.byteLength > MAX_PARSE_UPLOAD_BYTES) {
+        await flushCurrent();
+      }
       continue;
     }
     if (candidateBytes.byteLength > MAX_PARSE_UPLOAD_BYTES) {
-      const text = await extractPdfText(file);
-      if (!text) {
-        throw new Error(
-          `"${file.name}" PDF-ийн нэг хуудас хэт том байна. PDF-г бага resolution-тэй болгож дахин оруулна уу.`,
-        );
-      }
-      return chunkText(text).map((chunk, index, chunks) => ({
-        displayName: `${file.name} (${index + 1}/${chunks.length})`,
-        filename: `${file.name}.text-${String(index + 1).padStart(3, "0")}.txt`,
-        mimeType: "text/plain",
-        dataUrl: textToDataUrl(chunk),
-      }));
+      units.push(
+        await renderPdfPageAsImageUnit(
+          originalBytes,
+          file.name,
+          pageIndex,
+          units.length + 1,
+        ),
+      );
+      currentPages = [];
+      continue;
     }
     currentPages = candidatePages;
   }
@@ -701,16 +819,132 @@ function normalizeReviewText(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+function isAgencyReviewText(text: string): boolean {
+  const normalized = normalizeReviewText(text).replace(/[.,:;!?()[\]{}"']/g, "");
+  const agencyHeaders = [
+    "uudam travel agency",
+    "uudam travel",
+    "travel agency",
+    "agency",
+  ];
+  return agencyHeaders.some(
+    (header) => normalized === header || normalized.startsWith(`${header} `),
+  );
+}
+
+function isLikelyTripRouteText(text: string): boolean {
+  const normalized = normalizeReviewText(text);
+  return (
+    normalized.includes("аялал") ||
+    normalized.includes("tour") ||
+    normalized.includes("хөх хот") ||
+    normalized.includes("эрээн") ||
+    normalized.includes("бээжин") ||
+    normalized.includes("сеoul") ||
+    normalized.includes("seoul")
+  );
+}
+
+function isSuspiciousChildPriceConflict(normalized: string): boolean {
+  const mentionsChild =
+    normalized.includes("хүүхдийн үнэ") || normalized.includes("child price");
+  if (!mentionsChild) return false;
+  return (
+    normalized.includes("higher") ||
+    normalized.includes("greater") ||
+    normalized.includes("more than") ||
+    normalized.includes("өндөр") ||
+    normalized.includes("их") ||
+    normalized.includes("давсан")
+  );
+}
+
+function isOptionalAddOnCostConflict(normalized: string): boolean {
+  const mentionsForeignCost =
+    normalized.includes("cny") ||
+    normalized.includes("yuan") ||
+    normalized.includes("юань");
+  if (!mentionsForeignCost) return false;
+  return (
+    normalized.includes("optional") ||
+    normalized.includes("add-on") ||
+    normalized.includes("addon") ||
+    normalized.includes("extra") ||
+    normalized.includes("нэмэлт төлбөр") ||
+    normalized.includes("өөрийн зардлаар") ||
+    normalized.includes("хөтөлбөрт багтаагүй") ||
+    normalized.includes("ганцаараа орох") ||
+    normalized.includes("single room")
+  );
+}
+
+function isRecurringDateText(normalized: string): boolean {
+  return (
+    normalized.includes("гараг бүр") ||
+    normalized.includes("долоо хоног бүр") ||
+    normalized.includes("every week") ||
+    normalized.includes("weekly") ||
+    normalized.includes("пүрэв") ||
+    normalized.includes("даваа") ||
+    normalized.includes("мягмар") ||
+    normalized.includes("лхагва") ||
+    normalized.includes("баасан") ||
+    normalized.includes("бямба") ||
+    normalized.includes("ням") ||
+    normalized.includes("thursday") ||
+    normalized.includes("monday") ||
+    normalized.includes("tuesday") ||
+    normalized.includes("wednesday") ||
+    normalized.includes("friday") ||
+    normalized.includes("saturday") ||
+    normalized.includes("sunday")
+  );
+}
+
+function isDocumentedMealExceptionConflict(normalized: string): boolean {
+  const mentionsMeal =
+    normalized.includes("хоол") ||
+    normalized.includes("цай") ||
+    normalized.includes("meal") ||
+    normalized.includes("breakfast") ||
+    normalized.includes("lunch") ||
+    normalized.includes("dinner");
+  if (!mentionsMeal) return false;
+  return (
+    normalized.includes("өөрийн зардлаар") ||
+    normalized.includes("өөрсдийн зардлаар") ||
+    normalized.includes("өөрөө") ||
+    normalized.includes("чөлөөт өдөр") ||
+    normalized.includes("байдаггүй") ||
+    normalized.includes("байхгүй") ||
+    normalized.includes("not included") ||
+    normalized.includes("own expense") ||
+    normalized.includes("free day")
+  );
+}
+
 function summarizeConflict(detail: string): string {
   const normalized = normalizeReviewText(detail);
   const quoted = extractQuotedValues(detail);
   const subject = quoted[0] || "Энэ аялал";
 
-  if (normalized.includes("хүүхдийн үнэ") || normalized.includes("child price")) {
+  if (isAgencyReviewText(subject) || isAgencyReviewText(detail)) {
+    return "";
+  }
+  if (isOptionalAddOnCostConflict(normalized)) {
+    return "";
+  }
+  if (isDocumentedMealExceptionConflict(normalized)) {
+    return "";
+  }
+  if (isRecurringDateText(normalized)) {
+    return "";
+  }
+  if (isSuspiciousChildPriceConflict(normalized)) {
     return `${subject}: хүүхдийн болон том хүний үнэ зөрүүтэй байна.`;
   }
   if (normalized.includes("юань") || normalized.includes("cny") || normalized.includes("валют")) {
-    return `${subject}: үнэ хэдэн валютаар орж ирсэн байна.`;
+    return `${subject}: үндсэн үнэ MNT, шинжилгээний төлбөр CNY байна.`;
   }
   if (normalized.includes("хоол") || normalized.includes("meal")) {
     return `${subject}: хоол багтсан эсэх нь тодорхойгүй байна.`;
@@ -725,11 +959,20 @@ function summarizeConflict(detail: string): string {
   if (
     normalized.includes("6-р сард") ||
     normalized.includes("7-р сард") ||
-    normalized.includes("8-р сард")
+      normalized.includes("8-р сард")
   ) {
     return `${subject}: сар бүрийн үнэ өөр байна.`;
   }
-  return `${subject}: нэмэлт шалгалт хэрэгтэй.`;
+  if (
+    normalized.includes("file") ||
+    normalized.includes("файлын нэр") ||
+    normalized.includes("operator") ||
+    normalized.includes("оператор") ||
+    normalized.includes("брэнд")
+  ) {
+    return "";
+  }
+  return "";
 }
 
 function buildProposalClarifications(
@@ -797,6 +1040,17 @@ function buildProposalClarifications(
     const subject = quoted[0] || "";
     const subjectTag = subject ? `"${subject}" аяллын ` : "";
 
+    if (isAgencyReviewText(subject) || isAgencyReviewText(detail)) return;
+    if (isOptionalAddOnCostConflict(normalized)) return;
+    if (isDocumentedMealExceptionConflict(normalized)) return;
+    if (isRecurringDateText(normalized)) return;
+    if (
+      normalized.includes("хүүхдийн үнэ") ||
+      normalized.includes("child price")
+    ) {
+      if (!isSuspiciousChildPriceConflict(normalized)) return;
+    }
+
     if (
       normalized.includes("file") ||
       normalized.includes("файлын нэр") ||
@@ -806,6 +1060,16 @@ function buildProposalClarifications(
     ) {
       const detected = quoted[0] || "файлын нэр";
       const operator = quoted[1] || "илэрсэн оператор";
+      if (
+        normalized.includes("file") ||
+        normalized.includes("файлын нэр") ||
+        isLikelyTripRouteText(detected) ||
+        isLikelyTripRouteText(operator) ||
+        isAgencyReviewText(detected) ||
+        isAgencyReviewText(operator)
+      ) {
+        return;
+      }
       pushQuestion({
         id: `operator-mismatch:${index}`,
         prompt: "Брэнд/операторын нэр зөрчилтэй байна. Аль нэрийг хэрэглэх вэ?",
@@ -829,20 +1093,24 @@ function buildProposalClarifications(
     if (normalized.includes("хөтөлбөртэй") && normalized.includes("чөлөөт")) {
       pushQuestion({
         id: `plan-choice:${index}`,
-        prompt: `${subjectTag}аялалд хөтөлбөртэй болон чөлөөт гэсэн хоёр үнэ байна. Аль нь үндсэн үнэ вэ?`,
+        prompt: `${subjectTag}хөтөлбөртэй болон чөлөөт гэсэн хоёр тусдаа үнийн хувилбар байна. Яаж хадгалах вэ?`,
         detail,
         options: [
           {
-            label: "Хөтөлбөртэй хувилбар",
-            answer: `${subjectTag}хөтөлбөртэй хувилбарыг үндсэн үнэ болгон хэрэглэ. (Зөрчил: ${detail})`,
+            label: "Тусдаа хоёр аялал",
+            answer: `${subjectTag}хөтөлбөртэй болон чөлөөт хувилбарыг тусдаа хоёр аялал болгон хадгал. (Зөрчил: ${detail})`,
           },
           {
-            label: "Чөлөөт хувилбар",
-            answer: `${subjectTag}чөлөөт хувилбарыг үндсэн үнэ болгон хэрэглэ. (Зөрчил: ${detail})`,
+            label: "Зөвхөн хөтөлбөртэй",
+            answer: `${subjectTag}зөвхөн хөтөлбөртэй хувилбарыг үндсэн аялал болгон хэрэглэ. (Зөрчил: ${detail})`,
+          },
+          {
+            label: "Зөвхөн чөлөөт",
+            answer: `${subjectTag}зөвхөн чөлөөт хувилбарыг үндсэн аялал болгон хэрэглэ. (Зөрчил: ${detail})`,
           },
         ],
         allowCustom: true,
-        customPlaceholder: "Аль хувилбарыг хэрэглэхийг бичнэ үү",
+        customPlaceholder: "Жишээ: хоёр хувилбарыг тусдаа хадгал, эсвэл нэгийг сонго",
       });
       return;
     }
@@ -920,19 +1188,19 @@ function buildProposalClarifications(
       );
       pushQuestion({
         id: `currency-conflict:${index}`,
-        prompt: `${subjectTag}үнэ хэдэн валютаар орж ирсэн байна. Аль валютаар хадгалах вэ?`,
+        prompt: `${subjectTag}үндсэн үнэ MNT, шинжилгээний нэмэлт төлбөр CNY байна. Яаж хадгалах вэ?`,
         options: [
           {
-            label: "MNT-г үлдээх",
-            answer: `${subjectTag}үнийг MNT-ээр хадгал. CNY үнэ байвал саналд бүү ашигла.`,
+            label: "MNT + CNY тэмдэглэл",
+            answer: `${subjectTag}үндсэн үнийг MNT-ээр хадгалж, шинжилгээний CNY төлбөрийг тэмдэглэл/source_description-д тодорхой бич.`,
           },
           {
-            label: "CNY-г үлдээх",
-            answer: `${subjectTag}үнийг CNY-ээр хадгал. MNT үнэ байвал саналд бүү ашигла.`,
+            label: "Админаар засуулах",
+            answer: `${subjectTag}үнийн бүтэц тодорхойгүй тул хадгалахаас өмнө админаас яг adult/child MNT болон CNY нэмэлт төлбөрийг асуу.`,
           },
         ],
         allowCustom: true,
-        customPlaceholder: "Аль үнэ, аль валютыг хэрэглэхийг бичнэ үү",
+        customPlaceholder: "Жишээ: том хүн 890000 MNT + 600 CNY, хүүхэд 700000 MNT + 300 CNY",
       });
       return;
     }
@@ -994,11 +1262,20 @@ function buildProposalClarifications(
       return;
     }
 
-    // Any conflict that doesn't match a known category still gets surfaced —
-    // never silently drop a flagged conflict.
+    if (
+      normalized.includes("нэмэлт шалгалт") ||
+      normalized.includes("additional check") ||
+      normalized.includes("review needed") ||
+      normalized.includes("баталгаажуул")
+    ) {
+      return;
+    }
+
+    // Any concrete conflict that doesn't match a known category still gets surfaced
+    // with the original detail, so the admin is not asked a blind question.
     pushQuestion({
       id: `conflict:${index}`,
-      prompt: "Энэ зөрчлийг хэрхэн зохицуулах вэ?",
+      prompt: `Дараах зөрчлийг хэрхэн зохицуулах вэ? ${detail}`,
       options: [
         {
           label: "Илэрсэнээр нь үлдээх",
@@ -1013,29 +1290,6 @@ function buildProposalClarifications(
       customPlaceholder: "Хэрхэн зохицуулахыг бичнэ үү",
     });
   });
-
-  if (questions.length === 0 && proposal.needs_confirmation) {
-    const fallbackReason =
-      proposal.important_reason ||
-      proposal.conflicts[0] ||
-      "Нэг зүйл баталгаажуулах шаардлагатай байна.";
-    pushQuestion({
-      id: "final-confirmation",
-      prompt: fallbackReason,
-      options: [
-        {
-          label: "Илэрсэнээр хэрэглэх",
-          answer: "Илэрсэн утгуудыг одоогийн саналд байгаагаар нь хэвээр үлдээ.",
-        },
-        {
-          label: "Болгоомжтой хянан засах",
-          answer: "Тодорхойгүй утгуудыг хэвээр үлдээхгүй; саналыг илүү болгоомжтойгоор засна уу.",
-        },
-      ],
-      allowCustom: true,
-      customPlaceholder: "Хэрэглэх тодруулгыг бичнэ үү",
-    });
-  }
 
   return questions.slice(0, 4);
 }
@@ -1595,6 +1849,77 @@ export default function AdminPage() {
     };
   }
 
+  async function parseUploadUnitWithRetry(
+    unit: ParseUploadUnit,
+    note: string,
+    progressLabel: string,
+  ): Promise<{ proposal: AIProposal; requestId: number | null }> {
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const res = await fetchWithAdmin("/api/admin/parse-file", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          uploads: [
+            {
+              filename: unit.filename,
+              mimeType: unit.mimeType,
+              dataBase64: unit.dataUrl,
+            },
+          ],
+          note,
+        }),
+      });
+      const json = (await readJsonSafe(res)) as AIProposalResponse;
+      const shouldRetry =
+        res.status === 429 ||
+        (res.ok && isTransientAiFailure(json.proposal) && !json.proposal?.actions?.length);
+
+      if (shouldRetry && attempt < maxAttempts) {
+        const waitMs =
+          typeof json.retry_after_ms === "number" && json.retry_after_ms > 0
+            ? json.retry_after_ms
+            : attempt === 1
+              ? 35_000
+              : 60_000;
+        setAiBusyLabel(
+          `${progressLabel} — AI limit түр хүлээж байна (${Math.round(waitMs / 1000)}с)`,
+        );
+        await delayMs(waitMs);
+        continue;
+      }
+
+      if (!res.ok) {
+        if (res.status === 413) {
+          throw new Error(
+            `"${unit.displayName}" хэсэг сервер эсвэл платформын request limit-д хүрлээ.`,
+          );
+        }
+        if (res.status === 429) {
+          throw new Error(
+            `"${unit.displayName}" хэсгийг AI rate limit-ээс болж уншиж чадсангүй. 1 минутын дараа дахин оролдоно уу.`,
+          );
+        }
+        throw new Error(json?.error || `"${unit.displayName}" хэсгийг боловсруулж чадсангүй.`);
+      }
+      if (!json.proposal || !Array.isArray(json.proposal.actions)) {
+        throw new Error(`"${unit.displayName}" хэсгээс AI санал буцааж чадсангүй.`);
+      }
+      if (isTransientAiFailure(json.proposal) && json.proposal.actions.length === 0) {
+        throw new Error(
+          `"${unit.displayName}" хэсгийг AI түр завгүйгээс уншиж чадсангүй. Дахин оролдоно уу.`,
+        );
+      }
+
+      return {
+        proposal: json.proposal,
+        requestId: typeof json.request_id === "number" ? json.request_id : null,
+      };
+    }
+
+    throw new Error(`"${unit.displayName}" хэсгийг уншиж чадсангүй.`);
+  }
+
   async function parseAttachedFiles(
     files: AttachedFile[],
     note: string,
@@ -1619,38 +1944,15 @@ export default function AdminPage() {
 
     for (let index = 0; index < uploadUnits.length; index += 1) {
       const unit = uploadUnits[index];
-      setAiBusyLabel(
-        `${files.length} файл уншиж байна… ${index + 1}/${uploadUnits.length}`,
-      );
-      const res = await fetchWithAdmin("/api/admin/parse-file", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          uploads: [
-            {
-              filename: unit.filename,
-              mimeType: unit.mimeType,
-              dataBase64: unit.dataUrl,
-            },
-          ],
-          note,
-        }),
-      });
-      const json = (await readJsonSafe(res)) as AIProposalResponse;
-      if (!res.ok) {
-        if (res.status === 413) {
-          throw new Error(
-            `"${unit.displayName}" хэсэг сервер эсвэл платформын request limit-д хүрлээ.`,
-          );
-        }
-        throw new Error(json?.error || `"${unit.displayName}" хэсгийг боловсруулж чадсангүй.`);
+      const progressLabel = `${files.length} файл уншиж байна… ${index + 1}/${uploadUnits.length}`;
+      setAiBusyLabel(progressLabel);
+      const parsed = await parseUploadUnitWithRetry(unit, note, progressLabel);
+      proposals.push(parsed.proposal);
+      if (uploadUnits.length === 1) {
+        singleRequestId = parsed.requestId;
       }
-      if (!json.proposal || !Array.isArray(json.proposal.actions)) {
-        throw new Error(`"${unit.displayName}" хэсгээс AI санал буцааж чадсангүй.`);
-      }
-      proposals.push(json.proposal);
-      if (uploadUnits.length === 1 && typeof json.request_id === "number") {
-        singleRequestId = json.request_id;
+      if (index < uploadUnits.length - 1) {
+        await delayMs(2_000);
       }
     }
 
@@ -1750,8 +2052,8 @@ export default function AdminPage() {
       if (files.length > 0 || driveFileIds.length > 0) {
         const parsedProposals: AIProposal[] = [];
         const parsedSourceNames: string[] = [];
-        const parsed = await parseAttachedFiles(files, text);
         if (files.length > 0) {
+          const parsed = await parseAttachedFiles(files, text);
           parsedProposals.push(parsed.proposal);
           parsedSourceNames.push(...files.map((file) => file.name));
           requestId = parsed.requestId;
@@ -2939,14 +3241,14 @@ function ChatBubbleV2({
             </div>
           </div>
           <Badge tone={isReadyToApply ? "success" : "warning"}>
-            {isReadyToApply ? "Ready" : "Review"}
+            {isReadyToApply ? "Бэлэн" : "Хянах"}
           </Badge>
         </div>
 
         {compactWarnings.length > 0 && (
           <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
             <p className="text-xs font-semibold text-amber-900">
-              Товч шалгалт
+              Анхаарах зүйл
             </p>
             <div className="mt-1 space-y-1">
               {compactWarnings.map((item) => (
@@ -3005,7 +3307,7 @@ function ChatBubbleV2({
           <div className="mt-3 border-t border-line pt-3">
             {message.clarifications.length > 0 ? (
               <div className="space-y-3">
-                <p className="text-xs font-semibold text-ink">Шийдвэр гаргах зүйлс</p>
+                <p className="text-xs font-semibold text-ink">Тодруулах зүйлс</p>
                 {message.clarifications.map((q) => {
                   const selected = formDraft[q.id] ?? "";
                   return (
@@ -3014,7 +3316,7 @@ function ChatBubbleV2({
                       className="rounded-md border border-line bg-surface-sunken px-3 py-3"
                     >
                       <p className="text-xs font-semibold text-ink-muted">
-                        Асуулт
+                        Тодруулга
                       </p>
                       <p className="mt-1 text-sm font-medium text-ink">{q.prompt}</p>
                       <div className="mt-2 flex flex-wrap gap-2">
