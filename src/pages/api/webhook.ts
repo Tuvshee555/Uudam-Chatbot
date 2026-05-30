@@ -14,7 +14,12 @@ import {
   getTravelBotSettings,
   hasRecentOpenLead,
   isBotGloballyPaused,
+  listTrips,
 } from "../../lib/travelOps";
+import {
+  buildDepartureDateAvailabilityReply,
+  hasDepartureDateAvailabilityIntent,
+} from "../../lib/travelDates";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { getEnv } from "../../lib/env";
 import { withRedis } from "../../lib/redisState";
@@ -1139,6 +1144,70 @@ async function handleMessage(
     !(await hasRecentOpenLead(senderId, "booking"));
 
   await appendMessage(sessionId, "user", text);
+
+  if (!customerWantsToBook && hasDepartureDateAvailabilityIntent(text)) {
+    const trips = await listTrips({ limit: 5000 });
+    const dateAvailabilityReply = trips.length
+      ? buildDepartureDateAvailabilityReply({
+          userText: text,
+          trips,
+        })
+      : null;
+
+    if (dateAvailabilityReply) {
+      const safeDateReply = enforceWebsiteForPayment(
+        sanitizeAssistantReply(fixMojibake(dateAvailabilityReply)),
+      );
+
+      if (lastReply && isDuplicateReply(lastReply.text, safeDateReply)) {
+        recordCounter("webhook.duplicate_reply_avoided_total", 1, { platform });
+        await assertLockHealthy();
+        const delivered = await sendPlatformMessage(
+          platform,
+          senderId,
+          "Тэр мэдээллийг өмнө нь хуваалцсан. Өөр асуулт байвал асуугаарай!",
+          token,
+          pageId,
+          igUserId,
+          trace,
+          { allowFallback: false },
+        );
+        if (!delivered) {
+          throw new RetryableWebhookError("delivery_failed:duplicate_reply_notice");
+        }
+        return;
+      }
+
+      await assertLockHealthy();
+      const delivered = await sendPlatformMessage(
+        platform,
+        senderId,
+        safeDateReply,
+        token,
+        pageId,
+        igUserId,
+        trace,
+        { allowFallback: false },
+      );
+      if (!delivered) {
+        throw new RetryableWebhookError("delivery_failed:date_availability_reply");
+      }
+
+      try {
+        await appendMessage(sessionId, "assistant", safeDateReply);
+        await setLastReplyConsistent(sessionId, safeDateReply);
+      } catch (error) {
+        logWarn("webhook.reply_state_persist_failed", {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          platform,
+          senderHash: hashIdentifier(senderId),
+          classification: classifyError(error),
+        });
+      }
+      return;
+    }
+  }
 
   // When a booking lead is fresh, nudge the model to collect contact details
   // in its normal reply instead of sending a separate follow-up message.

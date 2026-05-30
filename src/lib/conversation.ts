@@ -2,6 +2,7 @@
 import { getEnv } from "./env";
 import { recordCounter } from "./observability";
 import { withRedis } from "./redisState";
+import { buildTemporalPromptContext } from "./travelDates";
 
 export type ChatRole = "user" | "assistant";
 
@@ -149,6 +150,8 @@ export function buildPrompt(options: {
   lines.push("- Keep replies short (2-4 sentences max). Avoid repeating yourself.");
   lines.push("- Use only the provided context. Do not invent routes, prices, departure dates, operators, or visa details.");
   lines.push("- NEVER use markdown formatting. Reply as plain text only.");
+  lines.push("- Resolve relative date words using the Time context. Do not ask what date 'маргааш', 'margaash', or 'tomorrow' means.");
+  lines.push("- If the user asks whether a trip departs on a resolved date, answer yes/no from departure dates in Context. If no exact match exists, say no and optionally mention nearby listed dates.");
   lines.push("- If the user asks for exact үнэ/өдөр, quote it from the dataset as-is.");
   lines.push("- If the same route has different prices between operators, mention that operator prices differ and ask which operator they want.");
   lines.push("- If information is missing or ambiguous, clearly say it is not confirmed in the current dataset.");
@@ -157,6 +160,10 @@ export function buildPrompt(options: {
 
   lines.push("");
   lines.push(`Business name: ${business?.name || "N/A"}`);
+
+  lines.push("Time context:");
+  lines.push(buildTemporalPromptContext(userText));
+  lines.push("");
 
   lines.push("Context:");
 
