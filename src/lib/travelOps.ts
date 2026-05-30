@@ -125,7 +125,8 @@ type TripMatchSnapshot = Pick<
 
 const env = getEnv();
 const FILE_PARSE_GEMINI_TIMEOUT_MS = Math.max(env.geminiTimeoutMs, 60_000);
-const FILE_PARSE_GEMINI_MAX_RETRIES = 0;
+const FILE_PARSE_GEMINI_MAX_RETRIES = Math.max(env.geminiMaxRetries, 4);
+const FILE_PARSE_BATCH_DELAY_MS = 1_200;
 const FILE_PARSE_REPAIR_TIMEOUT_MS = 20_000;
 let schemaEnsured = false;
 let schemaPromise: Promise<boolean> | null = null;
@@ -145,6 +146,12 @@ function parseInteger(value: unknown): number | null {
   if (!cleaned) return null;
   const parsed = Number(cleaned);
   return Number.isFinite(parsed) ? Math.trunc(parsed) : null;
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function coerceTripStatus(value: unknown): TripStatus {
@@ -1831,7 +1838,11 @@ export async function generateAIProposalFromContentBatched(input: {
     buildProposal: async (condensedTrips) => {
       const proposals: AIChangeProposal[] = [];
 
-      for (const batch of batches) {
+      for (let index = 0; index < batches.length; index += 1) {
+        if (index > 0) {
+          await wait(FILE_PARSE_BATCH_DELAY_MS);
+        }
+        const batch = batches[index];
         const { parts, sourceLabels: batchLabels } = buildBatchSourceParts({
           note: input.note,
           sources: batch,
@@ -2413,4 +2424,3 @@ export async function getDbDiagnostics() {
 export async function maybeRecordTravelMetric(action: string) {
   recordCounter("travel.ops.action_total", 1, { action });
 }
-

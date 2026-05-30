@@ -1,5 +1,5 @@
 import { createSign, randomUUID } from "crypto";
-import { MAX_UPLOAD_BYTES, parseUpload } from "./fileParse";
+import { parseUpload } from "./fileParse";
 import { getEnv } from "./env";
 import { logError, logInfo, recordCounter } from "./observability";
 import { queryNeon, withNeonClient } from "./neonDb";
@@ -539,11 +539,6 @@ async function downloadDriveFile(
   const buffer = Buffer.from(await response.arrayBuffer());
   if (buffer.byteLength === 0) {
     throw new Error(`Downloaded file is empty: ${spec.filename}`);
-  }
-  if (buffer.byteLength > MAX_UPLOAD_BYTES) {
-    throw new Error(
-      `Downloaded file is too large (${spec.filename}, ${buffer.byteLength} bytes).`,
-    );
   }
   return buffer;
 }

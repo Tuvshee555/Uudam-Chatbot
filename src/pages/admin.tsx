@@ -226,9 +226,6 @@ type DriveSyncDiagnostics = {
 const SECRET_KEY = "travel_admin_secret";
 const SECRET_TS_KEY = "travel_admin_secret_ts";
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
-const MAX_FILE_BYTES = 100 * 1024 * 1024;
-const MAX_TOTAL_FILE_BYTES = 100 * 1024 * 1024;
-const MAX_ATTACH_COUNT = 20;
 const ADMIN_AUTO_REFRESH_MS =
   process.env.NODE_ENV === "development" ? 0 : 45_000;
 const ACCEPT_FILES =
@@ -1327,35 +1324,9 @@ export default function AdminPage() {
     const inputFiles = Array.from(files);
     if (inputFiles.length === 0) return;
 
-    const oversized = inputFiles.filter((file) => file.size > MAX_FILE_BYTES);
-    if (oversized.length > 0) {
-      toast.error("Зарим файл хэт том байна. Нэг файл 100MB-аас хэтрэхгүй байх ёстой.");
-    }
-
-    const acceptedFiles = inputFiles.filter((file) => file.size <= MAX_FILE_BYTES);
-    if (acceptedFiles.length === 0) return;
-
-    if (attachedFiles.length + acceptedFiles.length > MAX_ATTACH_COUNT) {
-      toast.error(`Нийт хавсралт ${MAX_ATTACH_COUNT}-аас хэтрэхгүй байх ёстой.`);
-      return;
-    }
-
-    const currentAttachedBytes = attachedFiles.reduce(
-      (sum, file) => sum + Math.floor((file.dataUrl.length * 3) / 4),
-      0,
-    );
-    const totalBytes =
-      currentAttachedBytes + acceptedFiles.reduce((sum, file) => sum + file.size, 0);
-    if (totalBytes > MAX_TOTAL_FILE_BYTES) {
-      toast.error(
-        `Нийт хэмжээ хэт их байна (${formatBytes(totalBytes)}). Нэг хүсэлт ${formatBytes(MAX_TOTAL_FILE_BYTES)}-аас хэтрэхгүй байх ёстой.`,
-      );
-      return;
-    }
-
     try {
       const nextFiles = await Promise.all(
-        acceptedFiles.map((file) => readAttachedFile(file)),
+        inputFiles.map((file) => readAttachedFile(file)),
       );
       setAttachedFiles((prev) => {
         const existing = new Set(prev.map((file) => file.id));
@@ -1412,7 +1383,7 @@ export default function AdminPage() {
         if (!res.ok) {
           if (res.status === 413) {
             throw new Error(
-              `Нийт хэмжээ хэт их байна. Нэг хүсэлт ${formatBytes(MAX_TOTAL_FILE_BYTES)}-аас хэтрэхгүй байх ёстой.`,
+              "Нийт хэмжээ сервер эсвэл байршуулалтын платформын зөвшөөрсөн хэмжээнээс хэтэрлээ.",
             );
           }
           throw new Error(data?.error || "Файлуудыг боловсруулж чадсангүй.");
@@ -1477,7 +1448,7 @@ export default function AdminPage() {
         tone: "error",
         text:
           err instanceof TypeError
-            ? `Сервер хариу өгөхөөс өмнө байршуулалт амжилтгүй болсон. Файл цөөлж ${formatBytes(MAX_TOTAL_FILE_BYTES)}-аас доош байлгана уу.`
+            ? "Сервер хариу өгөхөөс өмнө байршуулалт амжилтгүй болсон. Сүлжээ, браузер эсвэл платформын бодит request limit-д хүрсэн байж магадгүй."
             : err instanceof Error
               ? err.message
               : "Алдаа гарлаа.",
@@ -2508,7 +2479,7 @@ function AssistantTab({
       </Card>
 
       <p className="px-1 text-xs text-ink-subtle">
-        Excel болон CSV файлыг AI уншихад тохиромжтой хүснэгт болгоно. PDF, зураг, текст файл нэгэн зэрэг хавсаргаж болно. Нэг файл 100MB-аас, нийт хүсэлт 100MB-аас хэтрэхгүй байх ёстой.
+        Excel болон CSV файлыг AI уншихад тохиромжтой хүснэгт болгоно. PDF, зураг, текст файл нэгэн зэрэг хавсаргаж болно. Маш том файл дээр браузер, сервер эсвэл AI provider-ийн бодит limit нөлөөлж магадгүй.
       </p>
 
     </div>

@@ -9,8 +9,6 @@
  */
 import ExcelJS from "exceljs";
 
-export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
-
 export type ParsedUpload = {
   /** Short human label for the source, e.g. "price-list.xlsx". */
   label: string;
@@ -46,9 +44,6 @@ function decodeBase64(dataBase64: string): Buffer {
   const buffer = Buffer.from(cleaned, "base64");
   if (buffer.byteLength === 0) {
     throw new Error("Файл хоосон эсвэл уншигдсангүй.");
-  }
-  if (buffer.byteLength > MAX_UPLOAD_BYTES) {
-    throw new Error("Файл хэт том байна (100MB-ээс бага байх ёстой).");
   }
   return buffer;
 }

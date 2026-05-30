@@ -1,16 +1,14 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
-import { parseUpload } from "../../../lib/fileParse";
+import { parseUpload, type ParsedUpload } from "../../../lib/fileParse";
 import { generateAIProposalFromContentBatched } from "../../../lib/travelOps";
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
 
 export const config = {
   api: {
-    bodyParser: { sizeLimit: "140mb" },
+    bodyParser: false,
   },
 };
-
-const MAX_UPLOAD_COUNT = 20;
 
 function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -47,6 +45,20 @@ function collectUploads(body: Record<string, unknown>): UploadPayload[] {
   return fallback.dataBase64 ? [fallback] : [];
 }
 
+async function readJsonBody(req: NextApiRequest): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
+  }
+
+  const raw = Buffer.concat(chunks).toString("utf8").trim();
+  if (!raw) return {};
+  const parsed = JSON.parse(raw) as unknown;
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : {};
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const trace = beginRequestTrace({
     route: "api.admin.parse_file",
@@ -62,22 +74,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (req.method !== "POST") return res.status(405).end();
 
-    const body = req.body && typeof req.body === "object" ? req.body : {};
+    let body: Record<string, unknown>;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      return res.status(400).json({ error: "Invalid JSON upload payload." });
+    }
     const note = asText((body as Record<string, unknown>).note);
-    const uploads = collectUploads(body as Record<string, unknown>);
+    const uploads = collectUploads(body);
 
     if (uploads.length === 0) {
       return res.status(400).json({ error: "No uploaded file data was provided." });
     }
-    if (uploads.length > MAX_UPLOAD_COUNT) {
-      return res.status(400).json({
-        error: `Attach up to ${MAX_UPLOAD_COUNT} files per request.`,
-      });
-    }
 
-    let parsedUploads;
+    const parsedUploads: ParsedUpload[] = [];
     try {
-      parsedUploads = await Promise.all(uploads.map((upload) => parseUpload(upload)));
+      for (const upload of uploads) {
+        parsedUploads.push(await parseUpload(upload));
+      }
     } catch (error) {
       return res.status(400).json({
         error: error instanceof Error ? error.message : "Failed to parse uploaded file.",
