@@ -1,6 +1,7 @@
 import { createSign, randomUUID } from "crypto";
-import { parseUpload } from "./fileParse";
+import { parseUpload, type ParsedUpload } from "./fileParse";
 import { getEnv } from "./env";
+import { extractGoogleDriveFileIds } from "./googleDriveLinks";
 import { logError, logInfo, recordCounter } from "./observability";
 import { queryNeon, withNeonClient } from "./neonDb";
 import {
@@ -13,6 +14,7 @@ const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3/files";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const DRIVE_SYNC_LOCK_ID = 420451;
+const DRIVE_LINK_PDF_CHUNK_BYTES = 4 * 1024 * 1024;
 const env = getEnv();
 
 type DriveSyncStatus = "idle" | "running" | "success" | "warning" | "error";
@@ -35,6 +37,13 @@ type DriveDownloadSpec = {
   filename: string;
   mimeType: string;
   url: string;
+};
+
+export type DriveLinkedParsedFile = {
+  fileId: string;
+  name: string;
+  mimeType: string;
+  parsedUploads: ParsedUpload[];
 };
 
 type DriveSyncFileState = {
@@ -94,6 +103,13 @@ function isDriveSyncConfigured() {
     env.googleDriveSyncEnabled &&
       env.googleDriveFolderId &&
       env.googleDriveServiceAccountEmail &&
+      normalizedPrivateKey(),
+  );
+}
+
+function isDriveLinkAccessConfigured() {
+  return Boolean(
+    env.googleDriveServiceAccountEmail &&
       normalizedPrivateKey(),
   );
 }
@@ -211,6 +227,19 @@ async function listDriveFiles(accessToken: string): Promise<DriveFileMeta[]> {
   }
 
   return files;
+}
+
+async function getDriveFileMeta(
+  accessToken: string,
+  fileId: string,
+): Promise<DriveFileMeta> {
+  const url = new URL(`${DRIVE_API_BASE}/${encodeURIComponent(fileId)}`);
+  url.searchParams.set(
+    "fields",
+    "id,name,mimeType,modifiedTime,md5Checksum,size",
+  );
+  url.searchParams.set("supportsAllDrives", "true");
+  return fetchDriveJson<DriveFileMeta>(url, accessToken);
 }
 
 function extensionOf(filename: string) {
@@ -541,6 +570,122 @@ async function downloadDriveFile(
     throw new Error(`Downloaded file is empty: ${spec.filename}`);
   }
   return buffer;
+}
+
+async function createPdfChunk(
+  sourcePdf: import("pdf-lib").PDFDocument,
+  pageIndexes: number[],
+): Promise<Uint8Array> {
+  const { PDFDocument } = await import("pdf-lib");
+  const chunkPdf = await PDFDocument.create();
+  const pages = await chunkPdf.copyPages(sourcePdf, pageIndexes);
+  for (const page of pages) {
+    chunkPdf.addPage(page);
+  }
+  return chunkPdf.save({ useObjectStreams: true });
+}
+
+async function splitDrivePdfForParsing(
+  filename: string,
+  buffer: Buffer,
+): Promise<Array<{ filename: string; mimeType: string; dataBase64: string }>> {
+  if (buffer.byteLength <= DRIVE_LINK_PDF_CHUNK_BYTES) {
+    return [
+      {
+        filename,
+        mimeType: "application/pdf",
+        dataBase64: buffer.toString("base64"),
+      },
+    ];
+  }
+
+  const { PDFDocument } = await import("pdf-lib");
+  const sourcePdf = await PDFDocument.load(buffer, {
+    ignoreEncryption: true,
+    updateMetadata: false,
+  });
+  const uploads: Array<{ filename: string; mimeType: string; dataBase64: string }> =
+    [];
+  let currentPages: number[] = [];
+
+  const flush = async () => {
+    if (currentPages.length === 0) return;
+    const chunkBytes = await createPdfChunk(sourcePdf, currentPages);
+    uploads.push({
+      filename: `${filename}.part-${String(uploads.length + 1).padStart(3, "0")}.pdf`,
+      mimeType: "application/pdf",
+      dataBase64: Buffer.from(chunkBytes).toString("base64"),
+    });
+    currentPages = [];
+  };
+
+  for (let pageIndex = 0; pageIndex < sourcePdf.getPageCount(); pageIndex += 1) {
+    const candidatePages = [...currentPages, pageIndex];
+    const candidateBytes = await createPdfChunk(sourcePdf, candidatePages);
+    if (
+      candidateBytes.byteLength > DRIVE_LINK_PDF_CHUNK_BYTES &&
+      currentPages.length > 0
+    ) {
+      await flush();
+      currentPages = [pageIndex];
+      continue;
+    }
+    currentPages = candidatePages;
+  }
+
+  await flush();
+  return uploads;
+}
+
+async function buildDriveParseUploads(
+  spec: DriveDownloadSpec,
+  buffer: Buffer,
+): Promise<Array<{ filename: string; mimeType: string; dataBase64: string }>> {
+  if (spec.mimeType === "application/pdf") {
+    return splitDrivePdfForParsing(spec.filename, buffer);
+  }
+  return [
+    {
+      filename: spec.filename,
+      mimeType: spec.mimeType,
+      dataBase64: buffer.toString("base64"),
+    },
+  ];
+}
+
+export { extractGoogleDriveFileIds };
+
+export function canReadGoogleDriveLinks() {
+  return isDriveLinkAccessConfigured();
+}
+
+export async function parseGoogleDriveFileId(
+  fileId: string,
+): Promise<DriveLinkedParsedFile> {
+  if (!isDriveLinkAccessConfigured()) {
+    throw new Error("Google Drive service account credentials are not configured.");
+  }
+
+  const accessToken = await getDriveAccessToken();
+  const file = await getDriveFileMeta(accessToken, fileId);
+  const spec = resolveDriveDownloadSpec(file);
+  if (!spec) {
+    throw new Error(`Unsupported Google Drive file type: ${file.mimeType}`);
+  }
+
+  const buffer = await downloadDriveFile(accessToken, spec);
+  const uploads = await buildDriveParseUploads(spec, buffer);
+  const parsedUploads: ParsedUpload[] = [];
+  for (const upload of uploads) {
+    parsedUploads.push(await parseUpload(upload));
+  }
+
+  return {
+    fileId,
+    name: file.name,
+    mimeType: file.mimeType,
+    parsedUploads,
+  };
 }
 
 async function withDriveSyncLock<T>(task: () => Promise<T>): Promise<T | null> {

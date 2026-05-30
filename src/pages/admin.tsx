@@ -22,6 +22,7 @@ import {
   cx,
   useToast,
 } from "@/components/ui";
+import { extractGoogleDriveFileIds } from "@/lib/googleDriveLinks";
 
 /* ----------------------------------------------------------------
    Types
@@ -176,6 +177,14 @@ type AttachedFile = {
   id: string;
   name: string;
   mimeType: string;
+  sizeBytes: number;
+  file: File;
+};
+
+type ParseUploadUnit = {
+  displayName: string;
+  filename: string;
+  mimeType: string;
   dataUrl: string;
 };
 
@@ -234,6 +243,8 @@ const SECRET_TS_KEY = "travel_admin_secret_ts";
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
 const ADMIN_AUTO_REFRESH_MS =
   process.env.NODE_ENV === "development" ? 0 : 45_000;
+const MAX_PARSE_UPLOAD_BYTES = 2_750_000;
+const MAX_TEXT_PARSE_CHARS = 60_000;
 const ACCEPT_FILES =
   ".xlsx,.xlsm,.csv,.pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,image/*,application/pdf";
 
@@ -339,6 +350,210 @@ function asInt(value: string): number | null {
 function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isPdfFile(file: File): boolean {
+  return (
+    file.type === "application/pdf" ||
+    file.name.trim().toLowerCase().endsWith(".pdf")
+  );
+}
+
+function bytesToDataUrl(bytes: Uint8Array, mimeType: string): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return `data:${mimeType};base64,${btoa(binary)}`;
+}
+
+async function fileToDataUrl(file: File): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("read failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function textToDataUrl(text: string): string {
+  return bytesToDataUrl(new TextEncoder().encode(text), "text/plain");
+}
+
+function chunkText(text: string, maxChars = MAX_TEXT_PARSE_CHARS): string[] {
+  const chunks: string[] = [];
+  let remaining = text.trim();
+  while (remaining.length > maxChars) {
+    const slice = remaining.slice(0, maxChars);
+    const splitAt = Math.max(
+      slice.lastIndexOf("\n\n"),
+      slice.lastIndexOf("\n"),
+      slice.lastIndexOf(". "),
+    );
+    const end = splitAt > maxChars * 0.6 ? splitAt + 1 : maxChars;
+    chunks.push(remaining.slice(0, end).trim());
+    remaining = remaining.slice(end).trim();
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
+
+function pdfTextItemsToText(items: unknown[]): string {
+  const lines: string[] = [];
+  let current = "";
+  let lastY: number | null = null;
+  let lastX: number | null = null;
+
+  const flush = () => {
+    const line = current.replace(/[ \t]+/g, " ").trim();
+    if (line) lines.push(line);
+    current = "";
+    lastY = null;
+    lastX = null;
+  };
+
+  for (const rawItem of items) {
+    const item = rawItem as {
+      str?: string;
+      width?: number;
+      transform?: number[];
+      hasEOL?: boolean;
+    };
+    const text = item.str?.trim();
+    if (!text) continue;
+    const x = Array.isArray(item.transform) ? item.transform[4] : null;
+    const y = Array.isArray(item.transform) ? Math.round(item.transform[5]) : null;
+    if (lastY != null && y != null && Math.abs(y - lastY) > 4) {
+      flush();
+    }
+    if (current) {
+      current += x != null && lastX != null && x - lastX > 24 ? "\t" : " ";
+    }
+    current += text;
+    if (x != null) lastX = x + (item.width || text.length * 5);
+    if (y != null) lastY = y;
+    if (item.hasEOL) flush();
+  }
+  flush();
+  return lines.join("\n");
+}
+
+async function extractPdfText(file: File): Promise<string> {
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const loadingTask = pdfjs.getDocument({
+    data: bytes,
+    disableWorker: true,
+    isEvalSupported: false,
+  } as unknown as Parameters<typeof pdfjs.getDocument>[0]);
+  const pdf = await loadingTask.promise;
+  const pages: string[] = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const text = pdfTextItemsToText(content.items);
+    if (text.trim()) {
+      pages.push(`Page ${pageNumber}\n${text}`);
+    }
+  }
+
+  return pages.join("\n\n").trim();
+}
+
+async function createPdfChunkBytes(
+  sourcePdf: import("pdf-lib").PDFDocument,
+  pageIndexes: number[],
+): Promise<Uint8Array> {
+  const { PDFDocument } = await import("pdf-lib");
+  const chunkPdf = await PDFDocument.create();
+  const pages = await chunkPdf.copyPages(sourcePdf, pageIndexes);
+  for (const page of pages) {
+    chunkPdf.addPage(page);
+  }
+  return chunkPdf.save({ useObjectStreams: true });
+}
+
+async function buildPdfUploadUnits(file: File): Promise<ParseUploadUnit[]> {
+  const { PDFDocument } = await import("pdf-lib");
+  const originalBytes = new Uint8Array(await file.arrayBuffer());
+  const mimeType = "application/pdf";
+
+  if (originalBytes.byteLength <= MAX_PARSE_UPLOAD_BYTES) {
+    return [
+      {
+        displayName: file.name,
+        filename: file.name,
+        mimeType,
+        dataUrl: bytesToDataUrl(originalBytes, mimeType),
+      },
+    ];
+  }
+
+  let sourcePdf: import("pdf-lib").PDFDocument;
+  try {
+    sourcePdf = await PDFDocument.load(originalBytes, {
+      ignoreEncryption: true,
+      updateMetadata: false,
+    });
+  } catch {
+    const text = await extractPdfText(file);
+    if (!text) throw new Error(`"${file.name}" PDF файлыг жижиглэж уншиж чадсангүй.`);
+    return chunkText(text).map((chunk, index, chunks) => ({
+      displayName: `${file.name} (${index + 1}/${chunks.length})`,
+      filename: `${file.name}.text-${String(index + 1).padStart(3, "0")}.txt`,
+      mimeType: "text/plain",
+      dataUrl: textToDataUrl(chunk),
+    }));
+  }
+
+  const units: ParseUploadUnit[] = [];
+  let currentPages: number[] = [];
+
+  const flushCurrent = async () => {
+    if (currentPages.length === 0) return;
+    const chunkBytes = await createPdfChunkBytes(sourcePdf, currentPages);
+    units.push({
+      displayName: `${file.name} (${units.length + 1})`,
+      filename: `${file.name}.part-${String(units.length + 1).padStart(3, "0")}.pdf`,
+      mimeType,
+      dataUrl: bytesToDataUrl(chunkBytes, mimeType),
+    });
+    currentPages = [];
+  };
+
+  for (let pageIndex = 0; pageIndex < sourcePdf.getPageCount(); pageIndex += 1) {
+    const candidatePages = [...currentPages, pageIndex];
+    const candidateBytes = await createPdfChunkBytes(sourcePdf, candidatePages);
+    if (
+      candidateBytes.byteLength > MAX_PARSE_UPLOAD_BYTES &&
+      currentPages.length > 0
+    ) {
+      await flushCurrent();
+      currentPages = [pageIndex];
+      continue;
+    }
+    if (candidateBytes.byteLength > MAX_PARSE_UPLOAD_BYTES) {
+      const text = await extractPdfText(file);
+      if (!text) {
+        throw new Error(
+          `"${file.name}" PDF-ийн нэг хуудас хэт том байна. PDF-г бага resolution-тэй болгож дахин оруулна уу.`,
+        );
+      }
+      return chunkText(text).map((chunk, index, chunks) => ({
+        displayName: `${file.name} (${index + 1}/${chunks.length})`,
+        filename: `${file.name}.text-${String(index + 1).padStart(3, "0")}.txt`,
+        mimeType: "text/plain",
+        dataUrl: textToDataUrl(chunk),
+      }));
+    }
+    currentPages = candidatePages;
+  }
+
+  await flushCurrent();
+  return units;
 }
 
 function shortId(value: string): string {
@@ -1311,18 +1526,12 @@ export default function AdminPage() {
   }
 
   async function readAttachedFile(file: File): Promise<AttachedFile> {
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ""));
-      reader.onerror = () => reject(new Error("read failed"));
-      reader.readAsDataURL(file);
-    });
-
     return {
       id: `${file.name}:${file.size}:${file.lastModified}`,
       name: file.name,
       mimeType: file.type || "",
-      dataUrl,
+      sizeBytes: file.size,
+      file,
     };
   }
 
@@ -1392,11 +1601,26 @@ export default function AdminPage() {
   ): Promise<{ proposal: AIProposal; requestId: number | null }> {
     const proposals: AIProposal[] = [];
     let singleRequestId: number | null = null;
+    const uploadUnits: ParseUploadUnit[] = [];
 
-    for (let index = 0; index < files.length; index += 1) {
-      const file = files[index];
+    for (const file of files) {
+      if (isPdfFile(file.file)) {
+        const pdfUnits = await buildPdfUploadUnits(file.file);
+        uploadUnits.push(...pdfUnits);
+      } else {
+        uploadUnits.push({
+          displayName: file.name,
+          filename: file.name,
+          mimeType: file.mimeType,
+          dataUrl: await fileToDataUrl(file.file),
+        });
+      }
+    }
+
+    for (let index = 0; index < uploadUnits.length; index += 1) {
+      const unit = uploadUnits[index];
       setAiBusyLabel(
-        `${files.length} файл уншиж байна… ${index + 1}/${files.length}`,
+        `${files.length} файл уншиж байна… ${index + 1}/${uploadUnits.length}`,
       );
       const res = await fetchWithAdmin("/api/admin/parse-file", {
         method: "POST",
@@ -1404,9 +1628,9 @@ export default function AdminPage() {
         body: JSON.stringify({
           uploads: [
             {
-              filename: file.name,
-              mimeType: file.mimeType,
-              dataBase64: file.dataUrl,
+              filename: unit.filename,
+              mimeType: unit.mimeType,
+              dataBase64: unit.dataUrl,
             },
           ],
           note,
@@ -1416,16 +1640,16 @@ export default function AdminPage() {
       if (!res.ok) {
         if (res.status === 413) {
           throw new Error(
-            `"${file.name}" файл дангаараа сервер эсвэл платформын request limit-д хүрлээ.`,
+            `"${unit.displayName}" хэсэг сервер эсвэл платформын request limit-д хүрлээ.`,
           );
         }
-        throw new Error(json?.error || `"${file.name}" файлыг боловсруулж чадсангүй.`);
+        throw new Error(json?.error || `"${unit.displayName}" хэсгийг боловсруулж чадсангүй.`);
       }
       if (!json.proposal || !Array.isArray(json.proposal.actions)) {
-        throw new Error(`"${file.name}" файлаас AI санал буцааж чадсангүй.`);
+        throw new Error(`"${unit.displayName}" хэсгээс AI санал буцааж чадсангүй.`);
       }
       proposals.push(json.proposal);
-      if (files.length === 1 && typeof json.request_id === "number") {
+      if (uploadUnits.length === 1 && typeof json.request_id === "number") {
         singleRequestId = json.request_id;
       }
     }
@@ -1442,6 +1666,54 @@ export default function AdminPage() {
     };
   }
 
+  async function parseDriveFileIds(
+    fileIds: string[],
+    note: string,
+  ): Promise<{ proposal: AIProposal; requestId: number | null }> {
+    const proposals: AIProposal[] = [];
+    let singleRequestId: number | null = null;
+
+    for (let index = 0; index < fileIds.length; index += 1) {
+      const fileId = fileIds[index];
+      setAiBusyLabel(
+        `${fileIds.length} Google Drive файл уншиж байна… ${index + 1}/${fileIds.length}`,
+      );
+      const res = await fetchWithAdmin("/api/admin/parse-file", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          driveFileIds: [fileId],
+          note,
+        }),
+      });
+      const json = (await readJsonSafe(res)) as AIProposalResponse;
+      if (!res.ok) {
+        throw new Error(
+          json?.error ||
+            `Google Drive файл (${shortId(fileId)}) уншиж чадсангүй. Файлыг service account-тэй share хийсэн эсэхийг шалгана уу.`,
+        );
+      }
+      if (!json.proposal || !Array.isArray(json.proposal.actions)) {
+        throw new Error(`Google Drive файл (${shortId(fileId)})-аас AI санал буцааж чадсангүй.`);
+      }
+      proposals.push(json.proposal);
+      if (fileIds.length === 1 && typeof json.request_id === "number") {
+        singleRequestId = json.request_id;
+      }
+    }
+
+    return {
+      proposal:
+        proposals.length === 1
+          ? proposals[0]
+          : mergeAIProposals(
+              proposals,
+              fileIds.map((fileId) => `Google Drive ${shortId(fileId)}`),
+            ),
+      requestId: singleRequestId,
+    };
+  }
+
   function removeAttachedFile(fileId: string) {
     setAttachedFiles((prev) => prev.filter((file) => file.id !== fileId));
   }
@@ -1449,31 +1721,53 @@ export default function AdminPage() {
   async function sendAssistant() {
     const text = aiInput.trim();
     const files = attachedFiles;
-    if (!text && files.length === 0) return;
+    const driveFileIds = extractGoogleDriveFileIds(text);
+    if (!text && files.length === 0 && driveFileIds.length === 0) return;
     if (busyKey === "ai-send") return;
 
+    const sourceNames = [
+      ...files.map((file) => file.name),
+      ...driveFileIds.map((fileId) => `Google Drive ${shortId(fileId)}`),
+    ];
     pushMessage({
       id: uid(),
       role: "admin",
       text: text || "Файл орууллаа",
-      fileNames: files.map((file) => file.name),
+      fileNames: sourceNames,
     });
     setAiInput("");
     setAttachedFiles([]);
     setBusyKey("ai-send");
     setAiBusyLabel(
-      files.length > 0
-        ? `${files.length} файл уншиж байна… (хэдэн секунд)`
+      files.length > 0 || driveFileIds.length > 0
+        ? `${Math.max(1, sourceNames.length)} файл уншиж байна… (хэдэн секунд)`
         : "AI хариу бэлдэж байна…",
     );
 
     try {
       let proposal: AIProposal | undefined;
       let requestId: number | null = null;
-      if (files.length > 0) {
+      if (files.length > 0 || driveFileIds.length > 0) {
+        const parsedProposals: AIProposal[] = [];
+        const parsedSourceNames: string[] = [];
         const parsed = await parseAttachedFiles(files, text);
-        proposal = parsed.proposal;
-        requestId = parsed.requestId;
+        if (files.length > 0) {
+          parsedProposals.push(parsed.proposal);
+          parsedSourceNames.push(...files.map((file) => file.name));
+          requestId = parsed.requestId;
+        }
+        if (driveFileIds.length > 0) {
+          const parsedDrive = await parseDriveFileIds(driveFileIds, text);
+          parsedProposals.push(parsedDrive.proposal);
+          parsedSourceNames.push(
+            ...driveFileIds.map((fileId) => `Google Drive ${shortId(fileId)}`),
+          );
+          requestId = files.length === 0 ? parsedDrive.requestId : null;
+        }
+        proposal =
+          parsedProposals.length === 1
+            ? parsedProposals[0]
+            : mergeAIProposals(parsedProposals, parsedSourceNames);
       } else {
         const res = await fetchWithAdmin("/api/admin/ai-change", {
           method: "POST",
@@ -1507,10 +1801,10 @@ export default function AdminPage() {
         return;
       }
       const fileInstruction =
-        files.length > 0
+        sourceNames.length > 0
           ? text
-            ? `[File] ${files.map((f) => f.name).join(", ")} - ${text}`
-            : `[File] ${files.map((f) => f.name).join(", ")}`
+            ? `[File] ${sourceNames.join(", ")} - ${text}`
+            : `[File] ${sourceNames.join(", ")}`
           : text;
       pushMessage({
         id: uid(),
@@ -2443,7 +2737,7 @@ function AssistantTab({
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
 }) {
   const attachedTotalBytes = attachedFiles.reduce(
-    (sum, file) => sum + Math.floor((file.dataUrl.length * 3) / 4),
+    (sum, file) => sum + file.sizeBytes,
     0,
   );
 

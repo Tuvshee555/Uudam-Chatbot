@@ -1,6 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
 import { parseUpload, type ParsedUpload } from "../../../lib/fileParse";
+import {
+  extractGoogleDriveFileIds,
+  parseGoogleDriveFileId,
+} from "../../../lib/googleDriveSync";
 import { generateAIProposalFromContentBatched } from "../../../lib/travelOps";
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
 
@@ -45,6 +49,29 @@ function collectUploads(body: Record<string, unknown>): UploadPayload[] {
   return fallback.dataBase64 ? [fallback] : [];
 }
 
+function collectDriveFileIds(body: Record<string, unknown>, note: string): string[] {
+  const ids: string[] = [];
+  const add = (value: unknown) => {
+    if (typeof value !== "string") return;
+    for (const id of extractGoogleDriveFileIds(value)) {
+      if (!ids.includes(id)) ids.push(id);
+    }
+    const trimmed = value.trim();
+    if (/^[A-Za-z0-9_-]{10,}$/.test(trimmed) && !ids.includes(trimmed)) {
+      ids.push(trimmed);
+    }
+  };
+
+  if (Array.isArray(body.driveLinks)) {
+    body.driveLinks.forEach(add);
+  }
+  if (Array.isArray(body.driveFileIds)) {
+    body.driveFileIds.forEach(add);
+  }
+  add(note);
+  return ids;
+}
+
 async function readJsonBody(req: NextApiRequest): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -82,8 +109,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     const note = asText((body as Record<string, unknown>).note);
     const uploads = collectUploads(body);
+    const driveFileIds = collectDriveFileIds(body, note);
 
-    if (uploads.length === 0) {
+    if (uploads.length === 0 && driveFileIds.length === 0) {
       return res.status(400).json({ error: "No uploaded file data was provided." });
     }
 
@@ -91,6 +119,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       for (const upload of uploads) {
         parsedUploads.push(await parseUpload(upload));
+      }
+      for (const fileId of driveFileIds) {
+        const driveFile = await parseGoogleDriveFileId(fileId);
+        parsedUploads.push(...driveFile.parsedUploads);
       }
     } catch (error) {
       return res.status(400).json({
