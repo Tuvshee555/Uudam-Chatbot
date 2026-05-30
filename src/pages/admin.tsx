@@ -116,6 +116,12 @@ type AIProposal = {
   actions: AIAction[];
 };
 
+type AIProposalResponse = {
+  proposal?: AIProposal;
+  request_id?: number;
+  error?: string;
+};
+
 type ClarificationOption = {
   label: string;
   answer: string;
@@ -1338,6 +1344,104 @@ export default function AdminPage() {
     }
   }
 
+  function mergeAIProposals(
+    proposals: AIProposal[],
+    fileNames: string[],
+  ): AIProposal {
+    const actionKeys = new Set<string>();
+    const actions: AIAction[] = [];
+    const conflicts = new Set<string>();
+    const importantReasons = new Set<string>();
+    const summaries = new Set<string>();
+
+    for (const proposal of proposals) {
+      for (const action of proposal.actions || []) {
+        const key = JSON.stringify(action);
+        if (actionKeys.has(key)) continue;
+        actionKeys.add(key);
+        actions.push(action);
+      }
+      for (const conflict of proposal.conflicts || []) {
+        if (conflict.trim()) conflicts.add(conflict.trim());
+      }
+      if (proposal.important_reason?.trim()) {
+        importantReasons.add(proposal.important_reason.trim());
+      }
+      if (proposal.summary?.trim()) {
+        summaries.add(proposal.summary.trim());
+      }
+    }
+
+    return {
+      summary:
+        actions.length > 0
+          ? `${fileNames.length} файл уншиж ${actions.length} өөрчлөлтийн санал оллоо.`
+          : Array.from(summaries)[0] || "Файлуудаас хэрэгжүүлэх өөрчлөлт олдсонгүй.",
+      needs_confirmation:
+        proposals.some((proposal) => proposal.needs_confirmation) ||
+        conflicts.size > 0,
+      important_reason: Array.from(importantReasons).join(" "),
+      conflicts: Array.from(conflicts),
+      actions,
+    };
+  }
+
+  async function parseAttachedFiles(
+    files: AttachedFile[],
+    note: string,
+  ): Promise<{ proposal: AIProposal; requestId: number | null }> {
+    const proposals: AIProposal[] = [];
+    let singleRequestId: number | null = null;
+
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      setAiBusyLabel(
+        `${files.length} файл уншиж байна… ${index + 1}/${files.length}`,
+      );
+      const res = await fetchWithAdmin("/api/admin/parse-file", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          uploads: [
+            {
+              filename: file.name,
+              mimeType: file.mimeType,
+              dataBase64: file.dataUrl,
+            },
+          ],
+          note,
+        }),
+      });
+      const json = (await readJsonSafe(res)) as AIProposalResponse;
+      if (!res.ok) {
+        if (res.status === 413) {
+          throw new Error(
+            `"${file.name}" файл дангаараа сервер эсвэл платформын request limit-д хүрлээ.`,
+          );
+        }
+        throw new Error(json?.error || `"${file.name}" файлыг боловсруулж чадсангүй.`);
+      }
+      if (!json.proposal || !Array.isArray(json.proposal.actions)) {
+        throw new Error(`"${file.name}" файлаас AI санал буцааж чадсангүй.`);
+      }
+      proposals.push(json.proposal);
+      if (files.length === 1 && typeof json.request_id === "number") {
+        singleRequestId = json.request_id;
+      }
+    }
+
+    return {
+      proposal:
+        proposals.length === 1
+          ? proposals[0]
+          : mergeAIProposals(
+              proposals,
+              files.map((file) => file.name),
+            ),
+      requestId: singleRequestId,
+    };
+  }
+
   function removeAttachedFile(fileId: string) {
     setAttachedFiles((prev) => prev.filter((file) => file.id !== fileId));
   }
@@ -1364,30 +1468,12 @@ export default function AdminPage() {
     );
 
     try {
-      let data: { proposal?: AIProposal; request_id?: number; error?: string };
+      let proposal: AIProposal | undefined;
+      let requestId: number | null = null;
       if (files.length > 0) {
-        const res = await fetchWithAdmin("/api/admin/parse-file", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            uploads: files.map((file) => ({
-              filename: file.name,
-              mimeType: file.mimeType,
-              dataBase64: file.dataUrl,
-            })),
-            note: text,
-          }),
-        });
-        const json = await readJsonSafe(res);
-        data = json as typeof data;
-        if (!res.ok) {
-          if (res.status === 413) {
-            throw new Error(
-              "Нийт хэмжээ сервер эсвэл байршуулалтын платформын зөвшөөрсөн хэмжээнээс хэтэрлээ.",
-            );
-          }
-          throw new Error(data?.error || "Файлуудыг боловсруулж чадсангүй.");
-        }
+        const parsed = await parseAttachedFiles(files, text);
+        proposal = parsed.proposal;
+        requestId = parsed.requestId;
       } else {
         const res = await fetchWithAdmin("/api/admin/ai-change", {
           method: "POST",
@@ -1395,13 +1481,14 @@ export default function AdminPage() {
           body: JSON.stringify({ instruction: text }),
         });
         const json = await readJsonSafe(res);
-        data = json as typeof data;
+        const data = json as AIProposalResponse;
         if (!res.ok) {
           throw new Error(data?.error || "AI санал үүсгэж чадсангүй.");
         }
+        proposal = data.proposal;
+        requestId = typeof data.request_id === "number" ? data.request_id : null;
       }
 
-      const proposal = data.proposal;
       if (!proposal || !Array.isArray(proposal.actions)) {
         throw new Error(
           "AI хэрэгжих санал буцааж чадсангүй. Илүү тодорхой зааварчилгаар дахин оролдоно уу.",
@@ -1430,8 +1517,7 @@ export default function AdminPage() {
         role: "assistant",
         kind: "proposal",
         proposal,
-        requestId:
-          typeof data.request_id === "number" ? data.request_id : null,
+        requestId,
         instruction: fileInstruction,
         status: "pending",
         confirmChecked: false,
