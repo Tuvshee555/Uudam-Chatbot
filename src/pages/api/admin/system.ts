@@ -22,6 +22,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     if (req.method !== "GET") return res.status(405).end();
 
+    const authorized = hasAdminAccess(req);
+    if (!authorized) {
+      return res.status(200).json({
+        ok: true,
+        open_access: env.adminOpenAccess,
+        authorized: false,
+      });
+    }
+
     void maybeAutoSyncDriveFolder({ source: "api.admin.system" });
     const [diagnostics, driveSync] = await Promise.all([
       getDbDiagnostics(),
@@ -30,7 +39,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       ok: true,
       open_access: env.adminOpenAccess,
-      authorized: hasAdminAccess(req),
+      authorized: true,
       db: diagnostics,
       drive_sync: driveSync,
     });

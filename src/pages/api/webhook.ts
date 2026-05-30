@@ -1145,18 +1145,62 @@ async function handleMessage(
 
   await appendMessage(sessionId, "user", text);
 
-  if (!customerWantsToBook && hasDepartureDateAvailabilityIntent(text)) {
+  async function recordFreshBookingLead() {
+    if (!freshBookingLead) return;
+    try {
+      let phone = extractPhoneNumber(text);
+      if (!phone) {
+        for (const entry of history.slice(-8)) {
+          if (entry.role !== "user") continue;
+          phone = extractPhoneNumber(entry.text);
+          if (phone) break;
+        }
+      }
+      const context = history
+        .slice(-6)
+        .map((m) => `${m.role === "user" ? "Хэрэглэгч" : "Бот"}: ${m.text}`)
+        .join("\n");
+      await createLead({
+        kind: "booking",
+        platform,
+        senderId,
+        customerMessage: text,
+        contactPhone: phone,
+        context,
+      });
+      recordCounter("webhook.booking_lead_total", 1, { platform });
+      await notifyStaffOfLead(
+        { kind: "booking", platform, customerMessage: text, contactPhone: phone },
+        {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          source: "api.webhook",
+        },
+      );
+    } catch (error) {
+      logWarn("webhook.booking_lead_failed", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+        classification: classifyError(error),
+      });
+    }
+  }
+
+  if (hasDepartureDateAvailabilityIntent(text)) {
     const trips = await listTrips({ limit: 5000 });
-    const dateAvailabilityReply = trips.length
-      ? buildDepartureDateAvailabilityReply({
-          userText: text,
-          trips,
-        })
-      : null;
+    const dateAvailabilityReply = buildDepartureDateAvailabilityReply({
+      userText: text,
+      trips,
+    });
 
     if (dateAvailabilityReply) {
+      const bookingNudge = customerWantsToBook
+        ? " Захиалгаа баталгаажуулах бол нэр, утасны дугаараа үлдээгээрэй."
+        : "";
       const safeDateReply = enforceWebsiteForPayment(
-        sanitizeAssistantReply(fixMojibake(dateAvailabilityReply)),
+        sanitizeAssistantReply(fixMojibake(`${dateAvailabilityReply}${bookingNudge}`)),
       );
 
       if (lastReply && isDuplicateReply(lastReply.text, safeDateReply)) {
@@ -1175,6 +1219,7 @@ async function handleMessage(
         if (!delivered) {
           throw new RetryableWebhookError("delivery_failed:duplicate_reply_notice");
         }
+        await recordFreshBookingLead();
         return;
       }
 
@@ -1205,6 +1250,7 @@ async function handleMessage(
           classification: classifyError(error),
         });
       }
+      await recordFreshBookingLead();
       return;
     }
   }
@@ -1259,6 +1305,7 @@ async function handleMessage(
     if (!delivered) {
       throw new RetryableWebhookError("delivery_failed:duplicate_reply_notice");
     }
+    await recordFreshBookingLead();
     return;
   }
 
@@ -1292,47 +1339,7 @@ async function handleMessage(
   }
 
   // --- Booking-intent lead: record + alert staff after the reply is sent ---
-  if (freshBookingLead) {
-    try {
-      let phone = extractPhoneNumber(text);
-      if (!phone) {
-        for (const entry of history.slice(-8)) {
-          if (entry.role !== "user") continue;
-          phone = extractPhoneNumber(entry.text);
-          if (phone) break;
-        }
-      }
-      const context = history
-        .slice(-6)
-        .map((m) => `${m.role === "user" ? "Хэрэглэгч" : "Бот"}: ${m.text}`)
-        .join("\n");
-      await createLead({
-        kind: "booking",
-        platform,
-        senderId,
-        customerMessage: text,
-        contactPhone: phone,
-        context,
-      });
-      recordCounter("webhook.booking_lead_total", 1, { platform });
-      await notifyStaffOfLead(
-        { kind: "booking", platform, customerMessage: text, contactPhone: phone },
-        {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          source: "api.webhook",
-        },
-      );
-    } catch (error) {
-      logWarn("webhook.booking_lead_failed", {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        platform,
-        senderHash: hashIdentifier(senderId),
-        classification: classifyError(error),
-      });
-    }
-  }
+  await recordFreshBookingLead();
 }
 
 async function processConversationWithPendingQueue(

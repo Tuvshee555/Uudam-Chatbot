@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildDepartureDateAvailabilityReply,
   buildTemporalPromptContext,
+  hasDepartureDateAvailabilityIntent,
   parseDepartureDateText,
   resolveRequestedDate,
 } from "../src/lib/travelDates";
@@ -84,6 +85,28 @@ test("answers no for missing target date and suggests upcoming departures", () =
   assert.match(reply || "", /алга байна/);
   assert.match(reply || "", /2026-06-02/);
   assert.doesNotMatch(reply || "", /ямар огноо|тодруулах/i);
+});
+
+test("answers direct date availability even when there are no trips", () => {
+  const reply = buildDepartureDateAvailabilityReply({
+    userText: "margaash garah aylal baina uu",
+    now: NOW_IN_MONGOLIA,
+    trips: [],
+  });
+
+  assert.match(reply || "", /2026-05-31/);
+  assert.match(reply || "", /алга байна/);
+  assert.doesNotMatch(reply || "", /ямар огноо|тодруулах/i);
+});
+
+test("recognizes date availability even when the user also wants to book", () => {
+  assert.equal(
+    hasDepartureDateAvailabilityIntent(
+      "margaash garah aylal baina uu zahialah gesen yum",
+      NOW_IN_MONGOLIA,
+    ),
+    true,
+  );
 });
 
 test("prompt context tells the model what tomorrow means", () => {

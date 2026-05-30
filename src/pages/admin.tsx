@@ -319,6 +319,13 @@ function getTestBotConversationId(): string {
   return nextId;
 }
 
+function isEditableElement(element: Element | null): boolean {
+  if (!element) return false;
+  return element.matches(
+    'input, textarea, select, [contenteditable="true"], [role="textbox"]',
+  );
+}
+
 function asInt(value: string): number | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -938,8 +945,9 @@ export default function AdminPage() {
   const toast = useToast();
 
   const [secret, setSecret] = useState("");
+  const [secretDraft, setSecretDraft] = useState("");
   const [requiresAuth, setRequiresAuth] = useState(false);
-  const [openAccess, setOpenAccess] = useState(true);
+  const [openAccess, setOpenAccess] = useState(false);
   const [dbInfo, setDbInfo] = useState<{
     configured: boolean;
     schemaReady: boolean;
@@ -993,14 +1001,31 @@ export default function AdminPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const secretRef = useRef(secret);
+  const searchRef = useRef(search);
+  const statusFilterRef = useRef(statusFilter);
+
+  useEffect(() => {
+    secretRef.current = secret;
+  }, [secret]);
+
+  useEffect(() => {
+    searchRef.current = search;
+  }, [search]);
+
+  useEffect(() => {
+    statusFilterRef.current = statusFilter;
+  }, [statusFilter]);
 
   const fetchWithAdmin = useCallback(
     async (url: string, init?: RequestInit) => {
       const headers = new Headers(init?.headers || {});
-      if (secret.trim()) headers.set("x-admin-secret", secret.trim());
+      if (secretRef.current.trim()) {
+        headers.set("x-admin-secret", secretRef.current.trim());
+      }
       return fetch(url, { ...init, headers });
     },
-    [secret],
+    [],
   );
 
   const readJsonSafe = useCallback(async (response: Response) => {
@@ -1013,6 +1038,104 @@ export default function AdminPage() {
     }
   }, []);
 
+  const loadTrips = useCallback(
+    async (
+      nextSearch = searchRef.current,
+      nextStatusFilter = statusFilterRef.current,
+      options: { showLoading?: boolean } = {},
+    ) => {
+      if (options.showLoading) setLoading(true);
+      try {
+        const tripRes = await fetchWithAdmin(
+          `/api/admin/trips?search=${encodeURIComponent(
+            nextSearch,
+          )}&status=${encodeURIComponent(nextStatusFilter)}&limit=300`,
+        );
+        if (tripRes.status === 401) {
+          setRequiresAuth(true);
+          return;
+        }
+
+        const tripJson = await tripRes.json();
+        setRequiresAuth(false);
+        setTrips(Array.isArray(tripJson?.trips) ? tripJson.trips : []);
+        setControl((tripJson?.control as ControlState) || null);
+      } catch {
+        toast.error("Аяллын мэдээлэл ачаалж чадсангүй.");
+      } finally {
+        if (options.showLoading) setLoading(false);
+      }
+    },
+    [fetchWithAdmin, toast],
+  );
+
+  const loadPauseState = useCallback(async () => {
+    try {
+      const pauseRes = await fetchWithAdmin("/api/pause");
+      if (pauseRes.status === 401) {
+        setRequiresAuth(true);
+        return false;
+      }
+
+      const pauseJson = await pauseRes.json().catch(() => ({}));
+      setRequiresAuth(false);
+      setControl(pauseJson?.control || null);
+      setPausedRows(Array.isArray(pauseJson?.paused) ? pauseJson.paused : []);
+      setRecentRows(Array.isArray(pauseJson?.recent) ? pauseJson.recent : []);
+      return true;
+    } catch {
+      toast.error("Ботын төлөв ачаалж чадсангүй.");
+      return false;
+    }
+  }, [fetchWithAdmin, toast]);
+
+  const loadSettingsState = useCallback(async () => {
+    try {
+      const settingsRes = await fetchWithAdmin("/api/admin/settings");
+      if (settingsRes.status === 401) {
+        setRequiresAuth(true);
+        return false;
+      }
+
+      const settingsJson = await settingsRes.json().catch(() => ({}));
+      setRequiresAuth(false);
+      if (settingsJson?.settings) {
+        setSettings(settingsJson.settings as TravelBotSettings);
+        setSettingsForm((prev) =>
+          prev ? prev : settingsToForm(settingsJson.settings as TravelBotSettings),
+        );
+      }
+      return true;
+    } catch {
+      toast.error("Тохиргоо ачаалж чадсангүй.");
+      return false;
+    }
+  }, [fetchWithAdmin, toast]);
+
+  const loadLeadsState = useCallback(async (options: { showLoading?: boolean } = {}) => {
+    if (options.showLoading) setLoading(true);
+    try {
+      const leadsRes = await fetchWithAdmin("/api/admin/leads");
+      if (leadsRes.status === 401) {
+        setRequiresAuth(true);
+        return false;
+      }
+
+      const leadsJson = await leadsRes.json().catch(() => ({}));
+      setRequiresAuth(false);
+      setLeads(Array.isArray(leadsJson?.leads) ? leadsJson.leads : []);
+      setNewLeadCount(
+        typeof leadsJson?.new_count === "number" ? leadsJson.new_count : 0,
+      );
+      return true;
+    } catch {
+      toast.error("Хүсэлтүүд ачаалж чадсангүй.");
+      return false;
+    } finally {
+      if (options.showLoading) setLoading(false);
+    }
+  }, [fetchWithAdmin, toast]);
+
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
@@ -1023,58 +1146,41 @@ export default function AdminPage() {
         return;
       }
       const systemJson = await systemRes.json();
-      setRequiresAuth(false);
-      setOpenAccess(Boolean(systemJson?.open_access));
-      setDbInfo(systemJson?.db || null);
-      setDriveSync((systemJson?.drive_sync as DriveSyncDiagnostics) || null);
-
-      const [tripRes, pauseRes, settingsRes, leadsRes] = await Promise.all([
-        fetchWithAdmin(
-          `/api/admin/trips?search=${encodeURIComponent(
-            search,
-          )}&status=${encodeURIComponent(statusFilter)}&limit=300`,
-        ),
-        fetchWithAdmin("/api/pause"),
-        fetchWithAdmin("/api/admin/settings"),
-        fetchWithAdmin("/api/admin/leads"),
-      ]);
-
-      if (
-        tripRes.status === 401 ||
-        pauseRes.status === 401 ||
-        settingsRes.status === 401 ||
-        leadsRes.status === 401
-      ) {
+      const nextOpenAccess = Boolean(systemJson?.open_access);
+      const authorized = Boolean(systemJson?.authorized);
+      setOpenAccess(nextOpenAccess);
+      if (!nextOpenAccess && !authorized) {
         setRequiresAuth(true);
+        setDbInfo(null);
+        setDriveSync(null);
         setLoading(false);
         return;
       }
 
-      const tripJson = await tripRes.json();
-      const pauseJson = await pauseRes.json().catch(() => ({}));
-      const settingsJson = await settingsRes.json().catch(() => ({}));
-      const leadsJson = await leadsRes.json().catch(() => ({}));
+      setRequiresAuth(false);
+      setDbInfo(systemJson?.db || null);
+      setDriveSync((systemJson?.drive_sync as DriveSyncDiagnostics) || null);
+      setLoading(false);
 
-      setTrips(Array.isArray(tripJson?.trips) ? tripJson.trips : []);
-      setControl(pauseJson?.control || tripJson?.control || null);
-      setPausedRows(Array.isArray(pauseJson?.paused) ? pauseJson.paused : []);
-      setRecentRows(Array.isArray(pauseJson?.recent) ? pauseJson.recent : []);
-      setLeads(Array.isArray(leadsJson?.leads) ? leadsJson.leads : []);
-      setNewLeadCount(
-        typeof leadsJson?.new_count === "number" ? leadsJson.new_count : 0,
-      );
-      if (settingsJson?.settings) {
-        setSettings(settingsJson.settings as TravelBotSettings);
-        setSettingsForm((prev) =>
-          prev ? prev : settingsToForm(settingsJson.settings as TravelBotSettings),
-        );
-      }
+      await Promise.all([
+        loadTrips(searchRef.current, statusFilterRef.current),
+        loadPauseState(),
+        loadSettingsState(),
+        loadLeadsState(),
+      ]);
     } catch {
       toast.error("Системийн өгөгдөл ачаалж чадсангүй.");
     } finally {
       setLoading(false);
     }
-  }, [fetchWithAdmin, search, statusFilter, toast]);
+  }, [
+    fetchWithAdmin,
+    loadLeadsState,
+    loadPauseState,
+    loadSettingsState,
+    loadTrips,
+    toast,
+  ]);
 
   const syncDriveNow = useCallback(async () => {
     setBusyKey("drive-sync");
@@ -1109,7 +1215,9 @@ export default function AdminPage() {
     const stored = storage.getItem(SECRET_KEY) || "";
     const ts = Number(storage.getItem(SECRET_TS_KEY) || "0");
     if (stored && Date.now() - ts < SESSION_TTL_MS) {
+      secretRef.current = stored;
       setSecret(stored);
+      setSecretDraft(stored);
     } else if (stored) {
       storage.removeItem(SECRET_KEY);
       storage.removeItem(SECRET_TS_KEY);
@@ -1121,6 +1229,14 @@ export default function AdminPage() {
   }, [loadAll]);
 
   useEffect(() => {
+    if (requiresAuth || (!openAccess && !secret.trim())) return;
+    const timer = window.setTimeout(() => {
+      void loadTrips(search, statusFilter, { showLoading: true });
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [loadTrips, openAccess, requiresAuth, search, secret, statusFilter]);
+
+  useEffect(() => {
     const timer = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(timer);
   }, []);
@@ -1129,10 +1245,35 @@ export default function AdminPage() {
     if (ADMIN_AUTO_REFRESH_MS <= 0) return;
     const refresh = setInterval(() => {
       if (typeof document !== "undefined" && document.hidden) return;
+      if (typeof document !== "undefined" && isEditableElement(document.activeElement)) {
+        return;
+      }
+      if (
+        isNewTrip ||
+        editingTrip != null ||
+        deletingTrip ||
+        confirmClear ||
+        busyKey ||
+        aiInput.trim() ||
+        attachedFiles.length > 0 ||
+        dragOver
+      ) {
+        return;
+      }
       void loadAll();
     }, ADMIN_AUTO_REFRESH_MS);
     return () => clearInterval(refresh);
-  }, [loadAll]);
+  }, [
+    aiInput,
+    attachedFiles.length,
+    busyKey,
+    confirmClear,
+    deletingTrip,
+    dragOver,
+    editingTrip,
+    isNewTrip,
+    loadAll,
+  ]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1149,11 +1290,15 @@ export default function AdminPage() {
 
   /* ---------------- auth ---------------- */
   async function applySecret() {
+    const nextSecret = secretDraft.trim();
+    if (!nextSecret) return;
     const storage = getSecretStorage();
     if (storage) {
-      storage.setItem(SECRET_KEY, secret.trim());
+      storage.setItem(SECRET_KEY, nextSecret);
       storage.setItem(SECRET_TS_KEY, String(Date.now()));
     }
+    secretRef.current = nextSecret;
+    setSecret(nextSecret);
     await loadAll();
   }
 
@@ -1627,7 +1772,9 @@ export default function AdminPage() {
       if (!res.ok) throw new Error(json?.error || "Хадгалж чадсангүй.");
       toast.success(isNewTrip ? "Шинэ аялал нэмэгдлээ." : "Аялал шинэчлэгдлээ.");
       closeTripModal();
-      await loadAll();
+      await loadTrips(searchRef.current, statusFilterRef.current, {
+        showLoading: true,
+      });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Хадгалж чадсангүй.");
     } finally {
@@ -1648,7 +1795,9 @@ export default function AdminPage() {
       const json = await readJsonSafe(res);
       if (!res.ok) throw new Error(String(json?.error || "Устгаж чадсангүй."));
       toast.success(`"${trip.route_name || trip.operator_name}" устгагдлаа.`);
-      await loadAll();
+      await loadTrips(searchRef.current, statusFilterRef.current, {
+        showLoading: true,
+      });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Устгаж чадсангүй.");
     } finally {
@@ -1673,7 +1822,7 @@ export default function AdminPage() {
       if (!res.ok) throw new Error("failed");
     } catch {
       toast.error("Тэмдэглэж чадсангүй. Дахин оролдоно уу.");
-      await loadAll();
+      await loadLeadsState({ showLoading: true });
     }
   }
 
@@ -1738,8 +1887,8 @@ export default function AdminPage() {
             <Input
               type="password"
               placeholder="Админ нууц үг"
-              value={secret}
-              onChange={(e) => setSecret(e.target.value)}
+              value={secretDraft}
+              onChange={(e) => setSecretDraft(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") void applySecret();
               }}
@@ -1900,7 +2049,11 @@ export default function AdminPage() {
             statusFilter={statusFilter}
             setStatusFilter={setStatusFilter}
             loading={loading}
-            onRefresh={() => void loadAll()}
+            onRefresh={() =>
+              void loadTrips(searchRef.current, statusFilterRef.current, {
+                showLoading: true,
+              })
+            }
             onCreate={beginCreateTrip}
             onEdit={beginEditTrip}
             onDelete={(trip) => setDeletingTrip(trip)}
@@ -1927,7 +2080,7 @@ export default function AdminPage() {
           <LeadsTab
             leads={leads}
             loading={loading}
-            onRefresh={() => void loadAll()}
+            onRefresh={() => void loadLeadsState({ showLoading: true })}
             onMarkSeen={(lead) => void markLeadSeen(lead)}
           />
         )}
