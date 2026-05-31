@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev --webpack --port 3004",
     "dev:turbo": "next dev --port 3004",
+    "prebuild": "node --import tsx scripts/preflight.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

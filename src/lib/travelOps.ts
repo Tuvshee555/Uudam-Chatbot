@@ -2,7 +2,12 @@ import { randomUUID } from "crypto";
 import { askGeminiParts, type GeminiPart } from "./gemini";
 import { getEnv } from "./env";
 import { fixMojibake } from "./encoding";
-import { logError, recordCounter } from "./observability";
+import {
+  classifyError,
+  logError,
+  logWarn,
+  recordCounter,
+} from "./observability";
 import { queryNeon, withNeonClient } from "./neonDb";
 import type {
   DiscountPolicy,
@@ -110,6 +115,19 @@ export type ProposalValidationReport = {
   auto_apply_ready: boolean;
 };
 
+type AIActionSnapshot = {
+  action: AITripAction;
+  trip_id: string;
+  before: TravelTrip | null;
+  after: TravelTrip | null;
+};
+
+export type AIProposalFailureResponse = {
+  statusCode: 429 | 503 | 504;
+  error: string;
+  retry_after_ms: number;
+};
+
 type TripMatchSnapshot = Pick<
   TravelTrip,
   | "id"
@@ -124,9 +142,14 @@ type TripMatchSnapshot = Pick<
 >;
 
 const env = getEnv();
+const AI_CHANGE_GEMINI_TIMEOUT_MS = Math.max(env.geminiTimeoutMs, 45_000);
+const AI_CHANGE_GEMINI_MAX_RETRIES = 0;
+const AI_CHANGE_REPAIR_TIMEOUT_MS = 15_000;
 const FILE_PARSE_GEMINI_TIMEOUT_MS = Math.max(env.geminiTimeoutMs, 60_000);
-const FILE_PARSE_GEMINI_MAX_RETRIES = Math.max(env.geminiMaxRetries, 4);
+const FILE_PARSE_GEMINI_MAX_RETRIES = Math.min(env.geminiMaxRetries, 1);
 const FILE_PARSE_BATCH_DELAY_MS = 1_200;
+const FILE_PARSE_TOTAL_BUDGET_MS = 150_000;
+const FILE_PARSE_MIN_BATCH_TIMEOUT_MS = 10_000;
 const FILE_PARSE_REPAIR_TIMEOUT_MS = 20_000;
 let schemaEnsured = false;
 let schemaPromise: Promise<boolean> | null = null;
@@ -288,6 +311,11 @@ export async function ensureTravelSchema() {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           applied_at TIMESTAMPTZ NULL
         );
+      `);
+      await client.query(`
+        ALTER TABLE travel_ai_change_requests
+          ADD COLUMN IF NOT EXISTS rollback_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+          ADD COLUMN IF NOT EXISTS reverted_at TIMESTAMPTZ NULL;
       `);
       await client.query(`
         CREATE TABLE IF NOT EXISTS travel_bot_settings (
@@ -799,6 +827,37 @@ export async function listTrips(options?: {
   return rows.rows.map(mapTripRow);
 }
 
+async function getTripById(id: string): Promise<TravelTrip | null> {
+  const result = await queryNeon<Record<string, unknown>>(
+    `
+      SELECT
+        id,
+        category,
+        operator_name,
+        route_name,
+        duration_text,
+        adult_price,
+        child_price,
+        currency,
+        departure_dates,
+        seats_total,
+        seats_left,
+        has_food,
+        status,
+        notes,
+        source_description,
+        extra,
+        created_at,
+        updated_at
+      FROM travel_trip_entries
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [id],
+  );
+  return result?.rows?.[0] ? mapTripRow(result.rows[0]) : null;
+}
+
 export async function getBotControl(): Promise<BotControl> {
   if (botControlCache && botControlCache.expiresAt > Date.now()) {
     return botControlCache.value;
@@ -1110,6 +1169,50 @@ function normalizeProposal(input: AIChangeProposal | null): AIChangeProposal {
       ? input.actions.filter((action) => action && typeof action === "object")
       : [],
   };
+}
+
+export function getAIProposalFailureResponse(
+  proposal: AIChangeProposal | undefined,
+): AIProposalFailureResponse | null {
+  if (!proposal || proposal.actions.length > 0) return null;
+
+  const text = [
+    proposal.summary,
+    proposal.important_reason,
+    ...(proposal.conflicts || []),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  if (
+    /\b429\b|rate.?limit|quota|resource.?exhausted/.test(text)
+  ) {
+    return {
+      statusCode: 429,
+      error:
+        "AI service is temporarily rate limited. Please wait a minute and try again.",
+      retry_after_ms: 60_000,
+    };
+  }
+
+  if (/timeout|timed out|etimedout/.test(text)) {
+    return {
+      statusCode: 504,
+      error:
+        "AI service took too long to answer. Please try again with a shorter instruction.",
+      retry_after_ms: 20_000,
+    };
+  }
+
+  if (/circuit|upstream|temporarily|took too long|could not finish reading batch/.test(text)) {
+    return {
+      statusCode: 503,
+      error: "AI service is temporarily unavailable. Please try again shortly.",
+      retry_after_ms: 30_000,
+    };
+  }
+
+  return null;
 }
 
 function dedupeStrings(values: string[]): string[] {
@@ -1786,6 +1889,9 @@ async function createProposal(opts: {
   instruction: string;
   source: string;
   userParts?: GeminiPart[];
+  timeoutMs?: number;
+  maxRetries?: number;
+  repairTimeoutMs?: number;
   buildProposal?: (condensedTrips: unknown) => Promise<AIChangeProposal>;
 }) {
   const ready = await ensureTravelSchema();
@@ -1833,23 +1939,33 @@ async function createProposal(opts: {
           condensedTrips,
           userParts: opts.userParts || [],
           source: opts.source,
+          timeoutMs: opts.timeoutMs,
+          maxRetries: opts.maxRetries,
+          repairTimeoutMs: opts.repairTimeoutMs,
         }),
       );
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    logError("travel.ai.proposal_failed", {
+    const classification = classifyError(error);
+    logWarn("travel.ai.proposal_failed", {
       source: opts.source,
+      classification,
       message,
     });
     // Surface the real reason instead of a misleading "couldn't parse JSON".
-    const rateLimited = /\b429\b|rate.?limit|quota|resource.?exhausted/i.test(
-      message,
-    );
+    const rateLimited = classification.category === "rate_limited";
+    const timedOut = classification.category === "timeout";
+    const circuitOpen = classification.category === "circuit_open";
+    const failureSummary = rateLimited
+      ? "AI service is temporarily rate limited."
+      : timedOut
+        ? "AI service took too long to answer."
+        : circuitOpen
+          ? "AI service is temporarily unavailable."
+          : "AI service could not generate a proposal.";
     proposal = {
-      summary: rateLimited
-        ? "AI үйлчилгээ түр завгүй байна (хүсэлтийн хязгаар хэтэрсэн). Хэдэн секунд хүлээгээд дахин оролдоно уу."
-        : "AI үйлчилгээтэй холбогдоход алдаа гарлаа. Дахин оролдоно уу.",
+      summary: failureSummary,
       needs_confirmation: true,
       important_reason: message.slice(0, 300),
       conflicts: [],
@@ -1898,6 +2014,9 @@ export async function generateAIProposal(instruction: string) {
     instruction,
     userParts: [{ text: `Хэрэглэгчийн хүсэлт: ${instruction}` }],
     source: "travel.ops.ai_change",
+    timeoutMs: AI_CHANGE_GEMINI_TIMEOUT_MS,
+    maxRetries: AI_CHANGE_GEMINI_MAX_RETRIES,
+    repairTimeoutMs: AI_CHANGE_REPAIR_TIMEOUT_MS,
   });
 }
 
@@ -1995,24 +2114,53 @@ export async function generateAIProposalFromContentBatched(input: {
     source: "travel.ops.file_parse",
     buildProposal: async (condensedTrips) => {
       const proposals: AIChangeProposal[] = [];
+      const startedAt = Date.now();
 
       for (let index = 0; index < batches.length; index += 1) {
         if (index > 0) {
           await wait(FILE_PARSE_BATCH_DELAY_MS);
+        }
+        const remainingMs = FILE_PARSE_TOTAL_BUDGET_MS - (Date.now() - startedAt);
+        if (remainingMs <= FILE_PARSE_MIN_BATCH_TIMEOUT_MS) {
+          const remainingLabels = batches
+            .slice(index)
+            .flatMap((batch) => batch.map((source) => source.label))
+            .join(", ");
+          proposals.push({
+            summary: `Stopped reading remaining batches: ${remainingLabels}`,
+            needs_confirmation: true,
+            important_reason:
+              "The upload was too large or slow for one safe AI parse request.",
+            conflicts: [
+              `Stopped before reading ${remainingLabels}. Split the files into smaller requests.`,
+            ],
+            actions: [],
+          });
+          break;
         }
         const batch = batches[index];
         const { parts, sourceLabels: batchLabels } = buildBatchSourceParts({
           note: input.note,
           sources: batch,
         });
+        const batchTimeoutMs = Math.min(
+          FILE_PARSE_GEMINI_TIMEOUT_MS,
+          Math.max(FILE_PARSE_MIN_BATCH_TIMEOUT_MS, remainingMs - 5_000),
+        );
+        const batchRetries =
+          FILE_PARSE_GEMINI_MAX_RETRIES > 0 &&
+          remainingMs >
+            batchTimeoutMs + FILE_PARSE_MIN_BATCH_TIMEOUT_MS + FILE_PARSE_BATCH_DELAY_MS
+            ? FILE_PARSE_GEMINI_MAX_RETRIES
+            : 0;
         try {
           proposals.push(
             await requestProposalFromModel({
               condensedTrips,
               userParts: parts,
               source: "travel.ops.file_parse",
-              timeoutMs: FILE_PARSE_GEMINI_TIMEOUT_MS,
-              maxRetries: FILE_PARSE_GEMINI_MAX_RETRIES,
+              timeoutMs: batchTimeoutMs,
+              maxRetries: batchRetries,
               repairTimeoutMs: FILE_PARSE_REPAIR_TIMEOUT_MS,
             }),
           );
@@ -2180,12 +2328,22 @@ async function applyAIAction(action: AITripAction) {
       }
       targetId = match.id || "";
     }
+    const before = targetId ? await getTripById(targetId) : null;
     const updated = await upsertTrip({
       id: targetId || undefined,
       fields: action.fields || {},
     });
     if (!updated) return { ok: false, message: "Upsert failed." };
-    return { ok: true, message: `Upserted ${updated.id}` };
+    return {
+      ok: true,
+      message: `Upserted ${updated.id}`,
+      snapshot: {
+        action,
+        trip_id: updated.id,
+        before,
+        after: updated,
+      } satisfies AIActionSnapshot,
+    };
   }
 
   let targetId = action.trip_id?.trim() || "";
@@ -2197,18 +2355,38 @@ async function applyAIAction(action: AITripAction) {
   if (!targetId) return { ok: false, message: "Target trip not found." };
 
   if (verb === "cancel") {
+    const before = await getTripById(targetId);
     const updated = await patchTrip(targetId, {
       status: "cancelled",
       ...(action.fields || {}),
     });
     if (!updated) return { ok: false, message: "Cancel update failed." };
-    return { ok: true, message: `Cancelled ${updated.id}` };
+    return {
+      ok: true,
+      message: `Cancelled ${updated.id}`,
+      snapshot: {
+        action,
+        trip_id: updated.id,
+        before,
+        after: updated,
+      } satisfies AIActionSnapshot,
+    };
   }
 
   if (verb === "patch") {
+    const before = await getTripById(targetId);
     const updated = await patchTrip(targetId, action.fields || {});
     if (!updated) return { ok: false, message: "Patch update failed." };
-    return { ok: true, message: `Patched ${updated.id}` };
+    return {
+      ok: true,
+      message: `Patched ${updated.id}`,
+      snapshot: {
+        action,
+        trip_id: updated.id,
+        before,
+        after: updated,
+      } satisfies AIActionSnapshot,
+    };
   }
 
   return { ok: false, message: `Unsupported action: ${verb}` };
@@ -2237,7 +2415,12 @@ export async function applyAIRequest(requestId: number) {
   const row = reqResult?.rows?.[0];
   if (!row) return { ok: false, message: "Change request not found." };
   if (row.status === "applied") {
-    return { ok: true, message: "Request already applied.", results: [] as string[] };
+    return {
+      ok: true,
+      message: "Request already applied.",
+      results: [] as string[],
+      request_id: requestId,
+    };
   }
 
   const proposal = normalizeProposal(row.proposal_json);
@@ -2269,11 +2452,13 @@ export async function applyAIRequest(requestId: number) {
   }
 
   const results: string[] = [];
+  const snapshots: AIActionSnapshot[] = [];
   let failed = false;
 
   for (const action of validation.proposal.actions) {
     const result = await applyAIAction(action);
     results.push(result.message);
+    if (result.ok && result.snapshot) snapshots.push(result.snapshot);
     if (!result.ok) failed = true;
   }
 
@@ -2281,10 +2466,14 @@ export async function applyAIRequest(requestId: number) {
   await queryNeon(
     `
       UPDATE travel_ai_change_requests
-      SET status = $2, applied_at = CASE WHEN $2 = 'applied' THEN NOW() ELSE NULL END
+      SET
+        status = $2,
+        rollback_json = $3::jsonb,
+        applied_at = CASE WHEN $2 = 'applied' THEN NOW() ELSE NULL END,
+        reverted_at = NULL
       WHERE id = $1
     `,
-    [requestId, status],
+    [requestId, status, JSON.stringify(snapshots)],
   );
 
   return {
@@ -2294,6 +2483,7 @@ export async function applyAIRequest(requestId: number) {
       : "All actions applied successfully.",
     results,
     proposal: validation.proposal,
+    request_id: requestId,
   };
 }
 
@@ -2318,22 +2508,26 @@ export async function applyAIProposalDirect(
     };
   }
   const results: string[] = [];
+  const snapshots: AIActionSnapshot[] = [];
   let failed = false;
 
   for (const action of normalised.actions) {
     const result = await applyAIAction(action);
     results.push(result.message);
+    if (result.ok && result.snapshot) snapshots.push(result.snapshot);
     if (!result.ok) failed = true;
   }
 
   const status = failed ? "error" : "applied";
+  let insertedRequestId: number | null = null;
   try {
-    await queryNeon(
+    const inserted = await queryNeon<{ id: number }>(
       `
         INSERT INTO travel_ai_change_requests (
-          instruction, proposal_json, conflicts, needs_confirmation, status, applied_at
+          instruction, proposal_json, conflicts, needs_confirmation, status, applied_at, rollback_json
         )
-        VALUES ($1, $2::jsonb, $3::text[], $4, $5, CASE WHEN $5 = 'applied' THEN NOW() ELSE NULL END)
+        VALUES ($1, $2::jsonb, $3::text[], $4, $5, CASE WHEN $5 = 'applied' THEN NOW() ELSE NULL END, $6::jsonb)
+        RETURNING id
       `,
       [
         instruction,
@@ -2341,8 +2535,10 @@ export async function applyAIProposalDirect(
         normalised.conflicts,
         normalised.needs_confirmation,
         status,
+        JSON.stringify(snapshots),
       ],
     );
+    insertedRequestId = inserted?.rows?.[0]?.id ?? null;
   } catch (insertError) {
     logError("travel.ai.direct_apply_insert_failed", {
       message:
@@ -2357,6 +2553,114 @@ export async function applyAIProposalDirect(
       : "All actions applied successfully.",
     results,
     proposal: normalised,
+    request_id: insertedRequestId,
+  };
+}
+
+function normalizeActionSnapshots(value: unknown): AIActionSnapshot[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const entry = item as Partial<AIActionSnapshot>;
+      const tripId = String(entry.trip_id || "").trim();
+      if (!tripId) return null;
+      return {
+        action:
+          entry.action && typeof entry.action === "object"
+            ? (entry.action as AITripAction)
+            : { action: "unknown" },
+        trip_id: tripId,
+        before: entry.before
+          ? mapTripRow(entry.before as unknown as Record<string, unknown>)
+          : null,
+        after: entry.after
+          ? mapTripRow(entry.after as unknown as Record<string, unknown>)
+          : null,
+      };
+    })
+    .filter((item): item is AIActionSnapshot => Boolean(item));
+}
+
+export async function rollbackAIRequest(requestId: number) {
+  const ready = await ensureTravelSchema();
+  if (!ready) {
+    return { ok: false, message: "Database is not configured.", results: [] as string[] };
+  }
+
+  const reqResult = await queryNeon<{
+    id: number;
+    status: string;
+    rollback_json: unknown;
+  }>(
+    `
+      SELECT id, status, rollback_json
+      FROM travel_ai_change_requests
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [requestId],
+  );
+  const row = reqResult?.rows?.[0];
+  if (!row) {
+    return { ok: false, message: "Change request not found.", results: [] as string[] };
+  }
+  if (row.status === "reverted") {
+    return { ok: true, message: "Request is already rolled back.", results: [] as string[] };
+  }
+
+  const snapshots = normalizeActionSnapshots(row.rollback_json);
+  if (snapshots.length === 0) {
+    return {
+      ok: false,
+      message: "No rollback snapshot is available for this request.",
+      results: [] as string[],
+    };
+  }
+
+  const results: string[] = [];
+  let failed = false;
+
+  for (const snapshot of [...snapshots].reverse()) {
+    if (snapshot.before) {
+      const restored = await upsertTrip({
+        id: snapshot.trip_id,
+        fields: snapshot.before,
+      });
+      if (restored) {
+        results.push(`Restored ${snapshot.trip_id}`);
+      } else {
+        failed = true;
+        results.push(`Failed to restore ${snapshot.trip_id}`);
+      }
+      continue;
+    }
+
+    const deleted = await deleteTrip(snapshot.trip_id);
+    if (deleted) {
+      results.push(`Removed AI-created trip ${snapshot.trip_id}`);
+    } else {
+      results.push(`AI-created trip ${snapshot.trip_id} was already absent`);
+    }
+  }
+
+  if (!failed) {
+    await queryNeon(
+      `
+        UPDATE travel_ai_change_requests
+        SET status = 'reverted', reverted_at = NOW()
+        WHERE id = $1
+      `,
+      [requestId],
+    );
+  }
+
+  return {
+    ok: !failed,
+    message: failed
+      ? "Rollback finished with errors. Review results."
+      : "Rollback completed successfully.",
+    results,
   };
 }
 

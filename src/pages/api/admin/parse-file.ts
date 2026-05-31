@@ -1,17 +1,30 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
 import { parseUpload, type ParsedUpload } from "../../../lib/fileParse";
+import { getClientKey, rateLimitAsync } from "../../../lib/rateLimit";
 import {
   extractGoogleDriveFileIds,
   parseGoogleDriveFileId,
 } from "../../../lib/googleDriveSync";
-import { generateAIProposalFromContentBatched } from "../../../lib/travelOps";
-import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
+import {
+  generateAIProposalFromContentBatched,
+  getAIProposalFailureResponse,
+} from "../../../lib/travelOps";
+import {
+  beginRequestTrace,
+  finishRequestTrace,
+  recordCounter,
+} from "../../../lib/observability";
+import {
+  PayloadTooLargeError,
+  readRawBodyLimited,
+} from "../../../lib/webhookSecurity";
 
 export const config = {
   api: {
     bodyParser: false,
   },
+  maxDuration: 180,
 };
 
 function asText(value: unknown): string {
@@ -24,12 +37,12 @@ type UploadPayload = {
   dataBase64: string;
 };
 
-type ProposalLike = {
-  summary?: string;
-  important_reason?: string;
-  conflicts?: string[];
-  actions?: unknown[];
-};
+const ADMIN_PARSE_BODY_MAX_BYTES = 4_500_000;
+const ADMIN_PARSE_RATE_LIMIT = 40;
+const ADMIN_PARSE_RATE_WINDOW_MS = 10 * 60 * 1000;
+const MAX_UPLOADS_PER_REQUEST = 3;
+const MAX_DRIVE_FILE_IDS_PER_REQUEST = 5;
+const MAX_NOTE_CHARS = 4_000;
 
 function collectUploads(body: Record<string, unknown>): UploadPayload[] {
   if (Array.isArray(body.uploads)) {
@@ -80,28 +93,24 @@ function collectDriveFileIds(body: Record<string, unknown>, note: string): strin
 }
 
 async function readJsonBody(req: NextApiRequest): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
-  }
-
-  const raw = Buffer.concat(chunks).toString("utf8").trim();
+  const contentLengthHeader = req.headers["content-length"];
+  const contentLengthRaw = Array.isArray(contentLengthHeader)
+    ? contentLengthHeader[0]
+    : contentLengthHeader;
+  const raw = (
+    await readRawBodyLimited(
+      req,
+      ADMIN_PARSE_BODY_MAX_BYTES,
+      contentLengthRaw,
+    )
+  )
+    .toString("utf8")
+    .trim();
   if (!raw) return {};
   const parsed = JSON.parse(raw) as unknown;
   return parsed && typeof parsed === "object" && !Array.isArray(parsed)
     ? (parsed as Record<string, unknown>)
     : {};
-}
-
-function hasTransientAiFailure(proposal: ProposalLike): boolean {
-  const text = [
-    proposal.summary || "",
-    proposal.important_reason || "",
-    ...(Array.isArray(proposal.conflicts) ? proposal.conflicts : []),
-  ].join(" ");
-  return /429|rate.?limit|quota|resource.?exhausted|circuit|upstream|could not finish reading batch/i.test(
-    text,
-  );
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -119,18 +128,60 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (req.method !== "POST") return res.status(405).end();
 
+    const clientKey = getClientKey(req);
+    const limit = await rateLimitAsync(
+      `admin-ai:parse-file:${clientKey}`,
+      ADMIN_PARSE_RATE_LIMIT,
+      ADMIN_PARSE_RATE_WINDOW_MS,
+    );
+    if (!limit.allowed) {
+      recordCounter("abuse.rate_limited_total", 1, {
+        route: "api.admin.parse_file",
+        scope: "admin_ai",
+      });
+      return res.status(429).json({
+        error: "rate_limited",
+        reset: limit.reset,
+        retry_after_ms: Math.max(0, limit.reset - Date.now()),
+      });
+    }
+
     let body: Record<string, unknown>;
     try {
       body = await readJsonBody(req);
-    } catch {
+    } catch (error) {
+      if (error instanceof PayloadTooLargeError) {
+        return res.status(413).json({
+          error: "upload_payload_too_large",
+          max_bytes: ADMIN_PARSE_BODY_MAX_BYTES,
+        });
+      }
       return res.status(400).json({ error: "Invalid JSON upload payload." });
     }
     const note = asText((body as Record<string, unknown>).note);
+    if (note.length > MAX_NOTE_CHARS) {
+      return res.status(413).json({
+        error: "note_too_long",
+        max_chars: MAX_NOTE_CHARS,
+      });
+    }
     const uploads = collectUploads(body);
     const driveFileIds = collectDriveFileIds(body, note);
 
     if (uploads.length === 0 && driveFileIds.length === 0) {
       return res.status(400).json({ error: "No uploaded file data was provided." });
+    }
+    if (uploads.length > MAX_UPLOADS_PER_REQUEST) {
+      return res.status(413).json({
+        error: "too_many_uploads",
+        max_uploads: MAX_UPLOADS_PER_REQUEST,
+      });
+    }
+    if (driveFileIds.length > MAX_DRIVE_FILE_IDS_PER_REQUEST) {
+      return res.status(413).json({
+        error: "too_many_drive_files",
+        max_drive_files: MAX_DRIVE_FILE_IDS_PER_REQUEST,
+      });
     }
 
     const parsedUploads: ParsedUpload[] = [];
@@ -143,8 +194,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         parsedUploads.push(...driveFile.parsedUploads);
       }
     } catch (error) {
-      return res.status(400).json({
-        error: error instanceof Error ? error.message : "Failed to parse uploaded file.",
+      const message =
+        error instanceof Error ? error.message : "Failed to parse uploaded file.";
+      return res.status(/too large/i.test(message) ? 413 : 400).json({
+        error: message,
       });
     }
 
@@ -157,15 +210,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })),
     });
 
-    if (
-      result.proposal.actions.length === 0 &&
-      hasTransientAiFailure(result.proposal)
-    ) {
-      return res.status(429).json({
+    const failure = getAIProposalFailureResponse(result.proposal);
+    if (failure) {
+      return res.status(failure.statusCode).json({
         ok: false,
-        error:
-          "AI file reader is temporarily rate limited. The admin UI will retry this file part.",
-        retry_after_ms: 35_000,
+        error: failure.error,
+        retry_after_ms: failure.retry_after_ms,
       });
     }
 

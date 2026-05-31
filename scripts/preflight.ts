@@ -1,9 +1,47 @@
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+function stripEnvQuotes(value: string) {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function loadEnvFile(path: string) {
+  if (!existsSync(path)) return;
+  const raw = readFileSync(path, "utf8");
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eqIndex = trimmed.indexOf("=");
+    if (eqIndex <= 0) continue;
+    const key = trimmed.slice(0, eqIndex).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    if (process.env[key] != null) continue;
+    process.env[key] = stripEnvQuotes(trimmed.slice(eqIndex + 1));
+  }
+}
+
+function loadLocalEnvFiles() {
+  loadEnvFile(resolve(process.cwd(), ".env.local"));
+  loadEnvFile(resolve(process.cwd(), ".env"));
+}
+
 async function run() {
+  loadLocalEnvFiles();
+
   const envModule = await import("../src/lib/env");
   const observabilityModule = await import("../src/lib/observability");
+  const readinessModule = await import("../src/lib/readiness");
   const redisModule = await import("../src/lib/redisState");
 
   const env = envModule.getEnv();
+  const readiness = readinessModule.getReadinessReport(env);
   const redisHealthBefore = redisModule.getRedisHealth();
   const getObservabilityDiagnostics = observabilityModule.getObservabilityDiagnostics;
 
@@ -48,11 +86,23 @@ async function run() {
       after: redisModule.getRedisHealth(),
     },
     observability: getObservabilityDiagnostics(),
+    readiness,
   };
 
   observabilityModule.logInfo("preflight.completed", report);
   if (!redisProbe.ok) {
     throw new Error("Preflight failed: Redis is enabled but unavailable");
+  }
+  if (
+    readiness.production &&
+    readiness.issues.some((issue) => issue.severity === "critical")
+  ) {
+    throw new Error(
+      `Preflight failed: production readiness score ${readiness.score}/10 (${readiness.issues
+        .filter((issue) => issue.severity === "critical")
+        .map((issue) => issue.key)
+        .join(", ")})`,
+    );
   }
 }
 

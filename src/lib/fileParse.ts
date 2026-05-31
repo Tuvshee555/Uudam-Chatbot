@@ -24,6 +24,8 @@ type UploadInput = {
   dataBase64: string;
 };
 
+export const MAX_PARSE_UPLOAD_DECODED_BYTES = 1_000_000;
+
 function extensionOf(filename: string): string {
   const match = /\.([a-z0-9]+)$/i.exec(filename.trim());
   return match ? match[1].toLowerCase() : "";
@@ -41,9 +43,23 @@ function decodeBase64(dataBase64: string): Buffer {
   const cleaned = dataBase64.includes(",")
     ? dataBase64.slice(dataBase64.indexOf(",") + 1)
     : dataBase64;
+  const compact = cleaned.replace(/\s/g, "");
+  const estimatedBytes =
+    Math.ceil((compact.length * 3) / 4) -
+    (compact.endsWith("==") ? 2 : compact.endsWith("=") ? 1 : 0);
+  if (estimatedBytes > MAX_PARSE_UPLOAD_DECODED_BYTES) {
+    throw new Error(
+      `File is too large for one AI parse request. Maximum is ${MAX_PARSE_UPLOAD_DECODED_BYTES} bytes after decoding.`,
+    );
+  }
   const buffer = Buffer.from(cleaned, "base64");
   if (buffer.byteLength === 0) {
     throw new Error("Файл хоосон эсвэл уншигдсангүй.");
+  }
+  if (buffer.byteLength > MAX_PARSE_UPLOAD_DECODED_BYTES) {
+    throw new Error(
+      `File is too large for one AI parse request. Maximum is ${MAX_PARSE_UPLOAD_DECODED_BYTES} bytes after decoding.`,
+    );
   }
   return buffer;
 }

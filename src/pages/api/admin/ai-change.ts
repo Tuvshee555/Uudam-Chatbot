@@ -1,12 +1,28 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
+import { getClientKey, rateLimitAsync } from "../../../lib/rateLimit";
 import {
   applyAIProposalDirect,
   applyAIRequest,
   generateAIProposal,
+  getAIProposalFailureResponse,
+  rollbackAIRequest,
   reviseAIRequest,
 } from "../../../lib/travelOps";
-import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
+import {
+  beginRequestTrace,
+  finishRequestTrace,
+  recordCounter,
+} from "../../../lib/observability";
+
+export const config = {
+  maxDuration: 75,
+};
+
+const ADMIN_AI_CHANGE_RATE_LIMIT = 30;
+const ADMIN_AI_CHANGE_RATE_WINDOW_MS = 10 * 60 * 1000;
+const MAX_AI_CHANGE_INSTRUCTION_CHARS = 4_000;
+const MAX_AI_CHANGE_CLARIFICATION_CHARS = 4_000;
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const trace = beginRequestTrace({
@@ -23,8 +39,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (req.method !== "POST") return res.status(405).end();
 
-    const { instruction, request_id, apply, confirm, clarification, proposal_direct } =
+    const clientKey = getClientKey(req);
+    const limit = await rateLimitAsync(
+      `admin-ai:ai-change:${clientKey}`,
+      ADMIN_AI_CHANGE_RATE_LIMIT,
+      ADMIN_AI_CHANGE_RATE_WINDOW_MS,
+    );
+    if (!limit.allowed) {
+      recordCounter("abuse.rate_limited_total", 1, {
+        route: "api.admin.ai_change",
+        scope: "admin_ai",
+      });
+      return res.status(429).json({
+        error: "rate_limited",
+        reset: limit.reset,
+        retry_after_ms: Math.max(0, limit.reset - Date.now()),
+      });
+    }
+
+    const { instruction, request_id, apply, rollback, confirm, clarification, proposal_direct } =
       req.body || {};
+
+    if (typeof request_id === "number" && rollback === true) {
+      if (confirm !== true) {
+        return res.status(400).json({
+          error: "confirmation_required",
+          message: "Set confirm=true to roll back stored AI change.",
+        });
+      }
+      const rolledBack = await rollbackAIRequest(request_id);
+      return res.status(rolledBack.ok ? 200 : 409).json(rolledBack);
+    }
 
     // Apply a proposal that was never persisted to DB (request_id was null).
     if (apply === true && proposal_direct && typeof instruction === "string") {
@@ -54,7 +99,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       typeof clarification === "string" &&
       clarification.trim()
     ) {
-      const revised = await reviseAIRequest(request_id, clarification.trim());
+      const trimmedClarification = clarification.trim();
+      if (trimmedClarification.length > MAX_AI_CHANGE_CLARIFICATION_CHARS) {
+        return res.status(413).json({
+          error: "clarification_too_long",
+          max_chars: MAX_AI_CHANGE_CLARIFICATION_CHARS,
+        });
+      }
+      const revised = await reviseAIRequest(request_id, trimmedClarification);
       return res.status(revised.ok ? 200 : 409).json(revised);
     }
 
@@ -62,7 +114,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "instruction is required" });
     }
 
-    const proposal = await generateAIProposal(instruction.trim());
+    const trimmedInstruction = instruction.trim();
+    if (trimmedInstruction.length > MAX_AI_CHANGE_INSTRUCTION_CHARS) {
+      return res.status(413).json({
+        error: "instruction_too_long",
+        max_chars: MAX_AI_CHANGE_INSTRUCTION_CHARS,
+      });
+    }
+
+    const proposal = await generateAIProposal(trimmedInstruction);
+    const failure = getAIProposalFailureResponse(proposal.proposal);
+    if (failure) {
+      return res.status(failure.statusCode).json({
+        ok: false,
+        error: failure.error,
+        retry_after_ms: failure.retry_after_ms,
+        proposal: proposal.proposal,
+        request_id: proposal.request_id,
+      });
+    }
     return res.status(200).json({
       ok: true,
       ...proposal,

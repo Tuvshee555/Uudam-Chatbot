@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import ExcelJS from "exceljs";
-import { parseUpload } from "../src/lib/fileParse";
+import {
+  MAX_PARSE_UPLOAD_DECODED_BYTES,
+  parseUpload,
+} from "../src/lib/fileParse";
 
 test("parseUpload reads XLSX workbooks after dependency overrides", async () => {
   const workbook = new ExcelJS.Workbook();
@@ -22,4 +25,20 @@ test("parseUpload reads XLSX workbooks after dependency overrides", async () => 
   assert.match(parsed.text, /Trips/);
   assert.match(parsed.text, /Улаанбаатар - Бээжин/);
   assert.match(parsed.text, /1200000/);
+});
+
+test("parseUpload rejects oversized decoded uploads before parsing", async () => {
+  const dataBase64 = Buffer.alloc(MAX_PARSE_UPLOAD_DECODED_BYTES + 1).toString(
+    "base64",
+  );
+
+  await assert.rejects(
+    () =>
+      parseUpload({
+        filename: "large.txt",
+        mimeType: "text/plain",
+        dataBase64,
+      }),
+    /too large/i,
+  );
 });

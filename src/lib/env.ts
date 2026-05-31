@@ -54,6 +54,13 @@ export type ValidatedEnv = {
 
 let cachedEnv: ValidatedEnv | null = null;
 
+function isVercelProductionDeployment(source: NodeJS.ProcessEnv): boolean {
+  return (
+    source.VERCEL_ENV === "production" &&
+    (source.VERCEL === "1" || source.VERCEL === "true")
+  );
+}
+
 function readRequiredString(
   name: string,
   source: NodeJS.ProcessEnv,
@@ -476,6 +483,30 @@ export function getEnv(): ValidatedEnv {
     errors.push(
       "ADMIN_OPEN_ACCESS cannot be true in production. Set ADMIN_OPEN_ACCESS=false and require authenticated admin access.",
     );
+  }
+  if (isVercelProductionDeployment(source)) {
+    const allRedisProductionFlagsEnabled =
+      redisStateEnabled &&
+      redisRateLimitEnabled &&
+      redisReplayEnabled &&
+      redisConversationEnabled &&
+      redisPauseEnabled;
+    if (!neonDatabaseUrl) {
+      errors.push("Production Vercel deployment requires NEON_DATABASE_URL or DATABASE_URL");
+    }
+    if (!redisUrl) {
+      errors.push("Production Vercel deployment requires REDIS_URL");
+    }
+    if (!allRedisProductionFlagsEnabled) {
+      errors.push(
+        "Production Vercel deployment requires REDIS_STATE_ENABLED, REDIS_RATE_LIMIT_ENABLED, REDIS_REPLAY_ENABLED, REDIS_CONVERSATION_ENABLED, and REDIS_PAUSE_ENABLED to be true",
+      );
+    }
+    if (!observabilityLogSinkUrl && !observabilityErrorSinkUrl) {
+      errors.push(
+        "Production Vercel deployment requires OBSERVABILITY_ERROR_SINK_URL or OBSERVABILITY_LOG_SINK_URL",
+      );
+    }
   }
   if (
     googleDriveSyncEnabled &&

@@ -121,7 +121,13 @@ type AIProposalResponse = {
   proposal?: AIProposal;
   request_id?: number;
   error?: string;
+  message?: string;
   retry_after_ms?: number;
+  max_chars?: number;
+  max_bytes?: number;
+  max_uploads?: number;
+  max_drive_files?: number;
+  reset?: number;
 };
 
 type ClarificationOption = {
@@ -157,7 +163,7 @@ type ProposalMsg = {
   proposal: AIProposal;
   requestId: number | null;
   instruction: string;
-  status: "pending" | "applied" | "cancelled" | "error";
+  status: "pending" | "applied" | "reverted" | "cancelled" | "error";
   confirmChecked: boolean;
   resultText?: string;
   clarifications: ClarificationQuestion[];
@@ -236,6 +242,16 @@ type DriveSyncDiagnostics = {
   recent_files: DriveSyncRecentFile[];
 };
 
+type ReadinessReport = {
+  score: number;
+  production: boolean;
+  issues: Array<{
+    key: string;
+    severity: "critical" | "warning";
+    message: string;
+  }>;
+};
+
 /* ----------------------------------------------------------------
    Constants & helpers
    ---------------------------------------------------------------- */
@@ -246,6 +262,10 @@ const ADMIN_AUTO_REFRESH_MS =
   process.env.NODE_ENV === "development" ? 0 : 45_000;
 const MAX_PARSE_UPLOAD_BYTES = 850_000;
 const MAX_TEXT_PARSE_CHARS = 60_000;
+const MAX_ATTACHED_FILES = 3;
+const MAX_CLIENT_FILE_BYTES = 1_000_000;
+const MAX_AI_INPUT_CHARS = 4_000;
+const MAX_DRIVE_LINKS = 5;
 const ACCEPT_FILES =
   ".xlsx,.xlsm,.csv,.pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,image/*,application/pdf";
 
@@ -387,6 +407,60 @@ function delayMs(ms: number): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
   });
+}
+
+function formatWaitMs(ms: number | undefined): string {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) {
+    return "бага зэрэг хүлээгээд";
+  }
+  const seconds = Math.max(1, Math.ceil(ms / 1000));
+  if (seconds < 60) return `${seconds} секунд хүлээгээд`;
+  return `${Math.ceil(seconds / 60)} минут хүлээгээд`;
+}
+
+function apiErrorMessage(
+  data: Partial<AIProposalResponse> | undefined,
+  fallback: string,
+): string {
+  const code = String(data?.error || "").trim();
+  const raw = String(data?.message || data?.error || "").trim();
+  const wait = formatWaitMs(data?.retry_after_ms);
+
+  if (code === "rate_limited") {
+    return `AI хэсэг түр хязгаарлагдлаа. ${wait} дахин оролдоно уу.`;
+  }
+  if (code === "instruction_too_long") {
+    return `Заавар хэт урт байна. ${data?.max_chars || MAX_AI_INPUT_CHARS} тэмдэгтээс богино бичнэ үү.`;
+  }
+  if (code === "clarification_too_long") {
+    return `Тодруулга хэт урт байна. ${data?.max_chars || MAX_AI_INPUT_CHARS} тэмдэгтээс богино бичнэ үү.`;
+  }
+  if (code === "note_too_long") {
+    return `Файлтай хамт бичсэн тайлбар хэт урт байна. ${data?.max_chars || MAX_AI_INPUT_CHARS} тэмдэгтээс богино бичнэ үү.`;
+  }
+  if (code === "upload_payload_too_large") {
+    return `Нэг удаагийн файл илгээх хэмжээ хэтэрлээ. Файлаа жижиглээд дахин оруулна уу.`;
+  }
+  if (code === "too_many_uploads") {
+    return `Нэг удаад ${data?.max_uploads || 3}-аас олон файл илгээхгүй. Файлуудаа хэсэг хэсгээр нь оруулна уу.`;
+  }
+  if (code === "too_many_drive_files") {
+    return `Нэг удаад ${data?.max_drive_files || MAX_DRIVE_LINKS}-аас олон Drive файл уншихгүй. Хэсэглээд дахин оруулна уу.`;
+  }
+  if (/too large|request limit/i.test(raw)) {
+    return "Файл эсвэл хүсэлт хэт том байна. Файлаа жижиглээд эсвэл цөөн файл сонгоод дахин оролдоно уу.";
+  }
+  if (/rate.?limit|quota|temporarily rate limited/i.test(raw)) {
+    return `AI үйлчилгээ түр завгүй байна. ${wait} дахин оролдоно уу.`;
+  }
+  if (/timed out|too long|timeout/i.test(raw)) {
+    return "AI хариу өгөхөд хэт удлаа. Асуултаа богино, тодорхой болгоод дахин оролдоно уу.";
+  }
+  if (/temporarily unavailable|circuit|upstream/i.test(raw)) {
+    return `AI үйлчилгээ түр боломжгүй байна. ${wait} дахин оролдоно уу.`;
+  }
+
+  return raw || fallback;
 }
 
 function isTransientAiFailure(proposal: AIProposal | undefined): boolean {
@@ -1427,6 +1501,7 @@ export default function AdminPage() {
     lastUpdatedAt: string | null;
   } | null>(null);
   const [driveSync, setDriveSync] = useState<DriveSyncDiagnostics | null>(null);
+  const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
 
   const [tab, setTab] = useState<TabKey>("assistant");
   const [loading, setLoading] = useState(false);
@@ -1625,6 +1700,7 @@ export default function AdminPage() {
         setRequiresAuth(true);
         setDbInfo(null);
         setDriveSync(null);
+        setReadiness(null);
         setLoading(false);
         return;
       }
@@ -1632,6 +1708,7 @@ export default function AdminPage() {
       setRequiresAuth(false);
       setDbInfo(systemJson?.db || null);
       setDriveSync((systemJson?.drive_sync as DriveSyncDiagnostics) || null);
+      setReadiness((systemJson?.readiness as ReadinessReport) || null);
       setLoading(false);
 
       await Promise.all([
@@ -1793,9 +1870,32 @@ export default function AdminPage() {
     const inputFiles = Array.from(files);
     if (inputFiles.length === 0) return;
 
+    const acceptedFiles = inputFiles.filter((file) => {
+      if (file.size <= MAX_CLIENT_FILE_BYTES) return true;
+      toast.error(
+        `"${file.name}" хэт том байна. ${formatBytes(MAX_CLIENT_FILE_BYTES)}-аас жижиг файл оруулна уу.`,
+      );
+      return false;
+    });
+    if (acceptedFiles.length === 0) return;
+
+    const freeSlots = Math.max(0, MAX_ATTACHED_FILES - attachedFiles.length);
+    if (freeSlots <= 0) {
+      toast.error(
+        `Нэг удаад хамгийн ихдээ ${MAX_ATTACHED_FILES} файл хавсаргана. Илүүдэл файлуудаа дараагийн удаа оруулна уу.`,
+      );
+      return;
+    }
+    const limitedFiles = acceptedFiles.slice(0, freeSlots);
+    if (acceptedFiles.length > freeSlots) {
+      toast.error(
+        `Зөвхөн эхний ${freeSlots} файлыг нэмлээ. Нэг удаад хамгийн ихдээ ${MAX_ATTACHED_FILES} файл.`,
+      );
+    }
+
     try {
       const nextFiles = await Promise.all(
-        inputFiles.map((file) => readAttachedFile(file)),
+        limitedFiles.map((file) => readAttachedFile(file)),
       );
       setAttachedFiles((prev) => {
         const existing = new Set(prev.map((file) => file.id));
@@ -1892,15 +1992,20 @@ export default function AdminPage() {
       if (!res.ok) {
         if (res.status === 413) {
           throw new Error(
-            `"${unit.displayName}" хэсэг сервер эсвэл платформын request limit-д хүрлээ.`,
+            `"${unit.displayName}" хэсэг хэт том байна. Файлаа жижиглээд эсвэл цөөн мөр/хуудсаар хуваагаад дахин оруулна уу.`,
           );
         }
         if (res.status === 429) {
           throw new Error(
-            `"${unit.displayName}" хэсгийг AI rate limit-ээс болж уншиж чадсангүй. 1 минутын дараа дахин оролдоно уу.`,
+            `"${unit.displayName}" хэсгийг AI түр завгүйгээс уншиж чадсангүй. ${formatWaitMs(json.retry_after_ms)} дахин оролдоно уу.`,
           );
         }
-        throw new Error(json?.error || `"${unit.displayName}" хэсгийг боловсруулж чадсангүй.`);
+        throw new Error(
+          apiErrorMessage(
+            json,
+            `"${unit.displayName}" хэсгийг боловсруулж чадсангүй.`,
+          ),
+        );
       }
       if (!json.proposal || !Array.isArray(json.proposal.actions)) {
         throw new Error(`"${unit.displayName}" хэсгээс AI санал буцааж чадсангүй.`);
@@ -1972,6 +2077,12 @@ export default function AdminPage() {
     fileIds: string[],
     note: string,
   ): Promise<{ proposal: AIProposal; requestId: number | null }> {
+    if (fileIds.length > MAX_DRIVE_LINKS) {
+      throw new Error(
+        `Нэг удаад хамгийн ихдээ ${MAX_DRIVE_LINKS} Google Drive файл уншина. Линкүүдээ хэсэг хэсгээр нь илгээнэ үү.`,
+      );
+    }
+
     const proposals: AIProposal[] = [];
     let singleRequestId: number | null = null;
 
@@ -1991,8 +2102,10 @@ export default function AdminPage() {
       const json = (await readJsonSafe(res)) as AIProposalResponse;
       if (!res.ok) {
         throw new Error(
-          json?.error ||
+          apiErrorMessage(
+            json,
             `Google Drive файл (${shortId(fileId)}) уншиж чадсангүй. Файлыг service account-тэй share хийсэн эсэхийг шалгана уу.`,
+          ),
         );
       }
       if (!json.proposal || !Array.isArray(json.proposal.actions)) {
@@ -2026,6 +2139,25 @@ export default function AdminPage() {
     const driveFileIds = extractGoogleDriveFileIds(text);
     if (!text && files.length === 0 && driveFileIds.length === 0) return;
     if (busyKey === "ai-send") return;
+
+    if (text.length > MAX_AI_INPUT_CHARS) {
+      toast.error(
+        `AI заавар хэт урт байна. ${MAX_AI_INPUT_CHARS} тэмдэгтээс богино бичнэ үү.`,
+      );
+      return;
+    }
+    if (files.length > MAX_ATTACHED_FILES) {
+      toast.error(
+        `Нэг удаад хамгийн ихдээ ${MAX_ATTACHED_FILES} файл хавсаргана.`,
+      );
+      return;
+    }
+    if (driveFileIds.length > MAX_DRIVE_LINKS) {
+      toast.error(
+        `Нэг удаад хамгийн ихдээ ${MAX_DRIVE_LINKS} Google Drive файл уншина.`,
+      );
+      return;
+    }
 
     const sourceNames = [
       ...files.map((file) => file.name),
@@ -2079,7 +2211,7 @@ export default function AdminPage() {
         const json = await readJsonSafe(res);
         const data = json as AIProposalResponse;
         if (!res.ok) {
-          throw new Error(data?.error || "AI санал үүсгэж чадсангүй.");
+          throw new Error(apiErrorMessage(data, "AI санал үүсгэж чадсангүй."));
         }
         proposal = data.proposal;
         requestId = typeof data.request_id === "number" ? data.request_id : null;
@@ -2174,7 +2306,7 @@ export default function AdminPage() {
         const json = await readJsonSafe(res);
         if (!res.ok) {
           throw new Error(
-            String(json?.message || json?.error || "Саналыг засаж чадсангүй."),
+            apiErrorMessage(json as AIProposalResponse, "Саналыг засаж чадсангүй."),
           );
         }
         proposal = json?.proposal as AIProposal | undefined;
@@ -2197,7 +2329,7 @@ export default function AdminPage() {
         const json = await readJsonSafe(res);
         if (!res.ok) {
           throw new Error(
-            String(json?.message || json?.error || "Саналыг засаж чадсангүй."),
+            apiErrorMessage(json as AIProposalResponse, "Саналыг засаж чадсангүй."),
           );
         }
         proposal = json?.proposal as AIProposal | undefined;
@@ -2262,6 +2394,10 @@ export default function AdminPage() {
       }
       setProposalMessage(message.id, {
         status: "applied",
+        requestId:
+          typeof json?.request_id === "number"
+            ? (json.request_id as number)
+            : message.requestId,
         resultText: Array.isArray(json?.results)
           ? json.results.join(" • ")
           : json?.message || "Амжилттай.",
@@ -2274,6 +2410,55 @@ export default function AdminPage() {
         resultText: err instanceof Error ? err.message : "Алдаа гарлаа.",
       });
       toast.error("Хэрэгжүүлэхэд алдаа гарлаа.");
+    } finally {
+      setBusyKey("");
+    }
+  }
+
+  async function rollbackProposal(message: ProposalMsg) {
+    if (message.requestId == null) {
+      toast.error("Буцаах хадгалсан хүсэлтийн дугаар олдсонгүй.");
+      return;
+    }
+    if (
+      !window.confirm(
+        "Сүүлд хадгалсан AI өөрчлөлтийг буцаах уу? Энэ үйлдэл тухайн өөрчлөлтийн өмнөх аяллын мэдээллийг сэргээнэ.",
+      )
+    ) {
+      return;
+    }
+
+    setBusyKey(`rollback-${message.id}`);
+    try {
+      const res = await fetchWithAdmin("/api/admin/ai-change", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          request_id: message.requestId,
+          rollback: true,
+          confirm: true,
+        }),
+      });
+      const json = await readJsonSafe(res);
+      if (!res.ok) {
+        throw new Error(
+          String(json?.message || json?.error || "Буцааж чадсангүй."),
+        );
+      }
+      setProposalMessage(message.id, {
+        status: "reverted",
+        resultText: Array.isArray(json?.results)
+          ? json.results.join(" • ")
+          : String(json?.message || "Буцаагдлаа."),
+      });
+      toast.success("AI өөрчлөлтийг буцаалаа.");
+      await loadAll();
+    } catch (err) {
+      setProposalMessage(message.id, {
+        status: "error",
+        resultText: err instanceof Error ? err.message : "Буцаахад алдаа гарлаа.",
+      });
+      toast.error("Буцаахад алдаа гарлаа.");
     } finally {
       setBusyKey("");
     }
@@ -2661,6 +2846,24 @@ export default function AdminPage() {
           </div>
         )}
 
+        {readiness && readiness.issues.length > 0 && (
+          <div className="mb-4">
+            <Alert
+              tone={
+                readiness.issues.some((issue) => issue.severity === "critical")
+                  ? "danger"
+                  : "warning"
+              }
+            >
+              Бэлэн байдлын оноо {readiness.score}/10.{" "}
+              {readiness.issues
+                .slice(0, 2)
+                .map((issue) => issue.message)
+                .join(" ")}
+            </Alert>
+          </div>
+        )}
+
         {tab === "assistant" && (
           <AssistantTab
             messages={chatMessages}
@@ -2672,12 +2875,19 @@ export default function AdminPage() {
             setDragOver={setDragOver}
             busy={busyKey === "ai-send"}
             busyLabel={aiBusyLabel}
-            applyBusyId={busyKey.startsWith("apply-") ? busyKey.slice(6) : ""}
+            applyBusyId={
+              busyKey.startsWith("apply-")
+                ? busyKey.slice(6)
+                : busyKey.startsWith("rollback-")
+                  ? busyKey.slice(9)
+                  : ""
+            }
             clarifyBusyId={
               busyKey.startsWith("clarify-") ? busyKey.slice(8) : ""
             }
             onSend={() => void sendAssistant()}
             onApply={(message) => void applyProposal(message)}
+            onRollback={(message) => void rollbackProposal(message)}
             onSubmitClarificationForm={(message, answers) =>
               void submitClarificationForm(message, answers)
             }
@@ -3006,6 +3216,7 @@ function AssistantTab({
   clarifyBusyId,
   onSend,
   onApply,
+  onRollback,
   onSubmitClarificationForm,
   onCancelProposal,
   onToggleConfirm,
@@ -3027,6 +3238,7 @@ function AssistantTab({
   clarifyBusyId: string;
   onSend: () => void;
   onApply: (message: ProposalMsg) => void;
+  onRollback: (message: ProposalMsg) => void;
   onSubmitClarificationForm: (
     message: ProposalMsg,
     answers: Record<string, string>,
@@ -3070,6 +3282,7 @@ function AssistantTab({
               applyBusy={applyBusyId === message.id}
               clarifyBusy={clarifyBusyId === message.id}
               onApply={onApply}
+              onRollback={onRollback}
               onSubmitClarificationForm={onSubmitClarificationForm}
               onCancelProposal={onCancelProposal}
               onToggleConfirm={onToggleConfirm}
@@ -3140,6 +3353,7 @@ function AssistantTab({
             ref={inputRef}
             value={aiInput}
             onChange={(e) => setAiInput(e.target.value)}
+            maxLength={MAX_AI_INPUT_CHARS}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -3161,7 +3375,7 @@ function AssistantTab({
       </Card>
 
       <p className="px-1 text-xs text-ink-subtle">
-        Excel болон CSV файлыг AI уншихад тохиромжтой хүснэгт болгоно. PDF, зураг, текст файл нэгэн зэрэг хавсаргаж болно. Маш том файл дээр браузер, сервер эсвэл AI provider-ийн бодит limit нөлөөлж магадгүй.
+        Нэг удаад {MAX_ATTACHED_FILES} хүртэл файл, {formatBytes(MAX_CLIENT_FILE_BYTES)} хүртэл хэмжээтэй файл, эсвэл {MAX_DRIVE_LINKS} хүртэл Drive линк уншуулна. Том прайс байвал хэсэг хэсгээр нь оруулаарай.
       </p>
 
     </div>
@@ -3172,6 +3386,7 @@ function ChatBubbleV2({
   applyBusy,
   clarifyBusy,
   onApply,
+  onRollback,
   onSubmitClarificationForm,
   onCancelProposal,
   onToggleConfirm: _onToggleConfirm,
@@ -3180,6 +3395,7 @@ function ChatBubbleV2({
   applyBusy: boolean;
   clarifyBusy: boolean;
   onApply: (message: ProposalMsg) => void;
+  onRollback: (message: ProposalMsg) => void;
   onSubmitClarificationForm: (
     message: ProposalMsg,
     answers: Record<string, string>,
@@ -3409,9 +3625,27 @@ function ChatBubbleV2({
         )}
 
         {message.status === "applied" && (
-          <div className="mt-3 flex items-center gap-1.5 border-t border-line pt-2 text-xs font-medium text-success">
-            <Icons.check size={14} />
-            Хадгалагдлаа. {message.resultText}
+          <div className="mt-3 space-y-2 border-t border-line pt-2">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-success">
+              <Icons.check size={14} />
+              Хадгалагдлаа. {message.resultText}
+            </div>
+            {message.requestId != null && (
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={applyBusy}
+                onClick={() => onRollback(message)}
+              >
+                Буцаах
+              </Button>
+            )}
+          </div>
+        )}
+        {message.status === "reverted" && (
+          <div className="mt-3 flex items-center gap-1.5 border-t border-line pt-2 text-xs font-medium text-warning">
+            <Icons.alert size={14} />
+            Өөрчлөлт буцаагдлаа. {message.resultText}
           </div>
         )}
         {message.status === "cancelled" && (

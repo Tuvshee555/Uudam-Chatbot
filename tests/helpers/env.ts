@@ -51,11 +51,24 @@ const DEFAULT_OPTIONAL_ENV: Record<string, string> = {
   REDIS_KEY_PREFIX: "nexonbot-test",
 };
 
+const RESET_ONLY_ENV_KEYS = [
+  "DATABASE_URL",
+  "NEON_DATABASE_URL",
+  "REDIS_URL",
+  "OBSERVABILITY_LOG_SINK_URL",
+  "OBSERVABILITY_ERROR_SINK_URL",
+  "OBSERVABILITY_SINK_TOKEN",
+  "VERCEL",
+  "VERCEL_ENV",
+  "VERCEL_GIT_COMMIT_SHA",
+];
+
 const KNOWN_TEST_ENV_KEYS = [
   ...Object.keys(REQUIRED_BASE_ENV),
   ...Object.keys(DEFAULT_NUMERIC_ENV),
   ...Object.keys(DEFAULT_BOOLEAN_ENV),
   ...Object.keys(DEFAULT_OPTIONAL_ENV),
+  ...RESET_ONLY_ENV_KEYS,
 ];
 
 export function applyTestEnv(overrides: Record<string, string | undefined> = {}) {

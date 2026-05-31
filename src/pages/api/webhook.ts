@@ -85,6 +85,7 @@ const MAX_RECENT_REPLIES = Math.max(
 );
 const MAX_PENDING_CONVERSATIONS = env.webhookMaxPendingConversations;
 const MAX_PENDING_PER_CONVERSATION = 20;
+const MAX_INCOMING_TEXT_CHARS = 2_000;
 const REDIS_CONVERSATION_UNLOCK_LUA = `
 if redis.call("GET", KEYS[1]) == ARGV[1] then
   return redis.call("DEL", KEYS[1])
@@ -1007,6 +1008,25 @@ async function handleMessage(
     );
     if (!delivered) {
       throw new RetryableWebhookError("delivery_failed:rate_limited");
+    }
+    return;
+  }
+
+  if (text.length > MAX_INCOMING_TEXT_CHARS) {
+    recordCounter("abuse.webhook_text_too_long_total", 1, { platform });
+    await assertLockHealthy();
+    const delivered = await sendPlatformMessage(
+      platform,
+      senderId,
+      "Асуултаа арай богино бичээд дахин илгээнэ үү.",
+      token,
+      pageId,
+      igUserId,
+      trace,
+      { allowFallback: false },
+    );
+    if (!delivered) {
+      throw new RetryableWebhookError("delivery_failed:text_too_long");
     }
     return;
   }

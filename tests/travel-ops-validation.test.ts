@@ -24,6 +24,33 @@ test("validation blocks patch actions without a target", async () => {
   assert.equal(result.proposal.needs_confirmation, true);
 });
 
+test("transient AI proposal failures map to retryable HTTP responses", async () => {
+  const { getAIProposalFailureResponse } = await loadTravelOps();
+  const timeoutProposal: AIChangeProposal = {
+    summary: "AI service took too long to answer.",
+    needs_confirmation: true,
+    important_reason: "Upstream gemini.generateContent timed out after 45000ms",
+    conflicts: [],
+    actions: [],
+  };
+  const rateLimitProposal: AIChangeProposal = {
+    summary: "AI service is temporarily rate limited.",
+    needs_confirmation: true,
+    important_reason: "Upstream gemini.generateContent returned 429",
+    conflicts: [],
+    actions: [],
+  };
+
+  assert.equal(
+    getAIProposalFailureResponse(timeoutProposal)?.statusCode,
+    504,
+  );
+  assert.equal(
+    getAIProposalFailureResponse(rateLimitProposal)?.statusCode,
+    429,
+  );
+});
+
 test("validation marks suspicious child pricing for confirmation", async () => {
   const { validateAIChangeProposal } = await loadTravelOps();
   const proposal: AIChangeProposal = {

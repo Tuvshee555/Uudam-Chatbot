@@ -6,6 +6,7 @@ import {
   maybeAutoSyncDriveFolder,
 } from "../../../lib/googleDriveSync";
 import { getDbDiagnostics } from "../../../lib/travelOps";
+import { getReadinessReport } from "../../../lib/readiness";
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
 
 const env = getEnv();
@@ -42,6 +43,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       authorized: true,
       db: diagnostics,
       drive_sync: driveSync,
+      readiness: getReadinessReport(env),
     });
   } finally {
     finishRequestTrace(trace, res.statusCode || 500);

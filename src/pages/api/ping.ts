@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getEnv } from "../../lib/env";
 import { pickFirst, safeSecretCompare } from "../../lib/adminAuth";
+import { getReadinessReport } from "../../lib/readiness";
 import {
   beginRequestTrace,
   finishRequestTrace,
@@ -42,6 +43,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         sha: process.env.VERCEL_GIT_COMMIT_SHA || null,
         metrics: metricsSummary(),
         observability: getObservabilityDiagnostics(),
+        readiness: getReadinessReport(env),
         circuit: {
           gemini: getCircuitState("gemini.generateContent"),
         },

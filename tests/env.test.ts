@@ -32,6 +32,50 @@ test("env validation rejects open admin access in production", async () => {
   );
 });
 
+test("env validation rejects unsafe Vercel production hardening", async () => {
+  applyTestEnv({
+    VERCEL: "1",
+    VERCEL_ENV: "production",
+    DATABASE_URL: "postgres://user:pass@example.com/db",
+    NEON_DATABASE_URL: undefined,
+    REDIS_URL: undefined,
+    REDIS_STATE_ENABLED: "false",
+    REDIS_RATE_LIMIT_ENABLED: "false",
+    REDIS_REPLAY_ENABLED: "false",
+    REDIS_CONVERSATION_ENABLED: "false",
+    REDIS_PAUSE_ENABLED: "false",
+    OBSERVABILITY_LOG_SINK_URL: undefined,
+    OBSERVABILITY_ERROR_SINK_URL: undefined,
+  });
+  const envModule = await loadEnvModule();
+  assert.throws(
+    () => envModule.getEnv(),
+    /Production Vercel deployment requires REDIS_URL/i,
+  );
+});
+
+test("env validation accepts hardened Vercel production configuration", async () => {
+  applyTestEnv({
+    VERCEL: "1",
+    VERCEL_ENV: "production",
+    DATABASE_URL: "postgres://user:pass@example.com/db",
+    NEON_DATABASE_URL: undefined,
+    REDIS_URL: "redis://example.com:6379",
+    REDIS_STATE_ENABLED: "true",
+    REDIS_RATE_LIMIT_ENABLED: "true",
+    REDIS_REPLAY_ENABLED: "true",
+    REDIS_CONVERSATION_ENABLED: "true",
+    REDIS_PAUSE_ENABLED: "true",
+    OBSERVABILITY_ERROR_SINK_URL: "https://errors.example.com",
+  });
+  const envModule = await loadEnvModule();
+  const env = envModule.getEnv();
+
+  assert.equal(env.redisUrl, "redis://example.com:6379");
+  assert.equal(env.redisReplayEnabled, true);
+  assert.equal(env.observabilityErrorSinkUrl, "https://errors.example.com");
+});
+
 test("env validation rejects NaN values", async () => {
   applyTestEnv({ DEMO_GLOBAL_RATE_LIMIT: "NaN" });
   const envModule = await loadEnvModule();
