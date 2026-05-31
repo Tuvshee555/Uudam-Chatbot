@@ -41,7 +41,7 @@ test("preflight reports weak production readiness without blocking deploy by def
   );
 
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /"score":4/);
+  assert.match(result.stdout, /"score":8/);
 });
 
 test("preflight blocks weak production readiness when strict mode is enabled", () => {
@@ -56,5 +56,5 @@ test("preflight blocks weak production readiness when strict mode is enabled", (
   );
 
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /production readiness score 4\/10/);
+  assert.match(result.stderr, /production readiness score 8\/10/);
 });

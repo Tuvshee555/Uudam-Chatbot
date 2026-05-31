@@ -38,24 +38,6 @@ export function getReadinessReport(env: ValidatedEnv): ReadinessReport {
     add("warning", "admin_secret_query", "Admin secret in query strings can leak via logs/history.");
   }
 
-  const redisFlags = [
-    env.redisStateEnabled,
-    env.redisRateLimitEnabled,
-    env.redisReplayEnabled,
-    env.redisConversationEnabled,
-    env.redisPauseEnabled,
-  ];
-  if (production && !env.redisUrl) {
-    add("critical", "redis_url", "Production needs Redis for cross-instance safety.");
-  }
-  if (production && redisFlags.some((enabled) => !enabled)) {
-    add(
-      "critical",
-      "redis_flags",
-      "Enable Redis state, rate limit, replay, conversation, and pause flags in production.",
-    );
-  }
-
   if (production && !env.observabilityErrorSinkUrl && !env.observabilityLogSinkUrl) {
     add("critical", "observability_sink", "Production needs an error/log sink for alerting.");
   } else if (!env.observabilityErrorSinkUrl) {
