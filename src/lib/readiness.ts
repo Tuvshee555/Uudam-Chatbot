@@ -38,12 +38,6 @@ export function getReadinessReport(env: ValidatedEnv): ReadinessReport {
     add("warning", "admin_secret_query", "Admin secret in query strings can leak via logs/history.");
   }
 
-  if (production && !env.observabilityErrorSinkUrl && !env.observabilityLogSinkUrl) {
-    add("critical", "observability_sink", "Production needs an error/log sink for alerting.");
-  } else if (!env.observabilityErrorSinkUrl) {
-    add("warning", "observability_error_sink", "Error sink is not configured.");
-  }
-
   if (env.googleDriveSyncEnabled) {
     if (!env.googleDriveFolderId) {
       add("critical", "drive_folder", "Google Drive sync is enabled without a folder ID.");

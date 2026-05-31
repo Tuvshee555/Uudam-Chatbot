@@ -45,7 +45,7 @@ test("production readiness does not require optional Redis", async () => {
   }
 });
 
-test("production readiness flags missing observability as critical", async () => {
+test("production readiness does not require developer alert sink", async () => {
   const previousVercelEnv = process.env.VERCEL_ENV;
   process.env.VERCEL_ENV = "production";
   try {
@@ -66,13 +66,14 @@ test("production readiness flags missing observability as critical", async () =>
     assert.equal(report.production, true);
     assert.equal(
       report.issues.some((issue) => issue.key === "observability_sink"),
-      true,
+      false,
     );
     assert.equal(
       report.issues.some((issue) => issue.key === "redis_url" || issue.key === "redis_flags"),
       false,
     );
-    assert.equal(report.score, 8);
+    assert.equal(report.score, 10);
+    assert.equal(report.issues.length, 0);
   } finally {
     if (previousVercelEnv == null) delete process.env.VERCEL_ENV;
     else process.env.VERCEL_ENV = previousVercelEnv;

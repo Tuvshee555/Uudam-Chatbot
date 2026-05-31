@@ -29,7 +29,7 @@ const BASE_ENV = {
   VERCEL: "1",
 };
 
-test("preflight reports weak production readiness without blocking deploy by default", () => {
+test("preflight treats optional production ops sinks as ready by default", () => {
   const result = spawnSync(
     process.execPath,
     ["--import", "tsx", "scripts/preflight.ts"],
@@ -41,10 +41,10 @@ test("preflight reports weak production readiness without blocking deploy by def
   );
 
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /"score":8/);
+  assert.match(result.stdout, /"score":10/);
 });
 
-test("preflight blocks weak production readiness when strict mode is enabled", () => {
+test("preflight strict mode does not require optional production ops sinks", () => {
   const result = spawnSync(
     process.execPath,
     ["--import", "tsx", "scripts/preflight.ts"],
@@ -55,6 +55,6 @@ test("preflight blocks weak production readiness when strict mode is enabled", (
     },
   );
 
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /production readiness score 8\/10/);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /"score":10/);
 });
