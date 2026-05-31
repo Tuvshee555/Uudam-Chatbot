@@ -24,7 +24,8 @@ type UploadInput = {
   dataBase64: string;
 };
 
-export const MAX_PARSE_UPLOAD_DECODED_BYTES = 1_000_000;
+export const MAX_PARSE_UPLOAD_DECODED_BYTES = 5 * 1024 * 1024;
+export const MAX_PARSE_UPLOAD_TOTAL_DECODED_BYTES = 20 * 1024 * 1024;
 
 function extensionOf(filename: string): string {
   const match = /\.([a-z0-9]+)$/i.exec(filename.trim());

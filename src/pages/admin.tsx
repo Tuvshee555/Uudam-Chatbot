@@ -125,6 +125,8 @@ type AIProposalResponse = {
   retry_after_ms?: number;
   max_chars?: number;
   max_bytes?: number;
+  max_file_bytes?: number;
+  max_total_bytes?: number;
   max_uploads?: number;
   max_drive_files?: number;
   reset?: number;
@@ -262,8 +264,9 @@ const ADMIN_AUTO_REFRESH_MS =
   process.env.NODE_ENV === "development" ? 0 : 45_000;
 const MAX_PARSE_UPLOAD_BYTES = 850_000;
 const MAX_TEXT_PARSE_CHARS = 60_000;
-const MAX_ATTACHED_FILES = 3;
-const MAX_CLIENT_FILE_BYTES = 1_000_000;
+const MAX_ATTACHED_FILES = 5;
+const MAX_CLIENT_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_CLIENT_TOTAL_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_AI_INPUT_CHARS = 4_000;
 const MAX_DRIVE_LINKS = 5;
 const ACCEPT_FILES =
@@ -380,6 +383,20 @@ function isPdfFile(file: File): boolean {
   );
 }
 
+function isImageFile(file: File): boolean {
+  return (
+    file.type.startsWith("image/") ||
+    /\.(png|jpe?g|webp|gif)$/i.test(file.name.trim())
+  );
+}
+
+function isTextLikeFile(file: File): boolean {
+  return (
+    file.type.startsWith("text/") ||
+    /\.(csv|txt|text|md|log)$/i.test(file.name.trim())
+  );
+}
+
 function bytesToDataUrl(bytes: Uint8Array, mimeType: string): string {
   let binary = "";
   const chunkSize = 0x8000;
@@ -441,8 +458,14 @@ function apiErrorMessage(
   if (code === "upload_payload_too_large") {
     return `Нэг удаагийн файл илгээх хэмжээ хэтэрлээ. Файлаа жижиглээд дахин оруулна уу.`;
   }
+  if (code === "upload_file_too_large") {
+    return `Нэг файл ${formatBytes(Number(data?.max_file_bytes) || MAX_CLIENT_FILE_BYTES)}-аас том байна. Файлаа жижиглээд дахин оруулна уу.`;
+  }
+  if (code === "upload_total_too_large") {
+    return `Нэг удаагийн нийт файлын хэмжээ ${formatBytes(Number(data?.max_total_bytes) || MAX_CLIENT_TOTAL_FILE_BYTES)}-аас хэтэрлээ. Файлуудаа хэсэг хэсгээр нь оруулна уу.`;
+  }
   if (code === "too_many_uploads") {
-    return `Нэг удаад ${data?.max_uploads || 3}-аас олон файл илгээхгүй. Файлуудаа хэсэг хэсгээр нь оруулна уу.`;
+    return `Нэг удаад ${data?.max_uploads || MAX_ATTACHED_FILES}-аас олон файл илгээхгүй. Файлуудаа хэсэг хэсгээр нь оруулна уу.`;
   }
   if (code === "too_many_drive_files") {
     return `Нэг удаад ${data?.max_drive_files || MAX_DRIVE_LINKS}-аас олон Drive файл уншихгүй. Хэсэглээд дахин оруулна уу.`;
@@ -746,6 +769,68 @@ async function buildPdfUploadUnits(file: File): Promise<ParseUploadUnit[]> {
 
   await flushCurrent();
   return units;
+}
+
+async function buildTextUploadUnits(file: File): Promise<ParseUploadUnit[]> {
+  const text = (await file.text()).trim();
+  if (!text) throw new Error(`"${file.name}" текст файл хоосон байна.`);
+  return chunkText(text).map((chunk, index, chunks) => ({
+    displayName: `${file.name} (${index + 1}/${chunks.length})`,
+    filename: `${file.name}.text-${String(index + 1).padStart(3, "0")}.txt`,
+    mimeType: "text/plain",
+    dataUrl: textToDataUrl(chunk),
+  }));
+}
+
+async function buildImageUploadUnit(file: File): Promise<ParseUploadUnit> {
+  if (file.size <= MAX_PARSE_UPLOAD_BYTES) {
+    return {
+      displayName: file.name,
+      filename: file.name,
+      mimeType: file.type || "image/jpeg",
+      dataUrl: await fileToDataUrl(file),
+    };
+  }
+
+  const bitmap = await createImageBitmap(file);
+  try {
+    let scale = 1;
+    let quality = 0.82;
+    let bestBytes: Uint8Array | null = null;
+
+    for (let attempt = 0; attempt < 16; attempt += 1) {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.floor(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.floor(bitmap.height * scale));
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Зургийг жижиглэж чадсангүй.");
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      const bytes = await canvasToJpegBytes(canvas, quality);
+      if (!bestBytes || bytes.byteLength < bestBytes.byteLength) {
+        bestBytes = bytes;
+      }
+      if (bytes.byteLength <= MAX_PARSE_UPLOAD_BYTES) {
+        return {
+          displayName: file.name,
+          filename: `${file.name}.compressed.jpg`,
+          mimeType: "image/jpeg",
+          dataUrl: bytesToDataUrl(bytes, "image/jpeg"),
+        };
+      }
+      if (quality > 0.46) {
+        quality -= 0.12;
+      } else {
+        scale *= 0.72;
+        quality = 0.78;
+      }
+    }
+
+    throw new Error(
+      `"${file.name}" зургийг request limit-д багтааж жижиглэж чадсангүй (${formatBytes(bestBytes?.byteLength || 0)}).`,
+    );
+  } finally {
+    bitmap.close();
+  }
 }
 
 function shortId(value: string): string {
@@ -1879,6 +1964,18 @@ export default function AdminPage() {
     });
     if (acceptedFiles.length === 0) return;
 
+    const attachedBytes = attachedFiles.reduce(
+      (sum, file) => sum + file.sizeBytes,
+      0,
+    );
+    const freeBytes = MAX_CLIENT_TOTAL_FILE_BYTES - attachedBytes;
+    if (freeBytes <= 0) {
+      toast.error(
+        `Нэг удаагийн нийт файлын хэмжээ ${formatBytes(MAX_CLIENT_TOTAL_FILE_BYTES)} хүрсэн байна. Илгээж дуусаад дараагийн файлуудаа оруулна уу.`,
+      );
+      return;
+    }
+
     const freeSlots = Math.max(0, MAX_ATTACHED_FILES - attachedFiles.length);
     if (freeSlots <= 0) {
       toast.error(
@@ -1886,10 +1983,32 @@ export default function AdminPage() {
       );
       return;
     }
-    const limitedFiles = acceptedFiles.slice(0, freeSlots);
+    const limitedFiles: File[] = [];
+    let nextTotalBytes = attachedBytes;
+    let skippedForTotal = 0;
+    for (const file of acceptedFiles) {
+      if (limitedFiles.length >= freeSlots) break;
+      if (nextTotalBytes + file.size > MAX_CLIENT_TOTAL_FILE_BYTES) {
+        skippedForTotal += 1;
+        continue;
+      }
+      limitedFiles.push(file);
+      nextTotalBytes += file.size;
+    }
+    if (limitedFiles.length === 0) {
+      toast.error(
+        `Нийт файлын хэмжээ ${formatBytes(MAX_CLIENT_TOTAL_FILE_BYTES)}-аас хэтэрнэ. Цөөн эсвэл жижиг файл сонгоно уу.`,
+      );
+      return;
+    }
     if (acceptedFiles.length > freeSlots) {
       toast.error(
         `Зөвхөн эхний ${freeSlots} файлыг нэмлээ. Нэг удаад хамгийн ихдээ ${MAX_ATTACHED_FILES} файл.`,
+      );
+    }
+    if (skippedForTotal > 0) {
+      toast.error(
+        `${skippedForTotal} файл нийт ${formatBytes(MAX_CLIENT_TOTAL_FILE_BYTES)} лимитээс хэтрэх тул нэмсэнгүй.`,
       );
     }
 
@@ -2037,7 +2156,16 @@ export default function AdminPage() {
       if (isPdfFile(file.file)) {
         const pdfUnits = await buildPdfUploadUnits(file.file);
         uploadUnits.push(...pdfUnits);
+      } else if (isTextLikeFile(file.file)) {
+        uploadUnits.push(...(await buildTextUploadUnits(file.file)));
+      } else if (isImageFile(file.file)) {
+        uploadUnits.push(await buildImageUploadUnit(file.file));
       } else {
+        if (file.file.size > MAX_PARSE_UPLOAD_BYTES) {
+          throw new Error(
+            `"${file.name}" файл Vercel-ийн шууд upload limit-д хэт том байна. Google Drive link ашиглах эсвэл файлаа жижиглээд дахин оруулна уу.`,
+          );
+        }
         uploadUnits.push({
           displayName: file.name,
           filename: file.name,
@@ -2149,6 +2277,13 @@ export default function AdminPage() {
     if (files.length > MAX_ATTACHED_FILES) {
       toast.error(
         `Нэг удаад хамгийн ихдээ ${MAX_ATTACHED_FILES} файл хавсаргана.`,
+      );
+      return;
+    }
+    const totalFileBytes = files.reduce((sum, file) => sum + file.sizeBytes, 0);
+    if (totalFileBytes > MAX_CLIENT_TOTAL_FILE_BYTES) {
+      toast.error(
+        `Нэг удаагийн нийт файлын хэмжээ ${formatBytes(MAX_CLIENT_TOTAL_FILE_BYTES)}-аас хэтэрч болохгүй.`,
       );
       return;
     }
@@ -3375,7 +3510,7 @@ function AssistantTab({
       </Card>
 
       <p className="px-1 text-xs text-ink-subtle">
-        Нэг удаад {MAX_ATTACHED_FILES} хүртэл файл, {formatBytes(MAX_CLIENT_FILE_BYTES)} хүртэл хэмжээтэй файл, эсвэл {MAX_DRIVE_LINKS} хүртэл Drive линк уншуулна. Том прайс байвал хэсэг хэсгээр нь оруулаарай.
+        Нэг удаад {MAX_ATTACHED_FILES} хүртэл файл, нэг файл {formatBytes(MAX_CLIENT_FILE_BYTES)} хүртэл, нийт {formatBytes(MAX_CLIENT_TOTAL_FILE_BYTES)} хүртэл, эсвэл {MAX_DRIVE_LINKS} хүртэл Drive линк уншуулна. Том прайс байвал хэсэг хэсгээр нь оруулаарай.
       </p>
 
     </div>

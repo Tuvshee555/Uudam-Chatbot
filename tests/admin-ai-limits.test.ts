@@ -156,7 +156,7 @@ test("admin file parse rejects too many uploads before parsing", async () => {
   await handler(
     createAdminStreamRequest(
       "/api/admin/parse-file",
-      { uploads: [upload, upload, upload, upload] },
+      { uploads: [upload, upload, upload, upload, upload, upload] },
       "203.0.113.13",
     ),
     res,
@@ -164,7 +164,7 @@ test("admin file parse rejects too many uploads before parsing", async () => {
 
   assert.equal(res.statusCode, 413);
   assert.equal(res.body.error, "too_many_uploads");
-  assert.equal(res.body.max_uploads, 3);
+  assert.equal(res.body.max_uploads, 5);
 });
 
 test("admin file parse rejects oversized raw payloads by content length", async () => {

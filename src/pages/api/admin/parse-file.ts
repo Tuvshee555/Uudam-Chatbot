@@ -1,6 +1,11 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
-import { parseUpload, type ParsedUpload } from "../../../lib/fileParse";
+import {
+  MAX_PARSE_UPLOAD_DECODED_BYTES,
+  MAX_PARSE_UPLOAD_TOTAL_DECODED_BYTES,
+  parseUpload,
+  type ParsedUpload,
+} from "../../../lib/fileParse";
 import { getClientKey, rateLimitAsync } from "../../../lib/rateLimit";
 import {
   extractGoogleDriveFileIds,
@@ -40,7 +45,7 @@ type UploadPayload = {
 const ADMIN_PARSE_BODY_MAX_BYTES = 4_500_000;
 const ADMIN_PARSE_RATE_LIMIT = 40;
 const ADMIN_PARSE_RATE_WINDOW_MS = 10 * 60 * 1000;
-const MAX_UPLOADS_PER_REQUEST = 3;
+const MAX_UPLOADS_PER_REQUEST = 5;
 const MAX_DRIVE_FILE_IDS_PER_REQUEST = 5;
 const MAX_NOTE_CHARS = 4_000;
 
@@ -90,6 +95,17 @@ function collectDriveFileIds(body: Record<string, unknown>, note: string): strin
   }
   add(note);
   return ids;
+}
+
+function estimateDecodedBytes(dataBase64: string) {
+  const cleaned = dataBase64.includes(",")
+    ? dataBase64.slice(dataBase64.indexOf(",") + 1)
+    : dataBase64;
+  const compact = cleaned.replace(/\s/g, "");
+  return (
+    Math.ceil((compact.length * 3) / 4) -
+    (compact.endsWith("==") ? 2 : compact.endsWith("=") ? 1 : 0)
+  );
 }
 
 async function readJsonBody(req: NextApiRequest): Promise<Record<string, unknown>> {
@@ -175,6 +191,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(413).json({
         error: "too_many_uploads",
         max_uploads: MAX_UPLOADS_PER_REQUEST,
+      });
+    }
+    let totalUploadBytes = 0;
+    for (const upload of uploads) {
+      const uploadBytes = estimateDecodedBytes(upload.dataBase64);
+      if (uploadBytes > MAX_PARSE_UPLOAD_DECODED_BYTES) {
+        return res.status(413).json({
+          error: "upload_file_too_large",
+          max_file_bytes: MAX_PARSE_UPLOAD_DECODED_BYTES,
+        });
+      }
+      totalUploadBytes += uploadBytes;
+    }
+    if (totalUploadBytes > MAX_PARSE_UPLOAD_TOTAL_DECODED_BYTES) {
+      return res.status(413).json({
+        error: "upload_total_too_large",
+        max_total_bytes: MAX_PARSE_UPLOAD_TOTAL_DECODED_BYTES,
       });
     }
     if (driveFileIds.length > MAX_DRIVE_FILE_IDS_PER_REQUEST) {
