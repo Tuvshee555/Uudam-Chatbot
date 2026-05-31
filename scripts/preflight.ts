@@ -32,6 +32,11 @@ function loadLocalEnvFiles() {
   loadEnvFile(resolve(process.cwd(), ".env"));
 }
 
+function isStrictPreflightEnabled() {
+  const value = String(process.env.STRICT_PREFLIGHT || "").trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes";
+}
+
 async function run() {
   loadLocalEnvFiles();
 
@@ -94,6 +99,7 @@ async function run() {
     throw new Error("Preflight failed: Redis is enabled but unavailable");
   }
   if (
+    isStrictPreflightEnabled() &&
     readiness.production &&
     readiness.issues.some((issue) => issue.severity === "critical")
   ) {

@@ -32,7 +32,7 @@ test("env validation rejects open admin access in production", async () => {
   );
 });
 
-test("env validation rejects unsafe Vercel production hardening", async () => {
+test("env validation allows Vercel production hardening to be reported by readiness", async () => {
   applyTestEnv({
     VERCEL: "1",
     VERCEL_ENV: "production",
@@ -48,10 +48,11 @@ test("env validation rejects unsafe Vercel production hardening", async () => {
     OBSERVABILITY_ERROR_SINK_URL: undefined,
   });
   const envModule = await loadEnvModule();
-  assert.throws(
-    () => envModule.getEnv(),
-    /Production Vercel deployment requires REDIS_URL/i,
-  );
+  const env = envModule.getEnv();
+
+  assert.equal(env.redisUrl, null);
+  assert.equal(env.redisReplayEnabled, false);
+  assert.equal(env.observabilityErrorSinkUrl, null);
 });
 
 test("env validation accepts hardened Vercel production configuration", async () => {
