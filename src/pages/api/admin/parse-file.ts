@@ -42,11 +42,19 @@ type UploadPayload = {
   dataBase64: string;
 };
 
+// Vercel hard-caps a serverless request body at ~4.5MB — this stays under it.
+// This is the one ceiling we cannot lift; the client chunker keeps every
+// request well below it.
 const ADMIN_PARSE_BODY_MAX_BYTES = 4_500_000;
-const ADMIN_PARSE_RATE_LIMIT = 40;
+// Generous rate window: a large multi-chunk file (e.g. a long PDF) fans out
+// into many one-chunk requests, so the limit must comfortably exceed the
+// chunk count of a single big upload to avoid mid-upload throttling.
+const ADMIN_PARSE_RATE_LIMIT = 1_000;
 const ADMIN_PARSE_RATE_WINDOW_MS = 10 * 60 * 1000;
-const MAX_UPLOADS_PER_REQUEST = 5;
-const MAX_DRIVE_FILE_IDS_PER_REQUEST = 5;
+// Latent per-request safety nets (the client sends one unit per request, so
+// these are effectively never hit) — kept high so no future batching trips them.
+const MAX_UPLOADS_PER_REQUEST = 1_000;
+const MAX_DRIVE_FILE_IDS_PER_REQUEST = 1_000;
 const MAX_NOTE_CHARS = 4_000;
 
 function collectUploads(body: Record<string, unknown>): UploadPayload[] {

@@ -301,6 +301,42 @@ test("validation accepts recurring weekday departure schedules", async () => {
   assert.equal(result.auto_apply_ready, true);
 });
 
+test("validation accepts daily / everyday recurring departures", async () => {
+  const { validateAIChangeProposal } = await loadTravelOps();
+  for (const phrase of ["Өдөр бүр", "daily", "Сар бүр", "өдөр болгон"]) {
+    const proposal: AIChangeProposal = {
+      summary: "daily trip",
+      needs_confirmation: false,
+      important_reason: "",
+      conflicts: [],
+      actions: [
+        {
+          action: "upsert",
+          fields: {
+            operator_name: "UUDAM Travel",
+            route_name: `Тест аялал ${phrase}`,
+            departure_dates: [phrase],
+          },
+        },
+      ],
+    };
+
+    const result = validateAIChangeProposal(proposal, []);
+    // The phrase must survive as a valid recurring date, not be dropped or
+    // flagged as an untrustworthy date.
+    assert.deepEqual(
+      result.proposal.actions[0]?.fields?.departure_dates,
+      [phrase],
+      `"${phrase}" should be kept as a recurring departure`,
+    );
+    assert.equal(
+      result.proposal.conflicts.some((c) => /could not be trusted|итгэх/i.test(c)),
+      false,
+      `"${phrase}" should not raise an untrusted-date conflict`,
+    );
+  }
+});
+
 test("validation treats documented meal exceptions as notes, not conflicts", async () => {
   const { validateAIChangeProposal } = await loadTravelOps();
   const proposal: AIChangeProposal = {

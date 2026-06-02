@@ -1255,29 +1255,47 @@ function normalizeDateText(value: string): string {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
+// Phrases that describe a repeating departure schedule rather than a single
+// calendar date. Kept in sync with the client copy in admin.tsx — update both.
+const RECURRING_DEPARTURE_TOKENS = [
+  // Daily — the common "өдөр бүр / daily / everyday" the admin asks for.
+  "өдөр бүр",
+  "өдөр болгон",
+  "өдөр тутам",
+  "daily",
+  "every day",
+  "everyday",
+  // Weekly / per-weekday.
+  "гараг бүр",
+  "долоо хоног бүр",
+  "долоохоног бүр",
+  "every week",
+  "weekly",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+  "даваа",
+  "мягмар",
+  "лхагва",
+  "пүрэв",
+  "баасан",
+  "бямба",
+  "ням",
+  // Monthly / periodic.
+  "сар бүр",
+  "monthly",
+  "every month",
+  "хоног тутам",
+];
+
 function isRecurringDepartureText(value: string): boolean {
   const normalized = normalizeLookupText(value);
   if (!normalized) return false;
-  return (
-    normalized.includes("гараг бүр") ||
-    normalized.includes("долоо хоног бүр") ||
-    normalized.includes("every week") ||
-    normalized.includes("weekly") ||
-    normalized.includes("monday") ||
-    normalized.includes("tuesday") ||
-    normalized.includes("wednesday") ||
-    normalized.includes("thursday") ||
-    normalized.includes("friday") ||
-    normalized.includes("saturday") ||
-    normalized.includes("sunday") ||
-    normalized.includes("даваа") ||
-    normalized.includes("мягмар") ||
-    normalized.includes("лхагва") ||
-    normalized.includes("пүрэв") ||
-    normalized.includes("баасан") ||
-    normalized.includes("бямба") ||
-    normalized.includes("ням")
-  );
+  return RECURRING_DEPARTURE_TOKENS.some((token) => normalized.includes(token));
 }
 
 function findTripMatches(
@@ -1665,6 +1683,14 @@ function buildProposalGuide(condensedTrips: unknown): string {
     "- Мэдээлэл байхгүй талбарыг БҮҮ таа — fields-ээс орхи.",
     "- Үнийн валют: 'юань'/'yuan' → CNY, 'төгрөг'/'сая' эсвэл 6+ оронтой тоо → MNT.",
     "- Хэрэв ямар ч өөрчлөлт хийх шаардлагагүй бол actions хоосон массив байг.",
+    "",
+    "Талбар таних заавар (админ ярианы хэлээр асууж магадгүй):",
+    "- 'Огноо', 'хэзээ', 'гарах өдөр', 'цаг' → departure_dates. 'өдөр бүр', 'daily', 'пүрэв гараг бүр' зэрэг давтагдах хуваарь ХҮЧИНТЭЙ departure_dates утга — огноо алга гэж бүү тооц.",
+    "- Тодорхой цагийн мэдээлэл (ж: '09:00 цагт') departure_dates-д эсвэл notes-д бич.",
+    "- 'Газар', 'байршил', 'хаашаа', 'чиглэл', 'маршрут' → route_name (шаардлагатай бол notes-д дэлгэрэнгүй).",
+    "- 'Суудал', 'хүн', 'багтаамж' → seats_total/seats_left. 'Суудал дүүрсэн/дууссан' → status=sold_out.",
+    "- Зөвхөн нэг талбар өөрчлөхөд action='patch' ашиглаж, бусад талбарыг БҮҮ хүр.",
+    "- Админ 'үүнийг'/'энэ аяллыг' гэж тодорхойгүй заавал, аль аялал болохыг trips жагсаалтаас тааруул. Олон аялал таарвал эсвэл огт тодорхойгүй бол needs_confirmation=true болгон аль аяллыг асуу.",
     "",
     "conflicts массивын дүрэм (ЧУХАЛ):",
     "- Мөр бүр бие даасан, тодорхой байх ёстой. Админ зөвхөн энэ мөрийг уншаад асуудлыг ойлгох ёстой.",

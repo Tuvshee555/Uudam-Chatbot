@@ -269,8 +269,10 @@ const MAX_CLIENT_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_CLIENT_TOTAL_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_AI_INPUT_CHARS = 4_000;
 const MAX_DRIVE_LINKS = 5;
-const ACCEPT_FILES =
-  ".xlsx,.xlsm,.csv,.pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,image/*,application/pdf";
+// Accept everything in the picker so nothing looks greyed-out. Unsupported
+// types still get a clear message after selection rather than being silently
+// unselectable.
+const ACCEPT_FILES = "*";
 
 const STATUS_LABELS: Record<TripStatus, string> = {
   active: "Идэвхтэй",
@@ -395,6 +397,10 @@ function isTextLikeFile(file: File): boolean {
     file.type.startsWith("text/") ||
     /\.(csv|txt|text|md|log)$/i.test(file.name.trim())
   );
+}
+
+function isOfficeDocFile(file: File): boolean {
+  return /\.(xlsx|xlsm|xls|docx)$/i.test(file.name.trim());
 }
 
 function bytesToDataUrl(bytes: Uint8Array, mimeType: string): string {
@@ -782,6 +788,105 @@ async function buildTextUploadUnits(file: File): Promise<ParseUploadUnit[]> {
   }));
 }
 
+/** Inflates a single entry from a ZIP (DOCX/XLSX) in the browser. */
+async function readZipEntryInBrowser(
+  buffer: ArrayBuffer,
+  entryName: string,
+): Promise<string | null> {
+  const view = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+  const targetBytes = new TextEncoder().encode(entryName);
+  const matches = (start: number) => {
+    for (let i = 0; i < targetBytes.length; i += 1) {
+      if (bytes[start + i] !== targetBytes[i]) return false;
+    }
+    return true;
+  };
+
+  let offset = 0;
+  while (offset + 30 <= bytes.length) {
+    if (view.getUint32(offset, true) !== 0x04034b50) break;
+    const method = view.getUint16(offset + 8, true);
+    const compressedSize = view.getUint32(offset + 18, true);
+    const nameLength = view.getUint16(offset + 26, true);
+    const extraLength = view.getUint16(offset + 28, true);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    if (compressedSize === 0) break;
+
+    if (nameLength === targetBytes.length && matches(nameStart)) {
+      const data = bytes.subarray(dataStart, dataStart + compressedSize);
+      if (method === 0) return new TextDecoder().decode(data);
+      if (method === 8) {
+        const stream = new Response(
+          new Blob([data]).stream().pipeThrough(
+            new DecompressionStream("deflate-raw"),
+          ),
+        );
+        return await stream.text();
+      }
+      return null;
+    }
+    offset = dataStart + compressedSize;
+  }
+  return null;
+}
+
+/**
+ * Extracts text from an Office document (Excel .xlsx/.xlsm/.xls, Word .docx)
+ * in the browser, then chunks it like plain text. This keeps upload size tied
+ * to the *content*, so a heavy Office file (embedded fonts/images) never trips
+ * the per-request size wall — only its readable text is sent.
+ */
+async function buildOfficeUploadUnits(file: File): Promise<ParseUploadUnit[]> {
+  const lower = file.name.trim().toLowerCase();
+  const buffer = await file.arrayBuffer();
+  let text = "";
+
+  if (lower.endsWith(".docx")) {
+    const xml = await readZipEntryInBrowser(buffer, "word/document.xml");
+    if (!xml) {
+      throw new Error(
+        `"${file.name}" Word файлыг уншиж чадсангүй. PDF болгож хадгалаад дахин оруулна уу.`,
+      );
+    }
+    text = xml
+      .replace(/<w:tab\b[^>]*\/?>/g, "\t")
+      .replace(/<\/w:p>/g, "\n")
+      .replace(/<w:br\b[^>]*\/?>/g, "\n")
+      .replace(/<[^>]+>/g, "")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  } else {
+    const XLSX = await import("xlsx");
+    const workbook = XLSX.read(new Uint8Array(buffer), { type: "array" });
+    const parts: string[] = [];
+    for (const sheetName of workbook.SheetNames) {
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet) continue;
+      const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false });
+      if (csv.trim()) parts.push(`# ${sheetName}\n${csv}`);
+    }
+    text = parts.join("\n\n").trim();
+  }
+
+  if (!text) {
+    throw new Error(`"${file.name}" файлд текст өгөгдөл олдсонгүй.`);
+  }
+
+  return chunkText(text).map((chunk, index, chunks) => ({
+    displayName: `${file.name} (${index + 1}/${chunks.length})`,
+    filename: `${file.name}.text-${String(index + 1).padStart(3, "0")}.txt`,
+    mimeType: "text/plain",
+    dataUrl: textToDataUrl(chunk),
+  }));
+}
+
 async function buildImageUploadUnit(file: File): Promise<ParseUploadUnit> {
   if (file.size <= MAX_PARSE_UPLOAD_BYTES) {
     return {
@@ -1037,27 +1142,41 @@ function isOptionalAddOnCostConflict(normalized: string): boolean {
   );
 }
 
+// Keep this list in sync with RECURRING_DEPARTURE_TOKENS in src/lib/travelOps.ts.
+const RECURRING_DATE_TOKENS = [
+  "өдөр бүр",
+  "өдөр болгон",
+  "өдөр тутам",
+  "daily",
+  "every day",
+  "everyday",
+  "гараг бүр",
+  "долоо хоног бүр",
+  "долоохоног бүр",
+  "every week",
+  "weekly",
+  "пүрэв",
+  "даваа",
+  "мягмар",
+  "лхагва",
+  "баасан",
+  "бямба",
+  "ням",
+  "thursday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "friday",
+  "saturday",
+  "sunday",
+  "сар бүр",
+  "monthly",
+  "every month",
+  "хоног тутам",
+];
+
 function isRecurringDateText(normalized: string): boolean {
-  return (
-    normalized.includes("гараг бүр") ||
-    normalized.includes("долоо хоног бүр") ||
-    normalized.includes("every week") ||
-    normalized.includes("weekly") ||
-    normalized.includes("пүрэв") ||
-    normalized.includes("даваа") ||
-    normalized.includes("мягмар") ||
-    normalized.includes("лхагва") ||
-    normalized.includes("баасан") ||
-    normalized.includes("бямба") ||
-    normalized.includes("ням") ||
-    normalized.includes("thursday") ||
-    normalized.includes("monday") ||
-    normalized.includes("tuesday") ||
-    normalized.includes("wednesday") ||
-    normalized.includes("friday") ||
-    normalized.includes("saturday") ||
-    normalized.includes("sunday")
-  );
+  return RECURRING_DATE_TOKENS.some((token) => normalized.includes(token));
 }
 
 function isDocumentedMealExceptionConflict(normalized: string): boolean {
@@ -1955,62 +2074,10 @@ export default function AdminPage() {
     const inputFiles = Array.from(files);
     if (inputFiles.length === 0) return;
 
-    const acceptedFiles = inputFiles.filter((file) => {
-      if (file.size <= MAX_CLIENT_FILE_BYTES) return true;
-      toast.error(
-        `"${file.name}" хэт том байна. ${formatBytes(MAX_CLIENT_FILE_BYTES)}-аас жижиг файл оруулна уу.`,
-      );
-      return false;
-    });
-    if (acceptedFiles.length === 0) return;
-
-    const attachedBytes = attachedFiles.reduce(
-      (sum, file) => sum + file.sizeBytes,
-      0,
-    );
-    const freeBytes = MAX_CLIENT_TOTAL_FILE_BYTES - attachedBytes;
-    if (freeBytes <= 0) {
-      toast.error(
-        `Нэг удаагийн нийт файлын хэмжээ ${formatBytes(MAX_CLIENT_TOTAL_FILE_BYTES)} хүрсэн байна. Илгээж дуусаад дараагийн файлуудаа оруулна уу.`,
-      );
-      return;
-    }
-
-    const freeSlots = Math.max(0, MAX_ATTACHED_FILES - attachedFiles.length);
-    if (freeSlots <= 0) {
-      toast.error(
-        `Нэг удаад хамгийн ихдээ ${MAX_ATTACHED_FILES} файл хавсаргана. Илүүдэл файлуудаа дараагийн удаа оруулна уу.`,
-      );
-      return;
-    }
-    const limitedFiles: File[] = [];
-    let nextTotalBytes = attachedBytes;
-    let skippedForTotal = 0;
-    for (const file of acceptedFiles) {
-      if (limitedFiles.length >= freeSlots) break;
-      if (nextTotalBytes + file.size > MAX_CLIENT_TOTAL_FILE_BYTES) {
-        skippedForTotal += 1;
-        continue;
-      }
-      limitedFiles.push(file);
-      nextTotalBytes += file.size;
-    }
-    if (limitedFiles.length === 0) {
-      toast.error(
-        `Нийт файлын хэмжээ ${formatBytes(MAX_CLIENT_TOTAL_FILE_BYTES)}-аас хэтэрнэ. Цөөн эсвэл жижиг файл сонгоно уу.`,
-      );
-      return;
-    }
-    if (acceptedFiles.length > freeSlots) {
-      toast.error(
-        `Зөвхөн эхний ${freeSlots} файлыг нэмлээ. Нэг удаад хамгийн ихдээ ${MAX_ATTACHED_FILES} файл.`,
-      );
-    }
-    if (skippedForTotal > 0) {
-      toast.error(
-        `${skippedForTotal} файл нийт ${formatBytes(MAX_CLIENT_TOTAL_FILE_BYTES)} лимитээс хэтрэх тул нэмсэнгүй.`,
-      );
-    }
+    // No size/count/total limits — accept every file as-is. Large files are
+    // auto-split into AI-sized chunks at parse time (buildPdfUploadUnits /
+    // buildTextUploadUnits), so size is handled there, not by rejecting here.
+    const limitedFiles = inputFiles;
 
     try {
       const nextFiles = await Promise.all(
@@ -2156,6 +2223,8 @@ export default function AdminPage() {
       if (isPdfFile(file.file)) {
         const pdfUnits = await buildPdfUploadUnits(file.file);
         uploadUnits.push(...pdfUnits);
+      } else if (isOfficeDocFile(file.file)) {
+        uploadUnits.push(...(await buildOfficeUploadUnits(file.file)));
       } else if (isTextLikeFile(file.file)) {
         uploadUnits.push(...(await buildTextUploadUnits(file.file)));
       } else if (isImageFile(file.file)) {
@@ -2205,12 +2274,7 @@ export default function AdminPage() {
     fileIds: string[],
     note: string,
   ): Promise<{ proposal: AIProposal; requestId: number | null }> {
-    if (fileIds.length > MAX_DRIVE_LINKS) {
-      throw new Error(
-        `Нэг удаад хамгийн ихдээ ${MAX_DRIVE_LINKS} Google Drive файл уншина. Линкүүдээ хэсэг хэсгээр нь илгээнэ үү.`,
-      );
-    }
-
+    // No cap on Drive links — each file is fetched and chunked one at a time.
     const proposals: AIProposal[] = [];
     let singleRequestId: number | null = null;
 
@@ -2274,26 +2338,6 @@ export default function AdminPage() {
       );
       return;
     }
-    if (files.length > MAX_ATTACHED_FILES) {
-      toast.error(
-        `Нэг удаад хамгийн ихдээ ${MAX_ATTACHED_FILES} файл хавсаргана.`,
-      );
-      return;
-    }
-    const totalFileBytes = files.reduce((sum, file) => sum + file.sizeBytes, 0);
-    if (totalFileBytes > MAX_CLIENT_TOTAL_FILE_BYTES) {
-      toast.error(
-        `Нэг удаагийн нийт файлын хэмжээ ${formatBytes(MAX_CLIENT_TOTAL_FILE_BYTES)}-аас хэтэрч болохгүй.`,
-      );
-      return;
-    }
-    if (driveFileIds.length > MAX_DRIVE_LINKS) {
-      toast.error(
-        `Нэг удаад хамгийн ихдээ ${MAX_DRIVE_LINKS} Google Drive файл уншина.`,
-      );
-      return;
-    }
-
     const sourceNames = [
       ...files.map((file) => file.name),
       ...driveFileIds.map((fileId) => `Google Drive ${shortId(fileId)}`),
@@ -3335,6 +3379,51 @@ export default function AdminPage() {
 }
 
 /* ----------------------------------------------------------------
+   Attached-file chip
+   ---------------------------------------------------------------- */
+function fileGlyph(file: AttachedFile): string {
+  const name = file.name.toLowerCase();
+  const mime = (file.mimeType || "").toLowerCase();
+  if (mime.startsWith("image/") || /\.(png|jpe?g|webp|gif|heic|heif)$/.test(name))
+    return "🖼️";
+  if (mime === "application/pdf" || name.endsWith(".pdf")) return "📕";
+  if (/\.(xlsx|xlsm|xls|csv)$/.test(name) || mime.includes("sheet")) return "📊";
+  if (/\.(txt|text|md|log)$/.test(name) || mime.startsWith("text/")) return "📝";
+  return "📎";
+}
+
+function FileChip({
+  file,
+  onRemove,
+}: {
+  file: AttachedFile;
+  onRemove: () => void;
+}) {
+  return (
+    <span
+      className="flex max-w-full items-center gap-1.5 rounded-md border border-line-strong bg-surface py-1 pl-2 pr-1 text-xs text-ink"
+      title={`${file.name} • ${formatBytes(file.sizeBytes)}`}
+    >
+      <span aria-hidden="true" className="shrink-0 text-sm leading-none">
+        {fileGlyph(file)}
+      </span>
+      <span className="truncate font-medium" style={{ maxWidth: "11rem" }}>
+        {file.name}
+      </span>
+      <span className="shrink-0 text-ink-subtle">{formatBytes(file.sizeBytes)}</span>
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`${file.name} устгах`}
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-ink-subtle hover:bg-surface-sunken hover:text-danger"
+      >
+        <Icons.close size={13} />
+      </button>
+    </span>
+  );
+}
+
+/* ----------------------------------------------------------------
    Assistant tab
    ---------------------------------------------------------------- */
 function AssistantTab({
@@ -3461,17 +3550,30 @@ function AssistantTab({
         </div>
 
         {attachedFiles.length > 0 && (
-          <div className="flex items-center justify-between border-t border-line bg-surface-sunken px-3 py-2">
-            <span className="text-xs text-ink-muted">
-              {attachedFiles.length} файл бэлэн • ~{formatBytes(attachedTotalBytes)}
-            </span>
-            <button
-              type="button"
-              onClick={() => attachedFiles.forEach((file) => onRemoveAttachedFile(file.id))}
-              className="text-xs font-medium text-brand hover:opacity-70"
-            >
-              Арилгах
-            </button>
+          <div className="border-t border-line bg-surface-sunken px-3 py-2.5">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-medium text-ink-muted">
+                {attachedFiles.length} файл бэлэн • ~{formatBytes(attachedTotalBytes)}
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  attachedFiles.forEach((file) => onRemoveAttachedFile(file.id))
+                }
+                className="text-xs font-medium text-brand hover:opacity-70"
+              >
+                Бүгдийг арилгах
+              </button>
+            </div>
+            <div className="scroll-area flex flex-wrap gap-1.5">
+              {attachedFiles.map((file) => (
+                <FileChip
+                  key={file.id}
+                  file={file}
+                  onRemove={() => onRemoveAttachedFile(file.id)}
+                />
+              ))}
+            </div>
           </div>
         )}
 
@@ -3510,7 +3612,7 @@ function AssistantTab({
       </Card>
 
       <p className="px-1 text-xs text-ink-subtle">
-        Нэг удаад {MAX_ATTACHED_FILES} хүртэл файл, нэг файл {formatBytes(MAX_CLIENT_FILE_BYTES)} хүртэл, нийт {formatBytes(MAX_CLIENT_TOTAL_FILE_BYTES)} хүртэл, эсвэл {MAX_DRIVE_LINKS} хүртэл Drive линк уншуулна. Том прайс байвал хэсэг хэсгээр нь оруулаарай.
+        Хүссэн тооны файл, ямар ч хэмжээтэйгээр оруулж болно. Том файлыг систем автоматаар хэсэглэн уншина. Google Drive линк ч хүссэн тоогоор уншуулж болно.
       </p>
 
     </div>

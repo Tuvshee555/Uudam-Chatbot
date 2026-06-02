@@ -143,7 +143,7 @@ test("admin AI change rate limits repeated admin AI attempts", async () => {
   assert.equal(last.body.error, "rate_limited");
 });
 
-test("admin file parse rejects too many uploads before parsing", async () => {
+test("admin file parse no longer rejects batches on upload count", async () => {
   await prepareEnvironment();
   const { default: handler } = await import("../src/pages/api/admin/parse-file");
   const upload = {
@@ -162,9 +162,10 @@ test("admin file parse rejects too many uploads before parsing", async () => {
     res,
   );
 
-  assert.equal(res.statusCode, 413);
-  assert.equal(res.body.error, "too_many_uploads");
-  assert.equal(res.body.max_uploads, 5);
+  // The per-request upload-count cap was lifted, so a six-file batch must NOT
+  // be turned away with the old "too_many_uploads" rejection. (It may still
+  // fail later for unrelated reasons like missing AI creds in the test env.)
+  assert.notEqual(res.body?.error, "too_many_uploads");
 });
 
 test("admin file parse rejects oversized raw payloads by content length", async () => {

@@ -8,6 +8,7 @@
  *   natively (OCR-style), so a photo of a paper price list works too.
  */
 import ExcelJS from "exceljs";
+import { inflateRawSync } from "node:zlib";
 
 export type ParsedUpload = {
   /** Short human label for the source, e.g. "price-list.xlsx". */
@@ -176,6 +177,126 @@ async function excelToHtml(buffer: Buffer): Promise<string> {
   return sections.join("\n");
 }
 
+/**
+ * Reads a legacy binary .xls (BIFF) workbook via SheetJS, which handles the
+ * old format ExcelJS cannot. Output matches excelToHtml so the AI sees the
+ * same HTML-table shape regardless of source format.
+ */
+async function legacyXlsToHtml(buffer: Buffer): Promise<string> {
+  const XLSX = await import("xlsx");
+  let workbook: import("xlsx").WorkBook;
+  try {
+    workbook = XLSX.read(buffer, { type: "buffer" });
+  } catch {
+    throw new Error(
+      "Excel файлыг уншиж чадсангүй. .xlsx хэлбэрээр хадгалаад дахин оруулна уу.",
+    );
+  }
+
+  const sections: string[] = [];
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) continue;
+    const rows = XLSX.utils.sheet_to_json<string[]>(sheet, {
+      header: 1,
+      blankrows: false,
+      defval: "",
+      raw: false,
+    });
+    const cleaned = rows
+      .map((row) => (Array.isArray(row) ? row.map((cell) => String(cell ?? "")) : []))
+      .filter((row) => row.some((cell) => cell.trim().length > 0));
+    if (cleaned.length > 0) {
+      sections.push(`<h3>${escapeHtml(sheetName)}</h3>${rowsToHtmlTable(cleaned)}`);
+    }
+  }
+
+  if (sections.length === 0) {
+    throw new Error("Excel файлд өгөгдөл олдсонгүй.");
+  }
+  return sections.join("\n");
+}
+
+/**
+ * Pulls a single file out of a ZIP archive (DOCX/XLSX are ZIPs) using only
+ * Node's built-in zlib — no external unzip dependency. Returns null if the
+ * entry isn't found. Handles both stored (method 0) and deflated (method 8).
+ */
+function readZipEntry(buffer: Buffer, entryName: string): Buffer | null {
+  const target = Buffer.from(entryName, "utf8");
+  let offset = 0;
+  // Local file headers start with PK\x03\x04 (0x04034b50).
+  while (offset + 30 <= buffer.length) {
+    if (buffer.readUInt32LE(offset) !== 0x04034b50) {
+      // Not at a local header — scan forward to the next signature.
+      const next = buffer.indexOf("PK\x03\x04", offset + 1, "binary");
+      if (next === -1) break;
+      offset = next;
+      continue;
+    }
+    const method = buffer.readUInt16LE(offset + 8);
+    const compressedSize = buffer.readUInt32LE(offset + 18);
+    const nameLength = buffer.readUInt16LE(offset + 26);
+    const extraLength = buffer.readUInt16LE(offset + 28);
+    const nameStart = offset + 30;
+    const name = buffer.subarray(nameStart, nameStart + nameLength);
+    const dataStart = nameStart + nameLength + extraLength;
+
+    if (compressedSize > 0 && name.equals(target)) {
+      const data = buffer.subarray(dataStart, dataStart + compressedSize);
+      if (method === 0) return Buffer.from(data);
+      if (method === 8) {
+        try {
+          return inflateRawSync(data);
+        } catch {
+          return null;
+        }
+      }
+      return null;
+    }
+
+    if (compressedSize > 0) {
+      offset = dataStart + compressedSize;
+    } else {
+      // Streamed entry (size in data descriptor) — fall back to scanning.
+      const next = buffer.indexOf("PK\x03\x04", dataStart, "binary");
+      if (next === -1) break;
+      offset = next;
+    }
+  }
+  return null;
+}
+
+/**
+ * Extracts readable text from a .docx (Word) file. A .docx is a ZIP whose
+ * word/document.xml holds the body; we strip XML tags, turning paragraph and
+ * line breaks into newlines so price lists stay legible to the AI.
+ */
+function docxToText(buffer: Buffer): string {
+  const xmlBuf = readZipEntry(buffer, "word/document.xml");
+  if (!xmlBuf) {
+    throw new Error(
+      "Word файлыг уншиж чадсангүй. PDF болгож хадгалаад эсвэл текстээ хуулж оруулна уу.",
+    );
+  }
+  const xml = xmlBuf.toString("utf8");
+  const withBreaks = xml
+    .replace(/<w:tab\b[^>]*\/?>/g, "\t")
+    .replace(/<\/w:p>/g, "\n")
+    .replace(/<w:br\b[^>]*\/?>/g, "\n");
+  const text = withBreaks
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return text;
+}
+
 function normalizeImageMime(extension: string, mimeType?: string): string {
   if (mimeType && mimeType.startsWith("image/")) return mimeType;
   const map: Record<string, string> = {
@@ -198,6 +319,10 @@ export async function parseUpload(input: UploadInput): Promise<ParsedUpload> {
 
   const isExcel = ["xlsx", "xlsm"].includes(extension);
   const isLegacyExcel = extension === "xls";
+  const isWord =
+    extension === "docx" ||
+    mimeType ===
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   const isCsv = extension === "csv" || mimeType === "text/csv";
   const isPdf = extension === "pdf" || mimeType === "application/pdf";
   const isImage =
@@ -208,13 +333,17 @@ export async function parseUpload(input: UploadInput): Promise<ParsedUpload> {
     mimeType.startsWith("text/");
 
   if (isLegacyExcel) {
-    throw new Error(
-      "Хуучин .xls формат дэмжигдэхгүй. Файлаа .xlsx болгож хадгалаад дахин оруулна уу.",
-    );
+    return { label: filename, text: await legacyXlsToHtml(buffer), inline: null };
   }
 
   if (isExcel) {
     return { label: filename, text: await excelToHtml(buffer), inline: null };
+  }
+
+  if (isWord) {
+    const text = docxToText(buffer);
+    if (!text) throw new Error("Word файлд текст олдсонгүй.");
+    return { label: filename, text, inline: null };
   }
 
   if (isCsv) {
@@ -249,6 +378,6 @@ export async function parseUpload(input: UploadInput): Promise<ParsedUpload> {
   }
 
   throw new Error(
-    "Энэ төрлийн файл дэмжигдэхгүй. Excel, CSV, PDF, зураг эсвэл текст файл оруулна уу.",
+    "Энэ төрлийн файл дэмжигдэхгүй. Excel (.xlsx/.xls), Word (.docx), CSV, PDF, зураг эсвэл текст файл оруулна уу.",
   );
 }
