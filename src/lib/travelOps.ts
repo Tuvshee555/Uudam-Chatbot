@@ -1692,13 +1692,16 @@ function buildProposalGuide(condensedTrips: unknown): string {
     "- Зөвхөн нэг талбар өөрчлөхөд action='patch' ашиглаж, бусад талбарыг БҮҮ хүр.",
     "- Админ 'үүнийг'/'энэ аяллыг' гэж тодорхойгүй заавал, аль аялал болохыг trips жагсаалтаас тааруул. Олон аялал таарвал эсвэл огт тодорхойгүй бол needs_confirmation=true болгон аль аяллыг асуу.",
     "",
-    "conflicts массивын дүрэм (ЧУХАЛ):",
-    "- Мөр бүр бие даасан, тодорхой байх ёстой. Админ зөвхөн энэ мөрийг уншаад асуудлыг ойлгох ёстой.",
-    "- Аль аяллын тухай вэ — маршрутын нэрийг ХАШИЛТАНД бич (ж: \"Жэжү арлын аялал 2026\").",
-    "- Аль талбар зөрчилтэй (үнэ, гарах огноо, хоол, суудал г.м.) болон зөрчилдөж буй яг утгуудыг бич.",
-    "- Боломжтой бол аль файлаас уншсаныг дурд.",
+    "conflicts массивын дүрэм (ЧУХАЛ) — аялалын ажилтантай ярьж байгаа мэт энгийн, эелдэг асуу:",
+    "- Энгийн, ойлгомжтой ярианы хэлээр бич. Аялалын менежертэй ярьж байгаа мэт, программистын хэллэг БҮҮ хэрэглэ.",
+    "- Доторх техник нэр томьёо, талбарын нэр, ID (ж: 'seed-33', 'trip_id', 'route_name', 'status=cancelled', 'departure_dates') БҮҮ дурд. Зөвхөн хүний ойлгох үг хэрэглэ.",
+    "- Аль аяллын тухай вэ — маршрутын нэрийг ХАШИЛТАНД бич (ж: \"Жэжү арлын аялал 2026\"). ID биш, НЭРийг нь хэрэглэ.",
+    "- Боломжтой бол сонголттой, шууд хариулж болохоор асуу (ж: \"...нэрийг шинэчлэх үү, эсвэл шинэ аялал болгох уу?\").",
+    "- Аль зүйл тодорхойгүй (үнэ, гарах өдөр, хоол, суудал г.м.) болон зөрчилдөж буй яг утгуудыг энгийнээр бич.",
     "- \"Нэг аяллын...\", \"зарим аялал...\" гэх ерөнхий, бүрхэг бичлэг хатуу хориотой.",
-    "- Сайн жишээ: \"\\\"Жэжү арлын аялал 2026\\\": хүүхдийн үнэ (4,900,000) том хүний үнэ (4,290,000)-өөс өндөр байна.\"",
+    "- Сайн жишээ: \"\\\"Хөх хотын шинжилгээтэй аялал\\\"-ын нэрийг шинэчлэх үү, эсвэл шинэ аялал болгож нэмэх үү?\"",
+    "- Сайн жишээ: \"\\\"Жэжү арлын аялал 2026\\\"-д хүүхдийн үнэ (4,900,000₮) том хүний үнэ (4,290,000₮)-өөс өндөр байна. Зөв үү?\"",
+    "- Муу жишээ (БҮҮ ингэ): \"'Boogii travel'-ийн ... (ID: seed-33) маршрутын нэр ... болж шинэчлэгдэх эсвэл шинэ маршрут үүсгэх эсэх нь тодорхойгүй байна.\"",
     "",
     `Одоогийн trips (JSON): ${JSON.stringify(condensedTrips)}`,
   ].join("\n");
@@ -2256,6 +2259,7 @@ function buildProposalRevisionGuide(input: {
     "Resolve only the directly affected uncertainty. Do not invent missing facts.",
     "If the clarification clearly answers a conflict, remove that conflict from the output.",
     "If uncertainty still remains, keep needs_confirmation=true and keep only the unresolved conflicts.",
+    "Any remaining conflict/question must be in plain, friendly Mongolian like a travel agent — never mention internal IDs or field names (no 'seed-33', 'trip_id', 'route_name', 'status='). Refer to trips by their quoted name.",
     "",
     "JSON schema:",
     "{",
@@ -2843,6 +2847,91 @@ export async function markLeadSeen(id: number): Promise<boolean> {
     [id],
   );
   return (result?.rowCount ?? 0) > 0;
+}
+
+export type LeadStats = {
+  total: number;
+  new_count: number;
+  today: number;
+  last7days: number;
+  last30days: number;
+  by_platform: Array<{ platform: string; count: number }>;
+  by_kind: Array<{ kind: string; count: number }>;
+  daily: Array<{ day: string; count: number }>;
+};
+
+/** Aggregated lead numbers for the dashboard. Safe defaults if DB is absent. */
+export async function getLeadStats(): Promise<LeadStats> {
+  const empty: LeadStats = {
+    total: 0,
+    new_count: 0,
+    today: 0,
+    last7days: 0,
+    last30days: 0,
+    by_platform: [],
+    by_kind: [],
+    daily: [],
+  };
+  const ready = await ensureTravelSchema();
+  if (!ready) return empty;
+
+  const [totals, platforms, kinds, daily] = await Promise.all([
+    queryNeon<{
+      total: string;
+      new_count: string;
+      today: string;
+      last7days: string;
+      last30days: string;
+    }>(`
+      SELECT
+        COUNT(*)::text AS total,
+        COUNT(*) FILTER (WHERE status = 'new')::text AS new_count,
+        COUNT(*) FILTER (WHERE created_at >= date_trunc('day', NOW()))::text AS today,
+        COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '7 days')::text AS last7days,
+        COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days')::text AS last30days
+      FROM travel_leads
+    `),
+    queryNeon<{ platform: string; count: string }>(`
+      SELECT COALESCE(NULLIF(platform, ''), 'unknown') AS platform, COUNT(*)::text AS count
+      FROM travel_leads
+      GROUP BY 1
+      ORDER BY COUNT(*) DESC
+    `),
+    queryNeon<{ kind: string; count: string }>(`
+      SELECT COALESCE(NULLIF(kind, ''), 'handoff') AS kind, COUNT(*)::text AS count
+      FROM travel_leads
+      GROUP BY 1
+      ORDER BY COUNT(*) DESC
+    `),
+    queryNeon<{ day: string; count: string }>(`
+      SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day, COUNT(*)::text AS count
+      FROM travel_leads
+      WHERE created_at >= NOW() - INTERVAL '7 days'
+      GROUP BY 1
+      ORDER BY 1
+    `),
+  ]);
+
+  const t = totals?.rows?.[0];
+  return {
+    total: Number(t?.total || 0),
+    new_count: Number(t?.new_count || 0),
+    today: Number(t?.today || 0),
+    last7days: Number(t?.last7days || 0),
+    last30days: Number(t?.last30days || 0),
+    by_platform: (platforms?.rows || []).map((r) => ({
+      platform: r.platform,
+      count: Number(r.count || 0),
+    })),
+    by_kind: (kinds?.rows || []).map((r) => ({
+      kind: r.kind,
+      count: Number(r.count || 0),
+    })),
+    daily: (daily?.rows || []).map((r) => ({
+      day: r.day,
+      count: Number(r.count || 0),
+    })),
+  };
 }
 
 export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {

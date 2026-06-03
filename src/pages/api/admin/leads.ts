@@ -1,6 +1,11 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
-import { countNewLeads, listLeads, markLeadSeen } from "../../../lib/travelOps";
+import {
+  countNewLeads,
+  getLeadStats,
+  listLeads,
+  markLeadSeen,
+} from "../../../lib/travelOps";
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -17,6 +22,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!allowed) return;
 
     if (req.method === "GET") {
+      // ?stats=1 returns dashboard aggregates alongside the lead list.
+      if (req.query.stats) {
+        const [leads, newCount, stats] = await Promise.all([
+          listLeads(80),
+          countNewLeads(),
+          getLeadStats(),
+        ]);
+        return res
+          .status(200)
+          .json({ ok: true, leads, new_count: newCount, stats });
+      }
       const [leads, newCount] = await Promise.all([
         listLeads(80),
         countNewLeads(),

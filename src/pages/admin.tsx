@@ -212,6 +212,17 @@ type TravelLead = {
   seen_at: string | null;
 };
 
+type LeadStats = {
+  total: number;
+  new_count: number;
+  today: number;
+  last7days: number;
+  last30days: number;
+  by_platform: Array<{ platform: string; count: number }>;
+  by_kind: Array<{ kind: string; count: number }>;
+  daily: Array<{ day: string; count: number }>;
+};
+
 type DriveSyncRecentFile = {
   file_id: string;
   file_name: string;
@@ -259,7 +270,9 @@ type ReadinessReport = {
    ---------------------------------------------------------------- */
 const SECRET_KEY = "travel_admin_secret";
 const SECRET_TS_KEY = "travel_admin_secret_ts";
-const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
+// Remember the device for 7 days, sliding: the timer resets every time the
+// admin opens/uses the panel, so it only logs out after a full week of no use.
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const ADMIN_AUTO_REFRESH_MS =
   process.env.NODE_ENV === "development" ? 0 : 45_000;
 const MAX_PARSE_UPLOAD_BYTES = 850_000;
@@ -1751,6 +1764,7 @@ export default function AdminPage() {
 
   const [leads, setLeads] = useState<TravelLead[]>([]);
   const [newLeadCount, setNewLeadCount] = useState(0);
+  const [leadStats, setLeadStats] = useState<LeadStats | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -1869,7 +1883,7 @@ export default function AdminPage() {
   const loadLeadsState = useCallback(async (options: { showLoading?: boolean } = {}) => {
     if (options.showLoading) setLoading(true);
     try {
-      const leadsRes = await fetchWithAdmin("/api/admin/leads");
+      const leadsRes = await fetchWithAdmin("/api/admin/leads?stats=1");
       if (leadsRes.status === 401) {
         setRequiresAuth(true);
         return false;
@@ -1880,6 +1894,11 @@ export default function AdminPage() {
       setLeads(Array.isArray(leadsJson?.leads) ? leadsJson.leads : []);
       setNewLeadCount(
         typeof leadsJson?.new_count === "number" ? leadsJson.new_count : 0,
+      );
+      setLeadStats(
+        leadsJson?.stats && typeof leadsJson.stats === "object"
+          ? (leadsJson.stats as LeadStats)
+          : null,
       );
       return true;
     } catch {
@@ -1974,6 +1993,9 @@ export default function AdminPage() {
       secretRef.current = stored;
       setSecret(stored);
       setSecretDraft(stored);
+      // Slide the session forward on each use so an active admin stays logged
+      // in; only a full week of inactivity logs them out.
+      storage.setItem(SECRET_TS_KEY, String(Date.now()));
     } else if (stored) {
       storage.removeItem(SECRET_KEY);
       storage.removeItem(SECRET_TS_KEY);
@@ -3248,6 +3270,7 @@ export default function AdminPage() {
         {tab === "leads" && (
           <LeadsTab
             leads={leads}
+            stats={leadStats}
             loading={loading}
             onRefresh={() => void loadLeadsState({ showLoading: true })}
             onMarkSeen={(lead) => void markLeadSeen(lead)}
@@ -4194,13 +4217,100 @@ function TripCard({
 /* ----------------------------------------------------------------
    Leads tab — human-handoff requests & booking-intent captures
    ---------------------------------------------------------------- */
+function LeadsDashboard({ stats }: { stats: LeadStats }) {
+  const platformLabel = (p: string) =>
+    p === "instagram" ? "Instagram" : p === "facebook" ? "Facebook" : p;
+
+  // Build a continuous 7-day series (fill gaps with 0) for the mini bar chart.
+  const days: Array<{ day: string; count: number; label: string }> = [];
+  const byDay = new Map(stats.daily.map((d) => [d.day, d.count]));
+  for (let i = 6; i >= 0; i -= 1) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    days.push({
+      day: key,
+      count: byDay.get(key) ?? 0,
+      label: `${d.getMonth() + 1}/${d.getDate()}`,
+    });
+  }
+  const maxCount = Math.max(1, ...days.map((d) => d.count));
+
+  const cards = [
+    { label: "Шинэ хүсэлт", value: stats.new_count, tone: "text-danger" },
+    { label: "Өнөөдөр", value: stats.today, tone: "text-brand" },
+    { label: "7 хоногт", value: stats.last7days, tone: "text-ink" },
+    { label: "Нийт", value: stats.total, tone: "text-ink" },
+  ];
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+        {cards.map((c) => (
+          <Card key={c.label} className="p-3">
+            <p className="text-xs text-ink-subtle">{c.label}</p>
+            <p className={cx("mt-1 text-2xl font-bold tabular-nums", c.tone)}>
+              {c.value}
+            </p>
+          </Card>
+        ))}
+      </div>
+
+      <Card className="p-3.5">
+        <p className="mb-3 text-sm font-medium text-ink">
+          Сүүлийн 7 хоногийн хүсэлт
+        </p>
+        <div className="flex h-28 items-end justify-between gap-1.5">
+          {days.map((d) => (
+            <div
+              key={d.day}
+              className="flex flex-1 flex-col items-center gap-1"
+              title={`${d.label}: ${d.count}`}
+            >
+              <span className="text-xs font-medium tabular-nums text-ink-muted">
+                {d.count > 0 ? d.count : ""}
+              </span>
+              <div
+                className="w-full rounded-t bg-brand/80"
+                style={{
+                  height: `${Math.max(4, (d.count / maxCount) * 80)}px`,
+                }}
+              />
+              <span className="text-[10px] text-ink-subtle">{d.label}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {stats.by_platform.length > 0 && (
+        <Card className="p-3.5">
+          <p className="mb-2 text-sm font-medium text-ink">Сувгаар</p>
+          <div className="flex flex-wrap gap-2">
+            {stats.by_platform.map((p) => (
+              <span
+                key={p.platform}
+                className="rounded-md border border-line bg-surface-sunken px-2.5 py-1 text-xs text-ink"
+              >
+                {platformLabel(p.platform)}:{" "}
+                <span className="font-semibold tabular-nums">{p.count}</span>
+              </span>
+            ))}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 function LeadsTab({
   leads,
+  stats,
   loading,
   onRefresh,
   onMarkSeen,
 }: {
   leads: TravelLead[];
+  stats: LeadStats | null;
   loading: boolean;
   onRefresh: () => void;
   onMarkSeen: (lead: TravelLead) => void;
@@ -4225,6 +4335,8 @@ function LeadsTab({
           </button>
         </div>
       </Card>
+
+      {stats && <LeadsDashboard stats={stats} />}
 
       {leads.length === 0 ? (
         <Card className="p-4">
