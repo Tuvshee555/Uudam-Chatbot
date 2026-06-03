@@ -16,12 +16,17 @@ import {
 } from "../../../lib/observability";
 
 export const config = {
-  maxDuration: 75,
+  // Large pasted lists fan out into several batched AI calls; give the function
+  // enough headroom to finish them (matches the file-parse endpoint and stays
+  // above the 150s batch budget in generateAIProposalFromContentBatched).
+  maxDuration: 180,
 };
 
 const ADMIN_AI_CHANGE_RATE_LIMIT = 30;
 const ADMIN_AI_CHANGE_RATE_WINDOW_MS = 10 * 60 * 1000;
-const MAX_AI_CHANGE_INSTRUCTION_CHARS = 4_000;
+// Large pasted price lists are auto-split into batches in generateAIProposal,
+// so allow a generous instruction size here. Clarifications stay short.
+const MAX_AI_CHANGE_INSTRUCTION_CHARS = 50_000;
 const MAX_AI_CHANGE_CLARIFICATION_CHARS = 4_000;
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

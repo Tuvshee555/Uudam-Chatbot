@@ -267,7 +267,9 @@ const MAX_TEXT_PARSE_CHARS = 60_000;
 const MAX_ATTACHED_FILES = 5;
 const MAX_CLIENT_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_CLIENT_TOTAL_FILE_BYTES = 20 * 1024 * 1024;
-const MAX_AI_INPUT_CHARS = 4_000;
+// Allow large pasted price lists. Oversized pastes are auto-split into safe
+// AI-sized batches server-side, so the admin can paste a whole list at once.
+const MAX_AI_INPUT_CHARS = 50_000;
 const MAX_DRIVE_LINKS = 5;
 // Accept everything in the picker so nothing looks greyed-out. Unsupported
 // types still get a clear message after selection rather than being silently

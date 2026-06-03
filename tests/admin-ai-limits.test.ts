@@ -85,23 +85,35 @@ function createAdminStreamRequest(
   return req;
 }
 
-test("admin AI change rejects oversized instructions before model calls", async () => {
+test("admin AI change rejects only truly oversized instructions", async () => {
   await prepareEnvironment();
   const { default: handler } = await import("../src/pages/api/admin/ai-change");
-  const res = createResponse();
 
+  // A long pasted price list (over the old 4k cap) must NOT be rejected — it is
+  // auto-split into batches. Only an absurdly large paste is turned away.
+  const okRes = createResponse();
   await handler(
     createAdminJsonRequest(
       "/api/admin/ai-change",
       { instruction: "x".repeat(4_001) },
       "203.0.113.10",
     ),
-    res,
+    okRes,
   );
+  assert.notEqual(okRes.body?.error, "instruction_too_long");
 
-  assert.equal(res.statusCode, 413);
-  assert.equal(res.body.error, "instruction_too_long");
-  assert.equal(res.body.max_chars, 4_000);
+  const tooLongRes = createResponse();
+  await handler(
+    createAdminJsonRequest(
+      "/api/admin/ai-change",
+      { instruction: "x".repeat(50_001) },
+      "203.0.113.10",
+    ),
+    tooLongRes,
+  );
+  assert.equal(tooLongRes.statusCode, 413);
+  assert.equal(tooLongRes.body.error, "instruction_too_long");
+  assert.equal(tooLongRes.body.max_chars, 50_000);
 });
 
 test("admin AI change requires explicit rollback confirmation", async () => {

@@ -2035,7 +2035,37 @@ async function createProposal(opts: {
   };
 }
 
+// A pasted instruction this long is almost always bulk data (a whole price
+// list), not a single command. Sending it as one giant prompt is what made the
+// AI time out / hit rate limits, so above this size we route it through the
+// chunk-and-merge batch pipeline instead.
+const LARGE_INSTRUCTION_CHARS = 6_000;
+
+// Heuristic: does the long text look like a multi-row price list (worth
+// splitting) rather than one long sentence? Many lines or repeated price/seat
+// cues signal bulk data.
+function looksLikeBulkPaste(instruction: string): boolean {
+  const lines = instruction.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length >= 12) return true;
+  const priceCues = (instruction.match(/₮|төгрөг|\bMNT\b|\bCNY\b|юань|\d[\d ,]{4,}/gi) || [])
+    .length;
+  return priceCues >= 8;
+}
+
 export async function generateAIProposal(instruction: string) {
+  // Big pasted price lists go through the batched (chunk + merge) pipeline so a
+  // single oversized prompt can't time out or get rate-limited. Normal short
+  // commands keep the fast, direct single-request path.
+  if (
+    instruction.length >= LARGE_INSTRUCTION_CHARS &&
+    looksLikeBulkPaste(instruction)
+  ) {
+    return generateAIProposalFromContentBatched({
+      label: "Шивсэн прайс жагсаалт",
+      contentText: instruction,
+    });
+  }
+
   return createProposal({
     instruction,
     userParts: [{ text: `Хэрэглэгчийн хүсэлт: ${instruction}` }],
