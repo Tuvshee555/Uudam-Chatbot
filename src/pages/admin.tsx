@@ -2263,6 +2263,71 @@ export default function AdminPage() {
     };
   }
 
+  // Drive-file equivalent of parseUploadUnitWithRetry: rate limits / transient
+  // AI busy auto-wait & resume forever; a genuinely unreadable file is skipped
+  // cleanly so one bad link can't sink a batch of Drive links.
+  async function parseDriveFileWithRetry(
+    fileId: string,
+    note: string,
+    progressLabel: string,
+  ): Promise<{ proposal: AIProposal; requestId: number | null }> {
+    const MAX_HARD_FAILURES = 6;
+    let hardFailures = 0;
+    let waitAttempt = 0;
+    const label = `Google Drive ${shortId(fileId)}`;
+
+    while (true) {
+      let res: Response;
+      try {
+        res = await fetchWithAdmin("/api/admin/parse-file", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ driveFileIds: [fileId], note }),
+        });
+      } catch {
+        hardFailures += 1;
+        if (hardFailures >= MAX_HARD_FAILURES) return emptyChunkResult(label);
+        await waitWithCountdown(progressLabel, 15_000, ++waitAttempt);
+        continue;
+      }
+
+      const json = (await readJsonSafe(res)) as AIProposalResponse;
+      const rateLimited = res.status === 429;
+      const transientOk =
+        res.ok &&
+        isTransientAiFailure(json.proposal) &&
+        !json.proposal?.actions?.length;
+
+      if (rateLimited || transientOk) {
+        const waitMs =
+          typeof json.retry_after_ms === "number" && json.retry_after_ms > 0
+            ? json.retry_after_ms
+            : Math.min(60_000, 20_000 + waitAttempt * 10_000);
+        await waitWithCountdown(progressLabel, waitMs, ++waitAttempt);
+        continue;
+      }
+
+      if (!res.ok) {
+        hardFailures += 1;
+        if (hardFailures >= MAX_HARD_FAILURES) return emptyChunkResult(label);
+        await waitWithCountdown(progressLabel, 15_000, ++waitAttempt);
+        continue;
+      }
+
+      if (!json.proposal || !Array.isArray(json.proposal.actions)) {
+        hardFailures += 1;
+        if (hardFailures >= MAX_HARD_FAILURES) return emptyChunkResult(label);
+        await waitWithCountdown(progressLabel, 10_000, ++waitAttempt);
+        continue;
+      }
+
+      return {
+        proposal: json.proposal,
+        requestId: typeof json.request_id === "number" ? json.request_id : null,
+      };
+    }
+  }
+
   async function parseAttachedFiles(
     files: AttachedFile[],
     note: string,
@@ -2359,32 +2424,15 @@ export default function AdminPage() {
 
     for (let index = 0; index < fileIds.length; index += 1) {
       const fileId = fileIds[index];
-      setAiBusyLabel(
-        `${fileIds.length} Google Drive файл уншиж байна… ${index + 1}/${fileIds.length}`,
-      );
-      const res = await fetchWithAdmin("/api/admin/parse-file", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          driveFileIds: [fileId],
-          note,
-        }),
-      });
-      const json = (await readJsonSafe(res)) as AIProposalResponse;
-      if (!res.ok) {
-        throw new Error(
-          apiErrorMessage(
-            json,
-            `Google Drive файл (${shortId(fileId)}) уншиж чадсангүй. Файлыг service account-тэй share хийсэн эсэхийг шалгана уу.`,
-          ),
-        );
-      }
-      if (!json.proposal || !Array.isArray(json.proposal.actions)) {
-        throw new Error(`Google Drive файл (${shortId(fileId)})-аас AI санал буцааж чадсангүй.`);
-      }
-      proposals.push(json.proposal);
-      if (fileIds.length === 1 && typeof json.request_id === "number") {
-        singleRequestId = json.request_id;
+      const progressLabel = `${fileIds.length} Google Drive файл уншиж байна… ${index + 1}/${fileIds.length}`;
+      setAiBusyLabel(progressLabel);
+      // Same auto-wait & resume behaviour as file uploads: rate limits / busy
+      // AI never surface as an error; only an unrecoverable problem skips this
+      // one Drive file (cleanly) so the rest still process.
+      const parsed = await parseDriveFileWithRetry(fileId, note, progressLabel);
+      proposals.push(parsed.proposal);
+      if (fileIds.length === 1) {
+        singleRequestId = parsed.requestId;
       }
     }
 
