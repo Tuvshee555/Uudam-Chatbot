@@ -267,9 +267,10 @@ const MAX_TEXT_PARSE_CHARS = 60_000;
 const MAX_ATTACHED_FILES = 5;
 const MAX_CLIENT_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_CLIENT_TOTAL_FILE_BYTES = 20 * 1024 * 1024;
-// Allow large pasted price lists. Oversized pastes are auto-split into safe
-// AI-sized batches server-side, so the admin can paste a whole list at once.
-const MAX_AI_INPUT_CHARS = 50_000;
+// Allow very large pasted price lists. Oversized pastes are auto-split into
+// safe AI-sized batches server-side, so the admin can paste a whole list (or
+// several) at once without it ever being truncated or rejected.
+const MAX_AI_INPUT_CHARS = 500_000;
 const MAX_DRIVE_LINKS = 5;
 // Accept everything in the picker so nothing looks greyed-out. Unsupported
 // types still get a clear message after selection rather than being silently
@@ -2142,66 +2143,80 @@ export default function AdminPage() {
     note: string,
     progressLabel: string,
   ): Promise<{ proposal: AIProposal; requestId: number | null }> {
-    const maxAttempts = 3;
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      const res = await fetchWithAdmin("/api/admin/parse-file", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          uploads: [
-            {
-              filename: unit.filename,
-              mimeType: unit.mimeType,
-              dataBase64: unit.dataUrl,
-            },
-          ],
-          note,
-        }),
-      });
-      const json = (await readJsonSafe(res)) as AIProposalResponse;
-      const shouldRetry =
-        res.status === 429 ||
-        (res.ok && isTransientAiFailure(json.proposal) && !json.proposal?.actions?.length);
+    // Rate limits / transient AI hiccups never surface as an error: we wait and
+    // resume automatically, with a friendly countdown, for as long as it takes.
+    // Only a genuine, unrecoverable problem (e.g. the chunk truly cannot be
+    // built) ends the loop, and even then we return an empty-but-valid result
+    // for this chunk so one bad piece can't sink the whole upload.
+    const MAX_HARD_FAILURES = 6; // consecutive non-rate-limit failures
+    let hardFailures = 0;
+    let waitAttempt = 0;
 
-      if (shouldRetry && attempt < maxAttempts) {
+    while (true) {
+      let res: Response;
+      try {
+        res = await fetchWithAdmin("/api/admin/parse-file", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            uploads: [
+              {
+                filename: unit.filename,
+                mimeType: unit.mimeType,
+                dataBase64: unit.dataUrl,
+              },
+            ],
+            note,
+          }),
+        });
+      } catch {
+        // Network blip — treat like a transient wait, don't error out.
+        hardFailures += 1;
+        if (hardFailures >= MAX_HARD_FAILURES) {
+          return emptyChunkResult(unit.displayName);
+        }
+        await waitWithCountdown(progressLabel, 15_000, ++waitAttempt);
+        continue;
+      }
+
+      const json = (await readJsonSafe(res)) as AIProposalResponse;
+      const rateLimited = res.status === 429;
+      const transientOk =
+        res.ok &&
+        isTransientAiFailure(json.proposal) &&
+        !json.proposal?.actions?.length;
+
+      // Rate limited or transiently busy → wait and resume forever (no cap).
+      if (rateLimited || transientOk) {
         const waitMs =
           typeof json.retry_after_ms === "number" && json.retry_after_ms > 0
             ? json.retry_after_ms
-            : attempt === 1
-              ? 35_000
-              : 60_000;
-        setAiBusyLabel(
-          `${progressLabel} — AI limit түр хүлээж байна (${Math.round(waitMs / 1000)}с)`,
-        );
-        await delayMs(waitMs);
+            : Math.min(60_000, 20_000 + waitAttempt * 10_000);
+        await waitWithCountdown(progressLabel, waitMs, ++waitAttempt);
         continue;
       }
 
       if (!res.ok) {
+        // 413 (chunk too big) is unrecoverable for this piece — skip it cleanly
+        // rather than throwing and killing the whole multi-chunk upload.
         if (res.status === 413) {
-          throw new Error(
-            `"${unit.displayName}" хэсэг хэт том байна. Файлаа жижиглээд эсвэл цөөн мөр/хуудсаар хуваагаад дахин оруулна уу.`,
-          );
+          return emptyChunkResult(unit.displayName);
         }
-        if (res.status === 429) {
-          throw new Error(
-            `"${unit.displayName}" хэсгийг AI түр завгүйгээс уншиж чадсангүй. ${formatWaitMs(json.retry_after_ms)} дахин оролдоно уу.`,
-          );
+        hardFailures += 1;
+        if (hardFailures >= MAX_HARD_FAILURES) {
+          return emptyChunkResult(unit.displayName);
         }
-        throw new Error(
-          apiErrorMessage(
-            json,
-            `"${unit.displayName}" хэсгийг боловсруулж чадсангүй.`,
-          ),
-        );
+        await waitWithCountdown(progressLabel, 15_000, ++waitAttempt);
+        continue;
       }
+
       if (!json.proposal || !Array.isArray(json.proposal.actions)) {
-        throw new Error(`"${unit.displayName}" хэсгээс AI санал буцааж чадсангүй.`);
-      }
-      if (isTransientAiFailure(json.proposal) && json.proposal.actions.length === 0) {
-        throw new Error(
-          `"${unit.displayName}" хэсгийг AI түр завгүйгээс уншиж чадсангүй. Дахин оролдоно уу.`,
-        );
+        hardFailures += 1;
+        if (hardFailures >= MAX_HARD_FAILURES) {
+          return emptyChunkResult(unit.displayName);
+        }
+        await waitWithCountdown(progressLabel, 10_000, ++waitAttempt);
+        continue;
       }
 
       return {
@@ -2209,8 +2224,43 @@ export default function AdminPage() {
         requestId: typeof json.request_id === "number" ? json.request_id : null,
       };
     }
+  }
 
-    throw new Error(`"${unit.displayName}" хэсгийг уншиж чадсангүй.`);
+  // Wait helper that shows a friendly, ticking countdown instead of an error.
+  async function waitWithCountdown(
+    progressLabel: string,
+    totalMs: number,
+    attempt: number,
+  ) {
+    const stepMs = 1_000;
+    let remaining = Math.max(stepMs, Math.round(totalMs));
+    while (remaining > 0) {
+      const secs = Math.ceil(remaining / 1000);
+      setAiBusyLabel(
+        `${progressLabel} — AI түр завгүй байна, ${secs}с дараа үргэлжилнэ` +
+          (attempt > 3 ? ` (оролдлого ${attempt})` : ""),
+      );
+      await delayMs(Math.min(stepMs, remaining));
+      remaining -= stepMs;
+    }
+  }
+
+  // A valid, empty result for a single chunk that genuinely couldn't be read,
+  // so the rest of the upload still completes without a thrown error.
+  function emptyChunkResult(displayName: string): {
+    proposal: AIProposal;
+    requestId: number | null;
+  } {
+    return {
+      proposal: {
+        summary: `"${displayName}" хэсгийг алгассан.`,
+        needs_confirmation: false,
+        important_reason: "",
+        conflicts: [],
+        actions: [],
+      },
+      requestId: null,
+    };
   }
 
   async function parseAttachedFiles(
@@ -2220,30 +2270,57 @@ export default function AdminPage() {
     const proposals: AIProposal[] = [];
     let singleRequestId: number | null = null;
     const uploadUnits: ParseUploadUnit[] = [];
+    const skippedFiles: string[] = [];
 
     for (const file of files) {
-      if (isPdfFile(file.file)) {
-        const pdfUnits = await buildPdfUploadUnits(file.file);
-        uploadUnits.push(...pdfUnits);
-      } else if (isOfficeDocFile(file.file)) {
-        uploadUnits.push(...(await buildOfficeUploadUnits(file.file)));
-      } else if (isTextLikeFile(file.file)) {
-        uploadUnits.push(...(await buildTextUploadUnits(file.file)));
-      } else if (isImageFile(file.file)) {
-        uploadUnits.push(await buildImageUploadUnit(file.file));
-      } else {
-        if (file.file.size > MAX_PARSE_UPLOAD_BYTES) {
-          throw new Error(
-            `"${file.name}" файл Vercel-ийн шууд upload limit-д хэт том байна. Google Drive link ашиглах эсвэл файлаа жижиглээд дахин оруулна уу.`,
-          );
+      // One unreadable file (corrupt PDF, weird binary) must never abort the
+      // whole batch. We skip it with a gentle note and keep going.
+      try {
+        if (isPdfFile(file.file)) {
+          uploadUnits.push(...(await buildPdfUploadUnits(file.file)));
+        } else if (isOfficeDocFile(file.file)) {
+          uploadUnits.push(...(await buildOfficeUploadUnits(file.file)));
+        } else if (isTextLikeFile(file.file)) {
+          uploadUnits.push(...(await buildTextUploadUnits(file.file)));
+        } else if (isImageFile(file.file)) {
+          uploadUnits.push(await buildImageUploadUnit(file.file));
+        } else {
+          if (file.file.size > MAX_PARSE_UPLOAD_BYTES) {
+            // Unknown big binary we can't chunk — skip it cleanly.
+            skippedFiles.push(file.name);
+            continue;
+          }
+          uploadUnits.push({
+            displayName: file.name,
+            filename: file.name,
+            mimeType: file.mimeType,
+            dataUrl: await fileToDataUrl(file.file),
+          });
         }
-        uploadUnits.push({
-          displayName: file.name,
-          filename: file.name,
-          mimeType: file.mimeType,
-          dataUrl: await fileToDataUrl(file.file),
-        });
+      } catch {
+        skippedFiles.push(file.name);
       }
+    }
+
+    if (skippedFiles.length > 0) {
+      toast.info(
+        `${skippedFiles.length} файлыг уншиж чадсангүй тул алгаслаа: ${skippedFiles
+          .slice(0, 3)
+          .join(", ")}${skippedFiles.length > 3 ? "…" : ""}`,
+      );
+    }
+
+    if (uploadUnits.length === 0) {
+      return {
+        proposal: {
+          summary: "Уншигдах файл олдсонгүй.",
+          needs_confirmation: false,
+          important_reason: "",
+          conflicts: [],
+          actions: [],
+        },
+        requestId: null,
+      };
     }
 
     for (let index = 0; index < uploadUnits.length; index += 1) {

@@ -106,14 +106,14 @@ test("admin AI change rejects only truly oversized instructions", async () => {
   await handler(
     createAdminJsonRequest(
       "/api/admin/ai-change",
-      { instruction: "x".repeat(50_001) },
+      { instruction: "x".repeat(500_001) },
       "203.0.113.10",
     ),
     tooLongRes,
   );
   assert.equal(tooLongRes.statusCode, 413);
   assert.equal(tooLongRes.body.error, "instruction_too_long");
-  assert.equal(tooLongRes.body.max_chars, 50_000);
+  assert.equal(tooLongRes.body.max_chars, 500_000);
 });
 
 test("admin AI change requires explicit rollback confirmation", async () => {

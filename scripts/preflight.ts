@@ -45,7 +45,28 @@ async function run() {
   const readinessModule = await import("../src/lib/readiness");
   const redisModule = await import("../src/lib/redisState");
 
-  const env = envModule.getEnv();
+  // Env validation must never hard-fail the *build*. On Vercel the build step
+  // may not see every runtime secret (e.g. Preview vs Production scope), but
+  // the actual serverless functions do at request time. A missing var should
+  // surface as a warning here, not block the whole deployment. Runtime code
+  // still validates strictly via getEnv() when a request comes in.
+  let env: ReturnType<typeof envModule.getEnv>;
+  try {
+    env = envModule.getEnv();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "warn",
+        event: "preflight.env_incomplete",
+        message:
+          "Env validation failed at build time (continuing — runtime validates per-request). " +
+          message,
+      }),
+    );
+    return;
+  }
   const readiness = readinessModule.getReadinessReport(env);
   const redisHealthBefore = redisModule.getRedisHealth();
   const getObservabilityDiagnostics = observabilityModule.getObservabilityDiagnostics;
