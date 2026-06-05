@@ -687,11 +687,42 @@ async function createPdfChunkBytes(
   return chunkPdf.save({ useObjectStreams: true });
 }
 
+// Decides whether extracted PDF text is a real text layer worth sending as
+// text, vs junk from a scanned/image PDF (which should go to OCR instead).
+// Requires enough length AND a healthy share of letters/digits so a few stray
+// glyphs from a scan don't get mistaken for a usable text layer.
+function isUsablePdfText(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < 200) return false;
+  const wordChars = (trimmed.match(/[\p{L}\p{N}]/gu) || []).length;
+  return wordChars >= 120 && wordChars / trimmed.length >= 0.5;
+}
+
 async function buildPdfUploadUnits(file: File): Promise<ParseUploadUnit[]> {
   const { PDFDocument } = await import("pdf-lib");
   const originalBytes = new Uint8Array(await file.arrayBuffer());
   const mimeType = "application/pdf";
 
+  // Accuracy-first: if the PDF has a real text layer, send the AI clean
+  // extracted text (like Excel→HTML) instead of the raw binary. The model
+  // reads structured text far more reliably than a PDF blob, so prices/tables
+  // come through more accurately — and it costs fewer tokens too. This runs for
+  // ALL sizes now (previously small PDFs skipped straight to binary). Scanned
+  // PDFs with no text layer fall through to the binary/image path below, where
+  // Gemini's OCR handles them.
+  const extractedText = await extractPdfText(file).catch(() => "");
+  if (isUsablePdfText(extractedText)) {
+    return chunkText(extractedText).map((chunk, index, chunks) => ({
+      displayName:
+        chunks.length > 1 ? `${file.name} (${index + 1}/${chunks.length})` : file.name,
+      filename: `${file.name}.text-${String(index + 1).padStart(3, "0")}.txt`,
+      mimeType: "text/plain",
+      dataUrl: textToDataUrl(chunk),
+    }));
+  }
+
+  // No usable text layer (likely scanned). Small enough → send binary so Gemini
+  // OCRs it; otherwise fall through to per-page image rendering below.
   if (originalBytes.byteLength <= MAX_PARSE_UPLOAD_BYTES) {
     return [
       {
@@ -701,16 +732,6 @@ async function buildPdfUploadUnits(file: File): Promise<ParseUploadUnit[]> {
         dataUrl: bytesToDataUrl(originalBytes, mimeType),
       },
     ];
-  }
-
-  const extractedText = await extractPdfText(file).catch(() => "");
-  if (extractedText.length > 400) {
-    return chunkText(extractedText).map((chunk, index, chunks) => ({
-      displayName: `${file.name} (${index + 1}/${chunks.length})`,
-      filename: `${file.name}.text-${String(index + 1).padStart(3, "0")}.txt`,
-      mimeType: "text/plain",
-      dataUrl: textToDataUrl(chunk),
-    }));
   }
 
   let sourcePdf: import("pdf-lib").PDFDocument;
