@@ -145,6 +145,12 @@ const env = getEnv();
 const AI_CHANGE_GEMINI_TIMEOUT_MS = Math.max(env.geminiTimeoutMs, 45_000);
 const AI_CHANGE_GEMINI_MAX_RETRIES = 0;
 const AI_CHANGE_REPAIR_TIMEOUT_MS = 15_000;
+// Reading uploaded files / price lists is where accuracy matters most, so use
+// the stronger Pro model there (overridable via GEMINI_FILE_PARSE_MODEL). Quick
+// text commands keep the default fast model. Pro is slower + pricier, which is
+// an accepted trade for getting prices/dates right.
+const FILE_PARSE_MODEL =
+  process.env.GEMINI_FILE_PARSE_MODEL || "gemini-2.5-pro";
 const FILE_PARSE_GEMINI_TIMEOUT_MS = Math.max(env.geminiTimeoutMs, 60_000);
 const FILE_PARSE_GEMINI_MAX_RETRIES = Math.min(env.geminiMaxRetries, 1);
 const FILE_PARSE_BATCH_DELAY_MS = 1_200;
@@ -1721,6 +1727,12 @@ function buildBatchSourceParts(input: {
     `Sources: ${sourceLabels}`,
     input.note ? `Admin note: ${input.note}` : "",
     "Extract travel information from the attached files, images, or text, including route, operator, price, seats, departure date, meals, and status.",
+    "ACCURACY IS THE TOP PRIORITY. Read carefully and do not rush.",
+    "Read EVERY trip/row in the source. Do not skip rows and do not stop early. If the source lists 12 trips, return actions for all 12.",
+    "Never merge two different trips into one, and never split one trip into two. Each distinct route = one action.",
+    "Copy prices, seat counts, and dates EXACTLY as written in the source — digit for digit. Do not round, estimate, convert, or 'fix' numbers. If a price is 4,290,000 write 4290000, not 4300000.",
+    "Only use information that is actually present in the source. Never invent or guess a price, date, or field. If a field is missing, leave it out rather than filling a plausible value.",
+    "If any value is unclear or hard to read, keep needs_confirmation=true and ask about that exact value in plain language instead of guessing.",
     "Ignore logos, agency names, headers, footers, contact details, and page decorations unless they are attached to a real trip row.",
     "Do not create a trip named UUDAM TRAVEL, UUDAM TRAVEL AGENCY, TRAVEL AGENCY, or any other agency/header-only text.",
     "Do not treat normal adult/child price differences as conflicts. Only flag child price if it is higher than adult price or the source is genuinely unclear.",
@@ -1841,6 +1853,7 @@ async function requestProposalFromModel(opts: {
   timeoutMs?: number;
   maxRetries?: number;
   repairTimeoutMs?: number;
+  model?: string;
 }) {
   const result = await askGeminiParts(
     [{ text: buildProposalGuide(opts.condensedTrips) }, ...opts.userParts],
@@ -1849,6 +1862,7 @@ async function requestProposalFromModel(opts: {
       jsonMode: true,
       timeoutMs: opts.timeoutMs,
       maxRetries: opts.maxRetries,
+      model: opts.model,
     },
   );
 
@@ -1862,6 +1876,7 @@ async function requestProposalFromModel(opts: {
           jsonMode: true,
           timeoutMs: opts.repairTimeoutMs,
           maxRetries: 0,
+          model: opts.model,
         },
       );
       parsed = parseJsonFromModel(repaired.text);
@@ -2107,6 +2122,12 @@ export async function generateAIProposalFromContent(input: {
     `Sources: ${sourceLabels}`,
     input.note ? `Admin note: ${input.note}` : "",
     "Extract travel information from the attached files, images, or text, including route, operator, price, seats, departure date, meals, and status.",
+    "ACCURACY IS THE TOP PRIORITY. Read carefully and do not rush.",
+    "Read EVERY trip/row in the source. Do not skip rows and do not stop early. If the source lists 12 trips, return actions for all 12.",
+    "Never merge two different trips into one, and never split one trip into two. Each distinct route = one action.",
+    "Copy prices, seat counts, and dates EXACTLY as written in the source — digit for digit. Do not round, estimate, convert, or 'fix' numbers. If a price is 4,290,000 write 4290000, not 4300000.",
+    "Only use information that is actually present in the source. Never invent or guess a price, date, or field. If a field is missing, leave it out rather than filling a plausible value.",
+    "If any value is unclear or hard to read, keep needs_confirmation=true and ask about that exact value in plain language instead of guessing.",
     "Ignore logos, agency names, headers, footers, contact details, and page decorations unless they are attached to a real trip row.",
     "Do not treat normal adult/child price differences as conflicts. Only flag child price if it is higher than adult price or the source is genuinely unclear.",
     "Optional add-on costs in CNY/yuan (нэмэлт төлбөр, өөрийн зардлаар, single room fees, extra attraction tickets) are not conflicts; keep them in notes/source_description.",
@@ -2221,6 +2242,7 @@ export async function generateAIProposalFromContentBatched(input: {
               timeoutMs: batchTimeoutMs,
               maxRetries: batchRetries,
               repairTimeoutMs: FILE_PARSE_REPAIR_TIMEOUT_MS,
+              model: FILE_PARSE_MODEL,
             }),
           );
         } catch (error) {

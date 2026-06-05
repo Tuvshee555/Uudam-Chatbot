@@ -55,6 +55,8 @@ export type AskGeminiOptions = {
   timeoutMs?: number;
   maxRetries?: number;
   model?: string;
+  /** Sampling temperature. Defaults to 0 for deterministic, factual extraction. */
+  temperature?: number;
 };
 
 /**
@@ -98,12 +100,18 @@ export async function askGeminiParts(
   const startedAt = Date.now();
   const source = options?.source || "unknown";
 
+  // Temperature 0 by default: for reading prices/dates and producing structured
+  // edits we want deterministic, factual output — not "creative" guesses.
+  const temperature =
+    typeof options?.temperature === "number" ? options.temperature : 0;
+  const generationConfig: Record<string, unknown> = { temperature };
+  if (options?.jsonMode) {
+    generationConfig.responseMimeType = "application/json";
+  }
   const requestBody: Record<string, unknown> = {
     contents: [{ role: "user", parts: toRestParts(parts) }],
+    generationConfig,
   };
-  if (options?.jsonMode) {
-    requestBody.generationConfig = { responseMimeType: "application/json" };
-  }
 
   try {
     const { response, attempts } = await executeWithCircuitBreaker(
