@@ -8,7 +8,15 @@ import {
 } from "../../lib/pause";
 import { getClientKey } from "../../lib/rateLimit";
 import { requireAdminAccess } from "../../lib/adminAccess";
-import { getBotControl, setBotPaused } from "../../lib/travelOps";
+import {
+  getBotControl,
+  isPagePaused,
+  listPageControls,
+  setBotPaused,
+  setPagePaused,
+} from "../../lib/travelOps";
+import { getEnv } from "../../lib/env";
+import { getPageDisplayName } from "../../lib/pages";
 import {
   beginRequestTrace,
   finishRequestTrace,
@@ -29,15 +37,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!access) return;
 
     if (req.method === "GET") {
+      const pageControls = await listPageControls();
       return res.status(200).json({
         paused: await listPaused(),
         recent: await listRecent(),
         control: await getBotControl(),
+        pages: pageControls.map((c) => ({
+          ...c,
+          display_name: getPageDisplayName(c.page_id),
+        })),
       });
     }
 
     if (req.method === "POST") {
-      const { sender_id, action, duration_ms, reason } = req.body || {};
+      const { sender_id, action, duration_ms, reason, page_id } = req.body || {};
+
+      // --- Per-page pause control ---
+      if (
+        action === "page_pause" ||
+        action === "page_resume" ||
+        action === "page_status"
+      ) {
+        if (typeof page_id !== "string" || !page_id.trim()) {
+          return res.status(400).json({ error: "missing page_id" });
+        }
+        const pageId = page_id.trim();
+        const known = getEnv().facebookPages.some((p) => p.pageId === pageId);
+        if (!known) {
+          return res.status(400).json({ error: "unknown page_id" });
+        }
+        if (action === "page_pause") {
+          await setPagePaused(
+            pageId,
+            true,
+            typeof reason === "string" ? reason : null,
+          );
+        } else if (action === "page_resume") {
+          await setPagePaused(pageId, false, null);
+        }
+        return res.status(200).json({
+          ok: true,
+          page_id: pageId,
+          paused: await isPagePaused(pageId),
+        });
+      }
 
       if (action === "global_pause") {
         await setBotPaused(true, typeof reason === "string" ? reason : null);
@@ -70,7 +113,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       return res.status(400).json({
         error:
-          "action must be pause | resume | status | global_pause | global_resume | global_status",
+          "action must be pause | resume | status | global_pause | global_resume | global_status | page_pause | page_resume | page_status",
       });
     }
 

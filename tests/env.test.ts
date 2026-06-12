@@ -20,6 +20,88 @@ test("env validation accepts valid configuration", async () => {
   assert.equal(env.googleDriveSyncIntervalMinutes, 30);
 });
 
+test("env builds a single-page roster from legacy TOKEN_PAGE + FACEBOOK_PAGE_ID", async () => {
+  applyTestEnv();
+  const envModule = await loadEnvModule();
+  const env = envModule.getEnv();
+  assert.deepEqual(env.facebookPages, [
+    { pageId: "1234567890", token: "test-page-token" },
+  ]);
+  // Legacy singular fields stay populated for back-compat consumers.
+  assert.equal(env.facebookPageId, "1234567890");
+  assert.equal(env.tokenPage, "test-page-token");
+});
+
+test("env parses a multi-page roster from FACEBOOK_PAGES", async () => {
+  applyTestEnv({
+    FACEBOOK_PAGES: "1010493442437235:tokA,596733917653582:tokB",
+    // Drop legacy vars so the roster comes purely from FACEBOOK_PAGES.
+    TOKEN_PAGE: undefined,
+    FACEBOOK_PAGE_ID: undefined,
+  });
+  const envModule = await loadEnvModule();
+  const env = envModule.getEnv();
+  assert.deepEqual(env.facebookPages, [
+    { pageId: "1010493442437235", token: "tokA" },
+    { pageId: "596733917653582", token: "tokB" },
+  ]);
+  // Singular fields derive from the primary (first) page.
+  assert.equal(env.facebookPageId, "1010493442437235");
+  assert.equal(env.tokenPage, "tokA");
+});
+
+test("env keeps tokens containing ':' intact (split on first colon only)", async () => {
+  applyTestEnv({
+    FACEBOOK_PAGES: "123:EAA:with:colons",
+    TOKEN_PAGE: undefined,
+    FACEBOOK_PAGE_ID: undefined,
+  });
+  const envModule = await loadEnvModule();
+  const env = envModule.getEnv();
+  assert.deepEqual(env.facebookPages, [
+    { pageId: "123", token: "EAA:with:colons" },
+  ]);
+});
+
+test("env merges legacy page into FACEBOOK_PAGES roster without duplication", async () => {
+  applyTestEnv({
+    FACEBOOK_PAGES: "999:tokNew",
+    // Legacy pair present and DISTINCT — should be appended as a second page.
+  });
+  const envModule = await loadEnvModule();
+  const env = envModule.getEnv();
+  assert.deepEqual(env.facebookPages, [
+    { pageId: "999", token: "tokNew" },
+    { pageId: "1234567890", token: "test-page-token" },
+  ]);
+});
+
+test("env rejects an empty Facebook page roster", async () => {
+  applyTestEnv({
+    FACEBOOK_PAGES: undefined,
+    TOKEN_PAGE: undefined,
+    FACEBOOK_PAGE_ID: undefined,
+  });
+  const envModule = await loadEnvModule();
+  assert.throws(
+    () => envModule.getEnv(),
+    /At least one Facebook page must be configured/i,
+  );
+});
+
+test("env rejects a malformed FACEBOOK_PAGES entry", async () => {
+  applyTestEnv({
+    FACEBOOK_PAGES: "no-colon-here",
+    TOKEN_PAGE: undefined,
+    FACEBOOK_PAGE_ID: undefined,
+  });
+  const envModule = await loadEnvModule();
+  assert.throws(
+    () => envModule.getEnv(),
+    /FACEBOOK_PAGES entry .* must be in the form pageId:token/i,
+  );
+});
+
 test("env validation rejects open admin access in production", async () => {
   applyTestEnv({
     ADMIN_OPEN_ACCESS: "true",
@@ -75,6 +157,39 @@ test("env validation accepts hardened Vercel production configuration", async ()
   assert.equal(env.redisUrl, "redis://example.com:6379");
   assert.equal(env.redisReplayEnabled, true);
   assert.equal(env.observabilityErrorSinkUrl, "https://errors.example.com");
+});
+
+test("env validation derives REDIS_URL from Upstash REST credentials", async () => {
+  applyTestEnv({
+    REDIS_URL: undefined,
+    UPSTASH_REDIS_REST_URL: "https://subtle-sheepdog-115805.upstash.io",
+    UPSTASH_REDIS_REST_TOKEN: "token with symbols:/?",
+    REDIS_STATE_ENABLED: "true",
+    REDIS_RATE_LIMIT_ENABLED: "true",
+    REDIS_REPLAY_ENABLED: "true",
+    REDIS_CONVERSATION_ENABLED: "true",
+    REDIS_PAUSE_ENABLED: "true",
+  });
+  const envModule = await loadEnvModule();
+  const env = envModule.getEnv();
+
+  assert.equal(
+    env.redisUrl,
+    "rediss://default:token%20with%20symbols%3A%2F%3F@subtle-sheepdog-115805.upstash.io:6379",
+  );
+});
+
+test("env validation auto-enables Redis state from Upstash REST credentials alone", async () => {
+  applyTestEnv({
+    REDIS_URL: undefined,
+    REDIS_STATE_ENABLED: undefined,
+    UPSTASH_REDIS_REST_URL: "https://subtle-sheepdog-115805.upstash.io",
+    UPSTASH_REDIS_REST_TOKEN: "tok",
+  });
+  const envModule = await loadEnvModule();
+  const env = envModule.getEnv();
+
+  assert.equal(env.redisStateEnabled, true);
 });
 
 test("env validation rejects NaN values", async () => {

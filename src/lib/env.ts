@@ -5,6 +5,7 @@ export type ValidatedEnv = {
   verifyToken: string;
   tokenPage: string;
   facebookPageId: string;
+  facebookPages: Array<{ pageId: string; token: string }>;
   metaAppSecret: string;
   adminSecret: string;
   adminOpenAccess: boolean;
@@ -77,6 +78,40 @@ function readOptionalString(
   return trimmed.length ? trimmed : null;
 }
 
+function buildRedisUrlFromUpstashRest(
+  source: NodeJS.ProcessEnv,
+  errors: string[],
+): string | null {
+  const restUrl = readOptionalString("UPSTASH_REDIS_REST_URL", source);
+  const restToken = readOptionalString("UPSTASH_REDIS_REST_TOKEN", source);
+  if (!restUrl && !restToken) return null;
+
+  if (!restUrl || !restToken) {
+    errors.push(
+      "UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN must be set together",
+    );
+    return null;
+  }
+
+  try {
+    const parsed = new URL(restUrl);
+    if (parsed.protocol !== "https:") {
+      errors.push("UPSTASH_REDIS_REST_URL must start with https://");
+      return null;
+    }
+    const host = parsed.hostname;
+    if (!host) {
+      errors.push("UPSTASH_REDIS_REST_URL must include a host");
+      return null;
+    }
+    const encodedToken = encodeURIComponent(restToken);
+    return `rediss://default:${encodedToken}@${host}:6379`;
+  } catch {
+    errors.push("UPSTASH_REDIS_REST_URL must be a valid URL");
+    return null;
+  }
+}
+
 function readRequiredStringFromNames(
   names: string[],
   source: NodeJS.ProcessEnv,
@@ -99,6 +134,73 @@ function readRequiredStringFromNames(
     errors.push(`${primary} is required and must be a non-empty string`);
   }
   return "";
+}
+
+/**
+ * Builds the roster of Facebook pages this deployment serves. One deployment can
+ * serve several pages, each with its own page-access token.
+ *
+ * Preferred format: `FACEBOOK_PAGES=pageId1:token1,pageId2:token2`. Tokens may
+ * themselves contain `:`, so each entry is split on the FIRST colon only.
+ *
+ * Back-compat: when `FACEBOOK_PAGES` is absent, fall back to the legacy single
+ * pair `FACEBOOK_PAGE_ID` + `TOKEN_PAGE`. At least one page must resolve, or this
+ * pushes a validation error.
+ */
+function parseFacebookPages(
+  source: NodeJS.ProcessEnv,
+  legacyPageId: string,
+  legacyToken: string,
+  errors: string[],
+): Array<{ pageId: string; token: string }> {
+  const raw = readOptionalString("FACEBOOK_PAGES", source);
+  const pages: Array<{ pageId: string; token: string }> = [];
+  const seen = new Set<string>();
+
+  if (raw) {
+    for (const entry of raw.split(",")) {
+      const trimmed = entry.trim();
+      if (!trimmed) continue;
+      const sep = trimmed.indexOf(":");
+      if (sep <= 0) {
+        errors.push(
+          `FACEBOOK_PAGES entry "${trimmed}" must be in the form pageId:token`,
+        );
+        continue;
+      }
+      const pageId = trimmed.slice(0, sep).trim();
+      const token = trimmed.slice(sep + 1).trim();
+      if (!pageId || !token) {
+        errors.push(
+          `FACEBOOK_PAGES entry "${trimmed}" must have a non-empty pageId and token`,
+        );
+        continue;
+      }
+      if (seen.has(pageId)) {
+        // Last definition wins; keep the roster unique by page id.
+        const existing = pages.findIndex((p) => p.pageId === pageId);
+        if (existing >= 0) pages[existing] = { pageId, token };
+        continue;
+      }
+      seen.add(pageId);
+      pages.push({ pageId, token });
+    }
+  }
+
+  // Legacy single-page fallback / supplement: include the legacy pair if it is set
+  // and not already represented by FACEBOOK_PAGES.
+  if (legacyPageId && legacyToken && !seen.has(legacyPageId)) {
+    seen.add(legacyPageId);
+    pages.push({ pageId: legacyPageId, token: legacyToken });
+  }
+
+  if (!pages.length) {
+    errors.push(
+      "At least one Facebook page must be configured via FACEBOOK_PAGES (pageId:token,...) or the legacy TOKEN_PAGE + FACEBOOK_PAGE_ID pair",
+    );
+  }
+
+  return pages;
 }
 
 function readBoolean(
@@ -172,8 +274,21 @@ export function getEnv(): ValidatedEnv {
     errors,
   );
   const verifyToken = readRequiredString("VERIFY_TOKEN", source, errors);
-  const tokenPage = readRequiredString("TOKEN_PAGE", source, errors);
-  const facebookPageId = readRequiredString("FACEBOOK_PAGE_ID", source, errors);
+  // Legacy single-page vars are now OPTIONAL — they feed the multi-page roster
+  // below as a fallback. parseFacebookPages enforces "at least one page".
+  const legacyTokenPage = readOptionalString("TOKEN_PAGE", source) || "";
+  const legacyFacebookPageId = readOptionalString("FACEBOOK_PAGE_ID", source) || "";
+  const facebookPages = parseFacebookPages(
+    source,
+    legacyFacebookPageId,
+    legacyTokenPage,
+    errors,
+  );
+  // Keep the singular fields populated (back-compat consumers, IG fallback, tests):
+  // prefer the explicit legacy vars, otherwise derive from the primary roster page.
+  const primaryPage = facebookPages[0];
+  const tokenPage = legacyTokenPage || primaryPage?.token || "";
+  const facebookPageId = legacyFacebookPageId || primaryPage?.pageId || "";
   const metaAppSecret = readRequiredStringFromNames(
     ["META_APP_SECRET", "FACEBOOK_APP_SECRET", "INSTAGRAM_APP_SECRET_KEY"],
     source,
@@ -202,10 +317,14 @@ export function getEnv(): ValidatedEnv {
     false,
     errors,
   );
+  const redisConfigured = Boolean(
+    source.REDIS_URL ||
+      (source.UPSTASH_REDIS_REST_URL && source.UPSTASH_REDIS_REST_TOKEN),
+  );
   const redisStateEnabled = readBoolean(
     "REDIS_STATE_ENABLED",
     source,
-    Boolean(source.REDIS_URL),
+    redisConfigured,
     errors,
   );
   const redisRateLimitEnabled = readBoolean(
@@ -232,7 +351,9 @@ export function getEnv(): ValidatedEnv {
     redisStateEnabled,
     errors,
   );
-  const redisUrl = readOptionalString("REDIS_URL", source);
+  const redisUrl =
+    readOptionalString("REDIS_URL", source) ||
+    buildRedisUrlFromUpstashRest(source, errors);
   const redisKeyPrefix =
     readOptionalString("REDIS_KEY_PREFIX", source) || "uudamtravelbot";
 
@@ -499,6 +620,7 @@ export function getEnv(): ValidatedEnv {
     verifyToken,
     tokenPage,
     facebookPageId,
+    facebookPages,
     metaAppSecret,
     adminSecret,
     adminOpenAccess,
@@ -549,6 +671,8 @@ export function getEnv(): ValidatedEnv {
   logStartupDiagnostics("env", {
     trustProxyHeaders: cachedEnv.trustProxyHeaders,
     allowAdminSecretQuery: cachedEnv.allowAdminSecretQuery,
+    facebookPageCount: cachedEnv.facebookPages.length,
+    facebookPageIds: cachedEnv.facebookPages.map((p) => p.pageId),
     redisStateEnabled: cachedEnv.redisStateEnabled,
     redisRateLimitEnabled: cachedEnv.redisRateLimitEnabled,
     redisReplayEnabled: cachedEnv.redisReplayEnabled,

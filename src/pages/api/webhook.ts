@@ -13,7 +13,7 @@ import {
   createLead,
   getTravelBotSettings,
   hasRecentOpenLead,
-  isBotGloballyPaused,
+  isPagePaused,
   listTrips,
 } from "../../lib/travelOps";
 import {
@@ -43,8 +43,10 @@ import {
 
 const env = getEnv();
 const VERIFY_TOKEN = env.verifyToken;
-const EXPECTED_FACEBOOK_PAGE_ID = env.facebookPageId;
-const FACEBOOK_TOKEN = env.tokenPage;
+// Page id -> page access token, for every Facebook page this deployment serves.
+const PAGE_TOKENS = new Map(env.facebookPages.map((p) => [p.pageId, p.token]));
+// Fallback token for the Instagram path (IG uses the same FB app's primary token).
+const FALLBACK_TOKEN = env.tokenPage;
 const META_APP_SECRET = env.metaAppSecret;
 const FALLBACK_SEND_ERROR_MESSAGE = "Уучлаарай, мессеж илгээхэд алдаа гарлаа.";
 
@@ -1033,11 +1035,12 @@ async function handleMessage(
 
   await trackSender(senderId);
 
-  if (await isBotGloballyPaused()) {
-    logInfo("webhook.global_pause_active", {
+  if (await isPagePaused(pageId)) {
+    logInfo("webhook.page_pause_active", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
       platform,
+      pageId,
       senderHash: hashIdentifier(senderId),
     });
     return;
@@ -1149,7 +1152,7 @@ async function handleMessage(
   void maybeAutoSyncDriveFolder({ source: "api.webhook" });
   const { systemPrompt: fileSystemPrompt, business } = await readBusinessData();
 
-  const sessionId = `${platform}:${senderId}`;
+  const sessionId = `${platform}:${pageId}:${senderId}`;
   await assertLockHealthy();
   const history = await getHistory(sessionId);
   const lastReply = await getLastReplyConsistent(sessionId);
@@ -1562,9 +1565,17 @@ export default async function handler(
                 feedKey,
                 { platform: "facebook", eventType: "feed" },
                 async () => {
-                  const token = FACEBOOK_TOKEN;
+                  const token = PAGE_TOKENS.get(pageId);
                   if (!token) {
-                    throw new RetryableWebhookError("missing_page_token:feed");
+                    // Page not in our roster — nothing we can do, drop cleanly
+                    // (don't 503-retry forever on a page we don't serve).
+                    logWarn("webhook.unexpected_page", {
+                      requestId: trace.requestId,
+                      correlationId: trace.correlationId,
+                      pageId,
+                      eventType: "feed",
+                    });
+                    return;
                   }
 
                   logInfo("webhook.comment_trigger", {
@@ -1644,16 +1655,14 @@ export default async function handler(
 
               if (!senderId || !text) continue;
 
-              if (
-                payload.object === "page" &&
-                EXPECTED_FACEBOOK_PAGE_ID &&
-                pageId !== EXPECTED_FACEBOOK_PAGE_ID
-              ) {
+              // For Facebook pages, only serve pages in our roster. Unknown page
+              // → drop (don't reply with the wrong page's token).
+              if (payload.object === "page" && !PAGE_TOKENS.has(pageId)) {
                 logWarn("webhook.unexpected_page", {
                   requestId: trace.requestId,
                   correlationId: trace.correlationId,
                   pageId,
-                  expectedPageId: EXPECTED_FACEBOOK_PAGE_ID,
+                  knownPageIds: Array.from(PAGE_TOKENS.keys()),
                   senderHash: hashIdentifier(senderId),
                 });
                 continue;
@@ -1662,7 +1671,9 @@ export default async function handler(
               const platform: Platform =
                 payload.object === "instagram" ? "instagram" : "facebook";
 
-              const token = FACEBOOK_TOKEN;
+              // Reply with this page's own token. Instagram has no per-page FB
+              // token here, so fall back to the primary token to stay working.
+              const token = PAGE_TOKENS.get(pageId) ?? FALLBACK_TOKEN;
 
               const eventKey = buildEventKey(platform, senderId, event);
               await runEventWithClaim(
@@ -1680,7 +1691,7 @@ export default async function handler(
                     throw new RetryableWebhookError("missing_page_token:dm");
                   }
 
-                  const conversationKey = `${platform}:${senderId}`;
+                  const conversationKey = `${platform}:${pageId}:${senderId}`;
                   const payloadForConversation: PendingConversationPayload = {
                     platform,
                     senderId,

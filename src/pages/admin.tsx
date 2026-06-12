@@ -63,6 +63,11 @@ type ControlState = {
   updated_at: string;
 };
 
+type PageControlState = ControlState & {
+  page_id: string;
+  display_name: string;
+};
+
 type TravelBotSettings = {
   business_name: string;
   system_prompt: string;
@@ -1753,6 +1758,7 @@ export default function AdminPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [control, setControl] = useState<ControlState | null>(null);
+  const [pageControls, setPageControls] = useState<PageControlState[]>([]);
   const [pausedRows, setPausedRows] = useState<PauseRow[]>([]);
   const [recentRows, setRecentRows] = useState<RecentRow[]>([]);
   const [pauseReason, setPauseReason] = useState("");
@@ -1869,6 +1875,7 @@ export default function AdminPage() {
       const pauseJson = await pauseRes.json().catch(() => ({}));
       setRequiresAuth(false);
       setControl(pauseJson?.control || null);
+      setPageControls(Array.isArray(pauseJson?.pages) ? pauseJson.pages : []);
       setPausedRows(Array.isArray(pauseJson?.paused) ? pauseJson.paused : []);
       setRecentRows(Array.isArray(pauseJson?.recent) ? pauseJson.recent : []);
       return true;
@@ -2841,16 +2848,25 @@ export default function AdminPage() {
 
   /* ---------------- bot control ---------------- */
   async function runPauseAction(
-    action: "pause" | "resume" | "global_pause" | "global_resume",
+    action:
+      | "pause"
+      | "resume"
+      | "global_pause"
+      | "global_resume"
+      | "page_pause"
+      | "page_resume",
     senderId?: string,
     durationMs?: number | null,
+    pageId?: string,
   ) {
-    setBusyKey(`${action}:${senderId || "global"}`);
+    setBusyKey(`${action}:${pageId || senderId || "global"}`);
     try {
       const body: Record<string, unknown> = { action };
       if (senderId) body.sender_id = senderId;
+      if (pageId) body.page_id = pageId;
       if (durationMs != null) body.duration_ms = durationMs;
-      if (action === "global_pause") body.reason = pauseReason || null;
+      if (action === "global_pause" || action === "page_pause")
+        body.reason = pauseReason || null;
       const res = await fetchWithAdmin("/api/pause", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3274,7 +3290,7 @@ export default function AdminPage() {
 
         {tab === "bot" && (
           <BotTab
-            control={control}
+            pageControls={pageControls}
             pauseReason={pauseReason}
             setPauseReason={setPauseReason}
             recentRows={recentRows}
@@ -3282,8 +3298,8 @@ export default function AdminPage() {
             pausedIds={pausedIds}
             busyKey={busyKey}
             tick={tick}
-            onPauseAction={(action, senderId, ms) =>
-              void runPauseAction(action, senderId, ms)
+            onPauseAction={(action, senderId, ms, pageId) =>
+              void runPauseAction(action, senderId, ms, pageId)
             }
           />
         )}
@@ -4455,7 +4471,7 @@ function LeadCard({
    Bot tab
    ---------------------------------------------------------------- */
 function BotTab({
-  control,
+  pageControls,
   pauseReason,
   setPauseReason,
   recentRows,
@@ -4465,7 +4481,7 @@ function BotTab({
   tick,
   onPauseAction,
 }: {
-  control: ControlState | null;
+  pageControls: PageControlState[];
   pauseReason: string;
   setPauseReason: (value: string) => void;
   recentRows: RecentRow[];
@@ -4474,12 +4490,18 @@ function BotTab({
   busyKey: string;
   tick: number;
   onPauseAction: (
-    action: "pause" | "resume" | "global_pause" | "global_resume",
+    action:
+      | "pause"
+      | "resume"
+      | "global_pause"
+      | "global_resume"
+      | "page_pause"
+      | "page_resume",
     senderId?: string,
     ms?: number | null,
+    pageId?: string,
   ) => void;
 }) {
-  const botPaused = Boolean(control?.bot_paused);
   const handoffRows = pausedRows.filter((row) => row.reason === "handoff");
   const handoffIds = new Set(handoffRows.map((row) => row.sender_id));
   return (
@@ -4556,17 +4578,9 @@ function BotTab({
 
       <Card className="p-4">
         <SectionHeading
-          title="Ботын төлөв"
-          description="Мэдээлэл их хэмжээгээр шинэчлэх үед ботыг түр зогсоож болно."
+          title="Хуудас бүрийн төлөв"
+          description="Хуудас тус бүрийн ботыг тусад нь зогсоох/сэргээх. Нэг хуудсыг зогсооход нөгөө хуудас үргэлжлүүлэн ажиллана."
         />
-        <div className="mt-3 flex items-center gap-2">
-          <Badge tone={botPaused ? "danger" : "success"} dot>
-            {botPaused ? "Бот зогссон" : "Бот идэвхтэй"}
-          </Badge>
-          <span className="text-xs text-ink-subtle">
-            {formatTime(control?.updated_at)}
-          </span>
-        </div>
         <div className="mt-3 space-y-2">
           <input
             value={pauseReason}
@@ -4574,26 +4588,64 @@ function BotTab({
             placeholder="Зогсоох шалтгаан (сонголттой)"
             className="h-10 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-ink placeholder:text-ink-subtle focus:border-brand"
           />
-          <div className="flex gap-2">
-            <Button
-              variant="danger"
-              block
-              disabled={busyKey === "global_pause:global" || botPaused}
-              onClick={() => onPauseAction("global_pause")}
-            >
-              <Icons.pause size={16} />
-              Бот зогсоох
-            </Button>
-            <Button
-              variant="success"
-              block
-              disabled={busyKey === "global_resume:global" || !botPaused}
-              onClick={() => onPauseAction("global_resume")}
-            >
-              <Icons.play size={16} />
-              Бот сэргээх
-            </Button>
-          </div>
+        </div>
+        <div className="mt-3 space-y-3">
+          {pageControls.length === 0 && (
+            <p className="text-sm text-ink-subtle">
+              Тохируулсан хуудас алга байна.
+            </p>
+          )}
+          {pageControls.map((page) => {
+            const paused = Boolean(page.bot_paused);
+            return (
+              <div
+                key={page.page_id}
+                className="rounded-md border border-line-strong p-3"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-ink">
+                      {page.display_name}
+                    </p>
+                    <span className="text-xs text-ink-subtle">
+                      {formatTime(page.updated_at)}
+                    </span>
+                  </div>
+                  <Badge tone={paused ? "danger" : "success"} dot>
+                    {paused ? "Зогссон" : "Идэвхтэй"}
+                  </Badge>
+                </div>
+                <div className="mt-2 flex gap-2">
+                  <Button
+                    variant="danger"
+                    block
+                    disabled={
+                      busyKey === `page_pause:${page.page_id}` || paused
+                    }
+                    onClick={() =>
+                      onPauseAction("page_pause", undefined, undefined, page.page_id)
+                    }
+                  >
+                    <Icons.pause size={16} />
+                    Зогсоох
+                  </Button>
+                  <Button
+                    variant="success"
+                    block
+                    disabled={
+                      busyKey === `page_resume:${page.page_id}` || !paused
+                    }
+                    onClick={() =>
+                      onPauseAction("page_resume", undefined, undefined, page.page_id)
+                    }
+                  >
+                    <Icons.play size={16} />
+                    Сэргээх
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </Card>
 

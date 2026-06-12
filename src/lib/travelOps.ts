@@ -47,6 +47,10 @@ export type BotControl = {
   updated_at: string;
 };
 
+export type PageControl = BotControl & {
+  page_id: string;
+};
+
 export type TravelBotSettings = {
   business_name: string;
   system_prompt: string;
@@ -162,6 +166,8 @@ let schemaPromise: Promise<boolean> | null = null;
 let botControlCache:
   | { value: BotControl; expiresAt: number }
   | null = null;
+// Per-page pause control, cached 5s like the legacy single-row control.
+const pageControlCache = new Map<string, { value: BotControl; expiresAt: number }>();
 let botSettingsCache:
   | { value: TravelBotSettings; expiresAt: number }
   | null = null;
@@ -306,6 +312,46 @@ export async function ensureTravelSchema() {
         VALUES (TRUE, FALSE, NULL)
         ON CONFLICT (id) DO NOTHING;
       `);
+      // Per-page pause control. One row per Facebook page so the client can pause
+      // one page (e.g. the main agency page) without silencing another (the AI page).
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_page_control (
+          page_id TEXT PRIMARY KEY,
+          bot_paused BOOLEAN NOT NULL DEFAULT FALSE,
+          pause_reason TEXT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+      // Seed a row for every configured page (idempotent).
+      for (const page of env.facebookPages) {
+        await client.query(
+          `
+            INSERT INTO travel_page_control (page_id, bot_paused, pause_reason)
+            VALUES ($1, FALSE, NULL)
+            ON CONFLICT (page_id) DO NOTHING;
+          `,
+          [page.pageId],
+        );
+      }
+      // One-time backfill: the primary page inherits any active pause from the
+      // legacy single-row control so an existing pause isn't silently lost.
+      const primaryPageId = env.facebookPages[0]?.pageId;
+      if (primaryPageId) {
+        await client.query(
+          `
+            UPDATE travel_page_control AS pc
+            SET bot_paused = bc.bot_paused,
+                pause_reason = bc.pause_reason,
+                updated_at = NOW()
+            FROM travel_bot_control AS bc
+            WHERE pc.page_id = $1
+              AND bc.id = TRUE
+              AND bc.bot_paused = TRUE
+              AND pc.bot_paused = FALSE;
+          `,
+          [primaryPageId],
+        );
+      }
       await client.query(`
         CREATE TABLE IF NOT EXISTS travel_ai_change_requests (
           id BIGSERIAL PRIMARY KEY,
@@ -911,6 +957,79 @@ export async function setBotPaused(paused: boolean, reason?: string | null) {
 export async function isBotGloballyPaused() {
   const control = await getBotControl();
   return control.bot_paused;
+}
+
+// ---------------------------------------------------------------------------
+// Per-page pause control (travel_page_control). One deployment serves several
+// Facebook pages; each page is paused/resumed independently from the admin UI.
+// ---------------------------------------------------------------------------
+
+const UNPAUSED_PAGE_DEFAULT = (): BotControl => ({
+  bot_paused: false,
+  pause_reason: null,
+  updated_at: new Date().toISOString(),
+});
+
+export async function getPageControl(pageId: string): Promise<BotControl> {
+  const cached = pageControlCache.get(pageId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value;
+  }
+  const ready = await ensureTravelSchema();
+  if (!ready) return UNPAUSED_PAGE_DEFAULT();
+
+  const result = await queryNeon<Record<string, unknown>>(
+    `SELECT bot_paused, pause_reason, updated_at FROM travel_page_control WHERE page_id = $1 LIMIT 1`,
+    [pageId],
+  );
+  const row = result?.rows?.[0];
+  const value: BotControl = {
+    bot_paused: Boolean(row?.bot_paused),
+    pause_reason: row?.pause_reason ? String(row.pause_reason) : null,
+    updated_at: String(row?.updated_at || new Date().toISOString()),
+  };
+  pageControlCache.set(pageId, { value, expiresAt: Date.now() + 5_000 });
+  return value;
+}
+
+export async function setPagePaused(
+  pageId: string,
+  paused: boolean,
+  reason?: string | null,
+) {
+  const ready = await ensureTravelSchema();
+  if (!ready) return false;
+  const result = await queryNeon(
+    `
+      INSERT INTO travel_page_control (page_id, bot_paused, pause_reason, updated_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (page_id)
+      DO UPDATE SET
+        bot_paused = EXCLUDED.bot_paused,
+        pause_reason = EXCLUDED.pause_reason,
+        updated_at = NOW()
+    `,
+    [pageId, paused, reason || null],
+  );
+  pageControlCache.delete(pageId);
+  return Boolean(result);
+}
+
+export async function isPagePaused(pageId: string): Promise<boolean> {
+  const control = await getPageControl(pageId);
+  return control.bot_paused;
+}
+
+/** Returns one control row per configured page, in roster order. */
+export async function listPageControls(): Promise<PageControl[]> {
+  const roster = env.facebookPages;
+  const controls = await Promise.all(
+    roster.map(async (page) => {
+      const control = await getPageControl(page.pageId);
+      return { page_id: page.pageId, ...control };
+    }),
+  );
+  return controls;
 }
 
 export async function upsertTrip(input: {
