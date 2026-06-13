@@ -133,15 +133,23 @@ async function run() {
   }
 }
 
-run().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(
-    JSON.stringify({
-      ts: new Date().toISOString(),
-      level: "error",
-      event: "preflight.failed",
-      message,
-    }),
-  );
-  process.exit(1);
-});
+run()
+  .then(() => {
+    // The Redis probe opens a live ioredis socket that keeps the Node event
+    // loop alive, so the process would otherwise hang here forever and stall
+    // the Vercel build until it times out. Preflight has done its job by now —
+    // exit explicitly so no dangling handle (Redis, etc.) can block the build.
+    process.exit(0);
+  })
+  .catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "error",
+        event: "preflight.failed",
+        message,
+      }),
+    );
+    process.exit(1);
+  });
