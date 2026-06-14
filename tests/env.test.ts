@@ -18,6 +18,7 @@ test("env validation accepts valid configuration", async () => {
   assert.equal(env.adminOpenAccess, false);
   assert.equal(env.googleDriveSyncEnabled, false);
   assert.equal(env.googleDriveSyncIntervalMinutes, 30);
+  assert.equal(env.googleDriveSyncFileLimit, 500);
 });
 
 test("env builds a single-page roster from legacy TOKEN_PAGE + FACEBOOK_PAGE_ID", async () => {

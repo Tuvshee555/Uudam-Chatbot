@@ -797,11 +797,11 @@ async function runDriveFolderSyncInternal(input: {
 
         try {
           const buffer = await downloadDriveFile(accessToken, spec);
-          const parsed = await parseUpload({
-            filename: spec.filename,
-            mimeType: spec.mimeType,
-            dataBase64: buffer.toString("base64"),
-          });
+          const uploads = await buildDriveParseUploads(spec, buffer);
+          const parsedUploads: ParsedUpload[] = [];
+          for (const upload of uploads) {
+            parsedUploads.push(await parseUpload(upload));
+          }
           const note = [
             "Automatic sync from Google Drive folder.",
             `File: ${file.name}`,
@@ -810,13 +810,11 @@ async function runDriveFolderSyncInternal(input: {
           ].join(" ");
           const proposalResult = await generateAIProposalFromContentBatched({
             note,
-            sources: [
-              {
+            sources: parsedUploads.map((parsed) => ({
                 label: parsed.label,
                 contentText: parsed.text || undefined,
                 inline: parsed.inline,
-              },
-            ],
+              })),
           });
 
           const requestId = proposalResult.request_id;

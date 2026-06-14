@@ -282,14 +282,10 @@ const ADMIN_AUTO_REFRESH_MS =
   process.env.NODE_ENV === "development" ? 0 : 45_000;
 const MAX_PARSE_UPLOAD_BYTES = 850_000;
 const MAX_TEXT_PARSE_CHARS = 60_000;
-const MAX_ATTACHED_FILES = 5;
-const MAX_CLIENT_FILE_BYTES = 5 * 1024 * 1024;
-const MAX_CLIENT_TOTAL_FILE_BYTES = 20 * 1024 * 1024;
 // Allow very large pasted price lists. Oversized pastes are auto-split into
 // safe AI-sized batches server-side, so the admin can paste a whole list (or
 // several) at once without it ever being truncated or rejected.
 const MAX_AI_INPUT_CHARS = 500_000;
-const MAX_DRIVE_LINKS = 5;
 // Accept everything in the picker so nothing looks greyed-out. Unsupported
 // types still get a clear message after selection rather than being silently
 // unselectable.
@@ -486,16 +482,16 @@ function apiErrorMessage(
     return `Нэг удаагийн файл илгээх хэмжээ хэтэрлээ. Файлаа жижиглээд дахин оруулна уу.`;
   }
   if (code === "upload_file_too_large") {
-    return `Нэг файл ${formatBytes(Number(data?.max_file_bytes) || MAX_CLIENT_FILE_BYTES)}-аас том байна. Файлаа жижиглээд дахин оруулна уу.`;
+    return `Нэг файлын боловсруулсан хэсэг ${formatBytes(Number(data?.max_file_bytes) || 0)}-аас том байна. Систем тухайн хэсгийг уншиж чадсангүй.`;
   }
   if (code === "upload_total_too_large") {
-    return `Нэг удаагийн нийт файлын хэмжээ ${formatBytes(Number(data?.max_total_bytes) || MAX_CLIENT_TOTAL_FILE_BYTES)}-аас хэтэрлээ. Файлуудаа хэсэг хэсгээр нь оруулна уу.`;
+    return `Нэг боловсруулалтын нийт хэмжээ ${formatBytes(Number(data?.max_total_bytes) || 0)}-аас хэтэрлээ.`;
   }
   if (code === "too_many_uploads") {
-    return `Нэг удаад ${data?.max_uploads || MAX_ATTACHED_FILES}-аас олон файл илгээхгүй. Файлуудаа хэсэг хэсгээр нь оруулна уу.`;
+    return `Нэг боловсруулалтад хэт олон хэсэг орлоо (${data?.max_uploads || 0}).`;
   }
   if (code === "too_many_drive_files") {
-    return `Нэг удаад ${data?.max_drive_files || MAX_DRIVE_LINKS}-аас олон Drive файл уншихгүй. Хэсэглээд дахин оруулна уу.`;
+    return `Нэг боловсруулалтад хэт олон онлайн файл орлоо (${data?.max_drive_files || 0}).`;
   }
   if (/too large|request limit/i.test(raw)) {
     return "Файл эсвэл хүсэлт хэт том байна. Файлаа жижиглээд эсвэл цөөн файл сонгоод дахин оролдоно уу.";
@@ -2303,10 +2299,11 @@ export default function AdminPage() {
   } {
     return {
       proposal: {
-        summary: `"${displayName}" хэсгийг алгассан.`,
-        needs_confirmation: false,
-        important_reason: "",
-        conflicts: [],
+        summary: `"${displayName}" хэсгийг бүрэн уншиж чадсангүй.`,
+        needs_confirmation: true,
+        important_reason:
+          "Энэ хэсгийн мэдээлэл хадгалагдаагүй. Бусад уншигдсан файлын үр дүнг үргэлжлүүлэн бэлдлээ.",
+        conflicts: [`"${displayName}" хэсгийг дахин шалгах шаардлагатай.`],
         actions: [],
       },
       requestId: null,
@@ -3799,7 +3796,7 @@ function AssistantTab({
       </Card>
 
       <p className="px-1 text-xs text-ink-subtle">
-        Хүссэн тооны файл, ямар ч хэмжээтэйгээр оруулж болно. Том файлыг систем автоматаар хэсэглэн уншина. Google Drive линк ч хүссэн тоогоор уншуулж болно.
+        Олон файл нэг дор оруулж болно. Том файлуудыг систем автоматаар хэсэглэн, дарааллаар нь уншина.
       </p>
 
     </div>
@@ -4762,43 +4759,40 @@ function SettingsTab({
 
   return (
     <div className="space-y-3">
+      {driveSync?.configured && (
       <Card className="p-4">
         <SectionHeading
-          title="Google Drive Sync"
-          description="Drive folder-оос өөрчлөгдсөн файлуудыг автоматаар уншиж, аюулгүй бол шууд хадгална."
+          title="Файлын автомат шинэчлэл"
+          description="Холбосон хавтасны шинэ болон өөрчлөгдсөн файлуудыг автоматаар уншина."
           action={
             <Button size="sm" loading={syncBusy} onClick={onSyncDriveNow}>
               <Icons.refresh size={15} />
-              Sync now
+              Одоо шинэчлэх
             </Button>
           }
         />
         <div className="mt-3 space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={driveSync?.enabled ? "success" : "neutral"} dot>
-              {driveSync?.enabled ? "Идэвхтэй" : "Унтраалттай"}
+              {driveSync?.enabled ? "Автомат" : "Гараар"}
             </Badge>
             <Badge tone={driveSyncTone(driveSync?.state.status)}>
-              {driveSync?.state.status || "idle"}
+              {driveSync?.state.status === "running"
+                ? "Уншиж байна"
+                : driveSync?.state.status === "success"
+                  ? "Амжилттай"
+                  : driveSync?.state.status === "warning"
+                    ? "Шалгах зүйлтэй"
+                    : driveSync?.state.status === "error"
+                      ? "Алдаа гарсан"
+                      : "Бэлэн"}
             </Badge>
             <span className="text-xs text-ink-subtle">
               Давтамж: {driveSync?.interval_minutes ?? 30} мин
             </span>
-            <span className="text-xs text-ink-subtle">
-              Дээд файл: {driveSync?.file_limit ?? 0}
-            </span>
           </div>
 
-          {!driveSync?.configured ? (
-            <Alert tone="warning">
-              GOOGLE_DRIVE_SYNC_ENABLED-ийг асаахаас гадна folder ID, service account
-              email, private key-гээ env-д тохируулна. Дараа нь тухайн Drive folder-оо
-              service account хаягтай share хийнэ.
-            </Alert>
-          ) : (
             <div className="rounded-lg border border-line bg-surface-sunken p-3 text-sm text-ink-muted">
-              <p>Folder ID: {driveSync.folder_id || "—"}</p>
-              <p>Service account: {driveSync.service_account_email || "—"}</p>
               <p>Сүүлд шалгасан: {formatTime(driveSync.state.last_checked_at)}</p>
               <p>Сүүлд дууссан: {formatTime(driveSync.state.last_synced_at)}</p>
               <p>
@@ -4818,7 +4812,6 @@ function SettingsTab({
                 </p>
               )}
             </div>
-          )}
 
           {driveSync?.recent_files?.length ? (
             <div className="space-y-2">
@@ -4832,12 +4825,21 @@ function SettingsTab({
                       {file.file_name || file.file_id}
                     </p>
                     <Badge tone={driveSyncTone(file.last_status as DriveSyncDiagnostics["state"]["status"])}>
-                      {file.last_status}
+                      {file.last_status === "applied"
+                        ? "Хадгалсан"
+                        : file.last_status === "unchanged"
+                          ? "Өөрчлөлтгүй"
+                          : file.last_status === "no_changes"
+                            ? "Шинэ мэдээлэлгүй"
+                            : file.last_status === "review_required"
+                              ? "Шалгах"
+                              : file.last_status === "error"
+                                ? "Алдаа"
+                                : "Алгассан"}
                     </Badge>
                   </div>
                   <p className="mt-1 text-xs text-ink-subtle">
                     {formatTime(file.updated_at)}
-                    {file.request_id ? ` · Request #${file.request_id}` : ""}
                   </p>
                   {file.last_error && (
                     <p className="mt-1 whitespace-pre-wrap text-xs text-danger">
@@ -4850,6 +4852,7 @@ function SettingsTab({
           ) : null}
         </div>
       </Card>
+      )}
 
       <Card className="p-4">
         <SectionHeading

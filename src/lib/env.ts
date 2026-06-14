@@ -577,9 +577,9 @@ export function getEnv(): ValidatedEnv {
   const googleDriveSyncFileLimit = readPositiveInt(
     "GOOGLE_DRIVE_SYNC_FILE_LIMIT",
     source,
-    50,
-    1,
     500,
+    1,
+    5_000,
     errors,
   );
 

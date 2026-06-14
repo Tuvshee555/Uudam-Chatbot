@@ -138,3 +138,15 @@ test("parseUpload rejects oversized decoded uploads before parsing", async () =>
     /too large/i,
   );
 });
+
+test("parseUpload accepts larger server-side Drive text files", async () => {
+  const text = "trip data\n".repeat(700_000);
+  const parsed = await parseUpload({
+    filename: "large-drive-export.txt",
+    mimeType: "text/plain",
+    dataBase64: Buffer.from(text).toString("base64"),
+  });
+
+  assert.equal(parsed.inline, null);
+  assert.equal(parsed.text.length, text.trim().length);
+});

@@ -6,6 +6,10 @@ import {
 } from "../../../lib/googleDriveSync";
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
 
+export const config = {
+  maxDuration: 300,
+};
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const trace = beginRequestTrace({
     route: "api.admin.drive_sync",

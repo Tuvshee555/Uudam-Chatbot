@@ -25,8 +25,11 @@ type UploadInput = {
   dataBase64: string;
 };
 
-export const MAX_PARSE_UPLOAD_DECODED_BYTES = 5 * 1024 * 1024;
-export const MAX_PARSE_UPLOAD_TOTAL_DECODED_BYTES = 20 * 1024 * 1024;
+// Browser uploads are split into sub-megabyte requests before they reach this
+// parser. The larger ceiling is for server-side Drive downloads, where there is
+// no request-body limit and larger workbooks/documents can be parsed directly.
+export const MAX_PARSE_UPLOAD_DECODED_BYTES = 25 * 1024 * 1024;
+export const MAX_PARSE_UPLOAD_TOTAL_DECODED_BYTES = 100 * 1024 * 1024;
 
 function extensionOf(filename: string): string {
   const match = /\.([a-z0-9]+)$/i.exec(filename.trim());

@@ -35,9 +35,40 @@ function createResponse() {
 
 async function prepareEnvironment() {
   applyTestEnv({
-    DATABASE_URL: "postgres://user:pass@example.com/db",
+    DATABASE_URL: undefined,
     NEON_DATABASE_URL: undefined,
   });
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    summary: "No changes",
+                    needs_confirmation: false,
+                    important_reason: "",
+                    conflicts: [],
+                    actions: [],
+                  }),
+                },
+              ],
+            },
+          },
+        ],
+        usageMetadata: {
+          promptTokenCount: 1,
+          candidatesTokenCount: 1,
+          totalTokenCount: 2,
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
   const envModule = await import("../src/lib/env");
   envModule.resetEnvCacheForTests();
   const rateLimitModule = await import("../src/lib/rateLimit");
