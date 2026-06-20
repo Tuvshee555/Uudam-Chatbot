@@ -142,7 +142,7 @@ export async function readFAQ(): Promise<FAQData> {
   };
 }
 
-export async function readBusinessData(): Promise<BusinessDataFile> {
+export async function readBusinessData(): Promise<BusinessDataFile & { pinnedButtonLabels: string[] }> {
   const [knowledge, settings] = await Promise.all([
     readKnowledgeData(),
     getTravelBotSettings(),
@@ -155,6 +155,7 @@ export async function readBusinessData(): Promise<BusinessDataFile> {
       knowledgeBase: formatKnowledgeBase(knowledge),
     },
     knowledge,
+    pinnedButtonLabels: (settings.chat_buttons || []).map((b) => b.label).filter(Boolean),
   };
 }
 

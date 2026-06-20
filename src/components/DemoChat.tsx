@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Badge, Button, Icons, cx } from "@/components/ui";
 
+type PinnedButton = { label: string; message: string };
+
 type ChatMessage = {
   from: "user" | "bot";
   text: string;
-  buttons?: string[];
+  aiButtons?: string[];
 };
 
 type DemoChatProps = {
@@ -13,14 +15,7 @@ type DemoChatProps = {
   description?: string;
   showHeader?: boolean;
   placeholder?: string;
-  suggestions?: string[];
 };
-
-const DEFAULT_SUGGESTIONS = [
-  "Хөх хотын аяллын үнэ хэд вэ?",
-  "Ирэх сард ямар аяллууд гарах вэ?",
-  "2 том хүн, 2 хүүхдийн аялалд хөнгөлөлт бий юу?",
-];
 
 const DEMO_CONVERSATION_KEY = "uudam_demo_conversation_id";
 
@@ -28,12 +23,10 @@ function getConversationId(): string {
   if (typeof window === "undefined") return "";
   const existing = window.sessionStorage.getItem(DEMO_CONVERSATION_KEY);
   if (existing) return existing;
-
   const nextId =
     typeof window.crypto?.randomUUID === "function"
       ? window.crypto.randomUUID().replace(/-/g, "")
       : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 18)}`;
-
   window.sessionStorage.setItem(DEMO_CONVERSATION_KEY, nextId);
   return nextId;
 }
@@ -41,11 +34,11 @@ function getConversationId(): string {
 function TypingDots() {
   return (
     <div className="flex items-center gap-1 px-1 py-1">
-      {[0, 1, 2].map((index) => (
+      {[0, 1, 2].map((i) => (
         <span
-          key={index}
+          key={i}
           className="h-2 w-2 animate-bounce rounded-full bg-ink-subtle"
-          style={{ animationDelay: `${index * 0.12}s` }}
+          style={{ animationDelay: `${i * 0.12}s` }}
         />
       ))}
     </div>
@@ -58,16 +51,33 @@ export default function DemoChat({
   description = "Хэрэглэгчийн асуултаар туршаад ботын бодит хариуг шууд шалгана.",
   showHeader = true,
   placeholder = "Маршрут, үнэ, гарах өдөр, хоол, суудлын талаар асуугаарай...",
-  suggestions = DEFAULT_SUGGESTIONS,
 }: DemoChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [conversationId, setConversationId] = useState("");
+  const [pinnedButtons, setPinnedButtons] = useState<PinnedButton[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setConversationId(getConversationId());
+    fetch("/api/demo")
+      .then((r) => r.json())
+      .then((json) => {
+        if (Array.isArray(json?.pinned_buttons)) {
+          setPinnedButtons(
+            (json.pinned_buttons as unknown[]).filter(
+              (b): b is PinnedButton =>
+                b !== null &&
+                typeof b === "object" &&
+                typeof (b as PinnedButton).label === "string" &&
+                typeof (b as PinnedButton).message === "string" &&
+                (b as PinnedButton).label.trim().length > 0,
+            ),
+          );
+        }
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -92,25 +102,26 @@ export default function DemoChat({
         typeof json?.reply === "string" && json.reply.trim()
           ? json.reply
           : "Хариу боловсруулах үед алдаа гарлаа.";
-      const replyButtons: string[] = Array.isArray(json?.buttons)
-        ? (json.buttons as unknown[]).filter((b): b is string => typeof b === "string")
+      const aiButtons: string[] = Array.isArray(json?.buttons)
+        ? (json.buttons as unknown[]).filter(
+            (b): b is string => typeof b === "string",
+          )
         : [];
       setMessages((prev) => [
         ...prev,
-        { from: "bot", text: replyText, buttons: replyButtons },
+        { from: "bot", text: replyText, aiButtons },
       ]);
     } catch {
       setMessages((prev) => [
         ...prev,
-        {
-          from: "bot",
-          text: "Уучлаарай, сервертэй холбогдоход алдаа гарлаа.",
-        },
+        { from: "bot", text: "Уучлаарай, сервертэй холбогдоход алдаа гарлаа." },
       ]);
     } finally {
       setSending(false);
     }
   }
+
+  const hasPinned = pinnedButtons.length > 0;
 
   return (
     <div className={cx("space-y-4", className)}>
@@ -124,40 +135,53 @@ export default function DemoChat({
         </div>
       )}
 
-      {suggestions.length > 0 && (
-        <div className="scroll-area flex gap-2 overflow-x-auto pb-1">
-          {suggestions.map((suggestion) => (
-            <button
-              key={suggestion}
-              type="button"
-              disabled={sending || !conversationId}
-              onClick={() => void send(suggestion)}
-              className="shrink-0 rounded-full border border-line-strong bg-surface px-3 py-1.5 text-xs font-medium text-ink-muted transition-colors hover:border-brand hover:text-brand"
-            >
-              {suggestion}
-            </button>
-          ))}
-        </div>
-      )}
-
       <div className="overflow-hidden rounded-[20px] border border-line bg-surface shadow-sm">
+        {/* Bot header */}
         <div className="border-b border-line bg-linear-to-r from-brand-soft via-surface to-surface px-4 py-3">
           <div className="flex items-start gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-brand text-white">
               <Icons.ai size={18} />
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-ink">Хэрэглэгчид очих хариулт</p>
+              <p className="text-sm font-semibold text-ink">Уудам Трэвел AI</p>
               <p className="mt-0.5 text-xs text-ink-muted">
-                Энэ нь нийтийн туршилтын чатын яг ижил API-г ашиглаж байна.
+                Аялалын асуултад шууд хариулна
               </p>
             </div>
+            <span className="ml-auto flex items-center gap-1 rounded-full bg-success-soft px-2.5 py-1 text-xs font-semibold text-success">
+              <span className="h-1.5 w-1.5 rounded-full bg-success" />
+              Онлайн
+            </span>
           </div>
         </div>
 
+        {/* Pinned quick-action buttons — always visible */}
+        {hasPinned && (
+          <div className="border-b border-line bg-surface-sunken px-4 py-3">
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-subtle">
+              Түгээмэл асуултууд
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {pinnedButtons.map((btn) => (
+                <button
+                  key={btn.label}
+                  type="button"
+                  disabled={sending || !conversationId}
+                  onClick={() => void send(btn.message)}
+                  className="rounded-full border border-brand/30 bg-brand-soft px-3 py-1.5 text-xs font-semibold text-brand transition-all hover:border-brand hover:bg-brand hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {btn.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Message area */}
         <div
           aria-live="polite"
-          className="scroll-area h-[28rem] overflow-y-auto bg-canvas/55 px-4 py-4"
+          className="scroll-area overflow-y-auto bg-canvas/55 px-4 py-4"
+          style={{ height: hasPinned ? "22rem" : "26rem" }}
         >
           {messages.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 rounded-[18px] border border-dashed border-line-strong bg-surface px-6 text-center">
@@ -165,7 +189,11 @@ export default function DemoChat({
                 <Icons.ai size={20} />
               </div>
               <div className="space-y-1">
-                <p className="text-sm font-semibold text-ink">Одоогоор мессеж алга</p>
+                <p className="text-sm font-semibold text-ink">
+                  {hasPinned
+                    ? "Дээрх товч дарж эхлэх эсвэл өөрийн асуултаа бичнэ үү"
+                    : "Одоогоор мессеж алга"}
+                </p>
                 <p className="max-w-md text-sm text-ink-muted">
                   Үнэ, суудал, гарах өдөр, хоол эсвэл маршруттай холбоотой
                   бодит асуултаар туршаарай.
@@ -174,35 +202,36 @@ export default function DemoChat({
             </div>
           ) : (
             <div className="space-y-3">
-              {messages.map((message, index) => (
+              {messages.map((msg, idx) => (
                 <div
-                  key={`${message.from}-${index}`}
+                  key={`${msg.from}-${idx}`}
                   className={cx(
                     "flex flex-col",
-                    message.from === "user" ? "items-end" : "items-start",
+                    msg.from === "user" ? "items-end" : "items-start",
                   )}
                 >
                   <div
                     className={cx(
                       "max-w-[88%] rounded-[20px] px-4 py-3 text-sm leading-relaxed shadow-sm",
-                      message.from === "user"
+                      msg.from === "user"
                         ? "rounded-br-md bg-brand text-white"
                         : "rounded-bl-md border border-line bg-surface text-ink",
                     )}
                   >
-                    {message.text}
+                    {msg.text}
                   </div>
-                  {message.from === "bot" &&
-                    message.buttons &&
-                    message.buttons.length > 0 && (
-                      <div className="mt-2 flex max-w-[88%] flex-wrap gap-2">
-                        {message.buttons.map((label) => (
+                  {/* AI-generated contextual follow-up buttons */}
+                  {msg.from === "bot" &&
+                    msg.aiButtons &&
+                    msg.aiButtons.length > 0 && (
+                      <div className="mt-2 flex max-w-[88%] flex-wrap gap-1.5">
+                        {msg.aiButtons.map((label) => (
                           <button
                             key={label}
                             type="button"
                             disabled={sending || !conversationId}
                             onClick={() => void send(label)}
-                            className="rounded-full border border-brand/40 bg-brand-soft px-3 py-1.5 text-xs font-medium text-brand transition-colors hover:border-brand hover:bg-brand hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                            className="rounded-full border border-line-strong bg-surface px-3 py-1.5 text-xs font-medium text-ink-muted transition-colors hover:border-brand hover:text-brand disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             {label}
                           </button>
@@ -223,41 +252,43 @@ export default function DemoChat({
           <div ref={bottomRef} />
         </div>
 
-        <div className="border-t border-line bg-surface px-4 py-4">
-          <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-ink" htmlFor="demo-chat-input">
-                Туршилтын асуулт
-              </label>
-              <textarea
-                id="demo-chat-input"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                className="min-h-24 w-full resize-y rounded-xl border border-line-strong bg-surface px-3 py-2 text-sm leading-relaxed text-ink transition-colors placeholder:text-ink-subtle focus:border-brand disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:opacity-70"
-                placeholder={placeholder}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    void send();
-                  }
-                }}
-                disabled={sending || !conversationId}
-              />
-              <p className="text-xs text-ink-subtle">
-                `Enter` дарж илгээнэ. Шинэ мөр авах бол `Shift+Enter` ашиглана.
-              </p>
-            </div>
+        {/* Input area */}
+        <div className="border-t border-line bg-surface px-4 py-3">
+          <div className="flex items-end gap-2">
+            <textarea
+              id="demo-chat-input"
+              value={input}
+              rows={1}
+              onChange={(e) => {
+                setInput(e.target.value);
+                e.target.style.height = "auto";
+                e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+              }}
+              className="flex-1 resize-none rounded-2xl border border-line-strong bg-surface-sunken px-4 py-3 text-sm leading-relaxed text-ink transition-colors placeholder:text-ink-subtle focus:border-brand focus:outline-none disabled:cursor-not-allowed disabled:opacity-70"
+              placeholder={placeholder}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+              disabled={sending || !conversationId}
+              style={{ minHeight: "44px" }}
+            />
             <Button
-              size="lg"
+              size="md"
               loading={sending}
               disabled={sending || !input.trim() || !conversationId}
               onClick={() => void send()}
-              className="md:min-w-36"
+              className="shrink-0 rounded-2xl"
             >
-              <Icons.play size={16} />
+              <Icons.play size={15} />
               Илгээх
             </Button>
           </div>
+          <p className="mt-1.5 text-center text-xs text-ink-subtle">
+            Enter — илгээх · Shift+Enter — шинэ мөр
+          </p>
         </div>
       </div>
     </div>

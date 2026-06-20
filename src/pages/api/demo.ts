@@ -11,6 +11,7 @@ import { appendMessage, buildPrompt, getHistory } from "../../lib/conversation";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { enforceWebsiteForPayment, extractButtons, sanitizeAssistantReply } from "../../lib/reply";
+import { getTravelBotSettings } from "../../lib/travelOps";
 import { getEnv } from "../../lib/env";
 import {
   beginRequestTrace,
@@ -47,6 +48,11 @@ export default async function handler(
   });
 
   try {
+    if (req.method === "GET") {
+      const settings = await getTravelBotSettings();
+      return res.status(200).json({ pinned_buttons: settings.chat_buttons });
+    }
+
     if (req.method !== "POST") {
       return res.status(405).end();
     }
@@ -115,7 +121,7 @@ export default async function handler(
 
     try {
       void maybeAutoSyncDriveFolder({ source: "api.demo" });
-      const { systemPrompt, business } = await readBusinessData();
+      const { systemPrompt, business, pinnedButtonLabels } = await readBusinessData();
       const sessionId = `demo:${normalizedConversationId}`;
       const history = await getHistory(sessionId);
 
@@ -124,6 +130,7 @@ export default async function handler(
         business: business || {},
         history,
         userText: normalizedText,
+        pinnedButtonLabels,
       });
       const result = await askGemini(prompt, {
         requestId: trace.requestId,

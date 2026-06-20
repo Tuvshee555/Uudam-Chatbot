@@ -51,6 +51,11 @@ export type PageControl = BotControl & {
   page_id: string;
 };
 
+export type ChatButton = {
+  label: string;
+  message: string;
+};
+
 export type TravelBotSettings = {
   business_name: string;
   system_prompt: string;
@@ -67,6 +72,7 @@ export type TravelBotSettings = {
   handoff_keywords: string[];
   handoff_reply: string;
   handoff_pause_minutes: number;
+  chat_buttons: ChatButton[];
   updated_at: string;
 };
 
@@ -394,6 +400,11 @@ export async function ensureTravelSchema() {
           ADD COLUMN IF NOT EXISTS handoff_reply TEXT NOT NULL DEFAULT '',
           ADD COLUMN IF NOT EXISTS handoff_pause_minutes INTEGER NOT NULL DEFAULT 60;
       `);
+      // Quick-reply chat buttons — admin-managed pinned menu buttons.
+      await client.query(`
+        ALTER TABLE travel_bot_settings
+          ADD COLUMN IF NOT EXISTS chat_buttons JSONB NOT NULL DEFAULT '[]'::jsonb;
+      `);
       await client.query(`
         INSERT INTO travel_bot_settings (id)
         VALUES (TRUE)
@@ -582,6 +593,21 @@ function normalizeVerifiedCredentials(value: unknown): VerifiedCredential[] {
     });
 }
 
+function normalizeChatButtons(value: unknown): ChatButton[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry) => entry && typeof entry === "object")
+    .slice(0, 20)
+    .map((entry) => {
+      const item = entry as Record<string, unknown>;
+      return {
+        label: normalizeStoredText(item.label).slice(0, 60),
+        message: normalizeStoredText(item.message).slice(0, 200),
+      };
+    })
+    .filter((b) => b.label && b.message);
+}
+
 function normalizeFaq(value: unknown): FAQItem[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -620,6 +646,7 @@ function emptyTravelBotSettings(): TravelBotSettings {
     handoff_keywords: [],
     handoff_reply: "",
     handoff_pause_minutes: 60,
+    chat_buttons: [],
     updated_at: new Date().toISOString(),
   };
 }
@@ -642,6 +669,7 @@ function mapBotSettingsRow(row: Record<string, unknown> | undefined): TravelBotS
     handoff_keywords: normalizeStoredTextArray(row.handoff_keywords),
     handoff_reply: normalizeStoredText(row.handoff_reply),
     handoff_pause_minutes: normalizePauseMinutes(row.handoff_pause_minutes),
+    chat_buttons: normalizeChatButtons(row.chat_buttons),
     updated_at: String(row.updated_at || new Date().toISOString()),
   };
 }
@@ -672,6 +700,7 @@ export async function getTravelBotSettings(): Promise<TravelBotSettings> {
         handoff_keywords,
         handoff_reply,
         handoff_pause_minutes,
+        chat_buttons,
         updated_at
       FROM travel_bot_settings
       WHERE id = TRUE
@@ -753,6 +782,9 @@ export async function updateTravelBotSettings(
   }
   if (typeof fields.handoff_pause_minutes !== "undefined") {
     push("handoff_pause_minutes", normalizePauseMinutes(fields.handoff_pause_minutes));
+  }
+  if (typeof fields.chat_buttons !== "undefined") {
+    push("chat_buttons", JSON.stringify(normalizeChatButtons(fields.chat_buttons)), "::jsonb");
   }
 
   if (!sets.length) {

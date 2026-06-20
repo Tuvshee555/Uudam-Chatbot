@@ -84,7 +84,13 @@ type TravelBotSettings = {
   handoff_keywords: string[];
   handoff_reply: string;
   handoff_pause_minutes: number;
+  chat_buttons: ChatButton[];
   updated_at: string;
+};
+
+type ChatButton = {
+  label: string;
+  message: string;
 };
 
 type StructuredRow = Record<string, string>;
@@ -105,6 +111,7 @@ type SettingsForm = {
   handoff_keywords: string;
   handoff_reply: string;
   handoff_pause_minutes: string;
+  chat_buttons: ChatButton[];
 };
 
 type AIAction = {
@@ -1040,6 +1047,7 @@ function settingsToForm(settings: TravelBotSettings): SettingsForm {
     handoff_keywords: (settings.handoff_keywords || []).join("\n"),
     handoff_reply: settings.handoff_reply || "",
     handoff_pause_minutes: String(settings.handoff_pause_minutes ?? 60),
+    chat_buttons: Array.isArray(settings.chat_buttons) ? settings.chat_buttons : [],
   };
 }
 
@@ -3049,6 +3057,7 @@ export default function AdminPage() {
         handoff_keywords: splitLines(settingsForm.handoff_keywords),
         handoff_reply: settingsForm.handoff_reply.trim(),
         handoff_pause_minutes: asInt(settingsForm.handoff_pause_minutes) ?? 60,
+        chat_buttons: settingsForm.chat_buttons,
       };
       const res = await fetchWithAdmin("/api/admin/settings", {
         method: "PATCH",
@@ -4927,6 +4936,90 @@ function SettingsTab({
             value={form.comment_dm_reply}
             onChange={(e) => patch({ comment_dm_reply: e.target.value })}
           />
+        </div>
+      </Card>
+
+      <Card className="p-4">
+        <SectionHeading
+          title="Чатын товчлуурууд"
+          description="Хэрэглэгч нэг дараад асуулт илгээдэг товч. Та хүссэн үедээ нэмэх, устгах, өөрчлөх боломжтой."
+          action={
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() =>
+                patch({
+                  chat_buttons: [
+                    ...form.chat_buttons,
+                    { label: "", message: "" },
+                  ],
+                })
+              }
+            >
+              <Icons.plus size={15} />
+              Товч нэмэх
+            </Button>
+          }
+        />
+        <div className="mt-3 space-y-2">
+          {form.chat_buttons.length === 0 && (
+            <div className="rounded-lg border border-dashed border-line-strong bg-surface-sunken px-4 py-5 text-center">
+              <p className="text-sm font-medium text-ink-muted">Товч байхгүй байна</p>
+              <p className="mt-1 text-xs text-ink-subtle">
+                «Товч нэмэх» дарж эхлээрэй. Хэрэглэгч товч дарахад тухайн мессеж ботод илгээгдэнэ.
+              </p>
+            </div>
+          )}
+          {form.chat_buttons.map((btn, idx) => (
+            <div
+              key={idx}
+              className="flex items-start gap-2 rounded-lg border border-line bg-surface p-3"
+            >
+              <div className="flex-1 space-y-2">
+                <input
+                  className="h-9 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-ink focus:border-brand focus:outline-none"
+                  placeholder="Товчны нэр (хэрэглэгчид харагдана) — ж: Үнэ хэд вэ?"
+                  value={btn.label}
+                  maxLength={60}
+                  onChange={(e) => {
+                    const updated = form.chat_buttons.map((b, i) =>
+                      i === idx ? { ...b, label: e.target.value } : b,
+                    );
+                    patch({ chat_buttons: updated });
+                  }}
+                />
+                <input
+                  className="h-9 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-ink focus:border-brand focus:outline-none"
+                  placeholder="Илгээгдэх мессеж — ж: Хөх хот аяллын үнэ хэд вэ?"
+                  value={btn.message}
+                  maxLength={200}
+                  onChange={(e) => {
+                    const updated = form.chat_buttons.map((b, i) =>
+                      i === idx ? { ...b, message: e.target.value } : b,
+                    );
+                    patch({ chat_buttons: updated });
+                  }}
+                />
+              </div>
+              <button
+                type="button"
+                className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-subtle transition-colors hover:bg-danger-soft hover:text-danger"
+                onClick={() =>
+                  patch({
+                    chat_buttons: form.chat_buttons.filter((_, i) => i !== idx),
+                  })
+                }
+                title="Устгах"
+              >
+                <Icons.trash size={16} />
+              </button>
+            </div>
+          ))}
+          {form.chat_buttons.length > 0 && (
+            <p className="text-xs text-ink-subtle">
+              Нийт {form.chat_buttons.length} товч · Дээрх мэдээллийг хадгалахаа мартуузай.
+            </p>
+          )}
         </div>
       </Card>
 
