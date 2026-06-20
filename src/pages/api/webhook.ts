@@ -20,7 +20,24 @@ import {
   buildDepartureDateAvailabilityReply,
   hasDepartureDateAvailabilityIntent,
 } from "../../lib/travelDates";
+import {
+  buildCompareReply,
+  buildSeatsReply,
+  hasCompareIntent,
+  hasSeatsIntent,
+} from "../../lib/travelFastPaths";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
+import {
+  advanceCollectState,
+  buildCompletionMessage,
+  buildLeadContext,
+  clearCollectState,
+  getCollectState,
+  isInCollectFlow,
+  promptForStep,
+  setCollectState,
+  startCollectState,
+} from "../../lib/bookingCollect";
 import { getEnv } from "../../lib/env";
 import { withRedis } from "../../lib/redisState";
 import {
@@ -1062,6 +1079,92 @@ async function handleMessage(
 
   const botSettings = await getTravelBotSettings();
 
+  // --- Booking info collection flow (mid-flow message handling) ---
+  // If the sender is already in a booking-collection flow, treat this message
+  // as their answer to the current step rather than routing normally.
+  if (botSettings.handoff_enabled) {
+    const collectState = await getCollectState(senderId);
+    if (collectState && collectState.step !== "done") {
+      const nextState = advanceCollectState(collectState, text);
+      if (nextState.step === "done") {
+        // All info collected — save lead, notify staff, hand off
+        await clearCollectState(senderId);
+        const pauseMs =
+          botSettings.handoff_pause_minutes > 0
+            ? botSettings.handoff_pause_minutes * 60_000
+            : undefined;
+        await pauseBot(senderId, pauseMs, "handoff");
+        try {
+          await createLead({
+            kind: "booking",
+            platform,
+            senderId,
+            customerMessage: nextState.originalMessage,
+            contactPhone: nextState.phone,
+            context: buildLeadContext(nextState),
+          });
+          await notifyStaffOfLead(
+            {
+              kind: "booking",
+              platform,
+              customerMessage: `${nextState.name} | ${nextState.phone} | ${nextState.trip}`,
+              contactPhone: nextState.phone,
+            },
+            {
+              requestId: trace?.requestId,
+              correlationId: trace?.correlationId,
+              source: "api.webhook",
+            },
+          );
+          recordCounter("webhook.booking_collect_completed_total", 1, { platform });
+        } catch (error) {
+          logWarn("webhook.booking_collect_lead_failed", {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            platform,
+            senderHash: hashIdentifier(senderId),
+            classification: classifyError(error),
+          });
+        }
+        const completionMsg = buildCompletionMessage(nextState);
+        await assertLockHealthy();
+        const delivered = await sendPlatformMessage(
+          platform,
+          senderId,
+          completionMsg,
+          token,
+          pageId,
+          igUserId,
+          trace,
+          { allowFallback: false },
+        );
+        if (!delivered) {
+          throw new RetryableWebhookError("delivery_failed:booking_collect_done");
+        }
+        return;
+      } else {
+        // Still mid-flow — save state and ask the next question
+        await setCollectState(senderId, nextState);
+        const question = promptForStep(nextState.step);
+        await assertLockHealthy();
+        const delivered = await sendPlatformMessage(
+          platform,
+          senderId,
+          question,
+          token,
+          pageId,
+          igUserId,
+          trace,
+          { allowFallback: false },
+        );
+        if (!delivered) {
+          throw new RetryableWebhookError("delivery_failed:booking_collect_step");
+        }
+        return;
+      }
+    }
+  }
+
   // --- Human handoff: customer asks to talk to a real person ---
   if (
     botSettings.handoff_enabled &&
@@ -1157,58 +1260,43 @@ async function handleMessage(
   const history = await getHistory(sessionId);
   const lastReply = await getLastReplyConsistent(sessionId);
 
-  // --- Booking-intent lead capture ---
-  // Gated on handoff_enabled so the admin keeps a single off switch for all
-  // staff-alert behaviour. Deduped so a chatty customer yields one lead.
+  // --- Booking-intent: start collection flow ---
+  // When the customer expresses intent to book and there's no recent open lead,
+  // start the name→phone→trip collection flow instead of immediately creating a
+  // skeleton lead. The collection flow (handled above) completes the lead.
   const customerWantsToBook =
     botSettings.handoff_enabled && isBookingIntent(text);
-  const freshBookingLead =
-    customerWantsToBook &&
-    !(await hasRecentOpenLead(senderId, "booking"));
+
+  if (customerWantsToBook && !(await hasRecentOpenLead(senderId, "booking"))) {
+    const newState = startCollectState(text);
+    await setCollectState(senderId, newState);
+    const firstQuestion = promptForStep(newState.step);
+    await appendMessage(sessionId, "user", text);
+    await assertLockHealthy();
+    const delivered = await sendPlatformMessage(
+      platform,
+      senderId,
+      firstQuestion,
+      token,
+      pageId,
+      igUserId,
+      trace,
+      { allowFallback: false },
+    );
+    if (!delivered) {
+      throw new RetryableWebhookError("delivery_failed:booking_collect_start");
+    }
+    recordCounter("webhook.booking_collect_started_total", 1, { platform });
+    return;
+  }
 
   await appendMessage(sessionId, "user", text);
 
+  // Kept as a no-op placeholder for the date-availability branch below that
+  // previously called recordFreshBookingLead(). The collect flow now handles
+  // all booking lead creation so this is intentionally empty.
   async function recordFreshBookingLead() {
-    if (!freshBookingLead) return;
-    try {
-      let phone = extractPhoneNumber(text);
-      if (!phone) {
-        for (const entry of history.slice(-8)) {
-          if (entry.role !== "user") continue;
-          phone = extractPhoneNumber(entry.text);
-          if (phone) break;
-        }
-      }
-      const context = history
-        .slice(-6)
-        .map((m) => `${m.role === "user" ? "Хэрэглэгч" : "Бот"}: ${m.text}`)
-        .join("\n");
-      await createLead({
-        kind: "booking",
-        platform,
-        senderId,
-        customerMessage: text,
-        contactPhone: phone,
-        context,
-      });
-      recordCounter("webhook.booking_lead_total", 1, { platform });
-      await notifyStaffOfLead(
-        { kind: "booking", platform, customerMessage: text, contactPhone: phone },
-        {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          source: "api.webhook",
-        },
-      );
-    } catch (error) {
-      logWarn("webhook.booking_lead_failed", {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        platform,
-        senderHash: hashIdentifier(senderId),
-        classification: classifyError(error),
-      });
-    }
+    // booking leads are now created by the multi-step collect flow
   }
 
   if (hasDepartureDateAvailabilityIntent(text)) {
@@ -1278,14 +1366,70 @@ async function handleMessage(
     }
   }
 
-  // When a booking lead is fresh, nudge the model to collect contact details
-  // in its normal reply instead of sending a separate follow-up message.
-  const effectiveSystemPrompt = freshBookingLead
-    ? `${fileSystemPrompt}\n\n[Дотоод заавар: Хэрэглэгч захиалга хийх сонирхолтой байна. Хариултдаа эелдэгээр нэр болон утасны дугаараа үлдээхийг хүсээрэй — манай ажилтан холбогдож захиалгыг баталгаажуулна.]`
-    : fileSystemPrompt;
+  // --- Fast-path: seats availability (Feature 2) ---
+  if (hasSeatsIntent(text)) {
+    const trips = await listTrips({ limit: 5000 });
+    const seatsReply = buildSeatsReply(text, trips);
+    if (seatsReply) {
+      const safeSeatsReply = enforceWebsiteForPayment(sanitizeAssistantReply(seatsReply));
+      await assertLockHealthy();
+      const delivered = await sendPlatformMessage(
+        platform,
+        senderId,
+        safeSeatsReply,
+        token,
+        pageId,
+        igUserId,
+        trace,
+        { allowFallback: false },
+      );
+      if (!delivered) {
+        throw new RetryableWebhookError("delivery_failed:seats_fast_path");
+      }
+      try {
+        await appendMessage(sessionId, "assistant", safeSeatsReply);
+        await setLastReplyConsistent(sessionId, safeSeatsReply);
+      } catch {
+        // non-critical
+      }
+      recordCounter("webhook.seats_fast_path_total", 1, { platform });
+      return;
+    }
+  }
+
+  // --- Fast-path: trip comparison (Feature 3) ---
+  if (hasCompareIntent(text)) {
+    const trips = await listTrips({ limit: 5000 });
+    const compareReply = buildCompareReply(text, trips);
+    if (compareReply) {
+      const safeCompareReply = enforceWebsiteForPayment(sanitizeAssistantReply(compareReply));
+      await assertLockHealthy();
+      const delivered = await sendPlatformMessage(
+        platform,
+        senderId,
+        safeCompareReply,
+        token,
+        pageId,
+        igUserId,
+        trace,
+        { allowFallback: false },
+      );
+      if (!delivered) {
+        throw new RetryableWebhookError("delivery_failed:compare_fast_path");
+      }
+      try {
+        await appendMessage(sessionId, "assistant", safeCompareReply);
+        await setLastReplyConsistent(sessionId, safeCompareReply);
+      } catch {
+        // non-critical
+      }
+      recordCounter("webhook.compare_fast_path_total", 1, { platform });
+      return;
+    }
+  }
 
   const prompt = buildPrompt({
-    systemPrompt: effectiveSystemPrompt,
+    systemPrompt: fileSystemPrompt,
     business: business || {},
     history,
     userText: text,

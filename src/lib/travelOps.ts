@@ -428,6 +428,24 @@ export async function ensureTravelSchema() {
         CREATE INDEX IF NOT EXISTS idx_travel_leads_status_created
           ON travel_leads (status, created_at DESC);
       `);
+      // Migration: add lead_status CRM column (idempotent)
+      await client.query(`
+        ALTER TABLE travel_leads
+          ADD COLUMN IF NOT EXISTS lead_status TEXT NOT NULL DEFAULT 'new_lead';
+      `);
+      // Broadcast feature: track sent broadcasts and opted-in senders
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_broadcasts (
+          id BIGSERIAL PRIMARY KEY,
+          message TEXT NOT NULL DEFAULT '',
+          platform TEXT NOT NULL DEFAULT 'facebook',
+          sent_count INTEGER NOT NULL DEFAULT 0,
+          failed_count INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'pending',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          finished_at TIMESTAMPTZ NULL
+        );
+      `);
       await client.query(`
         CREATE TABLE IF NOT EXISTS travel_drive_sync_state (
           id BOOLEAN PRIMARY KEY DEFAULT TRUE,
@@ -2902,6 +2920,8 @@ export async function rollbackAIRequest(requestId: number) {
    ---------------------------------------------------------------- */
 export type LeadKind = "handoff" | "booking";
 
+export type LeadCrmStatus = "new_lead" | "contacted" | "booked" | "no_answer";
+
 export type TravelLead = {
   id: number;
   kind: LeadKind;
@@ -2911,12 +2931,19 @@ export type TravelLead = {
   contact_phone: string;
   context: string;
   status: "new" | "seen";
+  lead_status: LeadCrmStatus;
   created_at: string;
   seen_at: string | null;
 };
 
+const VALID_CRM_STATUSES: LeadCrmStatus[] = ["new_lead", "contacted", "booked", "no_answer"];
+
 function mapLeadRow(row: Record<string, unknown>): TravelLead {
   const kind = row.kind === "booking" ? "booking" : "handoff";
+  const rawCrm = String(row.lead_status || "new_lead");
+  const lead_status: LeadCrmStatus = (VALID_CRM_STATUSES as string[]).includes(rawCrm)
+    ? (rawCrm as LeadCrmStatus)
+    : "new_lead";
   return {
     id: Number(row.id),
     kind,
@@ -2926,6 +2953,7 @@ function mapLeadRow(row: Record<string, unknown>): TravelLead {
     contact_phone: String(row.contact_phone || ""),
     context: String(row.context || ""),
     status: row.status === "seen" ? "seen" : "new",
+    lead_status,
     created_at: String(row.created_at || ""),
     seen_at: row.seen_at ? String(row.seen_at) : null,
   };
@@ -3018,6 +3046,20 @@ export async function markLeadSeen(id: number): Promise<boolean> {
   const result = await queryNeon(
     `UPDATE travel_leads SET status = 'seen', seen_at = NOW() WHERE id = $1`,
     [id],
+  );
+  return (result?.rowCount ?? 0) > 0;
+}
+
+export async function updateLeadStatus(
+  id: number,
+  leadStatus: LeadCrmStatus,
+): Promise<boolean> {
+  if (!(VALID_CRM_STATUSES as string[]).includes(leadStatus)) return false;
+  const ready = await ensureTravelSchema();
+  if (!ready) return false;
+  const result = await queryNeon(
+    `UPDATE travel_leads SET lead_status = $1, status = 'seen', seen_at = COALESCE(seen_at, NOW()) WHERE id = $2`,
+    [leadStatus, id],
   );
   return (result?.rowCount ?? 0) > 0;
 }
@@ -3203,4 +3245,106 @@ export async function getDbDiagnostics() {
 
 export async function maybeRecordTravelMetric(action: string) {
   recordCounter("travel.ops.action_total", 1, { action });
+}
+
+/* ----------------------------------------------------------------
+   Broadcast
+   ---------------------------------------------------------------- */
+
+/** Returns unique Messenger sender_ids from leads (opted-in by having engaged). */
+export async function getMessengerRecipients(
+  platform: "facebook" | "instagram" = "facebook",
+  limit = 2000,
+): Promise<string[]> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return [];
+  const safeLimit = Math.min(Math.max(limit, 1), 5000);
+  const result = await queryNeon<{ sender_id: string }>(
+    `
+      SELECT DISTINCT sender_id
+      FROM travel_leads
+      WHERE platform = $1
+        AND sender_id <> ''
+      ORDER BY sender_id
+      LIMIT $2
+    `,
+    [platform, safeLimit],
+  );
+  return (result?.rows || []).map((r) => r.sender_id).filter(Boolean);
+}
+
+export type BroadcastRecord = {
+  id: number;
+  message: string;
+  platform: string;
+  sent_count: number;
+  failed_count: number;
+  status: string;
+  created_at: string;
+  finished_at: string | null;
+};
+
+export async function createBroadcastRecord(
+  message: string,
+  platform: string,
+): Promise<BroadcastRecord | null> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return null;
+  const result = await queryNeon<Record<string, unknown>>(
+    `
+      INSERT INTO travel_broadcasts (message, platform, status)
+      VALUES ($1, $2, 'sending')
+      RETURNING *
+    `,
+    [message.slice(0, 2000), platform],
+  );
+  const row = result?.rows?.[0];
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    message: String(row.message || ""),
+    platform: String(row.platform || ""),
+    sent_count: Number(row.sent_count || 0),
+    failed_count: Number(row.failed_count || 0),
+    status: String(row.status || "pending"),
+    created_at: String(row.created_at || ""),
+    finished_at: row.finished_at ? String(row.finished_at) : null,
+  };
+}
+
+export async function finalizeBroadcast(
+  id: number,
+  sentCount: number,
+  failedCount: number,
+): Promise<void> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return;
+  await queryNeon(
+    `
+      UPDATE travel_broadcasts
+      SET sent_count = $1, failed_count = $2, status = 'done', finished_at = NOW()
+      WHERE id = $3
+    `,
+    [sentCount, failedCount, id],
+  );
+}
+
+export async function listBroadcasts(limit = 20): Promise<BroadcastRecord[]> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return [];
+  const safeLimit = Math.min(Math.max(limit, 1), 100);
+  const result = await queryNeon<Record<string, unknown>>(
+    `SELECT * FROM travel_broadcasts ORDER BY created_at DESC LIMIT $1`,
+    [safeLimit],
+  );
+  return (result?.rows || []).map((row) => ({
+    id: Number(row.id),
+    message: String(row.message || ""),
+    platform: String(row.platform || ""),
+    sent_count: Number(row.sent_count || 0),
+    failed_count: Number(row.failed_count || 0),
+    status: String(row.status || "pending"),
+    created_at: String(row.created_at || ""),
+    finished_at: row.finished_at ? String(row.finished_at) : null,
+  }));
 }

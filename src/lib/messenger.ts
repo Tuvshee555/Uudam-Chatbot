@@ -86,3 +86,30 @@ export async function sendTypingOn(
     trace,
   );
 }
+
+/**
+ * Send an image to a Messenger recipient via the attachment API.
+ * No extra Meta approval needed — standard pages_messaging permission covers this.
+ * imageUrl must be a publicly accessible HTTPS URL.
+ */
+export async function sendImageMessage(
+  recipientId: string,
+  imageUrl: string,
+  token: string,
+  trace?: UpstreamTraceOptions,
+) {
+  await postToMessenger(
+    `https://graph.facebook.com/v19.0/me/messages?access_token=${token}`,
+    {
+      messaging_type: "RESPONSE",
+      recipient: { id: recipientId },
+      message: {
+        attachment: {
+          type: "image",
+          payload: { url: imageUrl, is_reusable: true },
+        },
+      },
+    },
+    trace,
+  );
+}
