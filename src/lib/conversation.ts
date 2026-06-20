@@ -157,6 +157,7 @@ export function buildPrompt(options: {
   lines.push("- If information is missing or ambiguous, clearly say it is not confirmed in the current dataset.");
   lines.push("- If the user message is unclear, ask ONE short clarifying question.");
   lines.push("- Stay travel-topic focused and politely redirect unrelated questions.");
+  lines.push("- After your reply text, on a NEW line, write exactly: BUTTONS: followed by 2-3 short Mongolian follow-up button labels separated by | (pipe). Each label must be under 40 characters. Choose buttons that naturally continue the conversation (e.g. ask for price, seats, booking, nearby dates). Example: BUTTONS: Үнэ хэд вэ?|Суудал бий юу?|Захиалах");
 
   lines.push("");
   lines.push(`Business name: ${business?.name || "N/A"}`);

@@ -87,6 +87,20 @@ export function sanitizeAssistantReply(text: string) {
   return dedupedParagraphs.join("\n").trim() || "Энэ мэдээлэл одоогоор тодорхойгүй байна. Хүний ажилтантай холбож өгье.";
 }
 
+const BUTTONS_LINE_PATTERN = /\nBUTTONS:\s*(.+)$/;
+
+export function extractButtons(text: string): { text: string; buttons: string[] } {
+  const match = text.match(BUTTONS_LINE_PATTERN);
+  if (!match) return { text, buttons: [] };
+  const cleanText = text.slice(0, match.index).trim();
+  const buttons = match[1]
+    .split("|")
+    .map((b) => b.trim())
+    .filter((b) => b.length > 0 && b.length <= 60)
+    .slice(0, 3);
+  return { text: cleanText, buttons };
+}
+
 export function isDuplicateReply(
   previousReply: string | undefined,
   nextReply: string,

@@ -10,7 +10,7 @@ import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPrompt, getHistory } from "../../lib/conversation";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
-import { enforceWebsiteForPayment, sanitizeAssistantReply } from "../../lib/reply";
+import { enforceWebsiteForPayment, extractButtons, sanitizeAssistantReply } from "../../lib/reply";
 import { getEnv } from "../../lib/env";
 import {
   beginRequestTrace,
@@ -130,9 +130,9 @@ export default async function handler(
         correlationId: trace.correlationId,
         source: "api.demo",
       });
-      const reply = enforceWebsiteForPayment(
-        sanitizeAssistantReply(fixMojibake(result.text)),
-      );
+      const rawFixed = fixMojibake(result.text);
+      const { text: rawNoButtons, buttons } = extractButtons(rawFixed);
+      const reply = enforceWebsiteForPayment(sanitizeAssistantReply(rawNoButtons));
       await appendMessage(sessionId, "user", normalizedText);
       await appendMessage(sessionId, "assistant", reply);
 
@@ -143,9 +143,10 @@ export default async function handler(
         conversationIdSuffix: normalizedConversationId.slice(-8),
         promptLength: prompt.length,
         replyLength: reply.length,
+        buttonCount: buttons.length,
       });
 
-      return res.status(200).json({ reply });
+      return res.status(200).json({ reply, buttons });
     } catch (error: any) {
       const classification = classifyError(error);
       logError("demo.request_failed", {

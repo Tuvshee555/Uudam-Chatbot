@@ -4,6 +4,7 @@ import { Badge, Button, Icons, cx } from "@/components/ui";
 type ChatMessage = {
   from: "user" | "bot";
   text: string;
+  buttons?: string[];
 };
 
 type DemoChatProps = {
@@ -87,15 +88,16 @@ export default function DemoChat({
         body: JSON.stringify({ text: payload, conversationId }),
       });
       const json = await response.json();
+      const replyText =
+        typeof json?.reply === "string" && json.reply.trim()
+          ? json.reply
+          : "Хариу боловсруулах үед алдаа гарлаа.";
+      const replyButtons: string[] = Array.isArray(json?.buttons)
+        ? (json.buttons as unknown[]).filter((b): b is string => typeof b === "string")
+        : [];
       setMessages((prev) => [
         ...prev,
-        {
-          from: "bot",
-          text:
-            typeof json?.reply === "string" && json.reply.trim()
-              ? json.reply
-              : "Хариу боловсруулах үед алдаа гарлаа.",
-        },
+        { from: "bot", text: replyText, buttons: replyButtons },
       ]);
     } catch {
       setMessages((prev) => [
@@ -176,8 +178,8 @@ export default function DemoChat({
                 <div
                   key={`${message.from}-${index}`}
                   className={cx(
-                    "flex",
-                    message.from === "user" ? "justify-end" : "justify-start",
+                    "flex flex-col",
+                    message.from === "user" ? "items-end" : "items-start",
                   )}
                 >
                   <div
@@ -190,6 +192,23 @@ export default function DemoChat({
                   >
                     {message.text}
                   </div>
+                  {message.from === "bot" &&
+                    message.buttons &&
+                    message.buttons.length > 0 && (
+                      <div className="mt-2 flex max-w-[88%] flex-wrap gap-2">
+                        {message.buttons.map((label) => (
+                          <button
+                            key={label}
+                            type="button"
+                            disabled={sending || !conversationId}
+                            onClick={() => void send(label)}
+                            className="rounded-full border border-brand/40 bg-brand-soft px-3 py-1.5 text-xs font-medium text-brand transition-colors hover:border-brand hover:bg-brand hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                 </div>
               ))}
               {sending && (
