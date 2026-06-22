@@ -210,7 +210,7 @@ type ParseUploadUnit = {
   dataUrl: string;
 };
 
-type TabKey = "assistant" | "trips" | "bot" | "leads" | "settings";
+type TabKey = "assistant" | "trips" | "bot" | "leads" | "settings" | "analytics";
 
 type LeadCrmStatus = "new_lead" | "contacted" | "booked" | "no_answer";
 
@@ -3320,6 +3320,12 @@ export default function AdminPage() {
             onClick={() => setTab("settings")}
           />
           <SidebarItem
+            icon={<Icons.control size={16} />}
+            label="Аналитик"
+            active={tab === "analytics"}
+            onClick={() => setTab("analytics")}
+          />
+          <SidebarItem
             icon={<Icons.ai size={16} />}
             label="AI туслах"
             active={tab === "assistant"}
@@ -3468,6 +3474,10 @@ export default function AdminPage() {
               onSave={() => void saveSettings()}
               onRequestClear={() => setConfirmClear(true)}
             />
+          )}
+
+          {tab === "analytics" && (
+            <AnalyticsTab apiFetch={fetchWithAdmin} />
           )}
         </main>
       </div>
@@ -5803,6 +5813,216 @@ function EmbeddedTestBot() {
             <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
           </svg>
         </button>
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------
+   Analytics tab
+   ---------------------------------------------------------------- */
+type AnalyticsStatsData = {
+  totalLeads: number;
+  newLeads: number;
+  bookingLeads: number;
+  leadsByDay: { date: string; count: number }[];
+  leadsByTrip: { trip: string; count: number }[];
+  leadsByStatus: Record<string, number>;
+  totalTrips: number;
+  activeTrips: number;
+  totalContacts: number;
+  topTrips: { name: string; price: number; seats_left: number }[];
+};
+
+function AnalyticsTab({
+  apiFetch,
+}: {
+  apiFetch: (url: string, init?: RequestInit) => Promise<Response>;
+}) {
+  const [stats, setStats] = useState<AnalyticsStatsData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    apiFetch("/api/admin/analytics")
+      .then((res) => res.json())
+      .then((data: { ok?: boolean; stats?: AnalyticsStatsData }) => {
+        if (cancelled) return;
+        if (data?.ok && data.stats) {
+          setStats(data.stats);
+        } else {
+          setError("Мэдээлэл ачаалж чадсангүй.");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setError("Мэдээлэл ачаалж чадсангүй.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [apiFetch]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Spinner />
+      </div>
+    );
+  }
+
+  if (error || !stats) {
+    return (
+      <div className="py-8">
+        <Alert tone="danger">{error || "Мэдээлэл ачаалж чадсангүй."}</Alert>
+      </div>
+    );
+  }
+
+  const STATUS_MN: Record<string, string> = {
+    new_lead: "Шинэ",
+    contacted: "Холбогдсон",
+    booked: "Захиалсан",
+    no_answer: "Хариугүй",
+  };
+
+  const dayMax = Math.max(1, ...stats.leadsByDay.map((d) => d.count));
+  const tripMax = Math.max(1, ...stats.leadsByTrip.map((t) => t.count));
+
+  return (
+    <div className="space-y-6">
+      <SectionHeading title="Аналитик" description="Хүсэлт болон аяллын нийлбэр статистик" />
+
+      {/* Row 1 — 4 stat cards */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Card className="p-4">
+          <p className="text-xs text-ink-subtle">Нийт хүсэлт</p>
+          <p className="mt-1 text-2xl font-bold text-ink">{stats.totalLeads}</p>
+        </Card>
+        <Card className="p-4">
+          <p className="text-xs text-ink-subtle">Шинэ хүсэлт</p>
+          <p className="mt-1 text-2xl font-bold text-ink">{stats.newLeads}</p>
+        </Card>
+        <Card className="p-4">
+          <p className="text-xs text-ink-subtle">Захиалга</p>
+          <p className="mt-1 text-2xl font-bold text-ink">{stats.bookingLeads}</p>
+        </Card>
+        <Card className="p-4">
+          <p className="text-xs text-ink-subtle">Нийт харилцагч</p>
+          <p className="mt-1 text-2xl font-bold text-ink">{stats.totalContacts}</p>
+        </Card>
+      </div>
+
+      {/* Row 2 — bar charts */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <Card className="p-4">
+          <h3 className="mb-3 text-sm font-semibold text-ink">Өдрөөр (14 хоног)</h3>
+          {stats.leadsByDay.length === 0 ? (
+            <p className="text-sm text-ink-subtle">Өгөгдөл байхгүй.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {stats.leadsByDay.map((item) => {
+                const pct = Math.round((item.count / dayMax) * 100);
+                return (
+                  <div key={item.date}>
+                    <div className="flex justify-between text-xs mb-0.5">
+                      <span className="text-ink truncate">{item.date}</span>
+                      <span className="text-ink-muted ml-2 shrink-0">{item.count}</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-surface-sunken overflow-hidden">
+                      <div className="h-full rounded-full bg-brand" style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+
+        <Card className="p-4">
+          <h3 className="mb-3 text-sm font-semibold text-ink">Аяллаар</h3>
+          {stats.leadsByTrip.length === 0 ? (
+            <p className="text-sm text-ink-subtle">Өгөгдөл байхгүй.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {stats.leadsByTrip.map((item) => {
+                const pct = Math.round((item.count / tripMax) * 100);
+                return (
+                  <div key={item.trip}>
+                    <div className="flex justify-between text-xs mb-0.5">
+                      <span className="text-ink truncate">{item.trip}</span>
+                      <span className="text-ink-muted ml-2 shrink-0">{item.count}</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-surface-sunken overflow-hidden">
+                      <div className="h-full rounded-full bg-brand" style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {/* Row 3 — status breakdown + active trips table */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <Card className="p-4">
+          <h3 className="mb-3 text-sm font-semibold text-ink">Статусаар</h3>
+          {Object.keys(stats.leadsByStatus).length === 0 ? (
+            <p className="text-sm text-ink-subtle">Өгөгдөл байхгүй.</p>
+          ) : (
+            <div className="space-y-2">
+              {Object.entries(stats.leadsByStatus).map(([status, count]) => (
+                <div key={status} className="flex items-center justify-between text-sm">
+                  <span className="text-ink">{STATUS_MN[status] ?? status}</span>
+                  <span className="font-semibold text-ink">{count}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        <Card className="p-4">
+          <h3 className="mb-3 text-sm font-semibold text-ink">
+            Идэвхтэй аяллууд{" "}
+            <span className="font-normal text-ink-muted">
+              ({stats.activeTrips}/{stats.totalTrips})
+            </span>
+          </h3>
+          {stats.topTrips.length === 0 ? (
+            <p className="text-sm text-ink-subtle">Идэвхтэй аялал байхгүй.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-line text-left text-xs text-ink-muted">
+                    <th className="pb-2 font-medium">Аяллын нэр</th>
+                    <th className="pb-2 font-medium text-right">Үнэ</th>
+                    <th className="pb-2 font-medium text-right">Суудал</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {stats.topTrips.map((trip) => (
+                    <tr key={trip.name}>
+                      <td className="py-2 pr-3 text-ink truncate max-w-[160px]">
+                        {trip.name}
+                      </td>
+                      <td className="py-2 text-right text-ink-muted">
+                        {trip.price > 0 ? trip.price.toLocaleString("en-US") : "—"}
+                      </td>
+                      <td className="py-2 text-right text-ink-muted">
+                        {trip.seats_left}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
       </div>
     </div>
   );
