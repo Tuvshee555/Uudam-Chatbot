@@ -88,6 +88,34 @@ export async function sendTypingOn(
 }
 
 /**
+ * Send inline quick-reply buttons after a text message.
+ * Buttons appear as tappable chips below the message in Messenger.
+ * Labels must be ≤20 chars. Max 13 buttons (we cap at 5 to be safe).
+ */
+export async function sendQuickReplies(
+  recipientId: string,
+  text: string,
+  labels: string[],
+  token: string,
+  trace?: UpstreamTraceOptions,
+) {
+  const quickReplies = labels.slice(0, 5).map((label) => ({
+    content_type: "text",
+    title: label.slice(0, 20),
+    payload: label.slice(0, 20),
+  }));
+  await postToMessenger(
+    `https://graph.facebook.com/v19.0/me/messages?access_token=${token}`,
+    {
+      messaging_type: "RESPONSE",
+      recipient: { id: recipientId },
+      message: { text, quick_replies: quickReplies },
+    },
+    trace,
+  );
+}
+
+/**
  * Send an image to a Messenger recipient via the attachment API.
  * No extra Meta approval needed — standard pages_messaging permission covers this.
  * imageUrl must be a publicly accessible HTTPS URL.

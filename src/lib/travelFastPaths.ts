@@ -88,6 +88,35 @@ export function hasCompareIntent(text: string): boolean {
 }
 
 /**
+ * If the bot reply clearly mentions a specific trip (≥2 route-name words match),
+ * return smart action buttons for that trip. Returns null if ambiguous.
+ */
+export function buildSmartButtons(replyText: string, trips: TravelTrip[]): string[] | null {
+  const norm = normText(replyText);
+  const active = trips.filter((t) => t.status === "active");
+
+  let bestScore = 0;
+  let bestTrip: TravelTrip | null = null;
+
+  for (const trip of active) {
+    const words = normText(trip.route_name)
+      .split(/\s+/)
+      .filter((w) => w.length >= 3);
+    const score = words.filter((w) => norm.includes(w)).length;
+    if (score > bestScore) {
+      bestScore = score;
+      bestTrip = trip;
+    }
+  }
+
+  if (!bestTrip || bestScore < 2) return null;
+
+  const buttons: string[] = ["Дэлгэрэнгүй", "Захиалах"];
+  if (bestTrip.seats_left !== null) buttons.push("Суудал бий юу?");
+  return buttons;
+}
+
+/**
  * Finds up to 4 trips mentioned in the user's message and returns a
  * formatted side-by-side comparison.
  * Returns null if fewer than 2 trips can be identified.

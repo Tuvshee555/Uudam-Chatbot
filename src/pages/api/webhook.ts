@@ -1,6 +1,6 @@
 ﻿import type { NextApiRequest, NextApiResponse } from "next";
 import { askGemini } from "../../lib/gemini";
-import { replyToComment, sendImageMessage, sendTextMessage, sendTypingOn } from "../../lib/messenger";
+import { replyToComment, sendImageMessage, sendQuickReplies, sendTextMessage, sendTypingOn } from "../../lib/messenger";
 import { sendTextMessage as sendIgTextMessage } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
@@ -23,6 +23,7 @@ import {
 import {
   buildCompareReply,
   buildSeatsReply,
+  buildSmartButtons,
   hasCompareIntent,
   hasSeatsIntent,
 } from "../../lib/travelFastPaths";
@@ -1578,6 +1579,25 @@ async function handleMessage(
       }
     } catch {
       // Trip photo send is enhancement-only — never surface to customer
+    }
+  }
+
+  // --- Smart contextual buttons: if reply is about a specific trip, send quick-replies ---
+  // Only on Messenger — quick_replies API is Messenger-specific.
+  if (platform === "facebook" && token) {
+    try {
+      const tripsForButtons = await listTrips({ limit: 5000 });
+      const smartButtons = buildSmartButtons(safeReply, tripsForButtons);
+      if (smartButtons && smartButtons.length > 0) {
+        await sendQuickReplies(senderId, "⬇️", smartButtons, token, {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          source: "api.webhook.smart_buttons",
+        });
+        recordCounter("webhook.smart_buttons_sent_total", 1, { platform });
+      }
+    } catch {
+      // Enhancement-only — never surface to customer
     }
   }
 
