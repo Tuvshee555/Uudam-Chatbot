@@ -3433,6 +3433,7 @@ export default function AdminPage() {
               pausedIds={pausedIds}
               busyKey={busyKey}
               tick={tick}
+              apiFetch={fetchWithAdmin}
               onPauseAction={(action, senderId, ms, pageId) =>
                 void runPauseAction(action, senderId, ms, pageId)
               }
@@ -4815,6 +4816,7 @@ function BotTab({
   pausedIds,
   busyKey,
   tick,
+  apiFetch,
   onPauseAction,
 }: {
   pageControls: PageControlState[];
@@ -4825,6 +4827,7 @@ function BotTab({
   pausedIds: Set<string>;
   busyKey: string;
   tick: number;
+  apiFetch: (url: string, init?: RequestInit) => Promise<Response>;
   onPauseAction: (
     action:
       | "pause"
@@ -4840,6 +4843,119 @@ function BotTab({
 }) {
   const handoffRows = pausedRows.filter((row) => row.reason === "handoff");
   const handoffIds = new Set(handoffRows.map((row) => row.sender_id));
+  const [selectedSender, setSelectedSender] = useState<string | null>(null);
+  const [chatHistory, setChatHistory] = useState<{ role: string; text: string }[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+
+  async function openChat(senderId: string) {
+    setSelectedSender(senderId);
+    setChatHistory([]);
+    setChatLoading(true);
+    try {
+      const res = await apiFetch(
+        `/api/admin/conversation?sender_id=${encodeURIComponent(senderId)}`,
+      );
+      const data = await res.json();
+      setChatHistory(Array.isArray(data.messages) ? data.messages : []);
+    } catch {
+      setChatHistory([]);
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  if (selectedSender) {
+    const row = recentRows.find((r) => r.sender_id === selectedSender);
+    const isPaused = pausedIds.has(selectedSender);
+    const wantsHuman = handoffIds.has(selectedSender);
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setSelectedSender(null)}
+            className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-sm text-ink-muted hover:border-brand hover:text-brand"
+          >
+            <Icons.chevronLeft size={14} />
+            Буцах
+          </button>
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-mono text-sm font-medium text-ink">
+              {shortId(selectedSender)}
+            </p>
+            {row && (
+              <p className="text-xs text-ink-subtle">Сүүлд: {formatTime(row.last_seen)}</p>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {wantsHuman && <Badge tone="warning">🙋 Хүн хүсэв</Badge>}
+            {isPaused ? (
+              <Button
+                size="sm"
+                variant="success"
+                disabled={busyKey === `resume:${selectedSender}`}
+                onClick={() => onPauseAction("resume", selectedSender)}
+              >
+                Сэргээх
+              </Button>
+            ) : (
+              <div className="flex gap-1">
+                {DURATIONS.map((d) => (
+                  <button
+                    key={d.label}
+                    type="button"
+                    disabled={busyKey === `pause:${selectedSender}`}
+                    onClick={() => onPauseAction("pause", selectedSender, d.ms)}
+                    className="rounded-md border border-line-strong bg-surface px-2 py-1 text-xs text-ink-muted hover:border-danger hover:text-danger"
+                  >
+                    {d.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <Card className="p-4">
+          {chatLoading && (
+            <div className="flex justify-center py-6">
+              <Spinner className="h-6 w-6 text-brand" />
+            </div>
+          )}
+          {!chatLoading && chatHistory.length === 0 && (
+            <p className="py-6 text-center text-sm text-ink-subtle">
+              Хадгалагдсан яриа олдсонгүй (Redis TTL дууссан байж болно).
+            </p>
+          )}
+          {!chatLoading && chatHistory.length > 0 && (
+            <div className="space-y-2">
+              {chatHistory.map((msg, i) => (
+                <div
+                  key={i}
+                  className={cx(
+                    "flex",
+                    msg.role === "user" ? "justify-start" : "justify-end",
+                  )}
+                >
+                  <div
+                    className={cx(
+                      "max-w-[78%] rounded-2xl px-3.5 py-2 text-sm leading-relaxed",
+                      msg.role === "user"
+                        ? "bg-surface-sunken text-ink"
+                        : "bg-brand text-white",
+                    )}
+                  >
+                    {msg.text}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3">
       {handoffRows.length > 0 && (
@@ -4951,33 +5067,37 @@ function BotTab({
                     {paused ? "Зогссон" : "Идэвхтэй"}
                   </Badge>
                 </div>
-                <div className="mt-2 flex gap-2">
-                  <Button
-                    variant="danger"
-                    block
+                <div className="mt-2">
+                  <button
+                    type="button"
                     disabled={
-                      busyKey === `page_pause:${page.page_id}` || paused
+                      busyKey === `page_pause:${page.page_id}` ||
+                      busyKey === `page_resume:${page.page_id}`
                     }
                     onClick={() =>
-                      onPauseAction("page_pause", undefined, undefined, page.page_id)
+                      onPauseAction(
+                        paused ? "page_resume" : "page_pause",
+                        undefined,
+                        undefined,
+                        page.page_id,
+                      )
                     }
+                    className={cx(
+                      "relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none disabled:opacity-50",
+                      paused ? "bg-danger" : "bg-success",
+                    )}
+                    aria-label={paused ? "Сэргээх" : "Зогсоох"}
                   >
-                    <Icons.pause size={16} />
-                    Зогсоох
-                  </Button>
-                  <Button
-                    variant="success"
-                    block
-                    disabled={
-                      busyKey === `page_resume:${page.page_id}` || !paused
-                    }
-                    onClick={() =>
-                      onPauseAction("page_resume", undefined, undefined, page.page_id)
-                    }
-                  >
-                    <Icons.play size={16} />
-                    Сэргээх
-                  </Button>
+                    <span
+                      className={cx(
+                        "inline-block h-6 w-6 transform rounded-full bg-white shadow ring-0 transition duration-200",
+                        paused ? "translate-x-7" : "translate-x-0",
+                      )}
+                    />
+                  </button>
+                  <span className="ml-2 text-xs text-ink-subtle">
+                    {paused ? "Дарж сэргээх" : "Дарж зогсоох"}
+                  </span>
                 </div>
               </div>
             );
@@ -5006,55 +5126,36 @@ function BotTab({
               <div
                 key={row.sender_id}
                 className={cx(
-                  "rounded-md border p-2.5",
+                  "cursor-pointer rounded-xl border p-3 transition-colors hover:border-brand/40 hover:bg-surface",
                   wantsHuman
                     ? "border-warning/40 bg-warning-soft"
                     : "border-line bg-surface-sunken",
                 )}
+                onClick={() => openChat(row.sender_id)}
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="flex items-center gap-1.5 truncate font-mono text-xs text-ink">
+                    <p className="flex items-center gap-1.5 truncate font-mono text-sm text-ink">
                       {shortId(row.sender_id)}
                       {wantsHuman && (
-                        <span className="shrink-0 rounded-full bg-warning-soft px-1.5 text-[10px] font-semibold text-warning">
+                        <span className="shrink-0 rounded-full bg-warning px-1.5 py-0.5 text-[10px] font-semibold text-white">
                           🙋 хүн хүсэв
                         </span>
                       )}
+                      {isPaused && (
+                        <span className="shrink-0 rounded-full bg-danger px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                          зогссон
+                        </span>
+                      )}
                     </p>
-                    <p className="text-xs text-ink-subtle">
+                    <p className="mt-0.5 text-xs text-ink-subtle">
                       {formatTime(row.last_seen)}
                       {isPaused && pauseRow
                         ? ` · ${tick >= 0 ? timeLeft(pauseRow.expires_at) : ""}`
                         : ""}
                     </p>
                   </div>
-                  {isPaused ? (
-                    <Button
-                      size="sm"
-                      variant="success"
-                      disabled={busyKey === `resume:${row.sender_id}`}
-                      onClick={() => onPauseAction("resume", row.sender_id)}
-                    >
-                      Сэргээх
-                    </Button>
-                  ) : (
-                    <div className="flex gap-1">
-                      {DURATIONS.map((duration) => (
-                        <button
-                          key={duration.label}
-                          type="button"
-                          disabled={busyKey === `pause:${row.sender_id}`}
-                          onClick={() =>
-                            onPauseAction("pause", row.sender_id, duration.ms)
-                          }
-                          className="rounded-md border border-line-strong bg-surface px-2 py-1 text-xs text-ink-muted hover:border-danger hover:text-danger"
-                        >
-                          {duration.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                  <Icons.chevronRight size={14} className="shrink-0 text-ink-subtle" />
                 </div>
               </div>
             );
