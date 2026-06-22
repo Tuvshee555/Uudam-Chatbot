@@ -27,6 +27,7 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
     has_food: true,
     status: "active",
     notes: "",
+    hotel: "",
     source_description: "",
     photo_urls: [],
     extra: {},

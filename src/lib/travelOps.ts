@@ -35,6 +35,7 @@ export type TravelTrip = {
   has_food: boolean | null;
   status: TripStatus;
   notes: string;
+  hotel: string;
   source_description: string;
   photo_urls: string[];
   extra: Record<string, unknown>;
@@ -98,6 +99,7 @@ export type TripMutationFields = Partial<
     | "has_food"
     | "status"
     | "notes"
+    | "hotel"
     | "source_description"
     | "photo_urls"
     | "extra"
@@ -240,6 +242,7 @@ function cleanFields(input: TripMutationFields): TripMutationFields {
     cleaned.status = coerceTripStatus(input.status);
   }
   if (typeof input.notes === "string") cleaned.notes = input.notes.trim();
+  if (typeof input.hotel === "string") cleaned.hotel = input.hotel.trim();
   if (typeof input.source_description === "string") {
     cleaned.source_description = input.source_description.trim();
   }
@@ -290,6 +293,7 @@ export async function ensureTravelSchema() {
           has_food BOOLEAN NULL,
           status TEXT NOT NULL DEFAULT 'active',
           notes TEXT NOT NULL DEFAULT '',
+          hotel TEXT NOT NULL DEFAULT '',
           source_description TEXT NOT NULL DEFAULT '',
           extra JSONB NOT NULL DEFAULT '{}'::jsonb,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -445,6 +449,11 @@ export async function ensureTravelSchema() {
       await client.query(`
         ALTER TABLE travel_trip_entries
           ADD COLUMN IF NOT EXISTS photo_urls JSONB NOT NULL DEFAULT '[]'::jsonb;
+      `);
+      // Migration: add per-trip hotel column (idempotent)
+      await client.query(`
+        ALTER TABLE travel_trip_entries
+          ADD COLUMN IF NOT EXISTS hotel TEXT NOT NULL DEFAULT '';
       `);
       // Broadcast feature: track sent broadcasts and opted-in senders
       await client.query(`
@@ -894,6 +903,7 @@ function mapTripRow(row: Record<string, unknown>): TravelTrip {
           : Boolean(row.has_food),
     status: coerceTripStatus(row.status),
     notes: normalizeStoredText(row.notes),
+    hotel: normalizeStoredText(row.hotel),
     source_description: normalizeStoredText(row.source_description),
     photo_urls: Array.isArray(row.photo_urls)
       ? (row.photo_urls as unknown[])
@@ -940,7 +950,9 @@ export async function listTrips(options?: {
         has_food,
         status,
         notes,
+        hotel,
         source_description,
+        photo_urls,
         extra,
         created_at,
         updated_at
@@ -981,7 +993,9 @@ async function getTripById(id: string): Promise<TravelTrip | null> {
         has_food,
         status,
         notes,
+        hotel,
         source_description,
+        photo_urls,
         extra,
         created_at,
         updated_at
@@ -1147,6 +1161,7 @@ export async function upsertTrip(input: {
         : null,
     status: coerceTripStatus(cleaned.status),
     notes: cleaned.notes || "",
+    hotel: cleaned.hotel || "",
     source_description: cleaned.source_description || "",
     photo_urls: Array.isArray(cleaned.photo_urls)
       ? cleaned.photo_urls.filter((u) => typeof u === "string" && u.startsWith("https://")).slice(0, 20)
@@ -1173,13 +1188,14 @@ export async function upsertTrip(input: {
         has_food,
         status,
         notes,
+        hotel,
         source_description,
         photo_urls,
         extra,
         updated_at
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10, $11, $12, $13, $14, $15, $16::jsonb, $17::jsonb, NOW()
+        $1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18::jsonb, NOW()
       )
       ON CONFLICT (id)
       DO UPDATE SET
@@ -1196,6 +1212,7 @@ export async function upsertTrip(input: {
         has_food = EXCLUDED.has_food,
         status = EXCLUDED.status,
         notes = EXCLUDED.notes,
+        hotel = EXCLUDED.hotel,
         source_description = EXCLUDED.source_description,
         photo_urls = EXCLUDED.photo_urls,
         extra = EXCLUDED.extra,
@@ -1217,6 +1234,7 @@ export async function upsertTrip(input: {
       row.has_food,
       row.status,
       row.notes,
+      row.hotel,
       row.source_description,
       JSON.stringify(row.photo_urls),
       JSON.stringify(row.extra),
@@ -1247,6 +1265,7 @@ export async function patchTrip(id: string, fields: TripMutationFields) {
     has_food: "has_food",
     status: "status",
     notes: "notes",
+    hotel: "hotel",
     source_description: "source_description",
     photo_urls: "photo_urls",
     extra: "extra",
@@ -3228,6 +3247,7 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     if (trip.status !== "active") {
       details.push(`Status: ${trip.status}`);
     }
+    if (trip.hotel) details.push(`Hotel: ${trip.hotel}`);
     if (trip.notes) details.push(`Notes: ${trip.notes}`);
 
     return {

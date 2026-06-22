@@ -44,6 +44,7 @@ type TravelTrip = {
   has_food: boolean | null;
   status: TripStatus;
   notes: string;
+  hotel: string;
   source_description: string;
   photo_urls: string[];
   updated_at: string;
@@ -1784,6 +1785,7 @@ const BLANK_TRIP_DRAFT: Record<string, string> = {
   status: "active",
   has_food: "unknown",
   notes: "",
+  hotel: "",
   source_description: "",
 };
 
@@ -2975,6 +2977,7 @@ export default function AdminPage() {
       has_food:
         trip.has_food == null ? "unknown" : trip.has_food ? "true" : "false",
       notes: trip.notes || "",
+      hotel: trip.hotel || "",
       source_description: trip.source_description || "",
     });
     setTripPhotoUrls(trip.photo_urls || []);
@@ -3051,6 +3054,7 @@ export default function AdminPage() {
           ? null
           : tripDraft.has_food === "true",
       notes: tripDraft.notes || "",
+      hotel: tripDraft.hotel || "",
       departure_dates: (tripDraft.departure_dates || "")
         .split(",")
         .map((value) => value.trim())
@@ -3640,6 +3644,16 @@ export default function AdminPage() {
             value={tripDraft.departure_dates}
             onChange={(e) =>
               setTripDraft((p) => ({ ...p, departure_dates: e.target.value }))
+            }
+          />
+        </div>
+        <div className="mt-3">
+          <Input
+            label="Зочид буудал"
+            placeholder="ж: Shangri-La Ulaanbaatar (4*)"
+            value={tripDraft.hotel}
+            onChange={(e) =>
+              setTripDraft((p) => ({ ...p, hotel: e.target.value }))
             }
           />
         </div>
