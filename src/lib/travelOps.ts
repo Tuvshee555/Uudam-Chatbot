@@ -74,6 +74,7 @@ export type TravelBotSettings = {
   handoff_reply: string;
   handoff_pause_minutes: number;
   chat_buttons: ChatButton[];
+  extra: Record<string, unknown>;
   updated_at: string;
 };
 
@@ -407,6 +408,11 @@ export async function ensureTravelSchema() {
         ALTER TABLE travel_bot_settings
           ADD COLUMN IF NOT EXISTS chat_buttons JSONB NOT NULL DEFAULT '[]'::jsonb;
       `);
+      // Flow builder rules — keyword-triggered bot replies with optional buttons.
+      await client.query(`
+        ALTER TABLE travel_bot_settings
+          ADD COLUMN IF NOT EXISTS extra JSONB NOT NULL DEFAULT '{}'::jsonb;
+      `);
       await client.query(`
         INSERT INTO travel_bot_settings (id)
         VALUES (TRUE)
@@ -672,6 +678,7 @@ function emptyTravelBotSettings(): TravelBotSettings {
     handoff_reply: "",
     handoff_pause_minutes: 60,
     chat_buttons: [],
+    extra: {},
     updated_at: new Date().toISOString(),
   };
 }
@@ -695,6 +702,10 @@ function mapBotSettingsRow(row: Record<string, unknown> | undefined): TravelBotS
     handoff_reply: normalizeStoredText(row.handoff_reply),
     handoff_pause_minutes: normalizePauseMinutes(row.handoff_pause_minutes),
     chat_buttons: normalizeChatButtons(row.chat_buttons),
+    extra:
+      row.extra && typeof row.extra === "object" && !Array.isArray(row.extra)
+        ? (row.extra as Record<string, unknown>)
+        : {},
     updated_at: String(row.updated_at || new Date().toISOString()),
   };
 }
@@ -726,6 +737,7 @@ export async function getTravelBotSettings(): Promise<TravelBotSettings> {
         handoff_reply,
         handoff_pause_minutes,
         chat_buttons,
+        extra,
         updated_at
       FROM travel_bot_settings
       WHERE id = TRUE
@@ -811,6 +823,14 @@ export async function updateTravelBotSettings(
   if (typeof fields.chat_buttons !== "undefined") {
     push("chat_buttons", JSON.stringify(normalizeChatButtons(fields.chat_buttons)), "::jsonb");
   }
+  if (
+    typeof fields.extra !== "undefined" &&
+    fields.extra &&
+    typeof fields.extra === "object" &&
+    !Array.isArray(fields.extra)
+  ) {
+    push("extra", JSON.stringify(fields.extra), "::jsonb");
+  }
 
   if (!sets.length) {
     return getTravelBotSettings();
@@ -839,6 +859,8 @@ export async function updateTravelBotSettings(
         handoff_keywords,
         handoff_reply,
         handoff_pause_minutes,
+        chat_buttons,
+        extra,
         updated_at
     `,
     values,

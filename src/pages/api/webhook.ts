@@ -1,5 +1,6 @@
 ﻿import type { NextApiRequest, NextApiResponse } from "next";
 import { askGemini } from "../../lib/gemini";
+import { matchFlow, type FlowRule } from "../../lib/flowEngine";
 import { replyToComment, sendImageMessage, sendQuickReplies, sendTextMessage, sendTypingOn } from "../../lib/messenger";
 import { sendTextMessage as sendIgTextMessage } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
@@ -1300,11 +1301,45 @@ async function handleMessage(
     return;
   }
 
+  const sessionId = `${platform}:${pageId}:${senderId}`;
+
+  // --- Flow rules: keyword-triggered replies (skip AI call when matched) ---
+  const flowRules = Array.isArray(botSettings.extra?.flows)
+    ? (botSettings.extra.flows as FlowRule[])
+    : [];
+  if (flowRules.length > 0) {
+    const matchedRule = matchFlow(text, flowRules);
+    if (matchedRule) {
+      recordCounter("webhook.flow_rule_matched_total", 1, { platform });
+      await assertLockHealthy();
+      const delivered = await sendPlatformMessage(
+        platform,
+        senderId,
+        matchedRule.reply,
+        token,
+        pageId,
+        igUserId,
+        trace,
+        { allowFallback: false },
+      );
+      if (!delivered) {
+        throw new RetryableWebhookError("delivery_failed:flow_rule");
+      }
+      try {
+        await appendMessage(sessionId, "user", text);
+        await appendMessage(sessionId, "assistant", matchedRule.reply);
+        await setLastReplyConsistent(sessionId, matchedRule.reply);
+      } catch {
+        // non-critical
+      }
+      return;
+    }
+  }
+
   // --- Load business data ---
   void maybeAutoSyncDriveFolder({ source: "api.webhook" });
   const { systemPrompt: fileSystemPrompt, business } = await readBusinessData();
 
-  const sessionId = `${platform}:${pageId}:${senderId}`;
   await assertLockHealthy();
   const history = await getHistory(sessionId);
   const lastReply = await getLastReplyConsistent(sessionId);
