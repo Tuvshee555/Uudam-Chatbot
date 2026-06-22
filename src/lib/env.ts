@@ -51,6 +51,9 @@ export type ValidatedEnv = {
   googleDrivePrivateKey: string | null;
   googleDriveSyncIntervalMinutes: number;
   googleDriveSyncFileLimit: number;
+  cloudinaryCloudName: string | null;
+  cloudinaryApiKey: string | null;
+  cloudinaryApiSecret: string | null;
 };
 
 let cachedEnv: ValidatedEnv | null = null;
@@ -583,6 +586,10 @@ export function getEnv(): ValidatedEnv {
     errors,
   );
 
+  const cloudinaryCloudName = readOptionalString("CLOUDINARY_CLOUD_NAME", source);
+  const cloudinaryApiKey = readOptionalString("CLOUDINARY_API_KEY", source);
+  const cloudinaryApiSecret = readOptionalString("CLOUDINARY_API_SECRET", source);
+
   const anyRedisFeatureEnabled =
     redisRateLimitEnabled ||
     redisReplayEnabled ||
@@ -666,6 +673,9 @@ export function getEnv(): ValidatedEnv {
     googleDrivePrivateKey,
     googleDriveSyncIntervalMinutes,
     googleDriveSyncFileLimit,
+    cloudinaryCloudName,
+    cloudinaryApiKey,
+    cloudinaryApiSecret,
   };
 
   logStartupDiagnostics("env", {

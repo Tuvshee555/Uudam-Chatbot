@@ -1722,6 +1722,44 @@ function StructuredEditor({
 }
 
 /* ----------------------------------------------------------------
+   Sidebar nav item
+   ---------------------------------------------------------------- */
+function SidebarItem({
+  icon,
+  label,
+  active,
+  badge,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  active: boolean;
+  badge?: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cx(
+        "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors",
+        active
+          ? "bg-brand text-white"
+          : "text-ink-muted hover:bg-surface-sunken hover:text-ink",
+      )}
+    >
+      {icon}
+      <span className="flex-1 text-left">{label}</span>
+      {badge != null && badge > 0 && (
+        <span className="rounded-full bg-danger px-1.5 py-0.5 text-[10px] font-bold text-white">
+          {badge}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/* ----------------------------------------------------------------
    Page
    ---------------------------------------------------------------- */
 const BLANK_TRIP_DRAFT: Record<string, string> = {
@@ -1796,6 +1834,8 @@ export default function AdminPage() {
   );
   const [tripPhotoUrls, setTripPhotoUrls] = useState<string[]>([]);
   const [tripPhotoInput, setTripPhotoInput] = useState("");
+  const [photoDragging, setPhotoDragging] = useState(false);
+  const [photoUploading, setPhotoUploading] = useState<string[]>([]); // track uploading file names
   const [deletingTrip, setDeletingTrip] = useState<TravelTrip | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
 
@@ -1808,6 +1848,7 @@ export default function AdminPage() {
   const [broadcastResult, setBroadcastResult] = useState<{ sent: number; failed: number } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const photoFileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const secretRef = useRef(secret);
@@ -2934,6 +2975,52 @@ export default function AdminPage() {
 
   const tripModalOpen = isNewTrip || editingTrip != null;
 
+  async function handlePhotoFiles(files: FileList | File[]) {
+    const fileArray = Array.from(files).filter((f) => f.size <= 10 * 1024 * 1024);
+    if (fileArray.length === 0) return;
+    const newNames = fileArray.map((f) => f.name);
+    setPhotoUploading((prev) => [...prev, ...newNames]);
+    for (const file of fileArray) {
+      try {
+        // Step 1: get signed params from our API
+        const sigRes = await fetchWithAdmin("/api/admin/upload-image", { method: "POST" });
+        if (!sigRes.ok) {
+          const sigJson = (await sigRes.json().catch(() => ({}))) as { error?: string };
+          throw new Error(sigJson?.error ?? "署名параметр авч чадсангүй.");
+        }
+        const sigData = (await sigRes.json()) as {
+          signature: string;
+          timestamp: number;
+          cloudName: string;
+          apiKey: string;
+          folder: string;
+        };
+        // Step 2: upload directly to Cloudinary
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("api_key", sigData.apiKey);
+        formData.append("timestamp", String(sigData.timestamp));
+        formData.append("signature", sigData.signature);
+        formData.append("folder", sigData.folder);
+        const uploadRes = await fetch(
+          `https://api.cloudinary.com/v1_1/${sigData.cloudName}/image/upload`,
+          { method: "POST", body: formData },
+        );
+        const uploadJson = (await uploadRes.json()) as { secure_url?: string; error?: { message?: string } };
+        if (!uploadRes.ok || !uploadJson.secure_url) {
+          throw new Error(uploadJson?.error?.message ?? "Cloudinary upload амжилтгүй.");
+        }
+        setTripPhotoUrls((prev) => [...prev, uploadJson.secure_url!]);
+      } catch (err) {
+        toast.error(
+          `"${file.name}" зураг оруулж чадсангүй: ${err instanceof Error ? err.message : "алдаа"}`,
+        );
+      } finally {
+        setPhotoUploading((prev) => prev.filter((n) => n !== file.name));
+      }
+    }
+  }
+
   function closeTripModal() {
     setEditingTrip(null);
     setIsNewTrip(false);
@@ -3175,235 +3262,214 @@ export default function AdminPage() {
     );
   }
 
-  const tabs: Array<{
-    key: TabKey;
-    label: string;
-    icon: ReactNode;
-    badge?: number;
-  }> = [
-    { key: "assistant", label: "AI Туслах", icon: <Icons.ai size={17} /> },
-    { key: "trips", label: "Аяллууд", icon: <Icons.trips size={17} /> },
-    { key: "bot", label: "Бот удирдлага", icon: <Icons.control size={17} /> },
-    {
-      key: "leads",
-      label: "Хүсэлтүүд",
-      icon: <Icons.alert size={17} />,
-      badge: newLeadCount,
-    },
-    { key: "settings", label: "Тохиргоо", icon: <Icons.settings size={17} /> },
-  ];
-
   return (
-    <div className="min-h-dvh bg-canvas pb-16">
+    <div className="flex h-screen flex-col overflow-hidden bg-canvas">
       <Head>
         <title>Аяллын удирдлагын самбар</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
 
-      {/* Header */}
-      <header className="sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur">
-        <div className="mx-auto w-full max-w-3xl px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <h1 className="truncate text-base font-semibold text-ink">
-                Аяллын удирдлага
-              </h1>
-              <p className="truncate text-xs text-ink-subtle">
-                {settings?.business_name || "Аяллын чатбот"}
-              </p>
-            </div>
-            <div className="flex shrink-0 items-center gap-1.5">
-              {handoffRows.length > 0 && (
-                <button type="button" onClick={() => setTab("bot")}>
-                  <Badge tone="warning" dot>
-                    🙋 {handoffRows.length}
-                  </Badge>
-                </button>
-              )}
-              <Badge tone={botPaused ? "danger" : "success"} dot>
-                {botPaused ? "Зогссон" : "Идэвхтэй"}
+      {/* Top bar */}
+      <header className="flex h-12 shrink-0 items-center justify-between border-b border-line bg-surface px-4">
+        <span className="text-sm font-semibold text-ink">Уудам Трэвел Admin</span>
+        <div className="flex items-center gap-3">
+          {handoffRows.length > 0 && (
+            <button type="button" onClick={() => setTab("bot")}>
+              <Badge tone="warning" dot>
+                🙋 {handoffRows.length}
               </Badge>
-              <Badge tone={dbInfo?.configured ? "neutral" : "danger"}>
-                {dbInfo?.trips ?? trips.length} аялал
-              </Badge>
-            </div>
-          </div>
-
-          {/* Tabs */}
-          <nav className="scroll-area -mx-1 mt-3 flex gap-1 overflow-x-auto">
-            {tabs.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                onClick={() => setTab(item.key)}
-                className={cx(
-                  "flex shrink-0 items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                  tab === item.key
-                    ? "bg-brand text-white"
-                    : "text-ink-muted hover:bg-surface-sunken",
-                )}
-              >
-                {item.icon}
-                {item.label}
-                {item.badge != null && item.badge > 0 && (
-                  <span
-                    className={cx(
-                      "ml-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-xs font-bold",
-                      tab === item.key
-                        ? "bg-white text-brand"
-                        : "bg-danger text-white",
-                    )}
-                  >
-                    {item.badge}
-                  </span>
-                )}
-              </button>
-            ))}
-          </nav>
+            </button>
+          )}
+          <Badge tone={botPaused ? "danger" : "success"} dot>
+            {botPaused ? "Бот зогссон" : "Бот идэвхтэй"}
+          </Badge>
+          <Badge tone={dbInfo?.configured ? "neutral" : "danger"}>
+            {dbInfo?.trips ?? trips.length} аялал
+          </Badge>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-3xl px-4 py-4">
-        {botPaused && (
-          <div className="mb-4">
-            <Alert tone="warning">
-              Бот түр зогссон байна. Хэрэглэгчид автомат хариу авахгүй.{" "}
-              {control?.pause_reason ? `Шалтгаан: ${control.pause_reason}` : ""}
-            </Alert>
-          </div>
-        )}
+      {/* Body */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Sidebar */}
+        <aside className="flex w-60 shrink-0 flex-col gap-1 overflow-y-auto border-r border-line bg-surface p-3">
+          <SidebarItem
+            icon={<Icons.trips size={16} />}
+            label="Аяллууд"
+            active={tab === "trips"}
+            onClick={() => setTab("trips")}
+          />
+          <SidebarItem
+            icon={<Icons.control size={16} />}
+            label="Ботын хяналт"
+            active={tab === "bot"}
+            badge={handoffRows.length || undefined}
+            onClick={() => setTab("bot")}
+          />
+          <SidebarItem
+            icon={<Icons.alert size={16} />}
+            label="Хүсэлтүүд"
+            active={tab === "leads"}
+            badge={newLeadCount || undefined}
+            onClick={() => setTab("leads")}
+          />
+          <SidebarItem
+            icon={<Icons.settings size={16} />}
+            label="Тохиргоо"
+            active={tab === "settings"}
+            onClick={() => setTab("settings")}
+          />
+          <SidebarItem
+            icon={<Icons.ai size={16} />}
+            label="AI туслах"
+            active={tab === "assistant"}
+            onClick={() => setTab("assistant")}
+          />
+        </aside>
 
-        {!dbInfo?.configured && (
-          <div className="mb-4">
-            <Alert tone="danger">
-              Өгөгдлийн сан холбогдоогүй байна. Мэдээлэл хадгалагдахгүй.
-            </Alert>
-          </div>
-        )}
+        {/* Content */}
+        <main className="flex-1 overflow-y-auto p-4 md:p-6">
+          {botPaused && (
+            <div className="mb-4">
+              <Alert tone="warning">
+                Бот түр зогссон байна. Хэрэглэгчид автомат хариу авахгүй.{" "}
+                {control?.pause_reason ? `Шалтгаан: ${control.pause_reason}` : ""}
+              </Alert>
+            </div>
+          )}
 
-        {readiness && readiness.issues.length > 0 && (
-          <div className="mb-4">
-            <Alert
-              tone={
-                readiness.issues.some((issue) => issue.severity === "critical")
-                  ? "danger"
-                  : "warning"
+          {!dbInfo?.configured && (
+            <div className="mb-4">
+              <Alert tone="danger">
+                Өгөгдлийн сан холбогдоогүй байна. Мэдээлэл хадгалагдахгүй.
+              </Alert>
+            </div>
+          )}
+
+          {readiness && readiness.issues.length > 0 && (
+            <div className="mb-4">
+              <Alert
+                tone={
+                  readiness.issues.some((issue) => issue.severity === "critical")
+                    ? "danger"
+                    : "warning"
+                }
+              >
+                Бэлэн байдлын оноо {readiness.score}/10.{" "}
+                {readiness.issues
+                  .slice(0, 2)
+                  .map((issue) => issue.message)
+                  .join(" ")}
+              </Alert>
+            </div>
+          )}
+
+          {tab === "assistant" && (
+            <AssistantTab
+              messages={chatMessages}
+              aiInput={aiInput}
+              setAiInput={setAiInput}
+              attachedFiles={attachedFiles}
+              onRemoveAttachedFile={removeAttachedFile}
+              dragOver={dragOver}
+              setDragOver={setDragOver}
+              busy={busyKey === "ai-send"}
+              busyLabel={aiBusyLabel}
+              applyBusyId={
+                busyKey.startsWith("apply-")
+                  ? busyKey.slice(6)
+                  : busyKey.startsWith("rollback-")
+                    ? busyKey.slice(9)
+                    : ""
               }
-            >
-              Бэлэн байдлын оноо {readiness.score}/10.{" "}
-              {readiness.issues
-                .slice(0, 2)
-                .map((issue) => issue.message)
-                .join(" ")}
-            </Alert>
-          </div>
-        )}
+              clarifyBusyId={
+                busyKey.startsWith("clarify-") ? busyKey.slice(8) : ""
+              }
+              onSend={() => void sendAssistant()}
+              onApply={(message) => void applyProposal(message)}
+              onRollback={(message) => void rollbackProposal(message)}
+              onSubmitClarificationForm={(message, answers) =>
+                void submitClarificationForm(message, answers)
+              }
+              onCancelProposal={(id) =>
+                setProposalMessage(id, { status: "cancelled" })
+              }
+              onToggleConfirm={(id, value) =>
+                setProposalMessage(id, { confirmChecked: value })
+              }
+              onPickFile={() => fileInputRef.current?.click()}
+              onDropFiles={(files) => void attachFiles(files)}
+              chatEndRef={chatEndRef}
+              inputRef={inputRef}
+            />
+          )}
 
-        {tab === "assistant" && (
-          <AssistantTab
-            messages={chatMessages}
-            aiInput={aiInput}
-            setAiInput={setAiInput}
-            attachedFiles={attachedFiles}
-            onRemoveAttachedFile={removeAttachedFile}
-            dragOver={dragOver}
-            setDragOver={setDragOver}
-            busy={busyKey === "ai-send"}
-            busyLabel={aiBusyLabel}
-            applyBusyId={
-              busyKey.startsWith("apply-")
-                ? busyKey.slice(6)
-                : busyKey.startsWith("rollback-")
-                  ? busyKey.slice(9)
-                  : ""
-            }
-            clarifyBusyId={
-              busyKey.startsWith("clarify-") ? busyKey.slice(8) : ""
-            }
-            onSend={() => void sendAssistant()}
-            onApply={(message) => void applyProposal(message)}
-            onRollback={(message) => void rollbackProposal(message)}
-            onSubmitClarificationForm={(message, answers) =>
-              void submitClarificationForm(message, answers)
-            }
-            onCancelProposal={(id) =>
-              setProposalMessage(id, { status: "cancelled" })
-            }
-            onToggleConfirm={(id, value) =>
-              setProposalMessage(id, { confirmChecked: value })
-            }
-            onPickFile={() => fileInputRef.current?.click()}
-            onDropFiles={(files) => void attachFiles(files)}
-            chatEndRef={chatEndRef}
-            inputRef={inputRef}
-          />
-        )}
+          {tab === "trips" && (
+            <TripsTab
+              trips={trips}
+              search={search}
+              setSearch={setSearch}
+              statusFilter={statusFilter}
+              setStatusFilter={setStatusFilter}
+              loading={loading}
+              onRefresh={() =>
+                void loadTrips(searchRef.current, statusFilterRef.current, {
+                  showLoading: true,
+                })
+              }
+              onCreate={beginCreateTrip}
+              onEdit={beginEditTrip}
+              onDelete={(trip) => setDeletingTrip(trip)}
+            />
+          )}
 
-        {tab === "trips" && (
-          <TripsTab
-            trips={trips}
-            search={search}
-            setSearch={setSearch}
-            statusFilter={statusFilter}
-            setStatusFilter={setStatusFilter}
-            loading={loading}
-            onRefresh={() =>
-              void loadTrips(searchRef.current, statusFilterRef.current, {
-                showLoading: true,
-              })
-            }
-            onCreate={beginCreateTrip}
-            onEdit={beginEditTrip}
-            onDelete={(trip) => setDeletingTrip(trip)}
-          />
-        )}
+          {tab === "bot" && (
+            <BotTab
+              pageControls={pageControls}
+              pauseReason={pauseReason}
+              setPauseReason={setPauseReason}
+              recentRows={recentRows}
+              pausedRows={pausedRows}
+              pausedIds={pausedIds}
+              busyKey={busyKey}
+              tick={tick}
+              onPauseAction={(action, senderId, ms, pageId) =>
+                void runPauseAction(action, senderId, ms, pageId)
+              }
+            />
+          )}
 
-        {tab === "bot" && (
-          <BotTab
-            pageControls={pageControls}
-            pauseReason={pauseReason}
-            setPauseReason={setPauseReason}
-            recentRows={recentRows}
-            pausedRows={pausedRows}
-            pausedIds={pausedIds}
-            busyKey={busyKey}
-            tick={tick}
-            onPauseAction={(action, senderId, ms, pageId) =>
-              void runPauseAction(action, senderId, ms, pageId)
-            }
-          />
-        )}
+          {tab === "leads" && (
+            <LeadsTab
+              leads={leads}
+              stats={leadStats}
+              loading={loading}
+              onRefresh={() => void loadLeadsState({ showLoading: true })}
+              onMarkSeen={(lead) => void markLeadSeen(lead)}
+              onUpdateStatus={(lead, status) => void updateLeadCrmStatus(lead, status)}
+              broadcastMessage={broadcastMessage}
+              broadcastSending={broadcastSending}
+              broadcastResult={broadcastResult}
+              onBroadcastChange={setBroadcastMessage}
+              onBroadcastSend={() => void sendBroadcast()}
+            />
+          )}
 
-        {tab === "leads" && (
-          <LeadsTab
-            leads={leads}
-            stats={leadStats}
-            loading={loading}
-            onRefresh={() => void loadLeadsState({ showLoading: true })}
-            onMarkSeen={(lead) => void markLeadSeen(lead)}
-            onUpdateStatus={(lead, status) => void updateLeadCrmStatus(lead, status)}
-            broadcastMessage={broadcastMessage}
-            broadcastSending={broadcastSending}
-            broadcastResult={broadcastResult}
-            onBroadcastChange={setBroadcastMessage}
-            onBroadcastSend={() => void sendBroadcast()}
-          />
-        )}
-
-        {tab === "settings" && settingsForm && (
-          <SettingsTab
-            form={settingsForm}
-            setForm={setSettingsForm}
-            updatedAt={settings?.updated_at}
-            busy={busyKey === "save-settings"}
-            driveSync={driveSync}
-            syncBusy={busyKey === "drive-sync"}
-            onSyncDriveNow={() => void syncDriveNow()}
-            onSave={() => void saveSettings()}
-            onRequestClear={() => setConfirmClear(true)}
-          />
-        )}
-      </main>
+          {tab === "settings" && settingsForm && (
+            <SettingsTab
+              form={settingsForm}
+              setForm={setSettingsForm}
+              updatedAt={settings?.updated_at}
+              busy={busyKey === "save-settings"}
+              driveSync={driveSync}
+              syncBusy={busyKey === "drive-sync"}
+              onSyncDriveNow={() => void syncDriveNow()}
+              onSave={() => void saveSettings()}
+              onRequestClear={() => setConfirmClear(true)}
+            />
+          )}
+        </main>
+      </div>
 
       {/* Hidden file input */}
       <input
@@ -3571,37 +3637,87 @@ export default function AdminPage() {
         {/* Photo URL editor */}
         <div className="mt-4">
           <p className="mb-1 text-sm font-medium text-ink">
-            Аялалын зургууд (URL)
+            Аялалын зургууд
           </p>
           <p className="mb-2 text-xs text-ink-subtle">
-            Хэрэглэгч энэ аялалыг асуухад бот зургийг автоматаар илгээнэ. HTTPS зурагны линк оруулна уу.
+            Хэрэглэгч энэ аялалыг асуухад бот зургийг автоматаар илгээнэ.
           </p>
-          {tripPhotoUrls.map((url, idx) => (
-            <div key={idx} className="mb-1.5 flex items-center gap-2">
-              <input
-                type="url"
-                value={url}
-                onChange={(e) =>
-                  setTripPhotoUrls((prev) =>
-                    prev.map((u, i) => (i === idx ? e.target.value : u)),
-                  )
-                }
-                placeholder="https://example.com/photo.jpg"
-                className="flex-1 rounded-lg border border-line-strong bg-surface-sunken px-3 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none"
-              />
-              <button
-                type="button"
-                onClick={() =>
-                  setTripPhotoUrls((prev) => prev.filter((_, i) => i !== idx))
-                }
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line text-ink-muted hover:border-danger hover:text-danger"
-                aria-label="Устгах"
-              >
-                <Icons.trash size={14} />
-              </button>
+
+          {/* Drag-drop upload zone */}
+          <div
+            onDragOver={(e) => { e.preventDefault(); setPhotoDragging(true); }}
+            onDragLeave={() => setPhotoDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setPhotoDragging(false);
+              void handlePhotoFiles(e.dataTransfer.files);
+            }}
+            onClick={() => photoFileInputRef.current?.click()}
+            className={cx(
+              "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-6 transition-colors",
+              photoDragging
+                ? "border-brand bg-brand-soft"
+                : "border-line-strong bg-surface-sunken hover:border-brand",
+            )}
+          >
+            <Icons.download size={24} className="text-ink-subtle" />
+            <p className="text-sm font-medium text-ink">Зураг чирж оруулах эсвэл дарж сонгох</p>
+            <p className="text-xs text-ink-subtle">PNG, JPG, WEBP — хамгийн ихдээ 10MB</p>
+            <input
+              ref={photoFileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files) void handlePhotoFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
+          </div>
+
+          {/* Uploading indicators */}
+          {photoUploading.length > 0 && (
+            <div className="mt-2 space-y-1">
+              {photoUploading.map((name) => (
+                <div key={name} className="flex items-center gap-2 rounded-md border border-line bg-surface-sunken px-3 py-2 text-xs text-ink-muted">
+                  <Spinner className="shrink-0" />
+                  <span className="truncate">{name} — байршуулж байна…</span>
+                </div>
+              ))}
             </div>
-          ))}
-          <div className="mt-1.5 flex gap-2">
+          )}
+
+          {/* Thumbnail previews */}
+          {tripPhotoUrls.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {tripPhotoUrls.map((url, idx) => (
+                <div key={idx} className="group relative h-20 w-20 overflow-hidden rounded-lg border border-line">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={url}
+                    alt={`Зураг ${idx + 1}`}
+                    className="h-full w-full object-cover"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = "none";
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setTripPhotoUrls((prev) => prev.filter((_, i) => i !== idx))}
+                    className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition-opacity group-hover:opacity-100"
+                    aria-label="Устгах"
+                  >
+                    <Icons.trash size={16} className="text-white" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Manual URL paste fallback */}
+          <p className="mt-3 mb-1 text-xs font-medium text-ink-muted">Эсвэл URL-аар нэмэх</p>
+          <div className="flex gap-2">
             <input
               type="url"
               value={tripPhotoInput}
@@ -3616,7 +3732,7 @@ export default function AdminPage() {
                   }
                 }
               }}
-              placeholder="Шинэ зурагны URL нэмэх..."
+              placeholder="https://example.com/photo.jpg"
               className="flex-1 rounded-lg border border-line-strong bg-surface-sunken px-3 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none"
             />
             <Button
