@@ -54,6 +54,11 @@ export type ValidatedEnv = {
   cloudinaryCloudName: string | null;
   cloudinaryApiKey: string | null;
   cloudinaryApiSecret: string | null;
+  qpayEnabled: boolean;
+  qpayBaseUrl: string | null;
+  qpayUsername: string | null;
+  qpayPassword: string | null;
+  qpayInvoiceCode: string | null;
 };
 
 let cachedEnv: ValidatedEnv | null = null;
@@ -590,6 +595,14 @@ export function getEnv(): ValidatedEnv {
   const cloudinaryApiKey = readOptionalString("CLOUDINARY_API_KEY", source);
   const cloudinaryApiSecret = readOptionalString("CLOUDINARY_API_SECRET", source);
 
+  // QPay (optional, OFF by default). The feature only activates when
+  // QPAY_ENABLED=true AND all credentials are present (see qpay.ts isQPayConfigured).
+  const qpayEnabled = readBoolean("QPAY_ENABLED", source, false, errors);
+  const qpayBaseUrl = readOptionalString("QPAY_BASE_URL", source);
+  const qpayUsername = readOptionalString("QPAY_USERNAME", source);
+  const qpayPassword = readOptionalString("QPAY_PASSWORD", source);
+  const qpayInvoiceCode = readOptionalString("QPAY_INVOICE_CODE", source);
+
   const anyRedisFeatureEnabled =
     redisRateLimitEnabled ||
     redisReplayEnabled ||
@@ -676,6 +689,11 @@ export function getEnv(): ValidatedEnv {
     cloudinaryCloudName,
     cloudinaryApiKey,
     cloudinaryApiSecret,
+    qpayEnabled,
+    qpayBaseUrl,
+    qpayUsername,
+    qpayPassword,
+    qpayInvoiceCode,
   };
 
   logStartupDiagnostics("env", {

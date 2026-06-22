@@ -455,6 +455,25 @@ export async function ensureTravelSchema() {
         ALTER TABLE travel_trip_entries
           ADD COLUMN IF NOT EXISTS hotel TEXT NOT NULL DEFAULT '';
       `);
+      // QPay payments (feature is OFF by default; table is harmless when unused)
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_payments (
+          id BIGSERIAL PRIMARY KEY,
+          invoice_id TEXT NOT NULL DEFAULT '',
+          sender_invoice_no TEXT NOT NULL DEFAULT '',
+          platform TEXT NOT NULL DEFAULT 'facebook',
+          sender_id TEXT NOT NULL DEFAULT '',
+          customer_name TEXT NOT NULL DEFAULT '',
+          trip_name TEXT NOT NULL DEFAULT '',
+          amount INTEGER NOT NULL DEFAULT 0,
+          currency TEXT NOT NULL DEFAULT 'MNT',
+          status TEXT NOT NULL DEFAULT 'pending',
+          qr_text TEXT NOT NULL DEFAULT '',
+          note TEXT NOT NULL DEFAULT '',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          paid_at TIMESTAMPTZ NULL
+        );
+      `);
       // Broadcast feature: track sent broadcasts and opted-in senders
       await client.query(`
         CREATE TABLE IF NOT EXISTS travel_broadcasts (
