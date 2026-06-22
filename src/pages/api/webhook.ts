@@ -1,6 +1,20 @@
 ﻿import type { NextApiRequest, NextApiResponse } from "next";
 import { askGemini } from "../../lib/gemini";
-import { matchFlow, type FlowRule } from "../../lib/flowEngine";
+import {
+  matchFlow,
+  findTriggeredFlow,
+  getFlowState,
+  setFlowState,
+  clearFlowState,
+  newRuntimeState,
+  runFlowFrom,
+  resumeFlowWithInput,
+  type FlowRule,
+  type FlowDoc,
+  type FlowEffects,
+  type FlowRuntimeState,
+  type RunOutcome,
+} from "../../lib/flowEngine";
 import { replyToComment, sendImageMessage, sendQuickReplies, sendTextMessage, sendTypingOn } from "../../lib/messenger";
 import { sendTextMessage as sendIgTextMessage } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
@@ -1215,6 +1229,100 @@ async function handleMessage(
     }
   }
 
+  // --- Visual flow (graph) handling ---
+  // Build the side-effect adapter once; both the resume and trigger paths use it.
+  // If a flow ends on an ai_step node, this carries its optional prompt override
+  // into the AI pipeline below.
+  let flowAiPromptOverride: string | undefined;
+  const flowDocs: FlowDoc[] = Array.isArray(botSettings.extra?.flowDocs)
+    ? (botSettings.extra.flowDocs as FlowDoc[])
+    : [];
+  const flowSessionId = `${platform}:${pageId}:${senderId}`;
+
+  function buildFlowEffects(): FlowEffects {
+    return {
+      sendText: async (msg: string) => {
+        await assertLockHealthy();
+        const ok = await sendPlatformMessage(
+          platform, senderId, msg, token, pageId, igUserId, trace, { allowFallback: false },
+        );
+        if (!ok) throw new RetryableWebhookError("delivery_failed:flow_message");
+        await appendMessage(flowSessionId, "assistant", msg).catch(() => {});
+      },
+      sendImage: token && platform === "facebook"
+        ? async (url: string) => {
+            await sendImageMessage(senderId, url, token, {
+              requestId: trace?.requestId,
+              correlationId: trace?.correlationId,
+              source: "api.webhook.flow_image",
+            });
+          }
+        : undefined,
+      sendQuickReplies: token && platform === "facebook"
+        ? async (msg: string, labels: string[]) => {
+            await sendQuickReplies(senderId, msg, labels, token, {
+              requestId: trace?.requestId,
+              correlationId: trace?.correlationId,
+              source: "api.webhook.flow_quick",
+            });
+            await appendMessage(flowSessionId, "assistant", msg).catch(() => {});
+          }
+        : undefined,
+      notifyOwner: async (msg: string) => {
+        await notifyStaffOfLead(
+          { kind: "handoff", platform, customerMessage: msg },
+          { requestId: trace?.requestId, correlationId: trace?.correlationId, source: "api.webhook.flow" },
+        ).catch(() => {});
+      },
+      captureLead: async (state: FlowRuntimeState) => {
+        await createLead({
+          kind: "booking",
+          platform,
+          senderId,
+          customerMessage: state.fields.message || text,
+          contactPhone: state.fields.phone || "",
+          context: JSON.stringify(state.fields),
+        }).catch(() => {});
+      },
+    };
+  }
+
+  async function persistFlowOutcome(
+    doc: FlowDoc,
+    state: FlowRuntimeState,
+    outcome: RunOutcome,
+  ): Promise<{ handedToAi: boolean; systemPromptOverride?: string }> {
+    if (outcome.status === "waiting_input") {
+      await setFlowState(senderId, platform, state);
+      return { handedToAi: false };
+    }
+    // completed / skipped / handoff_to_ai → clear runtime state
+    await clearFlowState(senderId, platform);
+    if (outcome.status === "handoff_to_ai") {
+      return { handedToAi: true, systemPromptOverride: outcome.systemPromptOverride };
+    }
+    return { handedToAi: false };
+  }
+
+  // Resume a paused graph flow (sender previously hit a user_input node).
+  if (flowDocs.length > 0) {
+    const activeState = await getFlowState(senderId, platform);
+    if (activeState) {
+      const doc = flowDocs.find((d) => d.id === activeState.flowId && d.enabled);
+      if (doc) {
+        recordCounter("webhook.flow_graph_resumed_total", 1, { platform });
+        await appendMessage(flowSessionId, "user", text).catch(() => {});
+        const outcome = await resumeFlowWithInput(doc, activeState, text, buildFlowEffects());
+        const { handedToAi } = await persistFlowOutcome(doc, activeState, outcome);
+        if (!handedToAi) return;
+        // ai_step reached → fall through to the normal AI pipeline below.
+      } else {
+        // Flow disappeared/disabled — drop stale state and continue normally.
+        await clearFlowState(senderId, platform);
+      }
+    }
+  }
+
   // --- Human handoff: customer asks to talk to a real person ---
   if (
     botSettings.handoff_enabled &&
@@ -1302,6 +1410,30 @@ async function handleMessage(
   }
 
   const sessionId = `${platform}:${pageId}:${senderId}`;
+
+  // --- Visual flow (graph) triggers: a keyword starts a new multi-step flow ---
+  if (flowDocs.length > 0) {
+    const triggered = findTriggeredFlow(text, flowDocs);
+    if (triggered) {
+      recordCounter("webhook.flow_graph_triggered_total", 1, { platform });
+      await appendMessage(sessionId, "user", text).catch(() => {});
+      const state = newRuntimeState(triggered.doc.id, triggered.startNodeId);
+      const outcome = await runFlowFrom(
+        triggered.doc,
+        triggered.startNodeId,
+        state,
+        buildFlowEffects(),
+      );
+      const { handedToAi, systemPromptOverride } = await persistFlowOutcome(
+        triggered.doc,
+        state,
+        outcome,
+      );
+      if (!handedToAi) return;
+      // ai_step: continue to the AI pipeline, applying any prompt override.
+      flowAiPromptOverride = systemPromptOverride;
+    }
+  }
 
   // --- Flow rules: keyword-triggered replies (skip AI call when matched) ---
   const flowRules = Array.isArray(botSettings.extra?.flows)
@@ -1513,7 +1645,9 @@ async function handleMessage(
   }
 
   const prompt = buildPrompt({
-    systemPrompt: fileSystemPrompt,
+    systemPrompt: flowAiPromptOverride
+      ? `${fileSystemPrompt}\n\n${flowAiPromptOverride}`
+      : fileSystemPrompt,
     business: business || {},
     history,
     userText: text,
