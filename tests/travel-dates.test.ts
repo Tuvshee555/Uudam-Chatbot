@@ -28,6 +28,7 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
     status: "active",
     notes: "",
     source_description: "",
+    photo_urls: [],
     extra: {},
     created_at: "",
     updated_at: "",

@@ -1,6 +1,6 @@
 ﻿import type { NextApiRequest, NextApiResponse } from "next";
 import { askGemini } from "../../lib/gemini";
-import { replyToComment, sendTextMessage, sendTypingOn } from "../../lib/messenger";
+import { replyToComment, sendImageMessage, sendTextMessage, sendTypingOn } from "../../lib/messenger";
 import { sendTextMessage as sendIgTextMessage } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
@@ -26,6 +26,11 @@ import {
   hasCompareIntent,
   hasSeatsIntent,
 } from "../../lib/travelFastPaths";
+import {
+  extractTripPhotosForReply,
+  isFirstMessage,
+  sampleWelcomePhotos,
+} from "../../lib/welcomeFlow";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import {
   advanceCollectState,
@@ -1079,6 +1084,49 @@ async function handleMessage(
 
   const botSettings = await getTravelBotSettings();
 
+  // --- Welcome flow: first message greeting + trip photo gallery ---
+  // Only on Facebook Messenger (IG doesn't support attachment API without approval).
+  // Fires exactly once per sender (Redis SETNX). Falls back gracefully if Redis down.
+  if (platform === "facebook" && token && (await isFirstMessage(senderId, platform))) {
+    try {
+      const welcomeText =
+        botSettings.quick_info_reply ||
+        "Уудам Трэвел-д тавтай морилно уу! Бид танд хамгийн шилдэг аялалыг санал болгоно. Доорх аялалуудаас сонирхсоноо асуугаарай.";
+      await sendTextMessage(senderId, welcomeText, token, {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        source: "api.webhook.welcome",
+      });
+      // Send trip photos — load trips, sample photos, send each as image
+      const allTrips = await listTrips({ limit: 5000 });
+      const welcomePhotos = sampleWelcomePhotos(allTrips);
+      for (const url of welcomePhotos) {
+        try {
+          await sendImageMessage(senderId, url, token, {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            source: "api.webhook.welcome",
+          });
+        } catch {
+          // One bad URL shouldn't kill the rest
+        }
+      }
+      recordCounter("webhook.welcome_sent_total", 1, {
+        platform,
+        photoCount: String(welcomePhotos.length),
+      });
+    } catch (error) {
+      logWarn("webhook.welcome_failed", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+        classification: classifyError(error),
+      });
+    }
+    // Continue processing their actual first message normally
+  }
+
   // --- Booking info collection flow (mid-flow message handling) ---
   // If the sender is already in a booking-collection flow, treat this message
   // as their answer to the current step rather than routing normally.
@@ -1503,6 +1551,34 @@ async function handleMessage(
       senderHash: hashIdentifier(senderId),
       classification: classifyError(error),
     });
+  }
+
+  // --- Trip photo auto-send: if AI replied about a specific trip, send its photos ---
+  // Only on Facebook Messenger (attachment API). Best-effort — never blocks reply.
+  if (platform === "facebook" && token) {
+    try {
+      const tripsForPhotos = await listTrips({ limit: 5000 });
+      const tripPhotos = extractTripPhotosForReply(safeReply, tripsForPhotos);
+      for (const url of tripPhotos) {
+        try {
+          await sendImageMessage(senderId, url, token, {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            source: "api.webhook.trip_photo",
+          });
+        } catch {
+          // One bad URL shouldn't kill the rest
+        }
+      }
+      if (tripPhotos.length > 0) {
+        recordCounter("webhook.trip_photos_sent_total", 1, {
+          platform,
+          photoCount: String(tripPhotos.length),
+        });
+      }
+    } catch {
+      // Trip photo send is enhancement-only — never surface to customer
+    }
   }
 
   // --- Booking-intent lead: record + alert staff after the reply is sent ---

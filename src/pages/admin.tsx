@@ -45,6 +45,7 @@ type TravelTrip = {
   status: TripStatus;
   notes: string;
   source_description: string;
+  photo_urls: string[];
   updated_at: string;
 };
 
@@ -1793,6 +1794,8 @@ export default function AdminPage() {
   const [tripDraft, setTripDraft] = useState<Record<string, string>>(
     BLANK_TRIP_DRAFT,
   );
+  const [tripPhotoUrls, setTripPhotoUrls] = useState<string[]>([]);
+  const [tripPhotoInput, setTripPhotoInput] = useState("");
   const [deletingTrip, setDeletingTrip] = useState<TravelTrip | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
 
@@ -2901,6 +2904,8 @@ export default function AdminPage() {
     setIsNewTrip(true);
     setEditingTrip(null);
     setTripDraft({ ...BLANK_TRIP_DRAFT });
+    setTripPhotoUrls([]);
+    setTripPhotoInput("");
   }
 
   function beginEditTrip(trip: TravelTrip) {
@@ -2923,6 +2928,8 @@ export default function AdminPage() {
       notes: trip.notes || "",
       source_description: trip.source_description || "",
     });
+    setTripPhotoUrls(trip.photo_urls || []);
+    setTripPhotoInput("");
   }
 
   const tripModalOpen = isNewTrip || editingTrip != null;
@@ -2954,6 +2961,7 @@ export default function AdminPage() {
         .map((value) => value.trim())
         .filter(Boolean),
       source_description: tripDraft.source_description || "",
+      photo_urls: tripPhotoUrls,
     };
     if (!fields.route_name.trim() && !fields.operator_name.trim()) {
       toast.error("Маршрут эсвэл операторын нэр оруулна уу.");
@@ -3558,6 +3566,78 @@ export default function AdminPage() {
               setTripDraft((p) => ({ ...p, notes: e.target.value }))
             }
           />
+        </div>
+
+        {/* Photo URL editor */}
+        <div className="mt-4">
+          <p className="mb-1 text-sm font-medium text-ink">
+            Аялалын зургууд (URL)
+          </p>
+          <p className="mb-2 text-xs text-ink-subtle">
+            Хэрэглэгч энэ аялалыг асуухад бот зургийг автоматаар илгээнэ. HTTPS зурагны линк оруулна уу.
+          </p>
+          {tripPhotoUrls.map((url, idx) => (
+            <div key={idx} className="mb-1.5 flex items-center gap-2">
+              <input
+                type="url"
+                value={url}
+                onChange={(e) =>
+                  setTripPhotoUrls((prev) =>
+                    prev.map((u, i) => (i === idx ? e.target.value : u)),
+                  )
+                }
+                placeholder="https://example.com/photo.jpg"
+                className="flex-1 rounded-lg border border-line-strong bg-surface-sunken px-3 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() =>
+                  setTripPhotoUrls((prev) => prev.filter((_, i) => i !== idx))
+                }
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line text-ink-muted hover:border-danger hover:text-danger"
+                aria-label="Устгах"
+              >
+                <Icons.trash size={14} />
+              </button>
+            </div>
+          ))}
+          <div className="mt-1.5 flex gap-2">
+            <input
+              type="url"
+              value={tripPhotoInput}
+              onChange={(e) => setTripPhotoInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  const url = tripPhotoInput.trim();
+                  if (url.startsWith("https://") && tripPhotoUrls.length < 20) {
+                    setTripPhotoUrls((prev) => [...prev, url]);
+                    setTripPhotoInput("");
+                  }
+                }
+              }}
+              placeholder="Шинэ зурагны URL нэмэх..."
+              className="flex-1 rounded-lg border border-line-strong bg-surface-sunken px-3 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none"
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={
+                !tripPhotoInput.trim().startsWith("https://") ||
+                tripPhotoUrls.length >= 20
+              }
+              onClick={() => {
+                const url = tripPhotoInput.trim();
+                if (url.startsWith("https://") && tripPhotoUrls.length < 20) {
+                  setTripPhotoUrls((prev) => [...prev, url]);
+                  setTripPhotoInput("");
+                }
+              }}
+            >
+              <Icons.plus size={14} />
+              Нэмэх
+            </Button>
+          </div>
         </div>
       </Modal>
 

@@ -36,6 +36,7 @@ export type TravelTrip = {
   status: TripStatus;
   notes: string;
   source_description: string;
+  photo_urls: string[];
   extra: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -97,6 +98,7 @@ export type TripMutationFields = Partial<
     | "status"
     | "notes"
     | "source_description"
+    | "photo_urls"
     | "extra"
   >
 >;
@@ -432,6 +434,11 @@ export async function ensureTravelSchema() {
       await client.query(`
         ALTER TABLE travel_leads
           ADD COLUMN IF NOT EXISTS lead_status TEXT NOT NULL DEFAULT 'new_lead';
+      `);
+      // Migration: add photo_urls to trips (idempotent)
+      await client.query(`
+        ALTER TABLE travel_trip_entries
+          ADD COLUMN IF NOT EXISTS photo_urls JSONB NOT NULL DEFAULT '[]'::jsonb;
       `);
       // Broadcast feature: track sent broadcasts and opted-in senders
       await client.query(`
@@ -866,6 +873,11 @@ function mapTripRow(row: Record<string, unknown>): TravelTrip {
     status: coerceTripStatus(row.status),
     notes: normalizeStoredText(row.notes),
     source_description: normalizeStoredText(row.source_description),
+    photo_urls: Array.isArray(row.photo_urls)
+      ? (row.photo_urls as unknown[])
+          .filter((u): u is string => typeof u === "string" && u.startsWith("https://"))
+          .slice(0, 20)
+      : [],
     extra:
       row.extra && typeof row.extra === "object" && !Array.isArray(row.extra)
         ? (row.extra as Record<string, unknown>)
@@ -1114,6 +1126,9 @@ export async function upsertTrip(input: {
     status: coerceTripStatus(cleaned.status),
     notes: cleaned.notes || "",
     source_description: cleaned.source_description || "",
+    photo_urls: Array.isArray(cleaned.photo_urls)
+      ? cleaned.photo_urls.filter((u) => typeof u === "string" && u.startsWith("https://")).slice(0, 20)
+      : [],
     extra: cleaned.extra || {},
     created_at: "",
     updated_at: "",
@@ -1137,11 +1152,12 @@ export async function upsertTrip(input: {
         status,
         notes,
         source_description,
+        photo_urls,
         extra,
         updated_at
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10, $11, $12, $13, $14, $15, $16::jsonb, NOW()
+        $1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10, $11, $12, $13, $14, $15, $16::jsonb, $17::jsonb, NOW()
       )
       ON CONFLICT (id)
       DO UPDATE SET
@@ -1159,6 +1175,7 @@ export async function upsertTrip(input: {
         status = EXCLUDED.status,
         notes = EXCLUDED.notes,
         source_description = EXCLUDED.source_description,
+        photo_urls = EXCLUDED.photo_urls,
         extra = EXCLUDED.extra,
         updated_at = NOW()
       RETURNING *
@@ -1179,6 +1196,7 @@ export async function upsertTrip(input: {
       row.status,
       row.notes,
       row.source_description,
+      JSON.stringify(row.photo_urls),
       JSON.stringify(row.extra),
     ],
   );
@@ -1208,21 +1226,24 @@ export async function patchTrip(id: string, fields: TripMutationFields) {
     status: "status",
     notes: "notes",
     source_description: "source_description",
+    photo_urls: "photo_urls",
     extra: "extra",
   };
+
+  const JSONB_KEYS = new Set<keyof TripMutationFields>(["extra", "photo_urls"]);
 
   const values: unknown[] = [];
   const sets: string[] = [];
 
   keys.forEach((key, index) => {
     values.push(
-      key === "extra"
-        ? JSON.stringify((cleaned[key] as Record<string, unknown>) || {})
+      JSONB_KEYS.has(key)
+        ? JSON.stringify(cleaned[key] ?? (key === "photo_urls" ? [] : {}))
         : cleaned[key],
     );
     const column = columnMap[key];
     const placeholder = key === "departure_dates" ? `$${index + 1}::text[]` : `$${index + 1}`;
-    const jsonbPlaceholder = key === "extra" ? `${placeholder}::jsonb` : placeholder;
+    const jsonbPlaceholder = JSONB_KEYS.has(key) ? `${placeholder}::jsonb` : placeholder;
     sets.push(`${column} = ${jsonbPlaceholder}`);
   });
 
