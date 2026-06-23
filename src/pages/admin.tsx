@@ -1488,34 +1488,42 @@ function buildProposalClarifications(
       normalized.includes("огноо") ||
       normalized.includes("departure date")
     ) {
-      const subjectKey = normalizeReviewText(subject || detail);
-      coveredConflictChecks.push(
-        (value) =>
-          value.includes(subjectKey) &&
-          (value.includes("огноо") || value.includes("departure date")),
-      );
-      pushQuestion({
-        id: `date-conflict:${index}`,
-        prompt: `${subjectTag}гарах өдрийг тодорхойлж чадсангүй. Юу хийх вэ?`,
-        detail,
-        options: [
-          {
-            label: "Огноогүй үлдээх",
-            answer: `${subjectTag}гарах өдөргүйгээр саналд хэвээр нь үлдээ. (Зөрчил: ${detail})`,
-          },
-          {
-            label: "Энэ аяллыг хасах",
-            answer: `${subjectTag}гарах өдөр нь тодорхойгүй тул санал болгохгүй. (Зөрчил: ${detail})`,
-          },
-          {
-            label: "Огноо доороос бичих",
-            answer: `${subjectTag}гарах өдрийг доорх талбарт бичнэ үү.`,
-          },
-        ],
-        allowCustom: true,
-        customPlaceholder: "Гарах өдрийг бичнэ үү (ж: 2026-06-15, 2026-07-02)",
-      });
-      return;
+      // If the conflict text also mentions prices (₮ or multi-month price differences),
+      // it's a seasonal pricing conflict misrouted here — skip so the seasonal-price
+      // branch below fires instead.
+      const hasPriceContext =
+        detail.includes("₮") ||
+        (normalized.includes("сард") && /\d{3,}/.test(detail));
+      if (!hasPriceContext) {
+        const subjectKey = normalizeReviewText(subject || detail);
+        coveredConflictChecks.push(
+          (value) =>
+            value.includes(subjectKey) &&
+            (value.includes("огноо") || value.includes("departure date")),
+        );
+        pushQuestion({
+          id: `date-conflict:${index}`,
+          prompt: `${subjectTag}гарах өдрийг тодорхойлж чадсангүй. Юу хийх вэ?`,
+          detail,
+          options: [
+            {
+              label: "Огноогүй үлдээх",
+              answer: `${subjectTag}гарах өдөргүйгээр саналд хэвээр нь үлдээ. (Зөрчил: ${detail})`,
+            },
+            {
+              label: "Энэ аяллыг хасах",
+              answer: `${subjectTag}гарах өдөр нь тодорхойгүй тул санал болгохгүй. (Зөрчил: ${detail})`,
+            },
+            {
+              label: "Огноо доороос бичих",
+              answer: `${subjectTag}гарах өдрийг доорх талбарт бичнэ үү.`,
+            },
+          ],
+          allowCustom: true,
+          customPlaceholder: "Гарах өдрийг бичнэ үү (ж: 2026-06-15, 2026-07-02)",
+        });
+        return;
+      }
     }
 
     if (
