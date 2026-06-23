@@ -44,8 +44,11 @@ import {
 } from "../../lib/travelFastPaths";
 import {
   extractTripPhotosForReply,
+  getActiveSeason,
   isFirstMessage,
+  matchSeasonByText,
   resolveGreetingConfig,
+  resolveSeasons,
   sampleWelcomePhotos,
 } from "../../lib/welcomeFlow";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
@@ -908,6 +911,42 @@ async function sendPlatformMessage(
   }
 }
 
+/**
+ * Send a set of photos as ONE swipeable gallery (carousel). Falls back to
+ * sending them as individual image messages if the carousel call fails.
+ * Best-effort: never throws, returns silently when there are no photos or no
+ * token. Facebook Messenger only (attachment/template API).
+ */
+async function sendPhotoAlbum(
+  senderId: string,
+  photoUrls: string[],
+  token: string | undefined,
+  trace?: { requestId: string; correlationId: string },
+): Promise<void> {
+  if (!token || photoUrls.length === 0) return;
+  const traceOpts = {
+    requestId: trace?.requestId,
+    correlationId: trace?.correlationId,
+    source: "api.webhook.album",
+  };
+  try {
+    await sendImageCarousel(
+      senderId,
+      photoUrls.map((url) => ({ imageUrl: url })),
+      token,
+      traceOpts,
+    );
+  } catch {
+    for (const url of photoUrls) {
+      try {
+        await sendImageMessage(senderId, url, token, traceOpts);
+      } catch {
+        // one bad URL shouldn't kill the rest
+      }
+    }
+  }
+}
+
 async function sendFacebookTypingIndicator(
   recipientId: string,
   token: string | undefined,
@@ -1129,47 +1168,29 @@ async function handleMessage(
           source: "api.webhook.welcome",
         });
       }
-      // Photos: use the owner's hand-picked list when provided, else auto-sample
-      // one photo from each active trip.
-      let welcomePhotos: string[] = [];
-      if (greeting.usePhotoUrls && greeting.photoUrls.length > 0) {
-        welcomePhotos = greeting.photoUrls.slice(0, 10);
+      // Album 1 (default): owner's fixed default photos, OR hand-picked welcome
+      // photos, OR auto-sampled one-per-trip — in that order of preference.
+      let defaultAlbum: string[] = [];
+      if (greeting.defaultPhotoUrls.length > 0) {
+        defaultAlbum = greeting.defaultPhotoUrls.slice(0, 10);
+      } else if (greeting.usePhotoUrls && greeting.photoUrls.length > 0) {
+        defaultAlbum = greeting.photoUrls.slice(0, 10);
       } else if (!greeting.usePhotoUrls) {
         const allTrips = await listTrips({ limit: 5000 });
-        welcomePhotos = sampleWelcomePhotos(allTrips);
+        defaultAlbum = sampleWelcomePhotos(allTrips);
       }
-      // Send all photos as ONE swipeable gallery (carousel) instead of N
-      // separate image bubbles. Falls back to single images if the carousel
-      // call fails for any reason.
-      if (welcomePhotos.length > 0) {
-        try {
-          await sendImageCarousel(
-            senderId,
-            welcomePhotos.map((url) => ({ imageUrl: url })),
-            token,
-            {
-              requestId: trace?.requestId,
-              correlationId: trace?.correlationId,
-              source: "api.webhook.welcome",
-            },
-          );
-        } catch {
-          for (const url of welcomePhotos) {
-            try {
-              await sendImageMessage(senderId, url, token, {
-                requestId: trace?.requestId,
-                correlationId: trace?.correlationId,
-                source: "api.webhook.welcome",
-              });
-            } catch {
-              // One bad URL shouldn't kill the rest
-            }
-          }
-        }
+      await sendPhotoAlbum(senderId, defaultAlbum, token, trace);
+
+      // Album 2 (seasonal): the currently active season's photos, if any.
+      const activeSeason = getActiveSeason(resolveSeasons(botSettings.extra));
+      if (activeSeason && activeSeason.photoUrls.length > 0) {
+        await sendPhotoAlbum(senderId, activeSeason.photoUrls.slice(0, 10), token, trace);
       }
+
       recordCounter("webhook.welcome_sent_total", 1, {
         platform,
-        photoCount: String(welcomePhotos.length),
+        photoCount: String(defaultAlbum.length),
+        seasonPhotoCount: String(activeSeason?.photoUrls.length || 0),
       });
     } catch (error) {
       logWarn("webhook.welcome_failed", {
@@ -1181,6 +1202,29 @@ async function handleMessage(
       });
     }
     // Continue processing their actual first message normally
+  }
+
+  // --- Seasonal photo album on ask ---
+  // If the customer's message mentions a season (e.g. "наадам"), proactively
+  // send that season's photo album once, then let the bot answer as normal.
+  // De-duped per sender+season for 10 min so we don't re-spam the album.
+  if (platform === "facebook" && token) {
+    const matchedSeason = matchSeasonByText(text, resolveSeasons(botSettings.extra));
+    if (matchedSeason) {
+      const dedupeKey = `season_sent:${platform}:${senderId}:${matchedSeason.id}`;
+      const shouldSend = await withRedis("webhook.season_dedupe", async (r) => {
+        const set = await r.set(dedupeKey, "1", "EX", 600, "NX");
+        return set === "OK";
+      });
+      // If Redis is down (null), default to sending — better to show photos.
+      if (shouldSend !== false) {
+        await sendPhotoAlbum(senderId, matchedSeason.photoUrls.slice(0, 10), token, trace);
+        recordCounter("webhook.season_album_sent_total", 1, {
+          platform,
+          season: matchedSeason.name,
+        });
+      }
+    }
   }
 
   // --- Booking info collection flow (mid-flow message handling) ---

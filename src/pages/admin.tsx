@@ -6225,23 +6225,28 @@ type GreetingDraft = {
   text: string;
   photoUrls: string[];
   usePhotoUrls: boolean;
+  defaultPhotoUrls: string[];
 };
+
+function readUrlList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? (value as unknown[]).filter(
+        (u): u is string => typeof u === "string" && u.startsWith("https://"),
+      )
+    : [];
+}
 
 function readGreetingDraft(extra: Record<string, unknown>): GreetingDraft {
   const raw =
     extra && typeof extra.greeting === "object" && extra.greeting !== null
       ? (extra.greeting as Record<string, unknown>)
       : {};
-  const photoUrls = Array.isArray(raw.photoUrls)
-    ? (raw.photoUrls as unknown[]).filter(
-        (u): u is string => typeof u === "string" && u.startsWith("https://"),
-      )
-    : [];
   return {
     enabled: raw.enabled !== false,
     text: typeof raw.text === "string" ? raw.text : "",
-    photoUrls,
+    photoUrls: readUrlList(raw.photoUrls),
     usePhotoUrls: raw.usePhotoUrls === true,
+    defaultPhotoUrls: readUrlList(raw.defaultPhotoUrls),
   };
 }
 

@@ -24,6 +24,7 @@ export type GreetingConfig = {
   text: string; // owner's welcome message (overrides quick_info_reply)
   photoUrls: string[]; // hand-picked welcome photos
   usePhotoUrls: boolean; // true = send photoUrls; false = auto-sample from trips
+  defaultPhotoUrls: string[]; // fixed default album sent first on every greeting
 };
 
 /**
@@ -39,11 +40,17 @@ export function resolveGreetingConfig(extra: unknown): GreetingConfig {
       : undefined;
 
   if (!raw || typeof raw !== "object") {
-    return { enabled: true, text: "", photoUrls: [], usePhotoUrls: false };
+    return { enabled: true, text: "", photoUrls: [], usePhotoUrls: false, defaultPhotoUrls: [] };
   }
 
   const photoUrls = Array.isArray(raw.photoUrls)
     ? (raw.photoUrls as unknown[])
+        .filter((u): u is string => typeof u === "string" && u.startsWith("https://"))
+        .slice(0, 10)
+    : [];
+
+  const defaultPhotoUrls = Array.isArray(raw.defaultPhotoUrls)
+    ? (raw.defaultPhotoUrls as unknown[])
         .filter((u): u is string => typeof u === "string" && u.startsWith("https://"))
         .slice(0, 10)
     : [];
@@ -53,7 +60,74 @@ export function resolveGreetingConfig(extra: unknown): GreetingConfig {
     text: typeof raw.text === "string" ? raw.text : "",
     photoUrls,
     usePhotoUrls: raw.usePhotoUrls === true,
+    defaultPhotoUrls,
   };
+}
+
+// ─── Seasons (stored in bot_settings.extra.seasons) ──────────────────────────
+
+export type Season = {
+  id: string;
+  name: string; // e.g. "Наадам", "Өвлийн аялал"
+  keywords: string[]; // trigger words customers might type
+  photoUrls: string[]; // this season's album
+  active: boolean; // exactly one season should be active at a time
+};
+
+function sanitizeUrls(value: unknown): string[] {
+  return Array.isArray(value)
+    ? (value as unknown[])
+        .filter((u): u is string => typeof u === "string" && u.startsWith("https://"))
+        .slice(0, 10)
+    : [];
+}
+
+/** Reads the seasons array from bot_settings.extra. Tolerant of partial data. */
+export function resolveSeasons(extra: unknown): Season[] {
+  const raw =
+    extra && typeof extra === "object" && !Array.isArray(extra)
+      ? (extra as Record<string, unknown>).seasons
+      : undefined;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((s): s is Record<string, unknown> => Boolean(s) && typeof s === "object")
+    .map((s) => ({
+      id: typeof s.id === "string" ? s.id : Math.random().toString(36).slice(2),
+      name: typeof s.name === "string" ? s.name : "",
+      keywords: Array.isArray(s.keywords)
+        ? (s.keywords as unknown[]).filter((k): k is string => typeof k === "string")
+        : [],
+      photoUrls: sanitizeUrls(s.photoUrls),
+      active: s.active === true,
+    }));
+}
+
+/** The single active season (first one flagged active), or null. */
+export function getActiveSeason(seasons: Season[]): Season | null {
+  return seasons.find((s) => s.active) || null;
+}
+
+/**
+ * If the customer's message matches any season's keywords, return that season.
+ * Checks the active season first, then others (so a customer asking about an
+ * off-season trip still gets its photos). Returns null if no match.
+ */
+export function matchSeasonByText(text: string, seasons: Season[]): Season | null {
+  const norm = text.toLowerCase();
+  const active = getActiveSeason(seasons);
+  const ordered = active ? [active, ...seasons.filter((s) => s !== active)] : seasons;
+  for (const season of ordered) {
+    if (
+      season.photoUrls.length > 0 &&
+      season.keywords.some((k) => {
+        const kk = k.trim().toLowerCase();
+        return kk.length > 0 && norm.includes(kk);
+      })
+    ) {
+      return season;
+    }
+  }
+  return null;
 }
 
 // ─── First-seen detection ────────────────────────────────────────────────────
