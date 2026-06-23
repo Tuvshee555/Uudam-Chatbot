@@ -61,30 +61,30 @@ export function sanitizeAssistantReply(text: string) {
   const cleaned = normalizeWhitespace(stripMarkdown(text));
   if (!cleaned) return "Энэ мэдээлэл одоогоор тодорхойгүй байна. Хүний ажилтантай холбож өгье.";
 
-  const dedupedParagraphs: string[] = [];
-  const seenParagraphs = new Set<string>();
+  // Split on blank lines (paragraph breaks) — preserve them so the AI's
+  // line-by-line trip details format (price on one line, date on next, etc.)
+  // is kept intact when sent to Messenger.
+  const blocks = cleaned.split(/\n\n+/);
+  const dedupedBlocks: string[] = [];
+  const seenLines = new Set<string>();
 
-  for (const paragraph of cleaned.split("\n")) {
-    const normalizedParagraph = normalizeForCompare(paragraph);
-    if (!normalizedParagraph || seenParagraphs.has(normalizedParagraph)) continue;
-    seenParagraphs.add(normalizedParagraph);
-
-    const uniqueSentences: string[] = [];
-    const seenSentences = new Set<string>();
-    for (const sentence of splitSentences(paragraph)) {
-      const normalizedSentence = normalizeForCompare(sentence);
-      if (!normalizedSentence || seenSentences.has(normalizedSentence)) continue;
-      seenSentences.add(normalizedSentence);
-      uniqueSentences.push(sentence);
-      if (uniqueSentences.length >= 5) break;
+  for (const block of blocks) {
+    // Within each block, deduplicate individual lines (not sentences) so
+    // the emoji-prefixed detail lines are each preserved separately.
+    const lines = block.split("\n");
+    const uniqueLines: string[] = [];
+    for (const line of lines) {
+      const norm = normalizeForCompare(line);
+      if (!norm || seenLines.has(norm)) continue;
+      seenLines.add(norm);
+      uniqueLines.push(line.trim());
     }
-
-    if (uniqueSentences.length) {
-      dedupedParagraphs.push(uniqueSentences.join(" "));
+    if (uniqueLines.length) {
+      dedupedBlocks.push(uniqueLines.join("\n"));
     }
   }
 
-  return dedupedParagraphs.join("\n").trim() || "Энэ мэдээлэл одоогоор тодорхойгүй байна. Хүний ажилтантай холбож өгье.";
+  return dedupedBlocks.join("\n\n").trim() || "Энэ мэдээлэл одоогоор тодорхойгүй байна. Хүний ажилтантай холбож өгье.";
 }
 
 const BUTTONS_LINE_PATTERN = /\nBUTTONS:\s*(.+)$/;

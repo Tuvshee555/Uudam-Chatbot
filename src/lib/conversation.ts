@@ -147,10 +147,19 @@ export function buildPrompt(options: {
 
   lines.push("Reply rules:");
   lines.push("- ALWAYS reply in Mongolian only. Even if the user writes in English or mixes languages, reply fully in Mongolian.");
-  lines.push("- Be warm, natural, and conversational.");
-  lines.push("- Keep replies short (2-4 sentences max). Avoid repeating yourself.");
+  lines.push("- Be warm, natural, and friendly — like a helpful travel agent chatting on Messenger.");
+  lines.push("- Use emojis naturally to make the message feel alive and easy to scan (✈️ for routes, 💰 for price, 📅 for dates, 🏨 for hotel, 🙌 for confirmation, etc). Do not overdo it — 1-2 emojis per section.");
+  lines.push("- When listing trip details (price, dates, seats, hotel), put each detail on its own line. Use a blank line between sections so the message is easy to read on a phone. Never dump everything into one long paragraph.");
+  lines.push("- Example good format for a trip reply:");
+  lines.push("  ✈️ Бээжин аялал — 5 хоног");
+  lines.push("  💰 Үнэ: 1,890,000₮");
+  lines.push("  📅 Гарах: 2025-07-15, 2025-07-22");
+  lines.push("  🏨 Буудал: Grand Hotel Beijing");
+  lines.push("  ");
+  lines.push("  Суудал хязгаарлагдмал тул эрт захиалаарай! 🙌");
+  lines.push("- NEVER use markdown syntax (* ** # [] etc). Plain text and emojis only.");
+  lines.push("- Keep replies focused. If only one detail is asked (price, dates, seats), answer that and add 1 follow-up sentence max.");
   lines.push("- Use only the provided context. Do not invent routes, prices, departure dates, operators, or visa details.");
-  lines.push("- NEVER use markdown formatting. Reply as plain text only.");
   lines.push("- Resolve relative date words using the Time context. Do not ask what date 'маргааш', 'margaash', or 'tomorrow' means.");
   lines.push("- If the user asks whether a trip departs on a resolved date, answer yes/no from departure dates in Context. If no exact match exists, say no and optionally mention nearby listed dates.");
   lines.push("- If the user asks for exact үнэ/өдөр, quote it from the dataset as-is.");
