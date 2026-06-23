@@ -1507,9 +1507,13 @@ function buildProposalClarifications(
             label: "Энэ аяллыг хасах",
             answer: `${subjectTag}гарах өдөр нь тодорхойгүй тул санал болгохгүй. (Зөрчил: ${detail})`,
           },
+          {
+            label: "Огноо доороос бичих",
+            answer: `${subjectTag}гарах өдрийг доорх талбарт бичнэ үү.`,
+          },
         ],
         allowCustom: true,
-        customPlaceholder: "Хэрэглэх гарах өдрийг бичнэ үү (ж: 2026-06-15)",
+        customPlaceholder: "Гарах өдрийг бичнэ үү (ж: 2026-06-15, 2026-07-02)",
       });
       return;
     }
@@ -1553,20 +1557,28 @@ function buildProposalClarifications(
     ) {
       pushQuestion({
         id: `seasonal-price:${index}`,
-        prompt: `${subjectTag}сараас хамаараад өөр үнэтэй байна. Үүнийг яаж хадгалах вэ?`,
+        prompt: `${subjectTag}сараас хамаараад үнэ өөр байна. Яаж хадгалах вэ?`,
         detail,
         options: [
           {
-            label: "Сарын ялгааг үлдээх",
-            answer: `${subjectTag}сарын ялгаатай үнийг тусад нь тайлбар/тэмдэглэлд хадгалж, буруу тэгшлэхгүй.`,
+            label: "Огноо тус бүрд үнийг тэмдэглэ (санал болгох)",
+            answer: `${subjectTag}огноо бүрийн үнийг departure_dates дотор тус тусад нь тэмдэглэл/notes хэсэгт бич. Үндсэн adult_price-д хамгийн их үнийг тавь.`,
           },
           {
-            label: "Нэг үнэ болгох",
-            answer: `${subjectTag}нэг үндсэн үнэ сонгож үлдээ. Сарын ялгаатай үнийг одоохондоо ашиглахгүй.`,
+            label: "Тусдаа аялал болгох",
+            answer: `${subjectTag}сар бүрийг тусдаа аялал болгон хадгал. Жишээ нь "Шанхай + Тэнгэрийн хаалга — 6-р сар" ба "...— 7/8-р сар" гэж.`,
+          },
+          {
+            label: "Хамгийн бага үнийг үндсэн болгох",
+            answer: `${subjectTag}хамгийн бага үнийг үндсэн adult_price болгож, ялгааг notes хэсэгт тайлбарла.`,
+          },
+          {
+            label: "Хамгийн их үнийг үндсэн болгох",
+            answer: `${subjectTag}хамгийн их үнийг үндсэн adult_price болгож, буусан хямдралыг notes хэсэгт тайлбарла.`,
           },
         ],
         allowCustom: true,
-        customPlaceholder: "Сар бүрийн үнийг хэрхэн хадгалахыг бичнэ үү",
+        customPlaceholder: "Жишээ: 6-р сард 3,590,000 / 7,8-р сард 3,660,000 гэж тусад нь тэмдэглэ",
       });
       return;
     }
@@ -4253,7 +4265,22 @@ function ChatBubbleV2({
     return (
       <div className="flex justify-end">
         <div className="max-w-[85%] rounded-xl rounded-br-sm bg-brand px-3.5 py-2 text-sm text-white">
-          <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
+          {message.text && message.text !== "Файл орууллаа" && (
+            <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
+          )}
+          {message.fileNames && message.fileNames.length > 0 && (
+            <div className={message.text && message.text !== "Файл орууллаа" ? "mt-2 border-t border-white/20 pt-2" : undefined}>
+              <p className="text-xs font-semibold text-white/70 mb-1">
+                📎 {message.fileNames.length === 1 ? "Файл" : `${message.fileNames.length} файл`}
+              </p>
+              {message.fileNames.map((name) => (
+                <p key={name} className="text-xs text-white/90 truncate">{name}</p>
+              ))}
+            </div>
+          )}
+          {(!message.fileNames || message.fileNames.length === 0) && (!message.text || message.text === "Файл орууллаа") && (
+            <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
+          )}
         </div>
       </div>
     );
