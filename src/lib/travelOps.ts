@@ -2172,6 +2172,8 @@ async function verifyProposalAgainstSource(opts: {
         maxRetries: 0,
         model: opts.model,
         temperature: 0,
+        // File reading → OpenAI primary, Gemini backup.
+        preferOpenAI: true,
       },
     );
     const parsed = parseJsonFromModel(result.text) as
@@ -2242,6 +2244,8 @@ async function requestProposalFromModel(opts: {
       timeoutMs: opts.timeoutMs,
       maxRetries: opts.maxRetries,
       model: opts.model,
+      // File reading → OpenAI primary, Gemini backup.
+      preferOpenAI: true,
     },
   );
 
@@ -2256,6 +2260,7 @@ async function requestProposalFromModel(opts: {
           timeoutMs: opts.repairTimeoutMs,
           maxRetries: 0,
           model: opts.model,
+          preferOpenAI: true,
         },
       );
       parsed = parseJsonFromModel(repaired.text);

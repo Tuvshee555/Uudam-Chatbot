@@ -58,6 +58,12 @@ export type AskGeminiOptions = {
   model?: string;
   /** Sampling temperature. Defaults to 0 for deterministic, factual extraction. */
   temperature?: number;
+  /**
+   * When true, use OpenAI as the PRIMARY model and fall back to Gemini if
+   * OpenAI fails. Used for file reading/parsing, where OpenAI is more reliable.
+   * Chat answering leaves this off so Gemini (better Mongolian) stays primary.
+   */
+  preferOpenAI?: boolean;
 };
 
 /**
@@ -105,6 +111,22 @@ export async function askGeminiParts(
   // edits we want deterministic, factual output — not "creative" guesses.
   const temperature =
     typeof options?.temperature === "number" ? options.temperature : 0;
+
+  // File reading uses OpenAI as the primary model (more reliable for parsing).
+  // If OpenAI is configured, try it first; on failure, fall through to Gemini.
+  if (options?.preferOpenAI && env.openaiApiKey) {
+    const openaiResult = await askOpenAIFallbackParts(parts, {
+      source,
+      jsonMode: options?.jsonMode,
+      timeoutMs,
+      temperature,
+      requestId: options?.requestId,
+      correlationId: options?.correlationId,
+    });
+    if (openaiResult) return openaiResult;
+    logInfo("openai.falling_back_to_gemini", { source });
+    // OpenAI failed — continue to the Gemini path below as the backup.
+  }
   const generationConfig: Record<string, unknown> = { temperature };
   if (options?.jsonMode) {
     generationConfig.responseMimeType = "application/json";
