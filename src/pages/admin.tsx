@@ -2534,12 +2534,16 @@ export default function AdminPage() {
     }
 
     setAiBusyLabel(`${files.length} файл зэрэг уншиж байна…`);
+    // Stagger starts by 400ms per file so all requests don't hit Gemini
+    // at the exact same millisecond and trigger 503 overload errors.
     const results = await Promise.all(
       uploadUnits.map((unit, index) =>
-        parseUploadUnitWithRetry(
-          unit,
-          note,
-          `${files.length} файл уншиж байна… ${index + 1}/${uploadUnits.length}`,
+        delayMs(index * 400).then(() =>
+          parseUploadUnitWithRetry(
+            unit,
+            note,
+            `${files.length} файл уншиж байна… ${index + 1}/${uploadUnits.length}`,
+          ),
         ),
       ),
     );
