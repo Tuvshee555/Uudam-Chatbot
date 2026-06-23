@@ -13,6 +13,7 @@ import {
   fetchWithRetry,
   logRetryFailure,
 } from "./resilience";
+import { askOpenAIFallbackParts } from "./openaiFallback";
 
 const DEFAULT_MODEL = "gemini-2.5-flash";
 const GEMINI_API_BASE =
@@ -215,6 +216,28 @@ export async function askGeminiParts(
       classification,
       message: error instanceof Error ? error.message : String(error),
     });
+
+    // Gemini is down/overloaded (503) or timed out. Try OpenAI as a fallback
+    // so the admin's request still succeeds. Only for retryable upstream
+    // failures — a bad request or auth error should surface as-is.
+    if (
+      env.openaiApiKey &&
+      (classification.category === "upstream_5xx" ||
+        classification.category === "timeout" ||
+        classification.retryable === true)
+    ) {
+      logInfo("gemini.falling_back_to_openai", { source, model });
+      const fallback = await askOpenAIFallbackParts(parts, {
+        source,
+        jsonMode: options?.jsonMode,
+        timeoutMs,
+        temperature,
+        requestId: options?.requestId,
+        correlationId: options?.correlationId,
+      });
+      if (fallback) return fallback;
+    }
+
     throw error;
   }
 }

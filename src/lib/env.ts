@@ -2,6 +2,7 @@ import { logStartupDiagnostics } from "./observability";
 
 export type ValidatedEnv = {
   geminiApiKey: string;
+  openaiApiKey: string | null;
   verifyToken: string;
   tokenPage: string;
   facebookPageId: string;
@@ -281,6 +282,9 @@ export function getEnv(): ValidatedEnv {
     source,
     errors,
   );
+  // Optional — used only as an automatic fallback when Gemini returns 503 /
+  // times out. If absent, no fallback runs and the Gemini error surfaces.
+  const openaiApiKey = readOptionalString("OPENAI_API_KEY", source) || null;
   const verifyToken = readRequiredString("VERIFY_TOKEN", source, errors);
   // Legacy single-page vars are now OPTIONAL — they feed the multi-page roster
   // below as a fallback. parseFacebookPages enforces "at least one page".
@@ -637,6 +641,7 @@ export function getEnv(): ValidatedEnv {
 
   cachedEnv = {
     geminiApiKey,
+    openaiApiKey,
     verifyToken,
     tokenPage,
     facebookPageId,
