@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Badge, Button, Card, EmptyState, Icons, Input, Modal, Select, Spinner, Textarea, cx, useToast } from "@/components/ui";
 import { extractGoogleDriveFileIds } from "@/lib/googleDriveLinks";
-import { compactWarnings } from "@/lib/adminProposalUtils";
+import { buildProposalClarifications, compactWarnings } from "@/lib/adminProposalUtils";
 import { AdminConfirmModals } from "@/components/admin/AdminConfirmModals";
 import { AdminLoginGate } from "@/components/admin/AdminLoginGate";
 import { AdminSidebarItem } from "@/components/admin/AdminSidebarItem";
@@ -17,7 +17,7 @@ import { SeasonsTab } from "@/components/admin/SeasonsTab";
 import { SettingsTab } from "@/components/admin/SettingsTab";
 import { TripsTab } from "@/components/admin/TripsTab";
 import type { AIAction, AIProposal, AIProposalResponse, AttachedFile, ChatButton, ChatMessage, ClarificationAnswer, ClarificationQuestion, AdminMsg, ConflictItem, ConflictSeverity, ControlState, DriveSyncDiagnostics, DriveSyncRecentFile, FlowRule, LeadCrmStatus, LeadStats, NoteMsg, PageControlState, ParseUploadUnit, PauseRow, ProposalMsg, ReadinessReport, RecentRow, SettingsForm, StructuredRow, TabKey, TravelBotSettings, TravelLead, TravelTrip, TripStatus } from "@/lib/adminTypes";
-import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, DURATIONS, FIELD_LABELS, HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS, STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildProposalClarifications, buildTextUploadUnits, delayMs, describeAction, driveSyncTone, fileToDataUrl, formatBytes, formatMoneyValue, formatTime, getSecretStorage, getTestBotConversationId, handoffDurationSelectValue, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, settingsToForm, shortId, splitLines, summarizeConflict, timeLeft, toStructuredRows, uid } from "@/lib/adminPageUtils";
+import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, DURATIONS, FIELD_LABELS, HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS, STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, delayMs, describeAction, driveSyncTone, fileToDataUrl, formatBytes, formatMoneyValue, formatTime, getSecretStorage, getTestBotConversationId, handoffDurationSelectValue, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, settingsToForm, shortId, splitLines, summarizeConflict, timeLeft, toStructuredRows, uid } from "@/lib/adminPageUtils";
 const BLANK_TRIP_DRAFT: Record<string, string> = { category: "", operator_name: "", route_name: "", duration_text: "", adult_price: "", child_price: "", currency: "MNT", seats_total: "", seats_left: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
 export default function AdminPage() {
   const toast = useToast();
@@ -62,6 +62,8 @@ export default function AdminPage() {
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [aiBusyLabel, setAiBusyLabel] = useState("");
+  const [aiBusyProgress, setAiBusyProgress] = useState<number | null>(null);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [editingTrip, setEditingTrip] = useState<TravelTrip | null>(null);
   const [isNewTrip, setIsNewTrip] = useState(false);
   const [tripDraft, setTripDraft] = useState<Record<string, string>>(
@@ -605,6 +607,7 @@ export default function AdminPage() {
     note: string,
   ): Promise<{ proposal: AIProposal; requestId: number | null }> {
     const proposals: AIProposal[] = [];
+    setAiBusyProgress((current) => Math.max(current ?? 0, 8));
     let singleRequestId: number | null = null;
     const uploadUnits: ParseUploadUnit[] = [];
     const skippedFiles: string[] = [];
@@ -653,7 +656,9 @@ export default function AdminPage() {
         requestId: null,
       };
     }
-    setAiBusyLabel(`${files.length} файл зэрэг уншиж байна…`);
+    setAiBusyLabel(`${files.length} файл боловсруулж байна…`);
+    setAiBusyProgress((current) => Math.max(current ?? 0, 15));
+    let completedUnits = 0;
     const results = await Promise.all(
       uploadUnits.map((unit, index) =>
         delayMs(index * 400).then(() =>
@@ -661,7 +666,13 @@ export default function AdminPage() {
             unit,
             note,
             `${files.length} файл уншиж байна… ${index + 1}/${uploadUnits.length}`,
-          ),
+          ).then((result) => {
+            completedUnits += 1;
+            setAiBusyProgress(
+              Math.min(90, 15 + Math.round((completedUnits / uploadUnits.length) * 75)),
+            );
+            return result;
+          }),
         ),
       ),
     );
@@ -694,6 +705,9 @@ export default function AdminPage() {
       setAiBusyLabel(progressLabel);
       const parsed = await parseDriveFileWithRetry(fileId, note, progressLabel);
       proposals.push(parsed.proposal);
+      setAiBusyProgress(
+        Math.min(90, 15 + Math.round(((index + 1) / fileIds.length) * 75)),
+      );
       if (fileIds.length === 1) {
         singleRequestId = parsed.requestId;
       }
@@ -737,6 +751,9 @@ export default function AdminPage() {
     setAiInput("");
     setAttachedFiles([]);
     setBusyKey("ai-send");
+    setAiBusyProgress(
+      files.length > 0 || driveFileIds.length > 0 ? 3 : null,
+    );
     setAiBusyLabel(
       files.length > 0 || driveFileIds.length > 0
         ? `${Math.max(1, sourceNames.length)} файл уншиж байна… (хэдэн секунд)`
@@ -766,6 +783,8 @@ export default function AdminPage() {
           parsedProposals.length === 1
             ? parsedProposals[0]
             : mergeAIProposals(parsedProposals, parsedSourceNames);
+        setAiBusyLabel("Олдсон мэдээллийг нэгтгэж, шалгаж байна…");
+        setAiBusyProgress(96);
       } else {
         const res = await fetchWithAdmin("/api/admin/ai-change", {
           method: "POST",
@@ -812,6 +831,7 @@ export default function AdminPage() {
         proposal,
         requestId,
         instruction: fileInstruction,
+        sourceNames,
         status: "pending",
         confirmChecked: false,
         clarifications: buildProposalClarifications(proposal),
@@ -819,6 +839,7 @@ export default function AdminPage() {
         answeredClarificationIds: [],
         customReply: "",
       });
+      setAiBusyProgress(100);
     } catch (err) {
       pushMessage({
         id: uid(),
@@ -834,6 +855,7 @@ export default function AdminPage() {
       });
     } finally {
       setBusyKey("");
+      setAiBusyProgress(null);
     }
   }
   function setProposalMessage(id: string, patch: Partial<ProposalMsg>) {
@@ -1375,6 +1397,10 @@ export default function AdminPage() {
     }
   }
   const botPaused = Boolean(control?.bot_paused);
+  function selectAdminTab(nextTab: TabKey) {
+    setTab(nextTab);
+    setMobileNavOpen(false);
+  }
   if (requiresAuth || (!openAccess && !secret.trim())) {
     return (
       <AdminLoginGate
@@ -1391,9 +1417,20 @@ export default function AdminPage() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
       {/* Top bar */}
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-line bg-surface px-4">
-        <span className="text-sm font-semibold text-ink">Уудам Трэвел Admin</span>
-        <div className="flex items-center gap-3">
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-line bg-surface px-3 shadow-xs sm:px-4">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <button
+            type="button"
+            aria-label="Цэс нээх"
+            aria-expanded={mobileNavOpen}
+            onClick={() => setMobileNavOpen((open) => !open)}
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-ink-muted hover:bg-surface-sunken md:hidden"
+          >
+            {mobileNavOpen ? <Icons.close size={20} /> : <Icons.menu size={20} />}
+          </button>
+          <span className="truncate text-sm font-semibold text-ink">Уудам Трэвел Admin</span>
+        </div>
+        <div className="flex items-center gap-2 sm:gap-3">
           {handoffRows.length > 0 && (
             <button type="button" onClick={() => setTab("bot")}>
               <Badge tone="warning" dot>
@@ -1404,80 +1441,93 @@ export default function AdminPage() {
           <Badge tone={botPaused ? "danger" : "success"} dot>
             {botPaused ? "Бот зогссон" : "Бот идэвхтэй"}
           </Badge>
-          <Badge tone={dbInfo?.configured ? "neutral" : "danger"}>
-            {dbInfo?.trips ?? trips.length} аялал
-          </Badge>
+          <span className="hidden sm:inline-flex">
+            <Badge tone={dbInfo?.configured ? "neutral" : "danger"}>
+              {dbInfo?.trips ?? trips.length} аялал
+            </Badge>
+          </span>
         </div>
       </header>
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
+        {mobileNavOpen && (
+          <button
+            type="button"
+            aria-label="Цэс хаах"
+            className="fixed inset-0 top-14 z-30 bg-ink/25 backdrop-blur-[1px] md:hidden"
+            onClick={() => setMobileNavOpen(false)}
+          />
+        )}
         {/* Sidebar */}
-        <aside className="flex w-60 shrink-0 flex-col gap-1 overflow-y-auto border-r border-line bg-surface p-3">
+        <aside className={cx(
+          "fixed bottom-0 left-0 top-14 z-40 flex w-[17rem] shrink-0 flex-col gap-1 overflow-y-auto border-r border-line bg-surface p-3 shadow-lg transition-transform md:static md:z-auto md:w-60 md:translate-x-0 md:shadow-none",
+          mobileNavOpen ? "translate-x-0" : "-translate-x-full",
+        )}>
+          <AdminSidebarItem
+            icon={<Icons.ai size={16} />}
+            label="AI туслах"
+            active={tab === "assistant"}
+            onClick={() => selectAdminTab("assistant")}
+          />
           <AdminSidebarItem
             icon={<Icons.trips size={16} />}
             label="Аяллууд"
             active={tab === "trips"}
-            onClick={() => setTab("trips")}
+            onClick={() => selectAdminTab("trips")}
           />
           <AdminSidebarItem
             icon={<Icons.chevronRight size={16} />}
             label="Мэндчилгээ"
             active={tab === "greeting"}
-            onClick={() => setTab("greeting")}
+            onClick={() => selectAdminTab("greeting")}
           />
           <AdminSidebarItem
             icon={<Icons.refresh size={16} />}
             label="Улирал"
             active={tab === "seasons"}
-            onClick={() => setTab("seasons")}
+            onClick={() => selectAdminTab("seasons")}
           />
           <AdminSidebarItem
             icon={<Icons.control size={16} />}
             label="Ботын хяналт"
             active={tab === "bot"}
             badge={handoffRows.length || undefined}
-            onClick={() => setTab("bot")}
+            onClick={() => selectAdminTab("bot")}
           />
           <AdminSidebarItem
             icon={<Icons.alert size={16} />}
             label="Хүсэлтүүд"
             active={tab === "leads"}
             badge={newLeadCount || undefined}
-            onClick={() => setTab("leads")}
+            onClick={() => selectAdminTab("leads")}
           />
           <AdminSidebarItem
             icon={<Icons.settings size={16} />}
             label="Тохиргоо"
             active={tab === "settings"}
-            onClick={() => setTab("settings")}
+            onClick={() => selectAdminTab("settings")}
           />
           <AdminSidebarItem
             icon={<Icons.control size={16} />}
             label="Аналитик"
             active={tab === "analytics"}
-            onClick={() => setTab("analytics")}
+            onClick={() => selectAdminTab("analytics")}
           />
           <AdminSidebarItem
             icon={<Icons.play size={16} />}
             label="Урсгал"
             active={tab === "flow"}
-            onClick={() => setTab("flow")}
+            onClick={() => selectAdminTab("flow")}
           />
           <AdminSidebarItem
             icon={<Icons.download size={16} />}
             label="Төлбөр"
             active={tab === "payments"}
-            onClick={() => setTab("payments")}
-          />
-          <AdminSidebarItem
-            icon={<Icons.ai size={16} />}
-            label="AI туслах"
-            active={tab === "assistant"}
-            onClick={() => setTab("assistant")}
+            onClick={() => selectAdminTab("payments")}
           />
         </aside>
         {/* Content */}
-        <main className="flex-1 overflow-y-auto p-4 md:p-6">
+        <main className="min-w-0 flex-1 overflow-y-auto p-3 sm:p-4 md:p-6">
           {/* Bot-paused is already shown as a badge in the topbar — no banner. */}
           {systemLoaded && !dbInfo?.configured && (
             <div className="mb-4">
@@ -1514,6 +1564,7 @@ export default function AdminPage() {
               setDragOver={setDragOver}
               busy={busyKey === "ai-send"}
               busyLabel={aiBusyLabel}
+              busyProgress={aiBusyProgress}
               applyBusyId={
                 busyKey.startsWith("apply-")
                   ? busyKey.slice(6)
@@ -1558,6 +1609,19 @@ export default function AdminPage() {
               onCreate={beginCreateTrip}
               onEdit={beginEditTrip}
               onDelete={(trip) => setDeletingTrip(trip)}
+              onDeleteAll={async () => {
+                try {
+                  const res = await fetchWithAdmin(`/api/admin/trips?all=true`, {
+                    method: "DELETE",
+                  });
+                  const json = await res.json();
+                  if (!res.ok) throw new Error(json?.error || "failed");
+                  toast.success(`${json.deleted ?? 0} аялал устгагдлаа`);
+                  void loadTrips("", "", { showLoading: true });
+                } catch {
+                  toast.error("Устгахад алдаа гарлаа.");
+                }
+              }}
             />
           )}
           {tab === "bot" && (

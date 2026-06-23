@@ -25,6 +25,7 @@ export {
   countNewLeads,
   createBroadcastRecord,
   createLead,
+  deleteAllTrips,
   deleteTrip,
   ensureTravelSchema,
   finalizeBroadcast,

@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
 import {
+  deleteAllTrips,
   deleteTrip,
   getBotControl,
   listTrips,
@@ -70,6 +71,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === "DELETE") {
+      if (req.query.all === "true") {
+        const count = await deleteAllTrips();
+        return res.status(200).json({ ok: true, deleted: count });
+      }
       const id = asText(req.query.id) || asText((req.body || {}).id);
       if (!id) return res.status(400).json({ error: "id is required" });
       const deleted = await deleteTrip(id);

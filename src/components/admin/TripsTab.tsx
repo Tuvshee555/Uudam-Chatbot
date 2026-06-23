@@ -87,6 +87,7 @@ export function TripsTab({
   onCreate,
   onEdit,
   onDelete,
+  onDeleteAll,
 }: {
   trips: TravelTrip[];
   search: string;
@@ -98,9 +99,119 @@ export function TripsTab({
   onCreate: () => void;
   onEdit: (trip: TravelTrip) => void;
   onDelete: (trip: TravelTrip) => void;
+  onDeleteAll: () => void;
 }) {
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
+  const toast = useToast();
+
+  function handleExportJson() {
+    const data = trips.map((t) => ({
+      id: t.id,
+      operator_name: t.operator_name,
+      route_name: t.route_name,
+      category: t.category,
+      duration_text: t.duration_text,
+      adult_price: t.adult_price,
+      child_price: t.child_price,
+      currency: t.currency,
+      departure_dates: t.departure_dates,
+      seats_total: t.seats_total,
+      seats_left: t.seats_left,
+      has_food: t.has_food,
+      status: t.status,
+      hotel: t.hotel,
+      notes: t.notes,
+      source_description: t.source_description,
+      updated_at: t.updated_at,
+    }));
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `uudam-trips-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`${data.length} аялал татаж авлаа`);
+  }
+
+  function handleExportCsv() {
+    const headers = [
+      "id","operator_name","route_name","category","duration_text",
+      "adult_price","child_price","currency","departure_dates",
+      "seats_total","seats_left","has_food","status","hotel","notes","updated_at",
+    ];
+    const rows = trips.map((t) => [
+      t.id,
+      t.operator_name,
+      t.route_name,
+      t.category,
+      t.duration_text,
+      t.adult_price ?? "",
+      t.child_price ?? "",
+      t.currency,
+      t.departure_dates.join("; "),
+      t.seats_total ?? "",
+      t.seats_left ?? "",
+      t.has_food == null ? "" : t.has_food ? "true" : "false",
+      t.status,
+      t.hotel,
+      t.notes,
+      t.updated_at,
+    ].map((v) => `"${String(v).replace(/"/g, '""')}"`));
+    const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `uudam-trips-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`${trips.length} аялал CSV татаж авлаа`);
+  }
+
   return (
     <div className="space-y-3">
+      {/* Delete-all confirmation modal */}
+      <Modal
+        open={confirmDeleteAll}
+        onClose={() => setConfirmDeleteAll(false)}
+        title="Бүх аялал устгах уу?"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-ink-muted">
+            Одоо байгаа <span className="font-semibold text-ink">{trips.length} аялал</span> бүгдийг устгах гэж байна. Энэ үйлдлийг буцаах боломжгүй.
+          </p>
+          <p className="text-sm text-ink-muted">
+            Устгахын өмнө доорх товчоор татаж авахыг зөвлөж байна.
+          </p>
+          <div className="flex gap-2">
+            <Button variant="secondary" size="sm" onClick={handleExportJson}>
+              <Icons.download size={15} />
+              JSON татах
+            </Button>
+            <Button variant="secondary" size="sm" onClick={handleExportCsv}>
+              <Icons.download size={15} />
+              CSV татах
+            </Button>
+          </div>
+          <div className="flex justify-end gap-2 border-t border-line pt-3">
+            <Button variant="secondary" onClick={() => setConfirmDeleteAll(false)}>
+              Болих
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                setConfirmDeleteAll(false);
+                onDeleteAll();
+              }}
+            >
+              <Icons.trash size={15} />
+              Бүгдийг устгах
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
       <Card className="p-3.5">
         <div className="flex flex-col gap-2">
           <div className="flex gap-2">
@@ -136,6 +247,34 @@ export function TripsTab({
               Шинэ аялал
             </Button>
           </div>
+          {trips.length > 0 && (
+            <div className="flex gap-2 border-t border-line pt-2">
+              <button
+                type="button"
+                onClick={handleExportJson}
+                className="flex items-center gap-1.5 rounded-md border border-line-strong bg-surface px-3 py-1.5 text-xs font-medium text-ink-muted hover:border-brand hover:text-brand"
+              >
+                <Icons.download size={13} />
+                JSON
+              </button>
+              <button
+                type="button"
+                onClick={handleExportCsv}
+                className="flex items-center gap-1.5 rounded-md border border-line-strong bg-surface px-3 py-1.5 text-xs font-medium text-ink-muted hover:border-brand hover:text-brand"
+              >
+                <Icons.download size={13} />
+                CSV
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteAll(true)}
+                className="ml-auto flex items-center gap-1.5 rounded-md border border-danger/30 bg-surface px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/5"
+              >
+                <Icons.trash size={13} />
+                Бүгдийг устгах
+              </button>
+            </div>
+          )}
         </div>
       </Card>
 

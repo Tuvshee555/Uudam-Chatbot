@@ -1225,6 +1225,13 @@ export async function deleteTrip(id: string): Promise<boolean> {
   return (result?.rowCount ?? 0) > 0;
 }
 
+export async function deleteAllTrips(): Promise<number> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return 0;
+  const result = await queryNeon(`DELETE FROM travel_trip_entries`);
+  return result?.rowCount ?? 0;
+}
+
 export async function resolveTripIdByMatch(match?: {
   operator_name?: string;
   route_name?: string;
