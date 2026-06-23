@@ -17,6 +17,45 @@ const MAX_WELCOME_PHOTOS = 5;
 const MAX_TRIP_PHOTOS = 3;
 const SEEN_SENDER_TTL_SEC = 30 * 24 * 60 * 60; // 30 days
 
+// ─── Admin-controlled greeting config (stored in bot_settings.extra.greeting) ──
+
+export type GreetingConfig = {
+  enabled: boolean; // master on/off for the first-message welcome
+  text: string; // owner's welcome message (overrides quick_info_reply)
+  photoUrls: string[]; // hand-picked welcome photos
+  usePhotoUrls: boolean; // true = send photoUrls; false = auto-sample from trips
+};
+
+/**
+ * Reads the greeting config out of bot_settings.extra. Tolerates missing/partial
+ * data. Default = enabled, auto-sample photos (the historical behavior), no
+ * custom text — so existing deployments behave exactly as before until the
+ * owner customizes it in the admin.
+ */
+export function resolveGreetingConfig(extra: unknown): GreetingConfig {
+  const raw =
+    extra && typeof extra === "object" && !Array.isArray(extra)
+      ? ((extra as Record<string, unknown>).greeting as Record<string, unknown> | undefined)
+      : undefined;
+
+  if (!raw || typeof raw !== "object") {
+    return { enabled: true, text: "", photoUrls: [], usePhotoUrls: false };
+  }
+
+  const photoUrls = Array.isArray(raw.photoUrls)
+    ? (raw.photoUrls as unknown[])
+        .filter((u): u is string => typeof u === "string" && u.startsWith("https://"))
+        .slice(0, 10)
+    : [];
+
+  return {
+    enabled: raw.enabled !== false, // default ON
+    text: typeof raw.text === "string" ? raw.text : "",
+    photoUrls,
+    usePhotoUrls: raw.usePhotoUrls === true,
+  };
+}
+
 // ─── First-seen detection ────────────────────────────────────────────────────
 
 function seenKey(senderId: string, platform: string) {

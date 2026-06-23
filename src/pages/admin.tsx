@@ -212,7 +212,7 @@ type ParseUploadUnit = {
   dataUrl: string;
 };
 
-type TabKey = "assistant" | "trips" | "bot" | "leads" | "settings" | "analytics" | "flow" | "payments";
+type TabKey = "assistant" | "trips" | "bot" | "leads" | "settings" | "analytics" | "flow" | "payments" | "greeting";
 
 type FlowRule = {
   id: string;
@@ -3312,6 +3312,12 @@ export default function AdminPage() {
             onClick={() => setTab("trips")}
           />
           <SidebarItem
+            icon={<Icons.chevronRight size={16} />}
+            label="Мэндчилгээ"
+            active={tab === "greeting"}
+            onClick={() => setTab("greeting")}
+          />
+          <SidebarItem
             icon={<Icons.control size={16} />}
             label="Ботын хяналт"
             active={tab === "bot"}
@@ -3513,6 +3519,14 @@ export default function AdminPage() {
           )}
 
           {tab === "payments" && <PaymentsTab apiFetch={fetchWithAdmin} />}
+
+          {tab === "greeting" && (
+            <GreetingTab
+              extra={(settings?.extra ?? {}) as Record<string, unknown>}
+              apiFetch={fetchWithAdmin}
+              onSaved={loadAll}
+            />
+          )}
         </main>
       </div>
 
@@ -6067,6 +6081,261 @@ function AnalyticsTab({
             </div>
           )}
         </Card>
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------
+   Greeting Tab — owner-controlled first-message welcome (text + photos)
+   ---------------------------------------------------------------- */
+type GreetingDraft = {
+  enabled: boolean;
+  text: string;
+  photoUrls: string[];
+  usePhotoUrls: boolean;
+};
+
+function readGreetingDraft(extra: Record<string, unknown>): GreetingDraft {
+  const raw =
+    extra && typeof extra.greeting === "object" && extra.greeting !== null
+      ? (extra.greeting as Record<string, unknown>)
+      : {};
+  const photoUrls = Array.isArray(raw.photoUrls)
+    ? (raw.photoUrls as unknown[]).filter(
+        (u): u is string => typeof u === "string" && u.startsWith("https://"),
+      )
+    : [];
+  return {
+    enabled: raw.enabled !== false,
+    text: typeof raw.text === "string" ? raw.text : "",
+    photoUrls,
+    usePhotoUrls: raw.usePhotoUrls === true,
+  };
+}
+
+function GreetingTab({
+  extra,
+  apiFetch,
+  onSaved,
+}: {
+  extra: Record<string, unknown>;
+  apiFetch: (url: string, init?: RequestInit) => Promise<Response>;
+  onSaved: () => void;
+}) {
+  const toast = useToast();
+  const [draft, setDraft] = useState<GreetingDraft>(() => readGreetingDraft(extra));
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState<string[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const extraRef = useRef(extra);
+  useEffect(() => {
+    if (extraRef.current !== extra) {
+      extraRef.current = extra;
+      setDraft(readGreetingDraft(extra));
+    }
+  }, [extra]);
+
+  async function uploadFiles(files: FileList | File[]) {
+    const arr = Array.from(files).filter((f) => f.size <= 10 * 1024 * 1024);
+    if (!arr.length) return;
+    setUploading((p) => [...p, ...arr.map((f) => f.name)]);
+    for (const file of arr) {
+      try {
+        const sigRes = await apiFetch("/api/admin/upload-image", { method: "POST" });
+        if (!sigRes.ok) throw new Error("upload not configured");
+        const sig = (await sigRes.json()) as {
+          signature: string;
+          timestamp: number;
+          cloudName: string;
+          apiKey: string;
+          folder: string;
+        };
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("api_key", sig.apiKey);
+        fd.append("timestamp", String(sig.timestamp));
+        fd.append("signature", sig.signature);
+        fd.append("folder", sig.folder);
+        const up = await fetch(
+          `https://api.cloudinary.com/v1_1/${sig.cloudName}/image/upload`,
+          { method: "POST", body: fd },
+        );
+        const upJson = (await up.json()) as { secure_url?: string };
+        if (!up.ok || !upJson.secure_url) throw new Error("cloudinary failed");
+        setDraft((d) => ({ ...d, photoUrls: [...d.photoUrls, upJson.secure_url!] }));
+      } catch {
+        toast.error(`"${file.name}" зураг оруулж чадсангүй.`);
+      } finally {
+        setUploading((p) => p.filter((n) => n !== file.name));
+      }
+    }
+  }
+
+  async function save() {
+    setSaving(true);
+    try {
+      const res = await apiFetch("/api/admin/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ extra: { ...extra, greeting: draft } }),
+      });
+      if (!res.ok) {
+        toast.error("Мэндчилгээ хадгалж чадсангүй.");
+        return;
+      }
+      onSaved();
+      toast.success("Мэндчилгээ хадгалагдлаа.");
+    } catch {
+      toast.error("Мэндчилгээ хадгалж чадсангүй.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <SectionHeading
+        title="Мэндчилгээ"
+        description="Хэрэглэгч анх бичихэд бот юу илгээхийг та өөрөө бүрэн удирдана. Энд бичсэн текст болон зураг автоматаар илгээгдэнэ."
+      />
+
+      <Card className="p-4">
+        {/* Master toggle */}
+        <label className="flex cursor-pointer items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium text-ink">Мэндчилгээ идэвхтэй</p>
+            <p className="text-xs text-ink-subtle">
+              Унтраавал бот шууд асуултад хариулна, мэндчилгээ илгээхгүй.
+            </p>
+          </div>
+          <input
+            type="checkbox"
+            checked={draft.enabled}
+            onChange={(e) => setDraft((d) => ({ ...d, enabled: e.target.checked }))}
+            className="h-5 w-9 cursor-pointer appearance-none rounded-full bg-line-strong transition-colors checked:bg-brand"
+          />
+        </label>
+      </Card>
+
+      <Card className="p-4">
+        <Textarea
+          label="Мэндчилгээний текст"
+          rows={4}
+          placeholder="Жишээ: Уудам Трэвел-д тавтай морилно уу! 🌏 Бид танд хамгийн шилдэг аяллуудыг санал болгож байна. Доорх зургуудаас сонирхсон аялалаа сонгоорой."
+          value={draft.text}
+          onChange={(e) => setDraft((d) => ({ ...d, text: e.target.value }))}
+        />
+        <p className="mt-1 text-xs text-ink-subtle">
+          Хоосон орхивол ботын ерөнхий мэндчилгээ илгээгдэнэ.
+        </p>
+      </Card>
+
+      <Card className="p-4">
+        <p className="mb-2 text-sm font-medium text-ink">Мэндчилгээний зураг</p>
+        {/* Source choice */}
+        <div className="mb-3 flex flex-col gap-2">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
+            <input
+              type="radio"
+              checked={!draft.usePhotoUrls}
+              onChange={() => setDraft((d) => ({ ...d, usePhotoUrls: false }))}
+            />
+            Аяллуудаас автоматаар сонгох (аялал бүрээс нэг зураг)
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
+            <input
+              type="radio"
+              checked={draft.usePhotoUrls}
+              onChange={() => setDraft((d) => ({ ...d, usePhotoUrls: true }))}
+            />
+            Доорх зургуудыг гараар сонгох
+          </label>
+        </div>
+
+        {draft.usePhotoUrls && (
+          <>
+            {/* Drag-drop upload */}
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragging(false);
+                void uploadFiles(e.dataTransfer.files);
+              }}
+              onClick={() => fileInputRef.current?.click()}
+              className={cx(
+                "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-6 transition-colors",
+                dragging
+                  ? "border-brand bg-brand-soft"
+                  : "border-line-strong bg-surface-sunken hover:border-brand",
+              )}
+            >
+              <Icons.plus size={22} className="text-ink-subtle" />
+              <p className="text-sm font-medium text-ink">
+                Зураг чирж оруулах эсвэл дарж сонгох
+              </p>
+              <p className="text-xs text-ink-subtle">PNG, JPG, WEBP — хамгийн ихдээ 10MB</p>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files) void uploadFiles(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+            </div>
+
+            {uploading.length > 0 && (
+              <p className="mt-2 text-xs text-ink-muted">
+                Оруулж байна: {uploading.join(", ")}…
+              </p>
+            )}
+
+            {/* Thumbnails */}
+            {draft.photoUrls.length > 0 && (
+              <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4">
+                {draft.photoUrls.map((url, idx) => (
+                  <div key={idx} className="group relative aspect-square overflow-hidden rounded-lg border border-line">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={url} alt="" className="h-full w-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDraft((d) => ({
+                          ...d,
+                          photoUrls: d.photoUrls.filter((_, i) => i !== idx),
+                        }))
+                      }
+                      className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-md bg-black/60 text-white opacity-0 transition-opacity group-hover:opacity-100"
+                      aria-label="Устгах"
+                    >
+                      <Icons.trash size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="mt-2 text-xs text-ink-subtle">
+              Хамгийн ихдээ 10 зураг илгээгдэнэ.
+            </p>
+          </>
+        )}
+      </Card>
+
+      <div className="flex justify-end">
+        <Button onClick={() => void save()} disabled={saving}>
+          {saving ? "Хадгалж байна…" : "Хадгалах"}
+        </Button>
       </div>
     </div>
   );

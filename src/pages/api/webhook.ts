@@ -45,6 +45,7 @@ import {
 import {
   extractTripPhotosForReply,
   isFirstMessage,
+  resolveGreetingConfig,
   sampleWelcomePhotos,
 } from "../../lib/welcomeFlow";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
@@ -1103,19 +1104,36 @@ async function handleMessage(
   // --- Welcome flow: first message greeting + trip photo gallery ---
   // Only on Facebook Messenger (IG doesn't support attachment API without approval).
   // Fires exactly once per sender (Redis SETNX). Falls back gracefully if Redis down.
-  if (platform === "facebook" && token && (await isFirstMessage(senderId, platform))) {
+  // Admin-controlled greeting config (extra.greeting). When set, the owner's
+  // manual text/photos win; otherwise we fall back to the old auto behavior.
+  const greeting = resolveGreetingConfig(botSettings.extra);
+  if (
+    platform === "facebook" &&
+    token &&
+    greeting.enabled &&
+    (await isFirstMessage(senderId, platform))
+  ) {
     try {
       const welcomeText =
+        greeting.text ||
         botSettings.quick_info_reply ||
         "Уудам Трэвел-д тавтай морилно уу! Бид танд хамгийн шилдэг аялалыг санал болгоно. Доорх аялалуудаас сонирхсоноо асуугаарай.";
-      await sendTextMessage(senderId, welcomeText, token, {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        source: "api.webhook.welcome",
-      });
-      // Send trip photos — load trips, sample photos, send each as image
-      const allTrips = await listTrips({ limit: 5000 });
-      const welcomePhotos = sampleWelcomePhotos(allTrips);
+      if (welcomeText.trim()) {
+        await sendTextMessage(senderId, welcomeText, token, {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          source: "api.webhook.welcome",
+        });
+      }
+      // Photos: use the owner's hand-picked list when provided, else auto-sample
+      // one photo from each active trip.
+      let welcomePhotos: string[] = [];
+      if (greeting.usePhotoUrls && greeting.photoUrls.length > 0) {
+        welcomePhotos = greeting.photoUrls.slice(0, 10);
+      } else if (!greeting.usePhotoUrls) {
+        const allTrips = await listTrips({ limit: 5000 });
+        welcomePhotos = sampleWelcomePhotos(allTrips);
+      }
       for (const url of welcomePhotos) {
         try {
           await sendImageMessage(senderId, url, token, {
