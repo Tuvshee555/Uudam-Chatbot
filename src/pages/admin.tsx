@@ -3522,6 +3522,10 @@ export default function AdminPage() {
               extra={(settings?.extra ?? {}) as Record<string, unknown>}
               apiFetch={fetchWithAdmin}
               onSaved={loadAll}
+              autoPhotos={trips
+                .filter((t) => t.status === "active" && t.photo_urls?.length)
+                .map((t) => t.photo_urls[0])
+                .slice(0, 10)}
             />
           )}
         </main>
@@ -6118,10 +6122,12 @@ function GreetingTab({
   extra,
   apiFetch,
   onSaved,
+  autoPhotos,
 }: {
   extra: Record<string, unknown>;
   apiFetch: (url: string, init?: RequestInit) => Promise<Response>;
   onSaved: () => void;
+  autoPhotos: string[];
 }) {
   const toast = useToast();
   const [draft, setDraft] = useState<GreetingDraft>(() => readGreetingDraft(extra));
@@ -6198,7 +6204,9 @@ function GreetingTab({
   const previewText =
     draft.text.trim() ||
     "Уудам Трэвел-д тавтай морилно уу! 🌏 Бид танд хамгийн шилдэг аяллуудыг санал болгож байна.";
-  const previewPhotos = draft.usePhotoUrls ? draft.photoUrls.slice(0, 4) : [];
+  // In manual mode show the picked photos; in auto mode show the actual photos
+  // that would be auto-sampled from active trips.
+  const previewPhotos = (draft.usePhotoUrls ? draft.photoUrls : autoPhotos).slice(0, 4);
 
   return (
     <div className="mx-auto max-w-5xl space-y-5">
@@ -6448,8 +6456,8 @@ function GreetingTab({
                 <div className="max-w-[85%] rounded-2xl rounded-tl-sm bg-surface px-3 py-2 text-xs text-ink shadow-sm">
                   {previewText}
                 </div>
-                {draft.usePhotoUrls ? (
-                  previewPhotos.length > 0 ? (
+                {previewPhotos.length > 0 ? (
+                  <>
                     <div className="grid grid-cols-2 gap-1.5">
                       {previewPhotos.map((url, i) => (
                         <div
@@ -6461,12 +6469,17 @@ function GreetingTab({
                         </div>
                       ))}
                     </div>
-                  ) : (
-                    <p className="text-[11px] text-ink-subtle">Зураг сонгоогүй байна.</p>
-                  )
+                    {!draft.usePhotoUrls && (
+                      <p className="text-[11px] text-ink-subtle">
+                        ↑ Аяллаас автоматаар сонгогдсон зургууд (аялал бүрээс нэг).
+                      </p>
+                    )}
+                  </>
+                ) : draft.usePhotoUrls ? (
+                  <p className="text-[11px] text-ink-subtle">Зураг сонгоогүй байна.</p>
                 ) : (
                   <p className="text-[11px] text-ink-subtle">
-                    + Аяллуудаас зургууд автоматаар нэмэгдэнэ.
+                    Идэвхтэй аялалд зураг алга. Аялал нэмж зураг оруулна уу.
                   </p>
                 )}
               </div>
