@@ -1431,7 +1431,7 @@ function buildProposalClarifications(
       pushQuestion({
         id: `plan-choice:${index}`,
         prompt: `${subjectTag}хөтөлбөртэй болон чөлөөт гэсэн хоёр тусдаа үнийн хувилбар байна. Яаж хадгалах вэ?`,
-        detail,
+        detail: detail,
         options: [
           {
             label: "Тусдаа хоёр аялал",
@@ -1466,6 +1466,7 @@ function buildProposalClarifications(
       pushQuestion({
         id: `meal-conflict:${index}`,
         prompt: `${subjectTag}хоолны мэдээлэл зөрчилтэй байна. Хоол багтсан уу?`,
+        detail,
         options: [
           {
             label: "Тийм, багтсан",
@@ -1496,6 +1497,7 @@ function buildProposalClarifications(
       pushQuestion({
         id: `date-conflict:${index}`,
         prompt: `${subjectTag}гарах өдрийг тодорхойлж чадсангүй. Юу хийх вэ?`,
+        detail,
         options: [
           {
             label: "Огноогүй үлдээх",
@@ -1526,6 +1528,7 @@ function buildProposalClarifications(
       pushQuestion({
         id: `currency-conflict:${index}`,
         prompt: `${subjectTag}үндсэн үнэ MNT, шинжилгээний нэмэлт төлбөр CNY байна. Яаж хадгалах вэ?`,
+        detail,
         options: [
           {
             label: "MNT + CNY тэмдэглэл",
@@ -1551,6 +1554,7 @@ function buildProposalClarifications(
       pushQuestion({
         id: `seasonal-price:${index}`,
         prompt: `${subjectTag}сараас хамаараад өөр үнэтэй байна. Үүнийг яаж хадгалах вэ?`,
+        detail,
         options: [
           {
             label: "Сарын ялгааг үлдээх",
@@ -1575,6 +1579,7 @@ function buildProposalClarifications(
       pushQuestion({
         id: `duplicate-route:${index}`,
         prompt: "Ижил маршруттай боловч мэдээлэл нь зөрүүтэй хоёр аялал илэрлээ. Юу хийх вэ?",
+        detail,
         options: [
           {
             label: "Тусдаа үлдээх",
@@ -4371,10 +4376,17 @@ function ChatBubbleV2({
                       className="rounded-md border border-line bg-surface-sunken px-3 py-3"
                     >
                       <p className="text-xs font-semibold text-ink-muted">
-                        Тодруулга
+                        Шийдвэрлэх асуудал
                       </p>
                       <p className="mt-1 text-sm font-medium text-ink">{q.prompt}</p>
-                      <div className="mt-2 flex flex-wrap gap-2">
+                      {q.detail && (
+                        <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2">
+                          <p className="text-xs font-semibold text-amber-800">AI олсон мэдээлэл:</p>
+                          <p className="mt-0.5 text-xs text-amber-900 leading-relaxed">{q.detail}</p>
+                        </div>
+                      )}
+                      <p className="mt-2.5 text-xs font-semibold text-ink-muted">Юу хийх вэ?</p>
+                      <div className="mt-1.5 flex flex-wrap gap-2">
                         {q.options.map((opt) => (
                           <button
                             key={opt.label}
