@@ -2620,20 +2620,26 @@ export async function generateAIProposalFromContentBatched(input: {
             ? FILE_PARSE_GEMINI_MAX_RETRIES
             : 0;
         try {
-          proposals.push(
-            await requestProposalFromModel({
-              condensedTrips,
-              userParts: parts,
-              source: "travel.ops.file_parse",
-              timeoutMs: batchTimeoutMs,
-              maxRetries: batchRetries,
-              repairTimeoutMs: FILE_PARSE_REPAIR_TIMEOUT_MS,
-              model: FILE_PARSE_MODEL,
-              // Accuracy-first verify pass when there's budget left for the
-              // extra call; otherwise skip it rather than risk a timeout.
-              verify: remainingMs > batchTimeoutMs + FILE_PARSE_VERIFY_TIMEOUT_MS,
-            }),
-          );
+          const batchProposal = await requestProposalFromModel({
+            condensedTrips,
+            userParts: parts,
+            source: "travel.ops.file_parse",
+            timeoutMs: batchTimeoutMs,
+            maxRetries: batchRetries,
+            repairTimeoutMs: FILE_PARSE_REPAIR_TIMEOUT_MS,
+            model: FILE_PARSE_MODEL,
+            // Accuracy-first verify pass when there's budget left for the
+            // extra call; otherwise skip it rather than risk a timeout.
+            verify: remainingMs > batchTimeoutMs + FILE_PARSE_VERIFY_TIMEOUT_MS,
+          });
+          // Tag each conflict with the source filename so the admin knows
+          // which file caused each question in the clarification UI.
+          if (batches.length > 1 && batchProposal.conflicts.length > 0) {
+            batchProposal.conflicts = batchProposal.conflicts.map((c) =>
+              c.startsWith(`[${batchLabels}]`) ? c : `[${batchLabels}] ${c}`,
+            );
+          }
+          proposals.push(batchProposal);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           logError("travel.ai.file_batch_failed", {
