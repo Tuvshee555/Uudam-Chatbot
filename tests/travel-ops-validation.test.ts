@@ -152,13 +152,37 @@ test("validation warns before duplicate upsert creation", async () => {
   assert.match(result.proposal.conflicts.join(" "), /duplicate/i);
 });
 
-test("validation drops agency header-only fake trips", async () => {
+test("validation silently drops agency header-only rows with no price data", async () => {
   const { validateAIChangeProposal } = await loadTravelOps();
   const proposal: AIChangeProposal = {
     summary: "header noise",
-    needs_confirmation: true,
+    needs_confirmation: false,
     important_reason: "",
-    conflicts: ["UUDAM TRAVEL AGENCY: departure date is unclear."],
+    conflicts: [],
+    actions: [
+      {
+        action: "upsert",
+        fields: {
+          operator_name: "Uudam Travel",
+          route_name: "UUDAM TRAVEL AGENCY",
+          // No price — this is a genuine header-only false positive
+        },
+      },
+    ],
+  };
+
+  const result = validateAIChangeProposal(proposal, []);
+  assert.equal(result.proposal.actions.length, 0);
+  assert.equal(result.proposal.conflicts.length, 0);
+});
+
+test("validation flags agency-named route that has real price data instead of silently dropping", async () => {
+  const { validateAIChangeProposal } = await loadTravelOps();
+  const proposal: AIChangeProposal = {
+    summary: "agency name used as route name but has price data",
+    needs_confirmation: false,
+    important_reason: "",
+    conflicts: [],
     actions: [
       {
         action: "upsert",
@@ -173,8 +197,13 @@ test("validation drops agency header-only fake trips", async () => {
   };
 
   const result = validateAIChangeProposal(proposal, []);
-  assert.equal(result.proposal.actions.length, 0);
-  assert.equal(result.proposal.conflicts.length, 0);
+  // Action is preserved (real trip data) but flagged with a confirmation conflict
+  assert.equal(result.proposal.actions.length, 1);
+  assert.equal(result.proposal.needs_confirmation, true);
+  assert.ok(
+    result.proposal.conflicts.length > 0 || result.proposal.conflict_items?.length > 0,
+    "expected at least one conflict asking admin to rename the trip",
+  );
 });
 
 test("validation downgrades generic confirmation for complete clean new trips", async () => {

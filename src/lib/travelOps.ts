@@ -1199,8 +1199,8 @@ export async function upsertTrip(input: {
   const row: TravelTrip = {
     id,
     category: cleaned.category || "",
-    operator_name: cleaned.operator_name || "Unknown operator",
-    route_name: cleaned.route_name || "Unnamed route",
+    operator_name: cleaned.operator_name || "UUDAM TRAVEL AGENCY",
+    route_name: cleaned.route_name || "(Нэргүй аялал)",
     duration_text: cleaned.duration_text || "",
     adult_price:
       typeof cleaned.adult_price === "number" ? Math.trunc(cleaned.adult_price) : null,
@@ -1757,8 +1757,16 @@ export function validateAIChangeProposal(
     const label = buildConflictLabel(routeName, operatorName);
     const matchingTrips = findTripMatches(existingTrips, match.operator_name, match.route_name);
 
-    if (isAgencyHeaderName(routeName)) {
+    if (isAgencyHeaderName(routeName) && !cleanedFields.adult_price && !cleanedFields.child_price) {
+      // Agency name used as trip title AND no price data — true header row, skip silently.
       continue;
+    }
+    if (isAgencyHeaderName(routeName) && (cleanedFields.adult_price || cleanedFields.child_price)) {
+      // Agency name as route_name BUT has real price data — the model got confused.
+      // Flag it so the admin can rename, rather than silently losing real trip data.
+      confirmationConflicts.push(
+        `Аялалын нэр "${routeName}" нь агентлагийн нэртэй давхцаж байна. Аяллын жинхэнэ нэрийг оруулна уу.`,
+      );
     }
 
     if (verb !== "upsert" && verb !== "patch" && verb !== "cancel") {
@@ -2060,7 +2068,7 @@ function buildProposalGuide(condensedTrips: unknown): string {
     "BLOCKER (severity='blocker') — жинхэнэ зөрчил, needs_confirmation=true БОЛГОХ, менежерт АСУУХ:",
     "  • Ижил аялал + ижил огноо + ижил аялагчдын төрөл + тайлбаргүй өөр үнэ",
     "  • Хүүхдийн үнэ > том хүний үнэ (урвуу — буруу мэт)",
-    "  • Маршрутын нэр эсвэл operator огт байхгүй (үндсэн талбар дутуу)",
+    "  • Маршрутын нэр (route_name) огт байхгүй бол blocker болго; operator_name байхгүй бол 'UUDAM TRAVEL AGENCY' гэж бич — blocker биш",
     "  • Цуцлах (status=cancelled) үйлдэл — менежер баталгаажуулах ёстой",
     "",
     "TEXT FORMAT дүрэм:",
@@ -2097,8 +2105,9 @@ function buildBatchSourceParts(input: {
     "Copy prices, seat counts, and dates EXACTLY as written in the source — digit for digit. Do not round, estimate, convert, or 'fix' numbers. If a price is 4,290,000 write 4290000, not 4300000.",
     "Only use information that is actually present in the source. Never invent or guess a price, date, or field. If a field is missing, leave it out rather than filling a plausible value.",
     "If any value is unclear or hard to read, keep needs_confirmation=true and ask about that exact value in plain language instead of guessing.",
-    "Ignore logos, agency names, headers, footers, contact details, and page decorations unless they are attached to a real trip row.",
-    "Do not create a trip named UUDAM TRAVEL, UUDAM TRAVEL AGENCY, TRAVEL AGENCY, or any other agency/header-only text.",
+    "Ignore logos, agency headers, footers, contact details, and page decorations UNLESS they contain trip-specific data (price, date, seats) attached to a real trip row.",
+    "The route_name must be the DESTINATION or TRIP TITLE (e.g. 'Хөх хот', 'Тэнгэрийн хаалга-Чунчин', 'Шанхай+Ханжоу'). NEVER use the agency name as the route_name.",
+    "If the document is from UUDAM TRAVEL AGENCY and no other operator is named, set operator_name to 'UUDAM TRAVEL AGENCY' — do not leave it blank.",
     "Do not treat normal adult/child price differences as conflicts. An adult price HIGHER than the child price is normal and expected — NEVER flag it, never ask about it. Only flag the child/adult price if the CHILD price is higher than the adult price, or the source is genuinely unreadable.",
     "If a departure date IS written in the source (e.g. '06/10, 06/19, 06/22' or '06 сарын 17-21'), put it in departure_dates and treat it as known. NEVER list dates you found and then say the date is 'unclear' or 'тодорхойгүй' — that is a contradiction and is forbidden. Only flag a missing date if there is genuinely NO date anywhere in the source for that trip.",
     "When a trip has base prices in MNT plus a medical/exam fee in CNY, store the base adult/child prices as MNT and write the CNY fee clearly in notes/source_description.",
@@ -2108,6 +2117,10 @@ function buildBatchSourceParts(input: {
     "If a source lists хөтөлбөртэй and чөлөөт package prices for the same route, prefer separate actions with route names that include the variant instead of forcing one base price.",
     "Do not infer the operator from the uploaded filename when the document content already has a brand/operator.",
     "If possible, match against existing trips to update them; otherwise propose adding new trips.",
+    "",
+    "CRITICAL — count every distinct trip in the source and produce one action per trip:",
+    "A single PDF may contain 2, 3, or more separate trips on different pages or sections. Read the ENTIRE document. Each distinct destination/package = one action. Do NOT stop after finding the first trip.",
+    "To identify trip boundaries: look for new price tables, new route headings, new departure date sets, or new itinerary blocks. Each new combination = a new trip.",
     "",
     "CRITICAL — Date-based pricing rule (most common travel agency pattern):",
     "When the SAME trip name has DIFFERENT prices for DIFFERENT departure dates or months, this is NOT a conflict — it is normal seasonal/date pricing.",
@@ -2631,7 +2644,9 @@ export async function generateAIProposalFromContent(input: {
     "Copy prices, seat counts, and dates EXACTLY as written in the source — digit for digit. Do not round, estimate, convert, or 'fix' numbers. If a price is 4,290,000 write 4290000, not 4300000.",
     "Only use information that is actually present in the source. Never invent or guess a price, date, or field. If a field is missing, leave it out rather than filling a plausible value.",
     "If any value is unclear or hard to read, keep needs_confirmation=true and ask about that exact value in plain language instead of guessing.",
-    "Ignore logos, agency names, headers, footers, contact details, and page decorations unless they are attached to a real trip row.",
+    "Ignore logos, agency headers, footers, contact details, and page decorations UNLESS they contain trip-specific data (price, date, seats) attached to a real trip row.",
+    "The route_name must be the DESTINATION or TRIP TITLE (e.g. 'Хөх хот', 'Тэнгэрийн хаалга-Чунчин', 'Шанхай+Ханжоу'). NEVER use the agency name as the route_name.",
+    "If the document is from UUDAM TRAVEL AGENCY and no other operator is named, set operator_name to 'UUDAM TRAVEL AGENCY' — do not leave it blank.",
     "Do not treat normal adult/child price differences as conflicts. An adult price HIGHER than the child price is normal and expected — NEVER flag it, never ask about it. Only flag the child/adult price if the CHILD price is higher than the adult price, or the source is genuinely unreadable.",
     "If a departure date IS written in the source (e.g. '06/10, 06/19, 06/22' or '06 сарын 17-21'), put it in departure_dates and treat it as known. NEVER list dates you found and then say the date is 'unclear' or 'тодорхойгүй' — that is a contradiction and is forbidden. Only flag a missing date if there is genuinely NO date anywhere in the source for that trip.",
     "Optional add-on costs in CNY/yuan (нэмэлт төлбөр, өөрийн зардлаар, single room fees, extra attraction tickets) are not conflicts; keep them in notes/source_description.",
@@ -2640,6 +2655,10 @@ export async function generateAIProposalFromContent(input: {
     "If a source lists хөтөлбөртэй and чөлөөт package prices for the same route, prefer separate actions with route names that include the variant instead of forcing one base price.",
     "Do not infer the operator from the uploaded filename when the document content already has a brand/operator.",
     "If possible, match against existing trips to update them; otherwise propose adding new trips.",
+    "",
+    "CRITICAL — count every distinct trip in the source and produce one action per trip:",
+    "A single PDF may contain 2, 3, or more separate trips on different pages or sections. Read the ENTIRE document. Each distinct destination/package = one action. Do NOT stop after finding the first trip.",
+    "To identify trip boundaries: look for new price tables, new route headings, new departure date sets, or new itinerary blocks. Each new combination = a new trip.",
     "",
     "CRITICAL — Date-based pricing rule (most common travel agency pattern):",
     "When the SAME trip name has DIFFERENT prices for DIFFERENT departure dates or months, this is NOT a conflict — it is normal seasonal/date pricing.",
