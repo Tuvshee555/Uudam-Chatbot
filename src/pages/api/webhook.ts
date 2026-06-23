@@ -49,6 +49,7 @@ import {
   sampleWelcomePhotos,
 } from "../../lib/welcomeFlow";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
+import { logInboundMessage } from "../../lib/travelMessages";
 import {
   advanceCollectState,
   buildCompletionMessage,
@@ -1100,6 +1101,9 @@ async function handleMessage(
   }
 
   const botSettings = await getTravelBotSettings();
+
+  // Log the inbound message for "most asked questions" analytics (best-effort).
+  void logInboundMessage({ platform, senderId, text });
 
   // --- Welcome flow: first message greeting + trip photo gallery ---
   // Only on Facebook Messenger (IG doesn't support attachment API without approval).

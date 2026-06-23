@@ -15,7 +15,7 @@ import type { TravelTrip } from "./travelOps";
 
 const MAX_WELCOME_PHOTOS = 5;
 const MAX_TRIP_PHOTOS = 3;
-const SEEN_SENDER_TTL_SEC = 30 * 24 * 60 * 60; // 30 days
+const SEEN_SENDER_TTL_SEC = 14 * 24 * 60 * 60; // 14 days — re-greet returning customers after 2 weeks
 
 // ─── Admin-controlled greeting config (stored in bot_settings.extra.greeting) ──
 

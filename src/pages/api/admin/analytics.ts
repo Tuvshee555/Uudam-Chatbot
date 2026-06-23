@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
 import { queryNeon } from "../../../lib/neonDb";
+import { getFaqStats, type FaqPeriodStats } from "../../../lib/travelMessages";
 
 type LeadsByDay = { date: string; count: number };
 type LeadsByTrip = { trip: string; count: number };
@@ -124,7 +125,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })),
     };
 
-    return res.status(200).json({ ok: true, stats });
+    let faq: FaqPeriodStats = { week: [], month: [], allTime: [], totalMessages: 0 };
+    try {
+      faq = await getFaqStats(10);
+    } catch {
+      // FAQ stats are best-effort; never fail the whole analytics call.
+    }
+
+    return res.status(200).json({ ok: true, stats, faq });
   } catch {
     return res.status(200).json({ ok: true, stats: ZERO_STATS });
   }

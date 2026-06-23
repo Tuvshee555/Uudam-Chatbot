@@ -455,6 +455,21 @@ export async function ensureTravelSchema() {
         ALTER TABLE travel_trip_entries
           ADD COLUMN IF NOT EXISTS hotel TEXT NOT NULL DEFAULT '';
       `);
+      // Inbound customer messages — powers "most asked questions" analytics.
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_messages (
+          id BIGSERIAL PRIMARY KEY,
+          platform TEXT NOT NULL DEFAULT 'facebook',
+          sender_id TEXT NOT NULL DEFAULT '',
+          text TEXT NOT NULL DEFAULT '',
+          norm TEXT NOT NULL DEFAULT '',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS travel_messages_created_idx
+          ON travel_messages (created_at DESC);
+      `);
       // QPay payments (feature is OFF by default; table is harmless when unused)
       await client.query(`
         CREATE TABLE IF NOT EXISTS travel_payments (
