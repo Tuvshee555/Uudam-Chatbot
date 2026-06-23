@@ -4079,20 +4079,40 @@ function AssistantTab({
           if (files?.length) onDropFiles(files);
         }}
       >
-        <div className="scroll-area max-h-[55dvh] min-h-70 space-y-3 overflow-y-auto p-3.5">
-          {messages.map((message) => (
-            <ChatBubbleV2
-              key={message.id}
-              message={message}
-              applyBusy={applyBusyId === message.id}
-              clarifyBusy={clarifyBusyId === message.id}
-              onApply={onApply}
-              onRollback={onRollback}
-              onSubmitClarificationForm={onSubmitClarificationForm}
-              onCancelProposal={onCancelProposal}
-              onToggleConfirm={onToggleConfirm}
-            />
-          ))}
+        <div className="scroll-area max-h-[55dvh] min-h-[18rem] space-y-3 overflow-y-auto p-3.5">
+          {/* Friendly empty state when only the intro note is present. */}
+          {messages.length <= 1 && messages[0]?.id === "intro" ? (
+            <div className="flex h-full min-h-[16rem] flex-col items-center justify-center px-6 text-center">
+              <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-soft text-brand">
+                <Icons.ai size={24} />
+              </div>
+              <p className="text-base font-semibold text-ink">
+                AI туслахтай ярилцаарай
+              </p>
+              <p className="mt-1.5 max-w-md text-sm text-ink-muted">
+                Аяллын зураг, прайс жагсаалт (PDF, Excel) хавсаргаж аялал
+                автоматаар үүсгээрэй. Эсвэл доор бичгээр зааварчилж болно — ж:{" "}
+                <span className="text-ink">«Бээжингийн аяллын үнийг 4.5 сая болго»</span>.
+              </p>
+              <p className="mt-2 text-xs text-ink-subtle">
+                AI санал болгоно — та шалгаад баталгаажуулна.
+              </p>
+            </div>
+          ) : (
+            messages.map((message) => (
+              <ChatBubbleV2
+                key={message.id}
+                message={message}
+                applyBusy={applyBusyId === message.id}
+                clarifyBusy={clarifyBusyId === message.id}
+                onApply={onApply}
+                onRollback={onRollback}
+                onSubmitClarificationForm={onSubmitClarificationForm}
+                onCancelProposal={onCancelProposal}
+                onToggleConfirm={onToggleConfirm}
+              />
+            ))
+          )}
           {busy && (
             <div className="flex justify-start">
               <div className="flex items-center gap-2 rounded-2xl rounded-bl-sm border border-line bg-surface px-4 py-3 shadow-sm">

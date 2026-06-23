@@ -166,6 +166,13 @@ const AI_CHANGE_REPAIR_TIMEOUT_MS = 15_000;
 // an accepted trade for getting prices/dates right.
 const FILE_PARSE_MODEL =
   process.env.GEMINI_FILE_PARSE_MODEL || "gemini-2.5-pro";
+// Accuracy-first: after extraction, run a second pass that re-reads the SAME
+// source and checks every extracted price/date/seat against it, forcing
+// confirmation on anything it can't verify. Costs one extra Pro call per parse.
+// On by default; set GEMINI_FILE_PARSE_VERIFY=false to disable.
+const FILE_PARSE_VERIFY =
+  (process.env.GEMINI_FILE_PARSE_VERIFY || "true").toLowerCase() !== "false";
+const FILE_PARSE_VERIFY_TIMEOUT_MS = 60_000;
 const FILE_PARSE_GEMINI_TIMEOUT_MS = Math.max(env.geminiTimeoutMs, 60_000);
 const FILE_PARSE_GEMINI_MAX_RETRIES = Math.min(env.geminiMaxRetries, 1);
 const FILE_PARSE_BATCH_DELAY_MS = 1_200;
@@ -2111,6 +2118,105 @@ function mergeBatchProposals(
   };
 }
 
+/**
+ * Verification pass: re-reads the SAME source (image/file/text) together with
+ * the AI's extracted actions and asks the model to confirm every price, date,
+ * and seat count matches the source EXACTLY. Returns a list of plain-language
+ * mismatches. Any mismatch forces needs_confirmation=true so a human checks it
+ * before it's saved. Best-effort — if the verify call fails, we keep the
+ * original proposal but flag it for confirmation (fail safe, not fail open).
+ */
+function buildVerificationGuide(proposalActions: unknown): string {
+  return [
+    "You are a STRICT verifier. The same source (image/file/text) is attached.",
+    "Below is data a previous step extracted from that source. Your ONLY job is to",
+    "check whether every price, departure date, seat count, duration, and route name",
+    "in the extracted data matches the source EXACTLY — digit for digit, date for date.",
+    "",
+    "Extracted data (JSON):",
+    JSON.stringify(proposalActions),
+    "",
+    "Return ONLY JSON: { \"all_correct\": boolean, \"mismatches\": string[] }.",
+    "- For each value that does NOT match the source, add one short Mongolian line to",
+    "  mismatches naming the trip and the wrong field (e.g. 'Бээжин: үнэ 4290000 гэж",
+    "  байгаа ч зурагт 4920000 байна').",
+    "- If a value in the source is genuinely unreadable, list it as a mismatch too.",
+    "- If everything matches exactly, return all_correct=true and mismatches=[].",
+    "- Do NOT invent trips or add new data. Only verify what is given.",
+  ].join("\n");
+}
+
+async function verifyProposalAgainstSource(opts: {
+  proposal: AIChangeProposal;
+  userParts: GeminiPart[];
+  source: string;
+  model?: string;
+}): Promise<AIChangeProposal> {
+  // Nothing to verify if there are no concrete actions.
+  if (!opts.proposal.actions.length) return opts.proposal;
+
+  try {
+    const result = await askGeminiParts(
+      [{ text: buildVerificationGuide(opts.proposal.actions) }, ...opts.userParts],
+      {
+        source: `${opts.source}.verify`,
+        jsonMode: true,
+        timeoutMs: FILE_PARSE_VERIFY_TIMEOUT_MS,
+        maxRetries: 0,
+        model: opts.model,
+        temperature: 0,
+      },
+    );
+    const parsed = parseJsonFromModel(result.text) as
+      | { all_correct?: boolean; mismatches?: unknown }
+      | null;
+
+    if (!parsed) {
+      // Couldn't verify → fail safe: require human confirmation.
+      return {
+        ...opts.proposal,
+        needs_confirmation: true,
+        important_reason:
+          opts.proposal.important_reason ||
+          "Баталгаажуулалтын шалгалт бүтэлгүйтсэн тул гараар шалгана уу.",
+      };
+    }
+
+    const mismatches = Array.isArray(parsed.mismatches)
+      ? parsed.mismatches.map((m) => String(m)).filter(Boolean)
+      : [];
+
+    if (parsed.all_correct === true && mismatches.length === 0) {
+      return opts.proposal; // verified clean
+    }
+
+    // Mismatches found → surface them and force confirmation.
+    recordCounter("travel.ai.verify_mismatch_total", 1, {
+      count: String(mismatches.length),
+    });
+    return {
+      ...opts.proposal,
+      needs_confirmation: true,
+      important_reason:
+        "AI өөрийн уншсан мэдээллийг эх сурвалжтай тулгаж шалгахад зөрүү илэрлээ. Доорх утгуудыг гараар шалгана уу.",
+      conflicts: [...opts.proposal.conflicts, ...mismatches],
+    };
+  } catch (error) {
+    logWarn("travel.ai.verify_failed", {
+      source: opts.source,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    // Fail safe — flag for human review rather than trusting unverified data.
+    return {
+      ...opts.proposal,
+      needs_confirmation: true,
+      important_reason:
+        opts.proposal.important_reason ||
+        "Баталгаажуулалт хийгдсэнгүй тул гараар шалгана уу.",
+    };
+  }
+}
+
 async function requestProposalFromModel(opts: {
   condensedTrips: unknown;
   userParts: GeminiPart[];
@@ -2119,6 +2225,7 @@ async function requestProposalFromModel(opts: {
   maxRetries?: number;
   repairTimeoutMs?: number;
   model?: string;
+  verify?: boolean;
 }) {
   const result = await askGeminiParts(
     [{ text: buildProposalGuide(opts.condensedTrips) }, ...opts.userParts],
@@ -2153,7 +2260,21 @@ async function requestProposalFromModel(opts: {
     }
   }
 
-  return parsed ? normalizeProposal(parsed) : proposalFallbackFromRawText(result.text);
+  const proposal = parsed
+    ? normalizeProposal(parsed)
+    : proposalFallbackFromRawText(result.text);
+
+  // Accuracy-first second pass: verify extracted numbers against the source.
+  if (opts.verify && FILE_PARSE_VERIFY && proposal.actions.length > 0) {
+    return verifyProposalAgainstSource({
+      proposal,
+      userParts: opts.userParts,
+      source: opts.source,
+      model: opts.model,
+    });
+  }
+
+  return proposal;
 }
 
 async function requestProposalFromPrompt(opts: {
@@ -2508,6 +2629,9 @@ export async function generateAIProposalFromContentBatched(input: {
               maxRetries: batchRetries,
               repairTimeoutMs: FILE_PARSE_REPAIR_TIMEOUT_MS,
               model: FILE_PARSE_MODEL,
+              // Accuracy-first verify pass when there's budget left for the
+              // extra call; otherwise skip it rather than risk a timeout.
+              verify: remainingMs > batchTimeoutMs + FILE_PARSE_VERIFY_TIMEOUT_MS,
             }),
           );
         } catch (error) {
