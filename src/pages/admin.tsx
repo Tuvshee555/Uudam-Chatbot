@@ -2533,18 +2533,21 @@ export default function AdminPage() {
       };
     }
 
-    for (let index = 0; index < uploadUnits.length; index += 1) {
-      const unit = uploadUnits[index];
-      const progressLabel = `${files.length} файл уншиж байна… ${index + 1}/${uploadUnits.length}`;
-      setAiBusyLabel(progressLabel);
-      const parsed = await parseUploadUnitWithRetry(unit, note, progressLabel);
+    setAiBusyLabel(`${files.length} файл зэрэг уншиж байна…`);
+    const results = await Promise.all(
+      uploadUnits.map((unit, index) =>
+        parseUploadUnitWithRetry(
+          unit,
+          note,
+          `${files.length} файл уншиж байна… ${index + 1}/${uploadUnits.length}`,
+        ),
+      ),
+    );
+    for (const parsed of results) {
       proposals.push(parsed.proposal);
-      if (uploadUnits.length === 1) {
-        singleRequestId = parsed.requestId;
-      }
-      if (index < uploadUnits.length - 1) {
-        await delayMs(2_000);
-      }
+    }
+    if (uploadUnits.length === 1) {
+      singleRequestId = results[0]?.requestId ?? null;
     }
 
     return {

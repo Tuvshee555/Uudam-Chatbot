@@ -160,12 +160,11 @@ const env = getEnv();
 const AI_CHANGE_GEMINI_TIMEOUT_MS = Math.max(env.geminiTimeoutMs, 45_000);
 const AI_CHANGE_GEMINI_MAX_RETRIES = 0;
 const AI_CHANGE_REPAIR_TIMEOUT_MS = 15_000;
-// Reading uploaded files / price lists is where accuracy matters most, so use
-// the stronger Pro model there (overridable via GEMINI_FILE_PARSE_MODEL). Quick
-// text commands keep the default fast model. Pro is slower + pricier, which is
-// an accepted trade for getting prices/dates right.
+// Flash is 3-5x faster than Pro for clean travel PDFs and accurate enough
+// for formatted price lists. Override via GEMINI_FILE_PARSE_MODEL=gemini-2.5-pro
+// if you ever need the stronger model for a complex or low-quality document.
 const FILE_PARSE_MODEL =
-  process.env.GEMINI_FILE_PARSE_MODEL || "gemini-2.5-pro";
+  process.env.GEMINI_FILE_PARSE_MODEL || "gemini-2.5-flash";
 // Accuracy-first: after extraction, run a second pass that re-reads the SAME
 // source and checks every extracted price/date/seat against it, forcing
 // confirmation on anything it can't verify. Costs one extra Pro call per parse.
