@@ -124,11 +124,20 @@ type AIAction = {
   fields?: Record<string, unknown>;
 };
 
+type ConflictSeverity = "info" | "warning" | "blocker";
+type ConflictItem = {
+  text: string;
+  severity: ConflictSeverity;
+  type?: string;
+};
+
 type AIProposal = {
   summary: string;
   needs_confirmation: boolean;
   important_reason: string;
   conflicts: string[];
+  /** Structured conflicts with severity — present when the model supports it. */
+  conflict_items?: ConflictItem[];
   actions: AIAction[];
 };
 
@@ -1415,11 +1424,42 @@ function buildProposalClarifications(
     }
   });
 
+  // Build a fast lookup of severity by conflict text (when structured items present).
+  // Only blocker items become clarification questions. info/warning just show as boxes.
+  const conflictSeverityMap = new Map<string, ConflictSeverity>();
+  if (proposal.conflict_items && proposal.conflict_items.length > 0) {
+    for (const item of proposal.conflict_items) {
+      conflictSeverityMap.set(item.text.trim(), item.severity);
+    }
+  }
+
+  // Build a lookup of which trip action routes have departure_dates set, so we
+  // never ask "date unclear" for a trip where the AI already extracted the dates.
+  const tripsWithDates = new Set<string>();
+  for (const action of proposal.actions) {
+    const f = action.fields || {};
+    const dates = f.departure_dates;
+    const hasRealDates =
+      Array.isArray(dates) && dates.some((d) => String(d).trim().length > 2);
+    if (hasRealDates) {
+      const name = (f.route_name?.toString() || action.match?.route_name || "").trim().toLowerCase();
+      if (name) tripsWithDates.add(name);
+    }
+  }
+
   proposal.conflicts.forEach((conflict, index) => {
     const detail = conflict.trim();
     if (!detail) return;
     const normalized = normalizeReviewText(detail);
     if (coveredConflictChecks.some((check) => check(normalized))) return;
+
+    // If the model provided structured severity, only generate a question for
+    // blockers. info and warning are displayed as info boxes — no question needed.
+    if (conflictSeverityMap.size > 0) {
+      const severity = conflictSeverityMap.get(detail) ?? "blocker";
+      if (severity !== "blocker") return;
+    }
+
     const quoted = extractQuotedValues(conflict);
     // The first quoted value is usually the trip/route the conflict is about.
     const subject = quoted[0] || "";
@@ -1547,7 +1587,13 @@ function buildProposalClarifications(
       const hasPriceContext =
         detail.includes("₮") ||
         (normalized.includes("сард") && /\d{3,}/.test(detail));
-      if (!hasPriceContext) {
+      // If the AI already extracted departure_dates for this trip in its action,
+      // the date is NOT missing — skip the question (the extractor and conflict
+      // engine disagree, and the extractor wins).
+      const subjectRouteName = normalizeReviewText(subject);
+      const tripAlreadyHasDates =
+        subjectRouteName.length > 3 && tripsWithDates.has(subjectRouteName);
+      if (!hasPriceContext && !tripAlreadyHasDates) {
         const subjectKey = normalizeReviewText(subject || detail);
         coveredConflictChecks.push(
           (value) =>
@@ -4374,9 +4420,21 @@ function ChatBubbleV2({
     0,
     proposal.actions.length - previewActions.length,
   );
-  const compactWarnings = Array.from(
-    new Set(proposal.conflicts.map(summarizeConflict).filter(Boolean)),
-  ).slice(0, 3);
+  // When structured conflict_items are present, use them for display.
+  // info/warning items → amber info box (no question asked).
+  // blocker items not yet answered → become clarification questions.
+  const hasStructuredItems =
+    (proposal.conflict_items?.length ?? 0) > 0;
+  const infoWarningItems: ConflictItem[] = hasStructuredItems
+    ? (proposal.conflict_items ?? []).filter(
+        (item) => item.severity === "info" || item.severity === "warning",
+      )
+    : [];
+  const compactWarnings: string[] = hasStructuredItems
+    ? infoWarningItems.map((item) => item.text).slice(0, 3)
+    : Array.from(
+        new Set(proposal.conflicts.map(summarizeConflict).filter(Boolean)),
+      ).slice(0, 3);
   const reviewCount = message.clarifications.length;
   const isReadyToApply = message.status === "pending" && reviewCount === 0;
 

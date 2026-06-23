@@ -116,11 +116,27 @@ export type AITripAction = {
   fields?: TripMutationFields;
 };
 
+export type ConflictSeverity = "info" | "warning" | "blocker";
+
+export type ConflictItem = {
+  text: string;
+  severity: ConflictSeverity;
+  type?: string;
+};
+
 export type AIChangeProposal = {
   summary: string;
   needs_confirmation: boolean;
   important_reason: string;
+  /** Legacy flat list — still populated for back-compat with Drive sync etc. */
   conflicts: string[];
+  /**
+   * Structured conflict items with severity. When present, admin.tsx uses
+   * severity to decide whether to ask a question (blocker) or just show an
+   * info/warning box without blocking the save. Optional for back-compat with
+   * test fixtures and older code paths that build literals without it.
+   */
+  conflict_items?: ConflictItem[];
   actions: AITripAction[];
 };
 
@@ -1433,18 +1449,45 @@ function normalizeProposal(input: AIChangeProposal | null): AIChangeProposal {
       needs_confirmation: true,
       important_reason: "JSON бүтэц буруу байсан тул баталгаажуулалт шаардлагатай.",
       conflicts: ["AI хариу JSON биш байна."],
+      conflict_items: [{ text: "AI хариу JSON биш байна.", severity: "blocker" as const }],
       actions: [],
     };
   }
+
+  // Parse structured conflict_items when the model provides them.
+  // Fall back to the flat conflicts array for backwards compatibility.
+  const validSeverities = new Set(["info", "warning", "blocker"]);
+  const conflict_items: ConflictItem[] = Array.isArray(input.conflict_items)
+    ? input.conflict_items
+        .filter((item: unknown) => item && typeof item === "object")
+        .map((item: Record<string, unknown>) => ({
+          text: String((item as Record<string, unknown>).text || ""),
+          severity: validSeverities.has(String((item as Record<string, unknown>).severity))
+            ? (String((item as Record<string, unknown>).severity) as ConflictSeverity)
+            : "warning",
+          type: typeof (item as Record<string, unknown>).type === "string"
+            ? String((item as Record<string, unknown>).type)
+            : undefined,
+        }))
+        .filter((item) => item.text)
+    : // No structured items — wrap flat conflicts as "blocker" so old behavior preserved.
+      (Array.isArray(input.conflicts)
+        ? (input.conflicts as unknown[])
+            .map((value) => String(value))
+            .filter(Boolean)
+            .map((text) => ({ text, severity: "blocker" as ConflictSeverity }))
+        : []);
+
+  const conflicts = conflict_items.map((item) => item.text);
+
   return {
     summary: String(input.summary || "AI саналыг үүсгэлээ."),
     needs_confirmation: Boolean(input.needs_confirmation),
     important_reason: String(input.important_reason || ""),
-    conflicts: Array.isArray(input.conflicts)
-      ? input.conflicts.map((value) => String(value))
-      : [],
+    conflicts,
+    conflict_items,
     actions: Array.isArray(input.actions)
-      ? input.actions.filter((action) => action && typeof action === "object")
+      ? (input.actions as unknown[]).filter((action) => action && typeof action === "object") as AITripAction[]
       : [],
   };
 }
@@ -1869,11 +1912,25 @@ export function validateAIChangeProposal(
     proposalConflicts.length > 0 ||
     blockingConflicts.length > 0 ||
     (normalized.needs_confirmation && !genericOnlyConfirmation);
+  // Keep conflict_items aligned with the filtered proposalConflicts set. Items
+  // whose text was filtered out (agency headers, generic confirmations, etc.)
+  // are dropped; new blocking conflicts from validation get severity "blocker".
+  const proposalConflictSet = new Set(proposalConflicts);
+  const filteredItems: ConflictItem[] = (normalized.conflict_items || []).filter(
+    (item) => proposalConflictSet.has(item.text),
+  );
+  const existingItemTexts = new Set(filteredItems.map((i) => i.text));
+  const newBlockingItems: ConflictItem[] = blockingConflicts
+    .filter((text) => !existingItemTexts.has(text))
+    .map((text) => ({ text, severity: "blocker" as ConflictSeverity, type: "validation" }));
+  const finalConflictItems: ConflictItem[] = [...filteredItems, ...newBlockingItems];
+
   const finalProposal: AIChangeProposal = {
     ...normalized,
     needs_confirmation: needsConfirmation,
     important_reason: genericOnlyConfirmation ? "" : normalized.important_reason,
     conflicts: proposalConflicts,
+    conflict_items: finalConflictItems,
     actions: finalActions,
   };
 
@@ -1908,7 +1965,8 @@ function buildProposalRepairGuide(rawText: string): string {
     '  "summary": "short summary",',
     '  "needs_confirmation": true,',
     '  "important_reason": "reason",',
-    '  "conflicts": ["item"],',
+    '  "conflicts": [],',
+    '  "conflict_items": [{ "text": "...", "severity": "info|warning|blocker", "type": "optional" }],',
     '  "actions": [',
     '    { "action": "upsert|patch|cancel", "trip_id": "", "match": { "operator_name": "", "route_name": "" }, "fields": {} }',
     "  ]",
@@ -1931,7 +1989,10 @@ function buildProposalGuide(condensedTrips: unknown): string {
     '  "summary": "товч дүгнэлт (монголоор)",',
     '  "needs_confirmation": true/false,',
     '  "important_reason": "яагаад баталгаажуулах ёстой эсэх",',
-    '  "conflicts": ["зөрчил 1", "зөрчил 2"],',
+    '  "conflicts": [],',
+    '  "conflict_items": [',
+    '    { "text": "хүний ойлгох тайлбар (монголоор)", "severity": "info|warning|blocker", "type": "optional_type_tag" }',
+    "  ],",
     '  "actions": [',
     "    {",
     '      "action": "upsert|patch|cancel",',
@@ -1947,6 +2008,13 @@ function buildProposalGuide(condensedTrips: unknown): string {
     "    }",
     "  ]",
     "}",
+    "",
+    'conflict_items severity дүрэм (ХАМГИЙН ЧУХАЛ):',
+    '- "blocker": зөвхөн жинхэнэ зөрчил — ижил аялал+ижил огноо+ижил аялагчдын төрөл+тайлбаргүй өөр үнэ. Blocker байвал needs_confirmation=true болгоно.',
+    '- "warning": анхаарал хэрэгтэй боловч хадгалахыг зогсоохгүй. Жишээ: тодорхойгүй талбар, нэмэлт зардал.',
+    '- "info": ердийн мэдээлэл. Хадгалахыг зогсоохгүй, асуухгүй. Жишээ: дүрмийн мэдэгдэл.',
+    'conflict_items дэх "type" (заавал биш, тогтмол ашиглавал):',
+    '  adult_child_normal | date_based_pricing | optional_addon | duplicate_route | true_price_conflict | ocr_suspect | meal_exception',
     "",
     "Баталгаажуулалт заавал true болгох нөхцөл:",
     "- Маршрут цуцлах (status=cancelled),",
@@ -1970,19 +2038,40 @@ function buildProposalGuide(condensedTrips: unknown): string {
     "- Зөвхөн нэг талбар өөрчлөхөд action='patch' ашиглаж, бусад талбарыг БҮҮ хүр.",
     "- Админ 'үүнийг'/'энэ аяллыг' гэж тодорхойгүй заавал, аль аялал болохыг trips жагсаалтаас тааруул. Олон аялал таарвал эсвэл огт тодорхойгүй бол needs_confirmation=true болгон аль аяллыг асуу.",
     "",
-    "conflicts массивын дүрэм (ЧУХАЛ) — аялалын ажилтантай ярьж байгаа мэт энгийн, эелдэг асуу:",
-    "- Энгийн, ойлгомжтой ярианы хэлээр бич. Аялалын менежертэй ярьж байгаа мэт, программистын хэллэг БҮҮ хэрэглэ.",
-    "- Доторх техник нэр томьёо, талбарын нэр, ID (ж: 'seed-33', 'trip_id', 'route_name', 'status=cancelled', 'departure_dates') БҮҮ дурд. Зөвхөн хүний ойлгох үг хэрэглэ.",
-    "- Аль аяллын тухай вэ — маршрутын нэрийг ХАШИЛТАНД бич (ж: \"Жэжү арлын аялал 2026\"). ID биш, НЭРийг нь хэрэглэ.",
-    "- Боломжтой бол сонголттой, шууд хариулж болохоор асуу (ж: \"...нэрийг шинэчлэх үү, эсвэл шинэ аялал болгох уу?\").",
-    "- Аль зүйл тодорхойгүй (үнэ, гарах өдөр, хоол, суудал г.м.) болон зөрчилдөж буй яг утгуудыг энгийнээр бич.",
-    "- \"Нэг аяллын...\", \"зарим аялал...\" гэх ерөнхий, бүрхэг бичлэг хатуу хориотой.",
-    "- Сайн жишээ: \"\\\"Хөх хотын шинжилгээтэй аялал\\\"-ын нэрийг шинэчлэх үү, эсвэл шинэ аялал болгож нэмэх үү?\"",
-    "- ХАМГИЙН ЧУХАЛ: Том хүний үнэ хүүхдийн үнээс ИХ байх нь хэвийн. Үүнийг зөрчил гэж БҮҮ бич, БҮҮ асуу. Зөвхөн ХҮҮХДИЙН үнэ том хүний үнээс өндөр байвал л асуу.",
-    "- Муу жишээ (БҮҮ ИНГЭ): \"...-д том хүний үнэ (2,690,000₮) хүүхдийн үнэ (2,350,000₮)-өөс өндөр байна. Зөв үү?\" — энэ нь хэвийн, асуух шаардлагагүй.",
-    "- Гарах огноо эх сурвалжид бичигдсэн бол (ж: '06/10, 06/19, 06/22' эсвэл '06 сарын 17-21') түүнийг departure_dates-д хий. Огноог олсон атлаа 'тодорхойгүй' гэж зөрчил БҮҮ бич.",
-    "- Муу жишээ (БҮҮ ИНГЭ): \"...-ын гарах огноо (06/10, 06/19, 06/22) тодорхойгүй байна.\" — огноо нь эндээ бичигдсэн байхад тодорхойгүй гэж хэлэх нь зөрчилтэй, ИНГЭХ ХОРИОТОЙ.",
-    "- Муу жишээ (БҮҮ ингэ): \"'Boogii travel'-ийн ... (ID: seed-33) маршрутын нэр ... болж шинэчлэгдэх эсвэл шинэ маршрут үүсгэх эсэх нь тодорхойгүй байна.\"",
+    "=== TRAVEL AGENCY DOMAIN RULES FOR conflict_items ===",
+    "",
+    "ХЭВИЙН зүйл — ОГТХОН Ч зөрчил биш (conflict_items дотор дурдахгүй):",
+    "  • Том хүний үнэ > хүүхдийн үнэ > нярайн үнэ (эсвэл тэнцүү) — аялалын агентлагийн ердийн дүрэм",
+    "  • Нэг аяллын олон гарах огноо — олон хуваарьтай байх нь хэвийн",
+    "  • Сар, улирал, эсвэл гарах огноогоор үнэ өөр — ердийн сезоны үнэ (departure_dates+notes-д бич, blocker болгохгүй)",
+    "  • Нэмэлт төлбөр CNY/юань-аар (шинжилгээ, хувийн зардал, single room, нэмэлт үзвэр) — notes-д хадгал",
+    "  • Хоол зарим өдрөөр хэрэглэгчийн зардлаар (чөлөөт өдрүүд) — has_food=true, notes-д тайлбарла",
+    "  • 'Пүрэв гараг бүр', 'өдөр бүр', 'сар бүр' зэрэг давтагдах хуваарь — хүчинтэй departure_dates",
+    "",
+    "INFO (severity='info') — мэдээлэл, хадгалахыг зогсоохгүй, асуухгүй:",
+    "  • Аялалын нэрийг нарийвчлах боломжтой боловч одоогийн нэр бас зөв",
+    "  • Single room нэмэлт нь суурь үнийн гаднах зардал гэдгийг тодруулах",
+    "",
+    "WARNING (severity='warning') — анхаарал хэрэгтэй, хадгалахыг ЗОГСООХГҮЙ, зөвхөн yellow box:",
+    "  • Нэр маш ижил хоёр аялал давхцаж магадгүй — нягтлаарай",
+    "  • Тоон утга буруу унших эрсдэлтэй мэт (ж: 2,6360,000 — OCR алдаа байж болох)",
+    "  • Verification pass-ийн зөрүү",
+    "",
+    "BLOCKER (severity='blocker') — жинхэнэ зөрчил, needs_confirmation=true БОЛГОХ, менежерт АСУУХ:",
+    "  • Ижил аялал + ижил огноо + ижил аялагчдын төрөл + тайлбаргүй өөр үнэ",
+    "  • Хүүхдийн үнэ > том хүний үнэ (урвуу — буруу мэт)",
+    "  • Маршрутын нэр эсвэл operator огт байхгүй (үндсэн талбар дутуу)",
+    "  • Цуцлах (status=cancelled) үйлдэл — менежер баталгаажуулах ёстой",
+    "",
+    "TEXT FORMAT дүрэм:",
+    "- Энгийн, ойлгомжтой ярианы хэлээр бич. Аялалын менежертэй ярьж байгаа мэт.",
+    "- Техник нэр томьёо, талбарын нэр, ID (trip_id, route_name, seed-33 г.м.) БҮҮ дурд.",
+    "- Аяллын нэрийг ХАШИЛТАНД бич (ж: \"Жэжү арлын аялал 2026\").",
+    "- Аль зүйл тодорхойгүй болон яг утгуудыг нь энгийнээр дурд.",
+    "- \"Нэг аяллын...\", \"зарим аялал...\" гэх ерөнхий бичлэг хориотой.",
+    "- Гарах огноог departure_dates-д оруулсан бол conflicts-д 'огноо тодорхойгүй' гэж БҮҮ бич.",
+    "- Сайн жишээ: { \"text\": \"\\\"Хөх хотын шинжилгээтэй аялал\\\"-ыг шинэ аялал болгон нэмэх үү, эсвэл одоо байгааг шинэчлэх үү?\", \"severity\": \"blocker\", \"type\": \"duplicate_route\" }",
+    "- Муу жишээ (БҮҮ): { \"text\": \"...-д том хүний үнэ хүүхдийн үнэ-өөс өндөр байна.\", \"severity\": \"blocker\" } — ЭНЭ НЬ ХЭВИЙН, blocker болгохгүй.",
     "",
     `Одоогийн trips (JSON): ${JSON.stringify(condensedTrips)}`,
   ].join("\n");
@@ -2115,6 +2204,10 @@ function mergeBatchProposals(
       .filter((value) => String(value || "").trim().length > 0),
   );
 
+  const conflict_items: ConflictItem[] = dedupeStrings(
+    proposals.flatMap((proposal) => proposal.conflict_items || []).map((item) => JSON.stringify(item)),
+  ).map((s) => JSON.parse(s) as ConflictItem);
+
   return {
     summary:
       summaries[0] && proposals.length === 1
@@ -2125,6 +2218,7 @@ function mergeBatchProposals(
     needs_confirmation: proposals.some((proposal) => proposal.needs_confirmation),
     important_reason: importantReasons.join(" | "),
     conflicts,
+    conflict_items,
     actions,
   };
 }
@@ -2207,12 +2301,18 @@ async function verifyProposalAgainstSource(opts: {
     recordCounter("travel.ai.verify_mismatch_total", 1, {
       count: String(mismatches.length),
     });
+    const mismatchItems: ConflictItem[] = mismatches.map((text) => ({
+      text,
+      severity: "warning" as ConflictSeverity,
+      type: "verify_mismatch",
+    }));
     return {
       ...opts.proposal,
       needs_confirmation: true,
       important_reason:
         "AI өөрийн уншсан мэдээллийг эх сурвалжтай тулгаж шалгахад зөрүү илэрлээ. Доорх утгуудыг гараар шалгана уу.",
       conflicts: [...opts.proposal.conflicts, ...mismatches],
+      conflict_items: [...(opts.proposal.conflict_items || []), ...mismatchItems],
     };
   } catch (error) {
     logWarn("travel.ai.verify_failed", {
@@ -2415,6 +2515,7 @@ async function createProposal(opts: {
       needs_confirmation: true,
       important_reason: message.slice(0, 300),
       conflicts: [],
+      conflict_items: [],
       actions: [],
     };
   }
@@ -2623,6 +2724,11 @@ export async function generateAIProposalFromContentBatched(input: {
             conflicts: [
               `Stopped before reading ${remainingLabels}. Split the files into smaller requests.`,
             ],
+            conflict_items: [{
+              text: `Stopped before reading ${remainingLabels}. Split the files into smaller requests.`,
+              severity: "warning" as ConflictSeverity,
+              type: "batch_timeout",
+            }],
             actions: [],
           });
           break;
@@ -2676,6 +2782,11 @@ export async function generateAIProposalFromContentBatched(input: {
             important_reason:
               "One batch of uploaded files took too long or failed upstream, so the result may be incomplete.",
             conflicts: [`Batch failed for ${batchLabels}: ${message}`],
+            conflict_items: [{
+              text: `Batch failed for ${batchLabels}: ${message}`,
+              severity: "warning" as ConflictSeverity,
+              type: "batch_failed",
+            }],
             actions: [],
           });
         }
