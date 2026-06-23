@@ -2015,6 +2015,13 @@ function buildBatchSourceParts(input: {
     "If a source lists хөтөлбөртэй and чөлөөт package prices for the same route, prefer separate actions with route names that include the variant instead of forcing one base price.",
     "Do not infer the operator from the uploaded filename when the document content already has a brand/operator.",
     "If possible, match against existing trips to update them; otherwise propose adding new trips.",
+    "",
+    "CRITICAL — Date-based pricing rule (most common travel agency pattern):",
+    "When the SAME trip name has DIFFERENT prices for DIFFERENT departure dates or months, this is NOT a conflict — it is normal seasonal/date pricing.",
+    "Correct behavior: create ONE trip with all departure_dates listed, set adult_price to the most common or highest price, and write ALL date-specific prices in notes/source_description in plain language (e.g. '6-р сарын 27: 3,590,000₮ / 7,8-р сар: 3,660,000₮').",
+    "NEVER raise a conflict or ask the user when prices differ only because departure dates or months differ.",
+    "A true price conflict is ONLY when: same trip name + same departure date + same traveler type + two different prices with no explanation.",
+    "Before flagging any price conflict, first check: do the different prices correspond to different dates, months, room types, or traveler categories? If yes → store all, no conflict.",
   ]
     .filter(Boolean)
     .join("\n");
