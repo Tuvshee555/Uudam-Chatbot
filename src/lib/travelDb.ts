@@ -90,16 +90,16 @@ function coerceTripStatus(value: unknown): TripStatus {
 export function cleanFields(input: TripMutationFields): TripMutationFields {
   const cleaned: TripMutationFields = {};
   if (typeof input.category === "string") cleaned.category = input.category.trim();
-  if (typeof input.operator_name === "string") cleaned.operator_name = input.operator_name.trim();
+  if (typeof input.operator_name === "string") {
+    cleaned.operator_name = normalizeOperatorName(input.operator_name);
+  }
   if (typeof input.route_name === "string") cleaned.route_name = input.route_name.trim();
   if (typeof input.duration_text === "string") cleaned.duration_text = input.duration_text.trim();
   if (typeof input.currency === "string" && input.currency.trim()) {
     cleaned.currency = input.currency.trim().toUpperCase();
   }
   if (Array.isArray(input.departure_dates)) {
-    cleaned.departure_dates = input.departure_dates
-      .map((value) => String(value || "").trim())
-      .filter(Boolean)
+    cleaned.departure_dates = expandMongolianDepartureDates(input.departure_dates)
       .slice(0, 60);
   }
   if (input.adult_price === null || typeof input.adult_price === "number") {
@@ -131,6 +131,83 @@ export function cleanFields(input: TripMutationFields): TripMutationFields {
   return cleaned;
 }
 
+export function expandMongolianDepartureDates(values: unknown[]): string[] {
+  const result: string[] = [];
+  const add = (value: string) => {
+    const cleaned = value.trim();
+    if (cleaned && !result.includes(cleaned)) result.push(cleaned);
+  };
+
+  for (const rawValue of values) {
+    const value = String(rawValue || "").trim();
+    if (!value) continue;
+    const monthMatches = Array.from(
+      value.matchAll(/(\d{1,2})\s*(?:-?р\s*)?сарын\s*/gi),
+    );
+    if (monthMatches.length === 0) {
+      add(value);
+      continue;
+    }
+
+    const expanded: string[] = [];
+    let allGroupsReadable = true;
+    for (let index = 0; index < monthMatches.length; index += 1) {
+      const match = monthMatches[index];
+      const month = Number(match[1]);
+      const start = (match.index || 0) + match[0].length;
+      const end = monthMatches[index + 1]?.index ?? value.length;
+      const dayText = value
+        .slice(start, end)
+        .replace(/[,.;\s]+$/g, "")
+        .trim();
+      if (
+        month < 1 ||
+        month > 12 ||
+        !/^\d{1,2}(?:\s*,\s*\d{1,2})*$/.test(dayText)
+      ) {
+        allGroupsReadable = false;
+        break;
+      }
+      const days = dayText.split(",").map((day) => Number(day.trim()));
+      if (days.some((day) => day < 1 || day > 31)) {
+        allGroupsReadable = false;
+        break;
+      }
+      days.forEach((day) => expanded.push(`${month} сарын ${day}`));
+    }
+
+    if (!allGroupsReadable || expanded.length === 0) {
+      add(value);
+      continue;
+    }
+    // Preserve a recurring schedule when it shares one string with exact dates.
+    if (isRecurringDepartureText(value)) {
+      const recurring = value.match(
+        /(?:даваа|мягмар|лхагва|пүрэв|баасан|бямба|ням)\s+гар(?:а|и)г\s+(?:бүр|болгон)|долоо\s*хоног\s+бүр|сар\s+бүр|өдөр\s+(?:бүр|болгон|тутам)/i,
+      );
+      add(recurring?.[0] || value);
+    }
+    expanded.forEach(add);
+  }
+  return result;
+}
+
+export function normalizeOperatorName(value: string): string {
+  const trimmed = value.trim();
+  const normalized = trimmed
+    .toLowerCase()
+    .replace(/[.,:;!?()[\]{}"']/g, "")
+    .replace(/\s+/g, " ");
+  if (
+    normalized === "uudam" ||
+    normalized === "uudam travel" ||
+    normalized === "uudam travel agency"
+  ) {
+    return "UUDAM TRAVEL AGENCY";
+  }
+  return trimmed;
+}
+
 export function isAgencyHeaderName(value: string | null | undefined): boolean {
   const normalized = normalizeLookupText(value || "");
   return (
@@ -143,6 +220,15 @@ export function isAgencyHeaderName(value: string | null | undefined): boolean {
 
 export function isAgencyHeaderConflict(value: string): boolean {
   const normalized = normalizeLookupText(value);
+  const competingMainBrands =
+    (normalized.includes("хоёр өөр") ||
+      normalized.includes("two different") ||
+      normalized.includes("competing")) &&
+    (normalized.includes("header") ||
+      normalized.includes("лого") ||
+      normalized.includes("logo") ||
+      normalized.includes("толгой"));
+  if (competingMainBrands) return false;
   return (
     normalized.includes("uudam travel agency") ||
     normalized === "uudam travel" ||
@@ -1486,12 +1572,16 @@ export function findTripMatches(
   operatorName?: string,
   routeName?: string,
 ): TripMatchSnapshot[] {
-  const operator = operatorName ? normalizeLookupText(operatorName) : "";
+  const operator = operatorName
+    ? normalizeLookupText(normalizeOperatorName(operatorName))
+    : "";
   const route = routeName ? normalizeLookupText(routeName) : "";
   if (!operator && !route) return [];
 
   return trips.filter((trip) => {
-    const tripOperator = normalizeLookupText(trip.operator_name || "");
+    const tripOperator = normalizeLookupText(
+      normalizeOperatorName(trip.operator_name || ""),
+    );
     const tripRoute = normalizeLookupText(trip.route_name || "");
     if (operator && tripOperator !== operator) return false;
     if (route && tripRoute !== route) return false;

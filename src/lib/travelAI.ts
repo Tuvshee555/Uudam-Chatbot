@@ -95,6 +95,64 @@ function isMissingTripName(value: string | undefined): boolean {
   return !name || /^\(?\s*нэргүй\s+аялал\s*\)?$/i.test(name);
 }
 
+function isResolvedMissingDateConflict(
+  conflict: string,
+  actions: AITripAction[],
+): boolean {
+  const normalized = conflict.toLowerCase();
+  const claimsMissingDate =
+    (normalized.includes("огноо") || normalized.includes("гарах өдөр") || normalized.includes("departure date")) &&
+    (normalized.includes("тодорхойгүй") || normalized.includes("алга") || normalized.includes("missing") || normalized.includes("unknown"));
+  if (!claimsMissingDate) return false;
+
+  const datedActions = actions.filter(
+    (action) =>
+      Array.isArray(action.fields?.departure_dates) &&
+      action.fields.departure_dates.some((date) => String(date).trim().length > 0),
+  );
+  if (datedActions.length === 0) return false;
+  if (datedActions.length === actions.length) return true;
+  return datedActions.some((action) => {
+    const route = String(action.fields?.route_name || action.match?.route_name || "")
+      .trim()
+      .toLowerCase();
+    return route.length > 2 && normalized.includes(route);
+  });
+}
+
+function isFilenameOperatorChoiceConflict(conflict: string): boolean {
+  const normalized = conflict.toLowerCase();
+  const mentionsOperator =
+    normalized.includes("operator") ||
+    normalized.includes("оператор") ||
+    normalized.includes("брэнд");
+  const mentionsFilename =
+    normalized.includes("file name") ||
+    normalized.includes("filename") ||
+    normalized.includes("файлын нэр");
+  return mentionsOperator && mentionsFilename;
+}
+
+function isCorruptedPricePattern(value: string): boolean {
+  return /\b\d{1,3}[,.]\d{4}[,.]\d{3}\b/.test(value);
+}
+
+function isGenericExtractionMissConflict(
+  conflict: string,
+  actions: AITripAction[],
+): boolean {
+  if (actions.length === 0) return false;
+  const normalized = conflict.toLowerCase();
+  if (!/(тодорхойгүй|unknown|missing)/.test(normalized)) return false;
+  const fieldMentions = [
+    /маршрут|route/,
+    /оператор|operator|брэнд/,
+    /үнэ|price/,
+    /огноо|гарах өдөр|date/,
+  ].filter((pattern) => pattern.test(normalized)).length;
+  return fieldMentions >= 3;
+}
+
 export function validateAIChangeProposal(
   proposal: AIChangeProposal | null,
   existingTrips: TripMatchSnapshot[] = [],
@@ -102,9 +160,24 @@ export function validateAIChangeProposal(
 ): ProposalValidationReport {
   const normalized = normalizeProposal(proposal);
   const blockingConflicts: string[] = [];
+  const normalizedConflictItems = (normalized.conflict_items || []).map((item) => ({
+    ...item,
+    severity:
+      item.type === "ocr_suspect" && isCorruptedPricePattern(item.text)
+        ? ("blocker" as ConflictSeverity)
+        : item.severity,
+  }));
+  const structuredSeverity = new Map(
+    normalizedConflictItems.map((item) => [item.text, item.severity]),
+  );
+  const hasStructuredConflicts = structuredSeverity.size > 0;
   const confirmationConflicts = normalized.conflicts.filter(
     (conflict) =>
+      (!hasStructuredConflicts || structuredSeverity.get(conflict) === "blocker") &&
       !isAgencyHeaderConflict(conflict) &&
+      !isFilenameOperatorChoiceConflict(conflict) &&
+      !isResolvedMissingDateConflict(conflict, normalized.actions) &&
+      !isGenericExtractionMissConflict(conflict, normalized.actions) &&
       !isGenericConfirmationText(conflict) &&
       !isOptionalAddOnCostConflict(conflict) &&
       !isDocumentedMealExceptionConflict(conflict),
@@ -336,8 +409,8 @@ export function validateAIChangeProposal(
   // whose text was filtered out (agency headers, generic confirmations, etc.)
   // are dropped; new blocking conflicts from validation get severity "blocker".
   const proposalConflictSet = new Set(proposalConflicts);
-  const filteredItems: ConflictItem[] = (normalized.conflict_items || []).filter(
-    (item) => proposalConflictSet.has(item.text),
+  const filteredItems: ConflictItem[] = normalizedConflictItems.filter(
+    (item) => item.severity !== "blocker" || proposalConflictSet.has(item.text),
   );
   const existingItemTexts = new Set(filteredItems.map((i) => i.text));
   const newBlockingItems: ConflictItem[] = blockingConflicts
@@ -423,7 +496,16 @@ function buildProposalGuide(condensedTrips: unknown): string {
     '        "adult_price": 0, "child_price": 0, "currency": "MNT|CNY",',
     '        "departure_dates": ["..."], "seats_total": 0, "seats_left": 0,',
     '        "has_food": true, "status": "active|cancelled|sold_out|draft",',
-    '        "notes": "", "source_description": ""',
+    '        "notes": "", "source_description": "",',
+    '        "extra": {',
+    '          "tour_title": "canonical product title", "route": "actual travel path",',
+    '          "duration_days": null, "duration_nights": null,',
+    '          "recurring_schedule": null, "departure_date_groups": [],',
+    '          "infant_prices": [], "single_room_supplements": [], "foreign_currency_fees": [],',
+    '          "transport": [], "included_items": [], "excluded_items": [], "itinerary_days": [],',
+    '          "source_file_name": "", "original_title_text": "",',
+    '          "extraction_confidence": { "operator": "high|medium|low", "title": "high|medium|low", "dates": "high|medium|low", "prices": "high|medium|low", "duration": "high|medium|low" }',
+    "        }",
     "      }",
     "    }",
     "  ]",
@@ -513,6 +595,8 @@ function buildBatchSourceParts(input: {
     `Sources: ${sourceLabels}`,
     input.note ? `Admin note: ${input.note}` : "",
     "Extract travel information from the attached files, images, or text, including route, operator, price, seats, departure date, meals, and status.",
+    "EVIDENCE RULE: sources whose names share the same original filename are text and visual evidence for ONE document. Reconcile them into one tour record; never create duplicate actions for parsed-text and visual-page sources.",
+    "Use BOTH the parsed text and rendered page image. Before declaring a field missing, re-check page 1 visually, its headings, and nearby blocks. A missed extraction is not a document conflict.",
     "ACCURACY IS THE TOP PRIORITY. Read carefully and do not rush.",
     "Read EVERY trip/row in the source. Do not skip rows and do not stop early. If the source lists 12 trips, return actions for all 12.",
     "Never merge two different trips into one, and never split one trip into two. Each distinct route = one action.",
@@ -521,10 +605,20 @@ function buildBatchSourceParts(input: {
     "If any value is unclear or hard to read, keep needs_confirmation=true and ask about that exact value in plain language instead of guessing.",
     "Ignore logos, agency headers, footers, contact details, and page decorations UNLESS they contain trip-specific data (price, date, seats) attached to a real trip row.",
     "The route_name must be the DESTINATION or TRIP TITLE (e.g. 'Хөх хот', 'Тэнгэрийн хаалга-Чунчин', 'Шанхай+Ханжоу'). NEVER use the agency name as the route_name.",
+    "TITLE VS ROUTE: route_name is the canonical tour/product title used by this database. Store the actual path such as 'УБ-Энши-Чунчин-Жанжиажэ' separately in fields.extra.route. Store the same canonical title in fields.extra.tour_title.",
+    "Read the canonical title from the largest title block near the top of page 1. Correct harmless OCR spelling errors, but preserve the source typo in fields.extra.original_title_text. Ask only if the correction changes meaning.",
     "If the document is from UUDAM TRAVEL AGENCY and no other operator is named, set operator_name to 'UUDAM TRAVEL AGENCY' — do not leave it blank.",
+    "Treat UUDAM, UUDAM TRAVEL, and UUDAM TRAVEL AGENCY as the same brand and normalize them to 'UUDAM TRAVEL AGENCY'. A clear page-1 logo/header/contact match gives high operator confidence and MUST NOT create an operator question.",
+    "Never use the filename as operator when a visible operator exists. The filename may hint at the tour title only. Ask about operator only when two genuinely different companies compete in main logo/header positions.",
     "Do not treat normal adult/child price differences as conflicts. An adult price HIGHER than the child price is normal and expected — NEVER flag it, never ask about it. Only flag the child/adult price if the CHILD price is higher than the adult price, or the source is genuinely unreadable.",
     "If a departure date IS written in the source (e.g. '06/10, 06/19, 06/22' or '06 сарын 17-21'), put it in departure_dates and treat it as known. NEVER list dates you found and then say the date is 'unclear' or 'тодорхойгүй' — that is a contradiction and is forbidden. Only flag a missing date if there is genuinely NO date anywhere in the source for that trip.",
+    "Search date headings and variants: АЯЛЛЫН ОГНОО, АЯЛЛЫН ОГНОО / ХУВААРЬ, АЯЛЛЫН ОГНОО/ХУГАЦАА, ОГНОО, ХУВААРЬ. Expand '6 сарын 4, 11, 18' into usable departure_dates and also store grouped month/day data in fields.extra.departure_date_groups. Missing year is not a conflict; use year=null in extra.",
+    "If recurring text (Пүрэв/Баасан гариг болгон, долоо хоног бүр, сар бүр) and exact dates both exist, keep BOTH: recurring text in departure_dates and fields.extra.recurring_schedule, exact dates in departure_dates. They support each other and are not a conflict.",
+    "Normalize duration such as '8 өдөр / 7 шөнө' into duration_text and fields.extra.duration_days=8, duration_nights=7. Matching repeated durations are not conflicts; two different meaningful durations are blockers.",
     "When a trip has base prices in MNT plus a medical/exam fee in CNY, store the base adult/child prices as MNT and write the CNY fee clearly in notes/source_description.",
+    "Keep currencies separate: adult_price/child_price and currency hold the base price, while CNY medical fees, infant prices, and single-room supplements go into fields.extra.foreign_currency_fees / infant_prices / single_room_supplements and are repeated clearly in notes. Never add MNT and CNY together.",
+    "A malformed price such as '2,6360,000₮' is a real OCR warning. Do not guess. Create one precise blocker quoting the exact malformed text and plausible interpretations when justified.",
+    "Store transport, included items, excluded items, daily itinerary, source filename, and per-field confidence in fields.extra. Confidence is high when page-1 label/visual and text agree, medium when readable once, low only when cut off/garbled/ambiguous.",
     "Optional add-on costs in CNY/yuan (нэмэлт төлбөр, өөрийн зардлаар, single room fees, extra attraction tickets) are not conflicts; keep them in notes/source_description.",
     "Recurring schedules such as 'Пүрэв гараг бүр' are valid departure_dates; do not report them as missing dates.",
     "If meals are generally included but specific days/meals are self-paid or unavailable, set has_food=true and write the exceptions in notes/source_description instead of raising a meal conflict.",
@@ -544,6 +638,8 @@ function buildBatchSourceParts(input: {
     "NEVER raise a conflict or ask the user when prices differ only because departure dates or months differ.",
     "A true price conflict is ONLY when: same trip name + same departure date + same traveler type + two different prices with no explanation.",
     "Before flagging any price conflict, first check: do the different prices correspond to different dates, months, room types, or traveler categories? If yes → store all, no conflict.",
+    "QUESTION GATE: ask a human only for a required low-confidence value or two meaningful values that disagree. The question must quote the exact tour and exact conflicting text, and the answer must change a database value. Never emit a generic 'route/operator/price/date unclear' question.",
+    "BATCH RULE: each PDF is one separate tour unless that PDF visibly contains multiple complete products. Different filenames, routes, dates, prices, or the same operator across PDFs are expected and are not cross-file conflicts.",
   ]
     .filter(Boolean)
     .join("\n");

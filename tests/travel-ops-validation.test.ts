@@ -479,3 +479,213 @@ test("validation treats documented meal exceptions as notes, not conflicts", asy
   assert.equal(result.proposal.needs_confirmation, false);
   assert.equal(result.auto_apply_ready, true);
 });
+
+test("structured warnings stay visible without blocking save", async () => {
+  const { validateAIChangeProposal } = await loadTravelOps();
+  const warning = "Буудлын нэрийн жижиг тайлбар бүдэг харагдаж байна.";
+  const proposal: AIChangeProposal = {
+    summary: "OCR warning",
+    needs_confirmation: false,
+    important_reason: "",
+    conflicts: [warning],
+    conflict_items: [{ text: warning, severity: "warning", type: "ocr_suspect" }],
+    actions: [{
+      action: "upsert",
+      fields: {
+        operator_name: "UUDAM",
+        route_name: "Шанхайн аялал",
+        adult_price: 2_990_000,
+        currency: "MNT",
+        departure_dates: ["7 сарын 16"],
+        duration_text: "8 өдөр 7 шөнө",
+      },
+    }],
+  };
+
+  const result = validateAIChangeProposal(proposal, []);
+  assert.equal(result.proposal.needs_confirmation, false);
+  assert.equal(result.proposal.conflicts.length, 0);
+  assert.equal(result.proposal.conflict_items?.[0]?.severity, "warning");
+  assert.equal(result.auto_apply_ready, true);
+});
+
+test("corrupted OCR price patterns are promoted to blockers", async () => {
+  const { validateAIChangeProposal } = await loadTravelOps();
+  const conflict = '"Шанхайн аялал" хүүхдийн үнэ 2,6360,000₮ гэж бичигдсэн байна.';
+  const proposal: AIChangeProposal = {
+    summary: "bad OCR price",
+    needs_confirmation: false,
+    important_reason: "",
+    conflicts: [conflict],
+    conflict_items: [{ text: conflict, severity: "warning", type: "ocr_suspect" }],
+    actions: [{
+      action: "upsert",
+      fields: {
+        operator_name: "UUDAM TRAVEL AGENCY",
+        route_name: "Шанхайн аялал",
+        adult_price: 2_990_000,
+        departure_dates: ["7 сарын 16"],
+        duration_text: "8 өдөр 7 шөнө",
+      },
+    }],
+  };
+
+  const result = validateAIChangeProposal(proposal, []);
+  assert.equal(result.proposal.needs_confirmation, true);
+  assert.equal(result.proposal.conflict_items?.[0]?.severity, "blocker");
+});
+
+test("validation removes a missing-date conflict when dates were extracted", async () => {
+  const { validateAIChangeProposal } = await loadTravelOps();
+  const conflict = '"Тэнгэрийн хаалга" аяллын гарах огноо тодорхойгүй байна.';
+  const proposal: AIChangeProposal = {
+    summary: "dates found",
+    needs_confirmation: true,
+    important_reason: "",
+    conflicts: [conflict],
+    conflict_items: [{ text: conflict, severity: "blocker" }],
+    actions: [{
+      action: "upsert",
+      fields: {
+        operator_name: "UUDAM TRAVEL AGENCY",
+        route_name: "Тэнгэрийн хаалга",
+        adult_price: 2_990_000,
+        departure_dates: ["7 сарын 16", "7 сарын 23"],
+        duration_text: "8 өдөр 7 шөнө",
+      },
+    }],
+  };
+
+  const result = validateAIChangeProposal(proposal, []);
+  assert.equal(result.proposal.conflicts.length, 0);
+  assert.equal(result.proposal.needs_confirmation, false);
+});
+
+test("validation removes generic multi-field extraction-miss questions", async () => {
+  const { validateAIChangeProposal } = await loadTravelOps();
+  const conflict = "Аяллын маршрут, оператор, үнэ, гарах огноо тодорхойгүй байна.";
+  const proposal: AIChangeProposal = {
+    summary: "fields actually found",
+    needs_confirmation: true,
+    important_reason: "",
+    conflicts: [conflict],
+    conflict_items: [{ text: conflict, severity: "blocker" }],
+    actions: [{
+      action: "upsert",
+      fields: {
+        operator_name: "UUDAM TRAVEL AGENCY",
+        route_name: "Жанжиажэ аялал",
+        adult_price: 3_290_000,
+        departure_dates: ["8 сарын 8"],
+        duration_text: "8 өдөр 7 шөнө",
+      },
+    }],
+  };
+
+  const result = validateAIChangeProposal(proposal, []);
+  assert.equal(result.proposal.conflicts.length, 0);
+  assert.equal(result.proposal.needs_confirmation, false);
+});
+
+test("validation ignores filename-versus-operator pseudo conflicts", async () => {
+  const { validateAIChangeProposal } = await loadTravelOps();
+  const conflict = "Файлын нэр болон оператор UUDAM TRAVEL AGENCY зөрүүтэй байна.";
+  const proposal: AIChangeProposal = {
+    summary: "operator found",
+    needs_confirmation: true,
+    important_reason: "",
+    conflicts: [conflict],
+    conflict_items: [{ text: conflict, severity: "blocker" }],
+    actions: [{
+      action: "upsert",
+      fields: {
+        operator_name: "UUDAM TRAVEL AGENCY",
+        route_name: "Хөх хотын аялал",
+        adult_price: 890_000,
+        departure_dates: ["Пүрэв гараг бүр"],
+        duration_text: "5 өдөр 4 шөнө",
+      },
+    }],
+  };
+
+  const result = validateAIChangeProposal(proposal, []);
+  assert.equal(result.proposal.conflicts.length, 0);
+  assert.equal(result.proposal.needs_confirmation, false);
+});
+
+test("validation keeps a real competing-header operator conflict", async () => {
+  const { validateAIChangeProposal } = await loadTravelOps();
+  const conflict =
+    'Page 1-ийн хоёр өөр logo/header дээр "UUDAM TRAVEL AGENCY" болон "X TRAVEL" байна.';
+  const proposal: AIChangeProposal = {
+    summary: "two brands",
+    needs_confirmation: true,
+    important_reason: "",
+    conflicts: [conflict],
+    conflict_items: [{ text: conflict, severity: "blocker", type: "operator_conflict" }],
+    actions: [{
+      action: "upsert",
+      fields: {
+        operator_name: "UUDAM TRAVEL AGENCY",
+        route_name: "Шанхайн аялал",
+        adult_price: 2_990_000,
+        departure_dates: ["7 сарын 16"],
+        duration_text: "8 өдөр 7 шөнө",
+      },
+    }],
+  };
+
+  const result = validateAIChangeProposal(proposal, []);
+  assert.equal(result.proposal.needs_confirmation, true);
+  assert.equal(result.proposal.conflicts.length, 1);
+});
+
+test("operator aliases normalize and match as one UUDAM brand", async () => {
+  const { cleanFields } = await loadTravelOps();
+  const { findTripMatches } = await import("../src/lib/travelDb");
+  assert.equal(cleanFields({ operator_name: "Uudam" }).operator_name, "UUDAM TRAVEL AGENCY");
+  const matches = findTripMatches([
+    {
+      id: "trip-uudam",
+      operator_name: "Uudam Travel",
+      route_name: "Бээжин",
+      status: "active",
+      seats_left: null,
+      seats_total: null,
+      adult_price: null,
+      child_price: null,
+      currency: "MNT",
+    },
+  ], "UUDAM TRAVEL AGENCY", "Бээжин");
+  assert.equal(matches.length, 1);
+});
+
+test("Mongolian grouped departure dates expand without inventing a year", async () => {
+  const { expandMongolianDepartureDates } = await import("../src/lib/travelDb");
+  assert.deepEqual(
+    expandMongolianDepartureDates([
+      "6 сарын 4, 11, 18, 25, 7 сарын 2, 9, 16, 23, 30",
+    ]),
+    [
+      "6 сарын 4",
+      "6 сарын 11",
+      "6 сарын 18",
+      "6 сарын 25",
+      "7 сарын 2",
+      "7 сарын 9",
+      "7 сарын 16",
+      "7 сарын 23",
+      "7 сарын 30",
+    ],
+  );
+});
+
+test("recurring schedule and exact dates are both retained", async () => {
+  const { expandMongolianDepartureDates } = await import("../src/lib/travelDb");
+  assert.deepEqual(
+    expandMongolianDepartureDates([
+      "Пүрэв гариг болгон — 6 сарын 4, 11, 18",
+    ]),
+    ["Пүрэв гариг болгон", "6 сарын 4", "6 сарын 11", "6 сарын 18"],
+  );
+});

@@ -22,7 +22,7 @@ export const STATUS_LABELS: Record<TripStatus, string> = {
 export const FIELD_LABELS: Record<string, string> = {
   category: "Ангилал",
   operator_name: "Оператор",
-  route_name: "Маршрут",
+  route_name: "Аяллын нэр",
   duration_text: "Хугацаа",
   adult_price: "Том хүний үнэ",
   child_price: "Хүүхдийн үнэ",
@@ -384,8 +384,19 @@ export function buildProposalClarifications(
     const quoted = extractQuotedValues(conflict);
     const subject = quoted[0] || "";
     const subjectTag = subject ? `"${subject}" аяллын ` : "";
+    const isCompetingMainBrandConflict =
+      (normalized.includes("хоёр өөр") ||
+        normalized.includes("two different") ||
+        normalized.includes("competing")) &&
+      (normalized.includes("header") ||
+        normalized.includes("лого") ||
+        normalized.includes("logo") ||
+        normalized.includes("толгой"));
 
-    if (isAgencyReviewText(subject) || isAgencyReviewText(detail)) return;
+    if (
+      !isCompetingMainBrandConflict &&
+      (isAgencyReviewText(subject) || isAgencyReviewText(detail))
+    ) return;
     if (isOptionalAddOnCostConflict(normalized)) return;
     if (isDocumentedMealExceptionConflict(normalized)) return;
     if (isRecurringDateText(normalized)) return;
@@ -394,6 +405,7 @@ export function buildProposalClarifications(
     }
 
     if (
+      isCompetingMainBrandConflict ||
       normalized.includes("file") ||
       normalized.includes("файлын нэр") ||
       normalized.includes("operator") ||
@@ -403,12 +415,12 @@ export function buildProposalClarifications(
       const detected = quoted[0] || "файлын нэр";
       const operator = quoted[1] || "илэрсэн оператор";
       if (
-        normalized.includes("file") ||
-        normalized.includes("файлын нэр") ||
+        (!isCompetingMainBrandConflict &&
+          (normalized.includes("file") || normalized.includes("файлын нэр"))) ||
         isLikelyTripRouteText(detected) ||
         isLikelyTripRouteText(operator) ||
-        isAgencyReviewText(detected) ||
-        isAgencyReviewText(operator)
+        (!isCompetingMainBrandConflict &&
+          (isAgencyReviewText(detected) || isAgencyReviewText(operator)))
       ) {
         return;
       }
@@ -636,21 +648,55 @@ export function buildProposalClarifications(
       return;
     }
 
+    if (
+      normalized.includes("аяллын нэр") ||
+      normalized.includes("маршрутын нэр") ||
+      normalized.includes("route name") ||
+      normalized.includes("trip name")
+    ) {
+      pushQuestion({
+        id: `trip-name:${index}`,
+        prompt: subject
+          ? `"${subject}" нэрийг энэ аялалд ашиглах уу?`
+          : "Нэг аяллын нэр тодорхойгүй байна. Зөв нэрийг доорх талбарт яг бичнэ үү.",
+        detail,
+        options: [
+          ...(subject
+            ? [{
+                label: `"${subject}" нэрээр хадгалах`,
+                answer: `Аяллын нэрийг "${subject}" гэж хадгал. (Зөрчил: ${detail})`,
+              }]
+            : [{
+                label: "Файл дээрх аяллын гарчгийг ашиглах",
+                answer: `Файл дээр тухайн аяллын хэсгийн дээр бичсэн гарчгийг аяллын нэр болгон ашигла. (Зөрчил: ${detail})`,
+              }]),
+          {
+            label: "Энэ аяллыг одоохондоо хадгалахгүй",
+            answer: `Нэр нь тодорхойгүй энэ аяллыг саналын жагсаалтаас хас. (Зөрчил: ${detail})`,
+          },
+        ],
+        allowCustom: true,
+        customPlaceholder: "Зөв аяллын нэрийг яг бичнэ үү",
+      });
+      return;
+    }
+
     pushQuestion({
       id: `conflict:${index}`,
-      prompt: `Дараах зөрчлийг хэрхэн зохицуулах вэ? ${detail}`,
+      prompt: "Энэ мэдээллийг хадгалахаас өмнө нэг шийдвэр хэрэгтэй байна.",
+      detail,
       options: [
         {
-          label: "Илэрсэнээр нь үлдээх",
-          answer: `Дараах зөрчлийг илэрсэн хэвээр нь үлдээ: ${detail}`,
+          label: "Файлд бичсэн утгыг зөв гэж хадгалах",
+          answer: `Файлд бичсэн утгыг зөв гэж үзээд хадгал: ${detail}`,
         },
         {
-          label: "Болгоомжтой засах",
-          answer: `Дараах зөрчлийг болгоомжтой хянаж засна уу: ${detail}`,
+          label: "Энэ өөрчлөлтийг хадгалахгүй",
+          answer: `Энэ тодорхойгүй өөрчлөлтийг саналын жагсаалтаас хас: ${detail}`,
         },
       ],
       allowCustom: true,
-      customPlaceholder: "Хэрхэн зохицуулахыг бичнэ үү",
+      customPlaceholder: "Зөв нэр, үнэ, огноо эсвэл хийх үйлдлийг яг бичнэ үү",
     });
   });
 

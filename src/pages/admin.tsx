@@ -463,6 +463,11 @@ export default function AdminPage() {
                 mimeType: unit.mimeType,
                 dataBase64: unit.dataUrl,
               },
+              ...(unit.companions || []).map((companion) => ({
+                filename: companion.filename,
+                mimeType: companion.mimeType,
+                dataBase64: companion.dataUrl,
+              })),
             ],
             note,
           }),

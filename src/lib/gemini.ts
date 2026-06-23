@@ -113,10 +113,15 @@ export async function askGeminiParts(
   // edits we want deterministic, factual output — not "creative" guesses.
   const temperature =
     typeof options?.temperature === "number" ? options.temperature : 0;
+  const hasNativePdf = parts.some(
+    (part) => "inlineData" in part && part.inlineData.mimeType === "application/pdf",
+  );
 
   // File reading uses OpenAI as the primary model (more reliable for parsing).
-  // If OpenAI is configured, try it first; on failure, fall through to Gemini.
-  if (options?.preferOpenAI && env.openaiApiKey) {
+  // Native PDF parts stay on Gemini because Chat Completions image_url does not
+  // reliably accept application/pdf; rendered JPEG page evidence still uses
+  // OpenAI first. If OpenAI is configured, try it first for supported parts.
+  if (options?.preferOpenAI && env.openaiApiKey && !hasNativePdf) {
     const openaiResult = await askOpenAIFallbackParts(parts, {
       source,
       jsonMode: options?.jsonMode,
@@ -250,6 +255,7 @@ export async function askGeminiParts(
     // failures — a bad request or auth error should surface as-is.
     if (
       env.openaiApiKey &&
+      !hasNativePdf &&
       (classification.category === "upstream_5xx" ||
         classification.category === "timeout" ||
         classification.retryable === true)

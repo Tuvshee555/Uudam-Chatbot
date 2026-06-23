@@ -1,79 +1,24 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useState } from "react";
 import {
   Alert,
   Badge,
   Button,
   Card,
-  EmptyState,
   Icons,
-  Input,
-  Modal,
-  Select,
   Spinner,
-  Textarea,
   cx,
-  useToast,
 } from "@/components/ui";
 import type {
-  AIAction,
-  AIProposal,
   AttachedFile,
-  ChatButton,
   ChatMessage,
-  ClarificationAnswer,
-  ClarificationQuestion,
   ConflictItem,
-  ControlState,
-  DriveSyncDiagnostics,
-  DriveSyncRecentFile,
-  FlowRule,
-  LeadStats,
-  PageControlState,
-  PauseRow,
   ProposalMsg,
-  ReadinessReport,
-  RecentRow,
-  SettingsForm,
-  StructuredRow,
-  TravelBotSettings,
-  TravelLead,
-  TravelTrip,
 } from "@/lib/adminTypes";
+import { describeAction, summarizeConflict } from "@/lib/adminProposalUtils";
 import {
-  FIELD_LABELS,
-  STATUS_LABELS,
-  buildProposalClarifications,
-  compactWarnings,
-  describeAction,
-  summarizeConflict,
-} from "@/lib/adminProposalUtils";
-import { SectionHeading, StructuredEditor } from "./AdminShared";
-import {
-  DURATIONS,
-  HANDOFF_DURATION_CUSTOM,
-  HANDOFF_DURATION_OPTIONS,
   MAX_AI_INPUT_CHARS,
   QUICK_ACTIONS,
-  STATUS_TONE,
-  asInt,
-  conflictTone,
-  driveSyncTone,
   formatBytes,
-  formatMoney,
-  formatTime,
-  handoffDurationSelectValue,
-  settingsToForm,
-  shortId,
-  splitLines,
-  timeLeft,
-  toStructuredRows,
 } from "@/lib/adminUtils";
 
 function fileGlyph(file: AttachedFile): string {
@@ -131,6 +76,7 @@ export function AssistantTab({
   setDragOver,
   busy,
   busyLabel,
+  busyProgress,
   applyBusyId,
   clarifyBusyId,
   onSend,
@@ -153,6 +99,7 @@ export function AssistantTab({
   setDragOver: (value: boolean) => void;
   busy: boolean;
   busyLabel: string;
+  busyProgress: number | null;
   applyBusyId: string;
   clarifyBusyId: string;
   onSend: () => void;
@@ -179,7 +126,7 @@ export function AssistantTab({
       {/* Photo-first hero: drop trip photos → AI reads them into draft trips */}
       <Card
         className={cx(
-          "overflow-hidden border-brand/30 bg-brand-soft/40",
+          "overflow-hidden border-sun/25 bg-linear-to-r from-sun-soft via-white to-travel-soft",
           dragOver && "ring-2 ring-brand",
         )}
       >
@@ -197,9 +144,9 @@ export function AssistantTab({
             const files = e.dataTransfer.files;
             if (files?.length) onDropFiles(files);
           }}
-          className="flex w-full items-center gap-4 p-4 text-left transition-colors hover:bg-brand-soft/60"
+          className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-white/55 sm:gap-4"
         >
-          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-brand text-white">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-linear-to-br from-sun to-travel text-white shadow-sm sm:h-14 sm:w-14">
             <Icons.trips size={26} />
           </div>
           <div className="min-w-0 flex-1">
@@ -211,13 +158,13 @@ export function AssistantTab({
               уншиж, үнэ/огноо/маршрутыг автоматаар аялал болгож санал болгоно. Та
               шалгаад баталгаажуулна.
             </p>
-            <p className="mt-1 text-xs text-ink-subtle">
+            <p className="mt-1 text-sm text-ink-subtle">
               Зураг (JPG, PNG), PDF, Excel дэмжинэ. Олон зураг нэг дор болно.
             </p>
           </div>
           <span className="hidden shrink-0 items-center gap-1.5 rounded-xl bg-brand px-3.5 py-2 text-sm font-medium text-white sm:flex">
-            <Icons.plus size={15} />
-            Зураг сонгох
+            <Icons.paperclip size={15} />
+            Файл сонгох
           </span>
         </button>
       </Card>
@@ -275,18 +222,44 @@ export function AssistantTab({
           )}
           {busy && (
             <div className="flex justify-start">
-              <div className="flex items-center gap-2 rounded-2xl rounded-bl-sm border border-line bg-surface px-4 py-3 shadow-sm">
-                <div className="flex items-center gap-1">
-                  {[0, 1, 2].map((n) => (
-                    <span
-                      key={n}
-                      className="h-2 w-2 animate-bounce rounded-full bg-ink-subtle"
-                      style={{ animationDelay: `${n * 0.15}s` }}
-                    />
-                  ))}
+              <div className="w-full max-w-xl rounded-2xl rounded-bl-sm bg-ink px-4 py-3.5 text-white shadow-md">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold">
+                      {busyProgress != null ? "Файл боловсруулж байна" : "AI хариу бэлдэж байна"}
+                    </p>
+                    {busyLabel && (
+                      <p className="mt-0.5 truncate text-sm text-white/70">{busyLabel}</p>
+                    )}
+                  </div>
+                  {busyProgress != null ? (
+                    <span className="shrink-0 font-mono text-lg font-bold text-sun-soft">
+                      {Math.round(busyProgress)}%
+                    </span>
+                  ) : (
+                    <Spinner className="shrink-0 text-white" />
+                  )}
                 </div>
-                {busyLabel && (
-                  <span className="text-xs text-ink-muted">{busyLabel}</span>
+                <div
+                  className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/15"
+                  role="progressbar"
+                  aria-label="Файл боловсруулах явц"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={busyProgress ?? undefined}
+                >
+                  <div
+                    className={cx(
+                      "h-full rounded-full bg-linear-to-r from-sun via-[#f6c453] to-travel transition-[width] duration-500",
+                      busyProgress == null && "w-1/3 animate-pulse",
+                    )}
+                    style={busyProgress != null ? { width: `${busyProgress}%` } : undefined}
+                  />
+                </div>
+                {busyProgress != null && (
+                  <p className="mt-1.5 text-right text-sm text-white/60">
+                    {Math.max(0, 100 - Math.round(busyProgress))}% үлдсэн
+                  </p>
                 )}
               </div>
             </div>
@@ -342,10 +315,11 @@ export function AssistantTab({
           <button
             type="button"
             onClick={onPickFile}
-            aria-label="Attach files"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-line-strong text-ink-muted hover:border-brand hover:text-brand"
+            aria-label="Файл хавсаргах"
+            className="flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-line-strong px-2.5 text-sm font-medium text-ink-muted hover:border-brand hover:text-brand"
           >
-            <Icons.plus size={18} />
+            <Icons.paperclip size={17} />
+            <span className="hidden sm:inline">Файл</span>
           </button>
           <textarea
             ref={inputRef}
@@ -404,10 +378,11 @@ function ChatBubbleV2({
   void _onToggleConfirm;
   const [formDraft, setFormDraft] = useState<Record<string, string>>({});
   const [fieldOverrides, setFieldOverrides] = useState<Record<string, string>>({});
+  const [showAllChanges, setShowAllChanges] = useState(false);
   if (message.role === "admin") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-xl rounded-br-sm bg-brand px-3.5 py-2 text-sm text-white">
+        <div className="max-w-[90%] rounded-xl rounded-br-sm bg-linear-to-br from-brand to-travel px-3.5 py-2.5 text-sm text-white shadow-sm">
           {message.text && message.text !== "Файл орууллаа" && (
             <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
           )}
@@ -444,11 +419,11 @@ function ChatBubbleV2({
   }
 
   const { proposal } = message;
-  const previewActions = proposal.actions.slice(0, 4).map(describeAction);
-  const hiddenActionCount = Math.max(
-    0,
-    proposal.actions.length - previewActions.length,
-  );
+  const describedActions = proposal.actions.map(describeAction);
+  const visibleActions = showAllChanges
+    ? describedActions
+    : describedActions.slice(0, 5);
+  const hiddenActionCount = Math.max(0, describedActions.length - visibleActions.length);
   // When structured conflict_items are present, use them for display.
   // info/warning items → amber info box (no question asked).
   // blocker items not yet answered → become clarification questions.
@@ -468,11 +443,22 @@ function ChatBubbleV2({
   const isReadyToApply = message.status === "pending" && reviewCount === 0;
 
   return (
-    <div className="max-w-[92%]">
-      <div className="rounded-xl rounded-bl-sm border border-line bg-surface p-3.5 shadow-sm">
+    <div className="w-full max-w-5xl">
+      <div className="rounded-2xl rounded-bl-sm bg-surface p-4 shadow-sm ring-1 ring-line sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-ink">{proposal.summary}</p>
+            <p className="text-base font-semibold leading-6 text-ink">{proposal.summary}</p>
+            {message.sourceNames && message.sourceNames.length > 0 && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-sm text-ink-muted">
+                <Icons.paperclip size={15} className="shrink-0 text-travel" />
+                <span className="font-medium text-ink">Эх файл:</span>
+                {message.sourceNames.map((name, index) => (
+                  <span key={`${name}:${index}`} className="rounded-full bg-travel-soft px-2.5 py-1 text-travel">
+                    {name}
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="mt-2 flex flex-wrap gap-1.5">
               <Badge tone="neutral">{proposal.actions.length} өөрчлөлт</Badge>
               {reviewCount > 0 ? (
@@ -488,13 +474,13 @@ function ChatBubbleV2({
         </div>
 
         {compactWarnings.length > 0 && (
-          <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
-            <p className="text-xs font-semibold text-amber-900">
+          <div className="mt-4 border-l-4 border-sun bg-sun-soft px-3.5 py-3">
+            <p className="text-sm font-semibold text-warning">
               Анхаарах зүйл
             </p>
             <div className="mt-1 space-y-1">
               {compactWarnings.map((item) => (
-                <p key={item} className="text-xs text-amber-900/90">
+                <p key={item} className="text-sm leading-5 text-warning">
                   {item}
                 </p>
               ))}
@@ -502,42 +488,61 @@ function ChatBubbleV2({
           </div>
         )}
 
-        {previewActions.length > 0 && (
-          <details className="mt-3 rounded-md border border-line bg-surface-sunken px-3 py-2">
-            <summary className="cursor-pointer text-xs font-semibold text-ink-muted">
-              Өөрчлөлтийн товч жагсаалт
-            </summary>
-            <div className="mt-2 space-y-2">
-              {previewActions.map((described, index) => (
-                <div key={`${described.verb}:${described.target}:${index}`}>
-                  <p className="text-sm font-medium text-ink">
-                    {index + 1}. {described.verb} · {described.target}
-                  </p>
-                  {described.changes.length > 0 && (
-                    <p className="mt-0.5 text-xs text-ink-muted">
-                      {described.changes.slice(0, 2).join(" • ")}
-                    </p>
-                  )}
-                </div>
-              ))}
-              {hiddenActionCount > 0 && (
-                <p className="text-xs text-ink-subtle">
-                  +{hiddenActionCount} нэмэлт өөрчлөлт байна.
-                </p>
+        {visibleActions.length > 0 && (
+          <section className="mt-4 border-t border-line pt-4" aria-label="Санал болгосон өөрчлөлтүүд">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold text-ink">Санал болгосон өөрчлөлтүүд</h3>
+              {describedActions.length > 5 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllChanges((shown) => !shown)}
+                  className="text-sm font-medium text-brand hover:text-brand-hover"
+                >
+                  {showAllChanges ? "Товч харах" : `Бүгдийг харах (${describedActions.length})`}
+                </button>
               )}
             </div>
-          </details>
+            <div className={cx("mt-2 divide-y divide-line", showAllChanges && "max-h-96 overflow-y-auto pr-1 scroll-area")}>
+              {visibleActions.map((described, index) => (
+                <div
+                  key={`${described.verb}:${described.target}:${index}`}
+                  className="grid gap-1 py-2.5 sm:grid-cols-[2rem_minmax(12rem,0.8fr)_1.2fr] sm:items-start sm:gap-3"
+                >
+                  <span className="hidden h-6 w-6 items-center justify-center rounded-full bg-travel-soft text-sm font-semibold text-travel sm:flex">
+                    {index + 1}
+                  </span>
+                  <p className="text-sm font-semibold text-ink">
+                    <span className="sm:hidden">{index + 1}. </span>{described.target}
+                    <span className="ml-2 font-medium text-travel">{described.verb}</span>
+                  </p>
+                  <p
+                    className="line-clamp-2 text-sm leading-5 text-ink-muted"
+                    title={described.changes.join(" • ")}
+                  >
+                    {described.changes.length > 0
+                      ? described.changes.slice(0, 3).join(" • ")
+                      : "Төлөвийн өөрчлөлт"}
+                  </p>
+                </div>
+              ))}
+            </div>
+            {hiddenActionCount > 0 && (
+              <p className="mt-2 text-sm text-ink-subtle">
+                Цаана нь {hiddenActionCount} өөрчлөлт байна.
+              </p>
+            )}
+          </section>
         )}
 
         {message.clarificationAnswers.length > 0 && (
-          <details className="mt-3 rounded-md border border-line bg-brand-soft px-3 py-2">
-            <summary className="cursor-pointer text-xs font-semibold text-brand">
+          <details className="mt-4 border-t border-line pt-3">
+            <summary className="cursor-pointer text-sm font-semibold text-brand">
               Өмнө сонгосон хариултууд ({message.clarificationAnswers.length})
             </summary>
             <div className="mt-2 space-y-2">
               {message.clarificationAnswers.map((item) => (
                 <div key={item.questionId} className="rounded-md bg-white/70 px-2.5 py-2">
-                  <p className="text-xs text-ink-muted">{item.prompt}</p>
+                  <p className="text-sm text-ink-muted">{item.prompt}</p>
                   <p className="mt-1 text-sm text-ink">{item.answer}</p>
                 </div>
               ))}
@@ -546,28 +551,30 @@ function ChatBubbleV2({
         )}
 
         {message.status === "pending" && (
-          <div className="mt-3 border-t border-line pt-3">
+          <div className="mt-4 border-t border-line pt-4">
             {message.clarifications.length > 0 ? (
-              <div className="space-y-3">
-                <p className="text-xs font-semibold text-ink">Тодруулах зүйлс</p>
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-base font-semibold text-ink">Тодруулах зүйлс</h3>
+                  <p className="mt-0.5 text-sm text-ink-muted">
+                    Доорх нэг шийдвэрийг сонгох эсвэл зөв утгыг өөрөө бичнэ үү.
+                  </p>
+                </div>
                 {message.clarifications.map((q) => {
                   const selected = formDraft[q.id] ?? "";
                   return (
                     <div
                       key={q.id}
-                      className="rounded-md border border-line bg-surface-sunken px-3 py-3"
+                      className="border-l-4 border-sun bg-sun-soft px-4 py-3.5"
                     >
-                      <p className="text-xs font-semibold text-ink-muted">
-                        Шийдвэрлэх асуудал
-                      </p>
-                      <p className="mt-1 text-sm font-medium text-ink">{q.prompt}</p>
+                      <p className="text-base font-semibold leading-6 text-ink">{q.prompt}</p>
                       {q.detail && (
-                        <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2">
-                          <p className="text-xs font-semibold text-amber-800">AI олсон мэдээлэл:</p>
-                          <p className="mt-0.5 text-xs text-amber-900 leading-relaxed">{q.detail}</p>
+                        <div className="mt-2.5 bg-white/70 px-3 py-2.5">
+                          <p className="text-sm font-semibold text-warning">Файлаас уншсан мэдээлэл</p>
+                          <p className="mt-1 text-sm leading-6 text-ink-muted">{q.detail}</p>
                         </div>
                       )}
-                      <p className="mt-2.5 text-xs font-semibold text-ink-muted">Юу хийх вэ?</p>
+                      <p className="mt-3 text-sm font-semibold text-ink">Юу хийх вэ?</p>
                       <div className="mt-1.5 flex flex-wrap gap-2">
                         {q.options.map((opt) => (
                           <button
@@ -578,7 +585,7 @@ function ChatBubbleV2({
                               setFormDraft((prev) => ({ ...prev, [q.id]: opt.answer }))
                             }
                             className={cx(
-                              "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-60",
+                              "rounded-full border px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-60",
                               selected === opt.answer
                                 ? "border-brand bg-brand text-white"
                                 : "border-line-strong bg-white text-ink hover:border-brand hover:text-brand",
@@ -597,7 +604,7 @@ function ChatBubbleV2({
                             setFormDraft((prev) => ({ ...prev, [q.id]: e.target.value }))
                           }
                           placeholder={q.customPlaceholder || "Өөрийн хариуг бичнэ үү"}
-                          className="mt-2 h-9 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-ink focus:border-brand"
+                          className="mt-2.5 h-10 w-full rounded-lg border border-line-strong bg-surface px-3 text-sm text-ink focus:border-brand"
                         />
                       )}
                     </div>
@@ -628,7 +635,7 @@ function ChatBubbleV2({
                 </div>
               </div>
             ) : (
-              <p className="mb-2 text-xs text-ink-muted">
+              <p className="mb-3 text-sm text-ink-muted">
                 {proposal.conflicts.length > 0
                   ? "Тодорхойгүй байсан зүйлсийг нарийвчилсан. Зөв харагдвал хэрэгжүүлж болно."
                   : "Бүх зүйл тодорхой байна. Өөрчлөлтийг хэрэгжүүлж болно."}
@@ -639,6 +646,7 @@ function ChatBubbleV2({
               const createActions = proposal.actions
                 .map((a, i) => ({ action: a, index: i }))
                 .filter(({ action }) => (action.action || "").toLowerCase() === "upsert");
+              const editableActions = createActions.length <= 5 ? createActions : [];
 
               function fieldKey(actionIndex: number, field: string) {
                 return `${actionIndex}:${field}`;
@@ -683,16 +691,25 @@ function ChatBubbleV2({
 
               return (
                 <div className="space-y-3">
-                  {createActions.map(({ action, index }) => {
+                  {createActions.length > 5 && (
+                    <div className="flex items-start gap-2.5 bg-travel-soft px-3.5 py-3 text-sm text-ink-muted">
+                      <Icons.info size={17} className="mt-0.5 shrink-0 text-travel" />
+                      <p>
+                        {createActions.length} аяллын мэдээллийг дээрх нягт жагсаалтаар харууллаа.
+                        Дэлгэцийг хэт урт болгохгүйн тулд тус бүрийн том засварын картыг нуусан.
+                      </p>
+                    </div>
+                  )}
+                  {editableActions.map(({ action, index }) => {
                     const f = action.fields ?? {};
                     return (
-                      <div key={index} className="rounded-lg border border-line bg-surface-sunken p-3 space-y-2.5">
-                        <p className="text-xs font-semibold text-ink-muted">
+                      <div key={index} className="border-t border-line pt-3 space-y-2.5">
+                        <p className="text-sm font-semibold text-ink-muted">
                           {createActions.length > 1 ? `Аялал ${index + 1} — засаж хадгалах` : "Аялалын мэдээллийг нөхнэ үү"}
                         </p>
                         <div className="grid grid-cols-2 gap-2">
                           <div className="col-span-2">
-                            <label className="mb-1 block text-xs text-ink-muted">Маршрут нэр</label>
+                            <label className="mb-1 block text-xs text-ink-muted">Аяллын нэр</label>
                             <input
                               value={getField(index, "route_name", f.route_name)}
                               onChange={(e) => setField(index, "route_name", e.target.value)}

@@ -129,6 +129,9 @@ export const Icons = {
       <line x1="5" y1="12" x2="19" y2="12" />
     </>,
   ),
+  paperclip: makeIcon(
+    <path d="M20.5 11.5 12 20a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.7 5.7l-9 9a2 2 0 0 1-2.9-2.9l8.3-8.3" />,
+  ),
   trash: makeIcon(
     <>
       <path d="M4 7h16" />

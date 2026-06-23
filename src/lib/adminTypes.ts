@@ -166,6 +166,7 @@ export type ProposalMsg = {
   proposal: AIProposal;
   requestId: number | null;
   instruction: string;
+  sourceNames?: string[];
   status: "pending" | "applied" | "reverted" | "cancelled" | "error";
   confirmChecked: boolean;
   resultText?: string;
@@ -198,6 +199,12 @@ export type ParseUploadUnit = {
   filename: string;
   mimeType: string;
   dataUrl: string;
+  /** Additional evidence sent in the same AI request (for example PDF text + rendered pages). */
+  companions?: Array<{
+    filename: string;
+    mimeType: string;
+    dataUrl: string;
+  }>;
 };
 
 export type TabKey =

@@ -54,7 +54,7 @@ const STATUS_TONE: Record<TripStatus, "success" | "danger" | "warning" | "neutra
 const FIELD_LABELS: Record<string, string> = {
   category: "Ангилал",
   operator_name: "Оператор",
-  route_name: "Маршрут",
+  route_name: "Аяллын нэр",
   duration_text: "Хугацаа",
   adult_price: "Том хүний үнэ",
   child_price: "Хүүхдийн үнэ",
@@ -345,21 +345,30 @@ async function loadPdfDocument(bytes: Uint8Array): Promise<PdfDocumentProxy> {
   return (await loadingTask.promise) as PdfDocumentProxy;
 }
 
-async function extractPdfText(file: File): Promise<string> {
+type PdfPageText = { pageNumber: number; text: string };
+
+async function extractPdfPageTexts(file: File): Promise<PdfPageText[]> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const pdf = await loadPdfDocument(bytes);
-  const pages: string[] = [];
+  const pages: PdfPageText[] = [];
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
     const text = pdfTextItemsToText(content.items);
-    if (text.trim()) {
-      pages.push(`Page ${pageNumber}\n${text}`);
-    }
+    pages.push({ pageNumber, text: text.trim() });
   }
 
-  return pages.join("\n\n").trim();
+  return pages;
+}
+
+async function extractPdfText(file: File): Promise<string> {
+  const pages = await extractPdfPageTexts(file);
+  return pages
+    .filter((page) => page.text)
+    .map((page) => `Page ${page.pageNumber}\n${page.text}`)
+    .join("\n\n")
+    .trim();
 }
 
 async function canvasToJpegBytes(
@@ -449,35 +458,66 @@ async function buildPdfUploadUnits(file: File): Promise<ParseUploadUnit[]> {
   const originalBytes = new Uint8Array(await file.arrayBuffer());
   const mimeType = "application/pdf";
 
-  // Accuracy-first: if the PDF has a real text layer, send the AI clean
-  // extracted text (like Excel→HTML) instead of the raw binary. The model
-  // reads structured text far more reliably than a PDF blob, so prices/tables
-  // come through more accurately — and it costs fewer tokens too. This runs for
-  // ALL sizes now (previously small PDFs skipped straight to binary). Scanned
-  // PDFs with no text layer fall through to the binary/image path below, where
-  // Gemini's OCR handles them.
+  // Accuracy-first dual evidence: clean parsed text keeps tables/prices stable,
+  // while a rendered first page preserves the logo, title, date and price blocks
+  // that are often positioned visually and lost by raw text extraction.
   const extractedText = await extractPdfText(file).catch(() => "");
   if (isUsablePdfText(extractedText)) {
+    const pageOneVisual = await renderPdfPageAsImageUnit(
+      originalBytes,
+      file.name,
+      0,
+      1,
+    ).catch(() => null);
     return chunkText(extractedText).map((chunk, index, chunks) => ({
       displayName:
         chunks.length > 1 ? `${file.name} (${index + 1}/${chunks.length})` : file.name,
-      filename: `${file.name}.text-${String(index + 1).padStart(3, "0")}.txt`,
+      filename: `${file.name}.parsed-text-${String(index + 1).padStart(3, "0")}-of-${String(chunks.length).padStart(3, "0")}.txt`,
       mimeType: "text/plain",
       dataUrl: textToDataUrl(chunk),
+      companions: pageOneVisual
+        ? [{
+            filename: `${file.name}.visual-page-001.jpg`,
+            mimeType: pageOneVisual.mimeType,
+            dataUrl: pageOneVisual.dataUrl,
+          }]
+        : undefined,
     }));
   }
 
-  // No usable text layer (likely scanned). Small enough → send binary so Gemini
-  // OCRs it; otherwise fall through to per-page image rendering below.
-  if (originalBytes.byteLength <= MAX_PARSE_UPLOAD_BYTES) {
-    return [
-      {
-        displayName: file.name,
-        filename: file.name,
-        mimeType,
-        dataUrl: bytesToDataUrl(originalBytes, mimeType),
-      },
-    ];
+  // Scanned PDF: render every page for OCR and keep two adjacent pages in one
+  // request so itinerary continuations retain local context without breaching
+  // the platform request-body ceiling.
+  try {
+    const pdf = await loadPdfDocument(originalBytes);
+    const rendered: ParseUploadUnit[] = [];
+    for (let pageIndex = 0; pageIndex < pdf.numPages; pageIndex += 1) {
+      rendered.push(
+        await renderPdfPageAsImageUnit(
+          originalBytes,
+          file.name,
+          pageIndex,
+          pageIndex + 1,
+        ),
+      );
+    }
+    const grouped: ParseUploadUnit[] = [];
+    for (let index = 0; index < rendered.length; index += 2) {
+      const pair = rendered.slice(index, index + 2);
+      const first = pair[0];
+      grouped.push({
+        ...first,
+        displayName: `${file.name} (pages ${index + 1}-${index + pair.length})`,
+        companions: pair.slice(1).map((page) => ({
+          filename: page.filename,
+          mimeType: page.mimeType,
+          dataUrl: page.dataUrl,
+        })),
+      });
+    }
+    if (grouped.length > 0) return grouped;
+  } catch {
+    // Fall through to binary chunking for unusual PDFs that pdf.js cannot render.
   }
 
   let sourcePdf: import("pdf-lib").PDFDocument;
@@ -1455,19 +1495,20 @@ function buildProposalClarifications(
     // with the original detail, so the admin is not asked a blind question.
     pushQuestion({
       id: `conflict:${index}`,
-      prompt: `Дараах зөрчлийг хэрхэн зохицуулах вэ? ${detail}`,
+      prompt: "Энэ мэдээллийг хадгалахаас өмнө нэг шийдвэр хэрэгтэй байна.",
+      detail,
       options: [
         {
-          label: "Илэрсэнээр нь үлдээх",
-          answer: `Дараах зөрчлийг илэрсэн хэвээр нь үлдээ: ${detail}`,
+          label: "Файлд бичсэн утгыг зөв гэж хадгалах",
+          answer: `Файлд бичсэн утгыг зөв гэж үзээд хадгал: ${detail}`,
         },
         {
-          label: "Болгоомжтой засах",
-          answer: `Дараах зөрчлийг болгоомжтой хянаж засна уу: ${detail}`,
+          label: "Энэ өөрчлөлтийг хадгалахгүй",
+          answer: `Энэ тодорхойгүй өөрчлөлтийг саналын жагсаалтаас хас: ${detail}`,
         },
       ],
       allowCustom: true,
-      customPlaceholder: "Хэрхэн зохицуулахыг бичнэ үү",
+      customPlaceholder: "Зөв нэр, үнэ, огноо эсвэл хийх үйлдлийг яг бичнэ үү",
     });
   });
 

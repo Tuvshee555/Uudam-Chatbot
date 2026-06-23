@@ -18,8 +18,8 @@ const env = getEnv();
  *
  * Gemini Flash periodically returns 503 "Service Unavailable" during global
  * capacity spikes. Rather than failing the admin's upload, we transparently
- * retry the same request against OpenAI (GPT-4o-mini), which reads PDFs and
- * images natively via base64 data URLs — the same input shape Gemini uses.
+ * retry supported requests against OpenAI (GPT-4o-mini), which reads rendered
+ * page images via base64 data URLs. Native PDF parts remain on Gemini.
  *
  * Returns null if no OpenAI key is configured, so the caller can rethrow the
  * original Gemini error instead of masking it.
@@ -38,13 +38,21 @@ export async function askOpenAIFallbackParts(
 ): Promise<GeminiResult | null> {
   const key = env.openaiApiKey;
   if (!key) return null;
+  if (
+    parts.some(
+      (part) =>
+        "inlineData" in part && part.inlineData.mimeType === "application/pdf",
+    )
+  ) {
+    return null;
+  }
 
   const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
   const source = options?.source || "unknown";
   const startedAt = Date.now();
 
-  // Convert Gemini parts → OpenAI content blocks. Text stays text; inline
-  // binaries (PDF/image) become data-URL image_url blocks.
+  // Convert Gemini parts → OpenAI content blocks. Text stays text; rendered
+  // image binaries become data-URL image_url blocks.
   const content: any[] = parts.map((part) => {
     if ("inlineData" in part) {
       return {
