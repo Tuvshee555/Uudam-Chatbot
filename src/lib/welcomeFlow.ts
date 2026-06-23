@@ -213,4 +213,36 @@ export function extractTripPhotosForReply(
   return bestTrip.photo_urls.slice(0, MAX_TRIP_PHOTOS);
 }
 
+/**
+ * Same trip-matching logic as extractTripPhotosForReply, but returns the
+ * Facebook reusable attachment_id stored in extra.source_file_attachment_id.
+ * Used to send the PDF brochure to the customer alongside the text reply.
+ */
+export function extractTripBrochureAttachmentId(
+  replyText: string,
+  trips: TravelTrip[],
+): string | null {
+  const norm = normText(replyText);
+  const active = trips.filter((t) => t.status === "active");
+
+  let bestScore = 0;
+  let bestTrip: TravelTrip | null = null;
+
+  for (const trip of active) {
+    const words = normText(trip.route_name)
+      .split(/\s+/)
+      .filter((w) => w.length >= 3);
+    const score = words.filter((w) => norm.includes(w)).length;
+    if (score > bestScore) {
+      bestScore = score;
+      bestTrip = trip;
+    }
+  }
+
+  if (!bestTrip || bestScore === 0) return null;
+  const extra = bestTrip.extra as Record<string, unknown> | undefined;
+  const id = extra?.source_file_attachment_id;
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
+
 export { MAX_WELCOME_PHOTOS, MAX_TRIP_PHOTOS };

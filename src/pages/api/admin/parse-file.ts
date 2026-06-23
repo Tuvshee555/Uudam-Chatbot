@@ -15,6 +15,7 @@ import {
   generateAIProposalFromContentBatched,
   getAIProposalFailureResponse,
 } from "../../../lib/travelOps";
+import { uploadPdfToFacebook } from "../../../lib/fbAttachmentUpload";
 import {
   beginRequestTrace,
   finishRequestTrace,
@@ -242,12 +243,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
+    // Upload PDFs to Facebook reusable attachment store in parallel so each
+    // trip saved from this file can send the brochure back to customers.
+    const fbAttachmentIds = await Promise.all(
+      parsedUploads.map(async (parsed) => {
+        const upload = uploads.find((u) => u.filename === parsed.label) ?? null;
+        if (!upload || !upload.mimeType.includes("pdf")) return null;
+        return uploadPdfToFacebook(upload.dataBase64, parsed.label);
+      }),
+    );
+
     const result = await generateAIProposalFromContentBatched({
       note: note || undefined,
-      sources: parsedUploads.map((parsed) => ({
+      sources: parsedUploads.map((parsed, i) => ({
         label: parsed.label,
         contentText: parsed.text || undefined,
         inline: parsed.inline,
+        fbAttachmentId: fbAttachmentIds[i] ?? undefined,
       })),
     });
 

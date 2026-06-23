@@ -1231,6 +1231,7 @@ export async function generateAIProposalFromContentBatched(input: {
     label: string;
     contentText?: string;
     inline?: { mimeType: string; data: string } | null;
+    fbAttachmentId?: string;
   }>;
 }) {
   const sources =
@@ -1243,6 +1244,12 @@ export async function generateAIProposalFromContentBatched(input: {
             inline: input.inline,
           },
         ];
+
+  // Build a label → attachment_id map for post-processing
+  const fbAttachmentMap = new Map<string, string>();
+  for (const s of sources) {
+    if (s.fbAttachmentId) fbAttachmentMap.set(s.label, s.fbAttachmentId);
+  }
 
   const sourceLabels = sources.map((source) => source.label).join(", ");
   const batches = chunkProposalSources(sources);
@@ -1342,7 +1349,23 @@ export async function generateAIProposalFromContentBatched(input: {
         }
       }
 
-      return mergeBatchProposals(proposals, batches.length);
+      const merged = mergeBatchProposals(proposals, batches.length);
+
+      // Stamp each action's extra.source_file_attachment_id so the saved
+      // trip record knows which FB reusable attachment to send customers.
+      if (fbAttachmentMap.size > 0) {
+        for (const action of merged.actions) {
+          const sourceFile = (action.fields?.extra as Record<string, unknown> | undefined)?.source_file_name;
+          if (typeof sourceFile === "string" && fbAttachmentMap.has(sourceFile)) {
+            const extra = (action.fields?.extra as Record<string, unknown>) ?? {};
+            extra.source_file_attachment_id = fbAttachmentMap.get(sourceFile);
+            if (!action.fields) (action as { fields?: Record<string, unknown> }).fields = {};
+            (action.fields as Record<string, unknown>).extra = extra;
+          }
+        }
+      }
+
+      return merged;
     },
   });
 }

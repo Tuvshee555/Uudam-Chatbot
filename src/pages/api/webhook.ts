@@ -13,7 +13,8 @@ import { isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { buildCompareReply, buildSeatsReply, buildSmartButtons, hasCompareIntent, hasSeatsIntent, } from "../../lib/travelFastPaths";
-import { extractTripPhotosForReply, getActiveSeason, isFirstMessage, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
+import { extractTripBrochureAttachmentId, extractTripPhotosForReply, getActiveSeason, isFirstMessage, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
+import { sendFbFileAttachment } from "../../lib/fbAttachmentUpload";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
 import { advanceCollectState, buildCompletionMessage, buildLeadContext, clearCollectState, getCollectState, isInCollectFlow, promptForStep, setCollectState, startCollectState, } from "../../lib/bookingCollect";
@@ -1611,6 +1612,16 @@ async function handleMessage(
           platform,
           photoCount: String(tripPhotos.length),
         });
+      }
+
+      // Send PDF brochure if this trip has a stored Facebook attachment_id
+      const brochureId = extractTripBrochureAttachmentId(safeReply, tripsForPhotos);
+      if (brochureId) {
+        try {
+          await sendFbFileAttachment(senderId, brochureId, token);
+          recordCounter("webhook.trip_brochure_sent_total", 1, { platform });
+        } catch {
+        }
       }
     } catch {
     }
