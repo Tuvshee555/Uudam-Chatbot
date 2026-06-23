@@ -726,6 +726,39 @@ test("date-based pricing conflict is suppressed when multiple departure dates ex
   );
 });
 
+test("new upsert with sold_out status is overridden to active", async () => {
+  const { validateAIChangeProposal } = await loadTravelOps();
+  // Model hallucinated sold_out from "суудал нөөцлөх" booking phrase
+  const proposal: AIChangeProposal = {
+    summary: "Жэжү арлын аялал нэмэх",
+    needs_confirmation: false,
+    important_reason: "",
+    conflicts: [],
+    actions: [
+      {
+        action: "upsert",
+        fields: {
+          operator_name: "UUDAM TRAVEL AGENCY",
+          route_name: "Жэжү арлын аялал 2026",
+          duration_text: "5 өдөр / 4 шөнө",
+          adult_price: 4_290_000,
+          child_price: 4_090_000,
+          currency: "MNT",
+          departure_dates: ["6 сарын 17", "7 сарын 10", "8 сарын 5"],
+          status: "sold_out",
+        },
+      },
+    ],
+  };
+
+  const result = validateAIChangeProposal(proposal, []);
+  assert.equal(
+    result.proposal.actions[0]?.fields?.status,
+    "active",
+    "sold_out on new upsert should be overridden to active",
+  );
+});
+
 test("date-based pricing conflict suppressed when notes encode date→price mapping", async () => {
   const { validateAIChangeProposal } = await loadTravelOps();
   const proposal: AIChangeProposal = {

@@ -405,12 +405,13 @@ export function validateAIChangeProposal(
       cleanedFields.status = "cancelled";
     }
 
-    // A brand-new upsert action (no trip_id / no match) cannot logically
-    // start as cancelled — the model sometimes hallucinates this when it
-    // reads itinerary end-phrases ("аялал өндөрлөнө", "буцна") as
-    // cancellation. Override it to active.
-    if (verb === "upsert" && !tripId && !match.route_name && !match.operator_name && cleanedFields.status === "cancelled") {
-      cleanedFields.status = "active";
+    // A brand-new upsert (no trip_id / no match) cannot logically start as
+    // cancelled or sold_out — the model sometimes hallucinates these from
+    // itinerary booking phrases ("суудал авах", "нөөцлөх", "аялал өндөрлөнө").
+    if (verb === "upsert" && !tripId && !match.route_name && !match.operator_name) {
+      if (cleanedFields.status === "cancelled" || cleanedFields.status === "sold_out") {
+        cleanedFields.status = "active";
+      }
     }
 
     if (cleanedFields.status === "cancelled") {
@@ -665,6 +666,8 @@ function buildBatchSourceParts(input: {
     "Treat UUDAM, UUDAM TRAVEL, and UUDAM TRAVEL AGENCY as the same brand and normalize them to 'UUDAM TRAVEL AGENCY'. A clear page-1 logo/header/contact match gives high operator confidence and MUST NOT create an operator question.",
     "Never use the filename as operator when a visible operator exists. The filename may hint at the tour title only. Ask about operator only when two genuinely different companies compete in main logo/header positions.",
     "CANCELLATION RULE: Never use action='cancel', never set status='cancelled', and never write a cancellation warning UNLESS the document contains explicit cancellation language such as: цуцлагдсан, цуцлагдлаа, цуцлах, canceled, cancelled, trip cancelled, no longer available, зогсоосон, худалдаалагдахгүй. Normal itinerary end-phrases such as 'аялал өндөрлөнө', 'буцна', 'ниссэнээр аялал өндөрлөнө', 'чөлөөт өдөр', 'аялал дуусна' do NOT mean cancellation — they are normal tour program language. If the PDF has a title, price, dates, duration, and itinerary, classify it as an active tour (status='active').",
+    "SOLD-OUT RULE: Never set status='sold_out' or seats_left=0 or seats_total=0 UNLESS the document explicitly says: суудал дууссан, суудал дүүрсэн, sold out, fully booked, no seats left, бүрэн захиалагдсан. Booking-intent phrases such as 'суудал авах', 'суудал нөөцлөх', 'захиалга хийх', 'холбогдоорой', 'утасдана уу' mean the tour IS AVAILABLE and open for booking — these are the OPPOSITE of sold out. If the PDF has prices and future departure dates, always default to status='active'.",
+    "STALE RECORD RULE: If an existing database record has departure dates from a different year (e.g. 2023, 2024) and the uploaded PDF clearly has NEW departure dates for 2025 or 2026, do NOT use action='patch' on the old record. Create a NEW action='upsert' with the new dates instead. Only match and patch an existing record when the trip title, destination, duration, AND year/season all clearly refer to the same product run.",
     "Do not treat normal adult/child price differences as conflicts. An adult price HIGHER than the child price is normal and expected — NEVER flag it, never ask about it. Only flag the child/adult price if the CHILD price is higher than the adult price, or the source is genuinely unreadable.",
     "If a departure date IS written in the source (e.g. '06/10, 06/19, 06/22' or '06 сарын 17-21'), put it in departure_dates and treat it as known. NEVER list dates you found and then say the date is 'unclear' or 'тодорхойгүй' — that is a contradiction and is forbidden. Only flag a missing date if there is genuinely NO date anywhere in the source for that trip.",
     "Search date headings and variants: АЯЛЛЫН ОГНОО, АЯЛЛЫН ОГНОО / ХУВААРЬ, АЯЛЛЫН ОГНОО/ХУГАЦАА, ОГНОО, ХУВААРЬ. Expand '6 сарын 4, 11, 18' into usable departure_dates and also store grouped month/day data in fields.extra.departure_date_groups. Missing year is not a conflict; use year=null in extra.",
@@ -1226,6 +1229,8 @@ export async function generateAIProposalFromContent(input: {
     "The route_name must be the DESTINATION or TRIP TITLE (e.g. 'Хөх хот', 'Тэнгэрийн хаалга-Чунчин', 'Шанхай+Ханжоу'). NEVER use the agency name as the route_name.",
     "If the document is from UUDAM TRAVEL AGENCY and no other operator is named, set operator_name to 'UUDAM TRAVEL AGENCY' — do not leave it blank.",
     "CANCELLATION RULE: Never use action='cancel', never set status='cancelled', and never write a cancellation warning UNLESS the document contains explicit cancellation language such as: цуцлагдсан, цуцлагдлаа, цуцлах, canceled, cancelled, trip cancelled, no longer available, зогсоосон, худалдаалагдахгүй. Normal itinerary end-phrases such as 'аялал өндөрлөнө', 'буцна', 'ниссэнээр аялал өндөрлөнө', 'чөлөөт өдөр', 'аялал дуусна' do NOT mean cancellation — they are normal tour program language. If the PDF has a title, price, dates, duration, and itinerary, classify it as an active tour (status='active').",
+    "SOLD-OUT RULE: Never set status='sold_out' or seats_left=0 or seats_total=0 UNLESS the document explicitly says: суудал дууссан, суудал дүүрсэн, sold out, fully booked, no seats left, бүрэн захиалагдсан. Booking-intent phrases such as 'суудал авах', 'суудал нөөцлөх', 'захиалга хийх', 'холбогдоорой', 'утасдана уу' mean the tour IS AVAILABLE and open for booking — these are the OPPOSITE of sold out. If the PDF has prices and future departure dates, always default to status='active'.",
+    "STALE RECORD RULE: If an existing database record has departure dates from a different year (e.g. 2023, 2024) and the uploaded PDF clearly has NEW departure dates for 2025 or 2026, do NOT use action='patch' on the old record. Create a NEW action='upsert' with the new dates instead. Only match and patch an existing record when the trip title, destination, duration, AND year/season all clearly refer to the same product run.",
     "Do not treat normal adult/child price differences as conflicts. An adult price HIGHER than the child price is normal and expected — NEVER flag it, never ask about it. Only flag the child/adult price if the CHILD price is higher than the adult price, or the source is genuinely unreadable.",
     "If a departure date IS written in the source (e.g. '06/10, 06/19, 06/22' or '06 сарын 17-21'), put it in departure_dates and treat it as known. NEVER list dates you found and then say the date is 'unclear' or 'тодорхойгүй' — that is a contradiction and is forbidden. Only flag a missing date if there is genuinely NO date anywhere in the source for that trip.",
     "Optional add-on costs in CNY/yuan (нэмэлт төлбөр, өөрийн зардлаар, single room fees, extra attraction tickets) are not conflicts; keep them in notes/source_description.",
