@@ -116,6 +116,47 @@ export async function sendQuickReplies(
 }
 
 /**
+ * Send several images as ONE swipeable gallery (generic template carousel)
+ * instead of separate image bubbles. Each card shows a photo and optional
+ * title. Up to 10 cards. Standard pages_messaging permission — no extra
+ * approval. URLs must be publicly accessible HTTPS.
+ *
+ * This is the closest Messenger offers to "send all photos together": instead
+ * of N separate image messages, the customer sees one horizontally-scrollable
+ * card row.
+ */
+export async function sendImageCarousel(
+  recipientId: string,
+  cards: Array<{ imageUrl: string; title?: string; subtitle?: string }>,
+  token: string,
+  trace?: UpstreamTraceOptions,
+) {
+  const elements = cards.slice(0, 10).map((card) => ({
+    title: (card.title || " ").slice(0, 80),
+    ...(card.subtitle ? { subtitle: card.subtitle.slice(0, 80) } : {}),
+    image_url: card.imageUrl,
+  }));
+  await postToMessenger(
+    `https://graph.facebook.com/v19.0/me/messages?access_token=${token}`,
+    {
+      messaging_type: "RESPONSE",
+      recipient: { id: recipientId },
+      message: {
+        attachment: {
+          type: "template",
+          payload: {
+            template_type: "generic",
+            image_aspect_ratio: "square",
+            elements,
+          },
+        },
+      },
+    },
+    trace,
+  );
+}
+
+/**
  * Send an image to a Messenger recipient via the attachment API.
  * No extra Meta approval needed — standard pages_messaging permission covers this.
  * imageUrl must be a publicly accessible HTTPS URL.

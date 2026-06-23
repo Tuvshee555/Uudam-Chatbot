@@ -1804,6 +1804,9 @@ export default function AdminPage() {
   } | null>(null);
   const [driveSync, setDriveSync] = useState<DriveSyncDiagnostics | null>(null);
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
+  // True only after the first system fetch resolves — prevents the DB-not-
+  // connected banner from flashing during the initial load.
+  const [systemLoaded, setSystemLoaded] = useState(false);
 
   const [tab, setTab] = useState<TabKey>("assistant");
   const [loading, setLoading] = useState(false);
@@ -2028,6 +2031,7 @@ export default function AdminPage() {
       setDbInfo(systemJson?.db || null);
       setDriveSync((systemJson?.drive_sync as DriveSyncDiagnostics) || null);
       setReadiness((systemJson?.readiness as ReadinessReport) || null);
+      setSystemLoaded(true);
       setLoading(false);
 
       await Promise.all([
@@ -3365,16 +3369,9 @@ export default function AdminPage() {
 
         {/* Content */}
         <main className="flex-1 overflow-y-auto p-4 md:p-6">
-          {botPaused && (
-            <div className="mb-4">
-              <Alert tone="warning">
-                Бот түр зогссон байна. Хэрэглэгчид автомат хариу авахгүй.{" "}
-                {control?.pause_reason ? `Шалтгаан: ${control.pause_reason}` : ""}
-              </Alert>
-            </div>
-          )}
+          {/* Bot-paused is already shown as a badge in the topbar — no banner. */}
 
-          {!dbInfo?.configured && (
+          {systemLoaded && !dbInfo?.configured && (
             <div className="mb-4">
               <Alert tone="danger">
                 Өгөгдлийн сан холбогдоогүй байна. Мэдээлэл хадгалагдахгүй.
@@ -5903,25 +5900,28 @@ function AnalyticsTab({
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError("");
-    apiFetch("/api/admin/analytics")
-      .then((res) => res.json())
-      .then((data: { ok?: boolean; stats?: AnalyticsStatsData }) => {
+    const run = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const res = await apiFetch("/api/admin/analytics");
+        const data: { ok?: boolean; stats?: AnalyticsStatsData } = await res.json();
         if (cancelled) return;
         if (data?.ok && data.stats) {
           setStats(data.stats);
         } else {
           setError("Мэдээлэл ачаалж чадсангүй.");
         }
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setError("Мэдээлэл ачаалж чадсангүй.");
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false);
-      });
-    return () => { cancelled = true; };
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
   }, [apiFetch]);
 
   if (loading) {

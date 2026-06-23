@@ -15,14 +15,14 @@ import {
   type FlowRuntimeState,
   type RunOutcome,
 } from "../../lib/flowEngine";
-import { replyToComment, sendImageMessage, sendQuickReplies, sendTextMessage, sendTypingOn } from "../../lib/messenger";
+import { replyToComment, sendImageCarousel, sendImageMessage, sendQuickReplies, sendTextMessage, sendTypingOn } from "../../lib/messenger";
 import { sendTextMessage as sendIgTextMessage } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPrompt, getHistory } from "../../lib/conversation";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
-import { enforceWebsiteForPayment, isDuplicateReply, sanitizeAssistantReply } from "../../lib/reply";
+import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, sanitizeAssistantReply } from "../../lib/reply";
 import { isPaused, pauseBot, trackSender } from "../../lib/pause";
 import {
   createLead,
@@ -1134,15 +1134,33 @@ async function handleMessage(
         const allTrips = await listTrips({ limit: 5000 });
         welcomePhotos = sampleWelcomePhotos(allTrips);
       }
-      for (const url of welcomePhotos) {
+      // Send all photos as ONE swipeable gallery (carousel) instead of N
+      // separate image bubbles. Falls back to single images if the carousel
+      // call fails for any reason.
+      if (welcomePhotos.length > 0) {
         try {
-          await sendImageMessage(senderId, url, token, {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            source: "api.webhook.welcome",
-          });
+          await sendImageCarousel(
+            senderId,
+            welcomePhotos.map((url) => ({ imageUrl: url })),
+            token,
+            {
+              requestId: trace?.requestId,
+              correlationId: trace?.correlationId,
+              source: "api.webhook.welcome",
+            },
+          );
         } catch {
-          // One bad URL shouldn't kill the rest
+          for (const url of welcomePhotos) {
+            try {
+              await sendImageMessage(senderId, url, token, {
+                requestId: trace?.requestId,
+                correlationId: trace?.correlationId,
+                source: "api.webhook.welcome",
+              });
+            } catch {
+              // One bad URL shouldn't kill the rest
+            }
+          }
         }
       }
       recordCounter("webhook.welcome_sent_total", 1, {
@@ -1690,7 +1708,12 @@ async function handleMessage(
     aiReply = "Уучлаарай, систем түр алдаатай байна.";
   }
 
-  const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(fixMojibake(aiReply)));
+  // Parse the AI's trailing "BUTTONS: a|b|c" line BEFORE sanitizing, then clean
+  // the remaining text. This strips the BUTTONS line so it never leaks to the
+  // customer, and turns those labels into real Messenger quick-replies.
+  const fixedReply = fixMojibake(aiReply);
+  const { text: replyWithoutButtons, buttons: aiButtons } = extractButtons(fixedReply);
+  const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(replyWithoutButtons));
 
   if (lastReply && isDuplicateReply(lastReply.text, safeReply)) {
     recordCounter("webhook.duplicate_reply_avoided_total", 1, { platform });
@@ -1712,17 +1735,52 @@ async function handleMessage(
     return;
   }
 
+  // Combine the AI's own follow-up buttons with smart trip buttons (if the reply
+  // is clearly about one trip). Dedup, cap at 3 — these ride along with the SAME
+  // message as quick-replies, so there's no separate "⬇️" bubble.
+  let replyButtons: string[] = [...aiButtons];
+  if (platform === "facebook") {
+    try {
+      const tripsForButtons = await listTrips({ limit: 5000 });
+      const smartButtons = buildSmartButtons(safeReply, tripsForButtons);
+      if (smartButtons) {
+        for (const b of smartButtons) {
+          if (!replyButtons.some((x) => x.toLowerCase() === b.toLowerCase())) {
+            replyButtons.push(b);
+          }
+        }
+      }
+    } catch {
+      // buttons are enhancement-only
+    }
+  }
+  replyButtons = replyButtons.slice(0, 3);
+
   await assertLockHealthy();
-  const delivered = await sendPlatformMessage(
-    platform,
-    senderId,
-    safeReply,
-    token,
-    pageId,
-    igUserId,
-    trace,
-    { allowFallback: false },
-  );
+  let delivered: boolean;
+  if (platform === "facebook" && token && replyButtons.length > 0) {
+    try {
+      await sendQuickReplies(senderId, safeReply, replyButtons, token, {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        source: "api.webhook.reply_buttons",
+      });
+      recordCounter("webhook.reply_buttons_sent_total", 1, {
+        platform,
+        buttonCount: String(replyButtons.length),
+      });
+      delivered = true;
+    } catch {
+      // Quick-reply send failed → fall back to a plain text message.
+      delivered = await sendPlatformMessage(
+        platform, senderId, safeReply, token, pageId, igUserId, trace, { allowFallback: false },
+      );
+    }
+  } else {
+    delivered = await sendPlatformMessage(
+      platform, senderId, safeReply, token, pageId, igUserId, trace, { allowFallback: false },
+    );
+  }
   if (!delivered) {
     throw new RetryableWebhookError("delivery_failed:assistant_reply");
   }
@@ -1769,24 +1827,8 @@ async function handleMessage(
     }
   }
 
-  // --- Smart contextual buttons: if reply is about a specific trip, send quick-replies ---
-  // Only on Messenger — quick_replies API is Messenger-specific.
-  if (platform === "facebook" && token) {
-    try {
-      const tripsForButtons = await listTrips({ limit: 5000 });
-      const smartButtons = buildSmartButtons(safeReply, tripsForButtons);
-      if (smartButtons && smartButtons.length > 0) {
-        await sendQuickReplies(senderId, "⬇️", smartButtons, token, {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          source: "api.webhook.smart_buttons",
-        });
-        recordCounter("webhook.smart_buttons_sent_total", 1, { platform });
-      }
-    } catch {
-      // Enhancement-only — never surface to customer
-    }
-  }
+  // (Smart trip buttons are now merged into the reply's quick-replies above —
+  // no separate "⬇️" message.)
 
   // --- Booking-intent lead: record + alert staff after the reply is sent ---
   await recordFreshBookingLead();
