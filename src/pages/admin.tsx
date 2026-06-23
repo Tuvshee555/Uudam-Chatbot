@@ -3026,8 +3026,6 @@ export default function AdminPage() {
     answers: Record<string, string>,
   ) {
     // Build a combined clarification string from all answered questions.
-    // Include each question's conflict detail so the AI knows exactly which
-    // trip/conflict the admin's answer applies to.
     const combined = message.clarifications
       .map((q) => {
         const answer = (answers[q.id] ?? "").trim();
@@ -3039,8 +3037,41 @@ export default function AdminPage() {
       .join("\n");
     if (!combined.trim()) return;
 
-    // Re-use answerClarification with the first question as the anchor.
-    // The combined text carries all answers so the AI sees the full picture.
+    // When the proposal was created from a PDF file parse (requestId == null),
+    // the full trip data is already in the proposal — there is no stored DB record
+    // to revise. Re-calling the AI with just the clarification text (no PDF bytes)
+    // loses all the extracted data. Instead, mark all clarifications as answered
+    // and apply the proposal directly. The admin's answers are recorded in the
+    // clarificationAnswers list for audit purposes.
+    if (message.requestId == null) {
+      const allAnsweredIds = message.clarifications.map((q) => q.id);
+      const newAnswers = message.clarifications
+        .map((q) => {
+          const answer = (answers[q.id] ?? "").trim();
+          if (!answer) return null;
+          return { questionId: q.id, prompt: q.prompt, answer };
+        })
+        .filter(Boolean) as { questionId: string; prompt: string; answer: string }[];
+
+      setProposalMessage(message.id, {
+        clarifications: [],
+        clarificationAnswers: [
+          ...message.clarificationAnswers,
+          ...newAnswers,
+        ],
+        answeredClarificationIds: [
+          ...message.answeredClarificationIds,
+          ...allAnsweredIds,
+        ],
+        confirmChecked: false,
+        customReply: "",
+      });
+      // Apply the original proposal directly — the PDF data is intact.
+      await applyProposal({ ...message, clarifications: [], answeredClarificationIds: allAnsweredIds });
+      return;
+    }
+
+    // DB-backed proposal: send clarification to the AI for a revised proposal.
     const firstQ = message.clarifications[0];
     if (firstQ) {
       await answerClarification(message, firstQ, combined);
