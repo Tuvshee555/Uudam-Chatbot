@@ -285,6 +285,8 @@ function docxToText(buffer: Buffer): string {
   const xml = xmlBuf.toString("utf8");
   const withBreaks = xml
     .replace(/<w:tab\b[^>]*\/?>/g, "\t")
+    .replace(/<\/w:tc>/g, "\t")
+    .replace(/<\/w:tr>/g, "\n")
     .replace(/<\/w:p>/g, "\n")
     .replace(/<w:br\b[^>]*\/?>/g, "\n");
   const text = withBreaks

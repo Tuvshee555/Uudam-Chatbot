@@ -110,7 +110,87 @@ test("validation keeps uniquely matched upserts eligible", async () => {
 
   assert.equal(result.blocking_conflicts.length, 0);
   assert.equal(result.proposal.actions.length, 1);
+  assert.equal(result.proposal.actions[0]?.action, "patch");
+  assert.equal(result.proposal.actions[0]?.trip_id, "trip-1");
   assert.equal(result.auto_apply_ready, true);
+});
+
+test("update-only instructions are detected in English and Mongolian", async () => {
+  const { instructionForbidsTripCreation } = await loadTravelOps();
+  assert.equal(
+    instructionForbidsTripCreation("don't add trips, only fill the names"),
+    true,
+  );
+  assert.equal(
+    instructionForbidsTripCreation("Шинэ аялал битгий нэм, зөвхөн нэрийг нөх"),
+    true,
+  );
+  assert.equal(instructionForbidsTripCreation("Шинэ аялал нэм"), false);
+});
+
+test("validation blocks creates in update-only mode", async () => {
+  const { validateAIChangeProposal } = await loadTravelOps();
+  const proposal: AIChangeProposal = {
+    summary: "rename only",
+    needs_confirmation: false,
+    important_reason: "",
+    conflicts: [],
+    actions: [{
+      action: "upsert",
+      fields: { operator_name: "Uudam", route_name: "Бээжин" },
+    }],
+  };
+
+  const result = validateAIChangeProposal(proposal, [], { forbidCreate: true });
+  assert.equal(result.proposal.actions.length, 0);
+  assert.equal(result.blocking_conflicts.length, 1);
+  assert.match(result.blocking_conflicts[0], /шинэ аялал нэмэхгүй/);
+});
+
+test("validation blocks placeholder trip names", async () => {
+  const { validateAIChangeProposal } = await loadTravelOps();
+  const proposal: AIChangeProposal = {
+    summary: "bad name",
+    needs_confirmation: false,
+    important_reason: "",
+    conflicts: [],
+    actions: [{
+      action: "upsert",
+      fields: { operator_name: "Uudam", route_name: "(Нэргүй аялал)" },
+    }],
+  };
+
+  const result = validateAIChangeProposal(proposal, []);
+  assert.equal(result.proposal.actions.length, 0);
+  assert.ok(result.blocking_conflicts.length > 0);
+});
+
+test("validation blocks two different names targeting one trip", async () => {
+  const { validateAIChangeProposal } = await loadTravelOps();
+  const proposal: AIChangeProposal = {
+    summary: "ambiguous rename",
+    needs_confirmation: false,
+    important_reason: "",
+    conflicts: [],
+    actions: [
+      { action: "patch", trip_id: "trip-1", fields: { route_name: "Бээжин" } },
+      { action: "patch", trip_id: "trip-1", fields: { route_name: "Шанхай" } },
+    ],
+  };
+
+  const result = validateAIChangeProposal(proposal, [{
+    id: "trip-1",
+    operator_name: "Uudam",
+    route_name: "(Нэргүй аялал)",
+    status: "active",
+    seats_left: null,
+    seats_total: null,
+    adult_price: null,
+    child_price: null,
+    currency: "MNT",
+  }]);
+  assert.equal(result.blocking_conflicts.length, 1);
+  assert.match(result.blocking_conflicts[0], /хоёр өөр нэр/);
 });
 
 test("validation warns before duplicate upsert creation", async () => {
@@ -201,7 +281,7 @@ test("validation flags agency-named route that has real price data instead of si
   assert.equal(result.proposal.actions.length, 1);
   assert.equal(result.proposal.needs_confirmation, true);
   assert.ok(
-    result.proposal.conflicts.length > 0 || result.proposal.conflict_items?.length > 0,
+    result.proposal.conflicts.length > 0 || (result.proposal.conflict_items?.length ?? 0) > 0,
     "expected at least one conflict asking admin to rename the trip",
   );
 });

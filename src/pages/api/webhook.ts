@@ -1,20 +1,6 @@
 ﻿import type { NextApiRequest, NextApiResponse } from "next";
 import { askGemini } from "../../lib/gemini";
-import {
-  matchFlow,
-  findTriggeredFlow,
-  getFlowState,
-  setFlowState,
-  clearFlowState,
-  newRuntimeState,
-  runFlowFrom,
-  resumeFlowWithInput,
-  type FlowRule,
-  type FlowDoc,
-  type FlowEffects,
-  type FlowRuntimeState,
-  type RunOutcome,
-} from "../../lib/flowEngine";
+import { matchFlow, findTriggeredFlow, getFlowState, setFlowState, clearFlowState, newRuntimeState, runFlowFrom, resumeFlowWithInput, type FlowRule, type FlowDoc, type FlowEffects, type FlowRuntimeState, type RunOutcome, } from "../../lib/flowEngine";
 import { replyToComment, sendImageCarousel, sendImageMessage, sendQuickReplies, sendTextMessage, sendTypingOn } from "../../lib/messenger";
 import { sendTextMessage as sendIgTextMessage } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
@@ -24,75 +10,23 @@ import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, sanitizeAssistantReply } from "../../lib/reply";
 import { isPaused, pauseBot, trackSender } from "../../lib/pause";
-import {
-  createLead,
-  getTravelBotSettings,
-  hasRecentOpenLead,
-  isPagePaused,
-  listTrips,
-} from "../../lib/travelOps";
-import {
-  buildDepartureDateAvailabilityReply,
-  hasDepartureDateAvailabilityIntent,
-} from "../../lib/travelDates";
-import {
-  buildCompareReply,
-  buildSeatsReply,
-  buildSmartButtons,
-  hasCompareIntent,
-  hasSeatsIntent,
-} from "../../lib/travelFastPaths";
-import {
-  extractTripPhotosForReply,
-  getActiveSeason,
-  isFirstMessage,
-  matchSeasonByText,
-  resolveGreetingConfig,
-  resolveSeasons,
-  sampleWelcomePhotos,
-} from "../../lib/welcomeFlow";
+import { createLead, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
+import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
+import { buildCompareReply, buildSeatsReply, buildSmartButtons, hasCompareIntent, hasSeatsIntent, } from "../../lib/travelFastPaths";
+import { extractTripPhotosForReply, getActiveSeason, isFirstMessage, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
-import {
-  advanceCollectState,
-  buildCompletionMessage,
-  buildLeadContext,
-  clearCollectState,
-  getCollectState,
-  isInCollectFlow,
-  promptForStep,
-  setCollectState,
-  startCollectState,
-} from "../../lib/bookingCollect";
+import { advanceCollectState, buildCompletionMessage, buildLeadContext, clearCollectState, getCollectState, isInCollectFlow, promptForStep, setCollectState, startCollectState, } from "../../lib/bookingCollect";
 import { getEnv } from "../../lib/env";
 import { withRedis } from "../../lib/redisState";
-import {
-  beginRequestTrace,
-  classifyError,
-  finishRequestTrace,
-  hashIdentifier,
-  logError,
-  logInfo,
-  logWarn,
-  recordCounter,
-  setGauge,
-} from "../../lib/observability";
-import {
-  parseWebhookJson,
-  PayloadTooLargeError,
-  readRawBodyLimited,
-  verifyMetaSignature,
-} from "../../lib/webhookSecurity";
-
+import { beginRequestTrace, classifyError, finishRequestTrace, hashIdentifier, logError, logInfo, logWarn, recordCounter, setGauge, } from "../../lib/observability";
+import { parseWebhookJson, PayloadTooLargeError, readRawBodyLimited, verifyMetaSignature, } from "../../lib/webhookSecurity";
 const env = getEnv();
 const VERIFY_TOKEN = env.verifyToken;
-// Page id -> page access token, for every Facebook page this deployment serves.
 const PAGE_TOKENS = new Map(env.facebookPages.map((p) => [p.pageId, p.token]));
-// Fallback token for the Instagram path (IG uses the same FB app's primary token).
 const FALLBACK_TOKEN = env.tokenPage;
 const META_APP_SECRET = env.metaAppSecret;
 const FALLBACK_SEND_ERROR_MESSAGE = "Уучлаарай, мессеж илгээхэд алдаа гарлаа.";
-
 type Platform = "facebook" | "instagram";
 type PendingConversationPayload = {
   platform: Platform;
@@ -114,7 +48,6 @@ type EventClaim = {
   complete: () => Promise<void>;
   release: () => Promise<void>;
 };
-
 const PROCESSED_EVENT_TTL_MS = 2 * 60 * 1000;
 const EVENT_PROCESSING_TTL_MS = Math.max(env.redisLockTtlMs * 2, 60_000);
 const RECENT_TEXT_TTL_MS = 20 * 1000;
@@ -151,23 +84,19 @@ const recentReplies = new Map<string, { text: string; timestamp: number }>();
 const pendingConversations = new Map<string, PendingEnvelope[]>();
 let pendingConversationMessageCount = 0;
 let pendingSequence = 0;
-
 class RetryableWebhookError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "RetryableWebhookError";
   }
 }
-
 function isRetryableWebhookError(error: unknown) {
   return error instanceof RetryableWebhookError;
 }
-
 function asRetryableWebhookError(error: unknown, reason: string) {
   if (isRetryableWebhookError(error)) return error;
   return new RetryableWebhookError(reason);
 }
-
 function recordConsistencyDegraded(
   domain: "replay" | "conversation",
   operation: string,
@@ -175,18 +104,15 @@ function recordConsistencyDegraded(
   recordCounter("webhook.consistency_degraded_total", 1, { domain, operation });
   logError("webhook.consistency_degraded", { domain, operation });
 }
-
 export const config = {
   api: {
     bodyParser: false,
   },
 };
-
 function verifyToken(token: unknown) {
   if (!VERIFY_TOKEN || typeof token !== "string") return false;
   return token === VERIFY_TOKEN;
 }
-
 async function readRawBody(req: NextApiRequest): Promise<Buffer> {
   const contentLengthHeader = req.headers["content-length"];
   const contentLengthRaw = Array.isArray(contentLengthHeader)
@@ -194,7 +120,6 @@ async function readRawBody(req: NextApiRequest): Promise<Buffer> {
     : contentLengthHeader;
   return readRawBodyLimited(req, env.webhookMaxBodyBytes, contentLengthRaw);
 }
-
 function pruneProcessedEvents() {
   const now = Date.now();
   for (const [key, timestamp] of processedEvents.entries()) {
@@ -202,19 +127,16 @@ function pruneProcessedEvents() {
       processedEvents.delete(key);
     }
   }
-
   for (const [key, timestamp] of recentIncomingTexts.entries()) {
     if (now - timestamp > RECENT_TEXT_TTL_MS) {
       recentIncomingTexts.delete(key);
     }
   }
-
   for (const [key, value] of recentReplies.entries()) {
     if (now - value.timestamp > RECENT_REPLY_TTL_MS) {
       recentReplies.delete(key);
     }
   }
-
   if (processedEvents.size > MAX_PROCESSED_EVENTS) {
     const overflow = processedEvents.size - MAX_PROCESSED_EVENTS;
     const oldest = Array.from(processedEvents.entries())
@@ -224,13 +146,11 @@ function pruneProcessedEvents() {
       processedEvents.delete(key);
     }
   }
-
   for (const [key, timestamp] of processingEvents.entries()) {
     if (now - timestamp > EVENT_PROCESSING_TTL_MS) {
       processingEvents.delete(key);
     }
   }
-
   if (recentIncomingTexts.size > MAX_RECENT_INCOMING_TEXTS) {
     const overflow = recentIncomingTexts.size - MAX_RECENT_INCOMING_TEXTS;
     const oldest = Array.from(recentIncomingTexts.entries())
@@ -240,7 +160,6 @@ function pruneProcessedEvents() {
       recentIncomingTexts.delete(key);
     }
   }
-
   if (recentReplies.size > MAX_RECENT_REPLIES) {
     const overflow = recentReplies.size - MAX_RECENT_REPLIES;
     const oldest = Array.from(recentReplies.entries())
@@ -251,7 +170,6 @@ function pruneProcessedEvents() {
     }
   }
 }
-
 export function buildEventKey(
   platform: Platform,
   senderId: string,
@@ -259,38 +177,30 @@ export function buildEventKey(
 ) {
   const mid = event.message?.mid?.trim();
   if (mid) return `${platform}:mid:${mid}`;
-
   const normalizedText = (event.message?.text || "").trim().toLowerCase();
   return `${platform}:fallback:${senderId}:${hashIdentifier(normalizedText)}`;
 }
-
 function processedEventRedisKey(key: string) {
   return `webhook:processed_event:${key}`;
 }
-
 function processingEventRedisKey(key: string) {
   return `webhook:processing_event:${key}`;
 }
-
 function recentReplyRedisKey(sessionId: string) {
   return `webhook:recent_reply:${sessionId}`;
 }
-
 function conversationLockRedisKey(conversationKey: string) {
   return `webhook:conversation_lock:${conversationKey}`;
 }
-
 function conversationPendingRedisKey(conversationKey: string) {
   return `webhook:conversation_pending:${conversationKey}`;
 }
-
 export function markEventProcessed(key: string) {
   pruneProcessedEvents();
   if (processedEvents.has(key)) return false;
   processedEvents.set(key, Date.now());
   return true;
 }
-
 async function claimEventForProcessingConsistent(key: string): Promise<EventClaim> {
   if (env.redisReplayEnabled) {
     const redisClaim = await withRedis("webhook.event_claim", async (redis) => {
@@ -298,7 +208,6 @@ async function claimEventForProcessingConsistent(key: string): Promise<EventClai
       if (completed > 0) {
         return { state: "already_completed" as EventClaimState };
       }
-
       const claimToken = `${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
       const acquired = await redis.set(
         processingEventRedisKey(key),
@@ -310,7 +219,6 @@ async function claimEventForProcessingConsistent(key: string): Promise<EventClai
       if (acquired !== "OK") {
         return { state: "in_progress" as EventClaimState };
       }
-
       return {
         state: "acquired" as EventClaimState,
         token: claimToken,
@@ -323,7 +231,6 @@ async function claimEventForProcessingConsistent(key: string): Promise<EventClai
       recordConsistencyDegraded("replay", "event_claim");
       throw new RetryableWebhookError("redis_replay_unavailable:event_claim");
     }
-
     if (redisClaim.state !== "acquired") {
       return {
         state: redisClaim.state,
@@ -331,7 +238,6 @@ async function claimEventForProcessingConsistent(key: string): Promise<EventClai
         release: async () => {},
       };
     }
-
     const token = redisClaim.token;
     if (!token) {
       throw new RetryableWebhookError("redis_replay_unavailable:event_claim_token");
@@ -384,7 +290,6 @@ async function claimEventForProcessingConsistent(key: string): Promise<EventClai
       },
     };
   }
-
   pruneProcessedEvents();
   if (processedEvents.has(key)) {
     return {
@@ -393,7 +298,6 @@ async function claimEventForProcessingConsistent(key: string): Promise<EventClai
       release: async () => {},
     };
   }
-
   const existing = processingEvents.get(key);
   if (typeof existing === "number" && Date.now() - existing <= EVENT_PROCESSING_TTL_MS) {
     return {
@@ -402,7 +306,6 @@ async function claimEventForProcessingConsistent(key: string): Promise<EventClai
       release: async () => {},
     };
   }
-
   processingEvents.set(key, Date.now());
   return {
     state: "acquired",
@@ -415,7 +318,6 @@ async function claimEventForProcessingConsistent(key: string): Promise<EventClai
     },
   };
 }
-
 async function runEventWithClaim(
   key: string,
   tags: { platform: string; eventType: "dm" | "feed" },
@@ -438,7 +340,6 @@ async function runEventWithClaim(
     });
     return;
   }
-
   try {
     await task();
     await claim.complete();
@@ -455,11 +356,9 @@ async function runEventWithClaim(
     throw asRetryableWebhookError(error, "event_processing_failed");
   }
 }
-
 function normalizeText(text: string) {
   return text.trim().toLowerCase().replace(/\s+/g, " ");
 }
-
 export function markRecentIncomingText(
   platform: Platform,
   senderId: string,
@@ -471,17 +370,14 @@ export function markRecentIncomingText(
   recentIncomingTexts.set(key, Date.now());
   return true;
 }
-
 function updateConcurrencyGauges() {
   setGauge("webhook.active_conversations", activeConversations.size);
   setGauge("webhook.pending_conversations", pendingConversations.size);
   setGauge("webhook.pending_messages", pendingConversationMessageCount);
 }
-
 function findOldestPendingEnvelope() {
   let oldestConversationKey: string | null = null;
   let oldestEnvelope: PendingEnvelope | null = null;
-
   for (const [conversationKey, queue] of pendingConversations.entries()) {
     const first = queue[0];
     if (!first) continue;
@@ -490,21 +386,16 @@ function findOldestPendingEnvelope() {
       oldestConversationKey = conversationKey;
     }
   }
-
   return { oldestConversationKey, oldestEnvelope };
 }
-
 function evictOldestPendingEnvelope(reason: "overflow_global" | "overflow_conversation") {
   const { oldestConversationKey, oldestEnvelope } = findOldestPendingEnvelope();
   if (!oldestConversationKey || !oldestEnvelope) return false;
-
   const queue = pendingConversations.get(oldestConversationKey);
   if (!queue?.length) return false;
-
   queue.shift();
   pendingConversationMessageCount = Math.max(0, pendingConversationMessageCount - 1);
   if (!queue.length) pendingConversations.delete(oldestConversationKey);
-
   recordCounter("webhook.pending_evicted_total", 1, { reason });
   logWarn("webhook.pending_evicted", {
     reason,
@@ -514,7 +405,6 @@ function evictOldestPendingEnvelope(reason: "overflow_global" | "overflow_conver
   });
   return true;
 }
-
 function enqueuePendingConversation(
   conversationKey: string,
   payload: PendingConversationPayload,
@@ -522,7 +412,6 @@ function enqueuePendingConversation(
   while (pendingConversationMessageCount >= MAX_PENDING_CONVERSATIONS) {
     if (!evictOldestPendingEnvelope("overflow_global")) break;
   }
-
   const queue = pendingConversations.get(conversationKey) || [];
   queue.push({
     payload,
@@ -531,7 +420,6 @@ function enqueuePendingConversation(
   });
   pendingConversations.set(conversationKey, queue);
   pendingConversationMessageCount += 1;
-
   while (queue.length > MAX_PENDING_PER_CONVERSATION) {
     const dropped = queue.shift();
     if (dropped) {
@@ -546,16 +434,13 @@ function enqueuePendingConversation(
       });
     }
   }
-
   recordCounter("webhook.pending_enqueued_total", 1, {
     mode: queue.length > 1 ? "append" : "new",
   });
   updateConcurrencyGauges();
 }
-
 async function hasConversationLockConsistent(conversationKey: string) {
   if (activeConversations.has(conversationKey)) return true;
-
   if (env.redisConversationEnabled) {
     const redisBusy = await withRedis("webhook.conversation_lock_exists", async (redis) => {
       const exists = await redis.exists(conversationLockRedisKey(conversationKey));
@@ -570,13 +455,10 @@ async function hasConversationLockConsistent(conversationKey: string) {
       "redis_conversation_unavailable:conversation_lock_exists",
     );
   }
-
   return activeConversations.has(conversationKey);
 }
-
 async function acquireConversationLockConsistent(conversationKey: string) {
   if (!env.redisConversationEnabled) return null;
-
   const lockToken = `${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
   const acquired = await withRedis("webhook.conversation_lock_acquire", async (redis) => {
     const result = await redis.set(
@@ -588,10 +470,8 @@ async function acquireConversationLockConsistent(conversationKey: string) {
     );
     return result === "OK";
   });
-
   if (acquired === true) return lockToken;
   if (acquired === false) return "";
-
   recordCounter("webhook.redis_fallback_total", 1, {
     operation: "conversation_lock_acquire",
   });
@@ -600,7 +480,6 @@ async function acquireConversationLockConsistent(conversationKey: string) {
     "redis_conversation_unavailable:conversation_lock_acquire",
   );
 }
-
 async function releaseConversationLockConsistent(
   conversationKey: string,
   lockToken: string | null,
@@ -615,7 +494,6 @@ async function releaseConversationLockConsistent(
     );
     return Number(result) > 0;
   });
-
   if (released === null) {
     recordCounter("webhook.redis_fallback_total", 1, {
       operation: "conversation_lock_release",
@@ -623,7 +501,6 @@ async function releaseConversationLockConsistent(
     recordConsistencyDegraded("conversation", "conversation_lock_release");
   }
 }
-
 async function refreshConversationLockConsistent(
   conversationKey: string,
   lockToken: string | null,
@@ -648,7 +525,6 @@ async function refreshConversationLockConsistent(
     "redis_conversation_unavailable:conversation_lock_refresh",
   );
 }
-
 async function withConversationLockHeartbeat<T>(
   conversationKey: string,
   lockToken: string | null,
@@ -657,13 +533,11 @@ async function withConversationLockHeartbeat<T>(
   if (!lockToken || !env.redisConversationEnabled) {
     return task(async () => {});
   }
-
   const intervalMs = Math.max(1_000, Math.floor(env.redisLockTtlMs / 3));
   let stopped = false;
   let lockLost = false;
   let heartbeatError: unknown = null;
   let heartbeatInFlight: Promise<void> | null = null;
-
   const heartbeat = async () => {
     if (stopped || heartbeatInFlight || lockLost || heartbeatError) return;
     heartbeatInFlight = (async () => {
@@ -683,7 +557,6 @@ async function withConversationLockHeartbeat<T>(
     });
     await heartbeatInFlight;
   };
-
   const ensureLockHealthy = async () => {
     if (heartbeatError) {
       throw asRetryableWebhookError(
@@ -695,14 +568,12 @@ async function withConversationLockHeartbeat<T>(
       throw new RetryableWebhookError("conversation_lock_lost");
     }
   };
-
   const interval = setInterval(() => {
     void heartbeat();
   }, intervalMs);
   if (typeof (interval as NodeJS.Timeout).unref === "function") {
     (interval as NodeJS.Timeout).unref();
   }
-
   try {
     const result = await task(ensureLockHealthy);
     await heartbeat();
@@ -716,7 +587,6 @@ async function withConversationLockHeartbeat<T>(
     }
   }
 }
-
 async function enqueuePendingConversationConsistent(
   conversationKey: string,
   payload: PendingConversationPayload,
@@ -742,10 +612,8 @@ async function enqueuePendingConversationConsistent(
     recordConsistencyDegraded("conversation", "pending_enqueue");
     throw new RetryableWebhookError("redis_conversation_unavailable:pending_enqueue");
   }
-
   enqueuePendingConversation(conversationKey, payload);
 }
-
 async function drainPendingConversationConsistent(
   conversationKey: string,
 ): Promise<PendingConversationPayload | null> {
@@ -759,7 +627,6 @@ async function drainPendingConversationConsistent(
         payload: JSON.parse(raw) as PendingConversationPayload,
       } as const;
     });
-
     if (redisPayload) {
       if (redisPayload.found) {
         recordCounter("webhook.pending_drained_total", 1, { backend: "redis" });
@@ -773,7 +640,6 @@ async function drainPendingConversationConsistent(
     recordConsistencyDegraded("conversation", "pending_drain");
     throw new RetryableWebhookError("redis_conversation_unavailable:pending_drain");
   }
-
   const queue = pendingConversations.get(conversationKey) || [];
   const envelope = queue.shift() || null;
   if (envelope) {
@@ -784,7 +650,6 @@ async function drainPendingConversationConsistent(
   }
   return envelope?.payload || null;
 }
-
 async function getLastReplyConsistent(sessionId: string) {
   if (env.redisConversationEnabled) {
     const redisReply = await withRedis("webhook.last_reply_get", async (redis) => {
@@ -810,7 +675,6 @@ async function getLastReplyConsistent(sessionId: string) {
   }
   return recentReplies.get(sessionId) || null;
 }
-
 async function setLastReplyConsistent(sessionId: string, text: string) {
   const payload = { text, timestamp: Date.now() };
   if (env.redisConversationEnabled) {
@@ -832,7 +696,6 @@ async function setLastReplyConsistent(sessionId: string, text: string) {
   }
   recentReplies.set(sessionId, payload);
 }
-
 async function sendPlatformMessage(
   platform: Platform,
   senderId: string,
@@ -854,7 +717,6 @@ async function sendPlatformMessage(
     });
     return false;
   }
-
   try {
     if (platform === "facebook") {
       await sendTextMessage(senderId, text, token, trace);
@@ -873,12 +735,14 @@ async function sendPlatformMessage(
       senderHash: hashIdentifier(senderId),
       classification: classifyError(error),
       message: error instanceof Error ? error.message : String(error),
+      bodySnippet:
+        error && typeof error === "object" && "bodySnippet" in error
+          ? String((error as { bodySnippet?: unknown }).bodySnippet || "")
+          : undefined,
     });
-
     if (!allowFallback || text === FALLBACK_SEND_ERROR_MESSAGE) {
       return false;
     }
-
     try {
       if (platform === "facebook") {
         await sendTextMessage(senderId, FALLBACK_SEND_ERROR_MESSAGE, token, trace);
@@ -904,19 +768,19 @@ async function sendPlatformMessage(
           fallbackError instanceof Error
             ? fallbackError.message
             : String(fallbackError),
+        bodySnippet:
+          fallbackError &&
+          typeof fallbackError === "object" &&
+          "bodySnippet" in fallbackError
+            ? String(
+                (fallbackError as { bodySnippet?: unknown }).bodySnippet || "",
+              )
+            : undefined,
       });
     }
-
     return false;
   }
 }
-
-/**
- * Send a set of photos as ONE swipeable gallery (carousel). Falls back to
- * sending them as individual image messages if the carousel call fails.
- * Best-effort: never throws, returns silently when there are no photos or no
- * token. Facebook Messenger only (attachment/template API).
- */
 async function sendPhotoAlbum(
   senderId: string,
   photoUrls: string[],
@@ -941,12 +805,10 @@ async function sendPhotoAlbum(
       try {
         await sendImageMessage(senderId, url, token, traceOpts);
       } catch {
-        // one bad URL shouldn't kill the rest
       }
     }
   }
 }
-
 async function sendFacebookTypingIndicator(
   recipientId: string,
   token: string | undefined,
@@ -963,11 +825,9 @@ async function sendFacebookTypingIndicator(
     });
     return;
   }
-
   try {
     await sendTypingOn(recipientId, token, trace);
   } catch (error) {
-    // Subcode 2018048 = recipient is outside 24h messaging window. Expected, ignore.
     const msg = error instanceof Error ? error.message : String(error);
     if (msg.includes("2018048")) return;
     logWarn("webhook.typing.failed", {
@@ -977,14 +837,16 @@ async function sendFacebookTypingIndicator(
       recipientHash: hashIdentifier(recipientId),
       classification: classifyError(error),
       message: msg,
+      bodySnippet:
+        error && typeof error === "object" && "bodySnippet" in error
+          ? String((error as { bodySnippet?: unknown }).bodySnippet || "")
+          : undefined,
     });
   }
 }
-
 function normalizeLowerText(value: string): string {
   return value.trim().toLowerCase();
 }
-
 function isQuickInfoKeyword(text: string, keywords: string[]): boolean {
   const normalized = normalizeLowerText(text);
   if (!normalized) return false;
@@ -993,12 +855,6 @@ function isQuickInfoKeyword(text: string, keywords: string[]): boolean {
   }
   return false;
 }
-
-/**
- * True when the customer is asking to talk to a real person. Matches on
- * substring (not exact equality) so phrases like "хүнтэй яримаар байна" are
- * caught by the keyword "хүнтэй ярих".
- */
 function isHandoffRequest(text: string, keywords: string[]): boolean {
   const normalized = normalizeLowerText(text);
   if (!normalized) return false;
@@ -1008,9 +864,6 @@ function isHandoffRequest(text: string, keywords: string[]): boolean {
   }
   return false;
 }
-
-// Built-in booking-intent roots (Mongolian). Substring match catches inflected
-// forms — "захиал" covers захиалъя / захиалмаар / захиалга / захиалах.
 const BOOKING_INTENT_KEYWORDS = [
   "захиал",
   "бүртгүүл",
@@ -1019,24 +872,19 @@ const BOOKING_INTENT_KEYWORDS = [
   "book",
   "booking",
 ];
-
 function isBookingIntent(text: string): boolean {
   const normalized = normalizeLowerText(text);
   if (!normalized) return false;
   return BOOKING_INTENT_KEYWORDS.some((keyword) => normalized.includes(keyword));
 }
-
-/** Extracts the first Mongolian-style 8-digit mobile number, ignoring spaces/dashes. */
 function extractPhoneNumber(text: string): string {
   const compact = text.replace(/[\s\-()]/g, "");
   const match = compact.match(/(?<!\d)[5-9]\d{7}(?!\d)/);
   return match ? match[0] : "";
 }
-
 function isCommentTriggerMatch(commentText: string, patterns: string[]): boolean {
   const normalized = normalizeLowerText(commentText);
   if (!normalized) return false;
-
   for (const pattern of patterns) {
     const token = normalizeLowerText(pattern);
     if (!token) continue;
@@ -1045,7 +893,6 @@ function isCommentTriggerMatch(commentText: string, patterns: string[]): boolean
         const regex = new RegExp(token.slice(1, -1), "i");
         if (regex.test(commentText)) return true;
       } catch {
-        // Invalid regex token in DB should not crash message handling.
       }
       continue;
     }
@@ -1053,7 +900,6 @@ function isCommentTriggerMatch(commentText: string, patterns: string[]): boolean
   }
   return false;
 }
-
 async function handleMessage(
   platform: Platform,
   senderId: string,
@@ -1067,7 +913,6 @@ async function handleMessage(
   const assertLockHealthy = async () => {
     if (ensureLockHealthy) await ensureLockHealthy();
   };
-
   const limit = await rateLimitAsync(
     `${platform === "facebook" ? "fb" : "ig"}:${senderId}`,
     20,
@@ -1092,7 +937,6 @@ async function handleMessage(
     }
     return;
   }
-
   if (text.length > MAX_INCOMING_TEXT_CHARS) {
     recordCounter("abuse.webhook_text_too_long_total", 1, { platform });
     await assertLockHealthy();
@@ -1111,9 +955,7 @@ async function handleMessage(
     }
     return;
   }
-
   await trackSender(senderId);
-
   if (await isPagePaused(pageId)) {
     logInfo("webhook.page_pause_active", {
       requestId: trace?.requestId,
@@ -1124,7 +966,6 @@ async function handleMessage(
     });
     return;
   }
-
   if (await isPaused(senderId)) {
     logInfo("webhook.sender_paused", {
       requestId: trace?.requestId,
@@ -1134,21 +975,11 @@ async function handleMessage(
     });
     return;
   }
-
   if (platform === "facebook") {
     await sendFacebookTypingIndicator(senderId, token, pageId, trace);
   }
-
   const botSettings = await getTravelBotSettings();
-
-  // Log the inbound message for "most asked questions" analytics (best-effort).
   void logInboundMessage({ platform, senderId, text });
-
-  // --- Welcome flow: first message greeting + trip photo gallery ---
-  // Only on Facebook Messenger (IG doesn't support attachment API without approval).
-  // Fires exactly once per sender (Redis SETNX). Falls back gracefully if Redis down.
-  // Admin-controlled greeting config (extra.greeting). When set, the owner's
-  // manual text/photos win; otherwise we fall back to the old auto behavior.
   const greeting = resolveGreetingConfig(botSettings.extra);
   if (
     platform === "facebook" &&
@@ -1168,8 +999,6 @@ async function handleMessage(
           source: "api.webhook.welcome",
         });
       }
-      // Album 1 (default): owner's fixed default photos, OR hand-picked welcome
-      // photos, OR auto-sampled one-per-trip — in that order of preference.
       let defaultAlbum: string[] = [];
       if (greeting.defaultPhotoUrls.length > 0) {
         defaultAlbum = greeting.defaultPhotoUrls.slice(0, 10);
@@ -1180,13 +1009,10 @@ async function handleMessage(
         defaultAlbum = sampleWelcomePhotos(allTrips);
       }
       await sendPhotoAlbum(senderId, defaultAlbum, token, trace);
-
-      // Album 2 (seasonal): the currently active season's photos, if any.
       const activeSeason = getActiveSeason(resolveSeasons(botSettings.extra));
       if (activeSeason && activeSeason.photoUrls.length > 0) {
         await sendPhotoAlbum(senderId, activeSeason.photoUrls.slice(0, 10), token, trace);
       }
-
       recordCounter("webhook.welcome_sent_total", 1, {
         platform,
         photoCount: String(defaultAlbum.length),
@@ -1201,13 +1027,7 @@ async function handleMessage(
         classification: classifyError(error),
       });
     }
-    // Continue processing their actual first message normally
   }
-
-  // --- Seasonal photo album on ask ---
-  // If the customer's message mentions a season (e.g. "наадам"), proactively
-  // send that season's photo album once, then let the bot answer as normal.
-  // De-duped per sender+season for 10 min so we don't re-spam the album.
   if (platform === "facebook" && token) {
     const matchedSeason = matchSeasonByText(text, resolveSeasons(botSettings.extra));
     if (matchedSeason) {
@@ -1216,7 +1036,6 @@ async function handleMessage(
         const set = await r.set(dedupeKey, "1", "EX", 600, "NX");
         return set === "OK";
       });
-      // If Redis is down (null), default to sending — better to show photos.
       if (shouldSend !== false) {
         await sendPhotoAlbum(senderId, matchedSeason.photoUrls.slice(0, 10), token, trace);
         recordCounter("webhook.season_album_sent_total", 1, {
@@ -1226,16 +1045,11 @@ async function handleMessage(
       }
     }
   }
-
-  // --- Booking info collection flow (mid-flow message handling) ---
-  // If the sender is already in a booking-collection flow, treat this message
-  // as their answer to the current step rather than routing normally.
   if (botSettings.handoff_enabled) {
     const collectState = await getCollectState(senderId);
     if (collectState && collectState.step !== "done") {
       const nextState = advanceCollectState(collectState, text);
       if (nextState.step === "done") {
-        // All info collected — save lead, notify staff, hand off
         await clearCollectState(senderId);
         const pauseMs =
           botSettings.handoff_pause_minutes > 0
@@ -1291,7 +1105,6 @@ async function handleMessage(
         }
         return;
       } else {
-        // Still mid-flow — save state and ask the next question
         await setCollectState(senderId, nextState);
         const question = promptForStep(nextState.step);
         await assertLockHealthy();
@@ -1312,17 +1125,11 @@ async function handleMessage(
       }
     }
   }
-
-  // --- Visual flow (graph) handling ---
-  // Build the side-effect adapter once; both the resume and trigger paths use it.
-  // If a flow ends on an ai_step node, this carries its optional prompt override
-  // into the AI pipeline below.
   let flowAiPromptOverride: string | undefined;
   const flowDocs: FlowDoc[] = Array.isArray(botSettings.extra?.flowDocs)
     ? (botSettings.extra.flowDocs as FlowDoc[])
     : [];
   const flowSessionId = `${platform}:${pageId}:${senderId}`;
-
   function buildFlowEffects(): FlowEffects {
     return {
       sendText: async (msg: string) => {
@@ -1370,7 +1177,6 @@ async function handleMessage(
       },
     };
   }
-
   async function persistFlowOutcome(
     doc: FlowDoc,
     state: FlowRuntimeState,
@@ -1380,15 +1186,12 @@ async function handleMessage(
       await setFlowState(senderId, platform, state);
       return { handedToAi: false };
     }
-    // completed / skipped / handoff_to_ai → clear runtime state
     await clearFlowState(senderId, platform);
     if (outcome.status === "handoff_to_ai") {
       return { handedToAi: true, systemPromptOverride: outcome.systemPromptOverride };
     }
     return { handedToAi: false };
   }
-
-  // Resume a paused graph flow (sender previously hit a user_input node).
   if (flowDocs.length > 0) {
     const activeState = await getFlowState(senderId, platform);
     if (activeState) {
@@ -1399,15 +1202,11 @@ async function handleMessage(
         const outcome = await resumeFlowWithInput(doc, activeState, text, buildFlowEffects());
         const { handedToAi } = await persistFlowOutcome(doc, activeState, outcome);
         if (!handedToAi) return;
-        // ai_step reached → fall through to the normal AI pipeline below.
       } else {
-        // Flow disappeared/disabled — drop stale state and continue normally.
         await clearFlowState(senderId, platform);
       }
     }
   }
-
-  // --- Human handoff: customer asks to talk to a real person ---
   if (
     botSettings.handoff_enabled &&
     isHandoffRequest(text, botSettings.handoff_keywords)
@@ -1425,8 +1224,6 @@ async function handleMessage(
       senderHash: hashIdentifier(senderId),
       pauseMinutes: botSettings.handoff_pause_minutes,
     });
-    // Record the handoff as a lead and ping staff (best-effort — must never
-    // block delivery of the handoff acknowledgement to the customer).
     try {
       await createLead({
         kind: "handoff",
@@ -1470,8 +1267,6 @@ async function handleMessage(
     }
     return;
   }
-
-  // --- Keyword shortcut: DB-configured quick travel info reply ---
   if (
     botSettings.quick_info_reply &&
     isQuickInfoKeyword(text, botSettings.quick_info_keywords)
@@ -1492,10 +1287,7 @@ async function handleMessage(
     }
     return;
   }
-
   const sessionId = `${platform}:${pageId}:${senderId}`;
-
-  // --- Visual flow (graph) triggers: a keyword starts a new multi-step flow ---
   if (flowDocs.length > 0) {
     const triggered = findTriggeredFlow(text, flowDocs);
     if (triggered) {
@@ -1514,12 +1306,9 @@ async function handleMessage(
         outcome,
       );
       if (!handedToAi) return;
-      // ai_step: continue to the AI pipeline, applying any prompt override.
       flowAiPromptOverride = systemPromptOverride;
     }
   }
-
-  // --- Flow rules: keyword-triggered replies (skip AI call when matched) ---
   const flowRules = Array.isArray(botSettings.extra?.flows)
     ? (botSettings.extra.flows as FlowRule[])
     : [];
@@ -1546,27 +1335,17 @@ async function handleMessage(
         await appendMessage(sessionId, "assistant", matchedRule.reply);
         await setLastReplyConsistent(sessionId, matchedRule.reply);
       } catch {
-        // non-critical
       }
       return;
     }
   }
-
-  // --- Load business data ---
   void maybeAutoSyncDriveFolder({ source: "api.webhook" });
   const { systemPrompt: fileSystemPrompt, business } = await readBusinessData();
-
   await assertLockHealthy();
   const history = await getHistory(sessionId);
   const lastReply = await getLastReplyConsistent(sessionId);
-
-  // --- Booking-intent: start collection flow ---
-  // When the customer expresses intent to book and there's no recent open lead,
-  // start the name→phone→trip collection flow instead of immediately creating a
-  // skeleton lead. The collection flow (handled above) completes the lead.
   const customerWantsToBook =
     botSettings.handoff_enabled && isBookingIntent(text);
-
   if (customerWantsToBook && !(await hasRecentOpenLead(senderId, "booking"))) {
     const newState = startCollectState(text);
     await setCollectState(senderId, newState);
@@ -1589,23 +1368,15 @@ async function handleMessage(
     recordCounter("webhook.booking_collect_started_total", 1, { platform });
     return;
   }
-
   await appendMessage(sessionId, "user", text);
-
-  // Kept as a no-op placeholder for the date-availability branch below that
-  // previously called recordFreshBookingLead(). The collect flow now handles
-  // all booking lead creation so this is intentionally empty.
   async function recordFreshBookingLead() {
-    // booking leads are now created by the multi-step collect flow
   }
-
   if (hasDepartureDateAvailabilityIntent(text)) {
     const trips = await listTrips({ limit: 5000 });
     const dateAvailabilityReply = buildDepartureDateAvailabilityReply({
       userText: text,
       trips,
     });
-
     if (dateAvailabilityReply) {
       const bookingNudge = customerWantsToBook
         ? " Захиалгаа баталгаажуулах бол нэр, утасны дугаараа үлдээгээрэй."
@@ -1613,7 +1384,6 @@ async function handleMessage(
       const safeDateReply = enforceWebsiteForPayment(
         sanitizeAssistantReply(fixMojibake(`${dateAvailabilityReply}${bookingNudge}`)),
       );
-
       if (lastReply && isDuplicateReply(lastReply.text, safeDateReply)) {
         recordCounter("webhook.duplicate_reply_avoided_total", 1, { platform });
         await assertLockHealthy();
@@ -1633,7 +1403,6 @@ async function handleMessage(
         await recordFreshBookingLead();
         return;
       }
-
       await assertLockHealthy();
       const delivered = await sendPlatformMessage(
         platform,
@@ -1648,7 +1417,6 @@ async function handleMessage(
       if (!delivered) {
         throw new RetryableWebhookError("delivery_failed:date_availability_reply");
       }
-
       try {
         await appendMessage(sessionId, "assistant", safeDateReply);
         await setLastReplyConsistent(sessionId, safeDateReply);
@@ -1665,8 +1433,6 @@ async function handleMessage(
       return;
     }
   }
-
-  // --- Fast-path: seats availability (Feature 2) ---
   if (hasSeatsIntent(text)) {
     const trips = await listTrips({ limit: 5000 });
     const seatsReply = buildSeatsReply(text, trips);
@@ -1690,14 +1456,11 @@ async function handleMessage(
         await appendMessage(sessionId, "assistant", safeSeatsReply);
         await setLastReplyConsistent(sessionId, safeSeatsReply);
       } catch {
-        // non-critical
       }
       recordCounter("webhook.seats_fast_path_total", 1, { platform });
       return;
     }
   }
-
-  // --- Fast-path: trip comparison (Feature 3) ---
   if (hasCompareIntent(text)) {
     const trips = await listTrips({ limit: 5000 });
     const compareReply = buildCompareReply(text, trips);
@@ -1721,13 +1484,11 @@ async function handleMessage(
         await appendMessage(sessionId, "assistant", safeCompareReply);
         await setLastReplyConsistent(sessionId, safeCompareReply);
       } catch {
-        // non-critical
       }
       recordCounter("webhook.compare_fast_path_total", 1, { platform });
       return;
     }
   }
-
   const prompt = buildPrompt({
     systemPrompt: flowAiPromptOverride
       ? `${fileSystemPrompt}\n\n${flowAiPromptOverride}`
@@ -1736,7 +1497,6 @@ async function handleMessage(
     history,
     userText: text,
   });
-
   let aiReply: string;
   try {
     const result = await askGemini(prompt, {
@@ -1755,14 +1515,9 @@ async function handleMessage(
     });
     aiReply = "Уучлаарай, систем түр алдаатай байна.";
   }
-
-  // Parse the AI's trailing "BUTTONS: a|b|c" line BEFORE sanitizing, then clean
-  // the remaining text. This strips the BUTTONS line so it never leaks to the
-  // customer, and turns those labels into real Messenger quick-replies.
   const fixedReply = fixMojibake(aiReply);
   const { text: replyWithoutButtons, buttons: aiButtons } = extractButtons(fixedReply);
   const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(replyWithoutButtons));
-
   if (lastReply && isDuplicateReply(lastReply.text, safeReply)) {
     recordCounter("webhook.duplicate_reply_avoided_total", 1, { platform });
     await assertLockHealthy();
@@ -1782,10 +1537,6 @@ async function handleMessage(
     await recordFreshBookingLead();
     return;
   }
-
-  // Combine the AI's own follow-up buttons with smart trip buttons (if the reply
-  // is clearly about one trip). Dedup, cap at 3 — these ride along with the SAME
-  // message as quick-replies, so there's no separate "⬇️" bubble.
   let replyButtons: string[] = [...aiButtons];
   if (platform === "facebook") {
     try {
@@ -1799,11 +1550,9 @@ async function handleMessage(
         }
       }
     } catch {
-      // buttons are enhancement-only
     }
   }
   replyButtons = replyButtons.slice(0, 3);
-
   await assertLockHealthy();
   let delivered: boolean;
   if (platform === "facebook" && token && replyButtons.length > 0) {
@@ -1819,7 +1568,6 @@ async function handleMessage(
       });
       delivered = true;
     } catch {
-      // Quick-reply send failed → fall back to a plain text message.
       delivered = await sendPlatformMessage(
         platform, senderId, safeReply, token, pageId, igUserId, trace, { allowFallback: false },
       );
@@ -1832,8 +1580,6 @@ async function handleMessage(
   if (!delivered) {
     throw new RetryableWebhookError("delivery_failed:assistant_reply");
   }
-
-  // Persist reply state only after delivery is confirmed.
   try {
     await appendMessage(sessionId, "assistant", safeReply);
     await setLastReplyConsistent(sessionId, safeReply);
@@ -1846,9 +1592,6 @@ async function handleMessage(
       classification: classifyError(error),
     });
   }
-
-  // --- Trip photo auto-send: if AI replied about a specific trip, send its photos ---
-  // Only on Facebook Messenger (attachment API). Best-effort — never blocks reply.
   if (platform === "facebook" && token) {
     try {
       const tripsForPhotos = await listTrips({ limit: 5000 });
@@ -1861,7 +1604,6 @@ async function handleMessage(
             source: "api.webhook.trip_photo",
           });
         } catch {
-          // One bad URL shouldn't kill the rest
         }
       }
       if (tripPhotos.length > 0) {
@@ -1871,17 +1613,10 @@ async function handleMessage(
         });
       }
     } catch {
-      // Trip photo send is enhancement-only — never surface to customer
     }
   }
-
-  // (Smart trip buttons are now merged into the reply's quick-replies above —
-  // no separate "⬇️" message.)
-
-  // --- Booking-intent lead: record + alert staff after the reply is sent ---
   await recordFreshBookingLead();
 }
-
 async function processConversationWithPendingQueue(
   conversationKey: string,
   initial: PendingConversationPayload,
@@ -1903,7 +1638,6 @@ async function processConversationWithPendingQueue(
         });
         break;
       }
-
       await withConversationLockHeartbeat(
         conversationKey,
         lockToken,
@@ -1923,7 +1657,6 @@ async function processConversationWithPendingQueue(
             ensureLockHealthy,
           ),
       );
-
       const pending = await drainPendingConversationConsistent(conversationKey);
       if (!pending) break;
       current = pending;
@@ -1935,7 +1668,6 @@ async function processConversationWithPendingQueue(
     updateConcurrencyGauges();
   }
 }
-
 export function getWebhookRuntimeDiagnostics() {
   return {
     processedEvents: processedEvents.size,
@@ -1951,7 +1683,6 @@ export function getWebhookRuntimeDiagnostics() {
     redisConversationEnabled: env.redisConversationEnabled,
   };
 }
-
 export function resetWebhookStateForTests() {
   processedEvents.clear();
   processingEvents.clear();
@@ -1962,7 +1693,6 @@ export function resetWebhookStateForTests() {
   pendingConversationMessageCount = 0;
   pendingSequence = 0;
 }
-
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
@@ -1974,9 +1704,7 @@ export default async function handler(
     headers: req.headers,
     setHeader: (name, value) => res.setHeader(name, value),
   });
-
   try {
-    // ---------- VERIFY ----------
     if (req.method === "GET") {
       const mode = req.query["hub.mode"];
       const token = req.query["hub.verify_token"];
@@ -1986,8 +1714,6 @@ export default async function handler(
       recordCounter("abuse.webhook_verify_failed_total", 1);
       return res.status(403).send("Verification failed");
     }
-
-    // ---------- MESSAGES ----------
     if (req.method === "POST") {
       try {
         let rawBody: Buffer;
@@ -2005,12 +1731,10 @@ export default async function handler(
         const signature = Array.isArray(signatureHeader)
           ? signatureHeader[0]
           : signatureHeader;
-
         if (!verifyMetaSignature(rawBody, signature, META_APP_SECRET)) {
           recordCounter("abuse.webhook_invalid_signature_total", 1);
           return res.status(401).json({ error: "invalid_signature" });
         }
-
         let body: unknown;
         try {
           body = parseWebhookJson(rawBody);
@@ -2018,7 +1742,6 @@ export default async function handler(
           recordCounter("abuse.webhook_invalid_json_total", 1);
           return res.status(400).json({ error: "invalid_json" });
         }
-
         const payload = body as {
           object?: string;
           entry?: Array<{
@@ -2039,41 +1762,32 @@ export default async function handler(
             }>;
           }>;
         };
-
         logInfo("webhook.received", {
           requestId: trace.requestId,
           correlationId: trace.correlationId,
           object: payload?.object,
           entryCount: Array.isArray(payload?.entry) ? payload.entry.length : 0,
         });
-
         if (payload.object === "page" || payload.object === "instagram") {
           for (const entry of payload.entry || []) {
             const pageId =
               typeof entry?.id === "string" ? entry.id : String(entry?.id || "");
             const botSettings = await getTravelBotSettings();
-
-            // --- Feed events (post comments) ---
             const feedChanges = Array.isArray(entry?.changes) ? entry.changes : [];
             for (const change of feedChanges) {
               if (change?.field !== "feed") continue;
               const val = change?.value;
-              // Only handle comments on posts, not likes/reactions etc.
               if (val?.item !== "comment") continue;
               if (val?.verb !== "add") continue;
-              // Ignore comments by the page itself
               if (String(val?.from?.id) === pageId) continue;
-
               const commenterId = String(val?.from?.id || "").trim();
               const commentText = String(val?.message || "").trim();
               if (!commenterId || !commentText) continue;
-
               const isTriggered = isCommentTriggerMatch(
                 commentText,
                 botSettings.comment_trigger_patterns,
               );
               if (!isTriggered) continue;
-
               const commentId = String(val?.comment_id || "").trim();
               const feedKey = commentId
                 ? `feed:${commentId}`
@@ -2084,8 +1798,6 @@ export default async function handler(
                 async () => {
                   const token = PAGE_TOKENS.get(pageId);
                   if (!token) {
-                    // Page not in our roster — nothing we can do, drop cleanly
-                    // (don't 503-retry forever on a page we don't serve).
                     logWarn("webhook.unexpected_page", {
                       requestId: trace.requestId,
                       correlationId: trace.correlationId,
@@ -2094,14 +1806,12 @@ export default async function handler(
                     });
                     return;
                   }
-
                   logInfo("webhook.comment_trigger", {
                     requestId: trace.requestId,
                     correlationId: trace.correlationId,
                     commenterHash: hashIdentifier(commenterId),
                     commentId: commentId || null,
                   });
-
                   const publicReply = botSettings.comment_public_reply.trim();
                   const dmText = botSettings.comment_dm_reply.trim();
                   if (!dmText) {
@@ -2113,7 +1823,6 @@ export default async function handler(
                     });
                     return;
                   }
-
                   const dmDelivered = await sendPlatformMessage(
                     "facebook",
                     commenterId,
@@ -2131,7 +1840,6 @@ export default async function handler(
                   if (!dmDelivered) {
                     throw new RetryableWebhookError("delivery_failed:comment_dm");
                   }
-
                   if (commentId && publicReply) {
                     try {
                       await replyToComment(commentId, publicReply, token, {
@@ -2140,7 +1848,6 @@ export default async function handler(
                         source: "api.webhook.comment_reply",
                       });
                     } catch (error) {
-                      // Comment reply is best-effort; keep DM delivery as the durable outcome.
                       logWarn("webhook.comment_reply_failed", {
                         requestId: trace.requestId,
                         correlationId: trace.correlationId,
@@ -2154,26 +1861,18 @@ export default async function handler(
                 },
               );
             }
-
-            // --- Direct messages ---
             const messagingEvents = Array.isArray(entry?.messaging)
               ? entry.messaging
               : [];
-
             for (const event of messagingEvents) {
               if (!event?.sender?.id) continue;
               if (event?.message?.is_echo) continue;
-
               const senderId = String(event.sender.id).trim();
               const text =
                 typeof event?.message?.text === "string"
                   ? event.message.text.trim()
                   : "";
-
               if (!senderId || !text) continue;
-
-              // For Facebook pages, only serve pages in our roster. Unknown page
-              // → drop (don't reply with the wrong page's token).
               if (payload.object === "page" && !PAGE_TOKENS.has(pageId)) {
                 logWarn("webhook.unexpected_page", {
                   requestId: trace.requestId,
@@ -2184,14 +1883,9 @@ export default async function handler(
                 });
                 continue;
               }
-
               const platform: Platform =
                 payload.object === "instagram" ? "instagram" : "facebook";
-
-              // Reply with this page's own token. Instagram has no per-page FB
-              // token here, so fall back to the primary token to stay working.
               const token = PAGE_TOKENS.get(pageId) ?? FALLBACK_TOKEN;
-
               const eventKey = buildEventKey(platform, senderId, event);
               await runEventWithClaim(
                 eventKey,
@@ -2207,7 +1901,6 @@ export default async function handler(
                     });
                     throw new RetryableWebhookError("missing_page_token:dm");
                   }
-
                   const conversationKey = `${platform}:${pageId}:${senderId}`;
                   const payloadForConversation: PendingConversationPayload = {
                     platform,
@@ -2221,7 +1914,6 @@ export default async function handler(
                       correlationId: trace.correlationId,
                     },
                   };
-
                   const busy = await hasConversationLockConsistent(conversationKey);
                   if (busy) {
                     await enqueuePendingConversationConsistent(
@@ -2230,7 +1922,6 @@ export default async function handler(
                     );
                     return;
                   }
-
                   const lockToken = await acquireConversationLockConsistent(
                     conversationKey,
                   );
@@ -2241,7 +1932,6 @@ export default async function handler(
                     );
                     return;
                   }
-
                   let initialPayload = payloadForConversation;
                   const pendingBefore = await drainPendingConversationConsistent(
                     conversationKey,
@@ -2253,7 +1943,6 @@ export default async function handler(
                     );
                     initialPayload = pendingBefore;
                   }
-
                   await processConversationWithPendingQueue(
                     conversationKey,
                     initialPayload,
@@ -2264,7 +1953,6 @@ export default async function handler(
             }
           }
         }
-
         return res.status(200).json({ ok: true });
       } catch (err) {
         if (isRetryableWebhookError(err)) {
@@ -2279,7 +1967,6 @@ export default async function handler(
           res.setHeader("Retry-After", "5");
           return res.status(503).json({ error: "retryable_failure" });
         }
-
         logError("webhook.unhandled_error", {
           requestId: trace.requestId,
           correlationId: trace.correlationId,
@@ -2289,7 +1976,6 @@ export default async function handler(
         return res.status(500).json({ error: "internal_error" });
       }
     }
-
     return res.status(405).end();
   } finally {
     updateConcurrencyGauges();

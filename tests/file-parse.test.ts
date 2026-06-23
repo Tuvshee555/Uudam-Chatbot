@@ -123,6 +123,32 @@ test("parseUpload extracts text from .docx files", async () => {
   assert.match(parsed.text, /2400000/);
 });
 
+test("parseUpload preserves DOCX table cell boundaries", async () => {
+  const { deflateRawSync } = await import("node:zlib");
+  const xml = '<?xml version="1.0"?><w:document xmlns:w="x"><w:body>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Бангкок</w:t></w:r></w:p></w:tc>' +
+    '<w:tc><w:p><w:r><w:t>2400000</w:t></w:r></w:p></w:tc></w:tr></w:tbl>' +
+    '</w:body></w:document>';
+  const name = Buffer.from("word/document.xml");
+  const content = Buffer.from(xml);
+  const compressed = deflateRawSync(content);
+  const local = Buffer.alloc(30);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(8, 8);
+  local.writeUInt32LE(compressed.length, 18);
+  local.writeUInt32LE(content.length, 22);
+  local.writeUInt16LE(name.length, 26);
+  const docx = Buffer.concat([local, name, compressed]);
+
+  const parsed = await parseUpload({
+    filename: "table.docx",
+    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    dataBase64: docx.toString("base64"),
+  });
+
+  assert.match(parsed.text, /Бангкок\s+2400000/);
+});
+
 test("parseUpload rejects oversized decoded uploads before parsing", async () => {
   const dataBase64 = Buffer.alloc(MAX_PARSE_UPLOAD_DECODED_BYTES + 1).toString(
     "base64",

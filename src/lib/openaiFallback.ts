@@ -31,6 +31,7 @@ export async function askOpenAIFallbackParts(
     jsonMode?: boolean;
     timeoutMs?: number;
     temperature?: number;
+    maxOutputTokens?: number;
     requestId?: string;
     correlationId?: string;
   },
@@ -64,6 +65,9 @@ export async function askOpenAIFallbackParts(
   };
   if (options?.jsonMode) {
     requestBody.response_format = { type: "json_object" };
+  }
+  if (typeof options?.maxOutputTokens === "number") {
+    requestBody.max_completion_tokens = Math.trunc(options.maxOutputTokens);
   }
 
   try {

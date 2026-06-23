@@ -1,3 +1,4 @@
+import { createHmac } from "crypto";
 import { getEnv } from "./env";
 import { logInfo } from "./observability";
 import { fetchWithRetry } from "./resilience";
@@ -42,6 +43,28 @@ async function postToMessenger(
   });
 }
 
+function graphMessagesEndpoint(token: string) {
+  const params = new URLSearchParams({ access_token: token });
+  if (env.metaAppSecret) {
+    params.set(
+      "appsecret_proof",
+      createHmac("sha256", env.metaAppSecret).update(token).digest("hex"),
+    );
+  }
+  return `https://graph.facebook.com/v19.0/me/messages?${params.toString()}`;
+}
+
+function graphCommentEndpoint(commentId: string, token: string) {
+  const params = new URLSearchParams({ access_token: token });
+  if (env.metaAppSecret) {
+    params.set(
+      "appsecret_proof",
+      createHmac("sha256", env.metaAppSecret).update(token).digest("hex"),
+    );
+  }
+  return `https://graph.facebook.com/v19.0/${commentId}/comments?${params.toString()}`;
+}
+
 export async function sendTextMessage(
   recipientId: string,
   text: string,
@@ -49,7 +72,7 @@ export async function sendTextMessage(
   trace?: UpstreamTraceOptions,
 ) {
   await postToMessenger(
-    `https://graph.facebook.com/v19.0/me/messages?access_token=${token}`,
+    graphMessagesEndpoint(token),
     {
       messaging_type: "RESPONSE",
       recipient: { id: recipientId },
@@ -66,7 +89,7 @@ export async function replyToComment(
   trace?: UpstreamTraceOptions,
 ) {
   await postToMessenger(
-    `https://graph.facebook.com/v19.0/${commentId}/comments?access_token=${token}`,
+    graphCommentEndpoint(commentId, token),
     { message },
     trace,
   );
@@ -78,7 +101,7 @@ export async function sendTypingOn(
   trace?: UpstreamTraceOptions,
 ) {
   await postToMessenger(
-    `https://graph.facebook.com/v19.0/me/messages?access_token=${token}`,
+    graphMessagesEndpoint(token),
     {
       recipient: { id: recipientId },
       sender_action: "typing_on",
@@ -105,7 +128,7 @@ export async function sendQuickReplies(
     payload: label.slice(0, 20),
   }));
   await postToMessenger(
-    `https://graph.facebook.com/v19.0/me/messages?access_token=${token}`,
+    graphMessagesEndpoint(token),
     {
       messaging_type: "RESPONSE",
       recipient: { id: recipientId },
@@ -137,7 +160,7 @@ export async function sendImageCarousel(
     image_url: card.imageUrl,
   }));
   await postToMessenger(
-    `https://graph.facebook.com/v19.0/me/messages?access_token=${token}`,
+    graphMessagesEndpoint(token),
     {
       messaging_type: "RESPONSE",
       recipient: { id: recipientId },
@@ -168,7 +191,7 @@ export async function sendImageMessage(
   trace?: UpstreamTraceOptions,
 ) {
   await postToMessenger(
-    `https://graph.facebook.com/v19.0/me/messages?access_token=${token}`,
+    graphMessagesEndpoint(token),
     {
       messaging_type: "RESPONSE",
       recipient: { id: recipientId },

@@ -1,9 +1,21 @@
+import { createHmac } from "crypto";
 import { getEnv } from "./env";
 import { logInfo } from "./observability";
 import { fetchWithRetry } from "./resilience";
 import type { UpstreamTraceOptions } from "./messenger";
 
 const env = getEnv();
+
+function graphMessagesEndpoint(igUserId: string, token: string) {
+  const params = new URLSearchParams({ access_token: token });
+  if (env.metaAppSecret) {
+    params.set(
+      "appsecret_proof",
+      createHmac("sha256", env.metaAppSecret).update(token).digest("hex"),
+    );
+  }
+  return `https://graph.facebook.com/v19.0/${igUserId}/messages?${params.toString()}`;
+}
 
 export async function sendTextMessage(
   igUserId: string,
@@ -14,7 +26,7 @@ export async function sendTextMessage(
 ) {
   const startedAt = Date.now();
   const { attempts } = await fetchWithRetry(
-    `https://graph.facebook.com/v19.0/${igUserId}/messages?access_token=${token}`,
+    graphMessagesEndpoint(igUserId, token),
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -58,6 +58,8 @@ export type AskGeminiOptions = {
   model?: string;
   /** Sampling temperature. Defaults to 0 for deterministic, factual extraction. */
   temperature?: number;
+  /** Large structured extractions need room for one JSON action per trip. */
+  maxOutputTokens?: number;
   /**
    * When true, use OpenAI as the PRIMARY model and fall back to Gemini if
    * OpenAI fails. Used for file reading/parsing, where OpenAI is more reliable.
@@ -120,6 +122,7 @@ export async function askGeminiParts(
       jsonMode: options?.jsonMode,
       timeoutMs,
       temperature,
+      maxOutputTokens: options?.maxOutputTokens,
       requestId: options?.requestId,
       correlationId: options?.correlationId,
     });
@@ -128,6 +131,9 @@ export async function askGeminiParts(
     // OpenAI failed — continue to the Gemini path below as the backup.
   }
   const generationConfig: Record<string, unknown> = { temperature };
+  if (typeof options?.maxOutputTokens === "number") {
+    generationConfig.maxOutputTokens = Math.trunc(options.maxOutputTokens);
+  }
   if (options?.jsonMode) {
     generationConfig.responseMimeType = "application/json";
   }
@@ -254,6 +260,7 @@ export async function askGeminiParts(
         jsonMode: options?.jsonMode,
         timeoutMs,
         temperature,
+        maxOutputTokens: options?.maxOutputTokens,
         requestId: options?.requestId,
         correlationId: options?.correlationId,
       });
