@@ -4002,6 +4002,52 @@ function AssistantTab({
 
   return (
     <div className="space-y-4">
+      {/* Photo-first hero: drop trip photos → AI reads them into draft trips */}
+      <Card
+        className={cx(
+          "overflow-hidden border-brand/30 bg-brand-soft/40",
+          dragOver && "ring-2 ring-brand",
+        )}
+      >
+        <button
+          type="button"
+          onClick={onPickFile}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            const files = e.dataTransfer.files;
+            if (files?.length) onDropFiles(files);
+          }}
+          className="flex w-full items-center gap-4 p-4 text-left transition-colors hover:bg-brand-soft/60"
+        >
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-brand text-white">
+            <Icons.trips size={26} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-base font-semibold text-ink">
+              Аяллын зургаа энд тавьж аялал үүсгэх
+            </p>
+            <p className="mt-0.5 text-sm text-ink-muted">
+              Аяллын постер, үнийн зураг, хөтөлбөрийн зургаа чирж оруулаарай — AI
+              уншиж, үнэ/огноо/маршрутыг автоматаар аялал болгож санал болгоно. Та
+              шалгаад баталгаажуулна.
+            </p>
+            <p className="mt-1 text-xs text-ink-subtle">
+              Зураг (JPG, PNG), PDF, Excel дэмжинэ. Олон зураг нэг дор болно.
+            </p>
+          </div>
+          <span className="hidden shrink-0 items-center gap-1.5 rounded-xl bg-brand px-3.5 py-2 text-sm font-medium text-white sm:flex">
+            <Icons.plus size={15} />
+            Зураг сонгох
+          </span>
+        </button>
+      </Card>
+
       <Card
         className={cx(
           "flex flex-col overflow-hidden",
