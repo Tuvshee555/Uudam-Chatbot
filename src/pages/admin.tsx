@@ -839,7 +839,7 @@ export default function AdminPage() {
         sourceNames,
         status: "pending",
         confirmChecked: false,
-        clarifications: buildProposalClarifications(proposal),
+        clarifications: buildProposalClarifications(proposal, [], sourceNames),
         clarificationAnswers: [],
         answeredClarificationIds: [],
         customReply: "",
@@ -935,7 +935,7 @@ export default function AdminPage() {
       setProposalMessage(message.id, {
         proposal,
         requestId: newRequestId,
-        clarifications: buildProposalClarifications(proposal, nextAnsweredIds),
+        clarifications: buildProposalClarifications(proposal, nextAnsweredIds, message.sourceNames ?? []),
         clarificationAnswers: [
           ...message.clarificationAnswers,
           {

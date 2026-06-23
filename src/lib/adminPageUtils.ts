@@ -1131,6 +1131,7 @@ function summarizeConflict(detail: string): string {
 function buildProposalClarifications(
   proposal: AIProposal,
   answeredIds: string[] = [],
+  sourceNames: string[] = [],
 ): ClarificationQuestion[] {
   const questions: ClarificationQuestion[] = [];
   const seen = new Set(answeredIds);
@@ -1488,6 +1489,41 @@ function buildProposalClarifications(
       normalized.includes("review needed") ||
       normalized.includes("баталгаажуул")
     ) {
+      return;
+    }
+
+    // "add as new or update existing?" duplicate-check question
+    if (
+      normalized.includes("шинэ аялал болгон нэмэх үү") ||
+      normalized.includes("одоо байгааг шинэчлэх үү") ||
+      (normalized.includes("existing trip") && normalized.includes("duplicate")) ||
+      (normalized.includes("review before creating") && normalized.includes("duplicate"))
+    ) {
+      const sourceLabel = sourceNames.length === 1 ? sourceNames[0] : "";
+      const fileTag = sourceLabel ? ` · 📄 ${sourceLabel}` : "";
+      pushQuestion({
+        id: `add-or-update:${index}`,
+        prompt: subject
+          ? `"${subject}"${fileTag} — шинэ аялал болгон нэмэх үү, эсвэл одоо байгааг шинэчлэх үү?`
+          : `Шинэ аялал нэмэх үү, эсвэл одоо байгааг шинэчлэх үү?${fileTag}`,
+        detail,
+        options: [
+          {
+            label: "Шинэ аялал болгон нэмэх",
+            answer: subject
+              ? `"${subject}"-г шинэ аялал болгон нэм. Одоо байгаа аялалыг бүү өөрчил.`
+              : "Шинэ аялал болгон нэм. Одоо байгаа аялалыг бүү өөрчил.",
+          },
+          {
+            label: "Одоо байгааг шинэчлэх",
+            answer: subject
+              ? `"${subject}"-г одоо байгаа аялалтай нэгтгэж шинэчил.`
+              : "Одоо байгаа ижил аяллыг шинэчил.",
+          },
+        ],
+        allowCustom: true,
+        customPlaceholder: "Хэрхэн зохицуулахыг бичнэ үү",
+      });
       return;
     }
 
