@@ -488,7 +488,7 @@ export function getEnv(): ValidatedEnv {
     source,
     15_000,
     1_000,
-    60_000,
+    120_000,
     errors,
   );
   const geminiMaxRetries = readPositiveIntFromNames(
