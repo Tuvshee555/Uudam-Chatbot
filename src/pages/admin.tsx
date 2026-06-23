@@ -1172,13 +1172,61 @@ function isSuspiciousChildPriceConflict(normalized: string): boolean {
   const mentionsChild =
     normalized.includes("хүүхдийн үнэ") || normalized.includes("child price");
   if (!mentionsChild) return false;
-  return (
+  const mentionsComparison =
     normalized.includes("higher") ||
     normalized.includes("greater") ||
     normalized.includes("more than") ||
     normalized.includes("өндөр") ||
     normalized.includes("их") ||
-    normalized.includes("давсан")
+    normalized.includes("давсан");
+  if (!mentionsComparison) return false;
+
+  // Word order decides WHICH price is being called higher. In Mongolian
+  // "A нь B-өөс өндөр" means A > B. An ADULT price higher than the child price
+  // is completely normal — never flag it. Only a CHILD price higher than the
+  // adult price is suspicious. Whichever subject ("хүүхдийн үнэ" vs
+  // "том хүний үнэ") comes FIRST is the one claimed to be higher.
+  const childIdx = normalized.indexOf("хүүхдийн үнэ");
+  const childIdxEn = normalized.indexOf("child price");
+  const childPos = Math.min(
+    childIdx === -1 ? Number.MAX_SAFE_INTEGER : childIdx,
+    childIdxEn === -1 ? Number.MAX_SAFE_INTEGER : childIdxEn,
+  );
+  const adultIdx = normalized.indexOf("том хүний үнэ");
+  const adultIdxEn = normalized.indexOf("adult price");
+  const adultPos = Math.min(
+    adultIdx === -1 ? Number.MAX_SAFE_INTEGER : adultIdx,
+    adultIdxEn === -1 ? Number.MAX_SAFE_INTEGER : adultIdxEn,
+  );
+
+  // If the adult price is mentioned first, it's "adult higher than child" =
+  // normal, not suspicious. Only treat as suspicious when the child price is
+  // the subject claimed to be higher (or no adult price is mentioned at all).
+  if (adultPos < childPos) return false;
+  return true;
+}
+
+// True when a "date is unclear / тодорхойгүй" conflict actually contains real
+// dates in its text — e.g. "гарах огноо (06/10, 06/19, 06/22) тодорхойгүй".
+// That is self-contradictory (the AI listed the dates it claims it couldn't
+// find), so we drop the question instead of asking the admin an obvious one.
+function isContradictoryDateConflict(detail: string): boolean {
+  const normalized = normalizeReviewText(detail);
+  const mentionsUnclearDate =
+    (normalized.includes("огноо") ||
+      normalized.includes("гарах өдөр") ||
+      normalized.includes("departure date")) &&
+    (normalized.includes("тодорхойгүй") ||
+      normalized.includes("unclear") ||
+      normalized.includes("чадсангүй") ||
+      normalized.includes("чадаагүй"));
+  if (!mentionsUnclearDate) return false;
+  // A concrete date present in the same text: "06/10", "6/27", "06 сарын 17",
+  // "2026-06-15", "17-21" etc. Any of these means a date WAS found.
+  return (
+    /\d{1,2}\s*[\/.\-]\s*\d{1,2}/.test(detail) ||
+    /\d{4}-\d{1,2}-\d{1,2}/.test(detail) ||
+    /\d{1,2}\s*сар(ын)?\s*\d{1,2}/.test(detail)
   );
 }
 
@@ -1482,6 +1530,11 @@ function buildProposalClarifications(
       });
       return;
     }
+
+    // The AI sometimes lists the dates it found and then still claims the date
+    // is "unclear" — a self-contradiction. Drop that question entirely; the
+    // dates are right there in the text.
+    if (isContradictoryDateConflict(detail)) return;
 
     if (
       normalized.includes("явах өдөр тодорхойгүй") ||
