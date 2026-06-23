@@ -153,6 +153,51 @@ function isGenericExtractionMissConflict(
   return fieldMentions >= 3;
 }
 
+/**
+ * Suppresses false "price conflict" questions that are actually date-based
+ * seasonal pricing. The model sometimes lists multiple MNT prices from the
+ * same tour (e.g. 3,590,000₮ / 3,660,000₮ / 3,260,000₮) and flags them as
+ * a conflict even though they each belong to a different departure date or
+ * passenger type. We suppress the conflict when:
+ * 1. The conflict text contains two or more distinct MNT price figures, AND
+ * 2. At least one action already has multiple departure_dates (meaning
+ *    date-based pricing was successfully extracted), OR the notes/
+ *    source_description already encodes date→price information.
+ */
+function isDateBasedPricingConflict(
+  conflict: string,
+  actions: AITripAction[],
+): boolean {
+  // Must mention prices — look for multiple ₮ amounts or "үнэ" + numbers
+  const priceMatches = conflict.match(/[\d,]+(?:,\d{3})*(?:₮|төгрөг)/g) ?? [];
+  if (priceMatches.length < 2) return false;
+
+  // Must be about price differences (not some other kind of conflict)
+  const normalized = conflict.toLowerCase();
+  const isPriceConflict =
+    normalized.includes("үнэ") ||
+    normalized.includes("price") ||
+    normalized.includes("өөр") ||
+    normalized.includes("different");
+  if (!isPriceConflict) return false;
+
+  // Suppress if any action has multiple departure_dates (date-based pricing confirmed)
+  const hasMultiDateAction = actions.some(
+    (action) =>
+      Array.isArray(action.fields?.departure_dates) &&
+      action.fields.departure_dates.length > 1,
+  );
+  if (hasMultiDateAction) return true;
+
+  // Suppress if notes/source_description encodes date→price mapping
+  // (e.g. "6-р сарын 27: 3,590,000₮")
+  const hasDatePriceNotes = actions.some((action) => {
+    const notes = String(action.fields?.notes ?? action.fields?.source_description ?? "");
+    return /[0-9]\s*сарын\s*[0-9].*[0-9]+,\d{3}/.test(notes);
+  });
+  return hasDatePriceNotes;
+}
+
 export function validateAIChangeProposal(
   proposal: AIChangeProposal | null,
   existingTrips: TripMatchSnapshot[] = [],
@@ -178,6 +223,7 @@ export function validateAIChangeProposal(
       !isFilenameOperatorChoiceConflict(conflict) &&
       !isResolvedMissingDateConflict(conflict, normalized.actions) &&
       !isGenericExtractionMissConflict(conflict, normalized.actions) &&
+      !isDateBasedPricingConflict(conflict, normalized.actions) &&
       !isGenericConfirmationText(conflict) &&
       !isOptionalAddOnCostConflict(conflict) &&
       !isDocumentedMealExceptionConflict(conflict),
@@ -643,11 +689,13 @@ function buildBatchSourceParts(input: {
     "",
     "CRITICAL — Date-based pricing rule (most common travel agency pattern):",
     "When the SAME trip name has DIFFERENT prices for DIFFERENT departure dates or months, this is NOT a conflict — it is normal seasonal/date pricing.",
-    "Correct behavior: create ONE trip with all departure_dates listed, set adult_price to the most common or highest price, and write ALL date-specific prices in notes/source_description in plain language (e.g. '6-р сарын 27: 3,590,000₮ / 7,8-р сар: 3,660,000₮').",
+    "Correct behavior: create ONE trip with all departure_dates listed, set adult_price to the most common or highest price, and write ALL date-specific prices in notes/source_description in plain language (e.g. '6-р сарын 27: Том хүн 3,590,000₮ / Хүүхэд 3,260,000₮; 7,8-р сар: Том хүн 3,660,000₮ / Хүүхэд 3,260,000₮').",
     "NEVER raise a conflict or ask the user when prices differ only because departure dates or months differ.",
-    "A true price conflict is ONLY when: same trip name + same departure date + same traveler type + two different prices with no explanation.",
-    "Before flagging any price conflict, first check: do the different prices correspond to different dates, months, room types, or traveler categories? If yes → store all, no conflict.",
-    "QUESTION GATE: ask a human only for a required low-confidence value or two meaningful values that disagree. The question must quote the exact tour and exact conflicting text, and the answer must change a database value. Never emit a generic 'route/operator/price/date unclear' question.",
+    "DATE-PRICE GROUP PATTERN: Many Mongolian travel PDFs show prices in grouped blocks: a date heading followed by adult and child prices for that specific date. Example: '6 сарын 27 / Том хүн 3,590,000₮ / Хүүхэд 3,260,000₮ // 7 сарын 18 / Том хүн 3,660,000₮ / Хүүхэд 3,260,000₮'. These are NOT competing prices — they are separate departure options. Store each group as a departure_dates entry and encode all per-date prices in notes/source_description. Also store the structured groups in fields.extra.departure_date_groups as [{date_text, adult_price_mnt, child_price_mnt}]. Do NOT compare these prices against each other.",
+    "PASSENGER TYPE PRICES: adult_price > child_price > infant_price is always normal and expected. Never compare adult vs child vs infant prices as if they conflict. They are different passenger categories.",
+    "A true price conflict is ONLY when: same trip name + same exact departure date + same passenger type + two different prices + no explanation. ALL four conditions must be true simultaneously.",
+    "Before flagging any price conflict, first check: do the different prices correspond to different dates, months, passenger types, room types, or packages? If ANY of those differ → store all in notes, no conflict, no question.",
+    "QUESTION GATE: ask a human only for a required low-confidence value or two meaningful values that genuinely disagree. The question must quote the exact tour and exact conflicting text, and the answer must change a database value. Never emit a generic 'route/operator/price/date unclear' question.",
     "BATCH RULE: each PDF is one separate tour unless that PDF visibly contains multiple complete products. Different filenames, routes, dates, prices, or the same operator across PDFs are expected and are not cross-file conflicts.",
   ]
     .filter(Boolean)
@@ -1193,9 +1241,12 @@ export async function generateAIProposalFromContent(input: {
     "",
     "CRITICAL — Date-based pricing rule (most common travel agency pattern):",
     "When the SAME trip name has DIFFERENT prices for DIFFERENT departure dates or months, this is NOT a conflict — it is normal seasonal/date pricing.",
-    "Correct behavior: create ONE trip with all departure_dates listed, set adult_price to the most common or highest price, and write ALL date-specific prices in notes/source_description in plain language (e.g. '6-р сарын 27: 3,590,000₮ / 7,8-р сар: 3,660,000₮').",
+    "Correct behavior: create ONE trip with all departure_dates listed, set adult_price to the most common or highest price, and write ALL date-specific prices in notes/source_description in plain language (e.g. '6-р сарын 27: Том хүн 3,590,000₮ / Хүүхэд 3,260,000₮; 7,8-р сар: Том хүн 3,660,000₮ / Хүүхэд 3,260,000₮').",
     "NEVER raise a conflict or ask the user when prices differ only because departure dates or months differ.",
-    "A true price conflict is ONLY when: same trip name + same departure date + same traveler type + two different prices with no explanation.",
+    "DATE-PRICE GROUP PATTERN: Many Mongolian travel PDFs show prices in grouped blocks: a date heading followed by adult and child prices for that specific date. Example: '6 сарын 27 / Том хүн 3,590,000₮ / Хүүхэд 3,260,000₮ // 7 сарын 18 / Том хүн 3,660,000₮ / Хүүхэд 3,260,000₮'. These are NOT competing prices — they are separate departure options. Store each group in notes/source_description and in fields.extra.departure_date_groups as [{date_text, adult_price_mnt, child_price_mnt}]. Do NOT compare these prices against each other.",
+    "PASSENGER TYPE PRICES: adult_price > child_price > infant_price is always normal and expected. Never compare adult vs child vs infant prices as if they conflict.",
+    "A true price conflict is ONLY when: same trip name + same exact departure date + same passenger type + two different prices + no explanation. ALL four conditions must be true simultaneously.",
+    "Before flagging any price conflict, first check: do the different prices correspond to different dates, months, passenger types, room types, or packages? If ANY of those differ → store all in notes, no conflict.",
   ]
     .filter(Boolean)
     .join("\n");

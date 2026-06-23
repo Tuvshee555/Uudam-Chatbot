@@ -689,3 +689,71 @@ test("recurring schedule and exact dates are both retained", async () => {
     ["Пүрэв гариг болгон", "6 сарын 4", "6 сарын 11", "6 сарын 18"],
   );
 });
+
+test("date-based pricing conflict is suppressed when multiple departure dates exist", async () => {
+  const { validateAIChangeProposal } = await loadTravelOps();
+  // Simulates the Shanghai + Tengeriin Haalga case: model flags multiple prices
+  // as a conflict but the action already has multiple departure_dates.
+  const proposal: AIChangeProposal = {
+    summary: "Шанхай + Тэнгэрийн хаалга аялал нэмэх",
+    needs_confirmation: true,
+    important_reason: "Үнийн зөрүү байна.",
+    conflicts: [
+      '"Шанхай + Тэнгэрийн хаалга": аяллын үнэ 3,590,000₮, 3,660,000₮, 3,260,000₮ байна — өөр үнэ тодорхойлогдлоо.',
+    ],
+    actions: [
+      {
+        action: "upsert",
+        fields: {
+          operator_name: "UUDAM TRAVEL AGENCY",
+          route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
+          duration_text: "8 өдөр / 7 шөнө",
+          adult_price: 3_660_000,
+          child_price: 3_260_000,
+          currency: "MNT",
+          departure_dates: ["6 сарын 27", "7 сарын 18", "8 сарын 8"],
+          notes: "6 сарын 27: Том хүн 3,590,000₮ / Хүүхэд 3,260,000₮; 7,8-р сар: Том хүн 3,660,000₮ / Хүүхэд 3,260,000₮",
+        },
+      },
+    ],
+  };
+
+  const result = validateAIChangeProposal(proposal, []);
+  assert.equal(
+    result.proposal.conflicts.length,
+    0,
+    "date-based pricing conflict should be suppressed when multiple departure_dates exist",
+  );
+});
+
+test("date-based pricing conflict suppressed when notes encode date→price mapping", async () => {
+  const { validateAIChangeProposal } = await loadTravelOps();
+  const proposal: AIChangeProposal = {
+    summary: "date-price notes test",
+    needs_confirmation: true,
+    important_reason: "Үнийн зөрүү",
+    conflicts: [
+      '"Тэст аялал": үнэ 2,990,000₮, 3,100,000₮ байна — тодорхойгүй price өөрчлөлт.',
+    ],
+    actions: [
+      {
+        action: "upsert",
+        fields: {
+          operator_name: "UUDAM TRAVEL AGENCY",
+          route_name: "Тэст аялал",
+          adult_price: 3_100_000,
+          currency: "MNT",
+          departure_dates: ["6 сарын 15"],
+          notes: "6 сарын 15: 2,990,000₮; 7 сарын 15: 3,100,000₮",
+        },
+      },
+    ],
+  };
+
+  const result = validateAIChangeProposal(proposal, []);
+  assert.equal(
+    result.proposal.conflicts.length,
+    0,
+    "price conflict should be suppressed when notes encode date-price mapping",
+  );
+});
