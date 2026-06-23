@@ -165,19 +165,20 @@ const AI_CHANGE_REPAIR_TIMEOUT_MS = 15_000;
 // if you ever need the stronger model for a complex or low-quality document.
 const FILE_PARSE_MODEL =
   process.env.GEMINI_FILE_PARSE_MODEL || "gemini-2.5-flash";
-// Accuracy-first: after extraction, run a second pass that re-reads the SAME
-// source and checks every extracted price/date/seat against it, forcing
-// confirmation on anything it can't verify. Costs one extra Pro call per parse.
-// On by default; set GEMINI_FILE_PARSE_VERIFY=false to disable.
+// Verify pass = a SECOND full re-read of every file to double-check prices.
+// Off by default now (set GEMINI_FILE_PARSE_VERIFY=true to re-enable for a
+// 100%-accuracy slow run). Skipping it halves token cost and parse time.
 const FILE_PARSE_VERIFY =
-  (process.env.GEMINI_FILE_PARSE_VERIFY || "true").toLowerCase() !== "false";
-const FILE_PARSE_VERIFY_TIMEOUT_MS = 60_000;
-const FILE_PARSE_GEMINI_TIMEOUT_MS = Math.max(env.geminiTimeoutMs, 60_000);
+  (process.env.GEMINI_FILE_PARSE_VERIFY || "false").toLowerCase() === "true";
+const FILE_PARSE_VERIFY_TIMEOUT_MS = 45_000;
+// Respect the env timeout directly (don't force a 60s floor) so a low
+// GEMINI_TIMEOUT_MS actually makes parsing fail-fast instead of hanging.
+const FILE_PARSE_GEMINI_TIMEOUT_MS = env.geminiTimeoutMs;
 const FILE_PARSE_GEMINI_MAX_RETRIES = Math.min(env.geminiMaxRetries, 1);
-const FILE_PARSE_BATCH_DELAY_MS = 1_200;
-const FILE_PARSE_TOTAL_BUDGET_MS = 150_000;
-const FILE_PARSE_MIN_BATCH_TIMEOUT_MS = 10_000;
-const FILE_PARSE_REPAIR_TIMEOUT_MS = 20_000;
+const FILE_PARSE_BATCH_DELAY_MS = 800;
+const FILE_PARSE_TOTAL_BUDGET_MS = 120_000;
+const FILE_PARSE_MIN_BATCH_TIMEOUT_MS = 8_000;
+const FILE_PARSE_REPAIR_TIMEOUT_MS = 15_000;
 let schemaEnsured = false;
 let schemaPromise: Promise<boolean> | null = null;
 let botControlCache:
