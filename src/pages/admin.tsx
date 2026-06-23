@@ -4243,6 +4243,7 @@ function ChatBubbleV2({
 }) {
   void _onToggleConfirm;
   const [formDraft, setFormDraft] = useState<Record<string, string>>({});
+  const [fieldOverrides, setFieldOverrides] = useState<Record<string, string>>({});
   if (message.role === "admin") {
     return (
       <div className="flex justify-end">
@@ -4439,26 +4440,184 @@ function ChatBubbleV2({
                   : "Бүх зүйл тодорхой байна. Өөрчлөлтийг хэрэгжүүлж болно."}
               </p>
             )}
-            {message.clarifications.length === 0 && (
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant="success"
-                  loading={applyBusy}
-                  onClick={() => onApply(message)}
-                >
-                  <Icons.check size={15} />
-                  Зөвшөөрч хадгалах
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => onCancelProposal(message.id)}
-                >
-                  Болих
-                </Button>
-              </div>
-            )}
+            {message.clarifications.length === 0 && (() => {
+              const proposalMsg = message as ProposalMsg;
+              const createActions = proposal.actions
+                .map((a, i) => ({ action: a, index: i }))
+                .filter(({ action }) => (action.action || "").toLowerCase() === "create");
+
+              function fieldKey(actionIndex: number, field: string) {
+                return `${actionIndex}:${field}`;
+              }
+              function getField(actionIndex: number, field: string, fallback: unknown): string {
+                const k = fieldKey(actionIndex, field);
+                if (k in fieldOverrides) return fieldOverrides[k];
+                const v = (proposal.actions[actionIndex]?.fields ?? {})[field];
+                return v != null ? String(v) : fallback != null ? String(fallback) : "";
+              }
+              function setField(actionIndex: number, field: string, value: string) {
+                setFieldOverrides((prev) => ({ ...prev, [fieldKey(actionIndex, field)]: value }));
+              }
+
+              function buildMessageWithOverrides(): ProposalMsg {
+                if (Object.keys(fieldOverrides).length === 0) return proposalMsg;
+                const newActions = proposalMsg.proposal.actions.map((action, i) => {
+                  const overrideEntries = Object.entries(fieldOverrides)
+                    .filter(([k]) => k.startsWith(`${i}:`))
+                    .map(([k, v]) => [k.slice(k.indexOf(":") + 1), v]);
+                  if (overrideEntries.length === 0) return action;
+                  const newFields = { ...(action.fields ?? {}) };
+                  for (const [field, val] of overrideEntries) {
+                    if (field === "adult_price" || field === "child_price" || field === "seats_total" || field === "seats_left") {
+                      const n = parseFloat(val);
+                      newFields[field] = isNaN(n) ? null : n;
+                    } else if (field === "has_food") {
+                      newFields[field] = val === "true" ? true : val === "false" ? false : null;
+                    } else if (field === "departure_dates") {
+                      newFields[field] = val.split(",").map((d) => d.trim()).filter(Boolean);
+                    } else {
+                      newFields[field] = val;
+                    }
+                  }
+                  return { ...action, fields: newFields };
+                });
+                return {
+                  ...proposalMsg,
+                  proposal: { ...proposalMsg.proposal, actions: newActions },
+                };
+              }
+
+              return (
+                <div className="space-y-3">
+                  {createActions.map(({ action, index }) => {
+                    const f = action.fields ?? {};
+                    return (
+                      <div key={index} className="rounded-lg border border-line bg-surface-sunken p-3 space-y-2.5">
+                        <p className="text-xs font-semibold text-ink-muted">
+                          {createActions.length > 1 ? `Аялал ${index + 1} — засаж хадгалах` : "Аялалын мэдээллийг нөхнэ үү"}
+                        </p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="col-span-2">
+                            <label className="mb-1 block text-xs text-ink-muted">Маршрут нэр</label>
+                            <input
+                              value={getField(index, "route_name", f.route_name)}
+                              onChange={(e) => setField(index, "route_name", e.target.value)}
+                              placeholder="ж: Бээжин аялал"
+                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs text-ink-muted">Оператор</label>
+                            <input
+                              value={getField(index, "operator_name", f.operator_name)}
+                              onChange={(e) => setField(index, "operator_name", e.target.value)}
+                              placeholder="ж: Uudam Travel"
+                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs text-ink-muted">Хугацаа</label>
+                            <input
+                              value={getField(index, "duration_text", f.duration_text)}
+                              onChange={(e) => setField(index, "duration_text", e.target.value)}
+                              placeholder="ж: 5 хоног"
+                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs text-ink-muted">Насанд хүрэгч үнэ (₮)</label>
+                            <input
+                              type="number"
+                              value={getField(index, "adult_price", f.adult_price)}
+                              onChange={(e) => setField(index, "adult_price", e.target.value)}
+                              placeholder="ж: 1890000"
+                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs text-ink-muted">Хүүхдийн үнэ (₮)</label>
+                            <input
+                              type="number"
+                              value={getField(index, "child_price", f.child_price)}
+                              onChange={(e) => setField(index, "child_price", e.target.value)}
+                              placeholder="ж: 1200000 (заавал биш)"
+                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                            />
+                          </div>
+                          <div className="col-span-2">
+                            <label className="mb-1 block text-xs text-ink-muted">Гарах өдрүүд (таслалаар тусгаарла)</label>
+                            <input
+                              value={getField(index, "departure_dates", Array.isArray(f.departure_dates) ? (f.departure_dates as string[]).join(", ") : "")}
+                              onChange={(e) => setField(index, "departure_dates", e.target.value)}
+                              placeholder="ж: 2025-07-15, 2025-07-22"
+                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs text-ink-muted">Нийт суудал</label>
+                            <input
+                              type="number"
+                              value={getField(index, "seats_total", f.seats_total)}
+                              onChange={(e) => setField(index, "seats_total", e.target.value)}
+                              placeholder="заавал биш"
+                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs text-ink-muted">Хоол</label>
+                            <select
+                              value={getField(index, "has_food", f.has_food == null ? "" : String(f.has_food))}
+                              onChange={(e) => setField(index, "has_food", e.target.value)}
+                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                            >
+                              <option value="">Тодорхойгүй</option>
+                              <option value="true">Хоол багтсан</option>
+                              <option value="false">Хоол ороогүй</option>
+                            </select>
+                          </div>
+                          <div className="col-span-2">
+                            <label className="mb-1 block text-xs text-ink-muted">Буудал (заавал биш)</label>
+                            <input
+                              value={getField(index, "hotel", f.hotel)}
+                              onChange={(e) => setField(index, "hotel", e.target.value)}
+                              placeholder="ж: Grand Hotel Beijing"
+                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                            />
+                          </div>
+                          <div className="col-span-2">
+                            <label className="mb-1 block text-xs text-ink-muted">Тэмдэглэл (заавал биш)</label>
+                            <input
+                              value={getField(index, "notes", f.notes)}
+                              onChange={(e) => setField(index, "notes", e.target.value)}
+                              placeholder="нэмэлт мэдээлэл"
+                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="success"
+                      loading={applyBusy}
+                      onClick={() => onApply(buildMessageWithOverrides())}
+                    >
+                      <Icons.check size={15} />
+                      Зөвшөөрч хадгалах
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => onCancelProposal(message.id)}
+                    >
+                      Болих
+                    </Button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 
