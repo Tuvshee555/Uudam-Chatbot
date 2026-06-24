@@ -727,84 +727,61 @@ function buildBatchSourceParts(input: {
   return { parts, sourceLabels };
 }
 
-// Max chars for a single text source before it gets split into chunks.
-// Keeps each Gemini request well under the timeout budget (~45s per batch).
-const MAX_TEXT_CHARS_PER_SOURCE = 60_000;
+// Max chars per individual Gemini call for text-only sources.
+// At 45s timeout, Gemini handles ~30-40k chars comfortably.
+const MAX_TEXT_CHARS_PER_BATCH = 40_000;
 
 /**
- * Splits a large plain-text source into numbered-trip boundary chunks.
- * Looks for lines starting with a number (1., 2., 3. or #1, #2) as split
- * points so each chunk starts at a clean trip boundary. Falls back to
- * splitting at paragraph boundaries if no numbered headings are found.
+ * Splits a large plain-text string into chunks at numbered-trip boundaries
+ * (lines starting with "1.", "2." etc.) so each Gemini call gets a clean
+ * slice. Falls back to hard character slicing if no boundaries found.
  */
-function splitTextSource(
-  label: string,
-  text: string,
-  maxChars: number,
-): Array<{ label: string; contentText: string }> {
-  if (text.length <= maxChars) return [{ label, contentText: text }];
+function splitTextIntoChunks(text: string, maxChars: number): string[] {
+  if (text.length <= maxChars) return [text];
 
-  // Find all numbered-heading positions (e.g. "1.", "12.", "#3")
-  const headingRe = /(?:^|\n)([ \t]*(?:#\s*)?\d{1,2}[\.\)][ \t])/gm;
-  const positions: number[] = [];
+  // Collect positions of numbered headings: "1.", "2.", "12." at line start
+  const positions: number[] = [0];
+  const re = /\n[ \t]*\d{1,2}[.)]/g;
   let m: RegExpExecArray | null;
-  while ((m = headingRe.exec(text)) !== null) {
-    const pos = m.index === 0 ? 0 : m.index + 1; // skip the leading \n
-    if (positions.length === 0 || pos - positions[positions.length - 1] > 100) {
+  while ((m = re.exec(text)) !== null) {
+    const pos = m.index + 1; // position after the \n
+    if (pos - positions[positions.length - 1] > 200) {
       positions.push(pos);
     }
   }
 
-  // Fall back to paragraph boundaries if no numbered headings found
-  if (positions.length < 2) {
-    const paraRe = /\n\n+/g;
-    positions.length = 0;
-    positions.push(0);
-    while ((m = paraRe.exec(text)) !== null) {
-      positions.push(m.index + m[0].length);
-    }
-  }
-
-  const chunks: Array<{ label: string; contentText: string }> = [];
-  let chunkStart = 0;
-  let chunkEnd = 0;
-  let partIndex = 1;
-  const totalParts = Math.ceil(text.length / maxChars); // estimate
+  const chunks: string[] = [];
+  let start = 0;
 
   for (let i = 1; i <= positions.length; i++) {
-    const nextPos = i < positions.length ? positions[i] : text.length;
-    const segmentLength = nextPos - chunkStart;
+    const end = i < positions.length ? positions[i] : text.length;
+    // Flush when accumulated text exceeds limit or we're at the last boundary
+    if (end - start >= maxChars || i === positions.length) {
+      const slice = text.slice(start, end).trim();
+      if (slice) chunks.push(slice);
+      start = end;
+    }
+  }
 
-    // Flush when adding the next segment would exceed the limit, or at the end
-    if ((chunkEnd - chunkStart + segmentLength > maxChars && chunkEnd > chunkStart) || i === positions.length) {
-      const endPos = i === positions.length ? text.length : positions[i - 1];
-      const chunkText = text.slice(chunkStart, endPos).trim();
-      if (chunkText) {
-        const chunkLabel = `${label}.part-${String(partIndex).padStart(3, "0")}-of-${String(totalParts).padStart(3, "0")}.txt`;
-        chunks.push({ label: chunkLabel, contentText: chunkText });
-        partIndex++;
+  // Hard-split any chunk still over the limit (no boundaries found in it)
+  const result: string[] = [];
+  for (const chunk of chunks) {
+    if (chunk.length <= maxChars) {
+      result.push(chunk);
+    } else {
+      for (let i = 0; i < chunk.length; i += maxChars) {
+        result.push(chunk.slice(i, i + maxChars));
       }
-      chunkStart = i < positions.length ? positions[i - 1] : text.length;
-    }
-    chunkEnd = nextPos;
-  }
-
-  // Handle any remainder
-  if (chunkStart < text.length) {
-    const remainder = text.slice(chunkStart).trim();
-    if (remainder) {
-      const chunkLabel = `${label}.part-${String(partIndex).padStart(3, "0")}-of-${String(totalParts).padStart(3, "0")}.txt`;
-      chunks.push({ label: chunkLabel, contentText: remainder });
     }
   }
 
-  return chunks.length > 0 ? chunks : [{ label, contentText: text }];
+  return result.length > 0 ? result : [text];
 }
 
 /**
- * Expands sources by splitting any large text source into sub-chunks so that
- * no single batch request exceeds the model's comfortable context size.
- * Binary (inline) sources are passed through unchanged.
+ * Expands sources: any text source over MAX_TEXT_CHARS_PER_BATCH becomes
+ * multiple labelled sources so chunkProposalSources puts each in its own
+ * batch and they get separate Gemini calls.
  */
 function splitLargeTextSources(
   sources: Array<{
@@ -817,18 +794,17 @@ function splitLargeTextSources(
   const result: typeof sources = [];
   for (const source of sources) {
     const text = source.contentText ?? "";
-    if (!source.inline && text.length > MAX_TEXT_CHARS_PER_SOURCE) {
-      const chunks = splitTextSource(source.label, text, MAX_TEXT_CHARS_PER_SOURCE);
-      for (const chunk of chunks) {
+    if (!source.inline && text.length > MAX_TEXT_CHARS_PER_BATCH) {
+      const chunks = splitTextIntoChunks(text, MAX_TEXT_CHARS_PER_BATCH);
+      const total = chunks.length;
+      chunks.forEach((chunk, idx) => {
         result.push({
-          label: chunk.label,
-          contentText: chunk.contentText,
+          label: `${source.label}.part-${String(idx + 1).padStart(3, "0")}-of-${String(total).padStart(3, "0")}.txt`,
+          contentText: chunk,
           inline: null,
-          // fbAttachmentId maps by original filename — pass it on the first
-          // chunk only; later chunks re-use the same attachment
-          fbAttachmentId: chunk.label.includes(".part-001") ? source.fbAttachmentId : undefined,
+          fbAttachmentId: idx === 0 ? source.fbAttachmentId : undefined,
         });
-      }
+      });
     } else {
       result.push(source);
     }
@@ -845,7 +821,9 @@ function chunkProposalSources(
 ) {
   const MAX_INLINE_SOURCES_PER_BATCH = 2;
   const MAX_INLINE_BYTES_PER_BATCH = 12 * 1024 * 1024;
-  const MAX_TEXT_CHARS_PER_BATCH = 120_000;
+  // Keep this in sync with MAX_TEXT_CHARS_PER_BATCH so pre-split text chunks
+  // don't get merged back into a single oversized batch.
+  const MAX_TEXT_CHARS_PER_BATCH_LOCAL = MAX_TEXT_CHARS_PER_BATCH;
   const batches: Array<typeof sources> = [];
   let current: typeof sources = [];
   let inlineCount = 0;
@@ -870,7 +848,7 @@ function chunkProposalSources(
       current.length > 0 &&
       (inlineCount + sourceInlineCount > MAX_INLINE_SOURCES_PER_BATCH ||
         inlineBytes + sourceInlineBytes > MAX_INLINE_BYTES_PER_BATCH ||
-        textChars + sourceTextChars > MAX_TEXT_CHARS_PER_BATCH);
+        textChars + sourceTextChars > MAX_TEXT_CHARS_PER_BATCH_LOCAL);
 
     if (exceedsCurrentBatch) {
       flush();
