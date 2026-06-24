@@ -48,6 +48,7 @@ export function JsonEditorTab({ apiFetch, onSaved }: Props) {
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [copiedJson, setCopiedJson] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const lineNumRef = useRef<HTMLDivElement>(null);
 
   const loadTrips = useCallback(async () => {
     setLoading(true);
@@ -225,23 +226,43 @@ export function JsonEditorTab({ apiFetch, onSaved }: Props) {
         <span className="ml-auto text-xs text-ink-subtle">{json.split("\n").length} мөр</span>
       </div>
 
-      {/* Dark JSON editor */}
-      <div className="relative">
+      {/* Dark JSON editor with line numbers */}
+      <div
+        className={cx(
+          "relative flex overflow-hidden rounded-xl border bg-[#1e1e2e]",
+          parseError ? "border-danger" : "border-line-strong",
+        )}
+        style={{ minHeight: "65vh" }}
+      >
         {loading && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-black/40">
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/40">
             <Spinner className="h-8 w-8 text-white" />
           </div>
         )}
+        {/* Line numbers */}
+        <div
+          ref={lineNumRef}
+          aria-hidden
+          className="select-none overflow-hidden border-r border-white/10 bg-[#181825] px-3 py-3 text-right font-mono text-[13px] leading-relaxed text-[#585b70]"
+          style={{ minWidth: "3.2rem" }}
+        >
+          {json.split("\n").map((_, i) => (
+            <div key={i}>{i + 1}</div>
+          ))}
+        </div>
+        {/* Editor */}
         <textarea
           ref={textareaRef}
           value={json}
           onChange={(e) => handleChange(e.target.value)}
+          onScroll={() => {
+            if (lineNumRef.current && textareaRef.current) {
+              lineNumRef.current.scrollTop = textareaRef.current.scrollTop;
+            }
+          }}
           spellCheck={false}
-          className={cx(
-            "w-full rounded-xl border bg-[#1e1e2e] px-4 py-3 font-mono text-[13px] leading-relaxed text-[#cdd6f4] outline-none focus:ring-2 focus:ring-brand/40",
-            parseError ? "border-danger" : "border-line-strong",
-          )}
-          style={{ minHeight: "65vh", resize: "vertical" }}
+          className="flex-1 resize-none bg-transparent px-4 py-3 font-mono text-[13px] leading-relaxed text-[#cdd6f4] outline-none"
+          style={{ minHeight: "65vh" }}
           placeholder="ChatGPT-ийн JSON-ийг энд paste хийнэ үү..."
         />
       </div>
