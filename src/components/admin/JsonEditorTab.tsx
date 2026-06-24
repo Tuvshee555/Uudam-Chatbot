@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Card, Icons, Spinner, cx } from "@/components/ui";
-import { SectionHeading } from "./AdminShared";
 
 type Props = {
   apiFetch: (url: string, init?: RequestInit) => Promise<Response>;
@@ -9,12 +8,45 @@ type Props = {
 
 type SaveResult = { saved: number; failed: number; errors: string[] };
 
+const GPT_PROMPT =
+  `Доорх JSON нь манай аялалын компанийн бүх аяллын жагсаалт. Та дараах зүйлийг хийнэ үү:
+
+1. Аялал бүрт "price_groups" талбарыг нэм. Хэрэв аялал огноо тус бүрт өөр өөр үнэтэй бол тус тусад нь бич. Жишээ:
+   "price_groups": [
+     { "label": "6 сарын үнэ", "dates": ["6 сарын 27"], "adult_price": 3590000, "child_price": 3260000, "infant_price": null, "child_age": "2-12 нас", "infant_age": "0-2 нас", "note": "" },
+     { "label": "7/8 сарын үнэ", "dates": ["7 сарын 18", "8 сарын 8"], "adult_price": 3660000, "child_price": 3260000, "infant_price": null, "child_age": "2-12 нас", "infant_age": "0-2 нас", "note": "" }
+   ]
+
+2. Аялал бүрт "discounts" талбарыг нэм (хямдрал байвал). Жишээ:
+   "discounts": [
+     { "label": "Эрт захиалгын хямдрал", "dates": [], "adult_price": 2550000, "child_price": 2250000, "infant_price": null, "condition": "7 хоногийн өмнө захиалбал", "note": "" }
+   ]
+
+3. Аялал бүрт "aliases" талбарыг нэм — хэрэглэгчид хэрхэн хайдаг болохыг бод. Жишээ:
+   "aliases": ["Шанхай Жанжиажэ", "Шанхай Тэнгэрийн хаалга"]
+
+4. Аялал бүрт "child_rules" талбарыг нэм (хүүхдийн насны ангилал байвал). Жишээ:
+   "child_rules": [
+     { "label": "Хүүхэд", "age_range": "2-12 нас", "price": 2790000, "note": "" },
+     { "label": "Нярай", "age_range": "0-2 нас", "price": 490000, "note": "" }
+   ]
+
+5. "important_notes" талбарт чухал мэдээллийг нэм (виз, паспорт, нэмэлт зардал гэх мэт).
+
+6. ЧУХАЛ: id, route_name, operator_name болон бусад одоо байгаа талбаруудыг ӨӨРЧЛӨХГҮЙ орхино уу. Зөвхөн дээрх шинэ талбаруудыг нэм.
+
+7. Хариултаа зөвхөн цэвэр JSON хэлбэрээр өгнө үү. Тайлбар, markdown, \`\`\`json тэмдэглэгээ хэрэглэхгүй.
+
+Аяллын мэдээлэл:`;
+
 export function JsonEditorTab({ apiFetch, onSaved }: Props) {
   const [json, setJson] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
   const [saveResult, setSaveResult] = useState<SaveResult | null>(null);
+  const [copiedPrompt, setCopiedPrompt] = useState(false);
+  const [copiedJson, setCopiedJson] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const loadTrips = useCallback(async () => {
@@ -26,7 +58,7 @@ export function JsonEditorTab({ apiFetch, onSaved }: Props) {
       const data = await res.json() as { trips: unknown[] };
       setJson(JSON.stringify(data.trips, null, 2));
     } catch {
-      setJson("// Татаж чадсангүй");
+      setJson("");
     } finally {
       setLoading(false);
     }
@@ -50,14 +82,13 @@ export function JsonEditorTab({ apiFetch, onSaved }: Props) {
       setParseError(`JSON алдаа: ${e instanceof Error ? e.message : String(e)}`);
       return;
     }
-    // Accept either an array directly or { trips: [...] }
     const trips = Array.isArray(parsed)
       ? parsed
       : (parsed && typeof parsed === "object" && Array.isArray((parsed as Record<string, unknown>).trips))
         ? (parsed as Record<string, unknown>).trips as unknown[]
         : null;
     if (!trips) {
-      setParseError("JSON нь array эсвэл { trips: [...] } хэлбэртэй байх ёстой.");
+      setParseError("JSON нь [ ] array хэлбэртэй байх ёстой.");
       return;
     }
     setSaving(true);
@@ -77,74 +108,128 @@ export function JsonEditorTab({ apiFetch, onSaved }: Props) {
     }
   }
 
-  function handleFormat() {
-    try {
-      setJson(JSON.stringify(JSON.parse(json), null, 2));
-      setParseError(null);
-    } catch (e) {
-      setParseError(`JSON алдаа: ${e instanceof Error ? e.message : String(e)}`);
-    }
+  function copyJson() {
+    void navigator.clipboard.writeText(json).then(() => {
+      setCopiedJson(true);
+      setTimeout(() => setCopiedJson(false), 2000);
+    });
   }
 
-  function handleCopy() {
-    void navigator.clipboard.writeText(json);
+  function downloadJson() {
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `uudam-trips-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
-  const lineCount = json.split("\n").length;
+  function copyPrompt() {
+    void navigator.clipboard.writeText(GPT_PROMPT + "\n\n" + json).then(() => {
+      setCopiedPrompt(true);
+      setTimeout(() => setCopiedPrompt(false), 2500);
+    });
+  }
 
   function tripCount() {
     try {
       const p = JSON.parse(json) as unknown;
       if (Array.isArray(p)) return p.length;
-      if (p && typeof p === "object" && Array.isArray((p as Record<string, unknown>).trips)) {
+      if (p && typeof p === "object" && Array.isArray((p as Record<string, unknown>).trips))
         return ((p as Record<string, unknown>).trips as unknown[]).length;
-      }
     } catch { /* ignore */ }
     return null;
   }
 
+  const count = tripCount();
+
   return (
     <div className="space-y-4">
+      {/* How-to steps */}
       <Card className="p-4">
-        <SectionHeading
-          title="JSON засварлагч"
-          description="Бүх аяллын өгөгдлийг JSON хэлбэрээр харж, засварлаж, ChatGPT-ийн гаралтыг paste хийгээд хадгална уу."
-        />
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="secondary" onClick={() => void loadTrips()} disabled={loading || saving}>
-            <Icons.refresh size={14} />
-            Дахин татах
-          </Button>
-          <Button size="sm" variant="secondary" onClick={handleFormat} disabled={loading || saving}>
-            Формат хийх
-          </Button>
-          <Button size="sm" variant="secondary" onClick={handleCopy} disabled={loading || saving}>
-            Копилох
-          </Button>
-          <span className="ml-auto text-xs text-ink-subtle">{lineCount} мөр</span>
-        </div>
+        <p className="mb-3 text-sm font-semibold text-ink">ChatGPT ашиглан өгөгдөл нэмэх — алхам алхмаар</p>
+        <ol className="space-y-3">
+          <li className="flex gap-3">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand text-xs font-bold text-white">1</span>
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-ink">ChatGPT-д зааврыг хуулж илгээнэ</p>
+              <p className="text-xs text-ink-subtle mt-0.5">Дараах товч нь ChatGPT-д илгээх бүрэн зааврыг + манай өгөгдлийг нэг дор хуулна.</p>
+              <Button
+                size="sm"
+                variant={copiedPrompt ? "success" : "primary"}
+                className="mt-2"
+                disabled={loading || !json.trim()}
+                onClick={copyPrompt}
+              >
+                {copiedPrompt ? "✓ Хуулагдлаа! ChatGPT-д paste хийнэ үү" : "ChatGPT-д илгээх зааврыг хуулах"}
+              </Button>
+            </div>
+          </li>
+          <li className="flex gap-3">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand text-xs font-bold text-white">2</span>
+            <div>
+              <p className="text-sm font-medium text-ink">ChatGPT хариултаа өгнө</p>
+              <p className="text-xs text-ink-subtle mt-0.5">ChatGPT price_groups, discounts, aliases, child_rules талбаруудыг нэмсэн JSON буцааж өгнө. Хариулт бүхлээрээ JSON байх ёстой.</p>
+            </div>
+          </li>
+          <li className="flex gap-3">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand text-xs font-bold text-white">3</span>
+            <div>
+              <p className="text-sm font-medium text-ink">ChatGPT-ийн JSON-ийг доорх хэсэгт paste хийнэ</p>
+              <p className="text-xs text-ink-subtle mt-0.5">Доорх харанхуй хэсэгт бүх текстийг устгаж (Ctrl+A → Delete), ChatGPT-ийн хариултыг paste хийнэ (Ctrl+V).</p>
+            </div>
+          </li>
+          <li className="flex gap-3">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand text-xs font-bold text-white">4</span>
+            <div>
+              <p className="text-sm font-medium text-ink">"Мэдээлэл хадгалах" товч дарна</p>
+              <p className="text-xs text-ink-subtle mt-0.5">Бүх аяллын өгөгдөл нэг дор шинэчлэгдэнэ. Бот тэр даруй зөв хариулж эхэлнэ.</p>
+            </div>
+          </li>
+        </ol>
       </Card>
 
-      {parseError && (
-        <Alert tone="danger">{parseError}</Alert>
-      )}
+      {parseError && <Alert tone="danger">{parseError}</Alert>}
 
       {saveResult && (
         <Alert tone={saveResult.failed > 0 ? "warning" : "success"}>
-          {saveResult.saved} аялал хадгалагдлаа.
-          {saveResult.failed > 0 && ` ${saveResult.failed} алдаатай:`}
-          {saveResult.errors.length > 0 && (
-            <ul className="mt-1 list-disc pl-4 text-xs">
-              {saveResult.errors.map((e, i) => <li key={i}>{e}</li>)}
-            </ul>
+          ✓ {saveResult.saved} аялал амжилттай хадгалагдлаа!
+          {saveResult.failed > 0 && (
+            <>
+              {" "}{saveResult.failed} алдаатай:
+              <ul className="mt-1 list-disc pl-4 text-xs">
+                {saveResult.errors.map((e, i) => <li key={i}>{e}</li>)}
+              </ul>
+            </>
           )}
         </Alert>
       )}
 
+      {/* Editor toolbar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-ink">
+          {loading ? "Татаж байна…" : count != null ? `${count} аялал` : "Өгөгдөл"}
+        </span>
+        <Button size="sm" variant="secondary" onClick={() => void loadTrips()} disabled={loading || saving}>
+          <Icons.refresh size={13} />
+          Дахин татах
+        </Button>
+        <Button size="sm" variant="secondary" onClick={copyJson} disabled={loading || !json.trim()}>
+          {copiedJson ? "✓ Хуулагдлаа" : "JSON хуулах"}
+        </Button>
+        <Button size="sm" variant="secondary" onClick={downloadJson} disabled={loading || !json.trim()}>
+          <Icons.download size={13} />
+          Файл татах
+        </Button>
+        <span className="ml-auto text-xs text-ink-subtle">{json.split("\n").length} мөр</span>
+      </div>
+
+      {/* Dark JSON editor */}
       <div className="relative">
         {loading && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-surface/80">
-            <Spinner className="h-8 w-8 text-brand" />
+          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-black/40">
+            <Spinner className="h-8 w-8 text-white" />
           </div>
         )}
         <textarea
@@ -156,35 +241,26 @@ export function JsonEditorTab({ apiFetch, onSaved }: Props) {
             "w-full rounded-xl border bg-[#1e1e2e] px-4 py-3 font-mono text-[13px] leading-relaxed text-[#cdd6f4] outline-none focus:ring-2 focus:ring-brand/40",
             parseError ? "border-danger" : "border-line-strong",
           )}
-          style={{ minHeight: "60vh", resize: "vertical" }}
-          placeholder='[{"route_name": "...", "adult_price": 1000000, ...}]'
+          style={{ minHeight: "65vh", resize: "vertical" }}
+          placeholder="ChatGPT-ийн JSON-ийг энд paste хийнэ үү..."
         />
       </div>
 
-      <div className="flex items-center gap-3">
+      {/* Save button — prominent */}
+      <div className="sticky bottom-0 flex items-center gap-3 rounded-xl border border-line bg-surface p-3 shadow-sm">
         <Button
           loading={saving}
           disabled={loading || !json.trim()}
           onClick={() => void handleSave()}
+          className="px-6"
         >
           <Icons.download size={14} />
-          {tripCount() != null ? `Хадгалах (${tripCount()} аялал)` : "Хадгалах"}
+          {count != null ? `Мэдээлэл хадгалах (${count} аялал)` : "Мэдээлэл хадгалах"}
         </Button>
         <p className="text-xs text-ink-subtle">
-          ID бүхий аяллууд шинэчлэгдэнэ. ID-гүй бол шинэ аялал нэмэгдэнэ.
+          ID бүхий аяллууд шинэчлэгдэнэ · ID-гүй бол шинэ аялал нэмэгдэнэ
         </p>
       </div>
-
-      <Card className="p-4">
-        <p className="mb-2 text-sm font-semibold text-ink">ChatGPT-д өгөх заавар</p>
-        <div className="rounded-lg bg-surface-sunken p-3 text-xs text-ink-muted leading-relaxed">
-          <p className="font-medium text-ink mb-1">Дараах мессежийг ChatGPT-д илгээнэ үү:</p>
-          <p className="italic text-ink-subtle">
-            "Доорх JSON өгөгдлийг засаж өгнө үү. price_groups (огноо тус бүрийн үнэ), discounts (хямдрал), child_rules (хүүхдийн насны ангилал), aliases (өөр нэршил) талбаруудыг нэмнэ үү. Бусад талбарыг өөрчлөхгүй орхиж, JSON форматаар буцааж өгнө үү."
-          </p>
-          <p className="mt-2 text-ink-subtle">→ Копилсон JSON-ийг paste хийнэ → GPT хариулна → GPT-ийн хариултыг энд paste хийж Хадгалах дарна.</p>
-        </div>
-      </Card>
     </div>
   );
 }
