@@ -3,6 +3,7 @@ import { getEnv } from "./env";
 import {
   classifyError,
   logError,
+  logInfo,
   logWarn,
   recordCounter,
 } from "./observability";
@@ -64,9 +65,13 @@ const FILE_PARSE_VERIFY_TIMEOUT_MS = 45_000;
 // Respect the env timeout directly (don't force a 60s floor) so a low
 // GEMINI_TIMEOUT_MS actually makes parsing fail-fast instead of hanging.
 const FILE_PARSE_GEMINI_TIMEOUT_MS = env.geminiTimeoutMs;
-const FILE_PARSE_GEMINI_MAX_RETRIES = Math.min(env.geminiMaxRetries, 1);
-const FILE_PARSE_BATCH_DELAY_MS = 800;
-const FILE_PARSE_TOTAL_BUDGET_MS = 120_000;
+// One retry max for file parsing — a 45s timeout retried twice burns 90s+
+// before falling back. Keep it to a single attempt per batch.
+const FILE_PARSE_GEMINI_MAX_RETRIES = 0;
+const FILE_PARSE_BATCH_DELAY_MS = 500;
+// The parse-file route allows maxDuration: 180s; budget most of it so a
+// multi-chunk DOCX (5-6 batches) can finish all batches in one request.
+const FILE_PARSE_TOTAL_BUDGET_MS = 165_000;
 const FILE_PARSE_MIN_BATCH_TIMEOUT_MS = 8_000;
 const FILE_PARSE_REPAIR_TIMEOUT_MS = 15_000;
 
@@ -727,43 +732,67 @@ function buildBatchSourceParts(input: {
   return { parts, sourceLabels };
 }
 
-// Max chars per individual Gemini call for text-only sources.
-// At 45s timeout, Gemini handles ~30-40k chars comfortably.
-const MAX_TEXT_CHARS_PER_BATCH = 40_000;
+// Max chars per individual Gemini call for text-only sources. JSON-mode
+// structured extraction on Flash is slow, so keep each call small.
+const MAX_TEXT_CHARS_PER_BATCH = 18_000;
+// Max numbered trips per chunk. Even a small char count can hold many trips,
+// and emitting 29 trip JSON objects in one call blows past the 45s timeout.
+const MAX_TRIPS_PER_CHUNK = 6;
+
+/** Counts numbered-heading lines ("1.", "2.", "12)") in the text. */
+function countNumberedTrips(text: string): number {
+  const matches = text.match(/(?:^|\n)[ \t]*\d{1,2}[.)]/g);
+  return matches ? matches.length : 0;
+}
 
 /**
- * Splits a large plain-text string into chunks at numbered-trip boundaries
- * (lines starting with "1.", "2." etc.) so each Gemini call gets a clean
- * slice. Falls back to hard character slicing if no boundaries found.
+ * Splits a plain-text string into chunks at numbered-trip boundaries
+ * ("1.", "2." …). Each chunk holds at most MAX_TRIPS_PER_CHUNK trips and
+ * stays under maxChars. Falls back to hard char slicing if no boundaries.
  */
 function splitTextIntoChunks(text: string, maxChars: number): string[] {
-  if (text.length <= maxChars) return [text];
-
-  // Collect positions of numbered headings: "1.", "2.", "12." at line start
+  // Collect positions of numbered headings (each starts a new trip block)
   const positions: number[] = [0];
   const re = /\n[ \t]*\d{1,2}[.)]/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
-    const pos = m.index + 1; // position after the \n
-    if (pos - positions[positions.length - 1] > 200) {
+    const pos = m.index + 1; // position right after the \n
+    if (pos - positions[positions.length - 1] > 100) {
       positions.push(pos);
     }
   }
 
+  // No numbered structure → fall back to plain char slicing.
+  if (positions.length < 2) {
+    if (text.length <= maxChars) return [text];
+    const out: string[] = [];
+    for (let i = 0; i < text.length; i += maxChars) {
+      out.push(text.slice(i, i + maxChars));
+    }
+    return out;
+  }
+
+  // Walk trip boundaries, flushing when a chunk reaches the trip cap OR the
+  // char cap. positions[i] is the start of trip i; text.length ends the last.
   const chunks: string[] = [];
   let start = 0;
+  let tripsInChunk = 0;
 
   for (let i = 1; i <= positions.length; i++) {
     const end = i < positions.length ? positions[i] : text.length;
-    // Flush when accumulated text exceeds limit or we're at the last boundary
-    if (end - start >= maxChars || i === positions.length) {
+    tripsInChunk++;
+    const chunkLen = end - start;
+    const atEnd = i === positions.length;
+
+    if (tripsInChunk >= MAX_TRIPS_PER_CHUNK || chunkLen >= maxChars || atEnd) {
       const slice = text.slice(start, end).trim();
       if (slice) chunks.push(slice);
       start = end;
+      tripsInChunk = 0;
     }
   }
 
-  // Hard-split any chunk still over the limit (no boundaries found in it)
+  // Hard-split any chunk still over the char limit.
   const result: string[] = [];
   for (const chunk of chunks) {
     if (chunk.length <= maxChars) {
@@ -779,9 +808,9 @@ function splitTextIntoChunks(text: string, maxChars: number): string[] {
 }
 
 /**
- * Expands sources: any text source over MAX_TEXT_CHARS_PER_BATCH becomes
- * multiple labelled sources so chunkProposalSources puts each in its own
- * batch and they get separate Gemini calls.
+ * Expands sources: a text source that is either large (> MAX_TEXT_CHARS_PER_BATCH)
+ * OR holds many numbered trips (> MAX_TRIPS_PER_CHUNK) is split into multiple
+ * labelled sources so each gets its own fast Gemini call.
  */
 function splitLargeTextSources(
   sources: Array<{
@@ -794,9 +823,21 @@ function splitLargeTextSources(
   const result: typeof sources = [];
   for (const source of sources) {
     const text = source.contentText ?? "";
-    if (!source.inline && text.length > MAX_TEXT_CHARS_PER_BATCH) {
+    const tripCount = countNumberedTrips(text);
+    const needsSplit =
+      !source.inline &&
+      (text.length > MAX_TEXT_CHARS_PER_BATCH || tripCount > MAX_TRIPS_PER_CHUNK);
+
+    if (needsSplit) {
       const chunks = splitTextIntoChunks(text, MAX_TEXT_CHARS_PER_BATCH);
       const total = chunks.length;
+      logInfo("travel.ai.text_source_split", {
+        source: "travel.ops.file_parse",
+        label: source.label,
+        textChars: text.length,
+        tripCount,
+        chunkCount: total,
+      });
       chunks.forEach((chunk, idx) => {
         result.push({
           label: `${source.label}.part-${String(idx + 1).padStart(3, "0")}-of-${String(total).padStart(3, "0")}.txt`,
@@ -844,9 +885,13 @@ function chunkProposalSources(
     const sourceInlineBytes = estimateInlineBytes(source.inline?.data);
     const sourceInlineCount = source.inline ? 1 : 0;
     const sourceTextChars = source.contentText?.length ?? 0;
+    // A pre-split chunk (".part-NNN-of-NNN") must occupy its OWN batch so two
+    // small chunks are never merged back into one big trips-per-call request.
+    const isPreSplitChunk = /\.part-\d{3}-of-\d{3}\.txt$/.test(source.label);
     const exceedsCurrentBatch =
       current.length > 0 &&
-      (inlineCount + sourceInlineCount > MAX_INLINE_SOURCES_PER_BATCH ||
+      (isPreSplitChunk ||
+        inlineCount + sourceInlineCount > MAX_INLINE_SOURCES_PER_BATCH ||
         inlineBytes + sourceInlineBytes > MAX_INLINE_BYTES_PER_BATCH ||
         textChars + sourceTextChars > MAX_TEXT_CHARS_PER_BATCH_LOCAL);
 
@@ -858,6 +903,12 @@ function chunkProposalSources(
     inlineCount += sourceInlineCount;
     inlineBytes += sourceInlineBytes;
     textChars += sourceTextChars;
+
+    // Close the batch immediately after a pre-split chunk so the next chunk
+    // starts fresh in its own batch.
+    if (isPreSplitChunk) {
+      flush();
+    }
   }
 
   flush();
@@ -1399,8 +1450,9 @@ export async function generateAIProposalFromContentBatched(input: {
           },
         ];
 
-  // Split any large text source (e.g. a 29-trip DOCX) into sub-chunks so
-  // Gemini never has to process more than MAX_TEXT_CHARS_PER_SOURCE at once.
+  // Split any large/multi-trip text source (e.g. a 29-trip DOCX) into
+  // sub-chunks so each Gemini call only extracts a handful of trips and
+  // finishes well within the per-batch timeout.
   const sources = splitLargeTextSources(rawSources);
 
   // Build a label → attachment_id map for post-processing.
