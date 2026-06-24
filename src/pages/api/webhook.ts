@@ -12,7 +12,7 @@ import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, sanitizeAss
 import { isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
-import { buildCompareReply, buildSeatsReply, buildSmartButtons, hasCompareIntent, hasSeatsIntent, } from "../../lib/travelFastPaths";
+import { buildCompareReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, hasCompareIntent, hasSeatsIntent, } from "../../lib/travelFastPaths";
 import { extractTripBrochureAttachmentId, extractTripPhotosForReply, getActiveSeason, isFirstMessage, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
@@ -1372,8 +1372,14 @@ async function handleMessage(
   await appendMessage(sessionId, "user", text);
   async function recordFreshBookingLead() {
   }
+  let cachedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
+  const getTrips = async () => {
+    if (cachedTrips) return cachedTrips;
+    cachedTrips = await listTrips({ limit: 5000 });
+    return cachedTrips;
+  };
   if (hasDepartureDateAvailabilityIntent(text)) {
-    const trips = await listTrips({ limit: 5000 });
+    const trips = await getTrips();
     const dateAvailabilityReply = buildDepartureDateAvailabilityReply({
       userText: text,
       trips,
@@ -1435,7 +1441,7 @@ async function handleMessage(
     }
   }
   if (hasSeatsIntent(text)) {
-    const trips = await listTrips({ limit: 5000 });
+    const trips = await getTrips();
     const seatsReply = buildSeatsReply(text, trips);
     if (seatsReply) {
       const safeSeatsReply = enforceWebsiteForPayment(sanitizeAssistantReply(seatsReply));
@@ -1463,7 +1469,7 @@ async function handleMessage(
     }
   }
   if (hasCompareIntent(text)) {
-    const trips = await listTrips({ limit: 5000 });
+    const trips = await getTrips();
     const compareReply = buildCompareReply(text, trips);
     if (compareReply) {
       const safeCompareReply = enforceWebsiteForPayment(sanitizeAssistantReply(compareReply));
@@ -1487,6 +1493,36 @@ async function handleMessage(
       } catch {
       }
       recordCounter("webhook.compare_fast_path_total", 1, { platform });
+      return;
+    }
+  }
+  {
+    const trips = await getTrips();
+    const structuredTripReply = buildStructuredTripReply(text, trips);
+    if (structuredTripReply) {
+      const safeStructuredReply = enforceWebsiteForPayment(
+        sanitizeAssistantReply(structuredTripReply),
+      );
+      await assertLockHealthy();
+      const delivered = await sendPlatformMessage(
+        platform,
+        senderId,
+        safeStructuredReply,
+        token,
+        pageId,
+        igUserId,
+        trace,
+        { allowFallback: false },
+      );
+      if (!delivered) {
+        throw new RetryableWebhookError("delivery_failed:structured_trip_fast_path");
+      }
+      try {
+        await appendMessage(sessionId, "assistant", safeStructuredReply);
+        await setLastReplyConsistent(sessionId, safeStructuredReply);
+      } catch {
+      }
+      recordCounter("webhook.trip_fast_path_total", 1, { platform });
       return;
     }
   }
