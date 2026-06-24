@@ -179,57 +179,58 @@ export function BotTab({
     const name = row ? displayName(row) : shortId(selectedSender);
     return (
       <div className="space-y-3">
-        <div className="flex items-center gap-2">
+        {/* Header */}
+        <div className="flex items-center gap-3 rounded-2xl border border-line bg-surface px-4 py-3">
           <button
             type="button"
             onClick={() => setSelectedSender(null)}
-            className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-sm text-ink-muted hover:border-brand hover:text-brand"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-line bg-surface-sunken text-ink-muted hover:border-brand hover:text-brand active:scale-95"
           >
-            <Icons.chevronLeft size={14} />
-            Буцах
+            <Icons.chevronLeft size={18} />
           </button>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-ink">{name}</p>
-            {row?.display_name && (
-              <p className="font-mono text-[11px] text-ink-subtle">{shortId(selectedSender)}</p>
-            )}
-            {row && (
-              <p className="text-xs text-ink-subtle">Сүүлд: {formatTime(row.last_seen)}</p>
-            )}
+            <p className="truncate font-semibold text-ink">{name}</p>
+            <p className="text-xs text-ink-subtle">
+              <span className="font-mono opacity-50">{shortId(selectedSender)}</span>
+              {row && <><span className="mx-1 opacity-30">·</span>{formatTime(row.last_seen)}</>}
+            </p>
           </div>
-          <div className="flex items-center gap-2">
-            {wantsHuman && <Badge tone="warning">🙋 Хүн хүсэв</Badge>}
-            {isPaused ? (
-              <Button
-                size="sm"
-                variant="success"
-                disabled={busyKey === `resume:${selectedSender}`}
-                onClick={() => onPauseAction("resume", selectedSender)}
-              >
-                Бот сэргээх
-              </Button>
-            ) : (
-              <div className="flex flex-wrap gap-1">
-                {DURATIONS.map((d) => (
-                  <button
-                    key={d.label}
-                    type="button"
-                    disabled={busyKey === `pause:${selectedSender}`}
-                    onClick={() => onPauseAction("pause", selectedSender, d.ms)}
-                    className="rounded-md border border-line-strong bg-surface px-2 py-1 text-xs text-ink-muted hover:border-danger hover:text-danger disabled:opacity-50"
-                  >
-                    {d.label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          {wantsHuman && <Badge tone="warning">🙋 Хүн хүсэв</Badge>}
         </div>
 
+        {/* Big pause/resume button — easy to tap on phone */}
+        {isPaused ? (
+          <button
+            type="button"
+            disabled={busyKey === `resume:${selectedSender}`}
+            onClick={() => onPauseAction("resume", selectedSender)}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl border border-success/50 bg-success/10 py-4 text-base font-bold text-success hover:bg-success/20 active:scale-[0.98] disabled:opacity-50"
+          >
+            ▶ Бот сэргээх
+          </button>
+        ) : (
+          <div className="rounded-2xl border border-danger/30 bg-danger/5 p-3">
+            <p className="mb-2 text-center text-xs font-semibold text-danger">⏸ Бот зогсоох</p>
+            <div className="grid grid-cols-3 gap-2">
+              {DURATIONS.map((d) => (
+                <button
+                  key={d.label}
+                  type="button"
+                  disabled={busyKey === `pause:${selectedSender}`}
+                  onClick={() => onPauseAction("pause", selectedSender, d.ms)}
+                  className="rounded-xl border border-danger/40 bg-white py-3 text-sm font-semibold text-danger hover:bg-danger/10 active:scale-95 disabled:opacity-50"
+                >
+                  {d.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {isPaused && (
-          <div className="flex items-center gap-2 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger">
+          <div className="flex items-center gap-2 rounded-xl border border-danger/30 bg-danger/5 px-3 py-2.5 text-sm text-danger">
             <Icons.pause size={14} className="shrink-0" />
-            Бот энэ хэрэглэгчид түр зогссон байна. Та гараар хариулж болно.
+            Бот зогссон — та Messenger дээр гараар хариулж болно.
           </div>
         )}
 
@@ -240,9 +241,11 @@ export function BotTab({
             </div>
           )}
           {!chatLoading && chatHistory.length === 0 && (
-            <div className="flex flex-col items-center gap-1 py-6">
-              <p className="text-sm text-ink-subtle">Сүүлийн яриа байхгүй байна.</p>
-              <p className="text-xs text-ink-subtle opacity-60">2 цаг идэвхгүй байсан бол түүх арилдаг.</p>
+            <div className="flex flex-col items-center gap-1.5 py-8 text-center">
+              <p className="text-sm font-medium text-ink-subtle">Яриа харагдахгүй байна</p>
+              <p className="max-w-xs text-xs text-ink-subtle opacity-60">
+                Яриа 2 цагийн дараа автоматаар арилдаг. Эсвэл хэрэглэгч шинэ мессеж илгээсний дараа харагдана.
+              </p>
             </div>
           )}
           {!chatLoading && chatHistory.length > 0 && (
@@ -454,50 +457,63 @@ export function BotTab({
             );
             const wantsHuman = handoffIds.has(row.sender_id);
             const name = displayName(row);
+            const isRenaming = renamingId === row.sender_id;
             return (
               <div
                 key={row.sender_id}
                 className={cx(
-                  "rounded-xl border p-3 transition-colors",
+                  "rounded-2xl border transition-colors",
                   wantsHuman
-                    ? "border-warning/40 bg-warning-soft"
+                    ? "border-warning/50 bg-warning-soft"
                     : isPaused
-                      ? "border-danger/30 bg-danger/5"
-                      : "border-line bg-surface-sunken",
+                      ? "border-danger/40 bg-danger/5"
+                      : "border-line bg-surface",
                 )}
               >
+                {/* Top row — name + status badges + chevron */}
                 <div
-                  className="flex cursor-pointer items-center justify-between gap-2"
+                  className="flex cursor-pointer items-center gap-3 px-4 py-3.5"
                   onClick={() => openChat(row.sender_id)}
                 >
+                  {/* Avatar circle */}
+                  <div className={cx(
+                    "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold",
+                    wantsHuman ? "bg-warning/20 text-warning" :
+                    isPaused ? "bg-danger/15 text-danger" :
+                    "bg-brand/10 text-brand",
+                  )}>
+                    {name.slice(0, 1).toUpperCase()}
+                  </div>
                   <div className="min-w-0 flex-1">
-                    <p className="flex items-center gap-1.5 truncate text-sm font-semibold text-ink">
-                      {name}
+                    <p className="flex flex-wrap items-center gap-1.5 text-sm font-semibold text-ink">
+                      <span className="truncate">{name}</span>
                       {wantsHuman && (
-                        <span className="shrink-0 rounded-full bg-warning px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                          🙋 хүн хүсэв
+                        <span className="shrink-0 rounded-full bg-warning px-2 py-0.5 text-[10px] font-semibold text-white">
+                          🙋 Хүн хүсэв
                         </span>
                       )}
                       {isPaused && (
-                        <span className="shrink-0 rounded-full bg-danger px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                          бот зогссон
+                        <span className="shrink-0 rounded-full bg-danger px-2 py-0.5 text-[10px] font-semibold text-white">
+                          ⏸ Зогссон
                         </span>
                       )}
                     </p>
                     <p className="mt-0.5 text-xs text-ink-subtle">
-                      <span className="mr-2 font-mono opacity-60">{shortId(row.sender_id)}</span>
+                      <span className="font-mono opacity-50">{shortId(row.sender_id)}</span>
+                      <span className="mx-1.5 opacity-30">·</span>
                       {formatTime(row.last_seen)}
-                      {isPaused && pauseRow
-                        ? ` · ${tick >= 0 ? timeLeft(pauseRow.expires_at) : ""}`
+                      {isPaused && pauseRow && tick >= 0
+                        ? <span className="ml-1.5 font-medium text-danger">{timeLeft(pauseRow.expires_at)}</span>
                         : ""}
                     </p>
                   </div>
-                  <Icons.chevronRight size={14} className="shrink-0 text-ink-subtle" />
+                  <Icons.chevronRight size={16} className="shrink-0 text-ink-subtle" />
                 </div>
+
                 {/* Rename inline */}
-                {renamingId === row.sender_id ? (
+                {isRenaming && (
                   <div
-                    className="mt-2 flex items-center gap-1.5 border-t border-line/50 pt-2"
+                    className="flex items-center gap-2 border-t border-line/40 px-4 py-3"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <input
@@ -509,40 +525,41 @@ export function BotTab({
                         if (e.key === "Escape") { setRenamingId(null); setRenameValue(""); }
                       }}
                       placeholder="Нэр оруулна уу…"
-                      className="min-w-0 flex-1 rounded-lg border border-brand/40 bg-surface px-2.5 py-1 text-xs text-ink outline-none focus:border-brand"
+                      className="min-w-0 flex-1 rounded-xl border border-brand/40 bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-brand"
                     />
                     <button
                       type="button"
                       disabled={renameLoading}
                       onClick={() => void saveRename(row.sender_id)}
-                      className="rounded-md border border-brand bg-brand px-2.5 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+                      className="rounded-xl bg-brand px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
                     >
                       {renameLoading ? "…" : "Хадгалах"}
                     </button>
                     <button
                       type="button"
                       onClick={() => { setRenamingId(null); setRenameValue(""); }}
-                      className="rounded-md border border-line px-2 py-1 text-[11px] text-ink-muted"
+                      className="rounded-xl border border-line px-3 py-2 text-sm text-ink-muted"
                     >
                       Болих
                     </button>
                   </div>
-                ) : null}
-                {/* Quick pause/resume + rename row */}
-                {renamingId !== row.sender_id && (
-                  <div className="mt-2 flex items-center gap-1.5 border-t border-line/50 pt-2">
+                )}
+
+                {/* Action bar — pause/resume + rename */}
+                {!isRenaming && (
+                  <div className="flex items-center gap-2 border-t border-line/40 px-4 py-2.5">
                     {isPaused ? (
                       <button
                         type="button"
                         disabled={busyKey === `resume:${row.sender_id}`}
                         onClick={(e) => { e.stopPropagation(); onPauseAction("resume", row.sender_id); }}
-                        className="rounded-md border border-success/40 bg-success/10 px-2.5 py-1 text-xs font-medium text-success hover:border-success disabled:opacity-50"
+                        className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-success/50 bg-success/10 py-2.5 text-sm font-semibold text-success hover:bg-success/20 active:scale-95 disabled:opacity-50"
                       >
-                        Бот сэргээх
+                        ▶ Бот сэргээх
                       </button>
                     ) : (
-                      <>
-                        <span className="text-[11px] text-ink-subtle">Бот зогсоох:</span>
+                      <div className="flex flex-1 items-center gap-2">
+                        <span className="shrink-0 text-xs text-ink-subtle">Зогсоох:</span>
                         {[
                           { label: "30 мин", ms: 30 * 60 * 1000 },
                           { label: "1 цаг", ms: 60 * 60 * 1000 },
@@ -552,13 +569,13 @@ export function BotTab({
                             key={opt.label}
                             type="button"
                             disabled={busyKey === `pause:${row.sender_id}`}
-                            onClick={(e) => { e.stopPropagation(); onPauseAction("pause", row.sender_id, opt.ms); }}
-                            className="rounded-md border border-line-strong bg-surface px-2 py-1 text-[11px] text-ink-muted hover:border-danger hover:text-danger disabled:opacity-50"
+                            onClick={(e) => { e.stopPropagation(); onPauseAction("pause", row.sender_id, opt.ms ?? undefined); }}
+                            className="flex-1 rounded-xl border border-danger/30 bg-danger/5 py-2.5 text-xs font-semibold text-danger hover:bg-danger/15 active:scale-95 disabled:opacity-50"
                           >
                             {opt.label}
                           </button>
                         ))}
-                      </>
+                      </div>
                     )}
                     <button
                       type="button"
@@ -567,9 +584,10 @@ export function BotTab({
                         setRenamingId(row.sender_id);
                         setRenameValue(row.display_name ?? "");
                       }}
-                      className="ml-auto rounded-md border border-line px-2 py-1 text-[11px] text-ink-muted hover:border-brand hover:text-brand"
+                      className="shrink-0 rounded-xl border border-line p-2.5 text-ink-muted hover:border-brand hover:text-brand active:scale-95"
+                      title="Нэр өөрчлөх"
                     >
-                      ✏️ Нэр өөрчлөх
+                      <Icons.edit size={15} />
                     </button>
                   </div>
                 )}
