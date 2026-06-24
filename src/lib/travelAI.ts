@@ -727,6 +727,115 @@ function buildBatchSourceParts(input: {
   return { parts, sourceLabels };
 }
 
+// Max chars for a single text source before it gets split into chunks.
+// Keeps each Gemini request well under the timeout budget (~45s per batch).
+const MAX_TEXT_CHARS_PER_SOURCE = 60_000;
+
+/**
+ * Splits a large plain-text source into numbered-trip boundary chunks.
+ * Looks for lines starting with a number (1., 2., 3. or #1, #2) as split
+ * points so each chunk starts at a clean trip boundary. Falls back to
+ * splitting at paragraph boundaries if no numbered headings are found.
+ */
+function splitTextSource(
+  label: string,
+  text: string,
+  maxChars: number,
+): Array<{ label: string; contentText: string }> {
+  if (text.length <= maxChars) return [{ label, contentText: text }];
+
+  // Find all numbered-heading positions (e.g. "1.", "12.", "#3")
+  const headingRe = /(?:^|\n)([ \t]*(?:#\s*)?\d{1,2}[\.\)][ \t])/gm;
+  const positions: number[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = headingRe.exec(text)) !== null) {
+    const pos = m.index === 0 ? 0 : m.index + 1; // skip the leading \n
+    if (positions.length === 0 || pos - positions[positions.length - 1] > 100) {
+      positions.push(pos);
+    }
+  }
+
+  // Fall back to paragraph boundaries if no numbered headings found
+  if (positions.length < 2) {
+    const paraRe = /\n\n+/g;
+    positions.length = 0;
+    positions.push(0);
+    while ((m = paraRe.exec(text)) !== null) {
+      positions.push(m.index + m[0].length);
+    }
+  }
+
+  const chunks: Array<{ label: string; contentText: string }> = [];
+  let chunkStart = 0;
+  let chunkEnd = 0;
+  let partIndex = 1;
+  const totalParts = Math.ceil(text.length / maxChars); // estimate
+
+  for (let i = 1; i <= positions.length; i++) {
+    const nextPos = i < positions.length ? positions[i] : text.length;
+    const segmentLength = nextPos - chunkStart;
+
+    // Flush when adding the next segment would exceed the limit, or at the end
+    if ((chunkEnd - chunkStart + segmentLength > maxChars && chunkEnd > chunkStart) || i === positions.length) {
+      const endPos = i === positions.length ? text.length : positions[i - 1];
+      const chunkText = text.slice(chunkStart, endPos).trim();
+      if (chunkText) {
+        const chunkLabel = `${label}.part-${String(partIndex).padStart(3, "0")}-of-${String(totalParts).padStart(3, "0")}.txt`;
+        chunks.push({ label: chunkLabel, contentText: chunkText });
+        partIndex++;
+      }
+      chunkStart = i < positions.length ? positions[i - 1] : text.length;
+    }
+    chunkEnd = nextPos;
+  }
+
+  // Handle any remainder
+  if (chunkStart < text.length) {
+    const remainder = text.slice(chunkStart).trim();
+    if (remainder) {
+      const chunkLabel = `${label}.part-${String(partIndex).padStart(3, "0")}-of-${String(totalParts).padStart(3, "0")}.txt`;
+      chunks.push({ label: chunkLabel, contentText: remainder });
+    }
+  }
+
+  return chunks.length > 0 ? chunks : [{ label, contentText: text }];
+}
+
+/**
+ * Expands sources by splitting any large text source into sub-chunks so that
+ * no single batch request exceeds the model's comfortable context size.
+ * Binary (inline) sources are passed through unchanged.
+ */
+function splitLargeTextSources(
+  sources: Array<{
+    label: string;
+    contentText?: string;
+    inline?: { mimeType: string; data: string } | null;
+    fbAttachmentId?: string;
+  }>,
+): typeof sources {
+  const result: typeof sources = [];
+  for (const source of sources) {
+    const text = source.contentText ?? "";
+    if (!source.inline && text.length > MAX_TEXT_CHARS_PER_SOURCE) {
+      const chunks = splitTextSource(source.label, text, MAX_TEXT_CHARS_PER_SOURCE);
+      for (const chunk of chunks) {
+        result.push({
+          label: chunk.label,
+          contentText: chunk.contentText,
+          inline: null,
+          // fbAttachmentId maps by original filename — pass it on the first
+          // chunk only; later chunks re-use the same attachment
+          fbAttachmentId: chunk.label.includes(".part-001") ? source.fbAttachmentId : undefined,
+        });
+      }
+    } else {
+      result.push(source);
+    }
+  }
+  return result;
+}
+
 function chunkProposalSources(
   sources: Array<{
     label: string;
@@ -1300,7 +1409,7 @@ export async function generateAIProposalFromContentBatched(input: {
     fbAttachmentId?: string;
   }>;
 }) {
-  const sources =
+  const rawSources =
     input.sources && input.sources.length > 0
       ? input.sources
       : [
@@ -1311,13 +1420,23 @@ export async function generateAIProposalFromContentBatched(input: {
           },
         ];
 
-  // Build a label → attachment_id map for post-processing
+  // Split any large text source (e.g. a 29-trip DOCX) into sub-chunks so
+  // Gemini never has to process more than MAX_TEXT_CHARS_PER_SOURCE at once.
+  const sources = splitLargeTextSources(rawSources);
+
+  // Build a label → attachment_id map for post-processing.
+  // Index by both the original label AND any chunk labels so the stamp step
+  // finds the id regardless of whether the model wrote the original filename
+  // or the chunk filename in extra.source_file_name.
   const fbAttachmentMap = new Map<string, string>();
+  for (const s of rawSources) {
+    if (s.fbAttachmentId) fbAttachmentMap.set(s.label, s.fbAttachmentId);
+  }
   for (const s of sources) {
     if (s.fbAttachmentId) fbAttachmentMap.set(s.label, s.fbAttachmentId);
   }
 
-  const sourceLabels = sources.map((source) => source.label).join(", ");
+  const sourceLabels = rawSources.map((source) => source.label).join(", ");
   const batches = chunkProposalSources(sources);
 
   return createProposal({
