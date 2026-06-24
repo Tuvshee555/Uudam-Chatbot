@@ -85,3 +85,35 @@ export async function sendFbFileAttachment(
     return false;
   }
 }
+
+/**
+ * Sends a file by URL directly to a Messenger recipient (no pre-upload needed).
+ * Works for publicly accessible PDF/image URLs.
+ */
+export async function sendFbFileByUrl(
+  recipientId: string,
+  fileUrl: string,
+  pageToken: string,
+): Promise<boolean> {
+  try {
+    const resp = await fetch(
+      `https://graph.facebook.com/${FB_API_VERSION}/me/messages?access_token=${pageToken}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipient: { id: recipientId },
+          message: {
+            attachment: {
+              type: "file",
+              payload: { url: fileUrl, is_reusable: false },
+            },
+          },
+        }),
+      },
+    );
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}

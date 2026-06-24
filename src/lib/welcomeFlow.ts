@@ -215,13 +215,13 @@ export function extractTripPhotosForReply(
 
 /**
  * Same trip-matching logic as extractTripPhotosForReply, but returns the
- * Facebook reusable attachment_id stored in extra.source_file_attachment_id.
- * Used to send the PDF brochure to the customer alongside the text reply.
+ * brochure info for the best-matching trip — either a pre-uploaded Facebook
+ * attachment_id or a manually entered PDF URL from extra.brochure_pdf_url.
  */
 export function extractTripBrochureAttachmentId(
   replyText: string,
   trips: TravelTrip[],
-): string | null {
+): { type: "id"; value: string } | { type: "url"; value: string } | null {
   const norm = normText(replyText);
   const active = trips.filter((t) => t.status === "active");
 
@@ -241,8 +241,14 @@ export function extractTripBrochureAttachmentId(
 
   if (!bestTrip || bestScore === 0) return null;
   const extra = bestTrip.extra as Record<string, unknown> | undefined;
+
   const id = extra?.source_file_attachment_id;
-  return typeof id === "string" && id.length > 0 ? id : null;
+  if (typeof id === "string" && id.length > 0) return { type: "id", value: id };
+
+  const url = extra?.brochure_pdf_url;
+  if (typeof url === "string" && url.startsWith("https://")) return { type: "url", value: url };
+
+  return null;
 }
 
 export { MAX_WELCOME_PHOTOS, MAX_TRIP_PHOTOS };

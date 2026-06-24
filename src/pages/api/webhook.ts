@@ -14,7 +14,7 @@ import { createLead, getTravelBotSettings, hasRecentOpenLead, isPagePaused, list
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { buildCompareReply, buildSeatsReply, buildSmartButtons, hasCompareIntent, hasSeatsIntent, } from "../../lib/travelFastPaths";
 import { extractTripBrochureAttachmentId, extractTripPhotosForReply, getActiveSeason, isFirstMessage, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
-import { sendFbFileAttachment } from "../../lib/fbAttachmentUpload";
+import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
 import { advanceCollectState, buildCompletionMessage, buildLeadContext, clearCollectState, getCollectState, isInCollectFlow, promptForStep, setCollectState, startCollectState, } from "../../lib/bookingCollect";
@@ -1614,11 +1614,15 @@ async function handleMessage(
         });
       }
 
-      // Send PDF brochure if this trip has a stored Facebook attachment_id
-      const brochureId = extractTripBrochureAttachmentId(safeReply, tripsForPhotos);
-      if (brochureId) {
+      // Send PDF brochure if this trip has a stored attachment_id or a brochure_pdf_url
+      const brochure = extractTripBrochureAttachmentId(safeReply, tripsForPhotos);
+      if (brochure) {
         try {
-          await sendFbFileAttachment(senderId, brochureId, token);
+          if (brochure.type === "id") {
+            await sendFbFileAttachment(senderId, brochure.value, token);
+          } else {
+            await sendFbFileByUrl(senderId, brochure.value, token);
+          }
           recordCounter("webhook.trip_brochure_sent_total", 1, { platform });
         } catch {
         }

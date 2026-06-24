@@ -18,7 +18,7 @@ import { SettingsTab } from "@/components/admin/SettingsTab";
 import { TripsTab } from "@/components/admin/TripsTab";
 import type { AIAction, AIProposal, AIProposalResponse, AttachedFile, ChatButton, ChatMessage, ClarificationAnswer, ClarificationQuestion, AdminMsg, ConflictItem, ConflictSeverity, ControlState, DriveSyncDiagnostics, DriveSyncRecentFile, FlowRule, LeadCrmStatus, LeadStats, NoteMsg, PageControlState, ParseUploadUnit, PauseRow, ProposalMsg, ReadinessReport, RecentRow, SettingsForm, StructuredRow, TabKey, TravelBotSettings, TravelLead, TravelTrip, TripStatus } from "@/lib/adminTypes";
 import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, DURATIONS, FIELD_LABELS, HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS, STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, delayMs, describeAction, driveSyncTone, fileToDataUrl, formatBytes, formatMoneyValue, formatTime, getSecretStorage, getTestBotConversationId, handoffDurationSelectValue, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, settingsToForm, shortId, splitLines, summarizeConflict, timeLeft, toStructuredRows, uid } from "@/lib/adminPageUtils";
-const BLANK_TRIP_DRAFT: Record<string, string> = { category: "", operator_name: "", route_name: "", duration_text: "", adult_price: "", child_price: "", currency: "MNT", seats_total: "", seats_left: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
+const BLANK_TRIP_DRAFT: Record<string, string> = { category: "", operator_name: "", route_name: "", duration_text: "", adult_price: "", child_price: "", currency: "MNT", seats_total: "", seats_left: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "", brochure_pdf_url: "" };
 export default function AdminPage() {
   const toast = useToast();
   const [secret, setSecret] = useState("");
@@ -1153,6 +1153,7 @@ export default function AdminPage() {
       notes: trip.notes || "",
       hotel: trip.hotel || "",
       source_description: trip.source_description || "",
+      brochure_pdf_url: typeof trip.extra?.brochure_pdf_url === "string" ? trip.extra.brochure_pdf_url : "",
     });
     setTripPhotoUrls(trip.photo_urls || []);
     setTripPhotoInput("");
@@ -1229,6 +1230,9 @@ export default function AdminPage() {
         .filter(Boolean),
       source_description: tripDraft.source_description || "",
       photo_urls: tripPhotoUrls,
+      extra: {
+        brochure_pdf_url: tripDraft.brochure_pdf_url?.trim() || null,
+      },
     };
     if (!fields.route_name.trim()) {
       toast.error("Аяллын нэр оруулна уу.");
@@ -1952,6 +1956,20 @@ export default function AdminPage() {
               ))}
             </div>
           )}
+          {/* Brochure PDF URL */}
+          <div className="mt-4">
+            <p className="mb-1 text-sm font-medium text-ink">Хөтөлбөрийн PDF холбоос</p>
+            <p className="mb-2 text-xs text-ink-subtle">
+              Хэрэглэгч аялалыг асуухад бот хөтөлбөрийн PDF файлыг автоматаар илгээнэ.
+            </p>
+            <input
+              type="url"
+              value={tripDraft.brochure_pdf_url || ""}
+              onChange={(e) => setTripDraft((p) => ({ ...p, brochure_pdf_url: e.target.value }))}
+              placeholder="https://example.com/brochure.pdf"
+              className="w-full rounded-lg border border-line-strong bg-surface-sunken px-3 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none"
+            />
+          </div>
           {/* Manual URL paste fallback */}
           <p className="mt-3 mb-1 text-xs font-medium text-ink-muted">Эсвэл URL-аар нэмэх</p>
           <div className="flex gap-2">

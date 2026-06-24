@@ -1292,16 +1292,21 @@ export async function patchTrip(id: string, fields: TripMutationFields) {
   const values: unknown[] = [];
   const sets: string[] = [];
 
-  keys.forEach((key, index) => {
-    values.push(
-      JSONB_KEYS.has(key)
-        ? JSON.stringify(cleaned[key] ?? (key === "photo_urls" ? [] : {}))
-        : cleaned[key],
-    );
+  keys.forEach((key) => {
     const column = columnMap[key];
-    const placeholder = key === "departure_dates" ? `$${index + 1}::text[]` : `$${index + 1}`;
-    const jsonbPlaceholder = JSONB_KEYS.has(key) ? `${placeholder}::jsonb` : placeholder;
-    sets.push(`${column} = ${jsonbPlaceholder}`);
+    if (key === "extra") {
+      // Merge into existing extra to preserve keys set by AI import (departure_date_groups, source_file_attachment_id, etc.)
+      values.push(JSON.stringify(cleaned[key] ?? {}));
+      sets.push(`${column} = COALESCE(${column}, '{}'::jsonb) || $${values.length}::jsonb`);
+    } else if (JSONB_KEYS.has(key)) {
+      values.push(JSON.stringify(cleaned[key] ?? []));
+      const placeholder = `$${values.length}::jsonb`;
+      sets.push(`${column} = ${placeholder}`);
+    } else {
+      values.push(cleaned[key]);
+      const placeholder = key === "departure_dates" ? `$${values.length}::text[]` : `$${values.length}`;
+      sets.push(`${column} = ${placeholder}`);
+    }
   });
 
   values.push(id);

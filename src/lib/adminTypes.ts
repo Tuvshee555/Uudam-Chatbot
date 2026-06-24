@@ -23,6 +23,7 @@ export type TravelTrip = {
   hotel: string;
   source_description: string;
   photo_urls: string[];
+  extra: Record<string, unknown>;
   updated_at: string;
 };
 
