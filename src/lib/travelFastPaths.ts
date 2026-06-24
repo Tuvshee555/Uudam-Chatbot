@@ -195,12 +195,26 @@ function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] {
     if (matchedWords.length < minMatchCount && exactRouteHit === 0 && aliasHit === 0) continue;
     if (coverage < 0.5 && exactRouteHit === 0 && aliasHit === 0) continue;
 
+    // Discount boost: when user asks about discounts, rank trips with discounts higher
+    let discountBoost = 0;
+    if (DISCOUNT_KEYWORDS_MN.some((kw) => query.includes(kw))) {
+      const tripExtra = (trip.extra || {}) as Record<string, unknown>;
+      const hasAdminDiscounts = Array.isArray(tripExtra.discounts) && (tripExtra.discounts as unknown[]).length > 0;
+      const nameHasDiscount = DISCOUNT_KEYWORDS_MN.some((kw) =>
+        normText(trip.route_name).includes(kw) ||
+        normText(trip.source_description || "").includes(kw),
+      );
+      if (hasAdminDiscounts) discountBoost = 60;
+      else if (nameHasDiscount) discountBoost = 40;
+    }
+
     const score =
       exactRouteHit * 100 +
       aliasHit * 80 +
       matchedWords.length * 20 +
       coverage * 10 -
-      Math.max(0, routeKeywords.length - matchedWords.length);
+      Math.max(0, routeKeywords.length - matchedWords.length) +
+      discountBoost;
 
     matches.push({
       trip,
@@ -301,6 +315,118 @@ function findPriceGroupByYmd(
   return null;
 }
 
+/**
+ * Parse Mongolian date text into an array of {month, day} objects.
+ * Handles:
+ *   "6 сарын 27"            → [{month:6, day:27}]
+ *   "7 сарын 18, 8 сарын 8" → [{month:7, day:18}, {month:8, day:8}]
+ *   "6 сарын 19, 26"        → [{month:6, day:19}, {month:6, day:26}]
+ *   "2026-06-27"            → [{month:6, day:27}]
+ *   "6/27"                  → [{month:6, day:27}]
+ */
+function normalizeMnDate(dateText: string): Array<{ month: number; day: number }> {
+  const results: Array<{ month: number; day: number }> = [];
+
+  // ISO date: 2026-06-27
+  const isoMatch = /^\d{4}-(\d{1,2})-(\d{1,2})$/.exec(dateText.trim());
+  if (isoMatch) {
+    return [{ month: parseInt(isoMatch[1], 10), day: parseInt(isoMatch[2], 10) }];
+  }
+
+  // Slash format: 6/27
+  const slashMatch = /^(\d{1,2})\/(\d{1,2})$/.exec(dateText.trim());
+  if (slashMatch) {
+    return [{ month: parseInt(slashMatch[1], 10), day: parseInt(slashMatch[2], 10) }];
+  }
+
+  // Mongolian format: parse all "N сарын D" segments, with optional trailing day numbers
+  // Pattern: one or more "N сарын D[, D2, ...]" groups
+  const segmentPattern = /(\d{1,2})\s*сарын\s*(\d{1,2})((?:\s*,\s*\d{1,2})*)/g;
+  let match: RegExpExecArray | null;
+  while ((match = segmentPattern.exec(dateText)) !== null) {
+    const month = parseInt(match[1], 10);
+    const firstDay = parseInt(match[2], 10);
+    results.push({ month, day: firstDay });
+    // Extra days for same month: ", 26" etc.
+    const extras = match[3];
+    if (extras) {
+      const extraDays = extras.split(",").map((s) => s.trim()).filter(Boolean);
+      for (const ds of extraDays) {
+        const d = parseInt(ds, 10);
+        if (!isNaN(d)) results.push({ month, day: d });
+      }
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Extract date mentions from a user query string.
+ * e.g. "6 сарын 27, 7 сарын 18 үнэ" → [{month:6,day:27},{month:7,day:18}]
+ */
+function extractDatesFromText(text: string): Array<{ month: number; day: number }> {
+  const results: Array<{ month: number; day: number }> = [];
+  // Match "N сарын D" with optional extra days
+  const segmentPattern = /(\d{1,2})\s*сарын\s*(\d{1,2})((?:\s*,\s*\d{1,2}(?!\s*сарын))*)/g;
+  let match: RegExpExecArray | null;
+  while ((match = segmentPattern.exec(text)) !== null) {
+    const month = parseInt(match[1], 10);
+    const firstDay = parseInt(match[2], 10);
+    results.push({ month, day: firstDay });
+    const extras = match[3];
+    if (extras) {
+      const extraDays = extras.split(",").map((s) => s.trim()).filter(Boolean);
+      for (const ds of extraDays) {
+        const d = parseInt(ds, 10);
+        if (!isNaN(d)) results.push({ month, day: d });
+      }
+    }
+  }
+  return results;
+}
+
+/**
+ * Find the price group for a given month+day, checking:
+ * 1. extra.price_groups (admin-entered) using normalizeMnDate
+ * 2. extra.departure_date_groups (AI-imported) using parseDepartureDateText + ISO compare
+ */
+function findPriceGroupByMonthDay(
+  trip: TravelTrip,
+  month: number,
+  day: number,
+  now = new Date(),
+): Record<string, unknown> | DepartureDateGroup | null {
+  // 1. Check admin price_groups first
+  const structuredGroups = getStructuredPriceGroups(trip);
+  for (const g of structuredGroups) {
+    const rawDates = Array.isArray(g.dates) ? (g.dates as string[]) : [];
+    for (const dateText of rawDates) {
+      const parsed = normalizeMnDate(dateText);
+      if (parsed.some((d) => d.month === month && d.day === day)) {
+        return g;
+      }
+    }
+  }
+
+  // 2. Fall back to legacy departure_date_groups via ISO comparison
+  const paddedMonth = String(month).padStart(2, "0");
+  const paddedDay = String(day).padStart(2, "0");
+  const yearCandidates = [now.getFullYear(), now.getFullYear() + 1];
+  for (const year of yearCandidates) {
+    const ymd = `${year}-${paddedMonth}-${paddedDay}`;
+    for (const group of getPriceGroups(trip)) {
+      const dates = Array.isArray(group.dates) ? group.dates : [];
+      for (const dateText of dates) {
+        const parsed = parseDepartureDateText(dateText, now);
+        if (parsed.includes(ymd)) return group;
+      }
+    }
+  }
+
+  return null;
+}
+
 function formatPriceLine(group: {
   label?: string | null;
   adult_price?: number | null;
@@ -317,6 +443,23 @@ function formatPriceLine(group: {
   if (infant) parts.push(`Нярай: ${infant}`);
 
   return parts.join(" | ");
+}
+
+function formatChildRules(trip: TravelTrip, currency: string): string {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  if (!Array.isArray(extra.child_rules) || (extra.child_rules as unknown[]).length === 0) return "";
+  const rules = extra.child_rules as Array<Record<string, unknown>>;
+  const lines: string[] = ["👶 Хүүхдийн насны ангилал:"];
+  for (const r of rules) {
+    const label = typeof r.label === "string" && r.label ? r.label : "";
+    const price = formatMoney(typeof r.price === "number" ? r.price : null, currency);
+    if (label && price) {
+      lines.push(`  ${label}: ${price}`);
+    } else if (label) {
+      lines.push(`  ${label}`);
+    }
+  }
+  return lines.length > 1 ? lines.join("\n") : "";
 }
 
 function formatTripBasePrice(trip: TravelTrip) {
@@ -349,6 +492,8 @@ function formatTripBasePrice(trip: TravelTrip) {
         lines.push(`  ${priceParts.join(" | ")}`);
       }
     }
+    const childRulesStr = formatChildRules(trip, currency);
+    if (childRulesStr) lines.push(childRulesStr);
     return lines.join("\n");
   }
 
@@ -425,6 +570,61 @@ function buildSameTripPriceComparisonReply(
   text: string,
   now = new Date(),
 ) {
+  // Extract {month, day} pairs from user text (handles Mongolian date text in price_groups)
+  const mnDates = extractDatesFromText(text);
+
+  if (mnDates.length >= 2) {
+    // Use the new month/day-based lookup that covers both price_groups and departure_date_groups
+    const groups = mnDates.map((md) => ({
+      label: `${md.month} сарын ${md.day}`,
+      month: md.month,
+      day: md.day,
+      group: findPriceGroupByMonthDay(trip, md.month, md.day, now),
+    }));
+
+    if (groups.some((entry) => !entry.group)) return null;
+
+    const getPrice = (g: Record<string, unknown> | DepartureDateGroup) => ({
+      adult: typeof (g as Record<string, unknown>).adult_price === "number"
+        ? (g as Record<string, unknown>).adult_price as number
+        : (g as DepartureDateGroup).adult_price ?? null,
+      child: typeof (g as Record<string, unknown>).child_price === "number"
+        ? (g as Record<string, unknown>).child_price as number
+        : (g as DepartureDateGroup).child_price ?? null,
+      infant: typeof (g as Record<string, unknown>).infant_price === "number"
+        ? (g as Record<string, unknown>).infant_price as number
+        : (g as DepartureDateGroup).infant_price ?? null,
+    });
+
+    const first = getPrice(groups[0].group!);
+    const same = groups.every((entry) => {
+      const p = getPrice(entry.group!);
+      return p.adult === first.adult && p.child === first.child && p.infant === first.infant;
+    });
+
+    const currency = trip.currency || "MNT";
+    const lines = [
+      `✈️ ${trip.route_name} аяллын ${same ? "үнэ адилхан байна." : "үнэ адил биш байна."}`,
+    ];
+
+    for (const entry of groups) {
+      const g = entry.group!;
+      const p = getPrice(g);
+      const adultStr = formatMoney(p.adult, currency);
+      const childStr = formatMoney(p.child, currency);
+      const infantStr = formatMoney(p.infant, currency);
+      const priceParts: string[] = [];
+      if (adultStr) priceParts.push(`Том хүн: ${adultStr}`);
+      if (childStr) priceParts.push(`Хүүхэд: ${childStr}`);
+      if (infantStr) priceParts.push(`Нярай: ${infantStr}`);
+      const priceStr = priceParts.length ? priceParts.join(" | ") : "Үнийн мэдээлэл алга байна.";
+      lines.push(`💰 ${entry.label}: ${priceStr}`);
+    }
+
+    return lines.join("\n");
+  }
+
+  // Fallback: use ISO date parsing (legacy path for departure_date_groups)
   const dates = unique(parseDepartureDateText(text, now));
   if (dates.length < 2) return null;
 
@@ -516,6 +716,10 @@ export function buildDiscountReply(text: string, trips: TravelTrip[]): string | 
     if (regularChild) regular.push(`Хүүхэд: ${regularChild}`);
     lines.push(`Үндсэн үнэ: ${regular.join(" | ")}`);
   }
+
+  // Append child rules if available
+  const childRulesStr = formatChildRules(best, currency);
+  if (childRulesStr) lines.push(childRulesStr);
 
   if (hasDiscountInText) {
     lines.push(`\n${discountText.trim()}`);
