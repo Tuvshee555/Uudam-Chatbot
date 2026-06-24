@@ -680,6 +680,25 @@ test("Mongolian grouped departure dates expand without inventing a year", async 
   );
 });
 
+test("hallucinated past-year ISO dates are stripped to month/day", async () => {
+  const { expandMongolianDepartureDates } = await import("../src/lib/travelDb");
+  // The model sometimes emits "2023-06-27" for a source that only said "6 сарын 27".
+  // Any year before the current year is bogus and must drop to "M сарын D".
+  assert.deepEqual(
+    expandMongolianDepartureDates(["2023-06-27", "2023-07-18", "2023-08-08"]),
+    ["6 сарын 27", "7 сарын 18", "8 сарын 8"],
+  );
+});
+
+test("future ISO dates with a valid year are kept as-is", async () => {
+  const { expandMongolianDepartureDates } = await import("../src/lib/travelDb");
+  const nextYear = new Date().getFullYear() + 1;
+  assert.deepEqual(
+    expandMongolianDepartureDates([`${nextYear}-06-27`]),
+    [`${nextYear}-06-27`],
+  );
+});
+
 test("recurring schedule and exact dates are both retained", async () => {
   const { expandMongolianDepartureDates } = await import("../src/lib/travelDb");
   assert.deepEqual(

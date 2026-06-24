@@ -1220,6 +1220,39 @@ function buildProposalClarifications(
       if (severity !== "blocker") return;
     }
 
+    // Incomplete parse: some trips were not read (timeout / failed batch) or
+    // the model returned far fewer trips than the source contains. This MUST
+    // block saving — never let a partial import look "ready".
+    if (
+      normalized.includes("аялал дутуу") ||
+      normalized.includes("боловсруулсан") ||
+      normalized.includes("уншиж амжсангүй") ||
+      normalized.includes("уншиж чадсангүй") ||
+      normalized.includes("дахин жижиг хэсг") ||
+      normalized.includes("stopped before reading") ||
+      normalized.includes("split the files")
+    ) {
+      pushQuestion({
+        id: `incomplete-parse:${index}`,
+        prompt: "Файлын зарим аялал боловсруулагдаагүй байна. Хэрхэн үргэлжлүүлэх вэ?",
+        detail,
+        options: [
+          {
+            label: "Болих — бүгдийг уншуулна",
+            answer:
+              "Энэ хагас дутуу импортыг бүү хадгал. Файлыг жижиг хэсгүүдэд (10-аас доош аялалтай) хувааж дахин оруулна.",
+          },
+          {
+            label: "Зөвхөн уншсан аяллуудыг хадгалах",
+            answer:
+              "Зөвхөн одоо амжилттай уншсан аяллуудыг хадгал. Дутуу аяллуудыг дараа нь тусдаа оруулна гэдгийг ойлгосон.",
+          },
+        ],
+        allowCustom: false,
+      });
+      return;
+    }
+
     const quoted = extractQuotedValues(conflict);
     // The first quoted value is usually the trip/route the conflict is about.
     const subject = quoted[0] || "";

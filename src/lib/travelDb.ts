@@ -138,8 +138,23 @@ export function expandMongolianDepartureDates(values: unknown[]): string[] {
     if (cleaned && !result.includes(cleaned)) result.push(cleaned);
   };
 
+  // The model sometimes hallucinates a past year (e.g. 2023) onto a date that
+  // the source wrote as month/day only. Anything before this year is bogus and
+  // gets converted to "M сарын D" so the wrong year is never stored.
+  const minValidYear = new Date().getFullYear();
+  const fixHallucinatedYear = (value: string): string => {
+    const iso = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (iso) {
+      const year = Number(iso[1]);
+      if (year < minValidYear) {
+        return `${Number(iso[2])} сарын ${Number(iso[3])}`;
+      }
+    }
+    return value;
+  };
+
   for (const rawValue of values) {
-    const value = String(rawValue || "").trim();
+    const value = fixHallucinatedYear(String(rawValue || "").trim());
     if (!value) continue;
     const monthMatches = Array.from(
       value.matchAll(/(\d{1,2})\s*(?:-?р\s*)?сарын\s*/gi),

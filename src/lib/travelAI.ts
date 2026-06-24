@@ -62,9 +62,10 @@ const FILE_PARSE_MODEL =
 const FILE_PARSE_VERIFY =
   (process.env.GEMINI_FILE_PARSE_VERIFY || "false").toLowerCase() === "true";
 const FILE_PARSE_VERIFY_TIMEOUT_MS = 45_000;
-// Respect the env timeout directly (don't force a 60s floor) so a low
-// GEMINI_TIMEOUT_MS actually makes parsing fail-fast instead of hanging.
-const FILE_PARSE_GEMINI_TIMEOUT_MS = env.geminiTimeoutMs;
+// Cap each batch at 30s. With small (4-trip) chunks a healthy call returns in
+// ~15-20s; a 30s ceiling means a stuck batch fails fast and leaves budget for
+// the remaining chunks instead of eating 45s. Never exceed the env timeout.
+const FILE_PARSE_GEMINI_TIMEOUT_MS = Math.min(env.geminiTimeoutMs, 30_000);
 // One retry max for file parsing — a 45s timeout retried twice burns 90s+
 // before falling back. Keep it to a single attempt per batch.
 const FILE_PARSE_GEMINI_MAX_RETRIES = 0;
@@ -736,8 +737,9 @@ function buildBatchSourceParts(input: {
 // structured extraction on Flash is slow, so keep each call small.
 const MAX_TEXT_CHARS_PER_BATCH = 18_000;
 // Max numbered trips per chunk. Even a small char count can hold many trips,
-// and emitting 29 trip JSON objects in one call blows past the 45s timeout.
-const MAX_TRIPS_PER_CHUNK = 6;
+// and emitting many trip JSON objects (with full extra metadata) in one call
+// blows past the 45s timeout. 4 keeps each Gemini call fast (~15-20s).
+const MAX_TRIPS_PER_CHUNK = 4;
 
 /** Counts numbered-heading lines ("1.", "2.", "12)") in the text. */
 function countNumberedTrips(text: string): number {
@@ -1489,17 +1491,18 @@ export async function generateAIProposalFromContentBatched(input: {
             .slice(index)
             .flatMap((batch) => batch.map((source) => source.label))
             .join(", ");
+          const skippedCount = batches.slice(index).reduce((sum, b) => sum + b.length, 0);
           proposals.push({
             summary: `Stopped reading remaining batches: ${remainingLabels}`,
             needs_confirmation: true,
             important_reason:
               "The upload was too large or slow for one safe AI parse request.",
             conflicts: [
-              `Stopped before reading ${remainingLabels}. Split the files into smaller requests.`,
+              `Цаг хүрэлцээгүй тул ${skippedCount} хэсэг уншиж амжсангүй — энэ файлыг хадгалахаас өмнө дахин жижиг хэсгүүдэд хувааж оруулна уу. (${remainingLabels})`,
             ],
             conflict_items: [{
-              text: `Stopped before reading ${remainingLabels}. Split the files into smaller requests.`,
-              severity: "warning" as ConflictSeverity,
+              text: `Цаг хүрэлцээгүй тул ${skippedCount} хэсэг уншиж амжсангүй — энэ файлыг хадгалахаас өмнө дахин жижиг хэсгүүдэд хувааж оруулна уу. (${remainingLabels})`,
+              severity: "blocker" as ConflictSeverity,
               type: "batch_timeout",
             }],
             actions: [],
@@ -1554,10 +1557,10 @@ export async function generateAIProposalFromContentBatched(input: {
             needs_confirmation: true,
             important_reason:
               "One batch of uploaded files took too long or failed upstream, so the result may be incomplete.",
-            conflicts: [`Batch failed for ${batchLabels}: ${message}`],
+            conflicts: [`Нэг хэсгийг уншиж чадсангүй (${batchLabels}) — энэ хэсгийн аяллууд дутуу. Дахин оруулна уу.`],
             conflict_items: [{
-              text: `Batch failed for ${batchLabels}: ${message}`,
-              severity: "warning" as ConflictSeverity,
+              text: `Нэг хэсгийг уншиж чадсангүй (${batchLabels}) — энэ хэсгийн аяллууд дутуу. Дахин оруулна уу.`,
+              severity: "blocker" as ConflictSeverity,
               type: "batch_failed",
             }],
             actions: [],
@@ -1579,7 +1582,8 @@ export async function generateAIProposalFromContentBatched(input: {
         // Only warn when there's a clear gap: 3+ numbered items detected and
         // the model returned fewer than 70% of them.
         if (detectedCount >= 3 && actionCount < detectedCount * 0.7) {
-          const warningText = `${detectedCount} аялал илэрлээ, ${actionCount}-г боловсруулсан — файлыг дахин шалгана уу, зарим аялал орхигдсон байж болно.`;
+          const missingCount = detectedCount - actionCount;
+          const warningText = `${detectedCount} аялал илэрснээс ${actionCount}-г боловсруулсан, ${missingCount} аялал дутуу байна. Бүгдийг уншаагүй тул хадгалахаас өмнө шалгаж, дутуу аяллуудыг дахин оруулна уу.`;
           merged.needs_confirmation = true;
           if (!merged.conflicts.includes(warningText)) {
             merged.conflicts.unshift(warningText);
@@ -1588,7 +1592,7 @@ export async function generateAIProposalFromContentBatched(input: {
           if (!merged.conflict_items.some((ci) => ci.text === warningText)) {
             merged.conflict_items.unshift({
               text: warningText,
-              severity: "warning" as ConflictSeverity,
+              severity: "blocker" as ConflictSeverity,
               type: "completeness_check",
             });
           }
