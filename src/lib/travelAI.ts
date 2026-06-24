@@ -1049,8 +1049,9 @@ async function requestProposalFromModel(opts: {
       timeoutMs: opts.timeoutMs,
       maxRetries: opts.maxRetries,
       model: opts.model,
-      // File reading → OpenAI primary, Gemini backup.
-      preferOpenAI: true,
+      // Gemini is primary for file parsing — it handles structured text
+      // and multimodal (PDFs/images) natively. OpenAI is the fallback.
+      preferOpenAI: false,
       maxOutputTokens: 16_384,
     },
   );
@@ -1066,7 +1067,7 @@ async function requestProposalFromModel(opts: {
           timeoutMs: opts.repairTimeoutMs,
           maxRetries: 0,
           model: opts.model,
-          preferOpenAI: true,
+          preferOpenAI: false,
         },
       );
       parsed = parseJsonFromModel(repaired.text);
