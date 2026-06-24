@@ -152,11 +152,14 @@ export function buildPrompt(options: {
   lines.push("- When listing trip details (price, dates, seats, hotel), put each detail on its own line. Use a blank line between sections so the message is easy to read on a phone. Never dump everything into one long paragraph.");
   lines.push("- Example good format for a trip reply:");
   lines.push("  ✈️ Бээжин аялал — 5 хоног");
-  lines.push("  💰 Үнэ: 1,890,000₮");
-  lines.push("  📅 Гарах: 2025-07-15, 2025-07-22");
+  lines.push("  💰 Том хүн: 1,890,000₮ | Хүүхэд: 1,590,000₮");
+  lines.push("  📅 Гарах: 7 сарын 15, 7 сарын 22");
   lines.push("  🏨 Буудал: Grand Hotel Beijing");
   lines.push("  ");
   lines.push("  Суудал хязгаарлагдмал тул эрт захиалаарай! 🙌");
+  lines.push("- ALWAYS show both adult price AND child price when both are available in the dataset. Never show only the adult price.");
+  lines.push("- If a tour has departure_date_groups with different prices per date, list each date group with its price. Example: '6 сарын 27: Том хүн 3,590,000₮ / Хүүхэд 3,260,000₮ | 7-8 сар: Том хүн 3,660,000₮ / Хүүхэд 3,260,000₮'.");
+  lines.push("- If seats_left and seats_total are BOTH null/missing, say 'суудлын мэдээлэл одоогоор байхгүй' — do NOT say 'суудал байхгүй' or imply the tour is sold out.");
   lines.push("- NEVER use markdown syntax (* ** # [] etc). Plain text and emojis only.");
   lines.push("- Keep replies focused. If only one detail is asked (price, dates, seats), answer that and add 1 follow-up sentence max.");
   lines.push("- Use only the provided context. Do not invent routes, prices, departure dates, operators, or visa details.");

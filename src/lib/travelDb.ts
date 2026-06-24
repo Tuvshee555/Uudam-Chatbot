@@ -1924,6 +1924,25 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     if (trip.departure_dates.length) {
       details.push(`Departure dates: ${trip.departure_dates.join(", ")}`);
     }
+    if (typeof trip.child_price === "number") {
+      details.push(`Child price: ${trip.child_price}`);
+    }
+    // Emit structured price groups so the bot can answer per-date pricing questions
+    const extra = (trip.extra || {}) as Record<string, unknown>;
+    const priceGroups = Array.isArray(extra.departure_date_groups) ? extra.departure_date_groups : [];
+    if (priceGroups.length > 0) {
+      const groupText = (priceGroups as Array<Record<string, unknown>>)
+        .map((g) => {
+          const dates = Array.isArray(g.dates) ? (g.dates as string[]).join(", ") : String(g.dates ?? "");
+          const ap = typeof g.adult_price === "number" ? `adult ${g.adult_price}` : "";
+          const cp = typeof g.child_price === "number" ? `child ${g.child_price}` : "";
+          const ip = typeof g.infant_price === "number" ? `infant ${g.infant_price}` : "";
+          return `[${dates}: ${[ap, cp, ip].filter(Boolean).join(" / ")}]`;
+        })
+        .join("; ");
+      details.push(`Price groups: ${groupText}`);
+    }
+    // seats: only emit if actually known (null = unknown, 0 = sold out)
     if (trip.seats_left != null) {
       details.push(`Seats left: ${trip.seats_left}`);
     }
