@@ -452,14 +452,22 @@ function formatChildRules(trip: TravelTrip, currency: string): string {
   const lines: string[] = ["👶 Хүүхдийн насны ангилал:"];
   for (const r of rules) {
     const label = typeof r.label === "string" && r.label ? r.label : "";
+    const age = typeof r.age_range === "string" && r.age_range ? ` (${r.age_range})` : "";
     const price = formatMoney(typeof r.price === "number" ? r.price : null, currency);
-    if (label && price) {
-      lines.push(`  ${label}: ${price}`);
-    } else if (label) {
-      lines.push(`  ${label}`);
+    const display = label ? `${label}${age}` : age.replace(/[()]/g, "").trim();
+    if (display && price) {
+      lines.push(`  ${display}: ${price}`);
+    } else if (display) {
+      lines.push(`  ${display}: үнэ тодорхойгүй`);
     }
   }
   return lines.length > 1 ? lines.join("\n") : "";
+}
+
+// Compact a list of date strings: if more than 4, show first 3 + "… (N нийт)"
+function compactDates(dates: string[]): string {
+  if (dates.length <= 4) return dates.join(", ");
+  return `${dates.slice(0, 3).join(", ")} … (нийт ${dates.length} өдөр)`;
 }
 
 function formatTripBasePrice(trip: TravelTrip) {
@@ -468,11 +476,16 @@ function formatTripBasePrice(trip: TravelTrip) {
   // Prefer new structured price_groups from extra
   const structuredGroups = getStructuredPriceGroups(trip);
   if (structuredGroups.length > 0) {
-    const lines: string[] = ["💰 Үнэ (гарах огноогоор):"];
+    // Group price_groups by identical adult/child/infant price to avoid verbose repetition
+    type GroupedPrice = {
+      priceKey: string;
+      priceStr: string;
+      dates: string[];
+      label: string;
+    };
+    const grouped: GroupedPrice[] = [];
+
     for (const g of structuredGroups) {
-      const dates = Array.isArray(g.dates) && (g.dates as string[]).length > 0
-        ? (g.dates as string[]).join(", ")
-        : String(g.label ?? "");
       const adult = formatMoney(typeof g.adult_price === "number" ? g.adult_price : null, currency);
       const child = formatMoney(typeof g.child_price === "number" ? g.child_price : null, currency);
       const infant = formatMoney(typeof g.infant_price === "number" ? g.infant_price : null, currency);
@@ -486,10 +499,27 @@ function formatTripBasePrice(trip: TravelTrip) {
         const infantAge = typeof g.infant_age === "string" && g.infant_age.trim() ? ` (${g.infant_age.trim()})` : "";
         priceParts.push(`Нярай${infantAge}: ${infant}`);
       }
-      if (dates && priceParts.length) {
-        lines.push(`  ${dates}: ${priceParts.join(" | ")}`);
-      } else if (priceParts.length) {
-        lines.push(`  ${priceParts.join(" | ")}`);
+      if (!priceParts.length) continue;
+      const priceKey = priceParts.join("|");
+      const rawDates = Array.isArray(g.dates) && (g.dates as string[]).length > 0
+        ? g.dates as string[]
+        : [];
+      const labelStr = typeof g.label === "string" && g.label ? g.label : "";
+      const existing = grouped.find((gr) => gr.priceKey === priceKey);
+      if (existing) {
+        existing.dates.push(...rawDates);
+      } else {
+        grouped.push({ priceKey, priceStr: priceParts.join(" | "), dates: [...rawDates], label: labelStr });
+      }
+    }
+
+    const lines: string[] = ["💰 Үнэ (гарах огноогоор):"];
+    for (const gr of grouped) {
+      const dateDisplay = gr.dates.length > 0 ? compactDates(gr.dates) : gr.label;
+      if (dateDisplay) {
+        lines.push(`  ${dateDisplay}: ${gr.priceStr}`);
+      } else {
+        lines.push(`  ${gr.priceStr}`);
       }
     }
     const childRulesStr = formatChildRules(trip, currency);
@@ -500,11 +530,10 @@ function formatTripBasePrice(trip: TravelTrip) {
   // Fall back to legacy departure_date_groups
   const groups = getPriceGroups(trip);
   if (groups.length > 0) {
-    const lines: string[] = ["💰 Үнэ (гарах огноогоор):"];
+    // Also group by price to avoid repetition
+    type LegacyGroup = { priceKey: string; priceStr: string; dates: string[] };
+    const grouped: LegacyGroup[] = [];
     for (const g of groups) {
-      const dates = Array.isArray(g.dates) && g.dates.length > 0
-        ? g.dates.join(", ")
-        : (g.label ?? "");
       const adult = formatMoney(g.adult_price ?? null, currency);
       const child = formatMoney(g.child_price ?? null, currency);
       const infant = formatMoney(g.infant_price ?? null, currency);
@@ -512,10 +541,23 @@ function formatTripBasePrice(trip: TravelTrip) {
       if (adult) priceParts.push(`Том хүн: ${adult}`);
       if (child) priceParts.push(`Хүүхэд: ${child}`);
       if (infant) priceParts.push(`Нярай: ${infant}`);
-      if (dates && priceParts.length) {
-        lines.push(`  ${dates}: ${priceParts.join(" | ")}`);
-      } else if (priceParts.length) {
-        lines.push(`  ${priceParts.join(" | ")}`);
+      if (!priceParts.length) continue;
+      const priceKey = priceParts.join("|");
+      const rawDates = Array.isArray(g.dates) && g.dates.length > 0 ? g.dates : (g.label ? [g.label] : []);
+      const existing = grouped.find((gr) => gr.priceKey === priceKey);
+      if (existing) {
+        existing.dates.push(...rawDates);
+      } else {
+        grouped.push({ priceKey, priceStr: priceParts.join(" | "), dates: [...rawDates] });
+      }
+    }
+    const lines: string[] = ["💰 Үнэ (гарах огноогоор):"];
+    for (const gr of grouped) {
+      const dateDisplay = compactDates(gr.dates);
+      if (dateDisplay) {
+        lines.push(`  ${dateDisplay}: ${gr.priceStr}`);
+      } else {
+        lines.push(`  ${gr.priceStr}`);
       }
     }
     return lines.join("\n");
@@ -862,7 +904,42 @@ export function buildStructuredTripReply(
   }
 
   if (askedPrice) {
-    if (requestedDates.length > 0) {
+    const mnDates = extractDatesFromText(text);
+    if (mnDates.length > 0) {
+      // Use month/day lookup — works for both Mongolian price_groups and ISO departure_date_groups
+      const currency = best.currency || "MNT";
+      for (const md of mnDates) {
+        const g = findPriceGroupByMonthDay(best, md.month, md.day, now);
+        const label = `${md.month} сарын ${md.day}`;
+        if (!g) {
+          lines.push(`💰 ${label}-ны үнийн мэдээлэл тодорхойгүй байна.`);
+        } else {
+          const adult = formatMoney(
+            typeof (g as Record<string, unknown>).adult_price === "number"
+              ? (g as Record<string, unknown>).adult_price as number
+              : ((g as DepartureDateGroup).adult_price ?? null),
+            currency,
+          );
+          const child = formatMoney(
+            typeof (g as Record<string, unknown>).child_price === "number"
+              ? (g as Record<string, unknown>).child_price as number
+              : ((g as DepartureDateGroup).child_price ?? null),
+            currency,
+          );
+          const infant = formatMoney(
+            typeof (g as Record<string, unknown>).infant_price === "number"
+              ? (g as Record<string, unknown>).infant_price as number
+              : ((g as DepartureDateGroup).infant_price ?? null),
+            currency,
+          );
+          const parts: string[] = [];
+          if (adult) parts.push(`Том хүн: ${adult}`);
+          if (child) parts.push(`Хүүхэд: ${child}`);
+          if (infant) parts.push(`Нярай: ${infant}`);
+          lines.push(`💰 ${label}: ${parts.length ? parts.join(" | ") : "үнэ тодорхойгүй"}`);
+        }
+      }
+    } else if (requestedDates.length > 0) {
       for (const ymd of requestedDates) {
         lines.push(formatSpecificDatePrice(best, ymd, ymd, now));
       }
