@@ -10,8 +10,10 @@ import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPrompt, getHistory } from "../../lib/conversation";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
-import { enforceWebsiteForPayment, extractButtons, sanitizeAssistantReply } from "../../lib/reply";
-import { getTravelBotSettings } from "../../lib/travelOps";
+import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, sanitizeAssistantReply } from "../../lib/reply";
+import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
+import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
+import { buildCompareReply, buildSeatsReply, hasCompareIntent, hasSeatsIntent } from "../../lib/travelFastPaths";
 import { getEnv } from "../../lib/env";
 import {
   beginRequestTrace,
@@ -125,6 +127,47 @@ export default async function handler(
       const sessionId = `demo:${normalizedConversationId}`;
       const history = await getHistory(sessionId);
 
+      // Fast path: departure date availability
+      if (hasDepartureDateAvailabilityIntent(normalizedText)) {
+        const trips = await listTrips({ limit: 5000 });
+        const dateReply = buildDepartureDateAvailabilityReply({ userText: normalizedText, trips });
+        if (dateReply) {
+          const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(fixMojibake(dateReply)));
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          recordCounter("demo.date_fast_path_total", 1, {});
+          return res.status(200).json({ reply: safeReply, buttons: [] });
+        }
+      }
+
+      // Fast path: seats availability
+      if (hasSeatsIntent(normalizedText)) {
+        const trips = await listTrips({ limit: 5000 });
+        const seatsReply = buildSeatsReply(normalizedText, trips);
+        if (seatsReply) {
+          const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(seatsReply));
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          recordCounter("demo.seats_fast_path_total", 1, {});
+          return res.status(200).json({ reply: safeReply, buttons: [] });
+        }
+      }
+
+      // Fast path: trip comparison
+      if (hasCompareIntent(normalizedText)) {
+        const trips = await listTrips({ limit: 5000 });
+        const compareReply = buildCompareReply(normalizedText, trips);
+        if (compareReply) {
+          const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(compareReply));
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          recordCounter("demo.compare_fast_path_total", 1, {});
+          return res.status(200).json({ reply: safeReply, buttons: [] });
+        }
+      }
+
+      await appendMessage(sessionId, "user", normalizedText);
+
       const prompt = buildPrompt({
         systemPrompt,
         business: business || {},
@@ -140,7 +183,16 @@ export default async function handler(
       const rawFixed = fixMojibake(result.text);
       const { text: rawNoButtons, buttons } = extractButtons(rawFixed);
       const reply = enforceWebsiteForPayment(sanitizeAssistantReply(rawNoButtons));
-      await appendMessage(sessionId, "user", normalizedText);
+
+      // Skip duplicate replies (same as Messenger behavior)
+      const lastMessages = history.filter((m) => m.role === "assistant");
+      const lastReplyText = lastMessages.length > 0 ? lastMessages[lastMessages.length - 1].text : null;
+      if (lastReplyText && isDuplicateReply(lastReplyText, reply)) {
+        recordCounter("demo.duplicate_reply_avoided_total", 1, {});
+        await appendMessage(sessionId, "assistant", reply);
+        return res.status(200).json({ reply, buttons });
+      }
+
       await appendMessage(sessionId, "assistant", reply);
 
       logInfo("demo.reply_generated", {

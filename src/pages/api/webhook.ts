@@ -1341,7 +1341,7 @@ async function handleMessage(
     }
   }
   void maybeAutoSyncDriveFolder({ source: "api.webhook" });
-  const { systemPrompt: fileSystemPrompt, business } = await readBusinessData();
+  const { systemPrompt: fileSystemPrompt, business, pinnedButtonLabels } = await readBusinessData();
   await assertLockHealthy();
   const history = await getHistory(sessionId);
   const lastReply = await getLastReplyConsistent(sessionId);
@@ -1497,6 +1497,7 @@ async function handleMessage(
     business: business || {},
     history,
     userText: text,
+    pinnedButtonLabels,
   });
   let aiReply: string;
   try {
