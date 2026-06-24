@@ -295,6 +295,19 @@ function detectDirectFlight(trip: TravelTrip) {
   return null;
 }
 
+function isLandFlightCombo(trip: TravelTrip) {
+  const raw = [trip.route_name, trip.source_description, trip.notes]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const normalized = normText(raw);
+  return (
+    /газар\s*\+\s*нислэг/.test(raw) ||
+    normalized.includes("газар нислэг хосолсон") ||
+    normalized.includes("газар нислэг")
+  );
+}
+
 function formatDepartureDates(trip: TravelTrip) {
   if (!trip.departure_dates.length) return "Гарах өдрийн мэдээлэл одоогоор баталгаажаагүй байна.";
   return trip.departure_dates.join(", ");
@@ -570,9 +583,40 @@ function formatTripBasePrice(trip: TravelTrip) {
   if (adult) parts.push(`💰 Том хүн: ${adult}`);
   if (child) parts.push(`💰 Хүүхэд: ${child}`);
   if (!parts.length) {
-    return "💰 Үнийн мэдээлэл одоогоор баталгаажаагүй байна.";
+    return "💰 Үнийн мэдээлэл дэлгэрэнгүй мэдэхийг хүсвэл аяллын зөвлөхтэй холбогдоорой.";
   }
   return parts.join("\n");
+}
+
+/**
+ * Extract a single month number from phrases like "7 сард", "7-р сард", "долоодугаар сард".
+ * Returns null if no month-only mention found (without a specific day).
+ */
+function extractMonthOnlyFromText(text: string): number | null {
+  const MN_MONTH_WORDS: Record<string, number> = {
+    "нэгдүгээр": 1, "хоёрдугаар": 2, "гуравдугаар": 3, "дөрөвдүгээр": 4,
+    "тавдугаар": 5, "зургадугаар": 6, "долоодугаар": 7, "наймдугаар": 8,
+    "есдүгээр": 9, "аравдугаар": 10, "арваннэгдүгээр": 11, "арвандолоодугаар": 12,
+  };
+  // "7 сард" / "7-р сард" — but NOT when followed by "ны N" (specific day)
+  const numMatch = /(\d{1,2})[\s-]*(?:р\s+)?сар(?:д|ын)?\b(?!\s*\d)/.exec(text);
+  if (numMatch) return parseInt(numMatch[1], 10);
+  // Mongolian word forms
+  for (const [word, month] of Object.entries(MN_MONTH_WORDS)) {
+    if (text.toLowerCase().includes(word)) return month;
+  }
+  return null;
+}
+
+/** Filter price_groups to only those containing dates in the given month. */
+function filterPriceGroupsByMonth(
+  groups: Array<Record<string, unknown>>,
+  month: number,
+): Array<Record<string, unknown>> {
+  return groups.filter((g) => {
+    const rawDates = Array.isArray(g.dates) ? g.dates as string[] : [];
+    return rawDates.some((d) => normalizeMnDate(d).some((nd) => nd.month === month));
+  });
 }
 
 function formatSpecificDatePrice(
@@ -583,7 +627,7 @@ function formatSpecificDatePrice(
 ) {
   const group = findPriceGroupByYmd(trip, ymd, now);
   if (!group) {
-    return `💰 ${label}-ны үнийн мэдээлэл одоогоор тусдаа баталгаажаагүй байна.`;
+    return `💰 ${label}-ны үнийн мэдээлэл дэлгэрэнгүй мэдэхийг хүсвэл аяллын зөвлөхтэй холбогдоорой.`;
   }
 
   const currency = trip.currency || "MNT";
@@ -594,7 +638,7 @@ function formatSpecificDatePrice(
   if (adult) parts.push(`Том хүн: ${adult}`);
   if (child) parts.push(`Хүүхэд: ${child}`);
   if (infant) parts.push(`Нярай: ${infant}`);
-  const suffix = parts.length ? parts.join(" | ") : "Үнийн мэдээлэл алга байна.";
+  const suffix = parts.length ? parts.join(" | ") : "Аяллын зөвлөхтэй холбогдоорой.";
   return `💰 ${label}: ${suffix}`;
 }
 
@@ -725,7 +769,16 @@ export function buildDiscountReply(text: string, trips: TravelTrip[]): string | 
   const hasDiscountInText = /хямдрал|тусгай|үнэгүй|хөнгөлөлт|discount|promo/i.test(discountText);
 
   if (discountGroups.length === 0 && !hasDiscountInText) {
-    return `${best.route_name}: одоогоор тусгай хямдралтай огноо баталгаажаагүй байна. Аяллын зөвлөхтэй холбогдож лавлана уу.`;
+    const lines = [
+      `✈️ ${best.route_name}`,
+      "💡 Хямдралтай үнийн мэдээлэл одоогоор тусдаа баталгаажаагүй байна.",
+      formatTripBasePrice(best),
+    ];
+    if (best.departure_dates.length > 0) {
+      lines.push(`📅 Гарах өдрүүд: ${formatDepartureDates(best)}`);
+    }
+    lines.push("Дэлгэрэнгүйг манай аяллын зөвлөхөөс лавлаарай.");
+    return lines.join("\n");
   }
 
   const lines: string[] = [`✈️ ${best.route_name} — Хямдралтай үнэ:`];
@@ -861,6 +914,16 @@ export function buildStructuredTripReply(
   if (samePriceReply && hasSamePriceComparisonIntent(text)) {
     return samePriceReply;
   }
+  if (hasSamePriceComparisonIntent(text) && !samePriceReply) {
+    const fallbackLines = [
+      `✈️ ${best.route_name}`,
+      formatTripBasePrice(best),
+    ];
+    if (best.departure_dates.length > 0) {
+      fallbackLines.push(`📅 Гарах өдрүүд: ${formatDepartureDates(best)}`);
+    }
+    return fallbackLines.join("\n");
+  }
 
   const lines: string[] = [];
   const askedPrice = hasPriceIntent(text);
@@ -882,19 +945,23 @@ export function buildStructuredTripReply(
       lines.push("✈️ Энэ аялал шууд нислэгтэй.");
     } else if (directFlight === false) {
       // Check if it's a land+flight combo tour
-      const isLandFlight = /газар.*нислэг\s+хосолсон|газар\+нислэг/i.test(normText(best.route_name));
+      const isLandFlight = isLandFlightCombo(best);
       if (isLandFlight) {
         lines.push("✈️ Энэ нь газар + нислэг хосолсон аялал. Зөвхөн шууд нислэгтэй биш — газрын маршруттай хавсарсан аялал.");
       } else {
         lines.push("✈️ Энэ аялал шууд нислэгтэй биш.");
       }
     } else {
-      // Check source text for partial clues before giving up
-      const srcText = [best.notes, best.source_description].filter(Boolean).join(" ");
-      if (/нислэг|flight/i.test(srcText)) {
-        lines.push("✈️ Нислэгийн дэлгэрэнгүй (шууд эсэх) нь аяллын зөвлөхөөр баталгаажуулна уу.");
+      if (isLandFlightCombo(best)) {
+        lines.push("✈️ Энэ нь газар + нислэг хосолсон аялал. Зөвхөн шууд нислэгтэй биш — газрын маршруттай хавсарсан аялал.");
       } else {
-        lines.push("✈️ Нислэгийн мэдээлэл тодорхойгүй байна. Аяллын зөвлөхтэй холбогдоорой.");
+        // Check source text for partial clues before giving up
+        const srcText = [best.notes, best.source_description].filter(Boolean).join(" ");
+        if (/нислэг|flight/i.test(srcText)) {
+          lines.push("✈️ Нислэгийн дэлгэрэнгүй (шууд эсэх) нь аяллын зөвлөхөөр баталгаажуулна уу.");
+        } else {
+          lines.push("✈️ Нислэгийн мэдээлэл тодорхойгүй байна. Аяллын зөвлөхтэй холбогдоорой.");
+        }
       }
     }
   }
@@ -903,16 +970,19 @@ export function buildStructuredTripReply(
     lines.push(`🗓 Хугацаа: ${best.duration_text || "Хугацааны мэдээлэл алга байна."}`);
   }
 
+  // Detect if user asked about a specific month only (without a specific day)
+  const askedMonthOnly = extractMonthOnlyFromText(text);
+
   if (askedPrice) {
     const mnDates = extractDatesFromText(text);
     if (mnDates.length > 0) {
-      // Use month/day lookup — works for both Mongolian price_groups and ISO departure_date_groups
+      // Specific day(s) requested — use month/day lookup
       const currency = best.currency || "MNT";
       for (const md of mnDates) {
         const g = findPriceGroupByMonthDay(best, md.month, md.day, now);
         const label = `${md.month} сарын ${md.day}`;
         if (!g) {
-          lines.push(`💰 ${label}-ны үнийн мэдээлэл тодорхойгүй байна.`);
+          lines.push(`💰 ${label}-д тохирох үнийн мэдээлэл олдсонгүй. Аяллын зөвлөхтэй холбогдоорой.`);
         } else {
           const adult = formatMoney(
             typeof (g as Record<string, unknown>).adult_price === "number"
@@ -936,8 +1006,41 @@ export function buildStructuredTripReply(
           if (adult) parts.push(`Том хүн: ${adult}`);
           if (child) parts.push(`Хүүхэд: ${child}`);
           if (infant) parts.push(`Нярай: ${infant}`);
-          lines.push(`💰 ${label}: ${parts.length ? parts.join(" | ") : "үнэ тодорхойгүй"}`);
+          lines.push(`💰 ${label}: ${parts.length ? parts.join(" | ") : "аяллын зөвлөхтэй холбогдоорой"}`);
         }
+      }
+    } else if (askedMonthOnly !== null) {
+      // Month-only request: filter price_groups to that month
+      const currency = best.currency || "MNT";
+      const monthGroups = filterPriceGroupsByMonth(getStructuredPriceGroups(best), askedMonthOnly);
+      if (monthGroups.length > 0) {
+        lines.push(`💰 ${askedMonthOnly} сарын үнэ:`);
+        for (const g of monthGroups) {
+          const adult = formatMoney(typeof g.adult_price === "number" ? g.adult_price : null, currency);
+          const child = formatMoney(typeof g.child_price === "number" ? g.child_price : null, currency);
+          const infant = formatMoney(typeof g.infant_price === "number" ? g.infant_price : null, currency);
+          const priceParts: string[] = [];
+          if (adult) priceParts.push(`Том хүн: ${adult}`);
+          if (child) {
+            const childAge = typeof g.child_age === "string" && g.child_age.trim() ? ` (${g.child_age.trim()})` : "";
+            priceParts.push(`Хүүхэд${childAge}: ${child}`);
+          }
+          if (infant) priceParts.push(`Нярай: ${infant}`);
+          const rawDates = Array.isArray(g.dates) ? g.dates as string[] : [];
+          // Only show dates belonging to this month
+          const monthDates = rawDates.filter((d) => normalizeMnDate(d).some((nd) => nd.month === askedMonthOnly));
+          const dateDisplay = monthDates.length > 0 ? compactDates(monthDates) : (typeof g.label === "string" ? g.label : "");
+          if (dateDisplay) {
+            lines.push(`  ${dateDisplay}: ${priceParts.join(" | ")}`);
+          } else if (priceParts.length) {
+            lines.push(`  ${priceParts.join(" | ")}`);
+          }
+        }
+        const childRulesStr = formatChildRules(best, currency);
+        if (childRulesStr) lines.push(childRulesStr);
+      } else {
+        // Fall back to full price table
+        lines.push(formatTripBasePrice(best));
       }
     } else if (requestedDates.length > 0) {
       for (const ymd of requestedDates) {
@@ -948,8 +1051,26 @@ export function buildStructuredTripReply(
     }
   }
 
+  // Schedule: filter departure_dates to asked month if applicable
   if (askedSchedule || (askedPrice && best.departure_dates.length > 0)) {
-    lines.push(`📅 Гарах өдрүүд: ${formatDepartureDates(best)}`);
+    if (askedMonthOnly !== null && best.departure_dates.length > 0) {
+      const monthDates = best.departure_dates.filter((d) => {
+        // Match "N сарын D", "N/D", or ISO "YYYY-MM-DD"
+        const mn = normalizeMnDate(d);
+        if (mn.length > 0) return mn.some((nd) => nd.month === askedMonthOnly);
+        // ISO check
+        const isoM = /^\d{4}-(\d{2})-\d{2}$/.exec(d);
+        if (isoM) return parseInt(isoM[1], 10) === askedMonthOnly;
+        return false;
+      });
+      if (monthDates.length > 0) {
+        lines.push(`📅 ${askedMonthOnly} сарын гарах өдрүүд: ${compactDates(monthDates)}`);
+      } else {
+        lines.push(`📅 Гарах өдрүүд: ${formatDepartureDates(best)}`);
+      }
+    } else {
+      lines.push(`📅 Гарах өдрүүд: ${formatDepartureDates(best)}`);
+    }
   }
 
   if (

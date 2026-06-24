@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildStructuredTripReply } from "../src/lib/travelFastPaths";
+import { buildDiscountReply, buildStructuredTripReply } from "../src/lib/travelFastPaths";
 import type { TravelTrip } from "../src/lib/travelOps";
 
 const NOW = new Date("2026-06-24T04:00:00.000Z");
@@ -122,4 +122,46 @@ test("answers that hybrid land+flight route is not a direct flight", () => {
 
   assert.match(reply || "", /шууд нислэгтэй биш/);
   assert.match(reply || "", /9 өдөр \/ 8 шөнө/);
+});
+
+test("discount questions still show regular price when no promo price is stored", () => {
+  const reply = buildDiscountReply(
+    "Хайнан Хайкоу аяллын хямдралтай үнэ байгаа юу?",
+    [
+      trip({
+        id: "haikou",
+        route_name: "Хайнан - Хайкоу шууд нислэгтэй аялал",
+        duration_text: "8 өдөр / 7 шөнө",
+        adult_price: 2990000,
+        child_price: 2790000,
+        departure_dates: ["7 сарын 5", "7 сарын 12"],
+      }),
+    ],
+  );
+
+  assert.match(reply || "", /Хямдралтай үнийн мэдээлэл/);
+  assert.match(reply || "", /2,990,000₮/);
+  assert.match(reply || "", /2,790,000₮/);
+  assert.match(reply || "", /7 сарын 5/);
+});
+
+test("same-price comparison fails safe when date-group prices are not stored", () => {
+  const reply = buildStructuredTripReply(
+    "Шанхай Жанжиажэ аяллын 6 сарын 27, 7 сарын 18 үнэ адилхан уу?",
+    [
+      trip({
+        id: "shanghai-missing-groups",
+        route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
+        duration_text: "8 өдөр / 7 шөнө",
+        adult_price: 3590000,
+        child_price: 3260000,
+        departure_dates: ["6 сарын 27", "7 сарын 18"],
+        extra: {},
+      }),
+    ],
+    NOW,
+  );
+
+  assert.match(reply || "", /үнэ|Том хүн/);
+  assert.doesNotMatch(reply || "", /адилхан байна/);
 });
