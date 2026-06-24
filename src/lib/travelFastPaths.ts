@@ -848,17 +848,48 @@ export function hasSeatsIntent(text: string): boolean {
   return hasMn || hasEn;
 }
 
+function getSeatSalesMessage(trip: TravelTrip): string | null {
+  if (typeof trip.seats_left !== "number" || Number.isNaN(trip.seats_left)) {
+    return null;
+  }
+
+  if (trip.seats_left === 0) {
+    return "Уучлаарай, энэ гаралтын суудал дүүрсэн байна.\nДараагийн гарах өдрийг санал болгоё.";
+  }
+
+  if (trip.seats_left >= 1 && trip.seats_left <= 7) {
+    return "Суудал цөөн үлдсэн тул захиалга өгөх бол аяллын зөвлөхтэй хурдан холбогдоорой.";
+  }
+
+  return null;
+}
+
+function buildTripInfoReply(trip: TravelTrip) {
+  const lines = [`\u2708\uFE0F ${trip.route_name}`];
+
+  if (trip.duration_text) {
+    lines.push(`\uD83D\uDDD3 Хугацаа: ${trip.duration_text}`);
+  }
+
+  lines.push(formatTripBasePrice(trip));
+
+  if (trip.departure_dates.length > 0) {
+    lines.push(`\uD83D\uDCC5 Гарах өдрүүд: ${formatDepartureDates(trip)}`);
+  }
+
+  const seatMessage = getSeatSalesMessage(trip);
+  if (seatMessage) {
+    lines.push(seatMessage);
+  }
+
+  return lines.join("\n");
+}
+
 export function buildSeatsReply(text: string, trips: TravelTrip[]): string | null {
   const { best, ambiguous } = findBestTripMatch(text, trips);
   if (!best) return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
 
-  if (best.seats_left === null) {
-    return `${best.route_name}: суудлын мэдээлэл одоогоор байхгүй байна.`;
-  }
-  if (best.seats_left === 0 || best.status === "sold_out") {
-    return `${best.route_name}: суудал дүүрсэн байна.`;
-  }
-  return `${best.route_name}: ${best.seats_left} суудал үлдсэн байна.`;
+  return buildTripInfoReply(best);
 }
 
 export function hasCompareIntent(text: string): boolean {
@@ -908,8 +939,9 @@ export function buildCompareReply(text: string, trips: TravelTrip[]): string | n
         }`,
       );
     }
-    if (trip.seats_left !== null) {
-      lines.push(`Үлдсэн суудал: ${trip.seats_left}`);
+    const seatMessage = getSeatSalesMessage(trip);
+    if (seatMessage) {
+      lines.push(seatMessage);
     }
     lines.push("");
   }

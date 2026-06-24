@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildDiscountReply, buildStructuredTripReply } from "../src/lib/travelFastPaths";
+import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply } from "../src/lib/travelFastPaths";
 import type { TravelTrip } from "../src/lib/travelOps";
 
 const NOW = new Date("2026-06-24T04:00:00.000Z");
@@ -164,4 +164,65 @@ test("same-price comparison fails safe when date-group prices are not stored", (
 
   assert.match(reply || "", /үнэ|Том хүн/);
   assert.doesNotMatch(reply || "", /адилхан байна/);
+});
+
+
+test("seat reply omits seat wording when seats are unknown", () => {
+  const reply = buildSeatsReply(
+    "Тэнгэрийн хаалга аяллын суудал байна уу?",
+    [trip({ seats_left: null, seats_total: 20 })],
+  );
+
+  assert.match(reply || "", /Тэнгэрийн/);
+  assert.doesNotMatch(reply || "", /суудлын мэдээлэл|үлдсэн суудал|суудал дүүрсэн|цөөн үлдсэн/i);
+});
+
+test("seat reply omits seat wording when more than seven seats remain", () => {
+  const reply = buildSeatsReply(
+    "Тэнгэрийн хаалга аяллын суудал байна уу?",
+    [trip({ seats_left: 12, seats_total: 20 })],
+  );
+
+  assert.match(reply || "", /Тэнгэрийн/);
+  assert.doesNotMatch(reply || "", /12|үлдсэн суудал|цөөн үлдсэн|суудал дүүрсэн/i);
+});
+
+test("seat reply shows urgency when only a few seats remain", () => {
+  const reply = buildSeatsReply(
+    "Тэнгэрийн хаалга аяллын суудал байна уу?",
+    [trip({ seats_left: 3, seats_total: 20 })],
+  );
+
+  assert.match(reply || "", /Суудал цөөн үлдсэн тул захиалга өгөх бол аяллын зөвлөхтэй хурдан холбогдоорой./);
+});
+
+test("seat reply marks departure full only when seats_left is zero", () => {
+  const reply = buildSeatsReply(
+    "Тэнгэрийн хаалга аяллын суудал байна уу?",
+    [trip({ seats_left: 0, seats_total: 20, status: "active" })],
+  );
+
+  assert.match(reply || "", /энэ гаралтын суудал дүүрсэн байна/);
+  assert.match(reply || "", /Дараагийн гарах өдрийг санал болгоё/);
+});
+
+test("compare reply shows seat wording only for scarcity", () => {
+  const reply = buildCompareReply(
+    "Тэнгэрийн хаалга Чүнчин харьцуул",
+    [
+      trip({
+        id: "scarce",
+        route_name: "Тэнгэрийн хаалга - шууд нислэгтэй",
+        seats_left: 4,
+      }),
+      trip({
+        id: "plenty",
+        route_name: "Тэнгэрийн хаалга-Чүнчин",
+        seats_left: 12,
+      }),
+    ],
+  );
+
+  assert.match(reply || "", /Суудал цөөн үлдсэн тул захиалга өгөх бол аяллын зөвлөхтэй хурдан холбогдоорой./);
+  assert.doesNotMatch(reply || "", /Үлдсэн суудал: 12/);
 });

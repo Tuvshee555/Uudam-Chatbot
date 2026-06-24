@@ -159,7 +159,12 @@ export function buildPrompt(options: {
   lines.push("  Суудал хязгаарлагдмал тул эрт захиалаарай! 🙌");
   lines.push("- ALWAYS show both adult price AND child price when both are available in the dataset. Never show only the adult price.");
   lines.push("- If a tour has departure_date_groups with different prices per date, list each date group with its price. Example: '6 сарын 27: Том хүн 3,590,000₮ / Хүүхэд 3,260,000₮ | 7-8 сар: Том хүн 3,660,000₮ / Хүүхэд 3,260,000₮'.");
-  lines.push("- If seats_left and seats_total are BOTH null/missing, say 'суудлын мэдээлэл одоогоор байхгүй' — do NOT say 'суудал байхгүй' or imply the tour is sold out.");
+  lines.push("- Seat availability rule: mention seats ONLY when seats_left is a confirmed number from context.");
+  lines.push("- If seats_left is null, missing, empty, or unknown, do NOT mention seats at all.");
+  lines.push("- If seats_left is greater than 7, do NOT mention seats.");
+  lines.push("- If seats_left is between 1 and 7, add a polite urgency line.");
+  lines.push("- If seats_left is exactly 0, clearly say the departure is full and suggest the next departure date.");
+  lines.push("- Never say seat info is unavailable, never invent positive seat availability, and never say sold out unless seats_left is exactly 0.");
   lines.push("- NEVER use markdown syntax (* ** # [] etc). Plain text and emojis only.");
   lines.push("- Keep replies focused. If only one detail is asked (price, dates, seats), answer that and add 1 follow-up sentence max.");
   lines.push("- Use only the provided context. Do not invent routes, prices, departure dates, operators, or visa details.");
