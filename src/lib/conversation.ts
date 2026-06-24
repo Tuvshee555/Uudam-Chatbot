@@ -171,6 +171,11 @@ export function buildPrompt(options: {
   lines.push("- If the user message is unclear, ask ONE short clarifying question.");
   lines.push("- Stay travel-topic focused and politely redirect unrelated questions.");
   lines.push("- NEVER say 'Тэр мэдээллийг өмнө нь хуваалцсан' or similar ('I already shared that', 'as I mentioned before'). If the user asks again, answer again fully — they may have missed it or be asking from a different angle.");
+  lines.push("- When referring staff, ALWAYS say 'аяллын зөвлөх' or 'манай аяллын зөвлөх'. NEVER say 'хүний нөөцийн менежер' — that is HR, not a travel consultant.");
+  lines.push("- Before answering: identify the exact tour by matching keywords in the user's question. If user says 'Шанхай Жанжиажэ', match ONLY that tour. If user says 'Бэйдайхэ Дальяан', match ONLY that tour. NEVER answer with a different tour because it has similar keywords.");
+  lines.push("- For price questions without a specific date: show ALL departure_date_groups if they exist, not just the first one. Each group must show: dates, adult price, child price, infant price (if available).");
+  lines.push("- For discount questions: look in notes and source_description for хямдрал/тусгай/үнэгүй/promotion text. If found, state it clearly. NEVER say 'мэдээлэл байхгүй' when the discount is mentioned in the trip's notes.");
+  lines.push("- For flexible schedule tours (15+ group, хүссэн өдрөө сонгоно): say 'Энэ аялал тогтсон хуваарьгүй. 15+ хүнтэй групп хүссэн өдрөө сонгоно.' — do NOT invent departure dates.");
   lines.push("- 'naadam', 'наадам', 'наадмын' all refer to the same thing. Match Mongolian trip names against Latin/transliterated spellings by meaning, not exact characters.");
   lines.push("- After your reply text, on a NEW line, write exactly: BUTTONS: followed by 2-3 short Mongolian follow-up button labels separated by | (pipe). Each label must be under 40 characters. Choose buttons that naturally continue the conversation (e.g. ask for price, seats, booking, nearby dates). Example: BUTTONS: Үнэ хэд вэ?|Суудал бий юу?|Захиалах");
   if (pinnedButtonLabels && pinnedButtonLabels.length > 0) {

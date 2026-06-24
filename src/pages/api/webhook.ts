@@ -12,7 +12,7 @@ import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, sanitizeAss
 import { isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
-import { buildCompareReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, hasCompareIntent, hasSeatsIntent, } from "../../lib/travelFastPaths";
+import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, } from "../../lib/travelFastPaths";
 import { extractTripBrochureAttachmentId, extractTripPhotosForReply, getActiveSeason, isFirstMessage, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
@@ -1397,7 +1397,7 @@ async function handleMessage(
         const delivered = await sendPlatformMessage(
           platform,
           senderId,
-          "Тэр мэдээллийг өмнө нь хуваалцсан. Өөр асуулт байвал асуугаарай!",
+          "Уучлаарай, яг одоо хариулт боловсруулахад алдаа гарлаа. Хэдэн минутын дараа дахин асууна уу.",
           token,
           pageId,
           igUserId,
@@ -1465,6 +1465,34 @@ async function handleMessage(
       } catch {
       }
       recordCounter("webhook.seats_fast_path_total", 1, { platform });
+      return;
+    }
+  }
+  if (hasDiscountIntent(text)) {
+    const trips = await getTrips();
+    const discountReply = buildDiscountReply(text, trips);
+    if (discountReply) {
+      const safeDiscountReply = enforceWebsiteForPayment(sanitizeAssistantReply(discountReply));
+      await assertLockHealthy();
+      const delivered = await sendPlatformMessage(
+        platform,
+        senderId,
+        safeDiscountReply,
+        token,
+        pageId,
+        igUserId,
+        trace,
+        { allowFallback: false },
+      );
+      if (!delivered) {
+        throw new RetryableWebhookError("delivery_failed:discount_fast_path");
+      }
+      try {
+        await appendMessage(sessionId, "assistant", safeDiscountReply);
+        await setLastReplyConsistent(sessionId, safeDiscountReply);
+      } catch {
+      }
+      recordCounter("webhook.discount_fast_path_total", 1, { platform });
       return;
     }
   }

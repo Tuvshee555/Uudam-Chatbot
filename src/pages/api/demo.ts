@@ -13,7 +13,7 @@ import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, sanitizeAssistantReply } from "../../lib/reply";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
-import { buildCompareReply, buildSeatsReply, hasCompareIntent, hasSeatsIntent } from "../../lib/travelFastPaths";
+import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent } from "../../lib/travelFastPaths";
 import { getEnv } from "../../lib/env";
 import {
   beginRequestTrace,
@@ -153,6 +153,19 @@ export default async function handler(
         }
       }
 
+      // Fast path: discount query
+      if (hasDiscountIntent(normalizedText)) {
+        const trips = await listTrips({ limit: 5000 });
+        const discountReply = buildDiscountReply(normalizedText, trips);
+        if (discountReply) {
+          const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(discountReply));
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          recordCounter("demo.discount_fast_path_total", 1, {});
+          return res.status(200).json({ reply: safeReply, buttons: [] });
+        }
+      }
+
       // Fast path: trip comparison
       if (hasCompareIntent(normalizedText)) {
         const trips = await listTrips({ limit: 5000 });
@@ -162,6 +175,19 @@ export default async function handler(
           await appendMessage(sessionId, "user", normalizedText);
           await appendMessage(sessionId, "assistant", safeReply);
           recordCounter("demo.compare_fast_path_total", 1, {});
+          return res.status(200).json({ reply: safeReply, buttons: [] });
+        }
+      }
+
+      // Fast path: structured trip query (price/duration/dates/flight for a specific trip)
+      {
+        const trips = await listTrips({ limit: 5000 });
+        const structuredReply = buildStructuredTripReply(normalizedText, trips);
+        if (structuredReply) {
+          const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(structuredReply));
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          recordCounter("demo.structured_fast_path_total", 1, {});
           return res.status(200).json({ reply: safeReply, buttons: [] });
         }
       }

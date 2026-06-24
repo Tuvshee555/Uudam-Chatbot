@@ -1945,10 +1945,32 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
           const ap = typeof g.adult_price === "number" ? `adult ${g.adult_price}` : "";
           const cp = typeof g.child_price === "number" ? `child ${g.child_price}` : "";
           const ip = typeof g.infant_price === "number" ? `infant ${g.infant_price}` : "";
-          return `[${dates}: ${[ap, cp, ip].filter(Boolean).join(" / ")}]`;
+          const notes = typeof g.notes === "string" && g.notes.trim() ? ` (${g.notes.trim()})` : "";
+          return `[${dates}: ${[ap, cp, ip].filter(Boolean).join(" / ")}${notes}]`;
         })
         .join("; ");
       details.push(`Price groups: ${groupText}`);
+    }
+    // Emit discount groups if present
+    const discountGroups = Array.isArray(extra.discount_groups) ? extra.discount_groups : [];
+    if (discountGroups.length > 0) {
+      const discountText = (discountGroups as Array<Record<string, unknown>>)
+        .map((g) => {
+          const dates = Array.isArray(g.dates) ? (g.dates as string[]).join(", ") : String(g.dates ?? "");
+          const ap = typeof g.adult_price === "number" ? `adult ${g.adult_price}` : "";
+          const cp = typeof g.child_price === "number" ? `child ${g.child_price}` : "";
+          const ip = typeof g.infant_price === "number" ? `infant ${g.infant_price}` : "";
+          return `[${dates}: ${[ap, cp, ip].filter(Boolean).join(" / ")}]`;
+        })
+        .join("; ");
+      details.push(`Discount groups: ${discountText}`);
+    }
+    // Emit child age range and infant age range if stored
+    if (typeof extra.child_age_range === "string" && extra.child_age_range) {
+      details.push(`Child age range: ${extra.child_age_range}`);
+    }
+    if (typeof extra.infant_age_range === "string" && extra.infant_age_range) {
+      details.push(`Infant age range: ${extra.infant_age_range}`);
     }
     // seats: only emit if actually known (null = unknown, 0 = sold out)
     if (trip.seats_left != null) {

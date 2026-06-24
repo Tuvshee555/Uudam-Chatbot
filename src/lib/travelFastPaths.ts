@@ -44,6 +44,9 @@ const COMPARE_KEYWORDS_MN = [
 ];
 const COMPARE_KEYWORDS_EN = ["compare", "comparison", "vs", "versus", "difference", "better"];
 
+const DISCOUNT_KEYWORDS_MN = ["хямдрал", "хямдралтай", "хөнгөлөлт", "тусгай", "урамшуулал", "промо"];
+const DISCOUNT_KEYWORDS_EN = ["discount", "promo", "promotion", "special", "deal", "offer", "sale"];
+
 const GENERIC_ROUTE_WORDS = new Set([
   "аялал",
   "аяллын",
@@ -288,8 +291,35 @@ function formatPriceLine(group: {
 }
 
 function formatTripBasePrice(trip: TravelTrip) {
-  const adult = formatMoney(trip.adult_price, trip.currency);
-  const child = formatMoney(trip.child_price, trip.currency);
+  const groups = getPriceGroups(trip);
+  const currency = trip.currency || "MNT";
+
+  // If we have per-date price groups, show them all (most informative)
+  if (groups.length > 0) {
+    const lines: string[] = ["💰 Үнэ (гарах огноогоор):"];
+    for (const g of groups) {
+      const dates = Array.isArray(g.dates) && g.dates.length > 0
+        ? g.dates.join(", ")
+        : (g.label ?? "");
+      const adult = formatMoney(g.adult_price ?? null, currency);
+      const child = formatMoney(g.child_price ?? null, currency);
+      const infant = formatMoney(g.infant_price ?? null, currency);
+      const priceParts: string[] = [];
+      if (adult) priceParts.push(`Том хүн: ${adult}`);
+      if (child) priceParts.push(`Хүүхэд: ${child}`);
+      if (infant) priceParts.push(`Нярай: ${infant}`);
+      if (dates && priceParts.length) {
+        lines.push(`  ${dates}: ${priceParts.join(" | ")}`);
+      } else if (priceParts.length) {
+        lines.push(`  ${priceParts.join(" | ")}`);
+      }
+    }
+    return lines.join("\n");
+  }
+
+  // Fall back to flat price
+  const adult = formatMoney(trip.adult_price, currency);
+  const child = formatMoney(trip.child_price, currency);
   const parts: string[] = [];
   if (adult) parts.push(`💰 Том хүн: ${adult}`);
   if (child) parts.push(`💰 Хүүхэд: ${child}`);
@@ -361,6 +391,69 @@ function buildSameTripPriceComparisonReply(
     const group = entry.group!;
     const label = Array.isArray(group.dates) && group.dates.length > 0 ? group.dates[0] : entry.ymd;
     lines.push(formatSpecificDatePrice(trip, entry.ymd, label, now));
+  }
+
+  return lines.join("\n");
+}
+
+export function hasDiscountIntent(text: string): boolean {
+  const normalized = normText(text);
+  const hasMn = DISCOUNT_KEYWORDS_MN.some((keyword) => normalized.includes(keyword));
+  const hasEn = DISCOUNT_KEYWORDS_EN.some((keyword) => normalized.includes(keyword));
+  return hasMn || hasEn;
+}
+
+export function buildDiscountReply(text: string, trips: TravelTrip[]): string | null {
+  const { best, ambiguous } = findBestTripMatch(text, trips);
+  if (!best) return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
+
+  const extra = (best.extra || {}) as Record<string, unknown>;
+  const currency = best.currency || "MNT";
+
+  // Check for explicit discount_groups in extra
+  const discountGroups = Array.isArray(extra.discount_groups)
+    ? (extra.discount_groups as Array<Record<string, unknown>>)
+    : [];
+
+  // Check notes and source_description for discount info
+  const discountText = [best.notes, best.source_description]
+    .filter(Boolean)
+    .join(" ");
+  const hasDiscountInText = /хямдрал|тусгай|үнэгүй|хөнгөлөлт|discount|promo/i.test(discountText);
+
+  if (discountGroups.length === 0 && !hasDiscountInText) {
+    return `${best.route_name}: одоогоор тусгай хямдралтай огноо баталгаажаагүй байна. Аяллын зөвлөхтэй холбогдож лавлана уу.`;
+  }
+
+  const lines: string[] = [`✈️ ${best.route_name} — Хямдралтай үнэ:`];
+
+  if (discountGroups.length > 0) {
+    for (const g of discountGroups) {
+      const dates = Array.isArray(g.dates) ? (g.dates as string[]).join(", ") : String(g.dates ?? "");
+      const adult = formatMoney(typeof g.adult_price === "number" ? g.adult_price : null, currency);
+      const child = formatMoney(typeof g.child_price === "number" ? g.child_price : null, currency);
+      const infant = formatMoney(typeof g.infant_price === "number" ? g.infant_price : null, currency);
+      const priceParts: string[] = [];
+      if (adult) priceParts.push(`Том хүн: ${adult}`);
+      if (child) priceParts.push(`Хүүхэд: ${child}`);
+      if (infant) priceParts.push(`Нярай: ${infant}`);
+      if (dates) lines.push(`  ${dates}: ${priceParts.join(" | ")}`);
+      else lines.push(`  ${priceParts.join(" | ")}`);
+    }
+  }
+
+  // Show regular price for comparison
+  const regularAdult = formatMoney(best.adult_price, currency);
+  const regularChild = formatMoney(best.child_price, currency);
+  if (regularAdult || regularChild) {
+    const regular: string[] = [];
+    if (regularAdult) regular.push(`Том хүн: ${regularAdult}`);
+    if (regularChild) regular.push(`Хүүхэд: ${regularChild}`);
+    lines.push(`Үндсэн үнэ: ${regular.join(" | ")}`);
+  }
+
+  if (hasDiscountInText) {
+    lines.push(`\n${discountText.trim()}`);
   }
 
   return lines.join("\n");
@@ -439,7 +532,7 @@ export function buildCompareReply(text: string, trips: TravelTrip[]): string | n
     lines.push("");
   }
 
-  lines.push("Дэлгэрэнгүй мэдээлэл эсвэл захиалга хийхийн тулд манай ажилтантай холбогдоорой.");
+  lines.push("Дэлгэрэнгүй мэдээлэл эсвэл захиалга хийхийн тулд манай аяллын зөвлөхтэй холбогдоорой.");
   return lines.join("\n");
 }
 
@@ -477,9 +570,21 @@ export function buildStructuredTripReply(
     if (directFlight === true) {
       lines.push("✈️ Энэ аялал шууд нислэгтэй.");
     } else if (directFlight === false) {
-      lines.push("✈️ Энэ аялал шууд нислэгтэй биш.");
+      // Check if it's a land+flight combo tour
+      const isLandFlight = /газар.*нислэг\s+хосолсон|газар\+нислэг/i.test(normText(best.route_name));
+      if (isLandFlight) {
+        lines.push("✈️ Энэ нь газар + нислэг хосолсон аялал. Зөвхөн шууд нислэгтэй биш — газрын маршруттай хавсарсан аялал.");
+      } else {
+        lines.push("✈️ Энэ аялал шууд нислэгтэй биш.");
+      }
     } else {
-      lines.push("✈️ Нислэгийн төрлийн мэдээлэл одоогоор баталгаажаагүй байна.");
+      // Check source text for partial clues before giving up
+      const srcText = [best.notes, best.source_description].filter(Boolean).join(" ");
+      if (/нислэг|flight/i.test(srcText)) {
+        lines.push("✈️ Нислэгийн дэлгэрэнгүй (шууд эсэх) нь аяллын зөвлөхөөр баталгаажуулна уу.");
+      } else {
+        lines.push("✈️ Нислэгийн мэдээлэл тодорхойгүй байна. Аяллын зөвлөхтэй холбогдоорой.");
+      }
     }
   }
 
