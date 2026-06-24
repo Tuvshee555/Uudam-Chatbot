@@ -700,6 +700,13 @@ function buildBatchSourceParts(input: {
     "Before flagging any price conflict, first check: do the different prices correspond to different dates, months, passenger types, room types, or packages? If ANY of those differ → store all in notes, no conflict, no question.",
     "QUESTION GATE: ask a human only for a required low-confidence value or two meaningful values that genuinely disagree. The question must quote the exact tour and exact conflicting text, and the answer must change a database value. Never emit a generic 'route/operator/price/date unclear' question.",
     "BATCH RULE: each PDF is one separate tour unless that PDF visibly contains multiple complete products. Different filenames, routes, dates, prices, or the same operator across PDFs are expected and are not cross-file conflicts.",
+    "",
+    "CRITICAL — count every distinct trip in the source and produce one action per trip:",
+    "A document may contain 10, 20, or 30+ numbered trips. Read the ENTIRE document. Each distinct destination/package = one action. Do NOT stop after the first few trips.",
+    "Numbered list rule: every numbered heading (1, 2, 3 … or #1, #2) marks a new trip. Count all numbered headings first, then produce exactly that many actions. If you produce fewer, set needs_confirmation=true and add a conflict 'N аялал илэрлээ, M-г боловсруулсан — бүрэн уншина уу'.",
+    "Table/free-form rule: trip boundaries = new price table + new route heading + new departure dates = new trip.",
+    "",
+    "YEAR RULE: If the source only lists month and day (e.g. '6 сарын 4', '07/16') WITHOUT a year, do NOT invent a year. Do not write 2023, 2024, or any year that is not stated. Store month-day only in extra.departure_date_groups with year: null. If there is no year anywhere in the source, set needs_confirmation=true with one single question 'Эдгээр аяллын жилийг тодруулна уу (2025 эсвэл 2026?)' — never silently assume a year.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -1241,8 +1248,11 @@ export async function generateAIProposalFromContent(input: {
     "If possible, match against existing trips to update them; otherwise propose adding new trips.",
     "",
     "CRITICAL — count every distinct trip in the source and produce one action per trip:",
-    "A single PDF may contain 2, 3, or more separate trips on different pages or sections. Read the ENTIRE document. Each distinct destination/package = one action. Do NOT stop after finding the first trip.",
-    "To identify trip boundaries: look for new price tables, new route headings, new departure date sets, or new itinerary blocks. Each new combination = a new trip.",
+    "A document may contain 10, 20, or 30+ numbered trips. Read the ENTIRE document. Each distinct destination/package = one action. Do NOT stop after the first few trips.",
+    "Numbered list rule: every numbered heading (1, 2, 3 … or #1, #2) marks a new trip. Count all numbered headings first, then produce exactly that many actions. If you produce fewer, set needs_confirmation=true and add a conflict 'N аялал илэрлээ, M-г боловсруулсан — бүрэн уншина уу'.",
+    "Table/free-form rule: trip boundaries = new price table + new route heading + new departure dates = new trip.",
+    "",
+    "YEAR RULE: If the source only lists month and day (e.g. '6 сарын 4', '07/16') WITHOUT a year, do NOT invent a year. Do not write 2023, 2024, or any year that is not stated. Store month-day only in extra.departure_date_groups with year: null. If there is no year anywhere in the source, set needs_confirmation=true with one single question 'Эдгээр аяллын жилийг тодруулна уу (2025 эсвэл 2026?)' — never silently assume a year.",
     "",
     "CRITICAL — Date-based pricing rule (most common travel agency pattern):",
     "When the SAME trip name has DIFFERENT prices for DIFFERENT departure dates or months, this is NOT a conflict — it is normal seasonal/date pricing.",
@@ -1406,6 +1416,34 @@ export async function generateAIProposalFromContentBatched(input: {
       }
 
       const merged = mergeBatchProposals(proposals, batches.length);
+
+      // Code-side completeness check: count numbered trip markers in source text
+      // and warn if the model returned far fewer actions than expected.
+      const allSourceText = sources
+        .map((s) => s.contentText ?? "")
+        .join("\n");
+      if (allSourceText.trim()) {
+        const numberedMatches = allSourceText.match(/(?:^|\n)\s*\d{1,2}[\.\)]/gm);
+        const detectedCount = numberedMatches ? numberedMatches.length : 0;
+        const actionCount = merged.actions.length;
+        // Only warn when there's a clear gap: 3+ numbered items detected and
+        // the model returned fewer than 70% of them.
+        if (detectedCount >= 3 && actionCount < detectedCount * 0.7) {
+          const warningText = `${detectedCount} аялал илэрлээ, ${actionCount}-г боловсруулсан — файлыг дахин шалгана уу, зарим аялал орхигдсон байж болно.`;
+          merged.needs_confirmation = true;
+          if (!merged.conflicts.includes(warningText)) {
+            merged.conflicts.unshift(warningText);
+          }
+          if (!merged.conflict_items) merged.conflict_items = [];
+          if (!merged.conflict_items.some((ci) => ci.text === warningText)) {
+            merged.conflict_items.unshift({
+              text: warningText,
+              severity: "warning" as ConflictSeverity,
+              type: "completeness_check",
+            });
+          }
+        }
+      }
 
       // Stamp each action's extra.source_file_attachment_id so the saved
       // trip record knows which FB reusable attachment to send customers.
