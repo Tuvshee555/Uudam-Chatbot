@@ -5,6 +5,49 @@
 
 export type TripStatus = "active" | "cancelled" | "sold_out" | "draft";
 
+export type PriceGroup = {
+  label: string;
+  dates: string[];
+  adult_price: number | null;
+  child_price: number | null;
+  infant_price: number | null;
+  child_age: string;
+  infant_age: string;
+  note: string;
+};
+
+export type DiscountGroup = {
+  label: string;
+  dates: string[];
+  adult_price: number | null;
+  child_price: number | null;
+  infant_price: number | null;
+  condition: string;
+  note: string;
+};
+
+export type ChildRule = {
+  label: string;
+  age_range: string;
+  price: number | null;
+  note: string;
+};
+
+export type ExtraFee = {
+  label: string;
+  amount: number | null;
+  currency: string;
+  applies_to: string;
+  note: string;
+};
+
+export type RoomPrice = {
+  room_type: string;
+  price: number | null;
+  currency: string;
+  note: string;
+};
+
 export type TravelTrip = {
   id: string;
   category: string;
@@ -25,6 +68,16 @@ export type TravelTrip = {
   photo_urls: string[];
   extra: Record<string, unknown>;
   updated_at: string;
+  aliases: string[];
+  price_groups: PriceGroup[];
+  discounts: DiscountGroup[];
+  child_rules: ChildRule[];
+  extra_fees: ExtraFee[];
+  departure_rule: string;
+  included_items: string[];
+  excluded_items: string[];
+  room_prices: RoomPrice[];
+  important_notes: string[];
 };
 
 export type PauseRow = {

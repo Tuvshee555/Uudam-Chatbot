@@ -146,6 +146,27 @@ function getPriceGroups(trip: TravelTrip): DepartureDateGroup[] {
   return Array.isArray(groups) ? (groups as DepartureDateGroup[]) : [];
 }
 
+function getAliases(trip: TravelTrip): string[] {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  return Array.isArray(extra.aliases) ? (extra.aliases as string[]).filter(Boolean) : [];
+}
+
+function getStructuredPriceGroups(trip: TravelTrip): Array<Record<string, unknown>> {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  if (Array.isArray(extra.price_groups) && extra.price_groups.length > 0) {
+    return extra.price_groups as Array<Record<string, unknown>>;
+  }
+  return [];
+}
+
+function getStructuredDiscounts(trip: TravelTrip): Array<Record<string, unknown>> {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  if (Array.isArray(extra.discounts) && extra.discounts.length > 0) {
+    return extra.discounts as Array<Record<string, unknown>>;
+  }
+  return [];
+}
+
 function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] {
   const query = normText(text);
   const queryWords = unique(keywordTokens(text));
@@ -159,16 +180,24 @@ function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] {
     const routeKeywords = unique(keywordTokens(trip.route_name));
     if (!routeKeywords.length) continue;
 
+    // Check aliases for an exact match bonus
+    const aliases = getAliases(trip);
+    const aliasHit = aliases.some((alias) => {
+      const aliasNorm = normText(alias);
+      return query.includes(aliasNorm) || aliasNorm.includes(query);
+    }) ? 1 : 0;
+
     const matchedWords = routeKeywords.filter((word) => queryWords.includes(word));
     const coverage = matchedWords.length / routeKeywords.length;
     const exactRouteHit = query.includes(routeNorm) ? 1 : 0;
     const minMatchCount = routeKeywords.length === 1 ? 1 : 2;
 
-    if (matchedWords.length < minMatchCount && exactRouteHit === 0) continue;
-    if (coverage < 0.5 && exactRouteHit === 0) continue;
+    if (matchedWords.length < minMatchCount && exactRouteHit === 0 && aliasHit === 0) continue;
+    if (coverage < 0.5 && exactRouteHit === 0 && aliasHit === 0) continue;
 
     const score =
       exactRouteHit * 100 +
+      aliasHit * 80 +
       matchedWords.length * 20 +
       coverage * 10 -
       Math.max(0, routeKeywords.length - matchedWords.length);
@@ -291,10 +320,40 @@ function formatPriceLine(group: {
 }
 
 function formatTripBasePrice(trip: TravelTrip) {
-  const groups = getPriceGroups(trip);
   const currency = trip.currency || "MNT";
 
-  // If we have per-date price groups, show them all (most informative)
+  // Prefer new structured price_groups from extra
+  const structuredGroups = getStructuredPriceGroups(trip);
+  if (structuredGroups.length > 0) {
+    const lines: string[] = ["💰 Үнэ (гарах огноогоор):"];
+    for (const g of structuredGroups) {
+      const dates = Array.isArray(g.dates) && (g.dates as string[]).length > 0
+        ? (g.dates as string[]).join(", ")
+        : String(g.label ?? "");
+      const adult = formatMoney(typeof g.adult_price === "number" ? g.adult_price : null, currency);
+      const child = formatMoney(typeof g.child_price === "number" ? g.child_price : null, currency);
+      const infant = formatMoney(typeof g.infant_price === "number" ? g.infant_price : null, currency);
+      const priceParts: string[] = [];
+      if (adult) priceParts.push(`Том хүн: ${adult}`);
+      if (child) {
+        const childAge = typeof g.child_age === "string" && g.child_age.trim() ? ` (${g.child_age.trim()})` : "";
+        priceParts.push(`Хүүхэд${childAge}: ${child}`);
+      }
+      if (infant) {
+        const infantAge = typeof g.infant_age === "string" && g.infant_age.trim() ? ` (${g.infant_age.trim()})` : "";
+        priceParts.push(`Нярай${infantAge}: ${infant}`);
+      }
+      if (dates && priceParts.length) {
+        lines.push(`  ${dates}: ${priceParts.join(" | ")}`);
+      } else if (priceParts.length) {
+        lines.push(`  ${priceParts.join(" | ")}`);
+      }
+    }
+    return lines.join("\n");
+  }
+
+  // Fall back to legacy departure_date_groups
+  const groups = getPriceGroups(trip);
   if (groups.length > 0) {
     const lines: string[] = ["💰 Үнэ (гарах огноогоор):"];
     for (const g of groups) {

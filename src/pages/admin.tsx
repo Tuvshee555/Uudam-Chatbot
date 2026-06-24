@@ -16,7 +16,8 @@ import { PaymentsTab } from "@/components/admin/PaymentsTab";
 import { SeasonsTab } from "@/components/admin/SeasonsTab";
 import { SettingsTab } from "@/components/admin/SettingsTab";
 import { TripsTab } from "@/components/admin/TripsTab";
-import type { AIAction, AIProposal, AIProposalResponse, AttachedFile, ChatButton, ChatMessage, ClarificationAnswer, ClarificationQuestion, AdminMsg, ConflictItem, ConflictSeverity, ControlState, DriveSyncDiagnostics, DriveSyncRecentFile, FlowRule, LeadCrmStatus, LeadStats, NoteMsg, PageControlState, ParseUploadUnit, PauseRow, ProposalMsg, ReadinessReport, RecentRow, SettingsForm, StructuredRow, TabKey, TravelBotSettings, TravelLead, TravelTrip, TripStatus } from "@/lib/adminTypes";
+import { TripEditModal } from "@/components/admin/TripEditModal";
+import type { AIAction, AIProposal, AIProposalResponse, AttachedFile, ChatButton, ChatMessage, ClarificationAnswer, ClarificationQuestion, AdminMsg, ChildRule, ConflictItem, ConflictSeverity, ControlState, DiscountGroup, DriveSyncDiagnostics, DriveSyncRecentFile, ExtraFee, FlowRule, LeadCrmStatus, LeadStats, NoteMsg, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalMsg, ReadinessReport, RecentRow, RoomPrice, SettingsForm, StructuredRow, TabKey, TravelBotSettings, TravelLead, TravelTrip, TripStatus } from "@/lib/adminTypes";
 import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, DURATIONS, FIELD_LABELS, HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS, STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, delayMs, describeAction, driveSyncTone, fileToDataUrl, formatBytes, formatMoneyValue, formatTime, getSecretStorage, getTestBotConversationId, handoffDurationSelectValue, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, settingsToForm, shortId, splitLines, summarizeConflict, timeLeft, toStructuredRows, uid } from "@/lib/adminPageUtils";
 const BLANK_TRIP_DRAFT: Record<string, string> = { category: "", operator_name: "", route_name: "", duration_text: "", adult_price: "", child_price: "", currency: "MNT", seats_total: "", seats_left: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "", brochure_pdf_url: "" };
 export default function AdminPage() {
@@ -73,6 +74,16 @@ export default function AdminPage() {
   const [tripPhotoInput, setTripPhotoInput] = useState("");
   const [photoDragging, setPhotoDragging] = useState(false);
   const [photoUploading, setPhotoUploading] = useState<string[]>([]); // track uploading file names
+  const [tripAliases, setTripAliases] = useState<string[]>([]);
+  const [tripPriceGroups, setTripPriceGroups] = useState<PriceGroup[]>([]);
+  const [tripDiscounts, setTripDiscounts] = useState<DiscountGroup[]>([]);
+  const [tripChildRules, setTripChildRules] = useState<ChildRule[]>([]);
+  const [tripExtraFees, setTripExtraFees] = useState<ExtraFee[]>([]);
+  const [tripDepartureRule, setTripDepartureRule] = useState("");
+  const [tripIncludedItems, setTripIncludedItems] = useState<string[]>([]);
+  const [tripExcludedItems, setTripExcludedItems] = useState<string[]>([]);
+  const [tripRoomPrices, setTripRoomPrices] = useState<RoomPrice[]>([]);
+  const [tripImportantNotes, setTripImportantNotes] = useState<string[]>([]);
   const [deletingTrip, setDeletingTrip] = useState<TravelTrip | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [leads, setLeads] = useState<TravelLead[]>([]);
@@ -1132,6 +1143,16 @@ export default function AdminPage() {
     setTripDraft({ ...BLANK_TRIP_DRAFT });
     setTripPhotoUrls([]);
     setTripPhotoInput("");
+    setTripAliases([]);
+    setTripPriceGroups([]);
+    setTripDiscounts([]);
+    setTripChildRules([]);
+    setTripExtraFees([]);
+    setTripDepartureRule("");
+    setTripIncludedItems([]);
+    setTripExcludedItems([]);
+    setTripRoomPrices([]);
+    setTripImportantNotes([]);
   }
   function beginEditTrip(trip: TravelTrip) {
     setIsNewTrip(false);
@@ -1157,6 +1178,16 @@ export default function AdminPage() {
     });
     setTripPhotoUrls(trip.photo_urls || []);
     setTripPhotoInput("");
+    setTripAliases(Array.isArray(trip.extra?.aliases) ? (trip.extra.aliases as string[]) : []);
+    setTripPriceGroups(Array.isArray(trip.extra?.price_groups) ? (trip.extra.price_groups as PriceGroup[]) : []);
+    setTripDiscounts(Array.isArray(trip.extra?.discounts) ? (trip.extra.discounts as DiscountGroup[]) : []);
+    setTripChildRules(Array.isArray(trip.extra?.child_rules) ? (trip.extra.child_rules as ChildRule[]) : []);
+    setTripExtraFees(Array.isArray(trip.extra?.extra_fees) ? (trip.extra.extra_fees as ExtraFee[]) : []);
+    setTripDepartureRule(typeof trip.extra?.departure_rule === "string" ? trip.extra.departure_rule : "");
+    setTripIncludedItems(Array.isArray(trip.extra?.included_items) ? (trip.extra.included_items as string[]) : []);
+    setTripExcludedItems(Array.isArray(trip.extra?.excluded_items) ? (trip.extra.excluded_items as string[]) : []);
+    setTripRoomPrices(Array.isArray(trip.extra?.room_prices) ? (trip.extra.room_prices as RoomPrice[]) : []);
+    setTripImportantNotes(Array.isArray(trip.extra?.important_notes) ? (trip.extra.important_notes as string[]) : []);
   }
   const tripModalOpen = isNewTrip || editingTrip != null;
   async function handlePhotoFiles(files: FileList | File[]) {
@@ -1232,6 +1263,16 @@ export default function AdminPage() {
       photo_urls: tripPhotoUrls,
       extra: {
         brochure_pdf_url: tripDraft.brochure_pdf_url?.trim() || null,
+        aliases: tripAliases.filter(Boolean),
+        price_groups: tripPriceGroups,
+        discounts: tripDiscounts,
+        child_rules: tripChildRules,
+        extra_fees: tripExtraFees,
+        departure_rule: tripDepartureRule.trim(),
+        included_items: tripIncludedItems.filter(Boolean),
+        excluded_items: tripExcludedItems.filter(Boolean),
+        room_prices: tripRoomPrices,
+        important_notes: tripImportantNotes.filter(Boolean),
       },
     };
     if (!fields.route_name.trim()) {
@@ -1722,295 +1763,45 @@ export default function AdminPage() {
         }}
       />
       {/* Trip edit / create modal */}
-      <Modal
+      <TripEditModal
         open={tripModalOpen}
+        isNewTrip={isNewTrip}
+        editingTrip={editingTrip}
+        tripDraft={tripDraft}
+        setTripDraft={setTripDraft}
+        tripPhotoUrls={tripPhotoUrls}
+        setTripPhotoUrls={setTripPhotoUrls}
+        tripPhotoInput={tripPhotoInput}
+        setTripPhotoInput={setTripPhotoInput}
+        photoDragging={photoDragging}
+        setPhotoDragging={setPhotoDragging}
+        photoUploading={photoUploading}
+        photoFileInputRef={photoFileInputRef}
+        busyKey={busyKey}
+        handlePhotoFiles={handlePhotoFiles}
         onClose={closeTripModal}
-        title={isNewTrip ? "Шинэ аялал нэмэх" : "Аялал засах"}
-        description={
-          isNewTrip ? undefined : editingTrip?.route_name || undefined
-        }
-        footer={
-          <>
-            <Button variant="secondary" onClick={closeTripModal}>
-              Болих
-            </Button>
-            <Button
-              loading={busyKey === "save-trip"}
-              onClick={() => void saveTrip()}
-            >
-              Хадгалах
-            </Button>
-          </>
-        }
-      >
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Input
-            label="Маршрут"
-            value={tripDraft.route_name}
-            onChange={(e) =>
-              setTripDraft((p) => ({ ...p, route_name: e.target.value }))
-            }
-          />
-          <Input
-            label="Оператор"
-            value={tripDraft.operator_name}
-            onChange={(e) =>
-              setTripDraft((p) => ({ ...p, operator_name: e.target.value }))
-            }
-          />
-          <Input
-            label="Ангилал"
-            value={tripDraft.category}
-            onChange={(e) =>
-              setTripDraft((p) => ({ ...p, category: e.target.value }))
-            }
-          />
-          <Input
-            label="Хугацаа (ж: 5ш6ө)"
-            value={tripDraft.duration_text}
-            onChange={(e) =>
-              setTripDraft((p) => ({ ...p, duration_text: e.target.value }))
-            }
-          />
-          <Input
-            label="Том хүний үнэ"
-            inputMode="numeric"
-            value={tripDraft.adult_price}
-            onChange={(e) =>
-              setTripDraft((p) => ({ ...p, adult_price: e.target.value }))
-            }
-          />
-          <Input
-            label="Хүүхдийн үнэ"
-            inputMode="numeric"
-            value={tripDraft.child_price}
-            onChange={(e) =>
-              setTripDraft((p) => ({ ...p, child_price: e.target.value }))
-            }
-          />
-          <Select
-            label="Валют"
-            value={tripDraft.currency}
-            onChange={(e) =>
-              setTripDraft((p) => ({ ...p, currency: e.target.value }))
-            }
-          >
-            <option value="MNT">MNT (₮)</option>
-            <option value="CNY">CNY (юань)</option>
-            <option value="USD">USD ($)</option>
-          </Select>
-          <Select
-            label="Төлөв"
-            value={tripDraft.status}
-            onChange={(e) =>
-              setTripDraft((p) => ({ ...p, status: e.target.value }))
-            }
-          >
-            <option value="active">Идэвхтэй</option>
-            <option value="cancelled">Цуцлагдсан</option>
-            <option value="sold_out">Суудал дууссан</option>
-            <option value="draft">Ноорог</option>
-          </Select>
-          <Input
-            label="Нийт суудал"
-            inputMode="numeric"
-            value={tripDraft.seats_total}
-            onChange={(e) =>
-              setTripDraft((p) => ({ ...p, seats_total: e.target.value }))
-            }
-          />
-          <Input
-            label="Үлдсэн суудал"
-            inputMode="numeric"
-            value={tripDraft.seats_left}
-            onChange={(e) =>
-              setTripDraft((p) => ({ ...p, seats_left: e.target.value }))
-            }
-          />
-          <Select
-            label="Хоол"
-            value={tripDraft.has_food}
-            onChange={(e) =>
-              setTripDraft((p) => ({ ...p, has_food: e.target.value }))
-            }
-          >
-            <option value="unknown">Тодорхойгүй</option>
-            <option value="true">Багтсан</option>
-            <option value="false">Багтаагүй</option>
-          </Select>
-          <Input
-            label="Гарах өдөр (таслалаар)"
-            value={tripDraft.departure_dates}
-            onChange={(e) =>
-              setTripDraft((p) => ({ ...p, departure_dates: e.target.value }))
-            }
-          />
-        </div>
-        <div className="mt-3">
-          <Input
-            label="Зочид буудал"
-            placeholder="ж: Shangri-La Ulaanbaatar (4*)"
-            value={tripDraft.hotel}
-            onChange={(e) =>
-              setTripDraft((p) => ({ ...p, hotel: e.target.value }))
-            }
-          />
-        </div>
-        <div className="mt-3">
-          <Textarea
-            label="Эх сурвалжийн тайлбар"
-            rows={2}
-            value={tripDraft.source_description}
-            onChange={(e) =>
-              setTripDraft((p) => ({
-                ...p,
-                source_description: e.target.value,
-              }))
-            }
-          />
-        </div>
-        <div className="mt-3">
-          <Textarea
-            label="Тэмдэглэл"
-            rows={2}
-            value={tripDraft.notes}
-            onChange={(e) =>
-              setTripDraft((p) => ({ ...p, notes: e.target.value }))
-            }
-          />
-        </div>
-        {/* Photo URL editor */}
-        <div className="mt-4">
-          <p className="mb-1 text-sm font-medium text-ink">
-            Аялалын зургууд
-          </p>
-          <p className="mb-2 text-xs text-ink-subtle">
-            Хэрэглэгч энэ аялалыг асуухад бот зургийг автоматаар илгээнэ.
-          </p>
-          {/* Drag-drop upload zone */}
-          <div
-            onDragOver={(e) => { e.preventDefault(); setPhotoDragging(true); }}
-            onDragLeave={() => setPhotoDragging(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setPhotoDragging(false);
-              void handlePhotoFiles(e.dataTransfer.files);
-            }}
-            onClick={() => photoFileInputRef.current?.click()}
-            className={cx(
-              "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-6 transition-colors",
-              photoDragging
-                ? "border-brand bg-brand-soft"
-                : "border-line-strong bg-surface-sunken hover:border-brand",
-            )}
-          >
-            <Icons.download size={24} className="text-ink-subtle" />
-            <p className="text-sm font-medium text-ink">Зураг чирж оруулах эсвэл дарж сонгох</p>
-            <p className="text-xs text-ink-subtle">PNG, JPG, WEBP — хамгийн ихдээ 10MB</p>
-            <input
-              ref={photoFileInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                if (e.target.files) void handlePhotoFiles(e.target.files);
-                e.target.value = "";
-              }}
-            />
-          </div>
-          {/* Uploading indicators */}
-          {photoUploading.length > 0 && (
-            <div className="mt-2 space-y-1">
-              {photoUploading.map((name) => (
-                <div key={name} className="flex items-center gap-2 rounded-md border border-line bg-surface-sunken px-3 py-2 text-xs text-ink-muted">
-                  <Spinner className="shrink-0" />
-                  <span className="truncate">{name} — байршуулж байна…</span>
-                </div>
-              ))}
-            </div>
-          )}
-          {/* Thumbnail previews */}
-          {tripPhotoUrls.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-2">
-              {tripPhotoUrls.map((url, idx) => (
-                <div key={idx} className="group relative h-20 w-20 overflow-hidden rounded-lg border border-line">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={url}
-                    alt={`Зураг ${idx + 1}`}
-                    className="h-full w-full object-cover"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).style.display = "none";
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setTripPhotoUrls((prev) => prev.filter((_, i) => i !== idx))}
-                    className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition-opacity group-hover:opacity-100"
-                    aria-label="Устгах"
-                  >
-                    <Icons.trash size={16} className="text-white" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          {/* Brochure PDF URL */}
-          <div className="mt-4">
-            <p className="mb-1 text-sm font-medium text-ink">Хөтөлбөрийн PDF холбоос</p>
-            <p className="mb-2 text-xs text-ink-subtle">
-              Хэрэглэгч аялалыг асуухад бот хөтөлбөрийн PDF файлыг автоматаар илгээнэ.
-            </p>
-            <input
-              type="url"
-              value={tripDraft.brochure_pdf_url || ""}
-              onChange={(e) => setTripDraft((p) => ({ ...p, brochure_pdf_url: e.target.value }))}
-              placeholder="https://example.com/brochure.pdf"
-              className="w-full rounded-lg border border-line-strong bg-surface-sunken px-3 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none"
-            />
-          </div>
-          {/* Manual URL paste fallback */}
-          <p className="mt-3 mb-1 text-xs font-medium text-ink-muted">Эсвэл URL-аар нэмэх</p>
-          <div className="flex gap-2">
-            <input
-              type="url"
-              value={tripPhotoInput}
-              onChange={(e) => setTripPhotoInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  const url = tripPhotoInput.trim();
-                  if (url.startsWith("https://") && tripPhotoUrls.length < 20) {
-                    setTripPhotoUrls((prev) => [...prev, url]);
-                    setTripPhotoInput("");
-                  }
-                }
-              }}
-              placeholder="https://example.com/photo.jpg"
-              className="flex-1 rounded-lg border border-line-strong bg-surface-sunken px-3 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none"
-            />
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={
-                !tripPhotoInput.trim().startsWith("https://") ||
-                tripPhotoUrls.length >= 20
-              }
-              onClick={() => {
-                const url = tripPhotoInput.trim();
-                if (url.startsWith("https://") && tripPhotoUrls.length < 20) {
-                  setTripPhotoUrls((prev) => [...prev, url]);
-                  setTripPhotoInput("");
-                }
-              }}
-            >
-              <Icons.plus size={14} />
-              Нэмэх
-            </Button>
-          </div>
-        </div>
-      </Modal>
+        onSave={() => void saveTrip()}
+        tripAliases={tripAliases}
+        setTripAliases={setTripAliases}
+        tripPriceGroups={tripPriceGroups}
+        setTripPriceGroups={setTripPriceGroups}
+        tripDiscounts={tripDiscounts}
+        setTripDiscounts={setTripDiscounts}
+        tripChildRules={tripChildRules}
+        setTripChildRules={setTripChildRules}
+        tripExtraFees={tripExtraFees}
+        setTripExtraFees={setTripExtraFees}
+        tripDepartureRule={tripDepartureRule}
+        setTripDepartureRule={setTripDepartureRule}
+        tripIncludedItems={tripIncludedItems}
+        setTripIncludedItems={setTripIncludedItems}
+        tripExcludedItems={tripExcludedItems}
+        setTripExcludedItems={setTripExcludedItems}
+        tripRoomPrices={tripRoomPrices}
+        setTripRoomPrices={setTripRoomPrices}
+        tripImportantNotes={tripImportantNotes}
+        setTripImportantNotes={setTripImportantNotes}
+      />
       <AdminConfirmModals
         deletingTrip={deletingTrip}
         deleteBusy={busyKey.startsWith("delete-trip-")}
