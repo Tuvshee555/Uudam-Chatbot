@@ -410,24 +410,42 @@ function findPriceGroupByMonthDay(
   day: number,
   now = new Date(),
 ): Record<string, unknown> | DepartureDateGroup | null {
-  // 1. Check admin price_groups first
+  const mStr = String(month);
+  const dStr = String(day);
+  const mPad = mStr.padStart(2, "0");
+  const dPad = dStr.padStart(2, "0");
+  const mnVariants = new Set([
+    `${mStr} сарын ${dStr}`,
+    `${mPad} сарын ${dStr}`,
+    `${mStr} сарын ${dPad}`,
+    `${mPad} сарын ${dPad}`,
+    `${mStr}/${dStr}`,
+    `${mPad}/${dStr}`,
+    `${mStr}/${dPad}`,
+    `${mPad}/${dPad}`,
+  ]);
+  const yearCandidates = [now.getFullYear(), now.getFullYear() + 1];
+  for (const yr of yearCandidates) mnVariants.add(`${yr}-${mPad}-${dPad}`);
+
+  // 1. Check structured price_groups — prefer date_keys if populated, fall back to normalizeMnDate
   const structuredGroups = getStructuredPriceGroups(trip);
   for (const g of structuredGroups) {
-    const rawDates = Array.isArray(g.dates) ? (g.dates as string[]) : [];
-    for (const dateText of rawDates) {
-      const parsed = normalizeMnDate(dateText);
-      if (parsed.some((d) => d.month === month && d.day === day)) {
-        return g;
+    const dateKeys = Array.isArray(g.date_keys) ? (g.date_keys as string[]) : [];
+    if (dateKeys.length > 0) {
+      if (dateKeys.some((k) => mnVariants.has(k))) return g;
+    } else {
+      // fallback: parse dates on the fly
+      const rawDates = Array.isArray(g.dates) ? (g.dates as string[]) : [];
+      for (const dateText of rawDates) {
+        const parsed = normalizeMnDate(dateText);
+        if (parsed.some((d) => d.month === month && d.day === day)) return g;
       }
     }
   }
 
   // 2. Fall back to legacy departure_date_groups via ISO comparison
-  const paddedMonth = String(month).padStart(2, "0");
-  const paddedDay = String(day).padStart(2, "0");
-  const yearCandidates = [now.getFullYear(), now.getFullYear() + 1];
   for (const year of yearCandidates) {
-    const ymd = `${year}-${paddedMonth}-${paddedDay}`;
+    const ymd = `${year}-${mPad}-${dPad}`;
     for (const group of getPriceGroups(trip)) {
       const dates = Array.isArray(group.dates) ? group.dates : [];
       for (const dateText of dates) {

@@ -5,20 +5,45 @@
 
 export type TripStatus = "active" | "cancelled" | "sold_out" | "draft";
 
+export type PassengerPrice = {
+  label: string;      // "Том хүн" | "Хүүхэд" | "Нярай"
+  age_range: string;
+  price: number | null;
+  currency: string;
+};
+
+export type SourceProvenance = {
+  file_name: string;
+  page: number | null;
+  source_text: string;
+  confidence: "high" | "medium" | "low";
+};
+
+export type AnswerHint = {
+  intent: "price" | "discount" | "comparison" | "child_price" | "included" | "schedule";
+  question_pattern: string;
+  expected_answer_summary: string;
+};
+
 export type PriceGroup = {
   label: string;
   dates: string[];
+  display_dates: string[];
+  date_keys: string[];
   adult_price: number | null;
   child_price: number | null;
   infant_price: number | null;
   child_age: string;
   infant_age: string;
+  passenger_prices: PassengerPrice[];
   note: string;
 };
 
 export type DiscountGroup = {
   label: string;
   dates: string[];
+  display_dates: string[];
+  date_keys: string[];
   adult_price: number | null;
   child_price: number | null;
   infant_price: number | null;
@@ -30,6 +55,7 @@ export type ChildRule = {
   label: string;
   age_range: string;
   price: number | null;
+  currency: string;
   note: string;
 };
 
@@ -62,6 +88,7 @@ export type TravelTrip = {
   seats_left: number | null;
   has_food: boolean | null;
   status: TripStatus;
+  customer_visible: boolean;
   notes: string;
   hotel: string;
   source_description: string;
@@ -78,6 +105,10 @@ export type TravelTrip = {
   excluded_items: string[];
   room_prices: RoomPrice[];
   important_notes: string[];
+  source_provenance: SourceProvenance[];
+  answer_hints: AnswerHint[];
+  needs_human_review: boolean;
+  review_reasons: string[];
 };
 
 export type PauseRow = {

@@ -8,7 +8,7 @@ import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPrompt, getHistory } from "../../lib/conversation";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
-import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, sanitizeAssistantReply } from "../../lib/reply";
+import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply } from "../../lib/reply";
 import { isPaused, pauseBot, storeSenderName, trackSender } from "../../lib/pause";
 import { createLead, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
@@ -1599,7 +1599,16 @@ async function handleMessage(
   }
   const fixedReply = fixMojibake(aiReply);
   const { text: replyWithoutButtons, buttons: aiButtons } = extractButtons(fixedReply);
-  const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(replyWithoutButtons));
+  const recentAssistantReplies = history
+    .filter((message) => message.role === "assistant")
+    .map((message) => message.text)
+    .slice(-3);
+  const rewrittenReply = rewriteRepeatedGenericClarifier({
+    userText: text,
+    replyText: sanitizeAssistantReply(replyWithoutButtons),
+    recentAssistantReplies,
+  });
+  const safeReply = enforceWebsiteForPayment(rewrittenReply);
   if (lastReply && isDuplicateReply(lastReply.text, safeReply)) {
     recordCounter("webhook.duplicate_reply_avoided_total", 1, { platform });
     await assertLockHealthy();

@@ -284,3 +284,105 @@ export function buildDepartureDateAvailabilityReply(input: {
 
   return `${dateLabel} гарах аялал одоогийн мэдээлэлд алга байна. Одоогоор баталгаатай гарах өдөр бүртгэгдээгүй байна.`;
 }
+
+/**
+ * Generate all date key variants for a single date string.
+ *
+ * Handles:
+ *   "6 сарын 27"         → 5 variants (MN padded/unpadded, slash, ISO with year inference)
+ *   "7 сарын 9-14"       → range → each day as ISO + range key
+ *   "2026-06-27"         → all Mongolian + slash variants
+ *   "6/27"               → all Mongolian + ISO variants
+ *
+ * Returns deduplicated string array. Pass now to control year inference.
+ */
+export function generateDateKeys(dateText: string, now = new Date()): string[] {
+  const keys = new Set<string>();
+  const add = (k: string) => { if (k) keys.add(k.trim()); };
+
+  // ── helper: emit all variants for a single month+day ──────────────────────
+  function emitMonthDay(month: number, day: number, year?: number) {
+    const m = String(month);
+    const mPad = m.padStart(2, "0");
+    const d = String(day);
+    const dPad = d.padStart(2, "0");
+
+    add(`${m} сарын ${d}`);
+    add(`${mPad} сарын ${d}`);
+    add(`${m} сарын ${dPad}`);
+    add(`${mPad} сарын ${dPad}`);
+    add(`${m}/${d}`);
+    add(`${mPad}/${d}`);
+    add(`${m}/${dPad}`);
+    add(`${mPad}/${dPad}`);
+
+    // ISO: use provided year, or infer
+    const yr = year ?? inferYear(month, day, now);
+    if (yr) add(`${yr}-${mPad}-${dPad}`);
+    // Also add next-year ISO so queries near year-end still match
+    if (!year) {
+      const nextYr = yr + 1;
+      add(`${nextYr}-${mPad}-${dPad}`);
+    }
+  }
+
+  // ── try ISO: 2026-06-27 ───────────────────────────────────────────────────
+  const isoM = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(dateText.trim());
+  if (isoM) {
+    const [, yr, mo, dy] = isoM.map(Number);
+    emitMonthDay(mo, dy, yr);
+    return Array.from(keys);
+  }
+
+  // ── try slash: 6/27 ──────────────────────────────────────────────────────
+  const slashM = /^(\d{1,2})\/(\d{1,2})$/.exec(dateText.trim());
+  if (slashM) {
+    const [, mo, dy] = slashM.map(Number);
+    emitMonthDay(mo, dy);
+    return Array.from(keys);
+  }
+
+  // ── try Mongolian range: "7 сарын 9-14" ──────────────────────────────────
+  const rangeM = /^(\d{1,2})\s*сарын\s*(\d{1,2})\s*[-–—]\s*(\d{1,2})$/.exec(dateText.trim());
+  if (rangeM) {
+    const [, moStr, startStr, endStr] = rangeM;
+    const month = parseInt(moStr, 10);
+    const start = parseInt(startStr, 10);
+    const end = parseInt(endStr, 10);
+    const yr = inferYear(month, start, now);
+    const mPad = String(month).padStart(2, "0");
+    // Range key
+    add(`${month} сарын ${start}-${end}`);
+    add(`${yr}-${mPad}-${String(start).padStart(2, "0")}_to_${yr}-${mPad}-${String(end).padStart(2, "0")}`);
+    // Each individual day
+    for (let dy = start; dy <= end; dy++) {
+      if (isValidDateParts(yr, month, dy)) emitMonthDay(month, dy, yr);
+    }
+    return Array.from(keys);
+  }
+
+  // ── try Mongolian multi-day same month: "6 сарын 19, 26" ─────────────────
+  const multiM = /^(\d{1,2})\s*сарын\s*(\d{1,2})((?:\s*[,،]\s*\d{1,2})+)$/.exec(dateText.trim());
+  if (multiM) {
+    const month = parseInt(multiM[1], 10);
+    const days = [parseInt(multiM[2], 10)];
+    for (const part of multiM[3].split(/[,،]/)) {
+      const d = parseInt(part.trim(), 10);
+      if (!isNaN(d)) days.push(d);
+    }
+    for (const dy of days) emitMonthDay(month, dy);
+    return Array.from(keys);
+  }
+
+  // ── try plain Mongolian: "6 сарын 27" ────────────────────────────────────
+  const mnM = /^(\d{1,2})\s*сарын\s*(\d{1,2})$/.exec(dateText.trim());
+  if (mnM) {
+    const [, mo, dy] = mnM.map(Number);
+    emitMonthDay(mo, dy);
+    return Array.from(keys);
+  }
+
+  // ── fallback: return the original as-is ──────────────────────────────────
+  add(dateText);
+  return Array.from(keys);
+}

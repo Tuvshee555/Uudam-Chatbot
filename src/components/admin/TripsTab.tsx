@@ -341,9 +341,17 @@ function TripCard({
             {trip.category ? ` · ${trip.category}` : ""}
           </p>
         </div>
-        <Badge tone={STATUS_TONE[trip.status]}>
-          {STATUS_LABELS[trip.status]}
-        </Badge>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {(trip.extra as Record<string, unknown>)?.needs_human_review === true && (
+            <Badge tone="warning">Шалгах</Badge>
+          )}
+          {(trip.extra as Record<string, unknown>)?.customer_visible === false && (
+            <Badge tone="neutral">Нуусан</Badge>
+          )}
+          <Badge tone={STATUS_TONE[trip.status]}>
+            {STATUS_LABELS[trip.status]}
+          </Badge>
+        </div>
       </div>
       {facts.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">

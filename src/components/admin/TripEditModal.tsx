@@ -1,6 +1,6 @@
 import React from "react";
 import { Button, Icons, Input, Modal, Select, Spinner, Textarea, cx } from "@/components/ui";
-import type { ChildRule, DiscountGroup, ExtraFee, PriceGroup, RoomPrice, TravelTrip } from "@/lib/adminTypes";
+import type { AnswerHint, ChildRule, DiscountGroup, ExtraFee, PassengerPrice, PriceGroup, RoomPrice, SourceProvenance, TravelTrip } from "@/lib/adminTypes";
 
 export type TripDraftState = Record<string, string>;
 
@@ -43,6 +43,16 @@ export type TripEditModalProps = {
   setTripRoomPrices: React.Dispatch<React.SetStateAction<RoomPrice[]>>;
   tripImportantNotes: string[];
   setTripImportantNotes: React.Dispatch<React.SetStateAction<string[]>>;
+  // Metadata fields
+  tripCustomerVisible: boolean;
+  setTripCustomerVisible: React.Dispatch<React.SetStateAction<boolean>>;
+  tripNeedsHumanReview: boolean;
+  setTripNeedsHumanReview: React.Dispatch<React.SetStateAction<boolean>>;
+  tripReviewReasons: string[];
+  setTripReviewReasons: React.Dispatch<React.SetStateAction<string[]>>;
+  tripSourceProvenance: SourceProvenance[];
+  tripAnswerHints: AnswerHint[];
+  setTripAnswerHints: React.Dispatch<React.SetStateAction<AnswerHint[]>>;
 };
 
 const inputCls = "w-full rounded-lg border border-line-strong bg-surface-sunken px-3 py-1.5 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none";
@@ -51,14 +61,17 @@ const sectionHdr = "mt-5 text-sm font-semibold text-ink";
 const rowCls = "flex items-start gap-1.5";
 const delBtn = "shrink-0 rounded-md p-1 text-ink-muted hover:bg-surface-sunken hover:text-red-500";
 
+function emptyPassengerPrice(): PassengerPrice {
+  return { label: "", age_range: "", price: null, currency: "MNT" };
+}
 function emptyPriceGroup(): PriceGroup {
-  return { label: "", dates: [], adult_price: null, child_price: null, infant_price: null, child_age: "", infant_age: "", note: "" };
+  return { label: "", dates: [], display_dates: [], date_keys: [], adult_price: null, child_price: null, infant_price: null, child_age: "", infant_age: "", passenger_prices: [], note: "" };
 }
 function emptyDiscountGroup(): DiscountGroup {
-  return { label: "", dates: [], adult_price: null, child_price: null, infant_price: null, condition: "", note: "" };
+  return { label: "", dates: [], display_dates: [], date_keys: [], adult_price: null, child_price: null, infant_price: null, condition: "", note: "" };
 }
 function emptyChildRule(): ChildRule {
-  return { label: "", age_range: "", price: null, note: "" };
+  return { label: "", age_range: "", price: null, currency: "MNT", note: "" };
 }
 function emptyExtraFee(): ExtraFee {
   return { label: "", amount: null, currency: "MNT", applies_to: "", note: "" };
@@ -105,6 +118,15 @@ export function TripEditModal({
   setTripRoomPrices,
   tripImportantNotes,
   setTripImportantNotes,
+  tripCustomerVisible,
+  setTripCustomerVisible,
+  tripNeedsHumanReview,
+  setTripNeedsHumanReview,
+  tripReviewReasons,
+  setTripReviewReasons,
+  tripSourceProvenance,
+  tripAnswerHints,
+  setTripAnswerHints,
 }: TripEditModalProps) {
   return (
     <Modal
@@ -416,6 +438,42 @@ export function TripEditModal({
                 <input className={inputCls} value={g.note} onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, note: e.target.value } : v))} />
               </div>
             </div>
+            {/* passenger_prices sub-editor */}
+            <div className="mt-2">
+              <p className="mb-1 text-xs font-medium text-ink-muted">Зорчигчийн үнэ (нарийвчилсан)</p>
+              {(g.passenger_prices ?? []).map((pp, ppIdx) => (
+                <div key={ppIdx} className="mb-1 grid gap-1.5 rounded border border-line bg-surface p-2 sm:grid-cols-5">
+                  <div>
+                    <label className="mb-0.5 block text-xs text-ink-subtle">Нэр</label>
+                    <input className={inputCls} value={pp.label} placeholder="Том хүн" onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.map((p2, j) => j === ppIdx ? { ...p2, label: e.target.value } : p2) } : v))} />
+                  </div>
+                  <div>
+                    <label className="mb-0.5 block text-xs text-ink-subtle">Нас</label>
+                    <input className={inputCls} value={pp.age_range} placeholder="2-12" onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.map((p2, j) => j === ppIdx ? { ...p2, age_range: e.target.value } : p2) } : v))} />
+                  </div>
+                  <div>
+                    <label className="mb-0.5 block text-xs text-ink-subtle">Үнэ</label>
+                    <input className={numCls} type="number" value={pp.price ?? ""} onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.map((p2, j) => j === ppIdx ? { ...p2, price: e.target.value === "" ? null : Number(e.target.value) } : p2) } : v))} />
+                  </div>
+                  <div>
+                    <label className="mb-0.5 block text-xs text-ink-subtle">Валют</label>
+                    <select className={inputCls} value={pp.currency} onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.map((p2, j) => j === ppIdx ? { ...p2, currency: e.target.value } : p2) } : v))}>
+                      <option value="MNT">MNT</option>
+                      <option value="CNY">CNY</option>
+                      <option value="USD">USD</option>
+                    </select>
+                  </div>
+                  <div className="flex items-end">
+                    <button type="button" className={delBtn} onClick={() => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.filter((_, j) => j !== ppIdx) } : v))}>
+                      <Icons.trash size={13} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              <button type="button" className="text-xs text-brand hover:underline" onClick={() => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: [...(v.passenger_prices ?? []), emptyPassengerPrice()] } : v))}>
+                + Зорчигч нэмэх
+              </button>
+            </div>
           </div>
         ))}
       </div>
@@ -475,7 +533,7 @@ export function TripEditModal({
       <p className={sectionHdr}>Хүүхдийн насны ангилал</p>
       <div className="mt-2 space-y-2">
         {tripChildRules.map((r, idx) => (
-          <div key={idx} className="grid gap-2 rounded-lg border border-line bg-surface-sunken p-2 sm:grid-cols-4">
+          <div key={idx} className="grid gap-2 rounded-lg border border-line bg-surface-sunken p-2 sm:grid-cols-5">
             <div>
               <label className="mb-0.5 block text-xs text-ink-muted">Ангилал</label>
               <input className={inputCls} value={r.label} placeholder="ж: Хүүхэд" onChange={(e) => setTripChildRules((prev) => prev.map((v, i) => i === idx ? { ...v, label: e.target.value } : v))} />
@@ -487,6 +545,14 @@ export function TripEditModal({
             <div>
               <label className="mb-0.5 block text-xs text-ink-muted">Үнэ</label>
               <input className={numCls} type="number" value={r.price ?? ""} onChange={(e) => setTripChildRules((prev) => prev.map((v, i) => i === idx ? { ...v, price: e.target.value === "" ? null : Number(e.target.value) } : v))} />
+            </div>
+            <div>
+              <label className="mb-0.5 block text-xs text-ink-muted">Валют</label>
+              <select className={inputCls} value={r.currency ?? "MNT"} onChange={(e) => setTripChildRules((prev) => prev.map((v, i) => i === idx ? { ...v, currency: e.target.value } : v))}>
+                <option value="MNT">MNT</option>
+                <option value="CNY">CNY</option>
+                <option value="USD">USD</option>
+              </select>
             </div>
             <div className="flex gap-1">
               <div className="flex-1">
@@ -655,6 +721,115 @@ export function TripEditModal({
       </div>
       <button type="button" className="mt-1 mb-2 text-xs text-brand hover:underline" onClick={() => setTripImportantNotes((prev) => [...prev, ""])}>
         + Тэмдэглэл нэмэх
+      </button>
+
+      {/* K. Metadata toggles */}
+      <p className={sectionHdr}>Тохиргоо / мета</p>
+      <div className="mt-2 grid gap-3 sm:grid-cols-2">
+        <label className="flex items-center gap-2 text-sm text-ink">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border-line-strong accent-brand"
+            checked={tripCustomerVisible}
+            onChange={(e) => setTripCustomerVisible(e.target.checked)}
+          />
+          Ботод харагдана (хэрэглэгчид)
+        </label>
+        <label className="flex items-center gap-2 text-sm text-ink">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border-line-strong accent-brand"
+            checked={tripNeedsHumanReview}
+            onChange={(e) => setTripNeedsHumanReview(e.target.checked)}
+          />
+          Хүний шалгалт шаарддаг
+        </label>
+      </div>
+      {tripNeedsHumanReview && (
+        <div className="mt-2 space-y-1">
+          <p className="text-xs text-ink-muted">Шалтгаанууд:</p>
+          {tripReviewReasons.map((reason, idx) => (
+            <div key={idx} className={rowCls}>
+              <input
+                className={cx(inputCls, "flex-1")}
+                value={reason}
+                placeholder="ж: Огноо таарахгүй байна"
+                onChange={(e) => setTripReviewReasons((prev) => prev.map((v, i) => i === idx ? e.target.value : v))}
+              />
+              <button type="button" className={delBtn} onClick={() => setTripReviewReasons((prev) => prev.filter((_, i) => i !== idx))}>
+                <Icons.trash size={14} />
+              </button>
+            </div>
+          ))}
+          <button type="button" className="text-xs text-brand hover:underline" onClick={() => setTripReviewReasons((prev) => [...prev, ""])}>
+            + Шалтгаан нэмэх
+          </button>
+        </div>
+      )}
+
+      {/* L. Source provenance (read-only, from AI extraction) */}
+      {tripSourceProvenance.length > 0 && (
+        <>
+          <p className={sectionHdr}>Эх сурвалж (AI-ийн задлалт)</p>
+          <div className="mt-2 space-y-2">
+            {tripSourceProvenance.map((sp, idx) => (
+              <div key={idx} className="rounded-lg border border-line bg-surface-sunken p-2 text-xs text-ink-muted">
+                <div className="flex items-center gap-2 font-medium text-ink">
+                  <span>{sp.file_name}</span>
+                  {sp.page !== null && <span className="text-ink-subtle">— {sp.page}-р хуудас</span>}
+                  <span className={cx(
+                    "ml-auto rounded-full px-2 py-0.5 text-xs font-medium",
+                    sp.confidence === "high" ? "bg-green-100 text-green-700" :
+                    sp.confidence === "medium" ? "bg-yellow-100 text-yellow-700" :
+                    "bg-red-100 text-red-600"
+                  )}>
+                    {sp.confidence === "high" ? "Өндөр" : sp.confidence === "medium" ? "Дунд" : "Бага"}
+                  </span>
+                </div>
+                <p className="mt-1 text-ink-subtle">{sp.source_text}</p>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* M. Answer hints */}
+      <p className={sectionHdr}>Хариултын заавар (Answer hints)</p>
+      <div className="mt-2 space-y-2">
+        {tripAnswerHints.map((h, idx) => (
+          <div key={idx} className="rounded-lg border border-line bg-surface-sunken p-2 text-sm">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-xs font-medium text-ink-muted">Заавар {idx + 1}</span>
+              <button type="button" className={delBtn} onClick={() => setTripAnswerHints((prev) => prev.filter((_, i) => i !== idx))}>
+                <Icons.trash size={13} />
+              </button>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div>
+                <label className="mb-0.5 block text-xs text-ink-muted">Санаа (intent)</label>
+                <select className={inputCls} value={h.intent} onChange={(e) => setTripAnswerHints((prev) => prev.map((v, i) => i === idx ? { ...v, intent: e.target.value as AnswerHint["intent"] } : v))}>
+                  <option value="price">price — Үнэ</option>
+                  <option value="discount">discount — Хямдрал</option>
+                  <option value="comparison">comparison — Харьцуулалт</option>
+                  <option value="child_price">child_price — Хүүхдийн үнэ</option>
+                  <option value="included">included — Багтсан зүйл</option>
+                  <option value="schedule">schedule — Хуваарь</option>
+                </select>
+              </div>
+              <div>
+                <label className="mb-0.5 block text-xs text-ink-muted">Асуулт загвар</label>
+                <input className={inputCls} value={h.question_pattern} placeholder="ж: * үнэ хэд вэ?" onChange={(e) => setTripAnswerHints((prev) => prev.map((v, i) => i === idx ? { ...v, question_pattern: e.target.value } : v))} />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="mb-0.5 block text-xs text-ink-muted">Хүлээгдэж буй хариулт</label>
+                <input className={inputCls} value={h.expected_answer_summary} placeholder="ж: 3,290,000₮ буюу …" onChange={(e) => setTripAnswerHints((prev) => prev.map((v, i) => i === idx ? { ...v, expected_answer_summary: e.target.value } : v))} />
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <button type="button" className="mt-1 mb-2 text-xs text-brand hover:underline" onClick={() => setTripAnswerHints((prev) => [...prev, { intent: "price", question_pattern: "", expected_answer_summary: "" }])}>
+        + Заавар нэмэх
       </button>
     </Modal>
   );

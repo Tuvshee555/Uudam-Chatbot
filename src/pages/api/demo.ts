@@ -10,7 +10,7 @@ import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPrompt, getHistory } from "../../lib/conversation";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
-import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, sanitizeAssistantReply } from "../../lib/reply";
+import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply } from "../../lib/reply";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
 import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent } from "../../lib/travelFastPaths";
@@ -208,7 +208,17 @@ export default async function handler(
       });
       const rawFixed = fixMojibake(result.text);
       const { text: rawNoButtons, buttons } = extractButtons(rawFixed);
-      const reply = enforceWebsiteForPayment(sanitizeAssistantReply(rawNoButtons));
+      const recentAssistantReplies = history
+        .filter((message) => message.role === "assistant")
+        .map((message) => message.text)
+        .slice(-3);
+      const reply = enforceWebsiteForPayment(
+        rewriteRepeatedGenericClarifier({
+          userText: normalizedText,
+          replyText: sanitizeAssistantReply(rawNoButtons),
+          recentAssistantReplies,
+        }),
+      );
 
       // Skip duplicate replies (same as Messenger behavior)
       const lastMessages = history.filter((m) => m.role === "assistant");

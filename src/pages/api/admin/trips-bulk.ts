@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
 import { listTrips, upsertTrip, patchTrip } from "../../../lib/travelOps";
 import { beginRequestTrace, finishRequestTrace, logError } from "../../../lib/observability";
+import { generateDateKeys } from "../../../lib/travelDates";
 import type { TripMutationFields } from "../../../lib/travelTypes";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -37,6 +38,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           seats_left: t.seats_left,
           has_food: t.has_food,
           status: t.status,
+          customer_visible: typeof extra.customer_visible === "boolean" ? extra.customer_visible : true,
           hotel: t.hotel,
           notes: t.notes,
           source_description: t.source_description,
@@ -52,6 +54,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           room_prices: Array.isArray(extra.room_prices) ? extra.room_prices : [],
           important_notes: Array.isArray(extra.important_notes) ? extra.important_notes : [],
           brochure_pdf_url: typeof extra.brochure_pdf_url === "string" ? extra.brochure_pdf_url : "",
+          source_provenance: Array.isArray(extra.source_provenance) ? extra.source_provenance : [],
+          answer_hints: Array.isArray(extra.answer_hints) ? extra.answer_hints : [],
+          needs_human_review: typeof extra.needs_human_review === "boolean" ? extra.needs_human_review : false,
+          review_reasons: Array.isArray(extra.review_reasons) ? extra.review_reasons : [],
         };
       });
       return res.status(200).json({ trips: exported });
@@ -72,11 +78,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const routeName = typeof trip.route_name === "string" ? trip.route_name.trim() : "";
         if (!routeName) continue;
 
+        // Auto-generate date_keys for each price_group and discount entry
+        function enrichGroupDateKeys<T extends Record<string, unknown>>(groups: T[]): T[] {
+          return groups.map((g) => {
+            const dates: string[] = Array.isArray(g.dates)
+              ? (g.dates as unknown[]).filter((d) => typeof d === "string") as string[]
+              : [];
+            const allKeys = new Set<string>(Array.isArray(g.date_keys) ? (g.date_keys as string[]) : []);
+            for (const d of dates) {
+              for (const k of generateDateKeys(d)) allKeys.add(k);
+            }
+            const displayDates: string[] = Array.isArray(g.display_dates)
+              ? (g.display_dates as string[])
+              : dates;
+            return { ...g, date_keys: Array.from(allKeys), display_dates: displayDates };
+          });
+        }
+
         // Build extra from inlined structured fields
         const extra: Record<string, unknown> = {
           aliases: Array.isArray(trip.aliases) ? trip.aliases : [],
-          price_groups: Array.isArray(trip.price_groups) ? trip.price_groups : [],
-          discounts: Array.isArray(trip.discounts) ? trip.discounts : [],
+          price_groups: enrichGroupDateKeys(Array.isArray(trip.price_groups) ? trip.price_groups as Record<string, unknown>[] : []),
+          discounts: enrichGroupDateKeys(Array.isArray(trip.discounts) ? trip.discounts as Record<string, unknown>[] : []),
           child_rules: Array.isArray(trip.child_rules) ? trip.child_rules : [],
           extra_fees: Array.isArray(trip.extra_fees) ? trip.extra_fees : [],
           departure_rule: typeof trip.departure_rule === "string" ? trip.departure_rule : "",
@@ -85,6 +108,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           room_prices: Array.isArray(trip.room_prices) ? trip.room_prices : [],
           important_notes: Array.isArray(trip.important_notes) ? trip.important_notes : [],
           brochure_pdf_url: typeof trip.brochure_pdf_url === "string" ? trip.brochure_pdf_url : null,
+          customer_visible: typeof trip.customer_visible === "boolean" ? trip.customer_visible : true,
+          source_provenance: Array.isArray(trip.source_provenance) ? trip.source_provenance : [],
+          answer_hints: Array.isArray(trip.answer_hints) ? trip.answer_hints : [],
+          needs_human_review: typeof trip.needs_human_review === "boolean" ? trip.needs_human_review : false,
+          review_reasons: Array.isArray(trip.review_reasons) ? trip.review_reasons : [],
         };
 
         const fields: TripMutationFields = {

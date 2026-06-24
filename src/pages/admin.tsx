@@ -85,6 +85,11 @@ export default function AdminPage() {
   const [tripExcludedItems, setTripExcludedItems] = useState<string[]>([]);
   const [tripRoomPrices, setTripRoomPrices] = useState<RoomPrice[]>([]);
   const [tripImportantNotes, setTripImportantNotes] = useState<string[]>([]);
+  const [tripCustomerVisible, setTripCustomerVisible] = useState<boolean>(true);
+  const [tripNeedsHumanReview, setTripNeedsHumanReview] = useState<boolean>(false);
+  const [tripReviewReasons, setTripReviewReasons] = useState<string[]>([]);
+  const [tripSourceProvenance, setTripSourceProvenance] = useState<import("@/lib/adminTypes").SourceProvenance[]>([]);
+  const [tripAnswerHints, setTripAnswerHints] = useState<import("@/lib/adminTypes").AnswerHint[]>([]);
   const [deletingTrip, setDeletingTrip] = useState<TravelTrip | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [leads, setLeads] = useState<TravelLead[]>([]);
@@ -1154,6 +1159,11 @@ export default function AdminPage() {
     setTripExcludedItems([]);
     setTripRoomPrices([]);
     setTripImportantNotes([]);
+    setTripCustomerVisible(true);
+    setTripNeedsHumanReview(false);
+    setTripReviewReasons([]);
+    setTripSourceProvenance([]);
+    setTripAnswerHints([]);
   }
   function beginEditTrip(trip: TravelTrip) {
     setIsNewTrip(false);
@@ -1189,6 +1199,11 @@ export default function AdminPage() {
     setTripExcludedItems(Array.isArray(trip.extra?.excluded_items) ? (trip.extra.excluded_items as string[]) : []);
     setTripRoomPrices(Array.isArray(trip.extra?.room_prices) ? (trip.extra.room_prices as RoomPrice[]) : []);
     setTripImportantNotes(Array.isArray(trip.extra?.important_notes) ? (trip.extra.important_notes as string[]) : []);
+    setTripCustomerVisible(typeof trip.extra?.customer_visible === "boolean" ? trip.extra.customer_visible : true);
+    setTripNeedsHumanReview(typeof trip.extra?.needs_human_review === "boolean" ? trip.extra.needs_human_review : false);
+    setTripReviewReasons(Array.isArray(trip.extra?.review_reasons) ? (trip.extra.review_reasons as string[]) : []);
+    setTripSourceProvenance(Array.isArray(trip.extra?.source_provenance) ? (trip.extra.source_provenance as import("@/lib/adminTypes").SourceProvenance[]) : []);
+    setTripAnswerHints(Array.isArray(trip.extra?.answer_hints) ? (trip.extra.answer_hints as import("@/lib/adminTypes").AnswerHint[]) : []);
   }
   const tripModalOpen = isNewTrip || editingTrip != null;
   async function handlePhotoFiles(files: FileList | File[]) {
@@ -1274,6 +1289,11 @@ export default function AdminPage() {
         excluded_items: tripExcludedItems.filter(Boolean),
         room_prices: tripRoomPrices,
         important_notes: tripImportantNotes.filter(Boolean),
+        customer_visible: tripCustomerVisible,
+        needs_human_review: tripNeedsHumanReview,
+        review_reasons: tripReviewReasons.filter(Boolean),
+        source_provenance: tripSourceProvenance,
+        answer_hints: tripAnswerHints,
       },
     };
     if (!fields.route_name.trim()) {
@@ -1814,6 +1834,15 @@ export default function AdminPage() {
         setTripRoomPrices={setTripRoomPrices}
         tripImportantNotes={tripImportantNotes}
         setTripImportantNotes={setTripImportantNotes}
+        tripCustomerVisible={tripCustomerVisible}
+        setTripCustomerVisible={setTripCustomerVisible}
+        tripNeedsHumanReview={tripNeedsHumanReview}
+        setTripNeedsHumanReview={setTripNeedsHumanReview}
+        tripReviewReasons={tripReviewReasons}
+        setTripReviewReasons={setTripReviewReasons}
+        tripSourceProvenance={tripSourceProvenance}
+        tripAnswerHints={tripAnswerHints}
+        setTripAnswerHints={setTripAnswerHints}
       />
       <AdminConfirmModals
         deletingTrip={deletingTrip}

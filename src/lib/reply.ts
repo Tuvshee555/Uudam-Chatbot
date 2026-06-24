@@ -108,3 +108,65 @@ export function isDuplicateReply(
   if (!previousReply) return false;
   return normalizeForCompare(previousReply) === normalizeForCompare(nextReply);
 }
+
+function isGenericTripClarifier(text: string) {
+  const normalized = normalizeForCompare(text);
+  return (
+    normalized.includes("ямар аялалд сонирхож байна вэ") ||
+    normalized.includes("тодорхой мэдээлэл өгвөл илүү сайн туслах боломжтой") ||
+    normalized.includes("сонирхож байгаа аяллынхаа нэрийг бичиж үлдээнэ үү")
+  );
+}
+
+function isLowSignalFollowUp(text: string) {
+  const normalized = normalizeForCompare(text);
+  if (!normalized) return true;
+  if (normalized.length <= 18) return true;
+  if (/^\d{6,8}$/.test(normalized)) return true;
+  return (
+    normalized.includes("kkk") ||
+    normalized.includes("haha") ||
+    normalized.includes("hehe") ||
+    normalized.includes("би бна") ||
+    normalized.includes("mun bna") ||
+    normalized.includes("мөн bna") ||
+    normalized.includes("мөн байна") ||
+    normalized.includes("say utsaar") ||
+    normalized.includes("утсаар") ||
+    normalized.includes("ярьсан") ||
+    normalized.includes("за") ||
+    normalized.includes("ok")
+  );
+}
+
+function hasRecentStructuredTripReply(recentAssistantReplies: string[]) {
+  return recentAssistantReplies.some(
+    (reply) =>
+      reply.includes("✈️") &&
+      (reply.includes("💰") || reply.includes("📅") || reply.includes("өдөр")),
+  );
+}
+
+export function rewriteRepeatedGenericClarifier(input: {
+  userText: string;
+  replyText: string;
+  recentAssistantReplies: string[];
+}) {
+  const { userText, replyText, recentAssistantReplies } = input;
+  if (!isGenericTripClarifier(replyText)) return replyText;
+
+  const alreadyAskedRecently = recentAssistantReplies.some((reply) =>
+    isGenericTripClarifier(reply),
+  );
+  if (!alreadyAskedRecently) return replyText;
+
+  if (hasRecentStructuredTripReply(recentAssistantReplies)) {
+    return "Ойлголоо 😊 Дээрх аяллын талаар үнэ, хугацаа, гарах өдөр, эсвэл хүүхдийн үнээс аль нь хэрэгтэйгээ бичээрэй.";
+  }
+
+  if (isLowSignalFollowUp(userText)) {
+    return "Ойлголоо 😊 Сонирхож байгаа аяллынхаа нэрийг нэг бичээрэй, эсвэл үнэ, өдөр, гарах огнооноос аль нь хэрэгтэйгээ хэлээрэй.";
+  }
+
+  return "Аль аяллын талаар мэдээлэл авах вэ? Аяллын нэрээ нэг бичээрэй. 😊";
+}

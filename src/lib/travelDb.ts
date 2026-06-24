@@ -1927,7 +1927,14 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     description: routes.join("; "),
   }));
 
-  const modules = trips.map((trip) => {
+  const modules = trips
+    .filter((trip) => {
+      const ex = (trip.extra || {}) as Record<string, unknown>;
+      // Skip trips that are explicitly hidden from the bot
+      if (typeof ex.customer_visible === "boolean" && !ex.customer_visible) return false;
+      return true;
+    })
+    .map((trip) => {
     const details: string[] = [];
     if (trip.departure_dates.length) {
       details.push(`Departure dates: ${trip.departure_dates.join(", ")}`);
@@ -1978,13 +1985,29 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     const pgNew = Array.isArray(extra.price_groups) ? extra.price_groups as Array<Record<string, unknown>> : [];
     if (pgNew.length > 0) {
       const pgText = pgNew.map((g) => {
-        const dates = Array.isArray(g.dates) ? (g.dates as string[]).join(", ") : String(g.dates ?? "");
+        const displayDates = Array.isArray(g.display_dates) && (g.display_dates as string[]).length > 0
+          ? (g.display_dates as string[]).join(", ")
+          : Array.isArray(g.dates) ? (g.dates as string[]).join(", ") : String(g.dates ?? "");
         const label = typeof g.label === "string" && g.label ? `${g.label}: ` : "";
-        const ap = typeof g.adult_price === "number" ? `Том ${g.adult_price}₮` : "";
-        const cp = typeof g.child_price === "number" ? `Хүүхэд${g.child_age ? ` (${g.child_age})` : ""} ${g.child_price}₮` : "";
-        const ip = typeof g.infant_price === "number" ? `Нярай${g.infant_age ? ` (${g.infant_age})` : ""} ${g.infant_price}₮` : "";
+        // Use passenger_prices if present (more detailed), otherwise fallback to flat fields
+        const ppArr = Array.isArray(g.passenger_prices) ? g.passenger_prices as Array<Record<string, unknown>> : [];
+        let priceParts: string[];
+        if (ppArr.length > 0) {
+          priceParts = ppArr.map((pp) => {
+            const ppLabel = typeof pp.label === "string" && pp.label ? pp.label : "Зорчигч";
+            const ppAge = typeof pp.age_range === "string" && pp.age_range ? ` (${pp.age_range})` : "";
+            const ppPrice = typeof pp.price === "number" ? ` ${pp.price}₮` : "";
+            return `${ppLabel}${ppAge}${ppPrice}`;
+          });
+        } else {
+          priceParts = [
+            typeof g.adult_price === "number" ? `Том ${g.adult_price}₮` : "",
+            typeof g.child_price === "number" ? `Хүүхэд${g.child_age ? ` (${g.child_age})` : ""} ${g.child_price}₮` : "",
+            typeof g.infant_price === "number" ? `Нярай${g.infant_age ? ` (${g.infant_age})` : ""} ${g.infant_price}₮` : "",
+          ].filter(Boolean);
+        }
         const note = typeof g.note === "string" && g.note ? ` — ${g.note}` : "";
-        return `[${label}${dates}: ${[ap, cp, ip].filter(Boolean).join(" / ")}${note}]`;
+        return `[${label}${displayDates}: ${priceParts.filter(Boolean).join(" / ")}${note}]`;
       }).join("; ");
       details.push(`Огноо тус бүрийн үнэ: ${pgText}`);
     }
@@ -2039,6 +2062,17 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     }
     const impNotes = Array.isArray(extra.important_notes) ? (extra.important_notes as string[]).filter(Boolean) : [];
     if (impNotes.length > 0) details.push(`Чухал тэмдэглэл: ${impNotes.join(" | ")}`);
+    // Emit answer_hints so the bot gets explicit expected answers per intent
+    const answerHints = Array.isArray(extra.answer_hints) ? extra.answer_hints as Array<Record<string, unknown>> : [];
+    if (answerHints.length > 0) {
+      const hintText = answerHints.map((h) => {
+        const intent = typeof h.intent === "string" ? h.intent : "";
+        const qp = typeof h.question_pattern === "string" ? h.question_pattern : "";
+        const expected = typeof h.expected_answer_summary === "string" ? h.expected_answer_summary : "";
+        return `[${intent}: "${qp}" → ${expected}]`;
+      }).join("; ");
+      details.push(`Хариултын заавар: ${hintText}`);
+    }
     // seats: only emit if actually known (null = unknown, 0 = sold out)
     if (trip.seats_left != null) {
       details.push(`Seats left: ${trip.seats_left}`);
