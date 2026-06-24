@@ -852,7 +852,10 @@ export async function updateTravelBotSettings(
     typeof fields.extra === "object" &&
     !Array.isArray(fields.extra)
   ) {
-    push("extra", JSON.stringify(fields.extra), "::jsonb");
+    // Merge into existing extra (COALESCE so null extra becomes {}) so that
+    // GreetingTab and SeasonsTab don't overwrite each other's keys.
+    values.push(JSON.stringify(fields.extra));
+    sets.push(`extra = COALESCE(extra, '{}'::jsonb) || $${values.length}::jsonb`);
   }
 
   if (!sets.length) {

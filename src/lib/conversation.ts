@@ -170,6 +170,8 @@ export function buildPrompt(options: {
   lines.push("- If information is missing or ambiguous, clearly say it is not confirmed in the current dataset.");
   lines.push("- If the user message is unclear, ask ONE short clarifying question.");
   lines.push("- Stay travel-topic focused and politely redirect unrelated questions.");
+  lines.push("- NEVER say 'Тэр мэдээллийг өмнө нь хуваалцсан' or similar ('I already shared that', 'as I mentioned before'). If the user asks again, answer again fully — they may have missed it or be asking from a different angle.");
+  lines.push("- 'naadam', 'наадам', 'наадмын' all refer to the same thing. Match Mongolian trip names against Latin/transliterated spellings by meaning, not exact characters.");
   lines.push("- After your reply text, on a NEW line, write exactly: BUTTONS: followed by 2-3 short Mongolian follow-up button labels separated by | (pipe). Each label must be under 40 characters. Choose buttons that naturally continue the conversation (e.g. ask for price, seats, booking, nearby dates). Example: BUTTONS: Үнэ хэд вэ?|Суудал бий юу?|Захиалах");
   if (pinnedButtonLabels && pinnedButtonLabels.length > 0) {
     lines.push(`- The user already has these pinned menu buttons: ${pinnedButtonLabels.join(" | ")}. Do NOT duplicate them in your BUTTONS line. Offer different, contextually relevant follow-ups instead.`);
