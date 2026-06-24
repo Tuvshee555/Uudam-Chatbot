@@ -115,6 +115,11 @@ export function BotTab({
   const [selectedSender, setSelectedSender] = useState<string | null>(null);
   const [chatHistory, setChatHistory] = useState<{ role: string; text: string }[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
+  const [search, setSearch] = useState("");
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameLoading, setRenameLoading] = useState(false);
+  const toast = useToast();
 
   async function openChat(senderId: string) {
     setSelectedSender(senderId);
@@ -136,6 +141,36 @@ export function BotTab({
   function displayName(row: RecentRow) {
     return row.display_name || shortId(row.sender_id);
   }
+
+  async function saveRename(senderId: string) {
+    const name = renameValue.trim();
+    if (!name) { setRenamingId(null); return; }
+    setRenameLoading(true);
+    try {
+      await apiFetch("/api/pause", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "rename", sender_id: senderId, name }),
+      });
+      toast.success(`"${name}" гэж хадгаллаа`);
+      setRenamingId(null);
+      setRenameValue("");
+    } catch {
+      toast.error("Хадгалахад алдаа гарлаа");
+    } finally {
+      setRenameLoading(false);
+    }
+  }
+
+  const filteredRows = useMemo(() => {
+    if (!search.trim()) return recentRows;
+    const q = search.trim().toLowerCase();
+    return recentRows.filter(
+      (r) =>
+        r.sender_id.includes(q) ||
+        (r.display_name ?? "").toLowerCase().includes(q),
+    );
+  }, [recentRows, search]);
 
   if (selectedSender) {
     const row = recentRows.find((r) => r.sender_id === selectedSender);
@@ -393,13 +428,26 @@ export function BotTab({
           title="Сүүлийн харилцагчид"
           description="Тодорхой хэрэглэгчийн ботыг түр зогсоох/сэргээх."
         />
+        {recentRows.length > 0 && (
+          <div className="mt-3">
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Нэр эсвэл ID-р хайх…"
+              className="w-full"
+            />
+          </div>
+        )}
         <div className="mt-3 space-y-2">
           {recentRows.length === 0 && (
             <p className="text-sm text-ink-subtle">
               Сүүлийн харилцан яриа алга.
             </p>
           )}
-          {recentRows.map((row) => {
+          {recentRows.length > 0 && filteredRows.length === 0 && (
+            <p className="text-sm text-ink-subtle">Хайлтад тохирох хэрэглэгч олдсонгүй.</p>
+          )}
+          {filteredRows.map((row) => {
             const isPaused = pausedIds.has(row.sender_id);
             const pauseRow = pausedRows.find(
               (p) => p.sender_id === row.sender_id,
@@ -437,9 +485,7 @@ export function BotTab({
                       )}
                     </p>
                     <p className="mt-0.5 text-xs text-ink-subtle">
-                      {row.display_name && (
-                        <span className="mr-2 font-mono opacity-60">{shortId(row.sender_id)}</span>
-                      )}
+                      <span className="mr-2 font-mono opacity-60">{shortId(row.sender_id)}</span>
                       {formatTime(row.last_seen)}
                       {isPaused && pauseRow
                         ? ` · ${tick >= 0 ? timeLeft(pauseRow.expires_at) : ""}`
@@ -448,38 +494,85 @@ export function BotTab({
                   </div>
                   <Icons.chevronRight size={14} className="shrink-0 text-ink-subtle" />
                 </div>
-                {/* Quick pause/resume row — no need to open thread */}
-                <div className="mt-2 flex items-center gap-1.5 border-t border-line/50 pt-2">
-                  {isPaused ? (
+                {/* Rename inline */}
+                {renamingId === row.sender_id ? (
+                  <div
+                    className="mt-2 flex items-center gap-1.5 border-t border-line/50 pt-2"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      autoFocus
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void saveRename(row.sender_id);
+                        if (e.key === "Escape") { setRenamingId(null); setRenameValue(""); }
+                      }}
+                      placeholder="Нэр оруулна уу…"
+                      className="min-w-0 flex-1 rounded-lg border border-brand/40 bg-surface px-2.5 py-1 text-xs text-ink outline-none focus:border-brand"
+                    />
                     <button
                       type="button"
-                      disabled={busyKey === `resume:${row.sender_id}`}
-                      onClick={(e) => { e.stopPropagation(); onPauseAction("resume", row.sender_id); }}
-                      className="rounded-md border border-success/40 bg-success/10 px-2.5 py-1 text-xs font-medium text-success hover:border-success disabled:opacity-50"
+                      disabled={renameLoading}
+                      onClick={() => void saveRename(row.sender_id)}
+                      className="rounded-md border border-brand bg-brand px-2.5 py-1 text-[11px] font-medium text-white disabled:opacity-50"
                     >
-                      Бот сэргээх
+                      {renameLoading ? "…" : "Хадгалах"}
                     </button>
-                  ) : (
-                    <>
-                      <span className="text-[11px] text-ink-subtle">Бот зогсоох:</span>
-                      {[
-                        { label: "30 мин", ms: 30 * 60 * 1000 },
-                        { label: "1 цаг", ms: 60 * 60 * 1000 },
-                        { label: "Гараар", ms: null },
-                      ].map((opt) => (
-                        <button
-                          key={opt.label}
-                          type="button"
-                          disabled={busyKey === `pause:${row.sender_id}`}
-                          onClick={(e) => { e.stopPropagation(); onPauseAction("pause", row.sender_id, opt.ms); }}
-                          className="rounded-md border border-line-strong bg-surface px-2 py-1 text-[11px] text-ink-muted hover:border-danger hover:text-danger disabled:opacity-50"
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </>
-                  )}
-                </div>
+                    <button
+                      type="button"
+                      onClick={() => { setRenamingId(null); setRenameValue(""); }}
+                      className="rounded-md border border-line px-2 py-1 text-[11px] text-ink-muted"
+                    >
+                      Болих
+                    </button>
+                  </div>
+                ) : null}
+                {/* Quick pause/resume + rename row */}
+                {renamingId !== row.sender_id && (
+                  <div className="mt-2 flex items-center gap-1.5 border-t border-line/50 pt-2">
+                    {isPaused ? (
+                      <button
+                        type="button"
+                        disabled={busyKey === `resume:${row.sender_id}`}
+                        onClick={(e) => { e.stopPropagation(); onPauseAction("resume", row.sender_id); }}
+                        className="rounded-md border border-success/40 bg-success/10 px-2.5 py-1 text-xs font-medium text-success hover:border-success disabled:opacity-50"
+                      >
+                        Бот сэргээх
+                      </button>
+                    ) : (
+                      <>
+                        <span className="text-[11px] text-ink-subtle">Бот зогсоох:</span>
+                        {[
+                          { label: "30 мин", ms: 30 * 60 * 1000 },
+                          { label: "1 цаг", ms: 60 * 60 * 1000 },
+                          { label: "Гараар", ms: null },
+                        ].map((opt) => (
+                          <button
+                            key={opt.label}
+                            type="button"
+                            disabled={busyKey === `pause:${row.sender_id}`}
+                            onClick={(e) => { e.stopPropagation(); onPauseAction("pause", row.sender_id, opt.ms); }}
+                            className="rounded-md border border-line-strong bg-surface px-2 py-1 text-[11px] text-ink-muted hover:border-danger hover:text-danger disabled:opacity-50"
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRenamingId(row.sender_id);
+                        setRenameValue(row.display_name ?? "");
+                      }}
+                      className="ml-auto rounded-md border border-line px-2 py-1 text-[11px] text-ink-muted hover:border-brand hover:text-brand"
+                    >
+                      ✏️ Нэр өөрчлөх
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}

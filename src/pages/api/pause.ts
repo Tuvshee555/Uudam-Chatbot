@@ -5,6 +5,7 @@ import {
   listRecent,
   pauseBot,
   resumeBot,
+  storeSenderName,
 } from "../../lib/pause";
 import { getClientKey } from "../../lib/rateLimit";
 import { requireAdminAccess } from "../../lib/adminAccess";
@@ -92,6 +93,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       if (action === "global_status") {
         return res.status(200).json({ ok: true, control: await getBotControl() });
+      }
+
+      if (action === "rename") {
+        if (typeof sender_id !== "string" || !sender_id.trim()) {
+          return res.status(400).json({ error: "missing sender_id" });
+        }
+        const newName = typeof req.body.name === "string" ? req.body.name.trim() : "";
+        if (!newName) return res.status(400).json({ error: "missing name" });
+        await storeSenderName(sender_id.trim(), newName);
+        return res.status(200).json({ ok: true, sender_id: sender_id.trim(), name: newName });
       }
 
       if (!sender_id) return res.status(400).json({ error: "missing sender_id" });
