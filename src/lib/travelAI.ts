@@ -89,7 +89,10 @@ export function instructionForbidsTripCreation(instruction: string): boolean {
   const explicitNoCreate =
     /(?:do\s*not|don't|dont|never)\s+(?:try\s+to\s+)?(?:add|create)(?:\s+(?:new\s+)?trips?)?/.test(text) ||
     /(?:шинэ\s+аялал\s+)?(?:бүү|битгий)\s+(?:нэм|үүсгэ)/.test(text) ||
-    /(?:аялал\s+)?(?:нэмэхгүй|үүсгэхгүй)/.test(text);
+    // Must be paired with "аялал" or "шинэ" — bare "нэмэхгүй" matches too many
+    // unrelated phrases like "суудлыг 0 болгохгүй" or error messages in prior context
+    /(?:шинэ\s+аялал|аялал)\s+(?:нэмэхгүй|үүсгэхгүй)/.test(text) ||
+    /(?:нэмэхгүй|үүсгэхгүй)\s+(?:гэсэн|тул|гэж)/.test(text);
   const updateOnly =
     /(?:only|just)\s+(?:update|fill|rename|add\s+(?:the\s+)?names?)/.test(text) ||
     /зөвхөн[^.]{0,80}(?:нэр|нөх|шинэчил|зас)/.test(text);

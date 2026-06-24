@@ -809,3 +809,42 @@ test("date-based pricing conflict suppressed when notes encode date→price mapp
     "price conflict should be suppressed when notes encode date-price mapping",
   );
 });
+
+test("instructionForbidsTripCreation: bare нэмэхгүй does NOT forbid create", async () => {
+  const { instructionForbidsTripCreation } = await loadTravelOps();
+  // These phrases contain нэмэхгүй but are NOT trip-creation bans
+  assert.equal(
+    instructionForbidsTripCreation("Do not set total seats to 0 unless 0 means unknown"),
+    false,
+    "seat rule should not trigger forbidCreate",
+  );
+  assert.equal(
+    instructionForbidsTripCreation("CREATE EXACTLY 5 NEW TOUR RECORDS"),
+    false,
+    "explicit create instruction should not trigger forbidCreate",
+  );
+  assert.equal(
+    instructionForbidsTripCreation("суудлыг 0 болгохгүй"),
+    false,
+    "seat-0 rule should not trigger forbidCreate",
+  );
+});
+
+test("instructionForbidsTripCreation: explicit бans DO forbid create", async () => {
+  const { instructionForbidsTripCreation } = await loadTravelOps();
+  assert.equal(
+    instructionForbidsTripCreation("шинэ аялал нэмэхгүй, зөвхөн засна"),
+    true,
+    "шинэ аялал нэмэхгүй should forbid create",
+  );
+  assert.equal(
+    instructionForbidsTripCreation("do not add new trips"),
+    true,
+    "do not add new trips should forbid create",
+  );
+  assert.equal(
+    instructionForbidsTripCreation("аялал нэмэхгүй гэсэн"),
+    true,
+    "аялал нэмэхгүй гэсэн should forbid create",
+  );
+});
