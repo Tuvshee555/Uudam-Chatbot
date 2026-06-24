@@ -1972,6 +1972,73 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     if (typeof extra.infant_age_range === "string" && extra.infant_age_range) {
       details.push(`Infant age range: ${extra.infant_age_range}`);
     }
+    // Emit admin-entered structured fields
+    const aliases = Array.isArray(extra.aliases) ? (extra.aliases as string[]).filter(Boolean) : [];
+    if (aliases.length > 0) details.push(`Өөр нэршил: ${aliases.join(", ")}`);
+    const pgNew = Array.isArray(extra.price_groups) ? extra.price_groups as Array<Record<string, unknown>> : [];
+    if (pgNew.length > 0) {
+      const pgText = pgNew.map((g) => {
+        const dates = Array.isArray(g.dates) ? (g.dates as string[]).join(", ") : String(g.dates ?? "");
+        const label = typeof g.label === "string" && g.label ? `${g.label}: ` : "";
+        const ap = typeof g.adult_price === "number" ? `Том ${g.adult_price}₮` : "";
+        const cp = typeof g.child_price === "number" ? `Хүүхэд${g.child_age ? ` (${g.child_age})` : ""} ${g.child_price}₮` : "";
+        const ip = typeof g.infant_price === "number" ? `Нярай${g.infant_age ? ` (${g.infant_age})` : ""} ${g.infant_price}₮` : "";
+        const note = typeof g.note === "string" && g.note ? ` — ${g.note}` : "";
+        return `[${label}${dates}: ${[ap, cp, ip].filter(Boolean).join(" / ")}${note}]`;
+      }).join("; ");
+      details.push(`Огноо тус бүрийн үнэ: ${pgText}`);
+    }
+    const discNew = Array.isArray(extra.discounts) ? extra.discounts as Array<Record<string, unknown>> : [];
+    if (discNew.length > 0) {
+      const discText = discNew.map((g) => {
+        const dates = Array.isArray(g.dates) && (g.dates as string[]).length > 0 ? ` (${(g.dates as string[]).join(", ")})` : "";
+        const label = typeof g.label === "string" && g.label ? g.label : "Хямдрал";
+        const ap = typeof g.adult_price === "number" ? `Том ${g.adult_price}₮` : "";
+        const cp = typeof g.child_price === "number" ? `Хүүхэд ${g.child_price}₮` : "";
+        const ip = typeof g.infant_price === "number" ? `Нярай ${g.infant_price}₮` : "";
+        const cond = typeof g.condition === "string" && g.condition ? ` Нөхцөл: ${g.condition}` : "";
+        const note = typeof g.note === "string" && g.note ? ` — ${g.note}` : "";
+        return `[${label}${dates}: ${[ap, cp, ip].filter(Boolean).join(" / ")}${cond}${note}]`;
+      }).join("; ");
+      details.push(`Хямдрал: ${discText}`);
+    }
+    const childRules = Array.isArray(extra.child_rules) ? extra.child_rules as Array<Record<string, unknown>> : [];
+    if (childRules.length > 0) {
+      const crText = childRules.map((r) => {
+        const label = typeof r.label === "string" && r.label ? r.label : "";
+        const age = typeof r.age_range === "string" && r.age_range ? r.age_range : "";
+        const price = typeof r.price === "number" ? `${r.price}₮` : "";
+        return [label, age, price].filter(Boolean).join(" ");
+      }).join("; ");
+      details.push(`Хүүхдийн насны ангилал: ${crText}`);
+    }
+    const extraFees = Array.isArray(extra.extra_fees) ? extra.extra_fees as Array<Record<string, unknown>> : [];
+    if (extraFees.length > 0) {
+      const efText = extraFees.map((f) => {
+        const label = typeof f.label === "string" && f.label ? f.label : "Нэмэлт";
+        const amount = typeof f.amount === "number" ? `${f.amount}${typeof f.currency === "string" ? f.currency : ""}` : "";
+        return `${label}${amount ? `: ${amount}` : ""}`;
+      }).join("; ");
+      details.push(`Нэмэлт төлбөр: ${efText}`);
+    }
+    if (typeof extra.departure_rule === "string" && extra.departure_rule.trim()) {
+      details.push(`Гарах өдрийн дүрэм: ${extra.departure_rule.trim()}`);
+    }
+    const included = Array.isArray(extra.included_items) ? (extra.included_items as string[]).filter(Boolean) : [];
+    if (included.length > 0) details.push(`Багтсан: ${included.join(", ")}`);
+    const excluded = Array.isArray(extra.excluded_items) ? (extra.excluded_items as string[]).filter(Boolean) : [];
+    if (excluded.length > 0) details.push(`Багтаагүй: ${excluded.join(", ")}`);
+    const roomPrices = Array.isArray(extra.room_prices) ? extra.room_prices as Array<Record<string, unknown>> : [];
+    if (roomPrices.length > 0) {
+      const rpText = roomPrices.map((r) => {
+        const type = typeof r.room_type === "string" && r.room_type ? r.room_type : "Өрөө";
+        const price = typeof r.price === "number" ? `${r.price}${typeof r.currency === "string" ? r.currency : ""}` : "";
+        return `${type}${price ? `: ${price}` : ""}`;
+      }).join("; ");
+      details.push(`Өрөөний үнэ: ${rpText}`);
+    }
+    const impNotes = Array.isArray(extra.important_notes) ? (extra.important_notes as string[]).filter(Boolean) : [];
+    if (impNotes.length > 0) details.push(`Чухал тэмдэглэл: ${impNotes.join(" | ")}`);
     // seats: only emit if actually known (null = unknown, 0 = sold out)
     if (trip.seats_left != null) {
       details.push(`Seats left: ${trip.seats_left}`);

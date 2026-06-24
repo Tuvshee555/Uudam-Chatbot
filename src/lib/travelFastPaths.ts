@@ -469,10 +469,12 @@ export function buildDiscountReply(text: string, trips: TravelTrip[]): string | 
   const extra = (best.extra || {}) as Record<string, unknown>;
   const currency = best.currency || "MNT";
 
-  // Check for explicit discount_groups in extra
-  const discountGroups = Array.isArray(extra.discount_groups)
+  // Check admin-entered discounts first, then fall back to AI-imported discount_groups
+  const adminDiscounts = getStructuredDiscounts(best);
+  const aiDiscountGroups = Array.isArray(extra.discount_groups)
     ? (extra.discount_groups as Array<Record<string, unknown>>)
     : [];
+  const discountGroups = adminDiscounts.length > 0 ? adminDiscounts : aiDiscountGroups;
 
   // Check notes and source_description for discount info
   const discountText = [best.notes, best.source_description]
@@ -492,12 +494,16 @@ export function buildDiscountReply(text: string, trips: TravelTrip[]): string | 
       const adult = formatMoney(typeof g.adult_price === "number" ? g.adult_price : null, currency);
       const child = formatMoney(typeof g.child_price === "number" ? g.child_price : null, currency);
       const infant = formatMoney(typeof g.infant_price === "number" ? g.infant_price : null, currency);
+      const label = typeof g.label === "string" && g.label ? `${g.label}: ` : "";
+      const cond = typeof g.condition === "string" && g.condition ? ` (${g.condition})` : "";
+      const note = typeof g.note === "string" && g.note ? ` — ${g.note}` : "";
       const priceParts: string[] = [];
       if (adult) priceParts.push(`Том хүн: ${adult}`);
       if (child) priceParts.push(`Хүүхэд: ${child}`);
       if (infant) priceParts.push(`Нярай: ${infant}`);
-      if (dates) lines.push(`  ${dates}: ${priceParts.join(" | ")}`);
-      else lines.push(`  ${priceParts.join(" | ")}`);
+      const priceStr = priceParts.join(" | ");
+      if (dates) lines.push(`  ${label}${dates}: ${priceStr}${cond}${note}`);
+      else lines.push(`  ${label}${priceStr}${cond}${note}`);
     }
   }
 
