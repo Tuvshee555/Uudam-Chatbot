@@ -133,10 +133,15 @@ export function BotTab({
     }
   }
 
+  function displayName(row: RecentRow) {
+    return row.display_name || shortId(row.sender_id);
+  }
+
   if (selectedSender) {
     const row = recentRows.find((r) => r.sender_id === selectedSender);
     const isPaused = pausedIds.has(selectedSender);
     const wantsHuman = handoffIds.has(selectedSender);
+    const name = row ? displayName(row) : shortId(selectedSender);
     return (
       <div className="space-y-3">
         <div className="flex items-center gap-2">
@@ -149,9 +154,10 @@ export function BotTab({
             Буцах
           </button>
           <div className="min-w-0 flex-1">
-            <p className="truncate font-mono text-sm font-medium text-ink">
-              {shortId(selectedSender)}
-            </p>
+            <p className="truncate text-sm font-semibold text-ink">{name}</p>
+            {row?.display_name && (
+              <p className="font-mono text-[11px] text-ink-subtle">{shortId(selectedSender)}</p>
+            )}
             {row && (
               <p className="text-xs text-ink-subtle">Сүүлд: {formatTime(row.last_seen)}</p>
             )}
@@ -165,17 +171,17 @@ export function BotTab({
                 disabled={busyKey === `resume:${selectedSender}`}
                 onClick={() => onPauseAction("resume", selectedSender)}
               >
-                Сэргээх
+                Бот сэргээх
               </Button>
             ) : (
-              <div className="flex gap-1">
+              <div className="flex flex-wrap gap-1">
                 {DURATIONS.map((d) => (
                   <button
                     key={d.label}
                     type="button"
                     disabled={busyKey === `pause:${selectedSender}`}
                     onClick={() => onPauseAction("pause", selectedSender, d.ms)}
-                    className="rounded-md border border-line-strong bg-surface px-2 py-1 text-xs text-ink-muted hover:border-danger hover:text-danger"
+                    className="rounded-md border border-line-strong bg-surface px-2 py-1 text-xs text-ink-muted hover:border-danger hover:text-danger disabled:opacity-50"
                   >
                     {d.label}
                   </button>
@@ -185,6 +191,13 @@ export function BotTab({
           </div>
         </div>
 
+        {isPaused && (
+          <div className="flex items-center gap-2 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger">
+            <Icons.pause size={14} className="shrink-0" />
+            Бот энэ хэрэглэгчид түр зогссон байна. Та гараар хариулж болно.
+          </div>
+        )}
+
         <Card className="p-4">
           {chatLoading && (
             <div className="flex justify-center py-6">
@@ -192,9 +205,10 @@ export function BotTab({
             </div>
           )}
           {!chatLoading && chatHistory.length === 0 && (
-            <p className="py-6 text-center text-sm text-ink-subtle">
-              Хадгалагдсан яриа олдсонгүй (Redis TTL дууссан байж болно).
-            </p>
+            <div className="flex flex-col items-center gap-1 py-6">
+              <p className="text-sm text-ink-subtle">Сүүлийн яриа байхгүй байна.</p>
+              <p className="text-xs text-ink-subtle opacity-60">2 цаг идэвхгүй байсан бол түүх арилдаг.</p>
+            </div>
           )}
           {!chatLoading && chatHistory.length > 0 && (
             <div className="space-y-2">
@@ -249,12 +263,12 @@ export function BotTab({
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="truncate font-mono text-xs text-ink">
-                    {shortId(row.sender_id)}
-                  </p>
+                    <p className="truncate text-sm font-semibold text-ink">
+                      {recentRows.find((r) => r.sender_id === row.sender_id)?.display_name || shortId(row.sender_id)}
+                    </p>
                     <p className="text-xs text-ink-subtle">
-                    Хүссэн: {formatTime(row.paused_at)} · Дуусах:{" "}
-                    {tick >= 0 ? timeLeft(row.expires_at) : ""}
+                      Хүссэн: {formatTime(row.paused_at)} · Дуусах:{" "}
+                      {tick >= 0 ? timeLeft(row.expires_at) : ""}
                     </p>
                   </div>
                 <Button
@@ -391,21 +405,26 @@ export function BotTab({
               (p) => p.sender_id === row.sender_id,
             );
             const wantsHuman = handoffIds.has(row.sender_id);
+            const name = displayName(row);
             return (
               <div
                 key={row.sender_id}
                 className={cx(
-                  "cursor-pointer rounded-xl border p-3 transition-colors hover:border-brand/40 hover:bg-surface",
+                  "rounded-xl border p-3 transition-colors",
                   wantsHuman
                     ? "border-warning/40 bg-warning-soft"
-                    : "border-line bg-surface-sunken",
+                    : isPaused
+                      ? "border-danger/30 bg-danger/5"
+                      : "border-line bg-surface-sunken",
                 )}
-                onClick={() => openChat(row.sender_id)}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="flex items-center gap-1.5 truncate font-mono text-sm text-ink">
-                      {shortId(row.sender_id)}
+                <div
+                  className="flex cursor-pointer items-center justify-between gap-2"
+                  onClick={() => openChat(row.sender_id)}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="flex items-center gap-1.5 truncate text-sm font-semibold text-ink">
+                      {name}
                       {wantsHuman && (
                         <span className="shrink-0 rounded-full bg-warning px-1.5 py-0.5 text-[10px] font-semibold text-white">
                           🙋 хүн хүсэв
@@ -413,11 +432,14 @@ export function BotTab({
                       )}
                       {isPaused && (
                         <span className="shrink-0 rounded-full bg-danger px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                          зогссон
+                          бот зогссон
                         </span>
                       )}
                     </p>
                     <p className="mt-0.5 text-xs text-ink-subtle">
+                      {row.display_name && (
+                        <span className="mr-2 font-mono opacity-60">{shortId(row.sender_id)}</span>
+                      )}
                       {formatTime(row.last_seen)}
                       {isPaused && pauseRow
                         ? ` · ${tick >= 0 ? timeLeft(pauseRow.expires_at) : ""}`
@@ -425,6 +447,38 @@ export function BotTab({
                     </p>
                   </div>
                   <Icons.chevronRight size={14} className="shrink-0 text-ink-subtle" />
+                </div>
+                {/* Quick pause/resume row — no need to open thread */}
+                <div className="mt-2 flex items-center gap-1.5 border-t border-line/50 pt-2">
+                  {isPaused ? (
+                    <button
+                      type="button"
+                      disabled={busyKey === `resume:${row.sender_id}`}
+                      onClick={(e) => { e.stopPropagation(); onPauseAction("resume", row.sender_id); }}
+                      className="rounded-md border border-success/40 bg-success/10 px-2.5 py-1 text-xs font-medium text-success hover:border-success disabled:opacity-50"
+                    >
+                      Бот сэргээх
+                    </button>
+                  ) : (
+                    <>
+                      <span className="text-[11px] text-ink-subtle">Бот зогсоох:</span>
+                      {[
+                        { label: "30 мин", ms: 30 * 60 * 1000 },
+                        { label: "1 цаг", ms: 60 * 60 * 1000 },
+                        { label: "Гараар", ms: null },
+                      ].map((opt) => (
+                        <button
+                          key={opt.label}
+                          type="button"
+                          disabled={busyKey === `pause:${row.sender_id}`}
+                          onClick={(e) => { e.stopPropagation(); onPauseAction("pause", row.sender_id, opt.ms); }}
+                          className="rounded-md border border-line-strong bg-surface px-2 py-1 text-[11px] text-ink-muted hover:border-danger hover:text-danger disabled:opacity-50"
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </>
+                  )}
                 </div>
               </div>
             );

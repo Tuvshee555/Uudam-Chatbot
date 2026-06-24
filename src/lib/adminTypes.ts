@@ -34,7 +34,7 @@ export type PauseRow = {
   reason?: string;
 };
 
-export type RecentRow = { sender_id: string; last_seen: string };
+export type RecentRow = { sender_id: string; last_seen: string; display_name?: string };
 
 export type ControlState = {
   bot_paused: boolean;

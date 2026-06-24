@@ -9,7 +9,7 @@ import { appendMessage, buildPrompt, getHistory } from "../../lib/conversation";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, sanitizeAssistantReply } from "../../lib/reply";
-import { isPaused, pauseBot, trackSender } from "../../lib/pause";
+import { isPaused, pauseBot, storeSenderName, trackSender } from "../../lib/pause";
 import { createLead, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, } from "../../lib/travelFastPaths";
@@ -810,6 +810,19 @@ async function sendPhotoAlbum(
     }
   }
 }
+async function fetchAndStoreFbName(senderId: string, token: string): Promise<void> {
+  try {
+    const url = `https://graph.facebook.com/v19.0/${encodeURIComponent(senderId)}?fields=name&access_token=${encodeURIComponent(token)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+    if (!res.ok) return;
+    const data = (await res.json()) as { name?: string };
+    if (typeof data.name === "string" && data.name.trim()) {
+      await storeSenderName(senderId, data.name.trim());
+    }
+  } catch {
+    // non-critical, ignore
+  }
+}
 async function sendFacebookTypingIndicator(
   recipientId: string,
   token: string | undefined,
@@ -957,6 +970,9 @@ async function handleMessage(
     return;
   }
   await trackSender(senderId);
+  if (platform === "facebook" && token) {
+    void fetchAndStoreFbName(senderId, token);
+  }
   if (await isPagePaused(pageId)) {
     logInfo("webhook.page_pause_active", {
       requestId: trace?.requestId,

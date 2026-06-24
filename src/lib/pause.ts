@@ -8,7 +8,7 @@ export type PausedRow = {
   expires_at: string | null;
   reason?: string;
 };
-export type RecentSender = { sender_id: string; last_seen: string };
+export type RecentSender = { sender_id: string; last_seen: string; display_name?: string };
 
 const env = getEnv();
 const pausedSenders = new Map<
@@ -16,6 +16,8 @@ const pausedSenders = new Map<
   { paused_at: string; expires_at: string | null; reason?: string }
 >();
 const recentSenders = new Map<string, string>(); // sender_id → last_seen ISO
+const senderNames = new Map<string, string>(); // sender_id → display_name
+const SENDER_NAMES_KEY = "pause:sender_names"; // Redis hash key
 const MAX_RECENT = 20;
 const MAX_PAUSED_SENDERS = env.pauseMaxSenders;
 
@@ -223,6 +225,16 @@ export async function trackSender(senderId: string): Promise<void> {
   }
 }
 
+export async function storeSenderName(senderId: string, name: string): Promise<void> {
+  if (env.redisPauseEnabled) {
+    await withRedis("pause.store_sender_name", async (redis) => {
+      await redis.hset(SENDER_NAMES_KEY, senderId, name);
+      return true;
+    });
+  }
+  senderNames.set(senderId, name);
+}
+
 export async function listRecent(): Promise<RecentSender[]> {
   if (env.redisPauseEnabled) {
     const redisRows = await withRedis("pause.list_recent", async (redis) => {
@@ -242,6 +254,13 @@ export async function listRecent(): Promise<RecentSender[]> {
           last_seen: new Date(score).toISOString(),
         });
       }
+      // Bulk-fetch names from Redis hash
+      if (rows.length > 0) {
+        const names = await redis.hmget(SENDER_NAMES_KEY, ...rows.map((r) => r.sender_id));
+        rows.forEach((row, i) => {
+          if (names[i]) row.display_name = names[i] as string;
+        });
+      }
       return rows;
     });
     if (redisRows) return redisRows;
@@ -249,6 +268,10 @@ export async function listRecent(): Promise<RecentSender[]> {
   }
 
   return Array.from(recentSenders.entries())
-    .map(([sender_id, last_seen]) => ({ sender_id, last_seen }))
+    .map(([sender_id, last_seen]) => ({
+      sender_id,
+      last_seen,
+      display_name: senderNames.get(sender_id),
+    }))
     .sort((a, b) => b.last_seen.localeCompare(a.last_seen));
 }
