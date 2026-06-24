@@ -271,7 +271,8 @@ export type TabKey =
   | "flow"
   | "payments"
   | "greeting"
-  | "seasons";
+  | "seasons"
+  | "json";
 
 export type FlowRule = {
   id: string;
