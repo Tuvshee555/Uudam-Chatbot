@@ -13,6 +13,7 @@ import type {
   ChatMessage,
   ConflictItem,
   ProposalMsg,
+  TravelTrip,
 } from "@/lib/adminTypes";
 import { describeAction, summarizeConflict } from "@/lib/adminProposalUtils";
 import {
@@ -20,6 +21,7 @@ import {
   QUICK_ACTIONS,
   formatBytes,
 } from "@/lib/adminUtils";
+import { diffTripFields, type TripExtraDiff } from "@/lib/tripExtraSchema";
 
 function fileGlyph(file: AttachedFile): string {
   const name = file.name.toLowerCase();
@@ -68,6 +70,7 @@ export function FileChip({
    ---------------------------------------------------------------- */
 export function AssistantTab({
   messages,
+  existingTrips = [],
   aiInput,
   setAiInput,
   attachedFiles,
@@ -91,6 +94,7 @@ export function AssistantTab({
   inputRef,
 }: {
   messages: ChatMessage[];
+  existingTrips?: TravelTrip[];
   aiInput: string;
   setAiInput: (value: string) => void;
   attachedFiles: AttachedFile[];
@@ -210,6 +214,7 @@ export function AssistantTab({
               <ChatBubbleV2
                 key={message.id}
                 message={message}
+                existingTrips={existingTrips}
                 applyBusy={applyBusyId === message.id}
                 clarifyBusy={clarifyBusyId === message.id}
                 onApply={onApply}
@@ -355,6 +360,7 @@ export function AssistantTab({
 }
 function ChatBubbleV2({
   message,
+  existingTrips = [],
   applyBusy,
   clarifyBusy,
   onApply,
@@ -364,6 +370,7 @@ function ChatBubbleV2({
   onToggleConfirm: _onToggleConfirm,
 }: {
   message: ChatMessage;
+  existingTrips?: TravelTrip[];
   applyBusy: boolean;
   clarifyBusy: boolean;
   onApply: (message: ProposalMsg) => void;
@@ -420,6 +427,34 @@ function ChatBubbleV2({
 
   const { proposal } = message;
   const describedActions = proposal.actions.map(describeAction);
+
+  // Build a diff per action: match the action's trip_id or route_name against existing trips
+  function getDiffsForAction(actionIndex: number): TripExtraDiff[] {
+    const action = proposal.actions[actionIndex];
+    if (!action || !existingTrips.length) return [];
+    const verb = String(action.action || "").toLowerCase();
+    if (verb !== "patch" && !(verb === "upsert" && action.trip_id)) return [];
+    const tripId = action.trip_id?.trim();
+    const routeName = action.match?.route_name?.trim() ||
+      (action.fields?.route_name as string | undefined)?.trim();
+    const existing = existingTrips.find(
+      (t) =>
+        (tripId && t.id === tripId) ||
+        (routeName &&
+          t.route_name.toLowerCase() === routeName.toLowerCase()),
+    );
+    if (!existing) return [];
+    return diffTripFields(action.fields as Record<string, unknown> ?? {}, {
+      adult_price: existing.adult_price,
+      child_price: existing.child_price,
+      departure_dates: existing.departure_dates,
+      status: existing.status,
+      seats_total: existing.seats_total,
+      seats_left: existing.seats_left,
+      duration_text: existing.duration_text,
+      currency: existing.currency,
+    });
+  }
   const visibleActions = showAllChanges
     ? describedActions
     : describedActions.slice(0, 5);
@@ -503,28 +538,60 @@ function ChatBubbleV2({
               )}
             </div>
             <div className={cx("mt-2 divide-y divide-line", showAllChanges && "max-h-96 overflow-y-auto pr-1 scroll-area")}>
-              {visibleActions.map((described, index) => (
-                <div
-                  key={`${described.verb}:${described.target}:${index}`}
-                  className="grid gap-1 py-2.5 sm:grid-cols-[2rem_minmax(12rem,0.8fr)_1.2fr] sm:items-start sm:gap-3"
-                >
-                  <span className="hidden h-6 w-6 items-center justify-center rounded-full bg-travel-soft text-sm font-semibold text-travel sm:flex">
-                    {index + 1}
-                  </span>
-                  <p className="text-sm font-semibold text-ink">
-                    <span className="sm:hidden">{index + 1}. </span>{described.target}
-                    <span className="ml-2 font-medium text-travel">{described.verb}</span>
-                  </p>
-                  <p
-                    className="line-clamp-2 text-sm leading-5 text-ink-muted"
-                    title={described.changes.join(" • ")}
+              {visibleActions.map((described, index) => {
+                const diffs = getDiffsForAction(index);
+                return (
+                  <div
+                    key={`${described.verb}:${described.target}:${index}`}
+                    className="py-2.5"
                   >
-                    {described.changes.length > 0
-                      ? described.changes.slice(0, 3).join(" • ")
-                      : "Төлөвийн өөрчлөлт"}
-                  </p>
-                </div>
-              ))}
+                    <div className="grid gap-1 sm:grid-cols-[2rem_minmax(12rem,0.8fr)_1.2fr] sm:items-start sm:gap-3">
+                      <span className="hidden h-6 w-6 items-center justify-center rounded-full bg-travel-soft text-sm font-semibold text-travel sm:flex">
+                        {index + 1}
+                      </span>
+                      <p className="text-sm font-semibold text-ink">
+                        <span className="sm:hidden">{index + 1}. </span>{described.target}
+                        <span className="ml-2 font-medium text-travel">{described.verb}</span>
+                      </p>
+                      <p
+                        className="line-clamp-2 text-sm leading-5 text-ink-muted"
+                        title={described.changes.join(" • ")}
+                      >
+                        {described.changes.length > 0
+                          ? described.changes.slice(0, 3).join(" • ")
+                          : "Төлөвийн өөрчлөлт"}
+                      </p>
+                    </div>
+                    {diffs.length > 0 && (
+                      <div className="mt-1.5 ml-0 sm:ml-9 flex flex-wrap gap-1.5">
+                        {diffs.map((d) => (
+                          <span
+                            key={d.field}
+                            className={cx(
+                              "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
+                              d.kind === "added" && "bg-green-50 text-green-700 ring-1 ring-green-200",
+                              d.kind === "removed" && "bg-red-50 text-red-600 ring-1 ring-red-200",
+                              d.kind === "changed" && "bg-amber-50 text-amber-700 ring-1 ring-amber-200",
+                            )}
+                            title={`${d.label}: ${d.before || "—"} → ${d.after || "—"}`}
+                          >
+                            {d.label}
+                            {d.kind === "changed" && (
+                              <>
+                                <span className="opacity-50">{d.before}</span>
+                                <span>→</span>
+                                <span>{d.after}</span>
+                              </>
+                            )}
+                            {d.kind === "added" && <span>+{d.after}</span>}
+                            {d.kind === "removed" && <span>−{d.before}</span>}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
             {hiddenActionCount > 0 && (
               <p className="mt-2 text-sm text-ink-subtle">

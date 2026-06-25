@@ -1633,6 +1633,7 @@ export default function AdminPage() {
           {tab === "assistant" && (
             <AssistantTab
               messages={chatMessages}
+              existingTrips={trips}
               aiInput={aiInput}
               setAiInput={setAiInput}
               attachedFiles={attachedFiles}

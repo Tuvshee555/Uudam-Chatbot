@@ -6,6 +6,7 @@ import {
   recordCounter,
 } from "./observability";
 import { queryNeon, withNeonClient } from "./neonDb";
+import { normalizeExtra } from "./tripExtraSchema";
 import type {
   DiscountPolicy,
   FAQItem,
@@ -1182,7 +1183,9 @@ export async function upsertTrip(input: {
     photo_urls: Array.isArray(cleaned.photo_urls)
       ? cleaned.photo_urls.filter((u) => typeof u === "string" && u.startsWith("https://")).slice(0, 20)
       : [],
-    extra: cleaned.extra || {},
+    extra: normalizeExtra(
+      (cleaned.extra || {}) as Record<string, unknown>,
+    ).extra,
     created_at: "",
     updated_at: "",
   };
@@ -1295,8 +1298,11 @@ export async function patchTrip(id: string, fields: TripMutationFields) {
   keys.forEach((key) => {
     const column = columnMap[key];
     if (key === "extra") {
-      // Merge into existing extra to preserve keys set by AI import (departure_date_groups, source_file_attachment_id, etc.)
-      values.push(JSON.stringify(cleaned[key] ?? {}));
+      // Normalise then merge into existing extra (preserves keys set by AI import)
+      const { extra: normalisedExtra } = normalizeExtra(
+        (cleaned[key] ?? {}) as Record<string, unknown>,
+      );
+      values.push(JSON.stringify(normalisedExtra));
       sets.push(`${column} = COALESCE(${column}, '{}'::jsonb) || $${values.length}::jsonb`);
     } else if (JSONB_KEYS.has(key)) {
       values.push(JSON.stringify(cleaned[key] ?? []));
