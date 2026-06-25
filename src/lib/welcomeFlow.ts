@@ -16,10 +16,6 @@ import type { TravelTrip } from "./travelOps";
 const MAX_WELCOME_PHOTOS = 5;
 const MAX_TRIP_PHOTOS = 3;
 const SEEN_SENDER_TTL_SEC = 14 * 24 * 60 * 60; // 14 days — re-greet returning customers after 2 weeks
-const AI_ASSISTANT_NOTICE =
-  "Сайн байна уу! Би түр AI туслах бөгөөд таны асуултад шуурхай хариулж, манай ажилтан холбогдох хүртэл тусална.";
-const DEFAULT_WELCOME_TEXT =
-  "Uudam Travel-д тавтай морилно уу! Аяллын чиглэл, үнэ, гарах өдөр, суудлын талаар чөлөөтэй асуугаарай.";
 
 // ─── Admin-controlled greeting config (stored in bot_settings.extra.greeting) ──
 
@@ -66,18 +62,6 @@ export function resolveGreetingConfig(extra: unknown): GreetingConfig {
     usePhotoUrls: raw.usePhotoUrls === true,
     defaultPhotoUrls,
   };
-}
-
-export function buildWelcomeText(text: string | null | undefined): string {
-  const base = typeof text === "string" ? text.trim() : "";
-  const normalized = base.toLowerCase();
-  const alreadyMentionsAiRole =
-    normalized.includes("ai") &&
-    (normalized.includes("ажилтан") ||
-      normalized.includes("operator") ||
-      normalized.includes("human"));
-  const body = base || DEFAULT_WELCOME_TEXT;
-  return alreadyMentionsAiRole ? body : `${AI_ASSISTANT_NOTICE}\n\n${body}`;
 }
 
 // ─── Seasons (stored in bot_settings.extra.seasons) ──────────────────────────
@@ -267,4 +251,4 @@ export function extractTripBrochureAttachmentId(
   return null;
 }
 
-export { AI_ASSISTANT_NOTICE, DEFAULT_WELCOME_TEXT, MAX_WELCOME_PHOTOS, MAX_TRIP_PHOTOS };
+export { MAX_WELCOME_PHOTOS, MAX_TRIP_PHOTOS };

@@ -13,7 +13,7 @@ import { isPaused, pauseBot, storeSenderName, trackSender } from "../../lib/paus
 import { createLead, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, } from "../../lib/travelFastPaths";
-import { buildWelcomeText, extractTripBrochureAttachmentId, extractTripPhotosForReply, getActiveSeason, isFirstMessage, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
+import { extractTripBrochureAttachmentId, extractTripPhotosForReply, getActiveSeason, isFirstMessage, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
@@ -1005,9 +1005,10 @@ async function handleMessage(
     (await isFirstMessage(senderId, platform))
   ) {
     try {
-      const welcomeText = buildWelcomeText(
-        greeting.text || botSettings.quick_info_reply,
-      );
+      const welcomeText =
+        greeting.text ||
+        botSettings.quick_info_reply ||
+        "Уудам Трэвел-д тавтай морилно уу! Бид танд хамгийн шилдэг аялалыг санал болгоно. Доорх аялалуудаас сонирхсоноо асуугаарай.";
       if (welcomeText.trim()) {
         await sendTextMessage(senderId, welcomeText, token, {
           requestId: trace?.requestId,
