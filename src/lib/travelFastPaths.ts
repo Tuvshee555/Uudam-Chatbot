@@ -630,6 +630,83 @@ function formatDepartureDates(trip: TravelTrip) {
   return trip.departure_dates.join(", ");
 }
 
+function formatRouteName(routeName: string) {
+  return routeName.replace(/\s*\+\s*/g, " + ").replace(/\s{2,}/g, " ").trim();
+}
+
+function formatPassengerPriceLines(input: {
+  adult?: number | null;
+  child?: number | null;
+  infant?: number | null;
+  childAge?: string | null;
+  infantAge?: string | null;
+  currency: string;
+}) {
+  const lines: string[] = [];
+  const adult = formatMoney(input.adult ?? null, input.currency);
+  const child = formatMoney(input.child ?? null, input.currency);
+  const infant = formatMoney(input.infant ?? null, input.currency);
+  const childAge = input.childAge?.trim() ? ` /${input.childAge.trim()}/` : "";
+  const infantAge = input.infantAge?.trim() ? ` /${input.infantAge.trim()}/` : "";
+
+  if (adult) lines.push(`• Том хүн: ${adult}`);
+  if (child) lines.push(`• Хүүхэд${childAge}: ${child}`);
+  if (infant) lines.push(`• Нярай${infantAge}: ${infant}`);
+  return lines;
+}
+
+function groupDatesForDisplay(dates: string[]): Array<{ month: number | null; days: number[]; raw: string[] }> {
+  const groups: Array<{ month: number | null; days: number[]; raw: string[] }> = [];
+  for (const raw of dates) {
+    const parsed = normalizeMnDate(raw);
+    if (parsed.length === 0) {
+      groups.push({ month: null, days: [], raw: [raw] });
+      continue;
+    }
+    for (const value of parsed) {
+      let group = groups.find((entry) => entry.month === value.month);
+      if (!group) {
+        group = { month: value.month, days: [], raw: [] };
+        groups.push(group);
+      }
+      if (!group.days.includes(value.day)) group.days.push(value.day);
+    }
+  }
+  for (const group of groups) group.days.sort((a, b) => a - b);
+  return groups;
+}
+
+function joinDayList(days: number[]) {
+  if (days.length === 0) return "";
+  if (days.length <= 2) return days.join(", ");
+  return `${days.slice(0, -1).join(", ")}, ${days[days.length - 1]}`;
+}
+
+function formatGroupDateLabel(dates: string[], suffix = "гаралт") {
+  const grouped = groupDatesForDisplay(dates);
+  if (grouped.length === 0) return "";
+  if (grouped.every((entry) => entry.month !== null)) {
+    const parts = grouped.map((entry) => `${entry.month} сарын ${joinDayList(entry.days)}-ны`);
+    return parts.length === 1
+      ? `${parts[0]} ${suffix}`
+      : `${parts.slice(0, -1).join(", ")} болон ${parts[parts.length - 1]} ${suffix}`;
+  }
+  return dates.join(", ");
+}
+
+function formatCompactDepartureList(dates: string[]) {
+  const grouped = groupDatesForDisplay(dates);
+  if (grouped.length === 0) return compactDates(dates);
+  if (grouped.every((entry) => entry.month !== null)) {
+    const values: string[] = [];
+    for (const entry of grouped) {
+      for (const day of entry.days) values.push(`${entry.month}/${day}`);
+    }
+    return values.join(", ");
+  }
+  return compactDates(dates);
+}
+
 function findPriceGroupByYmd(
   trip: TravelTrip,
   ymd: string,
@@ -1007,6 +1084,65 @@ function formatTripBasePrice(trip: TravelTrip) {
  * Extract a single month number from phrases like "7 сард", "7-р сард", "долоодугаар сард".
  * Returns null if no month-only mention found (without a specific day).
  */
+function formatTripBasePricePremium(trip: TravelTrip) {
+  const currency = trip.currency || "MNT";
+  const sections: string[] = ["💰 Үнэ:"];
+  const structuredGroups = getStructuredPriceGroups(trip);
+
+  if (structuredGroups.length > 0) {
+    type GroupedPrice = { priceKey: string; priceLines: string[]; dates: string[]; label: string };
+    const grouped: GroupedPrice[] = [];
+    for (const g of structuredGroups) {
+      const priceLines = formatPassengerPriceLines({
+        adult: typeof g.adult_price === "number" ? g.adult_price : null,
+        child: typeof g.child_price === "number" ? g.child_price : null,
+        infant: typeof g.infant_price === "number" ? g.infant_price : null,
+        childAge: typeof g.child_age === "string" ? g.child_age : "",
+        infantAge: typeof g.infant_age === "string" ? g.infant_age : "",
+        currency,
+      });
+      if (!priceLines.length) continue;
+      const priceKey = priceLines.join("|");
+      const rawDates = Array.isArray(g.dates) ? g.dates as string[] : [];
+      const label = typeof g.label === "string" ? g.label : "";
+      const existing = grouped.find((entry) => entry.priceKey === priceKey);
+      if (existing) existing.dates.push(...rawDates);
+      else grouped.push({ priceKey, priceLines, dates: [...rawDates], label });
+    }
+    for (const entry of grouped) {
+      const dateLabel = entry.dates.length > 0 ? formatGroupDateLabel(entry.dates) : entry.label;
+      if (dateLabel) sections.push("", dateLabel);
+      sections.push(...entry.priceLines);
+    }
+    return sections.join("\n");
+  }
+
+  const legacyGroups = getPriceGroups(trip);
+  if (legacyGroups.length > 0) {
+    for (const group of legacyGroups) {
+      const dateLabel = Array.isArray(group.dates) && group.dates.length > 0 ? formatGroupDateLabel(group.dates) : (group.label || "");
+      const priceLines = formatPassengerPriceLines({
+        adult: group.adult_price ?? null,
+        child: group.child_price ?? null,
+        infant: group.infant_price ?? null,
+        currency,
+      });
+      if (!priceLines.length) continue;
+      if (dateLabel) sections.push("", dateLabel);
+      sections.push(...priceLines);
+    }
+    return sections.join("\n");
+  }
+
+  const flatLines = formatPassengerPriceLines({
+    adult: trip.adult_price,
+    child: trip.child_price,
+    currency,
+  });
+  if (!flatLines.length) return "💰 Үнийн мэдээлэл одоогоор тодорхойгүй байна.";
+  return [...sections, "", ...flatLines].join("\n");
+}
+
 function extractMonthOnlyFromText(text: string): number | null {
   const MN_MONTH_WORDS: Record<string, number> = {
     "нэгдүгээр": 1, "хоёрдугаар": 2, "гуравдугаар": 3, "дөрөвдүгээр": 4,
@@ -1187,7 +1323,7 @@ export function buildDiscountReply(text: string, trips: TravelTrip[]): string | 
     const lines = [
       `✈️ ${best.route_name}`,
       "💡 Хямдралтай үнийн мэдээлэл одоогоор тусдаа баталгаажаагүй байна.",
-      formatTripBasePrice(best),
+      formatTripBasePricePremium(best),
     ];
     if (best.departure_dates.length > 0) {
       lines.push(`📅 Гарах өдрүүд: ${formatDepartureDates(best)}`);
@@ -1262,23 +1398,28 @@ function getSeatSalesMessage(trip: TravelTrip): string | null {
 }
 
 function buildTripInfoReply(trip: TravelTrip) {
-  const lines = [`\u2708\uFE0F ${trip.route_name}`];
+  const lines = [`\u2708\uFE0F ${formatRouteName(trip.route_name)}`, ""];
 
   if (trip.duration_text) {
-    lines.push(`\uD83D\uDDD3 Хугацаа: ${trip.duration_text}`);
+    lines.push(`\uD83D\uDDD3 Хугацаа: ${trip.duration_text}`, "");
   }
 
-  lines.push(formatTripBasePrice(trip));
+  lines.push(formatTripBasePricePremium(trip));
 
   if (trip.departure_dates.length > 0) {
-    lines.push(`\uD83D\uDCC5 Гарах өдрүүд: ${formatDepartureDates(trip)}`);
+    lines.push("", `\uD83D\uDCC5 Гарах өдрүүд:`, formatCompactDepartureList(trip.departure_dates));
   }
 
   const seatMessage = getSeatSalesMessage(trip);
   if (seatMessage) {
-    lines.push(seatMessage);
+    lines.push("", seatMessage);
   }
 
+  if (isLandFlightCombo(trip)) {
+    lines.push("", "Энэ нь газар + нислэг хосолсон аялал бөгөөд УБ–Бэйдайхэ чиглэлийн нислэг багтсан.");
+  }
+
+  lines.push("", "Та аль гарах өдрийг сонирхож байна вэ? 😊");
   return lines.join("\n");
 }
 
@@ -1519,7 +1660,15 @@ export function buildStructuredTripReply(
     if (combinedReply) return combinedReply;
   }
 
-  if (!isStructuredTripQuestion(text) && !hasDatePriceConstraint(text)) return null;
+  const routeOnlyCandidate = !isStructuredTripQuestion(text) && !hasDatePriceConstraint(text)
+    ? findBestTripMatch(text, trips)
+    : null;
+  if (!isStructuredTripQuestion(text) && !hasDatePriceConstraint(text)) {
+    if (!routeOnlyCandidate?.best) return routeOnlyCandidate?.ambiguous?.length
+      ? buildAmbiguousTripReply(routeOnlyCandidate.ambiguous)
+      : null;
+    return buildTripInfoReply(routeOnlyCandidate.best);
+  }
 
   const { best, ambiguous } = findBestTripMatch(text, trips);
   if (!best) return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
@@ -1531,7 +1680,7 @@ export function buildStructuredTripReply(
   if (hasSamePriceComparisonIntent(text) && !samePriceReply) {
     const fallbackLines = [
       `✈️ ${best.route_name}`,
-      formatTripBasePrice(best),
+      formatTripBasePricePremium(best),
     ];
     if (best.departure_dates.length > 0) {
       fallbackLines.push(`📅 Гарах өдрүүд: ${formatDepartureDates(best)}`);
@@ -1545,6 +1694,9 @@ export function buildStructuredTripReply(
   const askedSchedule = hasScheduleIntent(text);
   const askedDirectFlight = hasDirectFlightIntent(text);
   const askedExistence = hasExistenceIntent(text);
+  if (!askedPrice && !askedDuration && !askedSchedule && !askedDirectFlight && !askedExistence) {
+    return buildTripInfoReply(best);
+  }
   const requestedDates = unique(parseDepartureDateText(text, now));
 
   if (askedExistence && !askedPrice && !askedDuration && !askedSchedule && !askedDirectFlight) {
@@ -1654,14 +1806,14 @@ export function buildStructuredTripReply(
         if (childRulesStr) lines.push(childRulesStr);
       } else {
         // Fall back to full price table
-        lines.push(formatTripBasePrice(best));
+        lines.push(formatTripBasePricePremium(best));
       }
     } else if (requestedDates.length > 0) {
       for (const ymd of requestedDates) {
         lines.push(formatSpecificDatePrice(best, ymd, ymd, now));
       }
     } else {
-      lines.push(formatTripBasePrice(best));
+      lines.push(formatTripBasePricePremium(best));
     }
   }
 
@@ -1695,7 +1847,7 @@ export function buildStructuredTripReply(
     askedExistence
   ) {
     lines.push(`🗓 Хугацаа: ${best.duration_text || "Мэдээлэл алга байна."}`);
-    lines.push(formatTripBasePrice(best));
+    lines.push(formatTripBasePricePremium(best));
     if (best.departure_dates.length > 0) {
       lines.push(`📅 Гарах өдрүүд: ${formatDepartureDates(best)}`);
     }
@@ -1707,7 +1859,7 @@ export function buildStructuredTripReply(
 
   if (lines.length === 1) {
     lines.push(`🗓 Хугацаа: ${best.duration_text || "Мэдээлэл алга байна."}`);
-    lines.push(formatTripBasePrice(best));
+    lines.push(formatTripBasePricePremium(best));
   }
 
   return lines.join("\n");

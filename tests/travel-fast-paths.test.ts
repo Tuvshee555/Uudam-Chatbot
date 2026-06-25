@@ -287,6 +287,51 @@ test("combined date and price query falls back to close matches on the same date
   assert.doesNotMatch(reply || "", /Ð¥Ð°Ð¹Ð½Ð°Ð½/);
 });
 
+test("route-only query uses spaced premium formatting", () => {
+  const reply = buildStructuredTripReply(
+    "Бээжин Бэйдэхэ газар нислэг хосолсон аялал",
+    [
+      trip({
+        id: "beidaihe-premium",
+        route_name: "Бэйдайхэ + Бээжин газар нислэг хосолсон аялал",
+        duration_text: "9 өдөр / 8 шөнө",
+        departure_dates: ["6 сарын 20", "6 сарын 27", "7 сарын 9", "7 сарын 18", "7 сарын 27", "8 сарын 1", "8 сарын 8", "8 сарын 15", "8 сарын 22"],
+        extra: {
+          price_groups: [
+            {
+              dates: ["6 сарын 20", "6 сарын 27"],
+              adult_price: 2030000,
+              child_price: 1590000,
+              infant_price: 530000,
+              child_age: "2–10 нас",
+              infant_age: "0–23 сар",
+            },
+            {
+              dates: ["7 сарын 9", "7 сарын 18", "7 сарын 27", "8 сарын 1", "8 сарын 8", "8 сарын 15", "8 сарын 22"],
+              adult_price: 2150000,
+              child_price: 1710000,
+              infant_price: 530000,
+              child_age: "2–10 нас",
+              infant_age: "0–23 сар",
+            },
+          ],
+        },
+        source_description: "Газар нислэг хосолсон маршрут",
+      }),
+    ],
+    NOW,
+  );
+
+  assert.match(reply || "", /\n\n🗓 Хугацаа:/);
+  assert.match(reply || "", /\n\n💰 Үнэ:/);
+  assert.match(reply || "", /• Том хүн:/);
+  assert.match(reply || "", /• Хүүхэд/);
+  assert.match(reply || "", /\n\n📅 Гарах өдрүүд:\n/);
+  assert.match(reply || "", /6\/20, 6\/27, 7\/9/);
+  assert.match(reply || "", /Та аль гарах өдрийг сонирхож байна вэ/);
+  assert.doesNotMatch(reply || "", /\|/);
+});
+
 test("program request prefers brochure pdf over images and itinerary", () => {
   const result = buildTripProgramReply(
     "Ð‘ÑÐ¹Ð´Ð°Ð¹Ñ…Ñ Ð°ÑÐ»Ð»Ñ‹Ð½ Ð´ÑÐ»Ð³ÑÑ€ÑÐ½Ð³Ò¯Ð¹ Ñ…Ó©Ñ‚Ó©Ð»Ð±Ó©Ñ€ pdf",
