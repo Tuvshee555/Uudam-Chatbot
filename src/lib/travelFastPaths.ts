@@ -22,6 +22,32 @@ type TripMatch = {
   score: number;
 };
 
+type MonthDay = {
+  month: number;
+  day: number;
+};
+
+type CombinedDatePriceMatch = {
+  trip: TravelTrip;
+  matchType: "adult" | "child" | "infant" | "passenger" | "discount" | "date_only";
+  score: number;
+  priceDiff: number;
+  matchedPrice: number | null;
+  group: Record<string, unknown> | DepartureDateGroup | null;
+};
+
+export type ProgramAsset = {
+  type: "id" | "url";
+  value: string;
+};
+
+export type TripProgramReplyResult = {
+  reply: string;
+  trip: TravelTrip;
+  brochure: ProgramAsset | null;
+  mediaUrls: string[];
+};
+
 const SEATS_KEYWORDS_MN = [
   "суудал",
   "зай",
@@ -91,6 +117,16 @@ const STRUCTURED_QUERY_SIGNALS = [
   "болно уу",
 ];
 
+const PROGRAM_QUERY_SIGNALS = [
+  "хөтөлбөр",
+  "program",
+  "pdf",
+  "зураг",
+  "өдөр өдөр",
+  "day by day",
+  "itinerary",
+];
+
 const DIRECT_FLIGHT_POSITIVE_PATTERNS = [/шууд\s+нислэг/i];
 const DIRECT_FLIGHT_NEGATIVE_PATTERNS = [
   /газар\s*\+\s*нислэг/i,
@@ -133,6 +169,18 @@ function unique<T>(values: T[]) {
   return Array.from(new Set(values));
 }
 
+function uniqueMonthDays(values: MonthDay[]) {
+  const seen = new Set<string>();
+  const result: MonthDay[] = [];
+  for (const value of values) {
+    const key = `${value.month}-${value.day}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
+}
+
 function formatMoney(value: number | null, currency: string) {
   if (typeof value !== "number") return null;
   const formatted = value.toLocaleString("mn-MN");
@@ -165,6 +213,88 @@ function getStructuredDiscounts(trip: TravelTrip): Array<Record<string, unknown>
     return extra.discounts as Array<Record<string, unknown>>;
   }
   return [];
+}
+
+function getTripSearchHaystack(trip: TravelTrip): string {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const sections: string[] = [
+    trip.route_name,
+    trip.source_description || "",
+    trip.notes || "",
+    ...trip.departure_dates,
+    ...getAliases(trip),
+  ];
+
+  const appendGroupText = (items: Array<Record<string, unknown> | DepartureDateGroup>) => {
+    for (const item of items) {
+      sections.push(...getGroupDateTexts(item));
+      const record = item as Record<string, unknown>;
+      for (const key of ["label", "note", "notes", "condition"]) {
+        if (typeof record[key] === "string" && record[key].trim()) {
+          sections.push(record[key] as string);
+        }
+      }
+    }
+  };
+
+  appendGroupText(getStructuredPriceGroups(trip));
+  appendGroupText(getStructuredDiscounts(trip));
+  appendGroupText(getPriceGroups(trip));
+
+  for (const key of ["child_rules", "room_prices"]) {
+    const items = extra[key];
+    if (!Array.isArray(items)) continue;
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      for (const value of Object.values(item as Record<string, unknown>)) {
+        if (typeof value === "string" && value.trim()) sections.push(value);
+      }
+    }
+  }
+
+  return normText(sections.join(" "));
+}
+
+function matchScoreForPriceKind(kind: CombinedDatePriceMatch["matchType"]): number {
+  switch (kind) {
+    case "adult":
+      return 100;
+    case "child":
+      return 90;
+    case "infant":
+      return 80;
+    case "passenger":
+      return 70;
+    case "discount":
+      return 60;
+    default:
+      return 10;
+  }
+}
+
+function getPriceValuesFromGroup(
+  group: Record<string, unknown> | DepartureDateGroup,
+  defaultAdultKind: "adult" | "discount",
+): Array<{ kind: CombinedDatePriceMatch["matchType"]; value: number }> {
+  const raw = group as Record<string, unknown>;
+  const values: Array<{ kind: CombinedDatePriceMatch["matchType"]; value: number }> = [];
+
+  const push = (kind: CombinedDatePriceMatch["matchType"], value: unknown) => {
+    if (typeof value === "number" && Number.isFinite(value)) values.push({ kind, value });
+  };
+
+  push(defaultAdultKind, raw.adult_price);
+  push("child", raw.child_price);
+  push("infant", raw.infant_price);
+
+  if (Array.isArray(raw.passenger_prices)) {
+    for (const item of raw.passenger_prices) {
+      if (!item || typeof item !== "object") continue;
+      push("passenger", (item as Record<string, unknown>).price);
+    }
+  }
+
+  return values;
 }
 
 function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] {
@@ -252,9 +382,196 @@ function findBestTripMatch(text: string, trips: TravelTrip[]) {
   return { best: best.trip, ambiguous: [] as TravelTrip[] };
 }
 
+function findLooseTripMatch(text: string, trips: TravelTrip[]) {
+  const query = normText(text);
+  let best: TravelTrip | null = null;
+  let bestScore = 0;
+  let secondScore = 0;
+
+  for (const trip of trips) {
+    if (trip.status !== "active") continue;
+    const routeNorm = normText(trip.route_name);
+    const routeWords = unique(
+      routeNorm.split(/\s+/).map((word) => word.trim()).filter((word) => word.length >= 2),
+    );
+    const matchedWordCount = routeWords.filter((word) => query.includes(word)).length;
+    const aliasHit = getAliases(trip).some((alias) => query.includes(normText(alias))) ? 1 : 0;
+    const exactRouteHit = query.includes(routeNorm) ? 1 : 0;
+    const score = exactRouteHit * 10 + aliasHit * 8 + matchedWordCount * 3;
+    if (score > bestScore) {
+      secondScore = bestScore;
+      bestScore = score;
+      best = trip;
+    } else if (score > secondScore) {
+      secondScore = score;
+    }
+  }
+
+  if (!best || bestScore === 0) return null;
+  if (bestScore - secondScore <= 1) return null;
+  return best;
+}
+
 function isStructuredTripQuestion(text: string) {
   const normalized = normText(text);
   return STRUCTURED_QUERY_SIGNALS.some((signal) => normalized.includes(signal));
+}
+
+export function hasProgramIntent(text: string) {
+  const normalized = normText(text);
+  return (
+    PROGRAM_QUERY_SIGNALS.some((signal) => normalized.includes(signal)) ||
+    /\u0445\u04e9\u0442\u04e9\u043b\u0431\u04e9\u0440|\u0437\u0443\u0440\u0430\u0433|\u04e9\u0434\u04e9\u0440\s*\u04e9\u0434\u04e9\u0440|program|pdf|itinerary|day\s*by\s*day/i.test(text)
+  );
+}
+
+function getTripBrochureAsset(trip: TravelTrip): ProgramAsset | null {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const id = extra.source_file_attachment_id;
+  if (typeof id === "string" && id.length > 0) return { type: "id", value: id };
+
+  const url = extra.brochure_pdf_url;
+  if (typeof url === "string" && url.startsWith("https://")) return { type: "url", value: url };
+  return null;
+}
+
+function pushMediaUrl(target: string[], value: unknown) {
+  if (typeof value === "string" && value.startsWith("https://") && !target.includes(value)) {
+    target.push(value);
+  }
+}
+
+function getTripProgramMediaUrls(trip: TravelTrip): string[] {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const urls: string[] = [];
+
+  const directKeys = [
+    "program_images",
+    "program_image_urls",
+    "itinerary_images",
+    "itinerary_image_urls",
+  ];
+  for (const key of directKeys) {
+    const value = extra[key];
+    if (!Array.isArray(value)) continue;
+    for (const item of value) pushMediaUrl(urls, item);
+  }
+
+  const mediaAssets = extra.media_assets;
+  const visit = (value: unknown, path = "") => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, path);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    const metaText = [
+      path,
+      typeof record.kind === "string" ? record.kind : "",
+      typeof record.type === "string" ? record.type : "",
+      typeof record.category === "string" ? record.category : "",
+      typeof record.purpose === "string" ? record.purpose : "",
+      typeof record.label === "string" ? record.label : "",
+    ]
+      .join(" ")
+      .toLowerCase();
+    const isProgramLike =
+      metaText.includes("program") ||
+      metaText.includes("itinerary") ||
+      metaText.includes("хөтөлбөр") ||
+      metaText.includes("өдөр");
+
+    if (isProgramLike) {
+      pushMediaUrl(urls, record.url);
+      pushMediaUrl(urls, record.src);
+      pushMediaUrl(urls, record.image_url);
+      pushMediaUrl(urls, record.imageUrl);
+    }
+
+    for (const [key, nested] of Object.entries(record)) {
+      visit(nested, `${path} ${key}`);
+    }
+  };
+
+  visit(mediaAssets, "media_assets");
+  return urls.slice(0, 6);
+}
+
+function getTripItineraryLines(trip: TravelTrip): string[] {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const rawDays = Array.isArray(extra.itinerary_days) ? extra.itinerary_days : [];
+  const lines: string[] = [];
+
+  for (const [index, item] of rawDays.entries()) {
+    if (typeof item === "string" && item.trim()) {
+      lines.push(`• Өдөр ${index + 1}: ${item.trim()}`);
+      continue;
+    }
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const dayValue =
+      typeof record.day === "number"
+        ? record.day
+        : typeof record.day_number === "number"
+          ? record.day_number
+          : index + 1;
+    const title = typeof record.title === "string" ? record.title.trim() : "";
+    const description = typeof record.description === "string" ? record.description.trim() : "";
+    const summary = [title, description].filter(Boolean).join(" — ");
+    if (summary) {
+      lines.push(`• Өдөр ${dayValue}: ${summary}`);
+    }
+  }
+
+  return lines;
+}
+
+export function buildTripProgramReply(
+  text: string,
+  trips: TravelTrip[],
+): TripProgramReplyResult | null {
+  if (!hasProgramIntent(text)) return null;
+
+  const best = findLooseTripMatch(text, trips);
+  if (!best) return null;
+
+  const brochure = getTripBrochureAsset(best);
+  const mediaUrls = brochure ? [] : getTripProgramMediaUrls(best);
+  const itineraryLines = brochure || mediaUrls.length > 0 ? [] : getTripItineraryLines(best);
+
+  if (brochure) {
+    return {
+      reply: `✈️ ${best.route_name}\n\nДэлгэрэнгүй хөтөлбөрийн PDF-г илгээж байна.`,
+      trip: best,
+      brochure,
+      mediaUrls,
+    };
+  }
+
+  if (mediaUrls.length > 0) {
+    return {
+      reply: `✈️ ${best.route_name}\n\nДэлгэрэнгүй хөтөлбөрийн зургуудыг илгээж байна.`,
+      trip: best,
+      brochure: null,
+      mediaUrls,
+    };
+  }
+
+  if (itineraryLines.length > 0) {
+    return {
+      reply: [`✈️ ${best.route_name}`, "", "Өдөр өдрийн хөтөлбөр:", ...itineraryLines].join("\n"),
+      trip: best,
+      brochure: null,
+      mediaUrls: [],
+    };
+  }
+
+  return {
+    reply: `✈️ ${best.route_name}\n\nДэлгэрэнгүй хөтөлбөрийн файл одоогоор бэлэн алга байна. Хэрэв хүсвэл манай аяллын зөвлөх дэлгэрэнгүй хөтөлбөрийг тусад нь илгээж өгнө.`,
+    trip: best,
+    brochure: null,
+    mediaUrls: [],
+  };
 }
 
 function hasPriceIntent(text: string) {
@@ -339,15 +656,16 @@ function findPriceGroupByYmd(
  */
 function normalizeMnDate(dateText: string): Array<{ month: number; day: number }> {
   const results: Array<{ month: number; day: number }> = [];
+  const trimmed = dateText.trim();
 
   // ISO date: 2026-06-27
-  const isoMatch = /^\d{4}-(\d{1,2})-(\d{1,2})$/.exec(dateText.trim());
+  const isoMatch = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(trimmed);
   if (isoMatch) {
-    return [{ month: parseInt(isoMatch[1], 10), day: parseInt(isoMatch[2], 10) }];
+    return [{ month: parseInt(isoMatch[2], 10), day: parseInt(isoMatch[3], 10) }];
   }
 
   // Slash format: 6/27
-  const slashMatch = /^(\d{1,2})\/(\d{1,2})$/.exec(dateText.trim());
+  const slashMatch = /^(\d{1,2})\/(\d{1,2})$/.exec(trimmed);
   if (slashMatch) {
     return [{ month: parseInt(slashMatch[1], 10), day: parseInt(slashMatch[2], 10) }];
   }
@@ -397,6 +715,85 @@ function extractDatesFromText(text: string): Array<{ month: number; day: number 
     }
   }
   return results;
+}
+
+function extractStructuredDates(text: string): MonthDay[] {
+  return uniqueMonthDays(parseLooseMonthDays(text));
+}
+
+function extractNormalizedPrice(text: string): number | null {
+  const compact = text.replace(/\s+/g, " ").trim();
+
+  const millionMatch = /(\d+(?:[.,]\d+)?)\s*сая(?:\s+(\d{1,4}))?/i.exec(compact);
+  if (millionMatch) {
+    const whole = Number.parseFloat(millionMatch[1].replace(",", "."));
+    if (!Number.isNaN(whole)) {
+      let price = Math.round(whole * 1_000_000);
+      if (millionMatch[2]) {
+        const tail = Number.parseInt(millionMatch[2], 10);
+        if (!Number.isNaN(tail)) {
+          price = Math.trunc(whole) * 1_000_000 + (tail < 1000 ? tail * 1000 : tail);
+        }
+      }
+      return price;
+    }
+  }
+
+  const kiloMatch = /(?:^|[^\d])(\d{3,5}(?:[.,]\d+)?)\s*[кk]\b/i.exec(compact);
+  if (kiloMatch) {
+    const amount = Number.parseFloat(kiloMatch[1].replace(",", "."));
+    if (!Number.isNaN(amount)) return Math.round(amount * 1000);
+  }
+
+  const groupedMatch = /(?:^|[^\d])(\d{1,3}(?:[.,]\d{3})+|\d{6,8})(?!\d)/.exec(compact);
+  if (groupedMatch) {
+    const digits = groupedMatch[1].replace(/[.,]/g, "");
+    const amount = Number.parseInt(digits, 10);
+    if (!Number.isNaN(amount)) return amount;
+  }
+
+  return null;
+}
+
+function hasDatePriceConstraint(text: string) {
+  return extractStructuredDates(text).length > 0 && extractNormalizedPrice(text) !== null;
+}
+
+function parseLooseMonthDays(text: string): MonthDay[] {
+  const results: MonthDay[] = [];
+  for (const match of text.matchAll(/(?:^|[^\d])(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)/g)) {
+    results.push({ month: parseInt(match[2], 10), day: parseInt(match[3], 10) });
+  }
+  for (const match of text.matchAll(/(?:^|[^\d])(\d{1,2})\/(\d{1,2})(?!\d)/g)) {
+    results.push({ month: parseInt(match[1], 10), day: parseInt(match[2], 10) });
+  }
+  for (const match of text.matchAll(/(\d{1,2})\s*[^\d\s,./-]{2,12}\s*(\d{1,2})/g)) {
+    results.push({ month: parseInt(match[1], 10), day: parseInt(match[2], 10) });
+  }
+  return results;
+}
+
+function getGroupDateTexts(group: Record<string, unknown> | DepartureDateGroup): string[] {
+  const values: string[] = [];
+  const raw = group as Record<string, unknown>;
+  for (const key of ["dates", "date_keys", "display_dates"]) {
+    const input = raw[key];
+    if (!Array.isArray(input)) continue;
+    for (const item of input) {
+      if (typeof item === "string" && item.trim()) values.push(item.trim());
+    }
+  }
+  return unique(values);
+}
+
+function groupMatchesMonthDay(
+  group: Record<string, unknown> | DepartureDateGroup,
+  month: number,
+  day: number,
+): boolean {
+  return getGroupDateTexts(group).some((dateText) =>
+    parseLooseMonthDays(dateText).some((value) => value.month === month && value.day === day),
+  );
 }
 
 /**
@@ -950,12 +1347,179 @@ export function buildCompareReply(text: string, trips: TravelTrip[]): string | n
   return lines.join("\n");
 }
 
+function findCombinedDatePriceMatches(
+  text: string,
+  trips: TravelTrip[],
+): { date: MonthDay; price: number; matches: CombinedDatePriceMatch[]; hasExact: boolean } | null {
+  const date = extractStructuredDates(text)[0];
+  const price = extractNormalizedPrice(text);
+  if (!date || price === null) return null;
+
+  const query = normText(text);
+  const matches: CombinedDatePriceMatch[] = [];
+
+  for (const trip of trips) {
+    if (trip.status !== "active") continue;
+    if (!getTripSearchHaystack(trip)) continue;
+
+    let bestForTrip: CombinedDatePriceMatch | null = null;
+    const consider = (
+      group: Record<string, unknown> | DepartureDateGroup | null,
+      matchType: CombinedDatePriceMatch["matchType"],
+      matchedPrice: number | null,
+    ) => {
+      const diff = matchedPrice === null ? Number.POSITIVE_INFINITY : Math.abs(matchedPrice - price);
+      const candidate: CombinedDatePriceMatch = {
+        trip,
+        matchType,
+        score: matchScoreForPriceKind(matchType) - Math.min(diff / 1000, 50),
+        priceDiff: diff,
+        matchedPrice,
+        group,
+      };
+      if (
+        !bestForTrip ||
+        candidate.score > bestForTrip.score ||
+        (candidate.score === bestForTrip.score && candidate.priceDiff < bestForTrip.priceDiff)
+      ) {
+        bestForTrip = candidate;
+      }
+    };
+
+    const searchGroups = (
+      groups: Array<Record<string, unknown> | DepartureDateGroup>,
+      adultKind: "adult" | "discount",
+    ) => {
+      for (const group of groups) {
+        if (!groupMatchesMonthDay(group, date.month, date.day)) continue;
+        let added = false;
+        for (const priceValue of getPriceValuesFromGroup(group, adultKind)) {
+          added = true;
+          consider(group, priceValue.value === price ? priceValue.kind : "date_only", priceValue.value);
+        }
+        if (!added) consider(group, "date_only", null);
+      }
+    };
+
+    searchGroups(getStructuredPriceGroups(trip), "adult");
+    searchGroups(getStructuredDiscounts(trip), "discount");
+    searchGroups(getPriceGroups(trip), "adult");
+
+    if (!bestForTrip) {
+      const hasTripDate = trip.departure_dates.some((value) =>
+        parseLooseMonthDays(value).some((dateValue) => dateValue.month === date.month && dateValue.day === date.day),
+      );
+      if (hasTripDate) {
+        const fallbackPrices = [trip.adult_price, trip.child_price]
+          .filter((value): value is number => typeof value === "number");
+        const closest = fallbackPrices.length > 0
+          ? fallbackPrices.reduce((bestValue, current) =>
+            Math.abs(current - price) < Math.abs(bestValue - price) ? current : bestValue
+          )
+          : null;
+        consider(null, "date_only", closest);
+      }
+    }
+
+    if (bestForTrip) {
+      const finalMatch = bestForTrip as CombinedDatePriceMatch;
+      if (query.includes(normText(trip.route_name))) finalMatch.score += 8;
+      if (getAliases(trip).some((alias) => query.includes(normText(alias)))) finalMatch.score += 5;
+      matches.push(finalMatch);
+    }
+  }
+
+  matches.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (a.priceDiff !== b.priceDiff) return a.priceDiff - b.priceDiff;
+    return a.trip.route_name.localeCompare(b.trip.route_name, "mn");
+  });
+
+  return {
+    date,
+    price,
+    matches,
+    hasExact: matches.some((match) => match.matchType !== "date_only" && match.priceDiff === 0),
+  };
+}
+
+function getCombinedMatchPriceFields(match: CombinedDatePriceMatch): Array<{ label: string; value: number | null }> {
+  const raw = (match.group || {}) as Record<string, unknown>;
+  const fields: Array<{ label: string; value: number | null }> = [
+    { label: "Том хүн", value: typeof raw.adult_price === "number" ? raw.adult_price : match.trip.adult_price },
+    { label: "Хүүхэд", value: typeof raw.child_price === "number" ? raw.child_price : match.trip.child_price },
+    { label: "Нярай", value: typeof raw.infant_price === "number" ? raw.infant_price : null },
+  ];
+
+  if (Array.isArray(raw.passenger_prices)) {
+    for (const item of raw.passenger_prices) {
+      if (!item || typeof item !== "object") continue;
+      const record = item as Record<string, unknown>;
+      if (typeof record.price !== "number") continue;
+      const label = typeof record.label === "string" && record.label.trim()
+        ? record.label.trim()
+        : "Зорчигч";
+      fields.push({ label, value: record.price });
+    }
+  }
+
+  return fields;
+}
+
+function formatCombinedDatePriceReply(
+  result: { date: MonthDay; price: number; matches: CombinedDatePriceMatch[]; hasExact: boolean },
+): string | null {
+  if (result.matches.length === 0) return null;
+
+  const dateLabel = `${result.date.month} сарын ${result.date.day}`;
+  const askedPrice = formatMoney(result.price, "MNT") || `${result.price}`;
+
+  if (result.hasExact) {
+    const exactMatches = result.matches
+      .filter((match) => match.matchType !== "date_only" && match.priceDiff === 0)
+      .slice(0, 3);
+    const intro = exactMatches.length > 1
+      ? `${dateLabel}-нд энэ үнэтэй хэд хэдэн аялал байна:`
+      : `Тийм ээ. ${dateLabel}-нд гарах ${askedPrice}-ийн аялал байна:`;
+    const blocks = exactMatches.map((match) => {
+      const lines = [`✈️ ${match.trip.route_name}`];
+      if (match.trip.duration_text) lines.push(`🗓 Хугацаа: ${match.trip.duration_text}`);
+      for (const field of getCombinedMatchPriceFields(match)) {
+        const formatted = formatMoney(field.value, match.trip.currency || "MNT");
+        if (formatted) lines.push(`💰 ${field.label}: ${formatted}`);
+      }
+      if (isLandFlightCombo(match.trip)) {
+        lines.push("Энэ нь газар + нислэг хосолсон аялал бөгөөд УБ–Бэйдайхэ 2 талын нислэг багтсан.");
+      }
+      return lines.join("\n");
+    });
+    return [intro, ...blocks].join("\n\n");
+  }
+
+  const closeMatches = result.matches.slice(0, 3);
+  const lines = [
+    `${dateLabel}-нд ${askedPrice}-өөр яг таарах аялал олдсонгүй. Харин ${dateLabel}-нд гарах ойролцоо үнэтэй аяллууд байна:`,
+  ];
+  for (const match of closeMatches) {
+    const duration = match.trip.duration_text ? ` • ${match.trip.duration_text}` : "";
+    const priceText = formatMoney(match.matchedPrice, match.trip.currency || "MNT");
+    lines.push(`• ${match.trip.route_name}${duration}${priceText ? ` • ${priceText}` : ""}`);
+  }
+  return lines.join("\n");
+}
+
 export function buildStructuredTripReply(
   text: string,
   trips: TravelTrip[],
   now = new Date(),
 ): string | null {
-  if (!isStructuredTripQuestion(text)) return null;
+  const combinedDatePrice = findCombinedDatePriceMatches(text, trips);
+  if (combinedDatePrice) {
+    const combinedReply = formatCombinedDatePriceReply(combinedDatePrice);
+    if (combinedReply) return combinedReply;
+  }
+
+  if (!isStructuredTripQuestion(text) && !hasDatePriceConstraint(text)) return null;
 
   const { best, ambiguous } = findBestTripMatch(text, trips);
   if (!best) return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;

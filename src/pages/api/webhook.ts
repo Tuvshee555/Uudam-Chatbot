@@ -8,11 +8,11 @@ import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPrompt, getHistory } from "../../lib/conversation";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
-import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply } from "../../lib/reply";
+import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { isPaused, pauseBot, storeSenderName, trackSender } from "../../lib/pause";
 import { createLead, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
-import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, } from "../../lib/travelFastPaths";
+import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, } from "../../lib/travelFastPaths";
 import { extractTripBrochureAttachmentId, extractTripPhotosForReply, getActiveSeason, isFirstMessage, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
@@ -970,7 +970,7 @@ async function handleMessage(
     return;
   }
   await trackSender(senderId);
-  if (platform === "facebook" && token) {
+  if (platform === "facebook" && token && !hasProgramIntent(text)) {
     void fetchAndStoreFbName(senderId, token);
   }
   if (await isPagePaused(pageId)) {
@@ -1542,6 +1542,56 @@ async function handleMessage(
   }
   {
     const trips = await getTrips();
+    const programReply = buildTripProgramReply(text, trips);
+    if (programReply) {
+      const safeProgramReply = enforceWebsiteForPayment(
+        sanitizeAssistantReply(programReply.reply),
+      );
+      await assertLockHealthy();
+      const delivered = await sendPlatformMessage(
+        platform,
+        senderId,
+        safeProgramReply,
+        token,
+        pageId,
+        igUserId,
+        trace,
+        { allowFallback: false },
+      );
+      if (!delivered) {
+        throw new RetryableWebhookError("delivery_failed:program_fast_path");
+      }
+      if (platform === "facebook" && token) {
+        if (programReply.brochure) {
+          try {
+            if (programReply.brochure.type === "id") {
+              await sendFbFileAttachment(senderId, programReply.brochure.value, token);
+            } else {
+              await sendFbFileByUrl(senderId, programReply.brochure.value, token);
+            }
+          } catch {
+          }
+        } else {
+          for (const url of programReply.mediaUrls) {
+            try {
+              await sendImageMessage(senderId, url, token, {
+                requestId: trace?.requestId,
+                correlationId: trace?.correlationId,
+                source: "api.webhook.program_media",
+              });
+            } catch {
+            }
+          }
+        }
+      }
+      try {
+        await appendMessage(sessionId, "assistant", safeProgramReply);
+        await setLastReplyConsistent(sessionId, safeProgramReply);
+      } catch {
+      }
+      recordCounter("webhook.program_fast_path_total", 1, { platform });
+      return;
+    }
     const structuredTripReply = buildStructuredTripReply(text, trips);
     if (structuredTripReply) {
       const safeStructuredReply = enforceWebsiteForPayment(
@@ -1605,7 +1655,10 @@ async function handleMessage(
     .slice(-3);
   const rewrittenReply = rewriteRepeatedGenericClarifier({
     userText: text,
-    replyText: sanitizeAssistantReply(replyWithoutButtons),
+    replyText: stripRepeatedGreeting(
+      sanitizeAssistantReply(replyWithoutButtons),
+      history.some((message) => message.role === "assistant"),
+    ),
     recentAssistantReplies,
   });
   const safeReply = enforceWebsiteForPayment(rewrittenReply);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { rewriteRepeatedGenericClarifier } from "../src/lib/reply";
+import { rewriteRepeatedGenericClarifier, stripRepeatedGreeting } from "../src/lib/reply";
 
 test("rewrites repeated generic clarifier after recent trip details", () => {
   const rewritten = rewriteRepeatedGenericClarifier({
@@ -26,4 +26,11 @@ test("leaves normal non-generic replies unchanged", () => {
   });
 
   assert.equal(rewritten, reply);
+});
+
+test("strips repeated greeting after the first assistant turn", () => {
+  const reply = "Сайн байна уу!\n\n✈️ Бээжин аялал\n💰 Том хүн: 1,890,000₮";
+  const stripped = stripRepeatedGreeting(reply, true);
+
+  assert.equal(stripped, "✈️ Бээжин аялал\n💰 Том хүн: 1,890,000₮");
 });

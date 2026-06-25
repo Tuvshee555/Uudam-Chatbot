@@ -57,6 +57,17 @@ function normalizeForCompare(text: string) {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+function isGreetingBlock(text: string) {
+  const normalized = normalizeForCompare(text);
+  return (
+    normalized.startsWith("сайн байна") ||
+    normalized.startsWith("сайн уу") ||
+    normalized.startsWith("тавтай морил") ||
+    normalized.startsWith("hello") ||
+    normalized.startsWith("hi ")
+  );
+}
+
 export function sanitizeAssistantReply(text: string) {
   const cleaned = normalizeWhitespace(stripMarkdown(text));
   if (!cleaned) return "Энэ мэдээлэл одоогоор тодорхойгүй байна. Хүний ажилтантай холбож өгье.";
@@ -85,6 +96,14 @@ export function sanitizeAssistantReply(text: string) {
   }
 
   return dedupedBlocks.join("\n\n").trim() || "Энэ мэдээлэл одоогоор тодорхойгүй байна. Хүний ажилтантай холбож өгье.";
+}
+
+export function stripRepeatedGreeting(replyText: string, hasPriorAssistantReply: boolean) {
+  if (!hasPriorAssistantReply) return replyText;
+  const blocks = replyText.split(/\n\n+/).map((block) => block.trim()).filter(Boolean);
+  if (blocks.length <= 1) return replyText;
+  if (!isGreetingBlock(blocks[0])) return replyText;
+  return blocks.slice(1).join("\n\n").trim();
 }
 
 const BUTTONS_LINE_PATTERN = /\nBUTTONS:\s*(.+)$/;

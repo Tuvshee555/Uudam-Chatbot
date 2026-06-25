@@ -10,10 +10,10 @@ import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPrompt, getHistory } from "../../lib/conversation";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
-import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply } from "../../lib/reply";
+import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
-import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent } from "../../lib/travelFastPaths";
+import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent } from "../../lib/travelFastPaths";
 import { getEnv } from "../../lib/env";
 import {
   beginRequestTrace,
@@ -182,6 +182,22 @@ export default async function handler(
       // Fast path: structured trip query (price/duration/dates/flight for a specific trip)
       {
         const trips = await listTrips({ limit: 5000 });
+        const programReply = buildTripProgramReply(normalizedText, trips);
+        if (programReply) {
+          const brochureLine = programReply.brochure?.type === "url"
+            ? `\n\nPDF хөтөлбөр: ${programReply.brochure.value}`
+            : "";
+          const mediaLine = !programReply.brochure && programReply.mediaUrls.length > 0
+            ? `\n\nХөтөлбөрийн зураг:\n${programReply.mediaUrls.join("\n")}`
+            : "";
+          const safeReply = enforceWebsiteForPayment(
+            sanitizeAssistantReply(`${programReply.reply}${brochureLine}${mediaLine}`),
+          );
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          recordCounter("demo.program_fast_path_total", 1, {});
+          return res.status(200).json({ reply: safeReply, buttons: [] });
+        }
         const structuredReply = buildStructuredTripReply(normalizedText, trips);
         if (structuredReply) {
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(structuredReply));
@@ -215,7 +231,10 @@ export default async function handler(
       const reply = enforceWebsiteForPayment(
         rewriteRepeatedGenericClarifier({
           userText: normalizedText,
-          replyText: sanitizeAssistantReply(rawNoButtons),
+          replyText: stripRepeatedGreeting(
+            sanitizeAssistantReply(rawNoButtons),
+            history.some((message) => message.role === "assistant"),
+          ),
           recentAssistantReplies,
         }),
       );
