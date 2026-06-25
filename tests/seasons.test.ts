@@ -87,3 +87,16 @@ test("resolveGreetingConfig reads defaultPhotoUrls", async () => {
   });
   assert.deepEqual(cfg.defaultPhotoUrls, ["https://x/a.jpg", "https://x/b.jpg"]);
 });
+
+test("buildWelcomeText falls back to the temporary AI assistant intro", async () => {
+  const { buildWelcomeText } = await load();
+  const fallback = buildWelcomeText("");
+  assert.match(fallback, /AI туслах/);
+  assert.match(fallback, /ажилтан/);
+  assert.match(buildWelcomeText("  Custom welcome  "), /Custom welcome/);
+  assert.match(buildWelcomeText("  Custom welcome  "), /AI туслах/);
+  assert.equal(
+    buildWelcomeText("Би түр AI туслах, ажилтан холбогдох хүртэл тусална."),
+    "Би түр AI туслах, ажилтан холбогдох хүртэл тусална.",
+  );
+});

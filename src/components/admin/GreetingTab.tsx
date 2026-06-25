@@ -76,6 +76,7 @@ import {
   timeLeft,
   toStructuredRows,
 } from "@/lib/adminUtils";
+import { buildWelcomeText } from "@/lib/welcomeFlow";
 
 export function GreetingTab({
   extra,
@@ -203,9 +204,7 @@ export function GreetingTab({
     }
   }
 
-  const previewText =
-    draft.text.trim() ||
-    "Уудам Трэвел-д тавтай морилно уу! 🌏 Бид танд хамгийн шилдэг аяллуудыг санал болгож байна.";
+  const previewText = buildWelcomeText(draft.text);
   // The default album always sends first, so it takes priority in the preview.
   // After it, in manual mode show the picked photos; in auto mode show the
   // actual photos that would be auto-sampled from active trips.

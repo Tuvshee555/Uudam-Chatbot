@@ -145,7 +145,7 @@ export default function DemoChat({
             <div className="min-w-0">
               <p className="text-sm font-semibold text-ink">Уудам Трэвел AI</p>
               <p className="mt-0.5 text-xs text-ink-muted">
-                Аялалын асуултад шууд хариулна
+                Түр AI туслах - хүн ажилтан холбогдох хүртэл тусална
               </p>
             </div>
             <span className="ml-auto flex items-center gap-1 rounded-full bg-success-soft px-2.5 py-1 text-xs font-semibold text-success">
@@ -195,8 +195,9 @@ export default function DemoChat({
                     : "Одоогоор мессеж алга"}
                 </p>
                 <p className="max-w-md text-sm text-ink-muted">
-                  Үнэ, суудал, гарах өдөр, хоол эсвэл маршруттай холбоотой
-                  бодит асуултаар туршаарай.
+                  Энэ чатанд түр AI туслах хариулж байна. Үнэ, суудал, гарах өдөр,
+                  хоол эсвэл маршруттай холбоотой асуулт асууж болно, харин хүн
+                  ажилтан удахгүй үргэлжлүүлэн тусална.
                 </p>
               </div>
             </div>
