@@ -42,6 +42,7 @@ test("matches Zhangjiajie alias to the Shanghai + Tengeriin Khaalga route", () =
         adult_price: 3590000,
         child_price: 3260000,
         extra: {
+          aliases: ["Жанжиажэ", "Zhangjiajie", "Шанхай Жанжиажэ"],
           departure_date_groups: [
             {
               dates: ["6 сарын 27"],
@@ -115,6 +116,7 @@ test("answers that hybrid land+flight route is not a direct flight", () => {
         adult_price: 2030000,
         child_price: 1590000,
         source_description: "Газар нислэг хосолсон маршрут",
+        extra: { aliases: ["Бэйдэхэ", "Бэйдэйхэ", "Beidaihe"] },
       }),
     ],
     NOW,
@@ -156,7 +158,7 @@ test("same-price comparison fails safe when date-group prices are not stored", (
         adult_price: 3590000,
         child_price: 3260000,
         departure_dates: ["6 сарын 27", "7 сарын 18"],
-        extra: {},
+        extra: { aliases: ["Жанжиажэ", "Шанхай Жанжиажэ"] },
       }),
     ],
     NOW,
@@ -297,6 +299,7 @@ test("route-only query uses spaced premium formatting", () => {
         duration_text: "9 өдөр / 8 шөнө",
         departure_dates: ["6 сарын 20", "6 сарын 27", "7 сарын 9", "7 сарын 18", "7 сарын 27", "8 сарын 1", "8 сарын 8", "8 сарын 15", "8 сарын 22"],
         extra: {
+          aliases: ["Бэйдэхэ", "Бэйдэйхэ", "Beidaihe"],
           price_groups: [
             {
               dates: ["6 сарын 20", "6 сарын 27"],

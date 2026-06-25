@@ -135,16 +135,12 @@ const DIRECT_FLIGHT_NEGATIVE_PATTERNS = [
   /газрын\s+аялал/i,
 ];
 
+// Only language/script normalizations here — no trip-specific city names.
+// City aliases (жанжиажэ, beidaihe, sanya, …) belong in each trip's
+// extra.aliases array in the database, editable via the admin panel.
 const ALIAS_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bnaadam\b/gi, "наадам"],
   [/наадмын/gi, "наадам"],
-  [/жанжиажэ|жанжиажэ|жанжиажиэ|zhangjiajie|zhanjiajie/gi, "тэнгэрийн хаалга"],
-  [/цунчин|чунцин|chongqing/gi, "чунчин"],
-  [/бэйдэхэ|бэйдэйхэ|beidaihe/gi, "бэйдайхэ"],
-  [/хөххот|hohhot|huhhot/gi, "хөх хот"],
-  [/саняа|sanya/gi, "саньяа"],
-  [/хайкоү|haikou/gi, "хайкоу"],
-  [/жежү|jeju/gi, "жэжү"],
 ];
 
 function normText(text: string) {
@@ -310,11 +306,16 @@ function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] {
     const routeKeywords = unique(keywordTokens(trip.route_name));
     if (!routeKeywords.length) continue;
 
-    // Check aliases for an exact match bonus
+    // Check aliases — full string OR token-level overlap.
+    // This means an alias like "Жанжиажэ" (stored in DB) will match
+    // a query containing "жанжиажэ" even without hardcoded replacements.
     const aliases = getAliases(trip);
     const aliasHit = aliases.some((alias) => {
       const aliasNorm = normText(alias);
-      return query.includes(aliasNorm) || aliasNorm.includes(query);
+      if (query.includes(aliasNorm) || aliasNorm.includes(query)) return true;
+      // Token-level: any alias token found in query tokens counts
+      const aliasTokens = unique(keywordTokens(alias));
+      return aliasTokens.length > 0 && aliasTokens.every((t) => query.includes(t));
     }) ? 1 : 0;
 
     const matchedWords = routeKeywords.filter((word) => queryWords.includes(word));
