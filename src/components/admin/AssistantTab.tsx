@@ -526,77 +526,76 @@ function ChatBubbleV2({
         {visibleActions.length > 0 && (
           <section className="mt-4 border-t border-line pt-4" aria-label="Санал болгосон өөрчлөлтүүд">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="text-sm font-semibold text-ink">Санал болгосон өөрчлөлтүүд</h3>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-subtle">Өөрчлөлтүүд</h3>
               {describedActions.length > 5 && (
                 <button
                   type="button"
                   onClick={() => setShowAllChanges((shown) => !shown)}
-                  className="text-sm font-medium text-brand hover:text-brand-hover"
+                  className="text-xs font-medium text-brand hover:text-brand-hover"
                 >
-                  {showAllChanges ? "Товч харах" : `Бүгдийг харах (${describedActions.length})`}
+                  {showAllChanges ? "Хураах" : `Бүгдийг харах · ${describedActions.length}`}
                 </button>
               )}
             </div>
-            <div className={cx("mt-2 divide-y divide-line", showAllChanges && "max-h-96 overflow-y-auto pr-1 scroll-area")}>
+            <div className={cx("mt-2 space-y-1", showAllChanges && "max-h-96 overflow-y-auto pr-1 scroll-area")}>
               {visibleActions.map((described, index) => {
                 const diffs = getDiffsForAction(index);
+                const verbColor =
+                  described.verb === "Шинэ аялал нэмэх"
+                    ? "bg-green-100 text-green-700"
+                    : described.verb === "Цуцлах"
+                      ? "bg-red-100 text-red-600"
+                      : "bg-surface-sunken text-ink-muted";
                 return (
                   <div
                     key={`${described.verb}:${described.target}:${index}`}
-                    className="py-2.5"
+                    className="rounded-xl bg-surface-sunken px-3 py-2.5"
                   >
-                    <div className="grid gap-1 sm:grid-cols-[2rem_minmax(12rem,0.8fr)_1.2fr] sm:items-start sm:gap-3">
-                      <span className="hidden h-6 w-6 items-center justify-center rounded-full bg-travel-soft text-sm font-semibold text-travel sm:flex">
+                    <div className="flex items-start gap-2.5">
+                      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-surface text-[11px] font-semibold text-ink-subtle ring-1 ring-line">
                         {index + 1}
                       </span>
-                      <p className="text-sm font-semibold text-ink">
-                        <span className="sm:hidden">{index + 1}. </span>{described.target}
-                        <span className="ml-2 font-medium text-travel">{described.verb}</span>
-                      </p>
-                      <p
-                        className="line-clamp-2 text-sm leading-5 text-ink-muted"
-                        title={described.changes.join(" • ")}
-                      >
-                        {described.changes.length > 0
-                          ? described.changes.slice(0, 3).join(" • ")
-                          : "Төлөвийн өөрчлөлт"}
-                      </p>
-                    </div>
-                    {diffs.length > 0 && (
-                      <div className="mt-1.5 ml-0 sm:ml-9 flex flex-wrap gap-1.5">
-                        {diffs.map((d) => (
-                          <span
-                            key={d.field}
-                            className={cx(
-                              "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
-                              d.kind === "added" && "bg-green-50 text-green-700 ring-1 ring-green-200",
-                              d.kind === "removed" && "bg-red-50 text-red-600 ring-1 ring-red-200",
-                              d.kind === "changed" && "bg-amber-50 text-amber-700 ring-1 ring-amber-200",
-                            )}
-                            title={`${d.label}: ${d.before || "—"} → ${d.after || "—"}`}
-                          >
-                            {d.label}
-                            {d.kind === "changed" && (
-                              <>
-                                <span className="opacity-50">{d.before}</span>
-                                <span>→</span>
-                                <span>{d.after}</span>
-                              </>
-                            )}
-                            {d.kind === "added" && <span>+{d.after}</span>}
-                            {d.kind === "removed" && <span>−{d.before}</span>}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-sm font-semibold text-ink leading-5">{described.target}</span>
+                          <span className={cx("rounded-full px-2 py-0.5 text-[11px] font-medium", verbColor)}>
+                            {described.verb}
                           </span>
-                        ))}
+                        </div>
+                        {described.changes.length > 0 && (
+                          <p className="mt-0.5 text-xs leading-5 text-ink-muted">
+                            {described.changes.slice(0, 4).join(" · ")}
+                          </p>
+                        )}
+                        {diffs.length > 0 && (
+                          <div className="mt-1.5 flex flex-wrap gap-1">
+                            {diffs.map((d) => (
+                              <span
+                                key={d.field}
+                                className={cx(
+                                  "inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[11px] font-medium",
+                                  d.kind === "added" && "bg-green-50 text-green-700",
+                                  d.kind === "removed" && "bg-red-50 text-red-600",
+                                  d.kind === "changed" && "bg-amber-50 text-amber-700",
+                                )}
+                              >
+                                {d.kind === "changed" && (
+                                  <>{d.label}: <span className="line-through opacity-60">{d.before}</span> → {d.after}</>
+                                )}
+                                {d.kind === "added" && <>+{d.label}: {d.after}</>}
+                                {d.kind === "removed" && <>−{d.label}: {d.before}</>}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    )}
+                    </div>
                   </div>
                 );
               })}
             </div>
             {hiddenActionCount > 0 && (
-              <p className="mt-2 text-sm text-ink-subtle">
-                Цаана нь {hiddenActionCount} өөрчлөлт байна.
-              </p>
+              <p className="mt-1.5 text-xs text-ink-subtle">+ {hiddenActionCount} өөр өөрчлөлт</p>
             )}
           </section>
         )}
@@ -632,17 +631,13 @@ function ChatBubbleV2({
                   return (
                     <div
                       key={q.id}
-                      className="border-l-4 border-sun bg-sun-soft px-4 py-3.5"
+                      className="rounded-xl border border-sun/40 bg-sun-soft px-4 py-3.5"
                     >
-                      <p className="text-base font-semibold leading-6 text-ink">{q.prompt}</p>
+                      <p className="text-sm font-semibold leading-5 text-ink">{q.prompt}</p>
                       {q.detail && (
-                        <div className="mt-2.5 bg-white/70 px-3 py-2.5">
-                          <p className="text-sm font-semibold text-warning">Файлаас уншсан мэдээлэл</p>
-                          <p className="mt-1 text-sm leading-6 text-ink-muted">{q.detail}</p>
-                        </div>
+                        <p className="mt-1.5 text-xs leading-5 text-ink-muted">{q.detail}</p>
                       )}
-                      <p className="mt-3 text-sm font-semibold text-ink">Юу хийх вэ?</p>
-                      <div className="mt-1.5 flex flex-wrap gap-2">
+                      <div className="mt-3 flex flex-wrap gap-1.5">
                         {q.options.map((opt) => (
                           <button
                             key={opt.label}
@@ -652,10 +647,10 @@ function ChatBubbleV2({
                               setFormDraft((prev) => ({ ...prev, [q.id]: opt.answer }))
                             }
                             className={cx(
-                              "rounded-full border px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-60",
+                              "rounded-full border px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-60",
                               selected === opt.answer
                                 ? "border-brand bg-brand text-white"
-                                : "border-line-strong bg-white text-ink hover:border-brand hover:text-brand",
+                                : "border-line-strong bg-surface text-ink hover:border-brand hover:text-brand",
                             )}
                           >
                             {opt.label}
@@ -671,7 +666,7 @@ function ChatBubbleV2({
                             setFormDraft((prev) => ({ ...prev, [q.id]: e.target.value }))
                           }
                           placeholder={q.customPlaceholder || "Өөрийн хариуг бичнэ үү"}
-                          className="mt-2.5 h-10 w-full rounded-lg border border-line-strong bg-surface px-3 text-sm text-ink focus:border-brand"
+                          className="mt-2 h-9 w-full rounded-lg border border-line-strong bg-surface px-3 text-sm text-ink focus:border-brand focus:outline-none"
                         />
                       )}
                     </div>
@@ -769,28 +764,31 @@ function ChatBubbleV2({
                   )}
                   {editableActions.map(({ action, index }) => {
                     const f = action.fields ?? {};
+                    const inputCls = "h-9 w-full rounded-lg border border-line bg-surface px-3 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none";
                     return (
-                      <div key={index} className="border-t border-line pt-3 space-y-2.5">
-                        <p className="text-sm font-semibold text-ink-muted">
-                          {createActions.length > 1 ? `Аялал ${index + 1} — засаж хадгалах` : "Аялалын мэдээллийг нөхнэ үү"}
+                      <div key={index} className="rounded-xl border border-line bg-surface-sunken p-3 space-y-3">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+                          {createActions.length > 1 ? `Аялал ${index + 1}` : "Аялалын мэдээлэл"}
                         </p>
+                        {/* Row 1: name full width */}
+                        <div>
+                          <label className="mb-1 block text-xs text-ink-muted">Аяллын нэр</label>
+                          <input
+                            value={getField(index, "route_name", f.route_name)}
+                            onChange={(e) => setField(index, "route_name", e.target.value)}
+                            placeholder="ж: Бээжин аялал"
+                            className={inputCls}
+                          />
+                        </div>
+                        {/* Row 2: operator + duration */}
                         <div className="grid grid-cols-2 gap-2">
-                          <div className="col-span-2">
-                            <label className="mb-1 block text-xs text-ink-muted">Аяллын нэр</label>
-                            <input
-                              value={getField(index, "route_name", f.route_name)}
-                              onChange={(e) => setField(index, "route_name", e.target.value)}
-                              placeholder="ж: Бээжин аялал"
-                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
-                            />
-                          </div>
                           <div>
                             <label className="mb-1 block text-xs text-ink-muted">Оператор</label>
                             <input
                               value={getField(index, "operator_name", f.operator_name)}
                               onChange={(e) => setField(index, "operator_name", e.target.value)}
-                              placeholder="ж: Uudam Travel"
-                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                              placeholder="Uudam Travel"
+                              className={inputCls}
                             />
                           </div>
                           <div>
@@ -798,47 +796,54 @@ function ChatBubbleV2({
                             <input
                               value={getField(index, "duration_text", f.duration_text)}
                               onChange={(e) => setField(index, "duration_text", e.target.value)}
-                              placeholder="ж: 5 хоног"
-                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                              placeholder="5 хоног"
+                              className={inputCls}
                             />
                           </div>
+                        </div>
+                        {/* Row 3: prices */}
+                        <div className="grid grid-cols-2 gap-2">
                           <div>
-                            <label className="mb-1 block text-xs text-ink-muted">Насанд хүрэгч үнэ (₮)</label>
+                            <label className="mb-1 block text-xs text-ink-muted">Том хүн үнэ ₮</label>
                             <input
                               type="number"
                               value={getField(index, "adult_price", f.adult_price)}
                               onChange={(e) => setField(index, "adult_price", e.target.value)}
-                              placeholder="ж: 1890000"
-                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                              placeholder="1890000"
+                              className={inputCls}
                             />
                           </div>
                           <div>
-                            <label className="mb-1 block text-xs text-ink-muted">Хүүхдийн үнэ (₮)</label>
+                            <label className="mb-1 block text-xs text-ink-muted">Хүүхэд үнэ ₮</label>
                             <input
                               type="number"
                               value={getField(index, "child_price", f.child_price)}
                               onChange={(e) => setField(index, "child_price", e.target.value)}
-                              placeholder="ж: 1200000 (заавал биш)"
-                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                              placeholder="заавал биш"
+                              className={inputCls}
                             />
                           </div>
-                          <div className="col-span-2">
-                            <label className="mb-1 block text-xs text-ink-muted">Гарах өдрүүд (таслалаар тусгаарла)</label>
-                            <input
-                              value={getField(index, "departure_dates", Array.isArray(f.departure_dates) ? (f.departure_dates as string[]).join(", ") : "")}
-                              onChange={(e) => setField(index, "departure_dates", e.target.value)}
-                              placeholder="ж: 2025-07-15, 2025-07-22"
-                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
-                            />
-                          </div>
+                        </div>
+                        {/* Row 4: dates full width */}
+                        <div>
+                          <label className="mb-1 block text-xs text-ink-muted">Гарах өдрүүд — таслалаар</label>
+                          <input
+                            value={getField(index, "departure_dates", Array.isArray(f.departure_dates) ? (f.departure_dates as string[]).join(", ") : "")}
+                            onChange={(e) => setField(index, "departure_dates", e.target.value)}
+                            placeholder="7 сарын 9, 7 сарын 18, 8 сарын 1"
+                            className={inputCls}
+                          />
+                        </div>
+                        {/* Row 5: seats + food */}
+                        <div className="grid grid-cols-2 gap-2">
                           <div>
-                            <label className="mb-1 block text-xs text-ink-muted">Нийт суудал</label>
+                            <label className="mb-1 block text-xs text-ink-muted">Суудал</label>
                             <input
                               type="number"
                               value={getField(index, "seats_total", f.seats_total)}
                               onChange={(e) => setField(index, "seats_total", e.target.value)}
                               placeholder="заавал биш"
-                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                              className={inputCls}
                             />
                           </div>
                           <div>
@@ -846,36 +851,39 @@ function ChatBubbleV2({
                             <select
                               value={getField(index, "has_food", f.has_food == null ? "" : String(f.has_food))}
                               onChange={(e) => setField(index, "has_food", e.target.value)}
-                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                              className={inputCls}
                             >
                               <option value="">Тодорхойгүй</option>
-                              <option value="true">Хоол багтсан</option>
-                              <option value="false">Хоол ороогүй</option>
+                              <option value="true">Багтсан</option>
+                              <option value="false">Ороогүй</option>
                             </select>
                           </div>
-                          <div className="col-span-2">
-                            <label className="mb-1 block text-xs text-ink-muted">Буудал (заавал биш)</label>
+                        </div>
+                        {/* Row 6: hotel + notes */}
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="mb-1 block text-xs text-ink-muted">Буудал</label>
                             <input
                               value={getField(index, "hotel", f.hotel)}
                               onChange={(e) => setField(index, "hotel", e.target.value)}
-                              placeholder="ж: Grand Hotel Beijing"
-                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                              placeholder="заавал биш"
+                              className={inputCls}
                             />
                           </div>
-                          <div className="col-span-2">
-                            <label className="mb-1 block text-xs text-ink-muted">Тэмдэглэл (заавал биш)</label>
+                          <div>
+                            <label className="mb-1 block text-xs text-ink-muted">Тэмдэглэл</label>
                             <input
                               value={getField(index, "notes", f.notes)}
                               onChange={(e) => setField(index, "notes", e.target.value)}
-                              placeholder="нэмэлт мэдээлэл"
-                              className="h-8 w-full rounded-md border border-line-strong bg-white px-2.5 text-sm text-ink focus:border-brand"
+                              placeholder="заавал биш"
+                              className={inputCls}
                             />
                           </div>
                         </div>
                       </div>
                     );
                   })}
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 pt-1">
                     <Button
                       size="sm"
                       variant="success"
@@ -883,11 +891,11 @@ function ChatBubbleV2({
                       onClick={() => onApply(buildMessageWithOverrides())}
                     >
                       <Icons.check size={15} />
-                      Зөвшөөрч хадгалах
+                      Хадгалах
                     </Button>
                     <Button
                       size="sm"
-                      variant="secondary"
+                      variant="ghost"
                       onClick={() => onCancelProposal(message.id)}
                     >
                       Болих
