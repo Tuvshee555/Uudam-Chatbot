@@ -527,6 +527,40 @@ export async function ensureTravelSchema() {
         CREATE INDEX IF NOT EXISTS idx_travel_drive_sync_files_updated
           ON travel_drive_sync_files (updated_at DESC);
       `);
+      // Chat history — replaces Redis conversation store
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_conversations (
+          id        BIGSERIAL PRIMARY KEY,
+          sender_id TEXT NOT NULL,
+          platform  TEXT NOT NULL DEFAULT 'facebook',
+          role      TEXT NOT NULL,
+          text      TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_travel_conversations_sender
+          ON travel_conversations (sender_id, created_at DESC);
+      `);
+      // Per-sender pause state + activity tracking — replaces Redis pause store
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_senders (
+          sender_id    TEXT PRIMARY KEY,
+          platform     TEXT NOT NULL DEFAULT 'facebook',
+          display_name TEXT NOT NULL DEFAULT '',
+          last_seen    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          msg_count    INTEGER NOT NULL DEFAULT 0,
+          paused       BOOLEAN NOT NULL DEFAULT FALSE,
+          pause_reason TEXT NOT NULL DEFAULT '',
+          paused_at    TIMESTAMPTZ NULL,
+          expires_at   TIMESTAMPTZ NULL,
+          updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_travel_senders_last_seen
+          ON travel_senders (last_seen DESC);
+      `);
       return true;
     });
 
@@ -2276,6 +2310,200 @@ export async function listBroadcasts(limit = 20): Promise<BroadcastRecord[]> {
     created_at: String(row.created_at || ""),
     finished_at: row.finished_at ? String(row.finished_at) : null,
   }));
+}
+
+// ----------------------------------------------------------------
+// Neon-backed conversation history
+// ----------------------------------------------------------------
+const MAX_HISTORY_ROWS = 12;
+const HISTORY_TTL_DAYS = 2;
+
+export async function dbGetHistory(
+  senderId: string,
+): Promise<Array<{ role: "user" | "assistant"; text: string }>> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return [];
+  const result = await queryNeon<{ role: string; text: string }>(
+    `SELECT role, text FROM travel_conversations
+     WHERE sender_id = $1
+       AND created_at > NOW() - INTERVAL '${HISTORY_TTL_DAYS} days'
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    [senderId, MAX_HISTORY_ROWS],
+  );
+  if (!result) return [];
+  return result.rows
+    .reverse()
+    .map((r) => ({ role: r.role as "user" | "assistant", text: r.text }));
+}
+
+export async function dbAppendMessage(
+  senderId: string,
+  role: "user" | "assistant",
+  text: string,
+): Promise<void> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return;
+  await queryNeon(
+    `INSERT INTO travel_conversations (sender_id, role, text) VALUES ($1, $2, $3)`,
+    [senderId, role, text],
+  );
+  // Prune old rows for this sender (keep last MAX_HISTORY_ROWS)
+  await queryNeon(
+    `DELETE FROM travel_conversations
+     WHERE sender_id = $1
+       AND id NOT IN (
+         SELECT id FROM travel_conversations
+         WHERE sender_id = $1
+         ORDER BY created_at DESC
+         LIMIT $2
+       )`,
+    [senderId, MAX_HISTORY_ROWS],
+  );
+}
+
+// ----------------------------------------------------------------
+// Neon-backed per-sender pause + activity tracking
+// ----------------------------------------------------------------
+export const AUTO_PAUSE_AFTER_MSGS = 8;
+export const AUTO_PAUSE_RESET_DAYS = 14;
+
+export type SenderRow = {
+  sender_id: string;
+  platform: string;
+  display_name: string;
+  last_seen: string;
+  msg_count: number;
+  paused: boolean;
+  pause_reason: string;
+  paused_at: string | null;
+  expires_at: string | null;
+};
+
+export async function dbTrackSender(
+  senderId: string,
+  platform = "facebook",
+): Promise<{ msg_count: number; auto_paused: boolean }> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return { msg_count: 0, auto_paused: false };
+  const result = await queryNeon<{ msg_count: number; paused: boolean }>(
+    `INSERT INTO travel_senders (sender_id, platform, last_seen, msg_count, updated_at)
+     VALUES ($1, $2, NOW(), 1, NOW())
+     ON CONFLICT (sender_id) DO UPDATE
+       SET last_seen  = NOW(),
+           platform   = EXCLUDED.platform,
+           msg_count  = travel_senders.msg_count + 1,
+           updated_at = NOW()
+     RETURNING msg_count, paused`,
+    [senderId, platform],
+  );
+  const row = result?.rows[0];
+  if (!row) return { msg_count: 0, auto_paused: false };
+  const count = Number(row.msg_count);
+  if (count >= AUTO_PAUSE_AFTER_MSGS && !row.paused) {
+    // auto-pause this sender for 14 days
+    const expiresAt = new Date(Date.now() + AUTO_PAUSE_RESET_DAYS * 86400_000).toISOString();
+    await queryNeon(
+      `UPDATE travel_senders
+       SET paused = TRUE, pause_reason = 'auto', paused_at = NOW(), expires_at = $2, updated_at = NOW()
+       WHERE sender_id = $1`,
+      [senderId, expiresAt],
+    );
+    return { msg_count: count, auto_paused: true };
+  }
+  return { msg_count: count, auto_paused: false };
+}
+
+export async function dbIsPaused(senderId: string): Promise<boolean> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return false;
+  const result = await queryNeon<{ paused: boolean; expires_at: string | null }>(
+    `SELECT paused, expires_at FROM travel_senders WHERE sender_id = $1`,
+    [senderId],
+  );
+  const row = result?.rows[0];
+  if (!row) return false;
+  if (!row.paused) return false;
+  if (row.expires_at && new Date(row.expires_at) < new Date()) {
+    // expired — auto-clear
+    await queryNeon(
+      `UPDATE travel_senders SET paused = FALSE, pause_reason = '', paused_at = NULL, expires_at = NULL, updated_at = NOW() WHERE sender_id = $1`,
+      [senderId],
+    );
+    return false;
+  }
+  return true;
+}
+
+export async function dbPauseSender(
+  senderId: string,
+  durationMs?: number,
+  reason = "manual",
+): Promise<void> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return;
+  const expiresAt = durationMs
+    ? new Date(Date.now() + durationMs).toISOString()
+    : null;
+  await queryNeon(
+    `INSERT INTO travel_senders (sender_id, paused, pause_reason, paused_at, expires_at, updated_at)
+     VALUES ($1, TRUE, $2, NOW(), $3, NOW())
+     ON CONFLICT (sender_id) DO UPDATE
+       SET paused = TRUE, pause_reason = $2, paused_at = NOW(), expires_at = $3, updated_at = NOW()`,
+    [senderId, reason, expiresAt],
+  );
+}
+
+export async function dbResumeSender(senderId: string): Promise<void> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return;
+  await queryNeon(
+    `UPDATE travel_senders
+     SET paused = FALSE, pause_reason = '', paused_at = NULL, expires_at = NULL, msg_count = 0, updated_at = NOW()
+     WHERE sender_id = $1`,
+    [senderId],
+  );
+}
+
+export async function dbStoreSenderName(senderId: string, name: string): Promise<void> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return;
+  await queryNeon(
+    `INSERT INTO travel_senders (sender_id, display_name, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (sender_id) DO UPDATE SET display_name = $2, updated_at = NOW()`,
+    [senderId, name],
+  );
+}
+
+export async function dbListPaused(): Promise<SenderRow[]> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return [];
+  const result = await queryNeon<SenderRow>(
+    `SELECT sender_id, platform, display_name, last_seen, msg_count,
+            paused, pause_reason, paused_at, expires_at
+     FROM travel_senders
+     WHERE paused = TRUE
+       AND (expires_at IS NULL OR expires_at > NOW())
+     ORDER BY paused_at DESC
+     LIMIT 100`,
+    [],
+  );
+  return result?.rows ?? [];
+}
+
+export async function dbListRecent(): Promise<SenderRow[]> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return [];
+  const result = await queryNeon<SenderRow>(
+    `SELECT sender_id, platform, display_name, last_seen, msg_count,
+            paused, pause_reason, paused_at, expires_at
+     FROM travel_senders
+     ORDER BY last_seen DESC
+     LIMIT 50`,
+    [],
+  );
+  return result?.rows ?? [];
 }
 
 export {

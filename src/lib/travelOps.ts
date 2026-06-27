@@ -21,8 +21,19 @@ export type {
 } from "./travelTypes";
 
 export {
+  AUTO_PAUSE_AFTER_MSGS,
+  AUTO_PAUSE_RESET_DAYS,
   cleanFields,
   countNewLeads,
+  dbAppendMessage,
+  dbGetHistory,
+  dbIsPaused,
+  dbListPaused,
+  dbListRecent,
+  dbPauseSender,
+  dbResumeSender,
+  dbStoreSenderName,
+  dbTrackSender,
   createBroadcastRecord,
   createLead,
   deleteAllTrips,

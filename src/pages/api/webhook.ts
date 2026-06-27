@@ -969,7 +969,19 @@ async function handleMessage(
     }
     return;
   }
-  await trackSender(senderId);
+  const trackResult = await trackSender(senderId, platform);
+  if (trackResult.auto_paused) {
+    logInfo("webhook.auto_paused_after_msgs", {
+      requestId: trace?.requestId,
+      senderHash: hashIdentifier(senderId),
+      platform,
+    });
+    void notifyStaffOfLead(
+      { kind: "handoff", platform, customerMessage: `[Авто зогсоол] ${text}` },
+      { requestId: trace?.requestId, correlationId: trace?.correlationId, source: "api.webhook.auto_pause" },
+    ).catch(() => {});
+    return;
+  }
   if (platform === "facebook" && token && !hasProgramIntent(text)) {
     void fetchAndStoreFbName(senderId, token);
   }

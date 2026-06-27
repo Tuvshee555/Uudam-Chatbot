@@ -1,8 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { getEnv } from "./env";
-import { recordCounter } from "./observability";
-import { withRedis } from "./redisState";
 import { buildTemporalPromptContext } from "./travelDates";
+import { dbGetHistory, dbAppendMessage } from "./travelDb";
 
 export type ChatRole = "user" | "assistant";
 
@@ -11,120 +9,12 @@ export type ChatMessage = {
   text: string;
 };
 
-type ChatSession = {
-  messages: ChatMessage[];
-  updatedAt: number;
-};
-
-const STORE = new Map<string, ChatSession>();
-const env = getEnv();
-const MAX_MESSAGES = 12;
-const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
-const MAX_SESSIONS = env.conversationMaxSessions;
-const CONVERSATION_INDEX_KEY = "conversation:index";
-
-function conversationListKey(id: string) {
-  return `conversation:messages:${id}`;
-}
-
-function prune() {
-  const now = Date.now();
-  for (const [key, session] of STORE.entries()) {
-    if (now - session.updatedAt > SESSION_TTL_MS) STORE.delete(key);
-  }
-
-  const overflow = STORE.size - MAX_SESSIONS;
-  if (overflow <= 0) return;
-
-  const oldest = Array.from(STORE.entries())
-    .sort((a, b) => a[1].updatedAt - b[1].updatedAt)
-    .slice(0, overflow);
-  for (const [key] of oldest) {
-    STORE.delete(key);
-  }
-}
-
 export async function getHistory(id: string): Promise<ChatMessage[]> {
-  if (env.redisConversationEnabled) {
-    const redisHistory = await withRedis("conversation.get_history", async (redis) => {
-      const raw = await redis.lrange(conversationListKey(id), -MAX_MESSAGES, -1);
-      if (!raw.length) {
-        await redis.zrem(CONVERSATION_INDEX_KEY, id);
-        return [] as ChatMessage[];
-      }
-      const parsed: ChatMessage[] = [];
-      for (const entry of raw) {
-        try {
-          const message = JSON.parse(entry) as ChatMessage;
-          if (
-            (message.role === "user" || message.role === "assistant") &&
-            typeof message.text === "string"
-          ) {
-            parsed.push(message);
-          }
-        } catch {
-          // Drop malformed entries to prevent runtime crashes.
-        }
-      }
-      return parsed;
-    });
-
-    if (redisHistory) return redisHistory;
-    recordCounter("conversation.redis_fallback_total", 1, {
-      operation: "getHistory",
-    });
-  }
-
-  prune();
-  return STORE.get(id)?.messages || [];
+  return dbGetHistory(id);
 }
 
 export async function appendMessage(id: string, role: ChatRole, text: string) {
-  if (env.redisConversationEnabled) {
-    const redisApplied = await withRedis("conversation.append_message", async (redis) => {
-      const now = Date.now();
-      const key = conversationListKey(id);
-      const payload = JSON.stringify({ role, text });
-      const pipeline = redis.pipeline();
-      pipeline.rpush(key, payload);
-      pipeline.ltrim(key, -MAX_MESSAGES, -1);
-      pipeline.pexpire(key, SESSION_TTL_MS);
-      pipeline.zadd(CONVERSATION_INDEX_KEY, now, id);
-      const execResult = await pipeline.exec();
-      if (!execResult) return false;
-
-      const total = await redis.zcard(CONVERSATION_INDEX_KEY);
-      if (total > MAX_SESSIONS) {
-        const overflow = total - MAX_SESSIONS;
-        const oldest = await redis.zrange(CONVERSATION_INDEX_KEY, 0, overflow - 1);
-        if (oldest.length) {
-          const eviction = redis.pipeline();
-          for (const sessionId of oldest) {
-            eviction.zrem(CONVERSATION_INDEX_KEY, sessionId);
-            eviction.del(conversationListKey(sessionId));
-          }
-          await eviction.exec();
-        }
-      }
-      return true;
-    });
-
-    if (redisApplied) return;
-    recordCounter("conversation.redis_fallback_total", 1, {
-      operation: "appendMessage",
-    });
-  }
-
-  prune();
-  const session = STORE.get(id) || { messages: [], updatedAt: Date.now() };
-  session.messages.push({ role, text });
-
-  if (session.messages.length > MAX_MESSAGES) {
-    session.messages = session.messages.slice(-MAX_MESSAGES);
-  }
-
-  session.updatedAt = Date.now();
-  STORE.set(id, session);
+  await dbAppendMessage(id, role, text);
 }
 
 export function buildPrompt(options: {
@@ -147,7 +37,9 @@ export function buildPrompt(options: {
 
   lines.push("Reply rules:");
   lines.push("- ALWAYS reply in Mongolian only. Even if the user writes in English or mixes languages, reply fully in Mongolian.");
-  lines.push("- Be warm, natural, and friendly — like a helpful travel agent chatting on Messenger.");
+  lines.push("- Be warm, natural, and friendly — like a helpful travel agent chatting on Messenger. Short messages, human tone. Never sound like a robot.");
+  lines.push("- LEAD CAPTURE (most important business rule): After answering 1-2 questions from a user who seems interested (asking price, dates, seats, or how to book), naturally ask for their name and phone number. Say something like: 'Та захиалга хийх болбол нэрээ болон утасны дугаараа үлдээнэ үү, манай аяллын зөвлөх тантай шууд холбогдоно 🙌'. Do this once per conversation, naturally, not robotically. If they already gave a phone number earlier, do NOT ask again.");
+  lines.push("- Once you have collected a name and phone number, say: 'Баярлалаа [name]! Манай аяллын зөвлөх тантай удахгүй холбогдох болно 🙌' — then stop offering more trip details. The human consultant will take over.");
   lines.push("- Use emojis naturally to make the message feel alive and easy to scan (✈️ for routes, 💰 for price, 📅 for dates, 🏨 for hotel, 🙌 for confirmation, etc). Do not overdo it — 1-2 emojis per section.");
   lines.push("- When listing trip details (price, dates, seats, hotel), put each detail on its own line. Use a blank line between sections so the message is easy to read on a phone. Never dump everything into one long paragraph.");
   lines.push("- Example good format for a trip reply:");
