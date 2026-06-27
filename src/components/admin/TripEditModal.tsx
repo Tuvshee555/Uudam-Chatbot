@@ -18,6 +18,7 @@ export type TripEditModalProps = {
   setPhotoDragging: (v: boolean) => void;
   photoUploading: string[];
   photoFileInputRef: React.RefObject<HTMLInputElement | null>;
+  saveDisabled?: boolean;
   busyKey: string;
   handlePhotoFiles: (files: FileList | File[]) => void;
   onClose: () => void;
@@ -121,6 +122,7 @@ export function TripEditModal({
   setPhotoDragging,
   photoUploading,
   photoFileInputRef,
+  saveDisabled = false,
   busyKey,
   handlePhotoFiles,
   onClose,
@@ -172,7 +174,7 @@ export function TripEditModal({
           <Button variant="secondary" onClick={onClose}>
             Болих
           </Button>
-          <Button loading={busyKey === "save-trip"} onClick={onSave}>
+          <Button disabled={saveDisabled} loading={busyKey === "save-trip"} onClick={onSave}>
             Хадгалах
           </Button>
         </>
@@ -336,6 +338,7 @@ export function TripEditModal({
                 <span className="truncate">{name} — байршуулж байна…</span>
               </div>
             ))}
+            <p className="px-1 text-xs text-ink-subtle">Хадгалах товч зураг байршуулж дуустал идэвхгүй байна.</p>
           </div>
         )}
         {tripPhotoUrls.length > 0 && (

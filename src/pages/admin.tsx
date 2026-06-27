@@ -1209,46 +1209,80 @@ export default function AdminPage() {
   }
   const tripModalOpen = isNewTrip || editingTrip != null;
   async function handlePhotoFiles(files: FileList | File[]) {
-    const fileArray = Array.from(files).filter((f) => f.size <= 10 * 1024 * 1024);
+    const validFiles = Array.from(files).filter((file) => file.size <= 10 * 1024 * 1024);
+    if (validFiles.length < Array.from(files).length) {
+      toast.error("10MB-ээс том зураг оруулах боломжгүй.");
+    }
+
+    const availableSlots = Math.max(0, 20 - tripPhotoUrls.length);
+    if (availableSlots === 0) {
+      toast.error("Нэг аялалд хамгийн ихдээ 20 зураг хадгална.");
+      return;
+    }
+
+    const fileArray = validFiles.slice(0, availableSlots);
+    if (fileArray.length < validFiles.length) {
+      toast.error("Зургийн дээд тоо 20 тул үлдсэн файлуудыг алгаслаа.");
+    }
     if (fileArray.length === 0) return;
-    const newNames = fileArray.map((f) => f.name);
+
+    const newNames = fileArray.map((file) => file.name);
     setPhotoUploading((prev) => [...prev, ...newNames]);
-    for (const file of fileArray) {
-      try {
-        const sigRes = await fetchWithAdmin("/api/admin/upload-image", { method: "POST" });
-        if (!sigRes.ok) {
-          const sigJson = (await sigRes.json().catch(() => ({}))) as { error?: string };
-          throw new Error(sigJson?.error ?? "署名параметр авч чадсангүй.");
-        }
-        const sigData = (await sigRes.json()) as {
-          signature: string;
-          timestamp: number;
-          cloudName: string;
-          apiKey: string;
-          folder: string;
-        };
-        const formData = new FormData();
-        formData.append("file", file);
-        formData.append("api_key", sigData.apiKey);
-        formData.append("timestamp", String(sigData.timestamp));
-        formData.append("signature", sigData.signature);
-        formData.append("folder", sigData.folder);
-        const uploadRes = await fetch(
-          `https://api.cloudinary.com/v1_1/${sigData.cloudName}/image/upload`,
-          { method: "POST", body: formData },
-        );
-        const uploadJson = (await uploadRes.json()) as { secure_url?: string; error?: { message?: string } };
-        if (!uploadRes.ok || !uploadJson.secure_url) {
-          throw new Error(uploadJson?.error?.message ?? "Cloudinary upload амжилтгүй.");
-        }
-        setTripPhotoUrls((prev) => [...prev, uploadJson.secure_url!]);
-      } catch (err) {
-        toast.error(
-          `"${file.name}" зураг оруулж чадсангүй: ${err instanceof Error ? err.message : "алдаа"}`,
-        );
-      } finally {
-        setPhotoUploading((prev) => prev.filter((n) => n !== file.name));
-      }
+
+    const removeUploadingName = (names: string[], target: string) => {
+      const index = names.indexOf(target);
+      if (index === -1) return names;
+      return [...names.slice(0, index), ...names.slice(index + 1)];
+    };
+
+    const uploadedUrls = (
+      await Promise.all(
+        fileArray.map(async (file) => {
+          try {
+            const sigRes = await fetchWithAdmin("/api/admin/upload-image", { method: "POST" });
+            if (!sigRes.ok) {
+              const sigJson = (await sigRes.json().catch(() => ({}))) as { error?: string };
+              throw new Error(sigJson?.error ?? "Зураг оруулах тохиргоо олдсонгүй.");
+            }
+            const sigData = (await sigRes.json()) as {
+              signature: string;
+              timestamp: number;
+              cloudName: string;
+              apiKey: string;
+              folder: string;
+            };
+            const formData = new FormData();
+            formData.append("file", file);
+            formData.append("api_key", sigData.apiKey);
+            formData.append("timestamp", String(sigData.timestamp));
+            formData.append("signature", sigData.signature);
+            formData.append("folder", sigData.folder);
+            const uploadRes = await fetch(
+              `https://api.cloudinary.com/v1_1/${sigData.cloudName}/image/upload`,
+              { method: "POST", body: formData },
+            );
+            const uploadJson = (await uploadRes.json()) as {
+              secure_url?: string;
+              error?: { message?: string };
+            };
+            if (!uploadRes.ok || !uploadJson.secure_url) {
+              throw new Error(uploadJson?.error?.message ?? "Cloudinary upload амжилтгүй.");
+            }
+            return uploadJson.secure_url;
+          } catch (err) {
+            toast.error(
+              `"${file.name}" зураг оруулж чадсангүй: ${err instanceof Error ? err.message : "алдаа"}`,
+            );
+            return null;
+          } finally {
+            setPhotoUploading((prev) => removeUploadingName(prev, file.name));
+          }
+        }),
+      )
+    ).filter((url): url is string => Boolean(url));
+
+    if (uploadedUrls.length > 0) {
+      setTripPhotoUrls((prev) => [...prev, ...uploadedUrls].slice(0, 20));
     }
   }
   function closeTripModal() {
@@ -1256,6 +1290,11 @@ export default function AdminPage() {
     setIsNewTrip(false);
   }
   async function saveTrip() {
+    if (photoUploading.length > 0) {
+      toast.error("Зураг байршуулж дуусаагүй байна. Дууссаны дараа хадгална уу.");
+      return;
+    }
+
     const fields = {
       category: tripDraft.category || "",
       operator_name: tripDraft.operator_name || "",
@@ -1816,6 +1855,7 @@ export default function AdminPage() {
         setPhotoDragging={setPhotoDragging}
         photoUploading={photoUploading}
         photoFileInputRef={photoFileInputRef}
+        saveDisabled={photoUploading.length > 0}
         busyKey={busyKey}
         handlePhotoFiles={handlePhotoFiles}
         onClose={closeTripModal}
