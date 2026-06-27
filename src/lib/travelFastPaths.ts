@@ -633,6 +633,23 @@ function getTripItineraryLines(trip: TravelTrip): string[] {
   return lines;
 }
 
+function formatPrice(amount: number | null | undefined): string {
+  if (!amount) return "";
+  return amount.toLocaleString("mn-MN") + "₮";
+}
+
+function buildTripSummaryLines(trip: TravelTrip): string {
+  const lines: string[] = [];
+  if (trip.duration_text) lines.push(`⏱ ${trip.duration_text}`);
+  const adult = formatPrice(trip.adult_price);
+  const child = formatPrice(trip.child_price);
+  if (adult && child) lines.push(`💰 Насанд хүрэгч: ${adult} | Хүүхэд: ${child}`);
+  else if (adult) lines.push(`💰 Үнэ: ${adult}`);
+  const dates = trip.departure_dates?.filter(Boolean) ?? [];
+  if (dates.length > 0) lines.push(`📅 Гарах өдрүүд: ${dates.slice(0, 5).join(", ")}${dates.length > 5 ? "…" : ""}`);
+  return lines.join("\n");
+}
+
 export function buildTripProgramReply(
   text: string,
   trips: TravelTrip[],
@@ -641,6 +658,9 @@ export function buildTripProgramReply(
 
   const best = findLooseTripMatch(text, trips, { hasBrochureIntent: true });
   if (!best) return null;
+
+  const summary = buildTripSummaryLines(best);
+  const summaryBlock = summary ? `\n\n${summary}` : "";
 
   const brochure = getTripBrochureAsset(best);
   const mediaUrls = brochure ? [] : getTripProgramMediaUrls(best);
@@ -651,14 +671,14 @@ export function buildTripProgramReply(
     // Pre-uploaded FB attachment_id: send as a proper file attachment.
     if (brochure.type === "url") {
       return {
-        reply: `✈️ ${best.route_name}\n\nДэлгэрэнгүй хөтөлбөрийн PDF:\n${brochure.value}`,
+        reply: `✈️ ${best.route_name}${summaryBlock}\n\n📄 Дэлгэрэнгүй хөтөлбөр:\n${brochure.value}`,
         trip: best,
         brochure: null,
         mediaUrls: [],
       };
     }
     return {
-      reply: `✈️ ${best.route_name}\n\nДэлгэрэнгүй хөтөлбөрийн PDF-г илгээж байна.`,
+      reply: `✈️ ${best.route_name}${summaryBlock}\n\nДэлгэрэнгүй хөтөлбөрийн PDF-г илгээж байна.`,
       trip: best,
       brochure,
       mediaUrls,
@@ -667,7 +687,7 @@ export function buildTripProgramReply(
 
   if (mediaUrls.length > 0) {
     return {
-      reply: `✈️ ${best.route_name}\n\nДэлгэрэнгүй хөтөлбөрийн зургуудыг илгээж байна.`,
+      reply: `✈️ ${best.route_name}${summaryBlock}\n\nДэлгэрэнгүй хөтөлбөрийн зургуудыг илгээж байна.`,
       trip: best,
       brochure: null,
       mediaUrls,
@@ -676,7 +696,7 @@ export function buildTripProgramReply(
 
   if (itineraryLines.length > 0) {
     return {
-      reply: [`✈️ ${best.route_name}`, "", "Өдөр өдрийн хөтөлбөр:", ...itineraryLines].join("\n"),
+      reply: [`✈️ ${best.route_name}`, summary, "", "Өдөр өдрийн хөтөлбөр:", ...itineraryLines].filter(s => s !== "").join("\n"),
       trip: best,
       brochure: null,
       mediaUrls: [],
@@ -684,7 +704,7 @@ export function buildTripProgramReply(
   }
 
   return {
-    reply: `✈️ ${best.route_name}\n\nОдоогоор энэ аяллын PDF хөтөлбөр системд ороогүй байна. Аяллын зөвлөхөөс хөтөлбөрийг илгээлгэе. 🙌`,
+    reply: `✈️ ${best.route_name}${summaryBlock}\n\nОдоогоор энэ аяллын PDF хөтөлбөр системд ороогүй байна. Аяллын зөвлөхөөс хөтөлбөрийг илгээлгэе. 🙌`,
     trip: best,
     brochure: null,
     mediaUrls: [],
