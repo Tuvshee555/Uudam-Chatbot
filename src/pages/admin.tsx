@@ -1707,6 +1707,7 @@ export default function AdminPage() {
           {tab === "bot" && (
             <BotTab
               control={control}
+              settings={settings}
               pageControls={pageControls}
               pauseReason={pauseReason}
               setPauseReason={setPauseReason}
@@ -1719,6 +1720,7 @@ export default function AdminPage() {
               onPauseAction={(action, senderId, ms, pageId) =>
                 void runPauseAction(action, senderId, ms, pageId)
               }
+              onSettingsChanged={() => void loadSettingsState()}
             />
           )}
           {tab === "leads" && (

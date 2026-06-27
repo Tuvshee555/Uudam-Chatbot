@@ -1050,7 +1050,8 @@ async function handleMessage(
         defaultAlbum = sampleWelcomePhotos(allTrips);
       }
       await sendPhotoAlbum(senderId, defaultAlbum, token, trace);
-      const activeSeason = getActiveSeason(resolveSeasons(botSettings.extra));
+      const seasonsEnabled = (botSettings.extra as Record<string, unknown>)?.seasons_enabled !== false;
+      const activeSeason = seasonsEnabled ? getActiveSeason(resolveSeasons(botSettings.extra)) : null;
       if (activeSeason && activeSeason.photoUrls.length > 0) {
         await sendPhotoAlbum(senderId, activeSeason.photoUrls.slice(0, 10), token, trace);
       }
@@ -1069,7 +1070,8 @@ async function handleMessage(
       });
     }
   }
-  if (platform === "facebook" && token) {
+  const seasonsEnabledGlobal = (botSettings.extra as Record<string, unknown>)?.seasons_enabled !== false;
+  if (platform === "facebook" && token && seasonsEnabledGlobal) {
     const matchedSeason = matchSeasonByText(text, resolveSeasons(botSettings.extra));
     if (matchedSeason) {
       const dedupeKey = `season_sent:${platform}:${senderId}:${matchedSeason.id}`;

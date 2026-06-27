@@ -76,8 +76,19 @@ import {
   toStructuredRows,
 } from "@/lib/adminUtils";
 
+function greetingEnabled(settings: TravelBotSettings | null): boolean {
+  const g = (settings?.extra as Record<string, unknown>)?.greeting;
+  if (!g || typeof g !== "object") return true;
+  return (g as Record<string, unknown>).enabled !== false;
+}
+
+function seasonsEnabled(settings: TravelBotSettings | null): boolean {
+  return (settings?.extra as Record<string, unknown>)?.seasons_enabled !== false;
+}
+
 export function BotTab({
   control,
+  settings,
   pageControls,
   pauseReason,
   setPauseReason,
@@ -88,8 +99,10 @@ export function BotTab({
   tick,
   apiFetch,
   onPauseAction,
+  onSettingsChanged,
 }: {
   control: ControlState | null;
+  settings: TravelBotSettings | null;
   pageControls: PageControlState[];
   pauseReason: string;
   setPauseReason: (value: string) => void;
@@ -113,6 +126,7 @@ export function BotTab({
     ms?: number | null,
     pageId?: string,
   ) => void;
+  onSettingsChanged: () => void;
 }) {
   const handoffRows = pausedRows.filter((row) => row.reason === "handoff");
   const handoffIds = new Set(handoffRows.map((row) => row.sender_id));
@@ -384,6 +398,37 @@ export function BotTab({
         </div>
       </Card>
 
+      <QuickToggleCard
+        title="Мэндчилгээний мессеж"
+        description="Унтраавал шинэ хэрэглэгчид мэндчилгээ илгээхгүй. Шууд асуултад хариулна."
+        enabled={greetingEnabled(settings)}
+        busyId="greeting-toggle"
+        onToggle={async (next) => {
+          const prevGreeting = (settings?.extra as Record<string, unknown>)?.greeting as Record<string, unknown> | undefined;
+          await apiFetch("/api/admin/settings", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ fields: { extra: { greeting: { ...prevGreeting, enabled: next } } } }),
+          });
+          onSettingsChanged();
+        }}
+      />
+
+      <QuickToggleCard
+        title="Улирлын зургийн альбом"
+        description="Унтраавал улирлын зураг (наадам, өвөл гэх мэт) илгээхгүй болно."
+        enabled={seasonsEnabled(settings)}
+        busyId="seasons-toggle"
+        onToggle={async (next) => {
+          await apiFetch("/api/admin/settings", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ fields: { extra: { seasons_enabled: next } } }),
+          });
+          onSettingsChanged();
+        }}
+      />
+
       <Card className="p-4">
         <SectionHeading
           title="Хуудас бүрийн төлөв"
@@ -632,6 +677,60 @@ export function BotTab({
         </div>
       </Card>
     </div>
+  );
+}
+
+function QuickToggleCard({
+  title,
+  description,
+  enabled,
+  busyId,
+  onToggle,
+}: {
+  title: string;
+  description: string;
+  enabled: boolean;
+  busyId: string;
+  onToggle: (next: boolean) => Promise<void>;
+}) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  async function handleToggle() {
+    setBusy(true);
+    try {
+      await onToggle(!enabled);
+    } catch {
+      toast.error("Хадгалахад алдаа гарлаа.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Card className="p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-ink">{title}</p>
+          <p className="mt-0.5 text-xs text-ink-subtle">{description}</p>
+        </div>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void handleToggle()}
+          className={cx(
+            "relative mt-0.5 inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none disabled:opacity-50",
+            enabled ? "bg-brand" : "bg-line-strong",
+          )}
+          aria-label={enabled ? "Унтраах" : "Асаах"}
+        >
+          <span
+            className={cx(
+              "inline-block h-6 w-6 transform rounded-full bg-white shadow ring-0 transition duration-200",
+              enabled ? "translate-x-7" : "translate-x-0",
+            )}
+          />
+        </button>
+      </div>
+    </Card>
   );
 }
 
