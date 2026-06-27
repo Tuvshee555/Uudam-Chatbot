@@ -10,7 +10,7 @@ import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { autoHandoffSender, isPaused, pauseBot, storeSenderName, trackSender } from "../../lib/pause";
-import { createLead, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
+import { createLead, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, } from "../../lib/travelFastPaths";
 import { claimSeasonSend, extractTripBrochureAttachmentId, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
@@ -1696,6 +1696,17 @@ async function handleMessage(
     });
     aiReply = "Уучлаарай, систем түр алдаатай байна.";
   }
+  // Bot signals it has nothing useful to say — go completely silent
+  if (aiReply.trim().toUpperCase() === "SILENT" || aiReply.trim() === "SILENT\nBUTTONS:" || /^SILENT\s*$/i.test(aiReply.trim().split("\n")[0])) {
+    logInfo("webhook.ai_silent", {
+      requestId: trace?.requestId,
+      correlationId: trace?.correlationId,
+      platform,
+      senderHash: hashIdentifier(senderId),
+    });
+    recordCounter("webhook.ai_silent_total", 1, { platform });
+    return;
+  }
   const fixedReply = fixMojibake(aiReply);
   const { text: replyWithoutButtons, buttons: aiButtons } = extractButtons(fixedReply);
   const recentAssistantReplies = history
@@ -1964,6 +1975,7 @@ export default async function handler(
             }>;
             messaging?: Array<{
               sender?: { id?: string };
+              recipient?: { id?: string };
               message?: { is_echo?: boolean; mid?: string; text?: string };
             }>;
           }>;
@@ -2072,7 +2084,19 @@ export default async function handler(
               : [];
             for (const event of messagingEvents) {
               if (!event?.sender?.id) continue;
-              if (event?.message?.is_echo) continue;
+              // Echo = operator/page sent a message to a customer → pause bot for that customer immediately
+              if (event?.message?.is_echo) {
+                const customerId = String(event.recipient?.id ?? "").trim();
+                if (customerId) {
+                  void dbPauseSender(customerId, undefined, "operator_reply").catch(() => {});
+                  logInfo("webhook.operator_echo_pause", {
+                    requestId: trace.requestId,
+                    customerHash: hashIdentifier(customerId),
+                    pageId,
+                  });
+                }
+                continue;
+              }
               const senderId = String(event.sender.id).trim();
               const text =
                 typeof event?.message?.text === "string"
