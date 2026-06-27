@@ -190,9 +190,16 @@ function getPriceGroups(trip: TravelTrip): DepartureDateGroup[] {
   return Array.isArray(groups) ? (groups as DepartureDateGroup[]) : [];
 }
 
-function getAliases(trip: TravelTrip): string[] {
+function getTripLooseField(trip: TravelTrip, key: string): unknown {
   const extra = (trip.extra || {}) as Record<string, unknown>;
-  return Array.isArray(extra.aliases) ? (extra.aliases as string[]).filter(Boolean) : [];
+  if (key in extra) return extra[key];
+  const record = trip as unknown as Record<string, unknown>;
+  return record[key];
+}
+
+function getAliases(trip: TravelTrip): string[] {
+  const raw = getTripLooseField(trip, "aliases");
+  return Array.isArray(raw) ? (raw as string[]).filter(Boolean) : [];
 }
 
 function getStructuredPriceGroups(trip: TravelTrip): Array<Record<string, unknown>> {
@@ -392,6 +399,40 @@ function queryWantsLandOnly(query: string): boolean {
   );
 }
 
+function hasLooseAliasMatch(query: string, queryKeywords: string[], alias: string): boolean {
+  const aliasNorm = normText(alias);
+  if (query.includes(aliasNorm) || aliasNorm.includes(query)) return true;
+
+  const aliasTokens = unique(keywordTokens(alias));
+  if (!aliasTokens.length) return false;
+
+  const overlap = aliasTokens.filter((token) => queryKeywords.includes(token)).length;
+  const requiredOverlap = aliasTokens.length === 1 ? 1 : Math.min(2, aliasTokens.length);
+  return overlap >= requiredOverlap;
+}
+
+function queryWantsLandOnlyEnhanced(query: string): boolean {
+  const normalized = normText(query);
+  if (normalized.includes("нислэггүй")) return true;
+
+  const explicitlyWantsFlight =
+    normalized.includes("газар нислэг") ||
+    normalized.includes("хосолсон") ||
+    normalized.includes("онгоц") ||
+    normalized.includes("нислэгтэй");
+  if (explicitlyWantsFlight) return false;
+
+  return (
+    normalized.includes("газрын аялал") ||
+    normalized.includes("газрын аяллын") ||
+    normalized.includes("газрын") ||
+    normalized.includes("газраар") ||
+    normalized.includes("автобусаар") ||
+    normalized.includes("галт тэрэг") ||
+    normalized.includes("land tour")
+  );
+}
+
 // Whether the query explicitly mentions a flight component.
 function queryWantsFlight(query: string): boolean {
   return /нислэг|онгоц|хосолсон|нислэгтэй/i.test(query);
@@ -410,7 +451,7 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
   // Use keywordTokens() so generic route words (газар, нислэг, аялал, хосолсон…)
   // don't act as false-positive boosters and rank the wrong trip higher.
   const queryKeywords = unique(keywordTokens(text));
-  const landOnly = queryWantsLandOnly(text);
+  const landOnly = queryWantsLandOnlyEnhanced(text);
   const wantsFlight = queryWantsFlight(text);
   const hasBrochure = options?.hasBrochureIntent ?? false;
   let best: TravelTrip | null = null;
@@ -423,9 +464,15 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
     // Filter route words through keywordTokens as well (strips GENERIC_ROUTE_WORDS).
     const routeKeywords = unique(keywordTokens(trip.route_name));
     const matchedWordCount = routeKeywords.filter((word) => queryKeywords.includes(word)).length;
-    const aliasHit = getAliases(trip).some((alias) => query.includes(normText(alias))) ? 1 : 0;
+    const aliases = getAliases(trip);
+    const aliasExactHit = aliases.some((alias) => query.includes(normText(alias))) ? 1 : 0;
+    const aliasTokenHit = aliases.some((alias) => hasLooseAliasMatch(query, queryKeywords, alias)) ? 1 : 0;
     const exactRouteHit = query.includes(routeNorm) ? 1 : 0;
-    let score = exactRouteHit * 10 + aliasHit * 8 + matchedWordCount * 3;
+    let score =
+      exactRouteHit * 10 +
+      aliasExactHit * 8 +
+      aliasTokenHit * 6 +
+      matchedWordCount * 3;
 
     // Category-intent alignment bonuses and penalties.
     const isCombo = tripIsLandFlightCombo(trip);
@@ -436,6 +483,8 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
       if (isCombo && !wantsFlight) score -= 100;
     }
     if (wantsFlight && isCombo) score += 50;
+    if (landOnly && tripCat.includes("газрын") && tripCat.includes("аялал")) score += 20;
+    if (landOnly && isCombo && !wantsFlight) score -= 50;
 
     // Bonus when alias is a precise land-only spelling variant.
     const landAliasHit = getAliases(trip).some((alias) => {
@@ -443,9 +492,19 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
       return an.includes("газрын") && query.includes(an);
     });
     if (landAliasHit) score += 80;
+    const enhancedLandAliasHit = aliases.some((alias) => {
+      const an = normText(alias);
+      return (
+        (an.includes("газрын") || an.includes("газраар") || an.includes("нислэггүй")) &&
+        hasLooseAliasMatch(query, queryKeywords, alias)
+      );
+    });
+    if (enhancedLandAliasHit && !landAliasHit) score += 100;
+    else if (enhancedLandAliasHit) score += 20;
 
     // Bonus when user wants a brochure and this trip actually has one.
     if (hasBrochure && getTripBrochureAsset(trip)) score += 100;
+    if (hasBrochure && getTripBrochureAsset(trip)) score += 20;
 
     if (score > bestScore) {
       secondScore = bestScore;
@@ -475,11 +534,10 @@ export function hasProgramIntent(text: string) {
 }
 
 function getTripBrochureAsset(trip: TravelTrip): ProgramAsset | null {
-  const extra = (trip.extra || {}) as Record<string, unknown>;
-  const id = extra.source_file_attachment_id;
+  const id = getTripLooseField(trip, "source_file_attachment_id");
   if (typeof id === "string" && id.length > 0) return { type: "id", value: id };
 
-  const url = extra.brochure_pdf_url;
+  const url = getTripLooseField(trip, "brochure_pdf_url");
   if (typeof url === "string" && url.startsWith("https://")) return { type: "url", value: url };
   return null;
 }

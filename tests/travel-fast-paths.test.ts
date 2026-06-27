@@ -357,6 +357,74 @@ test("program request prefers brochure pdf over images and itinerary", () => {
   assert.match(result?.reply || "", /pdf/i);
 });
 
+test("program request prefers the ground Beidaihe + Beijing tour for газрын аяллын phrasing", () => {
+  const result = buildTripProgramReply(
+    "Бээжин + Бэйдэхэ газрын аяллын хөтөлбөр үзэх",
+    [
+      trip({
+        id: "ground-tour",
+        route_name: "Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал",
+        category: "газрын аялал",
+        extra: {
+          aliases: [
+            "Бэйдайхэ Бээжин газрын аялал",
+            "Бэйдэхэ Бээжин газрын",
+            "Шар тэнгис Бэйдайхэ Бээжин",
+          ],
+          brochure_pdf_url: "https://example.com/ground-tour.pdf",
+        },
+      }),
+      trip({
+        id: "combo-tour",
+        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        category: "газар + нислэг хосолсон",
+        extra: {
+          aliases: [
+            "Бээжин Бэйдэхэ газар нислэг хосолсон",
+            "Бэйдэхэ Бээжин газар нислэг",
+          ],
+        },
+      }),
+    ],
+  );
+
+  assert.equal(result?.trip.id, "ground-tour");
+  assert.equal(result?.brochure?.type, "url");
+  assert.equal(result?.brochure?.value, "https://example.com/ground-tour.pdf");
+  assert.match(result?.reply || "", /Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал/);
+});
+
+test("program request can still use exported JSON top-level aliases and brochure fields", () => {
+  const groundTrip = {
+    ...trip({
+      id: "ground-export",
+      route_name: "Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал",
+      category: "газрын аялал",
+      extra: {},
+    }),
+    aliases: ["Бэйдэхэ Бээжин газрын"],
+    brochure_pdf_url: "https://example.com/export-ground.pdf",
+  } as TravelTrip & { aliases: string[]; brochure_pdf_url: string };
+
+  const comboTrip = {
+    ...trip({
+      id: "combo-export",
+      route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+      category: "газар + нислэг хосолсон",
+      extra: {},
+    }),
+    aliases: ["Бээжин Бэйдэхэ газар нислэг хосолсон"],
+  } as TravelTrip & { aliases: string[] };
+
+  const result = buildTripProgramReply(
+    "Бээжин + Бэйдэхэ газрын аяллын хөтөлбөр үзэх",
+    [groundTrip, comboTrip],
+  );
+
+  assert.equal(result?.trip.id, "ground-export");
+  assert.equal(result?.brochure?.value, "https://example.com/export-ground.pdf");
+});
+
 test("program request sends program images when brochure is missing", () => {
   const result = buildTripProgramReply(
     "Ð¨Ð°Ð½Ñ…Ð°Ð¹ Ð°ÑÐ»Ð»Ñ‹Ð½ program Ð·ÑƒÑ€Ð°Ð³",
