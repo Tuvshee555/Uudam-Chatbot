@@ -383,11 +383,36 @@ function findBestTripMatch(text: string, trips: TravelTrip[]) {
   return { best: best.trip, ambiguous: [] as TravelTrip[] };
 }
 
-function findLooseTripMatch(text: string, trips: TravelTrip[]) {
+// Whether the query explicitly signals a land-only (no-flight) trip.
+function queryWantsLandOnly(query: string): boolean {
+  return (
+    /газрын\s+аялал/i.test(query) ||
+    /нислэггүй/i.test(query) ||
+    /газраар/i.test(query)
+  );
+}
+
+// Whether the query explicitly mentions a flight component.
+function queryWantsFlight(query: string): boolean {
+  return /нислэг|онгоц|хосолсон|нислэгтэй/i.test(query);
+}
+
+// Whether a trip is a land+flight combo based on its category or name.
+function tripIsLandFlightCombo(trip: TravelTrip): boolean {
+  const cat = (trip.category || "").toLowerCase();
+  if (cat.includes("газар") && cat.includes("нислэг")) return true;
+  const name = normText(trip.route_name);
+  return /газар\s*\+\s*нислэг|газар\s+нислэг\s+хосолсон/.test(name);
+}
+
+function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBrochureIntent?: boolean }) {
   const query = normText(text);
   // Use keywordTokens() so generic route words (газар, нислэг, аялал, хосолсон…)
   // don't act as false-positive boosters and rank the wrong trip higher.
   const queryKeywords = unique(keywordTokens(text));
+  const landOnly = queryWantsLandOnly(text);
+  const wantsFlight = queryWantsFlight(text);
+  const hasBrochure = options?.hasBrochureIntent ?? false;
   let best: TravelTrip | null = null;
   let bestScore = 0;
   let secondScore = 0;
@@ -400,7 +425,28 @@ function findLooseTripMatch(text: string, trips: TravelTrip[]) {
     const matchedWordCount = routeKeywords.filter((word) => queryKeywords.includes(word)).length;
     const aliasHit = getAliases(trip).some((alias) => query.includes(normText(alias))) ? 1 : 0;
     const exactRouteHit = query.includes(routeNorm) ? 1 : 0;
-    const score = exactRouteHit * 10 + aliasHit * 8 + matchedWordCount * 3;
+    let score = exactRouteHit * 10 + aliasHit * 8 + matchedWordCount * 3;
+
+    // Category-intent alignment bonuses and penalties.
+    const isCombo = tripIsLandFlightCombo(trip);
+    const tripCat = (trip.category || "").toLowerCase();
+    if (landOnly) {
+      if (tripCat === "газрын аялал") score += 100;
+      // Penalise land+flight combos heavily when user said "газрын аялал".
+      if (isCombo && !wantsFlight) score -= 100;
+    }
+    if (wantsFlight && isCombo) score += 50;
+
+    // Bonus when alias is a precise land-only spelling variant.
+    const landAliasHit = getAliases(trip).some((alias) => {
+      const an = normText(alias);
+      return an.includes("газрын") && query.includes(an);
+    });
+    if (landAliasHit) score += 80;
+
+    // Bonus when user wants a brochure and this trip actually has one.
+    if (hasBrochure && getTripBrochureAsset(trip)) score += 100;
+
     if (score > bestScore) {
       secondScore = bestScore;
       bestScore = score;
@@ -535,7 +581,7 @@ export function buildTripProgramReply(
 ): TripProgramReplyResult | null {
   if (!hasProgramIntent(text)) return null;
 
-  const best = findLooseTripMatch(text, trips);
+  const best = findLooseTripMatch(text, trips, { hasBrochureIntent: true });
   if (!best) return null;
 
   const brochure = getTripBrochureAsset(best);
@@ -570,7 +616,7 @@ export function buildTripProgramReply(
   }
 
   return {
-    reply: `✈️ ${best.route_name}\n\nДэлгэрэнгүй хөтөлбөрийн файл одоогоор бэлэн алга байна. Хэрэв хүсвэл манай аяллын зөвлөх дэлгэрэнгүй хөтөлбөрийг тусад нь илгээж өгнө.`,
+    reply: `✈️ ${best.route_name}\n\nОдоогоор энэ аяллын PDF хөтөлбөр системд ороогүй байна. Аяллын зөвлөхөөс хөтөлбөрийг илгээлгэе. 🙌`,
     trip: best,
     brochure: null,
     mediaUrls: [],
