@@ -1791,8 +1791,8 @@ async function handleMessage(
     } catch {
     }
   }
-  // Always include "contact operator" as the last button — customer can tap any time
-  replyButtons = replyButtons.slice(0, 2);
+  // Always include contact button as the last one — customer can tap any time
+  replyButtons = replyButtons.slice(0, 10);
   if (!replyButtons.includes(CONTACT_OPERATOR_LABEL)) {
     replyButtons.push(CONTACT_OPERATOR_LABEL);
   }

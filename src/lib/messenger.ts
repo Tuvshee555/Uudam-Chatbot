@@ -122,7 +122,7 @@ export async function sendQuickReplies(
   token: string,
   trace?: UpstreamTraceOptions,
 ) {
-  const quickReplies = labels.slice(0, 5).map((label) => ({
+  const quickReplies = labels.slice(0, 11).map((label) => ({
     content_type: "text",
     title: label.slice(0, 25),
     payload: label.slice(0, 25),
