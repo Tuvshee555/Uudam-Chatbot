@@ -209,22 +209,29 @@ export function extractTripPhotosForReply(
     (t) => t.status === "active" && t.photo_urls.length > 0,
   );
 
-  let bestScore = 0;
-  let bestTrip: TravelTrip | null = null;
-
+  // Score all trips — collect any that match at least 2 words
+  const scored: { trip: TravelTrip; score: number }[] = [];
   for (const trip of active) {
     const words = normText(trip.route_name)
       .split(/\s+/)
       .filter((w) => w.length >= 3);
     const score = words.filter((w) => norm.includes(w)).length;
-    if (score > bestScore) {
-      bestScore = score;
-      bestTrip = trip;
-    }
+    if (score > 0) scored.push({ trip, score });
   }
 
-  if (!bestTrip || bestScore === 0) return [];
-  return bestTrip.photo_urls.slice(0, MAX_TRIP_PHOTOS);
+  if (scored.length === 0) return [];
+
+  // Single strong match (score ≥ 2) → send up to MAX_TRIP_PHOTOS from that trip
+  const best = scored.sort((a, b) => b.score - a.score)[0];
+  if (best.score >= 2 || scored.length === 1) {
+    return best.trip.photo_urls.slice(0, MAX_TRIP_PHOTOS);
+  }
+
+  // Multiple weak matches (list reply) → one photo per matched trip, up to 5
+  return scored
+    .slice(0, 5)
+    .map(({ trip }) => trip.photo_urls[0])
+    .filter(Boolean);
 }
 
 export function extractTripBrochureAttachmentId(

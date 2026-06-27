@@ -878,7 +878,7 @@ function isHandoffRequest(text: string, keywords: string[]): boolean {
   }
   return false;
 }
-const CONTACT_OPERATOR_LABEL = "Оператортой холбогдох";
+const CONTACT_OPERATOR_LABEL = "Зөвлөхтэй холбогдох";
 const BOOKING_INTENT_KEYWORDS = [
   "захиал",
   "бүртгүүл",

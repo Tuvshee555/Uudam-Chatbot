@@ -156,7 +156,7 @@ export async function readBusinessData(): Promise<BusinessDataFile & { pinnedBut
     },
     knowledge,
     pinnedButtonLabels: [
-      "Оператортой холбогдох",
+      "Зөвлөхтэй холбогдох",
       ...(settings.chat_buttons || []).map((b) => b.label).filter(Boolean),
     ],
   };

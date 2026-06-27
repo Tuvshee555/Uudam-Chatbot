@@ -124,8 +124,8 @@ export async function sendQuickReplies(
 ) {
   const quickReplies = labels.slice(0, 5).map((label) => ({
     content_type: "text",
-    title: label.slice(0, 20),
-    payload: label.slice(0, 20),
+    title: label.slice(0, 25),
+    payload: label.slice(0, 25),
   }));
   await postToMessenger(
     graphMessagesEndpoint(token),
