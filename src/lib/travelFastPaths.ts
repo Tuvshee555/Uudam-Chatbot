@@ -385,6 +385,9 @@ function findBestTripMatch(text: string, trips: TravelTrip[]) {
 
 function findLooseTripMatch(text: string, trips: TravelTrip[]) {
   const query = normText(text);
+  // Use keywordTokens() so generic route words (газар, нислэг, аялал, хосолсон…)
+  // don't act as false-positive boosters and rank the wrong trip higher.
+  const queryKeywords = unique(keywordTokens(text));
   let best: TravelTrip | null = null;
   let bestScore = 0;
   let secondScore = 0;
@@ -392,10 +395,9 @@ function findLooseTripMatch(text: string, trips: TravelTrip[]) {
   for (const trip of trips) {
     if (trip.status !== "active") continue;
     const routeNorm = normText(trip.route_name);
-    const routeWords = unique(
-      routeNorm.split(/\s+/).map((word) => word.trim()).filter((word) => word.length >= 2),
-    );
-    const matchedWordCount = routeWords.filter((word) => query.includes(word)).length;
+    // Filter route words through keywordTokens as well (strips GENERIC_ROUTE_WORDS).
+    const routeKeywords = unique(keywordTokens(trip.route_name));
+    const matchedWordCount = routeKeywords.filter((word) => queryKeywords.includes(word)).length;
     const aliasHit = getAliases(trip).some((alias) => query.includes(normText(alias))) ? 1 : 0;
     const exactRouteHit = query.includes(routeNorm) ? 1 : 0;
     const score = exactRouteHit * 10 + aliasHit * 8 + matchedWordCount * 3;
