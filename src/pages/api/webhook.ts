@@ -2088,7 +2088,8 @@ export default async function handler(
               if (event?.message?.is_echo) {
                 const customerId = String(event.recipient?.id ?? "").trim();
                 if (customerId) {
-                  void dbPauseSender(customerId, undefined, "operator_reply").catch(() => {});
+                  const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000;
+                  void dbPauseSender(customerId, fourteenDaysMs, "operator_reply").catch(() => {});
                   logInfo("webhook.operator_echo_pause", {
                     requestId: trace.requestId,
                     customerHash: hashIdentifier(customerId),
