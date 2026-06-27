@@ -53,9 +53,16 @@ const AI_CHANGE_GEMINI_MAX_RETRIES = 0;
 const AI_CHANGE_REPAIR_TIMEOUT_MS = 15_000;
 // Flash is 3-5x faster than Pro for clean travel PDFs and accurate enough
 // for formatted price lists. Override via GEMINI_FILE_PARSE_MODEL=gemini-2.5-pro
+// When OPENAI_API_KEY is set, OpenAI is the PRIMARY parser and Gemini is the
+// fallback (native PDF inline parts still go to Gemini since OpenAI's vision
+// endpoint does not accept application/pdf — those are rendered to JPEG first).
+// Override the OpenAI model via OPENAI_FILE_PARSE_MODEL (default: gpt-4o).
 // if you ever need the stronger model for a complex or low-quality document.
 const FILE_PARSE_MODEL =
   process.env.GEMINI_FILE_PARSE_MODEL || "gemini-2.5-flash";
+// Model used when OpenAI is primary for file parsing
+const OPENAI_FILE_PARSE_MODEL =
+  process.env.OPENAI_FILE_PARSE_MODEL || "gpt-4o";
 // Verify pass = a SECOND full re-read of every file to double-check prices.
 // Off by default now (set GEMINI_FILE_PARSE_VERIFY=true to re-enable for a
 // 100%-accuracy slow run). Skipping it halves token cost and parse time.
@@ -1083,6 +1090,11 @@ async function requestProposalFromModel(opts: {
   model?: string;
   verify?: boolean;
 }) {
+  // OpenAI is primary for all proposal extraction (file parsing + text instructions).
+  // Gemini is the fallback when OpenAI is unavailable or the input contains native
+  // PDF inline parts (OpenAI vision doesn't accept application/pdf directly — those
+  // are rendered to JPEG pages by fileParse.ts before reaching here).
+  // Messenger chat replies stay on Gemini (better Mongolian) — this path never runs there.
   const result = await askGeminiParts(
     [{ text: buildProposalGuide(opts.condensedTrips) }, ...opts.userParts],
     {
@@ -1091,9 +1103,8 @@ async function requestProposalFromModel(opts: {
       timeoutMs: opts.timeoutMs,
       maxRetries: opts.maxRetries,
       model: opts.model,
-      // Gemini is primary for file parsing — it handles structured text
-      // and multimodal (PDFs/images) natively. OpenAI is the fallback.
-      preferOpenAI: false,
+      preferOpenAI: true,
+      openaiModel: OPENAI_FILE_PARSE_MODEL,
       maxOutputTokens: 16_384,
     },
   );
@@ -1109,7 +1120,8 @@ async function requestProposalFromModel(opts: {
           timeoutMs: opts.repairTimeoutMs,
           maxRetries: 0,
           model: opts.model,
-          preferOpenAI: false,
+          preferOpenAI: true,
+          openaiModel: OPENAI_FILE_PARSE_MODEL,
         },
       );
       parsed = parseJsonFromModel(repaired.text);

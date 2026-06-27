@@ -34,6 +34,8 @@ export async function askOpenAIFallbackParts(
     maxOutputTokens?: number;
     requestId?: string;
     correlationId?: string;
+    /** Override model for this call (e.g. gpt-4o for file parsing). */
+    model?: string;
   },
 ): Promise<GeminiResult | null> {
   const key = env.openaiApiKey;
@@ -47,7 +49,7 @@ export async function askOpenAIFallbackParts(
     return null;
   }
 
-  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const model = options?.model || process.env.OPENAI_MODEL || "gpt-4o-mini";
   const source = options?.source || "unknown";
   const startedAt = Date.now();
 

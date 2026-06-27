@@ -66,6 +66,8 @@ export type AskGeminiOptions = {
    * Chat answering leaves this off so Gemini (better Mongolian) stays primary.
    */
   preferOpenAI?: boolean;
+  /** Override the OpenAI model when preferOpenAI=true (default: gpt-4o-mini). */
+  openaiModel?: string;
 };
 
 /**
@@ -130,6 +132,7 @@ export async function askGeminiParts(
       maxOutputTokens: options?.maxOutputTokens,
       requestId: options?.requestId,
       correlationId: options?.correlationId,
+      model: options?.openaiModel,
     });
     if (openaiResult) return openaiResult;
     logInfo("openai.falling_back_to_gemini", { source });
