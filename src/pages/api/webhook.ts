@@ -14,7 +14,7 @@ import { createLead, getTravelBotSettings, hasRecentOpenLead, isPagePaused, list
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, } from "../../lib/travelFastPaths";
 import { extractTripBrochureAttachmentId, extractTripPhotosForReply, getActiveSeason, isFirstMessage, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
-import { resolveAndValidatePdfUrl, sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
+import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
 import { advanceCollectState, buildCompletionMessage, buildLeadContext, clearCollectState, getCollectState, isInCollectFlow, promptForStep, setCollectState, startCollectState, } from "../../lib/bookingCollect";
@@ -1544,21 +1544,8 @@ async function handleMessage(
     const trips = await getTrips();
     const programReply = buildTripProgramReply(text, trips);
     if (programReply) {
-      // For URL-based brochures, validate before composing the reply text so the
-      // customer gets the correct message ("sending PDF" vs "file unavailable").
-      let validatedBrochureUrl: string | null = null;
-      if (programReply.brochure?.type === "url") {
-        validatedBrochureUrl = await resolveAndValidatePdfUrl(programReply.brochure.value).catch(() => null);
-      }
-
-      let programReplyText = programReply.reply;
-      if (programReply.brochure?.type === "url" && !validatedBrochureUrl) {
-        // URL brochure exists in DB but failed validation (HTML page, not a PDF, Drive login wall…)
-        programReplyText = `✈️ ${programReply.trip.route_name}\n\nХөтөлбөрийн файл нээгдэхгүй байна. Аяллын зөвлөхөөс PDF хөтөлбөрийг баталгаажуулж илгээе. 😊`;
-      }
-
       const safeProgramReply = enforceWebsiteForPayment(
-        sanitizeAssistantReply(programReplyText),
+        sanitizeAssistantReply(programReply.reply),
       );
       await assertLockHealthy();
       const delivered = await sendPlatformMessage(
@@ -1576,16 +1563,21 @@ async function handleMessage(
       }
       if (platform === "facebook" && token) {
         if (programReply.brochure) {
-          try {
-            if (programReply.brochure.type === "id") {
-              await sendFbFileAttachment(senderId, programReply.brochure.value, token);
-            } else if (validatedBrochureUrl) {
-              // URL already validated above — send the resolved direct-download URL.
-              await sendFbFileByUrl(senderId, validatedBrochureUrl, token);
-            }
-            // If validatedBrochureUrl is null, we already sent the fallback text above.
-          } catch {
-          }
+          // Fire-and-forget to a separate endpoint so the webhook can return 200
+          // to Meta immediately. The Drive download + FB upload can take 15-30s
+          // which exceeds Vercel's function timeout if done inline here.
+          const baseUrl = process.env.BASE_URL || process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_URL || "localhost:3000"}`;
+          const body = programReply.brochure.type === "id"
+            ? { recipientId: senderId, brochureId: programReply.brochure.value, pageToken: token }
+            : { recipientId: senderId, brochureUrl: programReply.brochure.value, pageToken: token };
+          fetch(`${baseUrl}/api/send-brochure`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-internal-token": env.verifyToken,
+            },
+            body: JSON.stringify(body),
+          }).catch(() => {});
         } else {
           for (const url of programReply.mediaUrls) {
             try {
@@ -1772,24 +1764,23 @@ async function handleMessage(
         });
       }
 
-      // Send PDF brochure if this trip has a stored attachment_id or a brochure_pdf_url
+      // Send PDF brochure if this trip has a stored attachment_id or a brochure_pdf_url.
+      // Fire-and-forget via /api/send-brochure to avoid blocking the webhook response.
       const brochure = extractTripBrochureAttachmentId(safeReply, tripsForPhotos);
-      if (brochure) {
-        try {
-          if (brochure.type === "id") {
-            await sendFbFileAttachment(senderId, brochure.value, token);
-            recordCounter("webhook.trip_brochure_sent_total", 1, { platform });
-          } else {
-            // Validate before sending: converts Drive /view links and checks PDF magic bytes.
-            const validUrl = await resolveAndValidatePdfUrl(brochure.value).catch(() => null);
-            if (validUrl) {
-              await sendFbFileByUrl(senderId, validUrl, token);
-              recordCounter("webhook.trip_brochure_sent_total", 1, { platform });
-            }
-            // If invalid, skip silently — the brochure was a bonus, not the main reply.
-          }
-        } catch {
-        }
+      if (brochure && token) {
+        const baseUrl = process.env.BASE_URL || process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_URL || "localhost:3000"}`;
+        const body = brochure.type === "id"
+          ? { recipientId: senderId, brochureId: brochure.value, pageToken: token }
+          : { recipientId: senderId, brochureUrl: brochure.value, pageToken: token };
+        fetch(`${baseUrl}/api/send-brochure`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-internal-token": env.verifyToken,
+          },
+          body: JSON.stringify(body),
+        }).catch(() => {});
+        recordCounter("webhook.trip_brochure_sent_total", 1, { platform });
       }
     } catch {
     }
