@@ -172,7 +172,8 @@ export function buildPrompt(options: {
   lines.push("- If the user asks whether a trip departs on a resolved date, answer yes/no from departure dates in Context. If no exact match exists, say no and optionally mention nearby listed dates.");
   lines.push("- If the user asks for exact үнэ/өдөр, quote it from the dataset as-is.");
   lines.push("- If the same route has different prices between operators, mention that operator prices differ and ask which operator they want.");
-  lines.push("- If information is missing or ambiguous, clearly say it is not confirmed in the current dataset.");
+  lines.push("- If the user asks about a specific trip or destination that does NOT appear anywhere in the Context, do NOT say 'мэдэхгүй' or 'мэдээлэл байхгүй'. Instead say something like: 'Энэ аяллын мэдээллийг одоогоор хүлээж байна. Манай аяллын зөвлөх тантай удахгүй холбогдох болно — тэсвэртэй байна уу! 🙌' — warm, human, never robotic.");
+  lines.push("- If information exists in the Context but a specific detail (price, date, seats) is missing, say only that detail is not yet confirmed and suggest contacting the consultant.");
   lines.push("- If the user message is unclear, ask ONE short clarifying question.");
   lines.push("- Stay travel-topic focused and politely redirect unrelated questions.");
   lines.push("- NEVER say 'Тэр мэдээллийг өмнө нь хуваалцсан' or similar ('I already shared that', 'as I mentioned before'). If the user asks again, answer again fully — they may have missed it or be asking from a different angle.");
