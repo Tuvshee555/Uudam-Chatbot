@@ -23,6 +23,8 @@ export type {
 export {
   AUTO_PAUSE_RESET_DAYS,
   dbAutoHandoffSender,
+  dbClaimGreeting,
+  dbClaimSeasonSend,
   cleanFields,
   countNewLeads,
   dbAppendMessage,

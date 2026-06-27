@@ -545,17 +545,24 @@ export async function ensureTravelSchema() {
       // Per-sender pause state + activity tracking — replaces Redis pause store
       await client.query(`
         CREATE TABLE IF NOT EXISTS travel_senders (
-          sender_id    TEXT PRIMARY KEY,
-          platform     TEXT NOT NULL DEFAULT 'facebook',
-          display_name TEXT NOT NULL DEFAULT '',
-          last_seen    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          msg_count    INTEGER NOT NULL DEFAULT 0,
-          paused       BOOLEAN NOT NULL DEFAULT FALSE,
-          pause_reason TEXT NOT NULL DEFAULT '',
-          paused_at    TIMESTAMPTZ NULL,
-          expires_at   TIMESTAMPTZ NULL,
-          updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          sender_id       TEXT PRIMARY KEY,
+          platform        TEXT NOT NULL DEFAULT 'facebook',
+          display_name    TEXT NOT NULL DEFAULT '',
+          last_seen       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          msg_count       INTEGER NOT NULL DEFAULT 0,
+          greeting_sent   BOOLEAN NOT NULL DEFAULT FALSE,
+          season_sent_ids TEXT[] NOT NULL DEFAULT '{}'::text[],
+          paused          BOOLEAN NOT NULL DEFAULT FALSE,
+          pause_reason    TEXT NOT NULL DEFAULT '',
+          paused_at       TIMESTAMPTZ NULL,
+          expires_at      TIMESTAMPTZ NULL,
+          updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+      `);
+      await client.query(`
+        ALTER TABLE travel_senders
+          ADD COLUMN IF NOT EXISTS greeting_sent   BOOLEAN NOT NULL DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS season_sent_ids TEXT[] NOT NULL DEFAULT '{}'::text[];
       `);
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_travel_senders_last_seen
@@ -2398,6 +2405,37 @@ export async function dbTrackSender(
   );
   const row = result?.rows[0];
   return { msg_count: row ? Number(row.msg_count) : 0 };
+}
+
+// Returns true if this is the first-ever message from this sender (greeting not yet sent).
+// Atomically marks greeting as sent so concurrent requests can't double-send.
+export async function dbClaimGreeting(senderId: string): Promise<boolean> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return false;
+  const result = await queryNeon<{ claimed: boolean }>(
+    `UPDATE travel_senders
+     SET greeting_sent = TRUE, updated_at = NOW()
+     WHERE sender_id = $1 AND greeting_sent = FALSE
+     RETURNING TRUE AS claimed`,
+    [senderId],
+  );
+  return (result?.rows[0]?.claimed) === true;
+}
+
+// Returns true if this season album hasn't been sent to this sender yet (within the session).
+// If not sent, atomically marks it as sent and returns true.
+export async function dbClaimSeasonSend(senderId: string, seasonId: string): Promise<boolean> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return false;
+  // Only send each season album once per 10-hour window — reset by clearing the array
+  const result = await queryNeon<{ claimed: boolean }>(
+    `UPDATE travel_senders
+     SET season_sent_ids = array_append(season_sent_ids, $2), updated_at = NOW()
+     WHERE sender_id = $1 AND NOT ($2 = ANY(season_sent_ids))
+     RETURNING TRUE AS claimed`,
+    [senderId, seasonId],
+  );
+  return (result?.rows[0]?.claimed) === true;
 }
 
 // Call this when the user signals real intent (phone number given, or booking keyword).

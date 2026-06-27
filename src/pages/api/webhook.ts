@@ -13,7 +13,7 @@ import { autoHandoffSender, isPaused, pauseBot, storeSenderName, trackSender } f
 import { createLead, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, } from "../../lib/travelFastPaths";
-import { extractTripBrochureAttachmentId, extractTripPhotosForReply, getActiveSeason, isFirstMessage, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
+import { claimSeasonSend, extractTripBrochureAttachmentId, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
@@ -1021,45 +1021,70 @@ async function handleMessage(
   }
   const botSettings = await getTravelBotSettings();
   void logInboundMessage({ platform, senderId, text });
+
+  // ── Greeting button tap handler ─────────────────────────────────────────────
+  // When customer taps "Аяллууд харах", "Наадмын аяллууд", or "Бүгдийг харах"
+  // send the right photos and return — no AI, no greeting repeat.
+  if (platform === "facebook" && token && isGreetingButton(text)) {
+    try {
+      const allTrips = await listTrips({ limit: 5000 });
+      const seasonsEnabled = (botSettings.extra as Record<string, unknown>)?.seasons_enabled !== false;
+      const activeSeason = seasonsEnabled ? getActiveSeason(resolveSeasons(botSettings.extra)) : null;
+      if (text === GREETING_BUTTONS.ALL_TRIPS || text === GREETING_BUTTONS.SEE_ALL) {
+        const greeting = resolveGreetingConfig(botSettings.extra);
+        let album: string[] = [];
+        if (greeting.defaultPhotoUrls.length > 0) album = greeting.defaultPhotoUrls.slice(0, 10);
+        else if (greeting.usePhotoUrls && greeting.photoUrls.length > 0) album = greeting.photoUrls.slice(0, 10);
+        else album = sampleWelcomePhotos(allTrips);
+        await sendPhotoAlbum(senderId, album, token, trace);
+      }
+      if (text === GREETING_BUTTONS.SEASONAL || text === GREETING_BUTTONS.SEE_ALL) {
+        if (activeSeason && activeSeason.photoUrls.length > 0) {
+          await sendPhotoAlbum(senderId, activeSeason.photoUrls.slice(0, 10), token, trace);
+        }
+      }
+      recordCounter("webhook.greeting_button_total", 1, { platform, button: text });
+    } catch (error) {
+      logWarn("webhook.greeting_button_failed", {
+        requestId: trace?.requestId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+        classification: classifyError(error),
+      });
+    }
+    return;
+  }
+
+  // ── First-message greeting ──────────────────────────────────────────────────
+  // Only fires when: Facebook, greeting enabled, first-ever message, AND the
+  // message is a generic opener (hi, hello, etc.) — NOT when person already
+  // asked about a specific trip.
   const greeting = resolveGreetingConfig(botSettings.extra);
   if (
     platform === "facebook" &&
     token &&
     greeting.enabled &&
+    isGenericOpener(text) &&
     (await isFirstMessage(senderId, platform))
   ) {
     try {
       const welcomeText =
         greeting.text ||
         botSettings.quick_info_reply ||
-        "Уудам Трэвел-д тавтай морилно уу! Бид танд хамгийн шилдэг аялалыг санал болгоно. Доорх аялалуудаас сонирхсоноо асуугаарай.";
-      if (welcomeText.trim()) {
-        await sendTextMessage(senderId, welcomeText, token, {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          source: "api.webhook.welcome",
-        });
-      }
-      let defaultAlbum: string[] = [];
-      if (greeting.defaultPhotoUrls.length > 0) {
-        defaultAlbum = greeting.defaultPhotoUrls.slice(0, 10);
-      } else if (greeting.usePhotoUrls && greeting.photoUrls.length > 0) {
-        defaultAlbum = greeting.photoUrls.slice(0, 10);
-      } else if (!greeting.usePhotoUrls) {
-        const allTrips = await listTrips({ limit: 5000 });
-        defaultAlbum = sampleWelcomePhotos(allTrips);
-      }
-      await sendPhotoAlbum(senderId, defaultAlbum, token, trace);
+        "Уудам Трэвел-д тавтай морилно уу! Доорх товчнуудаас сонирхсоноо сонгоорой 👇";
       const seasonsEnabled = (botSettings.extra as Record<string, unknown>)?.seasons_enabled !== false;
       const activeSeason = seasonsEnabled ? getActiveSeason(resolveSeasons(botSettings.extra)) : null;
-      if (activeSeason && activeSeason.photoUrls.length > 0) {
-        await sendPhotoAlbum(senderId, activeSeason.photoUrls.slice(0, 10), token, trace);
-      }
-      recordCounter("webhook.welcome_sent_total", 1, {
-        platform,
-        photoCount: String(defaultAlbum.length),
-        seasonPhotoCount: String(activeSeason?.photoUrls.length || 0),
+      const buttons = [
+        GREETING_BUTTONS.ALL_TRIPS,
+        ...(activeSeason ? [GREETING_BUTTONS.SEASONAL] : []),
+        GREETING_BUTTONS.SEE_ALL,
+      ];
+      // Send text + quick-reply buttons in one message
+      await sendQuickReplies(senderId, welcomeText, buttons, token, {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
       });
+      recordCounter("webhook.welcome_sent_total", 1, { platform });
     } catch (error) {
       logWarn("webhook.welcome_failed", {
         requestId: trace?.requestId,
@@ -1069,23 +1094,20 @@ async function handleMessage(
         classification: classifyError(error),
       });
     }
+    // Greeting sent — still let the message flow through so bot also answers
+    // (edge case: "сайн уу Бээжин аялал хэд вэ" should get both)
   }
+
+  // ── Seasonal album on keyword match ────────────────────────────────────────
   const seasonsEnabledGlobal = (botSettings.extra as Record<string, unknown>)?.seasons_enabled !== false;
   if (platform === "facebook" && token && seasonsEnabledGlobal) {
     const matchedSeason = matchSeasonByText(text, resolveSeasons(botSettings.extra));
-    if (matchedSeason) {
-      const dedupeKey = `season_sent:${platform}:${senderId}:${matchedSeason.id}`;
-      const shouldSend = await withRedis("webhook.season_dedupe", async (r) => {
-        const set = await r.set(dedupeKey, "1", "EX", 600, "NX");
-        return set === "OK";
+    if (matchedSeason && (await claimSeasonSend(senderId, matchedSeason.id))) {
+      await sendPhotoAlbum(senderId, matchedSeason.photoUrls.slice(0, 10), token, trace);
+      recordCounter("webhook.season_album_sent_total", 1, {
+        platform,
+        season: matchedSeason.name,
       });
-      if (shouldSend !== false) {
-        await sendPhotoAlbum(senderId, matchedSeason.photoUrls.slice(0, 10), token, trace);
-        recordCounter("webhook.season_album_sent_total", 1, {
-          platform,
-          season: matchedSeason.name,
-        });
-      }
     }
   }
   if (botSettings.handoff_enabled) {

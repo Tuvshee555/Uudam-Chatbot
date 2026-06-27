@@ -2,37 +2,31 @@
  * Welcome flow + trip photo auto-send helpers.
  *
  * Feature A — Welcome greeting:
- *   First time a sender messages → send a greeting text, then send up to
- *   MAX_WELCOME_PHOTOS images sampled from trips that have photo_urls.
+ *   First time a sender messages → ONLY if the message is generic (hi, hello, ?)
+ *   send greeting text + 3 quick-reply buttons + optional photo album.
+ *   If the first message already asks about a specific trip → skip greeting entirely.
  *
  * Feature B — Trip photo auto-send:
  *   After each AI reply, detect if a specific trip was discussed and send
  *   up to MAX_TRIP_PHOTOS of that trip's photos.
  */
 
-import { withRedis } from "./redisState";
+import { dbClaimGreeting, dbClaimSeasonSend } from "./travelDb";
 import type { TravelTrip } from "./travelOps";
 
 const MAX_WELCOME_PHOTOS = 5;
 const MAX_TRIP_PHOTOS = 3;
-const SEEN_SENDER_TTL_SEC = 14 * 24 * 60 * 60; // 14 days — re-greet returning customers after 2 weeks
 
 // ─── Admin-controlled greeting config (stored in bot_settings.extra.greeting) ──
 
 export type GreetingConfig = {
-  enabled: boolean; // master on/off for the first-message welcome
-  text: string; // owner's welcome message (overrides quick_info_reply)
-  photoUrls: string[]; // hand-picked welcome photos
-  usePhotoUrls: boolean; // true = send photoUrls; false = auto-sample from trips
-  defaultPhotoUrls: string[]; // fixed default album sent first on every greeting
+  enabled: boolean;
+  text: string;
+  photoUrls: string[];
+  usePhotoUrls: boolean;
+  defaultPhotoUrls: string[];
 };
 
-/**
- * Reads the greeting config out of bot_settings.extra. Tolerates missing/partial
- * data. Default = enabled, auto-sample photos (the historical behavior), no
- * custom text — so existing deployments behave exactly as before until the
- * owner customizes it in the admin.
- */
 export function resolveGreetingConfig(extra: unknown): GreetingConfig {
   const raw =
     extra && typeof extra === "object" && !Array.isArray(extra)
@@ -56,7 +50,7 @@ export function resolveGreetingConfig(extra: unknown): GreetingConfig {
     : [];
 
   return {
-    enabled: raw.enabled !== false, // default ON
+    enabled: raw.enabled !== false,
     text: typeof raw.text === "string" ? raw.text : "",
     photoUrls,
     usePhotoUrls: raw.usePhotoUrls === true,
@@ -64,14 +58,14 @@ export function resolveGreetingConfig(extra: unknown): GreetingConfig {
   };
 }
 
-// ─── Seasons (stored in bot_settings.extra.seasons) ──────────────────────────
+// ─── Seasons ─────────────────────────────────────────────────────────────────
 
 export type Season = {
   id: string;
-  name: string; // e.g. "Наадам", "Өвлийн аялал"
-  keywords: string[]; // trigger words customers might type
-  photoUrls: string[]; // this season's album
-  active: boolean; // exactly one season should be active at a time
+  name: string;
+  keywords: string[];
+  photoUrls: string[];
+  active: boolean;
 };
 
 function sanitizeUrls(value: unknown): string[] {
@@ -82,7 +76,6 @@ function sanitizeUrls(value: unknown): string[] {
     : [];
 }
 
-/** Reads the seasons array from bot_settings.extra. Tolerant of partial data. */
 export function resolveSeasons(extra: unknown): Season[] {
   const raw =
     extra && typeof extra === "object" && !Array.isArray(extra)
@@ -102,16 +95,10 @@ export function resolveSeasons(extra: unknown): Season[] {
     }));
 }
 
-/** The single active season (first one flagged active), or null. */
 export function getActiveSeason(seasons: Season[]): Season | null {
   return seasons.find((s) => s.active) || null;
 }
 
-/**
- * If the customer's message matches any season's keywords, return that season.
- * Checks the active season first, then others (so a customer asking about an
- * off-season trip still gets its photos). Returns null if no match.
- */
 export function matchSeasonByText(text: string, seasons: Season[]): Season | null {
   const norm = text.toLowerCase();
   const active = getActiveSeason(seasons);
@@ -130,40 +117,75 @@ export function matchSeasonByText(text: string, seasons: Season[]): Season | nul
   return null;
 }
 
-// ─── First-seen detection ────────────────────────────────────────────────────
-
-function seenKey(senderId: string, platform: string) {
-  return `welcome_seen:${platform}:${senderId}`;
-}
+// ─── First-seen detection (Neon-backed, no Redis) ────────────────────────────
 
 /**
- * Returns true the first time this sender is seen, false on repeat visits.
- * Uses Redis SETNX so it's atomic — no double-welcomes even under concurrency.
- * Falls back to false (no welcome) if Redis unavailable — safe degradation.
+ * Returns true the FIRST time this sender's greeting should fire.
+ * Atomically claims the greeting slot in travel_senders so no double-send.
  */
 export async function isFirstMessage(
   senderId: string,
-  platform: string,
+  _platform: string,
 ): Promise<boolean> {
-  const result = await withRedis("welcome.is_first_message", async (r) => {
-    const key = seenKey(senderId, platform);
-    const set = await r.set(key, "1", "EX", SEEN_SENDER_TTL_SEC, "NX");
-    return set === "OK"; // "OK" = was newly set (first time)
-  });
-  return result === true;
+  return dbClaimGreeting(senderId);
 }
 
-// ─── Welcome photo sampling ──────────────────────────────────────────────────
+// ─── Generic message detection ───────────────────────────────────────────────
+
+// Short generic openers that should trigger the greeting + buttons.
+// Anything more specific (trip names, destinations, questions) skips the greeting.
+const GENERIC_OPENERS = [
+  "сайн уу", "сайнуу", "сайн", "hi", "hello", "hey", "сайн байна уу",
+  "байна уу", "мэнд", "нүүр", "нүүрх", "хэллоу", "хай", "мэндчилье",
+  "ассалам", "привет", "өдрийн мэнд", "оюу", "ok", "ок", "ок",
+  "👋", "😊", "🙏", "хэрхэн", "юу байна", "та нар",
+];
 
 /**
- * Returns up to MAX_WELCOME_PHOTOS image URLs sampled across active trips that
- * have photos. Prefers variety — one photo per trip, shuffled.
+ * Returns true if the message is a generic opener that should trigger the
+ * full greeting flow. Returns false if the person already asked something
+ * specific — in that case, skip the greeting and just answer.
  */
+export function isGenericOpener(text: string): boolean {
+  const norm = text.trim().toLowerCase().replace(/[!?.]/g, "").trim();
+  if (!norm || norm.length <= 2) return true; // "?", ".", empty
+  return GENERIC_OPENERS.some((w) => norm === w || norm.startsWith(w + " ") || norm.endsWith(" " + w));
+}
+
+// ─── Quick-reply button labels ────────────────────────────────────────────────
+
+// These are sent as Messenger quick-reply buttons after the greeting text.
+// When tapped, the customer's message arrives as the exact button label text.
+export const GREETING_BUTTONS = {
+  ALL_TRIPS: "Аяллууд харах",
+  SEASONAL: "Наадмын аяллууд",
+  SEE_ALL: "Бүгдийг харах",
+} as const;
+
+export type GreetingButtonValue = typeof GREETING_BUTTONS[keyof typeof GREETING_BUTTONS];
+
+/** Returns true if the incoming text is one of the greeting quick-reply buttons. */
+export function isGreetingButton(text: string): text is GreetingButtonValue {
+  const t = text.trim();
+  return Object.values(GREETING_BUTTONS).includes(t as GreetingButtonValue);
+}
+
+// ─── Season dedupe (Neon-backed) ─────────────────────────────────────────────
+
+/**
+ * Returns true if this season album should be sent to this sender now
+ * (hasn't been sent yet in their session). Atomically marks it as sent.
+ */
+export async function claimSeasonSend(senderId: string, seasonId: string): Promise<boolean> {
+  return dbClaimSeasonSend(senderId, seasonId);
+}
+
+// ─── Welcome photo sampling ───────────────────────────────────────────────────
+
 export function sampleWelcomePhotos(trips: TravelTrip[]): string[] {
   const active = trips.filter(
     (t) => t.status === "active" && t.photo_urls.length > 0,
   );
-  // Take the first photo of each trip (most representative), then shuffle
   const candidates = active.map((t) => t.photo_urls[0]);
   for (let i = candidates.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -172,19 +194,12 @@ export function sampleWelcomePhotos(trips: TravelTrip[]): string[] {
   return candidates.slice(0, MAX_WELCOME_PHOTOS);
 }
 
-// ─── Trip photo detection after AI reply ────────────────────────────────────
+// ─── Trip photo detection after AI reply ─────────────────────────────────────
 
 function normText(t: string) {
   return t.toLowerCase().replace(/[^\wа-яөүё\s]/gi, " ");
 }
 
-/**
- * Given the AI reply text and the trip list, find trips that the reply is
- * clearly talking about (route name appears in the reply). Returns up to
- * MAX_TRIP_PHOTOS photo URLs from the best-matched trip.
- *
- * Returns empty array if no match or matched trip has no photos.
- */
 export function extractTripPhotosForReply(
   replyText: string,
   trips: TravelTrip[],
@@ -194,7 +209,6 @@ export function extractTripPhotosForReply(
     (t) => t.status === "active" && t.photo_urls.length > 0,
   );
 
-  // Score trips by how many route-name words appear in the reply
   let bestScore = 0;
   let bestTrip: TravelTrip | null = null;
 
@@ -213,11 +227,6 @@ export function extractTripPhotosForReply(
   return bestTrip.photo_urls.slice(0, MAX_TRIP_PHOTOS);
 }
 
-/**
- * Same trip-matching logic as extractTripPhotosForReply, but returns the
- * brochure info for the best-matching trip — either a pre-uploaded Facebook
- * attachment_id or a manually entered PDF URL from extra.brochure_pdf_url.
- */
 export function extractTripBrochureAttachmentId(
   replyText: string,
   trips: TravelTrip[],
