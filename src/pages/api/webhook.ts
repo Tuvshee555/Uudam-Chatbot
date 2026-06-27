@@ -14,7 +14,7 @@ import { createLead, getTravelBotSettings, hasRecentOpenLead, isPagePaused, list
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, } from "../../lib/travelFastPaths";
 import { extractTripBrochureAttachmentId, extractTripPhotosForReply, getActiveSeason, isFirstMessage, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
-import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
+import { resolveAndValidatePdfUrl, sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
 import { advanceCollectState, buildCompletionMessage, buildLeadContext, clearCollectState, getCollectState, isInCollectFlow, promptForStep, setCollectState, startCollectState, } from "../../lib/bookingCollect";
@@ -1544,8 +1544,21 @@ async function handleMessage(
     const trips = await getTrips();
     const programReply = buildTripProgramReply(text, trips);
     if (programReply) {
+      // For URL-based brochures, validate before composing the reply text so the
+      // customer gets the correct message ("sending PDF" vs "file unavailable").
+      let validatedBrochureUrl: string | null = null;
+      if (programReply.brochure?.type === "url") {
+        validatedBrochureUrl = await resolveAndValidatePdfUrl(programReply.brochure.value).catch(() => null);
+      }
+
+      let programReplyText = programReply.reply;
+      if (programReply.brochure?.type === "url" && !validatedBrochureUrl) {
+        // URL brochure exists in DB but failed validation (HTML page, not a PDF, Drive login wall…)
+        programReplyText = `✈️ ${programReply.trip.route_name}\n\nХөтөлбөрийн файл нээгдэхгүй байна. Аяллын зөвлөхөөс PDF хөтөлбөрийг баталгаажуулж илгээе. 😊`;
+      }
+
       const safeProgramReply = enforceWebsiteForPayment(
-        sanitizeAssistantReply(programReply.reply),
+        sanitizeAssistantReply(programReplyText),
       );
       await assertLockHealthy();
       const delivered = await sendPlatformMessage(
@@ -1566,9 +1579,11 @@ async function handleMessage(
           try {
             if (programReply.brochure.type === "id") {
               await sendFbFileAttachment(senderId, programReply.brochure.value, token);
-            } else {
-              await sendFbFileByUrl(senderId, programReply.brochure.value, token);
+            } else if (validatedBrochureUrl) {
+              // URL already validated above — send the resolved direct-download URL.
+              await sendFbFileByUrl(senderId, validatedBrochureUrl, token);
             }
+            // If validatedBrochureUrl is null, we already sent the fallback text above.
           } catch {
           }
         } else {
@@ -1763,10 +1778,16 @@ async function handleMessage(
         try {
           if (brochure.type === "id") {
             await sendFbFileAttachment(senderId, brochure.value, token);
+            recordCounter("webhook.trip_brochure_sent_total", 1, { platform });
           } else {
-            await sendFbFileByUrl(senderId, brochure.value, token);
+            // Validate before sending: converts Drive /view links and checks PDF magic bytes.
+            const validUrl = await resolveAndValidatePdfUrl(brochure.value).catch(() => null);
+            if (validUrl) {
+              await sendFbFileByUrl(senderId, validUrl, token);
+              recordCounter("webhook.trip_brochure_sent_total", 1, { platform });
+            }
+            // If invalid, skip silently — the brochure was a bonus, not the main reply.
           }
-          recordCounter("webhook.trip_brochure_sent_total", 1, { platform });
         } catch {
         }
       }
