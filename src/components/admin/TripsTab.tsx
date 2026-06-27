@@ -287,17 +287,93 @@ export function TripsTab({
           />
         </Card>
       ) : (
-        <div className="space-y-2.5">
-          {trips.map((trip) => (
-            <TripCard
-              key={trip.id}
-              trip={trip}
-              onEdit={() => onEdit(trip)}
-              onDelete={() => onDelete(trip)}
-            />
-          ))}
-        </div>
+        <TripGroups trips={trips} onEdit={onEdit} onDelete={onDelete} />
       )}
+    </div>
+  );
+}
+
+function getMissingHints(trip: TravelTrip): string[] {
+  const extra = (trip.extra ?? {}) as Record<string, unknown>;
+  const hints: string[] = [];
+  if (!trip.adult_price) hints.push("үнэ");
+  if (!trip.departure_dates.length) hints.push("гарах өдөр");
+  if (!trip.duration_text) hints.push("хугацаа");
+  const hasBrochure =
+    typeof extra.source_file_attachment_id === "string" ||
+    (typeof extra.brochure_pdf_url === "string" && (extra.brochure_pdf_url as string).startsWith("https://"));
+  if (!hasBrochure) hints.push("PDF хөтөлбөр");
+  return hints;
+}
+
+function TripGroups({
+  trips,
+  onEdit,
+  onDelete,
+}: {
+  trips: TravelTrip[];
+  onEdit: (trip: TravelTrip) => void;
+  onDelete: (trip: TravelTrip) => void;
+}) {
+  const groups = useMemo(() => {
+    const map = new Map<string, TravelTrip[]>();
+    for (const trip of trips) {
+      const key = trip.category?.trim() || "Ангилалгүй";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(trip);
+    }
+    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b, "mn"));
+  }, [trips]);
+
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggle = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+
+  return (
+    <div className="space-y-3">
+      {groups.map(([category, items]) => {
+        const isCollapsed = collapsed.has(category);
+        const missingCount = items.filter((t) => getMissingHints(t).length > 0).length;
+        return (
+          <div key={category} className="rounded-xl border border-line bg-surface">
+            <button
+              type="button"
+              onClick={() => toggle(category)}
+              className="flex w-full items-center justify-between gap-2 px-3.5 py-2.5 text-left"
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-ink">{category}</span>
+                <span className="rounded-full bg-surface-sunken px-2 py-0.5 text-xs text-ink-muted">
+                  {items.length}
+                </span>
+                {missingCount > 0 && !isCollapsed && (
+                  <span className="text-xs text-ink-subtle">· {missingCount} дутуу талбартай</span>
+                )}
+              </div>
+              <Icons.chevronRight
+                size={15}
+                className={cx("shrink-0 text-ink-muted transition-transform", !isCollapsed && "rotate-90")}
+              />
+            </button>
+            {!isCollapsed && (
+              <div className="space-y-2 border-t border-line p-2.5">
+                {items.map((trip) => (
+                  <TripCard
+                    key={trip.id}
+                    trip={trip}
+                    onEdit={() => onEdit(trip)}
+                    onDelete={() => onDelete(trip)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -313,9 +389,7 @@ function TripCard({
 }) {
   const facts: string[] = [];
   if (trip.seats_left != null || trip.seats_total != null) {
-    facts.push(
-      `Суудал: ${trip.seats_left ?? "?"}/${trip.seats_total ?? "?"}`,
-    );
+    facts.push(`Суудал: ${trip.seats_left ?? "?"}/${trip.seats_total ?? "?"}`);
   }
   if (trip.adult_price != null) {
     facts.push(`Том хүн: ${trip.adult_price.toLocaleString()}${trip.currency}`);
@@ -331,6 +405,8 @@ function TripCard({
     facts.push(`${trip.departure_dates.length} гарах өдөр`);
   }
 
+  const missing = getMissingHints(trip);
+
   return (
     <Card className="p-3.5">
       <div className="flex items-start justify-between gap-3">
@@ -338,7 +414,6 @@ function TripCard({
           <p className="font-semibold text-ink">{trip.route_name || "—"}</p>
           <p className="text-xs text-ink-subtle">
             {trip.operator_name}
-            {trip.category ? ` · ${trip.category}` : ""}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
@@ -356,14 +431,16 @@ function TripCard({
       {facts.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {facts.map((fact, i) => (
-            <span
-              key={i}
-              className="rounded-md bg-surface-sunken px-2 py-0.5 text-xs text-ink-muted"
-            >
+            <span key={i} className="rounded-md bg-surface-sunken px-2 py-0.5 text-xs text-ink-muted">
               {fact}
             </span>
           ))}
         </div>
+      )}
+      {missing.length > 0 && (
+        <p className="mt-1.5 text-xs text-ink-subtle">
+          дутуу: {missing.join(" · ")}
+        </p>
       )}
       <div className="mt-3 flex items-center justify-between gap-2">
         <span className="text-xs text-ink-subtle">
