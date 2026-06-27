@@ -2,57 +2,75 @@ import { getEnv } from "./env";
 import { logError, logInfo } from "./observability";
 
 const GDRIVE_VIEW_RE = /drive\.google\.com\/file\/d\/([^/?#]+)/;
+const FB_API_VERSION = "v19.0";
 
 /**
- * Convert a Google Drive share/view URL to a direct-download URL, then validate
- * that the resolved URL actually serves a PDF (not an HTML page).
+ * Convert a Google Drive share/view URL to a direct-download URL and
+ * download the PDF bytes on our server (bypassing the need for Facebook's
+ * servers to access Drive, which they can't do reliably).
  *
- * Returns the cleaned direct-download URL, or null if:
- * - The URL is a non-public Drive file (login wall)
- * - The response Content-Type is text/html (HTML page instead of PDF)
- * - The first bytes are not a PDF header (%PDF)
+ * Returns { buffer, filename } if the download is a valid PDF, or null if:
+ * - The URL resolves to an HTML page (login wall, virus-scan confirmation)
+ * - The first bytes are not %PDF
  * - Network/timeout errors
  */
-export async function resolveAndValidatePdfUrl(url: string): Promise<string | null> {
+async function downloadPdfBuffer(
+  url: string,
+): Promise<{ buffer: Buffer; filename: string } | null> {
   let resolvedUrl = url;
+  let filename = "ayalal.pdf";
 
   const driveMatch = GDRIVE_VIEW_RE.exec(url);
   if (driveMatch) {
     const fileId = driveMatch[1];
     resolvedUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+    filename = `drive-${fileId}.pdf`;
     logInfo("fbAttachmentUpload.gdrive_converted", { original: url, resolved: resolvedUrl });
   }
 
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10_000);
+    const timer = setTimeout(() => controller.abort(), 20_000);
     const resp = await fetch(resolvedUrl, {
-      method: "GET",
       signal: controller.signal,
-      headers: { "Range": "bytes=0-511" },
+      headers: {
+        // Impersonate a browser so Drive serves the file directly without a confirmation page.
+        "User-Agent": "Mozilla/5.0 (compatible; TravelBot/1.0)",
+      },
     }).finally(() => clearTimeout(timer));
 
     if (!resp.ok) {
-      logInfo("fbAttachmentUpload.pdf_validate_not_ok", { url: resolvedUrl, status: resp.status });
+      logInfo("fbAttachmentUpload.pdf_download_not_ok", { url: resolvedUrl, status: resp.status });
       return null;
     }
 
     const contentType = resp.headers.get("content-type") || "";
     if (contentType.startsWith("text/html")) {
-      logInfo("fbAttachmentUpload.pdf_validate_html", { url: resolvedUrl, contentType });
+      // Drive login wall or virus-scan confirmation page — not a PDF.
+      logInfo("fbAttachmentUpload.pdf_download_html", { url: resolvedUrl, contentType });
       return null;
     }
 
-    const buf = await resp.arrayBuffer();
-    const header = Buffer.from(buf.slice(0, 4)).toString("ascii");
-    if (!header.startsWith("%PDF")) {
-      logInfo("fbAttachmentUpload.pdf_validate_bad_magic", { url: resolvedUrl, header });
+    const arrayBuf = await resp.arrayBuffer();
+    const buffer = Buffer.from(arrayBuf);
+
+    // Check PDF magic bytes.
+    if (buffer.length < 4 || buffer.slice(0, 4).toString("ascii") !== "%PDF") {
+      logInfo("fbAttachmentUpload.pdf_download_bad_magic", {
+        url: resolvedUrl,
+        header: buffer.slice(0, 4).toString("ascii"),
+        sizeBytes: buffer.length,
+      });
       return null;
     }
 
-    return resolvedUrl;
+    logInfo("fbAttachmentUpload.pdf_download_ok", {
+      url: resolvedUrl,
+      sizeBytes: buffer.length,
+    });
+    return { buffer, filename };
   } catch (err) {
-    logInfo("fbAttachmentUpload.pdf_validate_error", {
+    logInfo("fbAttachmentUpload.pdf_download_error", {
       url: resolvedUrl,
       message: err instanceof Error ? err.message : String(err),
     });
@@ -61,9 +79,23 @@ export async function resolveAndValidatePdfUrl(url: string): Promise<string | nu
 }
 
 /**
+ * resolveAndValidatePdfUrl — kept for callers that only need to check a URL.
+ * Downloads the first bytes and checks the PDF magic header. Returns the
+ * resolved URL if valid, null otherwise.
+ */
+export async function resolveAndValidatePdfUrl(url: string): Promise<string | null> {
+  const result = await downloadPdfBuffer(url);
+  if (!result) return null;
+  // Return the resolved (possibly converted Drive) URL.
+  const driveMatch = GDRIVE_VIEW_RE.exec(url);
+  if (driveMatch) {
+    return `https://drive.google.com/uc?export=download&id=${driveMatch[1]}`;
+  }
+  return url;
+}
+
+/**
  * Build a clean PDF filename from a trip route name.
- * e.g. "Бээжин - Жинин - Жанжакоу - Эрээн - 4 хотын аялал" → "beezhyn-zhinyn-4-hotin-ayalal.pdf"
- * We keep it ASCII-safe for Messenger by replacing Cyrillic with a simple slug.
  */
 export function pdfFilenameFromRoute(routeName: string): string {
   const slug = routeName
@@ -75,8 +107,6 @@ export function pdfFilenameFromRoute(routeName: string): string {
     .slice(0, 60);
   return `${slug || "ayalal"}.pdf`;
 }
-
-const FB_API_VERSION = "v19.0";
 
 /**
  * Uploads a PDF to the Facebook Reusable Attachment API.
@@ -130,6 +160,53 @@ export async function uploadPdfToFacebook(
 }
 
 /**
+ * Upload a PDF buffer directly to Facebook's attachment API.
+ * Returns an attachment_id, or null on failure.
+ */
+async function uploadPdfBufferToFacebook(
+  buffer: Buffer,
+  filename: string,
+  pageToken: string,
+): Promise<string | null> {
+  try {
+    const pdfFilename = filename.endsWith(".pdf") ? filename : `${filename}.pdf`;
+    const formData = new FormData();
+    formData.append(
+      "message",
+      JSON.stringify({ attachment: { type: "file", payload: { is_reusable: true } } }),
+    );
+    const arrayBuf: ArrayBuffer = buffer.buffer instanceof ArrayBuffer
+      ? buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer
+      : new Uint8Array(buffer).buffer;
+    formData.append("filedata", new Blob([arrayBuf], { type: "application/pdf" }), pdfFilename);
+
+    const resp = await fetch(
+      `https://graph.facebook.com/${FB_API_VERSION}/me/message_attachments?access_token=${pageToken}`,
+      { method: "POST", body: formData },
+    );
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      logError("fbAttachmentUpload.buffer_upload_failed", {
+        status: resp.status,
+        body: text,
+        filename,
+      });
+      return null;
+    }
+
+    const json = (await resp.json()) as { attachment_id?: string };
+    return typeof json.attachment_id === "string" ? json.attachment_id : null;
+  } catch (err) {
+    logError("fbAttachmentUpload.buffer_upload_error", {
+      message: err instanceof Error ? err.message : String(err),
+      filename,
+    });
+    return null;
+  }
+}
+
+/**
  * Sends a previously-uploaded reusable attachment to a Messenger recipient.
  * Returns true if the API accepted it.
  */
@@ -162,27 +239,47 @@ export async function sendFbFileAttachment(
 }
 
 /**
- * Sends a file by URL directly to a Messenger recipient.
+ * Sends a PDF file to a Messenger recipient.
  *
- * Before sending, resolves and validates the URL:
- * - Google Drive /view links are converted to direct-download /uc?export=download URLs.
- * - The resolved URL is fetched to confirm it serves an actual PDF (%PDF magic bytes,
- *   not an HTML page). If validation fails, returns false without sending.
+ * For Google Drive URLs (which Facebook's servers cannot access directly),
+ * we download the PDF on our own server and re-upload it to Facebook's
+ * attachment API, then send the resulting attachment_id.
  *
- * Returns true if the Messenger API accepted the message.
+ * For other publicly accessible URLs, we pass them directly to the
+ * Facebook URL attachment API (Facebook fetches the file itself).
+ *
+ * Returns true if the message was delivered successfully.
  */
 export async function sendFbFileByUrl(
   recipientId: string,
   fileUrl: string,
   pageToken: string,
 ): Promise<boolean> {
-  try {
-    const validUrl = await resolveAndValidatePdfUrl(fileUrl);
-    if (!validUrl) {
-      logError("fbAttachmentUpload.sendFbFileByUrl_invalid_pdf", { fileUrl });
+  const isGoogleDrive = GDRIVE_VIEW_RE.test(fileUrl);
+
+  if (isGoogleDrive) {
+    // Facebook cannot access Google Drive URLs — download on our server then upload.
+    const downloaded = await downloadPdfBuffer(fileUrl);
+    if (!downloaded) {
+      logError("fbAttachmentUpload.gdrive_download_failed", { fileUrl });
       return false;
     }
 
+    const attachmentId = await uploadPdfBufferToFacebook(
+      downloaded.buffer,
+      downloaded.filename,
+      pageToken,
+    );
+    if (!attachmentId) {
+      logError("fbAttachmentUpload.gdrive_upload_failed", { fileUrl });
+      return false;
+    }
+
+    return sendFbFileAttachment(recipientId, attachmentId, pageToken);
+  }
+
+  // Non-Drive URL: let Facebook fetch it directly (simpler, no proxy needed).
+  try {
     const resp = await fetch(
       `https://graph.facebook.com/${FB_API_VERSION}/me/messages?access_token=${pageToken}`,
       {
@@ -193,7 +290,7 @@ export async function sendFbFileByUrl(
           message: {
             attachment: {
               type: "file",
-              payload: { url: validUrl, is_reusable: false },
+              payload: { url: fileUrl, is_reusable: false },
             },
           },
         }),
