@@ -104,7 +104,7 @@ function uid(): string {
 
 function getSecretStorage(): Storage | null {
   if (typeof window === "undefined") return null;
-  return window.sessionStorage;
+  return window.localStorage;
 }
 
 const TEST_BOT_CONVERSATION_KEY = "uudam_admin_testbot_conversation_id";
