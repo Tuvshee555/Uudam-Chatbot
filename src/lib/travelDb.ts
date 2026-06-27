@@ -298,12 +298,16 @@ export async function ensureTravelSchema() {
           id BOOLEAN PRIMARY KEY DEFAULT TRUE,
           bot_paused BOOLEAN NOT NULL DEFAULT FALSE,
           pause_reason TEXT NULL,
+          photo_only BOOLEAN NOT NULL DEFAULT FALSE,
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
       `);
       await client.query(`
-        INSERT INTO travel_bot_control (id, bot_paused, pause_reason)
-        VALUES (TRUE, FALSE, NULL)
+        ALTER TABLE travel_bot_control ADD COLUMN IF NOT EXISTS photo_only BOOLEAN NOT NULL DEFAULT FALSE;
+      `);
+      await client.query(`
+        INSERT INTO travel_bot_control (id, bot_paused, pause_reason, photo_only)
+        VALUES (TRUE, FALSE, NULL, FALSE)
         ON CONFLICT (id) DO NOTHING;
       `);
       // Per-page pause control. One row per Facebook page so the client can pause
@@ -1035,16 +1039,18 @@ export async function getBotControl(): Promise<BotControl> {
     return {
       bot_paused: false,
       pause_reason: null,
+      photo_only: false,
       updated_at: new Date().toISOString(),
     };
   }
   const result = await queryNeon<Record<string, unknown>>(
-    `SELECT bot_paused, pause_reason, updated_at FROM travel_bot_control WHERE id = TRUE LIMIT 1`,
+    `SELECT bot_paused, pause_reason, photo_only, updated_at FROM travel_bot_control WHERE id = TRUE LIMIT 1`,
   );
   const row = result?.rows?.[0];
-  const value = {
+  const value: BotControl = {
     bot_paused: Boolean(row?.bot_paused),
     pause_reason: row?.pause_reason ? String(row.pause_reason) : null,
+    photo_only: Boolean(row?.photo_only),
     updated_at: String(row?.updated_at || new Date().toISOString()),
   };
   botControlCache = { value, expiresAt: Date.now() + 5_000 };
@@ -1056,8 +1062,8 @@ export async function setBotPaused(paused: boolean, reason?: string | null) {
   if (!ready) return false;
   const result = await queryNeon(
     `
-      INSERT INTO travel_bot_control (id, bot_paused, pause_reason, updated_at)
-      VALUES (TRUE, $1, $2, NOW())
+      INSERT INTO travel_bot_control (id, bot_paused, pause_reason, photo_only, updated_at)
+      VALUES (TRUE, $1, $2, FALSE, NOW())
       ON CONFLICT (id)
       DO UPDATE SET
         bot_paused = EXCLUDED.bot_paused,
@@ -1070,14 +1076,38 @@ export async function setBotPaused(paused: boolean, reason?: string | null) {
   return Boolean(result);
 }
 
+export async function setPhotoOnly(enabled: boolean) {
+  const ready = await ensureTravelSchema();
+  if (!ready) return false;
+  const result = await queryNeon(
+    `
+      INSERT INTO travel_bot_control (id, bot_paused, pause_reason, photo_only, updated_at)
+      VALUES (TRUE, FALSE, NULL, $1, NOW())
+      ON CONFLICT (id)
+      DO UPDATE SET
+        photo_only = EXCLUDED.photo_only,
+        updated_at = NOW()
+    `,
+    [enabled],
+  );
+  botControlCache = null;
+  return Boolean(result);
+}
+
 export async function isBotGloballyPaused() {
   const control = await getBotControl();
   return control.bot_paused;
 }
 
+export async function isBotPhotoOnly() {
+  const control = await getBotControl();
+  return control.photo_only;
+}
+
 const UNPAUSED_PAGE_DEFAULT = (): BotControl => ({
   bot_paused: false,
   pause_reason: null,
+  photo_only: false,
   updated_at: new Date().toISOString(),
 });
 
@@ -1097,6 +1127,7 @@ export async function getPageControl(pageId: string): Promise<BotControl> {
   const value: BotControl = {
     bot_paused: Boolean(row?.bot_paused),
     pause_reason: row?.pause_reason ? String(row.pause_reason) : null,
+    photo_only: false,
     updated_at: String(row?.updated_at || new Date().toISOString()),
   };
   pageControlCache.set(pageId, { value, expiresAt: Date.now() + 5_000 });

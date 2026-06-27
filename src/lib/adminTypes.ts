@@ -123,6 +123,7 @@ export type RecentRow = { sender_id: string; last_seen: string; display_name?: s
 export type ControlState = {
   bot_paused: boolean;
   pause_reason: string | null;
+  photo_only: boolean;
   updated_at: string;
 };
 

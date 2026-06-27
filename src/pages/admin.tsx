@@ -1114,7 +1114,9 @@ export default function AdminPage() {
       | "global_pause"
       | "global_resume"
       | "page_pause"
-      | "page_resume",
+      | "page_resume"
+      | "photo_only_enable"
+      | "photo_only_disable",
     senderId?: string,
     durationMs?: number | null,
     pageId?: string,
@@ -1704,6 +1706,7 @@ export default function AdminPage() {
           )}
           {tab === "bot" && (
             <BotTab
+              control={control}
               pageControls={pageControls}
               pauseReason={pauseReason}
               setPauseReason={setPauseReason}

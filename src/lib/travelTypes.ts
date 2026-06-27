@@ -35,6 +35,7 @@ export type TravelTrip = {
 export type BotControl = {
   bot_paused: boolean;
   pause_reason: string | null;
+  photo_only: boolean;
   updated_at: string;
 };
 

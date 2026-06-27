@@ -15,6 +15,7 @@ import {
   listPageControls,
   setBotPaused,
   setPagePaused,
+  setPhotoOnly,
 } from "../../lib/travelOps";
 import { getEnv } from "../../lib/env";
 import { getPageDisplayName } from "../../lib/pages";
@@ -92,6 +93,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(200).json({ ok: true, control: await getBotControl() });
       }
       if (action === "global_status") {
+        return res.status(200).json({ ok: true, control: await getBotControl() });
+      }
+      if (action === "photo_only_enable") {
+        await setPhotoOnly(true);
+        return res.status(200).json({ ok: true, control: await getBotControl() });
+      }
+      if (action === "photo_only_disable") {
+        await setPhotoOnly(false);
         return res.status(200).json({ ok: true, control: await getBotControl() });
       }
 

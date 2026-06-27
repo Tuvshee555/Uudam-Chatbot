@@ -77,6 +77,7 @@ import {
 } from "@/lib/adminUtils";
 
 export function BotTab({
+  control,
   pageControls,
   pauseReason,
   setPauseReason,
@@ -88,6 +89,7 @@ export function BotTab({
   apiFetch,
   onPauseAction,
 }: {
+  control: ControlState | null;
   pageControls: PageControlState[];
   pauseReason: string;
   setPauseReason: (value: string) => void;
@@ -104,7 +106,9 @@ export function BotTab({
       | "global_pause"
       | "global_resume"
       | "page_pause"
-      | "page_resume",
+      | "page_resume"
+      | "photo_only_enable"
+      | "photo_only_disable",
     senderId?: string,
     ms?: number | null,
     pageId?: string,
@@ -348,6 +352,37 @@ export function BotTab({
           </div>
         </Card>
       )}
+
+      <Card className="p-4">
+        <SectionHeading
+          title="Зөвхөн зураг горим"
+          description="Идэвхтэй үед бот ямар ч текст хариулт илгээхгүй. Харин тодорхой аялал асуувал тухайн аяллын зургуудыг дуугүйхэн илгээнэ. Зураггүй аяллыг асуувал бот огт хариулахгүй."
+        />
+        <div className="mt-3 flex items-center gap-3">
+          <button
+            type="button"
+            disabled={busyKey === "photo_only_enable" || busyKey === "photo_only_disable"}
+            onClick={() =>
+              onPauseAction(control?.photo_only ? "photo_only_disable" : "photo_only_enable")
+            }
+            className={cx(
+              "relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none disabled:opacity-50",
+              control?.photo_only ? "bg-warning" : "bg-line-strong",
+            )}
+            aria-label={control?.photo_only ? "Унтраах" : "Асаах"}
+          >
+            <span
+              className={cx(
+                "inline-block h-6 w-6 transform rounded-full bg-white shadow ring-0 transition duration-200",
+                control?.photo_only ? "translate-x-7" : "translate-x-0",
+              )}
+            />
+          </button>
+          <span className={cx("text-sm font-medium", control?.photo_only ? "text-warning" : "text-ink-muted")}>
+            {control?.photo_only ? "Зөвхөн зураг горим идэвхтэй" : "Унтарсан — бот хэвийн хариулж байна"}
+          </span>
+        </div>
+      </Card>
 
       <Card className="p-4">
         <SectionHeading

@@ -10,7 +10,7 @@ import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { isPaused, pauseBot, storeSenderName, trackSender } from "../../lib/pause";
-import { createLead, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
+import { createLead, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, } from "../../lib/travelFastPaths";
 import { extractTripBrochureAttachmentId, extractTripPhotosForReply, getActiveSeason, isFirstMessage, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
@@ -992,6 +992,30 @@ async function handleMessage(
     });
     return;
   }
+
+  // Photo-only mode: no text replies at all. If the message matches a specific trip
+  // and that trip has photos, send only the photos silently. Otherwise stay mute.
+  const botControl = await getBotControl();
+  if (botControl.photo_only && platform === "facebook" && token) {
+    const trips = await listTrips({ status: "active" });
+    const photos = extractTripPhotosForReply(text, trips);
+    for (const url of photos) {
+      try {
+        await sendImageMessage(senderId, url, token, {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          source: "api.webhook.photo_only",
+        });
+      } catch { }
+    }
+    logInfo("webhook.photo_only_mode", {
+      requestId: trace?.requestId,
+      senderHash: hashIdentifier(senderId),
+      photosCount: photos.length,
+    });
+    return;
+  }
+
   if (platform === "facebook") {
     await sendFacebookTypingIndicator(senderId, token, pageId, trace);
   }
