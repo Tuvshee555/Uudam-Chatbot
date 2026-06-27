@@ -1918,8 +1918,15 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
   const trips = await listTrips({ limit: 5000 });
   const settings = await getTravelBotSettings();
 
+  const visibleTrips = trips.filter((trip) => {
+    if (trip.status !== "active") return false;
+    const ex = (trip.extra || {}) as Record<string, unknown>;
+    if (typeof ex.customer_visible === "boolean" && !ex.customer_visible) return false;
+    return true;
+  });
+
   const categories = new Map<string, string[]>();
-  for (const trip of trips) {
+  for (const trip of visibleTrips) {
     const key = trip.category || "Uncategorized";
     if (!categories.has(key)) categories.set(key, []);
     categories.get(key)?.push(trip.route_name);
@@ -1933,13 +1940,7 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     description: routes.join("; "),
   }));
 
-  const modules = trips
-    .filter((trip) => {
-      const ex = (trip.extra || {}) as Record<string, unknown>;
-      // Skip trips that are explicitly hidden from the bot
-      if (typeof ex.customer_visible === "boolean" && !ex.customer_visible) return false;
-      return true;
-    })
+  const modules = visibleTrips
     .map((trip) => {
     const details: string[] = [];
     if (trip.departure_dates.length) {
