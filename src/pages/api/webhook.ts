@@ -878,6 +878,7 @@ function isHandoffRequest(text: string, keywords: string[]): boolean {
   }
   return false;
 }
+const CONTACT_OPERATOR_LABEL = "Оператортой холбогдох";
 const BOOKING_INTENT_KEYWORDS = [
   "захиал",
   "бүртгүүл",
@@ -969,9 +970,42 @@ async function handleMessage(
     }
     return;
   }
-  await trackSender(senderId, platform);
+  const { msg_count: senderMsgCount, prev_msg_at: prevMsgAt } = await trackSender(senderId, platform);
   if (platform === "facebook" && token && !hasProgramIntent(text)) {
     void fetchAndStoreFbName(senderId, token);
+  }
+  // 5-minute inactivity check: if they had ≥1 prior message and went quiet for 5+ min,
+  // send goodbye message with contact numbers, then pause for 14 days.
+  const INACTIVITY_MS = 5 * 60 * 1000;
+  const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
+  const GOODBYE_MSG =
+    "Та руу залгахад бэлэн байна 📞\n\n" +
+    "☎️ 7713-6633\n" +
+    "📱 8913-6633\n" +
+    "📱 9117-2769\n\n" +
+    "Утасны дугаараа үлдээвэл манай зөвлөх тантай холбогдоно 🙌";
+  if (
+    platform === "facebook" &&
+    token &&
+    senderMsgCount > 1 &&
+    prevMsgAt &&
+    Date.now() - new Date(prevMsgAt).getTime() >= INACTIVITY_MS
+  ) {
+    try {
+      await sendTextMessage(senderId, GOODBYE_MSG, token, {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        source: "api.webhook.inactivity_goodbye",
+      });
+    } catch { /* best-effort */ }
+    await dbPauseSender(senderId, FOURTEEN_DAYS_MS, "inactivity");
+    recordCounter("webhook.inactivity_pause_total", 1, { platform });
+    logInfo("webhook.inactivity_pause", {
+      requestId: trace?.requestId,
+      senderHash: hashIdentifier(senderId),
+      gapMs: Date.now() - new Date(prevMsgAt).getTime(),
+    });
+    return;
   }
   if (await isPagePaused(pageId)) {
     logInfo("webhook.page_pause_active", {
@@ -1275,8 +1309,8 @@ async function handleMessage(
     }
   }
   if (
-    botSettings.handoff_enabled &&
-    isHandoffRequest(text, botSettings.handoff_keywords)
+    text.trim() === CONTACT_OPERATOR_LABEL ||
+    (botSettings.handoff_enabled && isHandoffRequest(text, botSettings.handoff_keywords))
   ) {
     // 14-day auto-reset so bot re-engages after 2 weeks if consultant hasn't followed up
     await autoHandoffSender(senderId);
@@ -1756,7 +1790,11 @@ async function handleMessage(
     } catch {
     }
   }
-  replyButtons = replyButtons.slice(0, 3);
+  // Always include "contact operator" as the last button — customer can tap any time
+  replyButtons = replyButtons.slice(0, 2);
+  if (!replyButtons.includes(CONTACT_OPERATOR_LABEL)) {
+    replyButtons.push(CONTACT_OPERATOR_LABEL);
+  }
   await assertLockHealthy();
   let delivered: boolean;
   if (platform === "facebook" && token && replyButtons.length > 0) {

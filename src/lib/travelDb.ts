@@ -562,7 +562,8 @@ export async function ensureTravelSchema() {
       await client.query(`
         ALTER TABLE travel_senders
           ADD COLUMN IF NOT EXISTS greeting_sent   BOOLEAN NOT NULL DEFAULT FALSE,
-          ADD COLUMN IF NOT EXISTS season_sent_ids TEXT[] NOT NULL DEFAULT '{}'::text[];
+          ADD COLUMN IF NOT EXISTS season_sent_ids TEXT[] NOT NULL DEFAULT '{}'::text[],
+          ADD COLUMN IF NOT EXISTS last_msg_at     TIMESTAMPTZ NULL;
       `);
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_travel_senders_last_seen
@@ -2389,22 +2390,30 @@ export type SenderRow = {
 export async function dbTrackSender(
   senderId: string,
   platform = "facebook",
-): Promise<{ msg_count: number }> {
+): Promise<{ msg_count: number; prev_msg_at: string | null }> {
   const ready = await ensureTravelSchema();
-  if (!ready) return { msg_count: 0 };
-  const result = await queryNeon<{ msg_count: number }>(
-    `INSERT INTO travel_senders (sender_id, platform, last_seen, msg_count, updated_at)
-     VALUES ($1, $2, NOW(), 1, NOW())
+  if (!ready) return { msg_count: 0, prev_msg_at: null };
+  const result = await queryNeon<{ msg_count: number; prev_msg_at: string | null }>(
+    `INSERT INTO travel_senders (sender_id, platform, last_seen, msg_count, last_msg_at, updated_at)
+     VALUES ($1, $2, NOW(), 1, NOW(), NOW())
      ON CONFLICT (sender_id) DO UPDATE
-       SET last_seen  = NOW(),
-           platform   = EXCLUDED.platform,
-           msg_count  = travel_senders.msg_count + 1,
-           updated_at = NOW()
-     RETURNING msg_count`,
+       SET last_seen   = NOW(),
+           platform    = EXCLUDED.platform,
+           msg_count   = travel_senders.msg_count + 1,
+           updated_at  = NOW()
+     RETURNING msg_count, last_msg_at AS prev_msg_at`,
     [senderId, platform],
   );
+  // Update last_msg_at AFTER reading the old value (so we get the gap)
+  await queryNeon(
+    `UPDATE travel_senders SET last_msg_at = NOW() WHERE sender_id = $1`,
+    [senderId],
+  );
   const row = result?.rows[0];
-  return { msg_count: row ? Number(row.msg_count) : 0 };
+  return {
+    msg_count: row ? Number(row.msg_count) : 0,
+    prev_msg_at: row?.prev_msg_at ? String(row.prev_msg_at) : null,
+  };
 }
 
 // Returns true if this is the first-ever message from this sender (greeting not yet sent).

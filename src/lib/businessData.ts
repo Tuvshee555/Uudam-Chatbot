@@ -155,7 +155,10 @@ export async function readBusinessData(): Promise<BusinessDataFile & { pinnedBut
       knowledgeBase: formatKnowledgeBase(knowledge),
     },
     knowledge,
-    pinnedButtonLabels: (settings.chat_buttons || []).map((b) => b.label).filter(Boolean),
+    pinnedButtonLabels: [
+      "Оператортой холбогдох",
+      ...(settings.chat_buttons || []).map((b) => b.label).filter(Boolean),
+    ],
   };
 }
 

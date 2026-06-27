@@ -46,7 +46,7 @@ export async function listPaused(): Promise<PausedRow[]> {
 export async function trackSender(
   senderId: string,
   platform = "facebook",
-): Promise<{ msg_count: number }> {
+): Promise<{ msg_count: number; prev_msg_at: string | null }> {
   return dbTrackSender(senderId, platform);
 }
 
