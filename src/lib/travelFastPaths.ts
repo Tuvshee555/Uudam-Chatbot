@@ -141,6 +141,15 @@ const DIRECT_FLIGHT_NEGATIVE_PATTERNS = [
 const ALIAS_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bnaadam\b/gi, "наадам"],
   [/наадмын/gi, "наадам"],
+  [/\bnisleggvi\b/gi, "нислэггүй"],
+  [/\bnisleggui\b/gi, "нислэггүй"],
+  [/\bniseleggvi\b/gi, "нислэггүй"],
+  [/\bno flight\b/gi, "нислэггүй"],
+  [/\bland tour\b/gi, "газрын аялал"],
+  [/\bwith ticket\b/gi, "тийзтэй"],
+  [/\bwithout ticket\b/gi, "тийзгүй"],
+  [/\bticketless\b/gi, "тийзгүй"],
+  [/\bticket included\b/gi, "тийзтэй"],
 ];
 
 function normText(text: string) {
@@ -304,6 +313,9 @@ function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] {
   const query = normText(text);
   const queryWords = unique(keywordTokens(text));
   if (!queryWords.length) return [];
+  const landOnly = queryWantsLandOnlyEnhanced(text);
+  const wantsCombo = queryWantsLandFlightCombo(text);
+  const wantsFlight = queryWantsFlight(text);
 
   const matches: TripMatch[] = [];
   for (const trip of trips) {
@@ -320,18 +332,17 @@ function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] {
     const aliasHit = aliases.some((alias) => {
       const aliasNorm = normText(alias);
       if (query.includes(aliasNorm) || aliasNorm.includes(query)) return true;
-      // Token-level: any alias token found in query tokens counts
-      const aliasTokens = unique(keywordTokens(alias));
-      return aliasTokens.length > 0 && aliasTokens.every((t) => query.includes(t));
+      return hasLooseAliasMatch(query, queryWords, alias);
     }) ? 1 : 0;
 
     const matchedWords = routeKeywords.filter((word) => queryWords.includes(word));
     const coverage = matchedWords.length / routeKeywords.length;
     const exactRouteHit = query.includes(routeNorm) ? 1 : 0;
     const minMatchCount = routeKeywords.length === 1 ? 1 : 2;
+    const strongTokenHit = matchedWords.some((word) => word.length >= 4);
 
-    if (matchedWords.length < minMatchCount && exactRouteHit === 0 && aliasHit === 0) continue;
-    if (coverage < 0.5 && exactRouteHit === 0 && aliasHit === 0) continue;
+    if (matchedWords.length < minMatchCount && exactRouteHit === 0 && aliasHit === 0 && !strongTokenHit) continue;
+    if (coverage < 0.5 && exactRouteHit === 0 && aliasHit === 0 && !strongTokenHit) continue;
 
     // Discount boost: when user asks about discounts, rank trips with discounts higher
     let discountBoost = 0;
@@ -346,13 +357,27 @@ function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] {
       else if (nameHasDiscount) discountBoost = 40;
     }
 
+    const isCombo = tripIsLandFlightCombo(trip);
+    const tripCat = normText(trip.category || "");
+    let intentBoost = 0;
+    if (landOnly) {
+      if (tripCat.includes("газрын аялал")) intentBoost += 160;
+      if (isCombo && !wantsFlight) intentBoost -= 220;
+    }
+    if (wantsCombo) {
+      if (isCombo) intentBoost += 160;
+      else intentBoost -= 140;
+    }
+    if (wantsFlight && isCombo) intentBoost += 35;
+
     const score =
       exactRouteHit * 100 +
       aliasHit * 80 +
       matchedWords.length * 20 +
       coverage * 10 -
       Math.max(0, routeKeywords.length - matchedWords.length) +
-      discountBoost;
+      discountBoost +
+      intentBoost;
 
     matches.push({
       trip,
@@ -373,7 +398,10 @@ function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] {
 
 function findBestTripMatch(text: string, trips: TravelTrip[]) {
   const matches = findTripMatches(text, trips);
-  if (!matches.length) return { best: null, ambiguous: [] as TravelTrip[] };
+  if (!matches.length) {
+    const looseBest = findLooseTripMatch(text, trips);
+    return { best: looseBest, ambiguous: [] as TravelTrip[] };
+  }
 
   const [best, second] = matches;
   if (
@@ -381,6 +409,8 @@ function findBestTripMatch(text: string, trips: TravelTrip[]) {
     best.score - second.score <= 5 &&
     Math.abs(best.keywordCoverage - second.keywordCoverage) <= 0.15
   ) {
+    const looseBest = findLooseTripMatch(text, trips);
+    if (looseBest) return { best: looseBest, ambiguous: [] as TravelTrip[] };
     return {
       best: null,
       ambiguous: matches.slice(0, 3).map((match) => match.trip),
@@ -411,9 +441,23 @@ function hasLooseAliasMatch(query: string, queryKeywords: string[], alias: strin
   return overlap >= requiredOverlap;
 }
 
+function queryExplicitlyRejectsFlight(query: string): boolean {
+  const normalized = normText(query);
+  return (
+    normalized.includes("нислэггүй") ||
+    normalized.includes("газрын аялал") ||
+    normalized.includes("газрын аяллын") ||
+    normalized.includes("газраар") ||
+    normalized.includes("автобусаар") ||
+    normalized.includes("галт тэрэг") ||
+    normalized.includes("no flight") ||
+    normalized.includes("land tour")
+  );
+}
+
 function queryWantsLandOnlyEnhanced(query: string): boolean {
   const normalized = normText(query);
-  if (normalized.includes("нислэггүй")) return true;
+  if (queryExplicitlyRejectsFlight(query)) return true;
 
   const explicitlyWantsFlight =
     normalized.includes("газар нислэг") ||
@@ -433,8 +477,19 @@ function queryWantsLandOnlyEnhanced(query: string): boolean {
   );
 }
 
+function queryWantsLandFlightCombo(query: string): boolean {
+  const normalized = normText(query);
+  if (queryExplicitlyRejectsFlight(query)) return false;
+  return (
+    normalized.includes("газар нислэг") ||
+    normalized.includes("нислэг хосолсон") ||
+    normalized.includes("хосолсон")
+  );
+}
+
 // Whether the query explicitly mentions a flight component.
 function queryWantsFlight(query: string): boolean {
+  if (queryExplicitlyRejectsFlight(query)) return false;
   return /нислэг|онгоц|хосолсон|нислэгтэй/i.test(query);
 }
 
@@ -452,6 +507,7 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
   // don't act as false-positive boosters and rank the wrong trip higher.
   const queryKeywords = unique(keywordTokens(text));
   const landOnly = queryWantsLandOnlyEnhanced(text);
+  const wantsCombo = queryWantsLandFlightCombo(text);
   const wantsFlight = queryWantsFlight(text);
   const hasBrochure = options?.hasBrochureIntent ?? false;
   let best: TravelTrip | null = null;
@@ -482,6 +538,8 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
       // Penalise land+flight combos heavily when user said "газрын аялал".
       if (isCombo && !wantsFlight) score -= 100;
     }
+    if (wantsCombo && isCombo) score += 180;
+    if (wantsCombo && !isCombo) score -= 180;
     if (wantsFlight && isCombo) score += 50;
     if (landOnly && tripCat.includes("газрын") && tripCat.includes("аялал")) score += 20;
     if (landOnly && isCombo && !wantsFlight) score -= 50;
@@ -656,7 +714,30 @@ export function buildTripProgramReply(
 ): TripProgramReplyResult | null {
   if (!hasProgramIntent(text)) return null;
 
-  const best = findLooseTripMatch(text, trips, { hasBrochureIntent: true });
+  const query = normText(text);
+  const wantsCombo = queryWantsLandFlightCombo(text);
+  const wantsLandOnly = queryWantsLandOnlyEnhanced(text) && !queryWantsFlight(text);
+  const exactMentionedTrips = trips.filter((trip) => {
+    if (query.includes(normText(trip.route_name))) return true;
+    return getAliases(trip).some((alias) => query.includes(normText(alias)));
+  });
+  const exactMentionedComboTrips = exactMentionedTrips.filter((trip) => tripIsLandFlightCombo(trip));
+  const exactMentionedLandTrips = exactMentionedTrips.filter((trip) => !tripIsLandFlightCombo(trip));
+  const scopedTrips = wantsCombo
+    ? exactMentionedComboTrips.length > 0
+      ? exactMentionedComboTrips
+      : trips.filter((trip) => tripIsLandFlightCombo(trip))
+    : wantsLandOnly
+      ? exactMentionedLandTrips.length > 0
+        ? exactMentionedLandTrips
+        : trips.filter((trip) => !tripIsLandFlightCombo(trip))
+      : exactMentionedTrips.length > 0
+        ? exactMentionedTrips
+        : trips;
+  const candidateTrips = scopedTrips.length > 0 ? scopedTrips : trips;
+  const best = candidateTrips.length === 1
+    ? candidateTrips[0]
+    : findLooseTripMatch(text, candidateTrips, { hasBrochureIntent: true });
   if (!best) return null;
 
   const summary = buildTripSummaryLines(best);
@@ -792,6 +873,198 @@ function formatPassengerPriceLines(input: {
   return lines;
 }
 
+function getImportantNotes(trip: TravelTrip): string[] {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  return Array.isArray(extra.important_notes)
+    ? (extra.important_notes as string[]).filter((value) => typeof value === "string" && value.trim())
+    : [];
+}
+
+function getTicketPreference(text: string): "with" | "without" | null {
+  const normalized = normText(text);
+  if (
+    normalized.includes("тийзгүй") ||
+    normalized.includes("ticketless") ||
+    normalized.includes("without ticket")
+  ) {
+    return "without";
+  }
+  if (
+    normalized.includes("тийзтэй") ||
+    normalized.includes("with ticket") ||
+    normalized.includes("ticket included")
+  ) {
+    return "with";
+  }
+  return null;
+}
+
+function priceGroupMatchesTicketPreference(
+  group: Record<string, unknown>,
+  preference: "with" | "without",
+): boolean {
+  const haystack = normText([
+    typeof group.label === "string" ? group.label : "",
+    typeof group.note === "string" ? group.note : "",
+    typeof group.notes === "string" ? group.notes : "",
+  ].join(" "));
+
+  if (preference === "without") {
+    return haystack.includes("тийзгүй") || haystack.includes("without ticket") || haystack.includes("ticketless");
+  }
+
+  return (
+    (haystack.includes("тийзтэй") || haystack.includes("with ticket") || haystack.includes("ticket included")) &&
+    !haystack.includes("тийзгүй")
+  );
+}
+
+function formatSelectedPriceGroups(
+  trip: TravelTrip,
+  groups: Array<Record<string, unknown>>,
+): string | null {
+  if (!groups.length) return null;
+  const currency = trip.currency || "MNT";
+  const lines: string[] = [`✈️ ${trip.route_name}`, "💰 Үнэ:"];
+  for (const group of groups) {
+    const groupLabel = typeof group.label === "string" ? group.label : "";
+    const dateLabel = Array.isArray(group.dates) && (group.dates as string[]).length > 0
+      ? formatGroupDateLabel(group.dates as string[])
+      : "";
+    if (groupLabel) lines.push("", groupLabel);
+    if (dateLabel && dateLabel !== groupLabel) lines.push(dateLabel);
+    lines.push(...formatPassengerPriceLines({
+      adult: typeof group.adult_price === "number" ? group.adult_price : null,
+      child: typeof group.child_price === "number" ? group.child_price : null,
+      infant: typeof group.infant_price === "number" ? group.infant_price : null,
+      childAge: typeof group.child_age === "string" ? group.child_age : "",
+      infantAge: typeof group.infant_age === "string" ? group.infant_age : "",
+      currency,
+    }));
+  }
+  return lines.join("\n");
+}
+
+function extractAgeRangeIntent(text: string): { min: number; max: number; target: "child" | "infant" } | null {
+  const match = /(хүүхэд|нярай)?\s*(\d{1,2})\s*[-–]\s*(\d{1,2})\s*(нас|сар|сартай|age)/i.exec(text);
+  if (!match) return null;
+
+  const min = Number.parseInt(match[2], 10);
+  const max = Number.parseInt(match[3], 10);
+  if (Number.isNaN(min) || Number.isNaN(max)) return null;
+
+  const unit = match[4];
+  const explicitTarget = match[1];
+  const target = explicitTarget === "нярай" || unit.includes("сар") || max <= 2 ? "infant" : "child";
+  return { min, max, target };
+}
+
+function extractRangePriceFromText(
+  text: string,
+  target: "child" | "infant",
+  min: number,
+  max: number,
+): number | null {
+  const role = target === "infant" ? "(нярай|infant)" : "(хүүхэд|child)";
+  const pattern = new RegExp(`${role}[^\\d]{0,10}${min}\\s*[-–]\\s*${max}\\s*(?:нас|сар|сартай|age)[^\\d]{0,10}([\\d,\\.\\s]+)\\s*₮?`, "i");
+  const match = pattern.exec(text);
+  if (!match) return null;
+  const value = Number.parseInt(match[2].replace(/[^\d]/g, ""), 10);
+  return Number.isNaN(value) ? null : value;
+}
+
+function buildAgeSpecificPriceReply(trip: TravelTrip, text: string): string | null {
+  const ageIntent = extractAgeRangeIntent(text);
+  if (!ageIntent) return null;
+
+  const currency = trip.currency || "MNT";
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  if (Array.isArray(extra.child_rules)) {
+    for (const rule of extra.child_rules as Array<Record<string, unknown>>) {
+      const ageRange = typeof rule.age_range === "string" ? rule.age_range : "";
+      const rangeMatch = /(\d{1,2})\s*[-–]\s*(\d{1,2})/.exec(ageRange);
+      if (!rangeMatch) continue;
+      const ruleMin = Number.parseInt(rangeMatch[1], 10);
+      const ruleMax = Number.parseInt(rangeMatch[2], 10);
+      if (ruleMin !== ageIntent.min || ruleMax !== ageIntent.max) continue;
+
+      const label = typeof rule.label === "string" && rule.label.trim() ? rule.label.trim() : (ageIntent.target === "infant" ? "Нярай" : "Хүүхэд");
+      const price = formatMoney(typeof rule.price === "number" ? rule.price : null, currency);
+      if (!price) continue;
+      return `✈️ ${trip.route_name}\n💰 ${label} ${ageIntent.min}-${ageIntent.max} насны үнэ: ${price}`;
+    }
+  }
+
+  const textBlocks: string[] = [
+    trip.notes,
+    trip.source_description,
+    ...getImportantNotes(trip),
+  ];
+  for (const group of getStructuredPriceGroups(trip)) {
+    if (typeof group.note === "string") textBlocks.push(group.note);
+    if (typeof group.notes === "string") textBlocks.push(group.notes);
+  }
+
+  for (const block of textBlocks) {
+    if (!block) continue;
+    const priceValue = extractRangePriceFromText(block, ageIntent.target, ageIntent.min, ageIntent.max);
+    if (priceValue === null) continue;
+    const label = ageIntent.target === "infant" ? "Нярай" : "Хүүхэд";
+    return `✈️ ${trip.route_name}\n💰 ${label} ${ageIntent.min}-${ageIntent.max} насны үнэ: ${formatMoney(priceValue, currency)}`;
+  }
+
+  return null;
+}
+
+function hasIncludedInPriceIntent(text: string): boolean {
+  return /багтсан\s+уу|орсон\s+уу|included|include|үнэд\s+.*багтсан/i.test(text);
+}
+
+function buildIncludedInPriceReply(trip: TravelTrip, text: string): string | null {
+  if (!hasIncludedInPriceIntent(text)) return null;
+
+  const normalized = normText(text);
+  const asksAboutFlightTicket =
+    normalized.includes("нислэгийн тийз") ||
+    normalized.includes("онгоцны тийз") ||
+    normalized.includes("flight ticket") ||
+    normalized.includes("ticket");
+  if (!asksAboutFlightTicket) return null;
+
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const includedItems = Array.isArray(extra.included_items) ? (extra.included_items as string[]) : [];
+  const excludedItems = Array.isArray(extra.excluded_items) ? (extra.excluded_items as string[]) : [];
+  const evidenceBlocks = [
+    trip.notes,
+    trip.source_description,
+    ...getImportantNotes(trip),
+    ...includedItems,
+    ...excludedItems,
+  ];
+  for (const group of getStructuredPriceGroups(trip)) {
+    if (typeof group.note === "string") evidenceBlocks.push(group.note);
+    if (typeof group.notes === "string") evidenceBlocks.push(group.notes);
+  }
+  const evidence = evidenceBlocks.filter(Boolean).join(" ");
+  const currency = trip.currency || "MNT";
+  const price = formatMoney(trip.adult_price, currency);
+
+  if (/нэмэгдэнэ|\+\s*тийз|багтаагүй|тусдаа/i.test(evidence)) {
+    const priceText = price ? `Одоогийн ${price} үнэд ` : "Одоогийн үнэд ";
+    return `✈️ ${trip.route_name}\n${priceText}нислэгийн тийз нэмэгдэнэ гэж тэмдэглэгдсэн байна. Тиймээс тийзийн нөхцөлийг аяллын зөвлөхөөр баталгаажуулах хэрэгтэй.`;
+  }
+
+  if (includedItems.some((item) => /нислэгийн?\s+тийз|онгоцны?\s+тийз/i.test(item))) {
+    return `✈️ ${trip.route_name}\nТийм ээ, үнэд нислэгийн тийз багтсан гэж тэмдэглэгдсэн байна.`;
+  }
+
+  if (excludedItems.some((item) => /нислэгийн?\s+тийз|онгоцны?\s+тийз/i.test(item))) {
+    return `✈️ ${trip.route_name}\nҮгүй, үнэд нислэгийн тийз багтаагүй гэж тэмдэглэгдсэн байна.`;
+  }
+
+  return `✈️ ${trip.route_name}\nНислэгийн тийз үнэд орсон эсэх мэдээлэл тодорхойгүй байна. Аяллын зөвлөхөөр баталгаажуулна уу.`;
+}
+
 function groupDatesForDisplay(dates: string[]): Array<{ month: number | null; days: number[]; raw: string[] }> {
   const groups: Array<{ month: number | null; days: number[]; raw: string[] }> = [];
   for (const raw of dates) {
@@ -884,9 +1157,19 @@ function normalizeMnDate(dateText: string): Array<{ month: number; day: number }
     return [{ month: parseInt(slashMatch[1], 10), day: parseInt(slashMatch[2], 10) }];
   }
 
+  const yearMonthDayPattern = /(?:\d{4}\s*он\s*)?(\d{1,2})\s*сар(?:ын)?\s*(\d{1,2})/g;
+  let yearMonthDayMatch: RegExpExecArray | null;
+  while ((yearMonthDayMatch = yearMonthDayPattern.exec(trimmed)) !== null) {
+    results.push({
+      month: parseInt(yearMonthDayMatch[1], 10),
+      day: parseInt(yearMonthDayMatch[2], 10),
+    });
+  }
+  if (results.length > 0) return results;
+
   // Mongolian format: parse all "N сарын D" segments, with optional trailing day numbers
   // Pattern: one or more "N сарын D[, D2, ...]" groups
-  const segmentPattern = /(\d{1,2})\s*сарын\s*(\d{1,2})((?:\s*,\s*\d{1,2})*)/g;
+  const segmentPattern = /(\d{1,2})\s*сар(?:ын)?\s*(\d{1,2})((?:\s*,\s*\d{1,2})*)/g;
   let match: RegExpExecArray | null;
   while ((match = segmentPattern.exec(dateText)) !== null) {
     const month = parseInt(match[1], 10);
@@ -912,8 +1195,18 @@ function normalizeMnDate(dateText: string): Array<{ month: number; day: number }
  */
 function extractDatesFromText(text: string): Array<{ month: number; day: number }> {
   const results: Array<{ month: number; day: number }> = [];
+  const yearMonthDayPattern = /(?:\d{4}\s*он\s*)?(\d{1,2})\s*сар(?:ын)?\s*(\d{1,2})/g;
+  let yearMonthDayMatch: RegExpExecArray | null;
+  while ((yearMonthDayMatch = yearMonthDayPattern.exec(text)) !== null) {
+    results.push({
+      month: parseInt(yearMonthDayMatch[1], 10),
+      day: parseInt(yearMonthDayMatch[2], 10),
+    });
+  }
+  if (results.length > 0) return uniqueMonthDays(results);
+
   // Match "N сарын D" with optional extra days
-  const segmentPattern = /(\d{1,2})\s*сарын\s*(\d{1,2})((?:\s*,\s*\d{1,2}(?!\s*сарын))*)/g;
+  const segmentPattern = /(\d{1,2})\s*сар(?:ын)?\s*(\d{1,2})((?:\s*,\s*\d{1,2}(?!\s*сар(?:ын)?))*)/g;
   let match: RegExpExecArray | null;
   while ((match = segmentPattern.exec(text)) !== null) {
     const month = parseInt(match[1], 10);
@@ -1451,10 +1744,18 @@ export function buildDiscountReply(text: string, trips: TravelTrip[]): string | 
   const discountGroups = adminDiscounts.length > 0 ? adminDiscounts : aiDiscountGroups;
 
   // Check notes and source_description for discount info
-  const discountText = [best.notes, best.source_description]
+  const discountText = [
+    best.notes,
+    best.source_description,
+    ...getImportantNotes(best),
+    ...getStructuredPriceGroups(best).flatMap((group) => [
+      typeof group.note === "string" ? group.note : "",
+      typeof group.notes === "string" ? group.notes : "",
+    ]),
+  ]
     .filter(Boolean)
     .join(" ");
-  const hasDiscountInText = /хямдрал|тусгай|үнэгүй|хөнгөлөлт|discount|promo/i.test(discountText);
+  const hasDiscountInText = /хямдрал|тусгай|үнэгүй|хөнгөлөлт|bonus|бонус|discount|promo|2\+1|5\+1/i.test(discountText);
 
   if (discountGroups.length === 0 && !hasDiscountInText) {
     const lines = [
@@ -1825,12 +2126,23 @@ export function buildStructuredTripReply(
     return fallbackLines.join("\n");
   }
 
+  const includedReply = buildIncludedInPriceReply(best, text);
+  if (includedReply) return includedReply;
+
   const lines: string[] = [];
   const askedPrice = hasPriceIntent(text);
   const askedDuration = hasDurationIntent(text);
   const askedSchedule = hasScheduleIntent(text);
   const askedDirectFlight = hasDirectFlightIntent(text);
   const askedExistence = hasExistenceIntent(text);
+  const ageSpecificReply = askedPrice ? buildAgeSpecificPriceReply(best, text) : null;
+  if (ageSpecificReply) return ageSpecificReply;
+  const ticketPreference = askedPrice ? getTicketPreference(text) : null;
+  if (ticketPreference) {
+    const matchingGroups = getStructuredPriceGroups(best).filter((group) => priceGroupMatchesTicketPreference(group, ticketPreference));
+    const filteredReply = formatSelectedPriceGroups(best, matchingGroups);
+    if (filteredReply) return filteredReply;
+  }
   if (!askedPrice && !askedDuration && !askedSchedule && !askedDirectFlight && !askedExistence) {
     return buildTripInfoReply(best);
   }

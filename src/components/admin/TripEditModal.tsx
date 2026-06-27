@@ -61,6 +61,8 @@ const sectionHdr = "mt-5 text-sm font-semibold text-ink";
 const rowCls = "flex items-start gap-1.5";
 const delBtn = "shrink-0 rounded-md p-1 text-ink-muted hover:bg-surface-sunken hover:text-red-500";
 
+type TripEditorTab = "base" | "pricing" | "advanced";
+
 function emptyPassengerPrice(): PassengerPrice {
   return { label: "", age_range: "", price: null, currency: "MNT" };
 }
@@ -78,6 +80,31 @@ function emptyExtraFee(): ExtraFee {
 }
 function emptyRoomPrice(): RoomPrice {
   return { room_type: "", price: null, currency: "MNT", note: "" };
+}
+
+function EditorTabButton({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cx(
+        "rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
+        active
+          ? "border-brand bg-brand text-white"
+          : "border-line-strong bg-surface text-ink-muted hover:border-brand hover:text-ink",
+      )}
+    >
+      {label}
+    </button>
+  );
 }
 
 export function TripEditModal({
@@ -128,6 +155,12 @@ export function TripEditModal({
   tripAnswerHints,
   setTripAnswerHints,
 }: TripEditModalProps) {
+  const [activeTab, setActiveTab] = React.useState<TripEditorTab>("base");
+
+  React.useEffect(() => {
+    if (open) setActiveTab("base");
+  }, [open, editingTrip?.id, isNewTrip]);
+
   return (
     <Modal
       open={open}
@@ -145,6 +178,14 @@ export function TripEditModal({
         </>
       }
     >
+      <div className="mb-4 flex flex-wrap gap-2 border-b border-line pb-4">
+        <EditorTabButton active={activeTab === "base"} label="Үндсэн" onClick={() => setActiveTab("base")} />
+        <EditorTabButton active={activeTab === "pricing"} label="Үнэ ба гаралт" onClick={() => setActiveTab("pricing")} />
+        <EditorTabButton active={activeTab === "advanced"} label="Нэмэлт" onClick={() => setActiveTab("advanced")} />
+      </div>
+
+      {activeTab === "base" && (
+        <>
       {/* Base fields */}
       <div className="grid gap-3 sm:grid-cols-2">
         <Input
@@ -372,6 +413,11 @@ export function TripEditModal({
         </div>
       </div>
 
+        </>
+      )}
+
+      {activeTab === "advanced" && (
+        <>
       {/* A. Aliases */}
       <p className={sectionHdr}>Өөр нэршил / хайлтын нэр</p>
       <div className="mt-2 space-y-1">
@@ -393,6 +439,11 @@ export function TripEditModal({
         + Нэршил нэмэх
       </button>
 
+        </>
+      )}
+
+      {activeTab === "pricing" && (
+        <>
       {/* B. Price groups */}
       <p className={sectionHdr}>Огноо тус бүрийн үнэ</p>
       <div className="mt-2 space-y-3">
@@ -623,6 +674,11 @@ export function TripEditModal({
         />
       </div>
 
+        </>
+      )}
+
+      {activeTab === "advanced" && (
+        <>
       {/* G. Included items */}
       <p className={sectionHdr}>Багтсан зүйлс</p>
       <div className="mt-2 space-y-1">
@@ -831,6 +887,8 @@ export function TripEditModal({
       <button type="button" className="mt-1 mb-2 text-xs text-brand hover:underline" onClick={() => setTripAnswerHints((prev) => [...prev, { intent: "price", question_pattern: "", expected_answer_summary: "" }])}>
         + Заавар нэмэх
       </button>
+        </>
+      )}
     </Modal>
   );
 }
