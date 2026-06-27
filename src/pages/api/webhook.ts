@@ -1563,21 +1563,11 @@ async function handleMessage(
       }
       if (platform === "facebook" && token) {
         if (programReply.brochure) {
-          // Fire-and-forget to a separate endpoint so the webhook can return 200
-          // to Meta immediately. The Drive download + FB upload can take 15-30s
-          // which exceeds Vercel's function timeout if done inline here.
-          const baseUrl = process.env.BASE_URL || process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_URL || "localhost:3000"}`;
-          const body = programReply.brochure.type === "id"
-            ? { recipientId: senderId, brochureId: programReply.brochure.value, pageToken: token }
-            : { recipientId: senderId, brochureUrl: programReply.brochure.value, pageToken: token };
-          fetch(`${baseUrl}/api/send-brochure`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-internal-token": env.verifyToken,
-            },
-            body: JSON.stringify(body),
-          }).catch(() => {});
+          // Only attachment_id brochures reach here — URL brochures are embedded as text links
+          // in the reply by buildTripProgramReply, so programReply.brochure is null for those.
+          if (programReply.brochure.type === "id") {
+            await sendFbFileAttachment(senderId, programReply.brochure.value, token).catch(() => {});
+          }
         } else {
           for (const url of programReply.mediaUrls) {
             try {
@@ -1765,21 +1755,15 @@ async function handleMessage(
       }
 
       // Send PDF brochure if this trip has a stored attachment_id or a brochure_pdf_url.
-      // Fire-and-forget via /api/send-brochure to avoid blocking the webhook response.
       const brochure = extractTripBrochureAttachmentId(safeReply, tripsForPhotos);
       if (brochure && token) {
-        const baseUrl = process.env.BASE_URL || process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_URL || "localhost:3000"}`;
-        const body = brochure.type === "id"
-          ? { recipientId: senderId, brochureId: brochure.value, pageToken: token }
-          : { recipientId: senderId, brochureUrl: brochure.value, pageToken: token };
-        fetch(`${baseUrl}/api/send-brochure`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-internal-token": env.verifyToken,
-          },
-          body: JSON.stringify(body),
-        }).catch(() => {});
+        if (brochure.type === "url") {
+          // URL brochures (Google Drive etc): send as a tappable text link — simple, no timeout risk.
+          await sendPlatformMessage(platform, senderId, `📄 PDF хөтөлбөр:\n${brochure.value}`, token, pageId, igUserId, trace, { allowFallback: false }).catch(() => {});
+        } else {
+          // Pre-uploaded FB attachment_id: send as a file attachment.
+          await sendFbFileAttachment(senderId, brochure.value, token).catch(() => {});
+        }
         recordCounter("webhook.trip_brochure_sent_total", 1, { platform });
       }
     } catch {

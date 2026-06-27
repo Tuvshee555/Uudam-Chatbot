@@ -351,10 +351,10 @@ test("program request prefers brochure pdf over images and itinerary", () => {
     ],
   );
 
-  assert.equal(result?.brochure?.type, "url");
-  assert.equal(result?.brochure?.value, "https://example.com/program.pdf");
+  // URL brochures are now embedded as a text link in the reply (no file attachment).
+  assert.equal(result?.brochure, null);
   assert.deepEqual(result?.mediaUrls, []);
-  assert.match(result?.reply || "", /pdf/i);
+  assert.match(result?.reply || "", /https:\/\/example\.com\/program\.pdf/);
 });
 
 test("program request prefers the ground Beidaihe + Beijing tour for газрын аяллын phrasing", () => {
@@ -389,9 +389,10 @@ test("program request prefers the ground Beidaihe + Beijing tour for газры�
   );
 
   assert.equal(result?.trip.id, "ground-tour");
-  assert.equal(result?.brochure?.type, "url");
-  assert.equal(result?.brochure?.value, "https://example.com/ground-tour.pdf");
+  // URL brochures are embedded as text links in the reply now.
+  assert.equal(result?.brochure, null);
   assert.match(result?.reply || "", /Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал/);
+  assert.match(result?.reply || "", /https:\/\/example\.com\/ground-tour\.pdf/);
 });
 
 test("program request can still use exported JSON top-level aliases and brochure fields", () => {
@@ -422,7 +423,9 @@ test("program request can still use exported JSON top-level aliases and brochure
   );
 
   assert.equal(result?.trip.id, "ground-export");
-  assert.equal(result?.brochure?.value, "https://example.com/export-ground.pdf");
+  // URL brochures are embedded as text links in the reply now.
+  assert.equal(result?.brochure, null);
+  assert.match(result?.reply || "", /https:\/\/example\.com\/export-ground\.pdf/);
 });
 
 test("program request sends program images when brochure is missing", () => {

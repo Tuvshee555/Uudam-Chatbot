@@ -647,6 +647,16 @@ export function buildTripProgramReply(
   const itineraryLines = brochure || mediaUrls.length > 0 ? [] : getTripItineraryLines(best);
 
   if (brochure) {
+    // URL brochures (Google Drive etc): send as a tappable text link — simple and reliable.
+    // Pre-uploaded FB attachment_id: send as a proper file attachment.
+    if (brochure.type === "url") {
+      return {
+        reply: `✈️ ${best.route_name}\n\nДэлгэрэнгүй хөтөлбөрийн PDF:\n${brochure.value}`,
+        trip: best,
+        brochure: null,
+        mediaUrls: [],
+      };
+    }
     return {
       reply: `✈️ ${best.route_name}\n\nДэлгэрэнгүй хөтөлбөрийн PDF-г илгээж байна.`,
       trip: best,
