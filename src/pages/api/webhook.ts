@@ -1057,14 +1057,17 @@ async function handleMessage(
   void logInboundMessage({ platform, senderId, text });
 
   // ── Greeting button tap handler ─────────────────────────────────────────────
-  // When customer taps "Аяллууд харах", "Наадмын аяллууд", or "Бүгдийг харах"
-  // send the right photos and return — no AI, no greeting repeat.
-  if (platform === "facebook" && token && isGreetingButton(text)) {
+  const seasonsEnabledForGreeting = (botSettings.extra as Record<string, unknown>)?.seasons_enabled !== false;
+  const activeSeasonForGreeting = seasonsEnabledForGreeting ? getActiveSeason(resolveSeasons(botSettings.extra)) : null;
+  const seasonButtonLabel = activeSeasonForGreeting ? `${activeSeasonForGreeting.name} аяллууд` : null;
+  const isSeasonButton = seasonButtonLabel && text.trim() === seasonButtonLabel;
+  const isAllTripsButton = text.trim() === GREETING_BUTTONS.ALL_TRIPS;
+  const isSeeAllButton = text.trim() === GREETING_BUTTONS.SEE_ALL;
+
+  if (platform === "facebook" && token && (isGreetingButton(text) || isSeasonButton)) {
     try {
       const allTrips = await listTrips({ limit: 5000 });
-      const seasonsEnabled = (botSettings.extra as Record<string, unknown>)?.seasons_enabled !== false;
-      const activeSeason = seasonsEnabled ? getActiveSeason(resolveSeasons(botSettings.extra)) : null;
-      if (text === GREETING_BUTTONS.ALL_TRIPS || text === GREETING_BUTTONS.SEE_ALL) {
+      if (isAllTripsButton || isSeeAllButton) {
         const greeting = resolveGreetingConfig(botSettings.extra);
         let album: string[] = [];
         if (greeting.defaultPhotoUrls.length > 0) album = greeting.defaultPhotoUrls.slice(0, 10);
@@ -1072,9 +1075,9 @@ async function handleMessage(
         else album = sampleWelcomePhotos(allTrips);
         await sendPhotoAlbum(senderId, album, token, trace);
       }
-      if (text === GREETING_BUTTONS.SEASONAL || text === GREETING_BUTTONS.SEE_ALL) {
-        if (activeSeason && activeSeason.photoUrls.length > 0) {
-          await sendPhotoAlbum(senderId, activeSeason.photoUrls.slice(0, 10), token, trace);
+      if (isSeasonButton || isSeeAllButton) {
+        if (activeSeasonForGreeting && activeSeasonForGreeting.photoUrls.length > 0) {
+          await sendPhotoAlbum(senderId, activeSeasonForGreeting.photoUrls.slice(0, 10), token, trace);
         }
       }
       recordCounter("webhook.greeting_button_total", 1, { platform, button: text });
@@ -1106,11 +1109,9 @@ async function handleMessage(
         greeting.text ||
         botSettings.quick_info_reply ||
         "Уудам Трэвел-д тавтай морилно уу! Доорх товчнуудаас сонирхсоноо сонгоорой 👇";
-      const seasonsEnabled = (botSettings.extra as Record<string, unknown>)?.seasons_enabled !== false;
-      const activeSeason = seasonsEnabled ? getActiveSeason(resolveSeasons(botSettings.extra)) : null;
       const buttons = [
         GREETING_BUTTONS.ALL_TRIPS,
-        ...(activeSeason ? [GREETING_BUTTONS.SEASONAL] : []),
+        ...(activeSeasonForGreeting ? [`${activeSeasonForGreeting.name} аяллууд`] : []),
         GREETING_BUTTONS.SEE_ALL,
       ];
       // Send text + quick-reply buttons in one message
@@ -1128,8 +1129,8 @@ async function handleMessage(
         classification: classifyError(error),
       });
     }
-    // Greeting sent — still let the message flow through so bot also answers
-    // (edge case: "сайн уу Бээжин аялал хэд вэ" should get both)
+    // Generic opener — greeting sent, nothing else to do. Return.
+    return;
   }
 
   // ── Seasonal album on keyword match ────────────────────────────────────────
