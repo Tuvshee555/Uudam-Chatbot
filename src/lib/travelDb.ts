@@ -2365,7 +2365,6 @@ export async function dbAppendMessage(
 // ----------------------------------------------------------------
 // Neon-backed per-sender pause + activity tracking
 // ----------------------------------------------------------------
-export const AUTO_PAUSE_AFTER_MSGS = 8;
 export const AUTO_PAUSE_RESET_DAYS = 14;
 
 export type SenderRow = {
@@ -2383,10 +2382,10 @@ export type SenderRow = {
 export async function dbTrackSender(
   senderId: string,
   platform = "facebook",
-): Promise<{ msg_count: number; auto_paused: boolean }> {
+): Promise<{ msg_count: number }> {
   const ready = await ensureTravelSchema();
-  if (!ready) return { msg_count: 0, auto_paused: false };
-  const result = await queryNeon<{ msg_count: number; paused: boolean }>(
+  if (!ready) return { msg_count: 0 };
+  const result = await queryNeon<{ msg_count: number }>(
     `INSERT INTO travel_senders (sender_id, platform, last_seen, msg_count, updated_at)
      VALUES ($1, $2, NOW(), 1, NOW())
      ON CONFLICT (sender_id) DO UPDATE
@@ -2394,24 +2393,25 @@ export async function dbTrackSender(
            platform   = EXCLUDED.platform,
            msg_count  = travel_senders.msg_count + 1,
            updated_at = NOW()
-     RETURNING msg_count, paused`,
+     RETURNING msg_count`,
     [senderId, platform],
   );
   const row = result?.rows[0];
-  if (!row) return { msg_count: 0, auto_paused: false };
-  const count = Number(row.msg_count);
-  if (count >= AUTO_PAUSE_AFTER_MSGS && !row.paused) {
-    // auto-pause this sender for 14 days
-    const expiresAt = new Date(Date.now() + AUTO_PAUSE_RESET_DAYS * 86400_000).toISOString();
-    await queryNeon(
-      `UPDATE travel_senders
-       SET paused = TRUE, pause_reason = 'auto', paused_at = NOW(), expires_at = $2, updated_at = NOW()
-       WHERE sender_id = $1`,
-      [senderId, expiresAt],
-    );
-    return { msg_count: count, auto_paused: true };
-  }
-  return { msg_count: count, auto_paused: false };
+  return { msg_count: row ? Number(row.msg_count) : 0 };
+}
+
+// Call this when the user signals real intent (phone number given, or booking keyword).
+// Pauses bot for this sender for 14 days so a human consultant takes over.
+export async function dbAutoHandoffSender(senderId: string): Promise<void> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return;
+  const expiresAt = new Date(Date.now() + AUTO_PAUSE_RESET_DAYS * 86400_000).toISOString();
+  await queryNeon(
+    `UPDATE travel_senders
+     SET paused = TRUE, pause_reason = 'auto_handoff', paused_at = NOW(), expires_at = $2, updated_at = NOW()
+     WHERE sender_id = $1 AND paused = FALSE`,
+    [senderId, expiresAt],
+  );
 }
 
 export async function dbIsPaused(senderId: string): Promise<boolean> {

@@ -1,4 +1,5 @@
 import {
+  dbAutoHandoffSender,
   dbIsPaused,
   dbListPaused,
   dbListRecent,
@@ -45,8 +46,12 @@ export async function listPaused(): Promise<PausedRow[]> {
 export async function trackSender(
   senderId: string,
   platform = "facebook",
-): Promise<{ auto_paused: boolean }> {
+): Promise<{ msg_count: number }> {
   return dbTrackSender(senderId, platform);
+}
+
+export async function autoHandoffSender(senderId: string): Promise<void> {
+  await dbAutoHandoffSender(senderId);
 }
 
 export async function storeSenderName(senderId: string, name: string): Promise<void> {

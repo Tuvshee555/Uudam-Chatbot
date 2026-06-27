@@ -21,8 +21,8 @@ export type {
 } from "./travelTypes";
 
 export {
-  AUTO_PAUSE_AFTER_MSGS,
   AUTO_PAUSE_RESET_DAYS,
+  dbAutoHandoffSender,
   cleanFields,
   countNewLeads,
   dbAppendMessage,

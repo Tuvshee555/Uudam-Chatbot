@@ -9,7 +9,7 @@ import { appendMessage, buildPrompt, getHistory } from "../../lib/conversation";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
-import { isPaused, pauseBot, storeSenderName, trackSender } from "../../lib/pause";
+import { autoHandoffSender, isPaused, pauseBot, storeSenderName, trackSender } from "../../lib/pause";
 import { createLead, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, } from "../../lib/travelFastPaths";
@@ -969,19 +969,7 @@ async function handleMessage(
     }
     return;
   }
-  const trackResult = await trackSender(senderId, platform);
-  if (trackResult.auto_paused) {
-    logInfo("webhook.auto_paused_after_msgs", {
-      requestId: trace?.requestId,
-      senderHash: hashIdentifier(senderId),
-      platform,
-    });
-    void notifyStaffOfLead(
-      { kind: "handoff", platform, customerMessage: `[Авто зогсоол] ${text}` },
-      { requestId: trace?.requestId, correlationId: trace?.correlationId, source: "api.webhook.auto_pause" },
-    ).catch(() => {});
-    return;
-  }
+  await trackSender(senderId, platform);
   if (platform === "facebook" && token && !hasProgramIntent(text)) {
     void fetchAndStoreFbName(senderId, token);
   }
@@ -1106,6 +1094,8 @@ async function handleMessage(
       const nextState = advanceCollectState(collectState, text);
       if (nextState.step === "done") {
         await clearCollectState(senderId);
+        // Use 14-day auto-handoff pause (resets automatically after 2 weeks)
+        await autoHandoffSender(senderId);
         const pauseMs =
           botSettings.handoff_pause_minutes > 0
             ? botSettings.handoff_pause_minutes * 60_000
@@ -1266,6 +1256,8 @@ async function handleMessage(
     botSettings.handoff_enabled &&
     isHandoffRequest(text, botSettings.handoff_keywords)
   ) {
+    // 14-day auto-reset so bot re-engages after 2 weeks if consultant hasn't followed up
+    await autoHandoffSender(senderId);
     const pauseMs =
       botSettings.handoff_pause_minutes > 0
         ? botSettings.handoff_pause_minutes * 60_000
