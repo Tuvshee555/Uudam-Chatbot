@@ -810,6 +810,104 @@ async function sendPhotoAlbum(
     }
   }
 }
+
+async function sendTripMediaForReply(
+  platform: Platform,
+  senderId: string,
+  replyText: string,
+  token: string | undefined,
+  pageId: string,
+  igUserId?: string | null,
+  trace?: { requestId: string; correlationId: string; source: string },
+) {
+  if (platform !== "facebook" || !token) return;
+  try {
+    const tripsForPhotos = await listTrips({ limit: 5000 });
+    const tripPhotos = extractTripPhotosForReply(replyText, tripsForPhotos);
+    logInfo("webhook.trip_photos_selected", {
+      requestId: trace?.requestId,
+      correlationId: trace?.correlationId,
+      platform,
+      pageId,
+      senderHash: hashIdentifier(senderId),
+      matchedCount: tripPhotos.length,
+      selectedHosts: tripPhotos.map((url) => {
+        try {
+          return new URL(url).host;
+        } catch {
+          return "invalid_url";
+        }
+      }),
+    });
+    for (const url of tripPhotos) {
+      try {
+        await sendImageMessage(senderId, url, token, {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          source: "api.webhook.trip_photo",
+        });
+      } catch (error) {
+        logWarn("webhook.trip_photo_send_failed", {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          platform,
+          pageId,
+          senderHash: hashIdentifier(senderId),
+          photoHost:
+            (() => {
+              try {
+                return new URL(url).host;
+              } catch {
+                return "invalid_url";
+              }
+            })(),
+          classification: classifyError(error),
+          message: error instanceof Error ? error.message : String(error),
+          bodySnippet:
+            error && typeof error === "object" && "bodySnippet" in error
+              ? String((error as { bodySnippet?: unknown }).bodySnippet || "")
+              : undefined,
+        });
+      }
+    }
+    if (tripPhotos.length > 0) {
+      recordCounter("webhook.trip_photos_sent_total", 1, {
+        platform,
+        photoCount: String(tripPhotos.length),
+      });
+    }
+
+    const brochure = extractTripBrochureAttachmentId(replyText, tripsForPhotos);
+    if (brochure) {
+      if (brochure.type === "url") {
+        await sendPlatformMessage(
+          platform,
+          senderId,
+          `📄 PDF хөтөлбөр:\n${brochure.value}`,
+          token,
+          pageId,
+          igUserId,
+          trace,
+          { allowFallback: false },
+        ).catch(() => {});
+      } else {
+        await sendFbFileAttachment(senderId, brochure.value, token).catch(() => {});
+      }
+      recordCounter("webhook.trip_brochure_sent_total", 1, { platform });
+    }
+  } catch (error) {
+    logWarn("webhook.trip_media_stage_failed", {
+      requestId: trace?.requestId,
+      correlationId: trace?.correlationId,
+      platform,
+      pageId,
+      senderHash: hashIdentifier(senderId),
+      classification: classifyError(error),
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 async function fetchAndStoreFbName(senderId: string, token: string): Promise<void> {
   try {
     const url = `https://graph.facebook.com/v19.0/${encodeURIComponent(senderId)}?fields=name&access_token=${encodeURIComponent(token)}`;
@@ -1698,6 +1796,15 @@ async function handleMessage(
       if (!delivered) {
         throw new RetryableWebhookError("delivery_failed:structured_trip_fast_path");
       }
+      await sendTripMediaForReply(
+        platform,
+        senderId,
+        safeStructuredReply,
+        token,
+        pageId,
+        igUserId,
+        trace,
+      );
       try {
         await appendMessage(sessionId, "assistant", safeStructuredReply);
         await setLastReplyConsistent(sessionId, safeStructuredReply);
@@ -1838,87 +1945,15 @@ async function handleMessage(
       classification: classifyError(error),
     });
   }
-  if (platform === "facebook" && token) {
-    try {
-      const tripsForPhotos = await listTrips({ limit: 5000 });
-      const tripPhotos = extractTripPhotosForReply(safeReply, tripsForPhotos);
-      logInfo("webhook.trip_photos_selected", {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        platform,
-        pageId,
-        senderHash: hashIdentifier(senderId),
-        matchedCount: tripPhotos.length,
-        selectedHosts: tripPhotos.map((url) => {
-          try {
-            return new URL(url).host;
-          } catch {
-            return "invalid_url";
-          }
-        }),
-      });
-      for (const url of tripPhotos) {
-        try {
-          await sendImageMessage(senderId, url, token, {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            source: "api.webhook.trip_photo",
-          });
-        } catch (error) {
-          logWarn("webhook.trip_photo_send_failed", {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            platform,
-            pageId,
-            senderHash: hashIdentifier(senderId),
-            photoHost:
-              (() => {
-                try {
-                  return new URL(url).host;
-                } catch {
-                  return "invalid_url";
-                }
-              })(),
-            classification: classifyError(error),
-            message: error instanceof Error ? error.message : String(error),
-            bodySnippet:
-              error && typeof error === "object" && "bodySnippet" in error
-                ? String((error as { bodySnippet?: unknown }).bodySnippet || "")
-                : undefined,
-          });
-        }
-      }
-      if (tripPhotos.length > 0) {
-        recordCounter("webhook.trip_photos_sent_total", 1, {
-          platform,
-          photoCount: String(tripPhotos.length),
-        });
-      }
-
-      // Send PDF brochure if this trip has a stored attachment_id or a brochure_pdf_url.
-      const brochure = extractTripBrochureAttachmentId(safeReply, tripsForPhotos);
-      if (brochure && token) {
-        if (brochure.type === "url") {
-          // URL brochures (Google Drive etc): send as a tappable text link — simple, no timeout risk.
-          await sendPlatformMessage(platform, senderId, `📄 PDF хөтөлбөр:\n${brochure.value}`, token, pageId, igUserId, trace, { allowFallback: false }).catch(() => {});
-        } else {
-          // Pre-uploaded FB attachment_id: send as a file attachment.
-          await sendFbFileAttachment(senderId, brochure.value, token).catch(() => {});
-        }
-        recordCounter("webhook.trip_brochure_sent_total", 1, { platform });
-      }
-    } catch (error) {
-      logWarn("webhook.trip_media_stage_failed", {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        platform,
-        pageId,
-        senderHash: hashIdentifier(senderId),
-        classification: classifyError(error),
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
+  await sendTripMediaForReply(
+    platform,
+    senderId,
+    safeReply,
+    token,
+    pageId,
+    igUserId,
+    trace,
+  );
   await recordFreshBookingLead();
 }
 async function processConversationWithPendingQueue(
