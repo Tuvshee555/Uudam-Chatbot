@@ -2458,14 +2458,14 @@ export async function dbClaimGreeting(senderId: string): Promise<boolean> {
 export async function dbClaimGoodbye(senderId: string): Promise<boolean> {
   const ready = await ensureTravelSchema();
   if (!ready) return false;
-  const TWO_DAYS_AGO = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+  const FOURTEEN_DAYS_AGO = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
   const result = await queryNeon<{ claimed: boolean }>(
     `UPDATE travel_senders
      SET goodbye_sent_at = NOW(), updated_at = NOW()
      WHERE sender_id = $1
        AND (goodbye_sent_at IS NULL OR goodbye_sent_at < $2)
      RETURNING TRUE AS claimed`,
-    [senderId, TWO_DAYS_AGO],
+    [senderId, FOURTEEN_DAYS_AGO],
   );
   return (result?.rows[0]?.claimed) === true;
 }
