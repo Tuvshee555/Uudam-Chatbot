@@ -1052,6 +1052,19 @@ async function handleMessage(
   if (platform === "facebook" && token && !hasProgramIntent(text)) {
     void fetchAndStoreFbName(senderId, token);
   }
+  // Extract name from message: if user sends a short Cyrillic word (2-12 chars, no digits,
+  // not a known keyword) as their whole message, treat it as their name.
+  void (async () => {
+    try {
+      const trimmed = text.trim();
+      const NOT_NAMES = ["сайн", "байна", "уу", "hi", "hello", "мэнд", "за", "ок", "ok", "тийм", "үгүй", "баярлалаа", "наадам"];
+      const isCyrillicName = /^[Ѐ-ӿ]{2,12}$/.test(trimmed) && !NOT_NAMES.includes(trimmed.toLowerCase());
+      if (isCyrillicName) {
+        const { dbStoreSenderName } = await import("../../lib/travelDb");
+        await dbStoreSenderName(senderId, trimmed);
+      }
+    } catch { /* non-critical */ }
+  })();
   // 5-minute inactivity check: if they had ≥1 prior message and went quiet for 5+ min,
   // send goodbye message with contact numbers, then pause for 14 days.
   const INACTIVITY_MS = 5 * 60 * 1000;

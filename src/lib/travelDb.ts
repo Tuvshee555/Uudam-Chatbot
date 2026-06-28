@@ -7,6 +7,11 @@ import {
 } from "./observability";
 import { queryNeon, withNeonClient } from "./neonDb";
 import { normalizeExtra } from "./tripExtraSchema";
+import {
+  keywordTokens,
+  normalizeTripName,
+  tokenCoverageScore,
+} from "./tripPhotoImport/normalize";
 import type {
   DiscountPolicy,
   FAQItem,
@@ -29,7 +34,6 @@ import type {
   ConflictItem,
   AIChangeProposal,
   AIProposalFailureResponse,
-  TripMatchSnapshot,
   LeadKind,
   LeadCrmStatus,
   TravelLead,
@@ -45,13 +49,23 @@ const FILE_PARSE_MODEL =
   process.env.GEMINI_FILE_PARSE_MODEL || "gemini-2.5-flash";
 const FILE_PARSE_VERIFY =
   (process.env.GEMINI_FILE_PARSE_VERIFY || "false").toLowerCase() === "true";
-const FILE_PARSE_VERIFY_TIMEOUT_MS = 45_000;
-const FILE_PARSE_GEMINI_TIMEOUT_MS = env.geminiTimeoutMs;
-const FILE_PARSE_GEMINI_MAX_RETRIES = Math.min(env.geminiMaxRetries, 1);
-const FILE_PARSE_BATCH_DELAY_MS = 800;
-const FILE_PARSE_TOTAL_BUDGET_MS = 120_000;
+// Cap each batch at 30s. With small (4-trip) chunks a healthy call returns in
+// ~15-20s; a 30s ceiling means a stuck batch fails fast and leaves budget for
+// the remaining chunks instead of eating 45s. Never exceed the env timeout.
+const FILE_PARSE_GEMINI_TIMEOUT_MS = Math.min(env.geminiTimeoutMs, 30_000);
+// One retry max for file parsing — a 45s timeout retried twice burns 90s+
+// before falling back. Keep it to a single attempt per batch.
+const FILE_PARSE_GEMINI_MAX_RETRIES = 0;
+const FILE_PARSE_BATCH_DELAY_MS = 500;
+// The parse-file route allows maxDuration: 180s; budget most of it so a
+// multi-chunk DOCX (5-6 batches) can finish all batches in one request.
+const FILE_PARSE_TOTAL_BUDGET_MS = 165_000;
 const FILE_PARSE_MIN_BATCH_TIMEOUT_MS = 8_000;
 const FILE_PARSE_REPAIR_TIMEOUT_MS = 15_000;
+const FILE_PARSE_VERIFY_TIMEOUT_MS = 45_000;
+// Model used when OpenAI is the primary file parser.
+const OPENAI_FILE_PARSE_MODEL =
+  process.env.OPENAI_FILE_PARSE_MODEL || "gpt-4o";
 let schemaEnsured = false;
 let schemaPromise: Promise<boolean> | null = null;
 let botControlCache:
@@ -1692,25 +1706,74 @@ export function isRecurringDepartureText(value: string): boolean {
 }
 
 export function findTripMatches(
-  trips: TripMatchSnapshot[],
+  trips: TravelTrip[],
   operatorName?: string,
   routeName?: string,
-): TripMatchSnapshot[] {
+): TravelTrip[] {
   const operator = operatorName
-    ? normalizeLookupText(normalizeOperatorName(operatorName))
+    ? normalizeTripName(normalizeOperatorName(operatorName))
     : "";
-  const route = routeName ? normalizeLookupText(routeName) : "";
+  const route = routeName ? normalizeTripName(routeName) : "";
   if (!operator && !route) return [];
 
-  return trips.filter((trip) => {
-    const tripOperator = normalizeLookupText(
+  const matches = new Map<string, { trip: TravelTrip; score: number }>();
+  for (const trip of trips) {
+    const names = [
+      trip.route_name,
+      ...(Array.isArray(trip.extra?.aliases)
+        ? (trip.extra.aliases as string[]).filter((a): a is string => typeof a === "string")
+        : []),
+    ].filter(Boolean);
+
+    const tripOperator = normalizeTripName(
       normalizeOperatorName(trip.operator_name || ""),
     );
-    const tripRoute = normalizeLookupText(trip.route_name || "");
-    if (operator && tripOperator !== operator) return false;
-    if (route && tripRoute !== route) return false;
-    return true;
-  });
+
+    let operatorScore = 0;
+    if (operator) {
+      if (tripOperator === operator) {
+        operatorScore = 1;
+      } else {
+        const fuzzy = tokenCoverageScore(operator, trip.operator_name || "");
+        if (fuzzy >= 0.8) operatorScore = 0.9;
+      }
+    }
+
+    let routeScore = 0;
+    if (route) {
+      for (const name of names) {
+        const normalizedName = normalizeTripName(name);
+        if (!normalizedName) continue;
+        if (normalizedName === route) {
+          routeScore = 1;
+          break;
+        }
+        if (
+          normalizedName.includes(route) ||
+          route.includes(normalizedName)
+        ) {
+          routeScore = Math.max(routeScore, 0.95);
+        }
+        const fuzzy = tokenCoverageScore(route, name);
+        if (fuzzy > routeScore) routeScore = fuzzy;
+      }
+    }
+
+    const score = operatorScore + routeScore;
+    const hasOperator = Boolean(operator);
+    const hasRoute = Boolean(route);
+    if (hasOperator && hasRoute && score < 1.6) continue;
+    if ((hasOperator || hasRoute) && score < 0.7) continue;
+
+    const existing = matches.get(trip.id);
+    if (!existing || existing.score < score) {
+      matches.set(trip.id, { trip, score });
+    }
+  }
+
+  return Array.from(matches.values())
+    .sort((a, b) => b.score - a.score)
+    .map((m) => m.trip);
 }
 
 export function buildConflictLabel(routeName?: string, operatorName?: string): string {
@@ -2345,8 +2408,8 @@ export async function listBroadcasts(limit = 20): Promise<BroadcastRecord[]> {
 // ----------------------------------------------------------------
 // Neon-backed conversation history
 // ----------------------------------------------------------------
-const MAX_HISTORY_ROWS = 12;
-const HISTORY_TTL_DAYS = 2;
+const MAX_HISTORY_ROWS = 50;
+const HISTORY_TTL_DAYS = 90;
 
 export async function dbGetHistory(
   senderId: string,
@@ -2618,4 +2681,5 @@ export {
   FILE_PARSE_TOTAL_BUDGET_MS,
   FILE_PARSE_MIN_BATCH_TIMEOUT_MS,
   FILE_PARSE_REPAIR_TIMEOUT_MS,
+  OPENAI_FILE_PARSE_MODEL,
 };
