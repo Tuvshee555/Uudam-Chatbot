@@ -13,8 +13,7 @@ import { autoHandoffSender, isPaused, pauseBot, storeSenderName, trackSender } f
 import { createLead, dbClaimGoodbye, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, } from "../../lib/travelFastPaths";
-import { claimSeasonSend, extractTripBrochureAttachmentId, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
-import { pdfFilenameFromRoute, sendFbFileAttachment, sendFbFileByUrl, sendFbImageAsPdfByUrl } from "../../lib/fbAttachmentUpload";
+import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
 import { advanceCollectState, buildCompletionMessage, buildLeadContext, clearCollectState, getCollectState, isInCollectFlow, promptForStep, setCollectState, startCollectState, } from "../../lib/bookingCollect";
@@ -840,18 +839,12 @@ async function sendTripMediaForReply(
       }),
     });
     for (const url of tripPhotos) {
-      const owningTrip = tripsForPhotos.find((trip) => trip.photo_urls.includes(url)) || null;
-      const pdfFilename = pdfFilenameFromRoute(owningTrip?.route_name || "ayalal-zurag");
       try {
-        const sent = await sendFbImageAsPdfByUrl(
-          senderId,
-          url,
-          token,
-          pdfFilename,
-        );
-        if (!sent) {
-          throw new Error("image_pdf_delivery_failed");
-        }
+        await sendImageMessage(senderId, url, token, {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          source: "api.webhook.trip_photo",
+        });
       } catch (error) {
         logWarn("webhook.trip_photo_send_failed", {
           requestId: trace?.requestId,
@@ -873,7 +866,6 @@ async function sendTripMediaForReply(
             error && typeof error === "object" && "bodySnippet" in error
               ? String((error as { bodySnippet?: unknown }).bodySnippet || "")
               : undefined,
-          pdfFilename,
         });
       }
     }
@@ -882,25 +874,6 @@ async function sendTripMediaForReply(
         platform,
         photoCount: String(tripPhotos.length),
       });
-    }
-
-    const brochure = extractTripBrochureAttachmentId(replyText, tripsForPhotos);
-    if (brochure) {
-      if (brochure.type === "url") {
-        await sendPlatformMessage(
-          platform,
-          senderId,
-          `📄 PDF хөтөлбөр:\n${brochure.value}`,
-          token,
-          pageId,
-          igUserId,
-          trace,
-          { allowFallback: false },
-        ).catch(() => {});
-      } else {
-        await sendFbFileAttachment(senderId, brochure.value, token).catch(() => {});
-      }
-      recordCounter("webhook.trip_brochure_sent_total", 1, { platform });
     }
   } catch (error) {
     logWarn("webhook.trip_media_stage_failed", {
@@ -1209,6 +1182,7 @@ async function handleMessage(
     platform === "facebook" &&
     token &&
     greeting.enabled &&
+    senderMsgCount === 1 &&
     isGenericOpener(text) &&
     (await isFirstMessage(senderId, platform))
   ) {
@@ -1767,13 +1741,7 @@ async function handleMessage(
         throw new RetryableWebhookError("delivery_failed:program_fast_path");
       }
       if (platform === "facebook" && token) {
-        if (programReply.brochure) {
-          // Only attachment_id brochures reach here — URL brochures are embedded as text links
-          // in the reply by buildTripProgramReply, so programReply.brochure is null for those.
-          if (programReply.brochure.type === "id") {
-            await sendFbFileAttachment(senderId, programReply.brochure.value, token).catch(() => {});
-          }
-        } else {
+        if (programReply.mediaUrls.length > 0) {
           for (const url of programReply.mediaUrls) {
             try {
               await sendImageMessage(senderId, url, token, {
@@ -1784,6 +1752,16 @@ async function handleMessage(
             } catch {
             }
           }
+        } else {
+          await sendTripMediaForReply(
+            platform,
+            senderId,
+            safeProgramReply,
+            token,
+            pageId,
+            igUserId,
+            trace ? { ...trace, source: "api.webhook.program_trip_media" } : undefined,
+          );
         }
       }
       try {
