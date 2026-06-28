@@ -364,6 +364,7 @@ export function TripEditModal({
             ))}
           </div>
         )}
+        <div className="hidden" aria-hidden="true">
         {/* Brochure PDF URL */}
         <div className="mt-4">
           <p className="mb-1 text-sm font-medium text-ink">Хөтөлбөрийн PDF холбоос</p>
@@ -413,6 +414,7 @@ export function TripEditModal({
             <Icons.plus size={14} />
             Нэмэх
           </Button>
+        </div>
         </div>
       </div>
 

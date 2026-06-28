@@ -294,15 +294,12 @@ export function TripsTab({
 }
 
 function getMissingHints(trip: TravelTrip): string[] {
-  const extra = (trip.extra ?? {}) as Record<string, unknown>;
   const hints: string[] = [];
   if (!trip.adult_price) hints.push("үнэ");
   if (!trip.departure_dates.length) hints.push("гарах өдөр");
   if (!trip.duration_text) hints.push("хугацаа");
-  const hasBrochure =
-    typeof extra.source_file_attachment_id === "string" ||
-    (typeof extra.brochure_pdf_url === "string" && (extra.brochure_pdf_url as string).startsWith("https://"));
-  if (!hasBrochure) hints.push("PDF хөтөлбөр");
+  const hasBrochure = trip.photo_urls.length > 0;
+  if (!hasBrochure) hints.push("зураг");
   return hints;
 }
 

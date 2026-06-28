@@ -743,28 +743,8 @@ export function buildTripProgramReply(
   const summary = buildTripSummaryLines(best);
   const summaryBlock = summary ? `\n\n${summary}` : "";
 
-  const brochure = getTripBrochureAsset(best);
-  const mediaUrls = brochure ? [] : getTripProgramMediaUrls(best);
-  const itineraryLines = brochure || mediaUrls.length > 0 ? [] : getTripItineraryLines(best);
-
-  if (brochure) {
-    // URL brochures (Google Drive etc): send as a tappable text link — simple and reliable.
-    // Pre-uploaded FB attachment_id: send as a proper file attachment.
-    if (brochure.type === "url") {
-      return {
-        reply: `✈️ ${best.route_name}${summaryBlock}\n\n📄 Дэлгэрэнгүй хөтөлбөр:\n${brochure.value}`,
-        trip: best,
-        brochure: null,
-        mediaUrls: [],
-      };
-    }
-    return {
-      reply: `✈️ ${best.route_name}${summaryBlock}\n\nДэлгэрэнгүй хөтөлбөрийн PDF-г илгээж байна.`,
-      trip: best,
-      brochure,
-      mediaUrls,
-    };
-  }
+  const mediaUrls = getTripProgramMediaUrls(best);
+  const itineraryLines = mediaUrls.length > 0 ? [] : getTripItineraryLines(best);
 
   if (mediaUrls.length > 0) {
     return {
@@ -785,7 +765,7 @@ export function buildTripProgramReply(
   }
 
   return {
-    reply: `✈️ ${best.route_name}${summaryBlock}\n\nОдоогоор энэ аяллын PDF хөтөлбөр системд ороогүй байна. Аяллын зөвлөхөөс хөтөлбөрийг илгээлгэе. 🙌`,
+    reply: `✈️ ${best.route_name}${summaryBlock}\n\nОдоогоор энэ аяллын нэмэлт зураг системд ороогүй байна. 🙌`,
     trip: best,
     brochure: null,
     mediaUrls: [],
