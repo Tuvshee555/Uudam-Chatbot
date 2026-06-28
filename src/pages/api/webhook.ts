@@ -889,16 +889,28 @@ async function sendTripMediaForReply(
 }
 
 async function fetchAndStoreFbName(senderId: string, token: string): Promise<void> {
+  // Conversations API: page reads its OWN conversations — allowed with pages_messaging.
+  // This avoids the blocked /{psid}?fields=name endpoint (needs Advanced Access).
   try {
-    const url = `https://graph.facebook.com/v19.0/${encodeURIComponent(senderId)}?fields=name&access_token=${encodeURIComponent(token)}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+    const pageId = getEnv().facebookPages[0]?.pageId ?? "";
+    if (!pageId) return;
+    const url =
+      `https://graph.facebook.com/v19.0/${encodeURIComponent(pageId)}/conversations` +
+      `?user_id=${encodeURIComponent(senderId)}&fields=participants&access_token=${encodeURIComponent(token)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return;
-    const data = (await res.json()) as { name?: string };
-    if (typeof data.name === "string" && data.name.trim()) {
-      await storeSenderName(senderId, data.name.trim());
+    const data = (await res.json()) as {
+      data?: Array<{ participants?: { data?: Array<{ name?: string; id?: string }> } }>;
+    };
+    const participants = data.data?.[0]?.participants?.data ?? [];
+    const person = participants.find(
+      (p) => p.id !== pageId && typeof p.name === "string" && p.name.trim(),
+    );
+    if (person?.name?.trim()) {
+      await storeSenderName(senderId, person.name.trim());
     }
   } catch {
-    // non-critical, ignore
+    // non-critical
   }
 }
 async function sendFacebookTypingIndicator(
