@@ -1843,6 +1843,21 @@ async function handleMessage(
     try {
       const tripsForPhotos = await listTrips({ limit: 5000 });
       const tripPhotos = extractTripPhotosForReply(safeReply, tripsForPhotos);
+      logInfo("webhook.trip_photos_selected", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        pageId,
+        senderHash: hashIdentifier(senderId),
+        matchedCount: tripPhotos.length,
+        selectedHosts: tripPhotos.map((url) => {
+          try {
+            return new URL(url).host;
+          } catch {
+            return "invalid_url";
+          }
+        }),
+      });
       for (const url of tripPhotos) {
         try {
           await sendImageMessage(senderId, url, token, {
@@ -1893,7 +1908,16 @@ async function handleMessage(
         }
         recordCounter("webhook.trip_brochure_sent_total", 1, { platform });
       }
-    } catch {
+    } catch (error) {
+      logWarn("webhook.trip_media_stage_failed", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        pageId,
+        senderHash: hashIdentifier(senderId),
+        classification: classifyError(error),
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
   await recordFreshBookingLead();
