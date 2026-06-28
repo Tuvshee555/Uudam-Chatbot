@@ -10,7 +10,7 @@ import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { autoHandoffSender, isPaused, pauseBot, storeSenderName, trackSender } from "../../lib/pause";
-import { createLead, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
+import { createLead, dbClaimGoodbye, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, } from "../../lib/travelFastPaths";
 import { claimSeasonSend, extractTripBrochureAttachmentId, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
@@ -991,19 +991,23 @@ async function handleMessage(
     prevMsgAt &&
     Date.now() - new Date(prevMsgAt).getTime() >= INACTIVITY_MS
   ) {
-    try {
-      await sendTextMessage(senderId, GOODBYE_MSG, token, {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        source: "api.webhook.inactivity_goodbye",
-      });
-    } catch { /* best-effort */ }
+    const shouldSendGoodbye = await dbClaimGoodbye(senderId);
+    if (shouldSendGoodbye) {
+      try {
+        await sendTextMessage(senderId, GOODBYE_MSG, token, {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          source: "api.webhook.inactivity_goodbye",
+        });
+      } catch { /* best-effort */ }
+    }
     await dbPauseSender(senderId, FOURTEEN_DAYS_MS, "inactivity");
     recordCounter("webhook.inactivity_pause_total", 1, { platform });
     logInfo("webhook.inactivity_pause", {
       requestId: trace?.requestId,
       senderHash: hashIdentifier(senderId),
       gapMs: Date.now() - new Date(prevMsgAt).getTime(),
+      goodbyeSent: shouldSendGoodbye,
     });
     return;
   }

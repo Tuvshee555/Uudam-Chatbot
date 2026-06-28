@@ -24,6 +24,7 @@ export {
   AUTO_PAUSE_RESET_DAYS,
   dbAutoHandoffSender,
   dbClaimGreeting,
+  dbClaimGoodbye,
   dbClaimSeasonSend,
   cleanFields,
   countNewLeads,

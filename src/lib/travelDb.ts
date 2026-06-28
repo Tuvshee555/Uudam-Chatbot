@@ -586,9 +586,10 @@ export async function ensureTravelSchema() {
       `);
       await client.query(`
         ALTER TABLE travel_senders
-          ADD COLUMN IF NOT EXISTS greeting_sent   BOOLEAN NOT NULL DEFAULT FALSE,
-          ADD COLUMN IF NOT EXISTS season_sent_ids TEXT[] NOT NULL DEFAULT '{}'::text[],
-          ADD COLUMN IF NOT EXISTS last_msg_at     TIMESTAMPTZ NULL;
+          ADD COLUMN IF NOT EXISTS greeting_sent    BOOLEAN NOT NULL DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS season_sent_ids  TEXT[] NOT NULL DEFAULT '{}'::text[],
+          ADD COLUMN IF NOT EXISTS last_msg_at      TIMESTAMPTZ NULL,
+          ADD COLUMN IF NOT EXISTS goodbye_sent_at  TIMESTAMPTZ NULL;
       `);
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_travel_senders_last_seen
@@ -2448,6 +2449,23 @@ export async function dbClaimGreeting(senderId: string): Promise<boolean> {
      WHERE sender_id = $1 AND greeting_sent = FALSE
      RETURNING TRUE AS claimed`,
     [senderId],
+  );
+  return (result?.rows[0]?.claimed) === true;
+}
+
+// Returns true if we should send the goodbye message now (not sent in the last 2 days).
+// Atomically sets goodbye_sent_at so it won't fire again within the cooldown window.
+export async function dbClaimGoodbye(senderId: string): Promise<boolean> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return false;
+  const TWO_DAYS_AGO = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+  const result = await queryNeon<{ claimed: boolean }>(
+    `UPDATE travel_senders
+     SET goodbye_sent_at = NOW(), updated_at = NOW()
+     WHERE sender_id = $1
+       AND (goodbye_sent_at IS NULL OR goodbye_sent_at < $2)
+     RETURNING TRUE AS claimed`,
+    [senderId, TWO_DAYS_AGO],
   );
   return (result?.rows[0]?.claimed) === true;
 }
