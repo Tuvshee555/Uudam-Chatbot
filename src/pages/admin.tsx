@@ -364,6 +364,14 @@ export default function AdminPage() {
     loadAll,
   ]);
   useEffect(() => {
+    const PAUSE_POLL_MS = 5_000;
+    const poll = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      void loadPauseState();
+    }, PAUSE_POLL_MS);
+    return () => clearInterval(poll);
+  }, [loadPauseState]);
+  useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages]);
   const pausedIds = useMemo(
