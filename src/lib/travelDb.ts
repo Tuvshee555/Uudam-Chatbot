@@ -2592,6 +2592,19 @@ export async function dbListRecent(): Promise<SenderRow[]> {
   return result?.rows ?? [];
 }
 
+export async function dbListSendersWithoutName(): Promise<{ sender_id: string; platform: string }[]> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return [];
+  const result = await queryNeon<{ sender_id: string; platform: string }>(
+    `SELECT sender_id, platform FROM travel_senders
+     WHERE display_name = '' OR display_name IS NULL
+     ORDER BY last_seen DESC
+     LIMIT 200`,
+    [],
+  );
+  return result?.rows ?? [];
+}
+
 export {
   AI_CHANGE_GEMINI_TIMEOUT_MS,
   AI_CHANGE_GEMINI_MAX_RETRIES,

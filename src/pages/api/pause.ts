@@ -16,6 +16,8 @@ import {
   setBotPaused,
   setPagePaused,
   setPhotoOnly,
+  dbListSendersWithoutName,
+  dbStoreSenderName,
 } from "../../lib/travelOps";
 import { getEnv } from "../../lib/env";
 import { getPageDisplayName } from "../../lib/pages";
@@ -102,6 +104,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (action === "photo_only_disable") {
         await setPhotoOnly(false);
         return res.status(200).json({ ok: true, control: await getBotControl() });
+      }
+
+      if (action === "backfill_names") {
+        const env = getEnv();
+        const token = env.facebookPages[0]?.token || env.tokenPage;
+        if (!token) return res.status(400).json({ error: "no page token configured" });
+        const senders = await dbListSendersWithoutName();
+        let filled = 0;
+        for (const s of senders) {
+          if (s.platform !== "facebook") continue;
+          try {
+            const url = `https://graph.facebook.com/v19.0/${encodeURIComponent(s.sender_id)}?fields=name&access_token=${encodeURIComponent(token)}`;
+            const fbRes = await fetch(url, { signal: AbortSignal.timeout(4000) });
+            if (!fbRes.ok) continue;
+            const data = (await fbRes.json()) as { name?: string };
+            if (typeof data.name === "string" && data.name.trim()) {
+              await dbStoreSenderName(s.sender_id, data.name.trim());
+              filled++;
+            }
+          } catch { /* skip */ }
+        }
+        return res.status(200).json({ ok: true, total: senders.length, filled });
       }
 
       if (action === "rename") {

@@ -137,6 +137,7 @@ export function BotTab({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [renameLoading, setRenameLoading] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
   const toast = useToast();
 
   async function openChat(senderId: string) {
@@ -507,10 +508,37 @@ export function BotTab({
       </Card>
 
       <Card className="p-4">
-        <SectionHeading
-          title="Сүүлийн харилцагчид"
-          description="Тодорхой хэрэглэгчийн ботыг түр зогсоох/сэргээх."
-        />
+        <div className="flex items-start justify-between gap-2">
+          <SectionHeading
+            title="Сүүлийн харилцагчид"
+            description="Тодорхой хэрэглэгчийн ботыг түр зогсоох/сэргээх."
+          />
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={backfilling}
+            onClick={async () => {
+              setBackfilling(true);
+              try {
+                const res = await apiFetch("/api/pause", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ action: "backfill_names" }),
+                });
+                const data = await res.json();
+                toast.success(`${data.filled ?? 0} нэр татаж авлаа`);
+                onSettingsChanged();
+              } catch {
+                toast.error("Нэр татахад алдаа гарлаа");
+              } finally {
+                setBackfilling(false);
+              }
+            }}
+          >
+            {backfilling ? <Spinner /> : <Icons.refresh size={14} />}
+            <span className="ml-1">{backfilling ? "Татаж байна…" : "Нэр татах"}</span>
+          </Button>
+        </div>
         {recentRows.length > 0 && (
           <div className="mt-3">
             <Input
