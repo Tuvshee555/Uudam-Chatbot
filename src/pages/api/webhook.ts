@@ -1477,6 +1477,16 @@ async function handleMessage(
     if (!delivered) {
       throw new RetryableWebhookError("delivery_failed:handoff");
     }
+    // Send contact numbers after handoff confirmation
+    if (platform === "facebook" && token) {
+      try {
+        await sendTextMessage(senderId, GOODBYE_MSG, token, {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          source: "api.webhook.handoff_goodbye",
+        });
+      } catch { /* best-effort */ }
+    }
     return;
   }
   if (

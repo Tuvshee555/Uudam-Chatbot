@@ -64,10 +64,10 @@ export function buildPrompt(options: {
   lines.push("- If the user asks whether a trip departs on a resolved date, answer yes/no from departure dates in Context. If no exact match exists, say no and optionally mention nearby listed dates.");
   lines.push("- If the user asks for exact үнэ/өдөр, quote it from the dataset as-is.");
   lines.push("- If the same route has different prices between operators, mention that operator prices differ and ask which operator they want.");
-  lines.push("- If the user asks about a specific trip or destination that does NOT appear anywhere in the Context, output exactly the word SILENT and nothing else. No explanation, no apology, no 'манай зөвлөх' message. Just: SILENT");
-  lines.push("- If the user asks a completely off-topic question (not related to travel, trips, prices, or booking) output exactly: SILENT");
-  lines.push("- SILENT means you say absolutely nothing. The consultant will handle it. Do NOT add any other text when outputting SILENT.");
-  lines.push("- If information exists in the Context but a specific detail (price, date, seats) is missing, say only that detail is not yet confirmed and suggest contacting the consultant.");
+  lines.push("- CRITICAL RULE — SILENT: If the trip or destination is NOT in the Context, output exactly one word: SILENT. Nothing else. No apology, no 'зөвлөх холбогдоно', no explanation. Just the single word SILENT.");
+  lines.push("- CRITICAL RULE — SILENT: If the question is off-topic (not travel/trips/prices/booking), output exactly: SILENT. Nothing else.");
+  lines.push("- CRITICAL RULE — SILENT: Even if a trip exists but a specific detail (price, date, seats) is missing from Context, do NOT say 'зөвлөхтэй холбогдоорой' or 'мэдэгдэнэ'. Just output: SILENT.");
+  lines.push("- SILENT is absolute. The system will handle it. Any reply other than SILENT when you don't know = wrong.");
   lines.push("- If the user message is unclear, ask ONE short clarifying question.");
   lines.push("- Stay travel-topic focused and politely redirect unrelated questions.");
   lines.push("- NEVER say 'Тэр мэдээллийг өмнө нь хуваалцсан' or similar ('I already shared that', 'as I mentioned before'). If the user asks again, answer again fully — they may have missed it or be asking from a different angle.");
