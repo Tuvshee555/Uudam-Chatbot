@@ -147,9 +147,10 @@ const GENERIC_OPENERS = [
  * specific — in that case, skip the greeting and just answer.
  */
 export function isGenericOpener(text: string): boolean {
-  const norm = text.trim().toLowerCase().replace(/[!?.]/g, "").trim();
-  if (!norm || norm.length <= 2) return true; // "?", ".", empty
-  return GENERIC_OPENERS.some((w) => norm === w || norm.startsWith(w + " ") || norm.endsWith(" " + w));
+  const norm = text.trim().toLowerCase().replace(/[!?.🙏👋😊]/g, "").trim();
+  if (!norm || norm.length <= 2) return true;
+  // Exact match only — "сайн уу бид явна шүү" is NOT generic even though it starts with "сайн уу"
+  return GENERIC_OPENERS.some((w) => norm === w);
 }
 
 // ─── Quick-reply button labels ────────────────────────────────────────────────
