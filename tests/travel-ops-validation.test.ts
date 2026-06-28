@@ -660,6 +660,21 @@ test("operator aliases normalize and match as one UUDAM brand", async () => {
   assert.equal(matches.length, 1);
 });
 
+test("cleanFields keeps https trip photo urls for Neon saves", async () => {
+  const { cleanFields } = await loadTravelOps();
+  assert.deepEqual(
+    cleanFields({
+      photo_urls: [
+        " https://example.com/1.jpg ",
+        "http://example.com/2.jpg",
+        "not-a-url",
+        "https://example.com/3.webp",
+      ],
+    }).photo_urls,
+    ["https://example.com/1.jpg", "https://example.com/3.webp"],
+  );
+});
+
 test("Mongolian grouped departure dates expand without inventing a year", async () => {
   const { expandMongolianDepartureDates } = await import("../src/lib/travelDb");
   assert.deepEqual(

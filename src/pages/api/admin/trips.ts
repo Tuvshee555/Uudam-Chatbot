@@ -15,6 +15,7 @@ function asText(value: unknown) {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
   const trace = beginRequestTrace({
     route: "api.admin.trips",
     method: req.method,

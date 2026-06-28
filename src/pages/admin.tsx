@@ -120,7 +120,7 @@ export default function AdminPage() {
       if (secretRef.current.trim()) {
         headers.set("x-admin-secret", secretRef.current.trim());
       }
-      return fetch(url, { ...init, headers });
+      return fetch(url, { ...init, headers, cache: init?.cache ?? "no-store" });
     },
     [],
   );

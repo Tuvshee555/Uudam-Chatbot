@@ -74,6 +74,24 @@ function parseInteger(value: unknown): number | null {
   return Number.isFinite(parsed) ? Math.trunc(parsed) : null;
 }
 
+function normalizeStoredUrlList(value: unknown): string[] {
+  const toUrls = (items: unknown[]) =>
+    items
+      .filter((url): url is string => typeof url === "string")
+      .map((url) => url.trim())
+      .filter((url) => url.startsWith("https://"))
+      .slice(0, 20);
+
+  if (Array.isArray(value)) return toUrls(value);
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (Array.isArray(parsed)) return toUrls(parsed);
+    } catch {}
+  }
+  return [];
+}
+
 export function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -125,6 +143,13 @@ export function cleanFields(input: TripMutationFields): TripMutationFields {
   if (typeof input.hotel === "string") cleaned.hotel = input.hotel.trim();
   if (typeof input.source_description === "string") {
     cleaned.source_description = input.source_description.trim();
+  }
+  if (Array.isArray(input.photo_urls)) {
+    cleaned.photo_urls = input.photo_urls
+      .filter((url): url is string => typeof url === "string")
+      .map((url) => url.trim())
+      .filter((url) => url.startsWith("https://"))
+      .slice(0, 20);
   }
   if (input.extra && typeof input.extra === "object" && !Array.isArray(input.extra)) {
     cleaned.extra = input.extra;
@@ -969,11 +994,7 @@ export function mapTripRow(row: Record<string, unknown>): TravelTrip {
     notes: normalizeStoredText(row.notes),
     hotel: normalizeStoredText(row.hotel),
     source_description: normalizeStoredText(row.source_description),
-    photo_urls: Array.isArray(row.photo_urls)
-      ? (row.photo_urls as unknown[])
-          .filter((u): u is string => typeof u === "string" && u.startsWith("https://"))
-          .slice(0, 20)
-      : [],
+    photo_urls: normalizeStoredUrlList(row.photo_urls),
     extra:
       row.extra && typeof row.extra === "object" && !Array.isArray(row.extra)
         ? (row.extra as Record<string, unknown>)
