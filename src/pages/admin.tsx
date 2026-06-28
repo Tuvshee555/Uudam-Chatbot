@@ -18,6 +18,7 @@ import { SettingsTab } from "@/components/admin/SettingsTab";
 import { TripsTab } from "@/components/admin/TripsTab";
 import { TripEditModal } from "@/components/admin/TripEditModal";
 import { JsonEditorTab } from "@/components/admin/JsonEditorTab";
+import { TripPhotoImportTab } from "@/components/admin/TripPhotoImportTab";
 import type { AIAction, AIProposal, AIProposalResponse, AttachedFile, ChatButton, ChatMessage, ClarificationAnswer, ClarificationQuestion, AdminMsg, ChildRule, ConflictItem, ConflictSeverity, ControlState, DiscountGroup, DriveSyncDiagnostics, DriveSyncRecentFile, ExtraFee, FlowRule, LeadCrmStatus, LeadStats, NoteMsg, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalMsg, ReadinessReport, RecentRow, RoomPrice, SettingsForm, StructuredRow, TabKey, TravelBotSettings, TravelLead, TravelTrip, TripStatus } from "@/lib/adminTypes";
 import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, DURATIONS, FIELD_LABELS, HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS, STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, delayMs, describeAction, driveSyncTone, fileToDataUrl, formatBytes, formatMoneyValue, formatTime, getSecretStorage, getTestBotConversationId, handoffDurationSelectValue, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, settingsToForm, shortId, splitLines, summarizeConflict, timeLeft, toStructuredRows, uid } from "@/lib/adminPageUtils";
 const BLANK_TRIP_DRAFT: Record<string, string> = { category: "", operator_name: "", route_name: "", duration_text: "", adult_price: "", child_price: "", currency: "MNT", seats_total: "", seats_left: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
@@ -1606,6 +1607,12 @@ export default function AdminPage() {
             onClick={() => selectAdminTab("seasons")}
           />
           <AdminSidebarItem
+            icon={<Icons.image size={16} />}
+            label="Зураг оруулах"
+            active={tab === "photos"}
+            onClick={() => selectAdminTab("photos")}
+          />
+          <AdminSidebarItem
             icon={<Icons.control size={16} />}
             label="Ботын хяналт"
             active={tab === "bot"}
@@ -1823,6 +1830,13 @@ export default function AdminPage() {
               extra={(settings?.extra ?? {}) as Record<string, unknown>}
               apiFetch={fetchWithAdmin}
               onSaved={loadAll}
+            />
+          )}
+          {tab === "photos" && (
+            <TripPhotoImportTab
+              trips={trips}
+              apiFetch={fetchWithAdmin}
+              onComplete={() => void loadTrips(searchRef.current, statusFilterRef.current, { showLoading: true })}
             />
           )}
           {tab === "json" && (

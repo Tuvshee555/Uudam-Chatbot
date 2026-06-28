@@ -1,0 +1,117 @@
+import type { NextApiRequest, NextApiResponse } from "next";
+import { requireAdminAccess } from "../../../lib/adminAccess";
+import { listTrips } from "../../../lib/travelDb";
+import { createBatch, setBatchItems } from "../../../lib/tripPhotoImport/batchStore";
+import { parseMultipartFiles } from "../../../lib/tripPhotoImport/extract";
+import { matchImportItemToTripsWithAI } from "../../../lib/tripPhotoImport/match";
+import {
+  type PreviewImportItem,
+  type MatchResult,
+} from "../../../lib/tripPhotoImport/types";
+
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const allowed = await requireAdminAccess(req, res, "api.admin.trip-photos-preview");
+  if (!allowed) return;
+
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "method_not_allowed" });
+  }
+
+  try {
+    const [trips, extracted] = await Promise.all([
+      listTrips({ limit: 1000 }),
+      parseMultipartFiles(req),
+    ]);
+
+    if (extracted.items.length === 0) {
+      return res.status(400).json({ error: "no_valid_images" });
+    }
+
+    const batchId = createBatch(trips);
+
+    const items: PreviewImportItem[] = [];
+    for (const item of extracted.items) {
+      const match: MatchResult = item.imageCount > 0
+        ? await matchImportItemToTripsWithAI(item.name, trips)
+        : {
+            tripId: null,
+            tripName: "",
+            confidence: "none",
+            score: 0,
+            matchedBy: "none",
+            reason: "Зураг олдоогүй",
+          };
+      items.push({
+        ...item,
+        match,
+        duplicateImageIds: [],
+        duplicateTripItemIds: [],
+      });
+    }
+
+    // Duplicate image detection across the whole batch
+    const shaToImageIds = new Map<string, string[]>();
+    for (const item of items) {
+      for (const image of item.images) {
+        const list = shaToImageIds.get(image.sha256) || [];
+        list.push(image.id);
+        shaToImageIds.set(image.sha256, list);
+      }
+    }
+    for (const item of items) {
+      for (const image of item.images) {
+        const duplicates = shaToImageIds.get(image.sha256) || [];
+        if (duplicates.length > 1) {
+          item.duplicateImageIds.push(...duplicates.filter((id) => id !== image.id));
+        }
+      }
+      item.duplicateImageIds = Array.from(new Set(item.duplicateImageIds));
+    }
+
+    // Duplicate trip detection
+    const tripIdToItemIds = new Map<string, string[]>();
+    for (const item of items) {
+      if (item.match.tripId) {
+        const list = tripIdToItemIds.get(item.match.tripId) || [];
+        list.push(item.id);
+        tripIdToItemIds.set(item.match.tripId, list);
+      }
+    }
+    for (const item of items) {
+      if (item.match.tripId) {
+        const duplicates = tripIdToItemIds.get(item.match.tripId) || [];
+        item.duplicateTripItemIds = duplicates.filter((id) => id !== item.id);
+      }
+    }
+
+    setBatchItems(batchId, items);
+
+    const previewItems = items.map((item) => ({
+      id: item.id,
+      name: item.name,
+      sourceType: item.sourceType,
+      imageCount: item.imageCount,
+      imageIds: item.images.map((img) => img.id),
+      match: item.match,
+      duplicateImageIds: item.duplicateImageIds,
+      duplicateTripItemIds: item.duplicateTripItemIds,
+      error: item.error,
+    }));
+
+    return res.status(200).json({
+      batchId,
+      items: previewItems,
+      tripCount: trips.length,
+      errors: extracted.errors,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown error";
+    return res.status(500).json({ error: message });
+  }
+}
