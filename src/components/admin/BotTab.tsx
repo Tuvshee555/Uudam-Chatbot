@@ -508,10 +508,34 @@ export function BotTab({
       </Card>
 
       <Card className="p-4">
-        <SectionHeading
-          title="Сүүлийн харилцагчид"
-          description="Тодорхой хэрэглэгчийн ботыг түр зогсоох/сэргээх."
-        />
+        <div className="flex items-center justify-between gap-2">
+          <SectionHeading
+            title="Сүүлийн харилцагчид"
+            description="Тодорхой хэрэглэгчийн ботыг түр зогсоох/сэргээх."
+          />
+          <button
+            onClick={async () => {
+              setBackfilling(true);
+              try {
+                const res = await apiFetch("/api/pause", {
+                  method: "POST",
+                  body: JSON.stringify({ action: "backfill_names" }),
+                });
+                const d = await res.json();
+                toast.success(`Нэр татлаа: ${d.filled ?? 0}/${d.total ?? 0}`);
+                onSettingsChanged();
+              } catch {
+                toast.error("Алдаа гарлаа");
+              } finally {
+                setBackfilling(false);
+              }
+            }}
+            disabled={backfilling}
+            className="shrink-0 rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-ink-subtle hover:bg-surface-hover disabled:opacity-50"
+          >
+            {backfilling ? "Татаж байна…" : "Нэр татах"}
+          </button>
+        </div>
         {recentRows.length > 0 && (
           <div className="mt-3">
             <Input

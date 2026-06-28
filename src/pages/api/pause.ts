@@ -107,31 +107,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       if (action === "backfill_names") {
+        // Use Conversations API — page reads its own conversations (pages_messaging permission).
+        // This works without Advanced Access, unlike the blocked /{psid}?fields=name endpoint.
         const env = getEnv();
-        const token = env.facebookPages[0]?.token || env.tokenPage;
-        if (!token) return res.status(400).json({ error: "no page token configured" });
-        const senders = await dbListSendersWithoutName();
-        let filled = 0;
-        const errors: string[] = [];
-        for (const s of senders) {
-          if (s.platform !== "facebook") continue;
-          try {
-            const url = `https://graph.facebook.com/v19.0/${encodeURIComponent(s.sender_id)}?fields=name&access_token=${encodeURIComponent(token)}`;
-            const fbRes = await fetch(url, { signal: AbortSignal.timeout(4000) });
-            const data = (await fbRes.json()) as { name?: string; error?: { message?: string; code?: number } };
-            if (!fbRes.ok || data.error) {
-              errors.push(`${s.sender_id.slice(-6)}: ${data.error?.message ?? fbRes.status}`);
-              continue;
-            }
-            if (typeof data.name === "string" && data.name.trim()) {
-              await dbStoreSenderName(s.sender_id, data.name.trim());
-              filled++;
-            }
-          } catch (e) {
-            errors.push(`${s.sender_id.slice(-6)}: ${e instanceof Error ? e.message : String(e)}`);
+        const pageId = env.facebookPages[0]?.pageId ?? "";
+        const token = env.facebookPages[0]?.token ?? env.tokenPage;
+        if (!token || !pageId) return res.status(400).json({ error: "no page token or pageId configured" });
+        try {
+          const url = `https://graph.facebook.com/v19.0/${encodeURIComponent(pageId)}/conversations?fields=participants&limit=100&access_token=${encodeURIComponent(token)}`;
+          const fbRes = await fetch(url, { signal: AbortSignal.timeout(10000) });
+          const data = (await fbRes.json()) as {
+            data?: Array<{ participants?: { data?: Array<{ name?: string; id?: string }> } }>;
+            error?: { message?: string };
+          };
+          if (!fbRes.ok || data.error) {
+            return res.status(400).json({ error: data.error?.message ?? fbRes.status });
           }
+          const convs = data.data ?? [];
+          let filled = 0;
+          for (const conv of convs) {
+            for (const p of conv.participants?.data ?? []) {
+              if (p.id && p.id !== pageId && p.name?.trim()) {
+                await dbStoreSenderName(p.id, p.name.trim());
+                filled++;
+              }
+            }
+          }
+          return res.status(200).json({ ok: true, total: convs.length, filled });
+        } catch (e) {
+          return res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
         }
-        return res.status(200).json({ ok: true, total: senders.length, filled, errors: errors.slice(0, 5) });
       }
 
       if (action === "rename") {
