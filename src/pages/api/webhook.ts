@@ -14,7 +14,7 @@ import { createLead, dbClaimGoodbye, dbPauseSender, getBotControl, getTravelBotS
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, } from "../../lib/travelFastPaths";
 import { claimSeasonSend, extractTripBrochureAttachmentId, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
-import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
+import { pdfFilenameFromRoute, sendFbFileAttachment, sendFbFileByUrl, sendFbImageAsPdfByUrl } from "../../lib/fbAttachmentUpload";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
 import { advanceCollectState, buildCompletionMessage, buildLeadContext, clearCollectState, getCollectState, isInCollectFlow, promptForStep, setCollectState, startCollectState, } from "../../lib/bookingCollect";
@@ -840,12 +840,18 @@ async function sendTripMediaForReply(
       }),
     });
     for (const url of tripPhotos) {
+      const owningTrip = tripsForPhotos.find((trip) => trip.photo_urls.includes(url)) || null;
+      const pdfFilename = pdfFilenameFromRoute(owningTrip?.route_name || "ayalal-zurag");
       try {
-        await sendImageMessage(senderId, url, token, {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          source: "api.webhook.trip_photo",
-        });
+        const sent = await sendFbImageAsPdfByUrl(
+          senderId,
+          url,
+          token,
+          pdfFilename,
+        );
+        if (!sent) {
+          throw new Error("image_pdf_delivery_failed");
+        }
       } catch (error) {
         logWarn("webhook.trip_photo_send_failed", {
           requestId: trace?.requestId,
@@ -867,6 +873,7 @@ async function sendTripMediaForReply(
             error && typeof error === "object" && "bodySnippet" in error
               ? String((error as { bodySnippet?: unknown }).bodySnippet || "")
               : undefined,
+          pdfFilename,
         });
       }
     }

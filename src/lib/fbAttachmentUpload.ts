@@ -4,6 +4,13 @@ import { logError, logInfo } from "./observability";
 const GDRIVE_VIEW_RE = /drive\.google\.com\/file\/d\/([^/?#]+)/;
 const FB_API_VERSION = "v19.0";
 
+function toCloudinaryJpegUrl(url: string): string {
+  if (!url.startsWith("https://res.cloudinary.com/")) return url;
+  if (!url.includes("/image/upload/")) return url;
+  if (url.includes("/image/upload/f_jpg,q_100/")) return url;
+  return url.replace("/image/upload/", "/image/upload/f_jpg,q_100/");
+}
+
 /**
  * Convert a Google Drive share/view URL to a direct-download URL and
  * download the PDF bytes on our server (bypassing the need for Facebook's
@@ -206,6 +213,83 @@ async function uploadPdfBufferToFacebook(
   }
 }
 
+async function downloadImageBuffer(
+  url: string,
+): Promise<{ buffer: Buffer; filename: string; contentType: string } | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; TravelBot/1.0)",
+      },
+    }).finally(() => clearTimeout(timer));
+
+    if (!resp.ok) {
+      logInfo("fbAttachmentUpload.image_download_not_ok", { url, status: resp.status });
+      return null;
+    }
+
+    const contentType = (resp.headers.get("content-type") || "").toLowerCase();
+    if (!contentType.startsWith("image/")) {
+      logInfo("fbAttachmentUpload.image_download_bad_type", { url, contentType });
+      return null;
+    }
+
+    const arrayBuf = await resp.arrayBuffer();
+    const buffer = Buffer.from(arrayBuf);
+    const pathname = new URL(url).pathname;
+    const filename = pathname.split("/").pop() || "trip-image";
+    return { buffer, filename, contentType };
+  } catch (err) {
+    logInfo("fbAttachmentUpload.image_download_error", {
+      url,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+async function buildPdfFromImageUrl(
+  imageUrl: string,
+  fallbackFilename: string,
+): Promise<{ buffer: Buffer; filename: string } | null> {
+  let downloaded = await downloadImageBuffer(imageUrl);
+  if (
+    (!downloaded || (!downloaded.contentType.includes("png") && !downloaded.contentType.includes("jpeg") && !downloaded.contentType.includes("jpg"))) &&
+    imageUrl.startsWith("https://res.cloudinary.com/")
+  ) {
+    downloaded = await downloadImageBuffer(toCloudinaryJpegUrl(imageUrl));
+  }
+  if (!downloaded) return null;
+
+  try {
+    const { PDFDocument } = await import("pdf-lib");
+    const pdf = await PDFDocument.create();
+    const isPng = downloaded.contentType.includes("png");
+    const embedded = isPng
+      ? await pdf.embedPng(downloaded.buffer)
+      : await pdf.embedJpg(downloaded.buffer);
+    const width = embedded.width;
+    const height = embedded.height;
+    const page = pdf.addPage([width, height]);
+    page.drawImage(embedded, { x: 0, y: 0, width, height });
+    const bytes = await pdf.save();
+    const filename = fallbackFilename.endsWith(".pdf")
+      ? fallbackFilename
+      : `${fallbackFilename}.pdf`;
+    return { buffer: Buffer.from(bytes), filename };
+  } catch (err) {
+    logError("fbAttachmentUpload.image_pdf_build_failed", {
+      imageUrl,
+      contentType: downloaded.contentType,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
 /**
  * Sends a previously-uploaded reusable attachment to a Messenger recipient.
  * Returns true if the API accepted it.
@@ -300,4 +384,30 @@ export async function sendFbFileByUrl(
   } catch {
     return false;
   }
+}
+
+export async function sendFbImageAsPdfByUrl(
+  recipientId: string,
+  imageUrl: string,
+  pageToken: string,
+  filenameBase: string,
+): Promise<boolean> {
+  const pdf = await buildPdfFromImageUrl(imageUrl, filenameBase);
+  if (!pdf) {
+    logError("fbAttachmentUpload.image_to_pdf_failed", { imageUrl, filenameBase });
+    return false;
+  }
+  const attachmentId = await uploadPdfBufferToFacebook(
+    pdf.buffer,
+    pdf.filename,
+    pageToken,
+  );
+  if (!attachmentId) {
+    logError("fbAttachmentUpload.image_pdf_upload_failed", {
+      imageUrl,
+      filename: pdf.filename,
+    });
+    return false;
+  }
+  return sendFbFileAttachment(recipientId, attachmentId, pageToken);
 }
