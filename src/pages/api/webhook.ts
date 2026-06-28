@@ -1348,7 +1348,7 @@ async function handleMessage(
           platform, senderId, msg, token, pageId, igUserId, trace, { allowFallback: false },
         );
         if (!ok) throw new RetryableWebhookError("delivery_failed:flow_message");
-        await appendMessage(flowSessionId, "assistant", msg).catch(() => {});
+        await appendMessage(senderId, "assistant", msg).catch(() => {});
       },
       sendImage: token && platform === "facebook"
         ? async (url: string) => {
@@ -1366,7 +1366,7 @@ async function handleMessage(
               correlationId: trace?.correlationId,
               source: "api.webhook.flow_quick",
             });
-            await appendMessage(flowSessionId, "assistant", msg).catch(() => {});
+            await appendMessage(senderId, "assistant", msg).catch(() => {});
           }
         : undefined,
       notifyOwner: async (msg: string) => {
@@ -1408,7 +1408,7 @@ async function handleMessage(
       const doc = flowDocs.find((d) => d.id === activeState.flowId && d.enabled);
       if (doc) {
         recordCounter("webhook.flow_graph_resumed_total", 1, { platform });
-        await appendMessage(flowSessionId, "user", text).catch(() => {});
+        await appendMessage(senderId, "user", text).catch(() => {});
         const outcome = await resumeFlowWithInput(doc, activeState, text, buildFlowEffects());
         const { handedToAi } = await persistFlowOutcome(doc, activeState, outcome);
         if (!handedToAi) return;
@@ -1514,7 +1514,7 @@ async function handleMessage(
     const triggered = findTriggeredFlow(text, flowDocs);
     if (triggered) {
       recordCounter("webhook.flow_graph_triggered_total", 1, { platform });
-      await appendMessage(sessionId, "user", text).catch(() => {});
+      await appendMessage(senderId, "user", text).catch(() => {});
       const state = newRuntimeState(triggered.doc.id, triggered.startNodeId);
       const outcome = await runFlowFrom(
         triggered.doc,
@@ -1553,8 +1553,8 @@ async function handleMessage(
         throw new RetryableWebhookError("delivery_failed:flow_rule");
       }
       try {
-        await appendMessage(sessionId, "user", text);
-        await appendMessage(sessionId, "assistant", matchedRule.reply);
+        await appendMessage(senderId, "user", text);
+        await appendMessage(senderId, "assistant", matchedRule.reply);
         await setLastReplyConsistent(sessionId, matchedRule.reply);
       } catch {
       }
@@ -1564,7 +1564,7 @@ async function handleMessage(
   void maybeAutoSyncDriveFolder({ source: "api.webhook" });
   const { systemPrompt: fileSystemPrompt, business, pinnedButtonLabels } = await readBusinessData();
   await assertLockHealthy();
-  const history = await getHistory(sessionId);
+  const history = await getHistory(senderId);
   const lastReply = await getLastReplyConsistent(sessionId);
   const customerWantsToBook =
     botSettings.handoff_enabled && isBookingIntent(text);
@@ -1572,7 +1572,7 @@ async function handleMessage(
     const newState = startCollectState(text);
     await setCollectState(senderId, newState);
     const firstQuestion = promptForStep(newState.step);
-    await appendMessage(sessionId, "user", text);
+    await appendMessage(senderId, "user", text);
     await assertLockHealthy();
     const delivered = await sendPlatformMessage(
       platform,
@@ -1590,7 +1590,7 @@ async function handleMessage(
     recordCounter("webhook.booking_collect_started_total", 1, { platform });
     return;
   }
-  await appendMessage(sessionId, "user", text);
+  await appendMessage(senderId, "user", text);
   async function recordFreshBookingLead() {
   }
   let cachedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
@@ -1646,7 +1646,7 @@ async function handleMessage(
         throw new RetryableWebhookError("delivery_failed:date_availability_reply");
       }
       try {
-        await appendMessage(sessionId, "assistant", safeDateReply);
+        await appendMessage(senderId, "assistant", safeDateReply);
         await setLastReplyConsistent(sessionId, safeDateReply);
       } catch (error) {
         logWarn("webhook.reply_state_persist_failed", {
@@ -1681,7 +1681,7 @@ async function handleMessage(
         throw new RetryableWebhookError("delivery_failed:seats_fast_path");
       }
       try {
-        await appendMessage(sessionId, "assistant", safeSeatsReply);
+        await appendMessage(senderId, "assistant", safeSeatsReply);
         await setLastReplyConsistent(sessionId, safeSeatsReply);
       } catch {
       }
@@ -1709,7 +1709,7 @@ async function handleMessage(
         throw new RetryableWebhookError("delivery_failed:discount_fast_path");
       }
       try {
-        await appendMessage(sessionId, "assistant", safeDiscountReply);
+        await appendMessage(senderId, "assistant", safeDiscountReply);
         await setLastReplyConsistent(sessionId, safeDiscountReply);
       } catch {
       }
@@ -1737,7 +1737,7 @@ async function handleMessage(
         throw new RetryableWebhookError("delivery_failed:compare_fast_path");
       }
       try {
-        await appendMessage(sessionId, "assistant", safeCompareReply);
+        await appendMessage(senderId, "assistant", safeCompareReply);
         await setLastReplyConsistent(sessionId, safeCompareReply);
       } catch {
       }
@@ -1791,7 +1791,7 @@ async function handleMessage(
         }
       }
       try {
-        await appendMessage(sessionId, "assistant", safeProgramReply);
+        await appendMessage(senderId, "assistant", safeProgramReply);
         await setLastReplyConsistent(sessionId, safeProgramReply);
       } catch {
       }
@@ -1827,7 +1827,7 @@ async function handleMessage(
         trace,
       );
       try {
-        await appendMessage(sessionId, "assistant", safeStructuredReply);
+        await appendMessage(senderId, "assistant", safeStructuredReply);
         await setLastReplyConsistent(sessionId, safeStructuredReply);
       } catch {
       }
@@ -1955,7 +1955,7 @@ async function handleMessage(
     throw new RetryableWebhookError("delivery_failed:assistant_reply");
   }
   try {
-    await appendMessage(sessionId, "assistant", safeReply);
+    await appendMessage(senderId, "assistant", safeReply);
     await setLastReplyConsistent(sessionId, safeReply);
   } catch (error) {
     logWarn("webhook.reply_state_persist_failed", {
