@@ -15,7 +15,7 @@ import { dbClaimGreeting, dbClaimSeasonSend } from "./travelDb";
 import type { TravelTrip } from "./travelOps";
 
 const MAX_WELCOME_PHOTOS = 5;
-const MAX_TRIP_PHOTOS = 3;
+const MAX_TRIP_PHOTOS = 2;
 
 // ─── Admin-controlled greeting config (stored in bot_settings.extra.greeting) ──
 

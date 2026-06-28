@@ -2220,7 +2220,7 @@ export default async function handler(
                 const customerId = String(event.recipient?.id ?? "").trim();
                 if (customerId) {
                   const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000;
-                  void dbPauseSender(customerId, fourteenDaysMs, "operator_reply").catch(() => {});
+                  await dbPauseSender(customerId, fourteenDaysMs, "operator_reply").catch(() => {});
                   logInfo("webhook.operator_echo_pause", {
                     requestId: trace.requestId,
                     customerHash: hashIdentifier(customerId),
