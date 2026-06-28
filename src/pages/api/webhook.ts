@@ -1582,7 +1582,39 @@ async function handleMessage(
     }
   }
   void maybeAutoSyncDriveFolder({ source: "api.webhook" });
-  const { systemPrompt: fileSystemPrompt, business, pinnedButtonLabels } = await readBusinessData();
+  const { systemPrompt: fileSystemPrompt, business: rawBusiness, pinnedButtonLabels } = await readBusinessData();
+
+  // Narrow knowledgeBase to the best-matching trip when user clearly names one.
+  // This prevents the AI from confusing two trips that share keywords (e.g. two "Бээжин" trips).
+  const business = (() => {
+    if (!rawBusiness?.knowledgeBase || typeof rawBusiness.knowledgeBase !== "string") return rawBusiness;
+    const norm = (s: string) => s.toLowerCase().replace(/[^\wа-яөүё\s]/gi, " ");
+    const userNorm = norm(text);
+    // Split knowledgeBase into per-trip blocks (each line starting with "- " is one trip module)
+    const allLines = rawBusiness.knowledgeBase.split("\n");
+    const tripLines = allLines.filter(l => l.startsWith("- "));
+    if (tripLines.length < 2) return rawBusiness; // only 1 trip, no confusion possible
+
+    // Score each trip line against user query using words ≥3 chars
+    const scored = tripLines.map(line => {
+      const words = norm(line).split(/\s+/).filter(w => w.length >= 3);
+      const score = words.filter(w => userNorm.includes(w)).length;
+      return { line, score };
+    }).filter(s => s.score > 0).sort((a, b) => b.score - a.score);
+
+    // If top match is clearly better than second (score gap ≥ 2), inject only that trip
+    if (scored.length >= 1 && (scored.length === 1 || scored[0].score - (scored[1]?.score ?? 0) >= 2)) {
+      const nonTripLines = allLines.filter(l => !l.startsWith("- "));
+      const focusedKb = [...nonTripLines, scored[0].line].join("\n");
+      logInfo("webhook.trip_focus_narrowed", {
+        requestId: trace?.requestId,
+        score: scored[0].score,
+        gap: scored[0].score - (scored[1]?.score ?? 0),
+      });
+      return { ...rawBusiness, knowledgeBase: focusedKb };
+    }
+    return rawBusiness;
+  })();
   await assertLockHealthy();
   const history = await getHistory(senderId);
   const lastReply = await getLastReplyConsistent(sessionId);
