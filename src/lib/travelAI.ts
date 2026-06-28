@@ -1,5 +1,4 @@
 import { askGeminiParts, type GeminiPart } from "./gemini";
-import { getEnv } from "./env";
 import {
   classifyError,
   logError,
@@ -14,7 +13,6 @@ import type {
   ConflictItem,
   AIChangeProposal,
   ProposalValidationReport,
-  TripMatchSnapshot,
 } from "./travelTypes";
 import {
   wait,
@@ -46,42 +44,21 @@ import {
   estimateInlineBytes,
 } from "./travelDb";
 import type { TravelTrip } from "./travelTypes";
-
-const env = getEnv();
-const AI_CHANGE_GEMINI_TIMEOUT_MS = Math.max(env.geminiTimeoutMs, 45_000);
-const AI_CHANGE_GEMINI_MAX_RETRIES = 0;
-const AI_CHANGE_REPAIR_TIMEOUT_MS = 15_000;
-// Flash is 3-5x faster than Pro for clean travel PDFs and accurate enough
-// for formatted price lists. Override via GEMINI_FILE_PARSE_MODEL=gemini-2.5-pro
-// When OPENAI_API_KEY is set, OpenAI is the PRIMARY parser and Gemini is the
-// fallback (native PDF inline parts still go to Gemini since OpenAI's vision
-// endpoint does not accept application/pdf — those are rendered to JPEG first).
-// Override the OpenAI model via OPENAI_FILE_PARSE_MODEL (default: gpt-4o).
-// if you ever need the stronger model for a complex or low-quality document.
-const FILE_PARSE_MODEL =
-  process.env.GEMINI_FILE_PARSE_MODEL || "gemini-2.5-flash";
-// Model used when OpenAI is primary for file parsing
-const OPENAI_FILE_PARSE_MODEL =
-  process.env.OPENAI_FILE_PARSE_MODEL || "gpt-4o";
-// Verify pass = a SECOND full re-read of every file to double-check prices.
-// Off by default now (set GEMINI_FILE_PARSE_VERIFY=true to re-enable for a
-// 100%-accuracy slow run). Skipping it halves token cost and parse time.
-const FILE_PARSE_VERIFY =
-  (process.env.GEMINI_FILE_PARSE_VERIFY || "false").toLowerCase() === "true";
-const FILE_PARSE_VERIFY_TIMEOUT_MS = 45_000;
-// Cap each batch at 30s. With small (4-trip) chunks a healthy call returns in
-// ~15-20s; a 30s ceiling means a stuck batch fails fast and leaves budget for
-// the remaining chunks instead of eating 45s. Never exceed the env timeout.
-const FILE_PARSE_GEMINI_TIMEOUT_MS = Math.min(env.geminiTimeoutMs, 30_000);
-// One retry max for file parsing — a 45s timeout retried twice burns 90s+
-// before falling back. Keep it to a single attempt per batch.
-const FILE_PARSE_GEMINI_MAX_RETRIES = 0;
-const FILE_PARSE_BATCH_DELAY_MS = 500;
-// The parse-file route allows maxDuration: 180s; budget most of it so a
-// multi-chunk DOCX (5-6 batches) can finish all batches in one request.
-const FILE_PARSE_TOTAL_BUDGET_MS = 165_000;
-const FILE_PARSE_MIN_BATCH_TIMEOUT_MS = 8_000;
-const FILE_PARSE_REPAIR_TIMEOUT_MS = 15_000;
+import {
+  AI_CHANGE_GEMINI_TIMEOUT_MS,
+  AI_CHANGE_GEMINI_MAX_RETRIES,
+  AI_CHANGE_REPAIR_TIMEOUT_MS,
+  FILE_PARSE_MODEL,
+  OPENAI_FILE_PARSE_MODEL,
+  FILE_PARSE_VERIFY,
+  FILE_PARSE_VERIFY_TIMEOUT_MS,
+  FILE_PARSE_GEMINI_TIMEOUT_MS,
+  FILE_PARSE_GEMINI_MAX_RETRIES,
+  FILE_PARSE_BATCH_DELAY_MS,
+  FILE_PARSE_TOTAL_BUDGET_MS,
+  FILE_PARSE_MIN_BATCH_TIMEOUT_MS,
+  FILE_PARSE_REPAIR_TIMEOUT_MS,
+} from "./travelDb";
 
 type AIActionSnapshot = {
   action: AITripAction;
@@ -216,7 +193,7 @@ function isDateBasedPricingConflict(
 
 export function validateAIChangeProposal(
   proposal: AIChangeProposal | null,
-  existingTrips: TripMatchSnapshot[] = [],
+  existingTrips: TravelTrip[] = [],
   options?: { forbidCreate?: boolean },
 ): ProposalValidationReport {
   const normalized = normalizeProposal(proposal);
@@ -1224,17 +1201,8 @@ async function createProposal(opts: {
     created_at: trip.created_at,
     created_order: isMissingTripName(trip.route_name) ? ++unnamedOrder : undefined,
   }));
-  const tripValidationSnapshot: TripMatchSnapshot[] = trips.map((trip) => ({
-    id: trip.id,
-    operator_name: trip.operator_name,
-    route_name: trip.route_name,
-    status: trip.status,
-    seats_left: trip.seats_left,
-    seats_total: trip.seats_total,
-    adult_price: trip.adult_price,
-    child_price: trip.child_price,
-    currency: trip.currency,
-  }));
+  // Full trips are passed to validation so alias/fuzzy matching can use
+  // extra.aliases and other fields when resolving AI-generated match targets.
 
   let proposal = normalizeProposal(null);
   try {
@@ -1282,7 +1250,7 @@ async function createProposal(opts: {
       actions: [],
     };
   }
-  proposal = validateAIChangeProposal(proposal, tripValidationSnapshot, {
+  proposal = validateAIChangeProposal(proposal, trips, {
     forbidCreate: instructionForbidsTripCreation(opts.instruction),
   }).proposal;
 

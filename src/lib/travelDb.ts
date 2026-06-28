@@ -8,7 +8,6 @@ import {
 import { queryNeon, withNeonClient } from "./neonDb";
 import { normalizeExtra } from "./tripExtraSchema";
 import {
-  keywordTokens,
   normalizeTripName,
   tokenCoverageScore,
 } from "./tripPhotoImport/normalize";

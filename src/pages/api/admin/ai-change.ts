@@ -12,6 +12,7 @@ import {
 import {
   beginRequestTrace,
   finishRequestTrace,
+  logError,
   recordCounter,
 } from "../../../lib/observability";
 
@@ -31,15 +32,16 @@ const MAX_AI_CHANGE_INSTRUCTION_CHARS = 500_000;
 const MAX_AI_CHANGE_CLARIFICATION_CHARS = 4_000;
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const trace = beginRequestTrace({
-    route: "api.admin.ai_change",
-    method: req.method,
-    url: req.url,
-    headers: req.headers,
-    setHeader: (name, value) => res.setHeader(name, value),
-  });
+  let trace: ReturnType<typeof beginRequestTrace> | null = null;
 
   try {
+    trace = beginRequestTrace({
+      route: "api.admin.ai_change",
+      method: req.method,
+      url: req.url,
+      headers: req.headers,
+      setHeader: (name, value) => res.setHeader(name, value),
+    });
     const allowed = await requireAdminAccess(req, res, "api.admin.ai_change");
     if (!allowed) return;
 
@@ -144,7 +146,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ...proposal,
       requires_confirmation: Boolean(proposal.proposal.needs_confirmation),
     });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unexpected error";
+    logError("api.admin.ai_change.unhandled", { error: message });
+    return res.status(500).json({
+      ok: false,
+      error: "ai_change_failed",
+      message,
+    });
   } finally {
-    finishRequestTrace(trace, res.statusCode || 500);
+    if (trace) finishRequestTrace(trace, res.statusCode || 500);
   }
 }

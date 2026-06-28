@@ -188,6 +188,37 @@ function textToDataUrl(text: string): string {
   return bytesToDataUrl(new TextEncoder().encode(text), "text/plain");
 }
 
+function base64UrlToText(base64: string): string {
+  const cleaned = base64.replace(/\s/g, "");
+  try {
+    const binary = atob(cleaned);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return "";
+  }
+}
+
+function dataUrlToText(dataUrl: string): string {
+  if (!dataUrl) return "";
+  if (!dataUrl.startsWith("data:")) return dataUrl;
+  const comma = dataUrl.indexOf(",");
+  if (comma === -1) return "";
+  const meta = dataUrl.slice(5, comma);
+  const payload = dataUrl.slice(comma + 1);
+  if (meta.includes(";base64")) {
+    return base64UrlToText(payload);
+  }
+  try {
+    return decodeURIComponent(payload);
+  } catch {
+    return payload;
+  }
+}
+
 function delayMs(ms: number): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -1591,7 +1622,7 @@ export {
   QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS,
   STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit,
   buildOfficeUploadUnits, buildPdfUploadUnits, buildProposalClarifications,
-  buildTextUploadUnits, delayMs, describeAction, driveSyncTone,
+  buildTextUploadUnits, dataUrlToText, delayMs, describeAction, driveSyncTone,
   fileToDataUrl, formatBytes, formatMoneyValue, formatTime, getSecretStorage,
   getTestBotConversationId, handoffDurationSelectValue, isEditableElement,
   isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure,

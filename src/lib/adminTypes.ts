@@ -254,6 +254,8 @@ export type ProposalMsg = {
   requestId: number | null;
   instruction: string;
   sourceNames?: string[];
+  /** Stored source text for file-based proposals so clarifications can re-run generation. */
+  sourceText?: string;
   status: "pending" | "applied" | "reverted" | "cancelled" | "error";
   confirmChecked: boolean;
   resultText?: string;

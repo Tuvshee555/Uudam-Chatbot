@@ -184,7 +184,7 @@ export function JsonEditorTab({ apiFetch, onSaved }: Props) {
           <li className="flex gap-3">
             <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand text-xs font-bold text-white">4</span>
             <div>
-              <p className="text-sm font-medium text-ink">"Мэдээлэл хадгалах" товч дарна</p>
+              <p className="text-sm font-medium text-ink">&quot;Мэдээлэл хадгалах&quot; товч дарна</p>
               <p className="text-xs text-ink-subtle mt-0.5">Бүх аяллын өгөгдөл нэг дор шинэчлэгдэнэ. Бот тэр даруй зөв хариулж эхэлнэ.</p>
             </div>
           </li>

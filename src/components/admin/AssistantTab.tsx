@@ -367,7 +367,7 @@ function ChatBubbleV2({
   onRollback,
   onSubmitClarificationForm,
   onCancelProposal,
-  onToggleConfirm: _onToggleConfirm,
+  onToggleConfirm,
 }: {
   message: ChatMessage;
   existingTrips?: TravelTrip[];
@@ -382,7 +382,6 @@ function ChatBubbleV2({
   onCancelProposal: (id: string) => void;
   onToggleConfirm: (id: string, value: boolean) => void;
 }) {
-  void _onToggleConfirm;
   const [formDraft, setFormDraft] = useState<Record<string, string>>({});
   const [fieldOverrides, setFieldOverrides] = useState<Record<string, string>>({});
   const [showAllChanges, setShowAllChanges] = useState(false);
@@ -433,26 +432,30 @@ function ChatBubbleV2({
     const action = proposal.actions[actionIndex];
     if (!action || !existingTrips.length) return [];
     const verb = String(action.action || "").toLowerCase();
-    if (verb !== "patch" && !(verb === "upsert" && action.trip_id)) return [];
+    const isCreate = verb === "upsert" && !action.trip_id;
+    if (verb !== "patch" && !isCreate && !(verb === "upsert" && action.trip_id)) {
+      return [];
+    }
     const tripId = action.trip_id?.trim();
     const routeName = action.match?.route_name?.trim() ||
       (action.fields?.route_name as string | undefined)?.trim();
-    const existing = existingTrips.find(
-      (t) =>
-        (tripId && t.id === tripId) ||
-        (routeName &&
-          t.route_name.toLowerCase() === routeName.toLowerCase()),
-    );
-    if (!existing) return [];
+    const existing = isCreate
+      ? null
+      : existingTrips.find(
+          (t) =>
+            (tripId && t.id === tripId) ||
+            (routeName &&
+              t.route_name.toLowerCase() === routeName.toLowerCase()),
+        );
     return diffTripFields(action.fields as Record<string, unknown> ?? {}, {
-      adult_price: existing.adult_price,
-      child_price: existing.child_price,
-      departure_dates: existing.departure_dates,
-      status: existing.status,
-      seats_total: existing.seats_total,
-      seats_left: existing.seats_left,
-      duration_text: existing.duration_text,
-      currency: existing.currency,
+      adult_price: existing?.adult_price ?? null,
+      child_price: existing?.child_price ?? null,
+      departure_dates: existing?.departure_dates ?? [],
+      status: existing?.status ?? "",
+      seats_total: existing?.seats_total ?? null,
+      seats_left: existing?.seats_left ?? null,
+      duration_text: existing?.duration_text ?? "",
+      currency: existing?.currency ?? "MNT",
     });
   }
   const visibleActions = showAllChanges
@@ -475,7 +478,10 @@ function ChatBubbleV2({
         new Set(proposal.conflicts.map(summarizeConflict).filter(Boolean)),
       ).slice(0, 3);
   const reviewCount = message.clarifications.length;
-  const isReadyToApply = message.status === "pending" && reviewCount === 0;
+  const isReadyToApply =
+    message.status === "pending" &&
+    reviewCount === 0 &&
+    message.confirmChecked === true;
 
   return (
     <div className="w-full max-w-5xl">
@@ -708,7 +714,6 @@ function ChatBubbleV2({
               const createActions = proposal.actions
                 .map((a, i) => ({ action: a, index: i }))
                 .filter(({ action }) => (action.action || "").toLowerCase() === "upsert");
-              const editableActions = createActions.length <= 5 ? createActions : [];
 
               function fieldKey(actionIndex: number, field: string) {
                 return `${actionIndex}:${field}`;
@@ -754,15 +759,12 @@ function ChatBubbleV2({
               return (
                 <div className="space-y-3">
                   {createActions.length > 5 && (
-                    <div className="flex items-start gap-2.5 bg-travel-soft px-3.5 py-3 text-sm text-ink-muted">
-                      <Icons.info size={17} className="mt-0.5 shrink-0 text-travel" />
-                      <p>
-                        {createActions.length} аяллын мэдээллийг дээрх нягт жагсаалтаар харууллаа.
-                        Дэлгэцийг хэт урт болгохгүйн тулд тус бүрийн том засварын картыг нуусан.
-                      </p>
-                    </div>
+                    <p className="text-xs text-ink-subtle">
+                      {createActions.length} шинэ аяллын мэдээлэл байна. Доорх картуудыг гүйлгэж засварлана.
+                    </p>
                   )}
-                  {editableActions.map(({ action, index }) => {
+                  <div className={cx("space-y-3", createActions.length > 3 && "max-h-96 overflow-y-auto scroll-area pr-1")}>
+                  {createActions.map(({ action, index }) => {
                     const f = action.fields ?? {};
                     const inputCls = "h-9 w-full rounded-lg border border-line bg-surface px-3 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none";
                     return (
@@ -883,11 +885,24 @@ function ChatBubbleV2({
                       </div>
                     );
                   })}
+                  </div>
+                  <label className="flex cursor-pointer items-start gap-2 pt-1">
+                    <input
+                      type="checkbox"
+                      checked={message.confirmChecked === true}
+                      onChange={(e) => onToggleConfirm(message.id, e.target.checked)}
+                      className="mt-0.5 h-4 w-4 rounded border-line-strong accent-brand"
+                    />
+                    <span className="text-sm text-ink">
+                      Баталгаажуулж байна: энэ өөрчлөлтийг хадгална
+                    </span>
+                  </label>
                   <div className="flex gap-2 pt-1">
                     <Button
                       size="sm"
                       variant="success"
                       loading={applyBusy}
+                      disabled={!isReadyToApply || applyBusy}
                       onClick={() => onApply(buildMessageWithOverrides())}
                     >
                       <Icons.check size={15} />

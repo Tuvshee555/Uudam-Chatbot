@@ -20,8 +20,9 @@ import { TripEditModal } from "@/components/admin/TripEditModal";
 import { JsonEditorTab } from "@/components/admin/JsonEditorTab";
 import { TripPhotoImportTab } from "@/components/admin/TripPhotoImportTab";
 import type { AIAction, AIProposal, AIProposalResponse, AttachedFile, ChatButton, ChatMessage, ClarificationAnswer, ClarificationQuestion, AdminMsg, ChildRule, ConflictItem, ConflictSeverity, ControlState, DiscountGroup, DriveSyncDiagnostics, DriveSyncRecentFile, ExtraFee, FlowRule, LeadCrmStatus, LeadStats, NoteMsg, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalMsg, ReadinessReport, RecentRow, RoomPrice, SettingsForm, StructuredRow, TabKey, TravelBotSettings, TravelLead, TravelTrip, TripStatus } from "@/lib/adminTypes";
-import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, DURATIONS, FIELD_LABELS, HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS, STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, delayMs, describeAction, driveSyncTone, fileToDataUrl, formatBytes, formatMoneyValue, formatTime, getSecretStorage, getTestBotConversationId, handoffDurationSelectValue, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, settingsToForm, shortId, splitLines, summarizeConflict, timeLeft, toStructuredRows, uid } from "@/lib/adminPageUtils";
+import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, DURATIONS, FIELD_LABELS, HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS, STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, dataUrlToText, delayMs, describeAction, driveSyncTone, fileToDataUrl, formatBytes, formatMoneyValue, formatTime, getSecretStorage, getTestBotConversationId, handoffDurationSelectValue, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, settingsToForm, shortId, splitLines, summarizeConflict, timeLeft, toStructuredRows, uid } from "@/lib/adminPageUtils";
 const BLANK_TRIP_DRAFT: Record<string, string> = { category: "", operator_name: "", route_name: "", duration_text: "", adult_price: "", child_price: "", currency: "MNT", seats_total: "", seats_left: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
+const MAX_AI_SOURCE_TEXT_CHARS = 20_000;
 export default function AdminPage() {
   const toast = useToast();
   const [secret, setSecret] = useState("");
@@ -636,7 +637,7 @@ export default function AdminPage() {
   async function parseAttachedFiles(
     files: AttachedFile[],
     note: string,
-  ): Promise<{ proposal: AIProposal; requestId: number | null }> {
+  ): Promise<{ proposal: AIProposal; requestId: number | null; sourceText: string }> {
     const proposals: AIProposal[] = [];
     setAiBusyProgress((current) => Math.max(current ?? 0, 8));
     let singleRequestId: number | null = null;
@@ -675,6 +676,15 @@ export default function AdminPage() {
           .join(", ")}${skippedFiles.length > 3 ? "…" : ""}`,
       );
     }
+    const sourceParts: string[] = [];
+    if (note.trim()) sourceParts.push(`Админы тэмдэглэл: ${note.trim()}`);
+    for (const unit of uploadUnits) {
+      if (unit.mimeType === "text/plain" || unit.filename.endsWith(".txt")) {
+        const text = dataUrlToText(unit.dataUrl).trim();
+        if (text) sourceParts.push(`[${unit.displayName}]\n${text}`);
+      }
+    }
+    const sourceText = sourceParts.join("\n\n").slice(0, MAX_AI_SOURCE_TEXT_CHARS);
     if (uploadUnits.length === 0) {
       return {
         proposal: {
@@ -685,11 +695,11 @@ export default function AdminPage() {
           actions: [],
         },
         requestId: null,
+        sourceText,
       };
     }
-    setAiBusyLabel(`${files.length} файл боловсруулж байна…`);
     setAiBusyProgress((current) => Math.max(current ?? 0, 15));
-    let completedUnits = 0;
+    const doneIndexes = new Set<number>();
     const results = await Promise.all(
       uploadUnits.map((unit, index) =>
         delayMs(index * 400).then(() =>
@@ -698,10 +708,11 @@ export default function AdminPage() {
             note,
             `${files.length} файл уншиж байна… ${index + 1}/${uploadUnits.length}`,
           ).then((result) => {
-            completedUnits += 1;
-            setAiBusyProgress(
-              Math.min(90, 15 + Math.round((completedUnits / uploadUnits.length) * 75)),
-            );
+            setAiBusyProgress(() => {
+              doneIndexes.add(index);
+              const completed = doneIndexes.size;
+              return Math.min(90, 15 + Math.round((completed / uploadUnits.length) * 75));
+            });
             return result;
           }),
         ),
@@ -722,12 +733,13 @@ export default function AdminPage() {
               files.map((file) => file.name),
             ),
       requestId: singleRequestId,
+      sourceText,
     };
   }
   async function parseDriveFileIds(
     fileIds: string[],
     note: string,
-  ): Promise<{ proposal: AIProposal; requestId: number | null }> {
+  ): Promise<{ proposal: AIProposal; requestId: number | null; sourceText: string }> {
     const proposals: AIProposal[] = [];
     let singleRequestId: number | null = null;
     for (let index = 0; index < fileIds.length; index += 1) {
@@ -752,6 +764,7 @@ export default function AdminPage() {
               fileIds.map((fileId) => `Google Drive ${shortId(fileId)}`),
             ),
       requestId: singleRequestId,
+      sourceText: "",
     };
   }
   function removeAttachedFile(fileId: string) {
@@ -793,6 +806,7 @@ export default function AdminPage() {
     try {
       let proposal: AIProposal | undefined;
       let requestId: number | null = null;
+      let sourceText = "";
       if (files.length > 0 || driveFileIds.length > 0) {
         const parsedProposals: AIProposal[] = [];
         const parsedSourceNames: string[] = [];
@@ -801,6 +815,7 @@ export default function AdminPage() {
           parsedProposals.push(parsed.proposal);
           parsedSourceNames.push(...files.map((file) => file.name));
           requestId = parsed.requestId;
+          sourceText = parsed.sourceText;
         }
         if (driveFileIds.length > 0) {
           const parsedDrive = await parseDriveFileIds(driveFileIds, text);
@@ -809,6 +824,9 @@ export default function AdminPage() {
             ...driveFileIds.map((fileId) => `Google Drive ${shortId(fileId)}`),
           );
           requestId = files.length === 0 ? parsedDrive.requestId : null;
+          sourceText = sourceText
+            ? `${sourceText}\n\n${parsedDrive.sourceText}`.slice(0, MAX_AI_SOURCE_TEXT_CHARS)
+            : parsedDrive.sourceText;
         }
         proposal =
           parsedProposals.length === 1
@@ -863,6 +881,7 @@ export default function AdminPage() {
         requestId,
         instruction: fileInstruction,
         sourceNames,
+        sourceText,
         status: "pending",
         confirmChecked: false,
         clarifications: buildProposalClarifications(proposal, [], sourceNames),
@@ -902,6 +921,8 @@ export default function AdminPage() {
     message: ProposalMsg,
     question: ClarificationQuestion,
     answer: string,
+    markAnsweredIds?: string[],
+    extraAnswers?: ClarificationAnswer[],
   ) {
     const trimmed = answer.trim();
     if (!trimmed) return;
@@ -926,19 +947,25 @@ export default function AdminPage() {
         }
         proposal = json?.proposal as AIProposal | undefined;
       } else {
-        const combined = [
-          message.instruction,
-          ...message.clarificationAnswers.map(
-            (qa) => `${qa.prompt}: ${qa.answer}`,
-          ),
-          `${question.prompt}: ${trimmed}`,
-        ]
-          .filter(Boolean)
-          .join("\n");
+        const contextParts: string[] = [];
+        if (message.sourceText) {
+          contextParts.push(`Source text from uploaded files:\n${message.sourceText}`);
+        }
+        if (message.instruction) contextParts.push(message.instruction);
+        if (message.clarificationAnswers.length > 0) {
+          contextParts.push(
+            "Previous clarification answers:\n" +
+              message.clarificationAnswers
+                .map((qa) => `${qa.prompt}: ${qa.answer}`)
+                .join("\n"),
+          );
+        }
+        contextParts.push(`${question.prompt}: ${trimmed}`);
+        const instruction = contextParts.join("\n\n").slice(0, MAX_AI_INPUT_CHARS);
         const res = await fetchWithAdmin("/api/admin/ai-change", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ instruction: combined }),
+          body: JSON.stringify({ instruction }),
         });
         const json = await readJsonSafe(res);
         if (!res.ok) {
@@ -954,22 +981,25 @@ export default function AdminPage() {
       if (!proposal || !Array.isArray(proposal.actions)) {
         throw new Error("AI засварласан санал буцааж чадсангүй.");
       }
-      const nextAnsweredIds = [
+      const nextAnsweredIds = markAnsweredIds ?? [
         ...message.answeredClarificationIds,
         question.id,
       ];
-      setProposalMessage(message.id, {
-        proposal,
-        requestId: newRequestId,
-        clarifications: buildProposalClarifications(proposal, nextAnsweredIds, message.sourceNames ?? []),
-        clarificationAnswers: [
-          ...message.clarificationAnswers,
+      const nextAnswers = [
+        ...message.clarificationAnswers,
+        ...(extraAnswers ?? [
           {
             questionId: question.id,
             prompt: question.prompt,
             answer: trimmed,
           },
-        ],
+        ]),
+      ];
+      setProposalMessage(message.id, {
+        proposal,
+        requestId: newRequestId,
+        clarifications: buildProposalClarifications(proposal, nextAnsweredIds, message.sourceNames ?? []),
+        clarificationAnswers: nextAnswers,
         answeredClarificationIds: nextAnsweredIds,
         customReply: "",
         confirmChecked: false,
@@ -1086,35 +1116,23 @@ export default function AdminPage() {
       .filter(Boolean)
       .join("\n");
     if (!combined.trim()) return;
-    if (message.requestId == null) {
-      const allAnsweredIds = message.clarifications.map((q) => q.id);
-      const newAnswers = message.clarifications
-        .map((q) => {
-          const answer = (answers[q.id] ?? "").trim();
-          if (!answer) return null;
-          return { questionId: q.id, prompt: q.prompt, answer };
-        })
-        .filter(Boolean) as { questionId: string; prompt: string; answer: string }[];
-      setProposalMessage(message.id, {
-        clarifications: [],
-        clarificationAnswers: [
-          ...message.clarificationAnswers,
-          ...newAnswers,
-        ],
-        answeredClarificationIds: [
-          ...message.answeredClarificationIds,
-          ...allAnsweredIds,
-        ],
-        confirmChecked: false,
-        customReply: "",
-      });
-      await applyProposal({ ...message, clarifications: [], answeredClarificationIds: allAnsweredIds });
-      return;
-    }
+    const allAnsweredIds = message.clarifications.map((q) => q.id);
+    const newAnswers = message.clarifications
+      .map((q) => {
+        const answer = (answers[q.id] ?? "").trim();
+        if (!answer) return null;
+        return { questionId: q.id, prompt: q.prompt, answer };
+      })
+      .filter(Boolean) as ClarificationAnswer[];
     const firstQ = message.clarifications[0];
-    if (firstQ) {
-      await answerClarification(message, firstQ, combined);
-    }
+    if (!firstQ) return;
+    await answerClarification(
+      message,
+      firstQ,
+      combined,
+      [...message.answeredClarificationIds, ...allAnsweredIds],
+      newAnswers,
+    );
   }
   async function runPauseAction(
     action:

@@ -8,6 +8,31 @@ async function loadTravelOps() {
   return import("../src/lib/travelOps");
 }
 
+import type { TravelTrip } from "../src/lib/travelTypes";
+
+function makeTrip(partial: Partial<TravelTrip> & Pick<TravelTrip, "id" | "operator_name" | "route_name">): TravelTrip {
+  return {
+    category: "",
+    duration_text: "",
+    adult_price: null,
+    child_price: null,
+    currency: "MNT",
+    departure_dates: [],
+    seats_total: null,
+    seats_left: null,
+    has_food: null,
+    status: "active",
+    notes: "",
+    hotel: "",
+    source_description: "",
+    photo_urls: [],
+    extra: {},
+    created_at: "2024-01-01T00:00:00Z",
+    updated_at: "2024-01-01T00:00:00Z",
+    ...partial,
+  };
+}
+
 test("validation blocks patch actions without a target", async () => {
   const { validateAIChangeProposal } = await loadTravelOps();
   const proposal: AIChangeProposal = {
@@ -95,7 +120,7 @@ test("validation keeps uniquely matched upserts eligible", async () => {
   };
 
   const result = validateAIChangeProposal(proposal, [
-    {
+    makeTrip({
       id: "trip-1",
       operator_name: "Uudam",
       route_name: "Tokyo tour",
@@ -105,7 +130,7 @@ test("validation keeps uniquely matched upserts eligible", async () => {
       adult_price: 5000000,
       child_price: 4500000,
       currency: "MNT",
-    },
+    }),
   ]);
 
   assert.equal(result.blocking_conflicts.length, 0);
@@ -178,7 +203,7 @@ test("validation blocks two different names targeting one trip", async () => {
     ],
   };
 
-  const result = validateAIChangeProposal(proposal, [{
+  const result = validateAIChangeProposal(proposal, [makeTrip({
     id: "trip-1",
     operator_name: "Uudam",
     route_name: "(Нэргүй аялал)",
@@ -188,7 +213,7 @@ test("validation blocks two different names targeting one trip", async () => {
     adult_price: null,
     child_price: null,
     currency: "MNT",
-  }]);
+  })]);
   assert.equal(result.blocking_conflicts.length, 1);
   assert.match(result.blocking_conflicts[0], /хоёр өөр нэр/);
 });
@@ -213,7 +238,7 @@ test("validation warns before duplicate upsert creation", async () => {
   };
 
   const result = validateAIChangeProposal(proposal, [
-    {
+    makeTrip({
       id: "trip-2",
       operator_name: "Uudam",
       route_name: "Beijing tour",
@@ -223,7 +248,7 @@ test("validation warns before duplicate upsert creation", async () => {
       adult_price: 2900000,
       child_price: 2500000,
       currency: "MNT",
-    },
+    }),
   ]);
 
   assert.equal(result.blocking_conflicts.length, 0);
@@ -645,7 +670,7 @@ test("operator aliases normalize and match as one UUDAM brand", async () => {
   const { findTripMatches } = await import("../src/lib/travelDb");
   assert.equal(cleanFields({ operator_name: "Uudam" }).operator_name, "UUDAM TRAVEL AGENCY");
   const matches = findTripMatches([
-    {
+    makeTrip({
       id: "trip-uudam",
       operator_name: "Uudam Travel",
       route_name: "Бээжин",
@@ -655,7 +680,7 @@ test("operator aliases normalize and match as one UUDAM brand", async () => {
       adult_price: null,
       child_price: null,
       currency: "MNT",
-    },
+    }),
   ], "UUDAM TRAVEL AGENCY", "Бээжин");
   assert.equal(matches.length, 1);
 });
