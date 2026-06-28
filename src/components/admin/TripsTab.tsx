@@ -102,14 +102,21 @@ export function TripsTab({
   onDeleteAll: () => void;
 }) {
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
-  const [photoOnly, setPhotoOnly] = useState(false);
+  const [photoFilter, setPhotoFilter] = useState<"all" | "with" | "without">("all");
   const toast = useToast();
 
   const tripsWithoutPhotos = useMemo(
     () => trips.filter((t) => (t.photo_urls?.length || 0) === 0),
     [trips],
   );
-  const visibleTrips = photoOnly ? tripsWithoutPhotos : trips;
+  const tripsWithPhotos = useMemo(
+    () => trips.filter((t) => (t.photo_urls?.length || 0) > 0),
+    [trips],
+  );
+  const visibleTrips =
+    photoFilter === "without" ? tripsWithoutPhotos :
+    photoFilter === "with" ? tripsWithPhotos :
+    trips;
 
   function handleExportJson() {
     const data = trips.map((t) => ({
@@ -251,22 +258,25 @@ export function TripsTab({
             </select>
             <button
               type="button"
-              onClick={() => setPhotoOnly((p) => !p)}
+              onClick={() => setPhotoFilter((f) => f === "all" ? "with" : f === "with" ? "without" : "all")}
               className={cx(
-                "flex shrink-0 items-center gap-1.5 rounded-md border px-3 text-xs font-medium transition",
-                photoOnly
+                "flex shrink-0 items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition",
+                photoFilter === "with"
+                  ? "border-brand bg-brand/10 text-brand"
+                  : photoFilter === "without"
                   ? "border-warning bg-warning/10 text-warning"
                   : "border-line-strong bg-surface text-ink-muted hover:border-brand hover:text-brand",
               )}
-              title="Зураггүй аяллуудыг харуулах"
+              title="Зураг шүүлтүүр"
             >
               <Icons.image size={14} />
-              Зураггүй
-              {tripsWithoutPhotos.length > 0 && (
-                <span className={cx("rounded-full px-1.5 py-0.5", photoOnly ? "bg-warning/20" : "bg-surface-sunken")}>
-                  {tripsWithoutPhotos.length}
-                </span>
-              )}
+              {photoFilter === "with" ? "Зурагтай" : photoFilter === "without" ? "Зураггүй" : "Зураг"}
+              <span className={cx("rounded-full px-1.5 py-0.5 tabular-nums",
+                photoFilter === "with" ? "bg-brand/20" :
+                photoFilter === "without" ? "bg-warning/20" : "bg-surface-sunken"
+              )}>
+                {photoFilter === "with" ? tripsWithPhotos.length : photoFilter === "without" ? tripsWithoutPhotos.length : trips.length}
+              </span>
             </button>
             <Button onClick={onCreate} className="shrink-0">
               <Icons.plus size={16} />
@@ -304,14 +314,14 @@ export function TripsTab({
         </div>
       </Card>
 
-      {tripsWithoutPhotos.length > 0 && !photoOnly && (
+      {tripsWithoutPhotos.length > 0 && photoFilter === "all" && (
         <div className="flex items-center gap-2 rounded-xl border border-warning/30 bg-warning/5 px-3.5 py-2.5 text-sm text-warning">
           <Icons.alert size={16} className="shrink-0" />
           <span>
             {tripsWithoutPhotos.length} аялалд зураг оруулаагүй байна.{" "}
             <button
               type="button"
-              onClick={() => setPhotoOnly(true)}
+              onClick={() => setPhotoFilter("without")}
               className="font-semibold underline hover:no-underline"
             >
               Харах
