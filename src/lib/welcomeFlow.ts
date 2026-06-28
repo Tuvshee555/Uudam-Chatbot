@@ -210,10 +210,12 @@ export function extractTripPhotosForReply(
     (t) => t.status === "active" && t.photo_urls.length > 0,
   );
 
-  // Score all trips — collect any that match at least 2 words
   const scored: { trip: TravelTrip; score: number }[] = [];
   for (const trip of active) {
-    const words = normText(trip.route_name)
+    // Score against route_name + aliases combined so unique keywords win
+    const extraAliases = Array.isArray((trip.extra as Record<string,unknown>)?.aliases) ? (trip.extra as Record<string,unknown>).aliases as string[] : [];
+    const tripText = [trip.route_name, ...extraAliases].join(" ");
+    const words = normText(tripText)
       .split(/\s+/)
       .filter((w) => w.length >= 3);
     const score = words.filter((w) => norm.includes(w)).length;
@@ -246,7 +248,9 @@ export function extractTripBrochureAttachmentId(
   let bestTrip: TravelTrip | null = null;
 
   for (const trip of active) {
-    const words = normText(trip.route_name)
+    const extraAliases = Array.isArray((trip.extra as Record<string,unknown>)?.aliases) ? (trip.extra as Record<string,unknown>).aliases as string[] : [];
+    const tripText = [trip.route_name, ...extraAliases].join(" ");
+    const words = normText(tripText)
       .split(/\s+/)
       .filter((w) => w.length >= 3);
     const score = words.filter((w) => norm.includes(w)).length;
