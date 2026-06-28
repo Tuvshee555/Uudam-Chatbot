@@ -1846,7 +1846,28 @@ async function handleMessage(
             correlationId: trace?.correlationId,
             source: "api.webhook.trip_photo",
           });
-        } catch {
+        } catch (error) {
+          logWarn("webhook.trip_photo_send_failed", {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            platform,
+            pageId,
+            senderHash: hashIdentifier(senderId),
+            photoHost:
+              (() => {
+                try {
+                  return new URL(url).host;
+                } catch {
+                  return "invalid_url";
+                }
+              })(),
+            classification: classifyError(error),
+            message: error instanceof Error ? error.message : String(error),
+            bodySnippet:
+              error && typeof error === "object" && "bodySnippet" in error
+                ? String((error as { bodySnippet?: unknown }).bodySnippet || "")
+                : undefined,
+          });
         }
       }
       if (tripPhotos.length > 0) {

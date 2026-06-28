@@ -5,6 +5,21 @@ import { fetchWithRetry } from "./resilience";
 
 const env = getEnv();
 
+// Messenger commonly re-compresses oversized/tall PNG uploads. For Cloudinary
+// images, serve a delivery-friendly JPEG variant first so Meta fetches a
+// lighter asset with saner dimensions.
+function toMessengerImageUrl(imageUrl: string): string {
+  if (!imageUrl.startsWith("https://res.cloudinary.com/")) return imageUrl;
+  if (!imageUrl.includes("/image/upload/")) return imageUrl;
+  if (imageUrl.includes("/image/upload/f_jpg,q_auto:best,c_limit,w_1440,h_1440/")) {
+    return imageUrl;
+  }
+  return imageUrl.replace(
+    "/image/upload/",
+    "/image/upload/f_jpg,q_auto:best,c_limit,w_1440,h_1440/",
+  );
+}
+
 export type UpstreamTraceOptions = {
   requestId?: string;
   correlationId?: string;
@@ -157,7 +172,7 @@ export async function sendImageCarousel(
   const elements = cards.slice(0, 10).map((card) => ({
     title: (card.title || " ").slice(0, 80),
     ...(card.subtitle ? { subtitle: card.subtitle.slice(0, 80) } : {}),
-    image_url: card.imageUrl,
+    image_url: toMessengerImageUrl(card.imageUrl),
   }));
   await postToMessenger(
     graphMessagesEndpoint(token),
@@ -198,7 +213,7 @@ export async function sendImageMessage(
       message: {
         attachment: {
           type: "image",
-          payload: { url: imageUrl, is_reusable: true },
+          payload: { url: toMessengerImageUrl(imageUrl), is_reusable: true },
         },
       },
     },
