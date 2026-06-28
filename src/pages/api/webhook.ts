@@ -979,11 +979,10 @@ async function handleMessage(
   const INACTIVITY_MS = 5 * 60 * 1000;
   const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
   const GOODBYE_MSG =
-    "Та руу залгахад бэлэн байна 📞\n\n" +
+    "Асуулт байвал бидэнтэй холбогдоорой 😊\n\n" +
     "☎️ 7713-6633\n" +
     "📱 8913-6633\n" +
-    "📱 9117-2769\n\n" +
-    "Утасны дугаараа үлдээвэл манай зөвлөх тантай холбогдоно 🙌";
+    "📱 9117-2769";
   if (
     platform === "facebook" &&
     token &&
