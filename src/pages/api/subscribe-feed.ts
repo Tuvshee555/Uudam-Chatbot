@@ -48,7 +48,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(401).json({ error: "Unauthorized" });
     }
 
-    const fields = "feed,messages,messaging_postbacks,message_reads";
+    const fields = "feed,messages,messaging_postbacks,message_reads,messaging_echoes";
     const url = `https://graph.facebook.com/v19.0/${env.facebookPageId}/subscribed_apps`;
 
     try {

@@ -26,6 +26,8 @@ export type UpstreamTraceOptions = {
   source?: string;
 };
 
+export const BOT_MESSAGE_METADATA = "uudam-bot-message";
+
 async function postToMessenger(
   endpoint: string,
   body: Record<string, unknown>,
@@ -91,7 +93,7 @@ export async function sendTextMessage(
     {
       messaging_type: "RESPONSE",
       recipient: { id: recipientId },
-      message: { text },
+      message: { text, metadata: BOT_MESSAGE_METADATA },
     },
     trace,
   );
@@ -147,7 +149,7 @@ export async function sendQuickReplies(
     {
       messaging_type: "RESPONSE",
       recipient: { id: recipientId },
-      message: { text, quick_replies: quickReplies },
+      message: { text, quick_replies: quickReplies, metadata: BOT_MESSAGE_METADATA },
     },
     trace,
   );
@@ -188,6 +190,7 @@ export async function sendImageCarousel(
             elements,
           },
         },
+        metadata: BOT_MESSAGE_METADATA,
       },
     },
     trace,
@@ -215,6 +218,7 @@ export async function sendImageMessage(
           type: "image",
           payload: { url: toMessengerImageUrl(imageUrl), is_reusable: true },
         },
+        metadata: BOT_MESSAGE_METADATA,
       },
     },
     trace,

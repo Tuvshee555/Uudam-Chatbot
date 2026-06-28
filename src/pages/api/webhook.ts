@@ -1,7 +1,7 @@
 ﻿import type { NextApiRequest, NextApiResponse } from "next";
 import { askGemini } from "../../lib/gemini";
 import { matchFlow, findTriggeredFlow, getFlowState, setFlowState, clearFlowState, newRuntimeState, runFlowFrom, resumeFlowWithInput, type FlowRule, type FlowDoc, type FlowEffects, type FlowRuntimeState, type RunOutcome, } from "../../lib/flowEngine";
-import { replyToComment, sendImageCarousel, sendImageMessage, sendQuickReplies, sendTextMessage, sendTypingOn } from "../../lib/messenger";
+import { BOT_MESSAGE_METADATA, replyToComment, sendImageCarousel, sendImageMessage, sendQuickReplies, sendTextMessage, sendTypingOn } from "../../lib/messenger";
 import { sendTextMessage as sendIgTextMessage } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
@@ -2119,7 +2119,7 @@ export default async function handler(
             messaging?: Array<{
               sender?: { id?: string };
               recipient?: { id?: string };
-              message?: { is_echo?: boolean; mid?: string; text?: string };
+              message?: { is_echo?: boolean; mid?: string; text?: string; metadata?: string };
             }>;
           }>;
         };
@@ -2227,13 +2227,21 @@ export default async function handler(
               : [];
             for (const event of messagingEvents) {
               if (!event?.sender?.id) continue;
-              // Echo = operator/page sent a message to a customer → pause bot for that customer immediately
+              // Echo = operator/page sent a message to a customer.
+              // Bot echoes carry our metadata; only pause for human/operator echoes.
               if (event?.message?.is_echo) {
                 const customerId = String(event.recipient?.id ?? "").trim();
-                if (customerId) {
+                const isBotEcho = event.message.metadata === BOT_MESSAGE_METADATA;
+                if (customerId && !isBotEcho) {
                   const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000;
                   await dbPauseSender(customerId, fourteenDaysMs, "operator_reply").catch(() => {});
                   logInfo("webhook.operator_echo_pause", {
+                    requestId: trace.requestId,
+                    customerHash: hashIdentifier(customerId),
+                    pageId,
+                  });
+                } else if (customerId && isBotEcho) {
+                  logInfo("webhook.bot_echo_skip", {
                     requestId: trace.requestId,
                     customerHash: hashIdentifier(customerId),
                     pageId,

@@ -2,7 +2,7 @@ import { createHmac } from "crypto";
 import { getEnv } from "./env";
 import { logInfo } from "./observability";
 import { fetchWithRetry } from "./resilience";
-import type { UpstreamTraceOptions } from "./messenger";
+import { BOT_MESSAGE_METADATA, type UpstreamTraceOptions } from "./messenger";
 
 const env = getEnv();
 
@@ -33,7 +33,7 @@ export async function sendTextMessage(
       body: JSON.stringify({
         messaging_type: "RESPONSE",
         recipient: { id: recipientId },
-        message: { text },
+        message: { text, metadata: BOT_MESSAGE_METADATA },
       }),
     },
     {
