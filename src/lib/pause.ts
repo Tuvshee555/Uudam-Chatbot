@@ -11,6 +11,7 @@ import {
 
 export type PausedRow = {
   sender_id: string;
+  display_name?: string;
   paused_at: string;
   expires_at: string | null;
   reason?: string;
@@ -37,6 +38,7 @@ export async function listPaused(): Promise<PausedRow[]> {
   const rows = await dbListPaused();
   return rows.map((r) => ({
     sender_id: r.sender_id,
+    display_name: r.display_name || undefined,
     paused_at: r.paused_at ?? new Date().toISOString(),
     expires_at: r.expires_at,
     reason: r.pause_reason || undefined,

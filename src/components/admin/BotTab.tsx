@@ -156,7 +156,7 @@ export function BotTab({
     }
   }
 
-  function displayName(row: RecentRow) {
+  function displayName(row: RecentRow | PauseRow) {
     return row.display_name || shortId(row.sender_id);
   }
 
@@ -320,7 +320,7 @@ export function BotTab({
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold text-ink">
-                      {recentRows.find((r) => r.sender_id === row.sender_id)?.display_name || shortId(row.sender_id)}
+                      {displayName(row)}
                     </p>
                     <p className="text-xs text-ink-subtle">
                       Хүссэн: {formatTime(row.paused_at)} · Дуусах:{" "}

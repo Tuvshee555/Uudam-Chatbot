@@ -113,6 +113,7 @@ export type TravelTrip = {
 
 export type PauseRow = {
   sender_id: string;
+  display_name?: string;
   paused_at: string;
   expires_at: string | null;
   reason?: string;
@@ -304,6 +305,7 @@ export type TabKey =
   | "payments"
   | "greeting"
   | "seasons"
+  | "photos"
   | "json";
 
 export type FlowRule = {
