@@ -68,11 +68,12 @@ const FIELD_LABELS: Record<string, string> = {
   source_description: "Эх сурвалж",
 };
 
-const DURATIONS: Array<{ label: string; ms: number | null }> = [
+const DURATIONS: Array<{ label: string; ms: number }> = [
   { label: "10 мин", ms: 10 * 60 * 1000 },
   { label: "30 мин", ms: 30 * 60 * 1000 },
   { label: "1 цаг", ms: 60 * 60 * 1000 },
-  { label: "∞", ms: null },
+  { label: "24 цаг", ms: 24 * 60 * 60 * 1000 },
+  { label: "14 хоног", ms: 14 * 24 * 60 * 60 * 1000 },
 ];
 
 const HANDOFF_DURATION_OPTIONS = [

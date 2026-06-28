@@ -66,7 +66,7 @@ export type ConfirmResultItem = {
   error?: string;
 };
 
-export const MAX_PHOTOS_PER_TRIP = 20;
+export const MAX_PHOTOS_PER_TRIP = 50;
 export const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 export const BATCH_TTL_MS = 60 * 60 * 1000;
 export const MAX_BATCH_TOTAL_BYTES = 500 * 1024 * 1024;

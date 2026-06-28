@@ -102,7 +102,14 @@ export function TripsTab({
   onDeleteAll: () => void;
 }) {
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
+  const [photoOnly, setPhotoOnly] = useState(false);
   const toast = useToast();
+
+  const tripsWithoutPhotos = useMemo(
+    () => trips.filter((t) => (t.photo_urls?.length || 0) === 0),
+    [trips],
+  );
+  const visibleTrips = photoOnly ? tripsWithoutPhotos : trips;
 
   function handleExportJson() {
     const data = trips.map((t) => ({
@@ -242,6 +249,25 @@ export function TripsTab({
               <option value="sold_out">Суудал дууссан</option>
               <option value="draft">Ноорог</option>
             </select>
+            <button
+              type="button"
+              onClick={() => setPhotoOnly((p) => !p)}
+              className={cx(
+                "flex shrink-0 items-center gap-1.5 rounded-md border px-3 text-xs font-medium transition",
+                photoOnly
+                  ? "border-warning bg-warning/10 text-warning"
+                  : "border-line-strong bg-surface text-ink-muted hover:border-brand hover:text-brand",
+              )}
+              title="Зураггүй аяллуудыг харуулах"
+            >
+              <Icons.image size={14} />
+              Зураггүй
+              {tripsWithoutPhotos.length > 0 && (
+                <span className={cx("rounded-full px-1.5 py-0.5", photoOnly ? "bg-warning/20" : "bg-surface-sunken")}>
+                  {tripsWithoutPhotos.length}
+                </span>
+              )}
+            </button>
             <Button onClick={onCreate} className="shrink-0">
               <Icons.plus size={16} />
               Шинэ аялал
@@ -278,7 +304,23 @@ export function TripsTab({
         </div>
       </Card>
 
-      {trips.length === 0 ? (
+      {tripsWithoutPhotos.length > 0 && !photoOnly && (
+        <div className="flex items-center gap-2 rounded-xl border border-warning/30 bg-warning/5 px-3.5 py-2.5 text-sm text-warning">
+          <Icons.alert size={16} className="shrink-0" />
+          <span>
+            {tripsWithoutPhotos.length} аялалд зураг оруулаагүй байна.{" "}
+            <button
+              type="button"
+              onClick={() => setPhotoOnly(true)}
+              className="font-semibold underline hover:no-underline"
+            >
+              Харах
+            </button>
+          </span>
+        </div>
+      )}
+
+      {visibleTrips.length === 0 ? (
         <Card className="p-4">
           <EmptyState
             icon={<Icons.trips size={26} />}
@@ -287,7 +329,7 @@ export function TripsTab({
           />
         </Card>
       ) : (
-        <TripGroups trips={trips} onEdit={onEdit} onDelete={onDelete} />
+        <TripGroups trips={visibleTrips} onEdit={onEdit} onDelete={onDelete} />
       )}
     </div>
   );

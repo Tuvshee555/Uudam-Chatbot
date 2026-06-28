@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
-import { getHistory } from "../../../lib/conversation";
+import { getFullHistory } from "../../../lib/conversation";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const allowed = await requireAdminAccess(req, res, "api.admin.conversation");
@@ -13,6 +13,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: "sender_id required" });
   }
 
-  const messages = await getHistory(sender_id.trim());
+  const messages = await getFullHistory(sender_id.trim());
   return res.status(200).json({ ok: true, messages });
 }

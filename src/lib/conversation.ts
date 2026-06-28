@@ -1,6 +1,6 @@
 ﻿/* eslint-disable @typescript-eslint/no-explicit-any */
 import { buildTemporalPromptContext } from "./travelDates";
-import { dbGetHistory, dbAppendMessage } from "./travelDb";
+import { dbGetHistory, dbAppendMessage, type ChatAttachment, type HistoryRow } from "./travelDb";
 
 export type ChatRole = "user" | "assistant";
 
@@ -10,11 +10,21 @@ export type ChatMessage = {
 };
 
 export async function getHistory(id: string): Promise<ChatMessage[]> {
+  const rows = await dbGetHistory(id);
+  return rows.map((r) => ({ role: r.role, text: r.text }));
+}
+
+export async function getFullHistory(id: string): Promise<HistoryRow[]> {
   return dbGetHistory(id);
 }
 
-export async function appendMessage(id: string, role: ChatRole, text: string) {
-  await dbAppendMessage(id, role, text);
+export async function appendMessage(
+  id: string,
+  role: ChatRole,
+  text: string,
+  attachments?: ChatAttachment[],
+) {
+  await dbAppendMessage(id, role, text, attachments);
 }
 
 export function buildPrompt(options: {

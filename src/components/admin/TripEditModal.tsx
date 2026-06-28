@@ -1,5 +1,6 @@
 import React from "react";
 import { Button, Icons, Input, Modal, Select, Spinner, Textarea, cx } from "@/components/ui";
+import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
 import type { AnswerHint, ChildRule, DiscountGroup, ExtraFee, PassengerPrice, PriceGroup, RoomPrice, SourceProvenance, TravelTrip } from "@/lib/adminTypes";
 
 export type TripDraftState = Record<string, string>;
@@ -345,20 +346,28 @@ export function TripEditModal({
           <div className="mt-2 flex flex-wrap gap-2">
             {tripPhotoUrls.map((url, idx) => (
               <div key={idx} className="group relative h-20 w-20 overflow-hidden rounded-lg border border-line">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={url}
-                  alt={`Зураг ${idx + 1}`}
-                  className="h-full w-full object-cover"
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                />
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block h-full w-full"
+                  title="Бүтэн зураг харах (шинэ хуудсанд)"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={url}
+                    alt={`Зураг ${idx + 1}`}
+                    className="h-full w-full object-cover"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                  />
+                </a>
                 <button
                   type="button"
                   onClick={() => setTripPhotoUrls((prev) => prev.filter((_, i) => i !== idx))}
-                  className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition-opacity group-hover:opacity-100"
+                  className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover:opacity-100"
                   aria-label="Устгах"
                 >
-                  <Icons.trash size={16} className="text-white" />
+                  <Icons.trash size={12} />
                 </button>
               </div>
             ))}
@@ -390,7 +399,7 @@ export function TripEditModal({
               if (e.key === "Enter") {
                 e.preventDefault();
                 const url = tripPhotoInput.trim();
-                if (url.startsWith("https://") && tripPhotoUrls.length < 20) {
+                if (url.startsWith("https://") && tripPhotoUrls.length < MAX_PHOTOS_PER_TRIP) {
                   setTripPhotoUrls((prev) => [...prev, url]);
                   setTripPhotoInput("");
                 }
@@ -402,10 +411,10 @@ export function TripEditModal({
           <Button
             size="sm"
             variant="secondary"
-            disabled={!tripPhotoInput.trim().startsWith("https://") || tripPhotoUrls.length >= 20}
+            disabled={!tripPhotoInput.trim().startsWith("https://") || tripPhotoUrls.length >= MAX_PHOTOS_PER_TRIP}
             onClick={() => {
               const url = tripPhotoInput.trim();
-              if (url.startsWith("https://") && tripPhotoUrls.length < 20) {
+              if (url.startsWith("https://") && tripPhotoUrls.length < MAX_PHOTOS_PER_TRIP) {
                 setTripPhotoUrls((prev) => [...prev, url]);
                 setTripPhotoInput("");
               }

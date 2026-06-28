@@ -580,6 +580,11 @@ export async function ensureTravelSchema() {
         CREATE INDEX IF NOT EXISTS idx_travel_conversations_sender
           ON travel_conversations (sender_id, created_at DESC);
       `);
+      // Migration: store image attachments with chat history so the admin inbox can render them.
+      await client.query(`
+        ALTER TABLE travel_conversations
+          ADD COLUMN IF NOT EXISTS attachments JSONB NOT NULL DEFAULT '[]'::jsonb;
+      `);
       // Per-sender pause state + activity tracking — replaces Redis pause store
       await client.query(`
         CREATE TABLE IF NOT EXISTS travel_senders (
@@ -2410,13 +2415,31 @@ export async function listBroadcasts(limit = 20): Promise<BroadcastRecord[]> {
 const MAX_HISTORY_ROWS = 50;
 const HISTORY_TTL_DAYS = 90;
 
+export type ChatAttachment = {
+  type: "image";
+  url: string;
+  caption?: string;
+};
+
+export type HistoryRow = {
+  role: "user" | "assistant";
+  text: string;
+  attachments: ChatAttachment[];
+  created_at: string;
+};
+
 export async function dbGetHistory(
   senderId: string,
-): Promise<Array<{ role: "user" | "assistant"; text: string }>> {
+): Promise<HistoryRow[]> {
   const ready = await ensureTravelSchema();
   if (!ready) return [];
-  const result = await queryNeon<{ role: string; text: string }>(
-    `SELECT role, text FROM travel_conversations
+  const result = await queryNeon<{
+    role: string;
+    text: string;
+    attachments: unknown;
+    created_at: string;
+  }>(
+    `SELECT role, text, attachments, created_at FROM travel_conversations
      WHERE sender_id = $1
        AND created_at > NOW() - INTERVAL '${HISTORY_TTL_DAYS} days'
      ORDER BY created_at DESC
@@ -2424,21 +2447,25 @@ export async function dbGetHistory(
     [senderId, MAX_HISTORY_ROWS],
   );
   if (!result) return [];
-  return result.rows
-    .reverse()
-    .map((r) => ({ role: r.role as "user" | "assistant", text: r.text }));
+  return result.rows.reverse().map((r) => ({
+    role: r.role as "user" | "assistant",
+    text: r.text,
+    attachments: Array.isArray(r.attachments) ? (r.attachments as ChatAttachment[]) : [],
+    created_at: r.created_at,
+  }));
 }
 
 export async function dbAppendMessage(
   senderId: string,
   role: "user" | "assistant",
   text: string,
+  attachments: ChatAttachment[] = [],
 ): Promise<void> {
   const ready = await ensureTravelSchema();
   if (!ready) return;
   await queryNeon(
-    `INSERT INTO travel_conversations (sender_id, role, text) VALUES ($1, $2, $3)`,
-    [senderId, role, text],
+    `INSERT INTO travel_conversations (sender_id, role, text, attachments) VALUES ($1, $2, $3, $4)`,
+    [senderId, role, text, JSON.stringify(attachments)],
   );
   // Prune old rows for this sender (keep last MAX_HISTORY_ROWS)
   await queryNeon(
@@ -2583,6 +2610,8 @@ export async function dbIsPaused(senderId: string): Promise<boolean> {
   return true;
 }
 
+const MAX_PAUSE_MS = 14 * 24 * 60 * 60 * 1000;
+
 export async function dbPauseSender(
   senderId: string,
   durationMs?: number,
@@ -2590,9 +2619,12 @@ export async function dbPauseSender(
 ): Promise<void> {
   const ready = await ensureTravelSchema();
   if (!ready) return;
-  const expiresAt = durationMs
-    ? new Date(Date.now() + durationMs).toISOString()
-    : null;
+  // Forever pauses are confusing and easy to forget; cap every per-sender pause at 14 days.
+  const effectiveMs =
+    typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs > 0
+      ? Math.min(durationMs, MAX_PAUSE_MS)
+      : MAX_PAUSE_MS;
+  const expiresAt = new Date(Date.now() + effectiveMs).toISOString();
   await queryNeon(
     `INSERT INTO travel_senders (sender_id, paused, pause_reason, paused_at, expires_at, updated_at)
      VALUES ($1, TRUE, $2, NOW(), $3, NOW())

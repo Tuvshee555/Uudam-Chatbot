@@ -33,10 +33,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "no_valid_images" });
     }
 
+    // Deduplicate by file/folder name. If the user drops the same file twice,
+    // keep the first occurrence and warn about the rest.
+    const seenNames = new Set<string>();
+    const dedupedItems: typeof extracted.items = [];
+    for (const item of extracted.items) {
+      const key = item.name.trim().toLowerCase();
+      if (seenNames.has(key)) {
+        extracted.errors.push(`Ижил нэртэй файл алгаслаа: ${item.name}`);
+        continue;
+      }
+      seenNames.add(key);
+      dedupedItems.push(item);
+    }
+
     const batchId = createBatch(trips);
 
     const items: PreviewImportItem[] = [];
-    for (const item of extracted.items) {
+    for (const item of dedupedItems) {
       const match: MatchResult = item.imageCount > 0
         ? await matchImportItemToTripsWithAI(item.name, trips)
         : {

@@ -781,6 +781,20 @@ async function sendPlatformMessage(
     return false;
   }
 }
+function imageAttachment(url: string): { type: "image"; url: string } {
+  return { type: "image", url };
+}
+
+async function recordImageMessage(senderId: string, photoUrls: string[]) {
+  if (photoUrls.length === 0) return;
+  await appendMessage(
+    senderId,
+    "assistant",
+    "",
+    photoUrls.map(imageAttachment),
+  ).catch(() => {});
+}
+
 async function sendPhotoAlbum(
   senderId: string,
   photoUrls: string[],
@@ -808,6 +822,7 @@ async function sendPhotoAlbum(
       }
     }
   }
+  await recordImageMessage(senderId, photoUrls);
 }
 
 async function sendTripMediaForReply(
@@ -870,6 +885,7 @@ async function sendTripMediaForReply(
       }
     }
     if (tripPhotos.length > 0) {
+      await recordImageMessage(senderId, tripPhotos);
       recordCounter("webhook.trip_photos_sent_total", 1, {
         platform,
         photoCount: String(tripPhotos.length),
@@ -1077,10 +1093,12 @@ async function handleMessage(
       }
     } catch { /* non-critical */ }
   })();
-  // 5-minute inactivity check: if they had ≥1 prior message and went quiet for 5+ min,
-  // send goodbye message with contact numbers, then pause for 14 days.
-  const INACTIVITY_MS = 5 * 60 * 1000;
-  const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
+  // Inactivity check: if they had ≥1 prior message and went quiet for 30+ min,
+  // send goodbye message with contact numbers, then pause for 24 h. This is gentler
+  // than the old 5 min / 14 day rule but still prevents the bot from jumping back in
+  // while a human consultant is likely following up.
+  const INACTIVITY_MS = 30 * 60 * 1000;
+  const INACTIVITY_PAUSE_MS = 24 * 60 * 60 * 1000;
   const GOODBYE_MSG =
     "Манай зөвлөхтэй холбогдох бол дараах дугааруудаар залгаарай 📞\n\n" +
     "☎️ 7713-6633\n" +
@@ -1104,7 +1122,7 @@ async function handleMessage(
         });
       } catch { /* best-effort */ }
     }
-    await dbPauseSender(senderId, FOURTEEN_DAYS_MS, "inactivity");
+    await dbPauseSender(senderId, INACTIVITY_PAUSE_MS, "inactivity");
     recordCounter("webhook.inactivity_pause_total", 1, { platform });
     logInfo("webhook.inactivity_pause", {
       requestId: trace?.requestId,
@@ -1149,6 +1167,7 @@ async function handleMessage(
         });
       } catch { }
     }
+    await recordImageMessage(senderId, photos);
     logInfo("webhook.photo_only_mode", {
       requestId: trace?.requestId,
       senderHash: hashIdentifier(senderId),
@@ -1357,6 +1376,7 @@ async function handleMessage(
               correlationId: trace?.correlationId,
               source: "api.webhook.flow_image",
             });
+            await recordImageMessage(senderId, [url]);
           }
         : undefined,
       sendQuickReplies: token && platform === "facebook"
@@ -1778,6 +1798,7 @@ async function handleMessage(
             } catch {
             }
           }
+          await recordImageMessage(senderId, programReply.mediaUrls);
         } else {
           await sendTripMediaForReply(
             platform,

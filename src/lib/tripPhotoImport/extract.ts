@@ -48,7 +48,11 @@ function bufferToImportImage(
 }
 
 async function extractZip(fileName: string, buffer: Buffer): Promise<ImportItem> {
-  const zip = await JSZip.loadAsync(buffer);
+  // Decode zip entry names as UTF-8. Most modern archivers store names in UTF-8;
+  // without this JSZip falls back to CP437 and Cyrillic names become garbled.
+  const zip = await JSZip.loadAsync(buffer, {
+    decodeFileName: (bytes) => new TextDecoder("utf-8").decode(bytes as Uint8Array),
+  });
   const images: ImportImage[] = [];
   const errors: string[] = [];
 
@@ -114,7 +118,8 @@ export async function parseMultipartFiles(
   }
 
   return new Promise((resolve, reject) => {
-    const busboy = Busboy({ headers: req.headers });
+    // Force UTF-8 for multipart filenames so Cyrillic/Mongolian names don't mojibake.
+    const busboy = Busboy({ headers: req.headers, defParamCharset: "utf8" });
 
     busboy.on("file", (fieldName, file, info) => {
       const chunks: Buffer[] = [];

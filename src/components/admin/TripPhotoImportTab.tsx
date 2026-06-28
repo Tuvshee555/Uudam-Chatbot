@@ -47,6 +47,7 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
   const [busy, setBusy] = React.useState(false);
   const [confirmingId, setConfirmingId] = React.useState<string | null>(null);
   const [results, setResults] = React.useState<ConfirmResult[] | null>(null);
+  const [itemResults, setItemResults] = React.useState<Record<string, ConfirmResult>>({});
   const [previewErrors, setPreviewErrors] = React.useState<string[]>([]);
 
   const sortedTrips = React.useMemo(
@@ -60,7 +61,53 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
     setOverrides({});
     setSkipped(new Set());
     setResults(null);
+    setItemResults({});
     setPreviewErrors([]);
+  }
+
+  async function confirmSingle(item: PreviewItem) {
+    if (!batchId) return;
+    const effectiveTripId = getEffectiveTripId(item);
+    if (!effectiveTripId) {
+      toast.error("Аялал сонгоогүй байна.");
+      return;
+    }
+    const itemOverrides: Record<string, string | null> = {};
+    if (effectiveTripId !== item.match.tripId) {
+      itemOverrides[item.id] = effectiveTripId;
+    }
+    setConfirmingId(item.id);
+    try {
+      const res = await apiFetch("/api/admin/trip-photos-confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          batchId,
+          mode,
+          overrides: itemOverrides,
+          skippedItemIds: Array.from(skipped),
+          itemIds: [item.id],
+        }),
+      });
+      const json = (await res.json()) as { results?: ConfirmResult[]; error?: string };
+      if (!res.ok) {
+        throw new Error(json.error || "Баталгаажуулахад алдаа гарлаа");
+      }
+      const result = json.results?.[0];
+      if (result) {
+        setItemResults((prev) => ({ ...prev, [item.id]: result }));
+        if (!result.error && result.uploaded > 0) {
+          toast.success(`${result.itemName} → ${result.tripName}: ${result.uploaded} зураг орууллаа`);
+          onComplete?.();
+        } else {
+          toast.error(result.error || "Зураг оруулахад алдаа гарлаа");
+        }
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Баталгаажуулахад алдаа гарлаа");
+    } finally {
+      setConfirmingId(null);
+    }
   }
 
   async function uploadFiles(fileList: FileList | File[] | null) {
@@ -95,6 +142,7 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
       }
       setBatchId(json.batchId);
       setItems(json.items || []);
+      setItemResults({});
       setPreviewErrors(json.errors || []);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Урьдчилан харахад алдаа гарлаа");
@@ -230,7 +278,56 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
     URL.revokeObjectURL(url);
   }
 
-  function statusTone(confidence: MatchResult["confidence"], hasError?: boolean): React.ComponentProps<typeof Badge>["tone"] {
+  function ExistingTripPhotos({
+  tripId,
+  trips,
+  newCount,
+}: {
+  tripId: string;
+  trips: TravelTrip[];
+  newCount: number;
+}) {
+  const trip = trips.find((t) => t.id === tripId);
+  const urls = Array.isArray(trip?.photo_urls) ? trip.photo_urls.filter((u): u is string => typeof u === "string") : [];
+  if (!trip) return null;
+  const wouldExceed = urls.length + newCount > 50;
+  return (
+    <div className="mt-2">
+      <p className={cx("text-xs", wouldExceed ? "text-warning font-medium" : "text-ink-subtle")}>
+        Одоо байгаа: {urls.length} зураг
+        {wouldExceed && " · хязгаарт ойртож байна"}
+      </p>
+      {urls.length > 0 && (
+        <div className="mt-1 flex max-w-[14rem] gap-1 overflow-x-auto">
+          {urls.slice(0, 4).map((url, idx) => (
+            <a
+              key={idx}
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block h-8 w-8 shrink-0 overflow-hidden rounded-md border border-line hover:ring-2 hover:ring-brand"
+              title="Одоо байгаа зураг харах"
+            >
+              <img src={url} alt="" className="h-full w-full object-cover" loading="lazy" />
+            </a>
+          ))}
+          {urls.length > 4 && (
+            <a
+              href={urls[0]}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line bg-surface-sunken text-[10px] text-ink-muted hover:bg-surface"
+            >
+              +{urls.length - 4}
+            </a>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function statusTone(confidence: MatchResult["confidence"], hasError?: boolean): React.ComponentProps<typeof Badge>["tone"] {
     if (hasError) return "danger";
     switch (confidence) {
       case "high":
@@ -447,18 +544,32 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
                             <div className="text-xs">{item.imageCount} ширхэг</div>
                             <div className="mt-1 flex max-w-[12rem] gap-1 overflow-x-auto">
                               {item.imageIds.slice(0, 4).map((imageId) => (
-                                <img
+                                <a
                                   key={imageId}
-                                  src={`/api/admin/trip-photos-thumbnail?batchId=${batchId}&imageId=${imageId}&w=48`}
-                                  alt=""
-                                  className="h-10 w-10 rounded-md border border-line object-cover"
-                                  loading="lazy"
-                                />
+                                  href={`/api/admin/trip-photos-full?batchId=${batchId}&imageId=${imageId}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="relative block h-10 w-10 shrink-0 overflow-hidden rounded-md border border-line hover:ring-2 hover:ring-brand"
+                                  title="Бүтэн зураг харах (шинэ хуудсанд)"
+                                >
+                                  <img
+                                    src={`/api/admin/trip-photos-thumbnail?batchId=${batchId}&imageId=${imageId}&w=48`}
+                                    alt=""
+                                    className="h-full w-full object-cover"
+                                    loading="lazy"
+                                  />
+                                </a>
                               ))}
                               {item.imageIds.length > 4 && (
-                                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-line bg-surface-sunken text-[10px] text-ink-muted">
+                                <a
+                                  href={`/api/admin/trip-photos-full?batchId=${batchId}&imageId=${item.imageIds[0]}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-line bg-surface-sunken text-[10px] text-ink-muted hover:bg-surface"
+                                  title="Бусад зургийг харах"
+                                >
                                   +{item.imageIds.length - 4}
-                                </span>
+                                </a>
                               )}
                             </div>
                           </td>
@@ -493,17 +604,37 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
                                 </option>
                               ))}
                             </select>
+                            {effectiveTripId && (
+                              <ExistingTripPhotos tripId={effectiveTripId} trips={trips} newCount={item.imageCount} />
+                            )}
                           </td>
                           <td className="py-3 align-top">
-                            <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
-                              <input
-                                type="checkbox"
-                                checked={isSkipped}
-                                onChange={() => toggleSkip(item.id)}
-                                className="h-4 w-4 rounded border-line-strong accent-brand"
-                              />
-                              Алгасах
-                            </label>
+                            <div className="flex flex-col gap-2">
+                              <button
+                                type="button"
+                                disabled={isSkipped || confirmingId === item.id || !effectiveTripId}
+                                onClick={() => void confirmSingle(item)}
+                                className="rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-white hover:bg-brand/90 disabled:opacity-50"
+                              >
+                                {confirmingId === item.id ? "Оруулж байна..." : "Баталгаажуулах"}
+                              </button>
+                              <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
+                                <input
+                                  type="checkbox"
+                                  checked={isSkipped}
+                                  onChange={() => toggleSkip(item.id)}
+                                  className="h-4 w-4 rounded border-line-strong accent-brand"
+                                />
+                                Алгасах
+                              </label>
+                              {itemResults[item.id] && (
+                                <p className={cx("text-xs", itemResults[item.id].error ? "text-red-600" : "text-green-600")}>
+                                  {itemResults[item.id].error
+                                    ? `Алдаа: ${itemResults[item.id].error}`
+                                    : `Оруулсан: ${itemResults[item.id].uploaded}`}
+                                </p>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );

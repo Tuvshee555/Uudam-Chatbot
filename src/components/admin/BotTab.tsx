@@ -131,7 +131,14 @@ export function BotTab({
   const handoffRows = pausedRows.filter((row) => row.reason === "handoff");
   const handoffIds = new Set(handoffRows.map((row) => row.sender_id));
   const [selectedSender, setSelectedSender] = useState<string | null>(null);
-  const [chatHistory, setChatHistory] = useState<{ role: string; text: string }[]>([]);
+  type ChatAttachment = { type: "image"; url: string; caption?: string };
+  type ChatHistoryMessage = {
+    role: "user" | "assistant";
+    text: string;
+    attachments?: ChatAttachment[];
+    created_at?: string;
+  };
+  const [chatHistory, setChatHistory] = useState<ChatHistoryMessage[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -139,6 +146,24 @@ export function BotTab({
   const [renameLoading, setRenameLoading] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   const toast = useToast();
+
+  function formatChatTime(iso?: string) {
+    if (!iso) return "";
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return iso;
+    const now = new Date();
+    const isToday =
+      date.getDate() === now.getDate() &&
+      date.getMonth() === now.getMonth() &&
+      date.getFullYear() === now.getFullYear();
+    return date.toLocaleString("mn-MN", {
+      month: "short",
+      day: "numeric",
+      ...(isToday ? {} : { year: "numeric" }),
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
 
   async function openChat(senderId: string) {
     setSelectedSender(senderId);
@@ -268,24 +293,74 @@ export function BotTab({
             </div>
           )}
           {!chatLoading && chatHistory.length > 0 && (
-            <div className="space-y-2">
+            <div className="max-h-[60vh] space-y-4 overflow-y-auto pr-1">
               {chatHistory.map((msg, i) => (
                 <div
                   key={i}
                   className={cx(
-                    "flex",
-                    msg.role === "user" ? "justify-start" : "justify-end",
+                    "flex gap-2.5",
+                    msg.role === "user" ? "justify-start" : "flex-row-reverse justify-end",
                   )}
                 >
                   <div
                     className={cx(
-                      "max-w-[78%] rounded-2xl px-3.5 py-2 text-sm leading-relaxed",
+                      "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border",
                       msg.role === "user"
-                        ? "bg-surface-sunken text-ink"
-                        : "bg-brand text-white",
+                        ? "border-line bg-surface-sunken text-ink-subtle"
+                        : "border-brand/30 bg-brand/10 text-brand",
                     )}
+                    title={msg.role === "user" ? "Хэрэглэгч" : "Бот"}
                   >
-                    {msg.text}
+                    {msg.role === "user" ? <Icons.user size={14} /> : <Icons.bot size={14} />}
+                  </div>
+                  <div className="max-w-[78%]">
+                    <div
+                      className={cx(
+                        "rounded-2xl px-3.5 py-2 text-sm leading-relaxed shadow-sm",
+                        msg.role === "user"
+                          ? "bg-surface-sunken text-ink"
+                          : "bg-brand text-white",
+                      )}
+                    >
+                      {msg.text ? (
+                        <p className="whitespace-pre-wrap">{msg.text}</p>
+                      ) : (
+                        <span className="opacity-75 italic">🖼 зураг</span>
+                      )}
+                      {msg.attachments && msg.attachments.length > 0 && (
+                        <div
+                          className={cx(
+                            "mt-2 grid gap-1.5",
+                            msg.attachments.length === 1 ? "grid-cols-1" : "grid-cols-2",
+                          )}
+                        >
+                          {msg.attachments.map((att, idx) => (
+                            <a
+                              key={idx}
+                              href={att.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="block overflow-hidden rounded-xl ring-1 ring-black/5 transition hover:opacity-90"
+                            >
+                              <img
+                                src={att.url}
+                                alt={att.caption || "Зураг"}
+                                className="max-h-48 w-full object-cover"
+                                loading="lazy"
+                              />
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <p
+                      className={cx(
+                        "mt-1 text-[10px] text-ink-subtle",
+                        msg.role === "user" ? "text-left" : "text-right",
+                      )}
+                    >
+                      {formatChatTime(msg.created_at)}
+                    </p>
                   </div>
                 </div>
               ))}

@@ -19,6 +19,7 @@ import { TripsTab } from "@/components/admin/TripsTab";
 import { TripEditModal } from "@/components/admin/TripEditModal";
 import { JsonEditorTab } from "@/components/admin/JsonEditorTab";
 import { TripPhotoImportTab } from "@/components/admin/TripPhotoImportTab";
+import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
 import type { AIAction, AIProposal, AIProposalResponse, AttachedFile, ChatButton, ChatMessage, ClarificationAnswer, ClarificationQuestion, AdminMsg, ChildRule, ConflictItem, ConflictSeverity, ControlState, DiscountGroup, DriveSyncDiagnostics, DriveSyncRecentFile, ExtraFee, FlowRule, LeadCrmStatus, LeadStats, NoteMsg, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalMsg, ReadinessReport, RecentRow, RoomPrice, SettingsForm, StructuredRow, TabKey, TravelBotSettings, TravelLead, TravelTrip, TripStatus } from "@/lib/adminTypes";
 import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, DURATIONS, FIELD_LABELS, HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS, STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, dataUrlToText, delayMs, describeAction, driveSyncTone, fileToDataUrl, formatBytes, formatMoneyValue, formatTime, getSecretStorage, getTestBotConversationId, handoffDurationSelectValue, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, settingsToForm, shortId, splitLines, summarizeConflict, timeLeft, toStructuredRows, uid } from "@/lib/adminPageUtils";
 const BLANK_TRIP_DRAFT: Record<string, string> = { category: "", operator_name: "", route_name: "", duration_text: "", adult_price: "", child_price: "", currency: "MNT", seats_total: "", seats_left: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
@@ -1240,15 +1241,15 @@ export default function AdminPage() {
       toast.error("10MB-ээс том зураг оруулах боломжгүй.");
     }
 
-    const availableSlots = Math.max(0, 20 - tripPhotoUrls.length);
+    const availableSlots = Math.max(0, MAX_PHOTOS_PER_TRIP - tripPhotoUrls.length);
     if (availableSlots === 0) {
-      toast.error("Нэг аялалд хамгийн ихдээ 20 зураг хадгална.");
+      toast.error(`Нэг аялалд хамгийн ихдээ ${MAX_PHOTOS_PER_TRIP} зураг хадгална.`);
       return;
     }
 
     const fileArray = validFiles.slice(0, availableSlots);
     if (fileArray.length < validFiles.length) {
-      toast.error("Зургийн дээд тоо 20 тул үлдсэн файлуудыг алгаслаа.");
+      toast.error(`Зургийн дээд тоо ${MAX_PHOTOS_PER_TRIP} тул үлдсэн файлуудыг алгаслаа.`);
     }
     if (fileArray.length === 0) return;
 
@@ -1308,7 +1309,7 @@ export default function AdminPage() {
     ).filter((url): url is string => Boolean(url));
 
     if (uploadedUrls.length > 0) {
-      setTripPhotoUrls((prev) => [...prev, ...uploadedUrls].slice(0, 20));
+      setTripPhotoUrls((prev) => [...prev, ...uploadedUrls].slice(0, MAX_PHOTOS_PER_TRIP));
     }
   }
   function closeTripModal() {
