@@ -112,20 +112,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (!token) return res.status(400).json({ error: "no page token configured" });
         const senders = await dbListSendersWithoutName();
         let filled = 0;
+        const errors: string[] = [];
         for (const s of senders) {
           if (s.platform !== "facebook") continue;
           try {
             const url = `https://graph.facebook.com/v19.0/${encodeURIComponent(s.sender_id)}?fields=name&access_token=${encodeURIComponent(token)}`;
             const fbRes = await fetch(url, { signal: AbortSignal.timeout(4000) });
-            if (!fbRes.ok) continue;
-            const data = (await fbRes.json()) as { name?: string };
+            const data = (await fbRes.json()) as { name?: string; error?: { message?: string; code?: number } };
+            if (!fbRes.ok || data.error) {
+              errors.push(`${s.sender_id.slice(-6)}: ${data.error?.message ?? fbRes.status}`);
+              continue;
+            }
             if (typeof data.name === "string" && data.name.trim()) {
               await dbStoreSenderName(s.sender_id, data.name.trim());
               filled++;
             }
-          } catch { /* skip */ }
+          } catch (e) {
+            errors.push(`${s.sender_id.slice(-6)}: ${e instanceof Error ? e.message : String(e)}`);
+          }
         }
-        return res.status(200).json({ ok: true, total: senders.length, filled });
+        return res.status(200).json({ ok: true, total: senders.length, filled, errors: errors.slice(0, 5) });
       }
 
       if (action === "rename") {

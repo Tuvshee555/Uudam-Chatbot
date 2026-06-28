@@ -526,7 +526,11 @@ export function BotTab({
                   body: JSON.stringify({ action: "backfill_names" }),
                 });
                 const data = await res.json();
-                toast.success(`${data.filled ?? 0} нэр татаж авлаа`);
+                if (data.errors?.length) {
+                  toast.error(`${data.filled ?? 0}/${data.total} нэр татлаа. Алдаа: ${data.errors[0]}`);
+                } else {
+                  toast.success(`${data.filled ?? 0}/${data.total} нэр татаж авлаа`);
+                }
                 onSettingsChanged();
               } catch {
                 toast.error("Нэр татахад алдаа гарлаа");
