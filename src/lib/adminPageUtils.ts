@@ -155,6 +155,14 @@ function isImageFile(file: File): boolean {
   );
 }
 
+function isZipFile(file: File): boolean {
+  return (
+    file.type === "application/zip" ||
+    file.type === "application/x-zip-compressed" ||
+    /\.zip$/i.test(file.name.trim())
+  );
+}
+
 function isTextLikeFile(file: File): boolean {
   return (
     file.type.startsWith("text/") ||
@@ -794,6 +802,85 @@ async function buildImageUploadUnit(file: File): Promise<ParseUploadUnit> {
   } finally {
     bitmap.close();
   }
+}
+
+function imageMimeFromName(name: string): string {
+  const lower = name.trim().toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".webp")) return "image/webp";
+  return "image/jpeg";
+}
+
+function dataUrlDecodedByteLength(dataUrl: string): number {
+  const raw = dataUrl.includes(",") ? dataUrl.slice(dataUrl.indexOf(",") + 1) : dataUrl;
+  const compact = raw.replace(/\s/g, "");
+  return (
+    Math.ceil((compact.length * 3) / 4) -
+    (compact.endsWith("==") ? 2 : compact.endsWith("=") ? 1 : 0)
+  );
+}
+
+async function buildZipImageUploadUnits(file: File): Promise<ParseUploadUnit[]> {
+  const JSZip = (await import("jszip")).default;
+  const zip = await JSZip.loadAsync(await file.arrayBuffer());
+  const entries = Object.values(zip.files)
+    .filter(
+      (entry) =>
+        !entry.dir &&
+        !entry.name.includes("__MACOSX") &&
+        /\.(png|jpe?g|webp)$/i.test(entry.name),
+    )
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  if (entries.length === 0) {
+    throw new Error(`"${file.name}" ZIP дотор зураг олдсонгүй.`);
+  }
+
+  const imageUnits: ParseUploadUnit[] = [];
+  for (const entry of entries) {
+    const blob = await entry.async("blob");
+    const cleanName = entry.name.split("/").pop() || entry.name;
+    const imageFile = new File([blob], `${file.name}/${cleanName}`, {
+      type: imageMimeFromName(cleanName),
+      lastModified: file.lastModified,
+    });
+    const unit = await buildImageUploadUnit(imageFile);
+    imageUnits.push({
+      ...unit,
+      displayName: `${file.name} / ${cleanName}`,
+      sourceGroup: file.name,
+    });
+  }
+
+  const groups: ParseUploadUnit[] = [];
+  let current: ParseUploadUnit | null = null;
+  let currentBytes = 0;
+  const maxGroupBytes = MAX_PARSE_UPLOAD_BYTES * 3;
+
+  for (const unit of imageUnits) {
+    const unitBytes = dataUrlDecodedByteLength(unit.dataUrl);
+    if (!current || currentBytes + unitBytes > maxGroupBytes) {
+      current = {
+        ...unit,
+        displayName: file.name,
+        sourceGroup: file.name,
+        companions: [],
+      };
+      groups.push(current);
+      currentBytes = unitBytes;
+      continue;
+    }
+    current.companions = [
+      ...(current.companions || []),
+      {
+        filename: unit.filename,
+        mimeType: unit.mimeType,
+        dataUrl: unit.dataUrl,
+      },
+    ];
+    currentBytes += unitBytes;
+  }
+
+  return groups;
 }
 
 function shortId(value: string): string {
@@ -1622,11 +1709,13 @@ export {
   HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS,
   QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS,
   STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit,
+  buildZipImageUploadUnits,
   buildOfficeUploadUnits, buildPdfUploadUnits, buildProposalClarifications,
   buildTextUploadUnits, dataUrlToText, delayMs, describeAction, driveSyncTone,
   fileToDataUrl, formatBytes, formatMoneyValue, formatTime, getSecretStorage,
   getTestBotConversationId, handoffDurationSelectValue, isEditableElement,
   isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure,
+  isZipFile,
   settingsToForm, shortId, splitLines, summarizeConflict, timeLeft, toStructuredRows,
   uid,
 };

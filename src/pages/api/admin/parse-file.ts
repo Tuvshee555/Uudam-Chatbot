@@ -1,4 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import JSZip from "jszip";
 import { requireAdminAccess } from "../../../lib/adminAccess";
 import {
   MAX_PARSE_UPLOAD_DECODED_BYTES,
@@ -21,6 +22,7 @@ import {
   finishRequestTrace,
   recordCounter,
 } from "../../../lib/observability";
+import { uploadImageToCloudinary } from "../../../lib/tripPhotoImport/upload";
 import {
   PayloadTooLargeError,
   readRawBodyLimited,
@@ -41,6 +43,12 @@ type UploadPayload = {
   filename: string;
   mimeType: string;
   dataBase64: string;
+};
+
+type PhotoUploadAsset = {
+  label: string;
+  buffer: Buffer;
+  mimeType: string;
 };
 
 // Vercel hard-caps a serverless request body at ~4.5MB — this stays under it.
@@ -115,6 +123,73 @@ function estimateDecodedBytes(dataBase64: string) {
     Math.ceil((compact.length * 3) / 4) -
     (compact.endsWith("==") ? 2 : compact.endsWith("=") ? 1 : 0)
   );
+}
+
+function decodeUploadBuffer(dataBase64: string): Buffer {
+  const cleaned = dataBase64.includes(",")
+    ? dataBase64.slice(dataBase64.indexOf(",") + 1)
+    : dataBase64;
+  return Buffer.from(cleaned.replace(/\s/g, ""), "base64");
+}
+
+function imageMimeFromName(name: string, fallback?: string): string {
+  const lower = name.trim().toLowerCase();
+  if (fallback?.startsWith("image/")) return fallback;
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".webp")) return "image/webp";
+  return "image/jpeg";
+}
+
+function isImageUpload(upload: UploadPayload): boolean {
+  return (
+    upload.mimeType.toLowerCase().startsWith("image/") ||
+    /\.(png|jpe?g|webp)$/i.test(upload.filename.trim())
+  );
+}
+
+function isZipUpload(upload: UploadPayload): boolean {
+  const mime = upload.mimeType.toLowerCase();
+  return (
+    mime === "application/zip" ||
+    mime === "application/x-zip-compressed" ||
+    /\.zip$/i.test(upload.filename.trim())
+  );
+}
+
+async function collectPhotoAssets(upload: UploadPayload): Promise<PhotoUploadAsset[]> {
+  const buffer = decodeUploadBuffer(upload.dataBase64);
+  if (isImageUpload(upload)) {
+    return [{
+      label: upload.filename,
+      buffer,
+      mimeType: imageMimeFromName(upload.filename, upload.mimeType),
+    }];
+  }
+  if (!isZipUpload(upload)) return [];
+
+  const zip = await JSZip.loadAsync(buffer, {
+    decodeFileName: (bytes) => new TextDecoder("utf-8").decode(bytes as Uint8Array),
+  });
+  const entries = Object.values(zip.files)
+    .filter(
+      (entry) =>
+        !entry.dir &&
+        !entry.name.includes("__MACOSX") &&
+        /\.(png|jpe?g|webp)$/i.test(entry.name),
+    )
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+  const assets: PhotoUploadAsset[] = [];
+  for (const entry of entries) {
+    const entryBuffer = await entry.async("nodebuffer");
+    const cleanName = entry.name.split("/").pop() || entry.name;
+    assets.push({
+      label: `${upload.filename}/${cleanName}`,
+      buffer: entryBuffer,
+      mimeType: imageMimeFromName(cleanName),
+    });
+  }
+  return assets;
 }
 
 async function readJsonBody(req: NextApiRequest): Promise<Record<string, unknown>> {
@@ -227,9 +302,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const parsedUploads: ParsedUpload[] = [];
+    const photoAssets: PhotoUploadAsset[] = [];
     try {
       for (const upload of uploads) {
-        parsedUploads.push(await parseUpload(upload));
+        const assets = await collectPhotoAssets(upload);
+        photoAssets.push(...assets);
+        if (isZipUpload(upload)) {
+          for (const asset of assets) {
+            parsedUploads.push({
+              label: asset.label,
+              text: "",
+              inline: {
+                mimeType: asset.mimeType,
+                data: asset.buffer.toString("base64"),
+              },
+            });
+          }
+        } else {
+          parsedUploads.push(await parseUpload(upload));
+        }
       }
       for (const fileId of driveFileIds) {
         const driveFile = await parseGoogleDriveFileId(fileId);
@@ -253,6 +344,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }),
     );
 
+    const photoUrlsByLabel = new Map<string, string[]>();
+    const photoUploadWarnings: string[] = [];
+    if (photoAssets.length > 0) {
+      for (const asset of photoAssets) {
+        try {
+          const url = await uploadImageToCloudinary(
+            asset.buffer,
+            asset.label,
+            asset.mimeType,
+          );
+          photoUrlsByLabel.set(asset.label, [
+            ...(photoUrlsByLabel.get(asset.label) || []),
+            url,
+          ]);
+        } catch (error) {
+          photoUploadWarnings.push(
+            `${asset.label}: ${error instanceof Error ? error.message : "upload failed"}`,
+          );
+        }
+      }
+    }
+
     const result = await generateAIProposalFromContentBatched({
       note: note || undefined,
       sources: parsedUploads.map((parsed, i) => ({
@@ -260,8 +373,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         contentText: parsed.text || undefined,
         inline: parsed.inline,
         fbAttachmentId: fbAttachmentIds[i] ?? undefined,
+        photoUrls: photoUrlsByLabel.get(parsed.label),
       })),
     });
+
+    if (photoUploadWarnings.length > 0) {
+      const warning =
+        `Зургийг аялалд автоматаар хавсаргах үед алдаа гарлаа: ${photoUploadWarnings
+          .slice(0, 3)
+          .join("; ")}${photoUploadWarnings.length > 3 ? "…" : ""}`;
+      result.proposal.needs_confirmation = true;
+      if (!result.proposal.conflicts.includes(warning)) {
+        result.proposal.conflicts.push(warning);
+      }
+      result.proposal.conflict_items = [
+        ...(result.proposal.conflict_items || []),
+        { text: warning, severity: "warning", type: "photo_upload_failed" },
+      ];
+    }
 
     const failure = getAIProposalFailureResponse(result.proposal);
     if (failure) {

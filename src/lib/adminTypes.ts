@@ -288,6 +288,8 @@ export type ParseUploadUnit = {
   filename: string;
   mimeType: string;
   dataUrl: string;
+  /** Original container name when several images came from one ZIP/folder. */
+  sourceGroup?: string;
   /** Additional evidence sent in the same AI request (for example PDF text + rendered pages). */
   companions?: Array<{
     filename: string;

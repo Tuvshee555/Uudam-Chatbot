@@ -21,7 +21,7 @@ import { JsonEditorTab } from "@/components/admin/JsonEditorTab";
 import { TripPhotoImportTab } from "@/components/admin/TripPhotoImportTab";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
 import type { AIAction, AIProposal, AIProposalResponse, AttachedFile, ChatButton, ChatMessage, ClarificationAnswer, ClarificationQuestion, AdminMsg, ChildRule, ConflictItem, ConflictSeverity, ControlState, DiscountGroup, DriveSyncDiagnostics, DriveSyncRecentFile, ExtraFee, FlowRule, LeadCrmStatus, LeadStats, NoteMsg, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalMsg, ReadinessReport, RecentRow, RoomPrice, SettingsForm, StructuredRow, TabKey, TravelBotSettings, TravelLead, TravelTrip, TripStatus } from "@/lib/adminTypes";
-import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, DURATIONS, FIELD_LABELS, HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS, STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, dataUrlToText, delayMs, describeAction, driveSyncTone, fileToDataUrl, formatBytes, formatMoneyValue, formatTime, getSecretStorage, getTestBotConversationId, handoffDurationSelectValue, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, settingsToForm, shortId, splitLines, summarizeConflict, timeLeft, toStructuredRows, uid } from "@/lib/adminPageUtils";
+import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, DURATIONS, FIELD_LABELS, HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS, STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, describeAction, driveSyncTone, fileToDataUrl, formatBytes, formatMoneyValue, formatTime, getSecretStorage, getTestBotConversationId, handoffDurationSelectValue, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, settingsToForm, shortId, splitLines, summarizeConflict, timeLeft, toStructuredRows, uid } from "@/lib/adminPageUtils";
 const BLANK_TRIP_DRAFT: Record<string, string> = { category: "", operator_name: "", route_name: "", duration_text: "", adult_price: "", child_price: "", currency: "MNT", seats_total: "", seats_left: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
 const MAX_AI_SOURCE_TEXT_CHARS = 20_000;
 export default function AdminPage() {
@@ -654,6 +654,8 @@ export default function AdminPage() {
           uploadUnits.push(...(await buildTextUploadUnits(file.file)));
         } else if (isImageFile(file.file)) {
           uploadUnits.push(await buildImageUploadUnit(file.file));
+        } else if (isZipFile(file.file)) {
+          uploadUnits.push(...(await buildZipImageUploadUnits(file.file)));
         } else {
           if (file.file.size > MAX_PARSE_UPLOAD_BYTES) {
             skippedFiles.push(file.name);

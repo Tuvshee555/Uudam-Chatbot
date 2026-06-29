@@ -67,6 +67,14 @@ type AIActionSnapshot = {
   after: TravelTrip | null;
 };
 
+type ProposalSource = {
+  label: string;
+  contentText?: string;
+  inline?: { mimeType: string; data: string } | null;
+  fbAttachmentId?: string;
+  photoUrls?: string[];
+};
+
 export function instructionForbidsTripCreation(instruction: string): boolean {
   const text = instruction.toLowerCase().replace(/\s+/g, " ").trim();
   if (!text) return false;
@@ -631,11 +639,7 @@ function buildProposalGuide(condensedTrips: unknown): string {
 
 function buildBatchSourceParts(input: {
   note?: string;
-  sources: Array<{
-    label: string;
-    contentText?: string;
-    inline?: { mimeType: string; data: string } | null;
-  }>;
+  sources: ProposalSource[];
 }) {
   const parts: GeminiPart[] = [];
   const sourceLabels = input.sources.map((source) => source.label).join(", ");
@@ -810,12 +814,7 @@ function splitTextIntoChunks(text: string, maxChars: number): string[] {
  * labelled sources so each gets its own fast Gemini call.
  */
 function splitLargeTextSources(
-  sources: Array<{
-    label: string;
-    contentText?: string;
-    inline?: { mimeType: string; data: string } | null;
-    fbAttachmentId?: string;
-  }>,
+  sources: ProposalSource[],
 ): typeof sources {
   const result: typeof sources = [];
   for (const source of sources) {
@@ -851,11 +850,7 @@ function splitLargeTextSources(
 }
 
 function chunkProposalSources(
-  sources: Array<{
-    label: string;
-    contentText?: string;
-    inline?: { mimeType: string; data: string } | null;
-  }>,
+  sources: ProposalSource[],
 ) {
   const MAX_INLINE_SOURCES_PER_BATCH = 2;
   const MAX_INLINE_BYTES_PER_BATCH = 12 * 1024 * 1024;
@@ -1438,9 +1433,10 @@ export async function generateAIProposalFromContentBatched(input: {
     contentText?: string;
     inline?: { mimeType: string; data: string } | null;
     fbAttachmentId?: string;
+    photoUrls?: string[];
   }>;
 }) {
-  const rawSources =
+  const rawSources: ProposalSource[] =
     input.sources && input.sources.length > 0
       ? input.sources
       : [
@@ -1467,6 +1463,18 @@ export async function generateAIProposalFromContentBatched(input: {
   for (const s of sources) {
     if (s.fbAttachmentId) fbAttachmentMap.set(s.label, s.fbAttachmentId);
   }
+
+  const photoUrlMap = new Map<string, string[]>();
+  const addPhotoUrls = (label: string, urls?: string[]) => {
+    const clean = (urls || [])
+      .filter((url): url is string => typeof url === "string")
+      .map((url) => url.trim())
+      .filter((url) => url.startsWith("https://"));
+    if (clean.length === 0) return;
+    photoUrlMap.set(label, Array.from(new Set([...(photoUrlMap.get(label) || []), ...clean])));
+  };
+  for (const s of rawSources) addPhotoUrls(s.label, s.photoUrls);
+  for (const s of sources) addPhotoUrls(s.label, s.photoUrls);
 
   const sourceLabels = rawSources.map((source) => source.label).join(", ");
   const batches = chunkProposalSources(sources);
@@ -1612,6 +1620,27 @@ export async function generateAIProposalFromContentBatched(input: {
         }
       }
 
+      if (photoUrlMap.size > 0 && merged.actions.length > 0) {
+        const allPhotoUrls = Array.from(photoUrlMap.values()).flat();
+        for (const action of merged.actions) {
+          const sourceFile = (action.fields?.extra as Record<string, unknown> | undefined)?.source_file_name;
+          const matchedUrls =
+            typeof sourceFile === "string" && photoUrlMap.has(sourceFile)
+              ? photoUrlMap.get(sourceFile) || []
+              : merged.actions.length === 1
+                ? allPhotoUrls
+                : [];
+          if (matchedUrls.length === 0) continue;
+          const existingUrls = Array.isArray(action.fields?.photo_urls)
+            ? action.fields.photo_urls.filter((url): url is string => typeof url === "string")
+            : [];
+          if (!action.fields) (action as { fields?: Record<string, unknown> }).fields = {};
+          (action.fields as Record<string, unknown>).photo_urls = Array.from(
+            new Set([...existingUrls, ...matchedUrls]),
+          ).slice(0, 20);
+        }
+      }
+
       return merged;
     },
   });
@@ -1739,6 +1768,24 @@ export async function reviseAIRequest(
   };
 }
 
+function fieldsWithMergedPhotoUrls(
+  fields: AITripAction["fields"] | undefined,
+  before: TravelTrip | null,
+): AITripAction["fields"] {
+  const next = { ...(fields || {}) };
+  if (!Array.isArray(next.photo_urls) || next.photo_urls.length === 0) return next;
+  const existing = Array.isArray(before?.photo_urls) ? before.photo_urls : [];
+  next.photo_urls = Array.from(
+    new Set(
+      [...existing, ...next.photo_urls]
+        .filter((url): url is string => typeof url === "string")
+        .map((url) => url.trim())
+        .filter((url) => url.startsWith("https://")),
+    ),
+  ).slice(0, 20);
+  return next;
+}
+
 async function applyAIAction(action: AITripAction) {
   if (!action || typeof action !== "object") {
     return { ok: false, message: "Invalid action payload." };
@@ -1761,7 +1808,10 @@ async function applyAIAction(action: AITripAction) {
     }
     const before = targetId ? await getTripById(targetId) : null;
     if (before) {
-      const updated = await patchTrip(targetId, action.fields || {});
+      const updated = await patchTrip(
+        targetId,
+        fieldsWithMergedPhotoUrls(action.fields, before) || {},
+      );
       if (!updated) return { ok: false, message: "Existing trip update failed." };
       return {
         ok: true,
@@ -1820,7 +1870,10 @@ async function applyAIAction(action: AITripAction) {
 
   if (verb === "patch") {
     const before = await getTripById(targetId);
-    const updated = await patchTrip(targetId, action.fields || {});
+    const updated = await patchTrip(
+      targetId,
+      fieldsWithMergedPhotoUrls(action.fields, before) || {},
+    );
     if (!updated) return { ok: false, message: "Patch update failed." };
     return {
       ok: true,
