@@ -607,7 +607,8 @@ export async function ensureTravelSchema() {
           ADD COLUMN IF NOT EXISTS greeting_sent    BOOLEAN NOT NULL DEFAULT FALSE,
           ADD COLUMN IF NOT EXISTS season_sent_ids  TEXT[] NOT NULL DEFAULT '{}'::text[],
           ADD COLUMN IF NOT EXISTS last_msg_at      TIMESTAMPTZ NULL,
-          ADD COLUMN IF NOT EXISTS goodbye_sent_at  TIMESTAMPTZ NULL;
+          ADD COLUMN IF NOT EXISTS goodbye_sent_at  TIMESTAMPTZ NULL,
+          ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ NULL;
       `);
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_travel_senders_last_seen
@@ -2557,6 +2558,49 @@ export async function dbClaimGoodbye(senderId: string): Promise<boolean> {
     [senderId, FOURTEEN_DAYS_AGO],
   );
   return (result?.rows[0]?.claimed) === true;
+}
+
+export type ReminderCandidate = {
+  sender_id: string;
+  platform: string;
+  last_msg_at: string;
+};
+
+// Returns all senders eligible for a 23-hour reminder:
+// - last_msg_at is between 23h and 24h ago (inside FB 24h window)
+// - reminder_sent_at is NULL or older than 6 months (cooldown)
+// - not currently paused
+export async function dbGetPendingReminders(): Promise<ReminderCandidate[]> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return [];
+  const SIX_MONTHS_AGO = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
+  const result = await queryNeon<ReminderCandidate>(
+    `SELECT sender_id, platform, last_msg_at
+     FROM travel_senders
+     WHERE platform = 'facebook'
+       AND last_msg_at < NOW() - INTERVAL '23 hours'
+       AND last_msg_at > NOW() - INTERVAL '24 hours'
+       AND (reminder_sent_at IS NULL OR reminder_sent_at < $1)
+       AND (paused = FALSE OR expires_at < NOW())`,
+    [SIX_MONTHS_AGO],
+  );
+  return result?.rows ?? [];
+}
+
+// Atomically claim the reminder slot for a sender (prevents double-send if cron overlaps).
+export async function dbClaimReminder(senderId: string): Promise<boolean> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return false;
+  const SIX_MONTHS_AGO = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString();
+  const result = await queryNeon<{ claimed: boolean }>(
+    `UPDATE travel_senders
+     SET reminder_sent_at = NOW(), updated_at = NOW()
+     WHERE sender_id = $1
+       AND (reminder_sent_at IS NULL OR reminder_sent_at < $2)
+     RETURNING TRUE AS claimed`,
+    [senderId, SIX_MONTHS_AGO],
+  );
+  return result?.rows[0]?.claimed === true;
 }
 
 // Returns true if this season album hasn't been sent to this sender yet (within the session).
