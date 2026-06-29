@@ -197,77 +197,182 @@ export function sampleWelcomePhotos(trips: TravelTrip[]): string[] {
 
 // ─── Trip photo detection after AI reply ─────────────────────────────────────
 
-function normText(t: string) {
-  return t.toLowerCase().replace(/[^\wа-яөүё\s]/gi, " ");
+const MEDIA_MATCH_STOP_WORDS = new Set([
+  "trip",
+  "tour",
+  "travel",
+  "price",
+  "program",
+  "photo",
+  "photos",
+  "pdf",
+  "image",
+  "images",
+  "\u0430\u044f\u043b\u0430\u043b",
+  "\u0430\u044f\u043b\u043b\u044b\u043d",
+  "\u0430\u044f\u043b\u043b\u0443\u0443\u0434",
+  "\u04af\u043d\u044d",
+  "\u0445\u04e9\u0442\u04e9\u043b\u0431\u04e9\u0440",
+  "\u0437\u0443\u0440\u0430\u0433",
+  "\u0437\u0443\u0440\u0433\u0443\u0443\u0434",
+  "\u0434\u044d\u043b\u0433\u044d\u0440\u044d\u043d\u0433\u04af\u0439",
+  "\u0448\u0443\u0443\u0434",
+  "\u043d\u0438\u0441\u043b\u044d\u0433\u0442\u044d\u0439",
+]);
+
+type TripMediaMatch = {
+  trip: TravelTrip;
+  score: number;
+  replyScore: number;
+  userScore: number;
+  phraseHits: number;
+  tokenHits: number;
+};
+
+function mediaNormText(text: string) {
+  return text.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ");
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
+function tripAliases(trip: TravelTrip): string[] {
+  const extraAliases = Array.isArray((trip.extra as Record<string, unknown>)?.aliases)
+    ? ((trip.extra as Record<string, unknown>).aliases as unknown[])
+    : [];
+  const topLevelAliases = Array.isArray((trip as unknown as { aliases?: unknown }).aliases)
+    ? ((trip as unknown as { aliases?: unknown[] }).aliases as unknown[])
+    : [];
+
+  return uniqueStrings([...extraAliases, ...topLevelAliases].filter((value): value is string => (
+    typeof value === "string" && value.trim().length > 0
+  )));
+}
+
+function tripNames(trip: TravelTrip): string[] {
+  return uniqueStrings([trip.route_name, ...tripAliases(trip)].filter(Boolean));
+}
+
+function mediaKeywordTokens(text: string): string[] {
+  return uniqueStrings(
+    mediaNormText(text)
+      .split(/\s+/)
+      .map((word) => word.trim())
+      .filter((word) => word.length >= 3 && !MEDIA_MATCH_STOP_WORDS.has(word)),
+  );
+}
+
+function scoreTripAgainstText(text: string, trip: TravelTrip) {
+  const normalizedText = mediaNormText(text);
+  const textTokens = new Set(mediaKeywordTokens(text));
+  let score = 0;
+  let phraseHits = 0;
+  const matchedTokens = new Set<string>();
+
+  for (const name of tripNames(trip)) {
+    const normalizedName = mediaNormText(name).trim();
+    if (normalizedName.length >= 3 && normalizedText.includes(normalizedName)) {
+      phraseHits++;
+      score += name === trip.route_name ? 12 : 10;
+    }
+
+    for (const token of mediaKeywordTokens(name)) {
+      if (textTokens.has(token)) {
+        matchedTokens.add(token);
+      }
+    }
+  }
+
+  score += matchedTokens.size * 3;
+  if (phraseHits > 0) score += Math.min(matchedTokens.size, 3);
+
+  return {
+    score,
+    phraseHits,
+    tokenHits: matchedTokens.size,
+  };
+}
+
+function hasStrongEvidence(evidence: { phraseHits: number; tokenHits: number }) {
+  return evidence.phraseHits > 0 || evidence.tokenHits >= 2;
+}
+
+function selectVerifiedTripForMedia(input: {
+  replyText: string;
+  userText?: string;
+  trips: TravelTrip[];
+}): TripMediaMatch | null {
+  const matches = input.trips
+    .map((trip) => {
+      const reply = scoreTripAgainstText(input.replyText, trip);
+      const user = input.userText ? scoreTripAgainstText(input.userText, trip) : null;
+      const score = reply.score * (input.userText ? 2 : 1) + (user?.score || 0);
+      return {
+        trip,
+        score,
+        replyScore: reply.score,
+        userScore: user?.score || 0,
+        phraseHits: reply.phraseHits + (user?.phraseHits || 0),
+        tokenHits: reply.tokenHits + (user?.tokenHits || 0),
+        replyEvidence: reply,
+        userEvidence: user,
+      };
+    })
+    .filter((match) => {
+      if (input.userText) {
+        return hasStrongEvidence(match.replyEvidence) && hasStrongEvidence(match.userEvidence || { phraseHits: 0, tokenHits: 0 });
+      }
+      return hasStrongEvidence(match.replyEvidence);
+    })
+    .sort((a, b) => b.score - a.score);
+
+  if (matches.length === 0) return null;
+
+  const best = matches[0];
+  const second = matches[1];
+  const minimumScore = input.userText ? 18 : 8;
+  if (best.score < minimumScore) return null;
+  if (second && best.score - second.score < 6) return null;
+
+  return best;
 }
 
 export function extractTripPhotosForReply(
   replyText: string,
   trips: TravelTrip[],
+  options: { userText?: string } = {},
 ): string[] {
-  const norm = normText(replyText);
   const active = trips.filter(
     (t) => t.status === "active" && t.photo_urls.length > 0,
   );
-
-  const scored: { trip: TravelTrip; score: number }[] = [];
-  for (const trip of active) {
-    // Score against route_name + aliases combined so unique keywords win
-    const extraAliases = Array.isArray((trip.extra as Record<string,unknown>)?.aliases) ? (trip.extra as Record<string,unknown>).aliases as string[] : [];
-    const tripText = [trip.route_name, ...extraAliases].join(" ");
-    const words = normText(tripText)
-      .split(/\s+/)
-      .filter((w) => w.length >= 3);
-    const score = words.filter((w) => norm.includes(w)).length;
-    if (score > 0) scored.push({ trip, score });
-  }
-
-  if (scored.length === 0) return [];
-
-  // Single strong match (score ≥ 2) → send up to MAX_TRIP_PHOTOS from that trip
-  const best = scored.sort((a, b) => b.score - a.score)[0];
-  if (best.score >= 2 || scored.length === 1) {
-    return best.trip.photo_urls.slice(0, MAX_TRIP_PHOTOS);
-  }
-
-  // Multiple weak matches (list reply) → one photo per matched trip, up to 5
-  return scored
-    .slice(0, 5)
-    .map(({ trip }) => trip.photo_urls[0])
-    .filter(Boolean);
+  const verifiedMatch = selectVerifiedTripForMedia({
+    replyText,
+    userText: options.userText,
+    trips: active,
+  });
+  return verifiedMatch ? verifiedMatch.trip.photo_urls.slice(0, MAX_TRIP_PHOTOS) : [];
 }
 
 export function extractTripBrochureAttachmentId(
   replyText: string,
   trips: TravelTrip[],
+  options: { userText?: string } = {},
 ): { type: "id"; value: string } | { type: "url"; value: string } | null {
-  const norm = normText(replyText);
   const active = trips.filter((t) => t.status === "active");
+  const verifiedMatch = selectVerifiedTripForMedia({
+    replyText,
+    userText: options.userText,
+    trips: active,
+  });
+  if (!verifiedMatch) return null;
+  const verifiedExtra = verifiedMatch.trip.extra as Record<string, unknown> | undefined;
 
-  let bestScore = 0;
-  let bestTrip: TravelTrip | null = null;
+  const verifiedId = verifiedExtra?.source_file_attachment_id;
+  if (typeof verifiedId === "string" && verifiedId.length > 0) return { type: "id", value: verifiedId };
 
-  for (const trip of active) {
-    const extraAliases = Array.isArray((trip.extra as Record<string,unknown>)?.aliases) ? (trip.extra as Record<string,unknown>).aliases as string[] : [];
-    const tripText = [trip.route_name, ...extraAliases].join(" ");
-    const words = normText(tripText)
-      .split(/\s+/)
-      .filter((w) => w.length >= 3);
-    const score = words.filter((w) => norm.includes(w)).length;
-    if (score > bestScore) {
-      bestScore = score;
-      bestTrip = trip;
-    }
-  }
-
-  if (!bestTrip || bestScore === 0) return null;
-  const extra = bestTrip.extra as Record<string, unknown> | undefined;
-
-  const id = extra?.source_file_attachment_id;
-  if (typeof id === "string" && id.length > 0) return { type: "id", value: id };
-
-  const url = extra?.brochure_pdf_url;
-  if (typeof url === "string" && url.startsWith("https://")) return { type: "url", value: url };
+  const verifiedUrl = verifiedExtra?.brochure_pdf_url;
+  if (typeof verifiedUrl === "string" && verifiedUrl.startsWith("https://")) return { type: "url", value: verifiedUrl };
 
   return null;
 }

@@ -829,6 +829,7 @@ async function sendTripMediaForReply(
   platform: Platform,
   senderId: string,
   replyText: string,
+  userText: string,
   token: string | undefined,
   pageId: string,
   igUserId?: string | null,
@@ -837,7 +838,7 @@ async function sendTripMediaForReply(
   if (platform !== "facebook" || !token) return;
   try {
     const tripsForPhotos = await listTrips({ limit: 5000 });
-    const tripPhotos = extractTripPhotosForReply(replyText, tripsForPhotos);
+    const tripPhotos = extractTripPhotosForReply(replyText, tripsForPhotos, { userText });
     logInfo("webhook.trip_photos_selected", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
@@ -1836,6 +1837,7 @@ async function handleMessage(
             platform,
             senderId,
             safeProgramReply,
+            text,
             token,
             pageId,
             igUserId,
@@ -1874,6 +1876,7 @@ async function handleMessage(
         platform,
         senderId,
         safeStructuredReply,
+        text,
         token,
         pageId,
         igUserId,
@@ -2023,6 +2026,7 @@ async function handleMessage(
     platform,
     senderId,
     safeReply,
+    text,
     token,
     pageId,
     igUserId,

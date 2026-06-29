@@ -43,10 +43,15 @@ export type ProgramAsset = {
 
 export type TripProgramReplyResult = {
   reply: string;
-  trip: TravelTrip;
+  trip: TravelTrip | null;
   brochure: ProgramAsset | null;
   mediaUrls: string[];
 };
+
+export type TripResolution =
+  | { status: "verified"; trip: TravelTrip; candidates: TravelTrip[] }
+  | { status: "ambiguous"; trip: null; candidates: TravelTrip[] }
+  | { status: "not_found"; trip: null; candidates: [] };
 
 const SEATS_KEYWORDS_MN = [
   "суудал",
@@ -396,11 +401,18 @@ function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] {
   });
 }
 
-function findBestTripMatch(text: string, trips: TravelTrip[]) {
+export function resolveTripFromUserMessage(
+  text: string,
+  trips: TravelTrip[],
+  options: { allowLooseFallback?: boolean } = {},
+): TripResolution {
+  const allowLooseFallback = options.allowLooseFallback !== false;
   const matches = findTripMatches(text, trips);
   if (!matches.length) {
-    const looseBest = findLooseTripMatch(text, trips);
-    return { best: looseBest, ambiguous: [] as TravelTrip[] };
+    const looseBest = allowLooseFallback ? findLooseTripMatch(text, trips) : null;
+    return looseBest
+      ? { status: "verified", trip: looseBest, candidates: [] }
+      : { status: "not_found", trip: null, candidates: [] };
   }
 
   const [best, second] = matches;
@@ -409,15 +421,17 @@ function findBestTripMatch(text: string, trips: TravelTrip[]) {
     best.score - second.score <= 5 &&
     Math.abs(best.keywordCoverage - second.keywordCoverage) <= 0.15
   ) {
-    const looseBest = findLooseTripMatch(text, trips);
-    if (looseBest) return { best: looseBest, ambiguous: [] as TravelTrip[] };
-    return {
-      best: null,
-      ambiguous: matches.slice(0, 3).map((match) => match.trip),
-    };
+    return { status: "ambiguous", trip: null, candidates: matches.slice(0, 3).map((match) => match.trip) };
   }
 
-  return { best: best.trip, ambiguous: [] as TravelTrip[] };
+  return { status: "verified", trip: best.trip, candidates: [] };
+}
+
+function findBestTripMatch(text: string, trips: TravelTrip[]) {
+  const resolution = resolveTripFromUserMessage(text, trips);
+  if (resolution.status === "verified") return { best: resolution.trip, ambiguous: [] as TravelTrip[] };
+  if (resolution.status === "ambiguous") return { best: null, ambiguous: resolution.candidates };
+  return { best: null, ambiguous: [] as TravelTrip[] };
 }
 
 // Whether the query explicitly signals a land-only (no-flight) trip.
@@ -735,10 +749,19 @@ export function buildTripProgramReply(
         ? exactMentionedTrips
         : trips;
   const candidateTrips = scopedTrips.length > 0 ? scopedTrips : trips;
-  const best = candidateTrips.length === 1
-    ? candidateTrips[0]
-    : findLooseTripMatch(text, candidateTrips, { hasBrochureIntent: true });
-  if (!best) return null;
+  const resolution = trips.length === 1
+    ? { status: "verified" as const, trip: trips[0], candidates: [] }
+    : resolveTripFromUserMessage(text, candidateTrips, { allowLooseFallback: false });
+  if (resolution.status === "ambiguous") {
+    return {
+      reply: buildAmbiguousTripReply(resolution.candidates),
+      trip: null,
+      brochure: null,
+      mediaUrls: [],
+    };
+  }
+  if (resolution.status !== "verified") return null;
+  const best = resolution.trip;
 
   const summary = buildTripSummaryLines(best);
   const summaryBlock = summary ? `\n\n${summary}` : "";
