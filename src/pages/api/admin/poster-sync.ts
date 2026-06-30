@@ -9,6 +9,17 @@ const CLOUDINARY_FOLDER = "uudam-travel-trips";
 const MAX_PHOTOS = 20;
 const MAX_IMAGES_PER_SYNC = 10;
 
+// Poster PNGs (base64) are well over the default 1MB body limit. Raise it so
+// 2-3 high-res poster slices fit in one JSON POST.
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: "25mb",
+    },
+    maxDuration: 60,
+  },
+};
+
 // base64 data URL → Cloudinary upload, returns secure_url
 async function uploadBase64ToCloudinary(
   dataUrl: string,
