@@ -43,7 +43,7 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
   const [items, setItems] = React.useState<PreviewItem[]>([]);
   const [overrides, setOverrides] = React.useState<Record<string, string | null>>({});
   const [skipped, setSkipped] = React.useState<Set<string>>(new Set());
-  const [mode, setMode] = React.useState<"append" | "replace">("append");
+  const [mode, setMode] = React.useState<"append" | "replace">("replace");
   const [busy, setBusy] = React.useState(false);
   const [confirmingId, setConfirmingId] = React.useState<string | null>(null);
   const [results, setResults] = React.useState<ConfirmResult[] | null>(null);

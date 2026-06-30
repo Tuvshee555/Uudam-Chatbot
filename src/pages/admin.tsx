@@ -95,6 +95,7 @@ export default function AdminPage() {
   const [tripAnswerHints, setTripAnswerHints] = useState<import("@/lib/adminTypes").AnswerHint[]>([]);
   const [deletingTrip, setDeletingTrip] = useState<TravelTrip | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [photoReplaceConfirm, setPhotoReplaceConfirm] = useState<{ files: File[] } | null>(null);
   const [leads, setLeads] = useState<TravelLead[]>([]);
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [leadStats, setLeadStats] = useState<LeadStats | null>(null);
@@ -1237,20 +1238,18 @@ export default function AdminPage() {
     setTripAnswerHints(Array.isArray(trip.extra?.answer_hints) ? (trip.extra.answer_hints as import("@/lib/adminTypes").AnswerHint[]) : []);
   }
   const tripModalOpen = isNewTrip || editingTrip != null;
-  async function handlePhotoFiles(files: FileList | File[]) {
-    const validFiles = Array.from(files).filter((file) => file.size <= 10 * 1024 * 1024);
-    if (validFiles.length < Array.from(files).length) {
-      toast.error("10MB-ээс том зураг оруулах боломжгүй.");
-    }
+  async function doUploadPhotoFiles(files: File[], replace: boolean) {
+    if (replace) setTripPhotoUrls([]);
 
-    const availableSlots = Math.max(0, MAX_PHOTOS_PER_TRIP - tripPhotoUrls.length);
+    const baseCount = replace ? 0 : tripPhotoUrls.length;
+    const availableSlots = Math.max(0, MAX_PHOTOS_PER_TRIP - baseCount);
     if (availableSlots === 0) {
       toast.error(`Нэг аялалд хамгийн ихдээ ${MAX_PHOTOS_PER_TRIP} зураг хадгална.`);
       return;
     }
 
-    const fileArray = validFiles.slice(0, availableSlots);
-    if (fileArray.length < validFiles.length) {
+    const fileArray = files.slice(0, availableSlots);
+    if (fileArray.length < files.length) {
       toast.error(`Зургийн дээд тоо ${MAX_PHOTOS_PER_TRIP} тул үлдсэн файлуудыг алгаслаа.`);
     }
     if (fileArray.length === 0) return;
@@ -1311,7 +1310,22 @@ export default function AdminPage() {
     ).filter((url): url is string => Boolean(url));
 
     if (uploadedUrls.length > 0) {
-      setTripPhotoUrls((prev) => [...prev, ...uploadedUrls].slice(0, MAX_PHOTOS_PER_TRIP));
+      setTripPhotoUrls((prev) => {
+        const base = replace ? [] : prev;
+        return [...base, ...uploadedUrls].slice(0, MAX_PHOTOS_PER_TRIP);
+      });
+    }
+  }
+  function handlePhotoFiles(files: FileList | File[]) {
+    const validFiles = Array.from(files).filter((file) => file.size <= 10 * 1024 * 1024);
+    if (validFiles.length < Array.from(files).length) {
+      toast.error("10MB-ээс том зураг оруулах боломжгүй.");
+    }
+    if (validFiles.length === 0) return;
+    if (tripPhotoUrls.length > 0) {
+      setPhotoReplaceConfirm({ files: validFiles });
+    } else {
+      void doUploadPhotoFiles(validFiles, false);
     }
   }
   function closeTripModal() {
@@ -1958,6 +1972,45 @@ export default function AdminPage() {
           );
         }}
       />
+      <Modal
+        open={photoReplaceConfirm != null}
+        onClose={() => setPhotoReplaceConfirm(null)}
+        title="Хуучин зургуудыг устгах уу?"
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-ink-muted">
+            Энэ аялалд <span className="font-semibold text-ink">{tripPhotoUrls.length}</span> зураг байна.
+            Шинэ {photoReplaceConfirm?.files.length ?? 0} зурган дээр нэмэх үү, эсвэл хуучныг устгаад солих уу?
+          </p>
+          <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+            <Button variant="secondary" onClick={() => setPhotoReplaceConfirm(null)}>
+              Болих
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                const files = photoReplaceConfirm?.files ?? [];
+                setPhotoReplaceConfirm(null);
+                void doUploadPhotoFiles(files, false);
+              }}
+            >
+              <Icons.plus size={15} />
+              Нэмэх
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                const files = photoReplaceConfirm?.files ?? [];
+                setPhotoReplaceConfirm(null);
+                void doUploadPhotoFiles(files, true);
+              }}
+            >
+              <Icons.trash size={15} />
+              Хуучныг устгаад солих
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
