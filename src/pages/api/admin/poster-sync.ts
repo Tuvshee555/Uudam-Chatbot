@@ -1,9 +1,9 @@
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "@/lib/adminAccess";
 import { getEnv } from "@/lib/env";
 import { logError, logInfo } from "@/lib/observability";
-import { findTripMatches, listTrips, patchTrip } from "@/lib/travelDb";
+import { getTripById, patchTrip, upsertTrip } from "@/lib/travelDb";
 
 const CLOUDINARY_FOLDER = "uudam-travel-trips";
 const MAX_PHOTOS = 20;
@@ -40,13 +40,12 @@ async function uploadBase64ToCloudinary(
   const sepIdx = dataUrl.indexOf(";base64,");
   const mimePrefix = dataUrl.indexOf("data:") === 0 && sepIdx > 5 ? dataUrl.slice(5, sepIdx) : "";
   if (!mimePrefix.startsWith("image/")) throw new Error(`Зурагны формат буруу: ${fileName}`);
-  const base64Match = [null, mimePrefix, dataUrl.slice(sepIdx + 8)] as const;
-  if (!base64Match[2]) throw new Error(`Зурагны формат буруу: ${fileName}`);
-  const mimeType = base64Match[1] as string;
-  const buffer = Buffer.from(base64Match[2] as string, "base64");
+  const base64Body = dataUrl.slice(sepIdx + 8);
+  if (!base64Body) throw new Error(`Зурагны формат буруу: ${fileName}`);
+  const buffer = Buffer.from(base64Body, "base64");
 
   const formData = new FormData();
-  const blob = new Blob([new Uint8Array(buffer)], { type: mimeType });
+  const blob = new Blob([new Uint8Array(buffer)], { type: mimePrefix });
   formData.append("file", blob, fileName);
   formData.append("api_key", env.cloudinaryApiKey);
   formData.append("timestamp", String(timestamp));
@@ -64,6 +63,17 @@ async function uploadBase64ToCloudinary(
   return json.secure_url;
 }
 
+/**
+ * Writes poster images to ONE explicit trip. The caller (poster app) has
+ * already shown the user a confirmation modal and chosen exactly what to do:
+ *   - tripId set        → attach to that exact trip (no guessing)
+ *   - createNew + title → create a brand-new trip from the poster title
+ *   - mode "replace"    → overwrite photo_urls (default; poster is source of truth)
+ *   - mode "append"     → add to existing photo_urls
+ *
+ * Nothing is matched or overwritten implicitly here — that decision lives in
+ * the UI, so the bot can never "do stupid shit" behind the user's back.
+ */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const allowed = await requireAdminAccess(req, res, "api.admin.poster-sync");
   if (!allowed) return;
@@ -71,12 +81,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== "POST") return res.status(405).end();
 
   const body = req.body as {
-    tripTitle?: unknown;
+    tripId?: unknown;
+    createNew?: unknown;
+    newTripTitle?: unknown;
+    mode?: unknown;
     photos?: unknown;
   };
 
-  const tripTitle = typeof body.tripTitle === "string" ? body.tripTitle.trim() : "";
-  if (!tripTitle) return res.status(400).json({ error: "tripTitle хоосон байна" });
+  const tripId = typeof body.tripId === "string" && body.tripId.trim() ? body.tripId.trim() : null;
+  const createNew = body.createNew === true;
+  const newTripTitle =
+    typeof body.newTripTitle === "string" ? body.newTripTitle.trim() : "";
+  const mode = body.mode === "append" ? "append" : "replace";
+
+  if (!tripId && !createNew) {
+    return res.status(400).json({ error: "tripId эсвэл createNew шаардлагатай" });
+  }
+  if (createNew && !newTripTitle) {
+    return res.status(400).json({ error: "Шинэ аялалын нэр хоосон байна" });
+  }
 
   const rawPhotos = Array.isArray(body.photos) ? body.photos : [];
   type PhotoInput = { dataUrl: string; filename: string };
@@ -94,24 +117,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: "photos хоосон байна" });
   }
 
-  // Find matching trip (findTripMatches signature: trips, operatorName?, routeName?)
-  const trips = await listTrips();
-  const matches = findTripMatches(trips, undefined, tripTitle);
+  // Resolve the target trip up-front so we never upload images for a trip
+  // that doesn't exist.
+  let targetTripId = tripId;
+  let targetName = "";
+  let existingUrls: string[] = [];
 
-  if (matches.length === 0) {
-    return res.status(404).json({
-      error: `"${tripTitle}" нэртэй аялал олдсонгүй`,
-      hint: "Аяллын нэр зөв эсэхийг шалгана уу",
+  if (createNew) {
+    const created = await upsertTrip({
+      id: randomUUID(),
+      fields: { route_name: newTripTitle, status: "draft" },
     });
+    if (!created) {
+      return res.status(500).json({ error: "Шинэ аялал үүсгэж чадсангүй" });
+    }
+    targetTripId = created.id;
+    targetName = created.route_name;
+  } else {
+    const trip = await getTripById(tripId as string);
+    if (!trip) {
+      return res.status(404).json({ error: "Сонгосон аялал олдсонгүй (устсан байж магадгүй)" });
+    }
+    targetTripId = trip.id;
+    targetName = trip.route_name;
+    existingUrls = Array.isArray(trip.photo_urls) ? trip.photo_urls : [];
   }
 
-  const bestMatch = matches[0];
-  const tripId = bestMatch.id;
-  const matchedName = bestMatch.route_name;
+  logInfo("poster_sync.start", {
+    targetTripId,
+    targetName,
+    createNew,
+    mode,
+    photoCount: photos.length,
+  });
 
-  logInfo("poster_sync.matched", { tripTitle, matchedName, tripId, photoCount: photos.length });
-
-  // Upload each photo to Cloudinary
+  // Upload to Cloudinary FIRST. We only touch the DB if at least one succeeds,
+  // so a failed upload can never blank out a trip's photos.
   const uploadedUrls: string[] = [];
   const failures: Array<{ filename: string; error: string }> = [];
 
@@ -133,23 +174,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  // Replace photo_urls (always replace — poster is source of truth)
-  const patched = await patchTrip(tripId, {
-    photo_urls: uploadedUrls.slice(0, MAX_PHOTOS),
-  });
+  const finalUrls =
+    mode === "append"
+      ? [...existingUrls, ...uploadedUrls].slice(0, MAX_PHOTOS)
+      : uploadedUrls.slice(0, MAX_PHOTOS);
 
+  const patched = await patchTrip(targetTripId as string, { photo_urls: finalUrls });
   if (!patched) {
     return res.status(500).json({ error: "Аялалын зурагийг хадгалж чадсангүй" });
   }
 
-  logInfo("poster_sync.done", { tripId, matchedName, uploaded: uploadedUrls.length, failed: failures.length });
+  logInfo("poster_sync.done", {
+    targetTripId,
+    targetName,
+    mode,
+    uploaded: uploadedUrls.length,
+    failed: failures.length,
+    total: finalUrls.length,
+  });
 
   return res.status(200).json({
     ok: true,
-    tripId,
-    matchedName,
+    tripId: targetTripId,
+    tripName: targetName,
+    created: createNew,
+    mode,
     uploaded: uploadedUrls.length,
     failed: failures.length,
+    totalPhotos: finalUrls.length,
     failures: failures.length > 0 ? failures : undefined,
   });
 }
