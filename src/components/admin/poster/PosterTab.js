@@ -421,14 +421,19 @@ export default function PosterTab({ apiFetch }) {
   // client-upload pattern — the file bytes never pass through any of our
   // serverless functions. /extract is then just given the URL.
   //
-  // Extraction itself runs as a background job: /extract returns a jobId
-  // almost instantly instead of waiting for the AI to finish, because Vercel
-  // Hobby hard-caps a single function invocation at 60s with no way to raise
-  // it — a big real trip PDF read by OpenAI vision can take longer than
-  // that, and holding the client's request open would get it killed with no
-  // error, just an endless spinner. Polling has no such ceiling.
+  // Extraction is a two-step job: /extract creates a job row and returns a
+  // jobId almost instantly. The BROWSER then calls /extract-worker itself to
+  // do the actual (possibly slow) AI extraction — this used to be dispatched
+  // server-to-server via a fire-and-forget fetch, but that silently never
+  // invoked the worker in production (jobs stuck at "pending" forever with
+  // no error). Having the client call it directly removes that unreliable
+  // hop. The worker call has its own timeout below so a stall shows a real
+  // error instead of spinning forever; the poll afterward picks up the
+  // result from the job row regardless of whether the worker response itself
+  // came back cleanly.
+  const WORKER_CALL_TIMEOUT_MS = 90 * 1000; // a little over Vercel's 60s function ceiling
   const JOB_POLL_INTERVAL_MS = 2500;
-  const JOB_POLL_TIMEOUT_MS = 10 * 60 * 1000; // 10 min safety net
+  const JOB_POLL_TIMEOUT_MS = 5 * 60 * 1000; // 5 min safety net
 
   async function pollExtractJob(jobId) {
     const startedAt = Date.now();
@@ -441,6 +446,28 @@ export default function PosterTab({ apiFetch }) {
         throw new Error("Хэт удаж байна — файл дахин оролдоно уу.");
       }
       await new Promise((resolve) => setTimeout(resolve, JOB_POLL_INTERVAL_MS));
+    }
+  }
+
+  async function runExtractWorker(jobId, submitBody) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), WORKER_CALL_TIMEOUT_MS);
+    try {
+      await apiFetch("/api/admin/poster/extract-worker", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...submitBody, jobId }),
+        signal: controller.signal,
+      });
+      // Ignore the response body/status here on purpose: the job row (polled
+      // below) is the source of truth. Even if this call errors/aborts after
+      // the server-side work finished, the poll still finds "done".
+    } catch {
+      // Worker call failed/aborted client-side — the poll loop below will
+      // either find a result the server managed to save anyway, or time out
+      // with a clear error. Nothing to surface here specifically.
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -472,6 +499,8 @@ export default function PosterTab({ apiFetch }) {
       body: JSON.stringify(submitBody),
     });
     if (submitted.error) throw new Error(submitted.error);
+
+    await runExtractWorker(submitted.jobId, submitBody);
     return pollExtractJob(submitted.jobId);
   }
 

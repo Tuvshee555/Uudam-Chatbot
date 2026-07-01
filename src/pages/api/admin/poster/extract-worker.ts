@@ -11,11 +11,14 @@ import { MAX_TOTAL_BYTES, resolveFile, runExtraction } from "@/lib/poster/extrac
 
 /**
  * Does the actual (possibly slow) document extraction for a job created by
- * /api/admin/poster/extract. Invoked as a fire-and-forget request from that
- * route — the CLIENT never talks to this endpoint directly, it polls
- * /api/admin/poster/extract-status instead. Gets its own full 60s budget
- * (Vercel Hobby's ceiling) independent of how long the client has been
- * waiting overall, since the client only ever holds open short poll requests.
+ * /api/admin/poster/extract. Called DIRECTLY by the client (not via a
+ * server-to-server self-fetch — that was tried first and proved unreliable
+ * on Vercel: the fire-and-forget dispatch silently never invoked this route
+ * in production, leaving jobs stuck at "pending" forever). The client awaits
+ * this one request (up to its own 60s budget — the Vercel Hobby ceiling
+ * either way) then polls /api/admin/poster/extract-status for the result,
+ * which the job row already holds regardless of whether this response itself
+ * arrives cleanly.
  */
 export const config = {
   api: { bodyParser: { sizeLimit: "5mb" } },
