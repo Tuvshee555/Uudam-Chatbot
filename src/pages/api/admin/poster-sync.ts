@@ -4,6 +4,39 @@ import { requireAdminAccess } from "@/lib/adminAccess";
 import { getEnv } from "@/lib/env";
 import { logError, logInfo } from "@/lib/observability";
 import { getTripById, patchTrip, upsertTrip } from "@/lib/travelDb";
+import type { TripMutationFields } from "@/lib/travelTypes";
+
+// Only route_name/duration_text/departure_dates/adult_price/child_price/
+// hotel/has_food/extra may be written by "Аялалд нэмэх" (the poster→trip
+// field sync) — each is explicitly type-checked below so a malformed client
+// payload can't touch unrelated trip columns.
+function sanitizeApprovedFields(input: unknown): TripMutationFields {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const fields: TripMutationFields = {};
+
+  if (typeof source.route_name === "string") fields.route_name = source.route_name;
+  if (typeof source.duration_text === "string") fields.duration_text = source.duration_text;
+  if (Array.isArray(source.departure_dates)) {
+    fields.departure_dates = source.departure_dates.filter((d): d is string => typeof d === "string");
+  }
+  if (typeof source.adult_price === "number") fields.adult_price = source.adult_price;
+  if (typeof source.child_price === "number") fields.child_price = source.child_price;
+  if (typeof source.hotel === "string") fields.hotel = source.hotel;
+  if (typeof source.has_food === "boolean") fields.has_food = source.has_food;
+  if (source.extra && typeof source.extra === "object") {
+    const extraSource = source.extra as Record<string, unknown>;
+    const extra: Record<string, unknown> = {};
+    if (Array.isArray(extraSource.included_items)) {
+      extra.included_items = extraSource.included_items.filter((v): v is string => typeof v === "string");
+    }
+    if (Array.isArray(extraSource.excluded_items)) {
+      extra.excluded_items = extraSource.excluded_items.filter((v): v is string => typeof v === "string");
+    }
+    if (Object.keys(extra).length) fields.extra = extra;
+  }
+  return fields;
+}
 
 const CLOUDINARY_FOLDER = "uudam-travel-trips";
 const MAX_PHOTOS = 20;
@@ -86,6 +119,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     newTripTitle?: unknown;
     mode?: unknown;
     photos?: unknown;
+    fields?: unknown;
   };
 
   const tripId = typeof body.tripId === "string" && body.tripId.trim() ? body.tripId.trim() : null;
@@ -93,6 +127,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const newTripTitle =
     typeof body.newTripTitle === "string" ? body.newTripTitle.trim() : "";
   const mode = body.mode === "append" ? "append" : "replace";
+  const approvedFields = sanitizeApprovedFields(body.fields);
 
   if (!tripId && !createNew) {
     return res.status(400).json({ error: "tripId эсвэл createNew шаардлагатай" });
@@ -113,8 +148,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     )
     .slice(0, MAX_IMAGES_PER_SYNC);
 
-  if (photos.length === 0) {
-    return res.status(400).json({ error: "photos хоосон байна" });
+  const hasFieldsToWrite = Object.keys(approvedFields).length > 0;
+  if (photos.length === 0 && !hasFieldsToWrite && !createNew) {
+    return res.status(400).json({ error: "Шинэчлэх зураг эсвэл мэдээлэл алга" });
   }
 
   // Resolve the target trip up-front so we never upload images for a trip
@@ -149,10 +185,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     createNew,
     mode,
     photoCount: photos.length,
+    fieldKeys: Object.keys(approvedFields),
   });
 
-  // Upload to Cloudinary FIRST. We only touch the DB if at least one succeeds,
-  // so a failed upload can never blank out a trip's photos.
+  // Upload to Cloudinary FIRST. We only touch photo_urls if at least one
+  // succeeds, so a failed upload can never blank out a trip's photos. Field
+  // updates (price/dates/hotel/etc.) are independent of photo upload success.
   const uploadedUrls: string[] = [];
   const failures: Array<{ filename: string; error: string }> = [];
 
@@ -167,21 +205,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  if (uploadedUrls.length === 0) {
+  if (photos.length > 0 && uploadedUrls.length === 0) {
     return res.status(500).json({
       error: "Нэг ч зураг Cloudinary-д орсонгүй",
       failures,
     });
   }
 
-  const finalUrls =
-    mode === "append"
-      ? [...existingUrls, ...uploadedUrls].slice(0, MAX_PHOTOS)
-      : uploadedUrls.slice(0, MAX_PHOTOS);
+  const patchFields: TripMutationFields = { ...approvedFields };
+  if (uploadedUrls.length > 0) {
+    patchFields.photo_urls =
+      mode === "append"
+        ? [...existingUrls, ...uploadedUrls].slice(0, MAX_PHOTOS)
+        : uploadedUrls.slice(0, MAX_PHOTOS);
+  }
 
-  const patched = await patchTrip(targetTripId as string, { photo_urls: finalUrls });
+  const patched = Object.keys(patchFields).length
+    ? await patchTrip(targetTripId as string, patchFields)
+    : true; // createNew with no extra fields/photos — trip already created above
+
   if (!patched) {
-    return res.status(500).json({ error: "Аялалын зурагийг хадгалж чадсангүй" });
+    return res.status(500).json({ error: "Аялалыг хадгалж чадсангүй" });
   }
 
   logInfo("poster_sync.done", {
@@ -190,7 +234,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     mode,
     uploaded: uploadedUrls.length,
     failed: failures.length,
-    total: finalUrls.length,
+    total: patchFields.photo_urls?.length,
+    fieldsWritten: Object.keys(approvedFields),
   });
 
   return res.status(200).json({
@@ -201,7 +246,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     mode,
     uploaded: uploadedUrls.length,
     failed: failures.length,
-    totalPhotos: finalUrls.length,
+    fieldsWritten: Object.keys(approvedFields),
+    totalPhotos: patchFields.photo_urls?.length ?? existingUrls.length,
     failures: failures.length > 0 ? failures : undefined,
   });
 }

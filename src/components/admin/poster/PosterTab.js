@@ -1139,6 +1139,7 @@ export default function PosterTab({ apiFetch }) {
         open={attachModalOpen}
         onClose={() => setAttachModalOpen(false)}
         posterTitle={trip?.title || ""}
+        posterTrip={trip}
         apiFetch={apiFetch}
         captureImages={captureForAttach}
         onDone={() => {}}

@@ -1,21 +1,59 @@
 import React from "react";
 import { Alert, Badge, Button, Icons, Modal, Select, Spinner, cx } from "@/components/ui";
 
+const FIELD_LABELS = {
+  route_name: "Аяллын нэр",
+  duration_text: "Хугацаа",
+  departure_dates: "Гарах өдрүүд",
+  adult_price: "Том хүний үнэ",
+  child_price: "Хүүхдийн үнэ",
+  hotel: "Зочид буудал",
+  has_food: "Хоол багтсан эсэх",
+  included_items: "Багтсан зүйлс",
+  excluded_items: "Багтаагүй зүйлс",
+};
+
+function formatFieldValue(key, value) {
+  if (value == null || value === "") return "—";
+  if (Array.isArray(value)) return value.length ? value.join(", ") : "—";
+  if (key === "has_food") return value ? "Тийм" : "Үгүй";
+  if ((key === "adult_price" || key === "child_price") && typeof value === "number") {
+    return `${value.toLocaleString()}₮`;
+  }
+  return String(value);
+}
+
+function valuesEqual(a, b) {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    const arrA = Array.isArray(a) ? a : [];
+    const arrB = Array.isArray(b) ? b : [];
+    return arrA.length === arrB.length && arrA.every((v, i) => v === arrB[i]);
+  }
+  return (a ?? null) === (b ?? null);
+}
+
 /**
- * Confirmation modal that attaches the currently-rendered poster to a real
- * chatbot trip. Nothing is written until the user presses "Нэмэх":
+ * Confirmation modal that attaches a poster to a real chatbot trip — both
+ * its rendered images AND the AI-extracted data (price, dates, hotel, meals,
+ * includes/excludes). Nothing is written until the user presses "Нэмэх":
+ *
  *   1. On open, asks /api/admin/poster-match (read-only) which trips could
- *      match the poster's title, with their current photo counts.
+ *      match the poster's title. Returns each candidate's CURRENT field
+ *      values plus the poster's data mapped onto trip fields.
  *   2. User picks the matched trip, overrides with a different one, or
  *      creates a brand-new trip from the poster title.
- *   3. If the target trip already has photos, user picks replace vs append.
- *   4. Only on confirm: captures the poster as images and calls
- *      /api/admin/poster-sync with an EXPLICIT target (never a guess).
+ *   3. Every field where poster data differs from the trip's current value
+ *      is shown old-vs-new with its own checkbox — nothing is assumed.
+ *   4. If the target trip already has photos, user picks replace vs append.
+ *   5. Only on confirm: captures the poster as images and calls
+ *      /api/admin/poster-sync with an EXPLICIT target + only the checked
+ *      fields (never a guess, never a silent overwrite).
  *
  * Props:
  *   open           boolean
  *   onClose        () => void
  *   posterTitle    string
+ *   posterTrip     object  (the full extracted poster JSON, for field mapping)
  *   apiFetch       (url, init) => Promise<Response>  (injects admin secret)
  *   captureImages  () => Promise<string[]>  (renders the poster to data-URL images)
  *   onDone         (result) => void  (called after a successful attach)
@@ -24,6 +62,7 @@ export default function AttachToTripModal({
   open,
   onClose,
   posterTitle,
+  posterTrip,
   apiFetch,
   captureImages,
   onDone,
@@ -32,8 +71,10 @@ export default function AttachToTripModal({
   const [matchError, setMatchError] = React.useState("");
   const [candidates, setCandidates] = React.useState([]);
   const [allTrips, setAllTrips] = React.useState([]);
+  const [mappedFields, setMappedFields] = React.useState({});
   const [target, setTarget] = React.useState(""); // tripId | "__new__" | ""
   const [mode, setMode] = React.useState("replace");
+  const [approvedKeys, setApprovedKeys] = React.useState(() => new Set());
   const [submitting, setSubmitting] = React.useState(false);
   const [submitError, setSubmitError] = React.useState("");
   const [result, setResult] = React.useState(null);
@@ -46,20 +87,23 @@ export default function AttachToTripModal({
     setResult(null);
     setCandidates([]);
     setAllTrips([]);
+    setMappedFields({});
     setTarget("");
     setMode("replace");
+    setApprovedKeys(new Set());
 
     (async () => {
       try {
         const res = await apiFetch("/api/admin/poster-match", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tripTitle: posterTitle }),
+          body: JSON.stringify({ tripTitle: posterTitle, posterTrip: posterTrip || null }),
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(json.error || "Тохирох аялал хайхад алдаа гарлаа");
         setCandidates(json.candidates || []);
         setAllTrips(json.allTrips || []);
+        setMappedFields(json.mappedFields || {});
         setTarget(json.candidates?.[0]?.id || "");
       } catch (e) {
         setMatchError(e instanceof Error ? e.message : String(e));
@@ -67,7 +111,7 @@ export default function AttachToTripModal({
         setLoading(false);
       }
     })();
-  }, [open, posterTitle, apiFetch]);
+  }, [open, posterTitle, posterTrip, apiFetch]);
 
   const isNew = target === "__new__";
   const bestId = candidates[0]?.id;
@@ -76,19 +120,65 @@ export default function AttachToTripModal({
     return candidates.find((c) => c.id === target) || allTrips.find((t) => t.id === target) || null;
   }, [target, isNew, candidates, allTrips]);
 
+  // Fields where the poster's data differs from the selected trip's current
+  // value. For a new trip, every mapped field is "new" (nothing to diff against).
+  const diffRows = React.useMemo(() => {
+    const current = selectedTrip?.currentFields || {};
+    return Object.keys(mappedFields)
+      .filter((key) => key !== "extra")
+      .map((key) => ({ key, oldValue: current[key], newValue: mappedFields[key] }))
+      .concat(
+        mappedFields.extra
+          ? Object.keys(mappedFields.extra).map((key) => ({
+              key,
+              oldValue: current[key],
+              newValue: mappedFields.extra[key],
+            }))
+          : [],
+      )
+      .filter((row) => isNew || !valuesEqual(row.oldValue, row.newValue))
+      .filter((row) => row.newValue != null && row.newValue !== "" && !(Array.isArray(row.newValue) && row.newValue.length === 0));
+  }, [mappedFields, selectedTrip, isNew]);
+
+  // Default: pre-check every differing field so the common case is one click.
+  React.useEffect(() => {
+    setApprovedKeys(new Set(diffRows.map((r) => r.key)));
+  }, [diffRows]);
+
+  function toggleField(key) {
+    setApprovedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
   const canSubmit = !loading && !submitting && !result && (isNew || Boolean(selectedTrip));
+
+  function buildApprovedFieldsPayload() {
+    const EXTRA_KEYS = new Set(["included_items", "excluded_items"]);
+    const fields = {};
+    const extra = {};
+    for (const row of diffRows) {
+      if (!approvedKeys.has(row.key)) continue;
+      if (EXTRA_KEYS.has(row.key)) extra[row.key] = row.newValue;
+      else fields[row.key] = row.newValue;
+    }
+    if (Object.keys(extra).length) fields.extra = extra;
+    return fields;
+  }
 
   async function handleSubmit() {
     setSubmitting(true);
     setSubmitError("");
     try {
       const images = await captureImages();
-      if (!images || images.length === 0) throw new Error("Постерын зураг үүсгэж чадсангүй");
-
-      const photos = images.map((dataUrl, i) => ({
+      const photos = (images || []).map((dataUrl, i) => ({
         dataUrl,
         filename: `${(posterTitle || "poster").slice(0, 30).replace(/[^\p{L}\p{N}]+/gu, "-")}-${i + 1}.png`,
       }));
+      const fields = buildApprovedFieldsPayload();
 
       const res = await apiFetch("/api/admin/poster-sync", {
         method: "POST",
@@ -99,6 +189,7 @@ export default function AttachToTripModal({
           newTripTitle: isNew ? posterTitle : undefined,
           mode,
           photos,
+          fields,
         }),
       });
       const json = await res.json().catch(() => ({}));
@@ -117,7 +208,7 @@ export default function AttachToTripModal({
       open={open}
       onClose={submitting ? () => {} : onClose}
       title="Аялалд нэмэх"
-      description={`«${posterTitle || "Untitled"}» постерыг аяллын зурагт хавсаргана`}
+      description={`«${posterTitle || "Untitled"}» постерыг аяллын мэдээлэлд холбоно`}
       footer={
         result ? (
           <Button onClick={onClose}>Болсон</Button>
@@ -141,9 +232,14 @@ export default function AttachToTripModal({
             <b>{result.tripName}</b>
           </div>
           <p className="mt-1 text-sm">
-            Оруулсан зураг: {result.uploaded} · Нийт зураг: {result.totalPhotos}
+            {result.uploaded > 0 && `Оруулсан зураг: ${result.uploaded} · Нийт зураг: ${result.totalPhotos}`}
             {result.failed > 0 && ` · Амжилтгүй: ${result.failed}`}
           </p>
+          {result.fieldsWritten?.length > 0 && (
+            <p className="mt-1 text-sm">
+              Шинэчилсэн мэдээлэл: {result.fieldsWritten.map((k) => FIELD_LABELS[k] || k).join(", ")}
+            </p>
+          )}
         </Alert>
       ) : (
         <div className="space-y-4">
@@ -248,6 +344,42 @@ export default function AttachToTripModal({
                     />
                     Хуучин дээр нэмэх
                   </label>
+                </div>
+              )}
+
+              {(isNew || selectedTrip) && diffRows.length > 0 && (
+                <div>
+                  <p className="mb-1 text-sm font-medium text-ink">
+                    {isNew ? "Постероос дараах мэдээлэл орно" : "Постерын мэдээлэл өөр байна — шинэчлэх зүйлээ сонго"}
+                  </p>
+                  <div className="space-y-1.5 rounded-lg border border-line p-2">
+                    {diffRows.map((row) => (
+                      <label key={row.key} className="flex items-start gap-2 rounded-md p-1.5 text-sm hover:bg-surface-sunken">
+                        <input
+                          type="checkbox"
+                          className="mt-1 accent-brand"
+                          checked={approvedKeys.has(row.key)}
+                          onChange={() => toggleField(row.key)}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="font-medium text-ink">{FIELD_LABELS[row.key] || row.key}</span>
+                          <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs">
+                            {!isNew && (
+                              <>
+                                <span className="text-ink-subtle line-through">
+                                  {formatFieldValue(row.key, row.oldValue)}
+                                </span>
+                                <span className="text-ink-subtle">→</span>
+                              </>
+                            )}
+                            <span className="font-medium text-brand">
+                              {formatFieldValue(row.key, row.newValue)}
+                            </span>
+                          </span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
                 </div>
               )}
             </>
