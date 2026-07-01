@@ -3,7 +3,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as htmlToImage from "html-to-image";
 import Poster from "./Poster";
+import AttachToTripModal from "./AttachToTripModal";
 import { createDefaultTrip } from "@/lib/poster/defaultTrip";
+import { Badge, Button, Card, Icons, Input, Select, Spinner, cx } from "@/components/ui";
 
 const POSTER_WIDTH = 1080;
 const MESSENGER_SINGLE_IMAGE_MAX_HEIGHT = 1900;
@@ -192,6 +194,7 @@ export default function PosterTab({ apiFetch }) {
   const [error, setError] = useState("");
   const [scale, setScale] = useState(0.6);
   const [totalH, setTotalH] = useState(0);
+  const [attachModalOpen, setAttachModalOpen] = useState(false);
 
   const page1Ref = useRef(null);
   const previewRef = useRef(null);
@@ -412,7 +415,7 @@ export default function PosterTab({ apiFetch }) {
       const uploadRes = await apiFetch("/api/admin/poster/upload", {
         method: "POST",
         headers: {
-          "x-filename": file.name,
+          "x-filename": encodeURIComponent(file.name),
           "Content-Type": file.type || "application/octet-stream",
         },
         body: file,
@@ -691,6 +694,13 @@ export default function PosterTab({ apiFetch }) {
     });
   }
 
+  // Renders the poster as Messenger-sized images for AttachToTripModal — the
+  // same finished, branded poster the customer will actually see.
+  async function captureForAttach() {
+    const slices = await withExportMode(() => captureMessengerSlices());
+    return slices.map((s) => s.url);
+  }
+
   async function downloadSplitImages() {
     setBusy("Messenger зурагнуудыг бэлдэж байна…");
     try {
@@ -870,141 +880,167 @@ export default function PosterTab({ apiFetch }) {
   }
 
   return (
-    <div className="poster-root">
+    <div className="space-y-3">
       {busy && (
-        <div className="loading-bar-wrap">
-          <div className="loading-bar" />
-          <div className="loading-label">{busy}</div>
+        <div className="flex items-center gap-2 rounded-lg border border-line bg-surface-sunken px-3 py-2 text-sm text-ink-muted">
+          <Spinner /> {busy}
         </div>
       )}
-      <div className="appbar">
-        <img src="/poster/uudam-logo.jpg" alt="" />
-        <h1>UUDAM — Постер үүсгэгч</h1>
-        <span className="sub">China doc → AI → брэнд постер</span>
-      </div>
+      {error && (
+        <div className="rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-sm text-danger">
+          ⚠ {error}
+        </div>
+      )}
 
-      <div className="layout">
-        <div className="main" ref={mainRef}>
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_320px] lg:items-start">
+        <div className="min-w-0 space-y-3" ref={mainRef}>
           {trip ? (
             /* Compact upload strip — shown when a poster is already open */
-            <div
-              className="upload-strip"
-              onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("over"); }}
-              onDragLeave={(e) => e.currentTarget.classList.remove("over")}
-              onDrop={(e) => { e.preventDefault(); e.currentTarget.classList.remove("over"); handleFiles(e.dataTransfer.files); }}
+            <Card
+              className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between"
+              onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("ring-2", "ring-brand"); }}
+              onDragLeave={(e) => e.currentTarget.classList.remove("ring-2", "ring-brand")}
+              onDrop={(e) => { e.preventDefault(); e.currentTarget.classList.remove("ring-2", "ring-brand"); handleFiles(e.dataTransfer.files); }}
             >
-              <label className="upload-strip-file">
-                <input type="file" multiple accept=".pdf,.docx,.txt,image/*" style={{ display: "none" }} onChange={(e) => handleFiles(e.target.files)} />
-                <span className="upload-strip-ic">⬆</span>
-                <span className="upload-strip-label">Шинэ файл чирж тавих эсвэл дарах</span>
+              <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm text-ink-muted hover:text-ink">
+                <input type="file" multiple accept=".pdf,.docx,.txt,image/*" className="hidden" onChange={(e) => handleFiles(e.target.files)} />
+                <Icons.upload size={16} className="shrink-0" />
+                <span className="truncate">Шинэ файл чирж тавих эсвэл дарах</span>
               </label>
-              <button type="button" className="btn ghost upload-strip-tpl" onClick={startTemplate}>Хоосон template</button>
-            </div>
+              <Button size="sm" variant="secondary" onClick={startTemplate}>
+                Хоосон template
+              </Button>
+            </Card>
           ) : (
             /* Full uploader — shown on empty state */
-            <div className="uploader">
-              <div className="lead">
-                Хятадаас ирсэн файлаa оруулаад, брэнд постер бэлэн.
-                <small>AI уншиж, аяллын постерийг ~10 секундэд үүсгэнэ.</small>
-              </div>
+            <Card className="p-5">
+              <p className="text-sm text-ink-muted">
+                Хятадаас ирсэн файлаa оруулаад, брэнд постер бэлэн.{" "}
+                <span className="text-ink-subtle">AI уншиж, аяллын постерийг ~10 секундэд үүсгэнэ.</span>
+              </p>
               <label
-                className="drop"
-                onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("over"); }}
-                onDragLeave={(e) => e.currentTarget.classList.remove("over")}
-                onDrop={(e) => { e.preventDefault(); e.currentTarget.classList.remove("over"); handleFiles(e.dataTransfer.files); }}
+                className="mt-3 flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed border-line-strong bg-surface-sunken p-8 text-center transition-colors hover:border-brand"
+                onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("border-brand", "bg-brand-soft"); }}
+                onDragLeave={(e) => e.currentTarget.classList.remove("border-brand", "bg-brand-soft")}
+                onDrop={(e) => { e.preventDefault(); e.currentTarget.classList.remove("border-brand", "bg-brand-soft"); handleFiles(e.dataTransfer.files); }}
               >
-                <input type="file" multiple accept=".pdf,.docx,.txt,image/*" style={{ display: "none" }} onChange={(e) => handleFiles(e.target.files)} />
-                <div className="ic">⬆</div>
-                <div className="dt">Файл эсвэл зураг энд чирж тавь</div>
-                <div className="ds">{`Дээд тал нь ${MAX_UPLOAD_FILES} файл · тус бүр ${MAX_UPLOAD_SIZE_MB}MB хүртэл · Word (.docx), PDF, .txt · JPG, PNG, WEBP зураг`}</div>
+                <input type="file" multiple accept=".pdf,.docx,.txt,image/*" className="hidden" onChange={(e) => handleFiles(e.target.files)} />
+                <Icons.upload size={26} className="text-ink-subtle" />
+                <p className="text-sm font-medium text-ink">Файл эсвэл зураг энд чирж тавь</p>
+                <p className="text-xs text-ink-subtle">{`Дээд тал нь ${MAX_UPLOAD_FILES} файл · тус бүр ${MAX_UPLOAD_SIZE_MB}MB хүртэл · Word (.docx), PDF, .txt · JPG, PNG, WEBP зураг`}</p>
               </label>
-              <div className="template-start">
-                <button type="button" className="btn" onClick={startTemplate}>Default template-ээр эхлэх</button>
-                <span>Файлгүйгээр шууд poster нээгээд бүх текст, үнэ, өдөр, хоол, зураг засна.</span>
+              <div className="mt-3 flex flex-col items-center gap-1.5 text-center">
+                <Button onClick={startTemplate}>Default template-ээр эхлэх</Button>
+                <span className="text-xs text-ink-subtle">
+                  Файлгүйгээр шууд poster нээгээд бүх текст, үнэ, өдөр, хоол, зураг засна.
+                </span>
               </div>
-            </div>
+            </Card>
           )}
-          {busy && <div className="note" style={{ marginTop: 10, textAlign: "center" }}>⏳ {busy}</div>}
-          {error && <div className="err" style={{ textAlign: "center" }}>⚠ {error}</div>}
 
           {trip && (
             <>
-              <div className="studio-panel">
-                <div className="studio-head">
-                  <div>
-                    <div className="eyebrow">Workspace</div>
-                    <h2>{trip.title || "Untitled poster"}</h2>
-                    <p>{source || "Live editable travel poster"} · {trip.days?.length || 0} өдөр · 1 export page</p>
+              <Card className="p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium uppercase tracking-wide text-ink-subtle">Workspace</p>
+                    <h2 className="truncate text-base font-semibold text-ink">{trip.title || "Untitled poster"}</h2>
+                    <p className="text-xs text-ink-subtle">
+                      {source || "Live editable travel poster"} · {trip.days?.length || 0} өдөр · 1 export page
+                    </p>
                   </div>
-                  <button className="btn ghost" type="button" onClick={startTemplate} disabled={!!busy}>
+                  <Button size="sm" variant="secondary" onClick={startTemplate} disabled={!!busy}>
                     Шинэ default template
-                  </button>
+                  </Button>
                 </div>
 
-                <div className="studio-actions">
-                  <button type="button" onClick={addDeparture}>+ Огноо</button>
-                  <button type="button" onClick={addDay}>+ Өдөр</button>
-                  <button type="button" onClick={removeLastDay} disabled={(trip.days || []).length <= 1}>Сүүлийн өдөр устгах</button>
-                  <button type="button" onClick={ensurePriceTable}>Үнийн хүснэгт асаах</button>
-                  <button type="button" onClick={addPriceRow} disabled={!trip.price_table}>+ Үнэ мөр</button>
-                  <button type="button" onClick={addPriceCol} disabled={!trip.price_table}>+ Үнэ багана</button>
-                  <button type="button" onClick={toggleFlights}>{trip.flights ? "Нислэг нуух" : "Нислэг нэмэх"}</button>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button size="sm" variant="secondary" onClick={addDeparture}>+ Огноо</Button>
+                  <Button size="sm" variant="secondary" onClick={addDay}>+ Өдөр</Button>
+                  <Button size="sm" variant="secondary" onClick={removeLastDay} disabled={(trip.days || []).length <= 1}>
+                    Сүүлийн өдөр устгах
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={ensurePriceTable}>Үнийн хүснэгт асаах</Button>
+                  <Button size="sm" variant="secondary" onClick={addPriceRow} disabled={!trip.price_table}>+ Үнэ мөр</Button>
+                  <Button size="sm" variant="secondary" onClick={addPriceCol} disabled={!trip.price_table}>+ Үнэ багана</Button>
+                  <Button size="sm" variant="secondary" onClick={toggleFlights}>
+                    {trip.flights ? "Нислэг нуух" : "Нислэг нэмэх"}
+                  </Button>
                 </div>
 
-                <div className="edit-hints">
+                <div className="mt-3 flex flex-col gap-1 border-t border-line pt-3 text-xs text-ink-subtle">
                   <span>Canvas маягаар: постер дээрх бичвэр дээр шууд дарж засна.</span>
                   <span>Зураг: нүүр зураг toolbar-аас, өдрийн зураг тухайн зурагны box дээр дарж орно.</span>
                   <span>Download/print үед editor товч, хоосон зурагны box автоматаар алга болно.</span>
                 </div>
-              </div>
+              </Card>
 
-              <div className="toolbar">
-                <button className="btn" onClick={save} disabled={!!busy}>💾 Хадгалах</button>
-                <button className="btn ghost" onClick={downloadPng} disabled={!!busy}>🖼 PNG (нэг poster)</button>
-                <button className="btn ghost" onClick={downloadPdf} disabled={!!busy}>📑 PDF</button>
-                <button className="btn ghost" onClick={downloadSplitImages} disabled={!!busy}>💬 Messenger Split</button>
-                <button className="btn ghost" onClick={downloadSplitZip} disabled={!!busy}>🗜 Messenger ZIP</button>
-                <span className="note" style={{ alignSelf: "center" }}>
+              <Card className="p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button size="sm" onClick={save} disabled={!!busy}>
+                    <Icons.check size={14} /> Хадгалах
+                  </Button>
+                  <Button size="sm" variant="primary" onClick={() => setAttachModalOpen(true)} disabled={!!busy}>
+                    <Icons.plus size={14} /> Аялалд нэмэх
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={downloadPng} disabled={!!busy}>
+                    <Icons.image size={14} /> PNG
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={downloadPdf} disabled={!!busy}>
+                    <Icons.file size={14} /> PDF
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={downloadSplitImages} disabled={!!busy}>
+                    Messenger Split
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={downloadSplitZip} disabled={!!busy}>
+                    Messenger ZIP
+                  </Button>
+                </div>
+                <p className="mt-2 text-xs text-ink-subtle">
                   Бичвэр дээр дарж засаарай · хоолны таглыг дарж асаах/унтраах · Messenger split: main poster-оос 1-2 зураг, хэт урт бол 3
-                </span>
-              </div>
+                </p>
+              </Card>
 
-              <div className="preview-shell" style={{ width: POSTER_WIDTH * scale, height: totalH * scale }}>
+              <div className="poster-root overflow-x-auto rounded-xl border border-line bg-surface-sunken p-3">
                 <div
-                  className="preview-stage"
-                  ref={previewRef}
-                  style={{ transform: `scale(${scale})`, transformOrigin: "top left", width: POSTER_WIDTH }}
+                  style={{ width: POSTER_WIDTH * scale, height: totalH * scale }}
                 >
-                  <Poster
-                    trip={trip}
-                    upd={upd}
-                    addItem={addItem}
-                    removeItem={removeItem}
-                    insertDay={insertDay}
-                    reorderDay={reorderDay}
-                    addPriceRow={addPriceRow}
-                    addPriceCol={addPriceCol}
-                    removePriceCol={removePriceCol}
-                    logoSrc="/poster/uudam-logo.jpg"
-                    page1Ref={page1Ref}
-                    onDayPhotoFile={onDayPhotoFile}
-                    dayPhotoInputRefs={dayPhotoInputRefs}
-                  />
+                  <div
+                    className="preview-stage"
+                    ref={previewRef}
+                    style={{ transform: `scale(${scale})`, transformOrigin: "top left", width: POSTER_WIDTH }}
+                  >
+                    <Poster
+                      trip={trip}
+                      upd={upd}
+                      addItem={addItem}
+                      removeItem={removeItem}
+                      insertDay={insertDay}
+                      reorderDay={reorderDay}
+                      addPriceRow={addPriceRow}
+                      addPriceCol={addPriceCol}
+                      removePriceCol={removePriceCol}
+                      logoSrc="/poster/uudam-logo.jpg"
+                      page1Ref={page1Ref}
+                      onDayPhotoFile={onDayPhotoFile}
+                      dayPhotoInputRefs={dayPhotoInputRefs}
+                    />
+                  </div>
                 </div>
               </div>
             </>
           )}
         </div>
 
-        <div className="sidebar">
-          <div className="card">
-            <div className="hist-head">
-              <h3>Түүх</h3>
-              <span>{history.length}</span>
+        <Card className="flex flex-col p-3">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-ink">Түүх</h3>
+            <div className="flex items-center gap-2">
+              <span className="rounded-full bg-surface-sunken px-2 py-0.5 text-xs text-ink-muted">{history.length}</span>
               {history.length > 0 && (
                 <button
                   type="button"
-                  className="btn ghost hist-export-btn"
+                  className="flex items-center gap-1 rounded-md border border-line-strong px-2 py-1 text-xs font-medium text-ink-muted hover:border-brand hover:text-brand"
                   onClick={async () => {
                     const res = await apiFetch("/api/admin/poster/export");
                     const blob = await res.blob();
@@ -1017,80 +1053,96 @@ export default function PosterTab({ apiFetch }) {
                   }}
                   title="Бүх аялалыг JSON файлаар татах"
                 >
-                  ⬇ Татах
+                  <Icons.download size={13} /> Татах
                 </button>
               )}
             </div>
-            <div className="hist-controls">
-              <label className="hist-search">
-                <span>Хайх</span>
-                <input
-                  value={historySearch}
-                  onChange={(e) => setHistorySearch(e.target.value)}
-                  placeholder="Нэрээр хайх..."
-                />
-              </label>
-              <div className="hist-filters">
-                <label>
-                  Эрэмбэ
-                  <select value={historySort} onChange={(e) => setHistorySort(e.target.value)}>
-                    <option value="newest">Шинэ эхэнд</option>
-                    <option value="oldest">Хуучин эхэнд</option>
-                    <option value="title">Нэрээр</option>
-                  </select>
-                </label>
-                <label>
-                  Бүлэг
-                  <select value={historyGroup} onChange={(e) => setHistoryGroup(e.target.value)}>
-                    <option value="date">Огноогоор</option>
-                    <option value="duplicate">Давхардлаар</option>
-                    <option value="none">Бүлэггүй</option>
-                  </select>
-                </label>
-              </div>
-              {trip && currentDuplicateCount > (tripId ? 1 : 0) && (
-                <div className="hist-warning">Ижил нэртэй хадгалсан аялал байна.</div>
-              )}
-            </div>
-            <div className="hist">
-              {history.length === 0 && <div className="note">Хадгалсан постер алга</div>}
-              {history.length > 0 && visibleHistoryGroups.every((group) => group.items.length === 0) && (
-                <div className="note">Хайлтад тохирох аялал алга</div>
-              )}
-              {visibleHistoryGroups.map((group) => (
-                <div className="hist-group" key={group.label || "all"}>
-                  {group.label && <div className="hist-group-title">{group.label}</div>}
-                  {group.items.map((h, index) => {
-                    const duplicateCount = historyTitleCounts.get(normalizeHistoryTitle(h.title)) || 0;
-                    return (
-                      <div className={"hist-item" + (duplicateCount > 1 ? " duplicate" : "")} key={h.id}>
-                        <div className="hist-num">{index + 1}</div>
-                        <button type="button" className="hist-open" onClick={() => openTrip(h.id)}>
-                          <div className="t">{h.title}</div>
-                          <div className="d">
-                            {h.source_file && <span className="hist-src">{h.source_file}</span>}
-                            {new Date(h.updated_at).toLocaleString()}
-                          </div>
-                          {duplicateCount > 1 && <div className="dup-badge">Ижил нэр x{duplicateCount}</div>}
-                        </button>
-                        <button
-                          type="button"
-                          className="hist-delete"
-                          title="Постер устгах"
-                          onClick={() => deleteTrip(h.id)}
-                          disabled={!!busy}
-                        >
-                          ×
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
           </div>
-        </div>
+
+          <div className="mt-3 space-y-2">
+            <Input
+              value={historySearch}
+              onChange={(e) => setHistorySearch(e.target.value)}
+              placeholder="Нэрээр хайх..."
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <Select value={historySort} onChange={(e) => setHistorySort(e.target.value)}>
+                <option value="newest">Шинэ эхэнд</option>
+                <option value="oldest">Хуучин эхэнд</option>
+                <option value="title">Нэрээр</option>
+              </Select>
+              <Select value={historyGroup} onChange={(e) => setHistoryGroup(e.target.value)}>
+                <option value="date">Огноогоор</option>
+                <option value="duplicate">Давхардлаар</option>
+                <option value="none">Бүлэггүй</option>
+              </Select>
+            </div>
+            {trip && currentDuplicateCount > (tripId ? 1 : 0) && (
+              <div className="rounded-lg border border-warning/30 bg-warning-soft px-2.5 py-1.5 text-xs text-warning">
+                Ижил нэртэй хадгалсан аялал байна.
+              </div>
+            )}
+          </div>
+
+          <div className="mt-3 max-h-[70vh] space-y-3 overflow-y-auto">
+            {history.length === 0 && (
+              <p className="py-4 text-center text-sm text-ink-subtle">Хадгалсан постер алга</p>
+            )}
+            {history.length > 0 && visibleHistoryGroups.every((group) => group.items.length === 0) && (
+              <p className="py-4 text-center text-sm text-ink-subtle">Хайлтад тохирох аялал алга</p>
+            )}
+            {visibleHistoryGroups.map((group) => (
+              <div key={group.label || "all"} className="space-y-1.5">
+                {group.label && (
+                  <p className="text-xs font-medium uppercase tracking-wide text-ink-subtle">{group.label}</p>
+                )}
+                {group.items.map((h, index) => {
+                  const duplicateCount = historyTitleCounts.get(normalizeHistoryTitle(h.title)) || 0;
+                  return (
+                    <div
+                      key={h.id}
+                      className={cx(
+                        "flex items-start gap-2 rounded-lg border p-2",
+                        duplicateCount > 1 ? "border-warning/40 bg-warning-soft" : "border-line hover:border-line-strong",
+                      )}
+                    >
+                      <span className="mt-0.5 shrink-0 text-xs text-ink-subtle">{index + 1}</span>
+                      <button type="button" className="min-w-0 flex-1 text-left" onClick={() => openTrip(h.id)}>
+                        <p className="truncate text-sm font-medium text-ink">{h.title}</p>
+                        <p className="truncate text-xs text-ink-subtle">
+                          {h.source_file && <span className="mr-1">{h.source_file}</span>}
+                          {new Date(h.updated_at).toLocaleString()}
+                        </p>
+                        {duplicateCount > 1 && (
+                          <Badge tone="warning" className="mt-1">Ижил нэр x{duplicateCount}</Badge>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        className="shrink-0 rounded-md p-1 text-ink-muted hover:bg-surface-sunken hover:text-danger"
+                        title="Постер устгах"
+                        onClick={() => deleteTrip(h.id)}
+                        disabled={!!busy}
+                      >
+                        <Icons.trash size={14} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </Card>
       </div>
+
+      <AttachToTripModal
+        open={attachModalOpen}
+        onClose={() => setAttachModalOpen(false)}
+        posterTitle={trip?.title || ""}
+        apiFetch={apiFetch}
+        captureImages={captureForAttach}
+        onDone={() => {}}
+      />
     </div>
   );
 }

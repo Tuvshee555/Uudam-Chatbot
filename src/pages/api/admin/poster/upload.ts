@@ -23,6 +23,16 @@ function readRawBody(req: NextApiRequest): Promise<Buffer> {
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
+function decodeHeaderFilename(value: string | string[] | undefined) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (!raw) return "upload";
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const allowed = await requireAdminAccess(req, res, "api.admin.poster.upload");
   if (!allowed) return;
@@ -34,7 +44,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  const filename = (req.headers["x-filename"] as string) || "upload";
+  const filename = decodeHeaderFilename(req.headers["x-filename"]);
   const contentType = (req.headers["content-type"] as string) || "application/octet-stream";
 
   try {
