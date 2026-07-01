@@ -1,0 +1,273 @@
+:root{
+  --navy:#113e67;
+  --navy-soft:#1c4f80;
+  --navy-deep:#082f52;
+  --gold:#f2bd4a;
+  --ink:#16202c;
+  --muted:#6b7785;
+  --line:#e2e8f0;
+  --tint:#f4f7fb;
+  --paper:#ffffff;
+  --danger:#cf5148;
+}
+
+.poster-root * {margin:0;padding:0;box-sizing:border-box}
+.poster-root {font-family:"Segoe UI","Noto Sans",Arial,sans-serif;color:var(--ink);background:#e8edf3}
+.poster-root button, .poster-root input, .poster-root textarea {font:inherit}
+
+.poster-root .loading-bar-wrap {position:fixed;top:0;left:0;right:0;z-index:9999;background:rgba(8,47,82,.96);padding:10px 20px 12px;display:flex;flex-direction:column;gap:6px}
+.poster-root .loading-bar {height:4px;border-radius:2px;background:var(--gold);animation:loadslide 1.6s ease-in-out infinite}
+.poster-root .loading-label {color:#fff;font-size:13px;font-weight:700;letter-spacing:.3px}
+@keyframes loadslide{0%{width:0%;margin-left:0}60%{width:80%;margin-left:0}100%{width:0%;margin-left:100%}}
+
+.poster-root .appbar {display:flex;align-items:center;gap:12px;padding:14px 22px;background:var(--navy);color:#fff}
+.poster-root .appbar img {width:38px;height:38px;border-radius:9px}
+.poster-root .appbar h1 {font-size:17px;font-weight:800;letter-spacing:1px}
+.poster-root .appbar .sub {font-size:12px;color:#bcd2e8;margin-left:auto}
+
+.poster-root .layout {display:grid;grid-template-columns:1fr 280px;gap:18px;padding:18px;align-items:start}
+.poster-root .main {min-width:0}
+.poster-root .sidebar {position:sticky;top:18px}
+.poster-root .card {background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px}
+
+/* Compact upload strip — replaces the full uploader once a poster is open */
+.poster-root .upload-strip {display:flex;align-items:center;gap:10px;padding:10px 14px;border:1.5px dashed #b9c6d8;border-radius:12px;background:#fff;transition:.15s;margin-bottom:4px}
+.poster-root .upload-strip:hover, .poster-root .upload-strip.over {border-color:var(--navy);background:#f7faff}
+.poster-root .upload-strip-file {display:flex;align-items:center;gap:10px;flex:1;cursor:pointer}
+.poster-root .upload-strip-ic {width:28px;height:28px;border-radius:50%;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0}
+.poster-root .upload-strip-label {font-size:13px;font-weight:700;color:var(--navy)}
+.poster-root .upload-strip-tpl {font-size:12px;padding:5px 10px;flex-shrink:0}
+
+.poster-root .uploader {max-width:780px;margin:40px auto 0;text-align:center}
+.poster-root .uploader .lead {font-size:24px;font-weight:900;color:var(--navy);letter-spacing:-.3px}
+.poster-root .uploader .lead small {display:block;font-size:15px;font-weight:500;color:var(--muted);margin-top:8px}
+.poster-root .drop {display:flex;flex-direction:column;align-items:center;gap:12px;margin-top:22px;border:2px dashed #b9c6d8;border-radius:18px;padding:48px 30px;background:#fff;color:var(--muted);cursor:pointer;transition:.18s}
+.poster-root .drop:hover, .poster-root .drop.over {border-color:var(--navy);background:#f7faff;color:var(--navy)}
+.poster-root .drop .ic {width:60px;height:60px;border-radius:50%;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-size:27px}
+.poster-root .drop .dt {font-size:18px;font-weight:800;color:var(--navy)}
+.poster-root .drop .ds {font-size:13px;color:var(--muted)}
+
+.poster-root .toolbar {display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
+.poster-root .btn {border:1px solid var(--navy);background:var(--navy);color:#fff;font-weight:700;font-size:14px;padding:9px 16px;border-radius:9px;cursor:pointer}
+.poster-root .btn.ghost {background:#fff;color:var(--navy)}
+.poster-root .btn:disabled {opacity:.5;cursor:default}
+.poster-root .note {font-size:13px;color:var(--muted)}
+.poster-root .err {color:#c0392b;font-size:14px;margin-top:8px}
+
+.poster-root .template-start {margin-top:18px;display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;color:var(--muted);font-size:13px}
+
+.poster-root .studio-panel {margin:18px 0 14px;padding:18px;border:1px solid #d8e4f0;border-radius:22px;background:#fff}
+.poster-root .studio-head {display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:14px}
+.poster-root .studio-head .eyebrow {font-size:11px;text-transform:uppercase;letter-spacing:2px;color:var(--gold);font-weight:900;margin-bottom:4px}
+.poster-root .studio-head h2 {font-size:22px;line-height:1.1;color:var(--navy);letter-spacing:-.4px}
+.poster-root .studio-head p {font-size:13px;color:var(--muted);margin-top:5px}
+.poster-root .studio-actions {display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.poster-root .studio-actions button {border:1px solid #cfddeb;background:#fff;color:var(--navy);border-radius:999px;padding:8px 12px;font-size:13px;font-weight:800;cursor:pointer}
+.poster-root .studio-actions button:hover {border-color:var(--navy)}
+.poster-root .studio-actions button:disabled {opacity:.45;cursor:default}
+.poster-root .edit-hints {display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.poster-root .edit-hints span {border:1px dashed #c7d7e6;border-radius:14px;background:#fff;padding:10px 12px;color:#536a82;font-size:12px;line-height:1.45}
+
+.poster-root .sidebar h3 {font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--muted)}
+.poster-root .hist-head {display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.poster-root .hist-head h3 {flex:1}
+.poster-root .hist-head span {min-width:24px;height:24px;border-radius:999px;background:#eef4fb;color:var(--navy);font-size:12px;font-weight:900;display:flex;align-items:center;justify-content:center}
+.poster-root .hist-export-btn {font-size:12px;padding:4px 10px;white-space:nowrap;text-decoration:none}
+.poster-root .hist-controls {display:grid;gap:8px;margin-bottom:12px}
+.poster-root .hist-search {display:grid;gap:4px;color:var(--muted);font-size:11px;font-weight:800}
+.poster-root .hist-search input, .poster-root .hist-filters select {width:100%;border:1px solid #d8e4f0;background:#fff;color:var(--ink);border-radius:8px;padding:7px 9px;font-size:12px;outline:none}
+.poster-root .hist-search input:focus, .poster-root .hist-filters select:focus {border-color:var(--navy);box-shadow:0 0 0 2px #dcebf8}
+.poster-root .hist-filters {display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.poster-root .hist-filters label {display:grid;gap:4px;color:var(--muted);font-size:11px;font-weight:800}
+.poster-root .hist-warning {border:1px solid #f2d29c;background:#fff8e8;color:#8a5b08;border-radius:8px;padding:8px 10px;font-size:12px;font-weight:800;line-height:1.35}
+.poster-root .hist {display:flex;flex-direction:column;gap:6px}
+.poster-root .hist-group {display:grid;gap:6px}
+.poster-root .hist-group-title {font-size:11px;font-weight:900;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin:8px 0 1px}
+.poster-root .hist-item {position:relative;border:1px solid var(--line);background:#fff;border-radius:9px;overflow:hidden}
+.poster-root .hist-item:hover {border-color:var(--navy)}
+.poster-root .hist-item.duplicate {border-color:#f2d29c;background:#fffdf8}
+.poster-root .hist-num {position:absolute;top:10px;left:10px;min-width:20px;height:20px;border-radius:999px;background:#eef4fb;color:var(--navy);font-size:11px;font-weight:900;display:flex;align-items:center;justify-content:center}
+.poster-root .hist-open {text-align:left;border:0;background:transparent;width:100%;padding:9px 38px 9px 38px;cursor:pointer;font-size:13px}
+.poster-root .hist-delete {position:absolute;top:7px;right:7px;width:22px;height:22px;border:1px solid #d9e1ea;background:#fff;color:var(--danger);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;line-height:1;cursor:pointer;opacity:0;transition:opacity .12s,border-color .12s,background .12s}
+.poster-root .hist-item:hover .hist-delete, .poster-root .hist-delete:focus {opacity:1}
+.poster-root .hist-delete:hover {border-color:var(--danger);background:#fff5f4}
+.poster-root .hist-delete:disabled {opacity:.4;cursor:default}
+.poster-root .hist .t {font-weight:700;color:var(--navy)}
+.poster-root .hist .d {color:var(--muted);font-size:11px}
+.poster-root .dup-badge {display:inline-flex;margin-top:6px;border-radius:999px;background:#fff1d6;color:#8a5b08;padding:3px 7px;font-size:10px;font-weight:900}
+.poster-root .hist-src {background:#eef4fb;color:#3a6a9a;border-radius:4px;padding:1px 5px;font-size:10px;font-weight:700;margin-right:5px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle}
+
+.poster-root .preview-shell {overflow:hidden}
+.poster-root .preview-stage {transform-origin:top left}
+
+/* ── POSTER PAGE ── */
+.poster-root .page {width:1080px;background:#fff;padding:52px 56px 0;margin-bottom:24px}
+
+/* Header */
+.poster-root .page .head {display:flex;align-items:center;gap:16px;padding-bottom:20px;border-bottom:2px solid var(--navy)}
+.poster-root .page .logo {width:64px;height:64px;border-radius:12px;object-fit:cover}
+.poster-root .page .name {font-size:18px;font-weight:900;letter-spacing:2px;color:var(--navy)}
+.poster-root .page .name small {display:block;font-size:10px;letter-spacing:3px;color:var(--muted);font-weight:600;margin-top:3px}
+.poster-root .page .spacer {flex:1}
+.poster-root .page .head-phone {display:flex;align-items:center;gap:6px;color:var(--navy);font-weight:800;font-size:15px;margin-right:20px;white-space:nowrap}
+.poster-root .page .head-phone-ic {font-size:14px}
+.poster-root .page .dur {text-align:right;display:flex;flex-direction:column;gap:4px}
+.poster-root .page .dur-item {color:var(--navy);font-weight:900;font-size:20px;display:flex;align-items:center;gap:6px;justify-content:flex-end}
+.poster-root .page .dur-item .dur-emoji {font-size:18px}
+
+/* Hero */
+.poster-root .page .hero {margin:28px 0 0;padding:40px 48px;color:#fff;position:relative;overflow:hidden;border-radius:16px;background:var(--navy)}
+.poster-root .page .hero .kicker {font-size:11px;letter-spacing:3px;text-transform:uppercase;color:var(--gold);font-weight:800;margin-bottom:10px}
+.poster-root .page .hero .htitle {font-size:50px;line-height:1.06;font-weight:900;letter-spacing:-1px;max-width:760px}
+
+/* Price table */
+.poster-root .page .sec {margin-top:28px}
+.poster-root .page .compact-sec {margin-top:20px}
+.poster-root .page .sec h3 {font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:var(--muted);font-weight:800;margin-bottom:10px}
+.poster-root .page .ptable {width:100%;border-collapse:collapse;margin-top:4px;table-layout:auto}
+.poster-root .page .ptable th {text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.3px;color:#fff;font-weight:700;padding:9px 10px;background:var(--navy);white-space:nowrap}
+.poster-root .page .ptable th:first-child {border-radius:8px 0 0 0}
+.poster-root .page .ptable th:last-child {border-radius:0 8px 0 0}
+.poster-root .page .ptable td {padding:10px 10px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:top;white-space:nowrap}
+.poster-root .page .ptable tr:last-child td {border-bottom:none}
+.poster-root .page .ptable-col-head {position:relative}
+.poster-root .page .col-remove-btn {position:absolute;top:2px;right:2px;width:16px;height:16px;border-radius:50%;border:none;background:rgba(255,255,255,.2);color:#fff;font-size:11px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity .12s;padding:0}
+.poster-root .page .ptable-col-head:hover .col-remove-btn {opacity:1}
+.poster-root .page .ptable-add-col-th {width:36px;padding:0 !important;text-align:center;vertical-align:middle;background:transparent;border:none}
+.poster-root .page .ptable-add-col-header {background:var(--navy)}
+.poster-root .page .ptable-add-btn {background:rgba(255,255,255,.15);border:1px dashed rgba(255,255,255,.4);color:#fff;border-radius:6px;width:26px;height:26px;font-size:18px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
+.poster-root .page .ptable-add-btn:hover {background:rgba(255,255,255,.3)}
+.poster-root .page .ptable-add-row-btn {margin-top:6px;display:inline-flex;align-items:center;border:1px dashed #b9c6d8;background:#fff;color:var(--navy-soft);border-radius:999px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer}
+.poster-root .page .ptable-add-row-btn:hover {border-color:var(--navy);background:#f4f7fb}
+.poster-root .page .pwhen {font-weight:700;color:var(--navy);white-space:normal;width:200px;min-width:90px;max-width:200px;word-break:break-word;vertical-align:top}
+.poster-root .page .pwhen-input {width:100%;min-width:0;border:none;outline:none;background:transparent;font:700 13px/1.5 inherit;color:var(--navy);resize:none;overflow:hidden;padding:0;margin:0;display:block;word-break:break-word}
+.poster-root .page .pwhen-input::placeholder {color:#9aaaba;font-weight:400;font-style:italic}
+.poster-root .page .pwhen-input:hover {background:rgba(0,0,0,.03);border-radius:4px}
+.poster-root .page .pwhen-input:focus {background:rgba(0,0,0,.04);border-radius:4px}
+body.exporting .page .pwhen-input {background:transparent !important}
+.poster-root .page .pamt {font-weight:800;white-space:normal;min-width:110px}
+.poster-root .page .price-desc {margin-top:10px;font-size:14px;line-height:1.7;color:var(--ink)}
+.poster-root .page .price-desc-input {width:100%;min-height:36px;padding:8px 10px;border-radius:8px;border:1px dashed #b9c6d8;font-size:14px;line-height:1.7;color:var(--ink);outline:none;resize:none;font-family:inherit;background:#fff}
+.poster-root .page .price-desc-input:focus {border-color:var(--navy);border-style:solid}
+.poster-root .page .pnote {margin-top:8px;color:var(--muted);font-size:13px;font-style:italic}
+.poster-root .page .price-note-boxes {display:grid;gap:8px;margin-top:10px}
+.poster-root .page .price-note-box {position:relative;border:1px solid #d9e6f2;border-left:4px solid var(--gold);border-radius:8px;background:#fbfdff;padding:10px 38px 10px 12px;color:#27415d;font-size:13px;line-height:1.55}
+.poster-root .page .price-note-content {outline:none;border-radius:6px}
+.poster-root .page .price-note-content:hover {box-shadow:0 0 0 2px #cfe0f1 inset}
+.poster-root .page .price-note-content:focus {box-shadow:0 0 0 2px var(--navy) inset;background:#fff}
+.poster-root .page .price-note-title {font-weight:900;color:var(--navy);margin-bottom:4px}
+.poster-root .page .price-note-box ul {margin:0;padding-left:18px}
+.poster-root .page .price-note-box li {margin:2px 0}
+.poster-root .page .price-note-line {font-style:italic;color:#586879}
+.poster-root .page .price-note-remove {position:absolute;top:8px;right:8px;width:22px;height:22px;border-radius:50%;border:1px solid #d8e4f0;background:#fff;color:var(--danger);font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.poster-root .page .price-note-remove:hover {border-color:var(--danger);background:#fff5f4}
+
+/* Program header */
+.poster-root .page .program-head {display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin:36px 0 12px;padding-top:24px;border-top:1px solid var(--line)}
+.poster-root .page .section-kicker {font-size:10px;text-transform:uppercase;letter-spacing:2.5px;color:var(--gold);font-weight:900;margin-bottom:4px}
+.poster-root .page .ititle {font-size:28px;font-weight:900;color:var(--navy);letter-spacing:-.3px}
+
+/* Day timeline */
+.poster-root .page .days {position:relative;padding-left:2px}
+.poster-root .page .days:before {content:"";position:absolute;left:22px;top:24px;bottom:60px;width:1px;background:var(--line)}
+.poster-root .page .dayrow {display:grid;grid-template-columns:46px 1fr;gap:18px;padding:10px 0;transition:opacity .15s}
+.poster-root .page .dayrow[draggable] {cursor:grab}
+.poster-root .page .dayrow[draggable]:active {cursor:grabbing}
+.poster-root .page .dayrow.drag-over {opacity:.5;outline:2px dashed var(--gold);border-radius:12px}
+.poster-root .page .dnum {width:44px;height:44px;border-radius:50%;background:var(--navy);color:#fff;font-weight:800;font-size:18px;display:flex;align-items:center;justify-content:center;position:relative;z-index:1;cursor:grab;user-select:none}
+.poster-root .page .dnum-num {position:absolute}
+.poster-root .page .dnum-handle {position:absolute;font-size:20px;font-weight:400;opacity:0;transition:opacity .15s}
+.poster-root .page .dnum:hover .dnum-num {opacity:0}
+.poster-root .page .dnum:hover .dnum-handle {opacity:1}
+
+/* Day card — card itself is the 60/40 grid so photo spans full height */
+.poster-root .page .daycard {border:1px solid var(--line);border-radius:12px;background:#fff;border-left:3px solid var(--gold);overflow:hidden;display:grid;grid-template-columns:minmax(0,3fr) 2fr;align-items:stretch}
+.poster-root .page .droute {font-size:19px;font-weight:900;color:var(--navy);display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.poster-root .page .droute .km, .poster-root .page .droute .flt {font-size:11px;padding:3px 8px;border-radius:999px;background:var(--tint);font-weight:700;color:var(--muted)}
+.poster-root .page .droute .flt {color:var(--navy-soft)}
+.poster-root .page .dmain {min-width:0;padding:20px 20px 20px 24px;display:flex;flex-direction:column}
+.poster-root .page .dsummary.prose {font-size:15px;line-height:1.7;color:#2c3e50;padding:0 0 0 18px;border:none;background:transparent;min-height:0;box-shadow:none !important;flex:1;list-style:disc;list-style-position:outside;margin:0}
+.poster-root .page .dsummary.prose li {margin-bottom:6px;outline:none}
+.poster-root .page .dsummary.prose li:last-child {margin-bottom:0}
+.poster-root .page .dsummary.prose li:empty:before {content:attr(data-placeholder);color:#9aaaba;font-style:italic;font-weight:400}
+body.exporting .page .dsummary.prose li:empty {display:none !important}
+.poster-root .page .dhotel {margin-top:10px;color:var(--muted);font-size:13px;line-height:1.4}
+
+/* Meal badges — under text in left column */
+.poster-root .page .dside {display:flex;flex-direction:column}
+.poster-root .page .mealgrid {display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:14px}
+.poster-root .page .mealcard {display:flex;flex-direction:row;gap:6px;align-items:center;justify-content:flex-start;padding:7px 10px;border-radius:8px;border:1px solid var(--line);font-size:11px;font-weight:700;cursor:pointer;text-align:left}
+.poster-root .page .mealcard.yes {background:#f0faf4;color:#1a7a4a;border-color:#b8e2c8}
+.poster-root .page .mealcard.no {background:#fdf4f4;color:#a04040;border-color:#e8c8c8}
+.poster-root .page .mealname {font-size:11px;font-weight:700}
+.poster-root .page .mealstate {font-size:10px;font-weight:600;opacity:.75}
+
+/* Day photo — fills the entire right column edge-to-edge */
+.poster-root .page .dphoto {width:100%;height:100%;min-height:200px;border-radius:0;border:none;background:#f5f8fc;background-size:cover,100% 100%;background-position:center;background-repeat:no-repeat;position:relative;overflow:hidden;display:flex;align-items:flex-end;justify-content:flex-start;padding:12px;color:#56728f;font-size:13px;font-weight:700;cursor:pointer}
+.poster-root .page .dphoto.filled {color:#fff}
+.poster-root .page .dphoto.dphoto-empty {min-height:120px;background:#f8fafc;border-left:2px dashed #c8d8e8;align-items:center;justify-content:center;padding:0;border-radius:0}
+.poster-root .page .dphoto-add-label {font-size:12px;font-weight:700;color:#7a9ab8}
+.poster-root .page .dphoto .photohint {display:inline-flex;padding:5px 9px;border-radius:999px;background:rgba(12,27,43,.42);color:#fff;font-size:11px;font-weight:700}
+
+.poster-root .page .daytools {display:flex;flex-wrap:wrap;gap:8px}
+.poster-root .addbtn {font-size:12px;color:var(--navy-soft);cursor:pointer;border:1px dashed #b9c6d8;background:#fff;border-radius:999px;padding:6px 10px;display:inline-flex;align-items:center;justify-content:center}
+.poster-root .addbtn.danger {color:var(--danger);border-color:#efc4bf}
+.poster-root .hidden-input {display:none}
+.poster-root .removebtn {width:20px;height:20px;border-radius:50%;border:1px solid #d9e1ea;background:#fff;color:var(--danger);font-size:14px;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex:none;opacity:0;transition:opacity .12s}
+.editable-chip:hover .removebtn,
+.pwhen:hover .removebtn,
+.droute:hover .removebtn,
+.editable-chip:focus-within .removebtn,
+.pwhen:focus-within .removebtn,
+.poster-root .droute:focus-within .removebtn {opacity:1}
+
+/* Footer */
+.poster-root .page .foot {margin:36px -56px 0;padding:16px 56px;background:var(--navy);color:#fff;display:flex;gap:24px;flex-wrap:wrap;font-size:14px}
+.poster-root .page .foot b {color:#fff;font-weight:800}
+
+.poster-root .page .endpad {height:32px}
+
+/* Edit interactions */
+.poster-root .page [contenteditable] {outline:none;border-radius:6px;transition:box-shadow .12s,background .12s}
+.poster-root .page [contenteditable]:hover {box-shadow:0 0 0 2px #cfe0f1 inset}
+.poster-root .page [contenteditable]:focus {box-shadow:0 0 0 2px var(--navy) inset;background:#f8fafc}
+.poster-root .page [contenteditable]::selection {background:#2563eb;color:#fff}
+.poster-root .page th [contenteditable]::selection {background:#f2bd4a;color:#113e67}
+.page .dsummary.prose[contenteditable]:hover,
+.poster-root .page .dsummary.prose[contenteditable]:focus {box-shadow:none;background:transparent}
+.poster-root .page .hero [contenteditable]:hover {box-shadow:0 0 0 2px rgba(255,255,255,.3) inset}
+.poster-root .page .hero [contenteditable]:focus {box-shadow:0 0 0 2px rgba(255,255,255,.5) inset;background:transparent}
+.poster-root .page .hero [contenteditable]::selection {background:rgba(255,255,255,.35);color:#fff}
+.poster-root .page th [contenteditable]:hover {box-shadow:0 0 0 2px rgba(255,255,255,.3) inset}
+.poster-root .page th [contenteditable]:focus {box-shadow:0 0 0 2px rgba(255,255,255,.5) inset;background:transparent}
+.poster-root .page [contenteditable][data-placeholder]:empty:before {content:attr(data-placeholder);color:#9aaaba;font-style:italic;font-weight:400}
+.poster-root .page th [contenteditable][data-placeholder]:empty:before {color:rgba(255,255,255,.45)}
+
+body.exporting .editor-only,
+body.exporting .hidden-input {display:none !important}
+body.exporting .price-desc-input:empty {display:none !important}
+body.exporting .page [contenteditable],
+body.exporting .page [contenteditable]:hover,
+body.exporting .page [contenteditable]:focus {box-shadow:none !important;background:transparent !important}
+
+@media print{
+.poster-root {background:#fff}
+.poster-root .appbar, .poster-root .toolbar, .poster-root .sidebar, .poster-root .uploader, .poster-root .editor-only, .poster-root .hidden-input {display:none !important}
+.poster-root .layout {display:block;padding:0}
+.poster-root .main {width:auto}
+.poster-root .preview-shell {width:auto !important;height:auto !important;overflow:visible !important}
+.poster-root .preview-stage {transform:none !important;width:1080px !important}
+.poster-root .page {box-shadow:none;margin:0;break-after:page}
+}
+
+@media (max-width: 1200px){
+.poster-root .layout {grid-template-columns:1fr}
+.poster-root .sidebar {order:-1}
+}
+
+@media (max-width: 820px){
+.poster-root .appbar {flex-wrap:wrap}
+.poster-root .appbar .sub {margin-left:0}
+.poster-root .studio-head {display:block}
+.poster-root .edit-hints {grid-template-columns:1fr}
+}

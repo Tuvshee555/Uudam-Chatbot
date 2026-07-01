@@ -310,6 +310,7 @@ export type TabKey =
   | "greeting"
   | "seasons"
   | "photos"
+  | "poster"
   | "json";
 
 export type FlowRule = {

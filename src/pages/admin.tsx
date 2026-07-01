@@ -19,6 +19,7 @@ import { TripsTab } from "@/components/admin/TripsTab";
 import { TripEditModal } from "@/components/admin/TripEditModal";
 import { JsonEditorTab } from "@/components/admin/JsonEditorTab";
 import { TripPhotoImportTab } from "@/components/admin/TripPhotoImportTab";
+import PosterTab from "@/components/admin/poster/PosterTab";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
 import type { AIAction, AIProposal, AIProposalResponse, AttachedFile, ChatButton, ChatMessage, ClarificationAnswer, ClarificationQuestion, AdminMsg, ChildRule, ConflictItem, ConflictSeverity, ControlState, DiscountGroup, DriveSyncDiagnostics, DriveSyncRecentFile, ExtraFee, FlowRule, LeadCrmStatus, LeadStats, NoteMsg, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalMsg, ReadinessReport, RecentRow, RoomPrice, SettingsForm, StructuredRow, TabKey, TravelBotSettings, TravelLead, TravelTrip, TripStatus } from "@/lib/adminTypes";
 import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, DURATIONS, FIELD_LABELS, HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS, STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, describeAction, driveSyncTone, fileToDataUrl, formatBytes, formatMoneyValue, formatTime, getSecretStorage, getTestBotConversationId, handoffDurationSelectValue, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, settingsToForm, shortId, splitLines, summarizeConflict, timeLeft, toStructuredRows, uid } from "@/lib/adminPageUtils";
@@ -1648,6 +1649,12 @@ export default function AdminPage() {
             onClick={() => selectAdminTab("photos")}
           />
           <AdminSidebarItem
+            icon={<Icons.image size={16} />}
+            label="Постер үүсгэгч"
+            active={tab === "poster"}
+            onClick={() => selectAdminTab("poster")}
+          />
+          <AdminSidebarItem
             icon={<Icons.control size={16} />}
             label="Ботын хяналт"
             active={tab === "bot"}
@@ -1873,6 +1880,9 @@ export default function AdminPage() {
               apiFetch={fetchWithAdmin}
               onComplete={() => void loadTrips(searchRef.current, statusFilterRef.current, { showLoading: true })}
             />
+          )}
+          {tab === "poster" && (
+            <PosterTab apiFetch={fetchWithAdmin} />
           )}
           {tab === "json" && (
             <JsonEditorTab

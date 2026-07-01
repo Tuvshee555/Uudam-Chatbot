@@ -1,5 +1,6 @@
 import type { AppProps } from "next/app";
 import "@/styles/globals.css";
+import "@/styles/poster.css";
 import { ErrorBoundary, ToastProvider } from "@/components/ui";
 
 export default function App({ Component, pageProps }: AppProps) {
