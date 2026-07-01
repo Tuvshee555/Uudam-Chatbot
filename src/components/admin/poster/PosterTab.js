@@ -2,21 +2,10 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as htmlToImage from "html-to-image";
-import { upload as uploadToBlob } from "@vercel/blob/client";
 import Poster from "./Poster";
 import AttachToTripModal from "./AttachToTripModal";
 import { createDefaultTrip } from "@/lib/poster/defaultTrip";
 import { Badge, Button, Card, Icons, Input, Select, Spinner, cx } from "@/components/ui";
-
-// Same key admin.tsx stores the admin secret under (see SECRET_KEY in
-// adminPageUtils.ts) — read directly here since @vercel/blob's client upload()
-// makes its own fetch to /api/admin/poster/upload and can't reuse apiFetch's
-// wrapped fetch, only a plain headers object.
-const ADMIN_SECRET_STORAGE_KEY = "travel_admin_secret";
-function getStoredAdminSecret() {
-  if (typeof window === "undefined") return "";
-  return window.localStorage.getItem(ADMIN_SECRET_STORAGE_KEY) || "";
-}
 
 const POSTER_WIDTH = 1080;
 const MESSENGER_SINGLE_IMAGE_MAX_HEIGHT = 1900;
@@ -413,98 +402,23 @@ export default function PosterTab({ apiFetch }) {
     return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
   }
 
-  // Upload the raw file to the chatbot in <4MB base64 chunks (Vercel body cap),
-  // reassembled server-side. The final chunk returns the extracted trip JSON.
-  // Small files (<3MB) go straight to /extract as base64 JSON. Bigger files
-  // (Vercel's function body cap is ~4.5MB, enforced no matter how a route
-  // reads its body) upload straight from the BROWSER to Vercel Blob using the
-  // client-upload pattern — the file bytes never pass through any of our
-  // serverless functions. /extract is then just given the URL.
-  //
-  // Extraction is a two-step job: /extract creates a job row and returns a
-  // jobId almost instantly. The BROWSER then calls /extract-worker itself to
-  // do the actual (possibly slow) AI extraction — this used to be dispatched
-  // server-to-server via a fire-and-forget fetch, but that silently never
-  // invoked the worker in production (jobs stuck at "pending" forever with
-  // no error). Having the client call it directly removes that unreliable
-  // hop. The worker call has its own timeout below so a stall shows a real
-  // error instead of spinning forever; the poll afterward picks up the
-  // result from the job row regardless of whether the worker response itself
-  // came back cleanly.
-  const WORKER_CALL_TIMEOUT_MS = 90 * 1000; // a little over Vercel's 60s function ceiling
-  const JOB_POLL_INTERVAL_MS = 2500;
-  const JOB_POLL_TIMEOUT_MS = 5 * 60 * 1000; // 5 min safety net
-
-  async function pollExtractJob(jobId) {
-    const startedAt = Date.now();
-    for (;;) {
-      const status = await fetchJson(`/api/admin/poster/extract-status?jobId=${encodeURIComponent(jobId)}`);
-      if (status.error && !status.status) throw new Error(status.error);
-      if (status.status === "done") return status.result;
-      if (status.status === "error") throw new Error(status.error || "Уншихад алдаа гарлаа");
-      if (Date.now() - startedAt > JOB_POLL_TIMEOUT_MS) {
-        throw new Error("Хэт удаж байна — файл дахин оролдоно уу.");
-      }
-      await new Promise((resolve) => setTimeout(resolve, JOB_POLL_INTERVAL_MS));
-    }
-  }
-
-  async function runExtractWorker(jobId, submitBody) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), WORKER_CALL_TIMEOUT_MS);
-    try {
-      const res = await apiFetch("/api/admin/poster/extract-worker", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...submitBody, jobId }),
-        signal: controller.signal,
-      });
-      const text = await res.text();
-      let json = {};
-      if (text) {
-        try { json = JSON.parse(text); } catch { json = { error: text.slice(0, 300) }; }
-      }
-      if (!res.ok) throw new Error(json.error || `Worker HTTP ${res.status}`);
-      if (json.error) throw new Error(json.error);
-    } catch (e) {
-      if (e?.name !== "AbortError") throw e;
-      // The poll below is still the source of truth if the server saved a result.
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
+  // Dead-simple upload, exactly like the standalone poster generator that
+  // works reliably: send the file straight to /api/admin/poster/extract as
+  // multipart FormData and get the extracted trip JSON back in one request.
+  // No Vercel Blob, no background jobs, no polling — those layers were added
+  // to dodge Vercel's body cap but caused endless hangs and 503s instead.
   async function extractOne(file) {
-    const DIRECT_LIMIT = 3 * 1024 * 1024;
-    let submitBody;
-
-    if (file.size > DIRECT_LIMIT) {
-      const blob = await uploadToBlob(file.name, file, {
-        access: "public",
-        handleUploadUrl: "/api/admin/poster/upload",
-        headers: { "x-admin-secret": getStoredAdminSecret() },
-      });
-      submitBody = { blobUrl: blob.url, filename: file.name, mimeType: file.type || "" };
-    } else {
-      const buf = await file.arrayBuffer();
-      const bytes = new Uint8Array(buf);
-      let binary = "";
-      const sub = 0x8000;
-      for (let j = 0; j < bytes.length; j += sub) {
-        binary += String.fromCharCode(...bytes.subarray(j, j + sub));
-      }
-      submitBody = { dataBase64: btoa(binary), filename: file.name, mimeType: file.type || "" };
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    const res = await apiFetch("/api/admin/poster/extract", { method: "POST", body: fd });
+    const text = await res.text();
+    let json = {};
+    if (text) {
+      try { json = JSON.parse(text); } catch { json = { error: text.slice(0, 300) }; }
     }
-
-    const submitted = await fetchJson("/api/admin/poster/extract", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(submitBody),
-    });
-    if (submitted.error) throw new Error(submitted.error);
-
-    await runExtractWorker(submitted.jobId, submitBody);
-    return pollExtractJob(submitted.jobId);
+    if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+    if (json.error) throw new Error(json.error);
+    return { ...json, source_file: json.source_file || file.name };
   }
 
   async function saveTripData(data, sourceFile) {

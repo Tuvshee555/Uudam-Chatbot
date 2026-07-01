@@ -1,7 +1,6 @@
 /**
- * The actual document -> trip JSON extraction. Pulled out of the extract API
- * route so both the job-creating endpoint and the background worker can call
- * it without duplicating logic.
+ * The actual document -> trip JSON extraction used by the direct poster
+ * upload endpoint.
  */
 import { fileToImages, fileToText } from "@/lib/poster/parse";
 import { extractTrip, extractTripFromImage, extractTripFromPdf } from "@/lib/poster/openai";
@@ -101,23 +100,3 @@ export async function runExtraction(buffer: Buffer, filename: string, mime: stri
   return { trip, source_file: filename };
 }
 
-export async function resolveFile(
-  body: Record<string, unknown>,
-): Promise<{ buffer: Buffer; filename: string; mime: string; blobUrl?: string }> {
-  const blobUrl = typeof body.blobUrl === "string" ? body.blobUrl : "";
-  if (blobUrl) {
-    const filename = typeof body.filename === "string" ? body.filename : "document";
-    const mime = typeof body.mimeType === "string" ? body.mimeType : "";
-    const res = await fetch(blobUrl);
-    if (!res.ok) throw new Error(`Blob татахад алдаа гарлаа: ${res.status}`);
-    const arrayBuffer = await res.arrayBuffer();
-    return { buffer: Buffer.from(arrayBuffer), filename, mime, blobUrl };
-  }
-
-  // Small-file path: whole file as base64 in the JSON body.
-  const dataBase64 = typeof body.dataBase64 === "string" ? body.dataBase64 : "";
-  if (!dataBase64) throw new Error("Файл олдсонгүй");
-  const filename = typeof body.filename === "string" ? body.filename : "document";
-  const mime = typeof body.mimeType === "string" ? body.mimeType : "";
-  return { buffer: Buffer.from(dataBase64, "base64"), filename, mime };
-}
