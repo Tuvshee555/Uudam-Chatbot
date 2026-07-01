@@ -419,11 +419,34 @@ export default function PosterTab({ apiFetch }) {
   // (Vercel's function body cap is ~4.5MB, enforced no matter how a route
   // reads its body) upload straight from the BROWSER to Vercel Blob using the
   // client-upload pattern — the file bytes never pass through any of our
-  // serverless functions. /extract is then just given the URL and fetches the
-  // whole file server-side, which keeps PDF vision extraction seeing the
-  // full document layout.
+  // serverless functions. /extract is then just given the URL.
+  //
+  // Extraction itself runs as a background job: /extract returns a jobId
+  // almost instantly instead of waiting for the AI to finish, because Vercel
+  // Hobby hard-caps a single function invocation at 60s with no way to raise
+  // it — a big real trip PDF read by OpenAI vision can take longer than
+  // that, and holding the client's request open would get it killed with no
+  // error, just an endless spinner. Polling has no such ceiling.
+  const JOB_POLL_INTERVAL_MS = 2500;
+  const JOB_POLL_TIMEOUT_MS = 10 * 60 * 1000; // 10 min safety net
+
+  async function pollExtractJob(jobId) {
+    const startedAt = Date.now();
+    for (;;) {
+      const status = await fetchJson(`/api/admin/poster/extract-status?jobId=${encodeURIComponent(jobId)}`);
+      if (status.error && !status.status) throw new Error(status.error);
+      if (status.status === "done") return status.result;
+      if (status.status === "error") throw new Error(status.error || "Уншихад алдаа гарлаа");
+      if (Date.now() - startedAt > JOB_POLL_TIMEOUT_MS) {
+        throw new Error("Хэт удаж байна — файл дахин оролдоно уу.");
+      }
+      await new Promise((resolve) => setTimeout(resolve, JOB_POLL_INTERVAL_MS));
+    }
+  }
+
   async function extractOne(file) {
     const DIRECT_LIMIT = 3 * 1024 * 1024;
+    let submitBody;
 
     if (file.size > DIRECT_LIMIT) {
       const blob = await uploadToBlob(file.name, file, {
@@ -431,38 +454,25 @@ export default function PosterTab({ apiFetch }) {
         handleUploadUrl: "/api/admin/poster/upload",
         headers: { "x-admin-secret": getStoredAdminSecret() },
       });
-
-      const r = await fetchJson("/api/admin/poster/extract", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          blobUrl: blob.url,
-          filename: file.name,
-          mimeType: file.type || "",
-        }),
-      });
-      if (r.error) throw new Error(r.error);
-      return r;
+      submitBody = { blobUrl: blob.url, filename: file.name, mimeType: file.type || "" };
+    } else {
+      const buf = await file.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = "";
+      const sub = 0x8000;
+      for (let j = 0; j < bytes.length; j += sub) {
+        binary += String.fromCharCode(...bytes.subarray(j, j + sub));
+      }
+      submitBody = { dataBase64: btoa(binary), filename: file.name, mimeType: file.type || "" };
     }
 
-    const buf = await file.arrayBuffer();
-    const bytes = new Uint8Array(buf);
-    let binary = "";
-    const sub = 0x8000;
-    for (let j = 0; j < bytes.length; j += sub) {
-      binary += String.fromCharCode(...bytes.subarray(j, j + sub));
-    }
-    const r = await fetchJson("/api/admin/poster/extract", {
+    const submitted = await fetchJson("/api/admin/poster/extract", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        dataBase64: btoa(binary),
-        filename: file.name,
-        mimeType: file.type || "",
-      }),
+      body: JSON.stringify(submitBody),
     });
-    if (r.error) throw new Error(r.error);
-    return r;
+    if (submitted.error) throw new Error(submitted.error);
+    return pollExtractJob(submitted.jobId);
   }
 
   async function saveTripData(data, sourceFile) {

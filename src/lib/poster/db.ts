@@ -127,3 +127,82 @@ export async function exportPosterTrips(): Promise<PosterTripRow[]> {
   );
   return res?.rows ?? [];
 }
+
+/**
+ * Extraction jobs — lets /extract return almost instantly (create a row,
+ * kick off the real work as a separate invocation) instead of holding the
+ * client's request open. Vercel Hobby hard-caps a single function invocation
+ * at 60s with no way to raise it; a real China-trip PDF read by OpenAI vision
+ * can take longer than that. Polling a job's status has no such ceiling —
+ * each poll is its own quick request, and the worker invocation can take up
+ * to its own 60s, retried/continued as needed by the client re-submitting
+ * on timeout (see EXTRACT_JOB_STALE_MS in extract-status.ts).
+ */
+export type PosterExtractJobStatus = "pending" | "running" | "done" | "error";
+
+export type PosterExtractJobRow = {
+  id: string;
+  status: PosterExtractJobStatus;
+  result: unknown;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function ensurePosterJobSchema(): Promise<boolean> {
+  const res = await queryNeon(`
+    CREATE TABLE IF NOT EXISTS poster_extract_jobs (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'pending',
+      result JSONB NULL,
+      error TEXT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  return res !== null;
+}
+
+export async function createPosterExtractJob(): Promise<string | null> {
+  if (!(await ensurePosterJobSchema())) return null;
+  const id = randomUUID();
+  const res = await queryNeon(
+    `INSERT INTO poster_extract_jobs (id, status) VALUES ($1, 'pending')`,
+    [id],
+  );
+  return res === null ? null : id;
+}
+
+export async function markPosterExtractJobRunning(id: string): Promise<void> {
+  await queryNeon(
+    `UPDATE poster_extract_jobs SET status = 'running', updated_at = NOW() WHERE id = $1`,
+    [id],
+  );
+}
+
+export async function completePosterExtractJob(id: string, result: unknown): Promise<void> {
+  await queryNeon(
+    `UPDATE poster_extract_jobs
+        SET status = 'done', result = $2::jsonb, updated_at = NOW()
+      WHERE id = $1`,
+    [id, JSON.stringify(result)],
+  );
+}
+
+export async function failPosterExtractJob(id: string, error: string): Promise<void> {
+  await queryNeon(
+    `UPDATE poster_extract_jobs
+        SET status = 'error', error = $2, updated_at = NOW()
+      WHERE id = $1`,
+    [id, error],
+  );
+}
+
+export async function getPosterExtractJob(id: string): Promise<PosterExtractJobRow | null> {
+  const res = await queryNeon<PosterExtractJobRow>(
+    `SELECT id, status, result, error, created_at, updated_at
+       FROM poster_extract_jobs WHERE id = $1`,
+    [id],
+  );
+  return res?.rows?.[0] ?? null;
+}
