@@ -401,40 +401,56 @@ export default function PosterTab({ apiFetch }) {
 
   // Upload the raw file to the chatbot in <4MB base64 chunks (Vercel body cap),
   // reassembled server-side. The final chunk returns the extracted trip JSON.
+  // Small files (<3MB) go straight to /extract as base64 JSON. Bigger files
+  // (Vercel's function body cap is ~4.5MB) upload to Vercel Blob first, then
+  // /extract is just given the URL and fetches the whole file server-side —
+  // this keeps PDF vision extraction seeing the full document layout.
   async function extractOne(file) {
-    const buf = await file.arrayBuffer();
-    const bytes = new Uint8Array(buf);
-    const CHUNK_BYTES = 3 * 1024 * 1024; // ~4MB base64, under the 5mb route limit
-    const totalChunks = Math.max(1, Math.ceil(bytes.length / CHUNK_BYTES));
-    const uploadId = `${Date.now()}-${Math.round(scale * 1e6)}-${file.name.length}-${bytes.length}`;
+    const DIRECT_LIMIT = 3 * 1024 * 1024;
 
-    let last = null;
-    for (let i = 0; i < totalChunks; i++) {
-      const slice = bytes.subarray(i * CHUNK_BYTES, (i + 1) * CHUNK_BYTES);
-      // base64-encode this slice
-      let binary = "";
-      const sub = 0x8000;
-      for (let j = 0; j < slice.length; j += sub) {
-        binary += String.fromCharCode(...slice.subarray(j, j + sub));
-      }
-      const chunkB64 = btoa(binary);
+    if (file.size > DIRECT_LIMIT) {
+      const uploadRes = await apiFetch("/api/admin/poster/upload", {
+        method: "POST",
+        headers: {
+          "x-filename": file.name,
+          "Content-Type": file.type || "application/octet-stream",
+        },
+        body: file,
+      });
+      const uploadJson = await uploadRes.json().catch(() => ({}));
+      if (uploadJson.error) throw new Error(uploadJson.error);
 
-      last = await fetchJson("/api/admin/poster/extract", {
+      const r = await fetchJson("/api/admin/poster/extract", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          uploadId,
+          blobUrl: uploadJson.url,
           filename: file.name,
           mimeType: file.type || "",
-          chunkIndex: i,
-          totalChunks,
-          chunk: chunkB64,
         }),
       });
-      if (last.error) throw new Error(last.error);
+      if (r.error) throw new Error(r.error);
+      return r;
     }
-    // `last` is the final response = { trip, source_file }
-    return last;
+
+    const buf = await file.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let binary = "";
+    const sub = 0x8000;
+    for (let j = 0; j < bytes.length; j += sub) {
+      binary += String.fromCharCode(...bytes.subarray(j, j + sub));
+    }
+    const r = await fetchJson("/api/admin/poster/extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        dataBase64: btoa(binary),
+        filename: file.name,
+        mimeType: file.type || "",
+      }),
+    });
+    if (r.error) throw new Error(r.error);
+    return r;
   }
 
   async function saveTripData(data, sourceFile) {

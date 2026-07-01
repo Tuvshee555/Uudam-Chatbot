@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { del } from "@vercel/blob";
 import { requireAdminAccess } from "@/lib/adminAccess";
 import { logError } from "@/lib/observability";
-import { assembleChunks, putChunk } from "@/lib/poster/chunkStore";
 // Ported poster libs (plain JS, typed loosely via poster-libs.d.ts)
 import { fileToImages, fileToText } from "@/lib/poster/parse";
 import {
@@ -13,8 +13,11 @@ import { extractTripFromPdfGemini } from "@/lib/poster/gemini";
 import { extractPdfImages } from "@/lib/poster/pdfImages";
 import { applyDayText, applyMealMarks, extractPdfFacts } from "@/lib/poster/pdfMeals";
 
+// Small files (<3MB) post directly as base64 JSON. Big files are uploaded to
+// Vercel Blob first (see /api/admin/poster/upload) and we're just given the
+// URL here — keeps this route's own body tiny regardless of document size.
 export const config = {
-  api: { bodyParser: { sizeLimit: "5mb" } }, // one <4MB chunk per request
+  api: { bodyParser: { sizeLimit: "5mb" } },
   maxDuration: 60,
 };
 
@@ -84,58 +87,49 @@ async function runExtraction(buffer: Buffer, filename: string, mime: string) {
   return { trip, source_file: filename };
 }
 
+async function resolveFile(
+  body: Record<string, unknown>,
+): Promise<{ buffer: Buffer; filename: string; mime: string; blobUrl?: string }> {
+  const blobUrl = typeof body.blobUrl === "string" ? body.blobUrl : "";
+  if (blobUrl) {
+    const filename = typeof body.filename === "string" ? body.filename : "document";
+    const mime = typeof body.mimeType === "string" ? body.mimeType : "";
+    const res = await fetch(blobUrl);
+    if (!res.ok) throw new Error(`Blob татахад алдаа гарлаа: ${res.status}`);
+    const arrayBuffer = await res.arrayBuffer();
+    return { buffer: Buffer.from(arrayBuffer), filename, mime, blobUrl };
+  }
+
+  // Small-file path: whole file as base64 in the JSON body.
+  const dataBase64 = typeof body.dataBase64 === "string" ? body.dataBase64 : "";
+  if (!dataBase64) throw new Error("Файл олдсонгүй");
+  const filename = typeof body.filename === "string" ? body.filename : "document";
+  const mime = typeof body.mimeType === "string" ? body.mimeType : "";
+  return { buffer: Buffer.from(dataBase64, "base64"), filename, mime };
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const allowed = await requireAdminAccess(req, res, "api.admin.poster.extract");
   if (!allowed) return;
   if (req.method !== "POST") return res.status(405).end();
 
-  const body = req.body as {
-    uploadId?: unknown;
-    filename?: unknown;
-    mimeType?: unknown;
-    chunkIndex?: unknown;
-    totalChunks?: unknown;
-    chunk?: unknown; // base64 (no data: prefix)
-  };
-
-  const uploadId = typeof body.uploadId === "string" ? body.uploadId : "";
-  const filename = typeof body.filename === "string" ? body.filename : "document";
-  const mimeType = typeof body.mimeType === "string" ? body.mimeType : "";
-  const chunkIndex = Number(body.chunkIndex);
-  const totalChunks = Number(body.totalChunks);
-  const chunk = typeof body.chunk === "string" ? body.chunk : "";
-
-  if (!uploadId || !chunk || !Number.isFinite(chunkIndex) || !Number.isFinite(totalChunks)) {
-    return res.status(400).json({ error: "Дутуу chunk мэдээлэл" });
-  }
-  if (totalChunks < 1 || totalChunks > 64) {
-    return res.status(400).json({ error: "totalChunks буруу" });
-  }
-  if (totalChunks * 4 * 1024 * 1024 > MAX_TOTAL_BYTES + 8 * 1024 * 1024) {
-    return res.status(413).json({ error: "Файл хэт том (100MB дээд хязгаар)" });
-  }
-
-  await putChunk(uploadId, chunkIndex, totalChunks, chunk);
-
-  // Not the last chunk yet — acknowledge and wait for more.
-  if (chunkIndex < totalChunks - 1) {
-    return res.status(200).json({ received: chunkIndex, more: true });
-  }
-
-  // Final chunk: assemble + extract.
-  const buffer = await assembleChunks(uploadId, totalChunks);
-  if (!buffer) {
-    return res.status(409).json({ error: "Зарим chunk дутуу тул угсарч чадсангүй. Дахин оролдоно уу." });
-  }
-  if (buffer.length > MAX_TOTAL_BYTES) {
-    return res.status(413).json({ error: "Файл хэт том (100MB дээд хязгаар)" });
-  }
+  const body = req.body as Record<string, unknown>;
+  let blobUrl: string | undefined;
 
   try {
-    const result = await runExtraction(buffer, filename, mimeType);
+    const resolved = await resolveFile(body);
+    blobUrl = resolved.blobUrl;
+    if (resolved.buffer.length > MAX_TOTAL_BYTES) {
+      return res.status(413).json({ error: "Файл хэт том (100MB дээд хязгаар)" });
+    }
+    const result = await runExtraction(resolved.buffer, resolved.filename, resolved.mime);
     return res.status(200).json(result);
   } catch (e) {
     logError("poster.extract.failed", { error: String((e as Error).message) });
     return res.status(500).json({ error: String((e as Error).message || e) });
+  } finally {
+    if (blobUrl) {
+      del(blobUrl).catch(() => {}); // best-effort cleanup, don't block the response
+    }
   }
 }
