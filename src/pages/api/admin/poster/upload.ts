@@ -21,8 +21,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== "POST") return res.status(405).end();
 
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    // BLOB_STORE_ID/BLOB_WEBHOOK_PUBLIC_KEY existing without this token means
+    // the Blob store was connected but Vercel didn't attach the read-write
+    // token to this project's env vars — reconnect it from Vercel's Storage
+    // tab (Storage -> your Blob store -> Connect Project), which should add
+    // BLOB_READ_WRITE_TOKEN automatically, then redeploy.
     return res.status(503).json({
-      error: "Vercel Blob тохируулаагүй байна (BLOB_READ_WRITE_TOKEN алга).",
+      error:
+        "Vercel Blob-ын BLOB_READ_WRITE_TOKEN тохируулаагүй байна. " +
+        `(BLOB_STORE_ID ${process.env.BLOB_STORE_ID ? "бий" : "байхгүй"}) ` +
+        "Vercel → Storage → Blob сан → Connect Project дахин хийгээд deploy хийнэ үү.",
     });
   }
 
@@ -47,6 +55,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     return res.status(200).json(jsonResponse);
   } catch (e) {
-    return res.status(400).json({ error: String((e as Error).message || e) });
+    const message = String((e as Error).message || e);
+    return res.status(400).json({
+      error: `Vercel Blob токен авахад алдаа гарлаа: ${message}`,
+    });
   }
 }
