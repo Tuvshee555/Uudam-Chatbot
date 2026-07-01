@@ -9,6 +9,21 @@ import {
 } from "@/lib/poster/db";
 import { MAX_TOTAL_BYTES, resolveFile, runExtraction } from "@/lib/poster/extractCore";
 
+const WORKER_EXTRACTION_TIMEOUT_MS = 52 * 1000;
+const WORKER_TIMEOUT_ERROR =
+  "Poster extraction exceeded the serverless time budget before it could finish. Large PDFs need to be split or extracted from text/docx.";
+
+function withWorkerTimeout<T>(promise: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(WORKER_TIMEOUT_ERROR)), WORKER_EXTRACTION_TIMEOUT_MS);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 /**
  * Does the actual (possibly slow) document extraction for a job created by
  * /api/admin/poster/extract. Called DIRECTLY by the client (not via a
@@ -46,7 +61,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await failPosterExtractJob(jobId, "Файл хэт том (100MB дээд хязгаар)");
       return res.status(200).json({ ok: false });
     }
-    const result = await runExtraction(resolved.buffer, resolved.filename, resolved.mime);
+    const result = await withWorkerTimeout(runExtraction(resolved.buffer, resolved.filename, resolved.mime));
     await completePosterExtractJob(jobId, result);
     logInfo("poster.extract_worker.done", { jobId });
     return res.status(200).json({ ok: true });
@@ -54,7 +69,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const message = String((e as Error).message || e);
     logError("poster.extract_worker.failed", { jobId, error: message });
     await failPosterExtractJob(jobId, message);
-    return res.status(200).json({ ok: false });
+    return res.status(200).json({ ok: false, error: message });
   } finally {
     if (blobUrl) {
       del(blobUrl).catch(() => {});

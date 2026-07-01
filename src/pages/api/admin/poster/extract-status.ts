@@ -1,6 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "@/lib/adminAccess";
-import { getPosterExtractJob } from "@/lib/poster/db";
+import { failPosterExtractJob, getPosterExtractJob } from "@/lib/poster/db";
+
+const EXTRACT_JOB_STALE_MS = 75 * 1000;
+const STALE_JOB_ERROR =
+  "Poster extraction timed out before it could finish. Large PDFs can exceed the serverless function limit; try a smaller PDF or convert the itinerary to text/docx.";
 
 /**
  * Polled by the client every few seconds while a poster extraction job runs.
@@ -16,6 +20,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const job = await getPosterExtractJob(jobId);
   if (!job) return res.status(404).json({ error: "Ажил олдсонгүй" });
+
+  if (job.status === "pending" || job.status === "running") {
+    const updatedAt = new Date(job.updated_at).getTime();
+    if (Number.isFinite(updatedAt) && Date.now() - updatedAt > EXTRACT_JOB_STALE_MS) {
+      await failPosterExtractJob(jobId, STALE_JOB_ERROR);
+      return res.status(200).json({ status: "error", error: STALE_JOB_ERROR });
+    }
+  }
 
   return res.status(200).json({
     status: job.status,

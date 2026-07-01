@@ -453,19 +453,22 @@ export default function PosterTab({ apiFetch }) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), WORKER_CALL_TIMEOUT_MS);
     try {
-      await apiFetch("/api/admin/poster/extract-worker", {
+      const res = await apiFetch("/api/admin/poster/extract-worker", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...submitBody, jobId }),
         signal: controller.signal,
       });
-      // Ignore the response body/status here on purpose: the job row (polled
-      // below) is the source of truth. Even if this call errors/aborts after
-      // the server-side work finished, the poll still finds "done".
-    } catch {
-      // Worker call failed/aborted client-side — the poll loop below will
-      // either find a result the server managed to save anyway, or time out
-      // with a clear error. Nothing to surface here specifically.
+      const text = await res.text();
+      let json = {};
+      if (text) {
+        try { json = JSON.parse(text); } catch { json = { error: text.slice(0, 300) }; }
+      }
+      if (!res.ok) throw new Error(json.error || `Worker HTTP ${res.status}`);
+      if (json.error) throw new Error(json.error);
+    } catch (e) {
+      if (e?.name !== "AbortError") throw e;
+      // The poll below is still the source of truth if the server saved a result.
     } finally {
       clearTimeout(timer);
     }

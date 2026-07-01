@@ -142,6 +142,42 @@ function visionModelCandidates() {
   return unique([process.env.OPENAI_VISION_MODEL, "gpt-4.1", "gpt-4o", process.env.OPENAI_MODEL]);
 }
 
+const DEFAULT_OPENAI_TIMEOUT_MS = 48_000;
+
+function openaiTimeoutMs() {
+  const value = Number(process.env.OPENAI_FETCH_TIMEOUT_MS || DEFAULT_OPENAI_TIMEOUT_MS);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_OPENAI_TIMEOUT_MS;
+}
+
+function isAbortError(error) {
+  return error?.name === "AbortError" || /aborted|abort/i.test(String(error?.message || error));
+}
+
+async function fetchOpenAI(body) {
+  const controller = new AbortController();
+  const timeoutMs = openaiTimeoutMs();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error(`OpenAI request exceeded ${Math.round(timeoutMs / 1000)}s timeout`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const SYSTEM_PROMPT =
   "You extract travel documents into structured data. You are a DATA EXTRACTOR not a writer. NEVER write, generate, or invent any text. Only copy text that exists verbatim in the source document. If text is not in the source, use empty string. Translate Chinese to Mongolian only for route names and headers.";
 
@@ -213,13 +249,7 @@ async function askVision(content) {
   const models = visionModelCandidates();
   for (const model of models) {
     try {
-      const res = await fetch("https://api.openai.com/v1/responses", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify({
+      const res = await fetchOpenAI({
           model,
           max_output_tokens: 14000,
           input: [
@@ -229,7 +259,6 @@ async function askVision(content) {
           text: {
             format: { type: "json_schema", name: "trip_extraction", strict: true, schema: TRIP_SCHEMA },
           },
-        }),
       });
       const body = await res.text();
       let data;
@@ -285,13 +314,7 @@ function parseTripJson(text) {
 }
 
 async function askOpenAI(model, docText) {
-  const res = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
+  const res = await fetchOpenAI({
       model,
       max_output_tokens: 14000,
       input: [
@@ -326,10 +349,9 @@ ${docText}`,
           type: "json_schema",
           name: "trip_extraction",
           strict: true,
-          schema: TRIP_SCHEMA,
-        },
+        schema: TRIP_SCHEMA,
       },
-    }),
+    },
   });
 
   const body = await res.text();
