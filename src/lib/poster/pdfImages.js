@@ -463,13 +463,24 @@ function sortBoxesTopToBottomLeftToRight(boxes) {
   });
 }
 
+// Decoding + per-pixel scanning a very large embedded image is pure
+// synchronous CPU work that blocks the event loop and can blow the serverless
+// time budget on photo-heavy brochures. Cropping is only a nice-to-have, so
+// skip it entirely above this decoded-pixel ceiling rather than freeze the job.
+const MAX_SCAN_DECODE_PIXELS = 6_000_000; // ~2450x2450; above this, don't crop
+
 function cropPhotoRectsFromScan(scan) {
+  // scan.width/height come from the PDF image dict — check before the pricey decode.
+  if (scan.width && scan.height && scan.width * scan.height > MAX_SCAN_DECODE_PIXELS) {
+    return [];
+  }
   let decoded;
   try {
     decoded = jpeg.decode(scan.bytes, { useTArray: true });
   } catch {
     return [];
   }
+  if (decoded.width * decoded.height > MAX_SCAN_DECODE_PIXELS) return [];
 
   const step = Math.max(2, Math.round(Math.min(decoded.width, decoded.height) / 360));
   const gridWidth = Math.ceil(decoded.width / step);
