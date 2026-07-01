@@ -33,7 +33,9 @@ function loadLocalEnvFiles() {
 }
 
 function isStrictPreflightEnabled() {
-  const value = String(process.env.STRICT_PREFLIGHT || "").trim().toLowerCase();
+  const value = String(process.env.STRICT_PREFLIGHT || "")
+    .trim()
+    .toLowerCase();
   return value === "1" || value === "true" || value === "yes";
 }
 
@@ -69,7 +71,8 @@ async function run() {
   }
   const readiness = readinessModule.getReadinessReport(env);
   const redisHealthBefore = redisModule.getRedisHealth();
-  const getObservabilityDiagnostics = observabilityModule.getObservabilityDiagnostics;
+  const getObservabilityDiagnostics =
+    observabilityModule.getObservabilityDiagnostics;
 
   const redisProbe: { attempted: boolean; ok: boolean; detail: string } = {
     attempted: false,
@@ -79,10 +82,13 @@ async function run() {
 
   if (env.redisStateEnabled) {
     redisProbe.attempted = true;
-    const result = await redisModule.withRedis("preflight.redis_ping", async (redis) => {
-      const pong = await redis.ping();
-      return pong;
-    });
+    const result = await redisModule.withRedis(
+      "preflight.redis_ping",
+      async (redis) => {
+        const pong = await redis.ping();
+        return pong;
+      },
+    );
 
     if (result === null) {
       redisProbe.ok = false;
@@ -138,7 +144,7 @@ run()
     // The Redis probe opens a live ioredis socket that keeps the Node event
     // loop alive, so the process would otherwise hang here forever and stall
     // the Vercel build until it times out. Preflight has done its job by now —
-    // exit explicitly so no dangling handle (Redis, etc.) can block the build.
+    // exit eexplicitly so no dangling handle (Redis, etc.) can block the build.
     process.exit(0);
   })
   .catch((error) => {
