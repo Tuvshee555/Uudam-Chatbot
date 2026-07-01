@@ -2,10 +2,21 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as htmlToImage from "html-to-image";
+import { upload as uploadToBlob } from "@vercel/blob/client";
 import Poster from "./Poster";
 import AttachToTripModal from "./AttachToTripModal";
 import { createDefaultTrip } from "@/lib/poster/defaultTrip";
 import { Badge, Button, Card, Icons, Input, Select, Spinner, cx } from "@/components/ui";
+
+// Same key admin.tsx stores the admin secret under (see SECRET_KEY in
+// adminPageUtils.ts) — read directly here since @vercel/blob's client upload()
+// makes its own fetch to /api/admin/poster/upload and can't reuse apiFetch's
+// wrapped fetch, only a plain headers object.
+const ADMIN_SECRET_STORAGE_KEY = "travel_admin_secret";
+function getStoredAdminSecret() {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(ADMIN_SECRET_STORAGE_KEY) || "";
+}
 
 const POSTER_WIDTH = 1080;
 const MESSENGER_SINGLE_IMAGE_MAX_HEIGHT = 1900;
@@ -405,29 +416,27 @@ export default function PosterTab({ apiFetch }) {
   // Upload the raw file to the chatbot in <4MB base64 chunks (Vercel body cap),
   // reassembled server-side. The final chunk returns the extracted trip JSON.
   // Small files (<3MB) go straight to /extract as base64 JSON. Bigger files
-  // (Vercel's function body cap is ~4.5MB) upload to Vercel Blob first, then
-  // /extract is just given the URL and fetches the whole file server-side —
-  // this keeps PDF vision extraction seeing the full document layout.
+  // (Vercel's function body cap is ~4.5MB, enforced no matter how a route
+  // reads its body) upload straight from the BROWSER to Vercel Blob using the
+  // client-upload pattern — the file bytes never pass through any of our
+  // serverless functions. /extract is then just given the URL and fetches the
+  // whole file server-side, which keeps PDF vision extraction seeing the
+  // full document layout.
   async function extractOne(file) {
     const DIRECT_LIMIT = 3 * 1024 * 1024;
 
     if (file.size > DIRECT_LIMIT) {
-      const uploadRes = await apiFetch("/api/admin/poster/upload", {
-        method: "POST",
-        headers: {
-          "x-filename": encodeURIComponent(file.name),
-          "Content-Type": file.type || "application/octet-stream",
-        },
-        body: file,
+      const blob = await uploadToBlob(file.name, file, {
+        access: "public",
+        handleUploadUrl: "/api/admin/poster/upload",
+        headers: { "x-admin-secret": getStoredAdminSecret() },
       });
-      const uploadJson = await uploadRes.json().catch(() => ({}));
-      if (uploadJson.error) throw new Error(uploadJson.error);
 
       const r = await fetchJson("/api/admin/poster/extract", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          blobUrl: uploadJson.url,
+          blobUrl: blob.url,
           filename: file.name,
           mimeType: file.type || "",
         }),

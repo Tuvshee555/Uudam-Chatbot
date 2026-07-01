@@ -1,38 +1,20 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { put } from "@vercel/blob";
+import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { requireAdminAccess } from "@/lib/adminAccess";
 
-// Large poster documents (>3MB) can't fit through a serverless function's
-// ~4.5MB body cap. The client streams the raw file here first; we store it in
-// Vercel Blob and hand back a URL. /api/admin/poster/extract then fetches that
-// URL server-side (whole file, so PDF vision extraction still sees full layout)
-// and deletes the blob once done.
-export const config = {
-  api: { bodyParser: false },
-  maxDuration: 60,
-};
-
-function readRawBody(req: NextApiRequest): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (c) => chunks.push(c));
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", reject);
-  });
-}
-
-const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
-
-function decodeHeaderFilename(value: string | string[] | undefined) {
-  const raw = Array.isArray(value) ? value[0] : value;
-  if (!raw) return "upload";
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-}
-
+/**
+ * Issues a short-lived client upload token so the BROWSER can upload large
+ * poster documents DIRECTLY to Vercel Blob — never through this (or any)
+ * serverless function's request body.
+ *
+ * Vercel enforces a hard ~4.5MB cap on a serverless function's request body,
+ * no matter how the function reads it (streamed or buffered). A route that
+ * accepts the raw file as its body — as this one used to — gets rejected by
+ * the platform with FUNCTION_PAYLOAD_TOO_LARGE before the handler even runs.
+ * The fix is Vercel Blob's client-upload pattern: this endpoint only ever
+ * exchanges a tiny JSON token request/response; the actual file bytes flow
+ * browser → Blob storage directly.
+ */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const allowed = await requireAdminAccess(req, res, "api.admin.poster.upload");
   if (!allowed) return;
@@ -44,21 +26,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  const filename = decodeHeaderFilename(req.headers["x-filename"]);
-  const contentType = (req.headers["content-type"] as string) || "application/octet-stream";
-
   try {
-    const body = await readRawBody(req);
-    if (body.length > MAX_UPLOAD_BYTES) {
-      return res.status(413).json({ error: "Файл хэт том (100MB дээд хязгаар)" });
-    }
-    const blob = await put(filename, body, {
-      access: "public",
-      contentType,
-      addRandomSuffix: true,
+    const jsonResponse = await handleUpload({
+      body: req.body as HandleUploadBody,
+      request: req,
+      onBeforeGenerateToken: async () => ({
+        allowedContentTypes: [
+          "application/pdf",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "text/plain",
+          "image/jpeg",
+          "image/png",
+          "image/webp",
+          "image/gif",
+          "image/bmp",
+        ],
+        maximumSizeInBytes: 100 * 1024 * 1024,
+        addRandomSuffix: true,
+      }),
     });
-    return res.status(200).json({ url: blob.url });
+    return res.status(200).json(jsonResponse);
   } catch (e) {
-    return res.status(500).json({ error: String((e as Error).message || e) });
+    return res.status(400).json({ error: String((e as Error).message || e) });
   }
 }
