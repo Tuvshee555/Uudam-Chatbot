@@ -15,6 +15,7 @@ function scriptPath() {
 }
 
 function pythonCandidates() {
+  if (process.env.VERCEL && !process.env.PYTHON) return [];
   return [process.env.PYTHON, "python", "python3"].filter(Boolean);
 }
 
@@ -43,6 +44,8 @@ async function runPython(pdfPath) {
 }
 
 export async function extractPdfFacts(buffer) {
+  if (pythonCandidates().length === 0) return { meals: {}, days: {} };
+
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "uudam-pdf-"));
   const pdfPath = path.join(dir, "source.pdf");
 

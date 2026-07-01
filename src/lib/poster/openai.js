@@ -139,7 +139,7 @@ function modelCandidates() {
 
 // Vision-capable models, in order of preference (used for image/PDF visual extraction)
 function visionModelCandidates() {
-  return unique([process.env.OPENAI_VISION_MODEL, process.env.OPENAI_MODEL, "gpt-4.1", "gpt-4o"]);
+  return unique([process.env.OPENAI_VISION_MODEL, "gpt-4.1", "gpt-4o", process.env.OPENAI_MODEL]);
 }
 
 const SYSTEM_PROMPT =
@@ -152,10 +152,14 @@ const VISION_USER_PROMPT = `Create structured data for a UUDAM Travel poster fro
 READ THE DOCUMENT VISUALLY as it appears on the page. The day program section lists days as "DAY 1", "DAY 2", etc. Each day has a route title and a body paragraph that belongs DIRECTLY UNDER that day's heading on the page. Match each day's body text to the correct day by its visual position — do not guess.
 
 Rules:
+- For "title": use the MAIN TRIP NAME, usually the largest travel title, e.g. "БЭЭЖИН - ЮНИВЕРСАЛ ШУУД НИСЛЭГТЭЙ АЯЛАЛ". NEVER use "UUDAM TRAVEL AGENCY" or the agency logo text as the title.
+- For "subtitle": use secondary date/route text if visible, such as "07/09-14 УБ-БЭЭЖИН-УБ". Do not put the whole title into subtitle if title is empty or agency text.
 - Output Mongolian text for route/header fields only.
+- For each day "route": copy only the route/location title after the DAY/date prefix. Do not include "DAY 1", "ӨДӨР 1", or dates in the route field.
 - For "summary": copy the program/хөтөлбөр paragraph for that day WORD FOR WORD exactly as written under that day on the page. Match it to the CORRECT day by visual position. Never put one day's text under another day. If a day genuinely has no body text on the page, use "". Process EVERY day including the very last one — do not skip the final day.
 - For "activities": copy bullet points or sentences from the source exactly. Do not add, remove, or change any words. If none exist use [].
 - Prices: copy the exact price text from the page (e.g. "1,390,000₮"). Do not reformat numbers.
+- If the document has an "АЯЛЛЫН ҮНЭ" or price table area, price_table must NOT be null. Extract visible columns such as "Том хүн" and "Хүүхэд 2-11 нас", and include visible price cells exactly, including "+ тийз" when shown.
 - In price_table, columns must NOT include a date/огноо column — dates go in the "dates" field of each row only. Copy the date text EXACTLY as written on the page (e.g. "7 сарын 2, 8, 9, 16, 20, 23"). Do NOT convert to ISO/numeric format like 2026-07-02.
 - Each row's cells array must match columns length exactly with the real price values. Do not leave cells empty.
 - If a price has both yuan and tugrik, put both like "4,180 юань / 2,340,000₮".
@@ -167,18 +171,34 @@ Rules:
 export function normalizeExtractedTrip(trip) {
   trip.contacts = DEFAULT_CONTACTS;
   trip.agency = AGENCY;
+  if (/uudam|travel agency|аялалын агент/i.test(String(trip.title || "")) && trip.subtitle) {
+    const subtitle = String(trip.subtitle || "").trim();
+    const title = subtitle
+      .replace(/\s+\d{1,2}[/-]\d{1,2}(?:[/-]\d{1,2})?.*$/i, "")
+      .replace(/\s+УБ[-–].*$/i, "")
+      .trim();
+    if (title) trip.title = title;
+  }
   trip.departures ||= [];
   trip.days ||= [];
   trip.includes ||= [];
   trip.excludes ||= [];
   for (const [index, day] of trip.days.entries()) {
     day.day = Number(day.day || index + 1);
+    day.route = String(day.route || "")
+      .replace(/^(?:day|өдөр)\s*\d+\s*[:.\-–]?\s*/i, "")
+      .replace(/^\d{1,2}[/-]\d{1,2}\s*[:.\-–]?\s*/i, "")
+      .trim();
     day.summary ||= "";
     day.activities ||= [];
     day.bonus ||= [];
     day.meals ||= { breakfast: true, lunch: false, dinner: true };
     day.hotel ??= null;
     day.flight ??= null;
+    if (!day.flight) {
+      const flightMatch = String(day.summary || "").match(/\b(?:OM|ОМ)\s*\d{3}\b/i);
+      if (flightMatch) day.flight = flightMatch[0].replace(/\s+/g, "").toUpperCase().replace("ОМ", "OM");
+    }
     day.photo = null;
     day.photo_caption ||= "";
   }

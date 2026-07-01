@@ -9,7 +9,6 @@ import {
   extractTripFromImage,
   extractTripFromPdf,
 } from "@/lib/poster/openai";
-import { extractTripFromPdfGemini } from "@/lib/poster/gemini";
 import { extractPdfImages } from "@/lib/poster/pdfImages";
 import { applyDayText, applyMealMarks, extractPdfFacts } from "@/lib/poster/pdfMeals";
 
@@ -42,13 +41,6 @@ function assignPhotos(trip: TripLike, extractedImages: string[]) {
 }
 
 async function extractPdfTrip(b64: string, filename: string) {
-  if (process.env.GEMINI_API_KEY) {
-    try {
-      return await extractTripFromPdfGemini(b64, filename);
-    } catch (err) {
-      logError("poster.extract.gemini_failed", { error: String((err as Error).message) });
-    }
-  }
   return extractTripFromPdf(b64, filename);
 }
 

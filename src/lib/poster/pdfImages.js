@@ -56,6 +56,11 @@ function isFullPageScan(image, pageSize, imageCountOnPage) {
   return pageSized && sameAspect && imageCountOnPage <= 2;
 }
 
+function isLikelyPageRender(width, height) {
+  const aspect = width / Math.max(1, height);
+  return width >= 700 && height >= 900 && aspect >= 0.55 && aspect <= 0.85;
+}
+
 function sha1(bytes) {
   return crypto.createHash("sha1").update(bytes).digest("hex");
 }
@@ -594,6 +599,7 @@ export async function extractPdfImages(buffer) {
       if (!image || image.bytes.length < MIN_BYTES) continue;
 
       if (isJpegLike(image.filter)) {
+        if (isLikelyPageRender(image.width, image.height)) continue;
         if (!isUsablePhotoShape(image.width, image.height)) continue;
         if (image.bytes.length / Math.max(1, image.width * image.height) < MIN_JPEG_BYTES_PER_PIXEL) continue;
         const decoded = decodeJpegBytes(image.bytes);
