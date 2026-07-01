@@ -2566,8 +2566,13 @@ export type ReminderCandidate = {
   last_msg_at: string;
 };
 
-// Returns all senders eligible for a 23-hour reminder:
-// - last_msg_at is between 23h and 24h ago (inside FB 24h window)
+// Returns all senders eligible for a follow-up reminder:
+// - last_msg_at is between 12h and 24h ago. Messages here use
+//   messaging_type RESPONSE, which Facebook only accepts inside the 24h
+//   window from the user's last message — the window can widen toward 12h
+//   but must never approach/exceed 24h. Widened from the ideal 23-24h
+//   because Vercel Hobby crons only run once daily, so a single run must
+//   reliably catch senders somewhere in this range before their window closes.
 // - reminder_sent_at is NULL or older than 6 months (cooldown)
 // - not currently paused
 export async function dbGetPendingReminders(): Promise<ReminderCandidate[]> {
@@ -2578,7 +2583,7 @@ export async function dbGetPendingReminders(): Promise<ReminderCandidate[]> {
     `SELECT sender_id, platform, last_msg_at
      FROM travel_senders
      WHERE platform = 'facebook'
-       AND last_msg_at < NOW() - INTERVAL '23 hours'
+       AND last_msg_at < NOW() - INTERVAL '12 hours'
        AND last_msg_at > NOW() - INTERVAL '24 hours'
        AND (reminder_sent_at IS NULL OR reminder_sent_at < $1)
        AND (paused = FALSE OR expires_at < NOW())`,
