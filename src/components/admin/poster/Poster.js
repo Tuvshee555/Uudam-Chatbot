@@ -225,6 +225,14 @@ export default function Poster({
   const dragIdx = useRef(null);
   const [dragOver, setDragOver] = useState(null);
 
+  // Defined before the JSX (not inline in the ref callback) so the day-photo
+  // input ref map is registered without mutating a value already read by JSX.
+  function setDayPhotoInputRef(i, node) {
+    if (!dayPhotoInputRefs.current) return;
+    if (node) dayPhotoInputRefs.current[i] = node;
+    else delete dayPhotoInputRefs.current[i];
+  }
+
   const Logo = () => (
     <>
       <img className="logo" src={logoSrc} alt="UUDAM" />
@@ -466,11 +474,7 @@ export default function Poster({
                       )}
 
                       <input
-                        ref={(node) => {
-                          if (!dayPhotoInputRefs.current) return;
-                          if (node) dayPhotoInputRefs.current[i] = node;
-                          else delete dayPhotoInputRefs.current[i];
-                        }}
+                        ref={(node) => setDayPhotoInputRef(i, node)}
                         type="file"
                         accept="image/*"
                         className="hidden-input"
