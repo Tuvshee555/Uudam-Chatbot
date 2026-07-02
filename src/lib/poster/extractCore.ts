@@ -37,16 +37,32 @@ async function extractPdfImagesGuarded(buffer: Buffer): Promise<string[]> {
 // PDF text extraction: Gemini first (fast, native PDF support, cheaper), then
 // OpenAI vision as fallback — mirrors the standalone poster generator, which
 // works reliably. Ours had been forced through OpenAI-only, which is the slow
-// path that was timing out on large real PDFs.
+// path that was timing out on large real PDFs. Every stage logs its duration
+// so a slow file names the guilty stage instead of just "timed out".
 async function extractPdfTripText(b64: string, filename: string) {
   if (process.env.GEMINI_API_KEY) {
+    const started = Date.now();
     try {
-      return await extractTripFromPdfGemini(b64, filename);
-    } catch {
-      // fall through to OpenAI vision
+      const trip = await extractTripFromPdfGemini(b64, filename);
+      console.log(`[extract] gemini ok in ${((Date.now() - started) / 1000).toFixed(1)}s: ${filename}`);
+      return trip;
+    } catch (err) {
+      console.warn(
+        `[extract] gemini failed after ${((Date.now() - started) / 1000).toFixed(1)}s, trying OpenAI: ${(err as Error).message}`,
+      );
     }
   }
-  return extractTripFromPdf(b64, filename);
+  const started = Date.now();
+  try {
+    const trip = await extractTripFromPdf(b64, filename);
+    console.log(`[extract] openai ok in ${((Date.now() - started) / 1000).toFixed(1)}s: ${filename}`);
+    return trip;
+  } catch (err) {
+    console.warn(
+      `[extract] openai failed after ${((Date.now() - started) / 1000).toFixed(1)}s: ${(err as Error).message}`,
+    );
+    throw err;
+  }
 }
 
 type TripLike = { days?: Array<{ photo?: string | null }> };

@@ -433,8 +433,11 @@ export default function PosterTab({ apiFetch }) {
   }
 
   async function extractOne(file) {
+    // Local dev has no Vercel 60s kill, and its server budget is 5 min —
+    // give the client the same room so slow local runs aren't cut at 90s.
+    const timeoutMs = isLocalDevHost() ? 300 * 1000 : EXTRACT_TIMEOUT_MS;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), EXTRACT_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     let res;
     try {
       if (file.size > DIRECT_UPLOAD_LIMIT_BYTES && !isLocalDevHost()) {
@@ -465,7 +468,7 @@ export default function PosterTab({ apiFetch }) {
       }
     } catch (e) {
       if (e?.name === "AbortError" || /abort/i.test(String(e?.message || ""))) {
-        throw new Error(`Хүсэлт хэт удаж зогслоо (${EXTRACT_TIMEOUT_MS / 1000}s). Файл хэт том эсвэл сервер ачаалалтай байж магадгүй — дахин оролдоно уу.`);
+        throw new Error(`Хүсэлт хэт удаж зогслоо (${timeoutMs / 1000}s). Файл хэт том эсвэл сервер ачаалалтай байж магадгүй — дахин оролдоно уу.`);
       }
       throw e;
     } finally {

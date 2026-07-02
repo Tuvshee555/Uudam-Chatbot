@@ -14,7 +14,9 @@ import {
 // function returns nothing, which the browser experiences as an endless hang.
 // The AI calls inside runExtraction are awaited network I/O, so this race can
 // actually fire (the one sync-CPU hotspot, photo cropping, is already capped).
-const EXTRACTION_BUDGET_MS = 52_000;
+// The 52s ceiling only exists because of Vercel; local dev has no kill, so
+// give slow PDFs (Gemini timeout -> full OpenAI fallback = up to ~85s) room.
+const EXTRACTION_BUDGET_MS = process.env.VERCEL ? 52_000 : 300_000;
 
 function withBudget<T>(promise: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
