@@ -418,12 +418,21 @@ export default function PosterTab({ apiFetch }) {
   // is exactly the failure mode this feature kept hitting.
   const EXTRACT_TIMEOUT_MS = 90 * 1000;
 
+  // The 4.5MB body cap is a VERCEL platform limit — local dev has no such
+  // cap, and no BLOB_READ_WRITE_TOKEN either, so routing big files through
+  // Blob on localhost just fails with "Failed to retrieve the client token".
+  // On localhost every file goes direct multipart, any size.
+  function isLocalDevHost() {
+    if (typeof window === "undefined") return false;
+    return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+  }
+
   async function extractOne(file) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), EXTRACT_TIMEOUT_MS);
     let res;
     try {
-      if (file.size > DIRECT_UPLOAD_LIMIT_BYTES) {
+      if (file.size > DIRECT_UPLOAD_LIMIT_BYTES && !isLocalDevHost()) {
         const blob = await uploadToBlob(file.name, file, {
           access: "public",
           handleUploadUrl: "/api/admin/poster/upload",
