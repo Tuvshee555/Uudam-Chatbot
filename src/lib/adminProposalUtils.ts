@@ -283,8 +283,14 @@ export function describeAction(action: AIAction): {
     "аялал";
   const fields = action.fields || {};
   const changes: string[] = [];
+  const targetNorm = String(target).trim().toLowerCase();
   for (const [key, value] of Object.entries(fields)) {
     if (value == null || value === "") continue;
+    // Skip values that add zero information — every skipped word here is one
+    // the admin doesn't have to read on every single proposal row.
+    if (key === "route_name" && String(value).trim().toLowerCase() === targetNorm) continue; // already the row heading
+    if (key === "operator_name" && /uudam\s*travel/i.test(String(value))) continue; // own agency, always identical
+    if (key === "currency" && String(value).toUpperCase() === "MNT") continue; // the default
     const label = FIELD_LABELS[key] || key;
     if (key === "has_food") {
       changes.push(`${label}: ${value ? "Байгаа" : "Байхгүй"}`);
