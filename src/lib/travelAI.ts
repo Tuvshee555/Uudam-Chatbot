@@ -1425,6 +1425,91 @@ export async function generateAIProposalFromContent(input: {
   });
 }
 
+// Trip identity key for grouping/matching actions: trip_id when present,
+// otherwise the route name folded to survive case/dash/е-э spelling variance.
+function tripActionKey(action: AITripAction): string {
+  const id = action.trip_id?.trim();
+  if (id) return `id:${id}`;
+  const name =
+    action.fields?.route_name?.toString().trim() ||
+    action.match?.route_name?.trim() ||
+    "";
+  return `name:${name.toLowerCase().replace(/э/g, "е").replace(/[^\p{L}\p{N}]+/gu, "")}`;
+}
+
+function unionStringArrays(a: unknown, b: unknown): string[] {
+  const clean = (v: unknown) =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  return Array.from(new Set([...clean(a), ...clean(b)]));
+}
+
+/**
+ * Collapses multiple actions that target the SAME trip into one. Multi-image
+ * uploads (a messenger-split zip = several slices of one poster) make the
+ * model emit one partial action per image — e.g. one carrying dates+prices,
+ * another carrying meals+photo — which showed up as confusing duplicate rows
+ * and split the photos across actions. Fields fill forward (first non-empty
+ * wins), list fields union.
+ */
+export function mergeDuplicateTripActions(proposal: AIChangeProposal): void {
+  const byKey = new Map<string, AITripAction>();
+  const mergedActions: AITripAction[] = [];
+  for (const action of proposal.actions) {
+    const verb = String(action.action || "").toLowerCase();
+    const key = `${verb}|${tripActionKey(action)}`;
+    const existing = verb !== "cancel" ? byKey.get(key) : undefined;
+    if (!existing || key.endsWith("name:")) {
+      byKey.set(key, action);
+      mergedActions.push(action);
+      continue;
+    }
+    const target = (existing.fields ?? {}) as Record<string, unknown>;
+    const source = (action.fields ?? {}) as Record<string, unknown>;
+    for (const [field, value] of Object.entries(source)) {
+      if (value == null || value === "") continue;
+      if (field === "photo_urls" || field === "departure_dates") {
+        target[field] = unionStringArrays(target[field], value);
+      } else if (field === "extra" && typeof value === "object") {
+        target[field] = { ...(target[field] as object ?? {}), ...(value as object) };
+      } else if (target[field] == null || target[field] === "") {
+        target[field] = value;
+      }
+    }
+    if (!existing.fields) (existing as { fields?: Record<string, unknown> }).fields = target;
+  }
+  proposal.actions = mergedActions;
+}
+
+/**
+ * Restores photo_urls after a clarification revision. The revision round-trip
+ * feeds the proposal back through the model, and models routinely drop the
+ * long Cloudinary URLs as noise — which meant answering ONE question silently
+ * cost the admin every attached photo.
+ */
+export function carryOverPhotoUrls(
+  previous: AIChangeProposal,
+  revised: AIChangeProposal,
+): void {
+  const photosByKey = new Map<string, string[]>();
+  for (const action of previous.actions) {
+    const urls = Array.isArray(action.fields?.photo_urls)
+      ? action.fields.photo_urls.filter((u): u is string => typeof u === "string")
+      : [];
+    if (urls.length > 0) photosByKey.set(tripActionKey(action), urls);
+  }
+  if (photosByKey.size === 0) return;
+  for (const action of revised.actions) {
+    const existing = Array.isArray(action.fields?.photo_urls)
+      ? action.fields.photo_urls
+      : [];
+    if (existing.length > 0) continue;
+    const carried = photosByKey.get(tripActionKey(action));
+    if (!carried) continue;
+    if (!action.fields) (action as { fields?: Record<string, unknown> }).fields = {};
+    (action.fields as Record<string, unknown>).photo_urls = carried;
+  }
+}
+
 // Filename noise that carries no trip identity ("...-messenger-split (3).zip").
 const PHOTO_LABEL_NOISE = new Set([
   "messenger", "split", "zip", "png", "jpg", "jpeg", "webp", "final",
@@ -1696,6 +1781,9 @@ export async function generateAIProposalFromContentBatched(input: {
 
       const merged = mergeBatchProposals(proposals, batches.length);
 
+      // One trip = one action, even when it arrived as several poster slices.
+      mergeDuplicateTripActions(merged);
+
       // Code-side completeness check: count numbered trip markers in source text
       // and warn if the model returned far fewer actions than expected.
       const allSourceText = sources
@@ -1756,6 +1844,7 @@ function buildProposalRevisionGuide(input: {
 }) {
   return [
     "You are revising an existing travel-ops proposal after a short admin clarification.",
+    "Preserve every action's photo_urls array EXACTLY as-is — never drop, truncate, or rewrite those URLs.",
     "Return JSON only using the same schema as before.",
     "Keep high-confidence extracted data unless the clarification changes it.",
     "Resolve only the directly affected uncertainty. Do not invent missing facts.",
@@ -1844,6 +1933,11 @@ export async function reviseAIRequest(
     maxRetries: 0,
     repairTimeoutMs: 15_000,
   });
+
+  // Models routinely drop the long Cloudinary photo URLs during revision —
+  // restore them from the pre-revision actions so answering a clarification
+  // never silently costs the attached photos.
+  carryOverPhotoUrls(currentProposal, revisedProposal);
 
   await queryNeon(
     `

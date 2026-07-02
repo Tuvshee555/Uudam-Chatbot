@@ -290,8 +290,15 @@ export function describeAction(action: AIAction): {
       changes.push(`${label}: ${value ? "Байгаа" : "Байхгүй"}`);
     } else if (key === "status") {
       changes.push(`${label}: ${STATUS_LABELS[value as TripStatus] || String(value)}`);
-    } else if (key === "departure_dates" && Array.isArray(value)) {
+    } else if (key === "photo_urls" && Array.isArray(value)) {
+      // Raw Cloudinary URLs are unreadable noise — the count is what matters.
+      if (value.length > 0) changes.push(`Зураг: ${value.length} ширхэг хавсаргана`);
+    } else if (Array.isArray(value)) {
       changes.push(`${label}: ${value.join(", ")}`);
+    } else if (typeof value === "object") {
+      // Nested detail objects (extra) stringify to "[object Object]" — skip;
+      // their real contents surface through the diff chips instead.
+      continue;
     } else {
       changes.push(`${label}: ${String(value)}`);
     }
