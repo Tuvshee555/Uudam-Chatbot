@@ -100,3 +100,19 @@ export async function runExtraction(buffer: Buffer, filename: string, mime: stri
   return { trip, source_file: filename };
 }
 
+export async function resolveFile(
+  body: Record<string, unknown>,
+): Promise<{ buffer: Buffer; filename: string; mime: string; blobUrl?: string }> {
+  const blobUrl = typeof body.blobUrl === "string" ? body.blobUrl : "";
+  if (blobUrl) {
+    const filename = typeof body.filename === "string" ? body.filename : "document";
+    const mime = typeof body.mimeType === "string" ? body.mimeType : "";
+    const res = await fetch(blobUrl);
+    if (!res.ok) throw new Error(`Blob татахад алдаа гарлаа: ${res.status}`);
+    const arrayBuffer = await res.arrayBuffer();
+    return { buffer: Buffer.from(arrayBuffer), filename, mime, blobUrl };
+  }
+
+  throw new Error("Файл олдсонгүй");
+}
+

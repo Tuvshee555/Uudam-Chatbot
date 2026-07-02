@@ -1,19 +1,15 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import Busboy from "busboy";
+import { del } from "@vercel/blob";
 import { requireAdminAccess } from "@/lib/adminAccess";
 import { logError } from "@/lib/observability";
-import { MAX_TOTAL_BYTES, runExtraction } from "@/lib/poster/extractCore";
+import { MAX_TOTAL_BYTES, resolveFile, runExtraction } from "@/lib/poster/extractCore";
 
 /**
- * Reads an uploaded trip document (PDF/docx/txt/image) as multipart FormData
- * and returns the extracted trip JSON — directly, in one request, exactly like
- * the standalone poster generator that works reliably.
- *
- * No Vercel Blob, no background job/worker, no polling. Those layers were added
- * to work around Vercel's serverless body cap but caused far more breakage than
- * they solved. The simple direct approach matches the proven original; if a
- * genuinely huge file hits Vercel's body limit it fails fast with a clear 413,
- * which is far better than the silent hangs the Blob/job machinery produced.
+ * Small files come in as multipart FormData and are extracted directly. Large
+ * files must be uploaded browser -> Blob first because Vercel rejects bodies
+ * over ~4.5MB before this handler runs; in that case the client posts a tiny
+ * JSON body with the Blob URL and we read the file from there.
  */
 export const config = {
   api: { bodyParser: false },
@@ -74,13 +70,44 @@ function readSingleUpload(
   });
 }
 
+function readJsonBody(req: NextApiRequest): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    req.on("end", () => {
+      try {
+        const text = Buffer.concat(chunks).toString("utf8").trim();
+        resolve(text ? JSON.parse(text) : {});
+      } catch (error) {
+        reject(error);
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const allowed = await requireAdminAccess(req, res, "api.admin.poster.extract");
   if (!allowed) return;
   if (req.method !== "POST") return res.status(405).end();
 
+  let blobUrl: string | undefined;
   try {
-    const upload = await readSingleUpload(req);
+    const contentType = String(req.headers["content-type"] || "");
+    let upload: { buffer: Buffer; filename: string; mimeType: string } | null = null;
+
+    if (contentType.includes("multipart/form-data")) {
+      upload = await readSingleUpload(req);
+    } else if (contentType.includes("application/json")) {
+      const resolved = await resolveFile(await readJsonBody(req));
+      blobUrl = resolved.blobUrl;
+      upload = {
+        buffer: resolved.buffer,
+        filename: resolved.filename,
+        mimeType: resolved.mime,
+      };
+    }
+
     if (!upload) return res.status(400).json({ error: "Файл олдсонгүй" });
 
     const result = await runExtraction(upload.buffer, upload.filename, upload.mimeType);
@@ -89,5 +116,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const message = String((e as Error).message || e);
     logError("poster.extract.failed", { error: message });
     return res.status(500).json({ error: message });
+  } finally {
+    if (blobUrl) {
+      del(blobUrl).catch(() => {});
+    }
   }
 }

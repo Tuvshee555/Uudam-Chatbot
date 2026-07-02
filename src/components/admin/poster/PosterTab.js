@@ -2,17 +2,25 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as htmlToImage from "html-to-image";
+import { upload as uploadToBlob } from "@vercel/blob/client";
 import Poster from "./Poster";
 import AttachToTripModal from "./AttachToTripModal";
 import { createDefaultTrip } from "@/lib/poster/defaultTrip";
 import { Badge, Button, Card, Icons, Input, Select, Spinner, cx } from "@/components/ui";
 
+const ADMIN_SECRET_STORAGE_KEY = "travel_admin_secret";
 const POSTER_WIDTH = 1080;
 const MESSENGER_SINGLE_IMAGE_MAX_HEIGHT = 1900;
 const MESSENGER_MAX_IMAGE_SLICES = 3;
 const MAX_UPLOAD_FILES = 10;
 const MAX_UPLOAD_SIZE_MB = 100;
 const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
+const DIRECT_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024;
+
+function getStoredAdminSecret() {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(ADMIN_SECRET_STORAGE_KEY) || "";
+}
 
 function setPath(obj, path, value) {
   const clone = structuredClone(obj);
@@ -402,15 +410,31 @@ export default function PosterTab({ apiFetch }) {
     return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
   }
 
-  // Dead-simple upload, exactly like the standalone poster generator that
-  // works reliably: send the file straight to /api/admin/poster/extract as
-  // multipart FormData and get the extracted trip JSON back in one request.
-  // No Vercel Blob, no background jobs, no polling — those layers were added
-  // to dodge Vercel's body cap but caused endless hangs and 503s instead.
+  // Keep the simple direct extract for smaller files, but send large files to
+  // Blob first so Vercel's 4.5MB function body cap doesn't reject them.
   async function extractOne(file) {
-    const fd = new FormData();
-    fd.append("file", file, file.name);
-    const res = await apiFetch("/api/admin/poster/extract", { method: "POST", body: fd });
+    let res;
+    if (file.size > DIRECT_UPLOAD_LIMIT_BYTES) {
+      const blob = await uploadToBlob(file.name, file, {
+        access: "public",
+        handleUploadUrl: "/api/admin/poster/upload",
+        headers: { "x-admin-secret": getStoredAdminSecret() },
+      });
+      res = await apiFetch("/api/admin/poster/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          blobUrl: blob.url,
+          filename: file.name,
+          mimeType: file.type || "",
+        }),
+      });
+    } else {
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      res = await apiFetch("/api/admin/poster/extract", { method: "POST", body: fd });
+    }
+
     const text = await res.text();
     let json = {};
     if (text) {
