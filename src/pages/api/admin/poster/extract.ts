@@ -3,7 +3,36 @@ import Busboy from "busboy";
 import { del } from "@vercel/blob";
 import { requireAdminAccess } from "@/lib/adminAccess";
 import { logError } from "@/lib/observability";
-import { MAX_TOTAL_BYTES, resolveFile, runExtraction } from "@/lib/poster/extractCore";
+import {
+  MAX_TOTAL_BYTES,
+  assertReadableDocument,
+  resolveFile,
+  runExtraction,
+} from "@/lib/poster/extractCore";
+
+// Answer with a clean JSON error BEFORE Vercel's hard 60s kill — a killed
+// function returns nothing, which the browser experiences as an endless hang.
+// The AI calls inside runExtraction are awaited network I/O, so this race can
+// actually fire (the one sync-CPU hotspot, photo cropping, is already capped).
+const EXTRACTION_BUDGET_MS = 52_000;
+
+function withBudget<T>(promise: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new Error(
+            "Уншилт хугацаанаас хэтэрлээ (52s). PDF хэт том эсвэл нарийн байна — хуудсыг цөөлж эсвэл текст/docx болгож дахин оролдоно уу.",
+          ),
+        ),
+      EXTRACTION_BUDGET_MS,
+    );
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
 
 /**
  * Small files come in as multipart FormData and are extracted directly. Large
@@ -110,7 +139,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!upload) return res.status(400).json({ error: "Файл олдсонгүй" });
 
-    const result = await runExtraction(upload.buffer, upload.filename, upload.mimeType);
+    // Rejects empty/truncated files (OneDrive online-only placeholders) in
+    // <1ms with a message that says what's wrong, instead of feeding garbage
+    // to the AI and failing confusingly a minute later.
+    assertReadableDocument(upload.buffer, upload.filename, upload.mimeType);
+
+    const result = await withBudget(
+      runExtraction(upload.buffer, upload.filename, upload.mimeType),
+    );
     return res.status(200).json(result);
   } catch (e) {
     const message = String((e as Error).message || e);

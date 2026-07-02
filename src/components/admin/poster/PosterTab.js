@@ -412,27 +412,50 @@ export default function PosterTab({ apiFetch }) {
 
   // Keep the simple direct extract for smaller files, but send large files to
   // Blob first so Vercel's 4.5MB function body cap doesn't reject them.
+  // Hard client-side deadline on the extract call. If Vercel kills the
+  // function mid-request (its 60s ceiling), the connection can hang instead
+  // of erroring — without this abort, the spinner would spin forever, which
+  // is exactly the failure mode this feature kept hitting.
+  const EXTRACT_TIMEOUT_MS = 90 * 1000;
+
   async function extractOne(file) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), EXTRACT_TIMEOUT_MS);
     let res;
-    if (file.size > DIRECT_UPLOAD_LIMIT_BYTES) {
-      const blob = await uploadToBlob(file.name, file, {
-        access: "public",
-        handleUploadUrl: "/api/admin/poster/upload",
-        headers: { "x-admin-secret": getStoredAdminSecret() },
-      });
-      res = await apiFetch("/api/admin/poster/extract", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          blobUrl: blob.url,
-          filename: file.name,
-          mimeType: file.type || "",
-        }),
-      });
-    } else {
-      const fd = new FormData();
-      fd.append("file", file, file.name);
-      res = await apiFetch("/api/admin/poster/extract", { method: "POST", body: fd });
+    try {
+      if (file.size > DIRECT_UPLOAD_LIMIT_BYTES) {
+        const blob = await uploadToBlob(file.name, file, {
+          access: "public",
+          handleUploadUrl: "/api/admin/poster/upload",
+          headers: { "x-admin-secret": getStoredAdminSecret() },
+          abortSignal: controller.signal,
+        });
+        res = await apiFetch("/api/admin/poster/extract", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            blobUrl: blob.url,
+            filename: file.name,
+            mimeType: file.type || "",
+          }),
+          signal: controller.signal,
+        });
+      } else {
+        const fd = new FormData();
+        fd.append("file", file, file.name);
+        res = await apiFetch("/api/admin/poster/extract", {
+          method: "POST",
+          body: fd,
+          signal: controller.signal,
+        });
+      }
+    } catch (e) {
+      if (e?.name === "AbortError" || /abort/i.test(String(e?.message || ""))) {
+        throw new Error(`Хүсэлт хэт удаж зогслоо (${EXTRACT_TIMEOUT_MS / 1000}s). Файл хэт том эсвэл сервер ачаалалтай байж магадгүй — дахин оролдоно уу.`);
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
     }
 
     const text = await res.text();

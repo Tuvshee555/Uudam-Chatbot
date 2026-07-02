@@ -72,6 +72,12 @@ function toGeminiSchema(schema) {
   return out;
 }
 
+// Bounded so a hung Gemini call fails fast instead of silently eating the
+// whole 60s serverless budget (which would get the function killed by Vercel
+// mid-request with no response — the endless-spinner failure mode). Real
+// extractions measure 5-25s; 35s leaves the OpenAI fallback a fighting chance.
+const GEMINI_FETCH_TIMEOUT_MS = Number(process.env.GEMINI_PDF_FETCH_TIMEOUT_MS || 35_000);
+
 export async function extractTripFromPdfGemini(base64, filename = "document.pdf") {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("Missing GEMINI_API_KEY");
@@ -79,27 +85,40 @@ export async function extractTripFromPdfGemini(base64, filename = "document.pdf"
   const model = geminiModel();
   const geminiSchema = toGeminiSchema(TRIP_SCHEMA);
 
-  const res = await fetch(`${GEMINI_URL(model)}?key=${key}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      system_instruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { inline_data: { mime_type: "application/pdf", data: base64 } },
-            { text: USER_PROMPT },
-          ],
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GEMINI_FETCH_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(`${GEMINI_URL(model)}?key=${key}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { inline_data: { mime_type: "application/pdf", data: base64 } },
+              { text: USER_PROMPT },
+            ],
+          },
+        ],
+        generationConfig: {
+          response_mime_type: "application/json",
+          response_schema: geminiSchema,
+          max_output_tokens: 16000,
         },
-      ],
-      generationConfig: {
-        response_mime_type: "application/json",
-        response_schema: geminiSchema,
-        max_output_tokens: 16000,
-      },
-    }),
-  });
+      }),
+    });
+  } catch (error) {
+    if (error?.name === "AbortError" || /abort/i.test(String(error?.message || error))) {
+      throw new Error(`Gemini request exceeded ${Math.round(GEMINI_FETCH_TIMEOUT_MS / 1000)}s timeout`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 
   const body = await res.text();
   let data;

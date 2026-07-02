@@ -100,6 +100,31 @@ export async function runExtraction(buffer: Buffer, filename: string, mime: stri
   return { trip, source_file: filename };
 }
 
+/**
+ * Fails fast on files that LOOK uploaded but aren't really there — the classic
+ * OneDrive "online-only placeholder" case, where the browser reads a stub or
+ * truncated bytes instead of the real document. Feeding that garbage to the AI
+ * wastes 30-60s and dies confusingly; this dies in <1ms with a message that
+ * says what's actually wrong.
+ */
+export function assertReadableDocument(buffer: Buffer, filename: string, mime: string): void {
+  if (!buffer || buffer.length === 0) {
+    throw new Error(
+      `"${filename}" хоосон байна. Файл OneDrive-с бүрэн татагдаагүй байж магадгүй — файл дээр хулганы баруун товч дараад "Always keep on this device" сонгож, бүрэн татагдсаны дараа дахин оруулна уу.`,
+    );
+  }
+  const name = filename.toLowerCase();
+  const isPdf = name.endsWith(".pdf") || mime === "application/pdf";
+  if (isPdf && !buffer.subarray(0, 1024).includes(Buffer.from("%PDF-"))) {
+    throw new Error(
+      `"${filename}" гэмтэлтэй эсвэл бүрэн татагдаагүй PDF байна (OneDrive sync шалгана уу). Файлыг бүрэн татаж аваад дахин оролдоно уу.`,
+    );
+  }
+}
+
+// A hung blob download must not silently consume the serverless time budget.
+const BLOB_FETCH_TIMEOUT_MS = 20_000;
+
 export async function resolveFile(
   body: Record<string, unknown>,
 ): Promise<{ buffer: Buffer; filename: string; mime: string; blobUrl?: string }> {
@@ -107,7 +132,7 @@ export async function resolveFile(
   if (blobUrl) {
     const filename = typeof body.filename === "string" ? body.filename : "document";
     const mime = typeof body.mimeType === "string" ? body.mimeType : "";
-    const res = await fetch(blobUrl);
+    const res = await fetch(blobUrl, { signal: AbortSignal.timeout(BLOB_FETCH_TIMEOUT_MS) });
     if (!res.ok) throw new Error(`Blob татахад алдаа гарлаа: ${res.status}`);
     const arrayBuffer = await res.arrayBuffer();
     return { buffer: Buffer.from(arrayBuffer), filename, mime, blobUrl };
