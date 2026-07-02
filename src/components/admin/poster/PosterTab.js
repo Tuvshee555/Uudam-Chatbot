@@ -15,7 +15,12 @@ const MESSENGER_MAX_IMAGE_SLICES = 3;
 const MAX_UPLOAD_FILES = 10;
 const MAX_UPLOAD_SIZE_MB = 100;
 const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
-const DIRECT_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024;
+// Vercel's serverless request-body cap is 4.5MB. Direct multipart upload is
+// the reliable path (Blob has repeatedly failed us: missing tokens, silent
+// hangs), so use as much of that cap as possible — Blob is a last resort for
+// the rare genuinely-huge file. 4.4MB leaves ~100KB for multipart framing;
+// typical ~4,000KB poster PDFs now go direct instead of detouring via Blob.
+const DIRECT_UPLOAD_LIMIT_BYTES = Math.floor(4.4 * 1024 * 1024);
 
 function getStoredAdminSecret() {
   if (typeof window === "undefined") return "";
