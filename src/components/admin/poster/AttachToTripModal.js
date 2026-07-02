@@ -23,11 +23,25 @@ function formatFieldValue(key, value) {
   return String(value);
 }
 
+// Cosmetic normalization: posters write titles in ALL CAPS with en-dashes and
+// "8 өдөр / 7 шөнө" style separators. "БЭЭЖИН – ЖИНИН" vs "Бээжин - Жинин" is
+// NOT a real difference — proposing it as a pre-checked change would downgrade
+// a nicely-cased trip name to shouting caps on one click.
+function cosmetic(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[\s\-–—−/\\.,:;·]+/g, " ")
+    .trim();
+}
+
 function valuesEqual(a, b) {
   if (Array.isArray(a) || Array.isArray(b)) {
     const arrA = Array.isArray(a) ? a : [];
     const arrB = Array.isArray(b) ? b : [];
-    return arrA.length === arrB.length && arrA.every((v, i) => v === arrB[i]);
+    return arrA.length === arrB.length && arrA.every((v, i) => cosmetic(v) === cosmetic(arrB[i]));
+  }
+  if (typeof a === "string" || typeof b === "string") {
+    return cosmetic(a) === cosmetic(b);
   }
   return (a ?? null) === (b ?? null);
 }

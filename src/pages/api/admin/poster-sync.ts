@@ -238,6 +238,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     fieldsWritten: Object.keys(approvedFields),
   });
 
+  // Expand "extra" into its child field names so the client's success
+  // message shows "Багтсан зүйлс" etc. instead of leaking the raw key.
+  const fieldsWritten = Object.keys(approvedFields).flatMap((key) =>
+    key === "extra" && approvedFields.extra
+      ? Object.keys(approvedFields.extra)
+      : [key],
+  );
+
   return res.status(200).json({
     ok: true,
     tripId: targetTripId,
@@ -246,7 +254,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     mode,
     uploaded: uploadedUrls.length,
     failed: failures.length,
-    fieldsWritten: Object.keys(approvedFields),
+    fieldsWritten,
     totalPhotos: patchFields.photo_urls?.length ?? existingUrls.length,
     failures: failures.length > 0 ? failures : undefined,
   });
