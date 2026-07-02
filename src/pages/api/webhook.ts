@@ -1,5 +1,6 @@
 ﻿import type { NextApiRequest, NextApiResponse } from "next";
 import { askGemini } from "../../lib/gemini";
+import { askOpenAIFallbackParts } from "../../lib/openaiFallback";
 import { matchFlow, findTriggeredFlow, getFlowState, setFlowState, clearFlowState, newRuntimeState, runFlowFrom, resumeFlowWithInput, type FlowRule, type FlowDoc, type FlowEffects, type FlowRuntimeState, type RunOutcome, } from "../../lib/flowEngine";
 import { BOT_MESSAGE_METADATA, replyToComment, sendImageCarousel, sendImageMessage, sendQuickReplies, sendTextMessage, sendTypingOn } from "../../lib/messenger";
 import { sendTextMessage as sendIgTextMessage } from "../../lib/instagram";
@@ -1909,14 +1910,30 @@ async function handleMessage(
     });
     aiReply = result.text;
   } catch (error) {
+    // Gemini down/overloaded must not mean a customer gets an apology while
+    // a working second model sits idle — try OpenAI with the same prompt
+    // (same rules: Mongolian-only, SILENT, BUTTONS) before giving up.
+    let fallbackText = "";
+    try {
+      const fallback = await askOpenAIFallbackParts([{ text: prompt }], {
+        source: "api.webhook.reply_fallback",
+        timeoutMs: 20_000,
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+      });
+      fallbackText = fallback?.text?.trim() || "";
+    } catch {
+      // fall through to the apology below
+    }
     logWarn("webhook.ai_fallback_reply", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
       platform,
       senderHash: hashIdentifier(senderId),
       classification: classifyError(error),
+      openaiFallbackUsed: Boolean(fallbackText),
     });
-    aiReply = "Уучлаарай, систем түр алдаатай байна.";
+    aiReply = fallbackText || "Уучлаарай, систем түр алдаатай байна.";
   }
   // Bot signals it has nothing useful to say — go completely silent
   if (aiReply.trim().toUpperCase() === "SILENT" || aiReply.trim() === "SILENT\nBUTTONS:" || /^SILENT\s*$/i.test(aiReply.trim().split("\n")[0])) {

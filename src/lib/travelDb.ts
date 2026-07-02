@@ -2106,6 +2106,12 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
   const modules = visibleTrips
     .map((trip) => {
     const details: string[] = [];
+    // Category is the transport differentiator (газрын / шууд нислэгтэй /
+    // хосолсон) — without it the bot cannot distinguish the three "Бээжин"
+    // trips when a customer names only the destination.
+    if (trip.category) {
+      details.push(`Ангилал: ${trip.category}`);
+    }
     if (trip.departure_dates.length) {
       details.push(`Departure dates: ${trip.departure_dates.join(", ")}`);
     }
