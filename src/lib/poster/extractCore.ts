@@ -34,34 +34,45 @@ async function extractPdfImagesGuarded(buffer: Buffer): Promise<string[]> {
   }
 }
 
-// PDF text extraction: Gemini first (fast, native PDF support, cheaper), then
-// OpenAI vision as fallback — mirrors the standalone poster generator, which
-// works reliably. Ours had been forced through OpenAI-only, which is the slow
-// path that was timing out on large real PDFs. Every stage logs its duration
-// so a slow file names the guilty stage instead of just "timed out".
+// PDF text extraction: Gemini AND OpenAI vision race in PARALLEL, first
+// success wins. Sequential fallback (Gemini timeout 35s THEN OpenAI 48s) had
+// an 83s worst case that could never fit Vercel Hobby's ~52s usable window —
+// the race bounds it to the slower single call (~48s) while the typical case
+// stays Gemini-fast (5-25s). Both see the WHOLE document, so day/meal-mark
+// alignment across pages is preserved (page-splitting was rejected for
+// exactly that reason). Costs one extra AI call per document — at once-a-day
+// usage that's pennies, far cheaper than the Pro plan this avoids.
 async function extractPdfTripText(b64: string, filename: string) {
-  if (process.env.GEMINI_API_KEY) {
-    const started = Date.now();
-    try {
-      const trip = await extractTripFromPdfGemini(b64, filename);
-      console.log(`[extract] gemini ok in ${((Date.now() - started) / 1000).toFixed(1)}s: ${filename}`);
-      return trip;
-    } catch (err) {
-      console.warn(
-        `[extract] gemini failed after ${((Date.now() - started) / 1000).toFixed(1)}s, trying OpenAI: ${(err as Error).message}`,
-      );
-    }
-  }
   const started = Date.now();
-  try {
-    const trip = await extractTripFromPdf(b64, filename);
-    console.log(`[extract] openai ok in ${((Date.now() - started) / 1000).toFixed(1)}s: ${filename}`);
-    return trip;
-  } catch (err) {
-    console.warn(
-      `[extract] openai failed after ${((Date.now() - started) / 1000).toFixed(1)}s: ${(err as Error).message}`,
+  const elapsed = () => `${((Date.now() - started) / 1000).toFixed(1)}s`;
+
+  const contenders: Array<Promise<TripLike>> = [];
+  if (process.env.GEMINI_API_KEY) {
+    contenders.push(
+      extractTripFromPdfGemini(b64, filename).then((trip) => {
+        console.log(`[extract] gemini ok in ${elapsed()}: ${filename}`);
+        return trip;
+      }),
     );
-    throw err;
+  }
+  contenders.push(
+    extractTripFromPdf(b64, filename).then((trip) => {
+      console.log(`[extract] openai ok in ${elapsed()}: ${filename}`);
+      return trip;
+    }),
+  );
+
+  // Silence the loser: whichever promise loses the race may still reject
+  // later; without a catch handler that becomes an unhandled rejection.
+  for (const p of contenders) p.catch(() => {});
+
+  try {
+    return await Promise.any(contenders);
+  } catch (err) {
+    const errors = err instanceof AggregateError ? err.errors : [err];
+    const detail = errors.map((e) => String((e as Error)?.message || e)).join(" | ");
+    console.warn(`[extract] all extractors failed after ${elapsed()}: ${detail}`);
+    throw new Error(`Уншиж чадсангүй: ${detail}`);
   }
 }
 
