@@ -130,7 +130,7 @@ export function AssistantTab({
       {/* Photo-first hero: drop trip photos → AI reads them into draft trips */}
       <Card
         className={cx(
-          "overflow-hidden border-sun/25 bg-linear-to-r from-sun-soft via-white to-travel-soft",
+          "overflow-hidden",
           dragOver && "ring-2 ring-brand",
         )}
       >
@@ -148,9 +148,9 @@ export function AssistantTab({
             const files = e.dataTransfer.files;
             if (files?.length) onDropFiles(files);
           }}
-          className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-white/55 sm:gap-4"
+          className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-surface-sunken sm:gap-4"
         >
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-linear-to-br from-sun to-travel text-white shadow-sm sm:h-14 sm:w-14">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand sm:h-14 sm:w-14">
             <Icons.trips size={26} />
           </div>
           <div className="min-w-0 flex-1">
@@ -166,7 +166,7 @@ export function AssistantTab({
               Зураг (JPG, PNG), PDF, Excel дэмжинэ. Олон зураг нэг дор болно.
             </p>
           </div>
-          <span className="hidden shrink-0 items-center gap-1.5 rounded-xl bg-brand px-3.5 py-2 text-sm font-medium text-white sm:flex">
+          <span className="hidden shrink-0 items-center gap-1.5 rounded-lg bg-brand px-3.5 py-2 text-sm font-medium text-white sm:flex">
             <Icons.paperclip size={15} />
             Файл сонгох
           </span>
@@ -227,26 +227,26 @@ export function AssistantTab({
           )}
           {busy && (
             <div className="flex justify-start">
-              <div className="w-full max-w-xl rounded-2xl rounded-bl-sm bg-ink px-4 py-3.5 text-white shadow-md">
+              <div className="w-full max-w-xl rounded-2xl rounded-bl-sm border border-line bg-surface px-4 py-3.5 shadow-sm">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold">
+                    <p className="text-sm font-semibold text-ink">
                       {busyProgress != null ? "Файл боловсруулж байна" : "AI хариу бэлдэж байна"}
                     </p>
                     {busyLabel && (
-                      <p className="mt-0.5 truncate text-sm text-white/70">{busyLabel}</p>
+                      <p className="mt-0.5 truncate text-sm text-ink-muted">{busyLabel}</p>
                     )}
                   </div>
                   {busyProgress != null ? (
-                    <span className="shrink-0 font-mono text-lg font-bold text-sun-soft">
+                    <span className="shrink-0 font-mono text-lg font-bold text-brand">
                       {Math.round(busyProgress)}%
                     </span>
                   ) : (
-                    <Spinner className="shrink-0 text-white" />
+                    <Spinner className="shrink-0 text-brand" />
                   )}
                 </div>
                 <div
-                  className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/15"
+                  className="mt-3 h-1.5 overflow-hidden rounded-full bg-surface-sunken"
                   role="progressbar"
                   aria-label="Файл боловсруулах явц"
                   aria-valuemin={0}
@@ -255,14 +255,14 @@ export function AssistantTab({
                 >
                   <div
                     className={cx(
-                      "h-full rounded-full bg-linear-to-r from-sun via-[#f6c453] to-travel transition-[width] duration-500",
+                      "h-full rounded-full bg-brand transition-[width] duration-500",
                       busyProgress == null && "w-1/3 animate-pulse",
                     )}
                     style={busyProgress != null ? { width: `${busyProgress}%` } : undefined}
                   />
                 </div>
                 {busyProgress != null && (
-                  <p className="mt-1.5 text-right text-sm text-white/60">
+                  <p className="mt-1.5 text-right text-sm text-ink-subtle">
                     {Math.max(0, 100 - Math.round(busyProgress))}% үлдсэн
                   </p>
                 )}
@@ -388,7 +388,7 @@ function ChatBubbleV2({
   if (message.role === "admin") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[90%] rounded-xl rounded-br-sm bg-linear-to-br from-brand to-travel px-3.5 py-2.5 text-sm text-white shadow-sm">
+        <div className="max-w-[90%] rounded-xl rounded-br-sm bg-brand px-3.5 py-2.5 text-sm text-white shadow-sm">
           {message.text && message.text !== "Файл орууллаа" && (
             <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
           )}
@@ -491,10 +491,10 @@ function ChatBubbleV2({
             <p className="text-base font-semibold leading-6 text-ink">{proposal.summary}</p>
             {message.sourceNames && message.sourceNames.length > 0 && (
               <div className="mt-2 flex flex-wrap items-center gap-1.5 text-sm text-ink-muted">
-                <Icons.paperclip size={15} className="shrink-0 text-travel" />
+                <Icons.paperclip size={15} className="shrink-0 text-ink-subtle" />
                 <span className="font-medium text-ink">Эх файл:</span>
                 {message.sourceNames.map((name, index) => (
-                  <span key={`${name}:${index}`} className="rounded-full bg-travel-soft px-2.5 py-1 text-travel">
+                  <span key={`${name}:${index}`} className="rounded-full bg-surface-sunken px-2.5 py-1 text-ink-muted">
                     {name}
                   </span>
                 ))}
@@ -515,7 +515,7 @@ function ChatBubbleV2({
         </div>
 
         {compactWarnings.length > 0 && (
-          <div className="mt-4 border-l-4 border-sun bg-sun-soft px-3.5 py-3">
+          <div className="mt-4 rounded-lg border-l-4 border-warning bg-warning-soft px-3.5 py-3">
             <p className="text-sm font-semibold text-warning">
               Анхаарах зүйл
             </p>
@@ -548,9 +548,9 @@ function ChatBubbleV2({
                 const diffs = getDiffsForAction(index);
                 const verbColor =
                   described.verb === "Шинэ аялал нэмэх"
-                    ? "bg-green-100 text-green-700"
+                    ? "bg-success-soft text-success"
                     : described.verb === "Цуцлах"
-                      ? "bg-red-100 text-red-600"
+                      ? "bg-danger-soft text-danger"
                       : "bg-surface-sunken text-ink-muted";
                 return (
                   <div
@@ -580,9 +580,9 @@ function ChatBubbleV2({
                                 key={d.field}
                                 className={cx(
                                   "inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[11px] font-medium",
-                                  d.kind === "added" && "bg-green-50 text-green-700",
-                                  d.kind === "removed" && "bg-red-50 text-red-600",
-                                  d.kind === "changed" && "bg-amber-50 text-amber-700",
+                                  d.kind === "added" && "bg-success-soft text-success",
+                                  d.kind === "removed" && "bg-danger-soft text-danger",
+                                  d.kind === "changed" && "bg-warning-soft text-warning",
                                 )}
                               >
                                 {d.kind === "changed" && (
@@ -613,7 +613,7 @@ function ChatBubbleV2({
             </summary>
             <div className="mt-2 space-y-2">
               {message.clarificationAnswers.map((item) => (
-                <div key={item.questionId} className="rounded-md bg-white/70 px-2.5 py-2">
+                <div key={item.questionId} className="rounded-md bg-surface-sunken px-2.5 py-2">
                   <p className="text-sm text-ink-muted">{item.prompt}</p>
                   <p className="mt-1 text-sm text-ink">{item.answer}</p>
                 </div>
@@ -637,7 +637,7 @@ function ChatBubbleV2({
                   return (
                     <div
                       key={q.id}
-                      className="rounded-xl border border-sun/40 bg-sun-soft px-4 py-3.5"
+                      className="rounded-xl border border-warning/30 bg-warning-soft px-4 py-3.5"
                     >
                       <p className="text-sm font-semibold leading-5 text-ink">{q.prompt}</p>
                       {q.detail && (
