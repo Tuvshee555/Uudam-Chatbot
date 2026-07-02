@@ -395,7 +395,11 @@ export function buildProposalClarifications(
       normalized.includes("split the files")
     ) {
       pushQuestion({
-        id: `incomplete-parse:${index}`,
+        // Stable id (no conflict index): the model AND the code-side
+        // completeness check often emit near-identical conflicts for the same
+        // situation — indexed ids turned that into the same question asked
+        // twice. One incomplete-parse decision is enough.
+        id: "incomplete-parse",
         prompt: "Файлын зарим аялал боловсруулагдаагүй байна. Хэрхэн үргэлжлүүлэх вэ?",
         detail,
         options: [
@@ -646,7 +650,10 @@ export function buildProposalClarifications(
       normalized.includes("ижил")
     ) {
       pushQuestion({
-        id: `duplicate-route:${index}`,
+        // Key by the trip named in the conflict (not the conflict's index) so
+        // two differently-worded conflicts about the SAME route pair collapse
+        // into one question, while different routes still each get asked.
+        id: `duplicate-route:${normalizeReviewText(subject || detail).slice(0, 60)}`,
         prompt: "Ижил маршруттай боловч мэдээлэл нь зөрүүтэй хоёр аялал илэрлээ. Юу хийх вэ?",
         detail,
         options: [

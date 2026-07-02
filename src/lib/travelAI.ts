@@ -706,7 +706,8 @@ function buildBatchSourceParts(input: {
     "",
     "CRITICAL — count every distinct trip in the source and produce one action per trip:",
     "A document may contain 10, 20, or 30+ numbered trips. Read the ENTIRE document. Each distinct destination/package = one action. Do NOT stop after the first few trips.",
-    "Numbered list rule: every numbered heading (1, 2, 3 … or #1, #2) marks a new trip. Count all numbered headings first, then produce exactly that many actions. If you produce fewer, set needs_confirmation=true and add a conflict 'N аялал илэрлээ, M-г боловсруулсан — бүрэн уншина уу'.",
+    "Numbered list rule: every numbered TRIP heading (1, 2, 3 … or #1, #2 introducing a distinct route/destination with its own price) marks a new trip. Count those first, then produce exactly that many actions. If you produce fewer, set needs_confirmation=true and add a conflict 'N аялал илэрлээ, M-г боловсруулсан — бүрэн уншина уу'.",
+    "NOT separate trips — never count these as trips: 'DAY 1/DAY 2', 'ӨДӨР 1', or date headings inside an itinerary (those are days WITHIN one trip); numbered activity/included-items lists; multiple uploaded images that are slices or pages of the SAME poster (same title/route across images = ONE trip, merge them into one action).",
     "Table/free-form rule: trip boundaries = new price table + new route heading + new departure dates = new trip.",
     "",
     "YEAR RULE: If the source only lists month and day (e.g. '6 сарын 4', '07/16') WITHOUT a year, do NOT invent a year. Do not write 2023, 2024, or any year that is not stated. Store month-day only in extra.departure_date_groups with year: null. If there is no year anywhere in the source, set needs_confirmation=true with one single question 'Эдгээр аяллын жилийг тодруулна уу (2025 эсвэл 2026?)' — never silently assume a year.",
@@ -1376,7 +1377,8 @@ export async function generateAIProposalFromContent(input: {
     "",
     "CRITICAL — count every distinct trip in the source and produce one action per trip:",
     "A document may contain 10, 20, or 30+ numbered trips. Read the ENTIRE document. Each distinct destination/package = one action. Do NOT stop after the first few trips.",
-    "Numbered list rule: every numbered heading (1, 2, 3 … or #1, #2) marks a new trip. Count all numbered headings first, then produce exactly that many actions. If you produce fewer, set needs_confirmation=true and add a conflict 'N аялал илэрлээ, M-г боловсруулсан — бүрэн уншина уу'.",
+    "Numbered list rule: every numbered TRIP heading (1, 2, 3 … or #1, #2 introducing a distinct route/destination with its own price) marks a new trip. Count those first, then produce exactly that many actions. If you produce fewer, set needs_confirmation=true and add a conflict 'N аялал илэрлээ, M-г боловсруулсан — бүрэн уншина уу'.",
+    "NOT separate trips — never count these as trips: 'DAY 1/DAY 2', 'ӨДӨР 1', or date headings inside an itinerary (those are days WITHIN one trip); numbered activity/included-items lists; multiple uploaded images that are slices or pages of the SAME poster (same title/route across images = ONE trip, merge them into one action).",
     "Table/free-form rule: trip boundaries = new price table + new route heading + new departure dates = new trip.",
     "",
     "YEAR RULE: If the source only lists month and day (e.g. '6 сарын 4', '07/16') WITHOUT a year, do NOT invent a year. Do not write 2023, 2024, or any year that is not stated. Store month-day only in extra.departure_date_groups with year: null. If there is no year anywhere in the source, set needs_confirmation=true with one single question 'Эдгээр аяллын жилийг тодруулна уу (2025 эсвэл 2026?)' — never silently assume a year.",
@@ -1421,6 +1423,123 @@ export async function generateAIProposalFromContent(input: {
     userParts: parts,
     source: "travel.ops.file_parse",
   });
+}
+
+// Filename noise that carries no trip identity ("...-messenger-split (3).zip").
+const PHOTO_LABEL_NOISE = new Set([
+  "messenger", "split", "zip", "png", "jpg", "jpeg", "webp", "final",
+  "copy", "image", "img", "page", "slice", "poster", "аялал", "tour",
+]);
+
+function photoMatchTokens(value: string): Set<string> {
+  return new Set(
+    value
+      .toLowerCase()
+      .replace(/э/g, "е") // fold Mongolian е/э spelling variance (ЖАНЖИАЖИЭ vs Жанжиажие)
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .split(/\s+/)
+      .filter((t) => t.length >= 3 && !PHOTO_LABEL_NOISE.has(t)),
+  );
+}
+
+/**
+ * Assigns uploaded images to the trips extracted FROM them. The old exact
+ * source_file_name match silently dropped every photo whenever the model
+ * wrote the label differently (long Cyrillic zip names guaranteed this) and
+ * more than one trip was proposed — the admin uploaded a poster zip per trip
+ * and got trips with no photos. Now each photo group is matched to the action
+ * whose route name shares the most identity tokens with the filename (the
+ * zip naming convention literally contains the trip title), falling back to
+ * exact label match and the single-action case.
+ */
+export function attachPhotoUrlsToActions(
+  photoUrlMap: Map<string, string[]>,
+  merged: AIChangeProposal,
+): void {
+  const actions = merged.actions;
+  const addUrls = (action: AITripAction, urls: string[]) => {
+    if (urls.length === 0) return;
+    const existing = Array.isArray(action.fields?.photo_urls)
+      ? action.fields.photo_urls.filter((url): url is string => typeof url === "string")
+      : [];
+    if (!action.fields) (action as { fields?: Record<string, unknown> }).fields = {};
+    (action.fields as Record<string, unknown>).photo_urls = Array.from(
+      new Set([...existing, ...urls]),
+    ).slice(0, 20);
+  };
+
+  const actionTokens = actions.map((action) => {
+    const extra = action.fields?.extra as Record<string, unknown> | undefined;
+    const parts = [
+      action.fields?.route_name,
+      action.match?.route_name,
+      typeof extra?.source_file_name === "string" ? extra.source_file_name : "",
+    ]
+      .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+      .join(" ");
+    return photoMatchTokens(parts);
+  });
+
+  const unmatchedLabels: string[] = [];
+  for (const [label, urls] of photoUrlMap) {
+    // 1) Exact source_file_name match still wins.
+    const exact = actions.find((action) => {
+      const extra = action.fields?.extra as Record<string, unknown> | undefined;
+      return extra?.source_file_name === label;
+    });
+    if (exact) {
+      addUrls(exact, urls);
+      continue;
+    }
+
+    // 2) Token-overlap: best action whose route name shares identity tokens
+    //    with the filename. Two guards against misattaching (wrong poster on
+    //    a trip is worse than no poster): at least one matched token of
+    //    length >= 4, AND >= 60% of the filename's identity tokens must match
+    //    — so "ЖИНИНЬ ... МИНИ АВАТАР ХӨХ ХОТ.zip" can't latch onto the
+    //    separate "Мини Аватар - Хөх хот - Датон" trip on partial overlap.
+    const labelTokens = photoMatchTokens(label);
+    let bestIndex = -1;
+    let bestScore = 0;
+    actionTokens.forEach((tokens, i) => {
+      let score = 0;
+      let hasStrongToken = false;
+      for (const t of labelTokens) {
+        if (tokens.has(t)) {
+          score += 1;
+          if (t.length >= 4) hasStrongToken = true;
+        }
+      }
+      const coverage = labelTokens.size > 0 ? score / labelTokens.size : 0;
+      if (hasStrongToken && coverage >= 0.6 && score > bestScore) {
+        bestScore = score;
+        bestIndex = i;
+      }
+    });
+    if (bestIndex >= 0) {
+      addUrls(actions[bestIndex], urls);
+      continue;
+    }
+
+    // 3) Single action -> everything belongs to it.
+    if (actions.length === 1) {
+      addUrls(actions[0], urls);
+      continue;
+    }
+    unmatchedLabels.push(label);
+  }
+
+  // Surface (as a non-blocking warning, never a question) any photos we
+  // could not confidently place, instead of dropping them silently.
+  if (unmatchedLabels.length > 0) {
+    const shown = unmatchedLabels.slice(0, 3).join(", ");
+    const warning = `Зарим зургийг аль аялалд хамаарахыг тодорхойлж чадсангүй: ${shown}${unmatchedLabels.length > 3 ? "…" : ""}. Хадгалсны дараа "Зураг оруулах" табаас гараар нэмнэ үү.`;
+    if (!merged.conflicts.includes(warning)) merged.conflicts.push(warning);
+    merged.conflict_items = [
+      ...(merged.conflict_items || []),
+      { text: warning, severity: "warning" as ConflictSeverity, type: "photo_unmatched" },
+    ];
+  }
 }
 
 export async function generateAIProposalFromContentBatched(input: {
@@ -1621,24 +1740,7 @@ export async function generateAIProposalFromContentBatched(input: {
       }
 
       if (photoUrlMap.size > 0 && merged.actions.length > 0) {
-        const allPhotoUrls = Array.from(photoUrlMap.values()).flat();
-        for (const action of merged.actions) {
-          const sourceFile = (action.fields?.extra as Record<string, unknown> | undefined)?.source_file_name;
-          const matchedUrls =
-            typeof sourceFile === "string" && photoUrlMap.has(sourceFile)
-              ? photoUrlMap.get(sourceFile) || []
-              : merged.actions.length === 1
-                ? allPhotoUrls
-                : [];
-          if (matchedUrls.length === 0) continue;
-          const existingUrls = Array.isArray(action.fields?.photo_urls)
-            ? action.fields.photo_urls.filter((url): url is string => typeof url === "string")
-            : [];
-          if (!action.fields) (action as { fields?: Record<string, unknown> }).fields = {};
-          (action.fields as Record<string, unknown>).photo_urls = Array.from(
-            new Set([...existingUrls, ...matchedUrls]),
-          ).slice(0, 20);
-        }
+        attachPhotoUrlsToActions(photoUrlMap, merged);
       }
 
       return merged;

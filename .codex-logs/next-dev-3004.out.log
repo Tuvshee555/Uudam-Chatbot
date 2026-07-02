@@ -1,0 +1,11 @@
+
+> mongolian-ai-receptionist@0.1.0 dev
+> next dev --webpack --port 3004
+
+▲ Next.js 16.2.6 (webpack)
+- Local:         http://localhost:3004
+- Network:       http://192.168.1.46:3004
+- Environments: .env.local, .env
+✓ Ready in 1765ms
+
+○ Compiling / ...
