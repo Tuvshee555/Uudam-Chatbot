@@ -390,6 +390,7 @@ export function buildProposalClarifications(
           {
             label: "Том хүний үнээр тэнцүүлэх",
             answer: `"${routeName}" аяллын хүүхдийн үнийг ${childPrice}-н оронд ${adultPrice} болгон өөрчил.`,
+            recommended: true,
           },
         ],
         allowCustom: true,
@@ -458,6 +459,7 @@ export function buildProposalClarifications(
             label: "Зөвхөн уншсан аяллуудыг хадгалах",
             answer:
               "Зөвхөн одоо амжилттай уншсан аяллуудыг хадгал. Дутуу аяллуудыг дараа нь тусдаа оруулна гэдгийг ойлгосон.",
+            recommended: true,
           },
         ],
         allowCustom: false,
@@ -678,8 +680,9 @@ export function buildProposalClarifications(
         detail,
         options: [
           {
-            label: "Огноо тус бүрд үнийг тэмдэглэ (санал болгох)",
+            label: "Огноо тус бүрд үнийг тэмдэглэ",
             answer: `${subjectTag}огноо бүрийн үнийг departure_dates дотор тус тусад нь тэмдэглэл/notes хэсэгт бич. Үндсэн adult_price-д хамгийн их үнийг тавь.`,
+            recommended: true,
           },
           {
             label: "Тусдаа аялал болгох",
@@ -716,6 +719,7 @@ export function buildProposalClarifications(
           {
             label: "Тусдаа үлдээх",
             answer: `Эдгээрийг тусдаа аялал болгон үлдээ. (Зөрчил: ${detail})`,
+            recommended: true,
           },
           {
             label: "Нэг болгон нэгтгэх",
@@ -762,10 +766,12 @@ export function buildProposalClarifications(
             ? [{
                 label: `"${subject}" нэрээр хадгалах`,
                 answer: `Аяллын нэрийг "${subject}" гэж хадгал. (Зөрчил: ${detail})`,
+                recommended: true,
               }]
             : [{
                 label: "Файл дээрх аяллын гарчгийг ашиглах",
                 answer: `Файл дээр тухайн аяллын хэсгийн дээр бичсэн гарчгийг аяллын нэр болгон ашигла. (Зөрчил: ${detail})`,
+                recommended: true,
               }]),
           {
             label: "Энэ аяллыг одоохондоо хадгалахгүй",
@@ -805,6 +811,7 @@ export function buildProposalClarifications(
             answer: subject
               ? `"${subject}"-г одоо байгаа аялалтай нэгтгэж шинэчил.`
               : "Одоо байгаа ижил аяллыг шинэчил.",
+            recommended: true,
           },
         ],
         allowCustom: true,
@@ -833,6 +840,7 @@ export function buildProposalClarifications(
           {
             label: "Үнэгүй хадгалах — дараа гараар нэмнэ",
             answer: `${subjectTag}үнийг хоосон орхиод хадгал. Үнийг дараа админ гараар нэмнэ.`,
+            recommended: true,
           },
           {
             label: "Энэ аялалыг хадгалахгүй",

@@ -1029,11 +1029,28 @@ export default function AdminPage() {
               proposal_direct: message.proposal,
               instruction: message.instruction,
             };
-      const res = await fetchWithAdmin("/api/admin/ai-change", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      // Bounded so a stuck DB connection reads as a clear error the admin can
+      // retry, instead of the "Save" button spinning forever with no signal.
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 45_000);
+      let res: Response;
+      try {
+        res = await fetchWithAdmin("/api/admin/ai-change", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          throw new Error(
+            "Хадгалахад удаж байна — сүлжээ/сервер удаан хариулж байна. Дахин оролдоно уу.",
+          );
+        }
+        throw err;
+      } finally {
+        clearTimeout(timeout);
+      }
       const json = await res.json();
       if (!res.ok) {
         throw new Error(json?.message || json?.error || "Хэрэгжүүлж чадсангүй.");

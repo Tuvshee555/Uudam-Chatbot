@@ -633,7 +633,8 @@ function ChatBubbleV2({
                   </p>
                 </div>
                 {message.clarifications.map((q) => {
-                  const selected = formDraft[q.id] ?? "";
+                  const selected =
+                    formDraft[q.id] ?? q.options.find((o) => o.recommended)?.answer ?? "";
                   return (
                     <div
                       key={q.id}
@@ -660,6 +661,18 @@ function ChatBubbleV2({
                             )}
                           >
                             {opt.label}
+                            {opt.recommended && (
+                              <span
+                                className={cx(
+                                  "ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+                                  selected === opt.answer
+                                    ? "bg-white/20 text-white"
+                                    : "bg-brand-soft text-brand",
+                                )}
+                              >
+                                Санал болгосон
+                              </span>
+                            )}
                           </button>
                         ))}
                       </div>
@@ -684,10 +697,24 @@ function ChatBubbleV2({
                     loading={clarifyBusy}
                     disabled={
                       clarifyBusy ||
-                      message.clarifications.some((q) => !(formDraft[q.id] ?? "").trim())
+                      message.clarifications.some(
+                        (q) =>
+                          !(
+                            formDraft[q.id] ?? q.options.find((o) => o.recommended)?.answer ?? ""
+                          ).trim(),
+                      )
                     }
                     onClick={() => {
-                      onSubmitClarificationForm(message, formDraft);
+                      // Fill in the recommended default for any question the
+                      // admin never explicitly tapped, so it's actually
+                      // submitted (not silently dropped for having no entry).
+                      const effectiveDraft = { ...formDraft };
+                      for (const q of message.clarifications) {
+                        if (effectiveDraft[q.id]) continue;
+                        const recommended = q.options.find((o) => o.recommended)?.answer;
+                        if (recommended) effectiveDraft[q.id] = recommended;
+                      }
+                      onSubmitClarificationForm(message, effectiveDraft);
                       setFormDraft({});
                     }}
                   >

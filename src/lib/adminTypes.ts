@@ -222,6 +222,9 @@ export type AIProposalResponse = {
 export type ClarificationOption = {
   label: string;
   answer: string;
+  /** Pre-selected + visually highlighted as the safe default (like Claude's
+   *  AskUserQuestion "(Recommended)" option) — admin can still tap another. */
+  recommended?: boolean;
 };
 
 export type ClarificationQuestion = {
