@@ -128,6 +128,13 @@ export type AIChangeProposal = {
    */
   conflict_items?: ConflictItem[];
   actions: AITripAction[];
+  /**
+   * Uploaded-image inventory (filename label → Cloudinary URLs) captured at
+   * proposal creation. Kept on the proposal so clarification revisions can
+   * deterministically re-attach photos to actions in code — the model never
+   * sees or owns these URLs and therefore can never lose them.
+   */
+  photo_sources?: Array<{ label: string; urls: string[] }>;
 };
 
 export type ProposalValidationReport = {

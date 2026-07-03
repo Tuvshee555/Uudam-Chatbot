@@ -1514,6 +1514,10 @@ export function carryOverPhotoUrls(
 const PHOTO_LABEL_NOISE = new Set([
   "messenger", "split", "zip", "png", "jpg", "jpeg", "webp", "final",
   "copy", "image", "img", "page", "slice", "poster", "аялал", "tour",
+  // processing suffixes the zip/photo pipeline appends ("...-1.png.compressed.jpg").
+  // "compressed" counting as an identity token halved coverage for one-word
+  // trip names (ЖАНЖИАЖИЭ АЯЛАЛ) and silently failed the 60% match bar.
+  "compressed", "converted", "resized", "scaled", "optimized", "edited",
 ]);
 
 function photoMatchTokens(value: string): Set<string> {
@@ -1540,6 +1544,7 @@ function photoMatchTokens(value: string): Set<string> {
 export function attachPhotoUrlsToActions(
   photoUrlMap: Map<string, string[]>,
   merged: AIChangeProposal,
+  options?: { quiet?: boolean },
 ): void {
   const actions = merged.actions;
   const addUrls = (action: AITripAction, urls: string[]) => {
@@ -1616,7 +1621,8 @@ export function attachPhotoUrlsToActions(
 
   // Surface (as a non-blocking warning, never a question) any photos we
   // could not confidently place, instead of dropping them silently.
-  if (unmatchedLabels.length > 0) {
+  // quiet = revision re-attach; don't re-append the warning a second time.
+  if (unmatchedLabels.length > 0 && !options?.quiet) {
     const shown = unmatchedLabels.slice(0, 3).join(", ");
     const warning = `Зарим зургийг аль аялалд хамаарахыг тодорхойлж чадсангүй: ${shown}${unmatchedLabels.length > 3 ? "…" : ""}. Хадгалсны дараа "Зураг оруулах" табаас гараар нэмнэ үү.`;
     if (!merged.conflicts.includes(warning)) merged.conflicts.push(warning);
@@ -1830,10 +1836,36 @@ export async function generateAIProposalFromContentBatched(input: {
       if (photoUrlMap.size > 0 && merged.actions.length > 0) {
         attachPhotoUrlsToActions(photoUrlMap, merged);
       }
+      // Persist the uploaded-image inventory on the proposal itself so a
+      // clarification revision (which round-trips through the model) can
+      // re-attach photos in code instead of trusting the model to keep them.
+      if (photoUrlMap.size > 0) {
+        merged.photo_sources = Array.from(photoUrlMap, ([label, urls]) => ({
+          label,
+          urls,
+        }));
+      }
 
       return merged;
     },
   });
+}
+
+/**
+ * Photos are attached/restored deterministically in code (carryOverPhotoUrls
+ * + photo_sources re-attach), so the model never needs the long Cloudinary
+ * URLs — sending them just bloated the prompt and gave the model a chance to
+ * mangle or drop them. Strip before stringifying.
+ */
+function proposalWithoutPhotoData(proposal: AIChangeProposal): AIChangeProposal {
+  const clone = JSON.parse(JSON.stringify(proposal)) as AIChangeProposal;
+  delete clone.photo_sources;
+  for (const action of clone.actions) {
+    if (action.fields && "photo_urls" in action.fields) {
+      delete (action.fields as Record<string, unknown>).photo_urls;
+    }
+  }
+  return clone;
 }
 
 function buildProposalRevisionGuide(input: {
@@ -1844,7 +1876,7 @@ function buildProposalRevisionGuide(input: {
 }) {
   return [
     "You are revising an existing travel-ops proposal after a short admin clarification.",
-    "Preserve every action's photo_urls array EXACTLY as-is — never drop, truncate, or rewrite those URLs.",
+    "Keep every action for a trip the clarification does not mention — never drop or rename unrelated actions.",
     "Return JSON only using the same schema as before.",
     "Keep high-confidence extracted data unless the clarification changes it.",
     "Resolve only the directly affected uncertainty. Do not invent missing facts.",
@@ -1865,7 +1897,7 @@ function buildProposalRevisionGuide(input: {
     "",
     `Original admin request: ${input.instruction}`,
     `Admin clarification: ${input.clarification}`,
-    `Current proposal JSON: ${JSON.stringify(input.currentProposal)}`,
+    `Current proposal JSON: ${JSON.stringify(proposalWithoutPhotoData(input.currentProposal))}`,
     `Current trips (JSON): ${JSON.stringify(input.condensedTrips)}`,
   ].join("\n");
 }
@@ -1934,10 +1966,23 @@ export async function reviseAIRequest(
     repairTimeoutMs: 15_000,
   });
 
-  // Models routinely drop the long Cloudinary photo URLs during revision —
-  // restore them from the pre-revision actions so answering a clarification
-  // never silently costs the attached photos.
+  // Photos are handled entirely in code: the model never saw the URLs
+  // (proposalWithoutPhotoData), so restore them here. First by trip identity
+  // from the pre-revision actions, then fuzzy filename-matching from the
+  // persisted upload inventory (covers renamed trips the identity key misses).
   carryOverPhotoUrls(currentProposal, revisedProposal);
+  const photoSources = currentProposal.photo_sources || [];
+  if (photoSources.length > 0) {
+    if (revisedProposal.actions.length > 0) {
+      attachPhotoUrlsToActions(
+        new Map(photoSources.map((s) => [s.label, s.urls])),
+        revisedProposal,
+        { quiet: true },
+      );
+    }
+    // Keep the inventory alive for the next clarification round.
+    revisedProposal.photo_sources = photoSources;
+  }
 
   await queryNeon(
     `

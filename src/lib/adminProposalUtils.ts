@@ -312,6 +312,30 @@ export function describeAction(action: AIAction): {
   return { verb, target: String(target), changes };
 }
 
+/**
+ * True when a question's detail text carries no information beyond the prompt
+ * (same words, different punctuation/suffixes). Compared as word-token sets so
+ * "«X» — нэмэх үү?" and "«X»-ыг нэмэх үү?" count as identical.
+ */
+export function isRedundantDetail(prompt: string, detail: string): boolean {
+  const tokens = (value: string) =>
+    new Set(
+      value
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}]+/gu, " ")
+        .split(/\s+/)
+        .filter((t) => t.length >= 2),
+    );
+  const detailTokens = tokens(detail);
+  if (detailTokens.size === 0) return true;
+  const promptTokens = tokens(prompt);
+  let covered = 0;
+  for (const t of detailTokens) {
+    if (promptTokens.has(t)) covered += 1;
+  }
+  return covered / detailTokens.size >= 0.85;
+}
+
 export function buildProposalClarifications(
   proposal: AIProposal,
   answeredIds: string[] = [],
@@ -325,6 +349,12 @@ export function buildProposalClarifications(
     if (!question) return;
     if (seen.has(question.id)) return;
     seen.add(question.id);
+    // Drop the detail line when it's just the prompt reworded — the raw model
+    // conflict often IS the question ("«X» — шинэ аялал болгон нэмэх үү…?"),
+    // and rendering both made every card twice as long to read for zero info.
+    if (question.detail && isRedundantDetail(question.prompt, question.detail)) {
+      question.detail = undefined;
+    }
     questions.push(question);
   }
 

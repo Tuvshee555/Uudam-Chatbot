@@ -1571,6 +1571,20 @@ export function normalizeProposal(input: AIChangeProposal | null): AIChangePropo
 
   const conflicts = conflict_items.map((item) => item.text);
 
+  // Photo inventory survives DB round-trips so revisions can re-attach.
+  const photo_sources = Array.isArray(input.photo_sources)
+    ? input.photo_sources
+        .filter((s): s is { label: string; urls: string[] } =>
+          Boolean(s) && typeof s === "object" && typeof (s as { label?: unknown }).label === "string")
+        .map((s) => ({
+          label: s.label,
+          urls: Array.isArray(s.urls)
+            ? s.urls.filter((u): u is string => typeof u === "string")
+            : [],
+        }))
+        .filter((s) => s.urls.length > 0)
+    : undefined;
+
   return {
     summary: String(input.summary || "AI саналыг үүсгэлээ."),
     needs_confirmation: Boolean(input.needs_confirmation),
@@ -1580,6 +1594,7 @@ export function normalizeProposal(input: AIChangeProposal | null): AIChangePropo
     actions: Array.isArray(input.actions)
       ? (input.actions as unknown[]).filter((action) => action && typeof action === "object") as AITripAction[]
       : [],
+    ...(photo_sources && photo_sources.length > 0 ? { photo_sources } : {}),
   };
 }
 
