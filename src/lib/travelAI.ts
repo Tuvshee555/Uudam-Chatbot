@@ -59,6 +59,10 @@ import {
   FILE_PARSE_MIN_BATCH_TIMEOUT_MS,
   FILE_PARSE_REPAIR_TIMEOUT_MS,
 } from "./travelDb";
+import {
+  normalizeTripName,
+  tokenCoverageScore,
+} from "./tripPhotoImport/normalize";
 
 type AIActionSnapshot = {
   action: AITripAction;
@@ -1488,13 +1492,49 @@ function unionStringArrays(a: unknown, b: unknown): string[] {
   return Array.from(new Set([...clean(a), ...clean(b)]));
 }
 
+function mergeActionFields(existing: AITripAction, action: AITripAction): void {
+  const target = (existing.fields ?? {}) as Record<string, unknown>;
+  const source = (action.fields ?? {}) as Record<string, unknown>;
+  for (const [field, value] of Object.entries(source)) {
+    if (value == null || value === "") continue;
+    if (field === "photo_urls" || field === "departure_dates") {
+      target[field] = unionStringArrays(target[field], value);
+    } else if (field === "extra" && typeof value === "object") {
+      target[field] = { ...(target[field] as object ?? {}), ...(value as object) };
+    } else if (
+      field === "route_name" &&
+      typeof target[field] === "string" &&
+      typeof value === "string" &&
+      value.length > (target[field] as string).length
+    ) {
+      // Prefer the MORE SPECIFIC name ("Жэжү арлын аялал 2026" over "Жэжү
+      // арлын аялал") rather than whichever partial slice happened to come
+      // first in the batch.
+      target[field] = value;
+    } else if (target[field] == null || target[field] === "") {
+      target[field] = value;
+    }
+  }
+  if (!existing.fields) (existing as { fields?: Record<string, unknown> }).fields = target;
+}
+
 /**
  * Collapses multiple actions that target the SAME trip into one. Multi-image
  * uploads (a messenger-split zip = several slices of one poster) make the
  * model emit one partial action per image — e.g. one carrying dates+prices,
  * another carrying meals+photo — which showed up as confusing duplicate rows
  * and split the photos across actions. Fields fill forward (first non-empty
- * wins), list fields union.
+ * wins, except route_name prefers the longer/more specific variant), list
+ * fields union.
+ *
+ * Pass 1 groups by exact identity (trip_id, or exact-folded route name).
+ * Pass 2 catches near-duplicates an exact key can't — the SAME poster
+ * sliced across images sometimes yields the trip's name with and without a
+ * trailing detail ("Жэжү арлын аялал 2026" vs "Жэжү арлын аялал"). When one
+ * name is a superset of the other's tokens (fuzzy match, not just prefix),
+ * they're merged automatically instead of asking the admin to pick — this
+ * was previously surfaced as a "хоёр өөр нэр таарсан" question for what is
+ * obviously one trip.
  */
 export function mergeDuplicateTripActions(proposal: AIChangeProposal): void {
   const byKey = new Map<string, AITripAction>();
@@ -1508,21 +1548,42 @@ export function mergeDuplicateTripActions(proposal: AIChangeProposal): void {
       mergedActions.push(action);
       continue;
     }
-    const target = (existing.fields ?? {}) as Record<string, unknown>;
-    const source = (action.fields ?? {}) as Record<string, unknown>;
-    for (const [field, value] of Object.entries(source)) {
-      if (value == null || value === "") continue;
-      if (field === "photo_urls" || field === "departure_dates") {
-        target[field] = unionStringArrays(target[field], value);
-      } else if (field === "extra" && typeof value === "object") {
-        target[field] = { ...(target[field] as object ?? {}), ...(value as object) };
-      } else if (target[field] == null || target[field] === "") {
-        target[field] = value;
-      }
-    }
-    if (!existing.fields) (existing as { fields?: Record<string, unknown> }).fields = target;
+    mergeActionFields(existing, action);
   }
-  proposal.actions = mergedActions;
+
+  // Pass 2: fuzzy near-duplicate merge for upsert actions with no trip_id
+  // (brand-new trips only — never merge across an already-resolved trip_id).
+  const finalActions: AITripAction[] = [];
+  for (const action of mergedActions) {
+    const verb = String(action.action || "").toLowerCase();
+    const name = action.fields?.route_name?.toString().trim() || action.match?.route_name?.trim() || "";
+    if (verb !== "upsert" || action.trip_id || !name) {
+      finalActions.push(action);
+      continue;
+    }
+    const nameNorm = normalizeTripName(name);
+    const dup = finalActions.find((existing) => {
+      const existingVerb = String(existing.action || "").toLowerCase();
+      if (existingVerb !== "upsert" || existing.trip_id) return false;
+      const existingName =
+        existing.fields?.route_name?.toString().trim() || existing.match?.route_name?.trim() || "";
+      if (!existingName) return false;
+      const existingNorm = normalizeTripName(existingName);
+      if (existingNorm === nameNorm) return true;
+      // One name fully contains the other's words (a trailing year/detail
+      // added or dropped) — not just generic fuzzy overlap, to avoid
+      // merging two genuinely different trips that happen to share words.
+      const isSupersetName = existingNorm.includes(nameNorm) || nameNorm.includes(existingNorm);
+      return isSupersetName && tokenCoverageScore(existingNorm, nameNorm) >= 0.6;
+    });
+    if (dup) {
+      mergeActionFields(dup, action);
+      continue;
+    }
+    finalActions.push(action);
+  }
+
+  proposal.actions = finalActions;
 }
 
 /**

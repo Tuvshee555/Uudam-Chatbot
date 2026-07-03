@@ -254,7 +254,13 @@ export function summarizeConflict(detail: string): string {
 /** Compact warning text for info/warning-severity items (shown as a yellow box, not a question). */
 export function compactWarnings(proposal: AIProposal): string[] {
   const items: ConflictItem[] = proposal.conflict_items || [];
-  const nonBlockers = items.filter((i) => i.severity !== "blocker");
+  // verify_mismatch items came from the second-opinion AI cross-check, which
+  // the admin found more confusing than useful (it can't tell a real typo
+  // from harmless formatting noise) — never surface them, including any
+  // still sitting in older stored proposals from before this was turned off.
+  const nonBlockers = items.filter(
+    (i) => i.severity !== "blocker" && i.type !== "verify_mismatch",
+  );
   if (nonBlockers.length > 0) {
     return nonBlockers.map((i) => i.text).filter(Boolean);
   }
@@ -860,6 +866,13 @@ export function buildProposalClarifications(
       // The two candidate names are always the last two quoted values (the
       // current trip name, if present, is quoted first).
       const candidateNames = Array.from(new Set(quoted)).slice(-2);
+      // The longer/more specific name is usually the better one (e.g. keeps a
+      // "2026" or date detail the shorter variant dropped) — same rule the
+      // auto-merge in mergeDuplicateTripActions uses, so recommend it here too.
+      const longest = candidateNames.reduce(
+        (best, n) => (n.length > best.length ? n : best),
+        candidateNames[0] || "",
+      );
       pushQuestion({
         id: `duplicate-name:${normalizeReviewText(detail).slice(0, 60)}`,
         prompt: "Нэг аялалд хоёр өөр нэр таарсан. Аль нэрийг хэрэглэх вэ?",
@@ -867,6 +880,7 @@ export function buildProposalClarifications(
         options: candidateNames.map((name) => ({
           label: `"${name}" гэж хадгалах`,
           answer: `Энэ аяллын нэрийг "${name}" гэж хадгал. (Зөрчил: ${detail})`,
+          recommended: name === longest,
         })),
         allowCustom: true,
         customPlaceholder: "Зөв аяллын нэрийг яг бичнэ үү",
@@ -882,6 +896,7 @@ export function buildProposalClarifications(
         {
           label: "Файлд бичсэн утгыг зөв гэж хадгалах",
           answer: `Файлд бичсэн утгыг зөв гэж үзээд хадгал: ${detail}`,
+          recommended: true,
         },
         {
           label: "Энэ өөрчлөлтийг хадгалахгүй",
