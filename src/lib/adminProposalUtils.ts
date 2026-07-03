@@ -813,6 +813,38 @@ export function buildProposalClarifications(
       return;
     }
 
+    // Price genuinely missing from the source (not a mismatch, not a date-
+    // varying case — just no number found at all). Give it its own clear
+    // question instead of the blank generic fallback.
+    if (
+      (normalized.includes("үнэ") || normalized.includes("price")) &&
+      (normalized.includes("тодорхойгүй") ||
+        normalized.includes("байхгүй") ||
+        normalized.includes("unclear") ||
+        normalized.includes("not found") ||
+        normalized.includes("missing")) &&
+      !/\d/.test(detail)
+    ) {
+      pushQuestion({
+        id: `missing-price:${normalizeReviewText(subject || detail).slice(0, 60)}`,
+        prompt: `${subjectTag}үнэ файлаас олдсонгүй. Юу хийх вэ?`,
+        detail,
+        options: [
+          {
+            label: "Үнэгүй хадгалах — дараа гараар нэмнэ",
+            answer: `${subjectTag}үнийг хоосон орхиод хадгал. Үнийг дараа админ гараар нэмнэ.`,
+          },
+          {
+            label: "Энэ аялалыг хадгалахгүй",
+            answer: `${subjectTag}үнэ тодорхойгүй тул саналын жагсаалтаас хас.`,
+          },
+        ],
+        allowCustom: true,
+        customPlaceholder: "Зөв үнийг доод шугамаар бичнэ үү (жишээ: 1590000)",
+      });
+      return;
+    }
+
     // "Нэг аялалд ... хоёр өөр нэр таарсан" — two actions in this batch both
     // targeted the same existing trip but disagree on its name. Surface both
     // candidate names as tap options instead of the blank generic fallback.

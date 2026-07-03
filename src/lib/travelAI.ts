@@ -973,10 +973,36 @@ function buildVerificationGuide(proposalActions: unknown): string {
     "- For each value that does NOT match the source, add one short Mongolian line to",
     "  mismatches naming the trip and the wrong field (e.g. 'Бээжин: үнэ 4290000 гэж",
     "  байгаа ч зурагт 4920000 байна').",
+    "- CRITICAL: before reporting a mismatch, compare the two values as NUMBERS/DATES,",
+    "  ignoring commas, currency symbols (₮, MNT), and whitespace. '2,390,000' and",
+    "  '2,390,000₮' are THE SAME VALUE — do not report that as a mismatch. Only report",
+    "  a mismatch when the underlying number, date, or text is actually different.",
     "- If a value in the source is genuinely unreadable, list it as a mismatch too.",
     "- If everything matches exactly, return all_correct=true and mismatches=[].",
     "- Do NOT invent trips or add new data. Only verify what is given.",
   ].join("\n");
+}
+
+/**
+ * Safety net for the verifier itself: despite the prompt instruction, the
+ * model sometimes reports a "mismatch" where both quoted values are actually
+ * identical once you strip formatting — e.g. "үнэ 2,390,000 гэж байгаа ч
+ * зурагт 2,390,000₮ байна" (currency symbol only) or the same date range
+ * twice. Extract every number/date-like token from the mismatch text; if
+ * there are exactly two distinct-looking tokens and they normalize equal,
+ * this is a false positive and must not become a clarification question.
+ */
+function isFalsePositiveMismatch(text: string): boolean {
+  const tokens = (text.match(/[\d]+(?:[.,][\d]+)*\s*(?:₮|төгрөг|сар[а-я]*\s*\d+[\d,\s-]*)?/g) ?? [])
+    .map((t) => t.trim())
+    .filter(Boolean);
+  // Need at least two value-like tokens to compare "old" vs "new".
+  if (tokens.length < 2) return false;
+  const normalize = (t: string) => t.replace(/[₮\s]|төгрөг/g, "").replace(/,/g, "");
+  const normalized = tokens.map(normalize);
+  // Every extracted value normalizes the same → nothing actually differs,
+  // regardless of how many times the model repeated it.
+  return normalized.every((n) => n === normalized[0]);
 }
 
 async function verifyProposalAgainstSource(opts: {
@@ -1017,12 +1043,15 @@ async function verifyProposalAgainstSource(opts: {
       };
     }
 
-    const mismatches = Array.isArray(parsed.mismatches)
+    const rawMismatches = Array.isArray(parsed.mismatches)
       ? parsed.mismatches.map((m) => String(m)).filter(Boolean)
       : [];
+    // Drop false positives where the verifier flagged two values that are
+    // actually the same after stripping formatting (currency symbol, commas).
+    const mismatches = rawMismatches.filter((m) => !isFalsePositiveMismatch(m));
 
-    if (parsed.all_correct === true && mismatches.length === 0) {
-      return opts.proposal; // verified clean
+    if (mismatches.length === 0) {
+      return opts.proposal; // verified clean (or only false-positive noise)
     }
 
     // Mismatches found → surface them and force confirmation.
