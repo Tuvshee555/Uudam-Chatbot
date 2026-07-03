@@ -58,6 +58,17 @@ export function resolveGreetingConfig(extra: unknown): GreetingConfig {
   };
 }
 
+// ─── Admin-controlled inactivity goodbye toggle (bot_settings.extra.goodbye) ──
+
+export function resolveGoodbyeEnabled(extra: unknown): boolean {
+  const raw =
+    extra && typeof extra === "object" && !Array.isArray(extra)
+      ? ((extra as Record<string, unknown>).goodbye as Record<string, unknown> | undefined)
+      : undefined;
+  if (!raw || typeof raw !== "object") return true;
+  return raw.enabled !== false;
+}
+
 // ─── Seasons ─────────────────────────────────────────────────────────────────
 
 export type Season = {

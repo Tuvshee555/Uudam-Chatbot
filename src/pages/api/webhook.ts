@@ -14,7 +14,7 @@ import { autoHandoffSender, isPaused, pauseBot, storeSenderName, trackSender } f
 import { createLead, dbClaimGoodbye, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, } from "../../lib/travelFastPaths";
-import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
+import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
 import { advanceCollectState, buildCompletionMessage, buildLeadContext, clearCollectState, getCollectState, isInCollectFlow, promptForStep, setCollectState, startCollectState, } from "../../lib/bookingCollect";
@@ -1117,11 +1117,14 @@ async function handleMessage(
     const shouldSendGoodbye = await dbClaimGoodbye(senderId);
     if (shouldSendGoodbye) {
       try {
-        await sendTextMessage(senderId, GOODBYE_MSG, token, {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          source: "api.webhook.inactivity_goodbye",
-        });
+        const goodbyeSettings = await getTravelBotSettings();
+        if (resolveGoodbyeEnabled(goodbyeSettings.extra)) {
+          await sendTextMessage(senderId, GOODBYE_MSG, token, {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            source: "api.webhook.inactivity_goodbye",
+          });
+        }
       } catch { /* best-effort */ }
     }
     await dbPauseSender(senderId, INACTIVITY_PAUSE_MS, "inactivity");

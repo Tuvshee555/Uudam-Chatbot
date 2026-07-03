@@ -86,6 +86,12 @@ function seasonsEnabled(settings: TravelBotSettings | null): boolean {
   return (settings?.extra as Record<string, unknown>)?.seasons_enabled !== false;
 }
 
+function goodbyeEnabled(settings: TravelBotSettings | null): boolean {
+  const g = (settings?.extra as Record<string, unknown>)?.goodbye;
+  if (!g || typeof g !== "object") return true;
+  return (g as Record<string, unknown>).enabled !== false;
+}
+
 export function BotTab({
   control,
   settings,
@@ -500,6 +506,24 @@ export function BotTab({
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ fields: { extra: { seasons_enabled: next } } }),
+          });
+          onSettingsChanged();
+        }}
+      />
+
+      <QuickToggleCard
+        title="Дугаар үлдээх мессеж (идэвхгүй болсны дараа)"
+        description={
+          '30 минут дуугүй байсны дараа "Манай зөвлөхтэй холбогдох бол..." гэсэн утасны дугаартай мессеж илгээнэ. Унтраавал энэ мессеж илгээхгүй, гэхдээ бот 24 цагийн турш дахин хариулахгүй байх нь өөрчлөгдөхгүй.'
+        }
+        enabled={goodbyeEnabled(settings)}
+        busyId="goodbye-toggle"
+        onToggle={async (next) => {
+          const prevGoodbye = (settings?.extra as Record<string, unknown>)?.goodbye as Record<string, unknown> | undefined;
+          await apiFetch("/api/admin/settings", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ fields: { extra: { goodbye: { ...prevGoodbye, enabled: next } } } }),
           });
           onSettingsChanged();
         }}
