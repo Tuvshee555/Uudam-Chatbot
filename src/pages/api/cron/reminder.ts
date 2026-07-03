@@ -26,6 +26,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Load reminder config from bot settings extra field
   const settings = await getTravelBotSettings();
   const extra = (settings?.extra ?? {}) as Record<string, unknown>;
+
+  // Admin-controlled on/off switch (Bot tab). Defaults to enabled only when
+  // text/photo were configured before this switch existed, so nothing that
+  // was already live silently starts firing again after an unrelated deploy —
+  // but once the admin has touched the toggle, their choice always wins.
+  if (extra.reminder_enabled === false) {
+    return res.status(200).json({ ok: false, reason: "reminder disabled in bot settings" });
+  }
+
   const reminderText = typeof extra.reminder_text === "string" && extra.reminder_text.trim()
     ? extra.reminder_text.trim()
     : null;

@@ -92,6 +92,20 @@ function goodbyeEnabled(settings: TravelBotSettings | null): boolean {
   return (g as Record<string, unknown>).enabled !== false;
 }
 
+function reminderEnabled(settings: TravelBotSettings | null): boolean {
+  return (settings?.extra as Record<string, unknown>)?.reminder_enabled !== false;
+}
+
+function reminderText(settings: TravelBotSettings | null): string {
+  const v = (settings?.extra as Record<string, unknown>)?.reminder_text;
+  return typeof v === "string" ? v : "";
+}
+
+function reminderPhotoUrl(settings: TravelBotSettings | null): string {
+  const v = (settings?.extra as Record<string, unknown>)?.reminder_photo_url;
+  return typeof v === "string" ? v : "";
+}
+
 export function BotTab({
   control,
   settings,
@@ -529,6 +543,8 @@ export function BotTab({
         }}
       />
 
+      <ReminderCard settings={settings} apiFetch={apiFetch} onSettingsChanged={onSettingsChanged} />
+
       <Card className="p-4">
         <SectionHeading
           title="Хуудас бүрийн төлөв"
@@ -801,6 +817,90 @@ export function BotTab({
         </div>
       </Card>
     </div>
+  );
+}
+
+function ReminderCard({
+  settings,
+  apiFetch,
+  onSettingsChanged,
+}: {
+  settings: TravelBotSettings | null;
+  apiFetch: (url: string, init?: RequestInit) => Promise<Response>;
+  onSettingsChanged: () => void;
+}) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const enabled = reminderEnabled(settings);
+  const text = reminderText(settings);
+  const photoUrl = reminderPhotoUrl(settings);
+
+  async function patchExtra(extra: Record<string, unknown>) {
+    setBusy(true);
+    try {
+      await apiFetch("/api/admin/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fields: { extra } }),
+      });
+      onSettingsChanged();
+    } catch {
+      toast.error("Хадгалахад алдаа гарлаа.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-ink">Сануулга (12-24 цаг дуугүй байсны дараа)</p>
+          <p className="mt-0.5 text-xs text-ink-subtle">
+            Хэрэглэгч сүүлийн мессежээс хойш 12-24 цагийн хооронд дуугүй байвал өдөрт нэг удаа
+            зураг, дараа нь текст илгээнэ (өдөрт 1 удаа ажилладаг автомат ажилд хамаарна). Идэвхгүй
+            болговол зураг, текст хадгалагдсан хэвээр байх ч илгээгдэхгүй.
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void patchExtra({ reminder_enabled: !enabled })}
+          className={cx(
+            "relative mt-0.5 inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none disabled:opacity-50",
+            enabled ? "bg-brand" : "bg-line-strong",
+          )}
+          aria-label={enabled ? "Унтраах" : "Асаах"}
+        >
+          <span
+            className={cx(
+              "inline-block h-6 w-6 transform rounded-full bg-white shadow ring-0 transition duration-200",
+              enabled ? "translate-x-7" : "translate-x-0",
+            )}
+          />
+        </button>
+      </div>
+
+      {(text || photoUrl) && (
+        <div className="mt-3 space-y-2 rounded-lg border border-line bg-surface-sunken p-3">
+          {photoUrl && (
+            <div className="flex items-center gap-3">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={photoUrl} alt="" className="h-16 w-16 shrink-0 rounded-md object-cover" />
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void patchExtra({ reminder_photo_url: "" })}
+                className="rounded-md border border-danger/30 px-2.5 py-1.5 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+              >
+                Зургийг устгах
+              </button>
+            </div>
+          )}
+          {text && <p className="whitespace-pre-wrap text-xs text-ink-muted">{text}</p>}
+        </div>
+      )}
+    </Card>
   );
 }
 
