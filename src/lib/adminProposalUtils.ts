@@ -229,10 +229,13 @@ export function summarizeConflict(detail: string): string {
   ) {
     return "Зарим файл түр уншигдаагүй байна.";
   }
+  const mnPriceCount = (detail.match(/[\d,]+(?:,\d{3})*\s*(?:₮|төгрөг)/g) ?? []).length;
+  const mentionsMonthDay = /\d+\s*сар(?:ын|д|ны)?\s*\d+/.test(detail);
   if (
     normalized.includes("6-р сард") ||
     normalized.includes("7-р сард") ||
-    normalized.includes("8-р сард")
+    normalized.includes("8-р сард") ||
+    (mnPriceCount >= 2 && mentionsMonthDay)
   ) {
     return `${subject}: сар бүрийн үнэ өөр байна.`;
   }
@@ -653,11 +656,21 @@ export function buildProposalClarifications(
       return;
     }
 
+    // Detect "price varies by date" conflicts by SHAPE, not fixed phrases —
+    // the model phrases these differently every time ("6-р сард", "6 сарын
+    // 20, 27:", "Том хүн 2,030,000₮ / Хүүхэд ..."). A real screenshot dump
+    // ("6 сарын 20, 27: Том хүн 2,030,000₮ / Хүүхэд 1,590,000₮; 7 сарын 1, 8,
+    // 15, 22: ...") matched NONE of the old fixed strings and fell through to
+    // the meaningless generic fallback question.
+    const mnPriceCount = (detail.match(/[\d,]+(?:,\d{3})*\s*(?:₮|төгрөг)/g) ?? []).length;
+    const mentionsMonthDay = /\d+\s*сар(?:ын|д|ны)?\s*\d+/.test(detail);
+    const isDateVaryingPriceDump = mnPriceCount >= 2 && (mentionsMonthDay || normalized.includes("сар"));
     if (
       normalized.includes("6-р сард") ||
       normalized.includes("7-р сард") ||
       normalized.includes("8-р сард") ||
-      (normalized.includes("сард") && normalized.includes("үнэ"))
+      (normalized.includes("сард") && normalized.includes("үнэ")) ||
+      isDateVaryingPriceDump
     ) {
       pushQuestion({
         id: `seasonal-price:${index}`,
@@ -796,6 +809,27 @@ export function buildProposalClarifications(
         ],
         allowCustom: true,
         customPlaceholder: "Хэрхэн зохицуулахыг бичнэ үү",
+      });
+      return;
+    }
+
+    // "Нэг аялалд ... хоёр өөр нэр таарсан" — two actions in this batch both
+    // targeted the same existing trip but disagree on its name. Surface both
+    // candidate names as tap options instead of the blank generic fallback.
+    if (normalized.includes("хоёр өөр нэр таарсан")) {
+      // The two candidate names are always the last two quoted values (the
+      // current trip name, if present, is quoted first).
+      const candidateNames = Array.from(new Set(quoted)).slice(-2);
+      pushQuestion({
+        id: `duplicate-name:${normalizeReviewText(detail).slice(0, 60)}`,
+        prompt: "Нэг аялалд хоёр өөр нэр таарсан. Аль нэрийг хэрэглэх вэ?",
+        detail,
+        options: candidateNames.map((name) => ({
+          label: `"${name}" гэж хадгалах`,
+          answer: `Энэ аяллын нэрийг "${name}" гэж хадгал. (Зөрчил: ${detail})`,
+        })),
+        allowCustom: true,
+        customPlaceholder: "Зөв аяллын нэрийг яг бичнэ үү",
       });
       return;
     }

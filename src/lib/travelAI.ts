@@ -434,13 +434,18 @@ export function validateAIChangeProposal(
     const nextName = action.fields?.route_name?.trim();
     if (!target || !nextName) continue;
     const names = targetNames.get(target) || new Set<string>();
-    names.add(nextName.toLowerCase());
+    names.add(nextName);
     targetNames.set(target, names);
   }
-  for (const names of targetNames.values()) {
-    if (names.size > 1) {
+  for (const [tripId, names] of targetNames) {
+    const distinct = Array.from(names).filter(
+      (name, i, arr) => arr.findIndex((o) => o.toLowerCase() === name.toLowerCase()) === i,
+    );
+    if (distinct.length > 1) {
+      const current = existingTrips.find((trip) => trip.id === tripId)?.route_name;
+      const currentTag = current ? ` (одоогийн нэр: "${current}")` : "";
       blockingConflicts.push(
-        "Нэг аялалд хоёр өөр нэр таарсан тул автоматаар хадгалсангүй. Файлын дарааллыг шалгана уу.",
+        `Нэг аялалд${currentTag} хоёр өөр нэр таарсан тул автоматаар хадгалсангүй: ${distinct.map((n) => `"${n}"`).join(" болон ")}. Аль нэрийг хэрэглэхийг сонгоно уу.`,
       );
     }
   }
@@ -1110,8 +1115,19 @@ async function requestProposalFromModel(opts: {
     ? normalizeProposal(parsed)
     : proposalFallbackFromRawText(result.text);
 
-  // Accuracy-first second pass: verify extracted numbers against the source.
-  if (opts.verify && FILE_PARSE_VERIFY && proposal.actions.length > 0) {
+  // Second-opinion pass — only when Gemini's OWN output looks uncertain, not
+  // on every batch (that would double AI cost/time for no benefit on the
+  // ~90% of extractions that are clean). "Unsure" = the proposal already
+  // carries a blocker conflict, or needs_confirmation is set, or a price is
+  // missing on an otherwise-complete action — exactly the cases where a
+  // second model catching a mismatch is worth the extra ~15-45s.
+  const looksUncertain =
+    proposal.needs_confirmation ||
+    (proposal.conflict_items || []).some((c) => c.severity === "blocker") ||
+    proposal.actions.some(
+      (a) => (a.action === "upsert" || a.action === "patch") && a.fields?.adult_price == null,
+    );
+  if (opts.verify && FILE_PARSE_VERIFY && looksUncertain && proposal.actions.length > 0) {
     return verifyProposalAgainstSource({
       proposal,
       userParts: opts.userParts,
