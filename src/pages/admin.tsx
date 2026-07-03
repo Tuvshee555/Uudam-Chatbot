@@ -438,6 +438,7 @@ export default function AdminPage() {
     const conflictItems = new Map<string, ConflictItem>();
     const importantReasons = new Set<string>();
     const summaries = new Set<string>();
+    const photoSources = new Map<string, Set<string>>();
     for (const proposal of proposals) {
       for (const action of proposal.actions || []) {
         const key = JSON.stringify(action);
@@ -457,6 +458,16 @@ export default function AdminPage() {
       if (proposal.summary?.trim()) {
         summaries.add(proposal.summary.trim());
       }
+      for (const source of proposal.photo_sources || []) {
+        if (!source.label?.trim()) continue;
+        const urls = photoSources.get(source.label) || new Set<string>();
+        for (const url of source.urls || []) {
+          if (typeof url === "string" && url.trim().startsWith("https://")) {
+            urls.add(url.trim());
+          }
+        }
+        if (urls.size > 0) photoSources.set(source.label, urls);
+      }
     }
     return {
       summary:
@@ -470,6 +481,14 @@ export default function AdminPage() {
       conflicts: Array.from(conflicts),
       conflict_items: Array.from(conflictItems.values()),
       actions,
+      ...(photoSources.size > 0
+        ? {
+            photo_sources: Array.from(photoSources, ([label, urls]) => ({
+              label,
+              urls: Array.from(urls),
+            })),
+          }
+        : {}),
     };
   }
   async function parseUploadUnitWithRetry(
@@ -985,6 +1004,9 @@ export default function AdminPage() {
       }
       if (!proposal || !Array.isArray(proposal.actions)) {
         throw new Error("AI засварласан санал буцааж чадсангүй.");
+      }
+      if (!proposal.photo_sources?.length && message.proposal.photo_sources?.length) {
+        proposal.photo_sources = message.proposal.photo_sources;
       }
       const nextAnsweredIds = markAnsweredIds ?? [
         ...message.answeredClarificationIds,

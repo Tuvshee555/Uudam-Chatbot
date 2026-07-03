@@ -202,6 +202,7 @@ export type AIProposal = {
   conflicts: string[];
   conflict_items?: ConflictItem[];
   actions: AIAction[];
+  photo_sources?: Array<{ label: string; urls: string[] }>;
 };
 
 export type AIProposalResponse = {

@@ -1678,6 +1678,16 @@ export function attachPhotoUrlsToActions(
   }
 }
 
+function attachPersistedPhotoSources(proposal: AIChangeProposal): void {
+  const sources = proposal.photo_sources || [];
+  if (sources.length === 0 || proposal.actions.length === 0) return;
+  attachPhotoUrlsToActions(
+    new Map(sources.map((source) => [source.label, source.urls])),
+    proposal,
+    { quiet: true },
+  );
+}
+
 export async function generateAIProposalFromContentBatched(input: {
   label?: string;
   note?: string;
@@ -2209,6 +2219,7 @@ export async function applyAIRequest(requestId: number) {
   }
 
   const proposal = normalizeProposal(row.proposal_json);
+  attachPersistedPhotoSources(proposal);
   const trips = await listTrips({ limit: 250 });
   const validation = validateAIChangeProposal(proposal, trips, {
     forbidCreate: instructionForbidsTripCreation(row.instruction),
@@ -2284,6 +2295,7 @@ export async function applyAIProposalDirect(
   }
 
   const trips = await listTrips({ limit: 250 });
+  attachPersistedPhotoSources(proposal);
   const validation = validateAIChangeProposal(proposal, trips, {
     forbidCreate: instructionForbidsTripCreation(instruction),
   });
