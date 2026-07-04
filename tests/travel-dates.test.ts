@@ -7,6 +7,7 @@ import {
   hasDepartureDateAvailabilityIntent,
   parseDepartureDateText,
   parseTripDepartureDateText,
+  resolveDepartureDatesAtWrite,
   resolveRequestedDate,
 } from "../src/lib/travelDates";
 import type { TravelTrip } from "../src/lib/travelOps";
@@ -148,6 +149,34 @@ test("filterFutureDepartureDates drops past dates, keeps future and recurring te
   ]);
 });
 
+test("resolveDepartureDatesAtWrite freezes bare dates with roll-forward from write time", () => {
+  // In July 2026: "1 сарын 15" is next January (2027), "8 сарын 1" is this August.
+  const resolved = resolveDepartureDatesAtWrite(
+    ["1 сарын 15", "8 сарын 1", "Пүрэв гараг бүр"],
+    new Date("2026-07-04T04:00:00.000Z"),
+  );
+  assert.deepEqual(resolved, [
+    { text: "1 сарын 15", ymd: "2027-01-15" },
+    { text: "8 сарын 1", ymd: "2026-08-01" },
+    { text: "Пүрэв гараг бүр", ymd: null }, // recurring — no calendar date
+  ]);
+});
+
+test("resolved map keeps a genuine next-season date that text parsing would hide", () => {
+  const now = new Date("2026-07-04T04:00:00.000Z");
+  // Without the map, "1 сарын 15" parses to 2026-01-15 (past) and is dropped.
+  assert.deepEqual(filterFutureDepartureDates(["1 сарын 15"], now), []);
+  // With the frozen write-time resolution (next January), it is kept.
+  const resolved = [{ text: "1 сарын 15", ymd: "2027-01-15" }];
+  assert.deepEqual(filterFutureDepartureDates(["1 сарын 15"], now, resolved), ["1 сарын 15"]);
+});
+
+test("resolved map still drops a frozen date that has since passed", () => {
+  const now = new Date("2026-07-04T04:00:00.000Z");
+  const resolved = [{ text: "3 сарын 8", ymd: "2026-03-08" }]; // frozen, now past
+  assert.deepEqual(filterFutureDepartureDates(["3 сарын 8"], now, resolved), []);
+});
+
 test("date availability does not resurrect a past-season trip as next year", () => {
   // User asks for March 8 (rolls forward to 2027-03-08); the trip's stored
   // "3 сарын 8" means March 2026 — they must NOT match.
@@ -157,4 +186,21 @@ test("date availability does not resurrect a past-season trip as next year", () 
     trips: [trip({ departure_dates: ["3 сарын 8"] })],
   });
   assert.match(reply || "", /алга байна/);
+});
+
+test("availability matches a next-season trip via its write-time resolved map", () => {
+  const now = new Date("2026-07-04T04:00:00.000Z");
+  const reply = buildDepartureDateAvailabilityReply({
+    userText: "1 сарын 15-нд гарах аялал байна уу",
+    now,
+    trips: [
+      trip({
+        route_name: "Хайнан өвлийн аялал",
+        departure_dates: ["1 сарын 15"],
+        extra: { departure_dates_resolved: [{ text: "1 сарын 15", ymd: "2027-01-15" }] },
+      }),
+    ],
+  });
+  assert.match(reply || "", /Тийм ээ/);
+  assert.match(reply || "", /Хайнан өвлийн аялал/);
 });

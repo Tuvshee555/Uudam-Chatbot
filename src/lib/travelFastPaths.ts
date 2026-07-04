@@ -3,7 +3,7 @@
  * from the DB instead of letting the model guess.
  */
 
-import { filterFutureDepartureDates, parseDepartureDateText } from "./travelDates";
+import { filterFutureDepartureDates, parseDepartureDateText, type ResolvedDepartureDate } from "./travelDates";
 import type { TravelTrip } from "./travelOps";
 
 /**
@@ -12,10 +12,16 @@ import type { TravelTrip } from "./travelOps";
  * text ("Пүрэв гараг бүр") is always kept — only verifiably past calendar
  * dates are dropped. A stale trip whose dates are ALL past ends up with an
  * empty list, which the reply builders already treat as "no known dates".
+ *
+ * Prefers the trip's write-time resolved ISO map (extra.departure_dates_resolved)
+ * so a genuine next-season date is not filtered as past; falls back to text
+ * parsing when the map is absent (existing trips behave exactly as before).
  */
 function withFutureDepartureDates(trip: TravelTrip, now = new Date()): TravelTrip {
   const dates = trip.departure_dates || [];
-  const filtered = filterFutureDepartureDates(dates, now);
+  const resolved = ((trip.extra || {}) as Record<string, unknown>)
+    .departure_dates_resolved as ResolvedDepartureDate[] | undefined;
+  const filtered = filterFutureDepartureDates(dates, now, resolved);
   if (filtered.length === dates.length) return trip;
   return { ...trip, departure_dates: filtered };
 }
@@ -730,7 +736,11 @@ function buildTripSummaryLines(trip: TravelTrip): string {
   const child = formatPrice(trip.child_price);
   if (adult && child) lines.push(`💰 Насанд хүрэгч: ${adult} | Хүүхэд: ${child}`);
   else if (adult) lines.push(`💰 Үнэ: ${adult}`);
-  const dates = filterFutureDepartureDates(trip.departure_dates?.filter(Boolean) ?? []);
+  const dates = filterFutureDepartureDates(
+    trip.departure_dates?.filter(Boolean) ?? [],
+    new Date(),
+    ((trip.extra || {}) as Record<string, unknown>).departure_dates_resolved as ResolvedDepartureDate[] | undefined,
+  );
   if (dates.length > 0) lines.push(`📅 Гарах өдрүүд: ${dates.slice(0, 5).join(", ")}${dates.length > 5 ? "…" : ""}`);
   return lines.join("\n");
 }

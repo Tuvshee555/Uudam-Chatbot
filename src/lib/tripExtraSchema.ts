@@ -35,6 +35,7 @@ const KNOWN_EXTRA_KEYS = new Set([
   "needs_human_review",
   "review_reasons",
   "booking_terms",
+  "departure_dates_resolved",
 ]);
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -213,6 +214,24 @@ function normalizeBookingTerms(raw: unknown): Record<string, string> {
   };
 }
 
+/**
+ * Write-time resolved departure dates: [{ text, ymd|null }]. Frozen ISO dates
+ * so reads never re-guess the year. Coerces loosely and drops malformed rows.
+ */
+function normalizeResolvedDepartureDates(raw: unknown): Array<{ text: string; ymd: string | null }> {
+  if (!Array.isArray(raw)) return [];
+  const out: Array<{ text: string; ymd: string | null }> = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const rec = item as Record<string, unknown>;
+    const text = asString(rec.text);
+    if (!text) continue;
+    const ymd = typeof rec.ymd === "string" && /^\d{4}-\d{2}-\d{2}$/.test(rec.ymd) ? rec.ymd : null;
+    out.push({ text, ymd });
+  }
+  return out;
+}
+
 function normalizeAnswerHints(raw: unknown): Record<string, unknown>[] {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -311,6 +330,7 @@ export function normalizeExtra(
       typeof raw.needs_human_review === "boolean" ? raw.needs_human_review : false,
     review_reasons: asStringArray(raw.review_reasons),
     booking_terms: normalizeBookingTerms(raw.booking_terms),
+    departure_dates_resolved: normalizeResolvedDepartureDates(raw.departure_dates_resolved),
   };
 
   return { extra, warnings };

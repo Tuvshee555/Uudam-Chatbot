@@ -188,16 +188,71 @@ export function parseTripDepartureDateText(text: string, now = new Date()): stri
 }
 
 /**
+ * A stored map from each departure-date display string to the ISO date it was
+ * resolved to AT WRITE TIME (or null for recurring/flexible text with no
+ * calendar date). Kept in `extra.departure_dates_resolved`.
+ */
+export type ResolvedDepartureDate = { text: string; ymd: string | null };
+
+/**
+ * Resolves each departure-date string to a STABLE ISO date at WRITE time.
+ *
+ * Bare month/day rolls forward from the write moment — which is the correct
+ * disambiguation: "1 сарын 15" saved in July means next January, and once
+ * frozen it will not drift or be re-guessed on later reads. A genuinely stale
+ * trip was saved when its date was near-future, so its frozen ISO is now
+ * correctly in the past. Recurring/flexible text resolves to ymd=null.
+ */
+export function resolveDepartureDatesAtWrite(
+  dates: string[],
+  now = new Date(),
+): ResolvedDepartureDate[] {
+  return (dates || []).map((text) => {
+    const parsed = explicitDateCandidates(String(text || ""), now, "roll-forward").map(toYmd);
+    return { text: String(text || ""), ymd: parsed.length > 0 ? parsed[0] : null };
+  });
+}
+
+/** Builds a text→ymd lookup from a stored resolved list (ignores blank text). */
+function resolvedLookup(
+  resolved?: ResolvedDepartureDate[] | null,
+): Map<string, string | null> | null {
+  if (!Array.isArray(resolved) || resolved.length === 0) return null;
+  const map = new Map<string, string | null>();
+  for (const entry of resolved) {
+    if (entry && typeof entry.text === "string") {
+      map.set(entry.text, typeof entry.ymd === "string" ? entry.ymd : null);
+    }
+  }
+  return map;
+}
+
+/**
  * Keeps only departure-date strings that are not verifiably in the past.
  * Per string: no parseable date (recurring/flexible text like "Пүрэв гараг
  * бүр", "аяллын групп бүрдсэн огноогоор") → keep; any parsed date today or
  * later → keep; every parsed date in the past → drop. Keep-if-unsure by
  * design: hiding a real future date is worse than showing a stale one.
+ *
+ * When a write-time `resolved` map is supplied it is preferred over re-parsing:
+ * a frozen ISO never drifts, so a genuine next-season date stays visible. Any
+ * date not covered by the map falls back to text parsing, so existing trips
+ * with no resolved map behave exactly as before (no regression).
  */
-export function filterFutureDepartureDates(dates: string[], now = new Date()): string[] {
+export function filterFutureDepartureDates(
+  dates: string[],
+  now = new Date(),
+  resolved?: ResolvedDepartureDate[] | null,
+): string[] {
   const todayYmd = toYmd(getMongoliaDateParts(now));
+  const lookup = resolvedLookup(resolved);
   return (dates || []).filter((dateText) => {
-    const parsed = parseTripDepartureDateText(String(dateText || ""), now);
+    const key = String(dateText || "");
+    if (lookup && lookup.has(key)) {
+      const ymd = lookup.get(key) ?? null;
+      return ymd === null ? true : ymd >= todayYmd;
+    }
+    const parsed = parseTripDepartureDateText(key, now);
     if (parsed.length === 0) return true;
     return parsed.some((ymd) => ymd >= todayYmd);
   });
@@ -239,6 +294,21 @@ function formatTripSummary(match: DepartureDateMatch): string {
   return `${trip.route_name} — ${trip.operator_name}${suffix}`;
 }
 
+/**
+ * The ISO date(s) a stored trip date text resolves to. Prefers the trip's
+ * write-time resolved map (frozen, no drift); falls back to current-year text
+ * parsing when the map has no entry (existing trips behave exactly as before).
+ */
+function tripDateYmds(trip: TravelTrip, dateText: string, now: Date): string[] {
+  const resolved = ((trip.extra || {}) as Record<string, unknown>)
+    .departure_dates_resolved as ResolvedDepartureDate[] | undefined;
+  if (Array.isArray(resolved)) {
+    const hit = resolved.find((entry) => entry && entry.text === dateText);
+    if (hit) return hit.ymd ? [hit.ymd] : [];
+  }
+  return parseTripDepartureDateText(dateText, now);
+}
+
 function findDepartureMatches(
   trips: TravelTrip[],
   requestedYmd: string,
@@ -250,7 +320,7 @@ function findDepartureMatches(
     for (const dateText of trip.departure_dates || []) {
       // Trip-date semantics: a stored "3 сарын 8" is THIS March. With
       // roll-forward parsing a stale spring trip matched next year's date.
-      const parsedDates = parseTripDepartureDateText(dateText, now);
+      const parsedDates = tripDateYmds(trip, dateText, now);
       if (!parsedDates.includes(requestedYmd)) continue;
       matches.push({ trip, matchedDateText: dateText });
       break;
@@ -270,7 +340,7 @@ function findUpcomingDepartures(
   for (const trip of trips) {
     if (trip.status !== "active") continue;
     for (const dateText of trip.departure_dates || []) {
-      for (const ymd of parseTripDepartureDateText(dateText, now)) {
+      for (const ymd of tripDateYmds(trip, dateText, now)) {
         if (ymd < afterYmd) continue;
         const key = `${ymd}:${trip.id}`;
         if (seen.has(key)) continue;

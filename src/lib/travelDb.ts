@@ -6,7 +6,7 @@ import {
   recordCounter,
 } from "./observability";
 import { queryNeon, withNeonClient } from "./neonDb";
-import { filterFutureDepartureDates } from "./travelDates";
+import { filterFutureDepartureDates, resolveDepartureDatesAtWrite, type ResolvedDepartureDate } from "./travelDates";
 import { normalizeExtra } from "./tripExtraSchema";
 import {
   normalizeTripName,
@@ -1271,6 +1271,7 @@ export async function upsertTrip(input: {
     throw new Error("Аяллын нэр хоосон тул хадгалсангүй.");
   }
   const id = input.id?.trim() || `trip-${randomUUID()}`;
+  const departureDatesForWrite = cleaned.departure_dates || [];
   const row: TravelTrip = {
     id,
     category: cleaned.category || "",
@@ -1282,7 +1283,7 @@ export async function upsertTrip(input: {
     child_price:
       typeof cleaned.child_price === "number" ? Math.trunc(cleaned.child_price) : null,
     currency: cleaned.currency || "MNT",
-    departure_dates: cleaned.departure_dates || [],
+    departure_dates: departureDatesForWrite,
     seats_total:
       typeof cleaned.seats_total === "number" ? Math.trunc(cleaned.seats_total) : null,
     seats_left:
@@ -1298,9 +1299,12 @@ export async function upsertTrip(input: {
     photo_urls: Array.isArray(cleaned.photo_urls)
       ? cleaned.photo_urls.filter((u) => typeof u === "string" && u.startsWith("https://")).slice(0, 20)
       : [],
-    extra: normalizeExtra(
-      (cleaned.extra || {}) as Record<string, unknown>,
-    ).extra,
+    extra: normalizeExtra({
+      ...((cleaned.extra || {}) as Record<string, unknown>),
+      // Freeze the year of each departure date at write time so reads never
+      // re-guess (fixes bare next-season dates being hidden as "past").
+      departure_dates_resolved: resolveDepartureDatesAtWrite(departureDatesForWrite),
+    }).extra,
     created_at: "",
     updated_at: "",
   };
@@ -1382,6 +1386,18 @@ export async function patchTrip(id: string, fields: TripMutationFields) {
   if (!ready) return null;
 
   const cleaned = cleanFields(fields);
+  // When a full extra object is patched alongside departure_dates (the admin
+  // editor always sends both), freeze the resolved ISO dates into that extra so
+  // reads stop re-guessing the year. We only do this when extra is present — a
+  // partial extra patch would let normalizeExtra's defaults wipe existing keys.
+  if (
+    Array.isArray(cleaned.departure_dates) &&
+    cleaned.extra &&
+    typeof cleaned.extra === "object"
+  ) {
+    (cleaned.extra as Record<string, unknown>).departure_dates_resolved =
+      resolveDepartureDatesAtWrite(cleaned.departure_dates as string[]);
+  }
   const keys = Object.keys(cleaned) as Array<keyof TripMutationFields>;
   if (!keys.length) return null;
 
@@ -2145,10 +2161,28 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     }
     // Past departure dates are stripped so the bot can never quote a date
     // that already happened. If nothing remains, the schedule is emitted as
-    // unknown and the REFER policy sends the customer to a consultant.
-    const futureDepartureDates = filterFutureDepartureDates(trip.departure_dates);
+    // unknown and the REFER policy sends the customer to a consultant. The
+    // write-time resolved map (when present) freezes each date's year so a
+    // genuine next-season departure is not mistaken for a past one.
+    const resolvedDepartureDates = ((trip.extra || {}) as Record<string, unknown>)
+      .departure_dates_resolved as ResolvedDepartureDate[] | undefined;
+    const futureDepartureDates = filterFutureDepartureDates(
+      trip.departure_dates,
+      new Date(),
+      resolvedDepartureDates,
+    );
     if (futureDepartureDates.length) {
-      details.push(`Departure dates: ${futureDepartureDates.join(", ")}`);
+      // Annotate each date with its frozen ISO year (when known) so the model
+      // is not left guessing whether "1 сарын 15" means this January or next.
+      const resolvedMap = new Map<string, string | null>();
+      for (const entry of resolvedDepartureDates || []) {
+        if (entry && typeof entry.text === "string") resolvedMap.set(entry.text, entry.ymd ?? null);
+      }
+      const annotated = futureDepartureDates.map((text) => {
+        const ymd = resolvedMap.get(text);
+        return ymd ? `${text} (${ymd})` : text;
+      });
+      details.push(`Departure dates: ${annotated.join(", ")}`);
     }
     if (typeof trip.child_price === "number") {
       details.push(`Child price: ${trip.child_price}`);
