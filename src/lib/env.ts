@@ -46,6 +46,11 @@ export type ValidatedEnv = {
   metaRetryBaseDelayMs: number;
   webhookMaxPendingConversations: number;
   staffNotifyPsids: string[];
+  // Optional Telegram fallback for staff lead alerts. Telegram has no 24h
+  // messaging window, so it delivers even when the Messenger RESPONSE-type
+  // staff ping is blocked by Meta's policy. Off unless both are set.
+  telegramBotToken: string | null;
+  telegramStaffChatIds: string[];
   googleDriveSyncEnabled: boolean;
   googleDriveFolderId: string | null;
   googleDriveServiceAccountEmail: string | null;
@@ -563,6 +568,11 @@ export function getEnv(): ValidatedEnv {
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
+  const telegramBotToken = readOptionalString("TELEGRAM_BOT_TOKEN", source);
+  const telegramStaffChatIds = (readOptionalString("TELEGRAM_STAFF_CHAT_IDS", source) || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
   const googleDriveSyncEnabled = readBoolean(
     "GOOGLE_DRIVE_SYNC_ENABLED",
     source,
@@ -685,6 +695,8 @@ export function getEnv(): ValidatedEnv {
     metaRetryBaseDelayMs,
     webhookMaxPendingConversations,
     staffNotifyPsids,
+    telegramBotToken,
+    telegramStaffChatIds,
     googleDriveSyncEnabled,
     googleDriveFolderId,
     googleDriveServiceAccountEmail,

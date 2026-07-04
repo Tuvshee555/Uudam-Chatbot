@@ -6,6 +6,7 @@ import {
   recordCounter,
 } from "./observability";
 import { queryNeon, withNeonClient } from "./neonDb";
+import { filterFutureDepartureDates } from "./travelDates";
 import { normalizeExtra } from "./tripExtraSchema";
 import {
   normalizeTripName,
@@ -2118,6 +2119,17 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     description: routes.join("; "),
   }));
 
+  // Keep-if-unsure staleness gate for date-keyed price/discount groups: a
+  // group whose every parseable date already passed must not be quoted to
+  // customers; groups with no parseable dates (labels, recurring text) stay.
+  const groupIsCurrent = (dates: unknown): boolean => {
+    const list = Array.isArray(dates)
+      ? dates.map((d) => String(d ?? "")).filter(Boolean)
+      : [];
+    if (list.length === 0) return true;
+    return filterFutureDepartureDates(list).length > 0;
+  };
+
   const modules = visibleTrips
     .map((trip) => {
     const details: string[] = [];
@@ -2127,15 +2139,20 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     if (trip.category) {
       details.push(`Ангилал: ${trip.category}`);
     }
-    if (trip.departure_dates.length) {
-      details.push(`Departure dates: ${trip.departure_dates.join(", ")}`);
+    // Past departure dates are stripped so the bot can never quote a date
+    // that already happened. If nothing remains, the schedule is emitted as
+    // unknown and the REFER policy sends the customer to a consultant.
+    const futureDepartureDates = filterFutureDepartureDates(trip.departure_dates);
+    if (futureDepartureDates.length) {
+      details.push(`Departure dates: ${futureDepartureDates.join(", ")}`);
     }
     if (typeof trip.child_price === "number") {
       details.push(`Child price: ${trip.child_price}`);
     }
     // Emit structured price groups so the bot can answer per-date pricing questions
     const extra = (trip.extra || {}) as Record<string, unknown>;
-    const priceGroups = Array.isArray(extra.departure_date_groups) ? extra.departure_date_groups : [];
+    const priceGroups = (Array.isArray(extra.departure_date_groups) ? extra.departure_date_groups : [])
+      .filter((g) => groupIsCurrent((g as Record<string, unknown>)?.dates));
     if (priceGroups.length > 0) {
       const groupText = (priceGroups as Array<Record<string, unknown>>)
         .map((g) => {
@@ -2150,7 +2167,8 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
       details.push(`Price groups: ${groupText}`);
     }
     // Emit discount groups if present
-    const discountGroups = Array.isArray(extra.discount_groups) ? extra.discount_groups : [];
+    const discountGroups = (Array.isArray(extra.discount_groups) ? extra.discount_groups : [])
+      .filter((g) => groupIsCurrent((g as Record<string, unknown>)?.dates));
     if (discountGroups.length > 0) {
       const discountText = (discountGroups as Array<Record<string, unknown>>)
         .map((g) => {
@@ -2173,7 +2191,8 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     // Emit admin-entered structured fields
     const aliases = Array.isArray(extra.aliases) ? (extra.aliases as string[]).filter(Boolean) : [];
     if (aliases.length > 0) details.push(`Өөр нэршил: ${aliases.join(", ")}`);
-    const pgNew = Array.isArray(extra.price_groups) ? extra.price_groups as Array<Record<string, unknown>> : [];
+    const pgNew = (Array.isArray(extra.price_groups) ? extra.price_groups as Array<Record<string, unknown>> : [])
+      .filter((g) => groupIsCurrent(g?.dates));
     if (pgNew.length > 0) {
       const pgText = pgNew.map((g) => {
         const displayDates = Array.isArray(g.display_dates) && (g.display_dates as string[]).length > 0
@@ -2202,7 +2221,8 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
       }).join("; ");
       details.push(`Огноо тус бүрийн үнэ: ${pgText}`);
     }
-    const discNew = Array.isArray(extra.discounts) ? extra.discounts as Array<Record<string, unknown>> : [];
+    const discNew = (Array.isArray(extra.discounts) ? extra.discounts as Array<Record<string, unknown>> : [])
+      .filter((g) => groupIsCurrent(g?.dates));
     if (discNew.length > 0) {
       const discText = discNew.map((g) => {
         const dates = Array.isArray(g.dates) && (g.dates as string[]).length > 0 ? ` (${(g.dates as string[]).join(", ")})` : "";

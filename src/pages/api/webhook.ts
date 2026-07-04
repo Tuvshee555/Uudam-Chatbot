@@ -6,14 +6,14 @@ import { BOT_MESSAGE_METADATA, replyToComment, sendImageCarousel, sendImageMessa
 import { sendTextMessage as sendIgTextMessage } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
-import { appendMessage, buildPrompt, getHistory } from "../../lib/conversation";
+import { appendMessage, buildPrompt, getHistory, isReferReply, REFER_FALLBACK_REPLY } from "../../lib/conversation";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { autoHandoffSender, isPaused, pauseBot, storeSenderName, trackSender } from "../../lib/pause";
 import { createLead, dbClaimGoodbye, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
-import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, } from "../../lib/travelFastPaths";
+import { appendLeadCaptureCta, buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, } from "../../lib/travelFastPaths";
 import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
@@ -987,6 +987,10 @@ function isHandoffRequest(text: string, keywords: string[]): boolean {
   return false;
 }
 const CONTACT_OPERATOR_LABEL = "Зөвлөхтэй холбогдох";
+// Sent when the bot would repeat its previous reply word-for-word. Must never
+// scold ("өмнө нь хэлсэн") and never fake an error.
+const DUPLICATE_REPLY_NUDGE =
+  "Өөр асуух зүйл байвал бичээрэй 😊 Утасны дугаараа үлдээвэл манай аяллын зөвлөх тан руу шууд холбогдоно.";
 const BOOKING_INTENT_KEYWORDS = [
   "захиал",
   "бүртгүүл",
@@ -1004,6 +1008,17 @@ function extractPhoneNumber(text: string): string {
   const compact = text.replace(/[\s\-()]/g, "");
   const match = compact.match(/(?<!\d)[5-9]\d{7}(?!\d)/);
   return match ? match[0] : "";
+}
+/**
+ * True when the message is essentially JUST a phone number (the customer
+ * answering the bot's "утасны дугаараа үлдээгээрэй" ask). Such messages get
+ * a deterministic thank-you instead of an AI round-trip; a phone bundled
+ * with a real question ("99119911 Бээжин явмаар байна") continues to the AI.
+ */
+function isPhoneOnlyMessage(text: string): boolean {
+  const compact = text.replace(/[\s\-()+.]/g, "");
+  const withoutPhone = compact.replace(/(?<!\d)[5-9]\d{7}(?!\d)/, "");
+  return withoutPhone.replace(/[^\p{L}\p{N}]+/gu, "").length <= 3;
 }
 function isCommentTriggerMatch(commentText: string, patterns: string[]): boolean {
   const normalized = normalizeLowerText(commentText);
@@ -1095,12 +1110,13 @@ async function handleMessage(
       }
     } catch { /* non-critical */ }
   })();
-  // Inactivity check: if they had ≥1 prior message and went quiet for 30+ min,
-  // send goodbye message with contact numbers, then pause for 24 h. This is gentler
-  // than the old 5 min / 14 day rule but still prevents the bot from jumping back in
-  // while a human consultant is likely following up.
+  // Re-engagement contact info: a customer coming back after 30+ min of
+  // silence gets the consultant contact message ONCE per 14 days (when the
+  // goodbye toggle is on) — and then their message is ALWAYS answered.
+  // The old behaviour (24h pause + early return) swallowed the returning
+  // customer's actual question and muted the bot for a day, which killed
+  // every conversation that naturally resumed hours later.
   const INACTIVITY_MS = 30 * 60 * 1000;
-  const INACTIVITY_PAUSE_MS = 24 * 60 * 60 * 1000;
   const GOODBYE_MSG =
     "Манай зөвлөхтэй холбогдох бол дараах дугааруудаар залгаарай 📞\n\n" +
     "☎️ 7713-6633\n" +
@@ -1124,18 +1140,11 @@ async function handleMessage(
             correlationId: trace?.correlationId,
             source: "api.webhook.inactivity_goodbye",
           });
+          recordCounter("webhook.reengagement_contact_sent_total", 1, { platform });
         }
       } catch { /* best-effort */ }
     }
-    await dbPauseSender(senderId, INACTIVITY_PAUSE_MS, "inactivity");
-    recordCounter("webhook.inactivity_pause_total", 1, { platform });
-    logInfo("webhook.inactivity_pause", {
-      requestId: trace?.requestId,
-      senderHash: hashIdentifier(senderId),
-      gapMs: Date.now() - new Date(prevMsgAt).getTime(),
-      goodbyeSent: shouldSendGoodbye,
-    });
-    return;
+    // No pause, no return — processing continues so the message gets answered.
   }
   if (await isPagePaused(pageId)) {
     logInfo("webhook.page_pause_active", {
@@ -1535,6 +1544,69 @@ async function handleMessage(
     return;
   }
   const sessionId = `${platform}:${pageId}:${senderId}`;
+  // ── Phone-number lead capture ───────────────────────────────────────────────
+  // The AI's #1 rule asks the customer for a phone number; this is where the
+  // answer is actually caught. Any message containing a Mongolian mobile
+  // number creates a lead + staff alert (once per open lead). A phone-only
+  // message gets a deterministic thank-you; a phone bundled with a question
+  // falls through so the AI answers the question too.
+  const detectedPhone = extractPhoneNumber(text);
+  if (detectedPhone) {
+    try {
+      if (!(await hasRecentOpenLead(senderId, "booking"))) {
+        await createLead({
+          kind: "booking",
+          platform,
+          senderId,
+          customerMessage: text,
+          contactPhone: detectedPhone,
+          context: "Чатад утасны дугаараа үлдээсэн.",
+        });
+        await notifyStaffOfLead(
+          {
+            kind: "booking",
+            platform,
+            customerMessage: text,
+            contactPhone: detectedPhone,
+          },
+          {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            source: "api.webhook.phone_capture",
+          },
+        );
+        recordCounter("webhook.phone_lead_captured_total", 1, { platform });
+      }
+    } catch (error) {
+      logWarn("webhook.phone_lead_capture_failed", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+        classification: classifyError(error),
+      });
+    }
+    if (isPhoneOnlyMessage(text)) {
+      try {
+        await appendMessage(senderId, "user", text);
+      } catch { /* non-critical */ }
+      const confirmation =
+        `Баярлалаа! 🙌 Манай аяллын зөвлөх таны ${detectedPhone} дугаарт удахгүй холбогдоно. ` +
+        "Өөр асуух зүйл байвал чөлөөтэй бичээрэй 😊";
+      await assertLockHealthy();
+      const delivered = await sendPlatformMessage(
+        platform, senderId, confirmation, token, pageId, igUserId, trace, { allowFallback: false },
+      );
+      if (!delivered) {
+        throw new RetryableWebhookError("delivery_failed:phone_capture_confirmation");
+      }
+      try {
+        await appendMessage(senderId, "assistant", confirmation);
+        await setLastReplyConsistent(sessionId, confirmation);
+      } catch { /* non-critical */ }
+      return;
+    }
+  }
   if (flowDocs.length > 0) {
     const triggered = findTriggeredFlow(text, flowDocs);
     if (triggered) {
@@ -1623,6 +1695,15 @@ async function handleMessage(
   await assertLockHealthy();
   const history = await getHistory(senderId);
   const lastReply = await getLastReplyConsistent(sessionId);
+  // Phone already given this conversation (current message or history). Every
+  // fast-path answer appends the phone ask unless this is true, and the AI
+  // prompt switches to "never ask again". Computed here (before the fast paths)
+  // so the deterministic replies capture leads the same way the AI path does.
+  const phoneCollected =
+    Boolean(detectedPhone) ||
+    history.some(
+      (message) => message.role === "user" && extractPhoneNumber(message.text),
+    );
   const customerWantsToBook =
     botSettings.handoff_enabled && isBookingIntent(text);
   if (customerWantsToBook && !(await hasRecentOpenLead(senderId, "booking"))) {
@@ -1666,16 +1747,20 @@ async function handleMessage(
       const bookingNudge = customerWantsToBook
         ? " Захиалгаа баталгаажуулах бол нэр, утасны дугаараа үлдээгээрэй."
         : "";
-      const safeDateReply = enforceWebsiteForPayment(
-        sanitizeAssistantReply(fixMojibake(`${dateAvailabilityReply}${bookingNudge}`)),
+      const safeDateReply = appendLeadCaptureCta(
+        enforceWebsiteForPayment(
+          sanitizeAssistantReply(fixMojibake(`${dateAvailabilityReply}${bookingNudge}`)),
+        ),
+        phoneCollected,
       );
       if (lastReply && isDuplicateReply(lastReply.text, safeDateReply)) {
         recordCounter("webhook.duplicate_reply_avoided_total", 1, { platform });
         await assertLockHealthy();
+        // Neutral nudge — never a fake error and never "I already told you".
         const delivered = await sendPlatformMessage(
           platform,
           senderId,
-          "Уучлаарай, яг одоо хариулт боловсруулахад алдаа гарлаа. Хэдэн минутын дараа дахин асууна уу.",
+          DUPLICATE_REPLY_NUDGE,
           token,
           pageId,
           igUserId,
@@ -1722,7 +1807,10 @@ async function handleMessage(
     const trips = await getTrips();
     const seatsReply = buildSeatsReply(text, trips);
     if (seatsReply) {
-      const safeSeatsReply = enforceWebsiteForPayment(sanitizeAssistantReply(seatsReply));
+      const safeSeatsReply = appendLeadCaptureCta(
+        enforceWebsiteForPayment(sanitizeAssistantReply(seatsReply)),
+        phoneCollected,
+      );
       await assertLockHealthy();
       const delivered = await sendPlatformMessage(
         platform,
@@ -1750,7 +1838,10 @@ async function handleMessage(
     const trips = await getTrips();
     const discountReply = buildDiscountReply(text, trips);
     if (discountReply) {
-      const safeDiscountReply = enforceWebsiteForPayment(sanitizeAssistantReply(discountReply));
+      const safeDiscountReply = appendLeadCaptureCta(
+        enforceWebsiteForPayment(sanitizeAssistantReply(discountReply)),
+        phoneCollected,
+      );
       await assertLockHealthy();
       const delivered = await sendPlatformMessage(
         platform,
@@ -1778,7 +1869,10 @@ async function handleMessage(
     const trips = await getTrips();
     const compareReply = buildCompareReply(text, trips);
     if (compareReply) {
-      const safeCompareReply = enforceWebsiteForPayment(sanitizeAssistantReply(compareReply));
+      const safeCompareReply = appendLeadCaptureCta(
+        enforceWebsiteForPayment(sanitizeAssistantReply(compareReply)),
+        phoneCollected,
+      );
       await assertLockHealthy();
       const delivered = await sendPlatformMessage(
         platform,
@@ -1806,8 +1900,9 @@ async function handleMessage(
     const trips = await getTrips();
     const programReply = buildTripProgramReply(text, trips);
     if (programReply) {
-      const safeProgramReply = enforceWebsiteForPayment(
-        sanitizeAssistantReply(programReply.reply),
+      const safeProgramReply = appendLeadCaptureCta(
+        enforceWebsiteForPayment(sanitizeAssistantReply(programReply.reply)),
+        phoneCollected,
       );
       await assertLockHealthy();
       const delivered = await sendPlatformMessage(
@@ -1859,8 +1954,9 @@ async function handleMessage(
     }
     const structuredTripReply = buildStructuredTripReply(text, trips);
     if (structuredTripReply) {
-      const safeStructuredReply = enforceWebsiteForPayment(
-        sanitizeAssistantReply(structuredTripReply),
+      const safeStructuredReply = appendLeadCaptureCta(
+        enforceWebsiteForPayment(sanitizeAssistantReply(structuredTripReply)),
+        phoneCollected,
       );
       await assertLockHealthy();
       const delivered = await sendPlatformMessage(
@@ -1903,8 +1999,13 @@ async function handleMessage(
     history,
     userText: text,
     pinnedButtonLabels,
+    phoneCollected,
   });
   let aiReply: string;
+  // True when BOTH Gemini and OpenAI failed. We then route through the REFER
+  // path below (consultant fallback + lead + staff alert) instead of leaving
+  // the customer with a bare apology and no human follow-up.
+  let aiOutage = false;
   try {
     const result = await askGemini(prompt, {
       requestId: trace?.requestId,
@@ -1936,18 +2037,62 @@ async function handleMessage(
       classification: classifyError(error),
       openaiFallbackUsed: Boolean(fallbackText),
     });
-    aiReply = fallbackText || "Уучлаарай, систем түр алдаатай байна.";
+    if (fallbackText) {
+      aiReply = fallbackText;
+    } else {
+      // Both models are down. Route to the REFER path so the customer gets the
+      // polite consultant handoff and a lead is created — never a dead end.
+      aiOutage = true;
+      aiReply = "REFER";
+    }
   }
-  // Bot signals it has nothing useful to say — go completely silent
-  if (aiReply.trim().toUpperCase() === "SILENT" || aiReply.trim() === "SILENT\nBUTTONS:" || /^SILENT\s*$/i.test(aiReply.trim().split("\n")[0])) {
-    logInfo("webhook.ai_silent", {
+  // Bot has no data for this question (REFER, or legacy SILENT). The old
+  // behaviour dropped the message entirely — an ignored customer and a lost
+  // lead nobody heard about. Now: polite consultant fallback to the customer
+  // + staff alert + lead row (guarded against repeats), so a human follows up.
+  if (isReferReply(aiReply)) {
+    logInfo("webhook.ai_refer", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
       platform,
       senderHash: hashIdentifier(senderId),
+      reason: aiOutage ? "ai_outage" : "no_data",
     });
-    recordCounter("webhook.ai_silent_total", 1, { platform });
-    return;
+    recordCounter("webhook.ai_refer_total", 1, {
+      platform,
+      reason: aiOutage ? "ai_outage" : "no_data",
+    });
+    try {
+      if (!(await hasRecentOpenLead(senderId, "handoff"))) {
+        await createLead({
+          kind: "handoff",
+          platform,
+          senderId,
+          customerMessage: text,
+          contactPhone: detectedPhone || "",
+          context: aiOutage
+            ? "AI түр саатсан тул зөвлөхөд шилжүүлэв."
+            : "Бот мэдээлэлгүй асуулт тул зөвлөхөд шилжүүлэв.",
+        });
+        await notifyStaffOfLead(
+          { kind: "handoff", platform, customerMessage: text },
+          {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            source: "api.webhook.ai_refer",
+          },
+        );
+      }
+    } catch (error) {
+      logWarn("webhook.ai_refer_lead_failed", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+        classification: classifyError(error),
+      });
+    }
+    aiReply = REFER_FALLBACK_REPLY;
   }
   const fixedReply = fixMojibake(aiReply);
   const { text: replyWithoutButtons, buttons: aiButtons } = extractButtons(fixedReply);
@@ -1967,10 +2112,12 @@ async function handleMessage(
   if (lastReply && isDuplicateReply(lastReply.text, safeReply)) {
     recordCounter("webhook.duplicate_reply_avoided_total", 1, { platform });
     await assertLockHealthy();
+    // The prompt forbids "Тэр мэдээллийг өмнө нь хуваалцсан" — the code must
+    // not say it either. Neutral nudge instead.
     const delivered = await sendPlatformMessage(
       platform,
       senderId,
-      "Тэр мэдээллийг өмнө нь хуваалцсан. Өөр асуулт байвал асуугаарай!",
+      DUPLICATE_REPLY_NUDGE,
       token,
       pageId,
       igUserId,

@@ -7,7 +7,7 @@ import {
   rateLimitAsync,
 } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
-import { appendMessage, buildPrompt, getHistory } from "../../lib/conversation";
+import { appendMessage, buildPrompt, getHistory, isReferReply, REFER_FALLBACK_REPLY } from "../../lib/conversation";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
@@ -222,7 +222,14 @@ export default async function handler(
         correlationId: trace.correlationId,
         source: "api.demo",
       });
-      const rawFixed = fixMojibake(result.text);
+      let rawFixed = fixMojibake(result.text);
+      // REFER (or legacy SILENT) = the model has no data for this question.
+      // The demo must mirror production: polite consultant fallback, never a
+      // bare token and never a dropped message.
+      if (isReferReply(rawFixed)) {
+        recordCounter("demo.ai_refer_total", 1, {});
+        rawFixed = REFER_FALLBACK_REPLY;
+      }
       const { text: rawNoButtons, buttons } = extractButtons(rawFixed);
       const recentAssistantReplies = history
         .filter((message) => message.role === "assistant")

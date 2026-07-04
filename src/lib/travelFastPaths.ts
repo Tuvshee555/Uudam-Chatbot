@@ -3,8 +3,22 @@
  * from the DB instead of letting the model guess.
  */
 
-import { parseDepartureDateText } from "./travelDates";
+import { filterFutureDepartureDates, parseDepartureDateText } from "./travelDates";
 import type { TravelTrip } from "./travelOps";
+
+/**
+ * Returns a copy of the trip with past departure dates stripped, so every
+ * fast-path reply quotes only current schedules. Recurring/flexible date
+ * text ("Пүрэв гараг бүр") is always kept — only verifiably past calendar
+ * dates are dropped. A stale trip whose dates are ALL past ends up with an
+ * empty list, which the reply builders already treat as "no known dates".
+ */
+function withFutureDepartureDates(trip: TravelTrip, now = new Date()): TravelTrip {
+  const dates = trip.departure_dates || [];
+  const filtered = filterFutureDepartureDates(dates, now);
+  if (filtered.length === dates.length) return trip;
+  return { ...trip, departure_dates: filtered };
+}
 
 type DepartureDateGroup = {
   label?: string | null;
@@ -717,7 +731,7 @@ function buildTripSummaryLines(trip: TravelTrip): string {
   const child = formatPrice(trip.child_price);
   if (adult && child) lines.push(`💰 Насанд хүрэгч: ${adult} | Хүүхэд: ${child}`);
   else if (adult) lines.push(`💰 Үнэ: ${adult}`);
-  const dates = trip.departure_dates?.filter(Boolean) ?? [];
+  const dates = filterFutureDepartureDates(trip.departure_dates?.filter(Boolean) ?? []);
   if (dates.length > 0) lines.push(`📅 Гарах өдрүүд: ${dates.slice(0, 5).join(", ")}${dates.length > 5 ? "…" : ""}`);
   return lines.join("\n");
 }
@@ -1626,13 +1640,37 @@ function formatSpecificDatePrice(
   return `💰 ${label}: ${suffix}`;
 }
 
+const AMBIGUOUS_REPLY_MARKER = "Аль аяллыг хэлж байгаагаа нэрээр нь нэг тодруулаад бичээрэй";
+
 function buildAmbiguousTripReply(trips: TravelTrip[]) {
   const names = trips.slice(0, 3).map((trip) => `• ${trip.route_name}`);
   return [
     "Таны асууж байгаа аялал 2-3 өөр хувилбартай байна.",
-    "Аль аяллыг хэлж байгаагаа нэрээр нь нэг тодруулаад бичээрэй:",
+    AMBIGUOUS_REPLY_MARKER + ":",
     ...names,
   ].join("\n");
+}
+
+/** The single lead-capture ask reused by every fast-path answer. */
+export const LEAD_CAPTURE_CTA =
+  "Утасны дугаараа үлдээвэл манай аяллын зөвлөх тан руу шууд холбогдоно 🙌";
+
+/**
+ * Appends the phone-number ask to a fast-path reply so the deterministic
+ * answers capture leads the same way the AI path does. The fast paths used to
+ * answer price/seats/dates and stop — exactly the hot-buyer questions — so the
+ * best leads were never asked for a number.
+ *
+ * Skips when: the phone is already collected; the reply is a clarifying
+ * (ambiguous) question, where a phone ask is explicitly disallowed; or the
+ * reply already requests contact details (no double ask).
+ */
+export function appendLeadCaptureCta(reply: string, phoneCollected: boolean): string {
+  const text = (reply || "").trim();
+  if (!text || phoneCollected) return reply;
+  if (text.includes(AMBIGUOUS_REPLY_MARKER)) return reply;
+  if (/утас|дугаар/i.test(text)) return reply;
+  return `${text}\n\n${LEAD_CAPTURE_CTA}`;
 }
 
 function buildSameTripPriceComparisonReply(
@@ -1733,8 +1771,9 @@ export function hasDiscountIntent(text: string): boolean {
 }
 
 export function buildDiscountReply(text: string, trips: TravelTrip[]): string | null {
-  const { best, ambiguous } = findBestTripMatch(text, trips);
-  if (!best) return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
+  const { best: bestRaw, ambiguous } = findBestTripMatch(text, trips);
+  if (!bestRaw) return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
+  const best = withFutureDepartureDates(bestRaw);
 
   const extra = (best.extra || {}) as Record<string, unknown>;
   const currency = best.currency || "MNT";
@@ -1838,7 +1877,8 @@ function getSeatSalesMessage(trip: TravelTrip): string | null {
   return null;
 }
 
-function buildTripInfoReply(trip: TravelTrip) {
+function buildTripInfoReply(rawTrip: TravelTrip, now = new Date()) {
+  const trip = withFutureDepartureDates(rawTrip, now);
   const lines = [`\u2708\uFE0F ${formatRouteName(trip.route_name)}`, ""];
 
   if (trip.duration_text) {
@@ -1857,7 +1897,9 @@ function buildTripInfoReply(trip: TravelTrip) {
   }
 
   if (isLandFlightCombo(trip)) {
-    lines.push("", "Энэ нь газар + нислэг хосолсон аялал бөгөөд УБ–Бэйдайхэ чиглэлийн нислэг багтсан.");
+    // No route claim here: the flight leg differs per trip. Naming a route
+    // in code once told customers every combo trip flies UB–Beidaihe.
+    lines.push("", "Энэ нь газар + нислэг хосолсон аялал.");
   }
 
   lines.push("", "Та аль гарах өдрийг сонирхож байна вэ? 😊");
@@ -1898,7 +1940,7 @@ export function buildCompareReply(text: string, trips: TravelTrip[]): string | n
   });
 
   if (matched.length < 2) return null;
-  const candidates = matched.slice(0, 4);
+  const candidates = matched.slice(0, 4).map((trip) => withFutureDepartureDates(trip));
 
   const lines: string[] = ["📊 Аялал харьцуулалт:", ""];
   for (const trip of candidates) {
@@ -2071,7 +2113,7 @@ function formatCombinedDatePriceReply(
         if (formatted) lines.push(`💰 ${field.label}: ${formatted}`);
       }
       if (isLandFlightCombo(match.trip)) {
-        lines.push("Энэ нь газар + нислэг хосолсон аялал бөгөөд УБ–Бэйдайхэ 2 талын нислэг багтсан.");
+        lines.push("Энэ нь газар + нислэг хосолсон аялал.");
       }
       return lines.join("\n");
     });
@@ -2108,11 +2150,12 @@ export function buildStructuredTripReply(
     if (!routeOnlyCandidate?.best) return routeOnlyCandidate?.ambiguous?.length
       ? buildAmbiguousTripReply(routeOnlyCandidate.ambiguous)
       : null;
-    return buildTripInfoReply(routeOnlyCandidate.best);
+    return buildTripInfoReply(routeOnlyCandidate.best, now);
   }
 
-  const { best, ambiguous } = findBestTripMatch(text, trips);
-  if (!best) return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
+  const { best: bestRaw, ambiguous } = findBestTripMatch(text, trips);
+  if (!bestRaw) return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
+  const best = withFutureDepartureDates(bestRaw, now);
 
   const samePriceReply = buildSameTripPriceComparisonReply(best, text, now);
   if (samePriceReply && hasSamePriceComparisonIntent(text)) {

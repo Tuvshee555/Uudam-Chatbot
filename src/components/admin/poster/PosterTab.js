@@ -617,17 +617,25 @@ export default function PosterTab({ apiFetch }) {
     return node.getBoundingClientRect().top - container.getBoundingClientRect().top;
   }
 
+  function getMessengerSplitCandidates(node) {
+    const totalHeight = node.offsetHeight;
+    const candidates = [];
+
+    node.querySelectorAll(".dayrow,.program-head,.sec.compact-sec,.foot").forEach((el) => {
+      const top = getRelativeTop(el, node);
+      // Only split at real section/day boundaries, and avoid tiny header/footer slivers.
+      if (top > totalHeight * 0.12 && top < totalHeight * 0.92) candidates.push(top);
+    });
+
+    return Array.from(new Set(candidates.map(Math.round))).sort((a, b) => a - b);
+  }
+
   function chooseMessengerSplitPoint(node) {
     const totalHeight = node.offsetHeight;
     const target = totalHeight / 2;
     const minY = totalHeight * 0.38;
     const maxY = totalHeight * 0.72;
-    const candidates = [];
-
-    node.querySelectorAll(".dayrow,.program-head,.sec.compact-sec,.foot").forEach((el) => {
-      const top = getRelativeTop(el, node);
-      if (top > minY && top < maxY) candidates.push(top);
-    });
+    const candidates = getMessengerSplitCandidates(node).filter((top) => top > minY && top < maxY);
 
     if (!candidates.length) return Math.round(target);
 
@@ -643,25 +651,50 @@ export default function PosterTab({ apiFetch }) {
     if (sliceCount === 2) return [chooseMessengerSplitPoint(node)];
 
     const totalHeight = node.offsetHeight;
-    const candidates = [];
-    node.querySelectorAll(".dayrow,.program-head,.sec.compact-sec,.foot").forEach((el) => {
-      const top = getRelativeTop(el, node);
-      if (top > totalHeight * 0.18 && top < totalHeight * 0.88) candidates.push(top);
-    });
+    const targets = Array.from({ length: sliceCount - 1 }, (_, i) => (totalHeight * (i + 1)) / sliceCount);
+    const candidates = getMessengerSplitCandidates(node).filter((point) => point > totalHeight * 0.16 && point < totalHeight * 0.9);
 
-    const points = [];
-    for (let i = 1; i < sliceCount; i++) {
-      const target = (totalHeight * i) / sliceCount;
-      const minGap = totalHeight * 0.18;
-      const eligible = candidates.filter((point) => points.every((existing) => Math.abs(existing - point) > minGap));
-      const best = (eligible.length ? eligible : candidates).reduce((currentBest, current) =>
-        Math.abs(current - target) < Math.abs(currentBest - target) ? current : currentBest,
-        target
-      );
-      points.push(best);
+    if (candidates.length < sliceCount - 1) {
+      return targets.map(Math.round);
     }
 
-    return points.sort((a, b) => a - b).map(Math.round);
+    let bestPoints = targets;
+    let bestScore = Infinity;
+
+    const scorePoints = (points) => {
+      const sorted = [...points].sort((a, b) => a - b);
+      const ranges = [0, ...sorted, totalHeight].map((startY, index, all) => all[index + 1] - startY).filter(Boolean);
+      const ideal = totalHeight / sliceCount;
+      const maxRange = Math.max(...ranges);
+      const minRange = Math.min(...ranges);
+      const balancePenalty = ranges.reduce((sum, height) => sum + Math.abs(height - ideal), 0);
+      const targetPenalty = sorted.reduce((sum, point, index) => sum + Math.abs(point - targets[index]), 0);
+      const hugeSlicePenalty = Math.max(0, maxRange - MESSENGER_SINGLE_IMAGE_MAX_HEIGHT) * 3;
+      const tinySlicePenalty = Math.max(0, totalHeight * 0.16 - minRange) * 4;
+      return balancePenalty * 1.4 + targetPenalty + hugeSlicePenalty + tinySlicePenalty;
+    };
+
+    function visit(startIndex, picked) {
+      if (picked.length === sliceCount - 1) {
+        const score = scorePoints(picked);
+        if (score < bestScore) {
+          bestScore = score;
+          bestPoints = [...picked];
+        }
+        return;
+      }
+
+      const remainingNeeded = sliceCount - 1 - picked.length;
+      for (let i = startIndex; i <= candidates.length - remainingNeeded; i++) {
+        const point = candidates[i];
+        const previous = picked[picked.length - 1] ?? 0;
+        if (point - previous < totalHeight * 0.14) continue;
+        visit(i + 1, [...picked, point]);
+      }
+    }
+
+    visit(0, []);
+    return bestPoints.sort((a, b) => a - b).map(Math.round);
   }
 
   function drawMessengerBadge(ctx, width, height, index, total) {

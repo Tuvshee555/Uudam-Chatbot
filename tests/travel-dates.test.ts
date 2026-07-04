@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   buildDepartureDateAvailabilityReply,
   buildTemporalPromptContext,
+  filterFutureDepartureDates,
   hasDepartureDateAvailabilityIntent,
   parseDepartureDateText,
+  parseTripDepartureDateText,
   resolveRequestedDate,
 } from "../src/lib/travelDates";
 import type { TravelTrip } from "../src/lib/travelOps";
@@ -117,4 +119,42 @@ test("prompt context tells the model what tomorrow means", () => {
   assert.match(context, /Current date .*2026-05-30/);
   assert.match(context, /tomorrow.*2026-05-31/);
   assert.match(context, /requested date resolves to 2026-05-31/);
+});
+
+test("trip-date parsing keeps bare month/day in the CURRENT year (no roll-forward)", () => {
+  // 2026-05-30 in Mongolia: "3 сарын 8" on a stored trip is March 2026 (past),
+  // never March 2027 — roll-forward here made stale trips look bookable.
+  assert.deepEqual(parseTripDepartureDateText("3 сарын 8", NOW_IN_MONGOLIA), ["2026-03-08"]);
+  assert.deepEqual(parseTripDepartureDateText("2026 он 7 сар 7", NOW_IN_MONGOLIA), ["2026-07-07"]);
+});
+
+test("filterFutureDepartureDates drops past dates, keeps future and recurring text", () => {
+  const filtered = filterFutureDepartureDates(
+    [
+      "3 сарын 8", // past (March 2026 vs now = May 30, 2026)
+      "6 сарын 10", // future
+      "Пүрэв гараг бүр", // recurring — always kept
+      "аяллын групп бүрдсэн огноогоор", // flexible — always kept
+      "2026-05-30", // today — kept
+      "2025-12-01", // explicit past year — dropped
+    ],
+    NOW_IN_MONGOLIA,
+  );
+  assert.deepEqual(filtered, [
+    "6 сарын 10",
+    "Пүрэв гараг бүр",
+    "аяллын групп бүрдсэн огноогоор",
+    "2026-05-30",
+  ]);
+});
+
+test("date availability does not resurrect a past-season trip as next year", () => {
+  // User asks for March 8 (rolls forward to 2027-03-08); the trip's stored
+  // "3 сарын 8" means March 2026 — they must NOT match.
+  const reply = buildDepartureDateAvailabilityReply({
+    userText: "3 сарын 8-нд гарах аялал байна уу",
+    now: NOW_IN_MONGOLIA,
+    trips: [trip({ departure_dates: ["3 сарын 8"] })],
+  });
+  assert.match(reply || "", /алга байна/);
 });

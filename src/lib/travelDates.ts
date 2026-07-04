@@ -100,8 +100,22 @@ function inferYear(month: number, day: number, now = new Date()): number {
   return toYmd(candidate) >= toYmd(today) ? today.year : today.year + 1;
 }
 
-function explicitDateCandidates(text: string, now = new Date()): DateParts[] {
+// How to interpret a month/day with no year:
+// - "roll-forward" (user queries): "3 сарын 8" asked in July means NEXT March.
+// - "current-year" (stored trip dates): "3 сарын 8" on a trip record means
+//   THIS March — if it already passed, the departure is stale, not next year's.
+type YearInferenceMode = "roll-forward" | "current-year";
+
+function explicitDateCandidates(
+  text: string,
+  now = new Date(),
+  yearMode: YearInferenceMode = "roll-forward",
+): DateParts[] {
   const candidates: DateParts[] = [];
+  const resolveYear = (month: number, day: number) =>
+    yearMode === "current-year"
+      ? getMongoliaDateParts(now).year
+      : inferYear(month, day, now);
   const push = (year: number, month: number, day: number) => {
     if (!isValidDateParts(year, month, day)) return;
     const ymd = toYmd({ year, month, day });
@@ -119,13 +133,17 @@ function explicitDateCandidates(text: string, now = new Date()): DateParts[] {
   )) {
     const month = Number(match[2]);
     const day = Number(match[3]);
-    push(match[1] ? Number(match[1]) : inferYear(month, day, now), month, day);
+    push(match[1] ? Number(match[1]) : resolveYear(month, day), month, day);
   }
 
-  for (const match of text.matchAll(/\b(\d{1,2})[./-](\d{1,2})\b/g)) {
+  // The lookbehind/lookahead stop this bare month/day pattern from re-matching
+  // the "12-01" inside a full ISO date like "2025-12-01" (already captured, with
+  // its real year, by the regex above). Without them the fragment was re-parsed
+  // as the CURRENT year, so an explicitly past-year date looked like a future one.
+  for (const match of text.matchAll(/(?<![\d./-])(\d{1,2})[./-](\d{1,2})(?![\d./-])/g)) {
     const month = Number(match[1]);
     const day = Number(match[2]);
-    push(inferYear(month, day, now), month, day);
+    push(resolveYear(month, day), month, day);
   }
 
   return candidates;
@@ -157,6 +175,32 @@ export function resolveRequestedDate(
 
 export function parseDepartureDateText(text: string, now = new Date()): string[] {
   return explicitDateCandidates(text, now).map(toYmd);
+}
+
+/**
+ * Parses a STORED trip departure-date string. Bare month/day means the
+ * CURRENT year — a June date read in July is a PAST departure, never next
+ * year's. (parseDepartureDateText rolls forward, which is right for user
+ * queries but made stale trips look like next-season departures.)
+ */
+export function parseTripDepartureDateText(text: string, now = new Date()): string[] {
+  return explicitDateCandidates(text, now, "current-year").map(toYmd);
+}
+
+/**
+ * Keeps only departure-date strings that are not verifiably in the past.
+ * Per string: no parseable date (recurring/flexible text like "Пүрэв гараг
+ * бүр", "аяллын групп бүрдсэн огноогоор") → keep; any parsed date today or
+ * later → keep; every parsed date in the past → drop. Keep-if-unsure by
+ * design: hiding a real future date is worse than showing a stale one.
+ */
+export function filterFutureDepartureDates(dates: string[], now = new Date()): string[] {
+  const todayYmd = toYmd(getMongoliaDateParts(now));
+  return (dates || []).filter((dateText) => {
+    const parsed = parseTripDepartureDateText(String(dateText || ""), now);
+    if (parsed.length === 0) return true;
+    return parsed.some((ymd) => ymd >= todayYmd);
+  });
 }
 
 function isDepartureAvailabilityQuestion(text: string): boolean {
@@ -204,7 +248,9 @@ function findDepartureMatches(
   for (const trip of trips) {
     if (trip.status !== "active") continue;
     for (const dateText of trip.departure_dates || []) {
-      const parsedDates = parseDepartureDateText(dateText, now);
+      // Trip-date semantics: a stored "3 сарын 8" is THIS March. With
+      // roll-forward parsing a stale spring trip matched next year's date.
+      const parsedDates = parseTripDepartureDateText(dateText, now);
       if (!parsedDates.includes(requestedYmd)) continue;
       matches.push({ trip, matchedDateText: dateText });
       break;
@@ -224,7 +270,7 @@ function findUpcomingDepartures(
   for (const trip of trips) {
     if (trip.status !== "active") continue;
     for (const dateText of trip.departure_dates || []) {
-      for (const ymd of parseDepartureDateText(dateText, now)) {
+      for (const ymd of parseTripDepartureDateText(dateText, now)) {
         if (ymd < afterYmd) continue;
         const key = `${ymd}:${trip.id}`;
         if (seen.has(key)) continue;

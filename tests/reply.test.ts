@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { rewriteRepeatedGenericClarifier, stripRepeatedGreeting } from "../src/lib/reply";
+import { extractButtons, isReferReply, rewriteRepeatedGenericClarifier, stripRepeatedGreeting } from "../src/lib/reply";
 
 test("rewrites repeated generic clarifier after recent trip details", () => {
   const rewritten = rewriteRepeatedGenericClarifier({
@@ -33,4 +33,21 @@ test("strips repeated greeting after the first assistant turn", () => {
   const stripped = stripRepeatedGreeting(reply, true);
 
   assert.equal(stripped, "✈️ Бээжин аялал\n💰 Том хүн: 1,890,000₮");
+});
+
+test("isReferReply catches REFER and legacy SILENT, ignores normal replies", () => {
+  assert.equal(isReferReply("REFER"), true);
+  assert.equal(isReferReply("refer\nBUTTONS:"), true);
+  assert.equal(isReferReply("SILENT"), true);
+  assert.equal(isReferReply("  SILENT  "), true);
+  assert.equal(isReferReply("✈️ Бээжин аялал — 5 хоног"), false);
+  assert.equal(isReferReply("Танд REFER гэдэг үг хэрэгтэй юу?"), false);
+});
+
+test("extractButtons keeps up to 10 buttons (disambiguation lists)", () => {
+  const labels = Array.from({ length: 12 }, (_, i) => `Аялал ${i + 1}`);
+  const { buttons } = extractButtons(`Сонгоно уу:\nBUTTONS: ${labels.join("|")}`);
+  assert.equal(buttons.length, 10);
+  assert.equal(buttons[0], "Аялал 1");
+  assert.equal(buttons[9], "Аялал 10");
 });

@@ -2,6 +2,26 @@ const WEBSITE_URL = "";
 const WEBSITE_REPLY =
   "Төлбөрийн заавар, дансны мэдээллийг чат дээр баталгаажуулахгүй. Тухайн оператороос албан ёсоор баталгаажуулж авна уу.";
 
+/**
+ * REFER protocol — the model's machine-readable "I don't have this data"
+ * signal. The old SILENT rule dropped the customer's message with no reply
+ * and no staff alert (a silently lost lead). Now the model outputs REFER and
+ * the CALLER converts it into a polite consultant fallback + staff alert +
+ * lead. "SILENT" is kept as a legacy alias so an older cached prompt or a
+ * stubborn model can't regress us to dropping messages.
+ *
+ * Lives here (env-free reply helpers) rather than in conversation.ts so tests
+ * and callers can use it without dragging in the DB/env import chain.
+ */
+export function isReferReply(text: string): boolean {
+  const firstLine = (text || "").trim().split("\n")[0]?.trim().toUpperCase() ?? "";
+  return firstLine === "REFER" || firstLine === "SILENT" || /^(REFER|SILENT)\b/.test(firstLine);
+}
+
+/** Customer-facing fallback sent instead of REFER. No hardcoded phone numbers here. */
+export const REFER_FALLBACK_REPLY =
+  "Энэ мэдээллийг манай аяллын зөвлөхөөс тодруулж хэлье 🙌 Утасны дугаараа үлдээвэл зөвлөх тан руу шууд холбогдоно.";
+
 const PAYMENT_LEAK_PATTERNS: RegExp[] = [
   /\/register/i,
   /регистер\s*хуудас/i,
@@ -116,7 +136,9 @@ export function extractButtons(text: string): { text: string; buttons: string[] 
     .split("|")
     .map((b) => b.trim())
     .filter((b) => b.length > 0 && b.length <= 60)
-    .slice(0, 3);
+    // The prompt promises up to 10 buttons (one per trip in disambiguation
+    // lists); slicing to 3 silently cut those taps. Messenger allows 13.
+    .slice(0, 10);
   return { text: cleanText, buttons };
 }
 

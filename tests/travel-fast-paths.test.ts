@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, resolveTripFromUserMessage } from "../src/lib/travelFastPaths";
+import { appendLeadCaptureCta, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, LEAD_CAPTURE_CTA, resolveTripFromUserMessage } from "../src/lib/travelFastPaths";
 import type { TravelTrip } from "../src/lib/travelOps";
 
 const NOW = new Date("2026-06-24T04:00:00.000Z");
@@ -42,6 +42,33 @@ test("shared city-only trip resolver returns ambiguous instead of guessing", () 
     resolution.candidates.map((candidate) => candidate.id),
     ["tokyo-fuji", "tokyo-universal"],
   );
+});
+
+test("appendLeadCaptureCta adds the phone ask to a normal fast-path answer", () => {
+  const out = appendLeadCaptureCta("✈️ Бээжин аялал\n💰 Том хүн: 1,890,000₮", false);
+  assert.match(out, /1,890,000₮/);
+  assert.ok(out.endsWith(LEAD_CAPTURE_CTA));
+});
+
+test("appendLeadCaptureCta skips when phone already collected", () => {
+  const reply = "✈️ Бээжин аялал\n💰 Том хүн: 1,890,000₮";
+  assert.equal(appendLeadCaptureCta(reply, true), reply);
+});
+
+test("appendLeadCaptureCta skips clarifying (ambiguous) replies", () => {
+  const ambiguous = buildStructuredTripReply("Tokyo une hed ve?", [
+    trip({ id: "tokyo-fuji", route_name: "Tokyo Fuji аялал", adult_price: 3490000 }),
+    trip({ id: "tokyo-universal", route_name: "Tokyo Universal аялал", adult_price: 1790000 }),
+  ]);
+  assert.ok(ambiguous);
+  const out = appendLeadCaptureCta(ambiguous as string, false);
+  assert.equal(out, ambiguous);
+  assert.doesNotMatch(out, new RegExp(LEAD_CAPTURE_CTA));
+});
+
+test("appendLeadCaptureCta does not double-ask when reply already requests a phone", () => {
+  const reply = "Захиалахын тулд утасны дугаараа үлдээгээрэй.";
+  assert.equal(appendLeadCaptureCta(reply, false), reply);
 });
 
 test("structured reply asks for clarification on shared city-only query", () => {
@@ -374,7 +401,10 @@ test("route-only query uses spaced premium formatting", () => {
   assert.match(reply || "", /• Том хүн:/);
   assert.match(reply || "", /• Хүүхэд/);
   assert.match(reply || "", /\n\n📅 Гарах өдрүүд:\n/);
-  assert.match(reply || "", /6\/20, 6\/27, 7\/9/);
+  // 6/20 is before NOW (2026-06-24) so it is filtered out as a past departure;
+  // the schedule line starts at the first future date, 6/27.
+  assert.match(reply || "", /6\/27, 7\/9/);
+  assert.doesNotMatch(reply || "", /6\/20/);
   assert.match(reply || "", /Та аль гарах өдрийг сонирхож байна вэ/);
   assert.doesNotMatch(reply || "", /\|/);
 });
