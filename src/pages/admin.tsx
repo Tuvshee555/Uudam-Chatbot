@@ -1748,6 +1748,39 @@ export default function AdminPage() {
               onCreate={beginCreateTrip}
               onEdit={beginEditTrip}
               onDelete={(trip) => setDeletingTrip(trip)}
+              onToggleVisible={async (trip) => {
+                const currentlyHidden =
+                  (trip.extra as Record<string, unknown> | undefined)?.customer_visible === false;
+                try {
+                  // Send the trip's FULL existing extra with just customer_visible
+                  // flipped — normalizeExtra rebuilds every known field from
+                  // whatever "extra" it's given, so a bare
+                  // { customer_visible: true } would reset aliases, price_groups,
+                  // discounts, etc. back to empty and silently wipe real data.
+                  const res = await fetchWithAdmin(`/api/admin/trips`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      id: trip.id,
+                      fields: {
+                        extra: { ...(trip.extra || {}), customer_visible: currentlyHidden },
+                      },
+                    }),
+                  });
+                  const json = await res.json();
+                  if (!res.ok) throw new Error(json?.error || "failed");
+                  toast.success(
+                    currentlyHidden
+                      ? "Аялал дахин харагдана. Бот энэ талаар хариулна."
+                      : "Аялал нуугдлаа. Бот энэ аялалын талаар асуухад мэдэхгүй мэт хариулна.",
+                  );
+                  void loadTrips(searchRef.current, statusFilterRef.current, {
+                    showLoading: false,
+                  });
+                } catch {
+                  toast.error("Өөрчлөхөд алдаа гарлаа.");
+                }
+              }}
               onDeleteAll={async () => {
                 try {
                   const res = await fetchWithAdmin(`/api/admin/trips?all=true`, {

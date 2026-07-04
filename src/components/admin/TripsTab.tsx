@@ -88,6 +88,7 @@ export function TripsTab({
   onEdit,
   onDelete,
   onDeleteAll,
+  onToggleVisible,
 }: {
   trips: TravelTrip[];
   search: string;
@@ -100,6 +101,7 @@ export function TripsTab({
   onEdit: (trip: TravelTrip) => void;
   onDelete: (trip: TravelTrip) => void;
   onDeleteAll: () => void;
+  onToggleVisible: (trip: TravelTrip) => void;
 }) {
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [photoFilter, setPhotoFilter] = useState<"all" | "with" | "without">("all");
@@ -339,7 +341,12 @@ export function TripsTab({
           />
         </Card>
       ) : (
-        <TripGroups trips={visibleTrips} onEdit={onEdit} onDelete={onDelete} />
+        <TripGroups
+          trips={visibleTrips}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onToggleVisible={onToggleVisible}
+        />
       )}
     </div>
   );
@@ -359,10 +366,12 @@ function TripGroups({
   trips,
   onEdit,
   onDelete,
+  onToggleVisible,
 }: {
   trips: TravelTrip[];
   onEdit: (trip: TravelTrip) => void;
   onDelete: (trip: TravelTrip) => void;
+  onToggleVisible: (trip: TravelTrip) => void;
 }) {
   const groups = useMemo(() => {
     const map = new Map<string, TravelTrip[]>();
@@ -416,6 +425,7 @@ function TripGroups({
                     trip={trip}
                     onEdit={() => onEdit(trip)}
                     onDelete={() => onDelete(trip)}
+                    onToggleVisible={() => onToggleVisible(trip)}
                   />
                 ))}
               </div>
@@ -431,11 +441,14 @@ function TripCard({
   trip,
   onEdit,
   onDelete,
+  onToggleVisible,
 }: {
   trip: TravelTrip;
   onEdit: () => void;
   onDelete: () => void;
+  onToggleVisible: () => void;
 }) {
+  const isHidden = (trip.extra as Record<string, unknown>)?.customer_visible === false;
   const facts: string[] = [];
   if (trip.seats_left != null || trip.seats_total != null) {
     facts.push(`Суудал: ${trip.seats_left ?? "?"}/${trip.seats_total ?? "?"}`);
@@ -469,9 +482,7 @@ function TripCard({
           {(trip.extra as Record<string, unknown>)?.needs_human_review === true && (
             <Badge tone="warning">Шалгах</Badge>
           )}
-          {(trip.extra as Record<string, unknown>)?.customer_visible === false && (
-            <Badge tone="neutral">Нуусан</Badge>
-          )}
+          {isHidden && <Badge tone="neutral">Нуусан</Badge>}
           <Badge tone={STATUS_TONE[trip.status]}>
             {STATUS_LABELS[trip.status]}
           </Badge>
@@ -496,6 +507,19 @@ function TripCard({
           Шинэчилсэн: {formatTime(trip.updated_at)}
         </span>
         <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            className={isHidden ? "text-success" : "text-ink-muted"}
+            onClick={onToggleVisible}
+            title={
+              isHidden
+                ? "Бот дахин энэ аяллын талаар хариулж эхэлнэ"
+                : "Бот энэ аяллыг огт мэдэхгүй мэт хариулна (харилцагчид харагдахгүй)"
+            }
+          >
+            {isHidden ? "Харуулах" : "Нуух"}
+          </Button>
           <Button size="sm" variant="secondary" onClick={onEdit}>
             <Icons.edit size={15} />
             Засах
