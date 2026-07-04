@@ -23,7 +23,7 @@ import PosterTab from "@/components/admin/poster/PosterTab";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
 import type { AIAction, AIProposal, AIProposalResponse, AttachedFile, BookingTerms, ChatButton, ChatMessage, ClarificationAnswer, ClarificationQuestion, AdminMsg, ChildRule, ConflictItem, ConflictSeverity, ControlState, DiscountGroup, DriveSyncDiagnostics, DriveSyncRecentFile, ExtraFee, FlowRule, LeadCrmStatus, LeadStats, NoteMsg, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalMsg, ReadinessReport, RecentRow, RoomPrice, SettingsForm, StructuredRow, TabKey, TravelBotSettings, TravelLead, TravelTrip, TripStatus } from "@/lib/adminTypes";
 import { emptyBookingTerms, toBookingTermsForm } from "@/lib/adminTypes";
-import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, DURATIONS, FIELD_LABELS, HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS, STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, describeAction, driveSyncTone, fileToDataUrl, formatBytes, formatMoneyValue, formatTime, getSecretStorage, getTestBotConversationId, handoffDurationSelectValue, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, settingsToForm, shortId, splitLines, summarizeConflict, timeLeft, toStructuredRows, uid } from "@/lib/adminPageUtils";
+import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, DURATIONS, FIELD_LABELS, HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS, STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, describeAction, driveSyncTone, emptyChunkResult, fileToDataUrl, formatBytes, formatMoneyValue, formatTime, getSecretStorage, getTestBotConversationId, handoffDurationSelectValue, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, mergeAIProposals, settingsToForm, shortId, splitLines, summarizeConflict, timeLeft, toStructuredRows, uid } from "@/lib/adminPageUtils";
 const BLANK_TRIP_DRAFT: Record<string, string> = { category: "", operator_name: "", route_name: "", duration_text: "", adult_price: "", child_price: "", currency: "MNT", seats_total: "", seats_left: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
 const MAX_AI_SOURCE_TEXT_CHARS = 20_000;
 export default function AdminPage() {
@@ -430,69 +430,6 @@ export default function AdminPage() {
       toast.error("Нэг буюу хэд хэдэн файлыг уншиж чадсангүй.");
     }
   }
-  function mergeAIProposals(
-    proposals: AIProposal[],
-    fileNames: string[],
-  ): AIProposal {
-    const actionKeys = new Set<string>();
-    const actions: AIAction[] = [];
-    const conflicts = new Set<string>();
-    const conflictItems = new Map<string, ConflictItem>();
-    const importantReasons = new Set<string>();
-    const summaries = new Set<string>();
-    const photoSources = new Map<string, Set<string>>();
-    for (const proposal of proposals) {
-      for (const action of proposal.actions || []) {
-        const key = JSON.stringify(action);
-        if (actionKeys.has(key)) continue;
-        actionKeys.add(key);
-        actions.push(action);
-      }
-      for (const conflict of proposal.conflicts || []) {
-        if (conflict.trim()) conflicts.add(conflict.trim());
-      }
-      for (const item of proposal.conflict_items || []) {
-        if (item.text?.trim()) conflictItems.set(item.text.trim(), item);
-      }
-      if (proposal.important_reason?.trim()) {
-        importantReasons.add(proposal.important_reason.trim());
-      }
-      if (proposal.summary?.trim()) {
-        summaries.add(proposal.summary.trim());
-      }
-      for (const source of proposal.photo_sources || []) {
-        if (!source.label?.trim()) continue;
-        const urls = photoSources.get(source.label) || new Set<string>();
-        for (const url of source.urls || []) {
-          if (typeof url === "string" && url.trim().startsWith("https://")) {
-            urls.add(url.trim());
-          }
-        }
-        if (urls.size > 0) photoSources.set(source.label, urls);
-      }
-    }
-    return {
-      summary:
-        actions.length > 0
-          ? `${fileNames.length} файл уншиж ${actions.length} өөрчлөлтийн санал оллоо.`
-          : Array.from(summaries)[0] || "Файлуудаас хэрэгжүүлэх өөрчлөлт олдсонгүй.",
-      needs_confirmation:
-        proposals.some((proposal) => proposal.needs_confirmation) ||
-        conflicts.size > 0,
-      important_reason: Array.from(importantReasons).join(" "),
-      conflicts: Array.from(conflicts),
-      conflict_items: Array.from(conflictItems.values()),
-      actions,
-      ...(photoSources.size > 0
-        ? {
-            photo_sources: Array.from(photoSources, ([label, urls]) => ({
-              label,
-              urls: Array.from(urls),
-            })),
-          }
-        : {}),
-    };
-  }
   async function parseUploadUnitWithRetry(
     unit: ParseUploadUnit,
     note: string,
@@ -586,22 +523,6 @@ export default function AdminPage() {
       await delayMs(Math.min(stepMs, remaining));
       remaining -= stepMs;
     }
-  }
-  function emptyChunkResult(displayName: string): {
-    proposal: AIProposal;
-    requestId: number | null;
-  } {
-    return {
-      proposal: {
-        summary: `"${displayName}" хэсгийг бүрэн уншиж чадсангүй.`,
-        needs_confirmation: true,
-        important_reason:
-          "Энэ хэсгийн мэдээлэл хадгалагдаагүй. Бусад уншигдсан файлын үр дүнг үргэлжлүүлэн бэлдлээ.",
-        conflicts: [`"${displayName}" хэсгийг дахин шалгах шаардлагатай.`],
-        actions: [],
-      },
-      requestId: null,
-    };
   }
   async function parseDriveFileWithRetry(
     fileId: string,

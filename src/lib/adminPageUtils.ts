@@ -1719,3 +1719,90 @@ export {
   settingsToForm, shortId, splitLines, summarizeConflict, timeLeft, toStructuredRows,
   uid,
 };
+
+/**
+ * Merges the AI proposals from several parsed files/chunks into one proposal,
+ * de-duplicating actions/conflicts and unioning photo sources. Pure (moved out
+ * of admin.tsx to keep that file under the 2,000-line cap).
+ */
+export function mergeAIProposals(
+  proposals: AIProposal[],
+  fileNames: string[],
+): AIProposal {
+  const actionKeys = new Set<string>();
+  const actions: AIAction[] = [];
+  const conflicts = new Set<string>();
+  const conflictItems = new Map<string, ConflictItem>();
+  const importantReasons = new Set<string>();
+  const summaries = new Set<string>();
+  const photoSources = new Map<string, Set<string>>();
+  for (const proposal of proposals) {
+    for (const action of proposal.actions || []) {
+      const key = JSON.stringify(action);
+      if (actionKeys.has(key)) continue;
+      actionKeys.add(key);
+      actions.push(action);
+    }
+    for (const conflict of proposal.conflicts || []) {
+      if (conflict.trim()) conflicts.add(conflict.trim());
+    }
+    for (const item of proposal.conflict_items || []) {
+      if (item.text?.trim()) conflictItems.set(item.text.trim(), item);
+    }
+    if (proposal.important_reason?.trim()) {
+      importantReasons.add(proposal.important_reason.trim());
+    }
+    if (proposal.summary?.trim()) {
+      summaries.add(proposal.summary.trim());
+    }
+    for (const source of proposal.photo_sources || []) {
+      if (!source.label?.trim()) continue;
+      const urls = photoSources.get(source.label) || new Set<string>();
+      for (const url of source.urls || []) {
+        if (typeof url === "string" && url.trim().startsWith("https://")) {
+          urls.add(url.trim());
+        }
+      }
+      if (urls.size > 0) photoSources.set(source.label, urls);
+    }
+  }
+  return {
+    summary:
+      actions.length > 0
+        ? `${fileNames.length} файл уншиж ${actions.length} өөрчлөлтийн санал оллоо.`
+        : Array.from(summaries)[0] || "Файлуудаас хэрэгжүүлэх өөрчлөлт олдсонгүй.",
+    needs_confirmation:
+      proposals.some((proposal) => proposal.needs_confirmation) ||
+      conflicts.size > 0,
+    important_reason: Array.from(importantReasons).join(" "),
+    conflicts: Array.from(conflicts),
+    conflict_items: Array.from(conflictItems.values()),
+    actions,
+    ...(photoSources.size > 0
+      ? {
+          photo_sources: Array.from(photoSources, ([label, urls]) => ({
+            label,
+            urls: Array.from(urls),
+          })),
+        }
+      : {}),
+  };
+}
+
+/** A placeholder proposal for a file/chunk the parser could not read. Pure. */
+export function emptyChunkResult(displayName: string): {
+  proposal: AIProposal;
+  requestId: number | null;
+} {
+  return {
+    proposal: {
+      summary: `"${displayName}" хэсгийг бүрэн уншиж чадсангүй.`,
+      needs_confirmation: true,
+      important_reason:
+        "Энэ хэсгийн мэдээлэл хадгалагдаагүй. Бусад уншигдсан файлын үр дүнг үргэлжлүүлэн бэлдлээ.",
+      conflicts: [`"${displayName}" хэсгийг дахин шалгах шаардлагатай.`],
+      actions: [],
+    },
+    requestId: null,
+  };
+}
