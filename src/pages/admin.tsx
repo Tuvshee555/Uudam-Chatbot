@@ -21,7 +21,8 @@ import { JsonEditorTab } from "@/components/admin/JsonEditorTab";
 import { TripPhotoImportTab } from "@/components/admin/TripPhotoImportTab";
 import PosterTab from "@/components/admin/poster/PosterTab";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
-import type { AIAction, AIProposal, AIProposalResponse, AttachedFile, ChatButton, ChatMessage, ClarificationAnswer, ClarificationQuestion, AdminMsg, ChildRule, ConflictItem, ConflictSeverity, ControlState, DiscountGroup, DriveSyncDiagnostics, DriveSyncRecentFile, ExtraFee, FlowRule, LeadCrmStatus, LeadStats, NoteMsg, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalMsg, ReadinessReport, RecentRow, RoomPrice, SettingsForm, StructuredRow, TabKey, TravelBotSettings, TravelLead, TravelTrip, TripStatus } from "@/lib/adminTypes";
+import type { AIAction, AIProposal, AIProposalResponse, AttachedFile, BookingTerms, ChatButton, ChatMessage, ClarificationAnswer, ClarificationQuestion, AdminMsg, ChildRule, ConflictItem, ConflictSeverity, ControlState, DiscountGroup, DriveSyncDiagnostics, DriveSyncRecentFile, ExtraFee, FlowRule, LeadCrmStatus, LeadStats, NoteMsg, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalMsg, ReadinessReport, RecentRow, RoomPrice, SettingsForm, StructuredRow, TabKey, TravelBotSettings, TravelLead, TravelTrip, TripStatus } from "@/lib/adminTypes";
+import { emptyBookingTerms, toBookingTermsForm } from "@/lib/adminTypes";
 import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, DURATIONS, FIELD_LABELS, HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS, STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, describeAction, driveSyncTone, fileToDataUrl, formatBytes, formatMoneyValue, formatTime, getSecretStorage, getTestBotConversationId, handoffDurationSelectValue, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, settingsToForm, shortId, splitLines, summarizeConflict, timeLeft, toStructuredRows, uid } from "@/lib/adminPageUtils";
 const BLANK_TRIP_DRAFT: Record<string, string> = { category: "", operator_name: "", route_name: "", duration_text: "", adult_price: "", child_price: "", currency: "MNT", seats_total: "", seats_left: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
 const MAX_AI_SOURCE_TEXT_CHARS = 20_000;
@@ -89,6 +90,7 @@ export default function AdminPage() {
   const [tripExcludedItems, setTripExcludedItems] = useState<string[]>([]);
   const [tripRoomPrices, setTripRoomPrices] = useState<RoomPrice[]>([]);
   const [tripImportantNotes, setTripImportantNotes] = useState<string[]>([]);
+  const [tripBookingTerms, setTripBookingTerms] = useState<BookingTerms>(emptyBookingTerms());
   const [tripCustomerVisible, setTripCustomerVisible] = useState<boolean>(true);
   const [tripNeedsHumanReview, setTripNeedsHumanReview] = useState<boolean>(false);
   const [tripReviewReasons, setTripReviewReasons] = useState<string[]>([]);
@@ -1232,6 +1234,7 @@ export default function AdminPage() {
     setTripExcludedItems([]);
     setTripRoomPrices([]);
     setTripImportantNotes([]);
+    setTripBookingTerms(emptyBookingTerms());
     setTripCustomerVisible(true);
     setTripNeedsHumanReview(false);
     setTripReviewReasons([]);
@@ -1271,6 +1274,7 @@ export default function AdminPage() {
     setTripExcludedItems(Array.isArray(trip.extra?.excluded_items) ? (trip.extra.excluded_items as string[]) : []);
     setTripRoomPrices(Array.isArray(trip.extra?.room_prices) ? (trip.extra.room_prices as RoomPrice[]) : []);
     setTripImportantNotes(Array.isArray(trip.extra?.important_notes) ? (trip.extra.important_notes as string[]) : []);
+    setTripBookingTerms(toBookingTermsForm(trip.extra?.booking_terms));
     setTripCustomerVisible(typeof trip.extra?.customer_visible === "boolean" ? trip.extra.customer_visible : true);
     setTripNeedsHumanReview(typeof trip.extra?.needs_human_review === "boolean" ? trip.extra.needs_human_review : false);
     setTripReviewReasons(Array.isArray(trip.extra?.review_reasons) ? (trip.extra.review_reasons as string[]) : []);
@@ -1412,6 +1416,7 @@ export default function AdminPage() {
         excluded_items: tripExcludedItems.filter(Boolean),
         room_prices: tripRoomPrices,
         important_notes: tripImportantNotes.filter(Boolean),
+        booking_terms: tripBookingTerms,
         customer_visible: tripCustomerVisible,
         needs_human_review: tripNeedsHumanReview,
         review_reasons: tripReviewReasons.filter(Boolean),
@@ -1984,6 +1989,8 @@ export default function AdminPage() {
         setTripRoomPrices={setTripRoomPrices}
         tripImportantNotes={tripImportantNotes}
         setTripImportantNotes={setTripImportantNotes}
+        tripBookingTerms={tripBookingTerms}
+        setTripBookingTerms={setTripBookingTerms}
         tripCustomerVisible={tripCustomerVisible}
         setTripCustomerVisible={setTripCustomerVisible}
         tripNeedsHumanReview={tripNeedsHumanReview}

@@ -34,6 +34,7 @@ const KNOWN_EXTRA_KEYS = new Set([
   "answer_hints",
   "needs_human_review",
   "review_reasons",
+  "booking_terms",
 ]);
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -195,6 +196,23 @@ function normalizeSourceProvenance(raw: unknown): Record<string, unknown>[] {
     }));
 }
 
+/**
+ * Booking terms a hot buyer asks before committing: deposit, payment method/
+ * timing, required documents, visa requirement, cancellation/refund policy.
+ * Freeform Mongolian strings (kept simple for the admin editor and the bot).
+ * Absent/empty fields mean "unknown" — the bot REFERs rather than inventing.
+ */
+function normalizeBookingTerms(raw: unknown): Record<string, string> {
+  const src = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  return {
+    deposit: asString(src.deposit).trim(),
+    payment: asString(src.payment).trim(),
+    documents: asString(src.documents).trim(),
+    visa: asString(src.visa).trim(),
+    cancellation: asString(src.cancellation).trim(),
+  };
+}
+
 function normalizeAnswerHints(raw: unknown): Record<string, unknown>[] {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -292,6 +310,7 @@ export function normalizeExtra(
     needs_human_review:
       typeof raw.needs_human_review === "boolean" ? raw.needs_human_review : false,
     review_reasons: asStringArray(raw.review_reasons),
+    booking_terms: normalizeBookingTerms(raw.booking_terms),
   };
 
   return { extra, warnings };

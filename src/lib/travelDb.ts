@@ -2277,6 +2277,17 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     }
     const impNotes = Array.isArray(extra.important_notes) ? (extra.important_notes as string[]).filter(Boolean) : [];
     if (impNotes.length > 0) details.push(`Чухал тэмдэглэл: ${impNotes.join(" | ")}`);
+    // Booking terms — lets the bot answer deposit/payment/documents/visa/
+    // cancellation questions from stored data instead of REFER. Empty fields
+    // are omitted, so a field the trip lacks stays "unknown" → REFER.
+    const bookingTerms = (extra.booking_terms || {}) as Record<string, unknown>;
+    const btParts: string[] = [];
+    if (typeof bookingTerms.deposit === "string" && bookingTerms.deposit.trim()) btParts.push(`Урьдчилгаа: ${bookingTerms.deposit.trim()}`);
+    if (typeof bookingTerms.payment === "string" && bookingTerms.payment.trim()) btParts.push(`Төлбөрийн нөхцөл: ${bookingTerms.payment.trim()}`);
+    if (typeof bookingTerms.documents === "string" && bookingTerms.documents.trim()) btParts.push(`Бүрдүүлэх бичиг баримт: ${bookingTerms.documents.trim()}`);
+    if (typeof bookingTerms.visa === "string" && bookingTerms.visa.trim()) btParts.push(`Виз: ${bookingTerms.visa.trim()}`);
+    if (typeof bookingTerms.cancellation === "string" && bookingTerms.cancellation.trim()) btParts.push(`Цуцлалт/буцаалт: ${bookingTerms.cancellation.trim()}`);
+    if (btParts.length > 0) details.push(`Захиалгын нөхцөл: ${btParts.join(" | ")}`);
     // Emit answer_hints so the bot gets explicit expected answers per intent
     const answerHints = Array.isArray(extra.answer_hints) ? extra.answer_hints as Array<Record<string, unknown>> : [];
     if (answerHints.length > 0) {

@@ -1,7 +1,7 @@
 import React from "react";
 import { Button, Icons, Input, Modal, Select, Spinner, Textarea, cx } from "@/components/ui";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
-import type { AnswerHint, ChildRule, DiscountGroup, ExtraFee, PassengerPrice, PriceGroup, RoomPrice, SourceProvenance, TravelTrip } from "@/lib/adminTypes";
+import type { AnswerHint, BookingTerms, ChildRule, DiscountGroup, ExtraFee, PassengerPrice, PriceGroup, RoomPrice, SourceProvenance, TravelTrip } from "@/lib/adminTypes";
 
 export type TripDraftState = Record<string, string>;
 
@@ -45,6 +45,8 @@ export type TripEditModalProps = {
   setTripRoomPrices: React.Dispatch<React.SetStateAction<RoomPrice[]>>;
   tripImportantNotes: string[];
   setTripImportantNotes: React.Dispatch<React.SetStateAction<string[]>>;
+  tripBookingTerms: BookingTerms;
+  setTripBookingTerms: React.Dispatch<React.SetStateAction<BookingTerms>>;
   // Metadata fields
   tripCustomerVisible: boolean;
   setTripCustomerVisible: React.Dispatch<React.SetStateAction<boolean>>;
@@ -148,6 +150,8 @@ export function TripEditModal({
   setTripRoomPrices,
   tripImportantNotes,
   setTripImportantNotes,
+  tripBookingTerms,
+  setTripBookingTerms,
   tripCustomerVisible,
   setTripCustomerVisible,
   tripNeedsHumanReview,
@@ -792,6 +796,33 @@ export function TripEditModal({
       <button type="button" className="mt-1 mb-2 text-xs text-brand hover:underline" onClick={() => setTripImportantNotes((prev) => [...prev, ""])}>
         + Тэмдэглэл нэмэх
       </button>
+
+      {/* J2. Booking terms — what a buyer asks before committing. Empty fields
+          stay unknown so the bot refers to a consultant instead of inventing. */}
+      <p className={sectionHdr}>Захиалгын нөхцөл</p>
+      <p className="mt-0.5 text-xs text-ink-subtle">Хоосон талбарыг бот &laquo;тодорхойгүй&raquo; гэж үзэж, зөвлөхөд шилжүүлнэ. Зохиож бичихгүй.</p>
+      <div className="mt-2 space-y-2">
+        <div>
+          <label className="mb-0.5 block text-xs text-ink-muted">Урьдчилгаа</label>
+          <input className={inputCls} value={tripBookingTerms.deposit} placeholder="ж: Урьдчилгаа 500,000₮, үлдэгдлийг гарахаас 7 хоногийн өмнө" onChange={(e) => setTripBookingTerms((p) => ({ ...p, deposit: e.target.value }))} />
+        </div>
+        <div>
+          <label className="mb-0.5 block text-xs text-ink-muted">Төлбөрийн нөхцөл</label>
+          <input className={inputCls} value={tripBookingTerms.payment} placeholder="ж: Дансаар эсвэл QPay-ээр, 2 хэсэгт хуваан төлж болно" onChange={(e) => setTripBookingTerms((p) => ({ ...p, payment: e.target.value }))} />
+        </div>
+        <div>
+          <label className="mb-0.5 block text-xs text-ink-muted">Бүрдүүлэх бичиг баримт</label>
+          <input className={inputCls} value={tripBookingTerms.documents} placeholder="ж: Гадаад паспорт (6 сараас дээш хүчинтэй), 2 хувь цээж зураг" onChange={(e) => setTripBookingTerms((p) => ({ ...p, documents: e.target.value }))} />
+        </div>
+        <div>
+          <label className="mb-0.5 block text-xs text-ink-muted">Виз</label>
+          <input className={inputCls} value={tripBookingTerms.visa} placeholder="ж: Хятадын виз шаардлагатай, бид мэдүүлэгт туслана" onChange={(e) => setTripBookingTerms((p) => ({ ...p, visa: e.target.value }))} />
+        </div>
+        <div>
+          <label className="mb-0.5 block text-xs text-ink-muted">Цуцлалт / буцаан олголт</label>
+          <input className={inputCls} value={tripBookingTerms.cancellation} placeholder="ж: Гарахаас 14 хоногийн өмнө цуцлавал урьдчилгаа буцаана" onChange={(e) => setTripBookingTerms((p) => ({ ...p, cancellation: e.target.value }))} />
+        </div>
+      </div>
 
       {/* K. Metadata toggles */}
       <p className={sectionHdr}>Тохиргоо / мета</p>

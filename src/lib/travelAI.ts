@@ -722,6 +722,7 @@ function buildBatchSourceParts(input: {
     "YEAR RULE: If the source only lists month and day (e.g. '6 сарын 4', '07/16') WITHOUT a year, do NOT invent a year. Do not write 2023, 2024, or any year that is not stated. Store month-day only in extra.departure_date_groups with year: null. If there is no year anywhere in the source, set needs_confirmation=true with one single question 'Эдгээр аяллын жилийг тодруулна уу (2025 эсвэл 2026?)' — never silently assume a year.",
     "SEATS RULE: If the source does NOT state a seat count, set seats_total=null and seats_left=null. NEVER output seats_total=0 unless the source explicitly says '0 суудал' or 'sold out'. A 0 value means the tour is full, which is dangerous if invented.",
     "FLEXIBLE DEPARTURE RULE: If a tour says 'хүссэн өдрөө сонгоно', '15+ хүнтэй групп өдрөө сонгоно', 'group may choose date', or similar — the departure date is NOT fixed. In this case: leave departure_dates empty/null, store the rule text in notes and in extra.recurring_schedule. NEVER invent example dates like '2025-07-15' for a flexible tour.",
+    "BOOKING TERMS RULE: if the source states any of deposit/prepayment (урьдчилгаа), payment method or timing (төлбөр), required documents (бүрдүүлэх бичиг баримт, паспорт, гэрэл зураг), visa (виз), or cancellation/refund policy (цуцлалт, буцаан олголт), put them in fields.extra.booking_terms as { deposit, payment, documents, visa, cancellation } — short Mongolian strings copied from the source. Leave any field that is NOT stated as an empty string; NEVER invent a deposit amount, document list, visa rule, or cancellation policy.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -1448,6 +1449,7 @@ export async function generateAIProposalFromContent(input: {
     "Before flagging any price conflict, first check: do the different prices correspond to different dates, months, passenger types, room types, or packages? If ANY of those differ → store all in notes, no conflict.",
     "SEATS RULE: If the source does NOT state a seat count, set seats_total=null and seats_left=null. NEVER output seats_total=0 unless the source explicitly says '0 суудал' or 'sold out'. A 0 value means the tour is full, which is dangerous if invented.",
     "FLEXIBLE DEPARTURE RULE: If a tour says 'хүссэн өдрөө сонгоно', '15+ хүнтэй групп өдрөө сонгоно', 'group may choose date', or similar — the departure date is NOT fixed. In this case: leave departure_dates empty/null, store the rule text in notes and in extra.recurring_schedule. NEVER invent example dates like '2025-07-15' for a flexible tour.",
+    "BOOKING TERMS RULE: if the source states any of deposit/prepayment (урьдчилгаа), payment method or timing (төлбөр), required documents (бүрдүүлэх бичиг баримт, паспорт, гэрэл зураг), visa (виз), or cancellation/refund policy (цуцлалт, буцаан олголт), put them in fields.extra.booking_terms as { deposit, payment, documents, visa, cancellation } — short Mongolian strings copied from the source. Leave any field that is NOT stated as an empty string; NEVER invent a deposit amount, document list, visa rule, or cancellation policy.",
   ]
     .filter(Boolean)
     .join("\n");

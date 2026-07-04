@@ -74,6 +74,32 @@ export type RoomPrice = {
   note: string;
 };
 
+/** Booking terms a customer asks before committing. Freeform Mongolian strings. */
+export type BookingTerms = {
+  deposit: string;
+  payment: string;
+  documents: string;
+  visa: string;
+  cancellation: string;
+};
+
+export function emptyBookingTerms(): BookingTerms {
+  return { deposit: "", payment: "", documents: "", visa: "", cancellation: "" };
+}
+
+/** Coerces any stored/AI value into a complete BookingTerms for the form. */
+export function toBookingTermsForm(raw: unknown): BookingTerms {
+  const src = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  return {
+    deposit: str(src.deposit),
+    payment: str(src.payment),
+    documents: str(src.documents),
+    visa: str(src.visa),
+    cancellation: str(src.cancellation),
+  };
+}
+
 export type TravelTrip = {
   id: string;
   category: string;
