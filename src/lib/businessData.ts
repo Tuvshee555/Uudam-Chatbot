@@ -70,19 +70,27 @@ export function formatPrice(price: ProgramPrice) {
 function formatKnowledgeBase(data: KnowledgeData) {
   const lines: string[] = [];
 
-  lines.push("Packages:");
+  // Packages are a category → route-name index, not priced products. Render
+  // only the meaningful fields so no English/sentinel filler (price/duration/
+  // target scaffolding) reaches the model and, from there, a customer.
+  lines.push("Trip categories:");
   for (const program of data.packages) {
-    lines.push(
-      `- ${program.name} | duration: ${program.duration} | price: ${formatPrice(program.price)} | target: ${program.target} | description: ${program.description}`,
-    );
+    lines.push(`- ${program.name}: ${program.description}`);
   }
 
   lines.push("");
   lines.push("Modules:");
   for (const program of data.modules) {
-    lines.push(
-      `- ${program.name} | duration: ${program.duration} | price: ${formatPrice(program.price)} | target: ${program.target} | description: ${program.description}`,
-    );
+    const parts = [`- ${program.name}`];
+    if (program.duration) parts.push(`duration: ${program.duration}`);
+    // formatPrice renders an unknown price as clean Mongolian ("Үнэ
+    // тодорхойгүй"), never the NEEDS_MANUAL_FIX sentinel. Always shown so the
+    // model has an explicit "price unknown → REFER" signal instead of a gap it
+    // might fill with a guess.
+    parts.push(`price: ${formatPrice(program.price)}`);
+    if (program.target) parts.push(`target: ${program.target}`);
+    if (program.description) parts.push(`description: ${program.description}`);
+    lines.push(parts.join(" | "));
   }
 
   lines.push("");

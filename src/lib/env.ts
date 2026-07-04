@@ -60,6 +60,10 @@ export type ValidatedEnv = {
   cloudinaryCloudName: string | null;
   cloudinaryApiKey: string | null;
   cloudinaryApiSecret: string | null;
+  // Mass broadcast to past leads. OFF by default: sending RESPONSE-type
+  // messages to recipients outside Meta's 24h window violates policy and can
+  // get the page suspended. Only enable when the audience/compliance is understood.
+  broadcastEnabled: boolean;
   qpayEnabled: boolean;
   qpayBaseUrl: string | null;
   qpayUsername: string | null;
@@ -609,6 +613,8 @@ export function getEnv(): ValidatedEnv {
   const cloudinaryApiKey = readOptionalString("CLOUDINARY_API_KEY", source);
   const cloudinaryApiSecret = readOptionalString("CLOUDINARY_API_SECRET", source);
 
+  const broadcastEnabled = readBoolean("BROADCAST_ENABLED", source, false, errors);
+
   // QPay (optional, OFF by default). The feature only activates when
   // QPAY_ENABLED=true AND all credentials are present (see qpay.ts isQPayConfigured).
   const qpayEnabled = readBoolean("QPAY_ENABLED", source, false, errors);
@@ -706,6 +712,7 @@ export function getEnv(): ValidatedEnv {
     cloudinaryCloudName,
     cloudinaryApiKey,
     cloudinaryApiSecret,
+    broadcastEnabled,
     qpayEnabled,
     qpayBaseUrl,
     qpayUsername,

@@ -590,7 +590,6 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
 
     // Bonus when user wants a brochure and this trip actually has one.
     if (hasBrochure && getTripBrochureAsset(trip)) score += 100;
-    if (hasBrochure && getTripBrochureAsset(trip)) score += 20;
 
     if (score > bestScore) {
       secondScore = bestScore;

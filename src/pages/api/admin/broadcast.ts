@@ -38,6 +38,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === "POST") {
+      // Quarantined by default: blasting RESPONSE-type messages to past leads
+      // outside Meta's 24h window is a policy violation that can suspend the
+      // page. Requires an explicit BROADCAST_ENABLED=true opt-in.
+      if (!env.broadcastEnabled) {
+        return res.status(403).json({
+          error: "broadcast_disabled",
+          message:
+            "Масс мессеж илгээх боломж хаалттай байна. Facebook-ийн 24 цагийн дүрмийг зөрчиж хуудас түдгэлзэх эрсдэлтэй тул үүнийг зөвхөн BROADCAST_ENABLED=true тохируулснаар идэвхжүүлнэ.",
+        });
+      }
       const { message, platform = "facebook" } = req.body || {};
 
       if (typeof message !== "string" || !message.trim()) {

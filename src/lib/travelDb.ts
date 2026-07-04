@@ -2111,11 +2111,15 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     categories.get(key)?.push(trip.route_name);
   }
 
+  // Category → route-name index. Kept clean of English/sentinel filler
+  // ("Varies by departure date", "Travel category", NEEDS_MANUAL_FIX) that the
+  // model could echo to a customer; only the category name and its routes carry
+  // meaning here, so the rest is left blank and the formatter omits it.
   const packages = Array.from(categories.entries()).map(([category, routes]) => ({
     name: category,
-    duration: "Varies by departure date",
+    duration: "",
     price: "NEEDS_MANUAL_FIX" as ProgramPrice,
-    target: "Travel category",
+    target: "",
     description: routes.join("; "),
   }));
 
@@ -2302,7 +2306,7 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
 
     return {
       name: trip.route_name,
-      duration: trip.duration_text || "Unknown",
+      duration: trip.duration_text || "",
       price:
         typeof trip.adult_price === "number"
           ? trip.adult_price

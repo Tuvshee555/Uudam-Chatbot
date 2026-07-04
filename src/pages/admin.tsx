@@ -1498,7 +1498,7 @@ export default function AdminPage() {
         setBroadcastMessage("");
         toast.success(`Broadcast: ${json.sent} илгээсэн, ${json.failed} алдаа.`);
       } else {
-        toast.error(`Алдаа: ${json.error || "server_error"}`);
+        toast.error(json.message || `Алдаа: ${json.error || "server_error"}`);
       }
     } catch {
       toast.error("Broadcast илгээж чадсангүй.");

@@ -175,8 +175,10 @@ function isLowSignalFollowUp(text: string) {
     normalized.includes("say utsaar") ||
     normalized.includes("утсаар") ||
     normalized.includes("ярьсан") ||
-    normalized.includes("за") ||
-    normalized.includes("ok")
+    // Word-boundary matches: substring "за"/"ok" wrongly fired on "Захиалах"
+    // ("за…") and romanized "Tokio" ("…ok…"), muting real trip questions.
+    /(^|\s)за($|\s)/.test(normalized) ||
+    /(^|\s)ok($|\s)/.test(normalized)
   );
 }
 

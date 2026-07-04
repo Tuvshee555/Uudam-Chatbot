@@ -1004,9 +1004,14 @@ function isBookingIntent(text: string): boolean {
   if (!normalized) return false;
   return BOOKING_INTENT_KEYWORDS.some((keyword) => normalized.includes(keyword));
 }
+// Mongolian mobile numbers are 8 digits starting with 6, 8, or 9. A 7-prefix
+// 8-digit number is an Ulaanbaatar LANDLINE (e.g. the agency's own 7713-6633),
+// which must never be captured as a customer lead phone; 5 is not a mobile
+// prefix either.
+const MONGOLIAN_MOBILE_RE = /(?<!\d)[689]\d{7}(?!\d)/;
 function extractPhoneNumber(text: string): string {
   const compact = text.replace(/[\s\-()]/g, "");
-  const match = compact.match(/(?<!\d)[5-9]\d{7}(?!\d)/);
+  const match = compact.match(MONGOLIAN_MOBILE_RE);
   return match ? match[0] : "";
 }
 /**
@@ -1017,7 +1022,7 @@ function extractPhoneNumber(text: string): string {
  */
 function isPhoneOnlyMessage(text: string): boolean {
   const compact = text.replace(/[\s\-()+.]/g, "");
-  const withoutPhone = compact.replace(/(?<!\d)[5-9]\d{7}(?!\d)/, "");
+  const withoutPhone = compact.replace(MONGOLIAN_MOBILE_RE, "");
   return withoutPhone.replace(/[^\p{L}\p{N}]+/gu, "").length <= 3;
 }
 function isCommentTriggerMatch(commentText: string, patterns: string[]): boolean {
@@ -1770,6 +1775,13 @@ async function handleMessage(
         if (!delivered) {
           throw new RetryableWebhookError("delivery_failed:duplicate_reply_notice");
         }
+        // Persist the nudge as the last reply so a third identical question is
+        // not met with the exact same nudge again — the next turn compares
+        // against the nudge, not the muted answer.
+        try {
+          await appendMessage(senderId, "assistant", DUPLICATE_REPLY_NUDGE);
+          await setLastReplyConsistent(sessionId, DUPLICATE_REPLY_NUDGE);
+        } catch { /* non-critical */ }
         await recordFreshBookingLead();
         return;
       }
@@ -2127,6 +2139,12 @@ async function handleMessage(
     if (!delivered) {
       throw new RetryableWebhookError("delivery_failed:duplicate_reply_notice");
     }
+    // Persist the nudge as the last reply so repeating the question a third
+    // time is not answered with the identical nudge again.
+    try {
+      await appendMessage(senderId, "assistant", DUPLICATE_REPLY_NUDGE);
+      await setLastReplyConsistent(sessionId, DUPLICATE_REPLY_NUDGE);
+    } catch { /* non-critical */ }
     await recordFreshBookingLead();
     return;
   }
