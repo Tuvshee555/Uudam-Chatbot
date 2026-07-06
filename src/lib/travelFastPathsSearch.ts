@@ -1,0 +1,778 @@
+/**
+ * Trip matching/search core for the fast-path reply layer: normalizes user
+ * text (incl. phonetic Latin transliteration for typed-in-English Mongolian),
+ * scores trips against a query, and resolves which trip(s) a message is about.
+ */
+
+import { filterFutureDepartureDates, type ResolvedDepartureDate } from "./travelDates";
+import type { TravelTrip } from "./travelOps";
+
+/**
+ * Returns a copy of the trip with past departure dates stripped, so every
+ * fast-path reply quotes only current schedules. Recurring/flexible date
+ * text ("Пүрэв гараг бүр") is always kept — only verifiably past calendar
+ * dates are dropped. A stale trip whose dates are ALL past ends up with an
+ * empty list, which the reply builders already treat as "no known dates".
+ *
+ * Prefers the trip's write-time resolved ISO map (extra.departure_dates_resolved)
+ * so a genuine next-season date is not filtered as past; falls back to text
+ * parsing when the map is absent (existing trips behave exactly as before).
+ */
+export function withFutureDepartureDates(trip: TravelTrip, now = new Date()): TravelTrip {
+  const dates = trip.departure_dates || [];
+  const resolved = ((trip.extra || {}) as Record<string, unknown>)
+    .departure_dates_resolved as ResolvedDepartureDate[] | undefined;
+  const filtered = filterFutureDepartureDates(dates, now, resolved);
+  if (filtered.length === dates.length) return trip;
+  return { ...trip, departure_dates: filtered };
+}
+
+export type DepartureDateGroup = {
+  label?: string | null;
+  dates?: string[];
+  adult_price?: number | null;
+  child_price?: number | null;
+  infant_price?: number | null;
+  notes?: string | null;
+};
+
+export type TripMatch = {
+  trip: TravelTrip;
+  matchedWords: string[];
+  keywordCoverage: number;
+  score: number;
+};
+
+export type MonthDay = {
+  month: number;
+  day: number;
+};
+
+export type CombinedDatePriceMatch = {
+  trip: TravelTrip;
+  matchType: "adult" | "child" | "infant" | "passenger" | "discount" | "date_only";
+  score: number;
+  priceDiff: number;
+  matchedPrice: number | null;
+  group: Record<string, unknown> | DepartureDateGroup | null;
+};
+
+export type ProgramAsset = {
+  type: "id" | "url";
+  value: string;
+};
+
+export type TripProgramReplyResult = {
+  reply: string;
+  trip: TravelTrip | null;
+  brochure: ProgramAsset | null;
+  mediaUrls: string[];
+};
+
+export type TripResolution =
+  | { status: "verified"; trip: TravelTrip; candidates: TravelTrip[] }
+  | { status: "ambiguous"; trip: null; candidates: TravelTrip[] }
+  | { status: "not_found"; trip: null; candidates: [] };
+
+export const DISCOUNT_KEYWORDS_MN = ["хямдрал", "хямдралтай", "хөнгөлөлт", "тусгай", "урамшуулал", "промо"];
+export const DISCOUNT_KEYWORDS_EN = ["discount", "promo", "promotion", "special", "deal", "offer", "sale"];
+
+const GENERIC_ROUTE_WORDS = new Set([
+  "аялал",
+  "аяллын",
+  "хот",
+  "хотын",
+  "шууд",
+  "нислэг",
+  "нислэгтэй",
+  "газар",
+  "газрын",
+  "хосолсон",
+  "аялалтай",
+  "өдөр",
+  "шөнө",
+  "өдрийн",
+  "шөнийн",
+  "буюу",
+  "тусгай",
+  "хямдрал",
+  "final",
+  "uudam",
+  "travel",
+  "agency",
+]);
+
+const STRUCTURED_QUERY_SIGNALS = [
+  "үнэ",
+  "хэд вэ",
+  "хэдээр",
+  "төлбөр",
+  "хэдэн өдөр",
+  "хэд хоног",
+  "хэзээ",
+  "огноо",
+  "гарах",
+  "хуваарь",
+  "шууд нислэг",
+  "нислэгтэй юу",
+  "байна уу",
+  "адилхан",
+  "ижил",
+  "болно уу",
+];
+
+const PROGRAM_QUERY_SIGNALS = [
+  "хөтөлбөр",
+  "program",
+  "pdf",
+  "зураг",
+  "өдөр өдөр",
+  "day by day",
+  "itinerary",
+];
+
+// Only language/script normalizations here — no trip-specific city names.
+// City aliases (жанжиажэ, beidaihe, sanya, …) belong in each trip's
+// extra.aliases array in the database, editable via the admin panel.
+const ALIAS_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/\bnaadam\b/gi, "наадам"],
+  [/наадмын/gi, "наадам"],
+  [/\bnisleggvi\b/gi, "нислэггүй"],
+  [/\bnisleggui\b/gi, "нислэггүй"],
+  [/\bniseleggvi\b/gi, "нислэггүй"],
+  [/\bnislegtei\b/gi, "нислэгтэй"],
+  [/\bnislegt[eэ]i\b/gi, "нислэгтэй"],
+  [/\bnisleg\b/gi, "нислэг"],
+  [/\bno flight\b/gi, "нислэггүй"],
+  [/\bland tour\b/gi, "газрын аялал"],
+  [/\bgazar\b/gi, "газар"],
+  [/\bgazr\b/gi, "газар"],
+  [/\bgazrin\b/gi, "газрын"],
+  [/\bgazriin\b/gi, "газрын"],
+  [/\bgazariin\b/gi, "газрын"],
+  [/\bgazryn\b/gi, "газрын"],
+  [/\bhosolson\b/gi, "хосолсон"],
+  [/\bhoslson\b/gi, "хосолсон"],
+  [/\baylal\b/gi, "аялал"],
+  [/\bayalal\b/gi, "аялал"],
+  [/\bzurag\b/gi, "зураг"],
+  [/\buzi[eй]?\b/gi, "үзье"],
+  [/\bbeejin\b/gi, "бээжин"],
+  [/\bbeijing\b/gi, "бээжин"],
+  [/\bbeidaihe\b/gi, "бэйдайхэ"],
+  [/\bbeidehe\b/gi, "бэйдэхэ"],
+  [/\bbeidehi\b/gi, "бэйдэхэ"],
+  [/\bwith ticket\b/gi, "тийзтэй"],
+  [/\bwithout ticket\b/gi, "тийзгүй"],
+  [/\bticketless\b/gi, "тийзгүй"],
+  [/\bticket included\b/gi, "тийзтэй"],
+];
+
+export function normText(text: string) {
+  let normalized = text.toLowerCase();
+  for (const [pattern, replacement] of ALIAS_REPLACEMENTS) {
+    normalized = normalized.replace(pattern, replacement);
+  }
+  return normalized
+    .replace(/[+_/\\|()[\],.:;!?-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const CYRILLIC_TO_LATIN: Record<string, string> = {
+  а: "a",
+  б: "b",
+  в: "v",
+  г: "g",
+  д: "d",
+  е: "e",
+  ё: "yo",
+  ж: "j",
+  з: "z",
+  и: "i",
+  й: "i",
+  к: "k",
+  л: "l",
+  м: "m",
+  н: "n",
+  о: "o",
+  ө: "o",
+  п: "p",
+  р: "r",
+  с: "s",
+  т: "t",
+  у: "u",
+  ү: "u",
+  ф: "f",
+  х: "h",
+  ц: "ts",
+  ч: "ch",
+  ш: "sh",
+  щ: "sh",
+  ъ: "",
+  ы: "i",
+  ь: "",
+  э: "e",
+  ю: "yu",
+  я: "ya",
+};
+
+export function phoneticLatinText(text: string) {
+  return normText(text)
+    .split("")
+    .map((char) => CYRILLIC_TO_LATIN[char] ?? char)
+    .join("")
+    .replace(/ts/g, "c")
+    .replace(/ch/g, "c")
+    .replace(/sh/g, "s")
+    .replace(/yo/g, "o")
+    .replace(/yu/g, "u")
+    .replace(/ya/g, "a")
+    .replace(/kh/g, "h")
+    .replace(/ee+/g, "e")
+    .replace(/oo+/g, "o")
+    .replace(/uu+/g, "u")
+    .replace(/ii+/g, "i")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const GENERIC_ROUTE_WORDS_PHONETIC = new Set(
+  Array.from(GENERIC_ROUTE_WORDS, (word) => phoneticLatinText(word)).filter(Boolean),
+);
+
+export function keywordTokens(text: string) {
+  return normText(text)
+    .split(/\s+/)
+    .map((word) => word.trim())
+    .filter((word) => word.length >= 2 && !GENERIC_ROUTE_WORDS.has(word));
+}
+
+export function phoneticKeywordTokens(text: string) {
+  return phoneticLatinText(text)
+    .split(/\s+/)
+    .map((word) => word.trim())
+    .filter((word) => word.length >= 2 && !GENERIC_ROUTE_WORDS_PHONETIC.has(word));
+}
+
+export function unique<T>(values: T[]) {
+  return Array.from(new Set(values));
+}
+
+export function uniqueMonthDays(values: MonthDay[]) {
+  const seen = new Set<string>();
+  const result: MonthDay[] = [];
+  for (const value of values) {
+    const key = `${value.month}-${value.day}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
+}
+
+export function formatMoney(value: number | null, currency: string) {
+  if (typeof value !== "number") return null;
+  const formatted = value.toLocaleString("mn-MN");
+  const suffix = currency === "MNT" || !currency ? "₮" : ` ${currency}`;
+  return `${formatted}${suffix}`;
+}
+
+export function getPriceGroups(trip: TravelTrip): DepartureDateGroup[] {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const groups = extra.departure_date_groups;
+  return Array.isArray(groups) ? (groups as DepartureDateGroup[]) : [];
+}
+
+export function getTripLooseField(trip: TravelTrip, key: string): unknown {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  if (key in extra) return extra[key];
+  const record = trip as unknown as Record<string, unknown>;
+  return record[key];
+}
+
+export function getAliases(trip: TravelTrip): string[] {
+  const raw = getTripLooseField(trip, "aliases");
+  return Array.isArray(raw) ? (raw as string[]).filter(Boolean) : [];
+}
+
+export function getStructuredPriceGroups(trip: TravelTrip): Array<Record<string, unknown>> {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  if (Array.isArray(extra.price_groups) && extra.price_groups.length > 0) {
+    return extra.price_groups as Array<Record<string, unknown>>;
+  }
+  return [];
+}
+
+export function getStructuredDiscounts(trip: TravelTrip): Array<Record<string, unknown>> {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  if (Array.isArray(extra.discounts) && extra.discounts.length > 0) {
+    return extra.discounts as Array<Record<string, unknown>>;
+  }
+  return [];
+}
+
+export function getTripSearchHaystack(trip: TravelTrip): string {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const sections: string[] = [
+    trip.route_name,
+    trip.source_description || "",
+    trip.notes || "",
+    ...trip.departure_dates,
+    ...getAliases(trip),
+  ];
+
+  const appendGroupText = (items: Array<Record<string, unknown> | DepartureDateGroup>) => {
+    for (const item of items) {
+      sections.push(...getGroupDateTexts(item));
+      const record = item as Record<string, unknown>;
+      for (const key of ["label", "note", "notes", "condition"]) {
+        if (typeof record[key] === "string" && record[key].trim()) {
+          sections.push(record[key] as string);
+        }
+      }
+    }
+  };
+
+  appendGroupText(getStructuredPriceGroups(trip));
+  appendGroupText(getStructuredDiscounts(trip));
+  appendGroupText(getPriceGroups(trip));
+
+  for (const key of ["child_rules", "room_prices"]) {
+    const items = extra[key];
+    if (!Array.isArray(items)) continue;
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      for (const value of Object.values(item as Record<string, unknown>)) {
+        if (typeof value === "string" && value.trim()) sections.push(value);
+      }
+    }
+  }
+
+  return normText(sections.join(" "));
+}
+
+export function matchScoreForPriceKind(kind: CombinedDatePriceMatch["matchType"]): number {
+  switch (kind) {
+    case "adult":
+      return 100;
+    case "child":
+      return 90;
+    case "infant":
+      return 80;
+    case "passenger":
+      return 70;
+    case "discount":
+      return 60;
+    default:
+      return 10;
+  }
+}
+
+export function getPriceValuesFromGroup(
+  group: Record<string, unknown> | DepartureDateGroup,
+  defaultAdultKind: "adult" | "discount",
+): Array<{ kind: CombinedDatePriceMatch["matchType"]; value: number }> {
+  const raw = group as Record<string, unknown>;
+  const values: Array<{ kind: CombinedDatePriceMatch["matchType"]; value: number }> = [];
+
+  const push = (kind: CombinedDatePriceMatch["matchType"], value: unknown) => {
+    if (typeof value === "number" && Number.isFinite(value)) values.push({ kind, value });
+  };
+
+  push(defaultAdultKind, raw.adult_price);
+  push("child", raw.child_price);
+  push("infant", raw.infant_price);
+
+  if (Array.isArray(raw.passenger_prices)) {
+    for (const item of raw.passenger_prices) {
+      if (!item || typeof item !== "object") continue;
+      push("passenger", (item as Record<string, unknown>).price);
+    }
+  }
+
+  return values;
+}
+
+export function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] {
+  const query = normText(text);
+  const queryPhonetic = phoneticLatinText(text);
+  const queryWords = unique(keywordTokens(text));
+  const queryPhoneticWords = unique(phoneticKeywordTokens(text));
+  if (!queryWords.length && !queryPhoneticWords.length) return [];
+  const landOnly = queryWantsLandOnlyEnhanced(text);
+  const wantsCombo = queryWantsLandFlightCombo(text);
+  const wantsFlight = queryWantsFlight(text);
+
+  const matches: TripMatch[] = [];
+  for (const trip of trips) {
+    if (trip.status !== "active") continue;
+    if (landOnly && !wantsFlight && tripIsLandFlightCombo(trip)) continue;
+    if (landOnly && tripIsCruise(trip)) continue;
+
+    const routeNorm = normText(trip.route_name);
+    const routePhonetic = phoneticLatinText(trip.route_name);
+    const routeKeywords = unique(keywordTokens(trip.route_name));
+    const routePhoneticKeywords = unique(phoneticKeywordTokens(trip.route_name));
+    if (!routeKeywords.length && !routePhoneticKeywords.length) continue;
+
+    // Check aliases — full string OR token-level overlap.
+    // This means an alias like "Жанжиажэ" (stored in DB) will match
+    // a query containing "жанжиажэ" even without hardcoded replacements.
+    const aliases = getAliases(trip);
+    const aliasHit = aliases.some((alias) => {
+      const aliasNorm = normText(alias);
+      if (query.includes(aliasNorm) || aliasNorm.includes(query)) return true;
+      const aliasPhonetic = phoneticLatinText(alias);
+      if (
+        aliasPhonetic &&
+        queryPhonetic &&
+        (queryPhonetic.includes(aliasPhonetic) || aliasPhonetic.includes(queryPhonetic))
+      ) {
+        return true;
+      }
+      return hasLooseAliasMatch(query, queryWords, alias, queryPhonetic, queryPhoneticWords);
+    }) ? 1 : 0;
+
+    const matchedWords = unique([
+      ...routeKeywords.filter((word) => queryWords.includes(word)),
+      ...routePhoneticKeywords.filter((word) => queryPhoneticWords.includes(word)),
+    ]);
+    const routeTokenPool = unique([...routeKeywords, ...routePhoneticKeywords]);
+    const coverage = matchedWords.length / routeTokenPool.length;
+    const exactRouteHit = query.includes(routeNorm) || (routePhonetic.length > 0 && queryPhonetic.includes(routePhonetic)) ? 1 : 0;
+    const minMatchCount = routeTokenPool.length === 1 ? 1 : 2;
+    const strongTokenHit = matchedWords.some((word) => word.length >= 4);
+
+    if (matchedWords.length < minMatchCount && exactRouteHit === 0 && aliasHit === 0 && !strongTokenHit) continue;
+    if (coverage < 0.5 && exactRouteHit === 0 && aliasHit === 0 && !strongTokenHit) continue;
+
+    // Discount boost: when user asks about discounts, rank trips with discounts higher
+    let discountBoost = 0;
+    if (DISCOUNT_KEYWORDS_MN.some((kw) => query.includes(kw))) {
+      const tripExtra = (trip.extra || {}) as Record<string, unknown>;
+      const hasAdminDiscounts = Array.isArray(tripExtra.discounts) && (tripExtra.discounts as unknown[]).length > 0;
+      const nameHasDiscount = DISCOUNT_KEYWORDS_MN.some((kw) =>
+        normText(trip.route_name).includes(kw) ||
+        normText(trip.source_description || "").includes(kw),
+      );
+      if (hasAdminDiscounts) discountBoost = 60;
+      else if (nameHasDiscount) discountBoost = 40;
+    }
+
+    const isCombo = tripIsLandFlightCombo(trip);
+    const isCruise = tripIsCruise(trip);
+    const tripCat = normText(trip.category || "");
+    let intentBoost = 0;
+    if (landOnly) {
+      if (tripCat.includes("газрын аялал")) intentBoost += 160;
+      if (isCombo && !wantsFlight) intentBoost -= 220;
+      if (!tripCat.includes("газрын аялал")) intentBoost -= 180;
+      if (isCruise) intentBoost -= 260;
+    }
+    if (wantsCombo) {
+      if (isCombo) intentBoost += 160;
+      else intentBoost -= 140;
+    }
+    if (wantsFlight && isCombo) intentBoost += 35;
+
+    const score =
+      exactRouteHit * 100 +
+      aliasHit * 80 +
+      matchedWords.length * 20 +
+      coverage * 10 -
+      Math.max(0, routeKeywords.length - matchedWords.length) +
+      discountBoost +
+      intentBoost;
+
+    matches.push({
+      trip,
+      matchedWords,
+      keywordCoverage: coverage,
+      score,
+    });
+  }
+
+  return matches.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (b.matchedWords.length !== a.matchedWords.length) {
+      return b.matchedWords.length - a.matchedWords.length;
+    }
+    return a.trip.route_name.localeCompare(b.trip.route_name, "mn");
+  });
+}
+
+export function resolveTripFromUserMessage(
+  text: string,
+  trips: TravelTrip[],
+  options: { allowLooseFallback?: boolean } = {},
+): TripResolution {
+  const allowLooseFallback = options.allowLooseFallback !== false;
+  const matches = findTripMatches(text, trips);
+  if (!matches.length) {
+    const looseBest = allowLooseFallback ? findLooseTripMatch(text, trips) : null;
+    return looseBest
+      ? { status: "verified", trip: looseBest, candidates: [] }
+      : { status: "not_found", trip: null, candidates: [] };
+  }
+
+  const [best, second] = matches;
+  if (
+    second &&
+    best.score - second.score <= 5 &&
+    Math.abs(best.keywordCoverage - second.keywordCoverage) <= 0.15
+  ) {
+    return { status: "ambiguous", trip: null, candidates: matches.slice(0, 3).map((match) => match.trip) };
+  }
+
+  return { status: "verified", trip: best.trip, candidates: [] };
+}
+
+export function findBestTripMatch(text: string, trips: TravelTrip[]) {
+  const resolution = resolveTripFromUserMessage(text, trips);
+  if (resolution.status === "verified") return { best: resolution.trip, ambiguous: [] as TravelTrip[] };
+  if (resolution.status === "ambiguous") return { best: null, ambiguous: resolution.candidates };
+  return { best: null, ambiguous: [] as TravelTrip[] };
+}
+
+// Whether the query explicitly signals a land-only (no-flight) trip.
+function queryWantsLandOnly(query: string): boolean {
+  return (
+    /газрын\s+аялал/i.test(query) ||
+    /нислэггүй/i.test(query) ||
+    /газраар/i.test(query)
+  );
+}
+
+function hasLooseAliasMatch(
+  query: string,
+  queryKeywords: string[],
+  alias: string,
+  queryPhonetic = "",
+  queryPhoneticKeywords: string[] = [],
+): boolean {
+  const aliasNorm = normText(alias);
+  if (query.includes(aliasNorm) || aliasNorm.includes(query)) return true;
+
+  const aliasPhonetic = phoneticLatinText(alias);
+  if (
+    aliasPhonetic &&
+    queryPhonetic &&
+    (queryPhonetic.includes(aliasPhonetic) || aliasPhonetic.includes(queryPhonetic))
+  ) {
+    return true;
+  }
+
+  const aliasTokens = unique(keywordTokens(alias));
+  const aliasPhoneticTokens = unique(phoneticKeywordTokens(alias));
+  if (!aliasTokens.length && !aliasPhoneticTokens.length) return false;
+
+  const overlap = aliasTokens.filter((token) => queryKeywords.includes(token)).length;
+  const phoneticOverlap = aliasPhoneticTokens.filter((token) => queryPhoneticKeywords.includes(token)).length;
+  const requiredOverlap = aliasTokens.length === 1 ? 1 : Math.min(2, aliasTokens.length);
+  const requiredPhoneticOverlap = aliasPhoneticTokens.length === 1 ? 1 : Math.min(2, aliasPhoneticTokens.length);
+  return overlap >= requiredOverlap || phoneticOverlap >= requiredPhoneticOverlap;
+}
+
+export function queryExplicitlyRejectsFlight(query: string): boolean {
+  const normalized = normText(query);
+  return (
+    normalized.includes("нислэггүй") ||
+    normalized.includes("газрын аялал") ||
+    normalized.includes("газрын аяллын") ||
+    normalized.includes("газраар") ||
+    normalized.includes("автобусаар") ||
+    normalized.includes("галт тэрэг") ||
+    normalized.includes("no flight") ||
+    normalized.includes("land tour")
+  );
+}
+
+export function queryWantsLandOnlyEnhanced(query: string): boolean {
+  const normalized = normText(query);
+  if (queryExplicitlyRejectsFlight(query)) return true;
+
+  const explicitlyWantsFlight =
+    normalized.includes("газар нислэг") ||
+    normalized.includes("хосолсон") ||
+    normalized.includes("онгоц") ||
+    normalized.includes("нислэгтэй");
+  if (explicitlyWantsFlight) return false;
+
+  return (
+    normalized.includes("газрын аялал") ||
+    normalized.includes("газрын аяллын") ||
+    normalized.includes("газрын") ||
+    normalized.includes("газраар") ||
+    normalized.includes("автобусаар") ||
+    normalized.includes("галт тэрэг") ||
+    normalized.includes("land tour")
+  );
+}
+
+export function queryWantsLandFlightCombo(query: string): boolean {
+  const normalized = normText(query);
+  if (queryExplicitlyRejectsFlight(query)) return false;
+  return (
+    normalized.includes("газар нислэг") ||
+    normalized.includes("нислэг хосолсон") ||
+    normalized.includes("хосолсон")
+  );
+}
+
+// Whether the query explicitly mentions a flight component.
+export function queryWantsFlight(query: string): boolean {
+  if (queryExplicitlyRejectsFlight(query)) return false;
+  return /нислэг|онгоц|хосолсон|нислэгтэй/i.test(query);
+}
+
+// Whether a trip is a land+flight combo based on its category or name.
+export function tripIsLandFlightCombo(trip: TravelTrip): boolean {
+  const cat = (trip.category || "").toLowerCase();
+  if (cat.includes("газар") && cat.includes("нислэг")) return true;
+  const name = normText(trip.route_name);
+  return /газар\s*\+\s*нислэг|газар\s+нислэг\s+хосолсон/.test(name);
+}
+
+export function tripIsCruise(trip: TravelTrip): boolean {
+  const category = normText(trip.category || "");
+  const name = normText(trip.route_name);
+  return (
+    category.includes("круз") ||
+    category.includes("усан онгоц") ||
+    name.includes("круз") ||
+    name.includes("усан онгоц")
+  );
+}
+
+function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBrochureIntent?: boolean }) {
+  const query = normText(text);
+  const queryPhonetic = phoneticLatinText(text);
+  // Use keywordTokens() so generic route words (газар, нислэг, аялал, хосолсон…)
+  // don't act as false-positive boosters and rank the wrong trip higher.
+  const queryKeywords = unique(keywordTokens(text));
+  const queryPhoneticKeywords = unique(phoneticKeywordTokens(text));
+  const landOnly = queryWantsLandOnlyEnhanced(text);
+  const wantsCombo = queryWantsLandFlightCombo(text);
+  const wantsFlight = queryWantsFlight(text);
+  const hasBrochure = options?.hasBrochureIntent ?? false;
+  let best: TravelTrip | null = null;
+  let bestScore = 0;
+  let secondScore = 0;
+
+  for (const trip of trips) {
+    if (trip.status !== "active") continue;
+    if (landOnly && !wantsFlight && tripIsLandFlightCombo(trip)) continue;
+    if (landOnly && tripIsCruise(trip)) continue;
+    const routeNorm = normText(trip.route_name);
+    const routePhonetic = phoneticLatinText(trip.route_name);
+    // Filter route words through keywordTokens as well (strips GENERIC_ROUTE_WORDS).
+    const routeKeywords = unique(keywordTokens(trip.route_name));
+    const routePhoneticKeywords = unique(phoneticKeywordTokens(trip.route_name));
+    const matchedWordCount = routeKeywords.filter((word) => queryKeywords.includes(word)).length;
+    const phoneticMatchedWordCount = routePhoneticKeywords.filter((word) => queryPhoneticKeywords.includes(word)).length;
+    const aliases = getAliases(trip);
+    const aliasExactHit = aliases.some((alias) => {
+      const aliasNorm = normText(alias);
+      const aliasPhonetic = phoneticLatinText(alias);
+      return query.includes(aliasNorm) || (aliasPhonetic.length > 0 && queryPhonetic.includes(aliasPhonetic));
+    }) ? 1 : 0;
+    const aliasTokenHit = aliases.some((alias) =>
+      hasLooseAliasMatch(query, queryKeywords, alias, queryPhonetic, queryPhoneticKeywords),
+    ) ? 1 : 0;
+    const exactRouteHit = query.includes(routeNorm) || (routePhonetic.length > 0 && queryPhonetic.includes(routePhonetic)) ? 1 : 0;
+    let score =
+      exactRouteHit * 10 +
+      aliasExactHit * 8 +
+      aliasTokenHit * 6 +
+      Math.max(matchedWordCount, phoneticMatchedWordCount) * 3;
+
+    // Category-intent alignment bonuses and penalties.
+    const isCombo = tripIsLandFlightCombo(trip);
+    const isCruise = tripIsCruise(trip);
+    const tripCat = (trip.category || "").toLowerCase();
+    if (landOnly) {
+      if (tripCat === "газрын аялал") score += 100;
+      // Penalise land+flight combos heavily when user said "газрын аялал".
+      if (isCombo && !wantsFlight) score -= 100;
+      if (!tripCat.includes("газрын") || !tripCat.includes("аялал")) score -= 180;
+      if (isCruise) score -= 260;
+    }
+    if (wantsCombo && isCombo) score += 180;
+    if (wantsCombo && !isCombo) score -= 180;
+    if (wantsFlight && isCombo) score += 50;
+    if (landOnly && tripCat.includes("газрын") && tripCat.includes("аялал")) score += 20;
+    if (landOnly && isCombo && !wantsFlight) score -= 50;
+
+    // Bonus when alias is a precise land-only spelling variant.
+    const landAliasHit = getAliases(trip).some((alias) => {
+      const an = normText(alias);
+      const ap = phoneticLatinText(alias);
+      return an.includes("газрын") && (query.includes(an) || (ap.length > 0 && queryPhonetic.includes(ap)));
+    });
+    if (landAliasHit) score += 80;
+    const enhancedLandAliasHit = aliases.some((alias) => {
+      const an = normText(alias);
+      return (
+        (an.includes("газрын") || an.includes("газраар") || an.includes("нислэггүй")) &&
+        hasLooseAliasMatch(query, queryKeywords, alias, queryPhonetic, queryPhoneticKeywords)
+      );
+    });
+    if (enhancedLandAliasHit && !landAliasHit) score += 100;
+    else if (enhancedLandAliasHit) score += 20;
+
+    // Bonus when user wants a brochure and this trip actually has one.
+    if (hasBrochure && getTripBrochureAsset(trip)) score += 100;
+
+    if (score > bestScore) {
+      secondScore = bestScore;
+      bestScore = score;
+      best = trip;
+    } else if (score > secondScore) {
+      secondScore = score;
+    }
+  }
+
+  if (!best || bestScore === 0) return null;
+  if (bestScore - secondScore <= 1) return null;
+  return best;
+}
+
+export function isStructuredTripQuestion(text: string) {
+  const normalized = normText(text);
+  return STRUCTURED_QUERY_SIGNALS.some((signal) => normalized.includes(signal));
+}
+
+export function hasProgramIntent(text: string) {
+  const normalized = normText(text);
+  return (
+    PROGRAM_QUERY_SIGNALS.some((signal) => normalized.includes(signal)) ||
+    /хөтөлбөр|зураг|өдөр\s*өдөр|program|pdf|itinerary|day\s*by\s*day/i.test(text)
+  );
+}
+
+export function getTripBrochureAsset(trip: TravelTrip): ProgramAsset | null {
+  const id = getTripLooseField(trip, "source_file_attachment_id");
+  if (typeof id === "string" && id.length > 0) return { type: "id", value: id };
+
+  const url = getTripLooseField(trip, "brochure_pdf_url");
+  if (typeof url === "string" && url.startsWith("https://")) return { type: "url", value: url };
+  return null;
+}
+
+// getGroupDateTexts lives in travelFastPathsPricing.ts, but getTripSearchHaystack
+// (defined above) needs it — re-declared here to avoid a circular import since
+// pricing imports search helpers. Kept byte-identical to the pricing copy.
+function getGroupDateTexts(group: Record<string, unknown> | DepartureDateGroup): string[] {
+  const values: string[] = [];
+  const raw = group as Record<string, unknown>;
+  for (const key of ["dates", "date_keys", "display_dates"]) {
+    const input = raw[key];
+    if (!Array.isArray(input)) continue;
+    for (const item of input) {
+      if (typeof item === "string" && item.trim()) values.push(item.trim());
+    }
+  }
+  return unique(values);
+}
