@@ -16,7 +16,6 @@ import {
   Input,
   Modal,
   Select,
-  Spinner,
   Textarea,
   cx,
   useToast,
@@ -54,7 +53,7 @@ import {
   describeAction,
   summarizeConflict,
 } from "@/lib/adminProposalUtils";
-import { SectionHeading, StructuredEditor } from "./AdminShared";
+import { LoadingPanel, SectionHeading, StructuredEditor } from "./AdminShared";
 import type { AnalyticsStatsData, FaqStatsData } from "./adminTabData";
 import { readUrlList } from "./adminTabData";
 import {
@@ -118,11 +117,7 @@ export function AnalyticsTab({
   }, [apiFetch]);
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-16">
-        <Spinner />
-      </div>
-    );
+    return <LoadingPanel />;
   }
 
   if (error || !stats) {

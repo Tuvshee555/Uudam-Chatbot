@@ -16,7 +16,6 @@ import {
   Input,
   Modal,
   Select,
-  Spinner,
   Textarea,
   cx,
   useToast,
@@ -54,7 +53,7 @@ import {
   describeAction,
   summarizeConflict,
 } from "@/lib/adminProposalUtils";
-import { SectionHeading, StructuredEditor } from "./AdminShared";
+import { LoadingPanel, SectionHeading, StructuredEditor } from "./AdminShared";
 import {
   PAYMENT_STATUS_MN,
   PAYMENT_STATUS_TONE,
@@ -132,11 +131,7 @@ export function PaymentsTab({
   }
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-16">
-        <Spinner />
-      </div>
-    );
+    return <LoadingPanel />;
   }
 
   return (

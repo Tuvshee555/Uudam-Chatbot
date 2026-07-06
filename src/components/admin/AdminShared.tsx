@@ -1,6 +1,15 @@
 import type { ReactNode } from "react";
-import { Button, Icons } from "@/components/ui";
+import { Button, Icons, Spinner } from "@/components/ui";
 import type { StructuredRow } from "@/lib/adminTypes";
+
+/** Full-panel loading placeholder for a tab's initial data fetch. */
+export function LoadingPanel() {
+  return (
+    <div className="flex items-center justify-center py-16">
+      <Spinner />
+    </div>
+  );
+}
 
 export function SectionHeading({
   title,
