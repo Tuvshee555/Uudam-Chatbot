@@ -38,12 +38,13 @@ export function buildPrompt(options: {
     knowledgeBase?: any;
   };
   history: ChatMessage[];
+  customerMemory?: string;
   userText: string;
   pinnedButtonLabels?: string[];
   /** True when the customer already left a phone number in this conversation. */
   phoneCollected?: boolean;
 }) {
-  const { systemPrompt, business, history, userText, pinnedButtonLabels, phoneCollected } = options;
+  const { systemPrompt, business, history, customerMemory, userText, pinnedButtonLabels, phoneCollected } = options;
   const lines: string[] = [];
 
   const recentHistory = history.slice(-25);
@@ -111,6 +112,10 @@ export function buildPrompt(options: {
   if (pinnedButtonLabels && pinnedButtonLabels.length > 0) {
     lines.push(`- The user already has these pinned menu buttons: ${pinnedButtonLabels.join(" | ")}. Do NOT duplicate them in your BUTTONS line. Offer different, contextually relevant follow-ups instead.`);
   }
+  lines.push("- MEMORY RULE: Use Persistent customer memory and recent conversation together before answering. Resolve references like 'that one', 'same as before', 'yesterday', or 'next week' from memory when possible.");
+  lines.push("- MEMORY RULE: If the current user message changes a previous preference, plan, or decision, treat the current message as the newest truth. Do not contradict known memory.");
+  lines.push("- MEMORY RULE: Do not recite the memory or say you have a database. Use it naturally, like an attentive travel agent who remembers the customer.");
+  lines.push("- Before answering, silently reason about the customer's intent, relevant memory, recent turns, exact trip data in Context, and business rules. Do not show this reasoning.");
 
   lines.push("");
   lines.push(`Business name: ${business?.name || "N/A"}`);
@@ -128,6 +133,13 @@ export function buildPrompt(options: {
   }
 
   lines.push("");
+
+  const memoryText = customerMemory?.trim();
+  if (memoryText) {
+    lines.push("Persistent customer memory:");
+    lines.push(memoryText);
+    lines.push("");
+  }
 
   if (recentHistory.length) {
     lines.push("Conversation so far:");

@@ -312,6 +312,20 @@ export async function ensureTravelSchema() {
         ALTER TABLE travel_conversations
           ADD COLUMN IF NOT EXISTS attachments JSONB NOT NULL DEFAULT '[]'::jsonb;
       `);
+      // Long-term per-customer memory. Chat rows are still kept for recent
+      // detail, while this table preserves durable context after pruning.
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_customer_memories (
+          sender_id TEXT PRIMARY KEY,
+          memory_text TEXT NOT NULL DEFAULT '',
+          last_conversation_id BIGINT NOT NULL DEFAULT 0,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_travel_customer_memories_updated
+          ON travel_customer_memories (updated_at DESC);
+      `);
       // Per-sender pause state + activity tracking — replaces Redis pause store
       await client.query(`
         CREATE TABLE IF NOT EXISTS travel_senders (

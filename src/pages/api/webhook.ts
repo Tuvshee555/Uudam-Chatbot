@@ -8,6 +8,7 @@ import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPrompt, getHistory, isReferReply, REFER_FALLBACK_REPLY } from "../../lib/conversation";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
+import { getCustomerMemoryText, updateCustomerMemoryAfterTurn } from "../../lib/conversationMemory";
 import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, dbClaimGoodbye, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
@@ -127,6 +128,7 @@ function isLikelyContextDependentText(text: string) {
 function buildContextualUserText(
   history: Array<{ role: "user" | "assistant"; text: string }>,
   userText: string,
+  customerMemory = "",
 ) {
   if (!isLikelyContextDependentText(userText)) return userText;
   const recentUserTurns = history
@@ -134,8 +136,13 @@ function buildContextualUserText(
     .map((message) => message.text.trim())
     .filter(Boolean)
     .slice(-4);
-  if (recentUserTurns.length === 0) return userText;
-  return [...recentUserTurns, userText.trim()].join("\n");
+  const memoryText = customerMemory.trim();
+  if (recentUserTurns.length === 0 && !memoryText) return userText;
+  return [
+    memoryText ? `Customer memory:\n${memoryText}` : "",
+    recentUserTurns.length ? `Recent customer messages:\n${recentUserTurns.join("\n")}` : "",
+    `Current message:\n${userText.trim()}`,
+  ].filter(Boolean).join("\n\n");
 }
 
 async function handleMessage(
@@ -277,7 +284,16 @@ async function handleMessage(
   }
   await assertLockHealthy();
   const history = await getHistory(senderId);
-  const contextualUserText = buildContextualUserText(history, text);
+  const customerMemory = await getCustomerMemoryText(senderId);
+  const contextualUserText = buildContextualUserText(history, text, customerMemory);
+  const sessionId = `${platform}:${pageId}:${senderId}`;
+  const rememberTurn = (source: string) =>
+    updateCustomerMemoryAfterTurn({
+      senderId,
+      requestId: trace?.requestId,
+      correlationId: trace?.correlationId,
+      source,
+    });
 
   // Photo-only mode: send photos only when we have a real trip signal.
   // Stay silent on greetings, unrelated text, or unknown requests. The only
@@ -401,6 +417,7 @@ async function handleMessage(
           source: "api.webhook.photo_only_clarify",
         });
         await appendMessage(senderId, "assistant", clarification);
+        await rememberTurn("api.webhook.photo_only_clarify");
       } catch (error) {
         logWarn("webhook.photo_only_clarify_failed", {
           requestId: trace?.requestId,
@@ -614,6 +631,7 @@ async function handleMessage(
         );
         if (!ok) throw new RetryableWebhookError("delivery_failed:flow_message");
         await appendMessage(senderId, "assistant", msg).catch(() => {});
+        await rememberTurn("api.webhook.flow_message");
       },
       sendImage: token && platform === "facebook"
         ? async (url: string) => {
@@ -633,6 +651,7 @@ async function handleMessage(
               source: "api.webhook.flow_quick",
             });
             await appendMessage(senderId, "assistant", msg).catch(() => {});
+            await rememberTurn("api.webhook.flow_quick");
           }
         : undefined,
       notifyOwner: async (msg: string) => {
@@ -743,6 +762,12 @@ async function handleMessage(
     if (!delivered) {
       throw new RetryableWebhookError("delivery_failed:handoff");
     }
+    try {
+      await appendMessage(senderId, "user", text);
+      await appendMessage(senderId, "assistant", handoffMsg);
+      await setLastReplyConsistent(sessionId, handoffMsg);
+      await rememberTurn("api.webhook.handoff");
+    } catch { /* non-critical */ }
     // Send contact numbers after handoff confirmation
     if (platform === "facebook" && token) {
       try {
@@ -783,9 +808,14 @@ async function handleMessage(
     if (!delivered) {
       throw new RetryableWebhookError("delivery_failed:quick_info_keyword");
     }
+    try {
+      await appendMessage(senderId, "user", text);
+      await appendMessage(senderId, "assistant", botSettings.quick_info_reply);
+      await setLastReplyConsistent(sessionId, botSettings.quick_info_reply);
+      await rememberTurn("api.webhook.quick_info");
+    } catch { /* non-critical */ }
     return;
   }
-  const sessionId = `${platform}:${pageId}:${senderId}`;
   // ── Phone-number lead capture ───────────────────────────────────────────────
   // The AI's #1 rule asks the customer for a phone number; this is where the
   // answer is actually caught. Any message containing a Mongolian mobile
@@ -845,6 +875,7 @@ async function handleMessage(
       try {
         await appendMessage(senderId, "assistant", confirmation);
         await setLastReplyConsistent(sessionId, confirmation);
+        await rememberTurn("api.webhook.phone_capture_confirmation");
       } catch { /* non-critical */ }
       return;
     }
@@ -895,6 +926,7 @@ async function handleMessage(
         await appendMessage(senderId, "user", text);
         await appendMessage(senderId, "assistant", matchedRule.reply);
         await setLastReplyConsistent(sessionId, matchedRule.reply);
+        await rememberTurn("api.webhook.flow_rule");
       } catch {
       }
       return;
@@ -1018,6 +1050,7 @@ async function handleMessage(
           await appendMessage(senderId, "assistant", DUPLICATE_REPLY_NUDGE);
           await setLastReplyConsistent(sessionId, DUPLICATE_REPLY_NUDGE);
         } catch { /* non-critical */ }
+        await rememberTurn("api.webhook.date_duplicate_nudge");
         await recordFreshBookingLead();
         return;
       }
@@ -1047,6 +1080,7 @@ async function handleMessage(
           classification: classifyError(error),
         });
       }
+      await rememberTurn("api.webhook.date_fast_path");
       await recordFreshBookingLead();
       return;
     }
@@ -1078,6 +1112,7 @@ async function handleMessage(
         await setLastReplyConsistent(sessionId, safeSeatsReply);
       } catch {
       }
+      await rememberTurn("api.webhook.seats_fast_path");
       recordCounter("webhook.seats_fast_path_total", 1, { platform });
       return;
     }
@@ -1109,6 +1144,7 @@ async function handleMessage(
         await setLastReplyConsistent(sessionId, safeDiscountReply);
       } catch {
       }
+      await rememberTurn("api.webhook.discount_fast_path");
       recordCounter("webhook.discount_fast_path_total", 1, { platform });
       return;
     }
@@ -1140,6 +1176,7 @@ async function handleMessage(
         await setLastReplyConsistent(sessionId, safeCompareReply);
       } catch {
       }
+      await rememberTurn("api.webhook.compare_fast_path");
       recordCounter("webhook.compare_fast_path_total", 1, { platform });
       return;
     }
@@ -1197,6 +1234,7 @@ async function handleMessage(
         await setLastReplyConsistent(sessionId, safeProgramReply);
       } catch {
       }
+      await rememberTurn("api.webhook.program_fast_path");
       recordCounter("webhook.program_fast_path_total", 1, { platform });
       return;
     }
@@ -1235,6 +1273,7 @@ async function handleMessage(
         await setLastReplyConsistent(sessionId, safeStructuredReply);
       } catch {
       }
+      await rememberTurn("api.webhook.trip_fast_path");
       recordCounter("webhook.trip_fast_path_total", 1, { platform });
       return;
     }
@@ -1245,6 +1284,7 @@ async function handleMessage(
       : fileSystemPrompt,
     business: business || {},
     history,
+    customerMemory,
     userText: text,
     pinnedButtonLabels,
     phoneCollected,
@@ -1381,6 +1421,7 @@ async function handleMessage(
       await appendMessage(senderId, "assistant", DUPLICATE_REPLY_NUDGE);
       await setLastReplyConsistent(sessionId, DUPLICATE_REPLY_NUDGE);
     } catch { /* non-critical */ }
+    await rememberTurn("api.webhook.duplicate_nudge");
     await recordFreshBookingLead();
     return;
   }
@@ -1443,6 +1484,7 @@ async function handleMessage(
       classification: classifyError(error),
     });
   }
+  await rememberTurn("api.webhook.reply");
   await sendTripMediaForReply(
     platform,
     senderId,

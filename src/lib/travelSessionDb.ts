@@ -21,10 +21,18 @@ export type ChatAttachment = {
 };
 
 export type HistoryRow = {
+  id: number;
   role: "user" | "assistant";
   text: string;
   attachments: ChatAttachment[];
   created_at: string;
+};
+
+export type CustomerMemoryRow = {
+  sender_id: string;
+  memory_text: string;
+  last_conversation_id: number;
+  updated_at: string;
 };
 
 export async function dbGetHistory(
@@ -33,12 +41,13 @@ export async function dbGetHistory(
   const ready = await ensureTravelSchema();
   if (!ready) return [];
   const result = await queryNeon<{
+    id: number;
     role: string;
     text: string;
     attachments: unknown;
     created_at: string;
   }>(
-    `SELECT role, text, attachments, created_at FROM travel_conversations
+    `SELECT id, role, text, attachments, created_at FROM travel_conversations
      WHERE sender_id = $1
        AND created_at > NOW() - INTERVAL '${HISTORY_TTL_DAYS} days'
      ORDER BY created_at DESC
@@ -47,6 +56,39 @@ export async function dbGetHistory(
   );
   if (!result) return [];
   return result.rows.reverse().map((r) => ({
+    id: Number(r.id),
+    role: r.role as "user" | "assistant",
+    text: r.text,
+    attachments: Array.isArray(r.attachments) ? (r.attachments as ChatAttachment[]) : [],
+    created_at: r.created_at,
+  }));
+}
+
+export async function dbGetHistorySince(
+  senderId: string,
+  afterConversationId: number,
+  limit = 80,
+): Promise<HistoryRow[]> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return [];
+  const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 200);
+  const result = await queryNeon<{
+    id: number;
+    role: string;
+    text: string;
+    attachments: unknown;
+    created_at: string;
+  }>(
+    `SELECT id, role, text, attachments, created_at FROM travel_conversations
+     WHERE sender_id = $1
+       AND id > $2
+     ORDER BY id ASC
+     LIMIT $3`,
+    [senderId, Math.max(0, Math.trunc(afterConversationId || 0)), safeLimit],
+  );
+  if (!result) return [];
+  return result.rows.map((r) => ({
+    id: Number(r.id),
     role: r.role as "user" | "assistant",
     text: r.text,
     attachments: Array.isArray(r.attachments) ? (r.attachments as ChatAttachment[]) : [],
@@ -77,6 +119,46 @@ export async function dbAppendMessage(
          LIMIT $2
        )`,
     [senderId, MAX_HISTORY_ROWS],
+  );
+}
+
+export async function dbGetCustomerMemory(
+  senderId: string,
+): Promise<CustomerMemoryRow | null> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return null;
+  const result = await queryNeon<CustomerMemoryRow>(
+    `SELECT sender_id, memory_text, last_conversation_id, updated_at
+     FROM travel_customer_memories
+     WHERE sender_id = $1`,
+    [senderId],
+  );
+  const row = result?.rows[0];
+  if (!row) return null;
+  return {
+    sender_id: row.sender_id,
+    memory_text: row.memory_text || "",
+    last_conversation_id: Number(row.last_conversation_id || 0),
+    updated_at: row.updated_at,
+  };
+}
+
+export async function dbUpsertCustomerMemory(input: {
+  senderId: string;
+  memoryText: string;
+  lastConversationId: number;
+}): Promise<void> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return;
+  await queryNeon(
+    `INSERT INTO travel_customer_memories (sender_id, memory_text, last_conversation_id, updated_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (sender_id) DO UPDATE
+       SET memory_text = EXCLUDED.memory_text,
+           last_conversation_id = GREATEST(travel_customer_memories.last_conversation_id, EXCLUDED.last_conversation_id),
+           updated_at = NOW()
+     WHERE travel_customer_memories.last_conversation_id <= EXCLUDED.last_conversation_id`,
+    [input.senderId, input.memoryText, Math.max(0, Math.trunc(input.lastConversationId || 0))],
   );
 }
 

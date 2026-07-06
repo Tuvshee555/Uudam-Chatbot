@@ -8,6 +8,7 @@ import {
 } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPrompt, getHistory, isReferReply, REFER_FALLBACK_REPLY } from "../../lib/conversation";
+import { getCustomerMemoryText, updateCustomerMemoryAfterTurn } from "../../lib/conversationMemory";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
@@ -126,6 +127,14 @@ export default async function handler(
       const { systemPrompt, business, pinnedButtonLabels } = await readBusinessData();
       const sessionId = `demo:${normalizedConversationId}`;
       const history = await getHistory(sessionId);
+      const customerMemory = await getCustomerMemoryText(sessionId);
+      const rememberTurn = () =>
+        updateCustomerMemoryAfterTurn({
+          senderId: sessionId,
+          requestId: trace.requestId,
+          correlationId: trace.correlationId,
+          source: "api.demo",
+        });
 
       // Fast path: departure date availability
       if (hasDepartureDateAvailabilityIntent(normalizedText)) {
@@ -135,6 +144,7 @@ export default async function handler(
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(fixMojibake(dateReply)));
           await appendMessage(sessionId, "user", normalizedText);
           await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
           recordCounter("demo.date_fast_path_total", 1, {});
           return res.status(200).json({ reply: safeReply, buttons: [] });
         }
@@ -148,6 +158,7 @@ export default async function handler(
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(seatsReply));
           await appendMessage(sessionId, "user", normalizedText);
           await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
           recordCounter("demo.seats_fast_path_total", 1, {});
           return res.status(200).json({ reply: safeReply, buttons: [] });
         }
@@ -161,6 +172,7 @@ export default async function handler(
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(discountReply));
           await appendMessage(sessionId, "user", normalizedText);
           await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
           recordCounter("demo.discount_fast_path_total", 1, {});
           return res.status(200).json({ reply: safeReply, buttons: [] });
         }
@@ -174,6 +186,7 @@ export default async function handler(
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(compareReply));
           await appendMessage(sessionId, "user", normalizedText);
           await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
           recordCounter("demo.compare_fast_path_total", 1, {});
           return res.status(200).json({ reply: safeReply, buttons: [] });
         }
@@ -195,6 +208,7 @@ export default async function handler(
           );
           await appendMessage(sessionId, "user", normalizedText);
           await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
           recordCounter("demo.program_fast_path_total", 1, {});
           return res.status(200).json({ reply: safeReply, buttons: [] });
         }
@@ -203,6 +217,7 @@ export default async function handler(
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(structuredReply));
           await appendMessage(sessionId, "user", normalizedText);
           await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
           recordCounter("demo.structured_fast_path_total", 1, {});
           return res.status(200).json({ reply: safeReply, buttons: [] });
         }
@@ -214,6 +229,7 @@ export default async function handler(
         systemPrompt,
         business: business || {},
         history,
+        customerMemory,
         userText: normalizedText,
         pinnedButtonLabels,
       });
@@ -252,10 +268,12 @@ export default async function handler(
       if (lastReplyText && isDuplicateReply(lastReplyText, reply)) {
         recordCounter("demo.duplicate_reply_avoided_total", 1, {});
         await appendMessage(sessionId, "assistant", reply);
+        await rememberTurn();
         return res.status(200).json({ reply, buttons });
       }
 
       await appendMessage(sessionId, "assistant", reply);
+      await rememberTurn();
 
       logInfo("demo.reply_generated", {
         requestId: trace.requestId,
