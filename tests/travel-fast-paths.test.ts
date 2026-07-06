@@ -557,6 +557,8 @@ test("program request asks for clarification on generic Beijing flight-tour word
   assert.match(result?.reply || "", /Аль аяллыг хэлж байгаагаа/i);
   assert.equal(result?.trip, null);
   assert.deepEqual(result?.mediaUrls, []);
+  assert.doesNotMatch(result?.reply || "", /4 ХОТЫН АЯЛАЛ/);
+  assert.doesNotMatch(result?.reply || "", /наадмын амралтаар явах газрын аялал/);
 });
 
 test("land-only existence query prefers the ground Beidaihe + Beijing tour", () => {

@@ -1235,7 +1235,7 @@ async function handleMessage(
             }
           }
           await recordImageMessage(senderId, programReply.mediaUrls);
-        } else {
+        } else if (programReply.trip) {
           await sendTripMediaForReply(
             platform,
             senderId,

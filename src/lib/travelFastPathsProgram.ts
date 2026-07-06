@@ -35,6 +35,28 @@ const PROGRAM_ONLY_QUERY_WORDS = new Set([
   "itinerary",
 ]);
 
+function uniqueTripsByRouteName(trips: TravelTrip[]) {
+  const seen = new Set<string>();
+  return trips.filter((trip) => {
+    const key = normText(trip.route_name);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function tripHasFlightSignal(trip: TravelTrip) {
+  const haystack = normText(
+    [trip.route_name, trip.category, trip.source_description, trip.notes].filter(Boolean).join(" "),
+  );
+  return (
+    haystack.includes("нислэг") ||
+    haystack.includes("шууд") ||
+    haystack.includes("онгоц") ||
+    tripIsLandFlightCombo(trip)
+  );
+}
+
 export function pushMediaUrl(target: string[], value: unknown) {
   if (typeof value === "string" && value.startsWith("https://") && !target.includes(value)) {
     target.push(value);
@@ -156,6 +178,7 @@ export function buildTripProgramReply(
   const query = normText(text);
   const wantsCombo = queryWantsLandFlightCombo(text);
   const wantsLandOnly = queryWantsLandOnlyEnhanced(text) && !queryWantsFlight(text);
+  const wantsFlight = queryWantsFlight(text);
   const exactMentionedTrips = trips.filter((trip) => {
     if (query.includes(normText(trip.route_name))) return true;
     return getAliases(trip).some((alias) => query.includes(normText(alias)));
@@ -170,6 +193,10 @@ export function buildTripProgramReply(
       ? exactMentionedLandTrips.length > 0
         ? exactMentionedLandTrips
         : trips.filter((trip) => !tripIsLandFlightCombo(trip))
+      : wantsFlight
+        ? exactMentionedTrips.length > 0
+          ? exactMentionedTrips
+          : trips.filter((trip) => tripHasFlightSignal(trip))
       : exactMentionedTrips.length > 0
         ? exactMentionedTrips
         : trips;
@@ -181,7 +208,7 @@ export function buildTripProgramReply(
       : [];
   if (genericProgramMatches.length > 1 && routeQueryWords.length <= 1) {
     return {
-      reply: buildAmbiguousTripReply(genericProgramMatches.slice(0, 3).map((match) => match.trip)),
+      reply: buildAmbiguousTripReply(uniqueTripsByRouteName(genericProgramMatches.map((match) => match.trip)).slice(0, 3)),
       trip: null,
       brochure: null,
       mediaUrls: [],
@@ -192,7 +219,7 @@ export function buildTripProgramReply(
     : resolveTripFromUserMessage(text, candidateTrips, { allowLooseFallback: false });
   if (resolution.status === "ambiguous") {
     return {
-      reply: buildAmbiguousTripReply(resolution.candidates),
+      reply: buildAmbiguousTripReply(uniqueTripsByRouteName(resolution.candidates)),
       trip: null,
       brochure: null,
       mediaUrls: [],
