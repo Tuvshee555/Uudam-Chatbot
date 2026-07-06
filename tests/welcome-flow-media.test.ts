@@ -179,6 +179,29 @@ test("photo-only mode treats gazrin phrasing as land-only and excludes combo tri
   assert.deepEqual(photos, ["https://example.com/beijing-ground-1.jpg"]);
 });
 
+test("photo-only mode excludes cruise trips from gazrin land-tour phrasing", async () => {
+  const { extractTripPhotosForUserMessage } = await loadWelcomeFlow();
+  const photos = extractTripPhotosForUserMessage(
+    "beejin gazrin aylal bnu",
+    [
+      trip({
+        id: "ground-tour",
+        route_name: "Бээжин газрын аялал",
+        category: "газрын аялал",
+        photo_urls: ["https://example.com/beijing-ground-1.jpg"],
+      }),
+      trip({
+        id: "cruise-tour",
+        route_name: "Усан онгоцны аялал - Эрээн - Бээжин - Тяньжин - Чежү Пусан",
+        category: "круз аялал",
+        photo_urls: ["https://example.com/beijing-cruise-1.jpg"],
+      }),
+    ],
+  );
+
+  assert.deepEqual(photos, ["https://example.com/beijing-ground-1.jpg"]);
+});
+
 test("brochure matching also refuses mismatched user and reply trips", async () => {
   const { extractTripBrochureAttachmentId } = await loadWelcomeFlow();
   const brochure = extractTripBrochureAttachmentId(

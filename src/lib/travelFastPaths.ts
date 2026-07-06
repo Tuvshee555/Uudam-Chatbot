@@ -437,6 +437,8 @@ function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] {
   const matches: TripMatch[] = [];
   for (const trip of trips) {
     if (trip.status !== "active") continue;
+    if (landOnly && !wantsFlight && tripIsLandFlightCombo(trip)) continue;
+    if (landOnly && tripIsCruise(trip)) continue;
 
     const routeNorm = normText(trip.route_name);
     const routePhonetic = phoneticLatinText(trip.route_name);
@@ -489,11 +491,14 @@ function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] {
     }
 
     const isCombo = tripIsLandFlightCombo(trip);
+    const isCruise = tripIsCruise(trip);
     const tripCat = normText(trip.category || "");
     let intentBoost = 0;
     if (landOnly) {
       if (tripCat.includes("газрын аялал")) intentBoost += 160;
       if (isCombo && !wantsFlight) intentBoost -= 220;
+      if (!tripCat.includes("газрын аялал")) intentBoost -= 180;
+      if (isCruise) intentBoost -= 260;
     }
     if (wantsCombo) {
       if (isCombo) intentBoost += 160;
@@ -659,6 +664,17 @@ function tripIsLandFlightCombo(trip: TravelTrip): boolean {
   return /газар\s*\+\s*нислэг|газар\s+нислэг\s+хосолсон/.test(name);
 }
 
+function tripIsCruise(trip: TravelTrip): boolean {
+  const category = normText(trip.category || "");
+  const name = normText(trip.route_name);
+  return (
+    category.includes("круз") ||
+    category.includes("усан онгоц") ||
+    name.includes("круз") ||
+    name.includes("усан онгоц")
+  );
+}
+
 function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBrochureIntent?: boolean }) {
   const query = normText(text);
   const queryPhonetic = phoneticLatinText(text);
@@ -676,6 +692,8 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
 
   for (const trip of trips) {
     if (trip.status !== "active") continue;
+    if (landOnly && !wantsFlight && tripIsLandFlightCombo(trip)) continue;
+    if (landOnly && tripIsCruise(trip)) continue;
     const routeNorm = normText(trip.route_name);
     const routePhonetic = phoneticLatinText(trip.route_name);
     // Filter route words through keywordTokens as well (strips GENERIC_ROUTE_WORDS).
@@ -701,11 +719,14 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
 
     // Category-intent alignment bonuses and penalties.
     const isCombo = tripIsLandFlightCombo(trip);
+    const isCruise = tripIsCruise(trip);
     const tripCat = (trip.category || "").toLowerCase();
     if (landOnly) {
       if (tripCat === "газрын аялал") score += 100;
       // Penalise land+flight combos heavily when user said "газрын аялал".
       if (isCombo && !wantsFlight) score -= 100;
+      if (!tripCat.includes("газрын") || !tripCat.includes("аялал")) score -= 180;
+      if (isCruise) score -= 260;
     }
     if (wantsCombo && isCombo) score += 180;
     if (wantsCombo && !isCombo) score -= 180;
