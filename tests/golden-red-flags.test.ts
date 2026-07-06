@@ -88,7 +88,7 @@ test("seats reply invents no seat count and leaks no marker", () => {
 });
 
 test("discount reply leaks no marker even with a priceless trip", () => {
-  const reply = buildDiscountReply("Хайнан хямдрал байгаа юу?", TRIPS);
+  const reply = buildDiscountReply("Хайнан хямдрал байгаа юу?", TRIPS, NOW);
   assertNoRedFlags(reply, "discount reply");
 });
 

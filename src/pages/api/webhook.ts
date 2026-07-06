@@ -1206,7 +1206,17 @@ async function handleMessage(
           });
           recordCounter("webhook.reengagement_contact_sent_total", 1, { platform });
         }
-      } catch { /* best-effort */ }
+      } catch (error) {
+        logWarn("webhook.inactivity_goodbye_failed", {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          platform,
+          pageId,
+          senderHash: hashIdentifier(senderId),
+          classification: classifyError(error),
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
     // No pause, no return — processing continues so the message gets answered.
   }
@@ -1304,7 +1314,25 @@ async function handleMessage(
                 correlationId: trace?.correlationId,
                 source: "api.webhook.photo_only",
               });
-            } catch { }
+            } catch (error) {
+              logWarn("webhook.photo_only_send_failed", {
+                requestId: trace?.requestId,
+                correlationId: trace?.correlationId,
+                platform,
+                pageId,
+                senderHash: hashIdentifier(senderId),
+                photoHost:
+                  (() => {
+                    try {
+                      return new URL(url).host;
+                    } catch {
+                      return "invalid_url";
+                    }
+                  })(),
+                classification: classifyError(error),
+                message: error instanceof Error ? error.message : String(error),
+              });
+            }
           }
           await recordImageMessage(senderId, photos);
           await setPhotoOnlyState(senderId, createPhotoOnlyState({
@@ -1334,7 +1362,17 @@ async function handleMessage(
           source: "api.webhook.photo_only_clarify",
         });
         await appendMessage(senderId, "assistant", clarification);
-      } catch { }
+      } catch (error) {
+        logWarn("webhook.photo_only_clarify_failed", {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          platform,
+          pageId,
+          senderHash: hashIdentifier(senderId),
+          classification: classifyError(error),
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
     logInfo("webhook.photo_only_mode", {
       requestId: trace?.requestId,
@@ -1674,7 +1712,17 @@ async function handleMessage(
           correlationId: trace?.correlationId,
           source: "api.webhook.handoff_goodbye",
         });
-      } catch { /* best-effort */ }
+      } catch (error) {
+        logWarn("webhook.handoff_goodbye_failed", {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          platform,
+          pageId,
+          senderHash: hashIdentifier(senderId),
+          classification: classifyError(error),
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
     return;
   }

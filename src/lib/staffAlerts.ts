@@ -11,7 +11,7 @@ export type StaffLeadAlert = {
   contactPhone?: string;
 };
 
-function buildAlertText(alert: StaffLeadAlert): string {
+export function buildAlertText(alert: StaffLeadAlert): string {
   const heading =
     alert.kind === "handoff"
       ? "🔔 Шинэ хүсэлт — хэрэглэгч хүнтэй ярихыг хүсэв"

@@ -1936,10 +1936,14 @@ export function hasDiscountIntent(text: string): boolean {
   return hasMn || hasEn;
 }
 
-export function buildDiscountReply(text: string, trips: TravelTrip[]): string | null {
+export function buildDiscountReply(
+  text: string,
+  trips: TravelTrip[],
+  now = new Date(),
+): string | null {
   const { best: bestRaw, ambiguous } = findBestTripMatch(text, trips);
   if (!bestRaw) return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
-  const best = withFutureDepartureDates(bestRaw);
+  const best = withFutureDepartureDates(bestRaw, now);
 
   const extra = (best.extra || {}) as Record<string, unknown>;
   const currency = best.currency || "MNT";

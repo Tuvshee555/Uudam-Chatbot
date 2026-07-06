@@ -210,6 +210,7 @@ test("discount questions still show regular price when no promo price is stored"
         departure_dates: ["7 сарын 5", "7 сарын 12"],
       }),
     ],
+    NOW,
   );
 
   assert.match(reply || "", /Хямдралтай үнийн мэдээлэл/);
@@ -635,6 +636,7 @@ test("discount question falls back to notes and matching date group text", () =>
         departure_dates: ["7 сарын 3"],
       }),
     ],
+    NOW,
   );
 
   assert.match(reply || "", /Далянь хотын шууд нислэгтэй аялал/);
