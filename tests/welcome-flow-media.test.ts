@@ -150,6 +150,35 @@ test("photo-only mode matches romanized travel text against Cyrillic trip aliase
   ]);
 });
 
+test("photo-only mode treats gazrin phrasing as land-only and excludes combo trips", async () => {
+  const { extractTripPhotosForUserMessage } = await loadWelcomeFlow();
+  const photos = extractTripPhotosForUserMessage(
+    "beejin gazrin aylal bnu",
+    [
+      trip({
+        id: "ground-tour",
+        route_name: "Бээжин газрын аялал",
+        category: "газрын аялал",
+        photo_urls: ["https://example.com/beijing-ground-1.jpg"],
+      }),
+      trip({
+        id: "combo-tour",
+        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        category: "газар + нислэг хосолсон",
+        photo_urls: ["https://example.com/combo-tour-1.jpg"],
+        extra: {
+          aliases: [
+            "Бээжин Бэйдэхэ газар нислэг хосолсон",
+            "Бэйдэхэ Бээжин газар нислэг",
+          ],
+        },
+      }),
+    ],
+  );
+
+  assert.deepEqual(photos, ["https://example.com/beijing-ground-1.jpg"]);
+});
+
 test("brochure matching also refuses mismatched user and reply trips", async () => {
   const { extractTripBrochureAttachmentId } = await loadWelcomeFlow();
   const brochure = extractTripBrochureAttachmentId(

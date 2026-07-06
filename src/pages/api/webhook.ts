@@ -14,10 +14,12 @@ import { autoHandoffSender, isPaused, pauseBot, storeSenderName, trackSender } f
 import { createLead, dbClaimGoodbye, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { appendLeadCaptureCta, buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
-import { claimSeasonSend, extractTripPhotosForReply, extractTripPhotosForUserMessage, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
+import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
+import { createPhotoOnlyState, getPhotoOnlyState, setPhotoOnlyState } from "../../lib/photoOnlyState";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
 import { advanceCollectState, buildCompletionMessage, buildLeadContext, clearCollectState, getCollectState, isInCollectFlow, promptForStep, setCollectState, startCollectState, } from "../../lib/bookingCollect";
+import type { TravelTrip } from "../../lib/travelTypes";
 import { getEnv } from "../../lib/env";
 import { withRedis } from "../../lib/redisState";
 import { beginRequestTrace, classifyError, finishRequestTrace, hashIdentifier, logError, logInfo, logWarn, recordCounter, setGauge, } from "../../lib/observability";
@@ -28,6 +30,7 @@ const PAGE_TOKENS = new Map(env.facebookPages.map((p) => [p.pageId, p.token]));
 const FALLBACK_TOKEN = env.tokenPage;
 const META_APP_SECRET = env.metaAppSecret;
 const FALLBACK_SEND_ERROR_MESSAGE = "Уучлаарай, мессеж илгээхэд алдаа гарлаа.";
+const MAX_PHOTO_ONLY_PHOTOS = 2;
 type Platform = "facebook" | "instagram";
 type PendingConversationPayload = {
   platform: Platform;
@@ -796,6 +799,62 @@ async function recordImageMessage(senderId: string, photoUrls: string[]) {
   ).catch(() => {});
 }
 
+function getTripPhotoUrls(trip: TravelTrip | null | undefined): string[] {
+  if (!trip || !Array.isArray(trip.photo_urls)) return [];
+  return trip.photo_urls
+    .filter((url): url is string => typeof url === "string" && url.startsWith("https://"))
+    .slice(0, MAX_PHOTO_ONLY_PHOTOS);
+}
+
+function normalizePhotoOnlyText(text: string) {
+  return text
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isPhotoOnlyFollowup(text: string) {
+  const normalized = normalizePhotoOnlyText(text);
+  return [
+    "again",
+    "more",
+    "photo",
+    "photos",
+    "zurag",
+    "zurguud",
+    "дахин",
+    "дахиад",
+    "дахиад зураг",
+    "дахин зураг",
+    "зураг",
+    "зургууд",
+    "өөр зураг",
+    "more photo",
+    "more photos",
+  ].includes(normalized);
+}
+
+function pickTripsByIds(trips: TravelTrip[], ids: string[]) {
+  const byId = new Map(trips.map((trip) => [trip.id, trip] as const));
+  return ids.map((id) => byId.get(id)).filter((trip): trip is TravelTrip => Boolean(trip));
+}
+
+function pickNumberedTripChoice(text: string, trips: TravelTrip[]) {
+  const normalized = normalizePhotoOnlyText(text);
+  if (!/^[1-9]$/.test(normalized)) return null;
+  const index = Number.parseInt(normalized, 10) - 1;
+  return index >= 0 && index < trips.length ? trips[index] : null;
+}
+
+function buildPhotoOnlyAmbiguousPrompt(trips: TravelTrip[]) {
+  return [
+    "Яг аль аяллын зураг үзэх вэ?",
+    ...trips.slice(0, 3).map((trip, index) => `${index + 1}. ${trip.route_name}`),
+  ].join("\n");
+}
+
 async function sendPhotoAlbum(
   senderId: string,
   photoUrls: string[],
@@ -1171,37 +1230,93 @@ async function handleMessage(
     return;
   }
 
-  // Photo-only mode: no text replies at all. If the message matches a specific trip
-  // and that trip has photos, send only the photos. On a miss, ask the
-  // smallest possible clarifying question instead of going silent.
+  // Photo-only mode: send photos only when we have a real trip signal.
+  // Stay silent on greetings, unrelated text, or unknown requests. The only
+  // text we send here is a true disambiguation prompt when the user is clearly
+  // talking about one of several matching trips.
   const botControl = await getBotControl();
   if (botControl.photo_only && platform === "facebook" && token) {
     const trips = await listTrips({ status: "active" });
-    const photos = extractTripPhotosForUserMessage(text, trips);
-    if (photos.length > 0) {
-      for (const url of photos) {
-        try {
-          await sendImageMessage(senderId, url, token, {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            source: "api.webhook.photo_only",
-          });
-        } catch { }
-      }
-      await recordImageMessage(senderId, photos);
-    } else {
-      const resolution = resolveTripFromUserMessage(text, trips, {
-        allowLooseFallback: false,
+    const photoOnlyState = await getPhotoOnlyState(senderId);
+    const pendingTrips = photoOnlyState ? pickTripsByIds(trips, photoOnlyState.pendingTripIds) : [];
+    const activeTrip = photoOnlyState?.activeTripId
+      ? trips.find((trip) => trip.id === photoOnlyState.activeTripId) || null
+      : null;
+
+    let promptKind: "generic" | "ambiguous" | "no_photos" | "not_found" | null = null;
+    let clarification: string | null = null;
+    let photos: string[] = [];
+
+    if (isGenericOpener(text)) {
+      logInfo("webhook.photo_only_mode", {
+        requestId: trace?.requestId,
+        senderHash: hashIdentifier(senderId),
+        photosCount: 0,
+        promptKind: "generic_silent",
       });
-      const clarification =
-        resolution.status === "ambiguous"
-          ? [
-              "Яг аль аяллын зураг үзэх вэ?",
-              ...resolution.candidates.slice(0, 3).map((trip) => `• ${trip.route_name}`),
-            ].join("\n")
-          : resolution.status === "verified"
-            ? "Энэ аялалд одоогоор зураг алга. Өөр аяллын нэр бичээрэй."
-            : "Ямар аяллын зураг үзэх вэ?";
+      return;
+    } else {
+      let resolvedTrip: TravelTrip | null = null;
+      let ambiguousTrips: TravelTrip[] = [];
+
+      if (pendingTrips.length > 0) {
+        const numberedChoice = pickNumberedTripChoice(text, pendingTrips);
+        if (numberedChoice) {
+          resolvedTrip = numberedChoice;
+        } else {
+          const pendingResolution = resolveTripFromUserMessage(text, pendingTrips, {
+            allowLooseFallback: false,
+          });
+          if (pendingResolution.status === "verified") resolvedTrip = pendingResolution.trip;
+          else if (pendingResolution.status === "ambiguous") ambiguousTrips = pendingResolution.candidates;
+        }
+      }
+
+      if (!resolvedTrip && ambiguousTrips.length === 0 && activeTrip && isPhotoOnlyFollowup(text)) {
+        resolvedTrip = activeTrip;
+      }
+
+      if (!resolvedTrip && ambiguousTrips.length === 0) {
+        const resolution = resolveTripFromUserMessage(text, trips, {
+          allowLooseFallback: false,
+        });
+        if (resolution.status === "verified") resolvedTrip = resolution.trip;
+        else if (resolution.status === "ambiguous") ambiguousTrips = resolution.candidates;
+      }
+
+      if (resolvedTrip) {
+        photos = getTripPhotoUrls(resolvedTrip);
+        if (photos.length > 0) {
+          for (const url of photos) {
+            try {
+              await sendImageMessage(senderId, url, token, {
+                requestId: trace?.requestId,
+                correlationId: trace?.correlationId,
+                source: "api.webhook.photo_only",
+              });
+            } catch { }
+          }
+          await recordImageMessage(senderId, photos);
+          await setPhotoOnlyState(senderId, createPhotoOnlyState({
+            activeTripId: resolvedTrip.id,
+            pendingTripIds: [],
+            lastPromptKind: null,
+            lastPromptAt: 0,
+          }));
+        }
+      } else if (ambiguousTrips.length > 0) {
+        clarification = buildPhotoOnlyAmbiguousPrompt(ambiguousTrips);
+        promptKind = "ambiguous";
+        await setPhotoOnlyState(senderId, createPhotoOnlyState({
+          activeTripId: activeTrip?.id ?? null,
+          pendingTripIds: ambiguousTrips.slice(0, 3).map((trip) => trip.id),
+          lastPromptKind: promptKind,
+          lastPromptAt: Date.now(),
+        }));
+      }
+    }
+
+    if (clarification) {
       try {
         await sendTextMessage(senderId, clarification, token, {
           requestId: trace?.requestId,
@@ -1215,6 +1330,7 @@ async function handleMessage(
       requestId: trace?.requestId,
       senderHash: hashIdentifier(senderId),
       photosCount: photos.length,
+      promptKind,
     });
     return;
   }

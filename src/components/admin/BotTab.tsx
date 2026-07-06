@@ -831,9 +831,20 @@ function ReminderCard({
 }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const enabled = reminderEnabled(settings);
-  const text = reminderText(settings);
+  const savedText = reminderText(settings);
   const photoUrl = reminderPhotoUrl(settings);
+
+  const [textDraft, setTextDraft] = useState(savedText);
+  const [textDirty, setTextDirty] = useState(false);
+  const savedTextRef = useRef(savedText);
+  if (savedTextRef.current !== savedText && !textDirty) {
+    savedTextRef.current = savedText;
+    setTextDraft(savedText);
+  }
 
   async function patchExtra(extra: Record<string, unknown>) {
     setBusy(true);
@@ -848,6 +859,63 @@ function ReminderCard({
       toast.error("Хадгалахад алдаа гарлаа.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function saveText() {
+    setBusy(true);
+    try {
+      await apiFetch("/api/admin/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fields: { extra: { reminder_text: textDraft.trim() } } }),
+      });
+      savedTextRef.current = textDraft.trim();
+      setTextDirty(false);
+      onSettingsChanged();
+      toast.success("Сануулгын текст хадгалагдлаа.");
+    } catch {
+      toast.error("Хадгалахад алдаа гарлаа.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uploadPhoto(files: FileList | File[]) {
+    const file = Array.from(files)[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("Зураг хэт том байна (10MB хүртэл).");
+      return;
+    }
+    setUploading(true);
+    try {
+      const sigRes = await apiFetch("/api/admin/upload-image", { method: "POST" });
+      if (!sigRes.ok) throw new Error("upload not configured");
+      const sig = (await sigRes.json()) as {
+        signature: string;
+        timestamp: number;
+        cloudName: string;
+        apiKey: string;
+        folder: string;
+      };
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("api_key", sig.apiKey);
+      fd.append("timestamp", String(sig.timestamp));
+      fd.append("signature", sig.signature);
+      fd.append("folder", sig.folder);
+      const up = await fetch(
+        `https://api.cloudinary.com/v1_1/${sig.cloudName}/image/upload`,
+        { method: "POST", body: fd },
+      );
+      const upJson = (await up.json()) as { secure_url?: string };
+      if (!up.ok || !upJson.secure_url) throw new Error("cloudinary failed");
+      await patchExtra({ reminder_photo_url: upJson.secure_url });
+    } catch {
+      toast.error("Зураг оруулж чадсангүй.");
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -881,25 +949,102 @@ function ReminderCard({
         </button>
       </div>
 
-      {(text || photoUrl) && (
-        <div className="mt-3 space-y-2 rounded-lg border border-line bg-surface-sunken p-3">
-          {photoUrl && (
+      <div className="mt-3 space-y-3 rounded-lg border border-line bg-surface-sunken p-3">
+        {/* Photo */}
+        <div>
+          <p className="mb-1.5 text-xs font-medium text-ink-muted">Зураг</p>
+          {photoUrl ? (
             <div className="flex items-center gap-3">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={photoUrl} alt="" className="h-16 w-16 shrink-0 rounded-md object-cover" />
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void patchExtra({ reminder_photo_url: "" })}
-                className="rounded-md border border-danger/30 px-2.5 py-1.5 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
-              >
-                Зургийг устгах
-              </button>
+              <div className="flex flex-col gap-1.5">
+                <button
+                  type="button"
+                  disabled={busy || uploading}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="rounded-md border border-line-strong px-2.5 py-1.5 text-xs font-medium text-ink hover:border-brand hover:text-brand disabled:opacity-50"
+                >
+                  {uploading ? "Оруулж байна…" : "Зураг солих"}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || uploading}
+                  onClick={() => void patchExtra({ reminder_photo_url: "" })}
+                  className="rounded-md border border-danger/30 px-2.5 py-1.5 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+                >
+                  Зургийг устгах
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragging(false);
+                void uploadPhoto(e.dataTransfer.files);
+              }}
+              onClick={() => fileInputRef.current?.click()}
+              className={cx(
+                "flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed p-4 text-center transition-colors",
+                dragging
+                  ? "border-brand bg-brand-soft"
+                  : "border-line-strong bg-surface hover:border-brand",
+              )}
+            >
+              {uploading ? (
+                <span className="flex items-center gap-2 text-xs text-ink-muted">
+                  <Spinner className="h-3.5 w-3.5" /> Оруулж байна…
+                </span>
+              ) : (
+                <>
+                  <p className="text-xs font-medium text-ink">
+                    Зураг чирж оруулах эсвэл дарж сонгох
+                  </p>
+                  <p className="text-[11px] text-ink-subtle">PNG, JPG, WEBP — хамгийн ихдээ 10MB</p>
+                </>
+              )}
             </div>
           )}
-          {text && <p className="whitespace-pre-wrap text-xs text-ink-muted">{text}</p>}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files) void uploadPhoto(e.target.files);
+              e.target.value = "";
+            }}
+          />
         </div>
-      )}
+
+        {/* Text */}
+        <div>
+          <p className="mb-1.5 text-xs font-medium text-ink-muted">Текст</p>
+          <Textarea
+            rows={3}
+            placeholder="Жишээ: Сайн байна уу! Танд тохирсон аялал байгаа эсэхийг мэдэхийг хүсвэл бидэнтэй холбогдоорой."
+            value={textDraft}
+            onChange={(e) => {
+              setTextDraft(e.target.value);
+              setTextDirty(true);
+            }}
+          />
+          <div className="mt-2 flex items-center justify-between">
+            <p className="text-xs text-ink-subtle">Хоосон орхивол текст илгээгдэхгүй.</p>
+            <Button
+              onClick={() => void saveText()}
+              disabled={busy || !textDirty}
+            >
+              {busy ? "Хадгалж байна…" : "Хадгалах"}
+            </Button>
+          </div>
+        </div>
+      </div>
     </Card>
   );
 }
