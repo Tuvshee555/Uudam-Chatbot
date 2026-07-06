@@ -1267,8 +1267,18 @@ async function handleMessage(
           const pendingResolution = resolveTripFromUserMessage(text, pendingTrips, {
             allowLooseFallback: false,
           });
-          if (pendingResolution.status === "verified") resolvedTrip = pendingResolution.trip;
-          else if (pendingResolution.status === "ambiguous") ambiguousTrips = pendingResolution.candidates;
+          const fullResolution = resolveTripFromUserMessage(text, trips, {
+            allowLooseFallback: false,
+          });
+          if (fullResolution.status === "verified") {
+            resolvedTrip = fullResolution.trip;
+          } else if (pendingResolution.status === "verified") {
+            resolvedTrip = pendingResolution.trip;
+          } else if (fullResolution.status === "ambiguous") {
+            ambiguousTrips = fullResolution.candidates;
+          } else if (pendingResolution.status === "ambiguous") {
+            ambiguousTrips = pendingResolution.candidates;
+          }
         }
       }
 
