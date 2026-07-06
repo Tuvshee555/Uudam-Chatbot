@@ -144,6 +144,31 @@ test("matches Zhangjiajie alias to the Shanghai + Tengeriin Khaalga route", () =
   assert.doesNotMatch(reply || "", /Бэйдайхэ/);
 });
 
+test("matches latin shanghai query to the Shanghai route", () => {
+  const resolution = resolveTripFromUserMessage(
+    "shanghai aylal medeelel",
+    [
+      trip({
+        id: "shanghai-zhangjiajie",
+        route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
+        extra: {
+          aliases: ["Шанхай Жанжиажэ", "Шанхай Тэнгэрийн хаалга"],
+        },
+      }),
+      trip({
+        id: "beijing-ground",
+        route_name: "ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ-БЭЭЖИНГИЙН ГАЗРЫН АЯЛАЛ",
+      }),
+    ],
+  );
+
+  assert.equal(resolution.status, "verified");
+  assert.equal(
+    resolution.status === "verified" ? resolution.trip.id : null,
+    "shanghai-zhangjiajie",
+  );
+});
+
 test("prefers the direct-flight Tengeriin Khaalga trip over longer variants", () => {
   const reply = buildStructuredTripReply(
     "Тэнгэрийн хаалга шууд нислэгтэй аялал хэд вэ?",

@@ -92,13 +92,12 @@ export function resetWebhookStateForTests() {
   resetWebhookStateForTestsInternal();
 }
 
-function isLikelyContextDependentText(text: string) {
+export function isLikelyContextDependentText(text: string) {
   const normalized = normalizePhotoOnlyText(text);
   if (!normalized) return false;
   const words = normalized.split(/\s+/).filter(Boolean);
   if (words.length <= 2) return true;
-  if (normalized.length <= 24) return true;
-  const followupHints = [
+  const referentialHints = [
     "again",
     "more",
     "photo",
@@ -122,13 +121,35 @@ function isLikelyContextDependentText(text: string) {
     "энэ",
     "тэр",
   ];
-  return followupHints.some((hint) => normalized.includes(hint));
+  const hasHint = referentialHints.some((hint) => normalized.includes(hint));
+  if (!hasHint) return false;
+  if (normalized.length <= 24) return true;
+
+  const contentWords = words.filter(
+    (word) =>
+      word.length >= 4 &&
+      !referentialHints.includes(word) &&
+      ![
+        "аялал",
+        "аяллын",
+        "зураг",
+        "хөтөлбөр",
+        "program",
+        "price",
+        "dates",
+        "seat",
+        "seats",
+        "үнэ",
+        "огноо",
+        "суудал",
+      ].includes(word),
+  );
+  return contentWords.length === 0;
 }
 
-function buildContextualUserText(
+export function buildContextualUserText(
   history: Array<{ role: "user" | "assistant"; text: string }>,
   userText: string,
-  customerMemory = "",
 ) {
   if (!isLikelyContextDependentText(userText)) return userText;
   const recentUserTurns = history
@@ -136,13 +157,8 @@ function buildContextualUserText(
     .map((message) => message.text.trim())
     .filter(Boolean)
     .slice(-4);
-  const memoryText = customerMemory.trim();
-  if (recentUserTurns.length === 0 && !memoryText) return userText;
-  return [
-    memoryText ? `Customer memory:\n${memoryText}` : "",
-    recentUserTurns.length ? `Recent customer messages:\n${recentUserTurns.join("\n")}` : "",
-    `Current message:\n${userText.trim()}`,
-  ].filter(Boolean).join("\n\n");
+  if (recentUserTurns.length === 0) return userText;
+  return [...recentUserTurns, userText.trim()].join("\n");
 }
 
 async function handleMessage(
@@ -285,7 +301,7 @@ async function handleMessage(
   await assertLockHealthy();
   const history = await getHistory(senderId);
   const customerMemory = await getCustomerMemoryText(senderId);
-  const contextualUserText = buildContextualUserText(history, text, customerMemory);
+  const contextualUserText = buildContextualUserText(history, text);
   const sessionId = `${platform}:${pageId}:${senderId}`;
   const rememberTurn = (source: string) =>
     updateCustomerMemoryAfterTurn({
@@ -396,6 +412,9 @@ async function handleMessage(
             lastPromptKind: null,
             lastPromptAt: 0,
           }));
+        } else {
+          clarification = `Одоогоор ${resolvedTrip.route_name} аяллын зураг системд ороогүй байна. Хүсвэл хөтөлбөр, үнэ, гарах өдрийг нь бичиж өгье.`;
+          promptKind = "no_photos";
         }
       } else if (ambiguousTrips.length > 0) {
         clarification = buildPhotoOnlyAmbiguousPrompt(ambiguousTrips);
