@@ -1,7 +1,25 @@
 import React from "react";
 import { Alert, Badge, Button, Icons, Modal, Select, Spinner, cx } from "@/components/ui";
+import type { ApiFetch, PosterTrip } from "./PosterTab";
 
-const FIELD_LABELS = {
+/* ------------------------------------------------------------------ *
+ * These field keys mirror MappedTripFields in src/lib/poster/tripMapper.ts
+ * (server-side mapping of poster data onto real trip fields) plus the
+ * "extra" sub-keys it nests (included_items/excluded_items), which this
+ * modal flattens into top-level diff rows for display.
+ * ------------------------------------------------------------------ */
+type FieldKey =
+  | "route_name"
+  | "duration_text"
+  | "departure_dates"
+  | "adult_price"
+  | "child_price"
+  | "hotel"
+  | "has_food"
+  | "included_items"
+  | "excluded_items";
+
+const FIELD_LABELS: Record<string, string> = {
   route_name: "Аяллын нэр",
   duration_text: "Хугацаа",
   departure_dates: "Гарах өдрүүд",
@@ -13,7 +31,11 @@ const FIELD_LABELS = {
   excluded_items: "Багтаагүй зүйлс",
 };
 
-function formatFieldValue(key, value) {
+/** A field value as seen in this modal: either the poster's mapped value or a
+ * matched trip's current value. Shapes mirror MappedTripFields/TripMutationFields. */
+type FieldValue = string | number | boolean | string[] | null | undefined;
+
+function formatFieldValue(key: string, value: FieldValue): string {
   if (value == null || value === "") return "—";
   if (Array.isArray(value)) return value.length ? value.join(", ") : "—";
   if (key === "has_food") return value ? "Тийм" : "Үгүй";
@@ -27,14 +49,14 @@ function formatFieldValue(key, value) {
 // "8 өдөр / 7 шөнө" style separators. "БЭЭЖИН – ЖИНИН" vs "Бээжин - Жинин" is
 // NOT a real difference — proposing it as a pre-checked change would downgrade
 // a nicely-cased trip name to shouting caps on one click.
-function cosmetic(value) {
+function cosmetic(value: unknown): string {
   return String(value ?? "")
     .toLowerCase()
     .replace(/[\s\-–—−/\\.,:;·]+/g, " ")
     .trim();
 }
 
-function valuesEqual(a, b) {
+function valuesEqual(a: FieldValue, b: FieldValue): boolean {
   if (Array.isArray(a) || Array.isArray(b)) {
     const arrA = Array.isArray(a) ? a : [];
     const arrB = Array.isArray(b) ? b : [];
@@ -45,6 +67,52 @@ function valuesEqual(a, b) {
   }
   return (a ?? null) === (b ?? null);
 }
+
+/** A candidate trip returned by /api/admin/poster-match, mirroring the
+ * `toCandidate` shape built server-side in src/pages/api/admin/poster-match.ts. */
+type MatchCandidate = {
+  id: string;
+  route_name: string;
+  operator_name?: string | null;
+  category?: string | null;
+  photoCount: number;
+  currentFields: Partial<Record<FieldKey, FieldValue>>;
+};
+
+/** The poster-data-mapped-onto-trip-fields payload from poster-match, mirroring
+ * MappedTripFields in tripMapper.ts (its "extra" sub-object is flattened by diffRows). */
+type MappedFields = Partial<Record<FieldKey, FieldValue>> & {
+  extra?: Partial<Record<FieldKey, FieldValue>>;
+};
+
+type DiffRow = {
+  key: string;
+  oldValue: FieldValue;
+  newValue: FieldValue;
+};
+
+type SyncResult = {
+  ok?: boolean;
+  created?: boolean;
+  tripId?: string;
+  tripName?: string;
+  mode?: "replace" | "append";
+  uploaded?: number;
+  totalPhotos?: number;
+  failed?: number;
+  fieldsWritten?: string[];
+  error?: string;
+};
+
+export type AttachToTripModalProps = {
+  open: boolean;
+  onClose: () => void;
+  posterTitle: string;
+  posterTrip: PosterTrip | null;
+  apiFetch: ApiFetch;
+  captureImages: () => Promise<string[]>;
+  onDone?: (result: SyncResult) => void;
+};
 
 /**
  * Confirmation modal that attaches a poster to a real chatbot trip — both
@@ -80,18 +148,18 @@ export default function AttachToTripModal({
   apiFetch,
   captureImages,
   onDone,
-}) {
+}: AttachToTripModalProps) {
   const [loading, setLoading] = React.useState(false);
   const [matchError, setMatchError] = React.useState("");
-  const [candidates, setCandidates] = React.useState([]);
-  const [allTrips, setAllTrips] = React.useState([]);
-  const [mappedFields, setMappedFields] = React.useState({});
+  const [candidates, setCandidates] = React.useState<MatchCandidate[]>([]);
+  const [allTrips, setAllTrips] = React.useState<MatchCandidate[]>([]);
+  const [mappedFields, setMappedFields] = React.useState<MappedFields>({});
   const [target, setTarget] = React.useState(""); // tripId | "__new__" | ""
-  const [mode, setMode] = React.useState("replace");
-  const [approvedKeys, setApprovedKeys] = React.useState(() => new Set());
+  const [mode, setMode] = React.useState<"replace" | "append">("replace");
+  const [approvedKeys, setApprovedKeys] = React.useState<Set<string>>(() => new Set());
   const [submitting, setSubmitting] = React.useState(false);
   const [submitError, setSubmitError] = React.useState("");
-  const [result, setResult] = React.useState(null);
+  const [result, setResult] = React.useState<SyncResult | null>(null);
 
   React.useEffect(() => {
     if (!open) return;
@@ -136,17 +204,17 @@ export default function AttachToTripModal({
 
   // Fields where the poster's data differs from the selected trip's current
   // value. For a new trip, every mapped field is "new" (nothing to diff against).
-  const diffRows = React.useMemo(() => {
+  const diffRows = React.useMemo<DiffRow[]>(() => {
     const current = selectedTrip?.currentFields || {};
     return Object.keys(mappedFields)
       .filter((key) => key !== "extra")
-      .map((key) => ({ key, oldValue: current[key], newValue: mappedFields[key] }))
+      .map((key) => ({ key, oldValue: current[key as FieldKey], newValue: mappedFields[key as FieldKey] }))
       .concat(
         mappedFields.extra
           ? Object.keys(mappedFields.extra).map((key) => ({
               key,
-              oldValue: current[key],
-              newValue: mappedFields.extra[key],
+              oldValue: current[key as FieldKey],
+              newValue: mappedFields.extra?.[key as FieldKey],
             }))
           : [],
       )
@@ -159,7 +227,7 @@ export default function AttachToTripModal({
     setApprovedKeys(new Set(diffRows.map((r) => r.key)));
   }, [diffRows]);
 
-  function toggleField(key) {
+  function toggleField(key: string) {
     setApprovedKeys((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
@@ -170,10 +238,10 @@ export default function AttachToTripModal({
 
   const canSubmit = !loading && !submitting && !result && (isNew || Boolean(selectedTrip));
 
-  function buildApprovedFieldsPayload() {
+  function buildApprovedFieldsPayload(): Record<string, unknown> {
     const EXTRA_KEYS = new Set(["included_items", "excluded_items"]);
-    const fields = {};
-    const extra = {};
+    const fields: Record<string, unknown> = {};
+    const extra: Record<string, unknown> = {};
     for (const row of diffRows) {
       if (!approvedKeys.has(row.key)) continue;
       if (EXTRA_KEYS.has(row.key)) extra[row.key] = row.newValue;
@@ -246,10 +314,10 @@ export default function AttachToTripModal({
             <b>{result.tripName}</b>
           </div>
           <p className="mt-1 text-sm">
-            {result.uploaded > 0 && `Оруулсан зураг: ${result.uploaded} · Нийт зураг: ${result.totalPhotos}`}
-            {result.failed > 0 && ` · Амжилтгүй: ${result.failed}`}
+            {(result.uploaded ?? 0) > 0 && `Оруулсан зураг: ${result.uploaded} · Нийт зураг: ${result.totalPhotos}`}
+            {(result.failed ?? 0) > 0 && ` · Амжилтгүй: ${result.failed}`}
           </p>
-          {result.fieldsWritten?.length > 0 && (
+          {result.fieldsWritten && result.fieldsWritten.length > 0 && (
             <p className="mt-1 text-sm">
               Шинэчилсэн мэдээлэл: {result.fieldsWritten.map((k) => FIELD_LABELS[k] || k).join(", ")}
             </p>

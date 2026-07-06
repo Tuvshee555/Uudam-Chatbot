@@ -1,8 +1,37 @@
 "use client";
 
 import { useRef, useState } from "react";
+import type {
+  ChangeEvent,
+  FocusEvent,
+  FormEvent,
+  ReactNode,
+  RefObject,
+} from "react";
+import type {
+  DayPhotoInputRefs,
+  PosterAddPriceColFn,
+  PosterAddPriceRowFn,
+  PosterInsertDayFn,
+  PosterMeals,
+  PosterOnDayPhotoFileFn,
+  PosterPriceTable,
+  PosterRemoveItemFn,
+  PosterRemovePriceColFn,
+  PosterReorderDayFn,
+  PosterTrip,
+  PosterUpdateFn,
+} from "./PosterTab";
 
-function Ed({ value = "", onChange, as = "span", className, placeholder }) {
+type EdProps = {
+  value?: string;
+  onChange: (value: string) => void;
+  as?: "span" | "div";
+  className?: string;
+  placeholder?: string;
+};
+
+function Ed({ value = "", onChange, as = "span", className, placeholder }: EdProps) {
   const Tag = as;
   return (
     <Tag
@@ -10,7 +39,7 @@ function Ed({ value = "", onChange, as = "span", className, placeholder }) {
       contentEditable
       suppressContentEditableWarning
       data-placeholder={placeholder || ""}
-      onBlur={(e) => {
+      onBlur={(e: FocusEvent<HTMLElement>) => {
         const txt = e.currentTarget.innerText.trim();
         if (txt !== value) onChange(txt);
       }}
@@ -20,7 +49,7 @@ function Ed({ value = "", onChange, as = "span", className, placeholder }) {
   );
 }
 
-function RemoveBtn({ onClick, title = "Устгах" }) {
+function RemoveBtn({ onClick, title = "Устгах" }: { onClick: () => void; title?: string }) {
   return (
     <button type="button" className="editor-only removebtn" onClick={onClick} title={title}>
       ×
@@ -28,24 +57,24 @@ function RemoveBtn({ onClick, title = "Устгах" }) {
   );
 }
 
-const MEAL_LABELS = [
+const MEAL_LABELS: Array<[keyof PosterMeals, string]> = [
   ["breakfast", "Өглөөний цай"],
   ["lunch", "Өдрийн хоол"],
   ["dinner", "Оройн хоол"],
 ];
 const HERO_KICKER = "😊 АЯЛАЛ БҮХЭН ДАВТАГДАШГҮЙ😊";
 
-function cleanText(value) {
+function cleanText(value: unknown): string {
   const text = String(value ?? "").trim();
   if (!text || /^null$/i.test(text) || /^undefined$/i.test(text)) return "";
   return text;
 }
 
-function buildNarrative(day) {
+function buildNarrative(day: { summary?: string }): string {
   return String(day.summary || "").trim();
 }
 
-function splitSummary(text) {
+function splitSummary(text: string | undefined): string[] {
   const t = String(text || "").trim();
   if (!t) return [];
   // If the user already structured the text with line breaks, respect those groupings.
@@ -54,8 +83,15 @@ function splitSummary(text) {
   return t.split(/(?<=[.])\s+/).map((s) => s.trim()).filter(Boolean);
 }
 
-function BulletEd({ value, onChange, className, placeholder }) {
-  const listRef = useRef(null);
+type BulletEdProps = {
+  value: string;
+  onChange: (value: string) => void;
+  className?: string;
+  placeholder?: string;
+};
+
+function BulletEd({ value, onChange, className, placeholder }: BulletEdProps) {
+  const listRef = useRef<HTMLUListElement>(null);
   const bullets = splitSummary(value);
 
   const emit = () => {
@@ -85,7 +121,14 @@ function BulletEd({ value, onChange, className, placeholder }) {
   );
 }
 
-function tableFromPriceNote(note) {
+/** A price table derived from a legacy free-text price_note, tagged so callers
+ * know to route edits back through price_note instead of price_table. */
+type NoteDerivedPriceTable = PosterPriceTable & {
+  fromPriceNote: true;
+  priceText: string;
+};
+
+function tableFromPriceNote(note: string | undefined): NoteDerivedPriceTable | null {
   const text = String(note || "").replace(/^⚠\s*/, "").trim();
   if (!text) return null;
 
@@ -93,8 +136,8 @@ function tableFromPriceNote(note) {
   if (matches.length < 2) return null;
 
   let cursor = 0;
-  const columns = [];
-  const cells = [];
+  const columns: string[] = [];
+  const cells: string[] = [];
   let consumedEnd = 0;
 
   for (const match of matches) {
@@ -109,7 +152,7 @@ function tableFromPriceNote(note) {
     const label = rawLabel || `Үнэ ${columns.length + 1}`;
     const amount = `${match[1].replace(/[’']/g, ",").replace(/\s+/g, "")}₮`;
 
-    let end = match.index + match[0].length;
+    let end = (match.index ?? 0) + match[0].length;
     const paren = text.slice(end).match(/^\s*(\([^)]*\))/);
     columns.push(paren ? `${label} ${paren[1]}` : label);
     cells.push(amount);
@@ -130,7 +173,7 @@ function tableFromPriceNote(note) {
   };
 }
 
-function splitPriceNotes(text) {
+function splitPriceNotes(text: string | undefined): string[] {
   const cleaned = String(text || "")
     .replace(/^⚠\s*/, "")
     .split(/\n+/)
@@ -139,8 +182,8 @@ function splitPriceNotes(text) {
 
   if (cleaned.length <= 1) return cleaned;
 
-  const boxes = [];
-  let current = null;
+  const boxes: Array<{ title: string; items: string[] }> = [];
+  let current: { title: string; items: string[] } | null = null;
 
   for (const line of cleaned) {
     const isHeading = /хямдрал|урамшуулал|санал|бэлэг|хөтөлбөр/i.test(line) && /[:：]$/.test(line);
@@ -155,13 +198,18 @@ function splitPriceNotes(text) {
   return boxes.map((box) => (box.title ? `${box.title}:\n${box.items.join("\n")}` : box.items.join("\n")));
 }
 
-function getPriceNoteBoxes(trip, priceTable) {
-  if (priceTable?.fromPriceNote) return splitPriceNotes(priceTable.note);
+function getPriceNoteBoxes(trip: PosterTrip, priceTable: PosterPriceTable | NoteDerivedPriceTable | null): string[] {
+  if (priceTable && "fromPriceNote" in priceTable && priceTable.fromPriceNote) return splitPriceNotes(priceTable.note);
   return splitPriceNotes(trip.price_note);
 }
 
-function removePriceNoteBox(trip, priceTable, boxText, upd) {
-  if (priceTable?.fromPriceNote) {
+function removePriceNoteBox(
+  trip: PosterTrip,
+  priceTable: PosterPriceTable | NoteDerivedPriceTable | null,
+  boxText: string,
+  upd: PosterUpdateFn,
+): void {
+  if (priceTable && "fromPriceNote" in priceTable && priceTable.fromPriceNote) {
     const remaining = splitPriceNotes(priceTable.note).filter((note) => note !== boxText).join("\n");
     const next = [priceTable.priceText, remaining].filter(Boolean).join(" ");
     upd(["price_note"], next);
@@ -172,10 +220,16 @@ function removePriceNoteBox(trip, priceTable, boxText, upd) {
   upd(["price_note"], remaining);
 }
 
-function updatePriceNoteBox(trip, priceTable, oldText, newText, upd) {
+function updatePriceNoteBox(
+  trip: PosterTrip,
+  priceTable: PosterPriceTable | NoteDerivedPriceTable | null,
+  oldText: string,
+  newText: string,
+  upd: PosterUpdateFn,
+): void {
   const cleanNewText = String(newText || "").trim();
 
-  if (priceTable?.fromPriceNote) {
+  if (priceTable && "fromPriceNote" in priceTable && priceTable.fromPriceNote) {
     const notes = splitPriceNotes(priceTable.note).map((note) => (note === oldText ? cleanNewText : note)).filter(Boolean);
     const next = [priceTable.priceText, notes.join("\n")].filter(Boolean).join(" ");
     upd(["price_note"], next);
@@ -186,7 +240,7 @@ function updatePriceNoteBox(trip, priceTable, oldText, newText, upd) {
   upd(["price_note"], notes.join("\n"));
 }
 
-function getPriceTable(trip) {
+function getPriceTable(trip: PosterTrip): PosterPriceTable | NoteDerivedPriceTable | null {
   if (trip.price_table) return trip.price_table;
   const noteTable = tableFromPriceNote(trip.price_note);
   if (noteTable) return noteTable;
@@ -205,6 +259,22 @@ function getPriceTable(trip) {
   };
 }
 
+export type PosterProps = {
+  trip: PosterTrip;
+  upd: PosterUpdateFn;
+  addItem: (path: (string | number)[], value: unknown) => void;
+  removeItem: PosterRemoveItemFn;
+  insertDay: PosterInsertDayFn;
+  reorderDay: PosterReorderDayFn;
+  addPriceRow: PosterAddPriceRowFn;
+  addPriceCol: PosterAddPriceColFn;
+  removePriceCol: PosterRemovePriceColFn;
+  logoSrc: string;
+  page1Ref: RefObject<HTMLDivElement | null>;
+  onDayPhotoFile: PosterOnDayPhotoFileFn;
+  dayPhotoInputRefs: DayPhotoInputRefs;
+};
+
 export default function Poster({
   trip: t,
   upd,
@@ -219,21 +289,21 @@ export default function Poster({
   page1Ref,
   onDayPhotoFile,
   dayPhotoInputRefs,
-}) {
+}: PosterProps) {
   const priceTable = getPriceTable(t);
   const priceNoteBoxes = getPriceNoteBoxes(t, priceTable);
-  const dragIdx = useRef(null);
-  const [dragOver, setDragOver] = useState(null);
+  const dragIdx = useRef<number | null>(null);
+  const [dragOver, setDragOver] = useState<number | null>(null);
 
   // Defined before the JSX (not inline in the ref callback) so the day-photo
   // input ref map is registered without mutating a value already read by JSX.
-  function setDayPhotoInputRef(i, node) {
+  function setDayPhotoInputRef(i: number, node: HTMLInputElement | null) {
     if (!dayPhotoInputRefs.current) return;
     if (node) dayPhotoInputRefs.current[i] = node;
     else delete dayPhotoInputRefs.current[i];
   }
 
-  const Logo = () => (
+  const Logo = (): ReactNode => (
     <>
       <img className="logo" src={logoSrc} alt="UUDAM" />
       <div className="name">
@@ -303,11 +373,12 @@ export default function Poster({
                             ref={(el) => {
                               if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; }
                             }}
-                            onInput={(e) => {
-                              e.target.style.height = "auto";
-                              e.target.style.height = e.target.scrollHeight + "px";
+                            onInput={(e: FormEvent<HTMLTextAreaElement>) => {
+                              const target = e.currentTarget;
+                              target.style.height = "auto";
+                              target.style.height = target.scrollHeight + "px";
                             }}
-                            onBlur={(e) => upd(["price_table", "rows", ri, "dates"], e.target.value.trim())}
+                            onBlur={(e: FocusEvent<HTMLTextAreaElement>) => upd(["price_table", "rows", ri, "dates"], e.target.value.trim())}
                           />
                           <RemoveBtn onClick={() => removeItem(["price_table", "rows"], ri)} />
                         </>
@@ -350,7 +421,7 @@ export default function Poster({
                         className="price-note-content"
                         contentEditable
                         suppressContentEditableWarning
-                        onBlur={(e) => updatePriceNoteBox(t, priceTable, note, e.currentTarget.innerText, upd)}
+                        onBlur={(e: FocusEvent<HTMLDivElement>) => updatePriceNoteBox(t, priceTable, note, e.currentTarget.innerText, upd)}
                       >
                         {title ? <div className="price-note-title">{title}:</div> : null}
                         {items.length > 1 ? (
@@ -478,7 +549,7 @@ export default function Poster({
                         type="file"
                         accept="image/*"
                         className="hidden-input"
-                        onChange={(e) => onDayPhotoFile(i, e.target.files?.[0])}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => onDayPhotoFile(i, e.target.files?.[0])}
                       />
 
                       <div className="editor-only daytools">

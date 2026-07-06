@@ -1,12 +1,128 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { MutableRefObject } from "react";
 import * as htmlToImage from "html-to-image";
 import { upload as uploadToBlob } from "@vercel/blob/client";
 import Poster from "./Poster";
 import AttachToTripModal from "./AttachToTripModal";
 import { createDefaultTrip } from "@/lib/poster/defaultTrip";
 import { Badge, Button, Card, Icons, Input, Select, Spinner, cx } from "@/components/ui";
+
+/* ------------------------------------------------------------------ *
+ * Trip / poster data shape — mirrors TRIP_SCHEMA in src/lib/poster/openai.js
+ * (the OpenAI structured-output schema) plus the extra editor-only fields
+ * normalizeTripData() fills in (show_meals, photo_caption defaults, etc).
+ * This is the single shared shape for PosterTab, Poster, and
+ * AttachToTripModal — the untyped JS this feature used to live in let all
+ * three drift independently, so this type is now the contract between them.
+ * ------------------------------------------------------------------ */
+
+export type PosterMeals = {
+  breakfast?: boolean;
+  lunch?: boolean;
+  dinner?: boolean;
+};
+
+export type PosterDay = {
+  day: number;
+  route: string;
+  distance_km?: number;
+  summary: string;
+  activities?: string[];
+  meals?: PosterMeals;
+  show_meals?: boolean;
+  hotel?: string | null;
+  flight?: string | null;
+  bonus?: string[];
+  photo?: string | null;
+  photo_caption?: string;
+};
+
+export type PosterDeparture = {
+  date?: string;
+};
+
+export type PosterPriceRow = {
+  dates: string;
+  cells: string[];
+};
+
+export type PosterPriceTable = {
+  columns: string[];
+  rows: PosterPriceRow[];
+  note?: string;
+};
+
+export type PosterFlights = {
+  outbound: string;
+  return: string;
+} | null;
+
+export type PosterContacts = {
+  phones?: string[];
+  email?: string;
+  address?: string;
+};
+
+/** A legacy/alternate price representation some older extracted trips carry. */
+export type PosterLegacyPrice = {
+  applies_to?: string;
+  adult?: string | number;
+  child?: string | number;
+  child_years?: string;
+  currency?: string;
+};
+
+export type PosterTrip = {
+  agency?: string;
+  title: string;
+  subtitle?: string;
+  duration_days?: number;
+  duration_nights?: number;
+  hero_image?: string | null;
+  flights?: PosterFlights;
+  departures?: PosterDeparture[];
+  price_table?: PosterPriceTable | null;
+  price_note?: string;
+  price_desc?: string;
+  /** Legacy per-trip prices array, superseded by price_table but still read as a fallback. */
+  prices?: PosterLegacyPrice[];
+  child_free_note?: string;
+  days?: PosterDay[];
+  includes?: string[];
+  excludes?: string[];
+  contacts?: PosterContacts;
+};
+
+/** A saved poster's history-list entry, as returned by GET /api/admin/poster/trips. */
+export type PosterHistoryItem = {
+  id: string;
+  title: string;
+  source_file: string | null;
+  updated_at: string;
+};
+
+type HistorySort = "newest" | "oldest" | "title";
+type HistoryGroupMode = "date" | "duplicate" | "none";
+
+/** Generic dot-path used by upd()/addItem()/removeItem() to reach into PosterTrip. */
+export type PosterPath = Array<string | number>;
+
+export type PosterUpdateFn = (path: PosterPath, value: unknown) => void;
+export type PosterAddItemFn = (path: PosterPath, value: unknown) => void;
+export type PosterRemoveItemFn = (path: PosterPath, index: number) => void;
+export type PosterInsertDayFn = (afterIndex: number) => void;
+export type PosterReorderDayFn = (fromIndex: number, toIndex: number) => void;
+export type PosterAddPriceRowFn = () => void;
+export type PosterAddPriceColFn = () => void;
+export type PosterRemovePriceColFn = (columnIndex: number) => void;
+export type PosterOnDayPhotoFileFn = (index: number, file: File | null | undefined) => void | Promise<void>;
+export type DayPhotoInputRefs = MutableRefObject<Record<number, HTMLInputElement>>;
+
+export type ApiFetch = (url: string, init?: RequestInit) => Promise<Response>;
+
+type JsonRecord = Record<string, unknown>;
 
 const ADMIN_SECRET_STORAGE_KEY = "travel_admin_secret";
 const POSTER_WIDTH = 1080;
@@ -22,20 +138,24 @@ const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
 // typical ~4,000KB poster PDFs now go direct instead of detouring via Blob.
 const DIRECT_UPLOAD_LIMIT_BYTES = Math.floor(4.4 * 1024 * 1024);
 
-function getStoredAdminSecret() {
+function getStoredAdminSecret(): string {
   if (typeof window === "undefined") return "";
   return window.localStorage.getItem(ADMIN_SECRET_STORAGE_KEY) || "";
 }
 
-function setPath(obj, path, value) {
-  const clone = structuredClone(obj);
-  let o = clone;
-  for (let i = 0; i < path.length - 1; i++) o = o[path[i]];
+/** Sets a value at an arbitrary path inside a structured-clone of obj. Path segments are
+ * property keys or array indices, matched 1:1 to the PosterTrip shape by the caller. */
+function setPath<T>(obj: T, path: PosterPath, value: unknown): T {
+  const clone = structuredClone(obj) as Record<string | number, unknown>;
+  let o: Record<string | number, unknown> = clone;
+  for (let i = 0; i < path.length - 1; i++) {
+    o = o[path[i]] as Record<string | number, unknown>;
+  }
   o[path[path.length - 1]] = value;
-  return clone;
+  return clone as T;
 }
 
-function resizeImage(file, maxW = 1500) {
+function resizeImage(file: File, maxW = 1500): Promise<string> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
@@ -43,7 +163,12 @@ function resizeImage(file, maxW = 1500) {
       const c = document.createElement("canvas");
       c.width = Math.round(img.width * scale);
       c.height = Math.round(img.height * scale);
-      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      const ctx = c.getContext("2d");
+      if (!ctx) {
+        reject(new Error("Canvas 2D context unavailable"));
+        return;
+      }
+      ctx.drawImage(img, 0, 0, c.width, c.height);
       resolve(c.toDataURL("image/jpeg", 0.82));
     };
     img.onerror = reject;
@@ -51,7 +176,7 @@ function resizeImage(file, maxW = 1500) {
   });
 }
 
-function tableFromPriceNote(note) {
+function tableFromPriceNote(note: string | undefined): { priceTable: PosterPriceTable; remainingNote: string } | null {
   const text = String(note || "").replace(/^⚠\s*/, "").trim();
   if (!text) return null;
 
@@ -59,8 +184,8 @@ function tableFromPriceNote(note) {
   if (matches.length < 2) return null;
 
   let cursor = 0;
-  const columns = [];
-  const cells = [];
+  const columns: string[] = [];
+  const cells: string[] = [];
   let consumedEnd = 0;
 
   for (const match of matches) {
@@ -74,8 +199,8 @@ function tableFromPriceNote(note) {
 
     const label = rawLabel || `Үнэ ${columns.length + 1}`;
     const amount = `${match[1].replace(/[’']/g, ",").replace(/\s+/g, "")}₮`;
-    const paren = text.slice(match.index + match[0].length).match(/^\s*(\([^)]*\))/);
-    const end = match.index + match[0].length + (paren ? paren[0].length : 0);
+    const paren = text.slice((match.index ?? 0) + match[0].length).match(/^\s*(\([^)]*\))/);
+    const end = (match.index ?? 0) + match[0].length + (paren ? paren[0].length : 0);
 
     columns.push(paren ? `${label} ${paren[1]}` : label);
     cells.push(amount);
@@ -95,7 +220,7 @@ function tableFromPriceNote(note) {
   };
 }
 
-function normalizeTripData(trip) {
+function normalizeTripData(trip: PosterTrip | null): PosterTrip | null {
   if (!trip) return trip;
   const clone = structuredClone(trip);
   clone.departures = (clone.departures || []).filter((d) => d?.date?.trim());
@@ -122,11 +247,12 @@ function normalizeTripData(trip) {
   }
 
   if (clone.price_table) {
-    clone.price_table.columns = (clone.price_table.columns || []).filter((x) => String(x || "").trim());
-    const colCount = clone.price_table.columns.length;
+    const priceTable = clone.price_table;
+    priceTable.columns = (priceTable.columns || []).filter((x) => String(x || "").trim());
+    const colCount = priceTable.columns.length;
 
     // Normalize rows: filter empty, pad/clamp cells
-    const cleaned = (clone.price_table.rows || [])
+    const cleaned = (priceTable.rows || [])
       .filter((r) => {
         const hasDate = String(r?.dates || "").trim();
         const hasCells = (r?.cells || []).some((x) => String(x || "").trim());
@@ -138,7 +264,7 @@ function normalizeTripData(trip) {
       }));
 
     // Merge rows with identical prices — combine their dates into one row
-    const merged = [];
+    const merged: PosterPriceRow[] = [];
     for (const row of cleaned) {
       const sig = row.cells.join("||");
       const existing = merged.find((m) => m.cells.join("||") === sig);
@@ -154,26 +280,26 @@ function normalizeTripData(trip) {
       }
     }
 
-    clone.price_table.rows = merged;
+    priceTable.rows = merged;
   }
   return clone;
 }
 
-function normalizeHistoryTitle(title) {
+function normalizeHistoryTitle(title: string | undefined): string {
   return String(title || "Untitled")
     .replace(/\s+/g, " ")
     .trim()
     .toLocaleLowerCase();
 }
 
-function historyDateLabel(value) {
+function historyDateLabel(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Огноогүй";
   const today = new Date();
   const yesterday = new Date();
   yesterday.setDate(today.getDate() - 1);
 
-  const sameDay = (a, b) =>
+  const sameDay = (a: Date, b: Date) =>
     a.getFullYear() === b.getFullYear() &&
     a.getMonth() === b.getMonth() &&
     a.getDate() === b.getDate();
@@ -183,12 +309,12 @@ function historyDateLabel(value) {
   return date.toLocaleDateString();
 }
 
-export default function PosterTab({ apiFetch }) {
+export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
   // apiFetch(url, init) injects the admin secret header (from admin.tsx).
-  const fetchJson = async (url, init) => {
+  const fetchJson = async (url: string, init?: RequestInit): Promise<JsonRecord> => {
     const res = await apiFetch(url, init);
     const text = await res.text();
-    let json = {};
+    let json: JsonRecord = {};
     if (text) {
       try { json = JSON.parse(text); } catch { json = { error: text.slice(0, 300) }; }
     }
@@ -196,28 +322,28 @@ export default function PosterTab({ apiFetch }) {
     return json;
   };
 
-  const [trip, setTrip] = useState(null);
-  const [tripId, setTripId] = useState(null);
+  const [trip, setTrip] = useState<PosterTrip | null>(null);
+  const [tripId, setTripId] = useState<string | null>(null);
   const [source, setSource] = useState("");
-  const [history, setHistory] = useState([]);
+  const [history, setHistory] = useState<PosterHistoryItem[]>([]);
   const [historySearch, setHistorySearch] = useState("");
-  const [historySort, setHistorySort] = useState("newest");
-  const [historyGroup, setHistoryGroup] = useState("date");
+  const [historySort, setHistorySort] = useState<HistorySort>("newest");
+  const [historyGroup, setHistoryGroup] = useState<HistoryGroupMode>("date");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [scale, setScale] = useState(0.6);
   const [totalH, setTotalH] = useState(0);
   const [attachModalOpen, setAttachModalOpen] = useState(false);
 
-  const page1Ref = useRef(null);
-  const previewRef = useRef(null);
-  const mainRef = useRef(null);
-  const dayPhotoInputRefs = useRef({});
+  const page1Ref = useRef<HTMLDivElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLDivElement>(null);
+  const dayPhotoInputRefs: DayPhotoInputRefs = useRef({});
 
-  const upd = (path, value) => setTrip((t) => setPath(t, path, value));
+  const upd: PosterUpdateFn = (path, value) => setTrip((t) => (t ? setPath(t, path, value) : t));
 
   const historyTitleCounts = useMemo(() => {
-    const counts = new Map();
+    const counts = new Map<string, number>();
     for (const item of history) {
       const key = normalizeHistoryTitle(item.title);
       counts.set(key, (counts.get(key) || 0) + 1);
@@ -233,20 +359,20 @@ export default function PosterTab({ apiFetch }) {
     });
 
     filtered.sort((a, b) => {
-      if (historySort === "oldest") return new Date(a.updated_at) - new Date(b.updated_at);
+      if (historySort === "oldest") return new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime();
       if (historySort === "title") return String(a.title || "").localeCompare(String(b.title || ""));
-      return new Date(b.updated_at) - new Date(a.updated_at);
+      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
     });
 
     if (historyGroup === "none") return [{ label: "", items: filtered }];
 
-    const groups = new Map();
+    const groups = new Map<string, PosterHistoryItem[]>();
     for (const item of filtered) {
       const duplicateCount = historyTitleCounts.get(normalizeHistoryTitle(item.title)) || 0;
       let label = historyDateLabel(item.updated_at);
       if (historyGroup === "duplicate") label = duplicateCount > 1 ? "Давхардсан нэртэй" : "Давхардаагүй";
       if (!groups.has(label)) groups.set(label, []);
-      groups.get(label).push(item);
+      groups.get(label)?.push(item);
     }
 
     return Array.from(groups, ([label, items]) => ({ label, items }));
@@ -259,32 +385,41 @@ export default function PosterTab({ apiFetch }) {
   const startTemplate = () => {
     setError("");
     setBusy("");
-    setTrip(normalizeTripData(createDefaultTrip()));
+    setTrip(normalizeTripData(createDefaultTrip() as PosterTrip));
     setTripId(null);
     setSource("Default template");
   };
 
-  const addItem = (path, value) =>
+  /** Walks a PosterPath into a structured-clone of an arbitrary trip-shaped object,
+   * returning the array found at that path. Used by addItem/removeItem, which — like
+   * the original JS — push/splice generic path-addressed arrays (departures, days,
+   * price_table.rows, etc.) rather than one setter per array. */
+  function getArrayAtPath(root: Record<string, unknown>, path: PosterPath): unknown[] {
+    let o: unknown = root;
+    for (const p of path) o = (o as Record<string | number, unknown>)[p];
+    return o as unknown[];
+  }
+
+  const addItem: PosterAddItemFn = (path, value) =>
     setTrip((t) => {
-      const clone = structuredClone(t);
-      let o = clone;
-      for (const p of path) o = o[p];
-      o.push(value);
-      return normalizeTripData(clone);
+      if (!t) return t;
+      const clone = structuredClone(t) as unknown as Record<string, unknown>;
+      getArrayAtPath(clone, path).push(value);
+      return normalizeTripData(clone as unknown as PosterTrip);
     });
 
-  const removeItem = (path, idx) =>
+  const removeItem: PosterRemoveItemFn = (path, idx) =>
     setTrip((t) => {
-      const clone = structuredClone(t);
-      let o = clone;
-      for (const p of path) o = o[p];
-      o.splice(idx, 1);
-      return normalizeTripData(clone);
+      if (!t) return t;
+      const clone = structuredClone(t) as unknown as Record<string, unknown>;
+      getArrayAtPath(clone, path).splice(idx, 1);
+      return normalizeTripData(clone as unknown as PosterTrip);
     });
 
   const addDeparture = () => addItem(["departures"], { date: "Шинэ огноо" });
 
-  const newDayObj = () => ({
+  const newDayObj = (): PosterDay => ({
+    day: 0,
     route: "Шинэ өдөр",
     distance_km: 0,
     summary:
@@ -301,22 +436,25 @@ export default function PosterTab({ apiFetch }) {
 
   const addDay = () =>
     setTrip((t) => {
+      if (!t) return t;
       const clone = structuredClone(t);
       clone.days ||= [];
       clone.days.push(newDayObj());
       return normalizeTripData(clone);
     });
 
-  const insertDay = (afterIndex) =>
+  const insertDay: PosterInsertDayFn = (afterIndex) =>
     setTrip((t) => {
+      if (!t) return t;
       const clone = structuredClone(t);
       clone.days ||= [];
       clone.days.splice(afterIndex + 1, 0, newDayObj());
       return normalizeTripData(clone);
     });
 
-  const reorderDay = (fromIdx, toIdx) =>
+  const reorderDay: PosterReorderDayFn = (fromIdx, toIdx) =>
     setTrip((t) => {
+      if (!t) return t;
       const clone = structuredClone(t);
       const days = clone.days || [];
       const [moved] = days.splice(fromIdx, 1);
@@ -327,6 +465,7 @@ export default function PosterTab({ apiFetch }) {
 
   const removeLastDay = () =>
     setTrip((t) => {
+      if (!t) return t;
       const clone = structuredClone(t);
       clone.days = (clone.days || []).slice(0, -1);
       return normalizeTripData(clone);
@@ -334,6 +473,7 @@ export default function PosterTab({ apiFetch }) {
 
   const ensurePriceTable = () =>
     setTrip((t) => {
+      if (!t) return t;
       const clone = structuredClone(t);
       clone.price_table ||= { columns: ["Том хүн", "Хүүхэд"], rows: [], note: "" };
       if (!clone.price_table.columns?.length) clone.price_table.columns = ["Том хүн", "Хүүхэд"];
@@ -344,8 +484,9 @@ export default function PosterTab({ apiFetch }) {
       return normalizeTripData(clone);
     });
 
-  const addPriceRow = () =>
+  const addPriceRow: PosterAddPriceRowFn = () =>
     setTrip((t) => {
+      if (!t) return t;
       const clone = structuredClone(t);
       clone.price_table ||= { columns: ["Том хүн", "Хүүхэд"], rows: [], note: "" };
       const cols = clone.price_table.columns?.length || 2;
@@ -354,8 +495,9 @@ export default function PosterTab({ apiFetch }) {
       return clone;
     });
 
-  const addPriceCol = () =>
+  const addPriceCol: PosterAddPriceColFn = () =>
     setTrip((t) => {
+      if (!t) return t;
       const clone = structuredClone(t);
       if (!clone.price_table) return clone;
       clone.price_table.columns.push("Шинэ багана");
@@ -366,8 +508,9 @@ export default function PosterTab({ apiFetch }) {
       return clone;
     });
 
-  const removePriceCol = (ci) =>
+  const removePriceCol: PosterRemovePriceColFn = (ci) =>
     setTrip((t) => {
+      if (!t) return t;
       const clone = structuredClone(t);
       if (!clone.price_table) return clone;
       clone.price_table.columns.splice(ci, 1);
@@ -380,6 +523,7 @@ export default function PosterTab({ apiFetch }) {
 
   const toggleFlights = () =>
     setTrip((t) => {
+      if (!t) return t;
       const clone = structuredClone(t);
       clone.flights = clone.flights ? null : { outbound: "MR855 УБ → Датун 16:30-18:10", return: "MR856 Датун → УБ 19:10-21:00" };
       return clone;
@@ -401,14 +545,15 @@ export default function PosterTab({ apiFetch }) {
 
   const loadHistory = async () => {
     const r = await fetchJson("/api/admin/poster/trips");
-    if (r.trips) setHistory(r.trips);
+    if (r.trips) setHistory(r.trips as PosterHistoryItem[]);
   };
 
   useEffect(() => {
     loadHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function sha256File(file) {
+  async function sha256File(file: File): Promise<string> {
     const buf = await file.arrayBuffer();
     const hashBuffer = await crypto.subtle.digest("SHA-256", buf);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
@@ -427,18 +572,18 @@ export default function PosterTab({ apiFetch }) {
   // cap, and no BLOB_READ_WRITE_TOKEN either, so routing big files through
   // Blob on localhost just fails with "Failed to retrieve the client token".
   // On localhost every file goes direct multipart, any size.
-  function isLocalDevHost() {
+  function isLocalDevHost(): boolean {
     if (typeof window === "undefined") return false;
     return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
   }
 
-  async function extractOne(file) {
+  async function extractOne(file: File): Promise<{ trip: PosterTrip; source_file: string }> {
     // Local dev has no Vercel 60s kill, and its server budget is 5 min —
     // give the client the same room so slow local runs aren't cut at 90s.
     const timeoutMs = isLocalDevHost() ? 300 * 1000 : EXTRACT_TIMEOUT_MS;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let res;
+    let res: Response;
     try {
       if (file.size > DIRECT_UPLOAD_LIMIT_BYTES && !isLocalDevHost()) {
         const blob = await uploadToBlob(file.name, file, {
@@ -467,7 +612,7 @@ export default function PosterTab({ apiFetch }) {
         });
       }
     } catch (e) {
-      if (e?.name === "AbortError" || /abort/i.test(String(e?.message || ""))) {
+      if ((e as { name?: string })?.name === "AbortError" || /abort/i.test(String((e as { message?: string })?.message || ""))) {
         throw new Error(`Хүсэлт хэт удаж зогслоо (${timeoutMs / 1000}s). Файл хэт том эсвэл сервер ачаалалтай байж магадгүй — дахин оролдоно уу.`);
       }
       throw e;
@@ -476,32 +621,32 @@ export default function PosterTab({ apiFetch }) {
     }
 
     const text = await res.text();
-    let json = {};
+    let json: JsonRecord = {};
     if (text) {
       try { json = JSON.parse(text); } catch { json = { error: text.slice(0, 300) }; }
     }
-    if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
-    if (json.error) throw new Error(json.error);
-    return { ...json, source_file: json.source_file || file.name };
+    if (!res.ok) throw new Error((json.error as string) || `HTTP ${res.status}`);
+    if (json.error) throw new Error(json.error as string);
+    return { ...(json as unknown as { trip: PosterTrip; source_file?: string }), source_file: (json.source_file as string) || file.name };
   }
 
-  async function saveTripData(data, sourceFile) {
-    const cleanTrip = normalizeTripData(data);
+  async function saveTripData(data: PosterTrip, sourceFile: string): Promise<{ id: string; trip: PosterTrip }> {
+    const cleanTrip = normalizeTripData(data) as PosterTrip;
     const r = await fetchJson("/api/admin/poster/trips", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: cleanTrip.title, data: cleanTrip, source_file: sourceFile }),
     });
-    if (r.error) throw new Error(r.error);
-    return { id: r.id, trip: cleanTrip };
+    if (r.error) throw new Error(r.error as string);
+    return { id: r.id as string, trip: cleanTrip };
   }
 
-  async function handleFiles(files) {
+  async function handleFiles(files: FileList | null | undefined) {
     if (!files || files.length === 0) return;
     setError("");
     let fileList = Array.from(files).filter((f) => f instanceof File);
     const droppedCount = fileList.length;
-    const warnings = [];
+    const warnings: string[] = [];
 
     if (droppedCount > MAX_UPLOAD_FILES) {
       warnings.push(`Зөвхөн эхний ${MAX_UPLOAD_FILES} файлыг боловсруулна (${droppedCount} файлаас).`);
@@ -519,8 +664,8 @@ export default function PosterTab({ apiFetch }) {
       return;
     }
 
-    const seen = new Set();
-    const uniqueFiles = [];
+    const seen = new Set<string>();
+    const uniqueFiles: File[] = [];
     for (const file of fileList) {
       const hash = await sha256File(file);
       if (seen.has(hash)) {
@@ -531,8 +676,8 @@ export default function PosterTab({ apiFetch }) {
       }
     }
 
-    const saved = [];
-    const failed = [];
+    const saved: Array<{ file: string; trip: PosterTrip; id: string }> = [];
+    const failed: Array<{ file: string; error: string }> = [];
 
     for (let i = 0; i < uniqueFiles.length; i++) {
       const file = uniqueFiles[i];
@@ -544,7 +689,7 @@ export default function PosterTab({ apiFetch }) {
         saved.push({ file: file.name, trip, id });
       } catch (e) {
         console.error("file failed:", file.name, e);
-        failed.push({ file: file.name, error: String(e.message || e) });
+        failed.push({ file: file.name, error: String((e as { message?: string })?.message || e) });
       }
     }
 
@@ -565,12 +710,12 @@ export default function PosterTab({ apiFetch }) {
     if (messages.length > 0) setError(messages.join(" "));
   }
 
-  async function capture(node) {
+  async function capture(node: HTMLElement): Promise<string> {
     const imgs = Array.from(node.querySelectorAll("img"));
     await Promise.all(
       imgs.map(async (img) => {
         if (!img.complete || !img.naturalWidth) {
-          await new Promise((resolve) => {
+          await new Promise<void>((resolve) => {
             const done = () => resolve();
             img.addEventListener("load", done, { once: true });
             img.addEventListener("error", done, { once: true });
@@ -579,13 +724,15 @@ export default function PosterTab({ apiFetch }) {
         if (img.decode) {
           try {
             await img.decode();
-          } catch {}
+          } catch {
+            // Decode failures are non-fatal — the image still renders via <img>.
+          }
         }
       })
     );
 
     if (document.fonts?.ready) await document.fonts.ready;
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 
     return htmlToImage.toPng(node, {
       pixelRatio: 2,
@@ -593,11 +740,13 @@ export default function PosterTab({ apiFetch }) {
       height: node.offsetHeight,
       backgroundColor: "#ffffff",
       style: { transform: "none", margin: "0", boxShadow: "none" },
-      filter: (domNode) => !domNode.classList?.contains("editor-only") && !domNode.classList?.contains("hidden-input"),
+      filter: (domNode) =>
+        !(domNode as Element).classList?.contains("editor-only") &&
+        !(domNode as Element).classList?.contains("hidden-input"),
     });
   }
 
-  async function withExportMode(work) {
+  async function withExportMode<T>(work: () => Promise<T>): Promise<T> {
     document.body.classList.add("exporting");
     try {
       return await work();
@@ -606,30 +755,30 @@ export default function PosterTab({ apiFetch }) {
     }
   }
 
-  function buildExportBaseName() {
+  function buildExportBaseName(): string {
     return (trip?.title || "poster")
       .slice(0, 40)
       .replace(/[\\/:*?"<>|]/g, "")
       .trim() || "poster";
   }
 
-  function getRelativeTop(node, container) {
+  function getRelativeTop(node: HTMLElement, container: HTMLElement): number {
     let top = 0;
-    let current = node;
+    let current: HTMLElement | null = node;
 
     while (current && current !== container) {
       top += current.offsetTop || 0;
-      current = current.offsetParent;
+      current = current.offsetParent as HTMLElement | null;
     }
 
     return top;
   }
 
-  function getMessengerSplitCandidates(node) {
+  function getMessengerSplitCandidates(node: HTMLElement): number[] {
     const totalHeight = node.offsetHeight;
-    const candidates = [];
+    const candidates: number[] = [];
 
-    node.querySelectorAll(".dayrow,.program-head,.sec.compact-sec,.foot").forEach((el) => {
+    node.querySelectorAll<HTMLElement>(".dayrow,.program-head,.sec.compact-sec,.foot").forEach((el) => {
       const top = getRelativeTop(el, node);
       // Only split at real section/day boundaries, and avoid tiny header/footer slivers.
       if (top > totalHeight * 0.12 && top < totalHeight * 0.92) candidates.push(top);
@@ -638,7 +787,7 @@ export default function PosterTab({ apiFetch }) {
     return Array.from(new Set(candidates.map(Math.round))).sort((a, b) => a - b);
   }
 
-  function chooseMessengerSplitPoint(node) {
+  function chooseMessengerSplitPoint(node: HTMLElement): number | null {
     const totalHeight = node.offsetHeight;
     const target = totalHeight / 2;
     const minY = totalHeight * 0.38;
@@ -654,7 +803,7 @@ export default function PosterTab({ apiFetch }) {
     );
   }
 
-  function chooseMessengerSplitPoints(node, sliceCount) {
+  function chooseMessengerSplitPoints(node: HTMLElement, sliceCount: number): number[] | null {
     if (sliceCount <= 1) return [];
     if (sliceCount === 2) {
       const point = chooseMessengerSplitPoint(node);
@@ -672,7 +821,7 @@ export default function PosterTab({ apiFetch }) {
     let bestPoints = targets;
     let bestScore = Infinity;
 
-    const scorePoints = (points) => {
+    const scorePoints = (points: number[]): number => {
       const sorted = [...points].sort((a, b) => a - b);
       const ranges = [0, ...sorted, totalHeight].map((startY, index, all) => all[index + 1] - startY).filter(Boolean);
       const ideal = totalHeight / sliceCount;
@@ -685,7 +834,7 @@ export default function PosterTab({ apiFetch }) {
       return balancePenalty * 1.4 + targetPenalty + hugeSlicePenalty + tinySlicePenalty;
     };
 
-    function visit(startIndex, picked) {
+    function visit(startIndex: number, picked: number[]) {
       if (picked.length === sliceCount - 1) {
         const score = scorePoints(picked);
         if (score < bestScore) {
@@ -708,7 +857,7 @@ export default function PosterTab({ apiFetch }) {
     return bestPoints.sort((a, b) => a - b).map(Math.round);
   }
 
-  function scoreMessengerSplitPlan(totalHeight, sliceCount, splitPoints) {
+  function scoreMessengerSplitPlan(totalHeight: number, sliceCount: number, splitPoints: number[]): number {
     const ideal = totalHeight / sliceCount;
     const ranges = [0, ...splitPoints, totalHeight]
       .map((startY, index, points) => points[index + 1] - startY)
@@ -732,7 +881,9 @@ export default function PosterTab({ apiFetch }) {
     return balancePenalty * 1.2 + targetPenalty + oversizePenalty + tinySlicePenalty + slicePenalty;
   }
 
-  function chooseMessengerSlicePlan(node) {
+  type MessengerSlicePlan = { sliceCount: number; splitPoints: number[]; score: number };
+
+  function chooseMessengerSlicePlan(node: HTMLElement): MessengerSlicePlan {
     const totalHeight = node.offsetHeight;
     const preferredCount = Math.min(
       MESSENGER_MAX_IMAGE_SLICES,
@@ -741,13 +892,13 @@ export default function PosterTab({ apiFetch }) {
     const countsToTry = Array.from({ length: MESSENGER_MAX_IMAGE_SLICES }, (_, index) => index + 1)
       .sort((a, b) => Math.abs(a - preferredCount) - Math.abs(b - preferredCount) || a - b);
 
-    let bestPlan = null;
+    let bestPlan: MessengerSlicePlan | null = null;
 
     for (const sliceCount of countsToTry) {
       const splitPoints = chooseMessengerSplitPoints(node, sliceCount);
       if (splitPoints === null) continue;
 
-      const plan = {
+      const plan: MessengerSlicePlan = {
         sliceCount,
         splitPoints,
         score: scoreMessengerSplitPlan(totalHeight, sliceCount, splitPoints),
@@ -770,7 +921,7 @@ export default function PosterTab({ apiFetch }) {
     };
   }
 
-  function drawMessengerBadge(ctx, width, height, index, total) {
+  function drawMessengerBadge(ctx: CanvasRenderingContext2D, width: number, height: number, index: number, total: number) {
     const label = `${index + 1}/${total}`;
     const badgeWidth = 120;
     const badgeHeight = 56;
@@ -789,12 +940,12 @@ export default function PosterTab({ apiFetch }) {
     ctx.fillText(label, x + badgeWidth / 2, y + badgeHeight / 2 + 1);
   }
 
-  async function captureMessengerSlices() {
+  async function captureMessengerSlices(): Promise<Array<{ index: number; url: string }>> {
     const node = page1Ref.current;
     if (!node) return [];
 
     const fullUrl = await capture(node);
-    const fullImage = await new Promise((resolve, reject) => {
+    const fullImage = await new Promise<HTMLImageElement>((resolve, reject) => {
       const img = new Image();
       img.onload = () => resolve(img);
       img.onerror = reject;
@@ -803,7 +954,9 @@ export default function PosterTab({ apiFetch }) {
 
     const totalHeight = node.offsetHeight;
     const { splitPoints } = chooseMessengerSlicePlan(node);
-    const ranges = [0, ...splitPoints, totalHeight].map((startY, index, points) => [startY, points[index + 1]]).filter((range) => range[1]);
+    const ranges = [0, ...splitPoints, totalHeight]
+      .map((startY, index, points) => [startY, points[index + 1]] as [number, number | undefined])
+      .filter((range): range is [number, number] => range[1] !== undefined);
     const scaleY = fullImage.height / totalHeight;
 
     return ranges.map(([startY, endY], index) => {
@@ -813,6 +966,7 @@ export default function PosterTab({ apiFetch }) {
       canvas.width = fullImage.width;
       canvas.height = sourceHeight;
       const ctx = canvas.getContext("2d");
+      if (!ctx) return { index, url: "" };
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(fullImage, 0, sourceY, fullImage.width, sourceHeight, 0, 0, canvas.width, canvas.height);
@@ -827,7 +981,7 @@ export default function PosterTab({ apiFetch }) {
 
   // Renders the poster as Messenger-sized images for AttachToTripModal — the
   // same finished, branded poster the customer will actually see.
-  async function captureForAttach() {
+  async function captureForAttach(): Promise<string[]> {
     const slices = await withExportMode(() => captureMessengerSlices());
     return slices.map((s) => s.url);
   }
@@ -847,7 +1001,7 @@ export default function PosterTab({ apiFetch }) {
         }
       });
     } catch (e) {
-      setError(String(e.message || e));
+      setError(String((e as { message?: string })?.message || e));
     } finally {
       setBusy("");
     }
@@ -878,7 +1032,7 @@ export default function PosterTab({ apiFetch }) {
         setTimeout(() => URL.revokeObjectURL(zipUrl), 1000);
       });
     } catch (e) {
-      setError(String(e.message || e));
+      setError(String((e as { message?: string })?.message || e));
     } finally {
       setBusy("");
     }
@@ -888,17 +1042,17 @@ export default function PosterTab({ apiFetch }) {
     setBusy("Зураг бэлдэж байна…");
     try {
       await withExportMode(async () => {
-        const nodes = [page1Ref.current].filter(Boolean);
+        const nodes = [page1Ref.current].filter((n): n is HTMLDivElement => Boolean(n));
         for (let i = 0; i < nodes.length; i++) {
           const url = await capture(nodes[i]);
           const a = document.createElement("a");
           a.href = url;
-          a.download = `${(trip.title || "poster").slice(0, 30)}-${i + 1}.png`;
+          a.download = `${(trip?.title || "poster").slice(0, 30)}-${i + 1}.png`;
           a.click();
         }
       });
     } catch (e) {
-      setError(String(e.message || e));
+      setError(String((e as { message?: string })?.message || e));
     } finally {
       setBusy("");
     }
@@ -909,31 +1063,32 @@ export default function PosterTab({ apiFetch }) {
     try {
       await withExportMode(async () => {
         const { jsPDF } = await import("jspdf");
-        const nodes = [page1Ref.current].filter(Boolean);
-        let pdf;
+        const nodes = [page1Ref.current].filter((n): n is HTMLDivElement => Boolean(n));
+        let pdf: InstanceType<typeof jsPDF> | undefined;
         for (let i = 0; i < nodes.length; i++) {
           const url = await capture(nodes[i]);
           const w = nodes[i].offsetWidth;
           const h = nodes[i].offsetHeight;
           if (i === 0) pdf = new jsPDF({ orientation: "p", unit: "px", format: [w, h] });
-          else pdf.addPage([w, h], "p");
-          pdf.addImage(url, "PNG", 0, 0, w, h);
+          else pdf?.addPage([w, h], "p");
+          pdf?.addImage(url, "PNG", 0, 0, w, h);
         }
-        pdf.save(`${(trip.title || "poster").slice(0, 30)}.pdf`);
+        pdf?.save(`${(trip?.title || "poster").slice(0, 30)}.pdf`);
       });
     } catch (e) {
-      setError(String(e.message || e));
+      setError(String((e as { message?: string })?.message || e));
     } finally {
       setBusy("");
     }
   }
 
-  async function onDayPhotoFile(index, file) {
+  const onDayPhotoFile: PosterOnDayPhotoFileFn = async (index, file) => {
     if (!file) return;
     setBusy("Өдрийн зураг нэмж байна…");
     try {
       const dataUrl = await resizeImage(file, 1400);
       setTrip((t) => {
+        if (!t) return t;
         const clone = structuredClone(t);
         const day = clone.days?.[index];
         if (!day) return t;
@@ -942,18 +1097,18 @@ export default function PosterTab({ apiFetch }) {
         return normalizeTripData(clone);
       });
     } catch (e) {
-      setError(String(e.message || e));
+      setError(String((e as { message?: string })?.message || e));
     } finally {
       setBusy("");
       if (dayPhotoInputRefs.current[index]) dayPhotoInputRefs.current[index].value = "";
     }
-  }
+  };
 
   async function save() {
     setError("");
     setBusy("Хадгалж байна…");
     try {
-      const cleanTrip = normalizeTripData(trip);
+      const cleanTrip = normalizeTripData(trip) as PosterTrip;
       const matchingTitles = history.filter((item) => {
         if (item.id === tripId) return false;
         return normalizeHistoryTitle(item.title) === normalizeHistoryTitle(cleanTrip.title);
@@ -963,36 +1118,37 @@ export default function PosterTab({ apiFetch }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: tripId, title: cleanTrip.title, data: cleanTrip, source_file: source }),
       });
-      if (r.error) throw new Error(r.error);
+      if (r.error) throw new Error(r.error as string);
       setTrip(cleanTrip);
-      setTripId(r.id);
+      setTripId(r.id as string);
       await loadHistory();
       if (matchingTitles.length > 0) {
         setError(`Ижил нэртэй ${matchingTitles.length} хадгалсан аялал байна: "${cleanTrip.title}"`);
       }
     } catch (e) {
-      setError(String(e.message || e));
+      setError(String((e as { message?: string })?.message || e));
     } finally {
       setBusy("");
     }
   }
 
-  async function openTrip(id) {
+  async function openTrip(id: string) {
     setBusy("Ачааллаж байна…");
     try {
       const r = await fetchJson(`/api/admin/poster/trip?id=${encodeURIComponent(id)}`);
-      if (r.error) throw new Error(r.error);
-      setTrip(normalizeTripData(r.trip.data));
-      setTripId(r.trip.id);
-      setSource(r.trip.source_file || "");
+      if (r.error) throw new Error(r.error as string);
+      const tripRow = r.trip as { id: string; data: PosterTrip; source_file: string | null };
+      setTrip(normalizeTripData(tripRow.data));
+      setTripId(tripRow.id);
+      setSource(tripRow.source_file || "");
     } catch (e) {
-      setError(String(e.message || e));
+      setError(String((e as { message?: string })?.message || e));
     } finally {
       setBusy("");
     }
   }
 
-  async function deleteTrip(id) {
+  async function deleteTrip(id: string) {
     const previousHistory = history;
     setHistory((items) => items.filter((item) => item.id !== id));
     if (tripId === id) {
@@ -1003,10 +1159,10 @@ export default function PosterTab({ apiFetch }) {
 
     try {
       const r = await fetchJson(`/api/admin/poster/trip?id=${encodeURIComponent(id)}`, { method: "DELETE" });
-      if (r.error) throw new Error(r.error);
+      if (r.error) throw new Error(r.error as string);
     } catch (e) {
       setHistory(previousHistory);
-      setError(String(e.message || e));
+      setError(String((e as { message?: string })?.message || e));
     }
   }
 
@@ -1197,12 +1353,12 @@ export default function PosterTab({ apiFetch }) {
               placeholder="Нэрээр хайх..."
             />
             <div className="grid grid-cols-2 gap-2">
-              <Select value={historySort} onChange={(e) => setHistorySort(e.target.value)}>
+              <Select value={historySort} onChange={(e) => setHistorySort(e.target.value as HistorySort)}>
                 <option value="newest">Шинэ эхэнд</option>
                 <option value="oldest">Хуучин эхэнд</option>
                 <option value="title">Нэрээр</option>
               </Select>
-              <Select value={historyGroup} onChange={(e) => setHistoryGroup(e.target.value)}>
+              <Select value={historyGroup} onChange={(e) => setHistoryGroup(e.target.value as HistoryGroupMode)}>
                 <option value="date">Огноогоор</option>
                 <option value="duplicate">Давхардлаар</option>
                 <option value="none">Бүлэггүй</option>
