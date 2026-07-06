@@ -55,6 +55,7 @@ import {
   sendPlatformMessage,
   recordImageMessage,
   getTripPhotoUrls,
+  normalizePhotoOnlyText,
   isPhotoOnlyFollowup,
   pickTripsByIds,
   pickNumberedTripChoice,
@@ -89,6 +90,54 @@ export function getWebhookRuntimeDiagnostics() {
 export function resetWebhookStateForTests() {
   resetWebhookStateForTestsInternal();
 }
+
+function isLikelyContextDependentText(text: string) {
+  const normalized = normalizePhotoOnlyText(text);
+  if (!normalized) return false;
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length <= 2) return true;
+  if (normalized.length <= 24) return true;
+  const followupHints = [
+    "again",
+    "more",
+    "photo",
+    "photos",
+    "program",
+    "pdf",
+    "price",
+    "dates",
+    "seat",
+    "seats",
+    "zurag",
+    "үнэ",
+    "хэзээ",
+    "огноо",
+    "суудал",
+    "хөтөлбөр",
+    "зураг",
+    "дахин",
+    "дахиад",
+    "өөр",
+    "энэ",
+    "тэр",
+  ];
+  return followupHints.some((hint) => normalized.includes(hint));
+}
+
+function buildContextualUserText(
+  history: Array<{ role: "user" | "assistant"; text: string }>,
+  userText: string,
+) {
+  if (!isLikelyContextDependentText(userText)) return userText;
+  const recentUserTurns = history
+    .filter((message) => message.role === "user")
+    .map((message) => message.text.trim())
+    .filter(Boolean)
+    .slice(-4);
+  if (recentUserTurns.length === 0) return userText;
+  return [...recentUserTurns, userText.trim()].join("\n");
+}
+
 async function handleMessage(
   platform: Platform,
   senderId: string,
@@ -226,6 +275,9 @@ async function handleMessage(
     });
     return;
   }
+  await assertLockHealthy();
+  const history = await getHistory(senderId);
+  const contextualUserText = buildContextualUserText(history, text);
 
   // Photo-only mode: send photos only when we have a real trip signal.
   // Stay silent on greetings, unrelated text, or unknown requests. The only
@@ -261,10 +313,10 @@ async function handleMessage(
         if (numberedChoice) {
           resolvedTrip = numberedChoice;
         } else {
-          const pendingResolution = resolveTripFromUserMessage(text, pendingTrips, {
+          const pendingResolution = resolveTripFromUserMessage(contextualUserText, pendingTrips, {
             allowLooseFallback: false,
           });
-          const fullResolution = resolveTripFromUserMessage(text, trips, {
+          const fullResolution = resolveTripFromUserMessage(contextualUserText, trips, {
             allowLooseFallback: false,
           });
           if (fullResolution.status === "verified") {
@@ -284,7 +336,7 @@ async function handleMessage(
       }
 
       if (!resolvedTrip && ambiguousTrips.length === 0) {
-        const resolution = resolveTripFromUserMessage(text, trips, {
+        const resolution = resolveTripFromUserMessage(contextualUserText, trips, {
           allowLooseFallback: false,
         });
         if (resolution.status === "verified") resolvedTrip = resolution.trip;
@@ -883,7 +935,6 @@ async function handleMessage(
     return rawBusiness;
   })();
   await assertLockHealthy();
-  const history = await getHistory(senderId);
   const lastReply = await getLastReplyConsistent(sessionId);
   // Phone already given this conversation (current message or history). Every
   // fast-path answer appends the phone ask unless this is true, and the AI
@@ -930,7 +981,7 @@ async function handleMessage(
   if (hasDepartureDateAvailabilityIntent(text)) {
     const trips = await getTrips();
     const dateAvailabilityReply = buildDepartureDateAvailabilityReply({
-      userText: text,
+      userText: contextualUserText,
       trips,
     });
     if (dateAvailabilityReply) {
@@ -1002,7 +1053,7 @@ async function handleMessage(
   }
   if (hasSeatsIntent(text)) {
     const trips = await getTrips();
-    const seatsReply = buildSeatsReply(text, trips);
+    const seatsReply = buildSeatsReply(contextualUserText, trips);
     if (seatsReply) {
       const safeSeatsReply = appendLeadCaptureCta(
         enforceWebsiteForPayment(sanitizeAssistantReply(seatsReply)),
@@ -1033,7 +1084,7 @@ async function handleMessage(
   }
   if (hasDiscountIntent(text)) {
     const trips = await getTrips();
-    const discountReply = buildDiscountReply(text, trips);
+    const discountReply = buildDiscountReply(contextualUserText, trips);
     if (discountReply) {
       const safeDiscountReply = appendLeadCaptureCta(
         enforceWebsiteForPayment(sanitizeAssistantReply(discountReply)),
@@ -1064,7 +1115,7 @@ async function handleMessage(
   }
   if (hasCompareIntent(text)) {
     const trips = await getTrips();
-    const compareReply = buildCompareReply(text, trips);
+    const compareReply = buildCompareReply(contextualUserText, trips);
     if (compareReply) {
       const safeCompareReply = appendLeadCaptureCta(
         enforceWebsiteForPayment(sanitizeAssistantReply(compareReply)),
@@ -1095,7 +1146,7 @@ async function handleMessage(
   }
   {
     const trips = await getTrips();
-    const programReply = buildTripProgramReply(text, trips);
+    const programReply = buildTripProgramReply(contextualUserText, trips);
     if (programReply) {
       const safeProgramReply = appendLeadCaptureCta(
         enforceWebsiteForPayment(sanitizeAssistantReply(programReply.reply)),
@@ -1133,7 +1184,7 @@ async function handleMessage(
             platform,
             senderId,
             safeProgramReply,
-            text,
+            contextualUserText,
             token,
             pageId,
             igUserId,
@@ -1149,7 +1200,7 @@ async function handleMessage(
       recordCounter("webhook.program_fast_path_total", 1, { platform });
       return;
     }
-    const structuredTripReply = buildStructuredTripReply(text, trips);
+    const structuredTripReply = buildStructuredTripReply(contextualUserText, trips);
     if (structuredTripReply) {
       const safeStructuredReply = appendLeadCaptureCta(
         enforceWebsiteForPayment(sanitizeAssistantReply(structuredTripReply)),
@@ -1173,7 +1224,7 @@ async function handleMessage(
         platform,
         senderId,
         safeStructuredReply,
-        text,
+        contextualUserText,
         token,
         pageId,
         igUserId,

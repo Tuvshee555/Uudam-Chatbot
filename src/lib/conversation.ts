@@ -46,7 +46,7 @@ export function buildPrompt(options: {
   const { systemPrompt, business, history, userText, pinnedButtonLabels, phoneCollected } = options;
   const lines: string[] = [];
 
-  const recentHistory = history.slice(-10);
+  const recentHistory = history.slice(-25);
 
   lines.push(systemPrompt.trim());
   lines.push("");
