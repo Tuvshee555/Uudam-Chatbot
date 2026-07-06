@@ -22,7 +22,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: "batch_id_required" });
   }
 
-  const batch = getBatch(body.batchId);
+  const batch = await getBatch(body.batchId);
   if (!batch) {
     return res.status(404).json({ error: "batch_not_found" });
   }
@@ -107,7 +107,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Only delete the batch when processing the full set in one call.
   if (targetItemIds.size === 0) {
-    deleteBatch(body.batchId);
+    await deleteBatch(body.batchId);
   }
 
   return res.status(200).json({ results });

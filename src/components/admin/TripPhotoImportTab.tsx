@@ -9,6 +9,7 @@ type PreviewItem = {
   sourceType: "zip" | "folder" | "image";
   imageCount: number;
   imageIds: string[];
+  imageOriginalNames: string[];
   match: MatchResult;
   duplicateImageIds: string[];
   duplicateTripItemIds: string[];
@@ -34,10 +35,15 @@ export type TripPhotoImportTabProps = {
 
 const MAX_FILE_SIZE_MB = 10;
 
+function isLikelyImageFile(file: File): boolean {
+  return file.type.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(file.name);
+}
+
 export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImportTabProps) {
   const toast = useToast();
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const folderInputRef = React.useRef<HTMLInputElement>(null);
+  const localPreviewUrlsRef = React.useRef<Record<string, string>>({});
   const [dragging, setDragging] = React.useState(false);
   const [batchId, setBatchId] = React.useState<string | null>(null);
   const [items, setItems] = React.useState<PreviewItem[]>([]);
@@ -49,11 +55,121 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
   const [results, setResults] = React.useState<ConfirmResult[] | null>(null);
   const [itemResults, setItemResults] = React.useState<Record<string, ConfirmResult>>({});
   const [previewErrors, setPreviewErrors] = React.useState<string[]>([]);
+  const [thumbnailUrls, setThumbnailUrls] = React.useState<Record<string, string>>({});
+  const [localPreviewUrls, setLocalPreviewUrls] = React.useState<Record<string, string>>({});
+  const [failedThumbnailIds, setFailedThumbnailIds] = React.useState<Set<string>>(new Set());
 
   const sortedTrips = React.useMemo(
     () => [...trips].sort((a, b) => a.route_name.localeCompare(b.route_name)),
     [trips],
   );
+
+  const tripPhotoCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const trip of trips) {
+      counts[trip.id] = Array.isArray(trip.photo_urls)
+        ? trip.photo_urls.filter((url): url is string => typeof url === "string" && url.length > 0).length
+        : 0;
+    }
+    return counts;
+  }, [trips]);
+
+  const selectedTripsHavePhotos = React.useMemo(
+    () =>
+      items.some((item) => {
+        if (skipped.has(item.id)) return false;
+        const tripId = getEffectiveTripId(item);
+        return !!tripId && (tripPhotoCounts[tripId] || 0) > 0;
+      }),
+    [items, overrides, skipped, tripPhotoCounts],
+  );
+
+  React.useEffect(() => {
+    localPreviewUrlsRef.current = localPreviewUrls;
+  }, [localPreviewUrls]);
+
+  React.useEffect(() => {
+    if (!batchId || items.length === 0) {
+      setThumbnailUrls((prev) => {
+        Object.values(prev).forEach((url) => URL.revokeObjectURL(url));
+        return {};
+      });
+      setFailedThumbnailIds(new Set());
+      return;
+    }
+
+    let cancelled = false;
+    const activeBatchId = batchId;
+    const objectUrls: string[] = [];
+    const imageRefs = items.flatMap((item) =>
+      item.imageIds.map((imageId, index) => ({
+        imageId,
+        originalName: item.imageOriginalNames[index] || "",
+      })),
+    );
+    const missingRefs = imageRefs.filter(
+      ({ originalName }) => !originalName || !localPreviewUrlsRef.current[originalName],
+    );
+    const imageIds = Array.from(new Set(missingRefs.map((ref) => ref.imageId)));
+
+    if (imageIds.length === 0) {
+      setFailedThumbnailIds(new Set());
+      setThumbnailUrls((prev) => {
+        Object.values(prev).forEach((url) => URL.revokeObjectURL(url));
+        return {};
+      });
+      return;
+    }
+
+    async function loadThumbnails() {
+      const entries = await Promise.all(
+        imageIds.map(async (imageId) => {
+          try {
+            const res = await apiFetch(
+              `/api/admin/trip-photos-thumbnail?batchId=${encodeURIComponent(activeBatchId)}&imageId=${encodeURIComponent(imageId)}&w=180`,
+            );
+            if (!res.ok) return [imageId, null] as const;
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            objectUrls.push(url);
+            return [imageId, url] as const;
+          } catch {
+            return [imageId, null] as const;
+          }
+        }),
+      );
+      if (cancelled) {
+        objectUrls.forEach((url) => URL.revokeObjectURL(url));
+        return;
+      }
+      setFailedThumbnailIds(
+        new Set(
+          entries
+            .filter((entry): entry is readonly [string, null] => entry[1] === null)
+            .map(([imageId]) => imageId),
+        ),
+      );
+      setThumbnailUrls((prev) => {
+        Object.values(prev).forEach((url) => URL.revokeObjectURL(url));
+        return Object.fromEntries(
+          entries.filter((entry): entry is readonly [string, string] => typeof entry[1] === "string"),
+        );
+      });
+    }
+
+    void loadThumbnails();
+
+    return () => {
+      cancelled = true;
+      objectUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [apiFetch, batchId, items]);
+
+  React.useEffect(() => {
+    if (!selectedTripsHavePhotos && mode !== "append") {
+      setMode("append");
+    }
+  }, [mode, selectedTripsHavePhotos]);
 
   function reset() {
     setBatchId(null);
@@ -63,6 +179,15 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
     setResults(null);
     setItemResults({});
     setPreviewErrors([]);
+    setThumbnailUrls((prev) => {
+      Object.values(prev).forEach((url) => URL.revokeObjectURL(url));
+      return {};
+    });
+    setLocalPreviewUrls((prev) => {
+      Object.values(prev).forEach((url) => URL.revokeObjectURL(url));
+      return {};
+    });
+    setFailedThumbnailIds(new Set());
   }
 
   async function confirmSingle(item: PreviewItem) {
@@ -120,9 +245,19 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
     const valid = files.filter((f) => f.size <= MAX_FILE_SIZE_MB * 1024 * 1024);
     if (valid.length === 0) return;
 
+    setLocalPreviewUrls((prev) => {
+      Object.values(prev).forEach((url) => URL.revokeObjectURL(url));
+      const next: Record<string, string> = {};
+      for (const file of valid) {
+        if (!isLikelyImageFile(file)) continue;
+        next[file.webkitRelativePath || file.name] = URL.createObjectURL(file);
+      }
+      return next;
+    });
+
     const formData = new FormData();
     for (const file of valid) {
-      formData.append("files", file, file.name);
+      formData.append("files", file, file.webkitRelativePath || file.name);
     }
 
     setBusy(true);
@@ -203,6 +338,7 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
       return;
     }
 
+    const collectedResults: ConfirmResult[] = [];
     setResults([]);
 
     for (const item of toConfirm) {
@@ -230,27 +366,37 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
           throw new Error(json.error || "Баталгаажуулахад алдаа гарлаа");
         }
         const itemResults = json.results || [];
+        collectedResults.push(...itemResults);
         setResults((prev) => [...(prev || []), ...itemResults]);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Баталгаажуулахад алдаа гарлаа");
+        const failedResult = {
+          itemId: item.id,
+          itemName: item.name,
+          tripId: effectiveTripId,
+          tripName: item.match.tripName,
+          uploaded: 0,
+          failed: item.imageCount,
+          photoUrls: [],
+          error: err instanceof Error ? err.message : "failed",
+        };
+        collectedResults.push(failedResult);
         setResults((prev) => [
           ...(prev || []),
-          {
-            itemId: item.id,
-            itemName: item.name,
-            tripId: effectiveTripId,
-            tripName: item.match.tripName,
-            uploaded: 0,
-            failed: item.imageCount,
-            photoUrls: [],
-            error: err instanceof Error ? err.message : "failed",
-          },
+          failedResult,
         ]);
       } finally {
         setConfirmingId(null);
       }
     }
 
+    const hasErrors = collectedResults.some((result) => result.error || result.uploaded === 0);
+    if (hasErrors) {
+      toast.error("Зарим импорт амжилтгүй боллоо.");
+      return;
+    }
+
+    reset();
     toast.success("Импорт дууслаа.");
     onComplete?.();
   }
@@ -292,36 +438,38 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
   if (!trip) return null;
   const wouldExceed = urls.length + newCount > 50;
   return (
-    <div className="mt-2">
-      <p className={cx("text-xs", wouldExceed ? "text-warning font-medium" : "text-ink-subtle")}>
-        Одоо байгаа: {urls.length} зураг
+    <div className="mt-3 rounded-lg border border-line bg-surface-sunken p-2">
+      <p className={cx("text-xs font-medium", wouldExceed ? "text-warning" : "text-ink-muted")}>
+        Одоо байгаа зураг: {urls.length}
         {wouldExceed && " · хязгаарт ойртож байна"}
       </p>
-      {urls.length > 0 && (
-        <div className="mt-1 flex max-w-[14rem] gap-1 overflow-x-auto">
-          {urls.slice(0, 4).map((url, idx) => (
+      {urls.length > 0 ? (
+        <div className="mt-2 flex max-w-full gap-2 overflow-x-auto pb-1">
+          {urls.slice(0, 6).map((url, idx) => (
             <a
               key={idx}
               href={url}
               target="_blank"
               rel="noopener noreferrer"
-              className="block h-8 w-8 shrink-0 overflow-hidden rounded-md border border-line hover:ring-2 hover:ring-brand"
-              title="Одоо байгаа зураг харах"
+              className="block h-16 w-16 shrink-0 overflow-hidden rounded-md border border-line bg-surface hover:ring-2 hover:ring-brand"
+              title="Одоо байгаа зургийг харах"
             >
               <img src={url} alt="" className="h-full w-full object-cover" loading="lazy" />
             </a>
           ))}
-          {urls.length > 4 && (
+          {urls.length > 6 && (
             <a
               href={urls[0]}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line bg-surface-sunken text-[10px] text-ink-muted hover:bg-surface"
+              className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md border border-line bg-surface text-sm font-medium text-ink-muted hover:bg-surface"
             >
-              +{urls.length - 4}
+              +{urls.length - 6}
             </a>
           )}
         </div>
+      ) : (
+        <p className="mt-1 text-xs text-ink-subtle">Солих зураг алга. Баталгаажуулахад шинэ зураг байрлана.</p>
       )}
     </div>
   );
@@ -367,7 +515,7 @@ function statusTone(confidence: MatchResult["confidence"], hasError?: boolean): 
               Амжилттай: {successCount} · Амжилтгүй: {failCount} · Нийт: {results.length}
             </p>
             <div className="mt-4 flex gap-2">
-              <Button onClick={reset}>Шинэ импорт</Button>
+              <Button onClick={reset}>Буцах</Button>
               <Button variant="secondary" onClick={downloadReport}>
                 Тайлан татах
               </Button>
@@ -427,7 +575,7 @@ function statusTone(confidence: MatchResult["confidence"], hasError?: boolean): 
           >
             <Icons.upload size={32} className="mx-auto text-ink-muted" />
             <p className="mt-2 text-sm font-medium text-ink">Чирж оруулах эсвэл дарж сонгох</p>
-            <p className="mt-1 text-xs text-ink-muted">.zip, .jpg, .jpeg, .png, .webp (бүр хавтас ч болно)</p>
+            <p className="mt-1 text-xs text-ink-muted">.zip, .jpg, .jpeg, .png, .webp</p>
           </div>
 
           <input
@@ -452,9 +600,12 @@ function statusTone(confidence: MatchResult["confidence"], hasError?: boolean): 
               Файл сонгох
             </Button>
             <Button variant="secondary" size="sm" onClick={() => folderInputRef.current?.click()}>
-              Хавтас сонгох
+              Эх хавтас сонгох
             </Button>
           </div>
+          <p className="mt-2 text-xs text-ink-subtle">
+            Олон аяллын хавтсыг нэг удаагаар оруулах бол тэдгээрийг агуулсан эх хавтсыг сонгоно.
+          </p>
         </div>
       </Card>
 
@@ -481,17 +632,23 @@ function statusTone(confidence: MatchResult["confidence"], hasError?: boolean): 
             <div className="p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <h3 className="font-semibold text-ink">Тааруулалт шалгах ({items.length} импорт)</h3>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-ink-muted">Цувах арга:</span>
-                  <select
-                    value={mode}
-                    onChange={(e) => setMode(e.target.value as "append" | "replace")}
-                    className="rounded-lg border border-line-strong bg-surface-sunken px-2 py-1 text-sm text-ink"
-                  >
-                    <option value="append">Одоо байгаа зурган дээр нэмэх</option>
-                    <option value="replace">Одоо байгаа зургийг солих</option>
-                  </select>
-                </div>
+                {selectedTripsHavePhotos ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-ink-muted">Цувах арга:</span>
+                    <select
+                      value={mode}
+                      onChange={(e) => setMode(e.target.value as "append" | "replace")}
+                      className="rounded-lg border border-line-strong bg-surface-sunken px-2 py-1 text-sm text-ink"
+                    >
+                      <option value="append">Одоо байгаа зурган дээр нэмэх</option>
+                      <option value="replace">Одоо байгаа зургийг солих</option>
+                    </select>
+                  </div>
+                ) : (
+                  <p className="rounded-lg bg-surface-sunken px-3 py-2 text-sm text-ink-muted">
+                    Сонгосон аялалд одоогоор зураг байхгүй. Шинэ зургийг шууд байршуулна.
+                  </p>
+                )}
               </div>
 
               {hasUnassigned && (
@@ -502,9 +659,9 @@ function statusTone(confidence: MatchResult["confidence"], hasError?: boolean): 
                 </div>
               )}
 
-              <div className="mt-4 overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead className="text-xs text-ink-muted">
+              <div className="mt-4">
+                <table className="block w-full text-left text-sm">
+                  <thead className="sr-only">
                     <tr>
                       <th className="pb-2 font-medium">Файл / хавтас</th>
                       <th className="pb-2 font-medium">Зураг</th>
@@ -513,21 +670,34 @@ function statusTone(confidence: MatchResult["confidence"], hasError?: boolean): 
                       <th className="pb-2 font-medium">Алгасах</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-line">
+                  <tbody className="block space-y-3">
                     {items.map((item) => {
                       const effectiveTripId = getEffectiveTripId(item);
                       const isSkipped = skipped.has(item.id);
                       const duplicateTrip = item.duplicateTripItemIds.length > 0;
+                      const previewSources = item.imageIds.map((imageId, index) => ({
+                        imageId,
+                        previewUrl:
+                          localPreviewUrls[item.imageOriginalNames[index] || ""] ||
+                          thumbnailUrls[imageId] ||
+                          "",
+                      }));
                       return (
-                        <tr key={item.id} className={cx(isSkipped && "opacity-50")}>
-                          <td className="py-3 pr-3 align-top">
+                        <tr
+                          key={item.id}
+                          className={cx(
+                            "grid rounded-lg border border-line bg-surface p-4 shadow-sm transition-opacity lg:grid-cols-[minmax(0,1fr)_minmax(12rem,0.9fr)_minmax(10rem,0.7fr)_minmax(18rem,1fr)_11rem] lg:gap-5",
+                            isSkipped && "opacity-50",
+                          )}
+                        >
+                          <td className="block min-w-0 py-2 align-top lg:py-0">
                             <div className="flex items-center gap-2">
                               {item.sourceType === "zip" ? (
                                 <Icons.file size={16} className="text-ink-muted" />
                               ) : (
                                 <Icons.image size={16} className="text-ink-muted" />
                               )}
-                              <span className="max-w-[12rem] truncate font-medium text-ink">
+                              <span className="min-w-0 max-w-full truncate font-medium text-ink">
                                 {item.name}
                               </span>
                             </div>
@@ -540,32 +710,42 @@ function statusTone(confidence: MatchResult["confidence"], hasError?: boolean): 
                               </p>
                             )}
                           </td>
-                          <td className="py-3 pr-3 align-top text-ink-muted">
-                            <div className="text-xs">{item.imageCount} ширхэг</div>
-                            <div className="mt-1 flex max-w-[12rem] gap-1 overflow-x-auto">
-                              {item.imageIds.slice(0, 4).map((imageId) => (
+                          <td className="block min-w-0 py-2 align-top text-ink-muted lg:py-0">
+                            <div className="text-xs font-medium text-ink-muted">Шинэ зураг: {item.imageCount}</div>
+                            <div className="mt-1 flex max-w-full gap-1.5 overflow-x-auto pb-1">
+                              {previewSources.slice(0, 4).map(({ imageId, previewUrl }) => (
                                 <a
                                   key={imageId}
-                                  href={`/api/admin/trip-photos-full?batchId=${batchId}&imageId=${imageId}`}
+                                  href={previewUrl || "#"}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="relative block h-10 w-10 shrink-0 overflow-hidden rounded-md border border-line hover:ring-2 hover:ring-brand"
+                                  className="relative block h-20 w-20 shrink-0 overflow-hidden rounded-md border border-line bg-surface-sunken hover:ring-2 hover:ring-brand"
                                   title="Бүтэн зураг харах (шинэ хуудсанд)"
                                 >
-                                  <img
-                                    src={`/api/admin/trip-photos-thumbnail?batchId=${batchId}&imageId=${imageId}&w=48`}
-                                    alt=""
-                                    className="h-full w-full object-cover"
-                                    loading="lazy"
-                                  />
+                                  {previewUrl ? (
+                                    <img
+                                      src={previewUrl}
+                                      alt=""
+                                      className="h-full w-full object-cover"
+                                      loading="lazy"
+                                    />
+                                  ) : failedThumbnailIds.has(imageId) ? (
+                                    <span className="flex h-full w-full items-center justify-center px-2 text-center text-[10px] text-red-500">
+                                      Харагдац алга
+                                    </span>
+                                  ) : (
+                                    <span className="flex h-full w-full items-center justify-center text-[10px] text-ink-subtle">
+                                      Уншиж байна
+                                    </span>
+                                  )}
                                 </a>
                               ))}
                               {item.imageIds.length > 4 && (
                                 <a
-                                  href={`/api/admin/trip-photos-full?batchId=${batchId}&imageId=${item.imageIds[0]}`}
+                                  href={previewSources[0]?.previewUrl || "#"}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-line bg-surface-sunken text-[10px] text-ink-muted hover:bg-surface"
+                                  className="flex h-20 w-20 shrink-0 items-center justify-center rounded-md border border-line bg-surface-sunken text-xs text-ink-muted hover:bg-surface"
                                   title="Бусад зургийг харах"
                                 >
                                   +{item.imageIds.length - 4}
@@ -573,29 +753,29 @@ function statusTone(confidence: MatchResult["confidence"], hasError?: boolean): 
                               )}
                             </div>
                           </td>
-                          <td className="py-3 pr-3 align-top">
+                          <td className="block min-w-0 py-2 align-top lg:py-0">
                             <div className="space-y-1">
                               <Badge tone={statusTone(item.match.confidence, !!item.error)}>
                                 {statusLabel(item.match.confidence, !!item.error)}
                               </Badge>
                               {item.match.tripId && (
-                                <p className="max-w-[12rem] truncate text-xs text-ink-muted">
+                                <p className="max-w-full truncate text-xs text-ink-muted">
                                   {item.match.tripName}
                                 </p>
                               )}
-                              <p className="max-w-[12rem] truncate text-xs text-ink-subtle">
+                              <p className="line-clamp-2 max-w-full text-xs text-ink-subtle">
                                 {item.match.reason}
                               </p>
                             </div>
                           </td>
-                          <td className="py-3 pr-3 align-top">
+                          <td className="block min-w-0 py-2 align-top lg:py-0">
                             <select
                               value={effectiveTripId ?? ""}
                               disabled={isSkipped}
                               onChange={(e) =>
                                 setOverride(item.id, e.target.value || null)
                               }
-                              className="w-full max-w-[14rem] rounded-lg border border-line-strong bg-surface-sunken px-2 py-1 text-sm text-ink disabled:opacity-50"
+                              className="w-full rounded-lg border border-line-strong bg-surface-sunken px-2 py-2 text-sm text-ink disabled:opacity-50"
                             >
                               <option value="">-- Аялал сонгох --</option>
                               {sortedTrips.map((trip) => (
@@ -608,17 +788,17 @@ function statusTone(confidence: MatchResult["confidence"], hasError?: boolean): 
                               <ExistingTripPhotos tripId={effectiveTripId} trips={trips} newCount={item.imageCount} />
                             )}
                           </td>
-                          <td className="py-3 align-top">
+                          <td className="block py-2 align-top lg:py-0">
                             <div className="flex flex-col gap-2">
                               <button
                                 type="button"
                                 disabled={isSkipped || confirmingId === item.id || !effectiveTripId}
                                 onClick={() => void confirmSingle(item)}
-                                className="rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-white hover:bg-brand/90 disabled:opacity-50"
+                                className="rounded-lg bg-brand px-3 py-2 text-sm font-medium text-white hover:bg-brand/90 disabled:opacity-50"
                               >
                                 {confirmingId === item.id ? "Оруулж байна..." : "Баталгаажуулах"}
                               </button>
-                              <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
+                              <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm text-ink">
                                 <input
                                   type="checkbox"
                                   checked={isSkipped}

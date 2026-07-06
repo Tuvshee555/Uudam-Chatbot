@@ -614,7 +614,15 @@ export default function PosterTab({ apiFetch }) {
   }
 
   function getRelativeTop(node, container) {
-    return node.getBoundingClientRect().top - container.getBoundingClientRect().top;
+    let top = 0;
+    let current = node;
+
+    while (current && current !== container) {
+      top += current.offsetTop || 0;
+      current = current.offsetParent;
+    }
+
+    return top;
   }
 
   function getMessengerSplitCandidates(node) {
@@ -637,7 +645,7 @@ export default function PosterTab({ apiFetch }) {
     const maxY = totalHeight * 0.72;
     const candidates = getMessengerSplitCandidates(node).filter((top) => top > minY && top < maxY);
 
-    if (!candidates.length) return Math.round(target);
+    if (!candidates.length) return null;
 
     return Math.round(
       candidates.reduce((best, current) =>
@@ -648,14 +656,17 @@ export default function PosterTab({ apiFetch }) {
 
   function chooseMessengerSplitPoints(node, sliceCount) {
     if (sliceCount <= 1) return [];
-    if (sliceCount === 2) return [chooseMessengerSplitPoint(node)];
+    if (sliceCount === 2) {
+      const point = chooseMessengerSplitPoint(node);
+      return point === null ? null : [point];
+    }
 
     const totalHeight = node.offsetHeight;
     const targets = Array.from({ length: sliceCount - 1 }, (_, i) => (totalHeight * (i + 1)) / sliceCount);
     const candidates = getMessengerSplitCandidates(node).filter((point) => point > totalHeight * 0.16 && point < totalHeight * 0.9);
 
     if (candidates.length < sliceCount - 1) {
-      return targets.map(Math.round);
+      return null;
     }
 
     let bestPoints = targets;
@@ -697,6 +708,68 @@ export default function PosterTab({ apiFetch }) {
     return bestPoints.sort((a, b) => a - b).map(Math.round);
   }
 
+  function scoreMessengerSplitPlan(totalHeight, sliceCount, splitPoints) {
+    const ideal = totalHeight / sliceCount;
+    const ranges = [0, ...splitPoints, totalHeight]
+      .map((startY, index, points) => points[index + 1] - startY)
+      .filter(Boolean);
+    const targets = Array.from({ length: sliceCount - 1 }, (_, i) => (totalHeight * (i + 1)) / sliceCount);
+    const balancePenalty = ranges.reduce((sum, height) => sum + Math.abs(height - ideal), 0);
+    const targetPenalty = splitPoints.reduce(
+      (sum, point, index) => sum + Math.abs(point - targets[index]),
+      0
+    );
+    const oversizePenalty = ranges.reduce((sum, height) => {
+      const extra = Math.max(0, height - MESSENGER_SINGLE_IMAGE_MAX_HEIGHT);
+      return sum + extra * extra * 0.08;
+    }, 0);
+    const tinySlicePenalty = ranges.reduce((sum, height) => {
+      const shortfall = Math.max(0, totalHeight * 0.14 - height);
+      return sum + shortfall * shortfall * 0.2;
+    }, 0);
+    const slicePenalty = Math.max(0, sliceCount - 1) * 80;
+
+    return balancePenalty * 1.2 + targetPenalty + oversizePenalty + tinySlicePenalty + slicePenalty;
+  }
+
+  function chooseMessengerSlicePlan(node) {
+    const totalHeight = node.offsetHeight;
+    const preferredCount = Math.min(
+      MESSENGER_MAX_IMAGE_SLICES,
+      Math.max(1, Math.ceil(totalHeight / MESSENGER_SINGLE_IMAGE_MAX_HEIGHT))
+    );
+    const countsToTry = Array.from({ length: MESSENGER_MAX_IMAGE_SLICES }, (_, index) => index + 1)
+      .sort((a, b) => Math.abs(a - preferredCount) - Math.abs(b - preferredCount) || a - b);
+
+    let bestPlan = null;
+
+    for (const sliceCount of countsToTry) {
+      const splitPoints = chooseMessengerSplitPoints(node, sliceCount);
+      if (splitPoints === null) continue;
+
+      const plan = {
+        sliceCount,
+        splitPoints,
+        score: scoreMessengerSplitPlan(totalHeight, sliceCount, splitPoints),
+      };
+
+      if (!bestPlan || plan.score < bestPlan.score) {
+        bestPlan = plan;
+      }
+    }
+
+    if (bestPlan) return bestPlan;
+
+    return {
+      sliceCount: preferredCount,
+      splitPoints: Array.from(
+        { length: Math.max(0, preferredCount - 1) },
+        (_, i) => Math.round((totalHeight * (i + 1)) / preferredCount)
+      ),
+      score: Number.POSITIVE_INFINITY,
+    };
+  }
+
   function drawMessengerBadge(ctx, width, height, index, total) {
     const label = `${index + 1}/${total}`;
     const badgeWidth = 120;
@@ -729,11 +802,7 @@ export default function PosterTab({ apiFetch }) {
     });
 
     const totalHeight = node.offsetHeight;
-    const sliceCount = Math.min(
-      MESSENGER_MAX_IMAGE_SLICES,
-      Math.max(1, Math.ceil(totalHeight / MESSENGER_SINGLE_IMAGE_MAX_HEIGHT))
-    );
-    const splitPoints = chooseMessengerSplitPoints(node, sliceCount);
+    const { splitPoints } = chooseMessengerSlicePlan(node);
     const ranges = [0, ...splitPoints, totalHeight].map((startY, index, points) => [startY, points[index + 1]]).filter((range) => range[1]);
     const scaleY = fullImage.height / totalHeight;
 

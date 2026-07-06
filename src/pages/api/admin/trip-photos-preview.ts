@@ -15,6 +15,46 @@ export const config = {
   },
 };
 
+export function mergeMatchedImageItems(items: PreviewImportItem[]): PreviewImportItem[] {
+  const merged: PreviewImportItem[] = [];
+  const tripImageGroups = new Map<string, PreviewImportItem>();
+
+  for (const item of items) {
+    if (item.sourceType !== "image" || !item.match.tripId) {
+      merged.push(item);
+      continue;
+    }
+
+    const existing = tripImageGroups.get(item.match.tripId);
+    if (!existing) {
+      const group = {
+        ...item,
+        name: item.match.tripName || item.name,
+        images: [...item.images],
+        imageCount: item.images.length,
+        error: item.error,
+        duplicateImageIds: [...item.duplicateImageIds],
+        duplicateTripItemIds: [],
+      };
+      tripImageGroups.set(item.match.tripId, group);
+      merged.push(group);
+      continue;
+    }
+
+    existing.images.push(...item.images);
+    existing.images.sort((a, b) =>
+      a.fileName.localeCompare(b.fileName, undefined, { numeric: true }),
+    );
+    existing.imageCount = existing.images.length;
+    existing.duplicateImageIds = Array.from(
+      new Set([...existing.duplicateImageIds, ...item.duplicateImageIds]),
+    );
+    existing.error = [existing.error, item.error].filter(Boolean).join("; ") || undefined;
+  }
+
+  return merged;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const allowed = await requireAdminAccess(req, res, "api.admin.trip-photos-preview");
   if (!allowed) return;
@@ -47,9 +87,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       dedupedItems.push(item);
     }
 
-    const batchId = createBatch(trips);
+    const batchId = await createBatch(trips);
 
-    const items: PreviewImportItem[] = [];
+    const matchedItems: PreviewImportItem[] = [];
     for (const item of dedupedItems) {
       const match: MatchResult = item.imageCount > 0
         ? await matchImportItemToTripsWithAI(item.name, trips)
@@ -61,13 +101,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             matchedBy: "none",
             reason: "Зураг олдоогүй",
           };
-      items.push({
+      matchedItems.push({
         ...item,
         match,
         duplicateImageIds: [],
         duplicateTripItemIds: [],
       });
     }
+
+    const items = mergeMatchedImageItems(matchedItems);
 
     // Duplicate image detection across the whole batch
     const shaToImageIds = new Map<string, string[]>();
@@ -104,7 +146,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    setBatchItems(batchId, items);
+    await setBatchItems(batchId, items);
 
     const previewItems = items.map((item) => ({
       id: item.id,
@@ -112,6 +154,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       sourceType: item.sourceType,
       imageCount: item.imageCount,
       imageIds: item.images.map((img) => img.id),
+      imageOriginalNames: item.images.map((img) => img.originalName),
       match: item.match,
       duplicateImageIds: item.duplicateImageIds,
       duplicateTripItemIds: item.duplicateTripItemIds,

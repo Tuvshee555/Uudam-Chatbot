@@ -14,7 +14,7 @@ import { autoHandoffSender, isPaused, pauseBot, storeSenderName, trackSender } f
 import { createLead, dbClaimGoodbye, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { appendLeadCaptureCta, buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, } from "../../lib/travelFastPaths";
-import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
+import { claimSeasonSend, extractTripPhotosForReply, extractTripPhotosForUserMessage, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
 import { advanceCollectState, buildCompletionMessage, buildLeadContext, clearCollectState, getCollectState, isInCollectFlow, promptForStep, setCollectState, startCollectState, } from "../../lib/bookingCollect";
@@ -1176,7 +1176,7 @@ async function handleMessage(
   const botControl = await getBotControl();
   if (botControl.photo_only && platform === "facebook" && token) {
     const trips = await listTrips({ status: "active" });
-    const photos = extractTripPhotosForReply(text, trips);
+    const photos = extractTripPhotosForUserMessage(text, trips);
     for (const url of photos) {
       try {
         await sendImageMessage(senderId, url, token, {

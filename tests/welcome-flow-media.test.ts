@@ -90,6 +90,36 @@ test("trip media sends only after the same specific trip passes both gates", asy
   ]);
 });
 
+test("photo-only mode resolves the trip directly from the user message", async () => {
+  const { extractTripPhotosForUserMessage } = await loadWelcomeFlow();
+  const photos = extractTripPhotosForUserMessage(
+    "Бээжин Бэйдэхэ газар нислэг хосолсон аяллын зураг үзье",
+    [
+      trip({
+        id: "ground-tour",
+        route_name: "Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал",
+        photo_urls: ["https://example.com/ground-tour.jpg"],
+      }),
+      trip({
+        id: "combo-tour",
+        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        photo_urls: ["https://example.com/combo-tour-1.jpg", "https://example.com/combo-tour-2.jpg"],
+        extra: {
+          aliases: [
+            "Бээжин Бэйдэхэ газар нислэг хосолсон",
+            "Бэйдэхэ Бээжин газар нислэг",
+          ],
+        },
+      }),
+    ],
+  );
+
+  assert.deepEqual(photos, [
+    "https://example.com/combo-tour-1.jpg",
+    "https://example.com/combo-tour-2.jpg",
+  ]);
+});
+
 test("brochure matching also refuses mismatched user and reply trips", async () => {
   const { extractTripBrochureAttachmentId } = await loadWelcomeFlow();
   const brochure = extractTripBrochureAttachmentId(

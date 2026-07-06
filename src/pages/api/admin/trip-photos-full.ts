@@ -17,7 +17,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: "missing_params" });
   }
 
-  const batch = getBatch(batchId);
+  const batch = await getBatch(batchId);
   if (!batch) {
     return res.status(404).json({ error: "batch_not_found" });
   }

@@ -13,6 +13,7 @@
 
 import { dbClaimGreeting, dbClaimSeasonSend } from "./travelDb";
 import type { TravelTrip } from "./travelOps";
+import { resolveTripFromUserMessage } from "./travelFastPaths";
 
 const MAX_WELCOME_PHOTOS = 5;
 const MAX_TRIP_PHOTOS = 2;
@@ -363,6 +364,22 @@ export function extractTripPhotosForReply(
     trips: active,
   });
   return verifiedMatch ? verifiedMatch.trip.photo_urls.slice(0, MAX_TRIP_PHOTOS) : [];
+}
+
+export function extractTripPhotosForUserMessage(
+  userText: string,
+  trips: TravelTrip[],
+): string[] {
+  const active = trips.filter(
+    (t) => t.status === "active" && t.photo_urls.length > 0,
+  );
+  const resolution = resolveTripFromUserMessage(userText, active, {
+    allowLooseFallback: false,
+  });
+  if (resolution.status === "verified") {
+    return resolution.trip.photo_urls.slice(0, MAX_TRIP_PHOTOS);
+  }
+  return extractTripPhotosForReply(userText, active);
 }
 
 export function extractTripBrochureAttachmentId(

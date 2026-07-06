@@ -12,6 +12,13 @@ async function loadMatcher() {
   return { matchImportItemToTrips };
 }
 
+async function loadPreviewHelpers() {
+  const { mergeMatchedImageItems } = await import(
+    "../src/pages/api/admin/trip-photos-preview"
+  );
+  return { mergeMatchedImageItems };
+}
+
 function makeTrip(id: string, routeName: string, aliases: string[] = []): TravelTrip {
   return {
     id,
@@ -36,6 +43,68 @@ function makeTrip(id: string, routeName: string, aliases: string[] = []): Travel
     updated_at: "",
   };
 }
+
+describe("tripPhotoImport preview grouping", () => {
+  it("groups separate image uploads matched to the same trip", async () => {
+    const { mergeMatchedImageItems } = await loadPreviewHelpers();
+    const match = {
+      tripId: "trip-1",
+      tripName: "Shared trip",
+      confidence: "medium" as const,
+      score: 0.72,
+      matchedBy: "fuzzy" as const,
+      reason: "same trip",
+    };
+    const items = mergeMatchedImageItems([
+      {
+        id: "item-a",
+        name: "photo-a.jpg",
+        sourceType: "image",
+        images: [
+          {
+            id: "img-a",
+            fileName: "photo-a.jpg",
+            originalName: "photo-a.jpg",
+            mimeType: "image/jpeg",
+            size: 1,
+            buffer: Buffer.from("a"),
+            sha256: "a",
+          },
+        ],
+        imageCount: 1,
+        match,
+        duplicateImageIds: [],
+        duplicateTripItemIds: [],
+      },
+      {
+        id: "item-b",
+        name: "photo-b.jpg",
+        sourceType: "image",
+        images: [
+          {
+            id: "img-b",
+            fileName: "photo-b.jpg",
+            originalName: "photo-b.jpg",
+            mimeType: "image/jpeg",
+            size: 1,
+            buffer: Buffer.from("b"),
+            sha256: "b",
+          },
+        ],
+        imageCount: 1,
+        match,
+        duplicateImageIds: [],
+        duplicateTripItemIds: [],
+      },
+    ]);
+
+    assert.equal(items.length, 1);
+    assert.equal(items[0].id, "item-a");
+    assert.equal(items[0].name, "Shared trip");
+    assert.equal(items[0].imageCount, 2);
+    assert.deepEqual(items[0].images.map((image) => image.id), ["img-a", "img-b"]);
+  });
+});
 
 describe("tripPhotoImport match", () => {
   it("exactly matches normalized route name", async () => {

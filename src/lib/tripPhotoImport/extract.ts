@@ -29,6 +29,20 @@ function sha256(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
+function splitPathSegments(path: string): string[] {
+  return path
+    .split(/[/\\]+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+}
+
+function folderGroupName(path: string, containerMode: boolean): string | null {
+  const segments = splitPathSegments(path);
+  if (segments.length < 2) return null;
+  if (!containerMode) return segments[0] || null;
+  return segments[1] || segments[0] || null;
+}
+
 function bufferToImportImage(
   fileName: string,
   buffer: Buffer,
@@ -38,7 +52,7 @@ function bufferToImportImage(
   return {
     id: randomUUID(),
     fileName: cleanName,
-    originalName: cleanName,
+    originalName: fileName,
     mimeType: mimeType || getMimeType(cleanName),
     size: buffer.length,
     buffer,
@@ -105,6 +119,75 @@ async function extractZip(fileName: string, buffer: Buffer): Promise<ImportItem>
   };
 }
 
+export async function buildImportItemsFromRawFiles(
+  rawFiles: RawFile[],
+): Promise<ExtractResult> {
+  const items: ImportItem[] = [];
+  const errors: string[] = [];
+  const totalBytes = rawFiles.reduce((sum, raw) => sum + raw.buffer.length, 0);
+
+  const imagePaths = rawFiles
+    .filter((raw) => isImageFileName(raw.fileName))
+    .map((raw) => splitPathSegments(raw.fileName));
+  const firstSegments = new Set(
+    imagePaths.map((segments) => segments[0]).filter(Boolean),
+  );
+  const secondLevelDirs = new Set(
+    imagePaths
+      .filter((segments) => segments.length >= 3)
+      .map((segments) => segments[1])
+      .filter(Boolean),
+  );
+  const containerMode = firstSegments.size === 1 && secondLevelDirs.size > 1;
+  const folderGroups = new Map<string, RawFile[]>();
+
+  for (const raw of rawFiles) {
+    if (raw.fileName.toLowerCase().endsWith(".zip")) {
+      items.push(await extractZip(raw.fileName, raw.buffer));
+      continue;
+    }
+
+    if (!isImageFileName(raw.fileName)) continue;
+
+    if (raw.buffer.length > MAX_FILE_SIZE_BYTES) {
+      errors.push(`${raw.fileName}: 10MB-ээс том`);
+      continue;
+    }
+
+    const groupName = folderGroupName(raw.fileName, containerMode);
+    if (groupName) {
+      const list = folderGroups.get(groupName) || [];
+      list.push(raw);
+      folderGroups.set(groupName, list);
+      continue;
+    }
+
+    items.push({
+      id: randomUUID(),
+      name: raw.fileName.split("/").pop() || raw.fileName,
+      sourceType: "image",
+      images: [bufferToImportImage(raw.fileName, raw.buffer, raw.mimeType)],
+      imageCount: 1,
+    });
+  }
+
+  for (const [groupName, files] of folderGroups.entries()) {
+    const images = files
+      .map((raw) => bufferToImportImage(raw.fileName, raw.buffer, raw.mimeType))
+      .sort((a, b) => a.fileName.localeCompare(b.fileName, undefined, { numeric: true }));
+
+    items.push({
+      id: randomUUID(),
+      name: groupName,
+      sourceType: "folder",
+      images,
+      imageCount: images.length,
+    });
+  }
+
+  return { items, totalBytes, errors };
+}
+
 export async function parseMultipartFiles(
   req: IncomingMessage,
 ): Promise<ExtractResult> {
@@ -151,25 +234,12 @@ export async function parseMultipartFiles(
 
     busboy.on("finish", async () => {
       try {
-        const items: ImportItem[] = [];
-        for (const raw of rawFiles) {
-          if (raw.fileName.toLowerCase().endsWith(".zip")) {
-            items.push(await extractZip(raw.fileName, raw.buffer));
-          } else if (isImageFileName(raw.fileName)) {
-            if (raw.buffer.length > MAX_FILE_SIZE_BYTES) {
-              errors.push(`${raw.fileName}: 10MB-ээс том`);
-              continue;
-            }
-            items.push({
-              id: randomUUID(),
-              name: raw.fileName.split("/").pop() || raw.fileName,
-              sourceType: "image",
-              images: [bufferToImportImage(raw.fileName, raw.buffer, raw.mimeType)],
-              imageCount: 1,
-            });
-          }
-        }
-        resolve({ items, totalBytes, errors });
+        const built = await buildImportItemsFromRawFiles(rawFiles);
+        resolve({
+          items: built.items,
+          totalBytes,
+          errors: [...errors, ...built.errors],
+        });
       } catch (err) {
         reject(err);
       }
