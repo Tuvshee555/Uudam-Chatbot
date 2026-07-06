@@ -169,8 +169,24 @@ const ALIAS_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bnisleggvi\b/gi, "нислэггүй"],
   [/\bnisleggui\b/gi, "нислэггүй"],
   [/\bniseleggvi\b/gi, "нислэггүй"],
+  [/\bnislegtei\b/gi, "нислэгтэй"],
+  [/\bnislegt[eэ]i\b/gi, "нислэгтэй"],
+  [/\bnisleg\b/gi, "нислэг"],
   [/\bno flight\b/gi, "нислэггүй"],
   [/\bland tour\b/gi, "газрын аялал"],
+  [/\bgazar\b/gi, "газар"],
+  [/\bgazr\b/gi, "газар"],
+  [/\bhosolson\b/gi, "хосолсон"],
+  [/\bhoslson\b/gi, "хосолсон"],
+  [/\baylal\b/gi, "аялал"],
+  [/\bayalal\b/gi, "аялал"],
+  [/\bzurag\b/gi, "зураг"],
+  [/\buzi[eй]?\b/gi, "үзье"],
+  [/\bbeejin\b/gi, "бээжин"],
+  [/\bbeijing\b/gi, "бээжин"],
+  [/\bbeidaihe\b/gi, "бэйдайхэ"],
+  [/\bbeidehe\b/gi, "бэйдэхэ"],
+  [/\bbeidehi\b/gi, "бэйдэхэ"],
   [/\bwith ticket\b/gi, "тийзтэй"],
   [/\bwithout ticket\b/gi, "тийзгүй"],
   [/\bticketless\b/gi, "тийзгүй"],
@@ -188,11 +204,81 @@ function normText(text: string) {
     .trim();
 }
 
+const CYRILLIC_TO_LATIN: Record<string, string> = {
+  а: "a",
+  б: "b",
+  в: "v",
+  г: "g",
+  д: "d",
+  е: "e",
+  ё: "yo",
+  ж: "j",
+  з: "z",
+  и: "i",
+  й: "i",
+  к: "k",
+  л: "l",
+  м: "m",
+  н: "n",
+  о: "o",
+  ө: "o",
+  п: "p",
+  р: "r",
+  с: "s",
+  т: "t",
+  у: "u",
+  ү: "u",
+  ф: "f",
+  х: "h",
+  ц: "ts",
+  ч: "ch",
+  ш: "sh",
+  щ: "sh",
+  ъ: "",
+  ы: "i",
+  ь: "",
+  э: "e",
+  ю: "yu",
+  я: "ya",
+};
+
+function phoneticLatinText(text: string) {
+  return normText(text)
+    .split("")
+    .map((char) => CYRILLIC_TO_LATIN[char] ?? char)
+    .join("")
+    .replace(/ts/g, "c")
+    .replace(/ch/g, "c")
+    .replace(/sh/g, "s")
+    .replace(/yo/g, "o")
+    .replace(/yu/g, "u")
+    .replace(/ya/g, "a")
+    .replace(/kh/g, "h")
+    .replace(/ee+/g, "e")
+    .replace(/oo+/g, "o")
+    .replace(/uu+/g, "u")
+    .replace(/ii+/g, "i")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const GENERIC_ROUTE_WORDS_PHONETIC = new Set(
+  Array.from(GENERIC_ROUTE_WORDS, (word) => phoneticLatinText(word)).filter(Boolean),
+);
+
 function keywordTokens(text: string) {
   return normText(text)
     .split(/\s+/)
     .map((word) => word.trim())
     .filter((word) => word.length >= 2 && !GENERIC_ROUTE_WORDS.has(word));
+}
+
+function phoneticKeywordTokens(text: string) {
+  return phoneticLatinText(text)
+    .split(/\s+/)
+    .map((word) => word.trim())
+    .filter((word) => word.length >= 2 && !GENERIC_ROUTE_WORDS_PHONETIC.has(word));
 }
 
 function unique<T>(values: T[]) {
@@ -336,8 +422,10 @@ function getPriceValuesFromGroup(
 
 function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] {
   const query = normText(text);
+  const queryPhonetic = phoneticLatinText(text);
   const queryWords = unique(keywordTokens(text));
-  if (!queryWords.length) return [];
+  const queryPhoneticWords = unique(phoneticKeywordTokens(text));
+  if (!queryWords.length && !queryPhoneticWords.length) return [];
   const landOnly = queryWantsLandOnlyEnhanced(text);
   const wantsCombo = queryWantsLandFlightCombo(text);
   const wantsFlight = queryWantsFlight(text);
@@ -347,8 +435,10 @@ function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] {
     if (trip.status !== "active") continue;
 
     const routeNorm = normText(trip.route_name);
+    const routePhonetic = phoneticLatinText(trip.route_name);
     const routeKeywords = unique(keywordTokens(trip.route_name));
-    if (!routeKeywords.length) continue;
+    const routePhoneticKeywords = unique(phoneticKeywordTokens(trip.route_name));
+    if (!routeKeywords.length && !routePhoneticKeywords.length) continue;
 
     // Check aliases — full string OR token-level overlap.
     // This means an alias like "Жанжиажэ" (stored in DB) will match
@@ -357,13 +447,25 @@ function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] {
     const aliasHit = aliases.some((alias) => {
       const aliasNorm = normText(alias);
       if (query.includes(aliasNorm) || aliasNorm.includes(query)) return true;
-      return hasLooseAliasMatch(query, queryWords, alias);
+      const aliasPhonetic = phoneticLatinText(alias);
+      if (
+        aliasPhonetic &&
+        queryPhonetic &&
+        (queryPhonetic.includes(aliasPhonetic) || aliasPhonetic.includes(queryPhonetic))
+      ) {
+        return true;
+      }
+      return hasLooseAliasMatch(query, queryWords, alias, queryPhonetic, queryPhoneticWords);
     }) ? 1 : 0;
 
-    const matchedWords = routeKeywords.filter((word) => queryWords.includes(word));
-    const coverage = matchedWords.length / routeKeywords.length;
-    const exactRouteHit = query.includes(routeNorm) ? 1 : 0;
-    const minMatchCount = routeKeywords.length === 1 ? 1 : 2;
+    const matchedWords = unique([
+      ...routeKeywords.filter((word) => queryWords.includes(word)),
+      ...routePhoneticKeywords.filter((word) => queryPhoneticWords.includes(word)),
+    ]);
+    const routeTokenPool = unique([...routeKeywords, ...routePhoneticKeywords]);
+    const coverage = matchedWords.length / routeTokenPool.length;
+    const exactRouteHit = query.includes(routeNorm) || (routePhonetic.length > 0 && queryPhonetic.includes(routePhonetic)) ? 1 : 0;
+    const minMatchCount = routeTokenPool.length === 1 ? 1 : 2;
     const strongTokenHit = matchedWords.some((word) => word.length >= 4);
 
     if (matchedWords.length < minMatchCount && exactRouteHit === 0 && aliasHit === 0 && !strongTokenHit) continue;
@@ -463,16 +565,34 @@ function queryWantsLandOnly(query: string): boolean {
   );
 }
 
-function hasLooseAliasMatch(query: string, queryKeywords: string[], alias: string): boolean {
+function hasLooseAliasMatch(
+  query: string,
+  queryKeywords: string[],
+  alias: string,
+  queryPhonetic = "",
+  queryPhoneticKeywords: string[] = [],
+): boolean {
   const aliasNorm = normText(alias);
   if (query.includes(aliasNorm) || aliasNorm.includes(query)) return true;
 
+  const aliasPhonetic = phoneticLatinText(alias);
+  if (
+    aliasPhonetic &&
+    queryPhonetic &&
+    (queryPhonetic.includes(aliasPhonetic) || aliasPhonetic.includes(queryPhonetic))
+  ) {
+    return true;
+  }
+
   const aliasTokens = unique(keywordTokens(alias));
-  if (!aliasTokens.length) return false;
+  const aliasPhoneticTokens = unique(phoneticKeywordTokens(alias));
+  if (!aliasTokens.length && !aliasPhoneticTokens.length) return false;
 
   const overlap = aliasTokens.filter((token) => queryKeywords.includes(token)).length;
+  const phoneticOverlap = aliasPhoneticTokens.filter((token) => queryPhoneticKeywords.includes(token)).length;
   const requiredOverlap = aliasTokens.length === 1 ? 1 : Math.min(2, aliasTokens.length);
-  return overlap >= requiredOverlap;
+  const requiredPhoneticOverlap = aliasPhoneticTokens.length === 1 ? 1 : Math.min(2, aliasPhoneticTokens.length);
+  return overlap >= requiredOverlap || phoneticOverlap >= requiredPhoneticOverlap;
 }
 
 function queryExplicitlyRejectsFlight(query: string): boolean {
@@ -537,9 +657,11 @@ function tripIsLandFlightCombo(trip: TravelTrip): boolean {
 
 function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBrochureIntent?: boolean }) {
   const query = normText(text);
+  const queryPhonetic = phoneticLatinText(text);
   // Use keywordTokens() so generic route words (газар, нислэг, аялал, хосолсон…)
   // don't act as false-positive boosters and rank the wrong trip higher.
   const queryKeywords = unique(keywordTokens(text));
+  const queryPhoneticKeywords = unique(phoneticKeywordTokens(text));
   const landOnly = queryWantsLandOnlyEnhanced(text);
   const wantsCombo = queryWantsLandFlightCombo(text);
   const wantsFlight = queryWantsFlight(text);
@@ -551,18 +673,27 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
   for (const trip of trips) {
     if (trip.status !== "active") continue;
     const routeNorm = normText(trip.route_name);
+    const routePhonetic = phoneticLatinText(trip.route_name);
     // Filter route words through keywordTokens as well (strips GENERIC_ROUTE_WORDS).
     const routeKeywords = unique(keywordTokens(trip.route_name));
+    const routePhoneticKeywords = unique(phoneticKeywordTokens(trip.route_name));
     const matchedWordCount = routeKeywords.filter((word) => queryKeywords.includes(word)).length;
+    const phoneticMatchedWordCount = routePhoneticKeywords.filter((word) => queryPhoneticKeywords.includes(word)).length;
     const aliases = getAliases(trip);
-    const aliasExactHit = aliases.some((alias) => query.includes(normText(alias))) ? 1 : 0;
-    const aliasTokenHit = aliases.some((alias) => hasLooseAliasMatch(query, queryKeywords, alias)) ? 1 : 0;
-    const exactRouteHit = query.includes(routeNorm) ? 1 : 0;
+    const aliasExactHit = aliases.some((alias) => {
+      const aliasNorm = normText(alias);
+      const aliasPhonetic = phoneticLatinText(alias);
+      return query.includes(aliasNorm) || (aliasPhonetic.length > 0 && queryPhonetic.includes(aliasPhonetic));
+    }) ? 1 : 0;
+    const aliasTokenHit = aliases.some((alias) =>
+      hasLooseAliasMatch(query, queryKeywords, alias, queryPhonetic, queryPhoneticKeywords),
+    ) ? 1 : 0;
+    const exactRouteHit = query.includes(routeNorm) || (routePhonetic.length > 0 && queryPhonetic.includes(routePhonetic)) ? 1 : 0;
     let score =
       exactRouteHit * 10 +
       aliasExactHit * 8 +
       aliasTokenHit * 6 +
-      matchedWordCount * 3;
+      Math.max(matchedWordCount, phoneticMatchedWordCount) * 3;
 
     // Category-intent alignment bonuses and penalties.
     const isCombo = tripIsLandFlightCombo(trip);
@@ -581,14 +712,15 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
     // Bonus when alias is a precise land-only spelling variant.
     const landAliasHit = getAliases(trip).some((alias) => {
       const an = normText(alias);
-      return an.includes("газрын") && query.includes(an);
+      const ap = phoneticLatinText(alias);
+      return an.includes("газрын") && (query.includes(an) || (ap.length > 0 && queryPhonetic.includes(ap)));
     });
     if (landAliasHit) score += 80;
     const enhancedLandAliasHit = aliases.some((alias) => {
       const an = normText(alias);
       return (
         (an.includes("газрын") || an.includes("газраар") || an.includes("нислэггүй")) &&
-        hasLooseAliasMatch(query, queryKeywords, alias)
+        hasLooseAliasMatch(query, queryKeywords, alias, queryPhonetic, queryPhoneticKeywords)
       );
     });
     if (enhancedLandAliasHit && !landAliasHit) score += 100;

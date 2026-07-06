@@ -13,7 +13,7 @@ import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepe
 import { autoHandoffSender, isPaused, pauseBot, storeSenderName, trackSender } from "../../lib/pause";
 import { createLead, dbClaimGoodbye, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
-import { appendLeadCaptureCta, buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, } from "../../lib/travelFastPaths";
+import { appendLeadCaptureCta, buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
 import { claimSeasonSend, extractTripPhotosForReply, extractTripPhotosForUserMessage, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
@@ -1172,21 +1172,45 @@ async function handleMessage(
   }
 
   // Photo-only mode: no text replies at all. If the message matches a specific trip
-  // and that trip has photos, send only the photos silently. Otherwise stay mute.
+  // and that trip has photos, send only the photos. On a miss, ask the
+  // smallest possible clarifying question instead of going silent.
   const botControl = await getBotControl();
   if (botControl.photo_only && platform === "facebook" && token) {
     const trips = await listTrips({ status: "active" });
     const photos = extractTripPhotosForUserMessage(text, trips);
-    for (const url of photos) {
+    if (photos.length > 0) {
+      for (const url of photos) {
+        try {
+          await sendImageMessage(senderId, url, token, {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            source: "api.webhook.photo_only",
+          });
+        } catch { }
+      }
+      await recordImageMessage(senderId, photos);
+    } else {
+      const resolution = resolveTripFromUserMessage(text, trips, {
+        allowLooseFallback: false,
+      });
+      const clarification =
+        resolution.status === "ambiguous"
+          ? [
+              "Яг аль аяллын зураг үзэх вэ?",
+              ...resolution.candidates.slice(0, 3).map((trip) => `• ${trip.route_name}`),
+            ].join("\n")
+          : resolution.status === "verified"
+            ? "Энэ аялалд одоогоор зураг алга. Өөр аяллын нэр бичээрэй."
+            : "Ямар аяллын зураг үзэх вэ?";
       try {
-        await sendImageMessage(senderId, url, token, {
+        await sendTextMessage(senderId, clarification, token, {
           requestId: trace?.requestId,
           correlationId: trace?.correlationId,
-          source: "api.webhook.photo_only",
+          source: "api.webhook.photo_only_clarify",
         });
+        await appendMessage(senderId, "assistant", clarification);
       } catch { }
     }
-    await recordImageMessage(senderId, photos);
     logInfo("webhook.photo_only_mode", {
       requestId: trace?.requestId,
       senderHash: hashIdentifier(senderId),
