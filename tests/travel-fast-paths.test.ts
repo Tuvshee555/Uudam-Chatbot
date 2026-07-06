@@ -531,6 +531,34 @@ test("program request prefers the combo tour when user explicitly says газа�
   assert.doesNotMatch(result?.reply || "", /https:\/\/example\.com\/combo-tour\.pdf/);
 });
 
+test("program request asks for clarification on generic Beijing flight-tour wording", () => {
+  const result = buildTripProgramReply(
+    "Бээжин нислэгтэй аяллын хөтөлбөр үзэх",
+    [
+      trip({
+        id: "beijing-direct",
+        route_name: "Бээжин - Юниверсал шууд нислэгтэй аялал",
+        extra: {
+          aliases: ["Бээжин Юниверсал"],
+          program_images: ["https://example.com/beijing-direct-program.jpg"],
+        },
+      }),
+      trip({
+        id: "beidaihe-combo",
+        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        extra: {
+          aliases: ["Бээжин Бэйдайхэ газар нислэг хосолсон", "Бэйдайхэ Бээжин"],
+          program_images: ["https://example.com/beidaihe-combo-program.jpg"],
+        },
+      }),
+    ],
+  );
+
+  assert.match(result?.reply || "", /Аль аяллыг хэлж байгаагаа/i);
+  assert.equal(result?.trip, null);
+  assert.deepEqual(result?.mediaUrls, []);
+});
+
 test("land-only existence query prefers the ground Beidaihe + Beijing tour", () => {
   const reply = buildStructuredTripReply(
     "Нислэггүй Бэйдайхэ Бээжин аялал байгаа юу?",

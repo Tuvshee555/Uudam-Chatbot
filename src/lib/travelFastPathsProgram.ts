@@ -6,9 +6,11 @@
 import { filterFutureDepartureDates, type ResolvedDepartureDate } from "./travelDates";
 import type { TravelTrip } from "./travelOps";
 import {
+  findTripMatches,
   getAliases,
   getTripBrochureAsset,
   hasProgramIntent,
+  keywordTokens,
   normText,
   queryWantsFlight,
   queryWantsLandFlightCombo,
@@ -19,6 +21,19 @@ import {
   type TripProgramReplyResult,
 } from "./travelFastPathsSearch";
 import { buildAmbiguousTripReply } from "./travelFastPathsPricing";
+
+const PROGRAM_ONLY_QUERY_WORDS = new Set([
+  "хөтөлбөр",
+  "program",
+  "pdf",
+  "зураг",
+  "өдөр",
+  "үзэх",
+  "үзье",
+  "medeelel",
+  "мэдээлэл",
+  "itinerary",
+]);
 
 export function pushMediaUrl(target: string[], value: unknown) {
   if (typeof value === "string" && value.startsWith("https://") && !target.includes(value)) {
@@ -159,6 +174,19 @@ export function buildTripProgramReply(
         ? exactMentionedTrips
         : trips;
   const candidateTrips = scopedTrips.length > 0 ? scopedTrips : trips;
+  const routeQueryWords = keywordTokens(text).filter((word) => !PROGRAM_ONLY_QUERY_WORDS.has(word));
+  const genericProgramMatches =
+    exactMentionedTrips.length === 0 && candidateTrips.length > 1
+      ? findTripMatches(text, candidateTrips)
+      : [];
+  if (genericProgramMatches.length > 1 && routeQueryWords.length <= 1) {
+    return {
+      reply: buildAmbiguousTripReply(genericProgramMatches.slice(0, 3).map((match) => match.trip)),
+      trip: null,
+      brochure: null,
+      mediaUrls: [],
+    };
+  }
   const resolution = trips.length === 1
     ? { status: "verified" as const, trip: trips[0], candidates: [] }
     : resolveTripFromUserMessage(text, candidateTrips, { allowLooseFallback: false });
