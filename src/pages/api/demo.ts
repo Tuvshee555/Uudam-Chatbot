@@ -9,6 +9,7 @@ import {
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPrompt, getHistory, isReferReply, REFER_FALLBACK_REPLY } from "../../lib/conversation";
 import { getCustomerMemoryText, updateCustomerMemoryAfterTurn } from "../../lib/conversationMemory";
+import { analyzeBeforeReply, buildTripIndexLines } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
@@ -225,11 +226,24 @@ export default async function handler(
 
       await appendMessage(sessionId, "user", normalizedText);
 
+      // Pre-answer reasoning (mirrors production webhook): analyze intent,
+      // references, and memory before the reply. Best-effort — null on failure.
+      const reasoningTrips = await listTrips({ limit: 5000 }).catch(() => []);
+      const reasoning = await analyzeBeforeReply({
+        customerMemory,
+        history,
+        userText: normalizedText,
+        tripIndexLines: buildTripIndexLines(reasoningTrips),
+        requestId: trace.requestId,
+        correlationId: trace.correlationId,
+        source: "api.demo.reasoning",
+      });
       const prompt = buildPrompt({
         systemPrompt,
         business: business || {},
         history,
         customerMemory,
+        reasoning: reasoning || undefined,
         userText: normalizedText,
         pinnedButtonLabels,
       });

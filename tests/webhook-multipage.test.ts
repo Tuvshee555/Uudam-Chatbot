@@ -181,27 +181,33 @@ test("webhook keeps the same sender's history separate per page", async () => {
   const record = { sendTokens: [] as string[], geminiPrompts: [] as string[] };
   const restore = stubFetch(record);
   try {
-    // Same PSID messages page A, then page B. The page-B prompt must NOT contain
-    // the page-A message — histories are isolated by page id.
+    // Same PSID messages page A, then page B. The page-B prompts must NOT
+    // contain the page-A message — histories are isolated by page id. Each AI
+    // message now makes a reasoning call plus the answer call, so assert the
+    // isolation invariant over every page-B prompt instead of a fixed count.
     await callWebhook(
       handler,
       pageMessage(PAGE_A, "shared-sender", "mid-1", "only-on-page-A"),
     );
+    const promptCountAfterPageA = record.geminiPrompts.length;
+    assert.ok(promptCountAfterPageA >= 1, "page A message should reach Gemini");
     await callWebhook(
       handler,
       pageMessage(PAGE_B, "shared-sender", "mid-2", "only-on-page-B"),
     );
 
-    assert.equal(record.geminiPrompts.length, 2);
-    const pageBPrompt = record.geminiPrompts[1];
-    assert.ok(
-      pageBPrompt.includes("only-on-page-B"),
-      "page B prompt should contain page B's message",
-    );
-    assert.ok(
-      !pageBPrompt.includes("only-on-page-A"),
-      "page B prompt must not leak page A's history",
-    );
+    const pageBPrompts = record.geminiPrompts.slice(promptCountAfterPageA);
+    assert.ok(pageBPrompts.length >= 1, "page B message should reach Gemini");
+    for (const pageBPrompt of pageBPrompts) {
+      assert.ok(
+        pageBPrompt.includes("only-on-page-B"),
+        "page B prompt should contain page B's message",
+      );
+      assert.ok(
+        !pageBPrompt.includes("only-on-page-A"),
+        "page B prompt must not leak page A's history",
+      );
+    }
   } finally {
     restore();
   }

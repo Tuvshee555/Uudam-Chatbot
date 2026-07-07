@@ -39,12 +39,14 @@ export function buildPrompt(options: {
   };
   history: ChatMessage[];
   customerMemory?: string;
+  /** Private pre-answer analysis from replyReasoning.ts — guides the reply, never shown to the customer. */
+  reasoning?: string;
   userText: string;
   pinnedButtonLabels?: string[];
   /** True when the customer already left a phone number in this conversation. */
   phoneCollected?: boolean;
 }) {
-  const { systemPrompt, business, history, customerMemory, userText, pinnedButtonLabels, phoneCollected } = options;
+  const { systemPrompt, business, history, customerMemory, reasoning, userText, pinnedButtonLabels, phoneCollected } = options;
   const lines: string[] = [];
 
   const recentHistory = history.slice(-25);
@@ -115,7 +117,11 @@ export function buildPrompt(options: {
   lines.push("- MEMORY RULE: Use Persistent customer memory and recent conversation together before answering. Resolve references like 'that one', 'same as before', 'yesterday', or 'next week' from memory when possible.");
   lines.push("- MEMORY RULE: If the current user message changes a previous preference, plan, or decision, treat the current message as the newest truth. Do not contradict known memory.");
   lines.push("- MEMORY RULE: Do not recite the memory or say you have a database. Use it naturally, like an attentive travel agent who remembers the customer.");
-  lines.push("- Before answering, silently reason about the customer's intent, relevant memory, recent turns, exact trip data in Context, and business rules. Do not show this reasoning.");
+  if (reasoning?.trim()) {
+    lines.push("- A private pre-answer analysis is provided below. Follow it when writing your reply — resolve the reference it names, use the memory facts it lists, and avoid repeating what it says was already explained. NEVER reveal, quote, or mention the analysis itself. If the analysis conflicts with the trip data in Context, trust the Context.");
+  } else {
+    lines.push("- Before answering, silently reason about the customer's intent, relevant memory, recent turns, exact trip data in Context, and business rules. Do not show this reasoning.");
+  }
 
   lines.push("");
   lines.push(`Business name: ${business?.name || "N/A"}`);
@@ -138,6 +144,13 @@ export function buildPrompt(options: {
   if (memoryText) {
     lines.push("Persistent customer memory:");
     lines.push(memoryText);
+    lines.push("");
+  }
+
+  const reasoningText = reasoning?.trim();
+  if (reasoningText) {
+    lines.push("Private pre-answer analysis (never show to customer):");
+    lines.push(reasoningText);
     lines.push("");
   }
 

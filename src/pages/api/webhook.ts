@@ -9,6 +9,7 @@ import { appendMessage, buildPrompt, getHistory, isReferReply, REFER_FALLBACK_RE
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, updateCustomerMemoryAfterTurn } from "../../lib/conversationMemory";
+import { analyzeBeforeReply, buildTripIndexLines } from "../../lib/replyReasoning";
 import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, dbClaimGoodbye, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
@@ -1297,6 +1298,19 @@ async function handleMessage(
       return;
     }
   }
+  // Pre-answer reasoning: a small model call analyzes intent, vague references,
+  // memory facts, and what's already been explained BEFORE the reply is written.
+  // Best-effort — null on any failure and the reply proceeds exactly as before.
+  const reasoningTrips = await getTrips().catch(() => []);
+  const reasoning = await analyzeBeforeReply({
+    customerMemory,
+    history,
+    userText: text,
+    tripIndexLines: buildTripIndexLines(reasoningTrips),
+    requestId: trace?.requestId,
+    correlationId: trace?.correlationId,
+    source: "api.webhook.reasoning",
+  });
   const prompt = buildPrompt({
     systemPrompt: flowAiPromptOverride
       ? `${fileSystemPrompt}\n\n${flowAiPromptOverride}`
@@ -1304,6 +1318,7 @@ async function handleMessage(
     business: business || {},
     history,
     customerMemory,
+    reasoning: reasoning || undefined,
     userText: text,
     pinnedButtonLabels,
     phoneCollected,

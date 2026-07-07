@@ -151,13 +151,18 @@ test("webhook retries transient send failure then dedupes completed event", asyn
 
     const first = await callWebhook(handler, payload);
     const second = await callWebhook(handler, payload);
+    const geminiAttemptsBeforeDedupe = geminiAttempts;
     const third = await callWebhook(handler, payload);
 
     assert.equal(first.statusCode, 503);
     assert.equal(second.statusCode, 200);
     assert.equal(third.statusCode, 200);
     assert.equal(sendAttempts, 2);
-    assert.equal(geminiAttempts, 2);
+    // Each processing attempt makes a pre-answer reasoning call plus the answer
+    // call (2 Gemini calls); two real attempts ran. The deduped third webhook
+    // delivery must not add any model calls at all.
+    assert.equal(geminiAttempts, 4);
+    assert.equal(geminiAttempts, geminiAttemptsBeforeDedupe);
   } finally {
     globalThis.fetch = originalFetch;
   }
