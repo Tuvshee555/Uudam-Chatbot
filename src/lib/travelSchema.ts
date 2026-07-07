@@ -312,6 +312,69 @@ export async function ensureTravelSchema() {
         ALTER TABLE travel_conversations
           ADD COLUMN IF NOT EXISTS attachments JSONB NOT NULL DEFAULT '[]'::jsonb;
       `);
+      // Customer-sent photos that need staff review: passports/documents,
+      // trip screenshots/posters, or uncategorized images. Kept separate from
+      // chat history so staff can search by customer without scrolling.
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_customer_documents (
+          id BIGSERIAL PRIMARY KEY,
+          platform TEXT NOT NULL DEFAULT 'facebook',
+          sender_id TEXT NOT NULL DEFAULT '',
+          page_id TEXT NOT NULL DEFAULT '',
+          source_url TEXT NOT NULL DEFAULT '',
+          stored_url TEXT NOT NULL DEFAULT '',
+          image_sha256 TEXT NOT NULL DEFAULT '',
+          mime_type TEXT NOT NULL DEFAULT '',
+          category TEXT NOT NULL DEFAULT 'other',
+          extracted_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+          matched_trip_id TEXT NULL,
+          status TEXT NOT NULL DEFAULT 'needs_review',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_travel_customer_documents_sender
+          ON travel_customer_documents (sender_id, created_at DESC);
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_travel_customer_documents_status
+          ON travel_customer_documents (status, created_at DESC);
+      `);
+      await client.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_travel_customer_documents_hash_sender
+          ON travel_customer_documents (sender_id, image_sha256)
+          WHERE image_sha256 <> '';
+      `);
+      await client.query(`
+        ALTER TABLE travel_customer_documents
+          ADD COLUMN IF NOT EXISTS confidence REAL NOT NULL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS duplicate_of_id BIGINT NULL,
+          ADD COLUMN IF NOT EXISTS matched_payment_id BIGINT NULL,
+          ADD COLUMN IF NOT EXISTS auto_action TEXT NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ NULL,
+          ADD COLUMN IF NOT EXISTS retention_hidden_at TIMESTAMPTZ NULL;
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_travel_customer_documents_payment
+          ON travel_customer_documents (matched_payment_id)
+          WHERE matched_payment_id IS NOT NULL;
+      `);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_customer_document_audit (
+          id BIGSERIAL PRIMARY KEY,
+          document_id BIGINT NOT NULL,
+          action TEXT NOT NULL DEFAULT '',
+          actor TEXT NOT NULL DEFAULT 'system',
+          before_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+          after_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_travel_customer_document_audit_document
+          ON travel_customer_document_audit (document_id, created_at DESC);
+      `);
       // Long-term per-customer memory. Chat rows are still kept for recent
       // detail, while this table preserves durable context after pruning.
       await client.query(`

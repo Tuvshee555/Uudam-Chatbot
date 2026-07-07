@@ -50,7 +50,7 @@ export async function dbGetHistory(
     `SELECT id, role, text, attachments, created_at FROM travel_conversations
      WHERE sender_id = $1
        AND created_at > NOW() - INTERVAL '${HISTORY_TTL_DAYS} days'
-     ORDER BY created_at DESC
+     ORDER BY id DESC
      LIMIT $2`,
     [senderId, MAX_HISTORY_ROWS],
   );
@@ -108,17 +108,22 @@ export async function dbAppendMessage(
     `INSERT INTO travel_conversations (sender_id, role, text, attachments) VALUES ($1, $2, $3, $4)`,
     [senderId, role, text, JSON.stringify(attachments)],
   );
-  // Prune old rows for this sender (keep last MAX_HISTORY_ROWS)
+  // Prune ONLY rows that are BOTH past the retention window AND already
+  // folded into the customer's long-term memory (id <= memory cursor).
+  // The old "keep last 50" delete permanently destroyed conversation content
+  // that the memory system had not processed yet (e.g. after a failed merge),
+  // which is exactly the silent forgetting this replaces. A row the memory
+  // hasn't seen is never deleted, no matter how old.
   await queryNeon(
-    `DELETE FROM travel_conversations
-     WHERE sender_id = $1
-       AND id NOT IN (
-         SELECT id FROM travel_conversations
-         WHERE sender_id = $1
-         ORDER BY created_at DESC
-         LIMIT $2
+    `DELETE FROM travel_conversations c
+     WHERE c.sender_id = $1
+       AND c.created_at < NOW() - INTERVAL '${HISTORY_TTL_DAYS} days'
+       AND c.id <= COALESCE(
+         (SELECT m.last_conversation_id FROM travel_customer_memories m
+          WHERE m.sender_id = $1),
+         0
        )`,
-    [senderId, MAX_HISTORY_ROWS],
+    [senderId],
   );
 }
 

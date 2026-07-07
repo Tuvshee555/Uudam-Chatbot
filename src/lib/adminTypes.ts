@@ -341,6 +341,7 @@ export type TabKey =
   | "seasons"
   | "photos"
   | "poster"
+  | "documents"
   | "json";
 
 export type FlowRule = {
@@ -375,6 +376,46 @@ export type LeadStats = {
   by_platform: Array<{ platform: string; count: number }>;
   by_kind: Array<{ kind: string; count: number }>;
   daily: Array<{ day: string; count: number }>;
+};
+
+export type CustomerDocumentStatus =
+  | "needs_review"
+  | "verified"
+  | "wrong_extraction"
+  | "duplicate"
+  | "attached_to_booking"
+  | "reviewed"
+  | "ignored";
+
+export type CustomerDocumentCategory =
+  | "passport"
+  | "travel_document"
+  | "booking_code"
+  | "trip_screenshot"
+  | "payment_screenshot"
+  | "other";
+
+export type CustomerDocument = {
+  id: number;
+  platform: string;
+  sender_id: string;
+  page_id: string;
+  source_url: string;
+  stored_url: string;
+  image_sha256: string;
+  mime_type: string;
+  category: CustomerDocumentCategory;
+  extracted_json: Record<string, unknown>;
+  matched_trip_id: string | null;
+  matched_payment_id: number | null;
+  duplicate_of_id: number | null;
+  confidence: number;
+  auto_action: string;
+  status: CustomerDocumentStatus;
+  created_at: string;
+  updated_at: string;
+  reviewed_at?: string | null;
+  retention_hidden_at?: string | null;
 };
 
 export type DriveSyncRecentFile = {

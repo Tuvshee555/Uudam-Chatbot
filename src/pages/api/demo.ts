@@ -7,15 +7,16 @@ import {
   rateLimitAsync,
 } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
-import { appendMessage, buildPrompt, getHistory, isReferReply, REFER_FALLBACK_REPLY } from "../../lib/conversation";
-import { getCustomerMemoryText, updateCustomerMemoryAfterTurn } from "../../lib/conversationMemory";
+import { appendMessage, buildPromptParts, getHistory, isReferReply, REFER_FALLBACK_REPLY } from "../../lib/conversation";
+import { buildContextualUserText, pickFastPathMatchText } from "../../lib/contextualText";
+import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { analyzeBeforeReply, buildTripIndexLines } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
-import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent } from "../../lib/travelFastPaths";
+import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
 import { getEnv } from "../../lib/env";
 import {
   beginRequestTrace,
@@ -129,18 +130,38 @@ export default async function handler(
       const sessionId = `demo:${normalizedConversationId}`;
       const history = await getHistory(sessionId);
       const customerMemory = await getCustomerMemoryText(sessionId);
+      // Non-blocking memory merge — same as production Messenger.
       const rememberTurn = () =>
-        updateCustomerMemoryAfterTurn({
+        scheduleCustomerMemoryUpdate({
           senderId: sessionId,
           requestId: trace.requestId,
           correlationId: trace.correlationId,
           source: "api.demo",
         });
+      // Reference resolution + current-message-first routing, identical to the
+      // production webhook — the demo used to skip this entirely, so QA runs
+      // never exercised the exact matching path Messenger customers hit.
+      const contextualUserText = buildContextualUserText(history, normalizedText);
+      let cachedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
+      const getTrips = async () => {
+        if (cachedTrips) return cachedTrips;
+        cachedTrips = await listTrips({ limit: 5000 });
+        return cachedTrips;
+      };
+      let fastPathTextCache: string | null = null;
+      const getFastPathText = async (): Promise<string> => {
+        if (fastPathTextCache !== null) return fastPathTextCache;
+        const trips = await getTrips();
+        fastPathTextCache = pickFastPathMatchText(normalizedText, contextualUserText, (input) =>
+          resolveTripFromUserMessage(input, trips, { allowLooseFallback: false }),
+        );
+        return fastPathTextCache;
+      };
 
       // Fast path: departure date availability
       if (hasDepartureDateAvailabilityIntent(normalizedText)) {
-        const trips = await listTrips({ limit: 5000 });
-        const dateReply = buildDepartureDateAvailabilityReply({ userText: normalizedText, trips });
+        const trips = await getTrips();
+        const dateReply = buildDepartureDateAvailabilityReply({ userText: await getFastPathText(), trips });
         if (dateReply) {
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(fixMojibake(dateReply)));
           await appendMessage(sessionId, "user", normalizedText);
@@ -153,8 +174,8 @@ export default async function handler(
 
       // Fast path: seats availability
       if (hasSeatsIntent(normalizedText)) {
-        const trips = await listTrips({ limit: 5000 });
-        const seatsReply = buildSeatsReply(normalizedText, trips);
+        const trips = await getTrips();
+        const seatsReply = buildSeatsReply(await getFastPathText(), trips);
         if (seatsReply) {
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(seatsReply));
           await appendMessage(sessionId, "user", normalizedText);
@@ -167,8 +188,8 @@ export default async function handler(
 
       // Fast path: discount query
       if (hasDiscountIntent(normalizedText)) {
-        const trips = await listTrips({ limit: 5000 });
-        const discountReply = buildDiscountReply(normalizedText, trips);
+        const trips = await getTrips();
+        const discountReply = buildDiscountReply(await getFastPathText(), trips);
         if (discountReply) {
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(discountReply));
           await appendMessage(sessionId, "user", normalizedText);
@@ -181,8 +202,8 @@ export default async function handler(
 
       // Fast path: trip comparison
       if (hasCompareIntent(normalizedText)) {
-        const trips = await listTrips({ limit: 5000 });
-        const compareReply = buildCompareReply(normalizedText, trips);
+        const trips = await getTrips();
+        const compareReply = buildCompareReply(await getFastPathText(), trips);
         if (compareReply) {
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(compareReply));
           await appendMessage(sessionId, "user", normalizedText);
@@ -195,8 +216,8 @@ export default async function handler(
 
       // Fast path: structured trip query (price/duration/dates/flight for a specific trip)
       {
-        const trips = await listTrips({ limit: 5000 });
-        const programReply = buildTripProgramReply(normalizedText, trips);
+        const trips = await getTrips();
+        const programReply = buildTripProgramReply(await getFastPathText(), trips);
         if (programReply) {
           const brochureLine = programReply.brochure?.type === "url"
             ? `\n\nPDF хөтөлбөр: ${programReply.brochure.value}`
@@ -213,7 +234,7 @@ export default async function handler(
           recordCounter("demo.program_fast_path_total", 1, {});
           return res.status(200).json({ reply: safeReply, buttons: [] });
         }
-        const structuredReply = buildStructuredTripReply(normalizedText, trips);
+        const structuredReply = buildStructuredTripReply(await getFastPathText(), trips);
         if (structuredReply) {
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(structuredReply));
           await appendMessage(sessionId, "user", normalizedText);
@@ -228,7 +249,7 @@ export default async function handler(
 
       // Pre-answer reasoning (mirrors production webhook): analyze intent,
       // references, and memory before the reply. Best-effort — null on failure.
-      const reasoningTrips = await listTrips({ limit: 5000 }).catch(() => []);
+      const reasoningTrips = await getTrips().catch(() => []);
       const reasoning = await analyzeBeforeReply({
         customerMemory,
         history,
@@ -238,19 +259,46 @@ export default async function handler(
         correlationId: trace.correlationId,
         source: "api.demo.reasoning",
       });
-      const prompt = buildPrompt({
+      const relevantTripNames = (() => {
+        if (reasoningTrips.length === 0) return [] as string[];
+        const direct = resolveTripFromUserMessage(normalizedText, reasoningTrips, {
+          allowLooseFallback: false,
+        });
+        if (direct.status === "verified") return [direct.trip.route_name];
+        if (direct.status === "ambiguous") {
+          return direct.candidates.slice(0, 4).map((trip) => trip.route_name);
+        }
+        if (contextualUserText !== normalizedText) {
+          const contextual = resolveTripFromUserMessage(contextualUserText, reasoningTrips, {
+            allowLooseFallback: false,
+          });
+          if (contextual.status === "verified") return [contextual.trip.route_name];
+          if (contextual.status === "ambiguous") {
+            return contextual.candidates.slice(0, 4).map((trip) => trip.route_name);
+          }
+        }
+        return [] as string[];
+      })();
+      const previousAssistantMessages = history.filter((m) => m.role === "assistant");
+      const previousAssistantReply = previousAssistantMessages.length > 0
+        ? previousAssistantMessages[previousAssistantMessages.length - 1].text
+        : undefined;
+      const promptParts = buildPromptParts({
         systemPrompt,
         business: business || {},
         history,
         customerMemory,
         reasoning: reasoning || undefined,
+        previousAssistantReply,
+        relevantTripNames,
         userText: normalizedText,
         pinnedButtonLabels,
       });
-      const result = await askGemini(prompt, {
+      const result = await askGemini(promptParts.user, {
         requestId: trace.requestId,
         correlationId: trace.correlationId,
         source: "api.demo",
+        systemInstruction: promptParts.system,
       });
       let rawFixed = fixMojibake(result.text);
       // REFER (or legacy SILENT) = the model has no data for this question.
@@ -294,7 +342,7 @@ export default async function handler(
         correlationId: trace.correlationId,
         clientHash,
         conversationIdSuffix: normalizedConversationId.slice(-8),
-        promptLength: prompt.length,
+        promptLength: promptParts.system.length + promptParts.user.length,
         replyLength: reply.length,
         buttonCount: buttons.length,
       });

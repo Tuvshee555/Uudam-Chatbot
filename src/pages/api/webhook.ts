@@ -5,10 +5,13 @@ import { matchFlow, findTriggeredFlow, getFlowState, setFlowState, clearFlowStat
 import { BOT_MESSAGE_METADATA, replyToComment, sendImageMessage, sendQuickReplies, sendTextMessage } from "../../lib/messenger";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
-import { appendMessage, buildPrompt, getHistory, isReferReply, REFER_FALLBACK_REPLY } from "../../lib/conversation";
+import { appendMessage, buildPromptParts, getHistory, isReferReply, REFER_FALLBACK_REPLY } from "../../lib/conversation";
+import { buildContextualUserText, isLikelyContextDependentText, pickFastPathMatchText } from "../../lib/contextualText";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
-import { getCustomerMemoryText, updateCustomerMemoryAfterTurn } from "../../lib/conversationMemory";
+import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
+import { processCustomerImageAttachments } from "../../lib/customerDocuments";
+import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines } from "../../lib/replyReasoning";
 import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
@@ -57,7 +60,6 @@ import {
   sendPlatformMessage,
   recordImageMessage,
   getTripPhotoUrls,
-  normalizePhotoOnlyText,
   isPhotoOnlyFollowup,
   pickTripsByIds,
   pickNumberedTripChoice,
@@ -84,6 +86,9 @@ export const config = {
   api: {
     bodyParser: false,
   },
+  // The AI path is reasoning + answer (+ retries) — well past default function
+  // limits. Without this, a mid-processing kill silently drops the reply.
+  maxDuration: 60,
 };
 export { buildEventKey, markEventProcessed, markRecentIncomingText };
 export function getWebhookRuntimeDiagnostics() {
@@ -93,73 +98,110 @@ export function resetWebhookStateForTests() {
   resetWebhookStateForTestsInternal();
 }
 
-export function isLikelyContextDependentText(text: string) {
-  const normalized = normalizePhotoOnlyText(text);
-  if (!normalized) return false;
-  const words = normalized.split(/\s+/).filter(Boolean);
-  if (words.length <= 2) return true;
-  const referentialHints = [
-    "again",
-    "more",
-    "photo",
-    "photos",
-    "program",
-    "pdf",
-    "price",
-    "dates",
-    "seat",
-    "seats",
-    "zurag",
-    "үнэ",
-    "хэзээ",
-    "огноо",
-    "суудал",
-    "хөтөлбөр",
-    "зураг",
-    "дахин",
-    "дахиад",
-    "өөр",
-    "энэ",
-    "тэр",
-  ];
-  const hasHint = referentialHints.some((hint) => normalized.includes(hint));
-  if (!hasHint) return false;
-  if (normalized.length <= 24) return true;
+// Implementation moved to contextualText.ts so the demo endpoint shares the
+// exact same reference-resolution behavior (it previously diverged silently).
+export { isLikelyContextDependentText, buildContextualUserText };
 
-  const contentWords = words.filter(
-    (word) =>
-      word.length >= 4 &&
-      !referentialHints.includes(word) &&
-      ![
-        "аялал",
-        "аяллын",
-        "зураг",
-        "хөтөлбөр",
-        "program",
-        "price",
-        "dates",
-        "seat",
-        "seats",
-        "үнэ",
-        "огноо",
-        "суудал",
-      ].includes(word),
-  );
-  return contentWords.length === 0;
+const ATTACHMENT_LABELS: Record<string, string> = {
+  image: "зураг",
+  video: "видео",
+  audio: "дуут мессеж",
+  file: "файл",
+};
+
+function extractImageAttachmentUrls(
+  attachments: Array<{ type?: string; payload?: { url?: string } }>,
+) {
+  return attachments
+    .filter((a) => a?.type === "image" && typeof a?.payload?.url === "string")
+    .map((a) => String(a.payload?.url || "").trim())
+    .filter((url) => url.startsWith("http"));
 }
 
-export function buildContextualUserText(
-  history: Array<{ role: "user" | "assistant"; text: string }>,
-  userText: string,
-) {
-  if (!isLikelyContextDependentText(userText)) return userText;
-  const recentUserTurns = history
-    .filter((message) => message.role === "user")
-    .map((message) => message.text.trim())
-    .filter(Boolean)
-    .slice(-4);
-  if (recentUserTurns.length === 0) return userText;
-  return [...recentUserTurns, userText.trim()].join("\n");
+/**
+ * A message with attachments but no text. Record what arrived (so history and
+ * long-term memory both know), and acknowledge it once so the customer never
+ * feels ignored — the old behavior dropped these events entirely.
+ */
+async function handleAttachmentOnlyMessage(input: {
+  platform: Platform;
+  senderId: string;
+  pageId: string;
+  token?: string;
+  attachments: Array<{ type?: string; payload?: { url?: string } }>;
+  trace?: { requestId: string; correlationId: string };
+}) {
+  const { platform, senderId, pageId, token, attachments, trace } = input;
+  if (await isPagePaused(pageId)) return;
+  if (await isPaused(senderId)) return;
+
+  const kinds = Array.from(
+    new Set(attachments.map((a) => ATTACHMENT_LABELS[a?.type || ""] || "файл")),
+  );
+  const storedImages = attachments
+    .filter((a) => a?.type === "image" && typeof a?.payload?.url === "string")
+    .map((a) => ({ type: "image" as const, url: String(a.payload?.url) }));
+  await appendMessage(
+    senderId,
+    "user",
+    `[Хэрэглэгч ${kinds.join(", ")} илгээсэн]`,
+    storedImages,
+  ).catch(() => {});
+  const imageUrls = extractImageAttachmentUrls(attachments);
+  if (imageUrls.length > 0) {
+    await processCustomerImageAttachments({
+      platform,
+      senderId,
+      pageId,
+      urls: imageUrls,
+      trace,
+    });
+  }
+
+  recordCounter("webhook.attachment_only_total", 1, {
+    platform,
+    kinds: kinds.join(","),
+  });
+
+  // Ack at most once per 2 minutes — an album arrives as several events and
+  // must not trigger a burst of identical acknowledgements.
+  const ackLimit = await rateLimitAsync(`attach_ack:${senderId}`, 1, 2 * 60 * 1000);
+  if (!ackLimit.allowed || platform !== "facebook" || !token) {
+    scheduleCustomerMemoryUpdate({
+      senderId,
+      requestId: trace?.requestId,
+      correlationId: trace?.correlationId,
+      source: "api.webhook.attachment_only",
+    });
+    return;
+  }
+  const ack =
+    "Илгээсэн зүйлийг тань хүлээн авлаа 🙌 Асуултаа бичгээр илгээвэл би шууд хариулъя. " +
+    "Эсвэл утасны дугаараа үлдээвэл манай аяллын зөвлөх тантай холбогдоно 😊";
+  try {
+    await sendTextMessage(senderId, ack, token, {
+      requestId: trace?.requestId,
+      correlationId: trace?.correlationId,
+      source: "api.webhook.attachment_ack",
+    });
+    await appendMessage(senderId, "assistant", ack).catch(() => {});
+  } catch (error) {
+    logWarn("webhook.attachment_ack_failed", {
+      requestId: trace?.requestId,
+      correlationId: trace?.correlationId,
+      platform,
+      pageId,
+      senderHash: hashIdentifier(senderId),
+      classification: classifyError(error),
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+  scheduleCustomerMemoryUpdate({
+    senderId,
+    requestId: trace?.requestId,
+    correlationId: trace?.correlationId,
+    source: "api.webhook.attachment_only",
+  });
 }
 
 async function handleMessage(
@@ -175,9 +217,21 @@ async function handleMessage(
   const assertLockHealthy = async () => {
     if (ensureLockHealthy) await ensureLockHealthy();
   };
+  // When a database IS configured but unavailable, fail closed: a 503 makes
+  // Meta redeliver and the dedup/queue machinery retries cleanly. The old
+  // fail-open behavior answered with zero history and zero memory — the bot
+  // greeted mid-conversation customers like strangers and permanently lost
+  // their message from history, with no error anywhere. (With no DB configured
+  // at all — tests, local dev — the bot still runs stateless by design.)
+  const dbReady = await ensureTravelSchema();
+  if (!dbReady && env.neonDatabaseUrl) {
+    throw new RetryableWebhookError("db_unavailable:context_load");
+  }
+  // 40 msgs / 10 min: an engaged customer asking many quick questions is a
+  // GOOD outcome — the old 20 cap (1 per 30s) throttled real buyers.
   const limit = await rateLimitAsync(
     `${platform === "facebook" ? "fb" : "ig"}:${senderId}`,
-    20,
+    40,
     10 * 60 * 1000,
   );
   if (!limit.allowed) {
@@ -304,8 +358,11 @@ async function handleMessage(
   const customerMemory = await getCustomerMemoryText(senderId);
   const contextualUserText = buildContextualUserText(history, text);
   const sessionId = `${platform}:${pageId}:${senderId}`;
+  // Non-blocking: the memory merge continues after the response via waitUntil.
+  // It used to be awaited inline while holding the conversation lock, which
+  // serialized a long model call behind every reply.
   const rememberTurn = (source: string) =>
-    updateCustomerMemoryAfterTurn({
+    scheduleCustomerMemoryUpdate({
       senderId,
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
@@ -338,6 +395,9 @@ async function handleMessage(
       });
       return;
     } else {
+      // Record the customer's message: photo-only replies used to leave a
+      // hole in history (and memory never learned what was asked).
+      await appendMessage(senderId, "user", text).catch(() => {});
       let resolvedTrip: TravelTrip | null = null;
       let ambiguousTrips: TravelTrip[] = [];
 
@@ -407,6 +467,7 @@ async function handleMessage(
             }
           }
           await recordImageMessage(senderId, photos);
+          await rememberTurn("api.webhook.photo_only_send");
           await setPhotoOnlyState(senderId, createPhotoOnlyState({
             activeTripId: resolvedTrip.id,
             pendingTripIds: [],
@@ -1030,10 +1091,22 @@ async function handleMessage(
     cachedTrips = await listTrips({ limit: 5000 });
     return cachedTrips;
   };
+  // Current-message-first routing for the deterministic matchers — see
+  // pickFastPathMatchText for the priority rules and the wrong-trip bug the
+  // old contextual-first matching caused.
+  let fastPathTextCache: string | null = null;
+  const getFastPathText = async (): Promise<string> => {
+    if (fastPathTextCache !== null) return fastPathTextCache;
+    const trips = await getTrips();
+    fastPathTextCache = pickFastPathMatchText(text, contextualUserText, (input) =>
+      resolveTripFromUserMessage(input, trips, { allowLooseFallback: false }),
+    );
+    return fastPathTextCache;
+  };
   if (hasDepartureDateAvailabilityIntent(text)) {
     const trips = await getTrips();
     const dateAvailabilityReply = buildDepartureDateAvailabilityReply({
-      userText: contextualUserText,
+      userText: await getFastPathText(),
       trips,
     });
     if (dateAvailabilityReply) {
@@ -1107,7 +1180,7 @@ async function handleMessage(
   }
   if (hasSeatsIntent(text)) {
     const trips = await getTrips();
-    const seatsReply = buildSeatsReply(contextualUserText, trips);
+    const seatsReply = buildSeatsReply(await getFastPathText(), trips);
     if (seatsReply) {
       const safeSeatsReply = appendLeadCaptureCta(
         enforceWebsiteForPayment(sanitizeAssistantReply(seatsReply)),
@@ -1139,7 +1212,7 @@ async function handleMessage(
   }
   if (hasDiscountIntent(text)) {
     const trips = await getTrips();
-    const discountReply = buildDiscountReply(contextualUserText, trips);
+    const discountReply = buildDiscountReply(await getFastPathText(), trips);
     if (discountReply) {
       const safeDiscountReply = appendLeadCaptureCta(
         enforceWebsiteForPayment(sanitizeAssistantReply(discountReply)),
@@ -1171,7 +1244,7 @@ async function handleMessage(
   }
   if (hasCompareIntent(text)) {
     const trips = await getTrips();
-    const compareReply = buildCompareReply(contextualUserText, trips);
+    const compareReply = buildCompareReply(await getFastPathText(), trips);
     if (compareReply) {
       const safeCompareReply = appendLeadCaptureCta(
         enforceWebsiteForPayment(sanitizeAssistantReply(compareReply)),
@@ -1203,7 +1276,7 @@ async function handleMessage(
   }
   {
     const trips = await getTrips();
-    const programReply = buildTripProgramReply(contextualUserText, trips);
+    const programReply = buildTripProgramReply(await getFastPathText(), trips);
     if (programReply) {
       const safeProgramReply = appendLeadCaptureCta(
         enforceWebsiteForPayment(sanitizeAssistantReply(programReply.reply)),
@@ -1241,7 +1314,7 @@ async function handleMessage(
             platform,
             senderId,
             safeProgramReply,
-            contextualUserText,
+            await getFastPathText(),
             token,
             pageId,
             igUserId,
@@ -1258,7 +1331,7 @@ async function handleMessage(
       recordCounter("webhook.program_fast_path_total", 1, { platform });
       return;
     }
-    const structuredTripReply = buildStructuredTripReply(contextualUserText, trips);
+    const structuredTripReply = buildStructuredTripReply(await getFastPathText(), trips);
     if (structuredTripReply) {
       const safeStructuredReply = appendLeadCaptureCta(
         enforceWebsiteForPayment(sanitizeAssistantReply(structuredTripReply)),
@@ -1282,7 +1355,7 @@ async function handleMessage(
         platform,
         senderId,
         safeStructuredReply,
-        contextualUserText,
+        await getFastPathText(),
         token,
         pageId,
         igUserId,
@@ -1311,7 +1384,30 @@ async function handleMessage(
     correlationId: trace?.correlationId,
     source: "api.webhook.reasoning",
   });
-  const prompt = buildPrompt({
+  // Deterministic relevance hint: the same matcher the fast paths trust points
+  // the model at the most likely trip(s). A hint, not a filter — the full
+  // Context stays in the prompt so the model can never be starved of the
+  // right trip by a bad match.
+  const relevantTripNames = (() => {
+    const source = reasoningTrips.length > 0 ? reasoningTrips : [];
+    if (source.length === 0) return [] as string[];
+    const direct = resolveTripFromUserMessage(text, source, { allowLooseFallback: false });
+    if (direct.status === "verified") return [direct.trip.route_name];
+    if (direct.status === "ambiguous") {
+      return direct.candidates.slice(0, 4).map((trip) => trip.route_name);
+    }
+    if (contextualUserText !== text) {
+      const contextual = resolveTripFromUserMessage(contextualUserText, source, {
+        allowLooseFallback: false,
+      });
+      if (contextual.status === "verified") return [contextual.trip.route_name];
+      if (contextual.status === "ambiguous") {
+        return contextual.candidates.slice(0, 4).map((trip) => trip.route_name);
+      }
+    }
+    return [] as string[];
+  })();
+  const promptParts = buildPromptParts({
     systemPrompt: flowAiPromptOverride
       ? `${fileSystemPrompt}\n\n${flowAiPromptOverride}`
       : fileSystemPrompt,
@@ -1319,6 +1415,8 @@ async function handleMessage(
     history,
     customerMemory,
     reasoning: reasoning || undefined,
+    previousAssistantReply: lastReply?.text || undefined,
+    relevantTripNames,
     userText: text,
     pinnedButtonLabels,
     phoneCollected,
@@ -1329,23 +1427,29 @@ async function handleMessage(
   // the customer with a bare apology and no human follow-up.
   let aiOutage = false;
   try {
-    const result = await askGemini(prompt, {
+    const result = await askGemini(promptParts.user, {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
       source: "api.webhook",
+      systemInstruction: promptParts.system,
     });
     aiReply = result.text;
   } catch (error) {
     // Gemini down/overloaded must not mean a customer gets an apology while
     // a working second model sits idle — try OpenAI with the same prompt
-    // (same rules: Mongolian-only, SILENT, BUTTONS) before giving up.
+    // (same rules: Mongolian-only, SILENT, BUTTONS) before giving up. The
+    // fallback gets a stronger model than the parsing default: outage minutes
+    // are rare, and gpt-4o-mini with this rule-heavy prompt was a visible
+    // quality cliff exactly when customers had already waited through retries.
     let fallbackText = "";
     try {
-      const fallback = await askOpenAIFallbackParts([{ text: prompt }], {
+      const fallback = await askOpenAIFallbackParts([{ text: promptParts.user }], {
         source: "api.webhook.reply_fallback",
         timeoutMs: 20_000,
         requestId: trace?.requestId,
         correlationId: trace?.correlationId,
+        model: process.env.OPENAI_REPLY_MODEL || "gpt-4o",
+        systemText: promptParts.system,
       });
       fallbackText = fallback?.text?.trim() || "";
     } catch {
@@ -1648,7 +1752,13 @@ export default async function handler(
             messaging?: Array<{
               sender?: { id?: string };
               recipient?: { id?: string };
-              message?: { is_echo?: boolean; mid?: string; text?: string; metadata?: string };
+              message?: {
+                is_echo?: boolean;
+                mid?: string;
+                text?: string;
+                metadata?: string;
+                attachments?: Array<{ type?: string; payload?: { url?: string } }>;
+              };
             }>;
           }>;
         };
@@ -1783,7 +1893,11 @@ export default async function handler(
                 typeof event?.message?.text === "string"
                   ? event.message.text.trim()
                   : "";
-              if (!senderId || !text) continue;
+              const attachments = Array.isArray(event?.message?.attachments)
+                ? event.message.attachments
+                : [];
+              if (!senderId) continue;
+              if (!text && attachments.length === 0) continue;
               if (payload.object === "page" && !PAGE_TOKENS.has(pageId)) {
                 logWarn("webhook.unexpected_page", {
                   requestId: trace.requestId,
@@ -1797,6 +1911,30 @@ export default async function handler(
               const platform: Platform =
                 payload.object === "instagram" ? "instagram" : "facebook";
               const token = PAGE_TOKENS.get(pageId) ?? FALLBACK_TOKEN;
+              // Attachment-only message (image, voice note, sticker, share).
+              // These used to be silently DROPPED — no reply, no history row;
+              // a customer sending a trip-poster screenshot was just ignored.
+              if (!text) {
+                const attachmentKey = buildEventKey(platform, senderId, event);
+                await runEventWithClaim(
+                  attachmentKey,
+                  { platform, eventType: "dm" },
+                  async () => {
+                    await handleAttachmentOnlyMessage({
+                      platform,
+                      senderId,
+                      pageId,
+                      token,
+                      attachments,
+                      trace: {
+                        requestId: trace.requestId,
+                        correlationId: trace.correlationId,
+                      },
+                    });
+                  },
+                );
+                continue;
+              }
               const eventKey = buildEventKey(platform, senderId, event);
               await runEventWithClaim(
                 eventKey,
@@ -1813,6 +1951,19 @@ export default async function handler(
                     throw new RetryableWebhookError("missing_page_token:dm");
                   }
                   const conversationKey = `${platform}:${pageId}:${senderId}`;
+                  const imageUrls = extractImageAttachmentUrls(attachments);
+                  if (imageUrls.length > 0) {
+                    await processCustomerImageAttachments({
+                      platform,
+                      senderId,
+                      pageId,
+                      urls: imageUrls,
+                      trace: {
+                        requestId: trace.requestId,
+                        correlationId: trace.correlationId,
+                      },
+                    });
+                  }
                   const payloadForConversation: PendingConversationPayload = {
                     platform,
                     senderId,

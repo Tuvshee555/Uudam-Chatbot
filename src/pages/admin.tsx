@@ -9,6 +9,7 @@ import { AdminSidebarItem } from "@/components/admin/AdminSidebarItem";
 import { AssistantTab } from "@/components/admin/AssistantTab";
 import { AnalyticsTab } from "@/components/admin/AnalyticsTab";
 import { BotTab } from "@/components/admin/BotTab";
+import { CustomerDocumentsTab } from "@/components/admin/CustomerDocumentsTab";
 import { FlowBuilderTab } from "@/components/admin/FlowBuilderTab";
 import { GreetingTab } from "@/components/admin/GreetingTab";
 import { LeadsTab } from "@/components/admin/LeadsTab";
@@ -102,6 +103,7 @@ export default function AdminPage() {
   const [leads, setLeads] = useState<TravelLead[]>([]);
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [leadStats, setLeadStats] = useState<LeadStats | null>(null);
+  const [documentUnreviewedCount, setDocumentUnreviewedCount] = useState(0);
   const [broadcastMessage, setBroadcastMessage] = useState("");
   const [broadcastSending, setBroadcastSending] = useState(false);
   const [broadcastResult, setBroadcastResult] = useState<{ sent: number; failed: number } | null>(null);
@@ -236,6 +238,20 @@ export default function AdminPage() {
       if (options.showLoading) setLoading(false);
     }
   }, [fetchWithAdmin, toast]);
+  const loadDocumentStats = useCallback(async () => {
+    try {
+      const res = await fetchWithAdmin("/api/admin/customer-documents?stats=1");
+      if (res.status === 401) {
+        setRequiresAuth(true);
+        return false;
+      }
+      const json = await res.json().catch(() => ({}));
+      setDocumentUnreviewedCount(Number(json?.stats?.unreviewed_count || 0));
+      return true;
+    } catch {
+      return false;
+    }
+  }, [fetchWithAdmin]);
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
@@ -268,6 +284,7 @@ export default function AdminPage() {
         loadPauseState(),
         loadSettingsState(),
         loadLeadsState(),
+        loadDocumentStats(),
       ]);
     } catch {
       toast.error("Системийн өгөгдөл ачаалж чадсангүй.");
@@ -276,6 +293,7 @@ export default function AdminPage() {
     }
   }, [
     fetchWithAdmin,
+    loadDocumentStats,
     loadLeadsState,
     loadPauseState,
     loadSettingsState,
@@ -1634,6 +1652,13 @@ export default function AdminPage() {
             onClick={() => selectAdminTab("leads")}
           />
           <AdminSidebarItem
+            icon={<Icons.image size={16} />}
+            label="Ирсэн зургууд"
+            active={tab === "documents"}
+            badge={documentUnreviewedCount || undefined}
+            onClick={() => selectAdminTab("documents")}
+          />
+          <AdminSidebarItem
             icon={<Icons.settings size={16} />}
             label="Тохиргоо"
             active={tab === "settings"}
@@ -1828,6 +1853,12 @@ export default function AdminPage() {
               broadcastResult={broadcastResult}
               onBroadcastChange={setBroadcastMessage}
               onBroadcastSend={() => void sendBroadcast()}
+            />
+          )}
+          {tab === "documents" && (
+            <CustomerDocumentsTab
+              apiFetch={fetchWithAdmin}
+              onChanged={() => void loadDocumentStats()}
             />
           )}
           {tab === "settings" && settingsForm && (

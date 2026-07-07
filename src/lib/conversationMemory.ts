@@ -1,3 +1,4 @@
+import { waitUntil } from "@vercel/functions";
 import { askGemini } from "./gemini";
 import {
   dbGetCustomerMemory,
@@ -5,11 +6,33 @@ import {
   dbUpsertCustomerMemory,
   type HistoryRow,
 } from "./travelDb";
+import { getCustomerDocumentMemoryText } from "./customerDocuments";
 import { classifyError, logWarn, recordCounter } from "./observability";
 
 const EMPTY_MEMORY = "";
 const MAX_MEMORY_CHARS = 12_000;
 const MEMORY_TRANSCRIPT_LIMIT = 80;
+// Must comfortably exceed MAX_MEMORY_CHARS in tokens (Mongolian Cyrillic runs
+// ~1.5-2 chars/token). The previous 2,500 cap silently truncated any memory
+// past ~4-5k chars on EVERY merge — the tail headings (unresolved questions,
+// context notes) were amputated and the loss compounded merge after merge.
+const MEMORY_MAX_OUTPUT_TOKENS = 8_192;
+// A failed merge is retried naturally on the next turn (rows are never pruned
+// before the cursor covers them), so this call gets a tight budget instead of
+// the 45s/2-retry default that used to block the webhook.
+const MEMORY_TIMEOUT_MS = 10_000;
+
+/**
+ * True when a proposed merged memory looks like the model dropped a large part
+ * of the existing memory (output truncation, bad generation). Saving such a
+ * merge would permanently destroy accumulated facts — the caller must keep the
+ * old memory and NOT advance the cursor so the merge retries next turn.
+ */
+export function isSuspiciousMemoryShrink(previous: string, next: string): boolean {
+  const prev = previous.trim();
+  if (prev.length < 800) return false; // small memories legitimately fluctuate
+  return next.trim().length < prev.length * 0.5;
+}
 
 export function normalizeCustomerMemoryText(text: string): string {
   return (text || "")
@@ -69,7 +92,37 @@ export function buildCustomerMemoryPrompt(input: {
 
 export async function getCustomerMemoryText(senderId: string): Promise<string> {
   const memory = await dbGetCustomerMemory(senderId);
-  return normalizeCustomerMemoryText(memory?.memory_text || EMPTY_MEMORY);
+  const base = normalizeCustomerMemoryText(memory?.memory_text || EMPTY_MEMORY);
+  const attachmentMemory = await getCustomerDocumentMemoryText(senderId).catch(() => "");
+  return normalizeCustomerMemoryText(
+    [base, attachmentMemory].filter((part) => part.trim()).join("\n\n"),
+  );
+}
+
+/**
+ * Runs the memory merge WITHOUT blocking the reply path. On Vercel, waitUntil
+ * keeps the work alive after the response is sent; anywhere else it degrades
+ * to a detached promise (updateCustomerMemoryAfterTurn never rejects — every
+ * failure is caught, counted, and retried naturally on the next turn).
+ *
+ * The old pattern awaited the merge inline while holding the per-conversation
+ * lock: a 45s-timeout, 2-retry Gemini call serialized behind every reply,
+ * so a customer sending three quick messages could wait a minute+ for the
+ * third answer.
+ */
+export function scheduleCustomerMemoryUpdate(input: {
+  senderId: string;
+  requestId?: string;
+  correlationId?: string;
+  source?: string;
+}): void {
+  const work = updateCustomerMemoryAfterTurn(input);
+  try {
+    waitUntil(work);
+  } catch {
+    // Not running on Vercel (tests, local node) — detached execution is fine.
+    void work;
+  }
 }
 
 export async function updateCustomerMemoryAfterTurn(input: {
@@ -99,10 +152,23 @@ export async function updateCustomerMemoryAfterTurn(input: {
       correlationId: input.correlationId,
       source,
       temperature: 0,
-      maxOutputTokens: 2500,
+      maxOutputTokens: MEMORY_MAX_OUTPUT_TOKENS,
+      timeoutMs: MEMORY_TIMEOUT_MS,
+      maxRetries: 0,
     });
     const nextMemory = normalizeCustomerMemoryText(result.text);
     if (!nextMemory) return;
+    if (isSuspiciousMemoryShrink(existing?.memory_text || "", nextMemory)) {
+      recordCounter("conversation_memory.suspicious_shrink_total", 1, { source });
+      logWarn("conversation_memory.suspicious_shrink_rejected", {
+        requestId: input.requestId,
+        correlationId: input.correlationId,
+        source,
+        previousChars: (existing?.memory_text || "").length,
+        proposedChars: nextMemory.length,
+      });
+      return;
+    }
 
     const newestConversationId = Math.max(...rows.map((row) => row.id));
     await dbUpsertCustomerMemory({

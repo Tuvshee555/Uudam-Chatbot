@@ -61,6 +61,13 @@ export type AskGeminiOptions = {
   /** Large structured extractions need room for one JSON action per trip. */
   maxOutputTokens?: number;
   /**
+   * Rules/persona sent via the model's dedicated system channel instead of
+   * being mixed into the user turn. Keeps instructions authoritative over
+   * customer-authored text (prompt-injection hardening) and improves rule
+   * adherence.
+   */
+  systemInstruction?: string;
+  /**
    * When true, use OpenAI as the PRIMARY model and fall back to Gemini if
    * OpenAI fails. Used for file reading/parsing, where OpenAI is more reliable.
    * Chat answering leaves this off so Gemini (better Mongolian) stays primary.
@@ -133,6 +140,7 @@ export async function askGeminiParts(
       requestId: options?.requestId,
       correlationId: options?.correlationId,
       model: options?.openaiModel,
+      systemText: options?.systemInstruction,
     });
     if (openaiResult) return openaiResult;
     logInfo("openai.falling_back_to_gemini", { source });
@@ -149,6 +157,11 @@ export async function askGeminiParts(
     contents: [{ role: "user", parts: toRestParts(parts) }],
     generationConfig,
   };
+  if (options?.systemInstruction?.trim()) {
+    requestBody.systemInstruction = {
+      parts: [{ text: options.systemInstruction }],
+    };
+  }
 
   try {
     const { response, attempts } = await executeWithCircuitBreaker(

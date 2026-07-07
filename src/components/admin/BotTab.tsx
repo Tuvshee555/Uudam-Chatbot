@@ -31,6 +31,7 @@ import type {
   ClarificationQuestion,
   ConflictItem,
   ControlState,
+  CustomerDocument,
   DriveSyncDiagnostics,
   DriveSyncRecentFile,
   FlowRule,
@@ -106,6 +107,50 @@ function reminderPhotoUrl(settings: TravelBotSettings | null): string {
   return typeof v === "string" ? v : "";
 }
 
+const DOCUMENT_CATEGORY_LABELS: Record<string, string> = {
+  passport: "Паспорт",
+  travel_document: "Бичиг баримт",
+  booking_code: "Код",
+  trip_screenshot: "Аяллын screenshot",
+  payment_screenshot: "Төлбөр",
+  other: "Бусад",
+};
+
+function compactDocValue(value: unknown): string {
+  if (value == null) return "";
+  if (Array.isArray(value)) return value.map(compactDocValue).filter(Boolean).join(", ");
+  if (typeof value === "object") return "";
+  return String(value).trim();
+}
+
+function summarizeCustomerDocument(doc: CustomerDocument): string {
+  const data = doc.extracted_json || {};
+  const payment = data.payment && typeof data.payment === "object"
+    ? (data.payment as Record<string, unknown>)
+    : {};
+  const passport = data.passport && typeof data.passport === "object"
+    ? (data.passport as Record<string, unknown>)
+    : {};
+  const booking = data.booking && typeof data.booking === "object"
+    ? (data.booking as Record<string, unknown>)
+    : {};
+  const trip = data.trip && typeof data.trip === "object"
+    ? (data.trip as Record<string, unknown>)
+    : {};
+  const candidates = [
+    compactDocValue(data.summary),
+    [compactDocValue(payment.amount), compactDocValue(payment.currency)].filter(Boolean).join(" "),
+    compactDocValue(payment.reference),
+    compactDocValue(booking.code),
+    compactDocValue(booking.trip_name),
+    compactDocValue(passport.full_name),
+    compactDocValue(passport.passport_number),
+    compactDocValue(trip.title),
+    compactDocValue(trip.destination),
+  ].filter(Boolean);
+  return candidates.slice(0, 3).join(" · ");
+}
+
 export function BotTab({
   control,
   settings,
@@ -160,6 +205,8 @@ export function BotTab({
   };
   const [chatHistory, setChatHistory] = useState<ChatHistoryMessage[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
+  const [customerDocuments, setCustomerDocuments] = useState<CustomerDocument[]>([]);
+  const [customerDocumentsLoading, setCustomerDocumentsLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -188,7 +235,9 @@ export function BotTab({
   async function openChat(senderId: string) {
     setSelectedSender(senderId);
     setChatHistory([]);
+    setCustomerDocuments([]);
     setChatLoading(true);
+    setCustomerDocumentsLoading(true);
     try {
       const res = await apiFetch(
         `/api/admin/conversation?sender_id=${encodeURIComponent(senderId)}`,
@@ -199,6 +248,20 @@ export function BotTab({
       setChatHistory([]);
     } finally {
       setChatLoading(false);
+    }
+    try {
+      const params = new URLSearchParams({
+        sender_id: senderId,
+        status: "all",
+        limit: "20",
+      });
+      const res = await apiFetch(`/api/admin/customer-documents?${params.toString()}`);
+      const data = await res.json().catch(() => ({}));
+      setCustomerDocuments(Array.isArray(data.documents) ? data.documents : []);
+    } catch {
+      setCustomerDocuments([]);
+    } finally {
+      setCustomerDocumentsLoading(false);
     }
   }
 
@@ -296,6 +359,63 @@ export function BotTab({
             <Icons.pause size={14} className="shrink-0" />
             Бот зогссон — та Messenger дээр гараар хариулж болно.
           </div>
+        )}
+
+        {(customerDocumentsLoading || customerDocuments.length > 0) && (
+          <Card className="border-warning/30 bg-warning-soft p-3.5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-ink">Ирсэн чухал зураг</p>
+                <p className="text-xs text-ink-subtle">
+                  Паспорт, төлбөр, код болон аяллын screenshot-ууд энд нэг дор харагдана.
+                </p>
+              </div>
+              {customerDocumentsLoading && <Spinner className="h-4 w-4 text-warning" />}
+            </div>
+            {customerDocuments.length > 0 && (
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                {customerDocuments.slice(0, 6).map((doc) => {
+                  const imageUrl = doc.stored_url || doc.source_url;
+                  const summary = summarizeCustomerDocument(doc);
+                  return (
+                    <a
+                      key={doc.id}
+                      href={imageUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex gap-2 rounded-lg border border-warning/30 bg-surface p-2 transition hover:border-warning"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={imageUrl}
+                        alt=""
+                        className="h-14 w-14 shrink-0 rounded-md object-cover"
+                        loading="lazy"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          <Badge tone={doc.status === "needs_review" ? "warning" : "neutral"}>
+                            {DOCUMENT_CATEGORY_LABELS[doc.category] || doc.category}
+                          </Badge>
+                          {doc.status === "needs_review" && (
+                            <span className="text-[10px] font-medium text-warning">
+                              Шалгах
+                            </span>
+                          )}
+                        </span>
+                        <span className="mt-1 line-clamp-2 block text-xs text-ink">
+                          {summary || "Дэлгэрэнгүйг нээж шалгана уу."}
+                        </span>
+                        <span className="mt-0.5 block text-[10px] text-ink-subtle">
+                          {formatTime(doc.created_at)}
+                        </span>
+                      </span>
+                    </a>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
         )}
 
         <Card className="p-4">

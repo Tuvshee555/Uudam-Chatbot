@@ -36,6 +36,8 @@ export async function askOpenAIFallbackParts(
     correlationId?: string;
     /** Override model for this call (e.g. gpt-4o for file parsing). */
     model?: string;
+    /** Rules/persona sent as an OpenAI system message (mirrors Gemini systemInstruction). */
+    systemText?: string;
   },
 ): Promise<GeminiResult | null> {
   const key = env.openaiApiKey;
@@ -67,9 +69,15 @@ export async function askOpenAIFallbackParts(
     return { type: "text", text: part.text };
   });
 
+  const messages: Array<Record<string, unknown>> = [];
+  if (options?.systemText?.trim()) {
+    messages.push({ role: "system", content: options.systemText });
+  }
+  messages.push({ role: "user", content });
+
   const requestBody: Record<string, unknown> = {
     model,
-    messages: [{ role: "user", content }],
+    messages,
     temperature:
       typeof options?.temperature === "number" ? options.temperature : 0,
   };
