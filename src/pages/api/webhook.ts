@@ -10,7 +10,7 @@ import { buildContextualUserText, isLikelyContextDependentText, pickFastPathMatc
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
-import { processCustomerImageAttachments } from "../../lib/customerDocuments";
+import { scheduleCustomerImageProcessing } from "../../lib/customerDocuments";
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines } from "../../lib/replyReasoning";
 import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
@@ -119,6 +119,78 @@ function extractImageAttachmentUrls(
 }
 
 /**
+ * Category-aware confirmation sent AFTER the vision pipeline classified what
+ * the customer sent. Only for documents a customer anxiously waits on
+ * (payment receipt, passport, booking code, travel document) — trip
+ * screenshots and misc images stay covered by the generic ack alone.
+ */
+function buildDocumentReceivedMessage(docs: Array<{ category: string }>): string | null {
+  const categories = new Set(docs.map((doc) => doc.category));
+  const received: string[] = [];
+  if (categories.has("payment_screenshot")) received.push("төлбөрийн баримт");
+  if (categories.has("passport")) received.push("паспортын зураг");
+  if (categories.has("booking_code")) received.push("захиалгын код");
+  if (categories.has("travel_document")) received.push("бичиг баримт");
+  if (received.length === 0) return null;
+  return `Таны илгээсэн ${received.join(", ")}-ыг хүлээн авч бүртгэлээ ✅ Манай аяллын зөвлөх шалгаад баталгаажуулна. Баярлалаа! 🙌`;
+}
+
+/**
+ * Fire-and-forget vision processing + post-classification confirmation. The
+ * pipeline (download + Cloudinary + AI extraction per image) must NEVER sit
+ * between the customer and their reply/ack — it used to be awaited inline,
+ * stalling text replies for up to minutes and risking a killed function on
+ * multi-image albums.
+ */
+function scheduleImageDocumentPipeline(input: {
+  platform: Platform;
+  senderId: string;
+  pageId: string;
+  token?: string;
+  imageUrls: string[];
+  trace?: { requestId: string; correlationId: string };
+}) {
+  const { platform, senderId, pageId, token, imageUrls, trace } = input;
+  if (imageUrls.length === 0) return;
+  scheduleCustomerImageProcessing({
+    platform,
+    senderId,
+    pageId,
+    urls: imageUrls,
+    trace,
+    onProcessed: async (docs) => {
+      scheduleCustomerMemoryUpdate({
+        senderId,
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        source: "api.webhook.image_documents",
+      });
+      if (platform !== "facebook" || !token) return;
+      const confirmation = buildDocumentReceivedMessage(docs);
+      if (!confirmation) return;
+      try {
+        await sendTextMessage(senderId, confirmation, token, {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          source: "api.webhook.document_received",
+        });
+        await appendMessage(senderId, "assistant", confirmation).catch(() => {});
+      } catch (error) {
+        logWarn("webhook.document_received_send_failed", {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          platform,
+          pageId,
+          senderHash: hashIdentifier(senderId),
+          classification: classifyError(error),
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+  });
+}
+
+/**
  * A message with attachments but no text. Record what arrived (so history and
  * long-term memory both know), and acknowledge it once so the customer never
  * feels ignored — the old behavior dropped these events entirely.
@@ -147,16 +219,16 @@ async function handleAttachmentOnlyMessage(input: {
     `[Хэрэглэгч ${kinds.join(", ")} илгээсэн]`,
     storedImages,
   ).catch(() => {});
-  const imageUrls = extractImageAttachmentUrls(attachments);
-  if (imageUrls.length > 0) {
-    await processCustomerImageAttachments({
-      platform,
-      senderId,
-      pageId,
-      urls: imageUrls,
-      trace,
-    });
-  }
+  // Vision pipeline runs in the background — the customer gets the ack
+  // immediately, then a category-aware confirmation once classification lands.
+  scheduleImageDocumentPipeline({
+    platform,
+    senderId,
+    pageId,
+    token,
+    imageUrls: extractImageAttachmentUrls(attachments),
+    trace,
+  });
 
   recordCounter("webhook.attachment_only_total", 1, {
     platform,
@@ -1951,19 +2023,20 @@ export default async function handler(
                     throw new RetryableWebhookError("missing_page_token:dm");
                   }
                   const conversationKey = `${platform}:${pageId}:${senderId}`;
-                  const imageUrls = extractImageAttachmentUrls(attachments);
-                  if (imageUrls.length > 0) {
-                    await processCustomerImageAttachments({
-                      platform,
-                      senderId,
-                      pageId,
-                      urls: imageUrls,
-                      trace: {
-                        requestId: trace.requestId,
-                        correlationId: trace.correlationId,
-                      },
-                    });
-                  }
+                  // Images riding along with text are processed in the
+                  // background — the text must be answered immediately, not
+                  // after a multi-image vision pipeline finishes.
+                  scheduleImageDocumentPipeline({
+                    platform,
+                    senderId,
+                    pageId,
+                    token,
+                    imageUrls: extractImageAttachmentUrls(attachments),
+                    trace: {
+                      requestId: trace.requestId,
+                      correlationId: trace.correlationId,
+                    },
+                  });
                   const payloadForConversation: PendingConversationPayload = {
                     platform,
                     senderId,

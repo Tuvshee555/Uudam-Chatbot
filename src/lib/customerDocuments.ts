@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { waitUntil } from "@vercel/functions";
 import { askGeminiParts, type GeminiPart } from "./gemini";
 import { queryNeon } from "./neonDb";
 import {
@@ -188,14 +189,16 @@ async function matchOrCreatePayment(input: {
   const amount = parseAmount(payment.amount);
   if (amount <= 0) return { id: null, autoAction: "" };
 
+  // Match ONLY this customer's own payment records. Trip prices are
+  // standardized (many customers owe the identical amount), so the old
+  // any-customer-by-amount fallback routinely attached customer B's receipt
+  // to customer A's booking — staff would "verify" the wrong person's payment.
   const payments = await listPayments({ limit: 500 }).catch(() => []);
   const matched = payments.find(
     (item) =>
       item.sender_id === input.senderId &&
       item.amount === amount &&
       (item.status === "pending" || item.status === "paid"),
-  ) || payments.find(
-    (item) => item.amount === amount && (item.status === "pending" || item.status === "paid"),
   );
   if (matched) {
     return { id: matched.id, autoAction: "matched_existing_payment" };
@@ -244,7 +247,17 @@ async function downloadImage(url: string): Promise<DownloadedImage> {
   };
 }
 
+// The retention sweep is an UPDATE over the whole table. It used to run on
+// EVERY customer message (getCustomerMemoryText → listCustomerDocuments →
+// sweep) — a pointless write on the reply hot path. A 6-hour throttle keeps
+// the policy enforced without taxing every conversation turn.
+let lastRetentionSweepAt = 0;
+const RETENTION_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
 async function applySensitiveRetentionPolicy() {
+  const now = Date.now();
+  if (now - lastRetentionSweepAt < RETENTION_SWEEP_INTERVAL_MS) return;
+  lastRetentionSweepAt = now;
   const ready = await ensureTravelSchema();
   if (!ready) return;
   await queryNeon(
@@ -498,6 +511,48 @@ export async function processCustomerImageAttachments(input: {
   return rows;
 }
 
+/**
+ * Runs the vision pipeline WITHOUT blocking the reply path. Per image this
+ * pipeline can take download (≤15s) + Cloudinary upload + extraction (≤25s,
+ * with retry) — awaiting it inline meant a customer sending text+photo waited
+ * for the whole thing before their text was even answered, and a multi-image
+ * album could blow straight past the webhook's maxDuration (killed function,
+ * no reply at all).
+ *
+ * `onProcessed` fires after classification with the created/updated rows —
+ * used to send the customer a category-aware confirmation ("төлбөрийн баримт
+ * хүлээн авлаа") once the system actually knows what arrived.
+ */
+export function scheduleCustomerImageProcessing(input: {
+  platform: Platform;
+  senderId: string;
+  pageId: string;
+  urls: string[];
+  trace?: { requestId?: string; correlationId?: string };
+  onProcessed?: (docs: CustomerDocument[]) => Promise<void>;
+}): void {
+  const work = (async () => {
+    const docs = await processCustomerImageAttachments(input);
+    if (docs.length > 0 && input.onProcessed) {
+      await input.onProcessed(docs);
+    }
+  })().catch((error) => {
+    logWarn("customer_documents.scheduled_processing_failed", {
+      requestId: input.trace?.requestId,
+      correlationId: input.trace?.correlationId,
+      senderHash: hashIdentifier(input.senderId),
+      classification: classifyError(error),
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
+  try {
+    waitUntil(work);
+  } catch {
+    // Not running on Vercel (tests, local node) — detached execution is fine.
+    void work;
+  }
+}
+
 export async function listCustomerDocuments(options?: {
   senderId?: string;
   status?: CustomerDocumentStatus | "all";
@@ -687,9 +742,18 @@ export function summarizeCustomerDocumentForMemory(doc: CustomerDocument): strin
     return ["payment receipt sent", amount, date].filter(Boolean).join(" - ");
   }
   if (doc.category === "booking_code") {
+    // The memory summary is injected into EVERY AI prompt — a raw code there
+    // can be echoed back to anyone in the chat. The bot only needs to know a
+    // code exists (staff see the full value in the admin tab); a masked
+    // suffix is enough to disambiguate "which code" in conversation.
     const code = compactValue(booking.code);
+    const maskedCode = code.length > 3 ? `•••${code.slice(-3)}` : code ? "•••" : "";
     const tripName = compactValue(booking.trip_name);
-    return ["booking/passcode image sent", code ? `code: ${code}` : "", tripName]
+    return [
+      "booking/passcode image sent",
+      maskedCode ? `code ending ${maskedCode}` : "",
+      tripName,
+    ]
       .filter(Boolean)
       .join(" - ");
   }
