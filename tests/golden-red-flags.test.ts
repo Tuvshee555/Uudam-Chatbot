@@ -16,7 +16,7 @@ import type { TravelTrip } from "../src/lib/travelOps";
  */
 const NOW = new Date("2026-06-24T04:00:00.000Z");
 
-const RED_FLAGS: Array<{ pattern: RegExp; label: string }> = [
+const RED_FLAGS: Array<{ pattern: RegExp; label: string; strip?: RegExp }> = [
   { pattern: /\bREFER\b/, label: "raw REFER token" },
   { pattern: /\bSILENT\b/, label: "raw SILENT token" },
   { pattern: /NEEDS_MANUAL_FIX/, label: "NEEDS_MANUAL_FIX sentinel" },
@@ -24,18 +24,37 @@ const RED_FLAGS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /source_description|\bJSON\b|database/i, label: "internal field/word" },
   { pattern: /өмнө нь (хэлсэн|хуваалцсан)/, label: "scolding repeat phrase" },
   { pattern: /хүний нөөцийн менежер/i, label: "wrong staff title" },
-  { pattern: /\b20(1\d|2[0-4])\b/, label: "past year (<=2024)" },
+  {
+    pattern: /\b20(1\d|2[0-4])\b/,
+    // Child prices are defined by birth-year eligibility ranges in the trip
+    // data (e.g. "2016-2023 он" = born 2016-2023). Reciting that range is
+    // correct — only a lone past year offered as a date is a red flag.
+    strip: /\b20\d{2}\s*[-–—]\s*20\d{2}(\s*он[ды]?)?/g,
+    label: "past year (<=2024)",
+  },
 ];
 
 function assertNoRedFlags(reply: string | null | undefined, context: string) {
   const text = reply || "";
   for (const flag of RED_FLAGS) {
+    const haystack = flag.strip ? text.replace(flag.strip, "") : text;
     assert.ok(
-      !flag.pattern.test(text),
+      !flag.pattern.test(haystack),
       `${context}: red flag "${flag.label}" appeared in reply:\n${text}`,
     );
   }
 }
+
+test("past-year red flag ignores birth-year eligibility ranges but still catches lone past dates", () => {
+  // Legitimate child-price eligibility wording must NOT trip the flag.
+  assertNoRedFlags("Хүүхэд (2016-2023 онд төрсөн): 1,050,000₮", "birth-year range");
+  assertNoRedFlags("Хүүхэд 2015-2022 он: 790,000₮", "birth-year range, plain");
+  // A lone past year offered as a date must still be caught.
+  const flag = RED_FLAGS.find((entry) => entry.label === "past year (<=2024)")!;
+  const offending = "Гарах өдөр: 2023 оны 7 сарын 5";
+  const haystack = flag.strip ? offending.replace(flag.strip, "") : offending;
+  assert.ok(flag.pattern.test(haystack), "lone past year must still be flagged");
+});
 
 function trip(fields: Partial<TravelTrip>): TravelTrip {
   return {

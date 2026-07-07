@@ -49,6 +49,8 @@ const QUESTIONS = [
 ];
 
 // A red flag = a substring that should NEVER appear in a customer-facing reply.
+// `strip` (optional) removes legitimate text before the pattern is tested —
+// used where a heuristic would otherwise misfire on valid data.
 const RED_FLAGS = [
   { pattern: /\bREFER\b/, label: "raw REFER token leaked" },
   { pattern: /\bSILENT\b/, label: "raw SILENT token leaked" },
@@ -57,7 +59,14 @@ const RED_FLAGS = [
   { pattern: /\b(JSON|database|source_description|record)\b/i, label: "internal field/word leaked" },
   { pattern: /өмнө нь (хэлсэн|хуваалцсан)|as I mentioned|already (told|shared)/i, label: "scolding repeat phrase" },
   { pattern: /хүний нөөцийн менежер/i, label: "wrong staff title (HR, not travel consultant)" },
-  { pattern: /\b20(1\d|2[0-4])\b/, label: "past year (<=2024) offered as a date" },
+  {
+    pattern: /\b20(1\d|2[0-4])\b/,
+    // Child prices are defined by birth-year eligibility ranges in the trip
+    // data (e.g. "2016-2023 он" = born 2016-2023). Reciting that range is
+    // correct — only a lone past year offered as a date is a red flag.
+    strip: /\b20\d{2}\s*[-–—]\s*20\d{2}(\s*он[ды]?)?/g,
+    label: "past year (<=2024) offered as a date",
+  },
 ];
 
 function makeConversationId(id) {
@@ -80,7 +89,10 @@ async function ask(text, conversationId) {
 }
 
 function checkRedFlags(reply) {
-  return RED_FLAGS.filter((flag) => flag.pattern.test(reply)).map((flag) => flag.label);
+  return RED_FLAGS.filter((flag) => {
+    const haystack = flag.strip ? reply.replace(flag.strip, "") : reply;
+    return flag.pattern.test(haystack);
+  }).map((flag) => flag.label);
 }
 
 async function main() {
