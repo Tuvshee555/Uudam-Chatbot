@@ -168,6 +168,14 @@ function scheduleImageDocumentPipeline(input: {
       if (platform !== "facebook" || !token) return;
       const confirmation = buildDocumentReceivedMessage(docs);
       if (!confirmation) return;
+      // Pause state is re-checked at SEND time, not schedule time: a payment
+      // receipt is exactly the moment staff jump in manually (operator echo
+      // pauses the bot), and processing takes long enough for that to happen.
+      // The document is still stored either way — only the bot's voice stops.
+      if ((await isPagePaused(pageId)) || (await isPaused(senderId))) {
+        recordCounter("webhook.document_received_suppressed_total", 1, { platform });
+        return;
+      }
       try {
         await sendTextMessage(senderId, confirmation, token, {
           requestId: trace?.requestId,
@@ -1831,6 +1839,7 @@ export default async function handler(
                 metadata?: string;
                 attachments?: Array<{ type?: string; payload?: { url?: string } }>;
               };
+              postback?: { title?: string; payload?: string };
             }>;
           }>;
         };
@@ -1961,10 +1970,21 @@ export default async function handler(
                 continue;
               }
               const senderId = String(event.sender.id).trim();
-              const text =
+              // Postback taps (Get Started button, persistent menu) carry no
+              // message.text — they were silently dropped, so a brand-new
+              // customer tapping Get Started got nothing. Treat the button
+              // title (or payload) as the customer's message.
+              const postbackText =
+                typeof event?.postback?.title === "string" && event.postback.title.trim()
+                  ? event.postback.title.trim()
+                  : typeof event?.postback?.payload === "string"
+                    ? event.postback.payload.trim()
+                    : "";
+              const messageText =
                 typeof event?.message?.text === "string"
                   ? event.message.text.trim()
                   : "";
+              const text = messageText || postbackText;
               const attachments = Array.isArray(event?.message?.attachments)
                 ? event.message.attachments
                 : [];
@@ -2007,7 +2027,11 @@ export default async function handler(
                 );
                 continue;
               }
-              const eventKey = buildEventKey(platform, senderId, event);
+              // Postbacks have no mid and no message.text — key them by the
+              // derived text so two DIFFERENT button taps never dedup-collide.
+              const eventKey = event?.message?.mid
+                ? buildEventKey(platform, senderId, event)
+                : buildEventKey(platform, senderId, { message: { text } });
               await runEventWithClaim(
                 eventKey,
                 { platform, eventType: "dm" },
