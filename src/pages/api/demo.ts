@@ -8,7 +8,8 @@ import {
 } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPromptParts, getHistory, isReferReply, REFER_FALLBACK_REPLY } from "../../lib/conversation";
-import { buildContextualUserText, pickFastPathMatchText } from "../../lib/contextualText";
+import { buildContextualUserText } from "../../lib/contextualText";
+import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { analyzeBeforeReply, buildTripIndexLines } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
@@ -16,7 +17,7 @@ import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
-import { buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
+import { buildAmbiguousTripReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
 import { getEnv } from "../../lib/env";
 import {
   beginRequestTrace,
@@ -148,15 +149,33 @@ export default async function handler(
         cachedTrips = await listTrips({ limit: 5000 });
         return cachedTrips;
       };
-      let fastPathTextCache: string | null = null;
-      const getFastPathText = async (): Promise<string> => {
-        if (fastPathTextCache !== null) return fastPathTextCache;
-        const trips = await getTrips();
-        fastPathTextCache = pickFastPathMatchText(normalizedText, contextualUserText, (input) =>
-          resolveTripFromUserMessage(input, trips, { allowLooseFallback: false }),
-        );
-        return fastPathTextCache;
+      let routedCache: FastPathRoute | null = null;
+      const getRouted = async (): Promise<FastPathRoute> => {
+        if (routedCache !== null) return routedCache;
+        routedCache = await routeFastPathText({
+          senderId: sessionId,
+          text: normalizedText,
+          contextualUserText,
+          trips: await getTrips(),
+        });
+        return routedCache;
       };
+      const getFastPathText = async (): Promise<string> => (await getRouted()).matchText;
+      // Answer fits several offered candidates — re-ask scoped to exactly
+      // those (mirrors the production webhook).
+      {
+        const routed = await getRouted();
+        if (routed.scopedClarify && routed.scopedClarify.length > 0) {
+          const clarifyReply = enforceWebsiteForPayment(
+            sanitizeAssistantReply(buildAmbiguousTripReply(routed.scopedClarify)),
+          );
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", clarifyReply);
+          await rememberTurn();
+          recordCounter("demo.scoped_clarify_total", 1, {});
+          return res.status(200).json({ reply: clarifyReply, buttons: [] });
+        }
+      }
 
       // Fast path: departure date availability
       if (hasDepartureDateAvailabilityIntent(normalizedText)) {

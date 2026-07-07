@@ -6,7 +6,8 @@ import { BOT_MESSAGE_METADATA, replyToComment, sendImageMessage, sendQuickReplie
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPromptParts, getHistory, isReferReply, REFER_FALLBACK_REPLY } from "../../lib/conversation";
-import { buildContextualUserText, isLikelyContextDependentText, pickFastPathMatchText } from "../../lib/contextualText";
+import { buildContextualUserText, isLikelyContextDependentText } from "../../lib/contextualText";
+import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
@@ -17,7 +18,7 @@ import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepe
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, dbClaimGoodbye, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
-import { appendLeadCaptureCta, buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
+import { appendLeadCaptureCta, buildAmbiguousTripReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
 import { claimSeasonSend, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { createPhotoOnlyState, getPhotoOnlyState, setPhotoOnlyState } from "../../lib/photoOnlyState";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
@@ -1171,18 +1172,56 @@ async function handleMessage(
     cachedTrips = await listTrips({ limit: 5000 });
     return cachedTrips;
   };
-  // Current-message-first routing for the deterministic matchers — see
-  // pickFastPathMatchText for the priority rules and the wrong-trip bug the
-  // old contextual-first matching caused.
-  let fastPathTextCache: string | null = null;
-  const getFastPathText = async (): Promise<string> => {
-    if (fastPathTextCache !== null) return fastPathTextCache;
-    const trips = await getTrips();
-    fastPathTextCache = pickFastPathMatchText(text, contextualUserText, (input) =>
-      resolveTripFromUserMessage(input, trips, { allowLooseFallback: false }),
-    );
-    return fastPathTextCache;
+  // Stateful routing for the deterministic matchers: answers to a
+  // clarification we just asked resolve against the OFFERED candidates first;
+  // otherwise current-message-first priorities apply. See fastPathRouting.ts
+  // for the live wrong-trip bug this prevents.
+  let routedCache: FastPathRoute | null = null;
+  const getRouted = async (): Promise<FastPathRoute> => {
+    if (routedCache !== null) return routedCache;
+    routedCache = await routeFastPathText({
+      senderId,
+      text,
+      contextualUserText,
+      trips: await getTrips(),
+    });
+    return routedCache;
   };
+  const getFastPathText = async (): Promise<string> => (await getRouted()).matchText;
+  // The customer's answer fits SEVERAL of the trips we just offered ("шууд
+  // нислэгтэй" when both options are direct flights) — re-ask scoped to
+  // exactly those, like a human agent would. Letting a matcher rescore the
+  // names would confidently pick one, which is a guess, not an answer.
+  {
+    const routed = await getRouted();
+    if (routed.scopedClarify && routed.scopedClarify.length > 0) {
+      const clarifyReply = enforceWebsiteForPayment(
+        sanitizeAssistantReply(buildAmbiguousTripReply(routed.scopedClarify)),
+      );
+      await assertLockHealthy();
+      const delivered = await sendPlatformMessage(
+        platform,
+        senderId,
+        clarifyReply,
+        token,
+        pageId,
+        igUserId,
+        trace,
+        { allowFallback: false },
+      );
+      if (!delivered) {
+        throw new RetryableWebhookError("delivery_failed:scoped_clarify");
+      }
+      try {
+        await appendMessage(senderId, "assistant", clarifyReply);
+        await setLastReplyConsistent(sessionId, clarifyReply);
+      } catch {
+      }
+      await rememberTurn("api.webhook.scoped_clarify");
+      recordCounter("webhook.scoped_clarify_total", 1, { platform });
+      return;
+    }
+  }
   if (hasDepartureDateAvailabilityIntent(text)) {
     const trips = await getTrips();
     const dateAvailabilityReply = buildDepartureDateAvailabilityReply({

@@ -95,24 +95,29 @@ export function buildContextualUserText(
   return [...recentUserTurns, userText.trim()].join("\n");
 }
 
-type TripResolver<TTrip> = (
-  text: string,
-) => { status: "verified"; trip: TTrip } | { status: "ambiguous"; candidates: TTrip[] } | { status: string };
+type TripResolution<TTrip> =
+  | { status: "verified"; trip: TTrip }
+  | { status: "ambiguous"; candidates: TTrip[] }
+  | { status: string };
+
+type TripResolver<TTrip> = (text: string) => TripResolution<TTrip>;
 
 /**
  * Which text should the deterministic trip matchers see?
  *
  * Priority: (1) the current message alone resolves a trip → use it;
- * (2) the contextual blob resolves one → use it (the classic "тэр ямар үнэтэй
- * вэ?" follow-up); (3) the current message alone is ambiguous → clarify from
- * what the customer JUST said, not from stale turns; (4) otherwise fall back
- * to the contextual blob.
+ * (2) the current message is ambiguous and the contextual blob verifies one
+ * OF THOSE candidates → use the context (legit narrowing: "Бээжин" earlier +
+ * "шууд нислэгтэй нь" now); a contextual winner OUTSIDE the candidates is a
+ * stale unrelated trip hijacking the match and is rejected; (3) the current
+ * message is ambiguous otherwise → clarify from what the customer JUST said;
+ * (4) the current message resolves nothing → fall back to the contextual blob.
  *
  * Matching over the concatenated turns first (the old behavior) let a trip
  * mentioned three turns ago outscore the trip the customer is asking about
  * right now — confident, well-formatted, wrong-trip answers.
  */
-export function pickFastPathMatchText<TTrip>(
+export function pickFastPathMatchText<TTrip extends { id: string }>(
   text: string,
   contextualUserText: string,
   resolve: TripResolver<TTrip>,
@@ -121,7 +126,13 @@ export function pickFastPathMatchText<TTrip>(
   const direct = resolve(text);
   if (direct.status === "verified") return text;
   const contextual = resolve(contextualUserText);
+  if (direct.status === "ambiguous" && "candidates" in direct) {
+    if (contextual.status === "verified" && "trip" in contextual) {
+      const candidateIds = new Set(direct.candidates.map((trip) => trip.id));
+      if (candidateIds.has(contextual.trip.id)) return contextualUserText;
+    }
+    return text;
+  }
   if (contextual.status === "verified") return contextualUserText;
-  if (direct.status === "ambiguous") return text;
   return contextualUserText;
 }
