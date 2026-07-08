@@ -14,7 +14,7 @@ import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/c
 import { analyzeBeforeReply, buildTripIndexLines } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
-import { enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
+import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
 import { buildAmbiguousTripReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
@@ -332,15 +332,18 @@ export default async function handler(
         .filter((message) => message.role === "assistant")
         .map((message) => message.text)
         .slice(-3);
-      const reply = enforceWebsiteForPayment(
-        rewriteRepeatedGenericClarifier({
-          userText: normalizedText,
-          replyText: stripRepeatedGreeting(
-            sanitizeAssistantReply(rawNoButtons),
-            history.some((message) => message.role === "assistant"),
-          ),
-          recentAssistantReplies,
-        }),
+      const reply = enforcePaymentNeverSelfConfirmed(
+        normalizedText,
+        enforceWebsiteForPayment(
+          rewriteRepeatedGenericClarifier({
+            userText: normalizedText,
+            replyText: stripRepeatedGreeting(
+              sanitizeAssistantReply(rawNoButtons),
+              history.some((message) => message.role === "assistant"),
+            ),
+            recentAssistantReplies,
+          }),
+        ),
       );
 
       // Skip duplicate replies (same as Messenger behavior)

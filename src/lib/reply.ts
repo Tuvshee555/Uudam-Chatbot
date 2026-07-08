@@ -44,6 +44,52 @@ export function enforceWebsiteForPayment(text: string) {
   return text;
 }
 
+// A customer's own text claim ("5 сая шилжүүлсэн", "screenshot явуулсан",
+// "миний төлбөр орсон уу?") is not proof of payment — the bot has no bank/QPay
+// access and can only see what the customer typed. The model is prompted not
+// to confirm from this, but a money-trust claim needs a code-level backstop
+// too: this pattern set matches the customer message, not the reply, so it
+// only fires when the conversation is actually about a payment claim.
+const PAYMENT_CLAIM_PATTERNS: RegExp[] = [
+  /шилжүүл(?:сэн|лээ|эв)/i,
+  /төл(?:сөн|лөө|бөр).{0,20}(?:орсон|хийсэн|хийлээ)/i,
+  /баримт/i,
+  /screenshot|скриншот/i,
+  /миний төлбөр орсон уу/i,
+  /баталгаажуул/i,
+  /данс руу шилжүүл/i,
+];
+
+// The reply text asserting confirmation — this is what must never leave the
+// bot for a text-only payment claim, regardless of what the customer typed.
+const PAYMENT_CONFIRMATION_CLAIM_PATTERNS: RegExp[] = [
+  /захиалг(?:а|ыг).{0,20}баталгаажс?/i,
+  /төлбөр(?:ийг)?.{0,20}хүлээн авлаа/i,
+  /баталгаажуулж байна/i,
+  /баталгаажсан байна/i,
+  /зөв байх ёстой/i,
+];
+
+const PAYMENT_VERIFICATION_DEFERRAL_REPLY =
+  "Төлбөр, захиалгын баталгаажуулалтыг манай аяллын зөвлөх л шалгаж хийдэг тул би чат дээр баталгаажуулж чадахгүй. Зөвлөх тантай удахгүй холбогдож шалгаад мэдэгдэх болно 🙏";
+
+/**
+ * Backstops the prompt rule: no matter what the model wrote, a text-only
+ * payment claim must never come back as a confirmed booking/payment. Only
+ * runs when the customer's OWN message is a payment claim — normal trip
+ * questions that happen to mention "баталгаажуулах" in another sense are
+ * unaffected because the reply-side pattern also has to match.
+ */
+export function enforcePaymentNeverSelfConfirmed(userText: string, replyText: string) {
+  const claimsPayment = PAYMENT_CLAIM_PATTERNS.some((pattern) => pattern.test(userText));
+  if (!claimsPayment) return replyText;
+  const confirmsInReply = PAYMENT_CONFIRMATION_CLAIM_PATTERNS.some((pattern) =>
+    pattern.test(replyText),
+  );
+  if (!confirmsInReply) return replyText;
+  return PAYMENT_VERIFICATION_DEFERRAL_REPLY;
+}
+
 function stripMarkdown(text: string): string {
   return text
     // [link text](url) → just the url

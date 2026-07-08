@@ -1,6 +1,42 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { extractButtons, isReferReply, rewriteRepeatedGenericClarifier, stripRepeatedGreeting } from "../src/lib/reply";
+import { enforcePaymentNeverSelfConfirmed, extractButtons, isReferReply, rewriteRepeatedGenericClarifier, stripRepeatedGreeting } from "../src/lib/reply";
+
+test("enforcePaymentNeverSelfConfirmed replaces a fabricated booking confirmation", () => {
+  const userText = "би 2,990,000 төлсөн, баталгаажуул";
+  const reply =
+    "Таны 2,990,000₮-ийн төлбөрийг хүлээн авлаа. Одоо бид таны Тэнгэрийн хаалга - шууд нислэгтэй аяллыг баталгаажуулж байна.";
+  const safe = enforcePaymentNeverSelfConfirmed(userText, reply);
+  assert.doesNotMatch(safe, /баталгаажуулж байна/);
+  assert.match(safe, /аяллын зөвлөх/);
+});
+
+test("enforcePaymentNeverSelfConfirmed blocks reassurance about a wrong-name payment", () => {
+  const userText = "баримт дээр нэр өөр байгаа зүгээр үү?";
+  const reply = "Тийм ээ, энэ зөв байх ёстой, санаа зоволтгүй.";
+  const safe = enforcePaymentNeverSelfConfirmed(userText, reply);
+  assert.doesNotMatch(safe, /зөв байх ёстой/);
+});
+
+test("enforcePaymentNeverSelfConfirmed blocks confirmation after a claimed screenshot", () => {
+  const userText = "би screenshot явуулсан, одоо захиалга баталгаатай юу?";
+  const reply =
+    "Таны явуулсан скриншотыг хүлээн авлаа. Таны 2,990,000₮-ийн төлбөрийг хүлээн авсан бөгөөд захиалга баталгаажсан байна.";
+  const safe = enforcePaymentNeverSelfConfirmed(userText, reply);
+  assert.doesNotMatch(safe, /баталгаажсан байна/);
+});
+
+test("enforcePaymentNeverSelfConfirmed leaves unrelated replies untouched", () => {
+  const reply = "✈️ Хайнан - Саньяа шууд нислэгтэй аялал\n💰 Том хүн: 2,990,000₮";
+  const safe = enforcePaymentNeverSelfConfirmed("Хайнан Саньяа хэд вэ?", reply);
+  assert.equal(safe, reply);
+});
+
+test("enforcePaymentNeverSelfConfirmed leaves normal trip replies untouched even if they mention баталгаажуулах in another sense", () => {
+  const reply = "Захиалгаа баталгаажуулах бол нэр, утасны дугаараа үлдээгээрэй.";
+  const safe = enforcePaymentNeverSelfConfirmed("Бээжин аялал хэд вэ?", reply);
+  assert.equal(safe, reply);
+});
 
 test("rewrites repeated generic clarifier after recent trip details", () => {
   const rewritten = rewriteRepeatedGenericClarifier({
