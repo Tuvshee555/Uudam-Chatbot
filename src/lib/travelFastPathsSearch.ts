@@ -398,6 +398,7 @@ export function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] 
   if (!queryWords.length && !queryPhoneticWords.length) return [];
   const landOnly = queryWantsLandOnlyEnhanced(text);
   const wantsCombo = queryWantsLandFlightCombo(text);
+  const wantsDirectFlight = queryWantsDirectFlight(text) && !wantsCombo;
   const wantsFlight = queryWantsFlight(text);
   const wantsSeaBeach = queryWantsSeaBeach(text);
 
@@ -405,6 +406,7 @@ export function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] 
   for (const trip of trips) {
     if (trip.status !== "active") continue;
     if (wantsCombo && !tripIsLandFlightCombo(trip)) continue;
+    if (wantsDirectFlight && !tripIsDirectFlight(trip)) continue;
     if (landOnly && !wantsFlight && !tripIsLandOnly(trip)) continue;
     if (wantsSeaBeach && !tripHasSeaBeach(trip)) continue;
     if (landOnly && tripIsCruise(trip)) continue;
@@ -520,6 +522,7 @@ export function resolveTripFromUserMessage(
   const hasSpecificTripPreference =
     queryWantsLandOnlyEnhanced(text) ||
     queryWantsLandFlightCombo(text) ||
+    queryWantsDirectFlight(text) ||
     queryWantsFlight(text) ||
     queryWantsSeaBeach(text) ||
     hasDisambiguatingModifier(text);
@@ -637,6 +640,15 @@ export function queryWantsLandFlightCombo(query: string): boolean {
 export function queryWantsFlight(query: string): boolean {
   if (queryExplicitlyRejectsFlight(query)) return false;
   return /нислэг|онгоц|хосолсон|нислэгтэй/i.test(query);
+}
+
+export function queryWantsDirectFlight(query: string): boolean {
+  const normalized = normText(query);
+  return (
+    normalized.includes("шууд нислэг") ||
+    normalized.includes("шууд нислэгтэй") ||
+    normalized.includes("direct flight")
+  );
 }
 
 export function queryWantsSeaBeach(query: string): boolean {
@@ -760,6 +772,24 @@ function tripIsLandOnly(trip: TravelTrip): boolean {
   );
 }
 
+export function tripIsDirectFlight(trip: TravelTrip): boolean {
+  if (tripIsLandFlightCombo(trip)) return false;
+  const haystack = normText(
+    [
+      trip.category || "",
+      trip.route_name,
+      trip.source_description || "",
+      trip.notes || "",
+      ...getAliases(trip),
+    ].join(" "),
+  );
+  return (
+    haystack.includes("шууд нислэг") ||
+    haystack.includes("шууд нислэгтэй") ||
+    haystack.includes("direct flight")
+  );
+}
+
 export function tripIsCruise(trip: TravelTrip): boolean {
   const category = normText(trip.category || "");
   const name = normText(trip.route_name);
@@ -780,6 +810,7 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
   const queryPhoneticKeywords = unique(phoneticKeywordTokens(text));
   const landOnly = queryWantsLandOnlyEnhanced(text);
   const wantsCombo = queryWantsLandFlightCombo(text);
+  const wantsDirectFlight = queryWantsDirectFlight(text) && !wantsCombo;
   const wantsFlight = queryWantsFlight(text);
   const wantsSeaBeach = queryWantsSeaBeach(text);
   const hasBrochure = options?.hasBrochureIntent ?? false;
@@ -790,6 +821,7 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
   for (const trip of trips) {
     if (trip.status !== "active") continue;
     if (wantsCombo && !tripIsLandFlightCombo(trip)) continue;
+    if (wantsDirectFlight && !tripIsDirectFlight(trip)) continue;
     if (landOnly && !wantsFlight && !tripIsLandOnly(trip)) continue;
     if (wantsSeaBeach && !tripHasSeaBeach(trip)) continue;
     if (landOnly && tripIsCruise(trip)) continue;

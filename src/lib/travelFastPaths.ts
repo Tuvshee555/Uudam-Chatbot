@@ -28,6 +28,7 @@ import {
   getPriceGroups,
   getPriceValuesFromGroup,
   isStructuredTripQuestion,
+  tripIsLandFlightCombo,
   unique,
   withFutureDepartureDates,
   type CombinedDatePriceMatch,
@@ -83,7 +84,11 @@ export function buildDiscountReply(
   now = new Date(),
 ): string | null {
   const { best: bestRaw, ambiguous } = findBestTripMatch(text, trips);
-  if (!bestRaw) return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
+  if (!bestRaw) {
+    const directUnavailable = buildDirectFlightUnavailableReply(text, trips);
+    if (directUnavailable) return directUnavailable;
+    return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
+  }
   const best = withFutureDepartureDates(bestRaw, now);
 
   const extra = (best.extra || {}) as Record<string, unknown>;
@@ -465,6 +470,37 @@ function formatCombinedDatePriceReply(
   return lines.join("\n");
 }
 
+function buildDirectFlightUnavailableReply(text: string, trips: TravelTrip[]): string | null {
+  if (!hasDirectFlightIntent(text)) return null;
+  const nearby = findBestTripMatch(
+    text
+      .replace(/шууд\s+нислэгтэй/gi, "")
+      .replace(/шууд\s+нислэг/gi, "")
+      .replace(/direct\s+flight/gi, ""),
+    trips,
+  );
+  const options = nearby.ambiguous.length
+    ? nearby.ambiguous
+    : nearby.best
+      ? [nearby.best]
+      : [];
+  if (options.length === 0) return null;
+  const names = options
+    .slice(0, 3)
+    .map((trip) => {
+      const kind = tripIsLandFlightCombo(trip)
+        ? "газар + нислэг хосолсон"
+        : trip.category || "өөр хувилбар";
+      return `• ${trip.route_name} (${kind})`;
+    });
+  return [
+    "Тэр чиглэлд яг шууд нислэгтэй аялал одоогоор тодорхой олдсонгүй.",
+    "Ойролцоо байгаа хувилбарууд:",
+    ...names,
+    "Та эдгээрээс алийг нь сонирхож байна вэ?",
+  ].join("\n");
+}
+
 export function buildStructuredTripReply(
   text: string,
   trips: TravelTrip[],
@@ -480,14 +516,22 @@ export function buildStructuredTripReply(
     ? findBestTripMatch(text, trips)
     : null;
   if (!isStructuredTripQuestion(text) && !hasDatePriceConstraint(text)) {
-    if (!routeOnlyCandidate?.best) return routeOnlyCandidate?.ambiguous?.length
-      ? buildAmbiguousTripReply(routeOnlyCandidate.ambiguous)
-      : null;
+    if (!routeOnlyCandidate?.best) {
+      const directUnavailable = buildDirectFlightUnavailableReply(text, trips);
+      if (directUnavailable) return directUnavailable;
+      return routeOnlyCandidate?.ambiguous?.length
+        ? buildAmbiguousTripReply(routeOnlyCandidate.ambiguous)
+        : null;
+    }
     return buildTripInfoReply(routeOnlyCandidate.best, now);
   }
 
   const { best: bestRaw, ambiguous } = findBestTripMatch(text, trips);
-  if (!bestRaw) return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
+  if (!bestRaw) {
+    const directUnavailable = buildDirectFlightUnavailableReply(text, trips);
+    if (directUnavailable) return directUnavailable;
+    return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
+  }
   const best = withFutureDepartureDates(bestRaw, now);
 
   const samePriceReply = buildSameTripPriceComparisonReply(best, text, now);

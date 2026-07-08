@@ -131,6 +131,29 @@ test("human correction not Beijing, the sea one picks the sea/beach variant", ()
   );
 });
 
+test("direct-flight Beijing price does not answer with combo tour price", () => {
+  const reply = buildStructuredTripReply("Бээжин шууд нислэгтэй нь хэд вэ?", [
+    trip({
+      id: "beijing-four-city",
+      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+      category: "Газрын аялал",
+      adult_price: 1790000,
+      child_price: 1490000,
+    }),
+    trip({
+      id: "beidaihe-beijing-combo",
+      route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+      category: "Газар нислэг хосолсон",
+      adult_price: 2150000,
+      child_price: 1710000,
+    }),
+  ]);
+
+  assert.match(reply || "", /яг шууд нислэгтэй аялал одоогоор тодорхой олдсонгүй/);
+  assert.match(reply || "", /газар \+ нислэг хосолсон/);
+  assert.doesNotMatch(reply || "", /2,150,000|1,710,000/);
+});
+
 test("program reply asks for clarification on shared city-only PDF request", () => {
   const result = buildTripProgramReply("Tokyo program pdf", [
     trip({
