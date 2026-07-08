@@ -324,6 +324,7 @@ export default async function handler(
           correlationId: trace.correlationId,
           source: "api.demo",
           systemInstruction: promptParts.system,
+          openaiModel: process.env.OPENAI_REPLY_MODEL || "gpt-4o",
         });
         aiReplyText = result.text;
       } catch (error) {

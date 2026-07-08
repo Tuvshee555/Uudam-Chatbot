@@ -285,6 +285,12 @@ export async function askGeminiParts(
         maxOutputTokens: options?.maxOutputTokens,
         requestId: options?.requestId,
         correlationId: options?.correlationId,
+        // Without these, an outage silently dropped the caller's system
+        // rules (persona, REFER protocol, anti-injection guard) and downgraded
+        // to the default OpenAI model — the fallback answered as a generic
+        // assistant instead of the travel bot it's standing in for.
+        model: options?.openaiModel,
+        systemText: options?.systemInstruction,
       });
       if (fallback) return fallback;
     }

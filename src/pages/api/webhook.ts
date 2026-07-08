@@ -119,21 +119,68 @@ function extractImageAttachmentUrls(
     .filter((url) => url.startsWith("http"));
 }
 
+type ProcessedDocumentLike = {
+  category: string;
+  extracted_json?: Record<string, unknown>;
+};
+
+function readDocString(doc: ProcessedDocumentLike, section: string, field: string): string {
+  const data = doc.extracted_json?.[section];
+  if (!data || typeof data !== "object") return "";
+  const value = (data as Record<string, unknown>)[field];
+  return value == null || typeof value === "object" ? "" : String(value).trim();
+}
+
 /**
  * Category-aware confirmation sent AFTER the vision pipeline classified what
  * the customer sent. Only for documents a customer anxiously waits on
  * (payment receipt, passport, booking code, travel document) — trip
- * screenshots and misc images stay covered by the generic ack alone.
+ * screenshots get their own matched-trip answer, misc images stay covered by
+ * the generic ack alone.
  */
-function buildDocumentReceivedMessage(docs: Array<{ category: string }>): string | null {
+function buildDocumentReceivedMessage(docs: ProcessedDocumentLike[]): string | null {
   const categories = new Set(docs.map((doc) => doc.category));
   const received: string[] = [];
-  if (categories.has("payment_screenshot")) received.push("төлбөрийн баримт");
+  if (categories.has("payment_screenshot")) {
+    // Echoing the amount the system read makes the confirmation feel real
+    // ("we saw your 4,180,000₮ transfer") and lets the customer correct a
+    // misread immediately.
+    const paymentDoc = docs.find((doc) => doc.category === "payment_screenshot");
+    const amount = paymentDoc ? readDocString(paymentDoc, "payment", "amount") : "";
+    const currency = paymentDoc ? readDocString(paymentDoc, "payment", "currency") : "";
+    received.push(
+      amount ? `${amount}${currency ? ` ${currency}` : ""} төлбөрийн баримт` : "төлбөрийн баримт",
+    );
+  }
   if (categories.has("passport")) received.push("паспортын зураг");
   if (categories.has("booking_code")) received.push("захиалгын код");
   if (categories.has("travel_document")) received.push("бичиг баримт");
   if (received.length === 0) return null;
   return `Таны илгээсэн ${received.join(", ")}-ыг хүлээн авч бүртгэлээ ✅ Манай аяллын зөвлөх шалгаад баталгаажуулна. Баярлалаа! 🙌`;
+}
+
+/**
+ * A trip screenshot that resolved against the REAL catalog gets an instant
+ * answer — the customer asking "what is this trip?" via screenshot receives
+ * the same price/dates reply they'd get by typing the trip name, with no
+ * staff involvement.
+ */
+async function buildMatchedTripReply(docs: ProcessedDocumentLike[]): Promise<string | null> {
+  const matched = docs.find((doc) => {
+    if (doc.category !== "trip_screenshot") return false;
+    const match = doc.extracted_json?.trip_match;
+    return Boolean(match && typeof match === "object" && (match as Record<string, unknown>).route_name);
+  });
+  if (!matched) return null;
+  const routeName = String(
+    (matched.extracted_json?.trip_match as Record<string, unknown>).route_name || "",
+  ).trim();
+  if (!routeName) return null;
+  const trips = await listTrips({ limit: 5000 }).catch(() => []);
+  const structured = trips.length > 0 ? buildStructuredTripReply(routeName, trips) : null;
+  const intro = `Таны илгээсэн зураг манай «${routeName}» аялал байна ✨`;
+  if (!structured) return intro;
+  return `${intro}\n\n${enforceWebsiteForPayment(sanitizeAssistantReply(structured))}`;
 }
 
 /**
@@ -168,7 +215,8 @@ function scheduleImageDocumentPipeline(input: {
       });
       if (platform !== "facebook" || !token) return;
       const confirmation = buildDocumentReceivedMessage(docs);
-      if (!confirmation) return;
+      const tripReply = await buildMatchedTripReply(docs);
+      if (!confirmation && !tripReply) return;
       // Pause state is re-checked at SEND time, not schedule time: a payment
       // receipt is exactly the moment staff jump in manually (operator echo
       // pauses the bot), and processing takes long enough for that to happen.
@@ -177,23 +225,28 @@ function scheduleImageDocumentPipeline(input: {
         recordCounter("webhook.document_received_suppressed_total", 1, { platform });
         return;
       }
-      try {
-        await sendTextMessage(senderId, confirmation, token, {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          source: "api.webhook.document_received",
-        });
-        await appendMessage(senderId, "assistant", confirmation).catch(() => {});
-      } catch (error) {
-        logWarn("webhook.document_received_send_failed", {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          platform,
-          pageId,
-          senderHash: hashIdentifier(senderId),
-          classification: classifyError(error),
-          message: error instanceof Error ? error.message : String(error),
-        });
+      for (const message of [confirmation, tripReply].filter(
+        (value): value is string => Boolean(value),
+      )) {
+        try {
+          await sendTextMessage(senderId, message, token, {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            source: "api.webhook.document_received",
+          });
+          await appendMessage(senderId, "assistant", message).catch(() => {});
+        } catch (error) {
+          logWarn("webhook.document_received_send_failed", {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            platform,
+            pageId,
+            senderHash: hashIdentifier(senderId),
+            classification: classifyError(error),
+            message: error instanceof Error ? error.message : String(error),
+          });
+          break;
+        }
       }
     },
   });
@@ -1551,6 +1604,7 @@ async function handleMessage(
       correlationId: trace?.correlationId,
       source: "api.webhook",
       systemInstruction: promptParts.system,
+      openaiModel: process.env.OPENAI_REPLY_MODEL || "gpt-4o",
     });
     aiReply = result.text;
   } catch (error) {
