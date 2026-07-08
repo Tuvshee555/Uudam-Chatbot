@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { NextApiRequest, NextApiResponse } from "next";
 import { askGemini } from "../../lib/gemini";
+import { askOpenAIFallbackParts } from "../../lib/openaiFallback";
 import {
   buildShardedRateLimitKey,
   getClientKey,
@@ -313,13 +314,42 @@ export default async function handler(
         userText: normalizedText,
         pinnedButtonLabels,
       });
-      const result = await askGemini(promptParts.user, {
-        requestId: trace.requestId,
-        correlationId: trace.correlationId,
-        source: "api.demo",
-        systemInstruction: promptParts.system,
-      });
-      let rawFixed = fixMojibake(result.text);
+      // Mirrors the production webhook: Gemini down/overloaded must not mean
+      // the customer gets a bare error while a working second model sits
+      // idle. Try OpenAI with the same prompt before giving up.
+      let aiReplyText: string;
+      try {
+        const result = await askGemini(promptParts.user, {
+          requestId: trace.requestId,
+          correlationId: trace.correlationId,
+          source: "api.demo",
+          systemInstruction: promptParts.system,
+        });
+        aiReplyText = result.text;
+      } catch (error) {
+        let fallbackText = "";
+        try {
+          const fallback = await askOpenAIFallbackParts([{ text: promptParts.user }], {
+            source: "api.demo.reply_fallback",
+            timeoutMs: 20_000,
+            requestId: trace.requestId,
+            correlationId: trace.correlationId,
+            model: process.env.OPENAI_REPLY_MODEL || "gpt-4o",
+            systemText: promptParts.system,
+          });
+          fallbackText = fallback?.text?.trim() || "";
+        } catch {
+          // fall through to REFER below
+        }
+        logError("demo.ai_fallback_reply", {
+          requestId: trace.requestId,
+          correlationId: trace.correlationId,
+          classification: classifyError(error),
+          openaiFallbackUsed: Boolean(fallbackText),
+        });
+        aiReplyText = fallbackText || "REFER";
+      }
+      let rawFixed = fixMojibake(aiReplyText);
       // REFER (or legacy SILENT) = the model has no data for this question.
       // The demo must mirror production: polite consultant fallback, never a
       // bare token and never a dropped message.
