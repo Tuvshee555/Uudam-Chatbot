@@ -134,3 +134,13 @@ test("short referential follow-ups skip generic assistant prompts", () => {
   );
   assert.equal(result, "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал\nзураг");
 });
+
+test("passenger price follow-ups borrow the previous assistant answer", () => {
+  const previousAnswer =
+    "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал. Том хүн 2,150,000₮, хүүхэд 1,710,000₮, нярай 530,000₮.";
+  const result = buildContextualUserText(
+    [{ role: "assistant", text: previousAnswer }],
+    "нярай хүүхэд үнэтэй юу?",
+  );
+  assert.equal(result, `${previousAnswer}\nнярай хүүхэд үнэтэй юу?`);
+});

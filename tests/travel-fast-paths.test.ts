@@ -906,6 +906,79 @@ test("child age range query is not misread as a date and returns the matching ch
   assert.doesNotMatch(reply || "", /2027|2 сарын 6|02-06/);
 });
 
+test("infant price follow-up stays on the contextual trip instead of matching expensive-word route", () => {
+  const reply = buildStructuredTripReply(
+    [
+      "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+      "нярай хүүхэд үнэтэй юу?",
+    ].join("\n"),
+    [
+      trip({
+        id: "beidaihe-combo",
+        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        adult_price: 2150000,
+        child_price: 1710000,
+        extra: {
+          price_groups: [
+            {
+              dates: ["7 сарын 9", "7 сарын 18", "7 сарын 27"],
+              adult_price: 2150000,
+              child_price: 1710000,
+              infant_price: 530000,
+              child_age: "2-10 нас",
+              infant_age: "0-23 сар",
+            },
+          ],
+        },
+      }),
+      trip({
+        id: "jining-expensive-test",
+        route_name: "Жинин - Мини аватар - Хөх хот + үнэтэй шинжилгээтэй",
+        adult_price: 890000,
+        child_price: 750000,
+      }),
+    ],
+  );
+
+  assert.match(reply || "", /Бэйдайхэ шар тэнгисийн эрэг/);
+  assert.match(reply || "", /Нярай \/0-23 сар\/: 530,000₮/);
+  assert.doesNotMatch(reply || "", /үнэтэй шинжилгээтэй/);
+});
+
+test("past specific date price does not fall forward to a future departure", () => {
+  const reply = buildStructuredTripReply(
+    "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал\n6 сарын 27-ны үнэ хэд вэ?",
+    [
+      trip({
+        id: "beidaihe-combo",
+        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        adult_price: 2150000,
+        child_price: 1710000,
+        extra: {
+          price_groups: [
+            {
+              dates: ["6 сарын 27"],
+              adult_price: 2150000,
+              child_price: 1710000,
+              infant_price: 530000,
+            },
+            {
+              dates: ["7 сарын 9"],
+              adult_price: 2150000,
+              child_price: 1710000,
+              infant_price: 530000,
+            },
+          ],
+        },
+      }),
+    ],
+    new Date("2026-07-08T04:00:00.000Z"),
+  );
+
+  assert.match(reply || "", /6 сарын 27-д тохирох үнийн мэдээлэл олдсонгүй/);
+  assert.doesNotMatch(reply || "", /7 сарын 9/);
+});
+
 test("included-in-price question answers with ticket clarification instead of only the price", () => {
   const reply = buildStructuredTripReply(
     "Бээжин Юниверсал наадмын аяллын үнэд нислэгийн тийз багтсан уу?",

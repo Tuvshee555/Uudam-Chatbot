@@ -76,6 +76,16 @@ export function isLikelyContextDependentText(text: string) {
         "үнэ",
         "огноо",
         "суудал",
+        "хүүхэд",
+        "хүүхдийн",
+        "нярай",
+        "том",
+        "хүн",
+        "үнэтэй",
+        "төлбөртэй",
+        "child",
+        "infant",
+        "adult",
       ].includes(word),
   );
   return contentWords.length === 0;

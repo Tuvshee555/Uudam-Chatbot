@@ -250,6 +250,52 @@ export function buildAgeSpecificPriceReply(trip: TravelTrip, text: string): stri
   return null;
 }
 
+export function buildPassengerTypePriceReply(trip: TravelTrip, text: string): string | null {
+  const normalized = normText(text);
+  const target = normalized.includes("нярай") || normalized.includes("infant")
+    ? "infant"
+    : normalized.includes("хүүхэд") || normalized.includes("хүүхдийн") || normalized.includes("child")
+      ? "child"
+      : normalized.includes("том хүн") || normalized.includes("adult")
+        ? "adult"
+        : null;
+  if (!target) return null;
+
+  const label = target === "infant" ? "Нярай" : target === "child" ? "Хүүхэд" : "Том хүн";
+  const currency = trip.currency || "MNT";
+  const groups = getStructuredPriceGroups(trip);
+  if (groups.length > 0) {
+    const lines = [`✈️ ${trip.route_name}`, `💰 ${label} үнэ:`];
+    let found = false;
+    for (const group of groups) {
+      const price = target === "infant"
+        ? (typeof group.infant_price === "number" ? group.infant_price : null)
+        : target === "child"
+          ? (typeof group.child_price === "number" ? group.child_price : null)
+          : (typeof group.adult_price === "number" ? group.adult_price : null);
+      if (price === null) continue;
+      found = true;
+      const age = target === "infant"
+        ? (typeof group.infant_age === "string" ? group.infant_age.trim() : "")
+        : target === "child"
+          ? (typeof group.child_age === "string" ? group.child_age.trim() : "")
+          : "";
+      const rawDates = Array.isArray(group.dates) ? group.dates as string[] : [];
+      const dateLabel = rawDates.length > 0 ? formatGroupDateLabel(rawDates) : "";
+      const ageText = age ? ` /${age}/` : "";
+      lines.push(`${dateLabel ? `${dateLabel}: ` : ""}${label}${ageText}: ${formatMoney(price, currency)}`);
+    }
+    if (found) return lines.join("\n");
+  }
+
+  const price = target === "infant" ? null : target === "child" ? trip.child_price : trip.adult_price;
+  if (typeof price === "number") {
+    return `✈️ ${trip.route_name}\n💰 ${label} үнэ: ${formatMoney(price, currency)}`;
+  }
+
+  return `✈️ ${trip.route_name}\n${label} үнийн мэдээлэл одоогоор тодорхойгүй байна. Аяллын зөвлөхөөр баталгаажуулна уу.`;
+}
+
 export function hasIncludedInPriceIntent(text: string): boolean {
   return /багтсан\s+уу|орсон\s+уу|included|include|үнэд\s+.*багтсан/i.test(text);
 }
@@ -548,6 +594,10 @@ export function findPriceGroupByMonthDay(
   day: number,
   now = new Date(),
 ): Record<string, unknown> | DepartureDateGroup | null {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const requestedThisYear = new Date(now.getFullYear(), month - 1, day);
+  if (requestedThisYear < today) return null;
+
   const mStr = String(month);
   const dStr = String(day);
   const mPad = mStr.padStart(2, "0");

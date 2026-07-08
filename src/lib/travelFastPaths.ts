@@ -39,6 +39,7 @@ import {
   buildAmbiguousTripReply,
   buildAgeSpecificPriceReply,
   buildIncludedInPriceReply,
+  buildPassengerTypePriceReply,
   buildSameTripPriceComparisonReply,
   compactDates,
   detectDirectFlight,
@@ -560,6 +561,8 @@ export function buildStructuredTripReply(
   const askedExistence = hasExistenceIntent(text);
   const ageSpecificReply = askedPrice ? buildAgeSpecificPriceReply(best, text) : null;
   if (ageSpecificReply) return ageSpecificReply;
+  const passengerTypeReply = askedPrice ? buildPassengerTypePriceReply(best, text) : null;
+  if (passengerTypeReply) return passengerTypeReply;
   const ticketPreference = askedPrice ? getTicketPreference(text) : null;
   if (ticketPreference) {
     const matchingGroups = getStructuredPriceGroups(best).filter((group) => priceGroupMatchesTicketPreference(group, ticketPreference));
