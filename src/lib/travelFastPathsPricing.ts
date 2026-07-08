@@ -251,7 +251,16 @@ export function buildAgeSpecificPriceReply(trip: TravelTrip, text: string): stri
 }
 
 export function buildPassengerTypePriceReply(trip: TravelTrip, text: string): string | null {
-  const normalized = normText(text);
+  // `text` can be a contextual blob with an earlier turn (often the bot's own
+  // previous reply) prepended before the customer's actual current message —
+  // see contextualText.ts. That old text can mention "хүүхэд"/"том хүн" from a
+  // DIFFERENT question (e.g. "хүүхдийн үнэ хэд вэ?" answered last turn), which
+  // must not hijack a new question like "тэр шууд нислэгтэй нь хэд байсан бэ?"
+  // into a stale child-price answer. Only the customer's current line (the
+  // last line) decides which passenger type is being asked about now.
+  const lines = text.split("\n");
+  const currentLine = lines[lines.length - 1] || text;
+  const normalized = normText(currentLine);
   const target = normalized.includes("нярай") || normalized.includes("infant")
     ? "infant"
     : normalized.includes("хүүхэд") || normalized.includes("хүүхдийн") || normalized.includes("child")

@@ -1180,3 +1180,51 @@ test("compare reply shows seat wording only for scarcity", () => {
   assert.match(reply || "", /Суудал цөөн үлдсэн тул захиалга өгөх бол аяллын зөвлөхтэй хурдан холбогдоорой./);
   assert.doesNotMatch(reply || "", /Үлдсэн суудал: 12/);
 });
+
+test("a direct-flight follow-up on a combo trip keeps the combo disclaimer even with stale contextual text prepended", () => {
+  // Reproduces a live bug: the contextual blob prepends the bot's OWN previous
+  // reply ("...хүүхдийн үнэ (2-10 нас) 1,710,000₮...") before the customer's
+  // actual current line. That stale text must not be misread as the current
+  // question — it hijacked "шууд нислэгтэй нь хэд байсан бэ?" into a bare
+  // child-price answer with no combo disclaimer at all.
+  const trips = [
+    trip({
+      id: "beidaihe-combo",
+      route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+      category: "Газар нислэг хосолсон",
+      adult_price: 2150000,
+      child_price: 1710000,
+      departure_dates: ["7 сарын 9", "7 сарын 18"],
+    }),
+  ];
+  const staleContext =
+    "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аяллын хүүхдийн үнэ (2-10 нас) 1,710,000₮ байна.\n\nХэрэв танд илүү дэлгэрэнгүй мэдээлэл хэрэгтэй бол асуугаарай! 😊";
+  const contextualText = `${staleContext}\nтэр шууд нислэгтэй нь хэд байсан бэ?`;
+
+  const reply = buildStructuredTripReply(contextualText, trips);
+
+  assert.ok(reply);
+  assert.match(reply as string, /газар \+ нислэг хосолсон аялал/);
+  assert.match(reply as string, /Том хүн: 2,150,000₮/);
+  assert.doesNotMatch(reply as string, /2027|20\d{2}-\d{2}-\d{2}/);
+});
+
+test("passenger-type price reply only reads the customer's current line, not stale prior context", () => {
+  const trips = [
+    trip({
+      id: "beidaihe-combo-2",
+      route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+      adult_price: 2150000,
+      child_price: 1710000,
+    }),
+  ];
+  const staleContext =
+    "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аяллын хүүхдийн үнэ 1,710,000₮ байна.";
+  const contextualText = `${staleContext}\nтом хүн хэд вэ?`;
+
+  const reply = buildStructuredTripReply(contextualText, trips);
+
+  assert.ok(reply);
+  assert.match(reply as string, /Том хүн/);
+  assert.doesNotMatch(reply as string, /Хүүхэд үнэ/);
+});

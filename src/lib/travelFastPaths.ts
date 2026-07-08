@@ -521,7 +521,16 @@ export function buildStructuredTripReply(
   trips: TravelTrip[],
   now = new Date(),
 ): string | null {
-  const combinedDatePrice = findCombinedDatePriceMatches(text, trips);
+  // `text` can be a contextual blob with an earlier turn (often the bot's own
+  // previous reply, full of real dates and prices) prepended before the
+  // customer's actual current message — see contextualText.ts. A combined
+  // date+price query ("7 сарын 9-нд 2,150,000-аар байна уу?") is only ever a
+  // deliberate statement in the CURRENT message; scanning the whole blob lets
+  // stray numbers from the stale previous reply (e.g. an age range "2-10 нас"
+  // read as a date, or an old price) misfire this match. Use only the last
+  // line for this specific detector.
+  const currentLine = text.split("\n").pop() || text;
+  const combinedDatePrice = findCombinedDatePriceMatches(currentLine, trips);
   if (combinedDatePrice) {
     const combinedReply = formatCombinedDatePriceReply(combinedDatePrice);
     if (combinedReply) return combinedReply;
@@ -586,7 +595,11 @@ export function buildStructuredTripReply(
   if (!askedPrice && !askedDuration && !askedSchedule && !askedDirectFlight && !askedExistence) {
     return buildTripInfoReply(best);
   }
-  const requestedDates = unique(parseDepartureDateText(text, now));
+  // Scoped to the current line only (see comment on `currentLine` above): a
+  // bare "N-M" pattern like an age range "(2-10 нас)" surviving from a stale
+  // prepended previous reply reads as a valid month/day and rolls forward to
+  // a bogus future date otherwise.
+  const requestedDates = unique(parseDepartureDateText(currentLine, now));
 
   if (askedExistence && !askedPrice && !askedDuration && !askedSchedule && !askedDirectFlight) {
     lines.push(`✈️ Тийм ээ, ${best.route_name} аялал манайд идэвхтэй байна.`);
