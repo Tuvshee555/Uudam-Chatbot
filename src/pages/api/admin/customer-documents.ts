@@ -3,6 +3,7 @@ import { requireAdminAccess } from "../../../lib/adminAccess";
 import {
   getCustomerDocumentStats,
   listCustomerDocuments,
+  listDocumentSenders,
   updateCustomerDocument,
   updateCustomerDocumentStatus,
   type CustomerDocumentCategory,
@@ -45,6 +46,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (req.query.stats) {
         const stats = await getCustomerDocumentStats();
         return res.status(200).json({ ok: true, stats });
+      }
+      if (req.query.group === "senders") {
+        const senders = await listDocumentSenders();
+        return res.status(200).json({ ok: true, senders });
       }
       const senderId =
         typeof req.query.sender_id === "string" ? req.query.sender_id : undefined;

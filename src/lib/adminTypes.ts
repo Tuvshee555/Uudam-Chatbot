@@ -418,6 +418,16 @@ export type CustomerDocument = {
   retention_hidden_at?: string | null;
 };
 
+export type DocumentSenderSummary = {
+  sender_id: string;
+  platform: string;
+  display_name: string;
+  total: number;
+  needs_review: number;
+  last_at: string;
+  by_category: Record<CustomerDocumentCategory, number>;
+};
+
 export type DriveSyncRecentFile = {
   file_id: string;
   file_name: string;

@@ -12,6 +12,8 @@ import {
 import { ensureTravelSchema } from "./travelSchema";
 import { uploadImageToCloudinary } from "./tripPhotoImport/upload";
 import { createPaymentRecord, listPayments } from "./travelPayments";
+import { listTrips, type TravelTrip } from "./travelOps";
+import { resolveTripFromUserMessage } from "./travelFastPathsSearch";
 import type { Platform } from "./webhookDedup";
 
 export type CustomerDocumentCategory =
@@ -279,12 +281,17 @@ function buildExtractionParts(image: DownloadedImage): GeminiPart[] {
       text: [
         "You classify and extract customer-sent travel chatbot images.",
         "Return JSON only. Do not invent unreadable data.",
-        "Categories:",
+        "Categories — classify by MEANING, not visual style:",
         "- passport: passport bio page/photo or official passport image.",
         "- travel_document: visa, ID, ticket, booking document, certificate, or other customer travel document.",
         "- booking_code: screenshot or message image containing a booking code, reservation number, passcode, confirmation code, or other code the agency needs later.",
-        "- trip_screenshot: screenshot/photo of a trip poster, social post, itinerary, price list, or tour ad.",
-        "- payment_screenshot: bank/payment transfer screenshot or QR/payment confirmation.",
+        "- trip_screenshot: screenshot/photo of a trip poster, social post, itinerary, price list, or tour ad — usually the customer asking 'what is this trip / how much'.",
+        "- payment_screenshot: ANY proof that money was transferred, in ANY visual style:",
+        "  * mobile banking success screen (green checkmark, 'Гүйлгээ амжилттай', amount + date)",
+        "  * bank transfer statement/printout ('Шилжүүлгийн мэдээлэл', Журналын №, Илгээгч/Хүлээн авагч table)",
+        "  * email receipt of a transfer (bank email with the statement embedded)",
+        "  * QR payment confirmation, transaction-list screenshot",
+        "  If the image shows an amount of money moving to an account, it is payment_screenshot.",
         "- other: any unrelated or unclear image.",
         "",
         "JSON schema:",
@@ -300,12 +307,21 @@ function buildExtractionParts(image: DownloadedImage): GeminiPart[] {
         '    "title": "", "destination": "", "departure_dates": [],',
         '    "price_text": "", "duration": "", "operator": ""',
         "  },",
-        '  "payment": { "amount": "", "currency": "", "reference": "", "date": "" },',
+        '  "payment": {',
+        '    "amount": "", "currency": "", "reference": "", "date": "",',
+        '    "sender_name": "", "description": "", "phone": ""',
+        "  },",
         '  "booking": { "code": "", "trip_name": "", "traveler_name": "", "phone": "", "notes": "" },',
         '  "visible_text": "important readable text, short",',
         '  "needs_human_review": true,',
         '  "warnings": []',
         "}",
+        "",
+        "Payment field rules:",
+        "- description: the transaction memo line ('Гүйлгээний утга') VERBATIM — it usually names the customer and trip.",
+        "- phone: any 8-digit Mongolian mobile number visible in the memo or receipt (starts with 6, 8, or 9). Empty if none.",
+        "- reference: journal/transaction number ('Журналын №', reference code).",
+        "- sender_name: who sent the money ('Илгээгч' / 'Нэр').",
         "",
         "For passports and documents, mark needs_human_review=true even if confident.",
       ].join("\n"),
@@ -317,6 +333,73 @@ function buildExtractionParts(image: DownloadedImage): GeminiPart[] {
       },
     },
   ];
+}
+
+// Mongolian mobile numbers are 8 digits starting 6/8/9. A 7-prefix number is
+// an Ulaanbaatar landline (often the agency's own) — never a customer phone.
+const MONGOLIAN_MOBILE_RE = /(?<!\d)[689]\d{7}(?!\d)/;
+
+/**
+ * Deterministic fallback: staff match receipts to customers by the phone
+ * number the payer writes into the transaction memo ("… аялалын төлбөр
+ * 99183371"). If the vision model missed it, pull it from the memo/visible
+ * text ourselves.
+ */
+export function extractMongolianPhone(text: string): string {
+  const compact = (text || "").replace(/[\s\-()]/g, "");
+  const match = compact.match(MONGOLIAN_MOBILE_RE);
+  return match ? match[0] : "";
+}
+
+export type DocumentTripMatch = { id: string; route_name: string } | null;
+
+/**
+ * Resolve a document against the REAL trip catalog. A trip screenshot that
+ * matches a catalog trip can be answered instantly (price/dates) instead of
+ * waiting for staff; a payment memo naming a trip ("… 88112594 Dalyan") gives
+ * staff the booking context without hunting.
+ */
+export function matchTripFromDocument(
+  extracted: Record<string, unknown>,
+  category: CustomerDocumentCategory,
+  trips: Array<{ id: string; route_name: string } & Record<string, unknown>>,
+  resolve: (
+    text: string,
+    trips: Array<{ id: string; route_name: string } & Record<string, unknown>>,
+  ) =>
+    | { status: "verified"; trip: { id: string; route_name: string } }
+    | { status: string },
+): DocumentTripMatch {
+  if (trips.length === 0) return null;
+  const trip = extracted.trip && typeof extracted.trip === "object"
+    ? (extracted.trip as Record<string, unknown>)
+    : {};
+  const booking = extracted.booking && typeof extracted.booking === "object"
+    ? (extracted.booking as Record<string, unknown>)
+    : {};
+  const payment = extracted.payment && typeof extracted.payment === "object"
+    ? (extracted.payment as Record<string, unknown>)
+    : {};
+  const candidates =
+    category === "trip_screenshot"
+      ? [
+          [compactValue(trip.title), compactValue(trip.destination)].filter(Boolean).join(" "),
+          compactValue(trip.title),
+          compactValue(trip.destination),
+          compactValue(extracted.visible_text),
+        ]
+      : [
+          compactValue(booking.trip_name),
+          compactValue(payment.description),
+        ];
+  for (const candidate of candidates) {
+    if (!candidate || candidate.length < 3) continue;
+    const result = resolve(candidate, trips);
+    if (result.status === "verified" && "trip" in result) {
+      return { id: result.trip.id, route_name: result.trip.route_name };
+    }
+  }
+  return null;
 }
 
 async function extractImageData(
@@ -335,6 +418,16 @@ async function extractImageData(
     preferOpenAI: true,
   });
   const extracted = parseJsonObject(result.text);
+  // Deterministic phone fallback over memo + visible text.
+  const payment = extracted.payment && typeof extracted.payment === "object"
+    ? (extracted.payment as Record<string, unknown>)
+    : null;
+  if (payment && !compactValue(payment.phone)) {
+    const phone = extractMongolianPhone(
+      [compactValue(payment.description), compactValue(extracted.visible_text)].join(" "),
+    );
+    if (phone) payment.phone = phone;
+  }
   return {
     extracted,
     category: normalizeCategory(extracted.category),
@@ -353,6 +446,7 @@ async function insertCustomerDocument(input: {
   extractedJson: Record<string, unknown>;
   confidence: number;
   matchedPaymentId: number | null;
+  matchedTripId: string | null;
   duplicateOfId: number | null;
   autoAction: string;
 }) {
@@ -363,12 +457,12 @@ async function insertCustomerDocument(input: {
       INSERT INTO travel_customer_documents (
         platform, sender_id, page_id, source_url, stored_url, image_sha256,
         mime_type, category, extracted_json, confidence, matched_payment_id,
-        duplicate_of_id, auto_action, status, reviewed_at, updated_at
+        matched_trip_id, duplicate_of_id, auto_action, status, reviewed_at, updated_at
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13,
-        CASE WHEN $12::bigint IS NULL THEN 'needs_review' ELSE 'duplicate' END,
-        CASE WHEN $12::bigint IS NULL THEN NULL ELSE NOW() END,
+        $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14,
+        CASE WHEN $13::bigint IS NULL THEN 'needs_review' ELSE 'duplicate' END,
+        CASE WHEN $13::bigint IS NULL THEN NULL ELSE NOW() END,
         NOW()
       )
       ON CONFLICT (sender_id, image_sha256)
@@ -381,6 +475,7 @@ async function insertCustomerDocument(input: {
         extracted_json = EXCLUDED.extracted_json,
         confidence = EXCLUDED.confidence,
         matched_payment_id = COALESCE(EXCLUDED.matched_payment_id, travel_customer_documents.matched_payment_id),
+        matched_trip_id = COALESCE(EXCLUDED.matched_trip_id, travel_customer_documents.matched_trip_id),
         auto_action = COALESCE(NULLIF(EXCLUDED.auto_action, ''), travel_customer_documents.auto_action),
         updated_at = NOW()
       RETURNING *
@@ -397,6 +492,7 @@ async function insertCustomerDocument(input: {
       JSON.stringify(input.extractedJson),
       input.confidence,
       input.matchedPaymentId,
+      input.matchedTripId,
       input.duplicateOfId,
       input.autoAction,
     ],
@@ -404,7 +500,9 @@ async function insertCustomerDocument(input: {
   return result?.rows?.[0] ?? null;
 }
 
-export async function processCustomerImageAttachment(input: ImageAttachmentInput) {
+export async function processCustomerImageAttachment(
+  input: ImageAttachmentInput & { trips?: TravelTrip[] },
+) {
   try {
     const image = await downloadImage(input.url);
     let storedUrl = input.url;
@@ -426,6 +524,22 @@ export async function processCustomerImageAttachment(input: ImageAttachmentInput
 
     const { extracted, category } = await extractImageData(image, input.trace);
     const confidence = readNumber(extracted.confidence);
+    // Resolve against the live catalog: a matched trip screenshot can be
+    // answered instantly, and a payment memo naming a trip gives staff
+    // booking context. Stamped into extracted_json so UI/memory can show the
+    // name without a join.
+    const tripMatch = matchTripFromDocument(
+      extracted,
+      category,
+      input.trips || [],
+      (text, candidateTrips) =>
+        resolveTripFromUserMessage(text, candidateTrips as TravelTrip[], {
+          allowLooseFallback: false,
+        }),
+    );
+    if (tripMatch) {
+      extracted.trip_match = { id: tripMatch.id, route_name: tripMatch.route_name };
+    }
     const duplicateOfId = await findDuplicateDocument({
       senderId: input.senderId,
       imageSha256: image.hash,
@@ -448,6 +562,7 @@ export async function processCustomerImageAttachment(input: ImageAttachmentInput
       extractedJson: extracted,
       confidence,
       matchedPaymentId: paymentMatch.id,
+      matchedTripId: tripMatch?.id ?? null,
       duplicateOfId,
       autoAction: paymentMatch.autoAction,
     });
@@ -503,9 +618,13 @@ export async function processCustomerImageAttachments(input: {
   const urls = Array.from(
     new Set(input.urls.map((url) => url.trim()).filter((url) => url.startsWith("http"))),
   ).slice(0, 5);
+  if (urls.length === 0) return [];
+  // One catalog fetch per batch — used to resolve trip screenshots and
+  // payment memos against real trips.
+  const trips = await listTrips({ limit: 5000 }).catch(() => [] as TravelTrip[]);
   const rows: CustomerDocument[] = [];
   for (const url of urls) {
-    const row = await processCustomerImageAttachment({ ...input, url });
+    const row = await processCustomerImageAttachment({ ...input, url, trips });
     if (row) rows.push(row);
   }
   return rows;
@@ -739,7 +858,19 @@ export function summarizeCustomerDocumentForMemory(doc: CustomerDocument): strin
       .filter(Boolean)
       .join(" ");
     const date = compactValue(payment.date);
-    return ["payment receipt sent", amount, date].filter(Boolean).join(" - ");
+    const phone = compactValue(payment.phone);
+    const matchedTrip = data.trip_match && typeof data.trip_match === "object"
+      ? compactValue((data.trip_match as Record<string, unknown>).route_name)
+      : "";
+    return [
+      "payment receipt sent",
+      amount,
+      date,
+      phone ? `phone ${phone}` : "",
+      matchedTrip ? `trip: ${matchedTrip}` : "",
+    ]
+      .filter(Boolean)
+      .join(" - ");
   }
   if (doc.category === "booking_code") {
     // The memory summary is injected into EVERY AI prompt — a raw code there
@@ -764,12 +895,92 @@ export function summarizeCustomerDocumentForMemory(doc: CustomerDocument): strin
     return "travel document image sent - staff review required";
   }
   if (doc.category === "trip_screenshot") {
+    const matchedTrip = data.trip_match && typeof data.trip_match === "object"
+      ? compactValue((data.trip_match as Record<string, unknown>).route_name)
+      : "";
     const title = compactValue(trip.title);
     const destination = compactValue(trip.destination);
     const summary = compactValue(data.summary);
-    return ["trip screenshot sent", title || destination || summary].filter(Boolean).join(" - ");
+    return [
+      "trip screenshot sent",
+      matchedTrip ? `matched our trip: ${matchedTrip}` : title || destination || summary,
+    ]
+      .filter(Boolean)
+      .join(" - ");
   }
   return compactValue(data.summary) || "image attachment sent";
+}
+
+export type DocumentSenderSummary = {
+  sender_id: string;
+  platform: string;
+  display_name: string;
+  total: number;
+  needs_review: number;
+  last_at: string;
+  by_category: Record<CustomerDocumentCategory, number>;
+};
+
+/**
+ * Person-first view: who has sent documents, what kinds, and how many still
+ * need review — so staff browse by customer instead of scrolling a flat feed.
+ */
+export async function listDocumentSenders(): Promise<DocumentSenderSummary[]> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return [];
+  await applySensitiveRetentionPolicy();
+  const result = await queryNeon<{
+    sender_id: string;
+    platform: string;
+    display_name: string | null;
+    total: string;
+    needs_review: string;
+    last_at: string;
+    passports: string;
+    travel_docs: string;
+    booking_codes: string;
+    trip_screenshots: string;
+    payments: string;
+    others: string;
+  }>(
+    `
+      SELECT
+        d.sender_id,
+        MAX(d.platform) AS platform,
+        COALESCE(MAX(NULLIF(s.display_name, '')), '') AS display_name,
+        COUNT(*)::text AS total,
+        COUNT(*) FILTER (WHERE d.status = 'needs_review')::text AS needs_review,
+        MAX(d.created_at)::text AS last_at,
+        COUNT(*) FILTER (WHERE d.category = 'passport')::text AS passports,
+        COUNT(*) FILTER (WHERE d.category = 'travel_document')::text AS travel_docs,
+        COUNT(*) FILTER (WHERE d.category = 'booking_code')::text AS booking_codes,
+        COUNT(*) FILTER (WHERE d.category = 'trip_screenshot')::text AS trip_screenshots,
+        COUNT(*) FILTER (WHERE d.category = 'payment_screenshot')::text AS payments,
+        COUNT(*) FILTER (WHERE d.category = 'other')::text AS others
+      FROM travel_customer_documents d
+      LEFT JOIN travel_senders s ON s.sender_id = d.sender_id
+      WHERE d.retention_hidden_at IS NULL
+      GROUP BY d.sender_id
+      ORDER BY MAX(d.created_at) DESC
+      LIMIT 200
+    `,
+  );
+  return (result?.rows || []).map((row) => ({
+    sender_id: row.sender_id,
+    platform: row.platform || "facebook",
+    display_name: row.display_name || "",
+    total: Number(row.total || 0),
+    needs_review: Number(row.needs_review || 0),
+    last_at: row.last_at,
+    by_category: {
+      passport: Number(row.passports || 0),
+      travel_document: Number(row.travel_docs || 0),
+      booking_code: Number(row.booking_codes || 0),
+      trip_screenshot: Number(row.trip_screenshots || 0),
+      payment_screenshot: Number(row.payments || 0),
+      other: Number(row.others || 0),
+    },
+  }));
 }
 
 export async function getCustomerDocumentMemoryText(senderId: string): Promise<string> {
