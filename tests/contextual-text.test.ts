@@ -98,7 +98,7 @@ test("standalone messages with their own content words are not diluted with old 
   assert.equal(isLikelyContextDependentText("Бээжин нислэгтэй аяллын хөтөлбөр үзэх"), false);
 });
 
-test("short referential follow-ups still borrow recent user turns", () => {
+test("short referential follow-ups use the previous assistant answer when available", () => {
   const result = buildContextualUserText(
     [
       { role: "user", text: "Хайнан аялал сонирхож байна" },
@@ -106,5 +106,31 @@ test("short referential follow-ups still borrow recent user turns", () => {
     ],
     "тэр хэд вэ?",
   );
-  assert.equal(result, "Хайнан аялал сонирхож байна\nтэр хэд вэ?");
+  assert.equal(result, "Хайнан 2,990,000₮...\nтэр хэд вэ?");
+});
+
+test("short referential follow-ups anchor to the previous assistant answer before stale user turns", () => {
+  const previousAnswer =
+    "Хамгийн хямд аялал бол ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ-БЭЭЖИНГИЙН ГАЗРЫН АЯЛАЛ юм. Хүүхдийн үнэ: 1,190,000₮";
+  const result = buildContextualUserText(
+    [
+      { role: "user", text: "шууд нислэгтэй нь хэд вэ?" },
+      { role: "user", text: "Хайнан сонирхож байна" },
+      { role: "user", text: "хамгийн хямд аялал юу байна" },
+      { role: "assistant", text: previousAnswer },
+    ],
+    "тэрний хүүхдийн үнэ?",
+  );
+  assert.equal(result, `${previousAnswer}\nтэрний хүүхдийн үнэ?`);
+});
+
+test("short referential follow-ups skip generic assistant prompts", () => {
+  const result = buildContextualUserText(
+    [
+      { role: "user", text: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал" },
+      { role: "assistant", text: "Үнэ, зураг, хөтөлбөрийн аль нь хэрэгтэй вэ?" },
+    ],
+    "зураг",
+  );
+  assert.equal(result, "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал\nзураг");
 });

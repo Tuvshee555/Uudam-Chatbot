@@ -81,11 +81,28 @@ export function isLikelyContextDependentText(text: string) {
   return contentWords.length === 0;
 }
 
+function isGenericAssistantFollowup(text: string) {
+  const normalized = normalizeContextText(text);
+  return (
+    normalized.includes("аль нь хэрэгтэй") ||
+    normalized.includes("алийг хэлж") ||
+    normalized.includes("аль аяллыг") ||
+    normalized.includes("нэг тодруулаад")
+  );
+}
+
 export function buildContextualUserText(
   history: Array<{ role: "user" | "assistant"; text: string }>,
   userText: string,
 ) {
   if (!isLikelyContextDependentText(userText)) return userText;
+  const previousAssistantReply = [...history]
+    .reverse()
+    .find((message) => message.role === "assistant" && message.text.trim())
+    ?.text.trim();
+  if (previousAssistantReply && !isGenericAssistantFollowup(previousAssistantReply)) {
+    return `${previousAssistantReply}\n${userText.trim()}`;
+  }
   const recentUserTurns = history
     .filter((message) => message.role === "user")
     .map((message) => message.text.trim())

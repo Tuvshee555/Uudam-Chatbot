@@ -8,6 +8,7 @@ import {
   parseDepartureDateText,
   parseTripDepartureDateText,
   resolveDepartureDatesAtWrite,
+  resolveRequestedMonth,
   resolveRequestedDate,
 } from "../src/lib/travelDates";
 import type { TravelTrip } from "../src/lib/travelOps";
@@ -112,6 +113,43 @@ test("recognizes date availability even when the user also wants to book", () =>
     ),
     true,
   );
+});
+
+test("broad month availability lists options instead of picking one trip", () => {
+  const now = new Date("2026-07-08T04:00:00.000Z");
+  const reply = buildDepartureDateAvailabilityReply({
+    userText: "7 сард явах аялал байна уу",
+    now,
+    trips: [
+      trip({
+        id: "beijing",
+        route_name: "Бээжин газрын аялал",
+        adult_price: 1790000,
+        departure_dates: ["7 сарын 9", "7 сарын 17"],
+      }),
+      trip({
+        id: "beidaihe",
+        route_name: "Бэйдайхэ далайтай аялал",
+        adult_price: 1390000,
+        departure_dates: ["7 сарын 16", "8 сарын 1"],
+      }),
+    ],
+  });
+
+  assert.match(reply || "", /7 сар/);
+  assert.match(reply || "", /Бээжин газрын аялал/);
+  assert.match(reply || "", /Бэйдайхэ далайтай аялал/);
+  assert.match(reply || "", /Аль чиглэл/);
+});
+
+test("resolves broad month request without stealing exact day requests", () => {
+  const now = new Date("2026-07-08T04:00:00.000Z");
+  assert.deepEqual(resolveRequestedMonth("7 сард явах аялал байна уу", now), {
+    year: 2026,
+    month: 7,
+    label: "7 сар",
+  });
+  assert.equal(resolveRequestedMonth("7 сарын 9-нд явах аялал байна уу", now), null);
 });
 
 test("prompt context tells the model what tomorrow means", () => {
