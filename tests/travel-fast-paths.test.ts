@@ -152,7 +152,7 @@ test("matches latin shanghai query to the Shanghai route", () => {
         id: "shanghai-zhangjiajie",
         route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
         extra: {
-          aliases: ["Шанхай Жанжиажэ", "Шанхай Тэнгэрийн хаалга"],
+          aliases: ["Шанхай Жанжиажэ", "Шанхай Тэнгэрийн хаалга", "Shanghai"],
         },
       }),
       trip({

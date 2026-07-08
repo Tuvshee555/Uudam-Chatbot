@@ -57,11 +57,13 @@ const TRIPS: TravelTrip[] = [
     id: "shanghai-tengeriin",
     route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
     category: "Шууд нислэгтэй",
+    extra: { aliases: ["Shanghai"] },
   }),
   trip({
     id: "shanghai-hanzhou",
     route_name: "Шанхай+Ханжоу шууд нислэгтэй, усан парктай аялал",
     category: "Шууд нислэгтэй",
+    extra: { aliases: ["Shanghai", "Hangzhou"] },
   }),
 ];
 
@@ -140,6 +142,60 @@ test("an answer fitting none of the offered candidates drops the clarification (
     !after || !after.candidateTripIds.includes("shanghai-tengeriin"),
     "stale Shanghai clarification must be dropped",
   );
+});
+
+test("specific combo query escapes stale Beijing ground-trip clarification", async () => {
+  const senderId = "route-test-beijing-combo-escape";
+  await clearClarificationState(senderId);
+  const trips = [
+    trip({
+      id: "beijing-four-city",
+      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+      category: "Газрын аялал",
+      extra: { aliases: ["Бээжин", "Beijing"] },
+    }),
+    trip({
+      id: "beidaihe-beijing-combo",
+      route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+      category: "Газар нислэг хосолсон",
+      extra: { aliases: ["Бээжин газар нислэг хосолсон", "Бэйдайхэ Бээжин"] },
+    }),
+    trip({
+      id: "beijing-naadam-ground",
+      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН-наадмын амралтаар явах газрын аялал",
+      category: "Газрын аялал",
+      extra: { aliases: ["Бээжин газрын аялал", "Beijing land tour"] },
+    }),
+  ];
+
+  await routeFastPathText({
+    senderId,
+    text: "Бээжин аялал хэд вэ?",
+    contextualUserText: "Бээжин аялал хэд вэ?",
+    trips,
+  });
+
+  const ground = await routeFastPathText({
+    senderId,
+    text: "Бээжин газрын аялал байна уу?",
+    contextualUserText: "Бээжин аялал хэд вэ?\nБээжин газрын аялал байна уу?",
+    trips,
+  });
+  assert.ok(ground.scopedClarify, "ground query can still clarify between ground variants");
+  assert.deepEqual(
+    ground.scopedClarify!.map((candidate) => candidate.id).sort(),
+    ["beijing-four-city", "beijing-naadam-ground"],
+  );
+
+  const combo = await routeFastPathText({
+    senderId,
+    text: "Бээжин газар нислэг хосолсон аяллын үнэ?",
+    contextualUserText:
+      "Бээжин аялал хэд вэ?\nБээжин газрын аялал байна уу?\nБээжин газар нислэг хосолсон аяллын үнэ?",
+    trips,
+  });
+  assert.equal(combo.scopedClarify, null);
+  assert.match(combo.matchText, /Бэйдайхэ шар тэнгисийн эрэг\+Бээжин газар нислэг хосолсон аялал/);
 });
 
 test("filterCandidatesByAttribute matches transliterated attribute answers", () => {

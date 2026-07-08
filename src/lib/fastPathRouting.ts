@@ -97,6 +97,17 @@ export async function routeFastPathText(input: {
       await clearClarificationState(senderId);
       return { matchText: `${scoped.trip.route_name}\n${text}`, scopedClarify: null };
     }
+    const catalogDirect = resolve(text, trips);
+    if (
+      catalogDirect.status === "verified" &&
+      !pendingTrips.some((trip) => trip.id === catalogDirect.trip.id)
+    ) {
+      await clearClarificationState(senderId);
+      return {
+        matchText: `${catalogDirect.trip.route_name}\n${text}`,
+        scopedClarify: null,
+      };
+    }
     if (scoped.status === "ambiguous") {
       await setClarificationState(senderId, scoped.candidates.map((trip) => trip.id));
       return { matchText: text, scopedClarify: scoped.candidates };

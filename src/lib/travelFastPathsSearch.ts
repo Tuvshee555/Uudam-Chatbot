@@ -132,7 +132,7 @@ const PROGRAM_QUERY_SIGNALS = [
 ];
 
 // Only language/script normalizations here — no trip-specific city names.
-// City aliases (жанжиажэ, beidaihe, sanya, …) belong in each trip's
+// City aliases and romanized destination names belong in each trip's
 // extra.aliases array in the database, editable via the admin panel.
 const ALIAS_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bnaadam\b/gi, "наадам"],
@@ -157,16 +157,6 @@ const ALIAS_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bayalal\b/gi, "аялал"],
   [/\bzurag\b/gi, "зураг"],
   [/\buzi[eй]?\b/gi, "үзье"],
-  [/\bbeejin\b/gi, "бээжин"],
-  [/\bbeijing\b/gi, "бээжин"],
-  [/\bshanghai\b/gi, "шанхай"],
-  [/\bshangai\b/gi, "шанхай"],
-  [/\bshanhai\b/gi, "шанхай"],
-  [/\bhangzhou\b/gi, "ханжоу"],
-  [/\bhangjou\b/gi, "ханжоу"],
-  [/\bbeidaihe\b/gi, "бэйдайхэ"],
-  [/\bbeidehe\b/gi, "бэйдэхэ"],
-  [/\bbeidehi\b/gi, "бэйдэхэ"],
   [/\bwith ticket\b/gi, "тийзтэй"],
   [/\bwithout ticket\b/gi, "тийзгүй"],
   [/\bticketless\b/gi, "тийзгүй"],
@@ -413,7 +403,8 @@ export function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] 
   const matches: TripMatch[] = [];
   for (const trip of trips) {
     if (trip.status !== "active") continue;
-    if (landOnly && !wantsFlight && tripIsLandFlightCombo(trip)) continue;
+    if (wantsCombo && !tripIsLandFlightCombo(trip)) continue;
+    if (landOnly && !wantsFlight && !tripIsLandOnly(trip)) continue;
     if (landOnly && tripIsCruise(trip)) continue;
 
     const routeNorm = normText(trip.route_name);
@@ -634,10 +625,42 @@ export function queryWantsFlight(query: string): boolean {
 
 // Whether a trip is a land+flight combo based on its category or name.
 export function tripIsLandFlightCombo(trip: TravelTrip): boolean {
-  const cat = (trip.category || "").toLowerCase();
-  if (cat.includes("газар") && cat.includes("нислэг")) return true;
-  const name = normText(trip.route_name);
-  return /газар\s*\+\s*нислэг|газар\s+нислэг\s+хосолсон/.test(name);
+  const haystack = normText(
+    [
+      trip.category || "",
+      trip.route_name,
+      trip.source_description || "",
+      trip.notes || "",
+      ...getAliases(trip),
+    ].join(" "),
+  );
+  return (
+    haystack.includes("газар нислэг") ||
+    (haystack.includes("газар") &&
+      haystack.includes("нислэг") &&
+      haystack.includes("хосолсон"))
+  );
+}
+
+function tripIsLandOnly(trip: TravelTrip): boolean {
+  if (tripIsLandFlightCombo(trip)) return false;
+  const haystack = normText(
+    [
+      trip.category || "",
+      trip.route_name,
+      trip.source_description || "",
+      trip.notes || "",
+      ...getAliases(trip),
+    ].join(" "),
+  );
+  return (
+    haystack.includes("газрын аялал") ||
+    haystack.includes("газрын") ||
+    haystack.includes("газраар") ||
+    haystack.includes("автобус") ||
+    haystack.includes("галт тэрэг") ||
+    haystack.includes("нислэггүй")
+  );
 }
 
 export function tripIsCruise(trip: TravelTrip): boolean {
@@ -668,7 +691,8 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
 
   for (const trip of trips) {
     if (trip.status !== "active") continue;
-    if (landOnly && !wantsFlight && tripIsLandFlightCombo(trip)) continue;
+    if (wantsCombo && !tripIsLandFlightCombo(trip)) continue;
+    if (landOnly && !wantsFlight && !tripIsLandOnly(trip)) continue;
     if (landOnly && tripIsCruise(trip)) continue;
     const routeNorm = normText(trip.route_name);
     const routePhonetic = phoneticLatinText(trip.route_name);
