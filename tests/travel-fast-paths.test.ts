@@ -83,6 +83,54 @@ test("structured reply asks for clarification on shared city-only query", () => 
   assert.doesNotMatch(reply || "", /3,490,000|1,790,000/);
 });
 
+test("broad Beijing price question clarifies instead of picking one variant", () => {
+  const resolution = resolveTripFromUserMessage("Бээжин аялал хэд вэ?", [
+    trip({
+      id: "beijing-four-city",
+      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+      category: "Газрын аялал",
+    }),
+    trip({
+      id: "beidaihe-beijing-combo",
+      route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+      category: "Газар нислэг хосолсон",
+    }),
+    trip({
+      id: "beijing-naadam-ground",
+      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН-наадмын амралтаар явах газрын аялал",
+      category: "Газрын аялал",
+    }),
+  ]);
+
+  assert.equal(resolution.status, "ambiguous");
+});
+
+test("human correction not Beijing, the sea one picks the sea/beach variant", () => {
+  const resolution = resolveTripFromUserMessage("Бээжин биш, далайтай нь", [
+    trip({
+      id: "beijing-four-city",
+      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+      category: "Газрын аялал",
+    }),
+    trip({
+      id: "beidaihe-beijing-combo",
+      route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+      category: "Газар нислэг хосолсон",
+    }),
+    trip({
+      id: "beijing-naadam-ground",
+      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН-наадмын амралтаар явах газрын аялал",
+      category: "Газрын аялал",
+    }),
+  ]);
+
+  assert.equal(resolution.status, "verified");
+  assert.equal(
+    resolution.status === "verified" ? resolution.trip.id : null,
+    "beidaihe-beijing-combo",
+  );
+});
+
 test("program reply asks for clarification on shared city-only PDF request", () => {
   const result = buildTripProgramReply("Tokyo program pdf", [
     trip({

@@ -399,12 +399,14 @@ export function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] 
   const landOnly = queryWantsLandOnlyEnhanced(text);
   const wantsCombo = queryWantsLandFlightCombo(text);
   const wantsFlight = queryWantsFlight(text);
+  const wantsSeaBeach = queryWantsSeaBeach(text);
 
   const matches: TripMatch[] = [];
   for (const trip of trips) {
     if (trip.status !== "active") continue;
     if (wantsCombo && !tripIsLandFlightCombo(trip)) continue;
     if (landOnly && !wantsFlight && !tripIsLandOnly(trip)) continue;
+    if (wantsSeaBeach && !tripHasSeaBeach(trip)) continue;
     if (landOnly && tripIsCruise(trip)) continue;
 
     const routeNorm = normText(trip.route_name);
@@ -472,6 +474,7 @@ export function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] 
       else intentBoost -= 140;
     }
     if (wantsFlight && isCombo) intentBoost += 35;
+    if (wantsSeaBeach && tripHasSeaBeach(trip)) intentBoost += 180;
 
     const score =
       exactRouteHit * 100 +
@@ -514,6 +517,19 @@ export function resolveTripFromUserMessage(
   }
 
   const [best, second] = matches;
+  const hasSpecificTripPreference =
+    queryWantsLandOnlyEnhanced(text) ||
+    queryWantsLandFlightCombo(text) ||
+    queryWantsFlight(text) ||
+    queryWantsSeaBeach(text) ||
+    hasDisambiguatingModifier(text);
+  const routeOnlyQuestion =
+    !hasSpecificTripPreference &&
+    routeContentTokens(text).length === 1 &&
+    matches.length > 1;
+  if (routeOnlyQuestion) {
+    return { status: "ambiguous", trip: null, candidates: matches.slice(0, 3).map((match) => match.trip) };
+  }
   if (
     second &&
     best.score - second.score <= 5 &&
@@ -623,6 +639,87 @@ export function queryWantsFlight(query: string): boolean {
   return /нислэг|онгоц|хосолсон|нислэгтэй/i.test(query);
 }
 
+export function queryWantsSeaBeach(query: string): boolean {
+  const normalized = normText(query);
+  return (
+    normalized.includes("далай") ||
+    normalized.includes("далайн") ||
+    normalized.includes("далайтай") ||
+    normalized.includes("тэнгис") ||
+    normalized.includes("тэнгисийн") ||
+    normalized.includes("эрэг") ||
+    normalized.includes("beach") ||
+    normalized.includes("sea") ||
+    normalized.includes("seaside")
+  );
+}
+
+function tripHasSeaBeach(trip: TravelTrip): boolean {
+  const haystack = normText(
+    [
+      trip.category || "",
+      trip.route_name,
+      trip.source_description || "",
+      trip.notes || "",
+      ...getAliases(trip),
+    ].join(" "),
+  );
+  return (
+    haystack.includes("далай") ||
+    haystack.includes("далайн") ||
+    haystack.includes("тэнгис") ||
+    haystack.includes("тэнгисийн") ||
+    haystack.includes("эрэг") ||
+    haystack.includes("beach") ||
+    haystack.includes("sea") ||
+    haystack.includes("seaside")
+  );
+}
+
+function hasDisambiguatingModifier(query: string): boolean {
+  const normalized = normText(query);
+  return (
+    normalized.includes("наадам") ||
+    normalized.includes("наадмын") ||
+    normalized.includes("парк") ||
+    normalized.includes("усан") ||
+    normalized.includes("shopping") ||
+    normalized.includes("дэлгүүр") ||
+    normalized.includes("хямд") ||
+    normalized.includes("хамгийн") ||
+    normalized.includes("тусгай")
+  );
+}
+
+function routeContentTokens(query: string): string[] {
+  const filler = new Set([
+    "хэд",
+    "юу",
+    "вэ",
+    "уу",
+    "байна",
+    "байгаа",
+    "бол",
+    "болно",
+    "талаар",
+    "мэдээлэл",
+    "мэдээ",
+    "авах",
+    "авъя",
+    "авя",
+    "awy",
+    "medeelel",
+    "medee",
+    "une",
+    "hed",
+    "ve",
+    "uu",
+    "baina",
+    "yu",
+  ]);
+  return unique(keywordTokens(query).filter((token) => !filler.has(token)));
+}
+
 // Whether a trip is a land+flight combo based on its category or name.
 export function tripIsLandFlightCombo(trip: TravelTrip): boolean {
   const haystack = normText(
@@ -684,6 +781,7 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
   const landOnly = queryWantsLandOnlyEnhanced(text);
   const wantsCombo = queryWantsLandFlightCombo(text);
   const wantsFlight = queryWantsFlight(text);
+  const wantsSeaBeach = queryWantsSeaBeach(text);
   const hasBrochure = options?.hasBrochureIntent ?? false;
   let best: TravelTrip | null = null;
   let bestScore = 0;
@@ -693,6 +791,7 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
     if (trip.status !== "active") continue;
     if (wantsCombo && !tripIsLandFlightCombo(trip)) continue;
     if (landOnly && !wantsFlight && !tripIsLandOnly(trip)) continue;
+    if (wantsSeaBeach && !tripHasSeaBeach(trip)) continue;
     if (landOnly && tripIsCruise(trip)) continue;
     const routeNorm = normText(trip.route_name);
     const routePhonetic = phoneticLatinText(trip.route_name);
@@ -731,6 +830,7 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
     if (wantsCombo && isCombo) score += 180;
     if (wantsCombo && !isCombo) score -= 180;
     if (wantsFlight && isCombo) score += 50;
+    if (wantsSeaBeach && tripHasSeaBeach(trip)) score += 180;
     if (landOnly && tripCat.includes("газрын") && tripCat.includes("аялал")) score += 20;
     if (landOnly && isCombo && !wantsFlight) score -= 50;
 
