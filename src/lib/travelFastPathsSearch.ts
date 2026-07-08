@@ -174,6 +174,30 @@ export function normText(text: string) {
     .trim();
 }
 
+/**
+ * True when a free-text admin/AI-extraction field is actually an internal QA
+ * placeholder ("шинэ мэдээлэл уншигдсан, баталгаажуулах шаардлагатай") rather
+ * than real customer-facing content. Any reply builder rendering duration_text,
+ * notes, or source_description verbatim must filter through this first —
+ * otherwise an unverified admin sentinel gets read straight to a customer.
+ * Kept in this dependency-free module (no DB/env imports) so every fast-path
+ * file and the AI reply path can use the exact same check without pulling in
+ * the database layer.
+ */
+export function isGenericConfirmationText(value: string | null | undefined): boolean {
+  const normalized = (value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!normalized) return true;
+  return (
+    normalized.includes("файлнаас шинэ аяллын мэдээлэл уншигдсан") ||
+    normalized.includes("шинэ аяллын мэдээлэл уншигдсан") ||
+    normalized.includes("баталгаажуулалт шаардлагатай") ||
+    normalized.includes("баталгаажуулах шаардлагатай") ||
+    (normalized.includes("new trip") && normalized.includes("confirmation")) ||
+    (normalized.includes("file") && normalized.includes("confirmation")) ||
+    (normalized.includes("file") && normalized.includes("review"))
+  );
+}
+
 const CYRILLIC_TO_LATIN: Record<string, string> = {
   а: "a",
   б: "b",

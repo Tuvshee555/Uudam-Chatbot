@@ -83,6 +83,19 @@ test("structured reply asks for clarification on shared city-only query", () => 
   assert.doesNotMatch(reply || "", /3,490,000|1,790,000/);
 });
 
+test("trip info reply never leaks an internal duration QA sentinel", () => {
+  const reply = buildSeatsReply("Тэнгэрийн хаалга суудал бий юу?", [
+    trip({
+      id: "tengeriin-khaalga-unverified-duration",
+      duration_text: "Нийт хугацаа тодорхойгүй, баталгаажуулах шаардлагатай",
+    }),
+  ]);
+
+  assert.ok(reply);
+  assert.doesNotMatch(reply as string, /баталгаажуулах шаардлагатай/);
+  assert.doesNotMatch(reply as string, /тодорхойгүй/);
+});
+
 test("broad Beijing price question clarifies instead of picking one variant", () => {
   const resolution = resolveTripFromUserMessage("Бээжин аялал хэд вэ?", [
     trip({

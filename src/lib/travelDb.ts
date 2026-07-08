@@ -1477,19 +1477,12 @@ export function isReasonableSeats(value: number | null | undefined) {
   return value == null || (Number.isFinite(value) && value >= 0 && value <= 10_000);
 }
 
-export function isGenericConfirmationText(value: string | null | undefined): boolean {
-  const normalized = normalizeLookupText(value || "");
-  if (!normalized) return true;
-  return (
-    normalized.includes("файлнаас шинэ аяллын мэдээлэл уншигдсан") ||
-    normalized.includes("шинэ аяллын мэдээлэл уншигдсан") ||
-    normalized.includes("баталгаажуулалт шаардлагатай") ||
-    normalized.includes("баталгаажуулах шаардлагатай") ||
-    (normalized.includes("new trip") && normalized.includes("confirmation")) ||
-    (normalized.includes("file") && normalized.includes("confirmation")) ||
-    (normalized.includes("file") && normalized.includes("review"))
-  );
-}
+// Re-exported so existing importers keep working; the single source of truth
+// now lives in travelFastPathsSearch.ts (dependency-free, no DB/env imports)
+// so fast-path reply builders can use the same check without pulling in the
+// database layer.
+export { isGenericConfirmationText } from "./travelFastPathsSearch";
+import { isGenericConfirmationText } from "./travelFastPathsSearch";
 
 export function isOptionalAddOnCostConflict(value: string): boolean {
   const normalized = normalizeLookupText(value);
@@ -1756,7 +1749,9 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
       }).join("; ");
       details.push(`Өрөөний үнэ: ${rpText}`);
     }
-    const impNotes = Array.isArray(extra.important_notes) ? (extra.important_notes as string[]).filter(Boolean) : [];
+    const impNotes = Array.isArray(extra.important_notes)
+      ? (extra.important_notes as string[]).filter(Boolean).filter((note) => !isGenericConfirmationText(note))
+      : [];
     if (impNotes.length > 0) details.push(`Чухал тэмдэглэл: ${impNotes.join(" | ")}`);
     // Booking terms — lets the bot answer deposit/payment/documents/visa/
     // cancellation questions from stored data instead of REFER. Empty fields
@@ -1794,17 +1789,20 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
       details.push(`Status: ${trip.status}`);
     }
     if (trip.hotel) details.push(`Hotel: ${trip.hotel}`);
-    if (trip.notes) details.push(`Notes: ${trip.notes}`);
+    if (trip.notes && !isGenericConfirmationText(trip.notes)) details.push(`Notes: ${trip.notes}`);
 
     return {
       name: trip.route_name,
-      duration: trip.duration_text || "",
+      duration: isGenericConfirmationText(trip.duration_text) ? "" : trip.duration_text || "",
       price:
         typeof trip.adult_price === "number"
           ? trip.adult_price
           : ("NEEDS_MANUAL_FIX" as ProgramPrice),
       target: trip.operator_name,
-      description: [trip.source_description, ...details].filter(Boolean).join(" | "),
+      description: [trip.source_description, ...details]
+        .filter(Boolean)
+        .filter((value) => !isGenericConfirmationText(value))
+        .join(" | "),
     };
   });
 

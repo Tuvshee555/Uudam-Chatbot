@@ -22,6 +22,7 @@
 
 import { askGemini } from "./gemini";
 import { buildTemporalPromptContext } from "./travelDates";
+import { isGenericConfirmationText } from "./travelFastPathsSearch";
 import { classifyError, logWarn, recordCounter } from "./observability";
 
 type ReasoningHistoryMessage = { role: "user" | "assistant"; text: string };
@@ -41,7 +42,10 @@ export function buildTripIndexLines(
   for (const trip of trips) {
     const name = (trip.route_name || "").trim();
     if (!name) continue;
-    const extras = [trip.category, trip.duration_text]
+    const extras = [
+      trip.category,
+      isGenericConfirmationText(trip.duration_text) ? "" : trip.duration_text,
+    ]
       .map((value) => (value || "").trim())
       .filter(Boolean)
       .join(", ");

@@ -10,6 +10,7 @@ import {
   getAliases,
   getTripBrochureAsset,
   hasProgramIntent,
+  isGenericConfirmationText,
   keywordTokens,
   normText,
   queryWantsFlight,
@@ -155,7 +156,9 @@ function formatPrice(amount: number | null | undefined): string {
 
 function buildTripSummaryLines(trip: TravelTrip): string {
   const lines: string[] = [];
-  if (trip.duration_text) lines.push(`⏱ ${trip.duration_text}`);
+  if (trip.duration_text && !isGenericConfirmationText(trip.duration_text)) {
+    lines.push(`⏱ ${trip.duration_text}`);
+  }
   const adult = formatPrice(trip.adult_price);
   const child = formatPrice(trip.child_price);
   if (adult && child) lines.push(`💰 Насанд хүрэгч: ${adult} | Хүүхэд: ${child}`);

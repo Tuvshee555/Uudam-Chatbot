@@ -21,6 +21,7 @@ import {
   getStructuredDiscounts,
   getStructuredPriceGroups,
   getTripSearchHaystack,
+  isGenericConfirmationText,
   keywordTokens,
   matchScoreForPriceKind,
   normText,
@@ -71,6 +72,16 @@ import {
   parseLooseMonthDays,
   priceGroupMatchesTicketPreference,
 } from "./travelFastPathsPricing";
+
+/**
+ * duration_text is free text an admin/AI-extraction pass can leave as an
+ * internal QA sentinel ("... тодорхойгүй, баталгаажуулах шаардлагатай")
+ * instead of an actual duration. Never echo that straight to a customer.
+ */
+function safeDurationText(durationText: string | null | undefined): string {
+  if (!durationText || isGenericConfirmationText(durationText)) return "";
+  return durationText;
+}
 
 export function hasDiscountIntent(text: string): boolean {
   const normalized = normText(text);
@@ -209,8 +220,9 @@ function buildTripInfoReply(rawTrip: TravelTrip, now = new Date()) {
   const trip = withFutureDepartureDates(rawTrip, now);
   const lines = [`✈️ ${formatRouteName(trip.route_name)}`, ""];
 
-  if (trip.duration_text) {
-    lines.push(`🗓 Хугацаа: ${trip.duration_text}`, "");
+  const infoDuration = safeDurationText(trip.duration_text);
+  if (infoDuration) {
+    lines.push(`🗓 Хугацаа: ${infoDuration}`, "");
   }
 
   lines.push(formatTripBasePricePremium(trip));
@@ -286,7 +298,7 @@ export function buildCompareReply(text: string, trips: TravelTrip[]): string | n
     const price = formatMoney(trip.adult_price, trip.currency);
     lines.push(`▶ ${trip.route_name}`);
     lines.push(`Үнэ (том хүн): ${price || "тодорхойгүй"}`);
-    lines.push(`Хугацаа: ${trip.duration_text || "тодорхойгүй"}`);
+    lines.push(`Хугацаа: ${safeDurationText(trip.duration_text) || "тодорхойгүй"}`);
     lines.push(
       `Хоол: ${
         trip.has_food === true ? "Тийм" : trip.has_food === false ? "Үгүй" : "тодорхойгүй"
@@ -446,7 +458,8 @@ function formatCombinedDatePriceReply(
       : `Тийм ээ. ${dateLabel}-нд гарах ${askedPrice}-ийн аялал байна:`;
     const blocks = exactMatches.map((match) => {
       const lines = [`✈️ ${match.trip.route_name}`];
-      if (match.trip.duration_text) lines.push(`🗓 Хугацаа: ${match.trip.duration_text}`);
+      const blockDuration = safeDurationText(match.trip.duration_text);
+      if (blockDuration) lines.push(`🗓 Хугацаа: ${blockDuration}`);
       for (const field of getCombinedMatchPriceFields(match)) {
         const formatted = formatMoney(field.value, match.trip.currency || "MNT");
         if (formatted) lines.push(`💰 ${field.label}: ${formatted}`);
@@ -464,7 +477,8 @@ function formatCombinedDatePriceReply(
     `${dateLabel}-нд ${askedPrice}-өөр яг таарах аялал олдсонгүй. Харин ${dateLabel}-нд гарах ойролцоо үнэтэй аяллууд байна:`,
   ];
   for (const match of closeMatches) {
-    const duration = match.trip.duration_text ? ` • ${match.trip.duration_text}` : "";
+    const closeDuration = safeDurationText(match.trip.duration_text);
+    const duration = closeDuration ? ` • ${closeDuration}` : "";
     const priceText = formatMoney(match.matchedPrice, match.trip.currency || "MNT");
     lines.push(`• ${match.trip.route_name}${duration}${priceText ? ` • ${priceText}` : ""}`);
   }
@@ -608,7 +622,7 @@ export function buildStructuredTripReply(
   }
 
   if (askedDuration) {
-    lines.push(`🗓 Хугацаа: ${best.duration_text || "Хугацааны мэдээлэл алга байна."}`);
+    lines.push(`🗓 Хугацаа: ${safeDurationText(best.duration_text) || "Хугацааны мэдээлэл алга байна."}`);
   }
 
   // Detect if user asked about a specific month only (without a specific day)
@@ -721,7 +735,7 @@ export function buildStructuredTripReply(
     !askedDirectFlight &&
     askedExistence
   ) {
-    lines.push(`🗓 Хугацаа: ${best.duration_text || "Мэдээлэл алга байна."}`);
+    lines.push(`🗓 Хугацаа: ${safeDurationText(best.duration_text) || "Мэдээлэл алга байна."}`);
     lines.push(formatTripBasePricePremium(best));
     if (best.departure_dates.length > 0) {
       lines.push(`📅 Гарах өдрүүд: ${formatDepartureDates(best)}`);
@@ -729,11 +743,11 @@ export function buildStructuredTripReply(
   }
 
   if (askedDirectFlight && !askedDuration) {
-    lines.push(`🗓 Хугацаа: ${best.duration_text || "Хугацааны мэдээлэл алга байна."}`);
+    lines.push(`🗓 Хугацаа: ${safeDurationText(best.duration_text) || "Хугацааны мэдээлэл алга байна."}`);
   }
 
   if (lines.length === 1) {
-    lines.push(`🗓 Хугацаа: ${best.duration_text || "Мэдээлэл алга байна."}`);
+    lines.push(`🗓 Хугацаа: ${safeDurationText(best.duration_text) || "Мэдээлэл алга байна."}`);
     lines.push(formatTripBasePricePremium(best));
   }
 
