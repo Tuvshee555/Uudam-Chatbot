@@ -294,7 +294,10 @@ export function CustomerDocumentsTab({
   const loadSenders = useCallback(async () => {
     setSendersLoading(true);
     try {
-      const res = await apiFetch("/api/admin/customer-documents?group=senders");
+      const params = new URLSearchParams({ group: "senders" });
+      if (dateFrom) params.set("from", dateFrom);
+      if (dateTo) params.set("to", dateTo);
+      const res = await apiFetch(`/api/admin/customer-documents?${params.toString()}`);
       const json = (await res.json().catch(() => ({}))) as {
         senders?: DocumentSenderSummary[];
         error?: string;
@@ -306,7 +309,7 @@ export function CustomerDocumentsTab({
     } finally {
       setSendersLoading(false);
     }
-  }, [apiFetch, toast]);
+  }, [apiFetch, dateFrom, dateTo, toast]);
 
   const loadDocuments = useCallback(async () => {
     setLoading(true);
@@ -476,37 +479,35 @@ export function CustomerDocumentsTab({
               </button>
             </div>
             {view === "all" && (
-              <>
-                <Select
-                  value={category}
-                  onChange={(e) =>
-                    setCategory(e.target.value as SimpleDocumentCategory | "all")
-                  }
-                  className="w-36"
-                >
-                  <option value="all">Бүх зураг</option>
-                  {SIMPLE_CATEGORY_ORDER.map((key) => (
-                    <option key={key} value={key}>
-                      {SIMPLE_CATEGORY_ICONS[key]} {SIMPLE_CATEGORY_LABELS[key]}
-                    </option>
-                  ))}
-                </Select>
-                <Input
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => setDateFrom(e.target.value)}
-                  className="w-36"
-                  aria-label="Эхлэх өдөр"
-                />
-                <Input
-                  type="date"
-                  value={dateTo}
-                  onChange={(e) => setDateTo(e.target.value)}
-                  className="w-36"
-                  aria-label="Дуусах өдөр"
-                />
-              </>
+              <Select
+                value={category}
+                onChange={(e) =>
+                  setCategory(e.target.value as SimpleDocumentCategory | "all")
+                }
+                className="w-36"
+              >
+                <option value="all">Бүх зураг</option>
+                {SIMPLE_CATEGORY_ORDER.map((key) => (
+                  <option key={key} value={key}>
+                    {SIMPLE_CATEGORY_ICONS[key]} {SIMPLE_CATEGORY_LABELS[key]}
+                  </option>
+                ))}
+              </Select>
             )}
+            <Input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="w-36"
+              aria-label="Эхлэх өдөр"
+            />
+            <Input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="w-36"
+              aria-label="Дуусах өдөр"
+            />
             <button
               type="button"
               onClick={() => (showPeopleList ? void loadSenders() : void loadDocuments())}

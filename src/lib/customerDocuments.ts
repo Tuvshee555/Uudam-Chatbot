@@ -969,10 +969,23 @@ export type DocumentSenderSummary = {
  * Person-first view: who has sent documents, what kinds, and how many still
  * need review — so staff browse by customer instead of scrolling a flat feed.
  */
-export async function listDocumentSenders(): Promise<DocumentSenderSummary[]> {
+export async function listDocumentSenders(options?: {
+  dateFrom?: string;
+  dateTo?: string;
+}): Promise<DocumentSenderSummary[]> {
   const ready = await ensureTravelSchema();
   if (!ready) return [];
   await applySensitiveRetentionPolicy();
+  const where: string[] = [`d.retention_hidden_at IS NULL`];
+  const values: unknown[] = [];
+  if (options?.dateFrom?.trim()) {
+    values.push(options.dateFrom.trim());
+    where.push(`d.created_at >= $${values.length}::date`);
+  }
+  if (options?.dateTo?.trim()) {
+    values.push(options.dateTo.trim());
+    where.push(`d.created_at < ($${values.length}::date + INTERVAL '1 day')`);
+  }
   const result = await queryNeon<{
     sender_id: string;
     platform: string;
@@ -1003,11 +1016,12 @@ export async function listDocumentSenders(): Promise<DocumentSenderSummary[]> {
         COUNT(*) FILTER (WHERE d.category = 'other')::text AS others
       FROM travel_customer_documents d
       LEFT JOIN travel_senders s ON s.sender_id = d.sender_id
-      WHERE d.retention_hidden_at IS NULL
+      WHERE ${where.join(" AND ")}
       GROUP BY d.sender_id
       ORDER BY MAX(d.created_at) DESC
       LIMIT 200
     `,
+    values,
   );
   return (result?.rows || []).map((row) => ({
     sender_id: row.sender_id,

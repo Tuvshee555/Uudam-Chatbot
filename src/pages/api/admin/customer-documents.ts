@@ -49,7 +49,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(200).json({ ok: true, stats });
       }
       if (req.query.group === "senders") {
-        const senders = await listDocumentSenders();
+        const dateFrom = typeof req.query.from === "string" ? req.query.from : undefined;
+        const dateTo = typeof req.query.to === "string" ? req.query.to : undefined;
+        const senders = await listDocumentSenders({ dateFrom, dateTo });
         return res.status(200).json({ ok: true, senders });
       }
       const senderId =
