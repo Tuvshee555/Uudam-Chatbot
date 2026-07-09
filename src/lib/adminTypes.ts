@@ -408,6 +408,10 @@ export type CustomerDocument = {
   extracted_json: Record<string, unknown>;
   matched_trip_id: string | null;
   matched_payment_id: number | null;
+  matched_payment_status?: "pending" | "paid" | "expired" | "cancelled" | null;
+  matched_payment_amount?: number | null;
+  matched_payment_customer_name?: string | null;
+  matched_payment_trip_name?: string | null;
   duplicate_of_id: number | null;
   confidence: number;
   auto_action: string;

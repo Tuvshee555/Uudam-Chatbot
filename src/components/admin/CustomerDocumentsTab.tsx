@@ -57,6 +57,35 @@ function tripMatchName(doc: CustomerDocument): string {
   return compactValue((match as Record<string, unknown>).route_name);
 }
 
+function documentSearchText(doc: CustomerDocument): string {
+  const rows = extractedRows(doc).flatMap((row) => [row.label, row.value]);
+  return [
+    doc.sender_id,
+    doc.matched_trip_id,
+    doc.matched_payment_id,
+    doc.matched_payment_status,
+    doc.matched_payment_amount,
+    doc.matched_payment_customer_name,
+    doc.matched_payment_trip_name,
+    tripMatchName(doc),
+    ...rows,
+  ].map(compactValue).filter(Boolean).join(" ").toLowerCase();
+}
+
+const PAYMENT_STATUS_LABELS = {
+  pending: "Төлбөр хүлээгдэж байна",
+  paid: "Төлсөн",
+  expired: "Хугацаа дууссан",
+  cancelled: "Цуцлагдсан",
+} as const;
+
+const PAYMENT_STATUS_TONE = {
+  pending: "warning",
+  paid: "success",
+  expired: "neutral",
+  cancelled: "danger",
+} as const;
+
 function extractedRows(doc: CustomerDocument) {
   const data = doc.extracted_json || {};
   const rows: Array<{ label: string; value: string }> = [];
@@ -177,15 +206,19 @@ function DocumentCard({
   busyId,
   onEdit,
   onDelete,
+  onRestore,
   onOpenPerson,
   showSender,
+  showDeleted,
 }: {
   doc: CustomerDocument;
   busyId: number | null;
   onEdit: (doc: CustomerDocument) => void;
   onDelete: (doc: CustomerDocument) => void;
+  onRestore: (doc: CustomerDocument) => void;
   onOpenPerson?: (senderId: string) => void;
   showSender: boolean;
+  showDeleted: boolean;
 }) {
   const rows = extractedRows(doc);
   const imageUrl = doc.stored_url || doc.source_url;
@@ -217,6 +250,14 @@ function DocumentCard({
             {doc.matched_payment_id && (
               <Badge tone="success">Төлбөр #{doc.matched_payment_id}</Badge>
             )}
+            {doc.matched_payment_status && (
+              <Badge tone={PAYMENT_STATUS_TONE[doc.matched_payment_status]}>
+                {PAYMENT_STATUS_LABELS[doc.matched_payment_status]}
+                {typeof doc.matched_payment_amount === "number"
+                  ? ` · ${doc.matched_payment_amount.toLocaleString()}₮`
+                  : ""}
+              </Badge>
+            )}
             <span className="text-xs text-ink-subtle">{formatTime(doc.created_at)}</span>
           </div>
           {showSender && (
@@ -246,22 +287,35 @@ function DocumentCard({
             <Button
               size="sm"
               variant="secondary"
-              disabled={busyId === doc.id}
+              disabled={busyId === doc.id || showDeleted}
               onClick={() => onEdit(doc)}
             >
               <Icons.edit size={14} />
               Засах
             </Button>
-            <Button
-              size="sm"
-              variant="danger"
-              disabled={busyId === doc.id}
-              loading={busyId === doc.id}
-              onClick={() => onDelete(doc)}
-            >
-              <Icons.trash size={14} />
-              Устгах
-            </Button>
+            {showDeleted ? (
+              <Button
+                size="sm"
+                variant="success"
+                disabled={busyId === doc.id}
+                loading={busyId === doc.id}
+                onClick={() => onRestore(doc)}
+              >
+                <Icons.refresh size={14} />
+                Сэргээх
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="danger"
+                disabled={busyId === doc.id}
+                loading={busyId === doc.id}
+                onClick={() => onDelete(doc)}
+              >
+                <Icons.trash size={14} />
+                Устгах
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -288,6 +342,7 @@ export function CustomerDocumentsTab({
   const [category, setCategory] = useState<SimpleDocumentCategory | "all">("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [showDeleted, setShowDeleted] = useState(false);
   const [editing, setEditing] = useState<CustomerDocument | null>(null);
   const [editFields, setEditFields] = useState<EditFields>(() => editFieldsFromDocument({ extracted_json: {} } as CustomerDocument));
 
@@ -297,6 +352,7 @@ export function CustomerDocumentsTab({
       const params = new URLSearchParams({ group: "senders" });
       if (dateFrom) params.set("from", dateFrom);
       if (dateTo) params.set("to", dateTo);
+      if (showDeleted) params.set("deleted", "true");
       const res = await apiFetch(`/api/admin/customer-documents?${params.toString()}`);
       const json = (await res.json().catch(() => ({}))) as {
         senders?: DocumentSenderSummary[];
@@ -309,7 +365,7 @@ export function CustomerDocumentsTab({
     } finally {
       setSendersLoading(false);
     }
-  }, [apiFetch, dateFrom, dateTo, toast]);
+  }, [apiFetch, dateFrom, dateTo, showDeleted, toast]);
 
   const loadDocuments = useCallback(async () => {
     setLoading(true);
@@ -321,6 +377,7 @@ export function CustomerDocumentsTab({
       );
       if (dateFrom) params.set("from", dateFrom);
       if (dateTo) params.set("to", dateTo);
+      if (showDeleted) params.set("deleted", "true");
       const res = await apiFetch(`/api/admin/customer-documents?${params.toString()}`);
       const json = (await res.json().catch(() => ({}))) as {
         documents?: CustomerDocument[];
@@ -333,7 +390,7 @@ export function CustomerDocumentsTab({
     } finally {
       setLoading(false);
     }
-  }, [apiFetch, dateFrom, dateTo, selectedSender, toast]);
+  }, [apiFetch, dateFrom, dateTo, selectedSender, showDeleted, toast]);
 
   useEffect(() => {
     if (view === "people" && !selectedSender) {
@@ -349,13 +406,22 @@ export function CustomerDocumentsTab({
     return senders.filter(
       (sender) =>
         sender.display_name.toLowerCase().includes(query) ||
-        sender.sender_id.includes(query),
+        sender.sender_id.includes(query) ||
+        String(sender.total).includes(query) ||
+        Object.values(sender.by_category).some((count) => String(count).includes(query)),
     );
   }, [search, senders]);
 
   const visibleDocuments = useMemo(
-    () => documents.filter((doc) => category === "all" || simpleCategory(doc.category) === category),
-    [category, documents],
+    () => {
+      const query = search.trim().toLowerCase();
+      return documents.filter((doc) => {
+        if (category !== "all" && simpleCategory(doc.category) !== category) return false;
+        if (!query) return true;
+        return documentSearchText(doc).includes(query);
+      });
+    },
+    [category, documents, search],
   );
 
   const documentsByCategory = useMemo(() => {
@@ -386,6 +452,25 @@ export function CustomerDocumentsTab({
       toast.success("Зураг устгагдлаа.");
     } catch {
       toast.error("Зураг устгаж чадсангүй.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function restoreDocument(doc: CustomerDocument) {
+    setBusyId(doc.id);
+    try {
+      const res = await apiFetch("/api/admin/customer-documents", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: doc.id, restore: true }),
+      });
+      if (!res.ok) throw new Error("failed");
+      setDocuments((prev) => prev.filter((item) => item.id !== doc.id));
+      onChanged?.();
+      toast.success("Зураг сэргээгдлээ.");
+    } catch {
+      toast.error("Зураг сэргээж чадсангүй.");
     } finally {
       setBusyId(null);
     }
@@ -510,6 +595,18 @@ export function CustomerDocumentsTab({
             />
             <button
               type="button"
+              onClick={() => setShowDeleted((value) => !value)}
+              className={cx(
+                "h-10 rounded-md border px-3 text-xs font-semibold transition-colors",
+                showDeleted
+                  ? "border-danger bg-danger text-white"
+                  : "border-line-strong bg-surface text-ink-muted hover:border-brand hover:text-brand",
+              )}
+            >
+              Устгасан
+            </button>
+            <button
+              type="button"
               onClick={() => (showPeopleList ? void loadSenders() : void loadDocuments())}
               aria-label="Шинэчлэх"
               className="flex h-10 w-10 items-center justify-center rounded-md border border-line-strong text-ink-muted hover:border-brand hover:text-brand"
@@ -520,13 +617,18 @@ export function CustomerDocumentsTab({
         </div>
       </Card>
 
+      <Input
+        placeholder={
+          view === "people" && !selectedSender
+            ? "Нэр, ID, зурагны тоогоор хайх..."
+            : "Нэр, утас, дүн, журнал №, паспорт, аялал, ID-аар хайх..."
+        }
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+
       {showPeopleList && (
         <>
-          <Input
-            placeholder="Нэр эсвэл ID-гаар хайх…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
           {sendersLoading && senders.length === 0 ? (
             <div className="flex justify-center py-8">
               <Spinner className="h-6 w-6 text-brand" />
@@ -634,7 +736,9 @@ export function CustomerDocumentsTab({
                         busyId={busyId}
                         onEdit={openEdit}
                         onDelete={(target) => void deleteDocument(target)}
+                        onRestore={(target) => void restoreDocument(target)}
                         showSender={false}
+                        showDeleted={showDeleted}
                       />
                     ))}
                   </div>
@@ -664,8 +768,10 @@ export function CustomerDocumentsTab({
                   busyId={busyId}
                   onEdit={openEdit}
                   onDelete={(target) => void deleteDocument(target)}
+                  onRestore={(target) => void restoreDocument(target)}
                   onOpenPerson={openPerson}
                   showSender
+                  showDeleted={showDeleted}
                 />
               ))}
             </div>

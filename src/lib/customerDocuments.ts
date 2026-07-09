@@ -46,6 +46,10 @@ export type CustomerDocument = {
   extracted_json: Record<string, unknown>;
   matched_trip_id: string | null;
   matched_payment_id: number | null;
+  matched_payment_status?: "pending" | "paid" | "expired" | "cancelled" | null;
+  matched_payment_amount?: number | null;
+  matched_payment_customer_name?: string | null;
+  matched_payment_trip_name?: string | null;
   duplicate_of_id: number | null;
   confidence: number;
   auto_action: string;
@@ -678,6 +682,7 @@ export async function listCustomerDocuments(options?: {
   category?: CustomerDocumentCategory | "all";
   dateFrom?: string;
   dateTo?: string;
+  deleted?: boolean;
   limit?: number;
 }) {
   const ready = await ensureTravelSchema();
@@ -685,35 +690,41 @@ export async function listCustomerDocuments(options?: {
   await applySensitiveRetentionPolicy();
   const where: string[] = [];
   const values: unknown[] = [];
-  where.push(`retention_hidden_at IS NULL`);
+  where.push(options?.deleted ? `retention_hidden_at IS NOT NULL` : `retention_hidden_at IS NULL`);
   if (options?.senderId?.trim()) {
     values.push(options.senderId.trim());
-    where.push(`sender_id = $${values.length}`);
+    where.push(`d.sender_id = $${values.length}`);
   }
   if (options?.status && options.status !== "all") {
     values.push(normalizeStatus(options.status));
-    where.push(`status = $${values.length}`);
+    where.push(`d.status = $${values.length}`);
   }
   if (options?.category && options.category !== "all") {
     values.push(options.category);
-    where.push(`category = $${values.length}`);
+    where.push(`d.category = $${values.length}`);
   }
   if (options?.dateFrom?.trim()) {
     values.push(options.dateFrom.trim());
-    where.push(`created_at >= $${values.length}::date`);
+    where.push(`d.created_at >= $${values.length}::date`);
   }
   if (options?.dateTo?.trim()) {
     values.push(options.dateTo.trim());
-    where.push(`created_at < ($${values.length}::date + INTERVAL '1 day')`);
+    where.push(`d.created_at < ($${values.length}::date + INTERVAL '1 day')`);
   }
   const limit = Math.min(Math.max(Math.trunc(options?.limit || 100), 1), 300);
   values.push(limit);
   const result = await queryNeon<CustomerDocument>(
     `
-      SELECT *
-      FROM travel_customer_documents
+      SELECT
+        d.*,
+        p.status AS matched_payment_status,
+        p.amount AS matched_payment_amount,
+        p.customer_name AS matched_payment_customer_name,
+        p.trip_name AS matched_payment_trip_name
+      FROM travel_customer_documents d
+      LEFT JOIN travel_payments p ON p.id = d.matched_payment_id
       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-      ORDER BY created_at DESC
+      ORDER BY d.created_at DESC
       LIMIT $${values.length}
     `,
     values,
@@ -750,6 +761,39 @@ export async function deleteCustomerDocument(id: number, actor = "admin") {
       actor,
       before: current,
       after: { retention_hidden_at: "now", status: "ignored" },
+    });
+  }
+  return ok;
+}
+
+export async function restoreCustomerDocument(id: number, actor = "admin") {
+  const ready = await ensureTravelSchema();
+  if (!ready) return false;
+  const before = await queryNeon<CustomerDocument>(
+    `SELECT * FROM travel_customer_documents WHERE id = $1 LIMIT 1`,
+    [id],
+  );
+  const current = before?.rows?.[0];
+  if (!current) return false;
+  const result = await queryNeon(
+    `
+      UPDATE travel_customer_documents
+      SET
+        retention_hidden_at = NULL,
+        status = CASE WHEN status = 'ignored' THEN 'needs_review' ELSE status END,
+        updated_at = NOW()
+      WHERE id = $1
+    `,
+    [id],
+  );
+  const ok = (result?.rowCount ?? 0) > 0;
+  if (ok) {
+    await writeDocumentAudit({
+      documentId: id,
+      action: "restored_to_inbox",
+      actor,
+      before: current,
+      after: { retention_hidden_at: null },
     });
   }
   return ok;
@@ -972,11 +1016,12 @@ export type DocumentSenderSummary = {
 export async function listDocumentSenders(options?: {
   dateFrom?: string;
   dateTo?: string;
+  deleted?: boolean;
 }): Promise<DocumentSenderSummary[]> {
   const ready = await ensureTravelSchema();
   if (!ready) return [];
   await applySensitiveRetentionPolicy();
-  const where: string[] = [`d.retention_hidden_at IS NULL`];
+  const where: string[] = [options?.deleted ? `d.retention_hidden_at IS NOT NULL` : `d.retention_hidden_at IS NULL`];
   const values: unknown[] = [];
   if (options?.dateFrom?.trim()) {
     values.push(options.dateFrom.trim());

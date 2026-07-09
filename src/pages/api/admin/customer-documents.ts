@@ -5,6 +5,7 @@ import {
   getCustomerDocumentStats,
   listCustomerDocuments,
   listDocumentSenders,
+  restoreCustomerDocument,
   updateCustomerDocument,
   updateCustomerDocumentStatus,
   type CustomerDocumentCategory,
@@ -51,7 +52,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (req.query.group === "senders") {
         const dateFrom = typeof req.query.from === "string" ? req.query.from : undefined;
         const dateTo = typeof req.query.to === "string" ? req.query.to : undefined;
-        const senders = await listDocumentSenders({ dateFrom, dateTo });
+        const deleted = req.query.deleted === "true";
+        const senders = await listDocumentSenders({ dateFrom, dateTo, deleted });
         return res.status(200).json({ ok: true, senders });
       }
       const senderId =
@@ -71,12 +73,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const limit = Number(req.query.limit || 100);
       const dateFrom = typeof req.query.from === "string" ? req.query.from : undefined;
       const dateTo = typeof req.query.to === "string" ? req.query.to : undefined;
+      const deleted = req.query.deleted === "true";
       const documents = await listCustomerDocuments({
         senderId,
         status,
         category,
         dateFrom,
         dateTo,
+        deleted,
         limit: Number.isFinite(limit) ? limit : 100,
       });
       return res.status(200).json({ ok: true, documents });
@@ -94,7 +98,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const hasEditableFields =
         req.body?.extracted_json !== undefined ||
         req.body?.matched_trip_id !== undefined ||
-        req.body?.matched_payment_id !== undefined;
+        req.body?.matched_payment_id !== undefined ||
+        req.body?.restore === true;
+      if (req.body?.restore === true) {
+        const ok = await restoreCustomerDocument(id, "admin");
+        return res.status(ok ? 200 : 404).json({ ok });
+      }
       if (hasEditableFields) {
         const extractedJson =
           req.body?.extracted_json && typeof req.body.extracted_json === "object"
