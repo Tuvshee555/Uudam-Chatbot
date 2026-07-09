@@ -676,6 +676,8 @@ export async function listCustomerDocuments(options?: {
   senderId?: string;
   status?: CustomerDocumentStatus | "all";
   category?: CustomerDocumentCategory | "all";
+  dateFrom?: string;
+  dateTo?: string;
   limit?: number;
 }) {
   const ready = await ensureTravelSchema();
@@ -696,6 +698,14 @@ export async function listCustomerDocuments(options?: {
     values.push(options.category);
     where.push(`category = $${values.length}`);
   }
+  if (options?.dateFrom?.trim()) {
+    values.push(options.dateFrom.trim());
+    where.push(`created_at >= $${values.length}::date`);
+  }
+  if (options?.dateTo?.trim()) {
+    values.push(options.dateTo.trim());
+    where.push(`created_at < ($${values.length}::date + INTERVAL '1 day')`);
+  }
   const limit = Math.min(Math.max(Math.trunc(options?.limit || 100), 1), 300);
   values.push(limit);
   const result = await queryNeon<CustomerDocument>(
@@ -709,6 +719,40 @@ export async function listCustomerDocuments(options?: {
     values,
   );
   return result?.rows || [];
+}
+
+export async function deleteCustomerDocument(id: number, actor = "admin") {
+  const ready = await ensureTravelSchema();
+  if (!ready) return false;
+  const before = await queryNeon<CustomerDocument>(
+    `SELECT * FROM travel_customer_documents WHERE id = $1 LIMIT 1`,
+    [id],
+  );
+  const current = before?.rows?.[0];
+  if (!current) return false;
+  const result = await queryNeon(
+    `
+      UPDATE travel_customer_documents
+      SET
+        status = 'ignored',
+        retention_hidden_at = NOW(),
+        reviewed_at = COALESCE(reviewed_at, NOW()),
+        updated_at = NOW()
+      WHERE id = $1
+    `,
+    [id],
+  );
+  const ok = (result?.rowCount ?? 0) > 0;
+  if (ok) {
+    await writeDocumentAudit({
+      documentId: id,
+      action: "deleted_from_inbox",
+      actor,
+      before: current,
+      after: { retention_hidden_at: "now", status: "ignored" },
+    });
+  }
+  return ok;
 }
 
 export async function updateCustomerDocumentStatus(

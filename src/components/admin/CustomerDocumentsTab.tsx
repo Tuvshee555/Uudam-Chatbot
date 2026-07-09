@@ -16,58 +16,31 @@ import {
 import type {
   CustomerDocument,
   CustomerDocumentCategory,
-  CustomerDocumentStatus,
   DocumentSenderSummary,
 } from "@/lib/adminTypes";
 import { formatTime, shortId } from "@/lib/adminUtils";
 
-const CATEGORY_LABELS: Record<CustomerDocumentCategory, string> = {
-  payment_screenshot: "Төлбөрийн баримт",
+type SimpleDocumentCategory = "payment" | "passport" | "other";
+
+const SIMPLE_CATEGORY_LABELS: Record<SimpleDocumentCategory, string> = {
+  payment: "Төлбөр",
   passport: "Паспорт",
-  travel_document: "Бичиг баримт",
-  booking_code: "Код / нууц үг",
-  trip_screenshot: "Аяллын зураг",
   other: "Бусад",
 };
 
-const CATEGORY_ICONS: Record<CustomerDocumentCategory, string> = {
-  payment_screenshot: "💰",
+const SIMPLE_CATEGORY_ICONS: Record<SimpleDocumentCategory, string> = {
+  payment: "💰",
   passport: "🛂",
-  travel_document: "📄",
-  booking_code: "🔑",
-  trip_screenshot: "✈️",
   other: "📎",
 };
 
-// Fixed display order: money first, identity documents next, questions last.
-const CATEGORY_ORDER: CustomerDocumentCategory[] = [
-  "payment_screenshot",
-  "passport",
-  "travel_document",
-  "booking_code",
-  "trip_screenshot",
-  "other",
-];
+const SIMPLE_CATEGORY_ORDER: SimpleDocumentCategory[] = ["payment", "passport", "other"];
 
-const STATUS_LABELS: Record<CustomerDocumentStatus, string> = {
-  needs_review: "Шалгах",
-  verified: "Баталгаажсан",
-  wrong_extraction: "Буруу уншсан",
-  duplicate: "Давхардсан",
-  attached_to_booking: "Захиалгад холбосон",
-  reviewed: "Шалгасан",
-  ignored: "Алгассан",
-};
-
-const STATUS_TONE: Record<CustomerDocumentStatus, "warning" | "success" | "neutral" | "danger"> = {
-  needs_review: "warning",
-  verified: "success",
-  wrong_extraction: "danger",
-  duplicate: "neutral",
-  attached_to_booking: "success",
-  reviewed: "success",
-  ignored: "neutral",
-};
+function simpleCategory(category: CustomerDocumentCategory): SimpleDocumentCategory {
+  if (category === "payment_screenshot") return "payment";
+  if (category === "passport") return "passport";
+  return "other";
+}
 
 function compactValue(value: unknown): string {
   if (value == null) return "";
@@ -129,36 +102,95 @@ function passportRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
-function confidenceLabel(value: number) {
-  const score = Number.isFinite(value) ? value : 0;
-  if (score >= 0.82) return { label: "AI өндөр", tone: "success" as const };
-  if (score >= 0.55) return { label: "AI дунд", tone: "warning" as const };
-  return { label: "AI бага — шалгах!", tone: "danger" as const };
-}
-
 function senderTitle(input: { display_name: string; sender_id: string }) {
   return input.display_name || `Хэрэглэгч …${shortId(input.sender_id)}`;
+}
+
+type EditFields = {
+  summary: string;
+  paymentAmount: string;
+  paymentCurrency: string;
+  paymentSender: string;
+  paymentPhone: string;
+  paymentDescription: string;
+  paymentReference: string;
+  paymentDate: string;
+  passportName: string;
+  passportNumber: string;
+  passportBirthDate: string;
+  passportExpiryDate: string;
+};
+
+function editFieldsFromDocument(doc: CustomerDocument): EditFields {
+  const data = doc.extracted_json || {};
+  const payment = data.payment && typeof data.payment === "object"
+    ? (data.payment as Record<string, unknown>)
+    : {};
+  const passport = data.passport && typeof data.passport === "object"
+    ? (data.passport as Record<string, unknown>)
+    : {};
+  return {
+    summary: compactValue(data.summary),
+    paymentAmount: compactValue(payment.amount),
+    paymentCurrency: compactValue(payment.currency),
+    paymentSender: compactValue(payment.sender_name),
+    paymentPhone: compactValue(payment.phone),
+    paymentDescription: compactValue(payment.description),
+    paymentReference: compactValue(payment.reference),
+    paymentDate: compactValue(payment.date),
+    passportName: compactValue(passport.full_name),
+    passportNumber: compactValue(passport.passport_number),
+    passportBirthDate: compactValue(passport.date_of_birth),
+    passportExpiryDate: compactValue(passport.expiry_date),
+  };
+}
+
+function buildEditedJson(doc: CustomerDocument, fields: EditFields): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...(doc.extracted_json || {}) };
+  next.summary = fields.summary;
+  if (simpleCategory(doc.category) === "payment") {
+    next.payment = {
+      ...((next.payment && typeof next.payment === "object") ? next.payment as Record<string, unknown> : {}),
+      amount: fields.paymentAmount,
+      currency: fields.paymentCurrency,
+      sender_name: fields.paymentSender,
+      phone: fields.paymentPhone,
+      description: fields.paymentDescription,
+      reference: fields.paymentReference,
+      date: fields.paymentDate,
+    };
+  }
+  if (simpleCategory(doc.category) === "passport") {
+    next.passport = {
+      ...((next.passport && typeof next.passport === "object") ? next.passport as Record<string, unknown> : {}),
+      full_name: fields.passportName,
+      passport_number: fields.passportNumber,
+      date_of_birth: fields.passportBirthDate,
+      expiry_date: fields.passportExpiryDate,
+    };
+  }
+  return next;
 }
 
 function DocumentCard({
   doc,
   busyId,
-  onStatus,
   onEdit,
+  onDelete,
   onOpenPerson,
   showSender,
 }: {
   doc: CustomerDocument;
   busyId: number | null;
-  onStatus: (doc: CustomerDocument, status: CustomerDocumentStatus) => void;
   onEdit: (doc: CustomerDocument) => void;
+  onDelete: (doc: CustomerDocument) => void;
   onOpenPerson?: (senderId: string) => void;
   showSender: boolean;
 }) {
   const rows = extractedRows(doc);
   const imageUrl = doc.stored_url || doc.source_url;
   const matchedTrip = tripMatchName(doc);
-  const confidence = confidenceLabel(doc.confidence);
+  const bucket = simpleCategory(doc.category);
   return (
     <Card className="overflow-hidden p-0">
       <div className="grid gap-0 sm:grid-cols-[180px_1fr]">
@@ -178,13 +210,10 @@ function DocumentCard({
         </a>
         <div className="min-w-0 p-3.5">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge tone={STATUS_TONE[doc.status]}>{STATUS_LABELS[doc.status]}</Badge>
             <Badge tone="neutral">
-              {CATEGORY_ICONS[doc.category]} {CATEGORY_LABELS[doc.category]}
+              {SIMPLE_CATEGORY_ICONS[bucket]} {SIMPLE_CATEGORY_LABELS[bucket]}
             </Badge>
-            <Badge tone={confidence.tone}>{confidence.label}</Badge>
             {matchedTrip && <Badge tone="success">✈️ {matchedTrip}</Badge>}
-            {doc.duplicate_of_id && <Badge tone="neutral">Давхардсан #{doc.duplicate_of_id}</Badge>}
             {doc.matched_payment_id && (
               <Badge tone="success">Төлбөр #{doc.matched_payment_id}</Badge>
             )}
@@ -216,16 +245,6 @@ function DocumentCard({
           <div className="mt-3 flex flex-wrap gap-2">
             <Button
               size="sm"
-              variant="success"
-              disabled={busyId === doc.id || doc.status === "verified"}
-              loading={busyId === doc.id}
-              onClick={() => onStatus(doc, "verified")}
-            >
-              <Icons.check size={14} />
-              Баталгаажуулах
-            </Button>
-            <Button
-              size="sm"
               variant="secondary"
               disabled={busyId === doc.id}
               onClick={() => onEdit(doc)}
@@ -235,26 +254,15 @@ function DocumentCard({
             </Button>
             <Button
               size="sm"
-              variant="secondary"
-              disabled={busyId === doc.id || doc.status === "wrong_extraction"}
-              onClick={() => onStatus(doc, "wrong_extraction")}
+              variant="danger"
+              disabled={busyId === doc.id}
+              loading={busyId === doc.id}
+              onClick={() => onDelete(doc)}
             >
-              Буруу
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={busyId === doc.id || doc.status === "ignored"}
-              onClick={() => onStatus(doc, "ignored")}
-            >
-              Алгасах
+              <Icons.trash size={14} />
+              Устгах
             </Button>
           </div>
-          {(doc.category === "passport" || doc.category === "booking_code") && (
-            <p className="mt-2 text-[11px] text-danger">
-              Нууцлалтай мэдээлэл — баталгаажуулахаас өмнө заавал зурагтай нь тулгаж шалгана уу.
-            </p>
-          )}
         </div>
       </div>
     </Card>
@@ -277,11 +285,11 @@ export function CustomerDocumentsTab({
   const [documents, setDocuments] = useState<CustomerDocument[]>([]);
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
-  const [status, setStatus] = useState<CustomerDocumentStatus | "all">("needs_review");
-  const [category, setCategory] = useState<CustomerDocumentCategory | "all">("all");
+  const [category, setCategory] = useState<SimpleDocumentCategory | "all">("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [editing, setEditing] = useState<CustomerDocument | null>(null);
-  const [editJson, setEditJson] = useState("");
-  const [editStatus, setEditStatus] = useState<CustomerDocumentStatus>("needs_review");
+  const [editFields, setEditFields] = useState<EditFields>(() => editFieldsFromDocument({ extracted_json: {} } as CustomerDocument));
 
   const loadSenders = useCallback(async () => {
     setSendersLoading(true);
@@ -305,9 +313,11 @@ export function CustomerDocumentsTab({
     try {
       const params = new URLSearchParams(
         selectedSender
-          ? { sender_id: selectedSender, status: "all", limit: "120" }
-          : { status, category, limit: "120" },
+          ? { sender_id: selectedSender, status: "all", limit: "300" }
+          : { status: "all", category: "all", limit: "300" },
       );
+      if (dateFrom) params.set("from", dateFrom);
+      if (dateTo) params.set("to", dateTo);
       const res = await apiFetch(`/api/admin/customer-documents?${params.toString()}`);
       const json = (await res.json().catch(() => ({}))) as {
         documents?: CustomerDocument[];
@@ -320,7 +330,7 @@ export function CustomerDocumentsTab({
     } finally {
       setLoading(false);
     }
-  }, [apiFetch, category, selectedSender, status, toast]);
+  }, [apiFetch, dateFrom, dateTo, selectedSender, toast]);
 
   useEffect(() => {
     if (view === "people" && !selectedSender) {
@@ -340,37 +350,39 @@ export function CustomerDocumentsTab({
     );
   }, [search, senders]);
 
+  const visibleDocuments = useMemo(
+    () => documents.filter((doc) => category === "all" || simpleCategory(doc.category) === category),
+    [category, documents],
+  );
+
   const documentsByCategory = useMemo(() => {
-    const groups = new Map<CustomerDocumentCategory, CustomerDocument[]>();
-    for (const doc of documents) {
-      const list = groups.get(doc.category) || [];
+    const groups = new Map<SimpleDocumentCategory, CustomerDocument[]>();
+    for (const doc of visibleDocuments) {
+      const bucket = simpleCategory(doc.category);
+      const list = groups.get(bucket) || [];
       list.push(doc);
-      groups.set(doc.category, list);
+      groups.set(bucket, list);
     }
     return groups;
-  }, [documents]);
+  }, [visibleDocuments]);
 
   const selectedSenderSummary = useMemo(
     () => senders.find((sender) => sender.sender_id === selectedSender) || null,
     [selectedSender, senders],
   );
 
-  async function updateStatus(doc: CustomerDocument, nextStatus: CustomerDocumentStatus) {
+  async function deleteDocument(doc: CustomerDocument) {
     setBusyId(doc.id);
     try {
-      const res = await apiFetch("/api/admin/customer-documents", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: doc.id, status: nextStatus }),
+      const res = await apiFetch(`/api/admin/customer-documents?id=${encodeURIComponent(String(doc.id))}`, {
+        method: "DELETE",
       });
       if (!res.ok) throw new Error("failed");
-      setDocuments((prev) =>
-        prev.map((item) => (item.id === doc.id ? { ...item, status: nextStatus } : item)),
-      );
+      setDocuments((prev) => prev.filter((item) => item.id !== doc.id));
       onChanged?.();
-      toast.success("Төлөв шинэчлэгдлээ.");
+      toast.success("Зураг устгагдлаа.");
     } catch {
-      toast.error("Төлөв шинэчилж чадсангүй.");
+      toast.error("Зураг устгаж чадсангүй.");
     } finally {
       setBusyId(null);
     }
@@ -378,23 +390,11 @@ export function CustomerDocumentsTab({
 
   function openEdit(doc: CustomerDocument) {
     setEditing(doc);
-    setEditStatus(doc.status);
-    setEditJson(JSON.stringify(doc.extracted_json || {}, null, 2));
+    setEditFields(editFieldsFromDocument(doc));
   }
 
   async function saveEdit() {
     if (!editing) return;
-    let parsed: Record<string, unknown>;
-    try {
-      const value = JSON.parse(editJson);
-      if (!value || typeof value !== "object" || Array.isArray(value)) {
-        throw new Error("object required");
-      }
-      parsed = value as Record<string, unknown>;
-    } catch {
-      toast.error("JSON бүтэц буруу байна.");
-      return;
-    }
     setBusyId(editing.id);
     try {
       const res = await apiFetch("/api/admin/customer-documents", {
@@ -402,8 +402,7 @@ export function CustomerDocumentsTab({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: editing.id,
-          status: editStatus,
-          extracted_json: parsed,
+          extracted_json: buildEditedJson(editing, editFields),
         }),
       });
       const json = (await res.json().catch(() => ({}))) as {
@@ -429,8 +428,13 @@ export function CustomerDocumentsTab({
     setView("people");
   }
 
+  function setEditField(key: keyof EditFields, value: string) {
+    setEditFields((prev) => ({ ...prev, [key]: value }));
+  }
+
   const showPeopleList = view === "people" && !selectedSender;
   const showPersonDetail = view === "people" && Boolean(selectedSender);
+  const editingBucket = editing ? simpleCategory(editing.category) : "other";
 
   return (
     <div className="space-y-3">
@@ -439,7 +443,7 @@ export function CustomerDocumentsTab({
           <div className="min-w-0">
             <p className="font-semibold text-ink">Ирсэн зургууд</p>
             <p className="text-xs text-ink-subtle">
-              Бүх зураг автоматаар хадгалагдаж, AI ангилдаг — доорх төлөв нь зөвхөн шалгалтын явц.
+              Хэрэглэгчээс ирсэн бүх зураг автоматаар хадгалагдана. Хэрэггүй бол устгахад л болно.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -474,33 +478,33 @@ export function CustomerDocumentsTab({
             {view === "all" && (
               <>
                 <Select
-                  value={status}
-                  onChange={(e) => setStatus(e.target.value as CustomerDocumentStatus | "all")}
-                  className="w-36"
-                >
-                  <option value="needs_review">Шалгах</option>
-                  <option value="verified">Баталгаажсан</option>
-                  <option value="wrong_extraction">Буруу уншсан</option>
-                  <option value="duplicate">Давхардсан</option>
-                  <option value="attached_to_booking">Захиалгад холбосон</option>
-                  <option value="reviewed">Шалгасан</option>
-                  <option value="ignored">Алгассан</option>
-                  <option value="all">Бүгд</option>
-                </Select>
-                <Select
                   value={category}
                   onChange={(e) =>
-                    setCategory(e.target.value as CustomerDocumentCategory | "all")
+                    setCategory(e.target.value as SimpleDocumentCategory | "all")
                   }
-                  className="w-44"
+                  className="w-36"
                 >
-                  <option value="all">Бүх төрөл</option>
-                  {CATEGORY_ORDER.map((key) => (
+                  <option value="all">Бүх зураг</option>
+                  {SIMPLE_CATEGORY_ORDER.map((key) => (
                     <option key={key} value={key}>
-                      {CATEGORY_ICONS[key]} {CATEGORY_LABELS[key]}
+                      {SIMPLE_CATEGORY_ICONS[key]} {SIMPLE_CATEGORY_LABELS[key]}
                     </option>
                   ))}
                 </Select>
+                <Input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  className="w-36"
+                  aria-label="Эхлэх өдөр"
+                />
+                <Input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  className="w-36"
+                  aria-label="Дуусах өдөр"
+                />
               </>
             )}
             <button
@@ -558,21 +562,26 @@ export function CustomerDocumentsTab({
                           </p>
                         </div>
                       </div>
-                      {sender.needs_review > 0 && (
-                        <Badge tone="warning">{sender.needs_review} шалгах</Badge>
-                      )}
                     </div>
                     <div className="mt-2.5 flex flex-wrap gap-1.5">
-                      {CATEGORY_ORDER.map((key) =>
-                        sender.by_category[key] ? (
+                      {SIMPLE_CATEGORY_ORDER.map((key) => {
+                        const count = key === "payment"
+                          ? sender.by_category.payment_screenshot || 0
+                          : key === "passport"
+                            ? sender.by_category.passport || 0
+                            : (sender.by_category.travel_document || 0) +
+                              (sender.by_category.booking_code || 0) +
+                              (sender.by_category.trip_screenshot || 0) +
+                              (sender.by_category.other || 0);
+                        return count ? (
                           <span
                             key={key}
                             className="rounded-full border border-line bg-surface-sunken px-2 py-0.5 text-[11px] text-ink-muted"
                           >
-                            {CATEGORY_ICONS[key]} {CATEGORY_LABELS[key]}: {sender.by_category[key]}
+                            {SIMPLE_CATEGORY_ICONS[key]} {SIMPLE_CATEGORY_LABELS[key]}: {count}
                           </span>
-                        ) : null,
-                      )}
+                        ) : null;
+                      })}
                     </div>
                   </Card>
                 </button>
@@ -607,13 +616,13 @@ export function CustomerDocumentsTab({
               />
             </Card>
           ) : (
-            CATEGORY_ORDER.map((key) => {
+            SIMPLE_CATEGORY_ORDER.map((key) => {
               const docs = documentsByCategory.get(key);
               if (!docs || docs.length === 0) return null;
               return (
                 <div key={key} className="space-y-2">
                   <p className="text-sm font-semibold text-ink">
-                    {CATEGORY_ICONS[key]} {CATEGORY_LABELS[key]}{" "}
+                    {SIMPLE_CATEGORY_ICONS[key]} {SIMPLE_CATEGORY_LABELS[key]}{" "}
                     <span className="font-normal text-ink-subtle">({docs.length})</span>
                   </p>
                   <div className="grid gap-3 lg:grid-cols-2">
@@ -622,8 +631,8 @@ export function CustomerDocumentsTab({
                         key={doc.id}
                         doc={doc}
                         busyId={busyId}
-                        onStatus={(target, next) => void updateStatus(target, next)}
                         onEdit={openEdit}
+                        onDelete={(target) => void deleteDocument(target)}
                         showSender={false}
                       />
                     ))}
@@ -637,7 +646,7 @@ export function CustomerDocumentsTab({
 
       {view === "all" && (
         <>
-          {!loading && documents.length === 0 ? (
+          {!loading && visibleDocuments.length === 0 ? (
             <Card className="p-4">
               <EmptyState
                 icon={<Icons.image size={26} />}
@@ -647,20 +656,20 @@ export function CustomerDocumentsTab({
             </Card>
           ) : (
             <div className="grid gap-3 lg:grid-cols-2">
-              {documents.map((doc) => (
+              {visibleDocuments.map((doc) => (
                 <DocumentCard
                   key={doc.id}
                   doc={doc}
                   busyId={busyId}
-                  onStatus={(target, next) => void updateStatus(target, next)}
                   onEdit={openEdit}
+                  onDelete={(target) => void deleteDocument(target)}
                   onOpenPerson={openPerson}
                   showSender
                 />
               ))}
             </div>
           )}
-          {loading && documents.length === 0 && (
+          {loading && visibleDocuments.length === 0 && (
             <div className="flex justify-center py-8">
               <Spinner className="h-6 w-6 text-brand" />
             </div>
@@ -671,7 +680,7 @@ export function CustomerDocumentsTab({
       <Modal
         open={Boolean(editing)}
         onClose={() => setEditing(null)}
-        title="Уншсан мэдээлэл засах"
+        title="Зургийн мэдээлэл засах"
         footer={
           <>
             <Button variant="secondary" onClick={() => setEditing(null)}>
@@ -688,28 +697,84 @@ export function CustomerDocumentsTab({
         }
       >
         <div className="space-y-3">
-          <Select
-            label="Төлөв"
-            value={editStatus}
-            onChange={(e) => setEditStatus(e.target.value as CustomerDocumentStatus)}
-          >
-            {(Object.entries(STATUS_LABELS) as [CustomerDocumentStatus, string][]).map(
-              ([key, label]) => (
-                <option key={key} value={key}>
-                  {label}
-                </option>
-              ),
-            )}
-          </Select>
-          <Textarea
-            label="Extracted JSON"
-            rows={14}
-            value={editJson}
-            onChange={(e) => setEditJson(e.target.value)}
+          {editing && (
+            <div className="flex items-center gap-2 rounded-md border border-line bg-surface-sunken px-3 py-2 text-sm text-ink-muted">
+              <span>{SIMPLE_CATEGORY_ICONS[editingBucket]}</span>
+              <span>{SIMPLE_CATEGORY_LABELS[editingBucket]}</span>
+              <span className="text-ink-subtle">#{editing.id}</span>
+            </div>
+          )}
+          <Input
+            label="Товч"
+            value={editFields.summary}
+            onChange={(e) => setEditField("summary", e.target.value)}
           />
-          <p className="text-xs text-ink-subtle">
-            Паспорт, код, төлбөрийн мэдээлэл засахдаа зөвхөн зурагтай нь тулгаж баталгаажуулна уу.
-          </p>
+          {editingBucket === "payment" && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Input
+                label="Дүн"
+                value={editFields.paymentAmount}
+                onChange={(e) => setEditField("paymentAmount", e.target.value)}
+              />
+              <Input
+                label="Валют"
+                value={editFields.paymentCurrency}
+                onChange={(e) => setEditField("paymentCurrency", e.target.value)}
+              />
+              <Input
+                label="Илгээгч"
+                value={editFields.paymentSender}
+                onChange={(e) => setEditField("paymentSender", e.target.value)}
+              />
+              <Input
+                label="Утас"
+                value={editFields.paymentPhone}
+                onChange={(e) => setEditField("paymentPhone", e.target.value)}
+              />
+              <Input
+                label="Журнал №"
+                value={editFields.paymentReference}
+                onChange={(e) => setEditField("paymentReference", e.target.value)}
+              />
+              <Input
+                label="Төлсөн огноо"
+                value={editFields.paymentDate}
+                onChange={(e) => setEditField("paymentDate", e.target.value)}
+              />
+              <div className="sm:col-span-2">
+                <Textarea
+                  label="Гүйлгээний утга"
+                  rows={3}
+                  value={editFields.paymentDescription}
+                  onChange={(e) => setEditField("paymentDescription", e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+          {editingBucket === "passport" && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Input
+                label="Нэр"
+                value={editFields.passportName}
+                onChange={(e) => setEditField("passportName", e.target.value)}
+              />
+              <Input
+                label="Паспорт №"
+                value={editFields.passportNumber}
+                onChange={(e) => setEditField("passportNumber", e.target.value)}
+              />
+              <Input
+                label="Төрсөн огноо"
+                value={editFields.passportBirthDate}
+                onChange={(e) => setEditField("passportBirthDate", e.target.value)}
+              />
+              <Input
+                label="Дуусах огноо"
+                value={editFields.passportExpiryDate}
+                onChange={(e) => setEditField("passportExpiryDate", e.target.value)}
+              />
+            </div>
+          )}
         </div>
       </Modal>
     </div>

@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
 import {
+  deleteCustomerDocument,
   getCustomerDocumentStats,
   listCustomerDocuments,
   listDocumentSenders,
@@ -66,10 +67,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ? (categoryRaw as CustomerDocumentCategory | "all")
           : "all";
       const limit = Number(req.query.limit || 100);
+      const dateFrom = typeof req.query.from === "string" ? req.query.from : undefined;
+      const dateTo = typeof req.query.to === "string" ? req.query.to : undefined;
       const documents = await listCustomerDocuments({
         senderId,
         status,
         category,
+        dateFrom,
+        dateTo,
         limit: Number.isFinite(limit) ? limit : 100,
       });
       return res.status(200).json({ ok: true, documents });
@@ -117,6 +122,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (status === undefined) return res.status(400).json({ error: "status required" });
       const updated = await updateCustomerDocumentStatus(id, status as CustomerDocumentStatus, "admin");
       if (!updated) return res.status(404).json({ error: "document_not_found" });
+      return res.status(200).json({ ok: true });
+    }
+
+    if (req.method === "DELETE") {
+      const id = Number(req.query.id || req.body?.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ error: "valid id is required" });
+      }
+      const ok = await deleteCustomerDocument(id, "admin");
+      if (!ok) return res.status(404).json({ error: "document_not_found" });
       return res.status(200).json({ ok: true });
     }
 
