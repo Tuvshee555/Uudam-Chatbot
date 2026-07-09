@@ -90,6 +90,15 @@ export function enforcePaymentNeverSelfConfirmed(userText: string, replyText: st
   return PAYMENT_VERIFICATION_DEFERRAL_REPLY;
 }
 
+// The AI prompt shows the model a fill-in-the-blank example ('[Чиглэл]
+// чиглэлд 3 өөр аялал байна...') so it can copy the sentence shape. The model
+// occasionally echoes the literal bracket placeholder instead of substituting
+// the real destination name — this strips the token so a leaked "[Чиглэл]"
+// never reaches a customer even if the prompt instruction is ignored.
+function stripLeakedPlaceholders(text: string): string {
+  return text.replace(/\[Чиглэл\]\s*/gi, "");
+}
+
 function stripMarkdown(text: string): string {
   return text
     // [link text](url) → just the url
@@ -135,7 +144,7 @@ function isGreetingBlock(text: string) {
 }
 
 export function sanitizeAssistantReply(text: string) {
-  const cleaned = normalizeWhitespace(stripMarkdown(text));
+  const cleaned = normalizeWhitespace(stripMarkdown(stripLeakedPlaceholders(text)));
   if (!cleaned) return "Энэ мэдээлэл одоогоор тодорхойгүй байна. Хүний ажилтантай холбож өгье.";
 
   // Split on blank lines (paragraph breaks) — preserve them so the AI's

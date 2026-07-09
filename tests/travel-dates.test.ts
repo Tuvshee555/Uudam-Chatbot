@@ -210,6 +210,34 @@ test("resolveDepartureDatesAtWrite freezes bare dates with roll-forward from wri
   ]);
 });
 
+test("resolveDepartureDatesAtWrite still rolls a recently-passed date forward a full year (grace window does NOT apply here)", () => {
+  // Staff entering a trip a few days late: "7 сарын 2" saved on 2026-07-09.
+  // Must stay unconditional roll-forward (2027), NOT snap to this year like
+  // the live customer-query grace window does — otherwise a genuine next-year
+  // recurrence gets frozen to an already-past date and silently dropped.
+  const resolved = resolveDepartureDatesAtWrite(
+    ["7 сарын 2"],
+    new Date("2026-07-09T04:00:00.000Z"),
+  );
+  assert.deepEqual(resolved, [{ text: "7 сарын 2", ymd: "2027-07-02" }]);
+});
+
+test("resolveRequestedDate keeps a recently-passed date in the current year (live customer query)", () => {
+  // Real customer message: "7.2 nd garah aylal" asked 2026-07-09 (7 days
+  // after July 2) must resolve to 2026-07-02, not roll forward to 2027 —
+  // rolling forward here produced nonsense replies like "2027-07-02 гарах
+  // аялал алга байна" for a trip that departed a week ago.
+  const requested = resolveRequestedDate("7.2 nd garah aylal", new Date("2026-07-09T04:00:00.000Z"));
+  assert.equal(requested?.ymd, "2026-07-02");
+});
+
+test("resolveRequestedDate still rolls a far-past date forward a full year (grace window is bounded)", () => {
+  // A date more than RECENT_PAST_GRACE_DAYS in the past still means "next
+  // year" — only genuinely recent dates get the current-year reading.
+  const requested = resolveRequestedDate("1 сарын 15-нд гарах аялал байгаа юу?", new Date("2026-07-09T04:00:00.000Z"));
+  assert.equal(requested?.ymd, "2027-01-15");
+});
+
 test("resolved map keeps a genuine next-season date that text parsing would hide", () => {
   const now = new Date("2026-07-04T04:00:00.000Z");
   // Without the map, "1 сарын 15" parses to 2026-01-15 (past) and is dropped.

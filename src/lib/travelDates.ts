@@ -97,13 +97,45 @@ function isValidDateParts(year: number, month: number, day: number): boolean {
   );
 }
 
-function inferYear(month: number, day: number, now = new Date()): number {
+// A month/day that's only recently passed (e.g. asked 7 days after the date)
+// almost never means "that date next year" — a customer typing "7.2" a week
+// after July 2 means the trip that just left, not July 2 of NEXT year. Rolling
+// forward a full year there produced replies like "2027-07-02 гарах аялал
+// алга байна" for a date that was one week ago. Only roll forward once the
+// date is far enough in the past that "next year" is the sane reading.
+//
+// Scoped to LIVE CUSTOMER QUERIES ONLY (resolveRequestedDate) — NOT the
+// write-time trip-date freeze (resolveDepartureDatesAtWrite). A trip saved
+// with a departure that's already slightly past (late data entry, first date
+// of a recurring series already elapsed) must still roll forward unconditionally,
+// or its real next-year departure gets miscomputed and later dropped as "past"
+// by filterFutureDepartureDates.
+const RECENT_PAST_GRACE_DAYS = 14;
+
+function inferYear(
+  month: number,
+  day: number,
+  now = new Date(),
+  applyRecentPastGrace = false,
+): number {
   const today = getMongoliaDateParts(now);
   const candidate = { year: today.year, month, day };
   if (!isValidDateParts(candidate.year, candidate.month, candidate.day)) {
     return today.year;
   }
-  return toYmd(candidate) >= toYmd(today) ? today.year : today.year + 1;
+  if (toYmd(candidate) >= toYmd(today)) return today.year;
+  if (applyRecentPastGrace) {
+    const daysPast = daysBetween(candidate, today);
+    if (daysPast <= RECENT_PAST_GRACE_DAYS) return today.year;
+  }
+  return today.year + 1;
+}
+
+function daysBetween(a: DateParts, b: DateParts): number {
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const aUtc = Date.UTC(a.year, a.month - 1, a.day);
+  const bUtc = Date.UTC(b.year, b.month - 1, b.day);
+  return Math.round(Math.abs(bUtc - aUtc) / msPerDay);
 }
 
 // How to interpret a month/day with no year:
@@ -116,12 +148,13 @@ function explicitDateCandidates(
   text: string,
   now = new Date(),
   yearMode: YearInferenceMode = "roll-forward",
+  applyRecentPastGrace = false,
 ): DateParts[] {
   const candidates: DateParts[] = [];
   const resolveYear = (month: number, day: number) =>
     yearMode === "current-year"
       ? getMongoliaDateParts(now).year
-      : inferYear(month, day, now);
+      : inferYear(month, day, now, applyRecentPastGrace);
   const push = (year: number, month: number, day: number) => {
     if (!isValidDateParts(year, month, day)) return;
     const ymd = toYmd({ year, month, day });
@@ -170,7 +203,12 @@ export function resolveRequestedDate(
     };
   }
 
-  const explicit = explicitDateCandidates(text, now)[0];
+  // "roll-forward" + grace: a live customer question about a date that only
+  // recently passed means the recent trip, not that date next year (see
+  // RECENT_PAST_GRACE_DAYS above). Trip-record parsing below intentionally
+  // does NOT pass this — a stored departure date must roll forward
+  // unconditionally so its real next-year date is never miscomputed.
+  const explicit = explicitDateCandidates(text, now, "roll-forward", true)[0];
   if (!explicit) return null;
   return {
     ymd: toYmd(explicit),
