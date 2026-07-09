@@ -176,6 +176,8 @@ export function formatSelectedPriceGroups(
       currency,
     }));
   }
+  const feesLine = formatExtraFeesLine(trip);
+  if (feesLine) lines.push(feesLine);
   return lines.join("\n");
 }
 

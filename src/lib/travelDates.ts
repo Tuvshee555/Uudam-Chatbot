@@ -285,6 +285,9 @@ export function filterFutureDepartureDates(
 function isDepartureAvailabilityQuestion(text: string): boolean {
   const normalized = text.trim().toLowerCase();
   if (!normalized) return false;
+  if (/үнэ|үнийн|хэд\s*вэ|хэдээр|төлбөр|төгрөг|₮|\bmnt\b|\bcny\b|\busd\b/i.test(normalized)) {
+    return false;
+  }
 
   const hasTravelSignal =
     /аялал|aylal|tour|trip|гар|garah|гарах|явах|yavah|departure|өдөр|ognoo|date/.test(

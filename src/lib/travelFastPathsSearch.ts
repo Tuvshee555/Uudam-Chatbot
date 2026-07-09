@@ -518,7 +518,9 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
       coverage * 10 -
       Math.max(0, routeKeywords.length - matchedWords.length) +
       discountBoost +
-      intentBoost;
+      intentBoost +
+      durationVariantScore(text, trip) +
+      examFeeIntentScore(text, trip);
 
     matches.push({
       trip,
@@ -732,8 +734,60 @@ function hasDisambiguatingModifier(query: string): boolean {
     normalized.includes("дэлгүүр") ||
     normalized.includes("хямд") ||
     normalized.includes("хамгийн") ||
-    normalized.includes("тусгай")
+    normalized.includes("тусгай") ||
+    /(\d{1,2})\s*(өдөр|шөнө)/.test(normalized)
   );
+}
+
+function tripSearchText(trip: TravelTrip): string {
+  return normText([
+    trip.route_name,
+    trip.duration_text,
+    trip.category,
+    trip.notes,
+    trip.source_description,
+    ...getAliases(trip),
+  ].filter(Boolean).join(" "));
+}
+
+function durationVariantScore(query: string, trip: TravelTrip): number {
+  const normalized = normText(query);
+  const haystack = tripSearchText(trip);
+  let score = 0;
+  for (const match of normalized.matchAll(/(\d{1,2})\s*(өдөр|шөнө)/g)) {
+    const amount = match[1];
+    const unit = match[2];
+    const target = `${amount} ${unit}`;
+    const hasTarget = haystack.includes(target);
+    const hasCompetingSameUnit = new RegExp(`\\d{1,2}\\s*${unit}`).test(haystack);
+    if (hasTarget) score += 120;
+    else if (hasCompetingSameUnit) score -= 120;
+  }
+  return score;
+}
+
+function examFeeIntentScore(query: string, trip: TravelTrip): number {
+  const normalized = normText(query);
+  const asksFreeExam = normalized.includes("үнэгүй шинжилгээ");
+  const asksPaidExam = normalized.includes("үнэтэй шинжилгээ") || normalized.includes("төлбөртэй шинжилгээ");
+  if (!asksFreeExam && !asksPaidExam) return 0;
+
+  const haystack = tripSearchText(trip);
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const hasExamFees = Array.isArray(extra.extra_fees) &&
+    (extra.extra_fees as Array<Record<string, unknown>>).some((fee) =>
+      typeof fee.label === "string" && normText(fee.label).includes("шинжилгээ"),
+    );
+
+  if (asksFreeExam) {
+    if (haystack.includes("үнэгүй шинжилгээ")) return 180;
+    if (haystack.includes("үнэтэй шинжилгээ") || hasExamFees) return -180;
+  }
+  if (asksPaidExam) {
+    if (haystack.includes("үнэтэй шинжилгээ") || hasExamFees) return 180;
+    if (haystack.includes("үнэгүй шинжилгээ")) return -180;
+  }
+  return 0;
 }
 
 function routeContentTokens(query: string): string[] {
@@ -898,6 +952,8 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
     if (wantsSeaBeach && tripHasSeaBeach(trip)) score += 180;
     if (landOnly && tripCat.includes("газрын") && tripCat.includes("аялал")) score += 20;
     if (landOnly && isCombo && !wantsFlight) score -= 50;
+    score += durationVariantScore(text, trip);
+    score += examFeeIntentScore(text, trip);
 
     // Bonus when alias is a precise land-only spelling variant.
     const landAliasHit = getAliases(trip).some((alias) => {

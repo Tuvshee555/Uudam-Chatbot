@@ -115,6 +115,16 @@ test("recognizes date availability even when the user also wants to book", () =>
   );
 });
 
+test("date availability intent does not steal date-specific price questions", () => {
+  assert.equal(
+    hasDepartureDateAvailabilityIntent(
+      "Хайлаар Манжуур 5 өдөр 8 сарын 24-нд хэд вэ?",
+      NOW_IN_MONGOLIA,
+    ),
+    false,
+  );
+});
+
 test("broad month availability lists options instead of picking one trip", () => {
   const now = new Date("2026-07-08T04:00:00.000Z");
   const reply = buildDepartureDateAvailabilityReply({

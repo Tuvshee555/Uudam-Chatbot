@@ -236,6 +236,7 @@ export function buildTripProgramReply(
 
   const mediaUrls = getTripProgramMediaUrls(best);
   const itineraryLines = mediaUrls.length > 0 ? [] : getTripItineraryLines(best);
+  const brochure = getTripBrochureAsset(best);
 
   if (mediaUrls.length > 0) {
     return {
@@ -243,6 +244,15 @@ export function buildTripProgramReply(
       trip: best,
       brochure: null,
       mediaUrls,
+    };
+  }
+
+  if (brochure) {
+    return {
+      reply: `✈️ ${best.route_name}${summaryBlock}\n\nPDF хөтөлбөрийг илгээж байна.`,
+      trip: best,
+      brochure,
+      mediaUrls: [],
     };
   }
 

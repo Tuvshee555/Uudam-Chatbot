@@ -53,6 +53,7 @@ import {
   formatChildRules,
   formatCompactDepartureList,
   formatDepartureDates,
+  formatExtraFeesLine,
   formatRouteName,
   formatSelectedPriceGroups,
   formatSpecificDatePrice,
@@ -710,6 +711,8 @@ export function buildStructuredTripReply(
           lines.push(`💰 ${label}: ${parts.length ? parts.join(" | ") : "аяллын зөвлөхтэй холбогдоорой"}`);
         }
       }
+      const feesLine = formatExtraFeesLine(best);
+      if (feesLine) lines.push(feesLine);
     } else if (askedMonthOnly !== null) {
       // Month-only request: filter price_groups to that month
       const currency = best.currency || "MNT";
@@ -739,6 +742,8 @@ export function buildStructuredTripReply(
         }
         const childRulesStr = formatChildRules(best, currency);
         if (childRulesStr) lines.push(childRulesStr);
+        const feesLine = formatExtraFeesLine(best);
+        if (feesLine) lines.push(feesLine);
       } else {
         // Fall back to full price table
         lines.push(formatTripBasePricePremium(best));
@@ -747,6 +752,8 @@ export function buildStructuredTripReply(
       for (const ymd of requestedDates) {
         lines.push(formatSpecificDatePrice(best, ymd, ymd, now));
       }
+      const feesLine = formatExtraFeesLine(best);
+      if (feesLine) lines.push(feesLine);
     } else {
       lines.push(formatTripBasePricePremium(best));
     }
