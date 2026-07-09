@@ -193,6 +193,26 @@ export function extractAgeRangeIntent(text: string): { min: number; max: number;
   return { min, max, target };
 }
 
+export function extractSingleAgeIntent(text: string): { age: number; target: "child" | "infant" } | null {
+  const beforeTarget = /(хүүхэд|нярай)?\s*(\d{1,2})\s*(настай|нас|сар|сартай)\b/i.exec(text);
+  const afterTarget = /(?:^|[^\d-])(\d{1,2})\s*(настай|нас|сар|сартай)\s*(хүүхэд|нярай)?/i.exec(text);
+  const match = beforeTarget || afterTarget;
+  if (!match) return null;
+
+  const age = Number.parseInt(beforeTarget ? match[2] : match[1], 10);
+  if (Number.isNaN(age)) return null;
+  const unit = beforeTarget ? match[3] : match[2];
+  const explicitTarget = beforeTarget ? match[1] : match[3];
+  const target = explicitTarget === "нярай" || unit.includes("сар")
+    ? "infant"
+    : explicitTarget === "хүүхэд"
+      ? "child"
+      : age <= 1
+        ? "infant"
+        : "child";
+  return { age, target };
+}
+
 export function extractRangePriceFromText(
   text: string,
   target: "child" | "infant",
@@ -207,25 +227,59 @@ export function extractRangePriceFromText(
   return Number.isNaN(value) ? null : value;
 }
 
+function parseAgeRange(text: string): { min: number; max: number } | null {
+  const rangeMatch = /(\d{1,2})\s*[-–]\s*(\d{1,2})/.exec(text);
+  if (!rangeMatch) return null;
+  const min = Number.parseInt(rangeMatch[1], 10);
+  const max = Number.parseInt(rangeMatch[2], 10);
+  if (Number.isNaN(min) || Number.isNaN(max)) return null;
+  return { min, max };
+}
+
+function ruleMatchesTarget(rule: Record<string, unknown>, target: "child" | "infant"): boolean {
+  const label = typeof rule.label === "string" ? normText(rule.label) : "";
+  const range = typeof rule.age_range === "string" ? normText(rule.age_range) : "";
+  const haystack = `${label} ${range}`;
+  if (target === "infant") return haystack.includes("нярай") || haystack.includes("infant") || haystack.includes("сар");
+  return !haystack.includes("нярай") && !haystack.includes("infant") && !haystack.includes("сар");
+}
+
+function findSingleAgePriceInText(text: string, target: "child" | "infant", age: number): number | null {
+  const role = target === "infant" ? "(нярай|infant)" : "(хүүхэд|child)";
+  const pattern = new RegExp(`${role}[^\\d]{0,10}(\\d{1,2})\\s*[-–]\\s*(\\d{1,2})\\s*(?:нас|сар|сартай|age)[^\\d]{0,10}([\\d,\\.\\s]+)\\s*₮?`, "gi");
+  for (const match of text.matchAll(pattern)) {
+    const min = Number.parseInt(match[2], 10);
+    const max = Number.parseInt(match[3], 10);
+    if (Number.isNaN(min) || Number.isNaN(max) || age < min || age > max) continue;
+    const value = Number.parseInt(match[4].replace(/[^\d]/g, ""), 10);
+    if (!Number.isNaN(value)) return value;
+  }
+  return null;
+}
+
 export function buildAgeSpecificPriceReply(trip: TravelTrip, text: string): string | null {
-  const ageIntent = extractAgeRangeIntent(text);
-  if (!ageIntent) return null;
+  const ageRangeIntent = extractAgeRangeIntent(text);
+  const singleAgeIntent = ageRangeIntent ? null : extractSingleAgeIntent(text);
+  if (!ageRangeIntent && !singleAgeIntent) return null;
 
   const currency = trip.currency || "MNT";
   const extra = (trip.extra || {}) as Record<string, unknown>;
   if (Array.isArray(extra.child_rules)) {
     for (const rule of extra.child_rules as Array<Record<string, unknown>>) {
       const ageRange = typeof rule.age_range === "string" ? rule.age_range : "";
-      const rangeMatch = /(\d{1,2})\s*[-–]\s*(\d{1,2})/.exec(ageRange);
-      if (!rangeMatch) continue;
-      const ruleMin = Number.parseInt(rangeMatch[1], 10);
-      const ruleMax = Number.parseInt(rangeMatch[2], 10);
-      if (ruleMin !== ageIntent.min || ruleMax !== ageIntent.max) continue;
+      const range = parseAgeRange(ageRange);
+      if (!range) continue;
+      if (ageRangeIntent && (range.min !== ageRangeIntent.min || range.max !== ageRangeIntent.max)) continue;
+      if (singleAgeIntent) {
+        if (singleAgeIntent.age < range.min || singleAgeIntent.age > range.max) continue;
+        if (!ruleMatchesTarget(rule, singleAgeIntent.target)) continue;
+      }
 
-      const label = typeof rule.label === "string" && rule.label.trim() ? rule.label.trim() : (ageIntent.target === "infant" ? "Нярай" : "Хүүхэд");
+      const target = ageRangeIntent?.target || singleAgeIntent?.target || "child";
+      const label = typeof rule.label === "string" && rule.label.trim() ? rule.label.trim() : (target === "infant" ? "Нярай" : "Хүүхэд");
       const price = formatMoney(typeof rule.price === "number" ? rule.price : null, currency);
       if (!price) continue;
-      return `✈️ ${trip.route_name}\n💰 ${label} ${ageIntent.min}-${ageIntent.max} насны үнэ: ${price}`;
+      return `✈️ ${trip.route_name}\n💰 ${label} ${range.min}-${range.max} насны үнэ: ${price}`;
     }
   }
 
@@ -241,10 +295,17 @@ export function buildAgeSpecificPriceReply(trip: TravelTrip, text: string): stri
 
   for (const block of textBlocks) {
     if (!block) continue;
-    const priceValue = extractRangePriceFromText(block, ageIntent.target, ageIntent.min, ageIntent.max);
+    const priceValue = ageRangeIntent
+      ? extractRangePriceFromText(block, ageRangeIntent.target, ageRangeIntent.min, ageRangeIntent.max)
+      : singleAgeIntent
+        ? findSingleAgePriceInText(block, singleAgeIntent.target, singleAgeIntent.age)
+        : null;
     if (priceValue === null) continue;
-    const label = ageIntent.target === "infant" ? "Нярай" : "Хүүхэд";
-    return `✈️ ${trip.route_name}\n💰 ${label} ${ageIntent.min}-${ageIntent.max} насны үнэ: ${formatMoney(priceValue, currency)}`;
+    const label = (ageRangeIntent?.target || singleAgeIntent?.target) === "infant" ? "Нярай" : "Хүүхэд";
+    const ageText = ageRangeIntent
+      ? `${ageRangeIntent.min}-${ageRangeIntent.max} насны`
+      : `${singleAgeIntent?.age} настай`;
+    return `✈️ ${trip.route_name}\n💰 ${label} ${ageText} үнэ: ${formatMoney(priceValue, currency)}`;
   }
 
   return null;
@@ -807,7 +868,40 @@ export function formatTripBasePrice(trip: TravelTrip) {
  * Extract a single month number from phrases like "7 сард", "7-р сард", "долоодугаар сард".
  * Returns null if no month-only mention found (without a specific day).
  */
+/**
+ * Mandatory add-on charges (exam fees, single-room supplements, etc.) stored
+ * per-trip in extra.extra_fees. These are often in CNY/HKD while the base
+ * price is in MNT — a customer asking for the TOTAL cost needs this line or
+ * they are quoted a number that is not what they will actually pay.
+ */
+export function formatExtraFeesLine(trip: TravelTrip): string {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const fees = Array.isArray(extra.extra_fees)
+    ? (extra.extra_fees as Array<Record<string, unknown>>)
+    : [];
+  if (fees.length === 0) return "";
+  const parts = fees
+    .map((f) => {
+      const label = typeof f.label === "string" && f.label ? f.label : "Нэмэлт төлбөр";
+      const amount =
+        typeof f.amount === "number"
+          ? `${f.amount.toLocaleString("mn-MN")}${typeof f.currency === "string" ? f.currency : ""}`
+          : "";
+      const appliesTo = typeof f.applies_to === "string" && f.applies_to ? ` (${f.applies_to})` : "";
+      return amount ? `${label}${appliesTo}: ${amount}` : "";
+    })
+    .filter(Boolean);
+  if (parts.length === 0) return "";
+  return `⚠️ Дээрх үнэ дээр нэмэлт төлбөр орно: ${parts.join("; ")}`;
+}
+
 export function formatTripBasePricePremium(trip: TravelTrip) {
+  const priceBlock = formatTripBasePricePremiumCore(trip);
+  const feesLine = formatExtraFeesLine(trip);
+  return feesLine ? `${priceBlock}\n${feesLine}` : priceBlock;
+}
+
+function formatTripBasePricePremiumCore(trip: TravelTrip) {
   const currency = trip.currency || "MNT";
   const sections: string[] = ["💰 Үнэ:"];
   const structuredGroups = getStructuredPriceGroups(trip);

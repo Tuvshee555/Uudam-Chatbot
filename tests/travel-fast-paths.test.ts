@@ -167,6 +167,30 @@ test("direct-flight Beijing price does not answer with combo tour price", () => 
   assert.doesNotMatch(reply || "", /2,150,000|1,710,000/);
 });
 
+test("sold-out direct-flight match is reported as sold out instead of unavailable", () => {
+  const reply = buildStructuredTripReply("Жинин Универсал шууд нислэгтэй хэд вэ, суудал байгаа юу?", [
+    trip({
+      id: "universal-sold-out",
+      route_name: "Бээжин - Юниверсал шууд нислэгтэй наадмын амралтаар гарах аялал",
+      category: "Шууд нислэгтэй аялал",
+      status: "sold_out",
+      extra: {
+        aliases: ["Бээжин Юниверсал", "Универсал"],
+      },
+    }),
+    trip({
+      id: "jinin-ground",
+      route_name: "Жинин - Утай - Гүмбэн",
+      category: "Газрын аялал",
+    }),
+  ]);
+
+  assert.match(reply || "", /Юниверсал/);
+  assert.match(reply || "", /суудал дууссан/);
+  assert.doesNotMatch(reply || "", /яг шууд нислэгтэй аялал одоогоор тодорхой олдсонгүй/);
+  assert.doesNotMatch(reply || "", /Жинин - Утай - Гүмбэн/);
+});
+
 test("program reply asks for clarification on shared city-only PDF request", () => {
   const result = buildTripProgramReply("Tokyo program pdf", [
     trip({
@@ -919,6 +943,46 @@ test("child age range query is not misread as a date and returns the matching ch
   assert.doesNotMatch(reply || "", /2027|2 сарын 6|02-06/);
 });
 
+test("single child age query returns the matching age tier instead of the first child price", () => {
+  const reply = buildStructuredTripReply(
+    "Хайнан Саньяа 2 настай хүүхэд хэдээр явах вэ?",
+    [
+      trip({
+        id: "sanya",
+        route_name: "Хайнан - Саньяа шууд нислэгтэй аялал",
+        adult_price: 2990000,
+        child_price: 2790000,
+        extra: {
+          aliases: ["Хайнан Саньяа", "Саньяа"],
+          price_groups: [
+            {
+              label: "Үндсэн үнэ",
+              note: "Пүрэв гариг болгон. Хүүхэд 6–12 нас 2,790,000₮; хүүхэд 2–6 нас 2,190,000₮; нярай 0–2 нас 490,000₮.",
+              dates: ["7 сарын 2", "7 сарын 9"],
+              adult_price: 2990000,
+              child_price: 2790000,
+              infant_price: 490000,
+              child_age: "6-12 нас",
+              infant_age: "0-2 нас",
+            },
+          ],
+          child_rules: [
+            { label: "Хүүхэд", age_range: "6-12 нас", price: 2790000, currency: "MNT" },
+            { label: "Хүүхэд", age_range: "2-6 нас", price: 2190000, currency: "MNT" },
+            { label: "Нярай", age_range: "0-2 нас", price: 490000, currency: "MNT" },
+          ],
+        },
+      }),
+    ],
+    NOW,
+  );
+
+  assert.match(reply || "", /2,190,000₮/);
+  assert.match(reply || "", /2-6 нас|2–6 нас/);
+  assert.doesNotMatch(reply || "", /2,790,000₮/);
+  assert.doesNotMatch(reply || "", /490,000₮/);
+});
+
 test("infant price follow-up stays on the contextual trip instead of matching expensive-word route", () => {
   const reply = buildStructuredTripReply(
     [
@@ -1227,4 +1291,30 @@ test("passenger-type price reply only reads the customer's current line, not sta
   assert.ok(reply);
   assert.match(reply as string, /Том хүн/);
   assert.doesNotMatch(reply as string, /Хүүхэд үнэ/);
+});
+
+test("price reply surfaces a mandatory extra fee stored in a foreign currency", () => {
+  // Reproduces a live gap: a customer asking for the TOTAL cost of a trip
+  // with a mandatory CNY exam fee got only the MNT base price back — the fee
+  // silently disappeared because no fast-path reply builder ever read
+  // extra.extra_fees, even though it's rendered into the AI's own Context.
+  const withFee = trip({
+    id: "hohhot-exam-fee",
+    route_name: "Хөх хотын шинжилгээтэй - газрын аялал",
+    adult_price: 890000,
+    child_price: 700000,
+    extra: {
+      extra_fees: [
+        { label: "Шинжилгээний төлбөр", amount: 600, currency: "CNY", applies_to: "том хүн" },
+        { label: "Шинжилгээний төлбөр", amount: 300, currency: "CNY", applies_to: "хүүхэд" },
+      ],
+    },
+  });
+
+  const reply = buildSeatsReply("Хөх хотын шинжилгээтэй аялал хэд вэ?", [withFee]);
+
+  assert.ok(reply);
+  assert.match(reply as string, /Том хүн: 890,000₮/);
+  assert.match(reply as string, /600.*CNY/);
+  assert.match(reply as string, /300.*CNY/);
 });

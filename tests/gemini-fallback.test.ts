@@ -13,6 +13,11 @@ applyTestEnv({
   OPENAI_API_KEY: "test-openai-key",
 });
 
+type OpenAIChatBody = {
+  model?: string;
+  messages?: Array<{ role?: string; content?: string }>;
+};
+
 test("askGemini's internal OpenAI fallback forwards systemInstruction and the caller's model override", async () => {
   // Regression: on a Gemini outage/rate-limit, askGemini's own catch block
   // used to call askOpenAIFallbackParts without `model` or `systemText` —
@@ -23,14 +28,14 @@ test("askGemini's internal OpenAI fallback forwards systemInstruction and the ca
   // internal fallback already returned a "successful" (but ungrounded) reply.
   const geminiModule = await import("../src/lib/gemini");
   const originalFetch = globalThis.fetch;
-  let capturedBody: any = null;
+  const captured: { body: OpenAIChatBody | null } = { body: null };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     if (url.includes("generativelanguage.googleapis.com")) {
       return new Response("rate limited", { status: 429 });
     }
     if (url.includes("api.openai.com")) {
-      capturedBody = JSON.parse(String(init?.body));
+      captured.body = JSON.parse(String(init?.body)) as OpenAIChatBody;
       return new Response(
         JSON.stringify({
           choices: [{ message: { content: "REFER" } }],
@@ -50,12 +55,13 @@ test("askGemini's internal OpenAI fallback forwards systemInstruction and the ca
     });
 
     assert.equal(result.text, "REFER");
+    const capturedBody = captured.body;
     assert.ok(capturedBody, "expected the OpenAI fallback to be called");
     assert.equal(capturedBody.model, "gpt-4o");
     assert.ok(
-      capturedBody.messages.some(
-        (m: { role: string; content: string }) =>
-          m.role === "system" && m.content.includes("SYSTEM RULES"),
+      capturedBody.messages?.some(
+        (message) =>
+          message.role === "system" && message.content?.includes("SYSTEM RULES"),
       ),
       "expected the system prompt to survive into the fallback call",
     );

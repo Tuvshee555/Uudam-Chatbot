@@ -97,6 +97,8 @@ export function buildDiscountReply(
 ): string | null {
   const { best: bestRaw, ambiguous } = findBestTripMatch(text, trips);
   if (!bestRaw) {
+    const soldOut = buildSoldOutTripReply(text, trips);
+    if (soldOut) return soldOut;
     const directUnavailable = buildDirectFlightUnavailableReply(text, trips);
     if (directUnavailable) return directUnavailable;
     return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
@@ -248,7 +250,11 @@ function buildTripInfoReply(rawTrip: TravelTrip, now = new Date()) {
 
 export function buildSeatsReply(text: string, trips: TravelTrip[]): string | null {
   const { best, ambiguous } = findBestTripMatch(text, trips);
-  if (!best) return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
+  if (!best) {
+    const soldOut = buildSoldOutTripReply(text, trips);
+    if (soldOut) return soldOut;
+    return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
+  }
 
   return buildTripInfoReply(best);
 }
@@ -516,6 +522,29 @@ function buildDirectFlightUnavailableReply(text: string, trips: TravelTrip[]): s
   ].join("\n");
 }
 
+function buildSoldOutTripReply(text: string, trips: TravelTrip[]): string | null {
+  const soldOutTrips = trips.filter((trip) => trip.status === "sold_out");
+  if (soldOutTrips.length === 0) return null;
+
+  const { best, ambiguous } = findBestTripMatch(text, soldOutTrips, { includeSoldOut: true });
+  if (!best && ambiguous.length === 0) return null;
+
+  if (!best && ambiguous.length > 0) {
+    return [
+      "Таны асуусан нэрээр суудал дууссан хэд хэдэн аялал байна.",
+      "Алийг нь хэлж байгаагаа нэг тодруулаад бичээрэй:",
+      ...ambiguous.slice(0, 3).map((trip) => `• ${trip.route_name}`),
+    ].join("\n");
+  }
+  if (!best) return null;
+
+  return [
+    `✈️ ${best.route_name}`,
+    "Энэ аяллын суудал дууссан байна.",
+    "Одоогоор захиалга авах боломжгүй тул ижил төстэй өөр хувилбарыг аяллын зөвлөхөөс тодруулж өгье.",
+  ].join("\n");
+}
+
 export function buildStructuredTripReply(
   text: string,
   trips: TravelTrip[],
@@ -541,6 +570,8 @@ export function buildStructuredTripReply(
     : null;
   if (!isStructuredTripQuestion(text) && !hasDatePriceConstraint(text)) {
     if (!routeOnlyCandidate?.best) {
+      const soldOut = buildSoldOutTripReply(text, trips);
+      if (soldOut) return soldOut;
       const directUnavailable = buildDirectFlightUnavailableReply(text, trips);
       if (directUnavailable) return directUnavailable;
       return routeOnlyCandidate?.ambiguous?.length
@@ -552,6 +583,8 @@ export function buildStructuredTripReply(
 
   const { best: bestRaw, ambiguous } = findBestTripMatch(text, trips);
   if (!bestRaw) {
+    const soldOut = buildSoldOutTripReply(text, trips);
+    if (soldOut) return soldOut;
     const directUnavailable = buildDirectFlightUnavailableReply(text, trips);
     if (directUnavailable) return directUnavailable;
     return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;

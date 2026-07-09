@@ -414,7 +414,16 @@ export function getPriceValuesFromGroup(
   return values;
 }
 
-export function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] {
+type TripMatchOptions = {
+  includeSoldOut?: boolean;
+};
+
+function canMatchTripStatus(trip: TravelTrip, options?: TripMatchOptions): boolean {
+  if (trip.status === "active") return true;
+  return options?.includeSoldOut === true && trip.status === "sold_out";
+}
+
+export function findTripMatches(text: string, trips: TravelTrip[], options?: TripMatchOptions): TripMatch[] {
   const query = normText(text);
   const queryPhonetic = phoneticLatinText(text);
   const queryWords = unique(keywordTokens(text));
@@ -428,7 +437,7 @@ export function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] 
 
   const matches: TripMatch[] = [];
   for (const trip of trips) {
-    if (trip.status !== "active") continue;
+    if (!canMatchTripStatus(trip, options)) continue;
     if (wantsCombo && !tripIsLandFlightCombo(trip)) continue;
     if (wantsDirectFlight && !tripIsDirectFlight(trip)) continue;
     if (landOnly && !wantsFlight && !tripIsLandOnly(trip)) continue;
@@ -531,12 +540,12 @@ export function findTripMatches(text: string, trips: TravelTrip[]): TripMatch[] 
 export function resolveTripFromUserMessage(
   text: string,
   trips: TravelTrip[],
-  options: { allowLooseFallback?: boolean } = {},
+  options: { allowLooseFallback?: boolean } & TripMatchOptions = {},
 ): TripResolution {
   const allowLooseFallback = options.allowLooseFallback !== false;
-  const matches = findTripMatches(text, trips);
+  const matches = findTripMatches(text, trips, options);
   if (!matches.length) {
-    const looseBest = allowLooseFallback ? findLooseTripMatch(text, trips) : null;
+    const looseBest = allowLooseFallback ? findLooseTripMatch(text, trips, options) : null;
     return looseBest
       ? { status: "verified", trip: looseBest, candidates: [] }
       : { status: "not_found", trip: null, candidates: [] };
@@ -568,8 +577,8 @@ export function resolveTripFromUserMessage(
   return { status: "verified", trip: best.trip, candidates: [] };
 }
 
-export function findBestTripMatch(text: string, trips: TravelTrip[]) {
-  const resolution = resolveTripFromUserMessage(text, trips);
+export function findBestTripMatch(text: string, trips: TravelTrip[], options?: TripMatchOptions) {
+  const resolution = resolveTripFromUserMessage(text, trips, options);
   if (resolution.status === "verified") return { best: resolution.trip, ambiguous: [] as TravelTrip[] };
   if (resolution.status === "ambiguous") return { best: null, ambiguous: resolution.candidates };
   return { best: null, ambiguous: [] as TravelTrip[] };
@@ -825,7 +834,7 @@ export function tripIsCruise(trip: TravelTrip): boolean {
   );
 }
 
-function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBrochureIntent?: boolean }) {
+function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBrochureIntent?: boolean } & TripMatchOptions) {
   const query = normText(text);
   const queryPhonetic = phoneticLatinText(text);
   // Use keywordTokens() so generic route words (газар, нислэг, аялал, хосолсон…)
@@ -843,7 +852,7 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
   let secondScore = 0;
 
   for (const trip of trips) {
-    if (trip.status !== "active") continue;
+    if (!canMatchTripStatus(trip, options)) continue;
     if (wantsCombo && !tripIsLandFlightCombo(trip)) continue;
     if (wantsDirectFlight && !tripIsDirectFlight(trip)) continue;
     if (landOnly && !wantsFlight && !tripIsLandOnly(trip)) continue;
