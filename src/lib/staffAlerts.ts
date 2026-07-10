@@ -114,11 +114,12 @@ export async function notifyStaffOfLead(
   }
 
   if (attempted === 0) {
+    // Deliberately no notify channel configured (owner checks the admin
+    // dashboard's Хүсэлтүүд/leads tab instead of real-time pings) — this is
+    // expected, not a failure. The lead itself is already saved in the DB
+    // regardless of whether a ping goes out; log level is quiet on purpose.
     recordCounter("staff_alert.no_channel_total", 1, { kind: alert.kind });
-    logError("staff_alert.no_channel_configured", {
-      kind: alert.kind,
-      hint: "Set STAFF_NOTIFY_PSIDS and/or TELEGRAM_BOT_TOKEN + TELEGRAM_STAFF_CHAT_IDS so new leads reach a human.",
-    });
+    logInfo("staff_alert.no_channel_configured", { kind: alert.kind });
     return;
   }
   if (delivered === 0) {
