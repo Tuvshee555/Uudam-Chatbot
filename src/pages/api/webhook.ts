@@ -1668,12 +1668,15 @@ async function handleMessage(
   // the customer with a bare apology and no human follow-up.
   let aiOutage = false;
   try {
+    // OpenAI is the primary model for customer replies (owner's call — more
+    // reliable in practice); Gemini is the backup if OpenAI itself fails.
     const result = await askGemini(promptParts.user, {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
       source: "api.webhook",
       systemInstruction: promptParts.system,
       openaiModel: process.env.OPENAI_REPLY_MODEL || "gpt-4o",
+      preferOpenAI: true,
     });
     aiReply = result.text;
   } catch (error) {

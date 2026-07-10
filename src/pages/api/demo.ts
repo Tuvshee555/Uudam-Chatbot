@@ -336,12 +336,15 @@ export default async function handler(
       // idle. Try OpenAI with the same prompt before giving up.
       let aiReplyText: string;
       try {
+        // OpenAI is the primary model for customer replies (owner's call —
+        // more reliable in practice); Gemini is the backup if OpenAI fails.
         const result = await askGemini(promptParts.user, {
           requestId: trace.requestId,
           correlationId: trace.correlationId,
           source: "api.demo",
           systemInstruction: promptParts.system,
           openaiModel: process.env.OPENAI_REPLY_MODEL || "gpt-4o",
+          preferOpenAI: true,
         });
         aiReplyText = result.text;
       } catch (error) {

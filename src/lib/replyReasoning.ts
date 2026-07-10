@@ -154,6 +154,7 @@ export async function analyzeBeforeReply(input: {
       maxOutputTokens: REASONING_MAX_OUTPUT_TOKENS,
       timeoutMs: REASONING_TIMEOUT_MS,
       maxRetries: 0,
+      preferOpenAI: true,
     });
     const analysis = normalizeReasoningText(result.text);
     if (!analysis) return null;

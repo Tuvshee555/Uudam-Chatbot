@@ -155,6 +155,7 @@ export async function updateCustomerMemoryAfterTurn(input: {
       maxOutputTokens: MEMORY_MAX_OUTPUT_TOKENS,
       timeoutMs: MEMORY_TIMEOUT_MS,
       maxRetries: 0,
+      preferOpenAI: true,
     });
     const nextMemory = normalizeCustomerMemoryText(result.text);
     if (!nextMemory) return;

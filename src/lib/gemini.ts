@@ -69,8 +69,10 @@ export type AskGeminiOptions = {
   systemInstruction?: string;
   /**
    * When true, use OpenAI as the PRIMARY model and fall back to Gemini if
-   * OpenAI fails. Used for file reading/parsing, where OpenAI is more reliable.
-   * Chat answering leaves this off so Gemini (better Mongolian) stays primary.
+   * OpenAI fails. Originally used only for file reading/parsing; owner chose
+   * OpenAI as primary for customer chat too (2026-07-10) after a Gemini
+   * prepay-credit outage left both webhook.ts and demo.ts stuck retrying a
+   * dead provider before ever reaching the working OpenAI fallback.
    */
   preferOpenAI?: boolean;
   /** Override the OpenAI model when preferOpenAI=true (default: gpt-4o-mini). */
