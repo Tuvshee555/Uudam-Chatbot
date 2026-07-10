@@ -1250,6 +1250,39 @@ async function handleMessage(
   // so a customer saying they just paid got a random trip listing instead of
   // any acknowledgment).
   if (hasPaymentClaimIntent(text)) {
+    // The deferral reply PROMISES the customer a consultant will check and
+    // get back to them — that promise is only real if staff actually hear
+    // about it. A payment claim is the strongest buy signal there is; without
+    // this lead+alert, a paying customer would wait on a follow-up nobody
+    // knew to make.
+    try {
+      if (!(await hasRecentOpenLead(senderId, "handoff"))) {
+        await createLead({
+          kind: "handoff",
+          platform,
+          senderId,
+          customerMessage: text,
+          contactPhone: detectedPhone || "",
+          context: "Төлбөр шилжүүлсэн гэж мэдэгдсэн — зөвлөх шалгаж баталгаажуулна уу.",
+        });
+        await notifyStaffOfLead(
+          { kind: "handoff", platform, customerMessage: text, contactPhone: detectedPhone || "" },
+          {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            source: "api.webhook.payment_claim",
+          },
+        );
+      }
+    } catch (error) {
+      logWarn("webhook.payment_claim_lead_failed", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+        classification: classifyError(error),
+      });
+    }
     const deferralReply = enforceWebsiteForPayment(
       sanitizeAssistantReply(PAYMENT_VERIFICATION_DEFERRAL_REPLY),
     );
