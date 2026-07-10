@@ -15,7 +15,7 @@ import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/c
 import { analyzeBeforeReply, buildTripIndexLines } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
 import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
-import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
+import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
 import { buildAmbiguousTripReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
@@ -162,6 +162,23 @@ export default async function handler(
         return routedCache;
       };
       const getFastPathText = async (): Promise<string> => (await getRouted()).matchText;
+
+      // A payment/booking confirmation claim ("5 сая шилжүүлсэн") must be
+      // acknowledged BEFORE any trip/date/price fast-path runs — those are
+      // blind text/number matchers and were hijacking payment claims into an
+      // unrelated trip reply (a bare number like "5" or "8" in "5 сая" /
+      // "8 сая" matched a trip alias or month availability instead).
+      if (hasPaymentClaimIntent(normalizedText)) {
+        const deferralReply = enforceWebsiteForPayment(
+          sanitizeAssistantReply(PAYMENT_VERIFICATION_DEFERRAL_REPLY),
+        );
+        await appendMessage(sessionId, "user", normalizedText);
+        await appendMessage(sessionId, "assistant", deferralReply);
+        await rememberTurn();
+        recordCounter("demo.payment_claim_deferred_total", 1, {});
+        return res.status(200).json({ reply: deferralReply, buttons: [] });
+      }
+
       // Answer fits several offered candidates — re-ask scoped to exactly
       // those (mirrors the production webhook).
       {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { enforcePaymentNeverSelfConfirmed, extractButtons, isReferReply, rewriteRepeatedGenericClarifier, stripRepeatedGreeting } from "../src/lib/reply";
+import { enforcePaymentNeverSelfConfirmed, extractButtons, hasPaymentClaimIntent, isReferReply, rewriteRepeatedGenericClarifier, stripRepeatedGreeting } from "../src/lib/reply";
 
 test("enforcePaymentNeverSelfConfirmed replaces a fabricated booking confirmation", () => {
   const userText = "би 2,990,000 төлсөн, баталгаажуул";
@@ -36,6 +36,27 @@ test("enforcePaymentNeverSelfConfirmed leaves normal trip replies untouched even
   const reply = "Захиалгаа баталгаажуулах бол нэр, утасны дугаараа үлдээгээрэй.";
   const safe = enforcePaymentNeverSelfConfirmed("Бээжин аялал хэд вэ?", reply);
   assert.equal(safe, reply);
+});
+
+test("hasPaymentClaimIntent detects a money-transfer claim even with a bare number in it", () => {
+  // Real bug: "5 сая шилжүүлсэн" was hijacked by a trip fast-path because "5"
+  // matched a trip alias containing "5 өдөр", and "8 сая" matched August
+  // month availability — the payment claim was never acknowledged at all.
+  assert.equal(hasPaymentClaimIntent("5 сая шилжүүлсэн, баталгаажуулаарай"), true);
+  assert.equal(hasPaymentClaimIntent("8 сая шилжүүлсэн, баталгаажуулаарай"), true);
+  assert.equal(hasPaymentClaimIntent("мөнгө шилжүүлсэн, баталгаажуулаарай"), true);
+  assert.equal(hasPaymentClaimIntent("screenshot явуулсан"), true);
+  assert.equal(hasPaymentClaimIntent("миний төлбөр орсон уу?"), true);
+});
+
+test("hasPaymentClaimIntent does not fire on an unrelated document/visa question", () => {
+  // The looser PAYMENT_CLAIM_PATTERNS set (used by enforcePaymentNeverSelfConfirmed)
+  // includes a bare /баримт/i, which also matches "бичиг баримт" (visa
+  // documents) — fine there since it only fires if the REPLY separately
+  // claims confirmation, but hasPaymentClaimIntent gates fast-path routing
+  // directly, so it must not treat a document question as a payment claim.
+  assert.equal(hasPaymentClaimIntent("Виз бүрдүүлэх бичиг баримт хэрэгтэй юу?"), false);
+  assert.equal(hasPaymentClaimIntent("Бээжин аялал хэд вэ?"), false);
 });
 
 test("rewrites repeated generic clarifier after recent trip details", () => {

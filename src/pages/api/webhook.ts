@@ -14,7 +14,7 @@ import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/c
 import { scheduleCustomerImageProcessing } from "../../lib/customerDocuments";
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines } from "../../lib/replyReasoning";
-import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, isDuplicateReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
+import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, dbClaimGoodbye, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
@@ -1241,6 +1241,42 @@ async function handleMessage(
     return routedCache;
   };
   const getFastPathText = async (): Promise<string> => (await getRouted()).matchText;
+
+  // A payment/booking confirmation claim ("5 сая шилжүүлсэн") must be
+  // acknowledged BEFORE any trip/date/price fast-path runs below — those are
+  // blind text/number matchers and were hijacking real payment claims into an
+  // unrelated trip reply (a bare number like "5" or "8" in "5 сая" / "8 сая"
+  // matched a trip alias containing "5 өдөр" or August month availability,
+  // so a customer saying they just paid got a random trip listing instead of
+  // any acknowledgment).
+  if (hasPaymentClaimIntent(text)) {
+    const deferralReply = enforceWebsiteForPayment(
+      sanitizeAssistantReply(PAYMENT_VERIFICATION_DEFERRAL_REPLY),
+    );
+    await assertLockHealthy();
+    const delivered = await sendPlatformMessage(
+      platform,
+      senderId,
+      deferralReply,
+      token,
+      pageId,
+      igUserId,
+      trace,
+      { allowFallback: false },
+    );
+    if (!delivered) {
+      throw new RetryableWebhookError("delivery_failed:payment_claim_deferred");
+    }
+    try {
+      await appendMessage(senderId, "assistant", deferralReply);
+      await setLastReplyConsistent(sessionId, deferralReply);
+    } catch {
+    }
+    await rememberTurn("api.webhook.payment_claim_deferred");
+    recordCounter("webhook.payment_claim_deferred_total", 1, { platform });
+    return;
+  }
+
   // The customer's answer fits SEVERAL of the trips we just offered ("шууд
   // нислэгтэй" when both options are direct flights) — re-ask scoped to
   // exactly those, like a human agent would. Letting a matcher rescore the

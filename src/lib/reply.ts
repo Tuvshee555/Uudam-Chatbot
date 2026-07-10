@@ -70,8 +70,38 @@ const PAYMENT_CONFIRMATION_CLAIM_PATTERNS: RegExp[] = [
   /зөв байх ёстой/i,
 ];
 
-const PAYMENT_VERIFICATION_DEFERRAL_REPLY =
+export const PAYMENT_VERIFICATION_DEFERRAL_REPLY =
   "Төлбөр, захиалгын баталгаажуулалтыг манай аяллын зөвлөх л шалгаж хийдэг тул би чат дээр баталгаажуулж чадахгүй. Зөвлөх тантай удахгүй холбогдож шалгаад мэдэгдэх болно 🙏";
+
+// Stricter than PAYMENT_CLAIM_PATTERNS above — that set includes a bare
+// /баримт/i, which also matches innocent questions like "бичиг баримт
+// хэрэгтэй юу?" (visa document question). Fine for its original job (only
+// fires if the REPLY separately also claims confirmation — a rare
+// coincidence), but too broad to gate fast-path routing on: it would make a
+// document question get told "only the consultant can verify payments"
+// instead of answered. This set requires an unambiguous money-transfer or
+// payment-proof signal.
+const STRONG_PAYMENT_CLAIM_PATTERNS: RegExp[] = [
+  /шилжүүл(?:сэн|лээ|эв)/i,
+  /төл(?:сөн|лөө|бөр).{0,20}(?:орсон|хийсэн|хийлээ)/i,
+  /screenshot|скриншот/i,
+  /миний төлбөр орсон уу/i,
+  /данс руу шилжүүл/i,
+  /(?:төлбөр|захиалг(?:а|ыг)).{0,15}баталгаажуул/i,
+];
+
+/**
+ * True when the customer's OWN message is itself a payment/booking
+ * confirmation claim ("5 сая шилжүүлсэн", "screenshot явуулсан"). Callers use
+ * this to short-circuit trip/date/price fast-paths BEFORE they run — those
+ * fast-paths are blind text/number matchers and were hijacking payment claims
+ * (e.g. "5 сая шилжүүлсэн" matched a trip alias containing "5 өдөр", "8 сая"
+ * matched August availability) into an unrelated trip reply instead of
+ * acknowledging the payment claim at all.
+ */
+export function hasPaymentClaimIntent(userText: string): boolean {
+  return STRONG_PAYMENT_CLAIM_PATTERNS.some((pattern) => pattern.test(userText));
+}
 
 /**
  * Backstops the prompt rule: no matter what the model wrote, a text-only
