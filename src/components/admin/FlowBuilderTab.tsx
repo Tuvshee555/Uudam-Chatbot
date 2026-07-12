@@ -1,82 +1,8 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import {
-  Alert,
-  Badge,
-  Button,
-  Card,
-  EmptyState,
-  Icons,
-  Input,
-  Modal,
-  Select,
-  Spinner,
-  Textarea,
-  cx,
-  useToast,
-} from "@/components/ui";
-import type {
-  AIAction,
-  AIProposal,
-  AttachedFile,
-  ChatButton,
-  ChatMessage,
-  ClarificationAnswer,
-  ClarificationQuestion,
-  ConflictItem,
-  ControlState,
-  DriveSyncDiagnostics,
-  DriveSyncRecentFile,
-  FlowRule,
-  LeadStats,
-  PageControlState,
-  PauseRow,
-  ProposalMsg,
-  ReadinessReport,
-  RecentRow,
-  SettingsForm,
-  StructuredRow,
-  TravelBotSettings,
-  TravelLead,
-  TravelTrip,
-} from "@/lib/adminTypes";
-import {
-  FIELD_LABELS,
-  STATUS_LABELS,
-  buildProposalClarifications,
-  compactWarnings,
-  describeAction,
-  summarizeConflict,
-} from "@/lib/adminProposalUtils";
-import { SectionHeading, StructuredEditor } from "./AdminShared";
+import { useEffect, useRef, useState } from "react";
+import { Button, Card, EmptyState, Icons, Input, Modal, Spinner, Textarea, useToast } from "@/components/ui";
+import type { FlowRule } from "@/lib/adminTypes";
+import { SectionHeading } from "./AdminShared";
 import { BLANK_FLOW_RULE } from "./adminTabData";
-import {
-  DURATIONS,
-  HANDOFF_DURATION_CUSTOM,
-  HANDOFF_DURATION_OPTIONS,
-  MAX_AI_INPUT_CHARS,
-  QUICK_ACTIONS,
-  STATUS_TONE,
-  asInt,
-  conflictTone,
-  driveSyncTone,
-  formatBytes,
-  formatMoney,
-  formatTime,
-  handoffDurationSelectValue,
-  settingsToForm,
-  shortId,
-  splitLines,
-  timeLeft,
-  toStructuredRows,
-} from "@/lib/adminUtils";
-
 export function FlowBuilderTab({
   extra,
   apiFetch,

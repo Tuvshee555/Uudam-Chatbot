@@ -1,81 +1,8 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import {
-  Alert,
-  Badge,
-  Button,
-  Card,
-  EmptyState,
-  Icons,
-  Input,
-  Modal,
-  Select,
-  Spinner,
-  Textarea,
-  cx,
-  useToast,
-} from "@/components/ui";
-import type {
-  AIAction,
-  AIProposal,
-  AttachedFile,
-  ChatButton,
-  ChatMessage,
-  ClarificationAnswer,
-  ClarificationQuestion,
-  ConflictItem,
-  ControlState,
-  CustomerDocument,
-  DriveSyncDiagnostics,
-  DriveSyncRecentFile,
-  FlowRule,
-  LeadStats,
-  PageControlState,
-  PauseRow,
-  ProposalMsg,
-  ReadinessReport,
-  RecentRow,
-  SettingsForm,
-  StructuredRow,
-  TravelBotSettings,
-  TravelLead,
-  TravelTrip,
-} from "@/lib/adminTypes";
-import {
-  FIELD_LABELS,
-  STATUS_LABELS,
-  buildProposalClarifications,
-  compactWarnings,
-  describeAction,
-  summarizeConflict,
-} from "@/lib/adminProposalUtils";
-import { SectionHeading, StructuredEditor } from "./AdminShared";
-import {
-  DURATIONS,
-  HANDOFF_DURATION_CUSTOM,
-  HANDOFF_DURATION_OPTIONS,
-  MAX_AI_INPUT_CHARS,
-  QUICK_ACTIONS,
-  STATUS_TONE,
-  asInt,
-  conflictTone,
-  driveSyncTone,
-  formatBytes,
-  formatMoney,
-  formatTime,
-  handoffDurationSelectValue,
-  settingsToForm,
-  shortId,
-  splitLines,
-  timeLeft,
-  toStructuredRows,
-} from "@/lib/adminUtils";
+import { useMemo, useRef, useState } from "react";
+import { Badge, Button, Card, Icons, Input, Spinner, Textarea, cx, useToast } from "@/components/ui";
+import type { ControlState, CustomerDocument, PageControlState, PauseRow, RecentRow, TravelBotSettings } from "@/lib/adminTypes";
+import { SectionHeading } from "./AdminShared";
+import { DURATIONS, formatTime, shortId, timeLeft } from "@/lib/adminUtils";
 
 function greetingEnabled(settings: TravelBotSettings | null): boolean {
   const g = (settings?.extra as Record<string, unknown>)?.greeting;
@@ -1173,12 +1100,12 @@ function QuickToggleCard({
   title,
   description,
   enabled,
-  busyId,
   onToggle,
 }: {
   title: string;
   description: string;
   enabled: boolean;
+  // Kept in the props type: callers pass it as a stable identifier.
   busyId: string;
   onToggle: (next: boolean) => Promise<void>;
 }) {

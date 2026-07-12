@@ -1,10 +1,7 @@
 import { randomUUID } from "crypto";
 import { getEnv } from "./env";
 import { fixMojibake } from "./encoding";
-import {
-  logError,
-  recordCounter,
-} from "./observability";
+import { recordCounter } from "./observability";
 import { queryNeon } from "./neonDb";
 import { ensureTravelSchema } from "./travelSchema";
 // Re-exported so existing importers (travelOps, googleDriveSync, travelAI, …)

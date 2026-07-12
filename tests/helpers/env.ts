@@ -52,6 +52,7 @@ const DEFAULT_OPTIONAL_ENV: Record<string, string> = {
 };
 
 const RESET_ONLY_ENV_KEYS = [
+  "CRON_SECRET",
   "FACEBOOK_PAGES",
   "DATABASE_URL",
   "NEON_DATABASE_URL",

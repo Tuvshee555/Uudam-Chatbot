@@ -7,42 +7,8 @@ import {
   recordCounter,
 } from "./observability";
 import { queryNeon } from "./neonDb";
-import type {
-  AITripAction,
-  ConflictSeverity,
-  ConflictItem,
-  AIChangeProposal,
-  ProposalValidationReport,
-} from "./travelTypes";
-import {
-  wait,
-  ensureTravelSchema,
-  listTrips,
-  getTripById,
-  upsertTrip,
-  patchTrip,
-  deleteTrip,
-  resolveTripIdByMatch,
-  mapTripRow,
-  normalizeProposal,
-  parseJsonFromModel,
-  proposalFallbackFromRawText,
-  dedupeStrings,
-  cleanFields,
-  isAgencyHeaderName,
-  isAgencyHeaderConflict,
-  isOptionalAddOnCostConflict,
-  isDocumentedMealExceptionConflict,
-  isGenericConfirmationText,
-  isCompleteCleanAction,
-  buildConflictLabel,
-  findTripMatches,
-  isReasonableMoney,
-  isReasonableSeats,
-  normalizeDateText,
-  isRecurringDepartureText,
-  estimateInlineBytes,
-} from "./travelDb";
+import type { AITripAction, ConflictSeverity, ConflictItem, AIChangeProposal } from "./travelTypes";
+import { wait, ensureTravelSchema, listTrips, getTripById, upsertTrip, patchTrip, deleteTrip, resolveTripIdByMatch, mapTripRow, normalizeProposal, parseJsonFromModel, proposalFallbackFromRawText, dedupeStrings, estimateInlineBytes } from "./travelDb";
 import type { TravelTrip } from "./travelTypes";
 import {
   AI_CHANGE_GEMINI_TIMEOUT_MS,

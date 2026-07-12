@@ -17,6 +17,7 @@ test("production readiness does not require optional Redis", async () => {
     const report = await loadReadiness({
       VERCEL_ENV: "production",
       DATABASE_URL: "postgres://user:pass@example.com/db",
+      CRON_SECRET: "test-cron-secret",
       NEON_DATABASE_URL: undefined,
       OBSERVABILITY_LOG_SINK_URL: undefined,
       OBSERVABILITY_ERROR_SINK_URL: "https://errors.example.com",
@@ -52,6 +53,7 @@ test("production readiness does not require developer alert sink", async () => {
     const report = await loadReadiness({
       VERCEL_ENV: "production",
       DATABASE_URL: "postgres://user:pass@example.com/db",
+      CRON_SECRET: "test-cron-secret",
       NEON_DATABASE_URL: undefined,
       OBSERVABILITY_LOG_SINK_URL: undefined,
       OBSERVABILITY_ERROR_SINK_URL: undefined,
@@ -87,6 +89,7 @@ test("production readiness reaches 10 when critical hardening is configured", as
     const report = await loadReadiness({
       VERCEL_ENV: "production",
       DATABASE_URL: "postgres://user:pass@example.com/db",
+      CRON_SECRET: "test-cron-secret",
       NEON_DATABASE_URL: undefined,
       REDIS_URL: undefined,
       REDIS_STATE_ENABLED: "false",

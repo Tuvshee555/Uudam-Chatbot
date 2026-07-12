@@ -21,12 +21,7 @@ import {
   clearClarificationState,
 } from "./clarificationState";
 import { pickFastPathMatchText } from "./contextualText";
-import {
-  getTripSearchHaystack,
-  normText,
-  phoneticLatinText,
-  resolveTripFromUserMessage,
-} from "./travelFastPathsSearch";
+import { getTripSearchHaystack, phoneticLatinText, resolveTripFromUserMessage } from "./travelFastPathsSearch";
 import type { TravelTrip } from "./travelTypes";
 
 /**

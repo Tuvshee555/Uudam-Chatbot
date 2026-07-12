@@ -3,12 +3,20 @@ import { dbClaimReminder, dbGetPendingReminders } from "../../../lib/travelOps";
 import { sendTextMessage, sendImageMessage } from "../../../lib/messenger";
 import { getEnv } from "../../../lib/env";
 import { getTravelBotSettings } from "../../../lib/travelOps";
+import { safeSecretCompare } from "../../../lib/adminAuth";
 
-// Vercel cron secret — must match CRON_SECRET env var
+// Vercel cron secret — must match CRON_SECRET env var.
+// FAIL CLOSED in production: a missing secret used to mean "allow everyone",
+// so anyone who found the URL could trigger reminder sends to real customers.
+// Local dev (no secret, not production) stays open for convenience.
 function isCronAuthorized(req: NextApiRequest): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return true; // no secret configured = allow (dev mode)
-  return req.headers.authorization === `Bearer ${secret}`;
+  const secret = process.env.CRON_SECRET || "";
+  const production =
+    process.env.VERCEL_ENV === "production" || process.env.NODE_ENV === "production";
+  if (!secret) return !production;
+  const header = req.headers.authorization;
+  const provided = Array.isArray(header) ? header[0] : header || "";
+  return safeSecretCompare(`Bearer ${secret}`, provided);
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

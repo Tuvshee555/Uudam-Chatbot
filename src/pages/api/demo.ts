@@ -14,7 +14,7 @@ import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { analyzeBeforeReply, buildTripIndexLines } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
-import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
+import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
@@ -127,7 +127,7 @@ export default async function handler(
     }
 
     try {
-      void maybeAutoSyncDriveFolder({ source: "api.demo" });
+      scheduleDriveAutoSync({ source: "api.demo" });
       const { systemPrompt, business, pinnedButtonLabels } = await readBusinessData();
       const sessionId = `demo:${normalizedConversationId}`;
       const history = await getHistory(sessionId);

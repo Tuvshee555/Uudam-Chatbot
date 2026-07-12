@@ -1,82 +1,6 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import {
-  Alert,
-  Badge,
-  Button,
-  Card,
-  EmptyState,
-  Icons,
-  Input,
-  Modal,
-  Select,
-  Spinner,
-  Textarea,
-  cx,
-  useToast,
-} from "@/components/ui";
-import type {
-  AIAction,
-  AIProposal,
-  AttachedFile,
-  ChatButton,
-  ChatMessage,
-  ClarificationAnswer,
-  ClarificationQuestion,
-  ConflictItem,
-  ControlState,
-  DriveSyncDiagnostics,
-  DriveSyncRecentFile,
-  FlowRule,
-  LeadStats,
-  PageControlState,
-  PauseRow,
-  ProposalMsg,
-  ReadinessReport,
-  RecentRow,
-  SettingsForm,
-  StructuredRow,
-  TravelBotSettings,
-  TravelLead,
-  TravelTrip,
-} from "@/lib/adminTypes";
-import {
-  FIELD_LABELS,
-  STATUS_LABELS,
-  buildProposalClarifications,
-  compactWarnings,
-  describeAction,
-  summarizeConflict,
-} from "@/lib/adminProposalUtils";
-import { SectionHeading, StructuredEditor } from "./AdminShared";
+import { useEffect, useRef, useState } from "react";
+import { Button, Card, Icons, Input, Spinner, cx, useToast } from "@/components/ui";
 import { readSeasons, type SeasonItem } from "./adminTabData";
-import {
-  DURATIONS,
-  HANDOFF_DURATION_CUSTOM,
-  HANDOFF_DURATION_OPTIONS,
-  MAX_AI_INPUT_CHARS,
-  QUICK_ACTIONS,
-  STATUS_TONE,
-  asInt,
-  conflictTone,
-  driveSyncTone,
-  formatBytes,
-  formatMoney,
-  formatTime,
-  handoffDurationSelectValue,
-  settingsToForm,
-  shortId,
-  splitLines,
-  timeLeft,
-  toStructuredRows,
-} from "@/lib/adminUtils";
-
 export function SeasonsTab({
   extra,
   apiFetch,
@@ -415,17 +339,6 @@ export function SeasonsTab({
   );
 }
 
-/* ----------------------------------------------------------------
-   Greeting Tab — owner-controlled first-message welcome (text + photos)
-   ---------------------------------------------------------------- */
-type GreetingDraft = {
-  enabled: boolean;
-  text: string;
-  photoUrls: string[];
-  usePhotoUrls: boolean;
-  defaultPhotoUrls: string[];
-};
-
 function readUrlList(value: unknown): string[] {
   return Array.isArray(value)
     ? (value as unknown[]).filter(
@@ -434,16 +347,3 @@ function readUrlList(value: unknown): string[] {
     : [];
 }
 
-function readGreetingDraft(extra: Record<string, unknown>): GreetingDraft {
-  const raw =
-    extra && typeof extra.greeting === "object" && extra.greeting !== null
-      ? (extra.greeting as Record<string, unknown>)
-      : {};
-  return {
-    enabled: raw.enabled !== false,
-    text: typeof raw.text === "string" ? raw.text : "",
-    photoUrls: readUrlList(raw.photoUrls),
-    usePhotoUrls: raw.usePhotoUrls === true,
-    defaultPhotoUrls: readUrlList(raw.defaultPhotoUrls),
-  };
-}

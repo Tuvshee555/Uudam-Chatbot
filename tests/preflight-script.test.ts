@@ -27,6 +27,9 @@ const BASE_ENV = {
   OBSERVABILITY_SINK_BATCH_SIZE: "20",
   VERCEL_ENV: "production",
   VERCEL: "1",
+  // Readiness warns when the reminder cron secret is missing — a fully
+  // configured deployment has it set.
+  CRON_SECRET: "test-cron-secret",
 };
 
 test("preflight treats optional production ops sinks as ready by default", () => {

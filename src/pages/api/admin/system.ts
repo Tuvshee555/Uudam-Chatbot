@@ -3,7 +3,7 @@ import { getEnv } from "../../../lib/env";
 import { hasAdminAccess } from "../../../lib/adminAccess";
 import {
   getDriveSyncDiagnostics,
-  maybeAutoSyncDriveFolder,
+  scheduleDriveAutoSync,
 } from "../../../lib/googleDriveSync";
 import { getDbDiagnostics } from "../../../lib/travelOps";
 import { getReadinessReport } from "../../../lib/readiness";
@@ -32,7 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    void maybeAutoSyncDriveFolder({ source: "api.admin.system" });
+    scheduleDriveAutoSync({ source: "api.admin.system" });
     const [diagnostics, driveSync] = await Promise.all([
       getDbDiagnostics(),
       getDriveSyncDiagnostics(),

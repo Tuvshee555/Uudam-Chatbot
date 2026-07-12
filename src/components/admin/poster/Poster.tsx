@@ -278,7 +278,6 @@ export type PosterProps = {
 export default function Poster({
   trip: t,
   upd,
-  addItem,
   removeItem,
   insertDay,
   reorderDay,

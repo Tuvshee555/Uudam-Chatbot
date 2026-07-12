@@ -49,7 +49,7 @@ async function extractPdfTripText(b64: string, filename: string) {
   const contenders: Array<Promise<TripLike>> = [];
   if (process.env.GEMINI_API_KEY) {
     contenders.push(
-      extractTripFromPdfGemini(b64, filename).then((trip) => {
+      extractTripFromPdfGemini(b64).then((trip) => {
         console.log(`[extract] gemini ok in ${elapsed()}: ${filename}`);
         return trip;
       }),

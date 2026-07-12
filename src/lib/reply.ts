@@ -151,13 +151,6 @@ function normalizeWhitespace(text: string) {
   return text.replace(/\r/g, "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-function splitSentences(text: string) {
-  return text
-    .split(/(?<=[.!?])\s+/)
-    .map((sentence) => sentence.trim())
-    .filter(Boolean);
-}
-
 function normalizeForCompare(text: string) {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }

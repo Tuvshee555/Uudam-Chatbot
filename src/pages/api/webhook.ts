@@ -9,22 +9,25 @@ import { appendMessage, buildPromptParts, getHistory, isReferReply, REFER_FALLBA
 import { buildContextualUserText, isLikelyContextDependentText } from "../../lib/contextualText";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { fixMojibake } from "../../lib/encoding";
-import { maybeAutoSyncDriveFolder } from "../../lib/googleDriveSync";
+import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
-import { scheduleCustomerImageProcessing } from "../../lib/customerDocuments";
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines } from "../../lib/replyReasoning";
 import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
-import { createLead, dbClaimGoodbye, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
+import { createLead, dbClaimGoodbye, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { appendLeadCaptureCta, buildAmbiguousTripReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
-import { claimSeasonSend, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
-import { createPhotoOnlyState, getPhotoOnlyState, setPhotoOnlyState } from "../../lib/photoOnlyState";
+import { claimSeasonSend, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
+import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
+import {
+  extractImageAttachmentUrls,
+  handleAttachmentOnlyMessage,
+  scheduleImageDocumentPipeline,
+} from "../../lib/webhookAttachments";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
-import { advanceCollectState, buildCompletionMessage, buildLeadContext, clearCollectState, getCollectState, isInCollectFlow, promptForStep, setCollectState, startCollectState, } from "../../lib/bookingCollect";
-import type { TravelTrip } from "../../lib/travelTypes";
+import { advanceCollectState, buildCompletionMessage, buildLeadContext, clearCollectState, getCollectState, promptForStep, setCollectState, startCollectState } from "../../lib/bookingCollect";
 import { getEnv } from "../../lib/env";
 import { beginRequestTrace, classifyError, finishRequestTrace, hashIdentifier, logError, logInfo, logWarn, recordCounter, } from "../../lib/observability";
 import { parseWebhookJson, PayloadTooLargeError, verifyMetaSignature, } from "../../lib/webhookSecurity";
@@ -57,28 +60,7 @@ import {
   getWebhookRuntimeDiagnostics as getWebhookRuntimeDiagnosticsInternal,
   resetWebhookStateForTests as resetWebhookStateForTestsInternal,
 } from "../../lib/webhookDedup";
-import {
-  sendPlatformMessage,
-  recordImageMessage,
-  getTripPhotoUrls,
-  isPhotoOnlyFollowup,
-  pickTripsByIds,
-  pickNumberedTripChoice,
-  buildPhotoOnlyAmbiguousPrompt,
-  sendPhotoAlbum,
-  sendTripMediaForReply,
-  fetchAndStoreFbName,
-  sendFacebookTypingIndicator,
-  normalizeLowerText,
-  isQuickInfoKeyword,
-  isHandoffRequest,
-  CONTACT_OPERATOR_LABEL,
-  DUPLICATE_REPLY_NUDGE,
-  isBookingIntent,
-  extractPhoneNumber,
-  isPhoneOnlyMessage,
-  isCommentTriggerMatch,
-} from "../../lib/webhookMedia";
+import { sendPlatformMessage, recordImageMessage, sendPhotoAlbum, sendTripMediaForReply, fetchAndStoreFbName, sendFacebookTypingIndicator, normalizeLowerText, isQuickInfoKeyword, isHandoffRequest, CONTACT_OPERATOR_LABEL, DUPLICATE_REPLY_NUDGE, isBookingIntent, extractPhoneNumber, isPhoneOnlyMessage, isCommentTriggerMatch } from "../../lib/webhookMedia";
 const env = getEnv();
 const PAGE_TOKENS = new Map(env.facebookPages.map((p) => [p.pageId, p.token]));
 const FALLBACK_TOKEN = env.tokenPage;
@@ -102,241 +84,6 @@ export function resetWebhookStateForTests() {
 // Implementation moved to contextualText.ts so the demo endpoint shares the
 // exact same reference-resolution behavior (it previously diverged silently).
 export { isLikelyContextDependentText, buildContextualUserText };
-
-const ATTACHMENT_LABELS: Record<string, string> = {
-  image: "зураг",
-  video: "видео",
-  audio: "дуут мессеж",
-  file: "файл",
-};
-
-function extractImageAttachmentUrls(
-  attachments: Array<{ type?: string; payload?: { url?: string } }>,
-) {
-  return attachments
-    .filter((a) => a?.type === "image" && typeof a?.payload?.url === "string")
-    .map((a) => String(a.payload?.url || "").trim())
-    .filter((url) => url.startsWith("http"));
-}
-
-type ProcessedDocumentLike = {
-  category: string;
-  extracted_json?: Record<string, unknown>;
-};
-
-function readDocString(doc: ProcessedDocumentLike, section: string, field: string): string {
-  const data = doc.extracted_json?.[section];
-  if (!data || typeof data !== "object") return "";
-  const value = (data as Record<string, unknown>)[field];
-  return value == null || typeof value === "object" ? "" : String(value).trim();
-}
-
-/**
- * Category-aware confirmation sent AFTER the vision pipeline classified what
- * the customer sent. Only for documents a customer anxiously waits on
- * (payment receipt, passport, booking code, travel document) — trip
- * screenshots get their own matched-trip answer, misc images stay covered by
- * the generic ack alone.
- */
-function buildDocumentReceivedMessage(docs: ProcessedDocumentLike[]): string | null {
-  const categories = new Set(docs.map((doc) => doc.category));
-  const received: string[] = [];
-  if (categories.has("payment_screenshot")) {
-    // Echoing the amount the system read makes the confirmation feel real
-    // ("we saw your 4,180,000₮ transfer") and lets the customer correct a
-    // misread immediately.
-    const paymentDoc = docs.find((doc) => doc.category === "payment_screenshot");
-    const amount = paymentDoc ? readDocString(paymentDoc, "payment", "amount") : "";
-    const currency = paymentDoc ? readDocString(paymentDoc, "payment", "currency") : "";
-    received.push(
-      amount ? `${amount}${currency ? ` ${currency}` : ""} төлбөрийн баримт` : "төлбөрийн баримт",
-    );
-  }
-  if (categories.has("passport")) received.push("паспортын зураг");
-  if (categories.has("booking_code")) received.push("захиалгын код");
-  if (categories.has("travel_document")) received.push("бичиг баримт");
-  if (received.length === 0) return null;
-  return `Таны илгээсэн ${received.join(", ")}-ыг хүлээн авч бүртгэлээ ✅ Манай аяллын зөвлөх шалгаад баталгаажуулна. Баярлалаа! 🙌`;
-}
-
-/**
- * A trip screenshot that resolved against the REAL catalog gets an instant
- * answer — the customer asking "what is this trip?" via screenshot receives
- * the same price/dates reply they'd get by typing the trip name, with no
- * staff involvement.
- */
-async function buildMatchedTripReply(docs: ProcessedDocumentLike[]): Promise<string | null> {
-  const matched = docs.find((doc) => {
-    if (doc.category !== "trip_screenshot") return false;
-    const match = doc.extracted_json?.trip_match;
-    return Boolean(match && typeof match === "object" && (match as Record<string, unknown>).route_name);
-  });
-  if (!matched) return null;
-  const routeName = String(
-    (matched.extracted_json?.trip_match as Record<string, unknown>).route_name || "",
-  ).trim();
-  if (!routeName) return null;
-  const trips = await listTrips({ limit: 5000 }).catch(() => []);
-  const structured = trips.length > 0 ? buildStructuredTripReply(routeName, trips) : null;
-  const intro = `Таны илгээсэн зураг манай «${routeName}» аялал байна ✨`;
-  if (!structured) return intro;
-  return `${intro}\n\n${enforceWebsiteForPayment(sanitizeAssistantReply(structured))}`;
-}
-
-/**
- * Fire-and-forget vision processing + post-classification confirmation. The
- * pipeline (download + Cloudinary + AI extraction per image) must NEVER sit
- * between the customer and their reply/ack — it used to be awaited inline,
- * stalling text replies for up to minutes and risking a killed function on
- * multi-image albums.
- */
-function scheduleImageDocumentPipeline(input: {
-  platform: Platform;
-  senderId: string;
-  pageId: string;
-  token?: string;
-  imageUrls: string[];
-  trace?: { requestId: string; correlationId: string };
-}) {
-  const { platform, senderId, pageId, token, imageUrls, trace } = input;
-  if (imageUrls.length === 0) return;
-  scheduleCustomerImageProcessing({
-    platform,
-    senderId,
-    pageId,
-    urls: imageUrls,
-    trace,
-    onProcessed: async (docs) => {
-      scheduleCustomerMemoryUpdate({
-        senderId,
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        source: "api.webhook.image_documents",
-      });
-      if (platform !== "facebook" || !token) return;
-      const confirmation = buildDocumentReceivedMessage(docs);
-      const tripReply = await buildMatchedTripReply(docs);
-      if (!confirmation && !tripReply) return;
-      // Pause state is re-checked at SEND time, not schedule time: a payment
-      // receipt is exactly the moment staff jump in manually (operator echo
-      // pauses the bot), and processing takes long enough for that to happen.
-      // The document is still stored either way — only the bot's voice stops.
-      if ((await isPagePaused(pageId)) || (await isPaused(senderId))) {
-        recordCounter("webhook.document_received_suppressed_total", 1, { platform });
-        return;
-      }
-      for (const message of [confirmation, tripReply].filter(
-        (value): value is string => Boolean(value),
-      )) {
-        try {
-          await sendTextMessage(senderId, message, token, {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            source: "api.webhook.document_received",
-          });
-          await appendMessage(senderId, "assistant", message).catch(() => {});
-        } catch (error) {
-          logWarn("webhook.document_received_send_failed", {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            platform,
-            pageId,
-            senderHash: hashIdentifier(senderId),
-            classification: classifyError(error),
-            message: error instanceof Error ? error.message : String(error),
-          });
-          break;
-        }
-      }
-    },
-  });
-}
-
-/**
- * A message with attachments but no text. Record what arrived (so history and
- * long-term memory both know), and acknowledge it once so the customer never
- * feels ignored — the old behavior dropped these events entirely.
- */
-async function handleAttachmentOnlyMessage(input: {
-  platform: Platform;
-  senderId: string;
-  pageId: string;
-  token?: string;
-  attachments: Array<{ type?: string; payload?: { url?: string } }>;
-  trace?: { requestId: string; correlationId: string };
-}) {
-  const { platform, senderId, pageId, token, attachments, trace } = input;
-  if (await isPagePaused(pageId)) return;
-  if (await isPaused(senderId)) return;
-
-  const kinds = Array.from(
-    new Set(attachments.map((a) => ATTACHMENT_LABELS[a?.type || ""] || "файл")),
-  );
-  const storedImages = attachments
-    .filter((a) => a?.type === "image" && typeof a?.payload?.url === "string")
-    .map((a) => ({ type: "image" as const, url: String(a.payload?.url) }));
-  await appendMessage(
-    senderId,
-    "user",
-    `[Хэрэглэгч ${kinds.join(", ")} илгээсэн]`,
-    storedImages,
-  ).catch(() => {});
-  // Vision pipeline runs in the background — the customer gets the ack
-  // immediately, then a category-aware confirmation once classification lands.
-  scheduleImageDocumentPipeline({
-    platform,
-    senderId,
-    pageId,
-    token,
-    imageUrls: extractImageAttachmentUrls(attachments),
-    trace,
-  });
-
-  recordCounter("webhook.attachment_only_total", 1, {
-    platform,
-    kinds: kinds.join(","),
-  });
-
-  // Ack at most once per 2 minutes — an album arrives as several events and
-  // must not trigger a burst of identical acknowledgements.
-  const ackLimit = await rateLimitAsync(`attach_ack:${senderId}`, 1, 2 * 60 * 1000);
-  if (!ackLimit.allowed || platform !== "facebook" || !token) {
-    scheduleCustomerMemoryUpdate({
-      senderId,
-      requestId: trace?.requestId,
-      correlationId: trace?.correlationId,
-      source: "api.webhook.attachment_only",
-    });
-    return;
-  }
-  const ack =
-    "Илгээсэн зүйлийг тань хүлээн авлаа 🙌 Асуултаа бичгээр илгээвэл би шууд хариулъя. " +
-    "Эсвэл утасны дугаараа үлдээвэл манай аяллын зөвлөх тантай холбогдоно 😊";
-  try {
-    await sendTextMessage(senderId, ack, token, {
-      requestId: trace?.requestId,
-      correlationId: trace?.correlationId,
-      source: "api.webhook.attachment_ack",
-    });
-    await appendMessage(senderId, "assistant", ack).catch(() => {});
-  } catch (error) {
-    logWarn("webhook.attachment_ack_failed", {
-      requestId: trace?.requestId,
-      correlationId: trace?.correlationId,
-      platform,
-      pageId,
-      senderHash: hashIdentifier(senderId),
-      classification: classifyError(error),
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
-  scheduleCustomerMemoryUpdate({
-    senderId,
-    requestId: trace?.requestId,
-    correlationId: trace?.correlationId,
-    source: "api.webhook.attachment_only",
-  });
-}
 
 async function handleMessage(
   platform: Platform,
@@ -409,19 +156,6 @@ async function handleMessage(
   if (platform === "facebook" && token && !hasProgramIntent(text)) {
     void fetchAndStoreFbName(senderId, token);
   }
-  // Extract name from message: if user sends a short Cyrillic word (2-12 chars, no digits,
-  // not a known keyword) as their whole message, treat it as their name.
-  void (async () => {
-    try {
-      const trimmed = text.trim();
-      const NOT_NAMES = ["сайн", "байна", "уу", "hi", "hello", "мэнд", "за", "ок", "ok", "тийм", "үгүй", "баярлалаа", "наадам"];
-      const isCyrillicName = /^[Ѐ-ӿ]{2,12}$/.test(trimmed) && !NOT_NAMES.includes(trimmed.toLowerCase());
-      if (isCyrillicName) {
-        const { dbStoreSenderName } = await import("../../lib/travelDb");
-        await dbStoreSenderName(senderId, trimmed);
-      }
-    } catch { /* non-critical */ }
-  })();
   // Re-engagement contact info: a customer coming back after 30+ min of
   // silence gets the consultant contact message ONCE per 14 days (when the
   // goodbye toggle is on) — and then their message is ALWAYS answered.
@@ -429,12 +163,6 @@ async function handleMessage(
   // customer's actual question and muted the bot for a day, which killed
   // every conversation that naturally resumed hours later.
   const INACTIVITY_MS = 30 * 60 * 1000;
-  const GOODBYE_MSG =
-    "Манай зөвлөхтэй холбогдох бол дараах дугааруудаар залгаарай 📞\n\n" +
-    "☎️ 7713-6633\n" +
-    "📱 8913-6633\n" +
-    "📱 9117-2769\n\n" +
-    "Эсвэл та утасны дугаараа үлдээвэл манай зөвлөх удахгүй тантай холбогдох болно 🙌";
   if (
     platform === "facebook" &&
     token &&
@@ -447,7 +175,7 @@ async function handleMessage(
       try {
         const goodbyeSettings = await getTravelBotSettings();
         if (resolveGoodbyeEnabled(goodbyeSettings.extra)) {
-          await sendTextMessage(senderId, GOODBYE_MSG, token, {
+          await sendTextMessage(senderId, resolveGoodbyeContactText(goodbyeSettings.extra), token, {
             requestId: trace?.requestId,
             correlationId: trace?.correlationId,
             source: "api.webhook.inactivity_goodbye",
@@ -502,154 +230,64 @@ async function handleMessage(
       correlationId: trace?.correlationId,
       source,
     });
+  /**
+   * Shared tail of every deterministic fast-path reply: deliver (retryable on
+   * failure), optionally send follow-up media, persist history + last-reply
+   * state, schedule the memory merge, bump the counter. The fast paths below
+   * were six copy-pasted versions of this block.
+   */
+  const deliverFastPathReply = async (input: {
+    reply: string;
+    failTag: string;
+    rememberSource: string;
+    counter?: string;
+    afterDeliver?: () => Promise<void>;
+  }) => {
+    await assertLockHealthy();
+    const delivered = await sendPlatformMessage(
+      platform,
+      senderId,
+      input.reply,
+      token,
+      pageId,
+      igUserId,
+      trace,
+      { allowFallback: false },
+    );
+    if (!delivered) {
+      throw new RetryableWebhookError(`delivery_failed:${input.failTag}`);
+    }
+    if (input.afterDeliver) await input.afterDeliver();
+    try {
+      await appendMessage(senderId, "assistant", input.reply);
+      await setLastReplyConsistent(sessionId, input.reply);
+    } catch (error) {
+      logWarn("webhook.reply_state_persist_failed", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+        classification: classifyError(error),
+      });
+    }
+    await rememberTurn(input.rememberSource);
+    if (input.counter) recordCounter(input.counter, 1, { platform });
+  };
 
   // Photo-only mode: send photos only when we have a real trip signal.
-  // Stay silent on greetings, unrelated text, or unknown requests. The only
-  // text we send here is a true disambiguation prompt when the user is clearly
-  // talking about one of several matching trips.
+  // Stay silent on greetings, unrelated text, or unknown requests. Full
+  // behavior lives in webhookPhotoOnly.ts (extracted for the 2,000-line cap).
   const botControl = await getBotControl();
   if (botControl.photo_only && platform === "facebook" && token) {
-    const trips = await listTrips({ status: "active" });
-    const photoOnlyState = await getPhotoOnlyState(senderId);
-    const pendingTrips = photoOnlyState ? pickTripsByIds(trips, photoOnlyState.pendingTripIds) : [];
-    const activeTrip = photoOnlyState?.activeTripId
-      ? trips.find((trip) => trip.id === photoOnlyState.activeTripId) || null
-      : null;
-
-    let promptKind: "generic" | "ambiguous" | "no_photos" | "not_found" | null = null;
-    let clarification: string | null = null;
-    let photos: string[] = [];
-
-    if (isGenericOpener(text)) {
-      logInfo("webhook.photo_only_mode", {
-        requestId: trace?.requestId,
-        senderHash: hashIdentifier(senderId),
-        photosCount: 0,
-        promptKind: "generic_silent",
-      });
-      return;
-    } else {
-      // Record the customer's message: photo-only replies used to leave a
-      // hole in history (and memory never learned what was asked).
-      await appendMessage(senderId, "user", text).catch(() => {});
-      let resolvedTrip: TravelTrip | null = null;
-      let ambiguousTrips: TravelTrip[] = [];
-
-      if (pendingTrips.length > 0) {
-        const numberedChoice = pickNumberedTripChoice(text, pendingTrips);
-        if (numberedChoice) {
-          resolvedTrip = numberedChoice;
-        } else {
-          const pendingResolution = resolveTripFromUserMessage(contextualUserText, pendingTrips, {
-            allowLooseFallback: false,
-          });
-          const fullResolution = resolveTripFromUserMessage(contextualUserText, trips, {
-            allowLooseFallback: false,
-          });
-          if (fullResolution.status === "verified") {
-            resolvedTrip = fullResolution.trip;
-          } else if (pendingResolution.status === "verified") {
-            resolvedTrip = pendingResolution.trip;
-          } else if (fullResolution.status === "ambiguous") {
-            ambiguousTrips = fullResolution.candidates;
-          } else if (pendingResolution.status === "ambiguous") {
-            ambiguousTrips = pendingResolution.candidates;
-          }
-        }
-      }
-
-      if (!resolvedTrip && ambiguousTrips.length === 0 && activeTrip && isPhotoOnlyFollowup(text)) {
-        resolvedTrip = activeTrip;
-      }
-
-      if (!resolvedTrip && ambiguousTrips.length === 0) {
-        const resolution = resolveTripFromUserMessage(contextualUserText, trips, {
-          allowLooseFallback: false,
-        });
-        if (resolution.status === "verified") resolvedTrip = resolution.trip;
-        else if (resolution.status === "ambiguous") ambiguousTrips = resolution.candidates;
-      }
-
-      if (resolvedTrip) {
-        photos = getTripPhotoUrls(resolvedTrip);
-        if (photos.length > 0) {
-          for (const url of photos) {
-            try {
-              await sendImageMessage(senderId, url, token, {
-                requestId: trace?.requestId,
-                correlationId: trace?.correlationId,
-                source: "api.webhook.photo_only",
-              });
-            } catch (error) {
-              logWarn("webhook.photo_only_send_failed", {
-                requestId: trace?.requestId,
-                correlationId: trace?.correlationId,
-                platform,
-                pageId,
-                senderHash: hashIdentifier(senderId),
-                photoHost:
-                  (() => {
-                    try {
-                      return new URL(url).host;
-                    } catch {
-                      return "invalid_url";
-                    }
-                  })(),
-                classification: classifyError(error),
-                message: error instanceof Error ? error.message : String(error),
-              });
-            }
-          }
-          await recordImageMessage(senderId, photos);
-          await rememberTurn("api.webhook.photo_only_send");
-          await setPhotoOnlyState(senderId, createPhotoOnlyState({
-            activeTripId: resolvedTrip.id,
-            pendingTripIds: [],
-            lastPromptKind: null,
-            lastPromptAt: 0,
-          }));
-        } else {
-          clarification = `Одоогоор ${resolvedTrip.route_name} аяллын зураг системд ороогүй байна. Хүсвэл хөтөлбөр, үнэ, гарах өдрийг нь бичиж өгье.`;
-          promptKind = "no_photos";
-        }
-      } else if (ambiguousTrips.length > 0) {
-        clarification = buildPhotoOnlyAmbiguousPrompt(ambiguousTrips);
-        promptKind = "ambiguous";
-        await setPhotoOnlyState(senderId, createPhotoOnlyState({
-          activeTripId: activeTrip?.id ?? null,
-          pendingTripIds: ambiguousTrips.slice(0, 3).map((trip) => trip.id),
-          lastPromptKind: promptKind,
-          lastPromptAt: Date.now(),
-        }));
-      }
-    }
-
-    if (clarification) {
-      try {
-        await sendTextMessage(senderId, clarification, token, {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          source: "api.webhook.photo_only_clarify",
-        });
-        await appendMessage(senderId, "assistant", clarification);
-        await rememberTurn("api.webhook.photo_only_clarify");
-      } catch (error) {
-        logWarn("webhook.photo_only_clarify_failed", {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          platform,
-          pageId,
-          senderHash: hashIdentifier(senderId),
-          classification: classifyError(error),
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    logInfo("webhook.photo_only_mode", {
-      requestId: trace?.requestId,
-      senderHash: hashIdentifier(senderId),
-      photosCount: photos.length,
-      promptKind,
+    await handlePhotoOnlyMode({
+      platform,
+      senderId,
+      pageId,
+      token,
+      text,
+      contextualUserText,
+      trace,
+      rememberTurn,
     });
     return;
   }
@@ -707,7 +345,7 @@ async function handleMessage(
     greeting.enabled &&
     senderMsgCount === 1 &&
     isGenericOpener(text) &&
-    (await isFirstMessage(senderId, platform))
+    (await isFirstMessage(senderId))
   ) {
     try {
       const welcomeText =
@@ -756,6 +394,13 @@ async function handleMessage(
       const nextState = advanceCollectState(collectState, text);
       if (nextState.step === "done") {
         await clearCollectState(senderId);
+        // The ONLY place a chat message becomes the stored customer name:
+        // this is a direct answer to "нэрээ бичнэ үү". A generic heuristic
+        // used to guess names from any short Cyrillic message and polluted
+        // display_name with trip/keyword words ("Бээжин", "үнэ").
+        if (nextState.name.trim()) {
+          await dbStoreSenderName(senderId, nextState.name.trim()).catch(() => {});
+        }
         // Use 14-day auto-handoff pause (resets automatically after 2 weeks)
         await autoHandoffSender(senderId);
         const pauseMs =
@@ -836,7 +481,6 @@ async function handleMessage(
   const flowDocs: FlowDoc[] = Array.isArray(botSettings.extra?.flowDocs)
     ? (botSettings.extra.flowDocs as FlowDoc[])
     : [];
-  const flowSessionId = `${platform}:${pageId}:${senderId}`;
   function buildFlowEffects(): FlowEffects {
     return {
       sendText: async (msg: string) => {
@@ -986,7 +630,7 @@ async function handleMessage(
     // Send contact numbers after handoff confirmation
     if (platform === "facebook" && token) {
       try {
-        await sendTextMessage(senderId, GOODBYE_MSG, token, {
+        await sendTextMessage(senderId, resolveGoodbyeContactText(botSettings.extra), token, {
           requestId: trace?.requestId,
           correlationId: trace?.correlationId,
           source: "api.webhook.handoff_goodbye",
@@ -1147,7 +791,7 @@ async function handleMessage(
       return;
     }
   }
-  void maybeAutoSyncDriveFolder({ source: "api.webhook" });
+  scheduleDriveAutoSync({ source: "api.webhook" });
   const { systemPrompt: fileSystemPrompt, business: rawBusiness, pinnedButtonLabels } = await readBusinessData();
 
   // Narrow knowledgeBase to the best-matching trip when user clearly names one.
@@ -1217,8 +861,6 @@ async function handleMessage(
     return;
   }
   await appendMessage(senderId, "user", text);
-  async function recordFreshBookingLead() {
-  }
   let cachedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
   const getTrips = async () => {
     if (cachedTrips) return cachedTrips;
@@ -1283,30 +925,12 @@ async function handleMessage(
         classification: classifyError(error),
       });
     }
-    const deferralReply = enforceWebsiteForPayment(
-      sanitizeAssistantReply(PAYMENT_VERIFICATION_DEFERRAL_REPLY),
-    );
-    await assertLockHealthy();
-    const delivered = await sendPlatformMessage(
-      platform,
-      senderId,
-      deferralReply,
-      token,
-      pageId,
-      igUserId,
-      trace,
-      { allowFallback: false },
-    );
-    if (!delivered) {
-      throw new RetryableWebhookError("delivery_failed:payment_claim_deferred");
-    }
-    try {
-      await appendMessage(senderId, "assistant", deferralReply);
-      await setLastReplyConsistent(sessionId, deferralReply);
-    } catch {
-    }
-    await rememberTurn("api.webhook.payment_claim_deferred");
-    recordCounter("webhook.payment_claim_deferred_total", 1, { platform });
+    await deliverFastPathReply({
+      reply: enforceWebsiteForPayment(sanitizeAssistantReply(PAYMENT_VERIFICATION_DEFERRAL_REPLY)),
+      failTag: "payment_claim_deferred",
+      rememberSource: "api.webhook.payment_claim_deferred",
+      counter: "webhook.payment_claim_deferred_total",
+    });
     return;
   }
 
@@ -1317,30 +941,14 @@ async function handleMessage(
   {
     const routed = await getRouted();
     if (routed.scopedClarify && routed.scopedClarify.length > 0) {
-      const clarifyReply = enforceWebsiteForPayment(
-        sanitizeAssistantReply(buildAmbiguousTripReply(routed.scopedClarify)),
-      );
-      await assertLockHealthy();
-      const delivered = await sendPlatformMessage(
-        platform,
-        senderId,
-        clarifyReply,
-        token,
-        pageId,
-        igUserId,
-        trace,
-        { allowFallback: false },
-      );
-      if (!delivered) {
-        throw new RetryableWebhookError("delivery_failed:scoped_clarify");
-      }
-      try {
-        await appendMessage(senderId, "assistant", clarifyReply);
-        await setLastReplyConsistent(sessionId, clarifyReply);
-      } catch {
-      }
-      await rememberTurn("api.webhook.scoped_clarify");
-      recordCounter("webhook.scoped_clarify_total", 1, { platform });
+      await deliverFastPathReply({
+        reply: enforceWebsiteForPayment(
+          sanitizeAssistantReply(buildAmbiguousTripReply(routed.scopedClarify)),
+        ),
+        failTag: "scoped_clarify",
+        rememberSource: "api.webhook.scoped_clarify",
+        counter: "webhook.scoped_clarify_total",
+      });
       return;
     }
   }
@@ -1362,60 +970,21 @@ async function handleMessage(
       );
       if (lastReply && isDuplicateReply(lastReply.text, safeDateReply)) {
         recordCounter("webhook.duplicate_reply_avoided_total", 1, { platform });
-        await assertLockHealthy();
         // Neutral nudge — never a fake error and never "I already told you".
-        const delivered = await sendPlatformMessage(
-          platform,
-          senderId,
-          DUPLICATE_REPLY_NUDGE,
-          token,
-          pageId,
-          igUserId,
-          trace,
-          { allowFallback: false },
-        );
-        if (!delivered) {
-          throw new RetryableWebhookError("delivery_failed:duplicate_reply_notice");
-        }
-        // Persist the nudge as the last reply so a third identical question is
-        // not met with the exact same nudge again — the next turn compares
-        // against the nudge, not the muted answer.
-        try {
-          await appendMessage(senderId, "assistant", DUPLICATE_REPLY_NUDGE);
-          await setLastReplyConsistent(sessionId, DUPLICATE_REPLY_NUDGE);
-        } catch { /* non-critical */ }
-        await rememberTurn("api.webhook.date_duplicate_nudge");
-        await recordFreshBookingLead();
+        // Persisted as the last reply so a third identical question is not
+        // met with the exact same nudge again.
+        await deliverFastPathReply({
+          reply: DUPLICATE_REPLY_NUDGE,
+          failTag: "duplicate_reply_notice",
+          rememberSource: "api.webhook.date_duplicate_nudge",
+        });
         return;
       }
-      await assertLockHealthy();
-      const delivered = await sendPlatformMessage(
-        platform,
-        senderId,
-        safeDateReply,
-        token,
-        pageId,
-        igUserId,
-        trace,
-        { allowFallback: false },
-      );
-      if (!delivered) {
-        throw new RetryableWebhookError("delivery_failed:date_availability_reply");
-      }
-      try {
-        await appendMessage(senderId, "assistant", safeDateReply);
-        await setLastReplyConsistent(sessionId, safeDateReply);
-      } catch (error) {
-        logWarn("webhook.reply_state_persist_failed", {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          platform,
-          senderHash: hashIdentifier(senderId),
-          classification: classifyError(error),
-        });
-      }
-      await rememberTurn("api.webhook.date_fast_path");
-      await recordFreshBookingLead();
+      await deliverFastPathReply({
+        reply: safeDateReply,
+        failTag: "date_availability_reply",
+        rememberSource: "api.webhook.date_fast_path",
+      });
       return;
     }
   }
@@ -1423,31 +992,15 @@ async function handleMessage(
     const trips = await getTrips();
     const seatsReply = buildSeatsReply(await getFastPathText(), trips);
     if (seatsReply) {
-      const safeSeatsReply = appendLeadCaptureCta(
-        enforceWebsiteForPayment(sanitizeAssistantReply(seatsReply)),
-        phoneCollected,
-      );
-      await assertLockHealthy();
-      const delivered = await sendPlatformMessage(
-        platform,
-        senderId,
-        safeSeatsReply,
-        token,
-        pageId,
-        igUserId,
-        trace,
-        { allowFallback: false },
-      );
-      if (!delivered) {
-        throw new RetryableWebhookError("delivery_failed:seats_fast_path");
-      }
-      try {
-        await appendMessage(senderId, "assistant", safeSeatsReply);
-        await setLastReplyConsistent(sessionId, safeSeatsReply);
-      } catch {
-      }
-      await rememberTurn("api.webhook.seats_fast_path");
-      recordCounter("webhook.seats_fast_path_total", 1, { platform });
+      await deliverFastPathReply({
+        reply: appendLeadCaptureCta(
+          enforceWebsiteForPayment(sanitizeAssistantReply(seatsReply)),
+          phoneCollected,
+        ),
+        failTag: "seats_fast_path",
+        rememberSource: "api.webhook.seats_fast_path",
+        counter: "webhook.seats_fast_path_total",
+      });
       return;
     }
   }
@@ -1455,31 +1008,15 @@ async function handleMessage(
     const trips = await getTrips();
     const discountReply = buildDiscountReply(await getFastPathText(), trips);
     if (discountReply) {
-      const safeDiscountReply = appendLeadCaptureCta(
-        enforceWebsiteForPayment(sanitizeAssistantReply(discountReply)),
-        phoneCollected,
-      );
-      await assertLockHealthy();
-      const delivered = await sendPlatformMessage(
-        platform,
-        senderId,
-        safeDiscountReply,
-        token,
-        pageId,
-        igUserId,
-        trace,
-        { allowFallback: false },
-      );
-      if (!delivered) {
-        throw new RetryableWebhookError("delivery_failed:discount_fast_path");
-      }
-      try {
-        await appendMessage(senderId, "assistant", safeDiscountReply);
-        await setLastReplyConsistent(sessionId, safeDiscountReply);
-      } catch {
-      }
-      await rememberTurn("api.webhook.discount_fast_path");
-      recordCounter("webhook.discount_fast_path_total", 1, { platform });
+      await deliverFastPathReply({
+        reply: appendLeadCaptureCta(
+          enforceWebsiteForPayment(sanitizeAssistantReply(discountReply)),
+          phoneCollected,
+        ),
+        failTag: "discount_fast_path",
+        rememberSource: "api.webhook.discount_fast_path",
+        counter: "webhook.discount_fast_path_total",
+      });
       return;
     }
   }
@@ -1487,31 +1024,15 @@ async function handleMessage(
     const trips = await getTrips();
     const compareReply = buildCompareReply(await getFastPathText(), trips);
     if (compareReply) {
-      const safeCompareReply = appendLeadCaptureCta(
-        enforceWebsiteForPayment(sanitizeAssistantReply(compareReply)),
-        phoneCollected,
-      );
-      await assertLockHealthy();
-      const delivered = await sendPlatformMessage(
-        platform,
-        senderId,
-        safeCompareReply,
-        token,
-        pageId,
-        igUserId,
-        trace,
-        { allowFallback: false },
-      );
-      if (!delivered) {
-        throw new RetryableWebhookError("delivery_failed:compare_fast_path");
-      }
-      try {
-        await appendMessage(senderId, "assistant", safeCompareReply);
-        await setLastReplyConsistent(sessionId, safeCompareReply);
-      } catch {
-      }
-      await rememberTurn("api.webhook.compare_fast_path");
-      recordCounter("webhook.compare_fast_path_total", 1, { platform });
+      await deliverFastPathReply({
+        reply: appendLeadCaptureCta(
+          enforceWebsiteForPayment(sanitizeAssistantReply(compareReply)),
+          phoneCollected,
+        ),
+        failTag: "compare_fast_path",
+        rememberSource: "api.webhook.compare_fast_path",
+        counter: "webhook.compare_fast_path_total",
+      });
       return;
     }
   }
@@ -1523,53 +1044,39 @@ async function handleMessage(
         enforceWebsiteForPayment(sanitizeAssistantReply(programReply.reply)),
         phoneCollected,
       );
-      await assertLockHealthy();
-      const delivered = await sendPlatformMessage(
-        platform,
-        senderId,
-        safeProgramReply,
-        token,
-        pageId,
-        igUserId,
-        trace,
-        { allowFallback: false },
-      );
-      if (!delivered) {
-        throw new RetryableWebhookError("delivery_failed:program_fast_path");
-      }
-      if (platform === "facebook" && token) {
-        if (programReply.mediaUrls.length > 0) {
-          for (const url of programReply.mediaUrls) {
-            try {
-              await sendImageMessage(senderId, url, token, {
-                requestId: trace?.requestId,
-                correlationId: trace?.correlationId,
-                source: "api.webhook.program_media",
-              });
-            } catch {
+      await deliverFastPathReply({
+        reply: safeProgramReply,
+        failTag: "program_fast_path",
+        rememberSource: "api.webhook.program_fast_path",
+        counter: "webhook.program_fast_path_total",
+        afterDeliver: async () => {
+          if (platform !== "facebook" || !token) return;
+          if (programReply.mediaUrls.length > 0) {
+            for (const url of programReply.mediaUrls) {
+              try {
+                await sendImageMessage(senderId, url, token, {
+                  requestId: trace?.requestId,
+                  correlationId: trace?.correlationId,
+                  source: "api.webhook.program_media",
+                });
+              } catch {
+              }
             }
+            await recordImageMessage(senderId, programReply.mediaUrls);
+          } else if (programReply.trip) {
+            await sendTripMediaForReply(
+              platform,
+              senderId,
+              safeProgramReply,
+              await getFastPathText(),
+              token,
+              pageId,
+              igUserId,
+              trace ? { ...trace, source: "api.webhook.program_trip_media" } : undefined,
+            );
           }
-          await recordImageMessage(senderId, programReply.mediaUrls);
-        } else if (programReply.trip) {
-          await sendTripMediaForReply(
-            platform,
-            senderId,
-            safeProgramReply,
-            await getFastPathText(),
-            token,
-            pageId,
-            igUserId,
-            trace ? { ...trace, source: "api.webhook.program_trip_media" } : undefined,
-          );
-        }
-      }
-      try {
-        await appendMessage(senderId, "assistant", safeProgramReply);
-        await setLastReplyConsistent(sessionId, safeProgramReply);
-      } catch {
-      }
-      await rememberTurn("api.webhook.program_fast_path");
-      recordCounter("webhook.program_fast_path_total", 1, { platform });
+        },
+      });
       return;
     }
     const structuredTripReply = buildStructuredTripReply(await getFastPathText(), trips);
@@ -1578,37 +1085,24 @@ async function handleMessage(
         enforceWebsiteForPayment(sanitizeAssistantReply(structuredTripReply)),
         phoneCollected,
       );
-      await assertLockHealthy();
-      const delivered = await sendPlatformMessage(
-        platform,
-        senderId,
-        safeStructuredReply,
-        token,
-        pageId,
-        igUserId,
-        trace,
-        { allowFallback: false },
-      );
-      if (!delivered) {
-        throw new RetryableWebhookError("delivery_failed:structured_trip_fast_path");
-      }
-      await sendTripMediaForReply(
-        platform,
-        senderId,
-        safeStructuredReply,
-        await getFastPathText(),
-        token,
-        pageId,
-        igUserId,
-        trace,
-      );
-      try {
-        await appendMessage(senderId, "assistant", safeStructuredReply);
-        await setLastReplyConsistent(sessionId, safeStructuredReply);
-      } catch {
-      }
-      await rememberTurn("api.webhook.trip_fast_path");
-      recordCounter("webhook.trip_fast_path_total", 1, { platform });
+      await deliverFastPathReply({
+        reply: safeStructuredReply,
+        failTag: "structured_trip_fast_path",
+        rememberSource: "api.webhook.trip_fast_path",
+        counter: "webhook.trip_fast_path_total",
+        afterDeliver: async () => {
+          await sendTripMediaForReply(
+            platform,
+            senderId,
+            safeStructuredReply,
+            await getFastPathText(),
+            token,
+            pageId,
+            igUserId,
+            trace,
+          );
+        },
+      });
       return;
     }
   }
@@ -1782,30 +1276,14 @@ async function handleMessage(
   const safeReply = enforcePaymentNeverSelfConfirmed(text, enforceWebsiteForPayment(rewrittenReply));
   if (lastReply && isDuplicateReply(lastReply.text, safeReply)) {
     recordCounter("webhook.duplicate_reply_avoided_total", 1, { platform });
-    await assertLockHealthy();
     // The prompt forbids "Тэр мэдээллийг өмнө нь хуваалцсан" — the code must
-    // not say it either. Neutral nudge instead.
-    const delivered = await sendPlatformMessage(
-      platform,
-      senderId,
-      DUPLICATE_REPLY_NUDGE,
-      token,
-      pageId,
-      igUserId,
-      trace,
-      { allowFallback: false },
-    );
-    if (!delivered) {
-      throw new RetryableWebhookError("delivery_failed:duplicate_reply_notice");
-    }
-    // Persist the nudge as the last reply so repeating the question a third
-    // time is not answered with the identical nudge again.
-    try {
-      await appendMessage(senderId, "assistant", DUPLICATE_REPLY_NUDGE);
-      await setLastReplyConsistent(sessionId, DUPLICATE_REPLY_NUDGE);
-    } catch { /* non-critical */ }
-    await rememberTurn("api.webhook.duplicate_nudge");
-    await recordFreshBookingLead();
+    // not say it either. Neutral nudge instead, persisted as the last reply
+    // so a third identical question is not answered with the same nudge.
+    await deliverFastPathReply({
+      reply: DUPLICATE_REPLY_NUDGE,
+      failTag: "duplicate_reply_notice",
+      rememberSource: "api.webhook.duplicate_nudge",
+    });
     return;
   }
   let replyButtons: string[] = [...aiButtons];
@@ -1878,7 +1356,6 @@ async function handleMessage(
     igUserId,
     trace,
   );
-  await recordFreshBookingLead();
 }
 async function processConversationWithPendingQueue(
   conversationKey: string,

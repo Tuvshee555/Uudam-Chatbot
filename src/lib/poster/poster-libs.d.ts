@@ -18,7 +18,7 @@ declare module "@/lib/poster/openai" {
 }
 
 declare module "@/lib/poster/gemini" {
-  export function extractTripFromPdfGemini(base64: string, filename?: string): Promise<any>;
+  export function extractTripFromPdfGemini(base64: string): Promise<any>;
 }
 
 declare module "@/lib/poster/pdfImages" {

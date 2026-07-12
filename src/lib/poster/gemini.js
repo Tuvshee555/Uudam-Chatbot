@@ -2,7 +2,7 @@
 // Gemini 2.5 Flash accepts inline PDF bytes natively, reads multi-column layouts
 // correctly, and is fast enough to stay within Vercel's 60s function limit.
 
-import { DEFAULT_CONTACTS, AGENCY, TRIP_SCHEMA, normalizeExtractedTrip } from "./openai.js";
+import { TRIP_SCHEMA, normalizeExtractedTrip } from "./openai.js";
 
 // Gemini /v1beta generateContent endpoint with structured JSON output
 const GEMINI_URL = (model) =>
@@ -78,7 +78,7 @@ function toGeminiSchema(schema) {
 // extractions measure 5-25s; 35s leaves the OpenAI fallback a fighting chance.
 const GEMINI_FETCH_TIMEOUT_MS = Number(process.env.GEMINI_PDF_FETCH_TIMEOUT_MS || 35_000);
 
-export async function extractTripFromPdfGemini(base64, filename = "document.pdf") {
+export async function extractTripFromPdfGemini(base64) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("Missing GEMINI_API_KEY");
 

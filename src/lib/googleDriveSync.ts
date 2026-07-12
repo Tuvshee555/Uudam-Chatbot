@@ -1,4 +1,5 @@
 import { createSign, randomUUID } from "crypto";
+import { waitUntil } from "@vercel/functions";
 import { parseUpload, type ParsedUpload } from "./fileParse";
 import { getEnv } from "./env";
 import { extractGoogleDriveFileIds } from "./googleDriveLinks";
@@ -995,5 +996,23 @@ export async function maybeAutoSyncDriveFolder(input: {
       source: input.source || "passive",
       message: error instanceof Error ? error.message : String(error),
     });
+  }
+}
+
+/**
+ * Fire-and-forget auto-sync that survives the response ending. Callers used
+ * to do `void maybeAutoSyncDriveFolder(...)` — on Vercel the runtime freezes
+ * the function once the response is sent, so a sync triggered mid-request
+ * could be killed half-way with no error anywhere. waitUntil keeps the
+ * function alive until the sync settles (same pattern as conversationMemory
+ * and customerDocuments).
+ */
+export function scheduleDriveAutoSync(input: { source?: string } = {}): void {
+  const work = maybeAutoSyncDriveFolder(input);
+  try {
+    waitUntil(work);
+  } catch {
+    // Not running on Vercel (tests, local node) — detached execution is fine.
+    void work;
   }
 }

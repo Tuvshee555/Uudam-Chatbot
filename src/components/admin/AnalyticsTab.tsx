@@ -1,82 +1,7 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import {
-  Alert,
-  Badge,
-  Button,
-  Card,
-  EmptyState,
-  Icons,
-  Input,
-  Modal,
-  Select,
-  Textarea,
-  cx,
-  useToast,
-} from "@/components/ui";
-import type {
-  AIAction,
-  AIProposal,
-  AttachedFile,
-  ChatButton,
-  ChatMessage,
-  ClarificationAnswer,
-  ClarificationQuestion,
-  ConflictItem,
-  ControlState,
-  DriveSyncDiagnostics,
-  DriveSyncRecentFile,
-  FlowRule,
-  LeadStats,
-  PageControlState,
-  PauseRow,
-  ProposalMsg,
-  ReadinessReport,
-  RecentRow,
-  SettingsForm,
-  StructuredRow,
-  TravelBotSettings,
-  TravelLead,
-  TravelTrip,
-} from "@/lib/adminTypes";
-import {
-  FIELD_LABELS,
-  STATUS_LABELS,
-  buildProposalClarifications,
-  compactWarnings,
-  describeAction,
-  summarizeConflict,
-} from "@/lib/adminProposalUtils";
-import { LoadingPanel, SectionHeading, StructuredEditor } from "./AdminShared";
+import { useEffect, useState } from "react";
+import { Alert, Card, cx } from "@/components/ui";
+import { LoadingPanel, SectionHeading } from "./AdminShared";
 import type { AnalyticsStatsData, FaqStatsData } from "./adminTabData";
-import { readUrlList } from "./adminTabData";
-import {
-  DURATIONS,
-  HANDOFF_DURATION_CUSTOM,
-  HANDOFF_DURATION_OPTIONS,
-  MAX_AI_INPUT_CHARS,
-  QUICK_ACTIONS,
-  STATUS_TONE,
-  asInt,
-  conflictTone,
-  driveSyncTone,
-  formatBytes,
-  formatMoney,
-  formatTime,
-  handoffDurationSelectValue,
-  settingsToForm,
-  shortId,
-  splitLines,
-  timeLeft,
-  toStructuredRows,
-} from "@/lib/adminUtils";
-
 export function AnalyticsTab({
   apiFetch,
 }: {
@@ -343,32 +268,3 @@ export function AnalyticsTab({
   );
 }
 
-/* ----------------------------------------------------------------
-   Seasons Tab — owner-controlled seasonal albums (e.g. Наадам, Өвөл)
-   Stored in bot_settings.extra.seasons. Exactly one is active at a time;
-   the active season's album is appended to the greeting, and any season's
-   keywords auto-trigger its album when a customer mentions them.
-   ---------------------------------------------------------------- */
-type SeasonItem = {
-  id: string;
-  name: string;
-  keywords: string[];
-  photoUrls: string[];
-  active: boolean;
-};
-
-function readSeasons(extra: Record<string, unknown>): SeasonItem[] {
-  const raw = extra.seasons;
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((s): s is Record<string, unknown> => Boolean(s) && typeof s === "object")
-    .map((s) => ({
-      id: typeof s.id === "string" ? s.id : Math.random().toString(36).slice(2),
-      name: typeof s.name === "string" ? s.name : "",
-      keywords: Array.isArray(s.keywords)
-        ? (s.keywords as unknown[]).filter((k): k is string => typeof k === "string")
-        : [],
-      photoUrls: readUrlList(s.photoUrls),
-      active: s.active === true,
-    }));
-}

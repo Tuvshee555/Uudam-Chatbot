@@ -1,11 +1,4 @@
-import type {
-  DiscountPolicy,
-  FAQItem,
-  KnowledgeData,
-  ProgramPrice,
-  SpecialOffer,
-  VerifiedCredential,
-} from "./businessData";
+import type { DiscountPolicy, FAQItem, SpecialOffer, VerifiedCredential } from "./businessData";
 
 export type TripStatus = "active" | "cancelled" | "sold_out" | "draft";
 

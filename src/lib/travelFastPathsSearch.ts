@@ -586,15 +586,6 @@ export function findBestTripMatch(text: string, trips: TravelTrip[], options?: T
   return { best: null, ambiguous: [] as TravelTrip[] };
 }
 
-// Whether the query explicitly signals a land-only (no-flight) trip.
-function queryWantsLandOnly(query: string): boolean {
-  return (
-    /газрын\s+аялал/i.test(query) ||
-    /нислэггүй/i.test(query) ||
-    /газраар/i.test(query)
-  );
-}
-
 function hasLooseAliasMatch(
   query: string,
   queryKeywords: string[],

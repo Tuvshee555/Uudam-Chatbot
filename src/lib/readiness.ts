@@ -37,6 +37,13 @@ export function getReadinessReport(env: ValidatedEnv): ReadinessReport {
   if (env.allowAdminSecretQuery) {
     add("warning", "admin_secret_query", "Admin secret in query strings can leak via logs/history.");
   }
+  if (!process.env.CRON_SECRET) {
+    add(
+      "warning",
+      "cron_secret",
+      "CRON_SECRET is not set; the reminder cron endpoint refuses all requests in production until it is configured.",
+    );
+  }
 
   if (env.googleDriveSyncEnabled) {
     if (!env.googleDriveFolderId) {

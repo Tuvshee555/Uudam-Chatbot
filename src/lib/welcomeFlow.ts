@@ -70,6 +70,28 @@ export function resolveGoodbyeEnabled(extra: unknown): boolean {
   return raw.enabled !== false;
 }
 
+/**
+ * Consultant contact message (inactivity goodbye + post-handoff). The default
+ * carries the current phone numbers, but bot_settings.extra.goodbye.text lets
+ * the admin change a number from the JSON editor without a code deploy —
+ * these numbers used to be hardcoded in webhook.ts.
+ */
+export const DEFAULT_GOODBYE_CONTACT_TEXT =
+  "Манай зөвлөхтэй холбогдох бол дараах дугааруудаар залгаарай 📞\n\n" +
+  "☎️ 7713-6633\n" +
+  "📱 8913-6633\n" +
+  "📱 9117-2769\n\n" +
+  "Эсвэл та утасны дугаараа үлдээвэл манай зөвлөх удахгүй тантай холбогдох болно 🙌";
+
+export function resolveGoodbyeContactText(extra: unknown): string {
+  const raw =
+    extra && typeof extra === "object" && !Array.isArray(extra)
+      ? ((extra as Record<string, unknown>).goodbye as Record<string, unknown> | undefined)
+      : undefined;
+  const text = raw && typeof raw.text === "string" ? raw.text.trim() : "";
+  return text || DEFAULT_GOODBYE_CONTACT_TEXT;
+}
+
 // ─── Seasons ─────────────────────────────────────────────────────────────────
 
 export type Season = {
@@ -135,10 +157,7 @@ export function matchSeasonByText(text: string, seasons: Season[]): Season | nul
  * Returns true the FIRST time this sender's greeting should fire.
  * Atomically claims the greeting slot in travel_senders so no double-send.
  */
-export async function isFirstMessage(
-  senderId: string,
-  _platform: string,
-): Promise<boolean> {
+export async function isFirstMessage(senderId: string): Promise<boolean> {
   return dbClaimGreeting(senderId);
 }
 
