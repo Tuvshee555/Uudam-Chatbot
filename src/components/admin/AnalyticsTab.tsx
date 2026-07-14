@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Alert, Card, cx } from "@/components/ui";
-import { LoadingPanel, SectionHeading, StatCard } from "./AdminShared";
+import { Alert, Card, Icons, cx } from "@/components/ui";
+import { LoadingPanel, StatCard, TabHeader } from "./AdminShared";
 import type { AnalyticsStatsData, FaqStatsData } from "./adminTabData";
 export function AnalyticsTab({
   apiFetch,
@@ -65,7 +65,11 @@ export function AnalyticsTab({
 
   return (
     <div className="space-y-6">
-      <SectionHeading title="Аналитик" description="Хүсэлт болон аяллын нийлбэр статистик" />
+      <TabHeader
+        icon={<Icons.chart size={20} />}
+        title="Аналитик"
+        description="Хүсэлт болон аяллын нийлбэр статистик."
+      />
 
       {/* Row 1 — 4 stat cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

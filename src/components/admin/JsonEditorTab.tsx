@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Card, Icons, Spinner, cx } from "@/components/ui";
+import { TabHeader } from "./AdminShared";
 import { GPT_PROMPT } from "@/lib/jsonEditorPrompt";
 
 type Props = {
@@ -117,6 +118,11 @@ export function JsonEditorTab({ apiFetch, onSaved }: Props) {
 
   return (
     <div className="space-y-4">
+      <TabHeader
+        icon={<Icons.braces size={20} />}
+        title="JSON засвар"
+        description="Бүх аяллын өгөгдлийг нэг дор экспортлож, ChatGPT-ээр баяжуулаад буцааж хадгална."
+      />
       {/* How-to steps */}
       <Card className="p-4">
         <p className="mb-3 text-sm font-semibold text-ink">ChatGPT ашиглан өгөгдөл нэмэх — алхам алхмаар</p>

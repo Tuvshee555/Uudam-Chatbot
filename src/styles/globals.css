@@ -207,6 +207,12 @@
     background-color: var(--color-brand);
     color: #ffffff;
   }
+
+  /* Native checks and radios pick up the accent instead of browser blue */
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: var(--color-brand);
+  }
 }
 
 /* ============================================================

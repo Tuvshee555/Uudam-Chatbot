@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { Badge, Button, Card, EmptyState, Icons, Modal, Spinner, cx, useToast } from "@/components/ui";
+import { Badge, Button, Card, EmptyState, IconButton, Icons, Modal, Spinner, cx, useToast } from "@/components/ui";
+import { TabHeader } from "./AdminShared";
 import type { TravelTrip } from "@/lib/adminTypes";
 import { STATUS_LABELS } from "@/lib/adminProposalUtils";
 import { STATUS_TONE, formatTime } from "@/lib/adminUtils";
@@ -156,6 +157,18 @@ export function TripsTab({
         </div>
       </Modal>
 
+      <TabHeader
+        icon={<Icons.trips size={20} />}
+        title="Аяллууд"
+        description="Ботын мэддэг бүх аялал — хайх, засах, нуух, шинээр нэмэх."
+        actions={
+          <Button onClick={onCreate}>
+            <Icons.plus size={16} />
+            Шинэ аялал
+          </Button>
+        }
+      />
+
       <Card className="p-3.5">
         <div className="flex flex-col gap-2">
           <div className="flex gap-2">
@@ -163,22 +176,17 @@ export function TripsTab({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Маршрут эсвэл оператор хайх…"
-              className="h-10 min-w-0 flex-1 rounded-md border border-line-strong bg-surface px-3 text-sm text-ink placeholder:text-ink-subtle focus:border-brand"
+              className="h-10 min-w-0 flex-1 rounded-md border border-line-strong bg-surface px-3 text-sm text-ink transition-colors placeholder:text-ink-subtle focus:border-brand"
             />
-            <button
-              type="button"
-              onClick={onRefresh}
-              aria-label="Шинэчлэх"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-line-strong bg-surface text-ink-muted transition-colors hover:border-brand hover:text-brand"
-            >
+            <IconButton label="Шинэчлэх" onClick={onRefresh}>
               {loading ? <Spinner /> : <Icons.refresh size={17} />}
-            </button>
+            </IconButton>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="h-10 flex-1 rounded-md border border-line-strong bg-surface px-2.5 text-sm text-ink focus:border-brand"
+              className="h-10 min-w-[10rem] flex-1 rounded-md border border-line-strong bg-surface px-2.5 text-sm text-ink transition-colors focus:border-brand"
             >
               <option value="">Бүх төлөв</option>
               <option value="active">Идэвхтэй</option>
@@ -186,32 +194,31 @@ export function TripsTab({
               <option value="sold_out">Суудал дууссан</option>
               <option value="draft">Ноорог</option>
             </select>
-            <button
-              type="button"
-              onClick={() => setPhotoFilter((f) => f === "all" ? "with" : f === "with" ? "without" : "all")}
-              className={cx(
-                "flex shrink-0 items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition",
-                photoFilter === "with"
-                  ? "border-brand bg-brand/10 text-brand"
-                  : photoFilter === "without"
-                  ? "border-warning bg-warning/10 text-warning"
-                  : "border-line-strong bg-surface text-ink-muted hover:border-brand hover:text-brand",
-              )}
-              title="Зураг шүүлтүүр"
-            >
-              <Icons.image size={14} />
-              {photoFilter === "with" ? "Зурагтай" : photoFilter === "without" ? "Зураггүй" : "Зураг"}
-              <span className={cx("rounded-full px-1.5 py-0.5 tabular-nums",
-                photoFilter === "with" ? "bg-brand/20" :
-                photoFilter === "without" ? "bg-warning/20" : "bg-surface-sunken"
-              )}>
-                {photoFilter === "with" ? tripsWithPhotos.length : photoFilter === "without" ? tripsWithoutPhotos.length : trips.length}
-              </span>
-            </button>
-            <Button onClick={onCreate} className="shrink-0">
-              <Icons.plus size={16} />
-              Шинэ аялал
-            </Button>
+            <div className="flex shrink-0 items-center rounded-md border border-line-strong bg-surface-sunken p-0.5">
+              {(
+                [
+                  { key: "all", label: "Бүгд", count: trips.length },
+                  { key: "with", label: "Зурагтай", count: tripsWithPhotos.length },
+                  { key: "without", label: "Зураггүй", count: tripsWithoutPhotos.length },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => setPhotoFilter(opt.key)}
+                  aria-pressed={photoFilter === opt.key}
+                  className={cx(
+                    "flex items-center gap-1.5 rounded-[6px] px-2.5 py-1.5 text-xs font-medium transition-colors",
+                    photoFilter === opt.key
+                      ? "bg-surface text-ink shadow-xs"
+                      : "text-ink-muted hover:text-ink",
+                  )}
+                >
+                  {opt.label}
+                  <span className="tabular-nums text-ink-subtle">{opt.count}</span>
+                </button>
+              ))}
+            </div>
           </div>
           {trips.length > 0 && (
             <div className="flex gap-2 border-t border-line pt-2">

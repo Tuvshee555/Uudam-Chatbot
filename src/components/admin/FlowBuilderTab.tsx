@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, Card, EmptyState, Icons, Input, Modal, Spinner, Textarea, useToast } from "@/components/ui";
 import type { FlowRule } from "@/lib/adminTypes";
-import { SectionHeading } from "./AdminShared";
+import { TabHeader } from "./AdminShared";
 import { BLANK_FLOW_RULE } from "./adminTabData";
 export function FlowBuilderTab({
   extra,
@@ -122,11 +122,12 @@ export function FlowBuilderTab({
 
   return (
     <div className="max-w-2xl space-y-4">
-      <SectionHeading
+      <TabHeader
+        icon={<Icons.play size={20} />}
         title="Урсгал"
         description="Хэрэглэгч хэлэхэд → Бот хариулна. Түлхүүр үгтэй мессеж илрэхэд AI-г тойрч хариу илгээнэ."
-        action={
-          <Button size="sm" variant="primary" onClick={openNew} disabled={saving}>
+        actions={
+          <Button size="sm" onClick={openNew} disabled={saving}>
             <Icons.plus size={15} />
             Дүрэм нэмэх
           </Button>

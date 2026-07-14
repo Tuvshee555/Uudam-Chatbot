@@ -11,6 +11,41 @@ export function LoadingPanel() {
   );
 }
 
+/** Page-level tab header: icon tile + title + description + actions.
+    One pattern for every tab so the product reads as one system. */
+export function TabHeader({
+  icon,
+  title,
+  description,
+  actions,
+}: {
+  icon?: ReactNode;
+  title: string;
+  description?: string;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex min-w-0 items-start gap-3">
+        {icon && (
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-brand-soft text-brand">
+            {icon}
+          </div>
+        )}
+        <div className="min-w-0">
+          <h1 className="text-lg font-bold tracking-tight text-ink">{title}</h1>
+          {description && (
+            <p className="mt-0.5 max-w-2xl text-sm text-ink-muted">{description}</p>
+          )}
+        </div>
+      </div>
+      {actions && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>
+      )}
+    </div>
+  );
+}
+
 /** One KPI tile — uppercase micro-label over a big tabular number. */
 export function StatCard({
   label,
@@ -109,7 +144,7 @@ export function StructuredEditor({
                     {field.label}
                   </span>
                   <input
-                    className="mt-1 h-9 w-full rounded-md border border-line-strong bg-surface px-2.5 text-sm text-ink focus:border-brand"
+                    className="mt-1 h-9 w-full rounded-md border border-line-strong bg-surface px-2.5 text-sm text-ink transition-colors focus:border-brand"
                     value={row[field.key] || ""}
                     onChange={(e) => update(index, field.key, e.target.value)}
                   />

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, Card, Icons, Spinner, Textarea, cx, useToast } from "@/components/ui";
+import { Button, Card, Icons, Spinner, Switch, Textarea, cx, useToast } from "@/components/ui";
+import { TabHeader } from "./AdminShared";
 import { readGreetingDraft, type GreetingDraft } from "./adminTabData";
 export function GreetingTab({
   extra,
@@ -140,18 +141,11 @@ export function GreetingTab({
 
   return (
     <div className="mx-auto max-w-5xl space-y-5">
-      {/* Hero header */}
-      <div className="flex items-start gap-3">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-brand-soft text-brand">
-          <Icons.chevronRight size={20} />
-        </div>
-        <div>
-          <h1 className="text-lg font-semibold text-ink">Мэндчилгээ</h1>
-          <p className="mt-0.5 text-sm text-ink-muted">
-            Хэрэглэгч анх бичихэд бот автоматаар илгээх текст ба зургийг та өөрөө удирдана.
-          </p>
-        </div>
-      </div>
+      <TabHeader
+        icon={<Icons.bot size={20} />}
+        title="Мэндчилгээ"
+        description="Хэрэглэгч анх бичихэд бот автоматаар илгээх текст ба зургийг та өөрөө удирдана."
+      />
 
       <div className="grid gap-5 lg:grid-cols-[1fr_300px]">
         {/* ---- Left: editor ---- */}
@@ -176,24 +170,11 @@ export function GreetingTab({
                 </p>
               </div>
             </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={draft.enabled}
-              onClick={() => setDraft((d) => ({ ...d, enabled: !d.enabled }))}
-              className={cx(
-                "relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200",
-                draft.enabled ? "bg-brand" : "bg-line-strong",
-              )}
-              aria-label="Мэндчилгээ асаах/унтраах"
-            >
-              <span
-                className={cx(
-                  "inline-block h-6 w-6 transform rounded-full bg-white shadow ring-0 transition duration-200",
-                  draft.enabled ? "translate-x-7" : "translate-x-0",
-                )}
-              />
-            </button>
+            <Switch
+              checked={draft.enabled}
+              onChange={(next) => setDraft((d) => ({ ...d, enabled: next }))}
+              label="Мэндчилгээ асаах/унтраах"
+            />
           </Card>
 
           <div

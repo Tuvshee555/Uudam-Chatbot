@@ -59,11 +59,11 @@ export type TripEditModalProps = {
   setTripAnswerHints: React.Dispatch<React.SetStateAction<AnswerHint[]>>;
 };
 
-const inputCls = "w-full rounded-lg border border-line-strong bg-surface-sunken px-3 py-1.5 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none";
+const inputCls = "w-full rounded-md border border-line-strong bg-surface px-3 py-1.5 text-sm text-ink transition-colors placeholder:text-ink-subtle focus:border-brand";
 const numCls = inputCls;
 const sectionHdr = "mt-5 text-sm font-semibold text-ink";
 const rowCls = "flex items-start gap-1.5";
-const delBtn = "shrink-0 rounded-md p-1 text-ink-muted hover:bg-surface-sunken hover:text-red-500";
+const delBtn = "shrink-0 rounded-md p-1 text-ink-muted transition-colors hover:bg-danger-soft hover:text-danger";
 
 type TripEditorTab = "base" | "pricing" | "advanced";
 
@@ -410,7 +410,7 @@ export function TripEditModal({
               }
             }}
             placeholder="https://example.com/photo.jpg"
-            className="flex-1 rounded-lg border border-line-strong bg-surface-sunken px-3 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none"
+            className="flex-1 rounded-md border border-line-strong bg-surface px-3 py-2 text-sm text-ink transition-colors placeholder:text-ink-subtle focus:border-brand"
           />
           <Button
             size="sm"

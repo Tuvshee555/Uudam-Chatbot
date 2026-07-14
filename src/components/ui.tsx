@@ -465,6 +465,79 @@ export function Badge({
 }
 
 /* ----------------------------------------------------------------
+   Switch — the one toggle for the whole product. `activeClass`
+   lets status toggles use warning/danger instead of brand.
+   ---------------------------------------------------------------- */
+export function Switch({
+  checked,
+  onChange,
+  disabled = false,
+  label,
+  activeClass = "bg-brand",
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+  label: string;
+  activeClass?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cx(
+        "relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-50",
+        checked ? activeClass : "bg-line-strong",
+      )}
+    >
+      <span
+        className={cx(
+          "pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-sm transition-transform duration-200",
+          checked ? "translate-x-7" : "translate-x-0",
+        )}
+      />
+    </button>
+  );
+}
+
+/* ----------------------------------------------------------------
+   IconButton — square bordered action (refresh, close, edit…)
+   ---------------------------------------------------------------- */
+export function IconButton({
+  label,
+  onClick,
+  disabled = false,
+  className,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+      className={cx(
+        "flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-line-strong bg-surface text-ink-muted transition-colors hover:border-brand hover:text-brand active:scale-95 disabled:cursor-not-allowed disabled:opacity-50",
+        className,
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+/* ----------------------------------------------------------------
    Form controls — label is always bound to the control
    ---------------------------------------------------------------- */
 const CONTROL_BASE =
@@ -585,18 +658,23 @@ export function Select({
   const fieldId = id ?? autoId;
   return (
     <FieldShell label={label} hint={hint} error={error} htmlFor={fieldId}>
-      <select
-        id={fieldId}
-        className={cx(
-          CONTROL_BASE,
-          "h-10 px-3",
-          error ? "border-danger" : "border-line-strong",
-          className,
-        )}
-        {...rest}
-      >
-        {children}
-      </select>
+      <span className="relative block">
+        <select
+          id={fieldId}
+          className={cx(
+            CONTROL_BASE,
+            "h-10 appearance-none px-3 pr-9",
+            error ? "border-danger" : "border-line-strong",
+            className,
+          )}
+          {...rest}
+        >
+          {children}
+        </select>
+        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rotate-90 text-ink-subtle">
+          <Icons.chevronRight size={14} />
+        </span>
+      </span>
     </FieldShell>
   );
 }

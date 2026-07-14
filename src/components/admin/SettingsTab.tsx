@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Badge, Button, Card, Icons, Input, Select, Textarea, cx } from "@/components/ui";
+import { Badge, Button, Card, Icons, Input, Select, Switch, Textarea, cx } from "@/components/ui";
 import type { DriveSyncDiagnostics, SettingsForm } from "@/lib/adminTypes";
-import { SectionHeading, StructuredEditor } from "./AdminShared";
+import { SectionHeading, StructuredEditor, TabHeader } from "./AdminShared";
 import { HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, driveSyncTone, formatTime, getTestBotConversationId, handoffDurationSelectValue } from "@/lib/adminUtils";
 
 export function SettingsTab({
@@ -34,6 +34,11 @@ export function SettingsTab({
 
   return (
     <div className="space-y-3">
+      <TabHeader
+        icon={<Icons.settings size={20} />}
+        title="Тохиргоо"
+        description="Ботын үндсэн дүрэм, автомат хариу, товчлуур болон хүнд шилжүүлэх тохиргоо."
+      />
       {driveSync?.configured && (
       <Card className="p-4">
         <SectionHeading
@@ -243,7 +248,7 @@ export function SettingsTab({
             >
               <div className="flex-1 space-y-2">
                 <input
-                  className="h-9 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-ink focus:border-brand focus:outline-none"
+                  className="h-9 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-ink transition-colors focus:border-brand"
                   placeholder="Товчны нэр (хэрэглэгчид харагдана) — ж: Үнэ хэд вэ?"
                   value={btn.label}
                   maxLength={60}
@@ -255,7 +260,7 @@ export function SettingsTab({
                   }}
                 />
                 <input
-                  className="h-9 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-ink focus:border-brand focus:outline-none"
+                  className="h-9 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-ink transition-colors focus:border-brand"
                   placeholder="Илгээгдэх мессеж — ж: Хөх хот аяллын үнэ хэд вэ?"
                   value={btn.message}
                   maxLength={200}
@@ -295,17 +300,16 @@ export function SettingsTab({
           description="Хэрэглэгч ажилтантай ярихыг хүсвэл бот зогсож, та хариулна."
         />
         <div className="mt-3 space-y-3">
-          <label className="flex items-center gap-2.5 rounded-md border border-line bg-surface-sunken p-3">
-            <input
-              type="checkbox"
-              className="h-4 w-4"
-              checked={form.handoff_enabled}
-              onChange={(e) => patch({ handoff_enabled: e.target.checked })}
-            />
+          <div className="flex items-center justify-between gap-3 rounded-md border border-line bg-surface-sunken p-3">
             <span className="text-sm font-medium text-ink">
               Хүнд шилжүүлэх идэвхжүүлэх
             </span>
-          </label>
+            <Switch
+              checked={form.handoff_enabled}
+              onChange={(next) => patch({ handoff_enabled: next })}
+              label="Хүнд шилжүүлэх идэвхжүүлэх"
+            />
+          </div>
           <Textarea
             label="Илэрхийлэх түлхүүр үгс"
             hint="Хэрэглэгчийн мессежэд эдгээр үг байвал бот зогсч ажилтанд шилжинэ."
@@ -424,7 +428,7 @@ export function SettingsTab({
         )}
       </Card>
 
-      <div className="sticky bottom-3 z-10">
+      <div className="sticky bottom-3 z-10 rounded-xl border border-line bg-surface/90 p-2 shadow-md backdrop-blur-md">
         <Button block size="lg" loading={busy} onClick={onSave}>
           Тохиргоо хадгалах
         </Button>
@@ -529,7 +533,7 @@ function EmbeddedTestBot() {
       </div>
 
       {/* Message area */}
-      <div className="scroll-area h-72 overflow-y-auto bg-[#f0f2f5] px-4 py-4">
+      <div className="scroll-area h-72 overflow-y-auto bg-surface-sunken px-4 py-4">
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-brand/10 text-brand">

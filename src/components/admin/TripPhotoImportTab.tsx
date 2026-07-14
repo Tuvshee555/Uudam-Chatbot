@@ -1,5 +1,6 @@
 import React from "react";
 import { Button, Card, Icons, Badge, Alert, cx, useToast } from "@/components/ui";
+import { TabHeader } from "./AdminShared";
 import type { TravelTrip } from "@/lib/adminTypes";
 import type { MatchResult } from "@/lib/tripPhotoImport/types";
 
@@ -550,13 +551,13 @@ function statusTone(confidence: MatchResult["confidence"], hasError?: boolean): 
 
   return (
     <div className="space-y-4">
+      <TabHeader
+        icon={<Icons.upload size={20} />}
+        title="Аяллын зураг оруулах"
+        description="Олон zip файл, хавтас эсвэл зураг шууд чирж оруулна. Систем автоматаар аялалд тааруулж, баталгаажуулсаны дараа Cloudinary руу оруулна."
+      />
       <Card>
         <div className="p-4">
-          <h2 className="text-lg font-semibold text-ink">Аяллын зураг оруулах</h2>
-          <p className="mt-1 text-sm text-ink-muted">
-            Олон zip файл, хавтас эсвэл зураг шууд чирж оруулна. Систем автоматаар
-            аялалд тааруулж, баталгаажуулсаны дараа Cloudinary руу оруулна.
-          </p>
 
           <div
             onDragOver={(e) => {

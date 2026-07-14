@@ -8,6 +8,7 @@ import Poster from "./Poster";
 import AttachToTripModal from "./AttachToTripModal";
 import { createDefaultTrip } from "@/lib/poster/defaultTrip";
 import { Badge, Button, Card, Icons, Input, Select, Spinner, cx } from "@/components/ui";
+import { TabHeader } from "@/components/admin/AdminShared";
 
 /* ------------------------------------------------------------------ *
  * Trip / poster data shape — mirrors TRIP_SCHEMA in src/lib/poster/openai.js
@@ -1168,6 +1169,11 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
 
   return (
     <div className="space-y-3">
+      <TabHeader
+        icon={<Icons.image size={20} />}
+        title="Постер үүсгэгч"
+        description="Хятадаас ирсэн файлаас брэнд постер — PNG, PDF болон Messenger хэсэглэлээр татна."
+      />
       {busy && (
         <div className="flex items-center gap-2 rounded-lg border border-line bg-surface-sunken px-3 py-2 text-sm text-ink-muted">
           <Spinner /> {busy}

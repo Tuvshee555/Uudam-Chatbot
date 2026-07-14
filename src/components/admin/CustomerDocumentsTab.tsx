@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   EmptyState,
+  IconButton,
   Icons,
   Input,
   Modal,
@@ -13,6 +14,7 @@ import {
   Textarea,
   useToast,
 } from "@/components/ui";
+import { TabHeader } from "./AdminShared";
 import type {
   CustomerDocument,
   CustomerDocumentCategory,
@@ -526,16 +528,15 @@ export function CustomerDocumentsTab({
 
   return (
     <div className="space-y-3">
+      <TabHeader
+        icon={<Icons.file size={20} />}
+        title="Ирсэн зургууд"
+        description="Хэрэглэгчээс ирсэн бүх зураг автоматаар хадгалагдана. Хэрэггүй бол устгахад л болно."
+      />
       <Card className="p-3.5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0">
-            <p className="font-semibold text-ink">Ирсэн зургууд</p>
-            <p className="text-xs text-ink-subtle">
-              Хэрэглэгчээс ирсэн бүх зураг автоматаар хадгалагдана. Хэрэггүй бол устгахад л болно.
-            </p>
-          </div>
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex rounded-md border border-line-strong p-0.5">
+            <div className="flex rounded-md border border-line-strong bg-surface-sunken p-0.5">
               <button
                 type="button"
                 onClick={() => {
@@ -543,8 +544,8 @@ export function CustomerDocumentsTab({
                   setView("people");
                 }}
                 className={cx(
-                  "rounded px-3 py-1.5 text-xs font-medium",
-                  view === "people" ? "bg-brand text-white" : "text-ink-muted hover:text-ink",
+                  "rounded-[6px] px-3 py-1.5 text-xs font-medium transition-colors",
+                  view === "people" ? "bg-surface text-ink shadow-xs" : "text-ink-muted hover:text-ink",
                 )}
               >
                 Хүмүүс
@@ -556,8 +557,8 @@ export function CustomerDocumentsTab({
                   setView("all");
                 }}
                 className={cx(
-                  "rounded px-3 py-1.5 text-xs font-medium",
-                  view === "all" ? "bg-brand text-white" : "text-ink-muted hover:text-ink",
+                  "rounded-[6px] px-3 py-1.5 text-xs font-medium transition-colors",
+                  view === "all" ? "bg-surface text-ink shadow-xs" : "text-ink-muted hover:text-ink",
                 )}
               >
                 Бүх зураг
@@ -605,14 +606,12 @@ export function CustomerDocumentsTab({
             >
               Устгасан
             </button>
-            <button
-              type="button"
+            <IconButton
+              label="Шинэчлэх"
               onClick={() => (showPeopleList ? void loadSenders() : void loadDocuments())}
-              aria-label="Шинэчлэх"
-              className="flex h-10 w-10 items-center justify-center rounded-md border border-line-strong text-ink-muted hover:border-brand hover:text-brand"
             >
               {sendersLoading || loading ? <Spinner /> : <Icons.refresh size={17} />}
-            </button>
+            </IconButton>
           </div>
         </div>
       </Card>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, Card, Icons, Input, Spinner, cx, useToast } from "@/components/ui";
+import { Button, Card, Icons, Input, Spinner, Switch, cx, useToast } from "@/components/ui";
+import { TabHeader } from "./AdminShared";
 import { readSeasons, type SeasonItem } from "./adminTabData";
 export function SeasonsTab({
   extra,
@@ -121,21 +122,11 @@ export function SeasonsTab({
 
   return (
     <div className="mx-auto max-w-5xl space-y-5">
-      {/* Hero header */}
-      <div className="flex items-start gap-3">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-brand-soft text-brand">
-          <Icons.refresh size={20} />
-        </div>
-        <div>
-          <h1 className="text-lg font-semibold text-ink">Улирал</h1>
-          <p className="mt-0.5 max-w-2xl text-sm text-ink-muted">
-            Улирлын аялал — тухайн улиралд (ж: зун Наадам) онцлох зургуудыг
-            тохируулна. Нэг улирлыг идэвхтэй болгоход мэндчилгээнд тэр улирлын
-            зургууд нэмж илгээгдэнэ. Хэрэглэгч уг улирлын нэрийг бичихэд бот
-            зургуудыг автоматаар илгээнэ.
-          </p>
-        </div>
-      </div>
+      <TabHeader
+        icon={<Icons.image size={20} />}
+        title="Улирал"
+        description="Улирлын аялал — тухайн улиралд (ж: зун Наадам) онцлох зургуудыг тохируулна. Нэг улирлыг идэвхтэй болгоход мэндчилгээнд тэр улирлын зургууд нэмж илгээгдэнэ. Хэрэглэгч уг улирлын нэрийг бичихэд бот зургуудыг автоматаар илгээнэ."
+      />
 
       <div className="flex items-center justify-between gap-3">
         <Button variant="secondary" onClick={addSeason} disabled={saving}>
@@ -184,24 +175,11 @@ export function SeasonsTab({
                     >
                       Идэвхтэй
                     </span>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={season.active}
-                      onClick={() => toggleActive(season.id)}
-                      className={cx(
-                        "relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200",
-                        season.active ? "bg-brand" : "bg-line-strong",
-                      )}
-                      aria-label="Улирал идэвхжүүлэх"
-                    >
-                      <span
-                        className={cx(
-                          "inline-block h-6 w-6 transform rounded-full bg-white shadow ring-0 transition duration-200",
-                          season.active ? "translate-x-7" : "translate-x-0",
-                        )}
-                      />
-                    </button>
+                    <Switch
+                      checked={season.active}
+                      onChange={() => toggleActive(season.id)}
+                      label="Улирал идэвхжүүлэх"
+                    />
                   </div>
                   <Button
                     variant="ghost"

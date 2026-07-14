@@ -1,5 +1,5 @@
-import { Badge, Button, Card, EmptyState, Icons, Spinner, cx } from "@/components/ui";
-import { StatCard } from "./AdminShared";
+import { Badge, Button, Card, EmptyState, IconButton, Icons, Spinner, cx } from "@/components/ui";
+import { StatCard, TabHeader } from "./AdminShared";
 import type { LeadCrmStatus, LeadStats, TravelLead } from "@/lib/adminTypes";
 import { formatTime } from "@/lib/adminUtils";
 
@@ -124,24 +124,16 @@ export function LeadsTab({
 }) {
   return (
     <div className="space-y-3">
-      <Card className="p-3.5">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="font-semibold text-ink">Хэрэглэгчийн хүсэлтүүд</p>
-            <p className="text-xs text-ink-subtle">
-              Хүнтэй ярих хүсэлт болон захиалгын сонирхол гаргасан хэрэглэгчид.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onRefresh}
-            aria-label="Шинэчлэх"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-line-strong bg-surface text-ink-muted transition-colors hover:border-brand hover:text-brand"
-          >
+      <TabHeader
+        icon={<Icons.user size={20} />}
+        title="Хүсэлтүүд"
+        description="Хүнтэй ярих хүсэлт болон захиалгын сонирхол гаргасан хэрэглэгчид."
+        actions={
+          <IconButton label="Шинэчлэх" onClick={onRefresh}>
             {loading ? <Spinner /> : <Icons.refresh size={17} />}
-          </button>
-        </div>
-      </Card>
+          </IconButton>
+        }
+      />
 
       {/* Broadcast card */}
       <Card className="p-4">
@@ -154,7 +146,7 @@ export function LeadsTab({
           value={broadcastMessage}
           onChange={(e) => onBroadcastChange(e.target.value)}
           placeholder="Шинэ аялалын мэдэгдэл, хямдрал, урилга..."
-          className="w-full rounded-lg border border-line-strong bg-surface-sunken px-3 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none"
+          className="w-full rounded-md border border-line-strong bg-surface px-3 py-2 text-sm text-ink transition-colors placeholder:text-ink-subtle focus:border-brand"
           disabled={broadcastSending}
         />
         {broadcastResult && (
@@ -284,7 +276,7 @@ function LeadCard({
           <select
             value={crmStatus}
             onChange={(e) => onUpdateStatus(e.target.value as LeadCrmStatus)}
-            className="rounded-md border border-line-strong bg-surface px-2 py-1.5 text-xs text-ink focus:border-brand focus:outline-none"
+            className="rounded-md border border-line-strong bg-surface px-2 py-1.5 text-xs text-ink transition-colors focus:border-brand"
             aria-label="Статус"
           >
             {(Object.entries(CRM_STATUS_LABELS) as [LeadCrmStatus, string][]).map(([val, label]) => (

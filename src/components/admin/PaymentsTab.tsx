@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Badge, Card, EmptyState, Icons, useToast } from "@/components/ui";
-import { LoadingPanel, SectionHeading, StatCard } from "./AdminShared";
+import { Alert, Badge, Button, Card, EmptyState, Icons, useToast } from "@/components/ui";
+import { LoadingPanel, SectionHeading, StatCard, TabHeader } from "./AdminShared";
 import {
   PAYMENT_STATUS_MN,
   PAYMENT_STATUS_TONE,
@@ -64,7 +64,8 @@ export function PaymentsTab({
 
   return (
     <div className="space-y-6">
-      <SectionHeading
+      <TabHeader
+        icon={<Icons.card size={20} />}
         title="Төлбөр (QPay)"
         description="QPay-ээр төлбөр хүлээн авах болон төлбөрийн түүх. Одоогоор унтраалттай."
       />
@@ -98,7 +99,7 @@ export function PaymentsTab({
         <SectionHeading title="Төлбөрийн түүх" description="Хэн юунд төлсөн, юу хүлээгдэж байгаа." />
         {payments.length === 0 ? (
           <EmptyState
-            icon={<Icons.download size={28} />}
+            icon={<Icons.card size={24} />}
             title="Төлбөр алга"
             description="Одоогоор бүртгэгдсэн төлбөр байхгүй байна."
           />
@@ -125,23 +126,25 @@ export function PaymentsTab({
                   </Badge>
                 </div>
                 {p.status !== "paid" && (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    <button
-                      type="button"
+                  <div className="mt-2.5 flex flex-wrap gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="success"
                       disabled={busyId === p.id}
                       onClick={() => void setStatus(p.id, "paid")}
-                      className="rounded-md border border-success/40 bg-success-soft px-2 py-1 text-xs font-medium text-success hover:border-success disabled:opacity-50"
                     >
+                      <Icons.check size={14} />
                       Төлсөн гэж тэмдэглэх
-                    </button>
-                    <button
-                      type="button"
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-danger"
                       disabled={busyId === p.id}
                       onClick={() => void setStatus(p.id, "cancelled")}
-                      className="rounded-md border border-line-strong bg-surface px-2 py-1 text-xs text-ink-muted hover:border-danger hover:text-danger disabled:opacity-50"
                     >
                       Цуцлах
-                    </button>
+                    </Button>
                   </div>
                 )}
               </div>

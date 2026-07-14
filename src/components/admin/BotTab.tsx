@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
-import { Badge, Button, Card, Icons, Input, Spinner, Textarea, cx, useToast } from "@/components/ui";
+import { Badge, Button, Card, Icons, Input, Spinner, Switch, Textarea, cx, useToast } from "@/components/ui";
 import type { ControlState, CustomerDocument, PageControlState, PauseRow, RecentRow, TravelBotSettings } from "@/lib/adminTypes";
-import { SectionHeading } from "./AdminShared";
+import { SectionHeading, TabHeader } from "./AdminShared";
 import { DURATIONS, formatTime, shortId, timeLeft } from "@/lib/adminUtils";
 
 function greetingEnabled(settings: TravelBotSettings | null): boolean {
@@ -440,6 +440,11 @@ export function BotTab({
 
   return (
     <div className="space-y-3">
+      <TabHeader
+        icon={<Icons.control size={20} />}
+        title="Ботын хяналт"
+        description="Хүнд шилжүүлэх хүсэлт, бот зогсоох/сэргээх, сүүлийн харилцан яриа."
+      />
       {handoffRows.length > 0 && (
         <Card className="border-warning/40 bg-warning-soft p-4">
           <div className="flex items-start gap-2">
@@ -516,25 +521,15 @@ export function BotTab({
           description="Идэвхтэй үед бот ямар ч текст хариулт илгээхгүй. Харин тодорхой аялал асуувал тухайн аяллын зургуудыг дуугүйхэн илгээнэ. Зураггүй аяллыг асуувал бот огт хариулахгүй."
         />
         <div className="mt-3 flex items-center gap-3">
-          <button
-            type="button"
+          <Switch
+            checked={Boolean(control?.photo_only)}
             disabled={busyKey === "photo_only_enable" || busyKey === "photo_only_disable"}
-            onClick={() =>
+            onChange={() =>
               onPauseAction(control?.photo_only ? "photo_only_disable" : "photo_only_enable")
             }
-            className={cx(
-              "relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 disabled:opacity-50",
-              control?.photo_only ? "bg-warning" : "bg-line-strong",
-            )}
-            aria-label={control?.photo_only ? "Унтраах" : "Асаах"}
-          >
-            <span
-              className={cx(
-                "inline-block h-6 w-6 transform rounded-full bg-white shadow ring-0 transition duration-200",
-                control?.photo_only ? "translate-x-7" : "translate-x-0",
-              )}
-            />
-          </button>
+            label={control?.photo_only ? "Унтраах" : "Асаах"}
+            activeClass="bg-warning"
+          />
           <span className={cx("text-sm font-medium", control?.photo_only ? "text-warning" : "text-ink-muted")}>
             {control?.photo_only ? "Зөвхөн зураг горим идэвхтэй" : "Унтарсан — бот хэвийн хариулж байна"}
           </span>
@@ -602,7 +597,7 @@ export function BotTab({
             value={pauseReason}
             onChange={(e) => setPauseReason(e.target.value)}
             placeholder="Зогсоох шалтгаан (сонголттой)"
-            className="h-10 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-ink placeholder:text-ink-subtle focus:border-brand"
+            className="h-10 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-ink transition-colors placeholder:text-ink-subtle focus:border-brand"
           />
         </div>
         <div className="mt-3 space-y-3">
@@ -631,14 +626,14 @@ export function BotTab({
                     {paused ? "Зогссон" : "Идэвхтэй"}
                   </Badge>
                 </div>
-                <div className="mt-2">
-                  <button
-                    type="button"
+                <div className="mt-2 flex items-center gap-2">
+                  <Switch
+                    checked={!paused}
                     disabled={
                       busyKey === `page_pause:${page.page_id}` ||
                       busyKey === `page_resume:${page.page_id}`
                     }
-                    onClick={() =>
+                    onChange={() =>
                       onPauseAction(
                         paused ? "page_resume" : "page_pause",
                         undefined,
@@ -646,20 +641,10 @@ export function BotTab({
                         page.page_id,
                       )
                     }
-                    className={cx(
-                      "relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 disabled:opacity-50",
-                      paused ? "bg-danger" : "bg-success",
-                    )}
-                    aria-label={paused ? "Сэргээх" : "Зогсоох"}
-                  >
-                    <span
-                      className={cx(
-                        "inline-block h-6 w-6 transform rounded-full bg-white shadow ring-0 transition duration-200",
-                        paused ? "translate-x-7" : "translate-x-0",
-                      )}
-                    />
-                  </button>
-                  <span className="ml-2 text-xs text-ink-subtle">
+                    label={paused ? "Сэргээх" : "Зогсоох"}
+                    activeClass="bg-success"
+                  />
+                  <span className="text-xs text-ink-subtle">
                     {paused ? "Дарж сэргээх" : "Дарж зогсоох"}
                   </span>
                 </div>
@@ -977,23 +962,14 @@ function ReminderCard({
             болговол зураг, текст хадгалагдсан хэвээр байх ч илгээгдэхгүй.
           </p>
         </div>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void patchExtra({ reminder_enabled: !enabled })}
-          className={cx(
-            "relative mt-0.5 inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 disabled:opacity-50",
-            enabled ? "bg-brand" : "bg-line-strong",
-          )}
-          aria-label={enabled ? "Унтраах" : "Асаах"}
-        >
-          <span
-            className={cx(
-              "inline-block h-6 w-6 transform rounded-full bg-white shadow ring-0 transition duration-200",
-              enabled ? "translate-x-7" : "translate-x-0",
-            )}
+        <span className="mt-0.5 shrink-0">
+          <Switch
+            checked={enabled}
+            disabled={busy}
+            onChange={() => void patchExtra({ reminder_enabled: !enabled })}
+            label={enabled ? "Унтраах" : "Асаах"}
           />
-        </button>
+        </span>
       </div>
 
       <div className="mt-3 space-y-3 rounded-lg border border-line bg-surface-sunken p-3">
@@ -1128,23 +1104,14 @@ function QuickToggleCard({
           <p className="text-sm font-semibold text-ink">{title}</p>
           <p className="mt-0.5 text-xs text-ink-subtle">{description}</p>
         </div>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void handleToggle()}
-          className={cx(
-            "relative mt-0.5 inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 disabled:opacity-50",
-            enabled ? "bg-brand" : "bg-line-strong",
-          )}
-          aria-label={enabled ? "Унтраах" : "Асаах"}
-        >
-          <span
-            className={cx(
-              "inline-block h-6 w-6 transform rounded-full bg-white shadow ring-0 transition duration-200",
-              enabled ? "translate-x-7" : "translate-x-0",
-            )}
+        <span className="mt-0.5 shrink-0">
+          <Switch
+            checked={enabled}
+            disabled={busy}
+            onChange={() => void handleToggle()}
+            label={enabled ? "Унтраах" : "Асаах"}
           />
-        </button>
+        </span>
       </div>
     </Card>
   );

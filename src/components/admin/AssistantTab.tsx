@@ -166,7 +166,7 @@ export function AssistantTab({
               Зураг (JPG, PNG), PDF, Excel дэмжинэ. Олон зураг нэг дор болно.
             </p>
           </div>
-          <span className="hidden shrink-0 items-center gap-1.5 rounded-lg bg-brand px-3.5 py-2 text-sm font-medium text-white sm:flex">
+          <span className="hidden h-10 shrink-0 items-center gap-2 rounded-md bg-brand px-4 text-sm font-semibold text-white shadow-xs shadow-brand/30 sm:inline-flex">
             <Icons.paperclip size={15} />
             Файл сонгох
           </span>
@@ -321,7 +321,7 @@ export function AssistantTab({
             type="button"
             onClick={onPickFile}
             aria-label="Файл хавсаргах"
-            className="flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-line-strong px-2.5 text-sm font-medium text-ink-muted hover:border-brand hover:text-brand"
+            className="flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-md border border-line-strong bg-surface px-2.5 text-sm font-medium text-ink-muted transition-colors hover:border-brand hover:text-brand"
           >
             <Icons.paperclip size={17} />
             <span className="hidden sm:inline">Файл</span>
@@ -339,7 +339,7 @@ export function AssistantTab({
             }}
             rows={1}
             placeholder="Ж: «Бангкок аяллыг цуцал» эсвэл прайс жагсаалт файл хавсаргах"
-            className="scroll-area max-h-32 min-h-10 flex-1 resize-none rounded-md border border-line-strong bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-subtle focus:border-brand"
+            className="scroll-area max-h-32 min-h-10 flex-1 resize-none rounded-md border border-line-strong bg-surface px-3 py-2 text-sm text-ink transition-colors placeholder:text-ink-subtle focus:border-brand"
           />
           <Button
             onClick={onSend}
@@ -685,7 +685,7 @@ function ChatBubbleV2({
                             setFormDraft((prev) => ({ ...prev, [q.id]: e.target.value }))
                           }
                           placeholder={q.customPlaceholder || "Өөрийн хариуг бичнэ үү"}
-                          className="mt-2 h-9 w-full rounded-lg border border-line-strong bg-surface px-3 text-sm text-ink focus:border-brand focus:outline-none"
+                          className="mt-2 h-9 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-ink transition-colors focus:border-brand"
                         />
                       )}
                     </div>
@@ -793,7 +793,7 @@ function ChatBubbleV2({
                   <div className={cx("space-y-3", createActions.length > 3 && "max-h-96 overflow-y-auto scroll-area pr-1")}>
                   {createActions.map(({ action, index }) => {
                     const f = action.fields ?? {};
-                    const inputCls = "h-9 w-full rounded-lg border border-line bg-surface px-3 text-sm text-ink placeholder:text-ink-subtle focus:border-brand focus:outline-none";
+                    const inputCls = "h-9 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-ink transition-colors placeholder:text-ink-subtle focus:border-brand";
                     return (
                       <div key={index} className="rounded-xl border border-line bg-surface-sunken p-3 space-y-3">
                         <p className="text-xs font-semibold uppercase tracking-wide text-ink-subtle">
