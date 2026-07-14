@@ -72,6 +72,7 @@ export default function AdminPage() {
   const [aiBusyLabel, setAiBusyLabel] = useState("");
   const [aiBusyProgress, setAiBusyProgress] = useState<number | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [sidebarHidden, setSidebarHidden] = useState(false);
   const [editingTrip, setEditingTrip] = useState<TravelTrip | null>(null);
   const [isNewTrip, setIsNewTrip] = useState(false);
   const [tripDraft, setTripDraft] = useState<Record<string, string>>(
@@ -1564,10 +1565,17 @@ export default function AdminPage() {
         <div className="flex min-w-0 items-center gap-2">
           <button
             type="button"
-            aria-label="Цэс нээх"
-            aria-expanded={mobileNavOpen}
-            onClick={() => setMobileNavOpen((open) => !open)}
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink md:hidden"
+            aria-label="Цэс нээх/хаах"
+            aria-expanded={mobileNavOpen || !sidebarHidden}
+            onClick={() => {
+              // Desktop collapses the rail in place; mobile toggles the overlay.
+              if (window.matchMedia("(min-width: 768px)").matches) {
+                setSidebarHidden((hidden) => !hidden);
+              } else {
+                setMobileNavOpen((open) => !open);
+              }
+            }}
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink"
           >
             {mobileNavOpen ? <Icons.close size={20} /> : <Icons.menu size={20} />}
           </button>
@@ -1605,6 +1613,7 @@ export default function AdminPage() {
         <aside className={cx(
           "scroll-area-dark fixed bottom-0 left-0 top-14 z-40 flex w-[17rem] shrink-0 flex-col overflow-y-auto bg-gradient-to-b from-nav to-nav-deep px-3 pb-6 pt-1 transition-transform md:static md:z-auto md:w-64 md:translate-x-0",
           mobileNavOpen ? "translate-x-0 shadow-lg" : "-translate-x-full md:shadow-none",
+          sidebarHidden && "md:hidden",
         )}>
           {NAV_GROUPS.map((group) => (
             <div key={group.label}>

@@ -6,7 +6,7 @@
  *
  * All primitives consume the design tokens defined in globals.css, so the
  * UI is mathematically consistent: one radius scale, one shadow scale, one
- * spacing rhythm, one focus system, one brand colour (#113e67).
+ * spacing rhythm, one focus system, one accent colour (travel teal).
  */
 import Link from "next/link";
 import {

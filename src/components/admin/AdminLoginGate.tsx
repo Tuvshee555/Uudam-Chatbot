@@ -21,8 +21,8 @@ export function AdminLoginGate({
         className="pointer-events-none absolute inset-0"
         style={{
           backgroundImage:
-            "radial-gradient(760px 500px at 78% -10%, rgba(23, 82, 127, 0.55), transparent 65%)," +
-            "radial-gradient(620px 460px at -8% 108%, rgba(22, 134, 139, 0.28), transparent 60%)",
+            "radial-gradient(760px 500px at 78% -10%, rgba(18, 138, 128, 0.35), transparent 65%)," +
+            "radial-gradient(620px 460px at -8% 108%, rgba(232, 132, 61, 0.16), transparent 60%)",
         }}
       />
       <div className="animate-fade-up relative w-full max-w-sm">

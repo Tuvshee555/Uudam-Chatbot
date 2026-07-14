@@ -2,45 +2,47 @@
 
 /* ============================================================
    DESIGN TOKENS — single source of truth
-   Brand: #113e67 (deep navy). Used for CTAs, active states,
-   focus rings and accents only — never as decorative fill.
+   Accent: #0f766e (travel teal) + #e8843d (sun) highlight.
+   Neutrals are warm gray — deliberately NOT blue-tinted.
+   Used for CTAs, active states, focus rings and accents only —
+   never as decorative fill.
    Type: Manrope (cyrillic-ext, loaded via next/font in _app),
    JetBrains Mono for data/code. Fallback stacks keep the UI
    readable if the webfont ever fails to load.
    ============================================================ */
 @theme {
-  /* Brand */
-  --color-brand: #113e67;
-  --color-brand-hover: #17527f;
-  --color-brand-active: #0d3253;
-  --color-brand-soft: #e9f0f6;
-  --color-brand-border: #c4d6e3;
+  /* Brand accent — travel teal */
+  --color-brand: #0f766e;
+  --color-brand-hover: #128a80;
+  --color-brand-active: #0a5a54;
+  --color-brand-soft: #e7f4f2;
+  --color-brand-border: #b9dfda;
   --color-travel: #16868b;
   --color-travel-soft: #e8f6f5;
   --color-sun: #e8843d;
   --color-sun-soft: #fff1e6;
 
-  /* Surfaces */
-  --color-canvas: #eef2f6;
+  /* Surfaces — warm neutral */
+  --color-canvas: #f4f4f2;
   --color-surface: #ffffff;
-  --color-surface-sunken: #f1f4f7;
+  --color-surface-sunken: #f0f1ef;
 
-  /* Dark navy navigation surface (sidebar / login backdrop) */
-  --color-nav: #0c2947;
-  --color-nav-deep: #081d33;
-  --color-nav-raised: #16375a;
-  --color-nav-line: #1d3f63;
-  --color-nav-ink: #cddcec;
-  --color-nav-ink-soft: #7e99b6;
+  /* Dark charcoal navigation surface (sidebar / login backdrop) */
+  --color-nav: #171a1c;
+  --color-nav-deep: #0f1213;
+  --color-nav-raised: #262b2d;
+  --color-nav-line: #272d2f;
+  --color-nav-ink: #d5d9d8;
+  --color-nav-ink-soft: #8e9694;
 
   /* Lines */
-  --color-line: #e3e8ee;
-  --color-line-strong: #cfd7e1;
+  --color-line: #e5e6e3;
+  --color-line-strong: #d1d4d0;
 
-  /* Text */
-  --color-ink: #101d2e;
-  --color-ink-muted: #586675;
-  --color-ink-subtle: #8a96a5;
+  /* Text — neutral ink */
+  --color-ink: #17191a;
+  --color-ink-muted: #5a6163;
+  --color-ink-subtle: #8d9395;
 
   /* Status */
   --color-success: #1f7a4d;
@@ -58,11 +60,11 @@
   --radius-lg: 14px;
   --radius-xl: 18px;
 
-  /* Shadow scale — navy-tinted, one light source (top) */
-  --shadow-xs: 0 1px 2px rgba(13, 32, 58, 0.06);
-  --shadow-sm: 0 1px 2px rgba(13, 32, 58, 0.05), 0 2px 8px rgba(13, 32, 58, 0.05);
-  --shadow-md: 0 2px 6px rgba(13, 32, 58, 0.06), 0 12px 32px rgba(13, 32, 58, 0.12);
-  --shadow-lg: 0 4px 14px rgba(9, 26, 48, 0.12), 0 28px 64px rgba(9, 26, 48, 0.24);
+  /* Shadow scale — neutral, one light source (top) */
+  --shadow-xs: 0 1px 2px rgba(20, 24, 24, 0.06);
+  --shadow-sm: 0 1px 2px rgba(20, 24, 24, 0.05), 0 2px 8px rgba(20, 24, 24, 0.05);
+  --shadow-md: 0 2px 6px rgba(20, 24, 24, 0.06), 0 12px 32px rgba(20, 24, 24, 0.12);
+  --shadow-lg: 0 4px 14px rgba(14, 17, 17, 0.12), 0 28px 64px rgba(14, 17, 17, 0.24);
 
   /* Typography */
   --font-sans: var(
@@ -157,16 +159,16 @@
   body {
     min-height: 100dvh;
     background-color: var(--color-canvas);
-    /* Quiet ambient depth: brand navy top-right, travel teal bottom-left */
+    /* Quiet ambient depth: teal top-right, warm sun bottom-left */
     background-image:
       radial-gradient(
         1100px 620px at 88% -12%,
-        rgba(17, 62, 103, 0.08),
+        rgba(15, 118, 110, 0.06),
         transparent 62%
       ),
       radial-gradient(
         900px 540px at -12% 112%,
-        rgba(22, 134, 139, 0.06),
+        rgba(232, 132, 61, 0.05),
         transparent 60%
       );
     background-attachment: fixed;
@@ -198,7 +200,7 @@
   select:focus-visible {
     outline: none;
     border-color: var(--color-brand);
-    box-shadow: 0 0 0 3px rgba(17, 62, 103, 0.12);
+    box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.14);
   }
 
   ::selection {
