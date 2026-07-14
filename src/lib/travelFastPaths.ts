@@ -443,6 +443,72 @@ function buildStandalonePriceLookupReply(text: string, trips: TravelTrip[]): str
   return lines.join("\n");
 }
 
+function extractPassengerCounts(text: string): { adult: number; child: number; infant: number } | null {
+  const normalized = normText(text);
+  const hasTotalIntent =
+    normalized.includes("нийт") ||
+    normalized.includes("хэд болох") ||
+    normalized.includes("нийлээд") ||
+    normalized.includes("total");
+  if (!hasTotalIntent) return null;
+
+  const readCount = (patterns: RegExp[]) => {
+    for (const pattern of patterns) {
+      const match = pattern.exec(normalized);
+      if (!match) continue;
+      const value = Number(match[1]);
+      if (Number.isInteger(value) && value >= 0 && value <= 50) return value;
+    }
+    return 0;
+  };
+
+  const adult = readCount([/(?:том\s+хүн|насанд хүрэгч|adult)\s*(\d{1,2})/i, /(\d{1,2})\s*(?:том(?:\s+хүн)?|насанд хүрэгч|adult)/i]);
+  const child = readCount([/(?:хүүхэд|child)\s*(\d{1,2})/i, /(\d{1,2})\s*(?:хүүхэд|child)/i]);
+  const infant = readCount([/(?:нярай|infant)\s*(\d{1,2})/i, /(\d{1,2})\s*(?:нярай|infant)/i]);
+  if (adult + child + infant <= 0) return null;
+  return { adult, child, infant };
+}
+
+function buildPassengerTotalReply(
+  trip: TravelTrip,
+  text: string,
+  now = new Date(),
+): string | null {
+  const currentLine = text.split("\n").pop() || text;
+  const counts = extractPassengerCounts(currentLine);
+  if (!counts) return null;
+
+  const currency = trip.currency || "MNT";
+  const monthDay = extractDatesFromText(currentLine)[0];
+  const group = monthDay ? findPriceGroupByMonthDay(trip, monthDay.month, monthDay.day, now) : null;
+  const structuredGroup = !group ? getStructuredPriceGroups(trip)[0] : null;
+  const selected = (group || structuredGroup || null) as Record<string, unknown> | null;
+  const adultPrice = typeof selected?.adult_price === "number" ? selected.adult_price : trip.adult_price;
+  const childPrice = typeof selected?.child_price === "number" ? selected.child_price : trip.child_price;
+  const infantPrice = typeof selected?.infant_price === "number" ? selected.infant_price : null;
+
+  const rows: string[] = [];
+  let total = 0;
+  const add = (label: string, count: number, price: number | null | undefined) => {
+    if (count <= 0) return;
+    if (typeof price !== "number") {
+      rows.push(`• ${label} ${count}: үнэ тодорхойгүй`);
+      return;
+    }
+    const subtotal = count * price;
+    total += subtotal;
+    rows.push(`• ${label} ${count} x ${formatMoney(price, currency)} = ${formatMoney(subtotal, currency)}`);
+  };
+
+  add("Том хүн", counts.adult, adultPrice);
+  add("Хүүхэд", counts.child, childPrice);
+  add("Нярай", counts.infant, infantPrice);
+  if (total <= 0) return null;
+
+  const label = monthDay ? `${monthDay.month} сарын ${monthDay.day}-ны ` : "";
+  return [`✈️ ${trip.route_name}`, `💰 ${label}нийт: ${formatMoney(total, currency)}`, ...rows].join("\n");
+}
+
 export function buildSmartButtons(replyText: string, trips: TravelTrip[]): string[] | null {
   const { best } = findBestTripMatch(replyText, trips);
   if (!best) return null;
@@ -760,7 +826,37 @@ export function buildStructuredTripReply(
     if (directUnavailable) return directUnavailable;
     return null;
   }
-  const best = withFutureDepartureDates(bestRaw, now);
+  let best = withFutureDepartureDates(bestRaw, now);
+  const currentMonthDays = extractDatesFromText(currentLine);
+  if (currentMonthDays.length > 0) {
+    const bestHasRequestedDate = currentMonthDays.some((md) =>
+      Boolean(findPriceGroupByMonthDay(best, md.month, md.day, now)),
+    );
+    if (!bestHasRequestedDate) {
+      const datedTrips = trips.filter((trip) =>
+        trip.status === "active" &&
+        currentMonthDays.some((md) => Boolean(findPriceGroupByMonthDay(trip, md.month, md.day, now))),
+      );
+      const bestRouteTokens = unique(keywordTokens(best.route_name));
+      const relatedByRoute = datedTrips
+        .map((trip) => ({
+          trip,
+          overlap: unique(keywordTokens(trip.route_name)).filter((token) =>
+            bestRouteTokens.includes(token),
+          ).length,
+        }))
+        .filter((item) => item.overlap > 0)
+        .sort((a, b) => b.overlap - a.overlap);
+      if (relatedByRoute[0] && (!relatedByRoute[1] || relatedByRoute[0].overlap > relatedByRoute[1].overlap)) {
+        best = withFutureDepartureDates(relatedByRoute[0].trip, now);
+      } else {
+        const datedMatch = datedTrips.length > 0 ? findBestTripMatch(text, datedTrips) : null;
+        if (datedMatch?.best && datedMatch.best.id !== best.id) {
+          best = withFutureDepartureDates(datedMatch.best, now);
+        }
+      }
+    }
+  }
 
   const samePriceReply = buildSameTripPriceComparisonReply(best, text, now);
   if (samePriceReply && hasSamePriceComparisonIntent(text)) {
@@ -786,6 +882,8 @@ export function buildStructuredTripReply(
   const askedSchedule = hasScheduleIntent(text);
   const askedDirectFlight = hasDirectFlightIntent(text);
   const askedExistence = hasExistenceIntent(text);
+  const passengerTotalReply = askedPrice ? buildPassengerTotalReply(best, text, now) : null;
+  if (passengerTotalReply) return passengerTotalReply;
   const ageSpecificReply = askedPrice ? buildAgeSpecificPriceReply(best, text) : null;
   if (ageSpecificReply) return ageSpecificReply;
   const passengerTypeReply = askedPrice ? buildPassengerTypePriceReply(best, text) : null;
@@ -843,10 +941,10 @@ export function buildStructuredTripReply(
   }
 
   // Detect if user asked about a specific month only (without a specific day)
-  const askedMonthOnly = extractMonthOnlyFromText(text);
+  const askedMonthOnly = extractMonthOnlyFromText(currentLine);
 
   if (askedPrice) {
-    const mnDates = extractDatesFromText(text);
+    const mnDates = extractDatesFromText(currentLine);
     if (mnDates.length > 0) {
       // Specific day(s) requested — use month/day lookup
       const currency = best.currency || "MNT";

@@ -107,6 +107,8 @@ const STRUCTURED_QUERY_SIGNALS = [
   "хэд вэ",
   "хэдээр",
   "төлбөр",
+  "нийт",
+  "хэд болох",
   "хэдэн өдөр",
   "хэд хоног",
   "хэзээ",
@@ -278,6 +280,34 @@ export function phoneticKeywordTokens(text: string) {
 
 export function unique<T>(values: T[]) {
   return Array.from(new Set(values));
+}
+
+function isOneEditApart(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (Math.min(a.length, b.length) < 5 || Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+    edits += 1;
+    if (edits > 1) return false;
+    if (a.length > b.length) i += 1;
+    else if (b.length > a.length) j += 1;
+    else {
+      i += 1;
+      j += 1;
+    }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+
+function phoneticTokenMatches(queryToken: string, candidateToken: string): boolean {
+  return queryToken === candidateToken || isOneEditApart(queryToken, candidateToken);
 }
 
 export function uniqueMonthDays(values: MonthDay[]) {
@@ -520,7 +550,9 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
 
     const matchedWords = unique([
       ...routeKeywords.filter((word) => queryWords.includes(word)),
-      ...routePhoneticKeywords.filter((word) => queryPhoneticWords.includes(word)),
+      ...routePhoneticKeywords.filter((word) =>
+        queryPhoneticWords.some((queryWord) => phoneticTokenMatches(queryWord, word)),
+      ),
     ]);
     const routeTokenPool = unique([...routeKeywords, ...routePhoneticKeywords]);
     const coverage = matchedWords.length / routeTokenPool.length;

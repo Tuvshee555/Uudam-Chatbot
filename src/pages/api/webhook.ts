@@ -13,12 +13,12 @@ import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines } from "../../lib/replyReasoning";
-import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
+import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, dbClaimGoodbye, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { appendLeadCaptureCta, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
-import { claimSeasonSend, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
+import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
   extractImageAttachmentUrls,
@@ -1054,10 +1054,18 @@ async function handleMessage(
   }
   {
     const trips = await getTrips();
-    const programReply = buildTripProgramReply(await getFastPathText(), trips);
+    const programFastPathText = await getFastPathText();
+    const programReply = buildTripProgramReply(programFastPathText, trips);
     if (programReply) {
+      const inferredMediaUrls = programReply.mediaUrls.length > 0
+        ? programReply.mediaUrls
+        : extractTripPhotosForReply(programReply.reply, trips, { userText: programFastPathText });
       const safeProgramReply = appendLeadCaptureCta(
-        enforceWebsiteForPayment(sanitizeAssistantReply(programReply.reply)),
+        enforceWebsiteForPayment(
+          sanitizeAssistantReply(
+            reconcilePhotoAttachmentReply(programReply.reply, inferredMediaUrls.length > 0),
+          ),
+        ),
         phoneCollected,
       );
       await deliverFastPathReply({
@@ -1084,7 +1092,7 @@ async function handleMessage(
               platform,
               senderId,
               safeProgramReply,
-              await getFastPathText(),
+              programFastPathText,
               token,
               pageId,
               igUserId,

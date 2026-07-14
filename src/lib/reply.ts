@@ -44,6 +44,14 @@ export function enforceWebsiteForPayment(text: string) {
   return text;
 }
 
+export function reconcilePhotoAttachmentReply(text: string, hasAttachedMedia: boolean) {
+  if (!hasAttachedMedia) return text;
+  return text.replace(
+    /\n\nОдоогоор энэ аяллын нэмэлт зураг системд ороогүй байна\. 🙌/g,
+    "\n\nЗургийг илгээж байна.",
+  );
+}
+
 // A customer's own text claim ("5 сая шилжүүлсэн", "screenshot явуулсан",
 // "миний төлбөр орсон уу?") is not proof of payment — the bot has no bank/QPay
 // access and can only see what the customer typed. The model is prompted not
@@ -83,7 +91,9 @@ export const PAYMENT_VERIFICATION_DEFERRAL_REPLY =
 // payment-proof signal.
 const STRONG_PAYMENT_CLAIM_PATTERNS: RegExp[] = [
   /шилжүүл(?:сэн|лээ|эв)/i,
+  /төл(?:сөн|лөө|өв)/i,
   /төл(?:сөн|лөө|бөр).{0,20}(?:орсон|хийсэн|хийлээ)/i,
+  /\d[\d\s,.]{4,}.{0,30}(?:төл(?:сөн|лөө|өв)|шилжүүл|баталгаажуул)/i,
   /screenshot|скриншот/i,
   /миний төлбөр орсон уу/i,
   /данс руу шилжүүл/i,

@@ -28,7 +28,7 @@ const DIRECT_FLIGHT_NEGATIVE_PATTERNS = [
 
 export function hasPriceIntent(text: string) {
   return (
-    /үнэ|хэд\s+вэ|хэдээр|төлбөр|price|cost/i.test(text) ||
+    /үнэ|хэд\s+вэ|хэдээр|хэд\s+болох|нийт|төлбөр|price|cost|total/i.test(text) ||
     /(\d{1,2}\s*(?:настай|нас|сар|сартай)\s*(?:хүүхэд|нярай)?|(?:хүүхэд|нярай)\s*\d{1,2}\s*(?:настай|нас|сар|сартай))/i.test(text)
   );
 }
@@ -329,6 +329,7 @@ export function buildPassengerTypePriceReply(trip: TravelTrip, text: string): st
   // last line) decides which passenger type is being asked about now.
   const lines = text.split("\n");
   const currentLine = lines[lines.length - 1] || text;
+  if (extractDatesFromText(currentLine).length > 0) return null;
   const normalized = normText(currentLine);
   const target = normalized.includes("нярай") || normalized.includes("infant")
     ? "infant"

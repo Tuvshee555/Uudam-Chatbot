@@ -15,7 +15,7 @@ import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/c
 import { analyzeBeforeReply, buildTripIndexLines } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
-import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
+import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
 import { buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
@@ -315,7 +315,7 @@ export default async function handler(
           const mediaLine = !programReply.brochure && programReply.mediaUrls.length > 0
             ? `\n\nХөтөлбөрийн зураг:\n${programReply.mediaUrls.join("\n")}`
             : "";
-          const safeReply = enforceWebsiteForPayment(
+          let safeReply = enforceWebsiteForPayment(
             sanitizeAssistantReply(`${programReply.reply}${brochureLine}${mediaLine}`),
           );
           const media = buildDemoMedia({
@@ -325,6 +325,7 @@ export default async function handler(
             explicitMediaUrls: programReply.mediaUrls,
             brochureUrl: programReply.brochure?.type === "url" ? programReply.brochure.value : null,
           });
+          safeReply = reconcilePhotoAttachmentReply(safeReply, media.mediaUrls.length > 0 || Boolean(media.brochureUrl));
           await appendMessage(sessionId, "user", normalizedText);
           await appendMessage(sessionId, "assistant", safeReply, imageAttachments(media.mediaUrls));
           await rememberTurn();
