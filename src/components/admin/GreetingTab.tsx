@@ -182,7 +182,7 @@ export function GreetingTab({
               aria-checked={draft.enabled}
               onClick={() => setDraft((d) => ({ ...d, enabled: !d.enabled }))}
               className={cx(
-                "relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none",
+                "relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200",
                 draft.enabled ? "bg-brand" : "bg-line-strong",
               )}
               aria-label="Мэндчилгээ асаах/унтраах"

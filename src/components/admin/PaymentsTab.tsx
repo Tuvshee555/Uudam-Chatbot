@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Badge, Card, EmptyState, Icons, useToast } from "@/components/ui";
-import { LoadingPanel, SectionHeading } from "./AdminShared";
+import { LoadingPanel, SectionHeading, StatCard } from "./AdminShared";
 import {
   PAYMENT_STATUS_MN,
   PAYMENT_STATUS_TONE,
@@ -87,24 +87,10 @@ export function PaymentsTab({
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Card className="p-4">
-          <p className="text-xs text-ink-subtle">Нийт</p>
-          <p className="mt-1 text-2xl font-bold text-ink">{stats.total}</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-xs text-ink-subtle">Төлсөн</p>
-          <p className="mt-1 text-2xl font-bold text-ink">{stats.paid}</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-xs text-ink-subtle">Хүлээгдэж буй</p>
-          <p className="mt-1 text-2xl font-bold text-ink">{stats.pending}</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-xs text-ink-subtle">Нийт орлого</p>
-          <p className="mt-1 text-2xl font-bold text-ink">
-            {stats.paidAmount.toLocaleString()}₮
-          </p>
-        </Card>
+        <StatCard label="Нийт" value={stats.total} />
+        <StatCard label="Төлсөн" value={stats.paid} tone="text-success" />
+        <StatCard label="Хүлээгдэж буй" value={stats.pending} tone="text-warning" />
+        <StatCard label="Нийт орлого" value={`${stats.paidAmount.toLocaleString()}₮`} />
       </div>
 
       {/* Payments table */}

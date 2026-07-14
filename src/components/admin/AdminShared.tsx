@@ -1,13 +1,40 @@
 import type { ReactNode } from "react";
-import { Button, Icons, Spinner } from "@/components/ui";
+import { Button, Card, Icons, Spinner, cx } from "@/components/ui";
 import type { StructuredRow } from "@/lib/adminTypes";
 
 /** Full-panel loading placeholder for a tab's initial data fetch. */
 export function LoadingPanel() {
   return (
     <div className="flex items-center justify-center py-16">
-      <Spinner />
+      <Spinner className="text-brand" />
     </div>
+  );
+}
+
+/** One KPI tile — uppercase micro-label over a big tabular number. */
+export function StatCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: ReactNode;
+  tone?: string;
+}) {
+  return (
+    <Card className="p-3.5">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-subtle">
+        {label}
+      </p>
+      <p
+        className={cx(
+          "mt-1.5 text-[26px] font-extrabold leading-none tracking-tight tabular-nums",
+          tone ?? "text-ink",
+        )}
+      >
+        {value}
+      </p>
+    </Card>
   );
 }
 

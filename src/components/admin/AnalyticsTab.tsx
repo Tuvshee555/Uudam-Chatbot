@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Alert, Card, cx } from "@/components/ui";
-import { LoadingPanel, SectionHeading } from "./AdminShared";
+import { LoadingPanel, SectionHeading, StatCard } from "./AdminShared";
 import type { AnalyticsStatsData, FaqStatsData } from "./adminTabData";
 export function AnalyticsTab({
   apiFetch,
@@ -69,22 +69,10 @@ export function AnalyticsTab({
 
       {/* Row 1 — 4 stat cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Card className="p-4">
-          <p className="text-xs text-ink-subtle">Нийт хүсэлт</p>
-          <p className="mt-1 text-2xl font-bold text-ink">{stats.totalLeads}</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-xs text-ink-subtle">Шинэ хүсэлт</p>
-          <p className="mt-1 text-2xl font-bold text-ink">{stats.newLeads}</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-xs text-ink-subtle">Захиалга</p>
-          <p className="mt-1 text-2xl font-bold text-ink">{stats.bookingLeads}</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-xs text-ink-subtle">Нийт харилцагч</p>
-          <p className="mt-1 text-2xl font-bold text-ink">{stats.totalContacts}</p>
-        </Card>
+        <StatCard label="Нийт хүсэлт" value={stats.totalLeads} />
+        <StatCard label="Шинэ хүсэлт" value={stats.newLeads} tone="text-brand" />
+        <StatCard label="Захиалга" value={stats.bookingLeads} tone="text-success" />
+        <StatCard label="Нийт харилцагч" value={stats.totalContacts} />
       </div>
 
       {/* Row 2 — bar charts */}
@@ -103,8 +91,8 @@ export function AnalyticsTab({
                       <span className="text-ink truncate">{item.date}</span>
                       <span className="text-ink-muted ml-2 shrink-0">{item.count}</span>
                     </div>
-                    <div className="h-2 rounded-full bg-surface-sunken overflow-hidden">
-                      <div className="h-full rounded-full bg-brand" style={{ width: `${pct}%` }} />
+                    <div className="h-2 overflow-hidden rounded-full bg-surface-sunken">
+                      <div className="h-full rounded-full bg-gradient-to-r from-brand to-brand-hover transition-[width] duration-500" style={{ width: `${pct}%` }} />
                     </div>
                   </div>
                 );
@@ -127,8 +115,8 @@ export function AnalyticsTab({
                       <span className="text-ink truncate">{item.trip}</span>
                       <span className="text-ink-muted ml-2 shrink-0">{item.count}</span>
                     </div>
-                    <div className="h-2 rounded-full bg-surface-sunken overflow-hidden">
-                      <div className="h-full rounded-full bg-brand" style={{ width: `${pct}%` }} />
+                    <div className="h-2 overflow-hidden rounded-full bg-surface-sunken">
+                      <div className="h-full rounded-full bg-gradient-to-r from-brand to-brand-hover transition-[width] duration-500" style={{ width: `${pct}%` }} />
                     </div>
                   </div>
                 );
@@ -252,7 +240,7 @@ export function AnalyticsTab({
                       </div>
                       <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-surface-sunken">
                         <div
-                          className="h-full rounded-full bg-brand"
+                          className="h-full rounded-full bg-gradient-to-r from-brand to-brand-hover transition-[width] duration-500"
                           style={{ width: `${(q.count / max) * 100}%` }}
                         />
                       </div>

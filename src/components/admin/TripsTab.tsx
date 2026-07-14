@@ -169,7 +169,7 @@ export function TripsTab({
               type="button"
               onClick={onRefresh}
               aria-label="Шинэчлэх"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-line-strong text-ink-muted hover:border-brand hover:text-brand"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-line-strong bg-surface text-ink-muted transition-colors hover:border-brand hover:text-brand"
             >
               {loading ? <Spinner /> : <Icons.refresh size={17} />}
             </button>
@@ -329,7 +329,7 @@ function TripGroups({
             <button
               type="button"
               onClick={() => toggle(category)}
-              className="flex w-full items-center justify-between gap-2 px-3.5 py-2.5 text-left"
+              className="flex w-full items-center justify-between gap-2 rounded-t-xl px-3.5 py-2.5 text-left transition-colors hover:bg-surface-sunken/60"
             >
               <div className="flex items-center gap-2">
                 <span className="text-sm font-semibold text-ink">{category}</span>
@@ -398,38 +398,50 @@ function TripCard({
   const missing = getMissingHints(trip);
 
   return (
-    <Card className="p-3.5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="font-semibold text-ink">{trip.route_name || "—"}</p>
-          <p className="text-xs text-ink-subtle">
-            {trip.operator_name}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          {(trip.extra as Record<string, unknown>)?.needs_human_review === true && (
-            <Badge tone="warning">Шалгах</Badge>
+    <Card className={cx("card-lift p-3.5", isHidden && "opacity-70")}>
+      <div className="flex gap-3">
+        {trip.photo_urls.length > 0 && (
+          <img
+            src={trip.photo_urls[0]}
+            alt={trip.route_name || "Аяллын зураг"}
+            loading="lazy"
+            className="h-16 w-16 shrink-0 rounded-lg object-cover ring-1 ring-line"
+          />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-semibold text-ink">{trip.route_name || "—"}</p>
+              <p className="text-xs text-ink-subtle">
+                {trip.operator_name}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {(trip.extra as Record<string, unknown>)?.needs_human_review === true && (
+                <Badge tone="warning">Шалгах</Badge>
+              )}
+              {isHidden && <Badge tone="neutral">Нуусан</Badge>}
+              <Badge tone={STATUS_TONE[trip.status]}>
+                {STATUS_LABELS[trip.status]}
+              </Badge>
+            </div>
+          </div>
+          {facts.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {facts.map((fact, i) => (
+                <span key={i} className="rounded-md bg-surface-sunken px-2 py-0.5 text-xs tabular-nums text-ink-muted">
+                  {fact}
+                </span>
+              ))}
+            </div>
           )}
-          {isHidden && <Badge tone="neutral">Нуусан</Badge>}
-          <Badge tone={STATUS_TONE[trip.status]}>
-            {STATUS_LABELS[trip.status]}
-          </Badge>
+          {missing.length > 0 && (
+            <p className="mt-1.5 text-xs text-ink-subtle">
+              дутуу: {missing.join(" · ")}
+            </p>
+          )}
         </div>
       </div>
-      {facts.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {facts.map((fact, i) => (
-            <span key={i} className="rounded-md bg-surface-sunken px-2 py-0.5 text-xs text-ink-muted">
-              {fact}
-            </span>
-          ))}
-        </div>
-      )}
-      {missing.length > 0 && (
-        <p className="mt-1.5 text-xs text-ink-subtle">
-          дутуу: {missing.join(" · ")}
-        </p>
-      )}
       <div className="mt-3 flex items-center justify-between gap-2">
         <span className="text-xs text-ink-subtle">
           Шинэчилсэн: {formatTime(trip.updated_at)}

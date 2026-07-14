@@ -386,7 +386,7 @@ export function BotTab({
                         "rounded-2xl px-3.5 py-2 text-sm leading-relaxed shadow-sm",
                         msg.role === "user"
                           ? "bg-surface-sunken text-ink"
-                          : "bg-brand text-white",
+                          : "bg-gradient-to-b from-brand-hover to-brand text-white shadow-brand/20",
                       )}
                     >
                       {msg.text ? (
@@ -523,7 +523,7 @@ export function BotTab({
               onPauseAction(control?.photo_only ? "photo_only_disable" : "photo_only_enable")
             }
             className={cx(
-              "relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none disabled:opacity-50",
+              "relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 disabled:opacity-50",
               control?.photo_only ? "bg-warning" : "bg-line-strong",
             )}
             aria-label={control?.photo_only ? "Унтраах" : "Асаах"}
@@ -647,7 +647,7 @@ export function BotTab({
                       )
                     }
                     className={cx(
-                      "relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none disabled:opacity-50",
+                      "relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 disabled:opacity-50",
                       paused ? "bg-danger" : "bg-success",
                     )}
                     aria-label={paused ? "Сэргээх" : "Зогсоох"}
@@ -693,7 +693,7 @@ export function BotTab({
               }
             }}
             disabled={backfilling}
-            className="shrink-0 rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-ink-subtle hover:bg-surface-hover disabled:opacity-50"
+            className="shrink-0 rounded-md border border-line-strong bg-surface px-3 py-1.5 text-xs font-medium text-ink-muted transition-colors hover:border-brand hover:text-brand disabled:opacity-50"
           >
             {backfilling ? "Татаж байна…" : "Нэр татах"}
           </button>
@@ -729,7 +729,7 @@ export function BotTab({
               <div
                 key={row.sender_id}
                 className={cx(
-                  "rounded-2xl border transition-colors",
+                  "card-lift rounded-2xl border",
                   wantsHuman
                     ? "border-warning/50 bg-warning-soft"
                     : isPaused
@@ -982,7 +982,7 @@ function ReminderCard({
           disabled={busy}
           onClick={() => void patchExtra({ reminder_enabled: !enabled })}
           className={cx(
-            "relative mt-0.5 inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none disabled:opacity-50",
+            "relative mt-0.5 inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 disabled:opacity-50",
             enabled ? "bg-brand" : "bg-line-strong",
           )}
           aria-label={enabled ? "Унтраах" : "Асаах"}
@@ -1133,7 +1133,7 @@ function QuickToggleCard({
           disabled={busy}
           onClick={() => void handleToggle()}
           className={cx(
-            "relative mt-0.5 inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none disabled:opacity-50",
+            "relative mt-0.5 inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 disabled:opacity-50",
             enabled ? "bg-brand" : "bg-line-strong",
           )}
           aria-label={enabled ? "Унтраах" : "Асаах"}

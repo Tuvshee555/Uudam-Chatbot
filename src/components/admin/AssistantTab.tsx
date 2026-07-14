@@ -148,9 +148,9 @@ export function AssistantTab({
             const files = e.dataTransfer.files;
             if (files?.length) onDropFiles(files);
           }}
-          className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-surface-sunken sm:gap-4"
+          className="group flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-brand-soft/35 sm:gap-4"
         >
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand sm:h-14 sm:w-14">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-soft to-travel-soft text-brand transition-transform duration-200 group-hover:scale-105 sm:h-14 sm:w-14">
             <Icons.trips size={26} />
           </div>
           <div className="min-w-0 flex-1">
@@ -281,7 +281,7 @@ export function AssistantTab({
                 setAiInput(action.prompt);
                 inputRef.current?.focus();
               }}
-              className="shrink-0 rounded-full border border-line-strong bg-surface px-3 py-1 text-xs font-medium text-ink-muted hover:border-brand hover:text-brand"
+              className="shrink-0 rounded-full border border-line-strong bg-surface px-3 py-1 text-xs font-medium text-ink-muted transition-colors duration-150 hover:border-brand hover:bg-brand-soft/50 hover:text-brand"
             >
               {action.label}
             </button>
@@ -387,8 +387,8 @@ function ChatBubbleV2({
   const [showAllChanges, setShowAllChanges] = useState(false);
   if (message.role === "admin") {
     return (
-      <div className="flex justify-end">
-        <div className="max-w-[90%] rounded-xl rounded-br-sm bg-brand px-3.5 py-2.5 text-sm text-white shadow-sm">
+      <div className="animate-fade-up flex justify-end">
+        <div className="max-w-[90%] rounded-xl rounded-br-sm bg-gradient-to-b from-brand-hover to-brand px-3.5 py-2.5 text-sm text-white shadow-sm shadow-brand/20">
           {message.text && message.text !== "Файл орууллаа" && (
             <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
           )}
@@ -418,7 +418,7 @@ function ChatBubbleV2({
           ? "success"
           : "info";
     return (
-      <div className="max-w-[92%]">
+      <div className="animate-fade-up max-w-[92%]">
         <Alert tone={tone}>{message.text}</Alert>
       </div>
     );
@@ -484,7 +484,7 @@ function ChatBubbleV2({
     message.confirmChecked === true;
 
   return (
-    <div className="w-full max-w-5xl">
+    <div className="animate-fade-up w-full max-w-5xl">
       <div className="rounded-2xl rounded-bl-sm bg-surface p-4 shadow-sm ring-1 ring-line sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">

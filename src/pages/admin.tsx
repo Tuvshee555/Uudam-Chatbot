@@ -1,11 +1,11 @@
 ﻿import Head from "next/head";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Badge, Button, Icons, Modal, cx, useToast } from "@/components/ui";
+import { Alert, Badge, Button, Icons, Logo, Modal, cx, useToast } from "@/components/ui";
 import { extractGoogleDriveFileIds } from "@/lib/googleDriveLinks";
 import { buildProposalClarifications } from "@/lib/adminProposalUtils";
 import { AdminConfirmModals } from "@/components/admin/AdminConfirmModals";
 import { AdminLoginGate } from "@/components/admin/AdminLoginGate";
-import { AdminSidebarItem } from "@/components/admin/AdminSidebarItem";
+import { AdminSidebarItem, NAV_GROUPS } from "@/components/admin/AdminSidebarItem";
 import { AssistantTab } from "@/components/admin/AssistantTab";
 import { AnalyticsTab } from "@/components/admin/AnalyticsTab";
 import { BotTab } from "@/components/admin/BotTab";
@@ -1535,6 +1535,11 @@ export default function AdminPage() {
     }
   }
   const botPaused = Boolean(control?.bot_paused);
+  const navBadges: Partial<Record<TabKey, number>> = {
+    bot: handoffRows.length || undefined,
+    leads: newLeadCount || undefined,
+    documents: documentUnreviewedCount || undefined,
+  };
   function selectAdminTab(nextTab: TabKey) {
     setTab(nextTab);
     setMobileNavOpen(false);
@@ -1549,24 +1554,24 @@ export default function AdminPage() {
     );
   }
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-canvas">
+    <div className="flex h-dvh flex-col overflow-hidden">
       <Head>
         <title>Аяллын удирдлагын самбар</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
       {/* Top bar */}
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-line bg-surface px-3 shadow-xs sm:px-4">
-        <div className="flex min-w-0 items-center gap-2.5">
+      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-line bg-surface/85 px-3 backdrop-blur-md sm:px-5">
+        <div className="flex min-w-0 items-center gap-2">
           <button
             type="button"
             aria-label="Цэс нээх"
             aria-expanded={mobileNavOpen}
             onClick={() => setMobileNavOpen((open) => !open)}
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-ink-muted hover:bg-surface-sunken md:hidden"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink md:hidden"
           >
             {mobileNavOpen ? <Icons.close size={20} /> : <Icons.menu size={20} />}
           </button>
-          <span className="truncate text-sm font-semibold text-ink">Уудам Трэвел Admin</span>
+          <Logo />
         </div>
         <div className="flex items-center gap-2 sm:gap-3">
           {handoffRows.length > 0 && (
@@ -1580,7 +1585,7 @@ export default function AdminPage() {
             {botPaused ? "Бот зогссон" : "Бот идэвхтэй"}
           </Badge>
           <span className="hidden sm:inline-flex">
-            <Badge tone={dbInfo?.configured ? "neutral" : "danger"}>
+            <Badge tone={dbInfo?.configured ? "neutral" : "danger"} className="tabular-nums">
               {dbInfo?.trips ?? trips.length} аялал
             </Badge>
           </span>
@@ -1592,105 +1597,38 @@ export default function AdminPage() {
           <button
             type="button"
             aria-label="Цэс хаах"
-            className="fixed inset-0 top-14 z-30 bg-ink/25 backdrop-blur-[1px] md:hidden"
+            className="animate-overlay-in fixed inset-0 top-14 z-30 bg-nav-deep/45 backdrop-blur-[2px] md:hidden"
             onClick={() => setMobileNavOpen(false)}
           />
         )}
-        {/* Sidebar */}
+        {/* Sidebar — dark navy rail, grouped nav */}
         <aside className={cx(
-          "fixed bottom-0 left-0 top-14 z-40 flex w-[17rem] shrink-0 flex-col gap-1 overflow-y-auto border-r border-line bg-surface p-3 shadow-lg transition-transform md:static md:z-auto md:w-60 md:translate-x-0 md:shadow-none",
-          mobileNavOpen ? "translate-x-0" : "-translate-x-full",
+          "scroll-area-dark fixed bottom-0 left-0 top-14 z-40 flex w-[17rem] shrink-0 flex-col overflow-y-auto bg-gradient-to-b from-nav to-nav-deep px-3 pb-6 pt-1 transition-transform md:static md:z-auto md:w-64 md:translate-x-0",
+          mobileNavOpen ? "translate-x-0 shadow-lg" : "-translate-x-full md:shadow-none",
         )}>
-          <AdminSidebarItem
-            icon={<Icons.ai size={16} />}
-            label="AI туслах"
-            active={tab === "assistant"}
-            onClick={() => selectAdminTab("assistant")}
-          />
-          <AdminSidebarItem
-            icon={<Icons.trips size={16} />}
-            label="Аяллууд"
-            active={tab === "trips"}
-            onClick={() => selectAdminTab("trips")}
-          />
-          <AdminSidebarItem
-            icon={<Icons.chevronRight size={16} />}
-            label="Мэндчилгээ"
-            active={tab === "greeting"}
-            onClick={() => selectAdminTab("greeting")}
-          />
-          <AdminSidebarItem
-            icon={<Icons.refresh size={16} />}
-            label="Улирал"
-            active={tab === "seasons"}
-            onClick={() => selectAdminTab("seasons")}
-          />
-          <AdminSidebarItem
-            icon={<Icons.image size={16} />}
-            label="Зураг оруулах"
-            active={tab === "photos"}
-            onClick={() => selectAdminTab("photos")}
-          />
-          <AdminSidebarItem
-            icon={<Icons.image size={16} />}
-            label="Постер үүсгэгч"
-            active={tab === "poster"}
-            onClick={() => selectAdminTab("poster")}
-          />
-          <AdminSidebarItem
-            icon={<Icons.control size={16} />}
-            label="Ботын хяналт"
-            active={tab === "bot"}
-            badge={handoffRows.length || undefined}
-            onClick={() => selectAdminTab("bot")}
-          />
-          <AdminSidebarItem
-            icon={<Icons.alert size={16} />}
-            label="Хүсэлтүүд"
-            active={tab === "leads"}
-            badge={newLeadCount || undefined}
-            onClick={() => selectAdminTab("leads")}
-          />
-          <AdminSidebarItem
-            icon={<Icons.image size={16} />}
-            label="Ирсэн зургууд"
-            active={tab === "documents"}
-            badge={documentUnreviewedCount || undefined}
-            onClick={() => selectAdminTab("documents")}
-          />
-          <AdminSidebarItem
-            icon={<Icons.settings size={16} />}
-            label="Тохиргоо"
-            active={tab === "settings"}
-            onClick={() => selectAdminTab("settings")}
-          />
-          <AdminSidebarItem
-            icon={<Icons.control size={16} />}
-            label="Аналитик"
-            active={tab === "analytics"}
-            onClick={() => selectAdminTab("analytics")}
-          />
-          <AdminSidebarItem
-            icon={<Icons.play size={16} />}
-            label="Урсгал"
-            active={tab === "flow"}
-            onClick={() => selectAdminTab("flow")}
-          />
-          <AdminSidebarItem
-            icon={<Icons.download size={16} />}
-            label="Төлбөр"
-            active={tab === "payments"}
-            onClick={() => selectAdminTab("payments")}
-          />
-          <AdminSidebarItem
-            icon={<Icons.chevronRight size={16} />}
-            label="JSON засвар"
-            active={tab === "json"}
-            onClick={() => selectAdminTab("json")}
-          />
+          {NAV_GROUPS.map((group) => (
+            <div key={group.label}>
+              <p className="px-3 pb-1.5 pt-4 text-[10px] font-bold uppercase tracking-[0.16em] text-nav-ink-soft/75">
+                {group.label}
+              </p>
+              <div className="flex flex-col gap-0.5">
+                {group.items.map((item) => (
+                  <AdminSidebarItem
+                    key={item.key}
+                    icon={item.icon}
+                    label={item.label}
+                    active={tab === item.key}
+                    badge={navBadges[item.key]}
+                    onClick={() => selectAdminTab(item.key)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
         </aside>
         {/* Content */}
-        <main className="min-w-0 flex-1 overflow-y-auto p-3 sm:p-4 md:p-6">
+        <main className="scroll-area min-w-0 flex-1 overflow-y-auto p-3 sm:p-5 lg:p-7">
+          <div className="mx-auto w-full max-w-6xl">
           {/* Bot-paused is already shown as a badge in the topbar — no banner. */}
           {systemLoaded && !dbInfo?.configured && (
             <div className="mb-4">
@@ -1716,6 +1654,7 @@ export default function AdminPage() {
               </Alert>
             </div>
           )}
+          <div key={tab} className="animate-fade-up">
           {tab === "assistant" && (
             <AssistantTab
               messages={chatMessages}
@@ -1919,6 +1858,8 @@ export default function AdminPage() {
               onSaved={loadAll}
             />
           )}
+          </div>
+          </div>
         </main>
       </div>
       {/* Hidden file input */}

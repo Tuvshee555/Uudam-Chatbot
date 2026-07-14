@@ -142,7 +142,7 @@ export function FlowBuilderTab({
 
       <div className="space-y-2">
         {rules.map((rule) => (
-          <Card key={rule.id} className="p-4">
+          <Card key={rule.id} className="card-lift p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1 space-y-1">
                 <div className="flex flex-wrap gap-1">

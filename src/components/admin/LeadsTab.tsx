@@ -1,4 +1,5 @@
 import { Badge, Button, Card, EmptyState, Icons, Spinner, cx } from "@/components/ui";
+import { StatCard } from "./AdminShared";
 import type { LeadCrmStatus, LeadStats, TravelLead } from "@/lib/adminTypes";
 import { formatTime } from "@/lib/adminUtils";
 
@@ -32,12 +33,7 @@ export function LeadsDashboard({ stats }: { stats: LeadStats }) {
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         {cards.map((c) => (
-          <Card key={c.label} className="p-3">
-            <p className="text-xs text-ink-subtle">{c.label}</p>
-            <p className={cx("mt-1 text-2xl font-bold tabular-nums", c.tone)}>
-              {c.value}
-            </p>
-          </Card>
+          <StatCard key={c.label} label={c.label} value={c.value} tone={c.tone} />
         ))}
       </div>
 
@@ -46,22 +42,36 @@ export function LeadsDashboard({ stats }: { stats: LeadStats }) {
           Сүүлийн 7 хоногийн хүсэлт
         </p>
         <div className="flex h-28 items-end justify-between gap-1.5">
-          {days.map((d) => (
+          {days.map((d, index) => (
             <div
               key={d.day}
-              className="flex flex-1 flex-col items-center gap-1"
+              className="group flex flex-1 flex-col items-center gap-1"
               title={`${d.label}: ${d.count}`}
             >
               <span className="text-xs font-medium tabular-nums text-ink-muted">
                 {d.count > 0 ? d.count : ""}
               </span>
               <div
-                className="w-full rounded-t bg-brand/80"
+                className={cx(
+                  "w-full rounded-t-md bg-gradient-to-t transition-all duration-300 group-hover:from-brand group-hover:to-brand-hover",
+                  index === days.length - 1
+                    ? "from-brand to-brand-hover"
+                    : "from-brand/40 to-brand/55",
+                )}
                 style={{
                   height: `${Math.max(4, (d.count / maxCount) * 80)}px`,
                 }}
               />
-              <span className="text-[10px] text-ink-subtle">{d.label}</span>
+              <span
+                className={cx(
+                  "text-[10px] tabular-nums",
+                  index === days.length - 1
+                    ? "font-semibold text-brand"
+                    : "text-ink-subtle",
+                )}
+              >
+                {d.label}
+              </span>
             </div>
           ))}
         </div>
@@ -126,7 +136,7 @@ export function LeadsTab({
             type="button"
             onClick={onRefresh}
             aria-label="Шинэчлэх"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-line-strong text-ink-muted hover:border-brand hover:text-brand"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-line-strong bg-surface text-ink-muted transition-colors hover:border-brand hover:text-brand"
           >
             {loading ? <Spinner /> : <Icons.refresh size={17} />}
           </button>
@@ -220,7 +230,13 @@ function LeadCard({
   const crmStatus: LeadCrmStatus = lead.lead_status ?? "new_lead";
 
   return (
-    <Card className={cx("p-3.5", !isNew && "opacity-75")}>
+    <Card
+      className={cx(
+        "card-lift p-3.5",
+        isNew && "border-l-4 border-l-brand",
+        !isNew && "opacity-75",
+      )}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone={isBooking ? "success" : "warning"} dot>

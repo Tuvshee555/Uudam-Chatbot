@@ -210,6 +210,26 @@ export const Icons = {
       <polyline points="14 2 14 8 20 8" />
     </>,
   ),
+  chart: makeIcon(
+    <>
+      <line x1="5.5" y1="20" x2="5.5" y2="12" />
+      <line x1="12" y1="20" x2="12" y2="4.5" />
+      <line x1="18.5" y1="20" x2="18.5" y2="9" />
+    </>,
+  ),
+  card: makeIcon(
+    <>
+      <rect x="3" y="5.5" width="18" height="13" rx="2" />
+      <line x1="3" y1="10" x2="21" y2="10" />
+      <line x1="7" y1="15" x2="11" y2="15" />
+    </>,
+  ),
+  braces: makeIcon(
+    <>
+      <path d="M8.5 4H8a2 2 0 0 0-2 2v3.5c0 1.4-.7 2.1-2 2.5 1.3.4 2 1.1 2 2.5V18a2 2 0 0 0 2 2h.5" />
+      <path d="M15.5 4h.5a2 2 0 0 1 2 2v3.5c0 1.4.7 2.1 2 2.5-1.3.4-2 1.1-2 2.5V18a2 2 0 0 1-2 2h-.5" />
+    </>,
+  ),
 };
 
 /* ----------------------------------------------------------------
@@ -220,7 +240,7 @@ export function Logo({ className }: { className?: string }) {
     <span className={cx("flex items-center gap-2.5", className)}>
       <span
         aria-hidden="true"
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand text-base font-bold text-white"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-brand-hover via-brand to-brand-active text-base font-extrabold text-white shadow-sm shadow-brand/30"
       >
         У
       </span>
@@ -274,19 +294,19 @@ type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "success";
 type ButtonSize = "sm" | "md" | "lg";
 
 const BTN_BASE =
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border font-semibold transition-colors select-none disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border font-semibold transition-all duration-150 select-none active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100";
 
 const BTN_VARIANT: Record<ButtonVariant, string> = {
   primary:
-    "border-transparent bg-brand text-white hover:bg-brand-hover active:bg-brand-active",
+    "border-transparent bg-brand text-white shadow-xs shadow-brand/30 hover:bg-brand-hover hover:shadow-sm hover:shadow-brand/30 active:bg-brand-active",
   secondary:
-    "border-line-strong bg-surface text-ink hover:bg-surface-sunken",
+    "border-line-strong bg-surface text-ink shadow-xs hover:border-brand-border hover:bg-brand-soft/40",
   ghost:
     "border-transparent bg-transparent text-ink-muted hover:bg-surface-sunken hover:text-ink",
   danger:
-    "border-transparent bg-danger text-white hover:bg-danger-hover",
+    "border-transparent bg-danger text-white shadow-xs shadow-danger/30 hover:bg-danger-hover",
   success:
-    "border-transparent bg-success text-white hover:bg-success-hover",
+    "border-transparent bg-success text-white shadow-xs shadow-success/30 hover:bg-success-hover",
 };
 
 const BTN_SIZE: Record<ButtonSize, string> = {
@@ -379,7 +399,7 @@ export function PanelHeader({
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
-        <h2 id={titleId} className="text-base font-semibold text-ink">
+        <h2 id={titleId} className="text-lg font-bold tracking-tight text-ink">
           {title}
         </h2>
         {description && (
@@ -448,7 +468,7 @@ export function Badge({
    Form controls — label is always bound to the control
    ---------------------------------------------------------------- */
 const CONTROL_BASE =
-  "w-full rounded-md border bg-surface text-sm text-ink transition-colors placeholder:text-ink-subtle focus:border-brand disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:opacity-70";
+  "w-full rounded-md border bg-surface text-sm text-ink transition-all duration-150 placeholder:text-ink-subtle focus:border-brand focus:ring-3 focus:ring-brand/10 disabled:cursor-not-allowed disabled:bg-surface-sunken disabled:opacity-70";
 
 function FieldShell({
   label,
@@ -603,8 +623,12 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line-strong px-6 py-10 text-center">
-      {icon && <div className="text-ink-subtle">{icon}</div>}
+    <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line-strong bg-surface-sunken/40 px-6 py-12 text-center">
+      {icon && (
+        <div className="mb-1 flex h-12 w-12 items-center justify-center rounded-full bg-brand-soft text-brand">
+          {icon}
+        </div>
+      )}
       <p className="text-sm font-semibold text-ink">{title}</p>
       {description && (
         <p className="max-w-sm text-sm text-ink-muted">{description}</p>
@@ -732,7 +756,7 @@ export function Modal({
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4">
       <div
-        className="absolute inset-0 bg-ink/55"
+        className="animate-overlay-in absolute inset-0 bg-nav-deep/60 backdrop-blur-[2px]"
         aria-hidden="true"
         onClick={onClose}
       />
@@ -742,7 +766,7 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={description ? descId : undefined}
-        className="relative flex max-h-[92dvh] w-full max-w-2xl flex-col rounded-t-xl bg-surface shadow-lg sm:max-h-[88dvh] sm:rounded-xl"
+        className="animate-scale-in relative flex max-h-[92dvh] w-full max-w-2xl flex-col rounded-t-xl bg-surface shadow-lg sm:max-h-[88dvh] sm:rounded-xl"
       >
         <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
           <div className="min-w-0">
@@ -794,9 +818,9 @@ type ToastApi = {
 const ToastContext = createContext<ToastApi | null>(null);
 
 const TOAST_TONE: Record<ToastTone, string> = {
-  success: "border-success/25 bg-success-soft text-success",
-  error: "border-danger/25 bg-danger-soft text-danger",
-  info: "border-brand/20 bg-brand-soft text-brand",
+  success: "border-success/30 text-success",
+  error: "border-danger/30 text-danger",
+  info: "border-brand/25 text-brand",
 };
 
 export function ToastProvider({ children }: { children: ReactNode }) {
@@ -837,7 +861,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           <div
             key={item.id}
             className={cx(
-              "pointer-events-auto flex w-full max-w-sm items-start gap-2.5 rounded-lg border px-3.5 py-3 shadow-md",
+              "animate-toast-in pointer-events-auto flex w-full max-w-sm items-start gap-2.5 rounded-lg border bg-surface px-3.5 py-3 shadow-md",
               TOAST_TONE[item.tone],
             )}
           >
@@ -850,7 +874,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 <Icons.info size={16} />
               )}
             </span>
-            <p className="min-w-0 flex-1 text-sm font-medium">{item.message}</p>
+            <p className="min-w-0 flex-1 text-sm font-medium text-ink">
+              {item.message}
+            </p>
             <button
               type="button"
               onClick={() => remove(item.id)}

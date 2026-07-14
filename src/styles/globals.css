@@ -4,6 +4,9 @@
    DESIGN TOKENS — single source of truth
    Brand: #113e67 (deep navy). Used for CTAs, active states,
    focus rings and accents only — never as decorative fill.
+   Type: Manrope (cyrillic-ext, loaded via next/font in _app),
+   JetBrains Mono for data/code. Fallback stacks keep the UI
+   readable if the webfont ever fails to load.
    ============================================================ */
 @theme {
   /* Brand */
@@ -18,13 +21,21 @@
   --color-sun-soft: #fff1e6;
 
   /* Surfaces */
-  --color-canvas: #f4f6f8;
+  --color-canvas: #eef2f6;
   --color-surface: #ffffff;
   --color-surface-sunken: #f1f4f7;
 
+  /* Dark navy navigation surface (sidebar / login backdrop) */
+  --color-nav: #0c2947;
+  --color-nav-deep: #081d33;
+  --color-nav-raised: #16375a;
+  --color-nav-line: #1d3f63;
+  --color-nav-ink: #cddcec;
+  --color-nav-ink-soft: #7e99b6;
+
   /* Lines */
-  --color-line: #e5e9ef;
-  --color-line-strong: #d3dae3;
+  --color-line: #e3e8ee;
+  --color-line-strong: #cfd7e1;
 
   /* Text */
   --color-ink: #101d2e;
@@ -47,15 +58,80 @@
   --radius-lg: 14px;
   --radius-xl: 18px;
 
-  /* Shadow scale — restrained, single-direction */
-  --shadow-xs: 0 1px 2px rgba(16, 29, 46, 0.06);
-  --shadow-sm: 0 1px 3px rgba(16, 29, 46, 0.07), 0 1px 2px rgba(16, 29, 46, 0.04);
-  --shadow-md: 0 6px 18px rgba(16, 29, 46, 0.1);
-  --shadow-lg: 0 18px 44px rgba(16, 29, 46, 0.16);
+  /* Shadow scale — navy-tinted, one light source (top) */
+  --shadow-xs: 0 1px 2px rgba(13, 32, 58, 0.06);
+  --shadow-sm: 0 1px 2px rgba(13, 32, 58, 0.05), 0 2px 8px rgba(13, 32, 58, 0.05);
+  --shadow-md: 0 2px 6px rgba(13, 32, 58, 0.06), 0 12px 32px rgba(13, 32, 58, 0.12);
+  --shadow-lg: 0 4px 14px rgba(9, 26, 48, 0.12), 0 28px 64px rgba(9, 26, 48, 0.24);
 
   /* Typography */
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", sans-serif;
+  --font-sans: var(
+    --font-manrope,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    "Noto Sans",
+    "Apple Color Emoji",
+    sans-serif
+  );
+  --font-mono: var(
+    --font-jetbrains,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace
+  );
+
+  /* Motion — one easing, three speeds */
+  --ease-out-soft: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  --animate-fade-up: fade-up 0.35s var(--ease-out-soft) both;
+  --animate-scale-in: scale-in 0.22s var(--ease-out-soft) both;
+  --animate-overlay-in: overlay-in 0.2s ease-out both;
+  --animate-toast-in: toast-in 0.28s var(--ease-out-soft) both;
+
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes scale-in {
+    from {
+      opacity: 0;
+      transform: scale(0.965) translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes overlay-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(14px) scale(0.97);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
 }
 
 /* ============================================================
@@ -81,6 +157,19 @@
   body {
     min-height: 100dvh;
     background-color: var(--color-canvas);
+    /* Quiet ambient depth: brand navy top-right, travel teal bottom-left */
+    background-image:
+      radial-gradient(
+        1100px 620px at 88% -12%,
+        rgba(17, 62, 103, 0.08),
+        transparent 62%
+      ),
+      radial-gradient(
+        900px 540px at -12% 112%,
+        rgba(22, 134, 139, 0.06),
+        transparent 60%
+      );
+    background-attachment: fixed;
     color: var(--color-ink);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
@@ -88,10 +177,28 @@
     text-rendering: optimizeLegibility;
   }
 
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+  }
+
   /* One unified focus system for the whole product */
   :focus-visible {
     outline: 2px solid var(--color-brand);
     outline-offset: 2px;
+  }
+
+  /* Text controls signal focus with border + soft ring instead of the
+     outline, so typing focus looks composed rather than doubled up.
+     Checkboxes/radios/ranges keep the outline — it is their only signal. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus-visible,
+  textarea:focus-visible,
+  select:focus-visible {
+    outline: none;
+    border-color: var(--color-brand);
+    box-shadow: 0 0 0 3px rgba(17, 62, 103, 0.12);
   }
 
   ::selection {
@@ -105,18 +212,36 @@
    ============================================================ */
 .skeleton {
   background-color: var(--color-surface-sunken);
+  background-image: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.65) 50%,
+    transparent 70%
+  );
+  background-size: 220% 100%;
   border-radius: var(--radius-sm);
-  animation: skeleton-pulse 1.6s ease-in-out infinite;
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
 }
 
-@keyframes skeleton-pulse {
-  0%,
-  100% {
-    opacity: 1;
+@keyframes skeleton-shimmer {
+  from {
+    background-position: 130% 0;
   }
-  50% {
-    opacity: 0.5;
+  to {
+    background-position: -90% 0;
   }
+}
+
+/* Interactive card lift — shared hover treatment for clickable surfaces */
+.card-lift {
+  transition:
+    box-shadow 0.2s var(--ease-out-soft),
+    transform 0.2s var(--ease-out-soft),
+    border-color 0.2s var(--ease-out-soft);
+}
+.card-lift:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
 }
 
 /* Slim, theme-consistent scrollbars */
@@ -133,6 +258,23 @@
   border-radius: 999px;
 }
 .scroll-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Dark-surface variant for the navy sidebar */
+.scroll-area-dark {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-nav-raised) transparent;
+}
+.scroll-area-dark::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-area-dark::-webkit-scrollbar-thumb {
+  background-color: var(--color-nav-raised);
+  border-radius: 999px;
+}
+.scroll-area-dark::-webkit-scrollbar-track {
   background: transparent;
 }
 

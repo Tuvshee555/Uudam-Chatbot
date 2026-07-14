@@ -190,7 +190,7 @@ export function SeasonsTab({
                       aria-checked={season.active}
                       onClick={() => toggleActive(season.id)}
                       className={cx(
-                        "relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none",
+                        "relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200",
                         season.active ? "bg-brand" : "bg-line-strong",
                       )}
                       aria-label="Улирал идэвхжүүлэх"
