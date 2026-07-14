@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { enforcePaymentNeverSelfConfirmed, extractButtons, hasPaymentClaimIntent, isReferReply, rewriteRepeatedGenericClarifier, stripRepeatedGreeting } from "../src/lib/reply";
+import { enforcePaymentNeverSelfConfirmed, extractButtons, hasPaymentClaimIntent, isReferReply, rewriteRepeatedGenericClarifier, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../src/lib/reply";
 
 test("enforcePaymentNeverSelfConfirmed replaces a fabricated booking confirmation", () => {
   const userText = "би 2,990,000 төлсөн, баталгаажуул";
@@ -99,6 +99,16 @@ test("isReferReply catches REFER and legacy SILENT, ignores normal replies", () 
   assert.equal(isReferReply("  SILENT  "), true);
   assert.equal(isReferReply("✈️ Бээжин аялал — 5 хоног"), false);
   assert.equal(isReferReply("Танд REFER гэдэг үг хэрэгтэй юу?"), false);
+});
+
+test("shouldSilenceNoDataReply catches unknown-detail fallback wording", () => {
+  const unknownDetail =
+    "\u041d\u0438\u0441\u043b\u044d\u0433\u0438\u0439\u043d \u0442\u0438\u0439\u0437 \u04af\u043d\u044d\u0434 \u043e\u0440\u0441\u043e\u043d \u044d\u0441\u044d\u0445 \u043c\u044d\u0434\u044d\u044d\u043b\u044d\u043b \u0442\u043e\u0434\u043e\u0440\u0445\u043e\u0439\u0433\u04af\u0439 \u0431\u0430\u0439\u043d\u0430. \u0410\u044f\u043b\u043b\u044b\u043d \u0437\u04e9\u0432\u043b\u04e9\u0445\u04e9\u04e9\u0440 \u0431\u0430\u0442\u0430\u043b\u0433\u0430\u0430\u0436\u0443\u0443\u043b\u043d\u0430 \u0443\u0443.";
+  const paymentVerification =
+    "\u041c\u0430\u043d\u0430\u0439 \u0430\u044f\u043b\u043b\u044b\u043d \u0437\u04e9\u0432\u043b\u04e9\u0445 \u0448\u0430\u043b\u0433\u0430\u0430\u0434 \u0431\u0430\u0442\u0430\u043b\u0433\u0430\u0430\u0436\u0443\u0443\u043b\u043d\u0430.";
+
+  assert.equal(shouldSilenceNoDataReply(unknownDetail), true);
+  assert.equal(shouldSilenceNoDataReply(paymentVerification), false);
 });
 
 test("extractButtons keeps up to 10 buttons (disambiguation lists)", () => {
