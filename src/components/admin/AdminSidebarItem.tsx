@@ -43,7 +43,7 @@ export const NAV_GROUPS: Array<{
   },
 ];
 
-/** One row of the dark-navy admin nav rail. */
+/** One row of the light admin nav rail. */
 export function AdminSidebarItem({
   icon,
   label,
@@ -65,28 +65,28 @@ export function AdminSidebarItem({
       className={cx(
         "relative flex w-full items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium transition-all duration-150",
         active
-          ? "bg-white/12 text-white"
-          : "text-nav-ink-soft hover:bg-white/6 hover:text-nav-ink",
+          ? "bg-brand-soft text-brand"
+          : "text-ink-muted hover:bg-surface-sunken hover:text-ink",
       )}
     >
       <span
         aria-hidden="true"
         className={cx(
-          "absolute left-0 top-1/2 h-4.5 w-[3px] -translate-y-1/2 rounded-full bg-sun transition-opacity duration-150",
+          "absolute left-0 top-1/2 h-4.5 w-[3px] -translate-y-1/2 rounded-full bg-brand transition-opacity duration-150",
           active ? "opacity-100" : "opacity-0",
         )}
       />
       <span
         className={cx(
           "shrink-0 transition-colors",
-          active ? "text-sun" : "text-nav-ink-soft",
+          active ? "text-brand" : "text-ink-subtle",
         )}
       >
         {icon}
       </span>
       <span className="flex-1 truncate text-left">{label}</span>
       {badge != null && badge > 0 && (
-        <span className="min-w-5 rounded-full bg-sun px-1.5 py-0.5 text-center text-[10px] font-bold tabular-nums text-nav-deep">
+        <span className="min-w-5 rounded-full bg-danger px-1.5 py-0.5 text-center text-[10px] font-bold tabular-nums text-white">
           {badge > 99 ? "99+" : badge}
         </span>
       )}

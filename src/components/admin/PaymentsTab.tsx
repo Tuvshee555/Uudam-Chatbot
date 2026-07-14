@@ -9,26 +9,43 @@ import {
 } from "./adminTabData";
 import { formatTime, shortId } from "@/lib/adminUtils";
 
+// Survives tab switches: revisits render the last data instantly while a
+// background refresh replaces it, instead of a spinner on every visit.
+let paymentsCache: {
+  configured: boolean;
+  payments: PaymentRow[];
+  stats: PaymentStats;
+} | null = null;
+
 export function PaymentsTab({
   apiFetch,
 }: {
   apiFetch: (url: string, init?: RequestInit) => Promise<Response>;
 }) {
   const toast = useToast();
-  const [configured, setConfigured] = useState(false);
-  const [payments, setPayments] = useState<PaymentRow[]>([]);
-  const [stats, setStats] = useState<PaymentStats>({ total: 0, paid: 0, pending: 0, paidAmount: 0 });
-  const [loading, setLoading] = useState(true);
+  const [configured, setConfigured] = useState(paymentsCache?.configured ?? false);
+  const [payments, setPayments] = useState<PaymentRow[]>(paymentsCache?.payments ?? []);
+  const [stats, setStats] = useState<PaymentStats>(
+    paymentsCache?.stats ?? { total: 0, paid: 0, pending: 0, paidAmount: 0 },
+  );
+  const [loading, setLoading] = useState(paymentsCache == null);
   const [busyId, setBusyId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    if (paymentsCache == null) setLoading(true);
     try {
       const res = await apiFetch("/api/admin/payments");
       const data = await res.json();
-      setConfigured(Boolean(data?.configured));
-      setPayments(Array.isArray(data?.payments) ? data.payments : []);
+      const nextConfigured = Boolean(data?.configured);
+      const nextPayments = Array.isArray(data?.payments) ? data.payments : [];
+      setConfigured(nextConfigured);
+      setPayments(nextPayments);
       if (data?.stats) setStats(data.stats);
+      paymentsCache = {
+        configured: nextConfigured,
+        payments: nextPayments,
+        stats: data?.stats ?? { total: 0, paid: 0, pending: 0, paidAmount: 0 },
+      };
     } catch {
       toast.error("Төлбөрийн мэдээлэл ачаалж чадсангүй.");
     } finally {

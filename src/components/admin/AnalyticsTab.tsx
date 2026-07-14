@@ -2,21 +2,25 @@ import { useEffect, useState } from "react";
 import { Alert, Card, Icons, cx } from "@/components/ui";
 import { LoadingPanel, StatCard, TabHeader } from "./AdminShared";
 import type { AnalyticsStatsData, FaqStatsData } from "./adminTabData";
+// Survives tab switches: revisits render the last stats instantly while a
+// background refresh replaces them, instead of a spinner on every visit.
+let analyticsCache: { stats: AnalyticsStatsData; faq: FaqStatsData | null } | null = null;
+
 export function AnalyticsTab({
   apiFetch,
 }: {
   apiFetch: (url: string, init?: RequestInit) => Promise<Response>;
 }) {
-  const [stats, setStats] = useState<AnalyticsStatsData | null>(null);
-  const [faq, setFaq] = useState<FaqStatsData | null>(null);
+  const [stats, setStats] = useState<AnalyticsStatsData | null>(analyticsCache?.stats ?? null);
+  const [faq, setFaq] = useState<FaqStatsData | null>(analyticsCache?.faq ?? null);
   const [faqPeriod, setFaqPeriod] = useState<"week" | "month" | "allTime">("week");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(analyticsCache == null);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
-      setLoading(true);
+      if (analyticsCache == null) setLoading(true);
       setError("");
       try {
         const res = await apiFetch("/api/admin/analytics");
@@ -26,6 +30,7 @@ export function AnalyticsTab({
         if (data?.ok && data.stats) {
           setStats(data.stats);
           setFaq(data.faq ?? null);
+          analyticsCache = { stats: data.stats, faq: data.faq ?? null };
         } else {
           setError("Мэдээлэл ачаалж чадсангүй.");
         }

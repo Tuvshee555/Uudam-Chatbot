@@ -256,31 +256,35 @@ export default function AdminPage() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const systemRes = await fetchWithAdmin("/api/admin/system");
-      if (systemRes.status === 401) {
-        setRequiresAuth(true);
-        setLoading(false);
-        return;
-      }
-      const systemJson = await systemRes.json();
-      const nextOpenAccess = Boolean(systemJson?.open_access);
-      const authorized = Boolean(systemJson?.authorized);
-      setOpenAccess(nextOpenAccess);
-      if (!nextOpenAccess && !authorized) {
-        setRequiresAuth(true);
-        setDbInfo(null);
-        setDriveSync(null);
-        setReadiness(null);
-        setLoading(false);
-        return;
-      }
-      setRequiresAuth(false);
-      setDbInfo(systemJson?.db || null);
-      setDriveSync((systemJson?.drive_sync as DriveSyncDiagnostics) || null);
-      setReadiness((systemJson?.readiness as ReadinessReport) || null);
-      setSystemLoaded(true);
-      setLoading(false);
+      // Everything fires at once. The system/diagnostics call is the slowest
+      // request (DB + Drive checks on a serverless connection), so trips,
+      // leads and settings must not queue behind it. Every loader handles
+      // its own 401 by flipping requiresAuth, so auth still resolves fine.
+      const systemPromise = (async () => {
+        const systemRes = await fetchWithAdmin("/api/admin/system");
+        if (systemRes.status === 401) {
+          setRequiresAuth(true);
+          return;
+        }
+        const systemJson = await systemRes.json();
+        const nextOpenAccess = Boolean(systemJson?.open_access);
+        const authorized = Boolean(systemJson?.authorized);
+        setOpenAccess(nextOpenAccess);
+        if (!nextOpenAccess && !authorized) {
+          setRequiresAuth(true);
+          setDbInfo(null);
+          setDriveSync(null);
+          setReadiness(null);
+          return;
+        }
+        setRequiresAuth(false);
+        setDbInfo(systemJson?.db || null);
+        setDriveSync((systemJson?.drive_sync as DriveSyncDiagnostics) || null);
+        setReadiness((systemJson?.readiness as ReadinessReport) || null);
+        setSystemLoaded(true);
+      })();
       await Promise.all([
+        systemPromise,
         loadTrips(searchRef.current, statusFilterRef.current),
         loadPauseState(),
         loadSettingsState(),
@@ -1609,15 +1613,15 @@ export default function AdminPage() {
             onClick={() => setMobileNavOpen(false)}
           />
         )}
-        {/* Sidebar — dark navy rail, grouped nav */}
+        {/* Sidebar — light rail, grouped nav */}
         <aside className={cx(
-          "scroll-area-dark fixed bottom-0 left-0 top-14 z-40 flex w-[17rem] shrink-0 flex-col overflow-y-auto bg-gradient-to-b from-nav to-nav-deep px-3 pb-6 pt-1 transition-transform md:static md:z-auto md:w-64 md:translate-x-0",
+          "scroll-area fixed bottom-0 left-0 top-14 z-40 flex w-[17rem] shrink-0 flex-col overflow-y-auto border-r border-line bg-surface px-3 pb-6 pt-1 transition-transform md:static md:z-auto md:w-64 md:translate-x-0",
           mobileNavOpen ? "translate-x-0 shadow-lg" : "-translate-x-full md:shadow-none",
           sidebarHidden && "md:hidden",
         )}>
           {NAV_GROUPS.map((group) => (
             <div key={group.label}>
-              <p className="px-3 pb-1.5 pt-4 text-[10px] font-bold uppercase tracking-[0.16em] text-nav-ink-soft/75">
+              <p className="px-3 pb-1.5 pt-4 text-[10px] font-bold uppercase tracking-[0.16em] text-ink-subtle">
                 {group.label}
               </p>
               <div className="flex flex-col gap-0.5">
