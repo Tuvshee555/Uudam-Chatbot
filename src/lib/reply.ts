@@ -147,6 +147,19 @@ function stripMarkdown(text: string): string {
     .replace(/(https?:\/\/[^\s]+)\n\1/g, "$1");
 }
 
+function stripControlTokens(text: string): string {
+  return text
+    .replace(/(^|\s)\b(?:REFER|SILENT)\b(?=\s|$)/gi, " ")
+    .replace(/[ \t]{2,}/g, " ");
+}
+
+function stripScoldingRepeatPhrases(text: string): string {
+  return text
+    .replace(/[^.\n!?]*өмнө нь хэлсэн[^.\n!?]*[.!?]?/gi, "")
+    .replace(/[^.\n!?]*as I mentioned[^.\n!?]*[.!?]?/gi, "")
+    .replace(/[^.\n!?]*already (?:told|shared)[^.\n!?]*[.!?]?/gi, "");
+}
+
 function normalizeWhitespace(text: string) {
   return text.replace(/\r/g, "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
@@ -167,7 +180,7 @@ function isGreetingBlock(text: string) {
 }
 
 export function sanitizeAssistantReply(text: string) {
-  const cleaned = normalizeWhitespace(stripMarkdown(stripLeakedPlaceholders(text)));
+  const cleaned = normalizeWhitespace(stripScoldingRepeatPhrases(stripControlTokens(stripMarkdown(stripLeakedPlaceholders(text)))));
   if (!cleaned) return "Энэ мэдээлэл одоогоор тодорхойгүй байна. Хүний ажилтантай холбож өгье.";
 
   // Split on blank lines (paragraph breaks) — preserve them so the AI's

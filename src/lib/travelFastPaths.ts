@@ -29,6 +29,7 @@ import {
   getPriceGroups,
   getPriceValuesFromGroup,
   isStructuredTripQuestion,
+  tripIsDirectFlight,
   tripIsLandFlightCombo,
   unique,
   withFutureDepartureDates,
@@ -98,11 +99,12 @@ export function buildDiscountReply(
 ): string | null {
   const { best: bestRaw, ambiguous } = findBestTripMatch(text, trips);
   if (!bestRaw) {
+    if (ambiguous.length) return buildAmbiguousTripReply(ambiguous);
     const soldOut = buildSoldOutTripReply(text, trips);
     if (soldOut) return soldOut;
     const directUnavailable = buildDirectFlightUnavailableReply(text, trips);
     if (directUnavailable) return directUnavailable;
-    return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
+    return null;
   }
   const best = withFutureDepartureDates(bestRaw, now);
 
@@ -276,6 +278,169 @@ export function hasCompareIntent(text: string): boolean {
   const hasMn = COMPARE_KEYWORDS_MN.some((keyword) => normalized.includes(keyword));
   const hasEn = COMPARE_KEYWORDS_EN.some((keyword) => normalized.includes(keyword));
   return hasMn || hasEn;
+}
+
+export function hasBudgetIntent(text: string): boolean {
+  const normalized = normText(text);
+  return (
+    normalized.includes("хамгийн хямд") ||
+    normalized.includes("хямд аялал") ||
+    normalized.includes("саяас доош") ||
+    normalized.includes("сая дотор") ||
+    normalized.includes("доош үнэтэй") ||
+    normalized.includes("cheapest") ||
+    normalized.includes("under budget")
+  );
+}
+
+function extractBudgetLimit(text: string): number | null {
+  const normalized = normText(text);
+  const million = /(\d+(?:[.,]\d+)?)\s*сая/.exec(normalized);
+  if (million) {
+    const value = Number(million[1].replace(",", "."));
+    if (Number.isFinite(value) && value > 0) return Math.round(value * 1_000_000);
+  }
+  const numeric = /(\d[\d\s,.]{4,})\s*(?:₮|mnt|төгрөг)/i.exec(text);
+  if (numeric) {
+    const value = Number.parseInt(numeric[1].replace(/[^\d]/g, ""), 10);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return null;
+}
+
+function lowestAdultPrice(trip: TravelTrip): number | null {
+  const prices = [
+    trip.adult_price,
+    ...getStructuredPriceGroups(trip).map((group) =>
+      typeof group.adult_price === "number" ? group.adult_price : null,
+    ),
+  ].filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
+  if (prices.length === 0) return null;
+  return Math.min(...prices);
+}
+
+export function buildBudgetReply(
+  text: string,
+  trips: TravelTrip[],
+  now = new Date(),
+): string | null {
+  const normalized = normText(text);
+  const wantsCheapest = normalized.includes("хамгийн хямд") || normalized.includes("cheapest");
+  const wantsDirect = hasDirectFlightIntent(text);
+  const budgetLimit = extractBudgetLimit(text);
+  if (!wantsCheapest && budgetLimit === null) return null;
+
+  const candidates = trips
+    .filter((trip) => trip.status === "active")
+    .map((trip) => withFutureDepartureDates(trip, now))
+    .filter((trip) => !wantsDirect || tripIsDirectFlight(trip))
+    .map((trip) => ({ trip, price: lowestAdultPrice(trip) }))
+    .filter((item): item is { trip: TravelTrip; price: number } =>
+      typeof item.price === "number" && (budgetLimit === null || item.price <= budgetLimit),
+    )
+    .sort((a, b) => {
+      if (a.price !== b.price) return a.price - b.price;
+      return a.trip.route_name.localeCompare(b.trip.route_name, "mn");
+    })
+    .slice(0, wantsCheapest && budgetLimit === null ? 1 : 7);
+
+  if (candidates.length === 0) {
+    const directText = wantsDirect ? " шууд нислэгтэй" : "";
+    const budgetText = budgetLimit ? ` ${formatMoney(budgetLimit, "MNT")}-аас доош` : "";
+    return `Одоогоор${budgetText}${directText} аялал тодорхой олдсонгүй. Аяллын зөвлөхөөр ойролцоо хувилбар шалгуулъя.`;
+  }
+
+  const title = wantsCheapest
+    ? (wantsDirect ? "Хамгийн хямд шууд нислэгтэй аяллууд:" : "Хамгийн хямд аяллууд:")
+    : `${formatMoney(budgetLimit, "MNT")}-аас доош үнэтэй аяллууд:`;
+  const lines = [title];
+  for (const { trip, price } of candidates) {
+    const parts = [`• ${trip.route_name}`];
+    const duration = safeDurationText(trip.duration_text);
+    if (duration) parts.push(duration);
+    parts.push(`том хүн ${formatMoney(price, trip.currency || "MNT")}`);
+    if (typeof trip.child_price === "number") {
+      parts.push(`хүүхэд ${formatMoney(trip.child_price, trip.currency || "MNT")}`);
+    }
+    if (trip.departure_dates.length > 0) {
+      parts.push(`гарах: ${formatCompactDepartureList(trip.departure_dates)}`);
+    }
+    lines.push(parts.join(" — "));
+  }
+  lines.push("Аль аяллыг нь сонирхож байна вэ?");
+  return lines.join("\n");
+}
+
+function hasStandalonePriceLookupIntent(text: string): boolean {
+  const normalized = normText(text);
+  if (extractNormalizedPrice(text) === null) return false;
+  if (
+    normalized.includes("төлсөн") ||
+    normalized.includes("шилжүүл") ||
+    normalized.includes("баримт") ||
+    normalized.includes("баталгааж")
+  ) {
+    return false;
+  }
+  return (
+    normalized.includes("гэсэн аялал") ||
+    normalized.includes("аль аялал") ||
+    normalized.includes("ямар аялал") ||
+    normalized.includes("аль нь") ||
+    normalized.includes("үнэтэй аялал")
+  );
+}
+
+function buildStandalonePriceLookupReply(text: string, trips: TravelTrip[]): string | null {
+  if (!hasStandalonePriceLookupIntent(text)) return null;
+  const price = extractNormalizedPrice(text);
+  if (price === null) return null;
+
+  const matches: Array<{ trip: TravelTrip; label: string }> = [];
+  const seen = new Set<string>();
+  const add = (trip: TravelTrip, label: string, value: number | null | undefined) => {
+    if (typeof value !== "number" || value !== price || seen.has(trip.id)) return;
+    seen.add(trip.id);
+    matches.push({ trip, label });
+  };
+
+  for (const trip of trips) {
+    if (trip.status !== "active") continue;
+    add(trip, "Том хүн", trip.adult_price);
+    add(trip, "Хүүхэд", trip.child_price);
+
+    for (const group of getStructuredPriceGroups(trip)) {
+      for (const value of getPriceValuesFromGroup(group, "adult")) {
+        add(trip, value.kind === "child" ? "Хүүхэд" : value.kind === "infant" ? "Нярай" : "Том хүн", value.value);
+      }
+    }
+    for (const group of getPriceGroups(trip)) {
+      for (const value of getPriceValuesFromGroup(group, "adult")) {
+        add(trip, value.kind === "child" ? "Хүүхэд" : value.kind === "infant" ? "Нярай" : "Том хүн", value.value);
+      }
+    }
+    for (const discount of getStructuredDiscounts(trip)) {
+      for (const value of getPriceValuesFromGroup(discount, "discount")) {
+        add(trip, value.kind === "discount" ? "Хямдрал" : value.kind === "child" ? "Хүүхэд" : "Том хүн", value.value);
+      }
+    }
+  }
+
+  if (matches.length === 0) return null;
+  const priceText = formatMoney(price, "MNT") || `${price}`;
+  const lines = [`${priceText} үнэтэй тохирох аяллууд:`];
+  for (const { trip, label } of matches.slice(0, 6)) {
+    const duration = safeDurationText(trip.duration_text);
+    const parts = [`• ${trip.route_name}`, label];
+    if (duration) parts.push(duration);
+    if (trip.departure_dates.length > 0) {
+      parts.push(`гарах: ${formatCompactDepartureList(trip.departure_dates)}`);
+    }
+    lines.push(parts.join(" — "));
+  }
+  if (matches.length > 6) lines.push(`... нийт ${matches.length} тохирол байна.`);
+  lines.push("Аль аяллыг нь сонирхож байна вэ?");
+  return lines.join("\n");
 }
 
 export function buildSmartButtons(replyText: string, trips: TravelTrip[]): string[] | null {
@@ -560,6 +725,9 @@ export function buildStructuredTripReply(
   // read as a date, or an old price) misfire this match. Use only the last
   // line for this specific detector.
   const currentLine = text.split("\n").pop() || text;
+  const standalonePriceLookupReply = buildStandalonePriceLookupReply(currentLine, trips);
+  if (standalonePriceLookupReply) return standalonePriceLookupReply;
+
   const combinedDatePrice = findCombinedDatePriceMatches(currentLine, trips);
   if (combinedDatePrice) {
     const combinedReply = formatCombinedDatePriceReply(combinedDatePrice);
@@ -571,24 +739,26 @@ export function buildStructuredTripReply(
     : null;
   if (!isStructuredTripQuestion(text) && !hasDatePriceConstraint(text)) {
     if (!routeOnlyCandidate?.best) {
+      if (routeOnlyCandidate?.ambiguous?.length) {
+        return buildAmbiguousTripReply(routeOnlyCandidate.ambiguous);
+      }
       const soldOut = buildSoldOutTripReply(text, trips);
       if (soldOut) return soldOut;
       const directUnavailable = buildDirectFlightUnavailableReply(text, trips);
       if (directUnavailable) return directUnavailable;
-      return routeOnlyCandidate?.ambiguous?.length
-        ? buildAmbiguousTripReply(routeOnlyCandidate.ambiguous)
-        : null;
+      return null;
     }
     return buildTripInfoReply(routeOnlyCandidate.best, now);
   }
 
   const { best: bestRaw, ambiguous } = findBestTripMatch(text, trips);
   if (!bestRaw) {
+    if (ambiguous.length) return buildAmbiguousTripReply(ambiguous);
     const soldOut = buildSoldOutTripReply(text, trips);
     if (soldOut) return soldOut;
     const directUnavailable = buildDirectFlightUnavailableReply(text, trips);
     if (directUnavailable) return directUnavailable;
-    return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
+    return null;
   }
   const best = withFutureDepartureDates(bestRaw, now);
 

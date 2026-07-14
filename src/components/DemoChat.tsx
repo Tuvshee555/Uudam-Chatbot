@@ -7,6 +7,8 @@ type ChatMessage = {
   from: "user" | "bot";
   text: string;
   aiButtons?: string[];
+  mediaUrls?: string[];
+  brochureUrl?: string | null;
 };
 
 type DemoChatProps = {
@@ -107,9 +109,18 @@ export default function DemoChat({
             (b): b is string => typeof b === "string",
           )
         : [];
+      const mediaUrls: string[] = Array.isArray(json?.mediaUrls)
+        ? (json.mediaUrls as unknown[]).filter(
+            (url): url is string => typeof url === "string" && url.startsWith("https://"),
+          )
+        : [];
+      const brochureUrl =
+        typeof json?.brochureUrl === "string" && json.brochureUrl.startsWith("https://")
+          ? json.brochureUrl
+          : null;
       setMessages((prev) => [
         ...prev,
-        { from: "bot", text: replyText, aiButtons },
+        { from: "bot", text: replyText, aiButtons, mediaUrls, brochureUrl },
       ]);
     } catch {
       setMessages((prev) => [
@@ -220,6 +231,42 @@ export default function DemoChat({
                   >
                     {msg.text}
                   </div>
+                  {msg.from === "bot" && ((msg.mediaUrls?.length || 0) > 0 || msg.brochureUrl) && (
+                    <div className="mt-2 flex max-w-[88%] flex-col gap-2">
+                      {msg.mediaUrls && msg.mediaUrls.length > 0 && (
+                        <div className="grid grid-cols-2 gap-2">
+                          {msg.mediaUrls.map((url, imageIndex) => (
+                            <a
+                              key={`${url}-${imageIndex}`}
+                              href={url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block overflow-hidden rounded-lg border border-line bg-surface shadow-sm"
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element -- Demo chat previews arbitrary media URLs returned by the bot. */}
+                              <img
+                                src={url}
+                                alt={`Trip photo ${imageIndex + 1}`}
+                                className="aspect-4/3 w-full object-cover"
+                                loading="lazy"
+                              />
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                      {msg.brochureUrl && (
+                        <a
+                          href={msg.brochureUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex w-fit items-center gap-2 rounded-full border border-line-strong bg-surface px-3 py-1.5 text-xs font-semibold text-brand shadow-sm transition-colors hover:border-brand"
+                        >
+                          <Icons.file size={14} />
+                          PDF
+                        </a>
+                      )}
+                    </div>
+                  )}
                   {/* AI-generated contextual follow-up buttons */}
                   {msg.from === "bot" &&
                     msg.aiButtons &&

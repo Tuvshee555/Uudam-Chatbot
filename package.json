@@ -13,6 +13,7 @@
     "test": "node scripts/run-tests.mjs",
     "chaos": "node --import tsx scripts/chaos.ts",
     "qa:golden": "node scripts/golden-questions.mjs",
+    "qa:100-demo": "node scripts/qa-100-demo.mjs",
     "preflight": "node --import tsx scripts/preflight.ts",
     "validate": "npm run lint && npm run typecheck && npm run test && npm run build",
     "fb:subscribe-page": "node scripts/subscribe-page-app.mjs"

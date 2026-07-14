@@ -17,7 +17,7 @@ import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButt
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, dbClaimGoodbye, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
-import { appendLeadCaptureCta, buildAmbiguousTripReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
+import { appendLeadCaptureCta, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
 import { claimSeasonSend, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
@@ -1000,6 +1000,22 @@ async function handleMessage(
         failTag: "seats_fast_path",
         rememberSource: "api.webhook.seats_fast_path",
         counter: "webhook.seats_fast_path_total",
+      });
+      return;
+    }
+  }
+  if (hasBudgetIntent(text)) {
+    const trips = await getTrips();
+    const budgetReply = buildBudgetReply(await getFastPathText(), trips);
+    if (budgetReply) {
+      await deliverFastPathReply({
+        reply: appendLeadCaptureCta(
+          enforceWebsiteForPayment(sanitizeAssistantReply(budgetReply)),
+          phoneCollected,
+        ),
+        failTag: "budget_fast_path",
+        rememberSource: "api.webhook.budget_fast_path",
+        counter: "webhook.budget_fast_path_total",
       });
       return;
     }

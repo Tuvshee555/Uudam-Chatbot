@@ -27,7 +27,10 @@ const DIRECT_FLIGHT_NEGATIVE_PATTERNS = [
 ];
 
 export function hasPriceIntent(text: string) {
-  return /үнэ|хэд\s+вэ|хэдээр|төлбөр|price|cost/i.test(text);
+  return (
+    /үнэ|хэд\s+вэ|хэдээр|төлбөр|price|cost/i.test(text) ||
+    /(\d{1,2}\s*(?:настай|нас|сар|сартай)\s*(?:хүүхэд|нярай)?|(?:хүүхэд|нярай)\s*\d{1,2}\s*(?:настай|нас|сар|сартай))/i.test(text)
+  );
 }
 
 export function hasDurationIntent(text: string) {
@@ -260,8 +263,11 @@ function findSingleAgePriceInText(text: string, target: "child" | "infant", age:
 }
 
 export function buildAgeSpecificPriceReply(trip: TravelTrip, text: string): string | null {
-  const ageRangeIntent = extractAgeRangeIntent(text);
-  const singleAgeIntent = ageRangeIntent ? null : extractSingleAgeIntent(text);
+  const lines = text.split("\n");
+  const currentLine = lines[lines.length - 1] || text;
+  if (extractDatesFromText(currentLine).length > 0) return null;
+  const ageRangeIntent = extractAgeRangeIntent(currentLine);
+  const singleAgeIntent = ageRangeIntent ? null : extractSingleAgeIntent(currentLine);
   if (!ageRangeIntent && !singleAgeIntent) return null;
 
   const currency = trip.currency || "MNT";

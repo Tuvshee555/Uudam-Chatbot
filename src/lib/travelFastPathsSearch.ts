@@ -244,6 +244,7 @@ export function phoneticLatinText(text: string) {
     .replace(/ts/g, "c")
     .replace(/ch/g, "c")
     .replace(/sh/g, "s")
+    .replace(/kyo/g, "kio")
     .replace(/yo/g, "o")
     .replace(/yu/g, "u")
     .replace(/ya/g, "a")
@@ -423,6 +424,54 @@ function canMatchTripStatus(trip: TravelTrip, options?: TripMatchOptions): boole
   return options?.includeSoldOut === true && trip.status === "sold_out";
 }
 
+function extractQueryMonthDays(text: string): MonthDay[] {
+  const normalized = normText(text);
+  const values: MonthDay[] = [];
+  const push = (month: number, day: number) => {
+    if (!Number.isInteger(month) || !Number.isInteger(day)) return;
+    if (month < 1 || month > 12 || day < 1 || day > 31) return;
+    values.push({ month, day });
+  };
+
+  for (const match of normalized.matchAll(/(\d{1,2})\s*(?:р\s*)?сар(?:ын)?\s*(\d{1,2})/g)) {
+    push(Number(match[1]), Number(match[2]));
+  }
+  for (const match of normalized.matchAll(/(?<![\d./-])(\d{1,2})[./-](\d{1,2})(?![\d./-])/g)) {
+    push(Number(match[1]), Number(match[2]));
+  }
+
+  return uniqueMonthDays(values);
+}
+
+function textHasMonthDay(text: string, date: MonthDay): boolean {
+  const normalized = normText(text);
+  const month = String(date.month);
+  const monthPadded = month.padStart(2, "0");
+  const day = String(date.day);
+  const dayPadded = day.padStart(2, "0");
+  const variants = [
+    `${month} сарын ${day}`,
+    `${monthPadded} сарын ${day}`,
+    `${month} сарын ${dayPadded}`,
+    `${monthPadded} сарын ${dayPadded}`,
+    `${month}/${day}`,
+    `${monthPadded}/${day}`,
+    `${month}/${dayPadded}`,
+    `${monthPadded}/${dayPadded}`,
+  ];
+  return variants.some((variant) => normalized.includes(normText(variant)));
+}
+
+function tripHasMonthDay(trip: TravelTrip, date: MonthDay): boolean {
+  const dateTexts = [
+    ...trip.departure_dates,
+    ...getStructuredPriceGroups(trip).flatMap(getGroupDateTexts),
+    ...getStructuredDiscounts(trip).flatMap(getGroupDateTexts),
+    ...getPriceGroups(trip).flatMap(getGroupDateTexts),
+  ];
+  return dateTexts.some((value) => textHasMonthDay(value, date));
+}
+
 export function findTripMatches(text: string, trips: TravelTrip[], options?: TripMatchOptions): TripMatch[] {
   const query = normText(text);
   const queryPhonetic = phoneticLatinText(text);
@@ -434,6 +483,7 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
   const wantsDirectFlight = queryWantsDirectFlight(text) && !wantsCombo;
   const wantsFlight = queryWantsFlight(text);
   const wantsSeaBeach = queryWantsSeaBeach(text);
+  const requestedMonthDays = extractQueryMonthDays(text);
 
   const matches: TripMatch[] = [];
   for (const trip of trips) {
@@ -511,6 +561,13 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
     if (wantsFlight && isCombo) intentBoost += 35;
     if (wantsSeaBeach && tripHasSeaBeach(trip)) intentBoost += 180;
 
+    let dateBoost = 0;
+    if (requestedMonthDays.length > 0) {
+      dateBoost = requestedMonthDays.some((date) => tripHasMonthDay(trip, date))
+        ? 180
+        : -40;
+    }
+
     const score =
       exactRouteHit * 100 +
       aliasHit * 80 +
@@ -519,6 +576,7 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
       Math.max(0, routeKeywords.length - matchedWords.length) +
       discountBoost +
       intentBoost +
+      dateBoost +
       durationVariantScore(text, trip) +
       examFeeIntentScore(text, trip);
 
@@ -554,6 +612,15 @@ export function resolveTripFromUserMessage(
   }
 
   const [best, second] = matches;
+  const requestedMonthDays = extractQueryMonthDays(text);
+  if (requestedMonthDays.length > 0) {
+    const datedMatches = matches.filter((match) =>
+      requestedMonthDays.some((date) => tripHasMonthDay(match.trip, date)),
+    );
+    if (datedMatches.length === 1) {
+      return { status: "verified", trip: datedMatches[0].trip, candidates: [] };
+    }
+  }
   const hasSpecificTripPreference =
     queryWantsLandOnlyEnhanced(text) ||
     queryWantsLandFlightCombo(text) ||
@@ -892,6 +959,7 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
   const wantsFlight = queryWantsFlight(text);
   const wantsSeaBeach = queryWantsSeaBeach(text);
   const hasBrochure = options?.hasBrochureIntent ?? false;
+  const requestedMonthDays = extractQueryMonthDays(text);
   let best: TravelTrip | null = null;
   let bestScore = 0;
   let secondScore = 0;
@@ -965,6 +1033,11 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
 
     // Bonus when user wants a brochure and this trip actually has one.
     if (hasBrochure && getTripBrochureAsset(trip)) score += 100;
+    if (requestedMonthDays.length > 0) {
+      score += requestedMonthDays.some((date) => tripHasMonthDay(trip, date))
+        ? 120
+        : -30;
+    }
 
     if (score > bestScore) {
       secondScore = bestScore;

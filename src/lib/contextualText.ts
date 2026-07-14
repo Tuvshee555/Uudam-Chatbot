@@ -41,16 +41,30 @@ export function isLikelyContextDependentText(text: string) {
     "seats",
     "zurag",
     "үнэ",
+    "хэд",
     "хэзээ",
+    "сарын",
     "огноо",
     "суудал",
     "хөтөлбөр",
     "зураг",
+    "хүүхэд",
+    "хүүхдийн",
+    "нярай",
+    "тийзтэй",
+    "тийзгүй",
+    "ticket",
     "дахин",
     "дахиад",
     "өөр",
+    "адил",
     "энэ",
     "тэр",
+    "эхний",
+    "эхнийх",
+    "эхнийх нь",
+    "нэгдүгээр",
+    "first",
   ];
   const hasHint = referentialHints.some((hint) => normalized.includes(hint));
   if (!hasHint) return false;
@@ -74,11 +88,22 @@ export function isLikelyContextDependentText(text: string) {
         "seat",
         "seats",
         "үнэ",
+        "хэд",
+        "вэ",
+        "юу",
+        "нь",
+        "сарын",
+        "өөр",
+        "адил",
+        "нд",
         "огноо",
         "суудал",
         "хүүхэд",
         "хүүхдийн",
         "нярай",
+        "тийзтэй",
+        "тийзгүй",
+        "ticket",
         "том",
         "хүн",
         "үнэтэй",
@@ -101,6 +126,51 @@ function isGenericAssistantFollowup(text: string) {
   );
 }
 
+function isFirstOptionFollowup(text: string) {
+  const normalized = normalizeContextText(text);
+  return (
+    normalized.includes("эхний") ||
+    normalized.includes("эхнийх") ||
+    normalized.includes("нэгдүгээр") ||
+    normalized.includes("first") ||
+    normalized === "1"
+  );
+}
+
+function firstAssistantOption(text: string): string | null {
+  for (const line of text.split("\n")) {
+    const cleaned = line.trim().replace(/^[•*\-]\s*/, "").replace(/^\d+[.)]\s*/, "").trim();
+    if (!cleaned || cleaned.length < 4) continue;
+    if (!/^[•*\-]|\d+[.)]/.test(line.trim())) continue;
+    const normalized = normalizeContextText(cleaned);
+    if (
+      normalized.startsWith("том хүн") ||
+      normalized.startsWith("хүүхэд") ||
+      normalized.startsWith("нярай") ||
+      normalized.startsWith("гарах") ||
+      normalized.startsWith("насанд хүрэгч")
+    ) {
+      continue;
+    }
+    return cleaned.split(" — ")[0]?.trim() || cleaned;
+  }
+  return null;
+}
+
+function likelyRefersToPreviousAssistantOption(text: string) {
+  const normalized = normalizeContextText(text);
+  return (
+    normalized.includes("тэр") ||
+    normalized.includes("нь") ||
+    normalized.includes("зураг") ||
+    normalized.includes("хөтөлбөр") ||
+    normalized.includes("pdf") ||
+    normalized.includes("хүүхэд") ||
+    normalized.includes("хүүхдийн") ||
+    normalized.includes("нярай")
+  );
+}
+
 export function buildContextualUserText(
   history: Array<{ role: "user" | "assistant"; text: string }>,
   userText: string,
@@ -110,6 +180,14 @@ export function buildContextualUserText(
     .reverse()
     .find((message) => message.role === "assistant" && message.text.trim())
     ?.text.trim();
+  if (previousAssistantReply && isFirstOptionFollowup(userText)) {
+    const firstOption = firstAssistantOption(previousAssistantReply);
+    if (firstOption) return `${firstOption}\n${userText.trim()}`;
+  }
+  if (previousAssistantReply && likelyRefersToPreviousAssistantOption(userText)) {
+    const firstOption = firstAssistantOption(previousAssistantReply);
+    if (firstOption) return `${firstOption}\n${userText.trim()}`;
+  }
   if (previousAssistantReply && !isGenericAssistantFollowup(previousAssistantReply)) {
     return `${previousAssistantReply}\n${userText.trim()}`;
   }

@@ -18,7 +18,8 @@ import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
-import { buildAmbiguousTripReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
+import { buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
+import { extractTripPhotosForReply } from "../../lib/welcomeFlow";
 import { getEnv } from "../../lib/env";
 import {
   beginRequestTrace,
@@ -35,11 +36,46 @@ const DEMO_MAX_TEXT_CHARS = env.demoMaxTextChars;
 const DEMO_GLOBAL_LIMIT = env.demoGlobalRateLimit;
 const DEMO_CONVERSATION_ID_PATTERN = /^[a-zA-Z0-9_-]{16,80}$/;
 
+type DemoMedia = {
+  mediaUrls: string[];
+  brochureUrl: string | null;
+};
+
 function normalizeConversationId(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   if (!DEMO_CONVERSATION_ID_PATTERN.test(trimmed)) return null;
   return trimmed;
+}
+
+function isLocalQaRequest(req: NextApiRequest): boolean {
+  if (process.env.NODE_ENV === "production") return false;
+  const marker = req.headers["x-uudam-demo-qa"];
+  return marker === "1" || marker === "true";
+}
+
+function imageAttachments(urls: string[]) {
+  return urls.map((url) => ({ type: "image" as const, url }));
+}
+
+function buildDemoMedia(input: {
+  reply: string;
+  userText: string;
+  trips: Awaited<ReturnType<typeof listTrips>>;
+  explicitMediaUrls?: string[];
+  brochureUrl?: string | null;
+}): DemoMedia {
+  const explicit = input.explicitMediaUrls || [];
+  const inferred = explicit.length > 0
+    ? []
+    : extractTripPhotosForReply(input.reply, input.trips, { userText: input.userText });
+  const mediaUrls = Array.from(new Set([...explicit, ...inferred]))
+    .filter((url) => typeof url === "string" && url.startsWith("https://"))
+    .slice(0, 2);
+  const brochureUrl = input.brochureUrl && input.brochureUrl.startsWith("https://")
+    ? input.brochureUrl
+    : null;
+  return { mediaUrls, brochureUrl };
 }
 
 export default async function handler(
@@ -79,51 +115,54 @@ export default async function handler(
     if (!normalizedConversationId) {
       return res.status(400).json({ error: "invalid_conversation_id" });
     }
+    const qaBypassRateLimit = isLocalQaRequest(req);
 
-    const key = `demo:${clientKey}`;
-    const limit = await rateLimitAsync(key, 30, 5 * 60 * 1000); // 30 requests per 5 minutes per IP
-    if (!limit.allowed) {
-      recordCounter("abuse.rate_limited_total", 1, {
-        route: "api.demo",
-        scope: "client",
-      });
-      return res.status(429).json({
-        error: "rate_limited",
-        reset: limit.reset,
-      });
-    }
+    if (!qaBypassRateLimit) {
+      const key = `demo:${clientKey}`;
+      const limit = await rateLimitAsync(key, 30, 5 * 60 * 1000); // 30 requests per 5 minutes per IP
+      if (!limit.allowed) {
+        recordCounter("abuse.rate_limited_total", 1, {
+          route: "api.demo",
+          scope: "client",
+        });
+        return res.status(429).json({
+          error: "rate_limited",
+          reset: limit.reset,
+        });
+      }
 
-    const shardKey = buildShardedRateLimitKey("demo:global", clientKey, 32);
-    const shardLimit = await rateLimitAsync(
-      shardKey,
-      DEMO_GLOBAL_LIMIT,
-      60 * 1000,
-    );
-    if (!shardLimit.allowed) {
-      recordCounter("abuse.rate_limited_total", 1, {
-        route: "api.demo",
-        scope: "global_shard",
-      });
-      return res.status(429).json({
-        error: "server_busy",
-        reset: shardLimit.reset,
-      });
-    }
+      const shardKey = buildShardedRateLimitKey("demo:global", clientKey, 32);
+      const shardLimit = await rateLimitAsync(
+        shardKey,
+        DEMO_GLOBAL_LIMIT,
+        60 * 1000,
+      );
+      if (!shardLimit.allowed) {
+        recordCounter("abuse.rate_limited_total", 1, {
+          route: "api.demo",
+          scope: "global_shard",
+        });
+        return res.status(429).json({
+          error: "server_busy",
+          reset: shardLimit.reset,
+        });
+      }
 
-    const globalLimit = await rateLimitAsync(
-      "demo:global:all",
-      DEMO_GLOBAL_LIMIT * 32,
-      60 * 1000,
-    );
-    if (!globalLimit.allowed) {
-      recordCounter("abuse.rate_limited_total", 1, {
-        route: "api.demo",
-        scope: "global_all",
-      });
-      return res.status(429).json({
-        error: "server_busy",
-        reset: globalLimit.reset,
-      });
+      const globalLimit = await rateLimitAsync(
+        "demo:global:all",
+        DEMO_GLOBAL_LIMIT * 32,
+        60 * 1000,
+      );
+      if (!globalLimit.allowed) {
+        recordCounter("abuse.rate_limited_total", 1, {
+          route: "api.demo",
+          scope: "global_all",
+        });
+        return res.status(429).json({
+          error: "server_busy",
+          reset: globalLimit.reset,
+        });
+      }
     }
 
     try {
@@ -223,6 +262,20 @@ export default async function handler(
         }
       }
 
+      // Fast path: cheapest / under-budget questions
+      if (hasBudgetIntent(normalizedText)) {
+        const trips = await getTrips();
+        const budgetReply = buildBudgetReply(await getFastPathText(), trips);
+        if (budgetReply) {
+          const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(budgetReply));
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
+          recordCounter("demo.budget_fast_path_total", 1, {});
+          return res.status(200).json({ reply: safeReply, buttons: [] });
+        }
+      }
+
       // Fast path: discount query
       if (hasDiscountIntent(normalizedText)) {
         const trips = await getTrips();
@@ -265,20 +318,32 @@ export default async function handler(
           const safeReply = enforceWebsiteForPayment(
             sanitizeAssistantReply(`${programReply.reply}${brochureLine}${mediaLine}`),
           );
+          const media = buildDemoMedia({
+            reply: safeReply,
+            userText: await getFastPathText(),
+            trips,
+            explicitMediaUrls: programReply.mediaUrls,
+            brochureUrl: programReply.brochure?.type === "url" ? programReply.brochure.value : null,
+          });
           await appendMessage(sessionId, "user", normalizedText);
-          await appendMessage(sessionId, "assistant", safeReply);
+          await appendMessage(sessionId, "assistant", safeReply, imageAttachments(media.mediaUrls));
           await rememberTurn();
           recordCounter("demo.program_fast_path_total", 1, {});
-          return res.status(200).json({ reply: safeReply, buttons: [] });
+          return res.status(200).json({ reply: safeReply, buttons: [], ...media });
         }
         const structuredReply = buildStructuredTripReply(await getFastPathText(), trips);
         if (structuredReply) {
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(structuredReply));
+          const media = buildDemoMedia({
+            reply: safeReply,
+            userText: await getFastPathText(),
+            trips,
+          });
           await appendMessage(sessionId, "user", normalizedText);
-          await appendMessage(sessionId, "assistant", safeReply);
+          await appendMessage(sessionId, "assistant", safeReply, imageAttachments(media.mediaUrls));
           await rememberTurn();
           recordCounter("demo.structured_fast_path_total", 1, {});
-          return res.status(200).json({ reply: safeReply, buttons: [] });
+          return res.status(200).json({ reply: safeReply, buttons: [], ...media });
         }
       }
 
@@ -402,12 +467,22 @@ export default async function handler(
       const lastReplyText = lastMessages.length > 0 ? lastMessages[lastMessages.length - 1].text : null;
       if (lastReplyText && isDuplicateReply(lastReplyText, reply)) {
         recordCounter("demo.duplicate_reply_avoided_total", 1, {});
-        await appendMessage(sessionId, "assistant", reply);
+        const media = buildDemoMedia({
+          reply,
+          userText: normalizedText,
+          trips: reasoningTrips,
+        });
+        await appendMessage(sessionId, "assistant", reply, imageAttachments(media.mediaUrls));
         await rememberTurn();
-        return res.status(200).json({ reply, buttons });
+        return res.status(200).json({ reply, buttons, ...media });
       }
 
-      await appendMessage(sessionId, "assistant", reply);
+      const media = buildDemoMedia({
+        reply,
+        userText: normalizedText,
+        trips: reasoningTrips,
+      });
+      await appendMessage(sessionId, "assistant", reply, imageAttachments(media.mediaUrls));
       await rememberTurn();
 
       logInfo("demo.reply_generated", {
@@ -420,7 +495,7 @@ export default async function handler(
         buttonCount: buttons.length,
       });
 
-      return res.status(200).json({ reply, buttons });
+      return res.status(200).json({ reply, buttons, ...media });
     } catch (error: any) {
       const classification = classifyError(error);
       logError("demo.request_failed", {

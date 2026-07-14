@@ -20,7 +20,7 @@ import {
   setClarificationState,
   clearClarificationState,
 } from "./clarificationState";
-import { pickFastPathMatchText } from "./contextualText";
+import { isLikelyContextDependentText, pickFastPathMatchText } from "./contextualText";
 import { getTripSearchHaystack, phoneticLatinText, resolveTripFromUserMessage } from "./travelFastPathsSearch";
 import type { TravelTrip } from "./travelTypes";
 
@@ -125,6 +125,14 @@ export async function routeFastPathText(input: {
   // --- 2. Stateless current-message-first routing, capturing new ambiguity. ---
   const direct = resolve(text, trips);
   const contextual = contextualUserText !== text ? resolve(contextualUserText, trips) : null;
+  if (
+    contextualUserText !== text &&
+    isLikelyContextDependentText(text) &&
+    contextual?.status === "verified" &&
+    (direct.status !== "verified" || direct.trip.id !== contextual.trip.id)
+  ) {
+    return { matchText: contextualUserText, scopedClarify: null };
+  }
   const picked = pickFastPathMatchText(text, contextualUserText, (t) =>
     t === text ? direct : contextual ?? resolve(t, trips),
   );
