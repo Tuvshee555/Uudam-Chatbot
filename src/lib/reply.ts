@@ -4,11 +4,9 @@ const WEBSITE_REPLY =
 
 /**
  * REFER protocol — the model's machine-readable "I don't have this data"
- * signal. The old SILENT rule dropped the customer's message with no reply
- * and no staff alert (a silently lost lead). Now the model outputs REFER and
- * the CALLER converts it into a polite consultant fallback + staff alert +
- * lead. "SILENT" is kept as a legacy alias so an older cached prompt or a
- * stubborn model can't regress us to dropping messages.
+ * signal. Callers should keep the customer side silent and create/alert a
+ * staff handoff in the background, so missing data never becomes a wrong
+ * "we don't have it" answer. "SILENT" is kept as a legacy alias.
  *
  * Lives here (env-free reply helpers) rather than in conversation.ts so tests
  * and callers can use it without dragging in the DB/env import chain.
@@ -17,10 +15,6 @@ export function isReferReply(text: string): boolean {
   const firstLine = (text || "").trim().split("\n")[0]?.trim().toUpperCase() ?? "";
   return firstLine === "REFER" || firstLine === "SILENT" || /^(REFER|SILENT)\b/.test(firstLine);
 }
-
-/** Customer-facing fallback sent instead of REFER. No hardcoded phone numbers here. */
-export const REFER_FALLBACK_REPLY =
-  "Энэ мэдээллийг манай аяллын зөвлөхөөс тодруулж хэлье 🙌 Утасны дугаараа үлдээвэл зөвлөх тан руу шууд холбогдоно.";
 
 const PAYMENT_LEAK_PATTERNS: RegExp[] = [
   /\/register/i,
@@ -50,6 +44,21 @@ export function reconcilePhotoAttachmentReply(text: string, hasAttachedMedia: bo
     /\n\nОдоогоор энэ аяллын нэмэлт зураг системд ороогүй байна\. 🙌/g,
     "\n\nЗургийг илгээж байна.",
   );
+}
+
+const NO_DATA_REPLY_PATTERNS: RegExp[] = [
+  /(?:аялал|чиглэлд).{0,80}тодорхой олдсонгүй/i,
+  /үнийн мэдээлэл (?:олдсонгүй|одоогоор тодорхойгүй)/i,
+  /мэдээлэл одоогоор тодорхойгүй/i,
+  /зураг системд ороогүй/i,
+  /нэмэлт зураг системд ороогүй/i,
+  /хүний ажилтантай холбож өгье/i,
+];
+
+export function shouldSilenceNoDataReply(text: string): boolean {
+  const normalized = (text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return true;
+  return NO_DATA_REPLY_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
 // A customer's own text claim ("5 сая шилжүүлсэн", "screenshot явуулсан",

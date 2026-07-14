@@ -8,7 +8,8 @@
  */
 import { sendImageMessage, sendTextMessage } from "./messenger";
 import { appendMessage } from "./conversation";
-import { listTrips } from "./travelOps";
+import { createLead, hasRecentOpenLead, listTrips } from "./travelOps";
+import { notifyStaffOfLead } from "./staffAlerts";
 import { resolveTripFromUserMessage } from "./travelFastPaths";
 import { isGenericOpener } from "./welcomeFlow";
 import { createPhotoOnlyState, getPhotoOnlyState, setPhotoOnlyState } from "./photoOnlyState";
@@ -136,7 +137,35 @@ export async function handlePhotoOnlyMode(input: {
           lastPromptAt: 0,
         }));
       } else {
-        clarification = `Одоогоор ${resolvedTrip.route_name} аяллын зураг системд ороогүй байна. Хүсвэл хөтөлбөр, үнэ, гарах өдрийг нь бичиж өгье.`;
+        try {
+          if (!(await hasRecentOpenLead(senderId, "handoff"))) {
+            await createLead({
+              kind: "handoff",
+              platform,
+              senderId,
+              customerMessage: text,
+              context: `Photo-only mode: ${resolvedTrip.route_name} аяллын зураг системд ороогүй тул хэрэглэгчид no-data хариу илгээсэнгүй.`,
+            });
+            await notifyStaffOfLead(
+              { kind: "handoff", platform, customerMessage: text },
+              {
+                requestId: trace?.requestId,
+                correlationId: trace?.correlationId,
+                source: "api.webhook.photo_only_no_data_silent",
+              },
+            );
+          }
+        } catch (error) {
+          logWarn("webhook.photo_only_no_data_lead_failed", {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            platform,
+            pageId,
+            senderHash: hashIdentifier(senderId),
+            classification: classifyError(error),
+          });
+        }
+        await rememberTurn("api.webhook.photo_only_no_photos_silent");
         promptKind = "no_photos";
       }
     } else if (ambiguousTrips.length > 0) {

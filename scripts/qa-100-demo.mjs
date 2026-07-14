@@ -55,19 +55,19 @@ const singles = [
   { id: "macau", text: "Макао Жухай Хайлин арал үнэ?", expectAny: ["Макао"] },
   { id: "guangzhou", text: "Гуанжоу Макао Шэнжин үнэ?", expectAny: ["Гуанжоу"] },
   { id: "cruise", text: "Усан онгоцны аялал Чежү Пусан хэд вэ?", expectAny: ["Усан онгоц", "Пусан"] },
-  { id: "july-price", text: "7 сарын аяллын үнэ л хэлээд өг" },
-  { id: "august-price", text: "8 сарын аяллын үнэ" },
-  { id: "past-date-no-context", text: "6 сарын 27-ны үнэ хэд вэ?", reject: ["7 сарын 9-нд гарах"] },
-  { id: "beidaihe-july-9", text: "Бэйдайхэ 7 сарын 9 хэд вэ?", expectAny: ["7 сарын 9", "2,150,000", "1,390,000"] },
+  { id: "july-price", text: "7 сарын аяллын үнэ л хэлээд өг", allowSilent: true },
+  { id: "august-price", text: "8 сарын аяллын үнэ", allowSilent: true },
+  { id: "past-date-no-context", text: "6 сарын 27-ны үнэ хэд вэ?", reject: ["7 сарын 9-нд гарах"], allowSilent: true },
+  { id: "beidaihe-july-9", text: "Бэйдайхэ 7 сарын 9 хэд вэ?", expectAny: ["7 сарын 9", "2,150,000", "1,390,000"], allowSilent: true },
   { id: "beidaihe-aug-child", text: "Бэйдайхэ 8 сарын 1 хүүхдийн үнэ", expectAny: ["хүүхэд", "1,710,000"] },
-  { id: "beidaihe-past-date", text: "Бэйдайхэ 6 сарын 27 үнэ", reject: ["7 сарын 9"] },
+  { id: "beidaihe-past-date", text: "Бэйдайхэ 6 сарын 27 үнэ", reject: ["7 сарын 9"], allowSilent: true },
   { id: "shanghai-aug-6", text: "Шанхай 8 сарын 6 үнэ", expectAny: ["8 сарын 6", "3,160,000"] },
   { id: "hailaar-aug-24", text: "Хайлаар 8 сарын 24 үнэ", expectAny: ["Аль аяллыг", "Хайлаар Манжуур"] },
   { id: "tomorrow", text: "маргааш явах аялал байна уу" },
   { id: "today", text: "өнөөдөр гарах аялал байна уу" },
   { id: "july-availability", text: "7 сард явах аялал байна уу" },
   { id: "august-availability", text: "8 сард явах аялал байна уу" },
-  { id: "beidaihe-infant", text: "Бэйдайхэ нярай хэд вэ?", expectAny: ["Нярай", "530,000"], reject: ["Жинин", "шинжилгээ"] },
+  { id: "beidaihe-infant", text: "Бэйдайхэ нярай хэд вэ?", expectAny: ["Нярай", "530,000"], reject: ["Жинин", "шинжилгээ"], allowSilent: true },
   { id: "beidaihe-child", text: "Бэйдайхэ хүүхдийн үнэ", expectAny: ["Хүүхэд", "1,190,000", "1,710,000"] },
   { id: "sanya-age-2", text: "Хайнан Саньяа 2 настай хүүхэд хэд вэ?", expectAny: ["2-6", "2,190,000"] },
   { id: "sanya-age-7", text: "Хайнан Саньяа 7 настай хүүхэд хэд вэ?", expectAny: ["6-12", "2,790,000"] },
@@ -75,22 +75,22 @@ const singles = [
   { id: "beidaihe-total-clear", text: "Бэйдайхэ 2 том 1 хүүхэд нийт хэд вэ", expectAny: ["3,970,000"] },
   { id: "beidaihe-photo", text: "Бэйдайхэ газар нислэг хосолсон зураг", requireMedia: true },
   { id: "shanghai-photo", text: "Шанхай Тэнгэрийн хаалга зураг явуулаач", requireMedia: true },
-  { id: "hainan-photo", text: "Хайнан Саньяа зураг" },
+  { id: "hainan-photo", text: "Хайнан Саньяа зураг", allowSilent: true },
   { id: "beijing-program", text: "Бээжин хөтөлбөр" },
   { id: "shanghai-program", text: "Шанхай Жанжиажэ хөтөлбөр" },
-  { id: "pdf-no-trip", text: "PDF явуул" },
+  { id: "pdf-no-trip", text: "PDF явуул", allowSilent: true },
   { id: "beidaihe-seats", text: "суудал байна уу Бэйдайхэ" },
   { id: "hainan-seats", text: "Хайнан суудал байгаа юу" },
-  { id: "discount-broad", text: "хямдралтай үнэ байгаа юу" },
+  { id: "discount-broad", text: "хямдралтай үнэ байгаа юу", allowSilent: true },
   { id: "dalian-discount", text: "Далянь хямдралтай юу", expectAny: ["Далянь", "хямд"] },
   { id: "cheapest", text: "хамгийн хямд аялал юу байна" },
   { id: "cheapest-direct", text: "хамгийн хямд шууд нислэгтэй аялал?" },
   { id: "under-3m", text: "3 саяас доош аялал байна уу" },
   { id: "price-2990", text: "2,990,000 гэсэн аялал аль вэ?", expectAny: ["2,990,000", "Тэнгэрийн хаалга"] },
-  { id: "visa", text: "виз хэрэгтэй юу" },
-  { id: "passport", text: "паспорт шаардлагатай юу" },
+  { id: "visa", text: "виз хэрэгтэй юу", allowSilent: true },
+  { id: "passport", text: "паспорт шаардлагатай юу", allowSilent: true },
   { id: "payment-claim", text: "2,990,000 төлсөн баталгаажуул", expectAny: ["зөвлөх", "баталгаажуулж чадахгүй"], reject: ["баталгаажлаа", "баталгаажсан", "Тэнгэрийн хаалга"] },
-  { id: "handoff", text: "зөвлөхтэй холбож өгөөч" },
+  { id: "handoff", text: "зөвлөхтэй холбож өгөөч", allowSilent: true },
   { id: "tokyo-latin", text: "Tokyo аялал байна уу?", expectAny: ["Токио"] },
   { id: "beidaihe-latin", text: "beidaihe une", expectAny: ["Бэйдайхэ", "БЭЙДАЙХЭ"] },
 ];
@@ -123,8 +123,8 @@ const conversations = [
   {
     id: "ctx-july-past",
     turns: [
-      { text: "7 сарын аяллын үнэ л хэлээд өг" },
-      { text: "6 сарын 27-ны үнэ хэд вэ?", reject: ["7 сарын 9-нд гарах"] },
+      { text: "7 сарын аяллын үнэ л хэлээд өг", allowSilent: true },
+      { text: "6 сарын 27-ны үнэ хэд вэ?", reject: ["7 сарын 9-нд гарах"], allowSilent: true },
       { text: "8 сарын хүүхдийн үнэ өөр үү?", reject: ["Жинин", "шинжилгээ"] },
     ],
   },
@@ -141,7 +141,7 @@ const conversations = [
     turns: [
       { text: "3 саяас доош аялал байна уу" },
       { text: "хамгийн эхнийх нь хэд вэ" },
-      { text: "тэрний нярай үнэ?" },
+      { text: "тэрний нярай үнэ?", allowSilent: true },
     ],
   },
   {
@@ -218,7 +218,9 @@ function matchesAny(reply, expected) {
 function validate(turn, result) {
   const problems = [];
   const reply = result.reply || "";
-  if (!reply.trim()) problems.push("empty reply");
+  const isSilent = !reply.trim();
+  if (isSilent && !turn.allowSilent) problems.push("empty reply");
+  if (isSilent && turn.allowSilent) return problems;
   for (const flag of RED_FLAGS) {
     if (flag.pattern.test(reply)) problems.push(flag.label);
   }

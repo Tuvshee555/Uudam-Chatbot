@@ -100,6 +100,9 @@ export default function DemoChat({
         body: JSON.stringify({ text: payload, conversationId }),
       });
       const json = await response.json();
+      if (json?.silent === true) {
+        return;
+      }
       const replyText =
         typeof json?.reply === "string" && json.reply.trim()
           ? json.reply

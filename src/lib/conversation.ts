@@ -46,7 +46,7 @@ export async function appendMessage(
 
 // REFER protocol lives in reply.ts (env-free) so callers/tests don't drag in
 // the DB/env import chain. Re-exported here for existing importers.
-export { isReferReply, REFER_FALLBACK_REPLY } from "./reply";
+export { isReferReply } from "./reply";
 
 export type BuildPromptOptions = {
   systemPrompt: string;
@@ -114,7 +114,7 @@ export function buildPromptParts(options: BuildPromptOptions): { system: string;
   lines.push("- Use ONLY what is explicitly written in the Context. Do not invent or assume anything — not routes, prices, dates, operators, visa details, or transport type.");
   lines.push("- TRANSPORT RULE: NEVER say a trip has a flight (нислэг) unless the Context explicitly says so. NEVER say train (галт тэрэг) unless the Context says so. NEVER say bus unless the Context says so. If transport is not in Context, do not mention it at all.");
   lines.push("- PAST DATES RULE: Never offer a departure date that is before the Current date shown in Time context. If every known departure date for a trip has already passed, treat the schedule as unknown and use REFER.");
-  lines.push("- CRITICAL RULE — REFER: If the trip or destination the user is asking about is NOT found in the Context, output exactly one word: REFER. Nothing else — no apology, no explanation. The system will politely connect the customer with a travel consultant.");
+  lines.push("- CRITICAL RULE — REFER: If the trip or destination the user is asking about is NOT found in the Context, output exactly one word: REFER. Nothing else — no apology, no explanation. The system will keep the customer side silent and alert staff in the background.");
   lines.push("- CRITICAL RULE — REFER: If a trip exists in Context but the specific detail asked (transport type, price, date, seats, hotel, visa) is NOT there, output exactly: REFER. Do not guess. Do not fill the gap with a plausible answer.");
   lines.push("- REFER is absolute for missing information. Zero tolerance for guessing — a wrong answer is worse than referring to a consultant.");
   lines.push("- OFF-TOPIC RULE: If the question is not about travel/trips/prices/booking at all, do NOT use REFER. Politely redirect in one short friendly Mongolian sentence back to travel topics.");

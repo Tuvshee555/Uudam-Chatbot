@@ -309,6 +309,57 @@ test("webhook handles long Gemini latency without dropping event", async () => {
   }
 });
 
+test("webhook stays silent when the model refers unknown data to staff", async () => {
+  applyTestEnv();
+  const handler = await loadWebhookHandler();
+
+  const originalFetch = globalThis.fetch;
+  let sendCount = 0;
+
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.includes(":generateContent")) {
+      return new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: "REFER" }] } }],
+        }),
+        { status: 200 },
+      );
+    }
+
+    if (url.includes("/messages")) {
+      sendCount += 1;
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const payload = {
+      object: "instagram",
+      entry: [
+        {
+          id: "ig-page-refer",
+          messaging: [
+            {
+              sender: { id: "ig-user-refer" },
+              message: { mid: "ig-mid-refer-1", text: "энэ байхгүй аяллын зураг байна уу" },
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = await callWebhook(handler, payload);
+
+    assert.equal(result.statusCode, 200);
+    assert.equal(sendCount, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("redis disconnect in replay/conversation mode fails closed with 503", async () => {
   const script = `
     (async () => {

@@ -8,14 +8,14 @@ import {
   rateLimitAsync,
 } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
-import { appendMessage, buildPromptParts, getHistory, isReferReply, REFER_FALLBACK_REPLY } from "../../lib/conversation";
+import { appendMessage, buildPromptParts, getHistory, isReferReply } from "../../lib/conversation";
 import { buildContextualUserText } from "../../lib/contextualText";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { analyzeBeforeReply, buildTripIndexLines } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
-import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
+import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../../lib/reply";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
 import { buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
@@ -179,6 +179,16 @@ export default async function handler(
           correlationId: trace.correlationId,
           source: "api.demo",
         });
+      const returnSilent = async () => {
+        await rememberTurn();
+        return res.status(200).json({
+          reply: "",
+          buttons: [],
+          mediaUrls: [],
+          brochureUrl: null,
+          silent: true,
+        });
+      };
       // Reference resolution + current-message-first routing, identical to the
       // production webhook — the demo used to skip this entirely, so QA runs
       // never exercised the exact matching path Messenger customers hit.
@@ -241,6 +251,7 @@ export default async function handler(
         if (dateReply) {
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(fixMojibake(dateReply)));
           await appendMessage(sessionId, "user", normalizedText);
+          if (shouldSilenceNoDataReply(safeReply)) return returnSilent();
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.date_fast_path_total", 1, {});
@@ -255,6 +266,7 @@ export default async function handler(
         if (seatsReply) {
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(seatsReply));
           await appendMessage(sessionId, "user", normalizedText);
+          if (shouldSilenceNoDataReply(safeReply)) return returnSilent();
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.seats_fast_path_total", 1, {});
@@ -269,6 +281,7 @@ export default async function handler(
         if (budgetReply) {
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(budgetReply));
           await appendMessage(sessionId, "user", normalizedText);
+          if (shouldSilenceNoDataReply(safeReply)) return returnSilent();
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.budget_fast_path_total", 1, {});
@@ -283,6 +296,7 @@ export default async function handler(
         if (discountReply) {
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(discountReply));
           await appendMessage(sessionId, "user", normalizedText);
+          if (shouldSilenceNoDataReply(safeReply)) return returnSilent();
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.discount_fast_path_total", 1, {});
@@ -297,6 +311,7 @@ export default async function handler(
         if (compareReply) {
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(compareReply));
           await appendMessage(sessionId, "user", normalizedText);
+          if (shouldSilenceNoDataReply(safeReply)) return returnSilent();
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.compare_fast_path_total", 1, {});
@@ -327,6 +342,7 @@ export default async function handler(
           });
           safeReply = reconcilePhotoAttachmentReply(safeReply, media.mediaUrls.length > 0 || Boolean(media.brochureUrl));
           await appendMessage(sessionId, "user", normalizedText);
+          if (shouldSilenceNoDataReply(safeReply)) return returnSilent();
           await appendMessage(sessionId, "assistant", safeReply, imageAttachments(media.mediaUrls));
           await rememberTurn();
           recordCounter("demo.program_fast_path_total", 1, {});
@@ -341,6 +357,7 @@ export default async function handler(
             trips,
           });
           await appendMessage(sessionId, "user", normalizedText);
+          if (shouldSilenceNoDataReply(safeReply)) return returnSilent();
           await appendMessage(sessionId, "assistant", safeReply, imageAttachments(media.mediaUrls));
           await rememberTurn();
           recordCounter("demo.structured_fast_path_total", 1, {});
@@ -436,13 +453,13 @@ export default async function handler(
         });
         aiReplyText = fallbackText || "REFER";
       }
-      let rawFixed = fixMojibake(aiReplyText);
+      const rawFixed = fixMojibake(aiReplyText);
       // REFER (or legacy SILENT) = the model has no data for this question.
-      // The demo must mirror production: polite consultant fallback, never a
-      // bare token and never a dropped message.
+      // Mirror production: no customer-facing answer. The demo returns a
+      // machine-readable silent flag so the UI can simply leave the bot quiet.
       if (isReferReply(rawFixed)) {
         recordCounter("demo.ai_refer_total", 1, {});
-        rawFixed = REFER_FALLBACK_REPLY;
+        return returnSilent();
       }
       const { text: rawNoButtons, buttons } = extractButtons(rawFixed);
       const recentAssistantReplies = history
@@ -462,6 +479,7 @@ export default async function handler(
           }),
         ),
       );
+      if (shouldSilenceNoDataReply(reply)) return returnSilent();
 
       // Skip duplicate replies (same as Messenger behavior)
       const lastMessages = history.filter((m) => m.role === "assistant");

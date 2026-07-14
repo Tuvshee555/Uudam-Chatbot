@@ -5,7 +5,7 @@ import { matchFlow, findTriggeredFlow, getFlowState, setFlowState, clearFlowStat
 import { BOT_MESSAGE_METADATA, replyToComment, sendImageMessage, sendQuickReplies, sendTextMessage } from "../../lib/messenger";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
-import { appendMessage, buildPromptParts, getHistory, isReferReply, REFER_FALLBACK_REPLY } from "../../lib/conversation";
+import { appendMessage, buildPromptParts, getHistory, isReferReply } from "../../lib/conversation";
 import { buildContextualUserText, isLikelyContextDependentText } from "../../lib/contextualText";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { fixMojibake } from "../../lib/encoding";
@@ -13,7 +13,7 @@ import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines } from "../../lib/replyReasoning";
-import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, stripRepeatedGreeting } from "../../lib/reply";
+import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../../lib/reply";
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, dbClaimGoodbye, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
@@ -243,6 +243,45 @@ async function handleMessage(
     counter?: string;
     afterDeliver?: () => Promise<void>;
   }) => {
+    if (shouldSilenceNoDataReply(input.reply)) {
+      logInfo("webhook.no_data_reply_suppressed", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+        failTag: input.failTag,
+      });
+      recordCounter("webhook.no_data_reply_suppressed_total", 1, { platform });
+      try {
+        if (!(await hasRecentOpenLead(senderId, "handoff"))) {
+          await createLead({
+            kind: "handoff",
+            platform,
+            senderId,
+            customerMessage: text,
+            context: `Бот мэдээлэлгүй fast-path хариуг илгээхгүй дарлаа: ${input.failTag}`,
+          });
+          await notifyStaffOfLead(
+            { kind: "handoff", platform, customerMessage: text },
+            {
+              requestId: trace?.requestId,
+              correlationId: trace?.correlationId,
+              source: "api.webhook.no_data_silent",
+            },
+          );
+        }
+      } catch (error) {
+        logWarn("webhook.no_data_silent_lead_failed", {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          platform,
+          senderHash: hashIdentifier(senderId),
+          classification: classifyError(error),
+        });
+      }
+      await rememberTurn(`${input.rememberSource}_silent`);
+      return;
+    }
     await assertLockHealthy();
     const delivered = await sendPlatformMessage(
       platform,
@@ -1182,7 +1221,7 @@ async function handleMessage(
   });
   let aiReply: string;
   // True when BOTH Gemini and OpenAI failed. We then route through the REFER
-  // path below (consultant fallback + lead + staff alert) instead of leaving
+  // path below (silent customer side + lead + staff alert) instead of leaving
   // the customer with a bare apology and no human follow-up.
   let aiOutage = false;
   try {
@@ -1229,16 +1268,15 @@ async function handleMessage(
     if (fallbackText) {
       aiReply = fallbackText;
     } else {
-      // Both models are down. Route to the REFER path so the customer gets the
-      // polite consultant handoff and a lead is created — never a dead end.
+      // Both models are down. Route to the REFER path so a lead is created and
+      // staff are alerted — never a fake customer-facing answer.
       aiOutage = true;
       aiReply = "REFER";
     }
   }
-  // Bot has no data for this question (REFER, or legacy SILENT). The old
-  // behaviour dropped the message entirely — an ignored customer and a lost
-  // lead nobody heard about. Now: polite consultant fallback to the customer
-  // + staff alert + lead row (guarded against repeats), so a human follows up.
+  // Bot has no data for this question (REFER, or legacy SILENT). Keep the
+  // customer side silent, but create/alert a staff handoff so this does not
+  // become a lost lead. Missing trip data must never become "we don't have it".
   if (isReferReply(aiReply)) {
     logInfo("webhook.ai_refer", {
       requestId: trace?.requestId,
@@ -1252,6 +1290,7 @@ async function handleMessage(
       reason: aiOutage ? "ai_outage" : "no_data",
     });
     try {
+      await rememberTurn(aiOutage ? "api.webhook.ai_outage_silent" : "api.webhook.ai_refer_silent");
       if (!(await hasRecentOpenLead(senderId, "handoff"))) {
         await createLead({
           kind: "handoff",
@@ -1281,7 +1320,7 @@ async function handleMessage(
         classification: classifyError(error),
       });
     }
-    aiReply = REFER_FALLBACK_REPLY;
+    return;
   }
   const fixedReply = fixMojibake(aiReply);
   const { text: replyWithoutButtons, buttons: aiButtons } = extractButtons(fixedReply);
@@ -1298,6 +1337,45 @@ async function handleMessage(
     recentAssistantReplies,
   });
   const safeReply = enforcePaymentNeverSelfConfirmed(text, enforceWebsiteForPayment(rewrittenReply));
+  if (shouldSilenceNoDataReply(safeReply)) {
+    logInfo("webhook.ai_no_data_reply_suppressed", {
+      requestId: trace?.requestId,
+      correlationId: trace?.correlationId,
+      platform,
+      senderHash: hashIdentifier(senderId),
+    });
+    recordCounter("webhook.ai_no_data_reply_suppressed_total", 1, { platform });
+    try {
+      if (!(await hasRecentOpenLead(senderId, "handoff"))) {
+        await createLead({
+          kind: "handoff",
+          platform,
+          senderId,
+          customerMessage: text,
+          contactPhone: detectedPhone || "",
+          context: "AI мэдээлэлгүй өгүүлбэр бичсэн тул хэрэглэгч рүү илгээхгүй дарж, зөвлөхөд шилжүүлэв.",
+        });
+        await notifyStaffOfLead(
+          { kind: "handoff", platform, customerMessage: text, contactPhone: detectedPhone || "" },
+          {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            source: "api.webhook.ai_no_data_silent",
+          },
+        );
+      }
+    } catch (error) {
+      logWarn("webhook.ai_no_data_silent_lead_failed", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+        classification: classifyError(error),
+      });
+    }
+    await rememberTurn("api.webhook.ai_no_data_silent");
+    return;
+  }
   if (lastReply && isDuplicateReply(lastReply.text, safeReply)) {
     recordCounter("webhook.duplicate_reply_avoided_total", 1, { platform });
     // The prompt forbids "Тэр мэдээллийг өмнө нь хуваалцсан" — the code must
