@@ -37,11 +37,15 @@ export function getReadinessReport(env: ValidatedEnv): ReadinessReport {
   if (env.allowAdminSecretQuery) {
     add("warning", "admin_secret_query", "Admin secret in query strings can leak via logs/history.");
   }
-  if (!process.env.CRON_SECRET) {
+  // Only meaningful in production: local dev intentionally leaves the cron
+  // endpoint open (see api/cron/reminder.ts), so a missing secret is fine there.
+  const isProduction =
+    process.env.VERCEL_ENV === "production" || process.env.NODE_ENV === "production";
+  if (isProduction && !process.env.CRON_SECRET) {
     add(
       "warning",
       "cron_secret",
-      "CRON_SECRET is not set; the reminder cron endpoint refuses all requests in production until it is configured.",
+      "CRON_SECRET тохируулаагүй тул сануулгын автомат илгээлт (cron) ажиллахгүй байна.",
     );
   }
 
