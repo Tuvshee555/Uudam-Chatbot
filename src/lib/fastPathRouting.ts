@@ -131,7 +131,10 @@ export async function routeFastPathText(input: {
     contextual?.status === "verified" &&
     (direct.status !== "verified" || direct.trip.id !== contextual.trip.id)
   ) {
-    return { matchText: contextualUserText, scopedClarify: null };
+    return {
+      matchText: `${contextual.trip.route_name}\n${text}`,
+      scopedClarify: null,
+    };
   }
   const picked = pickFastPathMatchText(text, contextualUserText, (t) =>
     t === text ? direct : contextual ?? resolve(t, trips),
@@ -146,5 +149,15 @@ export async function routeFastPathText(input: {
     await setClarificationState(senderId, contextual.candidates.map((trip) => trip.id));
   }
 
-  return { matchText: picked, scopedClarify: null };
+  // Context is only for identifying the trip. Do not pass the whole previous
+  // answer back into price/date/program builders: it may contain stale
+  // qualifiers ("тийзгүй", "7 сар", an old price) that override what the
+  // customer asks in the current turn. Once context resolves one trip, reduce
+  // it to the canonical trip name plus the current message.
+  const matchText =
+    picked === contextualUserText && contextual?.status === "verified"
+      ? `${contextual.trip.route_name}\n${text}`
+      : picked;
+
+  return { matchText, scopedClarify: null };
 }

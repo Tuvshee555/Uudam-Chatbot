@@ -5,7 +5,7 @@
  * reply fragments reused by the top-level structured-reply builder.
  */
 
-import { parseDepartureDateText } from "./travelDates";
+import { filterFutureDepartureDates, parseDepartureDateText } from "./travelDates";
 import type { TravelTrip } from "./travelOps";
 import {
   formatMoney,
@@ -319,7 +319,11 @@ export function buildAgeSpecificPriceReply(trip: TravelTrip, text: string): stri
   return null;
 }
 
-export function buildPassengerTypePriceReply(trip: TravelTrip, text: string): string | null {
+export function buildPassengerTypePriceReply(
+  trip: TravelTrip,
+  text: string,
+  now = new Date(),
+): string | null {
   // `text` can be a contextual blob with an earlier turn (often the bot's own
   // previous reply) prepended before the customer's actual current message —
   // see contextualText.ts. That old text can mention "хүүхэд"/"том хүн" from a
@@ -341,10 +345,18 @@ export function buildPassengerTypePriceReply(trip: TravelTrip, text: string): st
   if (!target) return null;
 
   const label = target === "infant" ? "Нярай" : target === "child" ? "Хүүхэд" : "Том хүн";
+  const possessiveLabel = target === "infant" ? "нярайн" : target === "child" ? "хүүхдийн" : "том хүний";
   const currency = trip.currency || "MNT";
-  const groups = getStructuredPriceGroups(trip);
+  const requestedMonth = extractMonthOnlyFromText(currentLine);
+  const allGroups = getStructuredPriceGroups(trip);
+  const groups = requestedMonth === null
+    ? allGroups
+    : filterPriceGroupsByMonth(allGroups, requestedMonth);
   if (groups.length > 0) {
-    const lines = [`✈️ ${trip.route_name}`, `💰 ${label} үнэ:`];
+    const heading = requestedMonth === null
+      ? `💰 ${label} үнэ:`
+      : `💰 ${requestedMonth} сарын ${possessiveLabel} үнэ:`;
+    const lines = [`✈️ ${trip.route_name}`, heading];
     let found = false;
     for (const group of groups) {
       const price = target === "infant"
@@ -353,18 +365,27 @@ export function buildPassengerTypePriceReply(trip: TravelTrip, text: string): st
           ? (typeof group.child_price === "number" ? group.child_price : null)
           : (typeof group.adult_price === "number" ? group.adult_price : null);
       if (price === null) continue;
-      found = true;
       const age = target === "infant"
         ? (typeof group.infant_age === "string" ? group.infant_age.trim() : "")
         : target === "child"
           ? (typeof group.child_age === "string" ? group.child_age.trim() : "")
           : "";
       const rawDates = Array.isArray(group.dates) ? group.dates as string[] : [];
-      const dateLabel = rawDates.length > 0 ? formatGroupDateLabel(rawDates) : "";
+      const futureDates = filterFutureDepartureDates(rawDates, now);
+      const relevantDates = requestedMonth === null
+        ? futureDates
+        : futureDates.filter((date) => normalizeMnDate(date).some((value) => value.month === requestedMonth));
+      if (rawDates.length > 0 && relevantDates.length === 0) continue;
+      found = true;
+      const dateLabel = relevantDates.length > 0 ? formatGroupDateLabel(relevantDates) : "";
       const ageText = age ? ` /${age}/` : "";
       lines.push(`${dateLabel ? `${dateLabel}: ` : ""}${label}${ageText}: ${formatMoney(price, currency)}`);
     }
     if (found) return lines.join("\n");
+  }
+
+  if (requestedMonth !== null && allGroups.length > 0) {
+    return `✈️ ${trip.route_name}\n${requestedMonth} сарын ${possessiveLabel} үнийн мэдээлэл одоогоор алга байна. Аяллын зөвлөхөөр баталгаажуулна уу.`;
   }
 
   const price = target === "infant" ? null : target === "child" ? trip.child_price : trip.adult_price;
@@ -894,7 +915,7 @@ export function formatExtraFeesLine(trip: TravelTrip): string {
       const label = typeof f.label === "string" && f.label ? f.label : "Нэмэлт төлбөр";
       const amount =
         typeof f.amount === "number"
-          ? `${f.amount.toLocaleString("mn-MN")}${typeof f.currency === "string" ? f.currency : ""}`
+          ? formatMoney(f.amount, typeof f.currency === "string" ? f.currency : "")
           : "";
       const appliesTo = typeof f.applies_to === "string" && f.applies_to ? ` (${f.applies_to})` : "";
       return amount ? `${label}${appliesTo}: ${amount}` : "";
@@ -937,7 +958,11 @@ function formatTripBasePricePremiumCore(trip: TravelTrip) {
     }
     for (const entry of grouped) {
       const dateLabel = entry.dates.length > 0 ? formatGroupDateLabel(entry.dates) : entry.label;
-      if (dateLabel) sections.push("", dateLabel);
+      const groupLabel = entry.label.trim();
+      const heading = groupLabel && dateLabel && groupLabel !== dateLabel
+        ? `${groupLabel}\n${dateLabel}`
+        : (dateLabel || groupLabel);
+      if (heading) sections.push("", heading);
       sections.push(...entry.priceLines);
     }
     return sections.join("\n");
@@ -975,9 +1000,18 @@ export function extractMonthOnlyFromText(text: string): number | null {
     "тавдугаар": 5, "зургадугаар": 6, "долоодугаар": 7, "наймдугаар": 8,
     "есдүгээр": 9, "аравдугаар": 10, "арваннэгдүгээр": 11, "арвандолоодугаар": 12,
   };
-  // "7 сард" / "7-р сард" — but NOT when followed by "ны N" (specific day)
-  const numMatch = /(\d{1,2})[\s-]*(?:р\s+)?сар(?:д|ын)?\b(?!\s*\d)/.exec(text);
-  if (numMatch) return parseInt(numMatch[1], 10);
+  // "7 сард" / "7-р сард" / "7 сарын үнэ" — but not "7 сарын 9"
+  // or an age such as "8 сартай". JavaScript's `\b` only understands ASCII
+  // word characters, so it cannot safely delimit Mongolian suffixes here.
+  const numMatch = /(\d{1,2})\s*(?:-\s*р|р)?\s*сар(ын|д|тай)?/iu.exec(text);
+  if (numMatch) {
+    const suffix = numMatch[2] || "";
+    const remainder = text.slice((numMatch.index || 0) + numMatch[0].length);
+    if (suffix !== "тай" && !/^\s*\d/.test(remainder)) {
+      const month = parseInt(numMatch[1], 10);
+      if (month >= 1 && month <= 12) return month;
+    }
+  }
   // Mongolian word forms
   for (const [word, month] of Object.entries(MN_MONTH_WORDS)) {
     if (text.toLowerCase().includes(word)) return month;
@@ -1019,14 +1053,23 @@ export function formatSpecificDatePrice(
   return `💰 ${label}: ${suffix}`;
 }
 
-export const AMBIGUOUS_REPLY_MARKER = "Аль аяллыг хэлж байгаагаа нэрээр нь нэг тодруулаад бичээрэй";
+export const AMBIGUOUS_REPLY_MARKER = "Аль аяллыг нь сонирхож байна вэ?";
 
 export function buildAmbiguousTripReply(trips: TravelTrip[]) {
-  const names = trips.slice(0, 3).map((trip) => `• ${trip.route_name}`);
+  const names = trips.slice(0, 5).map((trip) => {
+    const details = [
+      trip.duration_text,
+      typeof trip.adult_price === "number"
+        ? `том хүн ${trip.adult_price.toLocaleString("mn-MN")}${trip.currency === "MNT" ? "₮" : trip.currency}`
+        : "",
+    ].filter(Boolean);
+    return `• ${trip.route_name}${details.length ? ` — ${details.join(" · ")}` : ""}`;
+  });
   return [
-    "Таны асууж байгаа аялал 2-3 өөр хувилбартай байна.",
-    AMBIGUOUS_REPLY_MARKER + ":",
+    "Энэ чиглэлээр хэд хэдэн сонголт байна 😊",
     ...names,
+    "",
+    AMBIGUOUS_REPLY_MARKER,
   ].join("\n");
 }
 

@@ -348,7 +348,13 @@ export function hasDepartureDateAvailabilityIntent(text: string, now = new Date(
 
 function formatMoney(value: number | null, currency: string): string {
   if (typeof value !== "number") return "";
-  return `${value.toLocaleString("mn-MN")}${currency || "MNT"}`;
+  const unit = currency === "MNT" || !currency ? "₮" : currency;
+  return `${value.toLocaleString("mn-MN")}${unit}`;
+}
+
+function formatCustomerDate(ymd: string): string {
+  const [, month, day] = ymd.split("-").map(Number);
+  return `${month} сарын ${day}`;
 }
 
 function formatTripSummary(match: DepartureDateMatch): string {
@@ -359,7 +365,7 @@ function formatTripSummary(match: DepartureDateMatch): string {
   if (typeof trip.seats_left === "number") details.push(`${trip.seats_left} суудал`);
 
   const suffix = details.length ? ` (${details.join(", ")})` : "";
-  return `${trip.route_name} — ${trip.operator_name}${suffix}`;
+  return `${trip.route_name}${suffix}`;
 }
 
 /**
@@ -451,7 +457,7 @@ function formatMonthDepartureOptions(matches: Array<{ ymd: string; trip: TravelT
   const byTrip = new Map<string, { trip: TravelTrip; dates: string[] }>();
   for (const match of matches) {
     const existing = byTrip.get(match.trip.id) || { trip: match.trip, dates: [] };
-    existing.dates.push(match.ymd.slice(5).replace("-", "/"));
+    existing.dates.push(formatCustomerDate(match.ymd));
     byTrip.set(match.trip.id, existing);
   }
 
@@ -459,10 +465,14 @@ function formatMonthDepartureOptions(matches: Array<{ ymd: string; trip: TravelT
     .slice(0, 5)
     .map(({ trip, dates }) => {
       const price = formatMoney(trip.adult_price, trip.currency);
-      const priceText = price ? `, том хүн ${price}` : "";
-      return `${trip.route_name} (${dates.slice(0, 5).join(", ")}${priceText})`;
+      const lines = [
+        `• ${trip.route_name}`,
+        `  📅 ${dates.slice(0, 5).join(", ")}`,
+      ];
+      if (price) lines.push(`  💰 Том хүн ${price}`);
+      return lines.join("\n");
     })
-    .join("; ");
+    .join("\n\n");
 }
 
 export function buildTemporalPromptContext(userText: string, now = new Date()): string {
@@ -495,36 +505,37 @@ export function buildDepartureDateAvailabilityReply(input: {
     if (!requestedMonth) return null;
     const monthMatches = findMonthDepartures(input.trips, requestedMonth, now);
     if (monthMatches.length === 0) {
-      return `${requestedMonth.label}-д гарах аялал одоогийн мэдээлэлд алга байна. Өөр сар эсвэл чиглэл сонирхож байвал хэлээрэй.`;
+      return `${requestedMonth.month} сард гарах аялал одоогийн мэдээлэлд алга байна. Өөр сар эсвэл чиглэл сонирхож байвал хэлээрэй.`;
     }
     const options = formatMonthDepartureOptions(monthMatches);
     const extra =
       new Set(monthMatches.map((match) => match.trip.id)).size > 5
         ? " Бусад хувилбар ч байгаа тул чиглэлээ хэлбэл нарийвчлаад өгье."
         : "";
-    return `Тийм ээ, ${requestedMonth.label}-д гарах аяллууд байна: ${options}.${extra} Аль чиглэл сонирхож байна вэ?`;
+    return `Тийм ээ, ${requestedMonth.month} сард гарах аяллууд байна 😊\n\n${options}${extra}\n\nАль чиглэл сонирхож байна вэ?`;
   }
 
   const matches = findDepartureMatches(input.trips, requested.ymd, now);
-  const dateLabel =
-    requested.source === "relative" ? `${requested.label} (${requested.ymd})` : requested.ymd;
+  const dateLabel = requested.source === "relative"
+    ? `${requested.label} буюу ${formatCustomerDate(requested.ymd)}`
+    : formatCustomerDate(requested.ymd);
 
   if (matches.length > 0) {
-    const shown = matches.slice(0, 4).map(formatTripSummary).join("; ");
+    const shown = matches.slice(0, 4).map((match) => `• ${formatTripSummary(match)}`).join("\n");
     const extra =
       matches.length > 4 ? ` Нийт ${matches.length} аялал таарч байна.` : "";
-    return `Тийм ээ, ${dateLabel} гарах аялал байна: ${shown}.${extra} Суудал болон захиалгыг баталгаажуулахын тулд нэр, утсаа үлдээгээрэй.`;
+    return `Тийм ээ, ${dateLabel}-нд гарах аялал байна 😊\n\n${shown}${extra}`;
   }
 
   const upcoming = findUpcomingDepartures(input.trips, requested.ymd, now);
   if (upcoming.length > 0) {
     const options = upcoming
-      .map(({ ymd, trip }) => `${ymd}: ${trip.route_name} — ${trip.operator_name}`)
-      .join("; ");
-    return `${dateLabel} гарах аялал одоогийн мэдээлэлд алга байна. Ойрын гарах өдрүүд: ${options}.`;
+      .map(({ ymd, trip }) => `• ${formatCustomerDate(ymd)} — ${trip.route_name}`)
+      .join("\n");
+    return `${dateLabel}-нд гарах аялал алга байна. Ойрын гаралтууд:\n\n${options}`;
   }
 
-  return `${dateLabel} гарах аялал одоогийн мэдээлэлд алга байна. Одоогоор баталгаатай гарах өдөр бүртгэгдээгүй байна.`;
+  return `${dateLabel}-нд гарах аялал алга байна. Өөр өдөр эсвэл чиглэл хэлбэл шалгаад өгье.`;
 }
 
 /**

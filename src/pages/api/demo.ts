@@ -8,18 +8,18 @@ import {
   rateLimitAsync,
 } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
-import { appendMessage, buildPromptParts, getHistory, isReferReply } from "../../lib/conversation";
+import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone, isReferReply } from "../../lib/conversation";
 import { buildContextualUserText } from "../../lib/contextualText";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
-import { analyzeBeforeReply, buildTripIndexLines } from "../../lib/replyReasoning";
+import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
-import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../../lib/reply";
+import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../../lib/reply";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
-import { buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
-import { extractTripPhotosForReply } from "../../lib/welcomeFlow";
+import { appendLeadCaptureCta, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
+import { extractTripPhotosForReply, hasTripPhotoIntent } from "../../lib/welcomeFlow";
 import { getEnv } from "../../lib/env";
 import {
   beginRequestTrace,
@@ -66,7 +66,7 @@ function buildDemoMedia(input: {
   brochureUrl?: string | null;
 }): DemoMedia {
   const explicit = input.explicitMediaUrls || [];
-  const inferred = explicit.length > 0
+  const inferred = explicit.length > 0 || !hasTripPhotoIntent(input.userText)
     ? []
     : extractTripPhotosForReply(input.reply, input.trips, { userText: input.userText });
   const mediaUrls = Array.from(new Set([...explicit, ...inferred]))
@@ -170,6 +170,7 @@ export default async function handler(
       const { systemPrompt, business, pinnedButtonLabels } = await readBusinessData();
       const sessionId = `demo:${normalizedConversationId}`;
       const history = await getHistory(sessionId);
+      const phoneAlreadyRequested = hasAskedForPhone(history);
       const customerMemory = await getCustomerMemoryText(sessionId);
       // Non-blocking memory merge — same as production Messenger.
       const rememberTurn = () =>
@@ -179,14 +180,16 @@ export default async function handler(
           correlationId: trace.correlationId,
           source: "api.demo",
         });
-      const returnSilent = async () => {
+      const returnHandoff = async (options: { aiOutage?: boolean } = {}) => {
+        const reply = buildHandoffAcknowledgement(options);
+        await appendMessage(sessionId, "assistant", reply);
         await rememberTurn();
         return res.status(200).json({
-          reply: "",
+          reply,
           buttons: [],
           mediaUrls: [],
           brochureUrl: null,
-          silent: true,
+          handoff: true,
         });
       };
       // Reference resolution + current-message-first routing, identical to the
@@ -249,9 +252,12 @@ export default async function handler(
         const trips = await getTrips();
         const dateReply = buildDepartureDateAvailabilityReply({ userText: await getFastPathText(), trips });
         if (dateReply) {
-          const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(fixMojibake(dateReply)));
+          const safeReply = appendLeadCaptureCta(
+            enforceWebsiteForPayment(sanitizeAssistantReply(fixMojibake(dateReply))),
+            phoneAlreadyRequested,
+          );
           await appendMessage(sessionId, "user", normalizedText);
-          if (shouldSilenceNoDataReply(safeReply)) return returnSilent();
+          if (shouldSilenceNoDataReply(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.date_fast_path_total", 1, {});
@@ -264,9 +270,12 @@ export default async function handler(
         const trips = await getTrips();
         const seatsReply = buildSeatsReply(await getFastPathText(), trips);
         if (seatsReply) {
-          const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(seatsReply));
+          const safeReply = appendLeadCaptureCta(
+            enforceWebsiteForPayment(sanitizeAssistantReply(seatsReply)),
+            phoneAlreadyRequested,
+          );
           await appendMessage(sessionId, "user", normalizedText);
-          if (shouldSilenceNoDataReply(safeReply)) return returnSilent();
+          if (shouldSilenceNoDataReply(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.seats_fast_path_total", 1, {});
@@ -279,9 +288,12 @@ export default async function handler(
         const trips = await getTrips();
         const budgetReply = buildBudgetReply(await getFastPathText(), trips);
         if (budgetReply) {
-          const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(budgetReply));
+          const safeReply = appendLeadCaptureCta(
+            enforceWebsiteForPayment(sanitizeAssistantReply(budgetReply)),
+            phoneAlreadyRequested,
+          );
           await appendMessage(sessionId, "user", normalizedText);
-          if (shouldSilenceNoDataReply(safeReply)) return returnSilent();
+          if (shouldSilenceNoDataReply(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.budget_fast_path_total", 1, {});
@@ -294,9 +306,12 @@ export default async function handler(
         const trips = await getTrips();
         const discountReply = buildDiscountReply(await getFastPathText(), trips);
         if (discountReply) {
-          const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(discountReply));
+          const safeReply = appendLeadCaptureCta(
+            enforceWebsiteForPayment(sanitizeAssistantReply(discountReply)),
+            phoneAlreadyRequested,
+          );
           await appendMessage(sessionId, "user", normalizedText);
-          if (shouldSilenceNoDataReply(safeReply)) return returnSilent();
+          if (shouldSilenceNoDataReply(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.discount_fast_path_total", 1, {});
@@ -309,9 +324,12 @@ export default async function handler(
         const trips = await getTrips();
         const compareReply = buildCompareReply(await getFastPathText(), trips);
         if (compareReply) {
-          const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(compareReply));
+          const safeReply = appendLeadCaptureCta(
+            enforceWebsiteForPayment(sanitizeAssistantReply(compareReply)),
+            phoneAlreadyRequested,
+          );
           await appendMessage(sessionId, "user", normalizedText);
-          if (shouldSilenceNoDataReply(safeReply)) return returnSilent();
+          if (shouldSilenceNoDataReply(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.compare_fast_path_total", 1, {});
@@ -330,8 +348,11 @@ export default async function handler(
           const mediaLine = !programReply.brochure && programReply.mediaUrls.length > 0
             ? `\n\nХөтөлбөрийн зураг:\n${programReply.mediaUrls.join("\n")}`
             : "";
-          let safeReply = enforceWebsiteForPayment(
-            sanitizeAssistantReply(`${programReply.reply}${brochureLine}${mediaLine}`),
+          let safeReply = appendLeadCaptureCta(
+            enforceWebsiteForPayment(
+              sanitizeAssistantReply(`${programReply.reply}${brochureLine}${mediaLine}`),
+            ),
+            phoneAlreadyRequested,
           );
           const media = buildDemoMedia({
             reply: safeReply,
@@ -342,7 +363,7 @@ export default async function handler(
           });
           safeReply = reconcilePhotoAttachmentReply(safeReply, media.mediaUrls.length > 0 || Boolean(media.brochureUrl));
           await appendMessage(sessionId, "user", normalizedText);
-          if (shouldSilenceNoDataReply(safeReply)) return returnSilent();
+          if (shouldSilenceNoDataReply(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply, imageAttachments(media.mediaUrls));
           await rememberTurn();
           recordCounter("demo.program_fast_path_total", 1, {});
@@ -350,14 +371,17 @@ export default async function handler(
         }
         const structuredReply = buildStructuredTripReply(await getFastPathText(), trips);
         if (structuredReply) {
-          const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(structuredReply));
+          const safeReply = appendLeadCaptureCta(
+            enforceWebsiteForPayment(sanitizeAssistantReply(structuredReply)),
+            phoneAlreadyRequested,
+          );
           const media = buildDemoMedia({
             reply: safeReply,
             userText: await getFastPathText(),
             trips,
           });
           await appendMessage(sessionId, "user", normalizedText);
-          if (shouldSilenceNoDataReply(safeReply)) return returnSilent();
+          if (shouldSilenceNoDataReply(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply, imageAttachments(media.mediaUrls));
           await rememberTurn();
           recordCounter("demo.structured_fast_path_total", 1, {});
@@ -370,15 +394,17 @@ export default async function handler(
       // Pre-answer reasoning (mirrors production webhook): analyze intent,
       // references, and memory before the reply. Best-effort — null on failure.
       const reasoningTrips = await getTrips().catch(() => []);
-      const reasoning = await analyzeBeforeReply({
-        customerMemory,
-        history,
-        userText: normalizedText,
-        tripIndexLines: buildTripIndexLines(reasoningTrips),
-        requestId: trace.requestId,
-        correlationId: trace.correlationId,
-        source: "api.demo.reasoning",
-      });
+      const reasoning = shouldAnalyzeBeforeReply(normalizedText)
+        ? await analyzeBeforeReply({
+            customerMemory,
+            history,
+            userText: normalizedText,
+            tripIndexLines: buildTripIndexLines(reasoningTrips),
+            requestId: trace.requestId,
+            correlationId: trace.correlationId,
+            source: "api.demo.reasoning",
+          })
+        : null;
       const relevantTripNames = (() => {
         if (reasoningTrips.length === 0) return [] as string[];
         const direct = resolveTripFromUserMessage(normalizedText, reasoningTrips, {
@@ -413,6 +439,7 @@ export default async function handler(
         relevantTripNames,
         userText: normalizedText,
         pinnedButtonLabels,
+        phoneRequested: hasAskedForPhone(history),
       });
       // Mirrors the production webhook: Gemini down/overloaded must not mean
       // the customer gets a bare error while a working second model sits
@@ -455,11 +482,10 @@ export default async function handler(
       }
       const rawFixed = fixMojibake(aiReplyText);
       // REFER (or legacy SILENT) = the model has no data for this question.
-      // Mirror production: no customer-facing answer. The demo returns a
-      // machine-readable silent flag so the UI can simply leave the bot quiet.
+      // Acknowledge the staff handoff instead of making the bot appear broken.
       if (isReferReply(rawFixed)) {
         recordCounter("demo.ai_refer_total", 1, {});
-        return returnSilent();
+        return returnHandoff();
       }
       const { text: rawNoButtons, buttons } = extractButtons(rawFixed);
       const recentAssistantReplies = history
@@ -479,7 +505,7 @@ export default async function handler(
           }),
         ),
       );
-      if (shouldSilenceNoDataReply(reply)) return returnSilent();
+      if (shouldSilenceNoDataReply(reply)) return returnHandoff();
 
       // Skip duplicate replies (same as Messenger behavior)
       const lastMessages = history.filter((m) => m.role === "assistant");

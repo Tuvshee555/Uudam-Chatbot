@@ -4,9 +4,9 @@ const WEBSITE_REPLY =
 
 /**
  * REFER protocol — the model's machine-readable "I don't have this data"
- * signal. Callers should keep the customer side silent and create/alert a
- * staff handoff in the background, so missing data never becomes a wrong
- * "we don't have it" answer. "SILENT" is kept as a legacy alias.
+ * signal. Callers should create/alert a staff handoff and acknowledge that
+ * handoff to the customer without exposing the token or inventing an answer.
+ * "SILENT" is kept as a legacy alias.
  *
  * Lives here (env-free reply helpers) rather than in conversation.ts so tests
  * and callers can use it without dragging in the DB/env import chain.
@@ -14,6 +14,16 @@ const WEBSITE_REPLY =
 export function isReferReply(text: string): boolean {
   const firstLine = (text || "").trim().split("\n")[0]?.trim().toUpperCase() ?? "";
   return firstLine === "REFER" || firstLine === "SILENT" || /^(REFER|SILENT)\b/.test(firstLine);
+}
+
+export const NO_DATA_HANDOFF_REPLY =
+  "Энэ асуултыг манай аяллын зөвлөхөд дамжууллаа. Мэдээллийг шалгаад танд энд хариу өгнө 🙏";
+
+export const AI_OUTAGE_HANDOFF_REPLY =
+  "Уучлаарай, хариу боловсруулахад түр саатал гарлаа. Таны асуултыг аяллын зөвлөхөд дамжуулсан тул энд хариу өгнө 🙏";
+
+export function buildHandoffAcknowledgement(options: { aiOutage?: boolean } = {}) {
+  return options.aiOutage ? AI_OUTAGE_HANDOFF_REPLY : NO_DATA_HANDOFF_REPLY;
 }
 
 const PAYMENT_LEAK_PATTERNS: RegExp[] = [

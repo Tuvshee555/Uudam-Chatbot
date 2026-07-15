@@ -158,10 +158,9 @@ test("webhook retries transient send failure then dedupes completed event", asyn
     assert.equal(second.statusCode, 200);
     assert.equal(third.statusCode, 200);
     assert.equal(sendAttempts, 2);
-    // Each processing attempt makes a pre-answer reasoning call plus the answer
-    // call (2 Gemini calls); two real attempts ran. The deduped third webhook
-    // delivery must not add any model calls at all.
-    assert.equal(geminiAttempts, 4);
+    // This self-contained message needs only the answer call. Two real attempts
+    // ran; the deduped third delivery must add no model calls at all.
+    assert.equal(geminiAttempts, 2);
     assert.equal(geminiAttempts, geminiAttemptsBeforeDedupe);
   } finally {
     globalThis.fetch = originalFetch;
@@ -309,14 +308,15 @@ test("webhook handles long Gemini latency without dropping event", async () => {
   }
 });
 
-test("webhook stays silent when the model refers unknown data to staff", async () => {
+test("webhook acknowledges the handoff when the model refers unknown data to staff", async () => {
   applyTestEnv();
   const handler = await loadWebhookHandler();
 
   const originalFetch = globalThis.fetch;
   let sendCount = 0;
+  let sentBody = "";
 
-  globalThis.fetch = (async (input) => {
+  globalThis.fetch = (async (input, init) => {
     const url = String(input);
     if (url.includes(":generateContent")) {
       return new Response(
@@ -329,6 +329,7 @@ test("webhook stays silent when the model refers unknown data to staff", async (
 
     if (url.includes("/messages")) {
       sendCount += 1;
+      sentBody = String(init?.body || "");
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }
 
@@ -354,7 +355,8 @@ test("webhook stays silent when the model refers unknown data to staff", async (
     const result = await callWebhook(handler, payload);
 
     assert.equal(result.statusCode, 200);
-    assert.equal(sendCount, 0);
+    assert.equal(sendCount, 1);
+    assert.match(sentBody, /аяллын зөвлөх/);
   } finally {
     globalThis.fetch = originalFetch;
   }

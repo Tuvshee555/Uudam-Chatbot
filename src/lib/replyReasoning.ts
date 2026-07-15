@@ -22,6 +22,7 @@
 
 import { askGemini } from "./gemini";
 import { buildTemporalPromptContext } from "./travelDates";
+import { isLikelyContextDependentText, normalizeContextText } from "./contextualText";
 import { isGenericConfirmationText } from "./travelFastPathsSearch";
 import { classifyError, logWarn, recordCounter } from "./observability";
 
@@ -33,6 +34,20 @@ const MAX_TRIP_INDEX_LINES = 80;
 const MAX_ANALYSIS_CHARS = 1_600;
 const REASONING_TIMEOUT_MS = 12_000;
 const REASONING_MAX_OUTPUT_TOKENS = 400;
+
+/**
+ * A second model call is useful only when the current message actually depends
+ * on earlier context. Running it for greetings, off-topic messages, and
+ * self-contained questions adds latency and lets an unnecessary model guess
+ * influence the final answer.
+ */
+export function shouldAnalyzeBeforeReply(userText: string): boolean {
+  if (isLikelyContextDependentText(userText)) return true;
+  const normalized = normalizeContextText(userText);
+  return /(?:^|\s)(?:нөгөө|өмнөх|өчигдөр|уржигдар|ярьсан|санаж|дахиад|дахин|same as before|last time)(?:\s|$)/i.test(
+    normalized,
+  );
+}
 
 /** Compact one-line-per-trip index so vague references can be resolved to a real trip name. */
 export function buildTripIndexLines(

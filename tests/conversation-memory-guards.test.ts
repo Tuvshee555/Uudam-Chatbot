@@ -5,6 +5,7 @@ import { applyTestEnv } from "./helpers/env";
 // conversationMemory.ts transitively loads env at import time.
 let isSuspiciousMemoryShrink: typeof import("../src/lib/conversationMemory").isSuspiciousMemoryShrink;
 let buildPromptParts: typeof import("../src/lib/conversation").buildPromptParts;
+let hasAskedForPhone: typeof import("../src/lib/conversation").hasAskedForPhone;
 let historyRowToChatMessage: typeof import("../src/lib/conversation").historyRowToChatMessage;
 
 before(async () => {
@@ -13,7 +14,21 @@ before(async () => {
   isSuspiciousMemoryShrink = memoryModule.isSuspiciousMemoryShrink;
   const conversationModule = await import("../src/lib/conversation");
   buildPromptParts = conversationModule.buildPromptParts;
+  hasAskedForPhone = conversationModule.hasAskedForPhone;
   historyRowToChatMessage = conversationModule.historyRowToChatMessage;
+});
+
+test("phone lead capture is recognized after the bot asks once", () => {
+  assert.equal(
+    hasAskedForPhone([
+      { role: "assistant", text: "Утасны дугаараа үлдээвэл зөвлөх холбогдоно 🙌" },
+    ]),
+    true,
+  );
+  assert.equal(
+    hasAskedForPhone([{ role: "assistant", text: "Манай утас 7713-6633." }]),
+    false,
+  );
 });
 
 test("memory shrink guard rejects a merge that drops most of a substantial memory", () => {
@@ -47,7 +62,7 @@ test("buildPromptParts separates rules (system) from conversation data (user)", 
   assert.doesNotMatch(parts.user, /Reply rules:/);
 });
 
-test("buildPromptParts includes the previous reply block and reword rule only when provided", () => {
+test("buildPromptParts relies on recent history instead of duplicating the previous reply", () => {
   const withPrev = buildPromptParts({
     systemPrompt: "Bot.",
     business: {},
@@ -55,9 +70,9 @@ test("buildPromptParts includes the previous reply block and reword rule only wh
     previousAssistantReply: "PREVIOUS-REPLY-MARKER",
     userText: "hi",
   });
-  assert.match(withPrev.system, /REWORD it/);
-  assert.match(withPrev.user, /Your previous reply \(reword if answering the same question again\):/);
-  assert.match(withPrev.user, /PREVIOUS-REPLY-MARKER/);
+  assert.match(withPrev.system, /previous assistant turn/i);
+  assert.doesNotMatch(withPrev.user, /Your previous reply/);
+  assert.doesNotMatch(withPrev.user, /PREVIOUS-REPLY-MARKER/);
 
   const without = buildPromptParts({
     systemPrompt: "Bot.",
@@ -65,7 +80,7 @@ test("buildPromptParts includes the previous reply block and reword rule only wh
     history: [],
     userText: "hi",
   });
-  assert.doesNotMatch(without.system, /REWORD it/);
+  assert.doesNotMatch(without.system, /previous assistant turn/i);
   assert.doesNotMatch(without.user, /Your previous reply/);
 });
 

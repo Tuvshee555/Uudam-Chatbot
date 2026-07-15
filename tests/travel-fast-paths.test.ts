@@ -77,10 +77,11 @@ test("structured reply asks for clarification on shared city-only query", () => 
     trip({ id: "tokyo-universal", route_name: "Tokyo Universal аялал", adult_price: 1790000 }),
   ]);
 
-  assert.match(reply || "", /Аль аяллыг хэлж/i);
+  assert.match(reply || "", /Аль аяллыг нь сонирхож/i);
   assert.match(reply || "", /Tokyo Fuji/);
   assert.match(reply || "", /Tokyo Universal/);
-  assert.doesNotMatch(reply || "", /3,490,000|1,790,000/);
+  assert.match(reply || "", /3,490,000/);
+  assert.match(reply || "", /1,790,000/);
 });
 
 test("trip info reply never leaks an internal duration QA sentinel", () => {
@@ -205,7 +206,7 @@ test("program reply asks for clarification on shared city-only PDF request", () 
     }),
   ]);
 
-  assert.match(result?.reply || "", /Аль аяллыг хэлж/i);
+  assert.match(result?.reply || "", /Аль аяллыг нь сонирхож/i);
   assert.equal(result?.trip, null);
   assert.deepEqual(result?.mediaUrls, []);
 });
@@ -494,6 +495,45 @@ test("combined date and price query falls back to close matches on the same date
   assert.doesNotMatch(reply || "", /Ð¥Ð°Ð¹Ð½Ð°Ð½/);
 });
 
+test("month-specific child price only returns that month and passenger type", () => {
+  const reply = buildStructuredTripReply(
+    "Бэйдайхэ 8 сарын хүүхдийн үнэ өөр үү?",
+    [
+      trip({
+        id: "beidaihe-month-child",
+        route_name: "Бэйдайхэ + Бээжин газар нислэг хосолсон аялал",
+        departure_dates: ["7 сарын 9", "7 сарын 18", "8 сарын 1", "8 сарын 8"],
+        extra: {
+          aliases: ["Бэйдайхэ", "Бэйдэхэ"],
+          price_groups: [
+            {
+              dates: ["7 сарын 9", "7 сарын 18"],
+              adult_price: 2150000,
+              child_price: 1650000,
+              infant_price: 530000,
+              child_age: "2–10 нас",
+            },
+            {
+              dates: ["8 сарын 1", "8 сарын 8"],
+              adult_price: 2250000,
+              child_price: 1710000,
+              infant_price: 530000,
+              child_age: "2–10 нас",
+            },
+          ],
+        },
+      }),
+    ],
+    NOW,
+  );
+
+  assert.match(reply || "", /8 сарын хүүхдийн үнэ/);
+  assert.match(reply || "", /1,710,000₮/);
+  assert.match(reply || "", /8 сарын 1, 8-ны гаралт/);
+  assert.doesNotMatch(reply || "", /7\/9|7\/18|1,650,000₮/);
+  assert.doesNotMatch(reply || "", /Том хүн|Нярай/);
+});
+
 test("route-only query uses spaced premium formatting", () => {
   const reply = buildStructuredTripReply(
     "Бээжин Бэйдэхэ газар нислэг хосолсон аялал",
@@ -662,7 +702,7 @@ test("program request asks for clarification on generic Beijing flight-tour word
     ],
   );
 
-  assert.match(result?.reply || "", /Аль аяллыг хэлж байгаагаа/i);
+  assert.match(result?.reply || "", /Аль аяллыг нь сонирхож/i);
   assert.equal(result?.trip, null);
   assert.deepEqual(result?.mediaUrls, []);
   assert.doesNotMatch(result?.reply || "", /4 ХОТЫН АЯЛАЛ/);
@@ -855,7 +895,7 @@ test("ticketed Tokyo price query only shows the ticket-included group", () => {
 
   assert.match(reply || "", /Онгоцны тийзтэй үнэ/);
   assert.match(reply || "", /5,600,000₮/);
-  assert.match(reply || "", /211,000MNT/);
+  assert.match(reply || "", /211,000₮/);
   assert.doesNotMatch(reply || "", /3,490,000₮/);
   assert.doesNotMatch(reply || "", /Онгоцны тийзгүй үнэ/);
 });
@@ -903,6 +943,42 @@ test("ticketless Tokyo price query only shows the ticketless group", () => {
   assert.match(reply || "", /3,490,000₮/);
   assert.doesNotMatch(reply || "", /5,600,000₮/);
   assert.doesNotMatch(reply || "", /Онгоцны тийзтэй үнэ/);
+});
+
+test("ticket price comparison keeps the included and excluded labels", () => {
+  const reply = buildStructuredTripReply(
+    "Токио, Фүжи аялал\nтийзтэйгээ ялгаа?",
+    [
+      trip({
+        id: "tokyo-ticket-comparison",
+        route_name: "Токио, Фүжи аялал",
+        departure_dates: ["Баасан гариг болгон", "7 сарын 10"],
+        extra: {
+          price_groups: [
+            {
+              label: "Онгоцны тийзгүй үнэ",
+              dates: ["Баасан гариг болгон"],
+              adult_price: 3490000,
+              child_price: 3250000,
+            },
+            {
+              label: "Онгоцны тийзтэй үнэ",
+              dates: ["7 сарын 10"],
+              adult_price: 5600000,
+              child_price: 5050000,
+            },
+          ],
+        },
+      }),
+    ],
+    NOW,
+  );
+
+  assert.match(reply || "", /Онгоцны тийзгүй үнэ/);
+  assert.match(reply || "", /Онгоцны тийзтэй үнэ/);
+  assert.match(reply || "", /3,490,000₮/);
+  assert.match(reply || "", /5,600,000₮/);
+  assert.doesNotMatch(reply || "", /📅 Гарах өдрүүд:\s*$/);
 });
 
 test("child age range query is not misread as a date and returns the matching child tier", () => {
@@ -990,7 +1066,7 @@ test("duration and date disambiguate Hailaar Manchurian variants", () => {
   assert.match(reply || "", /Хайлаар Манжуурын аялал - 5 өдөр 4 шөнө/);
   assert.match(reply || "", /8 сарын 24/);
   assert.match(reply || "", /990,000₮/);
-  assert.match(reply || "", /250,000MNT/);
+  assert.match(reply || "", /250,000₮/);
   assert.doesNotMatch(reply || "", /4 өдөр 3 шөнө/);
 });
 
@@ -1071,6 +1147,49 @@ test("infant price follow-up stays on the contextual trip instead of matching ex
   assert.match(reply || "", /Бэйдайхэ шар тэнгисийн эрэг/);
   assert.match(reply || "", /Нярай \/0-23 сар\/: 530,000₮/);
   assert.doesNotMatch(reply || "", /үнэтэй шинжилгээтэй/);
+});
+
+test("broad infant-price query selects the related variant that stores an infant price", () => {
+  const reply = buildStructuredTripReply(
+    "Бэйдайхэ нярай хэд вэ?",
+    [
+      trip({
+        id: "beidaihe-ground-no-infant",
+        route_name: "ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ-БЭЭЖИНГИЙН ГАЗРЫН АЯЛАЛ",
+        adult_price: 1390000,
+        child_price: 1190000,
+        extra: {
+          aliases: ["Бэйдайхэ"],
+          price_groups: [
+            { dates: ["7 сарын 16"], adult_price: 1390000, child_price: 1190000 },
+          ],
+        },
+      }),
+      trip({
+        id: "beidaihe-combo-with-infant",
+        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        adult_price: 2150000,
+        child_price: 1710000,
+        extra: {
+          aliases: ["Бэйдайхэ"],
+          price_groups: [
+            {
+              dates: ["7 сарын 18", "8 сарын 1"],
+              adult_price: 2150000,
+              child_price: 1710000,
+              infant_price: 530000,
+              infant_age: "0-23 сар",
+            },
+          ],
+        },
+      }),
+    ],
+    NOW,
+  );
+
+  assert.match(reply || "", /газар нислэг хосолсон аялал/);
+  assert.match(reply || "", /Нярай \/0-23 сар\/: 530,000₮/);
+  assert.doesNotMatch(reply || "", /1,190,000₮/);
 });
 
 test("past specific date price does not fall forward to a future departure", () => {

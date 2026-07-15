@@ -7,6 +7,7 @@ import { applyTestEnv } from "./helpers/env";
 let buildReasoningPrompt: typeof import("../src/lib/replyReasoning").buildReasoningPrompt;
 let buildTripIndexLines: typeof import("../src/lib/replyReasoning").buildTripIndexLines;
 let normalizeReasoningText: typeof import("../src/lib/replyReasoning").normalizeReasoningText;
+let shouldAnalyzeBeforeReply: typeof import("../src/lib/replyReasoning").shouldAnalyzeBeforeReply;
 let buildPrompt: typeof import("../src/lib/conversation").buildPrompt;
 
 before(async () => {
@@ -15,6 +16,7 @@ before(async () => {
   buildReasoningPrompt = reasoningModule.buildReasoningPrompt;
   buildTripIndexLines = reasoningModule.buildTripIndexLines;
   normalizeReasoningText = reasoningModule.normalizeReasoningText;
+  shouldAnalyzeBeforeReply = reasoningModule.shouldAnalyzeBeforeReply;
   const conversationModule = await import("../src/lib/conversation");
   buildPrompt = conversationModule.buildPrompt;
 });
@@ -83,6 +85,14 @@ test("normalizeReasoningText strips code fences and caps runaway output", () => 
   assert.equal(normalizeReasoningText("```text\nIntent: price ask\n```"), "Intent: price ask");
   assert.equal(normalizeReasoningText("   \n  "), "");
   assert.equal(normalizeReasoningText("a".repeat(5000)).length, 1600);
+});
+
+test("pre-answer reasoning runs only for messages that depend on prior context", () => {
+  assert.equal(shouldAnalyzeBeforeReply("тэрний хүүхдийн үнэ?"), true);
+  assert.equal(shouldAnalyzeBeforeReply("өчигдөр ярьсан аялал"), true);
+  assert.equal(shouldAnalyzeBeforeReply("Сайн байна уу"), false);
+  assert.equal(shouldAnalyzeBeforeReply("Виз хэрэгтэй юу?"), false);
+  assert.equal(shouldAnalyzeBeforeReply("Хайнан Саньяа 7 настай хүүхэд хэд вэ?"), false);
 });
 
 test("buildPrompt injects the private analysis block and the follow-it rule when reasoning is provided", () => {

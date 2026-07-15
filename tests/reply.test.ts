@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { enforcePaymentNeverSelfConfirmed, extractButtons, hasPaymentClaimIntent, isReferReply, rewriteRepeatedGenericClarifier, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../src/lib/reply";
+import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, extractButtons, hasPaymentClaimIntent, isReferReply, rewriteRepeatedGenericClarifier, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../src/lib/reply";
 
 test("enforcePaymentNeverSelfConfirmed replaces a fabricated booking confirmation", () => {
   const userText = "би 2,990,000 төлсөн, баталгаажуул";
@@ -99,6 +99,16 @@ test("isReferReply catches REFER and legacy SILENT, ignores normal replies", () 
   assert.equal(isReferReply("  SILENT  "), true);
   assert.equal(isReferReply("✈️ Бээжин аялал — 5 хоног"), false);
   assert.equal(isReferReply("Танд REFER гэдэг үг хэрэгтэй юу?"), false);
+});
+
+test("unknown data and AI outages produce visible, safe handoff acknowledgements", () => {
+  const noData = buildHandoffAcknowledgement();
+  assert.match(noData, /аяллын зөвлөхөд дамжууллаа/);
+  assert.doesNotMatch(noData, /REFER|SILENT|database|тодорхойгүй/i);
+
+  const outage = buildHandoffAcknowledgement({ aiOutage: true });
+  assert.match(outage, /түр саатал/);
+  assert.match(outage, /зөвлөхөд дамжуулсан/);
 });
 
 test("shouldSilenceNoDataReply catches unknown-detail fallback wording", () => {

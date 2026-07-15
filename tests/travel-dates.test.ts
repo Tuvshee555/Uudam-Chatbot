@@ -76,7 +76,7 @@ test("answers direct tomorrow availability from active trip dates", () => {
   });
 
   assert.match(reply || "", /Тийм ээ/);
-  assert.match(reply || "", /2026-05-31/);
+  assert.match(reply || "", /маргааш буюу 5 сарын 31/);
   assert.match(reply || "", /Бээжин аялал/);
   assert.doesNotMatch(reply || "", /Цуцлагдсан/);
 });
@@ -89,7 +89,8 @@ test("answers no for missing target date and suggests upcoming departures", () =
   });
 
   assert.match(reply || "", /алга байна/);
-  assert.match(reply || "", /2026-06-02/);
+  assert.match(reply || "", /6 сарын 2/);
+  assert.doesNotMatch(reply || "", /2026-06-02|MNT|Uudam Travel/);
   assert.doesNotMatch(reply || "", /ямар огноо|тодруулах/i);
 });
 
@@ -100,7 +101,7 @@ test("answers direct date availability even when there are no trips", () => {
     trips: [],
   });
 
-  assert.match(reply || "", /2026-05-31/);
+  assert.match(reply || "", /маргааш буюу 5 сарын 31/);
   assert.match(reply || "", /алга байна/);
   assert.doesNotMatch(reply || "", /ямар огноо|тодруулах/i);
 });

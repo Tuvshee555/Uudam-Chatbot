@@ -58,7 +58,7 @@ const singles = [
   { id: "july-price", text: "7 сарын аяллын үнэ л хэлээд өг", allowSilent: true },
   { id: "august-price", text: "8 сарын аяллын үнэ", allowSilent: true },
   { id: "past-date-no-context", text: "6 сарын 27-ны үнэ хэд вэ?", reject: ["7 сарын 9-нд гарах"], allowSilent: true },
-  { id: "beidaihe-july-9", text: "Бэйдайхэ 7 сарын 9 хэд вэ?", expectAny: ["7 сарын 9", "2,150,000", "1,390,000"], allowSilent: true },
+  { id: "beidaihe-july-9", text: "Бэйдайхэ 7 сарын 9 хэд вэ?", reject: ["7 сарын 18", "8 сарын 1"] },
   { id: "beidaihe-aug-child", text: "Бэйдайхэ 8 сарын 1 хүүхдийн үнэ", expectAny: ["хүүхэд", "1,710,000"] },
   { id: "beidaihe-past-date", text: "Бэйдайхэ 6 сарын 27 үнэ", reject: ["7 сарын 9"], allowSilent: true },
   { id: "shanghai-aug-6", text: "Шанхай 8 сарын 6 үнэ", expectAny: ["8 сарын 6", "3,160,000"] },
@@ -219,8 +219,7 @@ function validate(turn, result) {
   const problems = [];
   const reply = result.reply || "";
   const isSilent = !reply.trim();
-  if (isSilent && !turn.allowSilent) problems.push("empty reply");
-  if (isSilent && turn.allowSilent) return problems;
+  if (isSilent) problems.push("empty reply");
   for (const flag of RED_FLAGS) {
     if (flag.pattern.test(reply)) problems.push(flag.label);
   }
@@ -232,6 +231,10 @@ function validate(turn, result) {
   }
   if (turn.requireMedia && result.mediaUrls.length === 0 && !result.brochureUrl) {
     problems.push("missing media attachment");
+  }
+  const requestedMedia = /зураг|зург|photo|image|pdf|хөтөлбөр|program/i.test(turn.text);
+  if (!requestedMedia && (result.mediaUrls.length > 0 || result.brochureUrl)) {
+    problems.push("unsolicited media attachment");
   }
   return problems;
 }

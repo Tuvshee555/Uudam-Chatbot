@@ -85,6 +85,23 @@ function safeDurationText(durationText: string | null | undefined): string {
   return durationText;
 }
 
+function hasInfantPrice(trip: TravelTrip): boolean {
+  if (
+    getStructuredPriceGroups(trip).some((group) => typeof group.infant_price === "number") ||
+    getPriceGroups(trip).some((group) => typeof group.infant_price === "number")
+  ) {
+    return true;
+  }
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const rules = [extra.child_rules, extra.child_price_rules]
+    .flatMap((value) => Array.isArray(value) ? value : []) as Array<Record<string, unknown>>;
+  return rules.some(
+    (rule) =>
+      typeof rule.price === "number" &&
+      /нярай|infant/i.test([rule.label, rule.type, rule.age_range].filter(Boolean).join(" ")),
+  );
+}
+
 export function hasDiscountIntent(text: string): boolean {
   const normalized = normText(text);
   const hasMn = DISCOUNT_KEYWORDS_MN.some((keyword) => normalized.includes(keyword));
@@ -230,10 +247,13 @@ function buildTripInfoReply(rawTrip: TravelTrip, now = new Date()) {
     lines.push(`🗓 Хугацаа: ${infoDuration}`, "");
   }
 
-  lines.push(formatTripBasePricePremium(trip));
+  const priceBlock = formatTripBasePricePremium(trip);
+  lines.push(priceBlock);
 
-  if (trip.departure_dates.length > 0) {
-    lines.push("", `📅 Гарах өдрүүд:`, formatCompactDepartureList(trip.departure_dates));
+  const departureText = formatCompactDepartureList(trip.departure_dates).trim();
+  const showDepartureSection = Boolean(departureText && !priceBlock.includes(departureText));
+  if (showDepartureSection) {
+    lines.push("", `📅 Гарах өдрүүд:`, departureText);
   }
 
   const seatMessage = getSeatSalesMessage(trip);
@@ -247,7 +267,9 @@ function buildTripInfoReply(rawTrip: TravelTrip, now = new Date()) {
     lines.push("", "Энэ нь газар + нислэг хосолсон аялал.");
   }
 
-  lines.push("", "Та аль гарах өдрийг сонирхож байна вэ? 😊");
+  if (showDepartureSection) {
+    lines.push("", "Та аль гарах өдрийг сонирхож байна вэ? 😊");
+  }
   return lines.join("\n");
 }
 
@@ -817,7 +839,19 @@ export function buildStructuredTripReply(
     return buildTripInfoReply(routeOnlyCandidate.best, now);
   }
 
-  const { best: bestRaw, ambiguous } = findBestTripMatch(text, trips);
+  const matchedTrip = findBestTripMatch(text, trips);
+  let bestRaw = matchedTrip.best;
+  const { ambiguous } = matchedTrip;
+  if (
+    !bestRaw &&
+    hasPriceIntent(currentLine) &&
+    /нярай|infant/i.test(currentLine)
+  ) {
+    const candidatesWithInfantPrice = ambiguous.filter(hasInfantPrice);
+    if (candidatesWithInfantPrice.length === 1) {
+      bestRaw = candidatesWithInfantPrice[0];
+    }
+  }
   if (!bestRaw) {
     if (ambiguous.length) return buildAmbiguousTripReply(ambiguous);
     const soldOut = buildSoldOutTripReply(text, trips);
@@ -858,6 +892,39 @@ export function buildStructuredTripReply(
     }
   }
 
+  // If a broad destination match lands on a variant with no infant price,
+  // prefer a uniquely matching sibling variant that actually has the detail
+  // the customer requested. This avoids referring "Бэйдайхэ нярай хэд вэ?"
+  // when the combo itinerary has a stored infant price and the ground one does
+  // not.
+  if (
+    hasPriceIntent(currentLine) &&
+    /нярай|infant/i.test(currentLine) &&
+    !hasInfantPrice(best)
+  ) {
+    const routeTokens = unique(keywordTokens(best.route_name));
+    const infantCandidates = trips.filter((trip) => {
+      if (trip.status !== "active" || trip.id === best.id || !hasInfantPrice(trip)) return false;
+      const candidateTokens = unique(keywordTokens(trip.route_name));
+      return candidateTokens.some((token) => routeTokens.includes(token));
+    });
+    const infantMatch = infantCandidates.length > 0
+      ? findBestTripMatch(text, infantCandidates)
+      : null;
+    if (infantMatch?.best) {
+      best = withFutureDepartureDates(infantMatch.best, now);
+    }
+  }
+
+  // A phrase such as "8 сарын хүүхдийн үнэ өөр үү?" contains comparison
+  // wording, but its primary constraint is a passenger type in one month.
+  // Resolve that exact slice before the broad same-price comparison fallback,
+  // which otherwise prints the complete price table.
+  const monthPassengerTypeReply = extractMonthOnlyFromText(currentLine) !== null && hasPriceIntent(currentLine)
+    ? buildPassengerTypePriceReply(best, currentLine, now)
+    : null;
+  if (monthPassengerTypeReply) return monthPassengerTypeReply;
+
   const samePriceReply = buildSameTripPriceComparisonReply(best, text, now);
   if (samePriceReply && hasSamePriceComparisonIntent(text)) {
     return samePriceReply;
@@ -886,7 +953,7 @@ export function buildStructuredTripReply(
   if (passengerTotalReply) return passengerTotalReply;
   const ageSpecificReply = askedPrice ? buildAgeSpecificPriceReply(best, text) : null;
   if (ageSpecificReply) return ageSpecificReply;
-  const passengerTypeReply = askedPrice ? buildPassengerTypePriceReply(best, text) : null;
+  const passengerTypeReply = askedPrice ? buildPassengerTypePriceReply(best, text, now) : null;
   if (passengerTypeReply) return passengerTypeReply;
   const ticketPreference = askedPrice ? getTicketPreference(text) : null;
   if (ticketPreference) {
@@ -1042,10 +1109,12 @@ export function buildStructuredTripReply(
       if (monthDates.length > 0) {
         lines.push(`📅 ${askedMonthOnly} сарын гарах өдрүүд: ${compactDates(monthDates)}`);
       } else {
-        lines.push(`📅 Гарах өдрүүд: ${formatDepartureDates(best)}`);
+        const departureText = formatDepartureDates(best).trim();
+        if (departureText) lines.push(`📅 Гарах өдрүүд: ${departureText}`);
       }
     } else {
-      lines.push(`📅 Гарах өдрүүд: ${formatDepartureDates(best)}`);
+      const departureText = formatDepartureDates(best).trim();
+      if (departureText) lines.push(`📅 Гарах өдрүүд: ${departureText}`);
     }
   }
 
@@ -1059,7 +1128,8 @@ export function buildStructuredTripReply(
     lines.push(`🗓 Хугацаа: ${safeDurationText(best.duration_text) || "Мэдээлэл алга байна."}`);
     lines.push(formatTripBasePricePremium(best));
     if (best.departure_dates.length > 0) {
-      lines.push(`📅 Гарах өдрүүд: ${formatDepartureDates(best)}`);
+      const departureText = formatDepartureDates(best).trim();
+      if (departureText) lines.push(`📅 Гарах өдрүүд: ${departureText}`);
     }
   }
 

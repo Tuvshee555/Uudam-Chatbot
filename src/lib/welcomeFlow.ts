@@ -18,6 +18,11 @@ import { resolveTripFromUserMessage } from "./travelFastPaths";
 const MAX_WELCOME_PHOTOS = 5;
 const MAX_TRIP_PHOTOS = 2;
 
+export function hasTripPhotoIntent(text: string): boolean {
+  const normalized = text.normalize("NFKC").toLowerCase();
+  return /зураг|зургийг|зургаа|photo|photos|image|images|picture|zurag/.test(normalized);
+}
+
 // ─── Admin-controlled greeting config (stored in bot_settings.extra.greeting) ──
 
 export type GreetingConfig = {

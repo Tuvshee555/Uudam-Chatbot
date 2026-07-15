@@ -207,3 +207,21 @@ test("filterCandidatesByAttribute matches transliterated attribute answers", () 
   const none = filterCandidatesByAttribute("za", [TRIPS[1], TRIPS[2]]);
   assert.equal(none.length, 0, "low-signal answers must not fake-match");
 });
+
+test("context resolves the trip but stale qualifiers are removed from builder input", async () => {
+  const senderId = "route-test-canonical-context";
+  await clearClarificationState(senderId);
+  const previous =
+    "✈️ Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал\n💰 7 сарын үнэ: 3,590,000₮";
+  const current = "8 сарын хүүхдийн үнэ?";
+  const routed = await routeFastPathText({
+    senderId,
+    text: current,
+    contextualUserText: `${previous}\n${current}`,
+    trips: TRIPS,
+  });
+
+  assert.match(routed.matchText, /^Шанхай \+ Тэнгэрийн хаалга шууд нислэгтэй аялал/);
+  assert.match(routed.matchText, /8 сарын хүүхдийн үнэ/);
+  assert.doesNotMatch(routed.matchText, /7 сарын үнэ|3,590,000/);
+});

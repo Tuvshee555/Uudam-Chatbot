@@ -34,6 +34,14 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
   };
 }
 
+test("normal information requests do not opt into photos", async () => {
+  const { hasTripPhotoIntent } = await loadWelcomeFlow();
+  assert.equal(hasTripPhotoIntent("Бэйдайхэ аяллын үнэ хэд вэ?"), false);
+  assert.equal(hasTripPhotoIntent("Бэйдайхэ аяллын зураг явуулаач"), true);
+  assert.equal(hasTripPhotoIntent("beidaihe zurag"), true);
+  assert.equal(hasTripPhotoIntent("send photos"), true);
+});
+
 test("trip media fails closed when only a shared destination token matches", async () => {
   const { extractTripPhotosForReply } = await loadWelcomeFlow();
   const photos = extractTripPhotosForReply(

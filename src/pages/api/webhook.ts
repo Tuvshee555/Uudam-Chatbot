@@ -5,20 +5,20 @@ import { matchFlow, findTriggeredFlow, getFlowState, setFlowState, clearFlowStat
 import { BOT_MESSAGE_METADATA, replyToComment, sendImageMessage, sendQuickReplies, sendTextMessage } from "../../lib/messenger";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
-import { appendMessage, buildPromptParts, getHistory, isReferReply } from "../../lib/conversation";
+import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone, isReferReply } from "../../lib/conversation";
 import { buildContextualUserText, isLikelyContextDependentText } from "../../lib/contextualText";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { ensureTravelSchema } from "../../lib/travelSchema";
-import { analyzeBeforeReply, buildTripIndexLines } from "../../lib/replyReasoning";
-import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../../lib/reply";
+import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
+import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../../lib/reply";
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, dbClaimGoodbye, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { appendLeadCaptureCta, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
-import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
+import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
   extractImageAttachmentUrls,
@@ -243,7 +243,9 @@ async function handleMessage(
     counter?: string;
     afterDeliver?: () => Promise<void>;
   }) => {
-    if (shouldSilenceNoDataReply(input.reply)) {
+    const noDataReply = shouldSilenceNoDataReply(input.reply);
+    let reply = input.reply;
+    if (noDataReply) {
       logInfo("webhook.no_data_reply_suppressed", {
         requestId: trace?.requestId,
         correlationId: trace?.correlationId,
@@ -259,19 +261,19 @@ async function handleMessage(
             platform,
             senderId,
             customerMessage: text,
-            context: `Бот мэдээлэлгүй fast-path хариуг илгээхгүй дарлаа: ${input.failTag}`,
+            context: `Бот мэдээлэлгүй fast-path хариуг зөвлөхөд шилжүүлж, хэрэглэгчид handoff мэдэгдэл илгээлээ: ${input.failTag}`,
           });
           await notifyStaffOfLead(
             { kind: "handoff", platform, customerMessage: text },
             {
               requestId: trace?.requestId,
               correlationId: trace?.correlationId,
-              source: "api.webhook.no_data_silent",
+              source: "api.webhook.no_data_handoff",
             },
           );
         }
       } catch (error) {
-        logWarn("webhook.no_data_silent_lead_failed", {
+        logWarn("webhook.no_data_handoff_lead_failed", {
           requestId: trace?.requestId,
           correlationId: trace?.correlationId,
           platform,
@@ -279,14 +281,13 @@ async function handleMessage(
           classification: classifyError(error),
         });
       }
-      await rememberTurn(`${input.rememberSource}_silent`);
-      return;
+      reply = buildHandoffAcknowledgement();
     }
     await assertLockHealthy();
     const delivered = await sendPlatformMessage(
       platform,
       senderId,
-      input.reply,
+      reply,
       token,
       pageId,
       igUserId,
@@ -296,10 +297,10 @@ async function handleMessage(
     if (!delivered) {
       throw new RetryableWebhookError(`delivery_failed:${input.failTag}`);
     }
-    if (input.afterDeliver) await input.afterDeliver();
+    if (!noDataReply && input.afterDeliver) await input.afterDeliver();
     try {
-      await appendMessage(senderId, "assistant", input.reply);
-      await setLastReplyConsistent(sessionId, input.reply);
+      await appendMessage(senderId, "assistant", reply);
+      await setLastReplyConsistent(sessionId, reply);
     } catch (error) {
       logWarn("webhook.reply_state_persist_failed", {
         requestId: trace?.requestId,
@@ -309,7 +310,7 @@ async function handleMessage(
         classification: classifyError(error),
       });
     }
-    await rememberTurn(input.rememberSource);
+    await rememberTurn(noDataReply ? `${input.rememberSource}_handoff` : input.rememberSource);
     if (input.counter) recordCounter(input.counter, 1, { platform });
   };
 
@@ -875,6 +876,7 @@ async function handleMessage(
     history.some(
       (message) => message.role === "user" && extractPhoneNumber(message.text),
     );
+  const phoneAlreadyRequested = phoneCollected || hasAskedForPhone(history);
   const customerWantsToBook =
     botSettings.handoff_enabled && isBookingIntent(text);
   if (customerWantsToBook && !(await hasRecentOpenLead(senderId, "booking"))) {
@@ -1005,7 +1007,7 @@ async function handleMessage(
         enforceWebsiteForPayment(
           sanitizeAssistantReply(fixMojibake(`${dateAvailabilityReply}${bookingNudge}`)),
         ),
-        phoneCollected,
+        phoneAlreadyRequested,
       );
       if (lastReply && isDuplicateReply(lastReply.text, safeDateReply)) {
         recordCounter("webhook.duplicate_reply_avoided_total", 1, { platform });
@@ -1034,7 +1036,7 @@ async function handleMessage(
       await deliverFastPathReply({
         reply: appendLeadCaptureCta(
           enforceWebsiteForPayment(sanitizeAssistantReply(seatsReply)),
-          phoneCollected,
+          phoneAlreadyRequested,
         ),
         failTag: "seats_fast_path",
         rememberSource: "api.webhook.seats_fast_path",
@@ -1050,7 +1052,7 @@ async function handleMessage(
       await deliverFastPathReply({
         reply: appendLeadCaptureCta(
           enforceWebsiteForPayment(sanitizeAssistantReply(budgetReply)),
-          phoneCollected,
+          phoneAlreadyRequested,
         ),
         failTag: "budget_fast_path",
         rememberSource: "api.webhook.budget_fast_path",
@@ -1066,7 +1068,7 @@ async function handleMessage(
       await deliverFastPathReply({
         reply: appendLeadCaptureCta(
           enforceWebsiteForPayment(sanitizeAssistantReply(discountReply)),
-          phoneCollected,
+          phoneAlreadyRequested,
         ),
         failTag: "discount_fast_path",
         rememberSource: "api.webhook.discount_fast_path",
@@ -1082,7 +1084,7 @@ async function handleMessage(
       await deliverFastPathReply({
         reply: appendLeadCaptureCta(
           enforceWebsiteForPayment(sanitizeAssistantReply(compareReply)),
-          phoneCollected,
+          phoneAlreadyRequested,
         ),
         failTag: "compare_fast_path",
         rememberSource: "api.webhook.compare_fast_path",
@@ -1105,7 +1107,7 @@ async function handleMessage(
             reconcilePhotoAttachmentReply(programReply.reply, inferredMediaUrls.length > 0),
           ),
         ),
-        phoneCollected,
+        phoneAlreadyRequested,
       );
       await deliverFastPathReply({
         reply: safeProgramReply,
@@ -1146,7 +1148,7 @@ async function handleMessage(
     if (structuredTripReply) {
       const safeStructuredReply = appendLeadCaptureCta(
         enforceWebsiteForPayment(sanitizeAssistantReply(structuredTripReply)),
-        phoneCollected,
+        phoneAlreadyRequested,
       );
       await deliverFastPathReply({
         reply: safeStructuredReply,
@@ -1154,16 +1156,18 @@ async function handleMessage(
         rememberSource: "api.webhook.trip_fast_path",
         counter: "webhook.trip_fast_path_total",
         afterDeliver: async () => {
-          await sendTripMediaForReply(
-            platform,
-            senderId,
-            safeStructuredReply,
-            await getFastPathText(),
-            token,
-            pageId,
-            igUserId,
-            trace,
-          );
+          if (hasTripPhotoIntent(text)) {
+            await sendTripMediaForReply(
+              platform,
+              senderId,
+              safeStructuredReply,
+              await getFastPathText(),
+              token,
+              pageId,
+              igUserId,
+              trace,
+            );
+          }
         },
       });
       return;
@@ -1173,15 +1177,17 @@ async function handleMessage(
   // memory facts, and what's already been explained BEFORE the reply is written.
   // Best-effort — null on any failure and the reply proceeds exactly as before.
   const reasoningTrips = await getTrips().catch(() => []);
-  const reasoning = await analyzeBeforeReply({
-    customerMemory,
-    history,
-    userText: text,
-    tripIndexLines: buildTripIndexLines(reasoningTrips),
-    requestId: trace?.requestId,
-    correlationId: trace?.correlationId,
-    source: "api.webhook.reasoning",
-  });
+  const reasoning = shouldAnalyzeBeforeReply(text)
+    ? await analyzeBeforeReply({
+        customerMemory,
+        history,
+        userText: text,
+        tripIndexLines: buildTripIndexLines(reasoningTrips),
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        source: "api.webhook.reasoning",
+      })
+    : null;
   // Deterministic relevance hint: the same matcher the fast paths trust points
   // the model at the most likely trip(s). A hint, not a filter — the full
   // Context stays in the prompt so the model can never be starved of the
@@ -1218,6 +1224,7 @@ async function handleMessage(
     userText: text,
     pinnedButtonLabels,
     phoneCollected,
+    phoneRequested: phoneAlreadyRequested,
   });
   let aiReply: string;
   // True when BOTH Gemini and OpenAI failed. We then route through the REFER
@@ -1274,9 +1281,8 @@ async function handleMessage(
       aiReply = "REFER";
     }
   }
-  // Bot has no data for this question (REFER, or legacy SILENT). Keep the
-  // customer side silent, but create/alert a staff handoff so this does not
-  // become a lost lead. Missing trip data must never become "we don't have it".
+  // Bot has no data for this question (REFER, or legacy SILENT). Create/alert
+  // a staff handoff and visibly acknowledge it so the customer is not ignored.
   if (isReferReply(aiReply)) {
     logInfo("webhook.ai_refer", {
       requestId: trace?.requestId,
@@ -1290,7 +1296,6 @@ async function handleMessage(
       reason: aiOutage ? "ai_outage" : "no_data",
     });
     try {
-      await rememberTurn(aiOutage ? "api.webhook.ai_outage_silent" : "api.webhook.ai_refer_silent");
       if (!(await hasRecentOpenLead(senderId, "handoff"))) {
         await createLead({
           kind: "handoff",
@@ -1320,6 +1325,11 @@ async function handleMessage(
         classification: classifyError(error),
       });
     }
+    await deliverFastPathReply({
+      reply: buildHandoffAcknowledgement({ aiOutage }),
+      failTag: aiOutage ? "ai_outage_handoff" : "ai_refer_handoff",
+      rememberSource: aiOutage ? "api.webhook.ai_outage_handoff" : "api.webhook.ai_refer_handoff",
+    });
     return;
   }
   const fixedReply = fixMojibake(aiReply);
@@ -1353,19 +1363,19 @@ async function handleMessage(
           senderId,
           customerMessage: text,
           contactPhone: detectedPhone || "",
-          context: "AI мэдээлэлгүй өгүүлбэр бичсэн тул хэрэглэгч рүү илгээхгүй дарж, зөвлөхөд шилжүүлэв.",
+          context: "AI мэдээлэлгүй өгүүлбэр бичсэн тул зөвлөхөд шилжүүлж, хэрэглэгчид handoff мэдэгдэл илгээлээ.",
         });
         await notifyStaffOfLead(
           { kind: "handoff", platform, customerMessage: text, contactPhone: detectedPhone || "" },
           {
             requestId: trace?.requestId,
             correlationId: trace?.correlationId,
-            source: "api.webhook.ai_no_data_silent",
+            source: "api.webhook.ai_no_data_handoff",
           },
         );
       }
     } catch (error) {
-      logWarn("webhook.ai_no_data_silent_lead_failed", {
+      logWarn("webhook.ai_no_data_handoff_lead_failed", {
         requestId: trace?.requestId,
         correlationId: trace?.correlationId,
         platform,
@@ -1373,7 +1383,11 @@ async function handleMessage(
         classification: classifyError(error),
       });
     }
-    await rememberTurn("api.webhook.ai_no_data_silent");
+    await deliverFastPathReply({
+      reply: buildHandoffAcknowledgement(),
+      failTag: "ai_no_data_handoff",
+      rememberSource: "api.webhook.ai_no_data_handoff",
+    });
     return;
   }
   if (lastReply && isDuplicateReply(lastReply.text, safeReply)) {
