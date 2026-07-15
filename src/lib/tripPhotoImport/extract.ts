@@ -61,7 +61,7 @@ function bufferToImportImage(
   };
 }
 
-async function extractZip(fileName: string, buffer: Buffer): Promise<ImportItem> {
+async function extractZip(fileName: string, buffer: Buffer): Promise<ImportItem[]> {
   // Decode zip entry names as UTF-8. Most modern archivers store names in UTF-8;
   // without this JSZip falls back to CP437 and Cyrillic names become garbled.
   const zip = await JSZip.loadAsync(buffer, {
@@ -109,14 +109,49 @@ async function extractZip(fileName: string, buffer: Buffer): Promise<ImportItem>
     .filter((img): img is ImportImage => img !== null)
     .sort((a, b) => a.fileName.localeCompare(b.fileName, undefined, { numeric: true }));
 
-  return {
-    id: randomUUID(),
-    name: fileName.split("/").pop() || fileName,
-    sourceType: "zip",
-    images: validImages,
-    imageCount: validImages.length,
-    error: errors.length ? errors.join("; ") : undefined,
-  };
+  const archiveName = fileName.split("/").pop() || fileName;
+  const paths = validImages.map((image) => splitPathSegments(image.originalName));
+  const firstLevelDirs = new Set(
+    paths.filter((segments) => segments.length >= 2).map((segments) => segments[0]),
+  );
+  const secondLevelDirs = new Set(
+    paths.filter((segments) => segments.length >= 3).map((segments) => segments[1]),
+  );
+  const containerMode = firstLevelDirs.size === 1 && secondLevelDirs.size > 1;
+  const groups = new Map<string, ImportImage[]>();
+
+  for (const image of validImages) {
+    const segments = splitPathSegments(image.originalName);
+    const groupName =
+      segments.length < 2
+        ? archiveName
+        : containerMode
+          ? segments[1] || segments[0]
+          : segments[0];
+    groups.set(groupName, [...(groups.get(groupName) || []), image]);
+  }
+
+  if (groups.size === 0) {
+    return [{
+      id: randomUUID(),
+      name: archiveName,
+      sourceType: "zip",
+      images: [],
+      imageCount: 0,
+      error: errors.length ? errors.join("; ") : undefined,
+    }];
+  }
+
+  return Array.from(groups)
+    .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
+    .map(([name, images]) => ({
+      id: randomUUID(),
+      name,
+      sourceType: "zip" as const,
+      images,
+      imageCount: images.length,
+      error: errors.length ? errors.join("; ") : undefined,
+    }));
 }
 
 export async function buildImportItemsFromRawFiles(
@@ -143,7 +178,7 @@ export async function buildImportItemsFromRawFiles(
 
   for (const raw of rawFiles) {
     if (raw.fileName.toLowerCase().endsWith(".zip")) {
-      items.push(await extractZip(raw.fileName, raw.buffer));
+      items.push(...(await extractZip(raw.fileName, raw.buffer)));
       continue;
     }
 

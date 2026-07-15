@@ -19,17 +19,22 @@ async function loadPreviewHelpers() {
   return { mergeMatchedImageItems };
 }
 
-function makeTrip(id: string, routeName: string, aliases: string[] = []): TravelTrip {
+function makeTrip(
+  id: string,
+  routeName: string,
+  aliases: string[] = [],
+  details: { duration?: string; dates?: string[] } = {},
+): TravelTrip {
   return {
     id,
     category: "test",
     operator_name: "UUDAM TRAVEL AGENCY",
     route_name: routeName,
-    duration_text: "",
+    duration_text: details.duration || "",
     adult_price: null,
     child_price: null,
     currency: "MNT",
-    departure_dates: [],
+    departure_dates: details.dates || [],
     seats_total: null,
     seats_left: null,
     has_food: null,
@@ -140,5 +145,54 @@ describe("tripPhotoImport match", () => {
     const match = matchImportItemToTrips("Токио.zip", trips);
     assert.equal(match.tripId, null);
     assert.equal(match.matchedBy, "none");
+  });
+
+  it("does not guess between sibling trips when the folder only names the destination", async () => {
+    const { matchImportItemToTrips } = await loadMatcher();
+    const trips = [
+      makeTrip("ground", "Beidaihe ground tour"),
+      makeTrip("flight", "Beidaihe flight tour"),
+    ];
+
+    const match = matchImportItemToTrips("Beidaihe photos.zip", trips);
+
+    assert.equal(match.tripId, null);
+    assert.match(match.reason, /Олон аялалтай/);
+  });
+
+  it("uses transport variant to choose the correct sibling trip", async () => {
+    const { matchImportItemToTrips } = await loadMatcher();
+    const trips = [
+      makeTrip("ground", "Beidaihe ground tour"),
+      makeTrip("flight", "Beidaihe flight tour"),
+    ];
+
+    assert.equal(
+      matchImportItemToTrips("Beidaihe ground photos.zip", trips).tripId,
+      "ground",
+    );
+    assert.equal(
+      matchImportItemToTrips("Beidaihe flight photos.zip", trips).tripId,
+      "flight",
+    );
+  });
+
+  it("uses duration and departure date to separate otherwise identical trips", async () => {
+    const { matchImportItemToTrips } = await loadMatcher();
+    const trips = [
+      makeTrip("four-day", "Hailar tour", [], {
+        duration: "4 days",
+        dates: ["2026-07-10"],
+      }),
+      makeTrip("five-day", "Hailar tour", [], {
+        duration: "5 days",
+        dates: ["2026-07-18"],
+      }),
+    ];
+
+    assert.equal(
+      matchImportItemToTrips("Hailar 5 days 07-18.zip", trips).tripId,
+      "five-day",
+    );
   });
 });

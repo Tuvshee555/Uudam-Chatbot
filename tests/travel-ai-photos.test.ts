@@ -6,8 +6,8 @@ import type { AIChangeProposal } from "../src/lib/travelTypes";
 applyTestEnv();
 
 async function loadTravelAI() {
-  const { attachPhotoUrlsToActions } = await import("../src/lib/travelAI");
-  return { attachPhotoUrlsToActions };
+  const { attachPhotoUrlsToActions, mergeDuplicateTripActions } = await import("../src/lib/travelAI");
+  return { attachPhotoUrlsToActions, mergeDuplicateTripActions };
 }
 
 describe("travelAI photo attachment", () => {
@@ -82,5 +82,92 @@ describe("travelAI photo attachment", () => {
       proposal.conflict_items?.some((item) => item.type === "photo_unmatched"),
       true,
     );
+  });
+
+  it("leaves an equal sibling-trip match unassigned instead of choosing the first action", async () => {
+    const { attachPhotoUrlsToActions } = await loadTravelAI();
+    const proposal: AIChangeProposal = {
+      summary: "",
+      needs_confirmation: false,
+      important_reason: "",
+      conflicts: [],
+      actions: [
+        { action: "upsert", fields: { route_name: "Beidaihe ground tour" } },
+        { action: "upsert", fields: { route_name: "Beidaihe flight tour" } },
+      ],
+    };
+
+    attachPhotoUrlsToActions(
+      new Map([["summer.zip/Beidaihe/1.jpg", ["https://example.com/unknown.jpg"]]]),
+      proposal,
+    );
+
+    assert.equal(proposal.actions[0].fields?.photo_urls, undefined);
+    assert.equal(proposal.actions[1].fields?.photo_urls, undefined);
+    assert.equal(
+      proposal.conflict_items?.some((item) => item.type === "photo_unmatched"),
+      true,
+    );
+  });
+
+  it("does not attach multiple ZIP trip folders to one action when extraction missed a trip", async () => {
+    const { attachPhotoUrlsToActions } = await loadTravelAI();
+    const proposal: AIChangeProposal = {
+      summary: "",
+      needs_confirmation: false,
+      important_reason: "",
+      conflicts: [],
+      actions: [{ action: "upsert", fields: { route_name: "Unknown tour" } }],
+    };
+
+    attachPhotoUrlsToActions(
+      new Map([
+        ["summer.zip/Trip A/1.jpg", ["https://example.com/a.jpg"]],
+        ["summer.zip/Trip B/1.jpg", ["https://example.com/b.jpg"]],
+      ]),
+      proposal,
+    );
+
+    assert.equal(proposal.actions[0].fields?.photo_urls, undefined);
+    assert.equal(
+      proposal.conflict_items?.filter((item) => item.type === "photo_unmatched").length,
+      1,
+    );
+  });
+
+  it("keeps transport variants as separate extracted trips", async () => {
+    const { mergeDuplicateTripActions } = await loadTravelAI();
+    const proposal: AIChangeProposal = {
+      summary: "",
+      needs_confirmation: false,
+      important_reason: "",
+      conflicts: [],
+      actions: [
+        { action: "upsert", fields: { route_name: "Beidaihe tour ground" } },
+        { action: "upsert", fields: { route_name: "Beidaihe tour flight" } },
+      ],
+    };
+
+    mergeDuplicateTripActions(proposal);
+
+    assert.equal(proposal.actions.length, 2);
+  });
+
+  it("keeps different-duration products as separate extracted trips", async () => {
+    const { mergeDuplicateTripActions } = await loadTravelAI();
+    const proposal: AIChangeProposal = {
+      summary: "",
+      needs_confirmation: false,
+      important_reason: "",
+      conflicts: [],
+      actions: [
+        { action: "upsert", fields: { route_name: "Hailar tour", duration_text: "4 days" } },
+        { action: "upsert", fields: { route_name: "Hailar tour", duration_text: "5 days" } },
+      ],
+    };
+
+    mergeDuplicateTripActions(proposal);
+
+    assert.equal(proposal.actions.length, 2);
   });
 });

@@ -72,6 +72,8 @@ function buildBatchSourceParts(input: {
     "ACCURACY IS THE TOP PRIORITY. Read carefully and do not rush.",
     "Read EVERY trip/row in the source. Do not skip rows and do not stop early. If the source lists 12 trips, return actions for all 12.",
     "Never merge two different trips into one, and never split one trip into two. Each distinct route = one action.",
+    "TRIP VARIANT RULE: the same destination with a different transport mode (flight, ground/bus, rail, combined), duration, itinerary, or package type is a DIFFERENT trip and must stay in a separate action. Different departure dates alone remain one trip with date groups.",
+    "PHOTO SOURCE RULE: write the exact source label shown in Sources into fields.extra.source_file_name for every extracted action. When one ZIP contains trip-named folders, use each image's full folder path to decide which trip it belongs to; never assign a generic numbered image by list order.",
     "Copy prices, seat counts, and dates EXACTLY as written in the source — digit for digit. Do not round, estimate, convert, or 'fix' numbers. If a price is 4,290,000 write 4290000, not 4300000.",
     "Only use information that is actually present in the source. Never invent or guess a price, date, or field. If a field is missing, leave it out rather than filling a plausible value.",
     "If any value is unclear or hard to read, keep needs_confirmation=true and ask about that exact value in plain language instead of guessing.",
@@ -818,6 +820,8 @@ export async function generateAIProposalFromContent(input: {
     "ACCURACY IS THE TOP PRIORITY. Read carefully and do not rush.",
     "Read EVERY trip/row in the source. Do not skip rows and do not stop early. If the source lists 12 trips, return actions for all 12.",
     "Never merge two different trips into one, and never split one trip into two. Each distinct route = one action.",
+    "TRIP VARIANT RULE: the same destination with a different transport mode (flight, ground/bus, rail, combined), duration, itinerary, or package type is a DIFFERENT trip and must stay in a separate action. Different departure dates alone remain one trip with date groups.",
+    "PHOTO SOURCE RULE: write the exact source label shown in Sources into fields.extra.source_file_name for every extracted action. When one ZIP contains trip-named folders, use each image's full folder path to decide which trip it belongs to; never assign a generic numbered image by list order.",
     "Copy prices, seat counts, and dates EXACTLY as written in the source — digit for digit. Do not round, estimate, convert, or 'fix' numbers. If a price is 4,290,000 write 4290000, not 4300000.",
     "Only use information that is actually present in the source. Never invent or guess a price, date, or field. If a field is missing, leave it out rather than filling a plausible value.",
     "If any value is unclear or hard to read, keep needs_confirmation=true and ask about that exact value in plain language instead of guessing.",
@@ -931,6 +935,45 @@ function mergeActionFields(existing: AITripAction, action: AITripAction): void {
   if (!existing.fields) (existing as { fields?: Record<string, unknown> }).fields = target;
 }
 
+type TripProductVariant = "air" | "ground" | "combined" | "rail";
+
+function tripProductVariant(action: AITripAction): TripProductVariant | null {
+  const extra = action.fields?.extra as Record<string, unknown> | undefined;
+  const text = normalizeTripName([
+    action.fields?.route_name,
+    action.match?.route_name,
+    typeof extra?.transport === "string" ? extra.transport : "",
+    typeof extra?.route === "string" ? extra.route : "",
+  ].filter(Boolean).join(" "));
+  if (/хосол|combined|combo/.test(text)) return "combined";
+  if (/галт\s*тэрэг|train|rail/.test(text)) return "rail";
+  if (/нис(?:лэг|эх|эхийн|лэгтэй)?|онгоц|flight|air/.test(text)) return "air";
+  if (/газ(?:ар|рын)|автобус|bus|coach/.test(text)) return "ground";
+  return null;
+}
+
+function tripDurationDays(action: AITripAction): number | null {
+  const extra = action.fields?.extra as Record<string, unknown> | undefined;
+  if (typeof extra?.duration_days === "number" && Number.isFinite(extra.duration_days)) {
+    return extra.duration_days;
+  }
+  const text = normalizeTripName([
+    action.fields?.duration_text,
+    action.fields?.route_name,
+  ].filter(Boolean).join(" "));
+  const match = text.match(/\b(\d{1,2})\s*(?:өдөр|хоног|days?)\b/);
+  return match ? Number(match[1]) : null;
+}
+
+function hasCompatibleProductVariant(left: AITripAction, right: AITripAction): boolean {
+  const leftVariant = tripProductVariant(left);
+  const rightVariant = tripProductVariant(right);
+  if (leftVariant && rightVariant && leftVariant !== rightVariant) return false;
+  const leftDuration = tripDurationDays(left);
+  const rightDuration = tripDurationDays(right);
+  return !(leftDuration && rightDuration && leftDuration !== rightDuration);
+}
+
 /**
  * Collapses multiple actions that target the SAME trip into one. Multi-image
  * uploads (a messenger-split zip = several slices of one poster) make the
@@ -955,7 +998,10 @@ export function mergeDuplicateTripActions(proposal: AIChangeProposal): void {
   for (const action of proposal.actions) {
     const verb = String(action.action || "").toLowerCase();
     const key = `${verb}|${tripActionKey(action)}`;
-    const existing = verb !== "cancel" ? byKey.get(key) : undefined;
+    const keyedAction = verb !== "cancel" ? byKey.get(key) : undefined;
+    const existing = keyedAction && hasCompatibleProductVariant(keyedAction, action)
+      ? keyedAction
+      : undefined;
     if (!existing || key.endsWith("name:")) {
       byKey.set(key, action);
       mergedActions.push(action);
@@ -982,6 +1028,7 @@ export function mergeDuplicateTripActions(proposal: AIChangeProposal): void {
         existing.fields?.route_name?.toString().trim() || existing.match?.route_name?.trim() || "";
       if (!existingName) return false;
       const existingNorm = normalizeTripName(existingName);
+      if (!hasCompatibleProductVariant(existing, action)) return false;
       if (existingNorm === nameNorm) return true;
       // One name fully contains the other's words (a trailing year/detail
       // added or dropped) — not just generic fuzzy overlap, to avoid
@@ -1050,6 +1097,18 @@ function photoMatchTokens(value: string): Set<string> {
   );
 }
 
+function normalizedPhotoLabel(value: string): string {
+  return normalizeTripName(value.replace(/\\/g, "/"));
+}
+
+function photoSourceGroup(label: string): string {
+  const segments = label.replace(/\\/g, "/").split("/").filter(Boolean);
+  if (segments.length <= 1) return normalizedPhotoLabel(label);
+  // The complete parent path identifies a trip photo group. Keep every nested
+  // folder because ZIPs often have a wrapper folder above trip-named folders.
+  return normalizedPhotoLabel(segments.slice(0, -1).join("/"));
+}
+
 /**
  * Assigns uploaded images to the trips extracted FROM them. The old exact
  * source_file_name match silently dropped every photo whenever the model
@@ -1090,14 +1149,18 @@ export function attachPhotoUrlsToActions(
   });
 
   const unmatchedLabels: string[] = [];
+  const sourceGroups = new Set(Array.from(photoUrlMap.keys(), photoSourceGroup));
   for (const [label, urls] of photoUrlMap) {
     // 1) Exact source_file_name match still wins.
-    const exact = actions.find((action) => {
+    const exactMatches = actions.filter((action) => {
       const extra = action.fields?.extra as Record<string, unknown> | undefined;
-      return extra?.source_file_name === label;
+      return (
+        typeof extra?.source_file_name === "string" &&
+        normalizedPhotoLabel(extra.source_file_name) === normalizedPhotoLabel(label)
+      );
     });
-    if (exact) {
-      addUrls(exact, urls);
+    if (exactMatches.length > 0) {
+      exactMatches.forEach((action) => addUrls(action, urls));
       continue;
     }
 
@@ -1108,8 +1171,7 @@ export function attachPhotoUrlsToActions(
     //    — so "ЖИНИНЬ ... МИНИ АВАТАР ХӨХ ХОТ.zip" can't latch onto the
     //    separate "Мини Аватар - Хөх хот - Датон" trip on partial overlap.
     const labelTokens = photoMatchTokens(label);
-    let bestIndex = -1;
-    let bestScore = 0;
+    const ranked: Array<{ index: number; score: number; coverage: number }> = [];
     actionTokens.forEach((tokens, i) => {
       let score = 0;
       let hasStrongToken = false;
@@ -1120,18 +1182,25 @@ export function attachPhotoUrlsToActions(
         }
       }
       const coverage = labelTokens.size > 0 ? score / labelTokens.size : 0;
-      if (hasStrongToken && coverage >= 0.6 && score > bestScore) {
-        bestScore = score;
-        bestIndex = i;
+      if (hasStrongToken && coverage >= 0.6) {
+        ranked.push({ index: i, score, coverage });
       }
     });
-    if (bestIndex >= 0) {
-      addUrls(actions[bestIndex], urls);
+    ranked.sort((left, right) =>
+      right.score - left.score || right.coverage - left.coverage,
+    );
+    const best = ranked[0];
+    const second = ranked[1];
+    const uniqueBest = best && (
+      !second || best.score > second.score || best.coverage - second.coverage >= 0.2
+    );
+    if (uniqueBest) {
+      addUrls(actions[best.index], urls);
       continue;
     }
 
     // 3) Single action -> everything belongs to it.
-    if (actions.length === 1) {
+    if (actions.length === 1 && sourceGroups.size === 1) {
       addUrls(actions[0], urls);
       continue;
     }

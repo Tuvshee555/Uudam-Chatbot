@@ -1,5 +1,6 @@
 import { askGemini } from "../gemini";
 import type { TravelTrip } from "../travelTypes";
+import { tokenCoverageScore } from "./normalize";
 
 export type AIMatchSuggestion = {
   tripId: string;
@@ -18,17 +19,34 @@ export async function suggestTripByAI(
 ): Promise<AIMatchSuggestion> {
   if (trips.length === 0) return null;
 
-  const candidates = trips.slice(0, 30).map((trip) => ({
+  const candidates = trips
+    .map((trip) => ({
+      trip,
+      score: Math.max(
+        tokenCoverageScore(fileName, trip.route_name),
+        ...(Array.isArray(trip.extra?.aliases)
+          ? (trip.extra.aliases as string[]).map((alias) =>
+              tokenCoverageScore(fileName, alias),
+            )
+          : [0]),
+      ),
+    }))
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 30)
+    .map(({ trip }) => ({
     id: trip.id,
     route_name: trip.route_name,
     category: trip.category,
+    duration: trip.duration_text,
+    departure_dates: trip.departure_dates,
     aliases: Array.isArray(trip.extra?.aliases)
       ? (trip.extra.aliases as string[]).filter((a): a is string => typeof a === "string")
       : [],
-  }));
+    }));
 
   const prompt = `You are matching a zip/folder of trip photos to the correct trip.
 Given the filename/folder name "${fileName}", choose the best matching trip from the list below.
+Use route, transport variant, duration, and departure date. If the filename does not distinguish two sibling trips, return no match rather than guessing.
 Respond with JSON only:
 {
   "trip_id": "...",

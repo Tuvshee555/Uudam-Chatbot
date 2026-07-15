@@ -184,7 +184,9 @@ async function collectPhotoAssets(upload: UploadPayload): Promise<PhotoUploadAss
     const entryBuffer = await entry.async("nodebuffer");
     const cleanName = entry.name.split("/").pop() || entry.name;
     assets.push({
-      label: `${upload.filename}/${cleanName}`,
+      // Keep the directory path: agencies commonly name each ZIP folder after
+      // its trip, while the photos themselves are only "1.jpg", "2.jpg", etc.
+      label: `${upload.filename}/${entry.name}`,
       buffer: entryBuffer,
       mimeType: imageMimeFromName(cleanName),
     });

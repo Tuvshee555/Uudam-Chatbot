@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import JSZip from "jszip";
 import { applyTestEnv } from "./helpers/env";
 
 applyTestEnv();
@@ -12,6 +13,26 @@ async function loadExtractors() {
 }
 
 describe("tripPhotoImport extract", () => {
+  it("splits trip-named folders inside a ZIP into separate import items", async () => {
+    const { buildImportItemsFromRawFiles } = await loadExtractors();
+    const zip = new JSZip();
+    zip.file("Summer trips/Beidaihe ground/1.jpg", "a");
+    zip.file("Summer trips/Beidaihe ground/2.jpg", "b");
+    zip.file("Summer trips/Beidaihe flight/1.jpg", "c");
+
+    const result = await buildImportItemsFromRawFiles([{
+      fieldName: "files",
+      fileName: "summer.zip",
+      mimeType: "application/zip",
+      buffer: await zip.generateAsync({ type: "nodebuffer" }),
+    }]);
+
+    assert.deepEqual(
+      result.items.map((item) => [item.name, item.imageCount]),
+      [["Beidaihe flight", 1], ["Beidaihe ground", 2]],
+    );
+  });
+
   it("groups sibling trip folders when a parent folder is selected", async () => {
     const { buildImportItemsFromRawFiles } = await loadExtractors();
     const result = await buildImportItemsFromRawFiles([
