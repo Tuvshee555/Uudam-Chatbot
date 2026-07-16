@@ -128,7 +128,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!allowed) return;
   if (req.method !== "POST") return res.status(405).end();
 
-  let blobUrl: string | undefined;
+  const blobUrls: string[] = [];
   try {
     const contentType = String(req.headers["content-type"] || "");
     let uploads: Upload[] = [];
@@ -136,13 +136,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (contentType.includes("multipart/form-data")) {
       uploads = await readUploads(req);
     } else if (contentType.includes("application/json")) {
-      const resolved = await resolveFile(await readJsonBody(req));
-      blobUrl = resolved.blobUrl;
-      uploads = [{
-        buffer: resolved.buffer,
-        filename: resolved.filename,
-        mimeType: resolved.mime,
-      }];
+      const body = await readJsonBody(req);
+      const files = Array.isArray(body.files)
+        ? body.files
+            .filter((file): file is Record<string, unknown> => Boolean(file) && typeof file === "object")
+            .slice(0, 5)
+        : [];
+      const resolvedFiles =
+        files.length > 0
+          ? await Promise.all(files.map((file) => resolveFile(file)))
+          : [await resolveFile(body)];
+      uploads = resolvedFiles.map((resolved) => {
+        if (resolved.blobUrl) blobUrls.push(resolved.blobUrl);
+        return {
+          buffer: resolved.buffer,
+          filename: resolved.filename,
+          mimeType: resolved.mime,
+        };
+      });
     }
 
     if (uploads.length === 0) return res.status(400).json({ error: "Файл олдсонгүй" });
@@ -165,7 +176,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     logError("poster.extract.failed", { error: message });
     return res.status(500).json({ error: message });
   } finally {
-    if (blobUrl) {
+    for (const blobUrl of blobUrls) {
       del(blobUrl).catch(() => {});
     }
   }

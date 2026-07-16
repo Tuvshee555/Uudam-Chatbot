@@ -594,8 +594,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
   function canBatchImageSlices(files: File[]): boolean {
     if (files.length <= 1 || files.length > 5) return false;
     if (!files.every(isPosterImageFile)) return false;
-    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
-    return isLocalDevHost() || totalBytes <= DIRECT_UPLOAD_LIMIT_BYTES;
+    return true;
   }
 
   async function extractImageSliceBatch(files: File[]): Promise<{ trip: PosterTrip; source_file: string }> {
@@ -603,13 +602,40 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const fd = new FormData();
-      for (const file of files) fd.append("file", file, file.name);
-      const res = await apiFetch("/api/admin/poster/extract", {
-        method: "POST",
-        body: fd,
-        signal: controller.signal,
-      });
+      const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+      let res: Response;
+      if (totalBytes > DIRECT_UPLOAD_LIMIT_BYTES && !isLocalDevHost()) {
+        const blobs = await Promise.all(
+          files.map((file) =>
+            uploadToBlob(file.name, file, {
+              access: "public",
+              handleUploadUrl: "/api/admin/poster/upload",
+              clientPayload: JSON.stringify({ adminSecret: getStoredAdminSecret() }),
+              abortSignal: controller.signal,
+            }),
+          ),
+        );
+        res = await apiFetch("/api/admin/poster/extract", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            files: blobs.map((blob, index) => ({
+              blobUrl: blob.url,
+              filename: files[index]?.name || `poster-slice-${index + 1}`,
+              mimeType: files[index]?.type || "",
+            })),
+          }),
+          signal: controller.signal,
+        });
+      } else {
+        const fd = new FormData();
+        for (const file of files) fd.append("file", file, file.name);
+        res = await apiFetch("/api/admin/poster/extract", {
+          method: "POST",
+          body: fd,
+          signal: controller.signal,
+        });
+      }
       const text = await res.text();
       let json: JsonRecord = {};
       if (text) {
