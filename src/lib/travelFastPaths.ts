@@ -797,21 +797,30 @@ function buildSoldOutTripReply(text: string, trips: TravelTrip[]): string | null
   // three bookable Beijing trips went unmentioned. Pitch ACTIVE trips that
   // share the sold-out trip's destination words (data-driven — never
   // hardcoded names) in the same breath, like a human agent would.
-  const GENERIC_NAME_TOKENS = new Set([
-    "аялал", "аяллын", "шууд", "нислэгтэй", "газрын", "газар", "хосолсон",
-    "наадмын", "амралтаар", "гарах", "хотын", "хот", "tour", "trip",
-  ]);
-  const destinationTokens = best.route_name
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter((token) => token.length >= 4 && !GENERIC_NAME_TOKENS.has(token));
+  const soldOutTokens = unique([
+    ...keywordTokens(best.route_name),
+    ...getAliases(best).flatMap((alias) => keywordTokens(alias)),
+  ]).filter((token) => token.length >= 4);
   const alternatives = trips
     .filter((trip) => trip.status === "active" && trip.id !== best.id)
-    .filter((trip) => {
-      const name = trip.route_name.toLowerCase();
-      return destinationTokens.some((token) => name.includes(token));
+    .map((trip) => {
+      const candidateTokens = new Set([
+        ...keywordTokens(trip.route_name),
+        ...getAliases(trip).flatMap((alias) => keywordTokens(alias)),
+        ...keywordTokens(trip.source_description || ""),
+      ]);
+      const overlap = soldOutTokens.filter((token) => candidateTokens.has(token));
+      return { trip, score: overlap.length, overlap };
     })
-    .slice(0, 3);
+    .filter((candidate) => candidate.score > 0)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      const aPrice = typeof a.trip.adult_price === "number" ? a.trip.adult_price : Number.MAX_SAFE_INTEGER;
+      const bPrice = typeof b.trip.adult_price === "number" ? b.trip.adult_price : Number.MAX_SAFE_INTEGER;
+      return aPrice - bPrice;
+    })
+    .slice(0, 3)
+    .map((candidate) => candidate.trip);
 
   if (alternatives.length > 0) {
     const altLines = alternatives.map((trip) => {

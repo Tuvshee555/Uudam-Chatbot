@@ -62,11 +62,9 @@ async function sendTelegramMessage(
  * channel. Never throws — a failed staff alert must not break customer-facing
  * webhook delivery.
  *
- * Two independent channels:
- *   1. Messenger PSIDs (STAFF_NOTIFY_PSIDS) — subject to Meta's 24h window, so
- *      it silently fails unless the staff account messaged the page recently.
- *   2. Telegram (TELEGRAM_BOT_TOKEN + TELEGRAM_STAFF_CHAT_IDS) — no 24h window,
- *      the reliable fallback.
+ * Realtime staff pings are optional. The durable source of truth is the admin
+ * Leads tab; STAFF_NOTIFY_PSIDS can additionally ping staff inside Messenger
+ * when Meta allows it.
  *
  * The lead already exists in the DB regardless; this only controls the ping.
  * If NO channel is configured, or every configured channel fails, that is
@@ -122,7 +120,7 @@ export async function notifyStaffOfLead(
     recordCounter("staff_alert.no_channel_total", 1, { kind: alert.kind });
     logError("staff_alert.no_channel_configured", {
       kind: alert.kind,
-      hint: "A lead was created but no realtime staff alert channel is configured. Configure Telegram or STAFF_NOTIFY_PSIDS, or monitor the admin leads tab continuously.",
+      hint: "A lead was created but no realtime staff alert channel is configured. Keep the admin Leads tab monitored, or configure STAFF_NOTIFY_PSIDS for Messenger staff pings.",
     });
     return { attempted, delivered };
   }
@@ -131,7 +129,7 @@ export async function notifyStaffOfLead(
     logError("staff_alert.all_channels_failed", {
       kind: alert.kind,
       attempted,
-      hint: "Every staff-alert channel failed. Messenger RESPONSE pings are blocked outside Meta's 24h window — configure Telegram as a reliable fallback.",
+      hint: "Every configured staff-alert channel failed. The lead is still in the admin Leads tab; check Messenger staff-ping permissions or monitor the admin queue.",
     });
   }
   return { attempted, delivered };

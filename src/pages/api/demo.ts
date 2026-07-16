@@ -8,14 +8,14 @@ import {
   rateLimitAsync,
 } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
-import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone, isReferReply } from "../../lib/conversation";
+import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone } from "../../lib/conversation";
 import { buildContextualUserText } from "../../lib/contextualText";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
-import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../../lib/reply";
+import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../../lib/reply";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
 import { appendLeadCaptureCta, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
@@ -57,6 +57,10 @@ function isLocalQaRequest(req: NextApiRequest): boolean {
 
 function imageAttachments(urls: string[]) {
   return urls.map((url) => ({ type: "image" as const, url }));
+}
+
+function shouldHandoffSilently(reply: string) {
+  return isReferReply(reply) || shouldSilenceNoDataReply(reply);
 }
 
 function buildDemoMedia(input: {
@@ -269,7 +273,7 @@ export default async function handler(
             phoneAlreadyRequested,
           );
           await appendMessage(sessionId, "user", normalizedText);
-          if (shouldSilenceNoDataReply(safeReply)) return returnHandoff();
+          if (shouldHandoffSilently(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.date_fast_path_total", 1, {});
@@ -287,7 +291,7 @@ export default async function handler(
             phoneAlreadyRequested,
           );
           await appendMessage(sessionId, "user", normalizedText);
-          if (shouldSilenceNoDataReply(safeReply)) return returnHandoff();
+          if (shouldHandoffSilently(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.seats_fast_path_total", 1, {});
@@ -305,7 +309,7 @@ export default async function handler(
             phoneAlreadyRequested,
           );
           await appendMessage(sessionId, "user", normalizedText);
-          if (shouldSilenceNoDataReply(safeReply)) return returnHandoff();
+          if (shouldHandoffSilently(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.budget_fast_path_total", 1, {});
@@ -323,7 +327,7 @@ export default async function handler(
             phoneAlreadyRequested,
           );
           await appendMessage(sessionId, "user", normalizedText);
-          if (shouldSilenceNoDataReply(safeReply)) return returnHandoff();
+          if (shouldHandoffSilently(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.discount_fast_path_total", 1, {});
@@ -341,7 +345,7 @@ export default async function handler(
             phoneAlreadyRequested,
           );
           await appendMessage(sessionId, "user", normalizedText);
-          if (shouldSilenceNoDataReply(safeReply)) return returnHandoff();
+          if (shouldHandoffSilently(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.compare_fast_path_total", 1, {});
@@ -375,7 +379,7 @@ export default async function handler(
           });
           safeReply = reconcilePhotoAttachmentReply(safeReply, media.mediaUrls.length > 0 || Boolean(media.brochureUrl));
           await appendMessage(sessionId, "user", normalizedText);
-          if (shouldSilenceNoDataReply(safeReply)) return returnHandoff();
+          if (shouldHandoffSilently(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply, imageAttachments(media.mediaUrls));
           await rememberTurn();
           recordCounter("demo.program_fast_path_total", 1, {});
@@ -393,7 +397,7 @@ export default async function handler(
             trips,
           });
           await appendMessage(sessionId, "user", normalizedText);
-          if (shouldSilenceNoDataReply(safeReply)) return returnHandoff();
+          if (shouldHandoffSilently(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply, imageAttachments(media.mediaUrls));
           await rememberTurn();
           recordCounter("demo.structured_fast_path_total", 1, {});
@@ -517,7 +521,7 @@ export default async function handler(
           }),
         ),
       );
-      if (shouldSilenceNoDataReply(reply)) return returnHandoff();
+      if (shouldHandoffSilently(reply)) return returnHandoff();
 
       // Skip duplicate replies (same as Messenger behavior)
       const lastMessages = history.filter((m) => m.role === "assistant");

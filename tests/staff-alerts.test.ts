@@ -74,9 +74,9 @@ test("buildAlertText truncates a long customer message so the alert stays readab
 });
 
 test("notifyStaffOfLead never throws even when zero channels are configured", async () => {
-  // STAFF_NOTIFY_PSIDS and TELEGRAM_BOT_TOKEN are both left unset by
-  // applyTestEnv's defaults — this is the "lead delivered nowhere" case that
-  // must be a logged no-op, never an unhandled rejection reaching the webhook.
+  // STAFF_NOTIFY_PSIDS is left unset by applyTestEnv's defaults — this is the
+  // "lead delivered nowhere except the admin queue" case that must be a
+  // logged no-op, never an unhandled rejection reaching the webhook.
   applyTestEnv();
   const { notifyStaffOfLead } = await loadStaffAlertsModule();
 

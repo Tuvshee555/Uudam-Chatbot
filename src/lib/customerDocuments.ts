@@ -672,9 +672,9 @@ async function extractFileData(
 
   if (!extracted) {
     extracted = {
-      category: "travel_document",
+      category: "other",
       confidence: 0.2,
-      summary: "Customer sent a file attachment; staff review required.",
+      summary: "Customer sent a file attachment, but it could not be read automatically.",
       passport: {},
       trip: {},
       payment: {},

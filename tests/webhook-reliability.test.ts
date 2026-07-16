@@ -453,6 +453,67 @@ test("webhook acknowledges Messenger file-only attachments without waiting on ex
   }
 });
 
+test("webhook keeps image-only unknown attachments silent while background processing runs", async () => {
+  applyTestEnv();
+  const handler = await loadWebhookHandler();
+
+  const originalFetch = globalThis.fetch;
+  const sentTexts: string[] = [];
+
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.includes("cdn.example.test/random-screenshot.jpg")) {
+      return new Response(Buffer.from([0xff, 0xd8, 0xff, 0xd9]), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      });
+    }
+
+    if (url.includes("/messages")) {
+      const body = JSON.parse(String(init?.body || "{}")) as {
+        message?: { text?: string };
+      };
+      if (body.message?.text) sentTexts.push(body.message.text);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const payload = {
+      object: "page",
+      entry: [
+        {
+          id: "1234567890",
+          messaging: [
+            {
+              sender: { id: "fb-user-image-only" },
+              message: {
+                mid: "fb-mid-image-only-1",
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://cdn.example.test/random-screenshot.jpg" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = await callWebhook(handler, payload);
+    await sleep(50);
+
+    assert.equal(result.statusCode, 200);
+    assert.deepEqual(sentTexts, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("redis disconnect in replay/conversation mode fails closed with 503", async () => {
   const script = `
     (async () => {

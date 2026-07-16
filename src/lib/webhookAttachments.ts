@@ -70,13 +70,6 @@ type ProcessedDocumentLike = {
   extracted_json?: Record<string, unknown>;
 };
 
-function readDocString(doc: ProcessedDocumentLike, section: string, field: string): string {
-  const data = doc.extracted_json?.[section];
-  if (!data || typeof data !== "object") return "";
-  const value = (data as Record<string, unknown>)[field];
-  return value == null || typeof value === "object" ? "" : String(value).trim();
-}
-
 /**
  * Category-aware confirmation sent AFTER the vision pipeline classified what
  * the customer sent. Only for documents a customer anxiously waits on
@@ -88,15 +81,9 @@ function buildDocumentReceivedMessage(docs: ProcessedDocumentLike[]): string | n
   const categories = new Set(docs.map((doc) => doc.category));
   const received: string[] = [];
   if (categories.has("payment_screenshot")) {
-    // Echoing the amount the system read makes the confirmation feel real
-    // ("we saw your 4,180,000₮ transfer") and lets the customer correct a
-    // misread immediately.
-    const paymentDoc = docs.find((doc) => doc.category === "payment_screenshot");
-    const amount = paymentDoc ? readDocString(paymentDoc, "payment", "amount") : "";
-    const currency = paymentDoc ? readDocString(paymentDoc, "payment", "currency") : "";
-    received.push(
-      amount ? `${amount}${currency ? ` ${currency}` : ""} төлбөрийн баримт` : "төлбөрийн баримт",
-    );
+    // Do not echo OCR-read amounts to the customer. A misread number can feel
+    // like payment verification; staff see the amount in the review tab.
+    received.push("төлбөрийн баримт");
   }
   if (categories.has("passport")) received.push("паспортын зураг");
   if (categories.has("booking_code")) received.push("захиалгын код");
@@ -315,8 +302,22 @@ export async function handleAttachmentOnlyMessage(input: {
     kinds: kinds.join(","),
   });
 
-  // Ack at most once per 2 minutes — an album arrives as several events and
-  // must not trigger a burst of identical acknowledgements.
+  const hasFileLikeAttachment = attachments.some((attachment) => attachment?.type !== "image");
+  if (!hasFileLikeAttachment) {
+    // Image-only messages can be unknown screenshots. The background pipeline
+    // will send a category-specific confirmation for payment/passport/booking
+    // docs or a matched-trip answer; unrelated images stay silent.
+    scheduleCustomerMemoryUpdate({
+      senderId,
+      requestId: trace?.requestId,
+      correlationId: trace?.correlationId,
+      source: "api.webhook.attachment_only",
+    });
+    return;
+  }
+
+  // Ack file-like uploads at most once per 2 minutes — an album arrives as
+  // several events and must not trigger a burst of identical acknowledgements.
   const ackLimit = await rateLimitAsync(`attach_ack:${senderId}`, 1, 2 * 60 * 1000);
   if (!ackLimit.allowed || platform !== "facebook" || !token) {
     scheduleCustomerMemoryUpdate({
