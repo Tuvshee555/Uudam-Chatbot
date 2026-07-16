@@ -20,7 +20,7 @@ import type {
   CustomerDocumentCategory,
   DocumentSenderSummary,
 } from "@/lib/adminTypes";
-import { shortId } from "@/lib/adminUtils";
+import { formatTime, shortId } from "@/lib/adminUtils";
 
 type SimpleDocumentCategory = "payment" | "passport" | "other";
 
@@ -51,31 +51,6 @@ function compactValue(value: unknown): string {
   }
   if (typeof value === "object") return "";
   return String(value).trim();
-}
-
-/**
- * Mongolian date-time. The shared formatTime uses toLocaleString("mn-MN"),
- * but browsers without real mn locale data silently fall back to English
- * month names ("9 Jul") — exactly what the owner flagged. Explicit words,
- * relative for the freshest items, year only when it differs.
- */
-function formatMnDateTime(value: string | null | undefined): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  const now = new Date();
-  const hm = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-  const sameDay = (a: Date, b: Date) =>
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate();
-  if (sameDay(date, now)) return `Өнөөдөр ${hm}`;
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-  if (sameDay(date, yesterday)) return `Өчигдөр ${hm}`;
-  const md = `${date.getMonth() + 1} сарын ${date.getDate()}`;
-  if (date.getFullYear() === now.getFullYear()) return `${md}, ${hm}`;
-  return `${date.getFullYear()} оны ${md}`;
 }
 
 /** "11860000.00 MNT" → "11,860,000₮"; non-MNT currencies keep their code. */
@@ -319,7 +294,7 @@ function DocumentCard({
                   {SIMPLE_CATEGORY_ICONS[bucket]} {SIMPLE_CATEGORY_LABELS[bucket]}
                 </span>
                 <span aria-hidden="true">·</span>
-                <span>{formatMnDateTime(doc.created_at)}</span>
+                <span>{formatTime(doc.created_at)}</span>
                 {doc.matched_payment_id && (
                   <>
                     <span aria-hidden="true">·</span>
@@ -830,7 +805,7 @@ export function CustomerDocumentsTab({
                           {senderTitle(sender)}
                         </p>
                         <p className="text-[11px] text-ink-subtle">
-                          {sender.total} зураг · {formatMnDateTime(sender.last_at)}
+                          {sender.total} зураг · {formatTime(sender.last_at)}
                         </p>
                       </div>
                     </div>
@@ -879,7 +854,7 @@ export function CustomerDocumentsTab({
               </p>
               {selectedSenderSummary && (
                 <p className="text-[11px] text-ink-subtle">
-                  {selectedSenderSummary.total} зураг · сүүлд {formatMnDateTime(selectedSenderSummary.last_at)}
+                  {selectedSenderSummary.total} зураг · сүүлд {formatTime(selectedSenderSummary.last_at)}
                 </p>
               )}
             </div>

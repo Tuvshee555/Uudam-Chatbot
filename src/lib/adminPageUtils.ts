@@ -898,16 +898,14 @@ function timeLeft(expiresAt: string | null): string {
   return minutes <= 0 ? `${seconds}с` : `${minutes}м ${seconds}с`;
 }
 
+// Explicit Mongolian words — toLocaleString("mn-MN") falls back to English
+// on browsers without Mongolian locale data (same fix as adminUtils.formatTime).
 function formatTime(value: string | null | undefined): string {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleString("mn-MN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const hm = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  return `${date.getMonth() + 1} сарын ${date.getDate()}, ${hm}`;
 }
 
 function driveSyncTone(
@@ -1014,7 +1012,9 @@ function formatMoneyValue(
   amount: number | null | undefined,
   currency?: unknown,
 ): string {
-  if (amount == null || !Number.isFinite(amount)) return "unknown";
+  // This lands inside Mongolian-facing clarification questions — the English
+  // word "unknown" was leaking into them whenever a price was missing.
+  if (amount == null || !Number.isFinite(amount)) return "тодорхойгүй";
   const code = typeof currency === "string" && currency.trim() ? currency.trim() : "";
   return `${amount.toLocaleString("en-US")}${code ? ` ${code}` : ""}`;
 }

@@ -389,11 +389,12 @@ function TripCard({
   if (trip.seats_left != null || trip.seats_total != null) {
     facts.push(`Суудал: ${trip.seats_left ?? "?"}/${trip.seats_total ?? "?"}`);
   }
+  const currencyMark = trip.currency === "MNT" ? "₮" : ` ${trip.currency}`;
   if (trip.adult_price != null) {
-    facts.push(`Том хүн: ${trip.adult_price.toLocaleString()}${trip.currency}`);
+    facts.push(`Том хүн: ${trip.adult_price.toLocaleString("en-US")}${currencyMark}`);
   }
   if (trip.child_price != null) {
-    facts.push(`Хүүхэд: ${trip.child_price.toLocaleString()}${trip.currency}`);
+    facts.push(`Хүүхэд: ${trip.child_price.toLocaleString("en-US")}${currencyMark}`);
   }
   if (trip.has_food != null) {
     facts.push(`Хоол: ${trip.has_food ? "багтсан" : "багтаагүй"}`);

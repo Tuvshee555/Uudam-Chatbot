@@ -66,16 +66,29 @@ export function formatMoney(value: number | null | undefined, currency = "MNT") 
   return `${value.toLocaleString("mn-MN")} ${currency || "MNT"}`;
 }
 
+/**
+ * Mongolian date-time for every admin surface. toLocaleString("mn-MN")
+ * silently falls back to ENGLISH month names ("9 Jul") on browsers without
+ * Mongolian locale data — which is most of them — so the words are explicit.
+ * Relative for the freshest items, year only when it differs.
+ */
 export function formatTime(value: string | null | undefined) {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("mn-MN", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const now = new Date();
+  const hm = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  const sameDay = (a: Date, b: Date) =>
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
+  if (sameDay(date, now)) return `Өнөөдөр ${hm}`;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (sameDay(date, yesterday)) return `Өчигдөр ${hm}`;
+  const md = `${date.getMonth() + 1} сарын ${date.getDate()}`;
+  if (date.getFullYear() === now.getFullYear()) return `${md}, ${hm}`;
+  return `${date.getFullYear()} оны ${md}`;
 }
 
 export function shortId(value: string | null | undefined) {

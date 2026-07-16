@@ -108,7 +108,7 @@ export function PaymentsTab({
         <StatCard label="Нийт" value={stats.total} />
         <StatCard label="Төлсөн" value={stats.paid} tone="text-success" />
         <StatCard label="Хүлээгдэж буй" value={stats.pending} tone="text-warning" />
-        <StatCard label="Нийт орлого" value={`${stats.paidAmount.toLocaleString()}₮`} />
+        <StatCard label="Нийт орлого" value={`${stats.paidAmount.toLocaleString("en-US")}₮`} />
       </div>
 
       {/* Payments table */}
@@ -133,7 +133,7 @@ export function PaymentsTab({
                       {p.customer_name || shortId(p.sender_id) || "Тодорхойгүй"}
                     </p>
                     <p className="truncate text-xs text-ink-muted">
-                      {p.trip_name || "—"} · {p.amount.toLocaleString()}
+                      {p.trip_name || "—"} · {p.amount.toLocaleString("en-US")}
                       {p.currency === "MNT" ? "₮" : ` ${p.currency}`}
                     </p>
                     <p className="text-xs text-ink-subtle">{formatTime(p.created_at)}</p>
