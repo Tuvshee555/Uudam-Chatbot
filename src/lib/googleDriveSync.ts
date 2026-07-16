@@ -676,10 +676,7 @@ export async function parseGoogleDriveFileId(
 
   const buffer = await downloadDriveFile(accessToken, spec);
   const uploads = await buildDriveParseUploads(spec, buffer);
-  const parsedUploads: ParsedUpload[] = [];
-  for (const upload of uploads) {
-    parsedUploads.push(await parseUpload(upload));
-  }
+  const parsedUploads = await Promise.all(uploads.map((upload) => parseUpload(upload)));
 
   return {
     fileId,
@@ -799,10 +796,9 @@ async function runDriveFolderSyncInternal(input: {
         try {
           const buffer = await downloadDriveFile(accessToken, spec);
           const uploads = await buildDriveParseUploads(spec, buffer);
-          const parsedUploads: ParsedUpload[] = [];
-          for (const upload of uploads) {
-            parsedUploads.push(await parseUpload(upload));
-          }
+          const parsedUploads = await Promise.all(
+            uploads.map((upload) => parseUpload(upload)),
+          );
           const note = [
             "Automatic sync from Google Drive folder.",
             `File: ${file.name}`,

@@ -100,23 +100,27 @@ export async function uploadFileToCloudinary(
 export async function uploadImagesToCloudinary(
   images: Array<{ buffer: Buffer; fileName: string; mimeType: string }>,
 ): Promise<{ urls: string[]; failures: Array<{ fileName: string; error: string }> }> {
-  const urls: string[] = [];
-  const failures: Array<{ fileName: string; error: string }> = [];
+  const results: Array<{ url?: string; failure?: { fileName: string; error: string } }> = await Promise.all(
+    images.map(async (image) => {
+      try {
+        const url = await uploadImageToCloudinary(
+          image.buffer,
+          image.fileName,
+          image.mimeType,
+        );
+        return { url };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "upload failed";
+        logError("trip_photo_import.cloudinary_failure", { fileName: image.fileName, error: message });
+        return { failure: { fileName: image.fileName, error: message } };
+      }
+    }),
+  );
 
-  for (const image of images) {
-    try {
-      const url = await uploadImageToCloudinary(
-        image.buffer,
-        image.fileName,
-        image.mimeType,
-      );
-      urls.push(url);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "upload failed";
-      logError("trip_photo_import.cloudinary_failure", { fileName: image.fileName, error: message });
-      failures.push({ fileName: image.fileName, error: message });
-    }
-  }
-
-  return { urls, failures };
+  return {
+    urls: results.map((result) => result.url).filter((url): url is string => Boolean(url)),
+    failures: results
+      .map((result) => result.failure)
+      .filter((failure): failure is { fileName: string; error: string } => Boolean(failure)),
+  };
 }

@@ -10,7 +10,7 @@ panel.
 
 ## What it does
 
-- **Answers DMs** on Messenger/Instagram via a Meta webhook, using Gemini grounded
+- **Answers DMs** on Messenger/Instagram via a Meta webhook, using OpenAI grounded
   in the agency's trip data (Neon Postgres, editable from the admin panel).
 - **Captures leads** when a customer shows booking intent.
 - **Staff pause** — agents can take over a conversation and pause the bot.
@@ -23,7 +23,7 @@ panel.
 ## Tech stack
 
 Next.js (Pages API routes) · React 19 · TypeScript · Neon Postgres · Upstash Redis
-(optional) · Gemini · Tailwind v4. Deployed on Vercel.
+(optional) · OpenAI · Tailwind v4. Deployed on Vercel.
 
 ## Quick start (local)
 
@@ -35,7 +35,7 @@ npm run dev                  # http://localhost:3004
 
 ### Minimum env vars
 
-`GEMINI_API_KEY`, `VERIFY_TOKEN`, `FACEBOOK_PAGES` (one or more `pageId:token`
+`OPENAI_API_KEY`, `VERIFY_TOKEN`, `FACEBOOK_PAGES` (one or more `pageId:token`
 pairs, comma-separated), `META_APP_SECRET`, `ADMIN_SECRET`, `NEON_DATABASE_URL`.
 Everything else has safe defaults — see [.env.example](.env.example). Redis is
 optional locally; configure `REDIS_URL` **or** the
@@ -62,7 +62,7 @@ optional locally; configure `REDIS_URL` **or** the
 ## Project layout
 
 ```
-src/lib/        core logic (webhook, gemini, redis, db, resilience, observability)
+src/lib/        core logic (webhook, OpenAI, redis, db, resilience, observability)
 src/pages/api/  HTTP routes (webhook, admin, metrics, ping)
 src/components/ admin UI + demo chat
 tests/          70+ tests (env, webhook security/replay, rate limit, parsing, ...)

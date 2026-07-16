@@ -115,6 +115,20 @@ async function uploadBase64ToCloudinary(
   return json.secure_url;
 }
 
+async function resolvePosterSyncPhoto(photo: PosterSyncPhotoInput): Promise<string> {
+  if (photo.url) {
+    const parsed = new URL(photo.url);
+    if (parsed.protocol !== "https:") {
+      throw new Error(`Unsupported image URL protocol: ${parsed.protocol}`);
+    }
+    return parsed.toString();
+  }
+  if (photo.dataUrl) {
+    return uploadBase64ToCloudinary(photo.dataUrl, photo.filename);
+  }
+  throw new Error("missing image data");
+}
+
 /**
  * Writes poster images to ONE explicit trip. The caller (poster app) has
  * already shown the user a confirmation modal and chosen exactly what to do:
@@ -204,24 +218,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const uploadedUrls: string[] = [];
   const failures: Array<{ filename: string; error: string }> = [];
 
-  for (const photo of photos) {
-    try {
-      if (photo.url) {
-        const parsed = new URL(photo.url);
-        if (parsed.protocol !== "https:") {
-          throw new Error(`Unsupported image URL protocol: ${parsed.protocol}`);
+  const resolvedPhotos: Array<{ url?: string; failure?: { filename: string; error: string } }> =
+    await Promise.all(
+      photos.map(async (photo) => {
+        try {
+          return { url: await resolvePosterSyncPhoto(photo) };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "upload failed";
+          logError("poster_sync.upload_failure", { filename: photo.filename, error: msg });
+          return { failure: { filename: photo.filename, error: msg } };
         }
-        uploadedUrls.push(parsed.toString());
-      } else if (photo.dataUrl) {
-        const url = await uploadBase64ToCloudinary(photo.dataUrl, photo.filename);
-        uploadedUrls.push(url);
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "upload failed";
-      logError("poster_sync.upload_failure", { filename: photo.filename, error: msg });
-      failures.push({ filename: photo.filename, error: msg });
-    }
-  }
+      }),
+    );
+  uploadedUrls.push(
+    ...resolvedPhotos
+      .map((result) => result.url)
+      .filter((url): url is string => Boolean(url)),
+  );
+  failures.push(
+    ...resolvedPhotos
+      .map((result) => result.failure)
+      .filter((failure): failure is { filename: string; error: string } => Boolean(failure)),
+  );
 
   if (photos.length > 0 && uploadedUrls.length === 0) {
     return res.status(500).json({

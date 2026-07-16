@@ -51,6 +51,11 @@ type PhotoUploadAsset = {
   mimeType: string;
 };
 
+type ParsedUploadWork = {
+  parsedUploads: ParsedUpload[];
+  photoAssets: PhotoUploadAsset[];
+};
+
 // Vercel hard-caps a serverless request body at ~4.5MB — this stays under it.
 // This is the one ceiling we cannot lift; the client chunker keeps every
 // request well below it.
@@ -194,6 +199,28 @@ async function collectPhotoAssets(upload: UploadPayload): Promise<PhotoUploadAss
   return assets;
 }
 
+async function parseUploadWithPhotoAssets(upload: UploadPayload): Promise<ParsedUploadWork> {
+  const photoAssets = await collectPhotoAssets(upload);
+  if (isZipUpload(upload)) {
+    return {
+      photoAssets,
+      parsedUploads: photoAssets.map((asset) => ({
+        label: asset.label,
+        text: "",
+        inline: {
+          mimeType: asset.mimeType,
+          data: asset.buffer.toString("base64"),
+        },
+      })),
+    };
+  }
+
+  return {
+    photoAssets,
+    parsedUploads: [await parseUpload(upload)],
+  };
+}
+
 async function readJsonBody(req: NextApiRequest): Promise<Record<string, unknown>> {
   const contentLengthHeader = req.headers["content-length"];
   const contentLengthRaw = Array.isArray(contentLengthHeader)
@@ -303,31 +330,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const parsedUploads: ParsedUpload[] = [];
-    const photoAssets: PhotoUploadAsset[] = [];
+    let parsedUploads: ParsedUpload[] = [];
+    let photoAssets: PhotoUploadAsset[] = [];
     try {
-      for (const upload of uploads) {
-        const assets = await collectPhotoAssets(upload);
-        photoAssets.push(...assets);
-        if (isZipUpload(upload)) {
-          for (const asset of assets) {
-            parsedUploads.push({
-              label: asset.label,
-              text: "",
-              inline: {
-                mimeType: asset.mimeType,
-                data: asset.buffer.toString("base64"),
-              },
-            });
-          }
-        } else {
-          parsedUploads.push(await parseUpload(upload));
-        }
-      }
-      for (const fileId of driveFileIds) {
-        const driveFile = await parseGoogleDriveFileId(fileId);
-        parsedUploads.push(...driveFile.parsedUploads);
-      }
+      const localWork = await Promise.all(uploads.map(parseUploadWithPhotoAssets));
+      parsedUploads = localWork.flatMap((work) => work.parsedUploads);
+      photoAssets = localWork.flatMap((work) => work.photoAssets);
+      const driveFiles = await Promise.all(
+        driveFileIds.map((fileId) => parseGoogleDriveFileId(fileId)),
+      );
+      parsedUploads.push(...driveFiles.flatMap((driveFile) => driveFile.parsedUploads));
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Failed to parse uploaded file.";
@@ -349,22 +361,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const photoUrlsByLabel = new Map<string, string[]>();
     const photoUploadWarnings: string[] = [];
     if (photoAssets.length > 0) {
-      for (const asset of photoAssets) {
-        try {
-          const url = await uploadImageToCloudinary(
-            asset.buffer,
-            asset.label,
-            asset.mimeType,
-          );
-          photoUrlsByLabel.set(asset.label, [
-            ...(photoUrlsByLabel.get(asset.label) || []),
-            url,
-          ]);
-        } catch (error) {
-          photoUploadWarnings.push(
-            `${asset.label}: ${error instanceof Error ? error.message : "upload failed"}`,
-          );
+      const uploadResults: Array<{ label?: string; url?: string; warning?: string }> = await Promise.all(
+        photoAssets.map(async (asset) => {
+          try {
+            const url = await uploadImageToCloudinary(
+              asset.buffer,
+              asset.label,
+              asset.mimeType,
+            );
+            return { label: asset.label, url };
+          } catch (error) {
+            return {
+              warning: `${asset.label}: ${error instanceof Error ? error.message : "upload failed"}`,
+            };
+          }
+        }),
+      );
+      for (const result of uploadResults) {
+        if (result.warning) {
+          photoUploadWarnings.push(result.warning);
+          continue;
         }
+        if (!result.label || !result.url) continue;
+        photoUrlsByLabel.set(result.label, [
+          ...(photoUrlsByLabel.get(result.label) || []),
+          result.url,
+        ]);
       }
     }
 
