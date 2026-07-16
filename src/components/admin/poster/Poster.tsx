@@ -322,8 +322,24 @@ export default function Poster({
             <span className="head-phone-num">{(t.contacts?.phones || []).join(", ")}</span>
           </div>
           <div className="dur">
-            <div className="dur-item"><span className="dur-emoji">☀️</span>{t.duration_days} өдөр</div>
-            <div className="dur-item"><span className="dur-emoji">🌙</span>{t.duration_nights} шөнө</div>
+            <div className="dur-item">
+              <span className="dur-emoji">☀️</span>
+              <Ed
+                value={String(t.duration_days ?? "")}
+                placeholder="0"
+                onChange={(v) => upd(["duration_days"], parseInt(v.replace(/\D/g, ""), 10) || 0)}
+              />{" "}
+              өдөр
+            </div>
+            <div className="dur-item">
+              <span className="dur-emoji">🌙</span>
+              <Ed
+                value={String(t.duration_nights ?? "")}
+                placeholder="0"
+                onChange={(v) => upd(["duration_nights"], parseInt(v.replace(/\D/g, ""), 10) || 0)}
+              />{" "}
+              шөнө
+            </div>
           </div>
         </div>
 
