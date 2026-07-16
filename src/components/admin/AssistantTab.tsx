@@ -1,6 +1,5 @@
 import { useState } from "react";
 import {
-  Alert,
   Badge,
   Button,
   Card,
@@ -411,15 +410,24 @@ function ChatBubbleV2({
   }
 
   if (message.kind === "note") {
-    const tone =
-      message.tone === "error"
-        ? "danger"
-        : message.tone === "success"
-          ? "success"
-          : "info";
+    // A genuine failure (upload broke, network error) still needs to read as
+    // distinct from a normal reply — everything else (greeting, "nothing to
+    // change", clarifying question) is just the assistant talking and should
+    // look like an ordinary chat bubble, not a colored system alert banner.
+    if (message.tone === "error") {
+      return (
+        <div className="animate-fade-up flex justify-start">
+          <div className="max-w-xl rounded-2xl rounded-bl-sm border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger">
+            <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
+          </div>
+        </div>
+      );
+    }
     return (
-      <div className="animate-fade-up max-w-[92%]">
-        <Alert tone={tone}>{message.text}</Alert>
+      <div className="animate-fade-up flex justify-start">
+        <div className="max-w-xl rounded-2xl rounded-bl-sm border border-line bg-surface px-4 py-3 text-sm text-ink shadow-sm">
+          <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
+        </div>
       </div>
     );
   }
