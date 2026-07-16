@@ -42,6 +42,25 @@ const CLOUDINARY_FOLDER = "uudam-travel-trips";
 const MAX_PHOTOS = 20;
 const MAX_IMAGES_PER_SYNC = 10;
 
+export type PosterSyncPhotoInput = {
+  dataUrl?: string;
+  url?: string;
+  filename: string;
+};
+
+export function normalizePosterSyncPhotos(rawPhotos: unknown): PosterSyncPhotoInput[] {
+  return (Array.isArray(rawPhotos) ? rawPhotos : [])
+    .filter(
+      (p): p is PosterSyncPhotoInput =>
+        p &&
+        typeof p === "object" &&
+        typeof (p as PosterSyncPhotoInput).filename === "string" &&
+        (typeof (p as PosterSyncPhotoInput).dataUrl === "string" ||
+          typeof (p as PosterSyncPhotoInput).url === "string"),
+    )
+    .slice(0, MAX_IMAGES_PER_SYNC);
+}
+
 // Poster PNGs (base64) are well over the default 1MB body limit. Raise it so
 // 2-3 high-res poster slices fit in one JSON POST.
 export const config = {
@@ -136,17 +155,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: "Шинэ аялалын нэр хоосон байна" });
   }
 
-  const rawPhotos = Array.isArray(body.photos) ? body.photos : [];
-  type PhotoInput = { dataUrl: string; filename: string };
-  const photos: PhotoInput[] = rawPhotos
-    .filter(
-      (p): p is PhotoInput =>
-        p &&
-        typeof p === "object" &&
-        typeof (p as PhotoInput).dataUrl === "string" &&
-        typeof (p as PhotoInput).filename === "string",
-    )
-    .slice(0, MAX_IMAGES_PER_SYNC);
+  const photos = normalizePosterSyncPhotos(body.photos);
 
   const hasFieldsToWrite = Object.keys(approvedFields).length > 0;
   if (photos.length === 0 && !hasFieldsToWrite && !createNew) {
@@ -188,16 +197,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     fieldKeys: Object.keys(approvedFields),
   });
 
-  // Upload to Cloudinary FIRST. We only touch photo_urls if at least one
-  // succeeds, so a failed upload can never blank out a trip's photos. Field
-  // updates (price/dates/hotel/etc.) are independent of photo upload success.
+  // Resolve photos FIRST. Data URLs are uploaded to Cloudinary; hosted URLs
+  // (from the production client-side Blob upload) are reused directly. We only
+  // touch photo_urls if at least one image resolves, so a failed image step can
+  // never blank out a trip's photos. Field updates are independent.
   const uploadedUrls: string[] = [];
   const failures: Array<{ filename: string; error: string }> = [];
 
   for (const photo of photos) {
     try {
-      const url = await uploadBase64ToCloudinary(photo.dataUrl, photo.filename);
-      uploadedUrls.push(url);
+      if (photo.url) {
+        const parsed = new URL(photo.url);
+        if (parsed.protocol !== "https:") {
+          throw new Error(`Unsupported image URL protocol: ${parsed.protocol}`);
+        }
+        uploadedUrls.push(parsed.toString());
+      } else if (photo.dataUrl) {
+        const url = await uploadBase64ToCloudinary(photo.dataUrl, photo.filename);
+        uploadedUrls.push(url);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "upload failed";
       logError("poster_sync.upload_failure", { filename: photo.filename, error: msg });

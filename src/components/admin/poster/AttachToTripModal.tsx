@@ -1,6 +1,6 @@
 import React from "react";
 import { Alert, Badge, Button, Icons, Modal, Select, Spinner, cx } from "@/components/ui";
-import type { ApiFetch, PosterTrip } from "./PosterTab";
+import type { ApiFetch, CapturedPosterImage, PosterTrip } from "./PosterTab";
 
 /* ------------------------------------------------------------------ *
  * These field keys mirror MappedTripFields in src/lib/poster/tripMapper.ts
@@ -110,7 +110,7 @@ export type AttachToTripModalProps = {
   posterTitle: string;
   posterTrip: PosterTrip | null;
   apiFetch: ApiFetch;
-  captureImages: () => Promise<string[]>;
+  captureImages: () => Promise<CapturedPosterImage[]>;
   onDone?: (result: SyncResult) => void;
 };
 
@@ -137,7 +137,7 @@ export type AttachToTripModalProps = {
  *   posterTitle    string
  *   posterTrip     object  (the full extracted poster JSON, for field mapping)
  *   apiFetch       (url, init) => Promise<Response>  (injects admin secret)
- *   captureImages  () => Promise<string[]>  (renders the poster to data-URL images)
+ *   captureImages  () => Promise<CapturedPosterImage[]>  (renders/uploads poster images)
  *   onDone         (result) => void  (called after a successful attach)
  */
 export default function AttachToTripModal({
@@ -251,15 +251,24 @@ export default function AttachToTripModal({
     return fields;
   }
 
+  function buildPhotoPayload(image: CapturedPosterImage, index: number) {
+    const fallbackFilename = `${(posterTitle || "poster").slice(0, 30).replace(/[^\p{L}\p{N}]+/gu, "-")}-${index + 1}.png`;
+    if (typeof image === "string") {
+      return image.startsWith("data:")
+        ? { dataUrl: image, filename: fallbackFilename }
+        : { url: image, filename: fallbackFilename };
+    }
+    const filename = image.filename || fallbackFilename;
+    if (image.url) return { url: image.url, filename };
+    return { dataUrl: image.dataUrl || "", filename };
+  }
+
   async function handleSubmit() {
     setSubmitting(true);
     setSubmitError("");
     try {
       const images = await captureImages();
-      const photos = (images || []).map((dataUrl, i) => ({
-        dataUrl,
-        filename: `${(posterTitle || "poster").slice(0, 30).replace(/[^\p{L}\p{N}]+/gu, "-")}-${i + 1}.png`,
-      }));
+      const photos = (images || []).map(buildPhotoPayload).filter((photo) => photo.dataUrl || photo.url);
       const fields = buildApprovedFieldsPayload();
 
       const res = await apiFetch("/api/admin/poster-sync", {

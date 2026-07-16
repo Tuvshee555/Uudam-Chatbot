@@ -247,6 +247,7 @@ export default function AdminPage() {
         return false;
       }
       const json = await res.json().catch(() => ({}));
+      setRequiresAuth(false);
       setDocumentUnreviewedCount(Number(json?.stats?.unreviewed_count || 0));
       return true;
     } catch {
@@ -256,35 +257,31 @@ export default function AdminPage() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      // Everything fires at once. The system/diagnostics call is the slowest
-      // request (DB + Drive checks on a serverless connection), so trips,
-      // leads and settings must not queue behind it. Every loader handles
-      // its own 401 by flipping requiresAuth, so auth still resolves fine.
-      const systemPromise = (async () => {
-        const systemRes = await fetchWithAdmin("/api/admin/system");
-        if (systemRes.status === 401) {
-          setRequiresAuth(true);
-          return;
-        }
-        const systemJson = await systemRes.json();
-        const nextOpenAccess = Boolean(systemJson?.open_access);
-        const authorized = Boolean(systemJson?.authorized);
-        setOpenAccess(nextOpenAccess);
-        if (!nextOpenAccess && !authorized) {
-          setRequiresAuth(true);
-          setDbInfo(null);
-          setDriveSync(null);
-          setReadiness(null);
-          return;
-        }
-        setRequiresAuth(false);
-        setDbInfo(systemJson?.db || null);
-        setDriveSync((systemJson?.drive_sync as DriveSyncDiagnostics) || null);
-        setReadiness((systemJson?.readiness as ReadinessReport) || null);
-        setSystemLoaded(true);
-      })();
+      const systemRes = await fetchWithAdmin("/api/admin/system");
+      if (systemRes.status === 401) {
+        setRequiresAuth(true);
+        setDbInfo(null);
+        setDriveSync(null);
+        setReadiness(null);
+        return;
+      }
+      const systemJson = await systemRes.json();
+      const nextOpenAccess = Boolean(systemJson?.open_access);
+      const authorized = Boolean(systemJson?.authorized);
+      setOpenAccess(nextOpenAccess);
+      if (!nextOpenAccess && !authorized) {
+        setRequiresAuth(true);
+        setDbInfo(null);
+        setDriveSync(null);
+        setReadiness(null);
+        return;
+      }
+      setRequiresAuth(false);
+      setDbInfo(systemJson?.db || null);
+      setDriveSync((systemJson?.drive_sync as DriveSyncDiagnostics) || null);
+      setReadiness((systemJson?.readiness as ReadinessReport) || null);
+      setSystemLoaded(true);
       await Promise.all([
-        systemPromise,
         loadTrips(searchRef.current, statusFilterRef.current),
         loadPauseState(),
         loadSettingsState(),
@@ -364,6 +361,7 @@ export default function AdminPage() {
     if (ADMIN_AUTO_REFRESH_MS <= 0) return;
     const refresh = setInterval(() => {
       if (typeof document !== "undefined" && document.hidden) return;
+      if (requiresAuth || (!openAccess && !secretRef.current.trim())) return;
       if (typeof document !== "undefined" && isEditableElement(document.activeElement)) {
         return;
       }
@@ -392,15 +390,18 @@ export default function AdminPage() {
     editingTrip,
     isNewTrip,
     loadAll,
+    openAccess,
+    requiresAuth,
   ]);
   useEffect(() => {
     const PAUSE_POLL_MS = 5_000;
     const poll = setInterval(() => {
       if (typeof document !== "undefined" && document.hidden) return;
+      if (requiresAuth || (!openAccess && !secretRef.current.trim())) return;
       void loadPauseState();
     }, PAUSE_POLL_MS);
     return () => clearInterval(poll);
-  }, [loadPauseState]);
+  }, [loadPauseState, openAccess, requiresAuth]);
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages]);

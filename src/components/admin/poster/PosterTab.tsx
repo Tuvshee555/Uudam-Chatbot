@@ -122,6 +122,13 @@ export type PosterOnDayPhotoFileFn = (index: number, file: File | null | undefin
 export type DayPhotoInputRefs = MutableRefObject<Record<number, HTMLInputElement>>;
 
 export type ApiFetch = (url: string, init?: RequestInit) => Promise<Response>;
+export type CapturedPosterImage =
+  | string
+  | {
+      dataUrl?: string;
+      url?: string;
+      filename?: string;
+    };
 
 type JsonRecord = Record<string, unknown>;
 
@@ -138,6 +145,7 @@ const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
 // the rare genuinely-huge file. 4.4MB leaves ~100KB for multipart framing;
 // typical ~4,000KB poster PDFs now go direct instead of detouring via Blob.
 const DIRECT_UPLOAD_LIMIT_BYTES = Math.floor(4.4 * 1024 * 1024);
+const DIRECT_POSTER_SYNC_BODY_LIMIT_CHARS = Math.floor(3.2 * 1024 * 1024);
 
 function getStoredAdminSecret(): string {
   if (typeof window === "undefined") return "";
@@ -578,6 +586,21 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
   }
 
+  async function dataUrlToFile(dataUrl: string, filename: string): Promise<File> {
+    const blob = await fetch(dataUrl).then((response) => response.blob());
+    return new File([blob], filename, { type: blob.type || "image/png" });
+  }
+
+  async function uploadPosterCapture(dataUrl: string, filename: string): Promise<string> {
+    const file = await dataUrlToFile(dataUrl, filename);
+    const blob = await uploadToBlob(filename, file, {
+      access: "public",
+      handleUploadUrl: "/api/admin/poster/upload",
+      clientPayload: JSON.stringify({ adminSecret: getStoredAdminSecret() }),
+    });
+    return blob.url;
+  }
+
   async function extractOne(file: File): Promise<{ trip: PosterTrip; source_file: string }> {
     // Local dev has no Vercel 60s kill, and its server budget is 5 min —
     // give the client the same room so slow local runs aren't cut at 90s.
@@ -982,9 +1005,33 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
 
   // Renders the poster as Messenger-sized images for AttachToTripModal — the
   // same finished, branded poster the customer will actually see.
-  async function captureForAttach(): Promise<string[]> {
+  async function captureForAttach(): Promise<CapturedPosterImage[]> {
     const slices = await withExportMode(() => captureMessengerSlices());
-    return slices.map((s) => s.url);
+    const captures = slices.map((slice) => ({
+      dataUrl: slice.url,
+      filename: `${buildExportBaseName()}-messenger-${slice.index + 1}.png`,
+    }));
+
+    if (isLocalDevHost()) return captures;
+
+    try {
+      return await Promise.all(
+        captures.map(async (capture) => ({
+          url: await uploadPosterCapture(capture.dataUrl, capture.filename),
+          filename: capture.filename,
+        })),
+      );
+    } catch (error) {
+      const totalChars = captures.reduce((sum, capture) => sum + capture.dataUrl.length, 0);
+      if (totalChars > DIRECT_POSTER_SYNC_BODY_LIMIT_CHARS) {
+        throw new Error(
+          `Poster image upload failed before saving to the trip: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+      return captures;
+    }
   }
 
   async function downloadSplitImages() {
