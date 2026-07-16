@@ -140,6 +140,70 @@ test("validation keeps uniquely matched upserts eligible", async () => {
   assert.equal(result.auto_apply_ready, true);
 });
 
+test("ambiguous upsert becomes a create with confirmation, not a dead-end", async () => {
+  // The real client case: a poster for "Хайлаар-Манжуур-Чичихар" fuzzy-matched
+  // three existing trips at once. The old behavior dropped the action with an
+  // English blocking conflict and no way forward.
+  const { validateAIChangeProposal } = await loadTravelOps();
+  const proposal: AIChangeProposal = {
+    summary: "poster upload",
+    needs_confirmation: false,
+    important_reason: "",
+    conflicts: [],
+    actions: [
+      {
+        action: "upsert",
+        match: { operator_name: "UUDAM TRAVEL AGENCY", route_name: "Хайлаар Манжуур" },
+        fields: { route_name: "Хайлаар Манжуур Чичихар", operator_name: "UUDAM TRAVEL AGENCY", adult_price: 1500000 },
+      },
+    ],
+  };
+
+  const result = validateAIChangeProposal(proposal, [
+    makeTrip({ id: "trip-1", operator_name: "UUDAM TRAVEL AGENCY", route_name: "Хайлаар Манжуурын аялал - 5 өдөр 4 шөнө" }),
+    makeTrip({ id: "trip-2", operator_name: "UUDAM TRAVEL AGENCY", route_name: "Хайлаар Манжуурын аялал - 4 өдөр 3 шөнө" }),
+  ]);
+
+  // Action survives as a create-new upsert: no trip_id, no match to re-resolve.
+  assert.equal(result.blocking_conflicts.length, 0);
+  assert.equal(result.proposal.actions.length, 1);
+  assert.equal(result.proposal.actions[0]?.action, "upsert");
+  assert.equal(result.proposal.actions[0]?.trip_id, undefined);
+  assert.equal(result.proposal.actions[0]?.match, undefined);
+  // Admin must confirm, and the warning names the colliding trips in Mongolian.
+  assert.equal(result.proposal.needs_confirmation, true);
+  const conflictText = result.proposal.conflicts.join(" ");
+  assert.match(conflictText, /төстэй аялал/);
+  assert.match(conflictText, /Хайлаар/);
+});
+
+test("ambiguous patch stays blocked with candidates named in Mongolian", async () => {
+  const { validateAIChangeProposal } = await loadTravelOps();
+  const proposal: AIChangeProposal = {
+    summary: "price update",
+    needs_confirmation: false,
+    important_reason: "",
+    conflicts: [],
+    actions: [
+      {
+        action: "patch",
+        match: { operator_name: "UUDAM TRAVEL AGENCY", route_name: "Хайлаар Манжуур" },
+        fields: { adult_price: 1600000 },
+      },
+    ],
+  };
+
+  const result = validateAIChangeProposal(proposal, [
+    makeTrip({ id: "trip-1", operator_name: "UUDAM TRAVEL AGENCY", route_name: "Хайлаар Манжуурын аялал - 5 өдөр 4 шөнө" }),
+    makeTrip({ id: "trip-2", operator_name: "UUDAM TRAVEL AGENCY", route_name: "Хайлаар Манжуурын аялал - 4 өдөр 3 шөнө" }),
+  ]);
+
+  assert.equal(result.proposal.actions.length, 0);
+  assert.equal(result.blocking_conflicts.length, 1);
+  assert.match(result.blocking_conflicts[0], /төстэй аялал таарч байна/);
+  assert.match(result.blocking_conflicts[0], /Хайлаар Манжуурын аялал - 5 өдөр 4 шөнө/);
+});
+
 test("update-only instructions are detected in English and Mongolian", async () => {
   const { instructionForbidsTripCreation } = await loadTravelOps();
   assert.equal(

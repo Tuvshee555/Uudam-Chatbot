@@ -352,12 +352,36 @@ export function validateAIChangeProposal(
 
     if ((verb === "patch" || verb === "cancel" || verb === "upsert") && !tripId && (match.route_name || match.operator_name)) {
       if (matchingTrips.length === 0 && verb !== "upsert") {
-        blockingConflicts.push(`${label}: matching trip not found.`);
+        blockingConflicts.push(
+          `${label}: таарах аялал олдсонгүй. Аяллын нэрийг бүртгэлтэй нэртэй нь яг таг бичээд дахин оролдоно уу.`,
+        );
         continue;
       }
       if (matchingTrips.length > 1) {
-        blockingConflicts.push(`${label}: multiple trips match the same operator/route.`);
-        continue;
+        const candidates = matchingTrips
+          .slice(0, 3)
+          .map((trip) => `«${trip.route_name}»`)
+          .join(", ");
+        if (verb === "upsert") {
+          // A file/poster upsert whose route fuzzy-matches SEVERAL existing
+          // trips (e.g. "Хайлаар-Манжуур-Чичихар" vs the separate Манжуур and
+          // Чичихар products). Guessing which record to overwrite is how wrong
+          // trips get clobbered, but hard-blocking used to dead-end the admin
+          // with an English message and no way forward. Instead: keep the
+          // action as a CREATE (match stripped so apply never re-resolves it
+          // onto the wrong record) and require explicit admin confirmation
+          // with the colliding trip names spelled out.
+          match.route_name = undefined;
+          match.operator_name = undefined;
+          confirmationConflicts.push(
+            `${label}: ${matchingTrips.length} төстэй аялал байна (${candidates}). Баталвал ШИНЭ аялал болгож нэмнэ — давхардаж магадгүй. Хэрэв эдгээрийн аль нэгийг нь шинэчлэх гэсэн бол тухайн аяллын нэрийг яг таг бичээд дахин илгээгээрэй.`,
+          );
+        } else {
+          blockingConflicts.push(
+            `${label}: ${matchingTrips.length} төстэй аялал таарч байна (${candidates}). Аль нь болохыг аяллын бүтэн нэрээр нь зааж бичээд дахин оролдоно уу.`,
+          );
+          continue;
+        }
       }
     }
 

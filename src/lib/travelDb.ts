@@ -1144,10 +1144,16 @@ export async function resolveTripIdByMatch(match?: {
     [operator, route],
   );
   if (!found || found.rows.length === 0) {
-    return { id: null, conflict: "Matching trip not found." };
+    // applyAIAction pattern-matches this text to allow upsert-creates —
+    // keep the wording in sync with the regex there if it ever changes.
+    return { id: null, conflict: "Таарах аялал олдсонгүй (matching trip not found)." };
   }
   if (found.rows.length > 1) {
-    return { id: null, conflict: "Multiple trips match the same operator/route." };
+    return {
+      id: null,
+      conflict:
+        "Ижил нэр/операторт хэд хэдэн аялал таарч байна. Аль нь болохыг аяллын бүтэн нэрээр нь зааж өгнө үү.",
+    };
   }
   return { id: found.rows[0].id, conflict: null as string | null };
 }

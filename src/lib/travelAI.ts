@@ -1645,7 +1645,7 @@ async function applyAIAction(action: AITripAction) {
       const match = await resolveTripIdByMatch(action.match);
       if (
         match.conflict &&
-        !/matching trip not found/i.test(match.conflict)
+        !/matching trip not found|таарах аялал олдсонгүй/i.test(match.conflict)
       ) {
         return { ok: false, message: match.conflict };
       }
