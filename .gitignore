@@ -48,3 +48,6 @@ next-env.d.ts
 # Claude Code local files
 .claude/
 .codex-logs/
+
+# scratch dir — QA logs, sample exports, never committed
+tmp/
