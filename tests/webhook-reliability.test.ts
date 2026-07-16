@@ -369,6 +369,90 @@ test("webhook stays silent to the customer when the model refers unknown data to
   }
 });
 
+test("webhook acknowledges Messenger file-only attachments without waiting on extraction", async () => {
+  applyTestEnv();
+  const handler = await loadWebhookHandler();
+
+  const originalFetch = globalThis.fetch;
+  const sentTexts: string[] = [];
+  let fileDownloads = 0;
+
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.includes("cdn.example.test/customer-receipt.pdf")) {
+      fileDownloads += 1;
+      return new Response(Buffer.from("%PDF-1.4\n% test"), {
+        status: 200,
+        headers: { "content-type": "application/pdf" },
+      });
+    }
+
+    if (url.includes("api.openai.com/v1/responses")) {
+      return new Response(
+        JSON.stringify({
+          output_text: JSON.stringify({
+            category: "travel_document",
+            confidence: 0.7,
+            summary: "PDF file sent by customer",
+            passport: {},
+            trip: {},
+            payment: {},
+            booking: {},
+            visible_text: "customer-receipt.pdf",
+            needs_human_review: true,
+            warnings: [],
+          }),
+        }),
+        { status: 200 },
+      );
+    }
+
+    if (url.includes("/messages")) {
+      const body = JSON.parse(String(init?.body || "{}")) as {
+        message?: { text?: string };
+      };
+      if (body.message?.text) sentTexts.push(body.message.text);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const payload = {
+      object: "page",
+      entry: [
+        {
+          id: "1234567890",
+          messaging: [
+            {
+              sender: { id: "fb-user-file-only" },
+              message: {
+                mid: "fb-mid-file-only-1",
+                attachments: [
+                  {
+                    type: "file",
+                    payload: { url: "https://cdn.example.test/customer-receipt.pdf" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = await callWebhook(handler, payload);
+    await sleep(50);
+
+    assert.equal(result.statusCode, 200);
+    assert.equal(sentTexts.length, 1);
+    assert.ok(fileDownloads >= 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("redis disconnect in replay/conversation mode fails closed with 503", async () => {
   const script = `
     (async () => {

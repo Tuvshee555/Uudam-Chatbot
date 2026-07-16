@@ -134,6 +134,21 @@ test("shouldSilenceNoDataReply catches deterministic fast-path no-data replies",
   assert.equal(shouldSilenceNoDataReply(pastDateMiss), true);
 });
 
+test("shouldSilenceNoDataReply catches date availability no-trip wording", () => {
+  assert.equal(
+    shouldSilenceNoDataReply(
+      "\u0037 \u0441\u0430\u0440\u044b\u043d \u0031\u0030-\u043d\u0434 \u0433\u0430\u0440\u0430\u0445 \u0430\u044f\u043b\u0430\u043b \u0430\u043b\u0433\u0430 \u0431\u0430\u0439\u043d\u0430. \u041e\u0439\u0440\u044b\u043d \u0433\u0430\u0440\u0430\u043b\u0442\u0443\u0443\u0434:",
+    ),
+    true,
+  );
+  assert.equal(
+    shouldSilenceNoDataReply(
+      "\u0039 \u0441\u0430\u0440\u0434 \u0433\u0430\u0440\u0430\u0445 \u0430\u044f\u043b\u0430\u043b \u043e\u0434\u043e\u043e\u0433\u0438\u0439\u043d \u043c\u044d\u0434\u044d\u044d\u043b\u044d\u043b\u0434 \u0430\u043b\u0433\u0430 \u0431\u0430\u0439\u043d\u0430.",
+    ),
+    true,
+  );
+});
+
 test("extractButtons keeps up to 10 buttons (disambiguation lists)", () => {
   const labels = Array.from({ length: 12 }, (_, i) => `Аялал ${i + 1}`);
   const { buttons } = extractButtons(`Сонгоно уу:\nBUTTONS: ${labels.join("|")}`);

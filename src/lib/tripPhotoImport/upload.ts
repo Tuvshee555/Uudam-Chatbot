@@ -64,6 +64,39 @@ export async function uploadImageToCloudinary(
   return json.secure_url;
 }
 
+export async function uploadFileToCloudinary(
+  buffer: Buffer,
+  fileName: string,
+  mimeType: string,
+): Promise<string> {
+  const sig = getCloudinarySignature();
+  if (!sig) {
+    throw new Error("Cloudinary тохиргоо дутуу байна");
+  }
+
+  const formData = new FormData();
+  const blob = new Blob([new Uint8Array(buffer)], { type: mimeType });
+  formData.append("file", blob, fileName);
+  formData.append("api_key", sig.apiKey);
+  formData.append("timestamp", String(sig.timestamp));
+  formData.append("signature", sig.signature);
+  formData.append("folder", sig.folder);
+
+  const res = await fetch(
+    `https://api.cloudinary.com/v1_1/${sig.cloudName}/auto/upload`,
+    { method: "POST", body: formData },
+  );
+
+  const json = (await res.json()) as {
+    secure_url?: string;
+    error?: { message?: string };
+  };
+  if (!res.ok || !json.secure_url) {
+    throw new Error(json.error?.message || "Cloudinary upload амжилтгүй");
+  }
+  return json.secure_url;
+}
+
 export async function uploadImagesToCloudinary(
   images: Array<{ buffer: Buffer; fileName: string; mimeType: string }>,
 ): Promise<{ urls: string[]; failures: Array<{ fileName: string; error: string }> }> {

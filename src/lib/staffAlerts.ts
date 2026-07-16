@@ -2,13 +2,16 @@ import { getEnv } from "./env";
 import { sendTextMessage, type UpstreamTraceOptions } from "./messenger";
 import { logError, logInfo, logWarn, recordCounter } from "./observability";
 
-const env = getEnv();
-
 export type StaffLeadAlert = {
   kind: "handoff" | "booking";
   platform: string;
   customerMessage: string;
   contactPhone?: string;
+};
+
+export type StaffAlertDeliveryResult = {
+  attempted: number;
+  delivered: number;
 };
 
 export function buildAlertText(alert: StaffLeadAlert): string {
@@ -37,6 +40,7 @@ async function sendTelegramMessage(
   botToken: string,
   chatId: string,
   text: string,
+  timeoutMs: number,
 ): Promise<void> {
   const response = await fetch(
     `https://api.telegram.org/bot${botToken}/sendMessage`,
@@ -44,7 +48,7 @@ async function sendTelegramMessage(
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
-      signal: AbortSignal.timeout(env.metaApiTimeoutMs),
+      signal: AbortSignal.timeout(timeoutMs),
     },
   );
   if (!response.ok) {
@@ -72,7 +76,8 @@ async function sendTelegramMessage(
 export async function notifyStaffOfLead(
   alert: StaffLeadAlert,
   trace?: UpstreamTraceOptions,
-): Promise<void> {
+): Promise<StaffAlertDeliveryResult> {
+  const env = getEnv();
   const text = buildAlertText(alert);
   let attempted = 0;
   let delivered = 0;
@@ -98,7 +103,7 @@ export async function notifyStaffOfLead(
     for (const chatId of env.telegramStaffChatIds) {
       attempted += 1;
       try {
-        await sendTelegramMessage(env.telegramBotToken, chatId, text);
+        await sendTelegramMessage(env.telegramBotToken, chatId, text, env.metaApiTimeoutMs);
         delivered += 1;
         recordCounter("staff_alert.sent_total", 1, { kind: alert.kind, channel: "telegram" });
         logInfo("staff_alert.sent", { kind: alert.kind, channel: "telegram" });
@@ -114,13 +119,12 @@ export async function notifyStaffOfLead(
   }
 
   if (attempted === 0) {
-    // Deliberately no notify channel configured (owner checks the admin
-    // dashboard's Хүсэлтүүд/leads tab instead of real-time pings) — this is
-    // expected, not a failure. The lead itself is already saved in the DB
-    // regardless of whether a ping goes out; log level is quiet on purpose.
     recordCounter("staff_alert.no_channel_total", 1, { kind: alert.kind });
-    logInfo("staff_alert.no_channel_configured", { kind: alert.kind });
-    return;
+    logError("staff_alert.no_channel_configured", {
+      kind: alert.kind,
+      hint: "A lead was created but no realtime staff alert channel is configured. Configure Telegram or STAFF_NOTIFY_PSIDS, or monitor the admin leads tab continuously.",
+    });
+    return { attempted, delivered };
   }
   if (delivered === 0) {
     recordCounter("staff_alert.all_channels_failed_total", 1, { kind: alert.kind });
@@ -130,4 +134,5 @@ export async function notifyStaffOfLead(
       hint: "Every staff-alert channel failed. Messenger RESPONSE pings are blocked outside Meta's 24h window — configure Telegram as a reliable fallback.",
     });
   }
+  return { attempted, delivered };
 }

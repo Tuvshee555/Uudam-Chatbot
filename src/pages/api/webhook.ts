@@ -21,9 +21,8 @@ import { appendLeadCaptureCta, buildAmbiguousTripReply, buildBudgetReply, buildC
 import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
-  extractImageAttachmentUrls,
+  scheduleAttachmentDocumentPipeline,
   handleAttachmentOnlyMessage,
-  scheduleImageDocumentPipeline,
 } from "../../lib/webhookAttachments";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
@@ -1806,12 +1805,12 @@ export default async function handler(
                   // Images riding along with text are processed in the
                   // background — the text must be answered immediately, not
                   // after a multi-image vision pipeline finishes.
-                  scheduleImageDocumentPipeline({
+                  scheduleAttachmentDocumentPipeline({
                     platform,
                     senderId,
                     pageId,
                     token,
-                    imageUrls: extractImageAttachmentUrls(attachments),
+                    attachments,
                     trace: {
                       requestId: trace.requestId,
                       correlationId: trace.correlationId,

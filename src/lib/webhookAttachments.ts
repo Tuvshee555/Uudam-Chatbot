@@ -10,7 +10,7 @@ import { sendTextMessage } from "./messenger";
 import { appendMessage } from "./conversation";
 import { rateLimitAsync } from "./rateLimit";
 import { scheduleCustomerMemoryUpdate } from "./conversationMemory";
-import { scheduleCustomerImageProcessing } from "./customerDocuments";
+import { scheduleCustomerAttachmentProcessing, scheduleCustomerImageProcessing, type FileAttachmentInput } from "./customerDocuments";
 import { isPaused } from "./pause";
 import { isPagePaused, listTrips } from "./travelOps";
 import { buildStructuredTripReply } from "./travelFastPaths";
@@ -37,6 +37,32 @@ export function extractImageAttachmentUrls(
     .filter((a) => a?.type === "image" && typeof a?.payload?.url === "string")
     .map((a) => String(a.payload?.url || "").trim())
     .filter((url) => url.startsWith("http"));
+}
+
+export function extractFileAttachmentInputs(
+  attachments: Array<{
+    type?: string;
+    payload?: { url?: string };
+    title?: string;
+    name?: string;
+    mime_type?: string;
+  }>,
+  base: Pick<FileAttachmentInput, "platform" | "senderId" | "pageId" | "trace">,
+): FileAttachmentInput[] {
+  return attachments
+    .filter((a) => a?.type !== "image" && typeof a?.payload?.url === "string")
+    .map((a) => ({
+      ...base,
+      url: String(a.payload?.url || "").trim(),
+      attachmentType: String(a.type || "file"),
+      fileName: typeof a.name === "string"
+        ? a.name
+        : typeof a.title === "string"
+          ? a.title
+          : undefined,
+      mimeType: typeof a.mime_type === "string" ? a.mime_type : undefined,
+    }))
+    .filter((file) => file.url.startsWith("http"));
 }
 
 type ProcessedDocumentLike = {
@@ -172,6 +198,78 @@ export function scheduleImageDocumentPipeline(input: {
   });
 }
 
+export function scheduleAttachmentDocumentPipeline(input: {
+  platform: Platform;
+  senderId: string;
+  pageId: string;
+  token?: string;
+  attachments: Array<{
+    type?: string;
+    payload?: { url?: string };
+    title?: string;
+    name?: string;
+    mime_type?: string;
+  }>;
+  trace?: { requestId: string; correlationId: string };
+}) {
+  const { platform, senderId, pageId, token, attachments, trace } = input;
+  const imageUrls = extractImageAttachmentUrls(attachments);
+  const files = extractFileAttachmentInputs(attachments, {
+    platform,
+    senderId,
+    pageId,
+    trace,
+  });
+  if (imageUrls.length === 0 && files.length === 0) return;
+  scheduleCustomerAttachmentProcessing({
+    platform,
+    senderId,
+    pageId,
+    imageUrls,
+    files,
+    trace,
+    onProcessed: async (docs) => {
+      scheduleCustomerMemoryUpdate({
+        senderId,
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        source: "api.webhook.attachments",
+      });
+      if (platform !== "facebook" || !token) return;
+      const confirmation = buildDocumentReceivedMessage(docs);
+      const tripReply = await buildMatchedTripReply(docs);
+      if (!confirmation && !tripReply) return;
+      if ((await isPagePaused(pageId)) || (await isPaused(senderId))) {
+        recordCounter("webhook.document_received_suppressed_total", 1, { platform });
+        return;
+      }
+      for (const message of [confirmation, tripReply].filter(
+        (value): value is string => Boolean(value),
+      )) {
+        try {
+          await sendTextMessage(senderId, message, token, {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            source: "api.webhook.document_received",
+          });
+          await appendMessage(senderId, "assistant", message).catch(() => {});
+        } catch (error) {
+          logWarn("webhook.document_received_send_failed", {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            platform,
+            pageId,
+            senderHash: hashIdentifier(senderId),
+            classification: classifyError(error),
+            message: error instanceof Error ? error.message : String(error),
+          });
+          break;
+        }
+      }
+    },
+  });
+}
+
 /**
  * A message with attachments but no text. Record what arrived (so history and
  * long-term memory both know), and acknowledge it once so the customer never
@@ -201,14 +299,14 @@ export async function handleAttachmentOnlyMessage(input: {
     `[Хэрэглэгч ${kinds.join(", ")} илгээсэн]`,
     storedImages,
   ).catch(() => {});
-  // Vision pipeline runs in the background — the customer gets the ack
+  // Document pipeline runs in the background — the customer gets the ack
   // immediately, then a category-aware confirmation once classification lands.
-  scheduleImageDocumentPipeline({
+  scheduleAttachmentDocumentPipeline({
     platform,
     senderId,
     pageId,
     token,
-    imageUrls: extractImageAttachmentUrls(attachments),
+    attachments,
     trace,
   });
 

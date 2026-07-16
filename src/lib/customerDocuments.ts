@@ -10,7 +10,7 @@ import {
   recordCounter,
 } from "./observability";
 import { ensureTravelSchema } from "./travelSchema";
-import { uploadImageToCloudinary } from "./tripPhotoImport/upload";
+import { uploadFileToCloudinary, uploadImageToCloudinary } from "./tripPhotoImport/upload";
 import { createPaymentRecord, listPayments } from "./travelPayments";
 import { listTrips, type TravelTrip } from "./travelOps";
 import { resolveTripFromUserMessage } from "./travelFastPathsSearch";
@@ -69,11 +69,22 @@ export type ImageAttachmentInput = {
 };
 
 const SENSITIVE_RETENTION_DAYS = 180;
+const MAX_CUSTOMER_ATTACHMENT_BYTES = 12 * 1024 * 1024;
+
+export type FileAttachmentInput = ImageAttachmentInput & {
+  attachmentType?: string;
+  fileName?: string;
+  mimeType?: string;
+};
 
 type DownloadedImage = {
   buffer: Buffer;
   mimeType: string;
   hash: string;
+};
+
+type DownloadedFile = DownloadedImage & {
+  fileName: string;
 };
 
 function normalizeCategory(value: unknown): CustomerDocumentCategory {
@@ -126,6 +137,52 @@ function normalizeStatus(value: unknown): CustomerDocumentStatus {
 function readNumber(value: unknown): number {
   const num = Number(value);
   return Number.isFinite(num) ? Math.max(0, Math.min(1, num)) : 0;
+}
+
+function fileNameFromUrl(url: string, fallback = "customer-attachment"): string {
+  try {
+    const parsed = new URL(url);
+    const last = parsed.pathname.split("/").filter(Boolean).pop() || "";
+    const decoded = decodeURIComponent(last).replace(/[^\w.\-() ]+/g, "_").trim();
+    return decoded || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function mimeFromFileName(fileName: string): string {
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith(".pdf")) return "application/pdf";
+  if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (lower.endsWith(".txt")) return "text/plain";
+  if (lower.endsWith(".csv")) return "text/csv";
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  return "application/octet-stream";
+}
+
+function isImageMimeType(mimeType: string): boolean {
+  return mimeType.toLowerCase().startsWith("image/");
+}
+
+function getResponseOutputText(data: unknown): string {
+  const root = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  if (typeof root.output_text === "string") return root.output_text;
+  const output = Array.isArray(root.output) ? root.output : [];
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue;
+    const content = Array.isArray((item as Record<string, unknown>).content)
+      ? ((item as Record<string, unknown>).content as unknown[])
+      : [];
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      const record = part as Record<string, unknown>;
+      if (typeof record.text === "string") return record.text;
+      if (typeof record.output_text === "string") return record.output_text;
+    }
+  }
+  return "";
 }
 
 function parseAmount(value: unknown): number {
@@ -250,6 +307,30 @@ async function downloadImage(url: string): Promise<DownloadedImage> {
     buffer,
     mimeType,
     hash: createHash("sha256").update(buffer).digest("hex"),
+  };
+}
+
+async function downloadFileAttachment(input: FileAttachmentInput): Promise<DownloadedFile> {
+  const res = await fetch(input.url, { signal: AbortSignal.timeout(20_000) });
+  if (!res.ok) {
+    throw new Error(`file_download_failed:${res.status}`);
+  }
+  const headerType = res.headers.get("content-type") || "";
+  const fileName = (input.fileName || fileNameFromUrl(input.url)).slice(0, 180);
+  const mimeType =
+    input.mimeType?.split(";")[0]?.trim() ||
+    headerType.split(";")[0]?.trim() ||
+    mimeFromFileName(fileName);
+  const arrayBuffer = await res.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  if (buffer.length > MAX_CUSTOMER_ATTACHMENT_BYTES) {
+    throw new Error("file_too_large");
+  }
+  return {
+    buffer,
+    mimeType: mimeType || mimeFromFileName(fileName),
+    hash: createHash("sha256").update(buffer).digest("hex"),
+    fileName,
   };
 }
 
@@ -423,6 +504,184 @@ async function extractImageData(
   });
   const extracted = parseJsonObject(result.text);
   // Deterministic phone fallback over memo + visible text.
+  const payment = extracted.payment && typeof extracted.payment === "object"
+    ? (extracted.payment as Record<string, unknown>)
+    : null;
+  if (payment && !compactValue(payment.phone)) {
+    const phone = extractMongolianPhone(
+      [compactValue(payment.description), compactValue(extracted.visible_text)].join(" "),
+    );
+    if (phone) payment.phone = phone;
+  }
+  return {
+    extracted,
+    category: normalizeCategory(extracted.category),
+  };
+}
+
+function buildCustomerFileExtractionPrompt(input: {
+  fileName: string;
+  mimeType: string;
+  parsedText?: string;
+}): string {
+  return [
+    "You classify and extract a customer-sent travel chatbot attachment.",
+    "Return JSON only. Do not invent unreadable data.",
+    "Classify by meaning, not file type.",
+    "Categories:",
+    "- passport: passport bio page/photo or official passport image.",
+    "- travel_document: visa, ID, ticket, booking document, certificate, flight ticket, insurance, or other customer travel document.",
+    "- booking_code: booking code, reservation number, passcode, confirmation code, or other code the agency needs later.",
+    "- trip_screenshot: trip poster, social post, itinerary, price list, or tour ad.",
+    "- payment_screenshot: bank transfer receipt, payment proof, statement, QR payment confirmation, transaction success screen, or any proof money moved to an account.",
+    "- other: unrelated or unclear file.",
+    "",
+    "JSON schema:",
+    "{",
+    '  "category": "passport|travel_document|booking_code|trip_screenshot|payment_screenshot|other",',
+    '  "confidence": 0.0,',
+    '  "summary": "short Mongolian summary for staff",',
+    '  "passport": { "full_name": "", "passport_number": "", "date_of_birth": "", "expiry_date": "", "nationality": "", "sex": "" },',
+    '  "trip": { "title": "", "destination": "", "departure_dates": [], "price_text": "", "duration": "", "operator": "" },',
+    '  "payment": { "amount": "", "currency": "", "reference": "", "date": "", "sender_name": "", "description": "", "phone": "" },',
+    '  "booking": { "code": "", "trip_name": "", "traveler_name": "", "phone": "", "notes": "" },',
+    '  "visible_text": "important readable text, short",',
+    '  "needs_human_review": true,',
+    '  "warnings": []',
+    "}",
+    "",
+    `File name: ${input.fileName}`,
+    `MIME type: ${input.mimeType}`,
+    input.parsedText
+      ? `Parsed file text:\n${input.parsedText.slice(0, 16_000)}`
+      : "No parsed text was available. Read the attached file visually if present.",
+  ].join("\n");
+}
+
+async function extractTextFromFile(file: DownloadedFile): Promise<string> {
+  if (isImageMimeType(file.mimeType)) return "";
+  try {
+    const { fileToText } = await import("@/lib/poster/parse");
+    const text = await fileToText(file.buffer, file.fileName);
+    return String(text || "").trim();
+  } catch {
+    if (file.mimeType.startsWith("text/")) {
+      return file.buffer.toString("utf8").trim();
+    }
+    return "";
+  }
+}
+
+async function extractFileDataWithOpenAIFile(
+  file: DownloadedFile,
+): Promise<Record<string, unknown> | null> {
+  if (file.mimeType !== "application/pdf") return null;
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return null;
+  const model = process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL || "gpt-4.1";
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`,
+    },
+    body: JSON.stringify({
+      model,
+      max_output_tokens: 2200,
+      input: [
+        {
+          role: "system",
+          content:
+            "You are a strict customer document classifier for a travel agency. Return JSON only. Never invent missing data.",
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_file",
+              filename: file.fileName,
+              file_data: `data:${file.mimeType};base64,${file.buffer.toString("base64")}`,
+            },
+            {
+              type: "input_text",
+              text: buildCustomerFileExtractionPrompt({
+                fileName: file.fileName,
+                mimeType: file.mimeType,
+              }),
+            },
+          ],
+        },
+      ],
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(
+      `openai_file_extract_failed:${response.status}:${
+        typeof (data as { error?: { message?: string } }).error?.message === "string"
+          ? (data as { error?: { message?: string } }).error?.message
+          : ""
+      }`,
+    );
+  }
+  const text = getResponseOutputText(data);
+  return text ? parseJsonObject(text) : null;
+}
+
+async function extractFileData(
+  file: DownloadedFile,
+  trace?: { requestId?: string; correlationId?: string },
+) {
+  let extracted: Record<string, unknown> | null = null;
+  try {
+    extracted = await extractFileDataWithOpenAIFile(file);
+  } catch (error) {
+    logWarn("customer_documents.file_visual_extract_failed", {
+      requestId: trace?.requestId,
+      correlationId: trace?.correlationId,
+      fileName: file.fileName,
+      classification: classifyError(error),
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  if (!extracted) {
+    const parsedText = await extractTextFromFile(file);
+    if (parsedText) {
+      const result = await askOpenAIParts(
+        [{ text: buildCustomerFileExtractionPrompt({ fileName: file.fileName, mimeType: file.mimeType, parsedText }) }],
+        {
+          source: "customer_documents.file_extract",
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          jsonMode: true,
+          timeoutMs: 20_000,
+          maxRetries: 1,
+          maxOutputTokens: 1600,
+          temperature: 0,
+          preferOpenAI: true,
+        },
+      );
+      extracted = parseJsonObject(result.text);
+    }
+  }
+
+  if (!extracted) {
+    extracted = {
+      category: "travel_document",
+      confidence: 0.2,
+      summary: "Customer sent a file attachment; staff review required.",
+      passport: {},
+      trip: {},
+      payment: {},
+      booking: {},
+      visible_text: file.fileName,
+      needs_human_review: true,
+      warnings: ["File could not be automatically read."],
+    };
+  }
+
   const payment = extracted.payment && typeof extracted.payment === "object"
     ? (extracted.payment as Record<string, unknown>)
     : null;
@@ -612,6 +871,124 @@ export async function processCustomerImageAttachment(
   }
 }
 
+export async function processCustomerFileAttachment(
+  input: FileAttachmentInput & { trips?: TravelTrip[] },
+) {
+  try {
+    const file = await downloadFileAttachment(input);
+    if (isImageMimeType(file.mimeType)) {
+      return processCustomerImageAttachment({ ...input, url: input.url, trips: input.trips });
+    }
+
+    let storedUrl = input.url;
+    try {
+      storedUrl = await uploadFileToCloudinary(
+        file.buffer,
+        `customer-${input.senderId}-${Date.now()}-${file.fileName}`,
+        file.mimeType,
+      );
+    } catch (error) {
+      logWarn("customer_documents.file_store_failed", {
+        requestId: input.trace?.requestId,
+        correlationId: input.trace?.correlationId,
+        senderHash: hashIdentifier(input.senderId),
+        fileName: file.fileName,
+        classification: classifyError(error),
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const { extracted, category } = await extractFileData(file, input.trace);
+    const confidence = readNumber(extracted.confidence);
+    const tripMatch = matchTripFromDocument(
+      extracted,
+      category,
+      input.trips || [],
+      (text, candidateTrips) =>
+        resolveTripFromUserMessage(text, candidateTrips as TravelTrip[], {
+          allowLooseFallback: false,
+        }),
+    );
+    if (tripMatch) {
+      extracted.trip_match = { id: tripMatch.id, route_name: tripMatch.route_name };
+    }
+    extracted.file = {
+      name: file.fileName,
+      mime_type: file.mimeType,
+      attachment_type: input.attachmentType || "file",
+    };
+
+    const duplicateOfId = await findDuplicateDocument({
+      senderId: input.senderId,
+      imageSha256: file.hash,
+    });
+    const paymentMatch = await matchOrCreatePayment({
+      platform: input.platform,
+      senderId: input.senderId,
+      imageSha256: file.hash,
+      extracted,
+    });
+    const row = await insertCustomerDocument({
+      platform: input.platform,
+      senderId: input.senderId,
+      pageId: input.pageId,
+      sourceUrl: input.url,
+      storedUrl,
+      imageSha256: file.hash,
+      mimeType: file.mimeType,
+      category,
+      extractedJson: extracted,
+      confidence,
+      matchedPaymentId: paymentMatch.id,
+      matchedTripId: tripMatch?.id ?? null,
+      duplicateOfId,
+      autoAction: paymentMatch.autoAction,
+    });
+    if (row?.id) {
+      await writeDocumentAudit({
+        documentId: row.id,
+        action: duplicateOfId ? "duplicate_detected" : "created_from_file",
+        after: row,
+      });
+      if (paymentMatch.id) {
+        await writeDocumentAudit({
+          documentId: row.id,
+          action: paymentMatch.autoAction || "payment_matched",
+          after: { matched_payment_id: paymentMatch.id },
+        });
+      }
+    }
+
+    recordCounter("customer_documents.processed_total", 1, {
+      platform: input.platform,
+      category,
+      attachment_type: input.attachmentType || "file",
+    });
+    logInfo("customer_documents.file_processed", {
+      requestId: input.trace?.requestId,
+      correlationId: input.trace?.correlationId,
+      senderHash: hashIdentifier(input.senderId),
+      category,
+      documentId: row?.id,
+      fileName: file.fileName,
+    });
+    return row;
+  } catch (error) {
+    recordCounter("customer_documents.failed_total", 1, {
+      platform: input.platform,
+      attachment_type: input.attachmentType || "file",
+    });
+    logWarn("customer_documents.file_process_failed", {
+      requestId: input.trace?.requestId,
+      correlationId: input.trace?.correlationId,
+      senderHash: hashIdentifier(input.senderId),
+      classification: classifyError(error),
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
 export async function processCustomerImageAttachments(input: {
   platform: Platform;
   senderId: string;
@@ -628,6 +1005,33 @@ export async function processCustomerImageAttachments(input: {
   const trips = await listTrips({ limit: 5000 }).catch(() => [] as TravelTrip[]);
   const rows = await Promise.all(
     urls.map((url) => processCustomerImageAttachment({ ...input, url, trips })),
+  );
+  return rows.filter((row): row is CustomerDocument => Boolean(row));
+}
+
+export async function processCustomerFileAttachments(input: {
+  platform: Platform;
+  senderId: string;
+  pageId: string;
+  files: FileAttachmentInput[];
+  trace?: { requestId?: string; correlationId?: string };
+}) {
+  const files = input.files
+    .filter((file) => file.url.trim().startsWith("http"))
+    .slice(0, 5);
+  if (files.length === 0) return [];
+  const trips = await listTrips({ limit: 5000 }).catch(() => [] as TravelTrip[]);
+  const rows = await Promise.all(
+    files.map((file) =>
+      processCustomerFileAttachment({
+        ...file,
+        platform: input.platform,
+        senderId: input.senderId,
+        pageId: input.pageId,
+        trace: input.trace,
+        trips,
+      }),
+    ),
   );
   return rows.filter((row): row is CustomerDocument => Boolean(row));
 }
@@ -670,6 +1074,52 @@ export function scheduleCustomerImageProcessing(input: {
     waitUntil(work);
   } catch {
     // Not running on Vercel (tests, local node) — detached execution is fine.
+    void work;
+  }
+}
+
+export function scheduleCustomerAttachmentProcessing(input: {
+  platform: Platform;
+  senderId: string;
+  pageId: string;
+  imageUrls: string[];
+  files: FileAttachmentInput[];
+  trace?: { requestId?: string; correlationId?: string };
+  onProcessed?: (docs: CustomerDocument[]) => Promise<void>;
+}): void {
+  const work = (async () => {
+    const [imageDocs, fileDocs] = await Promise.all([
+      processCustomerImageAttachments({
+        platform: input.platform,
+        senderId: input.senderId,
+        pageId: input.pageId,
+        urls: input.imageUrls,
+        trace: input.trace,
+      }),
+      processCustomerFileAttachments({
+        platform: input.platform,
+        senderId: input.senderId,
+        pageId: input.pageId,
+        files: input.files,
+        trace: input.trace,
+      }),
+    ]);
+    const docs = [...imageDocs, ...fileDocs];
+    if (docs.length > 0 && input.onProcessed) {
+      await input.onProcessed(docs);
+    }
+  })().catch((error) => {
+    logWarn("customer_documents.scheduled_attachment_processing_failed", {
+      requestId: input.trace?.requestId,
+      correlationId: input.trace?.correlationId,
+      senderHash: hashIdentifier(input.senderId),
+      classification: classifyError(error),
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
+  try {
+    waitUntil(work);
+  } catch {
     void work;
   }
 }

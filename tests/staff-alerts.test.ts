@@ -80,11 +80,32 @@ test("notifyStaffOfLead never throws even when zero channels are configured", as
   applyTestEnv();
   const { notifyStaffOfLead } = await loadStaffAlertsModule();
 
-  await assert.doesNotReject(
-    notifyStaffOfLead({
+  let result: Awaited<ReturnType<typeof notifyStaffOfLead>> | null = null;
+  await assert.doesNotReject(async () => {
+    result = await notifyStaffOfLead({
       kind: "handoff",
       platform: "facebook",
       customerMessage: "Хүнтэй ярья",
-    }),
-  );
+    });
+  });
+  assert.deepEqual(result, { attempted: 0, delivered: 0 });
+});
+
+test("notifyStaffOfLead reports successful realtime delivery", async () => {
+  applyTestEnv({ STAFF_NOTIFY_PSIDS: "staff-1" });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ ok: true }), { status: 200 })) as typeof fetch;
+
+  try {
+    const { notifyStaffOfLead } = await loadStaffAlertsModule();
+    const result = await notifyStaffOfLead({
+      kind: "handoff",
+      platform: "facebook",
+      customerMessage: "Хүнтэй ярья",
+    });
+    assert.deepEqual(result, { attempted: 1, delivered: 1 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
