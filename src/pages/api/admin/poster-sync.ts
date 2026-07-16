@@ -145,7 +145,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const createNew = body.createNew === true;
   const newTripTitle =
     typeof body.newTripTitle === "string" ? body.newTripTitle.trim() : "";
-  const mode = body.mode === "append" ? "append" : "replace";
+  const mode = body.mode === "append" ? "append" : body.mode === "skip" ? "skip" : "replace";
   const approvedFields = sanitizeApprovedFields(body.fields);
 
   if (!tripId && !createNew) {
@@ -231,7 +231,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const patchFields: TripMutationFields = { ...approvedFields };
-  if (uploadedUrls.length > 0) {
+  if (uploadedUrls.length > 0 && mode !== "skip") {
     patchFields.photo_urls =
       mode === "append"
         ? [...existingUrls, ...uploadedUrls].slice(0, MAX_PHOTOS)

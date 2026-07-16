@@ -1086,7 +1086,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
         index,
         url: canvas.toDataURL("image/png"),
       };
-    });
+    }).filter((slice) => Boolean(slice.url));
   }
 
   // Renders the poster as Messenger-sized images for AttachToTripModal — the
@@ -1172,42 +1172,29 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     }
   }
 
-  async function downloadPng() {
-    setBusy("Зураг бэлдэж байна…");
-    try {
-      await withExportMode(async () => {
-        const nodes = [page1Ref.current].filter((n): n is HTMLDivElement => Boolean(n));
-        for (let i = 0; i < nodes.length; i++) {
-          const url = await capture(nodes[i]);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = `${(trip?.title || "poster").slice(0, 30)}-${i + 1}.png`;
-          a.click();
-        }
-      });
-    } catch (e) {
-      setError(String((e as { message?: string })?.message || e));
-    } finally {
-      setBusy("");
-    }
-  }
-
   async function downloadPdf() {
     setBusy("PDF бэлдэж байна…");
     try {
       await withExportMode(async () => {
         const { jsPDF } = await import("jspdf");
-        const nodes = [page1Ref.current].filter((n): n is HTMLDivElement => Boolean(n));
+        const captures = await captureMessengerSlices();
+        if (captures.length === 0) throw new Error("Poster capture failed.");
         let pdf: InstanceType<typeof jsPDF> | undefined;
-        for (let i = 0; i < nodes.length; i++) {
-          const url = await capture(nodes[i]);
-          const w = nodes[i].offsetWidth;
-          const h = nodes[i].offsetHeight;
+        for (let i = 0; i < captures.length; i++) {
+          const url = captures[i].url;
+          const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+            const image = new Image();
+            image.onload = () => resolve(image);
+            image.onerror = reject;
+            image.src = url;
+          });
+          const w = img.width;
+          const h = img.height;
           if (i === 0) pdf = new jsPDF({ orientation: "p", unit: "px", format: [w, h] });
           else pdf?.addPage([w, h], "p");
           pdf?.addImage(url, "PNG", 0, 0, w, h);
         }
-        pdf?.save(`${(trip?.title || "poster").slice(0, 30)}.pdf`);
+        pdf?.save(`${buildExportBaseName()}-split.pdf`);
       });
     } catch (e) {
       setError(String((e as { message?: string })?.message || e));
@@ -1409,14 +1396,11 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                   <Button size="sm" variant="primary" onClick={() => setAttachModalOpen(true)} disabled={!!busy}>
                     <Icons.plus size={14} /> Аялалд нэмэх
                   </Button>
-                  <Button size="sm" variant="secondary" onClick={downloadPng} disabled={!!busy}>
+                  <Button size="sm" variant="secondary" onClick={downloadSplitImages} disabled={!!busy}>
                     <Icons.image size={14} /> PNG
                   </Button>
                   <Button size="sm" variant="secondary" onClick={downloadPdf} disabled={!!busy}>
                     <Icons.file size={14} /> PDF
-                  </Button>
-                  <Button size="sm" variant="secondary" onClick={downloadSplitImages} disabled={!!busy}>
-                    Messenger Split
                   </Button>
                   <Button size="sm" variant="secondary" onClick={downloadSplitZip} disabled={!!busy}>
                     Messenger ZIP

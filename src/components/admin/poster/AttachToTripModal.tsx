@@ -96,7 +96,7 @@ type SyncResult = {
   created?: boolean;
   tripId?: string;
   tripName?: string;
-  mode?: "replace" | "append";
+  mode?: "replace" | "append" | "skip";
   uploaded?: number;
   totalPhotos?: number;
   failed?: number;
@@ -155,7 +155,7 @@ export default function AttachToTripModal({
   const [allTrips, setAllTrips] = React.useState<MatchCandidate[]>([]);
   const [mappedFields, setMappedFields] = React.useState<MappedFields>({});
   const [target, setTarget] = React.useState(""); // tripId | "__new__" | ""
-  const [mode, setMode] = React.useState<"replace" | "append">("replace");
+  const [mode, setMode] = React.useState<"replace" | "append" | "skip">("replace");
   const [approvedKeys, setApprovedKeys] = React.useState<Set<string>>(() => new Set());
   const [submitting, setSubmitting] = React.useState(false);
   const [submitError, setSubmitError] = React.useState("");
@@ -186,7 +186,7 @@ export default function AttachToTripModal({
         setCandidates(json.candidates || []);
         setAllTrips(json.allTrips || []);
         setMappedFields(json.mappedFields || {});
-        setTarget(json.candidates?.[0]?.id || "");
+        setTarget(json.candidates?.[0]?.id || "__new__");
       } catch (e) {
         setMatchError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -201,6 +201,10 @@ export default function AttachToTripModal({
     if (!target || isNew) return null;
     return candidates.find((c) => c.id === target) || allTrips.find((t) => t.id === target) || null;
   }, [target, isNew, candidates, allTrips]);
+
+  React.useEffect(() => {
+    if (isNew || !selectedTrip || selectedTrip.photoCount === 0) setMode("replace");
+  }, [isNew, selectedTrip]);
 
   // Fields where the poster's data differs from the selected trip's current
   // value. For a new trip, every mapped field is "new" (nothing to diff against).
@@ -236,7 +240,14 @@ export default function AttachToTripModal({
     });
   }
 
-  const canSubmit = !loading && !submitting && !result && (isNew || Boolean(selectedTrip));
+  const hasApprovedFields = diffRows.some((row) => approvedKeys.has(row.key));
+  const willWritePhotos = isNew || mode !== "skip";
+  const canSubmit =
+    !loading &&
+    !submitting &&
+    !result &&
+    (isNew || Boolean(selectedTrip)) &&
+    (willWritePhotos || hasApprovedFields);
 
   function buildApprovedFieldsPayload(): Record<string, unknown> {
     const EXTRA_KEYS = new Set(["included_items", "excluded_items"]);
@@ -267,7 +278,7 @@ export default function AttachToTripModal({
     setSubmitting(true);
     setSubmitError("");
     try {
-      const images = await captureImages();
+      const images = willWritePhotos ? await captureImages() : [];
       const photos = (images || []).map(buildPhotoPayload).filter((photo) => photo.dataUrl || photo.url);
       const fields = buildApprovedFieldsPayload();
 
@@ -434,6 +445,15 @@ export default function AttachToTripModal({
                       onChange={() => setMode("append")}
                     />
                     Хуучин дээр нэмэх
+                  </label>
+                  <label className="flex items-center gap-2 py-1 text-sm">
+                    <input
+                      type="radio"
+                      className="accent-brand"
+                      checked={mode === "skip"}
+                      onChange={() => setMode("skip")}
+                    />
+                    Зургийг өөрчлөхгүй
                   </label>
                 </div>
               )}
