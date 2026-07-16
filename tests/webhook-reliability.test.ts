@@ -314,7 +314,7 @@ test("webhook handles long OpenAI latency without dropping event", async () => {
   }
 });
 
-test("webhook acknowledges the handoff when the model refers unknown data to staff", async () => {
+test("webhook stays silent to the customer when the model refers unknown data to staff", async () => {
   applyTestEnv();
   const handler = await loadWebhookHandler();
 
@@ -362,8 +362,8 @@ test("webhook acknowledges the handoff when the model refers unknown data to sta
     const result = await callWebhook(handler, payload);
 
     assert.equal(result.statusCode, 200);
-    assert.equal(sendCount, 1);
-    assert.match(sentBody, /аяллын зөвлөх/);
+    assert.equal(sendCount, 0);
+    assert.equal(sentBody, "");
   } finally {
     globalThis.fetch = originalFetch;
   }

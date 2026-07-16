@@ -244,7 +244,7 @@ async function handleMessage(
     afterDeliver?: () => Promise<void>;
   }) => {
     const noDataReply = shouldSilenceNoDataReply(input.reply);
-    let reply = input.reply;
+    const reply = input.reply;
     if (noDataReply) {
       logInfo("webhook.no_data_reply_suppressed", {
         requestId: trace?.requestId,
@@ -261,7 +261,7 @@ async function handleMessage(
             platform,
             senderId,
             customerMessage: text,
-            context: `Бот мэдээлэлгүй fast-path хариуг зөвлөхөд шилжүүлж, хэрэглэгчид handoff мэдэгдэл илгээлээ: ${input.failTag}`,
+            context: `Бот мэдээлэлгүй fast-path хариуг зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй: ${input.failTag}`,
           });
           await notifyStaffOfLead(
             { kind: "handoff", platform, customerMessage: text },
@@ -281,7 +281,9 @@ async function handleMessage(
           classification: classifyError(error),
         });
       }
-      reply = buildHandoffAcknowledgement();
+      await rememberTurn(`${input.rememberSource}_silent_no_data`);
+      if (input.counter) recordCounter(input.counter, 1, { platform });
+      return;
     }
     await assertLockHealthy();
     const delivered = await sendPlatformMessage(
@@ -1227,9 +1229,8 @@ async function handleMessage(
     phoneRequested: phoneAlreadyRequested,
   });
   let aiReply: string;
-  // True when OpenAI failed. We then route through the REFER
-  // path below (silent customer side + lead + staff alert) instead of leaving
-  // the customer with a bare apology and no human follow-up.
+  // True when OpenAI failed. Missing-data REFER stays silent customer-side,
+  // while a real AI outage gets a visible temporary-issue handoff.
   let aiOutage = false;
   try {
     // OpenAI is the primary model for customer replies (owner's call — more
@@ -1278,7 +1279,8 @@ async function handleMessage(
     }
   }
   // Bot has no data for this question (REFER, or legacy SILENT). Create/alert
-  // a staff handoff and visibly acknowledge it so the customer is not ignored.
+  // a staff handoff. For missing data, stay silent customer-side as requested;
+  // for a real AI outage, send a visible temporary-issue acknowledgement.
   if (isReferReply(aiReply)) {
     logInfo("webhook.ai_refer", {
       requestId: trace?.requestId,
@@ -1321,6 +1323,10 @@ async function handleMessage(
         classification: classifyError(error),
       });
     }
+    if (!aiOutage) {
+      await rememberTurn("api.webhook.ai_refer_silent_no_data");
+      return;
+    }
     await deliverFastPathReply({
       reply: buildHandoffAcknowledgement({ aiOutage }),
       failTag: aiOutage ? "ai_outage_handoff" : "ai_refer_handoff",
@@ -1359,7 +1365,7 @@ async function handleMessage(
           senderId,
           customerMessage: text,
           contactPhone: detectedPhone || "",
-          context: "AI мэдээлэлгүй өгүүлбэр бичсэн тул зөвлөхөд шилжүүлж, хэрэглэгчид handoff мэдэгдэл илгээлээ.",
+          context: "AI мэдээлэлгүй өгүүлбэр бичсэн тул зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй.",
         });
         await notifyStaffOfLead(
           { kind: "handoff", platform, customerMessage: text, contactPhone: detectedPhone || "" },
@@ -1379,11 +1385,7 @@ async function handleMessage(
         classification: classifyError(error),
       });
     }
-    await deliverFastPathReply({
-      reply: buildHandoffAcknowledgement(),
-      failTag: "ai_no_data_handoff",
-      rememberSource: "api.webhook.ai_no_data_handoff",
-    });
+    await rememberTurn("api.webhook.ai_no_data_silent");
     return;
   }
   if (lastReply && isDuplicateReply(lastReply.text, safeReply)) {

@@ -181,6 +181,17 @@ export default async function handler(
           source: "api.demo",
         });
       const returnHandoff = async (options: { aiOutage?: boolean } = {}) => {
+        if (!options.aiOutage) {
+          await rememberTurn();
+          return res.status(200).json({
+            reply: "",
+            buttons: [],
+            mediaUrls: [],
+            brochureUrl: null,
+            handoff: true,
+            silent: true,
+          });
+        }
         const reply = buildHandoffAcknowledgement(options);
         await appendMessage(sessionId, "assistant", reply);
         await rememberTurn();
@@ -482,7 +493,7 @@ export default async function handler(
       }
       const rawFixed = fixMojibake(aiReplyText);
       // REFER (or legacy SILENT) = the model has no data for this question.
-      // Acknowledge the staff handoff instead of making the bot appear broken.
+      // Mirror production: stay silent customer-side for missing data.
       if (isReferReply(rawFixed)) {
         recordCounter("demo.ai_refer_total", 1, {});
         return returnHandoff();

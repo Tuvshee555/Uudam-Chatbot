@@ -116,3 +116,34 @@ test("schedule cleanup prunes stale dates inside structured price groups", async
   assert.deepEqual(groups[0].dates, ["7 сарын 18", "8 сарын 8"]);
   assert.equal(groups[0].adult_price, 3590000);
 });
+
+test("schedule cleanup keeps next-year price group dates frozen at write time", async () => {
+  const { sanitizeTripScheduleForCurrentDate } = await loadMaintenance();
+  const result = sanitizeTripScheduleForCurrentDate(
+    trip({
+      departure_dates: ["1 сарын 15"],
+      extra: {
+        departure_dates_resolved: [{ text: "1 сарын 15", ymd: "2027-01-15" }],
+        price_groups: [
+          {
+            dates: ["1 сарын 15"],
+            adult_price: 2990000,
+            child_price: 2790000,
+          },
+        ],
+      },
+    }),
+    NOW,
+  );
+
+  assert.equal(result.changed, false);
+  assert.equal(result.trip.status, "active");
+  assert.deepEqual(result.trip.departure_dates, ["1 сарын 15"]);
+  assert.deepEqual(result.trip.extra.price_groups, [
+    {
+      dates: ["1 сарын 15"],
+      adult_price: 2990000,
+      child_price: 2790000,
+    },
+  ]);
+});

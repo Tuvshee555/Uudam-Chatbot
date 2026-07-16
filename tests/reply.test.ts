@@ -101,7 +101,7 @@ test("isReferReply catches REFER and legacy SILENT, ignores normal replies", () 
   assert.equal(isReferReply("Танд REFER гэдэг үг хэрэгтэй юу?"), false);
 });
 
-test("unknown data and AI outages produce visible, safe handoff acknowledgements", () => {
+test("handoff acknowledgement text stays safe when used", () => {
   const noData = buildHandoffAcknowledgement();
   assert.match(noData, /аяллын зөвлөхөд дамжууллаа/);
   assert.doesNotMatch(noData, /REFER|SILENT|database|тодорхойгүй/i);

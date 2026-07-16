@@ -76,9 +76,6 @@ const pageControlCache = new Map<string, { value: BotControl; expiresAt: number 
 let botSettingsCache:
   | { value: TravelBotSettings; expiresAt: number }
   | null = null;
-let tripScheduleMaintenanceNextAt = 0;
-const TRIP_SCHEDULE_MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
-
 function parseInteger(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.trunc(value);
@@ -687,7 +684,27 @@ function cloneExtra(extra: Record<string, unknown>): Record<string, unknown> {
   return JSON.parse(JSON.stringify(extra || {})) as Record<string, unknown>;
 }
 
-function pruneDateGroups(value: unknown, now: Date): { value: unknown; changed: boolean } {
+function resolvedForGroupDates(
+  dates: string[],
+  resolved?: ResolvedDepartureDate[] | null,
+): ResolvedDepartureDate[] | null {
+  if (!Array.isArray(resolved) || resolved.length === 0 || dates.length === 0) return null;
+  const byText = new Map(
+    resolved
+      .filter((entry) => entry && typeof entry.text === "string")
+      .map((entry) => [entry.text, entry.ymd ?? null] as const),
+  );
+  const matches = dates
+    .filter((date) => byText.has(date))
+    .map((date) => ({ text: date, ymd: byText.get(date) ?? null }));
+  return matches.length > 0 ? matches : null;
+}
+
+function pruneDateGroups(
+  value: unknown,
+  now: Date,
+  resolved?: ResolvedDepartureDate[] | null,
+): { value: unknown; changed: boolean } {
   if (!Array.isArray(value)) return { value, changed: false };
   let changed = false;
   const groups: unknown[] = [];
@@ -704,8 +721,9 @@ function pruneDateGroups(value: unknown, now: Date): { value: unknown; changed: 
       groups.push(group);
       continue;
     }
-    const expandedDates = expandMongolianDepartureDates(rawDates);
-    const futureDates = filterFutureDepartureDates(expandedDates, now);
+    const groupResolved = resolvedForGroupDates(rawDates, resolved);
+    const expandedDates = groupResolved ? rawDates : expandMongolianDepartureDates(rawDates);
+    const futureDates = filterFutureDepartureDates(expandedDates, now, groupResolved);
     if (futureDates.length === 0) {
       changed = true;
       continue;
@@ -738,7 +756,7 @@ export function sanitizeTripScheduleForCurrentDate(
   }
 
   for (const key of ["departure_date_groups", "discount_groups", "discounts", "price_groups"]) {
-    const result = pruneDateGroups(nextExtra[key], now);
+    const result = pruneDateGroups(nextExtra[key], now, pruned.resolved ?? resolved);
     if (result.changed) {
       nextExtra = { ...nextExtra, [key]: result.value };
       changed = true;
@@ -770,9 +788,6 @@ export function sanitizeTripScheduleForCurrentDate(
 
 async function persistTripScheduleMaintenance(trips: TravelTrip[]): Promise<void> {
   if (trips.length === 0) return;
-  const nowMs = Date.now();
-  if (nowMs < tripScheduleMaintenanceNextAt) return;
-  tripScheduleMaintenanceNextAt = nowMs + TRIP_SCHEDULE_MAINTENANCE_INTERVAL_MS;
 
   for (const trip of trips) {
     await queryNeon(
