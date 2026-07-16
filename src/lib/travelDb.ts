@@ -1180,18 +1180,26 @@ export async function patchTrip(id: string, fields: TripMutationFields) {
   if (!ready) return null;
 
   const cleaned = cleanFields(fields);
-  // When a full extra object is patched alongside departure_dates (the admin
-  // editor always sends both), freeze the resolved ISO dates into that extra so
-  // reads stop re-guessing the year. We only do this when extra is present — a
-  // partial extra patch would let normalizeExtra's defaults wipe existing keys.
-  if (
-    Array.isArray(cleaned.departure_dates) &&
-    cleaned.extra &&
-    typeof cleaned.extra === "object"
-  ) {
-    (cleaned.extra as Record<string, unknown>).departure_dates_resolved =
-      resolveDepartureDatesAtWrite(cleaned.departure_dates as string[]);
+  // Freeze write-time ISO dates whenever departure_dates changes. If the patch
+  // only changed dates, merge just this metadata key into extra so existing AI
+  // import metadata is not overwritten by normalizer defaults.
+  if (Array.isArray(cleaned.departure_dates)) {
+    const resolvedDates = resolveDepartureDatesAtWrite(
+      cleaned.departure_dates as string[],
+    );
+    if (cleaned.extra && typeof cleaned.extra === "object") {
+      (cleaned.extra as Record<string, unknown>).departure_dates_resolved =
+        resolvedDates;
+    } else {
+      cleaned.extra = { departure_dates_resolved: resolvedDates };
+    }
   }
+  const extraPatchKeys =
+    cleaned.extra && typeof cleaned.extra === "object"
+      ? Object.keys(cleaned.extra as Record<string, unknown>)
+      : [];
+  const isResolvedDatesOnlyExtraPatch =
+    extraPatchKeys.length === 1 && extraPatchKeys[0] === "departure_dates_resolved";
   const keys = Object.keys(cleaned) as Array<keyof TripMutationFields>;
   if (!keys.length) return null;
 
@@ -1224,9 +1232,9 @@ export async function patchTrip(id: string, fields: TripMutationFields) {
     const column = columnMap[key];
     if (key === "extra") {
       // Normalise then merge into existing extra (preserves keys set by AI import)
-      const { extra: normalisedExtra } = normalizeExtra(
-        (cleaned[key] ?? {}) as Record<string, unknown>,
-      );
+      const normalisedExtra = isResolvedDatesOnlyExtraPatch
+        ? ((cleaned[key] ?? {}) as Record<string, unknown>)
+        : normalizeExtra((cleaned[key] ?? {}) as Record<string, unknown>).extra;
       values.push(JSON.stringify(normalisedExtra));
       sets.push(`${column} = COALESCE(${column}, '{}'::jsonb) || $${values.length}::jsonb`);
     } else if (JSONB_KEYS.has(key)) {

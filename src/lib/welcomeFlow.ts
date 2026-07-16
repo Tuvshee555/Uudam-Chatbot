@@ -16,7 +16,7 @@ import type { TravelTrip } from "./travelOps";
 import { resolveTripFromUserMessage } from "./travelFastPaths";
 
 const MAX_WELCOME_PHOTOS = 5;
-const MAX_TRIP_PHOTOS = 2;
+const MAX_TRIP_PHOTOS = 5;
 
 export function hasTripPhotoIntent(text: string): boolean {
   const normalized = text.normalize("NFKC").toLowerCase();

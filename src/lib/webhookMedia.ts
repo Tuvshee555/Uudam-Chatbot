@@ -8,7 +8,7 @@ import { sendTextMessage as sendIgTextMessage } from "./instagram";
 import { appendMessage } from "./conversation";
 import { storeSenderName } from "./pause";
 import { listTrips } from "./travelOps";
-import { extractTripPhotosForReply } from "./welcomeFlow";
+import { extractTripPhotosForReply, MAX_TRIP_PHOTOS } from "./welcomeFlow";
 import type { TravelTrip } from "./travelTypes";
 import { getEnv } from "./env";
 import {
@@ -22,7 +22,7 @@ import {
 import type { Platform } from "./webhookDedup";
 
 const FALLBACK_SEND_ERROR_MESSAGE = "Уучлаарай, мессеж илгээхэд алдаа гарлаа.";
-const MAX_PHOTO_ONLY_PHOTOS = 2;
+const MAX_PHOTO_ONLY_PHOTOS = MAX_TRIP_PHOTOS;
 
 export async function sendPlatformMessage(
   platform: Platform,

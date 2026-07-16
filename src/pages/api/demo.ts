@@ -19,7 +19,7 @@ import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceW
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
 import { appendLeadCaptureCta, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
-import { extractTripPhotosForReply, hasTripPhotoIntent } from "../../lib/welcomeFlow";
+import { extractTripPhotosForReply, hasTripPhotoIntent, MAX_TRIP_PHOTOS } from "../../lib/welcomeFlow";
 import { DUPLICATE_REPLY_NUDGE } from "../../lib/webhookMedia";
 import { getEnv } from "../../lib/env";
 import {
@@ -72,7 +72,7 @@ function buildDemoMedia(input: {
     : extractTripPhotosForReply(input.reply, input.trips, { userText: input.userText });
   const mediaUrls = Array.from(new Set([...explicit, ...inferred]))
     .filter((url) => typeof url === "string" && url.startsWith("https://"))
-    .slice(0, 2);
+    .slice(0, MAX_TRIP_PHOTOS);
   const brochureUrl = input.brochureUrl && input.brochureUrl.startsWith("https://")
     ? input.brochureUrl
     : null;

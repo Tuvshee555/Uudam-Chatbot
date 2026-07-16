@@ -136,6 +136,7 @@ const ADMIN_SECRET_STORAGE_KEY = "travel_admin_secret";
 const POSTER_WIDTH = 1080;
 const MESSENGER_SINGLE_IMAGE_MAX_HEIGHT = 1900;
 const MESSENGER_MAX_IMAGE_SLICES = 3;
+const PDF_PAGE_EXTRACTION_LIMIT = 5;
 const MAX_UPLOAD_FILES = 10;
 const MAX_UPLOAD_SIZE_MB = 100;
 const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
@@ -1341,6 +1342,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                 <Icons.upload size={26} className="text-ink-subtle" />
                 <p className="text-sm font-medium text-ink">Файл эсвэл зураг энд чирж тавь</p>
                 <p className="text-xs text-ink-subtle">{`Дээд тал нь ${MAX_UPLOAD_FILES} файл · тус бүр ${MAX_UPLOAD_SIZE_MB}MB хүртэл · Word (.docx), PDF, .txt · JPG, PNG, WEBP зураг`}</p>
+                <p className="text-xs text-ink-subtle">{`PDF уншилт: эхний ${PDF_PAGE_EXTRACTION_LIMIT} хуудсыг зэрэг уншина. PNG/PDF таталт Messenger-д таарахаар хэсэглэгдэнэ.`}</p>
               </label>
               <div className="mt-3 flex flex-col items-center gap-1.5 text-center">
                 <Button onClick={startTemplate}>Default template-ээр эхлэх</Button>
@@ -1407,7 +1409,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                   </Button>
                 </div>
                 <p className="mt-2 text-xs text-ink-subtle">
-                  Бичвэр дээр дарж засаарай · хоолны таглыг дарж асаах/унтраах · Messenger split: main poster-оос 1-2 зураг, хэт урт бол 3
+                  Бичвэр дээр дарж засаарай · хоолны таглыг дарж асаах/унтраах · PNG/PDF/Messenger export: main poster-оос 1-2 зураг, хэт урт бол {MESSENGER_MAX_IMAGE_SLICES}
                 </p>
               </Card>
 

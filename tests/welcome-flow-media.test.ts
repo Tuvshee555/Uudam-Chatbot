@@ -98,6 +98,37 @@ test("trip media sends only after the same specific trip passes both gates", asy
   ]);
 });
 
+test("trip media keeps complete five-slice poster sets", async () => {
+  const { extractTripPhotosForReply, extractTripPhotosForUserMessage } = await loadWelcomeFlow();
+  const posterSlices = [
+    "https://example.com/tokyo-fuji-1.jpg",
+    "https://example.com/tokyo-fuji-2.jpg",
+    "https://example.com/tokyo-fuji-3.jpg",
+    "https://example.com/tokyo-fuji-4.jpg",
+    "https://example.com/tokyo-fuji-5.jpg",
+  ];
+  const trips = [
+    trip({
+      id: "fuji",
+      route_name: "Tokyo Fuji",
+      photo_urls: posterSlices,
+    }),
+  ];
+
+  assert.deepEqual(
+    extractTripPhotosForReply(
+      "Tokyo Fuji program images are ready.",
+      trips,
+      { userText: "Please send Tokyo Fuji photos" },
+    ),
+    posterSlices,
+  );
+  assert.deepEqual(
+    extractTripPhotosForUserMessage("Please send Tokyo Fuji photos", trips),
+    posterSlices,
+  );
+});
+
 test("photo-only mode resolves the trip directly from the user message", async () => {
   const { extractTripPhotosForUserMessage } = await loadWelcomeFlow();
   const photos = extractTripPhotosForUserMessage(

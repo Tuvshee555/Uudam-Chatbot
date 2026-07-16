@@ -144,6 +144,22 @@ export default function AdminPage() {
       return { error: raw.slice(0, 300) } as Record<string, unknown>;
     }
   }, []);
+  const markAdminLocked = useCallback(() => {
+    setRequiresAuth(true);
+    setDbInfo(null);
+    setDriveSync(null);
+    setReadiness(null);
+    setTrips([]);
+    setTripsLoaded(false);
+    setControl(null);
+    setPageControls([]);
+    setPausedRows([]);
+    setRecentRows([]);
+    setLeads([]);
+    setNewLeadCount(0);
+    setLeadStats(null);
+    setDocumentUnreviewedCount(0);
+  }, []);
   const loadTrips = useCallback(
     async (
       nextSearch = searchRef.current,
@@ -158,7 +174,7 @@ export default function AdminPage() {
           )}&status=${encodeURIComponent(nextStatusFilter)}&limit=300`,
         );
         if (tripRes.status === 401) {
-          setRequiresAuth(true);
+          markAdminLocked();
           return;
         }
         const tripJson = await tripRes.json();
@@ -173,13 +189,13 @@ export default function AdminPage() {
         if (options.showLoading) setLoading(false);
       }
     },
-    [fetchWithAdmin, toast],
+    [fetchWithAdmin, markAdminLocked, toast],
   );
   const loadPauseState = useCallback(async () => {
     try {
       const pauseRes = await fetchWithAdmin("/api/pause");
       if (pauseRes.status === 401) {
-        setRequiresAuth(true);
+        markAdminLocked();
         return false;
       }
       const pauseJson = await pauseRes.json().catch(() => ({}));
@@ -193,12 +209,12 @@ export default function AdminPage() {
       toast.error("Ботын төлөв ачаалж чадсангүй.");
       return false;
     }
-  }, [fetchWithAdmin, toast]);
+  }, [fetchWithAdmin, markAdminLocked, toast]);
   const loadSettingsState = useCallback(async () => {
     try {
       const settingsRes = await fetchWithAdmin("/api/admin/settings");
       if (settingsRes.status === 401) {
-        setRequiresAuth(true);
+        markAdminLocked();
         return false;
       }
       const settingsJson = await settingsRes.json().catch(() => ({}));
@@ -214,13 +230,13 @@ export default function AdminPage() {
       toast.error("Тохиргоо ачаалж чадсангүй.");
       return false;
     }
-  }, [fetchWithAdmin, toast]);
+  }, [fetchWithAdmin, markAdminLocked, toast]);
   const loadLeadsState = useCallback(async (options: { showLoading?: boolean } = {}) => {
     if (options.showLoading) setLoading(true);
     try {
       const leadsRes = await fetchWithAdmin("/api/admin/leads?stats=1");
       if (leadsRes.status === 401) {
-        setRequiresAuth(true);
+        markAdminLocked();
         return false;
       }
       const leadsJson = await leadsRes.json().catch(() => ({}));
@@ -241,12 +257,12 @@ export default function AdminPage() {
     } finally {
       if (options.showLoading) setLoading(false);
     }
-  }, [fetchWithAdmin, toast]);
+  }, [fetchWithAdmin, markAdminLocked, toast]);
   const loadDocumentStats = useCallback(async () => {
     try {
       const res = await fetchWithAdmin("/api/admin/customer-documents?stats=1");
       if (res.status === 401) {
-        setRequiresAuth(true);
+        markAdminLocked();
         return false;
       }
       const json = await res.json().catch(() => ({}));
@@ -256,16 +272,13 @@ export default function AdminPage() {
     } catch {
       return false;
     }
-  }, [fetchWithAdmin]);
+  }, [fetchWithAdmin, markAdminLocked]);
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
       const systemRes = await fetchWithAdmin("/api/admin/system");
       if (systemRes.status === 401) {
-        setRequiresAuth(true);
-        setDbInfo(null);
-        setDriveSync(null);
-        setReadiness(null);
+        markAdminLocked();
         return;
       }
       const systemJson = await systemRes.json();
@@ -273,10 +286,7 @@ export default function AdminPage() {
       const authorized = Boolean(systemJson?.authorized);
       setOpenAccess(nextOpenAccess);
       if (!nextOpenAccess && !authorized) {
-        setRequiresAuth(true);
-        setDbInfo(null);
-        setDriveSync(null);
-        setReadiness(null);
+        markAdminLocked();
         return;
       }
       setRequiresAuth(false);
@@ -303,6 +313,7 @@ export default function AdminPage() {
     loadPauseState,
     loadSettingsState,
     loadTrips,
+    markAdminLocked,
     toast,
   ]);
   const syncDriveNow = useCallback(async () => {
@@ -1558,6 +1569,11 @@ export default function AdminPage() {
   const pausedPageCount = pageControls.filter((page) => page.bot_paused).length;
   const botPaused = pausedPageCount > 0;
   const headerTripCount = tripsLoaded ? trips.length : dbInfo?.trips ?? 0;
+  const headerTripLabel = requiresAuth
+    ? "Админ түгжээтэй"
+    : tripsLoaded || dbInfo
+      ? `${headerTripCount} аялал`
+      : "Аялал ачаалж байна";
   const navBadges: Partial<Record<TabKey, number>> = {
     bot: handoffRows.length || undefined,
     leads: newLeadCount || undefined,
@@ -1615,8 +1631,11 @@ export default function AdminPage() {
             {botPaused ? `${pausedPageCount} хуудас зогссон` : "Бот идэвхтэй"}
           </Badge>
           <span className="hidden sm:inline-flex">
-            <Badge tone={dbInfo?.configured ? "neutral" : "danger"} className="tabular-nums">
-              {headerTripCount} аялал
+            <Badge
+              tone={requiresAuth || (systemLoaded && !dbInfo?.configured) ? "danger" : "neutral"}
+              className="tabular-nums"
+            >
+              {headerTripLabel}
             </Badge>
           </span>
         </div>
