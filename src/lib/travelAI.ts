@@ -72,6 +72,7 @@ function buildBatchSourceParts(input: {
     "ACCURACY IS THE TOP PRIORITY. Read carefully and do not rush.",
     "Read EVERY trip/row in the source. Do not skip rows and do not stop early. If the source lists 12 trips, return actions for all 12.",
     "Never merge two different trips into one, and never split one trip into two. Each distinct route = one action.",
+    "MESSENGER-SPLIT POSTER RULE: if several attached images come from the same '*-messenger-split.zip', treat them as slices/pages of ONE poster unless a later slice clearly starts a new complete product with its own top-level title AND price/date table. Numbered day-card headings such as 'Day 6: Chongqing-Hohhot', city stop headings, meal rows, and route legs are itinerary items inside the parent tour, not separate trips.",
     "TRIP VARIANT RULE: the same destination with a different transport mode (flight, ground/bus, rail, combined), duration, itinerary, or package type is a DIFFERENT trip and must stay in a separate action. Different departure dates alone remain one trip with date groups.",
     "PHOTO SOURCE RULE: write the exact source label shown in Sources into fields.extra.source_file_name for every extracted action. When one ZIP contains trip-named folders, use each image's full folder path to decide which trip it belongs to; never assign a generic numbered image by list order.",
     "Copy prices, seat counts, and dates EXACTLY as written in the source — digit for digit. Do not round, estimate, convert, or 'fix' numbers. If a price is 4,290,000 write 4290000, not 4300000.",
@@ -1044,6 +1045,113 @@ export function mergeDuplicateTripActions(proposal: AIChangeProposal): void {
   }
 
   proposal.actions = finalActions;
+  mergeMessengerSplitItineraryFragments(proposal);
+}
+
+function actionRouteName(action: AITripAction): string {
+  return action.fields?.route_name?.toString().trim() || action.match?.route_name?.trim() || "";
+}
+
+function actionSourceLabel(action: AITripAction): string {
+  const extra = action.fields?.extra as Record<string, unknown> | undefined;
+  return typeof extra?.source_file_name === "string" ? extra.source_file_name.trim() : "";
+}
+
+function isMessengerSplitSource(label: string): boolean {
+  const normalized = label.toLowerCase().replace(/\\/g, "/");
+  return (
+    normalized.includes("messenger-split") ||
+    /messenger-\d+\.(?:png|jpe?g|webp)(?:\.compressed\.jpe?g)?$/i.test(normalized)
+  );
+}
+
+function tokenOverlap(left: Set<string>, right: Set<string>): number {
+  let count = 0;
+  for (const token of left) {
+    if (right.has(token)) count += 1;
+  }
+  return count;
+}
+
+function actionTitleMatchScore(action: AITripAction, groupLabel: string): number {
+  const groupTokens = photoMatchTokens(groupLabel);
+  const routeTokens = photoMatchTokens(actionRouteName(action));
+  if (groupTokens.size === 0 || routeTokens.size === 0) return 0;
+  const overlap = tokenOverlap(groupTokens, routeTokens);
+  return Math.max(overlap / groupTokens.size, overlap / routeTokens.size);
+}
+
+function hasActionPriceOrDate(action: AITripAction): boolean {
+  const fields = action.fields || {};
+  return (
+    typeof fields.adult_price === "number" ||
+    typeof fields.child_price === "number" ||
+    (Array.isArray(fields.departure_dates) && fields.departure_dates.length > 0)
+  );
+}
+
+function isIncompleteItineraryFragment(action: AITripAction): boolean {
+  if (hasActionPriceOrDate(action)) return false;
+  const fields = action.fields || {};
+  const extra = fields.extra as Record<string, unknown> | undefined;
+  return Boolean(
+    fields.duration_text ||
+      fields.has_food != null ||
+      extra?.daily_itinerary ||
+      extra?.route ||
+      extra?.transport,
+  );
+}
+
+function mergeItineraryFragmentIntoPrimary(primary: AITripAction, fragment: AITripAction): void {
+  const clone = JSON.parse(JSON.stringify(fragment)) as AITripAction;
+  if (clone.fields) {
+    delete clone.fields.route_name;
+    const extra = clone.fields.extra as Record<string, unknown> | undefined;
+    if (extra && typeof extra === "object") {
+      delete extra.route;
+      delete extra.tour_title;
+      delete extra.original_title_text;
+      delete extra.source_file_name;
+    }
+  }
+  delete clone.match;
+  mergeActionFields(primary, clone);
+}
+
+function mergeMessengerSplitItineraryFragments(proposal: AIChangeProposal): void {
+  const grouped = new Map<string, AITripAction[]>();
+  for (const action of proposal.actions) {
+    const label = actionSourceLabel(action);
+    if (!label || !isMessengerSplitSource(label)) continue;
+    const group = photoSourceGroup(label);
+    grouped.set(group, [...(grouped.get(group) || []), action]);
+  }
+
+  if (grouped.size === 0) return;
+
+  const drop = new Set<AITripAction>();
+  for (const [groupLabel, actions] of grouped) {
+    if (actions.length < 2) continue;
+    const ranked = actions
+      .map((action) => ({ action, score: actionTitleMatchScore(action, groupLabel) }))
+      .sort((left, right) => right.score - left.score);
+    const primary = ranked[0];
+    const second = ranked[1];
+    if (!primary || primary.score < 0.6 || (second && second.score >= primary.score - 0.05)) {
+      continue;
+    }
+
+    for (const candidate of ranked.slice(1)) {
+      if (!isIncompleteItineraryFragment(candidate.action)) continue;
+      mergeItineraryFragmentIntoPrimary(primary.action, candidate.action);
+      drop.add(candidate.action);
+    }
+  }
+
+  if (drop.size > 0) {
+    proposal.actions = proposal.actions.filter((action) => !drop.has(action));
+  }
 }
 
 /**

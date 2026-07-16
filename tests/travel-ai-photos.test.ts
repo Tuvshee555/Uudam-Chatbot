@@ -170,4 +170,48 @@ describe("travelAI photo attachment", () => {
 
     assert.equal(proposal.actions.length, 2);
   });
+
+  it("merges incomplete itinerary fragments from a messenger-split poster into the parent trip", async () => {
+    const { mergeDuplicateTripActions } = await loadTravelAI();
+    const proposal: AIChangeProposal = {
+      summary: "",
+      needs_confirmation: false,
+      important_reason: "",
+      conflicts: [],
+      actions: [
+        {
+          action: "upsert",
+          fields: {
+            route_name: "Chongqing ground flight combo",
+            adult_price: 2390000,
+            child_price: 2150000,
+            departure_dates: ["July 19", "July 26"],
+            extra: {
+              source_file_name:
+                "Chongqing ground flight combo-messenger-split.zip/Chongqing ground flight combo-messenger-1.png",
+            },
+          },
+        },
+        {
+          action: "upsert",
+          fields: {
+            route_name: "Chongqing-Hohhot",
+            duration_text: "8 days / 7 nights",
+            has_food: true,
+            extra: {
+              route: "Chongqing-Hohhot",
+              source_file_name:
+                "Chongqing ground flight combo-messenger-split.zip/Chongqing ground flight combo-messenger-3.png",
+            },
+          },
+        },
+      ],
+    };
+
+    mergeDuplicateTripActions(proposal);
+
+    assert.equal(proposal.actions.length, 1);
+    assert.equal(proposal.actions[0].fields?.route_name, "Chongqing ground flight combo");
+    assert.equal(proposal.actions[0].fields?.adult_price, 2390000);
+  });
 });
