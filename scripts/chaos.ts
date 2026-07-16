@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 function ensureEnv() {
-  process.env.GEMINI_API_KEY ||= "chaos-gemini-key";
+  process.env.OPENAI_API_KEY ||= "chaos-openai-key";
   process.env.VERIFY_TOKEN ||= "chaos-verify-token";
   process.env.TOKEN_PAGE ||= "chaos-page-token";
   process.env.FACEBOOK_PAGE_ID ||= "1234567890";

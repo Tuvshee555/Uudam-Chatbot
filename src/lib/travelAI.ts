@@ -1,4 +1,4 @@
-import { askGeminiParts, type GeminiPart } from "./gemini";
+import { askOpenAIParts, type OpenAIPart } from "./openaiProvider";
 import {
   classifyError,
   logError,
@@ -11,15 +11,15 @@ import type { AITripAction, ConflictSeverity, ConflictItem, AIChangeProposal } f
 import { wait, ensureTravelSchema, listTrips, getTripById, upsertTrip, patchTrip, deleteTrip, resolveTripIdByMatch, mapTripRow, normalizeProposal, parseJsonFromModel, proposalFallbackFromRawText, dedupeStrings, estimateInlineBytes } from "./travelDb";
 import type { TravelTrip } from "./travelTypes";
 import {
-  AI_CHANGE_GEMINI_TIMEOUT_MS,
-  AI_CHANGE_GEMINI_MAX_RETRIES,
+  AI_CHANGE_OPENAI_TIMEOUT_MS,
+  AI_CHANGE_OPENAI_MAX_RETRIES,
   AI_CHANGE_REPAIR_TIMEOUT_MS,
   FILE_PARSE_MODEL,
   OPENAI_FILE_PARSE_MODEL,
   FILE_PARSE_VERIFY,
   FILE_PARSE_VERIFY_TIMEOUT_MS,
-  FILE_PARSE_GEMINI_TIMEOUT_MS,
-  FILE_PARSE_GEMINI_MAX_RETRIES,
+  FILE_PARSE_OPENAI_TIMEOUT_MS,
+  FILE_PARSE_OPENAI_MAX_RETRIES,
   FILE_PARSE_BATCH_DELAY_MS,
   FILE_PARSE_TOTAL_BUDGET_MS,
   FILE_PARSE_MIN_BATCH_TIMEOUT_MS,
@@ -61,7 +61,7 @@ function buildBatchSourceParts(input: {
   note?: string;
   sources: ProposalSource[];
 }) {
-  const parts: GeminiPart[] = [];
+  const parts: OpenAIPart[] = [];
   const sourceLabels = input.sources.map((source) => source.label).join(", ");
   const guidance = [
     `Sources: ${sourceLabels}`,
@@ -157,12 +157,12 @@ function buildBatchSourceParts(input: {
   return { parts, sourceLabels };
 }
 
-// Max chars per individual Gemini call for text-only sources. JSON-mode
-// structured extraction on Flash is slow, so keep each call small.
+// Max chars per individual OpenAI call for text-only sources. JSON-mode
+// structured extraction can be slow, so keep each call small.
 const MAX_TEXT_CHARS_PER_BATCH = 18_000;
 // Max numbered trips per chunk. Even a small char count can hold many trips,
 // and emitting many trip JSON objects (with full extra metadata) in one call
-// blows past the 45s timeout. 4 keeps each Gemini call fast (~15-20s).
+// blows past the 45s timeout. 4 keeps each OpenAI call fast (~15-20s).
 const MAX_TRIPS_PER_CHUNK = 4;
 
 /** Counts numbered-heading lines ("1.", "2.", "12)") in the text. */
@@ -236,7 +236,7 @@ function splitTextIntoChunks(text: string, maxChars: number): string[] {
 /**
  * Expands sources: a text source that is either large (> MAX_TEXT_CHARS_PER_BATCH)
  * OR holds many numbered trips (> MAX_TRIPS_PER_CHUNK) is split into multiple
- * labelled sources so each gets its own fast Gemini call.
+ * labelled sources so each gets its own fast OpenAI call.
  */
 function splitLargeTextSources(
   sources: ProposalSource[],
@@ -426,7 +426,7 @@ function isFalsePositiveMismatch(text: string): boolean {
 
 async function verifyProposalAgainstSource(opts: {
   proposal: AIChangeProposal;
-  userParts: GeminiPart[];
+  userParts: OpenAIPart[];
   source: string;
   model?: string;
 }): Promise<AIChangeProposal> {
@@ -434,7 +434,7 @@ async function verifyProposalAgainstSource(opts: {
   if (!opts.proposal.actions.length) return opts.proposal;
 
   try {
-    const result = await askGeminiParts(
+    const result = await askOpenAIParts(
       [{ text: buildVerificationGuide(opts.proposal.actions) }, ...opts.userParts],
       {
         source: `${opts.source}.verify`,
@@ -443,7 +443,7 @@ async function verifyProposalAgainstSource(opts: {
         maxRetries: 0,
         model: opts.model,
         temperature: 0,
-        // File reading → OpenAI primary, Gemini backup.
+        // File reading stays on OpenAI only.
         preferOpenAI: true,
       },
     );
@@ -508,7 +508,7 @@ async function verifyProposalAgainstSource(opts: {
 
 async function requestProposalFromModel(opts: {
   condensedTrips: unknown;
-  userParts: GeminiPart[];
+  userParts: OpenAIPart[];
   source: string;
   timeoutMs?: number;
   maxRetries?: number;
@@ -516,12 +516,9 @@ async function requestProposalFromModel(opts: {
   model?: string;
   verify?: boolean;
 }) {
-  // OpenAI is primary for all proposal extraction (file parsing + text instructions).
-  // Gemini is the fallback when OpenAI is unavailable or the input contains native
-  // PDF inline parts (OpenAI vision doesn't accept application/pdf directly — those
-  // are rendered to JPEG pages by fileParse.ts before reaching here).
-  // Messenger chat replies stay on Gemini (better Mongolian) — this path never runs there.
-  const result = await askGeminiParts(
+  // OpenAI handles all proposal extraction (file parsing + text instructions).
+  // PDF inputs are rendered/extracted before reaching this path.
+  const result = await askOpenAIParts(
     [{ text: buildProposalGuide(opts.condensedTrips) }, ...opts.userParts],
     {
       source: opts.source,
@@ -538,7 +535,7 @@ async function requestProposalFromModel(opts: {
   let parsed = parseJsonFromModel(result.text);
   if (!parsed) {
     try {
-      const repaired = await askGeminiParts(
+      const repaired = await askOpenAIParts(
         [{ text: buildProposalRepairGuide(result.text) }],
         {
           source: `${opts.source}.repair`,
@@ -563,7 +560,7 @@ async function requestProposalFromModel(opts: {
     ? normalizeProposal(parsed)
     : proposalFallbackFromRawText(result.text);
 
-  // Second-opinion pass — only when Gemini's OWN output looks uncertain, not
+  // Second-opinion pass: only when the model output looks uncertain, not
   // on every batch (that would double AI cost/time for no benefit on the
   // ~90% of extractions that are clean). "Unsure" = the proposal already
   // carries a blocker conflict, or needs_confirmation is set, or a price is
@@ -594,7 +591,7 @@ async function requestProposalFromPrompt(opts: {
   maxRetries?: number;
   repairTimeoutMs?: number;
 }) {
-  const result = await askGeminiParts([{ text: opts.prompt }], {
+  const result = await askOpenAIParts([{ text: opts.prompt }], {
     source: opts.source,
     jsonMode: true,
     timeoutMs: opts.timeoutMs,
@@ -604,7 +601,7 @@ async function requestProposalFromPrompt(opts: {
   let parsed = parseJsonFromModel(result.text);
   if (!parsed) {
     try {
-      const repaired = await askGeminiParts(
+      const repaired = await askOpenAIParts(
         [{ text: buildProposalRepairGuide(result.text) }],
         {
           source: `${opts.source}.repair`,
@@ -628,7 +625,7 @@ async function requestProposalFromPrompt(opts: {
 async function createProposal(opts: {
   instruction: string;
   source: string;
-  userParts?: GeminiPart[];
+  userParts?: OpenAIPart[];
   timeoutMs?: number;
   maxRetries?: number;
   repairTimeoutMs?: number;
@@ -784,8 +781,8 @@ export async function generateAIProposal(instruction: string) {
     instruction,
     userParts: [{ text: `Хэрэглэгчийн хүсэлт: ${instruction}` }],
     source: "travel.ops.ai_change",
-    timeoutMs: AI_CHANGE_GEMINI_TIMEOUT_MS,
-    maxRetries: AI_CHANGE_GEMINI_MAX_RETRIES,
+    timeoutMs: AI_CHANGE_OPENAI_TIMEOUT_MS,
+    maxRetries: AI_CHANGE_OPENAI_MAX_RETRIES,
     repairTimeoutMs: AI_CHANGE_REPAIR_TIMEOUT_MS,
   });
 }
@@ -801,7 +798,7 @@ export async function generateAIProposalFromContent(input: {
     inline?: { mimeType: string; data: string } | null;
   }>;
 }) {
-  const parts: GeminiPart[] = [];
+  const parts: OpenAIPart[] = [];
   const sources =
     input.sources && input.sources.length > 0
       ? input.sources
@@ -1364,7 +1361,7 @@ export async function generateAIProposalFromContentBatched(input: {
         ];
 
   // Split any large/multi-trip text source (e.g. a 29-trip DOCX) into
-  // sub-chunks so each Gemini call only extracts a handful of trips and
+  // sub-chunks so each OpenAI call only extracts a handful of trips and
   // finishes well within the per-batch timeout.
   const sources = splitLargeTextSources(rawSources);
 
@@ -1438,14 +1435,14 @@ export async function generateAIProposalFromContentBatched(input: {
           sources: batch,
         });
         const batchTimeoutMs = Math.min(
-          FILE_PARSE_GEMINI_TIMEOUT_MS,
+          FILE_PARSE_OPENAI_TIMEOUT_MS,
           Math.max(FILE_PARSE_MIN_BATCH_TIMEOUT_MS, remainingMs - 5_000),
         );
         const batchRetries =
-          FILE_PARSE_GEMINI_MAX_RETRIES > 0 &&
+          FILE_PARSE_OPENAI_MAX_RETRIES > 0 &&
           remainingMs >
             batchTimeoutMs + FILE_PARSE_MIN_BATCH_TIMEOUT_MS + FILE_PARSE_BATCH_DELAY_MS
-            ? FILE_PARSE_GEMINI_MAX_RETRIES
+            ? FILE_PARSE_OPENAI_MAX_RETRIES
             : 0;
         try {
           const batchProposal = await requestProposalFromModel({

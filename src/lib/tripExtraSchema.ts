@@ -3,7 +3,7 @@
  *
  * Every write path (upsertTrip, patchTrip, trips-bulk) runs the incoming
  * extra blob through `normalizeExtra()` before it hits the database.  This
- * catches Gemini key-name drift (e.g. "departureGroups" instead of
+ * catches AI key-name drift (e.g. "departureGroups" instead of
  * "departure_date_groups"), coerces types, and auto-regenerates date_keys so
  * the bot's lookup never silently reads an empty array.
  */
@@ -16,7 +16,7 @@ const KNOWN_EXTRA_KEYS = new Set([
   "aliases",
   "price_groups",
   "discounts",
-  "departure_date_groups", // legacy: Gemini still writes this sometimes
+  "departure_date_groups", // legacy key emitted by older extraction prompts
   "child_rules",
   "extra_fees",
   "departure_rule",
@@ -112,7 +112,7 @@ function normalizeDiscountGroups(raw: unknown): Record<string, unknown>[] {
 }
 
 function normalizeDepartureDateGroups(raw: unknown): Record<string, unknown>[] {
-  // Legacy format written by Gemini: same shape as price_groups but stored
+  // Legacy format: same shape as price_groups but stored
   // under "departure_date_groups".  Normalise the same way.
   if (!Array.isArray(raw)) return [];
   return raw
@@ -279,7 +279,7 @@ export function normalizeExtra(
   const discounts = normalizeDiscountGroups(raw.discounts);
   const departureDateGroups = normalizeDepartureDateGroups(raw.departure_date_groups);
 
-  // Warn if Gemini wrote departure_date_groups but not price_groups
+  // Warn if the legacy departure_date_groups key appears without price_groups
   if (departureDateGroups.length > 0 && priceGroups.length === 0) {
     warnings.push(
       `departure_date_groups-ийг price_groups болгон хөрвүүлсэн (${departureDateGroups.length} бүлэг) — шалгана уу`,

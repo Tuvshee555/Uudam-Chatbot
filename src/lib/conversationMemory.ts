@@ -1,5 +1,5 @@
 import { waitUntil } from "@vercel/functions";
-import { askGemini } from "./gemini";
+import { askOpenAI } from "./openaiProvider";
 import {
   dbGetCustomerMemory,
   dbGetHistorySince,
@@ -106,7 +106,7 @@ export async function getCustomerMemoryText(senderId: string): Promise<string> {
  * failure is caught, counted, and retried naturally on the next turn).
  *
  * The old pattern awaited the merge inline while holding the per-conversation
- * lock: a 45s-timeout, 2-retry Gemini call serialized behind every reply,
+ * lock: a 45s-timeout, 2-retry AI call serialized behind every reply,
  * so a customer sending three quick messages could wait a minute+ for the
  * third answer.
  */
@@ -147,7 +147,7 @@ export async function updateCustomerMemoryAfterTurn(input: {
       existingMemory: existing?.memory_text || EMPTY_MEMORY,
       transcript,
     });
-    const result = await askGemini(prompt, {
+    const result = await askOpenAI(prompt, {
       requestId: input.requestId,
       correlationId: input.correlationId,
       source,

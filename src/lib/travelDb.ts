@@ -39,20 +39,20 @@ import type {
 } from "./travelTypes";
 
 const env = getEnv();
-const AI_CHANGE_GEMINI_TIMEOUT_MS = Math.max(env.geminiTimeoutMs, 45_000);
-const AI_CHANGE_GEMINI_MAX_RETRIES = 0;
+const AI_CHANGE_OPENAI_TIMEOUT_MS = Math.max(env.openaiTimeoutMs, 45_000);
+const AI_CHANGE_OPENAI_MAX_RETRIES = 0;
 const AI_CHANGE_REPAIR_TIMEOUT_MS = 15_000;
 const FILE_PARSE_MODEL =
-  process.env.GEMINI_FILE_PARSE_MODEL || "gemini-2.5-flash";
+  process.env.OPENAI_FILE_PARSE_MODEL || "gpt-4o";
 const FILE_PARSE_VERIFY =
-  (process.env.GEMINI_FILE_PARSE_VERIFY || "false").toLowerCase() === "true";
+  (process.env.OPENAI_FILE_PARSE_VERIFY || "false").toLowerCase() === "true";
 // Cap each batch at 30s. With small (4-trip) chunks a healthy call returns in
 // ~15-20s; a 30s ceiling means a stuck batch fails fast and leaves budget for
 // the remaining chunks instead of eating 45s. Never exceed the env timeout.
-const FILE_PARSE_GEMINI_TIMEOUT_MS = Math.min(env.geminiTimeoutMs, 30_000);
+const FILE_PARSE_OPENAI_TIMEOUT_MS = Math.min(env.openaiTimeoutMs, 30_000);
 // One retry max for file parsing — a 45s timeout retried twice burns 90s+
 // before falling back. Keep it to a single attempt per batch.
-const FILE_PARSE_GEMINI_MAX_RETRIES = 0;
+const FILE_PARSE_OPENAI_MAX_RETRIES = 0;
 const FILE_PARSE_BATCH_DELAY_MS = 500;
 // The parse-file route allows maxDuration: 180s; budget most of it so a
 // multi-chunk DOCX (5-6 batches) can finish all batches in one request.
@@ -1954,14 +1954,14 @@ export async function listBroadcasts(limit = 20): Promise<BroadcastRecord[]> {
 export * from "./travelSessionDb";
 
 export {
-  AI_CHANGE_GEMINI_TIMEOUT_MS,
-  AI_CHANGE_GEMINI_MAX_RETRIES,
+  AI_CHANGE_OPENAI_TIMEOUT_MS,
+  AI_CHANGE_OPENAI_MAX_RETRIES,
   AI_CHANGE_REPAIR_TIMEOUT_MS,
   FILE_PARSE_MODEL,
   FILE_PARSE_VERIFY,
   FILE_PARSE_VERIFY_TIMEOUT_MS,
-  FILE_PARSE_GEMINI_TIMEOUT_MS,
-  FILE_PARSE_GEMINI_MAX_RETRIES,
+  FILE_PARSE_OPENAI_TIMEOUT_MS,
+  FILE_PARSE_OPENAI_MAX_RETRIES,
   FILE_PARSE_BATCH_DELAY_MS,
   FILE_PARSE_TOTAL_BUDGET_MS,
   FILE_PARSE_MIN_BATCH_TIMEOUT_MS,

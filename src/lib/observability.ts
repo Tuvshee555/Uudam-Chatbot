@@ -32,7 +32,7 @@ export type ErrorClassification = {
 };
 
 const REDACT_KEY_PATTERN =
-  /(authorization|cookie|password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token_page|page_token|admin_secret|gemini_api_key|google_api_key|meta_app_secret)/i;
+  /(authorization|cookie|password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token_page|page_token|admin_secret|meta_app_secret)/i;
 const REDACT_EXCEPTIONS = new Set(["allowadminsecretquery"]);
 const MAX_LOG_DEPTH = 4;
 const MAX_ARRAY_ITEMS = 40;

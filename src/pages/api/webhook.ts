@@ -1,6 +1,6 @@
 ﻿import type { NextApiRequest, NextApiResponse } from "next";
-import { askGemini } from "../../lib/gemini";
-import { askOpenAIFallbackParts } from "../../lib/openaiFallback";
+import { askOpenAI } from "../../lib/openaiProvider";
+import { askOpenAIChatParts } from "../../lib/openaiFallback";
 import { matchFlow, findTriggeredFlow, getFlowState, setFlowState, clearFlowState, newRuntimeState, runFlowFrom, resumeFlowWithInput, type FlowRule, type FlowDoc, type FlowEffects, type FlowRuntimeState, type RunOutcome, } from "../../lib/flowEngine";
 import { BOT_MESSAGE_METADATA, replyToComment, sendImageMessage, sendQuickReplies, sendTextMessage } from "../../lib/messenger";
 import { rateLimitAsync } from "../../lib/rateLimit";
@@ -1227,14 +1227,14 @@ async function handleMessage(
     phoneRequested: phoneAlreadyRequested,
   });
   let aiReply: string;
-  // True when BOTH Gemini and OpenAI failed. We then route through the REFER
+  // True when OpenAI failed. We then route through the REFER
   // path below (silent customer side + lead + staff alert) instead of leaving
   // the customer with a bare apology and no human follow-up.
   let aiOutage = false;
   try {
     // OpenAI is the primary model for customer replies (owner's call — more
-    // reliable in practice); Gemini is the backup if OpenAI itself fails.
-    const result = await askGemini(promptParts.user, {
+    // reliable in practice).
+    const result = await askOpenAI(promptParts.user, {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
       source: "api.webhook",
@@ -1244,15 +1244,11 @@ async function handleMessage(
     });
     aiReply = result.text;
   } catch (error) {
-    // Gemini down/overloaded must not mean a customer gets an apology while
-    // a working second model sits idle — try OpenAI with the same prompt
-    // (same rules: Mongolian-only, SILENT, BUTTONS) before giving up. The
-    // fallback gets a stronger model than the parsing default: outage minutes
-    // are rare, and gpt-4o-mini with this rule-heavy prompt was a visible
-    // quality cliff exactly when customers had already waited through retries.
+    // OpenAI down/overloaded must not mean a customer gets a bare apology.
+    // Retry the same prompt with the configured reply model before giving up.
     let fallbackText = "";
     try {
-      const fallback = await askOpenAIFallbackParts([{ text: promptParts.user }], {
+      const fallback = await askOpenAIChatParts([{ text: promptParts.user }], {
         source: "api.webhook.reply_fallback",
         timeoutMs: 20_000,
         requestId: trace?.requestId,

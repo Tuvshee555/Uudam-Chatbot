@@ -20,7 +20,7 @@
  * AI model get the extra reasoning call.
  */
 
-import { askGemini } from "./gemini";
+import { askOpenAI } from "./openaiProvider";
 import { buildTemporalPromptContext } from "./travelDates";
 import { isLikelyContextDependentText, normalizeContextText } from "./contextualText";
 import { isGenericConfirmationText } from "./travelFastPathsSearch";
@@ -161,7 +161,7 @@ export async function analyzeBeforeReply(input: {
       userText: input.userText,
       tripIndexLines: input.tripIndexLines,
     });
-    const result = await askGemini(prompt, {
+    const result = await askOpenAI(prompt, {
       requestId: input.requestId,
       correlationId: input.correlationId,
       source,

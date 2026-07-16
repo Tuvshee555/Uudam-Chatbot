@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { NextApiRequest, NextApiResponse } from "next";
-import { askGemini } from "../../lib/gemini";
-import { askOpenAIFallbackParts } from "../../lib/openaiFallback";
+import { askOpenAI } from "../../lib/openaiProvider";
+import { askOpenAIChatParts } from "../../lib/openaiFallback";
 import {
   buildShardedRateLimitKey,
   getClientKey,
@@ -441,14 +441,14 @@ export default async function handler(
         pinnedButtonLabels,
         phoneRequested: hasAskedForPhone(history),
       });
-      // Mirrors the production webhook: Gemini down/overloaded must not mean
+      // Mirrors the production webhook: OpenAI down/overloaded must not mean
       // the customer gets a bare error while a working second model sits
       // idle. Try OpenAI with the same prompt before giving up.
       let aiReplyText: string;
       try {
         // OpenAI is the primary model for customer replies (owner's call —
-        // more reliable in practice); Gemini is the backup if OpenAI fails.
-        const result = await askGemini(promptParts.user, {
+        // more reliable in practice).
+        const result = await askOpenAI(promptParts.user, {
           requestId: trace.requestId,
           correlationId: trace.correlationId,
           source: "api.demo",
@@ -460,7 +460,7 @@ export default async function handler(
       } catch (error) {
         let fallbackText = "";
         try {
-          const fallback = await askOpenAIFallbackParts([{ text: promptParts.user }], {
+          const fallback = await askOpenAIChatParts([{ text: promptParts.user }], {
             source: "api.demo.reply_fallback",
             timeoutMs: 20_000,
             requestId: trace.requestId,

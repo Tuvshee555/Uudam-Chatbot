@@ -100,24 +100,36 @@ async function callWebhook(handler: WebhookHandler, payload: unknown) {
   return result();
 }
 
+function promptTextFromOpenAIRequest(rawBody: unknown) {
+  const body = JSON.parse(String(rawBody || "{}")) as {
+    messages?: Array<{
+      content?: string | Array<{ type?: string; text?: string }>;
+    }>;
+  };
+  const userMessage = body.messages?.findLast((message) =>
+    Array.isArray(message.content),
+  );
+  if (!Array.isArray(userMessage?.content)) return "";
+  return userMessage.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text || "")
+    .join("\n");
+}
+
 test("webhook retries transient send failure then dedupes completed event", async () => {
   applyTestEnv();
   const handler = await loadWebhookHandler();
 
   const originalFetch = globalThis.fetch;
   let sendAttempts = 0;
-  let geminiAttempts = 0;
+  let openaiAttempts = 0;
 
   globalThis.fetch = (async (input) => {
     const url = String(input);
-    if (url.includes(":generateContent")) {
-      geminiAttempts += 1;
+    if (url.includes("api.openai.com")) {
+      openaiAttempts += 1;
       return new Response(
-        JSON.stringify({
-          candidates: [
-            { content: { parts: [{ text: "Сайн байна уу?" }] } },
-          ],
-        }),
+        JSON.stringify({ choices: [{ message: { content: "Sain baina uu?" } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }),
         { status: 200 },
       );
     }
@@ -151,7 +163,7 @@ test("webhook retries transient send failure then dedupes completed event", asyn
 
     const first = await callWebhook(handler, payload);
     const second = await callWebhook(handler, payload);
-    const geminiAttemptsBeforeDedupe = geminiAttempts;
+    const openaiAttemptsBeforeDedupe = openaiAttempts;
     const third = await callWebhook(handler, payload);
 
     assert.equal(first.statusCode, 503);
@@ -160,8 +172,8 @@ test("webhook retries transient send failure then dedupes completed event", asyn
     assert.equal(sendAttempts, 2);
     // This self-contained message needs only the answer call. Two real attempts
     // ran; the deduped third delivery must add no model calls at all.
-    assert.equal(geminiAttempts, 2);
-    assert.equal(geminiAttempts, geminiAttemptsBeforeDedupe);
+    assert.equal(openaiAttempts, 2);
+    assert.equal(openaiAttempts, openaiAttemptsBeforeDedupe);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -176,11 +188,8 @@ test("webhook preserves reply order for concurrent same-user requests", async ()
 
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
-    if (url.includes(":generateContent")) {
-      const body = JSON.parse(String(init?.body || "{}")) as {
-        contents?: { parts?: { text?: string }[] }[];
-      };
-      const prompt = body.contents?.[0]?.parts?.[0]?.text ?? "";
+    if (url.includes("api.openai.com")) {
+      const prompt = promptTextFromOpenAIRequest(init?.body);
       const matches = Array.from(prompt.matchAll(/User:\s*([^\n]+)\nAssistant:/gm));
       const userText = (matches[matches.length - 1]?.[1] || "unknown").trim();
 
@@ -189,11 +198,7 @@ test("webhook preserves reply order for concurrent same-user requests", async ()
       }
 
       return new Response(
-        JSON.stringify({
-          candidates: [
-            { content: { parts: [{ text: `reply:${userText}` }] } },
-          ],
-        }),
+        JSON.stringify({ choices: [{ message: { content: `reply:${userText}` } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }),
         { status: 200 },
       );
     }
@@ -253,7 +258,7 @@ test("webhook preserves reply order for concurrent same-user requests", async ()
   }
 });
 
-test("webhook handles long Gemini latency without dropping event", async () => {
+test("webhook handles long OpenAI latency without dropping event", async () => {
   applyTestEnv();
   const handler = await loadWebhookHandler();
 
@@ -262,11 +267,12 @@ test("webhook handles long Gemini latency without dropping event", async () => {
 
   globalThis.fetch = (async (input) => {
     const url = String(input);
-    if (url.includes(":generateContent")) {
+    if (url.includes("api.openai.com")) {
       await sleep(700);
       return new Response(
         JSON.stringify({
-          candidates: [{ content: { parts: [{ text: "slow reply" }] } }],
+          choices: [{ message: { content: "slow reply" } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         }),
         { status: 200 },
       );
@@ -318,10 +324,11 @@ test("webhook acknowledges the handoff when the model refers unknown data to sta
 
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
-    if (url.includes(":generateContent")) {
+    if (url.includes("api.openai.com")) {
       return new Response(
         JSON.stringify({
-          candidates: [{ content: { parts: [{ text: "REFER" }] } }],
+          choices: [{ message: { content: "REFER" } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         }),
         { status: 200 },
       );
@@ -367,7 +374,7 @@ test("redis disconnect in replay/conversation mode fails closed with 503", async
     (async () => {
       const { createHmac } = await import("node:crypto");
 
-      process.env.GEMINI_API_KEY = "test-gemini-key";
+      process.env.OPENAI_API_KEY = "test-openai-key";
       process.env.VERIFY_TOKEN = "test-verify-token";
       process.env.TOKEN_PAGE = "test-page-token";
       process.env.FACEBOOK_PAGE_ID = "1234567890";

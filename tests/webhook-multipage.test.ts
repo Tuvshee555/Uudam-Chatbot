@@ -96,26 +96,35 @@ function pageMessage(pageId: string, senderId: string, mid: string, text: string
   };
 }
 
-/**
- * Stubs Gemini + Graph send. Captures the access_token used on each /messages
- * call and the prompt text Gemini received (so we can assert conversation
- * isolation by page).
- */
+function promptTextFromOpenAIRequest(rawBody: unknown) {
+  const body = JSON.parse(String(rawBody || "{}")) as {
+    messages?: Array<{
+      content?: string | Array<{ type?: string; text?: string }>;
+    }>;
+  };
+  const userMessage = body.messages?.findLast((message) =>
+    Array.isArray(message.content),
+  );
+  if (!Array.isArray(userMessage?.content)) return "";
+  return userMessage.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text || "")
+    .join("\n");
+}
+
 function stubFetch(record: {
   sendTokens: string[];
-  geminiPrompts: string[];
+  openaiPrompts: string[];
 }) {
   const original = globalThis.fetch;
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
-    if (url.includes(":generateContent")) {
-      const body = JSON.parse(String(init?.body || "{}")) as {
-        contents?: { parts?: { text?: string }[] }[];
-      };
-      record.geminiPrompts.push(body.contents?.[0]?.parts?.[0]?.text ?? "");
+    if (url.includes("api.openai.com")) {
+      record.openaiPrompts.push(promptTextFromOpenAIRequest(init?.body));
       return new Response(
         JSON.stringify({
-          candidates: [{ content: { parts: [{ text: "Сайн байна уу" }] } }],
+          choices: [{ message: { content: "Sain baina uu" } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         }),
         { status: 200 },
       );
@@ -139,33 +148,25 @@ test("webhook replies to each page with that page's own token", async () => {
     FACEBOOK_PAGE_ID: undefined,
   });
   const handler = await loadWebhookHandler();
-  const record = { sendTokens: [] as string[], geminiPrompts: [] as string[] };
+  const record = { sendTokens: [] as string[], openaiPrompts: [] as string[] };
   const restore = stubFetch(record);
   try {
     const a = await callWebhook(
       handler,
-      pageMessage(PAGE_A, "customer-1", "mid-a-1", "сайн уу"),
+      pageMessage(PAGE_A, "customer-1", "mid-a-1", "sain uu"),
     );
     const b = await callWebhook(
       handler,
-      pageMessage(PAGE_B, "customer-2", "mid-b-1", "сайн уу"),
+      pageMessage(PAGE_B, "customer-2", "mid-b-1", "sain uu"),
     );
     assert.equal(a.statusCode, 200);
     assert.equal(b.statusCode, 200);
-    // Each page triggers a typing indicator + the reply, both on /messages — so
-    // there are two sends per page. Every send must use that page's own token.
     const tokensForA = record.sendTokens.slice(0, 2);
     const tokensForB = record.sendTokens.slice(2);
     assert.ok(record.sendTokens.length >= 2, "page A should have sent at least once");
     assert.ok(record.sendTokens.length >= 4, "page B should have sent at least once");
-    assert.ok(
-      tokensForA.every((t) => t === TOKEN_A),
-      "all page A sends must use page A's token",
-    );
-    assert.ok(
-      tokensForB.every((t) => t === TOKEN_B),
-      "all page B sends must use page B's token",
-    );
+    assert.ok(tokensForA.every((token) => token === TOKEN_A));
+    assert.ok(tokensForB.every((token) => token === TOKEN_B));
   } finally {
     restore();
   }
@@ -178,35 +179,26 @@ test("webhook keeps the same sender's history separate per page", async () => {
     FACEBOOK_PAGE_ID: undefined,
   });
   const handler = await loadWebhookHandler();
-  const record = { sendTokens: [] as string[], geminiPrompts: [] as string[] };
+  const record = { sendTokens: [] as string[], openaiPrompts: [] as string[] };
   const restore = stubFetch(record);
   try {
-    // Same PSID messages page A, then page B. The page-B prompts must NOT
-    // contain the page-A message — histories are isolated by page id. Each AI
-    // message now makes a reasoning call plus the answer call, so assert the
-    // isolation invariant over every page-B prompt instead of a fixed count.
     await callWebhook(
       handler,
       pageMessage(PAGE_A, "shared-sender", "mid-1", "only-on-page-A"),
     );
-    const promptCountAfterPageA = record.geminiPrompts.length;
-    assert.ok(promptCountAfterPageA >= 1, "page A message should reach Gemini");
+    const promptCountAfterPageA = record.openaiPrompts.length;
+    assert.ok(promptCountAfterPageA >= 1, "page A message should reach OpenAI");
+
     await callWebhook(
       handler,
       pageMessage(PAGE_B, "shared-sender", "mid-2", "only-on-page-B"),
     );
 
-    const pageBPrompts = record.geminiPrompts.slice(promptCountAfterPageA);
-    assert.ok(pageBPrompts.length >= 1, "page B message should reach Gemini");
+    const pageBPrompts = record.openaiPrompts.slice(promptCountAfterPageA);
+    assert.ok(pageBPrompts.length >= 1, "page B message should reach OpenAI");
     for (const pageBPrompt of pageBPrompts) {
-      assert.ok(
-        pageBPrompt.includes("only-on-page-B"),
-        "page B prompt should contain page B's message",
-      );
-      assert.ok(
-        !pageBPrompt.includes("only-on-page-A"),
-        "page B prompt must not leak page A's history",
-      );
+      assert.ok(pageBPrompt.includes("only-on-page-B"));
+      assert.ok(!pageBPrompt.includes("only-on-page-A"));
     }
   } finally {
     restore();
@@ -220,17 +212,16 @@ test("webhook drops messages for a page not in the roster", async () => {
     FACEBOOK_PAGE_ID: undefined,
   });
   const handler = await loadWebhookHandler();
-  const record = { sendTokens: [] as string[], geminiPrompts: [] as string[] };
+  const record = { sendTokens: [] as string[], openaiPrompts: [] as string[] };
   const restore = stubFetch(record);
   try {
     const res = await callWebhook(
       handler,
-      pageMessage("999999999999999", "stranger", "mid-x", "сайн уу"),
+      pageMessage("999999999999999", "stranger", "mid-x", "sain uu"),
     );
-    // Webhook still acknowledges (200) but never replies to an unknown page.
     assert.equal(res.statusCode, 200);
     assert.equal(record.sendTokens.length, 0);
-    assert.equal(record.geminiPrompts.length, 0);
+    assert.equal(record.openaiPrompts.length, 0);
   } finally {
     restore();
   }

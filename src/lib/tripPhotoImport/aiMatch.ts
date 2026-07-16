@@ -1,4 +1,4 @@
-import { askGemini } from "../gemini";
+import { askOpenAI } from "../openaiProvider";
 import type { TravelTrip } from "../travelTypes";
 import { tokenCoverageScore } from "./normalize";
 
@@ -59,7 +59,7 @@ Trips:
 ${JSON.stringify(candidates, null, 2)}`;
 
   try {
-    const result = await askGemini(prompt, {
+    const result = await askOpenAI(prompt, {
       jsonMode: true,
       temperature: 0,
       timeoutMs: 10_000,

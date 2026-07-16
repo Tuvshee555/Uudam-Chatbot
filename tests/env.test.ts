@@ -13,7 +13,7 @@ test("env validation accepts valid configuration", async () => {
   const envModule = await loadEnvModule();
   const env = envModule.getEnv();
   assert.equal(env.demoMaxTextChars, 1000);
-  assert.equal(env.geminiMaxRetries, 1);
+  assert.equal(env.openaiMaxRetries, 1);
   assert.equal(env.webhookMaxBodyBytes, 1048576);
   assert.equal(env.adminOpenAccess, false);
   assert.equal(env.googleDriveSyncEnabled, false);

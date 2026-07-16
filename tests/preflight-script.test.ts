@@ -4,7 +4,7 @@ import test from "node:test";
 
 const BASE_ENV = {
   ...process.env,
-  GEMINI_API_KEY: "test-gemini-key",
+  OPENAI_API_KEY: "test-openai-key",
   VERIFY_TOKEN: "test-verify-token",
   TOKEN_PAGE: "test-page-token",
   FACEBOOK_PAGE_ID: "1234567890",

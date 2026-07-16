@@ -8,24 +8,19 @@ import {
   recordCounter,
 } from "./observability";
 import { fetchWithRetry } from "./resilience";
-import type { GeminiPart, GeminiResult } from "./gemini";
+import type { OpenAIPart, OpenAIResult } from "./openaiProvider";
 
 const OPENAI_API_BASE = "https://api.openai.com/v1/chat/completions";
 const env = getEnv();
 
 /**
- * OpenAI fallback for when Gemini is overloaded (503) or times out.
+ * OpenAI chat completion adapter for text and rendered image parts.
  *
- * Gemini Flash periodically returns 503 "Service Unavailable" during global
- * capacity spikes. Rather than failing the admin's upload, we transparently
- * retry supported requests against OpenAI (GPT-4o-mini), which reads rendered
- * page images via base64 data URLs. Native PDF parts remain on Gemini.
- *
- * Returns null if no OpenAI key is configured, so the caller can rethrow the
- * original Gemini error instead of masking it.
+ * The historical type names come from the old provider wrapper, but this
+ * function intentionally calls OpenAI only.
  */
-export async function askOpenAIFallbackParts(
-  parts: GeminiPart[],
+export async function askOpenAIChatParts(
+  parts: OpenAIPart[],
   options?: {
     source?: string;
     jsonMode?: boolean;
@@ -36,12 +31,12 @@ export async function askOpenAIFallbackParts(
     correlationId?: string;
     /** Override model for this call (e.g. gpt-4o for file parsing). */
     model?: string;
-    /** Rules/persona sent as an OpenAI system message (mirrors Gemini systemInstruction). */
+    /** Rules/persona sent as an OpenAI system message. */
     systemText?: string;
     /** Internal recursion guard for the lower-cost alternate model. */
     alternateModelAttempted?: boolean;
   },
-): Promise<GeminiResult | null> {
+): Promise<OpenAIResult | null> {
   const key = env.openaiApiKey;
   if (!key) return null;
   if (
@@ -57,7 +52,7 @@ export async function askOpenAIFallbackParts(
   const source = options?.source || "unknown";
   const startedAt = Date.now();
 
-  // Convert Gemini parts → OpenAI content blocks. Text stays text; rendered
+  // Convert compatibility parts to OpenAI content blocks. Text stays text; rendered
   // image binaries become data-URL image_url blocks.
   const content: any[] = parts.map((part) => {
     if ("inlineData" in part) {
@@ -103,9 +98,9 @@ export async function askOpenAIFallbackParts(
       },
       {
         upstream: "openai.chat",
-        timeoutMs: options?.timeoutMs ?? env.geminiTimeoutMs,
-        maxRetries: 1,
-        retryBaseDelayMs: env.geminiRetryBaseDelayMs,
+        timeoutMs: options?.timeoutMs ?? env.openaiTimeoutMs,
+        maxRetries: env.openaiMaxRetries,
+        retryBaseDelayMs: env.openaiRetryBaseDelayMs,
         requestId: options?.requestId,
         correlationId: options?.correlationId,
         metricPrefix: "openai",
@@ -157,7 +152,7 @@ export async function askOpenAIFallbackParts(
         model,
         fallbackModel: "gpt-4o-mini",
       });
-      const alternate = await askOpenAIFallbackParts(parts, {
+      const alternate = await askOpenAIChatParts(parts, {
         ...options,
         model: "gpt-4o-mini",
         alternateModelAttempted: true,

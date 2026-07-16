@@ -17,10 +17,6 @@ declare module "@/lib/poster/openai" {
   export function verifyDaySummaries(trip: any, pdfBase64: string, pdfFilename: string): Promise<any>;
 }
 
-declare module "@/lib/poster/gemini" {
-  export function extractTripFromPdfGemini(base64: string): Promise<any>;
-}
-
 declare module "@/lib/poster/pdfImages" {
   export function extractPdfImages(buffer: Buffer): Promise<string[]>;
 }
@@ -34,4 +30,8 @@ declare module "@/lib/poster/pdfMeals" {
 
 declare module "@/lib/poster/defaultTrip" {
   export function createDefaultTrip(): any;
+}
+
+declare module "pdf-parse/lib/pdf-parse.js" {
+  export default function pdfParse(buffer: Buffer): Promise<{ text?: string }>;
 }

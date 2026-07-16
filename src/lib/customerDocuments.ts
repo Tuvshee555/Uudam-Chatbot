@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
 import { waitUntil } from "@vercel/functions";
-import { askGeminiParts, type GeminiPart } from "./gemini";
+import { askOpenAIParts, type OpenAIPart } from "./openaiProvider";
 import { queryNeon } from "./neonDb";
 import {
   classifyError,
@@ -279,7 +279,7 @@ async function applySensitiveRetentionPolicy() {
   ).catch(() => {});
 }
 
-function buildExtractionParts(image: DownloadedImage): GeminiPart[] {
+function buildExtractionParts(image: DownloadedImage): OpenAIPart[] {
   return [
     {
       text: [
@@ -410,7 +410,7 @@ async function extractImageData(
   image: DownloadedImage,
   trace?: { requestId?: string; correlationId?: string },
 ) {
-  const result = await askGeminiParts(buildExtractionParts(image), {
+  const result = await askOpenAIParts(buildExtractionParts(image), {
     source: "customer_documents.extract",
     requestId: trace?.requestId,
     correlationId: trace?.correlationId,

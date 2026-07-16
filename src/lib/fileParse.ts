@@ -4,8 +4,8 @@
  *
  * - Spreadsheets become an HTML table — the model reads tabular data far
  *   more accurately as HTML than as raw cell dumps.
- * - PDFs and images are passed through as inline binary; Gemini reads those
- *   natively (OCR-style), so a photo of a paper price list works too.
+ * - PDFs are text-extracted server-side when possible, and images are passed
+ *   through as inline binary for OpenAI vision.
  */
 import ExcelJS from "exceljs";
 import { inflateRawSync } from "node:zlib";
@@ -15,7 +15,7 @@ export type ParsedUpload = {
   label: string;
   /** HTML table or plain text for the AI prompt. Empty when `inline` is set. */
   text: string;
-  /** Inline binary the model reads natively (PDF / image). */
+  /** Inline binary the model reads natively (image). */
   inline: { mimeType: string; data: string } | null;
 };
 
@@ -302,6 +302,12 @@ function docxToText(buffer: Buffer): string {
   return text;
 }
 
+async function pdfToText(buffer: Buffer): Promise<string> {
+  const pdf = (await import("pdf-parse/lib/pdf-parse.js")).default;
+  const data = await pdf(buffer);
+  return String(data.text || "").trim();
+}
+
 function normalizeImageMime(extension: string, mimeType?: string): string {
   if (mimeType && mimeType.startsWith("image/")) return mimeType;
   const map: Record<string, string> = {
@@ -358,10 +364,14 @@ export async function parseUpload(input: UploadInput): Promise<ParsedUpload> {
   }
 
   if (isPdf) {
+    const text = await pdfToText(buffer);
+    if (text) {
+      return { label: filename, text, inline: null };
+    }
     return {
       label: filename,
       text: "",
-      inline: { mimeType: "application/pdf", data: buffer.toString("base64") },
+      inline: null,
     };
   }
 

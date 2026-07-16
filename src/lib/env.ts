@@ -1,8 +1,7 @@
 import { logStartupDiagnostics } from "./observability";
 
 export type ValidatedEnv = {
-  geminiApiKey: string;
-  openaiApiKey: string | null;
+  openaiApiKey: string;
   verifyToken: string;
   tokenPage: string;
   facebookPageId: string;
@@ -36,11 +35,11 @@ export type ValidatedEnv = {
   rateLimitSweepInterval: number;
   conversationMaxSessions: number;
   pauseMaxSenders: number;
-  geminiTimeoutMs: number;
-  geminiMaxRetries: number;
-  geminiRetryBaseDelayMs: number;
-  geminiCircuitFailureThreshold: number;
-  geminiCircuitCooldownMs: number;
+  openaiTimeoutMs: number;
+  openaiMaxRetries: number;
+  openaiRetryBaseDelayMs: number;
+  openaiCircuitFailureThreshold: number;
+  openaiCircuitCooldownMs: number;
   metaApiTimeoutMs: number;
   metaSubscribeMaxRetries: number;
   metaRetryBaseDelayMs: number;
@@ -286,14 +285,7 @@ export function getEnv(): ValidatedEnv {
   const source = process.env;
   const errors: string[] = [];
 
-  const geminiApiKey = readRequiredStringFromNames(
-    ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-    source,
-    errors,
-  );
-  // Optional — used only as an automatic fallback when Gemini returns 503 /
-  // times out. If absent, no fallback runs and the Gemini error surfaces.
-  const openaiApiKey = readOptionalString("OPENAI_API_KEY", source) || null;
+  const openaiApiKey = readRequiredString("OPENAI_API_KEY", source, errors);
   const verifyToken = readRequiredString("VERIFY_TOKEN", source, errors);
   // Legacy single-page vars are now OPTIONAL — they feed the multi-page roster
   // below as a fallback. parseFacebookPages enforces "at least one page".
@@ -496,40 +488,40 @@ export function getEnv(): ValidatedEnv {
     50000,
     errors,
   );
-  const geminiTimeoutMs = readPositiveIntFromNames(
-    ["GEMINI_TIMEOUT_MS", "OPENAI_TIMEOUT_MS"],
+  const openaiTimeoutMs = readPositiveIntFromNames(
+    ["OPENAI_TIMEOUT_MS"],
     source,
     15_000,
     1_000,
     120_000,
     errors,
   );
-  const geminiMaxRetries = readPositiveIntFromNames(
-    ["GEMINI_MAX_RETRIES", "OPENAI_MAX_RETRIES"],
+  const openaiMaxRetries = readPositiveIntFromNames(
+    ["OPENAI_MAX_RETRIES"],
     source,
     2,
     0,
     5,
     errors,
   );
-  const geminiRetryBaseDelayMs = readPositiveIntFromNames(
-    ["GEMINI_RETRY_BASE_DELAY_MS", "OPENAI_RETRY_BASE_DELAY_MS"],
+  const openaiRetryBaseDelayMs = readPositiveIntFromNames(
+    ["OPENAI_RETRY_BASE_DELAY_MS"],
     source,
     300,
     50,
     10_000,
     errors,
   );
-  const geminiCircuitFailureThreshold = readPositiveIntFromNames(
-    ["GEMINI_CIRCUIT_FAILURE_THRESHOLD", "OPENAI_CIRCUIT_FAILURE_THRESHOLD"],
+  const openaiCircuitFailureThreshold = readPositiveIntFromNames(
+    ["OPENAI_CIRCUIT_FAILURE_THRESHOLD"],
     source,
     5,
     1,
     50,
     errors,
   );
-  const geminiCircuitCooldownMs = readPositiveIntFromNames(
-    ["GEMINI_CIRCUIT_COOLDOWN_MS", "OPENAI_CIRCUIT_COOLDOWN_MS"],
+  const openaiCircuitCooldownMs = readPositiveIntFromNames(
+    ["OPENAI_CIRCUIT_COOLDOWN_MS"],
     source,
     30_000,
     1_000,
@@ -656,7 +648,6 @@ export function getEnv(): ValidatedEnv {
   }
 
   cachedEnv = {
-    geminiApiKey,
     openaiApiKey,
     verifyToken,
     tokenPage,
@@ -691,11 +682,11 @@ export function getEnv(): ValidatedEnv {
     rateLimitSweepInterval,
     conversationMaxSessions,
     pauseMaxSenders,
-    geminiTimeoutMs,
-    geminiMaxRetries,
-    geminiRetryBaseDelayMs,
-    geminiCircuitFailureThreshold,
-    geminiCircuitCooldownMs,
+    openaiTimeoutMs,
+    openaiMaxRetries,
+    openaiRetryBaseDelayMs,
+    openaiCircuitFailureThreshold,
+    openaiCircuitCooldownMs,
     metaApiTimeoutMs,
     metaSubscribeMaxRetries,
     metaRetryBaseDelayMs,
@@ -743,8 +734,8 @@ export function getEnv(): ValidatedEnv {
     rateLimitMaxBuckets: cachedEnv.rateLimitMaxBuckets,
     conversationMaxSessions: cachedEnv.conversationMaxSessions,
     pauseMaxSenders: cachedEnv.pauseMaxSenders,
-    geminiTimeoutMs: cachedEnv.geminiTimeoutMs,
-    geminiMaxRetries: cachedEnv.geminiMaxRetries,
+    openaiTimeoutMs: cachedEnv.openaiTimeoutMs,
+    openaiMaxRetries: cachedEnv.openaiMaxRetries,
     metaApiTimeoutMs: cachedEnv.metaApiTimeoutMs,
     metaSubscribeMaxRetries: cachedEnv.metaSubscribeMaxRetries,
     webhookMaxPendingConversations: cachedEnv.webhookMaxPendingConversations,

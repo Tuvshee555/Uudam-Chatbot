@@ -1,32 +1,25 @@
 /**
- * The actual document -> trip JSON extraction used by the direct poster
- * upload endpoint.
+ * Document -> trip JSON extraction for the direct poster upload endpoint.
+ * OpenAI is the only model provider used here.
  */
 import { fileToImages, fileToText } from "@/lib/poster/parse";
 import { extractTrip, extractTripFromImage, extractTripFromPdf } from "@/lib/poster/openai";
-import { extractTripFromPdfGemini } from "@/lib/poster/gemini";
 import { extractPdfImages } from "@/lib/poster/pdfImages";
 import { applyDayText, applyMealMarks, extractPdfFacts } from "@/lib/poster/pdfMeals";
 
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp"];
 export const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
 const MAX_EXTRACTED_IMAGES = 18;
-
-// Photo cropping (extractPdfImages) is pure synchronous CPU work — on a
-// photo-heavy page it can block the event loop long enough to blow the whole
-// serverless budget. It's a nice-to-have (auto day photos), NOT the point of
-// extraction, so cap it: if it doesn't finish quickly, skip it and let the
-// trip data (the real value) come through. This is the "90% not 150%" fix.
 const PDF_IMAGE_CROP_BUDGET_MS = 12_000;
+const BLOB_FETCH_TIMEOUT_MS = 20_000;
+
+type TripLike = { days?: Array<{ photo?: string | null }> };
 
 async function extractPdfImagesGuarded(buffer: Buffer): Promise<string[]> {
   try {
     const budget = new Promise<string[]>((resolve) => {
       setTimeout(() => resolve([]), PDF_IMAGE_CROP_BUDGET_MS);
     });
-    // extractPdfImages is sync-heavy; defer it a tick so the timeout timer is
-    // registered first, then race. If cropping runs long, we take [] and move
-    // on rather than hanging the whole job.
     const work = Promise.resolve().then(() => extractPdfImages(buffer));
     return await Promise.race([work, budget]);
   } catch {
@@ -34,56 +27,26 @@ async function extractPdfImagesGuarded(buffer: Buffer): Promise<string[]> {
   }
 }
 
-// PDF text extraction: Gemini AND OpenAI vision race in PARALLEL, first
-// success wins. Sequential fallback (Gemini timeout 35s THEN OpenAI 48s) had
-// an 83s worst case that could never fit Vercel Hobby's ~52s usable window —
-// the race bounds it to the slower single call (~48s) while the typical case
-// stays Gemini-fast (5-25s). Both see the WHOLE document, so day/meal-mark
-// alignment across pages is preserved (page-splitting was rejected for
-// exactly that reason). Costs one extra AI call per document — at once-a-day
-// usage that's pennies, far cheaper than the Pro plan this avoids.
 async function extractPdfTripText(b64: string, filename: string) {
   const started = Date.now();
   const elapsed = () => `${((Date.now() - started) / 1000).toFixed(1)}s`;
-
-  const contenders: Array<Promise<TripLike>> = [];
-  if (process.env.GEMINI_API_KEY) {
-    contenders.push(
-      extractTripFromPdfGemini(b64).then((trip) => {
-        console.log(`[extract] gemini ok in ${elapsed()}: ${filename}`);
-        return trip;
-      }),
-    );
-  }
-  contenders.push(
-    extractTripFromPdf(b64, filename).then((trip) => {
-      console.log(`[extract] openai ok in ${elapsed()}: ${filename}`);
-      return trip;
-    }),
-  );
-
-  // Silence the loser: whichever promise loses the race may still reject
-  // later; without a catch handler that becomes an unhandled rejection.
-  for (const p of contenders) p.catch(() => {});
-
   try {
-    return await Promise.any(contenders);
+    const trip = await extractTripFromPdf(b64, filename);
+    console.log(`[extract] openai ok in ${elapsed()}: ${filename}`);
+    return trip;
   } catch (err) {
-    const errors = err instanceof AggregateError ? err.errors : [err];
-    const detail = errors.map((e) => String((e as Error)?.message || e)).join(" | ");
-    console.warn(`[extract] all extractors failed after ${elapsed()}: ${detail}`);
-    throw new Error(`Уншиж чадсангүй: ${detail}`);
+    const detail = String((err as Error)?.message || err);
+    console.warn(`[extract] openai failed after ${elapsed()}: ${detail}`);
+    throw new Error(`Could not read file with OpenAI: ${detail}`);
   }
 }
-
-type TripLike = { days?: Array<{ photo?: string | null }> };
 
 function assignPhotos(trip: TripLike, extractedImages: string[]) {
   if (!trip?.days?.length || !extractedImages?.length) return;
   const images = extractedImages.slice(0, MAX_EXTRACTED_IMAGES);
   const dayCount = trip.days.length;
   const imageCount = images.length;
-  for (let dayIndex = 0; dayIndex < dayCount; dayIndex++) {
+  for (let dayIndex = 0; dayIndex < dayCount; dayIndex += 1) {
     const imageIndex =
       imageCount <= dayCount
         ? dayIndex
@@ -114,10 +77,9 @@ export async function runExtraction(buffer: Buffer, filename: string, mime: stri
     return { trip, source_file: filename };
   }
 
-  // docx / txt
   const text = await fileToText(buffer, filename);
   if (!text || text.trim().length < 20) {
-    throw new Error("Файлаас текст уншиж чадсангүй.");
+    throw new Error("Could not read enough text from the uploaded file.");
   }
   const [trip, fileImages] = await Promise.all([
     extractTrip(text),
@@ -127,30 +89,20 @@ export async function runExtraction(buffer: Buffer, filename: string, mime: stri
   return { trip, source_file: filename };
 }
 
-/**
- * Fails fast on files that LOOK uploaded but aren't really there — the classic
- * OneDrive "online-only placeholder" case, where the browser reads a stub or
- * truncated bytes instead of the real document. Feeding that garbage to the AI
- * wastes 30-60s and dies confusingly; this dies in <1ms with a message that
- * says what's actually wrong.
- */
 export function assertReadableDocument(buffer: Buffer, filename: string, mime: string): void {
   if (!buffer || buffer.length === 0) {
     throw new Error(
-      `"${filename}" хоосон байна. Файл OneDrive-с бүрэн татагдаагүй байж магадгүй — файл дээр хулганы баруун товч дараад "Always keep on this device" сонгож, бүрэн татагдсаны дараа дахин оруулна уу.`,
+      `"${filename}" is empty. If it is a OneDrive online-only file, download it fully and try again.`,
     );
   }
   const name = filename.toLowerCase();
   const isPdf = name.endsWith(".pdf") || mime === "application/pdf";
   if (isPdf && !buffer.subarray(0, 1024).includes(Buffer.from("%PDF-"))) {
     throw new Error(
-      `"${filename}" гэмтэлтэй эсвэл бүрэн татагдаагүй PDF байна (OneDrive sync шалгана уу). Файлыг бүрэн татаж аваад дахин оролдоно уу.`,
+      `"${filename}" is not a readable PDF. It may be corrupted or not fully downloaded.`,
     );
   }
 }
-
-// A hung blob download must not silently consume the serverless time budget.
-const BLOB_FETCH_TIMEOUT_MS = 20_000;
 
 export async function resolveFile(
   body: Record<string, unknown>,
@@ -160,11 +112,10 @@ export async function resolveFile(
     const filename = typeof body.filename === "string" ? body.filename : "document";
     const mime = typeof body.mimeType === "string" ? body.mimeType : "";
     const res = await fetch(blobUrl, { signal: AbortSignal.timeout(BLOB_FETCH_TIMEOUT_MS) });
-    if (!res.ok) throw new Error(`Blob татахад алдаа гарлаа: ${res.status}`);
+    if (!res.ok) throw new Error(`Blob download failed: ${res.status}`);
     const arrayBuffer = await res.arrayBuffer();
     return { buffer: Buffer.from(arrayBuffer), filename, mime, blobUrl };
   }
 
-  throw new Error("Файл олдсонгүй");
+  throw new Error("No file found.");
 }
-

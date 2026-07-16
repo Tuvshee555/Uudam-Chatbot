@@ -1,5 +1,5 @@
 // Set minimum env before importing modules that load env at init.
-process.env.GEMINI_API_KEY ||= "test-gemini-key";
+process.env.OPENAI_API_KEY ||= "test-openai-key";
 process.env.VERIFY_TOKEN ||= "test-verify-token";
 process.env.TOKEN_PAGE ||= "test-page-token";
 process.env.FACEBOOK_PAGE_ID ||= "1234567890";

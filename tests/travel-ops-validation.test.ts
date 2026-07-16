@@ -54,14 +54,14 @@ test("transient AI proposal failures map to retryable HTTP responses", async () 
   const timeoutProposal: AIChangeProposal = {
     summary: "AI service took too long to answer.",
     needs_confirmation: true,
-    important_reason: "Upstream gemini.generateContent timed out after 45000ms",
+    important_reason: "Upstream openai.chat timed out after 45000ms",
     conflicts: [],
     actions: [],
   };
   const rateLimitProposal: AIChangeProposal = {
     summary: "AI service is temporarily rate limited.",
     needs_confirmation: true,
-    important_reason: "Upstream gemini.generateContent returned 429",
+    important_reason: "Upstream openai.chat returned 429",
     conflicts: [],
     actions: [],
   };

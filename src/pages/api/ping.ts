@@ -45,7 +45,7 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
         observability: getObservabilityDiagnostics(),
         readiness: getReadinessReport(env),
         circuit: {
-          gemini: getCircuitState("gemini.generateContent"),
+          openai: getCircuitState("openai.chat"),
         },
         redis: getRedisHealth(),
       });
