@@ -47,6 +47,7 @@ export default function AdminPage() {
   const [busyKey, setBusyKey] = useState("");
   const [tick, setTick] = useState(0);
   const [trips, setTrips] = useState<TravelTrip[]>([]);
+  const [tripsLoaded, setTripsLoaded] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [control, setControl] = useState<ControlState | null>(null);
@@ -162,7 +163,9 @@ export default function AdminPage() {
         }
         const tripJson = await tripRes.json();
         setRequiresAuth(false);
-        setTrips(Array.isArray(tripJson?.trips) ? tripJson.trips : []);
+        const nextTrips = Array.isArray(tripJson?.trips) ? tripJson.trips : [];
+        setTrips(nextTrips);
+        setTripsLoaded(true);
         setControl((tripJson?.control as ControlState) || null);
       } catch {
         toast.error("Аяллын мэдээлэл ачаалж чадсангүй.");
@@ -1554,6 +1557,7 @@ export default function AdminPage() {
   }
   const pausedPageCount = pageControls.filter((page) => page.bot_paused).length;
   const botPaused = pausedPageCount > 0;
+  const headerTripCount = tripsLoaded ? trips.length : dbInfo?.trips ?? 0;
   const navBadges: Partial<Record<TabKey, number>> = {
     bot: handoffRows.length || undefined,
     leads: newLeadCount || undefined,
@@ -1612,7 +1616,7 @@ export default function AdminPage() {
           </Badge>
           <span className="hidden sm:inline-flex">
             <Badge tone={dbInfo?.configured ? "neutral" : "danger"} className="tabular-nums">
-              {dbInfo?.trips ?? trips.length} аялал
+              {headerTripCount} аялал
             </Badge>
           </span>
         </div>
