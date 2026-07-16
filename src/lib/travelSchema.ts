@@ -96,25 +96,34 @@ export async function ensureTravelSchema() {
           [page.pageId],
         );
       }
-      // One-time backfill: the primary page inherits any active pause from the
-      // legacy single-row control so an existing pause isn't silently lost.
+      // Retire the legacy global pause. Per-page controls are authoritative.
+      // The old migration copied a true global flag into the primary page on
+      // EVERY schema initialization, so clicking Resume only worked until the
+      // next request initialized the schema and paused the page again.
       const primaryPageId = env.facebookPages[0]?.pageId;
       if (primaryPageId) {
         await client.query(
           `
             UPDATE travel_page_control AS pc
-            SET bot_paused = bc.bot_paused,
-                pause_reason = bc.pause_reason,
+            SET bot_paused = FALSE,
+                pause_reason = NULL,
                 updated_at = NOW()
             FROM travel_bot_control AS bc
             WHERE pc.page_id = $1
               AND bc.id = TRUE
-              AND bc.bot_paused = TRUE
-              AND pc.bot_paused = FALSE;
+              AND bc.bot_paused = TRUE;
           `,
           [primaryPageId],
         );
       }
+      await client.query(`
+        UPDATE travel_bot_control
+        SET bot_paused = FALSE,
+            pause_reason = NULL,
+            updated_at = NOW()
+        WHERE id = TRUE
+          AND bot_paused = TRUE;
+      `);
       await client.query(`
         CREATE TABLE IF NOT EXISTS travel_ai_change_requests (
           id BIGSERIAL PRIMARY KEY,

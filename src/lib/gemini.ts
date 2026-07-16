@@ -77,6 +77,8 @@ export type AskGeminiOptions = {
   preferOpenAI?: boolean;
   /** Override the OpenAI model when preferOpenAI=true (default: gpt-4o-mini). */
   openaiModel?: string;
+  /** Internal guard used by alternate-model attempts to avoid provider loops. */
+  skipOpenAIFallback?: boolean;
 };
 
 /**
@@ -127,12 +129,14 @@ export async function askGeminiParts(
   const hasNativePdf = parts.some(
     (part) => "inlineData" in part && part.inlineData.mimeType === "application/pdf",
   );
+  let openAIAttempted = false;
 
   // File reading uses OpenAI as the primary model (more reliable for parsing).
   // Native PDF parts stay on Gemini because Chat Completions image_url does not
   // reliably accept application/pdf; rendered JPEG page evidence still uses
   // OpenAI first. If OpenAI is configured, try it first for supported parts.
   if (options?.preferOpenAI && env.openaiApiKey && !hasNativePdf) {
+    openAIAttempted = true;
     const openaiResult = await askOpenAIFallbackParts(parts, {
       source,
       jsonMode: options?.jsonMode,
@@ -268,12 +272,43 @@ export async function askGeminiParts(
       message: error instanceof Error ? error.message : String(error),
     });
 
+    // Paid/high-capability models can have a separate rate-limit bucket. Try
+    // Flash before giving up; it is sufficient for structured file parsing and
+    // often remains available when Pro is exhausted.
+    if (classification.category === "rate_limited" && model !== DEFAULT_MODEL) {
+      logInfo("gemini.falling_back_to_model", {
+        source,
+        model,
+        fallbackModel: DEFAULT_MODEL,
+      });
+      try {
+        return await askGeminiParts(parts, {
+          ...options,
+          model: DEFAULT_MODEL,
+          preferOpenAI: false,
+          skipOpenAIFallback: true,
+        });
+      } catch (fallbackModelError) {
+        logError("gemini.model_fallback_failed", {
+          source,
+          model: DEFAULT_MODEL,
+          classification: classifyError(fallbackModelError),
+          message:
+            fallbackModelError instanceof Error
+              ? fallbackModelError.message
+              : String(fallbackModelError),
+        });
+      }
+    }
+
     // Gemini is down/overloaded (503) or timed out. Try OpenAI as a fallback
     // so the admin's request still succeeds. Only for retryable upstream
     // failures — a bad request or auth error should surface as-is.
     if (
       env.openaiApiKey &&
       !hasNativePdf &&
+      !openAIAttempted &&
+      !options?.skipOpenAIFallback &&
       (classification.category === "upstream_5xx" ||
         classification.category === "timeout" ||
         classification.retryable === true)

@@ -459,7 +459,9 @@ export default function AdminPage() {
     progressLabel: string,
   ): Promise<{ proposal: AIProposal; requestId: number | null }> {
     const MAX_HARD_FAILURES = 6; // consecutive non-rate-limit failures
+    const MAX_TRANSIENT_RETRIES = 1;
     let hardFailures = 0;
+    let transientRetries = 0;
     let waitAttempt = 0;
     while (true) {
       let res: Response;
@@ -498,6 +500,10 @@ export default function AdminPage() {
         isTransientAiFailure(json.proposal) &&
         !json.proposal?.actions?.length;
       if (rateLimited || transientOk) {
+        if (transientRetries >= MAX_TRANSIENT_RETRIES) {
+          return emptyChunkResult(unit.displayName);
+        }
+        transientRetries += 1;
         const waitMs =
           typeof json.retry_after_ms === "number" && json.retry_after_ms > 0
             ? json.retry_after_ms
@@ -553,7 +559,9 @@ export default function AdminPage() {
     progressLabel: string,
   ): Promise<{ proposal: AIProposal; requestId: number | null }> {
     const MAX_HARD_FAILURES = 6;
+    const MAX_TRANSIENT_RETRIES = 1;
     let hardFailures = 0;
+    let transientRetries = 0;
     let waitAttempt = 0;
     const label = `Google Drive ${shortId(fileId)}`;
     while (true) {
@@ -577,6 +585,10 @@ export default function AdminPage() {
         isTransientAiFailure(json.proposal) &&
         !json.proposal?.actions?.length;
       if (rateLimited || transientOk) {
+        if (transientRetries >= MAX_TRANSIENT_RETRIES) {
+          return emptyChunkResult(label);
+        }
+        transientRetries += 1;
         const waitMs =
           typeof json.retry_after_ms === "number" && json.retry_after_ms > 0
             ? json.retry_after_ms
@@ -1539,7 +1551,8 @@ export default function AdminPage() {
       setBusyKey("");
     }
   }
-  const botPaused = Boolean(control?.bot_paused);
+  const pausedPageCount = pageControls.filter((page) => page.bot_paused).length;
+  const botPaused = pausedPageCount > 0;
   const navBadges: Partial<Record<TabKey, number>> = {
     bot: handoffRows.length || undefined,
     leads: newLeadCount || undefined,
@@ -1594,7 +1607,7 @@ export default function AdminPage() {
             </button>
           )}
           <Badge tone={botPaused ? "danger" : "success"} dot>
-            {botPaused ? "Бот зогссон" : "Бот идэвхтэй"}
+            {botPaused ? `${pausedPageCount} хуудас зогссон` : "Бот идэвхтэй"}
           </Badge>
           <span className="hidden sm:inline-flex">
             <Badge tone={dbInfo?.configured ? "neutral" : "danger"} className="tabular-nums">

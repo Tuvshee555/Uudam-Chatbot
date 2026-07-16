@@ -38,6 +38,8 @@ export async function askOpenAIFallbackParts(
     model?: string;
     /** Rules/persona sent as an OpenAI system message (mirrors Gemini systemInstruction). */
     systemText?: string;
+    /** Internal recursion guard for the lower-cost alternate model. */
+    alternateModelAttempted?: boolean;
   },
 ): Promise<GeminiResult | null> {
   const key = env.openaiApiKey;
@@ -139,11 +141,29 @@ export async function askOpenAIFallbackParts(
       },
     };
   } catch (error) {
+    const classification = classifyError(error);
     recordCounter("openai.fallback_failures_total", 1, {
       model,
       source,
-      category: classifyError(error).category,
+      category: classification.category,
     });
+    if (
+      classification.category === "rate_limited" &&
+      model !== "gpt-4o-mini" &&
+      !options?.alternateModelAttempted
+    ) {
+      logInfo("openai.falling_back_to_model", {
+        source,
+        model,
+        fallbackModel: "gpt-4o-mini",
+      });
+      const alternate = await askOpenAIFallbackParts(parts, {
+        ...options,
+        model: "gpt-4o-mini",
+        alternateModelAttempted: true,
+      });
+      if (alternate) return alternate;
+    }
     logError("openai.fallback_failed", {
       source,
       model,

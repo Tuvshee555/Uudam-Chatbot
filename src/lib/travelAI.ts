@@ -1362,16 +1362,22 @@ export async function generateAIProposalFromContentBatched(input: {
           proposals.push(batchProposal);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
+          const classification = classifyError(error);
           logError("travel.ai.file_batch_failed", {
             source: "travel.ops.file_parse",
             batchLabels,
+            classification,
             message,
           });
+          const rateLimited = classification.category === "rate_limited";
           proposals.push({
-            summary: `Could not finish reading batch: ${batchLabels}`,
+            summary: rateLimited
+              ? `AI service is temporarily rate limited (429): ${batchLabels}`
+              : `Could not finish reading batch: ${batchLabels}`,
             needs_confirmation: true,
-            important_reason:
-              "One batch of uploaded files took too long or failed upstream, so the result may be incomplete.",
+            important_reason: rateLimited
+              ? message
+              : "One batch of uploaded files took too long or failed upstream, so the result may be incomplete.",
             conflicts: [`Нэг хэсгийг уншиж чадсангүй (${batchLabels}) — энэ хэсгийн аяллууд дутуу. Дахин оруулна уу.`],
             conflict_items: [{
               text: `Нэг хэсгийг уншиж чадсангүй (${batchLabels}) — энэ хэсгийн аяллууд дутуу. Дахин оруулна уу.`,

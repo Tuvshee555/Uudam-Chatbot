@@ -69,6 +69,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           );
         } else if (action === "page_resume") {
           await setPagePaused(pageId, false, null);
+          // The global flag is legacy, but older deployments may still have it
+          // set. Clear it when resuming the primary page so it cannot reassert
+          // the pause during a rolling deployment.
+          if (pageId === getEnv().facebookPages[0]?.pageId) {
+            await setBotPaused(false, null);
+          }
         }
         return res.status(200).json({
           ok: true,
