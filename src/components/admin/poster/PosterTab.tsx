@@ -590,7 +590,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
         const blob = await uploadToBlob(file.name, file, {
           access: "public",
           handleUploadUrl: "/api/admin/poster/upload",
-          headers: { "x-admin-secret": getStoredAdminSecret() },
+          clientPayload: JSON.stringify({ adminSecret: getStoredAdminSecret() }),
           abortSignal: controller.signal,
         });
         res = await apiFetch("/api/admin/poster/extract", {
