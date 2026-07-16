@@ -20,6 +20,7 @@ import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
 import { appendLeadCaptureCta, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
 import { extractTripPhotosForReply, hasTripPhotoIntent } from "../../lib/welcomeFlow";
+import { DUPLICATE_REPLY_NUDGE } from "../../lib/webhookMedia";
 import { getEnv } from "../../lib/env";
 import {
   beginRequestTrace,
@@ -523,14 +524,15 @@ export default async function handler(
       const lastReplyText = lastMessages.length > 0 ? lastMessages[lastMessages.length - 1].text : null;
       if (lastReplyText && isDuplicateReply(lastReplyText, reply)) {
         recordCounter("demo.duplicate_reply_avoided_total", 1, {});
-        const media = buildDemoMedia({
-          reply,
-          userText: normalizedText,
-          trips: reasoningTrips,
-        });
-        await appendMessage(sessionId, "assistant", reply, imageAttachments(media.mediaUrls));
+        const nudge = DUPLICATE_REPLY_NUDGE;
+        await appendMessage(sessionId, "assistant", nudge);
         await rememberTurn();
-        return res.status(200).json({ reply, buttons, ...media });
+        return res.status(200).json({
+          reply: nudge,
+          buttons: [],
+          mediaUrls: [],
+          brochureUrl: null,
+        });
       }
 
       const media = buildDemoMedia({

@@ -626,12 +626,10 @@ export async function processCustomerImageAttachments(input: {
   // One catalog fetch per batch — used to resolve trip screenshots and
   // payment memos against real trips.
   const trips = await listTrips({ limit: 5000 }).catch(() => [] as TravelTrip[]);
-  const rows: CustomerDocument[] = [];
-  for (const url of urls) {
-    const row = await processCustomerImageAttachment({ ...input, url, trips });
-    if (row) rows.push(row);
-  }
-  return rows;
+  const rows = await Promise.all(
+    urls.map((url) => processCustomerImageAttachment({ ...input, url, trips })),
+  );
+  return rows.filter((row): row is CustomerDocument => Boolean(row));
 }
 
 /**

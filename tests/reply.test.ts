@@ -121,6 +121,19 @@ test("shouldSilenceNoDataReply catches unknown-detail fallback wording", () => {
   assert.equal(shouldSilenceNoDataReply(paymentVerification), false);
 });
 
+test("shouldSilenceNoDataReply catches deterministic fast-path no-data replies", () => {
+  const budgetMiss =
+    "Одоогоор 3,000,000 MNT-аас доош шууд нислэгтэй аялал тодорхой олдсонгүй. Аяллын зөвлөхөөр ойролцоо хувилбар шалгуулъя.";
+  const directMiss =
+    "Тэр чиглэлд яг шууд нислэгтэй аялал одоогоор тодорхой олдсонгүй.\nОйролцоо байгаа хувилбарууд:\n• Бээжин газрын аялал";
+  const pastDateMiss =
+    "6 сарын 27-д тохирох үнийн мэдээлэл олдсонгүй. Аяллын зөвлөхтэй холбогдоорой.";
+
+  assert.equal(shouldSilenceNoDataReply(budgetMiss), true);
+  assert.equal(shouldSilenceNoDataReply(directMiss), true);
+  assert.equal(shouldSilenceNoDataReply(pastDateMiss), true);
+});
+
 test("extractButtons keeps up to 10 buttons (disambiguation lists)", () => {
   const labels = Array.from({ length: 12 }, (_, i) => `Аялал ${i + 1}`);
   const { buttons } = extractButtons(`Сонгоно уу:\nBUTTONS: ${labels.join("|")}`);
