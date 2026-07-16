@@ -265,8 +265,12 @@ export function buildTripProgramReply(
     };
   }
 
+  // No photos/brochure/itinerary for this trip — answer with what IS known
+  // and say nothing about pictures. The old "зураг системд ороогүй" footnote
+  // was noise for the customer and, worse, pattern-matched the no-data
+  // silence rule, which suppressed the entire correct answer.
   return {
-    reply: `✈️ ${best.route_name}${summaryBlock}\n\nОдоогоор энэ аяллын нэмэлт зураг системд ороогүй байна. 🙌`,
+    reply: `✈️ ${best.route_name}${summaryBlock}`,
     trip: best,
     brochure: null,
     mediaUrls: [],

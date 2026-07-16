@@ -67,8 +67,11 @@ const NO_DATA_REPLY_PATTERNS: RegExp[] = [
   /зөвлөхөөр.{0,40}баталгаажуул(?:ах|на)\s*(?:хэрэгтэй|шаардлагатай|уу)/i,
   /баталгаажуулах шаардлагатай/i,
   /мэдээлэл одоогоор тодорхойгүй/i,
-  /зураг системд ороогүй/i,
-  /нэмэлт зураг системд ороогүй/i,
+  // NOTE deliberately absent: "зураг системд ороогүй". That phrase was the
+  // harmless no-photos FOOTNOTE appended to complete, correct program answers
+  // (name, dates, prices, itinerary) — matching it here ghosted customers on
+  // 18 of 25 active trips that simply lack photos. Missing pictures are not
+  // missing data; only genuine no-answer replies belong in this list.
   /хүний ажилтантай холбож өгье/i,
 ];
 

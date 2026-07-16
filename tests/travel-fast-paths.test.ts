@@ -192,6 +192,39 @@ test("sold-out direct-flight match is reported as sold out instead of unavailabl
   assert.doesNotMatch(reply || "", /Жинин - Утай - Гүмбэн/);
 });
 
+test("sold-out reply pitches active same-destination trips instead of dead-ending", () => {
+  const reply = buildStructuredTripReply("Универсал аялал суудал байгаа юу?", [
+    trip({
+      id: "universal-sold-out",
+      route_name: "Бээжин - Юниверсал шууд нислэгтэй наадмын амралтаар гарах аялал",
+      category: "Шууд нислэгтэй аялал",
+      status: "sold_out",
+      extra: { aliases: ["Бээжин Юниверсал", "Универсал"] },
+    }),
+    trip({
+      id: "beijing-four-city",
+      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+      category: "Газрын аялал",
+      adult_price: 1590000,
+      duration_text: "8 өдөр 7 шөнө",
+    }),
+    trip({
+      id: "hainan-unrelated",
+      route_name: "Хайнан - Саньяа шууд нислэгтэй аялал",
+      category: "Шууд нислэгтэй аялал",
+      adult_price: 2990000,
+    }),
+  ]);
+
+  assert.match(reply || "", /суудал дууссан/);
+  // The sellable same-destination trip is pitched in the same message…
+  assert.match(reply || "", /нээлттэй/);
+  assert.match(reply || "", /4 ХОТЫН АЯЛАЛ/);
+  assert.match(reply || "", /1,590,000/);
+  // …but unrelated destinations are not dragged in.
+  assert.doesNotMatch(reply || "", /Хайнан/);
+});
+
 test("program reply asks for clarification on shared city-only PDF request", () => {
   const result = buildTripProgramReply("Tokyo program pdf", [
     trip({
@@ -1353,7 +1386,10 @@ test("program request falls back politely when no program asset exists", () => {
 
   assert.equal(result?.brochure, null);
   assert.deepEqual(result?.mediaUrls, []);
-  assert.match(result?.reply || "", /зураг/);
+  // The reply answers with what IS known and stays quiet about pictures —
+  // the old "зураг системд ороогүй" footnote tripped the no-data silence
+  // rule and suppressed the whole (correct) answer.
+  assert.doesNotMatch(result?.reply || "", /системд ороогүй/);
   assert.doesNotMatch(result?.reply || "", /database/i);
 });
 

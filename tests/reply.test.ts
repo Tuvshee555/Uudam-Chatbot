@@ -121,6 +121,24 @@ test("shouldSilenceNoDataReply catches unknown-detail fallback wording", () => {
   assert.equal(shouldSilenceNoDataReply(paymentVerification), false);
 });
 
+test("shouldSilenceNoDataReply never suppresses a real answer that merely lacks photos", () => {
+  // Regression: this exact reply shape (complete program answer + the old
+  // no-photos footnote) was being suppressed, ghosting customers on every
+  // photo-less trip — 18 of 25 active trips at the time. Missing pictures
+  // are not missing data; even if a stale build still emits the footnote,
+  // the reply must go out.
+  const fullProgramAnswer = [
+    "✈️ БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+    "",
+    "⏱ 8 өдөр 7 шөнө",
+    "💰 Насанд хүрэгч: 1,590,000₮ | Хүүхэд: 1,290,000₮",
+    "📅 Гарах өдрүүд: Ням гараг бүр",
+    "",
+    "Одоогоор энэ аяллын нэмэлт зураг системд ороогүй байна. 🙌",
+  ].join("\n");
+  assert.equal(shouldSilenceNoDataReply(fullProgramAnswer), false);
+});
+
 test("shouldSilenceNoDataReply catches deterministic fast-path no-data replies", () => {
   const budgetMiss =
     "Одоогоор 3,000,000 MNT-аас доош шууд нислэгтэй аялал тодорхой олдсонгүй. Аяллын зөвлөхөөр ойролцоо хувилбар шалгуулъя.";

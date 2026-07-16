@@ -792,6 +792,46 @@ function buildSoldOutTripReply(text: string, trips: TravelTrip[]): string | null
   }
   if (!best) return null;
 
+  // A sold-out answer that stops at "дууссан" buries the sellable catalog: a
+  // generic "Бээжин" question was leading with the dead Universal trip while
+  // three bookable Beijing trips went unmentioned. Pitch ACTIVE trips that
+  // share the sold-out trip's destination words (data-driven — never
+  // hardcoded names) in the same breath, like a human agent would.
+  const GENERIC_NAME_TOKENS = new Set([
+    "аялал", "аяллын", "шууд", "нислэгтэй", "газрын", "газар", "хосолсон",
+    "наадмын", "амралтаар", "гарах", "хотын", "хот", "tour", "trip",
+  ]);
+  const destinationTokens = best.route_name
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((token) => token.length >= 4 && !GENERIC_NAME_TOKENS.has(token));
+  const alternatives = trips
+    .filter((trip) => trip.status === "active" && trip.id !== best.id)
+    .filter((trip) => {
+      const name = trip.route_name.toLowerCase();
+      return destinationTokens.some((token) => name.includes(token));
+    })
+    .slice(0, 3);
+
+  if (alternatives.length > 0) {
+    const altLines = alternatives.map((trip) => {
+      const duration = safeDurationText(trip.duration_text);
+      const price = formatMoney(trip.adult_price, trip.currency || "MNT");
+      const details = [duration, price ? `Том хүн: ${price}` : ""]
+        .filter(Boolean)
+        .join(" — ");
+      return `• ${trip.route_name}${details ? ` (${details})` : ""}`;
+    });
+    return [
+      `✈️ ${best.route_name} — энэ аяллын суудал дууссан байна.`,
+      "",
+      "Гэхдээ ижил чиглэлд эдгээр аялал нээлттэй байна:",
+      ...altLines,
+      "",
+      "Аль нь сонирхол татаж байна вэ? 😊",
+    ].join("\n");
+  }
+
   return [
     `✈️ ${best.route_name}`,
     "Энэ аяллын суудал дууссан байна.",
