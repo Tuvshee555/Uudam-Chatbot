@@ -20,7 +20,7 @@ import type {
   CustomerDocumentCategory,
   DocumentSenderSummary,
 } from "@/lib/adminTypes";
-import { formatTime, shortId } from "@/lib/adminUtils";
+import { shortId } from "@/lib/adminUtils";
 
 type SimpleDocumentCategory = "payment" | "passport" | "other";
 
@@ -53,10 +53,110 @@ function compactValue(value: unknown): string {
   return String(value).trim();
 }
 
+/**
+ * Mongolian date-time. The shared formatTime uses toLocaleString("mn-MN"),
+ * but browsers without real mn locale data silently fall back to English
+ * month names ("9 Jul") — exactly what the owner flagged. Explicit words,
+ * relative for the freshest items, year only when it differs.
+ */
+function formatMnDateTime(value: string | null | undefined): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const now = new Date();
+  const hm = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  const sameDay = (a: Date, b: Date) =>
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
+  if (sameDay(date, now)) return `Өнөөдөр ${hm}`;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (sameDay(date, yesterday)) return `Өчигдөр ${hm}`;
+  const md = `${date.getMonth() + 1} сарын ${date.getDate()}`;
+  if (date.getFullYear() === now.getFullYear()) return `${md}, ${hm}`;
+  return `${date.getFullYear()} оны ${md}`;
+}
+
+/** "11860000.00 MNT" → "11,860,000₮"; non-MNT currencies keep their code. */
+function formatAmount(amount: unknown, currency?: unknown): string {
+  const raw = compactValue(amount);
+  if (!raw) return "";
+  const cur = compactValue(currency).toUpperCase();
+  const n = parseFloat(raw.replace(/[\s,]/g, ""));
+  if (!Number.isFinite(n)) return [raw, cur].filter(Boolean).join(" ");
+  const formatted = n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  if (!cur || cur === "MNT" || cur === "₮") return `${formatted}₮`;
+  return `${formatted} ${cur}`;
+}
+
 function tripMatchName(doc: CustomerDocument): string {
   const match = doc.extracted_json?.trip_match;
   if (!match || typeof match !== "object") return "";
   return compactValue((match as Record<string, unknown>).route_name);
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+/** The one fact the agency cares about first, per document kind. */
+function documentTitle(doc: CustomerDocument): string {
+  const data = doc.extracted_json || {};
+  const bucket = simpleCategory(doc.category);
+  if (bucket === "payment") {
+    const payment = record(data.payment);
+    return (
+      formatAmount(payment.amount, payment.currency) ||
+      compactValue(data.summary) ||
+      "Төлбөрийн баримт"
+    );
+  }
+  if (bucket === "passport") {
+    const passport = record(data.passport);
+    return compactValue(passport.full_name) || "Паспортын зураг";
+  }
+  return (
+    compactValue(data.summary) ||
+    compactValue(record(data.booking).trip_name) ||
+    "Зураг"
+  );
+}
+
+function extractedRows(doc: CustomerDocument) {
+  const data = doc.extracted_json || {};
+  const bucket = simpleCategory(doc.category);
+  const rows: Array<{ label: string; value: string }> = [];
+  const add = (label: string, value: unknown) => {
+    const text = compactValue(value);
+    if (text) rows.push({ label, value: text });
+  };
+  // Skip the field already promoted to the card title (amount / name).
+  if (bucket !== "payment") add("Товч", data.summary);
+  const passport = record(data.passport);
+  if (bucket !== "passport") add("Нэр", passport.full_name);
+  add("Паспорт", passport.passport_number);
+  add("Төрсөн огноо", passport.date_of_birth);
+  add("Дуусах огноо", passport.expiry_date);
+  const trip = record(data.trip);
+  add("Аялал", trip.title);
+  add("Чиглэл", trip.destination);
+  add("Огноо", trip.departure_dates);
+  add("Үнэ", trip.price_text);
+  const payment = record(data.payment);
+  if (bucket === "payment") add("Товч", data.summary);
+  else add("Дүн", formatAmount(payment.amount, payment.currency));
+  add("Илгээгч", payment.sender_name);
+  add("Утас (гүйлгээ)", payment.phone);
+  add("Гүйлгээний утга", payment.description);
+  add("Журнал №", payment.reference);
+  add("Төлсөн огноо", payment.date);
+  const booking = record(data.booking);
+  add("Код", booking.code);
+  add("Аяллын нэр", booking.trip_name);
+  add("Зорчигч", booking.traveler_name);
+  add("Утас", booking.phone);
+  return rows.slice(0, 10);
 }
 
 function documentSearchText(doc: CustomerDocument): string {
@@ -69,13 +169,14 @@ function documentSearchText(doc: CustomerDocument): string {
     doc.matched_payment_amount,
     doc.matched_payment_customer_name,
     doc.matched_payment_trip_name,
+    documentTitle(doc),
     tripMatchName(doc),
     ...rows,
   ].map(compactValue).filter(Boolean).join(" ").toLowerCase();
 }
 
 const PAYMENT_STATUS_LABELS = {
-  pending: "Төлбөр хүлээгдэж байна",
+  pending: "Хүлээгдэж байна",
   paid: "Төлсөн",
   expired: "Хугацаа дууссан",
   cancelled: "Цуцлагдсан",
@@ -87,51 +188,6 @@ const PAYMENT_STATUS_TONE = {
   expired: "neutral",
   cancelled: "danger",
 } as const;
-
-function extractedRows(doc: CustomerDocument) {
-  const data = doc.extracted_json || {};
-  const rows: Array<{ label: string; value: string }> = [];
-  const add = (label: string, value: unknown) => {
-    const text = compactValue(value);
-    if (text) rows.push({ label, value: text });
-  };
-  add("Товч", data.summary);
-  const passport = data.passport && typeof data.passport === "object"
-    ? (passportRecord(data.passport))
-    : {};
-  add("Нэр", passport.full_name);
-  add("Паспорт", passport.passport_number);
-  add("Төрсөн огноо", passport.date_of_birth);
-  add("Дуусах огноо", passport.expiry_date);
-  const trip = data.trip && typeof data.trip === "object"
-    ? (data.trip as Record<string, unknown>)
-    : {};
-  add("Аялал", trip.title);
-  add("Чиглэл", trip.destination);
-  add("Огноо", trip.departure_dates);
-  add("Үнэ", trip.price_text);
-  const payment = data.payment && typeof data.payment === "object"
-    ? (data.payment as Record<string, unknown>)
-    : {};
-  add("Дүн", [compactValue(payment.amount), compactValue(payment.currency)].filter(Boolean).join(" "));
-  add("Илгээгч", payment.sender_name);
-  add("Утас (гүйлгээ)", payment.phone);
-  add("Гүйлгээний утга", payment.description);
-  add("Журнал №", payment.reference);
-  add("Төлсөн огноо", payment.date);
-  const booking = data.booking && typeof data.booking === "object"
-    ? (data.booking as Record<string, unknown>)
-    : {};
-  add("Код", booking.code);
-  add("Аяллын нэр", booking.trip_name);
-  add("Зорчигч", booking.traveler_name);
-  add("Утас", booking.phone);
-  return rows.slice(0, 10);
-}
-
-function passportRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-}
 
 function senderTitle(input: { display_name: string; sender_id: string }) {
   return input.display_name || `Хэрэглэгч …${shortId(input.sender_id)}`;
@@ -154,12 +210,8 @@ type EditFields = {
 
 function editFieldsFromDocument(doc: CustomerDocument): EditFields {
   const data = doc.extracted_json || {};
-  const payment = data.payment && typeof data.payment === "object"
-    ? (data.payment as Record<string, unknown>)
-    : {};
-  const passport = data.passport && typeof data.passport === "object"
-    ? (data.passport as Record<string, unknown>)
-    : {};
+  const payment = record(data.payment);
+  const passport = record(data.passport);
   return {
     summary: compactValue(data.summary),
     paymentAmount: compactValue(payment.amount),
@@ -181,7 +233,7 @@ function buildEditedJson(doc: CustomerDocument, fields: EditFields): Record<stri
   next.summary = fields.summary;
   if (simpleCategory(doc.category) === "payment") {
     next.payment = {
-      ...((next.payment && typeof next.payment === "object") ? next.payment as Record<string, unknown> : {}),
+      ...record(next.payment),
       amount: fields.paymentAmount,
       currency: fields.paymentCurrency,
       sender_name: fields.paymentSender,
@@ -193,7 +245,7 @@ function buildEditedJson(doc: CustomerDocument, fields: EditFields): Record<stri
   }
   if (simpleCategory(doc.category) === "passport") {
     next.passport = {
-      ...((next.passport && typeof next.passport === "object") ? next.passport as Record<string, unknown> : {}),
+      ...record(next.passport),
       full_name: fields.passportName,
       passport_number: fields.passportNumber,
       date_of_birth: fields.passportBirthDate,
@@ -203,6 +255,8 @@ function buildEditedJson(doc: CustomerDocument, fields: EditFields): Record<stri
   return next;
 }
 
+const VISIBLE_DETAIL_ROWS = 4;
+
 function DocumentCard({
   doc,
   busyId,
@@ -210,6 +264,7 @@ function DocumentCard({
   onDelete,
   onRestore,
   onOpenPerson,
+  senderLabel,
   showSender,
   showDeleted,
 }: {
@@ -219,111 +274,160 @@ function DocumentCard({
   onDelete: (doc: CustomerDocument) => void;
   onRestore: (doc: CustomerDocument) => void;
   onOpenPerson?: (senderId: string) => void;
+  senderLabel?: string;
   showSender: boolean;
   showDeleted: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const rows = extractedRows(doc);
+  const visibleRows = expanded ? rows : rows.slice(0, VISIBLE_DETAIL_ROWS);
+  const hiddenRowCount = rows.length - visibleRows.length;
   const imageUrl = doc.stored_url || doc.source_url;
   const matchedTrip = tripMatchName(doc);
   const bucket = simpleCategory(doc.category);
+  const busy = busyId === doc.id;
   return (
     <Card className="overflow-hidden p-0">
-      <div className="grid gap-0 sm:grid-cols-[180px_1fr]">
+      <div className="grid gap-0 sm:grid-cols-[168px_1fr]">
         <a
           href={imageUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="block bg-surface-sunken"
+          title="Зургийг бүтнээр нээх"
+          className="group relative block bg-surface-sunken"
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={imageUrl}
             alt=""
-            className="h-48 w-full object-cover sm:h-full"
+            className="h-52 w-full object-contain p-1.5 transition-opacity group-hover:opacity-90 sm:h-full sm:max-h-72"
             loading="lazy"
           />
         </a>
-        <div className="min-w-0 p-3.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge tone="neutral">
-              {SIMPLE_CATEGORY_ICONS[bucket]} {SIMPLE_CATEGORY_LABELS[bucket]}
-            </Badge>
-            {matchedTrip && <Badge tone="success">✈️ {matchedTrip}</Badge>}
-            {doc.matched_payment_id && (
-              <Badge tone="success">Төлбөр #{doc.matched_payment_id}</Badge>
-            )}
-            {doc.matched_payment_status && (
-              <Badge tone={PAYMENT_STATUS_TONE[doc.matched_payment_status]}>
-                {PAYMENT_STATUS_LABELS[doc.matched_payment_status]}
-                {typeof doc.matched_payment_amount === "number"
-                  ? ` · ${doc.matched_payment_amount.toLocaleString()}₮`
-                  : ""}
-              </Badge>
-            )}
-            <span className="text-xs text-ink-subtle">{formatTime(doc.created_at)}</span>
+        <div className="flex min-w-0 flex-col p-3.5">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="truncate text-[15px] font-bold leading-6 text-ink" title={documentTitle(doc)}>
+                {bucket === "payment" ? (
+                  <span className="font-mono tracking-tight">{documentTitle(doc)}</span>
+                ) : (
+                  documentTitle(doc)
+                )}
+              </p>
+              <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-ink-subtle">
+                <span>
+                  {SIMPLE_CATEGORY_ICONS[bucket]} {SIMPLE_CATEGORY_LABELS[bucket]}
+                </span>
+                <span aria-hidden="true">·</span>
+                <span>{formatMnDateTime(doc.created_at)}</span>
+                {doc.matched_payment_id && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span>Төлбөр #{doc.matched_payment_id}</span>
+                  </>
+                )}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-0.5">
+              {busy ? (
+                <Spinner className="mx-1.5 h-4 w-4 text-brand" />
+              ) : showDeleted ? (
+                <Button size="sm" variant="success" onClick={() => onRestore(doc)}>
+                  <Icons.refresh size={14} />
+                  Сэргээх
+                </Button>
+              ) : (
+                <>
+                  <IconButton label="Засах" onClick={() => onEdit(doc)}>
+                    <Icons.edit size={15} />
+                  </IconButton>
+                  <IconButton
+                    label="Устгах (сэргээх боломжтой)"
+                    onClick={() => onDelete(doc)}
+                    className="hover:bg-danger-soft hover:text-danger"
+                  >
+                    <Icons.trash size={15} />
+                  </IconButton>
+                </>
+              )}
+            </div>
           </div>
+
+          {(doc.matched_payment_status || matchedTrip) && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {doc.matched_payment_status && (
+                <Badge tone={PAYMENT_STATUS_TONE[doc.matched_payment_status]}>
+                  {PAYMENT_STATUS_LABELS[doc.matched_payment_status]}
+                  {typeof doc.matched_payment_amount === "number"
+                    ? ` · ${doc.matched_payment_amount.toLocaleString("en-US")}₮`
+                    : ""}
+                </Badge>
+              )}
+              {matchedTrip && <Badge tone="success">✈️ {matchedTrip}</Badge>}
+            </div>
+          )}
+
+          <div className="mt-2.5 flex-1 space-y-1">
+            {rows.length === 0 ? (
+              <p className="rounded-md bg-surface-sunken px-2.5 py-2 text-xs text-ink-muted">
+                Уншигдсан талбар алга — «Засах» дээр дараад гараар нөхөж болно.
+              </p>
+            ) : (
+              <>
+                {visibleRows.map((row) => (
+                  <div key={row.label} className="grid grid-cols-[108px_1fr] gap-2 text-xs leading-5">
+                    <span className="text-ink-subtle">{row.label}</span>
+                    <span className="min-w-0 wrap-break-word font-medium text-ink">{row.value}</span>
+                  </div>
+                ))}
+                {hiddenRowCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setExpanded(true)}
+                    className="rounded text-xs font-medium text-brand hover:text-brand-hover"
+                  >
+                    Дэлгэрэнгүй · {hiddenRowCount}
+                  </button>
+                )}
+                {expanded && rows.length > VISIBLE_DETAIL_ROWS && (
+                  <button
+                    type="button"
+                    onClick={() => setExpanded(false)}
+                    className="rounded text-xs font-medium text-ink-subtle hover:text-ink-muted"
+                  >
+                    Хураах
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+
           {showSender && (
             <button
               type="button"
               onClick={() => onOpenPerson?.(doc.sender_id)}
-              className="mt-2 text-xs text-brand hover:underline"
+              className="mt-2.5 self-start rounded text-xs font-medium text-brand hover:text-brand-hover"
             >
-              Хэрэглэгч …{shortId(doc.sender_id)} — бүх зургийг харах
+              {senderLabel || `Хэрэглэгч …${shortId(doc.sender_id)}`} — бүх зураг →
             </button>
           )}
-          <div className="mt-3 space-y-1.5">
-            {rows.length === 0 ? (
-              <p className="rounded-md border border-line bg-surface-sunken px-2.5 py-2 text-xs text-ink-subtle">
-                Уншигдсан талбар алга. Гараар шалгана уу.
-              </p>
-            ) : (
-              rows.map((row) => (
-                <div key={row.label} className="grid grid-cols-[110px_1fr] gap-2 text-xs">
-                  <span className="text-ink-subtle">{row.label}</span>
-                  <span className="min-w-0 break-words font-medium text-ink">{row.value}</span>
-                </div>
-              ))
-            )}
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={busyId === doc.id || showDeleted}
-              onClick={() => onEdit(doc)}
-            >
-              <Icons.edit size={14} />
-              Засах
-            </Button>
-            {showDeleted ? (
-              <Button
-                size="sm"
-                variant="success"
-                disabled={busyId === doc.id}
-                loading={busyId === doc.id}
-                onClick={() => onRestore(doc)}
-              >
-                <Icons.refresh size={14} />
-                Сэргээх
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                variant="danger"
-                disabled={busyId === doc.id}
-                loading={busyId === doc.id}
-                onClick={() => onDelete(doc)}
-              >
-                <Icons.trash size={14} />
-                Устгах
-              </Button>
-            )}
-          </div>
         </div>
       </div>
     </Card>
   );
 }
+
+/** yyyy-mm-dd in local time, for <input type="date"> values. */
+function localIsoDate(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+const DATE_PRESETS: Array<{ label: string; days: number | null }> = [
+  { label: "Өнөөдөр", days: 1 },
+  { label: "7 хоног", days: 7 },
+  { label: "30 хоног", days: 30 },
+  { label: "Бүгд", days: null },
+];
 
 export function CustomerDocumentsTab({
   apiFetch,
@@ -348,7 +452,7 @@ export function CustomerDocumentsTab({
   const [editing, setEditing] = useState<CustomerDocument | null>(null);
   const [editFields, setEditFields] = useState<EditFields>(() => editFieldsFromDocument({ extracted_json: {} } as CustomerDocument));
 
-  const loadSenders = useCallback(async () => {
+  const loadSenders = useCallback(async (options?: { quiet?: boolean }) => {
     setSendersLoading(true);
     try {
       const params = new URLSearchParams({ group: "senders" });
@@ -363,7 +467,7 @@ export function CustomerDocumentsTab({
       if (!res.ok) throw new Error(json.error || "load_failed");
       setSenders(Array.isArray(json.senders) ? json.senders : []);
     } catch {
-      toast.error("Хэрэглэгчдийн жагсаалтыг ачаалж чадсангүй.");
+      if (!options?.quiet) toast.error("Хэрэглэгчдийн жагсаалтыг ачаалж чадсангүй.");
     } finally {
       setSendersLoading(false);
     }
@@ -399,8 +503,19 @@ export function CustomerDocumentsTab({
       void loadSenders();
     } else {
       void loadDocuments();
+      // Name lookup for "all photos" cards — a person's name beats "…1450".
+      // Quiet: a failed lookup only means IDs show, not an error worth a toast.
+      if (view === "all") void loadSenders({ quiet: true });
     }
   }, [view, selectedSender, loadSenders, loadDocuments]);
+
+  const senderNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const sender of senders) {
+      if (sender.display_name) map.set(sender.sender_id, sender.display_name);
+    }
+    return map;
+  }, [senders]);
 
   const filteredSenders = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -451,7 +566,7 @@ export function CustomerDocumentsTab({
       if (!res.ok) throw new Error("failed");
       setDocuments((prev) => prev.filter((item) => item.id !== doc.id));
       onChanged?.();
-      toast.success("Зураг устгагдлаа.");
+      toast.success("Устгагдлаа. «Устгасан» хэсгээс сэргээж болно.");
     } catch {
       toast.error("Зураг устгаж чадсангүй.");
     } finally {
@@ -522,109 +637,165 @@ export function CustomerDocumentsTab({
     setEditFields((prev) => ({ ...prev, [key]: value }));
   }
 
+  function applyDatePreset(days: number | null) {
+    if (days == null) {
+      setDateFrom("");
+      setDateTo("");
+      return;
+    }
+    const today = new Date();
+    const from = new Date(today);
+    from.setDate(today.getDate() - (days - 1));
+    setDateFrom(localIsoDate(from));
+    setDateTo(localIsoDate(today));
+  }
+
+  function presetActive(days: number | null): boolean {
+    if (days == null) return !dateFrom && !dateTo;
+    const today = new Date();
+    const from = new Date(today);
+    from.setDate(today.getDate() - (days - 1));
+    return dateFrom === localIsoDate(from) && dateTo === localIsoDate(today);
+  }
+
   const showPeopleList = view === "people" && !selectedSender;
   const showPersonDetail = view === "people" && Boolean(selectedSender);
   const editingBucket = editing ? simpleCategory(editing.category) : "other";
+  const anyLoading = sendersLoading || loading;
+  const resultCount = showPeopleList ? filteredSenders.length : visibleDocuments.length;
+  const resultNoun = showPeopleList ? "хэрэглэгч" : "зураг";
 
   return (
     <div className="space-y-3">
       <TabHeader
         icon={<Icons.file size={20} />}
         title="Ирсэн зургууд"
-        description="Хэрэглэгчээс ирсэн бүх зураг автоматаар хадгалагдана. Хэрэггүй бол устгахад л болно."
+        description="Хэрэглэгчээс ирсэн бүх зураг автоматаар хадгалагдана. Устгасныг дараа нь сэргээж болно."
       />
-      <Card className="p-3.5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex rounded-md border border-line-strong bg-surface-sunken p-0.5">
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedSender(null);
-                  setView("people");
-                }}
-                className={cx(
-                  "rounded-[6px] px-3 py-1.5 text-xs font-medium transition-colors",
-                  view === "people" ? "bg-surface text-ink shadow-xs" : "text-ink-muted hover:text-ink",
-                )}
-              >
-                Хүмүүс
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedSender(null);
-                  setView("all");
-                }}
-                className={cx(
-                  "rounded-[6px] px-3 py-1.5 text-xs font-medium transition-colors",
-                  view === "all" ? "bg-surface text-ink shadow-xs" : "text-ink-muted hover:text-ink",
-                )}
-              >
-                Бүх зураг
-              </button>
-            </div>
-            {view === "all" && (
-              <Select
-                value={category}
-                onChange={(e) =>
-                  setCategory(e.target.value as SimpleDocumentCategory | "all")
-                }
-                className="w-36"
-              >
-                <option value="all">Бүх зураг</option>
-                {SIMPLE_CATEGORY_ORDER.map((key) => (
-                  <option key={key} value={key}>
-                    {SIMPLE_CATEGORY_ICONS[key]} {SIMPLE_CATEGORY_LABELS[key]}
-                  </option>
-                ))}
-              </Select>
-            )}
-            <Input
-              type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
+      <Card className="space-y-2.5 p-3.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex rounded-md border border-line-strong bg-surface-sunken p-0.5">
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedSender(null);
+                setView("people");
+              }}
+              className={cx(
+                "rounded-[6px] px-3 py-1.5 text-xs font-medium transition-colors",
+                view === "people" ? "bg-surface text-ink shadow-xs" : "text-ink-muted hover:text-ink",
+              )}
+            >
+              Хүмүүс
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedSender(null);
+                setView("all");
+              }}
+              className={cx(
+                "rounded-[6px] px-3 py-1.5 text-xs font-medium transition-colors",
+                view === "all" ? "bg-surface text-ink shadow-xs" : "text-ink-muted hover:text-ink",
+              )}
+            >
+              Бүх зураг
+            </button>
+          </div>
+          {view === "all" && (
+            <Select
+              value={category}
+              onChange={(e) =>
+                setCategory(e.target.value as SimpleDocumentCategory | "all")
+              }
               className="w-36"
-              aria-label="Эхлэх өдөр"
-            />
-            <Input
-              type="date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="w-36"
-              aria-label="Дуусах өдөр"
-            />
+            >
+              <option value="all">Бүх төрөл</option>
+              {SIMPLE_CATEGORY_ORDER.map((key) => (
+                <option key={key} value={key}>
+                  {SIMPLE_CATEGORY_ICONS[key]} {SIMPLE_CATEGORY_LABELS[key]}
+                </option>
+              ))}
+            </Select>
+          )}
+          <div className="ml-auto flex items-center gap-2">
             <button
               type="button"
               onClick={() => setShowDeleted((value) => !value)}
+              aria-pressed={showDeleted}
               className={cx(
-                "h-10 rounded-md border px-3 text-xs font-semibold transition-colors",
+                "h-9 rounded-full px-3 text-xs font-medium transition-colors",
                 showDeleted
-                  ? "border-danger bg-danger text-white"
-                  : "border-line-strong bg-surface text-ink-muted hover:border-brand hover:text-brand",
+                  ? "bg-danger-soft text-danger ring-1 ring-danger/30"
+                  : "bg-surface-sunken text-ink-muted hover:text-ink",
               )}
             >
-              Устгасан
+              🗑 Устгасан
             </button>
             <IconButton
               label="Шинэчлэх"
               onClick={() => (showPeopleList ? void loadSenders() : void loadDocuments())}
             >
-              {sendersLoading || loading ? <Spinner /> : <Icons.refresh size={17} />}
+              {anyLoading ? <Spinner className="h-4 w-4" /> : <Icons.refresh size={17} />}
             </IconButton>
           </div>
         </div>
-      </Card>
 
-      <Input
-        placeholder={
-          view === "people" && !selectedSender
-            ? "Нэр, ID, зурагны тоогоор хайх..."
-            : "Нэр, утас, дүн, журнал №, паспорт, аялал, ID-аар хайх..."
-        }
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap gap-1.5">
+            {DATE_PRESETS.map((preset) => (
+              <button
+                key={preset.label}
+                type="button"
+                onClick={() => applyDatePreset(preset.days)}
+                className={cx(
+                  "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                  presetActive(preset.days)
+                    ? "bg-brand text-white"
+                    : "bg-surface-sunken text-ink-muted hover:bg-brand-soft hover:text-brand",
+                )}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1.5 text-xs text-ink-subtle">
+            <Input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="h-9 w-34 text-xs"
+              aria-label="Эхлэх өдөр"
+            />
+            <span aria-hidden="true">—</span>
+            <Input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="h-9 w-34 text-xs"
+              aria-label="Дуусах өдөр"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2.5">
+          <Input
+            placeholder={
+              showPeopleList
+                ? "Нэр, ID-аар хайх…"
+                : "Нэр, утас, дүн, журнал №, паспорт, аялал…"
+            }
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="flex-1"
+          />
+          {!anyLoading && (
+            <span className="shrink-0 text-xs text-ink-subtle">
+              {resultCount} {resultNoun}
+            </span>
+          )}
+        </div>
+      </Card>
 
       {showPeopleList && (
         <>
@@ -647,22 +818,20 @@ export function CustomerDocumentsTab({
                   key={sender.sender_id}
                   type="button"
                   onClick={() => setSelectedSender(sender.sender_id)}
-                  className="text-left"
+                  className="rounded-xl text-left"
                 >
                   <Card className="h-full p-3.5 transition-colors hover:border-brand">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex min-w-0 items-center gap-2.5">
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-soft text-sm font-bold text-brand">
-                          {(sender.display_name || "?").slice(0, 1).toUpperCase()}
-                        </div>
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-ink">
-                            {senderTitle(sender)}
-                          </p>
-                          <p className="text-[11px] text-ink-subtle">
-                            {sender.total} зураг · {formatTime(sender.last_at)}
-                          </p>
-                        </div>
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-soft text-sm font-bold text-brand">
+                        {(sender.display_name || "?").slice(0, 1).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-ink">
+                          {senderTitle(sender)}
+                        </p>
+                        <p className="text-[11px] text-ink-subtle">
+                          {sender.total} зураг · {formatMnDateTime(sender.last_at)}
+                        </p>
                       </div>
                     </div>
                     <div className="mt-2.5 flex flex-wrap gap-1.5">
@@ -678,9 +847,9 @@ export function CustomerDocumentsTab({
                         return count ? (
                           <span
                             key={key}
-                            className="rounded-full border border-line bg-surface-sunken px-2 py-0.5 text-[11px] text-ink-muted"
+                            className="rounded-full bg-surface-sunken px-2 py-0.5 text-[11px] text-ink-muted"
                           >
-                            {SIMPLE_CATEGORY_ICONS[key]} {SIMPLE_CATEGORY_LABELS[key]}: {count}
+                            {SIMPLE_CATEGORY_ICONS[key]} {count}
                           </span>
                         ) : null;
                       })}
@@ -696,14 +865,24 @@ export function CustomerDocumentsTab({
       {showPersonDetail && (
         <>
           <div className="flex items-center gap-2">
-            <Button size="sm" variant="secondary" onClick={() => setSelectedSender(null)}>
-              ← Буцах
-            </Button>
-            <p className="text-sm font-semibold text-ink">
-              {selectedSenderSummary
-                ? senderTitle(selectedSenderSummary)
-                : `Хэрэглэгч …${shortId(selectedSender || "")}`}
-            </p>
+            <IconButton label="Буцах" onClick={() => setSelectedSender(null)}>
+              <Icons.chevronLeft size={17} />
+            </IconButton>
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-soft text-sm font-bold text-brand">
+              {(selectedSenderSummary?.display_name || "?").slice(0, 1).toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-ink">
+                {selectedSenderSummary
+                  ? senderTitle(selectedSenderSummary)
+                  : `Хэрэглэгч …${shortId(selectedSender || "")}`}
+              </p>
+              {selectedSenderSummary && (
+                <p className="text-[11px] text-ink-subtle">
+                  {selectedSenderSummary.total} зураг · сүүлд {formatMnDateTime(selectedSenderSummary.last_at)}
+                </p>
+              )}
+            </div>
           </div>
           {loading && documents.length === 0 ? (
             <div className="flex justify-center py-8">
@@ -769,6 +948,7 @@ export function CustomerDocumentsTab({
                   onDelete={(target) => void deleteDocument(target)}
                   onRestore={(target) => void restoreDocument(target)}
                   onOpenPerson={openPerson}
+                  senderLabel={senderNameById.get(doc.sender_id)}
                   showSender
                   showDeleted={showDeleted}
                 />
