@@ -173,8 +173,10 @@ test("ambiguous upsert becomes a create with confirmation, not a dead-end", asyn
   // Admin must confirm, and the warning names the colliding trips in Mongolian.
   assert.equal(result.proposal.needs_confirmation, true);
   const conflictText = result.proposal.conflicts.join(" ");
-  assert.match(conflictText, /төстэй аялал/);
+  assert.match(conflictText, /төстэй байна/);
   assert.match(conflictText, /Хайлаар/);
+  // Reads like a sentence, not a "Label:" machine string.
+  assert.doesNotMatch(conflictText, /multiple trips match/i);
 });
 
 test("ambiguous patch stays blocked with candidates named in Mongolian", async () => {
@@ -200,7 +202,7 @@ test("ambiguous patch stays blocked with candidates named in Mongolian", async (
 
   assert.equal(result.proposal.actions.length, 0);
   assert.equal(result.blocking_conflicts.length, 1);
-  assert.match(result.blocking_conflicts[0], /төстэй аялал таарч байна/);
+  assert.match(result.blocking_conflicts[0], /төстэй \d+ аялал байгаа/);
   assert.match(result.blocking_conflicts[0], /Хайлаар Манжуурын аялал - 5 өдөр 4 шөнө/);
 });
 

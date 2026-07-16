@@ -515,13 +515,13 @@ function ChatBubbleV2({
         </div>
 
         {compactWarnings.length > 0 && (
-          <div className="mt-4 rounded-lg border-l-4 border-warning bg-warning-soft px-3.5 py-3">
-            <p className="text-sm font-semibold text-warning">
-              Анхаарах зүйл
+          <div className="mt-4 rounded-lg border-l-4 border-brand/40 bg-brand-soft px-3.5 py-3">
+            <p className="text-sm font-semibold text-ink">
+              Нэг зүйл тодруулъя
             </p>
-            <div className="mt-1 space-y-1">
+            <div className="mt-1 space-y-2">
               {compactWarnings.map((item) => (
-                <p key={item} className="text-sm leading-5 text-warning">
+                <p key={item} className="whitespace-pre-line text-sm leading-5 text-ink-muted">
                   {item}
                 </p>
               ))}

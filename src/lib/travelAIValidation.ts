@@ -351,34 +351,36 @@ export function validateAIChangeProposal(
     }
 
     if ((verb === "patch" || verb === "cancel" || verb === "upsert") && !tripId && (match.route_name || match.operator_name)) {
+      const askedName = (match.route_name || routeName || "").trim();
+      const askedTag = askedName ? `«${askedName}» ` : "";
       if (matchingTrips.length === 0 && verb !== "upsert") {
         blockingConflicts.push(
-          `${label}: таарах аялал олдсонгүй. Аяллын нэрийг бүртгэлтэй нэртэй нь яг таг бичээд дахин оролдоно уу.`,
+          `${askedTag}гэдэг нэртэй аялал бүртгэлд алга байна. Аяллын нэрээ бүртгэлтэй нэртэй нь яг адилхан бичээд дахин илгээгээрэй.`,
         );
         continue;
       }
       if (matchingTrips.length > 1) {
         const candidates = matchingTrips
           .slice(0, 3)
-          .map((trip) => `«${trip.route_name}»`)
-          .join(", ");
+          .map((trip) => `• ${trip.route_name}`)
+          .join("\n");
         if (verb === "upsert") {
           // A file/poster upsert whose route fuzzy-matches SEVERAL existing
-          // trips (e.g. "Хайлаар-Манжуур-Чичихар" vs the separate Манжуур and
-          // Чичихар products). Guessing which record to overwrite is how wrong
-          // trips get clobbered, but hard-blocking used to dead-end the admin
-          // with an English message and no way forward. Instead: keep the
-          // action as a CREATE (match stripped so apply never re-resolves it
-          // onto the wrong record) and require explicit admin confirmation
-          // with the colliding trip names spelled out.
+          // trips (e.g. a "Хайлаар Манжуур Чичихар" poster vs the separate
+          // Манжуур and Чичихар products). Guessing which record to overwrite
+          // is how wrong trips get clobbered, but hard-blocking used to
+          // dead-end the admin with an English message and no way forward.
+          // Instead: keep the action as a CREATE (match stripped so apply
+          // never re-resolves it onto the wrong record) and ask for one
+          // confirmation, in plain conversational Mongolian.
           match.route_name = undefined;
           match.operator_name = undefined;
           confirmationConflicts.push(
-            `${label}: ${matchingTrips.length} төстэй аялал байна (${candidates}). Баталвал ШИНЭ аялал болгож нэмнэ — давхардаж магадгүй. Хэрэв эдгээрийн аль нэгийг нь шинэчлэх гэсэн бол тухайн аяллын нэрийг яг таг бичээд дахин илгээгээрэй.`,
+            `${askedTag}аялал одоо байгаа ${matchingTrips.length} аялалтай төстэй байна:\n${candidates}\n\nБаталгаажуулбал ЭНЭ аяллыг ШИНЭ аялал болгож нэмнэ. Хэрэв дээрхийн аль нэгийг нь шинэчлэх гэсэн бол тэр аяллын бүтэн нэрийг бичээд дахин илгээгээрэй.`,
           );
         } else {
           blockingConflicts.push(
-            `${label}: ${matchingTrips.length} төстэй аялал таарч байна (${candidates}). Аль нь болохыг аяллын бүтэн нэрээр нь зааж бичээд дахин оролдоно уу.`,
+            `${askedTag}нэртэй төстэй ${matchingTrips.length} аялал байгаа тул алийг нь өөрчлөхийг таамаглаж чадсангүй:\n${candidates}\n\nАль аяллыг өөрчлөхөө бүтэн нэрээр нь бичээд дахин илгээгээрэй.`,
           );
           continue;
         }
