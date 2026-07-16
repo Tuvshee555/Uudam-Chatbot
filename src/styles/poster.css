@@ -12,7 +12,12 @@
 }
 
 .poster-root * {margin:0;padding:0;box-sizing:border-box}
-.poster-root {font-family:"Segoe UI","Noto Sans",Arial,sans-serif;color:var(--ink);background:#e8edf3}
+/* Chromeless preview: no frame, no backdrop, no padding — the poster is the
+   whole picture. Unlayered rules here intentionally override the Tailwind
+   utility classes (border/rounded/bg/p-3) on the same wrapper element, so the
+   fit-to-width scale in PosterTab has the full column and never overflows
+   into a horizontal scrollbar. */
+.poster-root {font-family:"Segoe UI","Noto Sans",Arial,sans-serif;color:var(--ink);background:transparent;border:0;border-radius:0;padding:0}
 .poster-root button, .poster-root input, .poster-root textarea {font:inherit}
 
 .poster-root .loading-bar-wrap {position:fixed;top:0;left:0;right:0;z-index:9999;background:rgba(8,47,82,.96);padding:10px 20px 12px;display:flex;flex-direction:column;gap:6px}
@@ -101,7 +106,9 @@
 .poster-root .preview-stage {transform-origin:top left}
 
 /* ── POSTER PAGE ── */
-.poster-root .page {width:1080px;background:#fff;padding:52px 56px 0;margin-bottom:24px}
+/* Soft paper shadow instead of a frame; the PNG/PDF export path already
+   forces boxShadow:"none" on capture, so it never bleeds into files. */
+.poster-root .page {width:1080px;background:#fff;padding:52px 56px 0;margin-bottom:24px;box-shadow:0 2px 14px rgba(17,62,103,.12)}
 
 /* Header */
 .poster-root .page .head {display:flex;align-items:center;gap:16px;padding-bottom:20px;border-bottom:2px solid var(--navy)}
