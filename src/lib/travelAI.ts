@@ -934,6 +934,15 @@ function mergeActionFields(existing: AITripAction, action: AITripAction): void {
 }
 
 function mergeActionIdentity(existing: AITripAction, action: AITripAction): void {
+  const existingHasTarget = Boolean(existing.trip_id || existing.match?.operator_name || existing.match?.route_name);
+  const incomingHasTarget = Boolean(action.trip_id || action.match?.operator_name || action.match?.route_name);
+  if (existing.action === "patch" && action.action === "upsert" && !existingHasTarget) {
+    existing.action = "upsert";
+  }
+  if (existing.action === "upsert" && action.action === "patch" && incomingHasTarget) {
+    // Keep the upsert verb for now; validation will safely downgrade it to a
+    // patch once the target copied below is present.
+  }
   if (!existing.trip_id && action.trip_id) {
     existing.trip_id = action.trip_id;
   }
@@ -1038,7 +1047,8 @@ export function mergeDuplicateTripActions(proposal: AIChangeProposal): void {
     const nameNorm = normalizeTripName(name);
     const dup = finalActions.find((existing) => {
       const existingVerb = String(existing.action || "").toLowerCase();
-      if (existingVerb !== verb) return false;
+      if (existingVerb === "cancel" || verb === "cancel") return false;
+      if (existingVerb !== verb && existingVerb !== "upsert" && existingVerb !== "patch") return false;
       if (existing.trip_id && action.trip_id && existing.trip_id !== action.trip_id) {
         return false;
       }
@@ -1325,7 +1335,31 @@ export function attachPhotoUrlsToActions(
       continue;
     }
 
-    // 3) Single action -> everything belongs to it.
+    // 3) One poster group with one clear parent trip -> every slice belongs
+    //    there. This catches messenger-split files where one image is a pure
+    //    itinerary/detail slice and its filename has too little route text to
+    //    pass the strict token-overlap guard above.
+    if (sourceGroups.size === 1) {
+      const groupLabel = Array.from(sourceGroups)[0] || label;
+      const rankedByGroup = actions
+        .map((action, index) => ({ index, score: actionTitleMatchScore(action, groupLabel) }))
+        .sort((left, right) => right.score - left.score);
+      const bestGroup = rankedByGroup[0];
+      const secondGroup = rankedByGroup[1];
+      const onlyAction = actions.length === 1;
+      const clearParent =
+        bestGroup &&
+        bestGroup.score >= 0.45 &&
+        (!secondGroup || bestGroup.score - secondGroup.score >= 0.2);
+      if (onlyAction || clearParent) {
+        addUrls(actions[onlyAction ? 0 : bestGroup.index], urls);
+        continue;
+      }
+    }
+
+    // 4) Single action + one source group -> everything belongs to it. If
+    //    there are multiple folders/groups, don't attach them all to one trip:
+    //    that usually means the model missed another trip in the upload.
     if (actions.length === 1 && sourceGroups.size === 1) {
       addUrls(actions[0], urls);
       continue;

@@ -233,6 +233,69 @@ describe("travelAI photo attachment", () => {
     );
   });
 
+  it("merges same-route create and update slices from one messenger-split poster", async () => {
+    const { attachPhotoUrlsToActions, mergeDuplicateTripActions } = await loadTravelAI();
+    const proposal: AIChangeProposal = {
+      summary: "",
+      needs_confirmation: false,
+      important_reason: "",
+      conflicts: [],
+      actions: [
+        {
+          action: "upsert",
+          fields: {
+            operator_name: "UUDAM TRAVEL AGENCY",
+            route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
+            adult_price: 3590000,
+            child_price: 3260000,
+            departure_dates: ["6 сарын 27", "7 сарын 18", "8 сарын 8"],
+            extra: {
+              source_file_name:
+                "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй-messenger-split.zip/Шанхай + Тэнгэрийн хаалга шууд нислэгтэй-messenger-1.png.compressed.jpg",
+            },
+          },
+        },
+        {
+          action: "patch",
+          fields: {
+            route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
+            notes: "Буудлын үнийн гадна 800 юанийн төлбөр.",
+            extra: {
+              source_file_name:
+                "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй-messenger-split.zip/Шанхай + Тэнгэрийн хаалга шууд нислэгтэй-messenger-2.png.compressed.jpg",
+            },
+          },
+        },
+      ],
+    };
+    const photoUrls = new Map([
+      [
+        "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй-messenger-split.zip/Шанхай + Тэнгэрийн хаалга шууд нислэгтэй-messenger-1.png.compressed.jpg",
+        ["https://example.com/shanghai-1.jpg"],
+      ],
+      [
+        "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй-messenger-split.zip/Шанхай + Тэнгэрийн хаалга шууд нислэгтэй-messenger-2.png.compressed.jpg",
+        ["https://example.com/shanghai-2.jpg"],
+      ],
+    ]);
+
+    mergeDuplicateTripActions(proposal);
+    attachPhotoUrlsToActions(photoUrls, proposal);
+
+    assert.equal(proposal.actions.length, 1);
+    assert.equal(proposal.actions[0].action, "upsert");
+    assert.equal(proposal.actions[0].fields?.adult_price, 3590000);
+    assert.match(String(proposal.actions[0].fields?.notes || ""), /800/);
+    assert.deepEqual(proposal.actions[0].fields?.photo_urls, [
+      "https://example.com/shanghai-1.jpg",
+      "https://example.com/shanghai-2.jpg",
+    ]);
+    assert.notEqual(
+      proposal.conflict_items?.some((item) => item.type === "photo_unmatched"),
+      true,
+    );
+  });
+
   it("merges incomplete itinerary fragments from a messenger-split poster into the parent trip", async () => {
     const { mergeDuplicateTripActions } = await loadTravelAI();
     const proposal: AIChangeProposal = {

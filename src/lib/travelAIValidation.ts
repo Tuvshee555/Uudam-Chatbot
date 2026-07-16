@@ -33,6 +33,7 @@ import {
   isRecurringDepartureText,
   isCompleteCleanAction,
 } from "./travelDb";
+import { filterFutureDepartureDates } from "./travelDates";
 
 export function instructionForbidsTripCreation(instruction: string): boolean {
   const text = instruction.toLowerCase().replace(/\s+/g, " ").trim();
@@ -161,7 +162,7 @@ function isDateBasedPricingConflict(
 export function validateAIChangeProposal(
   proposal: AIChangeProposal | null,
   existingTrips: TravelTrip[] = [],
-  options?: { forbidCreate?: boolean },
+  options?: { forbidCreate?: boolean; now?: Date },
 ): ProposalValidationReport {
   const normalized = normalizeProposal(proposal);
   const blockingConflicts: string[] = [];
@@ -300,7 +301,18 @@ export function validateAIChangeProposal(
         }
         if (!validDates.includes(normalizedDate)) validDates.push(normalizedDate);
       }
-      cleanedFields.departure_dates = validDates;
+      const futureDates = filterFutureDepartureDates(
+        validDates,
+        options?.now ?? new Date(),
+      );
+      cleanedFields.departure_dates = futureDates;
+      if (
+        validDates.length > 0 &&
+        futureDates.length === 0 &&
+        (!cleanedFields.status || cleanedFields.status === "active")
+      ) {
+        cleanedFields.status = "archived";
+      }
       if (invalidDates.length > 0) {
         confirmationConflicts.push(
           `${label}: some departure dates could not be trusted (${invalidDates.join(", ")}).`,
