@@ -193,6 +193,7 @@ export function TripsTab({
               <option value="cancelled">Цуцлагдсан</option>
               <option value="sold_out">Суудал дууссан</option>
               <option value="draft">Ноорог</option>
+              <option value="archived">Архив</option>
             </select>
             <div className="flex shrink-0 items-center rounded-md border border-line-strong bg-surface-sunken p-0.5">
               {(

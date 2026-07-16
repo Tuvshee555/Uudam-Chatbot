@@ -320,6 +320,33 @@ export function filterFutureDepartureDates(
   });
 }
 
+export type DepartureDatePruneResult = {
+  dates: string[];
+  resolved: ResolvedDepartureDate[] | null;
+  removedCount: number;
+  shouldArchive: boolean;
+};
+
+export function prunePastDepartureDates(
+  dates: string[],
+  now = new Date(),
+  resolved?: ResolvedDepartureDate[] | null,
+): DepartureDatePruneResult {
+  const original = (dates || []).map((date) => String(date || "")).filter(Boolean);
+  const futureDates = filterFutureDepartureDates(original, now, resolved);
+  const futureSet = new Set(futureDates);
+  const nextResolved = Array.isArray(resolved)
+    ? resolved.filter((entry) => entry && futureSet.has(entry.text))
+    : null;
+
+  return {
+    dates: futureDates,
+    resolved: nextResolved,
+    removedCount: Math.max(0, original.length - futureDates.length),
+    shouldArchive: original.length > 0 && futureDates.length === 0,
+  };
+}
+
 function isDepartureAvailabilityQuestion(text: string): boolean {
   const normalized = text.trim().toLowerCase();
   if (!normalized) return false;

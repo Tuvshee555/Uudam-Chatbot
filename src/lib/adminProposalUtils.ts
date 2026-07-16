@@ -17,6 +17,7 @@ export const STATUS_LABELS: Record<TripStatus, string> = {
   cancelled: "Цуцлагдсан",
   sold_out: "Суудал дууссан",
   draft: "Ноорог",
+  archived: "Архив",
 };
 
 export const FIELD_LABELS: Record<string, string> = {

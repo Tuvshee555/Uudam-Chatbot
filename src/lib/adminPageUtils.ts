@@ -41,6 +41,7 @@ const STATUS_LABELS: Record<TripStatus, string> = {
   cancelled: "Цуцлагдсан",
   sold_out: "Суудал дууссан",
   draft: "Ноорог",
+  archived: "Архив",
 };
 
 const STATUS_TONE: Record<TripStatus, "success" | "danger" | "warning" | "neutral"> =
@@ -49,6 +50,7 @@ const STATUS_TONE: Record<TripStatus, "success" | "danger" | "warning" | "neutra
     cancelled: "danger",
     sold_out: "warning",
     draft: "neutral",
+    archived: "neutral",
   };
 
 const FIELD_LABELS: Record<string, string> = {

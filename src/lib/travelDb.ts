@@ -7,7 +7,12 @@ import { ensureTravelSchema } from "./travelSchema";
 // Re-exported so existing importers (travelOps, googleDriveSync, travelAI, …)
 // that import ensureTravelSchema from ./travelDb keep working after the split.
 export { ensureTravelSchema } from "./travelSchema";
-import { filterFutureDepartureDates, resolveDepartureDatesAtWrite, type ResolvedDepartureDate } from "./travelDates";
+import {
+  filterFutureDepartureDates,
+  prunePastDepartureDates,
+  resolveDepartureDatesAtWrite,
+  type ResolvedDepartureDate,
+} from "./travelDates";
 import { normalizeExtra } from "./tripExtraSchema";
 import {
   normalizeTripName,
@@ -71,6 +76,8 @@ const pageControlCache = new Map<string, { value: BotControl; expiresAt: number 
 let botSettingsCache:
   | { value: TravelBotSettings; expiresAt: number }
   | null = null;
+let tripScheduleMaintenanceNextAt = 0;
+const TRIP_SCHEDULE_MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 function parseInteger(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -112,6 +119,7 @@ function coerceTripStatus(value: unknown): TripStatus {
   if (normalized === "cancelled") return "cancelled";
   if (normalized === "sold_out") return "sold_out";
   if (normalized === "draft") return "draft";
+  if (normalized === "archived") return "archived";
   return "active";
 }
 
@@ -671,6 +679,118 @@ export function mapTripRow(row: Record<string, unknown>): TravelTrip {
   };
 }
 
+function sameStringArray(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function cloneExtra(extra: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(extra || {})) as Record<string, unknown>;
+}
+
+function pruneDateGroups(value: unknown, now: Date): { value: unknown; changed: boolean } {
+  if (!Array.isArray(value)) return { value, changed: false };
+  let changed = false;
+  const groups: unknown[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      groups.push(item);
+      continue;
+    }
+    const group = { ...(item as Record<string, unknown>) };
+    const rawDates = Array.isArray(group.dates)
+      ? group.dates.map((date) => String(date || "")).filter(Boolean)
+      : [];
+    if (rawDates.length === 0) {
+      groups.push(group);
+      continue;
+    }
+    const expandedDates = expandMongolianDepartureDates(rawDates);
+    const futureDates = filterFutureDepartureDates(expandedDates, now);
+    if (futureDates.length === 0) {
+      changed = true;
+      continue;
+    }
+    if (!sameStringArray(rawDates, futureDates)) {
+      group.dates = futureDates;
+      changed = true;
+    }
+    groups.push(group);
+  }
+  if (groups.length !== value.length) changed = true;
+  return { value: groups, changed };
+}
+
+export function sanitizeTripScheduleForCurrentDate(
+  trip: TravelTrip,
+  now = new Date(),
+): { trip: TravelTrip; changed: boolean } {
+  const extra = cloneExtra((trip.extra || {}) as Record<string, unknown>);
+  const resolved = extra.departure_dates_resolved as ResolvedDepartureDate[] | undefined;
+  const pruned = prunePastDepartureDates(trip.departure_dates || [], now, resolved);
+  let nextExtra = extra;
+  let changed = !sameStringArray(trip.departure_dates || [], pruned.dates);
+
+  if (changed || Array.isArray(resolved)) {
+    nextExtra = {
+      ...nextExtra,
+      departure_dates_resolved: pruned.resolved ?? resolveDepartureDatesAtWrite(pruned.dates, now),
+    };
+  }
+
+  for (const key of ["departure_date_groups", "discount_groups", "discounts", "price_groups"]) {
+    const result = pruneDateGroups(nextExtra[key], now);
+    if (result.changed) {
+      nextExtra = { ...nextExtra, [key]: result.value };
+      changed = true;
+    }
+  }
+
+  let nextStatus = trip.status;
+  if (trip.status === "active" && pruned.shouldArchive) {
+    nextStatus = "archived";
+    nextExtra = {
+      ...nextExtra,
+      archived_reason: "all_departure_dates_passed",
+      archived_at: now.toISOString(),
+    };
+    changed = true;
+  }
+
+  if (!changed) return { trip, changed: false };
+  return {
+    trip: {
+      ...trip,
+      departure_dates: pruned.dates,
+      status: nextStatus,
+      extra: normalizeExtra(nextExtra).extra,
+    },
+    changed: true,
+  };
+}
+
+async function persistTripScheduleMaintenance(trips: TravelTrip[]): Promise<void> {
+  if (trips.length === 0) return;
+  const nowMs = Date.now();
+  if (nowMs < tripScheduleMaintenanceNextAt) return;
+  tripScheduleMaintenanceNextAt = nowMs + TRIP_SCHEDULE_MAINTENANCE_INTERVAL_MS;
+
+  for (const trip of trips) {
+    await queryNeon(
+      `
+        UPDATE travel_trip_entries
+        SET departure_dates = $1::text[], status = $2, extra = $3::jsonb
+        WHERE id = $4
+          AND (
+            departure_dates IS DISTINCT FROM $1::text[]
+            OR status IS DISTINCT FROM $2
+            OR extra IS DISTINCT FROM $3::jsonb
+          )
+      `,
+      [trip.departure_dates, trip.status, JSON.stringify(trip.extra || {}), trip.id],
+    );
+  }
+}
+
 export async function listTrips(options?: {
   search?: string;
   status?: string;
@@ -682,7 +802,7 @@ export async function listTrips(options?: {
 
   const search = options?.search?.trim() || null;
   const status = options?.status?.trim() || null;
-  const limit = Math.min(Math.max(Number(options?.limit || 150), 1), 1000);
+  const limit = Math.min(Math.max(Number(options?.limit || 150), 1), 5000);
   const offset = Math.max(Number(options?.offset || 0), 0);
 
   const rows = await queryNeon<Record<string, unknown>>(
@@ -724,7 +844,17 @@ export async function listTrips(options?: {
     [search, status, limit, offset],
   );
   if (!rows) return [] as TravelTrip[];
-  return rows.rows.map(mapTripRow);
+  const scheduled = rows.rows.map(mapTripRow).map((trip) =>
+    sanitizeTripScheduleForCurrentDate(trip),
+  );
+  await persistTripScheduleMaintenance(
+    scheduled.filter((entry) => entry.changed).map((entry) => entry.trip),
+  );
+  const sanitized = scheduled.map((entry) => entry.trip);
+  return sanitized.filter((trip) => {
+    if (status) return trip.status === status;
+    return trip.status !== "archived";
+  });
 }
 
 export async function getTripById(id: string): Promise<TravelTrip | null> {
@@ -757,7 +887,10 @@ export async function getTripById(id: string): Promise<TravelTrip | null> {
     `,
     [id],
   );
-  return result?.rows?.[0] ? mapTripRow(result.rows[0]) : null;
+  if (!result?.rows?.[0]) return null;
+  const sanitized = sanitizeTripScheduleForCurrentDate(mapTripRow(result.rows[0]));
+  if (sanitized.changed) await persistTripScheduleMaintenance([sanitized.trip]);
+  return sanitized.trip;
 }
 
 export async function getBotControl(): Promise<BotControl> {

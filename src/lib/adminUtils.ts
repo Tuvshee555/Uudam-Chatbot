@@ -17,6 +17,7 @@ export const STATUS_TONE: Record<
   cancelled: "danger",
   sold_out: "warning",
   draft: "neutral",
+  archived: "neutral",
 };
 
 export const DURATIONS: Array<{ label: string; ms: number }> = [

@@ -381,7 +381,7 @@ export function diffTripFields(
   }
   if ("status" in incoming) {
     const statusLabel: Record<string, string> = {
-      active: "Идэвхтэй", cancelled: "Цуцлагдсан", sold_out: "Суудал дүүрсэн", draft: "Ноорог",
+      active: "Идэвхтэй", cancelled: "Цуцлагдсан", sold_out: "Суудал дүүрсэн", draft: "Ноорог", archived: "Архив",
     };
     const bef = statusLabel[existing.status] ?? existing.status;
     const aft = statusLabel[asString(incoming.status)] ?? asString(incoming.status);

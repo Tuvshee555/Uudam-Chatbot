@@ -245,6 +245,7 @@ export function TripEditModal({
           <option value="cancelled">Цуцлагдсан</option>
           <option value="sold_out">Суудал дууссан</option>
           <option value="draft">Ноорог</option>
+          <option value="archived">Архив</option>
         </Select>
         <Input
           label="Нийт суудал"

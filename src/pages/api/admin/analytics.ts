@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
 import { queryNeon } from "../../../lib/neonDb";
 import { getFaqStats, type FaqPeriodStats } from "../../../lib/travelMessages";
+import { listTrips } from "../../../lib/travelOps";
 
 type LeadsByDay = { date: string; count: number };
 type LeadsByTrip = { trip: string; count: number };
@@ -50,10 +51,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       leadsByDayResult,
       leadsByTripResult,
       leadsByStatusResult,
-      totalTripsResult,
-      activeTripsResult,
       totalContactsResult,
-      topTripsResult,
+      trips,
     ] = await Promise.all([
       queryNeon<{ count: string }>("SELECT COUNT(*) as count FROM travel_leads"),
       queryNeon<{ count: string }>(
@@ -81,21 +80,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
          FROM travel_leads
          GROUP BY lead_status`,
       ),
-      queryNeon<{ count: string }>("SELECT COUNT(*) as count FROM travel_trip_entries"),
-      queryNeon<{ count: string }>(
-        "SELECT COUNT(*) as count FROM travel_trip_entries WHERE status = 'active'",
-      ),
       queryNeon<{ count: string }>(
         "SELECT COUNT(DISTINCT sender_id) as count FROM travel_leads",
       ),
-      queryNeon<{ name: string; price: string | null; seats_left: string | null }>(
-        `SELECT route_name as name, adult_price::text as price, seats_left::text as seats_left
-         FROM travel_trip_entries
-         WHERE status = 'active'
-         ORDER BY adult_price DESC NULLS LAST
-         LIMIT 5`,
-      ),
+      listTrips({ limit: 5000 }),
     ]);
+    const activeTrips = trips.filter((trip) => trip.status === "active");
+    const topTrips = activeTrips
+      .slice()
+      .sort((left, right) => (right.adult_price ?? -1) - (left.adult_price ?? -1))
+      .slice(0, 5);
 
     const stats: AnalyticsStats = {
       totalLeads: parseInt(totalLeadsResult?.rows[0]?.count ?? "0", 10) || 0,
@@ -115,13 +109,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           parseInt(row.count, 10) || 0,
         ]),
       ),
-      totalTrips: parseInt(totalTripsResult?.rows[0]?.count ?? "0", 10) || 0,
-      activeTrips: parseInt(activeTripsResult?.rows[0]?.count ?? "0", 10) || 0,
+      totalTrips: trips.length,
+      activeTrips: activeTrips.length,
       totalContacts: parseInt(totalContactsResult?.rows[0]?.count ?? "0", 10) || 0,
-      topTrips: (topTripsResult?.rows ?? []).map((row) => ({
-        name: row.name,
-        price: parseFloat(row.price ?? "0") || 0,
-        seats_left: parseInt(row.seats_left ?? "0", 10) || 0,
+      topTrips: topTrips.map((trip) => ({
+        name: trip.route_name,
+        price: trip.adult_price ?? 0,
+        seats_left: trip.seats_left ?? 0,
       })),
     };
 

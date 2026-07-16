@@ -266,6 +266,7 @@ const mn = {
       cancelled: "Цуцлагдсан",
       sold_out: "Суудал дууссан",
       draft: "Ноорог",
+      archived: "Архив",
     },
 
     editTrip: {

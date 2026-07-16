@@ -113,9 +113,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           seats_total: typeof trip.seats_total === "number" ? trip.seats_total : null,
           seats_left: typeof trip.seats_left === "number" ? trip.seats_left : null,
           has_food: typeof trip.has_food === "boolean" ? trip.has_food : null,
-          status: (["active", "cancelled", "sold_out", "draft"].includes(String(trip.status))
+          status: (["active", "cancelled", "sold_out", "draft", "archived"].includes(String(trip.status))
             ? trip.status
-            : "active") as "active" | "cancelled" | "sold_out" | "draft",
+            : "active") as "active" | "cancelled" | "sold_out" | "draft" | "archived",
           hotel: typeof trip.hotel === "string" ? trip.hotel : "",
           notes: typeof trip.notes === "string" ? trip.notes : "",
           source_description: typeof trip.source_description === "string" ? trip.source_description : "",

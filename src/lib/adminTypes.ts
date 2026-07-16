@@ -3,7 +3,7 @@
    so that sub-files and utilities can import without a circular dep.
    ---------------------------------------------------------------- */
 
-export type TripStatus = "active" | "cancelled" | "sold_out" | "draft";
+export type TripStatus = "active" | "cancelled" | "sold_out" | "draft" | "archived";
 
 export type PassengerPrice = {
   label: string;      // "Том хүн" | "Хүүхэд" | "Нярай"
