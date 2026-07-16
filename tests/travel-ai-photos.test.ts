@@ -171,6 +171,68 @@ describe("travelAI photo attachment", () => {
     assert.equal(proposal.actions.length, 2);
   });
 
+  it("merges same-route patch slices when only one slice has the resolved trip id", async () => {
+    const { attachPhotoUrlsToActions, mergeDuplicateTripActions } = await loadTravelAI();
+    const proposal: AIChangeProposal = {
+      summary: "",
+      needs_confirmation: false,
+      important_reason: "",
+      conflicts: [],
+      actions: [
+        {
+          action: "patch",
+          trip_id: "trip-shanghai-heaven",
+          fields: {
+            route_name: "Shanghai + Heaven Gate direct flight tour",
+            adult_price: 3590000,
+            departure_dates: ["June 27", "July 18", "August 8"],
+            extra: {
+              source_file_name:
+                "Shanghai Heaven Gate-messenger-split.zip/Shanghai Heaven Gate-messenger-1.png.compressed.jpg",
+            },
+          },
+        },
+        {
+          action: "patch",
+          fields: {
+            route_name: "Shanghai + Heaven Gate direct flight tour",
+            notes: "Includes Shanghai Tower exterior view, temple, Disneyland optional, zoo optional, Nanjing road, Huangpu river Bund.",
+            extra: {
+              source_file_name:
+                "Shanghai Heaven Gate-messenger-split.zip/Shanghai Heaven Gate-messenger-2.png.compressed.jpg",
+            },
+          },
+        },
+      ],
+    };
+    const photoUrls = new Map([
+      [
+        "Shanghai Heaven Gate-messenger-split.zip/Shanghai Heaven Gate-messenger-1.png.compressed.jpg",
+        ["https://example.com/shanghai-1.jpg"],
+      ],
+      [
+        "Shanghai Heaven Gate-messenger-split.zip/Shanghai Heaven Gate-messenger-2.png.compressed.jpg",
+        ["https://example.com/shanghai-2.jpg"],
+      ],
+    ]);
+
+    mergeDuplicateTripActions(proposal);
+    attachPhotoUrlsToActions(photoUrls, proposal);
+
+    assert.equal(proposal.actions.length, 1);
+    assert.equal(proposal.actions[0].trip_id, "trip-shanghai-heaven");
+    assert.equal(proposal.actions[0].fields?.adult_price, 3590000);
+    assert.match(String(proposal.actions[0].fields?.notes || ""), /Disneyland/);
+    assert.deepEqual(proposal.actions[0].fields?.photo_urls, [
+      "https://example.com/shanghai-1.jpg",
+      "https://example.com/shanghai-2.jpg",
+    ]);
+    assert.notEqual(
+      proposal.conflict_items?.some((item) => item.type === "photo_unmatched"),
+      true,
+    );
+  });
+
   it("merges incomplete itinerary fragments from a messenger-split poster into the parent trip", async () => {
     const { mergeDuplicateTripActions } = await loadTravelAI();
     const proposal: AIChangeProposal = {

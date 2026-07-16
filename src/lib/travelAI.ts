@@ -933,6 +933,22 @@ function mergeActionFields(existing: AITripAction, action: AITripAction): void {
   if (!existing.fields) (existing as { fields?: Record<string, unknown> }).fields = target;
 }
 
+function mergeActionIdentity(existing: AITripAction, action: AITripAction): void {
+  if (!existing.trip_id && action.trip_id) {
+    existing.trip_id = action.trip_id;
+  }
+  if (!existing.match && action.match) {
+    existing.match = action.match;
+    return;
+  }
+  if (existing.match && action.match) {
+    existing.match = {
+      ...action.match,
+      ...existing.match,
+    };
+  }
+}
+
 type TripProductVariant = "air" | "ground" | "combined" | "rail";
 
 function tripProductVariant(action: AITripAction): TripProductVariant | null {
@@ -1005,6 +1021,7 @@ export function mergeDuplicateTripActions(proposal: AIChangeProposal): void {
       mergedActions.push(action);
       continue;
     }
+    mergeActionIdentity(existing, action);
     mergeActionFields(existing, action);
   }
 
@@ -1014,14 +1031,17 @@ export function mergeDuplicateTripActions(proposal: AIChangeProposal): void {
   for (const action of mergedActions) {
     const verb = String(action.action || "").toLowerCase();
     const name = action.fields?.route_name?.toString().trim() || action.match?.route_name?.trim() || "";
-    if (verb !== "upsert" || action.trip_id || !name) {
+    if (verb === "cancel" || !name) {
       finalActions.push(action);
       continue;
     }
     const nameNorm = normalizeTripName(name);
     const dup = finalActions.find((existing) => {
       const existingVerb = String(existing.action || "").toLowerCase();
-      if (existingVerb !== "upsert" || existing.trip_id) return false;
+      if (existingVerb !== verb) return false;
+      if (existing.trip_id && action.trip_id && existing.trip_id !== action.trip_id) {
+        return false;
+      }
       const existingName =
         existing.fields?.route_name?.toString().trim() || existing.match?.route_name?.trim() || "";
       if (!existingName) return false;
@@ -1035,6 +1055,7 @@ export function mergeDuplicateTripActions(proposal: AIChangeProposal): void {
       return isSupersetName && tokenCoverageScore(existingNorm, nameNorm) >= 0.6;
     });
     if (dup) {
+      mergeActionIdentity(dup, action);
       mergeActionFields(dup, action);
       continue;
     }
