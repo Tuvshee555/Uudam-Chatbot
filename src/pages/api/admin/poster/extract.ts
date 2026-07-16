@@ -8,6 +8,7 @@ import {
   assertReadableDocument,
   resolveFile,
   runExtraction,
+  runMultiImageExtraction,
 } from "@/lib/poster/extractCore";
 
 // Answer with a clean JSON error BEFORE Vercel's hard 60s kill — a killed
@@ -47,22 +48,26 @@ export const config = {
   maxDuration: 60,
 };
 
-function readSingleUpload(
+type Upload = { buffer: Buffer; filename: string; mimeType: string };
+
+function readUploads(
   req: NextApiRequest,
-): Promise<{ buffer: Buffer; filename: string; mimeType: string } | null> {
+): Promise<Upload[]> {
   return new Promise((resolve, reject) => {
     const contentType = req.headers["content-type"] || "";
     if (!contentType.includes("multipart/form-data")) {
-      resolve(null);
+      resolve([]);
       return;
     }
     const busboy = Busboy({ headers: req.headers, defParamCharset: "utf8" });
-    let picked: { buffer: Buffer; filename: string; mimeType: string } | null = null;
+    const picked: Upload[] = [];
     let tooBig = false;
+    let totalSize = 0;
 
     busboy.on("file", (_field, file, info) => {
-      // Only keep the first file; drain any extras.
-      if (picked) {
+      // Keep up to five files: enough for Messenger-split poster slices,
+      // bounded so one upload cannot consume the whole function budget.
+      if (picked.length >= 5) {
         file.resume();
         return;
       }
@@ -70,7 +75,8 @@ function readSingleUpload(
       let size = 0;
       file.on("data", (chunk: Buffer) => {
         size += chunk.length;
-        if (size > MAX_TOTAL_BYTES) {
+        totalSize += chunk.length;
+        if (size > MAX_TOTAL_BYTES || totalSize > MAX_TOTAL_BYTES) {
           tooBig = true;
           file.resume();
           return;
@@ -79,11 +85,11 @@ function readSingleUpload(
       });
       file.on("end", () => {
         if (!tooBig) {
-          picked = {
+          picked.push({
             buffer: Buffer.concat(chunks),
             filename: info.filename || "document",
             mimeType: info.mimeType || "",
-          };
+          });
         }
       });
     });
@@ -125,29 +131,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let blobUrl: string | undefined;
   try {
     const contentType = String(req.headers["content-type"] || "");
-    let upload: { buffer: Buffer; filename: string; mimeType: string } | null = null;
+    let uploads: Upload[] = [];
 
     if (contentType.includes("multipart/form-data")) {
-      upload = await readSingleUpload(req);
+      uploads = await readUploads(req);
     } else if (contentType.includes("application/json")) {
       const resolved = await resolveFile(await readJsonBody(req));
       blobUrl = resolved.blobUrl;
-      upload = {
+      uploads = [{
         buffer: resolved.buffer,
         filename: resolved.filename,
         mimeType: resolved.mime,
-      };
+      }];
     }
 
-    if (!upload) return res.status(400).json({ error: "Файл олдсонгүй" });
+    if (uploads.length === 0) return res.status(400).json({ error: "Файл олдсонгүй" });
 
     // Rejects empty/truncated files (OneDrive online-only placeholders) in
     // <1ms with a message that says what's wrong, instead of feeding garbage
     // to the AI and failing confusingly a minute later.
-    assertReadableDocument(upload.buffer, upload.filename, upload.mimeType);
+    for (const upload of uploads) {
+      assertReadableDocument(upload.buffer, upload.filename, upload.mimeType);
+    }
 
     const result = await withBudget(
-      runExtraction(upload.buffer, upload.filename, upload.mimeType),
+      uploads.length > 1
+        ? runMultiImageExtraction(uploads)
+        : runExtraction(uploads[0].buffer, uploads[0].filename, uploads[0].mimeType),
     );
     return res.status(200).json(result);
   } catch (e) {

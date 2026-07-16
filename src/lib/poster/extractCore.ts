@@ -14,6 +14,29 @@ const PDF_IMAGE_CROP_BUDGET_MS = 12_000;
 const BLOB_FETCH_TIMEOUT_MS = 20_000;
 
 type TripLike = { days?: Array<{ photo?: string | null }> };
+type UploadLike = { buffer: Buffer; filename: string; mimeType: string };
+type PriceTableLike = {
+  columns?: string[];
+  rows?: Array<{ dates?: string; cells?: string[] }>;
+  note?: string;
+} | null;
+type ExtractedTripLike = {
+  title?: string;
+  subtitle?: string;
+  duration_days?: number;
+  duration_nights?: number;
+  flights?: { outbound?: string; return?: string } | null;
+  departures?: Array<{ date?: string }>;
+  price_table?: PriceTableLike;
+  price_note?: string;
+  days?: Array<Record<string, unknown> & { day?: number; route?: string; summary?: string }>;
+  includes?: string[];
+  excludes?: string[];
+  contacts?: unknown;
+  agency?: string;
+};
+
+const MAX_PARALLEL_PAGE_EXTRACTS = 5;
 
 async function extractPdfImagesGuarded(buffer: Buffer): Promise<string[]> {
   try {
@@ -55,6 +78,144 @@ function assignPhotos(trip: TripLike, extractedImages: string[]) {
   }
 }
 
+function nonEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function uniqueByText<T>(values: T[], key: (value: T) => string): T[] {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  for (const value of values) {
+    const normalized = key(value).trim().toLowerCase();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(value);
+  }
+  return result;
+}
+
+function priceTableScore(table: PriceTableLike): number {
+  if (!table) return 0;
+  const columnScore = Array.isArray(table.columns) ? table.columns.filter(Boolean).length * 2 : 0;
+  const rowScore = Array.isArray(table.rows)
+    ? table.rows.reduce(
+        (sum, row) => sum + (row.dates ? 1 : 0) + (row.cells || []).filter(Boolean).length,
+        0,
+      )
+    : 0;
+  return columnScore + rowScore + (table.note ? 1 : 0);
+}
+
+function mergePriceTables(tables: PriceTableLike[]): PriceTableLike {
+  const ranked = tables.filter(Boolean).sort((a, b) => priceTableScore(b) - priceTableScore(a));
+  const base = ranked[0];
+  if (!base) return null;
+
+  const rows = uniqueByText(
+    ranked.flatMap((table) => table?.rows || []),
+    (row) => `${row.dates || ""}|${(row.cells || []).join("|")}`,
+  );
+
+  return {
+    columns: Array.isArray(base.columns) ? base.columns : [],
+    rows,
+    note: uniqueByText(
+      ranked.map((table) => table?.note || "").filter(Boolean),
+      (note) => note,
+    ).join("\n"),
+  };
+}
+
+export function mergeExtractedTrips(trips: ExtractedTripLike[]): ExtractedTripLike {
+  const validTrips = trips.filter(Boolean);
+  if (validTrips.length === 0) throw new Error("No extracted page results to merge.");
+  if (validTrips.length === 1) return validTrips[0];
+
+  const first = validTrips[0];
+  const title =
+    validTrips.map((trip) => nonEmpty(trip.title)).find((value) => value && !/uudam travel agency/i.test(value)) ||
+    nonEmpty(first.title);
+  const subtitle = validTrips.map((trip) => nonEmpty(trip.subtitle)).find(Boolean) || "";
+  const durationDays = Math.max(0, ...validTrips.map((trip) => Number(trip.duration_days || 0)));
+  const durationNights = Math.max(0, ...validTrips.map((trip) => Number(trip.duration_nights || 0)));
+  const flights = validTrips.map((trip) => trip.flights).find((value) => value?.outbound || value?.return) || null;
+  const departures = uniqueByText(
+    validTrips.flatMap((trip) => trip.departures || []),
+    (departure) => departure.date || "",
+  );
+  const daysInPageOrder = uniqueByText(
+    validTrips.flatMap((trip) => trip.days || []),
+    (day) => `${day.day || ""}|${day.route || ""}|${day.summary || ""}`,
+  );
+  const uniqueDayNumbers = new Set(daysInPageOrder.map((day) => Number(day.day || 0)).filter(Boolean));
+  const shouldTrustDayNumbers = uniqueDayNumbers.size === daysInPageOrder.length;
+  const days = daysInPageOrder.map((day, index) => ({
+    ...day,
+    day: shouldTrustDayNumbers ? Number(day.day || index + 1) : index + 1,
+  }));
+
+  return {
+    ...first,
+    title,
+    subtitle,
+    duration_days: durationDays || Number(first.duration_days || 0),
+    duration_nights: durationNights || Number(first.duration_nights || 0),
+    flights,
+    departures,
+    price_table: mergePriceTables(validTrips.map((trip) => trip.price_table || null)),
+    price_note: uniqueByText(
+      validTrips.map((trip) => trip.price_note || "").filter(Boolean),
+      (note) => note,
+    ).join("\n"),
+    days,
+    includes: uniqueByText(validTrips.flatMap((trip) => trip.includes || []), (value) => value),
+    excludes: uniqueByText(validTrips.flatMap((trip) => trip.excludes || []), (value) => value),
+  };
+}
+
+async function splitPdfPages(buffer: Buffer, filename: string): Promise<UploadLike[]> {
+  const { PDFDocument } = await import("pdf-lib");
+  const source = await PDFDocument.load(buffer, { ignoreEncryption: true });
+  const pageCount = Math.min(source.getPageCount(), MAX_PARALLEL_PAGE_EXTRACTS);
+  if (pageCount <= 1) return [{ buffer, filename, mimeType: "application/pdf" }];
+
+  return Promise.all(
+    Array.from({ length: pageCount }, async (_, pageIndex) => {
+      const doc = await PDFDocument.create();
+      const [page] = await doc.copyPages(source, [pageIndex]);
+      doc.addPage(page);
+      const bytes = await doc.save();
+      return {
+        buffer: Buffer.from(bytes),
+        filename: `${filename.replace(/\.pdf$/i, "")}-page-${pageIndex + 1}.pdf`,
+        mimeType: "application/pdf",
+      };
+    }),
+  );
+}
+
+function isImageUpload(upload: UploadLike): boolean {
+  const name = upload.filename.toLowerCase();
+  return IMAGE_TYPES.includes(upload.mimeType) || /\.(jpe?g|png|webp|gif|bmp)$/.test(name);
+}
+
+export async function runMultiImageExtraction(uploads: UploadLike[]) {
+  const images = uploads.filter(isImageUpload).slice(0, MAX_PARALLEL_PAGE_EXTRACTS);
+  if (images.length === 0) throw new Error("No readable poster image files found.");
+  const trips = await Promise.all(
+    images.map((upload) =>
+      extractTripFromImage(
+        upload.buffer.toString("base64"),
+        upload.mimeType || "image/jpeg",
+      ),
+    ),
+  );
+  return {
+    trip: mergeExtractedTrips(trips),
+    source_file: images.map((upload) => upload.filename).join(", "),
+  };
+}
+
 export async function runExtraction(buffer: Buffer, filename: string, mime: string) {
   const name = filename.toLowerCase();
 
@@ -65,9 +226,17 @@ export async function runExtraction(buffer: Buffer, filename: string, mime: stri
   }
 
   if (name.endsWith(".pdf") || mime === "application/pdf") {
-    const b64 = buffer.toString("base64");
+    const pages = await splitPdfPages(buffer, filename);
+    const pageTripPromise =
+      pages.length > 1
+        ? Promise.all(
+            pages.map((page) =>
+              extractPdfTripText(page.buffer.toString("base64"), page.filename),
+            ),
+          ).then(mergeExtractedTrips)
+        : extractPdfTripText(buffer.toString("base64"), filename);
     const [trip, pdfImages, pdfFacts] = await Promise.all([
-      extractPdfTripText(b64, filename),
+      pageTripPromise,
       extractPdfImagesGuarded(buffer),
       extractPdfFacts(buffer),
     ]);

@@ -586,6 +586,51 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
   }
 
+  function isPosterImageFile(file: File): boolean {
+    const name = file.name.trim().toLowerCase();
+    return file.type.startsWith("image/") || /\.(jpe?g|png|webp|gif|bmp)$/.test(name);
+  }
+
+  function canBatchImageSlices(files: File[]): boolean {
+    if (files.length <= 1 || files.length > 5) return false;
+    if (!files.every(isPosterImageFile)) return false;
+    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+    return isLocalDevHost() || totalBytes <= DIRECT_UPLOAD_LIMIT_BYTES;
+  }
+
+  async function extractImageSliceBatch(files: File[]): Promise<{ trip: PosterTrip; source_file: string }> {
+    const timeoutMs = isLocalDevHost() ? 300 * 1000 : EXTRACT_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const fd = new FormData();
+      for (const file of files) fd.append("file", file, file.name);
+      const res = await apiFetch("/api/admin/poster/extract", {
+        method: "POST",
+        body: fd,
+        signal: controller.signal,
+      });
+      const text = await res.text();
+      let json: JsonRecord = {};
+      if (text) {
+        try { json = JSON.parse(text); } catch { json = { error: text.slice(0, 300) }; }
+      }
+      if (!res.ok) throw new Error((json.error as string) || `HTTP ${res.status}`);
+      if (json.error) throw new Error(json.error as string);
+      return {
+        ...(json as unknown as { trip: PosterTrip; source_file?: string }),
+        source_file: (json.source_file as string) || files.map((file) => file.name).join(", "),
+      };
+    } catch (e) {
+      if ((e as { name?: string })?.name === "AbortError" || /abort/i.test(String((e as { message?: string })?.message || ""))) {
+        throw new Error(`Хүсэлт хэт удаж зогслоо (${timeoutMs / 1000}s). Зургууд хэт том эсвэл сервер ачаалалтай байж магадгүй — дахин оролдоно уу.`);
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function dataUrlToFile(dataUrl: string, filename: string): Promise<File> {
     const blob = await fetch(dataUrl).then((response) => response.blob());
     return new File([blob], filename, { type: blob.type || "image/png" });
@@ -703,6 +748,19 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     const saved: Array<{ file: string; trip: PosterTrip; id: string }> = [];
     const failed: Array<{ file: string; error: string }> = [];
 
+    if (canBatchImageSlices(uniqueFiles)) {
+      const label = uniqueFiles.map((file) => file.name).join(", ");
+      setBusy(`${uniqueFiles.length} зургийн хэсгийг зэрэг уншиж байна: ${label}…`);
+      try {
+        const { trip, source_file } = await extractImageSliceBatch(uniqueFiles);
+        setBusy(`${uniqueFiles.length} зургийн хэсгийг нэг аялал болгож хадгалж байна…`);
+        const { id } = await saveTripData(trip, source_file || label);
+        saved.push({ file: source_file || label, trip, id });
+      } catch (e) {
+        console.error("image slice batch failed:", label, e);
+        failed.push({ file: label, error: String((e as { message?: string })?.message || e) });
+      }
+    } else {
     for (let i = 0; i < uniqueFiles.length; i++) {
       const file = uniqueFiles[i];
       setBusy(`${uniqueFiles.length} файлаас ${i + 1}-г уншиж байна: ${file.name}…`);
@@ -715,6 +773,8 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
         console.error("file failed:", file.name, e);
         failed.push({ file: file.name, error: String((e as { message?: string })?.message || e) });
       }
+    }
+
     }
 
     if (saved.length > 0) {
