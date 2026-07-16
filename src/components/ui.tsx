@@ -176,6 +176,12 @@ export const Icons = {
   ),
   chevronLeft: makeIcon(<path d="M15 18L9 12 15 6" />),
   chevronRight: makeIcon(<path d="M9 18L15 12 9 6" />),
+  send: makeIcon(
+    <>
+      <path d="M21 3 10.4 13.6" />
+      <path d="M21 3 14.2 21l-3.8-7.4L3 9.8z" />
+    </>,
+  ),
   upload: makeIcon(
     <>
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />

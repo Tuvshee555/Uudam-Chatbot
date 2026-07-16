@@ -1714,9 +1714,6 @@ export default function AdminPage() {
               onCancelProposal={(id) =>
                 setProposalMessage(id, { status: "cancelled" })
               }
-              onToggleConfirm={(id, value) =>
-                setProposalMessage(id, { confirmChecked: value })
-              }
               onPickFile={() => fileInputRef.current?.click()}
               onDropFiles={(files) => void attachFiles(files)}
               chatEndRef={chatEndRef}
