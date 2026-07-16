@@ -338,6 +338,10 @@ async function downloadFileAttachment(input: FileAttachmentInput): Promise<Downl
 // EVERY customer message (getCustomerMemoryText → listCustomerDocuments →
 // sweep) — a pointless write on the reply hot path. A 6-hour throttle keeps
 // the policy enforced without taxing every conversation turn.
+//
+// Privacy rule: passports, travel documents, and booking codes are sensitive
+// even if staff never review them. Do not let a stuck needs_review item remain
+// visible forever just because nobody clicked a status button.
 let lastRetentionSweepAt = 0;
 const RETENTION_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
@@ -353,7 +357,6 @@ async function applySensitiveRetentionPolicy() {
       SET retention_hidden_at = NOW(), updated_at = NOW()
       WHERE retention_hidden_at IS NULL
         AND category IN ('passport', 'travel_document', 'booking_code')
-        AND status IN ('verified', 'reviewed', 'ignored', 'attached_to_booking')
         AND created_at < NOW() - ($1::text || ' days')::interval
     `,
     [String(SENSITIVE_RETENTION_DAYS)],
@@ -1350,6 +1353,7 @@ export async function getCustomerDocumentStats() {
         SELECT COUNT(*)::text AS count
         FROM travel_customer_documents
         WHERE status = 'needs_review'
+          AND retention_hidden_at IS NULL
       `,
     ),
     queryNeon<{ category: string; count: string }>(
@@ -1357,6 +1361,7 @@ export async function getCustomerDocumentStats() {
         SELECT category, COUNT(*)::text AS count
         FROM travel_customer_documents
         WHERE status = 'needs_review'
+          AND retention_hidden_at IS NULL
         GROUP BY category
         ORDER BY count DESC
       `,

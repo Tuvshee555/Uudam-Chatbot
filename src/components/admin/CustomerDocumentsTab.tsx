@@ -22,26 +22,44 @@ import type {
 } from "@/lib/adminTypes";
 import { formatTime, shortId } from "@/lib/adminUtils";
 
-type SimpleDocumentCategory = "payment" | "passport" | "other";
-
-const SIMPLE_CATEGORY_LABELS: Record<SimpleDocumentCategory, string> = {
-  payment: "Төлбөр",
+const DOCUMENT_CATEGORY_LABELS: Record<CustomerDocumentCategory, string> = {
+  payment_screenshot: "Төлбөрийн баримт",
   passport: "Паспорт",
+  booking_code: "Захиалгын код",
+  trip_screenshot: "Аяллын screenshot",
+  travel_document: "Бичиг баримт",
   other: "Бусад",
 };
 
-const SIMPLE_CATEGORY_ICONS: Record<SimpleDocumentCategory, string> = {
-  payment: "💰",
+const DOCUMENT_CATEGORY_SHORT_LABELS: Record<CustomerDocumentCategory, string> = {
+  payment_screenshot: "Төлбөр",
+  passport: "Паспорт",
+  booking_code: "Код",
+  trip_screenshot: "Аялал",
+  travel_document: "Баримт",
+  other: "Бусад",
+};
+
+const DOCUMENT_CATEGORY_ICONS: Record<CustomerDocumentCategory, string> = {
+  payment_screenshot: "💰",
   passport: "🛂",
+  booking_code: "🔑",
+  trip_screenshot: "🧭",
+  travel_document: "📄",
   other: "📎",
 };
 
-const SIMPLE_CATEGORY_ORDER: SimpleDocumentCategory[] = ["payment", "passport", "other"];
+const DOCUMENT_CATEGORY_ORDER: CustomerDocumentCategory[] = [
+  "payment_screenshot",
+  "passport",
+  "booking_code",
+  "trip_screenshot",
+  "travel_document",
+  "other",
+];
 
-function simpleCategory(category: CustomerDocumentCategory): SimpleDocumentCategory {
-  if (category === "payment_screenshot") return "payment";
-  if (category === "passport") return "passport";
-  return "other";
+function documentCategory(category: CustomerDocumentCategory): CustomerDocumentCategory {
+  return DOCUMENT_CATEGORY_ORDER.includes(category) ? category : "other";
 }
 
 function compactValue(value: unknown): string {
@@ -78,8 +96,8 @@ function record(value: unknown): Record<string, unknown> {
 /** The one fact the agency cares about first, per document kind. */
 function documentTitle(doc: CustomerDocument): string {
   const data = doc.extracted_json || {};
-  const bucket = simpleCategory(doc.category);
-  if (bucket === "payment") {
+  const category = documentCategory(doc.category);
+  if (category === "payment_screenshot") {
     const payment = record(data.payment);
     return (
       formatAmount(payment.amount, payment.currency) ||
@@ -87,9 +105,20 @@ function documentTitle(doc: CustomerDocument): string {
       "Төлбөрийн баримт"
     );
   }
-  if (bucket === "passport") {
+  if (category === "passport") {
     const passport = record(data.passport);
     return compactValue(passport.full_name) || "Паспортын зураг";
+  }
+  if (category === "booking_code") {
+    const booking = record(data.booking);
+    return compactValue(booking.code) || compactValue(booking.trip_name) || "Захиалгын код";
+  }
+  if (category === "trip_screenshot") {
+    const trip = record(data.trip);
+    return tripMatchName(doc) || compactValue(trip.title) || compactValue(trip.destination) || "Аяллын screenshot";
+  }
+  if (category === "travel_document") {
+    return compactValue(data.summary) || compactValue(data.visible_text) || "Бичиг баримт";
   }
   return (
     compactValue(data.summary) ||
@@ -100,16 +129,16 @@ function documentTitle(doc: CustomerDocument): string {
 
 function extractedRows(doc: CustomerDocument) {
   const data = doc.extracted_json || {};
-  const bucket = simpleCategory(doc.category);
+  const category = documentCategory(doc.category);
   const rows: Array<{ label: string; value: string }> = [];
   const add = (label: string, value: unknown) => {
     const text = compactValue(value);
     if (text) rows.push({ label, value: text });
   };
   // Skip the field already promoted to the card title (amount / name).
-  if (bucket !== "payment") add("Товч", data.summary);
+  if (category !== "payment_screenshot") add("Товч", data.summary);
   const passport = record(data.passport);
-  if (bucket !== "passport") add("Нэр", passport.full_name);
+  if (category !== "passport") add("Нэр", passport.full_name);
   add("Паспорт", passport.passport_number);
   add("Төрсөн огноо", passport.date_of_birth);
   add("Дуусах огноо", passport.expiry_date);
@@ -119,7 +148,7 @@ function extractedRows(doc: CustomerDocument) {
   add("Огноо", trip.departure_dates);
   add("Үнэ", trip.price_text);
   const payment = record(data.payment);
-  if (bucket === "payment") add("Товч", data.summary);
+  if (category === "payment_screenshot") add("Товч", data.summary);
   else add("Дүн", formatAmount(payment.amount, payment.currency));
   add("Илгээгч", payment.sender_name);
   add("Утас (гүйлгээ)", payment.phone);
@@ -131,6 +160,8 @@ function extractedRows(doc: CustomerDocument) {
   add("Аяллын нэр", booking.trip_name);
   add("Зорчигч", booking.traveler_name);
   add("Утас", booking.phone);
+  add("Тэмдэглэл", booking.notes);
+  add("Уншигдсан текст", data.visible_text);
   return rows.slice(0, 10);
 }
 
@@ -170,6 +201,7 @@ function senderTitle(input: { display_name: string; sender_id: string }) {
 
 type EditFields = {
   summary: string;
+  visibleText: string;
   paymentAmount: string;
   paymentCurrency: string;
   paymentSender: string;
@@ -181,14 +213,30 @@ type EditFields = {
   passportNumber: string;
   passportBirthDate: string;
   passportExpiryDate: string;
+  passportNationality: string;
+  passportSex: string;
+  bookingCode: string;
+  bookingTripName: string;
+  bookingTravelerName: string;
+  bookingPhone: string;
+  bookingNotes: string;
+  tripTitle: string;
+  tripDestination: string;
+  tripDepartureDates: string;
+  tripPriceText: string;
+  tripDuration: string;
+  tripOperator: string;
 };
 
 function editFieldsFromDocument(doc: CustomerDocument): EditFields {
   const data = doc.extracted_json || {};
   const payment = record(data.payment);
   const passport = record(data.passport);
+  const booking = record(data.booking);
+  const trip = record(data.trip);
   return {
     summary: compactValue(data.summary),
+    visibleText: compactValue(data.visible_text),
     paymentAmount: compactValue(payment.amount),
     paymentCurrency: compactValue(payment.currency),
     paymentSender: compactValue(payment.sender_name),
@@ -200,13 +248,27 @@ function editFieldsFromDocument(doc: CustomerDocument): EditFields {
     passportNumber: compactValue(passport.passport_number),
     passportBirthDate: compactValue(passport.date_of_birth),
     passportExpiryDate: compactValue(passport.expiry_date),
+    passportNationality: compactValue(passport.nationality),
+    passportSex: compactValue(passport.sex),
+    bookingCode: compactValue(booking.code),
+    bookingTripName: compactValue(booking.trip_name),
+    bookingTravelerName: compactValue(booking.traveler_name),
+    bookingPhone: compactValue(booking.phone),
+    bookingNotes: compactValue(booking.notes),
+    tripTitle: compactValue(trip.title),
+    tripDestination: compactValue(trip.destination),
+    tripDepartureDates: compactValue(trip.departure_dates),
+    tripPriceText: compactValue(trip.price_text),
+    tripDuration: compactValue(trip.duration),
+    tripOperator: compactValue(trip.operator),
   };
 }
 
 function buildEditedJson(doc: CustomerDocument, fields: EditFields): Record<string, unknown> {
   const next: Record<string, unknown> = { ...(doc.extracted_json || {}) };
   next.summary = fields.summary;
-  if (simpleCategory(doc.category) === "payment") {
+  const category = documentCategory(doc.category);
+  if (category === "payment_screenshot") {
     next.payment = {
       ...record(next.payment),
       amount: fields.paymentAmount,
@@ -218,19 +280,57 @@ function buildEditedJson(doc: CustomerDocument, fields: EditFields): Record<stri
       date: fields.paymentDate,
     };
   }
-  if (simpleCategory(doc.category) === "passport") {
+  if (category === "passport") {
     next.passport = {
       ...record(next.passport),
       full_name: fields.passportName,
       passport_number: fields.passportNumber,
       date_of_birth: fields.passportBirthDate,
       expiry_date: fields.passportExpiryDate,
+      nationality: fields.passportNationality,
+      sex: fields.passportSex,
     };
+  }
+  if (category === "booking_code") {
+    next.booking = {
+      ...record(next.booking),
+      code: fields.bookingCode,
+      trip_name: fields.bookingTripName,
+      traveler_name: fields.bookingTravelerName,
+      phone: fields.bookingPhone,
+      notes: fields.bookingNotes,
+    };
+  }
+  if (category === "trip_screenshot") {
+    next.trip = {
+      ...record(next.trip),
+      title: fields.tripTitle,
+      destination: fields.tripDestination,
+      departure_dates: fields.tripDepartureDates
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean),
+      price_text: fields.tripPriceText,
+      duration: fields.tripDuration,
+      operator: fields.tripOperator,
+    };
+  }
+  if (category === "travel_document" || category === "other") {
+    next.visible_text = fields.visibleText;
   }
   return next;
 }
 
 const VISIBLE_DETAIL_ROWS = 4;
+
+function isImageDocument(doc: CustomerDocument): boolean {
+  return /^image\//i.test(doc.mime_type || "");
+}
+
+function documentFileName(doc: CustomerDocument): string {
+  const file = record(doc.extracted_json?.file);
+  return compactValue(file.name) || compactValue(doc.source_url.split("/").pop()) || "attachment";
+}
 
 function DocumentCard({
   doc,
@@ -259,8 +359,9 @@ function DocumentCard({
   const hiddenRowCount = rows.length - visibleRows.length;
   const imageUrl = doc.stored_url || doc.source_url;
   const matchedTrip = tripMatchName(doc);
-  const bucket = simpleCategory(doc.category);
+  const category = documentCategory(doc.category);
   const busy = busyId === doc.id;
+  const imageLike = isImageDocument(doc);
   return (
     <Card className="overflow-hidden p-0">
       <div className="grid gap-0 sm:grid-cols-[168px_1fr]">
@@ -268,22 +369,34 @@ function DocumentCard({
           href={imageUrl}
           target="_blank"
           rel="noopener noreferrer"
-          title="Зургийг бүтнээр нээх"
-          className="group relative block bg-surface-sunken"
+          title={imageLike ? "Зургийг бүтнээр нээх" : "Файлыг нээх"}
+          className="group relative flex min-h-52 items-center justify-center bg-surface-sunken"
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={imageUrl}
-            alt=""
-            className="h-52 w-full object-contain p-1.5 transition-opacity group-hover:opacity-90 sm:h-full sm:max-h-72"
-            loading="lazy"
-          />
+          {imageLike ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={imageUrl}
+              alt=""
+              className="h-52 w-full object-contain p-1.5 transition-opacity group-hover:opacity-90 sm:h-full sm:max-h-72"
+              loading="lazy"
+            />
+          ) : (
+            <div className="flex w-full flex-col items-center gap-2 px-3 py-6 text-center">
+              <Icons.file size={30} className="text-brand" />
+              <span className="max-w-full truncate text-xs font-semibold text-ink">
+                {documentFileName(doc)}
+              </span>
+              <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] text-ink-muted">
+                {doc.mime_type || "file"}
+              </span>
+            </div>
+          )}
         </a>
         <div className="flex min-w-0 flex-col p-3.5">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
               <p className="truncate text-[15px] font-bold leading-6 text-ink" title={documentTitle(doc)}>
-                {bucket === "payment" ? (
+                {category === "payment_screenshot" ? (
                   <span className="font-mono tracking-tight">{documentTitle(doc)}</span>
                 ) : (
                   documentTitle(doc)
@@ -291,10 +404,16 @@ function DocumentCard({
               </p>
               <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-ink-subtle">
                 <span>
-                  {SIMPLE_CATEGORY_ICONS[bucket]} {SIMPLE_CATEGORY_LABELS[bucket]}
+                  {DOCUMENT_CATEGORY_ICONS[category]} {DOCUMENT_CATEGORY_LABELS[category]}
                 </span>
                 <span aria-hidden="true">·</span>
                 <span>{formatTime(doc.created_at)}</span>
+                {doc.retention_hidden_at && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span>Архивласан</span>
+                  </>
+                )}
                 {doc.matched_payment_id && (
                   <>
                     <span aria-hidden="true">·</span>
@@ -420,7 +539,7 @@ export function CustomerDocumentsTab({
   const [documents, setDocuments] = useState<CustomerDocument[]>([]);
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
-  const [category, setCategory] = useState<SimpleDocumentCategory | "all">("all");
+  const [category, setCategory] = useState<CustomerDocumentCategory | "all">("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [showDeleted, setShowDeleted] = useState(false);
@@ -508,7 +627,7 @@ export function CustomerDocumentsTab({
     () => {
       const query = search.trim().toLowerCase();
       return documents.filter((doc) => {
-        if (category !== "all" && simpleCategory(doc.category) !== category) return false;
+        if (category !== "all" && documentCategory(doc.category) !== category) return false;
         if (!query) return true;
         return documentSearchText(doc).includes(query);
       });
@@ -517,12 +636,12 @@ export function CustomerDocumentsTab({
   );
 
   const documentsByCategory = useMemo(() => {
-    const groups = new Map<SimpleDocumentCategory, CustomerDocument[]>();
+    const groups = new Map<CustomerDocumentCategory, CustomerDocument[]>();
     for (const doc of visibleDocuments) {
-      const bucket = simpleCategory(doc.category);
-      const list = groups.get(bucket) || [];
+      const docCategory = documentCategory(doc.category);
+      const list = groups.get(docCategory) || [];
       list.push(doc);
-      groups.set(bucket, list);
+      groups.set(docCategory, list);
     }
     return groups;
   }, [visibleDocuments]);
@@ -635,7 +754,7 @@ export function CustomerDocumentsTab({
 
   const showPeopleList = view === "people" && !selectedSender;
   const showPersonDetail = view === "people" && Boolean(selectedSender);
-  const editingBucket = editing ? simpleCategory(editing.category) : "other";
+  const editingCategory = editing ? documentCategory(editing.category) : "other";
   const anyLoading = sendersLoading || loading;
   const resultCount = showPeopleList ? filteredSenders.length : visibleDocuments.length;
   const resultNoun = showPeopleList ? "хэрэглэгч" : "зураг";
@@ -681,14 +800,14 @@ export function CustomerDocumentsTab({
             <Select
               value={category}
               onChange={(e) =>
-                setCategory(e.target.value as SimpleDocumentCategory | "all")
+                setCategory(e.target.value as CustomerDocumentCategory | "all")
               }
-              className="w-36"
+              className="w-48"
             >
               <option value="all">Бүх төрөл</option>
-              {SIMPLE_CATEGORY_ORDER.map((key) => (
+              {DOCUMENT_CATEGORY_ORDER.map((key) => (
                 <option key={key} value={key}>
-                  {SIMPLE_CATEGORY_ICONS[key]} {SIMPLE_CATEGORY_LABELS[key]}
+                  {DOCUMENT_CATEGORY_ICONS[key]} {DOCUMENT_CATEGORY_LABELS[key]}
                 </option>
               ))}
             </Select>
@@ -810,21 +929,15 @@ export function CustomerDocumentsTab({
                       </div>
                     </div>
                     <div className="mt-2.5 flex flex-wrap gap-1.5">
-                      {SIMPLE_CATEGORY_ORDER.map((key) => {
-                        const count = key === "payment"
-                          ? sender.by_category.payment_screenshot || 0
-                          : key === "passport"
-                            ? sender.by_category.passport || 0
-                            : (sender.by_category.travel_document || 0) +
-                              (sender.by_category.booking_code || 0) +
-                              (sender.by_category.trip_screenshot || 0) +
-                              (sender.by_category.other || 0);
+                      {DOCUMENT_CATEGORY_ORDER.map((key) => {
+                        const count = sender.by_category[key] || 0;
                         return count ? (
                           <span
                             key={key}
                             className="rounded-full bg-surface-sunken px-2 py-0.5 text-[11px] text-ink-muted"
+                            title={DOCUMENT_CATEGORY_LABELS[key]}
                           >
-                            {SIMPLE_CATEGORY_ICONS[key]} {count}
+                            {DOCUMENT_CATEGORY_ICONS[key]} {DOCUMENT_CATEGORY_SHORT_LABELS[key]} {count}
                           </span>
                         ) : null;
                       })}
@@ -872,13 +985,13 @@ export function CustomerDocumentsTab({
               />
             </Card>
           ) : (
-            SIMPLE_CATEGORY_ORDER.map((key) => {
+            DOCUMENT_CATEGORY_ORDER.map((key) => {
               const docs = documentsByCategory.get(key);
               if (!docs || docs.length === 0) return null;
               return (
                 <div key={key} className="space-y-2">
                   <p className="text-sm font-semibold text-ink">
-                    {SIMPLE_CATEGORY_ICONS[key]} {SIMPLE_CATEGORY_LABELS[key]}{" "}
+                    {DOCUMENT_CATEGORY_ICONS[key]} {DOCUMENT_CATEGORY_LABELS[key]}{" "}
                     <span className="font-normal text-ink-subtle">({docs.length})</span>
                   </p>
                   <div className="grid gap-3 lg:grid-cols-2">
@@ -960,8 +1073,8 @@ export function CustomerDocumentsTab({
         <div className="space-y-3">
           {editing && (
             <div className="flex items-center gap-2 rounded-md border border-line bg-surface-sunken px-3 py-2 text-sm text-ink-muted">
-              <span>{SIMPLE_CATEGORY_ICONS[editingBucket]}</span>
-              <span>{SIMPLE_CATEGORY_LABELS[editingBucket]}</span>
+              <span>{DOCUMENT_CATEGORY_ICONS[editingCategory]}</span>
+              <span>{DOCUMENT_CATEGORY_LABELS[editingCategory]}</span>
               <span className="text-ink-subtle">#{editing.id}</span>
             </div>
           )}
@@ -970,7 +1083,7 @@ export function CustomerDocumentsTab({
             value={editFields.summary}
             onChange={(e) => setEditField("summary", e.target.value)}
           />
-          {editingBucket === "payment" && (
+          {editingCategory === "payment_screenshot" && (
             <div className="grid gap-3 sm:grid-cols-2">
               <Input
                 label="Дүн"
@@ -1012,7 +1125,7 @@ export function CustomerDocumentsTab({
               </div>
             </div>
           )}
-          {editingBucket === "passport" && (
+          {editingCategory === "passport" && (
             <div className="grid gap-3 sm:grid-cols-2">
               <Input
                 label="Нэр"
@@ -1034,7 +1147,91 @@ export function CustomerDocumentsTab({
                 value={editFields.passportExpiryDate}
                 onChange={(e) => setEditField("passportExpiryDate", e.target.value)}
               />
+              <Input
+                label="Иргэншил"
+                value={editFields.passportNationality}
+                onChange={(e) => setEditField("passportNationality", e.target.value)}
+              />
+              <Input
+                label="Хүйс"
+                value={editFields.passportSex}
+                onChange={(e) => setEditField("passportSex", e.target.value)}
+              />
             </div>
+          )}
+          {editingCategory === "booking_code" && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Input
+                label="Код"
+                value={editFields.bookingCode}
+                onChange={(e) => setEditField("bookingCode", e.target.value)}
+              />
+              <Input
+                label="Аяллын нэр"
+                value={editFields.bookingTripName}
+                onChange={(e) => setEditField("bookingTripName", e.target.value)}
+              />
+              <Input
+                label="Зорчигч"
+                value={editFields.bookingTravelerName}
+                onChange={(e) => setEditField("bookingTravelerName", e.target.value)}
+              />
+              <Input
+                label="Утас"
+                value={editFields.bookingPhone}
+                onChange={(e) => setEditField("bookingPhone", e.target.value)}
+              />
+              <div className="sm:col-span-2">
+                <Textarea
+                  label="Тэмдэглэл"
+                  rows={3}
+                  value={editFields.bookingNotes}
+                  onChange={(e) => setEditField("bookingNotes", e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+          {editingCategory === "trip_screenshot" && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Input
+                label="Аяллын нэр"
+                value={editFields.tripTitle}
+                onChange={(e) => setEditField("tripTitle", e.target.value)}
+              />
+              <Input
+                label="Чиглэл"
+                value={editFields.tripDestination}
+                onChange={(e) => setEditField("tripDestination", e.target.value)}
+              />
+              <Input
+                label="Гарах өдрүүд"
+                value={editFields.tripDepartureDates}
+                onChange={(e) => setEditField("tripDepartureDates", e.target.value)}
+              />
+              <Input
+                label="Үнэ"
+                value={editFields.tripPriceText}
+                onChange={(e) => setEditField("tripPriceText", e.target.value)}
+              />
+              <Input
+                label="Хугацаа"
+                value={editFields.tripDuration}
+                onChange={(e) => setEditField("tripDuration", e.target.value)}
+              />
+              <Input
+                label="Оператор"
+                value={editFields.tripOperator}
+                onChange={(e) => setEditField("tripOperator", e.target.value)}
+              />
+            </div>
+          )}
+          {(editingCategory === "travel_document" || editingCategory === "other") && (
+            <Textarea
+              label="Уншигдсан текст"
+              rows={5}
+              value={editFields.visibleText}
+              onChange={(e) => setEditField("visibleText", e.target.value)}
+            />
           )}
         </div>
       </Modal>
