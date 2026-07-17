@@ -1003,10 +1003,11 @@ async function handleMessage(
   {
     const routed = await getRouted();
     if (routed.scopedClarify && routed.scopedClarify.length > 0) {
+      const clarifyBody = routed.scopedClarifyNote
+        ? `${routed.scopedClarifyNote}\n${buildAmbiguousTripReply(routed.scopedClarify)}`
+        : buildAmbiguousTripReply(routed.scopedClarify);
       await deliverFastPathReply({
-        reply: enforceWebsiteForPayment(
-          sanitizeAssistantReply(buildAmbiguousTripReply(routed.scopedClarify)),
-        ),
+        reply: enforceWebsiteForPayment(sanitizeAssistantReply(clarifyBody)),
         failTag: "scoped_clarify",
         rememberSource: "api.webhook.scoped_clarify",
         counter: "webhook.scoped_clarify_total",

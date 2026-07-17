@@ -297,8 +297,11 @@ export default async function handler(
       {
         const routed = await getRouted();
         if (routed.scopedClarify && routed.scopedClarify.length > 0) {
+          const clarifyBody = routed.scopedClarifyNote
+            ? `${routed.scopedClarifyNote}\n${buildAmbiguousTripReply(routed.scopedClarify)}`
+            : buildAmbiguousTripReply(routed.scopedClarify);
           const clarifyReply = enforceWebsiteForPayment(
-            sanitizeAssistantReply(buildAmbiguousTripReply(routed.scopedClarify)),
+            sanitizeAssistantReply(clarifyBody),
           );
           await appendMessage(sessionId, "user", normalizedText);
           await appendMessage(sessionId, "assistant", clarifyReply);

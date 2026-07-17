@@ -1621,3 +1621,19 @@ test("price reply surfaces a mandatory extra fee stored in a foreign currency", 
   assert.match(reply as string, /600.*CNY/);
   assert.match(reply as string, /300.*CNY/);
 });
+
+test("picture-only request for a trip without visual assets goes silent, program request still answers", () => {
+  const bare = trip({
+    id: "no-media",
+    route_name: "Хайлаар Манжуурын аялал - 5 өдөр 4 шөнө",
+    adult_price: 990000,
+    extra: {},
+    photo_urls: [],
+  });
+  const photoAsk = buildTripProgramReply("Хайлаар Манжуур 5 өдөр зураг явуулаач", [bare]);
+  assert.equal(photoAsk?.reply, "NOTRIPMEDIA");
+
+  const programAsk = buildTripProgramReply("Хайлаар Манжуур 5 өдөр хөтөлбөр", [bare]);
+  assert.notEqual(programAsk?.reply, "NOTRIPMEDIA");
+  assert.match(programAsk?.reply || "", /Хайлаар Манжуурын аялал/);
+});

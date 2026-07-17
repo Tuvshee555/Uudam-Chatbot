@@ -410,6 +410,47 @@ function tripDateYmds(trip: TravelTrip, dateText: string, now: Date): string[] {
   return parseTripDepartureDateText(dateText, now);
 }
 
+const MN_WEEKDAY_PATTERNS: Array<{ day: number; pattern: RegExp }> = [
+  { day: 0, pattern: /ням/i },
+  { day: 1, pattern: /даваа/i },
+  { day: 2, pattern: /мягмар/i },
+  { day: 3, pattern: /лхагва/i },
+  { day: 4, pattern: /пүрэв/i },
+  { day: 5, pattern: /баасан/i },
+  { day: 6, pattern: /бямба/i },
+];
+
+/**
+ * Does this trip depart on the requested date? Understands all three shapes a
+ * stored departure can take:
+ *   - explicit dates ("8 сарын 24") — month+day equality, year-agnostic so a
+ *     roll-forward-parsed customer query still matches a current-year record;
+ *   - weekly recurrences ("Даваа гариг болгон") — weekday equality;
+ *   - fully flexible text ("аяллын групп бүрдсэн огноогоор") — matches any
+ *     date, since the group departs whenever it fills.
+ * Used to narrow a pending clarification when the customer answers with a
+ * date instead of a trip name.
+ */
+export function tripMatchesRequestedDate(
+  trip: TravelTrip,
+  requestedYmd: string,
+  now = new Date(),
+): boolean {
+  const requested = new Date(`${requestedYmd}T00:00:00`);
+  if (Number.isNaN(requested.getTime())) return false;
+  const requestedMonthDay = requestedYmd.slice(5);
+  for (const dateText of trip.departure_dates || []) {
+    const ymds = tripDateYmds(trip, dateText, now);
+    if (ymds.some((ymd) => ymd.slice(5) === requestedMonthDay)) return true;
+    if (ymds.length === 0 && !/\d/.test(dateText)) {
+      const weekday = MN_WEEKDAY_PATTERNS.find((w) => w.pattern.test(dateText));
+      if (!weekday) return true; // flexible schedule — any date works
+      if (requested.getDay() === weekday.day) return true;
+    }
+  }
+  return false;
+}
+
 function findDepartureMatches(
   trips: TravelTrip[],
   requestedYmd: string,

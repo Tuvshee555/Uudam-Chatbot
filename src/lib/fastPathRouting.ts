@@ -21,6 +21,7 @@ import {
   clearClarificationState,
 } from "./clarificationState";
 import { isLikelyContextDependentText, pickFastPathMatchText } from "./contextualText";
+import { parseDepartureDateText, tripMatchesRequestedDate } from "./travelDates";
 import { getTripSearchHaystack, phoneticLatinText, resolveTripFromUserMessage } from "./travelFastPathsSearch";
 import type { TravelTrip } from "./travelTypes";
 
@@ -40,12 +41,17 @@ export function filterCandidatesByAttribute(
   text: string,
   candidates: TravelTrip[],
 ): TravelTrip[] {
+  // Numbers ARE the discriminating signal between "…5 өдөр 4 шөнө" and
+  // "…4 өдөр 3 шөнө" — the old length filter dropped them, so "5 өдөр нь"
+  // degraded to just "өдөр" and matched every candidate with a duration.
   const phoneticTokens = (value: string) =>
     phoneticLatinText(value)
       .split(/\s+/)
-      .filter((word) => word.length >= 3);
+      .filter((word) => word.length >= 3 || /^\d+$/.test(word));
   const queryTokens = phoneticTokens(text);
   if (queryTokens.length === 0) return [];
+  // A lone bare digit ("1") is too weak to select a trip by containment.
+  if (queryTokens.every((word) => /^\d$/.test(word))) return [];
   return candidates.filter((trip) => {
     const hayTokens = phoneticTokens(
       `${getTripSearchHaystack(trip)} ${trip.category || ""}`,
@@ -67,6 +73,12 @@ export type FastPathRoute = {
    * and confidently pick one, which is a guess, not an answer.
    */
   scopedClarify: TravelTrip[] | null;
+  /**
+   * Optional context line for the scoped clarification ("8 сарын 24-нд эдгээр
+   * аяллууд гарна:") so a date answer that fits several candidates reads as
+   * an informed follow-up, not a blind re-ask.
+   */
+  scopedClarifyNote?: string;
 };
 
 export async function routeFastPathText(input: {
@@ -103,9 +115,42 @@ export async function routeFastPathText(input: {
         scopedClarify: null,
       };
     }
+    // A date answer ("8 сарын 24-нд хэд вэ") narrows by DEPARTURE DATE — the
+    // name/attribute matchers can't read dates, which used to clear the state
+    // and re-clarify from the whole catalog. One departing candidate → that's
+    // the trip; several → keep the clarification scoped to exactly those,
+    // with the date echoed so the re-ask reads as informed.
+    const requestedYmd = parseDepartureDateText(text)[0];
+    if (requestedYmd) {
+      const byDate = pendingTrips.filter((trip) =>
+        tripMatchesRequestedDate(trip, requestedYmd),
+      );
+      if (byDate.length === 1) {
+        await clearClarificationState(senderId);
+        return { matchText: `${byDate[0].route_name}\n${text}`, scopedClarify: null };
+      }
+      if (byDate.length > 1) {
+        await setClarificationState(senderId, byDate.map((trip) => trip.id));
+        const [, month, day] = requestedYmd.split("-");
+        return {
+          matchText: text,
+          scopedClarify: byDate,
+          scopedClarifyNote: `${Number(month)} сарын ${Number(day)}-нд эдгээр аялал гарна:`,
+        };
+      }
+    }
     if (scoped.status === "ambiguous") {
-      await setClarificationState(senderId, scoped.candidates.map((trip) => trip.id));
-      return { matchText: text, scopedClarify: scoped.candidates };
+      // Refine the resolver's candidates with attribute containment: for
+      // "5 өдөр нь" the resolver kept {4 өдөр, 5 өдөр} (digit-blind scoring),
+      // but only one of them actually contains the customer's "5".
+      const refined = filterCandidatesByAttribute(text, scoped.candidates);
+      if (refined.length === 1) {
+        await clearClarificationState(senderId);
+        return { matchText: `${refined[0].route_name}\n${text}`, scopedClarify: null };
+      }
+      const candidates = refined.length > 1 ? refined : scoped.candidates;
+      await setClarificationState(senderId, candidates.map((trip) => trip.id));
+      return { matchText: text, scopedClarify: candidates };
     }
     // The resolver saw nothing — try attribute containment ("усан парктай"
     // is an answer a human understands but no name-matcher scores).

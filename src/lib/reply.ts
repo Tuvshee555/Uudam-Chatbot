@@ -16,6 +16,14 @@ export function isReferReply(text: string): boolean {
   return firstLine === "REFER" || firstLine === "SILENT" || /^(REFER|SILENT)\b/.test(firstLine);
 }
 
+/**
+ * Machine token (like REFER) returned by the program builder when a customer
+ * asks specifically for pictures and the trip has no photos or brochure.
+ * Never shown to anyone: the no-data silence patterns match it, so both the
+ * webhook and the demo suppress the reply and record the handoff.
+ */
+export const TRIP_MEDIA_UNAVAILABLE_SILENT = "NOTRIPMEDIA";
+
 export const NO_DATA_HANDOFF_REPLY =
   "Энэ асуултыг манай аяллын зөвлөхөд дамжууллаа. Мэдээллийг шалгаад танд энд хариу өгнө 🙏";
 
@@ -57,6 +65,7 @@ export function reconcilePhotoAttachmentReply(text: string, hasAttachedMedia: bo
 }
 
 const NO_DATA_REPLY_PATTERNS: RegExp[] = [
+  /^NOTRIPMEDIA$/,
   /\u0433\u0430\u0440\u0430\u0445\s+\u0430\u044f\u043b\u0430\u043b\s+\u0430\u043b\u0433\u0430\s+\u0431\u0430\u0439\u043d\u0430/i,
   /\u043e\u0434\u043e\u043e\u0433\u0438\u0439\u043d\s+\u043c\u044d\u0434\u044d\u044d\u043b\u044d\u043b\u0434\s+\u0430\u043b\u0433\u0430\s+\u0431\u0430\u0439\u043d\u0430/i,
   /\u0442\u043e\u0445\u0438\u0440\u043e\u0445\s+\u04af\u043d\u0438\u0439\u043d\s+\u043c\u044d\u0434\u044d\u044d\u043b\u044d\u043b\s+\u043e\u043b\u0434\u0441\u043e\u043d\u0433\u04af\u0439/i,

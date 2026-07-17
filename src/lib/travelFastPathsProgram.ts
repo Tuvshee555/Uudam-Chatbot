@@ -4,6 +4,7 @@
  */
 
 import { filterFutureDepartureDates, type ResolvedDepartureDate } from "./travelDates";
+import { TRIP_MEDIA_UNAVAILABLE_SILENT } from "./reply";
 import type { TravelTrip } from "./travelOps";
 import {
   findTripMatches,
@@ -265,10 +266,27 @@ export function buildTripProgramReply(
     };
   }
 
-  // No photos/brochure/itinerary for this trip — answer with what IS known
-  // and say nothing about pictures. The old "зураг системд ороогүй" footnote
-  // was noise for the customer and, worse, pattern-matched the no-data
-  // silence rule, which suppressed the entire correct answer.
+  // The customer asked SPECIFICALLY for pictures and this trip has neither
+  // photos nor a brochure. Policy (owner): what the bot cannot provide, it
+  // does not talk around — stay silent, staff answers from the Meta inbox.
+  // The token below matches the no-data silence patterns, so both the
+  // webhook and the demo suppress it and log the handoff identically.
+  const wantsPicturesOnly =
+    /зураг|zurag|photo|picture|пост(?:ер)?/i.test(text) &&
+    !/хөтөлбөр|hutulbur|program|itinerary|өдөр\s*өдөр|day\s*by\s*day/i.test(text);
+  if (wantsPicturesOnly) {
+    return {
+      reply: TRIP_MEDIA_UNAVAILABLE_SILENT,
+      trip: best,
+      brochure: null,
+      mediaUrls: [],
+    };
+  }
+
+  // A PROGRAM question without stored assets still gets answered with what IS
+  // known, and says nothing about pictures. The old "зураг системд ороогүй"
+  // footnote was noise for the customer and, worse, pattern-matched the
+  // no-data silence rule, which suppressed the entire correct answer.
   return {
     reply: `✈️ ${best.route_name}${summaryBlock}`,
     trip: best,

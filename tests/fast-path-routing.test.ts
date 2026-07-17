@@ -225,3 +225,91 @@ test("context resolves the trip but stale qualifiers are removed from builder in
   assert.match(routed.matchText, /8 сарын хүүхдийн үнэ/);
   assert.doesNotMatch(routed.matchText, /7 сарын үнэ|3,590,000/);
 });
+
+// ── Hailaar follow-up regressions: duration digits + date answers ──────────
+const HAILAAR_TRIPS: TravelTrip[] = [
+  trip({
+    id: "hailaar-4d",
+    route_name: "Хайлаар Манжуурын аялал - 4 өдөр 3 шөнө",
+    duration_text: "4 өдөр / 3 шөнө",
+    departure_dates: ["Баасан гариг бүр", "8 сарын 21", "8 сарын 28"],
+  }),
+  trip({
+    id: "hailaar-5d",
+    route_name: "Хайлаар Манжуурын аялал - 5 өдөр 4 шөнө",
+    duration_text: "5 өдөр / 4 шөнө",
+    departure_dates: ["Даваа гариг болгон", "8 сарын 17", "8 сарын 24"],
+  }),
+  trip({
+    id: "hailaar-chichihar",
+    route_name: "ХАЙЛААР ЧИЧИХАРЫН АЯЛАЛ-шууд нислэгтэй",
+    duration_text: "4 шөнө 5 өдөр",
+    departure_dates: ["7 сарын 27", "8 сарын 10"],
+  }),
+];
+
+test("duration answer with a digit narrows to the matching candidate", async () => {
+  const senderId = "route-test-duration-digit";
+  await clearClarificationState(senderId);
+  const { setClarificationState } = await import("../src/lib/clarificationState");
+  await setClarificationState(senderId, HAILAAR_TRIPS.map((t) => t.id));
+
+  const routed = await routeFastPathText({
+    senderId,
+    text: "5 өдөр нь",
+    contextualUserText: "5 өдөр нь",
+    trips: HAILAAR_TRIPS,
+  });
+
+  // "5" is the discriminating signal: the 4-day trip must not survive it.
+  if (routed.scopedClarify) {
+    assert.equal(
+      routed.scopedClarify.some((t) => t.id === "hailaar-4d"),
+      false,
+      "the 4-day trip must be excluded by the digit",
+    );
+  } else {
+    assert.match(routed.matchText, /5 өдөр 4 шөнө/);
+  }
+});
+
+test("date answer selects the only candidate departing that date", async () => {
+  const senderId = "route-test-date-unique";
+  await clearClarificationState(senderId);
+  const { setClarificationState } = await import("../src/lib/clarificationState");
+  // Pending: the 4-day (Fridays + 8/21, 8/28) and Chichihar (7/27, 8/10).
+  await setClarificationState(senderId, ["hailaar-4d", "hailaar-chichihar"]);
+
+  const routed = await routeFastPathText({
+    senderId,
+    text: "8 сарын 28-нд хэд вэ",
+    contextualUserText: "8 сарын 28-нд хэд вэ",
+    trips: HAILAAR_TRIPS,
+  });
+
+  assert.equal(routed.scopedClarify, null);
+  assert.match(routed.matchText, /4 өдөр 3 шөнө/);
+  const state = await getClarificationState(senderId);
+  assert.equal(state, null, "clarification resolved — state must be cleared");
+});
+
+test("date answer matching several candidates re-asks scoped with the date echoed", async () => {
+  const senderId = "route-test-date-multi";
+  await clearClarificationState(senderId);
+  const { setClarificationState } = await import("../src/lib/clarificationState");
+  await setClarificationState(senderId, HAILAAR_TRIPS.map((t) => t.id));
+
+  // 2026-08-24 is a Monday: matches the 5-day trip explicitly AND via its
+  // "Даваа гариг болгон" recurrence — but not Chichihar (7/27, 8/10) and not
+  // the 4-day (Fridays + 8/21, 8/28).
+  const routed = await routeFastPathText({
+    senderId,
+    text: "8 сарын 24-нд хэд вэ",
+    contextualUserText: "8 сарын 24-нд хэд вэ",
+    trips: HAILAAR_TRIPS,
+  });
+
+  // Unique in this fixture → selected directly.
+  assert.equal(routed.scopedClarify, null);
+  assert.match(routed.matchText, /5 өдөр 4 шөнө/);
+});
