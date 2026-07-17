@@ -313,3 +313,50 @@ test("date answer matching several candidates re-asks scoped with the date echoe
   assert.equal(routed.scopedClarify, null);
   assert.match(routed.matchText, /5 өдөр 4 шөнө/);
 });
+
+test("a bare destination word that's ambiguous on its own is not hijacked by an unrelated previous reply", async () => {
+  // Real bug (2026-07-17): customer asked about land+flight combo trips
+  // ("gazar nisleg hisolson"), got a Chunchin combo trip, then sent just
+  // "beejin" — a complete, self-sufficient destination name that resolves
+  // AMBIGUOUS on its own (several real Beijing trips exist). Because
+  // isLikelyContextDependentText treats any 1-2 word message as a follow-up
+  // reference, the router let the unrelated Chunchin reply's contextual
+  // resolution win outright, with no check that Chunchin was even one of
+  // "beejin"'s own candidates.
+  const senderId = "route-test-short-word-not-context-hijacked";
+  await clearClarificationState(senderId);
+  const chunchin = trip({
+    id: "chunchin-combo",
+    route_name: "Чунчин-Газар Нислэг Хосолсон",
+    category: "Газар нислэг хосолсон",
+  });
+  // Two real Beijing-mentioning trips, matching the live catalog shape, so
+  // "beejin" resolves AMBIGUOUS on its own — not "verified" — which is what
+  // actually made the original bug happen (an ambiguous direct result was
+  // silently overridden by the unrelated contextual winner).
+  const beijingCombo = trip({
+    id: "beijing-combo",
+    route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+    category: "Газар нислэг хосолсон",
+    extra: { aliases: ["Бээжин"] },
+  });
+  const beijingCruise = trip({
+    id: "beijing-cruise",
+    route_name: "Усан онгоцны аялал - Эрээн - Бээжин -Тяньжин - Чежү Пусан",
+    category: "Круйз",
+    extra: { aliases: ["Бээжин круз"] },
+  });
+  const trips = [chunchin, beijingCombo, beijingCruise];
+  const previousReply =
+    "Чунчин-Газар Нислэг Хосолсон аялал 8 шөнө 9 өдөр үргэлжилнэ.\n\n✈️ Чунчин-Газар Нислэг Хосолсон — 8 шөнө 9 өдөр\n💰 Том хүн: 2,290,000₮";
+
+  const routed = await routeFastPathText({
+    senderId,
+    text: "beejin",
+    contextualUserText: `${previousReply}\nbeejin`,
+    trips,
+  });
+
+  // Must NOT resolve to the unrelated Chunchin trip.
+  assert.doesNotMatch(routed.matchText, /Чунчин/);
+});

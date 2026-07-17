@@ -536,20 +536,43 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
     // Check aliases — full string OR token-level overlap.
     // This means an alias like "Жанжиажэ" (stored in DB) will match
     // a query containing "жанжиажэ" even without hardcoded replacements.
+    //
+    // Bug (found 2026-07-17 replaying real traffic): "Beejin jinin janjakow
+    // ereen 4 hotiin aylal" — naming the 4-city Beijing/Jining/Zhangjiakou/
+    // Erlian trip by 4 of its own route-name words — matched the UNRELATED
+    // Erlian-Beijing-Tianjin-Jeju CRUISE instead, because the cruise's alias
+    // "Эрээн Бээжин Тяньжин Чежү Пусан круз" loosely shares 2 destination
+    // tokens (Эрээн, Бээжин — both common waypoints on many China routes) and
+    // a full alias hit was worth a flat 80, drowning out the 4-city trip's 4
+    // real matched route-name words (80 vs 4*20=80, plus the cruise's own
+    // partial route match tipped it over). A full/exact alias string match is
+    // a strong, deliberate signal (e.g. "Жанжиажэ" naming a whole trip) and
+    // keeps its full weight; a LOOSE token-overlap hit on a long multi-word
+    // alias is only as strong as the fraction of that alias it covers, so 2
+    // of 6 words no longer outweighs a direct 4-word route-name match.
     const aliases = getAliases(trip);
-    const aliasHit = aliases.some((alias) => {
+    let aliasHit = 0;
+    for (const alias of aliases) {
       const aliasNorm = normText(alias);
-      if (query.includes(aliasNorm) || aliasNorm.includes(query)) return true;
+      if (query.includes(aliasNorm) || aliasNorm.includes(query)) {
+        aliasHit = 1;
+        break;
+      }
       const aliasPhonetic = phoneticLatinText(alias);
       if (
         aliasPhonetic &&
         queryPhonetic &&
         (queryPhonetic.includes(aliasPhonetic) || aliasPhonetic.includes(queryPhonetic))
       ) {
-        return true;
+        aliasHit = 1;
+        break;
       }
-      return hasLooseAliasMatch(query, queryWords, alias, queryPhonetic, queryPhoneticWords);
-    }) ? 1 : 0;
+      if (hasLooseAliasMatch(query, queryWords, alias, queryPhonetic, queryPhoneticWords)) {
+        const aliasTokenCount = Math.max(1, unique(keywordTokens(alias)).length);
+        const looseStrength = aliasTokenCount <= 2 ? 1 : Math.min(1, 2 / aliasTokenCount);
+        aliasHit = Math.max(aliasHit, looseStrength);
+      }
+    }
 
     const matchedWords = unique([
       ...routeKeywords.filter((word) => queryWords.includes(word)),

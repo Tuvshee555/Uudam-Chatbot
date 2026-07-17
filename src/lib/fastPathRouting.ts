@@ -170,11 +170,29 @@ export async function routeFastPathText(input: {
   // --- 2. Stateless current-message-first routing, capturing new ambiguity. ---
   const direct = resolve(text, trips);
   const contextual = contextualUserText !== text ? resolve(contextualUserText, trips) : null;
+  // Bug (found 2026-07-17 replaying real traffic): "beejin" alone after a
+  // Chunchin (unrelated) reply returned Chunchin. isLikelyContextDependentText
+  // treats ANY 1-2 word message as a follow-up reference (needed for real
+  // pronouns like "тэр хэд вэ?"), but a bare destination name like "beejin"
+  // is a complete, self-sufficient query — it happened to resolve AMBIGUOUS
+  // (several real Beijing trips), not "nothing", so it has its own opinion
+  // that must be respected. Only let the contextual winner override when it's
+  // actually one of the direct candidates (the same guard pickFastPathMatchText
+  // already applies below) — otherwise it's a stale unrelated trip hijacking
+  // an unrelated fresh query, exactly the class of bug this file's own
+  // docstring warns about.
+  const directRejectsContextual =
+    direct.status === "ambiguous" &&
+    !(
+      contextual?.status === "verified" &&
+      direct.candidates.some((trip) => trip.id === contextual.trip.id)
+    );
   if (
     contextualUserText !== text &&
     isLikelyContextDependentText(text) &&
     contextual?.status === "verified" &&
-    (direct.status !== "verified" || direct.trip.id !== contextual.trip.id)
+    (direct.status !== "verified" || direct.trip.id !== contextual.trip.id) &&
+    !directRejectsContextual
   ) {
     return {
       matchText: `${contextual.trip.route_name}\n${text}`,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { appendLeadCaptureCta, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, LEAD_CAPTURE_CTA, resolveTripFromUserMessage } from "../src/lib/travelFastPaths";
+import { findTripMatches } from "../src/lib/travelFastPathsSearch";
 import type { TravelTrip } from "../src/lib/travelOps";
 
 const NOW = new Date("2026-06-24T04:00:00.000Z");
@@ -1636,4 +1637,40 @@ test("picture-only request for a trip without visual assets goes silent, program
   const programAsk = buildTripProgramReply("Хайлаар Манжуур 5 өдөр хөтөлбөр", [bare]);
   assert.notEqual(programAsk?.reply, "NOTRIPMEDIA");
   assert.match(programAsk?.reply || "", /Хайлаар Манжуурын аялал/);
+});
+
+test("naming a trip by its own route-name words beats a competing trip's loose alias overlap", () => {
+  // Real bug (2026-07-17): "Beejin jinin janjakow ereen 4 hotiin aylal" —
+  // naming the 4-city trip by 4 of its own route-name words — matched the
+  // UNRELATED Erlian-Beijing-Tianjin-Jeju cruise instead, because the
+  // cruise's alias "Эрээн Бээжин Тяньжин Чежү Пусан круз" loosely shared 2
+  // generic waypoint tokens (Эрээн, Бээжин) and a flat alias-hit bonus (80)
+  // outscored the 4-city trip's real 4-word direct match (4*20=80, tied
+  // before other boosts tipped it to the cruise).
+  const fourCity = trip({
+    id: "four-city",
+    route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+    category: "Газрын аялал",
+    extra: {},
+  });
+  const cruise = trip({
+    id: "cruise",
+    route_name: "Усан онгоцны аялал - Эрээн - Бээжин -Тяньжин - Чежү Пусан",
+    category: "Круйз",
+    extra: {
+      aliases: [
+        "Жэжү круз",
+        "Усан онгоцны аялал",
+        "Круйз аялал",
+        "Эрээн Бээжин Тяньжин Чежү Пусан круз",
+        "Тяньжин Инчон Жэжү круз",
+      ],
+    },
+  });
+
+  const matches = findTripMatches(
+    "Beejin jinin janjakow ereen 4 hotiin aylal sonirhoj bna",
+    [fourCity, cruise],
+  );
+  assert.equal(matches[0]?.trip.id, "four-city");
 });
