@@ -17,7 +17,7 @@ import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceW
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, dbClaimGoodbye, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
-import { appendLeadCaptureCta, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
+import { appendLeadCaptureCta, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
 import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
@@ -976,6 +976,26 @@ async function handleMessage(
     return;
   }
 
+  // Compare questions intentionally mention multiple destinations/products.
+  // Answer them as comparisons before scoped clarification narrows the message
+  // to one destination family and asks the wrong follow-up.
+  if (hasCompareIntent(text)) {
+    const trips = await getTrips();
+    const compareReply = buildCompareReply(await getFastPathText(), trips);
+    if (compareReply) {
+      await deliverFastPathReply({
+        reply: appendLeadCaptureCta(
+          enforceWebsiteForPayment(sanitizeAssistantReply(compareReply)),
+          phoneAlreadyRequested,
+        ),
+        failTag: "compare_fast_path",
+        rememberSource: "api.webhook.compare_fast_path",
+        counter: "webhook.compare_fast_path_total",
+      });
+      return;
+    }
+  }
+
   // The customer's answer fits SEVERAL of the trips we just offered ("шууд
   // нислэгтэй" when both options are direct flights) — re-ask scoped to
   // exactly those, like a human agent would. Letting a matcher rescore the
@@ -992,6 +1012,28 @@ async function handleMessage(
         counter: "webhook.scoped_clarify_total",
       });
       return;
+    }
+  }
+  // Broad structured questions ("Бээжин аялал хэд вэ?") should clarify from
+  // the DB when several active trips match. Do not send these to the model and
+  // risk a silent REFER.
+  {
+    const fastPathText = await getFastPathText();
+    if (isStructuredTripQuestion(fastPathText)) {
+      const resolution = resolveTripFromUserMessage(fastPathText, await getTrips(), {
+        allowLooseFallback: false,
+      });
+      if (resolution.status === "ambiguous" && resolution.candidates.length > 1) {
+        await deliverFastPathReply({
+          reply: enforceWebsiteForPayment(
+            sanitizeAssistantReply(buildAmbiguousTripReply(resolution.candidates)),
+          ),
+          failTag: "structured_clarify",
+          rememberSource: "api.webhook.structured_clarify",
+          counter: "webhook.structured_clarify_total",
+        });
+        return;
+      }
     }
   }
   if (hasDepartureDateAvailabilityIntent(text)) {
@@ -1074,22 +1116,6 @@ async function handleMessage(
         failTag: "discount_fast_path",
         rememberSource: "api.webhook.discount_fast_path",
         counter: "webhook.discount_fast_path_total",
-      });
-      return;
-    }
-  }
-  if (hasCompareIntent(text)) {
-    const trips = await getTrips();
-    const compareReply = buildCompareReply(await getFastPathText(), trips);
-    if (compareReply) {
-      await deliverFastPathReply({
-        reply: appendLeadCaptureCta(
-          enforceWebsiteForPayment(sanitizeAssistantReply(compareReply)),
-          phoneAlreadyRequested,
-        ),
-        failTag: "compare_fast_path",
-        rememberSource: "api.webhook.compare_fast_path",
-        counter: "webhook.compare_fast_path_total",
       });
       return;
     }

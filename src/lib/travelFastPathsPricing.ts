@@ -985,6 +985,25 @@ function formatTripBasePricePremiumCore(trip: TravelTrip) {
     return sections.join("\n");
   }
 
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const roomPrices = Array.isArray(extra.room_prices)
+    ? (extra.room_prices as Array<Record<string, unknown>>)
+    : [];
+  const roomLines = roomPrices
+    .map((room) => {
+      const roomType = typeof room.room_type === "string" && room.room_type.trim()
+        ? room.room_type.trim()
+        : "Өрөөний үнэ";
+      const amount = typeof room.price === "number"
+        ? formatMoney(room.price, typeof room.currency === "string" ? room.currency : currency)
+        : "";
+      return amount ? `• ${roomType}: ${amount}` : "";
+    })
+    .filter(Boolean);
+  if (roomLines.length > 0) {
+    return [...sections, "", "Өрөөний төрлөөр:", ...roomLines.slice(0, 8)].join("\n");
+  }
+
   const flatLines = formatPassengerPriceLines({
     adult: trip.adult_price,
     child: trip.child_price,

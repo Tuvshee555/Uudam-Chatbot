@@ -18,9 +18,9 @@ import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../../lib/reply";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
-import { appendLeadCaptureCta, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
+import { appendLeadCaptureCta, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
 import { extractTripPhotosForReply, hasTripPhotoIntent, MAX_TRIP_PHOTOS } from "../../lib/welcomeFlow";
-import { DUPLICATE_REPLY_NUDGE } from "../../lib/webhookMedia";
+import { DUPLICATE_REPLY_NUDGE, extractPhoneNumber, isPhoneOnlyMessage } from "../../lib/webhookMedia";
 import { getEnv } from "../../lib/env";
 import {
   beginRequestTrace,
@@ -175,7 +175,13 @@ export default async function handler(
       const { systemPrompt, business, pinnedButtonLabels } = await readBusinessData();
       const sessionId = `demo:${normalizedConversationId}`;
       const history = await getHistory(sessionId);
-      const phoneAlreadyRequested = hasAskedForPhone(history);
+      const detectedPhone = extractPhoneNumber(normalizedText);
+      const phoneCollected =
+        Boolean(detectedPhone) ||
+        history.some(
+          (message) => message.role === "user" && extractPhoneNumber(message.text),
+        );
+      const phoneAlreadyRequested = phoneCollected || hasAskedForPhone(history);
       const customerMemory = await getCustomerMemoryText(sessionId);
       // Non-blocking memory merge — same as production Messenger.
       const rememberTurn = () =>
@@ -208,6 +214,25 @@ export default async function handler(
           handoff: true,
         });
       };
+
+      // Keep the local test bot aligned with Messenger: when the customer is
+      // answering the phone-number ask, acknowledge it deterministically
+      // instead of sending the bare number through trip matching.
+      if (detectedPhone && isPhoneOnlyMessage(normalizedText)) {
+        const confirmation =
+          `Баярлалаа! 🙌 Манай аяллын зөвлөх таны ${detectedPhone} дугаарт удахгүй холбогдоно. ` +
+          "Өөр асуух зүйл байвал чөлөөтэй бичээрэй 😊";
+        await appendMessage(sessionId, "user", normalizedText);
+        await appendMessage(sessionId, "assistant", confirmation);
+        await rememberTurn();
+        recordCounter("demo.phone_capture_confirmation_total", 1, {});
+        return res.status(200).json({
+          reply: confirmation,
+          buttons: [],
+          mediaUrls: [],
+          brochureUrl: null,
+        });
+      }
       // Reference resolution + current-message-first routing, identical to the
       // production webhook — the demo used to skip this entirely, so QA runs
       // never exercised the exact matching path Messenger customers hit.
@@ -247,6 +272,26 @@ export default async function handler(
         return res.status(200).json({ reply: deferralReply, buttons: [] });
       }
 
+      // Compare questions mention multiple destinations on purpose. Let the
+      // comparison fast path answer before scoped clarification narrows to one
+      // destination family and turns "A уу B уу?" into "which A variant?".
+      if (hasCompareIntent(normalizedText)) {
+        const trips = await getTrips();
+        const compareReply = buildCompareReply(await getFastPathText(), trips);
+        if (compareReply) {
+          const safeReply = appendLeadCaptureCta(
+            enforceWebsiteForPayment(sanitizeAssistantReply(compareReply)),
+            phoneAlreadyRequested,
+          );
+          await appendMessage(sessionId, "user", normalizedText);
+          if (shouldHandoffSilently(safeReply)) return returnHandoff();
+          await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
+          recordCounter("demo.compare_fast_path_total", 1, {});
+          return res.status(200).json({ reply: safeReply, buttons: [] });
+        }
+      }
+
       // Answer fits several offered candidates — re-ask scoped to exactly
       // those (mirrors the production webhook).
       {
@@ -260,6 +305,28 @@ export default async function handler(
           await rememberTurn();
           recordCounter("demo.scoped_clarify_total", 1, {});
           return res.status(200).json({ reply: clarifyReply, buttons: [] });
+        }
+      }
+
+      // Broad structured questions ("Бээжин аялал хэд вэ?") should clarify
+      // from the DB when several active trips match. Do not send these to the
+      // model and risk a silent REFER.
+      {
+        const fastPathText = await getFastPathText();
+        if (isStructuredTripQuestion(fastPathText)) {
+          const resolution = resolveTripFromUserMessage(fastPathText, await getTrips(), {
+            allowLooseFallback: false,
+          });
+          if (resolution.status === "ambiguous" && resolution.candidates.length > 1) {
+            const clarifyReply = enforceWebsiteForPayment(
+              sanitizeAssistantReply(buildAmbiguousTripReply(resolution.candidates)),
+            );
+            await appendMessage(sessionId, "user", normalizedText);
+            await appendMessage(sessionId, "assistant", clarifyReply);
+            await rememberTurn();
+            recordCounter("demo.structured_clarify_total", 1, {});
+            return res.status(200).json({ reply: clarifyReply, buttons: [] });
+          }
         }
       }
 
@@ -331,24 +398,6 @@ export default async function handler(
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.discount_fast_path_total", 1, {});
-          return res.status(200).json({ reply: safeReply, buttons: [] });
-        }
-      }
-
-      // Fast path: trip comparison
-      if (hasCompareIntent(normalizedText)) {
-        const trips = await getTrips();
-        const compareReply = buildCompareReply(await getFastPathText(), trips);
-        if (compareReply) {
-          const safeReply = appendLeadCaptureCta(
-            enforceWebsiteForPayment(sanitizeAssistantReply(compareReply)),
-            phoneAlreadyRequested,
-          );
-          await appendMessage(sessionId, "user", normalizedText);
-          if (shouldHandoffSilently(safeReply)) return returnHandoff();
-          await appendMessage(sessionId, "assistant", safeReply);
-          await rememberTurn();
-          recordCounter("demo.compare_fast_path_total", 1, {});
           return res.status(200).json({ reply: safeReply, buttons: [] });
         }
       }
@@ -455,7 +504,8 @@ export default async function handler(
         relevantTripNames,
         userText: normalizedText,
         pinnedButtonLabels,
-        phoneRequested: hasAskedForPhone(history),
+        phoneCollected,
+        phoneRequested: phoneAlreadyRequested,
       });
       // Mirrors the production webhook: OpenAI down/overloaded must not mean
       // the customer gets a bare error while a working second model sits

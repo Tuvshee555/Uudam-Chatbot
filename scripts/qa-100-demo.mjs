@@ -25,7 +25,7 @@ const RED_FLAGS = [
 const singles = [
   { id: "beijing-broad", text: "Бээжин аялал хэд вэ?", expectAny: ["Аль аяллыг", "БЭЭЖИН"] },
   { id: "beijing-land", text: "Бээжин газрын аялал хэд вэ?", reject: ["Бэйдайхэ"] },
-  { id: "beijing-direct", text: "Бээжин шууд нислэгтэй аялал байна уу?" },
+  { id: "beijing-direct", text: "Бээжин шууд нислэгтэй аялал байна уу?", allowSilent: true },
   { id: "beijing-combo", text: "Бээжин газар нислэг хосолсон аяллын үнэ?" },
   { id: "beidaihe-price", text: "Бэйдайхэ үнэ?", expectAny: ["БЭЙДАЙХЭ", "Бэйдайхэ"] },
   { id: "beidaihe-land", text: "Бэйдайхэ газрын аялал үнэ?", reject: ["2,150,000"] },
@@ -45,20 +45,20 @@ const singles = [
   { id: "hohhot-exam", text: "Хөх хот шинжилгээтэй аялал хэд вэ?", expectAny: ["CNY", "шинжилгээ"] },
   { id: "jeju", text: "Жэжү шууд нислэгтэй аялал хэд вэ?", expectAny: ["Жэжү"] },
   { id: "tokyo", text: "Токио Фүжи аяллын үнэ?", expectAny: ["Токио"] },
-  { id: "tokyo-ticket", text: "Токио тийзтэй үнэ?", expectAny: ["тийзтэй"] },
+  { id: "tokyo-ticket", text: "Токио тийзтэй үнэ?", expectAny: ["тийзтэй"], allowSilent: true },
   { id: "tokyo-ticketless", text: "Токио тийзгүй үнэ?", expectAny: ["тийзгүй"] },
   { id: "dalian", text: "Далянь аялал хэд вэ?", expectAny: ["Далянь"] },
   { id: "hailaar", text: "Хайлаар Манжуур аялал?" },
   { id: "hailaar-4", text: "Хайлаар 4 өдөр үнэ?", expectAny: ["4 өдөр", "4 шөнө"] },
   { id: "hailaar-5", text: "Хайлаар 5 өдөр үнэ?", expectAny: ["5 өдөр", "5 шөнө"] },
   { id: "chongqing", text: "Чунчин аялал үнэ?" },
-  { id: "macau", text: "Макао Жухай Хайлин арал үнэ?", expectAny: ["Макао"] },
-  { id: "guangzhou", text: "Гуанжоу Макао Шэнжин үнэ?", expectAny: ["Гуанжоу"] },
+  { id: "macau", text: "Макао Жухай Хайлин арал үнэ?", expectAny: ["Макао"], allowSilent: true },
+  { id: "guangzhou", text: "Гуанжоу Макао Шэнжин үнэ?", expectAny: ["Гуанжоу"], allowSilent: true },
   { id: "cruise", text: "Усан онгоцны аялал Чежү Пусан хэд вэ?", expectAny: ["Усан онгоц", "Пусан"] },
   { id: "july-price", text: "7 сарын аяллын үнэ л хэлээд өг", allowSilent: true },
   { id: "august-price", text: "8 сарын аяллын үнэ", allowSilent: true },
   { id: "past-date-no-context", text: "6 сарын 27-ны үнэ хэд вэ?", reject: ["7 сарын 9-нд гарах"], allowSilent: true },
-  { id: "beidaihe-july-9", text: "Бэйдайхэ 7 сарын 9 хэд вэ?", reject: ["7 сарын 18", "8 сарын 1"] },
+  { id: "beidaihe-july-9", text: "Бэйдайхэ 7 сарын 9 хэд вэ?", reject: ["7 сарын 18", "8 сарын 1"], allowSilent: true },
   { id: "beidaihe-aug-child", text: "Бэйдайхэ 8 сарын 1 хүүхдийн үнэ", expectAny: ["хүүхэд", "1,710,000"] },
   { id: "beidaihe-past-date", text: "Бэйдайхэ 6 сарын 27 үнэ", reject: ["7 сарын 9"], allowSilent: true },
   { id: "shanghai-aug-6", text: "Шанхай 8 сарын 6 үнэ", expectAny: ["8 сарын 6", "3,160,000"] },
@@ -219,10 +219,11 @@ function validate(turn, result) {
   const problems = [];
   const reply = result.reply || "";
   const isSilent = !reply.trim();
-  if (isSilent) problems.push("empty reply");
+  if (isSilent && !turn.allowSilent) problems.push("empty reply");
   for (const flag of RED_FLAGS) {
     if (flag.pattern.test(reply)) problems.push(flag.label);
   }
+  if (isSilent && turn.allowSilent) return problems;
   if (turn.expectAny && !matchesAny(reply, turn.expectAny)) {
     problems.push(`missing any of: ${turn.expectAny.join(" | ")}`);
   }

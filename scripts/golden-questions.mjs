@@ -25,6 +25,7 @@ const DEMO_URL = process.env.DEMO_URL || "http://localhost:3004/api/demo";
 // phone number is given).
 const QUESTIONS = [
   { id: "beijing-ambiguous", text: "Бээжин", note: "should ask which of the Beijing variants (clarify), no phone ask" },
+  { id: "beijing-broad-price", text: "Бээжин аялал хэд вэ?", note: "known broad Beijing price question should clarify, not go silent" },
   { id: "beijing-direct-flight", text: "Бээжин шууд нислэгтэй үнэ хэд вэ?", note: "one trip, adult+child price" },
   { id: "beijing-land", text: "нислэггүй Бээжин аялал", note: "land trip only" },
   { id: "year-boundary", text: "1 сарын 15-нд гарах аялал байгаа юу?", note: "must not offer a past January date" },
@@ -47,6 +48,42 @@ const QUESTIONS = [
   { id: "repeat", text: "Бээжин аяллын үнэ хэд вэ?", follow: ["Бээжин аяллын үнэ хэд вэ?"], note: "no scolding on repeat" },
   { id: "landline", text: "Манай оффис 77136633 руу залгаарай гэсэн үү?", note: "77136633 is a landline — must NOT be treated as a lead phone" },
 ];
+
+const QUESTION_ASSERTIONS = {
+  // These are true unknown/no-data checks under the current lead-preservation
+  // policy: customer-side silence is allowed, but leaking REFER/SILENT is not.
+  "beijing-direct-flight": { allowSilent: true },
+  "beijing-broad-price": {
+    expectAny: ["Аль аяллыг", "БЭЭЖИН", "Бэйдайхэ"],
+  },
+  "year-boundary": { allowSilent: true },
+  visa: { allowSilent: true },
+  handoff: { allowSilent: true },
+
+  // A generic objection must not route-match the unrelated Jinin route whose
+  // name contains "үнэтэй шинжилгээтэй".
+  expensive: {
+    reject: ["Жинин", "шинжилгээтэй"],
+  },
+  compare: {
+    expectAny: ["харьцуулалт", "Харьцуулалт"],
+    reject: ["Энэ чиглэлээр хэд хэдэн сонголт"],
+  },
+
+  // The second turn is the customer leaving a phone number. Demo and Messenger
+  // must both acknowledge it, not answer the previous trip question again.
+  "phone-then-question": {
+    follow: {
+      0: {
+        expectAny: ["Баярлалаа", "99112233"],
+        reject: ["Аль аяллыг", "БЭЭЖИН", "Бэйдайхэ"],
+      },
+      1: {
+        reject: ["Утасны дугаараа", "дугаараа үлдээ"],
+      },
+    },
+  },
+};
 
 // A red flag = a substring that should NEVER appear in a customer-facing reply.
 // `strip` (optional) removes legitimate text before the pattern is tested —
@@ -95,6 +132,30 @@ function checkRedFlags(reply) {
   }).map((flag) => flag.label);
 }
 
+function normalizeTurnSpec(question, turn, followIndex) {
+  const base = typeof turn === "string" ? { text: turn } : turn;
+  const assertions = QUESTION_ASSERTIONS[question.id] || {};
+  const override = followIndex === -1
+    ? assertions
+    : (assertions.follow || {})[followIndex] || {};
+  return { ...base, ...override };
+}
+
+function checkTurnExpectations(reply, turn) {
+  const failures = [];
+  if (!turn.allowSilent && !reply.trim()) {
+    failures.push("unexpected empty/silent reply");
+  }
+  if (Array.isArray(turn.expectAny) && turn.expectAny.length > 0) {
+    const matched = turn.expectAny.some((needle) => reply.includes(needle));
+    if (!matched) failures.push(`missing any of: ${turn.expectAny.join(" | ")}`);
+  }
+  for (const needle of turn.reject || []) {
+    if (reply.includes(needle)) failures.push(`unexpected: ${needle}`);
+  }
+  return failures;
+}
+
 async function main() {
   console.log(`Golden-question QA → ${DEMO_URL}\n`);
   let failures = 0;
@@ -102,23 +163,31 @@ async function main() {
 
   for (const q of QUESTIONS) {
     const conversationId = makeConversationId(q.id);
-    const turns = [q.text, ...(q.follow || [])];
+    const turns = [
+      normalizeTurnSpec(q, q.text, -1),
+      ...(q.follow || []).map((turn, index) => normalizeTurnSpec(q, turn, index)),
+    ];
     console.log(`\n■ ${q.id} — ${q.note}`);
     for (const turn of turns) {
       checks += 1;
       try {
-        const reply = await ask(turn, conversationId);
+        const reply = await ask(turn.text, conversationId);
         const flags = checkRedFlags(reply);
+        const expectationFailures = checkTurnExpectations(reply, turn);
         const preview = reply.replace(/\n/g, " ⏎ ").slice(0, 160);
-        if (flags.length) {
+        if (flags.length || expectationFailures.length) {
           failures += 1;
-          console.log(`  ✖ "${turn}"\n    ${preview}\n    RED FLAGS: ${flags.join("; ")}`);
+          const allFailures = [
+            ...flags.map((flag) => `RED FLAG: ${flag}`),
+            ...expectationFailures,
+          ];
+          console.log(`  ✖ "${turn.text}"\n    ${preview}\n    FAILURES: ${allFailures.join("; ")}`);
         } else {
-          console.log(`  ✓ "${turn}" → ${preview}`);
+          console.log(`  ✓ "${turn.text}" → ${preview}`);
         }
       } catch (error) {
         failures += 1;
-        console.log(`  ✖ "${turn}" — request failed: ${error instanceof Error ? error.message : String(error)}`);
+        console.log(`  ✖ "${turn.text}" — request failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }

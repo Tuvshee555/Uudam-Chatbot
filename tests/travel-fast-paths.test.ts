@@ -978,6 +978,34 @@ test("ticketless Tokyo price query only shows the ticketless group", () => {
   assert.doesNotMatch(reply || "", /Онгоцны тийзтэй үнэ/);
 });
 
+test("ticketed price query does not fall back to ticketless price when ticketed group is missing", () => {
+  const reply = buildStructuredTripReply(
+    "Токио тийзтэй үнэ?",
+    [
+      trip({
+        id: "tokyo-ticketed-missing",
+        route_name: "Токио, Фүжи аялал",
+        adult_price: 3490000,
+        child_price: 3250000,
+        extra: {
+          aliases: ["Токио Фүжи", "Токио аялал"],
+          price_groups: [
+            {
+              label: "Онгоцны тийзгүй үнэ",
+              note: "Онгоцны тийзгүй үнэ.",
+              dates: ["Баасан гариг болгон"],
+              adult_price: 3490000,
+              child_price: 3250000,
+            },
+          ],
+        },
+      }),
+    ],
+  );
+
+  assert.equal(reply, "REFER");
+});
+
 test("ticket price comparison keeps the included and excluded labels", () => {
   const reply = buildStructuredTripReply(
     "Токио, Фүжи аялал\nтийзтэйгээ ялгаа?",
@@ -1012,6 +1040,34 @@ test("ticket price comparison keeps the included and excluded labels", () => {
   assert.match(reply || "", /3,490,000₮/);
   assert.match(reply || "", /5,600,000₮/);
   assert.doesNotMatch(reply || "", /📅 Гарах өдрүүд:\s*$/);
+});
+
+test("cruise price reply uses room price table when top-level prices are null", () => {
+  const reply = buildStructuredTripReply(
+    "Усан онгоцны аялал Чежү Пусан хэд вэ?",
+    [
+      trip({
+        id: "cruise",
+        route_name: "Усан онгоцны аялал - Эрээн - Бээжин -Тяньжин - Чежү Пусан",
+        adult_price: null,
+        child_price: null,
+        extra: {
+          aliases: ["Усан онгоцны аялал", "Чежү Пусан круз"],
+          room_prices: [
+            { room_type: "4 ортой цонхтой өрөө", price: 1890000, currency: "MNT" },
+            { room_type: "2 ортой цонхтой өрөө", price: 2390000, currency: "MNT" },
+          ],
+          extra_fees: [
+            { label: "Онгоцонд гарын мөнгө", amount: 710, currency: "CNY", applies_to: "1 хүн" },
+          ],
+        },
+      }),
+    ],
+  );
+
+  assert.match(reply || "", /Усан онгоцны аялал/);
+  assert.match(reply || "", /4 ортой цонхтой өрөө: 1,890,000₮/);
+  assert.match(reply || "", /710\s*CNY/);
 });
 
 test("child age range query is not misread as a date and returns the matching child tier", () => {
@@ -1180,6 +1236,22 @@ test("infant price follow-up stays on the contextual trip instead of matching ex
   assert.match(reply || "", /Бэйдайхэ шар тэнгисийн эрэг/);
   assert.match(reply || "", /Нярай \/0-23 сар\/: 530,000₮/);
   assert.doesNotMatch(reply || "", /үнэтэй шинжилгээтэй/);
+});
+
+test("fresh expensive objection does not match the paid-exam route by word alone", () => {
+  const reply = buildStructuredTripReply(
+    "Үнэтэй юм байна",
+    [
+      trip({
+        id: "jining-expensive-test",
+        route_name: "Жинин - Мини аватар - Хөх хот + үнэтэй шинжилгээтэй",
+        adult_price: 890000,
+        child_price: 750000,
+      }),
+    ],
+  );
+
+  assert.equal(reply, null);
 });
 
 test("broad infant-price query selects the related variant that stores an infant price", () => {
@@ -1451,6 +1523,29 @@ test("compare reply shows seat wording only for scarcity", () => {
 
   assert.match(reply || "", /Суудал цөөн үлдсэн тул захиалга өгөх бол аяллын зөвлөхтэй хурдан холбогдоорой./);
   assert.doesNotMatch(reply || "", /Үлдсэн суудал: 12/);
+});
+
+test("compare reply handles broad destination-vs-destination wording", () => {
+  const reply = buildCompareReply("Бээжин уу Хайнан уу, аль нь дээр вэ?", [
+    trip({
+      id: "beijing-ground",
+      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+      adult_price: 1590000,
+      child_price: 1290000,
+      duration_text: "8 өдөр 7 шөнө",
+    }),
+    trip({
+      id: "hainan-sanya",
+      route_name: "Хайнан - Саньяа шууд нислэгтэй аялал",
+      adult_price: 2990000,
+      child_price: 2790000,
+      duration_text: "9 өдөр / 8 шөнө",
+    }),
+  ]);
+
+  assert.match(reply || "", /Аялал харьцуулалт/);
+  assert.match(reply || "", /БЭЭЖИН/);
+  assert.match(reply || "", /Хайнан/);
 });
 
 test("a direct-flight follow-up on a combo trip keeps the combo disclaimer even with stale contextual text prepended", () => {

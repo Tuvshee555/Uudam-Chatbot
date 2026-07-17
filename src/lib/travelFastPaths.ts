@@ -294,6 +294,23 @@ const COMPARE_KEYWORDS_MN = [
   "vs",
 ];
 const COMPARE_KEYWORDS_EN = ["compare", "comparison", "vs", "versus", "difference", "better"];
+const COMPARE_QUERY_STOP_WORDS = new Set([
+  "аль",
+  "дээр",
+  "сайн",
+  "ямар",
+  "эсвэл",
+  "хооронд",
+  "ялгаа",
+  "ялгаатай",
+  "харьцуул",
+  "байна",
+  "байгаа",
+  "better",
+  "compare",
+  "comparison",
+  "versus",
+]);
 
 export function hasCompareIntent(text: string): boolean {
   const normalized = normText(text);
@@ -544,11 +561,30 @@ export function buildCompareReply(text: string, trips: TravelTrip[]): string | n
   const query = normText(text);
   const activeTrips = trips.filter((trip) => trip.status === "active");
 
-  const matched = activeTrips.filter((trip) => {
+  let matched = activeTrips.filter((trip) => {
     const keywords = unique(keywordTokens(trip.route_name));
     const matchedWords = keywords.filter((word) => query.includes(word));
     return matchedWords.length >= Math.min(2, keywords.length);
   });
+
+  if (matched.length < 2) {
+    const broadTokens = unique(keywordTokens(query))
+      .filter((word) => !COMPARE_QUERY_STOP_WORDS.has(word));
+    const broadMatches: TravelTrip[] = [];
+    for (const token of broadTokens) {
+      const best = activeTrips
+        .filter((trip) => getTripSearchHaystack(trip).includes(token))
+        .sort((a, b) => {
+          const aPrice = typeof a.adult_price === "number" ? a.adult_price : Number.MAX_SAFE_INTEGER;
+          const bPrice = typeof b.adult_price === "number" ? b.adult_price : Number.MAX_SAFE_INTEGER;
+          return aPrice - bPrice;
+        })[0];
+      if (best && !broadMatches.some((trip) => trip.id === best.id)) {
+        broadMatches.push(best);
+      }
+    }
+    if (broadMatches.length >= 2) matched = broadMatches;
+  }
 
   if (matched.length < 2) return null;
   const candidates = matched.slice(0, 4).map((trip) => withFutureDepartureDates(trip));
@@ -1009,6 +1045,7 @@ export function buildStructuredTripReply(
     const matchingGroups = getStructuredPriceGroups(best).filter((group) => priceGroupMatchesTicketPreference(group, ticketPreference));
     const filteredReply = formatSelectedPriceGroups(best, matchingGroups);
     if (filteredReply) return filteredReply;
+    return "REFER";
   }
   if (!askedPrice && !askedDuration && !askedSchedule && !askedDirectFlight && !askedExistence) {
     return buildTripInfoReply(best);
