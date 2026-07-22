@@ -15,6 +15,7 @@ import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/c
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../../lib/reply";
+import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, dbClaimGoodbye, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
@@ -1409,14 +1410,34 @@ async function handleMessage(
     recentAssistantReplies,
   });
   const safeReply = enforcePaymentNeverSelfConfirmed(text, enforceWebsiteForPayment(rewrittenReply));
-  if (shouldSilenceNoDataReply(safeReply)) {
-    logInfo("webhook.ai_no_data_reply_suppressed", {
-      requestId: trace?.requestId,
-      correlationId: trace?.correlationId,
-      platform,
-      senderHash: hashIdentifier(senderId),
-    });
-    recordCounter("webhook.ai_no_data_reply_suppressed_total", 1, { platform });
+  // Wrong-trip guard: the customer clearly asked about trip A but the model
+  // answered with a DIFFERENT destination's price. Route to the same silent
+  // handoff as a no-data reply rather than send a confident wrong answer.
+  const wrongTripLeak = findWrongTripReference({
+    replyText: safeReply,
+    relevantTripNames,
+    catalog: reasoningTrips,
+  });
+  if (shouldSilenceNoDataReply(safeReply) || wrongTripLeak) {
+    if (wrongTripLeak) {
+      logInfo("webhook.ai_wrong_trip_reply_suppressed", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+        askedTrips: wrongTripLeak.relevantTripNames.join(" | "),
+        offendingTrip: wrongTripLeak.offendingTripName,
+      });
+      recordCounter("webhook.ai_wrong_trip_reply_suppressed_total", 1, { platform });
+    } else {
+      logInfo("webhook.ai_no_data_reply_suppressed", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+      });
+      recordCounter("webhook.ai_no_data_reply_suppressed_total", 1, { platform });
+    }
     try {
       if (!(await hasRecentOpenLead(senderId, "handoff"))) {
         await createLead({
@@ -1425,7 +1446,9 @@ async function handleMessage(
           senderId,
           customerMessage: text,
           contactPhone: detectedPhone || "",
-          context: "AI мэдээлэлгүй өгүүлбэр бичсэн тул зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй.",
+          context: wrongTripLeak
+            ? `AI өөр аяллын (${wrongTripLeak.offendingTripName}) хариу өгөх гэсэн тул хэрэглэгчид илгээлгүй зөвлөхөд шилжүүлэв.`
+            : "AI мэдээлэлгүй өгүүлбэр бичсэн тул зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй.",
         });
         await notifyStaffOfLead(
           { kind: "handoff", platform, customerMessage: text, contactPhone: detectedPhone || "" },

@@ -17,6 +17,7 @@ import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } fro
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../../lib/reply";
+import { findWrongTripReference } from "../../lib/tripConsistency";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
 import { appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
@@ -611,6 +612,12 @@ export default async function handler(
         ),
       );
       if (shouldHandoffSilently(reply)) return returnHandoff();
+      // Wrong-trip guard (mirrors the webhook): asked about trip A, model priced
+      // a different destination → silent handoff instead of a confident wrong answer.
+      if (findWrongTripReference({ replyText: reply, relevantTripNames, catalog: reasoningTrips })) {
+        recordCounter("demo.ai_wrong_trip_reply_suppressed_total", 1, {});
+        return returnHandoff();
+      }
 
       // Skip duplicate replies (same as Messenger behavior)
       const lastMessages = history.filter((m) => m.role === "assistant");
