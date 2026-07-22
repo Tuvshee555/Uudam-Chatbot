@@ -37,6 +37,16 @@ const PROGRAM_ONLY_QUERY_WORDS = new Set([
   "itinerary",
 ]);
 
+// Matches MAX_TRIP_PHOTOS in welcomeFlow.ts. Kept local so this module stays a
+// leaf (importing welcomeFlow would drag in its DB/env chain).
+const MAX_PROGRAM_PHOTOS = 5;
+
+function tripGeneralPhotoUrls(trip: TravelTrip): string[] {
+  return (trip.photo_urls || [])
+    .filter((url): url is string => typeof url === "string" && url.startsWith("https://"))
+    .slice(0, MAX_PROGRAM_PHOTOS);
+}
+
 function uniqueTripsByRouteName(trips: TravelTrip[]) {
   const seen = new Set<string>();
   return trips.filter((trip) => {
@@ -266,15 +276,30 @@ export function buildTripProgramReply(
     };
   }
 
-  // The customer asked SPECIFICALLY for pictures and this trip has neither
-  // photos nor a brochure. Policy (owner): what the bot cannot provide, it
-  // does not talk around — stay silent, staff answers from the Meta inbox.
-  // The token below matches the no-data silence patterns, so both the
-  // webhook and the demo suppress it and log the handoff identically.
+  // The customer asked SPECIFICALLY for pictures. Every active trip stores its
+  // photos in the top-level photo_urls column, NOT in the extra.program_images
+  // that getTripProgramMediaUrls reads above — so send those. Bug (found
+  // 2026-07-22 probing the live demo/webhook): without this, "X аяллын зураг"
+  // for a trip that HAS photos fell straight through to the silent branch
+  // below, so a customer asking for pictures of a trip that has pictures got
+  // silence + a staff handoff on all 14 photo trips.
   const wantsPicturesOnly =
     /зураг|zurag|photo|picture|пост(?:ер)?/i.test(text) &&
     !/хөтөлбөр|hutulbur|program|itinerary|өдөр\s*өдөр|day\s*by\s*day/i.test(text);
   if (wantsPicturesOnly) {
+    const photoUrls = tripGeneralPhotoUrls(best);
+    if (photoUrls.length > 0) {
+      return {
+        reply: `✈️ ${best.route_name}${summaryBlock}\n\nАяллын зургуудыг илгээж байна.`,
+        trip: best,
+        brochure: null,
+        mediaUrls: photoUrls,
+      };
+    }
+    // Genuinely no photos AND no brochure. Policy (owner): what the bot cannot
+    // provide, it does not talk around — stay silent, staff answers from the
+    // Meta inbox. The token below matches the no-data silence patterns, so both
+    // the webhook and the demo suppress it and log the handoff identically.
     return {
       reply: TRIP_MEDIA_UNAVAILABLE_SILENT,
       trip: best,

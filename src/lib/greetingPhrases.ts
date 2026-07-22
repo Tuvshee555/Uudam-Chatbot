@@ -45,3 +45,14 @@ export function isKnownGreetingPhrase(text: string): boolean {
   if (!norm) return false;
   return GENERIC_OPENERS.some((w) => norm === w);
 }
+
+/**
+ * Deterministic reply for a bare greeting that arrives mid-conversation (the
+ * first-message welcome flow with buttons is handled separately in the
+ * webhook). Sent instead of routing the greeting to the model: when the
+ * previous turn was a multi-trip clarification, the model re-emits that
+ * clarification's price list on "hi" ~50% of the time (found 2026-07-22 in the
+ * 100-question sweep). A greeting asks nothing and must never re-serve a trip.
+ */
+export const MID_CONVERSATION_GREETING_REPLY =
+  "Сайн байна уу! 😊 Аяллын талаар асуух зүйл байвал надад хэлээрэй. Би танд туслахад бэлэн байна.";

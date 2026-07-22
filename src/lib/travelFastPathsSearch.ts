@@ -521,7 +521,7 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
   const matches: TripMatch[] = [];
   for (const trip of trips) {
     if (!canMatchTripStatus(trip, options)) continue;
-    if (wantsCombo && !tripIsLandFlightCombo(trip)) continue;
+    if (wantsCombo && !tripMatchesLandFlightComboIntent(trip)) continue;
     if (wantsDirectFlight && !tripIsDirectFlight(trip)) continue;
     if (landOnly && !wantsFlight && !tripIsLandOnly(trip)) continue;
     if (wantsSeaBeach && !tripHasSeaBeach(trip)) continue;
@@ -614,6 +614,7 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
     }
     if (wantsCombo) {
       if (isCombo) intentBoost += 160;
+      else if (tripMatchesLandFlightComboIntent(trip)) intentBoost += 120;
       else intentBoost -= 140;
     }
     if (wantsFlight && isCombo) intentBoost += 35;
@@ -952,6 +953,25 @@ export function tripIsLandFlightCombo(trip: TravelTrip): boolean {
       haystack.includes("нислэг") &&
       haystack.includes("хосолсон"))
   );
+}
+
+function tripMatchesLandFlightComboIntent(trip: TravelTrip): boolean {
+  if (tripIsLandFlightCombo(trip)) return true;
+  const haystack = normText(
+    [
+      trip.category || "",
+      trip.route_name,
+      trip.source_description || "",
+      trip.notes || "",
+      ...getAliases(trip),
+    ].join(" "),
+  );
+  // Some imported combo products say only "хосолсон аялал" in the source
+  // description, not the stricter "газар нислэг хосолсон" category. When the
+  // customer explicitly asks for a land+flight/combo variant, include these
+  // inferred combo trips so the resolver does not fall through to the model
+  // and guess the plain direct-flight sibling.
+  return haystack.includes("хосолсон") && !tripIsDirectFlight(trip);
 }
 
 function tripIsLandOnly(trip: TravelTrip): boolean {

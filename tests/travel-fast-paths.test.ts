@@ -344,6 +344,35 @@ test("prefers the direct-flight Tengeriin Khaalga trip over longer variants", ()
   assert.doesNotMatch(reply || "", /Чунчин/);
 });
 
+test("prefers inferred combo Tengeriin Khaalga trip when user asks газар нислэгтэй", () => {
+  const reply = buildStructuredTripReply(
+    "Тэнгэрийн хаалга газар нислэгтэй хэд вэ?",
+    [
+      trip({
+        id: "direct",
+        route_name: "Тэнгэрийн хаалга - шууд нислэгтэй",
+        category: "шууд нислэгтэй аялал",
+        adult_price: 2990000,
+        child_price: 2790000,
+        source_description: "8 өдөр 7 шөнө. УБ - Жанжиажэ - УБ шууд нислэгтэй.",
+      }),
+      trip({
+        id: "combo",
+        route_name: "Тэнгэрийн хаалга-Чунчин",
+        category: "",
+        adult_price: 3290000,
+        child_price: 2990000,
+        source_description: "8 өдөр 7 шөнө. Тэнгэрийн хаалга, Чунчин хосолсон аялал.",
+      }),
+    ],
+    NOW,
+  );
+
+  assert.match(reply || "", /^✈️ Тэнгэрийн хаалга-Чунчин/m);
+  assert.match(reply || "", /3,290,000₮/);
+  assert.doesNotMatch(reply || "", /^✈️ Тэнгэрийн хаалга - шууд нислэгтэй/m);
+});
+
 test("answers that hybrid land+flight route is not a direct flight", () => {
   const reply = buildStructuredTripReply(
     "Бээжин Бэйдэхэ газар нислэг хосолсон аялал шууд нислэгтэй юу?",
@@ -1255,6 +1284,30 @@ test("fresh expensive objection does not match the paid-exam route by word alone
   assert.equal(reply, null);
 });
 
+test("ambiguous passenger total question shows totals for each possible trip", () => {
+  const reply = buildStructuredTripReply(
+    "Бэйдайхэ 2 том 1 хүүхэд нийт хэд вэ",
+    [
+      trip({
+        id: "beidaihe-ground",
+        route_name: "ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ-БЭЭЖИНГИЙН ГАЗРЫН АЯЛАЛ",
+        adult_price: 1690000,
+        child_price: 1390000,
+      }),
+      trip({
+        id: "beidaihe-combo",
+        route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+        adult_price: 2150000,
+        child_price: 1710000,
+      }),
+    ],
+  );
+
+  assert.match(reply || "", /4,770,000₮/);
+  assert.match(reply || "", /6,010,000₮/);
+  assert.match(reply || "", /Аль аяллынх нь зөв болохыг сонгоорой/);
+});
+
 test("fresh expensive objection gets a generic budget follow-up without route guessing", () => {
   const reply = buildPriceObjectionReply("Үнэтэй юм байна");
 
@@ -1650,6 +1703,32 @@ test("picture-only request for a trip without visual assets goes silent, program
   const programAsk = buildTripProgramReply("Хайлаар Манжуур 5 өдөр хөтөлбөр", [bare]);
   assert.notEqual(programAsk?.reply, "NOTRIPMEDIA");
   assert.match(programAsk?.reply || "", /Хайлаар Манжуурын аялал/);
+});
+
+test("picture-only request for a trip WITH photos sends those photos, never silence", () => {
+  // Real bug (found 2026-07-22 probing the live demo/webhook): every active
+  // trip stores its photos in the top-level photo_urls column, but the program
+  // builder's media lookup only reads extra.program_images/media_assets. So a
+  // photos-only ask ("X аяллын зураг") for a trip that HAS photos fell through
+  // to the NOTRIPMEDIA silent branch — the customer asked for pictures of a
+  // trip that has pictures and got silence + a staff handoff on all 14 photo
+  // trips. photo_urls must be the fallback media source.
+  const withPhotos = trip({
+    id: "with-photos",
+    route_name: "Далянь хотын шууд нислэгтэй аялал",
+    adult_price: 2890000,
+    extra: {},
+    photo_urls: [
+      "https://cdn.example.com/dalian-1.jpg",
+      "https://cdn.example.com/dalian-2.jpg",
+      "https://cdn.example.com/dalian-3.jpg",
+      "https://cdn.example.com/dalian-4.jpg",
+    ],
+  });
+  const photoAsk = buildTripProgramReply("Далянь аяллын зураг", [withPhotos]);
+  assert.notEqual(photoAsk?.reply, "NOTRIPMEDIA");
+  assert.deepEqual(photoAsk?.mediaUrls, withPhotos.photo_urls);
+  assert.match(photoAsk?.reply || "", /Далянь хотын шууд нислэгтэй аялал/);
 });
 
 test("naming a trip by its own route-name words beats a competing trip's loose alias overlap", () => {

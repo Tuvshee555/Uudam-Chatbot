@@ -7,6 +7,7 @@ import { rateLimitAsync } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone } from "../../lib/conversation";
 import { buildContextualUserText, isLikelyContextDependentText } from "../../lib/contextualText";
+import { isKnownGreetingPhrase, MID_CONVERSATION_GREETING_REPLY } from "../../lib/greetingPhrases";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
@@ -17,7 +18,7 @@ import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceW
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, dbClaimGoodbye, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
-import { appendLeadCaptureCta, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
+import { appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
 import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
@@ -414,6 +415,25 @@ async function handleMessage(
       });
     }
     // Generic opener — greeting sent, nothing else to do. Return.
+    return;
+  }
+
+  // ── Mid-conversation bare greeting ─────────────────────────────────────────
+  // The first-message welcome (with buttons) already returned above. A bare
+  // greeting on any later turn (or a first turn where the welcome didn't fire —
+  // Instagram, greeting disabled) gets a deterministic friendly reply instead
+  // of the model. Without this it falls through to the model, which — when the
+  // previous turn was a multi-trip clarification — re-emits that clarification's
+  // price list on "hi" ~50% of the time (found 2026-07-22). A greeting asks
+  // nothing and must never re-serve a stale trip. Any attachment riding along
+  // with the text is still processed by scheduleAttachmentDocumentPipeline.
+  if (isKnownGreetingPhrase(text)) {
+    await deliverFastPathReply({
+      reply: MID_CONVERSATION_GREETING_REPLY,
+      failTag: "greeting_fast_path",
+      rememberSource: "api.webhook.greeting_fast_path",
+      counter: "webhook.greeting_fast_path_total",
+    });
     return;
   }
 
@@ -1003,9 +1023,10 @@ async function handleMessage(
   {
     const routed = await getRouted();
     if (routed.scopedClarify && routed.scopedClarify.length > 0) {
+      const totalReply = buildAmbiguousPassengerTotalReply(await getFastPathText(), routed.scopedClarify);
       const clarifyBody = routed.scopedClarifyNote
-        ? `${routed.scopedClarifyNote}\n${buildAmbiguousTripReply(routed.scopedClarify)}`
-        : buildAmbiguousTripReply(routed.scopedClarify);
+        ? `${routed.scopedClarifyNote}\n${totalReply || buildAmbiguousTripReply(routed.scopedClarify)}`
+        : totalReply || buildAmbiguousTripReply(routed.scopedClarify);
       await deliverFastPathReply({
         reply: enforceWebsiteForPayment(sanitizeAssistantReply(clarifyBody)),
         failTag: "scoped_clarify",
@@ -1025,9 +1046,10 @@ async function handleMessage(
         allowLooseFallback: false,
       });
       if (resolution.status === "ambiguous" && resolution.candidates.length > 1) {
+        const totalReply = buildAmbiguousPassengerTotalReply(fastPathText, resolution.candidates);
         await deliverFastPathReply({
           reply: enforceWebsiteForPayment(
-            sanitizeAssistantReply(buildAmbiguousTripReply(resolution.candidates)),
+            sanitizeAssistantReply(totalReply || buildAmbiguousTripReply(resolution.candidates)),
           ),
           failTag: "structured_clarify",
           rememberSource: "api.webhook.structured_clarify",

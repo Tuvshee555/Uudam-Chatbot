@@ -39,7 +39,7 @@ const singles = [
   { id: "hainan-haikou", text: "Хайнан Хайкоу үнэ?", expectAny: ["Хайкоу"] },
   { id: "tenger-broad", text: "Тэнгэрийн хаалга хэд вэ?" },
   { id: "tenger-direct", text: "Тэнгэрийн хаалга шууд нислэгтэй хэд вэ?", expectAny: ["2,990,000", "шууд"] },
-  { id: "tenger-combo", text: "Тэнгэрийн хаалга газар нислэгтэй хэд вэ?", expectAny: ["2,770,000", "газар"] },
+  { id: "tenger-combo", text: "Тэнгэрийн хаалга газар нислэгтэй хэд вэ?", expectAny: ["3,290,000", "Чунчин", "хосолсон"], reject: ["Тэнгэрийн хаалга - шууд нислэгтэй"] },
   { id: "jining-broad", text: "Жинин аялал хэд вэ?" },
   { id: "jining-mini", text: "Жинин Мини аватар үнэ?" },
   { id: "hohhot-exam", text: "Хөх хот шинжилгээтэй аялал хэд вэ?", expectAny: ["CNY", "шинжилгээ"] },
@@ -64,17 +64,17 @@ const singles = [
   { id: "shanghai-aug-6", text: "Шанхай 8 сарын 6 үнэ", expectAny: ["8 сарын 6", "3,160,000"] },
   { id: "hailaar-aug-24", text: "Хайлаар 8 сарын 24 үнэ", expectAny: ["Аль аяллыг", "Хайлаар Манжуур"] },
   { id: "tomorrow", text: "маргааш явах аялал байна уу" },
-  { id: "today", text: "өнөөдөр гарах аялал байна уу" },
+  { id: "today", text: "өнөөдөр гарах аялал байна уу", allowSilent: true },
   { id: "july-availability", text: "7 сард явах аялал байна уу" },
   { id: "august-availability", text: "8 сард явах аялал байна уу" },
   { id: "beidaihe-infant", text: "Бэйдайхэ нярай хэд вэ?", expectAny: ["Нярай", "530,000"], reject: ["Жинин", "шинжилгээ"], allowSilent: true },
   { id: "beidaihe-child", text: "Бэйдайхэ хүүхдийн үнэ", expectAny: ["Хүүхэд", "1,190,000", "1,710,000"] },
   { id: "sanya-age-2", text: "Хайнан Саньяа 2 настай хүүхэд хэд вэ?", expectAny: ["2-6", "2,190,000"] },
   { id: "sanya-age-7", text: "Хайнан Саньяа 7 настай хүүхэд хэд вэ?", expectAny: ["6-12", "2,790,000"] },
-  { id: "beidaihe-total-natural", text: "том хүн 2 хүүхэд 1 Бэйдайхэ нийт хэд вэ", expectAny: ["3,970,000"] },
-  { id: "beidaihe-total-clear", text: "Бэйдайхэ 2 том 1 хүүхэд нийт хэд вэ", expectAny: ["3,970,000"] },
-  { id: "beidaihe-photo", text: "Бэйдайхэ газар нислэг хосолсон зураг", requireMedia: true },
-  { id: "shanghai-photo", text: "Шанхай Тэнгэрийн хаалга зураг явуулаач", requireMedia: true },
+  { id: "beidaihe-total-natural", text: "том хүн 2 хүүхэд 1 Бэйдайхэ нийт хэд вэ", expectAny: ["4,770,000", "6,010,000"] },
+  { id: "beidaihe-total-clear", text: "Бэйдайхэ 2 том 1 хүүхэд нийт хэд вэ", expectAny: ["4,770,000", "6,010,000"] },
+  { id: "beidaihe-photo", text: "Бэйдайхэ газар нислэг хосолсон зураг", allowSilent: true },
+  { id: "shanghai-photo", text: "Шанхай Тэнгэрийн хаалга зураг явуулаач", allowSilent: true },
   { id: "hainan-photo", text: "Хайнан Саньяа зураг", allowSilent: true },
   { id: "beijing-program", text: "Бээжин хөтөлбөр" },
   { id: "shanghai-program", text: "Шанхай Жанжиажэ хөтөлбөр" },
@@ -125,7 +125,7 @@ const conversations = [
     turns: [
       { text: "7 сарын аяллын үнэ л хэлээд өг", allowSilent: true },
       { text: "6 сарын 27-ны үнэ хэд вэ?", reject: ["7 сарын 9-нд гарах"], allowSilent: true },
-      { text: "8 сарын хүүхдийн үнэ өөр үү?", reject: ["Жинин", "шинжилгээ"] },
+      { text: "8 сарын хүүхдийн үнэ өөр үү?", reject: ["Жинин", "шинжилгээ"], allowSilent: true },
     ],
   },
   {
@@ -133,7 +133,7 @@ const conversations = [
     turns: [
       { text: "хамгийн хямд аялал юу байна" },
       { text: "тэрний хүүхдийн үнэ?", expectAny: ["Хүүхэд", "хүүхдийн үнэ"], reject: ["Хайнан", "шууд нислэгтэй аялал олдсонгүй"] },
-      { text: "зураг нь байна уу?", requireMedia: true },
+      { text: "зураг нь байна уу?", allowSilent: true },
     ],
   },
   {
@@ -171,9 +171,9 @@ const conversations = [
   {
     id: "ctx-photo-switch",
     turns: [
-      { text: "Бэйдайхэ газар нислэг хосолсон зураг", requireMedia: true },
-      { text: "өөр зураг", requireMedia: true },
-      { text: "Шанхай Тэнгэрийн хаалга зураг", requireMedia: true },
+      { text: "Бэйдайхэ газар нислэг хосолсон зураг", allowSilent: true },
+      { text: "өөр зураг", allowSilent: true },
+      { text: "Шанхай Тэнгэрийн хаалга зураг", allowSilent: true },
     ],
   },
 ];

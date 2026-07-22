@@ -102,6 +102,103 @@ function hasInfantPrice(trip: TravelTrip): boolean {
   );
 }
 
+function firstPassengerPrice(trip: TravelTrip, key: "adult_price" | "child_price" | "infant_price"): number | null {
+  if (key === "adult_price" && typeof trip.adult_price === "number") return trip.adult_price;
+  if (key === "child_price" && typeof trip.child_price === "number") return trip.child_price;
+  for (const group of getStructuredPriceGroups(trip)) {
+    const value = group[key];
+    if (typeof value === "number") return value;
+  }
+  for (const group of getPriceGroups(trip)) {
+    const value = group[key];
+    if (typeof value === "number") return value;
+  }
+  return null;
+}
+
+function parsePassengerTotalRequest(text: string): { adultCount: number; childCount: number; infantCount: number } | null {
+  const normalized = normText(text);
+  if (!/(нийт|niit|total|хэд болох|hed boloh)/i.test(normalized)) return null;
+
+  const findCount = (patterns: RegExp[]) => {
+    for (const pattern of patterns) {
+      const match = pattern.exec(normalized);
+      if (match) return Number.parseInt(match[1], 10);
+    }
+    return 0;
+  };
+
+  const adultCount = findCount([
+    /том\s*хүн\s*(\d+)/i,
+    /(\d+)\s*том(?:\s*хүн)?/i,
+    /adult\s*(\d+)/i,
+    /(\d+)\s*adult/i,
+  ]);
+  const childCount = findCount([
+    /хүүхэд\s*(\d+)/i,
+    /(\d+)\s*хүүхэд/i,
+    /huuhed\s*(\d+)/i,
+    /(\d+)\s*huuhed/i,
+    /child\s*(\d+)/i,
+    /(\d+)\s*child/i,
+  ]);
+  const infantCount = findCount([
+    /нярай\s*(\d+)/i,
+    /(\d+)\s*нярай/i,
+    /infant\s*(\d+)/i,
+    /(\d+)\s*infant/i,
+  ]);
+
+  if (adultCount + childCount + infantCount <= 0) return null;
+  return { adultCount, childCount, infantCount };
+}
+
+function formatPassengerTotalLine(trip: TravelTrip, counts: { adultCount: number; childCount: number; infantCount: number }): string | null {
+  const currency = trip.currency || "MNT";
+  const adult = firstPassengerPrice(trip, "adult_price");
+  const child = firstPassengerPrice(trip, "child_price");
+  const infant = firstPassengerPrice(trip, "infant_price");
+  const parts: string[] = [];
+  let total = 0;
+
+  if (counts.adultCount > 0) {
+    if (typeof adult !== "number") return null;
+    total += counts.adultCount * adult;
+    parts.push(`${counts.adultCount} том хүн x ${formatMoney(adult, currency)}`);
+  }
+  if (counts.childCount > 0) {
+    if (typeof child !== "number") return null;
+    total += counts.childCount * child;
+    parts.push(`${counts.childCount} хүүхэд x ${formatMoney(child, currency)}`);
+  }
+  if (counts.infantCount > 0) {
+    if (typeof infant !== "number") return null;
+    total += counts.infantCount * infant;
+    parts.push(`${counts.infantCount} нярай x ${formatMoney(infant, currency)}`);
+  }
+
+  return `• ${trip.route_name}: ${formatMoney(total, currency)} (${parts.join(" + ")})`;
+}
+
+export function buildAmbiguousPassengerTotalReply(
+  text: string,
+  trips: TravelTrip[],
+): string | null {
+  const counts = parsePassengerTotalRequest(text);
+  if (!counts || trips.length < 2) return null;
+  const lines = trips
+    .slice(0, 5)
+    .map((trip) => formatPassengerTotalLine(trip, counts))
+    .filter((line): line is string => Boolean(line));
+  if (lines.length < 2) return null;
+  return [
+    "Энэ чиглэлээр хэд хэдэн хувилбар байгаа тул нийт үнийг тус бүрээр нь бодож өгье:",
+    ...lines,
+    "",
+    "Аль аяллынх нь зөв болохыг сонгоорой.",
+  ].join("\n");
+}
+
 export function hasDiscountIntent(text: string): boolean {
   const normalized = normText(text);
   const hasMn = DISCOUNT_KEYWORDS_MN.some((keyword) => normalized.includes(keyword));
@@ -137,7 +234,11 @@ export function buildDiscountReply(
 ): string | null {
   const { best: bestRaw, ambiguous } = findBestTripMatch(text, trips);
   if (!bestRaw) {
-    if (ambiguous.length) return buildAmbiguousTripReply(ambiguous);
+    if (ambiguous.length) {
+      const totalReply = buildAmbiguousPassengerTotalReply(text, ambiguous);
+      if (totalReply) return totalReply;
+      return buildAmbiguousTripReply(ambiguous);
+    }
     const soldOut = buildSoldOutTripReply(text, trips);
     if (soldOut) return soldOut;
     const directUnavailable = buildDirectFlightUnavailableReply(text, trips);
@@ -299,7 +400,12 @@ export function buildSeatsReply(text: string, trips: TravelTrip[]): string | nul
   if (!best) {
     const soldOut = buildSoldOutTripReply(text, trips);
     if (soldOut) return soldOut;
-    return ambiguous.length ? buildAmbiguousTripReply(ambiguous) : null;
+    if (ambiguous.length) {
+      const totalReply = buildAmbiguousPassengerTotalReply(text, ambiguous);
+      if (totalReply) return totalReply;
+      return buildAmbiguousTripReply(ambiguous);
+    }
+    return null;
   }
 
   return buildTripInfoReply(best);
@@ -934,6 +1040,8 @@ export function buildStructuredTripReply(
   if (!isStructuredTripQuestion(text) && !hasDatePriceConstraint(text)) {
     if (!routeOnlyCandidate?.best) {
       if (routeOnlyCandidate?.ambiguous?.length) {
+        const totalReply = buildAmbiguousPassengerTotalReply(currentLine, routeOnlyCandidate.ambiguous);
+        if (totalReply) return totalReply;
         return buildAmbiguousTripReply(routeOnlyCandidate.ambiguous);
       }
       const soldOut = buildSoldOutTripReply(text, trips);
@@ -959,7 +1067,11 @@ export function buildStructuredTripReply(
     }
   }
   if (!bestRaw) {
-    if (ambiguous.length) return buildAmbiguousTripReply(ambiguous);
+    if (ambiguous.length) {
+      const totalReply = buildAmbiguousPassengerTotalReply(currentLine, ambiguous);
+      if (totalReply) return totalReply;
+      return buildAmbiguousTripReply(ambiguous);
+    }
     const soldOut = buildSoldOutTripReply(text, trips);
     if (soldOut) return soldOut;
     const directUnavailable = buildDirectFlightUnavailableReply(text, trips);
