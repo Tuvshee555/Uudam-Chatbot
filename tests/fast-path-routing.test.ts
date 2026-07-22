@@ -360,3 +360,33 @@ test("a bare destination word that's ambiguous on its own is not hijacked by an 
   // Must NOT resolve to the unrelated Chunchin trip.
   assert.doesNotMatch(routed.matchText, /Чунчин/);
 });
+
+test("a plain greeting is never treated as a context-dependent follow-up", async () => {
+  // Real bug (2026-07-22): a returning customer typed just "hi" two days
+  // after asking about a trip, and got that trip's stale price/dates
+  // re-served instead of a fresh greeting. Root cause: isLikelyContextDependentText's
+  // words.length<=2 rule treats EVERY short message as a follow-up
+  // reference, with no exception for an actual greeting — which asks
+  // nothing and has no context to resolve. This is a wider case of the
+  // same bug class as the "beejin"/Chunchin fix above: a same-message
+  // result (here, "no trip mentioned at all" rather than "ambiguous")
+  // must not be silently overridden by an unrelated previous reply.
+  const senderId = "route-test-greeting-not-context-hijacked";
+  await clearClarificationState(senderId);
+  const beijingCombo = trip({
+    id: "beijing-combo",
+    route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+    category: "Газар нислэг хосолсон",
+  });
+  const previousReply =
+    "✈️ Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал\n💰 Үнэ: Том хүн 2,150,000₮";
+
+  const routed = await routeFastPathText({
+    senderId,
+    text: "hi",
+    contextualUserText: `${previousReply}\nhi`,
+    trips: [beijingCombo],
+  });
+
+  assert.equal(routed.matchText, "hi");
+});

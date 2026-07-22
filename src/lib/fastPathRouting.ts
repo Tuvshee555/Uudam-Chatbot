@@ -24,6 +24,7 @@ import { isLikelyContextDependentText, pickFastPathMatchText } from "./contextua
 import { parseDepartureDateText, tripMatchesRequestedDate } from "./travelDates";
 import { getTripSearchHaystack, phoneticLatinText, resolveTripFromUserMessage } from "./travelFastPathsSearch";
 import type { TravelTrip } from "./travelTypes";
+import { isKnownGreetingPhrase } from "./greetingPhrases";
 
 /**
  * Attribute answer matching against offered candidates: which of them contain
@@ -169,6 +170,15 @@ export async function routeFastPathText(input: {
 
   // --- 2. Stateless current-message-first routing, capturing new ambiguity. ---
   const direct = resolve(text, trips);
+  // Bug (found 2026-07-22 replaying real traffic): "hi" sent two days after
+  // asking about a trip got that trip's stale price/dates re-served. A
+  // greeting asks nothing and has no context to resolve — checked here (not
+  // just in buildContextualUserText, which now never builds that pollution
+  // for a greeting in the first place) so routeFastPathText is never
+  // dependent on a caller having sanitized contextualUserText first.
+  if (contextualUserText !== text && direct.status === "not_found" && isKnownGreetingPhrase(text)) {
+    return { matchText: text, scopedClarify: null };
+  }
   const contextual = contextualUserText !== text ? resolve(contextualUserText, trips) : null;
   // Bug (found 2026-07-17 replaying real traffic): "beejin" alone after a
   // Chunchin (unrelated) reply returned Chunchin. isLikelyContextDependentText

@@ -168,26 +168,11 @@ export async function isFirstMessage(senderId: string): Promise<boolean> {
 
 // ─── Generic message detection ───────────────────────────────────────────────
 
-// Short generic openers that should trigger the greeting + buttons.
-// Anything more specific (trip names, destinations, questions) skips the greeting.
-const GENERIC_OPENERS = [
-  "сайн уу", "сайнуу", "сайн", "hi", "hello", "hey", "сайн байна уу",
-  "байна уу", "мэнд", "нүүр", "нүүрх", "хэллоу", "хай", "мэндчилье",
-  "ассалам", "привет", "өдрийн мэнд", "оюу", "ok", "ок", "ок",
-  "👋", "😊", "🙏", "хэрхэн", "юу байна", "та нар",
-];
-
-/**
- * Returns true if the message is a generic opener that should trigger the
- * full greeting flow. Returns false if the person already asked something
- * specific — in that case, skip the greeting and just answer.
- */
-export function isGenericOpener(text: string): boolean {
-  const norm = text.trim().toLowerCase().replace(/[!?.🙏👋😊]/g, "").trim();
-  if (!norm || norm.length <= 2) return true;
-  // Exact match only — "сайн уу бид явна шүү" is NOT generic even though it starts with "сайн уу"
-  return GENERIC_OPENERS.some((w) => norm === w);
-}
+// Generic-opener word list and matchers now live in greetingPhrases.ts (a
+// dependency-free leaf module) so contextualText.ts can use the same list
+// without pulling in this file's DB/env import chain. Re-exported here so
+// existing callers (webhook.ts, webhookPhotoOnly.ts) are unaffected.
+export { isGenericOpener, isKnownGreetingPhrase } from "./greetingPhrases";
 
 // ─── Quick-reply button labels ────────────────────────────────────────────────
 

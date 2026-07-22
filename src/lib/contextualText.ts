@@ -14,6 +14,8 @@
  * trip the customer is asking about right now.
  */
 
+import { isKnownGreetingPhrase } from "./greetingPhrases";
+
 export function normalizeContextText(text: string) {
   return text
     .normalize("NFKC")
@@ -26,6 +28,15 @@ export function normalizeContextText(text: string) {
 export function isLikelyContextDependentText(text: string) {
   const normalized = normalizeContextText(text);
   if (!normalized) return false;
+  // Bug (found 2026-07-22 replaying real traffic): a customer typed just
+  // "hi" two days after asking about a trip, and got that trip's price/dates
+  // re-served instead of a greeting — the words.length<=2 rule below treats
+  // EVERY short message as a follow-up reference, with no exception for an
+  // actual greeting, which carries no question to resolve via context at
+  // all. A real greeting is never context-dependent, checked BEFORE the
+  // short-text catch-all (which still correctly keeps real short answers
+  // like "5" or "beejin" context-dependent/self-resolving).
+  if (isKnownGreetingPhrase(text)) return false;
   const words = normalized.split(/\s+/).filter(Boolean);
   if (words.length <= 2) return true;
   const referentialHints = [
