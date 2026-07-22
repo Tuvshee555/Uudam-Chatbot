@@ -159,16 +159,21 @@ export function priceGroupMatchesTicketPreference(
 export function formatSelectedPriceGroups(
   trip: TravelTrip,
   groups: Array<Record<string, unknown>>,
+  now = new Date(),
 ): string | null {
   if (!groups.length) return null;
   const currency = trip.currency || "MNT";
   const lines: string[] = [`✈️ ${trip.route_name}`, "💰 Үнэ:"];
   for (const group of groups) {
     const groupLabel = typeof group.label === "string" ? group.label : "";
-    const dateLabel = Array.isArray(group.dates) && (group.dates as string[]).length > 0
-      ? formatGroupDateLabel(group.dates as string[])
+    const rawDates = getPriceGroupDisplayDates(group);
+    const futureDates = filterFutureDepartureDates(rawDates, now);
+    if (rawDates.length > 0 && futureDates.length === 0) continue;
+    const dateLabel = futureDates.length > 0
+      ? formatGroupDateLabel(futureDates)
       : "";
-    if (groupLabel) lines.push("", groupLabel);
+    const labelHasDates = normalizeMnDate(groupLabel).length > 0;
+    if (groupLabel && !labelHasDates) lines.push("", groupLabel);
     if (dateLabel && dateLabel !== groupLabel) lines.push(dateLabel);
     lines.push(...formatPassengerPriceLines({
       adult: typeof group.adult_price === "number" ? group.adult_price : null,
@@ -179,6 +184,7 @@ export function formatSelectedPriceGroups(
       currency,
     }));
   }
+  if (lines.length === 2) return null;
   const feesLine = formatExtraFeesLine(trip);
   if (feesLine) lines.push(feesLine);
   return lines.join("\n");
@@ -384,16 +390,14 @@ export function buildPassengerTypePriceReply(
     if (found) return lines.join("\n");
   }
 
-  if (requestedMonth !== null && allGroups.length > 0) {
-    return `✈️ ${trip.route_name}\n${requestedMonth} сарын ${possessiveLabel} үнийн мэдээлэл одоогоор алга байна. Аяллын зөвлөхөөр баталгаажуулна уу.`;
-  }
+  if (requestedMonth !== null && allGroups.length > 0) return null;
 
   const price = target === "infant" ? null : target === "child" ? trip.child_price : trip.adult_price;
   if (typeof price === "number") {
     return `✈️ ${trip.route_name}\n💰 ${label} үнэ: ${formatMoney(price, currency)}`;
   }
 
-  return `✈️ ${trip.route_name}\n${label} үнийн мэдээлэл одоогоор тодорхойгүй байна. Аяллын зөвлөхөөр баталгаажуулна уу.`;
+  return null;
 }
 
 export function hasIncludedInPriceIntent(text: string): boolean {
@@ -484,6 +488,24 @@ export function formatGroupDateLabel(dates: string[], suffix = "гаралт") {
   return dates.join(", ");
 }
 
+function getPriceGroupDisplayDates(group: Record<string, unknown> | DepartureDateGroup): string[] {
+  const raw = group as Record<string, unknown>;
+  const dates = Array.isArray(raw.dates)
+    ? raw.dates.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    : [];
+  if (dates.length > 0) {
+    return dates.flatMap((dateText) => {
+      const parsed = normalizeMnDate(dateText);
+      return parsed.length > 0
+        ? parsed.map((date) => `${date.month} сарын ${date.day}`)
+        : [dateText];
+    });
+  }
+
+  const label = typeof raw.label === "string" ? raw.label : "";
+  return normalizeMnDate(label).map((date) => `${date.month} сарын ${date.day}`);
+}
+
 export function formatCompactDepartureList(dates: string[]) {
   const grouped = groupDatesForDisplay(dates);
   if (grouped.length === 0) return compactDates(dates);
@@ -537,13 +559,22 @@ export function normalizeMnDate(dateText: string): Array<{ month: number; day: n
     return [{ month: parseInt(slashMatch[1], 10), day: parseInt(slashMatch[2], 10) }];
   }
 
-  const yearMonthDayPattern = /(?:\d{4}\s*он\s*)?(\d{1,2})\s*сар(?:ын)?\s*(\d{1,2})/g;
+  const yearMonthDayPattern = /(?:\d{4}\s*он\s*)?(\d{1,2})\s*сар(?:ын)?\s*(\d{1,2})((?:\s*,\s*\d{1,2}(?!\s*сар(?:ын)?))*)/g;
   let yearMonthDayMatch: RegExpExecArray | null;
   while ((yearMonthDayMatch = yearMonthDayPattern.exec(trimmed)) !== null) {
+    const month = parseInt(yearMonthDayMatch[1], 10);
     results.push({
-      month: parseInt(yearMonthDayMatch[1], 10),
+      month,
       day: parseInt(yearMonthDayMatch[2], 10),
     });
+    const extras = yearMonthDayMatch[3];
+    if (extras) {
+      const extraDays = extras.split(",").map((s) => s.trim()).filter(Boolean);
+      for (const ds of extraDays) {
+        const day = parseInt(ds, 10);
+        if (!isNaN(day)) results.push({ month, day });
+      }
+    }
   }
   if (results.length > 0) return results;
 
@@ -575,13 +606,22 @@ export function normalizeMnDate(dateText: string): Array<{ month: number; day: n
  */
 export function extractDatesFromText(text: string): Array<{ month: number; day: number }> {
   const results: Array<{ month: number; day: number }> = [];
-  const yearMonthDayPattern = /(?:\d{4}\s*он\s*)?(\d{1,2})\s*сар(?:ын)?\s*(\d{1,2})/g;
+  const yearMonthDayPattern = /(?:\d{4}\s*он\s*)?(\d{1,2})\s*сар(?:ын)?\s*(\d{1,2})((?:\s*,\s*\d{1,2}(?!\s*сар(?:ын)?))*)/g;
   let yearMonthDayMatch: RegExpExecArray | null;
   while ((yearMonthDayMatch = yearMonthDayPattern.exec(text)) !== null) {
+    const month = parseInt(yearMonthDayMatch[1], 10);
     results.push({
-      month: parseInt(yearMonthDayMatch[1], 10),
+      month,
       day: parseInt(yearMonthDayMatch[2], 10),
     });
+    const extras = yearMonthDayMatch[3];
+    if (extras) {
+      const extraDays = extras.split(",").map((s) => s.trim()).filter(Boolean);
+      for (const ds of extraDays) {
+        const day = parseInt(ds, 10);
+        if (!isNaN(day)) results.push({ month, day });
+      }
+    }
   }
   if (results.length > 0) return uniqueMonthDays(results);
 
@@ -820,15 +860,15 @@ export function formatTripBasePrice(trip: TravelTrip) {
       }
       if (!priceParts.length) continue;
       const priceKey = priceParts.join("|");
-      const rawDates = Array.isArray(g.dates) && (g.dates as string[]).length > 0
-        ? g.dates as string[]
-        : [];
+      const rawDates = getPriceGroupDisplayDates(g);
+      const futureDates = filterFutureDepartureDates(rawDates);
+      if (rawDates.length > 0 && futureDates.length === 0) continue;
       const labelStr = typeof g.label === "string" && g.label ? g.label : "";
       const existing = grouped.find((gr) => gr.priceKey === priceKey);
       if (existing) {
-        existing.dates.push(...rawDates);
+        existing.dates.push(...futureDates);
       } else {
-        grouped.push({ priceKey, priceStr: priceParts.join(" | "), dates: [...rawDates], label: labelStr });
+        grouped.push({ priceKey, priceStr: priceParts.join(" | "), dates: [...futureDates], label: labelStr });
       }
     }
 
@@ -862,12 +902,14 @@ export function formatTripBasePrice(trip: TravelTrip) {
       if (infant) priceParts.push(`Нярай: ${infant}`);
       if (!priceParts.length) continue;
       const priceKey = priceParts.join("|");
-      const rawDates = Array.isArray(g.dates) && g.dates.length > 0 ? g.dates : (g.label ? [g.label] : []);
+      const rawDates = getPriceGroupDisplayDates(g);
+      const futureDates = filterFutureDepartureDates(rawDates);
+      if (rawDates.length > 0 && futureDates.length === 0) continue;
       const existing = grouped.find((gr) => gr.priceKey === priceKey);
       if (existing) {
-        existing.dates.push(...rawDates);
+        existing.dates.push(...futureDates);
       } else {
-        grouped.push({ priceKey, priceStr: priceParts.join(" | "), dates: [...rawDates] });
+        grouped.push({ priceKey, priceStr: priceParts.join(" | "), dates: [...futureDates] });
       }
     }
     const lines: string[] = ["💰 Үнэ (гарах огноогоор):"];
@@ -925,13 +967,13 @@ export function formatExtraFeesLine(trip: TravelTrip): string {
   return `⚠️ Дээрх үнэ дээр нэмэлт төлбөр орно: ${parts.join("; ")}`;
 }
 
-export function formatTripBasePricePremium(trip: TravelTrip) {
-  const priceBlock = formatTripBasePricePremiumCore(trip);
+export function formatTripBasePricePremium(trip: TravelTrip, now = new Date()) {
+  const priceBlock = formatTripBasePricePremiumCore(trip, now);
   const feesLine = formatExtraFeesLine(trip);
   return feesLine ? `${priceBlock}\n${feesLine}` : priceBlock;
 }
 
-function formatTripBasePricePremiumCore(trip: TravelTrip) {
+function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
   const currency = trip.currency || "MNT";
   const sections: string[] = ["💰 Үнэ:"];
   const structuredGroups = getStructuredPriceGroups(trip);
@@ -950,18 +992,21 @@ function formatTripBasePricePremiumCore(trip: TravelTrip) {
       });
       if (!priceLines.length) continue;
       const priceKey = priceLines.join("|");
-      const rawDates = Array.isArray(g.dates) ? g.dates as string[] : [];
+      const rawDates = getPriceGroupDisplayDates(g);
+      const futureDates = filterFutureDepartureDates(rawDates, now);
+      if (rawDates.length > 0 && futureDates.length === 0) continue;
       const label = typeof g.label === "string" ? g.label : "";
       const existing = grouped.find((entry) => entry.priceKey === priceKey);
-      if (existing) existing.dates.push(...rawDates);
-      else grouped.push({ priceKey, priceLines, dates: [...rawDates], label });
+      if (existing) existing.dates.push(...futureDates);
+      else grouped.push({ priceKey, priceLines, dates: [...futureDates], label });
     }
     for (const entry of grouped) {
       const dateLabel = entry.dates.length > 0 ? formatGroupDateLabel(entry.dates) : entry.label;
       const groupLabel = entry.label.trim();
-      const heading = groupLabel && dateLabel && groupLabel !== dateLabel
+      const labelHasDates = normalizeMnDate(groupLabel).length > 0;
+      const heading = groupLabel && !labelHasDates && dateLabel && groupLabel !== dateLabel
         ? `${groupLabel}\n${dateLabel}`
-        : (dateLabel || groupLabel);
+        : (dateLabel || (labelHasDates ? "" : groupLabel));
       if (heading) sections.push("", heading);
       sections.push(...entry.priceLines);
     }
@@ -971,7 +1016,10 @@ function formatTripBasePricePremiumCore(trip: TravelTrip) {
   const legacyGroups = getPriceGroups(trip);
   if (legacyGroups.length > 0) {
     for (const group of legacyGroups) {
-      const dateLabel = Array.isArray(group.dates) && group.dates.length > 0 ? formatGroupDateLabel(group.dates) : (group.label || "");
+      const rawDates = getPriceGroupDisplayDates(group);
+      const futureDates = filterFutureDepartureDates(rawDates, now);
+      if (rawDates.length > 0 && futureDates.length === 0) continue;
+      const dateLabel = futureDates.length > 0 ? formatGroupDateLabel(futureDates) : (group.label || "");
       const priceLines = formatPassengerPriceLines({
         adult: group.adult_price ?? null,
         child: group.child_price ?? null,
@@ -1074,13 +1122,30 @@ export function formatSpecificDatePrice(
 
 export const AMBIGUOUS_REPLY_MARKER = "Аль аяллыг нь сонирхож байна вэ?";
 
+function firstStructuredPassengerPrice(trip: TravelTrip, key: "child_price" | "infant_price"): number | null {
+  if (key === "child_price" && typeof trip.child_price === "number") return trip.child_price;
+  for (const group of getStructuredPriceGroups(trip)) {
+    const value = group[key];
+    if (typeof value === "number") return value;
+  }
+  for (const group of getPriceGroups(trip)) {
+    const value = group[key];
+    if (typeof value === "number") return value;
+  }
+  return null;
+}
+
 export function buildAmbiguousTripReply(trips: TravelTrip[]) {
   const names = trips.slice(0, 5).map((trip) => {
+    const currency = trip.currency || "MNT";
+    const adult = typeof trip.adult_price === "number" ? trip.adult_price : null;
+    const child = firstStructuredPassengerPrice(trip, "child_price");
+    const infant = firstStructuredPassengerPrice(trip, "infant_price");
     const details = [
       trip.duration_text,
-      typeof trip.adult_price === "number"
-        ? `том хүн ${trip.adult_price.toLocaleString("mn-MN")}${trip.currency === "MNT" ? "₮" : trip.currency}`
-        : "",
+      adult !== null ? `том хүн ${formatMoney(adult, currency)}` : "",
+      child !== null ? `хүүхэд ${formatMoney(child, currency)}` : "",
+      infant !== null ? `нярай ${formatMoney(infant, currency)}` : "",
     ].filter(Boolean);
     return `• ${trip.route_name}${details.length ? ` — ${details.join(" · ")}` : ""}`;
   });

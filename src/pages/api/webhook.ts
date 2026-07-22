@@ -17,7 +17,7 @@ import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceW
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, dbClaimGoodbye, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
-import { appendLeadCaptureCta, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
+import { appendLeadCaptureCta, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
 import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
@@ -1085,6 +1085,18 @@ async function handleMessage(
         failTag: "seats_fast_path",
         rememberSource: "api.webhook.seats_fast_path",
         counter: "webhook.seats_fast_path_total",
+      });
+      return;
+    }
+  }
+  {
+    const objectionReply = buildPriceObjectionReply(await getFastPathText());
+    if (objectionReply) {
+      await deliverFastPathReply({
+        reply: enforceWebsiteForPayment(sanitizeAssistantReply(objectionReply)),
+        failTag: "price_objection_fast_path",
+        rememberSource: "api.webhook.price_objection_fast_path",
+        counter: "webhook.price_objection_fast_path_total",
       });
       return;
     }

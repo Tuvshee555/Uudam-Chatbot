@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { appendLeadCaptureCta, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, LEAD_CAPTURE_CTA, resolveTripFromUserMessage } from "../src/lib/travelFastPaths";
+import { appendLeadCaptureCta, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, LEAD_CAPTURE_CTA, resolveTripFromUserMessage } from "../src/lib/travelFastPaths";
 import { findTripMatches } from "../src/lib/travelFastPathsSearch";
 import type { TravelTrip } from "../src/lib/travelOps";
 
@@ -1253,6 +1253,19 @@ test("fresh expensive objection does not match the paid-exam route by word alone
   );
 
   assert.equal(reply, null);
+});
+
+test("fresh expensive objection gets a generic budget follow-up without route guessing", () => {
+  const reply = buildPriceObjectionReply("Үнэтэй юм байна");
+
+  assert.match(reply || "", /Үнэ өндөр санагдаж болно/);
+  assert.match(reply || "", /төсөвтэй/);
+  assert.doesNotMatch(reply || "", /Жинин|шинжилгээ|хямдрал/i);
+});
+
+test("price objection helper does not swallow real price questions", () => {
+  assert.equal(buildPriceObjectionReply("нярай хүүхэд үнэтэй юу?"), null);
+  assert.equal(buildPriceObjectionReply("ямар үнэтэй вэ?"), null);
 });
 
 test("broad infant-price query selects the related variant that stores an infant price", () => {

@@ -18,7 +18,7 @@ import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../../lib/reply";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
-import { appendLeadCaptureCta, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
+import { appendLeadCaptureCta, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
 import { extractTripPhotosForReply, hasTripPhotoIntent, MAX_TRIP_PHOTOS } from "../../lib/welcomeFlow";
 import { DUPLICATE_REPLY_NUDGE, extractPhoneNumber, isPhoneOnlyMessage } from "../../lib/webhookMedia";
 import { getEnv } from "../../lib/env";
@@ -365,6 +365,19 @@ export default async function handler(
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.seats_fast_path_total", 1, {});
+          return res.status(200).json({ reply: safeReply, buttons: [] });
+        }
+      }
+
+      // Fast path: generic price objection, without guessing a random matching route.
+      {
+        const objectionReply = buildPriceObjectionReply(await getFastPathText());
+        if (objectionReply) {
+          const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(objectionReply));
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
+          recordCounter("demo.price_objection_fast_path_total", 1, {});
           return res.status(200).json({ reply: safeReply, buttons: [] });
         }
       }

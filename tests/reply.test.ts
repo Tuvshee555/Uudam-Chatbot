@@ -177,10 +177,15 @@ test("extractButtons keeps up to 10 buttons (disambiguation lists)", () => {
 
 test("the trip-media silence token survives sanitize and is suppressed", async () => {
   const { sanitizeAssistantReply, TRIP_MEDIA_UNAVAILABLE_SILENT } = await import("../src/lib/reply");
+  const { appendLeadCaptureCta } = await import("../src/lib/travelFastPaths");
   // stripMarkdown once ate the underscores out of "NO_TRIP_MEDIA", so the
   // silence pattern missed and the raw token leaked to the customer. The
   // token must round-trip sanitize unchanged and always be silenced.
   const sanitized = sanitizeAssistantReply(TRIP_MEDIA_UNAVAILABLE_SILENT);
   assert.equal(shouldSilenceNoDataReply(sanitized), true);
   assert.equal(shouldSilenceNoDataReply(TRIP_MEDIA_UNAVAILABLE_SILENT), true);
+  assert.equal(
+    shouldSilenceNoDataReply(appendLeadCaptureCta(TRIP_MEDIA_UNAVAILABLE_SILENT, false)),
+    true,
+  );
 });

@@ -114,7 +114,10 @@ function makeConversationId(id) {
 async function ask(text, conversationId) {
   const res = await fetch(DEMO_URL, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "x-uudam-demo-qa": "1",
+    },
     body: JSON.stringify({ text, conversationId }),
   });
   if (!res.ok) {
