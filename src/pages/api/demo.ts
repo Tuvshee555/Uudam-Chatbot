@@ -20,9 +20,9 @@ import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceW
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
-import { appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
+import { appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
 import { extractTripPhotosForReply, hasTripPhotoIntent, MAX_TRIP_PHOTOS } from "../../lib/welcomeFlow";
-import { DUPLICATE_REPLY_NUDGE, extractPhoneNumber, isPhoneOnlyMessage } from "../../lib/webhookMedia";
+import { CONTACT_OPERATOR_LABEL, DUPLICATE_REPLY_NUDGE, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
 import { getEnv } from "../../lib/env";
 import {
   beginRequestTrace,
@@ -175,6 +175,10 @@ export default async function handler(
     try {
       scheduleDriveAutoSync({ source: "api.demo" });
       const { systemPrompt, business, pinnedButtonLabels } = await readBusinessData();
+      // Same settings the production webhook reads — lets the test bot mirror
+      // the config-driven branches (handoff keywords, quick-info reply, the
+      // booking nudge) instead of silently diverging into the model.
+      const botSettings = await getTravelBotSettings();
       const sessionId = `demo:${normalizedConversationId}`;
       const history = await getHistory(sessionId);
       const detectedPhone = extractPhoneNumber(normalizedText);
@@ -249,6 +253,47 @@ export default async function handler(
         recordCounter("demo.greeting_fast_path_total", 1, {});
         return res.status(200).json({
           reply: greetingReply,
+          buttons: [],
+          mediaUrls: [],
+          brochureUrl: null,
+        });
+      }
+
+      // Handoff request (contact-operator button tap or a handoff keyword):
+      // Messenger returns the configured handoff message. The production webhook
+      // also pauses the bot + creates a lead — those are side effects a text
+      // test bot deliberately doesn't reproduce; only the customer-facing reply
+      // is mirrored so testers see the real handoff wording.
+      if (
+        normalizedText === CONTACT_OPERATOR_LABEL ||
+        (botSettings.handoff_enabled && isHandoffRequest(normalizedText, botSettings.handoff_keywords))
+      ) {
+        const handoffMsg =
+          botSettings.handoff_reply ||
+          "Таны хүсэлтийг хүлээн авлаа. Манай ажилтан удахгүй тантай холбогдоно.";
+        await appendMessage(sessionId, "user", normalizedText);
+        await appendMessage(sessionId, "assistant", handoffMsg);
+        await rememberTurn();
+        recordCounter("demo.handoff_requested_total", 1, {});
+        return res.status(200).json({
+          reply: handoffMsg,
+          buttons: [],
+          mediaUrls: [],
+          brochureUrl: null,
+        });
+      }
+
+      // Quick-info keyword → the admin's canned reply, exactly like Messenger.
+      if (
+        botSettings.quick_info_reply &&
+        isQuickInfoKeyword(normalizedText, botSettings.quick_info_keywords)
+      ) {
+        await appendMessage(sessionId, "user", normalizedText);
+        await appendMessage(sessionId, "assistant", botSettings.quick_info_reply);
+        await rememberTurn();
+        recordCounter("demo.quick_info_total", 1, {});
+        return res.status(200).json({
+          reply: botSettings.quick_info_reply,
           buttons: [],
           mediaUrls: [],
           brochureUrl: null,
@@ -362,8 +407,14 @@ export default async function handler(
         const trips = await getTrips();
         const dateReply = buildDepartureDateAvailabilityReply({ userText: await getFastPathText(), trips });
         if (dateReply) {
+          // Mirror the webhook: a booking-intent date question gets nudged for
+          // name + phone so the answer ends the same way Messenger's does.
+          const bookingNudge =
+            botSettings.handoff_enabled && isBookingIntent(normalizedText)
+              ? " Захиалгаа баталгаажуулах бол нэр, утасны дугаараа үлдээгээрэй."
+              : "";
           const safeReply = appendLeadCaptureCta(
-            enforceWebsiteForPayment(sanitizeAssistantReply(fixMojibake(dateReply))),
+            enforceWebsiteForPayment(sanitizeAssistantReply(fixMojibake(`${dateReply}${bookingNudge}`))),
             phoneAlreadyRequested,
           );
           await appendMessage(sessionId, "user", normalizedText);
@@ -445,28 +496,31 @@ export default async function handler(
       // Fast path: structured trip query (price/duration/dates/flight for a specific trip)
       {
         const trips = await getTrips();
-        const programReply = buildTripProgramReply(await getFastPathText(), trips);
+        const programFastPathText = await getFastPathText();
+        const programReply = buildTripProgramReply(programFastPathText, trips);
         if (programReply) {
-          const brochureLine = programReply.brochure?.type === "url"
-            ? `\n\nPDF хөтөлбөр: ${programReply.brochure.value}`
-            : "";
-          const mediaLine = !programReply.brochure && programReply.mediaUrls.length > 0
-            ? `\n\nХөтөлбөрийн зураг:\n${programReply.mediaUrls.join("\n")}`
-            : "";
-          let safeReply = appendLeadCaptureCta(
+          // Mirror the webhook exactly: the reply TEXT is programReply.reply
+          // (with its own "sending the photos/PDF" footnote) — the URLs are
+          // never inlined into the bubble. Media rides as attachments, which the
+          // demo UI already renders from mediaUrls/brochureUrl below.
+          const inferredMediaUrls = programReply.mediaUrls.length > 0
+            ? programReply.mediaUrls
+            : extractTripPhotosForReply(programReply.reply, trips, { userText: programFastPathText });
+          const safeReply = appendLeadCaptureCta(
             enforceWebsiteForPayment(
-              sanitizeAssistantReply(`${programReply.reply}${brochureLine}${mediaLine}`),
+              sanitizeAssistantReply(
+                reconcilePhotoAttachmentReply(programReply.reply, inferredMediaUrls.length > 0),
+              ),
             ),
             phoneAlreadyRequested,
           );
           const media = buildDemoMedia({
             reply: safeReply,
-            userText: await getFastPathText(),
+            userText: programFastPathText,
             trips,
             explicitMediaUrls: programReply.mediaUrls,
             brochureUrl: programReply.brochure?.type === "url" ? programReply.brochure.value : null,
           });
-          safeReply = reconcilePhotoAttachmentReply(safeReply, media.mediaUrls.length > 0 || Boolean(media.brochureUrl));
           await appendMessage(sessionId, "user", normalizedText);
           if (shouldHandoffSilently(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply, imageAttachments(media.mediaUrls));
@@ -635,6 +689,27 @@ export default async function handler(
         });
       }
 
+      // Button parity with Messenger: the AI reply carries the model's own
+      // BUTTONS line, plus deterministic smart buttons, plus the contact-operator
+      // button always last — identical to the production webhook.
+      let replyButtons: string[] = [...buttons];
+      try {
+        const smartButtons = buildSmartButtons(reply, reasoningTrips);
+        if (smartButtons) {
+          for (const b of smartButtons) {
+            if (!replyButtons.some((x) => x.toLowerCase() === b.toLowerCase())) {
+              replyButtons.push(b);
+            }
+          }
+        }
+      } catch {
+        // smart buttons are best-effort — never block a reply
+      }
+      replyButtons = replyButtons.slice(0, 10);
+      if (!replyButtons.includes(CONTACT_OPERATOR_LABEL)) {
+        replyButtons.push(CONTACT_OPERATOR_LABEL);
+      }
+
       const media = buildDemoMedia({
         reply,
         userText: normalizedText,
@@ -650,10 +725,10 @@ export default async function handler(
         conversationIdSuffix: normalizedConversationId.slice(-8),
         promptLength: promptParts.system.length + promptParts.user.length,
         replyLength: reply.length,
-        buttonCount: buttons.length,
+        buttonCount: replyButtons.length,
       });
 
-      return res.status(200).json({ reply, buttons, ...media });
+      return res.status(200).json({ reply, buttons: replyButtons, ...media });
     } catch (error: any) {
       const classification = classifyError(error);
       logError("demo.request_failed", {
