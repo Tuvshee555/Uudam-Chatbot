@@ -217,8 +217,11 @@ async function handleMessage(
     return;
   }
   await assertLockHealthy();
-  const history = await getHistory(senderId);
-  const customerMemory = await getCustomerMemoryText(senderId);
+  // Independent reads — run them together instead of two serial round trips.
+  const [history, customerMemory] = await Promise.all([
+    getHistory(senderId),
+    getCustomerMemoryText(senderId),
+  ]);
   const contextualUserText = buildContextualUserText(history, text);
   const sessionId = `${platform}:${pageId}:${senderId}`;
   // Non-blocking: the memory merge continues after the response via waitUntil.
@@ -1486,7 +1489,9 @@ async function handleMessage(
   let replyButtons: string[] = [...aiButtons];
   if (platform === "facebook") {
     try {
-      const tripsForButtons = await listTrips({ limit: 5000 });
+      // Reuse the catalog already loaded this request instead of re-querying the
+      // whole trip table from the DB just to build buttons.
+      const tripsForButtons = await getTrips();
       const smartButtons = buildSmartButtons(safeReply, tripsForButtons);
       if (smartButtons) {
         for (const b of smartButtons) {
