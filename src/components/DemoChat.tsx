@@ -162,8 +162,11 @@ export default function DemoChat({
                 Аялалын асуултад шууд хариулна
               </p>
             </div>
-            <span className="ml-auto flex items-center gap-1 rounded-full bg-success-soft px-2.5 py-1 text-xs font-semibold text-success">
-              <span className="h-1.5 w-1.5 rounded-full bg-success" />
+            <span className="ml-auto flex items-center gap-1.5 rounded-full bg-success-soft px-2.5 py-1 text-xs font-semibold text-success">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-60" />
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-success" />
+              </span>
               Онлайн
             </span>
           </div>
@@ -220,22 +223,33 @@ export default function DemoChat({
                 <div
                   key={`${msg.from}-${idx}`}
                   className={cx(
-                    "flex flex-col",
-                    msg.from === "user" ? "items-end" : "items-start",
+                    "flex animate-fade-up gap-2.5",
+                    msg.from === "user" ? "justify-end" : "justify-start",
                   )}
                 >
+                  {msg.from === "bot" && (
+                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand ring-1 ring-brand/10">
+                      <Icons.ai size={14} />
+                    </div>
+                  )}
                   <div
                     className={cx(
-                      "max-w-[88%] rounded-[20px] px-4 py-3 text-sm leading-relaxed shadow-sm",
+                      "flex min-w-0 max-w-[85%] flex-col",
+                      msg.from === "user" ? "items-end" : "items-start",
+                    )}
+                  >
+                  <div
+                    className={cx(
+                      "max-w-full whitespace-pre-wrap break-words rounded-[20px] px-4 py-3 text-sm leading-relaxed shadow-sm",
                       msg.from === "user"
-                        ? "rounded-br-md bg-brand text-white"
+                        ? "rounded-br-md bg-linear-to-br from-brand to-brand-active text-white"
                         : "rounded-bl-md border border-line bg-surface text-ink",
                     )}
                   >
                     {msg.text}
                   </div>
                   {msg.from === "bot" && ((msg.mediaUrls?.length || 0) > 0 || msg.brochureUrl) && (
-                    <div className="mt-2 flex max-w-[88%] flex-col gap-2">
+                    <div className="mt-2 flex max-w-full flex-col gap-2">
                       {msg.mediaUrls && msg.mediaUrls.length > 0 && (
                         <div className="grid grid-cols-2 gap-2">
                           {msg.mediaUrls.map((url, imageIndex) => (
@@ -274,7 +288,7 @@ export default function DemoChat({
                   {msg.from === "bot" &&
                     msg.aiButtons &&
                     msg.aiButtons.length > 0 && (
-                      <div className="mt-2 flex max-w-[88%] flex-wrap gap-1.5">
+                      <div className="mt-2 flex max-w-full flex-wrap gap-1.5">
                         {msg.aiButtons.map((label) => (
                           <button
                             key={label}
@@ -288,10 +302,14 @@ export default function DemoChat({
                         ))}
                       </div>
                     )}
+                  </div>
                 </div>
               ))}
               {sending && (
-                <div className="flex justify-start">
+                <div className="flex animate-fade-up justify-start gap-2.5">
+                  <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand ring-1 ring-brand/10">
+                    <Icons.ai size={14} />
+                  </div>
                   <div className="rounded-[20px] rounded-bl-md border border-line bg-surface px-3 py-2 shadow-sm">
                     <TypingDots />
                   </div>
@@ -304,7 +322,7 @@ export default function DemoChat({
 
         {/* Input area */}
         <div className="border-t border-line bg-surface px-4 py-3">
-          <div className="flex items-end gap-2">
+          <div className="flex items-end gap-1.5 rounded-2xl border border-line-strong bg-surface-sunken p-1.5 transition-all focus-within:border-brand focus-within:shadow-[0_0_0_3px_rgba(15,118,110,0.14)]">
             <textarea
               id="demo-chat-input"
               value={input}
@@ -314,7 +332,7 @@ export default function DemoChat({
                 e.target.style.height = "auto";
                 e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
               }}
-              className="flex-1 resize-none rounded-2xl border border-line-strong bg-surface-sunken px-4 py-3 text-sm leading-relaxed text-ink transition-colors placeholder:text-ink-subtle focus:border-brand focus:outline-none disabled:cursor-not-allowed disabled:opacity-70"
+              className="flex-1 resize-none border-0 bg-transparent px-3 py-2 text-sm leading-relaxed text-ink placeholder:text-ink-subtle focus:outline-none disabled:cursor-not-allowed disabled:opacity-70"
               placeholder={placeholder}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
@@ -323,14 +341,14 @@ export default function DemoChat({
                 }
               }}
               disabled={sending || !conversationId}
-              style={{ minHeight: "44px" }}
+              style={{ minHeight: "40px" }}
             />
             <Button
               size="md"
               loading={sending}
               disabled={sending || !input.trim() || !conversationId}
               onClick={() => void send()}
-              className="shrink-0 rounded-2xl"
+              className="shrink-0 rounded-xl"
             >
               <Icons.play size={15} />
               Илгээх
