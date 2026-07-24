@@ -128,26 +128,26 @@ function parsePassengerTotalRequest(text: string): { adultCount: number; childCo
     return 0;
   };
 
-  const adultCount = findCount([
-    /том\s*хүн\s*(\d+)/i,
-    /(\d+)\s*том(?:\s*хүн)?/i,
-    /adult\s*(\d+)/i,
-    /(\d+)\s*adult/i,
-  ]);
-  const childCount = findCount([
-    /хүүхэд\s*(\d+)/i,
-    /(\d+)\s*хүүхэд/i,
-    /huuhed\s*(\d+)/i,
-    /(\d+)\s*huuhed/i,
-    /child\s*(\d+)/i,
-    /(\d+)\s*child/i,
-  ]);
-  const infantCount = findCount([
-    /нярай\s*(\d+)/i,
-    /(\d+)\s*нярай/i,
-    /infant\s*(\d+)/i,
-    /(\d+)\s*infant/i,
-  ]);
+  // A digit directly before "том хүн" ("2 том хүн") means the count comes BEFORE the
+  // noun; otherwise ("том хүн 2") it comes after. Detecting the convention stops
+  // "том хүн (\d+)" from greedily grabbing the NEXT group's number — e.g.
+  // "2 том хүн 1 хүүхэд" must read 2 adults + 1 child, not 1 adult + 1 child.
+  const numberFirst = /\d+\s*(?:том\s*хүн|насанд\s*хүрэгч|adult)/i.test(normalized);
+  const ordered = (numFirst: RegExp[], nounFirst: RegExp[]) =>
+    numberFirst ? [...numFirst, ...nounFirst] : [...nounFirst, ...numFirst];
+
+  const adultCount = findCount(ordered(
+    [/(\d+)\s*том(?:\s*хүн)?/i, /(\d+)\s*adult/i],
+    [/том\s*хүн\s*(\d+)/i, /adult\s*(\d+)/i],
+  ));
+  const childCount = findCount(ordered(
+    [/(\d+)\s*хүүхэд/i, /(\d+)\s*huuhed/i, /(\d+)\s*child/i],
+    [/хүүхэд\s*(\d+)/i, /huuhed\s*(\d+)/i, /child\s*(\d+)/i],
+  ));
+  const infantCount = findCount(ordered(
+    [/(\d+)\s*нярай/i, /(\d+)\s*infant/i],
+    [/нярай\s*(\d+)/i, /infant\s*(\d+)/i],
+  ));
 
   if (adultCount + childCount + infantCount <= 0) return null;
   return { adultCount, childCount, infantCount };
@@ -525,7 +525,11 @@ export function buildBudgetReply(
     const duration = safeDurationText(trip.duration_text);
     if (duration) parts.push(duration);
     parts.push(`том хүн ${formatMoney(price, trip.currency || "MNT")}`);
-    if (typeof trip.child_price === "number") {
+    // Only pair child with adult when the shown adult IS the trip's base price.
+    // When `price` is a lower date-group price, the base child_price would be a
+    // mismatched pair (a discounted adult beside a full-price child), so leave
+    // child out rather than print an inconsistent couple.
+    if (typeof trip.child_price === "number" && price === trip.adult_price) {
       parts.push(`хүүхэд ${formatMoney(trip.child_price, trip.currency || "MNT")}`);
     }
     if (trip.departure_dates.length > 0) {
@@ -628,9 +632,23 @@ function extractPassengerCounts(text: string): { adult: number; child: number; i
     return 0;
   };
 
-  const adult = readCount([/(?:том\s+хүн|насанд хүрэгч|adult)\s*(\d{1,2})/i, /(\d{1,2})\s*(?:том(?:\s+хүн)?|насанд хүрэгч|adult)/i]);
-  const child = readCount([/(?:хүүхэд|child)\s*(\d{1,2})/i, /(\d{1,2})\s*(?:хүүхэд|child)/i]);
-  const infant = readCount([/(?:нярай|infant)\s*(\d{1,2})/i, /(\d{1,2})\s*(?:нярай|infant)/i]);
+  // "2 том хүн" (number first) vs "том хүн 2" (number after). Detect the convention
+  // so "том хүн (\d)" doesn't grab the NEXT group's number in "2 том хүн 1 хүүхэд".
+  const numberFirst = /\d+\s*(?:том\s+хүн|насанд хүрэгч|adult)/i.test(normalized);
+  const pick = (numFirst: RegExp[], nounFirst: RegExp[]) =>
+    numberFirst ? [...numFirst, ...nounFirst] : [...nounFirst, ...numFirst];
+  const adult = readCount(pick(
+    [/(\d{1,2})\s*(?:том(?:\s+хүн)?|насанд хүрэгч|adult)/i],
+    [/(?:том\s+хүн|насанд хүрэгч|adult)\s*(\d{1,2})/i],
+  ));
+  const child = readCount(pick(
+    [/(\d{1,2})\s*(?:хүүхэд|child)/i],
+    [/(?:хүүхэд|child)\s*(\d{1,2})/i],
+  ));
+  const infant = readCount(pick(
+    [/(\d{1,2})\s*(?:нярай|infant)/i],
+    [/(?:нярай|infant)\s*(\d{1,2})/i],
+  ));
   if (adult + child + infant <= 0) return null;
   return { adult, child, infant };
 }

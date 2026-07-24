@@ -353,7 +353,23 @@ export function getAliases(trip: TravelTrip): string[] {
 export function getStructuredPriceGroups(trip: TravelTrip): Array<Record<string, unknown>> {
   const extra = (trip.extra || {}) as Record<string, unknown>;
   if (Array.isArray(extra.price_groups) && extra.price_groups.length > 0) {
-    return extra.price_groups as Array<Record<string, unknown>>;
+    return (extra.price_groups as Array<Record<string, unknown>>).map((group) => {
+      const hasAdult = typeof group.adult_price === "number";
+      const hasChild = typeof group.child_price === "number";
+      const hasInfant = typeof group.infant_price === "number";
+      // Malformed import: a group carrying ONLY an infant price (no adult/child) is
+      // not a real tier. Rendered verbatim it drops the adult and child and shows
+      // just the infant line. Backfill adult/child from the trip's base prices so
+      // the customer still sees the full price. Well-formed groups pass untouched.
+      if (!hasAdult && !hasChild && hasInfant) {
+        return {
+          ...group,
+          adult_price: typeof trip.adult_price === "number" ? trip.adult_price : group.adult_price,
+          child_price: typeof trip.child_price === "number" ? trip.child_price : group.child_price,
+        };
+      }
+      return group;
+    });
   }
   return [];
 }
