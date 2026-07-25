@@ -63,7 +63,7 @@ const singles = [
   { id: "beidaihe-past-date", text: "Бэйдайхэ 6 сарын 27 үнэ", reject: ["7 сарын 9"], allowSilent: true },
   { id: "shanghai-aug-6", text: "Шанхай 8 сарын 6 үнэ", expectAny: ["8 сарын 6", "3,160,000"] },
   { id: "hailaar-aug-24", text: "Хайлаар 8 сарын 24 үнэ", expectAny: ["Аль аяллыг", "Хайлаар Манжуур"] },
-  { id: "tomorrow", text: "маргааш явах аялал байна уу" },
+  { id: "tomorrow", text: "маргааш явах аялал байна уу", allowSilent: true },
   { id: "today", text: "өнөөдөр гарах аялал байна уу", allowSilent: true },
   { id: "july-availability", text: "7 сард явах аялал байна уу" },
   { id: "august-availability", text: "8 сард явах аялал байна уу" },

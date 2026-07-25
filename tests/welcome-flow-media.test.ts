@@ -98,6 +98,51 @@ test("trip media sends only after the same specific trip passes both gates", asy
   ]);
 });
 
+test("photo-only mode prefers the combined route when the user names both destinations", async () => {
+  const { extractTripPhotosForUserMessage } = await loadWelcomeFlow();
+  const photos = extractTripPhotosForUserMessage(
+    "Shanghai Tenger photo",
+    [
+      trip({
+        id: "tenger",
+        route_name: "Tenger direct flight",
+        photo_urls: ["https://example.com/tenger-direct-1.jpg"],
+      }),
+      trip({
+        id: "shanghai-tenger",
+        route_name: "Shanghai Tenger direct flight",
+        photo_urls: ["https://example.com/shanghai-tenger-1.jpg", "https://example.com/shanghai-tenger-2.jpg"],
+      }),
+    ],
+  );
+
+  assert.deepEqual(photos, [
+    "https://example.com/shanghai-tenger-1.jpg",
+    "https://example.com/shanghai-tenger-2.jpg",
+  ]);
+});
+
+test("photo-only mode does not borrow photos from a shared-city trip with fewer query tokens", async () => {
+  const { extractTripPhotosForUserMessage } = await loadWelcomeFlow();
+  const photos = extractTripPhotosForUserMessage(
+    "Hohhot exam ground tour photo",
+    [
+      trip({
+        id: "hohhot-exam",
+        route_name: "Hohhot exam ground tour",
+        photo_urls: [],
+      }),
+      trip({
+        id: "jinin-hohhot",
+        route_name: "Jinin mini avatar Hohhot tour",
+        photo_urls: ["https://example.com/jinin-hohhot-1.jpg"],
+      }),
+    ],
+  );
+
+  assert.deepEqual(photos, []);
+});
+
 test("trip media keeps complete five-slice poster sets", async () => {
   const { extractTripPhotosForReply, extractTripPhotosForUserMessage } = await loadWelcomeFlow();
   const posterSlices = [

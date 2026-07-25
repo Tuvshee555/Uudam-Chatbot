@@ -668,6 +668,30 @@ test("program request prefers brochure pdf over images and itinerary", () => {
   assert.doesNotMatch(result?.reply || "", /https:\/\/example\.com\/program\.pdf/);
 });
 
+test("program photo request prefers the longer combined route over a shorter shared route", () => {
+  const result = buildTripProgramReply(
+    "Shanghai Tenger zurag",
+    [
+      trip({
+        id: "tenger-direct",
+        route_name: "Tenger direct flight",
+        photo_urls: ["https://example.com/tenger-direct-1.jpg"],
+      }),
+      trip({
+        id: "shanghai-tenger",
+        route_name: "Shanghai Tenger direct flight",
+        photo_urls: ["https://example.com/shanghai-tenger-1.jpg", "https://example.com/shanghai-tenger-2.jpg"],
+      }),
+    ],
+  );
+
+  assert.equal(result?.trip?.id, "shanghai-tenger");
+  assert.deepEqual(result?.mediaUrls, [
+    "https://example.com/shanghai-tenger-1.jpg",
+    "https://example.com/shanghai-tenger-2.jpg",
+  ]);
+});
+
 test("program request prefers the ground Beidaihe + Beijing tour for газрын аяллын phrasing", () => {
   const result = buildTripProgramReply(
     "Бээжин + Бэйдэхэ газрын аяллын хөтөлбөр үзэх",

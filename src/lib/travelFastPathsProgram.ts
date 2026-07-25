@@ -216,8 +216,14 @@ export function buildTripProgramReply(
         : trips;
   const candidateTrips = scopedTrips.length > 0 ? scopedTrips : trips;
   const routeQueryWords = keywordTokens(text).filter((word) => !PROGRAM_ONLY_QUERY_WORDS.has(word));
+  const directResolution = trips.length === 1
+    ? { status: "verified" as const, trip: trips[0], candidates: [] }
+    : resolveTripFromUserMessage(text, trips, { allowLooseFallback: false });
+  const canTrustDirectResolution =
+    directResolution.status === "verified" &&
+    (trips.length === 1 || routeQueryWords.length >= 2 || exactMentionedTrips.length > 0);
   const genericProgramMatches =
-    exactMentionedTrips.length === 0 && candidateTrips.length > 1
+    !canTrustDirectResolution && exactMentionedTrips.length === 0 && candidateTrips.length > 1
       ? findTripMatches(text, candidateTrips)
       : [];
   if (genericProgramMatches.length > 1 && routeQueryWords.length <= 1) {
@@ -228,8 +234,8 @@ export function buildTripProgramReply(
       mediaUrls: [],
     };
   }
-  const resolution = trips.length === 1
-    ? { status: "verified" as const, trip: trips[0], candidates: [] }
+  const resolution = canTrustDirectResolution
+    ? directResolution
     : resolveTripFromUserMessage(text, candidateTrips, { allowLooseFallback: false });
   if (resolution.status === "ambiguous") {
     return {

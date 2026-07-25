@@ -364,7 +364,16 @@ export function extractTripPhotosForReply(
   trips: TravelTrip[],
   options: { userText?: string } = {},
 ): string[] {
-  const active = trips.filter(
+  const allActive = trips.filter((t) => t.status === "active");
+  if (options.userText) {
+    const userResolution = resolveTripFromUserMessage(options.userText, allActive, {
+      allowLooseFallback: false,
+    });
+    if (userResolution.status === "verified" && userResolution.trip.photo_urls.length === 0) {
+      return [];
+    }
+  }
+  const active = allActive.filter(
     (t) => t.status === "active" && t.photo_urls.length > 0,
   );
   const verifiedMatch = selectVerifiedTripForMedia({
@@ -379,15 +388,14 @@ export function extractTripPhotosForUserMessage(
   userText: string,
   trips: TravelTrip[],
 ): string[] {
-  const active = trips.filter(
-    (t) => t.status === "active" && t.photo_urls.length > 0,
-  );
-  const resolution = resolveTripFromUserMessage(userText, active, {
+  const allActive = trips.filter((t) => t.status === "active");
+  const resolution = resolveTripFromUserMessage(userText, allActive, {
     allowLooseFallback: false,
   });
   if (resolution.status === "verified") {
     return resolution.trip.photo_urls.slice(0, MAX_TRIP_PHOTOS);
   }
+  const active = allActive.filter((t) => t.photo_urls.length > 0);
   return extractTripPhotosForReply(userText, active);
 }
 

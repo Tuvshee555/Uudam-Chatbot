@@ -103,6 +103,18 @@ const GENERIC_ROUTE_WORDS = new Set([
   "uudam",
   "travel",
   "agency",
+  "зураг",
+  "зургийг",
+  "зурагаа",
+  "зургууд",
+  "photo",
+  "photos",
+  "image",
+  "images",
+  "picture",
+  "program",
+  "pdf",
+  "хөтөлбөр",
 ]);
 
 const STRUCTURED_QUERY_SIGNALS = [
@@ -422,6 +434,25 @@ export function getTripSearchHaystack(trip: TravelTrip): string {
   return normText(sections.join(" "));
 }
 
+function tripSearchTokens(trip: TravelTrip): string[] {
+  return unique([
+    ...keywordTokens(trip.route_name),
+    ...getAliases(trip).flatMap((alias) => keywordTokens(alias)),
+    ...keywordTokens(trip.category || ""),
+    ...keywordTokens(trip.source_description || ""),
+    ...keywordTokens(trip.notes || ""),
+  ]);
+}
+
+function queryTripTokenCoveragePenalty(queryWords: string[], trip: TravelTrip): number {
+  const candidateTokens = new Set(tripSearchTokens(trip));
+  const meaningfulQueryWords = queryWords.filter((word) => word.length >= 4);
+  const missing = meaningfulQueryWords.filter((word) => !candidateTokens.has(word));
+  if (meaningfulQueryWords.length <= 1) return 0;
+  if (missing.length === 0) return 0;
+  return missing.length * 70;
+}
+
 export function matchScoreForPriceKind(kind: CombinedDatePriceMatch["matchType"]): number {
   switch (kind) {
     case "adult":
@@ -653,7 +684,8 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
       intentBoost +
       dateBoost +
       durationVariantScore(text, trip) +
-      examFeeIntentScore(text, trip);
+      examFeeIntentScore(text, trip) -
+      queryTripTokenCoveragePenalty(queryWords, trip);
 
     matches.push({
       trip,
