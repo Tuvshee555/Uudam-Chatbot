@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { appendLeadCaptureCta, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildSeatsReply, buildStructuredTripReply, buildTripProgramReply, LEAD_CAPTURE_CTA, resolveTripFromUserMessage } from "../src/lib/travelFastPaths";
+import { appendLeadCaptureCta, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, LEAD_CAPTURE_CTA, resolveTripFromUserMessage } from "../src/lib/travelFastPaths";
 import { findTripMatches } from "../src/lib/travelFastPathsSearch";
 import type { TravelTrip } from "../src/lib/travelOps";
 
@@ -54,6 +54,39 @@ test("appendLeadCaptureCta adds the phone ask to a normal fast-path answer", () 
 test("appendLeadCaptureCta skips when phone already collected", () => {
   const reply = "✈️ Бээжин аялал\n💰 Том хүн: 1,890,000₮";
   assert.equal(appendLeadCaptureCta(reply, true), reply);
+});
+
+test("smart buttons offer useful next taps for a matched trip with photos", () => {
+  const buttons = buildSmartButtons(
+    "✈️ Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал\n💰 Том хүн: 2,150,000₮",
+    [
+      trip({
+        id: "beidaihe-combo",
+        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        photo_urls: ["https://example.com/beidaihe-1.jpg"],
+      }),
+    ],
+  );
+
+  assert.deepEqual(buttons, ["Хөтөлбөр үзэх", "Зураг үзэх", "Захиалах"]);
+});
+
+test("clarification buttons are numbered and messenger-sized", () => {
+  const buttons = buildClarificationButtons([
+    trip({
+      id: "beijing-ground",
+      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+    }),
+    trip({
+      id: "beidaihe-combo",
+      route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+    }),
+  ]);
+
+  assert.equal(buttons.length, 2);
+  assert.ok(buttons[0].startsWith("1. "));
+  assert.ok(buttons[1].startsWith("2. "));
+  assert.ok(buttons.every((button) => button.length <= 25));
 });
 
 test("appendLeadCaptureCta skips clarifying (ambiguous) replies", () => {
@@ -1285,11 +1318,121 @@ test("infant price follow-up stays on the contextual trip instead of matching ex
         child_price: 750000,
       }),
     ],
+    NOW,
   );
 
   assert.match(reply || "", /Бэйдайхэ шар тэнгисийн эрэг/);
   assert.match(reply || "", /Нярай \/0-23 сар\/: 530,000₮/);
   assert.doesNotMatch(reply || "", /үнэтэй шинжилгээтэй/);
+});
+
+test("a 0₮ infant fare is never quoted as a free seat", () => {
+  // Extracted posters routinely land infant_price: 0 when the poster simply had
+  // no infant row. Quoting "Нярай: 0₮" tells the customer infants fly free.
+  const zeroInfantTrip = trip({
+    id: "zero-infant",
+    route_name: "Тест аялал А",
+    adult_price: 1000000,
+    child_price: 900000,
+    extra: {
+      price_groups: [
+        {
+          dates: ["9 сарын 12"],
+          adult_price: 1000000,
+          child_price: 900000,
+          infant_price: 0,
+          child_age: "2-12 нас",
+          infant_age: "0-2 нас",
+        },
+      ],
+    },
+  });
+
+  const fullPrice = buildStructuredTripReply(
+    [zeroInfantTrip.route_name, "үнэ хэд вэ?"].join("\n"),
+    [zeroInfantTrip],
+    NOW,
+  );
+  assert.match(fullPrice || "", /Том хүн: 1,000,000₮/);
+  assert.doesNotMatch(fullPrice || "", /:\s*0₮/);
+  assert.doesNotMatch(fullPrice || "", /Нярай/);
+
+  // Asking specifically about infants must still answer the question asked,
+  // rather than silently returning an adult/child block.
+  const infantAsk = buildStructuredTripReply(
+    [zeroInfantTrip.route_name, "нярай хүүхэд үнэ хэд вэ?"].join("\n"),
+    [zeroInfantTrip],
+    NOW,
+  );
+  assert.match(infantAsk || "", /Нярайн үнэ тодорхойгүй/);
+  assert.doesNotMatch(infantAsk || "", /:\s*0₮/);
+  assert.doesNotMatch(infantAsk || "", /null|undefined/);
+});
+
+test("a 0₮ fare is treated as unknown in passenger totals, not as free", () => {
+  const zeroInfantTrip = trip({
+    id: "zero-infant-total",
+    route_name: "Тест аялал А",
+    adult_price: 1000000,
+    child_price: 900000,
+    extra: {
+      price_groups: [
+        {
+          dates: ["9 сарын 12"],
+          adult_price: 1000000,
+          child_price: 900000,
+          infant_price: 0,
+        },
+      ],
+    },
+  });
+
+  const reply = buildStructuredTripReply(
+    [zeroInfantTrip.route_name, "2 том хүн 1 нярай нийт хэд вэ"].join("\n"),
+    [zeroInfantTrip],
+    NOW,
+  );
+
+  // The infant must not silently contribute 0₮ to a quoted total.
+  assert.doesNotMatch(reply || "", /Нярай 1 x 0₮/);
+  assert.doesNotMatch(reply || "", /null|undefined/);
+});
+
+test("price question still answers when every price group has already departed", () => {
+  // Staff routinely add new departure dates without adding matching price
+  // groups, so a live trip can have future departures while all of its
+  // price_groups dates sit in the past. The group tier must then fall through
+  // to the flat trip price instead of emitting a bare "💰 Үнэ:" header.
+  const staleGroupTrip = trip({
+    id: "stale-groups",
+    route_name: "Тест аялал Б",
+    adult_price: 2000000,
+    child_price: 1500000,
+    departure_dates: ["9 сарын 12", "10 сарын 3"],
+    extra: {
+      price_groups: [
+        {
+          dates: ["7 сарын 9", "7 сарын 18"],
+          adult_price: 2000000,
+          child_price: 1500000,
+          infant_price: 530000,
+          child_age: "2-10 нас",
+          infant_age: "0-23 сар",
+        },
+      ],
+    },
+  });
+
+  const reply = buildStructuredTripReply(
+    [staleGroupTrip.route_name, "үнэ хэд вэ?"].join("\n"),
+    [staleGroupTrip],
+    new Date("2026-08-15T04:00:00.000Z"),
+  );
+
+  assert.match(reply || "", /Том хүн: 2,000,000₮/);
+  assert.match(reply || "", /Хүүхэд: 1,500,000₮/);
+  // The old behaviour: a price header with nothing under it.
+  assert.doesNotMatch(reply || "", /💰 Үнэ:\s*(\n📅|\n*$)/);
 });
 
 test("fresh expensive objection does not match the paid-exam route by word alone", () => {
@@ -1799,4 +1942,201 @@ test("naming a trip by its own route-name words beats a competing trip's loose a
     [fourCity, cruise],
   );
   assert.equal(matches[0]?.trip.id, "four-city");
+});
+
+test("a name shared by several tours asks instead of guessing one", () => {
+  // "Тэнгэрийн хаалга" is the name of three different tours. Nothing in the
+  // message says which, so committing to the top-scoring one shipped a wrong
+  // price, programme AND poster at full confidence.
+  const shared = [
+    trip({ id: "tk-solo", route_name: "Тэнгэрийн хаалга - шууд нислэгтэй", adult_price: 2990000,
+      extra: { aliases: ["Тэнгэрийн хаалга"] } }),
+    trip({ id: "tk-chunchin", route_name: "Тэнгэрийн хаалга-Чунчин", adult_price: 3290000 }),
+    trip({ id: "tk-shanghai", route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал", adult_price: 3660000 }),
+  ];
+
+  const resolution = resolveTripFromUserMessage("Тэнгэрийн хаалга үнэ хэд вэ?", shared, {
+    allowLooseFallback: false,
+  });
+  assert.equal(resolution.status, "ambiguous");
+
+  // The alias above makes the solo tour the only "exactly mentioned" one; that
+  // must not override the ambiguity and send its poster.
+  const program = buildTripProgramReply("Тэнгэрийн хаалга зураг", shared);
+  assert.equal(program?.trip, null);
+  assert.deepEqual(program?.mediaUrls, []);
+});
+
+test("naming both destinations still resolves the combined tour", () => {
+  const shared = [
+    trip({ id: "tk-solo", route_name: "Тэнгэрийн хаалга - шууд нислэгтэй", adult_price: 2990000 }),
+    trip({ id: "tk-shanghai", route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал", adult_price: 3660000 }),
+  ];
+  const resolution = resolveTripFromUserMessage("Шанхай + Тэнгэрийн хаалга үнэ", shared, {
+    allowLooseFallback: false,
+  });
+  assert.equal(resolution.status, "verified");
+  assert.equal(resolution.trip?.id, "tk-shanghai");
+});
+
+test("a uniquely named tour still answers directly", () => {
+  const trips = [
+    trip({ id: "dalian", route_name: "Далянь хотын шууд нислэгтэй аялал", photo_urls: ["https://example.com/d1.png"] }),
+    trip({ id: "other", route_name: "Хайлаар Манжуурын аялал" }),
+  ];
+  const resolution = resolveTripFromUserMessage("Далянь зураг", trips, { allowLooseFallback: false });
+  assert.equal(resolution.status, "verified");
+  assert.equal(resolution.trip?.id, "dalian");
+});
+
+test("a documented-free infant is quoted as Үнэгүй, not suppressed as missing", () => {
+  // child_rules note "Үнэгүй" on a 0₮ infant entry means genuinely free (agency
+  // policy) — this must render as a real answer, not the "тодорхойгүй" fallback
+  // meant for a poster that never carried an infant price at all.
+  const freeInfantTrip = trip({
+    id: "free-infant",
+    route_name: "Тест аялал В",
+    adult_price: 1000000,
+    child_price: 900000,
+    extra: {
+      price_groups: [{
+        dates: ["9 сарын 12"],
+        adult_price: 1000000,
+        child_price: 900000,
+        infant_price: 0,
+        infant_age: "0-2 нас",
+      }],
+      child_rules: [
+        { note: "Үнэгүй", label: "Нярай", price: 0, age_range: "0-2 нас" },
+      ],
+    },
+  });
+
+  const priceReply = buildStructuredTripReply(
+    [freeInfantTrip.route_name, "үнэ хэд вэ?"].join("\n"),
+    [freeInfantTrip],
+  );
+  assert.match(priceReply || "", /Нярай[^:]*:\s*Үнэгүй/);
+  assert.doesNotMatch(priceReply || "", /тодорхойгүй/);
+
+  const infantAsk = buildStructuredTripReply(
+    [freeInfantTrip.route_name, "нярай хүүхэд үнэ хэд вэ?"].join("\n"),
+    [freeInfantTrip],
+  );
+  assert.match(infantAsk || "", /Үнэгүй/);
+  assert.doesNotMatch(infantAsk || "", /тодорхойгүй|Холбогдох дугаараа/);
+});
+
+test("a free-infant note never zeroes out a real, separately-priced child fare", () => {
+  // Real catalog bug this guards: one trip's child_rules used the SAME label
+  // ("Хүүхэд") for both the genuine child tier (750,000₮) and a mislabeled
+  // infant tier (0₮, "Үнэгүй", age 2024-2026 = 0-2yo) — matching on label alone
+  // made the real child price disappear as "Үнэгүй" too.
+  const mixedTrip = trip({
+    id: "mixed-labels",
+    route_name: "Тест аялал Г",
+    adult_price: 890000,
+    child_price: 750000,
+    extra: {
+      price_groups: [{
+        dates: ["Өдөр бүр"],
+        adult_price: 890000,
+        child_price: 750000,
+        infant_price: 0,
+        child_age: "2016-2023 он",
+        infant_age: "2024-2026 он",
+      }],
+      child_rules: [
+        { note: "", label: "Хүүхэд", price: 750000, age_range: "2016-2023 он" },
+        { note: "Үнэгүй", label: "Хүүхэд", price: 0, age_range: "2024-2026 он" },
+      ],
+    },
+  });
+
+  const reply = buildStructuredTripReply(
+    [mixedTrip.route_name, "үнэ хэд вэ?"].join("\n"),
+    [mixedTrip],
+  );
+  assert.match(reply || "", /Хүүхэд[^:]*:\s*750,000₮/, "the real child price must survive");
+  assert.match(reply || "", /Нярай[^:]*:\s*Үнэгүй/, "the infant tier must still show free");
+});
+
+test("distinct age-banded child fares are broken out instead of one flat price", () => {
+  // Real catalog bug: a trip with TWO child_rules tiers at different prices
+  // (1,390,000₮ for one birth-year band, 1,290,000₮ for another) had no
+  // price_groups, so the reply fell back to a single flat child_price and
+  // silently overcharged the cheaper band.
+  const tieredTrip = trip({
+    id: "tiered-child",
+    route_name: "Тест аялал Д",
+    adult_price: 1590000,
+    child_price: 1390000,
+    extra: {
+      child_rules: [
+        { note: "", label: "хүүхэд", price: 1390000, age_range: "2014-2015 онд төрсөн" },
+        { note: "", label: "хүүхэд", price: 1290000, age_range: "2016-2023 онд төрсөн" },
+        { note: "Үнэгүй", label: "Нярай", price: 0, age_range: "2024-2026 онд төрсөн" },
+      ],
+    },
+  });
+
+  const reply = buildStructuredTripReply(
+    [tieredTrip.route_name, "үнэ хэд вэ?"].join("\n"),
+    [tieredTrip],
+  );
+  assert.match(reply || "", /1,390,000₮/);
+  assert.match(reply || "", /1,290,000₮/);
+  assert.match(reply || "", /Нярай:\s*Үнэгүй/);
+});
+
+test("a genitive-case trip name ('X-ийн') still resolves to the trip", () => {
+  // Real customer message: "Далянийн аялалын үнэ хэд вэ?" -- the query token
+  // "далянийн" never equalled the bare route token "далянь", so the resolver
+  // returned not_found and the whole message got silently dropped.
+  const trips = [
+    trip({ id: "dalian", route_name: "Далянь хотын шууд нислэгтэй аялал", adult_price: 2890000 }),
+    trip({ id: "other", route_name: "Хайлаар Манжуурын аялал" }),
+  ];
+  const resolution = resolveTripFromUserMessage("Далянийн аялалын үнэ хэд вэ?", trips, {
+    allowLooseFallback: false,
+  });
+  assert.equal(resolution.status, "verified");
+  assert.equal(resolution.trip?.id, "dalian");
+});
+
+test("compound photo+price question answers the price even when the trip has no photos", () => {
+  // Real bug: a message asking for BOTH a photo and a real answer (price/
+  // dates/duration) for a trip with zero photo_urls returned complete
+  // silence + handoff for the WHOLE message, not just the unavailable photo
+  // part -- buildTripProgramReply's "no photos" sentinel was treated as
+  // final by the caller instead of falling back to the structured answer.
+  const noPhotoTrip = trip({
+    id: "no-photos",
+    route_name: "Тест аялал Е",
+    adult_price: 2890000,
+    child_price: 2390000,
+    photo_urls: [],
+  });
+  const result = buildProgramOrStructuredReply(
+    `${noPhotoTrip.route_name} үнэ хэд вэ, мөн зураг үзүүлээч`,
+    [noPhotoTrip],
+  );
+  assert.ok(result, "must not return null/silence when a real answer exists");
+  assert.match(result?.reply || "", /2,890,000₮/);
+  assert.notEqual(result?.reply, "NOTRIPMEDIA");
+});
+
+test("a photo-only question for a photo-less trip still stays silent (owner policy)", () => {
+  // The fallback above must not turn EVERY photo request into a wall of
+  // unrelated price/date text -- a bare "зураг" ask with nothing else
+  // answerable keeps the intended silent handoff.
+  const noPhotoTrip = trip({
+    id: "no-photos-2",
+    route_name: "Тест аялал Ж",
+    photo_urls: [],
+    adult_price: null,
+    child_price: null,
+  });
+  const result = buildProgramOrStructuredReply(`${noPhotoTrip.route_name} зураг үзүүлээч`, [noPhotoTrip]);
+  assert.equal(result?.reply, "NOTRIPMEDIA");
 });

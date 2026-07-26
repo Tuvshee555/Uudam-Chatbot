@@ -21,6 +21,7 @@ import {
   getStructuredDiscounts,
   getStructuredPriceGroups,
   getTripSearchHaystack,
+  isDocumentedFreeFare,
   isGenericConfirmationText,
   keywordTokens,
   matchScoreForPriceKind,
@@ -36,7 +37,10 @@ import {
   type CombinedDatePriceMatch,
   type DepartureDateGroup,
   type MonthDay,
+  type TripProgramReplyResult,
 } from "./travelFastPathsSearch";
+import { buildTripProgramReply } from "./travelFastPathsProgram";
+import { TRIP_MEDIA_UNAVAILABLE_SILENT } from "./reply";
 import {
   buildAmbiguousTripReply,
   buildAgeSpecificPriceReply,
@@ -55,6 +59,7 @@ import {
   formatCompactDepartureList,
   formatDepartureDates,
   formatExtraFeesLine,
+  formatPassengerMoney,
   formatRouteName,
   formatSelectedPriceGroups,
   formatSpecificDatePrice,
@@ -161,20 +166,33 @@ function formatPassengerTotalLine(trip: TravelTrip, counts: { adultCount: number
   const parts: string[] = [];
   let total = 0;
 
+  // A non-positive fare is normally missing poster data, not a free seat — EXCEPT
+  // when child_rules explicitly documents it as free (isDocumentedFreeFare), in
+  // which case quoting 0 for that passenger is the correct total, not a gap.
+  const childFree = isDocumentedFreeFare(trip, "child");
+  const infantFree = isDocumentedFreeFare(trip, "infant");
   if (counts.adultCount > 0) {
-    if (typeof adult !== "number") return null;
+    if (typeof adult !== "number" || adult <= 0) return null;
     total += counts.adultCount * adult;
     parts.push(`${counts.adultCount} том хүн x ${formatMoney(adult, currency)}`);
   }
   if (counts.childCount > 0) {
-    if (typeof child !== "number") return null;
-    total += counts.childCount * child;
-    parts.push(`${counts.childCount} хүүхэд x ${formatMoney(child, currency)}`);
+    if (childFree) {
+      parts.push(`${counts.childCount} хүүхэд x Үнэгүй`);
+    } else {
+      if (typeof child !== "number" || child <= 0) return null;
+      total += counts.childCount * child;
+      parts.push(`${counts.childCount} хүүхэд x ${formatMoney(child, currency)}`);
+    }
   }
   if (counts.infantCount > 0) {
-    if (typeof infant !== "number") return null;
-    total += counts.infantCount * infant;
-    parts.push(`${counts.infantCount} нярай x ${formatMoney(infant, currency)}`);
+    if (infantFree) {
+      parts.push(`${counts.infantCount} нярай x Үнэгүй`);
+    } else {
+      if (typeof infant !== "number" || infant <= 0) return null;
+      total += counts.infantCount * infant;
+      parts.push(`${counts.infantCount} нярай x ${formatMoney(infant, currency)}`);
+    }
   }
 
   return `• ${trip.route_name}: ${formatMoney(total, currency)} (${parts.join(" + ")})`;
@@ -303,9 +321,9 @@ export function buildDiscountReply(
   if (discountGroups.length > 0) {
     for (const g of discountGroups) {
       const dates = Array.isArray(g.dates) ? (g.dates as string[]).join(", ") : String(g.dates ?? "");
-      const adult = formatMoney(typeof g.adult_price === "number" ? g.adult_price : null, currency);
-      const child = formatMoney(typeof g.child_price === "number" ? g.child_price : null, currency);
-      const infant = formatMoney(typeof g.infant_price === "number" ? g.infant_price : null, currency);
+      const adult = formatPassengerMoney(typeof g.adult_price === "number" ? g.adult_price : null, currency);
+      const child = formatPassengerMoney(typeof g.child_price === "number" ? g.child_price : null, currency);
+      const infant = formatPassengerMoney(typeof g.infant_price === "number" ? g.infant_price : null, currency);
       const label = typeof g.label === "string" && g.label ? `${g.label}: ` : "";
       const cond = typeof g.condition === "string" && g.condition ? ` (${g.condition})` : "";
       const note = typeof g.note === "string" && g.note ? ` — ${g.note}` : "";
@@ -320,8 +338,8 @@ export function buildDiscountReply(
   }
 
   // Show regular price for comparison
-  const regularAdult = formatMoney(best.adult_price, currency);
-  const regularChild = formatMoney(best.child_price, currency);
+  const regularAdult = formatPassengerMoney(best.adult_price, currency);
+  const regularChild = formatPassengerMoney(best.child_price, currency);
   if (regularAdult || regularChild) {
     const regular: string[] = [];
     if (regularAdult) regular.push(`Том хүн: ${regularAdult}`);
@@ -538,14 +556,16 @@ export function buildBudgetReply(
     const parts = [`• ${trip.route_name}`];
     const duration = safeDurationText(trip.duration_text);
     if (duration) parts.push(duration);
-    parts.push(`том хүн ${formatMoney(price, trip.currency || "MNT")}`);
+    const adultText = formatPassengerMoney(price, trip.currency || "MNT");
+    if (adultText) parts.push(`том хүн ${adultText}`);
     // Only pair child with adult when the shown adult IS the trip's base price.
     // When `price` is a lower date-group price, the base child_price would be a
     // mismatched pair (a discounted adult beside a full-price child), so leave
     // child out rather than print an inconsistent couple.
-    if (typeof trip.child_price === "number" && price === trip.adult_price) {
-      parts.push(`хүүхэд ${formatMoney(trip.child_price, trip.currency || "MNT")}`);
-    }
+    const childText = price === trip.adult_price
+      ? formatPassengerMoney(trip.child_price, trip.currency || "MNT")
+      : null;
+    if (childText) parts.push(`хүүхэд ${childText}`);
     if (trip.departure_dates.length > 0) {
       parts.push(`гарах: ${formatCompactDepartureList(trip.departure_dates)}`);
     }
@@ -687,9 +707,15 @@ function buildPassengerTotalReply(
 
   const rows: string[] = [];
   let total = 0;
-  const add = (label: string, count: number, price: number | null | undefined) => {
+  const add = (label: string, count: number, price: number | null | undefined, free: boolean) => {
     if (count <= 0) return;
-    if (typeof price !== "number") {
+    if (free) {
+      rows.push(`• ${label} ${count} x Үнэгүй`);
+      return;
+    }
+    // 0₮ means the poster never carried this fare — report it as unknown rather
+    // than billing the passenger nothing.
+    if (typeof price !== "number" || price <= 0) {
       rows.push(`• ${label} ${count}: үнэ тодорхойгүй`);
       return;
     }
@@ -698,20 +724,38 @@ function buildPassengerTotalReply(
     rows.push(`• ${label} ${count} x ${formatMoney(price, currency)} = ${formatMoney(subtotal, currency)}`);
   };
 
-  add("Том хүн", counts.adult, adultPrice);
-  add("Хүүхэд", counts.child, childPrice);
-  add("Нярай", counts.infant, infantPrice);
+  add("Том хүн", counts.adult, adultPrice, false);
+  add("Хүүхэд", counts.child, childPrice, isDocumentedFreeFare(trip, "child"));
+  add("Нярай", counts.infant, infantPrice, isDocumentedFreeFare(trip, "infant"));
   if (total <= 0) return null;
 
   const label = monthDay ? `${monthDay.month} сарын ${monthDay.day}-ны ` : "";
   return [`✈️ ${trip.route_name}`, `💰 ${label}нийт: ${formatMoney(total, currency)}`, ...rows].join("\n");
 }
 
+function compactButtonTripName(routeName: string): string {
+  const cleaned = formatRouteName(routeName)
+    .replace(/\s+/g, " ")
+    .trim();
+  if (cleaned.length <= 21) return cleaned;
+  return `${cleaned.slice(0, 20).trim()}…`;
+}
+
+export function buildClarificationButtons(trips: TravelTrip[]): string[] {
+  return trips
+    .slice(0, 10)
+    .map((trip, index) => `${index + 1}. ${compactButtonTripName(trip.route_name)}`);
+}
+
 export function buildSmartButtons(replyText: string, trips: TravelTrip[]): string[] | null {
   const { best } = findBestTripMatch(replyText, trips);
   if (!best) return null;
 
-  const buttons: string[] = ["Дэлгэрэнгүй", "Захиалах"];
+  const buttons: string[] = ["Хөтөлбөр үзэх"];
+  if (Array.isArray(best.photo_urls) && best.photo_urls.length > 0) {
+    buttons.push("Зураг үзэх");
+  }
+  buttons.push("Захиалах");
   if (best.seats_left !== null) buttons.push("Суудал бий юу?");
   return buttons;
 }
@@ -750,7 +794,7 @@ export function buildCompareReply(text: string, trips: TravelTrip[]): string | n
 
   const lines: string[] = ["📊 Аялал харьцуулалт:", ""];
   for (const trip of candidates) {
-    const price = formatMoney(trip.adult_price, trip.currency);
+    const price = formatPassengerMoney(trip.adult_price, trip.currency);
     lines.push(`▶ ${trip.route_name}`);
     lines.push(`Үнэ (том хүн): ${price || "тодорхойгүй"}`);
     lines.push(`Хугацаа: ${safeDurationText(trip.duration_text) || "тодорхойгүй"}`);
@@ -1020,7 +1064,7 @@ function buildSoldOutTripReply(text: string, trips: TravelTrip[]): string | null
   if (alternatives.length > 0) {
     const altLines = alternatives.map((trip) => {
       const duration = safeDurationText(trip.duration_text);
-      const price = formatMoney(trip.adult_price, trip.currency || "MNT");
+      const price = formatPassengerMoney(trip.adult_price, trip.currency || "MNT");
       const details = [duration, price ? `Том хүн: ${price}` : ""]
         .filter(Boolean)
         .join(" — ");
@@ -1272,19 +1316,19 @@ export function buildStructuredTripReply(
         if (!g) {
           lines.push(`💰 ${label}-д тохирох үнийн мэдээлэл олдсонгүй. Аяллын зөвлөхтэй холбогдоорой.`);
         } else {
-          const adult = formatMoney(
+          const adult = formatPassengerMoney(
             typeof (g as Record<string, unknown>).adult_price === "number"
               ? (g as Record<string, unknown>).adult_price as number
               : ((g as DepartureDateGroup).adult_price ?? null),
             currency,
           );
-          const child = formatMoney(
+          const child = formatPassengerMoney(
             typeof (g as Record<string, unknown>).child_price === "number"
               ? (g as Record<string, unknown>).child_price as number
               : ((g as DepartureDateGroup).child_price ?? null),
             currency,
           );
-          const infant = formatMoney(
+          const infant = formatPassengerMoney(
             typeof (g as Record<string, unknown>).infant_price === "number"
               ? (g as Record<string, unknown>).infant_price as number
               : ((g as DepartureDateGroup).infant_price ?? null),
@@ -1306,9 +1350,9 @@ export function buildStructuredTripReply(
       if (monthGroups.length > 0) {
         lines.push(`💰 ${askedMonthOnly} сарын үнэ:`);
         for (const g of monthGroups) {
-          const adult = formatMoney(typeof g.adult_price === "number" ? g.adult_price : null, currency);
-          const child = formatMoney(typeof g.child_price === "number" ? g.child_price : null, currency);
-          const infant = formatMoney(typeof g.infant_price === "number" ? g.infant_price : null, currency);
+          const adult = formatPassengerMoney(typeof g.adult_price === "number" ? g.adult_price : null, currency);
+          const child = formatPassengerMoney(typeof g.child_price === "number" ? g.child_price : null, currency);
+          const infant = formatPassengerMoney(typeof g.infant_price === "number" ? g.infant_price : null, currency);
           const priceParts: string[] = [];
           if (adult) priceParts.push(`Том хүн: ${adult}`);
           if (child) {
@@ -1396,6 +1440,53 @@ export function buildStructuredTripReply(
   }
 
   return lines.join("\n");
+}
+
+/**
+ * The program/media fast path, with a fallback for when its ONLY answer would
+ * be "this trip has no photos to show" (the TRIP_MEDIA_UNAVAILABLE_SILENT
+ * sentinel). A caller that treats any non-null result as final loses the WHOLE
+ * reply the instant that happens — not just the photo part — because it never
+ * gets to try buildStructuredTripReply for a compound message that also asked
+ * a real, answerable question ("Далянийн ... үнэ, ... зураг үзүүлээч" got
+ * silence + human handoff for ALL of it, price included, purely because
+ * Далянь happened to have zero photos at that moment).
+ *
+ * Silence is still correct and preserved when there is truly nothing else to
+ * say — a bare "зураг" request for a photo-less trip must stay silent per
+ * owner policy. This only changes the outcome when a REAL structured answer
+ * exists for the same message.
+ */
+export function buildProgramOrStructuredReply(
+  text: string,
+  trips: TravelTrip[],
+): TripProgramReplyResult | null {
+  const programReply = buildTripProgramReply(text, trips);
+  if (!programReply || programReply.reply !== TRIP_MEDIA_UNAVAILABLE_SILENT) {
+    return programReply;
+  }
+  // A BARE photo request ("зураг үзүүлээч" and nothing else) for a trip with
+  // no photos must stay silent — that is deliberate owner policy (staff sees
+  // an unanswered inquiry and follows up personally), not a gap to paper over
+  // with whatever generic info happens to exist. Only fall back to a
+  // structured answer when the message shows evidence of asking something
+  // ELSE too; otherwise this would quietly turn every silent photo handoff
+  // into an auto-answered one.
+  const asksSomethingElse =
+    hasPriceIntent(text) ||
+    hasDurationIntent(text) ||
+    hasScheduleIntent(text) ||
+    hasDirectFlightIntent(text) ||
+    hasExistenceIntent(text);
+  if (!asksSomethingElse) return programReply;
+  const structuredReply = buildStructuredTripReply(text, trips);
+  if (!structuredReply) return programReply;
+  return {
+    reply: structuredReply,
+    trip: programReply.trip,
+    brochure: null,
+    mediaUrls: [],
+  };
 }
 
 // Re-export every public symbol from the sibling modules so existing imports

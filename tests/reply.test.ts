@@ -121,6 +121,13 @@ test("shouldSilenceNoDataReply catches unknown-detail fallback wording", () => {
   assert.equal(shouldSilenceNoDataReply(paymentVerification), false);
 });
 
+test("shouldSilenceNoDataReply catches missing passport/document data wording", () => {
+  const passportMiss =
+    "\u042d\u043d\u044d \u0430\u044f\u043b\u0430\u043b\u0434 \u043f\u0430\u0441\u043f\u043e\u0440\u0442 \u0448\u0430\u0430\u0440\u0434\u043b\u0430\u0433\u0430\u0442\u0430\u0439 \u044d\u0441\u044d\u0445 \u0442\u0430\u043b\u0430\u0430\u0440 \u043c\u044d\u0434\u044d\u044d\u043b\u044d\u043b \u0431\u0430\u0439\u0445\u0433\u04af\u0439 \u0431\u0430\u0439\u043d\u0430.";
+
+  assert.equal(shouldSilenceNoDataReply(passportMiss), true);
+});
+
 test("shouldSilenceNoDataReply never suppresses a real answer that merely lacks photos", () => {
   // Regression: this exact reply shape (complete program answer + the old
   // no-photos footnote) was being suppressed, ghosting customers on every

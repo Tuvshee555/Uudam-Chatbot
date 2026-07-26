@@ -19,7 +19,7 @@ import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, dbClaimGoodbye, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
-import { appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
 import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
@@ -245,6 +245,7 @@ async function handleMessage(
     failTag: string;
     rememberSource: string;
     counter?: string;
+    buttons?: string[];
     afterDeliver?: () => Promise<void>;
   }) => {
     const noDataReply = isReferReply(input.reply) || shouldSilenceNoDataReply(input.reply);
@@ -290,16 +291,47 @@ async function handleMessage(
       return;
     }
     await assertLockHealthy();
-    const delivered = await sendPlatformMessage(
-      platform,
-      senderId,
-      reply,
-      token,
-      pageId,
-      igUserId,
-      trace,
-      { allowFallback: false },
-    );
+    let delivered: boolean;
+    const quickButtons = input.buttons?.filter(Boolean).slice(0, 10) || [];
+    if (platform === "facebook" && token && quickButtons.length > 0) {
+      try {
+        const buttons = quickButtons.includes(CONTACT_OPERATOR_LABEL)
+          ? quickButtons
+          : [...quickButtons, CONTACT_OPERATOR_LABEL].slice(0, 11);
+        await sendQuickReplies(senderId, reply, buttons, token, {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          source: `api.webhook.${input.failTag}_buttons`,
+        });
+        recordCounter("webhook.fast_path_buttons_sent_total", 1, {
+          platform,
+          buttonCount: String(buttons.length),
+        });
+        delivered = true;
+      } catch {
+        delivered = await sendPlatformMessage(
+          platform,
+          senderId,
+          reply,
+          token,
+          pageId,
+          igUserId,
+          trace,
+          { allowFallback: false },
+        );
+      }
+    } else {
+      delivered = await sendPlatformMessage(
+        platform,
+        senderId,
+        reply,
+        token,
+        pageId,
+        igUserId,
+        trace,
+        { allowFallback: false },
+      );
+    }
     if (!delivered) {
       throw new RetryableWebhookError(`delivery_failed:${input.failTag}`);
     }
@@ -1000,6 +1032,21 @@ async function handleMessage(
     return;
   }
 
+  // Generic price objections must run before route matching. Otherwise a
+  // plain complaint can match a trip note that happens to contain "unetei".
+  {
+    const objectionReply = buildPriceObjectionReply(text);
+    if (objectionReply) {
+      await deliverFastPathReply({
+        reply: enforceWebsiteForPayment(sanitizeAssistantReply(objectionReply)),
+        failTag: "price_objection_fast_path",
+        rememberSource: "api.webhook.price_objection_fast_path",
+        counter: "webhook.price_objection_fast_path_total",
+      });
+      return;
+    }
+  }
+
   // Compare questions intentionally mention multiple destinations/products.
   // Answer them as comparisons before scoped clarification narrows the message
   // to one destination family and asks the wrong follow-up.
@@ -1036,6 +1083,7 @@ async function handleMessage(
         failTag: "scoped_clarify",
         rememberSource: "api.webhook.scoped_clarify",
         counter: "webhook.scoped_clarify_total",
+        buttons: buildClarificationButtons(routed.scopedClarify),
       });
       return;
     }
@@ -1058,6 +1106,23 @@ async function handleMessage(
           failTag: "structured_clarify",
           rememberSource: "api.webhook.structured_clarify",
           counter: "webhook.structured_clarify_total",
+          buttons: buildClarificationButtons(resolution.candidates),
+        });
+        return;
+      }
+      if (
+        resolution.status === "not_found" &&
+        !hasDepartureDateAvailabilityIntent(text) &&
+        !hasCompareIntent(text) &&
+        !hasBudgetIntent(text) &&
+        !hasDiscountIntent(text) &&
+        !hasSeatsIntent(text)
+      ) {
+        await deliverFastPathReply({
+          reply: "REFER",
+          failTag: "structured_trip_not_found",
+          rememberSource: "api.webhook.structured_trip_not_found",
+          counter: "webhook.structured_trip_not_found_total",
         });
         return;
       }
@@ -1095,6 +1160,7 @@ async function handleMessage(
         reply: safeDateReply,
         failTag: "date_availability_reply",
         rememberSource: "api.webhook.date_fast_path",
+        buttons: buildSmartButtons(safeDateReply, trips) || undefined,
       });
       return;
     }
@@ -1111,18 +1177,7 @@ async function handleMessage(
         failTag: "seats_fast_path",
         rememberSource: "api.webhook.seats_fast_path",
         counter: "webhook.seats_fast_path_total",
-      });
-      return;
-    }
-  }
-  {
-    const objectionReply = buildPriceObjectionReply(await getFastPathText());
-    if (objectionReply) {
-      await deliverFastPathReply({
-        reply: enforceWebsiteForPayment(sanitizeAssistantReply(objectionReply)),
-        failTag: "price_objection_fast_path",
-        rememberSource: "api.webhook.price_objection_fast_path",
-        counter: "webhook.price_objection_fast_path_total",
+        buttons: buildSmartButtons(seatsReply, trips) || undefined,
       });
       return;
     }
@@ -1139,6 +1194,7 @@ async function handleMessage(
         failTag: "budget_fast_path",
         rememberSource: "api.webhook.budget_fast_path",
         counter: "webhook.budget_fast_path_total",
+        buttons: buildSmartButtons(budgetReply, trips) || undefined,
       });
       return;
     }
@@ -1155,6 +1211,7 @@ async function handleMessage(
         failTag: "discount_fast_path",
         rememberSource: "api.webhook.discount_fast_path",
         counter: "webhook.discount_fast_path_total",
+        buttons: buildSmartButtons(discountReply, trips) || undefined,
       });
       return;
     }
@@ -1162,11 +1219,22 @@ async function handleMessage(
   {
     const trips = await getTrips();
     const programFastPathText = await getFastPathText();
-    const programReply = buildTripProgramReply(programFastPathText, trips);
+    // buildProgramOrStructuredReply already falls back to the structured
+    // (price/date/duration) answer whenever the program path's only answer
+    // would be pure "no photos" silence — covers every compound "zurag + X"
+    // phrasing, not just ones containing hasPriceIntent's specific keyword
+    // set (a bare "хэд төгрөг" price ask used to still fall through here).
+    const programReply = buildProgramOrStructuredReply(programFastPathText, trips);
     if (programReply) {
+      // A "which of these tours did you mean?" reply carries no media on
+      // purpose. Inferring from its text would pick one of the trip names it
+      // lists and attach that tour's poster — asking which tour while already
+      // sending one tour's prices as an image.
       const inferredMediaUrls = programReply.mediaUrls.length > 0
         ? programReply.mediaUrls
-        : extractTripPhotosForReply(programReply.reply, trips, { userText: programFastPathText });
+        : programReply.reply.includes(AMBIGUOUS_REPLY_MARKER)
+          ? []
+          : extractTripPhotosForReply(programReply.reply, trips, { userText: programFastPathText });
       const safeProgramReply = appendLeadCaptureCta(
         enforceWebsiteForPayment(
           sanitizeAssistantReply(
@@ -1175,11 +1243,19 @@ async function handleMessage(
         ),
         phoneAlreadyRequested,
       );
+      const programResolution = programReply.reply.includes(AMBIGUOUS_REPLY_MARKER)
+        ? resolveTripFromUserMessage(programFastPathText, trips, { allowLooseFallback: false })
+        : null;
+      const programButtons =
+        programResolution?.status === "ambiguous"
+          ? buildClarificationButtons(programResolution.candidates)
+          : buildSmartButtons(safeProgramReply, trips) || undefined;
       await deliverFastPathReply({
         reply: safeProgramReply,
         failTag: "program_fast_path",
         rememberSource: "api.webhook.program_fast_path",
         counter: "webhook.program_fast_path_total",
+        buttons: programButtons,
         afterDeliver: async () => {
           if (platform !== "facebook" || !token) return;
           if (programReply.mediaUrls.length > 0) {
@@ -1216,11 +1292,21 @@ async function handleMessage(
         enforceWebsiteForPayment(sanitizeAssistantReply(structuredTripReply)),
         phoneAlreadyRequested,
       );
+      const structuredResolution = structuredTripReply.includes(AMBIGUOUS_REPLY_MARKER)
+        ? resolveTripFromUserMessage(await getFastPathText(), trips, {
+            allowLooseFallback: false,
+          })
+        : null;
       await deliverFastPathReply({
         reply: safeStructuredReply,
         failTag: "structured_trip_fast_path",
         rememberSource: "api.webhook.trip_fast_path",
         counter: "webhook.trip_fast_path_total",
+        buttons: structuredTripReply.includes(AMBIGUOUS_REPLY_MARKER)
+          ? structuredResolution?.status === "ambiguous"
+            ? buildClarificationButtons(structuredResolution.candidates)
+            : undefined
+          : buildSmartButtons(safeStructuredReply, trips) || undefined,
         afterDeliver: async () => {
           if (hasTripPhotoIntent(text)) {
             await sendTripMediaForReply(

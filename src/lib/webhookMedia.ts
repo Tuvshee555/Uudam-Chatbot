@@ -8,7 +8,7 @@ import { sendTextMessage as sendIgTextMessage } from "./instagram";
 import { appendMessage } from "./conversation";
 import { storeSenderName } from "./pause";
 import { listTrips } from "./travelOps";
-import { extractTripPhotosForReply, MAX_TRIP_PHOTOS } from "./welcomeFlow";
+import { extractTripPhotosForReply, extractTripPhotosForUserMessage, hasTripPhotoIntent, MAX_TRIP_PHOTOS } from "./welcomeFlow";
 import type { TravelTrip } from "./travelTypes";
 import { getEnv } from "./env";
 import {
@@ -226,7 +226,13 @@ export async function sendTripMediaForReply(
   if (platform !== "facebook" || !token) return;
   try {
     const tripsForPhotos = await listTrips({ limit: 5000 });
-    const tripPhotos = extractTripPhotosForReply(replyText, tripsForPhotos, { userText });
+    const inferredPhotos = extractTripPhotosForReply(replyText, tripsForPhotos, { userText });
+    const tripPhotos =
+      inferredPhotos.length > 0
+        ? inferredPhotos
+        : hasTripPhotoIntent(userText)
+          ? extractTripPhotosForUserMessage(userText, tripsForPhotos)
+          : [];
     logInfo("webhook.trip_photos_selected", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,

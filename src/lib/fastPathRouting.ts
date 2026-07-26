@@ -100,6 +100,15 @@ export async function routeFastPathText(input: {
         .filter((trip): trip is TravelTrip => Boolean(trip))
     : [];
   if (pendingTrips.length > 0) {
+    const numberedChoice = /^\s*(\d{1,2})(?:\D|$)/.exec(text);
+    if (numberedChoice) {
+      const index = Number.parseInt(numberedChoice[1], 10) - 1;
+      const chosen = pendingTrips[index];
+      if (chosen) {
+        await clearClarificationState(senderId);
+        return { matchText: `${chosen.route_name}\n${text}`, scopedClarify: null };
+      }
+    }
     const scoped = resolve(text, pendingTrips);
     if (scoped.status === "verified") {
       await clearClarificationState(senderId);

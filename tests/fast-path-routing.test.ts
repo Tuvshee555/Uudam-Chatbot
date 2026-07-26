@@ -144,6 +144,24 @@ test("an answer fitting none of the offered candidates drops the clarification (
   );
 });
 
+test("numbered quick-reply choice resolves against the offered clarification list", async () => {
+  const senderId = "route-test-numbered-choice";
+  await clearClarificationState(senderId);
+  const { setClarificationState } = await import("../src/lib/clarificationState");
+  await setClarificationState(senderId, ["shanghai-tengeriin", "shanghai-hanzhou"]);
+
+  const routed = await routeFastPathText({
+    senderId,
+    text: "2. Шанхай+Ханжоу",
+    contextualUserText: "beidaihe aylal une\n2. Шанхай+Ханжоу",
+    trips: TRIPS,
+  });
+
+  assert.equal(routed.scopedClarify, null);
+  assert.match(routed.matchText, /Шанхай\+Ханжоу|Ð¨Ð°Ð½Ñ…Ð°Ð¹\+Ð¥Ð°Ð½Ð¶Ð¾Ñƒ/);
+  assert.equal(await getClarificationState(senderId), null);
+});
+
 test("specific combo query escapes stale Beijing ground-trip clarification", async () => {
   const senderId = "route-test-beijing-combo-escape";
   await clearClarificationState(senderId);

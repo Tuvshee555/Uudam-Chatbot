@@ -20,8 +20,8 @@ import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceW
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
-import { appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
-import { extractTripPhotosForReply, hasTripPhotoIntent, MAX_TRIP_PHOTOS } from "../../lib/welcomeFlow";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
+import { extractTripPhotosForReply, extractTripPhotosForUserMessage, hasTripPhotoIntent, MAX_TRIP_PHOTOS } from "../../lib/welcomeFlow";
 import { CONTACT_OPERATOR_LABEL, DUPLICATE_REPLY_NUDGE, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
 import { getEnv } from "../../lib/env";
 import {
@@ -73,10 +73,22 @@ function buildDemoMedia(input: {
   brochureUrl?: string | null;
 }): DemoMedia {
   const explicit = input.explicitMediaUrls || [];
-  const inferred = explicit.length > 0 || !hasTripPhotoIntent(input.userText)
-    ? []
-    : extractTripPhotosForReply(input.reply, input.trips, { userText: input.userText });
-  const mediaUrls = Array.from(new Set([...explicit, ...inferred]))
+  // Never infer photos for a "which of these tours did you mean?" reply. That
+  // reply deliberately carries no media, but it lists candidate trip NAMES —
+  // inferring from its text picks one of them and attaches that tour's poster,
+  // so the bot asks which tour the customer wants while simultaneously sending
+  // one tour's prices as an image. Silence on media is the whole point here.
+  const inferred =
+    explicit.length > 0 ||
+    !hasTripPhotoIntent(input.userText) ||
+    input.reply.includes(AMBIGUOUS_REPLY_MARKER)
+      ? []
+      : extractTripPhotosForReply(input.reply, input.trips, { userText: input.userText });
+  const directFromUser =
+    inferred.length === 0 && explicit.length === 0 && hasTripPhotoIntent(input.userText)
+      ? extractTripPhotosForUserMessage(input.userText, input.trips)
+      : [];
+  const mediaUrls = Array.from(new Set([...explicit, ...inferred, ...directFromUser]))
     .filter((url) => typeof url === "string" && url.startsWith("https://"))
     .slice(0, MAX_TRIP_PHOTOS);
   const brochureUrl = input.brochureUrl && input.brochureUrl.startsWith("https://")
@@ -339,6 +351,20 @@ export default async function handler(
         return res.status(200).json({ reply: deferralReply, buttons: [] });
       }
 
+      // Generic price objections must run before route matching. Otherwise a
+      // plain complaint can match a trip note that happens to contain "unetei".
+      {
+        const objectionReply = buildPriceObjectionReply(normalizedText);
+        if (objectionReply) {
+          const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(objectionReply));
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
+          recordCounter("demo.price_objection_fast_path_total", 1, {});
+          return res.status(200).json({ reply: safeReply, buttons: [] });
+        }
+      }
+
       // Compare questions mention multiple destinations on purpose. Let the
       // comparison fast path answer before scoped clarification narrows to one
       // destination family and turns "A уу B уу?" into "which A variant?".
@@ -375,7 +401,10 @@ export default async function handler(
           await appendMessage(sessionId, "assistant", clarifyReply);
           await rememberTurn();
           recordCounter("demo.scoped_clarify_total", 1, {});
-          return res.status(200).json({ reply: clarifyReply, buttons: [] });
+          return res.status(200).json({
+            reply: clarifyReply,
+            buttons: buildClarificationButtons(routed.scopedClarify),
+          });
         }
       }
 
@@ -397,7 +426,21 @@ export default async function handler(
             await appendMessage(sessionId, "assistant", clarifyReply);
             await rememberTurn();
             recordCounter("demo.structured_clarify_total", 1, {});
-            return res.status(200).json({ reply: clarifyReply, buttons: [] });
+            return res.status(200).json({
+              reply: clarifyReply,
+              buttons: buildClarificationButtons(resolution.candidates),
+            });
+          }
+          if (
+            resolution.status === "not_found" &&
+            !hasDepartureDateAvailabilityIntent(normalizedText) &&
+            !hasCompareIntent(normalizedText) &&
+            !hasBudgetIntent(normalizedText) &&
+            !hasDiscountIntent(normalizedText) &&
+            !hasSeatsIntent(normalizedText)
+          ) {
+            recordCounter("demo.structured_trip_not_found_total", 1, {});
+            return returnHandoff();
           }
         }
       }
@@ -422,7 +465,10 @@ export default async function handler(
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.date_fast_path_total", 1, {});
-          return res.status(200).json({ reply: safeReply, buttons: [] });
+          return res.status(200).json({
+            reply: safeReply,
+            buttons: buildSmartButtons(safeReply, trips) || [],
+          });
         }
       }
 
@@ -440,20 +486,10 @@ export default async function handler(
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.seats_fast_path_total", 1, {});
-          return res.status(200).json({ reply: safeReply, buttons: [] });
-        }
-      }
-
-      // Fast path: generic price objection, without guessing a random matching route.
-      {
-        const objectionReply = buildPriceObjectionReply(await getFastPathText());
-        if (objectionReply) {
-          const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(objectionReply));
-          await appendMessage(sessionId, "user", normalizedText);
-          await appendMessage(sessionId, "assistant", safeReply);
-          await rememberTurn();
-          recordCounter("demo.price_objection_fast_path_total", 1, {});
-          return res.status(200).json({ reply: safeReply, buttons: [] });
+          return res.status(200).json({
+            reply: safeReply,
+            buttons: buildSmartButtons(safeReply, trips) || [],
+          });
         }
       }
 
@@ -471,7 +507,10 @@ export default async function handler(
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.budget_fast_path_total", 1, {});
-          return res.status(200).json({ reply: safeReply, buttons: [] });
+          return res.status(200).json({
+            reply: safeReply,
+            buttons: buildSmartButtons(safeReply, trips) || [],
+          });
         }
       }
 
@@ -489,7 +528,10 @@ export default async function handler(
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
           recordCounter("demo.discount_fast_path_total", 1, {});
-          return res.status(200).json({ reply: safeReply, buttons: [] });
+          return res.status(200).json({
+            reply: safeReply,
+            buttons: buildSmartButtons(safeReply, trips) || [],
+          });
         }
       }
 
@@ -497,7 +539,13 @@ export default async function handler(
       {
         const trips = await getTrips();
         const programFastPathText = await getFastPathText();
-        const programReply = buildTripProgramReply(programFastPathText, trips);
+        // buildProgramOrStructuredReply already falls back to the structured
+        // (price/date/duration) answer whenever the program path's only
+        // answer would be pure "no photos" silence — covers every compound
+        // "zurag + X" phrasing, not just ones containing hasPriceIntent's
+        // specific keyword set (a bare "хэд төгрөг" price ask used to still
+        // fall through to silence here).
+        const programReply = buildProgramOrStructuredReply(programFastPathText, trips);
         if (programReply) {
           // Mirror the webhook exactly: the reply TEXT is programReply.reply
           // (with its own "sending the photos/PDF" footnote) — the URLs are
@@ -505,7 +553,9 @@ export default async function handler(
           // demo UI already renders from mediaUrls/brochureUrl below.
           const inferredMediaUrls = programReply.mediaUrls.length > 0
             ? programReply.mediaUrls
-            : extractTripPhotosForReply(programReply.reply, trips, { userText: programFastPathText });
+            : programReply.reply.includes(AMBIGUOUS_REPLY_MARKER)
+              ? []
+              : extractTripPhotosForReply(programReply.reply, trips, { userText: programFastPathText });
           const safeReply = appendLeadCaptureCta(
             enforceWebsiteForPayment(
               sanitizeAssistantReply(
@@ -526,7 +576,16 @@ export default async function handler(
           await appendMessage(sessionId, "assistant", safeReply, imageAttachments(media.mediaUrls));
           await rememberTurn();
           recordCounter("demo.program_fast_path_total", 1, {});
-          return res.status(200).json({ reply: safeReply, buttons: [], ...media });
+          const programResolution = programReply.reply.includes(AMBIGUOUS_REPLY_MARKER)
+            ? resolveTripFromUserMessage(programFastPathText, trips, {
+                allowLooseFallback: false,
+              })
+            : null;
+          const buttons =
+            programResolution?.status === "ambiguous"
+              ? buildClarificationButtons(programResolution.candidates)
+              : buildSmartButtons(safeReply, trips) || [];
+          return res.status(200).json({ reply: safeReply, buttons, ...media });
         }
         const structuredReply = buildStructuredTripReply(await getFastPathText(), trips);
         if (structuredReply) {
@@ -544,7 +603,20 @@ export default async function handler(
           await appendMessage(sessionId, "assistant", safeReply, imageAttachments(media.mediaUrls));
           await rememberTurn();
           recordCounter("demo.structured_fast_path_total", 1, {});
-          return res.status(200).json({ reply: safeReply, buttons: [], ...media });
+          const structuredResolution = structuredReply.includes(AMBIGUOUS_REPLY_MARKER)
+            ? resolveTripFromUserMessage(await getFastPathText(), trips, {
+                allowLooseFallback: false,
+              })
+            : null;
+          return res.status(200).json({
+            reply: safeReply,
+            buttons: structuredReply.includes(AMBIGUOUS_REPLY_MARKER)
+              ? structuredResolution?.status === "ambiguous"
+                ? buildClarificationButtons(structuredResolution.candidates)
+                : []
+              : buildSmartButtons(safeReply, trips) || [],
+            ...media,
+          });
         }
       }
 
