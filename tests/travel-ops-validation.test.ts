@@ -845,7 +845,7 @@ test("date-based pricing conflict is suppressed when multiple departure dates ex
     needs_confirmation: true,
     important_reason: "Үнийн зөрүү байна.",
     conflicts: [
-      '"Шанхай + Тэнгэрийн хаалга": аяллын үнэ 3,590,000₮, 3,660,000₮, 3,260,000₮ байна — өөр үнэ тодорхойлогдлоо.',
+      '"Шанхай + Тэнгэрийн хаалга": аяллын үнэ 3,590,000₮, 1,500,000₮, 1,470,000₮ байна — өөр үнэ тодорхойлогдлоо.',
     ],
     actions: [
       {
@@ -858,7 +858,7 @@ test("date-based pricing conflict is suppressed when multiple departure dates ex
           child_price: 3_260_000,
           currency: "MNT",
           departure_dates: ["6 сарын 27", "7 сарын 18", "8 сарын 8"],
-          notes: "6 сарын 27: Том хүн 3,590,000₮ / Хүүхэд 3,260,000₮; 7,8-р сар: Том хүн 3,660,000₮ / Хүүхэд 3,260,000₮",
+          notes: "6 сарын 27: Том хүн 3,590,000₮ / Хүүхэд 1,470,000₮; 7,8-р сар: Том хүн 1,500,000₮ / Хүүхэд 1,470,000₮",
         },
       },
     ],
@@ -974,7 +974,7 @@ test("date-based pricing conflict suppressed when notes encode date→price mapp
     needs_confirmation: true,
     important_reason: "Үнийн зөрүү",
     conflicts: [
-      '"Тэст аялал": үнэ 2,990,000₮, 3,100,000₮ байна — тодорхойгүй price өөрчлөлт.',
+      '"Тэст аялал": үнэ 1,430,000₮, 3,100,000₮ байна — тодорхойгүй price өөрчлөлт.',
     ],
     actions: [
       {
@@ -985,7 +985,7 @@ test("date-based pricing conflict suppressed when notes encode date→price mapp
           adult_price: 3_100_000,
           currency: "MNT",
           departure_dates: ["8 сарын 15"],
-          notes: "8 сарын 15: 2,990,000₮; 9 сарын 15: 3,100,000₮",
+          notes: "8 сарын 15: 1,430,000₮; 9 сарын 15: 3,100,000₮",
         },
       },
     ],

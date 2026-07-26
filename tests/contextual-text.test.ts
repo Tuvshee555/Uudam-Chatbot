@@ -102,16 +102,16 @@ test("short referential follow-ups use the previous assistant answer when availa
   const result = buildContextualUserText(
     [
       { role: "user", text: "Хайнан аялал сонирхож байна" },
-      { role: "assistant", text: "Хайнан 2,990,000₮..." },
+      { role: "assistant", text: "Хайнан 1,430,000₮..." },
     ],
     "тэр хэд вэ?",
   );
-  assert.equal(result, "Хайнан 2,990,000₮...\nтэр хэд вэ?");
+  assert.equal(result, "Хайнан 1,430,000₮...\nтэр хэд вэ?");
 });
 
 test("short referential follow-ups anchor to the previous assistant answer before stale user turns", () => {
   const previousAnswer =
-    "Хамгийн хямд аялал бол ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ-БЭЭЖИНГИЙН ГАЗРЫН АЯЛАЛ юм. Хүүхдийн үнэ: 1,190,000₮";
+    "Хамгийн хямд аялал бол ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ-БЭЭЖИНГИЙН ГАЗРЫН АЯЛАЛ юм. Хүүхдийн үнэ: 1,120,000₮";
   const result = buildContextualUserText(
     [
       { role: "user", text: "шууд нислэгтэй нь хэд вэ?" },
@@ -137,7 +137,7 @@ test("short referential follow-ups skip generic assistant prompts", () => {
 
 test("passenger price follow-ups borrow the previous assistant answer", () => {
   const previousAnswer =
-    "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал. Том хүн 2,150,000₮, хүүхэд 1,710,000₮, нярай 530,000₮.";
+    "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал. Том хүн 1,270,000₮, хүүхэд 1,200,000₮, нярай 1,050,000₮.";
   const result = buildContextualUserText(
     [{ role: "assistant", text: previousAnswer }],
     "нярай хүүхэд үнэтэй юу?",

@@ -117,7 +117,8 @@ function isGenericExtractionMissConflict(
 /**
  * Suppresses false "price conflict" questions that are actually date-based
  * seasonal pricing. The model sometimes lists multiple MNT prices from the
- * same tour (e.g. 3,590,000₮ / 3,660,000₮ / 3,260,000₮) and flags them as
+ * same tour (e.g. 1,111,111₮ / 999,999₮ / 2,222,222₮ — synthetic amounts; never
+ * quote live catalog prices, even in a comment) and flags them as
  * a conflict even though they each belong to a different departure date or
  * passenger type. We suppress the conflict when:
  * 1. The conflict text contains two or more distinct MNT price figures, AND

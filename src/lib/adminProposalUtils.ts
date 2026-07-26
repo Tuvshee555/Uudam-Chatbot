@@ -667,10 +667,11 @@ export function buildProposalClarifications(
 
     // Detect "price varies by date" conflicts by SHAPE, not fixed phrases —
     // the model phrases these differently every time ("6-р сард", "6 сарын
-    // 20, 27:", "Том хүн 2,030,000₮ / Хүүхэд ..."). A real screenshot dump
-    // ("6 сарын 20, 27: Том хүн 2,030,000₮ / Хүүхэд 1,590,000₮; 7 сарын 1, 8,
+    // 20, 27:", "Том хүн 1,111,111₮ / Хүүхэд ..."). A real screenshot dump
+    // ("6 сарын 20, 27: Том хүн 1,111,111₮ / Хүүхэд 999,999₮; 7 сарын 1, 8,
     // 15, 22: ...") matched NONE of the old fixed strings and fell through to
-    // the meaningless generic fallback question.
+    // the meaningless generic fallback question. (Amounts here are deliberately
+    // synthetic — never quote live catalog prices, even in a comment.)
     const mnPriceCount = (detail.match(/[\d,]+(?:,\d{3})*\s*(?:₮|төгрөг)/g) ?? []).length;
     const mentionsMonthDay = /\d+\s*сар(?:ын|д|ны)?\s*\d+/.test(detail);
     const isDateVaryingPriceDump = mnPriceCount >= 2 && (mentionsMonthDay || normalized.includes("сар"));

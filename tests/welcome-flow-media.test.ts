@@ -159,7 +159,7 @@ test("reply media does not borrow photos when the exact discussed trip has none"
   ];
 
   const photos = extractTripPhotosForReply(
-    "Hohhot exam ground tour price is 890,000 MNT.",
+    "Hohhot exam ground tour price is 1,100,000 MNT.",
     trips,
     { userText: "Hohhot exam ground tour photo" },
   );

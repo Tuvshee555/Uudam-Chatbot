@@ -42,7 +42,7 @@ test("buildReasoningPrompt includes memory, history, trips, and the labeled outp
     customerMemory: "Trips/products discussed:\n- Хайнан Саньяа аялал (2026-07-02)",
     history: [
       { role: "user", text: "Хайнан аялал ямар үнэтэй вэ?" },
-      { role: "assistant", text: "Том хүн 2,990,000₮." },
+      { role: "assistant", text: "Том хүн 1,430,000₮." },
     ],
     userText: "Тэрийг маргааш захиалъя",
     tripIndexLines: ["- Хайнан Саньяа аялал"],

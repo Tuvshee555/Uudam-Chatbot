@@ -397,7 +397,7 @@ test("a plain greeting is never treated as a context-dependent follow-up", async
     category: "Газар нислэг хосолсон",
   });
   const previousReply =
-    "✈️ Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал\n💰 Үнэ: Том хүн 2,150,000₮";
+    "✈️ Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал\n💰 Үнэ: Том хүн 1,270,000₮";
 
   const routed = await routeFastPathText({
     senderId,

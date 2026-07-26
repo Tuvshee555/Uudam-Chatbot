@@ -907,122 +907,6 @@ export function compactDates(dates: string[]): string {
   return `${dates.slice(0, 3).join(", ")} … (нийт ${dates.length} өдөр)`;
 }
 
-export function formatTripBasePrice(trip: TravelTrip) {
-  const currency = trip.currency || "MNT";
-
-  // Prefer new structured price_groups from extra
-  const structuredGroups = getStructuredPriceGroups(trip);
-  if (structuredGroups.length > 0) {
-    // Group price_groups by identical adult/child/infant price to avoid verbose repetition
-    type GroupedPrice = {
-      priceKey: string;
-      priceStr: string;
-      dates: string[];
-      label: string;
-    };
-    const grouped: GroupedPrice[] = [];
-
-    for (const g of structuredGroups) {
-      const adult = formatPassengerMoney(typeof g.adult_price === "number" ? g.adult_price : null, currency);
-      const child = formatPassengerMoney(typeof g.child_price === "number" ? g.child_price : null, currency);
-      const infant = formatPassengerMoney(typeof g.infant_price === "number" ? g.infant_price : null, currency);
-      const priceParts: string[] = [];
-      if (adult) priceParts.push(`Том хүн: ${adult}`);
-      if (child) {
-        const childAge = typeof g.child_age === "string" && g.child_age.trim() ? ` (${g.child_age.trim()})` : "";
-        priceParts.push(`Хүүхэд${childAge}: ${child}`);
-      }
-      if (infant) {
-        const infantAge = typeof g.infant_age === "string" && g.infant_age.trim() ? ` (${g.infant_age.trim()})` : "";
-        priceParts.push(`Нярай${infantAge}: ${infant}`);
-      }
-      if (!priceParts.length) continue;
-      const priceKey = priceParts.join("|");
-      const rawDates = getPriceGroupDisplayDates(g);
-      const futureDates = filterFutureDepartureDates(rawDates);
-      if (rawDates.length > 0 && futureDates.length === 0) continue;
-      const labelStr = typeof g.label === "string" && g.label ? g.label : "";
-      const existing = grouped.find((gr) => gr.priceKey === priceKey);
-      if (existing) {
-        existing.dates.push(...futureDates);
-      } else {
-        grouped.push({ priceKey, priceStr: priceParts.join(" | "), dates: [...futureDates], label: labelStr });
-      }
-    }
-
-    // Every group can be skipped above (all its dates already departed, or it
-    // carries no prices). Returning here anyway would send the customer a bare
-    // "💰 Үнэ (гарах огноогоор):" header with no number under it, so fall
-    // through to the flat trip price instead.
-    if (grouped.length > 0) {
-      const lines: string[] = ["💰 Үнэ (гарах огноогоор):"];
-      for (const gr of grouped) {
-        const dateDisplay = gr.dates.length > 0 ? compactDates(gr.dates) : gr.label;
-        if (dateDisplay) {
-          lines.push(`  ${dateDisplay}: ${gr.priceStr}`);
-        } else {
-          lines.push(`  ${gr.priceStr}`);
-        }
-      }
-      const childRulesStr = formatChildRules(trip, currency);
-      if (childRulesStr) lines.push(childRulesStr);
-      return lines.join("\n");
-    }
-  }
-
-  // Fall back to legacy departure_date_groups
-  const groups = getPriceGroups(trip);
-  if (groups.length > 0) {
-    // Also group by price to avoid repetition
-    type LegacyGroup = { priceKey: string; priceStr: string; dates: string[] };
-    const grouped: LegacyGroup[] = [];
-    for (const g of groups) {
-      const adult = formatPassengerMoney(g.adult_price ?? null, currency);
-      const child = formatPassengerMoney(g.child_price ?? null, currency);
-      const infant = formatPassengerMoney(g.infant_price ?? null, currency);
-      const priceParts: string[] = [];
-      if (adult) priceParts.push(`Том хүн: ${adult}`);
-      if (child) priceParts.push(`Хүүхэд: ${child}`);
-      if (infant) priceParts.push(`Нярай: ${infant}`);
-      if (!priceParts.length) continue;
-      const priceKey = priceParts.join("|");
-      const rawDates = getPriceGroupDisplayDates(g);
-      const futureDates = filterFutureDepartureDates(rawDates);
-      if (rawDates.length > 0 && futureDates.length === 0) continue;
-      const existing = grouped.find((gr) => gr.priceKey === priceKey);
-      if (existing) {
-        existing.dates.push(...futureDates);
-      } else {
-        grouped.push({ priceKey, priceStr: priceParts.join(" | "), dates: [...futureDates] });
-      }
-    }
-    // Same fall-through as the structured branch: no renderable group means no
-    // header, so the flat trip price below can still answer the question.
-    if (grouped.length > 0) {
-      const lines: string[] = ["💰 Үнэ (гарах огноогоор):"];
-      for (const gr of grouped) {
-        const dateDisplay = compactDates(gr.dates);
-        if (dateDisplay) {
-          lines.push(`  ${dateDisplay}: ${gr.priceStr}`);
-        } else {
-          lines.push(`  ${gr.priceStr}`);
-        }
-      }
-      return lines.join("\n");
-    }
-  }
-
-  // Fall back to flat price
-  const adult = formatPassengerMoney(trip.adult_price, currency);
-  const child = formatPassengerMoney(trip.child_price, currency);
-  const parts: string[] = [];
-  if (adult) parts.push(`💰 Том хүн: ${adult}`);
-  if (child) parts.push(`💰 Хүүхэд: ${child}`);
-  if (!parts.length) {
-    return "💰 Үнийн мэдээлэл дэлгэрэнгүй мэдэхийг хүсвэл аяллын зөвлөхтэй холбогдоорой.";
-  }
-  return parts.join("\n");
-}
 
 /**
  * Extract a single month number from phrases like "7 сард", "7-р сард", "долоодугаар сард".
@@ -1156,8 +1040,9 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
 
   // A single flat child_price can silently pick ONE of several age-banded child
   // fares this catalog stores in child_rules (observed: a trip with a
-  // 1,390,000₮ tier for children born 2014-2015 and a SEPARATE 1,290,000₮ tier
-  // for 2016-2023, collapsed by the extraction to one flat trip.child_price) —
+  // 1,111,111₮ tier for one birth-year band and a SEPARATE 999,999₮ tier for
+  // another, collapsed by the extraction to one flat trip.child_price; the
+  // amounts here are synthetic on purpose) —
   // quoting that single number to every family either over- or under-charges
   // whichever band it doesn't match. When child_rules documents more than one
   // distinct non-infant fare, break them out instead.

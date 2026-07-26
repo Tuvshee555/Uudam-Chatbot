@@ -139,7 +139,7 @@ test("broad month availability lists options instead of picking one trip", () =>
       trip({
         id: "beidaihe",
         route_name: "Бэйдайхэ далайтай аялал",
-        adult_price: 1390000,
+        adult_price: 1160000,
         departure_dates: ["7 сарын 16", "8 сарын 1"],
       }),
     ],

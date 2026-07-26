@@ -7,19 +7,25 @@ const env = getEnv();
 
 // Messenger commonly re-compresses oversized/tall PNG uploads. For Cloudinary
 // images, serve a high-quality JPEG variant first so Meta fetches a readable
-// poster-sized asset instead of an over-large PNG. Keep the cap generous:
-// travel posters are usually tall, and a 1440px height cap made 5-slice
-// posters too narrow to read comfortably after Messenger's own compression.
+// poster-sized asset instead of an over-large PNG.
+//
+// The height cap only exists to bound a pathological upload; it must never
+// bite a real poster. `c_limit` scales BOTH axes to fit, so a height cap that
+// is too low silently narrows the poster — and narrower is exactly what makes
+// Messenger's own re-compression turn poster text to mush. A 1440px cap made
+// 5-slice posters unreadable; a 4096px cap still shrank a full 2160x5160
+// single-page poster to 1715px wide *and* inflated it from 721KB to 2199KB,
+// because resampling defeats the source JPEG's own encoding. Full-height
+// passthrough is both sharper and smaller, so keep the cap well clear of any
+// real poster and let width carry the quality.
+const MESSENGER_IMAGE_TRANSFORM = "f_jpg,q_100,c_limit,w_2160,h_8192";
+
 export function toMessengerImageUrl(imageUrl: string): string {
   if (!imageUrl.startsWith("https://res.cloudinary.com/")) return imageUrl;
   if (!imageUrl.includes("/image/upload/")) return imageUrl;
-  if (imageUrl.includes("/image/upload/f_jpg,q_100,c_limit,w_2160,h_4096/")) {
-    return imageUrl;
-  }
-  return imageUrl.replace(
-    "/image/upload/",
-    "/image/upload/f_jpg,q_100,c_limit,w_2160,h_4096/",
-  );
+  const transformed = `/image/upload/${MESSENGER_IMAGE_TRANSFORM}/`;
+  if (imageUrl.includes(transformed)) return imageUrl;
+  return imageUrl.replace("/image/upload/", transformed);
 }
 
 export type UpstreamTraceOptions = {

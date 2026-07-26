@@ -11,10 +11,10 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
     id: "trip-1",
     category: "Outbound",
     operator_name: "Uudam Travel",
-    route_name: "Тэнгэрийн хаалга - шууд нислэгтэй",
+    route_name: "Зэт хаалга - шууд нислэгтэй",
     duration_text: "5 өдөр / 4 шөнө",
-    adult_price: 3290000,
-    child_price: 2990000,
+    adult_price: 1234567,
+    child_price: 1200000,
     currency: "MNT",
     departure_dates: ["6 сарын 27", "7 сарын 18"],
     seats_total: null,
@@ -46,19 +46,19 @@ test("shared city-only trip resolver returns ambiguous instead of guessing", () 
 });
 
 test("appendLeadCaptureCta adds the phone ask to a normal fast-path answer", () => {
-  const out = appendLeadCaptureCta("✈️ Бээжин аялал\n💰 Том хүн: 1,890,000₮", false);
-  assert.match(out, /1,890,000₮/);
+  const out = appendLeadCaptureCta("✈️ Бээжин аялал\n💰 Том хүн: 1,210,000₮", false);
+  assert.match(out, /1,210,000₮/);
   assert.ok(out.endsWith(LEAD_CAPTURE_CTA));
 });
 
 test("appendLeadCaptureCta skips when phone already collected", () => {
-  const reply = "✈️ Бээжин аялал\n💰 Том хүн: 1,890,000₮";
+  const reply = "✈️ Бээжин аялал\n💰 Том хүн: 1,210,000₮";
   assert.equal(appendLeadCaptureCta(reply, true), reply);
 });
 
 test("smart buttons offer useful next taps for a matched trip with photos", () => {
   const buttons = buildSmartButtons(
-    "✈️ Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал\n💰 Том хүн: 2,150,000₮",
+    "✈️ Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал\n💰 Том хүн: 1,270,000₮",
     [
       trip({
         id: "beidaihe-combo",
@@ -91,7 +91,7 @@ test("clarification buttons are numbered and messenger-sized", () => {
 
 test("appendLeadCaptureCta skips clarifying (ambiguous) replies", () => {
   const ambiguous = buildStructuredTripReply("Tokyo une hed ve?", [
-    trip({ id: "tokyo-fuji", route_name: "Tokyo Fuji аялал", adult_price: 3490000 }),
+    trip({ id: "tokyo-fuji", route_name: "Tokyo Fuji аялал", adult_price: 1490000 }),
     trip({ id: "tokyo-universal", route_name: "Tokyo Universal аялал", adult_price: 1790000 }),
   ]);
   assert.ok(ambiguous);
@@ -107,14 +107,14 @@ test("appendLeadCaptureCta does not double-ask when reply already requests a pho
 
 test("structured reply asks for clarification on shared city-only query", () => {
   const reply = buildStructuredTripReply("Tokyo une hed ve?", [
-    trip({ id: "tokyo-fuji", route_name: "Tokyo Fuji аялал", adult_price: 3490000 }),
+    trip({ id: "tokyo-fuji", route_name: "Tokyo Fuji аялал", adult_price: 1490000 }),
     trip({ id: "tokyo-universal", route_name: "Tokyo Universal аялал", adult_price: 1790000 }),
   ]);
 
   assert.match(reply || "", /Аль аяллыг нь сонирхож/i);
   assert.match(reply || "", /Tokyo Fuji/);
   assert.match(reply || "", /Tokyo Universal/);
-  assert.match(reply || "", /3,490,000/);
+  assert.match(reply || "", /1,490,000/);
   assert.match(reply || "", /1,790,000/);
 });
 
@@ -192,14 +192,14 @@ test("direct-flight Beijing price does not answer with combo tour price", () => 
       id: "beidaihe-beijing-combo",
       route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
       category: "Газар нислэг хосолсон",
-      adult_price: 2150000,
-      child_price: 1710000,
+      adult_price: 1270000,
+      child_price: 1200000,
     }),
   ]);
 
   assert.match(reply || "", /яг шууд нислэгтэй аялал одоогоор тодорхой олдсонгүй/);
   assert.match(reply || "", /газар \+ нислэг хосолсон/);
-  assert.doesNotMatch(reply || "", /2,150,000|1,710,000/);
+  assert.doesNotMatch(reply || "", /1,270,000|1,200,000/);
 });
 
 test("sold-out direct-flight match is reported as sold out instead of unavailable", () => {
@@ -239,14 +239,14 @@ test("sold-out reply pitches active same-destination trips instead of dead-endin
       id: "beijing-four-city",
       route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
       category: "Газрын аялал",
-      adult_price: 1590000,
+      adult_price: 1170000,
       duration_text: "8 өдөр 7 шөнө",
     }),
     trip({
       id: "hainan-unrelated",
       route_name: "Хайнан - Саньяа шууд нислэгтэй аялал",
       category: "Шууд нислэгтэй аялал",
-      adult_price: 2990000,
+      adult_price: 1430000,
     }),
   ]);
 
@@ -254,7 +254,7 @@ test("sold-out reply pitches active same-destination trips instead of dead-endin
   // The sellable same-destination trip is pitched in the same message…
   assert.match(reply || "", /нээлттэй/);
   assert.match(reply || "", /4 ХОТЫН АЯЛАЛ/);
-  assert.match(reply || "", /1,590,000/);
+  assert.match(reply || "", /1,170,000/);
   // …but unrelated destinations are not dragged in.
   assert.doesNotMatch(reply || "", /Хайнан/);
 });
@@ -287,19 +287,19 @@ test("matches Zhangjiajie alias to the Shanghai + Tengeriin Khaalga route", () =
         route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
         duration_text: "6 өдөр / 5 шөнө",
         adult_price: 3590000,
-        child_price: 3260000,
+        child_price: 1470000,
         extra: {
           aliases: ["Жанжиажэ", "Zhangjiajie", "Шанхай Жанжиажэ"],
           departure_date_groups: [
             {
               dates: ["6 сарын 27"],
               adult_price: 3590000,
-              child_price: 3260000,
+              child_price: 1470000,
             },
             {
               dates: ["7 сарын 18"],
-              adult_price: 3660000,
-              child_price: 3260000,
+              adult_price: 1500000,
+              child_price: 1470000,
             },
           ],
         },
@@ -309,7 +309,7 @@ test("matches Zhangjiajie alias to the Shanghai + Tengeriin Khaalga route", () =
         route_name: "Бэйдайхэ, Далянь хотын аялал",
         duration_text: "8 өдөр / 7 шөнө",
         adult_price: 2690000,
-        child_price: 2390000,
+        child_price: 1320000,
       }),
     ],
     NOW,
@@ -352,27 +352,27 @@ test("prefers the direct-flight Tengeriin Khaalga trip over longer variants", ()
       trip({
         id: "base",
         route_name: "Тэнгэрийн хаалга - шууд нислэгтэй",
-        adult_price: 3290000,
-        child_price: 2990000,
+        adult_price: 1480000,
+        child_price: 1430000,
       }),
       trip({
         id: "with-chongqing",
         route_name: "Тэнгэрийн хаалга-Чунчин",
         adult_price: 3590000,
-        child_price: 3260000,
+        child_price: 1470000,
       }),
       trip({
         id: "with-shanghai",
         route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
         adult_price: 3590000,
-        child_price: 3260000,
+        child_price: 1470000,
       }),
     ],
     NOW,
   );
 
   assert.match(reply || "", /^✈️ Тэнгэрийн хаалга - шууд нислэгтэй/m);
-  assert.match(reply || "", /3,290,000₮/);
+  assert.match(reply || "", /1,480,000₮/);
   assert.doesNotMatch(reply || "", /Шанхай \+/);
   assert.doesNotMatch(reply || "", /Чунчин/);
 });
@@ -385,16 +385,16 @@ test("prefers inferred combo Tengeriin Khaalga trip when user asks газар н
         id: "direct",
         route_name: "Тэнгэрийн хаалга - шууд нислэгтэй",
         category: "шууд нислэгтэй аялал",
-        adult_price: 2990000,
-        child_price: 2790000,
+        adult_price: 1430000,
+        child_price: 1410000,
         source_description: "8 өдөр 7 шөнө. УБ - Жанжиажэ - УБ шууд нислэгтэй.",
       }),
       trip({
         id: "combo",
         route_name: "Тэнгэрийн хаалга-Чунчин",
         category: "",
-        adult_price: 3290000,
-        child_price: 2990000,
+        adult_price: 1480000,
+        child_price: 1430000,
         source_description: "8 өдөр 7 шөнө. Тэнгэрийн хаалга, Чунчин хосолсон аялал.",
       }),
     ],
@@ -402,7 +402,7 @@ test("prefers inferred combo Tengeriin Khaalga trip when user asks газар н
   );
 
   assert.match(reply || "", /^✈️ Тэнгэрийн хаалга-Чунчин/m);
-  assert.match(reply || "", /3,290,000₮/);
+  assert.match(reply || "", /1,480,000₮/);
   assert.doesNotMatch(reply || "", /^✈️ Тэнгэрийн хаалга - шууд нислэгтэй/m);
 });
 
@@ -415,7 +415,7 @@ test("answers that hybrid land+flight route is not a direct flight", () => {
         route_name: "Бэйдайхэ+Бээжин газар нислэг хосолсон аялал",
         duration_text: "9 өдөр / 8 шөнө",
         adult_price: 2030000,
-        child_price: 1590000,
+        child_price: 1170000,
         source_description: "Газар нислэг хосолсон маршрут",
         extra: { aliases: ["Бэйдэхэ", "Бэйдэйхэ", "Beidaihe"] },
       }),
@@ -435,8 +435,8 @@ test("discount questions still show regular price when no promo price is stored"
         id: "haikou",
         route_name: "Хайнан - Хайкоу шууд нислэгтэй аялал",
         duration_text: "8 өдөр / 7 шөнө",
-        adult_price: 2990000,
-        child_price: 2790000,
+        adult_price: 1430000,
+        child_price: 1410000,
         departure_dates: ["7 сарын 5", "7 сарын 12"],
       }),
     ],
@@ -444,8 +444,8 @@ test("discount questions still show regular price when no promo price is stored"
   );
 
   assert.match(reply || "", /Хямдралтай үнийн мэдээлэл/);
-  assert.match(reply || "", /2,990,000₮/);
-  assert.match(reply || "", /2,790,000₮/);
+  assert.match(reply || "", /1,430,000₮/);
+  assert.match(reply || "", /1,410,000₮/);
   assert.match(reply || "", /7 сарын 5/);
 });
 
@@ -458,7 +458,7 @@ test("same-price comparison fails safe when date-group prices are not stored", (
         route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
         duration_text: "8 өдөр / 7 шөнө",
         adult_price: 3590000,
-        child_price: 3260000,
+        child_price: 1470000,
         departure_dates: ["6 сарын 27", "7 сарын 18"],
         extra: { aliases: ["Жанжиажэ", "Шанхай Жанжиажэ"] },
       }),
@@ -473,29 +473,29 @@ test("same-price comparison fails safe when date-group prices are not stored", (
 
 test("combined date and price query returns only the exact matching tour", () => {
   const reply = buildStructuredTripReply(
-    "7/9 Ð½Ð¸Ð¹ 2150000 Ñ‹Ð½ Ð°ÑÐ»Ð°Ð»Ñ‹Ð³ Ò¯Ð·Ð¼ÑÑ€ Ð±Ð°Ð¹Ð½Ð°",
+    "7/9 Ð½Ð¸Ð¹ 1270000 Ñ‹Ð½ Ð°ÑÐ»Ð°Ð»Ñ‹Ð³ Ò¯Ð·Ð¼ÑÑ€ Ð±Ð°Ð¹Ð½Ð°",
     [
       trip({
         id: "beidaihe-flight",
         route_name: "Ð‘ÑÐ¹Ð´Ð°Ð¹Ñ…Ñ+Ð‘ÑÑÐ¶Ð¸Ð½ Ð³Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³ Ñ…Ð¾ÑÐ¾Ð»ÑÐ¾Ð½ Ð°ÑÐ»Ð°Ð»",
         duration_text: "9 Ó©Ð´Ó©Ñ€ / 8 ÑˆÓ©Ð½Ó©",
         adult_price: 2030000,
-        child_price: 1590000,
+        child_price: 1170000,
         source_description: "Ð“Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³ Ñ…Ð¾ÑÐ¾Ð»ÑÐ¾Ð½ Ð¼Ð°Ñ€ÑˆÑ€ÑƒÑ‚",
         departure_dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 9", "7 ÑÐ°Ñ€Ñ‹Ð½ 16"],
         extra: {
           price_groups: [
             {
               dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 9"],
-              adult_price: 2150000,
-              child_price: 1710000,
-              infant_price: 530000,
+              adult_price: 1270000,
+              child_price: 1200000,
+              infant_price: 1050000,
             },
             {
               dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 16"],
               adult_price: 2030000,
-              child_price: 1590000,
-              infant_price: 530000,
+              child_price: 1170000,
+              infant_price: 1050000,
             },
           ],
         },
@@ -504,14 +504,14 @@ test("combined date and price query returns only the exact matching tour", () =>
         id: "wrong-price",
         route_name: "Ð‘ÑÑÐ¶Ð¸Ð½ Ñ…Ð¾Ñ‚Ñ‹Ð½ Ð°ÑÐ»Ð°Ð»",
         duration_text: "5 Ó©Ð´Ó©Ñ€ / 4 ÑˆÓ©Ð½Ó©",
-        adult_price: 1990000,
+        adult_price: 1230000,
         departure_dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 9"],
         extra: {
           price_groups: [
             {
               dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 9"],
-              adult_price: 1990000,
-              child_price: 1690000,
+              adult_price: 1230000,
+              child_price: 1180000,
             },
           ],
         },
@@ -520,14 +520,14 @@ test("combined date and price query returns only the exact matching tour", () =>
         id: "same-date-other-route",
         route_name: "Ð–Ð¸Ð½Ð¸Ð½ Ð¼Ð¸Ð½Ð¸ Ð°Ð²Ð°Ñ‚Ð°Ñ€",
         duration_text: "4 Ó©Ð´Ó©Ñ€ / 3 ÑˆÓ©Ð½Ó©",
-        adult_price: 1090000,
+        adult_price: 1110000,
         departure_dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 9"],
       }),
     ],
     NOW,
   );
 
-  assert.match(reply || "", /2150000|2,150,000/);
+  assert.match(reply || "", /1270000|1,270,000/);
   assert.match(reply || "", /Ð‘ÑÐ¹Ð´Ð°Ð¹Ñ…Ñ\+Ð‘ÑÑÐ¶Ð¸Ð½/);
   assert.doesNotMatch(reply || "", /Ð–Ð¸Ð½Ð¸Ð½/);
   assert.doesNotMatch(reply || "", /Ð‘ÑÑÐ¶Ð¸Ð½ Ñ…Ð¾Ñ‚Ñ‹Ð½ Ð°ÑÐ»Ð°Ð»/);
@@ -535,7 +535,7 @@ test("combined date and price query returns only the exact matching tour", () =>
 
 test("combined date and price query falls back to close matches on the same date only", () => {
   const reply = buildStructuredTripReply(
-    "7/9 2250000 Ð°ÑÐ»Ð°Ð»",
+    "7/9 1310000 Ð°ÑÐ»Ð°Ð»",
     [
       trip({
         id: "close-a",
@@ -546,8 +546,8 @@ test("combined date and price query falls back to close matches on the same date
           price_groups: [
             {
               dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 9"],
-              adult_price: 2150000,
-              child_price: 1710000,
+              adult_price: 1270000,
+              child_price: 1200000,
             },
           ],
         },
@@ -562,7 +562,7 @@ test("combined date and price query falls back to close matches on the same date
             {
               dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 9"],
               adult_price: 2290000,
-              child_price: 1890000,
+              child_price: 1210000,
             },
           ],
         },
@@ -576,7 +576,7 @@ test("combined date and price query falls back to close matches on the same date
           price_groups: [
             {
               dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 12"],
-              adult_price: 2250000,
+              adult_price: 1310000,
             },
           ],
         },
@@ -585,7 +585,7 @@ test("combined date and price query falls back to close matches on the same date
     NOW,
   );
 
-  assert.match(reply || "", /2250000|2,250,000/);
+  assert.match(reply || "", /1310000|1,310,000/);
   assert.match(reply || "", /Ð‘ÑÐ¹Ð´Ð°Ð¹Ñ…Ñ\+Ð‘ÑÑÐ¶Ð¸Ð½/);
   assert.match(reply || "", /Ð‘ÑÑÐ¶Ð¸Ð½ ÑˆÑƒÑƒÐ´ Ð½Ð¸ÑÐ»ÑÐ³Ñ‚ÑÐ¹/);
   assert.doesNotMatch(reply || "", /Ð¥Ð°Ð¹Ð½Ð°Ð½/);
@@ -604,16 +604,16 @@ test("month-specific child price only returns that month and passenger type", ()
           price_groups: [
             {
               dates: ["7 сарын 9", "7 сарын 18"],
-              adult_price: 2150000,
+              adult_price: 1270000,
               child_price: 1650000,
-              infant_price: 530000,
+              infant_price: 1050000,
               child_age: "2–10 нас",
             },
             {
               dates: ["8 сарын 1", "8 сарын 8"],
-              adult_price: 2250000,
-              child_price: 1710000,
-              infant_price: 530000,
+              adult_price: 1310000,
+              child_price: 1200000,
+              infant_price: 1050000,
               child_age: "2–10 нас",
             },
           ],
@@ -624,7 +624,7 @@ test("month-specific child price only returns that month and passenger type", ()
   );
 
   assert.match(reply || "", /8 сарын хүүхдийн үнэ/);
-  assert.match(reply || "", /1,710,000₮/);
+  assert.match(reply || "", /1,200,000₮/);
   assert.match(reply || "", /8 сарын 1, 8-ны гаралт/);
   assert.doesNotMatch(reply || "", /7\/9|7\/18|1,650,000₮/);
   assert.doesNotMatch(reply || "", /Том хүн|Нярай/);
@@ -645,16 +645,16 @@ test("route-only query uses spaced premium formatting", () => {
             {
               dates: ["6 сарын 20", "6 сарын 27"],
               adult_price: 2030000,
-              child_price: 1590000,
-              infant_price: 530000,
+              child_price: 1170000,
+              infant_price: 1050000,
               child_age: "2–10 нас",
               infant_age: "0–23 сар",
             },
             {
               dates: ["7 сарын 9", "7 сарын 18", "7 сарын 27", "8 сарын 1", "8 сарын 8", "8 сарын 15", "8 сарын 22"],
-              adult_price: 2150000,
-              child_price: 1710000,
-              infant_price: 530000,
+              adult_price: 1270000,
+              child_price: 1200000,
+              infant_price: 1050000,
               child_age: "2–10 нас",
               infant_age: "0–23 сар",
             },
@@ -932,8 +932,8 @@ test("route plus date price query uses AND logic and stays on the Datun trip", (
           price_groups: [
             {
               dates: ["2026 он 7 сар 18", "2026 он 7 сар 21"],
-              adult_price: 2660000,
-              child_price: 2260000,
+              adult_price: 1400000,
+              child_price: 1310000,
               infant_price: 32200,
             },
           ],
@@ -951,8 +951,8 @@ test("route plus date price query uses AND logic and stays on the Datun trip", (
   );
 
   assert.match(reply || "", /УБ-Датун/);
-  assert.match(reply || "", /2,660,000₮/);
-  assert.match(reply || "", /2,260,000₮/);
+  assert.match(reply || "", /1,400,000₮/);
+  assert.match(reply || "", /1,310,000₮/);
   assert.match(reply || "", /32,200₮/);
   assert.doesNotMatch(reply || "", /Шанхай аялал/);
 });
@@ -964,8 +964,8 @@ test("discount question falls back to notes and matching date group text", () =>
       trip({
         id: "dalian",
         route_name: "Далянь хотын шууд нислэгтэй аялал",
-        adult_price: 2890000,
-        child_price: 2390000,
+        adult_price: 1420000,
+        child_price: 1320000,
         notes: "7 сарын 3-нд супер бонустай. 2 том хүн + 1 хүүхэд үнэгүй эсвэл 5 том хүн + 1 том хүн үнэгүй.",
         departure_dates: ["7 сарын 3", "7 сарын 10"],
         extra: {
@@ -973,8 +973,8 @@ test("discount question falls back to notes and matching date group text", () =>
           price_groups: [
             {
               dates: ["7 сарын 3"],
-              adult_price: 2890000,
-              child_price: 2390000,
+              adult_price: 1420000,
+              child_price: 1320000,
               note: "7 сарын 3-нд супер бонустай. 2 том хүн + 1 хүүхэд үнэгүй эсвэл 5 том хүн + 1 том хүн үнэгүй.",
             },
           ],
@@ -984,8 +984,8 @@ test("discount question falls back to notes and matching date group text", () =>
       trip({
         id: "other-july-3",
         route_name: "Хайлаар Манжуурын аялал",
-        adult_price: 1090000,
-        child_price: 890000,
+        adult_price: 1110000,
+        child_price: 1100000,
         departure_dates: ["7 сарын 3"],
       }),
     ],
@@ -995,8 +995,8 @@ test("discount question falls back to notes and matching date group text", () =>
   assert.match(reply || "", /Далянь хотын шууд нислэгтэй аялал/);
   assert.match(reply || "", /7 сарын 3/);
   assert.match(reply || "", /супер бонус|бонустай/i);
-  assert.match(reply || "", /2,890,000₮/);
-  assert.match(reply || "", /2,390,000₮/);
+  assert.match(reply || "", /1,420,000₮/);
+  assert.match(reply || "", /1,320,000₮/);
   assert.doesNotMatch(reply || "", /Хайлаар Манжуур/);
 });
 
@@ -1007,8 +1007,8 @@ test("ticketed Tokyo price query only shows the ticket-included group", () => {
       trip({
         id: "tokyo-fuji",
         route_name: "Токио, Фүжи аялал",
-        adult_price: 3490000,
-        child_price: 3250000,
+        adult_price: 1490000,
+        child_price: 1460000,
         extra: {
           aliases: ["Токио Фүжи"],
           price_groups: [
@@ -1016,8 +1016,8 @@ test("ticketed Tokyo price query only shows the ticket-included group", () => {
               label: "Онгоцны тийзгүй үнэ",
               note: "Онгоцны тийзгүй үнэ.",
               dates: ["Баасан гариг болгон"],
-              adult_price: 3490000,
-              child_price: 3250000,
+              adult_price: 1490000,
+              child_price: 1460000,
               infant_price: 0,
               child_age: "2-12 нас",
               infant_age: "0-2 нас",
@@ -1027,7 +1027,7 @@ test("ticketed Tokyo price query only shows the ticket-included group", () => {
               note: "Онгоцны тийзтэй үнэ.",
               dates: ["6 сарын 19", "7 сарын 10"],
               adult_price: 5600000,
-              child_price: 5050000,
+              child_price: 1550000,
               infant_price: 0,
               child_age: "2-12 нас",
               infant_age: "0-2 нас",
@@ -1046,7 +1046,7 @@ test("ticketed Tokyo price query only shows the ticket-included group", () => {
   assert.match(reply || "", /Онгоцны тийзтэй үнэ/);
   assert.match(reply || "", /5,600,000₮/);
   assert.match(reply || "", /211,000₮/);
-  assert.doesNotMatch(reply || "", /3,490,000₮/);
+  assert.doesNotMatch(reply || "", /1,490,000₮/);
   assert.doesNotMatch(reply || "", /Онгоцны тийзгүй үнэ/);
 });
 
@@ -1057,8 +1057,8 @@ test("ticketless Tokyo price query only shows the ticketless group", () => {
       trip({
         id: "tokyo-fuji-ticketless",
         route_name: "Токио, Фүжи аялал",
-        adult_price: 3490000,
-        child_price: 3250000,
+        adult_price: 1490000,
+        child_price: 1460000,
         extra: {
           aliases: ["Токио Фүжи"],
           price_groups: [
@@ -1066,8 +1066,8 @@ test("ticketless Tokyo price query only shows the ticketless group", () => {
               label: "Онгоцны тийзгүй үнэ",
               note: "Онгоцны тийзгүй үнэ.",
               dates: ["Баасан гариг болгон"],
-              adult_price: 3490000,
-              child_price: 3250000,
+              adult_price: 1490000,
+              child_price: 1460000,
               infant_price: 0,
               child_age: "2-12 нас",
               infant_age: "0-2 нас",
@@ -1077,7 +1077,7 @@ test("ticketless Tokyo price query only shows the ticketless group", () => {
               note: "Онгоцны тийзтэй үнэ.",
               dates: ["6 сарын 19", "7 сарын 10"],
               adult_price: 5600000,
-              child_price: 5050000,
+              child_price: 1550000,
               infant_price: 0,
               child_age: "2-12 нас",
               infant_age: "0-2 нас",
@@ -1090,7 +1090,7 @@ test("ticketless Tokyo price query only shows the ticketless group", () => {
   );
 
   assert.match(reply || "", /Онгоцны тийзгүй үнэ/);
-  assert.match(reply || "", /3,490,000₮/);
+  assert.match(reply || "", /1,490,000₮/);
   assert.doesNotMatch(reply || "", /5,600,000₮/);
   assert.doesNotMatch(reply || "", /Онгоцны тийзтэй үнэ/);
 });
@@ -1102,8 +1102,8 @@ test("ticketed price query does not fall back to ticketless price when ticketed 
       trip({
         id: "tokyo-ticketed-missing",
         route_name: "Токио, Фүжи аялал",
-        adult_price: 3490000,
-        child_price: 3250000,
+        adult_price: 1490000,
+        child_price: 1460000,
         extra: {
           aliases: ["Токио Фүжи", "Токио аялал"],
           price_groups: [
@@ -1111,8 +1111,8 @@ test("ticketed price query does not fall back to ticketless price when ticketed 
               label: "Онгоцны тийзгүй үнэ",
               note: "Онгоцны тийзгүй үнэ.",
               dates: ["Баасан гариг болгон"],
-              adult_price: 3490000,
-              child_price: 3250000,
+              adult_price: 1490000,
+              child_price: 1460000,
             },
           ],
         },
@@ -1136,14 +1136,14 @@ test("ticket price comparison keeps the included and excluded labels", () => {
             {
               label: "Онгоцны тийзгүй үнэ",
               dates: ["Баасан гариг болгон"],
-              adult_price: 3490000,
-              child_price: 3250000,
+              adult_price: 1490000,
+              child_price: 1460000,
             },
             {
               label: "Онгоцны тийзтэй үнэ",
               dates: ["7 сарын 10"],
               adult_price: 5600000,
-              child_price: 5050000,
+              child_price: 1550000,
             },
           ],
         },
@@ -1154,7 +1154,7 @@ test("ticket price comparison keeps the included and excluded labels", () => {
 
   assert.match(reply || "", /Онгоцны тийзгүй үнэ/);
   assert.match(reply || "", /Онгоцны тийзтэй үнэ/);
-  assert.match(reply || "", /3,490,000₮/);
+  assert.match(reply || "", /1,490,000₮/);
   assert.match(reply || "", /5,600,000₮/);
   assert.doesNotMatch(reply || "", /📅 Гарах өдрүүд:\s*$/);
 });
@@ -1171,8 +1171,8 @@ test("cruise price reply uses room price table when top-level prices are null", 
         extra: {
           aliases: ["Усан онгоцны аялал", "Чежү Пусан круз"],
           room_prices: [
-            { room_type: "4 ортой цонхтой өрөө", price: 1890000, currency: "MNT" },
-            { room_type: "2 ортой цонхтой өрөө", price: 2390000, currency: "MNT" },
+            { room_type: "4 ортой цонхтой өрөө", price: 1210000, currency: "MNT" },
+            { room_type: "2 ортой цонхтой өрөө", price: 1320000, currency: "MNT" },
           ],
           extra_fees: [
             { label: "Онгоцонд гарын мөнгө", amount: 710, currency: "CNY", applies_to: "1 хүн" },
@@ -1183,7 +1183,7 @@ test("cruise price reply uses room price table when top-level prices are null", 
   );
 
   assert.match(reply || "", /Усан онгоцны аялал/);
-  assert.match(reply || "", /4 ортой цонхтой өрөө: 1,890,000₮/);
+  assert.match(reply || "", /4 ортой цонхтой өрөө: 1,210,000₮/);
   assert.match(reply || "", /710\s*CNY/);
 });
 
@@ -1194,29 +1194,29 @@ test("child age range query is not misread as a date and returns the matching ch
       trip({
         id: "sanya",
         route_name: "Хайнан - Саньяа шууд нислэгтэй аялал",
-        adult_price: 2990000,
-        child_price: 2790000,
+        adult_price: 1430000,
+        child_price: 1410000,
         extra: {
           aliases: ["Хайнан Саньяа", "Саньяа"],
           price_groups: [
             {
               label: "Үндсэн үнэ",
-              note: "Пүрэв гариг болгон. Хүүхэд 6–12 нас 2,790,000₮; хүүхэд 2–6 нас 2,190,000₮; нярай 0–2 нас 490,000₮.",
+              note: "Пүрэв гариг болгон. Хүүхэд 6–12 нас 1,410,000₮; хүүхэд 2–6 нас 1,280,000₮; нярай 0–2 нас 1,030,000₮.",
               dates: ["7 сарын 2", "7 сарын 9"],
-              adult_price: 2990000,
-              child_price: 2790000,
-              infant_price: 490000,
+              adult_price: 1430000,
+              child_price: 1410000,
+              infant_price: 1030000,
               child_age: "6-12 нас",
               infant_age: "0-2 нас",
             },
           ],
           child_rules: [
-            { label: "Хүүхэд", age_range: "6-12 нас", price: 2790000, currency: "MNT" },
-            { label: "Хүүхэд", age_range: "2-6 нас", price: 2190000, currency: "MNT" },
-            { label: "Нярай", age_range: "0-2 нас", price: 490000, currency: "MNT" },
+            { label: "Хүүхэд", age_range: "6-12 нас", price: 1410000, currency: "MNT" },
+            { label: "Хүүхэд", age_range: "2-6 нас", price: 1280000, currency: "MNT" },
+            { label: "Нярай", age_range: "0-2 нас", price: 1030000, currency: "MNT" },
           ],
           important_notes: [
-            "Үнэ асуухад хүүхдийн бүх ангиллыг заавал хэлнэ: 6–12 нас 2,790,000₮; 2–6 нас 2,190,000₮; 0–2 нас 490,000₮.",
+            "Үнэ асуухад хүүхдийн бүх ангиллыг заавал хэлнэ: 6–12 нас 1,410,000₮; 2–6 нас 1,280,000₮; 0–2 нас 1,030,000₮.",
           ],
         },
       }),
@@ -1224,7 +1224,7 @@ test("child age range query is not misread as a date and returns the matching ch
     NOW,
   );
 
-  assert.match(reply || "", /2,190,000₮/);
+  assert.match(reply || "", /1,280,000₮/);
   assert.match(reply || "", /2-6 нас|2–6 нас/);
   assert.doesNotMatch(reply || "", /2027|2 сарын 6|02-06/);
 });
@@ -1236,15 +1236,15 @@ test("duration and date disambiguate Hailaar Manchurian variants", () => {
       trip({
         id: "hailaar-4",
         route_name: "Хайлаар Манжуурын аялал - 4 өдөр 3 шөнө",
-        adult_price: 890000,
-        child_price: 790000,
+        adult_price: 1100000,
+        child_price: 1080000,
         departure_dates: ["8 сарын 21"],
         duration_text: "4 өдөр 3 шөнө",
         source_description: "Хайлаар Манжуур 4 өдөр 8 сарын 21",
         extra: {
           aliases: ["Хайлаар Манжуур 4 өдөр"],
           price_groups: [
-            { dates: ["8 сарын 21"], adult_price: 890000, child_price: 790000 },
+            { dates: ["8 сарын 21"], adult_price: 1100000, child_price: 1080000 },
           ],
           extra_fees: [{ label: "Өрөөнд ганцаараа орох нэмэгдэл", amount: 200000, currency: "MNT" }],
         },
@@ -1252,15 +1252,15 @@ test("duration and date disambiguate Hailaar Manchurian variants", () => {
       trip({
         id: "hailaar-5",
         route_name: "Хайлаар Манжуурын аялал - 5 өдөр 4 шөнө",
-        adult_price: 990000,
-        child_price: 890000,
+        adult_price: 1100000,
+        child_price: 1100000,
         departure_dates: ["8 сарын 24"],
         duration_text: "5 өдөр 4 шөнө",
         source_description: "Хайлаар Манжуур 5 өдөр 8 сарын 24",
         extra: {
           aliases: ["Хайлаар Манжуур 5 өдөр"],
           price_groups: [
-            { dates: ["8 сарын 24"], adult_price: 990000, child_price: 890000 },
+            { dates: ["8 сарын 24"], adult_price: 1100000, child_price: 1100000 },
           ],
           extra_fees: [{ label: "Өрөөнд ганцаараа орох нэмэгдэл", amount: 250000, currency: "MNT" }],
         },
@@ -1271,7 +1271,7 @@ test("duration and date disambiguate Hailaar Manchurian variants", () => {
 
   assert.match(reply || "", /Хайлаар Манжуурын аялал - 5 өдөр 4 шөнө/);
   assert.match(reply || "", /8 сарын 24/);
-  assert.match(reply || "", /990,000₮/);
+  assert.match(reply || "", /1,100,000₮/);
   assert.match(reply || "", /250,000₮/);
   assert.doesNotMatch(reply || "", /4 өдөр 3 шөнө/);
 });
@@ -1283,26 +1283,26 @@ test("single child age query returns the matching age tier instead of the first 
       trip({
         id: "sanya",
         route_name: "Хайнан - Саньяа шууд нислэгтэй аялал",
-        adult_price: 2990000,
-        child_price: 2790000,
+        adult_price: 1430000,
+        child_price: 1410000,
         extra: {
           aliases: ["Хайнан Саньяа", "Саньяа"],
           price_groups: [
             {
               label: "Үндсэн үнэ",
-              note: "Пүрэв гариг болгон. Хүүхэд 6–12 нас 2,790,000₮; хүүхэд 2–6 нас 2,190,000₮; нярай 0–2 нас 490,000₮.",
+              note: "Пүрэв гариг болгон. Хүүхэд 6–12 нас 1,410,000₮; хүүхэд 2–6 нас 1,280,000₮; нярай 0–2 нас 1,030,000₮.",
               dates: ["7 сарын 2", "7 сарын 9"],
-              adult_price: 2990000,
-              child_price: 2790000,
-              infant_price: 490000,
+              adult_price: 1430000,
+              child_price: 1410000,
+              infant_price: 1030000,
               child_age: "6-12 нас",
               infant_age: "0-2 нас",
             },
           ],
           child_rules: [
-            { label: "Хүүхэд", age_range: "6-12 нас", price: 2790000, currency: "MNT" },
-            { label: "Хүүхэд", age_range: "2-6 нас", price: 2190000, currency: "MNT" },
-            { label: "Нярай", age_range: "0-2 нас", price: 490000, currency: "MNT" },
+            { label: "Хүүхэд", age_range: "6-12 нас", price: 1410000, currency: "MNT" },
+            { label: "Хүүхэд", age_range: "2-6 нас", price: 1280000, currency: "MNT" },
+            { label: "Нярай", age_range: "0-2 нас", price: 1030000, currency: "MNT" },
           ],
         },
       }),
@@ -1310,10 +1310,10 @@ test("single child age query returns the matching age tier instead of the first 
     NOW,
   );
 
-  assert.match(reply || "", /2,190,000₮/);
+  assert.match(reply || "", /1,280,000₮/);
   assert.match(reply || "", /2-6 нас|2–6 нас/);
-  assert.doesNotMatch(reply || "", /2,790,000₮/);
-  assert.doesNotMatch(reply || "", /490,000₮/);
+  assert.doesNotMatch(reply || "", /1,410,000₮/);
+  assert.doesNotMatch(reply || "", /1,030,000₮/);
 });
 
 test("infant price follow-up stays on the contextual trip instead of matching expensive-word route", () => {
@@ -1326,15 +1326,15 @@ test("infant price follow-up stays on the contextual trip instead of matching ex
       trip({
         id: "beidaihe-combo",
         route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
-        adult_price: 2150000,
-        child_price: 1710000,
+        adult_price: 1270000,
+        child_price: 1200000,
         extra: {
           price_groups: [
             {
               dates: ["7 сарын 9", "7 сарын 18", "7 сарын 27"],
-              adult_price: 2150000,
-              child_price: 1710000,
-              infant_price: 530000,
+              adult_price: 1270000,
+              child_price: 1200000,
+              infant_price: 1050000,
               child_age: "2-10 нас",
               infant_age: "0-23 сар",
             },
@@ -1344,15 +1344,15 @@ test("infant price follow-up stays on the contextual trip instead of matching ex
       trip({
         id: "jining-expensive-test",
         route_name: "Жинин - Мини аватар - Хөх хот + үнэтэй шинжилгээтэй",
-        adult_price: 890000,
-        child_price: 750000,
+        adult_price: 1100000,
+        child_price: 1070000,
       }),
     ],
     NOW,
   );
 
   assert.match(reply || "", /Бэйдайхэ шар тэнгисийн эрэг/);
-  assert.match(reply || "", /Нярай \/0-23 сар\/: 530,000₮/);
+  assert.match(reply || "", /Нярай \/0-23 сар\/: 1,050,000₮/);
   assert.doesNotMatch(reply || "", /үнэтэй шинжилгээтэй/);
 });
 
@@ -1445,7 +1445,7 @@ test("price question still answers when every price group has already departed",
           dates: ["7 сарын 9", "7 сарын 18"],
           adult_price: 2000000,
           child_price: 1500000,
-          infant_price: 530000,
+          infant_price: 1050000,
           child_age: "2-10 нас",
           infant_age: "0-23 сар",
         },
@@ -1472,8 +1472,8 @@ test("fresh expensive objection does not match the paid-exam route by word alone
       trip({
         id: "jining-expensive-test",
         route_name: "Жинин - Мини аватар - Хөх хот + үнэтэй шинжилгээтэй",
-        adult_price: 890000,
-        child_price: 750000,
+        adult_price: 1100000,
+        child_price: 1070000,
       }),
     ],
   );
@@ -1488,20 +1488,20 @@ test("ambiguous passenger total question shows totals for each possible trip", (
       trip({
         id: "beidaihe-ground",
         route_name: "ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ-БЭЭЖИНГИЙН ГАЗРЫН АЯЛАЛ",
-        adult_price: 1690000,
-        child_price: 1390000,
+        adult_price: 1180000,
+        child_price: 1160000,
       }),
       trip({
         id: "beidaihe-combo",
         route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
-        adult_price: 2150000,
-        child_price: 1710000,
+        adult_price: 1270000,
+        child_price: 1200000,
       }),
     ],
   );
 
-  assert.match(reply || "", /4,770,000₮/);
-  assert.match(reply || "", /6,010,000₮/);
+  assert.match(reply || "", /3,520,000₮/);
+  assert.match(reply || "", /3,740,000₮/);
   assert.match(reply || "", /Аль аяллынх нь зөв болохыг сонгоорой/);
 });
 
@@ -1534,28 +1534,28 @@ test("broad infant-price query selects the related variant that stores an infant
       trip({
         id: "beidaihe-ground-no-infant",
         route_name: "ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ-БЭЭЖИНГИЙН ГАЗРЫН АЯЛАЛ",
-        adult_price: 1390000,
-        child_price: 1190000,
+        adult_price: 1160000,
+        child_price: 1120000,
         extra: {
           aliases: ["Бэйдайхэ"],
           price_groups: [
-            { dates: ["7 сарын 16"], adult_price: 1390000, child_price: 1190000 },
+            { dates: ["7 сарын 16"], adult_price: 1160000, child_price: 1120000 },
           ],
         },
       }),
       trip({
         id: "beidaihe-combo-with-infant",
         route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
-        adult_price: 2150000,
-        child_price: 1710000,
+        adult_price: 1270000,
+        child_price: 1200000,
         extra: {
           aliases: ["Бэйдайхэ"],
           price_groups: [
             {
               dates: ["7 сарын 18", "8 сарын 1"],
-              adult_price: 2150000,
-              child_price: 1710000,
-              infant_price: 530000,
+              adult_price: 1270000,
+              child_price: 1200000,
+              infant_price: 1050000,
               infant_age: "0-23 сар",
             },
           ],
@@ -1566,8 +1566,8 @@ test("broad infant-price query selects the related variant that stores an infant
   );
 
   assert.match(reply || "", /газар нислэг хосолсон аялал/);
-  assert.match(reply || "", /Нярай \/0-23 сар\/: 530,000₮/);
-  assert.doesNotMatch(reply || "", /1,190,000₮/);
+  assert.match(reply || "", /Нярай \/0-23 сар\/: 1,050,000₮/);
+  assert.doesNotMatch(reply || "", /1,120,000₮/);
 });
 
 test("past specific date price does not fall forward to a future departure", () => {
@@ -1577,21 +1577,21 @@ test("past specific date price does not fall forward to a future departure", () 
       trip({
         id: "beidaihe-combo",
         route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
-        adult_price: 2150000,
-        child_price: 1710000,
+        adult_price: 1270000,
+        child_price: 1200000,
         extra: {
           price_groups: [
             {
               dates: ["6 сарын 27"],
-              adult_price: 2150000,
-              child_price: 1710000,
-              infant_price: 530000,
+              adult_price: 1270000,
+              child_price: 1200000,
+              infant_price: 1050000,
             },
             {
               dates: ["7 сарын 9"],
-              adult_price: 2150000,
-              child_price: 1710000,
-              infant_price: 530000,
+              adult_price: 1270000,
+              child_price: 1200000,
+              infant_price: 1050000,
             },
           ],
         },
@@ -1612,7 +1612,7 @@ test("included-in-price question answers with ticket clarification instead of on
         id: "universal",
         route_name: "Бээжин - Юниверсал шууд нислэгтэй наадмын амралтаар гарах аялал",
         adult_price: 1790000,
-        child_price: 1590000,
+        child_price: 1170000,
         extra: {
           aliases: ["Бээжин Юниверсал"],
           price_groups: [
@@ -1621,7 +1621,7 @@ test("included-in-price question answers with ticket clarification instead of on
               note: "Үнэ дээр нислэгийн тийз нэмэгдэнэ.",
               dates: ["7 сарын 9-14"],
               adult_price: 1790000,
-              child_price: 1590000,
+              child_price: 1170000,
             },
           ],
           included_items: ["MIAT УБ-Бээжин-УБ нислэгийн тийз (асууж баталгаажуулах)"],
@@ -1741,27 +1741,27 @@ test("program request falls back politely when no program asset exists", () => {
 
 test("seat reply omits seat wording when seats are unknown", () => {
   const reply = buildSeatsReply(
-    "Тэнгэрийн хаалга аяллын суудал байна уу?",
+    "Зэт хаалга аяллын суудал байна уу?",
     [trip({ seats_left: null, seats_total: 20 })],
   );
 
-  assert.match(reply || "", /Тэнгэрийн/);
+  assert.match(reply || "", /Зэт/);
   assert.doesNotMatch(reply || "", /суудлын мэдээлэл|үлдсэн суудал|суудал дүүрсэн|цөөн үлдсэн/i);
 });
 
 test("seat reply omits seat wording when more than seven seats remain", () => {
   const reply = buildSeatsReply(
-    "Тэнгэрийн хаалга аяллын суудал байна уу?",
+    "Зэт хаалга аяллын суудал байна уу?",
     [trip({ seats_left: 12, seats_total: 20 })],
   );
 
-  assert.match(reply || "", /Тэнгэрийн/);
+  assert.match(reply || "", /Зэт/);
   assert.doesNotMatch(reply || "", /12|үлдсэн суудал|цөөн үлдсэн|суудал дүүрсэн/i);
 });
 
 test("seat reply shows urgency when only a few seats remain", () => {
   const reply = buildSeatsReply(
-    "Тэнгэрийн хаалга аяллын суудал байна уу?",
+    "Зэт хаалга аяллын суудал байна уу?",
     [trip({ seats_left: 3, seats_total: 20 })],
   );
 
@@ -1770,7 +1770,7 @@ test("seat reply shows urgency when only a few seats remain", () => {
 
 test("seat reply marks departure full only when seats_left is zero", () => {
   const reply = buildSeatsReply(
-    "Тэнгэрийн хаалга аяллын суудал байна уу?",
+    "Зэт хаалга аяллын суудал байна уу?",
     [trip({ seats_left: 0, seats_total: 20, status: "active" })],
   );
 
@@ -1804,15 +1804,15 @@ test("compare reply handles broad destination-vs-destination wording", () => {
     trip({
       id: "beijing-ground",
       route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
-      adult_price: 1590000,
-      child_price: 1290000,
+      adult_price: 1170000,
+      child_price: 1130000,
       duration_text: "8 өдөр 7 шөнө",
     }),
     trip({
       id: "hainan-sanya",
       route_name: "Хайнан - Саньяа шууд нислэгтэй аялал",
-      adult_price: 2990000,
-      child_price: 2790000,
+      adult_price: 1430000,
+      child_price: 1410000,
       duration_text: "9 өдөр / 8 шөнө",
     }),
   ]);
@@ -1824,7 +1824,7 @@ test("compare reply handles broad destination-vs-destination wording", () => {
 
 test("a direct-flight follow-up on a combo trip keeps the combo disclaimer even with stale contextual text prepended", () => {
   // Reproduces a live bug: the contextual blob prepends the bot's OWN previous
-  // reply ("...хүүхдийн үнэ (2-10 нас) 1,710,000₮...") before the customer's
+  // reply ("...хүүхдийн үнэ (2-10 нас) 1,200,000₮...") before the customer's
   // actual current line. That stale text must not be misread as the current
   // question — it hijacked "шууд нислэгтэй нь хэд байсан бэ?" into a bare
   // child-price answer with no combo disclaimer at all.
@@ -1833,20 +1833,20 @@ test("a direct-flight follow-up on a combo trip keeps the combo disclaimer even 
       id: "beidaihe-combo",
       route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
       category: "Газар нислэг хосолсон",
-      adult_price: 2150000,
-      child_price: 1710000,
+      adult_price: 1270000,
+      child_price: 1200000,
       departure_dates: ["7 сарын 9", "7 сарын 18"],
     }),
   ];
   const staleContext =
-    "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аяллын хүүхдийн үнэ (2-10 нас) 1,710,000₮ байна.\n\nХэрэв танд илүү дэлгэрэнгүй мэдээлэл хэрэгтэй бол асуугаарай! 😊";
+    "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аяллын хүүхдийн үнэ (2-10 нас) 1,200,000₮ байна.\n\nХэрэв танд илүү дэлгэрэнгүй мэдээлэл хэрэгтэй бол асуугаарай! 😊";
   const contextualText = `${staleContext}\nтэр шууд нислэгтэй нь хэд байсан бэ?`;
 
   const reply = buildStructuredTripReply(contextualText, trips);
 
   assert.ok(reply);
   assert.match(reply as string, /газар \+ нислэг хосолсон аялал/);
-  assert.match(reply as string, /Том хүн: 2,150,000₮/);
+  assert.match(reply as string, /Том хүн: 1,270,000₮/);
   assert.doesNotMatch(reply as string, /2027|20\d{2}-\d{2}-\d{2}/);
 });
 
@@ -1855,12 +1855,12 @@ test("passenger-type price reply only reads the customer's current line, not sta
     trip({
       id: "beidaihe-combo-2",
       route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
-      adult_price: 2150000,
-      child_price: 1710000,
+      adult_price: 1270000,
+      child_price: 1200000,
     }),
   ];
   const staleContext =
-    "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аяллын хүүхдийн үнэ 1,710,000₮ байна.";
+    "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аяллын хүүхдийн үнэ 1,200,000₮ байна.";
   const contextualText = `${staleContext}\nтом хүн хэд вэ?`;
 
   const reply = buildStructuredTripReply(contextualText, trips);
@@ -1878,8 +1878,8 @@ test("price reply surfaces a mandatory extra fee stored in a foreign currency", 
   const withFee = trip({
     id: "hohhot-exam-fee",
     route_name: "Хөх хотын шинжилгээтэй - газрын аялал",
-    adult_price: 890000,
-    child_price: 700000,
+    adult_price: 1100000,
+    child_price: 1060000,
     extra: {
       extra_fees: [
         { label: "Шинжилгээний төлбөр", amount: 600, currency: "CNY", applies_to: "том хүн" },
@@ -1891,7 +1891,7 @@ test("price reply surfaces a mandatory extra fee stored in a foreign currency", 
   const reply = buildSeatsReply("Хөх хотын шинжилгээтэй аялал хэд вэ?", [withFee]);
 
   assert.ok(reply);
-  assert.match(reply as string, /Том хүн: 890,000₮/);
+  assert.match(reply as string, /Том хүн: 1,100,000₮/);
   assert.match(reply as string, /600.*CNY/);
   assert.match(reply as string, /300.*CNY/);
 });
@@ -1900,7 +1900,7 @@ test("picture-only request for a trip without visual assets goes silent, program
   const bare = trip({
     id: "no-media",
     route_name: "Хайлаар Манжуурын аялал - 5 өдөр 4 шөнө",
-    adult_price: 990000,
+    adult_price: 1100000,
     extra: {},
     photo_urls: [],
   });
@@ -1923,7 +1923,7 @@ test("picture-only request for a trip WITH photos sends those photos, never sile
   const withPhotos = trip({
     id: "with-photos",
     route_name: "Далянь хотын шууд нислэгтэй аялал",
-    adult_price: 2890000,
+    adult_price: 1420000,
     extra: {},
     photo_urls: [
       "https://cdn.example.com/dalian-1.jpg",
@@ -1975,48 +1975,51 @@ test("naming a trip by its own route-name words beats a competing trip's loose a
 });
 
 test("a name shared by several tours asks instead of guessing one", () => {
-  // "Тэнгэрийн хаалга" is the name of three different tours. Nothing in the
-  // message says which, so committing to the top-scoring one shipped a wrong
-  // price, programme AND poster at full confidence.
+  // Structural shape being tested (synthetic names — never real catalog data):
+  // one shared multi-word name ("Зэт хаалга") appearing in THREE tours, one of
+  // which also registers that exact shared part as an alias. Nothing in the
+  // message says which is meant, so committing to the top-scoring one shipped a
+  // wrong price, programme AND poster at full confidence.
   const shared = [
-    trip({ id: "tk-solo", route_name: "Тэнгэрийн хаалга - шууд нислэгтэй", adult_price: 2990000,
-      extra: { aliases: ["Тэнгэрийн хаалга"] } }),
-    trip({ id: "tk-chunchin", route_name: "Тэнгэрийн хаалга-Чунчин", adult_price: 3290000 }),
-    trip({ id: "tk-shanghai", route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал", adult_price: 3660000 }),
+    trip({ id: "tk-solo", route_name: "Зэт хаалга - шууд нислэгтэй", adult_price: 1000000,
+      extra: { aliases: ["Зэт хаалга"] } }),
+    trip({ id: "tk-second", route_name: "Зэт хаалга-Күби", adult_price: 1100000 }),
+    trip({ id: "tk-combined", route_name: "Альфа + Зэт хаалга шууд нислэгтэй аялал", adult_price: 1200000 }),
   ];
 
-  const resolution = resolveTripFromUserMessage("Тэнгэрийн хаалга үнэ хэд вэ?", shared, {
+  const resolution = resolveTripFromUserMessage("Зэт хаалга үнэ хэд вэ?", shared, {
     allowLooseFallback: false,
   });
   assert.equal(resolution.status, "ambiguous");
 
   // The alias above makes the solo tour the only "exactly mentioned" one; that
   // must not override the ambiguity and send its poster.
-  const program = buildTripProgramReply("Тэнгэрийн хаалга зураг", shared);
+  const program = buildTripProgramReply("Зэт хаалга зураг", shared);
   assert.equal(program?.trip, null);
   assert.deepEqual(program?.mediaUrls, []);
 });
 
 test("naming both destinations still resolves the combined tour", () => {
+  // Shape: a short name that is a strict subset of a longer combined name.
   const shared = [
-    trip({ id: "tk-solo", route_name: "Тэнгэрийн хаалга - шууд нислэгтэй", adult_price: 2990000 }),
-    trip({ id: "tk-shanghai", route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал", adult_price: 3660000 }),
+    trip({ id: "tk-solo", route_name: "Зэт хаалга - шууд нислэгтэй", adult_price: 1000000 }),
+    trip({ id: "tk-combined", route_name: "Альфа + Зэт хаалга шууд нислэгтэй аялал", adult_price: 1200000 }),
   ];
-  const resolution = resolveTripFromUserMessage("Шанхай + Тэнгэрийн хаалга үнэ", shared, {
+  const resolution = resolveTripFromUserMessage("Альфа + Зэт хаалга үнэ", shared, {
     allowLooseFallback: false,
   });
   assert.equal(resolution.status, "verified");
-  assert.equal(resolution.trip?.id, "tk-shanghai");
+  assert.equal(resolution.trip?.id, "tk-combined");
 });
 
 test("a uniquely named tour still answers directly", () => {
   const trips = [
-    trip({ id: "dalian", route_name: "Далянь хотын шууд нислэгтэй аялал", photo_urls: ["https://example.com/d1.png"] }),
-    trip({ id: "other", route_name: "Хайлаар Манжуурын аялал" }),
+    trip({ id: "unique-a", route_name: "Дельта хотын шууд нислэгтэй аялал", photo_urls: ["https://example.com/d1.png"] }),
+    trip({ id: "unique-b", route_name: "Гамма Сигмагийн аялал" }),
   ];
-  const resolution = resolveTripFromUserMessage("Далянь зураг", trips, { allowLooseFallback: false });
+  const resolution = resolveTripFromUserMessage("Дельта зураг", trips, { allowLooseFallback: false });
   assert.equal(resolution.status, "verified");
-  assert.equal(resolution.trip?.id, "dalian");
+  assert.equal(resolution.trip?.id, "unique-a");
 });
 
 test("a documented-free infant is quoted as Үнэгүй, not suppressed as missing", () => {
@@ -2092,25 +2095,25 @@ test("a documented-free infant survives its price group's dates passing", () => 
 
 test("a free-infant note never zeroes out a real, separately-priced child fare", () => {
   // Real catalog bug this guards: one trip's child_rules used the SAME label
-  // ("Хүүхэд") for both the genuine child tier (750,000₮) and a mislabeled
+  // ("Хүүхэд") for both the genuine child tier (1,070,000₮) and a mislabeled
   // infant tier (0₮, "Үнэгүй", age 2024-2026 = 0-2yo) — matching on label alone
   // made the real child price disappear as "Үнэгүй" too.
   const mixedTrip = trip({
     id: "mixed-labels",
     route_name: "Тест аялал Г",
-    adult_price: 890000,
-    child_price: 750000,
+    adult_price: 1100000,
+    child_price: 1070000,
     extra: {
       price_groups: [{
         dates: ["Өдөр бүр"],
-        adult_price: 890000,
-        child_price: 750000,
+        adult_price: 1100000,
+        child_price: 1070000,
         infant_price: 0,
         child_age: "2016-2023 он",
         infant_age: "2024-2026 он",
       }],
       child_rules: [
-        { note: "", label: "Хүүхэд", price: 750000, age_range: "2016-2023 он" },
+        { note: "", label: "Хүүхэд", price: 1070000, age_range: "2016-2023 он" },
         { note: "Үнэгүй", label: "Хүүхэд", price: 0, age_range: "2024-2026 он" },
       ],
     },
@@ -2128,7 +2131,7 @@ test("a free-infant note never zeroes out a real, separately-priced child fare",
     [mixedTrip.route_name, "үнэ хэд вэ?"].join("\n"),
     [mixedTrip],
   );
-  assert.match(reply || "", /Хүүхэд[^:]*:\s*750,000₮/, "the real child price must survive");
+  assert.match(reply || "", /Хүүхэд[^:]*:\s*1,070,000₮/, "the real child price must survive");
   assert.doesNotMatch(
     reply || "",
     /Хүүхэд[^:]*:\s*Үнэгүй/,
@@ -2138,18 +2141,18 @@ test("a free-infant note never zeroes out a real, separately-priced child fare",
 
 test("distinct age-banded child fares are broken out instead of one flat price", () => {
   // Real catalog bug: a trip with TWO child_rules tiers at different prices
-  // (1,390,000₮ for one birth-year band, 1,290,000₮ for another) had no
+  // (1,160,000₮ for one birth-year band, 1,130,000₮ for another) had no
   // price_groups, so the reply fell back to a single flat child_price and
   // silently overcharged the cheaper band.
   const tieredTrip = trip({
     id: "tiered-child",
     route_name: "Тест аялал Д",
-    adult_price: 1590000,
-    child_price: 1390000,
+    adult_price: 1170000,
+    child_price: 1160000,
     extra: {
       child_rules: [
-        { note: "", label: "хүүхэд", price: 1390000, age_range: "2014-2015 онд төрсөн" },
-        { note: "", label: "хүүхэд", price: 1290000, age_range: "2016-2023 онд төрсөн" },
+        { note: "", label: "хүүхэд", price: 1160000, age_range: "2014-2015 онд төрсөн" },
+        { note: "", label: "хүүхэд", price: 1130000, age_range: "2016-2023 онд төрсөн" },
         { note: "Үнэгүй", label: "Нярай", price: 0, age_range: "2024-2026 онд төрсөн" },
       ],
     },
@@ -2159,24 +2162,25 @@ test("distinct age-banded child fares are broken out instead of one flat price",
     [tieredTrip.route_name, "үнэ хэд вэ?"].join("\n"),
     [tieredTrip],
   );
-  assert.match(reply || "", /1,390,000₮/);
-  assert.match(reply || "", /1,290,000₮/);
+  assert.match(reply || "", /1,160,000₮/);
+  assert.match(reply || "", /1,130,000₮/);
   assert.match(reply || "", /Нярай:\s*Үнэгүй/);
 });
 
 test("a genitive-case trip name ('X-ийн') still resolves to the trip", () => {
-  // Real customer message: "Далянийн аялалын үнэ хэд вэ?" -- the query token
-  // "далянийн" never equalled the bare route token "далянь", so the resolver
-  // returned not_found and the whole message got silently dropped.
+  // Shape (synthetic name): the customer inflects the destination — Mongolian is
+  // agglutinative, so "Зэтань" becomes "Зэтанийн" ("Zetan's"). The query token
+  // then never string-equals the bare route token, and the resolver used to
+  // return not_found and drop the whole message silently.
   const trips = [
-    trip({ id: "dalian", route_name: "Далянь хотын шууд нислэгтэй аялал", adult_price: 2890000 }),
-    trip({ id: "other", route_name: "Хайлаар Манжуурын аялал" }),
+    trip({ id: "inflected", route_name: "Зэтань хотын шууд нислэгтэй аялал", adult_price: 1000000 }),
+    trip({ id: "other", route_name: "Гамма Сигмагийн аялал" }),
   ];
-  const resolution = resolveTripFromUserMessage("Далянийн аялалын үнэ хэд вэ?", trips, {
+  const resolution = resolveTripFromUserMessage("Зэтанийн аялалын үнэ хэд вэ?", trips, {
     allowLooseFallback: false,
   });
   assert.equal(resolution.status, "verified");
-  assert.equal(resolution.trip?.id, "dalian");
+  assert.equal(resolution.trip?.id, "inflected");
 });
 
 test("compound photo+price question answers the price even when the trip has no photos", () => {
@@ -2188,8 +2192,8 @@ test("compound photo+price question answers the price even when the trip has no 
   const noPhotoTrip = trip({
     id: "no-photos",
     route_name: "Тест аялал Е",
-    adult_price: 2890000,
-    child_price: 2390000,
+    adult_price: 1420000,
+    child_price: 1320000,
     photo_urls: [],
   });
   const result = buildProgramOrStructuredReply(
@@ -2197,7 +2201,7 @@ test("compound photo+price question answers the price even when the trip has no 
     [noPhotoTrip],
   );
   assert.ok(result, "must not return null/silence when a real answer exists");
-  assert.match(result?.reply || "", /2,890,000₮/);
+  assert.match(result?.reply || "", /1,420,000₮/);
   assert.notEqual(result?.reply, "NOTRIPMEDIA");
 });
 

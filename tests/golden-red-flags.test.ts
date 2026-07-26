@@ -48,7 +48,7 @@ function assertNoRedFlags(reply: string | null | undefined, context: string) {
 test("past-year red flag ignores birth-year eligibility ranges but still catches lone past dates", () => {
   // Legitimate child-price eligibility wording must NOT trip the flag.
   assertNoRedFlags("Хүүхэд (2016-2023 онд төрсөн): 1,050,000₮", "birth-year range");
-  assertNoRedFlags("Хүүхэд 2015-2022 он: 790,000₮", "birth-year range, plain");
+  assertNoRedFlags("Хүүхэд 2015-2022 он: 1,080,000₮", "birth-year range, plain");
   // A lone past year offered as a date must still be caught.
   const flag = RED_FLAGS.find((entry) => entry.label === "past year (<=2024)")!;
   const offending = "Гарах өдөр: 2023 оны 7 сарын 5";
@@ -63,8 +63,8 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
     operator_name: "Uudam Travel",
     route_name: "Бээжин шууд нислэгтэй аялал",
     duration_text: "5 өдөр / 4 шөнө",
-    adult_price: 1890000,
-    child_price: 1590000,
+    adult_price: 1210000,
+    child_price: 1170000,
     currency: "MNT",
     departure_dates: ["1 сарын 5", "7 сарын 15"], // one past (Jan), one future (Jul)
     seats_total: null,

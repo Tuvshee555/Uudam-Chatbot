@@ -19,7 +19,7 @@ test("poster extraction merges parallel page results without losing later days",
       departures: [{ date: "7 сарын 19" }],
       price_table: {
         columns: ["Том хүн", "Хүүхэд"],
-        rows: [{ dates: "7 сарын 19", cells: ["2,150,000₮", "2,150,000₮"] }],
+        rows: [{ dates: "7 сарын 19", cells: ["1,270,000₮", "1,270,000₮"] }],
         note: "",
       },
       days: [
@@ -37,7 +37,7 @@ test("poster extraction merges parallel page results without losing later days",
       departures: [{ date: "7 сарын 26" }],
       price_table: {
         columns: ["Том хүн", "Хүүхэд"],
-        rows: [{ dates: "7 сарын 26", cells: ["2,150,000₮", "2,150,000₮"] }],
+        rows: [{ dates: "7 сарын 26", cells: ["1,270,000₮", "1,270,000₮"] }],
         note: "",
       },
       days: [

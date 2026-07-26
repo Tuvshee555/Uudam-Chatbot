@@ -247,7 +247,7 @@ describe("travelAI photo attachment", () => {
             operator_name: "UUDAM TRAVEL AGENCY",
             route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
             adult_price: 3590000,
-            child_price: 3260000,
+            child_price: 1470000,
             departure_dates: ["6 сарын 27", "7 сарын 18", "8 сарын 8"],
             extra: {
               source_file_name:
@@ -308,8 +308,8 @@ describe("travelAI photo attachment", () => {
           action: "upsert",
           fields: {
             route_name: "Chongqing ground flight combo",
-            adult_price: 2390000,
-            child_price: 2150000,
+            adult_price: 1320000,
+            child_price: 1270000,
             departure_dates: ["July 19", "July 26"],
             extra: {
               source_file_name:
@@ -337,7 +337,7 @@ describe("travelAI photo attachment", () => {
 
     assert.equal(proposal.actions.length, 1);
     assert.equal(proposal.actions[0].fields?.route_name, "Chongqing ground flight combo");
-    assert.equal(proposal.actions[0].fields?.adult_price, 2390000);
+    assert.equal(proposal.actions[0].fields?.adult_price, 1320000);
   });
 
   it("keeps every messenger-split poster slice as photos on the surviving parent trip", async () => {
@@ -352,8 +352,8 @@ describe("travelAI photo attachment", () => {
           action: "upsert",
           fields: {
             route_name: "Chongqing ground flight combo",
-            adult_price: 2390000,
-            child_price: 2150000,
+            adult_price: 1320000,
+            child_price: 1270000,
             departure_dates: ["July 19", "July 26"],
             extra: {
               source_file_name:

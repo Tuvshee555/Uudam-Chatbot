@@ -83,12 +83,12 @@ test("payment memory summary keeps amount and date (bot may confirm receipt arri
     doc({
       category: "payment_screenshot",
       extracted_json: {
-        payment: { amount: "2,990,000", currency: "MNT", date: "2026-07-06" },
+        payment: { amount: "1,430,000", currency: "MNT", date: "2026-07-06" },
       },
     }),
   );
   assert.match(summary, /payment receipt sent/);
-  assert.match(summary, /2,990,000 MNT/);
+  assert.match(summary, /1,430,000 MNT/);
   assert.match(summary, /2026-07-06/);
 });
 

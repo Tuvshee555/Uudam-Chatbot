@@ -3,9 +3,9 @@ import test from "node:test";
 import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, extractButtons, hasPaymentClaimIntent, isReferReply, rewriteRepeatedGenericClarifier, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../src/lib/reply";
 
 test("enforcePaymentNeverSelfConfirmed replaces a fabricated booking confirmation", () => {
-  const userText = "би 2,990,000 төлсөн, баталгаажуул";
+  const userText = "би 1,430,000 төлсөн, баталгаажуул";
   const reply =
-    "Таны 2,990,000₮-ийн төлбөрийг хүлээн авлаа. Одоо бид таны Тэнгэрийн хаалга - шууд нислэгтэй аяллыг баталгаажуулж байна.";
+    "Таны 1,430,000₮-ийн төлбөрийг хүлээн авлаа. Одоо бид таны Тэнгэрийн хаалга - шууд нислэгтэй аяллыг баталгаажуулж байна.";
   const safe = enforcePaymentNeverSelfConfirmed(userText, reply);
   assert.doesNotMatch(safe, /баталгаажуулж байна/);
   assert.match(safe, /аяллын зөвлөх/);
@@ -21,13 +21,13 @@ test("enforcePaymentNeverSelfConfirmed blocks reassurance about a wrong-name pay
 test("enforcePaymentNeverSelfConfirmed blocks confirmation after a claimed screenshot", () => {
   const userText = "би screenshot явуулсан, одоо захиалга баталгаатай юу?";
   const reply =
-    "Таны явуулсан скриншотыг хүлээн авлаа. Таны 2,990,000₮-ийн төлбөрийг хүлээн авсан бөгөөд захиалга баталгаажсан байна.";
+    "Таны явуулсан скриншотыг хүлээн авлаа. Таны 1,430,000₮-ийн төлбөрийг хүлээн авсан бөгөөд захиалга баталгаажсан байна.";
   const safe = enforcePaymentNeverSelfConfirmed(userText, reply);
   assert.doesNotMatch(safe, /баталгаажсан байна/);
 });
 
 test("enforcePaymentNeverSelfConfirmed leaves unrelated replies untouched", () => {
-  const reply = "✈️ Хайнан - Саньяа шууд нислэгтэй аялал\n💰 Том хүн: 2,990,000₮";
+  const reply = "✈️ Хайнан - Саньяа шууд нислэгтэй аялал\n💰 Том хүн: 1,430,000₮";
   const safe = enforcePaymentNeverSelfConfirmed("Хайнан Саньяа хэд вэ?", reply);
   assert.equal(safe, reply);
 });
@@ -65,7 +65,7 @@ test("rewrites repeated generic clarifier after recent trip details", () => {
     replyText:
       "Сайн байна уу? 😊 Таны аяллын талаар мэдээлэл авахад бэлэн байна. Ямар аялалд сонирхож байна вэ? Жишээлбэл, Бээжин, Шанхай, Хайнан гэх мэт. Тодорхой мэдээлэл өгвөл илүү сайн туслах боломжтой. ✈️",
     recentAssistantReplies: [
-      "✈️ Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал — 9 өдөр / 8 шөнө\n💰 Том хүн: 1,190,000₮ | Хүүхэд: 850,000₮",
+      "✈️ Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал — 9 өдөр / 8 шөнө\n💰 Том хүн: 1,120,000₮ | Хүүхэд: 850,000₮",
       "Сайн байна уу? 😊 Таны аяллын талаар мэдээлэл авахад бэлэн байна. Ямар аялалд сонирхож байна вэ? Жишээлбэл, Бээжин, Шанхай, Хайнан гэх мэт. Тодорхой мэдээлэл өгвөл илүү сайн туслах боломжтой. ✈️",
     ],
   });
@@ -75,7 +75,7 @@ test("rewrites repeated generic clarifier after recent trip details", () => {
 });
 
 test("leaves normal non-generic replies unchanged", () => {
-  const reply = "✈️ Хайнан - Саньяа шууд нислэгтэй аялал\n💰 Том хүн: 2,990,000₮";
+  const reply = "✈️ Хайнан - Саньяа шууд нислэгтэй аялал\n💰 Том хүн: 1,430,000₮";
   const rewritten = rewriteRepeatedGenericClarifier({
     userText: "Хайнан Саньяа хэд вэ?",
     replyText: reply,
@@ -86,10 +86,10 @@ test("leaves normal non-generic replies unchanged", () => {
 });
 
 test("strips repeated greeting after the first assistant turn", () => {
-  const reply = "Сайн байна уу!\n\n✈️ Бээжин аялал\n💰 Том хүн: 1,890,000₮";
+  const reply = "Сайн байна уу!\n\n✈️ Бээжин аялал\n💰 Том хүн: 1,210,000₮";
   const stripped = stripRepeatedGreeting(reply, true);
 
-  assert.equal(stripped, "✈️ Бээжин аялал\n💰 Том хүн: 1,890,000₮");
+  assert.equal(stripped, "✈️ Бээжин аялал\n💰 Том хүн: 1,210,000₮");
 });
 
 test("isReferReply catches REFER and legacy SILENT, ignores normal replies", () => {
@@ -138,7 +138,7 @@ test("shouldSilenceNoDataReply never suppresses a real answer that merely lacks 
     "✈️ БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
     "",
     "⏱ 8 өдөр 7 шөнө",
-    "💰 Насанд хүрэгч: 1,590,000₮ | Хүүхэд: 1,290,000₮",
+    "💰 Насанд хүрэгч: 1,170,000₮ | Хүүхэд: 1,130,000₮",
     "📅 Гарах өдрүүд: Ням гараг бүр",
     "",
     "Одоогоор энэ аяллын нэмэлт зураг системд ороогүй байна. 🙌",

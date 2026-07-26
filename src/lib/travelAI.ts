@@ -79,8 +79,8 @@ function buildBatchSourceParts(input: {
     "Only use information that is actually present in the source. Never invent or guess a price, date, or field. If a field is missing, leave it out rather than filling a plausible value.",
     "If any value is unclear or hard to read, keep needs_confirmation=true and ask about that exact value in plain language instead of guessing.",
     "Ignore logos, agency headers, footers, contact details, and page decorations UNLESS they contain trip-specific data (price, date, seats) attached to a real trip row.",
-    "The route_name must be the DESTINATION or TRIP TITLE (e.g. 'Хөх хот', 'Тэнгэрийн хаалга-Чунчин', 'Шанхай+Ханжоу'). NEVER use the agency name as the route_name.",
-    "TITLE VS ROUTE: route_name is the canonical tour/product title used by this database. Store the actual path such as 'УБ-Энши-Чунчин-Жанжиажэ' separately in fields.extra.route. Store the same canonical title in fields.extra.tour_title.",
+    "The route_name must be the DESTINATION or TRIP TITLE — a single city name, a hyphenated multi-city route, or a '+'-combined route, exactly as the source writes it. NEVER use the agency name as the route_name.",
+    "TITLE VS ROUTE: route_name is the canonical tour/product title used by this database. Store the actual full path (each leg joined by hyphens, as printed in the source) separately in fields.extra.route. Store the same canonical title in fields.extra.tour_title.",
     "Read the canonical title from the largest title block near the top of page 1. Correct harmless OCR spelling errors, but preserve the source typo in fields.extra.original_title_text. Ask only if the correction changes meaning.",
     "If the document is from UUDAM TRAVEL AGENCY and no other operator is named, set operator_name to 'UUDAM TRAVEL AGENCY' — do not leave it blank.",
     "Treat UUDAM, UUDAM TRAVEL, and UUDAM TRAVEL AGENCY as the same brand and normalize them to 'UUDAM TRAVEL AGENCY'. A clear page-1 logo/header/contact match gives high operator confidence and MUST NOT create an operator question.",
@@ -405,8 +405,9 @@ function buildVerificationGuide(proposalActions: unknown): string {
 /**
  * Safety net for the verifier itself: despite the prompt instruction, the
  * model sometimes reports a "mismatch" where both quoted values are actually
- * identical once you strip formatting — e.g. "үнэ 2,390,000 гэж байгаа ч
- * зурагт 2,390,000₮ байна" (currency symbol only) or the same date range
+ * identical once you strip formatting — e.g. "үнэ 1,111,111 гэж байгаа ч
+ * зурагт 1,111,111₮ байна" (synthetic amounts; currency symbol only) or the
+ * same date range
  * twice. Extract every number/date-like token from the mismatch text; if
  * there are exactly two distinct-looking tokens and they normalize equal,
  * this is a false positive and must not become a clarification question.
@@ -824,7 +825,7 @@ export async function generateAIProposalFromContent(input: {
     "Only use information that is actually present in the source. Never invent or guess a price, date, or field. If a field is missing, leave it out rather than filling a plausible value.",
     "If any value is unclear or hard to read, keep needs_confirmation=true and ask about that exact value in plain language instead of guessing.",
     "Ignore logos, agency headers, footers, contact details, and page decorations UNLESS they contain trip-specific data (price, date, seats) attached to a real trip row.",
-    "The route_name must be the DESTINATION or TRIP TITLE (e.g. 'Хөх хот', 'Тэнгэрийн хаалга-Чунчин', 'Шанхай+Ханжоу'). NEVER use the agency name as the route_name.",
+    "The route_name must be the DESTINATION or TRIP TITLE — a single city name, a hyphenated multi-city route, or a '+'-combined route, exactly as the source writes it. NEVER use the agency name as the route_name.",
     "If the document is from UUDAM TRAVEL AGENCY and no other operator is named, set operator_name to 'UUDAM TRAVEL AGENCY' — do not leave it blank.",
     "CANCELLATION RULE: Never use action='cancel', never set status='cancelled', and never write a cancellation warning UNLESS the document contains explicit cancellation language such as: цуцлагдсан, цуцлагдлаа, цуцлах, canceled, cancelled, trip cancelled, no longer available, зогсоосон, худалдаалагдахгүй. Normal itinerary end-phrases such as 'аялал өндөрлөнө', 'буцна', 'ниссэнээр аялал өндөрлөнө', 'чөлөөт өдөр', 'аялал дуусна' do NOT mean cancellation — they are normal tour program language. If the PDF has a title, price, dates, duration, and itinerary, classify it as an active tour (status='active').",
     "SOLD-OUT RULE: Never set status='sold_out' or seats_left=0 or seats_total=0 UNLESS the document explicitly says: суудал дууссан, суудал дүүрсэн, sold out, fully booked, no seats left, бүрэн захиалагдсан. Booking-intent phrases such as 'суудал авах', 'суудал нөөцлөх', 'захиалга хийх', 'холбогдоорой', 'утасдана уу' mean the tour IS AVAILABLE and open for booking — these are the OPPOSITE of sold out. If the PDF has prices and future departure dates, always default to status='active'.",

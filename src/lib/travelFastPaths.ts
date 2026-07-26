@@ -1095,7 +1095,8 @@ export function buildStructuredTripReply(
   // `text` can be a contextual blob with an earlier turn (often the bot's own
   // previous reply, full of real dates and prices) prepended before the
   // customer's actual current message — see contextualText.ts. A combined
-  // date+price query ("7 сарын 9-нд 2,150,000-аар байна уу?") is only ever a
+  // date+price query ("7 сарын 9-нд 1,111,111-аар байна уу?" — synthetic
+  // amount) is only ever a
   // deliberate statement in the CURRENT message; scanning the whole blob lets
   // stray numbers from the stale previous reply (e.g. an age range "2-10 нас"
   // read as a date, or an old price) misfire this match. Use only the last

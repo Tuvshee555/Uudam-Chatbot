@@ -40,7 +40,26 @@ const PROGRAM_ONLY_QUERY_WORDS = new Set([
 // Matches MAX_TRIP_PHOTOS in welcomeFlow.ts. Kept local so this module stays a
 // leaf (importing welcomeFlow would drag in its DB/env chain).
 const MAX_PROGRAM_PHOTOS = 5;
-const BEIDAIHE_SIGNAL = normText("Бэйдайхэ");
+
+/**
+ * Trips that share a DESTINATION the customer named without naming the full
+ * route (e.g. one city that appears in both a land tour and a flight combo).
+ *
+ * The destination vocabulary is derived from the catalog itself — keywordTokens
+ * strips generic travel words, so what is left is the identifying part of a
+ * route name. This used to be hardcoded to one specific destination, which
+ * meant every OTHER destination silently behaved differently and a renamed or
+ * removed trip turned the branch into dead code.
+ */
+function findDestinationMentionedTrips(query: string, trips: TravelTrip[]): TravelTrip[] {
+  const queryTokens = new Set(keywordTokens(query).filter((token) => token.length >= 5));
+  if (queryTokens.size === 0) return [];
+  return trips.filter((trip) =>
+    keywordTokens([trip.route_name, ...getAliases(trip)].join(" ")).some(
+      (token) => token.length >= 5 && queryTokens.has(token),
+    ),
+  );
+}
 
 function tripGeneralPhotoUrls(trip: TravelTrip): string[] {
   return (trip.photo_urls || [])
@@ -202,29 +221,35 @@ export function buildTripProgramReply(
     if (query.includes(normText(trip.route_name))) return true;
     return getAliases(trip).some((alias) => query.includes(normText(alias)));
   });
-  const destinationMentionedTrips = BEIDAIHE_SIGNAL && query.includes(BEIDAIHE_SIGNAL)
-    ? trips.filter((trip) =>
-        normText([trip.route_name, ...getAliases(trip)].join(" ")).includes(BEIDAIHE_SIGNAL),
-      )
-    : [];
-  const mentionedTrips = uniqueTripsByRouteName([...exactMentionedTrips, ...destinationMentionedTrips]);
+  // A shared destination word is NOT the same as naming a trip. When several
+  // tours visit the destination the customer said, that is precisely when the
+  // bot must ask which one — so the expansion only counts as a "mention" if it
+  // lands on exactly one trip. Otherwise it is used purely to SCOPE the
+  // fallback pools below, which is what keeps a destination question from
+  // falling back to the entire catalog.
+  const destinationTrips = findDestinationMentionedTrips(query, trips);
+  const destinationPool = destinationTrips.length > 0 ? destinationTrips : trips;
+  const mentionedTrips = uniqueTripsByRouteName([
+    ...exactMentionedTrips,
+    ...(destinationTrips.length === 1 ? destinationTrips : []),
+  ]);
   const exactMentionedComboTrips = mentionedTrips.filter((trip) => tripIsLandFlightCombo(trip));
   const exactMentionedLandTrips = mentionedTrips.filter((trip) => !tripIsLandFlightCombo(trip));
   const scopedTrips = wantsCombo
     ? exactMentionedComboTrips.length > 0
       ? exactMentionedComboTrips
-      : trips.filter((trip) => tripIsLandFlightCombo(trip))
+      : destinationPool.filter((trip) => tripIsLandFlightCombo(trip))
     : wantsLandOnly
       ? exactMentionedLandTrips.length > 0
         ? exactMentionedLandTrips
-        : trips.filter((trip) => !tripIsLandFlightCombo(trip))
+        : destinationPool.filter((trip) => !tripIsLandFlightCombo(trip))
       : wantsFlight
         ? mentionedTrips.length > 0
           ? mentionedTrips
-          : trips.filter((trip) => tripHasFlightSignal(trip))
+          : destinationPool.filter((trip) => tripHasFlightSignal(trip))
       : mentionedTrips.length > 0
         ? mentionedTrips
-        : trips;
+        : destinationPool;
   const candidateTrips = scopedTrips.length > 0 ? scopedTrips : trips;
   const routeQueryWords = keywordTokens(text).filter((word) => !PROGRAM_ONLY_QUERY_WORDS.has(word));
   const directResolution = trips.length === 1

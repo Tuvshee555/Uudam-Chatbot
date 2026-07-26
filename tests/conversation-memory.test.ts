@@ -10,7 +10,7 @@ test("buildPrompt includes persistent customer memory before recent turns", asyn
     systemPrompt: "You are a travel assistant.",
     business: {
       name: "Uudam Travel",
-      knowledgeBase: "- Бээжин аялал: 5 өдөр, том хүн 1,890,000₮",
+      knowledgeBase: "- Бээжин аялал: 5 өдөр, том хүн 1,210,000₮",
     },
     history: [
       { role: "user", text: "Бээжин аялал сонирхож байна" },

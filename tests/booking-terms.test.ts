@@ -6,7 +6,7 @@ import { emptyBookingTerms, toBookingTermsForm } from "../src/lib/adminTypes";
 test("normalizeExtra keeps booking_terms with all five trimmed fields", () => {
   const { extra } = normalizeExtra({
     booking_terms: {
-      deposit: "  Урьдчилгаа 500,000₮ ",
+      deposit: "  Урьдчилгаа 1,040,000₮ ",
       payment: "Дансаар",
       documents: "Гадаад паспорт",
       visa: "Хятадын виз",
@@ -15,7 +15,7 @@ test("normalizeExtra keeps booking_terms with all five trimmed fields", () => {
     },
   });
   assert.deepEqual(extra.booking_terms, {
-    deposit: "Урьдчилгаа 500,000₮",
+    deposit: "Урьдчилгаа 1,040,000₮",
     payment: "Дансаар",
     documents: "Гадаад паспорт",
     visa: "Хятадын виз",

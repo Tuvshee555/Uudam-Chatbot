@@ -15,7 +15,7 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
     route_name: "Shanghai + Heaven Gate",
     duration_text: "8 days / 7 nights",
     adult_price: 3590000,
-    child_price: 3260000,
+    child_price: 1470000,
     currency: "MNT",
     departure_dates: [],
     seats_total: null,
@@ -102,7 +102,7 @@ test("schedule cleanup prunes stale dates inside structured price groups", async
           },
           {
             dates: ["6 сарын 7"],
-            adult_price: 3290000,
+            adult_price: 1480000,
           },
         ],
       },
@@ -127,8 +127,8 @@ test("schedule cleanup keeps next-year price group dates frozen at write time", 
         price_groups: [
           {
             dates: ["1 сарын 15"],
-            adult_price: 2990000,
-            child_price: 2790000,
+            adult_price: 1430000,
+            child_price: 1410000,
           },
         ],
       },
@@ -142,8 +142,8 @@ test("schedule cleanup keeps next-year price group dates frozen at write time", 
   assert.deepEqual(result.trip.extra.price_groups, [
     {
       dates: ["1 сарын 15"],
-      adult_price: 2990000,
-      child_price: 2790000,
+      adult_price: 1430000,
+      child_price: 1410000,
     },
   ]);
 });
