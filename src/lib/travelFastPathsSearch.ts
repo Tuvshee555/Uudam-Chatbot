@@ -552,6 +552,53 @@ function tripHasMonthDay(trip: TravelTrip, date: MonthDay): boolean {
   return dateTexts.some((value) => textHasMonthDay(value, date));
 }
 
+
+const SHANGHAI_SIGNALS = ["\u0448\u0430\u043d\u0445\u0430\u0439", "shanghai"];
+const ZHANGJIAJIE_TENGER_SIGNALS = [
+  "\u0436\u0430\u043d\u0436\u0438\u0430\u0436\u044d",
+  "\u0436\u0430\u043d\u0433\u0436\u0438\u0430\u0436\u044d",
+  "zhangjiajie",
+  "\u0442\u044d\u043d\u0433\u044d\u0440\u0438\u0439\u043d \u0445\u0430\u0430\u043b\u0433\u0430",
+];
+
+function includesAnySignal(text: string, signals: string[]): boolean {
+  return signals.some((signal) => text.includes(signal));
+}
+
+function hasShanghaiZhangjiajieIntent(query: string): boolean {
+  const normalizedQuery = normText(query);
+  return (
+    includesAnySignal(normalizedQuery, SHANGHAI_SIGNALS) &&
+    includesAnySignal(normalizedQuery, ZHANGJIAJIE_TENGER_SIGNALS)
+  );
+}
+
+function tripTextForVariantSignals(trip: TravelTrip): string {
+  return normText([
+    trip.route_name,
+    trip.source_description || "",
+    ...getAliases(trip),
+  ].join(" "));
+}
+
+function tripMatchesShanghaiZhangjiajieVariant(trip: TravelTrip): boolean {
+  const tripText = tripTextForVariantSignals(trip);
+  return (
+    includesAnySignal(tripText, SHANGHAI_SIGNALS) &&
+    includesAnySignal(tripText, ZHANGJIAJIE_TENGER_SIGNALS)
+  );
+}
+
+function shanghaiZhangjiajieIntentScore(query: string, trip: TravelTrip): number {
+  if (!hasShanghaiZhangjiajieIntent(query)) return 0;
+
+  const tripText = tripTextForVariantSignals(trip);
+  if (includesAnySignal(tripText, SHANGHAI_SIGNALS)) return 220;
+  if (includesAnySignal(tripText, ZHANGJIAJIE_TENGER_SIGNALS)) return -160;
+  return 0;
+}
+
+
 export function findTripMatches(text: string, trips: TravelTrip[], options?: TripMatchOptions): TripMatch[] {
   const query = normText(text);
   const queryPhonetic = phoneticLatinText(text);
@@ -683,6 +730,7 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
       discountBoost +
       intentBoost +
       dateBoost +
+      shanghaiZhangjiajieIntentScore(text, trip) +
       durationVariantScore(text, trip) +
       examFeeIntentScore(text, trip) -
       queryTripTokenCoveragePenalty(queryWords, trip);
@@ -735,6 +783,14 @@ export function resolveTripFromUserMessage(
     queryWantsFlight(text) ||
     queryWantsSeaBeach(text) ||
     hasDisambiguatingModifier(text);
+
+  const shanghaiZhangjiajieMentions = hasShanghaiZhangjiajieIntent(text)
+    ? matches.filter((match) => tripMatchesShanghaiZhangjiajieVariant(match.trip))
+    : [];
+  if (shanghaiZhangjiajieMentions.length === 1) {
+    return { status: "verified", trip: shanghaiZhangjiajieMentions[0].trip, candidates: [] };
+  }
+
   const routeOnlyQuestion =
     !hasSpecificTripPreference &&
     routeContentTokens(text).length === 1 &&
