@@ -402,7 +402,11 @@ test("validation downgrades generic confirmation for complete clean new trips", 
     ],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  // Pinned clock: keeps the departure dates in the future so the stale-date
+  // filter does not archive the trip and force a confirmation.
+  const result = validateAIChangeProposal(proposal, [], {
+    now: new Date("2026-07-01T04:00:00.000Z"),
+  });
   assert.equal(result.proposal.needs_confirmation, false);
   assert.equal(result.proposal.important_reason, "");
   assert.equal(result.proposal.conflicts.length, 0);
@@ -464,7 +468,11 @@ test("validation does not flag optional yuan add-ons as trip conflicts", async (
     ],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  // Pinned clock: keeps the departure dates in the future so the stale-date
+  // filter does not archive the trip and force a confirmation.
+  const result = validateAIChangeProposal(proposal, [], {
+    now: new Date("2026-07-01T04:00:00.000Z"),
+  });
   assert.equal(result.proposal.conflicts.length, 0);
   assert.equal(result.proposal.needs_confirmation, false);
   assert.equal(result.auto_apply_ready, true);
@@ -565,7 +573,11 @@ test("validation treats documented meal exceptions as notes, not conflicts", asy
     ],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  // Pinned clock: keeps the departure dates in the future so the stale-date
+  // filter does not archive the trip and force a confirmation.
+  const result = validateAIChangeProposal(proposal, [], {
+    now: new Date("2026-07-01T04:00:00.000Z"),
+  });
   assert.equal(result.proposal.conflicts.length, 0);
   assert.equal(result.proposal.needs_confirmation, false);
   assert.equal(result.auto_apply_ready, true);
@@ -647,7 +659,12 @@ test("validation removes a missing-date conflict when dates were extracted", asy
     }],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  // Pin the clock so these departure dates stay in the future. Otherwise the
+  // stale-date filter empties them and archives the trip, which is a different
+  // path than the missing-date conflict removal this test covers.
+  const result = validateAIChangeProposal(proposal, [], {
+    now: new Date("2026-07-01T04:00:00.000Z"),
+  });
   assert.equal(result.proposal.conflicts.length, 0);
   assert.equal(result.proposal.needs_confirmation, false);
 });
@@ -673,7 +690,11 @@ test("validation removes generic multi-field extraction-miss questions", async (
     }],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  // Pinned clock: keeps the departure date in the future so the stale-date
+  // filter does not archive the trip and force a confirmation.
+  const result = validateAIChangeProposal(proposal, [], {
+    now: new Date("2026-07-01T04:00:00.000Z"),
+  });
   assert.equal(result.proposal.conflicts.length, 0);
   assert.equal(result.proposal.needs_confirmation, false);
 });

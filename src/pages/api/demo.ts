@@ -84,8 +84,18 @@ function buildDemoMedia(input: {
     input.reply.includes(AMBIGUOUS_REPLY_MARKER)
       ? []
       : extractTripPhotosForReply(input.reply, input.trips, { userText: input.userText });
+  // Same guard as `inferred` above, and for the same reason: this branch
+  // independently re-resolves a trip straight from the raw user text, so
+  // without the marker check it bypassed the ambiguity guard entirely and
+  // reintroduced the exact bug that guard exists to prevent — "Тэнгэрийн
+  // хаалга зураг" asked which of 3 tours while ALSO attaching one tour's
+  // poster, because this branch never checked whether the reply it was
+  // supposedly illustrating was actually a "which one?" question.
   const directFromUser =
-    inferred.length === 0 && explicit.length === 0 && hasTripPhotoIntent(input.userText)
+    inferred.length === 0 &&
+    explicit.length === 0 &&
+    hasTripPhotoIntent(input.userText) &&
+    !input.reply.includes(AMBIGUOUS_REPLY_MARKER)
       ? extractTripPhotosForUserMessage(input.userText, input.trips)
       : [];
   const mediaUrls = Array.from(new Set([...explicit, ...inferred, ...directFromUser]))

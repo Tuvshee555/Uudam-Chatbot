@@ -1565,7 +1565,7 @@ function buildProposalClarifications(
           },
         ],
         allowCustom: true,
-        customPlaceholder: "Жишээ: том хүн 890000 MNT + 600 CNY, хүүхэд 700000 MNT + 300 CNY",
+        customPlaceholder: "Жишээ: том хүн 1111111 MNT + 600 CNY, хүүхэд 999999 MNT + 300 CNY",
       });
       return;
     }
@@ -1599,7 +1599,7 @@ function buildProposalClarifications(
           },
         ],
         allowCustom: true,
-        customPlaceholder: "Жишээ: 6-р сард 3,590,000 / 7,8-р сард 3,660,000 гэж тусад нь тэмдэглэ",
+        customPlaceholder: "Жишээ: 6-р сард 1,111,111 / 7,8-р сард 2,222,222 гэж тусад нь тэмдэглэ",
       });
       return;
     }

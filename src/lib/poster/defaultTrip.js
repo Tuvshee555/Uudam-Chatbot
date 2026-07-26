@@ -1,22 +1,35 @@
+/**
+ * Blank starting point for the poster editor ("Default template" button) — it is
+ * NOT a real trip and must never look like one.
+ *
+ * It used to carry a real route name and real catalog prices (2,660,000₮ /
+ * 2,260,000₮ are the live Датон-Утайн fares), so a staff member who started from
+ * the template, swapped the photos and exported would publish a poster quoting a
+ * real-looking price for the wrong trip. Every identifying value here is now an
+ * obvious placeholder: the shape still teaches the editor, but nothing can be
+ * mistaken for a genuine offer, and nothing goes stale when the catalog changes.
+ *
+ * Real trip data always comes from the DB catalog — never from this file.
+ */
 export function createDefaultTrip() {
   return {
     agency: "UUDAM TRAVEL AGENCY",
-    title: "БЭЙДАХЭ АЯЛАЛ",
-    subtitle: "Шар тэнгисийн аялал",
+    title: "[АЯЛЛЫН НЭР]",
+    subtitle: "[Дэд гарчиг]",
     duration_days: 6,
     duration_nights: 5,
     hero_image: null,
     flights: null,
     departures: [
-      { date: "7-р сарын 4" },
-      { date: "7-р сарын 11" },
-      { date: "7-р сарын 18" },
+      { date: "[огноо 1]" },
+      { date: "[огноо 2]" },
+      { date: "[огноо 3]" },
     ],
     price_table: {
       columns: ["Том хүн", "Хүүхэд"],
       rows: [
-        { dates: "7-р сар", cells: ["2,340,000₮", "1,950,000₮"] },
-        { dates: "8-р сар", cells: ["2,660,000₮", "2,260,000₮"] },
+        { dates: "[1-р хугацаа]", cells: ["1,111,111₮", "999,999₮"] },
+        { dates: "[2-р хугацаа]", cells: ["2,222,222₮", "999,999₮"] },
       ],
       note: "",
     },
@@ -31,7 +44,7 @@ export function createDefaultTrip() {
           "Аяллын эхний өдөр аялагчид Улаанбаатараас хөдөлж, Замын-Үүдээр дамжин хил нэвтрээд Эрээн хотод хүрнэ. Замын турш аяллын багийн зааварчилгаа авч, тухайн өдрийн хэмнэлд тайван дасах боломжтой.",
         activities: ["Улаанбаатараас хөдөлнө", "Замын-Үүдээр дамжин хил нэвтэрнэ", "Эрээн хотод байрлана"],
         meals: { breakfast: false, lunch: false, dinner: true },
-        hotel: "Эрээн хотын зочид буудал",
+        hotel: "[Буудлын нэр]",
         flight: null,
         bonus: [],
         photo: null,
@@ -39,13 +52,13 @@ export function createDefaultTrip() {
       },
       {
         day: 2,
-        route: "Эрээн → Бэйдахэ",
+        route: "Эрээн → [Хот]",
         distance_km: 0,
         summary:
-          "Өглөөний цайны дараа далайн эргийн амралтын бүс болох Бэйдахэ чиглэлд хөдөлнө. Очсоны дараа буудалдаа байрлаж, далайн салхи, амралтын хотын тайван уур амьсгалыг мэдэрнэ.",
-        activities: ["Бэйдахэ чиглэлд хөдөлнө", "Буудалдаа байрлана", "Далайн эргээр чөлөөтэй алхана"],
+          "Өглөөний цайны дараа далайн эргийн амралтын бүс болох [Хот] чиглэлд хөдөлнө. Очсоны дараа буудалдаа байрлаж, далайн салхи, амралтын хотын тайван уур амьсгалыг мэдэрнэ.",
+        activities: ["[Хот] чиглэлд хөдөлнө", "Буудалдаа байрлана", "Далайн эргээр чөлөөтэй алхана"],
         meals: { breakfast: true, lunch: false, dinner: true },
-        hotel: "Бэйдахэ далайн эргийн буудал",
+        hotel: "[Буудлын нэр]",
         flight: null,
         bonus: [],
         photo: null,
@@ -53,13 +66,13 @@ export function createDefaultTrip() {
       },
       {
         day: 3,
-        route: "Бэйдахэ",
+        route: "[Хот]",
         distance_km: 0,
         summary:
           "Энэ өдөр далайн эргийн чөлөөт амралтад зориулагдана. Аялагчид далайн эргээр зугаалж, зураг авах, усан орчинд амрах, гэр бүлээрээ тайван өнгөрүүлэх боломжтой.",
         activities: ["Далайн эргээр амарна", "Чөлөөт зураг авалт хийнэ", "Орой буудалдаа амарна"],
         meals: { breakfast: true, lunch: false, dinner: true },
-        hotel: "Бэйдахэ далайн эргийн буудал",
+        hotel: "[Буудлын нэр]",
         flight: null,
         bonus: [],
         photo: null,

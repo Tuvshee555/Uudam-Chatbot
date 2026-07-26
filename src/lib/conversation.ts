@@ -111,13 +111,18 @@ export function buildPromptParts(options: BuildPromptOptions): { system: string;
   }
   lines.push("- Emojis add warmth: use 1-3 relevant emojis in a normal reply — a friendly 😊 or 🙌 plus travel/detail icons where they fit (✈️ 💰 📅 🏨). Keep it natural — never put an emoji on every line or let them clutter the answer.");
   lines.push("- Match the answer length to the question. For one requested detail, answer in 1-3 short lines. Use a compact list only for multiple details or options.");
-  lines.push("- Example good format for a trip reply:");
-  lines.push("  ✈️ [Аяллын нэр] — 5 хоног");
-  lines.push("  💰 Том хүн: 1,890,000₮ | Хүүхэд: 1,590,000₮");
-  lines.push("  📅 Гарах: 7 сарын 15, 7 сарын 22");
+  // Every value in this shape example is a placeholder or a deliberately
+  // impossible number. Real catalog prices must NEVER appear here: the example
+  // sits in the prompt on every request, so a real-looking figure becomes an
+  // anchor the model can echo as a quote when the context lacks a price — and
+  // it silently goes stale the moment the agency changes that price.
+  lines.push("- Example good format for a trip reply (placeholders only — NEVER copy these numbers, always use the real values from Context):");
+  lines.push("  ✈️ [Аяллын нэр] — [X] хоног");
+  lines.push("  💰 Том хүн: 1,111,111₮ | Хүүхэд: 999,999₮");
+  lines.push("  📅 Гарах: [огноо], [огноо]");
   lines.push("  🏨 Буудал: [Буудлын нэр]");
   lines.push("- For a general price or overview request, show adult and child prices together when both exist. If the customer asks only for a child or infant tier, answer only that tier.");
-  lines.push("- If a tour has departure_date_groups with different prices per date, list each date group with its price. Example: '6 сарын 27: Том хүн 3,590,000₮ / Хүүхэд 3,260,000₮ | 7-8 сар: Том хүн 3,660,000₮ / Хүүхэд 3,260,000₮'.");
+  lines.push("- If a tour has departure_date_groups with different prices per date, list each date group with its price. Shape only, do not copy these numbers: '[огноо]: Том хүн 1,111,111₮ / Хүүхэд 999,999₮ | [огноо]: Том хүн 2,222,222₮ / Хүүхэд 999,999₮'.");
   lines.push("- Seat availability rule: mention seats ONLY when seats_left is a confirmed number from context.");
   lines.push("- If seats_left is null, missing, empty, or unknown, do NOT mention seats at all.");
   lines.push("- If seats_left is greater than 7, do NOT mention seats.");

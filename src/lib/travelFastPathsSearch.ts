@@ -321,8 +321,29 @@ function isOneEditApart(a: string, b: string): boolean {
   return edits + (a.length - i) + (b.length - j) <= 1;
 }
 
+/**
+ * True when the LONGER token is the shorter one plus a trailing Mongolian
+ * case suffix — "далянийн" (genitive of "Далянь") vs "dalan"/"dalanin" in
+ * phonetic space: "dalanin".startsWith("dalan"). Case endings (genitive,
+ * accusative, dative...) add letters rather than substitute them, so this is
+ * NOT a typo (isOneEditApart's territory, capped at 1 substitution) — a real
+ * customer asking "Далянийн аялалын үнэ хэд вэ?" got "not_found" from the
+ * resolver because the query token never equalled the bare route token.
+ * Minimum shared length guards against short tokens prefix-matching by
+ * coincidence, mirroring the same idiom already used for scoped-clarification
+ * attribute answers (fastPathRouting.ts's filterCandidatesByAttribute).
+ */
+function isCaseSuffixedForm(a: string, b: string): boolean {
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  return shorter.length >= 4 && longer.length > shorter.length && longer.startsWith(shorter);
+}
+
 function phoneticTokenMatches(queryToken: string, candidateToken: string): boolean {
-  return queryToken === candidateToken || isOneEditApart(queryToken, candidateToken);
+  return (
+    queryToken === candidateToken ||
+    isOneEditApart(queryToken, candidateToken) ||
+    isCaseSuffixedForm(queryToken, candidateToken)
+  );
 }
 
 export function uniqueMonthDays(values: MonthDay[]) {
@@ -362,9 +383,68 @@ export function getAliases(trip: TravelTrip): string[] {
   return Array.isArray(raw) ? (raw as string[]).filter(Boolean) : [];
 }
 
+/**
+ * True when a 0₮ fare for `target` is a documented free tier, not a gap in the
+ * extracted data. Every trip observed with a 0 fare also carries a
+ * `child_rules`/`child_price_rules` entry with `note: "Үнэгүй"` for that same
+ * seat — the extraction pipeline records "free" as an explicit note next to a
+ * literal 0, not as a distinct sentinel, so this is the one place that
+ * information survives to be checked.
+ *
+ * Deliberately narrow: only INFANTS are ever free in this catalog (agency
+ * policy — a 12-year-old "хүүхэд" tier is never free even if some import left
+ * it at 0). A rule counts as infant-shaped when its label says so, or its age
+ * text is in months ("сар"), or a 0-N years span with N<=3, or a birth-year
+ * span whose oldest age this year is <=3 — matching the three real shapes seen
+ * in the catalog ("0-23 сар", "0-2 нас", "2024-2026 он").
+ */
+/**
+ * Whether an age_range/label describes an INFANT (0-3ish), the only bucket the
+ * agency ever waives — checked independently of whatever label the extraction
+ * happened to attach. Real catalog data has a "Хүүхэд" (child) label misapplied
+ * to a genuine infant tier (age_range "2024-2026 он", i.e. 0-2 years old this
+ * year) sitting alongside a real, non-zero "Хүүхэд" child tier — so the label
+ * alone is not trustworthy and the age must be checked directly.
+ */
+export function isInfantShapedAge(label: string, ageRange: string): boolean {
+  if (label.includes("нярай") || label.includes("infant")) return true;
+  if (/сар/.test(ageRange)) return true; // age given in months -> infant
+  const yearsSpan = /(\d{1,2})\s*[-–]\s*(\d{1,2})\s*нас/.exec(ageRange);
+  if (yearsSpan && Number(yearsSpan[1]) === 0 && Number(yearsSpan[2]) <= 3) return true;
+  const birthYears = /(\d{4})\s*[-–]\s*(\d{4})/.exec(ageRange);
+  if (birthYears) {
+    const maxAge = new Date().getFullYear() - Number(birthYears[1]);
+    if (maxAge >= 0 && maxAge <= 3) return true;
+  }
+  return false;
+}
+
+export function isDocumentedFreeFare(trip: TravelTrip, target: "child" | "infant"): boolean {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const rules = [extra.child_rules, extra.child_price_rules]
+    .flatMap((value) => (Array.isArray(value) ? (value as Array<Record<string, unknown>>) : []));
+  return rules.some((rule) => {
+    if (typeof rule.price !== "number" || rule.price !== 0) return false;
+    const note = normText(typeof rule.note === "string" ? rule.note : "");
+    if (!note.includes("үнэгүй") && !note.includes("free")) return false;
+    const label = normText(typeof rule.label === "string" ? rule.label : "");
+    const ageRange = typeof rule.age_range === "string" ? rule.age_range : "";
+    const infantShaped = isInfantShapedAge(label, ageRange);
+    if (target === "infant") return infantShaped;
+    // target === "child": must be labelled a child tier AND not actually an
+    // infant tier that happened to get the "Хүүхэд" label — an infant-shaped
+    // 0/free rule must never zero out a real, separately-priced child tier.
+    return (label.includes("хүүхэд") || label.includes("child")) && !infantShaped;
+  });
+}
+
 export function getStructuredPriceGroups(trip: TravelTrip): Array<Record<string, unknown>> {
   const extra = (trip.extra || {}) as Record<string, unknown>;
   if (Array.isArray(extra.price_groups) && extra.price_groups.length > 0) {
+    // Trip-level, not per-group: the "infants ride free" note in child_rules
+    // is a blanket policy statement, not tied to a specific departure tier.
+    const childFree = isDocumentedFreeFare(trip, "child");
+    const infantFree = isDocumentedFreeFare(trip, "infant");
     return (extra.price_groups as Array<Record<string, unknown>>).map((group) => {
       const hasAdult = typeof group.adult_price === "number";
       const hasChild = typeof group.child_price === "number";
@@ -373,14 +453,19 @@ export function getStructuredPriceGroups(trip: TravelTrip): Array<Record<string,
       // not a real tier. Rendered verbatim it drops the adult and child and shows
       // just the infant line. Backfill adult/child from the trip's base prices so
       // the customer still sees the full price. Well-formed groups pass untouched.
-      if (!hasAdult && !hasChild && hasInfant) {
-        return {
-          ...group,
-          adult_price: typeof trip.adult_price === "number" ? trip.adult_price : group.adult_price,
-          child_price: typeof trip.child_price === "number" ? trip.child_price : group.child_price,
-        };
-      }
-      return group;
+      const base = !hasAdult && !hasChild && hasInfant
+        ? {
+            ...group,
+            adult_price: typeof trip.adult_price === "number" ? trip.adult_price : group.adult_price,
+            child_price: typeof trip.child_price === "number" ? trip.child_price : group.child_price,
+          }
+        : group;
+      if (!childFree && !infantFree) return base;
+      return {
+        ...base,
+        ...(childFree ? { child_price_free: true } : {}),
+        ...(infantFree ? { infant_price_free: true } : {}),
+      };
     });
   }
   return [];
@@ -552,7 +637,6 @@ function tripHasMonthDay(trip: TravelTrip, date: MonthDay): boolean {
   return dateTexts.some((value) => textHasMonthDay(value, date));
 }
 
-
 const SHANGHAI_SIGNALS = ["\u0448\u0430\u043d\u0445\u0430\u0439", "shanghai"];
 const ZHANGJIAJIE_TENGER_SIGNALS = [
   "\u0436\u0430\u043d\u0436\u0438\u0430\u0436\u044d",
@@ -597,7 +681,6 @@ function shanghaiZhangjiajieIntentScore(query: string, trip: TravelTrip): number
   if (includesAnySignal(tripText, ZHANGJIAJIE_TENGER_SIGNALS)) return -160;
   return 0;
 }
-
 
 export function findTripMatches(text: string, trips: TravelTrip[], options?: TripMatchOptions): TripMatch[] {
   const query = normText(text);
@@ -783,6 +866,19 @@ export function resolveTripFromUserMessage(
     queryWantsFlight(text) ||
     queryWantsSeaBeach(text) ||
     hasDisambiguatingModifier(text);
+  // Strongest possible signal: the customer typed one tour's COMPLETE name.
+  // Checked before the ambiguity test below, because sibling tours are often
+  // supersets of each other's names ("Жинин-Мини аватар-Хөх хотын аялал" is a
+  // prefix of "…-Хөх хот - Ордос хотын аялал"), so name-word coverage alone
+  // would call a fully-typed name ambiguous and ask a pointless question.
+  const normalizedQuery = normText(text);
+  const fullNameMentions = matches.filter((match) => {
+    const name = normText(match.trip.route_name);
+    return name.length >= 8 && normalizedQuery.includes(name);
+  });
+  if (fullNameMentions.length === 1) {
+    return { status: "verified", trip: fullNameMentions[0].trip, candidates: [] };
+  }
 
   const shanghaiZhangjiajieMentions = hasShanghaiZhangjiajieIntent(text)
     ? matches.filter((match) => tripMatchesShanghaiZhangjiajieVariant(match.trip))
@@ -791,12 +887,28 @@ export function resolveTripFromUserMessage(
     return { status: "verified", trip: shanghaiZhangjiajieMentions[0].trip, candidates: [] };
   }
 
+  // Trips the customer's words do not rule out: every route word they typed
+  // appears in the trip's own name. When several qualify, their message simply
+  // does not say which tour they mean — "Тэнгэрийн хаалга" is the name of three
+  // different ones — so the top score is not evidence of intent. Committing to
+  // it ships a wrong price, programme AND poster at full confidence, which is
+  // how a customer ends up holding a poster for the tour they did not ask
+  // about. Ask the question a human agent would ask instead.
+  const queryRouteTokens = routeContentTokens(text);
+  const indistinguishable = hasSpecificTripPreference
+    ? []
+    : matches.filter((match) => tripNameCoversQuery(match.trip, queryRouteTokens));
   const routeOnlyQuestion =
     !hasSpecificTripPreference &&
-    routeContentTokens(text).length === 1 &&
-    matches.length > 1;
+    matches.length > 1 &&
+    (queryRouteTokens.length === 1 || indistinguishable.length > 1);
   if (routeOnlyQuestion) {
-    return { status: "ambiguous", trip: null, candidates: matches.slice(0, 3).map((match) => match.trip) };
+    const candidates = indistinguishable.length > 1 ? indistinguishable : matches;
+    return {
+      status: "ambiguous",
+      trip: null,
+      candidates: candidates.slice(0, 3).map((match) => match.trip),
+    };
   }
   if (
     second &&
@@ -804,6 +916,27 @@ export function resolveTripFromUserMessage(
     Math.abs(best.keywordCoverage - second.keywordCoverage) <= 0.15
   ) {
     return { status: "ambiguous", trip: null, candidates: matches.slice(0, 3).map((match) => match.trip) };
+  }
+
+  // Exactly one trip's own name contains everything the customer typed. That is
+  // a direct naming of that tour: it outranks the similarity score (which can
+  // favour a shorter name that merely shares tokens) and it settles the query,
+  // so the weak-evidence guard below must not second-guess it.
+  if (indistinguishable.length === 1) {
+    return { status: "verified", trip: indistinguishable[0].trip, candidates: [] };
+  }
+
+  // Every candidate scored negative: the query shares only weak, generic signal
+  // with these names — typically romanised input that did not transliterate
+  // cleanly ("shanghai" vs "шанхай" → "shanhai"). A negative best score is not
+  // evidence of intent, and guessing on it is how "shanghai tengerin haalga"
+  // returned the standalone Тэнгэрийн хаалга tour instead of the Шанхай one.
+  if (best.score <= 0 && matches.length > 1) {
+    return {
+      status: "ambiguous",
+      trip: null,
+      candidates: matches.slice(0, 3).map((match) => match.trip),
+    };
   }
 
   return { status: "verified", trip: best.trip, candidates: [] };
@@ -1011,6 +1144,36 @@ function examFeeIntentScore(query: string, trip: TravelTrip): number {
   return 0;
 }
 
+/**
+ * A trip's own identity text — route name plus aliases, nothing else. Notes,
+ * descriptions and day-by-day itineraries are deliberately excluded: a city
+ * mentioned in passing inside a programme must not make that trip look like a
+ * name match for the city the customer asked about.
+ */
+function tripIdentityText(trip: TravelTrip): string {
+  return normText([trip.route_name, ...getAliases(trip)].join(" "));
+}
+
+/**
+ * True when every route word the customer typed appears in this trip's own
+ * name — i.e. nothing in their message rules this trip out.
+ *
+ * Checked against the Cyrillic name AND its phonetic Latin form, because real
+ * customers type romanised Mongolian ("shanghai tengerin haalga"). Comparing
+ * Latin input to a Cyrillic-only name matches nothing, which would make an
+ * ambiguous query look specific and send one tour's price and poster.
+ */
+function tripNameCoversQuery(trip: TravelTrip, tokens: string[]): boolean {
+  if (!tokens.length) return false;
+  const identity = tripIdentityText(trip);
+  const identityLatin = phoneticLatinText(identity);
+  return tokens.every((token) => {
+    if (identity.includes(token)) return true;
+    const latinToken = phoneticLatinText(token);
+    return Boolean(latinToken) && identityLatin.includes(latinToken);
+  });
+}
+
 function routeContentTokens(query: string): string[] {
   const filler = new Set([
     "хэд",
@@ -1036,6 +1199,21 @@ function routeContentTokens(query: string): string[] {
     "uu",
     "baina",
     "yu",
+    // Cyrillic counterparts of the Latin filler above. Without these, "Тэнгэрийн
+    // хаалга үнэ хэд вэ?" keeps "үнэ" as a route token, no trip name contains
+    // it, and the ambiguity check below silently concludes the query is
+    // specific — the exact path that answered a 3-way ambiguous name with one
+    // confident price.
+    "үнэ",
+    "үнийн",
+    "зураг",
+    "зургууд",
+    "хөтөлбөр",
+    "хөтөлбөрийг",
+    "үзэх",
+    "үзүүлээч",
+    "харах",
+    "харуулаач",
   ]);
   return unique(keywordTokens(query).filter((token) => !filler.has(token)));
 }

@@ -805,7 +805,7 @@ export function TripEditModal({
       <div className="mt-2 space-y-2">
         <div>
           <label className="mb-0.5 block text-xs text-ink-muted">Урьдчилгаа</label>
-          <input className={inputCls} value={tripBookingTerms.deposit} placeholder="ж: Урьдчилгаа 500,000₮, үлдэгдлийг гарахаас 7 хоногийн өмнө" onChange={(e) => setTripBookingTerms((p) => ({ ...p, deposit: e.target.value }))} />
+          <input className={inputCls} value={tripBookingTerms.deposit} placeholder="ж: Урьдчилгаа 111,111₮, үлдэгдлийг гарахаас 7 хоногийн өмнө" onChange={(e) => setTripBookingTerms((p) => ({ ...p, deposit: e.target.value }))} />
         </div>
         <div>
           <label className="mb-0.5 block text-xs text-ink-muted">Төлбөрийн нөхцөл</label>
@@ -924,7 +924,7 @@ export function TripEditModal({
               </div>
               <div className="sm:col-span-2">
                 <label className="mb-0.5 block text-xs text-ink-muted">Хүлээгдэж буй хариулт</label>
-                <input className={inputCls} value={h.expected_answer_summary} placeholder="ж: 3,290,000₮ буюу …" onChange={(e) => setTripAnswerHints((prev) => prev.map((v, i) => i === idx ? { ...v, expected_answer_summary: e.target.value } : v))} />
+                <input className={inputCls} value={h.expected_answer_summary} placeholder="ж: 1,111,111₮ буюу …" onChange={(e) => setTripAnswerHints((prev) => prev.map((v, i) => i === idx ? { ...v, expected_answer_summary: e.target.value } : v))} />
               </div>
             </div>
           </div>

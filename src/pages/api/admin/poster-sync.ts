@@ -5,6 +5,7 @@ import { getEnv } from "@/lib/env";
 import { logError, logInfo } from "@/lib/observability";
 import { getTripById, patchTrip, upsertTrip } from "@/lib/travelDb";
 import type { TripMutationFields } from "@/lib/travelTypes";
+import { dedupePhotoUrlsByContent } from "@/lib/tripPhotoImport/dedupePhotos";
 
 // Only route_name/duration_text/departure_dates/adult_price/child_price/
 // hotel/has_food/extra may be written by "Аялалд нэмэх" (the poster→trip
@@ -250,10 +251,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const patchFields: TripMutationFields = { ...approvedFields };
   if (uploadedUrls.length > 0 && mode !== "skip") {
-    patchFields.photo_urls =
+    // Appending a re-exported poster would otherwise stack a second copy of the
+    // same pages under new Cloudinary ids, and the bot sends the customer both.
+    const merged =
       mode === "append"
-        ? [...existingUrls, ...uploadedUrls].slice(0, MAX_PHOTOS)
-        : uploadedUrls.slice(0, MAX_PHOTOS);
+        ? await dedupePhotoUrlsByContent([...existingUrls, ...uploadedUrls])
+        : uploadedUrls;
+    patchFields.photo_urls = merged.slice(0, MAX_PHOTOS);
   }
 
   const patched = Object.keys(patchFields).length

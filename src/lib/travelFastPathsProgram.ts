@@ -223,6 +223,28 @@ export function buildTripProgramReply(
   const directResolution = trips.length === 1
     ? { status: "verified" as const, trip: trips[0], candidates: [] }
     : resolveTripFromUserMessage(text, trips, { allowLooseFallback: false });
+  // The customer's words fit several tours. A single alias mention must not
+  // override that: "Тэнгэрийн хаалга" is registered as an alias of ONE tour but
+  // is equally the name of two others, so narrowing to the alias holder is how a
+  // customer asking for "Тэнгэрийн хаалга" photos received the wrong tour's
+  // poster — quoting a price 670,000₮ off. Ask, exactly as the price path does.
+  // …unless the customer typed exactly one tour's full ROUTE NAME, which settles
+  // it — that is a naming, not a guess. Deliberately NOT exactMentionedTrips:
+  // that set also counts alias hits, and "Тэнгэрийн хаалга" is registered as an
+  // alias of one tour while being equally the name of two others, which is what
+  // sent the wrong poster in the first place.
+  const exactRouteNameTrips = trips.filter((trip) => {
+    const name = normText(trip.route_name);
+    return name.length >= 8 && query.includes(name);
+  });
+  if (directResolution.status === "ambiguous" && exactRouteNameTrips.length !== 1) {
+    return {
+      reply: buildAmbiguousTripReply(uniqueTripsByRouteName(directResolution.candidates)),
+      trip: null,
+      brochure: null,
+      mediaUrls: [],
+    };
+  }
   const canTrustDirectResolution =
     directResolution.status === "verified" &&
     (trips.length === 1 || routeQueryWords.length >= 2 || exactMentionedTrips.length > 0);

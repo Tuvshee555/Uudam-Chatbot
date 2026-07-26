@@ -194,7 +194,7 @@ Rules:
 - For each day "route": copy only the route/location title after the DAY/date prefix. Do not include "DAY 1", "ӨДӨР 1", or dates in the route field.
 - For "summary": copy the program/хөтөлбөр paragraph for that day WORD FOR WORD exactly as written under that day on the page. Match it to the CORRECT day by visual position. Never put one day's text under another day. If a day genuinely has no body text on the page, use "". Process EVERY day including the very last one — do not skip the final day.
 - For "activities": copy bullet points or sentences from the source exactly. Do not add, remove, or change any words. If none exist use [].
-- Prices: copy the exact price text from the page (e.g. "1,390,000₮"). Do not reformat numbers.
+- Prices: copy the exact price text from the page (e.g. "1,111,111₮"). Do not reformat numbers.
 - If the document has an "АЯЛЛЫН ҮНЭ" or price table area, price_table must NOT be null. Extract visible columns such as "Том хүн" and "Хүүхэд 2-11 нас", and include visible price cells exactly, including "+ тийз" when shown.
 - In price_table, columns must NOT include a date/огноо column — dates go in the "dates" field of each row only. Copy the date text EXACTLY as written on the page (e.g. "7 сарын 2, 8, 9, 16, 20, 23"). Do NOT convert to ISO/numeric format like 2026-07-02.
 - Each row's cells array must match columns length exactly with the real price values. Do not leave cells empty.

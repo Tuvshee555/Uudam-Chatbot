@@ -871,7 +871,7 @@ function ChatBubble({
                                 type="number"
                                 value={getField(index, "adult_price", f.adult_price)}
                                 onChange={(e) => setField(index, "adult_price", e.target.value)}
-                                placeholder="1890000"
+                                placeholder="1111111"
                                 className={inputCls}
                               />
                             </div>

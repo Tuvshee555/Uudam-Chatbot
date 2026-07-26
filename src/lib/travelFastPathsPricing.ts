@@ -11,12 +11,29 @@ import {
   formatMoney,
   getPriceGroups,
   getStructuredPriceGroups,
+  isDocumentedFreeFare,
+  isInfantShapedAge,
   normText,
   unique,
   uniqueMonthDays,
   type DepartureDateGroup,
   type MonthDay,
 } from "./travelFastPathsSearch";
+
+/**
+ * Passenger fares only. A 0₮ adult/child/infant price is missing data from an
+ * extracted poster, not a real free seat — and rendered verbatim it tells the
+ * customer "Нярай: 0₮", i.e. this passenger travels free, which the agency then
+ * has to either honour or argue out of a screenshot. Treat non-positive fares as
+ * absent so the caller falls back to a real price or stays silent.
+ *
+ * Deliberately NOT applied to deposits, discounts or extra fees: a genuine 0
+ * there ("no deposit required") is meaningful, so those keep using formatMoney.
+ */
+export function formatPassengerMoney(value: number | null | undefined, currency: string) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  return formatMoney(value, currency);
+}
 
 const DIRECT_FLIGHT_POSITIVE_PATTERNS = [/шууд\s+нислэг/i];
 const DIRECT_FLIGHT_NEGATIVE_PATTERNS = [
@@ -96,11 +113,18 @@ export function formatPassengerPriceLines(input: {
   childAge?: string | null;
   infantAge?: string | null;
   currency: string;
+  // Set when the catalog documents this fare as genuinely free (child_rules
+  // note "Үнэгүй"), NOT merely absent — see isDocumentedFreeFare. Without
+  // this, a real 0₮ policy and a missing-data 0 both look identical, and
+  // formatPassengerMoney's default of treating <=0 as absent would hide a
+  // fare the agency actually wants advertised.
+  childFree?: boolean;
+  infantFree?: boolean;
 }) {
   const lines: string[] = [];
-  const adult = formatMoney(input.adult ?? null, input.currency);
-  const child = formatMoney(input.child ?? null, input.currency);
-  const infant = formatMoney(input.infant ?? null, input.currency);
+  const adult = formatPassengerMoney(input.adult ?? null, input.currency);
+  const child = input.childFree ? "Үнэгүй" : formatPassengerMoney(input.child ?? null, input.currency);
+  const infant = input.infantFree ? "Үнэгүй" : formatPassengerMoney(input.infant ?? null, input.currency);
   const childAge = input.childAge?.trim() ? ` /${input.childAge.trim()}/` : "";
   const infantAge = input.infantAge?.trim() ? ` /${input.infantAge.trim()}/` : "";
 
@@ -163,28 +187,39 @@ export function formatSelectedPriceGroups(
 ): string | null {
   if (!groups.length) return null;
   const currency = trip.currency || "MNT";
+  const childFree = isDocumentedFreeFare(trip, "child");
+  const infantFree = isDocumentedFreeFare(trip, "infant");
   const lines: string[] = [`✈️ ${trip.route_name}`, "💰 Үнэ:"];
+  let pricedGroups = 0;
   for (const group of groups) {
     const groupLabel = typeof group.label === "string" ? group.label : "";
     const rawDates = getPriceGroupDisplayDates(group);
     const futureDates = filterFutureDepartureDates(rawDates, now);
     if (rawDates.length > 0 && futureDates.length === 0) continue;
-    const dateLabel = futureDates.length > 0
-      ? formatGroupDateLabel(futureDates)
-      : "";
-    const labelHasDates = normalizeMnDate(groupLabel).length > 0;
-    if (groupLabel && !labelHasDates) lines.push("", groupLabel);
-    if (dateLabel && dateLabel !== groupLabel) lines.push(dateLabel);
-    lines.push(...formatPassengerPriceLines({
+    // Suppressed 0₮ fares can leave a group with no price lines at all; emitting
+    // its label and dates anyway would show the customer a date heading with no
+    // number under it, so skip the whole group instead.
+    const priceLines = formatPassengerPriceLines({
       adult: typeof group.adult_price === "number" ? group.adult_price : null,
       child: typeof group.child_price === "number" ? group.child_price : null,
       infant: typeof group.infant_price === "number" ? group.infant_price : null,
       childAge: typeof group.child_age === "string" ? group.child_age : "",
       infantAge: typeof group.infant_age === "string" ? group.infant_age : "",
       currency,
-    }));
+      childFree,
+      infantFree,
+    });
+    if (priceLines.length === 0) continue;
+    const dateLabel = futureDates.length > 0
+      ? formatGroupDateLabel(futureDates)
+      : "";
+    const labelHasDates = normalizeMnDate(groupLabel).length > 0;
+    if (groupLabel && !labelHasDates) lines.push("", groupLabel);
+    if (dateLabel && dateLabel !== groupLabel) lines.push(dateLabel);
+    lines.push(...priceLines);
+    pricedGroups += 1;
   }
-  if (lines.length === 2) return null;
+  if (pricedGroups === 0) return null;
   const feesLine = formatExtraFeesLine(trip);
   if (feesLine) lines.push(feesLine);
   return lines.join("\n");
@@ -291,7 +326,7 @@ export function buildAgeSpecificPriceReply(trip: TravelTrip, text: string): stri
 
       const target = ageRangeIntent?.target || singleAgeIntent?.target || "child";
       const label = typeof rule.label === "string" && rule.label.trim() ? rule.label.trim() : (target === "infant" ? "Нярай" : "Хүүхэд");
-      const price = formatMoney(typeof rule.price === "number" ? rule.price : null, currency);
+      const price = formatPassengerMoney(typeof rule.price === "number" ? rule.price : null, currency);
       if (!price) continue;
       return `✈️ ${trip.route_name}\n💰 ${label} ${range.min}-${range.max} насны үнэ: ${price}`;
     }
@@ -315,11 +350,13 @@ export function buildAgeSpecificPriceReply(trip: TravelTrip, text: string): stri
         ? findSingleAgePriceInText(block, singleAgeIntent.target, singleAgeIntent.age)
         : null;
     if (priceValue === null) continue;
+    const priceText = formatPassengerMoney(priceValue, currency);
+    if (!priceText) continue;
     const label = (ageRangeIntent?.target || singleAgeIntent?.target) === "infant" ? "Нярай" : "Хүүхэд";
     const ageText = ageRangeIntent
       ? `${ageRangeIntent.min}-${ageRangeIntent.max} насны`
       : `${singleAgeIntent?.age} настай`;
-    return `✈️ ${trip.route_name}\n💰 ${label} ${ageText} үнэ: ${formatMoney(priceValue, currency)}`;
+    return `✈️ ${trip.route_name}\n💰 ${label} ${ageText} үнэ: ${priceText}`;
   }
 
   return null;
@@ -370,7 +407,13 @@ export function buildPassengerTypePriceReply(
         : target === "child"
           ? (typeof group.child_price === "number" ? group.child_price : null)
           : (typeof group.adult_price === "number" ? group.adult_price : null);
-      if (price === null) continue;
+      const isFree = target === "infant"
+        ? group.infant_price_free === true
+        : target === "child"
+          ? group.child_price_free === true
+          : false;
+      const priceText = isFree ? "Үнэгүй" : formatPassengerMoney(price, currency);
+      if (!priceText) continue;
       const age = target === "infant"
         ? (typeof group.infant_age === "string" ? group.infant_age.trim() : "")
         : target === "child"
@@ -385,16 +428,47 @@ export function buildPassengerTypePriceReply(
       found = true;
       const dateLabel = relevantDates.length > 0 ? formatGroupDateLabel(relevantDates) : "";
       const ageText = age ? ` /${age}/` : "";
-      lines.push(`${dateLabel ? `${dateLabel}: ` : ""}${label}${ageText}: ${formatMoney(price, currency)}`);
+      lines.push(`${dateLabel ? `${dateLabel}: ` : ""}${label}${ageText}: ${priceText}`);
     }
     if (found) return lines.join("\n");
   }
 
   if (requestedMonth !== null && allGroups.length > 0) return null;
 
+  if (target === "infant" || target === "child") {
+    if (isDocumentedFreeFare(trip, target)) {
+      return `✈️ ${trip.route_name}\n💰 ${label} үнэ: Үнэгүй`;
+    }
+  }
+
   const price = target === "infant" ? null : target === "child" ? trip.child_price : trip.adult_price;
-  if (typeof price === "number") {
-    return `✈️ ${trip.route_name}\n💰 ${label} үнэ: ${formatMoney(price, currency)}`;
+  const flatPriceText = formatPassengerMoney(price, currency);
+  if (flatPriceText) {
+    return `✈️ ${trip.route_name}\n💰 ${label} үнэ: ${flatPriceText}`;
+  }
+
+  // The catalog claims a fare for this passenger type but every value is 0 —
+  // suppressed above as missing data. Return a definite "we don't know this one"
+  // rather than falling through to a generic adult/child block that never
+  // mentions the passenger type asked about.
+  //
+  // NOTE: this wording intentionally matches shouldSilenceNoDataReply(), so the
+  // webhook and demo both swallow it and hand off to staff — the owner's rule is
+  // that what the bot cannot provide, it does not talk around. The value of
+  // returning it here rather than null is that the handoff becomes deterministic
+  // and costs no model call. If that policy is ever relaxed, this is the text
+  // the customer would see.
+  const claimsFare = allGroups.some((group) => {
+    const value = target === "infant"
+      ? group.infant_price
+      : target === "child"
+        ? group.child_price
+        : group.adult_price;
+    return typeof value === "number";
+  });
+  if (claimsFare) {
+    const possessive = possessiveLabel.charAt(0).toUpperCase() + possessiveLabel.slice(1);
+    return `✈️ ${trip.route_name}\n💰 ${possessive} үнэ тодорхойгүй байгаа тул аяллын зөвлөх тодруулж хэлэх болно. Холбогдох дугаараа үлдээгээрэй 🙏`;
   }
 
   return null;
@@ -431,7 +505,7 @@ export function buildIncludedInPriceReply(trip: TravelTrip, text: string): strin
   }
   const evidence = evidenceBlocks.filter(Boolean).join(" ");
   const currency = trip.currency || "MNT";
-  const price = formatMoney(trip.adult_price, currency);
+  const price = formatPassengerMoney(trip.adult_price, currency);
 
   if (/нэмэгдэнэ|\+\s*тийз|багтаагүй|тусдаа/i.test(evidence)) {
     const priceText = price ? `Одоогийн ${price} үнэд ` : "Одоогийн үнэд ";
@@ -793,9 +867,9 @@ export function formatPriceLine(group: {
   infant_price?: number | null;
 }) {
   const parts: string[] = [];
-  const adult = formatMoney(group.adult_price ?? null, "MNT");
-  const child = formatMoney(group.child_price ?? null, "MNT");
-  const infant = formatMoney(group.infant_price ?? null, "MNT");
+  const adult = formatPassengerMoney(group.adult_price ?? null, "MNT");
+  const child = formatPassengerMoney(group.child_price ?? null, "MNT");
+  const infant = formatPassengerMoney(group.infant_price ?? null, "MNT");
 
   if (adult) parts.push(`Том хүн: ${adult}`);
   if (child) parts.push(`Хүүхэд: ${child}`);
@@ -812,7 +886,11 @@ export function formatChildRules(trip: TravelTrip, currency: string): string {
   for (const r of rules) {
     const label = typeof r.label === "string" && r.label ? r.label : "";
     const age = typeof r.age_range === "string" && r.age_range ? ` (${r.age_range})` : "";
-    const price = formatMoney(typeof r.price === "number" ? r.price : null, currency);
+    // This rule's own note is the direct, per-entry source of "genuinely free"
+    // vs "price never got extracted" — no need to re-derive it trip-wide.
+    const note = normText(typeof r.note === "string" ? r.note : "");
+    const isFree = r.price === 0 && (note.includes("үнэгүй") || note.includes("free"));
+    const price = isFree ? "Үнэгүй" : formatPassengerMoney(typeof r.price === "number" ? r.price : null, currency);
     const display = label ? `${label}${age}` : age.replace(/[()]/g, "").trim();
     if (display && price) {
       lines.push(`  ${display}: ${price}`);
@@ -845,9 +923,9 @@ export function formatTripBasePrice(trip: TravelTrip) {
     const grouped: GroupedPrice[] = [];
 
     for (const g of structuredGroups) {
-      const adult = formatMoney(typeof g.adult_price === "number" ? g.adult_price : null, currency);
-      const child = formatMoney(typeof g.child_price === "number" ? g.child_price : null, currency);
-      const infant = formatMoney(typeof g.infant_price === "number" ? g.infant_price : null, currency);
+      const adult = formatPassengerMoney(typeof g.adult_price === "number" ? g.adult_price : null, currency);
+      const child = formatPassengerMoney(typeof g.child_price === "number" ? g.child_price : null, currency);
+      const infant = formatPassengerMoney(typeof g.infant_price === "number" ? g.infant_price : null, currency);
       const priceParts: string[] = [];
       if (adult) priceParts.push(`Том хүн: ${adult}`);
       if (child) {
@@ -872,18 +950,24 @@ export function formatTripBasePrice(trip: TravelTrip) {
       }
     }
 
-    const lines: string[] = ["💰 Үнэ (гарах огноогоор):"];
-    for (const gr of grouped) {
-      const dateDisplay = gr.dates.length > 0 ? compactDates(gr.dates) : gr.label;
-      if (dateDisplay) {
-        lines.push(`  ${dateDisplay}: ${gr.priceStr}`);
-      } else {
-        lines.push(`  ${gr.priceStr}`);
+    // Every group can be skipped above (all its dates already departed, or it
+    // carries no prices). Returning here anyway would send the customer a bare
+    // "💰 Үнэ (гарах огноогоор):" header with no number under it, so fall
+    // through to the flat trip price instead.
+    if (grouped.length > 0) {
+      const lines: string[] = ["💰 Үнэ (гарах огноогоор):"];
+      for (const gr of grouped) {
+        const dateDisplay = gr.dates.length > 0 ? compactDates(gr.dates) : gr.label;
+        if (dateDisplay) {
+          lines.push(`  ${dateDisplay}: ${gr.priceStr}`);
+        } else {
+          lines.push(`  ${gr.priceStr}`);
+        }
       }
+      const childRulesStr = formatChildRules(trip, currency);
+      if (childRulesStr) lines.push(childRulesStr);
+      return lines.join("\n");
     }
-    const childRulesStr = formatChildRules(trip, currency);
-    if (childRulesStr) lines.push(childRulesStr);
-    return lines.join("\n");
   }
 
   // Fall back to legacy departure_date_groups
@@ -893,9 +977,9 @@ export function formatTripBasePrice(trip: TravelTrip) {
     type LegacyGroup = { priceKey: string; priceStr: string; dates: string[] };
     const grouped: LegacyGroup[] = [];
     for (const g of groups) {
-      const adult = formatMoney(g.adult_price ?? null, currency);
-      const child = formatMoney(g.child_price ?? null, currency);
-      const infant = formatMoney(g.infant_price ?? null, currency);
+      const adult = formatPassengerMoney(g.adult_price ?? null, currency);
+      const child = formatPassengerMoney(g.child_price ?? null, currency);
+      const infant = formatPassengerMoney(g.infant_price ?? null, currency);
       const priceParts: string[] = [];
       if (adult) priceParts.push(`Том хүн: ${adult}`);
       if (child) priceParts.push(`Хүүхэд: ${child}`);
@@ -912,21 +996,25 @@ export function formatTripBasePrice(trip: TravelTrip) {
         grouped.push({ priceKey, priceStr: priceParts.join(" | "), dates: [...futureDates] });
       }
     }
-    const lines: string[] = ["💰 Үнэ (гарах огноогоор):"];
-    for (const gr of grouped) {
-      const dateDisplay = compactDates(gr.dates);
-      if (dateDisplay) {
-        lines.push(`  ${dateDisplay}: ${gr.priceStr}`);
-      } else {
-        lines.push(`  ${gr.priceStr}`);
+    // Same fall-through as the structured branch: no renderable group means no
+    // header, so the flat trip price below can still answer the question.
+    if (grouped.length > 0) {
+      const lines: string[] = ["💰 Үнэ (гарах огноогоор):"];
+      for (const gr of grouped) {
+        const dateDisplay = compactDates(gr.dates);
+        if (dateDisplay) {
+          lines.push(`  ${dateDisplay}: ${gr.priceStr}`);
+        } else {
+          lines.push(`  ${gr.priceStr}`);
+        }
       }
+      return lines.join("\n");
     }
-    return lines.join("\n");
   }
 
   // Fall back to flat price
-  const adult = formatMoney(trip.adult_price, currency);
-  const child = formatMoney(trip.child_price, currency);
+  const adult = formatPassengerMoney(trip.adult_price, currency);
+  const child = formatPassengerMoney(trip.child_price, currency);
   const parts: string[] = [];
   if (adult) parts.push(`💰 Том хүн: ${adult}`);
   if (child) parts.push(`💰 Хүүхэд: ${child}`);
@@ -989,6 +1077,8 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
         childAge: typeof g.child_age === "string" ? g.child_age : "",
         infantAge: typeof g.infant_age === "string" ? g.infant_age : "",
         currency,
+        childFree: g.child_price_free === true,
+        infantFree: g.infant_price_free === true,
       });
       if (!priceLines.length) continue;
       const priceKey = priceLines.join("|");
@@ -1000,21 +1090,29 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
       if (existing) existing.dates.push(...futureDates);
       else grouped.push({ priceKey, priceLines, dates: [...futureDates], label });
     }
-    for (const entry of grouped) {
-      const dateLabel = entry.dates.length > 0 ? formatGroupDateLabel(entry.dates) : entry.label;
-      const groupLabel = entry.label.trim();
-      const labelHasDates = normalizeMnDate(groupLabel).length > 0;
-      const heading = groupLabel && !labelHasDates && dateLabel && groupLabel !== dateLabel
-        ? `${groupLabel}\n${dateLabel}`
-        : (dateLabel || (labelHasDates ? "" : groupLabel));
-      if (heading) sections.push("", heading);
-      sections.push(...entry.priceLines);
+    // Only commit to the price-group rendering if at least one group survived
+    // the departed-dates filter; otherwise fall through so the room/flat price
+    // tiers below can answer instead of returning a bare "💰 Үнэ:" header.
+    if (grouped.length > 0) {
+      for (const entry of grouped) {
+        const dateLabel = entry.dates.length > 0 ? formatGroupDateLabel(entry.dates) : entry.label;
+        const groupLabel = entry.label.trim();
+        const labelHasDates = normalizeMnDate(groupLabel).length > 0;
+        const heading = groupLabel && !labelHasDates && dateLabel && groupLabel !== dateLabel
+          ? `${groupLabel}\n${dateLabel}`
+          : (dateLabel || (labelHasDates ? "" : groupLabel));
+        if (heading) sections.push("", heading);
+        sections.push(...entry.priceLines);
+      }
+      return sections.join("\n");
     }
-    return sections.join("\n");
   }
 
   const legacyGroups = getPriceGroups(trip);
   if (legacyGroups.length > 0) {
+    // Buffer the group lines so an all-departed set of groups falls through to
+    // the room/flat price tiers instead of returning a header on its own.
+    const groupSections: string[] = [];
     for (const group of legacyGroups) {
       const rawDates = getPriceGroupDisplayDates(group);
       const futureDates = filterFutureDepartureDates(rawDates, now);
@@ -1025,12 +1123,16 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
         child: group.child_price ?? null,
         infant: group.infant_price ?? null,
         currency,
+        childFree: isDocumentedFreeFare(trip, "child"),
+        infantFree: isDocumentedFreeFare(trip, "infant"),
       });
       if (!priceLines.length) continue;
-      if (dateLabel) sections.push("", dateLabel);
-      sections.push(...priceLines);
+      if (dateLabel) groupSections.push("", dateLabel);
+      groupSections.push(...priceLines);
     }
-    return sections.join("\n");
+    if (groupSections.length > 0) {
+      return [...sections, ...groupSections].join("\n");
+    }
   }
 
   const extra = (trip.extra || {}) as Record<string, unknown>;
@@ -1052,13 +1154,60 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
     return [...sections, "", "Өрөөний төрлөөр:", ...roomLines.slice(0, 8)].join("\n");
   }
 
+  // A single flat child_price can silently pick ONE of several age-banded child
+  // fares this catalog stores in child_rules (observed: a trip with a
+  // 1,390,000₮ tier for children born 2014-2015 and a SEPARATE 1,290,000₮ tier
+  // for 2016-2023, collapsed by the extraction to one flat trip.child_price) —
+  // quoting that single number to every family either over- or under-charges
+  // whichever band it doesn't match. When child_rules documents more than one
+  // distinct non-infant fare, break them out instead.
+  const childTierLines = formatDistinctChildTiers(trip, currency);
+  if (childTierLines.length > 0) {
+    const lines = [...sections, ""];
+    const adultText = formatPassengerMoney(trip.adult_price, currency);
+    if (adultText) lines.push(`• Том хүн: ${adultText}`);
+    lines.push(...childTierLines);
+    if (isDocumentedFreeFare(trip, "infant")) lines.push("• Нярай: Үнэгүй");
+    return lines.join("\n");
+  }
+
   const flatLines = formatPassengerPriceLines({
     adult: trip.adult_price,
     child: trip.child_price,
     currency,
+    childFree: isDocumentedFreeFare(trip, "child"),
   });
   if (!flatLines.length) return "💰 Үнийн мэдээлэл одоогоор тодорхойгүй байна.";
   return [...sections, "", ...flatLines].join("\n");
+}
+
+/**
+ * Distinct age-banded child fares from child_rules/child_price_rules, infant
+ * tiers excluded (those render separately as "Нярай: Үнэгүй"). Returns [] when
+ * there is nothing to break out — either no rules, or every rule agrees with
+ * the flat trip.child_price, in which case the existing single-line render is
+ * already correct and adding a second identical line would be noise.
+ */
+function formatDistinctChildTiers(trip: TravelTrip, currency: string): string[] {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const rules = [extra.child_rules, extra.child_price_rules]
+    .flatMap((value) => (Array.isArray(value) ? (value as Array<Record<string, unknown>>) : []))
+    .filter((rule) => typeof rule.price === "number" && rule.price > 0)
+    .filter((rule) => {
+      const label = normText(typeof rule.label === "string" ? rule.label : "");
+      const ageRange = typeof rule.age_range === "string" ? rule.age_range : "";
+      return !isInfantShapedAge(label, ageRange);
+    });
+  const distinctPrices = new Set(rules.map((rule) => rule.price));
+  if (distinctPrices.size < 2) return [];
+  return rules
+    .map((rule) => {
+      const priceText = formatPassengerMoney(rule.price as number, currency);
+      if (!priceText) return "";
+      const ageRange = typeof rule.age_range === "string" && rule.age_range.trim() ? ` /${rule.age_range.trim()}/` : "";
+      return `• Хүүхэд${ageRange}: ${priceText}`;
+    })
+    .filter((line): line is string => Boolean(line));
 }
 
 export function extractMonthOnlyFromText(text: string): number | null {
@@ -1109,9 +1258,9 @@ export function formatSpecificDatePrice(
   }
 
   const currency = trip.currency || "MNT";
-  const adult = formatMoney(group.adult_price ?? null, currency);
-  const child = formatMoney(group.child_price ?? null, currency);
-  const infant = formatMoney(group.infant_price ?? null, currency);
+  const adult = formatPassengerMoney(group.adult_price ?? null, currency);
+  const child = formatPassengerMoney(group.child_price ?? null, currency);
+  const infant = formatPassengerMoney(group.infant_price ?? null, currency);
   const parts: string[] = [];
   if (adult) parts.push(`Том хүн: ${adult}`);
   if (child) parts.push(`Хүүхэд: ${child}`);
@@ -1141,11 +1290,14 @@ export function buildAmbiguousTripReply(trips: TravelTrip[]) {
     const adult = typeof trip.adult_price === "number" ? trip.adult_price : null;
     const child = firstStructuredPassengerPrice(trip, "child_price");
     const infant = firstStructuredPassengerPrice(trip, "infant_price");
+    const adultText = formatPassengerMoney(adult, currency);
+    const childText = formatPassengerMoney(child, currency);
+    const infantText = formatPassengerMoney(infant, currency);
     const details = [
       trip.duration_text,
-      adult !== null ? `том хүн ${formatMoney(adult, currency)}` : "",
-      child !== null ? `хүүхэд ${formatMoney(child, currency)}` : "",
-      infant !== null ? `нярай ${formatMoney(infant, currency)}` : "",
+      adultText ? `том хүн ${adultText}` : "",
+      childText ? `хүүхэд ${childText}` : "",
+      infantText ? `нярай ${infantText}` : "",
     ].filter(Boolean);
     return `• ${trip.route_name}${details.length ? ` — ${details.join(" · ")}` : ""}`;
   });
@@ -1224,9 +1376,9 @@ export function buildSameTripPriceComparisonReply(
     for (const entry of groups) {
       const g = entry.group!;
       const p = getPrice(g);
-      const adultStr = formatMoney(p.adult, currency);
-      const childStr = formatMoney(p.child, currency);
-      const infantStr = formatMoney(p.infant, currency);
+      const adultStr = formatPassengerMoney(p.adult, currency);
+      const childStr = formatPassengerMoney(p.child, currency);
+      const infantStr = formatPassengerMoney(p.infant, currency);
       const priceParts: string[] = [];
       if (adultStr) priceParts.push(`Том хүн: ${adultStr}`);
       if (childStr) priceParts.push(`Хүүхэд: ${childStr}`);

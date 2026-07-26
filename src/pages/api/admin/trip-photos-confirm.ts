@@ -8,6 +8,7 @@ import {
   MAX_PHOTOS_PER_TRIP,
 } from "../../../lib/tripPhotoImport/types";
 import { uploadImagesToCloudinary } from "../../../lib/tripPhotoImport/upload";
+import { dedupePhotoUrlsByContent } from "../../../lib/tripPhotoImport/dedupePhotos";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const allowed = await requireAdminAccess(req, res, "api.admin.trip-photos-confirm");
@@ -89,7 +90,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       body.mode === "replace"
         ? urls
         : Array.from(new Set([...existing, ...urls]));
-    const trimmed = nextUrls
+    // The Set above only dedupes identical URL strings, and a re-uploaded poster
+    // always gets a new Cloudinary id — so without a content check the customer
+    // receives the same poster twice. Compare the actual bytes.
+    const deduped = await dedupePhotoUrlsByContent(nextUrls);
+    const trimmed = deduped
       .filter((url): url is string => typeof url === "string" && url.startsWith("https://"))
       .slice(0, MAX_PHOTOS_PER_TRIP);
 
