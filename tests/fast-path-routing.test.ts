@@ -390,3 +390,45 @@ test("a plain greeting is never treated as a context-dependent follow-up", async
 
   assert.equal(routed.matchText, "hi");
 });
+
+test("a newly named photo trip beats stale previous photo context", async () => {
+  const senderId = "route-test-photo-topic-switch";
+  await clearClarificationState(senderId);
+  const beidaihe = trip({
+    id: "beidaihe-combo-photo",
+    route_name: "\u0411\u044d\u0439\u0434\u0430\u0439\u0445\u044d \u0448\u0430\u0440 \u0442\u044d\u043d\u0433\u0438\u0441\u0438\u0439\u043d \u044d\u0440\u044d\u0433+\u0411\u044d\u044d\u0436\u0438\u043d \u0433\u0430\u0437\u0430\u0440 \u043d\u0438\u0441\u043b\u044d\u0433 \u0445\u043e\u0441\u043e\u043b\u0441\u043e\u043d \u0430\u044f\u043b\u0430\u043b",
+    extra: {
+      aliases: [
+        "\u0411\u044d\u0439\u0434\u0430\u0439\u0445\u044d \u0433\u0430\u0437\u0430\u0440 \u043d\u0438\u0441\u043b\u044d\u0433 \u0445\u043e\u0441\u043e\u043b\u0441\u043e\u043d",
+      ],
+    },
+  });
+  const tengerDirect = trip({
+    id: "tenger-direct-photo",
+    route_name: "\u0422\u044d\u043d\u0433\u044d\u0440\u0438\u0439\u043d \u0445\u0430\u0430\u043b\u0433\u0430 - \u0448\u0443\u0443\u0434 \u043d\u0438\u0441\u043b\u044d\u0433\u0442\u044d\u0439",
+    extra: { aliases: ["\u0416\u0430\u043d\u0436\u0438\u0430\u0436\u044d", "Zhangjiajie"] },
+  });
+  const shanghaiTenger = trip({
+    id: "shanghai-tenger-photo",
+    route_name: "\u0428\u0430\u043d\u0445\u0430\u0439 + \u0422\u044d\u043d\u0433\u044d\u0440\u0438\u0439\u043d \u0445\u0430\u0430\u043b\u0433\u0430 \u0448\u0443\u0443\u0434 \u043d\u0438\u0441\u043b\u044d\u0433\u0442\u044d\u0439 \u0430\u044f\u043b\u0430\u043b",
+    extra: {
+      aliases: [
+        "\u0428\u0430\u043d\u0445\u0430\u0439 \u0416\u0430\u043d\u0436\u0438\u0430\u0436\u044d",
+        "Shanghai Zhangjiajie",
+      ],
+    },
+  });
+  const current = "\u0428\u0430\u043d\u0445\u0430\u0439 \u0416\u0430\u043d\u0436\u0438\u0430\u0436\u044d \u0437\u0443\u0440\u0430\u0433";
+  const stalePrevious =
+    "\u2708\ufe0f \u0411\u044d\u0439\u0434\u0430\u0439\u0445\u044d \u0448\u0430\u0440 \u0442\u044d\u043d\u0433\u0438\u0441\u0438\u0439\u043d \u044d\u0440\u044d\u0433+\u0411\u044d\u044d\u0436\u0438\u043d \u0433\u0430\u0437\u0430\u0440 \u043d\u0438\u0441\u043b\u044d\u0433 \u0445\u043e\u0441\u043e\u043b\u0441\u043e\u043d \u0430\u044f\u043b\u0430\u043b " +
+    "\u041f\u043e\u0441\u0442\u0435\u0440 \u0437\u0443\u0440\u0433\u0443\u0443\u0434\u044b\u0433 \u043d\u044c \u0445\u0430\u0432\u0441\u0430\u0440\u0433\u0430\u043b\u0430\u0430.";
+  const routed = await routeFastPathText({
+    senderId,
+    text: current,
+    contextualUserText: `${stalePrevious}\n${current}`,
+    trips: [beidaihe, tengerDirect, shanghaiTenger],
+  });
+
+  assert.equal(routed.scopedClarify, null);
+  assert.equal(routed.matchText, current);
+});

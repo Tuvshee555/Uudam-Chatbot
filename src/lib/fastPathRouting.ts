@@ -179,6 +179,9 @@ export async function routeFastPathText(input: {
   if (contextualUserText !== text && direct.status === "not_found" && isKnownGreetingPhrase(text)) {
     return { matchText: text, scopedClarify: null };
   }
+  if (direct.status === "verified") {
+    return { matchText: text, scopedClarify: null };
+  }
   const contextual = contextualUserText !== text ? resolve(contextualUserText, trips) : null;
   // Bug (found 2026-07-17 replaying real traffic): "beejin" alone after a
   // Chunchin (unrelated) reply returned Chunchin. isLikelyContextDependentText
@@ -201,7 +204,6 @@ export async function routeFastPathText(input: {
     contextualUserText !== text &&
     isLikelyContextDependentText(text) &&
     contextual?.status === "verified" &&
-    (direct.status !== "verified" || direct.trip.id !== contextual.trip.id) &&
     !directRejectsContextual
   ) {
     return {
@@ -215,10 +217,7 @@ export async function routeFastPathText(input: {
 
   if (direct.status === "ambiguous") {
     await setClarificationState(senderId, direct.candidates.map((trip) => trip.id));
-  } else if (
-    direct.status !== "verified" &&
-    contextual?.status === "ambiguous"
-  ) {
+  } else if (contextual?.status === "ambiguous") {
     await setClarificationState(senderId, contextual.candidates.map((trip) => trip.id));
   }
 
