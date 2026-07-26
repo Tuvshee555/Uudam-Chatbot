@@ -143,6 +143,30 @@ test("photo-only mode does not borrow photos from a shared-city trip with fewer 
   assert.deepEqual(photos, []);
 });
 
+test("reply media does not borrow photos when the exact discussed trip has none", async () => {
+  const { extractTripPhotosForReply } = await loadWelcomeFlow();
+  const trips = [
+    trip({
+      id: "hohhot-exam",
+      route_name: "Hohhot exam ground tour",
+      photo_urls: [],
+    }),
+    trip({
+      id: "jinin-hohhot",
+      route_name: "Jinin mini avatar Hohhot tour",
+      photo_urls: ["https://example.com/jinin-hohhot-1.jpg"],
+    }),
+  ];
+
+  const photos = extractTripPhotosForReply(
+    "Hohhot exam ground tour price is 890,000 MNT.",
+    trips,
+    { userText: "Hohhot exam ground tour photo" },
+  );
+
+  assert.deepEqual(photos, []);
+});
+
 test("trip media keeps complete five-slice poster sets", async () => {
   const { extractTripPhotosForReply, extractTripPhotosForUserMessage } = await loadWelcomeFlow();
   const posterSlices = [
