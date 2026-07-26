@@ -183,6 +183,10 @@ function buildTripSummaryLines(trip: TravelTrip): string {
   return lines.join("\n");
 }
 
+function buildShortMediaReply(trip: TravelTrip): string {
+  return `✈️ ${trip.route_name}\n\nАяллын постер зургуудыг илгээж байна.`;
+}
+
 export function buildTripProgramReply(
   text: string,
   trips: TravelTrip[],
@@ -251,6 +255,27 @@ export function buildTripProgramReply(
   const summary = buildTripSummaryLines(best);
   const summaryBlock = summary ? `\n\n${summary}` : "";
 
+  const wantsPicturesOnly =
+    /зураг|zurag|photo|picture|пост(?:ер)?/i.test(text) &&
+    !/хөтөлбөр|hutulbur|program|itinerary|өдөр\s*өдөр|day\s*by\s*day/i.test(text);
+  if (wantsPicturesOnly) {
+    const photoUrls = tripGeneralPhotoUrls(best);
+    if (photoUrls.length > 0) {
+      return {
+        reply: buildShortMediaReply(best),
+        trip: best,
+        brochure: null,
+        mediaUrls: photoUrls,
+      };
+    }
+    return {
+      reply: TRIP_MEDIA_UNAVAILABLE_SILENT,
+      trip: best,
+      brochure: null,
+      mediaUrls: [],
+    };
+  }
+
   const mediaUrls = getTripProgramMediaUrls(best);
   const itineraryLines = mediaUrls.length > 0 ? [] : getTripItineraryLines(best);
   const brochure = getTripBrochureAsset(best);
@@ -289,10 +314,10 @@ export function buildTripProgramReply(
   // for a trip that HAS photos fell straight through to the silent branch
   // below, so a customer asking for pictures of a trip that has pictures got
   // silence + a staff handoff on all 14 photo trips.
-  const wantsPicturesOnly =
+  const wantsPicturesOnlyFallback =
     /зураг|zurag|photo|picture|пост(?:ер)?/i.test(text) &&
     !/хөтөлбөр|hutulbur|program|itinerary|өдөр\s*өдөр|day\s*by\s*day/i.test(text);
-  if (wantsPicturesOnly) {
+  if (wantsPicturesOnlyFallback) {
     const photoUrls = tripGeneralPhotoUrls(best);
     if (photoUrls.length > 0) {
       return {

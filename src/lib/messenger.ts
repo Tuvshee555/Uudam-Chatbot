@@ -6,17 +6,19 @@ import { fetchWithRetry } from "./resilience";
 const env = getEnv();
 
 // Messenger commonly re-compresses oversized/tall PNG uploads. For Cloudinary
-// images, serve a delivery-friendly JPEG variant first so Meta fetches a
-// lighter asset with saner dimensions.
-function toMessengerImageUrl(imageUrl: string): string {
+// images, serve a high-quality JPEG variant first so Meta fetches a readable
+// poster-sized asset instead of an over-large PNG. Keep the cap generous:
+// travel posters are usually tall, and a 1440px height cap made 5-slice
+// posters too narrow to read comfortably after Messenger's own compression.
+export function toMessengerImageUrl(imageUrl: string): string {
   if (!imageUrl.startsWith("https://res.cloudinary.com/")) return imageUrl;
   if (!imageUrl.includes("/image/upload/")) return imageUrl;
-  if (imageUrl.includes("/image/upload/f_jpg,q_auto:best,c_limit,w_1440,h_1440/")) {
+  if (imageUrl.includes("/image/upload/f_jpg,q_100,c_limit,w_2160,h_4096/")) {
     return imageUrl;
   }
   return imageUrl.replace(
     "/image/upload/",
-    "/image/upload/f_jpg,q_auto:best,c_limit,w_1440,h_1440/",
+    "/image/upload/f_jpg,q_100,c_limit,w_2160,h_4096/",
   );
 }
 
