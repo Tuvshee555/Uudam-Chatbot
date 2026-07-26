@@ -20,6 +20,10 @@ import {
   recordCounter,
 } from "./observability";
 import type { Platform } from "./webhookDedup";
+import {
+  isFrustratedHandoffRequest as detectFrustratedHandoffRequest,
+  isHandoffRequest as detectHandoffRequest,
+} from "./handoffDetection";
 
 const FALLBACK_SEND_ERROR_MESSAGE = "Уучлаарай, мессеж илгээхэд алдаа гарлаа.";
 const MAX_PHOTO_ONLY_PHOTOS = MAX_TRIP_PHOTOS;
@@ -361,13 +365,11 @@ export function isQuickInfoKeyword(text: string, keywords: string[]): boolean {
   return false;
 }
 export function isHandoffRequest(text: string, keywords: string[]): boolean {
-  const normalized = normalizeLowerText(text);
-  if (!normalized) return false;
-  for (const keyword of keywords) {
-    const token = normalizeLowerText(keyword);
-    if (token && normalized.includes(token)) return true;
-  }
-  return false;
+  return detectHandoffRequest(text, keywords);
+}
+
+export function isFrustratedHandoffRequest(text: string): boolean {
+  return detectFrustratedHandoffRequest(text);
 }
 export const CONTACT_OPERATOR_LABEL = "Зөвлөхтэй холбогдох";
 // Sent when the bot would repeat its previous reply word-for-word. Must never
