@@ -2012,9 +2012,15 @@ test("a documented-free infant is quoted as Үнэгүй, not suppressed as miss
     },
   });
 
+  // Pinned clock: the fixture's price group departs on 9 сарын 12, and this
+  // test is about the FREE-INFANT rendering, not date filtering. Left
+  // unpinned it silently became a time bomb (caught by a clock-shift sweep) —
+  // once that date passed, the group dropped out and the assertion started
+  // exercising the flat-price path instead of the one under test.
   const priceReply = buildStructuredTripReply(
     [freeInfantTrip.route_name, "үнэ хэд вэ?"].join("\n"),
     [freeInfantTrip],
+    NOW,
   );
   assert.match(priceReply || "", /Нярай[^:]*:\s*Үнэгүй/);
   assert.doesNotMatch(priceReply || "", /тодорхойгүй/);
@@ -2022,9 +2028,36 @@ test("a documented-free infant is quoted as Үнэгүй, not suppressed as miss
   const infantAsk = buildStructuredTripReply(
     [freeInfantTrip.route_name, "нярай хүүхэд үнэ хэд вэ?"].join("\n"),
     [freeInfantTrip],
+    NOW,
   );
   assert.match(infantAsk || "", /Үнэгүй/);
   assert.doesNotMatch(infantAsk || "", /тодорхойгүй|Холбогдох дугаараа/);
+});
+
+test("a documented-free infant survives its price group's dates passing", () => {
+  // Trip-level "infants ride free" (child_rules) must not disappear from the
+  // main price answer once every price group has departed — the flat-price
+  // fall-through used to drop it, so the same trip answered "Үнэгүй" to
+  // "нярай үнэ?" but omitted infants entirely from "үнэ хэд вэ?".
+  const freeInfantTrip = trip({
+    id: "free-infant-departed",
+    route_name: "Тест аялал З",
+    adult_price: 1000000,
+    child_price: 900000,
+    extra: {
+      price_groups: [{ dates: ["9 сарын 12"], adult_price: 1000000, child_price: 900000, infant_price: 0, infant_age: "0-2 нас" }],
+      child_rules: [{ note: "Үнэгүй", label: "Нярай", price: 0, age_range: "0-2 нас" }],
+    },
+  });
+
+  const afterDeparture = new Date("2026-12-20T04:00:00.000Z");
+  const reply = buildStructuredTripReply(
+    [freeInfantTrip.route_name, "үнэ хэд вэ?"].join("\n"),
+    [freeInfantTrip],
+    afterDeparture,
+  );
+  assert.match(reply || "", /Том хүн: 1,000,000₮/);
+  assert.match(reply || "", /Нярай:\s*Үнэгүй/);
 });
 
 test("a free-infant note never zeroes out a real, separately-priced child fare", () => {

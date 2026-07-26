@@ -1177,6 +1177,15 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
     currency,
     childFree: isDocumentedFreeFare(trip, "child"),
   });
+  // "Infants ride free" is a trip-level policy from child_rules, not a fare
+  // attached to any one departure — so it must survive the fall-through that
+  // happens once every price group's dates have passed. Without this, a live
+  // trip awaiting new dates silently stopped mentioning free infants in its
+  // main price answer, while the infant-specific question still said Үнэгүй:
+  // two different answers to the same question depending on how it was asked.
+  // (There is no trip.infant_price column, so this cannot come from the flat
+  // fields the way the child fare does.)
+  if (isDocumentedFreeFare(trip, "infant")) flatLines.push("• Нярай: Үнэгүй");
   if (!flatLines.length) return "💰 Үнийн мэдээлэл одоогоор тодорхойгүй байна.";
   return [...sections, "", ...flatLines].join("\n");
 }
