@@ -423,6 +423,27 @@ export function isDocumentedFreeFare(trip: TravelTrip, target: "child" | "infant
   const extra = (trip.extra || {}) as Record<string, unknown>;
   const rules = [extra.child_rules, extra.child_price_rules]
     .flatMap((value) => (Array.isArray(value) ? (value as Array<Record<string, unknown>>) : []));
+
+  // A blanket "this passenger type is free" claim cannot coexist with a real,
+  // positively-priced fare for that same type — if both are present, the 0
+  // entry describes a NARROWER band (usually infants), not a free-for-all.
+  //
+  // This is the time-independent backstop for isInfantShapedAge, which reads
+  // the current year: real data labels an infant tier by BIRTH YEARS
+  // ("2024-2026 он"), so as those children age out the range stops looking
+  // infant-shaped and the very same 0/"Үнэгүй" rule would silently flip into
+  // "children are free" — handing out a real 750,000₮ child seat. Caught by a
+  // clock-shift sweep landing in 2028; without this guard the bug was
+  // invisible today and would have surfaced on its own years later.
+  const hasCompetingPaidFare = rules.some((rule) => {
+    if (typeof rule.price !== "number" || rule.price <= 0) return false;
+    const label = normText(typeof rule.label === "string" ? rule.label : "");
+    const ageRange = typeof rule.age_range === "string" ? rule.age_range : "";
+    const infantShaped = isInfantShapedAge(label, ageRange);
+    return target === "infant" ? infantShaped : !infantShaped;
+  });
+  if (hasCompetingPaidFare) return false;
+
   return rules.some((rule) => {
     if (typeof rule.price !== "number" || rule.price !== 0) return false;
     const note = normText(typeof rule.note === "string" ? rule.note : "");
