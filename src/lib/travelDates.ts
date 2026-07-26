@@ -222,11 +222,57 @@ export function resolveRequestedMonth(
   now = new Date(),
 ): RequestedMonth | null {
   if (explicitDateCandidates(text, now).length > 0) return null;
+  const today = getMongoliaDateParts(now);
+  const normalized = text.toLowerCase();
+
+  const buildMonth = (month: number, year: number): RequestedMonth => ({
+    year,
+    month,
+    label: `${month} сар`,
+  });
+
+  if (
+    /\b(this\s+month|ene\s+sar(?:d)?|odoogiin\s+sar(?:d)?)\b/i.test(normalized) ||
+    /\u044d\u043d\u044d\s+\u0441\u0430\u0440(?:\u0434|\u044b\u043d)?/i.test(normalized) ||
+    /\u043e\u0434\u043e\u043e\u0433\u0438\u0439\u043d\s+\u0441\u0430\u0440/i.test(normalized)
+  ) {
+    return buildMonth(today.month, today.year);
+  }
+
+  if (
+    /\b(next\s+month|ireh\s+sar(?:d)?|daraa\s+sar(?:d)?)\b/i.test(normalized) ||
+    /\u0438\u0440\u044d\u0445\s+\u0441\u0430\u0440(?:\u0434|\u044b\u043d)?/i.test(normalized) ||
+    /\u0434\u0430\u0440\u0430\u0430\s+\u0441\u0430\u0440(?:\u0434|\u044b\u043d)?/i.test(normalized)
+  ) {
+    const nextMonth = today.month === 12 ? 1 : today.month + 1;
+    const nextYear = today.month === 12 ? today.year + 1 : today.year;
+    return buildMonth(nextMonth, nextYear);
+  }
+
+  const monthNames: Array<{ month: number; patterns: RegExp[] }> = [
+    { month: 1, patterns: [/\bjan(?:uary)?\b/i] },
+    { month: 2, patterns: [/\bfeb(?:ruary)?\b/i] },
+    { month: 3, patterns: [/\bmar(?:ch)?\b/i] },
+    { month: 4, patterns: [/\bapr(?:il)?\b/i] },
+    { month: 5, patterns: [/\bmay\b/i] },
+    { month: 6, patterns: [/\bjun(?:e)?\b/i] },
+    { month: 7, patterns: [/\bjul(?:y)?\b/i] },
+    { month: 8, patterns: [/\baug(?:ust)?\b/i] },
+    { month: 9, patterns: [/\bsep(?:t(?:ember)?)?\b/i] },
+    { month: 10, patterns: [/\boct(?:ober)?\b/i] },
+    { month: 11, patterns: [/\bnov(?:ember)?\b/i] },
+    { month: 12, patterns: [/\bdec(?:ember)?\b/i] },
+  ];
+  for (const entry of monthNames) {
+    if (!entry.patterns.some((pattern) => pattern.test(normalized))) continue;
+    const year = entry.month < today.month ? today.year + 1 : today.year;
+    return buildMonth(entry.month, year);
+  }
+
   const match = /(?:^|[^\d])(\d{1,2})\s*(?:-?\s*р)?\s*(?:сард|сар|sard|sar)(?!\s*\d)/i.exec(text);
   if (!match) return null;
   const month = Number(match[1]);
   if (!Number.isInteger(month) || month < 1 || month > 12) return null;
-  const today = getMongoliaDateParts(now);
   const year = month < today.month ? today.year + 1 : today.year;
   return {
     year,
@@ -367,9 +413,14 @@ function isDepartureAvailabilityQuestion(text: string): boolean {
 }
 
 export function hasDepartureDateAvailabilityIntent(text: string, now = new Date()): boolean {
-  return (
-    Boolean(resolveRequestedDate(text, now) || resolveRequestedMonth(text, now)) &&
-    isDepartureAvailabilityQuestion(text)
+  const requestedDate = resolveRequestedDate(text, now);
+  const requestedMonth = resolveRequestedMonth(text, now);
+  if (!requestedDate && !requestedMonth) return false;
+  if (isDepartureAvailabilityQuestion(text)) return true;
+  if (!requestedMonth) return false;
+
+  return /\b(?:trip|trips|tour|tours|aylal|travel)\b|\u0430\u044f\u043b\u0430\u043b|\u0430\u044f\u043b\u043b\u0443\u0443\u0434/i.test(
+    text,
   );
 }
 
@@ -573,7 +624,7 @@ export function buildDepartureDateAvailabilityReply(input: {
     if (!requestedMonth) return null;
     const monthMatches = findMonthDepartures(input.trips, requestedMonth, now);
     if (monthMatches.length === 0) {
-      return `${requestedMonth.month} сард гарах аялал одоогийн мэдээлэлд алга байна. Өөр сар эсвэл чиглэл сонирхож байвал хэлээрэй.`;
+      return "REFER";
     }
     const options = formatMonthDepartureOptions(monthMatches);
     const extra =
@@ -600,10 +651,10 @@ export function buildDepartureDateAvailabilityReply(input: {
     const options = upcoming
       .map(({ ymd, trip }) => `• ${formatCustomerDate(ymd)} — ${trip.route_name}`)
       .join("\n");
-    return `${dateLabel}-нд гарах аялал алга байна. Ойрын гаралтууд:\n\n${options}`;
+    return `${dateLabel}-нд ойрхон гарах хувилбарууд:\n\n${options}`;
   }
 
-  return `${dateLabel}-нд гарах аялал алга байна. Өөр өдөр эсвэл чиглэл хэлбэл шалгаад өгье.`;
+  return "REFER";
 }
 
 /**

@@ -209,6 +209,13 @@ export function hasDiscountIntent(text: string): boolean {
 export function hasPriceObjectionIntent(text: string): boolean {
   const normalized = normText(text);
   if (!normalized) return false;
+  if (
+    /хямдруул|хөнгөлж\s*болох|үнэ\s*буулга|үнээ\s*буулга|hyamdruul|hongolj\s*boloh|une\s*buulg/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
   // "Нярай хүүхэд үнэтэй юу?" and "ямар үнэтэй вэ?" are real price questions.
   if (/[?？]/.test(text) || /\b(хэд|hed|ямар|yamar)\b/i.test(normalized) || /юу|уу|үү|вэ|ve/i.test(normalized)) {
     return false;
@@ -221,9 +228,16 @@ export function hasPriceObjectionIntent(text: string): boolean {
 
 export function buildPriceObjectionReply(text: string): string | null {
   if (!hasPriceObjectionIntent(text)) return null;
+  const normalized = normText(text);
+  const alreadyGavePartySize =
+    /\d+\s*(?:том|adult|хүн|hun|хүүхэд|huuhed|нярай|infant)|\b\d+\s*(?:pax|people)\b/i.test(
+      normalized,
+    );
   return [
     "Тийм ээ, ойлгож байна. Үнэ өндөр санагдаж болно.",
-    "Та ойролцоогоор хэдэн төгрөгийн төсөвтэй, хэдүүлээ явах вэ? Тэрэнд нь ойр аяллын хувилбар байвал шүүж өгье.",
+    alreadyGavePartySize
+      ? "Яг аль аяллыг сонирхож байна, ойролцоогоор ямар төсөв барьж байгаа вэ? Тэрэнд нь ойр аяллын хувилбар байвал шүүж өгье."
+      : "Та ойролцоогоор хэдэн төгрөгийн төсөвтэй, хэдүүлээ явах вэ? Тэрэнд нь ойр аяллын хувилбар байвал шүүж өгье.",
   ].join("\n");
 }
 

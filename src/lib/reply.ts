@@ -28,7 +28,7 @@ export const NO_DATA_HANDOFF_REPLY =
   "Энэ асуултыг манай аяллын зөвлөхөд дамжууллаа. Мэдээллийг шалгаад танд энд хариу өгнө 🙏";
 
 export const AI_OUTAGE_HANDOFF_REPLY =
-  "Уучлаарай, хариу боловсруулахад түр саатал гарлаа. Таны асуултыг аяллын зөвлөхөд дамжуулсан тул энд хариу өгнө 🙏";
+  "Таны асуултыг аяллын зөвлөхөд дамжууллаа. Мэдээллийг шалгаад танд энд хариу өгнө 🙏";
 
 export function buildHandoffAcknowledgement(options: { aiOutage?: boolean } = {}) {
   return options.aiOutage ? AI_OUTAGE_HANDOFF_REPLY : NO_DATA_HANDOFF_REPLY;
@@ -60,7 +60,7 @@ export function reconcilePhotoAttachmentReply(text: string, hasAttachedMedia: bo
   if (!hasAttachedMedia) return text;
   return text.replace(
     /\n\nОдоогоор энэ аяллын нэмэлт зураг системд ороогүй байна\. 🙌/g,
-    "\n\nЗургийг илгээж байна.",
+    "\n\nЗургийг хавсаргалаа.",
   );
 }
 
@@ -117,7 +117,7 @@ const PAYMENT_CONFIRMATION_CLAIM_PATTERNS: RegExp[] = [
 ];
 
 export const PAYMENT_VERIFICATION_DEFERRAL_REPLY =
-  "Төлбөр, захиалгын баталгаажуулалтыг манай аяллын зөвлөх л шалгаж хийдэг тул би чат дээр баталгаажуулж чадахгүй. Зөвлөх тантай удахгүй холбогдож шалгаад мэдэгдэх болно 🙏";
+  "Төлбөр, захиалгын баталгаажуулалтыг манай аяллын зөвлөх шалгаж баталгаажуулдаг. Зөвлөх тантай удахгүй холбогдож шалгаад мэдэгдэх болно 🙏";
 
 // Stricter than PAYMENT_CLAIM_PATTERNS above — that set includes a bare
 // /баримт/i, which also matches innocent questions like "бичиг баримт

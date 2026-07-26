@@ -81,29 +81,27 @@ test("answers direct tomorrow availability from active trip dates", () => {
   assert.doesNotMatch(reply || "", /Цуцлагдсан/);
 });
 
-test("answers no for missing target date and suggests upcoming departures", () => {
+test("missing target date suggests upcoming departures without dead-end wording", () => {
   const reply = buildDepartureDateAvailabilityReply({
     userText: "tomorrow departure available?",
     now: NOW_IN_MONGOLIA,
     trips: [trip({ departure_dates: ["2026-06-02"] })],
   });
 
-  assert.match(reply || "", /алга байна/);
+  assert.match(reply || "", /ойрхон гарах хувилбарууд/);
   assert.match(reply || "", /6 сарын 2/);
   assert.doesNotMatch(reply || "", /2026-06-02|MNT|Uudam Travel/);
-  assert.doesNotMatch(reply || "", /ямар огноо|тодруулах/i);
+  assert.doesNotMatch(reply || "", /алга байна|ямар огноо|тодруулах/i);
 });
 
-test("answers direct date availability even when there are no trips", () => {
+test("direct date availability with no usable trips goes to silent handoff", () => {
   const reply = buildDepartureDateAvailabilityReply({
     userText: "margaash garah aylal baina uu",
     now: NOW_IN_MONGOLIA,
     trips: [],
   });
 
-  assert.match(reply || "", /маргааш буюу 5 сарын 31/);
-  assert.match(reply || "", /алга байна/);
-  assert.doesNotMatch(reply || "", /ямар огноо|тодруулах/i);
+  assert.equal(reply, "REFER");
 });
 
 test("recognizes date availability even when the user also wants to book", () => {
@@ -161,6 +159,32 @@ test("resolves broad month request without stealing exact day requests", () => {
     label: "7 сар",
   });
   assert.equal(resolveRequestedMonth("7 сарын 9-нд явах аялал байна уу", now), null);
+});
+
+test("resolves relative and English month availability requests", () => {
+  const now = new Date("2026-07-26T04:00:00.000Z");
+
+  assert.deepEqual(resolveRequestedMonth("энэ сард ямар аялал байна", now), {
+    year: 2026,
+    month: 7,
+    label: "7 сар",
+  });
+  assert.deepEqual(resolveRequestedMonth("ирэх сарын аяллууд", now), {
+    year: 2026,
+    month: 8,
+    label: "8 сар",
+  });
+  assert.deepEqual(resolveRequestedMonth("next month trips", now), {
+    year: 2026,
+    month: 8,
+    label: "8 сар",
+  });
+  assert.deepEqual(resolveRequestedMonth("October trips", now), {
+    year: 2026,
+    month: 10,
+    label: "10 сар",
+  });
+  assert.equal(hasDepartureDateAvailabilityIntent("October trips", now), true);
 });
 
 test("prompt context tells the model what tomorrow means", () => {
@@ -262,7 +286,7 @@ test("date availability does not resurrect a past-season trip as next year", () 
     now: NOW_IN_MONGOLIA,
     trips: [trip({ departure_dates: ["3 сарын 8"] })],
   });
-  assert.match(reply || "", /алга байна/);
+  assert.equal(reply, "REFER");
 });
 
 test("availability matches a next-season trip via its write-time resolved map", () => {

@@ -107,8 +107,8 @@ test("handoff acknowledgement text stays safe when used", () => {
   assert.doesNotMatch(noData, /REFER|SILENT|database|тодорхойгүй/i);
 
   const outage = buildHandoffAcknowledgement({ aiOutage: true });
-  assert.match(outage, /түр саатал/);
-  assert.match(outage, /зөвлөхөд дамжуулсан/);
+  assert.match(outage, /зөвлөхөд дамжууллаа/);
+  assert.doesNotMatch(outage, /Уучлаарай|түр саатал|чадахгүй/i);
 });
 
 test("shouldSilenceNoDataReply catches unknown-detail fallback wording", () => {

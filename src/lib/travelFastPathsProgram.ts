@@ -184,7 +184,7 @@ function buildTripSummaryLines(trip: TravelTrip): string {
 }
 
 function buildShortMediaReply(trip: TravelTrip): string {
-  return `✈️ ${trip.route_name}\n\nАяллын постер зургуудыг илгээж байна.`;
+  return `✈️ ${trip.route_name}\n\nПостер зургуудыг нь хавсаргалаа.`;
 }
 
 export function buildTripProgramReply(
@@ -282,7 +282,7 @@ export function buildTripProgramReply(
 
   if (mediaUrls.length > 0) {
     return {
-      reply: `✈️ ${best.route_name}${summaryBlock}\n\nДэлгэрэнгүй хөтөлбөрийн зургуудыг илгээж байна.`,
+      reply: `✈️ ${best.route_name}${summaryBlock}\n\nДэлгэрэнгүй хөтөлбөрийн зургуудыг хавсаргалаа.`,
       trip: best,
       brochure: null,
       mediaUrls,
@@ -291,7 +291,7 @@ export function buildTripProgramReply(
 
   if (brochure) {
     return {
-      reply: `✈️ ${best.route_name}${summaryBlock}\n\nPDF хөтөлбөрийг илгээж байна.`,
+      reply: `✈️ ${best.route_name}${summaryBlock}\n\nPDF хөтөлбөрийг хавсаргалаа.`,
       trip: best,
       brochure,
       mediaUrls: [],
@@ -321,7 +321,7 @@ export function buildTripProgramReply(
     const photoUrls = tripGeneralPhotoUrls(best);
     if (photoUrls.length > 0) {
       return {
-        reply: `✈️ ${best.route_name}${summaryBlock}\n\nАяллын зургуудыг илгээж байна.`,
+        reply: `✈️ ${best.route_name}${summaryBlock}\n\nАяллын зургуудыг хавсаргалаа.`,
         trip: best,
         brochure: null,
         mediaUrls: photoUrls,

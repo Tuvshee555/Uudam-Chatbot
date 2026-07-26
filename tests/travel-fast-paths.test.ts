@@ -1340,6 +1340,15 @@ test("fresh expensive objection gets a generic budget follow-up without route gu
   assert.doesNotMatch(reply || "", /Жинин|шинжилгээ|хямдрал/i);
 });
 
+test("generic discount negotiation asks for budget and group size instead of matching a random trip", () => {
+  const reply = buildPriceObjectionReply("2 том хүн 1 хүүхэд явна, хямдруулж болох уу?");
+
+  assert.match(reply || "", /ямар төсөв/);
+  assert.match(reply || "", /аль аяллыг/);
+  assert.doesNotMatch(reply || "", /хэдүүлээ/);
+  assert.doesNotMatch(reply || "", /Жинин|Хөх хот|Хайлаар|шинжилгээ/i);
+});
+
 test("price objection helper does not swallow real price questions", () => {
   assert.equal(buildPriceObjectionReply("нярай хүүхэд үнэтэй юу?"), null);
   assert.equal(buildPriceObjectionReply("ямар үнэтэй вэ?"), null);
@@ -1508,7 +1517,8 @@ test("program request sends program images when brochure is missing", () => {
 
   assert.equal(result?.brochure, null);
   assert.deepEqual(result?.mediaUrls, ["https://example.com/program-1.jpg"]);
-  assert.match(result?.reply || "", /Ð¸Ð»Ð³ÑÑÐ¶|илгээж/);
+  assert.match(result?.reply || "", /хавсаргалаа|Ñ…Ð°Ð²ÑÐ°Ñ€Ð³Ð°Ð»Ð°Ð°/);
+  assert.doesNotMatch(result?.reply || "", /илгээж байна|Ð¸Ð»Ð³ÑÑÐ¶/);
 });
 
 test("program request summarizes itinerary when no file assets exist", () => {
