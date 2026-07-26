@@ -2,6 +2,9 @@
   "name": "mongolian-ai-receptionist",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "next dev --webpack --port 3004",
     "dev:turbo": "next dev --port 3004",
@@ -31,21 +34,21 @@
     "jspdf": "^4.2.1",
     "jszip": "^3.10.1",
     "mammoth": "^1.12.0",
-    "next": "^16.2.6",
+    "next": "^16.2.12",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",
     "pdfjs-dist": "^5.7.284",
     "pg": "^8.20.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "sharp": "^0.35.2",
+    "sharp": "^0.35.3",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/busboy": "^1.5.4",
     "@types/jszip": "^3.4.0",
-    "@types/node": "^20",
+    "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
@@ -55,7 +58,12 @@
     "typescript": "^5"
   },
   "overrides": {
-    "postcss": "8.5.15",
-    "uuid": "11.1.1"
+    "postcss": "8.5.23",
+    "uuid": "11.1.1",
+    "sharp": "^0.35.3",
+    "brace-expansion@<1.1.16": "^1.1.16",
+    "brace-expansion@>=2.0.0 <2.1.2": "^2.1.2",
+    "dompurify": "^3.4.12",
+    "js-yaml@>=4.0.0 <4.3.0": "^4.3.0"
   }
 }

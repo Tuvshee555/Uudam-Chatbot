@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "crypto";
+import { sharedMap } from "./processState";
 
 type Primitive = string | number | boolean | null;
 type LogValue = Primitive | LogValue[] | { [key: string]: LogValue };
@@ -68,9 +69,9 @@ type GaugeMetric = {
   maxObserved: number;
 };
 
-const counters = new Map<string, CounterMetric>();
-const histograms = new Map<string, HistogramMetric>();
-const gauges = new Map<string, GaugeMetric>();
+const counters = sharedMap<string, CounterMetric>("observability.counters");
+const histograms = sharedMap<string, HistogramMetric>("observability.histograms");
+const gauges = sharedMap<string, GaugeMetric>("observability.gauges");
 const startupDiagnosticsFlags = (
   globalThis as typeof globalThis & {
     __uudamStartupDiagnosticsFlags?: Set<string>;

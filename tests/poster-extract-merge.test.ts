@@ -3,10 +3,11 @@ import test, { before } from "node:test";
 import { applyTestEnv } from "./helpers/env";
 
 let mergeExtractedTrips: typeof import("../src/lib/poster/extractCore").mergeExtractedTrips;
+let resolveFile: typeof import("../src/lib/poster/extractCore").resolveFile;
 
 before(async () => {
   applyTestEnv();
-  ({ mergeExtractedTrips } = await import("../src/lib/poster/extractCore"));
+  ({ mergeExtractedTrips, resolveFile } = await import("../src/lib/poster/extractCore"));
 });
 
 test("poster extraction merges parallel page results without losing later days", () => {
@@ -80,5 +81,33 @@ test("poster extraction renumbers duplicate page-local day numbers in page order
       [1, "First slice"],
       [2, "Second slice"],
     ],
+  );
+});
+
+test("poster file download refuses blob URLs outside Vercel Blob", async () => {
+  // The blobUrl is supplied by the caller, so a leaked admin secret must not
+  // turn this route into a fetch proxy for internal addresses.
+  for (const url of [
+    "http://169.254.169.254/latest/meta-data/",
+    "https://evil.example.com/poster.pdf",
+    // Suffix confusion: the allowlist must not match on "contains".
+    "https://blob.vercel-storage.com.evil.example.com/poster.pdf",
+    "file:///etc/passwd",
+    "not a url",
+  ]) {
+    await assert.rejects(
+      () => resolveFile({ blobUrl: url }),
+      /зөвхөн Vercel Blob|хаяг буруу/,
+      `expected ${url} to be refused`,
+    );
+  }
+});
+
+test("poster file download accepts a genuine Vercel Blob host", async () => {
+  // Reaches the network and fails there — the point is that it gets past the
+  // host check rather than being refused outright.
+  await assert.rejects(
+    () => resolveFile({ blobUrl: "https://abc123.public.blob.vercel-storage.com/poster.pdf" }),
+    (error: Error) => !/зөвхөн Vercel Blob|хаяг буруу/.test(error.message),
   );
 });

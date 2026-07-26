@@ -17,6 +17,7 @@
  *     matchFlow() still work, untouched. New graph flows are additive.
  */
 
+import { sharedMap } from "./processState";
 import { withRedis } from "./redisState";
 
 /* ----------------------------------------------------------------
@@ -182,7 +183,7 @@ export type FlowRuntimeState = {
 
 const TTL_MS = 60 * 60 * 1000; // 1 hour
 const REDIS_TTL_SEC = 60 * 60;
-const memStore = new Map<string, FlowRuntimeState>();
+const memStore = sharedMap<string, FlowRuntimeState>("flow_engine.mem");
 
 function stateKey(senderId: string, platform: string) {
   return `flow_state:${platform}:${senderId}`;

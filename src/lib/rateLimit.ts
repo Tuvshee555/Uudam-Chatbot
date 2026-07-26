@@ -1,13 +1,14 @@
 import net from "net";
 import { getEnv } from "./env";
 import { recordCounter, setGauge } from "./observability";
+import { sharedMap } from "./processState";
 import { withRedis } from "./redisState";
 
 type Bucket = { hits: number; reset: number; lastSeen: number };
 type LimitResult = { allowed: boolean; remaining: number; reset: number };
 
 const env = getEnv();
-const buckets = new Map<string, Bucket>();
+const buckets = sharedMap<string, Bucket>("rate_limit.buckets");
 let callsSinceSweep = 0;
 const REDIS_RATE_LIMIT_LUA = `
 local key = KEYS[1]

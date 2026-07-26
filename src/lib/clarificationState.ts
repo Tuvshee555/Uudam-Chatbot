@@ -13,6 +13,7 @@
  * Redis-backed with in-memory fallback, mirroring photoOnlyState.ts.
  */
 
+import { sharedMap } from "./processState";
 import { withRedis } from "./redisState";
 
 export type ClarificationState = {
@@ -23,7 +24,7 @@ export type ClarificationState = {
 // A clarification is a live back-and-forth — minutes, not days.
 const TTL_MS = 10 * 60 * 1000;
 const REDIS_TTL_SEC = 10 * 60;
-const memStore = new Map<string, ClarificationState>();
+const memStore = sharedMap<string, ClarificationState>("clarification_state.mem");
 
 function storeKey(senderId: string) {
   return `clarification_state:${senderId}`;

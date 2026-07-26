@@ -9,6 +9,7 @@
  * to the old direct-handoff behaviour (no collection).
  */
 
+import { sharedMap } from "./processState";
 import { withRedis } from "./redisState";
 import { logInfo } from "./observability";
 
@@ -27,7 +28,7 @@ const TTL_MS = 10 * 60 * 1000; // 10 min — abandon stale flows
 const REDIS_TTL_SEC = 600;
 
 // In-process fallback for when Redis is down
-const memStore = new Map<string, CollectState>();
+const memStore = sharedMap<string, CollectState>("booking_collect.mem");
 
 function storeKey(senderId: string) {
   return `booking_collect:${senderId}`;

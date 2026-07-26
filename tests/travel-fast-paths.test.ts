@@ -1285,6 +1285,9 @@ test("infant price follow-up stays on the contextual trip instead of matching ex
         child_price: 750000,
       }),
     ],
+    // Pin the clock: the infant price lives on a dated price group, which the
+    // reply builder drops once those departures are in the past.
+    new Date("2026-07-01T04:00:00.000Z"),
   );
 
   assert.match(reply || "", /Бэйдайхэ шар тэнгисийн эрэг/);

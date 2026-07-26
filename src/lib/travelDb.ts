@@ -3,6 +3,7 @@ import { getEnv } from "./env";
 import { fixMojibake } from "./encoding";
 import { recordCounter } from "./observability";
 import { queryNeon } from "./neonDb";
+import { sharedMap } from "./processState";
 import { ensureTravelSchema } from "./travelSchema";
 // Re-exported so existing importers (travelOps, googleDriveSync, travelAI, …)
 // that import ensureTravelSchema from ./travelDb keep working after the split.
@@ -72,7 +73,9 @@ let botControlCache:
   | { value: BotControl; expiresAt: number }
   | null = null;
 // Per-page pause control, cached 5s like the legacy single-row control.
-const pageControlCache = new Map<string, { value: BotControl; expiresAt: number }>();
+const pageControlCache = sharedMap<string, { value: BotControl; expiresAt: number }>(
+  "travel_db.page_control_cache",
+);
 let botSettingsCache:
   | { value: TravelBotSettings; expiresAt: number }
   | null = null;

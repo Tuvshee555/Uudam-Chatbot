@@ -3,6 +3,12 @@ import test from "node:test";
 import type { AIChangeProposal } from "../src/lib/travelOps";
 import { applyTestEnv } from "./helpers/env";
 
+// Validation prunes past departure dates, so every fixture below is evaluated
+// against a pinned clock. Without this, a bare "7 сарын 16" fixture quietly
+// changes meaning the day the wall clock passes it and the test starts failing
+// on a date nobody touched the code.
+const TEST_NOW = new Date("2026-07-01T04:00:00.000Z");
+
 async function loadTravelOps() {
   applyTestEnv();
   return import("../src/lib/travelOps");
@@ -43,7 +49,7 @@ test("validation blocks patch actions without a target", async () => {
     actions: [{ action: "patch", fields: { adult_price: 1000 } }],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(result.proposal.actions.length, 0);
   assert.equal(result.blocking_conflicts.length, 1);
   assert.equal(result.proposal.needs_confirmation, true);
@@ -96,7 +102,7 @@ test("validation marks suspicious child pricing for confirmation", async () => {
     ],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(result.blocking_conflicts.length, 0);
   assert.equal(result.proposal.actions.length, 1);
   assert.equal(result.proposal.needs_confirmation, true);
@@ -232,7 +238,7 @@ test("validation blocks creates in update-only mode", async () => {
     }],
   };
 
-  const result = validateAIChangeProposal(proposal, [], { forbidCreate: true });
+  const result = validateAIChangeProposal(proposal, [], { forbidCreate: true, now: TEST_NOW });
   assert.equal(result.proposal.actions.length, 0);
   assert.equal(result.blocking_conflicts.length, 1);
   assert.match(result.blocking_conflicts[0], /шинэ аялал нэмэхгүй/);
@@ -251,7 +257,7 @@ test("validation blocks placeholder trip names", async () => {
     }],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(result.proposal.actions.length, 0);
   assert.ok(result.blocking_conflicts.length > 0);
 });
@@ -342,7 +348,7 @@ test("validation silently drops agency header-only rows with no price data", asy
     ],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(result.proposal.actions.length, 0);
   assert.equal(result.proposal.conflicts.length, 0);
 });
@@ -367,7 +373,7 @@ test("validation flags agency-named route that has real price data instead of si
     ],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   // Action is preserved (real trip data) but flagged with a confirmation conflict
   assert.equal(result.proposal.actions.length, 1);
   assert.equal(result.proposal.needs_confirmation, true);
@@ -402,7 +408,7 @@ test("validation downgrades generic confirmation for complete clean new trips", 
     ],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(result.proposal.needs_confirmation, false);
   assert.equal(result.proposal.important_reason, "");
   assert.equal(result.proposal.conflicts.length, 0);
@@ -430,7 +436,7 @@ test("validation keeps generic confirmation when a new trip is incomplete", asyn
     ],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(result.proposal.needs_confirmation, true);
   assert.equal(result.auto_apply_ready, false);
 });
@@ -464,7 +470,7 @@ test("validation does not flag optional yuan add-ons as trip conflicts", async (
     ],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(result.proposal.conflicts.length, 0);
   assert.equal(result.proposal.needs_confirmation, false);
   assert.equal(result.auto_apply_ready, true);
@@ -493,7 +499,7 @@ test("validation accepts recurring weekday departure schedules", async () => {
     ],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(result.proposal.conflicts.length, 0);
   assert.deepEqual(result.proposal.actions[0]?.fields?.departure_dates, [
     "Пүрэв гараг бүр",
@@ -521,7 +527,7 @@ test("validation accepts daily / everyday recurring departures", async () => {
       ],
     };
 
-    const result = validateAIChangeProposal(proposal, []);
+    const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
     // The phrase must survive as a valid recurring date, not be dropped or
     // flagged as an untrustworthy date.
     assert.deepEqual(
@@ -565,7 +571,7 @@ test("validation treats documented meal exceptions as notes, not conflicts", asy
     ],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(result.proposal.conflicts.length, 0);
   assert.equal(result.proposal.needs_confirmation, false);
   assert.equal(result.auto_apply_ready, true);
@@ -593,7 +599,7 @@ test("structured warnings stay visible without blocking save", async () => {
     }],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(result.proposal.needs_confirmation, false);
   assert.equal(result.proposal.conflicts.length, 0);
   assert.equal(result.proposal.conflict_items?.[0]?.severity, "warning");
@@ -621,7 +627,7 @@ test("corrupted OCR price patterns are promoted to blockers", async () => {
     }],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(result.proposal.needs_confirmation, true);
   assert.equal(result.proposal.conflict_items?.[0]?.severity, "blocker");
 });
@@ -647,7 +653,10 @@ test("validation removes a missing-date conflict when dates were extracted", asy
     }],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  // Pin the clock: validation prunes past departure dates, so a fixture with
+  // bare "month day" dates silently changes meaning once the wall clock passes
+  // them (the action stops counting as complete and needs_confirmation sticks).
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(result.proposal.conflicts.length, 0);
   assert.equal(result.proposal.needs_confirmation, false);
 });
@@ -673,7 +682,7 @@ test("validation removes generic multi-field extraction-miss questions", async (
     }],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(result.proposal.conflicts.length, 0);
   assert.equal(result.proposal.needs_confirmation, false);
 });
@@ -699,7 +708,7 @@ test("validation ignores filename-versus-operator pseudo conflicts", async () =>
     }],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(result.proposal.conflicts.length, 0);
   assert.equal(result.proposal.needs_confirmation, false);
 });
@@ -726,7 +735,7 @@ test("validation keeps a real competing-header operator conflict", async () => {
     }],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(result.proposal.needs_confirmation, true);
   assert.equal(result.proposal.conflicts.length, 1);
 });
@@ -843,7 +852,7 @@ test("date-based pricing conflict is suppressed when multiple departure dates ex
     ],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(
     result.proposal.conflicts.length,
     0,
@@ -938,7 +947,7 @@ test("new upsert with sold_out status is overridden to active", async () => {
     ],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(
     result.proposal.actions[0]?.fields?.status,
     "active",
@@ -970,7 +979,7 @@ test("date-based pricing conflict suppressed when notes encode date→price mapp
     ],
   };
 
-  const result = validateAIChangeProposal(proposal, []);
+  const result = validateAIChangeProposal(proposal, [], { now: TEST_NOW });
   assert.equal(
     result.proposal.conflicts.length,
     0,

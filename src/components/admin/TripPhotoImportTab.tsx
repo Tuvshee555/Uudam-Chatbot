@@ -60,6 +60,18 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
   const [localPreviewUrls, setLocalPreviewUrls] = React.useState<Record<string, string>>({});
   const [failedThumbnailIds, setFailedThumbnailIds] = React.useState<Set<string>>(new Set());
 
+  // Declared as a callback rather than a hoisted function so the hooks below
+  // can list it in their dependency arrays instead of silently closing over
+  // `overrides`.
+  const getEffectiveTripId = React.useCallback(
+    (item: PreviewItem): string | null => {
+      const override = overrides[item.id];
+      if (override === null) return null;
+      return override ?? item.match.tripId ?? null;
+    },
+    [overrides],
+  );
+
   const sortedTrips = React.useMemo(
     () => [...trips].sort((a, b) => a.route_name.localeCompare(b.route_name)),
     [trips],
@@ -82,7 +94,7 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
         const tripId = getEffectiveTripId(item);
         return !!tripId && (tripPhotoCounts[tripId] || 0) > 0;
       }),
-    [items, overrides, skipped, tripPhotoCounts],
+    [items, getEffectiveTripId, skipped, tripPhotoCounts],
   );
 
   React.useEffect(() => {
@@ -319,12 +331,6 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
   const hasUnassigned = items.some(
     (item) => !skipped.has(item.id) && !getEffectiveTripId(item),
   );
-
-  function getEffectiveTripId(item: PreviewItem): string | null {
-    const override = overrides[item.id];
-    if (override === null) return null;
-    return override ?? item.match.tripId ?? null;
-  }
 
   async function confirmImport() {
     if (!batchId || items.length === 0) return;

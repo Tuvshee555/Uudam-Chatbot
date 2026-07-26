@@ -317,11 +317,3 @@ export function SeasonsTab({
   );
 }
 
-function readUrlList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? (value as unknown[]).filter(
-        (u): u is string => typeof u === "string" && u.startsWith("https://"),
-      )
-    : [];
-}
-

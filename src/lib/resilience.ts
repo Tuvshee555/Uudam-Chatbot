@@ -5,6 +5,7 @@ import {
   recordCounter,
   recordHistogram,
 } from "./observability";
+import { sharedMap } from "./processState";
 
 const DEFAULT_RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
@@ -76,7 +77,7 @@ export type CircuitOptions = {
   correlationId?: string;
 };
 
-const circuitStates = new Map<string, CircuitState>();
+const circuitStates = sharedMap<string, CircuitState>("resilience.circuit_states");
 
 function truncateBody(raw: string, maxLen = 500) {
   if (raw.length <= maxLen) return raw;
