@@ -40,6 +40,7 @@ const PROGRAM_ONLY_QUERY_WORDS = new Set([
 // Matches MAX_TRIP_PHOTOS in welcomeFlow.ts. Kept local so this module stays a
 // leaf (importing welcomeFlow would drag in its DB/env chain).
 const MAX_PROGRAM_PHOTOS = 5;
+const BEIDAIHE_SIGNAL = normText("Бэйдайхэ");
 
 function tripGeneralPhotoUrls(trip: TravelTrip): string[] {
   return (trip.photo_urls || [])
@@ -201,8 +202,14 @@ export function buildTripProgramReply(
     if (query.includes(normText(trip.route_name))) return true;
     return getAliases(trip).some((alias) => query.includes(normText(alias)));
   });
-  const exactMentionedComboTrips = exactMentionedTrips.filter((trip) => tripIsLandFlightCombo(trip));
-  const exactMentionedLandTrips = exactMentionedTrips.filter((trip) => !tripIsLandFlightCombo(trip));
+  const destinationMentionedTrips = BEIDAIHE_SIGNAL && query.includes(BEIDAIHE_SIGNAL)
+    ? trips.filter((trip) =>
+        normText([trip.route_name, ...getAliases(trip)].join(" ")).includes(BEIDAIHE_SIGNAL),
+      )
+    : [];
+  const mentionedTrips = uniqueTripsByRouteName([...exactMentionedTrips, ...destinationMentionedTrips]);
+  const exactMentionedComboTrips = mentionedTrips.filter((trip) => tripIsLandFlightCombo(trip));
+  const exactMentionedLandTrips = mentionedTrips.filter((trip) => !tripIsLandFlightCombo(trip));
   const scopedTrips = wantsCombo
     ? exactMentionedComboTrips.length > 0
       ? exactMentionedComboTrips
@@ -212,11 +219,11 @@ export function buildTripProgramReply(
         ? exactMentionedLandTrips
         : trips.filter((trip) => !tripIsLandFlightCombo(trip))
       : wantsFlight
-        ? exactMentionedTrips.length > 0
-          ? exactMentionedTrips
+        ? mentionedTrips.length > 0
+          ? mentionedTrips
           : trips.filter((trip) => tripHasFlightSignal(trip))
-      : exactMentionedTrips.length > 0
-        ? exactMentionedTrips
+      : mentionedTrips.length > 0
+        ? mentionedTrips
         : trips;
   const candidateTrips = scopedTrips.length > 0 ? scopedTrips : trips;
   const routeQueryWords = keywordTokens(text).filter((word) => !PROGRAM_ONLY_QUERY_WORDS.has(word));
@@ -247,9 +254,9 @@ export function buildTripProgramReply(
   }
   const canTrustDirectResolution =
     directResolution.status === "verified" &&
-    (trips.length === 1 || routeQueryWords.length >= 2 || exactMentionedTrips.length > 0);
+    (trips.length === 1 || routeQueryWords.length >= 2 || mentionedTrips.length > 0);
   const genericProgramMatches =
-    !canTrustDirectResolution && exactMentionedTrips.length === 0 && candidateTrips.length > 1
+    !canTrustDirectResolution && mentionedTrips.length === 0 && candidateTrips.length > 1
       ? findTripMatches(text, candidateTrips)
       : [];
   if (genericProgramMatches.length > 1 && routeQueryWords.length <= 1) {

@@ -152,6 +152,8 @@ const PROGRAM_QUERY_SIGNALS = [
 // City aliases and romanized destination names belong in each trip's
 // extra.aliases array in the database, editable via the admin panel.
 const ALIAS_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/[бБ]эйд[эеэи]хэ/g, "бэйдайхэ"],
+  [/[бБ]айд[эеэи]хэ/g, "бэйдайхэ"],
   [/\bnaadam\b/gi, "наадам"],
   [/наадмын/gi, "наадам"],
   [/\bnisleggvi\b/gi, "нислэггүй"],

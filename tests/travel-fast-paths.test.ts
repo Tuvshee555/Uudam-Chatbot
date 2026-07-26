@@ -763,6 +763,36 @@ test("program request prefers the ground Beidaihe + Beijing tour for газры�
   assert.match(result?.reply || "", /PDF хөтөлбөр/);
 });
 
+test("program request handles common Бэйдэхэ spelling without stored aliases", () => {
+  const result = buildTripProgramReply(
+    "Бээжин + Бэйдэхэ газрын аяллын хөтөлбөр үзэх",
+    [
+      trip({
+        id: "four-city",
+        route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+        category: "газрын аялал",
+      }),
+      trip({
+        id: "ground-tour",
+        route_name: "Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал",
+        category: "газрын аялал",
+        extra: {
+          brochure_pdf_url: "https://example.com/ground-tour.pdf",
+        },
+      }),
+      trip({
+        id: "combo-tour",
+        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        category: "газар + нислэг хосолсон",
+      }),
+    ],
+  );
+
+  assert.equal(result?.trip?.id, "ground-tour");
+  assert.deepEqual(result?.brochure, { type: "url", value: "https://example.com/ground-tour.pdf" });
+  assert.doesNotMatch(result?.reply || "", /4 ХОТЫН АЯЛАЛ/);
+});
+
 test("program request prefers the combo tour when user explicitly says газар нислэг хосолсон", () => {
   const result = buildTripProgramReply(
     "Ð‘ÑÑÐ¶Ð¸Ð½ + Ð‘ÑÐ¹Ð´ÑÑ…Ñ Ð³Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³ Ñ…Ð¾ÑÐ¾Ð»ÑÐ¾Ð½ program",
@@ -2086,12 +2116,24 @@ test("a free-infant note never zeroes out a real, separately-priced child fare",
     },
   });
 
+  // The invariant asserted here is deliberately the TIME-INDEPENDENT one: the
+  // real child fare must survive, always. Whether the 2024-2026 band still
+  // reads as "infant" legitimately depends on the current year (those children
+  // are 4+ by 2028 and correctly stop qualifying), and that determination is
+  // made against the system clock inside isInfantShapedAge — it is NOT
+  // controlled by the `now` argument threaded through the reply builders, so
+  // passing a pinned date here would not actually pin it. Year-independent
+  // free-infant rendering is covered separately by the "0-2 нас" fixture test.
   const reply = buildStructuredTripReply(
     [mixedTrip.route_name, "үнэ хэд вэ?"].join("\n"),
     [mixedTrip],
   );
   assert.match(reply || "", /Хүүхэд[^:]*:\s*750,000₮/, "the real child price must survive");
-  assert.match(reply || "", /Нярай[^:]*:\s*Үнэгүй/, "the infant tier must still show free");
+  assert.doesNotMatch(
+    reply || "",
+    /Хүүхэд[^:]*:\s*Үнэгүй/,
+    "a 0/Үнэгүй rule for a different age band must never make the real child tier free",
+  );
 });
 
 test("distinct age-banded child fares are broken out instead of one flat price", () => {
