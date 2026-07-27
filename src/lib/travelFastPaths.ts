@@ -478,17 +478,30 @@ export function hasCompareIntent(text: string): boolean {
   return hasMn || hasEn;
 }
 
+const BUDGET_PHRASES = [
+  "хамгийн хямд",
+  "хямд аялал",
+  // "2 саяд багтах аялал байна уу?" — the everyday way to ask for a price
+  // ceiling, and previously unmatched: the ask fell through to the trip
+  // matcher, resolved to nothing, and the customer got silence.
+  "багтах",
+  "багтаад",
+  "хямдхан",
+  "хямд нь",
+  "төсөв",
+  "саяас доош",
+  "сая дотор",
+  "доош үнэтэй",
+  "cheapest",
+  "under budget",
+];
+
 export function hasBudgetIntent(text: string): boolean {
   const normalized = normText(text);
-  return (
-    normalized.includes("хамгийн хямд") ||
-    normalized.includes("хямд аялал") ||
-    normalized.includes("саяас доош") ||
-    normalized.includes("сая дотор") ||
-    normalized.includes("доош үнэтэй") ||
-    normalized.includes("cheapest") ||
-    normalized.includes("under budget")
-  );
+  if (BUDGET_PHRASES.some((phrase) => normalized.includes(phrase))) return true;
+  // "хүртэл" on its own is ordinary Mongolian ("8 сар хүртэл"), so it only
+  // reads as a budget ceiling when it follows an amount.
+  return /(?:сая|төгрөг|мянга)\S*\s+хүртэл/.test(normalized);
 }
 
 function extractBudgetLimit(text: string): number | null {
@@ -506,15 +519,78 @@ function extractBudgetLimit(text: string): number | null {
   return null;
 }
 
-function lowestAdultPrice(trip: TravelTrip): number | null {
-  const prices = [
-    trip.adult_price,
-    ...getStructuredPriceGroups(trip).map((group) =>
-      typeof group.adult_price === "number" ? group.adult_price : null,
-    ),
-  ].filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
-  if (prices.length === 0) return null;
-  return Math.min(...prices);
+/**
+ * True when the text spells out this trip's own name — either because the
+ * customer typed it, or because the routing layer resolved it and prepended the
+ * canonical name. Either way the trip is settled, and a builder must answer for
+ * that trip rather than substituting a sibling.
+ */
+function textNamesTrip(text: string, trip: TravelTrip): boolean {
+  const name = normText(trip.route_name || "");
+  if (!name) return false;
+  return normText(text).includes(name);
+}
+
+type LowestAdultFare = {
+  price: number;
+  // The departures this fare actually covers, when it comes from a dated price
+  // group rather than the trip's base fare. Null means "applies trip-wide".
+  groupDates: string[] | null;
+  groupChildPrice: number | null;
+};
+
+function groupDateList(group: Record<string, unknown>): string[] {
+  for (const key of ["display_dates", "dates"]) {
+    const value = group[key];
+    if (Array.isArray(value)) {
+      const dates = value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "");
+      if (dates.length > 0) return dates;
+    }
+  }
+  return [];
+}
+
+function sameDeparture(a: string, b: string): boolean {
+  return normText(a) === normText(b);
+}
+
+/**
+ * The cheapest adult fare a customer could actually book, together with the
+ * departures it applies to.
+ *
+ * A dated price group is only considered when at least one of its departures is
+ * still in the trip's (already future-filtered) date list. Otherwise a cheap
+ * tier that has already departed keeps setting the headline price and
+ * under-quotes every remaining date.
+ */
+function lowestAdultFare(trip: TravelTrip): LowestAdultFare | null {
+  let best: LowestAdultFare | null = null;
+  const consider = (value: unknown, fare: Omit<LowestAdultFare, "price">) => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return;
+    // Ties keep the earlier (trip-wide) candidate, so an identically priced
+    // group never needlessly narrows the dates shown.
+    if (best && best.price <= value) return;
+    best = { price: value, ...fare };
+  };
+
+  consider(trip.adult_price, { groupDates: null, groupChildPrice: null });
+  for (const group of getStructuredPriceGroups(trip)) {
+    const dates = groupDateList(group);
+    if (dates.length === 0) {
+      // An undated group is a trip-wide tier, not a departure-specific one.
+      consider(group.adult_price, { groupDates: null, groupChildPrice: null });
+      continue;
+    }
+    const bookable = trip.departure_dates.filter((departure) =>
+      dates.some((date) => sameDeparture(date, departure)),
+    );
+    if (bookable.length === 0) continue;
+    consider(group.adult_price, {
+      groupDates: bookable,
+      groupChildPrice: typeof group.child_price === "number" ? group.child_price : null,
+    });
+  }
+  return best;
 }
 
 export function buildBudgetReply(
@@ -532,12 +608,12 @@ export function buildBudgetReply(
     .filter((trip) => trip.status === "active")
     .map((trip) => withFutureDepartureDates(trip, now))
     .filter((trip) => !wantsDirect || tripIsDirectFlight(trip))
-    .map((trip) => ({ trip, price: lowestAdultPrice(trip) }))
-    .filter((item): item is { trip: TravelTrip; price: number } =>
-      typeof item.price === "number" && (budgetLimit === null || item.price <= budgetLimit),
+    .map((trip) => ({ trip, fare: lowestAdultFare(trip) }))
+    .filter((item): item is { trip: TravelTrip; fare: LowestAdultFare } =>
+      item.fare !== null && (budgetLimit === null || item.fare.price <= budgetLimit),
     )
     .sort((a, b) => {
-      if (a.price !== b.price) return a.price - b.price;
+      if (a.fare.price !== b.fare.price) return a.fare.price - b.fare.price;
       return a.trip.route_name.localeCompare(b.trip.route_name, "mn");
     })
     .slice(0, wantsCheapest && budgetLimit === null ? 1 : 7);
@@ -552,22 +628,23 @@ export function buildBudgetReply(
     ? (wantsDirect ? "Хамгийн хямд шууд нислэгтэй аяллууд:" : "Хамгийн хямд аяллууд:")
     : `${formatMoney(budgetLimit, "MNT")}-аас доош үнэтэй аяллууд:`;
   const lines = [title];
-  for (const { trip, price } of candidates) {
+  for (const { trip, fare } of candidates) {
     const parts = [`• ${trip.route_name}`];
     const duration = safeDurationText(trip.duration_text);
     if (duration) parts.push(duration);
-    const adultText = formatPassengerMoney(price, trip.currency || "MNT");
+    const adultText = formatPassengerMoney(fare.price, trip.currency || "MNT");
     if (adultText) parts.push(`том хүн ${adultText}`);
-    // Only pair child with adult when the shown adult IS the trip's base price.
-    // When `price` is a lower date-group price, the base child_price would be a
-    // mismatched pair (a discounted adult beside a full-price child), so leave
-    // child out rather than print an inconsistent couple.
-    const childText = price === trip.adult_price
-      ? formatPassengerMoney(trip.child_price, trip.currency || "MNT")
-      : null;
+    // Keep the child fare from the same tier as the adult fare shown. Pairing a
+    // date-group adult price with the trip's base child price quotes a couple
+    // that no single departure actually sells at.
+    const childPrice = fare.groupDates ? fare.groupChildPrice : trip.child_price;
+    const childText = formatPassengerMoney(childPrice, trip.currency || "MNT");
     if (childText) parts.push(`хүүхэд ${childText}`);
-    if (trip.departure_dates.length > 0) {
-      parts.push(`гарах: ${formatCompactDepartureList(trip.departure_dates)}`);
+    // Show only the departures the quoted fare covers. Listing every date beside
+    // a cheaper tier's price under-quotes the dates that sell at the higher one.
+    const departures = fare.groupDates || trip.departure_dates;
+    if (departures.length > 0) {
+      parts.push(`гарах: ${formatCompactDepartureList(departures)}`);
     }
     lines.push(parts.join(" — "));
   }
@@ -1195,7 +1272,14 @@ export function buildStructuredTripReply(
   if (
     hasPriceIntent(currentLine) &&
     /нярай|infant/i.test(currentLine) &&
-    !hasInfantPrice(best)
+    !hasInfantPrice(best) &&
+    // ...but only while the trip is still a broad guess. Once the customer has
+    // named it outright — or picked it from a clarification, which prepends the
+    // chosen name — swapping answers about a tour they did not ask about: the
+    // header shows the sibling's name and the fare is the sibling's fare.
+    // Route names overlap heavily here (one trip's name is a substring of
+    // another's), so a single shared token is enough to pull in a wrong tour.
+    !textNamesTrip(text, best)
   ) {
     const routeTokens = unique(keywordTokens(best.route_name));
     const infantCandidates = trips.filter((trip) => {

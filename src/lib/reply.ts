@@ -128,15 +128,34 @@ export const PAYMENT_VERIFICATION_DEFERRAL_REPLY =
 // document question get told "only the consultant can verify payments"
 // instead of answered. This set requires an unambiguous money-transfer or
 // payment-proof signal.
+// Mongolian marks a completed action with the infix -чих- ("төлчихлөө",
+// "шилжүүлчихлээ", "гүйлгээ хийчихлээ"), which is how customers actually write
+// this — so every "done" verb stem takes an optional чих before its ending.
+//
+// MN_WORD_TAIL stops a stem from matching deeper into an unrelated word. Without
+// it /төл(?:өв)/ matches inside "төлөвлөгөө" (itinerary) and "төлөвлөж байна"
+// ("I'm planning a trip"), so asking for the itinerary was answered with "only a
+// consultant can verify your payment".
+const MN_WORD_TAIL = "(?![а-яёөү])";
 const STRONG_PAYMENT_CLAIM_PATTERNS: RegExp[] = [
-  /шилжүүл(?:сэн|лээ|эв)/i,
-  /төл(?:сөн|лөө|өв)/i,
-  /төл(?:сөн|лөө|бөр).{0,20}(?:орсон|хийсэн|хийлээ)/i,
-  /\d[\d\s,.]{4,}.{0,30}(?:төл(?:сөн|лөө|өв)|шилжүүл|баталгаажуул)/i,
+  new RegExp(`шилжүүл(?:чих)?(?:сэн|лээ|эв)${MN_WORD_TAIL}`, "i"),
+  new RegExp(`төл(?:чих)?(?:сөн|лөө|өв)${MN_WORD_TAIL}`, "i"),
+  /төл(?:сөн|лөө|бөр).{0,20}(?:орсон|хий(?:чих)?(?:сэн|лээ))/i,
+  /\d[\d\s,.]{4,}.{0,30}(?:төл(?:чих)?(?:сөн|лөө|өв)|шилжүүл|баталгаажуул)/i,
   /screenshot|скриншот/i,
   /миний төлбөр орсон уу/i,
   /данс руу шилжүүл/i,
   /(?:төлбөр|захиалг(?:а|ыг)).{0,15}баталгаажуул/i,
+  // A money noun followed by a completed transfer verb: "гүйлгээ хийчихлээ",
+  // "мөнгө явуулсан", "урьдчилгаагаа өглөө", "дансанд хийчихсэн". The verb has
+  // to carry a past/completive ending, which is what keeps ordinary questions
+  // out — "яаж төлбөрөө хийх вэ?" and "урьдчилгаа хэд төлөх вэ?" ask how to pay
+  // and must still be answered normally.
+  new RegExp(
+    `(?:төлбөр|мөнг|урьдчилгаа|гүйлгээ|данс)\\S*(?:\\s+\\S+){0,2}\\s+` +
+      `(?:хий|өг|явуул|илгээ|тушаа|оруул)(?:чих)?(?:сэн|сан|лээ|лаа|лөө|лоо)${MN_WORD_TAIL}`,
+    "i",
+  ),
 ];
 
 /**

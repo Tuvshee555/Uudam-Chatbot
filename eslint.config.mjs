@@ -13,6 +13,9 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     ".claude/**",
+    // Gitignored scratch dir for QA scripts and sample exports. It ships
+    // nothing, but linting it means a throwaway script can fail `validate`.
+    "tmp/**",
   ]),
   {
     // Poster.tsx was ported from a standalone (pre-React-Compiler) app and uses

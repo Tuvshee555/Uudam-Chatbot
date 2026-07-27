@@ -59,6 +59,47 @@ test("hasPaymentClaimIntent does not fire on an unrelated document/visa question
   assert.equal(hasPaymentClaimIntent("Бээжин аялал хэд вэ?"), false);
 });
 
+test("hasPaymentClaimIntent handles the completive -чих- forms customers actually type", () => {
+  // Mongolian marks a finished action with the infix -чих-. The patterns only
+  // allowed a bare past ending, so the most colloquial way of saying "I've
+  // paid" fell through to the trip matcher: "төлбөрөө хийчихлээ, 2 хүн" was
+  // read as a passenger count, resolved to no trip, and answered with silence.
+  assert.equal(hasPaymentClaimIntent("төлчихлөө"), true);
+  assert.equal(hasPaymentClaimIntent("би төлчихсөн"), true);
+  assert.equal(hasPaymentClaimIntent("шилжүүлчихлээ"), true);
+  assert.equal(hasPaymentClaimIntent("банкаар шилжүүлчихсэн"), true);
+  assert.equal(hasPaymentClaimIntent("төлбөрөө хийчихлээ шалгаад өгөөч"), true);
+  assert.equal(hasPaymentClaimIntent("төлбөрөө хийчихлээ, 2 хүн"), true);
+});
+
+test("hasPaymentClaimIntent covers transfer nouns beyond төлбөр/шилжүүлэх", () => {
+  assert.equal(hasPaymentClaimIntent("гүйлгээ хийсэн шалгана уу"), true);
+  assert.equal(hasPaymentClaimIntent("гүйлгээ хийчихлээ"), true);
+  assert.equal(hasPaymentClaimIntent("мөнгө явуулсан"), true);
+  assert.equal(hasPaymentClaimIntent("мөнгө илгээлээ"), true);
+  assert.equal(hasPaymentClaimIntent("урьдчилгаагаа өглөө"), true);
+  assert.equal(hasPaymentClaimIntent("дансанд хийчихсэн"), true);
+});
+
+test("hasPaymentClaimIntent still ignores questions about HOW to pay", () => {
+  // These decide whether the customer gets an answer or "only a consultant can
+  // verify payments", so the verb has to be finished, not asked about.
+  assert.equal(hasPaymentClaimIntent("яаж төлбөрөө хийх вэ?"), false);
+  assert.equal(hasPaymentClaimIntent("урьдчилгаа хэд төлөх ёстой вэ?"), false);
+  assert.equal(hasPaymentClaimIntent("хаана төлөх вэ?"), false);
+  assert.equal(hasPaymentClaimIntent("данс руу яаж шилжүүлэх вэ?"), false);
+  assert.equal(hasPaymentClaimIntent("гүйлгээний хураамж хэд вэ?"), false);
+});
+
+test("hasPaymentClaimIntent does not read 'төлөвлөгөө' as a payment claim", () => {
+  // /төл(?:өв)/ matched inside "төлөвлөгөө" (itinerary) and "төлөвлөж байна"
+  // ("I'm planning a trip"), so asking for the programme was answered with the
+  // payment-verification deferral.
+  assert.equal(hasPaymentClaimIntent("аяллын төлөвлөгөө харуулаач"), false);
+  assert.equal(hasPaymentClaimIntent("төлөвлөгөө байгаа юу"), false);
+  assert.equal(hasPaymentClaimIntent("би аялал төлөвлөж байна"), false);
+});
+
 test("rewrites repeated generic clarifier after recent trip details", () => {
   const rewritten = rewriteRepeatedGenericClarifier({
     userText: "Mun bna kkk",
