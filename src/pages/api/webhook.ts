@@ -19,7 +19,7 @@ import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, dbClaimGoodbye, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
 import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
@@ -1130,9 +1130,11 @@ async function handleMessage(
   }
   if (hasDepartureDateAvailabilityIntent(text)) {
     const trips = await getTrips();
+    const dateFastPathText = await getFastPathText();
     const dateAvailabilityReply = buildDepartureDateAvailabilityReply({
-      userText: await getFastPathText(),
+      userText: dateFastPathText,
       trips,
+      focusTrip: resolveFocusTripForDateQuestion(dateFastPathText, trips),
     });
     if (dateAvailabilityReply) {
       const bookingNudge = customerWantsToBook

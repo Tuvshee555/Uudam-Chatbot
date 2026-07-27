@@ -315,16 +315,43 @@ test("date answer matching several candidates re-asks scoped with the date echoe
   const senderId = "route-test-date-multi";
   await clearClarificationState(senderId);
   const { setClarificationState } = await import("../src/lib/clarificationState");
-  await setClarificationState(senderId, HAILAAR_TRIPS.map((t) => t.id));
 
-  // 2026-08-24 is a Monday: matches the 5-day trip explicitly AND via its
-  // "Даваа гариг болгон" recurrence — but not Chichihar (7/27, 8/10) and not
-  // the 4-day (Fridays + 8/21, 8/28).
+  // Explicit, non-overlapping departure dates only.
+  //
+  // This used to lean on "8 сарын 24" being a Monday so it hit the 5-day trip's
+  // "Даваа гариг болгон" recurrence and missed the 4-day trip's Fridays — a
+  // time bomb, because the same calendar date is a Friday in 2029, at which
+  // point both trips matched and this assertion flipped. Weekday recurrence
+  // narrowing is covered directly in audit-2026-07-27.test.ts against
+  // tripMatchesRequestedDate, so this test does not need to re-derive it from
+  // whatever weekday today happens to be.
+  const datedTrips: TravelTrip[] = [
+    trip({
+      id: "route-4d",
+      route_name: "Зэрэглээ хотын аялал - 4 өдөр 3 шөнө",
+      duration_text: "4 өдөр / 3 шөнө",
+      departure_dates: ["8 сарын 21", "8 сарын 28"],
+    }),
+    trip({
+      id: "route-5d",
+      route_name: "Зэрэглээ хотын аялал - 5 өдөр 4 шөнө",
+      duration_text: "5 өдөр / 4 шөнө",
+      departure_dates: ["8 сарын 17", "8 сарын 24"],
+    }),
+    trip({
+      id: "route-direct",
+      route_name: "НОМИН АРЛЫН АЯЛАЛ-шууд нислэгтэй",
+      duration_text: "4 шөнө 5 өдөр",
+      departure_dates: ["7 сарын 27", "8 сарын 10"],
+    }),
+  ];
+  await setClarificationState(senderId, datedTrips.map((t) => t.id));
+
   const routed = await routeFastPathText({
     senderId,
     text: "8 сарын 24-нд хэд вэ",
     contextualUserText: "8 сарын 24-нд хэд вэ",
-    trips: HAILAAR_TRIPS,
+    trips: datedTrips,
   });
 
   // Unique in this fixture → selected directly.

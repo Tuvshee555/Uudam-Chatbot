@@ -20,12 +20,14 @@ import {
   getAliases,
   getStructuredDiscounts,
   getStructuredPriceGroups,
+  getTripNameHaystack,
   getTripSearchHaystack,
   isDocumentedFreeFare,
   isGenericConfirmationText,
   keywordTokens,
   matchScoreForPriceKind,
   normText,
+  resolveTripFromUserMessage,
   findBestTripMatch,
   getPriceGroups,
   getPriceValuesFromGroup,
@@ -463,8 +465,31 @@ const COMPARE_QUERY_STOP_WORDS = new Set([
   "ялгаа",
   "ялгаатай",
   "харьцуул",
+  "харьцуулна",
+  "харьцуулаач",
   "байна",
   "байгаа",
+  // Connectors and counters. These carry no destination meaning, but they do
+  // occur inside trip text, so leaving them in let the word "and" select a
+  // trip. See getTripNameHaystack.
+  "болон",
+  "бол",
+  "хоёр",
+  "хоёрын",
+  "хоёрыг",
+  "гурав",
+  "гурван",
+  "аялал",
+  "аялл",
+  "аяллын",
+  "аялалд",
+  "тухай",
+  "юу",
+  "юм",
+  "вэ",
+  "уу",
+  "үү",
+  "нь",
   "better",
   "compare",
   "comparison",
@@ -488,6 +513,12 @@ const BUDGET_PHRASES = [
   "багтаад",
   "хямдхан",
   "хямд нь",
+  // The priciest-tour question routes through the same builder, so it has to
+  // pass this gate too — otherwise buildBudgetReply is never reached.
+  "хамгийн үнэтэй",
+  "хамгийн өндөр үнэтэй",
+  "most expensive",
+  "priciest",
   "төсөв",
   "саяас доош",
   "сая дотор",
@@ -600,11 +631,20 @@ export function buildBudgetReply(
 ): string | null {
   const normalized = normText(text);
   const wantsCheapest = normalized.includes("хамгийн хямд") || normalized.includes("cheapest");
+  // "Хамгийн үнэтэй аялал аль вэ?" is as ordinary a question as its opposite,
+  // but only the cheapest side existed, so the priciest-tour question fell
+  // through to the model and came back silent.
+  const wantsPriciest =
+    !wantsCheapest &&
+    (normalized.includes("хамгийн үнэтэй") ||
+      normalized.includes("хамгийн өндөр үнэтэй") ||
+      normalized.includes("most expensive") ||
+      normalized.includes("priciest"));
   const wantsDirect = hasDirectFlightIntent(text);
   const budgetLimit = extractBudgetLimit(text);
-  if (!wantsCheapest && budgetLimit === null) return null;
+  if (!wantsCheapest && !wantsPriciest && budgetLimit === null) return null;
 
-  const candidates = trips
+  const ranked = trips
     .filter((trip) => trip.status === "active")
     .map((trip) => withFutureDepartureDates(trip, now))
     .filter((trip) => !wantsDirect || tripIsDirectFlight(trip))
@@ -613,10 +653,19 @@ export function buildBudgetReply(
       item.fare !== null && (budgetLimit === null || item.fare.price <= budgetLimit),
     )
     .sort((a, b) => {
-      if (a.fare.price !== b.fare.price) return a.fare.price - b.fare.price;
+      if (a.fare.price !== b.fare.price) {
+        return wantsPriciest ? b.fare.price - a.fare.price : a.fare.price - b.fare.price;
+      }
       return a.trip.route_name.localeCompare(b.trip.route_name, "mn");
-    })
-    .slice(0, wantsCheapest && budgetLimit === null ? 1 : 7);
+    });
+
+  // Superlative questions want the trips AT that fare. Slicing to one hid two
+  // other tours selling at the very same 890,000₮ and made the plural heading
+  // ("Хамгийн хямд аяллууд:") a lie.
+  const superlative = (wantsCheapest || wantsPriciest) && budgetLimit === null;
+  const candidates = superlative
+    ? ranked.filter((item) => item.fare.price === ranked[0]?.fare.price).slice(0, 5)
+    : ranked.slice(0, 7);
 
   if (candidates.length === 0) {
     const directText = wantsDirect ? " шууд нислэгтэй" : "";
@@ -626,7 +675,9 @@ export function buildBudgetReply(
 
   const title = wantsCheapest
     ? (wantsDirect ? "Хамгийн хямд шууд нислэгтэй аяллууд:" : "Хамгийн хямд аяллууд:")
-    : `${formatMoney(budgetLimit, "MNT")}-аас доош үнэтэй аяллууд:`;
+    : wantsPriciest
+      ? (wantsDirect ? "Хамгийн үнэтэй шууд нислэгтэй аяллууд:" : "Хамгийн үнэтэй аяллууд:")
+      : `${formatMoney(budgetLimit, "MNT")}-аас доош үнэтэй аяллууд:`;
   const lines = [title];
   for (const { trip, fare } of candidates) {
     const parts = [`• ${trip.route_name}`];
@@ -837,6 +888,23 @@ export function buildSmartButtons(replyText: string, trips: TravelTrip[]): strin
   return buttons;
 }
 
+/**
+ * The single trip a date question is about, or null when the customer asked
+ * catalog-wide ("8 сарын 20-нд ямар аялал байна?").
+ *
+ * Feeds `buildDepartureDateAvailabilityReply`'s `focusTrip`. Deliberately
+ * strict: only an unambiguous, non-loose match counts, so a vague question
+ * still gets the catalog-wide answer rather than a guess.
+ */
+export function resolveFocusTripForDateQuestion(
+  text: string,
+  trips: TravelTrip[],
+): TravelTrip | null {
+  const resolution = resolveTripFromUserMessage(text, trips, { allowLooseFallback: false });
+  if (resolution.status !== "verified" || !resolution.trip) return null;
+  return resolution.trip.status === "active" ? resolution.trip : null;
+}
+
 export function buildCompareReply(text: string, trips: TravelTrip[]): string | null {
   const query = normText(text);
   const activeTrips = trips.filter((trip) => trip.status === "active");
@@ -852,8 +920,10 @@ export function buildCompareReply(text: string, trips: TravelTrip[]): string | n
       .filter((word) => !COMPARE_QUERY_STOP_WORDS.has(word));
     const broadMatches: TravelTrip[] = [];
     for (const token of broadTokens) {
+      // Name/alias only: a comparison names trips, so a token that merely turns
+      // up in some other trip's notes or date labels must not nominate it.
       const best = activeTrips
-        .filter((trip) => getTripSearchHaystack(trip).includes(token))
+        .filter((trip) => getTripNameHaystack(trip).includes(token))
         .sort((a, b) => {
           const aPrice = typeof a.adult_price === "number" ? a.adult_price : Number.MAX_SAFE_INTEGER;
           const bPrice = typeof b.adult_price === "number" ? b.adult_price : Number.MAX_SAFE_INTEGER;
@@ -1204,6 +1274,11 @@ export function buildStructuredTripReply(
       if (directUnavailable) return directUnavailable;
       return null;
     }
+    // "Энэ аялалд хоол багтсан уу?" is not a structured price/date question, so
+    // it lands here — and used to get the generic trip card, which never
+    // answers it even though the operator wrote the answer into notes/has_food.
+    const routeOnlyIncluded = buildIncludedInPriceReply(routeOnlyCandidate.best, text);
+    if (routeOnlyIncluded) return routeOnlyIncluded;
     return buildTripInfoReply(routeOnlyCandidate.best, now);
   }
 

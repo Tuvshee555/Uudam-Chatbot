@@ -502,6 +502,26 @@ export function tripMatchesRequestedDate(
   return false;
 }
 
+/**
+ * "<name> аялал", without doubling the word when the route name already ends
+ * in it — most route names in the catalog already end in "аялал".
+ */
+function tripPhrase(trip: TravelTrip): string {
+  const name = (trip.route_name || "").trim();
+  return /аялал\S*$/i.test(name) ? name : `${name} аялал`;
+}
+
+/**
+ * Departure text that carries no concrete calendar date — "Баасан гариг
+ * болгон", "Өдөр бүр", "аяллын групп бүрдсэн огноогоор". These never produce a
+ * ymd, so a trip that only has them looks like it has no departures at all.
+ */
+function recurringScheduleTexts(trip: TravelTrip, now: Date): string[] {
+  return (trip.departure_dates || []).filter(
+    (dateText) => tripDateYmds(trip, dateText, now).length === 0 && dateText.trim().length > 0,
+  );
+}
+
 function findDepartureMatches(
   trips: TravelTrip[],
   requestedYmd: string,
@@ -615,18 +635,37 @@ export function buildDepartureDateAvailabilityReply(input: {
   userText: string;
   trips: TravelTrip[];
   now?: Date;
+  /**
+   * The trip the customer actually named, when the message resolves to exactly
+   * one. Without it this builder answers catalog-wide, so "<аялал> 8 сарын
+   * 20-нд явах уу?" replied "Тийм ээ, 8 сарын 20-нд гарах аялал байна" and
+   * listed four OTHER tours — a yes to a question about a trip that does not
+   * run that day. When set, the answer is about this trip and nothing else.
+   */
+  focusTrip?: TravelTrip | null;
 }): string | null {
   const now = input.now || new Date();
   const requested = resolveRequestedDate(input.userText, now);
   if (!hasDepartureDateAvailabilityIntent(input.userText, now)) return null;
+  const focusTrip = input.focusTrip && input.focusTrip.status === "active" ? input.focusTrip : null;
+  const scopedTrips = focusTrip ? [focusTrip] : input.trips;
+
   if (!requested) {
     const requestedMonth = resolveRequestedMonth(input.userText, now);
     if (!requestedMonth) return null;
-    const monthMatches = findMonthDepartures(input.trips, requestedMonth, now);
+    const monthMatches = findMonthDepartures(scopedTrips, requestedMonth, now);
     if (monthMatches.length === 0) {
-      return "REFER";
+      if (!focusTrip) return "REFER";
+      const recurring = recurringScheduleTexts(focusTrip, now);
+      if (recurring.length > 0) {
+        return `${tripPhrase(focusTrip)} тогтмол хуваарьтай гардаг: ${recurring.join(", ")}. ${requestedMonth.month} сарын тодорхой огноог аяллын зөвлөх баталгаажуулж өгнө 🙌`;
+      }
+      return `${tripPhrase(focusTrip)} ${requestedMonth.month} сард гарахаар төлөвлөгдөөгүй байна. Аяллын зөвлөх тодруулж өгөх боломжтой 🙌`;
     }
     const options = formatMonthDepartureOptions(monthMatches);
+    if (focusTrip) {
+      return `Тийм ээ, ${tripPhrase(focusTrip)} ${requestedMonth.month} сард гарна 😊\n\n${options}`;
+    }
     const extra =
       new Set(monthMatches.map((match) => match.trip.id)).size > 5
         ? " Бусад хувилбар ч байгаа тул чиглэлээ хэлбэл нарийвчлаад өгье."
@@ -634,21 +673,54 @@ export function buildDepartureDateAvailabilityReply(input: {
     return `Тийм ээ, ${requestedMonth.month} сард гарах аяллууд байна 😊\n\n${options}${extra}\n\nАль чиглэл сонирхож байна вэ?`;
   }
 
-  const matches = findDepartureMatches(input.trips, requested.ymd, now);
+  const matches = findDepartureMatches(scopedTrips, requested.ymd, now);
   const dateLabel = requested.source === "relative"
     ? `${requested.label} буюу ${formatCustomerDate(requested.ymd)}`
     : formatCustomerDate(requested.ymd);
+
+  // A named trip gets the recurrence-aware answer: findDepartureMatches only
+  // understands explicit dates, so a tour running "Өдөр бүр" or "Баасан гариг
+  // болгон" looked like it had no departure at all and was wrongly denied.
+  // Catalog-wide listings deliberately stay on explicit dates — otherwise every
+  // daily and flexible-group tour joins every date list.
+  if (focusTrip && matches.length === 0 && tripMatchesRequestedDate(focusTrip, requested.ymd, now)) {
+    const recurring = recurringScheduleTexts(focusTrip, now);
+    const schedule = recurring.length > 0 ? ` (${recurring.join(", ")})` : "";
+    return `Тийм ээ, ${tripPhrase(focusTrip)} ${dateLabel}-нд гарна 😊${schedule}`;
+  }
 
   if (matches.length > 0) {
     const shown = matches.slice(0, 4).map((match) => `• ${formatTripSummary(match)}`).join("\n");
     const extra =
       matches.length > 4 ? ` Нийт ${matches.length} аялал таарч байна.` : "";
+    if (focusTrip) {
+      return `Тийм ээ, ${tripPhrase(focusTrip)} ${dateLabel}-нд гарна 😊\n\n${shown}`;
+    }
     return `Тийм ээ, ${dateLabel}-нд гарах аялал байна 😊\n\n${shown}${extra}`;
   }
 
-  const upcoming = findUpcomingDepartures(input.trips, requested.ymd, now);
-  if (upcoming.length > 0) {
-    const options = upcoming
+  // No departure on the requested date. Say so about the trip that was asked
+  // about before offering anything else — an unqualified list of other tours
+  // reads as a "yes".
+  const scopedUpcoming = findUpcomingDepartures(scopedTrips, requested.ymd, now);
+  if (focusTrip) {
+    if (scopedUpcoming.length > 0) {
+      const options = scopedUpcoming
+        .map(({ ymd }) => `• ${formatCustomerDate(ymd)}`)
+        .join("\n");
+      return `${tripPhrase(focusTrip)} ${dateLabel}-нд гарахгүй байна. Хамгийн ойрын гаралтууд:\n\n${options}`;
+    }
+    // A weekday/daily schedule produces no ymd, so "no upcoming departures"
+    // would be wrong here — quote the schedule the operator actually published.
+    const recurring = recurringScheduleTexts(focusTrip, now);
+    if (recurring.length > 0) {
+      return `${tripPhrase(focusTrip)} ${dateLabel}-нд гардаггүй. Тогтмол хуваарь нь: ${recurring.join(", ")}. Тохирох огноог аяллын зөвлөх баталгаажуулж өгнө 🙌`;
+    }
+    return `${tripPhrase(focusTrip)} ${dateLabel}-нд гарахгүй байна. Дараагийн гаралтын огноог аяллын зөвлөх тодруулж өгнө 🙌`;
+  }
+
+  if (scopedUpcoming.length > 0) {
+    const options = scopedUpcoming
       .map(({ ymd, trip }) => `• ${formatCustomerDate(ymd)} — ${trip.route_name}`)
       .join("\n");
     return `${dateLabel}-нд ойрхон гарах хувилбарууд:\n\n${options}`;

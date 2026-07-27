@@ -20,7 +20,7 @@ import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceW
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
 import { extractTripPhotosForReply, extractTripPhotosForUserMessage, hasTripPhotoIntent, MAX_TRIP_PHOTOS } from "../../lib/welcomeFlow";
 import { CONTACT_OPERATOR_LABEL, DUPLICATE_REPLY_NUDGE, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
 import { getEnv } from "../../lib/env";
@@ -458,7 +458,12 @@ export default async function handler(
       // Fast path: departure date availability
       if (hasDepartureDateAvailabilityIntent(normalizedText)) {
         const trips = await getTrips();
-        const dateReply = buildDepartureDateAvailabilityReply({ userText: await getFastPathText(), trips });
+        const dateFastPathText = await getFastPathText();
+        const dateReply = buildDepartureDateAvailabilityReply({
+          userText: dateFastPathText,
+          trips,
+          focusTrip: resolveFocusTripForDateQuestion(dateFastPathText, trips),
+        });
         if (dateReply) {
           // Mirror the webhook: a booking-intent date question gets nudged for
           // name + phone so the answer ends the same way Messenger's does.

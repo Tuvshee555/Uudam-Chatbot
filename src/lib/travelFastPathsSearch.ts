@@ -542,6 +542,21 @@ export function getTripSearchHaystack(trip: TravelTrip): string {
   return normText(sections.join(" "));
 }
 
+/**
+ * Name + alias text only — deliberately excludes notes, departure dates and
+ * price-group labels.
+ *
+ * `getTripSearchHaystack` folds all of those in, which is right for "does this
+ * trip mention X at all" lookups but wrong for "is this one of the trips the
+ * customer named". A formatted date label such as "8 сарын 6, 13-ны болон
+ * 20-ны гаралт" puts the connector "болон" ("and") inside an unrelated trip's
+ * haystack, so comparing "<аялал А> болон <аялал Б>" pulled in a third tour whose only
+ * connection to the question was the word "and".
+ */
+export function getTripNameHaystack(trip: TravelTrip): string {
+  return normText([trip.route_name, ...getAliases(trip)].join(" "));
+}
+
 function tripSearchTokens(trip: TravelTrip): string[] {
   return unique([
     ...keywordTokens(trip.route_name),
@@ -933,6 +948,16 @@ export function resolveTripFromUserMessage(
       candidates: candidates.slice(0, 3).map((match) => match.trip),
     };
   }
+  // Exactly one trip's own name contains everything the customer typed, and it
+  // is also the top match. That is a direct naming of that tour, so the
+  // near-tie test below must not turn it into a "which one did you mean?" —
+  // a rival that merely shares one generic word ("онгоцны") can sit within the
+  // score margin without being a plausible reading of the question at all.
+  // Gated on `best` so a weak covering match cannot outrank a stronger one.
+  if (indistinguishable.length === 1 && indistinguishable[0].trip.id === best.trip.id) {
+    return { status: "verified", trip: indistinguishable[0].trip, candidates: [] };
+  }
+
   if (
     second &&
     best.score - second.score <= 5 &&
@@ -1051,7 +1076,16 @@ export function queryWantsLandFlightCombo(query: string): boolean {
 // Whether the query explicitly mentions a flight component.
 export function queryWantsFlight(query: string): boolean {
   if (queryExplicitlyRejectsFlight(query)) return false;
-  return /нислэг|онгоц|хосолсон|нислэгтэй/i.test(query);
+  // "Онгоцны тийз багтсан уу?" asks what the fare covers — it is not a request
+  // for a flight-based tour. Left in, the bare "онгоц" made this read as a trip
+  // preference, which suppressed the name-coverage check and let the cruise
+  // ("Усан онгоцны аялал") stand as a rival candidate to a tour the customer
+  // had already named. Drop the ticket phrase before judging preference.
+  const withoutTicketPhrases = query.replace(
+    /(?:онгоцны|нислэгийн)?\s*тийз(?:ний|гүй|тэй)?/gi,
+    " ",
+  );
+  return /нислэг|онгоц|хосолсон|нислэгтэй/i.test(withoutTicketPhrases);
 }
 
 export function queryWantsDirectFlight(query: string): boolean {
@@ -1237,6 +1271,20 @@ function routeContentTokens(query: string): string[] {
     "үзүүлээч",
     "харах",
     "харуулаач",
+    // Words that belong to the QUESTION, not to a destination. "онгоцны тийз"
+    // ("plane ticket") made "<аялал> онгоцны тийз багтсан уу?" nominate the
+    // cruise tour, whose name contains "онгоцны" ("Усан онгоцны аялал"), so a
+    // customer who named their trip was asked which trip they meant.
+    "онгоц",
+    "онгоцны",
+    "нислэгийн",
+    "тийз",
+    "тийзний",
+    "багтсан",
+    "багтаагүй",
+    "орсон",
+    "хоол",
+    "хооллолт",
   ]);
   return unique(keywordTokens(query).filter((token) => !filler.has(token)));
 }

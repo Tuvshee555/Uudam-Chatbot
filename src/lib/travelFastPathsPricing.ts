@@ -239,7 +239,9 @@ export function extractAgeRangeIntent(text: string): { min: number; max: number;
   return { min, max, target };
 }
 
-export function extractSingleAgeIntent(text: string): { age: number; target: "child" | "infant" } | null {
+export function extractSingleAgeIntent(
+  text: string,
+): { age: number; target: "child" | "infant"; unit: "year" | "month" } | null {
   const beforeTarget = /(хүүхэд|нярай)?\s*(\d{1,2})\s*(настай|нас|сар|сартай)\b/i.exec(text);
   const afterTarget = /(?:^|[^\d-])(\d{1,2})\s*(настай|нас|сар|сартай)\s*(хүүхэд|нярай)?/i.exec(text);
   const match = beforeTarget || afterTarget;
@@ -256,7 +258,9 @@ export function extractSingleAgeIntent(text: string): { age: number; target: "ch
       : age <= 1
         ? "infant"
         : "child";
-  return { age, target };
+  // "6 сартай" is six MONTHS old. Carried out so callers compare against a
+  // tier's band in the right unit instead of reading 6 as six years.
+  return { age, target, unit: unit.includes("сар") ? "month" : "year" };
 }
 
 export function extractRangePriceFromText(
@@ -280,6 +284,88 @@ function parseAgeRange(text: string): { min: number; max: number } | null {
   const max = Number.parseInt(rangeMatch[2], 10);
   if (Number.isNaN(min) || Number.isNaN(max)) return null;
   return { min, max };
+}
+
+/**
+ * Does a fare tier's stated age band cover this passenger?
+ *
+ * The catalog writes bands in three different units, and comparing the raw
+ * numbers across them is how a 1-year-old ended up quoted the 2-12 child fare:
+ *   - years   — "2-12 нас", "11 нас доош"
+ *   - months  — "0-23 сар"          (23 is months, not years)
+ *   - birth years — "2015-2022 он", "2014-2015 онд төрсөн"
+ *
+ * Everything is normalised to months before comparing. Returns null when the
+ * band carries no usable bound (empty string), so callers can tell "outside
+ * this tier" apart from "this tier does not say".
+ */
+export function ageBandCoversAge(
+  ageRange: string,
+  age: number,
+  unit: "year" | "month",
+  now = new Date(),
+): boolean | null {
+  const text = (ageRange || "").trim();
+  if (!text) return null;
+  const ageMonths = unit === "month" ? age : age * 12;
+
+  // Birth-year band: "2015-2022 он" → anyone born in those years.
+  const birthYears = /(\d{4})\s*[-–]\s*(\d{4})/.exec(text);
+  if (birthYears) {
+    const youngestBirthYear = Math.max(Number(birthYears[1]), Number(birthYears[2]));
+    const oldestBirthYear = Math.min(Number(birthYears[1]), Number(birthYears[2]));
+    const currentYear = now.getFullYear();
+    const minAgeYears = currentYear - youngestBirthYear;
+    const maxAgeYears = currentYear - oldestBirthYear;
+    const ageYears = unit === "month" ? age / 12 : age;
+    return ageYears >= minAgeYears && ageYears <= maxAgeYears;
+  }
+
+  const bandUnit: "year" | "month" = /сар/.test(text) ? "month" : "year";
+  const toMonths = (value: number) => (bandUnit === "month" ? value : value * 12);
+
+  // Open-ended band: "11 нас доош" / "12 хүртэл".
+  const openEnded = /(\d{1,2})\s*(?:нас|сар)?\s*(?:доош|хүртэл|болон\s*доош)/.exec(text);
+  const range = parseAgeRange(text);
+  if (!range && openEnded) {
+    return ageMonths <= toMonths(Number(openEnded[1]));
+  }
+  if (!range) return null;
+
+  return ageMonths >= toMonths(range.min) && ageMonths <= toMonths(range.max);
+}
+
+type AgeTier = {
+  rule: Record<string, unknown>;
+  label: string;
+  ageRange: string;
+  price: number | null;
+  documentedFree: boolean;
+};
+
+function readAgeTiers(trip: TravelTrip): AgeTier[] {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const rules = [extra.child_rules, extra.child_price_rules].flatMap((value) =>
+    Array.isArray(value) ? (value as Array<Record<string, unknown>>) : [],
+  );
+  return rules.map((rule) => {
+    const note = normText(typeof rule.note === "string" ? rule.note : "");
+    const price = typeof rule.price === "number" ? rule.price : null;
+    return {
+      rule,
+      label: typeof rule.label === "string" ? rule.label.trim() : "",
+      ageRange: typeof rule.age_range === "string" ? rule.age_range : "",
+      price,
+      // Same convention as isDocumentedFreeFare: a 0 only means "free" when the
+      // operator wrote it down. Never inferred from a bare 0.
+      documentedFree: price === 0 && (note.includes("үнэгүй") || note.includes("free")),
+    };
+  });
+}
+
+function formatTierPrice(tier: AgeTier, currency: string): string | null {
+  if (tier.documentedFree) return "Үнэгүй";
+  return formatPassengerMoney(tier.price, currency);
 }
 
 function ruleMatchesTarget(rule: Record<string, unknown>, target: "child" | "infant"): boolean {
@@ -313,6 +399,60 @@ export function buildAgeSpecificPriceReply(trip: TravelTrip, text: string): stri
 
   const currency = trip.currency || "MNT";
   const extra = (trip.extra || {}) as Record<string, unknown>;
+
+  // A stated age is a hard constraint. Answer from the tier that actually
+  // covers it — and when no tier does, say something true rather than falling
+  // through to the generic "хүүхэд" fare, which quoted a 1-year-old the 2-12
+  // child price (infants travel free) and a 15-year-old the same 2-12 price
+  // while printing the very range that excludes them.
+  if (singleAgeIntent) {
+    const ageUnit = singleAgeIntent.unit;
+    const tiers = readAgeTiers(trip).filter((tier) => tier.ageRange.trim().length > 0);
+    if (tiers.length > 0) {
+      const covering = tiers.filter(
+        (tier) => ageBandCoversAge(tier.ageRange, singleAgeIntent.age, ageUnit) === true,
+      );
+      // Prefer a tier whose kind matches how the customer described the child
+      // ("нярай" vs "хүүхэд"); otherwise the narrowest covering tier wins.
+      const preferred =
+        covering.find((tier) =>
+          ruleMatchesTarget(tier.rule, singleAgeIntent.target),
+        ) || covering[0];
+      if (preferred) {
+        const priceText = formatTierPrice(preferred, currency);
+        if (priceText) {
+          const label = preferred.label || (singleAgeIntent.target === "infant" ? "Нярай" : "Хүүхэд");
+          return `✈️ ${trip.route_name}\n💰 ${label} /${preferred.ageRange}/ үнэ: ${priceText}`;
+        }
+      }
+      if (covering.length === 0) {
+        // Above every child/infant band the operator published → adult fare.
+        const olderThanEveryTier = tiers.every(
+          (tier) => ageBandCoversAge(tier.ageRange, singleAgeIntent.age, ageUnit) === false,
+        );
+        const adultText = formatPassengerMoney(trip.adult_price, currency);
+        const ageLabel = ageUnit === "month"
+          ? `${singleAgeIntent.age} сартай`
+          : `${singleAgeIntent.age} настай`;
+        if (olderThanEveryTier && adultText) {
+          // Only the child bands, deduplicated — the same band repeats once per
+          // priced variant (ticketed / non-ticketed), and quoting the infant
+          // band back to a teenager is noise.
+          const bands = unique(
+            tiers
+              .filter((tier) => !isInfantShapedAge(normText(tier.label), tier.ageRange))
+              .map((tier) => tier.ageRange.trim())
+              .filter(Boolean),
+          );
+          const bandNote = bands.length > 0
+            ? ` (хүүхдийн үнэ ${bands.join(", ")}-д хамаарна)`
+            : "";
+          return `✈️ ${trip.route_name}\n💰 ${ageLabel} аялагч том хүний үнээр бодогдоно: ${adultText}${bandNote}`;
+        }
+      }
+    }
+  }
+
   if (Array.isArray(extra.child_rules)) {
     for (const rule of extra.child_rules as Array<Record<string, unknown>>) {
       const ageRange = typeof rule.age_range === "string" ? rule.age_range : "";
@@ -485,9 +625,17 @@ export function buildIncludedInPriceReply(trip: TravelTrip, text: string): strin
   const asksAboutFlightTicket =
     normalized.includes("нислэгийн тийз") ||
     normalized.includes("онгоцны тийз") ||
+    normalized.includes("тийз") ||
     normalized.includes("flight ticket") ||
     normalized.includes("ticket");
-  if (!asksAboutFlightTicket) return null;
+  const asksAboutMeals =
+    normalized.includes("хоол") ||
+    normalized.includes("хооллолт") ||
+    normalized.includes("цай") ||
+    normalized.includes("meal") ||
+    normalized.includes("food") ||
+    normalized.includes("breakfast");
+  if (!asksAboutFlightTicket && !asksAboutMeals) return null;
 
   const extra = (trip.extra || {}) as Record<string, unknown>;
   const includedItems = Array.isArray(extra.included_items) ? (extra.included_items as string[]) : [];
@@ -507,9 +655,54 @@ export function buildIncludedInPriceReply(trip: TravelTrip, text: string): strin
   const currency = trip.currency || "MNT";
   const price = formatPassengerMoney(trip.adult_price, currency);
 
-  if (/нэмэгдэнэ|\+\s*тийз|багтаагүй|тусдаа/i.test(evidence)) {
+  // Meals are asked about at least as often as airfare, and the answer is
+  // usually already written down — either in a note that spells out which
+  // meals are covered, or in the has_food flag. Prefer the operator's own
+  // wording: "breakfast and dinner included, lunch not" is the real answer,
+  // where has_food alone would flatten it to a misleading "yes".
+  if (asksAboutMeals && !asksAboutFlightTicket) {
+    const isMealItem = (item: string) => /хоол|цай|хооллолт|breakfast|meal/i.test(item);
+    const mealsIncluded = includedItems.filter(isMealItem).map((item) => item.trim()).filter(Boolean);
+    const mealsExcluded = excludedItems.filter(isMealItem).map((item) => item.trim()).filter(Boolean);
+    // included_items/excluded_items already carry the answer split the right
+    // way round. Flattening them into one list turns "Хөтөлбөрт багтсан хоол"
+    // and "Хөтөлбөрт багтаагүй хоол" into a contradictory jumble.
+    if (mealsIncluded.length > 0 || mealsExcluded.length > 0) {
+      const parts = [`✈️ ${trip.route_name}`];
+      if (mealsIncluded.length > 0) parts.push(`🍽 Багтсан: ${unique(mealsIncluded).join(", ")}`);
+      if (mealsExcluded.length > 0) parts.push(`🚫 Багтаагүй: ${unique(mealsExcluded).join(", ")}`);
+      return parts.join("\n");
+    }
+    // Free-text notes: keep only sentences that actually talk about meals, so
+    // an unrelated bonus/discount note does not get served as a food answer.
+    const mealSentences = unique(
+      [trip.notes, trip.source_description, ...getImportantNotes(trip)]
+        .filter((block): block is string => typeof block === "string" && block.trim().length > 0)
+        .flatMap((block) => block.split(/(?<=[.!?])\s+|\n+/))
+        .map((sentence) => sentence.replace(/\s+/g, " ").trim())
+        .filter((sentence) => /хоол|цай|хооллолт/i.test(sentence)),
+    );
+    if (mealSentences.length > 0) {
+      return `✈️ ${trip.route_name}\n🍽 ${mealSentences.slice(0, 3).join(" ")}`;
+    }
+    if (trip.has_food === true) {
+      return `✈️ ${trip.route_name}\n🍽 Тийм ээ, үнэд хоол багтсан гэж тэмдэглэгдсэн байна. Аль хоол багтсаныг аяллын зөвлөх тодруулж өгнө.`;
+    }
+    if (trip.has_food === false) {
+      return `✈️ ${trip.route_name}\n🍽 Үгүй, үнэд хоол багтаагүй гэж тэмдэглэгдсэн байна.`;
+    }
+    return `✈️ ${trip.route_name}\n🍽 Хоол үнэд орсон эсэх мэдээлэл тодорхойгүй байна. Аяллын зөвлөхөөр баталгаажуулна уу.`;
+  }
+
+  // "Онгоцны тийзгүй үнэ" is how the catalog marks a fare that excludes
+  // airfare, so it has to count as exclusion evidence alongside "багтаагүй".
+  if (/нэмэгдэнэ|\+\s*тийз|багтаагүй|тусдаа|тийзгүй/i.test(evidence)) {
     const priceText = price ? `Одоогийн ${price} үнэд ` : "Одоогийн үнэд ";
-    return `✈️ ${trip.route_name}\n${priceText}нислэгийн тийз нэмэгдэнэ гэж тэмдэглэгдсэн байна. Тиймээс тийзийн нөхцөлийг аяллын зөвлөхөөр баталгаажуулах хэрэгтэй.`;
+    // Worded to state the fact rather than to defer. The old ending
+    // ("...аяллын зөвлөхөөр баталгаажуулах хэрэгтэй") matched the no-data
+    // silence guard in reply.ts, so this genuine answer was dropped every time
+    // it fired and the customer got nothing.
+    return `✈️ ${trip.route_name}\n${priceText}нислэгийн тийз багтаагүй, тусад нь нэмэгдэнэ гэж тэмдэглэгдсэн байна. Тийзтэй үнийн саналыг аяллын зөвлөх гаргаж өгнө 🙌`;
   }
 
   if (includedItems.some((item) => /нислэгийн?\s+тийз|онгоцны?\s+тийз/i.test(item))) {
@@ -518,6 +711,20 @@ export function buildIncludedInPriceReply(trip: TravelTrip, text: string): strin
 
   if (excludedItems.some((item) => /нислэгийн?\s+тийз|онгоцны?\s+тийз/i.test(item))) {
     return `✈️ ${trip.route_name}\nҮгүй, үнэд нислэгийн тийз багтаагүй гэж тэмдэглэгдсэн байна.`;
+  }
+
+  // Before giving up, check whether a note already answers it in prose —
+  // A note like "Энэ аялалд ... чиглэлийн нислэг багтсан." is a complete answer
+  // that the structured include/exclude lists simply do not carry.
+  const flightSentences = unique(
+    [trip.notes, trip.source_description, ...getImportantNotes(trip)]
+      .filter((block): block is string => typeof block === "string" && block.trim().length > 0)
+      .flatMap((block) => block.split(/(?<=[.!?])\s+|\n+/))
+      .map((sentence) => sentence.replace(/\s+/g, " ").trim())
+      .filter((sentence) => /нислэг|тийз/i.test(sentence)),
+  );
+  if (flightSentences.length > 0) {
+    return `✈️ ${trip.route_name}\n✈️ ${flightSentences.slice(0, 3).join(" ")}`;
   }
 
   return `✈️ ${trip.route_name}\nНислэгийн тийз үнэд орсон эсэх мэдээлэл тодорхойгүй байна. Аяллын зөвлөхөөр баталгаажуулна уу.`;
