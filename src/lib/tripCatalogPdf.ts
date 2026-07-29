@@ -65,8 +65,35 @@ function objList(value: unknown): Record<string, unknown>[] {
   return value.filter((v): v is Record<string, unknown> => !!v && typeof v === "object");
 }
 
-const INTERNAL_COPY_RE =
-  /\b(chatbot|admin|internal|source|review|staff)\b|бот|админ|дотоод|эх сурвалж|шалгах шаардлагатай/i;
+/**
+ * Copy written for staff or for the bot, not for the reader.
+ *
+ * Two registers give it away. The first is explicit tooling vocabulary
+ * ("chatbot", "эх сурвалж"). The second is the imperative instruction addressed
+ * to whoever answers — "when asked X, always say Y", "refer them to a
+ * consultant". A brochure addresses the reader as "та"/"аялагч", so "хэрэглэгч"
+ * (talking ABOUT the customer) only ever appears in an internal note.
+ *
+ * Verified against all 168 customer-facing strings in the live catalogue: this
+ * drops exactly the 6 staff instructions and keeps the other 162. Any fare an
+ * instruction happened to mention is rendered from the structured passenger
+ * tiers instead — see writePassengerFares — so nothing priced is lost.
+ */
+const INTERNAL_COPY_RE = new RegExp(
+  [
+    "\\b(chatbot|admin|internal|source|review|staff)\\b",
+    "бот",
+    "админ",
+    "дотоод",
+    "эх сурвалж",
+    "шалгах шаардлагатай",
+    "хэрэглэгч",
+    "заавал\\s+хэлнэ",
+    "лавлуул",
+    "асуу(вал|хад|бал)[^.!?]{0,80}(хэлнэ|хариулна|мэдэгдэнэ)",
+  ].join("|"),
+  "i",
+);
 
 function customerText(value: unknown): string {
   const valueText = text(value);
@@ -76,6 +103,26 @@ function customerText(value: unknown): string {
 
 function customerList(value: unknown): string[] {
   return strList(value).filter((item) => !INTERNAL_COPY_RE.test(item));
+}
+
+/** Letters and digits only — for comparing two phrasings of the same fact. */
+function squash(value: string): string {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+}
+
+/**
+ * True when a note just restates something already printed on the page, e.g. a
+ * "Буудал: Phoenix 5*…" note next to the hotel section that already says it.
+ * Repeating one fact twice on one page is the scatter this brochure exists to
+ * avoid.
+ */
+function restatesShownField(note: string, shown: string[]): boolean {
+  const a = squash(note);
+  if (a.length < 12) return false;
+  return shown.some((other) => {
+    const b = squash(other);
+    return b.length >= 12 && (a.includes(b) || b.includes(a));
+  });
 }
 
 function num(value: unknown): number | null {
@@ -388,6 +435,54 @@ function fitImage(photo: LoadedPhoto, boxW: number, boxH: number) {
   return { w, h };
 }
 
+type FareTier = { label: string; age: string; price: string; note: string };
+
+/**
+ * Every fare tier the trip actually has, by passenger type.
+ *
+ * The per-date table only has three columns (adult/child/infant), so a trip
+ * with two child bands — Хайнан sells 6-12 at 2,790,000₮ and 2-6 at
+ * 2,190,000₮ — silently loses one, and a customer with a 4-year-old is quoted
+ * the wrong price. `passenger_prices` and `child_rules` carry the full ladder;
+ * this merges them and drops exact duplicates.
+ */
+function fareTiers(trip: TravelTrip): FareTier[] {
+  const rows: FareTier[] = [];
+  const seen = new Set<string>();
+  const add = (label: unknown, age: unknown, price: unknown, currency: unknown, note: unknown) => {
+    const priceText = money(price, text(currency) || trip.currency);
+    const priced = priceText !== "—";
+    const tier: FareTier = {
+      label: customerText(label) || "—",
+      age: text(age) || "—",
+      // An unpriced tier still matters — it tells the reader the category
+      // exists — but "—" reads as broken, and a note like "Үнэгүй" would claim
+      // the seat is free. The catalogue's zero fares are missing data, not free
+      // seats (the bot refuses to quote them too), so send the reader to a human.
+      price: priced ? priceText : "Лавлана уу",
+      note: priced ? customerText(note) : "",
+    };
+    const key = `${squash(tier.label)}|${squash(tier.age)}|${tier.price}`;
+    const existing = rows.find((row) => `${squash(row.label)}|${squash(row.age)}|${row.price}` === key);
+    if (existing) {
+      // Same tier from both passenger_prices and child_rules — keep whichever
+      // phrasing carries a note instead of dropping it.
+      if (!existing.note && tier.note) existing.note = tier.note;
+      return;
+    }
+    seen.add(key);
+    rows.push(tier);
+  };
+
+  for (const group of objList(field(trip, "price_groups"))) {
+    for (const p of objList(group.passenger_prices)) add(p.label, p.age_range, p.price, p.currency, p.note);
+  }
+  for (const rule of objList(field(trip, "child_rules"))) {
+    add(rule.label, rule.age_range, rule.price, rule.currency, rule.note);
+  }
+  return rows;
+}
+
 /**
  * Fallback page for a trip with no poster. Carries only what a customer would
  * ask about: what it costs, when it leaves, what is and is not included, and
@@ -410,15 +505,23 @@ function writeInfoPage(doc: Doc, trip: TravelTrip) {
   doc.y = 38;
 
   // ---- price
+  //
+  // Two dimensions can carry a fare: WHEN you leave (price groups) and WHO is
+  // travelling (passenger tiers). Printing both tables when only one of them
+  // actually varies is the duplication that made this document feel scattered,
+  // so the date table is only shown when the date genuinely changes the price.
   const groups = objList(field(trip, "price_groups"));
-  if (groups.length > 0) {
-    doc.heading("Үнэ", 20);
+  const tiers = fareTiers(trip);
+  const datesChangePrice = groups.length > 1;
+
+  if (datesChangePrice) {
+    doc.heading("Үнэ (хөдлөх өдрөөр)", 20);
     doc.table(
       ["Хөдлөх өдөр", "Том хүн", "Хүүхэд", "Нярай"],
       groups.map((g) => {
         const dates = strList(g.display_dates).length > 0 ? strList(g.display_dates) : strList(g.dates);
         return [
-          dates.join(", ") || text(g.label) || "—",
+          dates.join(", ") || customerText(g.label) || "—",
           money(g.adult_price, trip.currency),
           money(g.child_price, trip.currency),
           money(g.infant_price, trip.currency),
@@ -426,16 +529,30 @@ function writeInfoPage(doc: Doc, trip: TravelTrip) {
       }),
       [74, 34, 34, 36],
     );
-    const ages = groups
-      .flatMap((g) => [
-        text(g.child_age) ? `Хүүхэд: ${text(g.child_age)}` : "",
-        text(g.infant_age) ? `Нярай: ${text(g.infant_age)}` : "",
-      ])
-      .filter(Boolean);
-    if (ages.length) {
-      doc.write(Array.from(new Set(ages)).join("   ·   "), { size: 8.5, color: INK_MUTED });
-    }
-  } else if (num(trip.adult_price) != null || num(trip.child_price) != null) {
+  }
+
+  if (tiers.length > 0) {
+    doc.heading(datesChangePrice ? "Зорчигчийн үнэ" : "Үнэ", 18);
+    doc.table(
+      ["Зорчигч", "Нас", "Үнэ", "Тайлбар"],
+      tiers.map((t) => [t.label, t.age, t.price, t.note || "—"]),
+      [40, 34, 38, 66],
+    );
+  } else if (!datesChangePrice && groups.length === 1) {
+    // One departure window, no passenger ladder — the group row is the price.
+    const g = groups[0];
+    doc.heading("Үнэ", 14);
+    doc.table(
+      ["Том хүн", "Хүүхэд", "Нярай"],
+      [[money(g.adult_price, trip.currency), money(g.child_price, trip.currency), money(g.infant_price, trip.currency)]],
+      [60, 59, 59],
+    );
+    const ages = [
+      text(g.child_age) ? `Хүүхэд: ${text(g.child_age)}` : "",
+      text(g.infant_age) ? `Нярай: ${text(g.infant_age)}` : "",
+    ].filter(Boolean);
+    if (ages.length) doc.write(ages.join("   ·   "), { size: 8.5, color: INK_MUTED });
+  } else if (groups.length === 0 && (num(trip.adult_price) != null || num(trip.child_price) != null)) {
     doc.heading("Үнэ", 14);
     doc.table(
       ["Том хүн", "Хүүхэд"],
@@ -515,7 +632,12 @@ function writeInfoPage(doc: Doc, trip: TravelTrip) {
     doc.table(["Нөхцөл", "Тайлбар"], filledTerms, [44, 134]);
   }
 
-  const importantNotes = customerList(field(trip, "important_notes"));
+  // Notes come last, so anything already printed above is dropped rather than
+  // said twice — the hotel in particular is often repeated as a "Буудал: …" note.
+  const alreadyShown = [text(trip.hotel), ...included, ...excluded].filter(Boolean);
+  const importantNotes = customerList(field(trip, "important_notes")).filter(
+    (note) => !restatesShownField(note, alreadyShown),
+  );
   if (importantNotes.length) {
     doc.heading("Анхаарах зүйл", 14);
     doc.bullets(importantNotes);
@@ -594,7 +716,8 @@ function writeCover(doc: Doc, trips: TravelTrip[], businessName: string, photos:
   doc.pdf.setFillColor(255, 255, 255);
   doc.pdf.roundedRect(MARGIN, 236, CONTENT_W, 28, 3, 3, "F");
   doc.font("bold", 10.5, BRAND);
-  doc.pdf.text("Уудам Трэвэл", MARGIN + 7, 248);
+  // From bot settings, never hardcoded — the agency name is client data.
+  doc.pdf.text(businessName, MARGIN + 7, 248);
   doc.font("normal", 9, INK_MUTED);
   doc.pdf.text("Аяллаа сонгоод дэлгэрэнгүй постер хуудсыг харна уу.", MARGIN + 7, 256);
 }
