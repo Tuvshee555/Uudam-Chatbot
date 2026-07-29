@@ -66,6 +66,10 @@ const env = getEnv();
 const PAGE_TOKENS = new Map(env.facebookPages.map((p) => [p.pageId, p.token]));
 const FALLBACK_TOKEN = env.tokenPage;
 const META_APP_SECRET = env.metaAppSecret;
+const LIVE_WEBHOOK_DISABLED =
+  process.env.WEBHOOK_BOT_DISABLED === "1" ||
+  process.env.WEBHOOK_BOT_DISABLED === "true";
+
 export const config = {
   api: {
     bodyParser: false,
@@ -1720,6 +1724,14 @@ export default async function handler(
       return res.status(403).send("Verification failed");
     }
     if (req.method === "POST") {
+      if (LIVE_WEBHOOK_DISABLED) {
+        logInfo("webhook.disabled", {
+          requestId: trace.requestId,
+          correlationId: trace.correlationId,
+        });
+        return res.status(200).json({ ok: true, botDisabled: true });
+      }
+
       try {
         let rawBody: Buffer;
         try {
