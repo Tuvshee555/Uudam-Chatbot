@@ -336,6 +336,7 @@ export default async function handler(
 
       // Quick-info keyword → the admin's canned reply, exactly like Messenger.
       if (
+        !isEnglishDemo &&
         botSettings.quick_info_reply &&
         isQuickInfoKeyword(normalizedText, botSettings.quick_info_keywords)
       ) {
