@@ -18,6 +18,7 @@ export function TripsTab({
   onDelete,
   onDeleteAll,
   onToggleVisible,
+  onFetchAllTrips,
 }: {
   trips: TravelTrip[];
   search: string;
@@ -31,9 +32,12 @@ export function TripsTab({
   onDelete: (trip: TravelTrip) => void;
   onDeleteAll: () => void;
   onToggleVisible: (trip: TravelTrip) => void;
+  /** Loads every trip, ignoring the on-screen search/status filter. */
+  onFetchAllTrips: () => Promise<TravelTrip[]>;
 }) {
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [photoFilter, setPhotoFilter] = useState<"all" | "with" | "without">("all");
+  const [pdfProgress, setPdfProgress] = useState("");
   const toast = useToast();
 
   const tripsWithoutPhotos = useMemo(
@@ -48,6 +52,38 @@ export function TripsTab({
     photoFilter === "without" ? tripsWithoutPhotos :
     photoFilter === "with" ? tripsWithPhotos :
     trips;
+
+  /**
+   * The client-facing export: every trip, every field, every photo, in one
+   * readable PDF. Always pulls a fresh unfiltered list so what she gets is the
+   * whole catalogue and not whatever the search box happens to be showing.
+   */
+  async function handleExportPdf() {
+    if (pdfProgress) return;
+    setPdfProgress("Аяллын мэдээлэл цуглуулж байна…");
+    try {
+      const allTrips = await onFetchAllTrips();
+      if (allTrips.length === 0) {
+        toast.error("Татах аялал алга байна.");
+        return;
+      }
+      const { downloadTripCatalogPdf } = await import("@/lib/tripCatalogPdf");
+      const result = await downloadTripCatalogPdf(allTrips, {
+        onProgress: (message) => setPdfProgress(message),
+      });
+      if (result.failedPhotoCount > 0) {
+        toast.success(
+          `${result.tripCount} аялал PDF болж татагдлаа (${result.failedPhotoCount} зураг татагдсангүй).`,
+        );
+      } else {
+        toast.success(`${result.tripCount} аялал, ${result.photoCount} зурагтай PDF татагдлаа.`);
+      }
+    } catch (error) {
+      toast.error(`PDF үүсгэж чадсангүй: ${String((error as { message?: string })?.message || error)}`);
+    } finally {
+      setPdfProgress("");
+    }
+  }
 
   function handleExportJson() {
     const data = trips.map((t) => ({
@@ -129,7 +165,17 @@ export function TripsTab({
           <p className="text-sm text-ink-muted">
             Устгахын өмнө доорх товчоор татаж авахыг зөвлөж байна.
           </p>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void handleExportPdf()}
+              loading={!!pdfProgress}
+              disabled={!!pdfProgress}
+            >
+              {!pdfProgress && <Icons.download size={15} />}
+              {pdfProgress || "Бүх мэдээлэл PDF"}
+            </Button>
             <Button variant="secondary" size="sm" onClick={handleExportJson}>
               <Icons.download size={15} />
               JSON татах
@@ -162,10 +208,22 @@ export function TripsTab({
         title="Аяллууд"
         description="Ботын мэддэг бүх аялал — хайх, засах, нуух, шинээр нэмэх."
         actions={
-          <Button onClick={onCreate}>
-            <Icons.plus size={16} />
-            Шинэ аялал
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => void handleExportPdf()}
+              loading={!!pdfProgress}
+              disabled={!!pdfProgress}
+              title="Бүх аяллын мэдээлэл, зурагтайгаа нэг PDF файл болж татагдана"
+            >
+              {!pdfProgress && <Icons.download size={16} />}
+              {pdfProgress || "Бүх мэдээлэл татах (PDF)"}
+            </Button>
+            <Button onClick={onCreate}>
+              <Icons.plus size={16} />
+              Шинэ аялал
+            </Button>
+          </div>
         }
       />
 
@@ -221,8 +279,11 @@ export function TripsTab({
               ))}
             </div>
           </div>
+          {/* JSON/CSV export the filtered list on screen. The full-catalogue PDF
+              lives in the header instead, so the two are not mistaken for
+              variants of the same export. */}
           {trips.length > 0 && (
-            <div className="flex gap-2 border-t border-line pt-2">
+            <div className="flex flex-wrap items-center gap-2 border-t border-line pt-2">
               <button
                 type="button"
                 onClick={handleExportJson}

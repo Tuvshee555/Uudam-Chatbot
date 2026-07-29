@@ -191,6 +191,20 @@ export default function AdminPage() {
     },
     [fetchWithAdmin, markAdminLocked, toast],
   );
+  /** Every trip, unfiltered and unpaginated — for the full-catalogue export.
+   *  Deliberately ignores search/status so the downloaded file is the whole
+   *  catalogue regardless of what the screen is filtered to. */
+  const fetchAllTrips = useCallback(async (): Promise<TravelTrip[]> => {
+    const res = await fetchWithAdmin("/api/admin/trips?limit=5000");
+    if (res.status === 401) {
+      markAdminLocked();
+      throw new Error("Нэвтрэх эрх дууссан байна.");
+    }
+    const json = await res.json();
+    if (!res.ok) throw new Error(json?.error || "trips_fetch_failed");
+    return Array.isArray(json?.trips) ? (json.trips as TravelTrip[]) : [];
+  }, [fetchWithAdmin, markAdminLocked]);
+
   const loadPauseState = useCallback(async () => {
     try {
       const pauseRes = await fetchWithAdmin("/api/pause");
@@ -1759,6 +1773,7 @@ export default function AdminPage() {
               onCreate={beginCreateTrip}
               onEdit={beginEditTrip}
               onDelete={(trip) => setDeletingTrip(trip)}
+              onFetchAllTrips={fetchAllTrips}
               onToggleVisible={async (trip) => {
                 const currentlyHidden =
                   (trip.extra as Record<string, unknown> | undefined)?.customer_visible === false;
