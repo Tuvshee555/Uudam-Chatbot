@@ -1,5 +1,6 @@
 import { createHmac } from "crypto";
 import { getEnv } from "./env";
+import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboundKillSwitch";
 import { logInfo } from "./observability";
 import { fetchWithRetry } from "./resilience";
 
@@ -41,6 +42,11 @@ async function postToMessenger(
   body: Record<string, unknown>,
   trace?: UpstreamTraceOptions,
 ) {
+  if (isMetaOutboundDisabled()) {
+    logMetaOutboundSuppressed(trace?.source || "meta.messenger", trace);
+    return;
+  }
+
   const startedAt = Date.now();
   const { attempts } = await fetchWithRetry(
     endpoint,

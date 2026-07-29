@@ -1,4 +1,5 @@
 import { getEnv } from "./env";
+import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboundKillSwitch";
 import { logError, logInfo } from "./observability";
 
 const GDRIVE_VIEW_RE = /drive\.google\.com\/file\/d\/([^/?#]+)/;
@@ -126,6 +127,11 @@ export async function uploadPdfToFacebook(
   filename: string,
 ): Promise<string | null> {
   try {
+    if (isMetaOutboundDisabled()) {
+      logMetaOutboundSuppressed("fbAttachmentUpload.uploadPdfToFacebook");
+      return null;
+    }
+
     const env = getEnv();
     const token = env.facebookPages[0]?.token;
     if (!token) return null;
@@ -176,6 +182,11 @@ async function uploadPdfBufferToFacebook(
   pageToken: string,
 ): Promise<string | null> {
   try {
+    if (isMetaOutboundDisabled()) {
+      logMetaOutboundSuppressed("fbAttachmentUpload.uploadPdfBufferToFacebook");
+      return null;
+    }
+
     const pdfFilename = filename.endsWith(".pdf") ? filename : `${filename}.pdf`;
     const formData = new FormData();
     formData.append(
@@ -300,6 +311,11 @@ export async function sendFbFileAttachment(
   pageToken: string,
 ): Promise<boolean> {
   try {
+    if (isMetaOutboundDisabled()) {
+      logMetaOutboundSuppressed("fbAttachmentUpload.sendFbFileAttachment");
+      return true;
+    }
+
     const resp = await fetch(
       `https://graph.facebook.com/${FB_API_VERSION}/me/messages?access_token=${pageToken}`,
       {
@@ -339,6 +355,11 @@ export async function sendFbFileByUrl(
   fileUrl: string,
   pageToken: string,
 ): Promise<boolean> {
+  if (isMetaOutboundDisabled()) {
+    logMetaOutboundSuppressed("fbAttachmentUpload.sendFbFileByUrl");
+    return true;
+  }
+
   const isGoogleDrive = GDRIVE_VIEW_RE.test(fileUrl);
 
   if (isGoogleDrive) {

@@ -30,6 +30,7 @@ import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
 import { advanceCollectState, buildCompletionMessage, buildLeadContext, clearCollectState, getCollectState, promptForStep, setCollectState, startCollectState } from "../../lib/bookingCollect";
 import { getEnv } from "../../lib/env";
+import { isMetaOutboundDisabled } from "../../lib/metaOutboundKillSwitch";
 import { beginRequestTrace, classifyError, finishRequestTrace, hashIdentifier, logError, logInfo, logWarn, recordCounter, } from "../../lib/observability";
 import { parseWebhookJson, PayloadTooLargeError, verifyMetaSignature, } from "../../lib/webhookSecurity";
 import {
@@ -66,11 +67,6 @@ const env = getEnv();
 const PAGE_TOKENS = new Map(env.facebookPages.map((p) => [p.pageId, p.token]));
 const FALLBACK_TOKEN = env.tokenPage;
 const META_APP_SECRET = env.metaAppSecret;
-const LIVE_WEBHOOK_DISABLED =
-  (process.env.VERCEL_ENV === "production" &&
-    process.env.WEBHOOK_BOT_DISABLED !== "0") ||
-  process.env.WEBHOOK_BOT_DISABLED === "1" ||
-  process.env.WEBHOOK_BOT_DISABLED === "true";
 
 export const config = {
   api: {
@@ -1726,7 +1722,7 @@ export default async function handler(
       return res.status(403).send("Verification failed");
     }
     if (req.method === "POST") {
-      if (LIVE_WEBHOOK_DISABLED) {
+      if (isMetaOutboundDisabled()) {
         logInfo("webhook.disabled", {
           requestId: trace.requestId,
           correlationId: trace.correlationId,

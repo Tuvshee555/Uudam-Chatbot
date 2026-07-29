@@ -1,5 +1,6 @@
 import { createHmac } from "crypto";
 import { getEnv } from "./env";
+import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboundKillSwitch";
 import { logInfo } from "./observability";
 import { fetchWithRetry } from "./resilience";
 import { BOT_MESSAGE_METADATA, type UpstreamTraceOptions } from "./messenger";
@@ -24,6 +25,11 @@ export async function sendTextMessage(
   token: string,
   trace?: UpstreamTraceOptions,
 ) {
+  if (isMetaOutboundDisabled()) {
+    logMetaOutboundSuppressed(trace?.source || "meta.instagram", trace);
+    return;
+  }
+
   const startedAt = Date.now();
   const { attempts } = await fetchWithRetry(
     graphMessagesEndpoint(igUserId, token),
