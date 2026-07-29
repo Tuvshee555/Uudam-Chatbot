@@ -169,7 +169,7 @@ function Hero() {
               aria-hidden="true"
               className="absolute -inset-4 -z-10 rounded-[28px] bg-gradient-to-br from-brand-soft via-sun-soft/50 to-transparent blur-2xl"
             />
-            <DemoChat showHeader={false} />
+            <DemoChat showHeader={false} lang="en" />
           </div>
         </div>
       </div>

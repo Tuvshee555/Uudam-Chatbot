@@ -11,25 +11,83 @@ type ChatMessage = {
   brochureUrl?: string | null;
 };
 
+type DemoLang = "mn" | "en";
+
 type DemoChatProps = {
   className?: string;
   title?: string;
   description?: string;
   showHeader?: boolean;
   placeholder?: string;
+  /** "en" turns the surface into the public English evaluation demo. */
+  lang?: DemoLang;
 };
+
+/* Full UI string set per language. The English demo targets Upwork/foreign
+   evaluators: same bot, same catalog — only the surface language changes. */
+const STRINGS = {
+  mn: {
+    title: "Шууд хариулт шалгах",
+    description: "Хэрэглэгчийн асуултаар туршаад ботын бодит хариуг шууд шалгана.",
+    placeholder: "Маршрут, үнэ, гарах өдөр, хоол, суудлын талаар асуугаарай...",
+    badge: "Бодит хариулт",
+    botName: "Уудам Трэвел AI",
+    botTagline: "Аялалын асуултад шууд хариулна",
+    online: "Онлайн",
+    quickLabel: "Түгээмэл асуултууд",
+    emptyTitleWithButtons: "Дээрх товч дарж эхлэх эсвэл өөрийн асуултаа бичнэ үү",
+    emptyTitle: "Одоогоор мессеж алга",
+    emptyBody:
+      "Үнэ, суудал, гарах өдөр, хоол эсвэл маршруттай холбоотой бодит асуултаар туршаарай.",
+    send: "Илгээх",
+    inputHint: "Enter — илгээх · Shift+Enter — шинэ мөр",
+    replyError: "Хариу боловсруулах үед алдаа гарлаа.",
+    connectError: "Уучлаарай, сервертэй холбогдоход алдаа гарлаа.",
+    handoffNote:
+      "🤝 Таны асуултыг ажилтан руу шилжүүллээ. Жинхэнэ Messenger орчинд эндээс ажилтан хариулдаг.",
+  },
+  en: {
+    title: "Try the live bot",
+    description: "The production travel bot, answering in English for evaluation.",
+    placeholder: "Ask about tours, prices, departure dates, meals, seats...",
+    badge: "Live answers",
+    botName: "Uudam Travel AI",
+    botTagline: "Answers travel questions instantly",
+    online: "Online",
+    quickLabel: "Popular questions",
+    emptyTitleWithButtons: "Tap a button above or type your own question",
+    emptyTitle: "No messages yet",
+    emptyBody:
+      "Try real questions about prices, seats, departure dates, meals or itineraries.",
+    send: "Send",
+    inputHint: "Enter — send · Shift+Enter — new line",
+    replyError: "Sorry, something went wrong while processing the reply.",
+    connectError: "Sorry, couldn't reach the server.",
+    handoffNote:
+      "🤝 The bot detected this needs a human and handed off — in production, staff take over the conversation right here. It escalates instead of guessing.",
+  },
+} as const;
+
+/* English starter questions are generic on purpose: the catalog is DB-driven,
+   so no trip name, price, or date may be baked into the UI. */
+const EN_STARTER_BUTTONS: PinnedButton[] = [
+  { label: "What tours do you have?", message: "What tours do you have right now?" },
+  { label: "Which trip is cheapest?", message: "Which trip is the cheapest?" },
+  { label: "Upcoming departures", message: "What departure dates are coming up?" },
+  { label: "Child & infant prices", message: "Do children and infants get different prices?" },
+];
 
 const DEMO_CONVERSATION_KEY = "uudam_demo_conversation_id";
 
-function getConversationId(): string {
+function getConversationId(storageKey: string): string {
   if (typeof window === "undefined") return "";
-  const existing = window.sessionStorage.getItem(DEMO_CONVERSATION_KEY);
+  const existing = window.sessionStorage.getItem(storageKey);
   if (existing) return existing;
   const nextId =
     typeof window.crypto?.randomUUID === "function"
       ? window.crypto.randomUUID().replace(/-/g, "")
       : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 18)}`;
-  window.sessionStorage.setItem(DEMO_CONVERSATION_KEY, nextId);
+  window.sessionStorage.setItem(storageKey, nextId);
   return nextId;
 }
 
@@ -49,11 +107,16 @@ function TypingDots() {
 
 export default function DemoChat({
   className,
-  title = "Шууд хариулт шалгах",
-  description = "Хэрэглэгчийн асуултаар туршаад ботын бодит хариуг шууд шалгана.",
+  title,
+  description,
   showHeader = true,
-  placeholder = "Маршрут, үнэ, гарах өдөр, хоол, суудлын талаар асуугаарай...",
+  placeholder,
+  lang = "mn",
 }: DemoChatProps) {
+  const t = STRINGS[lang];
+  const shownTitle = title ?? t.title;
+  const shownDescription = description ?? t.description;
+  const shownPlaceholder = placeholder ?? t.placeholder;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -62,7 +125,19 @@ export default function DemoChat({
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setConversationId(getConversationId());
+    // Separate conversation per language so a language flip never mixes
+    // histories mid-thread.
+    setConversationId(
+      getConversationId(
+        lang === "en" ? `${DEMO_CONVERSATION_KEY}_en` : DEMO_CONVERSATION_KEY,
+      ),
+    );
+    if (lang === "en") {
+      // The configured pinned buttons are Mongolian; the English demo uses
+      // generic English starters instead (no catalog data baked in).
+      setPinnedButtons(EN_STARTER_BUTTONS);
+      return;
+    }
     fetch("/api/demo")
       .then((r) => r.json())
       .then((json) => {
@@ -80,7 +155,7 @@ export default function DemoChat({
         }
       })
       .catch(() => {});
-  }, []);
+  }, [lang]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -97,16 +172,20 @@ export default function DemoChat({
       const response = await fetch("/api/demo", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: payload, conversationId }),
+        body: JSON.stringify({ text: payload, conversationId, lang }),
       });
       const json = await response.json();
       if (json?.silent === true) {
+        // On Messenger a silent handoff is correct — staff answer from the
+        // page inbox. The demo has no staff behind it, so silence reads as
+        // the bot freezing; surface the handoff as the feature it is.
+        setMessages((prev) => [...prev, { from: "bot", text: t.handoffNote }]);
         return;
       }
       const replyText =
         typeof json?.reply === "string" && json.reply.trim()
           ? json.reply
-          : "Хариу боловсруулах үед алдаа гарлаа.";
+          : t.replyError;
       const aiButtons: string[] = Array.isArray(json?.buttons)
         ? (json.buttons as unknown[]).filter(
             (b): b is string => typeof b === "string",
@@ -128,7 +207,7 @@ export default function DemoChat({
     } catch {
       setMessages((prev) => [
         ...prev,
-        { from: "bot", text: "Уучлаарай, сервертэй холбогдоход алдаа гарлаа." },
+        { from: "bot", text: t.connectError },
       ]);
     } finally {
       setSending(false);
@@ -142,10 +221,10 @@ export default function DemoChat({
       {showHeader && (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
-            <h3 className="text-base font-semibold text-ink">{title}</h3>
-            <p className="mt-1 text-sm text-ink-muted">{description}</p>
+            <h3 className="text-base font-semibold text-ink">{shownTitle}</h3>
+            <p className="mt-1 text-sm text-ink-muted">{shownDescription}</p>
           </div>
-          <Badge tone="brand">Бодит хариулт</Badge>
+          <Badge tone="brand">{t.badge}</Badge>
         </div>
       )}
 
@@ -157,17 +236,15 @@ export default function DemoChat({
               <Icons.ai size={18} />
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-ink">Уудам Трэвел AI</p>
-              <p className="mt-0.5 text-xs text-ink-muted">
-                Аялалын асуултад шууд хариулна
-              </p>
+              <p className="text-sm font-semibold text-ink">{t.botName}</p>
+              <p className="mt-0.5 text-xs text-ink-muted">{t.botTagline}</p>
             </div>
             <span className="ml-auto flex items-center gap-1.5 rounded-full bg-success-soft px-2.5 py-1 text-xs font-semibold text-success">
               <span className="relative flex h-1.5 w-1.5">
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-60" />
                 <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-success" />
               </span>
-              Онлайн
+              {t.online}
             </span>
           </div>
         </div>
@@ -176,7 +253,7 @@ export default function DemoChat({
         {hasPinned && (
           <div className="border-b border-line bg-surface-sunken px-4 py-3">
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-subtle">
-              Түгээмэл асуултууд
+              {t.quickLabel}
             </p>
             <div className="flex flex-wrap gap-2">
               {pinnedButtons.map((btn) => (
@@ -207,14 +284,9 @@ export default function DemoChat({
               </div>
               <div className="space-y-1">
                 <p className="text-sm font-semibold text-ink">
-                  {hasPinned
-                    ? "Дээрх товч дарж эхлэх эсвэл өөрийн асуултаа бичнэ үү"
-                    : "Одоогоор мессеж алга"}
+                  {hasPinned ? t.emptyTitleWithButtons : t.emptyTitle}
                 </p>
-                <p className="max-w-md text-sm text-ink-muted">
-                  Үнэ, суудал, гарах өдөр, хоол эсвэл маршруттай холбоотой
-                  бодит асуултаар туршаарай.
-                </p>
+                <p className="max-w-md text-sm text-ink-muted">{t.emptyBody}</p>
               </div>
             </div>
           ) : (
@@ -333,7 +405,7 @@ export default function DemoChat({
                 e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
               }}
               className="flex-1 resize-none border-0 bg-transparent px-3 py-2 text-sm leading-relaxed text-ink placeholder:text-ink-subtle focus:outline-none disabled:cursor-not-allowed disabled:opacity-70"
-              placeholder={placeholder}
+              placeholder={shownPlaceholder}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
@@ -351,11 +423,11 @@ export default function DemoChat({
               className="shrink-0 rounded-xl"
             >
               <Icons.play size={15} />
-              Илгээх
+              {t.send}
             </Button>
           </div>
           <p className="mt-1.5 text-center text-xs text-ink-subtle">
-            Enter — илгээх · Shift+Enter — шинэ мөр
+            {t.inputHint}
           </p>
         </div>
       </div>

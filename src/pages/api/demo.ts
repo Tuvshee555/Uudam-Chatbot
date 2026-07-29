@@ -39,6 +39,10 @@ const DEMO_MAX_TEXT_CHARS = env.demoMaxTextChars;
 const DEMO_GLOBAL_LIMIT = env.demoGlobalRateLimit;
 const DEMO_CONVERSATION_ID_PATTERN = /^[a-zA-Z0-9_-]{16,80}$/;
 
+// English-demo counterpart of CONTACT_OPERATOR_LABEL — the label the English
+// demo UI renders for its contact button.
+const CONTACT_OPERATOR_LABEL_EN = "👤 Talk to a human";
+
 type DemoMedia = {
   mediaUrls: string[];
   brochureUrl: string | null;
@@ -129,8 +133,12 @@ export default async function handler(
       return res.status(405).end();
     }
 
-    const { text, conversationId } = req.body || {};
+    const { text, conversationId, lang } = req.body || {};
     if (typeof text !== "string") return res.status(400).json({ error: "missing text" });
+    // English demo mode: the public landing page serves English-speaking
+    // evaluators. Same catalog, same history, same guards — only the reply
+    // language and the deterministic strings change.
+    const isEnglishDemo = lang === "en";
 
     const normalizedText = text.trim();
     if (!normalizedText) return res.status(400).json({ error: "missing text" });
@@ -231,7 +239,9 @@ export default async function handler(
             silent: true,
           });
         }
-        const reply = buildHandoffAcknowledgement(options);
+        const reply = isEnglishDemo
+          ? "Our AI assistant is briefly unavailable 🙏 In production a staff member would take over right here — please try again in a minute."
+          : buildHandoffAcknowledgement(options);
         await appendMessage(sessionId, "assistant", reply);
         await rememberTurn();
         return res.status(200).json({
@@ -247,9 +257,11 @@ export default async function handler(
       // answering the phone-number ask, acknowledge it deterministically
       // instead of sending the bare number through trip matching.
       if (detectedPhone && isPhoneOnlyMessage(normalizedText)) {
-        const confirmation =
-          `Баярлалаа! 🙌 Манай аяллын зөвлөх таны ${detectedPhone} дугаарт удахгүй холбогдоно. ` +
-          "Өөр асуух зүйл байвал чөлөөтэй бичээрэй 😊";
+        const confirmation = isEnglishDemo
+          ? `Thank you! 🙌 Our travel consultant will contact you at ${detectedPhone} shortly. ` +
+            "Feel free to ask anything else 😊"
+          : `Баярлалаа! 🙌 Манай аяллын зөвлөх таны ${detectedPhone} дугаарт удахгүй холбогдоно. ` +
+            "Өөр асуух зүйл байвал чөлөөтэй бичээрэй 😊";
         await appendMessage(sessionId, "user", normalizedText);
         await appendMessage(sessionId, "assistant", confirmation);
         await rememberTurn();
@@ -268,7 +280,9 @@ export default async function handler(
       // 100-question sweep). A greeting asks nothing; it must never re-serve a
       // stale trip. Mirrors the production webhook's mid-conversation greeting.
       if (isKnownGreetingPhrase(normalizedText)) {
-        const greetingReply = MID_CONVERSATION_GREETING_REPLY;
+        const greetingReply = isEnglishDemo
+          ? "Hello! 😊 Ask me anything about our tours — prices, departure dates, seats, meals or itineraries."
+          : MID_CONVERSATION_GREETING_REPLY;
         await appendMessage(sessionId, "user", normalizedText);
         await appendMessage(sessionId, "assistant", greetingReply);
         await rememberTurn();
@@ -288,11 +302,13 @@ export default async function handler(
       // is mirrored so testers see the real handoff wording.
       if (
         normalizedText === CONTACT_OPERATOR_LABEL ||
+        normalizedText === CONTACT_OPERATOR_LABEL_EN ||
         (botSettings.handoff_enabled && isHandoffRequest(normalizedText, botSettings.handoff_keywords))
       ) {
-        const handoffMsg =
-          botSettings.handoff_reply ||
-          "Таны хүсэлтийг хүлээн авлаа. Манай ажилтан удахгүй тантай холбогдоно.";
+        const handoffMsg = isEnglishDemo
+          ? "Got it 🤝 In production a staff member takes over the conversation right here and contacts you directly. (This public page is a demo, so no human is standing by — but this is exactly where the bot hands off.)"
+          : botSettings.handoff_reply ||
+            "Таны хүсэлтийг хүлээн авлаа. Манай ажилтан удахгүй тантай холбогдоно.";
         await appendMessage(sessionId, "user", normalizedText);
         await appendMessage(sessionId, "assistant", handoffMsg);
         await rememberTurn();
@@ -688,6 +704,10 @@ export default async function handler(
         phoneCollected,
         phoneRequested: phoneAlreadyRequested,
       });
+      // English demo: same prompt, same rules — only the output language flips.
+      const systemInstructionText = isEnglishDemo
+        ? `${promptParts.system}\n\nENGLISH DEMO MODE: An English-speaking visitor is evaluating this bot on a public demo page. Reply ONLY in English. Keep trip names as they appear in the catalog and keep every price in MNT with the ₮ sign — never convert currencies or invent amounts. Every rule above still applies, including replying REFER when the catalog has no answer. If the visitor asks to speak to a human, explain that in production a staff member takes over the chat at this point.`
+        : promptParts.system;
       // Mirrors the production webhook: OpenAI down/overloaded must not mean
       // the customer gets a bare error while a working second model sits
       // idle. Try OpenAI with the same prompt before giving up.
@@ -699,7 +719,7 @@ export default async function handler(
           requestId: trace.requestId,
           correlationId: trace.correlationId,
           source: "api.demo",
-          systemInstruction: promptParts.system,
+          systemInstruction: systemInstructionText,
           openaiModel: process.env.OPENAI_REPLY_MODEL || "gpt-4o",
           preferOpenAI: true,
         });
@@ -713,7 +733,7 @@ export default async function handler(
             requestId: trace.requestId,
             correlationId: trace.correlationId,
             model: process.env.OPENAI_REPLY_MODEL || "gpt-4o",
-            systemText: promptParts.system,
+            systemText: systemInstructionText,
           });
           fallbackText = fallback?.text?.trim() || "";
         } catch {
@@ -765,7 +785,9 @@ export default async function handler(
       const lastReplyText = lastMessages.length > 0 ? lastMessages[lastMessages.length - 1].text : null;
       if (lastReplyText && isDuplicateReply(lastReplyText, reply)) {
         recordCounter("demo.duplicate_reply_avoided_total", 1, {});
-        const nudge = DUPLICATE_REPLY_NUDGE;
+        const nudge = isEnglishDemo
+          ? "I've answered that just above 🙂 Anything else — dates, prices, seats?"
+          : DUPLICATE_REPLY_NUDGE;
         await appendMessage(sessionId, "assistant", nudge);
         await rememberTurn();
         return res.status(200).json({
@@ -781,7 +803,10 @@ export default async function handler(
       // button always last — identical to the production webhook.
       let replyButtons: string[] = [...buttons];
       try {
-        const smartButtons = buildSmartButtons(reply, reasoningTrips);
+        // Smart buttons carry Mongolian labels; tapping one would route the
+        // English demo into a Mongolian fast-path reply, so skip them there —
+        // the model's own BUTTONS line is already in English.
+        const smartButtons = isEnglishDemo ? null : buildSmartButtons(reply, reasoningTrips);
         if (smartButtons) {
           for (const b of smartButtons) {
             if (!replyButtons.some((x) => x.toLowerCase() === b.toLowerCase())) {
@@ -793,8 +818,11 @@ export default async function handler(
         // smart buttons are best-effort — never block a reply
       }
       replyButtons = replyButtons.slice(0, 10);
-      if (!replyButtons.includes(CONTACT_OPERATOR_LABEL)) {
-        replyButtons.push(CONTACT_OPERATOR_LABEL);
+      const contactOperatorLabel = isEnglishDemo
+        ? CONTACT_OPERATOR_LABEL_EN
+        : CONTACT_OPERATOR_LABEL;
+      if (!replyButtons.includes(contactOperatorLabel)) {
+        replyButtons.push(contactOperatorLabel);
       }
 
       const media = buildDemoMedia({
