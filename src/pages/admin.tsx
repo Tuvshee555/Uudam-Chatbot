@@ -1774,6 +1774,7 @@ export default function AdminPage() {
               onEdit={beginEditTrip}
               onDelete={(trip) => setDeletingTrip(trip)}
               onFetchAllTrips={fetchAllTrips}
+              businessName={settings?.business_name || ""}
               onToggleVisible={async (trip) => {
                 const currentlyHidden =
                   (trip.extra as Record<string, unknown> | undefined)?.customer_visible === false;

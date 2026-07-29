@@ -19,6 +19,7 @@ export function TripsTab({
   onDeleteAll,
   onToggleVisible,
   onFetchAllTrips,
+  businessName,
 }: {
   trips: TravelTrip[];
   search: string;
@@ -34,6 +35,8 @@ export function TripsTab({
   onToggleVisible: (trip: TravelTrip) => void;
   /** Loads every trip, ignoring the on-screen search/status filter. */
   onFetchAllTrips: () => Promise<TravelTrip[]>;
+  /** Agency name for the brochure cover, from bot settings. */
+  businessName: string;
 }) {
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [photoFilter, setPhotoFilter] = useState<"all" | "with" | "without">("all");
@@ -54,30 +57,32 @@ export function TripsTab({
     trips;
 
   /**
-   * The client-facing export: every trip, every field, every photo, in one
-   * readable PDF. Always pulls a fresh unfiltered list so what she gets is the
-   * whole catalogue and not whatever the search box happens to be showing.
+   * The brochure staff send a customer who asks to see the trips. Always pulls
+   * a fresh unfiltered list — the search box must not decide what a customer
+   * receives — and the builder then drops anything not active or hidden.
    */
   async function handleExportPdf() {
     if (pdfProgress) return;
     setPdfProgress("Аяллын мэдээлэл цуглуулж байна…");
     try {
       const allTrips = await onFetchAllTrips();
-      if (allTrips.length === 0) {
-        toast.error("Татах аялал алга байна.");
+      const { downloadTripCatalogPdf, customerVisibleTrips } = await import("@/lib/tripCatalogPdf");
+      if (customerVisibleTrips(allTrips).length === 0) {
+        toast.error("Үйлчлүүлэгчид харагдах идэвхтэй аялал алга байна.");
         return;
       }
-      const { downloadTripCatalogPdf } = await import("@/lib/tripCatalogPdf");
       const result = await downloadTripCatalogPdf(allTrips, {
+        businessName: businessName || undefined,
         onProgress: (message) => setPdfProgress(message),
       });
-      if (result.failedPhotoCount > 0) {
-        toast.success(
-          `${result.tripCount} аялал PDF болж татагдлаа (${result.failedPhotoCount} зураг татагдсангүй).`,
-        );
-      } else {
-        toast.success(`${result.tripCount} аялал, ${result.photoCount} зурагтай PDF татагдлаа.`);
-      }
+      const notes = [
+        result.hiddenCount > 0 ? `${result.hiddenCount} нуугдсан/идэвхгүй аялал ороогүй` : "",
+        result.textOnlyCount > 0 ? `${result.textOnlyCount} аялал зураггүй` : "",
+        result.failedPhotoCount > 0 ? `${result.failedPhotoCount} зураг татагдсангүй` : "",
+      ].filter(Boolean);
+      toast.success(
+        `${result.tripCount} аяллын танилцуулга татагдлаа${notes.length ? ` — ${notes.join(", ")}` : ""}.`,
+      );
     } catch (error) {
       toast.error(`PDF үүсгэж чадсангүй: ${String((error as { message?: string })?.message || error)}`);
     } finally {
@@ -165,17 +170,10 @@ export function TripsTab({
           <p className="text-sm text-ink-muted">
             Устгахын өмнө доорх товчоор татаж авахыг зөвлөж байна.
           </p>
+          {/* Backups only. The PDF brochure is deliberately NOT offered here —
+              it drops hidden/inactive trips and every internal field, so it
+              would be a lossy backup of what is about to be deleted. */}
           <div className="flex flex-wrap gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => void handleExportPdf()}
-              loading={!!pdfProgress}
-              disabled={!!pdfProgress}
-            >
-              {!pdfProgress && <Icons.download size={15} />}
-              {pdfProgress || "Бүх мэдээлэл PDF"}
-            </Button>
             <Button variant="secondary" size="sm" onClick={handleExportJson}>
               <Icons.download size={15} />
               JSON татах
@@ -214,10 +212,10 @@ export function TripsTab({
               onClick={() => void handleExportPdf()}
               loading={!!pdfProgress}
               disabled={!!pdfProgress}
-              title="Бүх аяллын мэдээлэл, зурагтайгаа нэг PDF файл болж татагдана"
+              title="Үйлчлүүлэгчид илгээх PDF танилцуулга — идэвхтэй аяллууд зурагтайгаа"
             >
               {!pdfProgress && <Icons.download size={16} />}
-              {pdfProgress || "Бүх мэдээлэл татах (PDF)"}
+              {pdfProgress || "Танилцуулга татах (PDF)"}
             </Button>
             <Button onClick={onCreate}>
               <Icons.plus size={16} />
@@ -384,7 +382,11 @@ function TripGroups({
   const toggle = (key: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
       return next;
     });
 
