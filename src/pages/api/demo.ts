@@ -703,6 +703,7 @@ export default async function handler(
         pinnedButtonLabels,
         phoneCollected,
         phoneRequested: phoneAlreadyRequested,
+        replyLanguage: isEnglishDemo ? "en" : "mn",
       });
       // English demo: same prompt, same rules — only the output language flips.
       const systemInstructionText = isEnglishDemo

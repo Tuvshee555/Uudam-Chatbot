@@ -68,6 +68,11 @@ export type BuildPromptOptions = {
   phoneCollected?: boolean;
   /** True when the bot already asked for a phone number in this conversation. */
   phoneRequested?: boolean;
+  /**
+   * Output language. "mn" (default) = production Messenger behaviour.
+   * "en" = the public English evaluation demo — same rules, English replies.
+   */
+  replyLanguage?: "mn" | "en";
 };
 
 export function hasAskedForPhone(history: ChatMessage[]): boolean {
@@ -88,7 +93,7 @@ export function hasAskedForPhone(history: ChatMessage[]): boolean {
  * single-blob prompt had.
  */
 export function buildPromptParts(options: BuildPromptOptions): { system: string; user: string } {
-  const { systemPrompt, business, history, customerMemory, reasoning, previousAssistantReply, relevantTripNames, userText, pinnedButtonLabels, phoneCollected, phoneRequested } = options;
+  const { systemPrompt, business, history, customerMemory, reasoning, previousAssistantReply, relevantTripNames, userText, pinnedButtonLabels, phoneCollected, phoneRequested, replyLanguage } = options;
   const lines: string[] = [];
 
   // Twelve turns are enough for local reference resolution; durable facts live
@@ -100,7 +105,14 @@ export function buildPromptParts(options: BuildPromptOptions): { system: string;
   lines.push("");
 
   lines.push("Reply rules:");
-  lines.push("- ALWAYS reply in Mongolian only. Even if the user writes in English or mixes languages, reply fully in Mongolian.");
+  if (replyLanguage === "en") {
+    // One authoritative language rule per prompt. Appending an English
+    // override AFTER the Mongolian-only rule doesn't work — the model keeps
+    // obeying the stronger "even if the user writes in English" clause.
+    lines.push("- ALWAYS reply in English only — this conversation is an English-language evaluation demo. Keep trip names exactly as they appear in Context and keep every price in MNT with the ₮ sign; never convert currencies or invent amounts. The reply-format examples below show the SHAPE only — translate their labels into English.");
+  } else {
+    lines.push("- ALWAYS reply in Mongolian only. Even if the user writes in English or mixes languages, reply fully in Mongolian.");
+  }
   lines.push("- Be warm, friendly and personable — like a favourite travel agent who is genuinely happy to help, not a formal help desk. A brief friendly touch is welcome (e.g. 'Өө, сайхан сонголт шүү 😊' or 'Баяртай байна!'), but ALWAYS lead with the direct answer first — never open with empty filler and never repeat the customer's question back to them.");
   if (phoneCollected) {
     lines.push("- PHONE ALREADY COLLECTED: the customer has already left their phone number in this conversation. Do NOT ask for it again. A travel consultant will call them soon — meanwhile keep answering their questions normally and helpfully.");
