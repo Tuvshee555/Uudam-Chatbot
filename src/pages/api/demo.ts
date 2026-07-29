@@ -69,6 +69,19 @@ function shouldHandoffSilently(reply: string) {
   return isReferReply(reply) || shouldSilenceNoDataReply(reply);
 }
 
+function localizeEnglishDemoReply(reply: string): string {
+  return reply
+    .replace(/Утасны дугаараа үлдээвэл манай аяллын зөвлөх тан руу шууд залгана 🙌\.?/g, "If you leave your phone number, our travel consultant will call you directly 🙌.")
+    .replace(/Том хүн:/g, "Adult:")
+    .replace(/Хүүхэд:/g, "Child:")
+    .replace(/Нярай:/g, "Infant:")
+    .replace(/Гарах:/g, "Departure:")
+    .replace(/Үнэ:/g, "Price:")
+    .replace(/(\d+)\s*өдөр\s*\/\s*(\d+)\s*шөнө/g, "$1 days / $2 nights")
+    .replace(/(\d+)\s*өдөр/g, "$1 days")
+    .replace(/(\d+)\s*шөнө/g, "$1 nights");
+}
+
 function buildDemoMedia(input: {
   reply: string;
   userText: string;
@@ -770,7 +783,7 @@ export default async function handler(
         .filter((message) => message.role === "assistant")
         .map((message) => message.text)
         .slice(-3);
-      const reply = enforcePaymentNeverSelfConfirmed(
+      const cleanedReply = enforcePaymentNeverSelfConfirmed(
         normalizedText,
         enforceWebsiteForPayment(
           rewriteRepeatedGenericClarifier({
@@ -783,6 +796,7 @@ export default async function handler(
           }),
         ),
       );
+      const reply = isEnglishDemo ? localizeEnglishDemoReply(cleanedReply) : cleanedReply;
       if (shouldHandoffSilently(reply)) return returnHandoff();
       // Wrong-trip guard (mirrors the webhook): asked about trip A, model priced
       // a different destination → silent handoff instead of a confident wrong answer.
@@ -812,7 +826,9 @@ export default async function handler(
       // Button parity with Messenger: the AI reply carries the model's own
       // BUTTONS line, plus deterministic smart buttons, plus the contact-operator
       // button always last — identical to the production webhook.
-      let replyButtons: string[] = [...buttons];
+      let replyButtons: string[] = isEnglishDemo
+        ? buttons.map(localizeEnglishDemoReply)
+        : [...buttons];
       try {
         // Smart buttons carry Mongolian labels; tapping one would route the
         // English demo into a Mongolian fast-path reply, so skip them there —
