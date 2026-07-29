@@ -40,6 +40,9 @@ const INK_MUTED: RGB = [90, 97, 99];
 const INK_SUBTLE: RGB = [141, 147, 149];
 const LINE: RGB = [214, 217, 213];
 const SOFT: RGB = [231, 244, 242];
+const PAPER: RGB = [250, 249, 244];
+const GOLD: RGB = [214, 151, 64];
+const SKY: RGB = [43, 112, 154];
 
 type RGB = [number, number, number];
 
@@ -374,6 +377,17 @@ function writePosterPage(doc: Doc, photo: LoadedPhoto) {
   doc.y = PAGE_H;
 }
 
+function fitImage(photo: LoadedPhoto, boxW: number, boxH: number) {
+  const ratio = photo.height / photo.width;
+  let w = boxW;
+  let h = w * ratio;
+  if (h > boxH) {
+    h = boxH;
+    w = h / ratio;
+  }
+  return { w, h };
+}
+
 /**
  * Fallback page for a trip with no poster. Carries only what a customer would
  * ask about: what it costs, when it leaves, what is and is not included, and
@@ -510,52 +524,146 @@ function writeInfoPage(doc: Doc, trip: TravelTrip) {
 
 /* --------------------------------------------------------- cover + index */
 
-function writeCover(doc: Doc, trips: TravelTrip[], businessName: string) {
-  doc.pdf.setFillColor(BRAND[0], BRAND[1], BRAND[2]);
+function firstLoadedPoster(trip: TravelTrip, photos: Map<string, LoadedPhoto | null>): LoadedPhoto | null {
+  for (const url of strList(trip.photo_urls)) {
+    const photo = photos.get(url);
+    if (photo) return photo;
+  }
+  return null;
+}
+
+function drawContainedImage(doc: Doc, photo: LoadedPhoto, x: number, y: number, w: number, h: number) {
+  const fit = fitImage(photo, w, h);
+  doc.pdf.addImage(photo.dataUrl, "JPEG", x + (w - fit.w) / 2, y + (h - fit.h) / 2, fit.w, fit.h, undefined, "FAST");
+}
+
+function writeCover(doc: Doc, trips: TravelTrip[], businessName: string, photos: Map<string, LoadedPhoto | null>) {
+  doc.pdf.setFillColor(PAPER[0], PAPER[1], PAPER[2]);
   doc.pdf.rect(0, 0, PAGE_W, PAGE_H, "F");
+  doc.pdf.setFillColor(BRAND[0], BRAND[1], BRAND[2]);
+  doc.pdf.rect(0, 0, PAGE_W, 104, "F");
+  doc.pdf.setFillColor(SKY[0], SKY[1], SKY[2]);
+  doc.pdf.rect(0, 104, PAGE_W, 20, "F");
 
-  doc.font("normal", 12, [190, 226, 221]);
-  doc.pdf.text(businessName.toUpperCase(), MARGIN, 96);
+  const previewPhotos = trips.map((trip) => firstLoadedPoster(trip, photos)).filter((p): p is LoadedPhoto => !!p).slice(0, 3);
+  const previewBoxes = [
+    { x: 116, y: 28, w: 34, h: 58 },
+    { x: 151, y: 18, w: 43, h: 72 },
+    { x: 130, y: 90, w: 50, h: 76 },
+  ];
+  previewPhotos.forEach((photo, i) => {
+    const box = previewBoxes[i];
+    doc.pdf.setFillColor(255, 255, 255);
+    doc.pdf.roundedRect(box.x - 2, box.y - 2, box.w + 4, box.h + 4, 2.5, 2.5, "F");
+    drawContainedImage(doc, photo, box.x, box.y, box.w, box.h);
+  });
 
-  doc.font("bold", 30, [255, 255, 255]);
-  doc.pdf.text("Аяллын", MARGIN, 124);
-  doc.pdf.text("танилцуулга", MARGIN, 140);
+  doc.font("normal", 11, [194, 229, 225]);
+  doc.pdf.text(businessName.toUpperCase(), MARGIN, 36);
 
-  doc.pdf.setDrawColor(255, 255, 255);
-  doc.pdf.setLineWidth(0.8);
-  doc.pdf.line(MARGIN, 152, MARGIN + 26, 152);
+  doc.font("bold", 27, [255, 255, 255]);
+  doc.pdf.text("Аяллын", MARGIN, 58);
+  doc.pdf.text("танилцуулга", MARGIN, 73);
 
-  doc.font("normal", 11, [214, 236, 233]);
-  doc.pdf.text(`${trips.length} аялал`, MARGIN, 166);
-  doc.font("normal", 9.5, [170, 208, 202]);
-  doc.pdf.text(todayLabel(), MARGIN, 176);
+  doc.pdf.setDrawColor(GOLD[0], GOLD[1], GOLD[2]);
+  doc.pdf.setLineWidth(1);
+  doc.pdf.line(MARGIN, 84, MARGIN + 30, 84);
+
+  doc.font("normal", 10.5, [225, 244, 241]);
+  doc.pdf.text("Үйлчлүүлэгчид илгээх аяллын багц танилцуулга", MARGIN, 94);
+
+  doc.font("bold", 15, INK);
+  doc.pdf.text(`${trips.length} аялал`, MARGIN, 153);
+  doc.font("normal", 10, INK_MUTED);
+  doc.pdf.text(`Шинэчилсэн: ${todayLabel()}`, MARGIN, 162);
+
+  const notes = [
+    "Дараагийн хуудсанд аяллуудыг товч харна.",
+    "Аялал бүрийн дэлгэрэнгүй постер дараагийн хуудсуудаас эхэлнэ.",
+    "Үнэ, хөтөлбөр, холбоо барих мэдээлэл постер дээрээ бүрэн байгаа.",
+  ];
+  let y = 184;
+  notes.forEach((note) => {
+    doc.pdf.setFillColor(BRAND[0], BRAND[1], BRAND[2]);
+    doc.pdf.circle(MARGIN + 2, y - 1.2, 1.2, "F");
+    doc.font("normal", 10, INK);
+    doc.pdf.text(note, MARGIN + 7, y);
+    y += 9;
+  });
+
+  doc.pdf.setFillColor(255, 255, 255);
+  doc.pdf.roundedRect(MARGIN, 236, CONTENT_W, 28, 3, 3, "F");
+  doc.font("bold", 10.5, BRAND);
+  doc.pdf.text("Уудам Трэвэл", MARGIN + 7, 248);
+  doc.font("normal", 9, INK_MUTED);
+  doc.pdf.text("Аяллаа сонгоод дэлгэрэнгүй постер хуудсыг харна уу.", MARGIN + 7, 256);
 }
 
 function writeIndex(doc: Doc, trips: TravelTrip[]) {
   doc.newPage();
-  doc.font("bold", 17, INK);
-  doc.pdf.text("Аяллын жагсаалт", MARGIN, doc.y + 7);
-  doc.y += 13;
-  doc.font("normal", 9.5, INK_MUTED);
-  doc.pdf.text("Дэлгэрэнгүйг дараагийн хуудаснуудаас харна уу.", MARGIN, doc.y + 3);
-  doc.y += 9;
+  const cardW = (CONTENT_W - 8) / 2;
+  const cardH = 50;
+  const gapX = 8;
+  const gapY = 9;
+  const startY = 52;
+  const CARDS_PER_PAGE = 8;
 
-  doc.table(
-    // "Эхлэх үнэ" — the column is the LOWEST adult fare across price groups, so
-    // it must not be labelled as if it were the only price.
-    ["#", "Аялал", "Хугацаа", "Эхлэх үнэ", "Хөдлөх өдрүүд"],
-    trips.map((trip, i) => [
-      String(i + 1),
-      text(trip.route_name) || "—",
-      text(trip.duration_text) || "—",
-      (() => {
-        const from = fromPrice(trip);
-        return from == null ? "—" : money(from, trip.currency);
-      })(),
-      departureSummary(trip) || "—",
-    ]),
-    [8, 62, 27, 30, 51],
-  );
+  const drawHeader = () => {
+    doc.pdf.setFillColor(PAPER[0], PAPER[1], PAPER[2]);
+    doc.pdf.rect(0, 0, PAGE_W, PAGE_H, "F");
+    doc.font("bold", 18, INK);
+    doc.pdf.text("Аяллаа сонгох", MARGIN, 28);
+    doc.font("normal", 9.5, INK_MUTED);
+    doc.pdf.text("Товч мэдээллээс сонгоод дараагийн хуудсуудаас постеруудыг бүтнээр нь харна.", MARGIN, 37);
+    doc.pdf.setDrawColor(GOLD[0], GOLD[1], GOLD[2]);
+    doc.pdf.setLineWidth(0.6);
+    doc.pdf.line(MARGIN, 43, MARGIN + 28, 43);
+  };
+
+  drawHeader();
+
+  trips.forEach((trip, i) => {
+    const slot = i % CARDS_PER_PAGE;
+    if (i > 0 && slot === 0) {
+      doc.newPage();
+      drawHeader();
+    }
+
+    const col = slot % 2;
+    const row = Math.floor(slot / 2);
+    const x = MARGIN + col * (cardW + gapX);
+    const y = startY + row * (cardH + gapY);
+    const title = text(trip.route_name) || "Аялал";
+    const duration = text(trip.duration_text);
+    const from = fromPrice(trip);
+    const price = from == null ? "Үнэ лавлах" : `Эхлэх үнэ ${money(from, trip.currency)}`;
+    const dates = departureSummary(trip, 3) || "Хөдлөх өдөр лавлах";
+
+    doc.pdf.setFillColor(255, 255, 255);
+    doc.pdf.roundedRect(x, y, cardW, cardH, 3, 3, "F");
+    doc.pdf.setDrawColor(230, 226, 216);
+    doc.pdf.setLineWidth(0.2);
+    doc.pdf.roundedRect(x, y, cardW, cardH, 3, 3, "S");
+
+    doc.pdf.setFillColor(BRAND[0], BRAND[1], BRAND[2]);
+    doc.pdf.roundedRect(x + 4, y + 5, 10, 7, 2, 2, "F");
+    doc.font("bold", 7.5, [255, 255, 255]);
+    doc.pdf.text(String(i + 1), x + 9, y + 9.8, { align: "center" });
+
+    doc.font("bold", 9.3, INK);
+    const titleLines = doc.pdf.splitTextToSize(title, cardW - 22) as string[];
+    doc.pdf.text(titleLines.slice(0, 2), x + 18, y + 8.8);
+
+    doc.font("normal", 8.2, INK_MUTED);
+    const meta = [duration, dates].filter(Boolean).join("  |  ");
+    const metaLines = doc.pdf.splitTextToSize(meta, cardW - 10) as string[];
+    doc.pdf.text(metaLines.slice(0, 3), x + 5, y + 24);
+
+    doc.pdf.setFillColor(246, 238, 224);
+    doc.pdf.roundedRect(x + 5, y + cardH - 11, cardW - 10, 7, 2, 2, "F");
+    doc.font("bold", 8.4, [129, 82, 23]);
+    doc.pdf.text(price, x + 8, y + cardH - 6.2);
+  });
 }
 
 /* ------------------------------------------------------------ public api */
@@ -628,7 +736,7 @@ export async function buildTripCatalogPdf(
   const doc = new Doc(pdf);
   const posterPages = new Set<number>();
 
-  writeCover(doc, trips, businessName);
+  writeCover(doc, trips, businessName, photos);
   writeIndex(doc, trips);
 
   let textOnlyCount = 0;
