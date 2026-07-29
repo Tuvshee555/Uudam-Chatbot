@@ -377,6 +377,14 @@ export default async function handler(
         return res.status(200).json({ reply: deferralReply, buttons: [] });
       }
 
+      // English demo: every deterministic fast path below is a Mongolian
+      // reply builder, and some of their intent matchers fire on English
+      // input too (buildBudgetReply matches "cheapest"/"most expensive";
+      // catalog aliases can carry Latin script) — which answered an English
+      // question in Mongolian on the live page. Route English questions
+      // straight to the model instead; the AI path keeps the same guards
+      // (wrong-trip suppression, REFER handoff, payment enforcement).
+      if (!isEnglishDemo) {
       // Generic price objections must run before route matching. Otherwise a
       // plain complaint can match a trip note that happens to contain "unetei".
       {
@@ -649,6 +657,8 @@ export default async function handler(
             ...media,
           });
         }
+      }
+
       }
 
       await appendMessage(sessionId, "user", normalizedText);
