@@ -67,6 +67,8 @@ const PAGE_TOKENS = new Map(env.facebookPages.map((p) => [p.pageId, p.token]));
 const FALLBACK_TOKEN = env.tokenPage;
 const META_APP_SECRET = env.metaAppSecret;
 const LIVE_WEBHOOK_DISABLED =
+  (process.env.VERCEL_ENV === "production" &&
+    process.env.WEBHOOK_BOT_DISABLED !== "0") ||
   process.env.WEBHOOK_BOT_DISABLED === "1" ||
   process.env.WEBHOOK_BOT_DISABLED === "true";
 
