@@ -20,7 +20,7 @@ import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceW
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
 import { extractTripPhotosForReply, extractTripPhotosForUserMessage, hasTripPhotoIntent, MAX_TRIP_PHOTOS } from "../../lib/welcomeFlow";
 import { CONTACT_OPERATOR_LABEL, DUPLICATE_REPLY_NUDGE, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
 import { getEnv } from "../../lib/env";
@@ -586,6 +586,33 @@ export default async function handler(
             buttons: buildSmartButtons(safeReply, trips) || [],
           });
         }
+      }
+
+      // Fast path: standalone price lookup ("1,430,000 гэсэн аялал аль вэ?").
+      // Deterministic on purpose: a customer quoting a price and asking which
+      // trip it is must never get a DIFFERENT trip's price stated back as if
+      // it matched. When no trip's price matches, hand off rather than let
+      // the model improvise a nearby-priced trip.
+      if (hasStandalonePriceLookupIntent(normalizedText)) {
+        const trips = await getTrips();
+        const priceLookupReply = buildStandalonePriceLookupReply(await getFastPathText(), trips);
+        await appendMessage(sessionId, "user", normalizedText);
+        if (!priceLookupReply) {
+          recordCounter("demo.price_lookup_no_match_total", 1, {});
+          return returnHandoff();
+        }
+        const safeReply = appendLeadCaptureCta(
+          enforceWebsiteForPayment(sanitizeAssistantReply(priceLookupReply)),
+          phoneAlreadyRequested,
+        );
+        if (shouldHandoffSilently(safeReply)) return returnHandoff();
+        await appendMessage(sessionId, "assistant", safeReply);
+        await rememberTurn();
+        recordCounter("demo.price_lookup_fast_path_total", 1, {});
+        return res.status(200).json({
+          reply: safeReply,
+          buttons: buildSmartButtons(safeReply, trips) || [],
+        });
       }
 
       // Fast path: structured trip query (price/duration/dates/flight for a specific trip)

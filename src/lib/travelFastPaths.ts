@@ -703,7 +703,7 @@ export function buildBudgetReply(
   return lines.join("\n");
 }
 
-function hasStandalonePriceLookupIntent(text: string): boolean {
+export function hasStandalonePriceLookupIntent(text: string): boolean {
   const normalized = normText(text);
   if (extractNormalizedPrice(text) === null) return false;
   if (
@@ -723,7 +723,7 @@ function hasStandalonePriceLookupIntent(text: string): boolean {
   );
 }
 
-function buildStandalonePriceLookupReply(text: string, trips: TravelTrip[]): string | null {
+export function buildStandalonePriceLookupReply(text: string, trips: TravelTrip[]): string | null {
   if (!hasStandalonePriceLookupIntent(text)) return null;
   const price = extractNormalizedPrice(text);
   if (price === null) return null;
