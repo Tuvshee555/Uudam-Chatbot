@@ -1121,6 +1121,25 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     }
   }
 
+  async function downloadFullPng() {
+    const node = page1Ref.current;
+    if (!node) return;
+    setBusy("Бүтэн PNG бэлдэж байна…");
+    try {
+      await withExportMode(async () => {
+        const url = await capture(node);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${buildExportBaseName()}-full.png`;
+        a.click();
+      });
+    } catch (e) {
+      setError(String((e as { message?: string })?.message || e));
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function downloadSplitImages() {
     setBusy("Messenger зурагнуудыг бэлдэж байна…");
     try {
@@ -1398,8 +1417,11 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                   <Button size="sm" variant="primary" onClick={() => setAttachModalOpen(true)} disabled={!!busy}>
                     <Icons.plus size={14} /> Аялалд нэмэх
                   </Button>
+                  <Button size="sm" variant="secondary" onClick={downloadFullPng} disabled={!!busy}>
+                    <Icons.image size={14} /> Бүтэн PNG
+                  </Button>
                   <Button size="sm" variant="secondary" onClick={downloadSplitImages} disabled={!!busy}>
-                    <Icons.image size={14} /> PNG
+                    <Icons.image size={14} /> PNG (Messenger)
                   </Button>
                   <Button size="sm" variant="secondary" onClick={downloadPdf} disabled={!!busy}>
                     <Icons.file size={14} /> PDF

@@ -11,13 +11,8 @@ import { Badge, Icons, cx } from "@/components/ui";
    in one. Light theme, locked. Reuses the app's design tokens so the
    page stays coherent with the admin + demo surfaces.
 
-   NOTE: wordmark, name, and the mailto address below are yours to edit.
+   NOTE: wordmark and name below are yours to edit.
    ------------------------------------------------------------------ */
-
-const CONTACT_EMAIL = "ganturtuvshinsaihan@gmail.com";
-const CONTACT_HREF = `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(
-  "Chatbot for my business",
-)}`;
 
 const CTA_PRIMARY =
   "inline-flex h-11 items-center justify-center gap-2 rounded-md bg-brand px-5 text-sm font-semibold text-white shadow-xs shadow-brand/30 transition-all duration-150 hover:bg-brand-hover active:scale-[0.985]";
@@ -120,8 +115,8 @@ function Nav() {
           >
             How it works
           </a>
-          <a href={CONTACT_HREF} className={cx(CTA_PRIMARY, "h-10 px-4")}>
-            Hire me
+          <a href="#top" className={cx(CTA_PRIMARY, "h-10 px-4")}>
+            Try the demo
           </a>
         </nav>
       </div>
@@ -149,8 +144,8 @@ function Hero() {
             from your real data and hand off to a human instead of guessing.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
-            <a href={CONTACT_HREF} className={CTA_PRIMARY}>
-              Hire me
+            <a href="#top" className={CTA_PRIMARY}>
+              Try the demo
               <Icons.chevronRight size={16} />
             </a>
             <a href="#how" className={CTA_SECONDARY}>
@@ -401,12 +396,14 @@ function FinalCta() {
             Tell me what you sell and I will show you what your bot could answer.
           </p>
           <div className="mt-8 flex justify-center">
-            <a href={CONTACT_HREF} className={cx(CTA_PRIMARY, "h-12 px-6 text-base")}>
-              Hire me
+            <a href="#top" className={cx(CTA_PRIMARY, "h-12 px-6 text-base")}>
+              Try the live demo
               <Icons.chevronRight size={18} />
             </a>
           </div>
-          <p className="mt-4 text-sm text-ink-subtle">{CONTACT_EMAIL}</p>
+          <p className="mt-4 text-sm text-ink-subtle">
+            Contact is handled through the platform where this portfolio is shared.
+          </p>
         </Reveal>
       </div>
     </section>
@@ -428,12 +425,9 @@ function Footer() {
             Chatbots for travel &amp; e-commerce
           </span>
         </div>
-        <a
-          href={CONTACT_HREF}
-          className="text-sm font-medium text-nav-ink transition-colors hover:text-white"
-        >
-          {CONTACT_EMAIL}
-        </a>
+        <span className="text-sm font-medium text-nav-ink">
+          Live product demo
+        </span>
       </div>
     </footer>
   );
