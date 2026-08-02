@@ -17,7 +17,7 @@ import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } fro
 import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
-import { createLead, dbClaimGoodbye, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
+import { createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
 import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
@@ -1389,6 +1389,14 @@ async function handleMessage(
     }
     return [] as string[];
   })();
+  // "Mimic Myself" toggle: off by default, adds nothing to the prompt when
+  // disabled — toneExamples stays undefined and buildPromptParts is a no-op
+  // for this option, preserving today's behavior exactly.
+  const mimicMyselfEnabled =
+    (botSettings.extra as Record<string, unknown> | undefined)?.mimic_myself_enabled === true;
+  const toneExamples = mimicMyselfEnabled
+    ? await dbGetRecentAdminMessages(8).catch(() => [])
+    : undefined;
   const promptParts = buildPromptParts({
     systemPrompt: flowAiPromptOverride
       ? `${fileSystemPrompt}\n\n${flowAiPromptOverride}`
@@ -1399,6 +1407,7 @@ async function handleMessage(
     reasoning: reasoning || undefined,
     previousAssistantReply: lastReply?.text || undefined,
     relevantTripNames,
+    toneExamples,
     userText: text,
     pinnedButtonLabels,
     phoneCollected,
@@ -1919,6 +1928,15 @@ export default async function handler(
                 if (customerId && !isBotEcho) {
                   const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000;
                   await dbPauseSender(customerId, fourteenDaysMs, "operator_reply").catch(() => {});
+                  // "Mimic Myself" tone capture — captured unconditionally on every
+                  // human operator reply, regardless of the toggle (only the PROMPT
+                  // USE of these samples is gated by mimic_myself_enabled below).
+                  // This keeps the sample pool warm before an admin ever opts in.
+                  // Fire-and-forget: must never delay the webhook response.
+                  const operatorText = String(event.message.text ?? "").trim();
+                  if (operatorText.length >= 8) {
+                    void dbAppendAdminMessage(customerId, operatorText).catch(() => {});
+                  }
                   logInfo("webhook.operator_echo_pause", {
                     requestId: trace.requestId,
                     customerHash: hashIdentifier(customerId),

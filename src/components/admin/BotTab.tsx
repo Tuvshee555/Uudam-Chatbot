@@ -20,6 +20,12 @@ function goodbyeEnabled(settings: TravelBotSettings | null): boolean {
   return (g as Record<string, unknown>).enabled !== false;
 }
 
+// Default OFF (opt-in), unlike the toggles above — turning it on changes what
+// the bot says, so an admin must deliberately switch it on.
+function mimicMyselfEnabled(settings: TravelBotSettings | null): boolean {
+  return (settings?.extra as Record<string, unknown>)?.mimic_myself_enabled === true;
+}
+
 function reminderEnabled(settings: TravelBotSettings | null): boolean {
   return (settings?.extra as Record<string, unknown>)?.reminder_enabled !== false;
 }
@@ -580,6 +586,21 @@ export function BotTab({
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ fields: { extra: { goodbye: { ...prevGoodbye, enabled: next } } } }),
+          });
+          onSettingsChanged();
+        }}
+      />
+
+      <QuickToggleCard
+        title="Mimic Myself — өөрийн өнгө аясаар хариулах"
+        description="Асаавал бот таны өөрийн бичдэг Messenger хариултуудыг өнгө аясны жишээ болгон ашиглана (тоо, нэр хуулбарлахгүй, зөвхөн бичих хэв маяг). Унтраавал одоогийнх шиг хэвээр."
+        enabled={mimicMyselfEnabled(settings)}
+        busyId="mimic-myself-toggle"
+        onToggle={async (next) => {
+          await apiFetch("/api/admin/settings", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ fields: { extra: { mimic_myself_enabled: next } } }),
           });
           onSettingsChanged();
         }}

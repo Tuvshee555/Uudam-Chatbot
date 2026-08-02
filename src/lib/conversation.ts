@@ -62,6 +62,8 @@ export type BuildPromptOptions = {
   previousAssistantReply?: string;
   /** Trip names a deterministic matcher considers most relevant to this question (hint, not a filter). */
   relevantTripNames?: string[];
+  /** "Mimic Myself": a handful of the admin's own real Messenger replies, used as tone/wording reference only. */
+  toneExamples?: string[];
   userText: string;
   pinnedButtonLabels?: string[];
   /** True when the customer already left a phone number in this conversation. */
@@ -93,7 +95,7 @@ export function hasAskedForPhone(history: ChatMessage[]): boolean {
  * single-blob prompt had.
  */
 export function buildPromptParts(options: BuildPromptOptions): { system: string; user: string } {
-  const { systemPrompt, business, history, customerMemory, reasoning, previousAssistantReply, relevantTripNames, userText, pinnedButtonLabels, phoneCollected, phoneRequested, replyLanguage } = options;
+  const { systemPrompt, business, history, customerMemory, reasoning, previousAssistantReply, relevantTripNames, toneExamples, userText, pinnedButtonLabels, phoneCollected, phoneRequested, replyLanguage } = options;
   const lines: string[] = [];
 
   // Twelve turns are enough for local reference resolution; durable facts live
@@ -123,6 +125,17 @@ export function buildPromptParts(options: BuildPromptOptions): { system: string;
     lines.push("- LEAD CAPTURE (top priority business rule): After your FIRST real answer (any trip info, price, dates, seats, or program), ALWAYS end your reply by asking for their phone number ONLY. Say something like: 'Утасны дугаараа үлдээвэл манай аяллын зөвлөх тан руу шууд залгана 🙌'. Do NOT ask for their name — phone number only. Do this once, naturally at the end of your reply. If they already gave a phone number in this conversation, do NOT ask again.");
   }
   lines.push("- Emojis add warmth: use 1-3 relevant emojis in a normal reply — a friendly 😊 or 🙌 plus travel/detail icons where they fit (✈️ 💰 📅 🏨). Keep it natural — never put an emoji on every line or let them clutter the answer.");
+  const toneSamples = (toneExamples || [])
+    .map((example) => example.trim())
+    .filter(Boolean)
+    .slice(0, 5)
+    .map((example) => (example.length > 140 ? `${example.slice(0, 140)}…` : example));
+  if (toneSamples.length > 0) {
+    lines.push("- WRITING STYLE REFERENCE: below are real phrases the agency owner has typed to customers herself. Match her general wording, phrasing, and warmth — NEVER copy any specific number, name, date, or fact from them, they are style samples only, not current data:");
+    for (const sample of toneSamples) {
+      lines.push(`  "${sample}"`);
+    }
+  }
   lines.push("- Match the answer length to the question. For one requested detail, answer in 1-3 short lines. Use a compact list only for multiple details or options.");
   // Every value in this shape example is a placeholder or a deliberately
   // impossible number. Real catalog prices must NEVER appear here: the example

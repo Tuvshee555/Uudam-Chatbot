@@ -31,6 +31,8 @@ export {
   cleanFields,
   countNewLeads,
   dbAppendMessage,
+  dbAppendAdminMessage,
+  dbGetRecentAdminMessages,
   dbGetHistory,
   dbIsPaused,
   dbListPaused,

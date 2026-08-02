@@ -18,7 +18,7 @@ import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
-import { getTravelBotSettings, listTrips } from "../../lib/travelOps";
+import { dbGetRecentAdminMessages, getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
 import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
 import { extractTripPhotosForReply, extractTripPhotosForUserMessage, hasTripPhotoIntent, MAX_TRIP_PHOTOS } from "../../lib/welcomeFlow";
@@ -742,6 +742,13 @@ export default async function handler(
       const previousAssistantReply = previousAssistantMessages.length > 0
         ? previousAssistantMessages[previousAssistantMessages.length - 1].text
         : undefined;
+      // Same "Mimic Myself" toggle the live webhook reads — keeps demo/live
+      // parity instead of the two bots silently diverging (see dc19abe).
+      const mimicMyselfEnabled =
+        (botSettings.extra as Record<string, unknown> | undefined)?.mimic_myself_enabled === true;
+      const toneExamples = mimicMyselfEnabled
+        ? await dbGetRecentAdminMessages(8).catch(() => [])
+        : undefined;
       const promptParts = buildPromptParts({
         systemPrompt,
         business: business || {},
@@ -750,6 +757,7 @@ export default async function handler(
         reasoning: reasoning || undefined,
         previousAssistantReply,
         relevantTripNames,
+        toneExamples,
         userText: normalizedText,
         pinnedButtonLabels,
         phoneCollected,

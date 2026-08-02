@@ -127,6 +127,83 @@ export async function dbAppendMessage(
   );
 }
 
+const MAX_ADMIN_MESSAGE_ROWS = 300;
+
+// Her replies sometimes contain a customer's own phone number ("тэгвэл
+// 9911-2233 руу залгаарай"). These rows later get quoted into OTHER
+// customers' prompts as tone examples — a real phone number must never ride
+// along, so it's scrubbed at capture time, not just at read time.
+const MOBILE_NUMBER_RE = /(?<!\d)[689]\d{3}[\s-]?\d{4}(?!\d)/g;
+
+// She reuses saved canned replies that greet the customer by their Facebook
+// display name ("Сайн байна уу Ganbold Tsendsuren!..." or Cyrillic "Ариун
+// Сарнай"). Two consecutive capitalized words — Latin or Cyrillic — is a
+// solid heuristic for "this is a person's full name", worth the rare false
+// positive (e.g. a two-word proper noun) given the alternative is a
+// stranger's real name sitting in another customer's prompt.
+const LATIN_FULL_NAME_RE = /\b[A-Z][a-zA-Z'-]+\s+[A-Z][a-zA-Z'-]+\b/g;
+// No \b here: JS's \b is defined against ASCII \w only, so it silently never
+// matches around Cyrillic letters (a Cyrillic char counts as "non-word" on
+// both sides, so \b never anchors) — this regex relied on \b and quietly
+// matched nothing until caught by a spot-check. The case-transition pattern
+// (capital letter, then a lowercase run) is self-delimiting without it.
+// A single Cyrillic name token — including compound given names like
+// "Бат-Эрдэнэ" or "Болор-Эрдэнэ", which are capitalized on BOTH sides of the
+// hyphen. An earlier version of this pattern treated the hyphen as part of a
+// lowercase run, so it only ever matched the first half ("Бат-") and left the
+// second half ("Эрдэнэ") sitting unredacted right next to the "[нэр]" tag.
+const CYRILLIC_NAME_WORD = "[А-ЯЁӨҮ][а-яёөү]+(?:-[А-ЯЁӨҮ][а-яёөү]+)?";
+const CYRILLIC_FULL_NAME_RE = new RegExp(`${CYRILLIC_NAME_WORD}\\s+${CYRILLIC_NAME_WORD}`, "g");
+// Her most common canned opener addresses customers by "Овгийн товчлол. Нэр"
+// (e.g. "Ө. Цэрэнбаяр", "В. Өлзийдүүрэн") rather than two full words — that
+// shape has no lowercase run after the first capital, so CYRILLIC_FULL_NAME_RE
+// above never matches it. Caught live: a real customer's initial+surname was
+// sitting unredacted in the production tone-sample table.
+const CYRILLIC_INITIAL_SURNAME_RE = new RegExp(`[А-ЯЁӨҮ]\\.\\s*${CYRILLIC_NAME_WORD}`, "g");
+
+/** Strips phone numbers and likely personal names before a reply is stored as a tone sample. */
+export function sanitizeToneSample(text: string): string {
+  return text
+    .replace(MOBILE_NUMBER_RE, "[утас]")
+    .replace(LATIN_FULL_NAME_RE, "[нэр]")
+    .replace(CYRILLIC_INITIAL_SURNAME_RE, "[нэр]")
+    .replace(CYRILLIC_FULL_NAME_RE, "[нэр]");
+}
+
+/** Captures an operator-typed Messenger reply as a raw tone-reference sample. */
+export async function dbAppendAdminMessage(
+  senderId: string,
+  text: string,
+): Promise<void> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return;
+  const safeText = sanitizeToneSample(text);
+  await queryNeon(
+    `INSERT INTO travel_admin_messages (sender_id, text) VALUES ($1, $2)`,
+    [senderId, safeText],
+  );
+  // Keep the sample pool bounded — only the most recent rows are ever read.
+  await queryNeon(
+    `DELETE FROM travel_admin_messages
+     WHERE id NOT IN (
+       SELECT id FROM travel_admin_messages ORDER BY id DESC LIMIT ${MAX_ADMIN_MESSAGE_ROWS}
+     )`,
+  );
+}
+
+/** Most recent admin-typed replies, newest first — used as LLM tone examples. */
+export async function dbGetRecentAdminMessages(limit: number): Promise<string[]> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return [];
+  const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 50);
+  const result = await queryNeon<{ text: string }>(
+    `SELECT text FROM travel_admin_messages ORDER BY id DESC LIMIT $1`,
+    [safeLimit],
+  );
+  if (!result) return [];
+  return result.rows.map((r) => r.text);
+}
+
 export async function dbGetCustomerMemory(
   senderId: string,
 ): Promise<CustomerMemoryRow | null> {

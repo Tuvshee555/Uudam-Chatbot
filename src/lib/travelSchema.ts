@@ -321,6 +321,22 @@ export async function ensureTravelSchema() {
         ALTER TABLE travel_conversations
           ADD COLUMN IF NOT EXISTS attachments JSONB NOT NULL DEFAULT '[]'::jsonb;
       `);
+      // Admin's own Messenger replies (operator echoes), captured as a style
+      // reference pool for the "Mimic Myself" tone toggle. Kept separate from
+      // travel_conversations — that table's role is hard-typed "user"|"assistant"
+      // and its rows feed turn-by-turn prompt history; this is a flat sample pool.
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_admin_messages (
+          id BIGSERIAL PRIMARY KEY,
+          sender_id TEXT NOT NULL DEFAULT '',
+          text TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_travel_admin_messages_created
+          ON travel_admin_messages (created_at DESC);
+      `);
       // Customer-sent photos that need staff review: passports/documents,
       // trip screenshots/posters, or uncategorized images. Kept separate from
       // chat history so staff can search by customer without scrolling.
