@@ -367,6 +367,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
   const [scale, setScale] = useState(0.6);
   const [totalH, setTotalH] = useState(0);
   const [attachModalOpen, setAttachModalOpen] = useState(false);
+  const [bulkPlan, setBulkPlan] = useState<PosterBulkPlan | null>(null);
   const [bulkReport, setBulkReport] = useState<PosterBulkRunReport | null>(null);
 
   const page1Ref = useRef<HTMLDivElement>(null);
@@ -415,10 +416,18 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
   const currentDuplicateCount = trip
     ? [...historyTitleCounts.entries()].find(([key]) => key === normalizeHistoryTitle(trip.title))?.[1] || 0
     : 0;
+  const bulkRunnableCount = bulkPlan
+    ? bulkPlan.items.filter((item) => item.action === "create" || item.action === "attach_exact").length
+    : 0;
+  const bulkSkippedCount = bulkPlan
+    ? bulkPlan.items.filter((item) => item.action === "skip").length
+    : 0;
 
   const startTemplate = () => {
     setError("");
     setBusy("");
+    setBulkPlan(null);
+    setBulkReport(null);
     setTrip(normalizeTripData(createDefaultTrip() as PosterTrip));
     setTripId(null);
     setSource("Default template");
@@ -770,6 +779,8 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
   async function handleFiles(files: FileList | null | undefined) {
     if (!files || files.length === 0) return;
     setError("");
+    setBulkPlan(null);
+    setBulkReport(null);
     let fileList = Array.from(files).filter((f) => f instanceof File);
     const droppedCount = fileList.length;
     const warnings: string[] = [];
@@ -1508,20 +1519,43 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     return nextTrip;
   }
 
-  async function syncAllSafePosters() {
+  async function fetchBulkPlan(): Promise<PosterBulkPlan> {
+    const planResponse = await fetchJson("/api/admin/poster-bulk-plan", { method: "POST" });
+    if (planResponse.error) throw new Error(planResponse.error as string);
+    const plan = planResponse as unknown as PosterBulkPlan;
+    if (!Array.isArray(plan.items)) throw new Error("Bulk plan response invalid.");
+    return plan;
+  }
+
+  async function previewBulkPosterSync() {
     setError("");
     setBulkReport(null);
     setBusy("Бүх постерын төлөвлөгөө шалгаж байна…");
+    try {
+      setBulkPlan(await fetchBulkPlan());
+    } catch (e) {
+      setError(String((e as { message?: string })?.message || e));
+      setBulkPlan(null);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function syncAllSafePosters() {
+    setError("");
+    setBulkReport(null);
+    const plan = bulkPlan;
+    if (!plan) {
+      setError("Эхлээд бүх постерын төлөвлөгөөг шалгана уу.");
+      return;
+    }
+
+    setBusy("Шалгасан төлөвлөгөөнөөс safe poster-уудыг аялалд холбож байна…");
     const failed: PosterBulkRunReport["failed"] = [];
     let created = 0;
     let attached = 0;
 
     try {
-      const planResponse = await fetchJson("/api/admin/poster-bulk-plan", { method: "POST" });
-      if (planResponse.error) throw new Error(planResponse.error as string);
-      const plan = planResponse as unknown as PosterBulkPlan;
-      if (!Array.isArray(plan.items)) throw new Error("Bulk plan response invalid.");
-
       const runnable = plan.items.filter((item) => item.action === "create" || item.action === "attach_exact");
       const skipped = plan.items.filter((item) => item.action === "skip");
 
@@ -1570,6 +1604,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
         skipped,
         failed,
       });
+      setBulkPlan(null);
     } catch (e) {
       setError(String((e as { message?: string })?.message || e));
     } finally {
@@ -1579,6 +1614,8 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
 
   async function save() {
     setError("");
+    setBulkPlan(null);
+    setBulkReport(null);
     setBusy("Хадгалж байна…");
     try {
       const cleanTrip = normalizeTripData(trip) as PosterTrip;
@@ -1622,6 +1659,8 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
   }
 
   async function deleteTrip(id: string) {
+    setBulkPlan(null);
+    setBulkReport(null);
     const previousHistory = history;
     setHistory((items) => items.filter((item) => item.id !== id));
     if (tripId === id) {
@@ -1749,9 +1788,14 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                   <Button size="sm" variant="primary" onClick={() => setAttachModalOpen(true)} disabled={!!busy}>
                     <Icons.plus size={14} /> Аялалд нэмэх
                   </Button>
-                  <Button size="sm" variant="secondary" onClick={syncAllSafePosters} disabled={!!busy || history.length === 0}>
-                    <Icons.plus size={14} /> Бүгдийг аялал болгох
+                  <Button size="sm" variant="secondary" onClick={previewBulkPosterSync} disabled={!!busy || history.length === 0}>
+                    <Icons.check size={14} /> Бүгдийг шалгах
                   </Button>
+                  {bulkPlan && (
+                    <Button size="sm" variant="primary" onClick={syncAllSafePosters} disabled={!!busy || bulkRunnableCount === 0}>
+                      <Icons.plus size={14} /> Safe-г үүсгэх ({bulkRunnableCount})
+                    </Button>
+                  )}
                   <Button size="sm" variant="secondary" onClick={downloadFullPng} disabled={!!busy}>
                     <Icons.image size={14} /> Бүтэн PNG
                   </Button>
@@ -1768,6 +1812,22 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                 <p className="mt-2 text-xs text-ink-subtle">
                   Бичвэр дээр дарж засаарай · хоолны таглыг дарж асаах/унтраах · PNG/PDF/Messenger export: main poster-оос 1-2 зураг, хэт урт бол {MESSENGER_MAX_IMAGE_SLICES}
                 </p>
+                {bulkPlan && (
+                  <div className="mt-3 rounded-lg border border-warning/30 bg-warning-soft px-3 py-2 text-xs text-warning">
+                    <p className="font-medium">
+                      Шалгалт бэлэн: {bulkPlan.summary.create} шинэ аялал, {bulkPlan.summary.attachExact} existing аялалд poster нэмэх, {bulkSkippedCount} skip.
+                    </p>
+                    {bulkSkippedCount > 0 && (
+                      <div className="mt-2 max-h-28 space-y-1 overflow-y-auto">
+                        {bulkPlan.items.filter((item) => item.action === "skip").slice(0, 8).map((item) => (
+                          <p key={`plan-skip-${item.posterId}`}>
+                            Skip: {item.title || "Untitled"} - {item.reason || item.reasonCode}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {bulkReport && (
                   <div className="mt-3 rounded-lg border border-line bg-surface-sunken px-3 py-2 text-xs text-ink-muted">
                     <p className="font-medium text-ink">
