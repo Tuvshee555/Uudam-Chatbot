@@ -135,7 +135,7 @@
 .poster-root .page .ptable th {text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.3px;color:#fff;font-weight:700;padding:9px 10px;background:var(--navy);white-space:nowrap}
 .poster-root .page .ptable th:first-child {border-radius:8px 0 0 0}
 .poster-root .page .ptable th:last-child {border-radius:0 8px 0 0}
-.poster-root .page .ptable td {padding:10px 10px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:top;white-space:nowrap}
+.poster-root .page .ptable td {padding:10px 10px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:top;white-space:normal;overflow-wrap:break-word;word-break:normal}
 .poster-root .page .ptable tr:last-child td {border-bottom:none}
 .poster-root .page .ptable-col-head {position:relative}
 .poster-root .page .col-remove-btn {position:absolute;top:2px;right:2px;width:16px;height:16px;border-radius:50%;border:none;background:rgba(255,255,255,.2);color:#fff;font-size:11px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity .12s;padding:0}
@@ -152,7 +152,7 @@
 .poster-root .page .pwhen-input:hover {background:rgba(0,0,0,.03);border-radius:4px}
 .poster-root .page .pwhen-input:focus {background:rgba(0,0,0,.04);border-radius:4px}
 body.exporting .page .pwhen-input {background:transparent !important}
-.poster-root .page .pamt {font-weight:800;white-space:normal;min-width:110px}
+.poster-root .page .pamt {font-weight:800;white-space:normal;min-width:110px;overflow-wrap:anywhere;word-break:normal}
 .poster-root .page .price-desc {margin-top:10px;font-size:14px;line-height:1.7;color:var(--ink)}
 .poster-root .page .price-desc-input {width:100%;min-height:36px;padding:8px 10px;border-radius:8px;border:1px dashed #b9c6d8;font-size:14px;line-height:1.7;color:var(--ink);outline:none;resize:none;font-family:inherit;background:#fff}
 .poster-root .page .price-desc-input:focus {border-color:var(--navy);border-style:solid}
@@ -187,32 +187,32 @@ body.exporting .page .pwhen-input {background:transparent !important}
 .poster-root .page .dnum:hover .dnum-num {opacity:0}
 .poster-root .page .dnum:hover .dnum-handle {opacity:1}
 
-/* Day card — card itself is the 60/40 grid so photo spans full height */
-.poster-root .page .daycard {border:1px solid var(--line);border-radius:12px;background:#fff;border-left:3px solid var(--gold);overflow:hidden;display:grid;grid-template-columns:minmax(0,3fr) 2fr;align-items:stretch}
-.poster-root .page .droute {font-size:19px;font-weight:900;color:var(--navy);display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+/* Day card: readable text first, then the photo below the plan. */
+.poster-root .page .daycard {border:1px solid var(--line);border-radius:12px;background:#fff;border-left:3px solid var(--gold);overflow:hidden;display:grid;grid-template-columns:1fr;align-items:stretch}
+.poster-root .page .droute {font-size:19px;font-weight:900;color:var(--navy);display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;overflow-wrap:anywhere;word-break:normal}
 .poster-root .page .droute .km, .poster-root .page .droute .flt {font-size:11px;padding:3px 8px;border-radius:999px;background:var(--tint);font-weight:700;color:var(--muted)}
 .poster-root .page .droute .flt {color:var(--navy-soft)}
 .poster-root .page .dmain {min-width:0;padding:20px 20px 20px 24px;display:flex;flex-direction:column}
-.poster-root .page .dsummary.prose {font-size:15px;line-height:1.7;color:#2c3e50;padding:0 0 0 18px;border:none;background:transparent;min-height:0;box-shadow:none !important;flex:1;list-style:disc;list-style-position:outside;margin:0}
+.poster-root .page .dsummary.prose {font-size:15px;line-height:1.7;color:#2c3e50;padding:0 0 0 18px;border:none;background:transparent;min-height:0;box-shadow:none !important;flex:1;list-style:disc;list-style-position:outside;margin:0;overflow-wrap:break-word;word-break:normal}
 .poster-root .page .dsummary.prose li {margin-bottom:6px;outline:none}
 .poster-root .page .dsummary.prose li:last-child {margin-bottom:0}
 .poster-root .page .dsummary.prose li:empty:before {content:attr(data-placeholder);color:#9aaaba;font-style:italic;font-weight:400}
 body.exporting .page .dsummary.prose li:empty {display:none !important}
 .poster-root .page .dhotel {margin-top:10px;color:var(--muted);font-size:13px;line-height:1.4}
 
-/* Meal badges — under text in left column */
-.poster-root .page .dside {display:flex;flex-direction:column}
+/* Meal badges sit under the day text. */
+.poster-root .page .dside {display:flex;flex-direction:column;gap:10px;padding:0 20px 20px 24px}
 .poster-root .page .mealgrid {display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:14px}
-.poster-root .page .mealcard {display:flex;flex-direction:row;gap:6px;align-items:center;justify-content:flex-start;padding:7px 10px;border-radius:8px;border:1px solid var(--line);font-size:11px;font-weight:700;cursor:pointer;text-align:left}
+.poster-root .page .mealcard {display:flex;flex-direction:row;gap:6px;align-items:center;justify-content:flex-start;padding:7px 10px;border-radius:8px;border:1px solid var(--line);font-size:11px;font-weight:700;cursor:pointer;text-align:left;min-width:0}
 .poster-root .page .mealcard.yes {background:#f0faf4;color:#1a7a4a;border-color:#b8e2c8}
 .poster-root .page .mealcard.no {background:#fdf4f4;color:#a04040;border-color:#e8c8c8}
 .poster-root .page .mealname {font-size:11px;font-weight:700}
 .poster-root .page .mealstate {font-size:10px;font-weight:600;opacity:.75}
 
-/* Day photo — fills the entire right column edge-to-edge */
-.poster-root .page .dphoto {width:100%;height:100%;min-height:200px;border-radius:0;border:none;background:#f5f8fc;background-size:cover,100% 100%;background-position:center;background-repeat:no-repeat;position:relative;overflow:hidden;display:flex;align-items:flex-end;justify-content:flex-start;padding:12px;color:#56728f;font-size:13px;font-weight:700;cursor:pointer}
+/* Day photo: separate visual block below the plan, not a squeezed side rail. */
+.poster-root .page .dphoto {width:100%;height:auto;min-height:240px;aspect-ratio:16/7;border-radius:10px;border:none;background:#f5f8fc;background-size:cover,100% 100%;background-position:center;background-repeat:no-repeat;position:relative;overflow:hidden;display:flex;align-items:flex-end;justify-content:flex-start;padding:12px;color:#56728f;font-size:13px;font-weight:700;cursor:pointer}
 .poster-root .page .dphoto.filled {color:#fff}
-.poster-root .page .dphoto.dphoto-empty {min-height:120px;background:#f8fafc;border-left:2px dashed #c8d8e8;align-items:center;justify-content:center;padding:0;border-radius:0}
+.poster-root .page .dphoto.dphoto-empty {min-height:140px;background:#f8fafc;border:2px dashed #c8d8e8;align-items:center;justify-content:center;padding:0;border-radius:10px}
 .poster-root .page .dphoto-add-label {font-size:12px;font-weight:700;color:#7a9ab8}
 .poster-root .page .dphoto .photohint {display:inline-flex;padding:5px 9px;border-radius:999px;background:rgba(12,27,43,.42);color:#fff;font-size:11px;font-weight:700}
 

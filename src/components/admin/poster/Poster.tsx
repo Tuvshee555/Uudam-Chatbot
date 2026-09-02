@@ -495,7 +495,7 @@ export default function Poster({
                 </div>
 
                 <div className="daycard">
-                  {/* Left col: title + text + meals | Right col: photo full height */}
+                  {/* Top: title + text + meals. Bottom: day photo. */}
                   <div className="dmain">
                     <div className="droute">
                       <Ed value={d.route} onChange={(v) => upd(["days", i, "route"], v)} />

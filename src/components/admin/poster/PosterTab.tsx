@@ -9,6 +9,7 @@ import AttachToTripModal from "./AttachToTripModal";
 import { createDefaultTrip } from "@/lib/poster/defaultTrip";
 import { Badge, Button, Card, Icons, Input, Select, Spinner, cx } from "@/components/ui";
 import { TabHeader } from "@/components/admin/AdminShared";
+import type { PosterBulkPlan, PosterBulkPlanItem } from "@/lib/poster/bulkPlan";
 
 /* ------------------------------------------------------------------ *
  * Trip / poster data shape — mirrors TRIP_SCHEMA in src/lib/poster/openai.js
@@ -131,11 +132,33 @@ export type CapturedPosterImage =
     };
 
 type JsonRecord = Record<string, unknown>;
+type PosterBulkRunReport = {
+  total: number;
+  created: number;
+  attached: number;
+  skipped: PosterBulkPlanItem[];
+  failed: Array<{ title: string; error: string }>;
+};
+type PosterSyncPhotoPayload = {
+  dataUrl?: string;
+  url?: string;
+  filename: string;
+};
 
 const ADMIN_SECRET_STORAGE_KEY = "travel_admin_secret";
 const POSTER_WIDTH = 1080;
 const MESSENGER_SINGLE_IMAGE_MAX_HEIGHT = 1900;
 const MESSENGER_MAX_IMAGE_SLICES = 3;
+const PDF_MAX_BYTES = 25 * 1024 * 1024;
+const PDF_COMPRESSION_STEPS = [
+  { maxWidth: 1800, quality: 0.86 },
+  { maxWidth: 1600, quality: 0.82 },
+  { maxWidth: 1400, quality: 0.78 },
+  { maxWidth: 1200, quality: 0.72 },
+  { maxWidth: 1080, quality: 0.66 },
+  { maxWidth: 900, quality: 0.58 },
+  { maxWidth: 760, quality: 0.52 },
+] as const;
 const PDF_PAGE_EXTRACTION_LIMIT = 5;
 const MAX_UPLOAD_FILES = 10;
 const MAX_UPLOAD_SIZE_MB = 100;
@@ -344,6 +367,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
   const [scale, setScale] = useState(0.6);
   const [totalH, setTotalH] = useState(0);
   const [attachModalOpen, setAttachModalOpen] = useState(false);
+  const [bulkReport, setBulkReport] = useState<PosterBulkRunReport | null>(null);
 
   const page1Ref = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
@@ -557,6 +581,12 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     const r = await fetchJson("/api/admin/poster/trips");
     if (r.trips) setHistory(r.trips as PosterHistoryItem[]);
   };
+
+  function waitForPosterRender(): Promise<void> {
+    return new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+  }
 
   useEffect(() => {
     loadHistory();
@@ -866,52 +896,187 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     }
   }
 
-  function buildExportBaseName(): string {
-    return (trip?.title || "poster")
+  function buildExportBaseName(titleOverride?: string): string {
+    return (titleOverride || trip?.title || "poster")
       .slice(0, 40)
       .replace(/[\\/:*?"<>|]/g, "")
       .trim() || "poster";
   }
 
-  function getRelativeTop(node: HTMLElement, container: HTMLElement): number {
-    let top = 0;
-    let current: HTMLElement | null = node;
+  type SplitCandidate = { y: number; quality: number; label: string };
+  type SplitRange = { top: number; bottom: number };
 
-    while (current && current !== container) {
-      top += current.offsetTop || 0;
-      current = current.offsetParent as HTMLElement | null;
-    }
-
-    return top;
+  function getRelativeRect(el: HTMLElement, container: HTMLElement): SplitRange {
+    const containerRect = container.getBoundingClientRect();
+    const rect = el.getBoundingClientRect();
+    const scaleFactor = container.offsetWidth
+      ? containerRect.width / container.offsetWidth
+      : 1;
+    const safeScale = Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1;
+    return {
+      top: (rect.top - containerRect.top) / safeScale,
+      bottom: (rect.bottom - containerRect.top) / safeScale,
+    };
   }
 
-  function getMessengerSplitCandidates(node: HTMLElement): number[] {
-    const totalHeight = node.offsetHeight;
-    const candidates: number[] = [];
+  function isVisibleSplitElement(el: HTMLElement): boolean {
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
 
-    node.querySelectorAll<HTMLElement>(".dayrow,.program-head,.sec.compact-sec,.foot").forEach((el) => {
-      const top = getRelativeTop(el, node);
-      // Only split at real section/day boundaries, and avoid tiny header/footer slivers.
-      if (top > totalHeight * 0.12 && top < totalHeight * 0.92) candidates.push(top);
+  function getMessengerSplitCandidates(node: HTMLElement): SplitCandidate[] {
+    const totalHeight = node.offsetHeight;
+    const candidates: SplitCandidate[] = [];
+
+    const addCandidate = (y: number, quality: number, label: string) => {
+      if (!Number.isFinite(y)) return;
+      const rounded = Math.round(y);
+      if (rounded < 80 || rounded > totalHeight - 80) return;
+      candidates.push({ y: rounded, quality, label });
+    };
+
+    const blocks = Array.from(
+      node.querySelectorAll<HTMLElement>(".hero,.sec.compact-sec,.program-head,.dayrow,.foot"),
+    )
+      .filter(isVisibleSplitElement)
+      .map((el) => ({ el, ...getRelativeRect(el, node) }))
+      .sort((a, b) => a.top - b.top);
+
+    for (let i = 0; i < blocks.length - 1; i++) {
+      const gapStart = blocks[i].bottom;
+      const gapEnd = blocks[i + 1].top;
+      const gap = gapEnd - gapStart;
+      if (gap >= 6) {
+        addCandidate(gapStart + gap / 2, 115 + Math.min(40, gap), "section-gap");
+      }
+    }
+
+    node.querySelectorAll<HTMLElement>(".program-head,.sec.compact-sec,.foot").forEach((el) => {
+      if (!isVisibleSplitElement(el)) return;
+      const rect = getRelativeRect(el, node);
+      addCandidate(rect.top, 80, "section-start");
+      addCandidate(rect.bottom, 65, "section-end");
     });
 
-    return Array.from(new Set(candidates.map(Math.round))).sort((a, b) => a - b);
+    node.querySelectorAll<HTMLElement>(".dayrow").forEach((row) => {
+      if (!isVisibleSplitElement(row)) return;
+      const rowRect = getRelativeRect(row, node);
+      addCandidate(rowRect.top, 120, "day-start");
+      addCandidate(rowRect.bottom, 95, "day-end");
+
+      const photo = row.querySelector<HTMLElement>(".dside");
+      if (photo && isVisibleSplitElement(photo)) {
+        const photoRect = getRelativeRect(photo, node);
+        addCandidate(photoRect.top, 78, "before-day-photo");
+      }
+
+      row.querySelectorAll<HTMLElement>(".dsummary li").forEach((li) => {
+        if (!isVisibleSplitElement(li)) return;
+        const liRect = getRelativeRect(li, node);
+        addCandidate(liRect.bottom + 5, 42, "between-bullets");
+      });
+    });
+
+    const deduped = new Map<number, SplitCandidate>();
+    for (const candidate of candidates) {
+      const nearKey = Array.from(deduped.keys()).find((key) => Math.abs(key - candidate.y) <= 4);
+      const key = nearKey ?? candidate.y;
+      const existing = deduped.get(key);
+      if (!existing || candidate.quality > existing.quality) {
+        deduped.set(key, { ...candidate, y: key });
+      }
+    }
+
+    return Array.from(deduped.values()).sort((a, b) => a.y - b.y);
+  }
+
+  function getUnsafeSplitRanges(node: HTMLElement): SplitRange[] {
+    const textSelectors = [
+      ".kicker",
+      ".htitle",
+      ".ptable tr",
+      ".price-note-box",
+      ".price-desc-input",
+      ".program-head",
+      ".droute",
+      ".dsummary li",
+      ".dhotel",
+      ".mealgrid",
+      ".foot span",
+    ].join(",");
+
+    return Array.from(node.querySelectorAll<HTMLElement>(textSelectors))
+      .filter(isVisibleSplitElement)
+      .map((el) => {
+        const rect = getRelativeRect(el, node);
+        return { top: rect.top - 18, bottom: rect.bottom + 18 };
+      });
+  }
+
+  function isUnsafeSplitY(y: number, unsafeRanges: SplitRange[]): boolean {
+    return unsafeRanges.some((range) => y > range.top && y < range.bottom);
+  }
+
+  function chooseNearestSafeY(
+    target: number,
+    minY: number,
+    maxY: number,
+    unsafeRanges: SplitRange[],
+  ): number {
+    let best = Math.round(Math.max(minY, Math.min(maxY, target)));
+    let bestScore = isUnsafeSplitY(best, unsafeRanges) ? Number.POSITIVE_INFINITY : Math.abs(best - target);
+
+    for (let y = Math.round(minY); y <= maxY; y += 6) {
+      if (isUnsafeSplitY(y, unsafeRanges)) continue;
+      const score = Math.abs(y - target);
+      if (score < bestScore) {
+        best = y;
+        bestScore = score;
+      }
+    }
+
+    return best;
+  }
+
+  function chooseSafeFallbackSplitPoints(node: HTMLElement, sliceCount: number): number[] {
+    if (sliceCount <= 1) return [];
+    const totalHeight = node.offsetHeight;
+    const unsafeRanges = getUnsafeSplitRanges(node);
+    const minSliceHeight = Math.max(260, totalHeight * 0.12);
+    const points: number[] = [];
+
+    for (let index = 1; index < sliceCount; index++) {
+      const target = (totalHeight * index) / sliceCount;
+      const previous = points[points.length - 1] ?? 0;
+      const remainingCuts = sliceCount - index;
+      const minY = previous + minSliceHeight;
+      const maxY = totalHeight - remainingCuts * minSliceHeight;
+      points.push(chooseNearestSafeY(target, minY, maxY, unsafeRanges));
+    }
+
+    return points.map(Math.round);
   }
 
   function chooseMessengerSplitPoint(node: HTMLElement): number | null {
     const totalHeight = node.offsetHeight;
     const target = totalHeight / 2;
-    const minY = totalHeight * 0.38;
-    const maxY = totalHeight * 0.72;
-    const candidates = getMessengerSplitCandidates(node).filter((top) => top > minY && top < maxY);
+    const minY = totalHeight * 0.34;
+    const maxY = totalHeight * 0.74;
+    const unsafeRanges = getUnsafeSplitRanges(node);
+    const candidates = getMessengerSplitCandidates(node).filter(
+      (candidate) =>
+        candidate.y > minY &&
+        candidate.y < maxY &&
+        !isUnsafeSplitY(candidate.y, unsafeRanges),
+    );
 
     if (!candidates.length) return null;
 
-    return Math.round(
-      candidates.reduce((best, current) =>
-        Math.abs(current - target) < Math.abs(best - target) ? current : best
-      )
-    );
+    return candidates.reduce((best, current) => {
+      const bestScore = Math.abs(best.y - target) - best.quality * 5;
+      const currentScore = Math.abs(current.y - target) - current.quality * 5;
+      return currentScore < bestScore ? current : best;
+    }).y;
   }
 
   function chooseMessengerSplitPoints(node: HTMLElement, sliceCount: number): number[] | null {
@@ -923,13 +1088,20 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
 
     const totalHeight = node.offsetHeight;
     const targets = Array.from({ length: sliceCount - 1 }, (_, i) => (totalHeight * (i + 1)) / sliceCount);
-    const candidates = getMessengerSplitCandidates(node).filter((point) => point > totalHeight * 0.16 && point < totalHeight * 0.9);
+    const unsafeRanges = getUnsafeSplitRanges(node);
+    const candidates = getMessengerSplitCandidates(node).filter(
+      (candidate) =>
+        candidate.y > totalHeight * 0.14 &&
+        candidate.y < totalHeight * 0.9 &&
+        !isUnsafeSplitY(candidate.y, unsafeRanges),
+    );
 
     if (candidates.length < sliceCount - 1) {
       return null;
     }
 
-    let bestPoints = targets;
+    let bestPoints: number[] = [];
+    let foundPlan = false;
     let bestScore = Infinity;
 
     const scorePoints = (points: number[]): number => {
@@ -941,8 +1113,12 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
       const balancePenalty = ranges.reduce((sum, height) => sum + Math.abs(height - ideal), 0);
       const targetPenalty = sorted.reduce((sum, point, index) => sum + Math.abs(point - targets[index]), 0);
       const hugeSlicePenalty = Math.max(0, maxRange - MESSENGER_SINGLE_IMAGE_MAX_HEIGHT) * 3;
-      const tinySlicePenalty = Math.max(0, totalHeight * 0.16 - minRange) * 4;
-      return balancePenalty * 1.4 + targetPenalty + hugeSlicePenalty + tinySlicePenalty;
+      const tinySlicePenalty = Math.max(0, totalHeight * 0.14 - minRange) * 4;
+      const qualityBonus = sorted.reduce((sum, point) => {
+        const candidate = candidates.find((item) => item.y === point);
+        return sum + (candidate?.quality ?? 0);
+      }, 0);
+      return balancePenalty * 1.25 + targetPenalty + hugeSlicePenalty + tinySlicePenalty - qualityBonus * 5;
     };
 
     function visit(startIndex: number, picked: number[]) {
@@ -951,21 +1127,22 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
         if (score < bestScore) {
           bestScore = score;
           bestPoints = [...picked];
+          foundPlan = true;
         }
         return;
       }
 
       const remainingNeeded = sliceCount - 1 - picked.length;
       for (let i = startIndex; i <= candidates.length - remainingNeeded; i++) {
-        const point = candidates[i];
+        const point = candidates[i].y;
         const previous = picked[picked.length - 1] ?? 0;
-        if (point - previous < totalHeight * 0.14) continue;
+        if (point - previous < totalHeight * 0.12) continue;
         visit(i + 1, [...picked, point]);
       }
     }
 
     visit(0, []);
-    return bestPoints.sort((a, b) => a - b).map(Math.round);
+    return foundPlan ? [...bestPoints].sort((a, b) => a - b).map(Math.round) : null;
   }
 
   function scoreMessengerSplitPlan(totalHeight: number, sliceCount: number, splitPoints: number[]): number {
@@ -1022,12 +1199,11 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
 
     if (bestPlan) return bestPlan;
 
+    const fallbackPoints = chooseSafeFallbackSplitPoints(node, preferredCount);
+
     return {
       sliceCount: preferredCount,
-      splitPoints: Array.from(
-        { length: Math.max(0, preferredCount - 1) },
-        (_, i) => Math.round((totalHeight * (i + 1)) / preferredCount)
-      ),
+      splitPoints: fallbackPoints,
       score: Number.POSITIVE_INFINITY,
     };
   }
@@ -1051,17 +1227,86 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     ctx.fillText(label, x + badgeWidth / 2, y + badgeHeight / 2 + 1);
   }
 
+  function loadImageFromUrl(url: string): Promise<HTMLImageElement> {
+    return new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = url;
+    });
+  }
+
+  function downloadBlob(blob: Blob, filename: string): void {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function renderSliceForPdf(
+    url: string,
+    step: (typeof PDF_COMPRESSION_STEPS)[number],
+  ): Promise<{ url: string; width: number; height: number }> {
+    const img = await loadImageFromUrl(url);
+    const scaleDown = Math.min(1, step.maxWidth / img.width);
+    const width = Math.max(1, Math.round(img.width * scaleDown));
+    const height = Math.max(1, Math.round(img.height * scaleDown));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas 2D context unavailable");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, 0, 0, width, height);
+    return { url: canvas.toDataURL("image/jpeg", step.quality), width, height };
+  }
+
+  async function buildCompressedPdfBlob(captures: Array<{ index: number; url: string }>): Promise<{
+    blob: Blob;
+    sizeBytes: number;
+    maxWidth: number;
+    quality: number;
+  }> {
+    const { jsPDF } = await import("jspdf");
+    let lastResult: { blob: Blob; sizeBytes: number; maxWidth: number; quality: number } | null = null;
+
+    for (const step of PDF_COMPRESSION_STEPS) {
+      let pdf: InstanceType<typeof jsPDF> | undefined;
+      for (let i = 0; i < captures.length; i++) {
+        const image = await renderSliceForPdf(captures[i].url, step);
+        const format: [number, number] = [image.width, image.height];
+        if (i === 0) {
+          pdf = new jsPDF({ orientation: "p", unit: "px", format, compress: true });
+        } else {
+          pdf?.addPage(format, "p");
+        }
+        pdf?.addImage(image.url, "JPEG", 0, 0, image.width, image.height, undefined, "FAST");
+      }
+
+      if (!pdf) throw new Error("Poster capture failed.");
+      const blob = pdf.output("blob");
+      lastResult = { blob, sizeBytes: blob.size, maxWidth: step.maxWidth, quality: step.quality };
+      if (blob.size <= PDF_MAX_BYTES) return lastResult;
+    }
+
+    if (!lastResult) throw new Error("PDF бэлдэхэд алдаа гарлаа.");
+    if (lastResult.sizeBytes > PDF_MAX_BYTES) {
+      throw new Error(
+        `PDF ${Math.ceil(lastResult.sizeBytes / 1024 / 1024)}MB болж байна. 25MB-аас бага болгохын тулд зураг/өдрийг цөөлж дахин оролдоно уу.`,
+      );
+    }
+    return lastResult;
+  }
+
   async function captureMessengerSlices(): Promise<Array<{ index: number; url: string }>> {
     const node = page1Ref.current;
     if (!node) return [];
 
     const fullUrl = await capture(node);
-    const fullImage = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = reject;
-      img.src = fullUrl;
-    });
+    const fullImage = await loadImageFromUrl(fullUrl);
 
     const totalHeight = node.offsetHeight;
     const { splitPoints } = chooseMessengerSlicePlan(node);
@@ -1092,11 +1337,11 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
 
   // Renders the poster as Messenger-sized images for AttachToTripModal — the
   // same finished, branded poster the customer will actually see.
-  async function captureForAttach(): Promise<CapturedPosterImage[]> {
+  async function captureForAttach(titleOverride?: string): Promise<CapturedPosterImage[]> {
     const slices = await withExportMode(() => captureMessengerSlices());
     const captures = slices.map((slice) => ({
       dataUrl: slice.url,
-      filename: `${buildExportBaseName()}-messenger-${slice.index + 1}.png`,
+      filename: `${buildExportBaseName(titleOverride)}-messenger-${slice.index + 1}.png`,
     }));
 
     if (isLocalDevHost()) return captures;
@@ -1119,6 +1364,22 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
       }
       return captures;
     }
+  }
+
+  function buildPosterSyncPhotoPayload(
+    image: CapturedPosterImage,
+    index: number,
+    titleOverride?: string,
+  ): PosterSyncPhotoPayload {
+    const fallbackFilename = `${buildExportBaseName(titleOverride)}-messenger-${index + 1}.png`;
+    if (typeof image === "string") {
+      return image.startsWith("data:")
+        ? { dataUrl: image, filename: fallbackFilename }
+        : { url: image, filename: fallbackFilename };
+    }
+    const filename = image.filename || fallbackFilename;
+    if (image.url) return { url: image.url, filename };
+    return { dataUrl: image.dataUrl || "", filename };
   }
 
   async function downloadFullPng() {
@@ -1196,25 +1457,15 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     setBusy("PDF бэлдэж байна…");
     try {
       await withExportMode(async () => {
-        const { jsPDF } = await import("jspdf");
         const captures = await captureMessengerSlices();
         if (captures.length === 0) throw new Error("Poster capture failed.");
-        let pdf: InstanceType<typeof jsPDF> | undefined;
-        for (let i = 0; i < captures.length; i++) {
-          const url = captures[i].url;
-          const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-            const image = new Image();
-            image.onload = () => resolve(image);
-            image.onerror = reject;
-            image.src = url;
-          });
-          const w = img.width;
-          const h = img.height;
-          if (i === 0) pdf = new jsPDF({ orientation: "p", unit: "px", format: [w, h] });
-          else pdf?.addPage([w, h], "p");
-          pdf?.addImage(url, "PNG", 0, 0, w, h);
+        const result = await buildCompressedPdfBlob(captures);
+        if (result.sizeBytes > PDF_MAX_BYTES) {
+          throw new Error(
+            `PDF ${Math.ceil(result.sizeBytes / 1024 / 1024)}MB болж байна. 25MB-аас бага болгож чадсангүй.`,
+          );
         }
-        pdf?.save(`${buildExportBaseName()}-split.pdf`);
+        downloadBlob(result.blob, `${buildExportBaseName()}-split.pdf`);
       });
     } catch (e) {
       setError(String((e as { message?: string })?.message || e));
@@ -1244,6 +1495,87 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
       if (dayPhotoInputRefs.current[index]) dayPhotoInputRefs.current[index].value = "";
     }
   };
+
+  async function loadPosterForBatch(posterId: string): Promise<PosterTrip> {
+    const r = await fetchJson(`/api/admin/poster/trip?id=${encodeURIComponent(posterId)}`);
+    if (r.error) throw new Error(r.error as string);
+    const tripRow = r.trip as { id: string; data: PosterTrip; source_file: string | null };
+    const nextTrip = normalizeTripData(tripRow.data) as PosterTrip;
+    setTrip(nextTrip);
+    setTripId(tripRow.id);
+    setSource(tripRow.source_file || "");
+    await waitForPosterRender();
+    return nextTrip;
+  }
+
+  async function syncAllSafePosters() {
+    setError("");
+    setBulkReport(null);
+    setBusy("Бүх постерын төлөвлөгөө шалгаж байна…");
+    const failed: PosterBulkRunReport["failed"] = [];
+    let created = 0;
+    let attached = 0;
+
+    try {
+      const planResponse = await fetchJson("/api/admin/poster-bulk-plan", { method: "POST" });
+      if (planResponse.error) throw new Error(planResponse.error as string);
+      const plan = planResponse as unknown as PosterBulkPlan;
+      if (!Array.isArray(plan.items)) throw new Error("Bulk plan response invalid.");
+
+      const runnable = plan.items.filter((item) => item.action === "create" || item.action === "attach_exact");
+      const skipped = plan.items.filter((item) => item.action === "skip");
+
+      for (let i = 0; i < runnable.length; i++) {
+        const item = runnable[i];
+        const title = item.title || "poster";
+        setBusy(`${runnable.length} постероос ${i + 1}-г аялалд холбож байна: ${title}…`);
+
+        try {
+          if (item.action === "attach_exact" && !item.targetTripId) {
+            throw new Error("Exact target trip missing from plan.");
+          }
+
+          const renderedTrip = await loadPosterForBatch(item.posterId);
+          const captureTitle = item.title || renderedTrip.title || "poster";
+          const images = await captureForAttach(captureTitle);
+          const photos = images
+            .map((image, index) => buildPosterSyncPhotoPayload(image, index, captureTitle))
+            .filter((photo) => photo.dataUrl || photo.url);
+
+          const syncResult = await fetchJson("/api/admin/poster-sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              tripId: item.action === "attach_exact" ? item.targetTripId : undefined,
+              createNew: item.action === "create" || undefined,
+              newTripTitle: item.action === "create" ? captureTitle : undefined,
+              mode: "replace",
+              photos,
+              fields: item.fields,
+            }),
+          });
+          if (syncResult.error) throw new Error(syncResult.error as string);
+          if (syncResult.created) created++;
+          else attached++;
+        } catch (e) {
+          failed.push({ title, error: String((e as { message?: string })?.message || e) });
+        }
+      }
+
+      await loadHistory();
+      setBulkReport({
+        total: plan.summary?.total ?? plan.items.length,
+        created,
+        attached,
+        skipped,
+        failed,
+      });
+    } catch (e) {
+      setError(String((e as { message?: string })?.message || e));
+    } finally {
+      setBusy("");
+    }
+  }
 
   async function save() {
     setError("");
@@ -1417,6 +1749,9 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                   <Button size="sm" variant="primary" onClick={() => setAttachModalOpen(true)} disabled={!!busy}>
                     <Icons.plus size={14} /> Аялалд нэмэх
                   </Button>
+                  <Button size="sm" variant="secondary" onClick={syncAllSafePosters} disabled={!!busy || history.length === 0}>
+                    <Icons.plus size={14} /> Бүгдийг аялал болгох
+                  </Button>
                   <Button size="sm" variant="secondary" onClick={downloadFullPng} disabled={!!busy}>
                     <Icons.image size={14} /> Бүтэн PNG
                   </Button>
@@ -1433,6 +1768,30 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                 <p className="mt-2 text-xs text-ink-subtle">
                   Бичвэр дээр дарж засаарай · хоолны таглыг дарж асаах/унтраах · PNG/PDF/Messenger export: main poster-оос 1-2 зураг, хэт урт бол {MESSENGER_MAX_IMAGE_SLICES}
                 </p>
+                {bulkReport && (
+                  <div className="mt-3 rounded-lg border border-line bg-surface-sunken px-3 py-2 text-xs text-ink-muted">
+                    <p className="font-medium text-ink">
+                      Bulk: {bulkReport.created} шинэ аялал, {bulkReport.attached} existing аялалд poster нэмсэн.
+                    </p>
+                    <p className="mt-1">
+                      Нийт {bulkReport.total} poster · skip {bulkReport.skipped.length} · failed {bulkReport.failed.length}
+                    </p>
+                    {(bulkReport.skipped.length > 0 || bulkReport.failed.length > 0) && (
+                      <div className="mt-2 max-h-28 space-y-1 overflow-y-auto">
+                        {bulkReport.skipped.slice(0, 8).map((item) => (
+                          <p key={`skip-${item.posterId}`}>
+                            Skip: {item.title || "Untitled"} - {item.reason || item.reasonCode}
+                          </p>
+                        ))}
+                        {bulkReport.failed.slice(0, 8).map((item, index) => (
+                          <p key={`fail-${index}`} className="text-danger">
+                            Failed: {item.title} - {item.error}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </Card>
 
               <div className="poster-root overflow-x-auto rounded-xl border border-line bg-surface-sunken p-3">
