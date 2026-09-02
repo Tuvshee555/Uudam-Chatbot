@@ -1312,9 +1312,10 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     return lastResult;
   }
 
-  async function captureMessengerSlices(): Promise<Array<{ index: number; url: string }>> {
+  async function captureMessengerSlices(options: { withBadge?: boolean } = {}): Promise<Array<{ index: number; url: string }>> {
     const node = page1Ref.current;
     if (!node) return [];
+    const withBadge = options.withBadge !== false;
 
     const fullUrl = await capture(node);
     const fullImage = await loadImageFromUrl(fullUrl);
@@ -1337,7 +1338,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(fullImage, 0, sourceY, fullImage.width, sourceHeight, 0, 0, canvas.width, canvas.height);
-      drawMessengerBadge(ctx, canvas.width, canvas.height, index, ranges.length);
+      if (withBadge) drawMessengerBadge(ctx, canvas.width, canvas.height, index, ranges.length);
 
       return {
         index,
@@ -1468,7 +1469,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     setBusy("PDF бэлдэж байна…");
     try {
       await withExportMode(async () => {
-        const captures = await captureMessengerSlices();
+        const captures = await captureMessengerSlices({ withBadge: false });
         if (captures.length === 0) throw new Error("Poster capture failed.");
         const result = await buildCompressedPdfBlob(captures);
         if (result.sizeBytes > PDF_MAX_BYTES) {
