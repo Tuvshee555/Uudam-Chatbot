@@ -120,14 +120,14 @@ async function resolvePosterSyncPhoto(photo: PosterSyncPhotoInput): Promise<stri
   if (photo.url) {
     const parsed = new URL(photo.url);
     if (parsed.protocol !== "https:") {
-      throw new Error(`Unsupported image URL protocol: ${parsed.protocol}`);
+      throw new Error(`Зурагны URL зөвхөн https байх ёстой: ${parsed.protocol}`);
     }
     return parsed.toString();
   }
   if (photo.dataUrl) {
     return uploadBase64ToCloudinary(photo.dataUrl, photo.filename);
   }
-  throw new Error("missing image data");
+  throw new Error("Зурагны мэдээлэл алга");
 }
 
 /**
@@ -177,22 +177,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: "Шинэчлэх зураг эсвэл мэдээлэл алга" });
   }
 
-  // Resolve the target trip up-front so we never upload images for a trip
-  // that doesn't exist.
+  // Resolve the target trip up-front so we never upload images for a missing
+  // existing trip. For new trips, delay the DB insert until after images are
+  // resolved so a Cloudinary outage cannot leave an empty draft behind.
   let targetTripId = tripId;
-  let targetName = "";
+  let targetName = createNew ? newTripTitle : "";
   let existingUrls: string[] = [];
 
   if (createNew) {
-    const created = await upsertTrip({
-      id: randomUUID(),
-      fields: { route_name: newTripTitle, status: "draft" },
-    });
-    if (!created) {
-      return res.status(500).json({ error: "Шинэ аялал үүсгэж чадсангүй" });
-    }
-    targetTripId = created.id;
-    targetName = created.route_name;
+    targetTripId = randomUUID();
   } else {
     const trip = await getTripById(tripId as string);
     if (!trip) {
@@ -225,7 +218,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         try {
           return { url: await resolvePosterSyncPhoto(photo) };
         } catch (err) {
-          const msg = err instanceof Error ? err.message : "upload failed";
+          const msg = err instanceof Error ? err.message : "Зураг байршуулахад алдаа гарлаа";
           logError("poster_sync.upload_failure", { filename: photo.filename, error: msg });
           return { failure: { filename: photo.filename, error: msg } };
         }
@@ -260,9 +253,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     patchFields.photo_urls = merged.slice(0, MAX_PHOTOS);
   }
 
-  const patched = Object.keys(patchFields).length
-    ? await patchTrip(targetTripId as string, patchFields)
-    : true; // createNew with no extra fields/photos — trip already created above
+  if (createNew) {
+    const approvedRouteName =
+      typeof patchFields.route_name === "string" ? patchFields.route_name.trim() : "";
+    const created = await upsertTrip({
+      id: targetTripId as string,
+      fields: {
+        ...patchFields,
+        route_name: approvedRouteName || newTripTitle,
+        status: "draft",
+      },
+    });
+    if (!created) {
+      return res.status(500).json({ error: "Шинэ аялал үүсгэж чадсангүй" });
+    }
+    targetTripId = created.id;
+    targetName = created.route_name;
+  }
+
+  const patched = createNew
+    ? true
+    : Object.keys(patchFields).length
+      ? await patchTrip(targetTripId as string, patchFields)
+      : true;
 
   if (!patched) {
     return res.status(500).json({ error: "Аялалыг хадгалж чадсангүй" });

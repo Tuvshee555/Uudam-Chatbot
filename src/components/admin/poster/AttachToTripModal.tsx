@@ -310,7 +310,7 @@ export default function AttachToTripModal({
       open={open}
       onClose={submitting ? () => {} : onClose}
       title="Аялалд нэмэх"
-      description={`«${posterTitle || "Untitled"}» постерыг аяллын мэдээлэлд холбоно`}
+      description={`«${posterTitle || "Нэргүй"}» постерыг аяллын мэдээлэлд холбоно`}
       footer={
         result ? (
           <Button onClick={onClose}>Болсон</Button>

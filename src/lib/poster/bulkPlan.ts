@@ -22,6 +22,7 @@ export type PosterBulkPlanItem = {
   posterId: string;
   title: string;
   sourceFile: string | null;
+  posterUpdatedAt?: string;
   action: PosterBulkPlanAction;
   targetTripId?: string;
   targetTripName?: string;
@@ -166,6 +167,7 @@ function makeSkip(
     posterId: row.id,
     title: row.title,
     sourceFile: row.source_file,
+    posterUpdatedAt: row.updated_at,
     action: "skip",
     fields: {},
     mappedFields,
@@ -179,14 +181,22 @@ export function buildPosterBulkPlan(
   trips: TravelTrip[],
 ): PosterBulkPlan {
   const seenTitleKeys = new Set<string>();
+  const rowsNewestFirst = posterRows
+    .map((row, index) => ({
+      row,
+      index,
+      updatedMs: Date.parse(row.updated_at || "") || 0,
+    }))
+    .sort((a, b) => b.updatedMs - a.updatedMs || a.index - b.index)
+    .map((entry) => entry.row);
 
-  const items: PosterBulkPlanItem[] = posterRows.map((row) => {
+  const items: PosterBulkPlanItem[] = rowsNewestFirst.map((row) => {
     const mappedFields = mapPosterTripToFields(posterData(row.data));
     const title = row.title?.trim() || mappedFields.route_name?.trim() || "";
     const normalized = normalizeTitle(title);
 
     if (!normalized) {
-      return makeSkip(row, mappedFields, "empty_title", "Poster has no usable title.");
+      return makeSkip(row, mappedFields, "empty_title", "Постерын нэр уншигдаагүй тул гараар шалгана.");
     }
 
     if (seenTitleKeys.has(normalized)) {
@@ -194,7 +204,7 @@ export function buildPosterBulkPlan(
         row,
         mappedFields,
         "duplicate_poster_title",
-        "Duplicate poster title. The newest saved poster for this title is the only one processed.",
+        "Ижил нэртэй постер байна. Энэ нэрийн хамгийн сүүлд хадгалсан постерыг л автоматаар боловсруулна.",
       );
     }
     seenTitleKeys.add(normalized);
@@ -205,7 +215,7 @@ export function buildPosterBulkPlan(
         row,
         mappedFields,
         "duplicate_trip_title",
-        "More than one catalog trip has this exact title or alias.",
+        "Каталог дээр энэ нэр эсвэл alias-тай хэд хэдэн аялал байна. Аль аялалд холбохыг гараар сонгоно.",
       );
     }
 
@@ -217,7 +227,7 @@ export function buildPosterBulkPlan(
           row,
           mappedFields,
           "existing_trip_has_photos",
-          `Exact catalog trip already has ${photoCount} photo(s).`,
+          `Энэ аялалд аль хэдийн ${photoCount} зураг байна. Хуучин зураг дарагдахаас сэргийлж автоматаар алгаслаа.`,
         );
       }
 
@@ -225,6 +235,7 @@ export function buildPosterBulkPlan(
         posterId: row.id,
         title,
         sourceFile: row.source_file,
+        posterUpdatedAt: row.updated_at,
         action: "attach_exact",
         targetTripId: target.id,
         targetTripName: target.route_name,
@@ -240,7 +251,7 @@ export function buildPosterBulkPlan(
         row,
         mappedFields,
         "needs_manual_match",
-        `Possible existing trip match: ${nearMatches.slice(0, 3).map((trip) => trip.route_name).join(", ")}.`,
+        `Ойролцоо нэртэй аялал байна: ${nearMatches.slice(0, 3).map((trip) => trip.route_name).join(", ")}. Гараар шалгана.`,
       );
     }
 
@@ -248,6 +259,7 @@ export function buildPosterBulkPlan(
       posterId: row.id,
       title,
       sourceFile: row.source_file,
+      posterUpdatedAt: row.updated_at,
       action: "create",
       mode: "replace",
       fields: buildCreateFields(title, mappedFields),

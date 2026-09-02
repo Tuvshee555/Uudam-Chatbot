@@ -28,13 +28,13 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
   };
 }
 
-function poster(id: string, title: string, data: Record<string, unknown> = {}) {
+function poster(id: string, title: string, data: Record<string, unknown> = {}, updatedAt = "") {
   return {
     id,
     title,
     source_file: `${id}.pdf`,
     data: { title, ...data },
-    updated_at: "",
+    updated_at: updatedAt,
   };
 }
 
@@ -50,6 +50,23 @@ test("bulk poster plan processes only the newest duplicate poster title", () => 
   assert.equal(plan.summary.create, 1);
   assert.equal(plan.summary.skipped, 1);
   assert.equal(plan.items[0].action, "create");
+  assert.equal(plan.items[1].reasonCode, "duplicate_poster_title");
+});
+
+test("bulk poster plan chooses newest duplicate by saved time, not input order", () => {
+  const plan = buildPosterBulkPlan(
+    [
+      poster("poster-old", "Хайнан аялал", {}, "2026-01-01T00:00:00.000Z"),
+      poster("poster-new", "Хайнан аялал", {}, "2026-02-01T00:00:00.000Z"),
+    ],
+    [],
+  );
+
+  assert.equal(plan.summary.create, 1);
+  assert.equal(plan.summary.skipped, 1);
+  assert.equal(plan.items[0].posterId, "poster-new");
+  assert.equal(plan.items[0].action, "create");
+  assert.equal(plan.items[1].posterId, "poster-old");
   assert.equal(plan.items[1].reasonCode, "duplicate_poster_title");
 });
 

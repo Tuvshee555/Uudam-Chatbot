@@ -319,7 +319,7 @@ function normalizeTripData(trip: PosterTrip | null): PosterTrip | null {
 }
 
 function normalizeHistoryTitle(title: string | undefined): string {
-  return String(title || "Untitled")
+  return String(title || "Нэргүй")
     .replace(/\s+/g, " ")
     .trim()
     .toLocaleLowerCase();
@@ -340,6 +340,19 @@ function historyDateLabel(value: string): string {
   if (sameDay(date, today)) return "Өнөөдөр";
   if (sameDay(date, yesterday)) return "Өчигдөр";
   return date.toLocaleDateString();
+}
+
+function bulkPlanSignature(plan: PosterBulkPlan): string {
+  return JSON.stringify(
+    plan.items.map((item) => ({
+      posterId: item.posterId,
+      posterUpdatedAt: item.posterUpdatedAt || "",
+      action: item.action,
+      targetTripId: item.targetTripId || "",
+      reasonCode: item.reasonCode || "",
+      fields: item.fields,
+    })),
+  );
 }
 
 export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
@@ -430,7 +443,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     setBulkReport(null);
     setTrip(normalizeTripData(createDefaultTrip() as PosterTrip));
     setTripId(null);
-    setSource("Default template");
+    setSource("Хоосон загвар");
   };
 
   /** Walks a PosterPath into a structured-clone of an arbitrary trip-shaped object,
@@ -1369,7 +1382,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
       const totalChars = captures.reduce((sum, capture) => sum + capture.dataUrl.length, 0);
       if (totalChars > DIRECT_POSTER_SYNC_BODY_LIMIT_CHARS) {
         throw new Error(
-          `Poster image upload failed before saving to the trip: ${
+          `Постерын зургийг аялалд хадгалахаас өмнө байршуулахад алдаа гарлаа: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
@@ -1470,7 +1483,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     try {
       await withExportMode(async () => {
         const captures = await captureMessengerSlices({ withBadge: false });
-        if (captures.length === 0) throw new Error("Poster capture failed.");
+        if (captures.length === 0) throw new Error("Постерын зургийг бэлдэж чадсангүй.");
         const result = await buildCompressedPdfBlob(captures);
         if (result.sizeBytes > PDF_MAX_BYTES) {
           throw new Error(
@@ -1524,7 +1537,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     const planResponse = await fetchJson("/api/admin/poster-bulk-plan", { method: "POST" });
     if (planResponse.error) throw new Error(planResponse.error as string);
     const plan = planResponse as unknown as PosterBulkPlan;
-    if (!Array.isArray(plan.items)) throw new Error("Bulk plan response invalid.");
+    if (!Array.isArray(plan.items)) throw new Error("Бүх постерын шалгалтын хариу буруу байна.");
     return plan;
   }
 
@@ -1551,27 +1564,34 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
       return;
     }
 
-    setBusy("Шалгасан төлөвлөгөөнөөс safe poster-уудыг аялалд холбож байна…");
+    setBusy("Баталгаатай постеруудыг дахин нягталж байна…");
     const failed: PosterBulkRunReport["failed"] = [];
     let created = 0;
     let attached = 0;
 
     try {
-      const runnable = plan.items.filter((item) => item.action === "create" || item.action === "attach_exact");
-      const skipped = plan.items.filter((item) => item.action === "skip");
+      const latestPlan = await fetchBulkPlan();
+      if (bulkPlanSignature(latestPlan) !== bulkPlanSignature(plan)) {
+        setBulkPlan(latestPlan);
+        setError("Аялал эсвэл постер өөрчлөгдсөн тул өмнөх шалгалтаар шууд бичихгүй. Шинэ шалгалтыг хараад дахин баталгаатайг үүсгэнэ үү.");
+        return;
+      }
+
+      const runnable = latestPlan.items.filter((item) => item.action === "create" || item.action === "attach_exact");
+      const skipped = latestPlan.items.filter((item) => item.action === "skip");
 
       for (let i = 0; i < runnable.length; i++) {
         const item = runnable[i];
-        const title = item.title || "poster";
+        const title = item.title || "постер";
         setBusy(`${runnable.length} постероос ${i + 1}-г аялалд холбож байна: ${title}…`);
 
         try {
           if (item.action === "attach_exact" && !item.targetTripId) {
-            throw new Error("Exact target trip missing from plan.");
+            throw new Error("Яг тохирсон аяллын ID шалгалтын хариунд алга байна.");
           }
 
           const renderedTrip = await loadPosterForBatch(item.posterId);
-          const captureTitle = item.title || renderedTrip.title || "poster";
+          const captureTitle = item.title || renderedTrip.title || "постер";
           const images = await captureForAttach(captureTitle);
           const photos = images
             .map((image, index) => buildPosterSyncPhotoPayload(image, index, captureTitle))
@@ -1599,7 +1619,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
 
       await loadHistory();
       setBulkReport({
-        total: plan.summary?.total ?? plan.items.length,
+        total: latestPlan.summary?.total ?? latestPlan.items.length,
         created,
         attached,
         skipped,
@@ -1684,7 +1704,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
       <TabHeader
         icon={<Icons.image size={20} />}
         title="Постер үүсгэгч"
-        description="Хятадаас ирсэн файлаас брэнд постер — PNG, PDF болон Messenger хэсэглэлээр татна."
+        description="Хятадаас ирсэн файлаас брэнд постер бэлдээд PNG, PDF болон Messenger хэсэглэлээр татна."
       />
       {busy && (
         <div className="flex items-center gap-2 rounded-lg border border-line bg-surface-sunken px-3 py-2 text-sm text-ink-muted">
@@ -1700,7 +1720,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_320px] lg:items-start">
         <div className="min-w-0 space-y-3" ref={mainRef}>
           {trip ? (
-            /* Compact upload strip — shown when a poster is already open */
+            /* Compact upload strip shown when a poster is already open. */
             <Card
               className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between"
               onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("ring-2", "ring-brand"); }}
@@ -1713,15 +1733,15 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                 <span className="truncate">Шинэ файл чирж тавих эсвэл дарах</span>
               </label>
               <Button size="sm" variant="secondary" onClick={startTemplate}>
-                Хоосон template
+                Хоосон загвар
               </Button>
             </Card>
           ) : (
-            /* Full uploader — shown on empty state */
+            /* Full uploader shown on empty state. */
             <Card className="p-5">
               <p className="text-sm text-ink-muted">
-                Хятадаас ирсэн файлаa оруулаад, брэнд постер бэлэн.{" "}
-                <span className="text-ink-subtle">AI уншиж, аяллын постерийг ~10 секундэд үүсгэнэ.</span>
+                Хятадаас ирсэн файлаа оруулаад, брэнд постер бэлдэнэ.{" "}
+                <span className="text-ink-subtle">Систем уншиж, аяллын постерийг ойролцоогоор 10 секундэд үүсгэнэ.</span>
               </p>
               <label
                 className="mt-3 flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed border-line-strong bg-surface-sunken p-8 text-center transition-colors hover:border-brand"
@@ -1736,9 +1756,9 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                 <p className="text-xs text-ink-subtle">{`PDF уншилт: эхний ${PDF_PAGE_EXTRACTION_LIMIT} хуудсыг зэрэг уншина. PNG/PDF таталт Messenger-д таарахаар хэсэглэгдэнэ.`}</p>
               </label>
               <div className="mt-3 flex flex-col items-center gap-1.5 text-center">
-                <Button onClick={startTemplate}>Default template-ээр эхлэх</Button>
+                <Button onClick={startTemplate}>Хоосон загвараар эхлэх</Button>
                 <span className="text-xs text-ink-subtle">
-                  Файлгүйгээр шууд poster нээгээд бүх текст, үнэ, өдөр, хоол, зураг засна.
+                  Файлгүйгээр шууд постер нээгээд бүх текст, үнэ, өдөр, хоол, зураг засна.
                 </span>
               </div>
             </Card>
@@ -1749,14 +1769,14 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
               <Card className="p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
-                    <p className="text-xs font-medium uppercase tracking-wide text-ink-subtle">Workspace</p>
-                    <h2 className="truncate text-base font-semibold text-ink">{trip.title || "Untitled poster"}</h2>
+                    <p className="text-xs font-medium tracking-wide text-ink-subtle">Ажлын хэсэг</p>
+                    <h2 className="truncate text-base font-semibold text-ink">{trip.title || "Нэргүй постер"}</h2>
                     <p className="text-xs text-ink-subtle">
-                      {source || "Live editable travel poster"} · {trip.days?.length || 0} өдөр · 1 export page
+                      {source || "Шууд засах аяллын постер"} · {trip.days?.length || 0} өдөр · 1 татах хуудас
                     </p>
                   </div>
                   <Button size="sm" variant="secondary" onClick={startTemplate} disabled={!!busy}>
-                    Шинэ default template
+                    Шинэ хоосон загвар
                   </Button>
                 </div>
 
@@ -1775,9 +1795,9 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                 </div>
 
                 <div className="mt-3 flex flex-col gap-1 border-t border-line pt-3 text-xs text-ink-subtle">
-                  <span>Canvas маягаар: постер дээрх бичвэр дээр шууд дарж засна.</span>
-                  <span>Зураг: нүүр зураг toolbar-аас, өдрийн зураг тухайн зурагны box дээр дарж орно.</span>
-                  <span>Download/print үед editor товч, хоосон зурагны box автоматаар алга болно.</span>
+                  <span>Постер дээрх бичвэр дээр шууд дарж засна.</span>
+                  <span>Зураг: нүүр зургийг дээд хэсгээс, өдрийн зургийг тухайн зурагны талбар дээр дарж солино.</span>
+                  <span>Татах болон хэвлэх үед засварын товч, хоосон зурагны талбар автоматаар алга болно.</span>
                 </div>
               </Card>
 
@@ -1794,7 +1814,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                   </Button>
                   {bulkPlan && (
                     <Button size="sm" variant="primary" onClick={syncAllSafePosters} disabled={!!busy || bulkRunnableCount === 0}>
-                      <Icons.plus size={14} /> Safe-г үүсгэх ({bulkRunnableCount})
+                      <Icons.plus size={14} /> Баталгаатайг үүсгэх ({bulkRunnableCount})
                     </Button>
                   )}
                   <Button size="sm" variant="secondary" onClick={downloadFullPng} disabled={!!busy}>
@@ -1811,18 +1831,18 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                   </Button>
                 </div>
                 <p className="mt-2 text-xs text-ink-subtle">
-                  Бичвэр дээр дарж засаарай · хоолны таглыг дарж асаах/унтраах · PNG/PDF/Messenger export: main poster-оос 1-2 зураг, хэт урт бол {MESSENGER_MAX_IMAGE_SLICES}
+                  Бичвэр дээр дарж засаарай · хоолны тэмдэг дээр дарж асаах/унтраах · PNG/PDF/Messenger таталт: үндсэн постероос 1-2 зураг, хэт урт бол {MESSENGER_MAX_IMAGE_SLICES}
                 </p>
                 {bulkPlan && (
                   <div className="mt-3 rounded-lg border border-warning/30 bg-warning-soft px-3 py-2 text-xs text-warning">
                     <p className="font-medium">
-                      Шалгалт бэлэн: {bulkPlan.summary.create} шинэ аялал, {bulkPlan.summary.attachExact} existing аялалд poster нэмэх, {bulkSkippedCount} skip.
+                      Шалгалт бэлэн: {bulkPlan.summary.create} шинэ аялал үүсгэнэ, {bulkPlan.summary.attachExact} байгаа аялалд постер нэмнэ, {bulkSkippedCount} алгасна.
                     </p>
                     {bulkSkippedCount > 0 && (
                       <div className="mt-2 max-h-28 space-y-1 overflow-y-auto">
                         {bulkPlan.items.filter((item) => item.action === "skip").slice(0, 8).map((item) => (
                           <p key={`plan-skip-${item.posterId}`}>
-                            Skip: {item.title || "Untitled"} - {item.reason || item.reasonCode}
+                            Алгасах: {item.title || "Нэргүй"} - {item.reason || item.reasonCode}
                           </p>
                         ))}
                       </div>
@@ -1832,21 +1852,21 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                 {bulkReport && (
                   <div className="mt-3 rounded-lg border border-line bg-surface-sunken px-3 py-2 text-xs text-ink-muted">
                     <p className="font-medium text-ink">
-                      Bulk: {bulkReport.created} шинэ аялал, {bulkReport.attached} existing аялалд poster нэмсэн.
+                      Дууслаа: {bulkReport.created} шинэ аялал үүсгэсэн, {bulkReport.attached} байгаа аялалд постер нэмсэн.
                     </p>
                     <p className="mt-1">
-                      Нийт {bulkReport.total} poster · skip {bulkReport.skipped.length} · failed {bulkReport.failed.length}
+                      Нийт {bulkReport.total} постер · алгассан {bulkReport.skipped.length} · амжилтгүй {bulkReport.failed.length}
                     </p>
                     {(bulkReport.skipped.length > 0 || bulkReport.failed.length > 0) && (
                       <div className="mt-2 max-h-28 space-y-1 overflow-y-auto">
                         {bulkReport.skipped.slice(0, 8).map((item) => (
                           <p key={`skip-${item.posterId}`}>
-                            Skip: {item.title || "Untitled"} - {item.reason || item.reasonCode}
+                            Алгассан: {item.title || "Нэргүй"} - {item.reason || item.reasonCode}
                           </p>
                         ))}
                         {bulkReport.failed.slice(0, 8).map((item, index) => (
                           <p key={`fail-${index}`} className="text-danger">
-                            Failed: {item.title} - {item.error}
+                            Амжилтгүй: {item.title} - {item.error}
                           </p>
                         ))}
                       </div>
