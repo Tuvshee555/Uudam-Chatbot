@@ -1,6 +1,6 @@
 import React from "react";
 import { Alert, Badge, Button, Icons, Modal, Select, Spinner, cx } from "@/components/ui";
-import type { ApiFetch, CapturedPosterImage, PosterTrip } from "./PosterTab";
+import type { ApiFetch, CapturedPosterPdf, PosterTrip } from "./PosterTab";
 
 /* ------------------------------------------------------------------ *
  * These field keys mirror MappedTripFields in src/lib/poster/tripMapper.ts
@@ -99,6 +99,7 @@ type SyncResult = {
   mode?: "replace" | "append" | "skip";
   uploaded?: number;
   totalPhotos?: number;
+  pdfUrl?: string;
   failed?: number;
   fieldsWritten?: string[];
   error?: string;
@@ -110,13 +111,13 @@ export type AttachToTripModalProps = {
   posterTitle: string;
   posterTrip: PosterTrip | null;
   apiFetch: ApiFetch;
-  captureImages: () => Promise<CapturedPosterImage[]>;
+  capturePdf: () => Promise<CapturedPosterPdf>;
   onDone?: (result: SyncResult) => void;
 };
 
 /**
  * Confirmation modal that attaches a poster to a real chatbot trip — both
- * its rendered images AND the AI-extracted data (price, dates, hotel, meals,
+ * its rendered PDF AND the AI-extracted data (price, dates, hotel, meals,
  * includes/excludes). Nothing is written until the user presses "Нэмэх":
  *
  *   1. On open, asks /api/admin/poster-match (read-only) which trips could
@@ -126,8 +127,8 @@ export type AttachToTripModalProps = {
  *      creates a brand-new trip from the poster title.
  *   3. Every field where poster data differs from the trip's current value
  *      is shown old-vs-new with its own checkbox — nothing is assumed.
- *   4. If the target trip already has photos, user picks replace vs append.
- *   5. Only on confirm: captures the poster as images and calls
+ *   4. Existing trips get the rendered poster PDF saved as their brochure file.
+ *   5. Only on confirm: captures the poster as a PDF and calls
  *      /api/admin/poster-sync with an EXPLICIT target + only the checked
  *      fields (never a guess, never a silent overwrite).
  *
@@ -137,7 +138,7 @@ export type AttachToTripModalProps = {
  *   posterTitle    string
  *   posterTrip     object  (the full extracted poster JSON, for field mapping)
  *   apiFetch       (url, init) => Promise<Response>  (injects admin secret)
- *   captureImages  () => Promise<CapturedPosterImage[]>  (renders/uploads poster images)
+ *   capturePdf     () => Promise<CapturedPosterPdf>  (renders/uploads poster PDF)
  *   onDone         (result) => void  (called after a successful attach)
  */
 export default function AttachToTripModal({
@@ -146,7 +147,7 @@ export default function AttachToTripModal({
   posterTitle,
   posterTrip,
   apiFetch,
-  captureImages,
+  capturePdf,
   onDone,
 }: AttachToTripModalProps) {
   const [loading, setLoading] = React.useState(false);
@@ -241,13 +242,13 @@ export default function AttachToTripModal({
   }
 
   const hasApprovedFields = diffRows.some((row) => approvedKeys.has(row.key));
-  const willWritePhotos = isNew || mode !== "skip";
+  const willWritePdf = isNew || mode !== "skip";
   const canSubmit =
     !loading &&
     !submitting &&
     !result &&
     (isNew || Boolean(selectedTrip)) &&
-    (willWritePhotos || hasApprovedFields);
+    (willWritePdf || hasApprovedFields);
 
   function buildApprovedFieldsPayload(): Record<string, unknown> {
     const EXTRA_KEYS = new Set(["included_items", "excluded_items"]);
@@ -262,24 +263,16 @@ export default function AttachToTripModal({
     return fields;
   }
 
-  function buildPhotoPayload(image: CapturedPosterImage, index: number) {
-    const fallbackFilename = `${(posterTitle || "poster").slice(0, 30).replace(/[^\p{L}\p{N}]+/gu, "-")}-${index + 1}.png`;
-    if (typeof image === "string") {
-      return image.startsWith("data:")
-        ? { dataUrl: image, filename: fallbackFilename }
-        : { url: image, filename: fallbackFilename };
-    }
-    const filename = image.filename || fallbackFilename;
-    if (image.url) return { url: image.url, filename };
-    return { dataUrl: image.dataUrl || "", filename };
+  function buildPdfPayload(pdf: CapturedPosterPdf) {
+    if (pdf.url) return { url: pdf.url, filename: pdf.filename };
+    return { dataUrl: pdf.dataUrl || "", filename: pdf.filename };
   }
 
   async function handleSubmit() {
     setSubmitting(true);
     setSubmitError("");
     try {
-      const images = willWritePhotos ? await captureImages() : [];
-      const photos = (images || []).map(buildPhotoPayload).filter((photo) => photo.dataUrl || photo.url);
+      const pdf = willWritePdf ? buildPdfPayload(await capturePdf()) : undefined;
       const fields = buildApprovedFieldsPayload();
 
       const res = await apiFetch("/api/admin/poster-sync", {
@@ -290,7 +283,7 @@ export default function AttachToTripModal({
           createNew: isNew || undefined,
           newTripTitle: isNew ? posterTitle : undefined,
           mode,
-          photos,
+          pdf,
           fields,
         }),
       });
@@ -334,7 +327,7 @@ export default function AttachToTripModal({
             <b>{result.tripName}</b>
           </div>
           <p className="mt-1 text-sm">
-            {(result.uploaded ?? 0) > 0 && `Оруулсан зураг: ${result.uploaded} · Нийт зураг: ${result.totalPhotos}`}
+            {result.pdfUrl && "PDF танилцуулга хадгаллаа"}
             {(result.failed ?? 0) > 0 && ` · Амжилтгүй: ${result.failed}`}
           </p>
           {result.fieldsWritten && result.fieldsWritten.length > 0 && (
@@ -426,7 +419,7 @@ export default function AttachToTripModal({
               {!isNew && selectedTrip && selectedTrip.photoCount > 0 && (
                 <div>
                   <p className="mb-1 text-sm text-ink-muted">
-                    Энэ аялалд аль хэдийн <b>{selectedTrip.photoCount}</b> зураг байна:
+                    Энэ аялалд аль хэдийн <b>{selectedTrip.photoCount}</b> хуучин зураг байна. PDF хадгалах эсэх:
                   </p>
                   <label className="flex items-center gap-2 py-1 text-sm">
                     <input
@@ -435,16 +428,7 @@ export default function AttachToTripModal({
                       checked={mode === "replace"}
                       onChange={() => setMode("replace")}
                     />
-                    Хуучныг устгаад солих (зөвлөмж)
-                  </label>
-                  <label className="flex items-center gap-2 py-1 text-sm">
-                    <input
-                      type="radio"
-                      className="accent-brand"
-                      checked={mode === "append"}
-                      onChange={() => setMode("append")}
-                    />
-                    Хуучин дээр нэмэх
+                    PDF хадгалах / солих (зөвлөмж)
                   </label>
                   <label className="flex items-center gap-2 py-1 text-sm">
                     <input
@@ -453,7 +437,7 @@ export default function AttachToTripModal({
                       checked={mode === "skip"}
                       onChange={() => setMode("skip")}
                     />
-                    Зургийг өөрчлөхгүй
+                    PDF-г өөрчлөхгүй
                   </label>
                 </div>
               )}

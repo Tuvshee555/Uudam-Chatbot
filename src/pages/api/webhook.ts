@@ -1256,7 +1256,9 @@ async function handleMessage(
       // purpose. Inferring from its text would pick one of the trip names it
       // lists and attach that tour's poster — asking which tour while already
       // sending one tour's prices as an image.
-      const inferredMediaUrls = programReply.mediaUrls.length > 0
+      const inferredMediaUrls = programReply.brochure
+        ? []
+        : programReply.mediaUrls.length > 0
         ? programReply.mediaUrls
         : programReply.reply.includes(AMBIGUOUS_REPLY_MARKER)
           ? []

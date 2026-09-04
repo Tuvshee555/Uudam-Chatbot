@@ -15,7 +15,7 @@ const MAX_HISTORY_ROWS = 50;
 const HISTORY_TTL_DAYS = 90;
 
 export type ChatAttachment = {
-  type: "image";
+  type: "image" | "file";
   url: string;
   caption?: string;
 };

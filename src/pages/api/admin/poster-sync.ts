@@ -49,6 +49,12 @@ export type PosterSyncPhotoInput = {
   filename: string;
 };
 
+export type PosterSyncPdfInput = {
+  dataUrl?: string;
+  url?: string;
+  filename: string;
+};
+
 export function normalizePosterSyncPhotos(rawPhotos: unknown): PosterSyncPhotoInput[] {
   return (Array.isArray(rawPhotos) ? rawPhotos : [])
     .filter(
@@ -62,8 +68,20 @@ export function normalizePosterSyncPhotos(rawPhotos: unknown): PosterSyncPhotoIn
     .slice(0, MAX_IMAGES_PER_SYNC);
 }
 
-// Poster PNGs (base64) are well over the default 1MB body limit. Raise it so
-// 2-3 high-res poster slices fit in one JSON POST.
+function normalizePosterSyncPdf(rawPdf: unknown): PosterSyncPdfInput | null {
+  if (!rawPdf || typeof rawPdf !== "object") return null;
+  const pdf = rawPdf as PosterSyncPdfInput;
+  if (typeof pdf.filename !== "string" || !pdf.filename.trim()) return null;
+  if (typeof pdf.dataUrl !== "string" && typeof pdf.url !== "string") return null;
+  return {
+    filename: pdf.filename.endsWith(".pdf") ? pdf.filename : `${pdf.filename}.pdf`,
+    ...(typeof pdf.dataUrl === "string" ? { dataUrl: pdf.dataUrl } : {}),
+    ...(typeof pdf.url === "string" ? { url: pdf.url } : {}),
+  };
+}
+
+// Poster PDFs and legacy poster PNGs are well over the default 1MB body limit.
+// Raise it so the admin can attach the finished poster without a proxy step.
 export const config = {
   api: {
     bodyParser: {
@@ -130,8 +148,60 @@ async function resolvePosterSyncPhoto(photo: PosterSyncPhotoInput): Promise<stri
   throw new Error("Зурагны мэдээлэл алга");
 }
 
+async function uploadPdfDataUrlToCloudinary(dataUrl: string, fileName: string): Promise<string> {
+  const env = getEnv();
+  if (!env.cloudinaryCloudName || !env.cloudinaryApiKey || !env.cloudinaryApiSecret) {
+    throw new Error("Cloudinary тохиргоо дутуу байна");
+  }
+
+  const sepIdx = dataUrl.indexOf(";base64,");
+  const mimePrefix = dataUrl.indexOf("data:") === 0 && sepIdx > 5 ? dataUrl.slice(5, sepIdx) : "";
+  if (mimePrefix !== "application/pdf") throw new Error(`PDF формат буруу: ${fileName}`);
+  const base64Body = dataUrl.slice(sepIdx + 8);
+  if (!base64Body) throw new Error(`PDF формат буруу: ${fileName}`);
+
+  const timestamp = Math.round(Date.now() / 1000);
+  const paramsToSign = `folder=${CLOUDINARY_FOLDER}&timestamp=${timestamp}`;
+  const signature = createHash("sha256")
+    .update(paramsToSign + env.cloudinaryApiSecret)
+    .digest("hex");
+  const buffer = Buffer.from(base64Body, "base64");
+  if (buffer.length < 4 || buffer.slice(0, 4).toString("ascii") !== "%PDF") {
+    throw new Error(`PDF файл буруу байна: ${fileName}`);
+  }
+
+  const formData = new FormData();
+  formData.append("file", new Blob([new Uint8Array(buffer)], { type: "application/pdf" }), fileName);
+  formData.append("api_key", env.cloudinaryApiKey);
+  formData.append("timestamp", String(timestamp));
+  formData.append("signature", signature);
+  formData.append("folder", CLOUDINARY_FOLDER);
+
+  const res = await fetch(
+    `https://api.cloudinary.com/v1_1/${env.cloudinaryCloudName}/raw/upload`,
+    { method: "POST", body: formData },
+  );
+  const json = (await res.json()) as { secure_url?: string; error?: { message?: string } };
+  if (!res.ok || !json.secure_url) {
+    throw new Error(json.error?.message ?? "PDF Cloudinary-д оруулахад алдаа гарлаа");
+  }
+  return json.secure_url;
+}
+
+async function resolvePosterSyncPdf(pdf: PosterSyncPdfInput): Promise<string> {
+  if (pdf.url) {
+    const parsed = new URL(pdf.url);
+    if (parsed.protocol !== "https:") {
+      throw new Error(`PDF URL зөвхөн https байх ёстой: ${parsed.protocol}`);
+    }
+    return parsed.toString();
+  }
+  if (pdf.dataUrl) return uploadPdfDataUrlToCloudinary(pdf.dataUrl, pdf.filename);
+  throw new Error("PDF мэдээлэл алга");
+}
+
 /**
- * Writes poster images to ONE explicit trip. The caller (poster app) has
+ * Writes a poster PDF (plus legacy poster images when supplied) to ONE explicit trip. The caller (poster app) has
  * already shown the user a confirmation modal and chosen exactly what to do:
  *   - tripId set        → attach to that exact trip (no guessing)
  *   - createNew + title → create a brand-new trip from the poster title
@@ -153,6 +223,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     newTripTitle?: unknown;
     mode?: unknown;
     photos?: unknown;
+    pdf?: unknown;
     fields?: unknown;
   };
 
@@ -171,13 +242,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const photos = normalizePosterSyncPhotos(body.photos);
+  const pdf = normalizePosterSyncPdf(body.pdf);
 
   const hasFieldsToWrite = Object.keys(approvedFields).length > 0;
-  if (photos.length === 0 && !hasFieldsToWrite && !createNew) {
-    return res.status(400).json({ error: "Шинэчлэх зураг эсвэл мэдээлэл алга" });
+  if (!pdf && photos.length === 0 && !hasFieldsToWrite && !createNew) {
+    return res.status(400).json({ error: "Шинэчлэх PDF, зураг эсвэл мэдээлэл алга" });
   }
 
-  // Resolve the target trip up-front so we never upload images for a missing
+  // Resolve the target trip up-front so we never upload files for a missing
   // existing trip. For new trips, delay the DB insert until after images are
   // resolved so a Cloudinary outage cannot leave an empty draft behind.
   let targetTripId = tripId;
@@ -202,15 +274,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     createNew,
     mode,
     photoCount: photos.length,
+    hasPdf: Boolean(pdf),
     fieldKeys: Object.keys(approvedFields),
   });
 
-  // Resolve photos FIRST. Data URLs are uploaded to Cloudinary; hosted URLs
+  // Resolve files FIRST. Data URLs are uploaded to Cloudinary; hosted URLs
   // (from the production client-side Blob upload) are reused directly. We only
-  // touch photo_urls if at least one image resolves, so a failed image step can
-  // never blank out a trip's photos. Field updates are independent.
+  // touch legacy photo_urls if at least one image resolves, so a failed image
+  // step can never blank out a trip's photos. Field updates are independent.
   const uploadedUrls: string[] = [];
+  let uploadedPdfUrl = "";
   const failures: Array<{ filename: string; error: string }> = [];
+
+  if (pdf) {
+    try {
+      uploadedPdfUrl = await resolvePosterSyncPdf(pdf);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "PDF байршуулахад алдаа гарлаа";
+      logError("poster_sync.pdf_failure", { filename: pdf.filename, error: msg });
+      return res.status(500).json({ error: msg });
+    }
+  }
 
   const resolvedPhotos: Array<{ url?: string; failure?: { filename: string; error: string } }> =
     await Promise.all(
@@ -243,6 +327,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const patchFields: TripMutationFields = { ...approvedFields };
+  if (uploadedPdfUrl) {
+    patchFields.extra = {
+      ...(patchFields.extra || {}),
+      brochure_pdf_url: uploadedPdfUrl,
+    };
+  }
   if (uploadedUrls.length > 0 && mode !== "skip") {
     // Appending a re-exported poster would otherwise stack a second copy of the
     // same pages under new Cloudinary ids, and the bot sends the customer both.
@@ -286,6 +376,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     targetName,
     mode,
     uploaded: uploadedUrls.length,
+    pdfUrl: uploadedPdfUrl || undefined,
     failed: failures.length,
     total: patchFields.photo_urls?.length,
     fieldsWritten: Object.keys(approvedFields),
@@ -306,6 +397,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     created: createNew,
     mode,
     uploaded: uploadedUrls.length,
+    pdfUrl: uploadedPdfUrl || undefined,
     failed: failures.length,
     fieldsWritten,
     totalPhotos: patchFields.photo_urls?.length ?? existingUrls.length,

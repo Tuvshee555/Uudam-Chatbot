@@ -129,7 +129,7 @@ export function BotTab({
   const handoffRows = pausedRows.filter((row) => row.reason === "handoff");
   const handoffIds = new Set(handoffRows.map((row) => row.sender_id));
   const [selectedSender, setSelectedSender] = useState<string | null>(null);
-  type ChatAttachment = { type: "image"; url: string; caption?: string };
+  type ChatAttachment = { type: "image" | "file"; url: string; caption?: string };
   type ChatHistoryMessage = {
     role: "user" | "assistant";
     text: string;
@@ -398,7 +398,9 @@ export function BotTab({
                       {msg.text ? (
                         <p className="whitespace-pre-wrap">{msg.text}</p>
                       ) : (
-                        <span className="opacity-75 italic">🖼 зураг</span>
+                        <span className="opacity-75 italic">
+                          {msg.attachments?.some((att) => att.type === "file") ? "Файл" : "Зураг"}
+                        </span>
                       )}
                       {msg.attachments && msg.attachments.length > 0 && (
                         <div
@@ -407,22 +409,37 @@ export function BotTab({
                             msg.attachments.length === 1 ? "grid-cols-1" : "grid-cols-2",
                           )}
                         >
-                          {msg.attachments.map((att, idx) => (
-                            <a
-                              key={idx}
-                              href={att.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="block overflow-hidden rounded-xl ring-1 ring-black/5 transition hover:opacity-90"
-                            >
-                              <img
-                                src={att.url}
-                                alt={att.caption || "Зураг"}
-                                className="max-h-48 w-full object-cover"
-                                loading="lazy"
-                              />
-                            </a>
-                          ))}
+                          {msg.attachments.map((att, idx) => {
+                            if (att.type === "file") {
+                              return (
+                                <a
+                                  key={idx}
+                                  href={att.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="block rounded-xl bg-white/90 px-3 py-2 text-xs font-semibold text-brand ring-1 ring-black/5 transition hover:bg-white"
+                                >
+                                  PDF файл нээх
+                                </a>
+                              );
+                            }
+                            return (
+                              <a
+                                key={idx}
+                                href={att.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="block overflow-hidden rounded-xl ring-1 ring-black/5 transition hover:opacity-90"
+                              >
+                                <img
+                                  src={att.url}
+                                  alt={att.caption || "Зураг"}
+                                  className="max-h-48 w-full object-cover"
+                                  loading="lazy"
+                                />
+                              </a>
+                            );
+                          })}
                         </div>
                       )}
                     </div>

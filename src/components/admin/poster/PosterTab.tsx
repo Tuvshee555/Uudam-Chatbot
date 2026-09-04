@@ -132,13 +132,11 @@ export type PosterOnDayPhotoFileFn = (index: number, file: File | null | undefin
 export type DayPhotoInputRefs = MutableRefObject<Record<number, HTMLInputElement>>;
 
 export type ApiFetch = (url: string, init?: RequestInit) => Promise<Response>;
-export type CapturedPosterImage =
-  | string
-  | {
-      dataUrl?: string;
-      url?: string;
-      filename?: string;
-    };
+export type CapturedPosterPdf = {
+  dataUrl?: string;
+  url?: string;
+  filename: string;
+};
 
 type JsonRecord = Record<string, unknown>;
 type PosterBulkRunReport = {
@@ -158,7 +156,7 @@ type PosterBulkPlanResponse = PosterBulkPlan & {
   allTrips?: BulkTripOption[];
 };
 type BulkResolutionValue = "create" | "skip" | `trip:${string}`;
-type PosterSyncPhotoPayload = {
+type PosterSyncPdfPayload = {
   dataUrl?: string;
   url?: string;
   filename: string;
@@ -844,6 +842,15 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     return blob.url;
   }
 
+  function blobToDataUrl(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error || new Error("Blob уншиж чадсангүй."));
+      reader.readAsDataURL(blob);
+    });
+  }
+
   async function extractOne(file: File): Promise<{ trip: PosterTrip; source_file: string }> {
     // Local dev has no Vercel 60s kill, and its server budget is 5 min —
     // give the client the same room so slow local runs aren't cut at 90s.
@@ -1482,51 +1489,42 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     }).filter((slice) => Boolean(slice.url));
   }
 
-  // Renders the poster as Messenger-sized images for AttachToTripModal — the
-  // same finished, branded poster the customer will actually see.
-  async function captureForAttach(titleOverride?: string): Promise<CapturedPosterImage[]> {
-    const slices = await withExportMode(() => captureMessengerSlices());
-    const captures = slices.map((slice) => ({
-      dataUrl: slice.url,
-      filename: `${buildExportBaseName(titleOverride)}-messenger-${slice.index + 1}.png`,
-    }));
+  async function capturePdfForAttach(titleOverride?: string): Promise<CapturedPosterPdf> {
+    const filename = `${buildExportBaseName(titleOverride)}-poster.pdf`;
+    const result = await withExportMode(async () => {
+      const captures = await captureMessengerSlices({ withBadge: false });
+      if (captures.length === 0) throw new Error("Постерын PDF бэлдэж чадсангүй.");
+      return buildCompressedPdfBlob(captures);
+    });
 
-    if (isLocalDevHost()) return captures;
+    if (isLocalDevHost()) {
+      return {
+        dataUrl: await blobToDataUrl(result.blob),
+        filename,
+      };
+    }
 
+    const dataUrl = await blobToDataUrl(result.blob);
     try {
-      return await Promise.all(
-        captures.map(async (capture) => ({
-          url: await uploadPosterCapture(capture.dataUrl, capture.filename),
-          filename: capture.filename,
-        })),
-      );
+      return {
+        url: await uploadPosterCapture(dataUrl, filename),
+        filename,
+      };
     } catch (error) {
-      const totalChars = captures.reduce((sum, capture) => sum + capture.dataUrl.length, 0);
-      if (totalChars > DIRECT_POSTER_SYNC_BODY_LIMIT_CHARS) {
+      if (dataUrl.length > DIRECT_POSTER_SYNC_BODY_LIMIT_CHARS) {
         throw new Error(
-          `Постерын зургийг аялалд хадгалахаас өмнө байршуулахад алдаа гарлаа: ${
+          `Постерын PDF-ийг аялалд хадгалахаас өмнө байршуулахад алдаа гарлаа: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
       }
-      return captures;
+      return { dataUrl, filename };
     }
   }
 
-  function buildPosterSyncPhotoPayload(
-    image: CapturedPosterImage,
-    index: number,
-    titleOverride?: string,
-  ): PosterSyncPhotoPayload {
-    const fallbackFilename = `${buildExportBaseName(titleOverride)}-messenger-${index + 1}.png`;
-    if (typeof image === "string") {
-      return image.startsWith("data:")
-        ? { dataUrl: image, filename: fallbackFilename }
-        : { url: image, filename: fallbackFilename };
-    }
-    const filename = image.filename || fallbackFilename;
-    if (image.url) return { url: image.url, filename };
-    return { dataUrl: image.dataUrl || "", filename };
+  function buildPosterSyncPdfPayload(pdf: CapturedPosterPdf): PosterSyncPdfPayload {
+    if (pdf.url) return { url: pdf.url, filename: pdf.filename };
+    return { dataUrl: pdf.dataUrl || "", filename: pdf.filename };
   }
 
   async function downloadFullPng() {
@@ -1725,10 +1723,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
 
           const renderedTrip = await loadPosterForBatch(item.posterId);
           const captureTitle = item.title || renderedTrip.title || "постер";
-          const images = await captureForAttach(captureTitle);
-          const photos = images
-            .map((image, index) => buildPosterSyncPhotoPayload(image, index, captureTitle))
-            .filter((photo) => photo.dataUrl || photo.url);
+          const pdf = buildPosterSyncPdfPayload(await capturePdfForAttach(captureTitle));
 
           const syncResult = await fetchJson("/api/admin/poster-sync", {
             method: "POST",
@@ -1738,7 +1733,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
               createNew: item.action === "create" || undefined,
               newTripTitle: item.action === "create" ? captureTitle : undefined,
               mode: "replace",
-              photos,
+              pdf,
               fields: item.fields,
             }),
           });
@@ -1809,10 +1804,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
 
           const renderedTrip = await loadPosterForBatch(item.posterId);
           const captureTitle = item.title || renderedTrip.title || "постер";
-          const images = await captureForAttach(captureTitle);
-          const photos = images
-            .map((image, index) => buildPosterSyncPhotoPayload(image, index, captureTitle))
-            .filter((photo) => photo.dataUrl || photo.url);
+          const pdf = buildPosterSyncPdfPayload(await capturePdfForAttach(captureTitle));
           const fields =
             createNew
               ? mappedFieldsForNewTrip(item)
@@ -1828,7 +1820,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
               createNew: createNew || undefined,
               newTripTitle: createNew ? captureTitle : undefined,
               mode: "replace",
-              photos,
+              pdf,
               fields,
             }),
           });
@@ -2322,7 +2314,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
         posterTitle={trip?.title || ""}
         posterTrip={trip}
         apiFetch={apiFetch}
-        captureImages={captureForAttach}
+        capturePdf={capturePdfForAttach}
         onDone={() => {}}
       />
     </div>

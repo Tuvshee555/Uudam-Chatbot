@@ -6,11 +6,12 @@
  * here is a true disambiguation prompt when the user is clearly talking
  * about one of several matching trips.
  */
+import { sendFbFileAttachment, sendFbFileByUrl } from "./fbAttachmentUpload";
 import { sendImageMessage, sendTextMessage } from "./messenger";
 import { appendMessage } from "./conversation";
 import { createLead, hasRecentOpenLead, listTrips } from "./travelOps";
 import { notifyStaffOfLead } from "./staffAlerts";
-import { resolveTripFromUserMessage } from "./travelFastPaths";
+import { getTripBrochureAsset, resolveTripFromUserMessage } from "./travelFastPaths";
 import { isGenericOpener } from "./welcomeFlow";
 import { createPhotoOnlyState, getPhotoOnlyState, setPhotoOnlyState } from "./photoOnlyState";
 import {
@@ -19,6 +20,7 @@ import {
   isPhotoOnlyFollowup,
   pickNumberedTripChoice,
   pickTripsByIds,
+  recordFileMessage,
   recordImageMessage,
 } from "./webhookMedia";
 import type { TravelTrip } from "./travelTypes";
@@ -99,8 +101,36 @@ export async function handlePhotoOnlyMode(input: {
     }
 
     if (resolvedTrip) {
-      photos = getTripPhotoUrls(resolvedTrip);
-      if (photos.length > 0) {
+      const brochure = getTripBrochureAsset(resolvedTrip);
+      let sentBrochure = false;
+      if (brochure) {
+        sentBrochure =
+          brochure.type === "id"
+            ? await sendFbFileAttachment(senderId, brochure.value, token)
+            : await sendFbFileByUrl(senderId, brochure.value, token);
+        if (sentBrochure) {
+          await recordFileMessage(senderId, brochure.value);
+          await rememberTurn("api.webhook.photo_only_pdf_send");
+          await setPhotoOnlyState(senderId, createPhotoOnlyState({
+            activeTripId: resolvedTrip.id,
+            pendingTripIds: [],
+            lastPromptKind: null,
+            lastPromptAt: 0,
+          }));
+        } else {
+          logWarn("webhook.photo_only_pdf_send_failed", {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            platform,
+            pageId,
+            senderHash: hashIdentifier(senderId),
+            sourceType: brochure.type,
+          });
+        }
+      }
+
+      photos = sentBrochure ? [] : getTripPhotoUrls(resolvedTrip);
+      if (!sentBrochure && photos.length > 0) {
         for (const url of photos) {
           try {
             await sendImageMessage(senderId, url, token, {

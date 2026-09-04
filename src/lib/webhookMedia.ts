@@ -6,9 +6,16 @@ import {
 } from "./messenger";
 import { sendTextMessage as sendIgTextMessage } from "./instagram";
 import { appendMessage } from "./conversation";
+import { sendFbFileAttachment, sendFbFileByUrl } from "./fbAttachmentUpload";
 import { storeSenderName } from "./pause";
 import { listTrips } from "./travelOps";
-import { extractTripPhotosForReply, extractTripPhotosForUserMessage, hasTripPhotoIntent, MAX_TRIP_PHOTOS } from "./welcomeFlow";
+import {
+  extractTripBrochureAttachmentId,
+  extractTripPhotosForReply,
+  extractTripPhotosForUserMessage,
+  hasTripPhotoIntent,
+  MAX_TRIP_PHOTOS,
+} from "./welcomeFlow";
 import type { TravelTrip } from "./travelTypes";
 import { getEnv } from "./env";
 import {
@@ -117,6 +124,10 @@ function imageAttachment(url: string): { type: "image"; url: string } {
   return { type: "image", url };
 }
 
+function fileAttachment(url: string): { type: "file"; url: string } {
+  return { type: "file", url };
+}
+
 export async function recordImageMessage(senderId: string, photoUrls: string[]) {
   if (photoUrls.length === 0) return;
   await appendMessage(
@@ -125,6 +136,11 @@ export async function recordImageMessage(senderId: string, photoUrls: string[]) 
     "",
     photoUrls.map(imageAttachment),
   ).catch(() => {});
+}
+
+export async function recordFileMessage(senderId: string, fileUrl: string) {
+  if (!fileUrl) return;
+  await appendMessage(senderId, "assistant", "", [fileAttachment(fileUrl)]).catch(() => {});
 }
 
 export function getTripPhotoUrls(trip: TravelTrip | null | undefined): string[] {
@@ -226,6 +242,34 @@ export async function sendTripMediaForReply(
   if (platform !== "facebook" || !token) return;
   try {
     const tripsForPhotos = await listTrips({ limit: 5000 });
+    const brochure = extractTripBrochureAttachmentId(replyText, tripsForPhotos, { userText });
+    if (brochure) {
+      const sent =
+        brochure.type === "id"
+          ? await sendFbFileAttachment(senderId, brochure.value, token)
+          : await sendFbFileByUrl(senderId, brochure.value, token);
+      if (sent) {
+        await recordFileMessage(senderId, brochure.value);
+        recordCounter("webhook.trip_pdf_sent_total", 1, { platform });
+        logInfo("webhook.trip_pdf_sent", {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          platform,
+          pageId,
+          senderHash: hashIdentifier(senderId),
+          sourceType: brochure.type,
+        });
+        return;
+      }
+      logWarn("webhook.trip_pdf_send_failed", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        pageId,
+        senderHash: hashIdentifier(senderId),
+        sourceType: brochure.type,
+      });
+    }
     const inferredPhotos = extractTripPhotosForReply(replyText, tripsForPhotos, { userText });
     const tripPhotos =
       inferredPhotos.length > 0
