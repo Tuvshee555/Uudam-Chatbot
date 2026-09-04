@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import type {
   ChangeEvent,
+  CSSProperties,
   FocusEvent,
   FormEvent,
   ReactNode,
@@ -16,6 +17,7 @@ import type {
   PosterMeals,
   PosterOnDayPhotoFileFn,
   PosterPriceTable,
+  PosterStyleSettings,
   PosterRemoveItemFn,
   PosterRemovePriceColFn,
   PosterReorderDayFn,
@@ -273,6 +275,7 @@ export type PosterProps = {
   page1Ref: RefObject<HTMLDivElement | null>;
   onDayPhotoFile: PosterOnDayPhotoFileFn;
   dayPhotoInputRefs: DayPhotoInputRefs;
+  posterStyle: PosterStyleSettings;
 };
 
 export default function Poster({
@@ -288,6 +291,7 @@ export default function Poster({
   page1Ref,
   onDayPhotoFile,
   dayPhotoInputRefs,
+  posterStyle,
 }: PosterProps) {
   const priceTable = getPriceTable(t);
   const priceNoteBoxes = getPriceNoteBoxes(t, priceTable);
@@ -298,9 +302,40 @@ export default function Poster({
     hasPhoto: Boolean(day.photo),
     photoNumber: day.photo ? ++visiblePhotoCount : index + 1,
   }));
+  const galleryPhotoEntries = [
+    ...dayPhotoEntries.filter((entry) => entry.hasPhoto),
+    ...dayPhotoEntries.filter((entry) => !entry.hasPhoto),
+  ];
   const hasDayPhotos = dayPhotoEntries.some((entry) => entry.hasPhoto);
   const dragIdx = useRef<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
+  const pageStyle = {
+    "--poster-agency-size": `${Math.round(18 * posterStyle.infoScale)}px`,
+    "--poster-agency-sub-size": `${Math.round(10 * posterStyle.infoScale)}px`,
+    "--poster-header-phone-size": `${Math.round(15 * posterStyle.infoScale)}px`,
+    "--poster-duration-size": `${Math.round(20 * posterStyle.infoScale)}px`,
+    "--poster-hero-kicker-size": `${Math.round(11 * posterStyle.infoScale)}px`,
+    "--poster-headline-size": `${Math.round(50 * posterStyle.headlineScale)}px`,
+    "--poster-section-kicker-size": `${Math.round(10 * posterStyle.infoScale)}px`,
+    "--poster-section-heading-size": `${Math.round(11 * posterStyle.infoScale)}px`,
+    "--poster-program-title-size": `${Math.round(28 * posterStyle.infoScale)}px`,
+    "--poster-table-head-size": `${Math.round(10 * posterStyle.infoScale)}px`,
+    "--poster-table-body-size": `${Math.round(13 * posterStyle.infoScale)}px`,
+    "--poster-price-desc-size": `${Math.round(14 * posterStyle.infoScale)}px`,
+    "--poster-price-note-size": `${Math.round(13 * posterStyle.infoScale)}px`,
+    "--poster-day-number-size": `${Math.round(18 * posterStyle.dayTitleScale)}px`,
+    "--poster-day-title-size": `${Math.round(19 * posterStyle.dayTitleScale)}px`,
+    "--poster-day-tag-size": `${Math.round(11 * posterStyle.dayTitleScale)}px`,
+    "--poster-day-text-size": `${Math.round(17 * posterStyle.dayTextScale)}px`,
+    "--poster-day-hotel-size": `${Math.round(13 * posterStyle.dayTextScale)}px`,
+    "--poster-meal-name-size": `${Math.round(11 * posterStyle.dayTextScale)}px`,
+    "--poster-meal-state-size": `${Math.round(10 * posterStyle.dayTextScale)}px`,
+    "--poster-photo-title-size": `${Math.round(24 * posterStyle.infoScale)}px`,
+    "--poster-photo-badge-size": `${Math.round(15 * posterStyle.infoScale)}px`,
+    "--poster-photo-hint-size": `${Math.round(11 * posterStyle.infoScale)}px`,
+    "--poster-photo-height": `${Math.round(300 * posterStyle.photoScale)}px`,
+    "--poster-footer-size": `${Math.round(14 * posterStyle.infoScale)}px`,
+  } as CSSProperties;
 
   // Defined before the JSX (not inline in the ref callback) so the day-photo
   // input ref map is registered without mutating a value already read by JSX.
@@ -321,7 +356,7 @@ export default function Poster({
 
   return (
     <>
-      <div className="page" id="p1" ref={page1Ref}>
+      <div className="page" id="p1" ref={page1Ref} style={pageStyle}>
         <div className="head">
           <Logo />
           <div className="spacer" />
@@ -584,20 +619,49 @@ export default function Poster({
             <div className="photo-gallery-title">Аяллын зургууд</div>
           </div>
           <div className="photo-grid">
-            {dayPhotoEntries.map(({ day, index, hasPhoto, photoNumber }) => (
-              <button
-                type="button"
-                key={`day-photo-${index}`}
-                className={"photo-tile" + (hasPhoto ? " filled" : " empty editor-only")}
-                style={hasPhoto ? {
-                  backgroundImage: `linear-gradient(180deg, rgba(12, 27, 43, 0.02), rgba(12, 27, 43, 0.12)), url(${day.photo})`,
-                } : undefined}
-                onClick={() => dayPhotoInputRefs.current?.[index]?.click()}
-              >
-                <span className="photo-day-badge">{photoNumber}</span>
-                <span className="editor-only photohint">{hasPhoto ? "Дарж зураг солино" : "+ Зураг нэмэх"}</span>
-              </button>
-            ))}
+            {galleryPhotoEntries.map(({ day, index, hasPhoto, photoNumber }) => {
+              const backgroundStyle = hasPhoto
+                ? {
+                    backgroundImage: `linear-gradient(180deg, rgba(12, 27, 43, 0.02), rgba(12, 27, 43, 0.12)), url(${day.photo})`,
+                  }
+                : undefined;
+
+              return hasPhoto ? (
+                <div
+                  key={`day-photo-${index}`}
+                  className="photo-tile filled"
+                  style={backgroundStyle}
+                >
+                  <span className="photo-day-badge">{photoNumber}</span>
+                  <div className="editor-only photo-actions">
+                    <button
+                      type="button"
+                      className="photo-action"
+                      onClick={() => dayPhotoInputRefs.current?.[index]?.click()}
+                    >
+                      Солих
+                    </button>
+                    <button
+                      type="button"
+                      className="photo-action danger"
+                      onClick={() => upd(["days", index, "photo"], null)}
+                    >
+                      Устгах
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  key={`day-photo-${index}`}
+                  className="photo-tile empty editor-only"
+                  onClick={() => dayPhotoInputRefs.current?.[index]?.click()}
+                >
+                  <span className="photo-day-badge">{photoNumber}</span>
+                  <span className="photohint">+ Зураг нэмэх</span>
+                </button>
+              );
+            })}
           </div>
         </div>
 

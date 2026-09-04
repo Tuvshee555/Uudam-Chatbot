@@ -67,6 +67,14 @@ export type PosterContacts = {
   address?: string;
 };
 
+export type PosterStyleSettings = {
+  headlineScale: number;
+  infoScale: number;
+  dayTitleScale: number;
+  dayTextScale: number;
+  photoScale: number;
+};
+
 /** A legacy/alternate price representation some older extracted trips carry. */
 export type PosterLegacyPrice = {
   applies_to?: string;
@@ -95,6 +103,7 @@ export type PosterTrip = {
   includes?: string[];
   excludes?: string[];
   contacts?: PosterContacts;
+  style?: Partial<PosterStyleSettings>;
 };
 
 /** A saved poster's history-list entry, as returned by GET /api/admin/poster/trips. */
@@ -170,6 +179,36 @@ const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
 // typical ~4,000KB poster PDFs now go direct instead of detouring via Blob.
 const DIRECT_UPLOAD_LIMIT_BYTES = Math.floor(4.4 * 1024 * 1024);
 const DIRECT_POSTER_SYNC_BODY_LIMIT_CHARS = Math.floor(3.2 * 1024 * 1024);
+
+const DEFAULT_POSTER_STYLE: PosterStyleSettings = {
+  headlineScale: 1,
+  infoScale: 1,
+  dayTitleScale: 1,
+  dayTextScale: 1,
+  photoScale: 0.72,
+};
+
+const POSTER_STYLE_LIMITS: Record<keyof PosterStyleSettings, { min: number; max: number }> = {
+  headlineScale: { min: 0.78, max: 1.25 },
+  infoScale: { min: 0.82, max: 1.22 },
+  dayTitleScale: { min: 0.8, max: 1.25 },
+  dayTextScale: { min: 0.75, max: 1.18 },
+  photoScale: { min: 0.5, max: 1.05 },
+};
+
+const POSTER_STYLE_CONTROLS: Array<{
+  key: keyof PosterStyleSettings;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+}> = [
+  { key: "headlineScale", label: "Том гарчиг", min: 0.78, max: 1.25, step: 0.01 },
+  { key: "infoScale", label: "Ерөнхий текст", min: 0.82, max: 1.22, step: 0.01 },
+  { key: "dayTitleScale", label: "Өдрийн нэр", min: 0.8, max: 1.25, step: 0.01 },
+  { key: "dayTextScale", label: "Өдрийн тайлбар", min: 0.75, max: 1.18, step: 0.01 },
+  { key: "photoScale", label: "Зургийн хэмжээ", min: 0.5, max: 1.05, step: 0.01 },
+];
 
 function getStoredAdminSecret(): string {
   if (typeof window === "undefined") return "";
@@ -253,9 +292,27 @@ function tableFromPriceNote(note: string | undefined): { priceTable: PosterPrice
   };
 }
 
+function clampStyleValue(key: keyof PosterStyleSettings, value: unknown): number {
+  const limits = POSTER_STYLE_LIMITS[key];
+  const numeric = typeof value === "number" ? value : parseFloat(String(value ?? ""));
+  if (!Number.isFinite(numeric)) return DEFAULT_POSTER_STYLE[key];
+  return Math.min(limits.max, Math.max(limits.min, numeric));
+}
+
+function normalizePosterStyle(style: PosterTrip["style"]): PosterStyleSettings {
+  return {
+    headlineScale: clampStyleValue("headlineScale", style?.headlineScale),
+    infoScale: clampStyleValue("infoScale", style?.infoScale),
+    dayTitleScale: clampStyleValue("dayTitleScale", style?.dayTitleScale),
+    dayTextScale: clampStyleValue("dayTextScale", style?.dayTextScale),
+    photoScale: clampStyleValue("photoScale", style?.photoScale),
+  };
+}
+
 function normalizeTripData(trip: PosterTrip | null): PosterTrip | null {
   if (!trip) return trip;
   const clone = structuredClone(trip);
+  clone.style = normalizePosterStyle(clone.style);
   clone.departures = (clone.departures || []).filter((d) => d?.date?.trim());
   clone.includes = (clone.includes || []).filter((x) => String(x || "").trim());
   clone.excludes = (clone.excludes || []).filter((x) => String(x || "").trim());
@@ -389,6 +446,23 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
   const dayPhotoInputRefs: DayPhotoInputRefs = useRef({});
 
   const upd: PosterUpdateFn = (path, value) => setTrip((t) => (t ? setPath(t, path, value) : t));
+  const posterStyle = useMemo(() => normalizePosterStyle(trip?.style), [trip?.style]);
+
+  const updatePosterStyle = (key: keyof PosterStyleSettings, value: number) =>
+    setTrip((t) => {
+      if (!t) return t;
+      const clone = structuredClone(t);
+      clone.style = normalizePosterStyle({ ...(clone.style || {}), [key]: value });
+      return normalizeTripData(clone);
+    });
+
+  const resetPosterStyle = () =>
+    setTrip((t) => {
+      if (!t) return t;
+      const clone = structuredClone(t);
+      clone.style = DEFAULT_POSTER_STYLE;
+      return normalizeTripData(clone);
+    });
 
   const historyTitleCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -1797,9 +1871,40 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                   </Button>
                 </div>
 
+                <div className="mt-4 rounded-xl border border-line bg-surface-sunken p-3">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-xs font-medium tracking-wide text-ink-subtle">Постерын хэмжээ</p>
+                      <p className="text-sm font-semibold text-ink">Зураг болон бичвэрийн хэмжээг тохируулах</p>
+                    </div>
+                    <Button size="sm" variant="secondary" onClick={resetPosterStyle}>
+                      Анхны хэмжээ
+                    </Button>
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                    {POSTER_STYLE_CONTROLS.map((control) => (
+                      <label key={control.key} className="grid gap-1 rounded-lg border border-line bg-surface px-3 py-2">
+                        <span className="flex items-center justify-between gap-2 text-xs font-medium text-ink-muted">
+                          <span>{control.label}</span>
+                          <span className="tabular-nums text-ink">{Math.round(posterStyle[control.key] * 100)}%</span>
+                        </span>
+                        <input
+                          type="range"
+                          min={control.min}
+                          max={control.max}
+                          step={control.step}
+                          value={posterStyle[control.key]}
+                          className="w-full cursor-pointer"
+                          onChange={(e) => updatePosterStyle(control.key, parseFloat(e.target.value))}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="mt-3 flex flex-col gap-1 border-t border-line pt-3 text-xs text-ink-subtle">
                   <span>Постер дээрх бичвэр дээр шууд дарж засна.</span>
-                  <span>Зураг: нүүр зургийг дээд хэсгээс, өдрийн зургийг тухайн зурагны талбар дээр дарж солино.</span>
+                  <span>Зураг: доод талын зургийн хэсгээс нэмэх, солих, устгах боломжтой.</span>
                   <span>Татах болон хэвлэх үед засварын товч, хоосон зурагны талбар автоматаар алга болно.</span>
                 </div>
               </Card>
@@ -1901,6 +2006,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                       page1Ref={page1Ref}
                       onDayPhotoFile={onDayPhotoFile}
                       dayPhotoInputRefs={dayPhotoInputRefs}
+                      posterStyle={posterStyle}
                     />
                   </div>
                 </div>
