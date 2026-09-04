@@ -352,7 +352,10 @@ function getMissingHints(trip: TravelTrip): string[] {
   if (!trip.adult_price) hints.push("үнэ");
   if (!trip.departure_dates.length) hints.push("гарах өдөр");
   if (!trip.duration_text) hints.push("хугацаа");
-  const hasBrochure = trip.photo_urls.length > 0;
+  const hasBrochure =
+    trip.photo_urls.length > 0 ||
+    typeof (trip.extra as Record<string, unknown>)?.brochure_pdf_url === "string" ||
+    typeof (trip.extra as Record<string, unknown>)?.source_file_attachment_id === "string";
   if (!hasBrochure) hints.push("зураг");
   return hints;
 }
@@ -448,6 +451,7 @@ function TripCard({
   onToggleVisible: () => void;
 }) {
   const isHidden = (trip.extra as Record<string, unknown>)?.customer_visible === false;
+  const isPosterSynced = typeof (trip.extra as Record<string, unknown>)?.poster_trip_id === "string";
   const facts: string[] = [];
   if (trip.seats_left != null || trip.seats_total != null) {
     facts.push(`Суудал: ${trip.seats_left ?? "?"}/${trip.seats_total ?? "?"}`);
@@ -493,6 +497,7 @@ function TripCard({
                 <Badge tone="warning">Шалгах</Badge>
               )}
               {isHidden && <Badge tone="neutral">Нуусан</Badge>}
+              {isPosterSynced && <Badge tone="brand">Poster sync</Badge>}
               <Badge tone={STATUS_TONE[trip.status]}>
                 {STATUS_LABELS[trip.status]}
               </Badge>
@@ -536,7 +541,13 @@ function TripCard({
             <Icons.edit size={15} />
             Засах
           </Button>
-          <Button size="sm" variant="ghost" className="text-danger" onClick={onDelete}>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-danger"
+            onClick={onDelete}
+            title={isPosterSynced ? "Холбоотой постер хамт устна" : undefined}
+          >
             <Icons.trash size={15} />
             Устгах
           </Button>

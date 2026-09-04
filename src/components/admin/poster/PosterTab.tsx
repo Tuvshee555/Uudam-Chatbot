@@ -7,7 +7,7 @@ import { upload as uploadToBlob } from "@vercel/blob/client";
 import Poster from "./Poster";
 import AttachToTripModal from "./AttachToTripModal";
 import { createDefaultTrip } from "@/lib/poster/defaultTrip";
-import { Badge, Button, Card, Icons, Input, Select, Spinner, cx } from "@/components/ui";
+import { Badge, Button, Card, Icons, Input, Modal, Select, Spinner, cx } from "@/components/ui";
 import { TabHeader } from "@/components/admin/AdminShared";
 import type { PosterBulkPlan, PosterBulkPlanItem } from "@/lib/poster/bulkPlan";
 
@@ -471,6 +471,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
   const [scale, setScale] = useState(0.6);
   const [totalH, setTotalH] = useState(0);
   const [attachModalOpen, setAttachModalOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<PosterHistoryItem | null>(null);
   const [bulkPlan, setBulkPlan] = useState<PosterBulkPlan | null>(null);
   const [bulkReport, setBulkReport] = useState<PosterBulkRunReport | null>(null);
   const [bulkTripOptions, setBulkTripOptions] = useState<BulkTripOption[]>([]);
@@ -1920,7 +1921,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
       <TabHeader
         icon={<Icons.image size={20} />}
         title="Постер үүсгэгч"
-        description="Хятадаас ирсэн файлаас брэнд постер бэлдээд PNG, PDF болон Messenger хэсэглэлээр татна."
+        description="Постер хадгалах бүрт түүнтэй холбоотой live chatbot аялал автоматаар үүсэж/шинэчлэгдэнэ."
       />
       {busy && (
         <div className="flex items-center gap-2 rounded-lg border border-line bg-surface-sunken px-3 py-2 text-sm text-ink-muted">
@@ -2042,6 +2043,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                 </div>
 
                 <div className="mt-3 flex flex-col gap-1 border-t border-line pt-3 text-xs text-ink-subtle">
+                  <span>Sync: хадгалсан постер бүр live аялалтай заавал холбоотой байна.</span>
                   <span>Постер дээрх бичвэр дээр шууд дарж засна.</span>
                   <span>Зураг: доод талын зургийн хэсгээс нэмэх, солих, устгах боломжтой.</span>
                   <span>Татах болон хэвлэх үед засварын товч, хоосон зурагны талбар автоматаар алга болно.</span>
@@ -2051,10 +2053,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
               <Card className="p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <Button size="sm" onClick={save} disabled={!!busy}>
-                    <Icons.check size={14} /> Хадгалах
-                  </Button>
-                  <Button size="sm" variant="primary" onClick={() => setAttachModalOpen(true)} disabled={!!busy}>
-                    <Icons.plus size={14} /> Аялалд нэмэх
+                    <Icons.check size={14} /> Хадгалах + аялал sync
                   </Button>
                   <Button size="sm" variant="secondary" onClick={previewBulkPosterSync} disabled={!!busy || history.length === 0}>
                     <Icons.check size={14} /> Бүгдийг шалгах
@@ -2293,8 +2292,8 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                       <button
                         type="button"
                         className="shrink-0 rounded-md p-1 text-ink-muted hover:bg-surface-sunken hover:text-danger"
-                        title="Постер устгах"
-                        onClick={() => deleteTrip(h.id)}
+                        title="Постер болон холбоотой аяллыг устгах"
+                        onClick={() => setDeleteConfirm(h)}
                         disabled={!!busy}
                       >
                         <Icons.trash size={14} />
@@ -2317,6 +2316,35 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
         capturePdf={capturePdfForAttach}
         onDone={() => {}}
       />
+      <Modal
+        open={deleteConfirm != null}
+        onClose={() => setDeleteConfirm(null)}
+        title="Постер болон аяллыг устгах уу?"
+        description={`"${deleteConfirm?.title || "Нэргүй"}" - холбоотой chatbot аялал хамт устна.`}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setDeleteConfirm(null)}>
+              Болих
+            </Button>
+            <Button
+              variant="danger"
+              loading={!!busy}
+              onClick={() => {
+                const target = deleteConfirm;
+                setDeleteConfirm(null);
+                if (target) void deleteTrip(target.id);
+              }}
+            >
+              <Icons.trash size={15} />
+              Хоёуланг устгах
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-ink-muted">
+          Энэ poster history-аас устах бөгөөд түүнтэй sync хийсэн live trip bot-ийн аяллын жагсаалтаас бас устна.
+        </p>
+      </Modal>
     </div>
   );
 }

@@ -191,12 +191,15 @@ export async function savePosterTrip(input: {
      VALUES ($1, $2::jsonb, $3)`,
     [tripId, dataJson, input.note ?? null],
   );
-  await syncPosterTrip({
+  const syncedTrip = await syncPosterTrip({
     id: tripId,
     title: input.title,
     source_file: input.source_file ?? null,
     data: input.data ?? {},
   });
+  if (!syncedTrip) {
+    throw new Error("Постер хадгалагдсан ч холбоотой аяллыг үүсгэж чадсангүй.");
+  }
   return { id: tripId };
 }
 
