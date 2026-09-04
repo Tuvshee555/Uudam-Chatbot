@@ -5,13 +5,17 @@
  * a second DB client.
  */
 import { randomUUID } from "crypto";
+import { mapPosterTripToFields } from "@/lib/poster/tripMapper";
 import { queryNeon } from "@/lib/neonDb";
+import { upsertTrip } from "@/lib/travelDb";
+import type { TripMutationFields } from "@/lib/travelTypes";
 
 export type PosterTripRow = {
   id: string;
   title: string;
   source_file: string | null;
   data: unknown;
+  created_at?: string;
   updated_at: string;
 };
 
@@ -65,6 +69,80 @@ export async function listPosterTrips(): Promise<
   return res?.rows ?? [];
 }
 
+function linkedTripId(posterId: string): string {
+  return `trip-${posterId}`;
+}
+
+function posterRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function posterItineraryDays(data: Record<string, unknown>): Record<string, unknown>[] {
+  const days = Array.isArray(data.days) ? data.days : [];
+  return days
+    .map((item, index): Record<string, unknown> | null => {
+      if (!item || typeof item !== "object") return null;
+      const day = item as Record<string, unknown>;
+      const dayNumber = typeof day.day === "number" ? day.day : index + 1;
+      const title = typeof day.route === "string" ? day.route.trim() : "";
+      const description = typeof day.summary === "string" ? day.summary.trim() : "";
+      const hotel = typeof day.hotel === "string" ? day.hotel.trim() : "";
+      const meals = day.meals && typeof day.meals === "object" ? day.meals : undefined;
+      if (!title && !description && !hotel) return null;
+      return {
+        day: dayNumber,
+        title,
+        description,
+        ...(hotel ? { hotel } : {}),
+        ...(meals ? { meals } : {}),
+      };
+    })
+    .filter((item): item is Record<string, unknown> => item !== null);
+}
+
+function linkedTripFields(row: {
+  id: string;
+  title: string;
+  source_file?: string | null;
+  data: unknown;
+}): TripMutationFields {
+  const data = posterRecord(row.data);
+  const mapped = mapPosterTripToFields(data);
+  const routeName =
+    typeof mapped.route_name === "string" && mapped.route_name.trim()
+      ? mapped.route_name.trim()
+      : row.title.trim();
+  const itineraryDays = posterItineraryDays(data);
+  const extra = {
+    ...(mapped.extra || {}),
+    poster_trip_id: row.id,
+    source_file_name: row.source_file || "",
+    original_title_text: row.title,
+    ...(itineraryDays.length ? { itinerary_days: itineraryDays } : {}),
+  };
+
+  return {
+    ...mapped,
+    route_name: routeName,
+    category: "Аялал",
+    operator_name: "UUDAM TRAVEL AGENCY",
+    status: "active",
+    source_description: row.source_file || row.title,
+    extra,
+  };
+}
+
+async function syncPosterTrip(row: {
+  id: string;
+  title: string;
+  source_file?: string | null;
+  data: unknown;
+}) {
+  const fields = linkedTripFields(row);
+  if (!fields.route_name) return null;
+  return upsertTrip({ id: linkedTripId(row.id), fields });
+}
+
 export async function getPosterTrip(id: string): Promise<PosterTripRow | null> {
   if (!(await ensurePosterSchema())) return null;
   const res = await queryNeon<PosterTripRow>(
@@ -86,12 +164,19 @@ export async function savePosterTrip(input: {
   let tripId = input.id?.trim() || "";
 
   if (tripId) {
-    await queryNeon(
+    const updated = await queryNeon(
       `UPDATE poster_trips
           SET title = $1, data = $2::jsonb, updated_at = NOW()
         WHERE id = $3`,
       [input.title, dataJson, tripId],
     );
+    if ((updated?.rowCount ?? 0) === 0) {
+      await queryNeon(
+        `INSERT INTO poster_trips (id, title, source_file, data)
+         VALUES ($1, $2, $3, $4::jsonb)`,
+        [tripId, input.title, input.source_file ?? null, dataJson],
+      );
+    }
   } else {
     tripId = `poster-${randomUUID()}`;
     await queryNeon(
@@ -106,11 +191,22 @@ export async function savePosterTrip(input: {
      VALUES ($1, $2::jsonb, $3)`,
     [tripId, dataJson, input.note ?? null],
   );
+  await syncPosterTrip({
+    id: tripId,
+    title: input.title,
+    source_file: input.source_file ?? null,
+    data: input.data ?? {},
+  });
   return { id: tripId };
 }
 
 export async function deletePosterTrip(id: string): Promise<boolean> {
   if (!(await ensurePosterSchema())) return false;
+  await queryNeon(
+    `DELETE FROM travel_trip_entries
+      WHERE extra->>'poster_trip_id' = $1`,
+    [id],
+  );
   await queryNeon(`DELETE FROM poster_trip_versions WHERE trip_id = $1`, [id]);
   const res = await queryNeon<{ id: string }>(
     `DELETE FROM poster_trips WHERE id = $1 RETURNING id`,
@@ -126,5 +222,15 @@ export async function exportPosterTrips(): Promise<PosterTripRow[]> {
        FROM poster_trips ORDER BY updated_at DESC`,
   );
   return res?.rows ?? [];
+}
+
+export async function syncAllPosterTrips(): Promise<{ posters: number; trips: number }> {
+  const posters = await exportPosterTrips();
+  let trips = 0;
+  for (const poster of posters) {
+    const synced = await syncPosterTrip(poster);
+    if (synced) trips += 1;
+  }
+  return { posters: posters.length, trips };
 }
 

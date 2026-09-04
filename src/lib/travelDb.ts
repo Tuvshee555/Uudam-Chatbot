@@ -1266,6 +1266,17 @@ export async function patchTrip(id: string, fields: TripMutationFields) {
 export async function deleteTrip(id: string): Promise<boolean> {
   const ready = await ensureTravelSchema();
   if (!ready) return false;
+  const linkedPoster = await queryNeon<{ poster_trip_id: string | null }>(
+    `SELECT extra->>'poster_trip_id' AS poster_trip_id
+       FROM travel_trip_entries
+      WHERE id = $1`,
+    [id],
+  );
+  const posterTripId = linkedPoster?.rows?.[0]?.poster_trip_id || "";
+  if (posterTripId) {
+    await queryNeon(`DELETE FROM poster_trip_versions WHERE trip_id = $1`, [posterTripId]);
+    await queryNeon(`DELETE FROM poster_trips WHERE id = $1`, [posterTripId]);
+  }
   const result = await queryNeon(
     `DELETE FROM travel_trip_entries WHERE id = $1`,
     [id],
@@ -1276,6 +1287,16 @@ export async function deleteTrip(id: string): Promise<boolean> {
 export async function deleteAllTrips(): Promise<number> {
   const ready = await ensureTravelSchema();
   if (!ready) return 0;
+  const linkedPosters = await queryNeon<{ poster_trip_id: string }>(
+    `SELECT DISTINCT extra->>'poster_trip_id' AS poster_trip_id
+       FROM travel_trip_entries
+      WHERE COALESCE(extra->>'poster_trip_id', '') <> ''`,
+  );
+  const posterIds = linkedPosters?.rows.map((row) => row.poster_trip_id).filter(Boolean) ?? [];
+  if (posterIds.length > 0) {
+    await queryNeon(`DELETE FROM poster_trip_versions WHERE trip_id = ANY($1::text[])`, [posterIds]);
+    await queryNeon(`DELETE FROM poster_trips WHERE id = ANY($1::text[])`, [posterIds]);
+  }
   const result = await queryNeon(`DELETE FROM travel_trip_entries`);
   return result?.rowCount ?? 0;
 }

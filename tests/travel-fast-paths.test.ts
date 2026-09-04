@@ -695,9 +695,11 @@ test("program request prefers brochure pdf over images and itinerary", () => {
     ],
   );
 
-  // Photo-only flow prefers program images over brochure links.
-  assert.equal(result?.brochure, null);
-  assert.deepEqual(result?.mediaUrls, ["https://example.com/program-1.jpg"]);
+  assert.deepEqual(result?.brochure, {
+    type: "url",
+    value: "https://example.com/program.pdf",
+  });
+  assert.deepEqual(result?.mediaUrls, []);
   assert.doesNotMatch(result?.reply || "", /https:\/\/example\.com\/program\.pdf/);
 });
 

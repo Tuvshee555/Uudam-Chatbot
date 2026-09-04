@@ -102,3 +102,10 @@ export async function withNeonClient<T>(
     client.release();
   }
 }
+
+export async function closeNeonPool(): Promise<void> {
+  if (!pool) return;
+  const currentPool = pool;
+  pool = null;
+  await currentPool.end();
+}
