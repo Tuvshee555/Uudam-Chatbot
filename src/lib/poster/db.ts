@@ -7,7 +7,7 @@
 import { randomUUID } from "crypto";
 import { mapPosterTripToFields } from "@/lib/poster/tripMapper";
 import { queryNeon } from "@/lib/neonDb";
-import { upsertTrip } from "@/lib/travelDb";
+import { getTripById, upsertTrip } from "@/lib/travelDb";
 import type { TripMutationFields } from "@/lib/travelTypes";
 
 export type PosterTripRow = {
@@ -140,6 +140,25 @@ async function syncPosterTrip(row: {
 }) {
   const fields = linkedTripFields(row);
   if (!fields.route_name) return null;
+  const existing = await getTripById(linkedTripId(row.id));
+  const existingExtra = (existing?.extra || {}) as Record<string, unknown>;
+  const preservedPdfUrl =
+    typeof existingExtra.brochure_pdf_url === "string" ? existingExtra.brochure_pdf_url : "";
+  const preservedAttachmentId =
+    typeof existingExtra.source_file_attachment_id === "string"
+      ? existingExtra.source_file_attachment_id
+      : "";
+  const hasPdf = Boolean(preservedPdfUrl || preservedAttachmentId);
+  fields.extra = {
+    ...(fields.extra || {}),
+    ...(preservedPdfUrl ? { brochure_pdf_url: preservedPdfUrl } : {}),
+    ...(preservedAttachmentId ? { source_file_attachment_id: preservedAttachmentId } : {}),
+    ...(typeof existingExtra.brochure_pdf_generated_at === "string"
+      ? { brochure_pdf_generated_at: existingExtra.brochure_pdf_generated_at }
+      : {}),
+    brochure_pdf_required: true,
+    brochure_pdf_missing: !hasPdf,
+  };
   return upsertTrip({ id: linkedTripId(row.id), fields });
 }
 

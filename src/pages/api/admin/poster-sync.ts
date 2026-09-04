@@ -331,7 +331,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     patchFields.extra = {
       ...(patchFields.extra || {}),
       brochure_pdf_url: uploadedPdfUrl,
+      brochure_pdf_required: true,
+      brochure_pdf_missing: false,
     };
+    patchFields.photo_urls = [];
   }
   if (uploadedUrls.length > 0 && mode !== "skip") {
     // Appending a re-exported poster would otherwise stack a second copy of the

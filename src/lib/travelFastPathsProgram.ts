@@ -11,6 +11,7 @@ import {
   getAliases,
   getTripBrochureAsset,
   hasProgramIntent,
+  isPosterLinkedTrip,
   isGenericConfirmationText,
   keywordTokens,
   normText,
@@ -308,11 +309,28 @@ export function buildTripProgramReply(
 
   const summary = buildTripSummaryLines(best);
   const summaryBlock = summary ? `\n\n${summary}` : "";
+  const brochure = getTripBrochureAsset(best);
 
   const wantsPicturesOnly =
     /зураг|zurag|photo|picture|пост(?:ер)?/i.test(text) &&
     !/хөтөлбөр|hutulbur|program|itinerary|өдөр\s*өдөр|day\s*by\s*day/i.test(text);
   if (wantsPicturesOnly) {
+    if (brochure) {
+      return {
+        reply: `✈️ ${best.route_name}${summaryBlock}\n\nPDF хөтөлбөрийг хавсаргалаа.`,
+        trip: best,
+        brochure,
+        mediaUrls: [],
+      };
+    }
+    if (isPosterLinkedTrip(best)) {
+      return {
+        reply: TRIP_MEDIA_UNAVAILABLE_SILENT,
+        trip: best,
+        brochure: null,
+        mediaUrls: [],
+      };
+    }
     const photoUrls = tripGeneralPhotoUrls(best);
     if (photoUrls.length > 0) {
       return {
@@ -330,12 +348,20 @@ export function buildTripProgramReply(
     };
   }
 
-  const brochure = getTripBrochureAsset(best);
   if (brochure) {
     return {
       reply: `✈️ ${best.route_name}${summaryBlock}\n\nPDF хөтөлбөрийг хавсаргалаа.`,
       trip: best,
       brochure,
+      mediaUrls: [],
+    };
+  }
+
+  if (isPosterLinkedTrip(best)) {
+    return {
+      reply: TRIP_MEDIA_UNAVAILABLE_SILENT,
+      trip: best,
+      brochure: null,
       mediaUrls: [],
     };
   }

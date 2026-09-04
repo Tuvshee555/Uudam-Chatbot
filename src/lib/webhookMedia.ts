@@ -16,6 +16,11 @@ import {
   hasTripPhotoIntent,
   MAX_TRIP_PHOTOS,
 } from "./welcomeFlow";
+import {
+  getTripBrochureAsset,
+  isPosterLinkedTrip,
+  resolveTripFromUserMessage,
+} from "./travelFastPathsSearch";
 import type { TravelTrip } from "./travelTypes";
 import { getEnv } from "./env";
 import {
@@ -269,6 +274,28 @@ export async function sendTripMediaForReply(
         senderHash: hashIdentifier(senderId),
         sourceType: brochure.type,
       });
+    }
+    const activeTrips = tripsForPhotos.filter((trip) => trip.status === "active");
+    const mediaResolution = resolveTripFromUserMessage(userText || replyText, activeTrips, {
+      allowLooseFallback: false,
+    });
+    if (
+      mediaResolution.status === "verified" &&
+      isPosterLinkedTrip(mediaResolution.trip) &&
+      !getTripBrochureAsset(mediaResolution.trip)
+    ) {
+      logWarn("webhook.poster_linked_trip_missing_pdf", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        pageId,
+        senderHash: hashIdentifier(senderId),
+        tripId: mediaResolution.trip.id,
+        posterTripId: String(
+          ((mediaResolution.trip.extra || {}) as Record<string, unknown>).poster_trip_id || "",
+        ),
+      });
+      return;
     }
     const inferredPhotos = extractTripPhotosForReply(replyText, tripsForPhotos, { userText });
     const tripPhotos =

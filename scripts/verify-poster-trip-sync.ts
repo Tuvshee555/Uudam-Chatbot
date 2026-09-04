@@ -17,6 +17,7 @@ type TripRow = {
   departure_dates: string[];
   hotel: string;
   has_food: boolean | null;
+  photo_urls: string[];
   extra: Record<string, unknown>;
 };
 
@@ -42,13 +43,22 @@ function sameStringArray(a: unknown, b: unknown) {
   return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
+function hasBrochurePdf(trip: TripRow) {
+  const pdfUrl = typeof trip.extra?.brochure_pdf_url === "string" ? trip.extra.brochure_pdf_url : "";
+  const attachmentId =
+    typeof trip.extra?.source_file_attachment_id === "string"
+      ? trip.extra.source_file_attachment_id
+      : "";
+  return pdfUrl.startsWith("https://") || attachmentId.length > 0;
+}
+
 async function main() {
   const posterResult = await queryNeon<PosterRow>(
     `SELECT id, title, data FROM poster_trips ORDER BY updated_at DESC`,
   );
   const tripResult = await queryNeon<TripRow>(
     `SELECT id, route_name, duration_text, adult_price, child_price,
-            departure_dates, hotel, has_food, extra
+            departure_dates, hotel, has_food, photo_urls, extra
        FROM travel_trip_entries
       WHERE COALESCE(extra->>'poster_trip_id', '') <> ''`,
   );
@@ -67,6 +77,12 @@ async function main() {
     if (!trip) {
       issues.push({ poster: poster.title, issue: "missing linked trip" });
       continue;
+    }
+    if (!hasBrochurePdf(trip)) {
+      issues.push({ poster: poster.title, issue: "linked trip missing PDF brochure" });
+    }
+    if (asArray(trip.photo_urls).length > 0) {
+      issues.push({ poster: poster.title, issue: "linked trip still has legacy photo attachments" });
     }
 
     const mapped = cleanFields(mapPosterTripToFields(posterRecord(poster.data)));

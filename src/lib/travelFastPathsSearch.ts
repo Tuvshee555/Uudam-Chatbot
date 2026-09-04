@@ -1506,6 +1506,12 @@ export function getTripBrochureAsset(trip: TravelTrip): ProgramAsset | null {
   return null;
 }
 
+export function isPosterLinkedTrip(trip: TravelTrip | null | undefined): boolean {
+  if (!trip) return false;
+  const posterTripId = getTripLooseField(trip, "poster_trip_id");
+  return typeof posterTripId === "string" && posterTripId.trim().length > 0;
+}
+
 // getGroupDateTexts lives in travelFastPathsPricing.ts, but getTripSearchHaystack
 // (defined above) needs it — re-declared here to avoid a circular import since
 // pricing imports search helpers. Kept byte-identical to the pricing copy.

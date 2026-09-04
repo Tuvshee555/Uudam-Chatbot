@@ -11,7 +11,7 @@ import { sendImageMessage, sendTextMessage } from "./messenger";
 import { appendMessage } from "./conversation";
 import { createLead, hasRecentOpenLead, listTrips } from "./travelOps";
 import { notifyStaffOfLead } from "./staffAlerts";
-import { getTripBrochureAsset, resolveTripFromUserMessage } from "./travelFastPaths";
+import { getTripBrochureAsset, isPosterLinkedTrip, resolveTripFromUserMessage } from "./travelFastPaths";
 import { isGenericOpener } from "./welcomeFlow";
 import { createPhotoOnlyState, getPhotoOnlyState, setPhotoOnlyState } from "./photoOnlyState";
 import {
@@ -129,7 +129,7 @@ export async function handlePhotoOnlyMode(input: {
         }
       }
 
-      photos = sentBrochure ? [] : getTripPhotoUrls(resolvedTrip);
+      photos = sentBrochure || isPosterLinkedTrip(resolvedTrip) ? [] : getTripPhotoUrls(resolvedTrip);
       if (!sentBrochure && photos.length > 0) {
         for (const url of photos) {
           try {

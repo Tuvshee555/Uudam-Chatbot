@@ -703,6 +703,45 @@ test("program request prefers brochure pdf over images and itinerary", () => {
   assert.doesNotMatch(result?.reply || "", /https:\/\/example\.com\/program\.pdf/);
 });
 
+test("poster-linked photo request sends the PDF brochure instead of photos", () => {
+  const result = buildTripProgramReply(
+    "Жэжү poster зураг явуул",
+    [
+      trip({
+        id: "jeju",
+        route_name: "Жэжү арлын аялал",
+        photo_urls: ["https://example.com/legacy-photo.jpg"],
+        extra: {
+          poster_trip_id: "poster-jeju",
+          brochure_pdf_url: "https://example.com/jeju.pdf",
+        },
+      }),
+    ],
+  );
+
+  assert.deepEqual(result?.brochure, { type: "url", value: "https://example.com/jeju.pdf" });
+  assert.deepEqual(result?.mediaUrls, []);
+  assert.match(result?.reply || "", /PDF/);
+});
+
+test("poster-linked trip without PDF refuses legacy image fallback", () => {
+  const result = buildTripProgramReply(
+    "Жэжү poster зураг явуул",
+    [
+      trip({
+        id: "jeju-missing-pdf",
+        route_name: "Жэжү арлын аялал",
+        photo_urls: ["https://example.com/legacy-photo.jpg"],
+        extra: { poster_trip_id: "poster-jeju" },
+      }),
+    ],
+  );
+
+  assert.equal(result?.reply, "NOTRIPMEDIA");
+  assert.equal(result?.brochure, null);
+  assert.deepEqual(result?.mediaUrls, []);
+});
+
 test("program photo request prefers the longer combined route over a shorter shared route", () => {
   const result = buildTripProgramReply(
     "Shanghai Tenger zurag",
