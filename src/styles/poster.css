@@ -201,18 +201,18 @@ body.exporting .page .dsummary.prose li:empty {display:none !important}
 .poster-root .page .dhotel {margin-top:10px;color:var(--muted);font-size:var(--poster-day-hotel-size,13px);line-height:1.4}
 
 /* Meal badges sit under the day text. */
-.poster-root .page .mealgrid {display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:14px}
-.poster-root .page .mealcard {display:flex;flex-direction:row;gap:6px;align-items:center;justify-content:flex-start;padding:7px 10px;border-radius:8px;border:1px solid var(--line);font-size:var(--poster-meal-name-size,11px);font-weight:700;cursor:pointer;text-align:left;min-width:0}
-.poster-root .page .mealcard.yes {background:#f0faf4;color:#1a7a4a;border-color:#b8e2c8}
-.poster-root .page .mealcard.no {background:#fdf4f4;color:#a04040;border-color:#e8c8c8}
-.poster-root .page .mealname {font-size:var(--poster-meal-name-size,11px);font-weight:700}
-.poster-root .page .mealstate {font-size:var(--poster-meal-state-size,10px);font-weight:600;opacity:.75}
+.poster-root .page .mealgrid {display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.poster-root .page .mealcard {display:inline-flex;flex:none;gap:6px;align-items:center;justify-content:flex-start;padding:5px 9px;border-radius:999px;border:1px solid var(--line);font-size:var(--poster-meal-name-size,11px);font-weight:700;cursor:pointer;text-align:left;min-width:0;background:#fff}
+.poster-root .page .mealcard.yes {color:#1a7a4a;border-color:#a9dcc0;background:#f8fffb}
+.poster-root .page .mealcard.no {color:#a04040;border-color:#efcaca;background:#fffafa}
+.poster-root .page .mealname {font-size:var(--poster-meal-name-size,11px);font-weight:800}
+.poster-root .page .mealstate {font-size:var(--poster-meal-state-size,10px);font-weight:700;opacity:.68}
 
 /* Trip photos: independent gallery after all day plans, sized for Messenger readability. */
 .poster-root .page .photo-gallery {margin-top:30px;padding-top:22px;border-top:1px solid var(--line)}
 .poster-root .page .photo-gallery-head {display:grid;gap:4px;margin-bottom:12px}
 .poster-root .page .photo-gallery-title {font-size:var(--poster-photo-title-size,24px);font-weight:900;color:var(--navy)}
-.poster-root .page .photo-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.poster-root .page .photo-grid {display:grid;grid-template-columns:repeat(var(--poster-photo-columns,3),minmax(0,1fr));gap:12px}
 .poster-root .page .photo-tile {position:relative;width:100%;height:var(--poster-photo-height,216px);border:0;border-radius:10px;background:#f5f8fc;background-size:cover,100% 100%;background-position:center;background-repeat:no-repeat;overflow:hidden}
 .poster-root .page .photo-tile.empty {display:flex;align-items:center;justify-content:center;border:2px dashed #c8d8e8;background:#f8fafc;color:#7a9ab8;font-size:var(--poster-photo-hint-size,11px);font-weight:800;cursor:pointer}
 .poster-root .page .photo-day-badge {position:absolute;left:12px;top:12px;min-width:34px;height:34px;border-radius:999px;background:rgba(17,62,103,.88);color:#fff;display:flex;align-items:center;justify-content:center;font-size:var(--poster-photo-badge-size,15px);font-weight:900}

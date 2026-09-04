@@ -184,7 +184,7 @@ const DEFAULT_POSTER_STYLE: PosterStyleSettings = {
   headlineScale: 1,
   infoScale: 1,
   dayTitleScale: 1,
-  dayTextScale: 1,
+  dayTextScale: 1.12,
   photoScale: 0.72,
 };
 
@@ -192,7 +192,7 @@ const POSTER_STYLE_LIMITS: Record<keyof PosterStyleSettings, { min: number; max:
   headlineScale: { min: 0.78, max: 1.25 },
   infoScale: { min: 0.82, max: 1.22 },
   dayTitleScale: { min: 0.8, max: 1.25 },
-  dayTextScale: { min: 0.75, max: 1.18 },
+  dayTextScale: { min: 0.85, max: 1.32 },
   photoScale: { min: 0.5, max: 1.05 },
 };
 
@@ -206,7 +206,7 @@ const POSTER_STYLE_CONTROLS: Array<{
   { key: "headlineScale", label: "Том гарчиг", min: 0.78, max: 1.25, step: 0.01 },
   { key: "infoScale", label: "Ерөнхий текст", min: 0.82, max: 1.22, step: 0.01 },
   { key: "dayTitleScale", label: "Өдрийн нэр", min: 0.8, max: 1.25, step: 0.01 },
-  { key: "dayTextScale", label: "Өдрийн тайлбар", min: 0.75, max: 1.18, step: 0.01 },
+  { key: "dayTextScale", label: "Өдрийн тайлбар", min: 0.85, max: 1.32, step: 0.01 },
   { key: "photoScale", label: "Зургийн хэмжээ", min: 0.5, max: 1.05, step: 0.01 },
 ];
 
@@ -307,6 +307,10 @@ function normalizePosterStyle(style: PosterTrip["style"]): PosterStyleSettings {
     dayTextScale: clampStyleValue("dayTextScale", style?.dayTextScale),
     photoScale: clampStyleValue("photoScale", style?.photoScale),
   };
+}
+
+function styleDisplayPercent(key: keyof PosterStyleSettings, value: number): number {
+  return Math.round((value / DEFAULT_POSTER_STYLE[key]) * 100);
 }
 
 function normalizeTripData(trip: PosterTrip | null): PosterTrip | null {
@@ -1886,7 +1890,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                       <label key={control.key} className="grid gap-1 rounded-lg border border-line bg-surface px-3 py-2">
                         <span className="flex items-center justify-between gap-2 text-xs font-medium text-ink-muted">
                           <span>{control.label}</span>
-                          <span className="tabular-nums text-ink">{Math.round(posterStyle[control.key] * 100)}%</span>
+                          <span className="tabular-nums text-ink">{styleDisplayPercent(control.key, posterStyle[control.key])}%</span>
                         </span>
                         <input
                           type="range"

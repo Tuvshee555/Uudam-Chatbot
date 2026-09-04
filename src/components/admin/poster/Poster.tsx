@@ -309,6 +309,7 @@ export default function Poster({
   const hasDayPhotos = dayPhotoEntries.some((entry) => entry.hasPhoto);
   const dragIdx = useRef<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
+  const photoColumns = posterStyle.photoScale >= 0.9 ? 2 : posterStyle.photoScale <= 0.6 ? 4 : 3;
   const pageStyle = {
     "--poster-agency-size": `${Math.round(18 * posterStyle.infoScale)}px`,
     "--poster-agency-sub-size": `${Math.round(10 * posterStyle.infoScale)}px`,
@@ -333,6 +334,7 @@ export default function Poster({
     "--poster-photo-title-size": `${Math.round(24 * posterStyle.infoScale)}px`,
     "--poster-photo-badge-size": `${Math.round(15 * posterStyle.infoScale)}px`,
     "--poster-photo-hint-size": `${Math.round(11 * posterStyle.infoScale)}px`,
+    "--poster-photo-columns": photoColumns,
     "--poster-photo-height": `${Math.round(300 * posterStyle.photoScale)}px`,
     "--poster-footer-size": `${Math.round(14 * posterStyle.infoScale)}px`,
   } as CSSProperties;
@@ -587,14 +589,6 @@ export default function Poster({
                       />
 
                       <div className="editor-only daytools">
-                        <button type="button" className="addbtn" onClick={() => dayPhotoInputRefs.current?.[i]?.click()}>
-                          {d.photo ? "Зураг солих" : "+ Зураг"}
-                        </button>
-                        {d.photo && (
-                          <button type="button" className="addbtn danger" onClick={() => upd(["days", i, "photo"], null)}>
-                            Фото авах
-                          </button>
-                        )}
                         <button type="button" className="addbtn" onClick={() => insertDay(i)}>
                           + Дараа өдөр
                         </button>
