@@ -16,5 +16,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   ]);
   const plan = buildPosterBulkPlan(posterRows, trips);
 
-  return res.status(200).json(plan);
+  const allTrips = trips
+    .map((trip) => ({
+      id: trip.id,
+      route_name: trip.route_name,
+      category: trip.category,
+      photoCount: Array.isArray(trip.photo_urls) ? trip.photo_urls.length : 0,
+    }))
+    .sort((a, b) => a.route_name.localeCompare(b.route_name, "mn"));
+
+  return res.status(200).json({ ...plan, allTrips });
 }

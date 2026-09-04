@@ -148,6 +148,16 @@ type PosterBulkRunReport = {
   skipped: PosterBulkPlanItem[];
   failed: Array<{ title: string; error: string }>;
 };
+type BulkTripOption = {
+  id: string;
+  route_name: string;
+  category?: string | null;
+  photoCount: number;
+};
+type PosterBulkPlanResponse = PosterBulkPlan & {
+  allTrips?: BulkTripOption[];
+};
+type BulkResolutionValue = "create" | "skip" | `trip:${string}`;
 type PosterSyncPhotoPayload = {
   dataUrl?: string;
   url?: string;
@@ -416,6 +426,28 @@ function bulkPlanSignature(plan: PosterBulkPlan): string {
   );
 }
 
+function defaultBulkResolution(item: PosterBulkPlanItem): BulkResolutionValue {
+  if (item.action === "attach_exact" && item.targetTripId) return `trip:${item.targetTripId}`;
+  if (item.action === "create") return "create";
+  return "skip";
+}
+
+function mappedFieldsForNewTrip(item: PosterBulkPlanItem): PosterBulkPlanItem["fields"] {
+  const mapped = item.mappedFields as Record<string, unknown>;
+  const fields: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(mapped)) {
+    if (key === "extra") continue;
+    if (value != null && value !== "" && !(Array.isArray(value) && value.length === 0)) {
+      fields[key] = value;
+    }
+  }
+  if (mapped.extra && typeof mapped.extra === "object") {
+    fields.extra = mapped.extra;
+  }
+  if (!fields.route_name && item.title) fields.route_name = item.title;
+  return fields as PosterBulkPlanItem["fields"];
+}
+
 export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
   // apiFetch(url, init) injects the admin secret header (from admin.tsx).
   const fetchJson = async (url: string, init?: RequestInit): Promise<JsonRecord> => {
@@ -443,6 +475,8 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
   const [attachModalOpen, setAttachModalOpen] = useState(false);
   const [bulkPlan, setBulkPlan] = useState<PosterBulkPlan | null>(null);
   const [bulkReport, setBulkReport] = useState<PosterBulkRunReport | null>(null);
+  const [bulkTripOptions, setBulkTripOptions] = useState<BulkTripOption[]>([]);
+  const [bulkSelections, setBulkSelections] = useState<Record<string, BulkResolutionValue>>({});
 
   const page1Ref = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
@@ -513,12 +547,19 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
   const bulkSkippedCount = bulkPlan
     ? bulkPlan.items.filter((item) => item.action === "skip").length
     : 0;
+  const bulkSelectedCount = bulkPlan
+    ? bulkPlan.items.filter((item) => (bulkSelections[item.posterId] || defaultBulkResolution(item)) !== "skip").length
+    : 0;
+  const bulkNeedsChoiceCount = bulkPlan
+    ? bulkPlan.items.filter((item) => item.action === "skip" && (bulkSelections[item.posterId] || "skip") === "skip").length
+    : 0;
 
   const startTemplate = () => {
     setError("");
     setBusy("");
     setBulkPlan(null);
     setBulkReport(null);
+    setBulkSelections({});
     setTrip(normalizeTripData(createDefaultTrip() as PosterTrip));
     setTripId(null);
     setSource("Хоосон загвар");
@@ -1614,12 +1655,22 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     return nextTrip;
   }
 
-  async function fetchBulkPlan(): Promise<PosterBulkPlan> {
+  async function fetchBulkPlan(): Promise<PosterBulkPlanResponse> {
     const planResponse = await fetchJson("/api/admin/poster-bulk-plan", { method: "POST" });
     if (planResponse.error) throw new Error(planResponse.error as string);
-    const plan = planResponse as unknown as PosterBulkPlan;
+    const plan = planResponse as unknown as PosterBulkPlanResponse;
     if (!Array.isArray(plan.items)) throw new Error("Бүх постерын шалгалтын хариу буруу байна.");
     return plan;
+  }
+
+  function applyBulkPlan(plan: PosterBulkPlanResponse) {
+    setBulkPlan(plan);
+    setBulkTripOptions(plan.allTrips || []);
+    setBulkSelections(
+      Object.fromEntries(
+        plan.items.map((item) => [item.posterId, defaultBulkResolution(item)]),
+      ),
+    );
   }
 
   async function previewBulkPosterSync() {
@@ -1627,10 +1678,11 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     setBulkReport(null);
     setBusy("Бүх постерын төлөвлөгөө шалгаж байна…");
     try {
-      setBulkPlan(await fetchBulkPlan());
+      applyBulkPlan(await fetchBulkPlan());
     } catch (e) {
       setError(String((e as { message?: string })?.message || e));
       setBulkPlan(null);
+      setBulkSelections({});
     } finally {
       setBusy("");
     }
@@ -1707,6 +1759,97 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
         failed,
       });
       setBulkPlan(null);
+    } catch (e) {
+      setError(String((e as { message?: string })?.message || e));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function syncSelectedBulkPosters() {
+    setError("");
+    setBulkReport(null);
+    const plan = bulkPlan;
+    if (!plan) {
+      setError("Эхлээд бүх постерын шалгалтыг нээнэ үү.");
+      return;
+    }
+
+    const runnable = plan.items
+      .map((item) => ({
+        item,
+        resolution: bulkSelections[item.posterId] || defaultBulkResolution(item),
+      }))
+      .filter((entry) => entry.resolution !== "skip");
+
+    if (runnable.length === 0) {
+      setError("Оруулах постер сонгогдоогүй байна.");
+      return;
+    }
+
+    setBusy("Сонгосон постеруудыг аялалд холбож байна…");
+    const failed: PosterBulkRunReport["failed"] = [];
+    const skipped = plan.items.filter((item) => (bulkSelections[item.posterId] || defaultBulkResolution(item)) === "skip");
+    let created = 0;
+    let attached = 0;
+
+    try {
+      for (let i = 0; i < runnable.length; i++) {
+        const { item, resolution } = runnable[i];
+        const title = item.title || "постер";
+        const createNew = resolution === "create";
+        const targetTripId = resolution.startsWith("trip:") ? resolution.slice("trip:".length) : "";
+
+        setBusy(`${runnable.length} постероос ${i + 1}-г оруулж байна: ${title}…`);
+
+        try {
+          if (!createNew && !targetTripId) {
+            throw new Error("Аялал сонгоогүй байна.");
+          }
+
+          const renderedTrip = await loadPosterForBatch(item.posterId);
+          const captureTitle = item.title || renderedTrip.title || "постер";
+          const images = await captureForAttach(captureTitle);
+          const photos = images
+            .map((image, index) => buildPosterSyncPhotoPayload(image, index, captureTitle))
+            .filter((photo) => photo.dataUrl || photo.url);
+          const fields =
+            createNew
+              ? mappedFieldsForNewTrip(item)
+              : item.action === "attach_exact" && item.targetTripId === targetTripId
+                ? item.fields
+                : {};
+
+          const syncResult = await fetchJson("/api/admin/poster-sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              tripId: createNew ? undefined : targetTripId,
+              createNew: createNew || undefined,
+              newTripTitle: createNew ? captureTitle : undefined,
+              mode: "replace",
+              photos,
+              fields,
+            }),
+          });
+          if (syncResult.error) throw new Error(syncResult.error as string);
+          if (syncResult.created) created++;
+          else attached++;
+        } catch (e) {
+          failed.push({ title, error: String((e as { message?: string })?.message || e) });
+        }
+      }
+
+      await loadHistory();
+      setBulkReport({
+        total: plan.items.length,
+        created,
+        attached,
+        skipped,
+        failed,
+      });
+      setBulkPlan(null);
+      setBulkSelections({});
     } catch (e) {
       setError(String((e as { message?: string })?.message || e));
     } finally {
@@ -1925,8 +2068,13 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                     <Icons.check size={14} /> Бүгдийг шалгах
                   </Button>
                   {bulkPlan && (
-                    <Button size="sm" variant="primary" onClick={syncAllSafePosters} disabled={!!busy || bulkRunnableCount === 0}>
+                    <Button size="sm" variant="secondary" onClick={syncAllSafePosters} disabled={!!busy || bulkRunnableCount === 0}>
                       <Icons.plus size={14} /> Баталгаатайг үүсгэх ({bulkRunnableCount})
+                    </Button>
+                  )}
+                  {bulkPlan && (
+                    <Button size="sm" variant="primary" onClick={syncSelectedBulkPosters} disabled={!!busy || bulkSelectedCount === 0}>
+                      <Icons.plus size={14} /> Сонгосноор бүгдийг оруулах ({bulkSelectedCount})
                     </Button>
                   )}
                   <Button size="sm" variant="secondary" onClick={downloadFullPng} disabled={!!busy}>
@@ -1947,18 +2095,64 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                 </p>
                 {bulkPlan && (
                   <div className="mt-3 rounded-lg border border-warning/30 bg-warning-soft px-3 py-2 text-xs text-warning">
-                    <p className="font-medium">
-                      Шалгалт бэлэн: {bulkPlan.summary.create} шинэ аялал үүсгэнэ, {bulkPlan.summary.attachExact} байгаа аялалд постер нэмнэ, {bulkSkippedCount} алгасна.
-                    </p>
-                    {bulkSkippedCount > 0 && (
-                      <div className="mt-2 max-h-28 space-y-1 overflow-y-auto">
-                        {bulkPlan.items.filter((item) => item.action === "skip").slice(0, 8).map((item) => (
-                          <p key={`plan-skip-${item.posterId}`}>
-                            Алгасах: {item.title || "Нэргүй"} - {item.reason || item.reasonCode}
-                          </p>
-                        ))}
-                      </div>
-                    )}
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="font-medium">
+                        Шалгалт бэлэн: {bulkPlan.summary.create} шинэ, {bulkPlan.summary.attachExact} яг тохирсон, {bulkSkippedCount} сонголт хэрэгтэй.
+                      </p>
+                      <p className="text-[11px]">
+                        Оруулах {bulkSelectedCount} · сонгоогүй асуудал {bulkNeedsChoiceCount}
+                      </p>
+                    </div>
+                    <div className="mt-3 max-h-80 space-y-2 overflow-y-auto pr-1">
+                      {bulkPlan.items.map((item) => {
+                        const resolution = bulkSelections[item.posterId] || defaultBulkResolution(item);
+                        const needsChoice = item.action === "skip" && resolution === "skip";
+                        return (
+                          <div
+                            key={`bulk-review-${item.posterId}`}
+                            className={cx(
+                              "grid gap-2 rounded-lg border bg-surface p-2 text-ink sm:grid-cols-[minmax(0,1fr)_280px]",
+                              needsChoice ? "border-warning/50" : "border-line",
+                            )}
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium">{item.title || "Нэргүй постер"}</p>
+                              <p className="mt-0.5 text-[11px] text-ink-subtle">
+                                {item.sourceFile || "source байхгүй"}
+                              </p>
+                              <p className={cx("mt-1 text-[11px]", needsChoice ? "text-warning" : "text-ink-subtle")}>
+                                {item.action === "attach_exact" && item.targetTripName
+                                  ? `Яг тохирсон: ${item.targetTripName}`
+                                  : item.action === "create"
+                                    ? "Тохирох аялал байхгүй тул шинэ аялал үүсгэхээр санал болгосон."
+                                    : item.reason || "Гараар сонгох шаардлагатай."}
+                              </p>
+                            </div>
+                            <Select
+                              value={resolution}
+                              onChange={(e) =>
+                                setBulkSelections((prev) => ({
+                                  ...prev,
+                                  [item.posterId]: e.target.value as BulkResolutionValue,
+                                }))
+                              }
+                            >
+                              <option value="skip">Алгасах / одоо хийхгүй</option>
+                              <option value="create">Шинэ аялал үүсгэх</option>
+                              {bulkTripOptions.map((tripOption) => (
+                                <option key={tripOption.id} value={`trip:${tripOption.id}`}>
+                                  {tripOption.route_name} ({tripOption.photoCount} зураг)
+                                </option>
+                              ))}
+                            </Select>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-3 rounded-md border border-warning/30 bg-white/70 px-2 py-1.5 text-[11px] text-warning">
+                      Яг тохирсон аялалд мэдээллийг зөвхөн дутуу талбарт нөхнө. Гараар сонгосон байгаа аялалд постерын зураг л солино.
+                      Шинэ аялал үүсгэх үед постерын нэр, үнэ, огноо зэрэг уншигдсан мэдээлэл орно.
+                    </div>
                   </div>
                 )}
                 {bulkReport && (
