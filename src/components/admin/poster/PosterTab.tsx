@@ -960,7 +960,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
     };
 
     const blocks = Array.from(
-      node.querySelectorAll<HTMLElement>(".hero,.sec.compact-sec,.program-head,.dayrow,.foot"),
+      node.querySelectorAll<HTMLElement>(".hero,.sec.compact-sec,.program-head,.dayrow,.photo-gallery-head,.photo-tile,.foot"),
     )
       .filter(isVisibleSplitElement)
       .map((el) => ({ el, ...getRelativeRect(el, node) }))
@@ -975,7 +975,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
       }
     }
 
-    node.querySelectorAll<HTMLElement>(".program-head,.sec.compact-sec,.foot").forEach((el) => {
+    node.querySelectorAll<HTMLElement>(".program-head,.sec.compact-sec,.photo-gallery,.foot").forEach((el) => {
       if (!isVisibleSplitElement(el)) return;
       const rect = getRelativeRect(el, node);
       addCandidate(rect.top, 80, "section-start");
@@ -988,17 +988,18 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
       addCandidate(rowRect.top, 120, "day-start");
       addCandidate(rowRect.bottom, 95, "day-end");
 
-      const photo = row.querySelector<HTMLElement>(".dside");
-      if (photo && isVisibleSplitElement(photo)) {
-        const photoRect = getRelativeRect(photo, node);
-        addCandidate(photoRect.top, 78, "before-day-photo");
-      }
-
       row.querySelectorAll<HTMLElement>(".dsummary li").forEach((li) => {
         if (!isVisibleSplitElement(li)) return;
         const liRect = getRelativeRect(li, node);
         addCandidate(liRect.bottom + 5, 42, "between-bullets");
       });
+    });
+
+    node.querySelectorAll<HTMLElement>(".photo-tile").forEach((tile) => {
+      if (!isVisibleSplitElement(tile)) return;
+      const rect = getRelativeRect(tile, node);
+      addCandidate(rect.top, 85, "photo-row-start");
+      addCandidate(rect.bottom, 85, "photo-row-end");
     });
 
     const deduped = new Map<number, SplitCandidate>();
@@ -1026,6 +1027,8 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
       ".dsummary li",
       ".dhotel",
       ".mealgrid",
+      ".photo-gallery-head",
+      ".photo-tile",
       ".foot span",
     ].join(",");
 

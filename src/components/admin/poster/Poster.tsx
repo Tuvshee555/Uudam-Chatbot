@@ -291,6 +291,14 @@ export default function Poster({
 }: PosterProps) {
   const priceTable = getPriceTable(t);
   const priceNoteBoxes = getPriceNoteBoxes(t, priceTable);
+  let visiblePhotoCount = 0;
+  const dayPhotoEntries = (t.days || []).map((day, index) => ({
+    day,
+    index,
+    hasPhoto: Boolean(day.photo),
+    photoNumber: day.photo ? ++visiblePhotoCount : index + 1,
+  }));
+  const hasDayPhotos = dayPhotoEntries.some((entry) => entry.hasPhoto);
   const dragIdx = useRef<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
 
@@ -495,7 +503,6 @@ export default function Poster({
                 </div>
 
                 <div className="daycard">
-                  {/* Top: title + text + meals. Bottom: day photo. */}
                   <div className="dmain">
                     <div className="droute">
                       <Ed value={d.route} onChange={(v) => upd(["days", i, "route"], v)} />
@@ -535,29 +542,6 @@ export default function Poster({
                         })}
                       </div>
                     ) : null}
-                  </div>
-
-                  <div className="dside">
-                      {d.photo ? (
-                        <button
-                          type="button"
-                          className="dphoto clickable filled"
-                          style={{
-                            backgroundImage: `linear-gradient(180deg, rgba(12, 27, 43, 0.08), rgba(12, 27, 43, 0.38)), url(${d.photo})`,
-                          }}
-                          onClick={() => dayPhotoInputRefs.current?.[i]?.click()}
-                        >
-                          <span className="editor-only photohint">Дарж зураг солино</span>
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          className="dphoto editor-only dphoto-empty"
-                          onClick={() => dayPhotoInputRefs.current?.[i]?.click()}
-                        >
-                          <span className="dphoto-add-label">+ Зураг нэмэх</span>
-                        </button>
-                      )}
 
                       <input
                         ref={(node) => setDayPhotoInputRef(i, node)}
@@ -568,6 +552,9 @@ export default function Poster({
                       />
 
                       <div className="editor-only daytools">
+                        <button type="button" className="addbtn" onClick={() => dayPhotoInputRefs.current?.[i]?.click()}>
+                          {d.photo ? "Зураг солих" : "+ Зураг"}
+                        </button>
                         {d.photo && (
                           <button type="button" className="addbtn danger" onClick={() => upd(["days", i, "photo"], null)}>
                             Фото авах
@@ -589,6 +576,29 @@ export default function Poster({
               </div>
             );
           })}
+        </div>
+
+        <div className={"photo-gallery" + (hasDayPhotos ? "" : " no-photos")}>
+          <div className="photo-gallery-head">
+            <div className="section-kicker">ЗУРАГ</div>
+            <div className="photo-gallery-title">Аяллын зургууд</div>
+          </div>
+          <div className="photo-grid">
+            {dayPhotoEntries.map(({ day, index, hasPhoto, photoNumber }) => (
+              <button
+                type="button"
+                key={`day-photo-${index}`}
+                className={"photo-tile" + (hasPhoto ? " filled" : " empty editor-only")}
+                style={hasPhoto ? {
+                  backgroundImage: `linear-gradient(180deg, rgba(12, 27, 43, 0.02), rgba(12, 27, 43, 0.12)), url(${day.photo})`,
+                } : undefined}
+                onClick={() => dayPhotoInputRefs.current?.[index]?.click()}
+              >
+                <span className="photo-day-badge">{photoNumber}</span>
+                <span className="editor-only photohint">{hasPhoto ? "Дарж зураг солино" : "+ Зураг нэмэх"}</span>
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="endpad" />

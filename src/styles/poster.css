@@ -187,13 +187,13 @@ body.exporting .page .pwhen-input {background:transparent !important}
 .poster-root .page .dnum:hover .dnum-num {opacity:0}
 .poster-root .page .dnum:hover .dnum-handle {opacity:1}
 
-/* Day card: readable text first, then the photo below the plan. */
+/* Day card: itinerary text owns the row; photos live in the gallery below. */
 .poster-root .page .daycard {border:1px solid var(--line);border-radius:12px;background:#fff;border-left:3px solid var(--gold);overflow:hidden;display:grid;grid-template-columns:1fr;align-items:stretch}
 .poster-root .page .droute {font-size:19px;font-weight:900;color:var(--navy);display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;overflow-wrap:anywhere;word-break:normal}
 .poster-root .page .droute .km, .poster-root .page .droute .flt {font-size:11px;padding:3px 8px;border-radius:999px;background:var(--tint);font-weight:700;color:var(--muted)}
 .poster-root .page .droute .flt {color:var(--navy-soft)}
-.poster-root .page .dmain {min-width:0;padding:20px 20px 20px 24px;display:flex;flex-direction:column}
-.poster-root .page .dsummary.prose {font-size:15px;line-height:1.7;color:#2c3e50;padding:0 0 0 18px;border:none;background:transparent;min-height:0;box-shadow:none !important;flex:1;list-style:disc;list-style-position:outside;margin:0;overflow-wrap:break-word;word-break:normal}
+.poster-root .page .dmain {min-width:0;padding:20px 22px 18px 24px;display:flex;flex-direction:column}
+.poster-root .page .dsummary.prose {font-size:17px;line-height:1.62;color:#223548;padding:0 0 0 20px;border:none;background:transparent;min-height:0;box-shadow:none !important;flex:1;list-style:disc;list-style-position:outside;margin:0;overflow-wrap:break-word;word-break:normal}
 .poster-root .page .dsummary.prose li {margin-bottom:6px;outline:none}
 .poster-root .page .dsummary.prose li:last-child {margin-bottom:0}
 .poster-root .page .dsummary.prose li:empty:before {content:attr(data-placeholder);color:#9aaaba;font-style:italic;font-weight:400}
@@ -201,7 +201,6 @@ body.exporting .page .dsummary.prose li:empty {display:none !important}
 .poster-root .page .dhotel {margin-top:10px;color:var(--muted);font-size:13px;line-height:1.4}
 
 /* Meal badges sit under the day text. */
-.poster-root .page .dside {display:flex;flex-direction:column;gap:10px;padding:0 20px 20px 24px}
 .poster-root .page .mealgrid {display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:14px}
 .poster-root .page .mealcard {display:flex;flex-direction:row;gap:6px;align-items:center;justify-content:flex-start;padding:7px 10px;border-radius:8px;border:1px solid var(--line);font-size:11px;font-weight:700;cursor:pointer;text-align:left;min-width:0}
 .poster-root .page .mealcard.yes {background:#f0faf4;color:#1a7a4a;border-color:#b8e2c8}
@@ -209,12 +208,16 @@ body.exporting .page .dsummary.prose li:empty {display:none !important}
 .poster-root .page .mealname {font-size:11px;font-weight:700}
 .poster-root .page .mealstate {font-size:10px;font-weight:600;opacity:.75}
 
-/* Day photo: separate visual block below the plan, not a squeezed side rail. */
-.poster-root .page .dphoto {width:100%;height:auto;min-height:240px;aspect-ratio:16/7;border-radius:10px;border:none;background:#f5f8fc;background-size:cover,100% 100%;background-position:center;background-repeat:no-repeat;position:relative;overflow:hidden;display:flex;align-items:flex-end;justify-content:flex-start;padding:12px;color:#56728f;font-size:13px;font-weight:700;cursor:pointer}
-.poster-root .page .dphoto.filled {color:#fff}
-.poster-root .page .dphoto.dphoto-empty {min-height:140px;background:#f8fafc;border:2px dashed #c8d8e8;align-items:center;justify-content:center;padding:0;border-radius:10px}
-.poster-root .page .dphoto-add-label {font-size:12px;font-weight:700;color:#7a9ab8}
-.poster-root .page .dphoto .photohint {display:inline-flex;padding:5px 9px;border-radius:999px;background:rgba(12,27,43,.42);color:#fff;font-size:11px;font-weight:700}
+/* Trip photos: independent gallery after all day plans, sized for Messenger readability. */
+.poster-root .page .photo-gallery {margin-top:30px;padding-top:22px;border-top:1px solid var(--line)}
+.poster-root .page .photo-gallery-head {display:grid;gap:4px;margin-bottom:12px}
+.poster-root .page .photo-gallery-title {font-size:24px;font-weight:900;color:var(--navy)}
+.poster-root .page .photo-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.poster-root .page .photo-tile {position:relative;width:100%;aspect-ratio:16/10;min-height:250px;border:0;border-radius:10px;background:#f5f8fc;background-size:cover,100% 100%;background-position:center;background-repeat:no-repeat;overflow:hidden;cursor:pointer}
+.poster-root .page .photo-tile.empty {display:flex;align-items:center;justify-content:center;border:2px dashed #c8d8e8;background:#f8fafc;color:#7a9ab8;font-size:12px;font-weight:800}
+.poster-root .page .photo-day-badge {position:absolute;left:12px;top:12px;min-width:34px;height:34px;border-radius:999px;background:rgba(17,62,103,.88);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:900}
+.poster-root .page .photo-tile .photohint {position:absolute;left:12px;bottom:12px;display:inline-flex;padding:5px 9px;border-radius:999px;background:rgba(12,27,43,.42);color:#fff;font-size:11px;font-weight:700}
+body.exporting .photo-gallery.no-photos {display:none !important}
 
 .poster-root .page .daytools {display:flex;flex-wrap:wrap;gap:8px}
 .poster-root .addbtn {font-size:12px;color:var(--navy-soft);cursor:pointer;border:1px dashed #b9c6d8;background:#fff;border-radius:999px;padding:6px 10px;display:inline-flex;align-items:center;justify-content:center}
