@@ -331,6 +331,7 @@ export type ParseUploadUnit = {
 export type TabKey =
   | "assistant"
   | "trips"
+  | "calendar"
   | "bot"
   | "leads"
   | "settings"

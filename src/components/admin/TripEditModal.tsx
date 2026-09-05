@@ -176,15 +176,21 @@ function DepartureDateEditor({
           <span className="px-1 py-1 text-xs font-medium text-warning">Гарах өдөр дутуу</span>
         ) : (
           dates.map((date, index) => (
-            <button
+            <span
               key={`${date}-${index}`}
-              type="button"
-              onClick={() => removeDate(index)}
-              className="rounded-md border border-line-strong bg-surface px-2 py-1 text-xs font-semibold text-ink-muted transition-colors hover:border-danger hover:text-danger"
-              title="Огноо устгах"
+              className="inline-flex items-center gap-1 rounded-md border border-line-strong bg-surface px-2 py-1 text-xs font-semibold text-ink-muted"
             >
               {date}
-            </button>
+              <button
+                type="button"
+                onClick={() => removeDate(index)}
+                className="ml-0.5 flex h-4 w-4 items-center justify-center rounded-full text-ink-subtle hover:bg-danger-soft hover:text-danger"
+                title="Огноо устгах"
+                aria-label={`${date} устгах`}
+              >
+                ×
+              </button>
+            </span>
           ))
         )}
       </div>
@@ -276,6 +282,9 @@ export function TripEditModal({
 
   const editingExtra = (editingTrip?.extra || {}) as Record<string, unknown>;
   const isPosterLinked = typeof editingExtra.poster_trip_id === "string";
+  const linkedPosterId = isPosterLinked ? String(editingExtra.poster_trip_id) : "";
+  const linkedSourceFile = typeof editingExtra.source_file_name === "string" ? editingExtra.source_file_name : "";
+  const originalPosterTitle = typeof editingExtra.original_title_text === "string" ? editingExtra.original_title_text : "";
   const brochurePdfUrl =
     typeof editingExtra.brochure_pdf_url === "string" && editingExtra.brochure_pdf_url.startsWith("https://")
       ? editingExtra.brochure_pdf_url
@@ -386,7 +395,14 @@ export function TripEditModal({
       {isPosterLinked && (
         <div className="mt-4 rounded-lg border border-success/25 bg-success-soft px-3 py-2.5 text-sm text-success">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="font-semibold">PDF хөтөлбөр холбогдсон</span>
+            <div className="min-w-0">
+              <p className="font-semibold">Постертэй холбогдсон аялал</p>
+              <p className="mt-0.5 truncate text-xs text-success/80">
+                {linkedPosterId}
+                {originalPosterTitle ? ` · ${originalPosterTitle}` : ""}
+                {linkedSourceFile ? ` · ${linkedSourceFile}` : ""}
+              </p>
+            </div>
             {brochurePdfUrl && (
               <a
                 href={brochurePdfUrl}

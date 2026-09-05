@@ -19,6 +19,18 @@ export type PosterTripRow = {
   updated_at: string;
 };
 
+export type PosterTripListRow = {
+  id: string;
+  title: string;
+  source_file: string | null;
+  updated_at: string;
+  linked_trip_id: string | null;
+  linked_trip_name: string | null;
+  linked_trip_status: string | null;
+  linked_trip_has_pdf: boolean;
+  linked_trip_needs_review: boolean;
+};
+
 let schemaReady = false;
 const PDF_REVIEW_REASON = "Poster sync: PDF хөтөлбөр дутуу";
 const SCHEDULE_REVIEW_REASON = "Poster sync: гарах өдрийн календарь дутуу";
@@ -53,19 +65,35 @@ export async function ensurePosterSchema(): Promise<boolean> {
   return true;
 }
 
-export async function listPosterTrips(): Promise<
-  Array<{ id: string; title: string; source_file: string | null; updated_at: string }>
-> {
+export async function listPosterTrips(): Promise<PosterTripListRow[]> {
   if (!(await ensurePosterSchema())) return [];
   const res = await queryNeon<{
     id: string;
     title: string;
     source_file: string | null;
     updated_at: string;
+    linked_trip_id: string | null;
+    linked_trip_name: string | null;
+    linked_trip_status: string | null;
+    linked_trip_has_pdf: boolean;
+    linked_trip_needs_review: boolean;
   }>(
-    `SELECT id, title, source_file, updated_at
-       FROM poster_trips
-      ORDER BY updated_at DESC
+    `SELECT p.id,
+            p.title,
+            p.source_file,
+            p.updated_at,
+            t.id AS linked_trip_id,
+            t.route_name AS linked_trip_name,
+            t.status AS linked_trip_status,
+            (
+              COALESCE(t.extra->>'brochure_pdf_url', '') <> ''
+              OR COALESCE(t.extra->>'source_file_attachment_id', '') <> ''
+            ) AS linked_trip_has_pdf,
+            COALESCE((t.extra->>'needs_human_review')::boolean, FALSE) AS linked_trip_needs_review
+       FROM poster_trips p
+       LEFT JOIN travel_trip_entries t
+         ON t.extra->>'poster_trip_id' = p.id
+      ORDER BY p.updated_at DESC
       LIMIT 200`,
   );
   return res?.rows ?? [];

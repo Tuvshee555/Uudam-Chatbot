@@ -12,6 +12,7 @@ export const NAV_GROUPS: Array<{
     items: [
       { key: "assistant", label: "AI туслах", icon: <Icons.ai size={16} /> },
       { key: "trips", label: "Аяллууд", icon: <Icons.trips size={16} /> },
+      { key: "calendar", label: "Календарь", icon: <Icons.calendar size={16} /> },
     ],
   },
   {

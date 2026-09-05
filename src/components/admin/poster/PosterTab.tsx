@@ -112,6 +112,11 @@ export type PosterHistoryItem = {
   title: string;
   source_file: string | null;
   updated_at: string;
+  linked_trip_id?: string | null;
+  linked_trip_name?: string | null;
+  linked_trip_status?: string | null;
+  linked_trip_has_pdf?: boolean;
+  linked_trip_needs_review?: boolean;
 };
 
 type HistorySort = "newest" | "oldest" | "title";
@@ -552,6 +557,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
   const bulkNeedsChoiceCount = bulkPlan
     ? bulkPlan.items.filter((item) => item.action === "skip" && (bulkSelections[item.posterId] || "skip") === "skip").length
     : 0;
+  const currentHistoryItem = tripId ? history.find((item) => item.id === tripId) || null : null;
 
   const startTemplate = () => {
     setError("");
@@ -2011,6 +2017,32 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                   </Button>
                 </div>
 
+                {tripId && (
+                  <div className="mt-4 rounded-xl border border-brand/20 bg-brand-soft p-3 text-sm text-brand">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <p className="font-semibold">Live trip connection</p>
+                        <p className="mt-0.5 truncate text-xs text-brand/80">
+                          poster: {tripId}
+                          {currentHistoryItem?.linked_trip_id ? ` · trip: ${currentHistoryItem.linked_trip_id}` : " · trip холбоогүй"}
+                        </p>
+                        {currentHistoryItem?.linked_trip_name && (
+                          <p className="mt-1 truncate text-xs text-brand/90">{currentHistoryItem.linked_trip_name}</p>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        <Badge tone={currentHistoryItem?.linked_trip_id ? "brand" : "danger"}>
+                          {currentHistoryItem?.linked_trip_id ? "Trip холбоотой" : "Trip байхгүй"}
+                        </Badge>
+                        <Badge tone={currentHistoryItem?.linked_trip_has_pdf ? "success" : "danger"}>
+                          {currentHistoryItem?.linked_trip_has_pdf ? "PDF бэлэн" : "PDF дутуу"}
+                        </Badge>
+                        {currentHistoryItem?.linked_trip_needs_review && <Badge tone="warning">Шалгах</Badge>}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <div className="mt-4 rounded-xl border border-line bg-surface-sunken p-3">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div>
@@ -2288,6 +2320,23 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                         {duplicateCount > 1 && (
                           <Badge tone="warning" className="mt-1">Ижил нэр x{duplicateCount}</Badge>
                         )}
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {h.linked_trip_id ? (
+                            <>
+                              <Badge tone={h.linked_trip_needs_review ? "warning" : "brand"}>
+                                {h.linked_trip_needs_review ? "Trip шалгах" : "Trip холбоотой"}
+                              </Badge>
+                              <Badge tone={h.linked_trip_has_pdf ? "success" : "danger"}>
+                                {h.linked_trip_has_pdf ? "PDF бэлэн" : "PDF дутуу"}
+                              </Badge>
+                              <span className="max-w-full truncate rounded-md bg-surface-sunken px-2 py-0.5 text-[11px] text-ink-subtle">
+                                {h.linked_trip_name || h.linked_trip_id}
+                              </span>
+                            </>
+                          ) : (
+                            <Badge tone="danger">Trip холбоогүй</Badge>
+                          )}
+                        </div>
                       </button>
                       <button
                         type="button"

@@ -17,6 +17,7 @@ import { PaymentsTab } from "@/components/admin/PaymentsTab";
 import { SeasonsTab } from "@/components/admin/SeasonsTab";
 import { SettingsTab } from "@/components/admin/SettingsTab";
 import { TripsTab } from "@/components/admin/TripsTab";
+import { TripCalendarTab } from "@/components/admin/TripCalendarTab";
 import { TripEditModal } from "@/components/admin/TripEditModal";
 import { JsonEditorTab } from "@/components/admin/JsonEditorTab";
 import { TripPhotoImportTab } from "@/components/admin/TripPhotoImportTab";
@@ -1693,7 +1694,24 @@ export default function AdminPage() {
         {/* Content */}
         <main className="scroll-area min-w-0 flex-1 overflow-y-auto p-3 sm:p-5 lg:p-7">
           <div className="mx-auto w-full max-w-6xl">
-          {/* Bot-paused is already shown as a badge in the topbar — no banner. */}
+          {botPaused && (
+            <div className="mb-4 rounded-xl border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-2">
+                  <Icons.pause size={16} className="mt-0.5 shrink-0" />
+                  <div>
+                    <p className="font-semibold">Ботын хуудас зогссон байна.</p>
+                    <p className="mt-0.5 text-danger/80">
+                      Vercel webhook 200 гэж харагдсан ч энэ үед бот зориуд хариу илгээхгүй.
+                    </p>
+                  </div>
+                </div>
+                <Button size="sm" variant="secondary" onClick={() => setTab("bot")}>
+                  Ботын хяналт нээх
+                </Button>
+              </div>
+            </div>
+          )}
           {systemLoaded && !dbInfo?.configured && (
             <div className="mb-4">
               <Alert tone="danger">
@@ -1822,6 +1840,9 @@ export default function AdminPage() {
                 }
               }}
             />
+          )}
+          {tab === "calendar" && (
+            <TripCalendarTab trips={trips} onEditTrip={beginEditTrip} />
           )}
           {tab === "bot" && (
             <BotTab

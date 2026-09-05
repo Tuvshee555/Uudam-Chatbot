@@ -359,6 +359,15 @@ function isPosterSyncedTrip(trip: TravelTrip): boolean {
   return typeof (trip.extra as Record<string, unknown>)?.poster_trip_id === "string";
 }
 
+function tripConnectionDetails(trip: TravelTrip): { posterId: string; sourceFile: string; pdfUrl: string } {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  return {
+    posterId: typeof extra.poster_trip_id === "string" ? extra.poster_trip_id : "",
+    sourceFile: typeof extra.source_file_name === "string" ? extra.source_file_name : "",
+    pdfUrl: typeof extra.brochure_pdf_url === "string" ? extra.brochure_pdf_url : "",
+  };
+}
+
 function formatTripMoney(value: number | null | undefined, currency = "MNT"): string | null {
   if (typeof value !== "number") return null;
   const suffix = currency === "MNT" || !currency ? "₮" : ` ${currency}`;
@@ -552,6 +561,7 @@ function TripCard({
 }) {
   const isHidden = (trip.extra as Record<string, unknown>)?.customer_visible === false;
   const isPosterSynced = isPosterSyncedTrip(trip);
+  const connection = tripConnectionDetails(trip);
   const hasPdf = tripHasPdf(trip);
   const facts: string[] = [];
   if (trip.seats_left != null || trip.seats_total != null) {
@@ -600,6 +610,25 @@ function TripCard({
             </div>
           )}
           <DepartureCalendar dates={trip.departure_dates || []} />
+          {isPosterSynced && (
+            <div className="mt-2 rounded-md border border-brand/15 bg-brand-soft px-2.5 py-2 text-xs text-brand">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-semibold">Холбоо:</span>
+                <span className="rounded-[6px] bg-surface px-1.5 py-0.5 font-mono text-[11px]">{connection.posterId}</span>
+                {connection.sourceFile && <span className="truncate text-brand/80">эх: {connection.sourceFile}</span>}
+                {connection.pdfUrl && (
+                  <a
+                    href={connection.pdfUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ml-auto rounded-[6px] bg-surface px-2 py-0.5 font-semibold hover:underline"
+                  >
+                    PDF нээх
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
           {missing.length > 0 && (
             <p className="mt-1.5 text-xs text-ink-subtle">
               дутуу: {missing.join(" · ")}

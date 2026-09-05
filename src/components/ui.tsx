@@ -116,6 +116,15 @@ export const Icons = {
       <line x1="15" y1="6" x2="15" y2="21" />
     </>,
   ),
+  calendar: makeIcon(
+    <>
+      <rect x="3.5" y="5" width="17" height="15.5" rx="2" />
+      <line x1="8" y1="3.5" x2="8" y2="7" />
+      <line x1="16" y1="3.5" x2="16" y2="7" />
+      <line x1="3.5" y1="10" x2="20.5" y2="10" />
+      <path d="M8 14h.1M12 14h.1M16 14h.1M8 17h.1M12 17h.1" />
+    </>,
+  ),
   pause: makeIcon(
     <>
       <rect x="6" y="5" width="4" height="14" rx="1" />
