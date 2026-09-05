@@ -4,6 +4,7 @@ import { TabHeader } from "./AdminShared";
 import type { TravelTrip } from "@/lib/adminTypes";
 import { STATUS_LABELS } from "@/lib/adminProposalUtils";
 import { STATUS_TONE, formatTime } from "@/lib/adminUtils";
+import { getPosterBrochureHref } from "@/lib/poster/pdfUrl";
 
 export function TripsTab({
   trips,
@@ -350,6 +351,7 @@ export function TripsTab({
 function tripHasPdf(trip: TravelTrip): boolean {
   const extra = (trip.extra || {}) as Record<string, unknown>;
   return (
+    (typeof extra.poster_trip_id === "string" && extra.poster_trip_id.trim().length > 0) ||
     (typeof extra.brochure_pdf_url === "string" && extra.brochure_pdf_url.startsWith("https://")) ||
     (typeof extra.source_file_attachment_id === "string" && extra.source_file_attachment_id.trim().length > 0)
   );
@@ -364,7 +366,7 @@ function tripConnectionDetails(trip: TravelTrip): { posterId: string; sourceFile
   return {
     posterId: typeof extra.poster_trip_id === "string" ? extra.poster_trip_id : "",
     sourceFile: typeof extra.source_file_name === "string" ? extra.source_file_name : "",
-    pdfUrl: typeof extra.brochure_pdf_url === "string" ? extra.brochure_pdf_url : "",
+    pdfUrl: getPosterBrochureHref(extra),
   };
 }
 

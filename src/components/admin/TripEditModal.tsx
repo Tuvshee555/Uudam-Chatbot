@@ -1,5 +1,6 @@
 import React from "react";
 import { Button, Icons, Input, Modal, Select, Spinner, Textarea, cx } from "@/components/ui";
+import { getPosterBrochureHref } from "@/lib/poster/pdfUrl";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
 import type { AnswerHint, BookingTerms, ChildRule, DiscountGroup, ExtraFee, PassengerPrice, PriceGroup, RoomPrice, SourceProvenance, TravelTrip } from "@/lib/adminTypes";
 
@@ -285,10 +286,7 @@ export function TripEditModal({
   const linkedPosterId = isPosterLinked ? String(editingExtra.poster_trip_id) : "";
   const linkedSourceFile = typeof editingExtra.source_file_name === "string" ? editingExtra.source_file_name : "";
   const originalPosterTitle = typeof editingExtra.original_title_text === "string" ? editingExtra.original_title_text : "";
-  const brochurePdfUrl =
-    typeof editingExtra.brochure_pdf_url === "string" && editingExtra.brochure_pdf_url.startsWith("https://")
-      ? editingExtra.brochure_pdf_url
-      : "";
+  const brochurePdfUrl = getPosterBrochureHref(editingExtra);
 
   return (
     <Modal

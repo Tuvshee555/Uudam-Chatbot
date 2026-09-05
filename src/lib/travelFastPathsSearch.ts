@@ -5,6 +5,7 @@
  */
 
 import { filterFutureDepartureDates, type ResolvedDepartureDate } from "./travelDates";
+import { getPosterPdfPublicUrl } from "./poster/pdfUrl";
 import type { TravelTrip } from "./travelOps";
 
 /**
@@ -1500,6 +1501,12 @@ export function hasProgramIntent(text: string) {
 export function getTripBrochureAsset(trip: TravelTrip): ProgramAsset | null {
   const id = getTripLooseField(trip, "source_file_attachment_id");
   if (typeof id === "string" && id.length > 0) return { type: "id", value: id };
+
+  const posterId = getTripLooseField(trip, "poster_trip_id");
+  if (typeof posterId === "string" && posterId.trim().length > 0) {
+    const generatedUrl = getPosterPdfPublicUrl(posterId.trim());
+    if (generatedUrl) return { type: "url", value: generatedUrl };
+  }
 
   const url = getTripLooseField(trip, "brochure_pdf_url");
   if (typeof url === "string" && url.startsWith("https://")) return { type: "url", value: url };

@@ -205,7 +205,7 @@ async function syncPosterTrip(row: {
 export async function getPosterTrip(id: string): Promise<PosterTripRow | null> {
   if (!(await ensurePosterSchema())) return null;
   const res = await queryNeon<PosterTripRow>(
-    `SELECT id, title, source_file, data FROM poster_trips WHERE id = $1`,
+    `SELECT id, title, source_file, data, updated_at FROM poster_trips WHERE id = $1`,
     [id],
   );
   return res?.rows?.[0] ?? null;

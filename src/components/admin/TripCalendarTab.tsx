@@ -34,6 +34,7 @@ const MONTH_LABELS = [
 function tripHasPdf(trip: TravelTrip): boolean {
   const extra = (trip.extra || {}) as Record<string, unknown>;
   return (
+    (typeof extra.poster_trip_id === "string" && extra.poster_trip_id.trim().length > 0) ||
     (typeof extra.brochure_pdf_url === "string" && extra.brochure_pdf_url.startsWith("https://")) ||
     (typeof extra.source_file_attachment_id === "string" && extra.source_file_attachment_id.trim().length > 0)
   );
