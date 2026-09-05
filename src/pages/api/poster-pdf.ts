@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getPosterTrip } from "@/lib/poster/db";
+import { getPosterTrip, linkedTripId } from "@/lib/poster/db";
+import { getTripById } from "@/lib/travelDb";
 import { buildPosterPdf, sanitizePosterPdfFileName } from "@/lib/poster/pdf";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -16,6 +17,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const poster = await getPosterTrip(id);
   if (!poster) {
     return res.status(404).json({ error: "Poster PDF not found" });
+  }
+
+  // The real captured poster PDF lives on the linked trip's brochure_pdf_url —
+  // that IS the actual brochure the client exported. Redirect to it and only
+  // fall back to rebuilding a plain-text PDF from poster JSON when no real
+  // PDF was ever attached.
+  const linkedTrip = await getTripById(linkedTripId(id));
+  const realPdfUrl =
+    typeof linkedTrip?.extra?.brochure_pdf_url === "string"
+      ? linkedTrip.extra.brochure_pdf_url.trim()
+      : "";
+  if (realPdfUrl.startsWith("https://")) {
+    return res.redirect(302, realPdfUrl);
   }
 
   const pdf = await buildPosterPdf(poster);

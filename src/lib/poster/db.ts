@@ -99,7 +99,7 @@ export async function listPosterTrips(): Promise<PosterTripListRow[]> {
   return res?.rows ?? [];
 }
 
-function linkedTripId(posterId: string): string {
+export function linkedTripId(posterId: string): string {
   return `trip-${posterId}`;
 }
 

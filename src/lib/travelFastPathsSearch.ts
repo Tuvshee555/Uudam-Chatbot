@@ -1502,14 +1502,18 @@ export function getTripBrochureAsset(trip: TravelTrip): ProgramAsset | null {
   const id = getTripLooseField(trip, "source_file_attachment_id");
   if (typeof id === "string" && id.length > 0) return { type: "id", value: id };
 
+  // The real captured/uploaded poster PDF is the actual brochure file — send
+  // that. The generated poster-pdf endpoint rebuilds a plain-text PDF from
+  // poster JSON and is only a last-resort fallback when no real PDF exists.
+  const url = getTripLooseField(trip, "brochure_pdf_url");
+  if (typeof url === "string" && url.startsWith("https://")) return { type: "url", value: url };
+
   const posterId = getTripLooseField(trip, "poster_trip_id");
   if (typeof posterId === "string" && posterId.trim().length > 0) {
     const generatedUrl = getPosterPdfPublicUrl(posterId.trim());
     if (generatedUrl) return { type: "url", value: generatedUrl };
   }
 
-  const url = getTripLooseField(trip, "brochure_pdf_url");
-  if (typeof url === "string" && url.startsWith("https://")) return { type: "url", value: url };
   return null;
 }
 
