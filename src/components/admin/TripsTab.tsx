@@ -39,21 +39,21 @@ export function TripsTab({
   businessName: string;
 }) {
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
-  const [photoFilter, setPhotoFilter] = useState<"all" | "with" | "without">("all");
+  const [brochureFilter, setBrochureFilter] = useState<"all" | "with" | "without">("all");
   const [pdfProgress, setPdfProgress] = useState("");
   const toast = useToast();
 
-  const tripsWithoutPhotos = useMemo(
-    () => trips.filter((t) => (t.photo_urls?.length || 0) === 0),
+  const tripsWithoutPdf = useMemo(
+    () => trips.filter((t) => !tripHasPdf(t)),
     [trips],
   );
-  const tripsWithPhotos = useMemo(
-    () => trips.filter((t) => (t.photo_urls?.length || 0) > 0),
+  const tripsWithPdf = useMemo(
+    () => trips.filter((t) => tripHasPdf(t)),
     [trips],
   );
   const visibleTrips =
-    photoFilter === "without" ? tripsWithoutPhotos :
-    photoFilter === "with" ? tripsWithPhotos :
+    brochureFilter === "without" ? tripsWithoutPdf :
+    brochureFilter === "with" ? tripsWithPdf :
     trips;
 
   /**
@@ -231,7 +231,7 @@ export function TripsTab({
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Маршрут эсвэл оператор хайх…"
+              placeholder="Аяллын нэр хайх…"
               className="h-10 min-w-0 flex-1 rounded-md border border-line-strong bg-surface px-3 text-sm text-ink transition-colors placeholder:text-ink-subtle focus:border-brand"
             />
             <IconButton label="Шинэчлэх" onClick={onRefresh}>
@@ -255,18 +255,18 @@ export function TripsTab({
               {(
                 [
                   { key: "all", label: "Бүгд", count: trips.length },
-                  { key: "with", label: "Зурагтай", count: tripsWithPhotos.length },
-                  { key: "without", label: "Зураггүй", count: tripsWithoutPhotos.length },
+                  { key: "with", label: "PDF-тэй", count: tripsWithPdf.length },
+                  { key: "without", label: "PDFгүй", count: tripsWithoutPdf.length },
                 ] as const
               ).map((opt) => (
                 <button
                   key={opt.key}
                   type="button"
-                  onClick={() => setPhotoFilter(opt.key)}
-                  aria-pressed={photoFilter === opt.key}
+                  onClick={() => setBrochureFilter(opt.key)}
+                  aria-pressed={brochureFilter === opt.key}
                   className={cx(
                     "flex items-center gap-1.5 rounded-[6px] px-2.5 py-1.5 text-xs font-medium transition-colors",
-                    photoFilter === opt.key
+                    brochureFilter === opt.key
                       ? "bg-surface text-ink shadow-xs"
                       : "text-ink-muted hover:text-ink",
                   )}
@@ -311,14 +311,14 @@ export function TripsTab({
         </div>
       </Card>
 
-      {tripsWithoutPhotos.length > 0 && photoFilter === "all" && (
-        <div className="flex items-center gap-2 rounded-xl border border-warning/30 bg-warning/5 px-3.5 py-2.5 text-sm text-warning">
+      {tripsWithoutPdf.length > 0 && brochureFilter === "all" && (
+        <div className="flex items-center gap-2 rounded-xl border border-danger/30 bg-danger-soft px-3.5 py-2.5 text-sm text-danger">
           <Icons.alert size={16} className="shrink-0" />
           <span>
-            {tripsWithoutPhotos.length} аялалд зураг оруулаагүй байна.{" "}
+            {tripsWithoutPdf.length} аялалд автоматаар илгээх PDF алга байна.{" "}
             <button
               type="button"
-              onClick={() => setPhotoFilter("without")}
+              onClick={() => setBrochureFilter("without")}
               className="font-semibold underline hover:no-underline"
             >
               Харах
@@ -347,16 +347,110 @@ export function TripsTab({
   );
 }
 
+function tripHasPdf(trip: TravelTrip): boolean {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  return (
+    (typeof extra.brochure_pdf_url === "string" && extra.brochure_pdf_url.startsWith("https://")) ||
+    (typeof extra.source_file_attachment_id === "string" && extra.source_file_attachment_id.trim().length > 0)
+  );
+}
+
+function isPosterSyncedTrip(trip: TravelTrip): boolean {
+  return typeof (trip.extra as Record<string, unknown>)?.poster_trip_id === "string";
+}
+
+function formatTripMoney(value: number | null | undefined, currency = "MNT"): string | null {
+  if (typeof value !== "number") return null;
+  const suffix = currency === "MNT" || !currency ? "₮" : ` ${currency}`;
+  return `${value.toLocaleString("mn-MN")}${suffix}`;
+}
+
+type CalendarChip = { month: string; day: string };
+
+function calendarDaySortValue(day: string): number {
+  return Number(day.split("-")[0]) || 0;
+}
+
+function parseCalendarChips(value: string): CalendarChip[] {
+  const text = value
+    .replace(/\r?\n+/g, ", ")
+    .replace(/(\d{1,2})\s*(?:-?р\s*)?сарын\s*(\d)/gi, "$1 сарын $2");
+  const chips: CalendarChip[] = [];
+  const monthPattern = /(\d{1,2})\s*(?:-?р\s*)?сарын/gi;
+  const monthMatches = Array.from(text.matchAll(monthPattern));
+  for (let i = 0; i < monthMatches.length; i += 1) {
+    const match = monthMatches[i];
+    const month = `${Number(match[1])} сар`;
+    const start = (match.index || 0) + match[0].length;
+    const end = monthMatches[i + 1]?.index ?? text.length;
+    const segment = text.slice(start, end);
+    for (const dayMatch of segment.matchAll(/(?<!\d)(\d{1,2})(?:\s*-\s*(\d{1,2}))?(?!\d)/g)) {
+      const day = dayMatch[2] ? `${Number(dayMatch[1])}-${Number(dayMatch[2])}` : String(Number(dayMatch[1]));
+      chips.push({ month, day });
+    }
+  }
+  const slash = text.match(/(?<!\d)(\d{1,2})\s*\/\s*(\d{1,2})(?!\d)/);
+  if (chips.length === 0 && slash) {
+    chips.push({ month: `${Number(slash[1])} сар`, day: String(Number(slash[2])) });
+  }
+  return chips;
+}
+
+function DepartureCalendar({ dates }: { dates: string[] }) {
+  const groups = new Map<string, string[]>();
+  const rules: string[] = [];
+  for (const raw of dates) {
+    const chips = parseCalendarChips(raw);
+    if (chips.length === 0) {
+      if (raw.trim()) rules.push(raw.trim());
+      continue;
+    }
+    for (const chip of chips) {
+      const days = groups.get(chip.month) || [];
+      if (!days.includes(chip.day)) days.push(chip.day);
+      groups.set(chip.month, days);
+    }
+  }
+
+  if (groups.size === 0 && rules.length === 0) {
+    return (
+      <div className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-warning/25 bg-warning/5 px-2.5 py-1 text-xs font-medium text-warning">
+        <Icons.alert size={13} />
+        Гарах өдөр дутуу
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      {Array.from(groups.entries()).map(([month, days]) => (
+        <div key={month} className="flex items-center gap-1 rounded-md border border-line bg-surface px-2 py-1">
+          <span className="text-xs font-semibold text-brand">{month}</span>
+          {[...days].sort((a, b) => calendarDaySortValue(a) - calendarDaySortValue(b)).map((day) => (
+            <span
+              key={day}
+              className="flex h-6 min-w-6 items-center justify-center rounded-[6px] bg-surface-sunken px-1.5 text-xs font-semibold tabular-nums text-ink"
+            >
+              {day}
+            </span>
+          ))}
+        </div>
+      ))}
+      {rules.map((rule) => (
+        <span key={rule} className="rounded-md border border-line bg-surface px-2.5 py-1 text-xs font-medium text-ink-muted">
+          {rule}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function getMissingHints(trip: TravelTrip): string[] {
   const hints: string[] = [];
   if (!trip.adult_price) hints.push("үнэ");
   if (!trip.departure_dates.length) hints.push("гарах өдөр");
   if (!trip.duration_text) hints.push("хугацаа");
-  const hasBrochure =
-    trip.photo_urls.length > 0 ||
-    typeof (trip.extra as Record<string, unknown>)?.brochure_pdf_url === "string" ||
-    typeof (trip.extra as Record<string, unknown>)?.source_file_attachment_id === "string";
-  if (!hasBrochure) hints.push("зураг");
+  if (!tripHasPdf(trip)) hints.push("PDF");
   return hints;
 }
 
@@ -372,9 +466,15 @@ function TripGroups({
   onToggleVisible: (trip: TravelTrip) => void;
 }) {
   const groups = useMemo(() => {
+    const meaningfulCategories = new Set(
+      trips
+        .map((trip) => trip.category?.trim())
+        .filter((category): category is string => Boolean(category && category !== "Аялал")),
+    );
+    const collapseDefaultCategory = meaningfulCategories.size === 0;
     const map = new Map<string, TravelTrip[]>();
     for (const trip of trips) {
-      const key = trip.category?.trim() || "Ангилалгүй";
+      const key = collapseDefaultCategory ? "Аяллууд" : trip.category?.trim() || "Ангилалгүй";
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(trip);
     }
@@ -451,46 +551,30 @@ function TripCard({
   onToggleVisible: () => void;
 }) {
   const isHidden = (trip.extra as Record<string, unknown>)?.customer_visible === false;
-  const isPosterSynced = typeof (trip.extra as Record<string, unknown>)?.poster_trip_id === "string";
+  const isPosterSynced = isPosterSyncedTrip(trip);
+  const hasPdf = tripHasPdf(trip);
   const facts: string[] = [];
   if (trip.seats_left != null || trip.seats_total != null) {
     facts.push(`Суудал: ${trip.seats_left ?? "?"}/${trip.seats_total ?? "?"}`);
   }
-  const currencyMark = trip.currency === "MNT" ? "₮" : ` ${trip.currency}`;
-  if (trip.adult_price != null) {
-    facts.push(`Том хүн: ${trip.adult_price.toLocaleString("en-US")}${currencyMark}`);
-  }
-  if (trip.child_price != null) {
-    facts.push(`Хүүхэд: ${trip.child_price.toLocaleString("en-US")}${currencyMark}`);
-  }
+  const adultPrice = formatTripMoney(trip.adult_price, trip.currency);
+  const childPrice = formatTripMoney(trip.child_price, trip.currency);
+  if (adultPrice) facts.push(`Том хүн: ${adultPrice}`);
+  if (childPrice) facts.push(`Хүүхэд: ${childPrice}`);
   if (trip.has_food != null) {
     facts.push(`Хоол: ${trip.has_food ? "багтсан" : "багтаагүй"}`);
   }
   if (trip.duration_text) facts.push(trip.duration_text);
-  if (trip.departure_dates.length) {
-    facts.push(`${trip.departure_dates.length} гарах өдөр`);
-  }
 
   const missing = getMissingHints(trip);
 
   return (
     <Card className={cx("card-lift p-3.5", isHidden && "opacity-70")}>
       <div className="flex gap-3">
-        {trip.photo_urls.length > 0 && (
-          <img
-            src={trip.photo_urls[0]}
-            alt={trip.route_name || "Аяллын зураг"}
-            loading="lazy"
-            className="h-16 w-16 shrink-0 rounded-lg object-cover ring-1 ring-line"
-          />
-        )}
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="font-semibold text-ink">{trip.route_name || "—"}</p>
-              <p className="text-xs text-ink-subtle">
-                {trip.operator_name}
-              </p>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               {(trip.extra as Record<string, unknown>)?.needs_human_review === true && (
@@ -498,6 +582,9 @@ function TripCard({
               )}
               {isHidden && <Badge tone="neutral">Нуусан</Badge>}
               {isPosterSynced && <Badge tone="brand">Poster sync</Badge>}
+              <Badge tone={hasPdf ? "success" : "danger"}>
+                {hasPdf ? "PDF бэлэн" : "PDF дутуу"}
+              </Badge>
               <Badge tone={STATUS_TONE[trip.status]}>
                 {STATUS_LABELS[trip.status]}
               </Badge>
@@ -512,6 +599,7 @@ function TripCard({
               ))}
             </div>
           )}
+          <DepartureCalendar dates={trip.departure_dates || []} />
           {missing.length > 0 && (
             <p className="mt-1.5 text-xs text-ink-subtle">
               дутуу: {missing.join(" · ")}

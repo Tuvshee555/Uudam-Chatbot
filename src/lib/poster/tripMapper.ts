@@ -111,6 +111,43 @@ function mapHasFood(days: PosterDay[] | undefined): boolean | undefined {
   return days.some((d) => d.meals?.breakfast || d.meals?.lunch || d.meals?.dinner);
 }
 
+function normalizeDepartureText(value: string): string {
+  return value
+    .replace(/\r?\n+/g, ", ")
+    .replace(/(\d{1,2})\s*(?:-?р\s*)?сарын\s*(\d)/gi, "$1 сарын $2")
+    .replace(/\s*,\s*/g, ", ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function pushDepartureText(target: string[], value: string | undefined): void {
+  const text = normalizeDepartureText(value || "");
+  if (!text || /^үнэ$/i.test(text)) return;
+  if (!target.includes(text)) target.push(text);
+}
+
+function extractTitleDate(title: string | undefined): string | null {
+  const match = String(title || "").match(/(?<!\d)(\d{1,2})\s*\/\s*(\d{1,2})(?!\d)/);
+  if (!match) return null;
+  return `${Number(match[1])} сарын ${Number(match[2])}`;
+}
+
+function mapDepartureDates(poster: PosterTrip): string[] {
+  const dates: string[] = [];
+  for (const departure of poster.departures || []) {
+    pushDepartureText(dates, departure.date);
+  }
+  if (dates.length === 0) {
+    for (const row of poster.price_table?.rows || []) {
+      pushDepartureText(dates, row.dates);
+    }
+  }
+  if (dates.length === 0) {
+    pushDepartureText(dates, extractTitleDate(poster.title) || undefined);
+  }
+  return dates;
+}
+
 export function mapPosterTripToFields(poster: PosterTrip): MappedTripFields {
   const fields: MappedTripFields = {};
 
@@ -119,9 +156,7 @@ export function mapPosterTripToFields(poster: PosterTrip): MappedTripFields {
   const durationText = mapDurationText(poster.duration_days, poster.duration_nights);
   if (durationText) fields.duration_text = durationText;
 
-  const dates = (poster.departures || [])
-    .map((d) => d.date?.trim())
-    .filter((d): d is string => Boolean(d));
+  const dates = mapDepartureDates(poster);
   if (dates.length) fields.departure_dates = dates;
 
   const { adult_price, child_price } = mapPrices(poster.price_table);

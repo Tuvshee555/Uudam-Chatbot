@@ -777,6 +777,7 @@ export function Modal({
   description,
   children,
   footer,
+  panelClassName,
 }: {
   open: boolean;
   onClose: () => void;
@@ -784,6 +785,7 @@ export function Modal({
   description?: string;
   children: ReactNode;
   footer?: ReactNode;
+  panelClassName?: string;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
@@ -850,7 +852,10 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={description ? descId : undefined}
-        className="animate-scale-in relative flex max-h-[92dvh] w-full max-w-2xl flex-col rounded-t-xl bg-surface shadow-lg sm:max-h-[88dvh] sm:rounded-xl"
+        className={cx(
+          "animate-scale-in relative flex max-h-[92dvh] w-full flex-col rounded-t-xl bg-surface shadow-lg sm:max-h-[88dvh] sm:rounded-xl",
+          panelClassName || "max-w-2xl",
+        )}
       >
         <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
           <div className="min-w-0">

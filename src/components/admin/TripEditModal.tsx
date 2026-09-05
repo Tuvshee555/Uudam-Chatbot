@@ -86,6 +86,112 @@ function emptyRoomPrice(): RoomPrice {
   return { room_type: "", price: null, currency: "MNT", note: "" };
 }
 
+function splitDepartureDraft(value: string): string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function joinDepartureDraft(values: string[]): string {
+  return values.join(", ");
+}
+
+function formatDateInput(value: string): string {
+  const [year, month, day] = value.split("-").map((part) => Number(part));
+  if (!year || !month || !day) return "";
+  return `${String(month).padStart(2, "0")} сарын ${day}`;
+}
+
+function MoneyInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-sm font-semibold text-ink">{label}</span>
+      <span className="flex h-12 items-center rounded-md border border-line-strong bg-surface px-3 transition-colors focus-within:border-brand">
+        <input
+          inputMode="numeric"
+          value={value}
+          onChange={(e) => onChange(e.target.value.replace(/[^\d]/g, ""))}
+          className="min-w-0 flex-1 bg-transparent text-sm tabular-nums text-ink outline-none placeholder:text-ink-subtle"
+        />
+        <span className="ml-2 rounded-[6px] bg-surface-sunken px-2 py-1 text-sm font-semibold text-ink-muted">
+          ₮
+        </span>
+      </span>
+    </label>
+  );
+}
+
+function DepartureDateEditor({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const dates = splitDepartureDraft(value);
+  const addDate = (raw: string) => {
+    const formatted = formatDateInput(raw);
+    if (!formatted || dates.includes(formatted)) return;
+    onChange(joinDepartureDraft([...dates, formatted]));
+  };
+  const removeDate = (index: number) => {
+    onChange(joinDepartureDraft(dates.filter((_, i) => i !== index)));
+  };
+
+  return (
+    <div className="sm:col-span-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+        <label className="block sm:w-52">
+          <span className="mb-1 block text-sm font-semibold text-ink">Гарах өдөр нэмэх</span>
+          <input
+            type="date"
+            onChange={(e) => {
+              addDate(e.target.value);
+              e.target.value = "";
+            }}
+            className={inputCls}
+          />
+        </label>
+        <label className="block min-w-0 flex-1">
+          <span className="mb-1 block text-sm font-semibold text-ink">Гарах өдрүүд</span>
+          <input
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="ж: 7 сарын 5, 7 сарын 12, Пүрэв гараг бүр"
+            className={inputCls}
+          />
+        </label>
+      </div>
+      <div className="mt-2 flex min-h-9 flex-wrap gap-1.5 rounded-lg border border-line bg-surface-sunken p-2">
+        {dates.length === 0 ? (
+          <span className="px-1 py-1 text-xs font-medium text-warning">Гарах өдөр дутуу</span>
+        ) : (
+          dates.map((date, index) => (
+            <button
+              key={`${date}-${index}`}
+              type="button"
+              onClick={() => removeDate(index)}
+              className="rounded-md border border-line-strong bg-surface px-2 py-1 text-xs font-semibold text-ink-muted transition-colors hover:border-danger hover:text-danger"
+              title="Огноо устгах"
+            >
+              {date}
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 function EditorTabButton({
   active,
   label,
@@ -168,12 +274,20 @@ export function TripEditModal({
     if (open) setActiveTab("base");
   }, [open, editingTrip?.id, isNewTrip]);
 
+  const editingExtra = (editingTrip?.extra || {}) as Record<string, unknown>;
+  const isPosterLinked = typeof editingExtra.poster_trip_id === "string";
+  const brochurePdfUrl =
+    typeof editingExtra.brochure_pdf_url === "string" && editingExtra.brochure_pdf_url.startsWith("https://")
+      ? editingExtra.brochure_pdf_url
+      : "";
+
   return (
     <Modal
       open={open}
       onClose={onClose}
       title={isNewTrip ? "Шинэ аялал нэмэх" : "Аялал засах"}
       description={isNewTrip ? undefined : editingTrip?.route_name || undefined}
+      panelClassName="max-w-4xl"
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>
@@ -196,46 +310,25 @@ export function TripEditModal({
       {/* Base fields */}
       <div className="grid gap-3 sm:grid-cols-2">
         <Input
-          label="Маршрут"
+          label="Аяллын нэр"
           value={tripDraft.route_name}
           onChange={(e) => setTripDraft((p) => ({ ...p, route_name: e.target.value }))}
-        />
-        <Input
-          label="Оператор"
-          value={tripDraft.operator_name}
-          onChange={(e) => setTripDraft((p) => ({ ...p, operator_name: e.target.value }))}
-        />
-        <Input
-          label="Ангилал"
-          value={tripDraft.category}
-          onChange={(e) => setTripDraft((p) => ({ ...p, category: e.target.value }))}
         />
         <Input
           label="Хугацаа (ж: 5ш6ө)"
           value={tripDraft.duration_text}
           onChange={(e) => setTripDraft((p) => ({ ...p, duration_text: e.target.value }))}
         />
-        <Input
+        <MoneyInput
           label="Том хүний үнэ"
-          inputMode="numeric"
           value={tripDraft.adult_price}
-          onChange={(e) => setTripDraft((p) => ({ ...p, adult_price: e.target.value }))}
+          onChange={(value) => setTripDraft((p) => ({ ...p, adult_price: value }))}
         />
-        <Input
+        <MoneyInput
           label="Хүүхдийн үнэ"
-          inputMode="numeric"
           value={tripDraft.child_price}
-          onChange={(e) => setTripDraft((p) => ({ ...p, child_price: e.target.value }))}
+          onChange={(value) => setTripDraft((p) => ({ ...p, child_price: value }))}
         />
-        <Select
-          label="Валют"
-          value={tripDraft.currency}
-          onChange={(e) => setTripDraft((p) => ({ ...p, currency: e.target.value }))}
-        >
-          <option value="MNT">MNT (₮)</option>
-          <option value="CNY">CNY (юань)</option>
-          <option value="USD">USD ($)</option>
-        </Select>
         <Select
           label="Төлөв"
           value={tripDraft.status}
@@ -246,6 +339,15 @@ export function TripEditModal({
           <option value="sold_out">Суудал дууссан</option>
           <option value="draft">Ноорог</option>
           <option value="archived">Архив</option>
+        </Select>
+        <Select
+          label="Хоол"
+          value={tripDraft.has_food}
+          onChange={(e) => setTripDraft((p) => ({ ...p, has_food: e.target.value }))}
+        >
+          <option value="unknown">Тодорхойгүй</option>
+          <option value="true">Багтсан</option>
+          <option value="false">Багтаагүй</option>
         </Select>
         <Input
           label="Нийт суудал"
@@ -259,19 +361,9 @@ export function TripEditModal({
           value={tripDraft.seats_left}
           onChange={(e) => setTripDraft((p) => ({ ...p, seats_left: e.target.value }))}
         />
-        <Select
-          label="Хоол"
-          value={tripDraft.has_food}
-          onChange={(e) => setTripDraft((p) => ({ ...p, has_food: e.target.value }))}
-        >
-          <option value="unknown">Тодорхойгүй</option>
-          <option value="true">Багтсан</option>
-          <option value="false">Багтаагүй</option>
-        </Select>
-        <Input
-          label="Гарах өдөр (таслалаар)"
+        <DepartureDateEditor
           value={tripDraft.departure_dates}
-          onChange={(e) => setTripDraft((p) => ({ ...p, departure_dates: e.target.value }))}
+          onChange={(value) => setTripDraft((p) => ({ ...p, departure_dates: value }))}
         />
       </div>
       <div className="mt-3">
@@ -284,14 +376,6 @@ export function TripEditModal({
       </div>
       <div className="mt-3">
         <Textarea
-          label="Эх сурвалжийн тайлбар"
-          rows={2}
-          value={tripDraft.source_description}
-          onChange={(e) => setTripDraft((p) => ({ ...p, source_description: e.target.value }))}
-        />
-      </div>
-      <div className="mt-3">
-        <Textarea
           label="Тэмдэглэл"
           rows={2}
           value={tripDraft.notes}
@@ -299,7 +383,25 @@ export function TripEditModal({
         />
       </div>
 
-      {/* Photo URL editor */}
+      {isPosterLinked && (
+        <div className="mt-4 rounded-lg border border-success/25 bg-success-soft px-3 py-2.5 text-sm text-success">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-semibold">PDF хөтөлбөр холбогдсон</span>
+            {brochurePdfUrl && (
+              <a
+                href={brochurePdfUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-md bg-surface px-2.5 py-1 text-xs font-semibold text-success shadow-xs hover:underline"
+              >
+                PDF нээх
+              </a>
+            )}
+          </div>
+        </div>
+      )}
+
+      {!isPosterLinked && (
       <div className="mt-4">
         <p className="mb-1 text-sm font-medium text-ink">Аялалын зургууд</p>
         <p className="mb-2 text-xs text-ink-subtle">
@@ -431,6 +533,7 @@ export function TripEditModal({
         </div>
         </div>
       </div>
+      )}
 
         </>
       )}

@@ -20,6 +20,8 @@ export type PosterTripRow = {
 };
 
 let schemaReady = false;
+const PDF_REVIEW_REASON = "Poster sync: PDF хөтөлбөр дутуу";
+const SCHEDULE_REVIEW_REASON = "Poster sync: гарах өдрийн календарь дутуу";
 
 export async function ensurePosterSchema(): Promise<boolean> {
   if (schemaReady) return true;
@@ -149,6 +151,14 @@ async function syncPosterTrip(row: {
       ? existingExtra.source_file_attachment_id
       : "";
   const hasPdf = Boolean(preservedPdfUrl || preservedAttachmentId);
+  const hasSchedule = Array.isArray(fields.departure_dates) && fields.departure_dates.length > 0;
+  const reviewReasons = new Set(
+    (Array.isArray(existingExtra.review_reasons) ? existingExtra.review_reasons : [])
+      .filter((reason): reason is string => typeof reason === "string" && reason.trim().length > 0)
+      .filter((reason) => reason !== PDF_REVIEW_REASON && reason !== SCHEDULE_REVIEW_REASON),
+  );
+  if (!hasPdf) reviewReasons.add(PDF_REVIEW_REASON);
+  if (!hasSchedule) reviewReasons.add(SCHEDULE_REVIEW_REASON);
   fields.extra = {
     ...(fields.extra || {}),
     ...(preservedPdfUrl ? { brochure_pdf_url: preservedPdfUrl } : {}),
@@ -158,6 +168,8 @@ async function syncPosterTrip(row: {
       : {}),
     brochure_pdf_required: true,
     brochure_pdf_missing: !hasPdf,
+    needs_human_review: Boolean(existingExtra.needs_human_review) || reviewReasons.size > 0,
+    review_reasons: Array.from(reviewReasons),
   };
   return upsertTrip({ id: linkedTripId(row.id), fields });
 }
