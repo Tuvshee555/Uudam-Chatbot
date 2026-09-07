@@ -1,5 +1,6 @@
 import { PDFDocument } from "pdf-lib";
 import sharp from "sharp";
+import { sanitizePosterPdfFileName } from "./pdfUrl";
 
 export type PosterPdfRow = {
   id: string;
@@ -242,13 +243,4 @@ export async function buildPosterPdf(poster: PosterPdfRow): Promise<Buffer> {
   return Buffer.from(await pdf.save({ useObjectStreams: true }));
 }
 
-export function sanitizePosterPdfFileName(value: string): string {
-  return (
-    value
-      .normalize("NFKD")
-      .replace(/[^\w.-]+/g, "-")
-      .replace(/-+/g, "-")
-      .replace(/^-|-$/g, "")
-      .slice(0, 80) || "poster"
-  );
-}
+export { sanitizePosterPdfFileName };

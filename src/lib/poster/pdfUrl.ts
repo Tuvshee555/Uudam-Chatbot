@@ -2,6 +2,17 @@ export function posterPdfPath(posterId: string): string {
   return `/api/poster-pdf?id=${encodeURIComponent(posterId)}`;
 }
 
+export function sanitizePosterPdfFileName(value: string): string {
+  return (
+    value
+      .normalize("NFKD")
+      .replace(/[^\w.-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 80) || "poster"
+  );
+}
+
 /**
  * Cloudinary blocks raw PDF delivery account-wide unless "PDF and ZIP files
  * delivery" is enabled, so these stored URLs answer 401 to everyone —

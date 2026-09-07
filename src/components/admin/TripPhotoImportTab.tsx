@@ -115,6 +115,15 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
     return counts;
   }, [trips]);
 
+  const getEffectiveTripId = React.useCallback(
+    (item: PreviewItem): string | null => {
+      const override = overrides[item.id];
+      if (override === null) return null;
+      return override ?? item.match.tripId ?? null;
+    },
+    [overrides],
+  );
+
   const selectedTripsHavePhotos = React.useMemo(
     () =>
       items.some((item) => {
@@ -122,7 +131,7 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
         const tripId = getEffectiveTripId(item);
         return !!tripId && (tripPhotoCounts[tripId] || 0) > 0;
       }),
-    [items, overrides, skipped, tripPhotoCounts],
+    [getEffectiveTripId, items, skipped, tripPhotoCounts],
   );
 
   React.useEffect(() => {
@@ -390,12 +399,6 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
   const hasUnassigned = items.some(
     (item) => !skipped.has(item.id) && !getEffectiveTripId(item),
   );
-
-  function getEffectiveTripId(item: PreviewItem): string | null {
-    const override = overrides[item.id];
-    if (override === null) return null;
-    return override ?? item.match.tripId ?? null;
-  }
 
   async function confirmImport() {
     if (!batchId || items.length === 0) return;

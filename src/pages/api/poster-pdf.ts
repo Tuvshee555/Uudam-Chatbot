@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getPosterTrip } from "@/lib/poster/db";
-import { sanitizePosterPdfFileName } from "@/lib/poster/pdf";
+import { sanitizePosterPdfFileName } from "@/lib/poster/pdfUrl";
 import { renderPosterPdf } from "@/lib/poster/renderPdf";
 
 export const config = { maxDuration: 60 };
