@@ -118,11 +118,15 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
     const status = source.status === "cancelled" ? "CANCELLED" : source.status === "sold_out" ? "SOLD_OUT" : reopened ? "OPEN" : old?.status || "OPEN";
     if (old) {
       await client.query(`UPDATE "Departure" SET label=$2,"endDate"=$3,status=$4::"DepartureStatus",
-        "seatsTotal"=$5,"seatsLeft"=$6 WHERE id=$1`, [depId, dep.label, dep.end, status,
-        seatsChanged ? source.seats_total : old.seatsTotal, seatsChanged ? source.seats_left : old.seatsLeft]);
+        "seatsTotal"=$5,"seatsLeft"=$6,price=$7,"childPrice"=$8,"infantPrice"=$9 WHERE id=$1`,
+        [depId, dep.label, dep.end, status,
+        seatsChanged ? source.seats_total : old.seatsTotal, seatsChanged ? source.seats_left : old.seatsLeft,
+        dep.price ?? null, dep.childPrice ?? null, dep.infantPrice ?? null]);
     } else {
-      await client.query(`INSERT INTO "Departure" (id,"tripId",label,"startDate","endDate","seatsTotal","seatsLeft",status)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::"DepartureStatus")`, [depId,id,dep.label,dep.start,dep.end,source.seats_total,source.seats_left,status]);
+      await client.query(`INSERT INTO "Departure" (id,"tripId",label,"startDate","endDate","seatsTotal","seatsLeft",price,"childPrice","infantPrice",status)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::"DepartureStatus")`,
+        [depId,id,dep.label,dep.start,dep.end,source.seats_total,source.seats_left,
+        dep.price ?? null, dep.childPrice ?? null, dep.infantPrice ?? null,status]);
     }
   }
   // Keep records referenced by bookings, but close removed dates to new bookings.

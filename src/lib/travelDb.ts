@@ -679,66 +679,8 @@ export function mapTripRow(row: Record<string, unknown>): TravelTrip {
   };
 }
 
-function sameStringArray(left: string[], right: string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
 function cloneExtra(extra: Record<string, unknown>): Record<string, unknown> {
   return JSON.parse(JSON.stringify(extra || {})) as Record<string, unknown>;
-}
-
-function resolvedForGroupDates(
-  dates: string[],
-  resolved?: ResolvedDepartureDate[] | null,
-): ResolvedDepartureDate[] | null {
-  if (!Array.isArray(resolved) || resolved.length === 0 || dates.length === 0) return null;
-  const byText = new Map(
-    resolved
-      .filter((entry) => entry && typeof entry.text === "string")
-      .map((entry) => [entry.text, entry.ymd ?? null] as const),
-  );
-  const matches = dates
-    .filter((date) => byText.has(date))
-    .map((date) => ({ text: date, ymd: byText.get(date) ?? null }));
-  return matches.length > 0 ? matches : null;
-}
-
-function pruneDateGroups(
-  value: unknown,
-  now: Date,
-  resolved?: ResolvedDepartureDate[] | null,
-): { value: unknown; changed: boolean } {
-  if (!Array.isArray(value)) return { value, changed: false };
-  let changed = false;
-  const groups: unknown[] = [];
-  for (const item of value) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
-      groups.push(item);
-      continue;
-    }
-    const group = { ...(item as Record<string, unknown>) };
-    const rawDates = Array.isArray(group.dates)
-      ? group.dates.map((date) => String(date || "")).filter(Boolean)
-      : [];
-    if (rawDates.length === 0) {
-      groups.push(group);
-      continue;
-    }
-    const groupResolved = resolvedForGroupDates(rawDates, resolved);
-    const expandedDates = groupResolved ? rawDates : expandMongolianDepartureDates(rawDates);
-    const futureDates = filterFutureDepartureDates(expandedDates, now, groupResolved);
-    if (futureDates.length === 0) {
-      changed = true;
-      continue;
-    }
-    if (!sameStringArray(rawDates, futureDates)) {
-      group.dates = futureDates;
-      changed = true;
-    }
-    groups.push(group);
-  }
-  if (groups.length !== value.length) changed = true;
-  return { value: groups, changed };
 }
 
 export function sanitizeTripScheduleForCurrentDate(
@@ -749,22 +691,7 @@ export function sanitizeTripScheduleForCurrentDate(
   const resolved = extra.departure_dates_resolved as ResolvedDepartureDate[] | undefined;
   const pruned = prunePastDepartureDates(trip.departure_dates || [], now, resolved);
   let nextExtra = extra;
-  let changed = !sameStringArray(trip.departure_dates || [], pruned.dates);
-
-  if (changed || Array.isArray(resolved)) {
-    nextExtra = {
-      ...nextExtra,
-      departure_dates_resolved: pruned.resolved ?? resolveDepartureDatesAtWrite(pruned.dates, now),
-    };
-  }
-
-  for (const key of ["departure_date_groups", "discount_groups", "discounts", "price_groups"]) {
-    const result = pruneDateGroups(nextExtra[key], now, pruned.resolved ?? resolved);
-    if (result.changed) {
-      nextExtra = { ...nextExtra, [key]: result.value };
-      changed = true;
-    }
-  }
+  let changed = false;
 
   let nextStatus = trip.status;
   if (trip.status === "active" && pruned.shouldArchive) {
@@ -776,12 +703,22 @@ export function sanitizeTripScheduleForCurrentDate(
     };
     changed = true;
   }
+  if (
+    trip.status === "archived" &&
+    extra.archived_reason === "all_departure_dates_passed" &&
+    pruned.dates.length > 0
+  ) {
+    nextStatus = "active";
+    nextExtra = { ...nextExtra, reactivated_at: now.toISOString() };
+    delete nextExtra.archived_reason;
+    delete nextExtra.archived_at;
+    changed = true;
+  }
 
   if (!changed) return { trip, changed: false };
   return {
     trip: {
       ...trip,
-      departure_dates: pruned.dates,
       status: nextStatus,
       extra: normalizeExtra(nextExtra).extra,
     },
@@ -806,6 +743,11 @@ async function persistTripScheduleMaintenance(trips: TravelTrip[]): Promise<void
       `,
       [trip.departure_dates, trip.status, JSON.stringify(trip.extra || {}), trip.id],
     );
+    try {
+      await flushWebsiteSync(trip.id, 1);
+    } catch (error) {
+      console.error("Website sync after trip schedule maintenance failed", error);
+    }
   }
 }
 

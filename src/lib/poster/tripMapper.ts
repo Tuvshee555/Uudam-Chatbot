@@ -17,6 +17,24 @@ type PosterDay = {
 };
 
 type PosterPriceRow = { dates?: string; cells?: string[] };
+type PassengerPrice = {
+  label: string;
+  age_range: string;
+  price: number | null;
+  currency: "MNT";
+};
+type MappedPriceGroup = {
+  label: string;
+  dates: string[];
+  display_dates: string[];
+  adult_price: number | null;
+  child_price: number | null;
+  infant_price: number | null;
+  child_age: string;
+  infant_age: string;
+  passenger_prices: PassengerPrice[];
+  note: string;
+};
 
 type PosterTrip = {
   title?: string;
@@ -40,17 +58,19 @@ export type MappedTripFields = {
   extra?: {
     included_items?: string[];
     excluded_items?: string[];
+    price_groups?: MappedPriceGroup[];
+    child_rules?: PassengerPrice[];
   };
 };
 
-/** "2,340,000₮" / "4,180 юань / 2,340,000₮" -> 2340000 (first tugrik-looking number). */
+/** "2,340,000₮" / "990.000₮" / "4,180 юань / 2,340,000₮" -> first tugrik-looking number. */
 function parsePriceToNumber(cellText: string | undefined): number | null {
   if (!cellText) return null;
   // Prefer a ₮-suffixed number; fall back to the first number found.
-  const tugrikMatch = cellText.match(/([\d][\d,\s]*\d|\d)\s*₮/);
-  const raw = tugrikMatch ? tugrikMatch[1] : cellText.match(/([\d][\d,\s]*\d|\d)/)?.[1];
+  const tugrikMatch = cellText.match(/([\d][\d,.\s]*\d|\d)\s*₮/);
+  const raw = tugrikMatch ? tugrikMatch[1] : cellText.match(/([\d][\d,.\s]*\d|\d)/)?.[1];
   if (!raw) return null;
-  const digits = raw.replace(/[,\s]/g, "");
+  const digits = raw.replace(/[,.\s]/g, "");
   const n = Number(digits);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
@@ -63,32 +83,132 @@ function findPriceColumnIndex(columns: string[] | undefined, keywords: string[])
   return idx;
 }
 
+function dateColumnIndex(columns: string[] | undefined): number {
+  return (columns || []).findIndex((column) => /огноо|date/i.test(column));
+}
+
+function priceCell(row: PosterPriceRow, columns: string[] | undefined, columnIndex: number): string | undefined {
+  const cells = row.cells || [];
+  if (columnIndex < 0) return undefined;
+  if (!columns?.length || cells.length === columns.length) return cells[columnIndex];
+  const dateIdx = dateColumnIndex(columns);
+  if (dateIdx >= 0 && cells.length === columns.length - 1) {
+    return cells[columnIndex > dateIdx ? columnIndex - 1 : columnIndex];
+  }
+  return cells[columnIndex];
+}
+
+function cleanColumnLabel(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function extractAgeRange(label: string): string {
+  const range = label.match(/(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*(?:нас|age)?/i);
+  if (range) return `${Number(range[1])}-${Number(range[2])} нас`;
+  const single = label.match(/(\d{1,2})\s*(?:нас|age)/i);
+  return single ? `${Number(single[1])} нас` : "";
+}
+
+function isAdultColumn(label: string): boolean {
+  return /том|adult/i.test(label);
+}
+
+function isChildColumn(label: string): boolean {
+  return /хүүх|child|нас|age/i.test(label) && !isAdultColumn(label);
+}
+
+function expandPosterDateList(value: string | undefined): string[] {
+  const text = normalizeDepartureText(value || "")
+    .replace(/\b(?:нд|ны|ний)\b/gi, "")
+    .replace(/(\d)(?:нд|ны|ний)\b/gi, "$1")
+    .trim();
+  if (!text || /^үнэ$/i.test(text)) return [];
+
+  const markers = [...text.matchAll(/(\d{1,2})\s*(?:-?\s*р)?\s*сарын/gi)];
+  if (markers.length === 0) return [text];
+
+  const dates: string[] = [];
+  for (let i = 0; i < markers.length; i++) {
+    const marker = markers[i];
+    const month = Number(marker[1]);
+    const start = (marker.index || 0) + marker[0].length;
+    const end = markers[i + 1]?.index ?? text.length;
+    const segment = text.slice(start, end);
+    const days = [...segment.matchAll(/\d{1,2}/g)].map((match) => match[0]);
+    for (const rawDay of days) {
+      const day = Number(rawDay);
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        dates.push(`${month} сарын ${String(day).padStart(2, "0")}`);
+      }
+    }
+  }
+
+  return [...new Set(dates.length > 0 ? dates : [text])];
+}
+
+function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup[] {
+  if (!priceTable?.rows?.length) return [];
+  const columns = priceTable.columns || [];
+  const adultIdx = findPriceColumnIndex(columns, ["том", "adult"]);
+  const childColumns = columns
+    .map((column, index) => ({ column: cleanColumnLabel(column), index }))
+    .filter(({ column }) => isChildColumn(column));
+
+  return priceTable.rows
+    .map((row) => {
+      const dates = expandPosterDateList(row.dates);
+      const passenger_prices = childColumns.map(({ column, index }) => ({
+        label: column,
+        age_range: extractAgeRange(column),
+        price: parsePriceToNumber(priceCell(row, columns, index)),
+        currency: "MNT" as const,
+      }));
+      const pricedPassengers = passenger_prices.filter((price) => price.price != null);
+      const infant = pricedPassengers.find((price) => /^0\s*[-–—]\s*2/.test(price.age_range));
+      const child = pricedPassengers.find((price) => price !== infant) || pricedPassengers[0];
+      return {
+        label: dates.join(", ") || normalizeDepartureText(row.dates || ""),
+        dates,
+        display_dates: dates,
+        adult_price: parsePriceToNumber(priceCell(row, columns, adultIdx >= 0 ? adultIdx : 0)),
+        child_price: child?.price ?? null,
+        infant_price: infant?.price ?? null,
+        child_age: child?.age_range || "",
+        infant_age: infant?.age_range || "",
+        passenger_prices,
+        note: "",
+      };
+    })
+    .filter((group) =>
+      group.dates.length > 0 ||
+      group.adult_price != null ||
+      group.child_price != null ||
+      group.infant_price != null ||
+      group.passenger_prices.some((price) => price.price != null),
+    );
+}
+
 function mapPrices(priceTable: PosterTrip["price_table"]): {
   adult_price: number | null;
   child_price: number | null;
 } {
   if (!priceTable?.rows?.length) return { adult_price: null, child_price: null };
 
-  const adultIdx = findPriceColumnIndex(priceTable.columns, ["том", "adult"]);
-  const childIdx = findPriceColumnIndex(priceTable.columns, ["хүүхэд", "child"]);
-
-  // Take the first row with a usable price in that column (rows are usually
-  // ordered earliest-departure-first, which is the most relevant "current" price).
-  let adult_price: number | null = null;
-  let child_price: number | null = null;
-  for (const row of priceTable.rows) {
-    const cells = row.cells || [];
-    if (adult_price == null) {
-      const cell = adultIdx >= 0 ? cells[adultIdx] : cells[0];
-      adult_price = parsePriceToNumber(cell);
-    }
-    if (child_price == null) {
-      const cell = childIdx >= 0 ? cells[childIdx] : cells[1];
-      child_price = parsePriceToNumber(cell);
-    }
-    if (adult_price != null && child_price != null) break;
+  const groups = mapPriceGroups(priceTable);
+  const priced = groups
+    .filter((group) => group.adult_price != null)
+    .sort((a, b) => (a.adult_price || 0) - (b.adult_price || 0));
+  if (priced.length > 0) {
+    return {
+      adult_price: priced[0].adult_price,
+      child_price: priced[0].child_price,
+    };
   }
-  return { adult_price, child_price };
+
+  return {
+    adult_price: groups.find((group) => group.adult_price != null)?.adult_price ?? null,
+    child_price: groups.find((group) => group.child_price != null)?.child_price ?? null,
+  };
 }
 
 function mapDurationText(durationDays?: number, durationNights?: number): string | undefined {
@@ -121,9 +241,11 @@ function normalizeDepartureText(value: string): string {
 }
 
 function pushDepartureText(target: string[], value: string | undefined): void {
-  const text = normalizeDepartureText(value || "");
-  if (!text || /^үнэ$/i.test(text)) return;
-  if (!target.includes(text)) target.push(text);
+  const dates = expandPosterDateList(value);
+  for (const text of dates) {
+    if (!text || /^үнэ$/i.test(text)) continue;
+    if (!target.includes(text)) target.push(text);
+  }
 }
 
 function extractTitleDate(title: string | undefined): string | null {
@@ -171,10 +293,22 @@ export function mapPosterTripToFields(poster: PosterTrip): MappedTripFields {
 
   const includes = (poster.includes || []).filter(Boolean);
   const excludes = (poster.excludes || []).filter(Boolean);
-  if (includes.length || excludes.length) {
+  const priceGroups = mapPriceGroups(poster.price_table);
+  const childRules = priceGroups.flatMap((group) => group.passenger_prices)
+    .filter((price, index, all) =>
+      price.price != null &&
+      index === all.findIndex((other) =>
+        other.label === price.label &&
+        other.age_range === price.age_range &&
+        other.price === price.price,
+      ),
+    );
+  if (includes.length || excludes.length || priceGroups.length || childRules.length) {
     fields.extra = {
       ...(includes.length ? { included_items: includes } : {}),
       ...(excludes.length ? { excluded_items: excludes } : {}),
+      ...(priceGroups.length ? { price_groups: priceGroups } : {}),
+      ...(childRules.length ? { child_rules: childRules } : {}),
     };
   }
 

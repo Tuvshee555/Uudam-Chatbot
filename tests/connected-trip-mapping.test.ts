@@ -32,6 +32,23 @@ test("weekly rules are explicit and respect Mongolian calendar dates", () => {
   assert.equal(recurring[0].start,"2026-09-10T00:00:00.000Z");
   assert.deepEqual(websiteDepartures({...trip,departure_dates:["Хугацаа тодорхойгүй"]}),[]);
 });
+test("website departures inherit date-specific price group overrides", () => {
+  const result=websiteDepartures({...trip,extra:{
+    departure_dates_resolved:[
+      {text:"8 сарын 17",ymd:"2026-08-17"},
+      {text:"8 сарын 24",ymd:"2026-08-24"},
+    ],
+    price_groups:[
+      {dates:["8 сарын 17"],adult_price:990000,child_price:890000,infant_price:390000},
+      {dates:["8 сарын 24"],adult_price:1190000,child_price:990000,infant_price:390000},
+    ],
+  }},new Date("2026-07-16T04:00:00.000Z"));
+  assert.equal(result.length,2);
+  assert.equal(result[0].price,990000);
+  assert.equal(result[0].childPrice,890000);
+  assert.equal(result[1].price,1190000);
+  assert.equal(result[1].childPrice,990000);
+});
 test("partial metadata updates preserve visibility, prices and unrelated details", () => {
   const existing = {customer_visible:false,price_groups:[{adult_price:123}],included_items:["Hotel"],departure_rule:"Weekly"};
   const patch = normalizeExtraPatch({included_items:[],website_sync:{synced:true}});

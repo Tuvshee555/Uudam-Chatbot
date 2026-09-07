@@ -1,4 +1,5 @@
 import type { TravelTrip } from "./travelTypes";
+import { generateDateKeys, parseTripDepartureDateText } from "./travelDates";
 
 export function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -76,16 +77,32 @@ export function websiteExtraDetails(extra: Record<string, unknown>) {
   const money = (amount: unknown, currency: unknown) => typeof amount === "number" && Number.isFinite(amount)
     ? `${amount.toLocaleString("en-US")}${!currency || currency === "MNT" ? "₮" : ` ${currency}`}` : "";
   const join = (items: unknown[]) => items.filter(v => typeof v === "string" && v.trim()).join(" - ");
+  const childNotes = [
+    ...records(extra.child_rules).map(r => join([r.label,r.age_range,money(r.price,r.currency),r.note])),
+    ...records(extra.price_groups).flatMap(group => {
+      const dates = strings(group.display_dates).length ? strings(group.display_dates) : strings(group.dates);
+      const dateLabel = dates.join(", ");
+      return records(group.passenger_prices).map(price =>
+        join([dateLabel, price.label, price.age_range, money(price.price, price.currency)]));
+    }),
+  ].filter((value, index, all) => value && all.indexOf(value) === index);
   return {
     extraFees: records(extra.extra_fees).map(f => join([f.label,money(f.amount,f.currency),f.applies_to,f.note])),
     roomPrices: records(extra.room_prices).map(r => join([r.room_type,money(r.price,r.currency),r.note])),
-    childPriceNotes: records(extra.child_rules).map(r => join([r.label,r.age_range,money(r.price,r.currency),r.note])),
+    childPriceNotes: childNotes,
   };
 }
 
 export function websiteDepartures(trip: TravelTrip, now = new Date()) {
   const resolved = records(trip.extra.departure_dates_resolved);
-  const dates = new Map<string, { start: string; end: string; label: string }>();
+  const dates = new Map<string, {
+    start: string;
+    end: string;
+    label: string;
+    price?: number | null;
+    childPrice?: number | null;
+    infantPrice?: number | null;
+  }>();
   const days = duration(trip.duration_text).days;
   const add = (ymd: string, label: string) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return;
@@ -95,7 +112,13 @@ export function websiteDepartures(trip: TravelTrip, now = new Date()) {
     end.setUTCDate(end.getUTCDate() + Math.max(days - 1, 0));
     dates.set(ymd, { start: start.toISOString(), end: end.toISOString(), label });
   };
-  for (const d of resolved) if (typeof d.ymd === "string") add(d.ymd, String(d.text || d.ymd));
+  if (resolved.length > 0) {
+    for (const d of resolved) if (typeof d.ymd === "string") add(d.ymd, String(d.text || d.ymd));
+  } else {
+    for (const text of trip.departure_dates) {
+      for (const ymd of parseTripDepartureDateText(text, now)) add(ymd, text);
+    }
+  }
   const weekdayNames = ["ням", "даваа", "мягмар", "лхагва", "пүрэв", "баасан", "бямба"];
   const ruleTexts = [...trip.departure_dates, String(trip.extra.departure_rule || "")];
   for (const text of ruleTexts) {
@@ -109,6 +132,26 @@ export function websiteDepartures(trip: TravelTrip, now = new Date()) {
     for (let i = 0; i < 12; i++) {
       add(start.toISOString().slice(0, 10), text);
       start.setUTCDate(start.getUTCDate() + 7);
+    }
+  }
+
+  for (const group of records(trip.extra.price_groups)) {
+    const groupKeys = new Set([
+      ...strings(group.date_keys),
+      ...strings(group.dates).flatMap((date) => generateDateKeys(date, now)),
+      ...strings(group.display_dates).flatMap((date) => generateDateKeys(date, now)),
+    ]);
+    if (groupKeys.size === 0) continue;
+    const adultPrice = typeof group.adult_price === "number" ? group.adult_price : null;
+    const childPrice = typeof group.child_price === "number" ? group.child_price : null;
+    const infantPrice = typeof group.infant_price === "number" ? group.infant_price : null;
+    for (const dep of dates.values()) {
+      const depYmd = dep.start.slice(0, 10);
+      const depKeys = new Set([depYmd, ...generateDateKeys(dep.label, now), ...generateDateKeys(depYmd, now)]);
+      if (![...depKeys].some((key) => groupKeys.has(key))) continue;
+      dep.price = adultPrice;
+      dep.childPrice = childPrice;
+      dep.infantPrice = infantPrice;
     }
   }
   return [...dates.values()].sort((a, b) => a.start.localeCompare(b.start));

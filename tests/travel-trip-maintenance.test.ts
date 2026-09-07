@@ -38,7 +38,7 @@ async function loadMaintenance() {
   return { sanitizeTripScheduleForCurrentDate };
 }
 
-test("schedule cleanup removes past dates and keeps future dates", async () => {
+test("schedule maintenance preserves historic dates when a trip still has future dates", async () => {
   const { sanitizeTripScheduleForCurrentDate } = await loadMaintenance();
   const result = sanitizeTripScheduleForCurrentDate(
     trip({
@@ -54,16 +54,17 @@ test("schedule cleanup removes past dates and keeps future dates", async () => {
     NOW,
   );
 
-  assert.equal(result.changed, true);
+  assert.equal(result.changed, false);
   assert.equal(result.trip.status, "active");
-  assert.deepEqual(result.trip.departure_dates, ["7 сарын 18", "8 сарын 8"]);
+  assert.deepEqual(result.trip.departure_dates, ["6 сарын 27", "7 сарын 18", "8 сарын 8"]);
   assert.deepEqual(result.trip.extra.departure_dates_resolved, [
+    { text: "6 сарын 27", ymd: "2026-06-27" },
     { text: "7 сарын 18", ymd: "2026-07-18" },
     { text: "8 сарын 8", ymd: "2026-08-08" },
   ]);
 });
 
-test("schedule cleanup archives active trips when all known dates have passed", async () => {
+test("schedule maintenance archives active trips when all known dates have passed without deleting dates", async () => {
   const { sanitizeTripScheduleForCurrentDate } = await loadMaintenance();
   const result = sanitizeTripScheduleForCurrentDate(
     trip({
@@ -80,11 +81,11 @@ test("schedule cleanup archives active trips when all known dates have passed", 
 
   assert.equal(result.changed, true);
   assert.equal(result.trip.status, "archived");
-  assert.deepEqual(result.trip.departure_dates, []);
+  assert.deepEqual(result.trip.departure_dates, ["6 сарын 7", "7 сарын 10"]);
   assert.equal(result.trip.extra.archived_reason, "all_departure_dates_passed");
 });
 
-test("schedule cleanup prunes stale dates inside structured price groups", async () => {
+test("schedule maintenance preserves structured price groups as trip history", async () => {
   const { sanitizeTripScheduleForCurrentDate } = await loadMaintenance();
   const result = sanitizeTripScheduleForCurrentDate(
     trip({
@@ -110,11 +111,37 @@ test("schedule cleanup prunes stale dates inside structured price groups", async
     NOW,
   );
 
-  assert.equal(result.changed, true);
+  assert.equal(result.changed, false);
   const groups = result.trip.extra.departure_date_groups as Array<Record<string, unknown>>;
-  assert.equal(groups.length, 1);
-  assert.deepEqual(groups[0].dates, ["7 сарын 18", "8 сарын 8"]);
+  assert.equal(groups.length, 2);
+  assert.deepEqual(groups[0].dates, ["6 сарын 27", "7 сарын 18", "8 сарын 8"]);
   assert.equal(groups[0].adult_price, 3590000);
+});
+
+test("schedule maintenance reactivates an auto-archived trip when a new future date is added", async () => {
+  const { sanitizeTripScheduleForCurrentDate } = await loadMaintenance();
+  const result = sanitizeTripScheduleForCurrentDate(
+    trip({
+      status: "archived",
+      departure_dates: ["6 сарын 7", "1 сарын 15"],
+      extra: {
+        archived_reason: "all_departure_dates_passed",
+        archived_at: "2026-07-16T04:00:00.000Z",
+        departure_dates_resolved: [
+          { text: "6 сарын 7", ymd: "2026-06-07" },
+          { text: "1 сарын 15", ymd: "2027-01-15" },
+        ],
+      },
+    }),
+    NOW,
+  );
+
+  assert.equal(result.changed, true);
+  assert.equal(result.trip.status, "active");
+  assert.deepEqual(result.trip.departure_dates, ["6 сарын 7", "1 сарын 15"]);
+  assert.equal(result.trip.extra.archived_reason, undefined);
+  assert.equal(result.trip.extra.archived_at, undefined);
+  assert.equal(typeof result.trip.extra.reactivated_at, "string");
 });
 
 test("schedule cleanup keeps next-year price group dates frozen at write time", async () => {
