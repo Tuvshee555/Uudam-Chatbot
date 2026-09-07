@@ -179,15 +179,23 @@ function MoneyInput({
   label,
   value,
   onChange,
+  missing,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  /** Reddens the box until a real amount is entered — a required field. */
+  missing?: boolean;
 }) {
   return (
     <label className="block">
       <span className="mb-1 block text-sm font-semibold text-ink">{label}</span>
-      <span className="flex h-12 items-center rounded-md border border-line-strong bg-surface px-3 transition-colors focus-within:border-brand">
+      <span
+        className={cx(
+          "flex h-12 items-center rounded-md border bg-surface px-3 transition-colors focus-within:border-brand",
+          missing ? "border-danger" : "border-line-strong",
+        )}
+      >
         <input
           inputMode="numeric"
           value={value}
@@ -198,6 +206,7 @@ function MoneyInput({
           ₮
         </span>
       </span>
+      {missing && <span className="mt-1 block text-xs font-medium text-danger">Заавал бөглөх</span>}
     </label>
   );
 }
@@ -205,9 +214,11 @@ function MoneyInput({
 function DepartureDateEditor({
   value,
   onChange,
+  missing,
 }: {
   value: string;
   onChange: (value: string) => void;
+  missing?: boolean;
 }) {
   const dates = splitDepartureDraft(value);
   const addDate = (raw: string) => {
@@ -239,13 +250,18 @@ function DepartureDateEditor({
             value={value}
             onChange={(e) => onChange(e.target.value)}
             placeholder="ж: 7 сарын 5, 7 сарын 12, Пүрэв гараг бүр"
-            className={inputCls}
+            className={cx(inputCls, missing && "border-danger")}
           />
         </label>
       </div>
-      <div className="mt-2 flex min-h-9 flex-wrap gap-1.5 rounded-lg border border-line bg-surface-sunken p-2">
+      <div
+        className={cx(
+          "mt-2 flex min-h-9 flex-wrap gap-1.5 rounded-lg border p-2",
+          missing ? "border-danger/40 bg-danger-soft" : "border-line bg-surface-sunken",
+        )}
+      >
         {dates.length === 0 ? (
-          <span className="px-1 py-1 text-xs font-medium text-warning">Гарах өдөр дутуу</span>
+          <span className="px-1 py-1 text-xs font-medium text-danger">Заавал бөглөх — гарах өдөр дутуу</span>
         ) : (
           dates.map((date, index) => (
             <span
@@ -369,14 +385,14 @@ export function TripEditModal({
     child_price: parseMoneyDraft(tripDraft.child_price),
     departure_dates: splitDraftList(tripDraft.departure_dates),
     photo_urls: tripPhotoUrls,
-    included_items: tripIncludedItems,
-    excluded_items: tripExcludedItems,
     itinerary_days: Array.isArray(editingExtra.itinerary_days) ? editingExtra.itinerary_days : [],
     has_brochure: Boolean(brochurePdfUrl),
     poster_photo_count:
       typeof editingExtra.poster_photo_count === "number" ? editingExtra.poster_photo_count : 0,
   });
   const blocking = blockingGaps(gaps);
+  // Drives the red border on each field itself, not just the summary banner.
+  const gapKeys = new Set(blocking.map((gap) => gap.key));
 
   React.useEffect(() => {
     if (blocking.length === 0) setConfirmingIncomplete(false);
@@ -452,21 +468,25 @@ export function TripEditModal({
           label="Аяллын нэр"
           value={tripDraft.route_name}
           onChange={(e) => setTripDraft((p) => ({ ...p, route_name: e.target.value }))}
+          error={gapKeys.has("route_name") ? "Заавал бөглөх" : undefined}
         />
         <Input
           label="Хугацаа (ж: 5ш6ө)"
           value={tripDraft.duration_text}
           onChange={(e) => setTripDraft((p) => ({ ...p, duration_text: e.target.value }))}
+          error={gapKeys.has("duration_text") ? "Заавал бөглөх" : undefined}
         />
         <MoneyInput
           label="Том хүний үнэ"
           value={tripDraft.adult_price}
           onChange={(value) => setTripDraft((p) => ({ ...p, adult_price: value }))}
+          missing={gapKeys.has("adult_price")}
         />
         <MoneyInput
           label="Хүүхдийн үнэ"
           value={tripDraft.child_price}
           onChange={(value) => setTripDraft((p) => ({ ...p, child_price: value }))}
+          missing={gapKeys.has("child_price")}
         />
         <Select
           label="Төлөв"
@@ -503,6 +523,7 @@ export function TripEditModal({
         <DepartureDateEditor
           value={tripDraft.departure_dates}
           onChange={(value) => setTripDraft((p) => ({ ...p, departure_dates: value }))}
+          missing={gapKeys.has("departure_dates")}
         />
       </div>
       <div className="mt-3">
@@ -566,12 +587,17 @@ export function TripEditModal({
             "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-6 transition-colors",
             photoDragging
               ? "border-brand bg-brand-soft"
-              : "border-line-strong bg-surface-sunken hover:border-brand",
+              : gapKeys.has("photo_urls")
+                ? "border-danger bg-danger-soft"
+                : "border-line-strong bg-surface-sunken hover:border-brand",
           )}
         >
-          <Icons.download size={24} className="text-ink-subtle" />
+          <Icons.download size={24} className={gapKeys.has("photo_urls") ? "text-danger" : "text-ink-subtle"} />
           <p className="text-sm font-medium text-ink">Зураг чирж оруулах эсвэл дарж сонгох</p>
           <p className="text-xs text-ink-subtle">PNG, JPG, WEBP — хамгийн ихдээ 10MB</p>
+          {gapKeys.has("photo_urls") && (
+            <p className="text-xs font-medium text-danger">Заавал бөглөх — зураг дутуу</p>
+          )}
           <input
             ref={photoFileInputRef}
             type="file"

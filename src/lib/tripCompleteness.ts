@@ -26,8 +26,6 @@ export type TripCompletenessInput = {
   child_price?: number | null;
   departure_dates?: readonly string[] | null;
   photo_urls?: readonly string[] | null;
-  included_items?: readonly unknown[] | null;
-  excluded_items?: readonly unknown[] | null;
   itinerary_days?: readonly unknown[] | null;
   has_brochure?: boolean;
   /**
@@ -75,19 +73,15 @@ const RULES: Array<{
     ok: (t) => text(t.duration_text) },
   { key: "adult_price", label: "Том хүний үнэ", where: "Үндсэн", severity: "blocking",
     ok: (t) => money(t.adult_price) },
+  { key: "child_price", label: "Хүүхдийн үнэ", where: "Үндсэн", severity: "blocking",
+    ok: (t) => money(t.child_price) },
   { key: "departure_dates", label: "Гарах өдөр", where: "Үнэ ба гаралт", severity: "blocking",
     ok: (t) => filled(t.departure_dates) },
   { key: "photo_urls", label: "Зураг", where: "Үндсэн", severity: "blocking",
     ok: (t) => filled(t.photo_urls) || (t.poster_photo_count ?? 0) > 0 },
-  { key: "included_items", label: "Багтсан үйлчилгээ", where: "Нэмэлт", severity: "blocking",
-    ok: (t) => filled(t.included_items) },
-  { key: "excluded_items", label: "Багтаагүй үйлчилгээ", where: "Нэмэлт", severity: "blocking",
-    ok: (t) => filled(t.excluded_items) },
   // Editable on the poster, not in this form — flag it, never block the save here.
   { key: "itinerary_days", label: "Өдрийн хөтөлбөр", where: "Постер", severity: "warning",
     ok: (t) => filled(t.itinerary_days) },
-  { key: "child_price", label: "Хүүхдийн үнэ", where: "Үндсэн", severity: "warning",
-    ok: (t) => money(t.child_price) },
   { key: "brochure", label: "PDF хөтөлбөр", where: "Постер", severity: "warning",
     ok: (t) => t.has_brochure !== false },
 ];
@@ -119,8 +113,6 @@ export function tripCompletenessInput(
     child_price: trip.child_price,
     departure_dates: trip.departure_dates,
     photo_urls: trip.photo_urls,
-    included_items: list(extra.included_items),
-    excluded_items: list(extra.excluded_items),
     itinerary_days: list(extra.itinerary_days),
     has_brochure:
       options.hasBrochure ??

@@ -15,8 +15,6 @@ const complete = {
   departure_dates: ["6 сарын 17-21"],
   photo_urls: ["https://example.com/1.jpg"],
   extra: {
-    included_items: ["Нислэгийн тийз"],
-    excluded_items: ["Виз"],
     itinerary_days: [{ day: 1, title: "УБ - Жэжү" }],
     poster_trip_id: "poster-jeju",
   },
@@ -32,21 +30,28 @@ test("the commercially required fields block a save when empty", () => {
       tripCompletenessInput({
         ...complete,
         adult_price: null,
+        child_price: null,
         departure_dates: [],
         photo_urls: [],
-        extra: { ...complete.extra, included_items: [], excluded_items: [] },
       }),
     ),
   );
 
   assert.deepEqual(
     gaps.map((gap) => gap.key).sort(),
-    ["adult_price", "departure_dates", "excluded_items", "included_items", "photo_urls"],
+    ["adult_price", "child_price", "departure_dates", "photo_urls"],
   );
-  assert.equal(
-    formatGapLabels(gaps),
-    "Том хүний үнэ, Гарах өдөр, Зураг, Багтсан үйлчилгээ, Багтаагүй үйлчилгээ",
+  assert.equal(formatGapLabels(gaps), "Том хүний үнэ, Хүүхдийн үнэ, Гарах өдөр, Зураг");
+});
+
+test("included and excluded lists are never required — staff answer that manually", () => {
+  const gaps = findTripGaps(
+    tripCompletenessInput({
+      ...complete,
+      extra: { ...complete.extra, included_items: [], excluded_items: [] },
+    }),
   );
+  assert.deepEqual(gaps, []);
 });
 
 test("a zero price counts as missing, not as free", () => {
@@ -55,28 +60,20 @@ test("a zero price counts as missing, not as free", () => {
 });
 
 test("blank strings in a list do not count as filled", () => {
-  const gaps = findTripGaps(
-    tripCompletenessInput({
-      ...complete,
-      departure_dates: ["  "],
-      extra: { ...complete.extra, included_items: ["", "   "] },
-    }),
-  );
+  const gaps = findTripGaps(tripCompletenessInput({ ...complete, departure_dates: ["  "] }));
   assert.ok(gaps.some((gap) => gap.key === "departure_dates"));
-  assert.ok(gaps.some((gap) => gap.key === "included_items"));
 });
 
 test("poster-owned facts warn but never block the trip form", () => {
   const gaps = findTripGaps(
     tripCompletenessInput({
       ...complete,
-      child_price: null,
       extra: { ...complete.extra, itinerary_days: [] },
     }),
   );
 
   assert.deepEqual(blockingGaps(gaps), []);
-  assert.deepEqual(gaps.map((gap) => gap.key).sort(), ["child_price", "itinerary_days"]);
+  assert.deepEqual(gaps.map((gap) => gap.key), ["itinerary_days"]);
 });
 
 test("a trip linked to a poster counts as having a brochure", () => {
