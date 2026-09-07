@@ -20,6 +20,7 @@
     "fb:subscribe-page": "node scripts/subscribe-page-app.mjs"
   },
   "dependencies": {
+    "@sparticuz/chromium": "^149.0.0",
     "@types/pg": "^8.20.0",
     "@vercel/blob": "^2.5.0",
     "@vercel/functions": "^3.7.4",
@@ -37,6 +38,7 @@
     "pdf-parse": "^1.1.1",
     "pdfjs-dist": "^5.7.284",
     "pg": "^8.20.0",
+    "playwright-core": "^1.63.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "sharp": "^0.35.2",

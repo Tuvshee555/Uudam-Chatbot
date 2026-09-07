@@ -1,14 +1,16 @@
 /**
- * Poster generator persistence — its OWN tables, fully separate from the
- * chatbot's travel_trip_entries. Making/saving a poster never touches a live
- * chatbot trip. Uses the chatbot's existing pg pool (queryNeon) so we don't add
- * a second DB client.
+ * Poster and chatbot trip persistence. A save commits both records together;
+ * the same permanent trip ID drives automatic website delivery.
  */
 import { randomUUID } from "crypto";
 import { mapPosterTripToFields } from "@/lib/poster/tripMapper";
 import { queryNeon } from "@/lib/neonDb";
-import { getTripById, upsertTrip } from "@/lib/travelDb";
+import { getTripById, upsertTrip, patchTrip, deleteTrip } from "@/lib/travelDb";
+import { ensureConnectedTripSchema, type PosterWrite } from "@/lib/connectedTripStore";
 import type { TripMutationFields } from "@/lib/travelTypes";
+import { posterPhotos } from "@/lib/connectedTripMapping";
+import { materializePoster } from "@/lib/websiteTripSync";
+import { getPosterPdfPublicUrl } from "./pdfUrl";
 
 export type PosterTripRow = {
   id: string;
@@ -153,6 +155,7 @@ function linkedTripFields(row: {
 
   return {
     ...mapped,
+    photo_urls: posterPhotos(data).filter(photo => photo.startsWith("https://")),
     route_name: routeName,
     category: "Аялал",
     operator_name: "UUDAM TRAVEL AGENCY",
@@ -167,10 +170,12 @@ async function syncPosterTrip(row: {
   title: string;
   source_file?: string | null;
   data: unknown;
-}) {
+}, posterWrite?: PosterWrite) {
   const fields = linkedTripFields(row);
   if (!fields.route_name) return null;
-  const existing = await getTripById(linkedTripId(row.id));
+  const linked = await queryNeon<{ id: string }>(`SELECT id FROM travel_trip_entries WHERE extra->>'poster_trip_id'=$1`, [row.id]);
+  const targetId = linked?.rows[0]?.id || linkedTripId(row.id);
+  const existing = await getTripById(targetId);
   const existingExtra = (existing?.extra || {}) as Record<string, unknown>;
   const preservedPdfUrl =
     typeof existingExtra.brochure_pdf_url === "string" ? existingExtra.brochure_pdf_url : "";
@@ -178,7 +183,7 @@ async function syncPosterTrip(row: {
     typeof existingExtra.source_file_attachment_id === "string"
       ? existingExtra.source_file_attachment_id
       : "";
-  const hasPdf = Boolean(preservedPdfUrl || preservedAttachmentId);
+  const hasPdf = Boolean(getPosterPdfPublicUrl(row.id) || preservedPdfUrl || preservedAttachmentId);
   const hasSchedule = Array.isArray(fields.departure_dates) && fields.departure_dates.length > 0;
   const reviewReasons = new Set(
     (Array.isArray(existingExtra.review_reasons) ? existingExtra.review_reasons : [])
@@ -199,7 +204,35 @@ async function syncPosterTrip(row: {
     needs_human_review: Boolean(existingExtra.needs_human_review) || reviewReasons.size > 0,
     review_reasons: Array.from(reviewReasons),
   };
-  return upsertTrip({ id: linkedTripId(row.id), fields });
+  // Poster owns these fields, including explicit removals. Preserve chatbot-only facts.
+  fields.departure_dates = fields.departure_dates || [];
+  fields.adult_price = fields.adult_price ?? null;
+  fields.child_price = fields.child_price ?? null;
+  fields.extra = { ...fields.extra, itinerary_days: posterItineraryDays(posterRecord(row.data)),
+    included_items: mappedList(row.data, "includes"), excluded_items: mappedList(row.data, "excludes") };
+  if (existing) {
+    fields.status = existing.status;
+    const previous = await getPosterTrip(row.id);
+    if (previous) {
+      const oldFields = mapPosterTripToFields(posterRecord(previous.data));
+      const newFields = mapPosterTripToFields(posterRecord(row.data));
+      // A layout/photo save must not reset edited chatbot facts or re-date the trip.
+      for (const key of ["duration_text", "departure_dates", "adult_price", "child_price", "hotel", "has_food"] as const) {
+        if (JSON.stringify(oldFields[key]) === JSON.stringify(newFields[key])) delete fields[key];
+      }
+      if (oldFields.hotel && !newFields.hotel) fields.hotel = "";
+      const oldNotes = posterRecord(previous.data).price_desc;
+      const newNotes = posterRecord(row.data).price_desc;
+      if (oldNotes !== newNotes) fields.notes = typeof newNotes === "string" ? newNotes : "";
+    }
+    return patchTrip(targetId, fields, false, posterWrite);
+  }
+  return upsertTrip({ id: targetId, fields, syncPoster: false, posterWrite });
+}
+
+function mappedList(data: unknown, key: string) {
+  const value = posterRecord(data)[key];
+  return Array.isArray(value) ? value.filter(v => typeof v === "string") : [];
 }
 
 export async function getPosterTrip(id: string): Promise<PosterTripRow | null> {
@@ -219,43 +252,16 @@ export async function savePosterTrip(input: {
   note?: string | null;
 }): Promise<{ id: string } | null> {
   if (!(await ensurePosterSchema())) return null;
-  const dataJson = JSON.stringify(input.data ?? {});
-  let tripId = input.id?.trim() || "";
-
-  if (tripId) {
-    const updated = await queryNeon(
-      `UPDATE poster_trips
-          SET title = $1, data = $2::jsonb, updated_at = NOW()
-        WHERE id = $3`,
-      [input.title, dataJson, tripId],
-    );
-    if ((updated?.rowCount ?? 0) === 0) {
-      await queryNeon(
-        `INSERT INTO poster_trips (id, title, source_file, data)
-         VALUES ($1, $2, $3, $4::jsonb)`,
-        [tripId, input.title, input.source_file ?? null, dataJson],
-      );
-    }
-  } else {
-    tripId = `poster-${randomUUID()}`;
-    await queryNeon(
-      `INSERT INTO poster_trips (id, title, source_file, data)
-       VALUES ($1, $2, $3, $4::jsonb)`,
-      [tripId, input.title, input.source_file ?? null, dataJson],
-    );
-  }
-
-  await queryNeon(
-    `INSERT INTO poster_trip_versions (trip_id, data, note)
-     VALUES ($1, $2::jsonb, $3)`,
-    [tripId, dataJson, input.note ?? null],
-  );
-  const syncedTrip = await syncPosterTrip({
+  if (!input.title.trim()) throw new Error("Аяллын нэр шаардлагатай");
+  await ensureConnectedTripSchema();
+  const tripId = input.id?.trim() || `poster-${randomUUID()}`;
+  const row = {
     id: tripId,
     title: input.title,
     source_file: input.source_file ?? null,
-    data: input.data ?? {},
-  });
+    data: await materializePoster(input.data ?? {}),
+  };
+  const syncedTrip = await syncPosterTrip(row, { ...row, note: input.note });
   if (!syncedTrip) {
     throw new Error("Постер хадгалагдсан ч холбоотой аяллыг үүсгэж чадсангүй.");
   }
@@ -264,11 +270,8 @@ export async function savePosterTrip(input: {
 
 export async function deletePosterTrip(id: string): Promise<boolean> {
   if (!(await ensurePosterSchema())) return false;
-  await queryNeon(
-    `DELETE FROM travel_trip_entries
-      WHERE extra->>'poster_trip_id' = $1`,
-    [id],
-  );
+  const linked = await queryNeon<{ id: string }>(`SELECT id FROM travel_trip_entries WHERE extra->>'poster_trip_id'=$1`, [id]);
+  if (linked?.rows[0]) return deleteTrip(linked.rows[0].id);
   await queryNeon(`DELETE FROM poster_trip_versions WHERE trip_id = $1`, [id]);
   const res = await queryNeon<{ id: string }>(
     `DELETE FROM poster_trips WHERE id = $1 RETURNING id`,
@@ -295,4 +298,3 @@ export async function syncAllPosterTrips(): Promise<{ posters: number; trips: nu
   }
   return { posters: posters.length, trips };
 }
-

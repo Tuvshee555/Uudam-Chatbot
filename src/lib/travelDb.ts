@@ -3,6 +3,9 @@ import { getEnv } from "./env";
 import { fixMojibake } from "./encoding";
 import { recordCounter } from "./observability";
 import { queryNeon } from "./neonDb";
+import { connectedTripMutation, ensureConnectedTripSchema, type PosterWrite } from "./connectedTripStore";
+import { withNeonClient } from "./neonDb";
+import { flushWebsiteSync } from "./websiteTripSync";
 import { ensureTravelSchema } from "./travelSchema";
 // Re-exported so existing importers (travelOps, googleDriveSync, travelAI, …)
 // that import ensureTravelSchema from ./travelDb keep working after the split.
@@ -13,7 +16,7 @@ import {
   resolveDepartureDatesAtWrite,
   type ResolvedDepartureDate,
 } from "./travelDates";
-import { normalizeExtra } from "./tripExtraSchema";
+import { normalizeExtra, normalizeExtraPatch } from "./tripExtraSchema";
 import {
   normalizeTripName,
   tokenCoverageScore,
@@ -1055,11 +1058,16 @@ export async function listPageControls(): Promise<PageControl[]> {
 export async function upsertTrip(input: {
   id?: string;
   fields: TripMutationFields;
+  syncPoster?: boolean;
+  posterWrite?: PosterWrite;
 }) {
   const ready = await ensureTravelSchema();
   if (!ready) return null;
 
   const cleaned = cleanFields(input.fields);
+  if (input.id && await getTripById(input.id)) {
+    return patchTrip(input.id, cleaned, input.syncPoster !== false, input.posterWrite);
+  }
   const routeName = cleaned.route_name?.trim() || "";
   if (!routeName || /^\(?\s*нэргүй\s+аялал\s*\)?$/i.test(routeName)) {
     throw new Error("Аяллын нэр хоосон тул хадгалсангүй.");
@@ -1103,7 +1111,7 @@ export async function upsertTrip(input: {
     updated_at: "",
   };
 
-  const result = await queryNeon<Record<string, unknown>>(
+  const result = await connectedTripMutation<Record<string, unknown>>(
     `
       INSERT INTO travel_trip_entries (
         id,
@@ -1171,11 +1179,15 @@ export async function upsertTrip(input: {
       JSON.stringify(row.photo_urls),
       JSON.stringify(row.extra),
     ],
+    id,
+    input.syncPoster !== false,
+    input.posterWrite,
   );
+  await flushWebsiteSync(id, 1);
   return result?.rows?.[0] ? mapTripRow(result.rows[0]) : null;
 }
 
-export async function patchTrip(id: string, fields: TripMutationFields) {
+export async function patchTrip(id: string, fields: TripMutationFields, syncPoster = true, posterWrite?: PosterWrite) {
   const ready = await ensureTravelSchema();
   if (!ready) return null;
 
@@ -1194,12 +1206,6 @@ export async function patchTrip(id: string, fields: TripMutationFields) {
       cleaned.extra = { departure_dates_resolved: resolvedDates };
     }
   }
-  const extraPatchKeys =
-    cleaned.extra && typeof cleaned.extra === "object"
-      ? Object.keys(cleaned.extra as Record<string, unknown>)
-      : [];
-  const isResolvedDatesOnlyExtraPatch =
-    extraPatchKeys.length === 1 && extraPatchKeys[0] === "departure_dates_resolved";
   const keys = Object.keys(cleaned) as Array<keyof TripMutationFields>;
   if (!keys.length) return null;
 
@@ -1232,9 +1238,7 @@ export async function patchTrip(id: string, fields: TripMutationFields) {
     const column = columnMap[key];
     if (key === "extra") {
       // Normalise then merge into existing extra (preserves keys set by AI import)
-      const normalisedExtra = isResolvedDatesOnlyExtraPatch
-        ? ((cleaned[key] ?? {}) as Record<string, unknown>)
-        : normalizeExtra((cleaned[key] ?? {}) as Record<string, unknown>).extra;
+      const normalisedExtra = normalizeExtraPatch((cleaned[key] ?? {}) as Record<string, unknown>);
       values.push(JSON.stringify(normalisedExtra));
       sets.push(`${column} = COALESCE(${column}, '{}'::jsonb) || $${values.length}::jsonb`);
     } else if (JSONB_KEYS.has(key)) {
@@ -1249,7 +1253,7 @@ export async function patchTrip(id: string, fields: TripMutationFields) {
   });
 
   values.push(id);
-  const result = await queryNeon<Record<string, unknown>>(
+  const result = await connectedTripMutation<Record<string, unknown>>(
     `
       UPDATE travel_trip_entries
       SET
@@ -1259,46 +1263,44 @@ export async function patchTrip(id: string, fields: TripMutationFields) {
       RETURNING *
     `,
     values,
+    id,
+    syncPoster,
+    posterWrite,
   );
+  await flushWebsiteSync(id, 1);
   return result?.rows?.[0] ? mapTripRow(result.rows[0]) : null;
 }
 
 export async function deleteTrip(id: string): Promise<boolean> {
   const ready = await ensureTravelSchema();
   if (!ready) return false;
-  const linkedPoster = await queryNeon<{ poster_trip_id: string | null }>(
-    `SELECT extra->>'poster_trip_id' AS poster_trip_id
-       FROM travel_trip_entries
-      WHERE id = $1`,
-    [id],
-  );
-  const posterTripId = linkedPoster?.rows?.[0]?.poster_trip_id || "";
-  if (posterTripId) {
-    await queryNeon(`DELETE FROM poster_trip_versions WHERE trip_id = $1`, [posterTripId]);
-    await queryNeon(`DELETE FROM poster_trips WHERE id = $1`, [posterTripId]);
-  }
-  const result = await queryNeon(
-    `DELETE FROM travel_trip_entries WHERE id = $1`,
-    [id],
-  );
-  return (result?.rowCount ?? 0) > 0;
+  await ensureConnectedTripSchema();
+  const deleted = await withNeonClient(async client => {
+    await client.query("BEGIN");
+    try {
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [id]);
+      const result = await client.query(`DELETE FROM travel_trip_entries WHERE id=$1 RETURNING extra->>'poster_trip_id' AS poster_id`, [id]);
+      const posterId = result.rows[0]?.poster_id;
+      if (posterId) {
+        await client.query("DELETE FROM poster_trip_versions WHERE trip_id=$1", [posterId]);
+        await client.query("DELETE FROM poster_trips WHERE id=$1", [posterId]);
+        await client.query("DELETE FROM poster_pdf_cache WHERE poster_id=$1", [posterId]);
+      }
+      await client.query("COMMIT");
+      return Boolean(result.rowCount);
+    } catch (error) { await client.query("ROLLBACK"); throw error; }
+  });
+  await flushWebsiteSync(id, 1);
+  return Boolean(deleted);
 }
 
 export async function deleteAllTrips(): Promise<number> {
   const ready = await ensureTravelSchema();
   if (!ready) return 0;
-  const linkedPosters = await queryNeon<{ poster_trip_id: string }>(
-    `SELECT DISTINCT extra->>'poster_trip_id' AS poster_trip_id
-       FROM travel_trip_entries
-      WHERE COALESCE(extra->>'poster_trip_id', '') <> ''`,
-  );
-  const posterIds = linkedPosters?.rows.map((row) => row.poster_trip_id).filter(Boolean) ?? [];
-  if (posterIds.length > 0) {
-    await queryNeon(`DELETE FROM poster_trip_versions WHERE trip_id = ANY($1::text[])`, [posterIds]);
-    await queryNeon(`DELETE FROM poster_trips WHERE id = ANY($1::text[])`, [posterIds]);
-  }
-  const result = await queryNeon(`DELETE FROM travel_trip_entries`);
-  return result?.rowCount ?? 0;
+  const trips = await queryNeon<{ id: string }>("SELECT id FROM travel_trip_entries");
+  let deleted = 0;
+  for (const trip of trips?.rows || []) if (await deleteTrip(trip.id)) deleted++;
+  return deleted;
 }
 
 export async function resolveTripIdByMatch(match?: {

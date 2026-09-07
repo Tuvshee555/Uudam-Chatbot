@@ -336,6 +336,15 @@ export function normalizeExtra(
   return { extra, warnings };
 }
 
+/** Normalize supplied fields only, without resetting unrelated stored facts. */
+export function normalizeExtraPatch(raw: Record<string, unknown>): Record<string, unknown> {
+  const normalized = normalizeExtra(raw).extra;
+  const keys = new Set(Object.keys(raw));
+  if (keys.has("departure_date_groups") && !keys.has("price_groups")) keys.add("price_groups");
+  keys.delete("website_sync");
+  return Object.fromEntries(Object.entries(normalized).filter(([key]) => keys.has(key)));
+}
+
 // ─── diff helpers (used by the UI proposal view) ─────────────────────────────
 
 export type TripExtraDiff = {

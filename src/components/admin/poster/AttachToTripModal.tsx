@@ -109,6 +109,7 @@ export type AttachToTripModalProps = {
   open: boolean;
   onClose: () => void;
   posterTitle: string;
+  posterId?: string | null;
   posterTrip: PosterTrip | null;
   apiFetch: ApiFetch;
   capturePdf: () => Promise<CapturedPosterPdf>;
@@ -145,6 +146,7 @@ export default function AttachToTripModal({
   open,
   onClose,
   posterTitle,
+  posterId,
   posterTrip,
   apiFetch,
   capturePdf,
@@ -280,6 +282,7 @@ export default function AttachToTripModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           tripId: isNew ? undefined : target,
+          posterId,
           createNew: isNew || undefined,
           newTripTitle: isNew ? posterTitle : undefined,
           mode,

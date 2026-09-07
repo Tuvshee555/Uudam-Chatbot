@@ -5,8 +5,10 @@ import type { TravelTrip } from "@/lib/adminTypes";
 import { STATUS_LABELS } from "@/lib/adminProposalUtils";
 import { STATUS_TONE, formatTime } from "@/lib/adminUtils";
 import { getPosterBrochureHref } from "@/lib/poster/pdfUrl";
+import { WebsiteSyncStatus } from "./WebsiteSyncStatus";
 
 export function TripsTab({
+  apiFetch,
   trips,
   search,
   setSearch,
@@ -22,6 +24,7 @@ export function TripsTab({
   onFetchAllTrips,
   businessName,
 }: {
+  apiFetch: (url: string, init?: RequestInit) => Promise<Response>;
   trips: TravelTrip[];
   search: string;
   setSearch: (value: string) => void;
@@ -226,6 +229,7 @@ export function TripsTab({
         }
       />
 
+      <WebsiteSyncStatus apiFetch={apiFetch} />
       <Card className="p-3.5">
         <div className="flex flex-col gap-2">
           <div className="flex gap-2">
@@ -616,6 +620,9 @@ function TripCard({
             <div className="mt-2 rounded-md border border-brand/15 bg-brand-soft px-2.5 py-2 text-xs text-brand">
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="font-semibold">Холбоо:</span>
+                {Boolean((trip.extra.website_sync as { website_slug?: string } | undefined)?.website_slug) && (
+                  <a className="font-semibold underline" href={`https://uudam-booking-web.vercel.app/mn/trips/${encodeURIComponent((trip.extra.website_sync as { website_slug: string }).website_slug)}`} target="_blank" rel="noopener noreferrer">Вэбсайт дээр үзэх</a>
+                )}
                 <span className="rounded-[6px] bg-surface px-1.5 py-0.5 font-mono text-[11px]">{connection.posterId}</span>
                 {connection.sourceFile && <span className="truncate text-brand/80">эх: {connection.sourceFile}</span>}
                 {connection.pdfUrl && (

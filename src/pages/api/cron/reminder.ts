@@ -4,6 +4,8 @@ import { sendTextMessage, sendImageMessage } from "../../../lib/messenger";
 import { getEnv } from "../../../lib/env";
 import { getTravelBotSettings } from "../../../lib/travelOps";
 import { safeSecretCompare } from "../../../lib/adminAuth";
+import { waitUntil } from "@vercel/functions";
+import { flushWebsiteSync } from "../../../lib/websiteTripSync";
 
 // Vercel cron secret — must match CRON_SECRET env var.
 // FAIL CLOSED in production: a missing secret used to mean "allow everyone",
@@ -22,6 +24,7 @@ function isCronAuthorized(req: NextApiRequest): boolean {
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET" && req.method !== "POST") return res.status(405).end();
   if (!isCronAuthorized(req)) return res.status(401).json({ error: "unauthorized" });
+  waitUntil(flushWebsiteSync(undefined, 30));
 
   const env = getEnv();
   // PSIDs are page-scoped: a sender who messaged page B does not exist for

@@ -25,10 +25,8 @@ export function getPosterPdfPublicUrl(posterId: string): string {
 }
 
 export function getPosterBrochureHref(extra: Record<string, unknown>): string {
-  // The real captured poster PDF (brochure_pdf_url) is the actual file the
-  // client uploaded/exported — always prefer it. The generated /api/poster-pdf
-  // endpoint rebuilds a plain-text PDF from poster JSON and is only a
-  // last-resort fallback for trips that never got a real PDF attached.
+  // Connected trips share the live poster PDF endpoint. Older uploaded PDFs
+  // remain readable until their trip has been migrated to the connection.
   const pdfUrl = typeof extra.brochure_pdf_url === "string" ? extra.brochure_pdf_url.trim() : "";
   if (pdfUrl.startsWith("https://")) return pdfUrl;
   const posterId = typeof extra.poster_trip_id === "string" ? extra.poster_trip_id.trim() : "";

@@ -4,6 +4,7 @@ import { requireAdminAccess } from "@/lib/adminAccess";
 import { getEnv } from "@/lib/env";
 import { logError, logInfo } from "@/lib/observability";
 import { getTripById, patchTrip, upsertTrip } from "@/lib/travelDb";
+import { queryNeon } from "@/lib/neonDb";
 import type { TripMutationFields } from "@/lib/travelTypes";
 import { dedupePhotoUrlsByContent } from "@/lib/tripPhotoImport/dedupePhotos";
 
@@ -219,6 +220,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const body = req.body as {
     tripId?: unknown;
+    posterId?: unknown;
     createNew?: unknown;
     newTripTitle?: unknown;
     mode?: unknown;
@@ -227,8 +229,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     fields?: unknown;
   };
 
-  const tripId = typeof body.tripId === "string" && body.tripId.trim() ? body.tripId.trim() : null;
-  const createNew = body.createNew === true;
+  let tripId = typeof body.tripId === "string" && body.tripId.trim() ? body.tripId.trim() : null;
+  let createNew = body.createNew === true;
+  if (typeof body.posterId === "string") {
+    const linked = await queryNeon<{ id: string }>("SELECT id FROM travel_trip_entries WHERE extra->>'poster_trip_id'=$1", [body.posterId]);
+    const canonicalId = linked?.rows[0]?.id;
+    if (!canonicalId) return res.status(409).json({ error: "Эхлээд постероо хадгална уу." });
+    if (tripId && tripId !== canonicalId) return res.status(409).json({ error: "Энэ постер өөр аялалтай холбогдсон байна. Холбоотой аяллаа шинэчилнэ үү." });
+    tripId = canonicalId;
+    createNew = false;
+  }
   const newTripTitle =
     typeof body.newTripTitle === "string" ? body.newTripTitle.trim() : "";
   const mode = body.mode === "append" ? "append" : body.mode === "skip" ? "skip" : "replace";
@@ -334,7 +344,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       brochure_pdf_required: true,
       brochure_pdf_missing: false,
     };
-    patchFields.photo_urls = [];
   }
   if (uploadedUrls.length > 0 && mode !== "skip") {
     // Appending a re-exported poster would otherwise stack a second copy of the

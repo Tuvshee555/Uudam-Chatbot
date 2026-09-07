@@ -1777,6 +1777,7 @@ export default function AdminPage() {
           )}
           {tab === "trips" && (
             <TripsTab
+              apiFetch={fetchWithAdmin}
               trips={trips}
               search={search}
               setSearch={setSearch}

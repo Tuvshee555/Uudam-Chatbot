@@ -1737,6 +1737,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               tripId: item.action === "attach_exact" ? item.targetTripId : undefined,
+              posterId: item.posterId,
               createNew: item.action === "create" || undefined,
               newTripTitle: item.action === "create" ? captureTitle : undefined,
               mode: "replace",
@@ -1824,6 +1825,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               tripId: createNew ? undefined : targetTripId,
+              posterId: item.posterId,
               createNew: createNew || undefined,
               newTripTitle: createNew ? captureTitle : undefined,
               mode: "replace",
@@ -1857,6 +1859,8 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
   }
 
   async function save() {
+    const savingId = tripId || `poster-${crypto.randomUUID()}`;
+    setTripId(savingId);
     setError("");
     setBulkPlan(null);
     setBulkReport(null);
@@ -1870,7 +1874,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
       const r = await fetchJson("/api/admin/poster/trips", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: tripId, title: cleanTrip.title, data: cleanTrip, source_file: source }),
+        body: JSON.stringify({ id: savingId, title: cleanTrip.title, data: cleanTrip, source_file: source }),
       });
       if (r.error) throw new Error(r.error as string);
       setTrip(cleanTrip);
@@ -2357,6 +2361,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
       </div>
 
       <AttachToTripModal
+        posterId={tripId}
         open={attachModalOpen}
         onClose={() => setAttachModalOpen(false)}
         posterTitle={trip?.title || ""}

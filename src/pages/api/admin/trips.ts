@@ -9,6 +9,8 @@ import {
   upsertTrip,
 } from "../../../lib/travelOps";
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
+import { websiteSyncStatus } from "../../../lib/websiteTripSync";
+import { ensureConnectedTripSchema } from "../../../lib/connectedTripStore";
 
 function asText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -42,7 +44,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         getBotControl(),
       ]);
 
-      return res.status(200).json({ ok: true, trips, control });
+      await ensureConnectedTripSchema();
+      const connections = new Map((await websiteSyncStatus()).map(row => [row.trip_id, row]));
+      return res.status(200).json({ ok: true, trips: trips.map(trip => ({ ...trip,
+        extra: { ...trip.extra, website_sync: connections.get(trip.id) || null } })), control });
     }
 
     if (req.method === "POST") {
