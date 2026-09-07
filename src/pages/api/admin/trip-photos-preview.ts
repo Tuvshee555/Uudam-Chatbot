@@ -1,10 +1,17 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { del } from "@vercel/blob";
 import { requireAdminAccess } from "../../../lib/adminAccess";
 import { listTrips } from "../../../lib/travelDb";
 import { createBatch, setBatchItems } from "../../../lib/tripPhotoImport/batchStore";
-import { parseMultipartFiles } from "../../../lib/tripPhotoImport/extract";
+import {
+  buildImportItemsFromRawFiles,
+  parseMultipartFiles,
+  type ExtractResult,
+  type RawFile,
+} from "../../../lib/tripPhotoImport/extract";
 import { matchImportItemToTripsWithAI } from "../../../lib/tripPhotoImport/match";
 import {
+  MAX_BATCH_TOTAL_BYTES,
   type PreviewImportItem,
   type MatchResult,
 } from "../../../lib/tripPhotoImport/types";
@@ -13,7 +20,57 @@ export const config = {
   api: {
     bodyParser: false,
   },
+  maxDuration: 60,
 };
+
+type BlobFileRef = { blobUrl: string; filename: string; mimeType: string };
+
+function readJsonBody(req: NextApiRequest): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    req.on("end", () => {
+      try {
+        const text = Buffer.concat(chunks).toString("utf8").trim();
+        resolve(text ? JSON.parse(text) : {});
+      } catch (error) {
+        reject(error);
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+/**
+ * Large batches (a whole trip's photo folder, easily tens of MB) can't be
+ * posted directly to this function — Vercel rejects any serverless request
+ * body over ~4.5MB with a plain-text 413 before the handler even runs. For
+ * those the browser uploads straight to Vercel Blob first and only sends us
+ * the resulting URLs here, so we fetch the bytes server-side instead.
+ */
+async function extractFromBlobUrls(refs: BlobFileRef[]): Promise<ExtractResult> {
+  const blobUrls = refs.map((ref) => ref.blobUrl);
+  try {
+    let totalBytes = 0;
+    const rawFiles: RawFile[] = await Promise.all(
+      refs.map(async (ref) => {
+        const res = await fetch(ref.blobUrl);
+        if (!res.ok) throw new Error(`Файл татахад алдаа гарлаа: ${ref.filename}`);
+        const buffer = Buffer.from(await res.arrayBuffer());
+        totalBytes += buffer.length;
+        if (totalBytes > MAX_BATCH_TOTAL_BYTES) {
+          throw new Error("Batch too large");
+        }
+        return { fieldName: "files", fileName: ref.filename, mimeType: ref.mimeType, buffer };
+      }),
+    );
+    return await buildImportItemsFromRawFiles(rawFiles);
+  } finally {
+    for (const blobUrl of blobUrls) {
+      del(blobUrl).catch(() => {});
+    }
+  }
+}
 
 export function mergeMatchedImageItems(items: PreviewImportItem[]): PreviewImportItem[] {
   const merged: PreviewImportItem[] = [];
@@ -64,9 +121,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    const contentType = String(req.headers["content-type"] || "");
     const [trips, extracted] = await Promise.all([
       listTrips({ limit: 1000 }),
-      parseMultipartFiles(req),
+      contentType.includes("application/json")
+        ? readJsonBody(req).then((body) => {
+            const refs = Array.isArray(body.files)
+              ? body.files.filter(
+                  (file): file is BlobFileRef =>
+                    Boolean(file) &&
+                    typeof file === "object" &&
+                    typeof (file as BlobFileRef).blobUrl === "string",
+                )
+              : [];
+            return extractFromBlobUrls(refs);
+          })
+        : parseMultipartFiles(req),
     ]);
 
     if (extracted.items.length === 0) {

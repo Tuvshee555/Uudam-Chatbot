@@ -10,6 +10,7 @@ import { createDefaultTrip } from "@/lib/poster/defaultTrip";
 import { Badge, Button, Card, Icons, Input, Modal, Select, Spinner, cx } from "@/components/ui";
 import { TabHeader } from "@/components/admin/AdminShared";
 import type { PosterBulkPlan, PosterBulkPlanItem } from "@/lib/poster/bulkPlan";
+import type { TripGap } from "@/lib/tripCompleteness";
 
 /* ------------------------------------------------------------------ *
  * Trip / poster data shape — mirrors TRIP_SCHEMA in src/lib/poster/openai.js
@@ -117,6 +118,8 @@ export type PosterHistoryItem = {
   linked_trip_status?: string | null;
   linked_trip_has_pdf?: boolean;
   linked_trip_needs_review?: boolean;
+  /** Same rules the trips tab blocks a save on — computed once, server-side. */
+  missing_gaps?: TripGap[];
 };
 
 type HistorySort = "newest" | "oldest" | "title";
@@ -451,7 +454,16 @@ function mappedFieldsForNewTrip(item: PosterBulkPlanItem): PosterBulkPlanItem["f
   return fields as PosterBulkPlanItem["fields"];
 }
 
-export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
+export default function PosterTab({
+  apiFetch,
+  openPosterId,
+  onPosterOpened,
+}: {
+  apiFetch: ApiFetch;
+  /** Set by the trips tab's "postert зураг нэмэх" redirect — opens this poster once, then clears. */
+  openPosterId?: string | null;
+  onPosterOpened?: () => void;
+}) {
   // apiFetch(url, init) injects the admin secret header (from admin.tsx).
   const fetchJson = async (url: string, init?: RequestInit): Promise<JsonRecord> => {
     const res = await apiFetch(url, init);
@@ -486,6 +498,15 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
   const previewRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLDivElement>(null);
   const dayPhotoInputRefs: DayPhotoInputRefs = useRef({});
+
+  // The trips tab's "Постерт зураг нэмэх" button lands here and jumps straight
+  // to the exact poster missing a photo, instead of leaving them to find it
+  // in the history list themselves.
+  useEffect(() => {
+    if (!openPosterId) return;
+    void openTrip(openPosterId).then(() => onPosterOpened?.());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openPosterId]);
 
   const upd: PosterUpdateFn = (path, value) => setTrip((t) => (t ? setPath(t, path, value) : t));
   const posterStyle = useMemo(() => normalizePosterStyle(trip?.style), [trip?.style]);
@@ -1933,6 +1954,7 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
         title="Постер үүсгэгч"
         description="Постер хадгалах бүрт түүнтэй холбоотой live chatbot аялал автоматаар үүсэж/шинэчлэгдэнэ."
       />
+      <IncompletePostersBanner history={history} onOpen={(id) => void openTrip(id)} />
       {busy && (
         <div className="flex items-center gap-2 rounded-lg border border-line bg-surface-sunken px-3 py-2 text-sm text-ink-muted">
           <Spinner /> {busy}
@@ -2042,6 +2064,34 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                           {currentHistoryItem?.linked_trip_has_pdf ? "PDF бэлэн" : "PDF дутуу"}
                         </Badge>
                         {currentHistoryItem?.linked_trip_needs_review && <Badge tone="warning">Шалгах</Badge>}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {!!currentHistoryItem?.missing_gaps?.length && (
+                  <div className="mt-4 rounded-xl border border-danger/30 bg-danger-soft p-3 text-sm">
+                    <div className="flex items-start gap-2.5">
+                      <Icons.alert size={18} className="mt-0.5 shrink-0 text-danger" />
+                      <div className="min-w-0">
+                        <p className="font-bold text-danger">
+                          {currentHistoryItem.missing_gaps.length} заавал бөглөх талбар дутуу байна
+                        </p>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {currentHistoryItem.missing_gaps.map((gap) => (
+                            <span
+                              key={gap.key}
+                              className="rounded-md border border-danger/30 bg-surface px-2 py-1 text-xs font-medium text-danger"
+                            >
+                              {gap.label}
+                            </span>
+                          ))}
+                        </div>
+                        {currentHistoryItem.missing_gaps.some((gap) => gap.key === "photo_urls") && (
+                          <p className="mt-2 text-xs text-ink-muted">
+                            Доод талын зургийн хэсэгт зураг нэмээд, дараа нь Хадгалах дарна уу.
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -2341,6 +2391,11 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
                             <Badge tone="danger">Trip холбоогүй</Badge>
                           )}
                         </div>
+                        {!!h.missing_gaps?.length && (
+                          <p className="mt-1 truncate text-[11px] font-medium text-danger">
+                            {h.missing_gaps.length} дутуу: {h.missing_gaps.map((gap) => gap.label).join(" · ")}
+                          </p>
+                        )}
                       </button>
                       <button
                         type="button"
@@ -2400,5 +2455,66 @@ export default function PosterTab({ apiFetch }: { apiFetch: ApiFetch }) {
         </p>
       </Modal>
     </div>
+  );
+}
+
+/**
+ * The catalogue-wide view of what is missing, mirroring TripsTab's banner so
+ * a gap reads the same whether you are looking at the trip or the poster
+ * behind it.
+ */
+function IncompletePostersBanner({
+  history,
+  onOpen,
+}: {
+  history: PosterHistoryItem[];
+  onOpen: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const incomplete = history.filter((item) => (item.missing_gaps?.length ?? 0) > 0);
+  const perField = new Map<string, number>();
+  for (const item of incomplete) {
+    for (const gap of item.missing_gaps || []) {
+      perField.set(gap.label, (perField.get(gap.label) || 0) + 1);
+    }
+  }
+  if (incomplete.length === 0) return null;
+
+  return (
+    <Card className="border-danger/30 bg-danger-soft p-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2.5">
+          <Icons.alert size={20} className="shrink-0 text-danger" />
+          <div>
+            <p className="text-sm font-bold text-danger">
+              {incomplete.length} постерт заавал бөглөх мэдээлэл дутуу байна
+            </p>
+            <p className="mt-0.5 text-xs text-ink-muted">
+              {[...perField.entries()].sort((a, b) => b[1] - a[1]).map(([label, n]) => `${label}: ${n}`).join(" · ")}
+            </p>
+          </div>
+        </div>
+        <Button size="sm" variant="secondary" onClick={() => setOpen((prev) => !prev)}>
+          {open ? "Хаах" : "Дутуу постеруудыг харах"}
+        </Button>
+      </div>
+      {open && (
+        <div className="mt-3 grid gap-1.5 border-t border-danger/20 pt-3">
+          {incomplete.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onOpen(item.id)}
+              className="flex w-full flex-wrap items-center justify-between gap-2 rounded-md bg-surface px-2.5 py-2 text-left transition-colors hover:bg-surface-sunken"
+            >
+              <span className="min-w-0 text-sm font-medium text-ink">{item.title || "—"}</span>
+              <span className="text-xs text-danger">
+                {(item.missing_gaps || []).map((gap) => gap.label).join(" · ")}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }

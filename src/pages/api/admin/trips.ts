@@ -12,6 +12,7 @@ import { beginRequestTrace, finishRequestTrace } from "../../../lib/observabilit
 import { websiteSyncStatus } from "../../../lib/websiteTripSync";
 import { ensureConnectedTripSchema } from "../../../lib/connectedTripStore";
 import { blockingGaps, findTripGaps, formatGapLabels, tripCompletenessInput } from "../../../lib/tripCompleteness";
+import { POSTER_PHOTO_COUNT_SQL } from "../../../lib/poster/photoCount";
 import { queryNeon } from "../../../lib/neonDb";
 import { getTripById } from "../../../lib/travelDb";
 import type { TravelTrip } from "../../../lib/travelTypes";
@@ -26,17 +27,8 @@ function asText(value: unknown) {
  * is published, and must not be reported as missing photos.
  */
 async function posterPhotoCountsByTrip(): Promise<Map<string, number>> {
-  // Counted in SQL: shipping every poster's JSON here to count it in Node cost
-  // 25s on this catalogue, because that column carries the whole layout.
   const rows = await queryNeon<{ id: string; photo_count: string }>(
-    `SELECT t.id,
-            (CASE WHEN COALESCE(p.data->>'hero_image', '') ~ '^(https://|data:image/)' THEN 1 ELSE 0 END)
-            + COALESCE((
-                SELECT count(*) FROM jsonb_array_elements(
-                  CASE WHEN jsonb_typeof(p.data->'days') = 'array' THEN p.data->'days' ELSE '[]'::jsonb END
-                ) AS day
-                WHERE day->>'photo' ~ '^(https://|data:image/)'
-              ), 0) AS photo_count
+    `SELECT t.id, ${POSTER_PHOTO_COUNT_SQL} AS photo_count
        FROM travel_trip_entries t
        JOIN poster_trips p ON p.id = t.extra->>'poster_trip_id'`,
   );

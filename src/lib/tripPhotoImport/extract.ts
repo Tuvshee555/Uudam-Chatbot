@@ -12,7 +12,7 @@ import {
 } from "./types";
 import { extractSequencePrefix } from "./normalize";
 
-type RawFile = {
+export type RawFile = {
   fieldName: string;
   fileName: string;
   mimeType: string;

@@ -1,8 +1,9 @@
 import React from "react";
+import { upload as uploadToBlob } from "@vercel/blob/client";
 import { Button, Card, Icons, Badge, Alert, cx, useToast } from "@/components/ui";
 import { TabHeader } from "./AdminShared";
 import type { TravelTrip } from "@/lib/adminTypes";
-import type { MatchResult } from "@/lib/tripPhotoImport/types";
+import { MAX_BATCH_TOTAL_BYTES, type MatchResult } from "@/lib/tripPhotoImport/types";
 
 type PreviewItem = {
   id: string;
@@ -35,9 +36,48 @@ export type TripPhotoImportTabProps = {
 };
 
 const MAX_FILE_SIZE_MB = 10;
+const ADMIN_SECRET_STORAGE_KEY = "travel_admin_secret";
+// Vercel rejects any serverless function request body over ~4.5MB with a
+// plain-text 413 before our handler runs. A folder of trip photos easily
+// exceeds that, so batches above this go browser -> Blob -> server instead.
+const DIRECT_UPLOAD_LIMIT_BYTES = Math.floor(4.4 * 1024 * 1024);
 
 function isLikelyImageFile(file: File): boolean {
   return file.type.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(file.name);
+}
+
+function isLikelyZipFile(file: File): boolean {
+  return (
+    file.type === "application/zip" ||
+    file.type === "application/x-zip-compressed" ||
+    /\.zip$/i.test(file.name)
+  );
+}
+
+function isLocalDevHost(): boolean {
+  if (typeof window === "undefined") return false;
+  return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
+
+function getStoredAdminSecret(): string {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(ADMIN_SECRET_STORAGE_KEY) || "";
+}
+
+/** Reads a fetch response as text first so a non-JSON error body (Vercel's
+ * plain-text 413, an HTML error page, etc.) never throws "Unexpected token"
+ * out of res.json() — it becomes a readable error message instead. */
+async function parseJsonResponse<T extends Record<string, unknown>>(res: Response): Promise<T> {
+  const raw = await res.text();
+  if (!raw) return {} as T;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    const message = res.status === 413
+      ? "Файл хэт том байна. Цөөн файл эсвэл жижиг хэсгүүдээр оруулна уу."
+      : raw.slice(0, 300);
+    return { error: message } as unknown as T;
+  }
 }
 
 export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImportTabProps) {
@@ -215,7 +255,7 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
           itemIds: [item.id],
         }),
       });
-      const json = (await res.json()) as { results?: ConfirmResult[]; error?: string };
+      const json = await parseJsonResponse<{ results?: ConfirmResult[]; error?: string }>(res);
       if (!res.ok) {
         throw new Error(json.error || "Баталгаажуулахад алдаа гарлаа");
       }
@@ -239,12 +279,20 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
   async function uploadFiles(fileList: FileList | File[] | null) {
     if (!fileList || fileList.length === 0) return;
     const files = Array.from(fileList);
-    const oversized = files.filter((f) => f.size > MAX_FILE_SIZE_MB * 1024 * 1024);
+    const oversized = files.filter(
+      (f) => !isLikelyZipFile(f) && f.size > MAX_FILE_SIZE_MB * 1024 * 1024,
+    );
     if (oversized.length > 0) {
       toast.error(`${oversized.length} файл 10MB-ээс том байна.`);
     }
-    const valid = files.filter((f) => f.size <= MAX_FILE_SIZE_MB * 1024 * 1024);
+    const valid = files.filter((f) => isLikelyZipFile(f) || f.size <= MAX_FILE_SIZE_MB * 1024 * 1024);
     if (valid.length === 0) return;
+
+    const totalBytes = valid.reduce((sum, f) => sum + f.size, 0);
+    if (totalBytes > MAX_BATCH_TOTAL_BYTES) {
+      toast.error("Нэг удаагийн багц хэт том байна. Цөөн файлаар хэсэглэн оруулна уу.");
+      return;
+    }
 
     setLocalPreviewUrls((prev) => {
       Object.values(prev).forEach((url) => URL.revokeObjectURL(url));
@@ -256,23 +304,46 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
       return next;
     });
 
-    const formData = new FormData();
-    for (const file of valid) {
-      formData.append("files", file, file.webkitRelativePath || file.name);
-    }
-
     setBusy(true);
     try {
-      const res = await apiFetch("/api/admin/trip-photos-preview", {
-        method: "POST",
-        body: formData,
-      });
-      const json = (await res.json()) as {
+      let res: Response;
+      if (totalBytes > DIRECT_UPLOAD_LIMIT_BYTES && !isLocalDevHost()) {
+        const blobs = await Promise.all(
+          valid.map((file) =>
+            uploadToBlob(file.webkitRelativePath || file.name, file, {
+              access: "public",
+              handleUploadUrl: "/api/admin/trip-photos-upload",
+              clientPayload: JSON.stringify({ adminSecret: getStoredAdminSecret() }),
+            }),
+          ),
+        );
+        res = await apiFetch("/api/admin/trip-photos-preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            files: blobs.map((blob, index) => ({
+              blobUrl: blob.url,
+              filename: valid[index].webkitRelativePath || valid[index].name,
+              mimeType: valid[index].type || "",
+            })),
+          }),
+        });
+      } else {
+        const formData = new FormData();
+        for (const file of valid) {
+          formData.append("files", file, file.webkitRelativePath || file.name);
+        }
+        res = await apiFetch("/api/admin/trip-photos-preview", {
+          method: "POST",
+          body: formData,
+        });
+      }
+      const json = await parseJsonResponse<{
         batchId?: string;
         items?: PreviewItem[];
         errors?: string[];
         error?: string;
-      };
+      }>(res);
       if (!res.ok || !json.batchId) {
         throw new Error(json.error || "Урьдчилан харахад алдаа гарлаа");
       }
@@ -362,7 +433,7 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
             itemIds: [item.id],
           }),
         });
-        const json = (await res.json()) as { results?: ConfirmResult[]; error?: string };
+        const json = await parseJsonResponse<{ results?: ConfirmResult[]; error?: string }>(res);
         if (!res.ok) {
           throw new Error(json.error || "Баталгаажуулахад алдаа гарлаа");
         }

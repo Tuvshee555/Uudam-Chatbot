@@ -11,12 +11,14 @@ import type { TripMutationFields } from "@/lib/travelTypes";
 import { posterPhotos } from "@/lib/connectedTripMapping";
 import { materializePoster } from "@/lib/websiteTripSync";
 import { getPosterPdfPublicUrl } from "./pdfUrl";
+import { POSTER_PHOTO_COUNT_SQL } from "./photoCount";
 import {
   INCOMPLETE_REVIEW_PREFIX,
   blockingGaps,
   findTripGaps,
   incompleteReviewReason,
   tripCompletenessInput,
+  type TripGap,
 } from "@/lib/tripCompleteness";
 
 export type PosterTripRow = {
@@ -38,6 +40,8 @@ export type PosterTripListRow = {
   linked_trip_status: string | null;
   linked_trip_has_pdf: boolean;
   linked_trip_needs_review: boolean;
+  /** Same rules TripsTab blocks on — so a gap reads identically in both tabs. */
+  missing_gaps: TripGap[];
 };
 
 let schemaReady = false;
@@ -84,8 +88,13 @@ export async function listPosterTrips(): Promise<PosterTripListRow[]> {
     linked_trip_id: string | null;
     linked_trip_name: string | null;
     linked_trip_status: string | null;
+    linked_trip_duration_text: string | null;
+    linked_trip_adult_price: number | null;
+    linked_trip_child_price: number | null;
+    linked_trip_departure_count: number;
     linked_trip_has_pdf: boolean;
     linked_trip_needs_review: boolean;
+    photo_count: string;
   }>(
     `SELECT p.id,
             p.title,
@@ -94,18 +103,38 @@ export async function listPosterTrips(): Promise<PosterTripListRow[]> {
             t.id AS linked_trip_id,
             t.route_name AS linked_trip_name,
             t.status AS linked_trip_status,
+            t.duration_text AS linked_trip_duration_text,
+            t.adult_price AS linked_trip_adult_price,
+            t.child_price AS linked_trip_child_price,
+            COALESCE(array_length(t.departure_dates, 1), 0) AS linked_trip_departure_count,
             (
               COALESCE(t.extra->>'brochure_pdf_url', '') <> ''
               OR COALESCE(t.extra->>'source_file_attachment_id', '') <> ''
             ) AS linked_trip_has_pdf,
-            COALESCE((t.extra->>'needs_human_review')::boolean, FALSE) AS linked_trip_needs_review
+            COALESCE((t.extra->>'needs_human_review')::boolean, FALSE) AS linked_trip_needs_review,
+            ${POSTER_PHOTO_COUNT_SQL} AS photo_count
        FROM poster_trips p
        LEFT JOIN travel_trip_entries t
          ON t.extra->>'poster_trip_id' = p.id
       ORDER BY p.updated_at DESC
       LIMIT 200`,
   );
-  return res?.rows ?? [];
+  return (res?.rows ?? []).map((row) => ({
+    ...row,
+    // Same rules TripsTab blocks a save on, so a gap here means the same
+    // thing there — no separate "poster complete" idea to keep in sync.
+    missing_gaps: blockingGaps(
+      findTripGaps({
+        route_name: row.linked_trip_name,
+        duration_text: row.linked_trip_duration_text,
+        adult_price: row.linked_trip_adult_price,
+        child_price: row.linked_trip_child_price,
+        departure_dates: Array.from({ length: row.linked_trip_departure_count }, () => "x"),
+        photo_urls: [],
+        poster_photo_count: Number(row.photo_count) || 0,
+      }),
+    ),
+  }));
 }
 
 export function linkedTripId(posterId: string): string {

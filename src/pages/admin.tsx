@@ -44,6 +44,9 @@ export default function AdminPage() {
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
   const [systemLoaded, setSystemLoaded] = useState(false);
   const [tab, setTab] = useState<TabKey>("assistant");
+  // Set by the trips tab's "Постерт зураг нэмэх" button — opens that exact
+  // poster once the poster tab mounts, instead of leaving them to hunt for it.
+  const [posterToOpen, setPosterToOpen] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [busyKey, setBusyKey] = useState("");
   const [tick, setTick] = useState(0);
@@ -1796,6 +1799,10 @@ export default function AdminPage() {
               onEdit={beginEditTrip}
               onDelete={(trip) => setDeletingTrip(trip)}
               onFetchAllTrips={fetchAllTrips}
+              onFixPhotosOnPoster={(posterId) => {
+                setPosterToOpen(posterId);
+                setTab("poster");
+              }}
               businessName={settings?.business_name || ""}
               onToggleVisible={async (trip) => {
                 const currentlyHidden =
@@ -1938,7 +1945,11 @@ export default function AdminPage() {
             />
           )}
           {tab === "poster" && (
-            <PosterTab apiFetch={fetchWithAdmin} />
+            <PosterTab
+              apiFetch={fetchWithAdmin}
+              openPosterId={posterToOpen}
+              onPosterOpened={() => setPosterToOpen(null)}
+            />
           )}
           {tab === "json" && (
             <JsonEditorTab

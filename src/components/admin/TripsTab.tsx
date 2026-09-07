@@ -24,6 +24,7 @@ export function TripsTab({
   onToggleVisible,
   onFetchAllTrips,
   businessName,
+  onFixPhotosOnPoster,
 }: {
   apiFetch: (url: string, init?: RequestInit) => Promise<Response>;
   trips: TravelTrip[];
@@ -42,6 +43,8 @@ export function TripsTab({
   onFetchAllTrips: () => Promise<TravelTrip[]>;
   /** Agency name for the brochure cover, from bot settings. */
   businessName: string;
+  /** Jumps to the poster tab and opens the exact poster missing photos — the gallery lives there, not in this form. */
+  onFixPhotosOnPoster: (posterId: string) => void;
 }) {
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [brochureFilter, setBrochureFilter] = useState<"all" | "with" | "without">("all");
@@ -231,7 +234,7 @@ export function TripsTab({
       />
 
       <WebsiteSyncStatus apiFetch={apiFetch} />
-      <IncompleteTripsBanner trips={trips} onEdit={onEdit} />
+      <IncompleteTripsBanner trips={trips} onEdit={onEdit} onFixPhotosOnPoster={onFixPhotosOnPoster} />
       <Card className="p-3.5">
         <div className="flex flex-col gap-2">
           <div className="flex gap-2">
@@ -348,6 +351,7 @@ export function TripsTab({
           onEdit={onEdit}
           onDelete={onDelete}
           onToggleVisible={onToggleVisible}
+          onFixPhotosOnPoster={onFixPhotosOnPoster}
         />
       )}
     </div>
@@ -475,9 +479,11 @@ function getTripGaps(trip: TravelTrip): TripGap[] {
 function IncompleteTripsBanner({
   trips,
   onEdit,
+  onFixPhotosOnPoster,
 }: {
   trips: TravelTrip[];
   onEdit: (trip: TravelTrip) => void;
+  onFixPhotosOnPoster: (posterId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const summary = useMemo(() => {
@@ -523,19 +529,31 @@ function IncompleteTripsBanner({
       </div>
       {open && (
         <div className="mt-3 grid gap-1.5 border-t border-danger/20 pt-3">
-          {summary.incomplete.map((trip) => (
-            <button
-              key={trip.id}
-              type="button"
-              onClick={() => onEdit(trip)}
-              className="flex w-full flex-wrap items-center justify-between gap-2 rounded-md bg-surface px-2.5 py-2 text-left transition-colors hover:bg-surface-sunken"
-            >
-              <span className="min-w-0 text-sm font-medium text-ink">{trip.route_name || "—"}</span>
-              <span className="text-xs text-danger">
-                {blockingGaps(getTripGaps(trip)).map((gap) => gap.label).join(" · ")}
-              </span>
-            </button>
-          ))}
+          {summary.incomplete.map((trip) => {
+            const gaps = blockingGaps(getTripGaps(trip));
+            const posterId = tripConnectionDetails(trip).posterId;
+            const needsPosterPhoto = gaps.some((gap) => gap.key === "photo_urls") && posterId;
+            return (
+              <div
+                key={trip.id}
+                className="flex w-full flex-wrap items-center justify-between gap-2 rounded-md bg-surface px-2.5 py-2"
+              >
+                <button
+                  type="button"
+                  onClick={() => onEdit(trip)}
+                  className="min-w-0 flex-1 text-left"
+                >
+                  <span className="block truncate text-sm font-medium text-ink">{trip.route_name || "—"}</span>
+                  <span className="text-xs text-danger">{gaps.map((gap) => gap.label).join(" · ")}</span>
+                </button>
+                {needsPosterPhoto && (
+                  <Button size="sm" variant="secondary" onClick={() => onFixPhotosOnPoster(posterId)}>
+                    <Icons.image size={13} /> Постерт зураг нэмэх
+                  </Button>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </Card>
@@ -547,11 +565,13 @@ function TripGroups({
   onEdit,
   onDelete,
   onToggleVisible,
+  onFixPhotosOnPoster,
 }: {
   trips: TravelTrip[];
   onEdit: (trip: TravelTrip) => void;
   onDelete: (trip: TravelTrip) => void;
   onToggleVisible: (trip: TravelTrip) => void;
+  onFixPhotosOnPoster: (posterId: string) => void;
 }) {
   const groups = useMemo(() => {
     const meaningfulCategories = new Set(
@@ -616,6 +636,7 @@ function TripGroups({
                     onEdit={() => onEdit(trip)}
                     onDelete={() => onDelete(trip)}
                     onToggleVisible={() => onToggleVisible(trip)}
+                    onFixPhotosOnPoster={onFixPhotosOnPoster}
                   />
                 ))}
               </div>
@@ -632,11 +653,13 @@ function TripCard({
   onEdit,
   onDelete,
   onToggleVisible,
+  onFixPhotosOnPoster,
 }: {
   trip: TravelTrip;
   onEdit: () => void;
   onDelete: () => void;
   onToggleVisible: () => void;
+  onFixPhotosOnPoster: (posterId: string) => void;
 }) {
   const isHidden = (trip.extra as Record<string, unknown>)?.customer_visible === false;
   const isPosterSynced = isPosterSyncedTrip(trip);
@@ -733,6 +756,16 @@ function TripCard({
               <p className="mt-1 text-xs text-ink-muted">
                 {gaps.map((gap) => gap.label).join(" · ")}
               </p>
+              {blocking.some((gap) => gap.key === "photo_urls") && connection.posterId && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="mt-2"
+                  onClick={() => onFixPhotosOnPoster(connection.posterId)}
+                >
+                  <Icons.image size={13} /> Постерт зураг нэмэх
+                </Button>
+              )}
             </div>
           )}
         </div>
