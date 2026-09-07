@@ -98,7 +98,13 @@ export async function renderPosterPdf(poster: PosterPdfRow) {
         new Promise(resolve => setTimeout(resolve, 8000)),
       ]);
     });
-    const pdf = await page.pdf({ width: "1080px", height: "1528px", printBackground: true, preferCSSPageSize: true });
+    let pdf: Buffer;
+    try {
+      pdf = await page.pdf({ width: "1080px", height: "1528px", printBackground: true, preferCSSPageSize: true });
+    } catch {
+      await page.waitForTimeout(500);
+      pdf = await page.pdf({ width: "1080px", height: "1528px", printBackground: true, preferCSSPageSize: true });
+    }
     await queryNeon(`INSERT INTO poster_pdf_cache(poster_id,hash,pdf) VALUES ($1,$2,$3)
       ON CONFLICT(poster_id) DO UPDATE SET hash=EXCLUDED.hash,pdf=EXCLUDED.pdf,updated_at=NOW()`, [poster.id,hash,pdf]);
     return pdf;
