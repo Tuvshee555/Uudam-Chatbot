@@ -431,6 +431,38 @@ export function buildTripProgramReply(
   };
 }
 
+/**
+ * A trip auto-archives once every departure date has passed (see
+ * sanitizeTripScheduleForCurrentDate in travelDb.ts) — it disappears from the
+ * website and from the catalogue the bot's own matchers search. Without this,
+ * a customer naming that trip by name gets silence or a generic fallback,
+ * indistinguishable from the bot simply not knowing the tour at all. Called
+ * only once the active catalogue has already failed to match, against a
+ * caller-supplied archived-only list — never mixed into the main trips array,
+ * so nothing else in the fast-path pipeline can see or answer from it.
+ */
+export function buildArchivedTripNotice(
+  text: string,
+  archivedTrips: TravelTrip[],
+): { reply: string; trip: TravelTrip } | null {
+  const expired = archivedTrips.filter(
+    (trip) =>
+      trip.status === "archived" &&
+      (trip.extra as Record<string, unknown> | undefined)?.archived_reason ===
+        "all_departure_dates_passed",
+  );
+  if (expired.length === 0) return null;
+  const resolution = resolveTripFromUserMessage(text, expired, {
+    allowLooseFallback: false,
+    includeArchived: true,
+  });
+  if (resolution.status !== "verified") return null;
+  return {
+    trip: resolution.trip,
+    reply: `${resolution.trip.route_name} аялалын бүх гарах өдөр өнгөрсөн тул одоогоор идэвхгүй байна. Шинэ огноо гарч ирмэгц дахин мэдэгдэх тул түр хүлээгээрэй, эсвэл манай ажилтантай шууд холбогдож лавлаарай.`,
+  };
+}
+
 // Re-exported so travelFastPaths.ts (and any consumer importing straight
 // from this module) can still reach the brochure-asset type/helper that
 // conceptually belongs to "program" but physically lives in the search

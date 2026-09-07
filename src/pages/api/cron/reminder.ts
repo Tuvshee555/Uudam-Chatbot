@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { dbClaimReminder, dbGetPendingReminders } from "../../../lib/travelOps";
+import { dbClaimReminder, dbGetPendingReminders, listTrips } from "../../../lib/travelOps";
 import { sendTextMessage, sendImageMessage } from "../../../lib/messenger";
 import { getEnv } from "../../../lib/env";
 import { getTravelBotSettings } from "../../../lib/travelOps";
@@ -25,6 +25,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== "GET" && req.method !== "POST") return res.status(405).end();
   if (!isCronAuthorized(req)) return res.status(401).json({ error: "unauthorized" });
   waitUntil(flushWebsiteSync(undefined, 30));
+  // listTrips() is where a trip with every departure date now in the past
+  // gets archived (and the website/bot stop showing it) — otherwise that
+  // transition only happens the next time someone messages the bot or opens
+  // the admin. Runs once a day regardless of traffic so a quiet trip doesn't
+  // stay live past its last date just because nobody asked about it.
+  waitUntil(listTrips({ limit: 5000 }).then(() => {}));
 
   const env = getEnv();
   // PSIDs are page-scoped: a sender who messaged page B does not exist for

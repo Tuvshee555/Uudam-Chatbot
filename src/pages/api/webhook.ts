@@ -19,7 +19,7 @@ import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
 import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
@@ -967,6 +967,14 @@ async function handleMessage(
     cachedTrips = await listTrips({ limit: 5000 });
     return cachedTrips;
   };
+  // Only fetched on the miss path (nothing in the active catalogue matched),
+  // so a normal message never pays for this extra query.
+  let cachedArchivedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
+  const getArchivedTrips = async () => {
+    if (cachedArchivedTrips) return cachedArchivedTrips;
+    cachedArchivedTrips = await listTrips({ status: "archived", limit: 500 });
+    return cachedArchivedTrips;
+  };
   // Stateful routing for the deterministic matchers: answers to a
   // clarification we just asked resolve against the OFFERED candidates first;
   // otherwise current-message-first priorities apply. See fastPathRouting.ts
@@ -1311,6 +1319,25 @@ async function handleMessage(
             );
           }
         },
+      });
+      return;
+    }
+    // The active catalogue has nothing to say — check whether the customer
+    // actually named a tour that expired (every departure date passed) rather
+    // than one we've simply never heard of, so they get told why, not silence.
+    const archivedNotice = buildArchivedTripNotice(
+      programFastPathText,
+      await getArchivedTrips(),
+    );
+    if (archivedNotice) {
+      await deliverFastPathReply({
+        reply: appendLeadCaptureCta(
+          enforceWebsiteForPayment(sanitizeAssistantReply(archivedNotice.reply)),
+          phoneAlreadyRequested,
+        ),
+        failTag: "archived_trip_notice",
+        rememberSource: "api.webhook.archived_trip_notice",
+        counter: "webhook.archived_trip_notice_total",
       });
       return;
     }

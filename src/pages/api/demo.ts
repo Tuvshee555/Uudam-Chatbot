@@ -20,7 +20,7 @@ import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceW
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { dbGetRecentAdminMessages, getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
 import { extractTripPhotosForReply, extractTripPhotosForUserMessage, hasTripPhotoIntent, MAX_TRIP_PHOTOS } from "../../lib/welcomeFlow";
 import { CONTACT_OPERATOR_LABEL, DUPLICATE_REPLY_NUDGE, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
 import { getEnv } from "../../lib/env";
@@ -362,6 +362,14 @@ export default async function handler(
         cachedTrips = await listTrips({ limit: 5000 });
         return cachedTrips;
       };
+      // Only fetched on the miss path (nothing in the active catalogue
+      // matched), so a normal message never pays for this extra query.
+      let cachedArchivedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
+      const getArchivedTrips = async () => {
+        if (cachedArchivedTrips) return cachedArchivedTrips;
+        cachedArchivedTrips = await listTrips({ status: "archived", limit: 500 });
+        return cachedArchivedTrips;
+      };
       let routedCache: FastPathRoute | null = null;
       const getRouted = async (): Promise<FastPathRoute> => {
         if (routedCache !== null) return routedCache;
@@ -666,6 +674,27 @@ export default async function handler(
               ? buildClarificationButtons(programResolution.candidates)
               : buildSmartButtons(safeReply, trips) || [];
           return res.status(200).json({ reply: safeReply, buttons, ...media });
+        }
+        // The active catalogue has nothing to say — check whether the customer
+        // actually named a tour that expired (every departure date passed)
+        // rather than one we've simply never heard of, so they get told why,
+        // not silence. Mirrors the live webhook exactly.
+        const archivedNotice = buildArchivedTripNotice(
+          programFastPathText,
+          await getArchivedTrips(),
+        );
+        if (archivedNotice) {
+          const safeReply = appendLeadCaptureCta(
+            enforceWebsiteForPayment(sanitizeAssistantReply(archivedNotice.reply)),
+            phoneAlreadyRequested,
+          );
+          const media = buildDemoMedia({ reply: safeReply, userText: programFastPathText, trips });
+          await appendMessage(sessionId, "user", normalizedText);
+          if (shouldHandoffSilently(safeReply)) return returnHandoff();
+          await appendMessage(sessionId, "assistant", safeReply, imageAttachments(media.mediaUrls));
+          await rememberTurn();
+          recordCounter("demo.archived_trip_notice_total", 1, {});
+          return res.status(200).json({ reply: safeReply, buttons: [], ...media });
         }
         const structuredReply = buildStructuredTripReply(await getFastPathText(), trips);
         if (structuredReply) {
