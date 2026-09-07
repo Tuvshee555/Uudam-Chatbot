@@ -22,9 +22,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const pdf = await renderPosterPdf(poster);
+  // Customers see this name on the file in Messenger, so keep the Mongolian
+  // title readable and leave the transliterated name as the ASCII fallback.
   const fileName = `${sanitizePosterPdfFileName(poster.title)}-${poster.id}.pdf`;
+  const readableName = `${
+    poster.title.replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) || "Аялал"
+  }.pdf`;
   res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+  res.setHeader(
+    "Content-Disposition",
+    `inline; filename="${fileName}"; filename*=UTF-8''${encodeURIComponent(readableName)}`,
+  );
   res.setHeader("Cache-Control", "no-cache, must-revalidate");
   res.setHeader("Content-Length", String(pdf.length));
   res.setHeader("X-Content-Type-Options", "nosniff");

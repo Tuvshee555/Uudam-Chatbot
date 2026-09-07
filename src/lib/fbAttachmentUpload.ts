@@ -1,6 +1,7 @@
 import { getEnv } from "./env";
 import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboundKillSwitch";
 import { logError, logInfo } from "./observability";
+import { isPosterPdfEndpointUrl } from "./poster/pdfUrl";
 
 const GDRIVE_VIEW_RE = /drive\.google\.com\/file\/d\/([^/?#]+)/;
 const FB_API_VERSION = "v19.0";
@@ -10,6 +11,17 @@ function toCloudinaryJpegUrl(url: string): string {
   if (!url.includes("/image/upload/")) return url;
   if (url.includes("/image/upload/f_jpg,q_100/")) return url;
   return url.replace("/image/upload/", "/image/upload/f_jpg,q_100/");
+}
+
+/** Prefer the server's own file name, so Messenger labels the trip, not an id. */
+function filenameFromDisposition(header: string | null): string {
+  if (!header) return "";
+  const encoded = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(header)?.[1];
+  const plain = /filename\s*=\s*"([^"]+)"/i.exec(header)?.[1];
+  const raw = encoded ? decodeURIComponent(encoded.trim()) : plain?.trim() || "";
+  const cleaned = raw.replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!cleaned || !cleaned.toLowerCase().endsWith(".pdf")) return "";
+  return cleaned.slice(0, 100);
 }
 
 /**
@@ -24,6 +36,7 @@ function toCloudinaryJpegUrl(url: string): string {
  */
 async function downloadPdfBuffer(
   url: string,
+  timeoutMs = 20_000,
 ): Promise<{ buffer: Buffer; filename: string } | null> {
   let resolvedUrl = url;
   let filename = "ayalal.pdf";
@@ -38,7 +51,7 @@ async function downloadPdfBuffer(
 
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 20_000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     const resp = await fetch(resolvedUrl, {
       signal: controller.signal,
       headers: {
@@ -76,7 +89,7 @@ async function downloadPdfBuffer(
       url: resolvedUrl,
       sizeBytes: buffer.length,
     });
-    return { buffer, filename };
+    return { buffer, filename: filenameFromDisposition(resp.headers.get("content-disposition")) || filename };
   } catch (err) {
     logInfo("fbAttachmentUpload.pdf_download_error", {
       url: resolvedUrl,
@@ -361,12 +374,20 @@ export async function sendFbFileByUrl(
   }
 
   const isGoogleDrive = GDRIVE_VIEW_RE.test(fileUrl);
+  // Our poster endpoint renders the poster in a headless browser on a cold
+  // cache, which outlasts Facebook's own fetch. Pull the bytes ourselves and
+  // hand Facebook a finished upload instead.
+  const isRenderedPoster = isPosterPdfEndpointUrl(fileUrl);
 
-  if (isGoogleDrive) {
-    // Facebook cannot access Google Drive URLs — download on our server then upload.
-    const downloaded = await downloadPdfBuffer(fileUrl);
+  if (isGoogleDrive || isRenderedPoster) {
+    const downloaded = await downloadPdfBuffer(fileUrl, isRenderedPoster ? 45_000 : 20_000);
     if (!downloaded) {
-      logError("fbAttachmentUpload.gdrive_download_failed", { fileUrl });
+      logError(
+        isRenderedPoster
+          ? "fbAttachmentUpload.poster_render_failed"
+          : "fbAttachmentUpload.gdrive_download_failed",
+        { fileUrl },
+      );
       return false;
     }
 
@@ -376,7 +397,12 @@ export async function sendFbFileByUrl(
       pageToken,
     );
     if (!attachmentId) {
-      logError("fbAttachmentUpload.gdrive_upload_failed", { fileUrl });
+      logError(
+        isRenderedPoster
+          ? "fbAttachmentUpload.poster_upload_failed"
+          : "fbAttachmentUpload.gdrive_upload_failed",
+        { fileUrl },
+      );
       return false;
     }
 

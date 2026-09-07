@@ -279,22 +279,24 @@ export async function sendTripMediaForReply(
     const mediaResolution = resolveTripFromUserMessage(userText || replyText, activeTrips, {
       allowLooseFallback: false,
     });
-    if (
-      mediaResolution.status === "verified" &&
-      isPosterLinkedTrip(mediaResolution.trip) &&
-      !getTripBrochureAsset(mediaResolution.trip)
-    ) {
-      logWarn("webhook.poster_linked_trip_missing_pdf", {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        platform,
-        pageId,
-        senderHash: hashIdentifier(senderId),
-        tripId: mediaResolution.trip.id,
-        posterTripId: String(
-          ((mediaResolution.trip.extra || {}) as Record<string, unknown>).poster_trip_id || "",
-        ),
-      });
+    // A poster trip's whole point is the PDF: Messenger recompresses poster
+    // images until the itinerary text is unreadable, which is the complaint
+    // this replaced. If the PDF is missing or its send failed, send nothing
+    // and leave it for staff rather than falling back to those images.
+    if (mediaResolution.status === "verified" && isPosterLinkedTrip(mediaResolution.trip)) {
+      if (!getTripBrochureAsset(mediaResolution.trip)) {
+        logWarn("webhook.poster_linked_trip_missing_pdf", {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          platform,
+          pageId,
+          senderHash: hashIdentifier(senderId),
+          tripId: mediaResolution.trip.id,
+          posterTripId: String(
+            ((mediaResolution.trip.extra || {}) as Record<string, unknown>).poster_trip_id || "",
+          ),
+        });
+      }
       return;
     }
     const inferredPhotos = extractTripPhotosForReply(replyText, tripsForPhotos, { userText });

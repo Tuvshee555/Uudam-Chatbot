@@ -5,7 +5,7 @@
  */
 
 import { filterFutureDepartureDates, type ResolvedDepartureDate } from "./travelDates";
-import { getPosterPdfPublicUrl } from "./poster/pdfUrl";
+import { getPosterPdfPublicUrl, isUsableStoredPdfUrl } from "./poster/pdfUrl";
 import type { TravelTrip } from "./travelOps";
 
 /**
@@ -1499,20 +1499,20 @@ export function hasProgramIntent(text: string) {
 }
 
 export function getTripBrochureAsset(trip: TravelTrip): ProgramAsset | null {
+  // A poster-linked trip's brochure is whatever the poster renders to right
+  // now, so it wins over both a Facebook attachment cached before the last
+  // edit and a copy uploaded to storage that may no longer be deliverable.
+  const posterId = getTripLooseField(trip, "poster_trip_id");
+  if (typeof posterId === "string" && posterId.trim().length > 0) {
+    const posterPdfUrl = getPosterPdfPublicUrl(posterId.trim());
+    if (posterPdfUrl) return { type: "url", value: posterPdfUrl };
+  }
+
   const id = getTripLooseField(trip, "source_file_attachment_id");
   if (typeof id === "string" && id.length > 0) return { type: "id", value: id };
 
-  // The real captured/uploaded poster PDF is the actual brochure file — send
-  // that. The generated poster-pdf endpoint rebuilds a plain-text PDF from
-  // poster JSON and is only a last-resort fallback when no real PDF exists.
   const url = getTripLooseField(trip, "brochure_pdf_url");
-  if (typeof url === "string" && url.startsWith("https://")) return { type: "url", value: url };
-
-  const posterId = getTripLooseField(trip, "poster_trip_id");
-  if (typeof posterId === "string" && posterId.trim().length > 0) {
-    const generatedUrl = getPosterPdfPublicUrl(posterId.trim());
-    if (generatedUrl) return { type: "url", value: generatedUrl };
-  }
+  if (isUsableStoredPdfUrl(url)) return { type: "url", value: url.trim() };
 
   return null;
 }

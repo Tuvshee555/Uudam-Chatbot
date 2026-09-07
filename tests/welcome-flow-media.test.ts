@@ -331,3 +331,31 @@ test("brochure matching also refuses mismatched user and reply trips", async () 
 
   assert.equal(brochure, null);
 });
+
+test("the webhook resolves a poster trip to the same rendered PDF the demo sends", async () => {
+  const { extractTripBrochureAttachmentId } = await loadWelcomeFlow();
+  const previousSiteUrl = process.env.SITE_URL;
+  process.env.SITE_URL = "https://bot.example.com";
+  try {
+    const brochure = extractTripBrochureAttachmentId(
+      "Tokyo Fuji PDF хөтөлбөрийг хавсаргалаа.",
+      [
+        trip({
+          id: "fuji",
+          route_name: "Tokyo Fuji",
+          photo_urls: ["https://example.com/fuji-photo.jpg"],
+          extra: { poster_trip_id: "poster-fuji" },
+        }),
+      ],
+      { userText: "Tokyo Fuji PDF явуулаач" },
+    );
+
+    assert.deepEqual(brochure, {
+      type: "url",
+      value: "https://bot.example.com/api/poster-pdf?id=poster-fuji",
+    });
+  } finally {
+    if (previousSiteUrl === undefined) delete process.env.SITE_URL;
+    else process.env.SITE_URL = previousSiteUrl;
+  }
+});

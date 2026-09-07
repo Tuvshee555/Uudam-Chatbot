@@ -742,6 +742,57 @@ test("poster-linked trip without PDF refuses legacy image fallback", () => {
   assert.deepEqual(result?.mediaUrls, []);
 });
 
+test("poster-linked trip sends the rendered poster, not a stale upload or attachment", () => {
+  const previousSiteUrl = process.env.SITE_URL;
+  process.env.SITE_URL = "https://bot.example.com";
+  try {
+    const result = buildTripProgramReply(
+      "Жэжү poster зураг явуул",
+      [
+        trip({
+          id: "jeju-connected",
+          route_name: "Жэжү арлын аялал",
+          photo_urls: ["https://example.com/legacy-photo.jpg"],
+          extra: {
+            poster_trip_id: "poster-jeju",
+            // Both of these predate the current poster edit.
+            source_file_attachment_id: "fb-attachment-123",
+            brochure_pdf_url: "https://example.com/jeju.pdf",
+          },
+        }),
+      ],
+    );
+
+    assert.deepEqual(result?.brochure, {
+      type: "url",
+      value: "https://bot.example.com/api/poster-pdf?id=poster-jeju",
+    });
+    assert.deepEqual(result?.mediaUrls, []);
+  } finally {
+    if (previousSiteUrl === undefined) delete process.env.SITE_URL;
+    else process.env.SITE_URL = previousSiteUrl;
+  }
+});
+
+test("a blocked Cloudinary raw PDF never counts as a brochure", () => {
+  const result = buildTripProgramReply(
+    "Жэжү хөтөлбөр явуулаач",
+    [
+      trip({
+        id: "jeju-blocked-pdf",
+        route_name: "Жэжү арлын аялал",
+        photo_urls: [],
+        extra: {
+          brochure_pdf_url:
+            "https://res.cloudinary.com/demo/raw/upload/v1/uudam-travel-trips/blocked.pdf",
+        },
+      }),
+    ],
+  );
+
+  assert.equal(result?.brochure, null);
+});
+
 test("program photo request prefers the longer combined route over a shorter shared route", () => {
   const result = buildTripProgramReply(
     "Shanghai Tenger zurag",

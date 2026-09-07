@@ -13,7 +13,7 @@
 
 import { dbClaimGreeting, dbClaimSeasonSend } from "./travelDb";
 import type { TravelTrip } from "./travelOps";
-import { resolveTripFromUserMessage } from "./travelFastPaths";
+import { getTripBrochureAsset, resolveTripFromUserMessage } from "./travelFastPaths";
 
 const MAX_WELCOME_PHOTOS = 5;
 const MAX_TRIP_PHOTOS = 5;
@@ -411,15 +411,10 @@ export function extractTripBrochureAttachmentId(
     trips: active,
   });
   if (!verifiedMatch) return null;
-  const verifiedExtra = verifiedMatch.trip.extra as Record<string, unknown> | undefined;
-
-  const verifiedId = verifiedExtra?.source_file_attachment_id;
-  if (typeof verifiedId === "string" && verifiedId.length > 0) return { type: "id", value: verifiedId };
-
-  const verifiedUrl = verifiedExtra?.brochure_pdf_url;
-  if (typeof verifiedUrl === "string" && verifiedUrl.startsWith("https://")) return { type: "url", value: verifiedUrl };
-
-  return null;
+  // Shared with the program fast path so the live webhook and the demo always
+  // resolve the same file: they used to diverge here, and Messenger silently
+  // fell back to compressed photos whenever this copy missed a poster PDF.
+  return getTripBrochureAsset(verifiedMatch.trip);
 }
 
 export { MAX_WELCOME_PHOTOS, MAX_TRIP_PHOTOS };
