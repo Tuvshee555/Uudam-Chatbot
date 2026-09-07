@@ -7,7 +7,14 @@ const nextConfig: NextConfig = {
   // the bundle so their dynamic/subpath imports resolve at runtime.
   serverExternalPackages: ["pdf-parse", "mammoth", "pdf-lib", "jpeg-js", "@sparticuz/chromium", "playwright-core"],
   outputFileTracingIncludes: {
-    "/api/poster-pdf": ["./src/styles/poster.css", "./public/fonts/*.ttf", "./public/poster/*", "./node_modules/@sparticuz/chromium/bin/**"],
+    "/api/poster-pdf": [
+      "./src/styles/poster.css",
+      "./public/fonts/*.ttf",
+      "./public/poster/*",
+      "./node_modules/@sparticuz/chromium/bin/**",
+      "./node_modules/playwright-core/browsers.json",
+      "./node_modules/playwright-core/package.json",
+    ],
   },
 };
 
