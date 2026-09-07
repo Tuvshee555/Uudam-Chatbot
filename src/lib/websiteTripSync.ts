@@ -181,7 +181,11 @@ export async function flushWebsiteSync(tripId?: string, limit = 5) {
 }
 
 export async function websiteSyncStatus() {
-  return (await queryNeon(`SELECT trip_id,revision=synced_revision AS synced,last_error,website_trip_id,website_slug,synced_at
-    FROM trip_website_sync ORDER BY updated_at DESC`))?.rows || [];
+  return (await queryNeon(`SELECT s.trip_id,s.revision=s.synced_revision AS synced,s.last_error,
+      s.website_trip_id,s.website_slug,s.synced_at
+    FROM trip_website_sync s
+    LEFT JOIN travel_trip_entries t ON t.id=s.trip_id
+    WHERE t.id IS NOT NULL OR s.last_error IS NOT NULL OR s.revision > s.synced_revision
+    ORDER BY s.updated_at DESC`))?.rows || [];
 }
 export async function closeBookingPool() { await pool?.end(); pool = undefined; }
