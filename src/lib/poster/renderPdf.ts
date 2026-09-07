@@ -13,9 +13,35 @@ import { ensureConnectedTripSchema } from "../connectedTripStore";
 import type { PosterPdfRow } from "./pdf";
 
 const noop = () => {};
+
+function renderFriendlyImageUrl(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    const url = new URL(value);
+    if (url.hostname === "res.cloudinary.com" && url.pathname.includes("/image/upload/")) {
+      url.pathname = url.pathname.replace("/image/upload/", "/image/upload/f_auto,q_auto:eco,w_1400,c_limit/");
+      return url.toString();
+    }
+  } catch {
+    return value;
+  }
+  return value;
+}
+
+function optimizePosterImagesForPdf(trip: PosterTrip): PosterTrip {
+  return {
+    ...trip,
+    hero_image: renderFriendlyImageUrl(trip.hero_image) as string | null | undefined,
+    days: (trip.days || []).map(day => ({
+      ...day,
+      photo: renderFriendlyImageUrl(day.photo) as string | null | undefined,
+    })),
+  };
+}
+
 export async function renderPosterPdf(poster: PosterPdfRow) {
   await ensureConnectedTripSchema();
-  const trip = poster.data as PosterTrip;
+  const trip = optimizePosterImagesForPdf(poster.data as PosterTrip);
   const hash = createHash("sha256").update(`poster-render-v1:${JSON.stringify(trip)}`).digest("hex");
   const cached = await queryNeon<{ pdf: Buffer }>("SELECT pdf FROM poster_pdf_cache WHERE poster_id=$1 AND hash=$2", [poster.id, hash]);
   if (cached?.rows[0]) return cached.rows[0].pdf;
@@ -60,8 +86,18 @@ export async function renderPosterPdf(poster: PosterPdfRow) {
       .dayrow,.photo-tile,.head,.hero,.sec,.foot{break-inside:avoid}
       .photo-tile.empty,.hidden-input,.editor-only{display:none!important}
       *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-    </style></head><body class="exporting"><main class="poster-root">${markup}</main></body></html>`, { waitUntil: "networkidle", timeout: 30000 });
+    </style></head><body class="exporting"><main class="poster-root">${markup}</main></body></html>`, { waitUntil: "domcontentloaded", timeout: 15000 });
     await page.evaluate(() => document.fonts.ready);
+    await page.evaluate(async () => {
+      const images = Array.from(document.images);
+      await Promise.race([
+        Promise.all(images.map(img => img.complete ? true : new Promise(resolve => {
+          img.addEventListener("load", resolve, { once: true });
+          img.addEventListener("error", resolve, { once: true });
+        }))),
+        new Promise(resolve => setTimeout(resolve, 8000)),
+      ]);
+    });
     const pdf = await page.pdf({ width: "1080px", height: "1528px", printBackground: true, preferCSSPageSize: true });
     await queryNeon(`INSERT INTO poster_pdf_cache(poster_id,hash,pdf) VALUES ($1,$2,$3)
       ON CONFLICT(poster_id) DO UPDATE SET hash=EXCLUDED.hash,pdf=EXCLUDED.pdf,updated_at=NOW()`, [poster.id,hash,pdf]);
