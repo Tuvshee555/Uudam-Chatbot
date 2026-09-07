@@ -47,6 +47,7 @@ export type PosterTripListRow = {
 let schemaReady = false;
 const PDF_REVIEW_REASON = "Poster sync: PDF хөтөлбөр дутуу";
 const SCHEDULE_REVIEW_REASON = "Poster sync: гарах өдрийн календарь дутуу";
+const PRICE_REVIEW_REASON = "Poster sync: огноо тус бүрийн үнэ дутуу";
 
 export async function ensurePosterSchema(): Promise<boolean> {
   if (schemaReady) return true;
@@ -221,14 +222,17 @@ async function syncPosterTrip(row: {
       : "";
   const hasPdf = Boolean(getPosterPdfPublicUrl(row.id) || preservedPdfUrl || preservedAttachmentId);
   const hasSchedule = Array.isArray(fields.departure_dates) && fields.departure_dates.length > 0;
+  const priceGroups = Array.isArray(fields.extra?.price_groups) ? fields.extra.price_groups : [];
+  const hasPricing = fields.adult_price != null || fields.child_price != null || priceGroups.length > 0;
   const reviewReasons = new Set(
     (Array.isArray(existingExtra.review_reasons) ? existingExtra.review_reasons : [])
       .filter((reason): reason is string => typeof reason === "string" && reason.trim().length > 0)
-      .filter((reason) => reason !== PDF_REVIEW_REASON && reason !== SCHEDULE_REVIEW_REASON)
+      .filter((reason) => reason !== PDF_REVIEW_REASON && reason !== SCHEDULE_REVIEW_REASON && reason !== PRICE_REVIEW_REASON)
       .filter((reason) => !reason.startsWith(INCOMPLETE_REVIEW_PREFIX)),
   );
   if (!hasPdf) reviewReasons.add(PDF_REVIEW_REASON);
   if (!hasSchedule) reviewReasons.add(SCHEDULE_REVIEW_REASON);
+  if (!hasPricing) reviewReasons.add(PRICE_REVIEW_REASON);
   // A poster rarely carries every commercial fact, so the trip it creates is
   // flagged with exactly the gaps the admin's editor would block on.
   const gaps = blockingGaps(
