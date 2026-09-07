@@ -1,6 +1,7 @@
 import React from "react";
 import { Button, Icons, Input, Modal, Select, Spinner, Textarea, cx } from "@/components/ui";
 import { getPosterBrochureHref } from "@/lib/poster/pdfUrl";
+import { blockingGaps, findTripGaps, type TripGap } from "@/lib/tripCompleteness";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
 import type { AnswerHint, BookingTerms, ChildRule, DiscountGroup, ExtraFee, PassengerPrice, PriceGroup, RoomPrice, SourceProvenance, TravelTrip } from "@/lib/adminTypes";
 
@@ -24,7 +25,8 @@ export type TripEditModalProps = {
   busyKey: string;
   handlePhotoFiles: (files: FileList | File[]) => void;
   onClose: () => void;
-  onSave: () => void;
+  /** confirmIncomplete is true when the user accepted the missing-fields prompt. */
+  onSave: (confirmIncomplete?: boolean) => void;
   // Structured fields
   tripAliases: string[];
   setTripAliases: React.Dispatch<React.SetStateAction<string[]>>;
@@ -102,6 +104,75 @@ function formatDateInput(value: string): string {
   const [year, month, day] = value.split("-").map((part) => Number(part));
   if (!year || !month || !day) return "";
   return `${String(month).padStart(2, "0")} сарын ${day}`;
+}
+
+/** Money inputs hold digit-only strings; departure dates a comma-separated line. */
+function parseMoneyDraft(value: string | undefined): number | null {
+  const digits = (value || "").replace(/[^\d]/g, "");
+  return digits ? Number(digits) : null;
+}
+
+function splitDraftList(value: string | undefined): string[] {
+  return (value || "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function GapWarning({ gaps, isNewTrip }: { gaps: TripGap[]; isNewTrip: boolean }) {
+  const blocking = gaps.filter((gap) => gap.severity === "blocking");
+  const warnings = gaps.filter((gap) => gap.severity === "warning");
+  if (gaps.length === 0) {
+    return (
+      <div className="mb-4 flex items-center gap-2 rounded-lg border border-success/25 bg-success-soft px-3 py-2 text-sm text-success">
+        <Icons.check size={16} className="shrink-0" />
+        <span>Бүх мэдээлэл бүрэн байна.</span>
+      </div>
+    );
+  }
+  return (
+    <div
+      className={cx(
+        "mb-4 rounded-lg border px-3.5 py-3",
+        blocking.length > 0 ? "border-danger/30 bg-danger-soft" : "border-warning/30 bg-warning-soft",
+      )}
+    >
+      <div className="flex items-start gap-2.5">
+        <Icons.alert
+          size={18}
+          className={cx("mt-0.5 shrink-0", blocking.length > 0 ? "text-danger" : "text-warning")}
+        />
+        <div className="min-w-0">
+          <p className={cx("text-sm font-bold", blocking.length > 0 ? "text-danger" : "text-warning")}>
+            {blocking.length > 0
+              ? `${blocking.length} заавал бөглөх талбар дутуу байна`
+              : `${warnings.length} талбар дутуу байна`}
+          </p>
+          {blocking.length > 0 && (
+            <p className="mt-0.5 text-xs text-ink-muted">
+              {isNewTrip
+                ? "Эдгээрийг бөглөхгүй бол шинэ аялал үүсгэхэд баталгаажуулалт шаардана."
+                : "Эдгээрийг бөглөхгүй бол хадгалахад баталгаажуулалт шаардана."}{" "}
+              Бот болон вебсайт энэ мэдээллийг хэрэглэгчид харуулна.
+            </p>
+          )}
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {[...blocking, ...warnings].map((gap) => (
+              <span
+                key={gap.key}
+                className={cx(
+                  "rounded-md border px-2 py-1 text-xs font-medium",
+                  gap.severity === "blocking"
+                    ? "border-danger/30 bg-surface text-danger"
+                    : "border-line bg-surface text-ink-muted",
+                )}
+              >
+                {gap.label}
+                <span className="ml-1 font-normal text-ink-subtle">· {gap.where}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function MoneyInput({
@@ -276,6 +347,7 @@ export function TripEditModal({
   setTripAnswerHints,
 }: TripEditModalProps) {
   const [activeTab, setActiveTab] = React.useState<TripEditorTab>("base");
+  const [confirmingIncomplete, setConfirmingIncomplete] = React.useState(false);
 
   React.useEffect(() => {
     if (open) setActiveTab("base");
@@ -288,6 +360,40 @@ export function TripEditModal({
   const originalPosterTitle = typeof editingExtra.original_title_text === "string" ? editingExtra.original_title_text : "";
   const brochurePdfUrl = getPosterBrochureHref(editingExtra);
 
+  // Checked against what is on screen right now, not the saved trip, so filling
+  // a field clears its warning before saving.
+  const gaps = findTripGaps({
+    route_name: tripDraft.route_name,
+    duration_text: tripDraft.duration_text,
+    adult_price: parseMoneyDraft(tripDraft.adult_price),
+    child_price: parseMoneyDraft(tripDraft.child_price),
+    departure_dates: splitDraftList(tripDraft.departure_dates),
+    photo_urls: tripPhotoUrls,
+    included_items: tripIncludedItems,
+    excluded_items: tripExcludedItems,
+    itinerary_days: Array.isArray(editingExtra.itinerary_days) ? editingExtra.itinerary_days : [],
+    has_brochure: Boolean(brochurePdfUrl),
+    poster_photo_count:
+      typeof editingExtra.poster_photo_count === "number" ? editingExtra.poster_photo_count : 0,
+  });
+  const blocking = blockingGaps(gaps);
+
+  React.useEffect(() => {
+    if (blocking.length === 0) setConfirmingIncomplete(false);
+  }, [blocking.length]);
+
+  React.useEffect(() => {
+    setConfirmingIncomplete(false);
+  }, [open, editingTrip?.id, isNewTrip]);
+
+  function handleSave() {
+    if (blocking.length > 0 && !confirmingIncomplete) {
+      setConfirmingIncomplete(true);
+      return;
+    }
+    onSave();
+  }
+
   return (
     <Modal
       open={open}
@@ -296,16 +402,42 @@ export function TripEditModal({
       description={isNewTrip ? undefined : editingTrip?.route_name || undefined}
       panelClassName="max-w-4xl"
       footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>
-            Болих
-          </Button>
-          <Button disabled={saveDisabled} loading={busyKey === "save-trip"} onClick={onSave}>
-            Хадгалах
-          </Button>
-        </>
+        confirmingIncomplete ? (
+          <>
+            <div className="mr-auto flex min-w-0 items-center gap-2 text-left">
+              <Icons.alert size={16} className="shrink-0 text-danger" />
+              <p className="text-sm text-ink">
+                <span className="font-semibold text-danger">
+                  {blocking.map((gap) => gap.label).join(", ")}
+                </span>{" "}
+                дутуу байхад хадгалах уу?
+              </p>
+            </div>
+            <Button variant="secondary" onClick={() => setConfirmingIncomplete(false)}>
+              Үгүй, бөглөнө
+            </Button>
+            <Button
+              variant="danger"
+              disabled={saveDisabled}
+              loading={busyKey === "save-trip"}
+              onClick={() => onSave(true)}
+            >
+              Тийм, дутуугаар хадгална
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button variant="secondary" onClick={onClose}>
+              Болих
+            </Button>
+            <Button disabled={saveDisabled} loading={busyKey === "save-trip"} onClick={handleSave}>
+              Хадгалах
+            </Button>
+          </>
+        )
       }
     >
+      <GapWarning gaps={gaps} isNewTrip={isNewTrip} />
       <div className="mb-4 flex flex-wrap gap-2 border-b border-line pb-4">
         <EditorTabButton active={activeTab === "base"} label="Үндсэн" onClick={() => setActiveTab("base")} />
         <EditorTabButton active={activeTab === "pricing"} label="Үнэ ба гаралт" onClick={() => setActiveTab("pricing")} />

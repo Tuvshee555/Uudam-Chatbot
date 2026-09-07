@@ -5,6 +5,7 @@ import type { TravelTrip } from "@/lib/adminTypes";
 import { STATUS_LABELS } from "@/lib/adminProposalUtils";
 import { STATUS_TONE, formatTime } from "@/lib/adminUtils";
 import { getPosterBrochureHref } from "@/lib/poster/pdfUrl";
+import { blockingGaps, findTripGaps, tripCompletenessInput, type TripGap } from "@/lib/tripCompleteness";
 import { WebsiteSyncStatus } from "./WebsiteSyncStatus";
 
 export function TripsTab({
@@ -230,6 +231,7 @@ export function TripsTab({
       />
 
       <WebsiteSyncStatus apiFetch={apiFetch} />
+      <IncompleteTripsBanner trips={trips} onEdit={onEdit} />
       <Card className="p-3.5">
         <div className="flex flex-col gap-2">
           <div className="flex gap-2">
@@ -460,13 +462,84 @@ function DepartureCalendar({ dates }: { dates: string[] }) {
   );
 }
 
-function getMissingHints(trip: TravelTrip): string[] {
-  const hints: string[] = [];
-  if (!trip.adult_price) hints.push("үнэ");
-  if (!trip.departure_dates.length) hints.push("гарах өдөр");
-  if (!trip.duration_text) hints.push("хугацаа");
-  if (!tripHasPdf(trip)) hints.push("PDF");
-  return hints;
+/** Same rules the trip editor blocks on, so both screens name gaps identically. */
+function getTripGaps(trip: TravelTrip): TripGap[] {
+  return findTripGaps(tripCompletenessInput(trip, { hasBrochure: tripHasPdf(trip) }));
+}
+
+/**
+ * The catalogue-wide view of what is missing. Counts trips per field so the
+ * common gaps ("13 trips have no included list") are visible without opening
+ * every trip one by one.
+ */
+function IncompleteTripsBanner({
+  trips,
+  onEdit,
+}: {
+  trips: TravelTrip[];
+  onEdit: (trip: TravelTrip) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const summary = useMemo(() => {
+    const perField = new Map<string, { label: string; trips: TravelTrip[] }>();
+    const incomplete: TravelTrip[] = [];
+    for (const trip of trips) {
+      const blocking = blockingGaps(getTripGaps(trip));
+      if (blocking.length === 0) continue;
+      incomplete.push(trip);
+      for (const gap of blocking) {
+        const entry = perField.get(gap.key) || { label: gap.label, trips: [] };
+        entry.trips.push(trip);
+        perField.set(gap.key, entry);
+      }
+    }
+    return {
+      incomplete,
+      fields: [...perField.values()].sort((a, b) => b.trips.length - a.trips.length),
+    };
+  }, [trips]);
+
+  if (summary.incomplete.length === 0) return null;
+
+  return (
+    <Card className="border-danger/30 bg-danger-soft p-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2.5">
+          <Icons.alert size={20} className="shrink-0 text-danger" />
+          <div>
+            <p className="text-sm font-bold text-danger">
+              {summary.incomplete.length} аялалд заавал бөглөх мэдээлэл дутуу байна
+            </p>
+            <p className="mt-0.5 text-xs text-ink-muted">
+              {summary.fields
+                .map((field) => `${field.label}: ${field.trips.length}`)
+                .join(" · ")}
+            </p>
+          </div>
+        </div>
+        <Button variant="secondary" onClick={() => setOpen((prev) => !prev)}>
+          {open ? "Хаах" : "Дутуу аяллуудыг харах"}
+        </Button>
+      </div>
+      {open && (
+        <div className="mt-3 grid gap-1.5 border-t border-danger/20 pt-3">
+          {summary.incomplete.map((trip) => (
+            <button
+              key={trip.id}
+              type="button"
+              onClick={() => onEdit(trip)}
+              className="flex w-full flex-wrap items-center justify-between gap-2 rounded-md bg-surface px-2.5 py-2 text-left transition-colors hover:bg-surface-sunken"
+            >
+              <span className="min-w-0 text-sm font-medium text-ink">{trip.route_name || "—"}</span>
+              <span className="text-xs text-danger">
+                {blockingGaps(getTripGaps(trip)).map((gap) => gap.label).join(" · ")}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
 }
 
 function TripGroups({
@@ -512,7 +585,7 @@ function TripGroups({
     <div className="space-y-3">
       {groups.map(([category, items]) => {
         const isCollapsed = collapsed.has(category);
-        const missingCount = items.filter((t) => getMissingHints(t).length > 0).length;
+        const missingCount = items.filter((t) => blockingGaps(getTripGaps(t)).length > 0).length;
         return (
           <div key={category} className="rounded-xl border border-line bg-surface">
             <button
@@ -582,7 +655,8 @@ function TripCard({
   }
   if (trip.duration_text) facts.push(trip.duration_text);
 
-  const missing = getMissingHints(trip);
+  const gaps = getTripGaps(trip);
+  const blocking = blockingGaps(gaps);
 
   return (
     <Card className={cx("card-lift p-3.5", isHidden && "opacity-70")}>
@@ -638,10 +712,28 @@ function TripCard({
               </div>
             </div>
           )}
-          {missing.length > 0 && (
-            <p className="mt-1.5 text-xs text-ink-subtle">
-              дутуу: {missing.join(" · ")}
-            </p>
+          {gaps.length > 0 && (
+            <div
+              className={cx(
+                "mt-2 rounded-md border px-2.5 py-2",
+                blocking.length > 0 ? "border-danger/30 bg-danger-soft" : "border-line bg-surface-sunken",
+              )}
+            >
+              <div className="flex items-center gap-1.5">
+                {blocking.length > 0 && <Icons.alert size={14} className="shrink-0 text-danger" />}
+                <span
+                  className={cx(
+                    "text-xs font-semibold",
+                    blocking.length > 0 ? "text-danger" : "text-ink-muted",
+                  )}
+                >
+                  {blocking.length > 0 ? `${blocking.length} заавал бөглөх талбар дутуу` : "Дутуу мэдээлэл"}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-ink-muted">
+                {gaps.map((gap) => gap.label).join(" · ")}
+              </p>
+            </div>
           )}
         </div>
       </div>

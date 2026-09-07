@@ -18,8 +18,11 @@ export function WebsiteSyncStatus({ apiFetch }: { apiFetch: (url: string, init?:
   const pending = state?.trips.filter(t => !t.synced) || [];
   return <div className="my-3 border-y border-line py-3 text-sm" role="status">
     <div className="flex flex-wrap items-center justify-between gap-3">
+      {/* The queue only holds trips changed since the last delivery, so its row
+          count is not the catalogue size — reporting one as the other read as
+          "0 trips connected" while every trip was in fact live on the website. */}
       <span>{error || (!state ? "Вэбсайтын холболт шалгаж байна…" : !state.configured ? "Вэбсайтын холболт тохируулаагүй" :
-        pending.length ? `Вэбсайт руу шинэчлэх ${pending.length} аялал байна` : `Вэбсайттай холбогдсон: ${state.trips.filter(t => t.synced && t.website_slug).length} аялал`)}</span>
+        pending.length ? `Вэбсайт руу шинэчлэх ${pending.length} аялал байна` : "Вэбсайт руу бүх өөрчлөлт хүргэгдсэн")}</span>
       <Button size="sm" disabled={busy} onClick={async () => { setBusy(true); await refresh("POST"); setBusy(false); }}>Дахин шинэчлэх</Button>
     </div>
     {pending.map(row => <p key={row.trip_id} className="mt-1 break-words text-danger">{row.trip_id}: {row.last_error || "Шинэчилж байна"}</p>)}

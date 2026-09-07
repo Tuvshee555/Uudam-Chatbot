@@ -1362,7 +1362,8 @@ export default function AdminPage() {
     setEditingTrip(null);
     setIsNewTrip(false);
   }
-  async function saveTrip() {
+  /** confirmIncomplete is set once the editor's "save anyway" prompt is accepted. */
+  async function saveTrip(confirmIncomplete = false) {
     if (photoUploading.length > 0) {
       toast.error("Зураг байршуулж дуусаагүй байна. Дууссаны дараа хадгална уу.");
       return;
@@ -1435,7 +1436,9 @@ export default function AdminPage() {
         method: isNewTrip ? "POST" : "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
-          isNewTrip ? { fields } : { id: editingTrip?.id, fields },
+          isNewTrip
+            ? { fields, confirmIncomplete }
+            : { id: editingTrip?.id, fields, confirmIncomplete },
         ),
       });
       const json = await res.json();
@@ -1979,7 +1982,7 @@ export default function AdminPage() {
         busyKey={busyKey}
         handlePhotoFiles={handlePhotoFiles}
         onClose={closeTripModal}
-        onSave={() => void saveTrip()}
+        onSave={(confirmIncomplete) => void saveTrip(confirmIncomplete)}
         tripAliases={tripAliases}
         setTripAliases={setTripAliases}
         tripPriceGroups={tripPriceGroups}

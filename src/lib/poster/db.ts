@@ -11,6 +11,13 @@ import type { TripMutationFields } from "@/lib/travelTypes";
 import { posterPhotos } from "@/lib/connectedTripMapping";
 import { materializePoster } from "@/lib/websiteTripSync";
 import { getPosterPdfPublicUrl } from "./pdfUrl";
+import {
+  INCOMPLETE_REVIEW_PREFIX,
+  blockingGaps,
+  findTripGaps,
+  incompleteReviewReason,
+  tripCompletenessInput,
+} from "@/lib/tripCompleteness";
 
 export type PosterTripRow = {
   id: string;
@@ -188,10 +195,22 @@ async function syncPosterTrip(row: {
   const reviewReasons = new Set(
     (Array.isArray(existingExtra.review_reasons) ? existingExtra.review_reasons : [])
       .filter((reason): reason is string => typeof reason === "string" && reason.trim().length > 0)
-      .filter((reason) => reason !== PDF_REVIEW_REASON && reason !== SCHEDULE_REVIEW_REASON),
+      .filter((reason) => reason !== PDF_REVIEW_REASON && reason !== SCHEDULE_REVIEW_REASON)
+      .filter((reason) => !reason.startsWith(INCOMPLETE_REVIEW_PREFIX)),
   );
   if (!hasPdf) reviewReasons.add(PDF_REVIEW_REASON);
   if (!hasSchedule) reviewReasons.add(SCHEDULE_REVIEW_REASON);
+  // A poster rarely carries every commercial fact, so the trip it creates is
+  // flagged with exactly the gaps the admin's editor would block on.
+  const gaps = blockingGaps(
+    findTripGaps(
+      tripCompletenessInput(
+        { ...fields, extra: { ...(fields.extra || {}) } } as Parameters<typeof tripCompletenessInput>[0],
+        { hasBrochure: hasPdf },
+      ),
+    ),
+  ).filter((gap) => gap.key !== "departure_dates");
+  if (gaps.length > 0) reviewReasons.add(incompleteReviewReason(gaps));
   fields.extra = {
     ...(fields.extra || {}),
     ...(preservedPdfUrl ? { brochure_pdf_url: preservedPdfUrl } : {}),

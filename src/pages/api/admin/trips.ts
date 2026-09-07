@@ -11,9 +11,63 @@ import {
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
 import { websiteSyncStatus } from "../../../lib/websiteTripSync";
 import { ensureConnectedTripSchema } from "../../../lib/connectedTripStore";
+import { blockingGaps, findTripGaps, formatGapLabels, tripCompletenessInput } from "../../../lib/tripCompleteness";
+import { queryNeon } from "../../../lib/neonDb";
+import { getTripById } from "../../../lib/travelDb";
+import type { TravelTrip } from "../../../lib/travelTypes";
 
 function asText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * How many photos each trip's poster holds. The gallery lives on the poster, so
+ * a trip with an empty photo_urls can still be fully illustrated everywhere it
+ * is published, and must not be reported as missing photos.
+ */
+async function posterPhotoCountsByTrip(): Promise<Map<string, number>> {
+  // Counted in SQL: shipping every poster's JSON here to count it in Node cost
+  // 25s on this catalogue, because that column carries the whole layout.
+  const rows = await queryNeon<{ id: string; photo_count: string }>(
+    `SELECT t.id,
+            (CASE WHEN COALESCE(p.data->>'hero_image', '') ~ '^(https://|data:image/)' THEN 1 ELSE 0 END)
+            + COALESCE((
+                SELECT count(*) FROM jsonb_array_elements(
+                  CASE WHEN jsonb_typeof(p.data->'days') = 'array' THEN p.data->'days' ELSE '[]'::jsonb END
+                ) AS day
+                WHERE day->>'photo' ~ '^(https://|data:image/)'
+              ), 0) AS photo_count
+       FROM travel_trip_entries t
+       JOIN poster_trips p ON p.id = t.extra->>'poster_trip_id'`,
+  );
+  return new Map((rows?.rows || []).map(row => [row.id, Number(row.photo_count) || 0]));
+}
+
+/**
+ * Refuses a save that would leave a customer-facing field empty. The admin asks
+ * for confirmation and resends with confirmIncomplete, so this blocks silent
+ * writes (scripts, stale tabs) without trapping a deliberate draft.
+ */
+async function incompleteResponse(
+  fields: Record<string, unknown>,
+  existing: TravelTrip | null,
+  confirmed: boolean,
+) {
+  if (confirmed) return null;
+  const merged = {
+    ...(existing || {}),
+    ...fields,
+    extra: { ...((existing?.extra as Record<string, unknown>) || {}), ...(fields.extra as Record<string, unknown> || {}) },
+  } as TravelTrip;
+  const posterId = typeof merged.extra?.poster_trip_id === "string" ? merged.extra.poster_trip_id : "";
+  const posterPhotoCount = posterId ? (await posterPhotoCountsByTrip()).get(merged.id) || 0 : 0;
+  const gaps = blockingGaps(findTripGaps(tripCompletenessInput(merged, { posterPhotoCount })));
+  if (gaps.length === 0) return null;
+  return {
+    error: "trip_incomplete",
+    message: `Дутуу мэдээлэл: ${formatGapLabels(gaps)}`,
+    gaps,
+  };
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -46,15 +100,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       await ensureConnectedTripSchema();
       const connections = new Map((await websiteSyncStatus()).map(row => [row.trip_id, row]));
+      const posterPhotoCounts = await posterPhotoCountsByTrip();
       return res.status(200).json({ ok: true, trips: trips.map(trip => ({ ...trip,
-        extra: { ...trip.extra, website_sync: connections.get(trip.id) || null } })), control });
+        extra: {
+          ...trip.extra,
+          website_sync: connections.get(trip.id) || null,
+          poster_photo_count: posterPhotoCounts.get(trip.id) || 0,
+        } })), control });
     }
 
     if (req.method === "POST") {
-      const { id, fields } = req.body || {};
+      const { id, fields, confirmIncomplete } = req.body || {};
       if (!fields || typeof fields !== "object") {
         return res.status(400).json({ error: "fields object is required" });
       }
+      const existing = typeof id === "string" && id.trim() ? await getTripById(id.trim()) : null;
+      const incomplete = await incompleteResponse(fields, existing, confirmIncomplete === true);
+      if (incomplete) return res.status(409).json(incomplete);
       const saved = await upsertTrip({
         id: typeof id === "string" ? id : undefined,
         fields,
@@ -64,12 +126,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === "PATCH") {
-      const { id, fields } = req.body || {};
+      const { id, fields, confirmIncomplete } = req.body || {};
       if (typeof id !== "string" || !id.trim()) {
         return res.status(400).json({ error: "id is required" });
       }
       if (!fields || typeof fields !== "object") {
         return res.status(400).json({ error: "fields object is required" });
+      }
+      // Only a full form save carries route_name. Partial patches — the hide
+      // toggle, an AI field change — must stay possible on an incomplete trip.
+      if (typeof fields.route_name === "string") {
+        const existing = await getTripById(id.trim());
+        const incomplete = await incompleteResponse(fields, existing, confirmIncomplete === true);
+        if (incomplete) return res.status(409).json(incomplete);
       }
       const saved = await patchTrip(id.trim(), fields);
       if (!saved) return res.status(404).json({ error: "trip_not_found_or_no_changes" });
