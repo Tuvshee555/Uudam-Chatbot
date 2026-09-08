@@ -17,6 +17,21 @@ test("frustrated customer messages trigger human handoff without custom keywords
   }
 });
 
+test("asking whether a real human even exists triggers handoff, not a random trip match", () => {
+  // Distinct from "хүнтэй холбо" (asking to CONNECT) — this is asking
+  // WHETHER a person is available at all, a very natural frustrated phrasing
+  // that used to fall through to whatever trip name loosely matched instead.
+  const cases = [
+    "Чи миний асуултанд хариулахгүй байна, хүн байхгүй юу?",
+    "Хүн алга юм уу энд?",
+    "Хүн үгүй бэ",
+    "Бодит хүнтэй ярья, робот биш",
+  ];
+  for (const text of cases) {
+    assert.equal(isHandoffRequest(text, []), true, text);
+  }
+});
+
 test("normal travel questions do not trigger frustration handoff", () => {
   const cases = [
     "\u0038 \u0441\u0430\u0440\u044b\u043d \u0430\u044f\u043b\u0430\u043b \u0431\u0430\u0439\u043d\u0430 \u0443\u0443",

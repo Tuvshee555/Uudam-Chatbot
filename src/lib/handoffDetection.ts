@@ -19,6 +19,11 @@ export function isFrustratedHandoffRequest(text: string): boolean {
     /арчаагүй|archaag(?:ui|umda|u?mda)?|archaagumda/i,
     /уур\s+хүр|уурлуул|дургүй\s+хүр/i,
     /оператор|operator|хүнтэй\s+холбо|зөвлөхтэй\s+холбо/i,
+    // Natural ways a frustrated customer asks "isn't there a real person" —
+    // distinct from "хүнтэй холбо" above (asking TO connect), this is asking
+    // WHETHER a human even exists ("хүн байхгүй юу", "хүн алга юм уу").
+    /хүн\s*(?:байхгүй|алга|үгүй)\s*(?:юм\s*)?(?:уу|бэ)?/i,
+    /робот\s*биш/i,
   ].some((pattern) => pattern.test(normalized));
 }
 
