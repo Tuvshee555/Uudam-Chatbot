@@ -93,6 +93,7 @@ export async function listPosterTrips(): Promise<PosterTripListRow[]> {
     linked_trip_adult_price: number | null;
     linked_trip_child_price: number | null;
     linked_trip_infant_price: number | null;
+    linked_trip_child_rules: unknown;
     linked_trip_departure_count: number;
     linked_trip_has_pdf: boolean;
     linked_trip_needs_review: boolean;
@@ -115,6 +116,7 @@ export async function listPosterTrips(): Promise<PosterTripListRow[]> {
               OR COALESCE(t.extra->>'source_file_attachment_id', '') <> ''
             ) AS linked_trip_has_pdf,
             COALESCE((t.extra->>'needs_human_review')::boolean, FALSE) AS linked_trip_needs_review,
+            COALESCE(t.extra->'child_rules', '[]'::jsonb) AS linked_trip_child_rules,
             ${POSTER_PHOTO_COUNT_SQL} AS photo_count
        FROM poster_trips p
        LEFT JOIN travel_trip_entries t
@@ -127,16 +129,23 @@ export async function listPosterTrips(): Promise<PosterTripListRow[]> {
     // Same rules TripsTab blocks a save on, so a gap here means the same
     // thing there — no separate "poster complete" idea to keep in sync.
     missing_gaps: blockingGaps(
-      findTripGaps({
-        route_name: row.linked_trip_name,
-        duration_text: row.linked_trip_duration_text,
-        adult_price: row.linked_trip_adult_price,
-        child_price: row.linked_trip_child_price,
-        infant_price: row.linked_trip_infant_price,
-        departure_dates: Array.from({ length: row.linked_trip_departure_count }, () => "x"),
-        photo_urls: [],
-        poster_photo_count: Number(row.photo_count) || 0,
-      }),
+      findTripGaps(
+        // Reuse the shared flattener so a documented "Үнэгүй" fare reads the
+        // same here as it does in the trip editor.
+        tripCompletenessInput(
+          {
+            route_name: row.linked_trip_name,
+            duration_text: row.linked_trip_duration_text,
+            adult_price: row.linked_trip_adult_price,
+            child_price: row.linked_trip_child_price,
+            infant_price: row.linked_trip_infant_price,
+            departure_dates: Array.from({ length: row.linked_trip_departure_count }, () => "x"),
+            photo_urls: [],
+            extra: { child_rules: row.linked_trip_child_rules },
+          },
+          { posterPhotoCount: Number(row.photo_count) || 0, hasBrochure: true },
+        ),
+      ),
     ),
   }));
 }

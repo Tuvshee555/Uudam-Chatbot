@@ -52,6 +52,31 @@ test("the infant fare is its own required tier, not something child_price covers
   assert.equal(gaps[0].label, "Нярайн үнэ");
 });
 
+test("an infant fare the operator documented as free counts as filled, a bare 0 does not", () => {
+  // A bare 0 is missing data — the existing rule that a stray 0 must never
+  // advertise itself as free.
+  assert.ok(
+    blockingGaps(findTripGaps(tripCompletenessInput({ ...complete, infant_price: 0 })))
+      .some((gap) => gap.key === "infant_price"),
+    "a bare 0 still reads as a missing fare",
+  );
+
+  // The same 0, written down as free in child_rules, is a complete answer.
+  const documentedFree = tripCompletenessInput({
+    ...complete,
+    infant_price: 0,
+    extra: {
+      ...complete.extra,
+      child_rules: [{ label: "Нярай", age_range: "0-2 нас", price: 0, note: "Үнэгүй" }],
+    },
+  });
+  assert.deepEqual(
+    blockingGaps(findTripGaps(documentedFree)).map((gap) => gap.key),
+    [],
+    "a documented free infant fare is not a gap",
+  );
+});
+
 test("included and excluded lists are never required — staff answer that manually", () => {
   const gaps = findTripGaps(
     tripCompletenessInput({

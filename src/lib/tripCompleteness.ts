@@ -25,6 +25,13 @@ export type TripCompletenessInput = {
   adult_price?: number | null;
   child_price?: number | null;
   infant_price?: number | null;
+  /**
+   * The operator explicitly documented this fare as free ("Нярай: Үнэгүй"),
+   * as opposed to simply leaving it blank. A bare 0 still counts as missing
+   * data — only a written-down free fare counts as filled.
+   */
+  infant_fare_free?: boolean;
+  child_fare_free?: boolean;
   departure_dates?: readonly string[] | null;
   photo_urls?: readonly string[] | null;
   itinerary_days?: readonly unknown[] | null;
@@ -62,6 +69,28 @@ function money(value: number | null | undefined): boolean {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
+/**
+ * A child_rules entry priced 0 whose note says "Үнэгүй" — the same convention
+ * isDocumentedFreeFare() reads when the bot answers. Kept deliberately simple
+ * here (no age-band reasoning): this only decides whether the admin still owes
+ * us a number, not what price a customer is quoted.
+ */
+function documentedFreeFare(
+  extra: Record<string, unknown>,
+  target: "child" | "infant",
+): boolean {
+  const rules = [extra.child_rules, extra.child_price_rules]
+    .flatMap((value) => (Array.isArray(value) ? (value as Array<Record<string, unknown>>) : []));
+  return rules.some((rule) => {
+    if (rule.price !== 0) return false;
+    const note = String(rule.note ?? "").toLowerCase();
+    if (!note.includes("үнэгүй") && !note.includes("free")) return false;
+    const haystack = `${String(rule.label ?? "")} ${String(rule.age_range ?? "")}`.toLowerCase();
+    const infantShaped = /нярай|infant|сар/.test(haystack);
+    return target === "infant" ? infantShaped : !infantShaped;
+  });
+}
+
 const RULES: Array<{
   key: string;
   label: string;
@@ -76,11 +105,12 @@ const RULES: Array<{
   { key: "adult_price", label: "Том хүний үнэ", where: "Үндсэн", severity: "blocking",
     ok: (t) => money(t.adult_price) },
   { key: "child_price", label: "Хүүхдийн үнэ", where: "Үндсэн", severity: "blocking",
-    ok: (t) => money(t.child_price) },
+    ok: (t) => money(t.child_price) || t.child_fare_free === true },
   // Infants have their own fare on every trip — customers ask, and 0/blank
-  // would read as "babies fly free", a promise the agency never made.
+  // would read as "babies fly free", a promise the agency never made. A fare
+  // the operator DID write down as free is complete, not missing.
   { key: "infant_price", label: "Нярайн үнэ", where: "Үндсэн", severity: "blocking",
-    ok: (t) => money(t.infant_price) },
+    ok: (t) => money(t.infant_price) || t.infant_fare_free === true },
   { key: "departure_dates", label: "Гарах өдөр", where: "Үнэ ба гаралт", severity: "blocking",
     ok: (t) => filled(t.departure_dates) },
   { key: "photo_urls", label: "Зураг", where: "Үндсэн", severity: "blocking",
@@ -118,6 +148,8 @@ export function tripCompletenessInput(
     adult_price: trip.adult_price,
     child_price: trip.child_price,
     infant_price: trip.infant_price,
+    infant_fare_free: documentedFreeFare(extra, "infant"),
+    child_fare_free: documentedFreeFare(extra, "child"),
     departure_dates: trip.departure_dates,
     photo_urls: trip.photo_urls,
     itinerary_days: list(extra.itinerary_days),
