@@ -86,6 +86,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           search: search || undefined,
           status: status || undefined,
           limit: Number.isFinite(limit) ? limit : 200,
+          // "Бүх төлөв" must mean every status. Auto-archived trips (no
+          // dates yet / all dates passed) are exactly the ones the admin
+          // needs to find and fix, so they cannot be hidden here.
+          includeArchived: !status,
         }),
         getBotControl(),
       ]);

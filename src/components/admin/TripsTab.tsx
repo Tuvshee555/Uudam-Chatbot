@@ -466,6 +466,18 @@ function DepartureCalendar({ dates }: { dates: string[] }) {
   );
 }
 
+/** Why the system archived this trip on its own, and how the admin un-archives it. */
+function archivedReasonHint(trip: TravelTrip): string | null {
+  const reason = (trip.extra as Record<string, unknown> | undefined)?.archived_reason;
+  if (reason === "no_departure_dates") {
+    return "Гарах өдөр байхгүй тул автоматаар архивлагдсан — огноо нэмбэл дахин идэвхжинэ.";
+  }
+  if (reason === "all_departure_dates_passed") {
+    return "Бүх гарах өдөр өнгөрсөн тул автоматаар архивлагдсан — шинэ огноо нэмбэл дахин идэвхжинэ.";
+  }
+  return null;
+}
+
 /** Same rules the trip editor blocks on, so both screens name gaps identically. */
 function getTripGaps(trip: TravelTrip): TripGap[] {
   return findTripGaps(tripCompletenessInput(trip, { hasBrochure: tripHasPdf(trip) }));
@@ -703,6 +715,9 @@ function TripCard({
               </Badge>
             </div>
           </div>
+          {trip.status === "archived" && archivedReasonHint(trip) && (
+            <p className="mt-1.5 text-xs font-medium text-warning">{archivedReasonHint(trip)}</p>
+          )}
           {facts.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {facts.map((fact, i) => (

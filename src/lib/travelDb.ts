@@ -753,11 +753,30 @@ async function persistTripScheduleMaintenance(trips: TravelTrip[]): Promise<void
   }
 }
 
+/**
+ * Archived trips are hidden by default because every bot/website/AI consumer
+ * of listTrips must never answer from them. Only the admin catalogue asks for
+ * them (includeArchived) — otherwise a trip auto-archived for missing dates
+ * simply vanishes from the one screen where it could be fixed.
+ */
+export function filterTripsForListing(
+  trips: TravelTrip[],
+  options?: { status?: string | null; includeArchived?: boolean },
+): TravelTrip[] {
+  const status = options?.status?.trim() || null;
+  return trips.filter((trip) => {
+    if (status) return trip.status === status;
+    if (options?.includeArchived) return true;
+    return trip.status !== "archived";
+  });
+}
+
 export async function listTrips(options?: {
   search?: string;
   status?: string;
   limit?: number;
   offset?: number;
+  includeArchived?: boolean;
 }) {
   const ready = await ensureTravelSchema();
   if (!ready) return [] as TravelTrip[];
@@ -813,9 +832,9 @@ export async function listTrips(options?: {
     scheduled.filter((entry) => entry.changed).map((entry) => entry.trip),
   );
   const sanitized = scheduled.map((entry) => entry.trip);
-  return sanitized.filter((trip) => {
-    if (status) return trip.status === status;
-    return trip.status !== "archived";
+  return filterTripsForListing(sanitized, {
+    status,
+    includeArchived: options?.includeArchived,
   });
 }
 
