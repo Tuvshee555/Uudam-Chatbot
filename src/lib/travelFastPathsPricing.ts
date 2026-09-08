@@ -1355,7 +1355,20 @@ export function formatSpecificDatePrice(
 ) {
   const group = findPriceGroupByYmd(trip, ymd, now);
   if (!group) {
-    return `💰 ${label}-ны үнийн мэдээлэл дэлгэрэнгүй мэдэхийг хүсвэл аяллын зөвлөхтэй холбогдоорой.`;
+    const requestedMonthDay = ymd.slice(5);
+    const tripHasDeparture = (trip.departure_dates || []).some((dateText) =>
+      parseDepartureDateText(dateText, now).some((date) => date.slice(5) === requestedMonthDay),
+    );
+    if (tripHasDeparture) {
+      const currency = trip.currency || "MNT";
+      const adult = formatPassengerMoney(trip.adult_price, currency);
+      const child = formatPassengerMoney(trip.child_price, currency);
+      const parts: string[] = [];
+      if (adult) parts.push(`Том хүн: ${adult}`);
+      if (child) parts.push(`Хүүхэд: ${child}`);
+      if (parts.length > 0) return `💰 ${label}: ${parts.join(" | ")}`;
+    }
+    return `💰 ${label}-ны үнийн мэдээлэл одоогоор тодорхойгүй байна. Аяллын зөвлөх тодруулж өгнө 🙏`;
   }
 
   const currency = trip.currency || "MNT";

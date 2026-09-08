@@ -269,7 +269,7 @@ export function resolveRequestedMonth(
     return buildMonth(entry.month, year);
   }
 
-  const match = /(?:^|[^\d])(\d{1,2})\s*(?:-?\s*р)?\s*(?:сард|сар|sard|sar)(?!\s*\d)/i.exec(text);
+  const match = /(?:^|[^\d])(\d{1,2})\s*(?:-?\s*р)?\s*(?:сард|сарын|сар|sard|sariin|sar)(?!\s*\d)/i.exec(text);
   if (!match) return null;
   const month = Number(match[1]);
   if (!Number.isInteger(month) || month < 1 || month > 12) return null;
@@ -417,11 +417,18 @@ export function hasDepartureDateAvailabilityIntent(text: string, now = new Date(
   const requestedMonth = resolveRequestedMonth(text, now);
   if (!requestedDate && !requestedMonth) return false;
   if (isDepartureAvailabilityQuestion(text)) return true;
+  const normalized = text.toLowerCase();
+  if (/үнэ|үнийн|хэд\s*вэ|хэдээр|төлбөр|төгрөг|₮|\bmnt\b|\bcny\b|\busd\b|price|cost/i.test(normalized)) {
+    return false;
+  }
+  const hasTravelOrPriceSignal =
+    /\b(?:trip|trips|tour|tours|aylal|travel)\b|\u0430\u044f\u043b\u0430\u043b|\u0430\u044f\u043b\u043b\u0443\u0443\u0434/i.test(
+      normalized,
+    );
+  if (requestedDate) return hasTravelOrPriceSignal;
   if (!requestedMonth) return false;
 
-  return /\b(?:trip|trips|tour|tours|aylal|travel)\b|\u0430\u044f\u043b\u0430\u043b|\u0430\u044f\u043b\u043b\u0443\u0443\u0434/i.test(
-    text,
-  );
+  return hasTravelOrPriceSignal;
 }
 
 function formatMoney(value: number | null, currency: string): string {

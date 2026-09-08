@@ -288,7 +288,34 @@ async function handleMessage(
           classification: classifyError(error),
         });
       }
-      await rememberTurn(`${input.rememberSource}_silent_no_data`);
+      const handoffReply = buildHandoffAcknowledgement();
+      await assertLockHealthy();
+      const delivered = await sendPlatformMessage(
+        platform,
+        senderId,
+        handoffReply,
+        token,
+        pageId,
+        igUserId,
+        trace,
+        { allowFallback: false },
+      );
+      if (!delivered) {
+        throw new RetryableWebhookError(`delivery_failed:${input.failTag}_no_data`);
+      }
+      try {
+        await appendMessage(senderId, "assistant", handoffReply);
+        await setLastReplyConsistent(sessionId, handoffReply);
+      } catch (error) {
+        logWarn("webhook.no_data_reply_state_persist_failed", {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          platform,
+          senderHash: hashIdentifier(senderId),
+          classification: classifyError(error),
+        });
+      }
+      await rememberTurn(`${input.rememberSource}_no_data_handoff`);
       if (input.counter) recordCounter(input.counter, 1, { platform });
       return;
     }
@@ -1104,6 +1131,22 @@ async function handleMessage(
   {
     const fastPathText = await getFastPathText();
     if (isStructuredTripQuestion(fastPathText)) {
+      const archivedNotice = buildArchivedTripNotice(
+        fastPathText,
+        await getArchivedTrips(),
+      );
+      if (archivedNotice) {
+        await deliverFastPathReply({
+          reply: appendLeadCaptureCta(
+            enforceWebsiteForPayment(sanitizeAssistantReply(archivedNotice.reply)),
+            phoneAlreadyRequested,
+          ),
+          failTag: "archived_trip_notice",
+          rememberSource: "api.webhook.archived_trip_notice",
+          counter: "webhook.archived_trip_notice_total",
+        });
+        return;
+      }
       const resolution = resolveTripFromUserMessage(fastPathText, await getTrips(), {
         allowLooseFallback: false,
       });
@@ -1138,7 +1181,7 @@ async function handleMessage(
       }
     }
   }
-  if (hasDepartureDateAvailabilityIntent(text)) {
+  if (hasDepartureDateAvailabilityIntent(text) && !hasProgramIntent(text)) {
     const trips = await getTrips();
     const dateFastPathText = await getFastPathText();
     const dateAvailabilityReply = buildDepartureDateAvailabilityReply({

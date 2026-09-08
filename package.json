@@ -13,6 +13,7 @@
     "test": "node scripts/run-tests.mjs",
     "chaos": "node --import tsx scripts/chaos.ts",
     "qa:golden": "node scripts/golden-questions.mjs",
+    "qa:current-catalog": "node --env-file=.env --env-file=.env.local --import tsx scripts/qa-current-catalog-demo.ts",
     "qa:100-demo": "node scripts/qa-100-demo.mjs",
     "qa:real": "node scripts/replay-real-conversations.mjs",
     "preflight": "node --import tsx scripts/preflight.ts",

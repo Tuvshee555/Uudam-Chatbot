@@ -445,21 +445,35 @@ export function buildArchivedTripNotice(
   text: string,
   archivedTrips: TravelTrip[],
 ): { reply: string; trip: TravelTrip } | null {
-  const expired = archivedTrips.filter(
+  const unavailable = archivedTrips.filter(
     (trip) =>
       trip.status === "archived" &&
-      (trip.extra as Record<string, unknown> | undefined)?.archived_reason ===
-        "all_departure_dates_passed",
+      (
+        (trip.extra as Record<string, unknown> | undefined)?.archived_reason ===
+          "all_departure_dates_passed" ||
+        (trip.extra as Record<string, unknown> | undefined)?.archived_reason ===
+          "no_departure_dates"
+      ),
   );
-  if (expired.length === 0) return null;
-  const resolution = resolveTripFromUserMessage(text, expired, {
+  if (unavailable.length === 0) return null;
+  const exactNameMatches = unavailable.filter((trip) => {
+    const normalizedText = normText(text);
+    const route = normText(trip.route_name || "");
+    return route.length >= 8 && normalizedText.includes(route);
+  });
+  if (exactNameMatches.length === 0) return null;
+  const resolution = resolveTripFromUserMessage(text, exactNameMatches, {
     allowLooseFallback: false,
     includeArchived: true,
   });
   if (resolution.status !== "verified") return null;
+  const reason = (resolution.trip.extra as Record<string, unknown> | undefined)?.archived_reason;
+  const detail = reason === "no_departure_dates"
+    ? "гарах өдөр нь одоогоор баталгаажаагүй байгаа тул"
+    : "бүх гарах өдөр өнгөрсөн тул";
   return {
     trip: resolution.trip,
-    reply: `${resolution.trip.route_name} аялалын бүх гарах өдөр өнгөрсөн тул одоогоор идэвхгүй байна. Шинэ огноо гарч ирмэгц дахин мэдэгдэх тул түр хүлээгээрэй, эсвэл манай ажилтантай шууд холбогдож лавлаарай.`,
+    reply: `${resolution.trip.route_name} аяллын ${detail} одоогоор идэвхгүй байна. Шинэ огноо гарч ирмэгц дахин идэвхжинэ, эсвэл манай аяллын зөвлөхтэй шууд холбогдож лавлаарай.`,
   };
 }
 

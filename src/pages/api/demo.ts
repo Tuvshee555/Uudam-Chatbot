@@ -20,7 +20,7 @@ import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceW
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { dbGetRecentAdminMessages, getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
 import { extractTripPhotosForReply, extractTripPhotosForUserMessage, hasTripPhotoIntent, MAX_TRIP_PHOTOS } from "../../lib/welcomeFlow";
 import { CONTACT_OPERATOR_LABEL, DUPLICATE_REPLY_NUDGE, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
 import { getEnv } from "../../lib/env";
@@ -241,19 +241,10 @@ export default async function handler(
           source: "api.demo",
         });
       const returnHandoff = async (options: { aiOutage?: boolean } = {}) => {
-        if (!options.aiOutage) {
-          await rememberTurn();
-          return res.status(200).json({
-            reply: "",
-            buttons: [],
-            mediaUrls: [],
-            brochureUrl: null,
-            handoff: true,
-            silent: true,
-          });
-        }
         const reply = isEnglishDemo
-          ? "Our AI assistant is briefly unavailable 🙏 In production a staff member would take over right here — please try again in a minute."
+          ? options.aiOutage
+            ? "Our AI assistant is briefly unavailable 🙏 In production a staff member would take over right here — please try again in a minute."
+            : "I passed this to our travel consultant so they can check the exact information and reply here 🙏"
           : buildHandoffAcknowledgement(options);
         await appendMessage(sessionId, "assistant", reply);
         await rememberTurn();
@@ -470,6 +461,26 @@ export default async function handler(
       {
         const fastPathText = await getFastPathText();
         if (isStructuredTripQuestion(fastPathText)) {
+          const archivedNotice = buildArchivedTripNotice(
+            fastPathText,
+            await getArchivedTrips(),
+          );
+          if (archivedNotice) {
+            const safeReply = appendLeadCaptureCta(
+              enforceWebsiteForPayment(sanitizeAssistantReply(archivedNotice.reply)),
+              phoneAlreadyRequested,
+            );
+            await appendMessage(sessionId, "user", normalizedText);
+            await appendMessage(sessionId, "assistant", safeReply);
+            await rememberTurn();
+            recordCounter("demo.archived_trip_notice_total", 1, {});
+            return res.status(200).json({
+              reply: safeReply,
+              buttons: [],
+              mediaUrls: [],
+              brochureUrl: null,
+            });
+          }
           const resolution = resolveTripFromUserMessage(fastPathText, await getTrips(), {
             allowLooseFallback: false,
           });
@@ -502,7 +513,7 @@ export default async function handler(
       }
 
       // Fast path: departure date availability
-      if (hasDepartureDateAvailabilityIntent(normalizedText)) {
+      if (hasDepartureDateAvailabilityIntent(normalizedText) && !hasProgramIntent(normalizedText)) {
         const trips = await getTrips();
         const dateFastPathText = await getFastPathText();
         const dateReply = buildDepartureDateAvailabilityReply({

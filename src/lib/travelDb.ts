@@ -694,18 +694,20 @@ export function sanitizeTripScheduleForCurrentDate(
   let changed = false;
 
   let nextStatus = trip.status;
-  if (trip.status === "active" && pruned.shouldArchive) {
+  const missingDepartureDates = (trip.departure_dates || []).length === 0;
+  if (trip.status === "active" && (pruned.shouldArchive || missingDepartureDates)) {
     nextStatus = "archived";
     nextExtra = {
       ...nextExtra,
-      archived_reason: "all_departure_dates_passed",
+      archived_reason: missingDepartureDates ? "no_departure_dates" : "all_departure_dates_passed",
       archived_at: now.toISOString(),
     };
     changed = true;
   }
   if (
     trip.status === "archived" &&
-    extra.archived_reason === "all_departure_dates_passed" &&
+    (extra.archived_reason === "all_departure_dates_passed" ||
+      extra.archived_reason === "no_departure_dates") &&
     pruned.dates.length > 0
   ) {
     nextStatus = "active";
