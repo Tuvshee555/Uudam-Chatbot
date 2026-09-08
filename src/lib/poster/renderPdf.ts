@@ -98,19 +98,24 @@ export async function renderPosterPdf(poster: PosterPdfRow) {
       // so document.images never sees them and this wait used to resolve
       // instantly — page.pdf() then fired before the browser had even
       // requested those photos, leaving them blank in the exported PDF.
+      //
+      // Deduped deliberately: the same photo appears in more than one rule,
+      // and probing each occurrence separately decodes the image again per
+      // probe. On an 8-photo poster that was enough extra bitmap memory to
+      // crash Chromium outright inside Vercel's sandbox.
       const bgUrlPattern = /url\(["']?(.*?)["']?\)/;
-      const bgLoads = Array.from(document.querySelectorAll<HTMLElement>("*"))
-        .map(el => {
-          const match = getComputedStyle(el).backgroundImage.match(bgUrlPattern);
-          return match?.[1] || null;
-        })
-        .filter((url): url is string => typeof url === "string" && !url.startsWith("data:"))
-        .map(url => new Promise(resolve => {
-          const probe = new Image();
-          probe.addEventListener("load", resolve, { once: true });
-          probe.addEventListener("error", resolve, { once: true });
-          probe.src = url;
-        }));
+      const bgUrls = new Set<string>();
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>("*"))) {
+        const match = getComputedStyle(el).backgroundImage.match(bgUrlPattern);
+        const url = match?.[1];
+        if (url && !url.startsWith("data:")) bgUrls.add(url);
+      }
+      const bgLoads = Array.from(bgUrls).map(url => new Promise(resolve => {
+        const probe = new Image();
+        probe.addEventListener("load", resolve, { once: true });
+        probe.addEventListener("error", resolve, { once: true });
+        probe.src = url;
+      }));
 
       await Promise.race([
         Promise.all([...imgLoads, ...bgLoads]),
@@ -124,6 +129,11 @@ export async function renderPosterPdf(poster: PosterPdfRow) {
       await page.waitForTimeout(500);
       pdf = await page.pdf({ width: "1080px", height: "1528px", printBackground: true, preferCSSPageSize: true });
     }
+    // Free the renderer (and every decoded photo in it) before the database
+    // round-trip: Vercel reuses a warm container between requests, so holding
+    // the page open across the write leaves that memory in place for the next
+    // poster to trip over.
+    await page.close();
     await queryNeon(`INSERT INTO poster_pdf_cache(poster_id,hash,pdf) VALUES ($1,$2,$3)
       ON CONFLICT(poster_id) DO UPDATE SET hash=EXCLUDED.hash,pdf=EXCLUDED.pdf,updated_at=NOW()`, [poster.id,hash,pdf]);
     return pdf;
