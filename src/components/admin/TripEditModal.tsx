@@ -3,7 +3,7 @@ import { Button, Icons, Input, Modal, Select, Spinner, Textarea, cx } from "@/co
 import { getPosterBrochureHref } from "@/lib/poster/pdfUrl";
 import { blockingGaps, findTripGaps, type TripGap } from "@/lib/tripCompleteness";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
-import type { AnswerHint, BookingTerms, ChildRule, DiscountGroup, ExtraFee, PassengerPrice, PriceGroup, RoomPrice, SourceProvenance, TravelTrip } from "@/lib/adminTypes";
+import type { AnswerHint, BookingTerms, ChildRule, DiscountGroup, ExtraFee, ItineraryDay, PassengerPrice, PriceGroup, RoomPrice, SourceProvenance, TravelTrip } from "@/lib/adminTypes";
 
 export type TripDraftState = Record<string, string>;
 
@@ -46,6 +46,8 @@ export type TripEditModalProps = {
   setTripExcludedItems: React.Dispatch<React.SetStateAction<string[]>>;
   tripRoomPrices: RoomPrice[];
   setTripRoomPrices: React.Dispatch<React.SetStateAction<RoomPrice[]>>;
+  tripItineraryDays: ItineraryDay[];
+  setTripItineraryDays: React.Dispatch<React.SetStateAction<ItineraryDay[]>>;
   tripImportantNotes: string[];
   setTripImportantNotes: React.Dispatch<React.SetStateAction<string[]>>;
   tripBookingTerms: BookingTerms;
@@ -68,7 +70,7 @@ const sectionHdr = "mt-5 text-sm font-semibold text-ink";
 const rowCls = "flex items-start gap-1.5";
 const delBtn = "shrink-0 rounded-md p-1 text-ink-muted transition-colors hover:bg-danger-soft hover:text-danger";
 
-type TripEditorTab = "base" | "pricing" | "advanced";
+type TripEditorTab = "base" | "pricing" | "itinerary" | "advanced";
 
 function emptyPassengerPrice(): PassengerPrice {
   return { label: "", age_range: "", price: null, currency: "MNT" };
@@ -87,6 +89,9 @@ function emptyExtraFee(): ExtraFee {
 }
 function emptyRoomPrice(): RoomPrice {
   return { room_type: "", price: null, currency: "MNT", note: "" };
+}
+function emptyItineraryDay(dayNumber: number): ItineraryDay {
+  return { day: dayNumber, title: "", description: "", hotel: "", meals: { breakfast: false, lunch: false, dinner: false } };
 }
 
 function splitDepartureDraft(value: string): string[] {
@@ -348,6 +353,8 @@ export function TripEditModal({
   setTripExcludedItems,
   tripRoomPrices,
   setTripRoomPrices,
+  tripItineraryDays,
+  setTripItineraryDays,
   tripImportantNotes,
   setTripImportantNotes,
   tripBookingTerms,
@@ -385,7 +392,7 @@ export function TripEditModal({
     child_price: parseMoneyDraft(tripDraft.child_price),
     departure_dates: splitDraftList(tripDraft.departure_dates),
     photo_urls: tripPhotoUrls,
-    itinerary_days: Array.isArray(editingExtra.itinerary_days) ? editingExtra.itinerary_days : [],
+    itinerary_days: tripItineraryDays,
     has_brochure: Boolean(brochurePdfUrl),
     poster_photo_count:
       typeof editingExtra.poster_photo_count === "number" ? editingExtra.poster_photo_count : 0,
@@ -457,6 +464,7 @@ export function TripEditModal({
       <div className="mb-4 flex flex-wrap gap-2 border-b border-line pb-4">
         <EditorTabButton active={activeTab === "base"} label="Үндсэн" onClick={() => setActiveTab("base")} />
         <EditorTabButton active={activeTab === "pricing"} label="Үнэ ба гаралт" onClick={() => setActiveTab("pricing")} />
+        <EditorTabButton active={activeTab === "itinerary"} label="Хөтөлбөр" onClick={() => setActiveTab("itinerary")} />
         <EditorTabButton active={activeTab === "advanced"} label="Нэмэлт" onClick={() => setActiveTab("advanced")} />
       </div>
 
@@ -968,6 +976,122 @@ export function TripEditModal({
         />
       </div>
 
+        </>
+      )}
+
+      {activeTab === "itinerary" && (
+        <>
+      <p className={sectionHdr}>Өдрийн хөтөлбөр</p>
+      <p className="mt-0.5 text-xs text-ink-subtle">
+        Эдгээр өдрүүд постер болон вебсайтад мөн харагдана. Зураг зөвхөн Постер таб дээрээс нэмнэ.
+      </p>
+      <div className="mt-2 space-y-2">
+        {tripItineraryDays.map((d, idx) => (
+          <div key={idx} className="rounded-lg border border-line bg-surface-sunken p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-ink-muted">Өдөр {idx + 1}</span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  className="rounded-md p-1 text-ink-muted transition-colors hover:bg-surface hover:text-ink disabled:opacity-30"
+                  disabled={idx === 0}
+                  title="Дээш зөөх"
+                  onClick={() => setTripItineraryDays((prev) => {
+                    if (idx === 0) return prev;
+                    const next = [...prev];
+                    [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+                    return next;
+                  })}
+                >
+                  <Icons.chevronRight size={14} className="-rotate-90" />
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md p-1 text-ink-muted transition-colors hover:bg-surface hover:text-ink disabled:opacity-30"
+                  disabled={idx === tripItineraryDays.length - 1}
+                  title="Доош зөөх"
+                  onClick={() => setTripItineraryDays((prev) => {
+                    if (idx === prev.length - 1) return prev;
+                    const next = [...prev];
+                    [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+                    return next;
+                  })}
+                >
+                  <Icons.chevronRight size={14} className="rotate-90" />
+                </button>
+                <button
+                  type="button"
+                  className={delBtn}
+                  onClick={() => setTripItineraryDays((prev) => prev.filter((_, i) => i !== idx))}
+                >
+                  <Icons.trash size={13} />
+                </button>
+              </div>
+            </div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <div>
+                <label className="mb-0.5 block text-xs text-ink-muted">Гарчиг / чиглэл</label>
+                <input
+                  className={inputCls}
+                  value={d.title}
+                  placeholder="ж: Улаанбаатар – Хархорин"
+                  onChange={(e) => setTripItineraryDays((prev) => prev.map((v, i) => i === idx ? { ...v, title: e.target.value } : v))}
+                />
+              </div>
+              <div>
+                <label className="mb-0.5 block text-xs text-ink-muted">Зочид буудал</label>
+                <input
+                  className={inputCls}
+                  value={d.hotel || ""}
+                  placeholder="ж: Kharkhorin Hotel"
+                  onChange={(e) => setTripItineraryDays((prev) => prev.map((v, i) => i === idx ? { ...v, hotel: e.target.value } : v))}
+                />
+              </div>
+            </div>
+            <div className="mt-2">
+              <label className="mb-0.5 block text-xs text-ink-muted">Тайлбар</label>
+              <textarea
+                className={cx(inputCls, "resize-y")}
+                rows={2}
+                value={d.description}
+                placeholder="Энэ өдрийн аяллын тайлбар..."
+                onChange={(e) => setTripItineraryDays((prev) => prev.map((v, i) => i === idx ? { ...v, description: e.target.value } : v))}
+              />
+            </div>
+            <div className="mt-2 flex gap-1.5">
+              {([
+                ["breakfast", "Өглөөний хоол"],
+                ["lunch", "Өдрийн хоол"],
+                ["dinner", "Оройн хоол"],
+              ] as const).map(([key, label]) => {
+                const on = Boolean(d.meals?.[key]);
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    className={cx(
+                      "rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
+                      on ? "border-brand bg-brand-soft text-brand" : "border-line-strong bg-surface text-ink-muted",
+                    )}
+                    onClick={() => setTripItineraryDays((prev) => prev.map((v, i) =>
+                      i === idx ? { ...v, meals: { ...v.meals, [key]: !on } } : v,
+                    ))}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        className="mt-1 text-xs text-brand hover:underline"
+        onClick={() => setTripItineraryDays((prev) => [...prev, emptyItineraryDay(prev.length + 1)])}
+      >
+        + Өдөр нэмэх
+      </button>
         </>
       )}
 

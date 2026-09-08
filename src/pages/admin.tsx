@@ -23,7 +23,7 @@ import { JsonEditorTab } from "@/components/admin/JsonEditorTab";
 import { TripPhotoImportTab } from "@/components/admin/TripPhotoImportTab";
 import PosterTab from "@/components/admin/poster/PosterTab";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
-import type { AIProposal, AIProposalResponse, AttachedFile, BookingTerms, ChatMessage, ClarificationAnswer, ClarificationQuestion, ChildRule, ControlState, DiscountGroup, DriveSyncDiagnostics, ExtraFee, LeadCrmStatus, LeadStats, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalMsg, ReadinessReport, RecentRow, RoomPrice, SettingsForm, TabKey, TravelBotSettings, TravelLead, TravelTrip } from "@/lib/adminTypes";
+import type { AIProposal, AIProposalResponse, AttachedFile, BookingTerms, ChatMessage, ClarificationAnswer, ClarificationQuestion, ChildRule, ControlState, DiscountGroup, DriveSyncDiagnostics, ExtraFee, ItineraryDay, LeadCrmStatus, LeadStats, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalMsg, ReadinessReport, RecentRow, RoomPrice, SettingsForm, TabKey, TravelBotSettings, TravelLead, TravelTrip } from "@/lib/adminTypes";
 import { emptyBookingTerms, toBookingTermsForm } from "@/lib/adminTypes";
 import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, emptyChunkResult, fileToDataUrl, getSecretStorage, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, mergeAIProposals, settingsToForm, shortId, splitLines, uid } from "@/lib/adminPageUtils";
 const BLANK_TRIP_DRAFT: Record<string, string> = { category: "Аялал", operator_name: "UUDAM TRAVEL AGENCY", route_name: "", duration_text: "", adult_price: "", child_price: "", currency: "MNT", seats_total: "", seats_left: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
@@ -96,6 +96,7 @@ export default function AdminPage() {
   const [tripIncludedItems, setTripIncludedItems] = useState<string[]>([]);
   const [tripExcludedItems, setTripExcludedItems] = useState<string[]>([]);
   const [tripRoomPrices, setTripRoomPrices] = useState<RoomPrice[]>([]);
+  const [tripItineraryDays, setTripItineraryDays] = useState<ItineraryDay[]>([]);
   const [tripImportantNotes, setTripImportantNotes] = useState<string[]>([]);
   const [tripBookingTerms, setTripBookingTerms] = useState<BookingTerms>(emptyBookingTerms());
   const [tripCustomerVisible, setTripCustomerVisible] = useState<boolean>(true);
@@ -1222,6 +1223,7 @@ export default function AdminPage() {
     setTripIncludedItems([]);
     setTripExcludedItems([]);
     setTripRoomPrices([]);
+    setTripItineraryDays([]);
     setTripImportantNotes([]);
     setTripBookingTerms(emptyBookingTerms());
     setTripCustomerVisible(true);
@@ -1262,6 +1264,7 @@ export default function AdminPage() {
     setTripIncludedItems(Array.isArray(trip.extra?.included_items) ? (trip.extra.included_items as string[]) : []);
     setTripExcludedItems(Array.isArray(trip.extra?.excluded_items) ? (trip.extra.excluded_items as string[]) : []);
     setTripRoomPrices(Array.isArray(trip.extra?.room_prices) ? (trip.extra.room_prices as RoomPrice[]) : []);
+    setTripItineraryDays(Array.isArray(trip.extra?.itinerary_days) ? (trip.extra.itinerary_days as ItineraryDay[]) : []);
     setTripImportantNotes(Array.isArray(trip.extra?.important_notes) ? (trip.extra.important_notes as string[]) : []);
     setTripBookingTerms(toBookingTermsForm(trip.extra?.booking_terms));
     setTripCustomerVisible(typeof trip.extra?.customer_visible === "boolean" ? trip.extra.customer_visible : true);
@@ -1405,6 +1408,7 @@ export default function AdminPage() {
         included_items: tripIncludedItems.filter(Boolean),
         excluded_items: tripExcludedItems.filter(Boolean),
         room_prices: tripRoomPrices,
+        itinerary_days: tripItineraryDays,
         important_notes: tripImportantNotes.filter(Boolean),
         booking_terms: tripBookingTerms,
         customer_visible: tripCustomerVisible,
@@ -2012,6 +2016,8 @@ export default function AdminPage() {
         setTripExcludedItems={setTripExcludedItems}
         tripRoomPrices={tripRoomPrices}
         setTripRoomPrices={setTripRoomPrices}
+        tripItineraryDays={tripItineraryDays}
+        setTripItineraryDays={setTripItineraryDays}
         tripImportantNotes={tripImportantNotes}
         setTripImportantNotes={setTripImportantNotes}
         tripBookingTerms={tripBookingTerms}

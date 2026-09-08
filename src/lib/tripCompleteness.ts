@@ -80,7 +80,7 @@ const RULES: Array<{
   { key: "photo_urls", label: "Зураг", where: "Үндсэн", severity: "blocking",
     ok: (t) => filled(t.photo_urls) || (t.poster_photo_count ?? 0) > 0 },
   // Editable on the poster, not in this form — flag it, never block the save here.
-  { key: "itinerary_days", label: "Өдрийн хөтөлбөр", where: "Постер", severity: "warning",
+  { key: "itinerary_days", label: "Өдрийн хөтөлбөр", where: "Хөтөлбөр", severity: "warning",
     ok: (t) => filled(t.itinerary_days) },
   { key: "brochure", label: "PDF хөтөлбөр", where: "Постер", severity: "warning",
     ok: (t) => t.has_brochure !== false },

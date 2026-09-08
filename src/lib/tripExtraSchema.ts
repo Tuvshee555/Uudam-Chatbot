@@ -36,6 +36,7 @@ const KNOWN_EXTRA_KEYS = new Set([
   "review_reasons",
   "booking_terms",
   "departure_dates_resolved",
+  "itinerary_days",
 ]);
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -232,6 +233,39 @@ function normalizeResolvedDepartureDates(raw: unknown): Array<{ text: string; ym
   return out;
 }
 
+/**
+ * Day-by-day itinerary rows, editable in the trip form's own "Хөтөлбөр" tab
+ * and mirrored onto the poster (tripToPoster in connectedTripMapping.ts).
+ * Unlike posterItineraryDays() in poster/db.ts (which drops blank days —
+ * that direction reads messy AI-extracted poster data), this normalizer
+ * keeps blank rows: they are admin-authored, deliberate, and dropping a row
+ * mid-edit would be confusing UX. Day numbers are always derived from array
+ * position, never trusted from the input, matching the poster's own
+ * normalizeTripData() renumbering convention.
+ */
+function normalizeItineraryDays(raw: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((d): d is Record<string, unknown> => !!d && typeof d === "object")
+    .map((d, index) => {
+      const title = asString(d.title);
+      const description = asString(d.description);
+      const hotel = asString(d.hotel);
+      const mealsRaw = d.meals && typeof d.meals === "object" ? (d.meals as Record<string, unknown>) : {};
+      return {
+        day: index + 1,
+        title,
+        description,
+        ...(hotel ? { hotel } : {}),
+        meals: {
+          breakfast: Boolean(mealsRaw.breakfast),
+          lunch: Boolean(mealsRaw.lunch),
+          dinner: Boolean(mealsRaw.dinner),
+        },
+      };
+    });
+}
+
 function normalizeAnswerHints(raw: unknown): Record<string, unknown>[] {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -331,6 +365,7 @@ export function normalizeExtra(
     review_reasons: asStringArray(raw.review_reasons),
     booking_terms: normalizeBookingTerms(raw.booking_terms),
     departure_dates_resolved: normalizeResolvedDepartureDates(raw.departure_dates_resolved),
+    itinerary_days: normalizeItineraryDays(raw.itinerary_days),
   };
 
   return { extra, warnings };

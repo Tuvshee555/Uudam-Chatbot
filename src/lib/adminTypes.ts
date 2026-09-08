@@ -74,6 +74,26 @@ export type RoomPrice = {
   note: string;
 };
 
+export type ItineraryDayMeals = {
+  breakfast?: boolean;
+  lunch?: boolean;
+  dinner?: boolean;
+};
+
+/**
+ * One day of the itinerary. Photos are deliberately NOT part of this shape —
+ * day photos stay a Poster-tab-only concern; editing them here would let a
+ * chatbot-trip save silently clobber what the poster's richer per-day layout
+ * carries (photo, captions, etc).
+ */
+export type ItineraryDay = {
+  day: number;
+  title: string;
+  description: string;
+  hotel?: string;
+  meals?: ItineraryDayMeals;
+};
+
 /** Booking terms a customer asks before committing. Freeform Mongolian strings. */
 export type BookingTerms = {
   deposit: string;
