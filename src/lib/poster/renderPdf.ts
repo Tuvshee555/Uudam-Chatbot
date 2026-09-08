@@ -64,9 +64,22 @@ export async function renderPosterPdf(poster: PosterPdfRow) {
     "C:/Program Files/Google/Chrome/Application/chrome.exe",
     "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
   ].find(existsSync);
+  // Posters with 8+ photos were crashing the browser outright on Vercel —
+  // hundreds of "CommandBufferHelper::AllocateRingBuffer() failed" GPU errors
+  // followed by "Target page, context or browser has been closed", surfacing
+  // as a plain 500. The sandbox has no real GPU and a small /dev/shm, so
+  // Chromium must be told to rasterise on the CPU and keep its heap in
+  // regular memory instead of shared memory.
+  const lowMemoryArgs = [
+    "--disable-gpu",
+    "--disable-software-rasterizer",
+    "--disable-dev-shm-usage",
+    "--no-zygote",
+  ];
   const browser = await playwright.launch({
     executablePath: localExecutable || await chromium.executablePath(),
-    args: localExecutable ? [] : chromium.args, headless: true,
+    args: localExecutable ? [] : [...chromium.args, ...lowMemoryArgs],
+    headless: true,
   });
   try {
     const page = await browser.newPage({ viewport: { width: 1080, height: 1528 } });
