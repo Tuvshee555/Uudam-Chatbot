@@ -489,6 +489,10 @@ export default function PosterTab({
   const [totalH, setTotalH] = useState(0);
   const [attachModalOpen, setAttachModalOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<PosterHistoryItem | null>(null);
+  const [quickAdultPrice, setQuickAdultPrice] = useState("");
+  const [quickChildPrice, setQuickChildPrice] = useState("");
+  const [quickDepartureDate, setQuickDepartureDate] = useState("");
+  const quickPhotoInputRef = useRef<HTMLInputElement>(null);
   const [bulkPlan, setBulkPlan] = useState<PosterBulkPlan | null>(null);
   const [bulkReport, setBulkReport] = useState<PosterBulkRunReport | null>(null);
   const [bulkTripOptions, setBulkTripOptions] = useState<BulkTripOption[]>([]);
@@ -684,6 +688,72 @@ export default function PosterTab({
       }
       return normalizeTripData(clone);
     });
+
+  /**
+   * Direct, labeled inputs for the missing-field warning. The poster's own
+   * price table / departures / day photos are all edited by clicking text
+   * directly on the rendered poster below — correct once you know that
+   * convention, but a dead end the first time a required field is simply
+   * blank and there is nothing yet on the poster to click. These write into
+   * the exact same fields the WYSIWYG editor does, just from a normal form.
+   */
+  function quickFillPrice(adultText: string, childText: string) {
+    setTrip((t) => {
+      if (!t) return t;
+      const clone = structuredClone(t);
+      clone.price_table ||= { columns: ["Том хүн", "Хүүхэд"], rows: [], note: "" };
+      if (!clone.price_table.columns?.length) clone.price_table.columns = ["Том хүн", "Хүүхэд"];
+      const columns = clone.price_table.columns;
+      let adultIdx = columns.findIndex((c) => /том|adult/i.test(c));
+      let childIdx = columns.findIndex((c) => /хүүх|child/i.test(c) && !/том|adult/i.test(c));
+      if (adultIdx < 0) { columns.push("Том хүн"); adultIdx = columns.length - 1; }
+      if (childIdx < 0) { columns.push("Хүүхэд"); childIdx = columns.length - 1; }
+      clone.price_table.rows ||= [];
+      if (clone.price_table.rows.length === 0) {
+        clone.price_table.rows.push({ dates: "", cells: columns.map(() => "") });
+      }
+      const row = clone.price_table.rows[0];
+      row.cells ||= [];
+      while (row.cells.length < columns.length) row.cells.push("");
+      if (adultText.trim()) row.cells[adultIdx] = `${adultText.trim()}₮`;
+      if (childText.trim()) row.cells[childIdx] = `${childText.trim()}₮`;
+      return normalizeTripData(clone);
+    });
+  }
+
+  function quickAddDeparture(dateText: string) {
+    if (!dateText.trim()) return;
+    setTrip((t) => {
+      if (!t) return t;
+      const clone = structuredClone(t);
+      clone.departures ||= [];
+      clone.departures.push({ date: dateText.trim() });
+      return normalizeTripData(clone);
+    });
+  }
+
+  async function quickAddCoverPhoto(file: File | null) {
+    if (!file) return;
+    setBusy("Зураг нэмж байна…");
+    try {
+      const dataUrl = await resizeImage(file, 1400);
+      setTrip((t) => {
+        if (!t) return t;
+        const clone = structuredClone(t);
+        if (!clone.days?.length) {
+          clone.days = [{ ...newDayObj(), day: 1 }];
+        }
+        clone.days[0].photo = dataUrl;
+        if (!clone.days[0].photo_caption) clone.days[0].photo_caption = clone.days[0].summary || clone.days[0].route || "";
+        clone.hero_image ||= dataUrl;
+        return normalizeTripData(clone);
+      });
+    } catch (e) {
+      setError(String((e as { message?: string })?.message || e));
+    } finally {
+      setBusy("");
+    }
+  }
 
   const addPriceRow: PosterAddPriceRowFn = () =>
     setTrip((t) => {
@@ -2087,11 +2157,99 @@ export default function PosterTab({
                             </span>
                           ))}
                         </div>
-                        {currentHistoryItem.missing_gaps.some((gap) => gap.key === "photo_urls") && (
-                          <p className="mt-2 text-xs text-ink-muted">
-                            Доод талын зургийн хэсэгт зураг нэмээд, дараа нь Хадгалах дарна уу.
-                          </p>
-                        )}
+                        {(() => {
+                          const gapKeys = new Set(currentHistoryItem.missing_gaps.map((g) => g.key));
+                          const needsAdult = gapKeys.has("adult_price");
+                          const needsChild = gapKeys.has("child_price");
+                          const needsDate = gapKeys.has("departure_dates");
+                          const needsPhoto = gapKeys.has("photo_urls");
+                          if (!needsAdult && !needsChild && !needsDate && !needsPhoto) return null;
+                          return (
+                            <div className="mt-3 grid gap-2.5 border-t border-danger/20 pt-3 sm:grid-cols-2">
+                              {(needsAdult || needsChild) && (
+                                <div className="rounded-lg border border-danger/20 bg-surface p-2.5 sm:col-span-2">
+                                  <p className="mb-1.5 text-xs font-semibold text-ink">Үнэ энд шууд бичих</p>
+                                  <div className="flex flex-wrap items-end gap-2">
+                                    <div className="min-w-28 flex-1">
+                                      <Input
+                                        label="Том хүний үнэ"
+                                        inputMode="numeric"
+                                        placeholder="ж: 1500000"
+                                        value={quickAdultPrice}
+                                        onChange={(e) => setQuickAdultPrice(e.target.value.replace(/[^\d]/g, ""))}
+                                      />
+                                    </div>
+                                    <div className="min-w-28 flex-1">
+                                      <Input
+                                        label="Хүүхдийн үнэ"
+                                        inputMode="numeric"
+                                        placeholder="ж: 1200000"
+                                        value={quickChildPrice}
+                                        onChange={(e) => setQuickChildPrice(e.target.value.replace(/[^\d]/g, ""))}
+                                      />
+                                    </div>
+                                    <Button
+                                      size="sm"
+                                      disabled={!quickAdultPrice.trim() && !quickChildPrice.trim()}
+                                      onClick={() => {
+                                        quickFillPrice(quickAdultPrice, quickChildPrice);
+                                        setQuickAdultPrice("");
+                                        setQuickChildPrice("");
+                                      }}
+                                    >
+                                      Тавих
+                                    </Button>
+                                  </div>
+                                </div>
+                              )}
+                              {needsDate && (
+                                <div className="rounded-lg border border-danger/20 bg-surface p-2.5">
+                                  <p className="mb-1.5 text-xs font-semibold text-ink">Гарах өдөр энд шууд бичих</p>
+                                  <div className="flex items-end gap-2">
+                                    <div className="min-w-0 flex-1">
+                                      <Input
+                                        placeholder="ж: 7 сарын 12"
+                                        value={quickDepartureDate}
+                                        onChange={(e) => setQuickDepartureDate(e.target.value)}
+                                      />
+                                    </div>
+                                    <Button
+                                      size="sm"
+                                      disabled={!quickDepartureDate.trim()}
+                                      onClick={() => {
+                                        quickAddDeparture(quickDepartureDate);
+                                        setQuickDepartureDate("");
+                                      }}
+                                    >
+                                      Нэмэх
+                                    </Button>
+                                  </div>
+                                </div>
+                              )}
+                              {needsPhoto && (
+                                <div className="rounded-lg border border-danger/20 bg-surface p-2.5">
+                                  <p className="mb-1.5 text-xs font-semibold text-ink">Зураг энд шууд оруулах</p>
+                                  <Button size="sm" variant="secondary" onClick={() => quickPhotoInputRef.current?.click()}>
+                                    <Icons.upload size={13} /> Зураг сонгох
+                                  </Button>
+                                  <input
+                                    ref={quickPhotoInputRef}
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    onChange={(e) => {
+                                      void quickAddCoverPhoto(e.target.files?.[0] || null);
+                                      e.target.value = "";
+                                    }}
+                                  />
+                                </div>
+                              )}
+                              <p className="text-[11px] text-ink-subtle sm:col-span-2">
+                                Бичсэний дараа доод талын &ldquo;Хадгалах + аялал sync&rdquo; товч дарж хадгална уу.
+                              </p>
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                   </div>
