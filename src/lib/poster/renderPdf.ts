@@ -89,12 +89,31 @@ export async function renderPosterPdf(poster: PosterPdfRow) {
     </style></head><body class="exporting"><main class="poster-root">${markup}</main></body></html>`, { waitUntil: "domcontentloaded", timeout: 15000 });
     await page.evaluate(() => document.fonts.ready);
     await page.evaluate(async () => {
-      const images = Array.from(document.images);
+      const imgLoads = Array.from(document.images).map(img => img.complete ? true : new Promise(resolve => {
+        img.addEventListener("load", resolve, { once: true });
+        img.addEventListener("error", resolve, { once: true });
+      }));
+
+      // The day-photo tiles are painted via CSS background-image, not <img>,
+      // so document.images never sees them and this wait used to resolve
+      // instantly — page.pdf() then fired before the browser had even
+      // requested those photos, leaving them blank in the exported PDF.
+      const bgUrlPattern = /url\(["']?(.*?)["']?\)/;
+      const bgLoads = Array.from(document.querySelectorAll<HTMLElement>("*"))
+        .map(el => {
+          const match = getComputedStyle(el).backgroundImage.match(bgUrlPattern);
+          return match?.[1] || null;
+        })
+        .filter((url): url is string => typeof url === "string" && !url.startsWith("data:"))
+        .map(url => new Promise(resolve => {
+          const probe = new Image();
+          probe.addEventListener("load", resolve, { once: true });
+          probe.addEventListener("error", resolve, { once: true });
+          probe.src = url;
+        }));
+
       await Promise.race([
-        Promise.all(images.map(img => img.complete ? true : new Promise(resolve => {
-          img.addEventListener("load", resolve, { once: true });
-          img.addEventListener("error", resolve, { once: true });
-        }))),
+        Promise.all([...imgLoads, ...bgLoads]),
         new Promise(resolve => setTimeout(resolve, 8000)),
       ]);
     });
