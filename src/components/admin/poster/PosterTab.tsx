@@ -491,6 +491,7 @@ export default function PosterTab({
   const [deleteConfirm, setDeleteConfirm] = useState<PosterHistoryItem | null>(null);
   const [quickAdultPrice, setQuickAdultPrice] = useState("");
   const [quickChildPrice, setQuickChildPrice] = useState("");
+  const [quickInfantPrice, setQuickInfantPrice] = useState("");
   const [quickDepartureDate, setQuickDepartureDate] = useState("");
   const quickPhotoInputRef = useRef<HTMLInputElement>(null);
   const [bulkPlan, setBulkPlan] = useState<PosterBulkPlan | null>(null);
@@ -680,8 +681,8 @@ export default function PosterTab({
     setTrip((t) => {
       if (!t) return t;
       const clone = structuredClone(t);
-      clone.price_table ||= { columns: ["Том хүн", "Хүүхэд"], rows: [], note: "" };
-      if (!clone.price_table.columns?.length) clone.price_table.columns = ["Том хүн", "Хүүхэд"];
+      clone.price_table ||= { columns: ["Том хүн", "Хүүхэд", "Нярай"], rows: [], note: "" };
+      if (!clone.price_table.columns?.length) clone.price_table.columns = ["Том хүн", "Хүүхэд", "Нярай"];
       clone.price_table.rows ||= [];
       if (clone.price_table.rows.length === 0) {
         clone.price_table.rows.push({ dates: "Шинэ огноо", cells: clone.price_table.columns.map(() => "") });
@@ -697,69 +698,78 @@ export default function PosterTab({
    * blank and there is nothing yet on the poster to click. These write into
    * the exact same fields the WYSIWYG editor does, just from a normal form.
    */
-  function quickFillPrice(adultText: string, childText: string) {
-    setTrip((t) => {
-      if (!t) return t;
-      const clone = structuredClone(t);
-      clone.price_table ||= { columns: ["Том хүн", "Хүүхэд"], rows: [], note: "" };
-      if (!clone.price_table.columns?.length) clone.price_table.columns = ["Том хүн", "Хүүхэд"];
-      const columns = clone.price_table.columns;
-      let adultIdx = columns.findIndex((c) => /том|adult/i.test(c));
-      let childIdx = columns.findIndex((c) => /хүүх|child/i.test(c) && !/том|adult/i.test(c));
-      if (adultIdx < 0) { columns.push("Том хүн"); adultIdx = columns.length - 1; }
-      if (childIdx < 0) { columns.push("Хүүхэд"); childIdx = columns.length - 1; }
-      clone.price_table.rows ||= [];
-      if (clone.price_table.rows.length === 0) {
-        clone.price_table.rows.push({ dates: "", cells: columns.map(() => "") });
-      }
-      const row = clone.price_table.rows[0];
+  // Each quick-fill writes the value AND saves right away (poster + chatbot
+  // trip + website), so "Тавих" is the whole job: the gap box re-reads the
+  // saved trip and drops the field the moment it is filled.
+  async function quickFillPrice(adultText: string, childText: string, infantText: string) {
+    if (!trip) return;
+    const clone = structuredClone(trip);
+    clone.price_table ||= { columns: ["Том хүн", "Хүүхэд", "Нярай"], rows: [], note: "" };
+    if (!clone.price_table.columns?.length) clone.price_table.columns = ["Том хүн", "Хүүхэд", "Нярай"];
+    const columns = clone.price_table.columns;
+    const isAdult = (c: string) => /том|adult/i.test(c);
+    const isInfant = (c: string) => !isAdult(c) && /нярай|infant|сар/i.test(c);
+    let adultIdx = columns.findIndex(isAdult);
+    let infantIdx = columns.findIndex(isInfant);
+    let childIdx = columns.findIndex((c) => /хүүх|child/i.test(c) && !isAdult(c) && !isInfant(c));
+    if (adultIdx < 0) { columns.push("Том хүн"); adultIdx = columns.length - 1; }
+    if (childIdx < 0) { columns.push("Хүүхэд"); childIdx = columns.length - 1; }
+    if (infantIdx < 0) { columns.push("Нярай"); infantIdx = columns.length - 1; }
+    clone.price_table.rows ||= [];
+    if (clone.price_table.rows.length === 0) {
+      clone.price_table.rows.push({ dates: "", cells: columns.map(() => "") });
+    }
+    for (const row of clone.price_table.rows) {
       row.cells ||= [];
       while (row.cells.length < columns.length) row.cells.push("");
-      if (adultText.trim()) row.cells[adultIdx] = `${adultText.trim()}₮`;
-      if (childText.trim()) row.cells[childIdx] = `${childText.trim()}₮`;
-      return normalizeTripData(clone);
-    });
+    }
+    const row = clone.price_table.rows[0];
+    if (adultText.trim()) row.cells[adultIdx] = `${adultText.trim()}₮`;
+    if (childText.trim()) row.cells[childIdx] = `${childText.trim()}₮`;
+    if (infantText.trim()) row.cells[infantIdx] = `${infantText.trim()}₮`;
+    const next = normalizeTripData(clone) as PosterTrip;
+    setTrip(next);
+    await persistTrip(next);
   }
 
-  function quickAddDeparture(dateText: string) {
-    if (!dateText.trim()) return;
-    setTrip((t) => {
-      if (!t) return t;
-      const clone = structuredClone(t);
-      clone.departures ||= [];
-      clone.departures.push({ date: dateText.trim() });
-      return normalizeTripData(clone);
-    });
+  async function quickAddDeparture(dateText: string) {
+    if (!dateText.trim() || !trip) return;
+    const clone = structuredClone(trip);
+    clone.departures ||= [];
+    clone.departures.push({ date: dateText.trim() });
+    const next = normalizeTripData(clone) as PosterTrip;
+    setTrip(next);
+    await persistTrip(next);
   }
 
   async function quickAddCoverPhoto(file: File | null) {
-    if (!file) return;
+    if (!file || !trip) return;
     setBusy("Зураг нэмж байна…");
+    let next: PosterTrip | null = null;
     try {
       const dataUrl = await resizeImage(file, 1400);
-      setTrip((t) => {
-        if (!t) return t;
-        const clone = structuredClone(t);
-        if (!clone.days?.length) {
-          clone.days = [{ ...newDayObj(), day: 1 }];
-        }
-        clone.days[0].photo = dataUrl;
-        if (!clone.days[0].photo_caption) clone.days[0].photo_caption = clone.days[0].summary || clone.days[0].route || "";
-        clone.hero_image ||= dataUrl;
-        return normalizeTripData(clone);
-      });
+      const clone = structuredClone(trip);
+      if (!clone.days?.length) {
+        clone.days = [{ ...newDayObj(), day: 1 }];
+      }
+      clone.days[0].photo = dataUrl;
+      if (!clone.days[0].photo_caption) clone.days[0].photo_caption = clone.days[0].summary || clone.days[0].route || "";
+      clone.hero_image ||= dataUrl;
+      next = normalizeTripData(clone) as PosterTrip;
+      setTrip(next);
     } catch (e) {
       setError(String((e as { message?: string })?.message || e));
     } finally {
       setBusy("");
     }
+    if (next) await persistTrip(next);
   }
 
   const addPriceRow: PosterAddPriceRowFn = () =>
     setTrip((t) => {
       if (!t) return t;
       const clone = structuredClone(t);
-      clone.price_table ||= { columns: ["Том хүн", "Хүүхэд"], rows: [], note: "" };
+      clone.price_table ||= { columns: ["Том хүн", "Хүүхэд", "Нярай"], rows: [], note: "" };
       const cols = clone.price_table.columns?.length || 2;
       clone.price_table.rows ||= [];
       clone.price_table.rows.push({ dates: "Шинэ огноо", cells: Array.from({ length: cols }, () => "") });
@@ -1950,6 +1960,13 @@ export default function PosterTab({
   }
 
   async function save() {
+    if (!trip) return;
+    await persistTrip(trip);
+  }
+
+  /** Save THIS trip value — not whatever React state happens to hold — so a
+   *  quick-fill can write a field and save it in the same click. */
+  async function persistTrip(current: PosterTrip) {
     const savingId = tripId || `poster-${crypto.randomUUID()}`;
     setTripId(savingId);
     setError("");
@@ -1957,7 +1974,7 @@ export default function PosterTab({
     setBulkReport(null);
     setBusy("Хадгалж байна…");
     try {
-      const cleanTrip = normalizeTripData(trip) as PosterTrip;
+      const cleanTrip = normalizeTripData(current) as PosterTrip;
       const matchingTitles = history.filter((item) => {
         if (item.id === tripId) return false;
         return normalizeHistoryTitle(item.title) === normalizeHistoryTitle(cleanTrip.title);
@@ -2161,40 +2178,58 @@ export default function PosterTab({
                           const gapKeys = new Set(currentHistoryItem.missing_gaps.map((g) => g.key));
                           const needsAdult = gapKeys.has("adult_price");
                           const needsChild = gapKeys.has("child_price");
+                          const needsInfant = gapKeys.has("infant_price");
                           const needsDate = gapKeys.has("departure_dates");
                           const needsPhoto = gapKeys.has("photo_urls");
-                          if (!needsAdult && !needsChild && !needsDate && !needsPhoto) return null;
+                          if (!needsAdult && !needsChild && !needsInfant && !needsDate && !needsPhoto) return null;
+                          const needsAnyPrice = needsAdult || needsChild || needsInfant;
                           return (
                             <div className="mt-3 grid gap-2.5 border-t border-danger/20 pt-3 sm:grid-cols-2">
-                              {(needsAdult || needsChild) && (
+                              {needsAnyPrice && (
                                 <div className="rounded-lg border border-danger/20 bg-surface p-2.5 sm:col-span-2">
                                   <p className="mb-1.5 text-xs font-semibold text-ink">Үнэ энд шууд бичих</p>
                                   <div className="flex flex-wrap items-end gap-2">
-                                    <div className="min-w-28 flex-1">
-                                      <Input
-                                        label="Том хүний үнэ"
-                                        inputMode="numeric"
-                                        placeholder="ж: 1500000"
-                                        value={quickAdultPrice}
-                                        onChange={(e) => setQuickAdultPrice(e.target.value.replace(/[^\d]/g, ""))}
-                                      />
-                                    </div>
-                                    <div className="min-w-28 flex-1">
-                                      <Input
-                                        label="Хүүхдийн үнэ"
-                                        inputMode="numeric"
-                                        placeholder="ж: 1200000"
-                                        value={quickChildPrice}
-                                        onChange={(e) => setQuickChildPrice(e.target.value.replace(/[^\d]/g, ""))}
-                                      />
-                                    </div>
+                                    {needsAdult && (
+                                      <div className="min-w-28 flex-1">
+                                        <Input
+                                          label="Том хүний үнэ"
+                                          inputMode="numeric"
+                                          placeholder="ж: 1500000"
+                                          value={quickAdultPrice}
+                                          onChange={(e) => setQuickAdultPrice(e.target.value.replace(/[^\d]/g, ""))}
+                                        />
+                                      </div>
+                                    )}
+                                    {needsChild && (
+                                      <div className="min-w-28 flex-1">
+                                        <Input
+                                          label="Хүүхдийн үнэ"
+                                          inputMode="numeric"
+                                          placeholder="ж: 1200000"
+                                          value={quickChildPrice}
+                                          onChange={(e) => setQuickChildPrice(e.target.value.replace(/[^\d]/g, ""))}
+                                        />
+                                      </div>
+                                    )}
+                                    {needsInfant && (
+                                      <div className="min-w-28 flex-1">
+                                        <Input
+                                          label="Нярайн үнэ"
+                                          inputMode="numeric"
+                                          placeholder="ж: 300000"
+                                          value={quickInfantPrice}
+                                          onChange={(e) => setQuickInfantPrice(e.target.value.replace(/[^\d]/g, ""))}
+                                        />
+                                      </div>
+                                    )}
                                     <Button
                                       size="sm"
-                                      disabled={!quickAdultPrice.trim() && !quickChildPrice.trim()}
+                                      disabled={!!busy || (!quickAdultPrice.trim() && !quickChildPrice.trim() && !quickInfantPrice.trim())}
                                       onClick={() => {
-                                        quickFillPrice(quickAdultPrice, quickChildPrice);
+                                        void quickFillPrice(quickAdultPrice, quickChildPrice, quickInfantPrice);
                                         setQuickAdultPrice("");
                                         setQuickChildPrice("");
+                                        setQuickInfantPrice("");
                                       }}
                                     >
                                       Тавих
@@ -2214,9 +2249,9 @@ export default function PosterTab({
                                     </div>
                                     <Button
                                       size="sm"
-                                      disabled={!quickDepartureDate.trim()}
+                                      disabled={!!busy || !quickDepartureDate.trim()}
                                       onClick={() => {
-                                        quickAddDeparture(quickDepartureDate);
+                                        void quickAddDeparture(quickDepartureDate);
                                         setQuickDepartureDate("");
                                       }}
                                     >
@@ -2244,7 +2279,7 @@ export default function PosterTab({
                                 </div>
                               )}
                               <p className="text-[11px] text-ink-subtle sm:col-span-2">
-                                Бичсэний дараа доод талын &ldquo;Хадгалах + аялал sync&rdquo; товч дарж хадгална уу.
+                                Тавих / Нэмэх / Зураг сонгох дармагц шууд хадгалагдаж, chatbot аялал болон вэбсайт хамт шинэчлэгдэнэ.
                               </p>
                             </div>
                           );

@@ -12,6 +12,7 @@ const complete = {
   duration_text: "5 өдөр 4 шөнө",
   adult_price: 4290000,
   child_price: 4090000,
+  infant_price: 590000,
   departure_dates: ["6 сарын 17-21"],
   photo_urls: ["https://example.com/1.jpg"],
   extra: {
@@ -31,6 +32,7 @@ test("the commercially required fields block a save when empty", () => {
         ...complete,
         adult_price: null,
         child_price: null,
+        infant_price: null,
         departure_dates: [],
         photo_urls: [],
       }),
@@ -39,9 +41,15 @@ test("the commercially required fields block a save when empty", () => {
 
   assert.deepEqual(
     gaps.map((gap) => gap.key).sort(),
-    ["adult_price", "child_price", "departure_dates", "photo_urls"],
+    ["adult_price", "child_price", "departure_dates", "infant_price", "photo_urls"],
   );
-  assert.equal(formatGapLabels(gaps), "Том хүний үнэ, Хүүхдийн үнэ, Гарах өдөр, Зураг");
+  assert.equal(formatGapLabels(gaps), "Том хүний үнэ, Хүүхдийн үнэ, Нярайн үнэ, Гарах өдөр, Зураг");
+});
+
+test("the infant fare is its own required tier, not something child_price covers", () => {
+  const gaps = blockingGaps(findTripGaps(tripCompletenessInput({ ...complete, infant_price: null })));
+  assert.deepEqual(gaps.map((gap) => gap.key), ["infant_price"]);
+  assert.equal(gaps[0].label, "Нярайн үнэ");
 });
 
 test("included and excluded lists are never required — staff answer that manually", () => {

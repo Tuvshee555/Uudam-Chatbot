@@ -28,6 +28,7 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
     duration_text: "5 өдөр / 4 шөнө",
     adult_price: 1000000,
     child_price: 900000,
+    infant_price: null,
     currency: "MNT",
     departure_dates: ["8 сарын 1"],
     seats_total: null,

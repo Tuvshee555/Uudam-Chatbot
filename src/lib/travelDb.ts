@@ -144,6 +144,9 @@ export function cleanFields(input: TripMutationFields): TripMutationFields {
   if (input.child_price === null || typeof input.child_price === "number") {
     cleaned.child_price = input.child_price;
   }
+  if (input.infant_price === null || typeof input.infant_price === "number") {
+    cleaned.infant_price = input.infant_price;
+  }
   if (input.seats_total === null || typeof input.seats_total === "number") {
     cleaned.seats_total = input.seats_total;
   }
@@ -653,6 +656,7 @@ export function mapTripRow(row: Record<string, unknown>): TravelTrip {
     duration_text: normalizeStoredText(row.duration_text),
     adult_price: parseInteger(row.adult_price),
     child_price: parseInteger(row.child_price),
+    infant_price: parseInteger(row.infant_price),
     currency: normalizeStoredText(row.currency) || "MNT",
     departure_dates: Array.isArray(row.departure_dates)
       ? row.departure_dates.map((value) => normalizeStoredText(value)).filter(Boolean)
@@ -796,6 +800,7 @@ export async function listTrips(options?: {
         duration_text,
         adult_price,
         child_price,
+        infant_price,
         currency,
         departure_dates,
         seats_total,
@@ -849,6 +854,7 @@ export async function getTripById(id: string): Promise<TravelTrip | null> {
         duration_text,
         adult_price,
         child_price,
+        infant_price,
         currency,
         departure_dates,
         seats_total,
@@ -1047,6 +1053,8 @@ export async function upsertTrip(input: {
       typeof cleaned.adult_price === "number" ? Math.trunc(cleaned.adult_price) : null,
     child_price:
       typeof cleaned.child_price === "number" ? Math.trunc(cleaned.child_price) : null,
+    infant_price:
+      typeof cleaned.infant_price === "number" ? Math.trunc(cleaned.infant_price) : null,
     currency: cleaned.currency || "MNT",
     departure_dates: departureDatesForWrite,
     seats_total:
@@ -1084,6 +1092,7 @@ export async function upsertTrip(input: {
         duration_text,
         adult_price,
         child_price,
+        infant_price,
         currency,
         departure_dates,
         seats_total,
@@ -1098,7 +1107,7 @@ export async function upsertTrip(input: {
         updated_at
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18::jsonb, NOW()
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::text[], $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, NOW()
       )
       ON CONFLICT (id)
       DO UPDATE SET
@@ -1108,6 +1117,7 @@ export async function upsertTrip(input: {
         duration_text = EXCLUDED.duration_text,
         adult_price = EXCLUDED.adult_price,
         child_price = EXCLUDED.child_price,
+        infant_price = EXCLUDED.infant_price,
         currency = EXCLUDED.currency,
         departure_dates = EXCLUDED.departure_dates,
         seats_total = EXCLUDED.seats_total,
@@ -1130,6 +1140,7 @@ export async function upsertTrip(input: {
       row.duration_text,
       row.adult_price,
       row.child_price,
+      row.infant_price,
       row.currency,
       row.departure_dates,
       row.seats_total,
@@ -1179,6 +1190,7 @@ export async function patchTrip(id: string, fields: TripMutationFields, syncPost
     duration_text: "duration_text",
     adult_price: "adult_price",
     child_price: "child_price",
+    infant_price: "infant_price",
     currency: "currency",
     departure_dates: "departure_dates",
     seats_total: "seats_total",
@@ -1772,8 +1784,24 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     if (typeof trip.child_price === "number") {
       details.push(`Child price: ${trip.child_price}`);
     }
+    if (typeof trip.infant_price === "number") {
+      details.push(`Infant price: ${trip.infant_price}`);
+    }
     // Emit structured price groups so the bot can answer per-date pricing questions
     const extra = (trip.extra || {}) as Record<string, unknown>;
+    // Who counts as infant/child/adult on THIS trip — bands differ per trip.
+    {
+      const bands = (extra.age_rules && typeof extra.age_rules === "object"
+        ? extra.age_rules
+        : {}) as Record<string, unknown>;
+      const band = (key: string) => (typeof bands[key] === "string" ? (bands[key] as string).trim() : "");
+      const parts = [
+        band("infant") ? `infant ${band("infant")}` : "",
+        band("child") ? `child ${band("child")}` : "",
+        band("adult") ? `adult ${band("adult")}` : "",
+      ].filter(Boolean);
+      if (parts.length > 0) details.push(`Age bands: ${parts.join(" / ")}`);
+    }
     const priceGroups = (Array.isArray(extra.departure_date_groups) ? extra.departure_date_groups : [])
       .filter((g) => groupIsCurrent((g as Record<string, unknown>)?.dates));
     if (priceGroups.length > 0) {

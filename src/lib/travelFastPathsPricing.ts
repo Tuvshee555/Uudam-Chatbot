@@ -343,11 +343,39 @@ type AgeTier = {
   documentedFree: boolean;
 };
 
+/**
+ * The trip's own infant/child/adult age bands (extra.age_rules), exactly as the
+ * admin saved them — empty when unset, so nothing invented is ever quoted.
+ */
+export function tripAgeBands(trip: TravelTrip): { infant: string; child: string; adult: string } {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const raw = (extra.age_rules && typeof extra.age_rules === "object"
+    ? extra.age_rules
+    : {}) as Record<string, unknown>;
+  const band = (key: string) => (typeof raw[key] === "string" ? (raw[key] as string).trim() : "");
+  return { infant: band("infant"), child: band("child"), adult: band("adult") };
+}
+
 function readAgeTiers(trip: TravelTrip): AgeTier[] {
   const extra = (trip.extra || {}) as Record<string, unknown>;
   const rules = [extra.child_rules, extra.child_price_rules].flatMap((value) =>
     Array.isArray(value) ? (value as Array<Record<string, unknown>>) : [],
   );
+  // No hand-written child rules: the trip's flat fares plus its saved age
+  // bands ARE the tiers ("Нярай 0-23 сар 300,000₮ / Хүүхэд 2-11 нас …"), so a
+  // "5 настай хүүхэд хэд вэ?" answers from the band that covers age 5, and a
+  // 7-year-old on a trip whose child band ends at 6 is priced as an adult.
+  if (rules.length === 0) {
+    const bands = tripAgeBands(trip);
+    const synthesized: Array<Record<string, unknown>> = [];
+    if (bands.infant && typeof trip.infant_price === "number") {
+      synthesized.push({ label: "Нярай", age_range: bands.infant, price: trip.infant_price });
+    }
+    if (bands.child && typeof trip.child_price === "number") {
+      synthesized.push({ label: "Хүүхэд", age_range: bands.child, price: trip.child_price });
+    }
+    rules.push(...synthesized);
+  }
   return rules.map((rule) => {
     const note = normText(typeof rule.note === "string" ? rule.note : "");
     const price = typeof rule.price === "number" ? rule.price : null;
@@ -581,10 +609,12 @@ export function buildPassengerTypePriceReply(
     }
   }
 
-  const price = target === "infant" ? null : target === "child" ? trip.child_price : trip.adult_price;
+  const price = target === "infant" ? trip.infant_price : target === "child" ? trip.child_price : trip.adult_price;
   const flatPriceText = formatPassengerMoney(price, currency);
   if (flatPriceText) {
-    return `✈️ ${trip.route_name}\n💰 ${label} үнэ: ${flatPriceText}`;
+    const band = tripAgeBands(trip)[target];
+    const bandText = band ? ` /${band}/` : "";
+    return `✈️ ${trip.route_name}\n💰 ${label}${bandText} үнэ: ${flatPriceText}`;
   }
 
   // The catalog claims a fare for this passenger type but every value is 0 —
@@ -1263,11 +1293,16 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
     return lines.join("\n");
   }
 
+  const bands = tripAgeBands(trip);
   const flatLines = formatPassengerPriceLines({
     adult: trip.adult_price,
     child: trip.child_price,
+    infant: trip.infant_price,
+    childAge: bands.child,
+    infantAge: bands.infant,
     currency,
     childFree: isDocumentedFreeFare(trip, "child"),
+    infantFree: isDocumentedFreeFare(trip, "infant"),
   });
   // "Infants ride free" is a trip-level policy from child_rules, not a fare
   // attached to any one departure — so it must survive the fall-through that
@@ -1275,9 +1310,9 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
   // trip awaiting new dates silently stopped mentioning free infants in its
   // main price answer, while the infant-specific question still said Үнэгүй:
   // two different answers to the same question depending on how it was asked.
-  // (There is no trip.infant_price column, so this cannot come from the flat
-  // fields the way the child fare does.)
-  if (isDocumentedFreeFare(trip, "infant")) flatLines.push("• Нярай: Үнэгүй");
+  if (isDocumentedFreeFare(trip, "infant") && !flatLines.some((line) => line.startsWith("• Нярай"))) {
+    flatLines.push("• Нярай: Үнэгүй");
+  }
   if (!flatLines.length) return "💰 Үнийн мэдээлэл одоогоор тодорхойгүй байна.";
   return [...sections, "", ...flatLines].join("\n");
 }

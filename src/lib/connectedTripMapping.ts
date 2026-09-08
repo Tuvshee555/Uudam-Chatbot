@@ -73,11 +73,31 @@ export function posterPhotos(data: unknown): string[] {
     .filter((v): v is string => typeof v === "string" && /^(https:\/\/|data:image\/)/.test(v)))];
 }
 
-export function websiteExtraDetails(extra: Record<string, unknown>) {
+export function websiteExtraDetails(
+  extra: Record<string, unknown>,
+  fares?: { adult: number | null; child: number | null; infant: number | null; currency: string },
+) {
   const money = (amount: unknown, currency: unknown) => typeof amount === "number" && Number.isFinite(amount)
     ? `${amount.toLocaleString("en-US")}${!currency || currency === "MNT" ? "₮" : ` ${currency}`}` : "";
   const join = (items: unknown[]) => items.filter(v => typeof v === "string" && v.trim()).join(" - ");
+  // The trip's own passenger tiers with their age bands come first, so the
+  // website says exactly who is an infant/child/adult on THIS trip.
+  const bands = record(extra.age_rules);
+  const band = (key: string) => (typeof bands[key] === "string" ? String(bands[key]).trim() : "");
+  const tierLine = (label: string, ageBand: string, amount: number | null) => {
+    if (!ageBand && amount == null) return "";
+    const fare = amount != null && amount > 0 ? money(amount, fares?.currency) : "";
+    return join([`${label}${ageBand ? ` (${ageBand})` : ""}`, fare]);
+  };
+  const tierLines = fares
+    ? [
+        tierLine("Том хүн", band("adult"), fares.adult),
+        tierLine("Хүүхэд", band("child"), fares.child),
+        tierLine("Нярай", band("infant"), fares.infant),
+      ].filter(Boolean)
+    : [];
   const childNotes = [
+    ...tierLines,
     ...records(extra.child_rules).map(r => join([r.label,r.age_range,money(r.price,r.currency),r.note])),
     ...records(extra.price_groups).flatMap(group => {
       const dates = strings(group.display_dates).length ? strings(group.display_dates) : strings(group.dates);

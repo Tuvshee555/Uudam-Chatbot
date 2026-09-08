@@ -37,6 +37,7 @@ const KNOWN_EXTRA_KEYS = new Set([
   "booking_terms",
   "departure_dates_resolved",
   "itinerary_days",
+  "age_rules",
 ]);
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -366,9 +367,24 @@ export function normalizeExtra(
     booking_terms: normalizeBookingTerms(raw.booking_terms),
     departure_dates_resolved: normalizeResolvedDepartureDates(raw.departure_dates_resolved),
     itinerary_days: normalizeItineraryDays(raw.itinerary_days),
+    age_rules: normalizeAgeRules(raw.age_rules),
   };
 
   return { extra, warnings };
+}
+
+/**
+ * Passenger age bands for this trip ("0-23 сар" / "2-11 нас" / "12+ нас").
+ * Empty strings mean "not set" — see src/lib/ageRules.ts for the defaults the
+ * admin form pre-fills and the rule that nothing unset is ever quoted.
+ */
+function normalizeAgeRules(raw: unknown): Record<string, string> {
+  const src = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  return {
+    infant: asString(src.infant).trim(),
+    child: asString(src.child).trim(),
+    adult: asString(src.adult).trim(),
+  };
 }
 
 /** Normalize supplied fields only, without resetting unrelated stored facts. */
@@ -397,6 +413,7 @@ export function diffTripFields(
   existing: {
     adult_price: number | null;
     child_price: number | null;
+    infant_price?: number | null;
     departure_dates: string[];
     status: string;
     seats_total: number | null;
@@ -422,6 +439,9 @@ export function diffTripFields(
   }
   if ("child_price" in incoming) {
     push("child_price", "Хүүхэд үнэ", fmt(existing.child_price), fmt(asNumberOrNull(incoming.child_price)));
+  }
+  if ("infant_price" in incoming) {
+    push("infant_price", "Нярай үнэ", fmt(existing.infant_price ?? null), fmt(asNumberOrNull(incoming.infant_price)));
   }
   if ("status" in incoming) {
     const statusLabel: Record<string, string> = {

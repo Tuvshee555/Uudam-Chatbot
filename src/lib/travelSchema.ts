@@ -214,6 +214,12 @@ export async function ensureTravelSchema() {
         ALTER TABLE travel_trip_entries
           ADD COLUMN IF NOT EXISTS hotel TEXT NOT NULL DEFAULT '';
       `);
+      // Migration: infant fare is a first-class tier next to adult/child, not
+      // something buried inside a per-date price group (idempotent)
+      await client.query(`
+        ALTER TABLE travel_trip_entries
+          ADD COLUMN IF NOT EXISTS infant_price INTEGER NULL;
+      `);
       // Inbound customer messages — powers "most asked questions" analytics.
       await client.query(`
         CREATE TABLE IF NOT EXISTS travel_messages (

@@ -30,6 +30,7 @@ function makeTrip(partial: Partial<TravelTrip> & Pick<TravelTrip, "id" | "operat
     created_at: "2024-01-01T00:00:00Z",
     updated_at: "2024-01-01T00:00:00Z",
     ...partial,
+    infant_price: partial.infant_price ?? null,
   };
 }
 

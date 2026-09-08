@@ -93,6 +93,7 @@ function safeDurationText(durationText: string | null | undefined): string {
 }
 
 function hasInfantPrice(trip: TravelTrip): boolean {
+  if (typeof trip.infant_price === "number" && trip.infant_price > 0) return true;
   if (
     getStructuredPriceGroups(trip).some((group) => typeof group.infant_price === "number") ||
     getPriceGroups(trip).some((group) => typeof group.infant_price === "number")
@@ -112,6 +113,7 @@ function hasInfantPrice(trip: TravelTrip): boolean {
 function firstPassengerPrice(trip: TravelTrip, key: "adult_price" | "child_price" | "infant_price"): number | null {
   if (key === "adult_price" && typeof trip.adult_price === "number") return trip.adult_price;
   if (key === "child_price" && typeof trip.child_price === "number") return trip.child_price;
+  if (key === "infant_price" && typeof trip.infant_price === "number") return trip.infant_price;
   for (const group of getStructuredPriceGroups(trip)) {
     const value = group[key];
     if (typeof value === "number") return value;

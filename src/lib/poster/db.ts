@@ -92,6 +92,7 @@ export async function listPosterTrips(): Promise<PosterTripListRow[]> {
     linked_trip_duration_text: string | null;
     linked_trip_adult_price: number | null;
     linked_trip_child_price: number | null;
+    linked_trip_infant_price: number | null;
     linked_trip_departure_count: number;
     linked_trip_has_pdf: boolean;
     linked_trip_needs_review: boolean;
@@ -107,6 +108,7 @@ export async function listPosterTrips(): Promise<PosterTripListRow[]> {
             t.duration_text AS linked_trip_duration_text,
             t.adult_price AS linked_trip_adult_price,
             t.child_price AS linked_trip_child_price,
+            t.infant_price AS linked_trip_infant_price,
             COALESCE(array_length(t.departure_dates, 1), 0) AS linked_trip_departure_count,
             (
               COALESCE(t.extra->>'brochure_pdf_url', '') <> ''
@@ -130,6 +132,7 @@ export async function listPosterTrips(): Promise<PosterTripListRow[]> {
         duration_text: row.linked_trip_duration_text,
         adult_price: row.linked_trip_adult_price,
         child_price: row.linked_trip_child_price,
+        infant_price: row.linked_trip_infant_price,
         departure_dates: Array.from({ length: row.linked_trip_departure_count }, () => "x"),
         photo_urls: [],
         poster_photo_count: Number(row.photo_count) || 0,

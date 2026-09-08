@@ -375,6 +375,7 @@ export function TripEditModal({
     duration_text: tripDraft.duration_text,
     adult_price: parseMoneyDraft(tripDraft.adult_price),
     child_price: parseMoneyDraft(tripDraft.child_price),
+    infant_price: parseMoneyDraft(tripDraft.infant_price),
     departure_dates: splitDraftList(tripDraft.departure_dates),
     photo_urls: tripPhotoUrls,
     itinerary_days: tripItineraryDays,
@@ -481,6 +482,38 @@ export function TripEditModal({
           onChange={(value) => setTripDraft((p) => ({ ...p, child_price: value }))}
           missing={gapKeys.has("child_price")}
         />
+        <MoneyInput
+          label="Нярайн үнэ"
+          value={tripDraft.infant_price}
+          onChange={(value) => setTripDraft((p) => ({ ...p, infant_price: value }))}
+          missing={gapKeys.has("infant_price")}
+        />
+        <div className="rounded-lg border border-line bg-surface-sunken p-3 sm:col-span-2">
+          <p className="text-sm font-semibold text-ink">Насны ангилал</p>
+          <p className="mt-0.5 text-xs text-ink-muted">
+            Энэ аялалд хэн нярай, хэн хүүхэд, хэн том хүн болохыг энд бичнэ — аялал бүр өөр байж болно. Бот болон вэбсайт яг энэ ангиллаар үнэ хэлнэ.
+          </p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-3">
+            <Input
+              label="Нярай"
+              placeholder="ж: 0-23 сар"
+              value={tripDraft.age_infant || ""}
+              onChange={(e) => setTripDraft((p) => ({ ...p, age_infant: e.target.value }))}
+            />
+            <Input
+              label="Хүүхэд"
+              placeholder="ж: 2-11 нас"
+              value={tripDraft.age_child || ""}
+              onChange={(e) => setTripDraft((p) => ({ ...p, age_child: e.target.value }))}
+            />
+            <Input
+              label="Том хүн"
+              placeholder="ж: 12+ нас"
+              value={tripDraft.age_adult || ""}
+              onChange={(e) => setTripDraft((p) => ({ ...p, age_adult: e.target.value }))}
+            />
+          </div>
+        </div>
         <Select
           label="Төлөв"
           value={tripDraft.status}

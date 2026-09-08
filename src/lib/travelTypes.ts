@@ -10,6 +10,7 @@ export type TravelTrip = {
   duration_text: string;
   adult_price: number | null;
   child_price: number | null;
+  infant_price: number | null;
   currency: string;
   departure_dates: string[];
   seats_total: number | null;
@@ -75,6 +76,7 @@ export type TripMutationFields = Partial<
     | "duration_text"
     | "adult_price"
     | "child_price"
+    | "infant_price"
     | "currency"
     | "departure_dates"
     | "seats_total"

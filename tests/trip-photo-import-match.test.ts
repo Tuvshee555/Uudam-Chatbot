@@ -33,6 +33,7 @@ function makeTrip(
     duration_text: details.duration || "",
     adult_price: null,
     child_price: null,
+    infant_price: null,
     currency: "MNT",
     departure_dates: details.dates || [],
     seats_total: null,

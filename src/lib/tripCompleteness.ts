@@ -24,6 +24,7 @@ export type TripCompletenessInput = {
   duration_text?: string | null;
   adult_price?: number | null;
   child_price?: number | null;
+  infant_price?: number | null;
   departure_dates?: readonly string[] | null;
   photo_urls?: readonly string[] | null;
   itinerary_days?: readonly unknown[] | null;
@@ -40,6 +41,7 @@ type TripLike = {
   duration_text?: string | null;
   adult_price?: number | null;
   child_price?: number | null;
+  infant_price?: number | null;
   departure_dates?: readonly string[] | null;
   photo_urls?: readonly string[] | null;
   extra?: Record<string, unknown> | null;
@@ -75,6 +77,10 @@ const RULES: Array<{
     ok: (t) => money(t.adult_price) },
   { key: "child_price", label: "Хүүхдийн үнэ", where: "Үндсэн", severity: "blocking",
     ok: (t) => money(t.child_price) },
+  // Infants have their own fare on every trip — customers ask, and 0/blank
+  // would read as "babies fly free", a promise the agency never made.
+  { key: "infant_price", label: "Нярайн үнэ", where: "Үндсэн", severity: "blocking",
+    ok: (t) => money(t.infant_price) },
   { key: "departure_dates", label: "Гарах өдөр", where: "Үнэ ба гаралт", severity: "blocking",
     ok: (t) => filled(t.departure_dates) },
   { key: "photo_urls", label: "Зураг", where: "Үндсэн", severity: "blocking",
@@ -111,6 +117,7 @@ export function tripCompletenessInput(
     duration_text: trip.duration_text,
     adult_price: trip.adult_price,
     child_price: trip.child_price,
+    infant_price: trip.infant_price,
     departure_dates: trip.departure_dates,
     photo_urls: trip.photo_urls,
     itinerary_days: list(extra.itinerary_days),

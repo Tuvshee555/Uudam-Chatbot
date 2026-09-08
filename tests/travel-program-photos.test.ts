@@ -12,6 +12,7 @@ function trip(overrides: Partial<TravelTrip>): TravelTrip {
     duration_text: "9 days / 8 nights",
     adult_price: 1270000,
     child_price: 1270000,
+    infant_price: null,
     currency: "MNT",
     departure_dates: ["2026-08-02", "2026-08-09"],
     seats_total: null,

@@ -21,6 +21,7 @@ function trip(id: string, status: TravelTrip["status"]): TravelTrip {
     duration_text: "5 өдөр",
     adult_price: 1_000_000,
     child_price: 900_000,
+    infant_price: null,
     currency: "MNT",
     departure_dates: [],
     seats_total: null,

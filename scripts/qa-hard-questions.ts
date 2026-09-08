@@ -69,6 +69,7 @@ function normalizeTrip(rawTrip: RawTrip): TravelTrip {
     duration_text: typeof rawTrip.duration_text === "string" ? rawTrip.duration_text : "",
     adult_price: typeof rawTrip.adult_price === "number" ? rawTrip.adult_price : null,
     child_price: typeof rawTrip.child_price === "number" ? rawTrip.child_price : null,
+    infant_price: typeof rawTrip.infant_price === "number" ? rawTrip.infant_price : null,
     currency: typeof rawTrip.currency === "string" ? rawTrip.currency : "MNT",
     departure_dates: strings(rawTrip.departure_dates),
     seats_total: typeof rawTrip.seats_total === "number" ? rawTrip.seats_total : null,

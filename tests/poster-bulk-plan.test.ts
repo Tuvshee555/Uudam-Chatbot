@@ -12,6 +12,7 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
     duration_text: fields.duration_text || "",
     adult_price: fields.adult_price ?? null,
     child_price: fields.child_price ?? null,
+    infant_price: fields.infant_price ?? null,
     currency: fields.currency || "MNT",
     departure_dates: fields.departure_dates || [],
     seats_total: fields.seats_total ?? null,

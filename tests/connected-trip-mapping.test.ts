@@ -5,7 +5,7 @@ import type { TravelTrip } from "../src/lib/travelTypes";
 import { normalizeExtraPatch } from "../src/lib/tripExtraSchema";
 
 const trip: TravelTrip = { id:"fixture",route_name:"Trip",operator_name:"Uudam",category:"",duration_text:"3 өдөр 2 шөнө",
-  adult_price:1230000,child_price:990000,currency:"MNT",departure_dates:["2026-09-17"],seats_total:null,seats_left:null,
+  adult_price:1230000,child_price:990000,infant_price:null,currency:"MNT",departure_dates:["2026-09-17"],seats_total:null,seats_left:null,
   has_food:null,status:"draft",notes:"",hotel:"",source_description:"",photo_urls:[],extra:{},created_at:"",updated_at:"" };
 test("renaming preserves poster photos, layout and departure-specific price table", () => {
   const prior={ title:"Trip",style:{photoScale:0.5},days:[{day:1,photo:"https://example.com/photo.jpg"}],price_table:{rows:[{cells:["100"]},{cells:["200"]}]} };

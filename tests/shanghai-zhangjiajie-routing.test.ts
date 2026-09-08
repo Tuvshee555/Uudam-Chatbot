@@ -12,6 +12,7 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
     duration_text: "8 \u04e9\u0434\u04e9\u0440 / 7 \u0448\u04e9\u043d\u04e9",
     adult_price: 1000,
     child_price: 800,
+    infant_price: null,
     currency: "MNT",
     departure_dates: [],
     seats_total: null,

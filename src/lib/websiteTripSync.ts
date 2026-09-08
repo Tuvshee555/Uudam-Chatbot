@@ -71,12 +71,16 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   const data: Record<string, unknown> = {
     title: source.route_name, description: source.notes || String(poster.subtitle || source.route_name),
     durationDays: d.days, durationNights: d.nights, price: source.adult_price ?? 0,
-    childPrice: source.child_price, currency: source.currency || "MNT", hotel: source.hotel || null,
+    childPrice: source.child_price, infantPrice: source.infant_price ?? null,
+    currency: source.currency || "MNT", hotel: source.hotel || null,
     foodIncluded: source.has_food, image,
     extraImages: photos.length || hadSourcePhotos ? photos.filter(p => p !== image) : prior?.extraImages || [],
     included: strings(source.extra.included_items), excluded: strings(source.extra.excluded_items),
     importantNotes: strings(source.extra.important_notes), departureRule: source.extra.departure_rule || null,
-    ...websiteExtraDetails(source.extra),
+    ...websiteExtraDetails(source.extra, {
+      adult: source.adult_price, child: source.child_price, infant: source.infant_price ?? null,
+      currency: source.currency || "MNT",
+    }),
     brochurePdfUrl: pdf, sourceMetadata: JSON.stringify(metadata),
     isPublished: (source.status === "active" || source.status === "sold_out") && source.extra.customer_visible !== false,
   };

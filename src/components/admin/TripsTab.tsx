@@ -683,8 +683,10 @@ function TripCard({
   }
   const adultPrice = formatTripMoney(trip.adult_price, trip.currency);
   const childPrice = formatTripMoney(trip.child_price, trip.currency);
+  const infantPrice = formatTripMoney(trip.infant_price, trip.currency);
   if (adultPrice) facts.push(`Том хүн: ${adultPrice}`);
   if (childPrice) facts.push(`Хүүхэд: ${childPrice}`);
+  if (infantPrice) facts.push(`Нярай: ${infantPrice}`);
   if (trip.has_food != null) {
     facts.push(`Хоол: ${trip.has_food ? "багтсан" : "багтаагүй"}`);
   }

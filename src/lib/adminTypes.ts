@@ -128,6 +128,7 @@ export type TravelTrip = {
   duration_text: string;
   adult_price: number | null;
   child_price: number | null;
+  infant_price: number | null;
   currency: string;
   departure_dates: string[];
   seats_total: number | null;

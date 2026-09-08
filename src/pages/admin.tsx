@@ -25,8 +25,9 @@ import PosterTab from "@/components/admin/poster/PosterTab";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
 import type { AIProposal, AIProposalResponse, AttachedFile, BookingTerms, ChatMessage, ClarificationAnswer, ClarificationQuestion, ChildRule, ControlState, DiscountGroup, DriveSyncDiagnostics, ExtraFee, ItineraryDay, LeadCrmStatus, LeadStats, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalMsg, ReadinessReport, RecentRow, RoomPrice, SettingsForm, TabKey, TravelBotSettings, TravelLead, TravelTrip } from "@/lib/adminTypes";
 import { emptyBookingTerms, toBookingTermsForm } from "@/lib/adminTypes";
+import { resolveAgeRules } from "@/lib/ageRules";
 import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, emptyChunkResult, fileToDataUrl, getSecretStorage, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, mergeAIProposals, settingsToForm, shortId, splitLines, uid } from "@/lib/adminPageUtils";
-const BLANK_TRIP_DRAFT: Record<string, string> = { category: "Аялал", operator_name: "UUDAM TRAVEL AGENCY", route_name: "", duration_text: "", adult_price: "", child_price: "", currency: "MNT", seats_total: "", seats_left: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
+const BLANK_TRIP_DRAFT: Record<string, string> = { category: "Аялал", operator_name: "UUDAM TRAVEL AGENCY", route_name: "", duration_text: "", adult_price: "", child_price: "", infant_price: "", age_infant: "0-23 сар", age_child: "2-11 нас", age_adult: "12+ нас", currency: "MNT", seats_total: "", seats_left: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
 const MAX_AI_SOURCE_TEXT_CHARS = 20_000;
 export default function AdminPage() {
   const toast = useToast();
@@ -1242,6 +1243,10 @@ export default function AdminPage() {
       duration_text: trip.duration_text || "",
       adult_price: trip.adult_price == null ? "" : String(trip.adult_price),
       child_price: trip.child_price == null ? "" : String(trip.child_price),
+      infant_price: trip.infant_price == null ? "" : String(trip.infant_price),
+      age_infant: resolveAgeRules(trip.extra).infant,
+      age_child: resolveAgeRules(trip.extra).child,
+      age_adult: resolveAgeRules(trip.extra).adult,
       currency: trip.currency || "MNT",
       seats_total: trip.seats_total == null ? "" : String(trip.seats_total),
       seats_left: trip.seats_left == null ? "" : String(trip.seats_left),
@@ -1382,6 +1387,7 @@ export default function AdminPage() {
       duration_text: tripDraft.duration_text || "",
       adult_price: asInt(tripDraft.adult_price || ""),
       child_price: asInt(tripDraft.child_price || ""),
+      infant_price: asInt(tripDraft.infant_price || ""),
       currency: "MNT",
       seats_total: asInt(tripDraft.seats_total || ""),
       seats_left: asInt(tripDraft.seats_left || ""),
@@ -1416,6 +1422,11 @@ export default function AdminPage() {
         review_reasons: tripReviewReasons.filter(Boolean),
         source_provenance: tripSourceProvenance,
         answer_hints: tripAnswerHints,
+        age_rules: {
+          infant: (tripDraft.age_infant || "").trim(),
+          child: (tripDraft.age_child || "").trim(),
+          adult: (tripDraft.age_adult || "").trim(),
+        },
       },
     };
     if (!fields.route_name.trim()) {
