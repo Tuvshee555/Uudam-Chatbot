@@ -1,5 +1,5 @@
 import React from "react";
-import { Button, Icons, Input, Modal, Select, Spinner, Textarea, cx } from "@/components/ui";
+import { Button, DatePicker, Icons, Input, Modal, Select, Spinner, Textarea, cx } from "@/components/ui";
 import { getPosterBrochureHref } from "@/lib/poster/pdfUrl";
 import { blockingGaps, findTripGaps, type TripGap } from "@/lib/tripCompleteness";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
@@ -103,12 +103,6 @@ function splitDepartureDraft(value: string): string[] {
 
 function joinDepartureDraft(values: string[]): string {
   return values.join(", ");
-}
-
-function formatDateInput(value: string): string {
-  const [year, month, day] = value.split("-").map((part) => Number(part));
-  if (!year || !month || !day) return "";
-  return `${String(month).padStart(2, "0")} сарын ${day}`;
 }
 
 /** Money inputs hold digit-only strings; departure dates a comma-separated line. */
@@ -226,8 +220,7 @@ function DepartureDateEditor({
   missing?: boolean;
 }) {
   const dates = splitDepartureDraft(value);
-  const addDate = (raw: string) => {
-    const formatted = formatDateInput(raw);
+  const addFormattedDate = (formatted: string) => {
     if (!formatted || dates.includes(formatted)) return;
     onChange(joinDepartureDraft([...dates, formatted]));
   };
@@ -238,17 +231,9 @@ function DepartureDateEditor({
   return (
     <div className="sm:col-span-2">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-        <label className="block sm:w-52">
-          <span className="mb-1 block text-sm font-semibold text-ink">Гарах өдөр нэмэх</span>
-          <input
-            type="date"
-            onChange={(e) => {
-              addDate(e.target.value);
-              e.target.value = "";
-            }}
-            className={inputCls}
-          />
-        </label>
+        <div className="sm:w-52">
+          <DatePicker label="Гарах өдөр нэмэх" onSelect={(formatted) => addFormattedDate(formatted)} />
+        </div>
         <label className="block min-w-0 flex-1">
           <span className="mb-1 block text-sm font-semibold text-ink">Гарах өдрүүд</span>
           <input

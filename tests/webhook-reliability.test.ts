@@ -136,7 +136,13 @@ test("webhook retries transient send failure then dedupes completed event", asyn
 
     if (url.includes("/messages")) {
       sendAttempts += 1;
-      if (sendAttempts === 1) {
+      // Quick-reply sends now fall back to a plain-text retry within the
+      // same request (matching Messenger's existing resilience — see
+      // sendQuickReplies/sendIgQuickReplies callers), so a single transient
+      // failure gets absorbed inline. Fail the first TWO attempts so the
+      // outer per-delivery retry-then-dedupe path this test targets still
+      // gets exercised.
+      if (sendAttempts <= 2) {
         return new Response("temporary send failure", { status: 500 });
       }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
@@ -169,11 +175,69 @@ test("webhook retries transient send failure then dedupes completed event", asyn
     assert.equal(first.statusCode, 503);
     assert.equal(second.statusCode, 200);
     assert.equal(third.statusCode, 200);
-    assert.equal(sendAttempts, 2);
+    assert.equal(sendAttempts, 3);
     // This self-contained message needs only the answer call. Two real attempts
     // ran; the deduped third delivery must add no model calls at all.
     assert.equal(openaiAttempts, 2);
     assert.equal(openaiAttempts, openaiAttemptsBeforeDedupe);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("webhook includes the connect-to-operator quick reply on Instagram, not just Facebook", async () => {
+  applyTestEnv();
+  const handler = await loadWebhookHandler();
+
+  const originalFetch = globalThis.fetch;
+  let quickReplyTitles: string[] = [];
+
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.includes("api.openai.com")) {
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "Тавтай морил! Аяллын талаар асуугаарай." } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+        { status: 200 },
+      );
+    }
+
+    if (url.includes("/messages")) {
+      const body = JSON.parse(String(init?.body || "{}")) as {
+        message?: { quick_replies?: Array<{ title?: string }> };
+      };
+      quickReplyTitles = (body.message?.quick_replies || []).map((q) => q.title || "");
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const payload = {
+      object: "instagram",
+      entry: [
+        {
+          id: "ig-page-operator-button",
+          messaging: [
+            {
+              sender: { id: "ig-user-operator-button" },
+              message: { mid: "ig-mid-operator-button-1", text: "сайн байна уу" },
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = await callWebhook(handler, payload);
+
+    assert.equal(result.statusCode, 200);
+    assert.ok(
+      quickReplyTitles.includes("Зөвлөхтэй холбогдох"),
+      `expected the operator quick reply on Instagram, got: ${JSON.stringify(quickReplyTitles)}`,
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -361,6 +425,66 @@ test("webhook acknowledges the customer when the model refers unknown data to st
 
     const result = await callWebhook(handler, payload);
 
+    assert.equal(result.statusCode, 200);
+    assert.equal(sendCount, 1);
+    assert.match(sentBody, /аяллын зөвлөх|холбогдож/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("webhook acknowledges the customer instead of staying silent when a reply is suppressed as no-data", async () => {
+  applyTestEnv();
+  const handler = await loadWebhookHandler();
+
+  const originalFetch = globalThis.fetch;
+  let sendCount = 0;
+  let sentBody = "";
+
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.includes("api.openai.com")) {
+      // Not the REFER token — a real sentence that matches the no-data
+      // suppression patterns in reply.ts, exercising the OTHER silent
+      // branch (shouldSilenceNoDataReply), not the isReferReply one.
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "Уучлаарай, энэ талаарх мэдээлэл одоогоор тодорхойгүй байна." } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+        { status: 200 },
+      );
+    }
+
+    if (url.includes("/messages")) {
+      sendCount += 1;
+      sentBody = String(init?.body || "");
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const payload = {
+      object: "instagram",
+      entry: [
+        {
+          id: "ig-page-suppressed",
+          messaging: [
+            {
+              sender: { id: "ig-user-suppressed" },
+              message: { mid: "ig-mid-suppressed-1", text: "Гэрэл гэгээний аялал хэдэн төгрөг вэ" },
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = await callWebhook(handler, payload);
+
+    // Never silent: a suppressed/no-data reply must still hand the customer
+    // off to a human instead of leaving them with nothing.
     assert.equal(result.statusCode, 200);
     assert.equal(sendCount, 1);
     assert.match(sentBody, /аяллын зөвлөх|холбогдож/i);

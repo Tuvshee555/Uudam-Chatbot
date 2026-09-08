@@ -695,6 +695,170 @@ export function Select({
 }
 
 /* ----------------------------------------------------------------
+   DatePicker — single-date popover calendar, styled to match the rest
+   of the design system instead of the browser's native <input type="date">.
+   Emits Mongolian-style "M сарын D" text (matching how dates are typed
+   and stored everywhere else in this app), not an ISO string.
+   ---------------------------------------------------------------- */
+const MONGOLIAN_WEEKDAYS = ["Ня", "Да", "Мя", "Лх", "Пү", "Ба", "Бя"];
+
+function daysInMonth(year: number, month: number): number {
+  return new Date(year, month + 1, 0).getDate();
+}
+
+export function formatMongolianDate(date: Date): string {
+  return `${date.getMonth() + 1} сарын ${date.getDate()}`;
+}
+
+export function DatePicker({
+  value,
+  onSelect,
+  label,
+  placeholder = "ж: 7 сарын 12",
+  className,
+}: {
+  value?: string;
+  onSelect: (formatted: string, date: Date) => void;
+  label?: string;
+  placeholder?: string;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const today = useMemo(() => new Date(), []);
+  const [viewYear, setViewYear] = useState(today.getFullYear());
+  const [viewMonth, setViewMonth] = useState(today.getMonth());
+  const rootRef = useRef<HTMLDivElement>(null);
+  const fieldId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(e: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const firstWeekday = new Date(viewYear, viewMonth, 1).getDay();
+  const totalDays = daysInMonth(viewYear, viewMonth);
+  const cells: Array<number | null> = [
+    ...Array.from({ length: firstWeekday }, () => null),
+    ...Array.from({ length: totalDays }, (_, i) => i + 1),
+  ];
+  const isToday = (day: number) =>
+    viewYear === today.getFullYear() && viewMonth === today.getMonth() && day === today.getDate();
+
+  const goToMonth = (delta: number) => {
+    let nextMonth = viewMonth + delta;
+    let nextYear = viewYear;
+    if (nextMonth < 0) { nextMonth = 11; nextYear -= 1; }
+    if (nextMonth > 11) { nextMonth = 0; nextYear += 1; }
+    setViewMonth(nextMonth);
+    setViewYear(nextYear);
+  };
+
+  const pick = (day: number) => {
+    const date = new Date(viewYear, viewMonth, day);
+    onSelect(formatMongolianDate(date), date);
+    setOpen(false);
+  };
+
+  return (
+    <div ref={rootRef} className={cx("relative", className)}>
+      {label && (
+        <label htmlFor={fieldId} className="mb-1.5 block text-sm font-medium text-ink">
+          {label}
+        </label>
+      )}
+      <button
+        id={fieldId}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={cx(
+          CONTROL_BASE,
+          "flex h-10 items-center justify-between gap-2 px-3 text-left",
+          "border-line-strong",
+        )}
+      >
+        <span className={value ? "text-ink" : "text-ink-subtle"}>{value || placeholder}</span>
+        <Icons.calendar size={16} className="shrink-0 text-ink-subtle" />
+      </button>
+      {open && (
+        <div className="absolute z-40 mt-1.5 w-72 rounded-lg border border-line bg-surface p-3 shadow-lg">
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => goToMonth(-1)}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-ink-muted hover:bg-surface-sunken"
+              aria-label="Өмнөх сар"
+            >
+              <Icons.chevronLeft size={16} />
+            </button>
+            <span className="text-sm font-semibold text-ink">
+              {viewYear} — {viewMonth + 1} сар
+            </span>
+            <button
+              type="button"
+              onClick={() => goToMonth(1)}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-ink-muted hover:bg-surface-sunken"
+              aria-label="Дараах сар"
+            >
+              <Icons.chevronRight size={16} />
+            </button>
+          </div>
+          <div className="mt-2 grid grid-cols-7 gap-1">
+            {MONGOLIAN_WEEKDAYS.map((wd) => (
+              <span key={wd} className="flex h-7 items-center justify-center text-xs font-medium text-ink-subtle">
+                {wd}
+              </span>
+            ))}
+            {cells.map((day, i) =>
+              day === null ? (
+                <span key={`empty-${i}`} />
+              ) : (
+                <button
+                  key={day}
+                  type="button"
+                  onClick={() => pick(day)}
+                  className={cx(
+                    "flex h-8 w-8 items-center justify-center rounded-md text-sm transition-colors",
+                    isToday(day)
+                      ? "border border-brand/40 font-semibold text-brand"
+                      : "text-ink hover:bg-brand-soft hover:text-brand",
+                  )}
+                >
+                  {day}
+                </button>
+              ),
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setViewYear(today.getFullYear());
+              setViewMonth(today.getMonth());
+              pick(today.getDate());
+            }}
+            className="mt-2 w-full rounded-md border border-line px-2 py-1.5 text-xs font-medium text-ink-muted hover:bg-surface-sunken"
+          >
+            Өнөөдөр
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------
    Skeleton
    ---------------------------------------------------------------- */
 export function Skeleton({ className }: { className?: string }) {

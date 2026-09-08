@@ -3,6 +3,7 @@ import { askOpenAI } from "../../lib/openaiProvider";
 import { askOpenAIChatParts } from "../../lib/openaiFallback";
 import { matchFlow, findTriggeredFlow, getFlowState, setFlowState, clearFlowState, newRuntimeState, runFlowFrom, resumeFlowWithInput, type FlowRule, type FlowDoc, type FlowEffects, type FlowRuntimeState, type RunOutcome, } from "../../lib/flowEngine";
 import { BOT_MESSAGE_METADATA, replyToComment, sendImageMessage, sendQuickReplies, sendTextMessage } from "../../lib/messenger";
+import { sendQuickReplies as sendIgQuickReplies } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone } from "../../lib/conversation";
@@ -289,6 +290,16 @@ async function handleMessage(
         });
       }
       const handoffReply = buildHandoffAcknowledgement();
+      // The bot doesn't know the answer — never let it keep guessing. Pause
+      // it for this customer the same way an explicit "холбогдох" request
+      // does, so a human takes over instead of the bot risking another
+      // wrong or empty reply on the next message.
+      await autoHandoffSender(senderId);
+      const noDataPauseMs =
+        botSettings.handoff_pause_minutes > 0
+          ? botSettings.handoff_pause_minutes * 60_000
+          : undefined;
+      await pauseBot(senderId, noDataPauseMs, "no_data_handoff");
       await assertLockHealthy();
       const delivered = await sendPlatformMessage(
         platform,
@@ -321,17 +332,27 @@ async function handleMessage(
     }
     await assertLockHealthy();
     let delivered: boolean;
+    // Always include the operator button — customer can tap it any time,
+    // even on a fast-path reply that didn't propose its own buttons.
     const quickButtons = input.buttons?.filter(Boolean).slice(0, 10) || [];
-    if (platform === "facebook" && token && quickButtons.length > 0) {
+    const buttons = quickButtons.includes(CONTACT_OPERATOR_LABEL)
+      ? quickButtons
+      : [...quickButtons, CONTACT_OPERATOR_LABEL].slice(0, 11);
+    if (token && buttons.length > 0) {
       try {
-        const buttons = quickButtons.includes(CONTACT_OPERATOR_LABEL)
-          ? quickButtons
-          : [...quickButtons, CONTACT_OPERATOR_LABEL].slice(0, 11);
-        await sendQuickReplies(senderId, reply, buttons, token, {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          source: `api.webhook.${input.failTag}_buttons`,
-        });
+        if (platform === "facebook") {
+          await sendQuickReplies(senderId, reply, buttons, token, {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            source: `api.webhook.${input.failTag}_buttons`,
+          });
+        } else {
+          await sendIgQuickReplies(igUserId || "", senderId, reply, buttons, token, {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            source: `api.webhook.${input.failTag}_buttons`,
+          });
+        }
         recordCounter("webhook.fast_path_buttons_sent_total", 1, {
           platform,
           buttonCount: String(buttons.length),
@@ -1536,8 +1557,10 @@ async function handleMessage(
     }
   }
   // Bot has no data for this question (REFER, or legacy SILENT). Create/alert
-  // a staff handoff. For missing data, stay silent customer-side as requested;
-  // for a real AI outage, send a visible temporary-issue acknowledgement.
+  // a staff handoff, pause the bot for this customer (never let it keep
+  // guessing on the next message), and tell the customer a human is taking
+  // over — same acknowledgement whether the cause was missing data or an AI
+  // outage.
   if (isReferReply(aiReply)) {
     logInfo("webhook.ai_refer", {
       requestId: trace?.requestId,
@@ -1580,15 +1603,44 @@ async function handleMessage(
         classification: classifyError(error),
       });
     }
-    if (!aiOutage) {
-      await rememberTurn("api.webhook.ai_refer_silent_no_data");
-      return;
+    await autoHandoffSender(senderId);
+    const referPauseMs =
+      botSettings.handoff_pause_minutes > 0
+        ? botSettings.handoff_pause_minutes * 60_000
+        : undefined;
+    await pauseBot(senderId, referPauseMs, aiOutage ? "ai_outage" : "no_data_handoff");
+    await assertLockHealthy();
+    const referHandoffReply = buildHandoffAcknowledgement({ aiOutage });
+    const referDelivered = await sendPlatformMessage(
+      platform,
+      senderId,
+      referHandoffReply,
+      token,
+      pageId,
+      igUserId,
+      trace,
+      { allowFallback: false },
+    );
+    if (!referDelivered) {
+      throw new RetryableWebhookError(
+        `delivery_failed:${aiOutage ? "ai_outage_handoff" : "ai_refer_handoff"}`,
+      );
     }
-    await deliverFastPathReply({
-      reply: buildHandoffAcknowledgement({ aiOutage }),
-      failTag: aiOutage ? "ai_outage_handoff" : "ai_refer_handoff",
-      rememberSource: aiOutage ? "api.webhook.ai_outage_handoff" : "api.webhook.ai_refer_handoff",
-    });
+    try {
+      await appendMessage(senderId, "assistant", referHandoffReply);
+      await setLastReplyConsistent(sessionId, referHandoffReply);
+    } catch (error) {
+      logWarn("webhook.ai_refer_reply_state_persist_failed", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+        classification: classifyError(error),
+      });
+    }
+    await rememberTurn(
+      aiOutage ? "api.webhook.ai_outage_handoff" : "api.webhook.ai_refer_handoff",
+    );
     return;
   }
   const fixedReply = fixMojibake(aiReply);
@@ -1664,7 +1716,44 @@ async function handleMessage(
         classification: classifyError(error),
       });
     }
-    await rememberTurn("api.webhook.ai_no_data_silent");
+    await autoHandoffSender(senderId);
+    const suppressedPauseMs =
+      botSettings.handoff_pause_minutes > 0
+        ? botSettings.handoff_pause_minutes * 60_000
+        : undefined;
+    await pauseBot(
+      senderId,
+      suppressedPauseMs,
+      wrongTripLeak ? "wrong_trip_handoff" : "no_data_handoff",
+    );
+    await assertLockHealthy();
+    const suppressedHandoffReply = buildHandoffAcknowledgement();
+    const suppressedDelivered = await sendPlatformMessage(
+      platform,
+      senderId,
+      suppressedHandoffReply,
+      token,
+      pageId,
+      igUserId,
+      trace,
+      { allowFallback: false },
+    );
+    if (!suppressedDelivered) {
+      throw new RetryableWebhookError("delivery_failed:ai_no_data_handoff");
+    }
+    try {
+      await appendMessage(senderId, "assistant", suppressedHandoffReply);
+      await setLastReplyConsistent(sessionId, suppressedHandoffReply);
+    } catch (error) {
+      logWarn("webhook.ai_no_data_reply_state_persist_failed", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+        classification: classifyError(error),
+      });
+    }
+    await rememberTurn("api.webhook.ai_no_data_handoff");
     return;
   }
   if (lastReply && isDuplicateReply(lastReply.text, safeReply)) {
@@ -1703,13 +1792,21 @@ async function handleMessage(
   }
   await assertLockHealthy();
   let delivered: boolean;
-  if (platform === "facebook" && token && replyButtons.length > 0) {
+  if (token && replyButtons.length > 0) {
     try {
-      await sendQuickReplies(senderId, safeReply, replyButtons, token, {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        source: "api.webhook.reply_buttons",
-      });
+      if (platform === "facebook") {
+        await sendQuickReplies(senderId, safeReply, replyButtons, token, {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          source: "api.webhook.reply_buttons",
+        });
+      } else {
+        await sendIgQuickReplies(igUserId || "", senderId, safeReply, replyButtons, token, {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          source: "api.webhook.reply_buttons",
+        });
+      }
       recordCounter("webhook.reply_buttons_sent_total", 1, {
         platform,
         buttonCount: String(replyButtons.length),

@@ -7,7 +7,7 @@ import { upload as uploadToBlob } from "@vercel/blob/client";
 import Poster from "./Poster";
 import AttachToTripModal from "./AttachToTripModal";
 import { createDefaultTrip } from "@/lib/poster/defaultTrip";
-import { Badge, Button, Card, Icons, Input, Modal, Select, Spinner, cx } from "@/components/ui";
+import { Badge, Button, Card, DatePicker, Icons, Input, Modal, Select, Spinner, cx } from "@/components/ui";
 import { TabHeader } from "@/components/admin/AdminShared";
 import type { PosterBulkPlan, PosterBulkPlanItem } from "@/lib/poster/bulkPlan";
 import type { TripGap } from "@/lib/tripCompleteness";
@@ -2204,13 +2204,12 @@ export default function PosterTab({
                               )}
                               {needsDate && (
                                 <div className="rounded-lg border border-danger/20 bg-surface p-2.5">
-                                  <p className="mb-1.5 text-xs font-semibold text-ink">Гарах өдөр энд шууд бичих</p>
+                                  <p className="mb-1.5 text-xs font-semibold text-ink">Гарах өдөр сонгох</p>
                                   <div className="flex items-end gap-2">
                                     <div className="min-w-0 flex-1">
-                                      <Input
-                                        placeholder="ж: 7 сарын 12"
+                                      <DatePicker
                                         value={quickDepartureDate}
-                                        onChange={(e) => setQuickDepartureDate(e.target.value)}
+                                        onSelect={(formatted) => setQuickDepartureDate(formatted)}
                                       />
                                     </div>
                                     <Button
