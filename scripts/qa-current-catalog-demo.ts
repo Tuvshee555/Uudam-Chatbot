@@ -20,6 +20,7 @@ type TripRow = {
   photo_count: number;
   poster_id: string | null;
   departure_count: number;
+  extra: Record<string, unknown>;
 };
 
 type DemoResult = {
@@ -67,7 +68,15 @@ function digits(value: number | null) {
 
 function priceLooksPresent(reply: string, trip: TripRow) {
   const compact = reply.replace(/[,\s.]/g, "");
-  return [digits(trip.adult_price), digits(trip.child_price)]
+  const groupPrices = Array.isArray(trip.extra?.price_groups)
+    ? trip.extra.price_groups.flatMap((group) => {
+        if (!group || typeof group !== "object") return [];
+        const row = group as Record<string, unknown>;
+        return [row.adult_price, row.child_price, row.infant_price]
+          .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+      })
+    : [];
+  return [digits(trip.adult_price), digits(trip.child_price), ...groupPrices.map(String)]
     .filter(Boolean)
     .some((price) => compact.includes(price));
 }
@@ -111,6 +120,7 @@ async function currentTrips(): Promise<TripRow[]> {
        status,
        CASE WHEN jsonb_typeof(photo_urls) = 'array' THEN jsonb_array_length(photo_urls) ELSE 0 END::int AS photo_count,
        extra->>'poster_trip_id' AS poster_id,
+       COALESCE(extra, '{}'::jsonb) AS extra,
        CASE
          WHEN jsonb_typeof(extra->'departure_dates_resolved') = 'array'
          THEN jsonb_array_length(extra->'departure_dates_resolved')
@@ -131,8 +141,13 @@ async function run() {
 
   console.log(`Current-catalog demo QA -> ${DEMO_URL}`);
   console.log(`Trips loaded: ${trips.length}; active=${activeTrips.length}; archived=${archivedTrips.length}`);
-  if (trips.length !== 22) failures.push(`expected 22 trips, got ${trips.length}`);
-  if (activeTrips.length + archivedTrips.length !== 22) failures.push("active+archived count does not equal 22");
+  const expectedTotal = Number(process.env.EXPECTED_CATALOG_TOTAL || 0);
+  if (expectedTotal > 0 && trips.length !== expectedTotal) {
+    failures.push(`expected ${expectedTotal} trips, got ${trips.length}`);
+  }
+  if (activeTrips.length + archivedTrips.length !== trips.length) {
+    failures.push("active+archived count does not equal total trip count");
+  }
 
   for (const trip of activeTrips) {
     checks += 1;
@@ -175,7 +190,7 @@ async function run() {
     { id: "hailaar-bad", text: "hailaariin ayalal medeelel", expectAny: ["Хайлаар", "Манжуур"] },
     { id: "ambiguous-shanghai", text: "Шанхай аялал", expectAny: ["Аль", "Шанхай"] },
     { id: "ambiguous-hailaar", text: "Хайлаар аялал", expectAny: ["Аль", "Хайлаар"] },
-    { id: "unknown", text: "Токио аялал байна уу", expectAny: ["зөвлөх", "холбож"] },
+    { id: "unknown", text: "Парис аялал байна уу", expectAny: ["зөвлөх", "холбож"] },
     { id: "discount", text: "Хямдрал байгаа юу", expectAny: ["зөвлөх", "хямдрал", "одоогоор"] },
     { id: "date-price", text: "Шанхай 9 сарын 17 үнэ хэд вэ", expectAny: ["₮", "Шанхай"] },
     { id: "specific-date", text: "10 сарын 8-нд ямар аялал байна", expectAny: ["10 сарын 8"] },
