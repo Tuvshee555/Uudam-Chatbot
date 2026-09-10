@@ -29,6 +29,14 @@ async function setup() {
       last_error TEXT, website_trip_id TEXT, website_slug TEXT,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), synced_at TIMESTAMPTZ
     );
+    -- Set when the last successful sync held back the trip's content fields
+    -- (title/description/hotel/included/excluded/notes/images) because staff
+    -- had edited them on the website since the sync last wrote them. Price,
+    -- availability and publish status still synced normally — only the sell
+    -- copy is on hold, and stays that way until someone edits the trip again
+    -- from the chatbot/poster side, which resolves the conflict in favour of
+    -- the newer chatbot edit.
+    ALTER TABLE trip_website_sync ADD COLUMN IF NOT EXISTS content_conflict BOOLEAN NOT NULL DEFAULT FALSE;
     CREATE TABLE IF NOT EXISTS connected_trip_assets (
       hash TEXT PRIMARY KEY, url TEXT NOT NULL
     );

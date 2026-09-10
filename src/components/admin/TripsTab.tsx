@@ -752,6 +752,15 @@ function TripCard({
               </div>
             </div>
           )}
+          {Boolean((trip.extra.website_sync as { content_conflict?: boolean } | undefined)?.content_conflict) && (
+            <div className="mt-2 rounded-md border border-danger/30 bg-danger-soft px-2.5 py-2 text-xs text-danger">
+              <div className="flex items-center gap-1.5">
+                <Icons.alert size={14} className="shrink-0" />
+                <span className="font-semibold">Вэбсайт дээр гараар засвар орсон:</span>
+                <span>Гарчиг/тайлбар зэрэг зарим талбарыг вэбсайт дээрээс өөрчилсөн тул автомат синк тэдгээрийг дарж бичихгүй. Энд дахин засвар хийвэл шинэ засвар нь дарж бичнэ.</span>
+              </div>
+            </div>
+          )}
           {gaps.length > 0 && (
             <div
               className={cx(
