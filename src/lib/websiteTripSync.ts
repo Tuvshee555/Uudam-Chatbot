@@ -5,6 +5,7 @@ import { ensureConnectedTripSchema } from "./connectedTripStore";
 import { duration, posterPhotos, record, records, strings, websiteDepartures, websiteExtraDetails } from "./connectedTripMapping";
 import { getEnv } from "./env";
 import { getPosterPdfPublicUrl } from "./poster/pdfUrl";
+import { classifyTripCategory } from "./tripCategorization";
 import type { TravelTrip } from "./travelTypes";
 
 let pool: Pool | undefined;
@@ -68,6 +69,11 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   const pdf = getPosterPdfPublicUrl(String(source.extra.poster_trip_id));
   if (!pdf) throw new Error("SITE_URL is required for the shared poster PDF");
   const metadata = { ...record(prior?.sourceMetadata), ...source.extra, connectedSource: { ...source, photos, poster } };
+  // Never override a category staff picked by hand — only classify a trip
+  // that has none yet (a brand-new sync, or one that predates this feature).
+  const categoryId = prior?.categoryId
+    ? undefined
+    : await classifyTripCategory(client, source).catch(() => null);
   const data: Record<string, unknown> = {
     title: source.route_name, description: source.notes || String(poster.subtitle || source.route_name),
     durationDays: d.days, durationNights: d.nights, price: source.adult_price ?? 0,
@@ -81,6 +87,7 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
       adult: source.adult_price, child: source.child_price, infant: source.infant_price ?? null,
       currency: source.currency || "MNT",
     }),
+    ...(categoryId !== undefined ? { categoryId } : {}),
     brochurePdfUrl: pdf, sourceMetadata: JSON.stringify(metadata),
     isPublished: (source.status === "active" || source.status === "sold_out") && source.extra.customer_visible !== false,
   };
