@@ -583,7 +583,6 @@ export default function Poster({
                   <div className="dmain">
                     <div className="droute">
                       <Ed value={d.route} onChange={(v) => upd(["days", i, "route"], v)} />
-                      <RemoveBtn onClick={() => removeItem(["days"], i)} title="Өдөр устгах" />
                       {d.distance_km ? <span className="km">{d.distance_km} км</span> : null}
                       {cleanText(d.flight) ? <span className="flt">✈ {cleanText(d.flight)}</span> : null}
                     </div>
@@ -638,6 +637,15 @@ export default function Poster({
                           onClick={() => upd(["days", i, "show_meals"], d.show_meals === false)}
                         >
                           {d.show_meals === false ? "🍽 Хоол харуулах" : "🍽 Хоол нуух"}
+                        </button>
+                        <button
+                          type="button"
+                          className="addbtn danger"
+                          disabled={(t.days || []).length <= 1}
+                          title={(t.days || []).length <= 1 ? "Хамгийн сүүлийн өдрийг устгах боломжгүй" : "Энэ өдрийг устгах"}
+                          onClick={() => removeItem(["days"], i)}
+                        >
+                          🗑 Энэ өдрийг устгах
                         </button>
                       </div>
                   </div>
