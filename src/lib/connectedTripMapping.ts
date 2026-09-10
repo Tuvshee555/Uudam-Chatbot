@@ -140,11 +140,18 @@ export function websiteDepartures(trip: TravelTrip, now = new Date()) {
     }
   }
   const weekdayNames = ["ням", "даваа", "мягмар", "лхагва", "пүрэв", "баасан", "бямба"];
+  const recurringWeekday = (text: string) => {
+    const lower = text.toLowerCase().trim();
+    if (!lower) return -1;
+    const day = weekdayNames.findIndex(name => lower.includes(name));
+    if (day < 0) return -1;
+    return /бүр|болгон/.test(lower) || /^[а-яөүё\s-]+гариг$/.test(lower) || weekdayNames.includes(lower)
+      ? day
+      : -1;
+  };
   const ruleTexts = [...trip.departure_dates, String(trip.extra.departure_rule || "")];
   for (const text of ruleTexts) {
-    const lower = text.toLowerCase();
-    if (!/бүр|болгон/.test(lower)) continue;
-    const day = weekdayNames.findIndex(name => lower.includes(name));
+    const day = recurringWeekday(text);
     if (day < 0) continue;
     const localToday = new Date(now.getTime() + 8 * 3600000).toISOString().slice(0, 10);
     const start = new Date(`${localToday}T00:00:00Z`);

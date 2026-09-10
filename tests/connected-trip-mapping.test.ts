@@ -30,6 +30,10 @@ test("weekly rules are explicit and respect Mongolian calendar dates", () => {
   const recurring=websiteDepartures({...trip,departure_dates:["Пүрэв гараг бүр"]},new Date("2026-09-09T23:00:00Z"));
   assert.equal(recurring.length,12);
   assert.equal(recurring[0].start,"2026-09-10T00:00:00.000Z");
+  const shortWeekdays=websiteDepartures({...trip,departure_dates:["Пүрэв","Ням гариг"],extra:{departure_dates_resolved:[{text:"Пүрэв",ymd:null},{text:"Ням гариг",ymd:null}]}},new Date("2026-09-09T23:00:00Z"));
+  assert.equal(shortWeekdays.length,24);
+  assert.equal(shortWeekdays[0].start,"2026-09-10T00:00:00.000Z");
+  assert.equal(shortWeekdays[1].start,"2026-09-13T00:00:00.000Z");
   assert.deepEqual(websiteDepartures({...trip,departure_dates:["Хугацаа тодорхойгүй"]}),[]);
 });
 test("website departures inherit date-specific price group overrides", () => {
