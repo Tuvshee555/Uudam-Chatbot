@@ -681,12 +681,19 @@ function TripCard({
   if (trip.seats_left != null || trip.seats_total != null) {
     facts.push(`Суудал: ${trip.seats_left ?? "?"}/${trip.seats_total ?? "?"}`);
   }
+  // A trip with date-specific price groups never actually quotes this flat
+  // price to a customer (the nearest upcoming group's price wins) — label it
+  // as the fallback here too, so this list can't read as "the live price"
+  // when it may not be what the bot or website currently show.
+  const hasPriceGroups = Array.isArray((trip.extra as Record<string, unknown>)?.price_groups)
+    && ((trip.extra as Record<string, unknown>).price_groups as unknown[]).length > 0;
+  const pricePrefix = hasPriceGroups ? "Үндсэн " : "";
   const adultPrice = formatTripMoney(trip.adult_price, trip.currency);
   const childPrice = formatTripMoney(trip.child_price, trip.currency);
   const infantPrice = formatTripMoney(trip.infant_price, trip.currency);
-  if (adultPrice) facts.push(`Том хүн: ${adultPrice}`);
-  if (childPrice) facts.push(`Хүүхэд: ${childPrice}`);
-  if (infantPrice) facts.push(`Нярай: ${infantPrice}`);
+  if (adultPrice) facts.push(`${pricePrefix}Том хүн: ${adultPrice}`);
+  if (childPrice) facts.push(`${pricePrefix}Хүүхэд: ${childPrice}`);
+  if (infantPrice) facts.push(`${pricePrefix}Нярай: ${infantPrice}`);
   if (trip.has_food != null) {
     facts.push(`Хоол: ${trip.has_food ? "багтсан" : "багтаагүй"}`);
   }

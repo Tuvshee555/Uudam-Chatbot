@@ -684,6 +684,13 @@ export function TripEditModal({
           onChange={(e) => setTripDraft((p) => ({ ...p, duration_text: e.target.value }))}
           error={gapKeys.has("duration_text") ? "Заавал бөглөх" : undefined}
         />
+        {tripPriceGroups.length > 0 && (
+          <div className="rounded-lg border border-warning/30 bg-warning-soft p-2.5 text-xs text-ink sm:col-span-2">
+            Энэ аялал &ldquo;Үнэ ба гаралт&rdquo; таб дээр огноо тус бүрийн үнэтэй байна — бот, вэбсайт хоёулаа
+            ХАМГИЙН ОЙРХОН огнооны үнийг харуулна, доорх үндсэн үнийг биш. Доорх нь зөвхөн шинэ огноо
+            хараахан ороогүй үед л харагдана.
+          </div>
+        )}
         <MoneyInput
           label="Том хүний үнэ"
           value={tripDraft.adult_price}
