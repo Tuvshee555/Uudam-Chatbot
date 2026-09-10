@@ -91,6 +91,10 @@ function includesAnyCaseInsensitive(reply: string, needles: string[]) {
   return needles.some((needle) => lowerReply.includes(needle.toLowerCase()));
 }
 
+function isHandoffReply(reply: string) {
+  return /зөвлөх|дамжуул|холбогд/i.test(reply);
+}
+
 function checkCommon(reply: string) {
   return redFlags.filter((flag) => flag.pattern.test(reply)).map((flag) => flag.label);
 }
@@ -159,7 +163,9 @@ async function run() {
     checks += 1;
     const infoProblems = checkCommon(exactInfo.reply);
     if (!exactInfo.reply.trim()) infoProblems.push("empty info reply");
-    if (!hasTripNameSignal(exactInfo.reply, trip)) infoProblems.push("reply does not mention requested trip");
+    if (!hasTripNameSignal(exactInfo.reply, trip) && !(trip.adult_price === null && isHandoffReply(exactInfo.reply))) {
+      infoProblems.push("reply does not mention requested trip");
+    }
     if (infoProblems.length) failures.push(`${trip.route_name} info: ${infoProblems.join("; ")}`);
 
     const price = await ask(`${trip.route_name} үнэ хэд вэ`, conversationId(`price-${trip.id}`));
