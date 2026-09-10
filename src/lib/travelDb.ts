@@ -117,6 +117,7 @@ export function wait(ms: number): Promise<void> {
 
 function coerceTripStatus(value: unknown): TripStatus {
   const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "paused") return "paused";
   if (normalized === "cancelled") return "cancelled";
   if (normalized === "sold_out") return "sold_out";
   if (normalized === "draft") return "draft";

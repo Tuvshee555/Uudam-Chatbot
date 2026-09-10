@@ -260,6 +260,50 @@ test("sold-out reply pitches active same-destination trips instead of dead-endin
   assert.doesNotMatch(reply || "", /Хайнан/);
 });
 
+test("a paused trip is reported as not currently active, not sold out", () => {
+  const reply = buildStructuredTripReply("Жинин Универсал шууд нислэгтэй хэд вэ, суудал байгаа юу?", [
+    trip({
+      id: "universal-paused",
+      route_name: "Бээжин - Юниверсал шууд нислэгтэй наадмын амралтаар гарах аялал",
+      category: "Шууд нислэгтэй аялал",
+      status: "paused",
+      extra: { aliases: ["Бээжин Юниверсал", "Универсал"] },
+    }),
+    trip({
+      id: "jinin-ground",
+      route_name: "Жинин - Утай - Гүмбэн",
+      category: "Газрын аялал",
+    }),
+  ]);
+
+  assert.match(reply || "", /Юниверсал/);
+  assert.match(reply || "", /идэвхгүй/);
+  assert.doesNotMatch(reply || "", /суудал дууссан/);
+});
+
+test("a paused trip's reply pitches active same-destination trips too", () => {
+  const reply = buildStructuredTripReply("Универсал аялал байгаа юу?", [
+    trip({
+      id: "universal-paused",
+      route_name: "Бээжин - Юниверсал шууд нислэгтэй наадмын амралтаар гарах аялал",
+      category: "Шууд нислэгтэй аялал",
+      status: "paused",
+      extra: { aliases: ["Бээжин Юниверсал", "Универсал"] },
+    }),
+    trip({
+      id: "beijing-four-city",
+      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+      category: "Газрын аялал",
+      adult_price: 1170000,
+      duration_text: "8 өдөр 7 шөнө",
+    }),
+  ]);
+
+  assert.match(reply || "", /идэвхгүй/);
+  assert.match(reply || "", /нээлттэй/);
+  assert.match(reply || "", /4 ХОТЫН АЯЛАЛ/);
+});
+
 test("program reply asks for clarification on shared city-only PDF request", () => {
   const result = buildTripProgramReply("Tokyo program pdf", [
     trip({

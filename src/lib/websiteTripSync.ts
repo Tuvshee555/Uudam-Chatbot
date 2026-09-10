@@ -143,7 +143,11 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
     ...(categoryId !== undefined ? { categoryId } : {}),
     brochurePdfUrl: pdf,
     sourceMetadata: JSON.stringify({ ...metadata, contentHash }),
-    isPublished: (source.status === "active" || source.status === "sold_out") && source.extra.customer_visible !== false,
+    // "paused" behaves exactly like sold_out here: visible, just not
+    // bookable — the trip stays on the site so customers can still ask
+    // about it, but every departure below reads as closed, not open.
+    isPublished: (source.status === "active" || source.status === "sold_out" || source.status === "paused")
+      && source.extra.customer_visible !== false,
     ...(staffEditedSinceLastSync ? {} : { lastSyncedAt: new Date() }),
   };
   if (prior) {
@@ -180,8 +184,11 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
     keep.push(depId);
     const seatsChanged = !prior || (Object.keys(previousSnapshot).length > 0 &&
       (previousSnapshot.seats_total !== source.seats_total || previousSnapshot.seats_left !== source.seats_left));
-    const reopened = ["cancelled", "sold_out"].includes(String(previousSnapshot.status)) && source.status === "active";
-    const status = source.status === "cancelled" ? "CANCELLED" : source.status === "sold_out" ? "SOLD_OUT" : reopened ? "OPEN" : old?.status || "OPEN";
+    const reopened = ["cancelled", "sold_out", "paused"].includes(String(previousSnapshot.status)) && source.status === "active";
+    const status = source.status === "cancelled" ? "CANCELLED"
+      : source.status === "sold_out" ? "SOLD_OUT"
+      : source.status === "paused" ? "PAUSED"
+      : reopened ? "OPEN" : old?.status || "OPEN";
     if (old) {
       await client.query(`UPDATE "Departure" SET label=$2,"endDate"=$3,status=$4::"DepartureStatus",
         "seatsTotal"=$5,"seatsLeft"=$6,price=$7,"childPrice"=$8,"infantPrice"=$9 WHERE id=$1`,

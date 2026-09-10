@@ -1164,28 +1164,58 @@ function buildDirectFlightUnavailableReply(text: string, trips: TravelTrip[]): s
   ].join("\n");
 }
 
-function buildSoldOutTripReply(text: string, trips: TravelTrip[]): string | null {
-  const soldOutTrips = trips.filter((trip) => trip.status === "sold_out");
-  if (soldOutTrips.length === 0) return null;
+/**
+ * "sold_out" (capacity ran out) and "paused" (staff pulled bookings for any
+ * other reason — schedule being redone, temporarily off sale) share the same
+ * shape of answer: the trip stays visible and answerable, but must never
+ * read as bookable, and a human asking about it deserves the same nudge
+ * toward what IS currently bookable rather than a dead end.
+ */
+const UNAVAILABLE_STATUS_WORDING: Record<"sold_out" | "paused", {
+  ambiguousIntro: string;
+  inlineSuffix: string;
+  standaloneLine: string;
+}> = {
+  sold_out: {
+    ambiguousIntro: "Таны асуусан нэрээр суудал дууссан хэд хэдэн аялал байна.",
+    inlineSuffix: "энэ аяллын суудал дууссан байна.",
+    standaloneLine: "Энэ аяллын суудал дууссан байна.",
+  },
+  paused: {
+    ambiguousIntro: "Таны асуусан нэрээр түр зогссон хэд хэдэн аялал байна.",
+    inlineSuffix: "энэ аялал одоогоор идэвхгүй байна.",
+    standaloneLine: "Энэ аялал одоогоор идэвхгүй тул захиалга авахгүй байна.",
+  },
+};
 
-  const { best, ambiguous } = findBestTripMatch(text, soldOutTrips, { includeSoldOut: true });
+function buildUnavailableTripReply(
+  text: string,
+  trips: TravelTrip[],
+  status: "sold_out" | "paused",
+): string | null {
+  const wording = UNAVAILABLE_STATUS_WORDING[status];
+  const matchTrips = trips.filter((trip) => trip.status === status);
+  if (matchTrips.length === 0) return null;
+
+  const matchOptions = status === "sold_out" ? { includeSoldOut: true } : { includePaused: true };
+  const { best, ambiguous } = findBestTripMatch(text, matchTrips, matchOptions);
   if (!best && ambiguous.length === 0) return null;
 
   if (!best && ambiguous.length > 0) {
     return [
-      "Таны асуусан нэрээр суудал дууссан хэд хэдэн аялал байна.",
+      wording.ambiguousIntro,
       "Алийг нь хэлж байгаагаа нэг тодруулаад бичээрэй:",
       ...ambiguous.slice(0, 3).map((trip) => `• ${trip.route_name}`),
     ].join("\n");
   }
   if (!best) return null;
 
-  // A sold-out answer that stops at "дууссан" buries the sellable catalog: a
+  // An unavailable answer that stops there buries the sellable catalog: a
   // generic "Бээжин" question was leading with the dead Universal trip while
   // three bookable Beijing trips went unmentioned. Pitch ACTIVE trips that
-  // share the sold-out trip's destination words (data-driven — never
+  // share the unavailable trip's destination words (data-driven — never
   // hardcoded names) in the same breath, like a human agent would.
-  const soldOutTokens = unique([
+  const matchTokens = unique([
     ...keywordTokens(best.route_name),
     ...getAliases(best).flatMap((alias) => keywordTokens(alias)),
   ]).filter((token) => token.length >= 4);
@@ -1197,7 +1227,7 @@ function buildSoldOutTripReply(text: string, trips: TravelTrip[]): string | null
         ...getAliases(trip).flatMap((alias) => keywordTokens(alias)),
         ...keywordTokens(trip.source_description || ""),
       ]);
-      const overlap = soldOutTokens.filter((token) => candidateTokens.has(token));
+      const overlap = matchTokens.filter((token) => candidateTokens.has(token));
       return { trip, score: overlap.length, overlap };
     })
     .filter((candidate) => candidate.score > 0)
@@ -1220,7 +1250,7 @@ function buildSoldOutTripReply(text: string, trips: TravelTrip[]): string | null
       return `• ${trip.route_name}${details ? ` (${details})` : ""}`;
     });
     return [
-      `✈️ ${best.route_name} — энэ аяллын суудал дууссан байна.`,
+      `✈️ ${best.route_name} — ${wording.inlineSuffix}`,
       "",
       "Гэхдээ ижил чиглэлд эдгээр аялал нээлттэй байна:",
       ...altLines,
@@ -1231,9 +1261,13 @@ function buildSoldOutTripReply(text: string, trips: TravelTrip[]): string | null
 
   return [
     `✈️ ${best.route_name}`,
-    "Энэ аяллын суудал дууссан байна.",
-    "Одоогоор захиалга авах боломжгүй тул ижил төстэй өөр хувилбарыг аяллын зөвлөхөөс тодруулж өгье.",
+    wording.standaloneLine,
+    "Ижил төстэй өөр хувилбарыг аяллын зөвлөхөөс тодруулж өгье.",
   ].join("\n");
+}
+
+function buildSoldOutTripReply(text: string, trips: TravelTrip[]): string | null {
+  return buildUnavailableTripReply(text, trips, "sold_out") ?? buildUnavailableTripReply(text, trips, "paused");
 }
 
 export function buildStructuredTripReply(

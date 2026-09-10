@@ -621,6 +621,7 @@ export function getPriceValuesFromGroup(
 
 type TripMatchOptions = {
   includeSoldOut?: boolean;
+  includePaused?: boolean;
   /** Only for matching against a caller-supplied archived-only list — see buildArchivedTripNotice. */
   includeArchived?: boolean;
 };
@@ -628,7 +629,8 @@ type TripMatchOptions = {
 function canMatchTripStatus(trip: TravelTrip, options?: TripMatchOptions): boolean {
   if (trip.status === "active") return true;
   if (options?.includeArchived === true && trip.status === "archived") return true;
-  return options?.includeSoldOut === true && trip.status === "sold_out";
+  if (options?.includeSoldOut === true && trip.status === "sold_out") return true;
+  return options?.includePaused === true && trip.status === "paused";
 }
 
 function extractQueryMonthDays(text: string): MonthDay[] {

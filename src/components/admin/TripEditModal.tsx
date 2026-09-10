@@ -745,6 +745,7 @@ export function TripEditModal({
           onChange={(e) => setTripDraft((p) => ({ ...p, status: e.target.value }))}
         >
           <option value="active">Идэвхтэй</option>
+          <option value="paused">Түр зогссон</option>
           <option value="cancelled">Цуцлагдсан</option>
           <option value="sold_out">Суудал дууссан</option>
           <option value="draft">Ноорог</option>

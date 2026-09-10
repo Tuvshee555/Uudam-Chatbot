@@ -256,6 +256,7 @@ export function TripsTab({
             >
               <option value="">Бүх төлөв</option>
               <option value="active">Идэвхтэй</option>
+              <option value="paused">Түр зогссон</option>
               <option value="cancelled">Цуцлагдсан</option>
               <option value="sold_out">Суудал дууссан</option>
               <option value="draft">Ноорог</option>
