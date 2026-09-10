@@ -10,6 +10,9 @@ export type PassengerPrice = {
   age_range: string;
   price: number | null;
   currency: string;
+  /** "Үнэгүй" when this fare is documented as free, not merely 0/unset — see
+   * isDocumentedFreeFare, which only trusts a 0 price accompanied by this. */
+  note?: string;
 };
 
 export type SourceProvenance = {
