@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { waitUntil } from "@vercel/functions";
 import { getEnv } from "./env";
 import { fixMojibake } from "./encoding";
 import { recordCounter } from "./observability";
@@ -736,24 +737,51 @@ async function persistTripScheduleMaintenance(trips: TravelTrip[]): Promise<void
   if (trips.length === 0) return;
 
   for (const trip of trips) {
-    await queryNeon(
-      `
-        UPDATE travel_trip_entries
-        SET departure_dates = $1::text[], status = $2, extra = $3::jsonb
-        WHERE id = $4
-          AND (
-            departure_dates IS DISTINCT FROM $1::text[]
-            OR status IS DISTINCT FROM $2
-            OR extra IS DISTINCT FROM $3::jsonb
-          )
-      `,
-      [trip.departure_dates, trip.status, JSON.stringify(trip.extra || {}), trip.id],
-    );
+    try {
+      await queryNeon(
+        `
+          UPDATE travel_trip_entries
+          SET departure_dates = $1::text[], status = $2, extra = $3::jsonb
+          WHERE id = $4
+            AND (
+              departure_dates IS DISTINCT FROM $1::text[]
+              OR status IS DISTINCT FROM $2
+              OR extra IS DISTINCT FROM $3::jsonb
+            )
+        `,
+        [trip.departure_dates, trip.status, JSON.stringify(trip.extra || {}), trip.id],
+      );
+    } catch (error) {
+      console.error("Persisting trip schedule maintenance failed", error);
+      continue;
+    }
     try {
       await flushWebsiteSync(trip.id, 1);
     } catch (error) {
       console.error("Website sync after trip schedule maintenance failed", error);
     }
+  }
+}
+
+/**
+ * listTrips() runs on every customer message (fast-path + AI trip lookup), so
+ * the DB write and cross-database website sync that make an auto-archive or
+ * auto-reactivate durable must never block that reply — the caller already
+ * has the correctly-sanitized trips in memory for this response regardless.
+ * The daily reminder cron re-runs listTrips() independently as a backstop, so
+ * a customer message that never lands (traffic dies right after this fires)
+ * still gets the maintenance persisted within a day either way.
+ */
+function schedulePersistTripScheduleMaintenance(trips: TravelTrip[]): void {
+  if (trips.length === 0) return;
+  const work = persistTripScheduleMaintenance(trips).catch((error) =>
+    console.error("Trip schedule maintenance failed", error),
+  );
+  try {
+    waitUntil(work);
+  } catch {
+    // Not running on Vercel (tests, local node) — detached execution is fine.
+    void work;
   }
 }
 
@@ -833,7 +861,7 @@ export async function listTrips(options?: {
   const scheduled = rows.rows.map(mapTripRow).map((trip) =>
     sanitizeTripScheduleForCurrentDate(trip),
   );
-  await persistTripScheduleMaintenance(
+  schedulePersistTripScheduleMaintenance(
     scheduled.filter((entry) => entry.changed).map((entry) => entry.trip),
   );
   const sanitized = scheduled.map((entry) => entry.trip);
