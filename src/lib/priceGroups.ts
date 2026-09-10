@@ -12,7 +12,14 @@ import { isInfantShapedAge } from "./travelFastPathsSearch";
  * that matters, and this mirrors the same dedup poster/tripMapper.ts already
  * does when mapping a POSTER's price table onto a trip.
  */
-export function deriveChildRules(groups: readonly PriceGroup[]): ChildRule[] {
+export function deriveChildRules(
+  groups: readonly PriceGroup[],
+  // Trip-level "this passenger type is free" — declared on the base price
+  // (no date-specific groups needed yet), independent of any price group.
+  // Only synthesized when nothing in the groups themselves already prices
+  // that type, so a real per-date band always wins over the blanket flag.
+  baseFree: { child?: boolean; infant?: boolean } = {},
+): ChildRule[] {
   const passengerPrices: PassengerPrice[] = groups.flatMap((group) => group.passenger_prices ?? []);
   const seen = new Set<string>();
   const rules: ChildRule[] = [];
@@ -22,6 +29,14 @@ export function deriveChildRules(groups: readonly PriceGroup[]): ChildRule[] {
     if (seen.has(key)) continue;
     seen.add(key);
     rules.push({ label: price.label, age_range: price.age_range, price: price.price, currency: price.currency, note: price.note || "" });
+  }
+  const hasBand = (target: "child" | "infant") =>
+    passengerPrices.some((p) => p.price != null && isInfantShapedAge(p.label.toLowerCase(), p.age_range) === (target === "infant"));
+  if (baseFree.infant && !hasBand("infant")) {
+    rules.push({ label: "Нярай", age_range: "", price: 0, currency: "MNT", note: "Үнэгүй" });
+  }
+  if (baseFree.child && !hasBand("child")) {
+    rules.push({ label: "Хүүхэд", age_range: "", price: 0, currency: "MNT", note: "Үнэгүй" });
   }
   return rules;
 }

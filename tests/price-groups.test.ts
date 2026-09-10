@@ -48,6 +48,33 @@ test("no groups at all derives no rules", () => {
   assert.deepEqual(deriveChildRules([]), []);
 });
 
+test("a trip with no price groups yet can still declare infant free from the base tab", () => {
+  const rules = deriveChildRules([], { infant: true });
+  assert.equal(rules.length, 1);
+  assert.equal(rules[0].label, "Нярай");
+  assert.equal(rules[0].price, 0);
+  assert.equal(rules[0].note, "Үнэгүй");
+});
+
+test("the base-tab free flag also works for child, independently of infant", () => {
+  const rules = deriveChildRules([], { child: true });
+  assert.equal(rules.length, 1);
+  assert.equal(rules[0].label, "Хүүхэд");
+});
+
+test("a real infant band in a price group wins over the base-tab free flag", () => {
+  // If the trip HAS priced its infant tier per date group, that real number
+  // must never be silently overridden by a leftover base-tab checkbox.
+  const g = group({ passenger_prices: [{ label: "Нярай", age_range: "0-23 сар", price: 350000, currency: "MNT" }] });
+  const rules = deriveChildRules([g], { infant: true });
+  assert.equal(rules.length, 1);
+  assert.equal(rules[0].price, 350000);
+});
+
+test("base-tab free flags are false by default and add nothing", () => {
+  assert.deepEqual(deriveChildRules([], {}), []);
+});
+
 test("withDerivedSummaryFields backfills the legacy flat child/infant fields from passenger_prices", () => {
   const g = group({
     passenger_prices: [

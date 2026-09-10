@@ -176,12 +176,19 @@ function MoneyInput({
   value,
   onChange,
   missing,
+  free,
+  onFreeChange,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   /** Reddens the box until a real amount is entered — a required field. */
   missing?: boolean;
+  /** When provided, shows a "Үнэгүй" checkbox that disables the number box
+   * instead of demanding a price — for a passenger type this trip genuinely
+   * never charges (almost always the infant fare). */
+  free?: boolean;
+  onFreeChange?: (free: boolean) => void;
 }) {
   return (
     <label className="block">
@@ -194,15 +201,28 @@ function MoneyInput({
       >
         <input
           inputMode="numeric"
-          value={value}
+          disabled={free}
+          value={free ? "" : value}
+          placeholder={free ? "Үнэгүй" : ""}
           onChange={(e) => onChange(e.target.value.replace(/[^\d]/g, ""))}
-          className="min-w-0 flex-1 bg-transparent text-sm tabular-nums text-ink outline-none placeholder:text-ink-subtle"
+          className="min-w-0 flex-1 bg-transparent text-sm tabular-nums text-ink outline-none placeholder:text-ink-subtle disabled:text-ink-subtle"
         />
         <span className="ml-2 rounded-[6px] bg-surface-sunken px-2 py-1 text-sm font-semibold text-ink-muted">
           ₮
         </span>
       </span>
-      {missing && <span className="mt-1 block text-xs font-medium text-danger">Заавал бөглөх</span>}
+      {missing && !free && <span className="mt-1 block text-xs font-medium text-danger">Заавал бөглөх</span>}
+      {onFreeChange && (
+        <span className="mt-1.5 flex items-center gap-1.5 text-xs text-ink-subtle">
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5 rounded border-line-strong accent-brand"
+            checked={!!free}
+            onChange={(e) => onFreeChange(e.target.checked)}
+          />
+          Үнэгүй
+        </span>
+      )}
     </label>
   );
 }
@@ -552,15 +572,24 @@ export function TripEditModal({
   // deriveChildRules in priceGroups.ts) so re-derive it from the live,
   // on-screen price groups here too, otherwise marking infant/child free in
   // this same modal would still show as a missing-data gap until reopened.
-  const liveChildRulesExtra = { child_rules: deriveChildRules(tripPriceGroups) };
+  // Free can also be declared on the base tab's flat price (no date groups
+  // at all yet) — either source counts as documented.
+  const liveChildRulesExtra = {
+    child_rules: deriveChildRules(tripPriceGroups, {
+      child: tripDraft.child_price_free === "true",
+      infant: tripDraft.infant_price_free === "true",
+    }),
+  };
+  const infantFareFree = documentedFreeFare(liveChildRulesExtra, "infant");
+  const childFareFree = documentedFreeFare(liveChildRulesExtra, "child");
   const gaps = findTripGaps({
     route_name: tripDraft.route_name,
     duration_text: tripDraft.duration_text,
     adult_price: parseMoneyDraft(tripDraft.adult_price),
     child_price: parseMoneyDraft(tripDraft.child_price),
     infant_price: parseMoneyDraft(tripDraft.infant_price),
-    infant_fare_free: documentedFreeFare(liveChildRulesExtra, "infant"),
-    child_fare_free: documentedFreeFare(liveChildRulesExtra, "child"),
+    infant_fare_free: infantFareFree,
+    child_fare_free: childFareFree,
     departure_dates: splitDraftList(tripDraft.departure_dates),
     photo_urls: tripPhotoUrls,
     itinerary_days: tripItineraryDays,
@@ -666,12 +695,16 @@ export function TripEditModal({
           value={tripDraft.child_price}
           onChange={(value) => setTripDraft((p) => ({ ...p, child_price: value }))}
           missing={gapKeys.has("child_price")}
+          free={tripDraft.child_price_free === "true"}
+          onFreeChange={(free) => setTripDraft((p) => ({ ...p, child_price_free: free ? "true" : "", child_price: free ? "" : p.child_price }))}
         />
         <MoneyInput
           label="Нярайн үнэ"
           value={tripDraft.infant_price}
           onChange={(value) => setTripDraft((p) => ({ ...p, infant_price: value }))}
           missing={gapKeys.has("infant_price")}
+          free={tripDraft.infant_price_free === "true"}
+          onFreeChange={(free) => setTripDraft((p) => ({ ...p, infant_price_free: free ? "true" : "", infant_price: free ? "" : p.infant_price }))}
         />
         <div className="rounded-lg border border-line bg-surface-sunken p-3 sm:col-span-2">
           <p className="text-sm font-semibold text-ink">Насны ангилал</p>
