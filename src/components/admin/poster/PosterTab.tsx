@@ -492,6 +492,7 @@ export default function PosterTab({
   const [quickAdultPrice, setQuickAdultPrice] = useState("");
   const [quickChildPrice, setQuickChildPrice] = useState("");
   const [quickInfantPrice, setQuickInfantPrice] = useState("");
+  const [quickInfantFree, setQuickInfantFree] = useState(false);
   const [quickDepartureDate, setQuickDepartureDate] = useState("");
   const quickPhotoInputRef = useRef<HTMLInputElement>(null);
   const [bulkPlan, setBulkPlan] = useState<PosterBulkPlan | null>(null);
@@ -701,7 +702,7 @@ export default function PosterTab({
   // Each quick-fill writes the value AND saves right away (poster + chatbot
   // trip + website), so "Тавих" is the whole job: the gap box re-reads the
   // saved trip and drops the field the moment it is filled.
-  async function quickFillPrice(adultText: string, childText: string, infantText: string) {
+  async function quickFillPrice(adultText: string, childText: string, infantText: string, infantFree = false) {
     if (!trip) return;
     const clone = structuredClone(trip);
     clone.price_table ||= { columns: ["Том хүн", "Хүүхэд", "Нярай"], rows: [], note: "" };
@@ -726,7 +727,10 @@ export default function PosterTab({
     const row = clone.price_table.rows[0];
     if (adultText.trim()) row.cells[adultIdx] = `${adultText.trim()}₮`;
     if (childText.trim()) row.cells[childIdx] = `${childText.trim()}₮`;
-    if (infantText.trim()) row.cells[infantIdx] = `${infantText.trim()}₮`;
+    // "Үнэгүй" is a real, distinct answer from leaving the cell blank — a blank
+    // infant fare still blocks saving as missing data, this marks it answered.
+    if (infantFree) row.cells[infantIdx] = "Үнэгүй";
+    else if (infantText.trim()) row.cells[infantIdx] = `${infantText.trim()}₮`;
     const next = normalizeTripData(clone) as PosterTrip;
     setTrip(next);
     await persistTrip(next);
@@ -1256,6 +1260,7 @@ export default function PosterTab({
       ".ptable tr",
       ".price-note-box",
       ".price-desc-input",
+      ".flights-row",
       ".program-head",
       ".droute",
       ".dsummary li",
@@ -2218,18 +2223,29 @@ export default function PosterTab({
                                           inputMode="numeric"
                                           placeholder="ж: 300000"
                                           value={quickInfantPrice}
+                                          disabled={quickInfantFree}
                                           onChange={(e) => setQuickInfantPrice(e.target.value.replace(/[^\d]/g, ""))}
                                         />
+                                        <label className="mt-1.5 flex items-center gap-1.5 text-xs text-ink-subtle">
+                                          <input
+                                            type="checkbox"
+                                            className="h-3.5 w-3.5 rounded border-line-strong accent-brand"
+                                            checked={quickInfantFree}
+                                            onChange={(e) => { setQuickInfantFree(e.target.checked); if (e.target.checked) setQuickInfantPrice(""); }}
+                                          />
+                                          Нярай үнэгүй (тэр аялалд)
+                                        </label>
                                       </div>
                                     )}
                                     <Button
                                       size="sm"
-                                      disabled={!!busy || (!quickAdultPrice.trim() && !quickChildPrice.trim() && !quickInfantPrice.trim())}
+                                      disabled={!!busy || (!quickAdultPrice.trim() && !quickChildPrice.trim() && !quickInfantPrice.trim() && !quickInfantFree)}
                                       onClick={() => {
-                                        void quickFillPrice(quickAdultPrice, quickChildPrice, quickInfantPrice);
+                                        void quickFillPrice(quickAdultPrice, quickChildPrice, quickInfantPrice, quickInfantFree);
                                         setQuickAdultPrice("");
                                         setQuickChildPrice("");
                                         setQuickInfantPrice("");
+                                        setQuickInfantFree(false);
                                       }}
                                     >
                                       Тавих

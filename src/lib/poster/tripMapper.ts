@@ -22,6 +22,9 @@ type PassengerPrice = {
   age_range: string;
   price: number | null;
   currency: "MNT";
+  /** "Үнэгүй" when the cell documented this fare as free — see isDocumentedFreeFare,
+   * which only trusts a 0 price when this note says so, never a bare 0. */
+  note?: string;
 };
 type MappedPriceGroup = {
   label: string;
@@ -66,9 +69,19 @@ export type MappedTripFields = {
   };
 };
 
-/** "2,340,000₮" / "990.000₮" / "4,180 юань / 2,340,000₮" -> first tugrik-looking number. */
-function parsePriceToNumber(cellText: string | undefined): number | null {
+/** A price cell the operator explicitly wrote as free, not merely blank. */
+export function isFreePriceCell(cellText: string | undefined): boolean {
+  return /үнэгүй|free/i.test(cellText || "");
+}
+
+/** "2,340,000₮" / "990.000₮" / "4,180 юань / 2,340,000₮" -> first tugrik-looking number.
+ * A cell written as "Үнэгүй" (free) maps to 0 when allowFree is set — only the
+ * child/infant columns pass that; the adult column never does, so a stray
+ * "Үнэгүй" typed in the wrong cell can never zero out a real adult fare. See
+ * isDocumentedFreeFare, which only trusts a 0 accompanied by that note. */
+function parsePriceToNumber(cellText: string | undefined, allowFree = false): number | null {
   if (!cellText) return null;
+  if (allowFree && isFreePriceCell(cellText)) return 0;
   // Prefer a ₮-suffixed number; fall back to the first number found.
   const tugrikMatch = cellText.match(/([\d][\d,.\s]*\d|\d)\s*₮/);
   const raw = tugrikMatch ? tugrikMatch[1] : cellText.match(/([\d][\d,.\s]*\d|\d)/)?.[1];
@@ -171,12 +184,16 @@ function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup
   return priceTable.rows
     .map((row) => {
       const dates = expandPosterDateList(row.dates);
-      const passenger_prices = childColumns.map(({ column, index }) => ({
-        label: column,
-        age_range: extractAgeRange(column),
-        price: parsePriceToNumber(priceCell(row, columns, index)),
-        currency: "MNT" as const,
-      }));
+      const passenger_prices = childColumns.map(({ column, index }) => {
+        const cell = priceCell(row, columns, index);
+        return {
+          label: column,
+          age_range: extractAgeRange(column),
+          price: parsePriceToNumber(cell, true),
+          currency: "MNT" as const,
+          ...(isFreePriceCell(cell) ? { note: "Үнэгүй" } : {}),
+        };
+      });
       const pricedPassengers = passenger_prices.filter((price) => price.price != null);
       const infant = pricedPassengers.find((price) => isInfantColumn(price.label));
       const child = pricedPassengers.find((price) => price !== infant) || pricedPassengers[0];

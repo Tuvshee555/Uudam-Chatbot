@@ -446,7 +446,21 @@ export default function Poster({
                     </td>
                     {cells.map((c, ci) => (
                       <td className="pamt" key={ci}>
-                        {t.price_table ? <Ed value={c} placeholder="Үнэ" onChange={(v) => upd(["price_table", "rows", ri, "cells", ci], v)} /> : c}
+                        {t.price_table ? (
+                          <>
+                            <Ed value={c} placeholder="Үнэ" onChange={(v) => upd(["price_table", "rows", ri, "cells", ci], v)} />
+                            {c.trim().toLowerCase() !== "үнэгүй" && (
+                              <button
+                                type="button"
+                                className="editor-only pamt-free-btn"
+                                onClick={() => upd(["price_table", "rows", ri, "cells", ci], "Үнэгүй")}
+                                title="Энэ мөрийг үнэгүй болгох"
+                              >
+                                Үнэгүй болгох
+                              </button>
+                            )}
+                          </>
+                        ) : c}
                       </td>
                     ))}
                     {t.price_table ? <td className="editor-only ptable-add-col-th" /> : null}
@@ -505,6 +519,32 @@ export default function Poster({
               placeholder="Тайлбар нэмэх..."
               onChange={(v) => upd(["price_desc"], v)}
             />
+          </div>
+        ) : null}
+
+        {t.flights ? (
+          <div className="sec compact-sec flights-sec">
+            <h3>✈️ Нислэг</h3>
+            <div className="flights-rows">
+              <div className="flights-row">
+                <span className="flights-label">Явах:</span>
+                <Ed
+                  className="flights-value"
+                  value={t.flights.outbound}
+                  placeholder="Нислэгийн мэдээлэл"
+                  onChange={(v) => upd(["flights", "outbound"], v)}
+                />
+              </div>
+              <div className="flights-row">
+                <span className="flights-label">Ирэх:</span>
+                <Ed
+                  className="flights-value"
+                  value={t.flights.return}
+                  placeholder="Нислэгийн мэдээлэл"
+                  onChange={(v) => upd(["flights", "return"], v)}
+                />
+              </div>
+            </div>
           </div>
         ) : null}
 

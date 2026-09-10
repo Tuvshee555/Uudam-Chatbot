@@ -153,6 +153,8 @@
 .poster-root .page .pwhen-input:focus {background:rgba(0,0,0,.04);border-radius:4px}
 body.exporting .page .pwhen-input {background:transparent !important}
 .poster-root .page .pamt {font-weight:800;white-space:normal;min-width:110px;overflow-wrap:anywhere;word-break:normal}
+.poster-root .page .pamt-free-btn {display:block;margin-top:3px;border:1px dashed #b9c6d8;background:#fff;color:var(--navy-soft);border-radius:999px;padding:2px 8px;font-size:10px;font-weight:600;cursor:pointer;white-space:nowrap}
+.poster-root .page .pamt-free-btn:hover {border-color:var(--navy);background:#f4f7fb}
 .poster-root .page .price-desc {margin-top:10px;font-size:var(--poster-price-desc-size,14px);line-height:1.7;color:var(--ink)}
 .poster-root .page .price-desc-input {width:100%;min-height:36px;padding:8px 10px;border-radius:8px;border:1px dashed #b9c6d8;font-size:var(--poster-price-desc-size,14px);line-height:1.7;color:var(--ink);outline:none;resize:none;font-family:inherit;background:#fff}
 .poster-root .page .price-desc-input:focus {border-color:var(--navy);border-style:solid}
@@ -168,6 +170,14 @@ body.exporting .page .pwhen-input {background:transparent !important}
 .poster-root .page .price-note-line {font-style:italic;color:#586879}
 .poster-root .page .price-note-remove {position:absolute;top:8px;right:8px;width:22px;height:22px;border-radius:50%;border:1px solid #d8e4f0;background:#fff;color:var(--danger);font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer}
 .poster-root .page .price-note-remove:hover {border-color:var(--danger);background:#fff5f4}
+
+/* Flights */
+.poster-root .page .flights-rows {display:grid;gap:8px;margin-top:4px}
+.poster-root .page .flights-row {display:flex;align-items:baseline;gap:8px;border:1px solid #d9e6f2;border-left:4px solid var(--gold);border-radius:8px;background:#fbfdff;padding:10px 12px;font-size:var(--poster-price-note-size,13px);line-height:1.55;color:#27415d}
+.poster-root .page .flights-label {font-weight:900;color:var(--navy);flex-shrink:0}
+.poster-root .page .flights-value {outline:none;border-radius:6px;flex:1}
+.poster-root .page .flights-value:hover {box-shadow:0 0 0 2px #cfe0f1 inset}
+.poster-root .page .flights-value:focus {box-shadow:0 0 0 2px var(--navy) inset;background:#fff}
 
 /* Program header */
 .poster-root .page .program-head {display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin:36px 0 12px;padding-top:24px;border-top:1px solid var(--line)}
