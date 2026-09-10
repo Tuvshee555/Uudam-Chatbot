@@ -4,6 +4,7 @@ import { getPosterBrochureHref } from "@/lib/poster/pdfUrl";
 import { blockingGaps, documentedFreeFare, findTripGaps, type TripGap } from "@/lib/tripCompleteness";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
 import { deriveChildRules } from "@/lib/priceGroups";
+import { isInfantShapedAge } from "@/lib/travelFastPathsSearch";
 import type { AnswerHint, BookingTerms, DiscountGroup, ExtraFee, ItineraryDay, PassengerPrice, PriceGroup, RoomPrice, SourceProvenance, TravelTrip } from "@/lib/adminTypes";
 
 export type TripDraftState = Record<string, string>;
@@ -326,6 +327,69 @@ function isFreeFare(price: PassengerPrice) {
   return price.price === 0 && price.note === FREE_FARE_NOTE;
 }
 
+/** "2-11 нас" / "0-23 сар" / "12 сар" -> the picker's own numeric parts.
+ * Infants are usually banded in months, children/adults in years — every
+ * downstream reader (isInfantShapedAge and friends) tells the two apart by
+ * checking for the literal substring "сар", so the unit must round-trip
+ * exactly, never default silently to years. */
+export function parseAgeRange(value: string): { min: string; max: string; unit: "сар" | "нас" } {
+  const unit: "сар" | "нас" = /сар/i.test(value) ? "сар" : "нас";
+  const range = value.match(/(\d{1,3})\s*[-–—]\s*(\d{1,3})/);
+  if (range) return { min: range[1], max: range[2], unit };
+  const single = value.match(/(\d{1,3})/);
+  return { min: single?.[1] ?? "", max: "", unit };
+}
+
+export function formatAgeRange(min: string, max: string, unit: "сар" | "нас"): string {
+  if (!min && !max) return "";
+  if (min && max) return `${min}-${max} ${unit}`;
+  return `${min || max} ${unit}`;
+}
+
+/** Pick an age band instead of typing it freeform — a min/max number and a
+ * unit toggle (months for infants, years for children), so a mistyped "нас"
+ * can never silently stand in for "сар" the way free text let it. */
+function AgeRangePicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const { min, max, unit } = parseAgeRange(value);
+  const setPart = (next: Partial<{ min: string; max: string; unit: "сар" | "нас" }>) => {
+    const merged = { min, max, unit, ...next };
+    onChange(formatAgeRange(merged.min, merged.max, merged.unit));
+  };
+  return (
+    <div className="flex items-stretch gap-1">
+      <input
+        className={cx(inputCls, "w-14 text-center")}
+        inputMode="numeric"
+        value={min}
+        placeholder="0"
+        onChange={(e) => setPart({ min: e.target.value.replace(/[^\d]/g, "") })}
+      />
+      <span className="flex items-center text-ink-subtle">–</span>
+      <input
+        className={cx(inputCls, "w-14 text-center")}
+        inputMode="numeric"
+        value={max}
+        placeholder="23"
+        onChange={(e) => setPart({ max: e.target.value.replace(/[^\d]/g, "") })}
+      />
+      <select
+        className={cx(inputCls, "w-20")}
+        value={unit}
+        onChange={(e) => setPart({ unit: e.target.value as "сар" | "нас" })}
+      >
+        <option value="сар">сар</option>
+        <option value="нас">нас</option>
+      </select>
+    </div>
+  );
+}
+
 /** One editable price band for a non-adult passenger type (child, infant, or
  * any other age tier the trip needs) — label, age range, price, and a Free
  * toggle. Adult stays its own single required field above this list since a
@@ -353,11 +417,9 @@ function PassengerBandRow({
       </div>
       <div>
         <label className="mb-0.5 block text-xs text-ink-muted">Нас</label>
-        <input
-          className={inputCls}
+        <AgeRangePicker
           value={price.age_range}
-          placeholder="ж: 2-11 нас"
-          onChange={(e) => onChange({ ...price, age_range: e.target.value })}
+          onChange={(age_range) => onChange({ ...price, age_range })}
         />
       </div>
       <div>
@@ -918,27 +980,46 @@ export function TripEditModal({
               />
             </div>
 
-            <div className="mt-3">
-              <p className="mb-1.5 text-xs font-semibold text-ink">Хүүхэд / Нярайн үнэ</p>
-              <div className="space-y-1.5">
-                {(g.passenger_prices ?? []).map((pp, ppIdx) => (
-                  <PassengerBandRow
-                    key={ppIdx}
-                    price={pp}
-                    onChange={(next) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.map((p2, j) => j === ppIdx ? next : p2) } : v))}
-                    onRemove={() => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.filter((_, j) => j !== ppIdx) } : v))}
-                  />
-                ))}
-              </div>
-              <div className="mt-1.5 flex flex-wrap gap-3">
-                <button type="button" className="text-xs text-brand hover:underline" onClick={() => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: [...(v.passenger_prices ?? []), emptyPassengerPrice("Хүүхэд")] } : v))}>
-                  + Хүүхдийн үнэ нэмэх
-                </button>
-                <button type="button" className="text-xs text-brand hover:underline" onClick={() => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: [...(v.passenger_prices ?? []), emptyPassengerPrice("Нярай")] } : v))}>
-                  + Нярайн үнэ нэмэх
-                </button>
-              </div>
-            </div>
+            {(() => {
+              const bands = g.passenger_prices ?? [];
+              const isInfantBand = (pp: PassengerPrice) => isInfantShapedAge(pp.label.toLowerCase(), pp.age_range);
+              const childBands = bands.map((pp, ppIdx) => ({ pp, ppIdx })).filter(({ pp }) => !isInfantBand(pp));
+              const infantBands = bands.map((pp, ppIdx) => ({ pp, ppIdx })).filter(({ pp }) => isInfantBand(pp));
+              const updateBand = (ppIdx: number, next: PassengerPrice) =>
+                setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.map((p2, j) => j === ppIdx ? next : p2) } : v));
+              const removeBand = (ppIdx: number) =>
+                setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.filter((_, j) => j !== ppIdx) } : v));
+              const addBand = (label: string) =>
+                setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: [...(v.passenger_prices ?? []), emptyPassengerPrice(label)] } : v));
+              return (
+                <>
+                  <div className="mt-3">
+                    <p className="mb-1.5 text-xs font-semibold text-ink">Хүүхдийн үнэ</p>
+                    <div className="space-y-1.5">
+                      {childBands.map(({ pp, ppIdx }) => (
+                        <PassengerBandRow key={ppIdx} price={pp} onChange={(next) => updateBand(ppIdx, next)} onRemove={() => removeBand(ppIdx)} />
+                      ))}
+                    </div>
+                    <button type="button" className="mt-1.5 text-xs text-brand hover:underline" onClick={() => addBand("Хүүхэд")}>
+                      + Хүүхдийн үнэ нэмэх
+                    </button>
+                  </div>
+
+                  <div className="mt-3">
+                    <p className="mb-1.5 text-xs font-semibold text-ink">Нярайн үнэ</p>
+                    <p className="mb-1.5 text-xs text-ink-subtle">Ихэвчлэн сараар тоологдоно (ж: 0-23 сар).</p>
+                    <div className="space-y-1.5">
+                      {infantBands.map(({ pp, ppIdx }) => (
+                        <PassengerBandRow key={ppIdx} price={pp} onChange={(next) => updateBand(ppIdx, next)} onRemove={() => removeBand(ppIdx)} />
+                      ))}
+                    </div>
+                    <button type="button" className="mt-1.5 text-xs text-brand hover:underline" onClick={() => addBand("Нярай")}>
+                      + Нярайн үнэ нэмэх
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
 
             <div className="mt-3">
               <label className="mb-0.5 block text-xs text-ink-muted">Тайлбар</label>

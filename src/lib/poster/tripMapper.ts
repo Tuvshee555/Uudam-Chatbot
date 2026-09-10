@@ -118,11 +118,21 @@ function cleanColumnLabel(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * "0-23 сар" (23 MONTHS old) used to come out as "0-23 нас" (23 YEARS old) —
+ * the unit was matched optionally then discarded, always appending "нас"
+ * regardless of what the source actually said. isInfantShapedAge and every
+ * other reader downstream tells infant from child ONLY by checking for the
+ * literal substring "сар", so silently dropping it mislabels a real infant
+ * band as an adult-aged child band. Preserve whichever unit was present;
+ * only default to "нас" when the label had no unit word at all.
+ */
 function extractAgeRange(label: string): string {
-  const range = label.match(/(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*(?:нас|age)?/i);
-  if (range) return `${Number(range[1])}-${Number(range[2])} нас`;
-  const single = label.match(/(\d{1,2})\s*(?:нас|age)/i);
-  return single ? `${Number(single[1])} нас` : "";
+  const unit = /сар/i.test(label) ? "сар" : "нас";
+  const range = label.match(/(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*(?:сар|нас|age)?/i);
+  if (range) return `${Number(range[1])}-${Number(range[2])} ${unit}`;
+  const single = label.match(/(\d{1,2})\s*(?:сар|нас|age)/i);
+  return single ? `${Number(single[1])} ${unit}` : "";
 }
 
 function isAdultColumn(label: string): boolean {
