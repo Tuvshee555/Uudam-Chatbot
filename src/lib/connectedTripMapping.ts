@@ -113,6 +113,37 @@ export function websiteExtraDetails(
   };
 }
 
+const WEEKDAY_NAMES = ["ням", "даваа", "мягмар", "лхагва", "пүрэв", "баасан", "бямба"];
+
+/** "Пүрэв гараг бүр" -> 4 (Thursday), or -1 when the text isn't a recurring-weekday rule. */
+export function recurringWeekdayIndex(text: string): number {
+  const lower = text.toLowerCase().trim();
+  if (!lower) return -1;
+  const day = WEEKDAY_NAMES.findIndex(name => lower.includes(name));
+  if (day < 0) return -1;
+  return /бүр|болгон/.test(lower) || /^[а-яөүё\s-]+гариг$/.test(lower) || WEEKDAY_NAMES.includes(lower)
+    ? day
+    : -1;
+}
+
+/** "Пүрэв гараг бүр" -> the next N occurrences (YYYY-MM-DD, UTC, Ulaanbaatar-local
+ * "today"), or [] when the text isn't a recurring-weekday rule. Shared by the
+ * website departure sync and the admin calendar — both need the exact same
+ * "what does this rule actually mean, starting from now" answer. */
+export function expandRecurringWeekday(text: string, now = new Date(), occurrences = 12): string[] {
+  const day = recurringWeekdayIndex(text);
+  if (day < 0) return [];
+  const localToday = new Date(now.getTime() + 8 * 3600000).toISOString().slice(0, 10);
+  const start = new Date(`${localToday}T00:00:00Z`);
+  start.setUTCDate(start.getUTCDate() + (day - start.getUTCDay() + 7) % 7);
+  const dates: string[] = [];
+  for (let i = 0; i < occurrences; i++) {
+    dates.push(start.toISOString().slice(0, 10));
+    start.setUTCDate(start.getUTCDate() + 7);
+  }
+  return dates;
+}
+
 export function websiteDepartures(trip: TravelTrip, now = new Date()) {
   const resolved = records(trip.extra.departure_dates_resolved);
   const dates = new Map<string, {
@@ -139,27 +170,9 @@ export function websiteDepartures(trip: TravelTrip, now = new Date()) {
       for (const ymd of parseTripDepartureDateText(text, now)) add(ymd, text);
     }
   }
-  const weekdayNames = ["ням", "даваа", "мягмар", "лхагва", "пүрэв", "баасан", "бямба"];
-  const recurringWeekday = (text: string) => {
-    const lower = text.toLowerCase().trim();
-    if (!lower) return -1;
-    const day = weekdayNames.findIndex(name => lower.includes(name));
-    if (day < 0) return -1;
-    return /бүр|болгон/.test(lower) || /^[а-яөүё\s-]+гариг$/.test(lower) || weekdayNames.includes(lower)
-      ? day
-      : -1;
-  };
   const ruleTexts = [...trip.departure_dates, String(trip.extra.departure_rule || "")];
   for (const text of ruleTexts) {
-    const day = recurringWeekday(text);
-    if (day < 0) continue;
-    const localToday = new Date(now.getTime() + 8 * 3600000).toISOString().slice(0, 10);
-    const start = new Date(`${localToday}T00:00:00Z`);
-    start.setUTCDate(start.getUTCDate() + (day - start.getUTCDay() + 7) % 7);
-    for (let i = 0; i < 12; i++) {
-      add(start.toISOString().slice(0, 10), text);
-      start.setUTCDate(start.getUTCDate() + 7);
-    }
+    for (const ymd of expandRecurringWeekday(text, now)) add(ymd, text);
   }
 
   for (const group of records(trip.extra.price_groups)) {

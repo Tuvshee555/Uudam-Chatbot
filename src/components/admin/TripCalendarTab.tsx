@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Badge, Button, Card, EmptyState, Icons, cx } from "@/components/ui";
 import { TabHeader } from "./AdminShared";
+import { expandRecurringWeekday } from "@/lib/connectedTripMapping";
 import type { TravelTrip } from "@/lib/adminTypes";
 
 type CalendarTripDay = {
@@ -45,7 +46,7 @@ function tripPosterId(trip: TravelTrip): string {
   return typeof posterId === "string" ? posterId : "";
 }
 
-function parseTripCalendar(trip: TravelTrip): { days: CalendarTripDay[]; rules: CalendarRule[] } {
+export function parseTripCalendar(trip: TravelTrip): { days: CalendarTripDay[]; rules: CalendarRule[] } {
   const days: CalendarTripDay[] = [];
   const rules: CalendarRule[] = [];
 
@@ -90,6 +91,21 @@ function parseTripCalendar(trip: TravelTrip): { days: CalendarTripDay[]; rules: 
           matched = true;
           days.push({ key: `${trip.id}:${month}:${day}:${text}`, month, day, label: text, trip });
         }
+      }
+    }
+
+    if (!matched) {
+      // "Пүрэв гараг бүр" etc — no fixed date, but a real, recurring weekly
+      // trip. Expand into its next occurrences so it actually shows up on
+      // the calendar grid instead of only in the "check this" sidebar list,
+      // which is where a recurring trip used to silently disappear to.
+      const occurrences = expandRecurringWeekday(text);
+      for (const ymd of occurrences) {
+        const [, monthStr, dayStr] = ymd.split("-");
+        const month = Number(monthStr);
+        const day = Number(dayStr);
+        matched = true;
+        days.push({ key: `${trip.id}:${ymd}:${text}`, month, day, label: `${text} (${ymd})`, trip });
       }
     }
 
