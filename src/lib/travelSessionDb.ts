@@ -400,6 +400,30 @@ export async function dbAutoHandoffSender(senderId: string): Promise<void> {
   );
 }
 
+/**
+ * Whether a stored pause row should still silence the bot for this sender.
+ *
+ * A paused row with NO expiry can never clear itself under the old rule
+ * (`expires_at && expired`): a null expiry skipped the auto-clear branch and
+ * fell straight through to "still paused", forever. Legacy rows — paused
+ * before dbPauseSender always stamped an expiry — silenced those customers
+ * permanently. Confirmed live 2026-09-11: two senders paused since June 28
+ * with expires_at = NULL, whose messages the bot received and then dropped
+ * without ever replying. Nothing may pause indefinitely, so a missing expiry
+ * counts as already expired.
+ *
+ * Split out from dbIsPaused so the decision is testable without a database.
+ */
+export function pauseRowStillActive(
+  row: { paused: boolean; expires_at: string | null } | undefined,
+  now = new Date(),
+): boolean {
+  if (!row) return false;
+  if (!row.paused) return false;
+  if (!row.expires_at) return false;
+  return new Date(row.expires_at) >= now;
+}
+
 export async function dbIsPaused(senderId: string): Promise<boolean> {
   const ready = await ensureTravelSchema();
   if (!ready) return false;
@@ -409,16 +433,15 @@ export async function dbIsPaused(senderId: string): Promise<boolean> {
   );
   const row = result?.rows[0];
   if (!row) return false;
-  if (!row.paused) return false;
-  if (row.expires_at && new Date(row.expires_at) < new Date()) {
-    // expired — auto-clear
+  if (pauseRowStillActive(row)) return true;
+  if (row.paused) {
+    // Expired, or never given an expiry — clear it so the row stops lying.
     await queryNeon(
       `UPDATE travel_senders SET paused = FALSE, pause_reason = '', paused_at = NULL, expires_at = NULL, updated_at = NOW() WHERE sender_id = $1`,
       [senderId],
     );
-    return false;
   }
-  return true;
+  return false;
 }
 
 const MAX_PAUSE_MS = 14 * 24 * 60 * 60 * 1000;
