@@ -63,7 +63,8 @@ import {
   getWebhookRuntimeDiagnostics as getWebhookRuntimeDiagnosticsInternal,
   resetWebhookStateForTests as resetWebhookStateForTestsInternal,
 } from "../../lib/webhookDedup";
-import { sendPlatformMessage, recordImageMessage, sendPhotoAlbum, sendTripMediaForReply, fetchAndStoreFbName, sendFacebookTypingIndicator, normalizeLowerText, isQuickInfoKeyword, isHandoffRequest, CONTACT_OPERATOR_LABEL, DUPLICATE_REPLY_NUDGE, isBookingIntent, extractPhoneNumber, isPhoneOnlyMessage, isCommentTriggerMatch } from "../../lib/webhookMedia";
+import { sendPlatformMessage, recordImageMessage, recordFileMessage, sendPhotoAlbum, sendTripMediaForReply, fetchAndStoreFbName, sendFacebookTypingIndicator, normalizeLowerText, isQuickInfoKeyword, isHandoffRequest, CONTACT_OPERATOR_LABEL, DUPLICATE_REPLY_NUDGE, isBookingIntent, extractPhoneNumber, isPhoneOnlyMessage, isCommentTriggerMatch } from "../../lib/webhookMedia";
+import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
 const env = getEnv();
 const PAGE_TOKENS = new Map(env.facebookPages.map((p) => [p.pageId, p.token]));
 const FALLBACK_TOKEN = env.tokenPage;
@@ -1358,6 +1359,42 @@ async function handleMessage(
         buttons: programButtons,
         afterDeliver: async () => {
           if (platform !== "facebook" || !token) return;
+          // The reply literally says "PDF хөтөлбөрийг хавсаргалаа", so the
+          // brochure the program builder already resolved must be the one
+          // sent. This used to fall through to sendTripMediaForReply, which
+          // re-derives the brochure from the reply TEXT — so a reply about
+          // the wrong trip attached that wrong trip's PDF, or (when the text
+          // matched nothing) promised a PDF and sent nothing at all.
+          if (programReply.brochure) {
+            try {
+              const sent =
+                programReply.brochure.type === "id"
+                  ? await sendFbFileAttachment(senderId, programReply.brochure.value, token)
+                  : await sendFbFileByUrl(senderId, programReply.brochure.value, token);
+              if (sent) {
+                await recordFileMessage(senderId, programReply.brochure.value);
+                recordCounter("webhook.program_pdf_sent_total", 1, { platform });
+              } else {
+                logWarn("webhook.program_pdf_send_failed", {
+                  requestId: trace?.requestId,
+                  correlationId: trace?.correlationId,
+                  platform,
+                  senderHash: hashIdentifier(senderId),
+                  sourceType: programReply.brochure.type,
+                });
+              }
+            } catch (error) {
+              logWarn("webhook.program_pdf_send_failed", {
+                requestId: trace?.requestId,
+                correlationId: trace?.correlationId,
+                platform,
+                senderHash: hashIdentifier(senderId),
+                sourceType: programReply.brochure.type,
+                classification: classifyError(error),
+              });
+            }
+            return;
+          }
           if (programReply.mediaUrls.length > 0) {
             for (const url of programReply.mediaUrls) {
               try {

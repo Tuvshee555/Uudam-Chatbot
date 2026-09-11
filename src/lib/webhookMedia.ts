@@ -450,7 +450,9 @@ export function isHandoffRequest(text: string, keywords: string[]): boolean {
 export function isFrustratedHandoffRequest(text: string): boolean {
   return detectFrustratedHandoffRequest(text);
 }
-export const CONTACT_OPERATOR_LABEL = "Зөвлөхтэй холбогдох";
+// Defined in the dependency-free leaf module so travelFastPaths.ts can offer
+// this label on every quick-reply set without importing this file.
+export { CONTACT_OPERATOR_LABEL } from "./contactLabels";
 // Sent when the bot would repeat its previous reply word-for-word. Must never
 // scold ("өмнө нь хэлсэн") and never fake an error.
 export const DUPLICATE_REPLY_NUDGE =

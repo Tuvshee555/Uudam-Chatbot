@@ -42,6 +42,8 @@ import {
   type TripProgramReplyResult,
 } from "./travelFastPathsSearch";
 import { buildTripProgramReply } from "./travelFastPathsProgram";
+import { CONTACT_OPERATOR_LABEL } from "./contactLabels";
+import { SMART_BUTTON_LABELS } from "./smartButtonLabels";
 import { TRIP_MEDIA_UNAVAILABLE_SILENT } from "./reply";
 import {
   buildAmbiguousTripReply,
@@ -877,16 +879,21 @@ export function buildClarificationButtons(trips: TravelTrip[]): string[] {
     .map((trip, index) => `${index + 1}. ${compactButtonTripName(trip.route_name)}`);
 }
 
+export { SMART_BUTTON_LABELS, SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
+
 export function buildSmartButtons(replyText: string, trips: TravelTrip[]): string[] | null {
   const { best } = findBestTripMatch(replyText, trips);
   if (!best) return null;
 
-  const buttons: string[] = ["Хөтөлбөр үзэх"];
+  const buttons: string[] = [SMART_BUTTON_LABELS.PROGRAM];
   if (Array.isArray(best.photo_urls) && best.photo_urls.length > 0) {
-    buttons.push("Зураг үзэх");
+    buttons.push(SMART_BUTTON_LABELS.PHOTOS);
   }
-  buttons.push("Захиалах");
-  if (best.seats_left !== null) buttons.push("Суудал бий юу?");
+  buttons.push(SMART_BUTTON_LABELS.BOOK);
+  if (best.seats_left !== null) buttons.push(SMART_BUTTON_LABELS.SEATS);
+  // Always offer a human. A customer who cannot see the option assumes it
+  // does not exist; the choice being visible is most of its value.
+  buttons.push(CONTACT_OPERATOR_LABEL);
   return buttons;
 }
 

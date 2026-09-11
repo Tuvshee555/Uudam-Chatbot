@@ -78,11 +78,23 @@ export function startCollectState(originalMessage: string): CollectState {
   };
 }
 
+/**
+ * Where a customer can see every trip, its full programme and prices without
+ * waiting on anyone. Offered alongside the very first booking question: a
+ * customer who taps "Захиалах" wants to move NOW, and being asked three
+ * questions before receiving anything reads as a form, not service.
+ */
+export const BOOKING_WEBSITE_URL = "https://uudam-booking-web.vercel.app";
+
 /** Returns the question to ask for the current step. */
 export function promptForStep(step: CollectStep): string {
   switch (step) {
     case "name":
-      return "Захиалга бүртгэхийн тулд таны нэрийг асуулъя — нэрээ бичнэ үү.";
+      return [
+        `Бүх аяллыг үнэ, хөтөлбөрийн хамт эндээс шууд харна уу 👉 ${BOOKING_WEBSITE_URL}`,
+        "",
+        "Манай зөвлөх тантай холбогдож захиалгыг баталгаажуулна. Нэрээ бичнэ үү.",
+      ].join("\n");
     case "phone":
       return "Баярлалаа! Тантай холбогдох утасны дугаараа бичнэ үү.";
     case "trip":

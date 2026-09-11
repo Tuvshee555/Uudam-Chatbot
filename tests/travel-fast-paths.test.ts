@@ -69,7 +69,14 @@ test("smart buttons offer useful next taps for a matched trip with photos", () =
     ],
   );
 
-  assert.deepEqual(buttons, ["Хөтөлбөр үзэх", "Зураг үзэх", "Захиалах"]);
+  // "Зөвлөхтэй холбогдох" rides along on every set: reaching a human has to
+  // be a visible choice, not one the customer has to know to ask for.
+  assert.deepEqual(buttons, [
+    "Хөтөлбөр үзэх",
+    "Зураг үзэх",
+    "Захиалах",
+    "Зөвлөхтэй холбогдох",
+  ]);
 });
 
 test("clarification buttons are numbered and messenger-sized", () => {
