@@ -19,6 +19,7 @@ import {
 import {
   getTripBrochureAsset,
   isPosterLinkedTrip,
+  phoneticLatinText,
   resolveTripFromUserMessage,
 } from "./travelFastPathsSearch";
 import type { TravelTrip } from "./travelTypes";
@@ -465,10 +466,28 @@ const BOOKING_INTENT_KEYWORDS = [
   "book",
   "booking",
 ];
+
+/**
+ * The same keywords in phonetic space, so Latin-typed Mongolian counts too.
+ *
+ * Mongolians routinely type Cyrillic words in Latin letters ("zahialga hiie",
+ * "burtguuleh"). Matching only the Cyrillic forms missed those outright: a
+ * real customer typed "zahialga hiie" — an unambiguous buy signal — and the
+ * bot re-sent the same price block it had just sent instead of starting the
+ * booking flow (seen in a live conversation, 2026-09-11). phoneticLatinText
+ * collapses both scripts onto one spelling, so one list covers both.
+ */
+const BOOKING_INTENT_KEYWORDS_PHONETIC = Array.from(
+  new Set(BOOKING_INTENT_KEYWORDS.map((keyword) => phoneticLatinText(keyword))),
+).filter(Boolean);
+
 export function isBookingIntent(text: string): boolean {
   const normalized = normalizeLowerText(text);
   if (!normalized) return false;
-  return BOOKING_INTENT_KEYWORDS.some((keyword) => normalized.includes(keyword));
+  if (BOOKING_INTENT_KEYWORDS.some((keyword) => normalized.includes(keyword))) return true;
+  const phonetic = phoneticLatinText(text);
+  if (!phonetic) return false;
+  return BOOKING_INTENT_KEYWORDS_PHONETIC.some((keyword) => phonetic.includes(keyword));
 }
 // Mongolian mobile numbers are 8 digits starting with 6, 8, or 9. A 7-prefix
 // 8-digit number is an Ulaanbaatar LANDLINE (e.g. the agency's own 7713-6633),

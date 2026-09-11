@@ -1453,6 +1453,20 @@ async function handleMessage(
             allowLooseFallback: false,
           })
         : null;
+      // The date fast-path and the AI path both refuse to repeat themselves;
+      // this one did not, so a customer could be sent the same price block
+      // twice in a row (seen live 2026-09-11 — the identical block bracketed
+      // a PDF reply). Re-sending what someone just read trains them to stop
+      // reading.
+      if (lastReply && isDuplicateReply(lastReply.text, safeStructuredReply)) {
+        recordCounter("webhook.duplicate_reply_avoided_total", 1, { platform });
+        await deliverFastPathReply({
+          reply: DUPLICATE_REPLY_NUDGE,
+          failTag: "duplicate_reply_notice",
+          rememberSource: "api.webhook.structured_duplicate_nudge",
+        });
+        return;
+      }
       await deliverFastPathReply({
         reply: safeStructuredReply,
         failTag: "structured_trip_fast_path",
