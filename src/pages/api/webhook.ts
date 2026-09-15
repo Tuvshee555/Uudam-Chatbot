@@ -385,7 +385,12 @@ async function handleMessage(
     if (!delivered) {
       throw new RetryableWebhookError(`delivery_failed:${input.failTag}`);
     }
-    if (!noDataReply && input.afterDeliver) await input.afterDeliver();
+    // Recorded BEFORE afterDeliver (which sends any PDF/photo and logs it via
+    // recordFileMessage/recordImageMessage with blank text): this text is
+    // what actually reaches Messenger first. Logging it after afterDeliver
+    // used to put a blank placeholder row ahead of the real caption in
+    // travel_conversations, which reads backwards in the admin inbox even
+    // though customers received the messages in the right order.
     try {
       await appendMessage(senderId, "assistant", reply);
       await setLastReplyConsistent(sessionId, reply);
@@ -398,6 +403,7 @@ async function handleMessage(
         classification: classifyError(error),
       });
     }
+    if (!noDataReply && input.afterDeliver) await input.afterDeliver();
     await rememberTurn(noDataReply ? `${input.rememberSource}_handoff` : input.rememberSource);
     if (input.counter) recordCounter(input.counter, 1, { platform });
   };
@@ -602,6 +608,9 @@ async function handleMessage(
         if (!delivered) {
           throw new RetryableWebhookError("delivery_failed:booking_collect_done");
         }
+        // See the booking_collect_start comment above — this path was also
+        // never recording its outgoing text.
+        await appendMessage(senderId, "assistant", completionMsg).catch(() => {});
         return;
       } else {
         await setCollectState(senderId, nextState);
@@ -620,6 +629,8 @@ async function handleMessage(
         if (!delivered) {
           throw new RetryableWebhookError("delivery_failed:booking_collect_step");
         }
+        // See the booking_collect_start comment above.
+        await appendMessage(senderId, "assistant", question).catch(() => {});
         return;
       }
     }
@@ -1005,6 +1016,12 @@ async function handleMessage(
     if (!delivered) {
       throw new RetryableWebhookError("delivery_failed:booking_collect_start");
     }
+    // Was missing: every other reply path records its outgoing text so the
+    // next turn's AI context and the admin inbox both see it. Without this,
+    // a "Захиалах" tap looked like the bot went silent (it likely didn't —
+    // the booking question was sent, just never logged), and the next AI
+    // reply lost track of having already asked this question.
+    await appendMessage(senderId, "assistant", firstQuestion).catch(() => {});
     recordCounter("webhook.booking_collect_started_total", 1, { platform });
     return;
   }
@@ -2096,7 +2113,20 @@ export default async function handler(
                 const isBotEcho = event.message.metadata === BOT_MESSAGE_METADATA;
                 if (customerId && !isBotEcho) {
                   const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000;
-                  await dbPauseSender(customerId, fourteenDaysMs, "operator_reply").catch(() => {});
+                  // Was previously `.catch(() => {})` — a failed pause write
+                  // was invisible, and the bot would just keep answering a
+                  // customer staff already took over with no error anywhere.
+                  await dbPauseSender(customerId, fourteenDaysMs, "operator_reply").catch(
+                    (error) => {
+                      logWarn("webhook.operator_echo_pause_failed", {
+                        requestId: trace.requestId,
+                        customerHash: hashIdentifier(customerId),
+                        pageId,
+                        classification: classifyError(error),
+                        message: error instanceof Error ? error.message : String(error),
+                      });
+                    },
+                  );
                   // "Mimic Myself" tone capture — captured unconditionally on every
                   // human operator reply, regardless of the toggle (only the PROMPT
                   // USE of these samples is gated by mimic_myself_enabled below).
@@ -2106,10 +2136,20 @@ export default async function handler(
                   if (operatorText.length >= 8) {
                     void dbAppendAdminMessage(customerId, operatorText).catch(() => {});
                   }
+                  // Diagnostic: attachment types on operator echoes are logged
+                  // so a report of "the bot kept answering after I sent a voice
+                  // note from the Page" can be checked against what Meta
+                  // actually sent, instead of guessing. Cheap — only runs on
+                  // human-sent echoes, which are low-volume.
+                  const echoAttachmentTypes = Array.isArray(event.message?.attachments)
+                    ? event.message.attachments.map((a) => a?.type || "unknown")
+                    : [];
                   logInfo("webhook.operator_echo_pause", {
                     requestId: trace.requestId,
                     customerHash: hashIdentifier(customerId),
                     pageId,
+                    hasText: operatorText.length > 0,
+                    attachmentTypes: echoAttachmentTypes,
                   });
                 } else if (customerId && isBotEcho) {
                   logInfo("webhook.bot_echo_skip", {
