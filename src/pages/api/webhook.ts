@@ -1641,6 +1641,21 @@ async function handleMessage(
         ? botSettings.handoff_pause_minutes * 60_000
         : undefined;
     await pauseBot(senderId, referPauseMs, aiOutage ? "ai_outage" : "no_data_handoff");
+    if (aiOutage) {
+      // Owner's call: an AI failure must never announce itself to a customer.
+      // The bot goes quiet (paused above) and staff got the lead alert; the
+      // customer's message is already in history for whoever picks it up.
+      // Logged as a warning so a "the bot ignored me" complaint can be traced
+      // to this in the error log instead of guessed at.
+      logWarn("webhook.ai_outage_customer_silenced", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+      });
+      recordCounter("webhook.ai_outage_silenced_total", 1, { platform });
+      return;
+    }
     await assertLockHealthy();
     const referHandoffReply = buildHandoffAcknowledgement({ aiOutage });
     const referDelivered = await sendPlatformMessage(

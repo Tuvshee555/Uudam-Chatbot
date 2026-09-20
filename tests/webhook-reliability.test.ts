@@ -752,3 +752,58 @@ test("redis disconnect in replay/conversation mode fails closed with 503", async
   assert.equal(result.statusCode, 503);
   assert.equal(result.body?.error, "retryable_failure");
 });
+
+test("webhook stays silent to the customer when OpenAI is down (outage is never announced)", async () => {
+  applyTestEnv();
+  const handler = await loadWebhookHandler();
+
+  const originalFetch = globalThis.fetch;
+  let openAiCalls = 0;
+  const sends: string[] = [];
+
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.includes("api.openai.com")) {
+      openAiCalls += 1;
+      return new Response(JSON.stringify({ error: { message: "upstream unavailable" } }), {
+        status: 500,
+      });
+    }
+
+    if (url.includes("/messages")) {
+      sends.push(String(init?.body || ""));
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const payload = {
+      object: "instagram",
+      entry: [
+        {
+          id: "ig-page-outage",
+          messaging: [
+            {
+              sender: { id: "ig-user-outage" },
+              message: { mid: "ig-mid-outage-1", text: "ai outage check" },
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = await callWebhook(handler, payload);
+
+    assert.equal(result.statusCode, 200);
+    assert.ok(openAiCalls >= 1, "the model must actually have been tried");
+    assert.deepEqual(
+      sends,
+      [],
+      "an AI outage must not send the customer any message (no apology, no hand-off notice)",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
