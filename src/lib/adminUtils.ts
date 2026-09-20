@@ -26,6 +26,7 @@ export const DURATIONS: Array<{ label: string; ms: number }> = [
   { label: "1 цаг", ms: 60 * 60 * 1000 },
   { label: "24 цаг", ms: 24 * 60 * 60 * 1000 },
   { label: "14 хоног", ms: 14 * 24 * 60 * 60 * 1000 },
+  { label: "30 хоног", ms: 30 * 24 * 60 * 60 * 1000 },
 ];
 
 export const HANDOFF_DURATION_OPTIONS = [

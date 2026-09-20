@@ -247,7 +247,7 @@ export async function dbUpsertCustomerMemory(input: {
 // ----------------------------------------------------------------
 // Neon-backed per-sender pause + activity tracking
 // ----------------------------------------------------------------
-export const AUTO_PAUSE_RESET_DAYS = 14;
+export const AUTO_PAUSE_RESET_DAYS = 30;
 
 export type SenderRow = {
   sender_id: string;
@@ -421,7 +421,7 @@ export async function dbClaimSeasonSend(senderId: string, seasonId: string): Pro
 }
 
 // Call this when the user signals real intent (phone number given, or booking keyword).
-// Pauses bot for this sender for 14 days so a human consultant takes over.
+// Pauses bot for this sender so a human consultant takes over.
 export async function dbAutoHandoffSender(senderId: string): Promise<void> {
   const ready = await ensureTravelSchema();
   if (!ready) return;
@@ -455,7 +455,7 @@ export async function dbIsPaused(senderId: string): Promise<boolean> {
   return true;
 }
 
-const MAX_PAUSE_MS = 14 * 24 * 60 * 60 * 1000;
+const MAX_PAUSE_MS = AUTO_PAUSE_RESET_DAYS * 24 * 60 * 60 * 1000;
 
 export async function dbPauseSender(
   senderId: string,
@@ -464,7 +464,7 @@ export async function dbPauseSender(
 ): Promise<void> {
   const ready = await ensureTravelSchema();
   if (!ready) return;
-  // Forever pauses are confusing and easy to forget; cap every per-sender pause at 14 days.
+  // Forever pauses are confusing and easy to forget; cap every per-sender pause at the takeover window.
   const effectiveMs =
     typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs > 0
       ? Math.min(durationMs, MAX_PAUSE_MS)
