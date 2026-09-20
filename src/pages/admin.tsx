@@ -30,7 +30,7 @@ import { deriveChildRules, withDerivedSummaryFields } from "@/lib/priceGroups";
 import { documentedFreeFare } from "@/lib/tripCompleteness";
 import { resolveAgeRules } from "@/lib/ageRules";
 import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, emptyChunkResult, fileToDataUrl, getSecretStorage, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, mergeAIProposals, settingsToForm, shortId, splitLines, uid } from "@/lib/adminPageUtils";
-const BLANK_TRIP_DRAFT: Record<string, string> = { category: "Аялал", operator_name: "UUDAM TRAVEL AGENCY", route_name: "", duration_text: "", adult_price: "", child_price: "", infant_price: "", child_price_free: "", infant_price_free: "", age_infant: "0-23 сар", age_child: "2-11 нас", age_adult: "12+ нас", currency: "MNT", seats_total: "", seats_left: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
+const BLANK_TRIP_DRAFT: Record<string, string> = { category: "Аялал", operator_name: "UUDAM TRAVEL AGENCY", route_name: "", duration_text: "", adult_price: "", child_price: "", infant_price: "", child_price_free: "", infant_price_free: "", age_infant: "0-23 сар", age_child: "2-11 нас", age_adult: "12+ нас", currency: "MNT", seats_total: "", seats_left: "", seats_percent_left: "", sale_badge_enabled: "false", sale_badge_label: "ХЯМДРАЛ", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
 const MAX_AI_SOURCE_TEXT_CHARS = 20_000;
 export default function AdminPage() {
   const toast = useToast();
@@ -1253,6 +1253,16 @@ export default function AdminPage() {
       currency: trip.currency || "MNT",
       seats_total: trip.seats_total == null ? "" : String(trip.seats_total),
       seats_left: trip.seats_left == null ? "" : String(trip.seats_left),
+      seats_percent_left:
+        typeof (trip.extra?.marketing_badge as Record<string, unknown> | undefined)?.seats_percent_left === "number"
+          ? String((trip.extra.marketing_badge as Record<string, unknown>).seats_percent_left)
+          : "",
+      sale_badge_enabled:
+        (trip.extra?.marketing_badge as Record<string, unknown> | undefined)?.sale_enabled === true ? "true" : "false",
+      sale_badge_label:
+        typeof (trip.extra?.marketing_badge as Record<string, unknown> | undefined)?.sale_label === "string"
+          ? String((trip.extra.marketing_badge as Record<string, unknown>).sale_label)
+          : "ХЯМДРАЛ",
       departure_dates: (trip.departure_dates || []).join(", "),
       status: trip.status || "active",
       has_food:
@@ -1431,6 +1441,14 @@ export default function AdminPage() {
           infant: (tripDraft.age_infant || "").trim(),
           child: (tripDraft.age_child || "").trim(),
           adult: (tripDraft.age_adult || "").trim(),
+        },
+        marketing_badge: {
+          sale_enabled: tripDraft.sale_badge_enabled === "true",
+          sale_label: (tripDraft.sale_badge_label || "ХЯМДРАЛ").trim(),
+          seats_percent_left: (() => {
+            const value = asInt(tripDraft.seats_percent_left || "");
+            return value == null ? null : Math.max(0, Math.min(100, value));
+          })(),
         },
       },
     };

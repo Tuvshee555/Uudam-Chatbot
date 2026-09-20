@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 import { queryNeon, withNeonClient } from "./neonDb";
 import { ensureConnectedTripSchema } from "./connectedTripStore";
-import { duration, posterPhotos, record, records, strings, websiteDepartures, websiteExtraDetails } from "./connectedTripMapping";
+import { duration, posterPhotos, record, records, strings, websiteDepartures, websiteExtraDetails, websiteMarketingBadge } from "./connectedTripMapping";
 import { getEnv } from "./env";
 import { getPosterPdfPublicUrl } from "./poster/pdfUrl";
 import { classifyTripCategory } from "./tripCategorization";
@@ -92,7 +92,8 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   const image = photos[0] || (hadSourcePhotos ? "" : prior?.image || "");
   const pdf = getPosterPdfPublicUrl(String(source.extra.poster_trip_id));
   if (!pdf) throw new Error("SITE_URL is required for the shared poster PDF");
-  const metadata = { ...record(prior?.sourceMetadata), ...source.extra, connectedSource: { ...source, photos, poster } };
+  const marketingBadge = websiteMarketingBadge(source);
+  const metadata = { ...record(prior?.sourceMetadata), ...source.extra, marketingBadge, connectedSource: { ...source, photos, poster, marketingBadge } };
   // Never override a category staff picked by hand — only classify a trip
   // that has none yet (a brand-new sync, or one that predates this feature).
   const categoryId = prior?.categoryId

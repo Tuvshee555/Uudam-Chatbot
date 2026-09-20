@@ -777,6 +777,30 @@ export function TripEditModal({
           value={tripDraft.seats_left}
           onChange={(e) => setTripDraft((p) => ({ ...p, seats_left: e.target.value }))}
         />
+        <Input
+          label="Үлдсэн суудлын хувь"
+          inputMode="numeric"
+          placeholder="ж: 30"
+          value={tripDraft.seats_percent_left || ""}
+          onChange={(e) => setTripDraft((p) => ({ ...p, seats_percent_left: e.target.value.replace(/[^\d]/g, "").slice(0, 3) }))}
+        />
+        <Select
+          label="Хямдралын badge"
+          value={tripDraft.sale_badge_enabled || "false"}
+          onChange={(e) => setTripDraft((p) => ({ ...p, sale_badge_enabled: e.target.value }))}
+        >
+          <option value="false">Унтраалттай</option>
+          <option value="true">Асаалттай</option>
+        </Select>
+        <Input
+          label="Badge текст"
+          placeholder="ж: ХЯМДРАЛ"
+          value={tripDraft.sale_badge_label || ""}
+          onChange={(e) => setTripDraft((p) => ({ ...p, sale_badge_label: e.target.value }))}
+        />
+        <p className="text-xs text-ink-subtle sm:col-span-2">
+          Вэб карт дээр “ХЯМДРАЛ”, үлдсэн суудлын хувь, бодит үлдсэн суудлын тоог харуулахад ашиглана.
+        </p>
         <DepartureDateEditor
           value={tripDraft.departure_dates}
           onChange={(value) => setTripDraft((p) => ({ ...p, departure_dates: value }))}

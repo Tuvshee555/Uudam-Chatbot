@@ -679,8 +679,24 @@ function TripCard({
   const connection = tripConnectionDetails(trip);
   const hasPdf = tripHasPdf(trip);
   const facts: string[] = [];
+  const marketingBadge = (trip.extra as Record<string, unknown> | undefined)?.marketing_badge as
+    | Record<string, unknown>
+    | undefined;
+  const saleEnabled = marketingBadge?.sale_enabled === true;
+  const saleLabel =
+    typeof marketingBadge?.sale_label === "string" && marketingBadge.sale_label.trim()
+      ? marketingBadge.sale_label.trim()
+      : "ХЯМДРАЛ";
+  const seatsPercentLeft =
+    typeof marketingBadge?.seats_percent_left === "number" ? marketingBadge.seats_percent_left : null;
   if (trip.seats_left != null || trip.seats_total != null) {
     facts.push(`Суудал: ${trip.seats_left ?? "?"}/${trip.seats_total ?? "?"}`);
+  }
+  if (seatsPercentLeft != null) {
+    facts.push(`Үлдсэн хувь: ${seatsPercentLeft}%`);
+  }
+  if (saleEnabled) {
+    facts.push(`Badge: ${saleLabel}`);
   }
   // A trip with date-specific price groups never actually quotes this flat
   // price to a customer (the nearest upcoming group's price wins) — label it
@@ -716,6 +732,7 @@ function TripCard({
                 <Badge tone="warning">Шалгах</Badge>
               )}
               {isHidden && <Badge tone="neutral">Нуусан</Badge>}
+              {saleEnabled && <Badge tone="warning">{saleLabel}</Badge>}
               {isPosterSynced && <Badge tone="brand">Poster sync</Badge>}
               <Badge tone={hasPdf ? "success" : "danger"}>
                 {hasPdf ? "PDF бэлэн" : "PDF дутуу"}

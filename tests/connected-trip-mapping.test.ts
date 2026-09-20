@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { tripToPoster, websiteDepartures, posterPhotos } from "../src/lib/connectedTripMapping";
+import { tripToPoster, websiteDepartures, posterPhotos, websiteMarketingBadge } from "../src/lib/connectedTripMapping";
 import type { TravelTrip } from "../src/lib/travelTypes";
 import { normalizeExtraPatch } from "../src/lib/tripExtraSchema";
 
@@ -59,4 +59,25 @@ test("partial metadata updates preserve visibility, prices and unrelated details
   assert.deepEqual({...existing,...patch},{...existing,included_items:[]});
   assert.deepEqual(normalizeExtraPatch({customer_visible:false}),{customer_visible:false});
   assert.deepEqual(normalizeExtraPatch({}),{});
+});
+test("marketing badge settings normalize and map to website metadata", () => {
+  const patch = normalizeExtraPatch({
+    marketing_badge: { sale_enabled: true, sale_label: "SUPER SALE LONG LABEL", seats_percent_left: 130 },
+  });
+  assert.deepEqual(patch, {
+    marketing_badge: { sale_enabled: true, sale_label: "SUPER SALE LONG LABEL", seats_percent_left: 100 },
+  });
+  const badge = websiteMarketingBadge({
+    ...trip,
+    seats_left: 6,
+    seats_total: 20,
+    extra: patch,
+  });
+  assert.deepEqual(badge, {
+    saleEnabled: true,
+    saleLabel: "SUPER SALE LONG LABEL",
+    seatsPercentLeft: 100,
+    seatsLeft: 6,
+    seatsTotal: 20,
+  });
 });

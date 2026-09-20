@@ -113,6 +113,23 @@ export function websiteExtraDetails(
   };
 }
 
+export function websiteMarketingBadge(trip: TravelTrip) {
+  const raw = record(trip.extra.marketing_badge);
+  const saleLabel = typeof raw.sale_label === "string" && raw.sale_label.trim()
+    ? raw.sale_label.trim()
+    : "ХЯМДРАЛ";
+  const percent = typeof raw.seats_percent_left === "number" && Number.isFinite(raw.seats_percent_left)
+    ? Math.max(0, Math.min(100, Math.trunc(raw.seats_percent_left)))
+    : null;
+  return {
+    saleEnabled: raw.sale_enabled === true,
+    saleLabel,
+    seatsPercentLeft: percent,
+    seatsLeft: trip.seats_left,
+    seatsTotal: trip.seats_total,
+  };
+}
+
 const WEEKDAY_NAMES = ["ням", "даваа", "мягмар", "лхагва", "пүрэв", "баасан", "бямба"];
 
 /** "Пүрэв гараг бүр" -> 4 (Thursday), or -1 when the text isn't a recurring-weekday rule. */

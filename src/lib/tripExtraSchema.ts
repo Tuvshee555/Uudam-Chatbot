@@ -38,6 +38,7 @@ const KNOWN_EXTRA_KEYS = new Set([
   "departure_dates_resolved",
   "itinerary_days",
   "age_rules",
+  "marketing_badge",
 ]);
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -58,6 +59,11 @@ function asNumberOrNull(v: unknown): number | null {
 
 function asString(v: unknown, fallback = ""): string {
   return typeof v === "string" ? v : fallback;
+}
+
+function clampPercent(value: number | null): number | null {
+  if (value == null) return null;
+  return Math.max(0, Math.min(100, value));
 }
 
 function enrichDateKeys<T extends Record<string, unknown>>(group: T): T {
@@ -373,6 +379,7 @@ export function normalizeExtra(
     departure_dates_resolved: normalizeResolvedDepartureDates(raw.departure_dates_resolved),
     itinerary_days: normalizeItineraryDays(raw.itinerary_days),
     age_rules: normalizeAgeRules(raw.age_rules),
+    marketing_badge: normalizeMarketingBadge(raw.marketing_badge),
   };
 
   return { extra, warnings };
@@ -389,6 +396,16 @@ function normalizeAgeRules(raw: unknown): Record<string, string> {
     infant: asString(src.infant).trim(),
     child: asString(src.child).trim(),
     adult: asString(src.adult).trim(),
+  };
+}
+
+function normalizeMarketingBadge(raw: unknown): Record<string, unknown> {
+  const src = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const saleLabel = asString(src.sale_label, "ХЯМДРАЛ").trim() || "ХЯМДРАЛ";
+  return {
+    sale_enabled: src.sale_enabled === true,
+    sale_label: saleLabel.slice(0, 24),
+    seats_percent_left: clampPercent(asNumberOrNull(src.seats_percent_left)),
   };
 }
 
