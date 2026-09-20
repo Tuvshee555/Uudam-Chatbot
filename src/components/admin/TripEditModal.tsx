@@ -747,10 +747,15 @@ export function TripEditModal({
           <option value="active">Идэвхтэй</option>
           <option value="paused">Түр зогссон</option>
           <option value="cancelled">Цуцлагдсан</option>
-          <option value="sold_out">Суудал дууссан</option>
+          <option value="sold_out">Суудал дүүрсэн</option>
           <option value="draft">Ноорог</option>
           <option value="archived">Архив</option>
         </Select>
+        {tripDraft.status === "sold_out" && (
+          <p className="text-xs text-ink-subtle sm:col-span-2">
+            Энэ төлөвтэй аялал вэб дээр харагдсан хэвээр байна, харин захиалга авах боломжгүй “Суудал дүүрсэн” гэж тэмдэглэгдэнэ.
+          </p>
+        )}
         <Select
           label="Хоол"
           value={tripDraft.has_food}

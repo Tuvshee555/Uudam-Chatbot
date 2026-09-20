@@ -30,7 +30,7 @@ import { autoHandoffSender, isPaused, markGetStarted, pauseBot, trackSender } fr
 import { AUTO_PAUSE_RESET_DAYS, createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, filterTripsByTransportIntent, buildSoldOutPrecedenceReply, } from "../../lib/travelFastPaths";
-import { buildHandoffReplyWithContact, claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
+import { DEFAULT_WELCOME_TEXT, buildHandoffReplyWithContact, claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
   scheduleAttachmentDocumentPipeline,
@@ -473,23 +473,23 @@ async function handleMessage(
   }
 
   // ── First-message greeting ──────────────────────────────────────────────────
-  // Only fires when: Facebook, greeting enabled, first-ever message, AND the
-  // message is a generic opener (hi, hello, etc.) — NOT when person already
-  // asked about a specific trip.
+  // Send once on the first real Facebook DM. If the first DM is just a generic
+  // opener, the welcome is the whole reply; if it already contains a trip
+  // question, the welcome goes first and the real question continues below.
   const greeting = resolveGreetingConfig(botSettings.extra);
   if (
     platform === "facebook" &&
     token &&
     greeting.enabled &&
     senderMsgCount === 1 &&
-    isGenericOpener(text) &&
+    !isBareNumber(text) &&
     (await isFirstMessage(senderId))
   ) {
     try {
       const welcomeText =
         greeting.text ||
         botSettings.quick_info_reply ||
-        "Уудам Трэвел-д тавтай морилно уу! Доорх товчнуудаас сонирхсоноо сонгоорой 👇";
+        DEFAULT_WELCOME_TEXT;
       const buttons = [
         GREETING_BUTTONS.ALL_TRIPS,
         ...(activeSeasonForGreeting ? [`${activeSeasonForGreeting.name} аяллууд`] : []),
@@ -510,8 +510,9 @@ async function handleMessage(
         classification: classifyError(error),
       });
     }
-    // Generic opener — greeting sent, nothing else to do. Return.
-    return;
+    if (isKnownGreetingPhrase(text)) {
+      return;
+    }
   }
 
   // ── Mid-conversation bare greeting ─────────────────────────────────────────

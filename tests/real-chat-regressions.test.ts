@@ -347,6 +347,22 @@ test("a trip's base infant price is listed even when its price groups have none"
   assert.match(reply, /10\/29 — 6 өдөр 5 шөнө · том хүн 3,590,000₮ · хүүхэд 3,150,000₮ · нярай 490,000₮/);
 });
 
+test("Shanghai school-break 10/29 uses its own base prices when stale price groups were dropped", async () => {
+  const { buildStructuredTripReply, sanitizeTripForCustomers } = await import("../src/lib/travelFastPaths");
+  applyTestEnv();
+  const trips = SHANGHAI_TRIPS.map((item) => sanitizeTripForCustomers(item));
+  const reply = buildStructuredTripReply(
+    "Шанхай сурагчдын амралт 10 сарын 29 үнэ хэд вэ",
+    trips,
+    new Date("2026-09-20T00:00:00.000Z"),
+  );
+  assert.ok(reply);
+  assert.match(reply!, /10\/29/);
+  assert.match(reply!, /10 сарын 29: Том хүн: 3,590,000₮ \| Хүүхэд: 3,150,000₮ \| Нярай: 490,000₮/);
+  assert.doesNotMatch(reply!, /11\/3/);
+  assert.doesNotMatch(reply!, /үнийн мэдээлэл олдсонгүй/);
+});
+
 test("asking about Shanghai lists EVERY Shanghai trip, not just the top 3", async () => {
   const { resolveTripFromUserMessage } = await search();
   // The client's own message, and plain phrasings of the same question.

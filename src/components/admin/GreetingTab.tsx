@@ -130,7 +130,7 @@ export function GreetingTab({
 
   const previewText =
     draft.text.trim() ||
-    "Уудам Трэвел-д тавтай морилно уу! 🌏 Бид танд хамгийн шилдэг аяллуудыг санал болгож байна.";
+    "Уудам Трэвэл-д тавтай морилно уу! 🌏\n\n📍 Дэлгэрэнгүй мэдээлэл, үнэ, хөтөлбөрийг - uudam-booking-web.vercel.app вебсайтаар нэвтэрч авна уу.\n📞 7713 6633 / 8913 6633 / 9117 2769 / 9924 8000\n\nТа ямар төрлийн аялал сонирхож байна вэ? 😊";
   // The default album always sends first, so it takes priority in the preview.
   // After it, in manual mode show the picked photos; in auto mode show the
   // actual photos that would be auto-sampled from active trips.
@@ -191,7 +191,7 @@ export function GreetingTab({
               </div>
               <Textarea
                 rows={4}
-                placeholder="Жишээ: Уудам Трэвел-д тавтай морилно уу! 🌏 Бид танд хамгийн шилдэг аяллуудыг санал болгож байна. Доорх зургуудаас сонирхсон аялалаа сонгоорой."
+                placeholder="Жишээ: Уудам Трэвэл-д тавтай морилно уу! 🌏&#10;&#10;📍 Дэлгэрэнгүй мэдээлэл, үнэ, хөтөлбөрийг - uudam-booking-web.vercel.app вебсайтаар нэвтэрч авна уу.&#10;📞 7713 6633 / 8913 6633 / 9117 2769 / 9924 8000&#10;&#10;Та ямар төрлийн аялал сонирхож байна вэ? 😊"
                 value={draft.text}
                 onChange={(e) => setDraft((d) => ({ ...d, text: e.target.value }))}
               />

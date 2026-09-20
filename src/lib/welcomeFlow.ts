@@ -2,9 +2,9 @@
  * Welcome flow + trip photo auto-send helpers.
  *
  * Feature A — Welcome greeting:
- *   First time a sender messages → ONLY if the message is generic (hi, hello, ?)
- *   send greeting text + 3 quick-reply buttons + optional photo album.
- *   If the first message already asks about a specific trip → skip greeting entirely.
+ *   First time a sender messages → send greeting text + quick-reply buttons.
+ *   If the first message already asks about a specific trip, greet first and
+ *   continue processing that real question in the same turn.
  *
  * Feature B — Trip photo auto-send:
  *   After each AI reply, detect if a specific trip was discussed and send
@@ -17,6 +17,12 @@ import { getTripBrochureAsset, resolveTripFromUserMessage } from "./travelFastPa
 
 const MAX_WELCOME_PHOTOS = 5;
 const MAX_TRIP_PHOTOS = 5;
+
+export const DEFAULT_WELCOME_TEXT =
+  "Уудам Трэвэл-д тавтай морилно уу! 🌏\n\n" +
+  "📍 Дэлгэрэнгүй мэдээлэл, үнэ, хөтөлбөрийг - uudam-booking-web.vercel.app вебсайтаар нэвтэрч авна уу.\n" +
+  "📞 7713 6633 / 8913 6633 / 9117 2769 / 9924 8000\n\n" +
+  "Та ямар төрлийн аялал сонирхож байна вэ? 😊";
 
 export function hasTripPhotoIntent(text: string): boolean {
   const normalized = text.normalize("NFKC").toLowerCase();

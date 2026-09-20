@@ -113,6 +113,29 @@ function hasInfantPrice(trip: TravelTrip): boolean {
   );
 }
 
+function tripHasDepartureMonthDay(
+  trip: TravelTrip,
+  month: number,
+  day: number,
+  now = new Date(),
+): boolean {
+  const target = `${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const matchesYmd = (ymd: string) => ymd.slice(5, 10) === target;
+  const resolved = (trip.extra as Record<string, unknown> | undefined)?.departure_dates_resolved;
+  if (Array.isArray(resolved)) {
+    for (const item of resolved) {
+      if (!item || typeof item !== "object") continue;
+      const ymd = (item as Record<string, unknown>).ymd;
+      if (typeof ymd === "string" && /^\d{4}-\d{2}-\d{2}$/.test(ymd) && matchesYmd(ymd)) {
+        return true;
+      }
+    }
+  }
+  return (trip.departure_dates || []).some((dateText) =>
+    parseDepartureDateText(dateText, now).some(matchesYmd),
+  );
+}
+
 function firstPassengerPrice(trip: TravelTrip, key: "adult_price" | "child_price" | "infant_price"): number | null {
   if (key === "adult_price" && typeof trip.adult_price === "number") return trip.adult_price;
   if (key === "child_price" && typeof trip.child_price === "number") return trip.child_price;
@@ -1390,12 +1413,16 @@ export function buildStructuredTripReply(
   const currentMonthDays = extractDatesFromText(currentLine);
   if (currentMonthDays.length > 0) {
     const bestHasRequestedDate = currentMonthDays.some((md) =>
-      Boolean(findPriceGroupByMonthDay(best, md.month, md.day, now)),
+      Boolean(findPriceGroupByMonthDay(best, md.month, md.day, now)) ||
+      tripHasDepartureMonthDay(best, md.month, md.day, now),
     );
     if (!bestHasRequestedDate) {
       const datedTrips = trips.filter((trip) =>
         trip.status === "active" &&
-        currentMonthDays.some((md) => Boolean(findPriceGroupByMonthDay(trip, md.month, md.day, now))),
+        currentMonthDays.some((md) =>
+          Boolean(findPriceGroupByMonthDay(trip, md.month, md.day, now)) ||
+          tripHasDepartureMonthDay(trip, md.month, md.day, now),
+        ),
       );
       const bestRouteTokens = unique(keywordTokens(best.route_name));
       const relatedByRoute = datedTrips
@@ -1552,25 +1579,31 @@ export function buildStructuredTripReply(
       for (const md of mnDates) {
         const g = findPriceGroupByMonthDay(best, md.month, md.day, now);
         const label = `${md.month} сарын ${md.day}`;
-        if (!g) {
+        const fallbackToBasePrice = !g && tripHasDepartureMonthDay(best, md.month, md.day, now);
+        if (!g && !fallbackToBasePrice) {
           lines.push(`💰 ${label}-д тохирох үнийн мэдээлэл олдсонгүй. Аяллын зөвлөхтэй холбогдоорой.`);
         } else {
+          const priceSource = g || {
+            adult_price: best.adult_price,
+            child_price: best.child_price,
+            infant_price: best.infant_price,
+          };
           const adult = formatPassengerMoney(
-            typeof (g as Record<string, unknown>).adult_price === "number"
-              ? (g as Record<string, unknown>).adult_price as number
-              : ((g as DepartureDateGroup).adult_price ?? null),
+            typeof (priceSource as Record<string, unknown>).adult_price === "number"
+              ? (priceSource as Record<string, unknown>).adult_price as number
+              : ((priceSource as DepartureDateGroup).adult_price ?? null),
             currency,
           );
           const child = formatPassengerMoney(
-            typeof (g as Record<string, unknown>).child_price === "number"
-              ? (g as Record<string, unknown>).child_price as number
-              : ((g as DepartureDateGroup).child_price ?? null),
+            typeof (priceSource as Record<string, unknown>).child_price === "number"
+              ? (priceSource as Record<string, unknown>).child_price as number
+              : ((priceSource as DepartureDateGroup).child_price ?? null),
             currency,
           );
           const infant = formatPassengerMoney(
-            typeof (g as Record<string, unknown>).infant_price === "number"
-              ? (g as Record<string, unknown>).infant_price as number
-              : ((g as DepartureDateGroup).infant_price ?? null),
+            typeof (priceSource as Record<string, unknown>).infant_price === "number"
+              ? (priceSource as Record<string, unknown>).infant_price as number
+              : ((priceSource as DepartureDateGroup).infant_price ?? null),
             currency,
           );
           const parts: string[] = [];

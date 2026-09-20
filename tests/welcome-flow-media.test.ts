@@ -43,6 +43,13 @@ test("normal information requests do not opt into photos", async () => {
   assert.equal(hasTripPhotoIntent("send photos"), true);
 });
 
+test("default welcome points customers to the website and contact numbers", async () => {
+  const { DEFAULT_WELCOME_TEXT } = await loadWelcomeFlow();
+  assert.match(DEFAULT_WELCOME_TEXT, /uudam-booking-web\.vercel\.app/);
+  assert.match(DEFAULT_WELCOME_TEXT, /7713 6633/);
+  assert.match(DEFAULT_WELCOME_TEXT, /Та ямар төрлийн аялал сонирхож байна вэ/);
+});
+
 test("trip media fails closed when only a shared destination token matches", async () => {
   const { extractTripPhotosForReply } = await loadWelcomeFlow();
   const photos = extractTripPhotosForReply(
