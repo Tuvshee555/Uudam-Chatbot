@@ -36,7 +36,9 @@ test("isKnownGreetingPhrase is narrower than isGenericOpener (no length<=2 catch
   // isGenericOpener treats ANY <=2-char message as an opener (welcome flow),
   // but isKnownGreetingPhrase must not — a bare "5" is a clarification answer,
   // not a greeting, and must stay routable.
-  assert.equal(isGenericOpener("5"), true);
+  // A bare number is NOT an opener (a real customer's first message "55" was
+  // answered with the welcome greeting); a short non-numeric message still is.
+  assert.equal(isGenericOpener("5"), false);
   assert.equal(isKnownGreetingPhrase("5"), false);
   assert.equal(isGenericOpener("ww"), true);
   assert.equal(isKnownGreetingPhrase("ww"), false);

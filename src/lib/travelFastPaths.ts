@@ -29,6 +29,7 @@ import {
   normText,
   resolveTripFromUserMessage,
   findBestTripMatch,
+  findTripMatches,
   getPriceGroups,
   getPriceValuesFromGroup,
   isStructuredTripQuestion,
@@ -1234,6 +1235,33 @@ function buildSoldOutTripReply(text: string, trips: TravelTrip[]): string | null
     "Энэ аяллын суудал дууссан байна.",
     "Одоогоор захиалга авах боломжгүй тул ижил төстэй өөр хувилбарыг аяллын зөвлөхөөс тодруулж өгье.",
   ].join("\n");
+}
+
+/**
+ * The customer's own message names a trip that is SOLD OUT more specifically than
+ * any active trip. Every other matcher only looks at active trips, so a sold-out
+ * trip named exactly lost to a near-name sibling: "ШАНХАЙ - ДИСНЕЙЛЭНД-10/08 үнэ
+ * хэд вэ" was answered with the 11/3 trip's price as if it were the same tour.
+ * Say it is full and offer the alternatives at the same destination instead.
+ *
+ * Deliberately strict — the full trip name, or a clear score lead over the best
+ * active match — so a bare "Шанхай" never gets a sold-out answer.
+ */
+export function buildSoldOutPrecedenceReply(text: string, trips: TravelTrip[]): string | null {
+  const soldOutTrips = trips.filter((trip) => trip.status === "sold_out");
+  if (soldOutTrips.length === 0) return null;
+  const soldMatches = findTripMatches(text, soldOutTrips, { includeSoldOut: true });
+  if (soldMatches.length === 0) return null;
+  const topSold = soldMatches[0];
+  const topActive = findTripMatches(
+    text,
+    trips.filter((trip) => trip.status === "active"),
+  )[0];
+  const fullName = normText(topSold.trip.route_name);
+  const namedFully = fullName.length >= 8 && normText(text).includes(fullName);
+  const clearlyBeatsActive = !topActive || topSold.score > topActive.score + 5;
+  if (!namedFully && !clearlyBeatsActive) return null;
+  return buildSoldOutTripReply(text, trips);
 }
 
 export function buildStructuredTripReply(

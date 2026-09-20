@@ -19,12 +19,25 @@ export const GENERIC_OPENERS = [
 ];
 
 /**
+ * A message that is only a short number ("5", "55", "3.", "12)"): a customer
+ * answering a numbered list, or a stray digit. It carries no meaning of its own
+ * — one was read as "5 million" and quoted a price search — so unless a numbered
+ * question is actually pending it must not be answered at all.
+ */
+export function isBareNumber(text: string): boolean {
+  return /^\s*\d{1,3}\s*[.)]?\s*$/.test(text);
+}
+
+/**
  * Returns true if the message is a generic opener that should trigger the
  * full greeting flow. Returns false if the person already asked something
  * specific — in that case, skip the greeting and just answer.
  */
 export function isGenericOpener(text: string): boolean {
   const norm = text.trim().toLowerCase().replace(/[!?.🙏👋😊]/g, "").trim();
+  // A bare number ("5", "55") is never a greeting. The old <=2-character rule
+  // sent the welcome message to a customer whose first message was "55".
+  if (isBareNumber(text)) return false;
   if (!norm || norm.length <= 2) return true;
   // Exact match only — "сайн уу бид явна шүү" is NOT generic even though it starts with "сайн уу"
   return GENERIC_OPENERS.some((w) => norm === w) || isGreetingLike(text);

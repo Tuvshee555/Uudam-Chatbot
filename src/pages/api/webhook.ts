@@ -5,10 +5,12 @@ import { matchFlow, findTriggeredFlow, getFlowState, setFlowState, clearFlowStat
 import { BOT_MESSAGE_METADATA, replyToComment, sendImageMessage, sendQuickReplies, sendTextMessage } from "../../lib/messenger";
 import { sendQuickReplies as sendIgQuickReplies } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
+import { getClarificationState } from "../../lib/clarificationState";
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone } from "../../lib/conversation";
 import { buildContextualUserText, isLikelyContextDependentText } from "../../lib/contextualText";
 import {
+  isBareNumber,
   isGetStartedPostback,
   isKnownGreetingPhrase,
   isThanksOnly,
@@ -27,7 +29,7 @@ import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBot, trackSender } from "../../lib/pause";
 import { AUTO_PAUSE_RESET_DAYS, createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, filterTripsByTransportIntent, } from "../../lib/travelFastPaths";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, filterTripsByTransportIntent, buildSoldOutPrecedenceReply, } from "../../lib/travelFastPaths";
 import { buildHandoffReplyWithContact, claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
@@ -529,6 +531,28 @@ async function handleMessage(
       counter: "webhook.greeting_fast_path_total",
     });
     return;
+  }
+
+  // ── Bare number ("5", "55") ────────────────────────────────────────────────
+  // A number on its own answers a numbered list the customer was just shown, or a
+  // booking question. Outside those it means nothing: the model read "5" as "5
+  // million" and offered a budget search. Stay silent unless one is pending.
+  if (isBareNumber(text)) {
+    const [pendingClarification, pendingBooking] = await Promise.all([
+      getClarificationState(senderId),
+      getCollectState(senderId),
+    ]);
+    if (!pendingClarification && !(pendingBooking && pendingBooking.step !== "done")) {
+      await appendMessage(senderId, "user", text).catch(() => {});
+      logInfo("webhook.bare_number_silent", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+      });
+      recordCounter("webhook.bare_number_silent_total", 1, { platform });
+      return;
+    }
   }
 
   // ── Bare thank-you ─────────────────────────────────────────────────────────
@@ -1161,6 +1185,23 @@ async function handleMessage(
         rememberSource: "api.webhook.scoped_clarify",
         counter: "webhook.scoped_clarify_total",
         buttons: buildClarificationButtons(routed.scopedClarify),
+      });
+      return;
+    }
+  }
+  // The customer named a trip that is sold out: say so (and offer the same
+  // destination's open trips) instead of quoting a near-name sibling's price.
+  {
+    const soldOutReply = buildSoldOutPrecedenceReply(text, await getTrips());
+    if (soldOutReply) {
+      await deliverFastPathReply({
+        reply: appendLeadCaptureCta(
+          enforceWebsiteForPayment(sanitizeAssistantReply(soldOutReply)),
+          phoneAlreadyRequested,
+        ),
+        failTag: "sold_out_named",
+        rememberSource: "api.webhook.sold_out_named",
+        counter: "webhook.sold_out_named_total",
       });
       return;
     }

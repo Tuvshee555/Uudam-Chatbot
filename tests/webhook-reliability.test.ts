@@ -892,3 +892,11 @@ test("the model saying it lacks the information is treated as no-data and never 
     false,
   );
 });
+
+test("a bare number with no numbered question pending gets no reply (not a welcome, not a '5 million' search)", async () => {
+  for (const [index, text] of ["55", "5", "3."].entries()) {
+    const { sends, openAiCalls } = await runInstagramText(`ig-user-bare-number-${index}`, `ig-mid-bare-number-${index}`, text);
+    assert.deepEqual(sends, [], `"${text}" must be met with silence`);
+    assert.equal(openAiCalls, 0, `"${text}" must not be sent to the model to be guessed at`);
+  }
+});

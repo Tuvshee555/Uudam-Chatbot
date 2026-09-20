@@ -442,3 +442,53 @@ test("a day range covers every day in it, not just the first", async () => {
   assert.match(reply!, /ТЭНГЭРИЙН ХААЛГАНЫ/);
   assert.match(reply!, /20–27-ны хооронд/);
 });
+
+// ── Client report: "55" / "5" answered with a welcome and a "5 million" search ──
+
+test("a bare number is recognised, and is never a greeting", async () => {
+  const { isBareNumber, isGenericOpener, isKnownGreetingPhrase } = await import("../src/lib/greetingPhrases");
+  for (const text of ["5", "55", "3.", "12)", " 7 ", "123"]) {
+    assert.equal(isBareNumber(text), true, text);
+    assert.equal(isGenericOpener(text), false, `"${text}" must not trigger the welcome greeting`);
+    assert.equal(isKnownGreetingPhrase(text), false, text);
+  }
+  // Numbers with meaning are not "bare".
+  for (const text of ["5 сая", "10 сарын 8", "1500000", "2 том хүн", "hi", "ok"]) {
+    assert.equal(isBareNumber(text), false, text);
+  }
+});
+
+// ── A trip the customer names is SOLD OUT ("10 сарын 8-ны Шанхай ... суудал дүүрсэн") ──
+
+const DISNEY_OCT8_SOLD = trip({
+  route_name: "ШАНХАЙ - ДИСНЕЙЛЭНД-10/08",
+  status: "sold_out",
+  duration_text: "6 өдөр 5 шөнө",
+  adult_price: 3290000,
+  departure_dates: ["10 сарын 8"],
+});
+
+test("naming a sold-out trip says it is full and offers open alternatives — never a sibling's price", async () => {
+  const { buildSoldOutPrecedenceReply } = await import("../src/lib/travelFastPaths");
+  const catalog = [DISNEY_OCT8_SOLD, SHANGHAI_DISNEY_NOV3, DISNEY_OCT29, HANGZHOU, SHANGHAI_NOV];
+  for (const text of [
+    "ШАНХАЙ - ДИСНЕЙЛЭНД-10/08 үнэ хэд вэ",
+    "10 сарын 8-ны Шанхай Диснейлэнд суудал байна уу",
+  ]) {
+    const reply = buildSoldOutPrecedenceReply(text, catalog);
+    assert.ok(reply, `"${text}" must be answered as sold out`);
+    assert.match(reply!, /ШАНХАЙ - ДИСНЕЙЛЭНД-10\/08/);
+    assert.match(reply!, /суудал дууссан/);
+    assert.match(reply!, /нээлттэй|ижил/, "open alternatives are offered");
+  }
+});
+
+test("a generic destination question never gets a sold-out answer, and an active trip named exactly wins", async () => {
+  const { buildSoldOutPrecedenceReply } = await import("../src/lib/travelFastPaths");
+  const catalog = [DISNEY_OCT8_SOLD, SHANGHAI_DISNEY_NOV3, DISNEY_OCT29, HANGZHOU, SHANGHAI_NOV];
+  for (const text of ["Shanghai", "Шанхай аялал", "hi Shanhai aylaliin medeelel aviya", "Диснейлэнд", SHANGHAI_DISNEY_NOV3.route_name + " үнэ"]) {
+    assert.equal(buildSoldOutPrecedenceReply(text, catalog), null, `"${text}" must go through the normal path`);
+  }
+  // No sold-out trips at all: always null.
+  assert.equal(buildSoldOutPrecedenceReply("ШАНХАЙ - ДИСНЕЙЛЭНД-10/08", [SHANGHAI_DISNEY_NOV3, HANGZHOU]), null);
+});
