@@ -14,6 +14,7 @@ export const STATUS_TONE: Record<
   "success" | "danger" | "warning" | "neutral"
 > = {
   active: "success",
+  paused: "warning",
   cancelled: "danger",
   sold_out: "warning",
   draft: "neutral",

@@ -24,11 +24,13 @@ import { JsonEditorTab } from "@/components/admin/JsonEditorTab";
 import { TripPhotoImportTab } from "@/components/admin/TripPhotoImportTab";
 import PosterTab from "@/components/admin/poster/PosterTab";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
-import type { AIProposal, AIProposalResponse, AttachedFile, BookingTerms, ChatMessage, ClarificationAnswer, ClarificationQuestion, ChildRule, ControlState, DiscountGroup, DriveSyncDiagnostics, ExtraFee, ItineraryDay, LeadCrmStatus, LeadStats, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalMsg, ReadinessReport, RecentRow, RoomPrice, SettingsForm, TabKey, TravelBotSettings, TravelLead, TravelTrip } from "@/lib/adminTypes";
+import type { AIProposal, AIProposalResponse, AttachedFile, BookingTerms, ChatMessage, ClarificationAnswer, ClarificationQuestion, ControlState, DiscountGroup, DriveSyncDiagnostics, ExtraFee, ItineraryDay, LeadCrmStatus, LeadStats, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalMsg, ReadinessReport, RecentRow, RoomPrice, SettingsForm, TabKey, TravelBotSettings, TravelLead, TravelTrip } from "@/lib/adminTypes";
 import { emptyBookingTerms, toBookingTermsForm } from "@/lib/adminTypes";
+import { deriveChildRules, withDerivedSummaryFields } from "@/lib/priceGroups";
+import { documentedFreeFare } from "@/lib/tripCompleteness";
 import { resolveAgeRules } from "@/lib/ageRules";
 import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, emptyChunkResult, fileToDataUrl, getSecretStorage, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, mergeAIProposals, settingsToForm, shortId, splitLines, uid } from "@/lib/adminPageUtils";
-const BLANK_TRIP_DRAFT: Record<string, string> = { category: "Аялал", operator_name: "UUDAM TRAVEL AGENCY", route_name: "", duration_text: "", adult_price: "", child_price: "", infant_price: "", age_infant: "0-23 сар", age_child: "2-11 нас", age_adult: "12+ нас", currency: "MNT", seats_total: "", seats_left: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
+const BLANK_TRIP_DRAFT: Record<string, string> = { category: "Аялал", operator_name: "UUDAM TRAVEL AGENCY", route_name: "", duration_text: "", adult_price: "", child_price: "", infant_price: "", child_price_free: "", infant_price_free: "", age_infant: "0-23 сар", age_child: "2-11 нас", age_adult: "12+ нас", currency: "MNT", seats_total: "", seats_left: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
 const MAX_AI_SOURCE_TEXT_CHARS = 20_000;
 export default function AdminPage() {
   const toast = useToast();
@@ -92,7 +94,6 @@ export default function AdminPage() {
   const [tripAliases, setTripAliases] = useState<string[]>([]);
   const [tripPriceGroups, setTripPriceGroups] = useState<PriceGroup[]>([]);
   const [tripDiscounts, setTripDiscounts] = useState<DiscountGroup[]>([]);
-  const [tripChildRules, setTripChildRules] = useState<ChildRule[]>([]);
   const [tripExtraFees, setTripExtraFees] = useState<ExtraFee[]>([]);
   const [tripDepartureRule, setTripDepartureRule] = useState("");
   const [tripIncludedItems, setTripIncludedItems] = useState<string[]>([]);
@@ -1219,7 +1220,6 @@ export default function AdminPage() {
     setTripAliases([]);
     setTripPriceGroups([]);
     setTripDiscounts([]);
-    setTripChildRules([]);
     setTripExtraFees([]);
     setTripDepartureRule("");
     setTripIncludedItems([]);
@@ -1245,6 +1245,8 @@ export default function AdminPage() {
       adult_price: trip.adult_price == null ? "" : String(trip.adult_price),
       child_price: trip.child_price == null ? "" : String(trip.child_price),
       infant_price: trip.infant_price == null ? "" : String(trip.infant_price),
+      child_price_free: documentedFreeFare((trip.extra || {}) as Record<string, unknown>, "child") ? "true" : "",
+      infant_price_free: documentedFreeFare((trip.extra || {}) as Record<string, unknown>, "infant") ? "true" : "",
       age_infant: resolveAgeRules(trip.extra).infant,
       age_child: resolveAgeRules(trip.extra).child,
       age_adult: resolveAgeRules(trip.extra).adult,
@@ -1264,7 +1266,6 @@ export default function AdminPage() {
     setTripAliases(Array.isArray(trip.extra?.aliases) ? (trip.extra.aliases as string[]) : []);
     setTripPriceGroups(Array.isArray(trip.extra?.price_groups) ? (trip.extra.price_groups as PriceGroup[]) : []);
     setTripDiscounts(Array.isArray(trip.extra?.discounts) ? (trip.extra.discounts as DiscountGroup[]) : []);
-    setTripChildRules(Array.isArray(trip.extra?.child_rules) ? (trip.extra.child_rules as ChildRule[]) : []);
     setTripExtraFees(Array.isArray(trip.extra?.extra_fees) ? (trip.extra.extra_fees as ExtraFee[]) : []);
     setTripDepartureRule(typeof trip.extra?.departure_rule === "string" ? trip.extra.departure_rule : "");
     setTripIncludedItems(Array.isArray(trip.extra?.included_items) ? (trip.extra.included_items as string[]) : []);
@@ -1407,9 +1408,12 @@ export default function AdminPage() {
       photo_urls: tripPhotoUrls,
       extra: {
         aliases: tripAliases.filter(Boolean),
-        price_groups: tripPriceGroups,
+        price_groups: tripPriceGroups.map(withDerivedSummaryFields),
         discounts: tripDiscounts,
-        child_rules: tripChildRules,
+        child_rules: deriveChildRules(tripPriceGroups, {
+          child: tripDraft.child_price_free === "true",
+          infant: tripDraft.infant_price_free === "true",
+        }),
         extra_fees: tripExtraFees,
         departure_rule: tripDepartureRule.trim(),
         included_items: tripIncludedItems.filter(Boolean),
@@ -2017,8 +2021,6 @@ export default function AdminPage() {
         setTripPriceGroups={setTripPriceGroups}
         tripDiscounts={tripDiscounts}
         setTripDiscounts={setTripDiscounts}
-        tripChildRules={tripChildRules}
-        setTripChildRules={setTripChildRules}
         tripExtraFees={tripExtraFees}
         setTripExtraFees={setTripExtraFees}
         tripDepartureRule={tripDepartureRule}

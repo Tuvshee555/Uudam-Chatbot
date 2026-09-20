@@ -5,6 +5,7 @@ import { ensureConnectedTripSchema } from "./connectedTripStore";
 import { duration, posterPhotos, record, records, strings, websiteDepartures, websiteExtraDetails } from "./connectedTripMapping";
 import { getEnv } from "./env";
 import { getPosterPdfPublicUrl } from "./poster/pdfUrl";
+import { classifyTripCategory } from "./tripCategorization";
 import type { TravelTrip } from "./travelTypes";
 
 let pool: Pool | undefined;
@@ -42,6 +43,30 @@ async function hostedPhoto(photo: string): Promise<string> {
   return body.secure_url;
 }
 
+export type ContentSnapshot = {
+  title: string; description: string; hotel: string | null;
+  included: string[]; excluded: string[]; importantNotes: string[];
+};
+export function contentSnapshotHash(snapshot: ContentSnapshot): string {
+  return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+}
+/**
+ * Decides whether a sync may overwrite this trip's website sell-copy fields.
+ * A staff edit on the website only wins when the chatbot side truly has not
+ * changed since the last sync (same content hash) — any real chatbot/poster
+ * edit (a differing hash) always takes precedence and clears the hold, so a
+ * conflict can never lock a trip out of future genuine updates.
+ */
+export function staffEditHoldsContent(args: {
+  hasPriorTrip: boolean; freshHash: string; priorHash: string | null;
+  priorUpdatedAt: string | Date | null | undefined; priorLastSyncedAt: string | Date | null | undefined;
+}): boolean {
+  const { hasPriorTrip, freshHash, priorHash, priorUpdatedAt, priorLastSyncedAt } = args;
+  const chatbotContentChanged = !hasPriorTrip || priorHash !== freshHash;
+  if (chatbotContentChanged || !priorLastSyncedAt || !priorUpdatedAt) return false;
+  return new Date(priorUpdatedAt) > new Date(priorLastSyncedAt);
+}
+
 export async function materializePoster(input: unknown) {
   const data = { ...record(input) };
   const photos = posterPhotos(data);
@@ -68,21 +93,62 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   const pdf = getPosterPdfPublicUrl(String(source.extra.poster_trip_id));
   if (!pdf) throw new Error("SITE_URL is required for the shared poster PDF");
   const metadata = { ...record(prior?.sourceMetadata), ...source.extra, connectedSource: { ...source, photos, poster } };
-  const data: Record<string, unknown> = {
+  // Never override a category staff picked by hand — only classify a trip
+  // that has none yet (a brand-new sync, or one that predates this feature).
+  const categoryId = prior?.categoryId
+    ? undefined
+    : await classifyTripCategory(client, source).catch(() => null);
+
+  // Staff can edit this trip's sell copy directly in the website admin
+  // (title/description/hotel/included/excluded/notes/images). Overwriting
+  // those fields on every sync — including a sync triggered by an unrelated
+  // price or seat-count change on the chatbot side — would silently discard
+  // that edit. Detect it by hashing what THIS sync would have written last
+  // time: if the chatbot's own content is unchanged since the trip was last
+  // synced AND the website side was edited more recently than that sync,
+  // hold the content fields back. A genuine content edit on the chatbot
+  // side (the hash changes) always wins and clears the hold — the chatbot
+  // stays the source of truth, this only stops a NO-OP resync from
+  // clobbering a same-day website edit.
+  const contentSnapshot: ContentSnapshot = {
     title: source.route_name, description: source.notes || String(poster.subtitle || source.route_name),
+    hotel: source.hotel || null,
+    included: strings(source.extra.included_items), excluded: strings(source.extra.excluded_items),
+    importantNotes: strings(source.extra.important_notes),
+  };
+  const contentHash = contentSnapshotHash(contentSnapshot);
+  const priorContentHash = typeof record(prior?.sourceMetadata).contentHash === "string"
+    ? String(record(prior?.sourceMetadata).contentHash) : null;
+  const staffEditedSinceLastSync = staffEditHoldsContent({
+    hasPriorTrip: Boolean(prior), freshHash: contentHash, priorHash: priorContentHash,
+    priorUpdatedAt: prior?.updatedAt, priorLastSyncedAt: prior?.lastSyncedAt,
+  });
+  const contentFields: Record<string, unknown> = staffEditedSinceLastSync
+    ? {}
+    : {
+        ...contentSnapshot, image,
+        extraImages: photos.length || hadSourcePhotos ? photos.filter(p => p !== image) : prior?.extraImages || [],
+        ...websiteExtraDetails(source.extra, {
+          adult: source.adult_price, child: source.child_price, infant: source.infant_price ?? null,
+          currency: source.currency || "MNT",
+        }),
+      };
+  const data: Record<string, unknown> = {
+    ...contentFields,
     durationDays: d.days, durationNights: d.nights, price: source.adult_price ?? 0,
     childPrice: source.child_price, infantPrice: source.infant_price ?? null,
-    currency: source.currency || "MNT", hotel: source.hotel || null,
-    foodIncluded: source.has_food, image,
-    extraImages: photos.length || hadSourcePhotos ? photos.filter(p => p !== image) : prior?.extraImages || [],
-    included: strings(source.extra.included_items), excluded: strings(source.extra.excluded_items),
-    importantNotes: strings(source.extra.important_notes), departureRule: source.extra.departure_rule || null,
-    ...websiteExtraDetails(source.extra, {
-      adult: source.adult_price, child: source.child_price, infant: source.infant_price ?? null,
-      currency: source.currency || "MNT",
-    }),
-    brochurePdfUrl: pdf, sourceMetadata: JSON.stringify(metadata),
-    isPublished: (source.status === "active" || source.status === "sold_out") && source.extra.customer_visible !== false,
+    currency: source.currency || "MNT",
+    foodIncluded: source.has_food,
+    departureRule: source.extra.departure_rule || null,
+    ...(categoryId !== undefined ? { categoryId } : {}),
+    brochurePdfUrl: pdf,
+    sourceMetadata: JSON.stringify({ ...metadata, contentHash }),
+    // "paused" behaves exactly like sold_out here: visible, just not
+    // bookable — the trip stays on the site so customers can still ask
+    // about it, but every departure below reads as closed, not open.
+    isPublished: (source.status === "active" || source.status === "sold_out" || source.status === "paused")
+      && source.extra.customer_visible !== false,
+    ...(staffEditedSinceLastSync ? {} : { lastSyncedAt: new Date() }),
   };
   if (prior) {
     const entries = Object.entries(data);
@@ -118,8 +184,11 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
     keep.push(depId);
     const seatsChanged = !prior || (Object.keys(previousSnapshot).length > 0 &&
       (previousSnapshot.seats_total !== source.seats_total || previousSnapshot.seats_left !== source.seats_left));
-    const reopened = ["cancelled", "sold_out"].includes(String(previousSnapshot.status)) && source.status === "active";
-    const status = source.status === "cancelled" ? "CANCELLED" : source.status === "sold_out" ? "SOLD_OUT" : reopened ? "OPEN" : old?.status || "OPEN";
+    const reopened = ["cancelled", "sold_out", "paused"].includes(String(previousSnapshot.status)) && source.status === "active";
+    const status = source.status === "cancelled" ? "CANCELLED"
+      : source.status === "sold_out" ? "SOLD_OUT"
+      : source.status === "paused" ? "PAUSED"
+      : reopened ? "OPEN" : old?.status || "OPEN";
     if (old) {
       await client.query(`UPDATE "Departure" SET label=$2,"endDate"=$3,status=$4::"DepartureStatus",
         "seatsTotal"=$5,"seatsLeft"=$6,price=$7,"childPrice"=$8,"infantPrice"=$9 WHERE id=$1`,
@@ -137,7 +206,7 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   await client.query(`UPDATE "Departure" SET status='CANCELLED' WHERE "tripId"=$1 AND NOT(id=ANY($2::text[]))`, [id, keep]);
   await client.query(`DELETE FROM "Departure" d WHERE d."tripId"=$1 AND NOT(d.id=ANY($2::text[]))
     AND NOT EXISTS(SELECT 1 FROM "Booking" b WHERE b."departureId"=d.id)`, [id, keep]);
-  return { id, slug };
+  return { id, slug, contentConflict: staffEditedSinceLastSync };
 }
 
 export async function flushWebsiteSync(tripId?: string, limit = 5) {
@@ -156,7 +225,7 @@ export async function flushWebsiteSync(tripId?: string, limit = 5) {
         if (!job) { await sourceDb.query("COMMIT"); return null; }
         const source = (await sourceDb.query(`SELECT * FROM travel_trip_entries WHERE id=$1`, [job.trip_id])).rows[0] as TravelTrip | undefined;
         const target = await bookingPool().connect();
-        let linked: { id: string; slug: string } | undefined;
+        let linked: { id: string; slug: string; contentConflict: boolean } | undefined;
         try {
           await target.query("BEGIN");
           if (source) {
@@ -172,7 +241,8 @@ export async function flushWebsiteSync(tripId?: string, limit = 5) {
         } catch (error) { await target.query("ROLLBACK"); throw error; }
         finally { target.release(); }
         await sourceDb.query(`UPDATE trip_website_sync SET synced_revision=$2,synced_at=NOW(),last_error=NULL,
-          website_trip_id=$3,website_slug=$4 WHERE trip_id=$1`, [job.trip_id,job.revision,linked?.id || null,linked?.slug || null]);
+          website_trip_id=$3,website_slug=$4,content_conflict=$5 WHERE trip_id=$1`,
+          [job.trip_id,job.revision,linked?.id || null,linked?.slug || null,linked?.contentConflict || false]);
         await sourceDb.query("COMMIT");
         return true;
       } catch (error) {
@@ -190,10 +260,10 @@ export async function flushWebsiteSync(tripId?: string, limit = 5) {
 
 export async function websiteSyncStatus() {
   return (await queryNeon(`SELECT s.trip_id,s.revision=s.synced_revision AS synced,s.last_error,
-      s.website_trip_id,s.website_slug,s.synced_at
+      s.website_trip_id,s.website_slug,s.synced_at,s.content_conflict
     FROM trip_website_sync s
     LEFT JOIN travel_trip_entries t ON t.id=s.trip_id
-    WHERE t.id IS NOT NULL OR s.last_error IS NOT NULL OR s.revision > s.synced_revision
+    WHERE t.id IS NOT NULL OR s.last_error IS NOT NULL OR s.revision > s.synced_revision OR s.content_conflict
     ORDER BY s.updated_at DESC`))?.rows || [];
 }
 export async function closeBookingPool() { await pool?.end(); pool = undefined; }

@@ -31,10 +31,17 @@ test("startCollectState begins at the name step with empty fields", () => {
 });
 
 test("promptForStep returns the right question per step, and nothing for done", () => {
-  assert.match(promptForStep("name"), /нэрээ бичнэ/);
+  assert.match(promptForStep("name"), /нэрээ бичнэ/i);
   assert.match(promptForStep("phone"), /утасны дугаараа/);
   assert.match(promptForStep("trip"), /аялалд бүртгүүлэх/);
   assert.equal(promptForStep("done"), "");
+});
+
+test("the first booking question also hands over the website", () => {
+  // A customer who taps "Захиалах" wants to move now; being asked three
+  // questions before receiving anything reads as a form, not service. The
+  // catalogue link goes out with the very first question.
+  assert.match(promptForStep("name"), /https:\/\/uudam-booking-web\.vercel\.app/);
 });
 
 test("advanceCollectState walks name -> phone -> trip -> done in order", () => {

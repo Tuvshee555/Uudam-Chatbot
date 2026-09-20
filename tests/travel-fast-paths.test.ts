@@ -69,7 +69,14 @@ test("smart buttons offer useful next taps for a matched trip with photos", () =
     ],
   );
 
-  assert.deepEqual(buttons, ["Хөтөлбөр үзэх", "Зураг үзэх", "Захиалах"]);
+  // "Зөвлөхтэй холбогдох" rides along on every set: reaching a human has to
+  // be a visible choice, not one the customer has to know to ask for.
+  assert.deepEqual(buttons, [
+    "Хөтөлбөр үзэх",
+    "Зураг үзэх",
+    "Захиалах",
+    "Зөвлөхтэй холбогдох",
+  ]);
 });
 
 test("clarification buttons are numbered and messenger-sized", () => {
@@ -258,6 +265,50 @@ test("sold-out reply pitches active same-destination trips instead of dead-endin
   assert.match(reply || "", /1,170,000/);
   // …but unrelated destinations are not dragged in.
   assert.doesNotMatch(reply || "", /Хайнан/);
+});
+
+test("a paused trip is reported as not currently active, not sold out", () => {
+  const reply = buildStructuredTripReply("Жинин Универсал шууд нислэгтэй хэд вэ, суудал байгаа юу?", [
+    trip({
+      id: "universal-paused",
+      route_name: "Бээжин - Юниверсал шууд нислэгтэй наадмын амралтаар гарах аялал",
+      category: "Шууд нислэгтэй аялал",
+      status: "paused",
+      extra: { aliases: ["Бээжин Юниверсал", "Универсал"] },
+    }),
+    trip({
+      id: "jinin-ground",
+      route_name: "Жинин - Утай - Гүмбэн",
+      category: "Газрын аялал",
+    }),
+  ]);
+
+  assert.match(reply || "", /Юниверсал/);
+  assert.match(reply || "", /идэвхгүй/);
+  assert.doesNotMatch(reply || "", /суудал дууссан/);
+});
+
+test("a paused trip's reply pitches active same-destination trips too", () => {
+  const reply = buildStructuredTripReply("Универсал аялал байгаа юу?", [
+    trip({
+      id: "universal-paused",
+      route_name: "Бээжин - Юниверсал шууд нислэгтэй наадмын амралтаар гарах аялал",
+      category: "Шууд нислэгтэй аялал",
+      status: "paused",
+      extra: { aliases: ["Бээжин Юниверсал", "Универсал"] },
+    }),
+    trip({
+      id: "beijing-four-city",
+      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+      category: "Газрын аялал",
+      adult_price: 1170000,
+      duration_text: "8 өдөр 7 шөнө",
+    }),
+  ]);
+
+  assert.match(reply || "", /идэвхгүй/);
+  assert.match(reply || "", /нээлттэй/);
+  assert.match(reply || "", /4 ХОТЫН АЯЛАЛ/);
 });
 
 test("program reply asks for clarification on shared city-only PDF request", () => {

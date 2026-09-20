@@ -144,6 +144,11 @@ function normalizePassengerPrices(raw: unknown): Record<string, unknown>[] {
       age_range: asString(p.age_range),
       price: asNumberOrNull(p.price),
       currency: asString(p.currency, "MNT"),
+      // "Үнэгүй" marks this band as a documented free fare, not merely 0 —
+      // see isDocumentedFreeFare, which reads this exact field. Dropped here
+      // once already (silently, since this whitelist predates that feature),
+      // which let a real free-fare save regress back to "missing data".
+      note: asString(p.note),
     }));
 }
 

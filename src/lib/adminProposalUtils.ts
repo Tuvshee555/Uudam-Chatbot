@@ -14,6 +14,7 @@ import type {
 
 export const STATUS_LABELS: Record<TripStatus, string> = {
   active: "Идэвхтэй",
+  paused: "Түр зогссон",
   cancelled: "Цуцлагдсан",
   sold_out: "Суудал дууссан",
   draft: "Ноорог",

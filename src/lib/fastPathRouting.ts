@@ -25,6 +25,23 @@ import { parseDepartureDateText, tripMatchesRequestedDate } from "./travelDates"
 import { getTripSearchHaystack, phoneticLatinText, resolveTripFromUserMessage } from "./travelFastPathsSearch";
 import type { TravelTrip } from "./travelTypes";
 import { isKnownGreetingPhrase } from "./greetingPhrases";
+import { SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
+
+/**
+ * Did the customer tap one of OUR quick-reply buttons?
+ *
+ * The text that arrives is our own label, not the customer's words, so it
+ * carries no trip identity — the trip is whatever the conversation was
+ * already about. Several labels collide with live trip names ("Хөтөлбөр
+ * үзэх" vs "…аяллын хөтөлбөр" and "Ордос -намрын тахилга үзэх аялал"), and
+ * the name matcher "verified" one of those from the bare label: tapping
+ * Хөтөлбөр үзэх under a Шанхай reply sent the Ордос brochure instead
+ * (confirmed in a real Messenger conversation, 2026-09-11).
+ */
+function isOwnButtonLabel(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return SMART_BUTTON_LABEL_LIST.some((label) => label.toLowerCase() === normalized);
+}
 
 /**
  * Attribute answer matching against offered candidates: which of them contain
@@ -188,10 +205,17 @@ export async function routeFastPathText(input: {
   if (contextualUserText !== text && direct.status === "not_found" && isKnownGreetingPhrase(text)) {
     return { matchText: text, scopedClarify: null };
   }
-  if (direct.status === "verified") {
+  // Our own button label never names a trip, however well it scores against
+  // one — skip straight to context so the tap applies to the trip the
+  // customer was actually looking at.
+  const tappedOwnButton = isOwnButtonLabel(text);
+  if (direct.status === "verified" && !tappedOwnButton) {
     return { matchText: text, scopedClarify: null };
   }
   const contextual = contextualUserText !== text ? resolve(contextualUserText, trips) : null;
+  if (tappedOwnButton && contextual?.status === "verified") {
+    return { matchText: `${contextual.trip.route_name}\n${text}`, scopedClarify: null };
+  }
   // Bug (found 2026-07-17 replaying real traffic): "beejin" alone after a
   // Chunchin (unrelated) reply returned Chunchin. isLikelyContextDependentText
   // treats ANY 1-2 word message as a follow-up reference (needed for real

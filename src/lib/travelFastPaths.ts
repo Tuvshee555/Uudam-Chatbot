@@ -43,6 +43,8 @@ import {
   type TripProgramReplyResult,
 } from "./travelFastPathsSearch";
 import { buildTripProgramReply } from "./travelFastPathsProgram";
+import { CONTACT_OPERATOR_LABEL } from "./contactLabels";
+import { SMART_BUTTON_LABELS } from "./smartButtonLabels";
 import { TRIP_MEDIA_UNAVAILABLE_SILENT } from "./reply";
 import {
   buildAmbiguousTripReply,
@@ -878,16 +880,21 @@ export function buildClarificationButtons(trips: TravelTrip[]): string[] {
     .map((trip, index) => `${index + 1}. ${compactButtonTripName(trip.route_name)}`);
 }
 
+export { SMART_BUTTON_LABELS, SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
+
 export function buildSmartButtons(replyText: string, trips: TravelTrip[]): string[] | null {
   const { best } = findBestTripMatch(replyText, trips);
   if (!best) return null;
 
-  const buttons: string[] = ["Хөтөлбөр үзэх"];
+  const buttons: string[] = [SMART_BUTTON_LABELS.PROGRAM];
   if (Array.isArray(best.photo_urls) && best.photo_urls.length > 0) {
-    buttons.push("Зураг үзэх");
+    buttons.push(SMART_BUTTON_LABELS.PHOTOS);
   }
-  buttons.push("Захиалах");
-  if (best.seats_left !== null) buttons.push("Суудал бий юу?");
+  buttons.push(SMART_BUTTON_LABELS.BOOK);
+  if (best.seats_left !== null) buttons.push(SMART_BUTTON_LABELS.SEATS);
+  // Always offer a human. A customer who cannot see the option assumes it
+  // does not exist; the choice being visible is most of its value.
+  buttons.push(CONTACT_OPERATOR_LABEL);
   return buttons;
 }
 
@@ -1165,28 +1172,58 @@ function buildDirectFlightUnavailableReply(text: string, trips: TravelTrip[]): s
   ].join("\n");
 }
 
-function buildSoldOutTripReply(text: string, trips: TravelTrip[]): string | null {
-  const soldOutTrips = trips.filter((trip) => trip.status === "sold_out");
-  if (soldOutTrips.length === 0) return null;
+/**
+ * "sold_out" (capacity ran out) and "paused" (staff pulled bookings for any
+ * other reason — schedule being redone, temporarily off sale) share the same
+ * shape of answer: the trip stays visible and answerable, but must never
+ * read as bookable, and a human asking about it deserves the same nudge
+ * toward what IS currently bookable rather than a dead end.
+ */
+const UNAVAILABLE_STATUS_WORDING: Record<"sold_out" | "paused", {
+  ambiguousIntro: string;
+  inlineSuffix: string;
+  standaloneLine: string;
+}> = {
+  sold_out: {
+    ambiguousIntro: "Таны асуусан нэрээр суудал дууссан хэд хэдэн аялал байна.",
+    inlineSuffix: "энэ аяллын суудал дууссан байна.",
+    standaloneLine: "Энэ аяллын суудал дууссан байна.",
+  },
+  paused: {
+    ambiguousIntro: "Таны асуусан нэрээр түр зогссон хэд хэдэн аялал байна.",
+    inlineSuffix: "энэ аялал одоогоор идэвхгүй байна.",
+    standaloneLine: "Энэ аялал одоогоор идэвхгүй тул захиалга авахгүй байна.",
+  },
+};
 
-  const { best, ambiguous } = findBestTripMatch(text, soldOutTrips, { includeSoldOut: true });
+function buildUnavailableTripReply(
+  text: string,
+  trips: TravelTrip[],
+  status: "sold_out" | "paused",
+): string | null {
+  const wording = UNAVAILABLE_STATUS_WORDING[status];
+  const matchTrips = trips.filter((trip) => trip.status === status);
+  if (matchTrips.length === 0) return null;
+
+  const matchOptions = status === "sold_out" ? { includeSoldOut: true } : { includePaused: true };
+  const { best, ambiguous } = findBestTripMatch(text, matchTrips, matchOptions);
   if (!best && ambiguous.length === 0) return null;
 
   if (!best && ambiguous.length > 0) {
     return [
-      "Таны асуусан нэрээр суудал дууссан хэд хэдэн аялал байна.",
+      wording.ambiguousIntro,
       "Алийг нь хэлж байгаагаа нэг тодруулаад бичээрэй:",
       ...ambiguous.slice(0, 3).map((trip) => `• ${trip.route_name}`),
     ].join("\n");
   }
   if (!best) return null;
 
-  // A sold-out answer that stops at "дууссан" buries the sellable catalog: a
+  // An unavailable answer that stops there buries the sellable catalog: a
   // generic "Бээжин" question was leading with the dead Universal trip while
   // three bookable Beijing trips went unmentioned. Pitch ACTIVE trips that
-  // share the sold-out trip's destination words (data-driven — never
+  // share the unavailable trip's destination words (data-driven — never
   // hardcoded names) in the same breath, like a human agent would.
-  const soldOutTokens = unique([
+  const matchTokens = unique([
     ...keywordTokens(best.route_name),
     ...getAliases(best).flatMap((alias) => keywordTokens(alias)),
   ]).filter((token) => token.length >= 4);
@@ -1198,7 +1235,7 @@ function buildSoldOutTripReply(text: string, trips: TravelTrip[]): string | null
         ...getAliases(trip).flatMap((alias) => keywordTokens(alias)),
         ...keywordTokens(trip.source_description || ""),
       ]);
-      const overlap = soldOutTokens.filter((token) => candidateTokens.has(token));
+      const overlap = matchTokens.filter((token) => candidateTokens.has(token));
       return { trip, score: overlap.length, overlap };
     })
     .filter((candidate) => candidate.score > 0)
@@ -1221,7 +1258,7 @@ function buildSoldOutTripReply(text: string, trips: TravelTrip[]): string | null
       return `• ${trip.route_name}${details ? ` (${details})` : ""}`;
     });
     return [
-      `✈️ ${best.route_name} — энэ аяллын суудал дууссан байна.`,
+      `✈️ ${best.route_name} — ${wording.inlineSuffix}`,
       "",
       "Гэхдээ ижил чиглэлд эдгээр аялал нээлттэй байна:",
       ...altLines,
@@ -1232,36 +1269,48 @@ function buildSoldOutTripReply(text: string, trips: TravelTrip[]): string | null
 
   return [
     `✈️ ${best.route_name}`,
-    "Энэ аяллын суудал дууссан байна.",
-    "Одоогоор захиалга авах боломжгүй тул ижил төстэй өөр хувилбарыг аяллын зөвлөхөөс тодруулж өгье.",
+    wording.standaloneLine,
+    "Ижил төстэй өөр хувилбарыг аяллын зөвлөхөөс тодруулж өгье.",
   ].join("\n");
 }
 
 /**
- * The customer's own message names a trip that is SOLD OUT more specifically than
- * any active trip. Every other matcher only looks at active trips, so a sold-out
- * trip named exactly lost to a near-name sibling: "ШАНХАЙ - ДИСНЕЙЛЭНД-10/08 үнэ
- * хэд вэ" was answered with the 11/3 trip's price as if it were the same tour.
- * Say it is full and offer the alternatives at the same destination instead.
+ * The customer's own message names a trip that is SOLD OUT (or paused) more
+ * specifically than any active trip. Every other matcher only looks at active
+ * trips, so an unavailable trip named exactly lost to a near-name sibling:
+ * "ШАНХАЙ - ДИСНЕЙЛЭНД-10/08 үнэ хэд вэ" was answered with the 11/3 trip's price
+ * as if it were the same tour. Say it is unavailable and offer the alternatives
+ * at the same destination instead.
  *
  * Deliberately strict — the full trip name, or a clear score lead over the best
- * active match — so a bare "Шанхай" never gets a sold-out answer.
+ * active match — so a bare "Шанхай" never gets an unavailable answer.
  */
 export function buildSoldOutPrecedenceReply(text: string, trips: TravelTrip[]): string | null {
-  const soldOutTrips = trips.filter((trip) => trip.status === "sold_out");
-  if (soldOutTrips.length === 0) return null;
-  const soldMatches = findTripMatches(text, soldOutTrips, { includeSoldOut: true });
-  if (soldMatches.length === 0) return null;
-  const topSold = soldMatches[0];
+  const unavailableTrips = trips.filter((trip) => trip.status === "sold_out" || trip.status === "paused");
+  if (unavailableTrips.length === 0) return null;
+  const unavailableMatches = findTripMatches(text, unavailableTrips, {
+    includeSoldOut: true,
+    includePaused: true,
+  });
+  if (unavailableMatches.length === 0) return null;
+  const topUnavailable = unavailableMatches[0];
   const topActive = findTripMatches(
     text,
     trips.filter((trip) => trip.status === "active"),
   )[0];
-  const fullName = normText(topSold.trip.route_name);
+  const fullName = normText(topUnavailable.trip.route_name);
   const namedFully = fullName.length >= 8 && normText(text).includes(fullName);
-  const clearlyBeatsActive = !topActive || topSold.score > topActive.score + 5;
+  const clearlyBeatsActive = !topActive || topUnavailable.score > topActive.score + 5;
   if (!namedFully && !clearlyBeatsActive) return null;
-  return buildSoldOutTripReply(text, trips);
+  return buildUnavailableTripReply(
+    text,
+    trips,
+    topUnavailable.trip.status === "paused" ? "paused" : "sold_out",
+  );
+}
+
+function buildSoldOutTripReply(text: string, trips: TravelTrip[]): string | null {
+  return buildUnavailableTripReply(text, trips, "sold_out") ?? buildUnavailableTripReply(text, trips, "paused");
 }
 
 export function buildStructuredTripReply(

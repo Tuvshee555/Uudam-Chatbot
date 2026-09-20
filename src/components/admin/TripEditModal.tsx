@@ -1,9 +1,11 @@
 import React from "react";
 import { Button, DatePicker, Icons, Input, Modal, Select, Spinner, Textarea, cx } from "@/components/ui";
 import { getPosterBrochureHref } from "@/lib/poster/pdfUrl";
-import { blockingGaps, findTripGaps, type TripGap } from "@/lib/tripCompleteness";
+import { blockingGaps, documentedFreeFare, findTripGaps, type TripGap } from "@/lib/tripCompleteness";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
-import type { AnswerHint, BookingTerms, ChildRule, DiscountGroup, ExtraFee, ItineraryDay, PassengerPrice, PriceGroup, RoomPrice, SourceProvenance, TravelTrip } from "@/lib/adminTypes";
+import { deriveChildRules } from "@/lib/priceGroups";
+import { isInfantShapedAge } from "@/lib/travelFastPathsSearch";
+import type { AnswerHint, BookingTerms, DiscountGroup, ExtraFee, ItineraryDay, PassengerPrice, PriceGroup, RoomPrice, SourceProvenance, TravelTrip } from "@/lib/adminTypes";
 
 export type TripDraftState = Record<string, string>;
 
@@ -34,8 +36,6 @@ export type TripEditModalProps = {
   setTripPriceGroups: React.Dispatch<React.SetStateAction<PriceGroup[]>>;
   tripDiscounts: DiscountGroup[];
   setTripDiscounts: React.Dispatch<React.SetStateAction<DiscountGroup[]>>;
-  tripChildRules: ChildRule[];
-  setTripChildRules: React.Dispatch<React.SetStateAction<ChildRule[]>>;
   tripExtraFees: ExtraFee[];
   setTripExtraFees: React.Dispatch<React.SetStateAction<ExtraFee[]>>;
   tripDepartureRule: string;
@@ -72,17 +72,14 @@ const delBtn = "shrink-0 rounded-md p-1 text-ink-muted transition-colors hover:b
 
 type TripEditorTab = "base" | "pricing" | "itinerary" | "advanced";
 
-function emptyPassengerPrice(): PassengerPrice {
-  return { label: "", age_range: "", price: null, currency: "MNT" };
+function emptyPassengerPrice(label = ""): PassengerPrice {
+  return { label, age_range: "", price: null, currency: "MNT" };
 }
 function emptyPriceGroup(): PriceGroup {
   return { label: "", dates: [], display_dates: [], date_keys: [], adult_price: null, child_price: null, infant_price: null, child_age: "", infant_age: "", passenger_prices: [], note: "" };
 }
 function emptyDiscountGroup(): DiscountGroup {
   return { label: "", dates: [], display_dates: [], date_keys: [], adult_price: null, child_price: null, infant_price: null, condition: "", note: "" };
-}
-function emptyChildRule(): ChildRule {
-  return { label: "", age_range: "", price: null, currency: "MNT", note: "" };
 }
 function emptyExtraFee(): ExtraFee {
   return { label: "", amount: null, currency: "MNT", applies_to: "", note: "" };
@@ -179,12 +176,19 @@ function MoneyInput({
   value,
   onChange,
   missing,
+  free,
+  onFreeChange,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   /** Reddens the box until a real amount is entered — a required field. */
   missing?: boolean;
+  /** When provided, shows a "Үнэгүй" checkbox that disables the number box
+   * instead of demanding a price — for a passenger type this trip genuinely
+   * never charges (almost always the infant fare). */
+  free?: boolean;
+  onFreeChange?: (free: boolean) => void;
 }) {
   return (
     <label className="block">
@@ -197,15 +201,28 @@ function MoneyInput({
       >
         <input
           inputMode="numeric"
-          value={value}
+          disabled={free}
+          value={free ? "" : value}
+          placeholder={free ? "Үнэгүй" : ""}
           onChange={(e) => onChange(e.target.value.replace(/[^\d]/g, ""))}
-          className="min-w-0 flex-1 bg-transparent text-sm tabular-nums text-ink outline-none placeholder:text-ink-subtle"
+          className="min-w-0 flex-1 bg-transparent text-sm tabular-nums text-ink outline-none placeholder:text-ink-subtle disabled:text-ink-subtle"
         />
         <span className="ml-2 rounded-[6px] bg-surface-sunken px-2 py-1 text-sm font-semibold text-ink-muted">
           ₮
         </span>
       </span>
-      {missing && <span className="mt-1 block text-xs font-medium text-danger">Заавал бөглөх</span>}
+      {missing && !free && <span className="mt-1 block text-xs font-medium text-danger">Заавал бөглөх</span>}
+      {onFreeChange && (
+        <span className="mt-1.5 flex items-center gap-1.5 text-xs text-ink-subtle">
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5 rounded border-line-strong accent-brand"
+            checked={!!free}
+            onChange={(e) => onFreeChange(e.target.checked)}
+          />
+          Үнэгүй
+        </span>
+      )}
     </label>
   );
 }
@@ -276,6 +293,189 @@ function DepartureDateEditor({
   );
 }
 
+/** Same date-chip pattern as DepartureDateEditor, but working on a plain
+ * string[] (a price group's own dates) instead of a comma-draft string. */
+function PriceGroupDateChips({
+  dates,
+  onChange,
+}: {
+  dates: string[];
+  onChange: (dates: string[]) => void;
+}) {
+  const addDate = (formatted: string) => {
+    if (!formatted || dates.includes(formatted)) return;
+    onChange([...dates, formatted]);
+  };
+  const removeDate = (index: number) => onChange(dates.filter((_, i) => i !== index));
+
+  return (
+    <div>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+        <div className="sm:w-52">
+          <DatePicker label="Огноо нэмэх" onSelect={(formatted) => addDate(formatted)} />
+        </div>
+      </div>
+      <div className="mt-2 flex min-h-9 flex-wrap gap-1.5 rounded-lg border border-line bg-surface p-2">
+        {dates.length === 0 ? (
+          <span className="px-1 py-1 text-xs font-medium text-danger">Огноо сонгоогүй байна</span>
+        ) : (
+          dates.map((date, index) => (
+            <span
+              key={`${date}-${index}`}
+              className="inline-flex items-center gap-1 rounded-md border border-line-strong bg-surface-sunken px-2 py-1 text-xs font-semibold text-ink-muted"
+            >
+              {date}
+              <button
+                type="button"
+                onClick={() => removeDate(index)}
+                className="ml-0.5 flex h-4 w-4 items-center justify-center rounded-full text-ink-subtle hover:bg-danger-soft hover:text-danger"
+                title="Огноо устгах"
+                aria-label={`${date} устгах`}
+              >
+                ×
+              </button>
+            </span>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+const FREE_FARE_NOTE = "Үнэгүй";
+function isFreeFare(price: PassengerPrice) {
+  return price.price === 0 && price.note === FREE_FARE_NOTE;
+}
+
+/** "2-11 нас" / "0-23 сар" / "12 сар" -> the picker's own numeric parts.
+ * Infants are usually banded in months, children/adults in years — every
+ * downstream reader (isInfantShapedAge and friends) tells the two apart by
+ * checking for the literal substring "сар", so the unit must round-trip
+ * exactly, never default silently to years. */
+export function parseAgeRange(value: string): { min: string; max: string; unit: "сар" | "нас" } {
+  const unit: "сар" | "нас" = /сар/i.test(value) ? "сар" : "нас";
+  const range = value.match(/(\d{1,3})\s*[-–—]\s*(\d{1,3})/);
+  if (range) return { min: range[1], max: range[2], unit };
+  const single = value.match(/(\d{1,3})/);
+  return { min: single?.[1] ?? "", max: "", unit };
+}
+
+export function formatAgeRange(min: string, max: string, unit: "сар" | "нас"): string {
+  if (!min && !max) return "";
+  if (min && max) return `${min}-${max} ${unit}`;
+  return `${min || max} ${unit}`;
+}
+
+/** Pick an age band instead of typing it freeform — a min/max number and a
+ * unit toggle (months for infants, years for children), so a mistyped "нас"
+ * can never silently stand in for "сар" the way free text let it. */
+function AgeRangePicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const { min, max, unit } = parseAgeRange(value);
+  const setPart = (next: Partial<{ min: string; max: string; unit: "сар" | "нас" }>) => {
+    const merged = { min, max, unit, ...next };
+    onChange(formatAgeRange(merged.min, merged.max, merged.unit));
+  };
+  return (
+    <div className="flex items-stretch gap-1">
+      <input
+        className={cx(inputCls, "w-14 text-center")}
+        inputMode="numeric"
+        value={min}
+        placeholder="0"
+        onChange={(e) => setPart({ min: e.target.value.replace(/[^\d]/g, "") })}
+      />
+      <span className="flex items-center text-ink-subtle">–</span>
+      <input
+        className={cx(inputCls, "w-14 text-center")}
+        inputMode="numeric"
+        value={max}
+        placeholder="23"
+        onChange={(e) => setPart({ max: e.target.value.replace(/[^\d]/g, "") })}
+      />
+      <select
+        className={cx(inputCls, "w-20")}
+        value={unit}
+        onChange={(e) => setPart({ unit: e.target.value as "сар" | "нас" })}
+      >
+        <option value="сар">сар</option>
+        <option value="нас">нас</option>
+      </select>
+    </div>
+  );
+}
+
+/** One editable price band for a non-adult passenger type (child, infant, or
+ * any other age tier the trip needs) — label, age range, price, and a Free
+ * toggle. Adult stays its own single required field above this list since a
+ * trip never has more than one adult fare per date group. */
+function PassengerBandRow({
+  price,
+  onChange,
+  onRemove,
+}: {
+  price: PassengerPrice;
+  onChange: (next: PassengerPrice) => void;
+  onRemove: () => void;
+}) {
+  const free = isFreeFare(price);
+  return (
+    <div className="grid gap-2 rounded-lg border border-line bg-surface p-2.5 sm:grid-cols-[1.2fr_1fr_1fr_auto]">
+      <div>
+        <label className="mb-0.5 block text-xs text-ink-muted">Ангилал</label>
+        <input
+          className={inputCls}
+          value={price.label}
+          placeholder="ж: Хүүхэд, Нярай"
+          onChange={(e) => onChange({ ...price, label: e.target.value })}
+        />
+      </div>
+      <div>
+        <label className="mb-0.5 block text-xs text-ink-muted">Нас</label>
+        <AgeRangePicker
+          value={price.age_range}
+          onChange={(age_range) => onChange({ ...price, age_range })}
+        />
+      </div>
+      <div>
+        <label className="mb-0.5 block text-xs text-ink-muted">Үнэ</label>
+        <input
+          className={numCls}
+          inputMode="numeric"
+          disabled={free}
+          value={free ? "" : price.price ?? ""}
+          placeholder={free ? "Үнэгүй" : ""}
+          onChange={(e) => {
+            const digits = e.target.value.replace(/[^\d]/g, "");
+            onChange({ ...price, price: digits === "" ? null : Number(digits), note: "" });
+          }}
+        />
+        <label className="mt-1 flex items-center gap-1.5 text-xs text-ink-subtle">
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5 rounded border-line-strong accent-brand"
+            checked={free}
+            onChange={(e) => onChange(e.target.checked
+              ? { ...price, price: 0, note: FREE_FARE_NOTE }
+              : { ...price, price: null, note: "" })}
+          />
+          Үнэгүй
+        </label>
+      </div>
+      <div className="flex items-start justify-end pt-5">
+        <button type="button" className={delBtn} onClick={onRemove} title="Устгах">
+          <Icons.trash size={13} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function EditorTabButton({
   active,
   label,
@@ -326,8 +526,6 @@ export function TripEditModal({
   setTripPriceGroups,
   tripDiscounts,
   setTripDiscounts,
-  tripChildRules,
-  setTripChildRules,
   tripExtraFees,
   setTripExtraFees,
   tripDepartureRule,
@@ -369,13 +567,29 @@ export function TripEditModal({
   const brochurePdfUrl = getPosterBrochureHref(editingExtra);
 
   // Checked against what is on screen right now, not the saved trip, so filling
-  // a field clears its warning before saving.
+  // a field clears its warning before saving. child_rules only exists on the
+  // SAVED trip (it's derived from price groups at save time — see
+  // deriveChildRules in priceGroups.ts) so re-derive it from the live,
+  // on-screen price groups here too, otherwise marking infant/child free in
+  // this same modal would still show as a missing-data gap until reopened.
+  // Free can also be declared on the base tab's flat price (no date groups
+  // at all yet) — either source counts as documented.
+  const liveChildRulesExtra = {
+    child_rules: deriveChildRules(tripPriceGroups, {
+      child: tripDraft.child_price_free === "true",
+      infant: tripDraft.infant_price_free === "true",
+    }),
+  };
+  const infantFareFree = documentedFreeFare(liveChildRulesExtra, "infant");
+  const childFareFree = documentedFreeFare(liveChildRulesExtra, "child");
   const gaps = findTripGaps({
     route_name: tripDraft.route_name,
     duration_text: tripDraft.duration_text,
     adult_price: parseMoneyDraft(tripDraft.adult_price),
     child_price: parseMoneyDraft(tripDraft.child_price),
     infant_price: parseMoneyDraft(tripDraft.infant_price),
+    infant_fare_free: infantFareFree,
+    child_fare_free: childFareFree,
     departure_dates: splitDraftList(tripDraft.departure_dates),
     photo_urls: tripPhotoUrls,
     itinerary_days: tripItineraryDays,
@@ -470,6 +684,13 @@ export function TripEditModal({
           onChange={(e) => setTripDraft((p) => ({ ...p, duration_text: e.target.value }))}
           error={gapKeys.has("duration_text") ? "Заавал бөглөх" : undefined}
         />
+        {tripPriceGroups.length > 0 && (
+          <div className="rounded-lg border border-warning/30 bg-warning-soft p-2.5 text-xs text-ink sm:col-span-2">
+            Энэ аялал &ldquo;Үнэ ба гаралт&rdquo; таб дээр огноо тус бүрийн үнэтэй байна — бот, вэбсайт хоёулаа
+            ХАМГИЙН ОЙРХОН огнооны үнийг харуулна, доорх үндсэн үнийг биш. Доорх нь зөвхөн шинэ огноо
+            хараахан ороогүй үед л харагдана.
+          </div>
+        )}
         <MoneyInput
           label="Том хүний үнэ"
           value={tripDraft.adult_price}
@@ -481,12 +702,16 @@ export function TripEditModal({
           value={tripDraft.child_price}
           onChange={(value) => setTripDraft((p) => ({ ...p, child_price: value }))}
           missing={gapKeys.has("child_price")}
+          free={tripDraft.child_price_free === "true"}
+          onFreeChange={(free) => setTripDraft((p) => ({ ...p, child_price_free: free ? "true" : "", child_price: free ? "" : p.child_price }))}
         />
         <MoneyInput
           label="Нярайн үнэ"
           value={tripDraft.infant_price}
           onChange={(value) => setTripDraft((p) => ({ ...p, infant_price: value }))}
           missing={gapKeys.has("infant_price")}
+          free={tripDraft.infant_price_free === "true"}
+          onFreeChange={(free) => setTripDraft((p) => ({ ...p, infant_price_free: free ? "true" : "", infant_price: free ? "" : p.infant_price }))}
         />
         <div className="rounded-lg border border-line bg-surface-sunken p-3 sm:col-span-2">
           <p className="text-sm font-semibold text-ink">Насны ангилал</p>
@@ -520,6 +745,7 @@ export function TripEditModal({
           onChange={(e) => setTripDraft((p) => ({ ...p, status: e.target.value }))}
         >
           <option value="active">Идэвхтэй</option>
+          <option value="paused">Түр зогссон</option>
           <option value="cancelled">Цуцлагдсан</option>
           <option value="sold_out">Суудал дууссан</option>
           <option value="draft">Ноорог</option>
@@ -764,86 +990,81 @@ export function TripEditModal({
 
       {activeTab === "pricing" && (
         <>
-      {/* B. Price groups */}
+      {/* B. Price groups — one entry per set of departure dates. Adult price is
+          always a single value; child/infant are a flexible list of price
+          bands (a trip can have more than one child age tier) with a Free
+          option, and that list is the ONLY place either is entered — no
+          separate "child price"/"infant price" fields to keep in sync. */}
       <p className={sectionHdr}>Огноо тус бүрийн үнэ</p>
       <div className="mt-2 space-y-3">
         {tripPriceGroups.map((g, idx) => (
           <div key={idx} className="rounded-lg border border-line bg-surface-sunken p-3 text-sm">
             <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs font-medium text-ink-muted">Бүлэг {idx + 1}</span>
+              <span className="text-xs font-medium text-ink-muted">
+                {g.dates.length ? g.dates.join(", ") : `Огноо сонгоогүй үнэ ${idx + 1}`}
+              </span>
               <button type="button" className={delBtn} onClick={() => setTripPriceGroups((prev) => prev.filter((_, i) => i !== idx))}>
                 <Icons.trash size={13} />
               </button>
             </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <div>
-                <label className="mb-0.5 block text-xs text-ink-muted">Бүлгийн нэр</label>
-                <input className={inputCls} value={g.label} onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, label: e.target.value } : v))} />
-              </div>
-              <div>
-                <label className="mb-0.5 block text-xs text-ink-muted">Огноонууд (таслалаар)</label>
-                <input className={inputCls} value={g.dates.join(", ")} placeholder="ж: 7/5, 7/12, 7/19" onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, dates: e.target.value.split(",").map((d) => d.trim()).filter(Boolean) } : v))} />
-              </div>
-              <div>
-                <label className="mb-0.5 block text-xs text-ink-muted">Том хүний үнэ</label>
-                <input className={numCls} type="number" value={g.adult_price ?? ""} onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, adult_price: e.target.value === "" ? null : Number(e.target.value) } : v))} />
-              </div>
-              <div>
-                <label className="mb-0.5 block text-xs text-ink-muted">Хүүхдийн үнэ</label>
-                <input className={numCls} type="number" value={g.child_price ?? ""} onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, child_price: e.target.value === "" ? null : Number(e.target.value) } : v))} />
-              </div>
-              <div>
-                <label className="mb-0.5 block text-xs text-ink-muted">Хүүхдийн нас (ж: 2-12)</label>
-                <input className={inputCls} value={g.child_age} onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, child_age: e.target.value } : v))} />
-              </div>
-              <div>
-                <label className="mb-0.5 block text-xs text-ink-muted">Нярайн үнэ</label>
-                <input className={numCls} type="number" value={g.infant_price ?? ""} onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, infant_price: e.target.value === "" ? null : Number(e.target.value) } : v))} />
-              </div>
-              <div>
-                <label className="mb-0.5 block text-xs text-ink-muted">Нярайн нас (ж: 0-2)</label>
-                <input className={inputCls} value={g.infant_age} onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, infant_age: e.target.value } : v))} />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="mb-0.5 block text-xs text-ink-muted">Тайлбар</label>
-                <input className={inputCls} value={g.note} onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, note: e.target.value } : v))} />
-              </div>
+
+            <PriceGroupDateChips
+              dates={g.dates}
+              onChange={(dates) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, dates, display_dates: dates } : v))}
+            />
+
+            <div className="mt-3">
+              <MoneyInput
+                label="Том хүний үнэ"
+                value={g.adult_price != null ? String(g.adult_price) : ""}
+                onChange={(value) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, adult_price: value === "" ? null : Number(value) } : v))}
+              />
             </div>
-            {/* passenger_prices sub-editor */}
-            <div className="mt-2">
-              <p className="mb-1 text-xs font-medium text-ink-muted">Зорчигчийн үнэ (нарийвчилсан)</p>
-              {(g.passenger_prices ?? []).map((pp, ppIdx) => (
-                <div key={ppIdx} className="mb-1 grid gap-1.5 rounded border border-line bg-surface p-2 sm:grid-cols-5">
-                  <div>
-                    <label className="mb-0.5 block text-xs text-ink-subtle">Нэр</label>
-                    <input className={inputCls} value={pp.label} placeholder="Том хүн" onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.map((p2, j) => j === ppIdx ? { ...p2, label: e.target.value } : p2) } : v))} />
-                  </div>
-                  <div>
-                    <label className="mb-0.5 block text-xs text-ink-subtle">Нас</label>
-                    <input className={inputCls} value={pp.age_range} placeholder="2-12" onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.map((p2, j) => j === ppIdx ? { ...p2, age_range: e.target.value } : p2) } : v))} />
-                  </div>
-                  <div>
-                    <label className="mb-0.5 block text-xs text-ink-subtle">Үнэ</label>
-                    <input className={numCls} type="number" value={pp.price ?? ""} onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.map((p2, j) => j === ppIdx ? { ...p2, price: e.target.value === "" ? null : Number(e.target.value) } : p2) } : v))} />
-                  </div>
-                  <div>
-                    <label className="mb-0.5 block text-xs text-ink-subtle">Валют</label>
-                    <select className={inputCls} value={pp.currency} onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.map((p2, j) => j === ppIdx ? { ...p2, currency: e.target.value } : p2) } : v))}>
-                      <option value="MNT">MNT</option>
-                      <option value="CNY">CNY</option>
-                      <option value="USD">USD</option>
-                    </select>
-                  </div>
-                  <div className="flex items-end">
-                    <button type="button" className={delBtn} onClick={() => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.filter((_, j) => j !== ppIdx) } : v))}>
-                      <Icons.trash size={13} />
+
+            {(() => {
+              const bands = g.passenger_prices ?? [];
+              const isInfantBand = (pp: PassengerPrice) => isInfantShapedAge(pp.label.toLowerCase(), pp.age_range);
+              const childBands = bands.map((pp, ppIdx) => ({ pp, ppIdx })).filter(({ pp }) => !isInfantBand(pp));
+              const infantBands = bands.map((pp, ppIdx) => ({ pp, ppIdx })).filter(({ pp }) => isInfantBand(pp));
+              const updateBand = (ppIdx: number, next: PassengerPrice) =>
+                setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.map((p2, j) => j === ppIdx ? next : p2) } : v));
+              const removeBand = (ppIdx: number) =>
+                setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.filter((_, j) => j !== ppIdx) } : v));
+              const addBand = (label: string) =>
+                setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: [...(v.passenger_prices ?? []), emptyPassengerPrice(label)] } : v));
+              return (
+                <>
+                  <div className="mt-3">
+                    <p className="mb-1.5 text-xs font-semibold text-ink">Хүүхдийн үнэ</p>
+                    <div className="space-y-1.5">
+                      {childBands.map(({ pp, ppIdx }) => (
+                        <PassengerBandRow key={ppIdx} price={pp} onChange={(next) => updateBand(ppIdx, next)} onRemove={() => removeBand(ppIdx)} />
+                      ))}
+                    </div>
+                    <button type="button" className="mt-1.5 text-xs text-brand hover:underline" onClick={() => addBand("Хүүхэд")}>
+                      + Хүүхдийн үнэ нэмэх
                     </button>
                   </div>
-                </div>
-              ))}
-              <button type="button" className="text-xs text-brand hover:underline" onClick={() => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: [...(v.passenger_prices ?? []), emptyPassengerPrice()] } : v))}>
-                + Зорчигч нэмэх
-              </button>
+
+                  <div className="mt-3">
+                    <p className="mb-1.5 text-xs font-semibold text-ink">Нярайн үнэ</p>
+                    <p className="mb-1.5 text-xs text-ink-subtle">Ихэвчлэн сараар тоологдоно (ж: 0-23 сар).</p>
+                    <div className="space-y-1.5">
+                      {infantBands.map(({ pp, ppIdx }) => (
+                        <PassengerBandRow key={ppIdx} price={pp} onChange={(next) => updateBand(ppIdx, next)} onRemove={() => removeBand(ppIdx)} />
+                      ))}
+                    </div>
+                    <button type="button" className="mt-1.5 text-xs text-brand hover:underline" onClick={() => addBand("Нярай")}>
+                      + Нярайн үнэ нэмэх
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+
+            <div className="mt-3">
+              <label className="mb-0.5 block text-xs text-ink-muted">Тайлбар</label>
+              <input className={inputCls} value={g.note} onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, note: e.target.value } : v))} />
             </div>
           </div>
         ))}
@@ -900,48 +1121,7 @@ export function TripEditModal({
         + Хямдрал нэмэх
       </button>
 
-      {/* D. Child rules */}
-      <p className={sectionHdr}>Хүүхдийн насны ангилал</p>
-      <div className="mt-2 space-y-2">
-        {tripChildRules.map((r, idx) => (
-          <div key={idx} className="grid gap-2 rounded-lg border border-line bg-surface-sunken p-2 sm:grid-cols-5">
-            <div>
-              <label className="mb-0.5 block text-xs text-ink-muted">Ангилал</label>
-              <input className={inputCls} value={r.label} placeholder="ж: Хүүхэд" onChange={(e) => setTripChildRules((prev) => prev.map((v, i) => i === idx ? { ...v, label: e.target.value } : v))} />
-            </div>
-            <div>
-              <label className="mb-0.5 block text-xs text-ink-muted">Нас</label>
-              <input className={inputCls} value={r.age_range} placeholder="ж: 2-12" onChange={(e) => setTripChildRules((prev) => prev.map((v, i) => i === idx ? { ...v, age_range: e.target.value } : v))} />
-            </div>
-            <div>
-              <label className="mb-0.5 block text-xs text-ink-muted">Үнэ</label>
-              <input className={numCls} type="number" value={r.price ?? ""} onChange={(e) => setTripChildRules((prev) => prev.map((v, i) => i === idx ? { ...v, price: e.target.value === "" ? null : Number(e.target.value) } : v))} />
-            </div>
-            <div>
-              <label className="mb-0.5 block text-xs text-ink-muted">Валют</label>
-              <select className={inputCls} value={r.currency ?? "MNT"} onChange={(e) => setTripChildRules((prev) => prev.map((v, i) => i === idx ? { ...v, currency: e.target.value } : v))}>
-                <option value="MNT">MNT</option>
-                <option value="CNY">CNY</option>
-                <option value="USD">USD</option>
-              </select>
-            </div>
-            <div className="flex gap-1">
-              <div className="flex-1">
-                <label className="mb-0.5 block text-xs text-ink-muted">Тайлбар</label>
-                <input className={inputCls} value={r.note} onChange={(e) => setTripChildRules((prev) => prev.map((v, i) => i === idx ? { ...v, note: e.target.value } : v))} />
-              </div>
-              <button type="button" className={cx(delBtn, "mt-5")} onClick={() => setTripChildRules((prev) => prev.filter((_, i) => i !== idx))}>
-                <Icons.trash size={13} />
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-      <button type="button" className="mt-1 text-xs text-brand hover:underline" onClick={() => setTripChildRules((prev) => [...prev, emptyChildRule()])}>
-        + Насны ангилал нэмэх
-      </button>
-
-      {/* E. Extra fees */}
+      {/* D. Extra fees */}
       <p className={sectionHdr}>Нэмэлт төлбөр</p>
       <div className="mt-2 space-y-2">
         {tripExtraFees.map((f, idx) => (
@@ -982,7 +1162,7 @@ export function TripEditModal({
         + Нэмэлт төлбөр нэмэх
       </button>
 
-      {/* F. Departure rule */}
+      {/* E. Departure rule */}
       <p className={sectionHdr}>Гарах өдрийн дүрэм</p>
       <div className="mt-2">
         <textarea

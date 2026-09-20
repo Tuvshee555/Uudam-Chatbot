@@ -38,6 +38,7 @@ const ACCEPT_FILES = "*";
 
 const STATUS_LABELS: Record<TripStatus, string> = {
   active: "Идэвхтэй",
+  paused: "Түр зогссон",
   cancelled: "Цуцлагдсан",
   sold_out: "Суудал дууссан",
   draft: "Ноорог",
@@ -47,6 +48,7 @@ const STATUS_LABELS: Record<TripStatus, string> = {
 const STATUS_TONE: Record<TripStatus, "success" | "danger" | "warning" | "neutral"> =
   {
     active: "success",
+    paused: "warning",
     cancelled: "danger",
     sold_out: "warning",
     draft: "neutral",

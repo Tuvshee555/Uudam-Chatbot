@@ -446,7 +446,21 @@ export default function Poster({
                     </td>
                     {cells.map((c, ci) => (
                       <td className="pamt" key={ci}>
-                        {t.price_table ? <Ed value={c} placeholder="Үнэ" onChange={(v) => upd(["price_table", "rows", ri, "cells", ci], v)} /> : c}
+                        {t.price_table ? (
+                          <>
+                            <Ed value={c} placeholder="Үнэ" onChange={(v) => upd(["price_table", "rows", ri, "cells", ci], v)} />
+                            {c.trim().toLowerCase() !== "үнэгүй" && (
+                              <button
+                                type="button"
+                                className="editor-only pamt-free-btn"
+                                onClick={() => upd(["price_table", "rows", ri, "cells", ci], "Үнэгүй")}
+                                title="Энэ мөрийг үнэгүй болгох"
+                              >
+                                Үнэгүй болгох
+                              </button>
+                            )}
+                          </>
+                        ) : c}
                       </td>
                     ))}
                     {t.price_table ? <td className="editor-only ptable-add-col-th" /> : null}
@@ -508,6 +522,32 @@ export default function Poster({
           </div>
         ) : null}
 
+        {t.flights ? (
+          <div className="sec compact-sec flights-sec">
+            <h3>✈️ Нислэг</h3>
+            <div className="flights-rows">
+              <div className="flights-row">
+                <span className="flights-label">Явах:</span>
+                <Ed
+                  className="flights-value"
+                  value={t.flights.outbound}
+                  placeholder="Нислэгийн мэдээлэл"
+                  onChange={(v) => upd(["flights", "outbound"], v)}
+                />
+              </div>
+              <div className="flights-row">
+                <span className="flights-label">Ирэх:</span>
+                <Ed
+                  className="flights-value"
+                  value={t.flights.return}
+                  placeholder="Нислэгийн мэдээлэл"
+                  onChange={(v) => upd(["flights", "return"], v)}
+                />
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         <div className="program-head">
           <div>
             <div className="section-kicker">ХӨТӨЛБӨР</div>
@@ -543,7 +583,6 @@ export default function Poster({
                   <div className="dmain">
                     <div className="droute">
                       <Ed value={d.route} onChange={(v) => upd(["days", i, "route"], v)} />
-                      <RemoveBtn onClick={() => removeItem(["days"], i)} title="Өдөр устгах" />
                       {d.distance_km ? <span className="km">{d.distance_km} км</span> : null}
                       {cleanText(d.flight) ? <span className="flt">✈ {cleanText(d.flight)}</span> : null}
                     </div>
@@ -598,6 +637,15 @@ export default function Poster({
                           onClick={() => upd(["days", i, "show_meals"], d.show_meals === false)}
                         >
                           {d.show_meals === false ? "🍽 Хоол харуулах" : "🍽 Хоол нуух"}
+                        </button>
+                        <button
+                          type="button"
+                          className="addbtn danger"
+                          disabled={(t.days || []).length <= 1}
+                          title={(t.days || []).length <= 1 ? "Хамгийн сүүлийн өдрийг устгах боломжгүй" : "Энэ өдрийг устгах"}
+                          onClick={() => removeItem(["days"], i)}
+                        >
+                          🗑 Энэ өдрийг устгах
                         </button>
                       </div>
                   </div>

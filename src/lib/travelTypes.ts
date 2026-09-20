@@ -1,6 +1,6 @@
 import type { DiscountPolicy, FAQItem, SpecialOffer, VerifiedCredential } from "./businessData";
 
-export type TripStatus = "active" | "cancelled" | "sold_out" | "draft" | "archived";
+export type TripStatus = "active" | "paused" | "cancelled" | "sold_out" | "draft" | "archived";
 
 export type TravelTrip = {
   id: string;

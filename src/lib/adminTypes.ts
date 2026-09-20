@@ -3,13 +3,23 @@
    so that sub-files and utilities can import without a circular dep.
    ---------------------------------------------------------------- */
 
-export type TripStatus = "active" | "cancelled" | "sold_out" | "draft" | "archived";
+/**
+ * "paused" = staff pulled bookings without cancelling the trip (schedule
+ * being redone, temporarily out of stock, etc.). Unlike archived, it stays
+ * visible everywhere (chatbot, poster brochure, website) — the customer can
+ * still see and ask about it — but every reply and every departure reads as
+ * not currently bookable rather than looking like a live, open trip.
+ */
+export type TripStatus = "active" | "paused" | "cancelled" | "sold_out" | "draft" | "archived";
 
 export type PassengerPrice = {
   label: string;      // "Том хүн" | "Хүүхэд" | "Нярай"
   age_range: string;
   price: number | null;
   currency: string;
+  /** "Үнэгүй" when this fare is documented as free, not merely 0/unset — see
+   * isDocumentedFreeFare, which only trusts a 0 price accompanied by this. */
+  note?: string;
 };
 
 export type SourceProvenance = {

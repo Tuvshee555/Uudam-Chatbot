@@ -75,7 +75,7 @@ function money(value: number | null | undefined): boolean {
  * here (no age-band reasoning): this only decides whether the admin still owes
  * us a number, not what price a customer is quoted.
  */
-function documentedFreeFare(
+export function documentedFreeFare(
   extra: Record<string, unknown>,
   target: "child" | "infant",
 ): boolean {
