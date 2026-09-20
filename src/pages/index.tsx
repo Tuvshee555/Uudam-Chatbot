@@ -1,6 +1,5 @@
 import Head from "next/head";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import DemoChat from "@/components/DemoChat";
 import { Badge, Icons, cx } from "@/components/ui";
 
 /* ------------------------------------------------------------------
@@ -16,8 +15,34 @@ import { Badge, Icons, cx } from "@/components/ui";
 
 const CTA_PRIMARY =
   "inline-flex h-11 items-center justify-center gap-2 rounded-md bg-brand px-5 text-sm font-semibold text-white shadow-xs shadow-brand/30 transition-all duration-150 hover:bg-brand-hover active:scale-[0.985]";
-const CTA_SECONDARY =
-  "inline-flex h-11 items-center justify-center gap-2 rounded-md border border-line-strong bg-surface px-5 text-sm font-semibold text-ink transition-all duration-150 hover:border-brand-border hover:bg-brand-soft/40 active:scale-[0.985]";
+const HERO_SLIDE_MS = 6500;
+
+const HERO_SLIDES = [
+  {
+    kicker: "Travel websites that feel alive",
+    title: "Turn the first screen into the trip.",
+    body: "A cinematic hero gives customers the destination first, then guides them straight into the options they can book.",
+    image:
+      "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=2400&q=80",
+    stat: "Auto slide every 6.5s",
+  },
+  {
+    kicker: "Messenger + web working together",
+    title: "Show the offer before they ask.",
+    body: "Use movement, clear calls to action, and real trip data so visitors understand where to go next immediately.",
+    image:
+      "https://images.unsplash.com/photo-1469474968028-56623f02e42e?auto=format&fit=crop&w=2400&q=80",
+    stat: "Gentle photo zoom",
+  },
+  {
+    kicker: "Minimal, direct, booking focused",
+    title: "Less clutter. More momentum.",
+    body: "The hero keeps the page simple while still feeling premium, modern, and travel-first.",
+    image:
+      "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=2400&q=80",
+    stat: "Dots + arrow controls",
+  },
+] as const;
 
 /* Scroll-reveal wrapper. Reveals once on entering the viewport; snaps
    straight to visible under reduced-motion or if IntersectionObserver
@@ -125,49 +150,145 @@ function Nav() {
 }
 
 function Hero() {
+  const [activeSlide, setActiveSlide] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setActiveSlide((current) => (current + 1) % HERO_SLIDES.length);
+    }, HERO_SLIDE_MS);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const slide = HERO_SLIDES[activeSlide];
+
+  const goToSlide = (index: number) => {
+    setActiveSlide((index + HERO_SLIDES.length) % HERO_SLIDES.length);
+  };
+
   return (
-    <section id="top" className="relative overflow-hidden">
-      <div className="mx-auto grid max-w-6xl items-center gap-10 px-5 py-16 sm:px-8 lg:grid-cols-[1.04fr_0.96fr] lg:gap-14 lg:py-24">
-        <div className="animate-fade-up">
-          <span className="inline-flex items-center gap-2 rounded-full border border-brand-border bg-brand-soft px-3 py-1 text-xs font-semibold text-brand">
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-60" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-brand" />
-            </span>
-            Freelance chatbot developer
+    <section
+      id="top"
+      className="relative isolate flex min-h-[calc(100dvh-4rem)] overflow-hidden bg-nav text-white"
+      aria-label="Travel hero carousel"
+    >
+      <div className="absolute inset-0 -z-10">
+        {HERO_SLIDES.map((item, index) => (
+          <div
+            key={item.title}
+            aria-hidden="true"
+            className={cx(
+              "absolute inset-0 transition-opacity duration-1000 ease-out",
+              index === activeSlide ? "opacity-100" : "opacity-0",
+            )}
+          >
+            <div
+              className={cx(
+                "hero-slide-image h-full w-full bg-cover bg-center will-change-transform",
+                index === activeSlide && "is-active",
+              )}
+              style={{ backgroundImage: `url(${item.image})` }}
+            />
+          </div>
+        ))}
+        <div className="absolute inset-0 bg-gradient-to-r from-nav-deep/85 via-nav/45 to-nav/20" />
+        <div className="absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-nav-deep/70 to-transparent" />
+      </div>
+
+      <button
+        type="button"
+        aria-label="Previous hero slide"
+        onClick={() => goToSlide(activeSlide - 1)}
+        className="absolute left-4 top-1/2 z-20 hidden h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/25 bg-white/10 text-white shadow-sm backdrop-blur transition-colors hover:bg-white/20 md:flex"
+      >
+        <Icons.chevronLeft size={22} />
+      </button>
+      <button
+        type="button"
+        aria-label="Next hero slide"
+        onClick={() => goToSlide(activeSlide + 1)}
+        className="absolute right-4 top-1/2 z-20 hidden h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/25 bg-white/10 text-white shadow-sm backdrop-blur transition-colors hover:bg-white/20 md:flex"
+      >
+        <Icons.chevronRight size={22} />
+      </button>
+
+      <div className="mx-auto flex w-full max-w-6xl flex-col justify-end px-5 py-12 sm:px-8 lg:py-16">
+        <div className="max-w-3xl animate-fade-up">
+          <span className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white/90 backdrop-blur">
+            <span className="h-1.5 w-1.5 rounded-full bg-sun" />
+            {slide.kicker}
           </span>
-          <h1 className="mt-5 text-4xl font-extrabold leading-[1.04] tracking-tight text-ink sm:text-5xl lg:text-6xl">
-            Chatbots that don&apos;t lie to your customers.
+          <h1 className="mt-5 max-w-4xl text-4xl font-extrabold leading-[1.02] tracking-tight text-white sm:text-5xl md:text-6xl lg:text-7xl">
+            {slide.title}
           </h1>
-          <p className="mt-5 max-w-xl text-lg leading-relaxed text-ink-muted">
-            Messenger and Instagram bots for travel and e-commerce. They answer
-            from your real data and hand off to a human instead of guessing.
+          <p className="mt-5 max-w-2xl text-base leading-relaxed text-white/82 sm:text-lg">
+            {slide.body}
           </p>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <a href="#top" className={CTA_PRIMARY}>
-              Try the demo
+          <div className="mt-8 flex flex-wrap items-center gap-3">
+            <a
+              href="#how"
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-white px-5 text-sm font-semibold text-nav shadow-md shadow-nav-deep/20 transition-all duration-150 hover:bg-white/90 active:scale-[0.985]"
+            >
+              See how it works
               <Icons.chevronRight size={16} />
             </a>
-            <a href="#how" className={CTA_SECONDARY}>
-              See how it works
+            <a
+              href="#top"
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-md border border-white/35 bg-white/10 px-5 text-sm font-semibold text-white backdrop-blur transition-all duration-150 hover:bg-white/18 active:scale-[0.985]"
+            >
+              Try the demo
             </a>
+            <span className="inline-flex h-11 items-center rounded-md border border-white/20 bg-white/10 px-4 text-sm font-semibold text-white/90 backdrop-blur">
+              {slide.stat}
+            </span>
           </div>
-          <p className="mt-6 text-sm text-ink-subtle">
-            The chat on this page is a real bot, live for a travel agency. Try
-            it.
-          </p>
         </div>
 
-        <div className="animate-fade-up [animation-delay:130ms]">
-          <div className="relative">
-            <div
-              aria-hidden="true"
-              className="absolute -inset-4 -z-10 rounded-[28px] bg-gradient-to-br from-brand-soft via-sun-soft/50 to-transparent blur-2xl"
-            />
-            <DemoChat showHeader={false} lang="en" />
+        <div className="mt-12 flex items-center justify-between gap-4">
+          <div className="flex gap-2" role="tablist" aria-label="Hero slides">
+            {HERO_SLIDES.map((item, index) => (
+              <button
+                key={item.title}
+                type="button"
+                role="tab"
+                aria-selected={index === activeSlide}
+                aria-label={`Show slide ${index + 1}: ${item.title}`}
+                onClick={() => goToSlide(index)}
+                className={cx(
+                  "h-2.5 rounded-full transition-all duration-300",
+                  index === activeSlide
+                    ? "w-9 bg-white"
+                    : "w-2.5 bg-white/45 hover:bg-white/70",
+                )}
+              />
+            ))}
           </div>
+          <p className="hidden max-w-xs text-right text-sm font-medium text-white/75 sm:block">
+            Built for travel pages that should feel calm, visual, and direct.
+          </p>
         </div>
       </div>
+
+      <style jsx global>{`
+        .hero-slide-image.is-active {
+          animation: heroKenBurns ${HERO_SLIDE_MS}ms ease-out forwards;
+        }
+
+        @keyframes heroKenBurns {
+          from {
+            transform: scale(1.02);
+          }
+          to {
+            transform: scale(1.1);
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .hero-slide-image.is-active {
+            animation: none;
+          }
+        }
+      `}</style>
     </section>
   );
 }
