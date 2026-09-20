@@ -14,6 +14,7 @@ import { FlowBuilderTab } from "@/components/admin/FlowBuilderTab";
 import { GreetingTab } from "@/components/admin/GreetingTab";
 import { LeadsTab } from "@/components/admin/LeadsTab";
 import { PaymentsTab } from "@/components/admin/PaymentsTab";
+import { ErrorLogsTab } from "@/components/admin/ErrorLogsTab";
 import { SeasonsTab } from "@/components/admin/SeasonsTab";
 import { SettingsTab } from "@/components/admin/SettingsTab";
 import { TripsTab } from "@/components/admin/TripsTab";
@@ -1934,6 +1935,7 @@ export default function AdminPage() {
             />
           )}
           {tab === "payments" && <PaymentsTab apiFetch={fetchWithAdmin} />}
+          {tab === "errors" && <ErrorLogsTab apiFetch={fetchWithAdmin} />}
           {tab === "greeting" && (
             <GreetingTab
               extra={(settings?.extra ?? {}) as Record<string, unknown>}

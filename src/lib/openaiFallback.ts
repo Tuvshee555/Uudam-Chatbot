@@ -5,6 +5,7 @@ import {
   classifyError,
   logError,
   logInfo,
+  logWarn,
   recordCounter,
 } from "./observability";
 import { fetchWithRetry } from "./resilience";
@@ -108,11 +109,24 @@ export async function askOpenAIChatParts(
     );
 
     const data = await response.json();
-    const raw =
-      (typeof data?.choices?.[0]?.message?.content === "string"
-        ? data.choices[0].message.content
-        : ""
-      ).trim() || "Уучлаарай, систем түр алдаатай байна.";
+    const completion =
+      typeof data?.choices?.[0]?.message?.content === "string"
+        ? data.choices[0].message.content.trim()
+        : "";
+    const finishReason = data?.choices?.[0]?.finish_reason ?? null;
+    // An empty completion used to be swapped for a customer-facing apology with
+    // no trace anywhere — the bot looked broken and nothing recorded why.
+    if (!completion) {
+      logWarn("openai.empty_completion", {
+        source,
+        model,
+        finishReason,
+        refusal: data?.choices?.[0]?.message?.refusal ?? null,
+      });
+    } else if (finishReason === "length" || finishReason === "content_filter") {
+      logWarn("openai.incomplete_completion", { source, model, finishReason });
+    }
+    const raw = completion || "Уучлаарай, систем түр алдаатай байна.";
 
     const usage = data?.usage ?? {};
     recordCounter("openai.fallback_success_total", 1, { model, source });

@@ -39,6 +39,7 @@ export const NAV_GROUPS: Array<{
       { key: "analytics", label: "Аналитик", icon: <Icons.chart size={16} /> },
       { key: "flow", label: "Урсгал", icon: <Icons.play size={16} /> },
       { key: "payments", label: "Төлбөр", icon: <Icons.card size={16} /> },
+      { key: "errors", label: "Алдааны бүртгэл", icon: <Icons.alert size={16} /> },
       { key: "json", label: "JSON засвар", icon: <Icons.braces size={16} /> },
     ],
   },

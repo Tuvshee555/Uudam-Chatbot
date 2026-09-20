@@ -364,6 +364,7 @@ export type TabKey =
   | "photos"
   | "poster"
   | "documents"
+  | "errors"
   | "json";
 
 export type FlowRule = {

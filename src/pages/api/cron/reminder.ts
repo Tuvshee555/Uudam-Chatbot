@@ -6,6 +6,7 @@ import { getTravelBotSettings } from "../../../lib/travelOps";
 import { safeSecretCompare } from "../../../lib/adminAuth";
 import { waitUntil } from "@vercel/functions";
 import { flushWebsiteSync } from "../../../lib/websiteTripSync";
+import { pruneErrorLogs } from "../../../lib/errorLogStore";
 
 // Vercel cron secret — must match CRON_SECRET env var.
 // FAIL CLOSED in production: a missing secret used to mean "allow everyone",
@@ -25,6 +26,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== "GET" && req.method !== "POST") return res.status(405).end();
   if (!isCronAuthorized(req)) return res.status(401).json({ error: "unauthorized" });
   waitUntil(flushWebsiteSync(undefined, 30));
+  // Daily cleanup of the error log (7-day retention). Also prunes hourly as
+  // errors arrive, but a quiet week would otherwise never trigger that.
+  waitUntil(pruneErrorLogs().then(() => {}).catch(() => {}));
   // listTrips() is where a trip with every departure date now in the past
   // gets archived (and the website/bot stop showing it) — otherwise that
   // transition only happens the next time someone messages the bot or opens

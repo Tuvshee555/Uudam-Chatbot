@@ -360,6 +360,46 @@ async function flushSink(reason: "interval" | "threshold" | "manual") {
   }
 }
 
+/**
+ * Info-level events that explain why the bot did NOT answer normally. They are
+ * the first thing to check when a client says "the bot stopped replying", and
+ * are low-volume (operator replies, AI hand-offs), unlike general info logs.
+ */
+export const PERSISTED_INFO_EVENTS: ReadonlySet<string> = new Set([
+  "webhook.operator_echo_pause",
+  "webhook.ai_refer",
+  "webhook.ai_wrong_trip_reply_suppressed",
+]);
+
+// Never persisted: the DB layer's own failures (storing them needs the DB that
+// just failed) and the store's own housekeeping — either would loop.
+const NEVER_PERSIST_PREFIXES = ["neon.", "error_log_store."];
+
+export function shouldPersistLog(level: unknown, event: unknown): boolean {
+  if (typeof event !== "string" || !event) return false;
+  if (NEVER_PERSIST_PREFIXES.some((prefix) => event.startsWith(prefix))) return false;
+  if (level === "error" || level === "warn") return true;
+  return level === "info" && PERSISTED_INFO_EVENTS.has(event);
+}
+
+const ERROR_LOG_DB_ENABLED = booleanEnv("ERROR_LOG_DB_ENABLED", true);
+
+/**
+ * Copies error/warn records into the self-cleaning travel_error_logs table
+ * (errorLogStore.ts). Loaded lazily so this module stays dependency-free, and
+ * skipped entirely when no database is configured (tests, local dev).
+ */
+function persistToDatabase(record: Record<string, LogValue>) {
+  if (!ERROR_LOG_DB_ENABLED) return;
+  if (!shouldPersistLog(record.level, record.event)) return;
+  if (!optionalEnv("NEON_DATABASE_URL") && !optionalEnv("DATABASE_URL")) return;
+  void import("./errorLogStore")
+    .then((store) => store.persistLogRecord(record))
+    .catch(() => {
+      // Logging must never break the caller.
+    });
+}
+
 export function logEvent(
   level: "debug" | "info" | "warn" | "error",
   event: string,
@@ -377,6 +417,7 @@ export function logEvent(
   };
   toConsoleMethod(level)(JSON.stringify(record));
   queueSinkRecord(record as Record<string, LogValue>);
+  persistToDatabase(record as Record<string, LogValue>);
 }
 
 export function logInfo(event: string, fields?: Record<string, unknown>) {

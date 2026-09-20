@@ -1,5 +1,6 @@
 import { getEnv } from "./env";
 import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboundKillSwitch";
+import { BOT_MESSAGE_METADATA } from "./messenger";
 import { logError, logInfo } from "./observability";
 import { isPosterPdfEndpointUrl } from "./poster/pdfUrl";
 
@@ -341,6 +342,11 @@ export async function sendFbFileAttachment(
               type: "file",
               payload: { attachment_id: attachmentId },
             },
+            // Must carry the bot tag: Meta echoes every Page-sent message back
+            // to the webhook, and an untagged echo is treated as a HUMAN
+            // operator reply, which pauses the bot for this customer. Without
+            // it, sending a program PDF silenced the bot for the next 14 days.
+            metadata: BOT_MESSAGE_METADATA,
           },
         }),
       },
@@ -423,6 +429,7 @@ export async function sendFbFileByUrl(
               type: "file",
               payload: { url: fileUrl, is_reusable: false },
             },
+            metadata: BOT_MESSAGE_METADATA,
           },
         }),
       },

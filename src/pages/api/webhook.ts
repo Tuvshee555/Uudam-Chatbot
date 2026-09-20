@@ -1553,6 +1553,7 @@ async function handleMessage(
     // OpenAI down/overloaded must not mean a customer gets a bare apology.
     // Retry the same prompt with the configured reply model before giving up.
     let fallbackText = "";
+    let fallbackError = "";
     try {
       const fallback = await askOpenAIChatParts([{ text: promptParts.user }], {
         source: "api.webhook.reply_fallback",
@@ -1563,8 +1564,10 @@ async function handleMessage(
         systemText: promptParts.system,
       });
       fallbackText = fallback?.text?.trim() || "";
-    } catch {
+      if (!fallbackText) fallbackError = "retry returned no text";
+    } catch (retryError) {
       // fall through to the apology below
+      fallbackError = retryError instanceof Error ? retryError.message : String(retryError);
     }
     logWarn("webhook.ai_fallback_reply", {
       requestId: trace?.requestId,
@@ -1572,7 +1575,9 @@ async function handleMessage(
       platform,
       senderHash: hashIdentifier(senderId),
       classification: classifyError(error),
+      message: error instanceof Error ? error.message : String(error),
       openaiFallbackUsed: Boolean(fallbackText),
+      fallbackError: fallbackError || undefined,
     });
     if (fallbackText) {
       aiReply = fallbackText;
@@ -2003,6 +2008,7 @@ export default async function handler(
               recipient?: { id?: string };
               message?: {
                 is_echo?: boolean;
+                app_id?: number | string;
                 mid?: string;
                 text?: string;
                 metadata?: string;
@@ -2154,10 +2160,15 @@ export default async function handler(
                   const echoAttachmentTypes = Array.isArray(event.message?.attachments)
                     ? event.message.attachments.map((a) => a?.type || "unknown")
                     : [];
+                  // appId identifies WHO sent it (Page inbox / Business Suite /
+                  // an automation / another app) — the field to check when a
+                  // pause looks like it was triggered by something that is not
+                  // a person typing.
                   logInfo("webhook.operator_echo_pause", {
                     requestId: trace.requestId,
                     customerHash: hashIdentifier(customerId),
                     pageId,
+                    appId: event.message.app_id ?? null,
                     hasText: operatorText.length > 0,
                     attachmentTypes: echoAttachmentTypes,
                   });
