@@ -273,13 +273,41 @@ export function assertReadableDocument(buffer: Buffer, filename: string, mime: s
   }
 }
 
+/**
+ * Blob URLs come from the client half of the Vercel Blob upload flow, so the
+ * value is caller-supplied even though the caller is an authenticated admin.
+ * Restricting it to Vercel's blob host keeps the server from being turned into
+ * a fetch proxy for internal addresses (link-local metadata, private ranges)
+ * by anyone who gets hold of the admin secret.
+ */
+function assertVercelBlobUrl(rawUrl: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error("Файлын хаяг буруу байна.");
+  }
+  const allowed =
+    parsed.protocol === "https:" &&
+    (parsed.hostname === "blob.vercel-storage.com" ||
+      parsed.hostname.endsWith(".blob.vercel-storage.com") ||
+      parsed.hostname.endsWith(".public.blob.vercel-storage.com"));
+  if (!allowed) {
+    throw new Error("Файлыг зөвхөн Vercel Blob сангаас уншина.");
+  }
+}
+
 export async function resolveFile(
   body: Record<string, unknown>,
 ): Promise<{ buffer: Buffer; filename: string; mime: string; blobUrl?: string }> {
   const blobUrl = typeof body.blobUrl === "string" ? body.blobUrl : "";
   if (blobUrl) {
+    assertVercelBlobUrl(blobUrl);
     const filename = typeof body.filename === "string" ? body.filename : "document";
     const mime = typeof body.mimeType === "string" ? body.mimeType : "";
+    // Redirects stay on the default "follow": Vercel Blob may serve public
+    // objects via a CDN hop, and breaking real poster uploads to close a
+    // redirect path that only Vercel itself could issue is a bad trade.
     const res = await fetch(blobUrl, { signal: AbortSignal.timeout(BLOB_FETCH_TIMEOUT_MS) });
     if (!res.ok) throw new Error(`Blob download failed: ${res.status}`);
     const arrayBuffer = await res.arrayBuffer();

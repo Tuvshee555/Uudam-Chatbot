@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getEnv } from "../../lib/env";
-import { pickFirst, safeSecretCompare } from "../../lib/adminAuth";
+import { hasAdminAccess } from "../../lib/adminAccess";
 import { getReadinessReport } from "../../lib/readiness";
 import {
   beginRequestTrace,
@@ -13,11 +13,11 @@ import { getRedisHealth } from "../../lib/redisState";
 
 const env = getEnv();
 
-function hasAdminAccess(req: NextApiRequest): boolean {
-  const provided = pickFirst(req.headers["x-admin-secret"] as string | string[] | undefined);
-  return safeSecretCompare(env.adminSecret, provided);
-}
-
+// Unlike the admin routes, an anonymous caller here is not an auth failure —
+// /api/ping is a public health check that simply returns less. So this uses
+// hasAdminAccess (no 401, no rate-limit counter) rather than
+// requireAdminAccess, but shares the one implementation instead of keeping a
+// second copy of the secret comparison.
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
   const trace = beginRequestTrace({
     route: "api.ping",

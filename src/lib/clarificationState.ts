@@ -13,6 +13,7 @@
  * Redis-backed with in-memory fallback, mirroring photoOnlyState.ts.
  */
 
+import { sharedMap } from "./processState";
 import { withRedis } from "./redisState";
 
 export type ClarificationState = {
@@ -27,7 +28,7 @@ export type ClarificationState = {
 // offered trips drops it (see routeFastPathText) — so a long window costs nothing.
 const TTL_MS = 6 * 60 * 60 * 1000;
 const REDIS_TTL_SEC = 6 * 60 * 60;
-const memStore = new Map<string, ClarificationState>();
+const memStore = sharedMap<string, ClarificationState>("clarification_state.mem");
 
 function storeKey(senderId: string) {
   return `clarification_state:${senderId}`;

@@ -27,6 +27,8 @@ Next.js (Pages API routes) · React 19 · TypeScript · Neon Postgres · Upstash
 
 ## Quick start (local)
 
+Node 22+ (see `.nvmrc`).
+
 ```bash
 cp .env.example .env.local   # fill in the required vars (see below)
 npm install
@@ -37,9 +39,15 @@ npm run dev                  # http://localhost:3004
 
 `OPENAI_API_KEY`, `VERIFY_TOKEN`, `FACEBOOK_PAGES` (one or more `pageId:token`
 pairs, comma-separated), `META_APP_SECRET`, `ADMIN_SECRET`, `NEON_DATABASE_URL`.
-Everything else has safe defaults — see [.env.example](.env.example). Redis is
-optional locally; configure `REDIS_URL` **or** the
-`UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN` pair for production.
+Everything else has safe defaults — see [.env.example](.env.example).
+
+Redis is optional locally and **strongly recommended in production**: without
+it, webhook replay protection, conversation state, staff pause and rate limits
+all live in per-process memory, and Vercel runs several instances that share
+nothing — so a customer can receive the same reply twice and a staff pause set
+on one instance is invisible to the others. Configure `REDIS_URL` **or** the
+`UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN` pair. `GET /api/ping` (with
+the admin secret) reports this under `readiness`.
 
 ## Scripts
 
@@ -65,6 +73,6 @@ optional locally; configure `REDIS_URL` **or** the
 src/lib/        core logic (webhook, OpenAI, redis, db, resilience, observability)
 src/pages/api/  HTTP routes (webhook, admin, metrics, ping)
 src/components/ admin UI + demo chat
-tests/          70+ tests (env, webhook security/replay, rate limit, parsing, ...)
+tests/          380+ tests (env, webhook security/replay, rate limit, parsing, ...)
 supabase/       SQL migrations
 ```

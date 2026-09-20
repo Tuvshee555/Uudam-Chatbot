@@ -1,5 +1,6 @@
 import type { NextApiRequest } from "next";
 import { getEnv } from "./env";
+import { sharedMap, sharedSet } from "./processState";
 import { withRedis } from "./redisState";
 import {
   hashIdentifier,
@@ -63,12 +64,16 @@ if redis.call("GET", KEYS[1]) == ARGV[1] then
 end
 return 0
 `;
-const processedEvents = new Map<string, number>();
-const processingEvents = new Map<string, number>();
-const activeConversations = new Set<string>();
-const recentIncomingTexts = new Map<string, number>();
-const recentReplies = new Map<string, { text: string; timestamp: number }>();
-const pendingConversations = new Map<string, PendingEnvelope[]>();
+const processedEvents = sharedMap<string, number>("webhook_dedup.processed_events");
+const processingEvents = sharedMap<string, number>("webhook_dedup.processing_events");
+const activeConversations = sharedSet<string>("webhook_dedup.active_conversations");
+const recentIncomingTexts = sharedMap<string, number>("webhook_dedup.recent_incoming_texts");
+const recentReplies = sharedMap<string, { text: string; timestamp: number }>(
+  "webhook_dedup.recent_replies",
+);
+const pendingConversations = sharedMap<string, PendingEnvelope[]>(
+  "webhook_dedup.pending_conversations",
+);
 let pendingConversationMessageCount = 0;
 let pendingSequence = 0;
 export class RetryableWebhookError extends Error {

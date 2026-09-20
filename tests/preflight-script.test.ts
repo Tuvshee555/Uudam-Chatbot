@@ -32,6 +32,10 @@ const BASE_ENV = {
   CRON_SECRET: "test-cron-secret",
 };
 
+// This deployment shape is deliberately memory-only (no REDIS_URL), so the
+// readiness report carries the single "redis_state" warning and scores 9. What
+// matters here is that preflight still EXITS 0 — a warning must never block a
+// build, in strict mode or out of it.
 test("preflight treats optional production ops sinks as ready by default", () => {
   const result = spawnSync(
     process.execPath,
@@ -44,7 +48,8 @@ test("preflight treats optional production ops sinks as ready by default", () =>
   );
 
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /"score":10/);
+  assert.match(result.stdout, /"score":9/);
+  assert.match(result.stdout, /"key":"redis_state","message"/);
 });
 
 test("preflight strict mode does not require optional production ops sinks", () => {
@@ -59,5 +64,6 @@ test("preflight strict mode does not require optional production ops sinks", () 
   );
 
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /"score":10/);
+  assert.match(result.stdout, /"score":9/);
+  assert.match(result.stdout, /"key":"redis_state","message"/);
 });

@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      GEMINI_API_KEY: ci-gemini-key
+      OPENAI_API_KEY: ci-openai-key
       VERIFY_TOKEN: ci-verify-token
       TOKEN_PAGE: ci-page-token
       FACEBOOK_PAGE_ID: "1234567890"
@@ -31,7 +31,8 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # Keep in step with .nvmrc and package.json "engines".
+          node-version-file: ".nvmrc"
           cache: "npm"
 
       - name: Install
@@ -59,6 +60,13 @@ jobs:
         env:
           NODE_ENV: production
           STRICT_PREFLIGHT: "true"
+          # Strict mode fails on *critical* readiness issues, and "no database"
+          # is one. Point it at a dummy connection string so this step checks
+          # what it is meant to check — a production-shaped config — instead of
+          # tripping over a var that CI was never going to have. Nothing
+          # connects: preflight only reads the config.
+          DATABASE_URL: "postgres://user:pass@example.com/db"
+          CRON_SECRET: ci-cron-secret
         run: npm run preflight
 
       - name: Remind about golden-question QA
@@ -68,6 +76,6 @@ jobs:
           if git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD -- \
               src/lib/travelFastPaths.ts src/lib/travelAI.ts src/lib/reply.ts \
               src/pages/api/demo.ts src/pages/api/webhook.ts | grep -q .; then
-            echo "::warning::Bot-answer logic changed in this PR. golden-questions.mjs needs GEMINI_API_KEY + a live DB and can't run in CI — run 'npm run dev' + 'npm run qa:golden' locally against real trip data before deploying."
+            echo "::warning::Bot-answer logic changed in this PR. golden-questions.mjs needs OPENAI_API_KEY + a live DB and can't run in CI — run 'npm run dev' + 'npm run qa:golden' locally against real trip data before deploying."
           fi
 

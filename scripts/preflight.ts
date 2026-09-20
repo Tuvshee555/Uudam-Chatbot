@@ -42,16 +42,18 @@ function isStrictPreflightEnabled() {
 async function run() {
   loadLocalEnvFiles();
 
-  const envModule = await import("../src/lib/env");
-  const observabilityModule = await import("../src/lib/observability");
-  const readinessModule = await import("../src/lib/readiness");
-  const redisModule = await import("../src/lib/redisState");
-
   // Env validation must never hard-fail the *build*. On Vercel the build step
   // may not see every runtime secret (e.g. Preview vs Production scope), but
   // the actual serverless functions do at request time. A missing var should
   // surface as a warning here, not block the whole deployment. Runtime code
   // still validates strictly via getEnv() when a request comes in.
+  //
+  // Import order matters and is load-bearing: several modules (redisState,
+  // rateLimit, travelDb, ...) call getEnv() at MODULE scope, so importing any
+  // of them before this try/catch makes the throw happen during import and
+  // escape the handler entirely — which is exactly what used to turn a missing
+  // var into a hard build failure. Validate first, import the rest after.
+  const envModule = await import("../src/lib/env");
   let env: ReturnType<typeof envModule.getEnv>;
   try {
     env = envModule.getEnv();
@@ -69,6 +71,11 @@ async function run() {
     );
     return;
   }
+
+  const observabilityModule = await import("../src/lib/observability");
+  const readinessModule = await import("../src/lib/readiness");
+  const redisModule = await import("../src/lib/redisState");
+
   const readiness = readinessModule.getReadinessReport(env);
   const redisHealthBefore = redisModule.getRedisHealth();
   const getObservabilityDiagnostics =
@@ -144,7 +151,7 @@ run()
     // The Redis probe opens a live ioredis socket that keeps the Node event
     // loop alive, so the process would otherwise hang here forever and stall
     // the Vercel build until it times out. Preflight has done its job by now —
-    // exit eexplicitly so no dangling handle (Redis, etc.) can block the build.
+    // exit explicitly so no dangling handle (Redis, etc.) can block the build.
     process.exit(0);
   })
   .catch((error) => {

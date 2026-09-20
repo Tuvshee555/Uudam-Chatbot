@@ -1,6 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getEnv } from "../../lib/env";
-import { pickFirst, safeSecretCompare } from "../../lib/adminAuth";
+import { requireAdminAccess } from "../../lib/adminAccess";
 import {
   beginRequestTrace,
   finishRequestTrace,
@@ -11,9 +10,7 @@ import { getRedisHealth } from "../../lib/redisState";
 import { getRateLimitDiagnostics } from "../../lib/rateLimit";
 import { getWebhookRuntimeDiagnostics } from "./webhook";
 
-const env = getEnv();
-
-export default function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const trace = beginRequestTrace({
     route: "api.metrics",
     method: req.method,
@@ -25,10 +22,11 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     if (req.method !== "GET") return res.status(405).end();
 
-    const secret = pickFirst(req.headers["x-admin-secret"]);
-    if (!safeSecretCompare(env.adminSecret, secret)) {
-      return res.status(401).json({ error: "unauthorized" });
-    }
+    // Shared guard so a wrong secret here is rate-limited and counted the same
+    // way it is on every /api/admin/* route, instead of allowing unlimited
+    // unauthenticated probing of an operational endpoint.
+    const allowed = await requireAdminAccess(req, res, "api.metrics");
+    if (!allowed) return;
 
     return res.status(200).json({
       generatedAt: new Date().toISOString(),

@@ -1,3 +1,4 @@
+import { sharedMap } from "./processState";
 import { withRedis } from "./redisState";
 
 export type PhotoOnlyState = {
@@ -10,7 +11,7 @@ export type PhotoOnlyState = {
 
 const TTL_MS = 10 * 24 * 60 * 60 * 1000;
 const REDIS_TTL_SEC = 10 * 24 * 60 * 60;
-const memStore = new Map<string, PhotoOnlyState>();
+const memStore = sharedMap<string, PhotoOnlyState>("photo_only_state.mem");
 
 function storeKey(senderId: string) {
   return `photo_only_state:${senderId}`;
