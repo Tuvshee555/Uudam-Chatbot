@@ -81,20 +81,35 @@ export function resolveGoodbyeEnabled(extra: unknown): boolean {
  * the admin change a number from the JSON editor without a code deploy —
  * these numbers used to be hardcoded in webhook.ts.
  */
-export const DEFAULT_GOODBYE_CONTACT_TEXT =
-  "Манай зөвлөхтэй холбогдох бол дараах дугааруудаар залгаарай 📞\n\n" +
-  "☎️ 7713-6633\n" +
-  "📱 8913-6633\n" +
-  "📱 9117-2769\n\n" +
-  "Эсвэл та утасны дугаараа үлдээвэл манай зөвлөх удахгүй тантай холбогдох болно 🙌";
+const CONSULTANT_PHONE_NUMBERS = "7713-6633 · 8913-6633 · 9117-2769";
 
-export function resolveGoodbyeContactText(extra: unknown): string {
+export const DEFAULT_GOODBYE_CONTACT_TEXT =
+  `Манай зөвлөхтэй холбогдох бол залгаарай 📞 ${CONSULTANT_PHONE_NUMBERS}\n` +
+  "Эсвэл утасны дугаараа үлдээвэл манай зөвлөх удахгүй тантай холбогдоно 🙌";
+
+/** One-line contact appended to the handoff confirmation (already says "we'll contact you"). */
+export const DEFAULT_HANDOFF_CONTACT_LINE = `📞 Яаралтай бол залгаарай: ${CONSULTANT_PHONE_NUMBERS}`;
+
+function customGoodbyeText(extra: unknown): string {
   const raw =
     extra && typeof extra === "object" && !Array.isArray(extra)
       ? ((extra as Record<string, unknown>).goodbye as Record<string, unknown> | undefined)
       : undefined;
-  const text = raw && typeof raw.text === "string" ? raw.text.trim() : "";
-  return text || DEFAULT_GOODBYE_CONTACT_TEXT;
+  return raw && typeof raw.text === "string" ? raw.text.trim() : "";
+}
+
+export function resolveGoodbyeContactText(extra: unknown): string {
+  return customGoodbyeText(extra) || DEFAULT_GOODBYE_CONTACT_TEXT;
+}
+
+/**
+ * The handoff confirmation and the consultant numbers used to go out as two
+ * separate bubbles. This merges them into one message. An admin-customised
+ * goodbye.text still wins, so a changed number in the JSON editor is honoured.
+ */
+export function buildHandoffReplyWithContact(handoffReply: string, extra: unknown): string {
+  const contact = customGoodbyeText(extra) || DEFAULT_HANDOFF_CONTACT_LINE;
+  return `${handoffReply.trim()}\n\n${contact}`;
 }
 
 // ─── Seasons ─────────────────────────────────────────────────────────────────

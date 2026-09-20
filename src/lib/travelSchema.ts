@@ -443,7 +443,8 @@ export async function ensureTravelSchema() {
           ADD COLUMN IF NOT EXISTS season_sent_ids  TEXT[] NOT NULL DEFAULT '{}'::text[],
           ADD COLUMN IF NOT EXISTS last_msg_at      TIMESTAMPTZ NULL,
           ADD COLUMN IF NOT EXISTS goodbye_sent_at  TIMESTAMPTZ NULL,
-          ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ NULL;
+          ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ NULL,
+          ADD COLUMN IF NOT EXISTS get_started_at   TIMESTAMPTZ NULL;
       `);
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_travel_senders_last_seen

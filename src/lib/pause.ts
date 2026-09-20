@@ -3,10 +3,12 @@ import {
   dbIsPaused,
   dbListPaused,
   dbListRecent,
+  dbMarkGetStarted,
   dbPauseSender,
   dbResumeSender,
   dbStoreSenderName,
   dbTrackSender,
+  type TrackedSender,
 } from "./travelDb";
 
 export type PausedRow = {
@@ -48,8 +50,12 @@ export async function listPaused(): Promise<PausedRow[]> {
 export async function trackSender(
   senderId: string,
   platform = "facebook",
-): Promise<{ msg_count: number; prev_msg_at: string | null }> {
+): Promise<TrackedSender> {
   return dbTrackSender(senderId, platform);
+}
+
+export async function markGetStarted(senderId: string, platform = "facebook"): Promise<void> {
+  await dbMarkGetStarted(senderId, platform);
 }
 
 export async function autoHandoffSender(senderId: string): Promise<void> {

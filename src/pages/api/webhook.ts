@@ -8,7 +8,12 @@ import { rateLimitAsync } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone } from "../../lib/conversation";
 import { buildContextualUserText, isLikelyContextDependentText } from "../../lib/contextualText";
-import { isKnownGreetingPhrase, MID_CONVERSATION_GREETING_REPLY } from "../../lib/greetingPhrases";
+import {
+  isGetStartedPostback,
+  isKnownGreetingPhrase,
+  isWithinGetStartedQuietWindow,
+  MID_CONVERSATION_GREETING_REPLY,
+} from "../../lib/greetingPhrases";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
@@ -17,11 +22,11 @@ import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
-import { autoHandoffSender, isPaused, pauseBot, trackSender } from "../../lib/pause";
+import { autoHandoffSender, isPaused, markGetStarted, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
 import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
-import { claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
+import { buildHandoffReplyWithContact, claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
   scheduleAttachmentDocumentPipeline,
@@ -156,9 +161,29 @@ async function handleMessage(
     }
     return;
   }
-  const { msg_count: senderMsgCount, prev_msg_at: prevMsgAt } = await trackSender(senderId, platform);
+  const {
+    msg_count: senderMsgCount,
+    prev_msg_at: prevMsgAt,
+    get_started_at: getStartedAt,
+  } = await trackSender(senderId, platform);
   if (platform === "facebook" && token && !hasProgramIntent(text)) {
     void fetchAndStoreFbName(senderId, token);
+  }
+  // "hi" typed right after tapping Get Started: Meta's automated response has
+  // just greeted this customer, so the bot stays quiet instead of stacking a
+  // second greeting. The message is still saved for the admin inbox, and the
+  // next real question is answered normally.
+  if (isKnownGreetingPhrase(text) && isWithinGetStartedQuietWindow(getStartedAt)) {
+    try {
+      await appendMessage(senderId, "user", text);
+    } catch { /* non-critical */ }
+    logInfo("webhook.greeting_after_get_started_skipped", {
+      requestId: trace?.requestId,
+      correlationId: trace?.correlationId,
+      platform,
+      senderHash: hashIdentifier(senderId),
+    });
+    return;
   }
   // Re-engagement contact info: a customer coming back after 30+ min of
   // silence gets the consultant contact message ONCE per 14 days (when the
@@ -762,9 +787,14 @@ async function handleMessage(
         classification: classifyError(error),
       });
     }
-    const handoffMsg =
+    const handoffConfirmation =
       botSettings.handoff_reply ||
       "Таны хүсэлтийг хүлээн авлаа. Манай ажилтан удахгүй тантай холбогдоно.";
+    // One bubble: confirmation + consultant numbers (Facebook only, as before).
+    const handoffMsg =
+      platform === "facebook" && token
+        ? buildHandoffReplyWithContact(handoffConfirmation, botSettings.extra)
+        : handoffConfirmation;
     await assertLockHealthy();
     const delivered = await sendPlatformMessage(
       platform,
@@ -785,26 +815,6 @@ async function handleMessage(
       await setLastReplyConsistent(sessionId, handoffMsg);
       await rememberTurn("api.webhook.handoff");
     } catch { /* non-critical */ }
-    // Send contact numbers after handoff confirmation
-    if (platform === "facebook" && token) {
-      try {
-        await sendTextMessage(senderId, resolveGoodbyeContactText(botSettings.extra), token, {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          source: "api.webhook.handoff_goodbye",
-        });
-      } catch (error) {
-        logWarn("webhook.handoff_goodbye_failed", {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          platform,
-          pageId,
-          senderHash: hashIdentifier(senderId),
-          classification: classifyError(error),
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
     return;
   }
   if (
@@ -2223,6 +2233,37 @@ export default async function handler(
               const eventKey = event?.message?.mid
                 ? buildEventKey(platform, senderId, event)
                 : buildEventKey(platform, senderId, { message: { text } });
+              // Get Started tap: Meta's own automated response already greets
+              // the customer, so the bot says nothing and waits for a real
+              // message. Only the tap time is recorded (not counted as a
+              // message) so the first real message still gets the welcome flow
+              // and a "hi" typed right after is not greeted a second time.
+              if (!messageText && isGetStartedPostback(event?.postback)) {
+                await runEventWithClaim(
+                  eventKey,
+                  { platform, eventType: "dm" },
+                  async () => {
+                    try {
+                      await markGetStarted(senderId, platform);
+                    } catch (error) {
+                      logWarn("webhook.get_started_mark_failed", {
+                        requestId: trace.requestId,
+                        correlationId: trace.correlationId,
+                        platform,
+                        senderHash: hashIdentifier(senderId),
+                        classification: classifyError(error),
+                      });
+                    }
+                    logInfo("webhook.get_started_silent", {
+                      requestId: trace.requestId,
+                      correlationId: trace.correlationId,
+                      platform,
+                      senderHash: hashIdentifier(senderId),
+                    });
+                  },
+                );
+                continue;
+              }
               await runEventWithClaim(
                 eventKey,
                 { platform, eventType: "dm" },

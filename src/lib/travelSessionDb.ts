@@ -261,13 +261,23 @@ export type SenderRow = {
   expires_at: string | null;
 };
 
+export type TrackedSender = {
+  msg_count: number;
+  prev_msg_at: string | null;
+  get_started_at: string | null;
+};
+
 export async function dbTrackSender(
   senderId: string,
   platform = "facebook",
-): Promise<{ msg_count: number; prev_msg_at: string | null }> {
+): Promise<TrackedSender> {
   const ready = await ensureTravelSchema();
-  if (!ready) return { msg_count: 0, prev_msg_at: null };
-  const result = await queryNeon<{ msg_count: number; prev_msg_at: string | null }>(
+  if (!ready) return { msg_count: 0, prev_msg_at: null, get_started_at: null };
+  const result = await queryNeon<{
+    msg_count: number;
+    prev_msg_at: string | null;
+    get_started_at: string | null;
+  }>(
     `INSERT INTO travel_senders (sender_id, platform, last_seen, msg_count, last_msg_at, updated_at)
      VALUES ($1, $2, NOW(), 1, NOW(), NOW())
      ON CONFLICT (sender_id) DO UPDATE
@@ -275,7 +285,7 @@ export async function dbTrackSender(
            platform    = EXCLUDED.platform,
            msg_count   = travel_senders.msg_count + 1,
            updated_at  = NOW()
-     RETURNING msg_count, last_msg_at AS prev_msg_at`,
+     RETURNING msg_count, last_msg_at AS prev_msg_at, get_started_at`,
     [senderId, platform],
   );
   // Update last_msg_at AFTER reading the old value (so we get the gap)
@@ -287,7 +297,31 @@ export async function dbTrackSender(
   return {
     msg_count: row ? Number(row.msg_count) : 0,
     prev_msg_at: row?.prev_msg_at ? String(row.prev_msg_at) : null,
+    get_started_at: row?.get_started_at ? new Date(row.get_started_at).toISOString() : null,
   };
+}
+
+// Records a Messenger "Get Started" tap WITHOUT counting it as a customer
+// message: msg_count stays untouched (0 for a brand-new sender) so the first
+// real message still qualifies for the welcome flow, and last_msg_at is left
+// alone so the reminder/inactivity logic sees no phantom activity. The stamp is
+// what lets a "hi" typed right after the tap be recognised as the same opening
+// gesture instead of drawing a second greeting.
+export async function dbMarkGetStarted(
+  senderId: string,
+  platform = "facebook",
+): Promise<void> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return;
+  await queryNeon(
+    `INSERT INTO travel_senders (sender_id, platform, last_seen, msg_count, get_started_at, updated_at)
+     VALUES ($1, $2, NOW(), 0, NOW(), NOW())
+     ON CONFLICT (sender_id) DO UPDATE
+       SET get_started_at = NOW(),
+           last_seen      = NOW(),
+           updated_at     = NOW()`,
+    [senderId, platform],
+  );
 }
 
 // Returns true if this is the first-ever message from this sender (greeting not yet sent).

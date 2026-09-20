@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  GET_STARTED_QUIET_WINDOW_MS,
   isGenericOpener,
+  isGetStartedPostback,
   isKnownGreetingPhrase,
+  isWithinGetStartedQuietWindow,
   MID_CONVERSATION_GREETING_REPLY,
 } from "../src/lib/greetingPhrases";
 
@@ -42,4 +45,39 @@ test("isKnownGreetingPhrase is narrower than isGenericOpener (no length<=2 catch
 test("the mid-conversation greeting reply is a friendly greeting with no trip data", () => {
   assert.match(MID_CONVERSATION_GREETING_REPLY, /Сайн байна уу/);
   assert.doesNotMatch(MID_CONVERSATION_GREETING_REPLY, /₮|\d{3,}/);
+});
+
+test("isGetStartedPostback recognises the Get Started tap by title or payload", () => {
+  assert.equal(isGetStartedPostback({ title: "Get started" }), true);
+  assert.equal(isGetStartedPostback({ title: "Get Started", payload: "anything" }), true);
+  assert.equal(isGetStartedPostback({ payload: "GET_STARTED" }), true);
+  assert.equal(isGetStartedPostback({ payload: "get-started" }), true);
+  assert.equal(isGetStartedPostback({ title: "Эхлэх" }), true);
+});
+
+test("isGetStartedPostback ignores other postbacks and missing data", () => {
+  assert.equal(isGetStartedPostback({ title: "Аяллууд харах", payload: "SHOW_TRIPS" }), false);
+  assert.equal(isGetStartedPostback({ title: "Contact operator" }), false);
+  assert.equal(isGetStartedPostback({}), false);
+  assert.equal(isGetStartedPostback(undefined), false);
+  assert.equal(isGetStartedPostback(null), false);
+  assert.equal(isGetStartedPostback({ title: 42, payload: {} }), false);
+});
+
+test("a greeting right after Get Started falls in the quiet window, a later one does not", () => {
+  const now = Date.parse("2026-09-20T10:00:00Z");
+  const secondsAgo = (s: number) => new Date(now - s * 1000).toISOString();
+  assert.equal(isWithinGetStartedQuietWindow(secondsAgo(5), now), true);
+  assert.equal(isWithinGetStartedQuietWindow(secondsAgo(119), now), true);
+  assert.equal(isWithinGetStartedQuietWindow(secondsAgo(GET_STARTED_QUIET_WINDOW_MS / 1000), now), false);
+  assert.equal(isWithinGetStartedQuietWindow(secondsAgo(3 * 24 * 3600), now), false);
+});
+
+test("the quiet window is off when there was no Get Started tap or the stamp is unusable", () => {
+  const now = Date.now();
+  assert.equal(isWithinGetStartedQuietWindow(null, now), false);
+  assert.equal(isWithinGetStartedQuietWindow(undefined, now), false);
+  assert.equal(isWithinGetStartedQuietWindow("not a date", now), false);
+  // A stamp in the future (clock skew) must not silence the bot.
+  assert.equal(isWithinGetStartedQuietWindow(new Date(now + 60_000).toISOString(), now), false);
 });

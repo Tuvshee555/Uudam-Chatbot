@@ -360,3 +360,25 @@ test("the webhook resolves a poster trip to the same rendered PDF the demo sends
     else process.env.SITE_URL = previousSiteUrl;
   }
 });
+
+test("handoff reply merges the confirmation and consultant numbers into one message", async () => {
+  const { buildHandoffReplyWithContact, DEFAULT_HANDOFF_CONTACT_LINE } = await loadWelcomeFlow();
+  const merged = buildHandoffReplyWithContact("Таны хүсэлтийг хүлээн авлаа. ", {});
+  assert.equal(merged, `Таны хүсэлтийг хүлээн авлаа.\n\n${DEFAULT_HANDOFF_CONTACT_LINE}`);
+  assert.match(merged, /7713-6633/);
+  assert.match(merged, /8913-6633/);
+  assert.match(merged, /9117-2769/);
+  // Compact: numbers share one line instead of one line each.
+  assert.equal(DEFAULT_HANDOFF_CONTACT_LINE.split("\n").length, 1);
+});
+
+test("an admin-customised goodbye text replaces the default handoff contact line", async () => {
+  const { buildHandoffReplyWithContact, resolveGoodbyeContactText } = await loadWelcomeFlow();
+  const extra = { goodbye: { text: "Залгах: 7000-0000" } };
+  assert.equal(
+    buildHandoffReplyWithContact("Хүлээн авлаа.", extra),
+    "Хүлээн авлаа.\n\nЗалгах: 7000-0000",
+  );
+  assert.equal(resolveGoodbyeContactText(extra), "Залгах: 7000-0000");
+  assert.match(resolveGoodbyeContactText({}), /7713-6633 · 8913-6633 · 9117-2769/);
+});

@@ -47,6 +47,40 @@ export function isKnownGreetingPhrase(text: string): boolean {
 }
 
 /**
+ * True for the Messenger "Get Started" button tap. Meta localizes the button
+ * title per viewer, and the payload is whatever the page configured (Meta's
+ * default is GET_STARTED), so either field matching is enough.
+ */
+export function isGetStartedPostback(
+  postback: { title?: unknown; payload?: unknown } | null | undefined,
+): boolean {
+  if (!postback || typeof postback !== "object") return false;
+  const norm = (value: unknown) =>
+    typeof value === "string" ? value.trim().toLowerCase().replace(/[\s_-]+/g, " ") : "";
+  const isGetStarted = (value: string) => value === "get started" || value === "эхлэх";
+  return isGetStarted(norm(postback.title)) || isGetStarted(norm(postback.payload));
+}
+
+/**
+ * How long after a Get Started tap a bare greeting ("hi") is treated as part of
+ * the same opening gesture. Meta's own automated response already greeted the
+ * customer at the tap, so a "hi" typed right after must not draw a second
+ * greeting from the bot. Outside this window "hi" is a real re-greeting.
+ */
+export const GET_STARTED_QUIET_WINDOW_MS = 2 * 60 * 1000;
+
+export function isWithinGetStartedQuietWindow(
+  getStartedAt: string | null | undefined,
+  now: number = Date.now(),
+): boolean {
+  if (!getStartedAt) return false;
+  const at = new Date(getStartedAt).getTime();
+  if (!Number.isFinite(at)) return false;
+  const age = now - at;
+  return age >= 0 && age < GET_STARTED_QUIET_WINDOW_MS;
+}
+
+/**
  * Deterministic reply for a bare greeting that arrives mid-conversation (the
  * first-message welcome flow with buttons is handled separately in the
  * webhook). Sent instead of routing the greeting to the model: when the
