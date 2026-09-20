@@ -129,6 +129,15 @@ const GENERIC_ROUTE_WORDS = new Set([
   "харуулаач",
   "харья",
   "харъя",
+  // Greeting words typed in front of a question ("hi Shanhai aylaliin medeelel
+  // aviya"): never a destination, but they used to count as unmatched query
+  // words and drag every candidate's score negative.
+  "hi",
+  "hii",
+  "hello",
+  "hey",
+  "сайн",
+  "сайнуу",
   // Everyday words that are never a destination but sit one letter (or a shared
   // prefix) away from words inside trip names: "харин" ("however") ~ "сарын"
   // ("month's", in "11-р сарын аяллын хөтөлбөр"), "байгаа" ("is there") ~
@@ -279,8 +288,9 @@ const ALIAS_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\b(?:vne|une|unee|unei|unii|uniin)\b/gi, "үнэ"],
   [/(?<![\p{L}\p{N}])үний(?![\p{L}\p{N}])/giu, "үнэ"],
   [/\baylaluud\b/gi, "аялалууд"],
+  [/\baylaliin\b|\baylalin\b|\bayliin\b/gi, "аяллын"],
   [/\bmedeelel\b/gi, "мэдээлэл"],
-  [/\b(?:avay|avya|awy|awya|aviy|avii)\b/gi, "авъя"],
+  [/\b(?:avay|avya|awy|awya|aviy|aviya|avii|avia)\b/gi, "авъя"],
   [/\bwith ticket\b/gi, "тийзтэй"],
   [/\bwithout ticket\b/gi, "тийзгүй"],
   [/\bticketless\b/gi, "тийзгүй"],
@@ -816,7 +826,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function sanitizeGroup(
   group: unknown,
   departureMonthDays: MonthDay[],
-): unknown {
+): unknown | null {
   if (!isRecord(group)) return group;
   let next: Record<string, unknown> = group;
   const set = (key: string, value: unknown) => {
@@ -856,6 +866,11 @@ function sanitizeGroup(
         )
       );
     });
+    // Nothing of this group's schedule is a real departure any more: its prices
+    // belong to departures that no longer exist (the Shanghai-Disney 10/29 trip
+    // carried a "9 сарын 29" group at 3,490,000₮ while the current base price is
+    // 3,590,000₮). Drop the whole group so the trip's own base prices win.
+    if (kept.length === 0) return null;
     if (kept.length !== group.dates.length) {
       set("dates", kept);
       if ("display_dates" in group) set("display_dates", kept);
@@ -904,8 +919,12 @@ export function sanitizeTripForCustomers(trip: TravelTrip): TravelTrip {
   for (const key of ["price_groups", "departure_date_groups", "discount_groups"]) {
     const groups = extra[key];
     if (!Array.isArray(groups)) continue;
-    const cleaned = groups.map((group) => sanitizeGroup(group, departureMonthDays));
-    if (cleaned.some((group, index) => group !== groups[index])) setExtra(key, cleaned);
+    const cleaned = groups
+      .map((group) => sanitizeGroup(group, departureMonthDays))
+      .filter((group) => group !== null);
+    if (cleaned.length !== groups.length || cleaned.some((group, index) => group !== groups[index])) {
+      setExtra(key, cleaned);
+    }
   }
 
   if ("infant_age_range" in extra) {
@@ -1129,6 +1148,29 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
   });
 }
 
+const MAX_ROUTE_CANDIDATES = 8;
+
+/**
+ * When the customer's words don't single out one trip, offer every trip that
+ * shares the best match's strong destination word (all six Shanghai trips), not
+ * an arbitrary top 3. A real customer asking about Shanghai saw 3 of 6 and the
+ * client reported the rest as missing. Falls back to the top 3 when the best
+ * match has no strong word to share.
+ */
+function candidatesForSameDestination(matches: TripMatch[]): TravelTrip[] {
+  const best = matches[0];
+  const strong = best.matchedWords.filter((word) => word.length >= 4);
+  if (strong.length === 0) return matches.slice(0, 3).map((match) => match.trip);
+  // Must share at least half of the best match's strong words, so "Beijing +
+  // Jining + Zhangjiakou + Erlian" does not also pull in every trip that merely
+  // contains "Jining", while a bare "Shanghai" still lists every Shanghai trip.
+  const needed = Math.ceil(strong.length / 2);
+  return matches
+    .filter((match) => match.matchedWords.filter((word) => strong.includes(word)).length >= needed)
+    .slice(0, MAX_ROUTE_CANDIDATES)
+    .map((match) => match.trip);
+}
+
 export function resolveTripFromUserMessage(
   text: string,
   trips: TravelTrip[],
@@ -1201,7 +1243,10 @@ export function resolveTripFromUserMessage(
     return {
       status: "ambiguous",
       trip: null,
-      candidates: candidates.slice(0, 3).map((match) => match.trip),
+      // Everything the destination covers, not just the top 3: a customer asking
+      // about "Shanghai" must be able to see all six Shanghai trips, and the
+      // numbered buttons / clarification state cover the same set.
+      candidates: candidates.slice(0, MAX_ROUTE_CANDIDATES).map((match) => match.trip),
     };
   }
   // Exactly one trip's own name contains everything the customer typed, and it
@@ -1219,7 +1264,7 @@ export function resolveTripFromUserMessage(
     best.score - second.score <= 5 &&
     Math.abs(best.keywordCoverage - second.keywordCoverage) <= 0.15
   ) {
-    return { status: "ambiguous", trip: null, candidates: matches.slice(0, 3).map((match) => match.trip) };
+    return { status: "ambiguous", trip: null, candidates: candidatesForSameDestination(matches) };
   }
 
   // Exactly one trip's own name contains everything the customer typed. That is
@@ -1239,7 +1284,7 @@ export function resolveTripFromUserMessage(
     return {
       status: "ambiguous",
       trip: null,
-      candidates: matches.slice(0, 3).map((match) => match.trip),
+      candidates: candidatesForSameDestination(matches),
     };
   }
 
@@ -1480,10 +1525,17 @@ function tripNameCoversQuery(trip: TravelTrip, tokens: string[]): boolean {
   if (!tokens.length) return false;
   const identity = tripIdentityText(trip);
   const identityLatin = phoneticLatinText(identity);
+  const identityLatinTokens = identityLatin.split(/\s+/).filter(Boolean);
   return tokens.every((token) => {
     if (identity.includes(token)) return true;
     const latinToken = phoneticLatinText(token);
-    return Boolean(latinToken) && identityLatin.includes(latinToken);
+    if (!latinToken) return false;
+    if (identityLatin.includes(latinToken)) return true;
+    // Case endings: "haalganii" (Хаалганы) must cover a name that spells it
+    // "хаалга". Substring matching only accepted the one trip whose name happens
+    // to use the same ending, so three "Тэнгэрийн хаалга" trips looked like one
+    // unique match and a price + poster were sent for a guess.
+    return identityLatinTokens.some((identityToken) => phoneticTokenMatches(latinToken, identityToken));
   });
 }
 
@@ -1620,6 +1672,23 @@ export function tripIsDirectFlight(trip: TravelTrip): boolean {
     haystack.includes("шууд нислэгтэй") ||
     haystack.includes("direct flight")
   );
+}
+
+/**
+ * Narrows a catalog to the transport type the customer asked for, so a date
+ * question ("10 сарын 20-27 хооронд явах шууд нислэгтэй ямар аялал байгаа вэ")
+ * lists only direct-flight trips. The date-availability answer used to list every
+ * trip that departs, so a customer asking for direct flights was shown land tours
+ * and land+flight combos. Mirrors the same intent filters findTripMatches applies.
+ */
+export function filterTripsByTransportIntent(text: string, trips: TravelTrip[]): TravelTrip[] {
+  const wantsCombo = queryWantsLandFlightCombo(text);
+  const wantsDirect = queryWantsDirectFlight(text) && !wantsCombo;
+  const wantsLandOnly = queryWantsLandOnlyEnhanced(text) && !queryWantsFlight(text);
+  if (wantsCombo) return trips.filter(tripMatchesLandFlightComboIntent);
+  if (wantsDirect) return trips.filter(tripIsDirectFlight);
+  if (wantsLandOnly) return trips.filter((trip) => tripIsLandOnly(trip) && !tripIsCruise(trip));
+  return trips;
 }
 
 export function tripIsCruise(trip: TravelTrip): boolean {

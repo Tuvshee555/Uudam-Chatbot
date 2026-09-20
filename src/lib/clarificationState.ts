@@ -54,7 +54,7 @@ export async function setClarificationState(
   candidateTripIds: string[],
 ): Promise<void> {
   const state: ClarificationState = {
-    candidateTripIds: candidateTripIds.slice(0, 5),
+    candidateTripIds: candidateTripIds.slice(0, 8),
     createdAt: Date.now(),
   };
   const applied = await withRedis("clarification_state.set", async (r) => {

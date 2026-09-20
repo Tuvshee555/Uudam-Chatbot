@@ -599,6 +599,57 @@ function findMonthDepartures(
   return matches.sort((a, b) => a.ymd.localeCompare(b.ymd));
 }
 
+// "10 сарын 20-27 хооронд": a day range inside one month. Only the first day
+// used to be looked at, so a customer asking about Oct 20-27 was answered for
+// Oct 20 alone.
+const DATE_RANGE_RE = /(\d{1,2})\s*(?:-?р\s*)?сар(?:ын)?\s*(\d{1,2})\s*[-–—]\s*(\d{1,2})(?!\d)/i;
+
+function resolveRequestedRange(
+  text: string,
+  now: Date,
+): { startYmd: string; endYmd: string; month: number; startDay: number; endDay: number } | null {
+  const match = DATE_RANGE_RE.exec(text.normalize("NFKC"));
+  if (!match) return null;
+  const month = Number(match[1]);
+  const startDay = Number(match[2]);
+  const endDay = Number(match[3]);
+  if (month < 1 || month > 12 || startDay < 1 || endDay <= startDay || endDay > 31) return null;
+  const start = resolveRequestedDate(`${month} сарын ${startDay}`, now);
+  if (!start) return null;
+  const [year, monthPart] = start.ymd.split("-");
+  return {
+    startYmd: start.ymd,
+    endYmd: `${year}-${monthPart}-${String(endDay).padStart(2, "0")}`,
+    month,
+    startDay,
+    endDay,
+  };
+}
+
+function findRangeDepartures(
+  trips: TravelTrip[],
+  startYmd: string,
+  endYmd: string,
+  now: Date,
+): Array<{ ymd: string; trip: TravelTrip }> {
+  const todayYmd = toYmd(getMongoliaDateParts(now));
+  const matches: Array<{ ymd: string; trip: TravelTrip }> = [];
+  const seen = new Set<string>();
+  for (const trip of trips) {
+    if (trip.status !== "active") continue;
+    for (const dateText of trip.departure_dates || []) {
+      for (const ymd of tripDateYmds(trip, dateText, now)) {
+        if (ymd < startYmd || ymd > endYmd || ymd < todayYmd) continue;
+        const key = `${ymd}:${trip.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        matches.push({ ymd, trip });
+      }
+    }
+  }
+  return matches.sort((a, b) => a.ymd.localeCompare(b.ymd));
+}
+
 function formatMonthDepartureOptions(matches: Array<{ ymd: string; trip: TravelTrip }>): string {
   const byTrip = new Map<string, { trip: TravelTrip; dates: string[] }>();
   for (const match of matches) {
@@ -656,6 +707,20 @@ export function buildDepartureDateAvailabilityReply(input: {
   if (!hasDepartureDateAvailabilityIntent(input.userText, now)) return null;
   const focusTrip = input.focusTrip && input.focusTrip.status === "active" ? input.focusTrip : null;
   const scopedTrips = focusTrip ? [focusTrip] : input.trips;
+
+  const range = resolveRequestedRange(input.userText, now);
+  if (range) {
+    const rangeMatches = findRangeDepartures(scopedTrips, range.startYmd, range.endYmd, now);
+    if (rangeMatches.length > 0) {
+      const label = `${range.month} сарын ${range.startDay}–${range.endDay}`;
+      const intro = focusTrip
+        ? `Тийм ээ, ${tripPhrase(focusTrip)} ${label}-ны хооронд гарна 😊`
+        : `Тийм ээ, ${label}-ны хооронд гарах аяллууд байна 😊`;
+      return `${intro}\n\n${formatMonthDepartureOptions(rangeMatches)}`;
+    }
+    // Nothing inside the range: fall through to the single-date answer, which
+    // offers the nearest departures (or stays silent when there are none).
+  }
 
   if (!requested) {
     const requestedMonth = resolveRequestedMonth(input.userText, now);

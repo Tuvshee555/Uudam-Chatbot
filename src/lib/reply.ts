@@ -92,6 +92,11 @@ const NO_DATA_REPLY_PATTERNS: RegExp[] = [
   // 18 of 25 active trips that simply lack photos. Missing pictures are not
   // missing data; only genuine no-answer replies belong in this list.
   /хүний ажилтантай холбож өгье/i,
+  // The model stating it lacks the answer instead of outputting REFER. The owner's
+  // rule is silence when the answer is unknown, so these are never sent.
+  /мэдээлэлд\s+байхгүй/i,
+  /мэдэхгүй байна/i,
+  /туслах боломжгүй/i,
 ];
 
 export function shouldSilenceNoDataReply(text: string): boolean {

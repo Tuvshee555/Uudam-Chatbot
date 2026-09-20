@@ -1422,6 +1422,11 @@ export const AMBIGUOUS_REPLY_MARKER = "Аль аяллыг нь сонирхож
 
 function firstStructuredPassengerPrice(trip: TravelTrip, key: "child_price" | "infant_price"): number | null {
   if (key === "child_price" && typeof trip.child_price === "number") return trip.child_price;
+  // The trip's own base infant price ("Үндсэн Нярай" in the admin). Only the
+  // child price used to have this fallback, so a trip whose price groups carry
+  // no infant figure (Shanghai-Disney 10/29, UB-Shanghai-Hangzhou) was listed to
+  // customers without its "нярай" price even though the admin shows one.
+  if (key === "infant_price" && typeof trip.infant_price === "number") return trip.infant_price;
   for (const group of getStructuredPriceGroups(trip)) {
     const value = group[key];
     if (typeof value === "number") return value;
@@ -1433,8 +1438,13 @@ function firstStructuredPassengerPrice(trip: TravelTrip, key: "child_price" | "i
   return null;
 }
 
+// Every matching trip is listed (up to this many). It was 5, and the resolver
+// only handed over 3, so "Shanghai" showed 3 of the 6 active Shanghai trips and
+// the client reported two of them as missing.
+const MAX_LISTED_TRIPS = 8;
+
 export function buildAmbiguousTripReply(trips: TravelTrip[]) {
-  const names = trips.slice(0, 5).map((trip) => {
+  const names = trips.slice(0, MAX_LISTED_TRIPS).map((trip) => {
     const currency = trip.currency || "MNT";
     const adult = typeof trip.adult_price === "number" ? trip.adult_price : null;
     const child = firstStructuredPassengerPrice(trip, "child_price");

@@ -378,7 +378,7 @@ test("webhook handles long OpenAI latency without dropping event", async () => {
   }
 });
 
-test("webhook acknowledges the customer when the model refers unknown data to staff", async () => {
+test("webhook stays silent when the model refers unknown data to staff", async () => {
   applyTestEnv();
   const handler = await loadWebhookHandler();
 
@@ -426,14 +426,14 @@ test("webhook acknowledges the customer when the model refers unknown data to st
     const result = await callWebhook(handler, payload);
 
     assert.equal(result.statusCode, 200);
-    assert.equal(sendCount, 1);
-    assert.match(sentBody, /аяллын зөвлөх|холбогдож/i);
+    assert.equal(sendCount, 0, "an unknown answer is met with silence, not a notice");
+    assert.equal(sentBody, "");
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("webhook acknowledges the customer instead of staying silent when a reply is suppressed as no-data", async () => {
+test("webhook stays silent when a reply is suppressed as no-data", async () => {
   applyTestEnv();
   const handler = await loadWebhookHandler();
 
@@ -486,8 +486,8 @@ test("webhook acknowledges the customer instead of staying silent when a reply i
     // Never silent: a suppressed/no-data reply must still hand the customer
     // off to a human instead of leaving them with nothing.
     assert.equal(result.statusCode, 200);
-    assert.equal(sendCount, 1);
-    assert.match(sentBody, /аяллын зөвлөх|холбогдож/i);
+    assert.equal(sendCount, 0, "a suppressed no-data reply must not be replaced by a notice");
+    assert.equal(sentBody, "");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -868,4 +868,27 @@ test("a typed greeting variant is answered as a greeting, not handed off", async
   assert.equal(sends.length, 1);
   assert.match(sends[0], /Сайн байна уу/);
   assert.doesNotMatch(sends[0], /зөвлөхөд дамжууллаа/);
+});
+
+
+test("when the AI itself answers REFER (does not know), the customer gets nothing", async () => {
+  const { sends, openAiCalls } = await runInstagramText("ig-user-ai-refer", "ig-mid-ai-refer-1", "ai refer check");
+  assert.ok(openAiCalls >= 1, "the model must actually have been asked");
+  assert.deepEqual(sends, [], "REFER means silence: no reply, no hand-off notice");
+});
+
+test("the model saying it lacks the information is treated as no-data and never sent", async () => {
+  const { shouldSilenceNoDataReply } = await import("../src/lib/reply");
+  for (const reply of [
+    "Тэр мэдээлэл миний мэдээлэлд байхгүй байна. Та зөвлөхтэй холбогдоно уу. 😊",
+    "Уучлаарай, би энэ талаар мэдэхгүй байна.",
+    "Уучлаарай, энэ талаар туслах боломжгүй байна.",
+  ]) {
+    assert.equal(shouldSilenceNoDataReply(reply), true, reply);
+  }
+  // A normal answer with a consultant tail is still sent.
+  assert.equal(
+    shouldSilenceNoDataReply("Шанхай аялал 6 өдөр 5 шөнө, том хүн 2,890,000₮. Дэлгэрэнгүйг зөвлөхөөс авна уу."),
+    false,
+  );
 });

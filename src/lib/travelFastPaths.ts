@@ -209,7 +209,7 @@ export function buildAmbiguousPassengerTotalReply(
   const counts = parsePassengerTotalRequest(text);
   if (!counts || trips.length < 2) return null;
   const lines = trips
-    .slice(0, 5)
+    .slice(0, 8)
     .map((trip) => formatPassengerTotalLine(trip, counts))
     .filter((line): line is string => Boolean(line));
   if (lines.length < 2) return null;

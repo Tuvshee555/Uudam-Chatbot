@@ -22,12 +22,12 @@ import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
-import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
+import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBot, trackSender } from "../../lib/pause";
 import { AUTO_PAUSE_RESET_DAYS, createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, } from "../../lib/travelFastPaths";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, filterTripsByTransportIntent, } from "../../lib/travelFastPaths";
 import { buildHandoffReplyWithContact, claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
@@ -316,44 +316,18 @@ async function handleMessage(
           classification: classifyError(error),
         });
       }
-      const handoffReply = buildHandoffAcknowledgement();
-      // The bot doesn't know the answer — never let it keep guessing. Pause
-      // it for this customer the same way an explicit "холбогдох" request
-      // does, so a human takes over instead of the bot risking another
-      // wrong or empty reply on the next message.
+      // The bot doesn't know the answer, so it says NOTHING to the customer (owner's
+      // rule: an unknown answer is met with silence, never a "passed to a
+      // consultant" notice). Staff got the lead + alert above, and the bot is
+      // paused for this customer the same way an explicit "холбогдох" request does
+      // — a human takes over instead of the bot risking another wrong or empty
+      // reply on the next message.
       await autoHandoffSender(senderId);
       const noDataPauseMs =
         botSettings.handoff_pause_minutes > 0
           ? botSettings.handoff_pause_minutes * 60_000
           : undefined;
       await pauseBot(senderId, noDataPauseMs, "no_data_handoff");
-      await assertLockHealthy();
-      const delivered = await sendPlatformMessage(
-        platform,
-        senderId,
-        handoffReply,
-        token,
-        pageId,
-        igUserId,
-        trace,
-        { allowFallback: false },
-      );
-      if (!delivered) {
-        throw new RetryableWebhookError(`delivery_failed:${input.failTag}_no_data`);
-      }
-      try {
-        await appendMessage(senderId, "assistant", handoffReply);
-        await setLastReplyConsistent(sessionId, handoffReply);
-      } catch (error) {
-        logWarn("webhook.no_data_reply_state_persist_failed", {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          platform,
-          senderHash: hashIdentifier(senderId),
-          classification: classifyError(error),
-        });
-      }
-      await rememberTurn(`${input.rememberSource}_no_data_handoff`);
       if (input.counter) recordCounter(input.counter, 1, { platform });
       return;
     }
@@ -547,6 +521,7 @@ async function handleMessage(
   // nothing and must never re-serve a stale trip. Any attachment riding along
   // with the text is still processed by scheduleAttachmentDocumentPipeline.
   if (isKnownGreetingPhrase(text)) {
+    await appendMessage(senderId, "user", text).catch(() => {});
     await deliverFastPathReply({
       reply: MID_CONVERSATION_GREETING_REPLY,
       failTag: "greeting_fast_path",
@@ -561,6 +536,7 @@ async function handleMessage(
   // come back as a list of Hainan trips. Answer it deterministically (also keeps
   // working when the model is down). Anything beyond thanks goes on as usual.
   if (isThanksOnly(text)) {
+    await appendMessage(senderId, "user", text).catch(() => {});
     await deliverFastPathReply({
       reply: THANKS_REPLY,
       failTag: "thanks_fast_path",
@@ -1262,7 +1238,8 @@ async function handleMessage(
     const dateFastPathText = await getFastPathText();
     const dateAvailabilityReply = buildDepartureDateAvailabilityReply({
       userText: dateFastPathText,
-      trips,
+      // Catalog-wide answers honour "шууд нислэгтэй" / "газрын" / "хосолсон".
+      trips: filterTripsByTransportIntent(dateFastPathText, trips),
       focusTrip: resolveFocusTripForDateQuestion(dateFastPathText, trips),
     });
     if (dateAvailabilityReply) {
@@ -1680,53 +1657,18 @@ async function handleMessage(
         ? botSettings.handoff_pause_minutes * 60_000
         : undefined;
     await pauseBot(senderId, referPauseMs, aiOutage ? "ai_outage" : "no_data_handoff");
-    if (aiOutage) {
-      // Owner's call: an AI failure must never announce itself to a customer.
-      // The bot goes quiet (paused above) and staff got the lead alert; the
-      // customer's message is already in history for whoever picks it up.
-      // Logged as a warning so a "the bot ignored me" complaint can be traced
-      // to this in the error log instead of guessed at.
-      logWarn("webhook.ai_outage_customer_silenced", {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        platform,
-        senderHash: hashIdentifier(senderId),
-      });
-      recordCounter("webhook.ai_outage_silenced_total", 1, { platform });
-      return;
-    }
-    await assertLockHealthy();
-    const referHandoffReply = buildHandoffAcknowledgement({ aiOutage });
-    const referDelivered = await sendPlatformMessage(
+    // Owner's rule: whether the model failed or simply does not know, the
+    // customer gets NO message. The bot is paused (above) and staff got the lead
+    // alert; the customer's message is already in history for whoever picks it up.
+    // Logged as a warning so a "the bot ignored me" complaint can be traced to
+    // this in the error log instead of guessed at.
+    logWarn(aiOutage ? "webhook.ai_outage_customer_silenced" : "webhook.ai_refer_customer_silenced", {
+      requestId: trace?.requestId,
+      correlationId: trace?.correlationId,
       platform,
-      senderId,
-      referHandoffReply,
-      token,
-      pageId,
-      igUserId,
-      trace,
-      { allowFallback: false },
-    );
-    if (!referDelivered) {
-      throw new RetryableWebhookError(
-        `delivery_failed:${aiOutage ? "ai_outage_handoff" : "ai_refer_handoff"}`,
-      );
-    }
-    try {
-      await appendMessage(senderId, "assistant", referHandoffReply);
-      await setLastReplyConsistent(sessionId, referHandoffReply);
-    } catch (error) {
-      logWarn("webhook.ai_refer_reply_state_persist_failed", {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        platform,
-        senderHash: hashIdentifier(senderId),
-        classification: classifyError(error),
-      });
-    }
-    await rememberTurn(
-      aiOutage ? "api.webhook.ai_outage_handoff" : "api.webhook.ai_refer_handoff",
-    );
+      senderHash: hashIdentifier(senderId),
+    });
+    recordCounter(aiOutage ? "webhook.ai_outage_silenced_total" : "webhook.ai_refer_silenced_total", 1, { platform });
     return;
   }
   const fixedReply = fixMojibake(aiReply);
@@ -1812,34 +1754,15 @@ async function handleMessage(
       suppressedPauseMs,
       wrongTripLeak ? "wrong_trip_handoff" : "no_data_handoff",
     );
-    await assertLockHealthy();
-    const suppressedHandoffReply = buildHandoffAcknowledgement();
-    const suppressedDelivered = await sendPlatformMessage(
+    // Silent: a reply the guards suppressed (no data / another trip's facts) is
+    // never replaced by a notice to the customer. Lead + alert + pause are above.
+    logWarn("webhook.ai_no_data_customer_silenced", {
+      requestId: trace?.requestId,
+      correlationId: trace?.correlationId,
       platform,
-      senderId,
-      suppressedHandoffReply,
-      token,
-      pageId,
-      igUserId,
-      trace,
-      { allowFallback: false },
-    );
-    if (!suppressedDelivered) {
-      throw new RetryableWebhookError("delivery_failed:ai_no_data_handoff");
-    }
-    try {
-      await appendMessage(senderId, "assistant", suppressedHandoffReply);
-      await setLastReplyConsistent(sessionId, suppressedHandoffReply);
-    } catch (error) {
-      logWarn("webhook.ai_no_data_reply_state_persist_failed", {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        platform,
-        senderHash: hashIdentifier(senderId),
-        classification: classifyError(error),
-      });
-    }
-    await rememberTurn("api.webhook.ai_no_data_handoff");
+      senderHash: hashIdentifier(senderId),
+      reason: wrongTripLeak ? "wrong_trip" : "no_data",
+    });
     return;
   }
   if (lastReply && isDuplicateReply(lastReply.text, safeReply)) {

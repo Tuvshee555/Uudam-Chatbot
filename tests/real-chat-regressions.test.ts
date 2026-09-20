@@ -241,12 +241,13 @@ test("a genuine infant band in years is left alone", async () => {
   assert.equal(sanitizeTripForCustomers(fine), fine, "nothing to fix returns the same object");
 });
 
-test("price-group dates that are not real departures are dropped, real ones kept", async () => {
+test("a price group whose dates are all gone is dropped, so the base prices win", async () => {
   const { sanitizeTripForCustomers } = await search();
-  // The top-asked trip: departs only 11/19, but its price group still said 9/19 and 10/10.
+  // The top-asked trip: departs only 11/19, but a price group still said 9/19 and 10/10.
   const stale = trip({
     route_name: "Шанхай + Тэнгэрийн хаалга",
     departure_dates: ["11 сарын 19"],
+    adult_price: 3660000,
     extra: {
       price_groups: [
         {
@@ -254,19 +255,19 @@ test("price-group dates that are not real departures are dropped, real ones kept
           dates: ["9 сарын 19", "10 сарын 10"],
           display_dates: ["9 сарын 19", "10 сарын 10"],
           date_keys: ["9 сарын 19", "9/19", "10 сарын 10", "10/10"],
-          adult_price: 3660000,
+          adult_price: 3560000, // an OLD price for departures that no longer exist
         },
         { label: "11 сарын 19", dates: ["11 сарын 19"], adult_price: 3660000 },
       ],
     },
   });
   const fixed = sanitizeTripForCustomers(stale);
-  const [staleGroup, currentGroup] = (fixed.extra as { price_groups: Array<Record<string, unknown>> }).price_groups;
-  assert.deepEqual(staleGroup.dates, []);
-  assert.equal(staleGroup.label, "");
-  assert.deepEqual(staleGroup.date_keys, []);
-  assert.equal(staleGroup.adult_price, 3660000, "the price itself is kept");
-  assert.deepEqual(currentGroup.dates, ["11 сарын 19"]);
+  const groups = (fixed.extra as { price_groups: Array<Record<string, unknown>> }).price_groups;
+  assert.equal(groups.length, 1, "the stale group (old price, old dates) is removed entirely");
+  assert.deepEqual(groups[0].dates, ["11 сарын 19"]);
+  assert.equal(fixed.adult_price, 3660000, "the trip's own base price is untouched");
+  // The admin's own data is never mutated.
+  assert.equal((stale.extra as { price_groups: unknown[] }).price_groups.length, 2);
 });
 
 test("a partly stale price group keeps only its real departure dates", async () => {
@@ -312,4 +313,132 @@ test("a 'which of these trips?' question is still remembered when the customer a
     Date.now = realNow;
     await clearClarificationState(senderId);
   }
+});
+
+
+// ── Client report: "2 trips' info looks incomplete" (Shanghai) ────────────────
+
+const HANGZHOU = trip({
+  route_name: "Улаанбаатар – Шанхай – Хүжөү – Пүюань – Ханжоу аялал",
+  duration_text: "8 өдөр 7 шөнө",
+  adult_price: 3390000,
+  child_price: 2690000,
+  infant_price: 390000, // base infant price, shown in the admin as "Үндсэн Нярай"
+  departure_dates: ["10 сарын 8", "10 сарын 15"],
+  // Price groups carry NO infant figure and stale dates, exactly like the live trip.
+  extra: { price_groups: [{ dates: ["9 сарын 10", "9 сарын 17", "10 сарын 15"], adult_price: 3390000, child_price: 2690000, infant_price: null }] },
+});
+const DISNEY_OCT29 = trip({
+  route_name: "ШАНХАЙ - ДИСНЭЙЛАНД -сурагчдын амралтын аялал - 10/29",
+  duration_text: "6 өдөр 5 шөнө",
+  adult_price: 3590000,
+  child_price: 3150000,
+  infant_price: 490000,
+  departure_dates: ["10 сарын 29"],
+  extra: { price_groups: [{ dates: ["9 сарын 29"], adult_price: 3490000, child_price: 3290000, infant_price: null }] },
+});
+const SHANGHAI_TRIPS = [SHANGHAI_NOV, HANGZHOU, SHANGHAI_DISNEY_NOV3, DISNEY_OCT29, SHANGHAI_ZHANGJIAJIE, trip({ route_name: "УБ-Шанхай хотын 12-р сарын аяллын хөтөлбөр", duration_text: "5 өдөр 4 шөнө", adult_price: 2890000, departure_dates: ["12 сарын 22"] })];
+
+test("a trip's base infant price is listed even when its price groups have none", async () => {
+  const { buildAmbiguousTripReply } = await import("../src/lib/travelFastPaths");
+  applyTestEnv();
+  const reply = buildAmbiguousTripReply([HANGZHOU, DISNEY_OCT29]);
+  assert.match(reply, /Ханжоу аялал — 8 өдөр 7 шөнө · том хүн 3,390,000₮ · хүүхэд 2,690,000₮ · нярай 390,000₮/);
+  assert.match(reply, /10\/29 — 6 өдөр 5 шөнө · том хүн 3,590,000₮ · хүүхэд 3,150,000₮ · нярай 490,000₮/);
+});
+
+test("asking about Shanghai lists EVERY Shanghai trip, not just the top 3", async () => {
+  const { resolveTripFromUserMessage } = await search();
+  // The client's own message, and plain phrasings of the same question.
+  for (const text of ["hi Shanhai aylaliin medeelel aviya", "Shanghai", "Шанхай аялал", "shanhai aylal medeelel"]) {
+    const result = resolveTripFromUserMessage(text, SHANGHAI_TRIPS, { allowLooseFallback: false });
+    assert.equal(result.status, "ambiguous", text);
+    assert.equal(
+      result.status === "ambiguous" ? result.candidates.length : 0,
+      SHANGHAI_TRIPS.length,
+      `"${text}" must offer all ${SHANGHAI_TRIPS.length} Shanghai trips`,
+    );
+  }
+});
+
+test("the numbered choice still works once more than three trips are offered", async () => {
+  applyTestEnv();
+  const { routeFastPathText } = await import("../src/lib/fastPathRouting");
+  const senderId = "shanghai-numbered-choice";
+  const first = await routeFastPathText({ senderId, text: "Shanghai", contextualUserText: "Shanghai", trips: SHANGHAI_TRIPS });
+  assert.ok(first.matchText.includes("Shanghai"));
+  const picked = await routeFastPathText({ senderId, text: "4. Улаанбаатар – Шанхай…", contextualUserText: "4. Улаанбаатар – Шанхай…", trips: SHANGHAI_TRIPS });
+  // Button 4 in the offered list is the Hangzhou trip (the buttons are numbered
+  // in the order the reply lists the trips).
+  assert.ok(
+    picked.matchText.includes(HANGZHOU.route_name),
+    `option 4 must resolve to the Hangzhou trip, got: ${picked.matchText.slice(0, 80)}`,
+  );
+});
+
+// ── "10 сарын 20-27 хооронд явах шууд нислэгтэй ямар аялал байгаа вэ" ───────────
+
+const DIRECT_OCT20 = trip({
+  route_name: "Египет шууд нислэгтэй аялал",
+  category: "Шууд нислэгтэй аялал",
+  duration_text: "7 өдөр 6 шөнө",
+  adult_price: 4990000,
+  departure_dates: ["10 сарын 22"],
+});
+const LAND_OCT20 = trip({
+  route_name: "ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ-БЭЭЖИНГИЙН ГАЗРЫН АЯЛАЛ",
+  category: "Газрын аялал",
+  duration_text: "9 өдөр 8 шөнө",
+  adult_price: 1390000,
+  departure_dates: ["10 сарын 20"],
+});
+const COMBO_OCT20 = trip({
+  route_name: "ТЭНГЭРИЙН ХААЛГАНЫ ГАЗАР НИСЛЭГ ХОСОЛСОН АЯЛАЛ ( Жанжиажэ - Аватар )",
+  category: "Газар нислэг хосолсон аялал",
+  duration_text: "10 өдөр 9 шөнө",
+  adult_price: 2650000,
+  departure_dates: ["10 сарын 20", "10 сарын 27"],
+});
+const DATE_CATALOG = [DIRECT_OCT20, LAND_OCT20, COMBO_OCT20];
+const NOW = new Date("2026-09-19T05:00:00Z");
+
+test("a direct-flight date question lists only direct-flight trips", async () => {
+  const { filterTripsByTransportIntent } = await search();
+  const { buildDepartureDateAvailabilityReply } = await import("../src/lib/travelDates");
+  const text = "10 сарын 20-27 хооронд явах шууд нислэгтэй ямар аялал байгаа вэ";
+  const narrowed = filterTripsByTransportIntent(text, DATE_CATALOG);
+  assert.deepEqual(narrowed.map((t) => t.route_name), [DIRECT_OCT20.route_name]);
+  const reply = buildDepartureDateAvailabilityReply({ userText: text, trips: narrowed, now: NOW });
+  assert.ok(reply);
+  assert.match(reply!, /Египет шууд нислэгтэй/);
+  assert.doesNotMatch(reply!, /ГАЗРЫН АЯЛАЛ|ГАЗАР НИСЛЭГ ХОСОЛСОН/, "land tours and combos must not be offered as direct flights");
+});
+
+test("land-only and combo questions are narrowed the same way", async () => {
+  const { filterTripsByTransportIntent } = await search();
+  assert.deepEqual(
+    filterTripsByTransportIntent("10 сарын 20-нд газрын аялал байна уу", DATE_CATALOG).map((t) => t.route_name),
+    [LAND_OCT20.route_name],
+  );
+  assert.deepEqual(
+    filterTripsByTransportIntent("газар нислэг хосолсон аялал 10 сарын 20", DATE_CATALOG).map((t) => t.route_name),
+    [COMBO_OCT20.route_name],
+  );
+  // No transport preference: nothing is dropped.
+  assert.equal(filterTripsByTransportIntent("10 сарын 20-нд ямар аялал байна", DATE_CATALOG).length, 3);
+});
+
+test("a day range covers every day in it, not just the first", async () => {
+  const { buildDepartureDateAvailabilityReply } = await import("../src/lib/travelDates");
+  const reply = buildDepartureDateAvailabilityReply({
+    userText: "10 сарын 20-27 хооронд ямар аялал байгаа вэ",
+    trips: DATE_CATALOG,
+    now: NOW,
+  });
+  assert.ok(reply);
+  // Trips departing on the 20th, the 22nd and the 27th all appear.
+  assert.match(reply!, /ШАР ТЭНГИС/);
+  assert.match(reply!, /Египет/);
+  assert.match(reply!, /ТЭНГЭРИЙН ХААЛГАНЫ/);
+  assert.match(reply!, /20–27-ны хооронд/);
 });
