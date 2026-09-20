@@ -20,9 +20,13 @@ export type ClarificationState = {
   createdAt: number;
 };
 
-// A clarification is a live back-and-forth — minutes, not days.
-const TTL_MS = 10 * 60 * 1000;
-const REDIS_TTL_SEC = 10 * 60;
+// Hours, not minutes. This was 10 minutes, but Messenger customers routinely
+// answer "which of these trips?" much later: one tapped their choice 35 minutes
+// after the question, the bot had already forgotten what it offered and re-asked
+// the same list. Stale state is harmless — an answer that fits none of the
+// offered trips drops it (see routeFastPathText) — so a long window costs nothing.
+const TTL_MS = 6 * 60 * 60 * 1000;
+const REDIS_TTL_SEC = 6 * 60 * 60;
 const memStore = new Map<string, ClarificationState>();
 
 function storeKey(senderId: string) {

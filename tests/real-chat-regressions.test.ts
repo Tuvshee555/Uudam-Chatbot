@@ -289,3 +289,27 @@ test("trips with weekly or no explicit departure dates are not reconciled", asyn
   });
   assert.equal(sanitizeTripForCustomers(weekly), weekly);
 });
+
+// ── Button answer arriving after the bot forgot what it offered ──────────────
+
+test("a 'which of these trips?' question is still remembered when the customer answers 35 minutes later", async () => {
+  applyTestEnv();
+  const { setClarificationState, getClarificationState, clearClarificationState } = await import(
+    "../src/lib/clarificationState"
+  );
+  const senderId = "clarify-ttl-35min";
+  const realNow = Date.now;
+  try {
+    await setClarificationState(senderId, ["trip-a", "trip-b"]);
+    Date.now = () => realNow() + 35 * 60 * 1000;
+    const state = await getClarificationState(senderId);
+    assert.ok(state, "a real customer tapped their choice 35 minutes after the question and the bot had forgotten it");
+    assert.deepEqual(state?.candidateTripIds, ["trip-a", "trip-b"]);
+    // ...but it does not live forever.
+    Date.now = () => realNow() + 7 * 60 * 60 * 1000;
+    assert.equal(await getClarificationState(senderId), null);
+  } finally {
+    Date.now = realNow;
+    await clearClarificationState(senderId);
+  }
+});
