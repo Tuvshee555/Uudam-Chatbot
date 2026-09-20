@@ -14,7 +14,7 @@
  * trip the customer is asking about right now.
  */
 
-import { isKnownGreetingPhrase } from "./greetingPhrases";
+import { isKnownGreetingPhrase, isThanksOnly } from "./greetingPhrases";
 
 export function normalizeContextText(text: string) {
   return text
@@ -37,6 +37,9 @@ export function isLikelyContextDependentText(text: string) {
   // short-text catch-all (which still correctly keeps real short answers
   // like "5" or "beejin" context-dependent/self-resolving).
   if (isKnownGreetingPhrase(text)) return false;
+  // Same reasoning for a bare thank-you: it asks nothing, so it must not borrow
+  // the previous turns' trips (a real "Баярлалаа" got a Hainan trip list).
+  if (isThanksOnly(text)) return false;
   const words = normalized.split(/\s+/).filter(Boolean);
   if (words.length <= 2) return true;
   const referentialHints = [

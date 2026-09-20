@@ -27,7 +27,7 @@ export function isGenericOpener(text: string): boolean {
   const norm = text.trim().toLowerCase().replace(/[!?.🙏👋😊]/g, "").trim();
   if (!norm || norm.length <= 2) return true;
   // Exact match only — "сайн уу бид явна шүү" is NOT generic even though it starts with "сайн уу"
-  return GENERIC_OPENERS.some((w) => norm === w);
+  return GENERIC_OPENERS.some((w) => norm === w) || isGreetingLike(text);
 }
 
 /**
@@ -43,8 +43,79 @@ export function isGenericOpener(text: string): boolean {
 export function isKnownGreetingPhrase(text: string): boolean {
   const norm = text.trim().toLowerCase().replace(/[!?.🙏👋😊]/g, "").trim();
   if (!norm) return false;
-  return GENERIC_OPENERS.some((w) => norm === w);
+  return GENERIC_OPENERS.some((w) => norm === w) || isGreetingLike(text);
 }
+
+// Words a greeting is made of, including the everyday typed forms ("бна",
+// "бну", "sn", "bnuu"). A real customer wrote "сайн сайн байна уу?" and it was
+// treated as an unknown price question and handed to staff, pausing the bot.
+const GREETING_CORE_WORDS = new Set([
+  "сайн", "сайнуу", "мэнд", "мэндээ", "мэндчилье", "амар", "амарсан", "амаржуу",
+  "sain", "sn", "hi", "hii", "hello", "hey", "сонин",
+]);
+const GREETING_FILLER_WORDS = new Set([
+  "байна", "бна", "бну", "бнуу", "бн", "уу", "юу", "өдрийн", "оройн", "өглөөний",
+  "bn", "bna", "bnu", "bnuu", "baina", "bainuu", "uu", "yu",
+]);
+
+/**
+ * Fuzzy greeting matcher: 1–5 words, every word a greeting word, at least one
+ * a core greeting word ("сайн сайн байна уу", "сайн бна уу", "Sn bnuu",
+ * "Өдрийн мэндээ"). Any other word — a name, a question — makes it a real
+ * message, so "hi shanghai price" is never swallowed.
+ */
+export function isGreetingLike(text: string): boolean {
+  const tokens = text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (tokens.length === 0 || tokens.length > 5) return false;
+  let sawCore = false;
+  for (const token of tokens) {
+    if (GREETING_CORE_WORDS.has(token)) {
+      sawCore = true;
+      continue;
+    }
+    if (!GREETING_FILLER_WORDS.has(token)) return false;
+  }
+  return sawCore;
+}
+
+const THANKS_CORE_WORDS = new Set([
+  "баярлалаа", "баярлаа", "баярлалаа", "ачлалаа", "bayrlalaa", "bayrlaa", "bayrla",
+  "bairlalaa", "thanks", "thank", "thx",
+]);
+const THANKS_FILLER_WORDS = new Set([
+  "за", "zaa", "za", "ok", "ок", "okay", "маш", "их", "танд", "танай", "тань", "аа", "you", "very", "much",
+]);
+
+/**
+ * A bare thank-you ("Баярлалаа", "за баярлалаа", "thanks"). It asks nothing, so
+ * it must never be treated as a follow-up that borrows the previous turns' trips
+ * — a real customer's "Баярлалаа" was answered with a list of Hainan trips.
+ * Anything beyond thanks + filler ("баярлалаа, үнэ хэд вэ") is a real message.
+ */
+export function isThanksOnly(text: string): boolean {
+  const tokens = text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (tokens.length === 0 || tokens.length > 4) return false;
+  let sawCore = false;
+  for (const token of tokens) {
+    if (THANKS_CORE_WORDS.has(token)) {
+      sawCore = true;
+      continue;
+    }
+    if (!THANKS_FILLER_WORDS.has(token)) return false;
+  }
+  return sawCore;
+}
+
+/** Deterministic reply to a bare thank-you: friendly, asks nothing, no lead-capture push. */
+export const THANKS_REPLY = "Зүгээр ээ 😊 Өөр асуух зүйл байвал чөлөөтэй бичээрэй.";
 
 /**
  * True for the Messenger "Get Started" button tap. Meta localizes the button

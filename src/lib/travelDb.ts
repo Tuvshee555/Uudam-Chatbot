@@ -1639,7 +1639,7 @@ export function isReasonableSeats(value: number | null | undefined) {
 // so fast-path reply builders can use the same check without pulling in the
 // database layer.
 export { isGenericConfirmationText } from "./travelFastPathsSearch";
-import { isGenericConfirmationText } from "./travelFastPathsSearch";
+import { isGenericConfirmationText, sanitizeTripForCustomers } from "./travelFastPathsSearch";
 
 export function isOptionalAddOnCostConflict(value: string): boolean {
   const normalized = normalizeLookupText(value);
@@ -1748,7 +1748,10 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
   };
 
   const modules = visibleTrips
-    .map((trip) => {
+    .map((rawTrip) => {
+    // Customer-facing view: fixes data-entry slips (infant band "0-23 нас",
+    // price-group dates that are not real departures) before the model sees them.
+    const trip = sanitizeTripForCustomers(rawTrip);
     const details: string[] = [];
     // Category is the transport differentiator (газрын / шууд нислэгтэй /
     // хосолсон) — without it the bot cannot distinguish the three "Бээжин"

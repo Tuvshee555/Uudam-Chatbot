@@ -116,6 +116,96 @@ const GENERIC_ROUTE_WORDS = new Set([
   "program",
   "pdf",
   "хөтөлбөр",
+  // Request verbs from the "Хөтөлбөр үзэх" / "Зураг үзэх" buttons and everyday
+  // phrasing. They are never part of a destination. Without this,
+  // "Хөтөлбөр үзэх" matched the trip "Ордос -намрын тахилга үзэх аялал" on the
+  // single word "үзэх" and two real customers were sent the Ordos PDF while
+  // they were looking at Shanghai.
+  "үзэх",
+  "үзүүлээч",
+  "үзье",
+  "үзмээр",
+  "харах",
+  "харуулаач",
+  "харья",
+  "харъя",
+  // Everyday words that are never a destination but sit one letter (or a shared
+  // prefix) away from words inside trip names: "харин" ("however") ~ "сарын"
+  // ("month's", in "11-р сарын аяллын хөтөлбөр"), "байгаа" ("is there") ~
+  // "байгалийн" ("natural"). Each of these produced a wrong trip list for a real
+  // customer's chit-chat.
+  "сарын",
+  "сар",
+  "харин",
+  "байгаа",
+  "байна",
+  "байдаг",
+  "байх",
+  "гарч",
+  "юу",
+  "уу",
+  "вэ",
+  "бэ",
+  "тэ",
+  "бас",
+  "болон",
+  "гэхдээ",
+]);
+
+/**
+ * Words that make up a price / programme / information request without naming
+ * a destination ("Үнэ", "Хэд хоногийн аялал хэдэн төг вээ", "Аялалын үнэ
+ * сонирхож байна"). Used only by isGenericTripRequest below.
+ */
+const GENERIC_REQUEST_WORDS = new Set([
+  "үнэ",
+  "үнийн",
+  "үнийг",
+  "үнэтэй",
+  "хэд",
+  "хэдэн",
+  "хоног",
+  "хоногийн",
+  "төг",
+  "төгрөг",
+  "вээ",
+  "вэ",
+  "бэ",
+  "уу",
+  "юу",
+  "ямар",
+  "байна",
+  "байгаа",
+  "байдаг",
+  "сонирхож",
+  "сонирхоно",
+  "мэдээлэл",
+  "мэдээ",
+  "авъя",
+  "авья",
+  "авмаар",
+  "авах",
+  "өгөөч",
+  "хэлээч",
+  "хэлээрэй",
+  "хуваарь",
+  "гарах",
+  "гарна",
+  "огноо",
+  "хэзээ",
+  "нийт",
+  "төлбөр",
+  "талаар",
+  "тухай",
+  "аялалууд",
+  "аялалын",
+  "аялалыг",
+  "аялалд",
+  "та",
+  "би",
+  "надад",
+  "манай",
+  "танай",
 ]);
 
 const STRUCTURED_QUERY_SIGNALS = [
@@ -155,6 +245,12 @@ const PROGRAM_QUERY_SIGNALS = [
 const ALIAS_REPLACEMENTS: Array<[RegExp, string]> = [
   [/[бБ]эйд[эеэи]хэ/g, "бэйдайхэ"],
   [/[бБ]айд[эеэи]хэ/g, "бэйдайхэ"],
+  // Zhangjiajie is spelled a dozen ways by customers and in the catalog
+  // ("Жанжиажэ", "ЖАНЖИАЖИЭ", "Жанжио", "Жанжиатай", "Жанжиэжэ"). Every word
+  // starting "жанжи" is that city; Zhangjiakou ("Жанжакоу") starts "жанжа" and is
+  // deliberately not touched. A precise rewrite, unlike fuzzy prefix matching,
+  // cannot collide with unrelated words ("байгаа" vs "байгалийн").
+  [/(?<![\p{L}\p{N}])жанжи\p{L}+/giu, "жанжиажэ"],
   [/\bnaadam\b/gi, "наадам"],
   [/наадмын/gi, "наадам"],
   [/\bnisleggvi\b/gi, "нислэггүй"],
@@ -177,6 +273,14 @@ const ALIAS_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bayalal\b/gi, "аялал"],
   [/\bzurag\b/gi, "зураг"],
   [/\buzi[eй]?\b/gi, "үзье"],
+  // Everyday Latin-typed / mistyped forms of the price and information words.
+  // Real customers wrote "Vne", "Үний", "Aylaluud", "Medeelel avay" as their
+  // whole message and each one was handed off to staff as "no data".
+  [/\b(?:vne|une|unee|unei|unii|uniin)\b/gi, "үнэ"],
+  [/(?<![\p{L}\p{N}])үний(?![\p{L}\p{N}])/giu, "үнэ"],
+  [/\baylaluud\b/gi, "аялалууд"],
+  [/\bmedeelel\b/gi, "мэдээлэл"],
+  [/\b(?:avay|avya|awy|awya|aviy|avii)\b/gi, "авъя"],
   [/\bwith ticket\b/gi, "тийзтэй"],
   [/\bwithout ticket\b/gi, "тийзгүй"],
   [/\bticketless\b/gi, "тийзгүй"],
@@ -643,7 +747,10 @@ function extractQueryMonthDays(text: string): MonthDay[] {
   for (const match of normalized.matchAll(/(\d{1,2})\s*(?:р\s*)?сар(?:ын)?\s*(\d{1,2})/g)) {
     push(Number(match[1]), Number(match[2]));
   }
-  for (const match of normalized.matchAll(/(?<![\d./-])(\d{1,2})[./-](\d{1,2})(?![\d./-])/g)) {
+  // Matched on the RAW text: normText turns "/" "." "-" into spaces, so running
+  // this on `normalized` (as before) meant "10/28", "11/3" and "9-19" were never
+  // recognised as dates — "шанхай аялал 10/28 11/3" got no date boost at all.
+  for (const match of text.toLowerCase().matchAll(/(?<![\d./-])(\d{1,2})[./-](\d{1,2})(?![\d./-])/g)) {
     push(Number(match[1]), Number(match[2]));
   }
 
@@ -679,6 +786,140 @@ function tripHasMonthDay(trip: TravelTrip, date: MonthDay): boolean {
   return dateTexts.some((value) => textHasMonthDay(value, date));
 }
 
+function monthDaysIncludingIso(text: string): MonthDay[] {
+  const values = [...extractQueryMonthDays(text)];
+  for (const match of text.matchAll(/(\d{4})-(\d{2})-(\d{2})/g)) {
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) values.push({ month, day });
+  }
+  return uniqueMonthDays(values);
+}
+
+// An infant band such as "0-23 \u043d\u0430\u0441" is a data-entry slip: every real infant
+// band is in MONTHS ("0-23 \u0441\u0430\u0440"), and the trip data even labels the same fare
+// "0-23 \u0421\u0410\u0420\u0422\u0410\u0419 \u041d\u042f\u0420\u0410\u0419". Read literally, "0-23 years" makes a 4-year-old an
+// infant \u2014 the AI told a real customer exactly that. Only unambiguous upper
+// bounds (18-24) are rewritten, so a genuine "0-2 \u043d\u0430\u0441" is left alone.
+const INFANT_YEARS_SLIP = /^(\s*0\s*[-\u2013\u2014]\s*(?:1[89]|2[0-4])\s*)\u043d\u0430\u0441(\s*)$/i;
+
+function fixInfantAgeUnit(value: unknown): unknown {
+  return typeof value === "string" && INFANT_YEARS_SLIP.test(value)
+    ? value.replace(INFANT_YEARS_SLIP, "$1\u0441\u0430\u0440$2")
+    : value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function sanitizeGroup(
+  group: unknown,
+  departureMonthDays: MonthDay[],
+): unknown {
+  if (!isRecord(group)) return group;
+  let next: Record<string, unknown> = group;
+  const set = (key: string, value: unknown) => {
+    if (next === group) next = { ...group };
+    next[key] = value;
+  };
+
+  if ("infant_age" in group) {
+    const fixed = fixInfantAgeUnit(group.infant_age);
+    if (fixed !== group.infant_age) set("infant_age", fixed);
+  }
+  if (Array.isArray(group.passenger_prices)) {
+    let changed = false;
+    const fixedList = group.passenger_prices.map((entry) => {
+      if (!isRecord(entry)) return entry;
+      const infantish = /\u043d\u044f\u0440\u0430\u0439|infant/i.test(String(entry.label ?? ""));
+      const fixed = infantish ? fixInfantAgeUnit(entry.age_range) : entry.age_range;
+      if (fixed === entry.age_range) return entry;
+      changed = true;
+      return { ...entry, age_range: fixed };
+    });
+    if (changed) set("passenger_prices", fixedList);
+  }
+
+  // A price group's dates that are not among the trip's real departure dates
+  // are left over from an earlier schedule (the top-asked trip carried
+  // "9 \u0441\u0430\u0440\u044b\u043d 19, 10 \u0441\u0430\u0440\u044b\u043d 10" while its only departure was 11 \u0441\u0430\u0440\u044b\u043d 19) and got
+  // quoted next to the real dates. Only compared when the trip lists explicit
+  // dates; weekly / "on demand" text has nothing to compare against.
+  if (departureMonthDays.length > 0 && Array.isArray(group.dates) && group.dates.length > 0) {
+    const kept = group.dates.filter((date) => {
+      const parsed = monthDaysIncludingIso(String(date ?? ""));
+      return (
+        parsed.length === 0 ||
+        parsed.some((md) =>
+          departureMonthDays.some((dep) => dep.month === md.month && dep.day === md.day),
+        )
+      );
+    });
+    if (kept.length !== group.dates.length) {
+      set("dates", kept);
+      if ("display_dates" in group) set("display_dates", kept);
+      set("label", kept.join(", "));
+      if (Array.isArray(group.date_keys)) {
+        set(
+          "date_keys",
+          kept.length === 0
+            ? []
+            : group.date_keys.filter((key) => {
+                const parsed = monthDaysIncludingIso(String(key ?? ""));
+                return (
+                  parsed.length === 0 ||
+                  parsed.some((md) =>
+                    departureMonthDays.some((dep) => dep.month === md.month && dep.day === md.day),
+                  )
+                );
+              }),
+        );
+      }
+    }
+  }
+  return next;
+}
+
+/**
+ * The customer-facing view of a trip. Fixes admin data-entry slips that would
+ * otherwise reach customers as wrong facts (see fixInfantAgeUnit and
+ * sanitizeGroup). Pure and never persisted: the admin still sees, and edits, the
+ * data exactly as entered.
+ */
+export function sanitizeTripForCustomers(trip: TravelTrip): TravelTrip {
+  const extra = trip.extra;
+  if (!isRecord(extra)) return trip;
+
+  const departureMonthDays = uniqueMonthDays(
+    (trip.departure_dates || []).flatMap((value) => monthDaysIncludingIso(String(value ?? ""))),
+  );
+
+  let nextExtra: Record<string, unknown> = extra;
+  const setExtra = (key: string, value: unknown) => {
+    if (nextExtra === extra) nextExtra = { ...extra };
+    nextExtra[key] = value;
+  };
+
+  for (const key of ["price_groups", "departure_date_groups", "discount_groups"]) {
+    const groups = extra[key];
+    if (!Array.isArray(groups)) continue;
+    const cleaned = groups.map((group) => sanitizeGroup(group, departureMonthDays));
+    if (cleaned.some((group, index) => group !== groups[index])) setExtra(key, cleaned);
+  }
+
+  if ("infant_age_range" in extra) {
+    const fixed = fixInfantAgeUnit(extra.infant_age_range);
+    if (fixed !== extra.infant_age_range) setExtra("infant_age_range", fixed);
+  }
+  if (isRecord(extra.age_rules) && "infant" in extra.age_rules) {
+    const fixed = fixInfantAgeUnit(extra.age_rules.infant);
+    if (fixed !== extra.age_rules.infant) setExtra("age_rules", { ...extra.age_rules, infant: fixed });
+  }
+
+  return nextExtra === extra ? trip : { ...trip, extra: nextExtra };
+}
+
 const SHANGHAI_SIGNALS = ["\u0448\u0430\u043d\u0445\u0430\u0439", "shanghai"];
 const ZHANGJIAJIE_TENGER_SIGNALS = [
   "\u0436\u0430\u043d\u0436\u0438\u0430\u0436\u044d",
@@ -691,11 +932,22 @@ function includesAnySignal(text: string, signals: string[]): boolean {
   return signals.some((signal) => text.includes(signal));
 }
 
+// Customers rarely spell Zhangjiajie the way the catalog does: "Жанжио",
+// "Жанжиатай", "Жанжиэжэ", "janjiaje". Any sufficiently long word that starts
+// "жанжи…" is that city — Zhangjiakou ("Жанжакоу") starts "жанжа" and is not
+// caught, which is what keeps the two apart.
+function queryMentionsZhangjiajie(normalizedQuery: string): boolean {
+  if (includesAnySignal(normalizedQuery, ZHANGJIAJIE_TENGER_SIGNALS)) return true;
+  return phoneticLatinText(normalizedQuery)
+    .split(/\s+/)
+    .some((token) => token.length >= 6 && token.startsWith("janji"));
+}
+
 function hasShanghaiZhangjiajieIntent(query: string): boolean {
   const normalizedQuery = normText(query);
   return (
     includesAnySignal(normalizedQuery, SHANGHAI_SIGNALS) &&
-    includesAnySignal(normalizedQuery, ZHANGJIAJIE_TENGER_SIGNALS)
+    queryMentionsZhangjiajie(normalizedQuery)
   );
 }
 
@@ -1489,8 +1741,33 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
 }
 
 export function isStructuredTripQuestion(text: string) {
-  const normalized = normText(text);
+  // "хөтөлбөр" (programme) literally contains "төлбөр" (payment): хө+төлбөр. A
+  // bare "Хөтөлбөр" was therefore a "structured price question", found no trip
+  // and was handed to staff as no-data. Blank the word out before matching so
+  // it is left to the programme path, which knows about the conversation.
+  const normalized = normText(text).replace(/хөтөлбөр\S*/g, " ");
   return STRUCTURED_QUERY_SIGNALS.some((signal) => normalized.includes(signal));
+}
+
+/**
+ * True when the message asks for prices / programme / information but names no
+ * destination at all ("Үнэ", "Хэд хоногийн аялал хэдэн төг вээ", "Aylaluud").
+ * The right response is the question a person would ask — which trip? — not a
+ * hand-off to staff with the bot paused for that customer.
+ *
+ * Deliberately strict: every word must be a known request/filler word, and a
+ * number disqualifies it (a bare digit answers a clarification, "10 сар" names
+ * a date). An unknown word — a city, a trip name — means the customer named
+ * something we may simply not offer ("Жэжү"), which staff should see.
+ */
+export function isGenericTripRequest(text: string): boolean {
+  const tokens = normText(text).split(/\s+/).filter(Boolean);
+  if (tokens.length === 0 || tokens.length > 8) return false;
+  for (const token of tokens) {
+    if (/\d/.test(token)) return false;
+    if (!GENERIC_ROUTE_WORDS.has(token) && !GENERIC_REQUEST_WORDS.has(token)) return false;
+  }
+  return true;
 }
 
 export function hasProgramIntent(text: string) {

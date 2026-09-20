@@ -11,8 +11,10 @@ import { buildContextualUserText, isLikelyContextDependentText } from "../../lib
 import {
   isGetStartedPostback,
   isKnownGreetingPhrase,
+  isThanksOnly,
   isWithinGetStartedQuietWindow,
   MID_CONVERSATION_GREETING_REPLY,
+  THANKS_REPLY,
 } from "../../lib/greetingPhrases";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { fixMojibake } from "../../lib/encoding";
@@ -20,12 +22,12 @@ import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
-import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../../lib/reply";
+import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBot, trackSender } from "../../lib/pause";
 import { createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage, } from "../../lib/travelFastPaths";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, } from "../../lib/travelFastPaths";
 import { buildHandoffReplyWithContact, claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGenericOpener, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
@@ -554,6 +556,20 @@ async function handleMessage(
     return;
   }
 
+  // ── Bare thank-you ─────────────────────────────────────────────────────────
+  // "Баярлалаа" asks nothing. It used to borrow the previous turns' trips and
+  // come back as a list of Hainan trips. Answer it deterministically (also keeps
+  // working when the model is down). Anything beyond thanks goes on as usual.
+  if (isThanksOnly(text)) {
+    await deliverFastPathReply({
+      reply: THANKS_REPLY,
+      failTag: "thanks_fast_path",
+      rememberSource: "api.webhook.thanks_fast_path",
+      counter: "webhook.thanks_fast_path_total",
+    });
+    return;
+  }
+
   // ── Seasonal album on keyword match ────────────────────────────────────────
   const seasonsEnabledGlobal = (botSettings.extra as Record<string, unknown>)?.seasons_enabled !== false;
   if (platform === "facebook" && token && seasonsEnabledGlobal) {
@@ -1039,7 +1055,7 @@ async function handleMessage(
   let cachedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
   const getTrips = async () => {
     if (cachedTrips) return cachedTrips;
-    cachedTrips = await listTrips({ limit: 5000 });
+    cachedTrips = (await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers);
     return cachedTrips;
   };
   // Only fetched on the miss path (nothing in the active catalogue matched),
@@ -1219,6 +1235,18 @@ async function handleMessage(
         !hasDiscountIntent(text) &&
         !hasSeatsIntent(text)
       ) {
+        // No destination named at all ("Үнэ", "Хөтөлбөр", "Хэд хоногийн аялал
+        // хэдэн төг вээ"): ask which trip. Handing this to staff and pausing
+        // the bot was the most common way a real customer got no answer.
+        if (isGenericTripRequest(text)) {
+          await deliverFastPathReply({
+            reply: WHICH_TRIP_CLARIFY_REPLY,
+            failTag: "generic_trip_request",
+            rememberSource: "api.webhook.generic_trip_request",
+            counter: "webhook.generic_trip_request_total",
+          });
+          return;
+        }
         await deliverFastPathReply({
           reply: "REFER",
           failTag: "structured_trip_not_found",
@@ -1593,6 +1621,17 @@ async function handleMessage(
   // guessing on the next message), and tell the customer a human is taking
   // over — same acknowledgement whether the cause was missing data or an AI
   // outage.
+  if (isReferReply(aiReply) && !aiOutage && isGenericTripRequest(text)) {
+    // "Aylaluud", "Medeelel avay": no destination named, so the model had
+    // nothing to look up and said REFER. Ask which trip rather than paging staff.
+    await deliverFastPathReply({
+      reply: WHICH_TRIP_CLARIFY_REPLY,
+      failTag: "generic_trip_request_ai",
+      rememberSource: "api.webhook.generic_trip_request_ai",
+      counter: "webhook.generic_trip_request_total",
+    });
+    return;
+  }
   if (isReferReply(aiReply)) {
     logInfo("webhook.ai_refer", {
       requestId: trace?.requestId,

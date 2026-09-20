@@ -20,7 +20,7 @@ import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceW
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { dbGetRecentAdminMessages, getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage } from "../../lib/travelFastPaths";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage , sanitizeTripForCustomers } from "../../lib/travelFastPaths";
 import { extractTripPhotosForReply, extractTripPhotosForUserMessage, hasTripPhotoIntent, MAX_TRIP_PHOTOS } from "../../lib/welcomeFlow";
 import { CONTACT_OPERATOR_LABEL, DUPLICATE_REPLY_NUDGE, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
 import { getEnv } from "../../lib/env";
@@ -350,7 +350,7 @@ export default async function handler(
       let cachedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
       const getTrips = async () => {
         if (cachedTrips) return cachedTrips;
-        cachedTrips = await listTrips({ limit: 5000 });
+        cachedTrips = (await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers);
         return cachedTrips;
       };
       // Only fetched on the miss path (nothing in the active catalogue

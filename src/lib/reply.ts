@@ -27,6 +27,15 @@ export const TRIP_MEDIA_UNAVAILABLE_SILENT = "NOTRIPMEDIA";
 export const NO_DATA_HANDOFF_REPLY =
   "Энэ асуултыг манай аяллын зөвлөхөд дамжууллаа. Мэдээллийг шалгаад танд энд хариу өгнө 🙏";
 
+/**
+ * Asked when a customer wants a price / programme / information but names no
+ * trip ("Үнэ", "Хөтөлбөр", "Хэд хоногийн аялал хэдэн төг вээ"). Staff hand-off
+ * (and a paused bot) is for questions the bot truly cannot answer; this one it
+ * can, by asking the same thing a person would.
+ */
+export const WHICH_TRIP_CLARIFY_REPLY =
+  "Аль аяллын талаар асууж байна вэ? 😊 Чиглэл (жишээ нь хотын нэр) эсвэл аяллын нэрээ бичвэл үнэ, хөтөлбөр, гарах өдрийг нь шууд хэлье.";
+
 export const AI_OUTAGE_HANDOFF_REPLY =
   "Таны асуултыг аяллын зөвлөхөд дамжууллаа. Мэдээллийг шалгаад танд энд хариу өгнө 🙏";
 

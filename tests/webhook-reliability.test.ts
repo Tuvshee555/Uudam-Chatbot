@@ -807,3 +807,65 @@ test("webhook stays silent to the customer when OpenAI is down (outage is never 
     globalThis.fetch = originalFetch;
   }
 });
+
+async function runInstagramText(senderId: string, mid: string, text: string) {
+  applyTestEnv();
+  const handler = await loadWebhookHandler();
+  const originalFetch = globalThis.fetch;
+  const sends: string[] = [];
+  let openAiCalls = 0;
+
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.includes("api.openai.com")) {
+      openAiCalls += 1;
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "REFER" } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+        { status: 200 },
+      );
+    }
+    if (url.includes("/messages")) {
+      sends.push(String(init?.body || ""));
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const result = await callWebhook(handler, {
+      object: "instagram",
+      entry: [{ id: `ig-page-${senderId}`, messaging: [{ sender: { id: senderId }, message: { mid, text } }] }],
+    });
+    assert.equal(result.statusCode, 200);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  return { sends, openAiCalls };
+}
+
+test("a bare price question with no trip named asks which trip, instead of handing off to staff", async () => {
+  for (const [index, text] of ["Үнэ", "Vne", "Хэд хоногийн аялал хэдэн төг вээ"].entries()) {
+    const { sends } = await runInstagramText(`ig-user-generic-${index}`, `ig-mid-generic-${index}`, text);
+    assert.equal(sends.length, 1, `"${text}" must get exactly one reply`);
+    assert.match(sends[0], /Аль аяллын талаар асууж байна вэ/, `"${text}" must ask which trip`);
+    assert.doesNotMatch(sends[0], /зөвлөхөд дамжууллаа/, `"${text}" must not be handed off as no-data`);
+  }
+});
+
+test("a bare thank-you gets a short friendly reply and never a trip list", async () => {
+  const { sends, openAiCalls } = await runInstagramText("ig-user-thanks", "ig-mid-thanks-1", "Баярлалаа");
+  assert.equal(sends.length, 1);
+  assert.match(sends[0], /Зүгээр ээ/);
+  assert.doesNotMatch(sends[0], /сонголт байна|₮/);
+  assert.equal(openAiCalls, 0, "a thank-you must not need the model (works during an AI outage)");
+});
+
+test("a typed greeting variant is answered as a greeting, not handed off", async () => {
+  const { sends } = await runInstagramText("ig-user-greet-typo", "ig-mid-greet-typo-1", "сайн сайн байна уу?");
+  assert.equal(sends.length, 1);
+  assert.match(sends[0], /Сайн байна уу/);
+  assert.doesNotMatch(sends[0], /зөвлөхөд дамжууллаа/);
+});
