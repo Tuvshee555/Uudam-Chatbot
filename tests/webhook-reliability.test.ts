@@ -900,3 +900,13 @@ test("a bare number with no numbered question pending gets no reply (not a welco
     assert.equal(openAiCalls, 0, `"${text}" must not be sent to the model to be guessed at`);
   }
 });
+
+test("catalog maintenance status text is logged but not answered as a customer question", async () => {
+  const { sends, openAiCalls } = await runInstagramText(
+    "ig-user-catalog-note",
+    "ig-mid-catalog-note-1",
+    "10 сарын 8-ны шанхай суудал дүүрсэн - 5 шөнө 6 өдөртэйй",
+  );
+  assert.deepEqual(sends, [], "catalog/status notes must not get a customer-facing reply");
+  assert.equal(openAiCalls, 0, "catalog/status notes must not be sent to the model");
+});

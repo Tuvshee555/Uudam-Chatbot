@@ -6,6 +6,7 @@ import {
   isKnownGreetingPhrase,
   isThanksOnly,
 } from "../src/lib/greetingPhrases";
+import { isLikelyCatalogMaintenanceText } from "../src/lib/customerTextClassification";
 import { isLikelyContextDependentText } from "../src/lib/contextualText";
 import type { TravelTrip } from "../src/lib/travelTypes";
 
@@ -497,6 +498,29 @@ test("naming a sold-out trip says it is full and offers open alternatives — ne
     assert.match(reply!, /суудал дууссан/);
     assert.match(reply!, /нээлттэй|ижил/, "open alternatives are offered");
   }
+});
+
+test("catalog/status maintenance rows are silenced before price or budget routing", async () => {
+  assert.equal(
+    isLikelyCatalogMaintenanceText("10 сарын 8-ны шанхай суудал дүүрсэн - 5 шөнө 6 өдөртэйй"),
+    true,
+  );
+  assert.equal(
+    isLikelyCatalogMaintenanceText("ШАНХАЙ - ДИСНЕЙЛЭНД-10/08 суудал дүүрсэн - 6 хоног 5 шөнө"),
+    true,
+  );
+  assert.equal(
+    isLikelyCatalogMaintenanceText("10 сарын 8-ны Шанхай Диснейлэнд суудал дүүрсэн үү?"),
+    false,
+  );
+  assert.equal(
+    isLikelyCatalogMaintenanceText("10 сарын 8-ны Шанхай Диснейлэнд 5 шөнө 6 өдөртэй юу?"),
+    false,
+  );
+  assert.equal(
+    isLikelyCatalogMaintenanceText("5 сая шилжүүлсэн"),
+    false,
+  );
 });
 
 test("a generic destination question never gets a sold-out answer, and an active trip named exactly wins", async () => {

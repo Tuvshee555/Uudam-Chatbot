@@ -6,6 +6,7 @@ import { BOT_MESSAGE_METADATA, replyToComment, sendImageMessage, sendQuickReplie
 import { sendQuickReplies as sendIgQuickReplies } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { getClarificationState } from "../../lib/clarificationState";
+import { isLikelyCatalogMaintenanceText } from "../../lib/customerTextClassification";
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone } from "../../lib/conversation";
 import { buildContextualUserText, isLikelyContextDependentText } from "../../lib/contextualText";
@@ -1084,6 +1085,51 @@ async function handleMessage(
     return routedCache;
   };
   const getFastPathText = async (): Promise<string> => (await getRouted()).matchText;
+
+  // Staff/catalog maintenance notes are not customer questions. They often
+  // contain dates, "суудал дүүрсэн", and duration numbers; answering those as
+  // prices or availability is exactly how a "5 шөнө" row turns into a bogus
+  // "5 сая" conversation. Save the inbound text for the inbox, alert staff,
+  // and stay quiet to the customer.
+  if (isLikelyCatalogMaintenanceText(text)) {
+    try {
+      if (!(await hasRecentOpenLead(senderId, "handoff"))) {
+        await createLead({
+          kind: "handoff",
+          platform,
+          senderId,
+          customerMessage: text,
+          contactPhone: detectedPhone || "",
+          context: "Дотоод каталог/status тэмдэглэл шиг харагдсан тул бот автоматаар хариулаагүй.",
+        });
+        await notifyStaffOfLead(
+          { kind: "handoff", platform, customerMessage: text, contactPhone: detectedPhone || "" },
+          {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            source: "api.webhook.catalog_note_suppressed",
+          },
+        );
+      }
+    } catch (error) {
+      logWarn("webhook.catalog_note_lead_failed", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+        classification: classifyError(error),
+      });
+    }
+    logInfo("webhook.catalog_note_suppressed", {
+      requestId: trace?.requestId,
+      correlationId: trace?.correlationId,
+      platform,
+      senderHash: hashIdentifier(senderId),
+    });
+    recordCounter("webhook.catalog_note_suppressed_total", 1, { platform });
+    await rememberTurn("api.webhook.catalog_note_suppressed");
+    return;
+  }
 
   // A payment/booking confirmation claim ("5 сая шилжүүлсэн") must be
   // acknowledged BEFORE any trip/date/price fast-path runs below — those are

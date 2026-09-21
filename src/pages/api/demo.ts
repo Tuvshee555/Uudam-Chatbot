@@ -10,6 +10,7 @@ import {
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone } from "../../lib/conversation";
 import { buildContextualUserText } from "../../lib/contextualText";
+import { isLikelyCatalogMaintenanceText } from "../../lib/customerTextClassification";
 import { isKnownGreetingPhrase, MID_CONVERSATION_GREETING_REPLY } from "../../lib/greetingPhrases";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
@@ -373,6 +374,20 @@ export default async function handler(
         return routedCache;
       };
       const getFastPathText = async (): Promise<string> => (await getRouted()).matchText;
+
+      if (isLikelyCatalogMaintenanceText(normalizedText)) {
+        await appendMessage(sessionId, "user", normalizedText);
+        await rememberTurn();
+        recordCounter("demo.catalog_note_suppressed_total", 1, {});
+        return res.status(200).json({
+          reply: "",
+          buttons: [],
+          mediaUrls: [],
+          brochureUrl: null,
+          handoff: true,
+          silent: true,
+        });
+      }
 
       // A payment/booking confirmation claim ("5 сая шилжүүлсэн") must be
       // acknowledged BEFORE any trip/date/price fast-path runs — those are
