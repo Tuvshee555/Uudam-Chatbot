@@ -11,17 +11,20 @@ import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone } from "../../lib/conversation";
 import { buildContextualUserText } from "../../lib/contextualText";
 import { isLikelyCatalogMaintenanceText } from "../../lib/customerTextClassification";
-import { isKnownGreetingPhrase, MID_CONVERSATION_GREETING_REPLY } from "../../lib/greetingPhrases";
+import { isKnownGreetingPhrase, isThanksOnly, MID_CONVERSATION_GREETING_REPLY, THANKS_REPLY } from "../../lib/greetingPhrases";
+import { stripTripNamesForIntent } from "../../lib/customerTurn";
+import { buildCatalogListingReply } from "../../lib/catalogListing";
+import { setClarificationState } from "../../lib/clarificationState";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
-import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting } from "../../lib/reply";
+import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { dbGetRecentAdminMessages, getTravelBotSettings, listTrips } from "../../lib/travelOps";
-import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isStructuredTripQuestion, resolveTripFromUserMessage , sanitizeTripForCustomers, filterTripsByTransportIntent } from "../../lib/travelFastPaths";
+import { hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply } from "../../lib/travelFastPaths";
 import { extractTripPhotosForReply, extractTripPhotosForUserMessage, hasTripPhotoIntent, MAX_TRIP_PHOTOS } from "../../lib/welcomeFlow";
 import { CONTACT_OPERATOR_LABEL, DUPLICATE_REPLY_NUDGE, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
 import { getEnv } from "../../lib/env";
@@ -300,6 +303,14 @@ export default async function handler(
         });
       }
 
+      // A bare thank-you asks nothing (mirrors the webhook's thanks fast path).
+      if (!isEnglishDemo && isThanksOnly(normalizedText)) {
+        await appendMessage(sessionId, "user", normalizedText);
+        await appendMessage(sessionId, "assistant", THANKS_REPLY);
+        await rememberTurn();
+        return res.status(200).json({ reply: THANKS_REPLY, buttons: [], mediaUrls: [], brochureUrl: null });
+      }
+
       // Handoff request (contact-operator button tap or a handoff keyword):
       // Messenger returns the configured handoff message. The production webhook
       // also pauses the bot + creates a lead — those are side effects a text
@@ -374,6 +385,8 @@ export default async function handler(
         return routedCache;
       };
       const getFastPathText = async (): Promise<string> => (await getRouted()).matchText;
+      // Same as the webhook: intent comes from the customer's words, trip names removed.
+      const intentText = stripTripNamesForIntent(normalizedText, await getTrips());
 
       if (isLikelyCatalogMaintenanceText(normalizedText)) {
         await appendMessage(sessionId, "user", normalizedText);
@@ -430,7 +443,7 @@ export default async function handler(
       // Compare questions mention multiple destinations on purpose. Let the
       // comparison fast path answer before scoped clarification narrows to one
       // destination family and turns "A уу B уу?" into "which A variant?".
-      if (hasCompareIntent(normalizedText)) {
+      if (hasCompareIntent(intentText)) {
         const trips = await getTrips();
         const compareReply = buildCompareReply(await getFastPathText(), trips);
         if (compareReply) {
@@ -454,7 +467,9 @@ export default async function handler(
         if (routed.scopedClarify && routed.scopedClarify.length > 0) {
           const totalReply = buildAmbiguousPassengerTotalReply(await getFastPathText(), routed.scopedClarify);
           const clarifyBody = routed.scopedClarifyNote
-            ? `${routed.scopedClarifyNote}\n${totalReply || buildAmbiguousTripReply(routed.scopedClarify)}`
+            ? totalReply
+              ? `${routed.scopedClarifyNote}\n${totalReply}`
+              : buildAmbiguousTripReply(routed.scopedClarify, routed.scopedClarifyNote)
             : totalReply || buildAmbiguousTripReply(routed.scopedClarify);
           const clarifyReply = enforceWebsiteForPayment(
             sanitizeAssistantReply(clarifyBody),
@@ -470,12 +485,32 @@ export default async function handler(
         }
       }
 
+      // Mirrors the webhook: a trip the customer named that is sold out, and a
+      // question about the catalog when no trip is named.
+      {
+        const soldOutReply = buildSoldOutPrecedenceReply(normalizedText, await getTrips());
+        const listing = soldOutReply ? null : buildCatalogListingReply(intentText, await getTrips());
+        const listingApplies = listing &&
+          resolveTripFromUserMessage(await getFastPathText(), await getTrips(), { allowLooseFallback: false }).status === "not_found";
+        if (soldOutReply || listingApplies) {
+          if (listingApplies) await setClarificationState(sessionId, listing!.listed.map((trip) => trip.id));
+          const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(soldOutReply || listing!.reply));
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
+          return res.status(200).json({
+            reply: soldOutReply ? appendLeadCaptureCta(safeReply, phoneAlreadyRequested) : safeReply,
+            buttons: listingApplies ? buildClarificationButtons(listing!.listed) : [],
+          });
+        }
+      }
+
       // Broad structured questions ("Бээжин аялал хэд вэ?") should clarify
       // from the DB when several active trips match. Do not send these to the
       // model and risk a silent REFER.
       {
         const fastPathText = await getFastPathText();
-        if (isStructuredTripQuestion(fastPathText)) {
+        if (isStructuredTripQuestion(intentText)) {
           const archivedNotice = buildArchivedTripNotice(
             fastPathText,
             await getArchivedTrips(),
@@ -515,27 +550,30 @@ export default async function handler(
           }
           if (
             resolution.status === "not_found" &&
-            !hasDepartureDateAvailabilityIntent(normalizedText) &&
-            !hasCompareIntent(normalizedText) &&
-            !hasBudgetIntent(normalizedText) &&
-            !hasDiscountIntent(normalizedText) &&
-            !hasSeatsIntent(normalizedText)
+            !hasDepartureDateAvailabilityIntent(intentText) &&
+            !hasCompareIntent(intentText) &&
+            !hasBudgetIntent(intentText) &&
+            !hasDiscountIntent(intentText) &&
+            !hasSeatsIntent(intentText)
           ) {
             recordCounter("demo.structured_trip_not_found_total", 1, {});
+            // No destination named at all ("Үнэ", "Хөтөлбөр"): ask which trip,
+            // exactly like the webhook.
+            if (isGenericTripRequest(normalizedText)) {
+              await appendMessage(sessionId, "user", normalizedText);
+              await appendMessage(sessionId, "assistant", WHICH_TRIP_CLARIFY_REPLY);
+              await rememberTurn();
+              return res.status(200).json({ reply: WHICH_TRIP_CLARIFY_REPLY, buttons: [] });
+            }
             return returnHandoff();
           }
         }
       }
 
       // Fast path: departure date availability
-      if (hasDepartureDateAvailabilityIntent(normalizedText) && !hasProgramIntent(normalizedText)) {
+      if (hasDepartureDateAvailabilityIntent(intentText) && !hasProgramIntent(intentText)) {
         const trips = await getTrips();
-        const dateFastPathText = await getFastPathText();
-        const dateReply = buildDepartureDateAvailabilityReply({
-          userText: dateFastPathText,
-          trips: filterTripsByTransportIntent(dateFastPathText, trips),
-          focusTrip: resolveFocusTripForDateQuestion(dateFastPathText, trips),
-        });
+        const dateReply = buildDateQuestionReply(intentText, await getFastPathText(), trips);
         if (dateReply) {
           // Mirror the webhook: a booking-intent date question gets nudged for
           // name + phone so the answer ends the same way Messenger's does.
@@ -560,7 +598,21 @@ export default async function handler(
       }
 
       // Fast path: seats availability
-      if (hasSeatsIntent(normalizedText)) {
+      // Fast path: group size after a trip ("11-13хүн байна") — mirrors the webhook.
+      {
+        const trips = await getTrips();
+        const groupReply = buildGroupSizeReply(await getFastPathText(), trips);
+        if (groupReply) {
+          const safeReply = appendLeadCaptureCta(sanitizeAssistantReply(groupReply), phoneAlreadyRequested);
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
+          recordCounter("demo.group_size_total", 1, {});
+          return res.status(200).json({ reply: safeReply, buttons: buildSmartButtons(safeReply, trips) || [] });
+        }
+      }
+
+      if (hasSeatsIntent(intentText)) {
         const trips = await getTrips();
         const seatsReply = buildSeatsReply(await getFastPathText(), trips);
         if (seatsReply) {
@@ -581,7 +633,7 @@ export default async function handler(
       }
 
       // Fast path: cheapest / under-budget questions
-      if (hasBudgetIntent(normalizedText)) {
+      if (hasBudgetIntent(intentText)) {
         const trips = await getTrips();
         const budgetReply = buildBudgetReply(await getFastPathText(), trips);
         if (budgetReply) {
@@ -602,7 +654,7 @@ export default async function handler(
       }
 
       // Fast path: discount query
-      if (hasDiscountIntent(normalizedText)) {
+      if (hasDiscountIntent(intentText)) {
         const trips = await getTrips();
         const discountReply = buildDiscountReply(await getFastPathText(), trips);
         if (discountReply) {
@@ -627,7 +679,7 @@ export default async function handler(
       // trip it is must never get a DIFFERENT trip's price stated back as if
       // it matched. When no trip's price matches, hand off rather than let
       // the model improvise a nearby-priced trip.
-      if (hasStandalonePriceLookupIntent(normalizedText)) {
+      if (hasStandalonePriceLookupIntent(intentText)) {
         const trips = await getTrips();
         const priceLookupReply = buildStandalonePriceLookupReply(await getFastPathText(), trips);
         await appendMessage(sessionId, "user", normalizedText);

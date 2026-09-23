@@ -179,7 +179,9 @@ function explicitDateCandidates(
   // the "12-01" inside a full ISO date like "2025-12-01" (already captured, with
   // its real year, by the regex above). Without them the fragment was re-parsed
   // as the CURRENT year, so an explicitly past-year date looked like a future one.
-  for (const match of text.matchAll(/(?<![\d./-])(\d{1,2})[./-](\d{1,2})(?![\d./-])/g)) {
+  // …and "11-13хүн", "2-11 нас", "3-4 сая" are counts, ages and money, not
+  // November 13th (a group-size answer was read back as a date question).
+  for (const match of text.matchAll(/(?<![\d./-])(\d{1,2})[./-](\d{1,2})(?![\d./-])(?!\s*(?:хүн|hun|нас|nas|сая|saya|кг|kg|хоног|шөнө|өдөр|удаа|мянга|₮|төг))/gi)) {
     const month = Number(match[1]);
     const day = Number(match[2]);
     push(resolveYear(month, day), month, day);
@@ -321,15 +323,39 @@ export function resolveDepartureDatesAtWrite(
   });
 }
 
+/**
+ * A departure that already LEFT but was saved afterwards, so write-time
+ * roll-forward froze it a year ahead: a date saved five days after it passed
+ * became that date NEXT year and kept being quoted as the first departure
+ * (seen 2026-09-21). Only when the trip's current season is still running
+ * (another date later this year): a genuine next-year series is untouched.
+ */
+const STALE_ROLL_FORWARD_DAYS = 120;
+
+function isStaleRollForward(ymd: string, resolved: ResolvedDepartureDate[], now: Date): boolean {
+  const today = getMongoliaDateParts(now);
+  const [year, month, day] = ymd.split("-").map(Number);
+  if (year !== today.year + 1 || !isValidDateParts(today.year, month, day)) return false;
+  const thisYear = { year: today.year, month, day };
+  const todayYmd = toYmd(today);
+  if (toYmd(thisYear) >= todayYmd || daysBetween(thisYear, today) > STALE_ROLL_FORWARD_DAYS) return false;
+  return resolved.some(
+    (entry) => typeof entry?.ymd === "string" && entry.ymd.startsWith(`${today.year}-`) && entry.ymd >= todayYmd,
+  );
+}
+
 /** Builds a text→ymd lookup from a stored resolved list (ignores blank text). */
 function resolvedLookup(
   resolved?: ResolvedDepartureDate[] | null,
+  now = new Date(),
 ): Map<string, string | null> | null {
   if (!Array.isArray(resolved) || resolved.length === 0) return null;
   const map = new Map<string, string | null>();
   for (const entry of resolved) {
     if (entry && typeof entry.text === "string") {
-      map.set(entry.text, typeof entry.ymd === "string" ? entry.ymd : null);
+      const ymd = typeof entry.ymd === "string" ? entry.ymd : null;
+      // A stale roll-forward is last year's (past) departure, not next year's.
+      map.set(entry.text, ymd && isStaleRollForward(ymd, resolved, now) ? `${Number(ymd.slice(0, 4)) - 1}${ymd.slice(4)}` : ymd);
     }
   }
   return map;
@@ -353,7 +379,7 @@ export function filterFutureDepartureDates(
   resolved?: ResolvedDepartureDate[] | null,
 ): string[] {
   const todayYmd = toYmd(getMongoliaDateParts(now));
-  const lookup = resolvedLookup(resolved);
+  const lookup = resolvedLookup(resolved, now);
   return (dates || []).filter((dateText) => {
     const key = String(dateText || "");
     if (lookup && lookup.has(key)) {
@@ -364,6 +390,28 @@ export function filterFutureDepartureDates(
     if (parsed.length === 0) return true;
     return parsed.some((ymd) => ymd >= todayYmd);
   });
+}
+
+/**
+ * Customer-facing order: recurring/flexible text first ("Ням гараг бүр"), then
+ * calendar dates earliest first. The catalog stores dates in entry order and
+ * one trip was quoted with its November and December dates first and the
+ * soonest (October) departure last and cut off. Never used when writing dates back.
+ */
+export function sortDepartureDatesForDisplay(
+  dates: string[],
+  now = new Date(),
+  resolved?: ResolvedDepartureDate[] | null,
+): string[] {
+  const lookup = resolvedLookup(resolved, now);
+  const keyOf = (text: string) => {
+    const ymd = lookup?.get(text) ?? parseTripDepartureDateText(text, now)[0] ?? null;
+    return ymd || "";
+  };
+  return (dates || [])
+    .map((text, index) => ({ text, index, key: keyOf(String(text || "")) }))
+    .sort((a, b) => (a.key === b.key ? a.index - b.index : a.key.localeCompare(b.key)))
+    .map((entry) => entry.text);
 }
 
 export type DepartureDatePruneResult = {
@@ -401,22 +449,47 @@ function isDepartureAvailabilityQuestion(text: string): boolean {
   }
 
   const hasTravelSignal =
-    /аялал|aylal|tour|trip|гар|garah|гарах|явах|yavah|departure|өдөр|ognoo|date/.test(
+    /аялал|aylal|tour|trip|гар|garah|гарах|явах|yavah|yavaad|yvah|ywah|явж|явъя|явна|ирэх|ireh|departure|өдөр|ognoo|date/.test(
       normalized,
     );
   const hasQuestionSignal =
-    /байна|baina|\?|уу|uu|боломж|bolomj|available|гарах|garah|явах|yavah/.test(
+    /байна|baina|\?|уу|uu|юу|бий|байгаа|бга|бну|bga|bnu|боломж|bolomj|available|гарах|garah|явах|yavah/.test(
       normalized,
     );
 
   return hasTravelSignal && hasQuestionSignal;
 }
 
+// Words that can surround a bare date/month answer without changing it:
+// "9-19 nd", "10sar", "11 сард бна уу", "10/10-нд".
+const BARE_DATE_FILLER = new Set([
+  "nd", "нд", "д", "т", "нь", "ны", "ний", "nii", "ni", "ын", "ийн", "уу", "үү", "юу", "вэ", "бэ", "бна",
+  "bna", "bnu", "bnuu", "байна", "байгаа", "bga", "бий", "yu", "uu", "ok", "ок", "эхээр", "сүүлээр",
+  "дундуур", "ehend", "suuleer", "эхэнд", "сүүлд", "хооронд", "hoorond", "sard", "сард",
+]);
+
+function isBareDateOrMonthMessage(text: string): boolean {
+  const rest = text
+    .toLowerCase()
+    .replace(/\d{1,4}\s*[./-]\s*\d{1,2}(?:\s*[./-]\s*\d{1,4})?/g, " ")
+    .replace(/\d{1,2}\s*(?:-?\s*р)?\s*(?:сарын|сард|сар|sariin|sard|sar)/g, " ")
+    .replace(/\d+/g, " ")
+    .replace(/[^\p{L}\s]/gu, " ")
+    .split(/\s+/)
+    .filter((word) => word && !BARE_DATE_FILLER.has(word));
+  return rest.length === 0;
+}
+
 export function hasDepartureDateAvailabilityIntent(text: string, now = new Date()): boolean {
   const requestedDate = resolveRequestedDate(text, now);
   const requestedMonth = resolveRequestedMonth(text, now);
-  if (!requestedDate && !requestedMonth) return false;
+  const requestedRange = resolveRequestedRange(text, now);
+  if (!requestedDate && !requestedMonth && !requestedRange) return false;
   if (isDepartureAvailabilityQuestion(text)) return true;
+  // A date or month on its own, typically answering "which departure?" after a
+  // trip card ("10sar", "9-19 nd"). It used to reach no fast path and the trip
+  // card came back as "✈️ … Энэ аялал шууд нислэгтэй" with no dates at all.
+  if (isBareDateOrMonthMessage(text)) return true;
   const normalized = text.toLowerCase();
   if (/үнэ|үнийн|хэд\s*вэ|хэдээр|төлбөр|төгрөг|₮|\bmnt\b|\bcny\b|\busd\b|price|cost/i.test(normalized)) {
     return false;
@@ -425,7 +498,7 @@ export function hasDepartureDateAvailabilityIntent(text: string, now = new Date(
     /\b(?:trip|trips|tour|tours|aylal|travel)\b|\u0430\u044f\u043b\u0430\u043b|\u0430\u044f\u043b\u043b\u0443\u0443\u0434/i.test(
       normalized,
     );
-  if (requestedDate) return hasTravelOrPriceSignal;
+  if (requestedDate || requestedRange) return hasTravelOrPriceSignal;
   if (!requestedMonth) return false;
 
   return hasTravelOrPriceSignal;
@@ -461,11 +534,27 @@ function formatTripSummary(match: DepartureDateMatch): string {
 function tripDateYmds(trip: TravelTrip, dateText: string, now: Date): string[] {
   const resolved = ((trip.extra || {}) as Record<string, unknown>)
     .departure_dates_resolved as ResolvedDepartureDate[] | undefined;
-  if (Array.isArray(resolved)) {
-    const hit = resolved.find((entry) => entry && entry.text === dateText);
-    if (hit) return hit.ymd ? [hit.ymd] : [];
+  const lookup = resolvedLookup(resolved, now);
+  if (lookup && lookup.has(dateText)) {
+    const ymd = lookup.get(dateText);
+    return ymd ? [ymd] : [];
   }
   return parseTripDepartureDateText(dateText, now);
+}
+
+/**
+ * Does the trip still depart in this calendar month (today or later)? Weekly
+ * and flexible schedules ("Ням гараг бүр", "групп бүрдсэн огноогоор") run in
+ * every month.
+ */
+export function tripDepartsInMonth(trip: TravelTrip, month: number, now = new Date()): boolean {
+  const todayYmd = toYmd(getMongoliaDateParts(now));
+  for (const dateText of trip.departure_dates || []) {
+    const ymds = tripDateYmds(trip, dateText, now);
+    if (ymds.some((ymd) => ymd >= todayYmd && Number(ymd.slice(5, 7)) === month)) return true;
+    if (ymds.length === 0 && dateText.trim() && !/\d/.test(dateText)) return true;
+  }
+  return false;
 }
 
 const MN_WEEKDAY_PATTERNS: Array<{ day: number; pattern: RegExp }> = [
@@ -604,26 +693,76 @@ function findMonthDepartures(
 // Oct 20 alone.
 const DATE_RANGE_RE = /(\d{1,2})\s*(?:-?р\s*)?сар(?:ын)?\s*(\d{1,2})\s*[-–—]\s*(\d{1,2})(?!\d)/i;
 
-function resolveRequestedRange(
-  text: string,
-  now: Date,
-): { startYmd: string; endYmd: string; month: number; startDay: number; endDay: number } | null {
-  const match = DATE_RANGE_RE.exec(text.normalize("NFKC"));
-  if (!match) return null;
-  const month = Number(match[1]);
-  const startDay = Number(match[2]);
-  const endDay = Number(match[3]);
-  if (month < 1 || month > 12 || startDay < 1 || endDay <= startDay || endDay > 31) return null;
-  const start = resolveRequestedDate(`${month} сарын ${startDay}`, now);
-  if (!start) return null;
-  const [year, monthPart] = start.ymd.split("-");
-  return {
-    startYmd: start.ymd,
-    endYmd: `${year}-${monthPart}-${String(endDay).padStart(2, "0")}`,
-    month,
-    startDay,
-    endDay,
-  };
+// "9.30-10.20", "10/28 - 11/3": a window across months. The single-date
+// parser can't read these at all (its lookarounds reject a date glued to a
+// dash), so "9.30-10.20ний хооронд … аялал байгаа юу" got no date answer.
+const CROSS_MONTH_RANGE_RE = /(?<![\d./-])(\d{1,2})[./](\d{1,2})\s*[-–—]\s*(\d{1,2})[./](\d{1,2})(?![\d./])/;
+
+// "9 сарын сүүлээр 10 сарын эхээр": parts of a month, in customer words.
+const MONTH_PART_RE =
+  /(\d{1,2})\s*(?:-?\s*р)?\s*(?:сарын|сар|sariin|sar)\s*(эх\S*|ehe\S*|ehn\S*|дунд\S*|dund\S*|сүүл\S*|suul\S*)/gi;
+const MAX_WINDOW_DAYS = 62;
+
+type RequestedRange = { startYmd: string; endYmd: string; label: string };
+
+function lastDayOfMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function rangeLabel(startYmd: string, endYmd: string): string {
+  const [, sm, sd] = startYmd.split("-").map(Number);
+  const [, em, ed] = endYmd.split("-").map(Number);
+  return sm === em ? `${sm} сарын ${sd}–${ed}` : `${sm} сарын ${sd} – ${em} сарын ${ed}`;
+}
+
+function buildRange(startYmd: string, endYmd: string): RequestedRange | null {
+  if (endYmd <= startYmd) return null;
+  const days = (Date.parse(`${endYmd}T00:00:00Z`) - Date.parse(`${startYmd}T00:00:00Z`)) / 86_400_000;
+  if (days > MAX_WINDOW_DAYS) return null;
+  return { startYmd, endYmd, label: rangeLabel(startYmd, endYmd) };
+}
+
+function resolveRequestedRange(text: string, now: Date): RequestedRange | null {
+  const normalized = text.normalize("NFKC");
+  const sameMonth = DATE_RANGE_RE.exec(normalized);
+  if (sameMonth) {
+    const month = Number(sameMonth[1]);
+    const startDay = Number(sameMonth[2]);
+    const endDay = Number(sameMonth[3]);
+    if (month < 1 || month > 12 || startDay < 1 || endDay <= startDay || endDay > 31) return null;
+    const start = resolveRequestedDate(`${month} сарын ${startDay}`, now);
+    if (!start) return null;
+    const [year, monthPart] = start.ymd.split("-");
+    return buildRange(start.ymd, `${year}-${monthPart}-${String(endDay).padStart(2, "0")}`);
+  }
+  const crossMonth = CROSS_MONTH_RANGE_RE.exec(normalized);
+  if (crossMonth) {
+    const start = resolveRequestedDate(`${crossMonth[1]} сарын ${crossMonth[2]}`, now);
+    const end = resolveRequestedDate(`${crossMonth[3]} сарын ${crossMonth[4]}`, now);
+    if (start && end) return buildRange(start.ymd, end.ymd);
+  }
+  // Two separate dates ("10/28 11/3", "10 сарын 28-аас 11 сарын 3 хүртэл").
+  const dates = explicitDateCandidates(normalized, now, "roll-forward", true).map(toYmd).sort();
+  if (dates.length >= 2) return buildRange(dates[0], dates[dates.length - 1]);
+  const parts = Array.from(normalized.matchAll(MONTH_PART_RE));
+  if (parts.length > 0) {
+    const today = getMongoliaDateParts(now);
+    const bounds = parts.flatMap((part) => {
+      const month = Number(part[1]);
+      if (month < 1 || month > 12) return [];
+      const year = month < today.month ? today.year + 1 : today.year;
+      const word = part[2].toLowerCase();
+      const [from, to] = /^(эх|ehe|ehn)/.test(word)
+        ? [1, 10]
+        : /^(дунд|dund)/.test(word)
+          ? [10, 20]
+          : [20, lastDayOfMonth(year, month)];
+      const ymd = (day: number) => toYmd({ year, month, day });
+      return [ymd(from), ymd(to)];
+    }).sort();
+    if (bounds.length > 0) return buildRange(bounds[0], bounds[bounds.length - 1]);
+  }
+  return null;
 }
 
 function findRangeDepartures(
@@ -708,18 +847,40 @@ export function buildDepartureDateAvailabilityReply(input: {
   const focusTrip = input.focusTrip && input.focusTrip.status === "active" ? input.focusTrip : null;
   const scopedTrips = focusTrip ? [focusTrip] : input.trips;
 
+  const todayYmd = toYmd(getMongoliaDateParts(now));
+  // "<when> гарахгүй" must always say WHEN it does leave — the bare "not in
+  // October, ask an advisor" left customers with no dates at all.
+  const nearestAfterMiss = (label: string, fromYmd: string): string | null => {
+    const upcoming = findUpcomingDepartures(scopedTrips, fromYmd < todayYmd ? todayYmd : fromYmd, now);
+    const fallback = upcoming.length > 0 ? upcoming : findUpcomingDepartures(scopedTrips, todayYmd, now);
+    if (focusTrip) {
+      if (fallback.length > 0) {
+        const options = fallback.map(({ ymd }) => `• ${formatCustomerDate(ymd)}`).join("\n");
+        return `${tripPhrase(focusTrip)} ${label} гарахгүй байна. Гарах өдрүүд нь:\n\n${options}`;
+      }
+      const recurring = recurringScheduleTexts(focusTrip, now);
+      if (recurring.length > 0) {
+        return `${tripPhrase(focusTrip)} тогтмол хуваарьтай гардаг: ${recurring.join(", ")}. Тохирох огноог аяллын зөвлөх баталгаажуулж өгнө 🙌`;
+      }
+      return `${tripPhrase(focusTrip)} ${label} гарахаар төлөвлөгдөөгүй байна. Аяллын зөвлөх тодруулж өгөх боломжтой 🙌`;
+    }
+    if (fallback.length === 0) return null;
+    const options = fallback
+      .map(({ ymd, trip }) => `• ${formatCustomerDate(ymd)} — ${trip.route_name}`)
+      .join("\n");
+    return `${label} гарах аялал алга байна. Ойрхон гарах хувилбарууд:\n\n${options}`;
+  };
+
   const range = resolveRequestedRange(input.userText, now);
   if (range) {
     const rangeMatches = findRangeDepartures(scopedTrips, range.startYmd, range.endYmd, now);
     if (rangeMatches.length > 0) {
-      const label = `${range.month} сарын ${range.startDay}–${range.endDay}`;
       const intro = focusTrip
-        ? `Тийм ээ, ${tripPhrase(focusTrip)} ${label}-ны хооронд гарна 😊`
-        : `Тийм ээ, ${label}-ны хооронд гарах аяллууд байна 😊`;
+        ? `Тийм ээ, ${tripPhrase(focusTrip)} ${range.label}-ны хооронд гарна 😊`
+        : `Тийм ээ, ${range.label}-ны хооронд гарах аяллууд байна 😊`;
       return `${intro}\n\n${formatMonthDepartureOptions(rangeMatches)}`;
     }
-    // Nothing inside the range: fall through to the single-date answer, which
-    // offers the nearest departures (or stays silent when there are none).
+    return nearestAfterMiss(`${range.label}-ны хооронд`, range.startYmd) ?? "REFER";
   }
 
   if (!requested) {
@@ -727,12 +888,8 @@ export function buildDepartureDateAvailabilityReply(input: {
     if (!requestedMonth) return null;
     const monthMatches = findMonthDepartures(scopedTrips, requestedMonth, now);
     if (monthMatches.length === 0) {
-      if (!focusTrip) return "REFER";
-      const recurring = recurringScheduleTexts(focusTrip, now);
-      if (recurring.length > 0) {
-        return `${tripPhrase(focusTrip)} тогтмол хуваарьтай гардаг: ${recurring.join(", ")}. ${requestedMonth.month} сарын тодорхой огноог аяллын зөвлөх баталгаажуулж өгнө 🙌`;
-      }
-      return `${tripPhrase(focusTrip)} ${requestedMonth.month} сард гарахаар төлөвлөгдөөгүй байна. Аяллын зөвлөх тодруулж өгөх боломжтой 🙌`;
+      const monthStart = `${requestedMonth.year}-${String(requestedMonth.month).padStart(2, "0")}-01`;
+      return nearestAfterMiss(`${requestedMonth.month} сард`, monthStart) ?? "REFER";
     }
     const options = formatMonthDepartureOptions(monthMatches);
     if (focusTrip) {

@@ -11,11 +11,16 @@
  *   - travelFastPathsPricing.ts  — date/price parsing + price formatting
  */
 
-import { filterFutureDepartureDates, parseDepartureDateText } from "./travelDates";
+import {
+  buildDepartureDateAvailabilityReply,
+  filterFutureDepartureDates,
+  parseDepartureDateText,
+} from "./travelDates";
 import type { TravelTrip } from "./travelOps";
 import {
   DISCOUNT_KEYWORDS_EN,
   DISCOUNT_KEYWORDS_MN,
+  filterTripsByTransportIntent,
   formatMoney,
   getAliases,
   getStructuredDiscounts,
@@ -43,6 +48,7 @@ import {
   type TripProgramReplyResult,
 } from "./travelFastPathsSearch";
 import { buildTripProgramReply } from "./travelFastPathsProgram";
+import { CUSTOMER_TURN_MARK, customerTurn, intentTextOf, joinContextAndTurn } from "./customerTurn";
 import { CONTACT_OPERATOR_LABEL } from "./contactLabels";
 import { SMART_BUTTON_LABELS } from "./smartButtonLabels";
 import { TRIP_MEDIA_UNAVAILABLE_SILENT } from "./reply";
@@ -451,7 +457,9 @@ function buildTripInfoReply(rawTrip: TravelTrip, now = new Date()) {
     lines.push("", "Энэ нь газар + нислэг хосолсон аялал.");
   }
 
-  if (showDepartureSection) {
+  // "Which date?" only when there is a choice — asked under a single date it
+  // reads as if the bot did not see its own list.
+  if (showDepartureSection && trip.departure_dates.length > 1) {
     lines.push("", "Та аль гарах өдрийг сонирхож байна вэ? 😊");
   }
   return lines.join("\n");
@@ -889,18 +897,16 @@ function buildPassengerTotalReply(
   return [`✈️ ${trip.route_name}`, `💰 ${label}нийт: ${formatMoney(total, currency)}`, ...rows].join("\n");
 }
 
-function compactButtonTripName(routeName: string): string {
-  const cleaned = formatRouteName(routeName)
-    .replace(/\s+/g, " ")
-    .trim();
-  if (cleaned.length <= 21) return cleaned;
-  return `${cleaned.slice(0, 20).trim()}…`;
-}
-
+/**
+ * "1. <full trip name>". The label is the quick-reply PAYLOAD, so it carries
+ * the whole name; Messenger shows a shortened title (messenger.ts). A label cut
+ * to 20 characters came back as "1. <first 20 characters>..." — no longer a unique
+ * trip once several names share their first 20 characters.
+ */
 export function buildClarificationButtons(trips: TravelTrip[]): string[] {
   return trips
     .slice(0, 10)
-    .map((trip, index) => `${index + 1}. ${compactButtonTripName(trip.route_name)}`);
+    .map((trip, index) => `${index + 1}. ${formatRouteName(trip.route_name).replace(/\s+/g, " ").trim()}`);
 }
 
 export { SMART_BUTTON_LABELS, SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
@@ -936,6 +942,88 @@ export function resolveFocusTripForDateQuestion(
   const resolution = resolveTripFromUserMessage(text, trips, { allowLooseFallback: false });
   if (resolution.status !== "verified" || !resolution.trip) return null;
   return resolution.trip.status === "active" ? resolution.trip : null;
+}
+
+const DATE_TOKENS_RE =
+  /\d{1,4}\s*[./-]\s*\d{1,2}(?:\s*[./-]\s*\d{1,4})?|\d{1,2}\s*(?:-?\s*р)?\s*(?:сарын|сард|сар|sariin|sard|sar)(?:\s*\d{1,2})?/gi;
+
+/**
+ * Which trips a date question is about.
+ *   - One named trip → `focusTrip`.
+ *   - A destination several trips share ("<хот> 10 сард") → `trips` is just
+ *     those; the catalog-wide answer used to list every trip leaving that
+ *     month, whatever the destination.
+ *   - Nothing named → `trips` is the whole catalog.
+ * The customer's dates are read out of their turn first: "<хот> 10/28 11/3"
+ * picked the one trip whose NAME ends in "-11/3" and answered only for it.
+ */
+export function resolveDateQuestionScope(
+  text: string,
+  trips: TravelTrip[],
+): { focusTrip: TravelTrip | null; trips: TravelTrip[] } {
+  const markIndex = text.lastIndexOf(CUSTOMER_TURN_MARK);
+  const context = markIndex >= 0 ? text.slice(0, markIndex).trim() : "";
+  const dateless = customerTurn(text).replace(DATE_TOKENS_RE, " ").replace(/\s+/g, " ").trim();
+  const resolve = (value: string) => resolveTripFromUserMessage(value, trips, { allowLooseFallback: false });
+  const isActive = (trip: TravelTrip | null | undefined): trip is TravelTrip => trip?.status === "active";
+  // 1. The customer's own words (dates removed).
+  const own = dateless ? resolve(dateless) : null;
+  if (own?.status === "verified" && isActive(own.trip)) return { focusTrip: own.trip, trips };
+  if (own?.status === "ambiguous") {
+    const scoped = own.candidates.filter(isActive);
+    if (scoped.length > 1) return { focusTrip: null, trips: scoped };
+    if (scoped.length === 1) return { focusTrip: scoped[0], trips };
+  }
+  // 2. The trip the conversation is on. Only a context that settles ONE trip
+  // counts — a previous list is not a scope (it hid a trip it had cut off).
+  if (context) {
+    const fromContext = resolve(joinContextAndTurn(context, dateless));
+    if (fromContext.status === "verified" && isActive(fromContext.trip)) {
+      return { focusTrip: fromContext.trip, trips };
+    }
+  }
+  // 3. A date that is part of the trip's own name ("…-12/3" typed in full).
+  const whole = resolve(customerTurn(text));
+  if (whole.status === "verified" && isActive(whole.trip)) return { focusTrip: whole.trip, trips };
+  return { focusTrip: null, trips };
+}
+
+const GROUP_SIZE_RE =
+  /^\s*(?:бид\s*|bid\s*)?(\d{1,3})(?:\s*[-–]\s*(\d{1,3}))?\s*(?:хүн|hun)\S*\s*(?:байна|бна|bna|байгаа|явна|yavna|болно|bolno)?\s*[.!]?\s*$/i;
+
+/**
+ * "11-13хүн байна" right after a trip card: the group size for THAT trip.
+ * With no fast path it reached the model, which answered about an unrelated
+ * trip (replayed from a real 2026-09-21 chat). Quote the per-person price and
+ * leave the group terms to an advisor.
+ */
+export function buildGroupSizeReply(matchText: string, trips: TravelTrip[]): string | null {
+  const size = GROUP_SIZE_RE.exec(customerTurn(matchText));
+  if (!size) return null;
+  const resolution = resolveTripFromUserMessage(matchText, trips, { allowLooseFallback: false });
+  if (resolution.status !== "verified" || resolution.trip?.status !== "active") return null;
+  const trip = resolution.trip;
+  const label = size[2] ? `${size[1]}-${size[2]}` : size[1];
+  const price = formatPassengerMoney(trip.adult_price, trip.currency || "MNT");
+  const lines = [`✈️ ${formatRouteName(trip.route_name)}`];
+  if (price) lines.push(`💰 Том хүн: ${price} (нэг хүний үнэ)`);
+  lines.push("", `${label} хүний группийн нийт үнэ, хөнгөлөлтийг манай аяллын зөвлөх тооцоод хэлж өгнө.`);
+  return lines.join("\n");
+}
+
+/** The date-availability answer shared by the webhook and the demo endpoint. */
+export function buildDateQuestionReply(
+  intentText: string,
+  matchText: string,
+  trips: TravelTrip[],
+): string | null {
+  const scope = resolveDateQuestionScope(matchText, trips);
+  return buildDepartureDateAvailabilityReply({
+    userText: intentText,
+    // Catalog-wide answers honour "шууд нислэгтэй" / "газрын" / "хосолсон".
+    trips: filterTripsByTransportIntent(intentText, scope.trips),
+    focusTrip: scope.focusTrip,
+  });
 }
 
 export function buildCompareReply(text: string, trips: TravelTrip[]): string | null {
@@ -1317,6 +1405,10 @@ export function buildSoldOutPrecedenceReply(text: string, trips: TravelTrip[]): 
   });
   if (unavailableMatches.length === 0) return null;
   const topUnavailable = unavailableMatches[0];
+  // A date is not a name: "[сар].[өдөр] nd yavaad …" matched a sold-out trip
+  // whose NAME ends in that date on its digits alone and was told that trip
+  // was full, though the customer never named any destination (2026-09-22).
+  if (!topUnavailable.matchedWords.some((word) => /\p{L}{4,}/u.test(word))) return null;
   const topActive = findTripMatches(
     text,
     trips.filter((trip) => trip.status === "active"),
@@ -1341,16 +1433,16 @@ export function buildStructuredTripReply(
   trips: TravelTrip[],
   now = new Date(),
 ): string | null {
-  // `text` can be a contextual blob with an earlier turn (often the bot's own
-  // previous reply, full of real dates and prices) prepended before the
-  // customer's actual current message — see contextualText.ts. A combined
-  // date+price query ("7 сарын 9-нд 1,111,111-аар байна уу?" — synthetic
-  // amount) is only ever a
-  // deliberate statement in the CURRENT message; scanning the whole blob lets
-  // stray numbers from the stale previous reply (e.g. an age range "2-10 нас"
-  // read as a date, or an old price) misfire this match. Use only the last
-  // line for this specific detector.
-  const currentLine = text.split("\n").pop() || text;
+  // `text` = context that identifies the trip (a trip name, or the bot's own
+  // previous reply full of real dates and prices) + the customer's marked
+  // turn (customerTurn.ts). `text` is used ONLY to find the trip; every
+  // "what are they asking" check reads `intentText` — the customer's turn with
+  // trip names removed. Stray numbers from a previous reply (an age range
+  // "2-10 нас" read as a date, an old price) and words inside trip names
+  // ("…[сар]-р сарын аяллын хөтөлбөр", "…шууд нислэгтэй…", "…-[сар]/[өдөр]") used to be
+  // answered as if the customer had asked them.
+  const intentText = intentTextOf(text, trips);
+  const currentLine = intentText.replace(/\s*\n\s*/g, " ").trim();
   const standalonePriceLookupReply = buildStandalonePriceLookupReply(currentLine, trips);
   if (standalonePriceLookupReply) return standalonePriceLookupReply;
 
@@ -1360,10 +1452,10 @@ export function buildStructuredTripReply(
     if (combinedReply) return combinedReply;
   }
 
-  const routeOnlyCandidate = !isStructuredTripQuestion(text) && !hasDatePriceConstraint(text)
+  const routeOnlyCandidate = !isStructuredTripQuestion(intentText) && !hasDatePriceConstraint(intentText)
     ? findBestTripMatch(text, trips)
     : null;
-  if (!isStructuredTripQuestion(text) && !hasDatePriceConstraint(text)) {
+  if (!isStructuredTripQuestion(intentText) && !hasDatePriceConstraint(intentText)) {
     if (!routeOnlyCandidate?.best) {
       if (routeOnlyCandidate?.ambiguous?.length) {
         const totalReply = buildAmbiguousPassengerTotalReply(currentLine, routeOnlyCandidate.ambiguous);
@@ -1379,7 +1471,7 @@ export function buildStructuredTripReply(
     // "Энэ аялалд хоол багтсан уу?" is not a structured price/date question, so
     // it lands here — and used to get the generic trip card, which never
     // answers it even though the operator wrote the answer into notes/has_food.
-    const routeOnlyIncluded = buildIncludedInPriceReply(routeOnlyCandidate.best, text);
+    const routeOnlyIncluded = buildIncludedInPriceReply(routeOnlyCandidate.best, intentText);
     if (routeOnlyIncluded) return routeOnlyIncluded;
     return buildTripInfoReply(routeOnlyCandidate.best, now);
   }
@@ -1485,11 +1577,11 @@ export function buildStructuredTripReply(
     : null;
   if (monthPassengerTypeReply) return monthPassengerTypeReply;
 
-  const samePriceReply = buildSameTripPriceComparisonReply(best, text, now);
-  if (samePriceReply && hasSamePriceComparisonIntent(text)) {
+  const samePriceReply = buildSameTripPriceComparisonReply(best, intentText, now);
+  if (samePriceReply && hasSamePriceComparisonIntent(intentText)) {
     return samePriceReply;
   }
-  if (hasSamePriceComparisonIntent(text) && !samePriceReply) {
+  if (hasSamePriceComparisonIntent(intentText) && !samePriceReply) {
     const fallbackLines = [
       `✈️ ${best.route_name}`,
       formatTripBasePricePremium(best, now),
@@ -1500,22 +1592,22 @@ export function buildStructuredTripReply(
     return fallbackLines.join("\n");
   }
 
-  const includedReply = buildIncludedInPriceReply(best, text);
+  const includedReply = buildIncludedInPriceReply(best, intentText);
   if (includedReply) return includedReply;
 
   const lines: string[] = [];
-  const askedPrice = hasPriceIntent(text);
-  const askedDuration = hasDurationIntent(text);
-  const askedSchedule = hasScheduleIntent(text);
-  const askedDirectFlight = hasDirectFlightIntent(text);
-  const askedExistence = hasExistenceIntent(text);
-  const passengerTotalReply = askedPrice ? buildPassengerTotalReply(best, text, now) : null;
+  const askedPrice = hasPriceIntent(intentText);
+  const askedDuration = hasDurationIntent(intentText);
+  const askedSchedule = hasScheduleIntent(intentText);
+  const askedDirectFlight = hasDirectFlightIntent(intentText);
+  const askedExistence = hasExistenceIntent(intentText);
+  const passengerTotalReply = askedPrice ? buildPassengerTotalReply(best, currentLine, now) : null;
   if (passengerTotalReply) return passengerTotalReply;
-  const ageSpecificReply = askedPrice ? buildAgeSpecificPriceReply(best, text) : null;
+  const ageSpecificReply = askedPrice ? buildAgeSpecificPriceReply(best, currentLine) : null;
   if (ageSpecificReply) return ageSpecificReply;
-  const passengerTypeReply = askedPrice ? buildPassengerTypePriceReply(best, text, now) : null;
+  const passengerTypeReply = askedPrice ? buildPassengerTypePriceReply(best, currentLine, now) : null;
   if (passengerTypeReply) return passengerTypeReply;
-  const ticketPreference = askedPrice ? getTicketPreference(text) : null;
+  const ticketPreference = askedPrice ? getTicketPreference(intentText) : null;
   if (ticketPreference) {
     const matchingGroups = getStructuredPriceGroups(best).filter((group) => priceGroupMatchesTicketPreference(group, ticketPreference));
     const filteredReply = formatSelectedPriceGroups(best, matchingGroups, now);
@@ -1694,7 +1786,7 @@ export function buildStructuredTripReply(
     !askedDirectFlight &&
     askedExistence
   ) {
-    lines.push(`🗓 Хугацаа: ${safeDurationText(best.duration_text) || "Мэдээлэл алга байна."}`);
+    if (safeDurationText(best.duration_text)) lines.push(`🗓 Хугацаа: ${safeDurationText(best.duration_text)}`);
     lines.push(formatTripBasePricePremium(best, now));
     if (best.departure_dates.length > 0) {
       const departureText = formatDepartureDates(best).trim();
@@ -1702,12 +1794,14 @@ export function buildStructuredTripReply(
     }
   }
 
-  if (askedDirectFlight && !askedDuration) {
-    lines.push(`🗓 Хугацаа: ${safeDurationText(best.duration_text) || "Хугацааны мэдээлэл алга байна."}`);
+  // Only when known: "Хугацааны мэдээлэл алга байна" ("no duration info") was
+  // sent to a real customer as if it were an answer (2026-09-16).
+  if (askedDirectFlight && !askedDuration && safeDurationText(best.duration_text)) {
+    lines.push(`🗓 Хугацаа: ${safeDurationText(best.duration_text)}`);
   }
 
   if (lines.length === 1) {
-    lines.push(`🗓 Хугацаа: ${safeDurationText(best.duration_text) || "Мэдээлэл алга байна."}`);
+    if (safeDurationText(best.duration_text)) lines.push(`🗓 Хугацаа: ${safeDurationText(best.duration_text)}`);
     lines.push(formatTripBasePricePremium(best, now));
   }
 
@@ -1744,12 +1838,13 @@ export function buildProgramOrStructuredReply(
   // structured answer when the message shows evidence of asking something
   // ELSE too; otherwise this would quietly turn every silent photo handoff
   // into an auto-answered one.
+  const intentText = intentTextOf(text, trips);
   const asksSomethingElse =
-    hasPriceIntent(text) ||
-    hasDurationIntent(text) ||
-    hasScheduleIntent(text) ||
-    hasDirectFlightIntent(text) ||
-    hasExistenceIntent(text);
+    hasPriceIntent(intentText) ||
+    hasDurationIntent(intentText) ||
+    hasScheduleIntent(intentText) ||
+    hasDirectFlightIntent(intentText) ||
+    hasExistenceIntent(intentText);
   if (!asksSomethingElse) return programReply;
   const structuredReply = buildStructuredTripReply(text, trips);
   if (!structuredReply) return programReply;

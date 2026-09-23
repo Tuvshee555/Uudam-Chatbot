@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { appendLeadCaptureCta, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStructuredTripReply, buildTripProgramReply, LEAD_CAPTURE_CTA, resolveTripFromUserMessage } from "../src/lib/travelFastPaths";
 import { findTripMatches } from "../src/lib/travelFastPathsSearch";
+import { joinContextAndTurn } from "../src/lib/customerTurn";
+import { quickReplyTitle } from "../src/lib/quickReplyTitle";
 import type { TravelTrip } from "../src/lib/travelOps";
 
 const NOW = new Date("2026-06-24T04:00:00.000Z");
@@ -82,19 +84,23 @@ test("smart buttons offer useful next taps for a matched trip with photos", () =
 test("clarification buttons are numbered and messenger-sized", () => {
   const buttons = buildClarificationButtons([
     trip({
-      id: "beijing-ground",
-      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+      id: "four-city-ground",
+      route_name: "ЗЭТ - АЛЬФА – ВЭЛМОР - КАРДАН – 4 ХОТЫН АЯЛАЛ",
     }),
     trip({
-      id: "beidaihe-combo",
-      route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+      id: "sea-combo",
+      route_name: "Лумиа шар тэнгисийн эрэг + Зэт газар нислэг хосолсон аялал",
     }),
   ]);
 
   assert.equal(buttons.length, 2);
   assert.ok(buttons[0].startsWith("1. "));
   assert.ok(buttons[1].startsWith("2. "));
-  assert.ok(buttons.every((button) => button.length <= 25));
+  // The label is the quick-reply PAYLOAD and keeps the whole name (a 20-char
+  // cut came back as "1. <first 20 characters>...", shared by two trips); the
+  // title Messenger displays is what must fit.
+  assert.equal(buttons[0], "1. ЗЭТ - АЛЬФА – ВЭЛМОР - КАРДАН – 4 ХОТЫН АЯЛАЛ");
+  assert.ok(buttons.every((button) => quickReplyTitle(button).length <= 20));
 });
 
 test("appendLeadCaptureCta skips clarifying (ambiguous) replies", () => {
@@ -1984,7 +1990,7 @@ test("a direct-flight follow-up on a combo trip keeps the combo disclaimer even 
   ];
   const staleContext =
     "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аяллын хүүхдийн үнэ (2-10 нас) 1,200,000₮ байна.\n\nХэрэв танд илүү дэлгэрэнгүй мэдээлэл хэрэгтэй бол асуугаарай! 😊";
-  const contextualText = `${staleContext}\nтэр шууд нислэгтэй нь хэд байсан бэ?`;
+  const contextualText = joinContextAndTurn(staleContext, "тэр шууд нислэгтэй нь хэд байсан бэ?");
 
   const reply = buildStructuredTripReply(contextualText, trips);
 
@@ -2005,7 +2011,7 @@ test("passenger-type price reply only reads the customer's current line, not sta
   ];
   const staleContext =
     "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аяллын хүүхдийн үнэ 1,200,000₮ байна.";
-  const contextualText = `${staleContext}\nтом хүн хэд вэ?`;
+  const contextualText = joinContextAndTurn(staleContext, "том хүн хэд вэ?");
 
   const reply = buildStructuredTripReply(contextualText, trips);
 

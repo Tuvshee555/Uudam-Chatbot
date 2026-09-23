@@ -5,7 +5,7 @@ import { matchFlow, findTriggeredFlow, getFlowState, setFlowState, clearFlowStat
 import { BOT_MESSAGE_METADATA, replyToComment, sendImageMessage, sendQuickReplies, sendTextMessage } from "../../lib/messenger";
 import { sendQuickReplies as sendIgQuickReplies } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
-import { getClarificationState } from "../../lib/clarificationState";
+import { getClarificationState, setClarificationState } from "../../lib/clarificationState";
 import { isLikelyCatalogMaintenanceText } from "../../lib/customerTextClassification";
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone } from "../../lib/conversation";
@@ -20,17 +20,19 @@ import {
   THANKS_REPLY,
 } from "../../lib/greetingPhrases";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
+import { stripTripNamesForIntent } from "../../lib/customerTurn";
+import { buildCatalogListingReply } from "../../lib/catalogListing";
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
-import { enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
+import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasBankAccountRequest, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBot, trackSender } from "../../lib/pause";
-import { AUTO_PAUSE_RESET_DAYS, createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, dbStoreSenderName, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
-import { buildDepartureDateAvailabilityReply, hasDepartureDateAvailabilityIntent, } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, resolveFocusTripForDateQuestion, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, filterTripsByTransportIntent, buildSoldOutPrecedenceReply, } from "../../lib/travelFastPaths";
+import { AUTO_PAUSE_RESET_DAYS, createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
+import { hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply, } from "../../lib/travelFastPaths";
 import { DEFAULT_WELCOME_TEXT, buildHandoffReplyWithContact, claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
@@ -39,7 +41,8 @@ import {
 } from "../../lib/webhookAttachments";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { logInboundMessage } from "../../lib/travelMessages";
-import { advanceCollectState, buildCompletionMessage, buildLeadContext, clearCollectState, getCollectState, promptForStep, setCollectState, startCollectState } from "../../lib/bookingCollect";
+import { getCollectState } from "../../lib/bookingCollect";
+import { continueBookingCollect, startBookingCollect, type BookingCollectContext } from "../../lib/bookingCollectFlow";
 import { getEnv } from "../../lib/env";
 import { isMetaOutboundDisabled } from "../../lib/metaOutboundKillSwitch";
 import { beginRequestTrace, classifyError, finishRequestTrace, hashIdentifier, logError, logInfo, logWarn, recordCounter, } from "../../lib/observability";
@@ -256,8 +259,7 @@ async function handleMessage(
     getHistory(senderId),
     getCustomerMemoryText(senderId),
   ]);
-  const contextualUserText = buildContextualUserText(history, text);
-  const sessionId = `${platform}:${pageId}:${senderId}`;
+  const contextualUserText = buildContextualUserText(history, text);  const sessionId = `${platform}:${pageId}:${senderId}`;
   // Non-blocking: the memory merge continues after the response via waitUntil.
   // It used to be awaited inline while holding the conversation lock, which
   // serialized a long model call behind every reply.
@@ -585,100 +587,23 @@ async function handleMessage(
       });
     }
   }
-  if (botSettings.handoff_enabled) {
-    const collectState = await getCollectState(senderId);
-    if (collectState && collectState.step !== "done") {
-      const nextState = advanceCollectState(collectState, text);
-      if (nextState.step === "done") {
-        await clearCollectState(senderId);
-        // The ONLY place a chat message becomes the stored customer name:
-        // this is a direct answer to "нэрээ бичнэ үү". A generic heuristic
-        // used to guess names from any short Cyrillic message and polluted
-        // display_name with trip/keyword words ("Бээжин", "үнэ").
-        if (nextState.name.trim()) {
-          await dbStoreSenderName(senderId, nextState.name.trim()).catch(() => {});
-        }
-        // Use 14-day auto-handoff pause (resets automatically after 2 weeks)
-        await autoHandoffSender(senderId);
-        const pauseMs =
-          botSettings.handoff_pause_minutes > 0
-            ? botSettings.handoff_pause_minutes * 60_000
-            : undefined;
-        await pauseBot(senderId, pauseMs, "handoff");
-        try {
-          await createLead({
-            kind: "booking",
-            platform,
-            senderId,
-            customerMessage: nextState.originalMessage,
-            contactPhone: nextState.phone,
-            context: buildLeadContext(nextState),
-          });
-          await notifyStaffOfLead(
-            {
-              kind: "booking",
-              platform,
-              customerMessage: `${nextState.name} | ${nextState.phone} | ${nextState.trip}`,
-              contactPhone: nextState.phone,
-            },
-            {
-              requestId: trace?.requestId,
-              correlationId: trace?.correlationId,
-              source: "api.webhook",
-            },
-          );
-          recordCounter("webhook.booking_collect_completed_total", 1, { platform });
-        } catch (error) {
-          logWarn("webhook.booking_collect_lead_failed", {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            platform,
-            senderHash: hashIdentifier(senderId),
-            classification: classifyError(error),
-          });
-        }
-        const completionMsg = buildCompletionMessage(nextState);
-        await assertLockHealthy();
-        const delivered = await sendPlatformMessage(
-          platform,
-          senderId,
-          completionMsg,
-          token,
-          pageId,
-          igUserId,
-          trace,
-          { allowFallback: false },
-        );
-        if (!delivered) {
-          throw new RetryableWebhookError("delivery_failed:booking_collect_done");
-        }
-        // See the booking_collect_start comment above — this path was also
-        // never recording its outgoing text.
-        await appendMessage(senderId, "assistant", completionMsg).catch(() => {});
-        return;
-      } else {
-        await setCollectState(senderId, nextState);
-        const question = promptForStep(nextState.step);
-        await assertLockHealthy();
-        const delivered = await sendPlatformMessage(
-          platform,
-          senderId,
-          question,
-          token,
-          pageId,
-          igUserId,
-          trace,
-          { allowFallback: false },
-        );
-        if (!delivered) {
-          throw new RetryableWebhookError("delivery_failed:booking_collect_step");
-        }
-        // See the booking_collect_start comment above.
-        await appendMessage(senderId, "assistant", question).catch(() => {});
-        return;
-      }
-    }
-  }
+  // Booking collector (name + phone before handoff). Answers are validated in
+  // bookingCollect.ts; a message that is not an answer drops the flow and is
+  // answered normally below.
+  const bookingCtx: BookingCollectContext = {
+    platform,
+    senderId,
+    text,
+    contextualUserText,
+    pauseMs: botSettings.handoff_pause_minutes > 0 ? botSettings.handoff_pause_minutes * 60_000 : undefined,
+    send: async (message, tag) => {
+      await assertLockHealthy();
+      const ok = await sendPlatformMessage(platform, senderId, message, token, pageId, igUserId, trace, { allowFallback: false });
+      if (!ok) throw new RetryableWebhookError(`delivery_failed:${tag}`);
+    },
+    trace,
+  };
+  if (botSettings.handoff_enabled && (await continueBookingCollect(bookingCtx))) return;
   let flowAiPromptOverride: string | undefined;
   const flowDocs: FlowDoc[] = Array.isArray(botSettings.extra?.flowDocs)
     ? (botSettings.extra.flowDocs as FlowDoc[])
@@ -1026,34 +951,7 @@ async function handleMessage(
   const phoneAlreadyRequested = phoneCollected || hasAskedForPhone(history);
   const customerWantsToBook =
     botSettings.handoff_enabled && isBookingIntent(text);
-  if (customerWantsToBook && !(await hasRecentOpenLead(senderId, "booking"))) {
-    const newState = startCollectState(text);
-    await setCollectState(senderId, newState);
-    const firstQuestion = promptForStep(newState.step);
-    await appendMessage(senderId, "user", text);
-    await assertLockHealthy();
-    const delivered = await sendPlatformMessage(
-      platform,
-      senderId,
-      firstQuestion,
-      token,
-      pageId,
-      igUserId,
-      trace,
-      { allowFallback: false },
-    );
-    if (!delivered) {
-      throw new RetryableWebhookError("delivery_failed:booking_collect_start");
-    }
-    // Was missing: every other reply path records its outgoing text so the
-    // next turn's AI context and the admin inbox both see it. Without this,
-    // a "Захиалах" tap looked like the bot went silent (it likely didn't —
-    // the booking question was sent, just never logged), and the next AI
-    // reply lost track of having already asked this question.
-    await appendMessage(senderId, "assistant", firstQuestion).catch(() => {});
-    recordCounter("webhook.booking_collect_started_total", 1, { platform });
-    return;
-  }
+  if (customerWantsToBook && (await startBookingCollect(bookingCtx))) return;
   await appendMessage(senderId, "user", text);
   let cachedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
   const getTrips = async () => {
@@ -1085,6 +983,9 @@ async function handleMessage(
     return routedCache;
   };
   const getFastPathText = async (): Promise<string> => (await getRouted()).matchText;
+  // What is being ASKED: the customer's words with trip names removed. A tapped
+  // "…шууд нислэгтэй аялал" button is a choice of trip, not a flight question.
+  const intentText = stripTripNamesForIntent(text, await getTrips());
 
   // Staff/catalog maintenance notes are not customer questions. They often
   // contain dates, "суудал дүүрсэн", and duration numbers; answering those as
@@ -1138,7 +1039,10 @@ async function handleMessage(
   // matched a trip alias containing "5 өдөр" or August month availability,
   // so a customer saying they just paid got a random trip listing instead of
   // any acknowledgment).
-  if (hasPaymentClaimIntent(text)) {
+  // A request for the bank account ("за дансаа") is the same buy signal:
+  // staff send the account, the bot only says so.
+  const asksBankAccount = hasBankAccountRequest(text);
+  if (hasPaymentClaimIntent(text) || asksBankAccount) {
     // The deferral reply PROMISES the customer a consultant will check and
     // get back to them — that promise is only real if staff actually hear
     // about it. A payment claim is the strongest buy signal there is; without
@@ -1152,7 +1056,9 @@ async function handleMessage(
           senderId,
           customerMessage: text,
           contactPhone: detectedPhone || "",
-          context: "Төлбөр шилжүүлсэн гэж мэдэгдсэн — зөвлөх шалгаж баталгаажуулна уу.",
+          context: asksBankAccount
+            ? "Хэрэглэгч төлбөрийн дансны мэдээлэл асуусан — зөвлөх албан ёсоор илгээнэ үү."
+            : "Төлбөр шилжүүлсэн гэж мэдэгдсэн — зөвлөх шалгаж баталгаажуулна уу.",
         });
         await notifyStaffOfLead(
           { kind: "handoff", platform, customerMessage: text, contactPhone: detectedPhone || "" },
@@ -1173,7 +1079,9 @@ async function handleMessage(
       });
     }
     await deliverFastPathReply({
-      reply: enforceWebsiteForPayment(sanitizeAssistantReply(PAYMENT_VERIFICATION_DEFERRAL_REPLY)),
+      reply: asksBankAccount
+        ? BANK_ACCOUNT_REQUEST_REPLY
+        : enforceWebsiteForPayment(sanitizeAssistantReply(PAYMENT_VERIFICATION_DEFERRAL_REPLY)),
       failTag: "payment_claim_deferred",
       rememberSource: "api.webhook.payment_claim_deferred",
       counter: "webhook.payment_claim_deferred_total",
@@ -1199,7 +1107,7 @@ async function handleMessage(
   // Compare questions intentionally mention multiple destinations/products.
   // Answer them as comparisons before scoped clarification narrows the message
   // to one destination family and asks the wrong follow-up.
-  if (hasCompareIntent(text)) {
+  if (hasCompareIntent(intentText)) {
     const trips = await getTrips();
     const compareReply = buildCompareReply(await getFastPathText(), trips);
     if (compareReply) {
@@ -1225,7 +1133,9 @@ async function handleMessage(
     if (routed.scopedClarify && routed.scopedClarify.length > 0) {
       const totalReply = buildAmbiguousPassengerTotalReply(await getFastPathText(), routed.scopedClarify);
       const clarifyBody = routed.scopedClarifyNote
-        ? `${routed.scopedClarifyNote}\n${totalReply || buildAmbiguousTripReply(routed.scopedClarify)}`
+        ? totalReply
+          ? `${routed.scopedClarifyNote}\n${totalReply}`
+          : buildAmbiguousTripReply(routed.scopedClarify, routed.scopedClarifyNote)
         : totalReply || buildAmbiguousTripReply(routed.scopedClarify);
       await deliverFastPathReply({
         reply: enforceWebsiteForPayment(sanitizeAssistantReply(clarifyBody)),
@@ -1254,12 +1164,31 @@ async function handleMessage(
       return;
     }
   }
+  // A question about the catalog ("шууд нислэгтэй аялал байна уу", "бүх
+  // аяллын хуваарь") when neither the message nor the context names a trip:
+  // list it from the DB instead of a silent no-data handoff.
+  {
+    const listing = buildCatalogListingReply(intentText, await getTrips());
+    if (listing && resolveTripFromUserMessage(await getFastPathText(), await getTrips(), { allowLooseFallback: false }).status === "not_found") {
+      // The list is a "which trip?" question: a following "Хөтөлбөр үзэх"
+      // must re-ask it, not take the first trip listed.
+      await setClarificationState(senderId, listing.listed.map((trip) => trip.id));
+      await deliverFastPathReply({
+        reply: enforceWebsiteForPayment(sanitizeAssistantReply(listing.reply)),
+        failTag: "catalog_listing",
+        rememberSource: "api.webhook.catalog_listing",
+        counter: "webhook.catalog_listing_total",
+        buttons: buildClarificationButtons(listing.listed),
+      });
+      return;
+    }
+  }
   // Broad structured questions ("Бээжин аялал хэд вэ?") should clarify from
   // the DB when several active trips match. Do not send these to the model and
   // risk a silent REFER.
   {
     const fastPathText = await getFastPathText();
-    if (isStructuredTripQuestion(fastPathText)) {
+    if (isStructuredTripQuestion(intentText)) {
       const archivedNotice = buildArchivedTripNotice(
         fastPathText,
         await getArchivedTrips(),
@@ -1294,11 +1223,11 @@ async function handleMessage(
       }
       if (
         resolution.status === "not_found" &&
-        !hasDepartureDateAvailabilityIntent(text) &&
-        !hasCompareIntent(text) &&
-        !hasBudgetIntent(text) &&
-        !hasDiscountIntent(text) &&
-        !hasSeatsIntent(text)
+        !hasDepartureDateAvailabilityIntent(intentText) &&
+        !hasCompareIntent(intentText) &&
+        !hasBudgetIntent(intentText) &&
+        !hasDiscountIntent(intentText) &&
+        !hasSeatsIntent(intentText)
       ) {
         // No destination named at all ("Үнэ", "Хөтөлбөр", "Хэд хоногийн аялал
         // хэдэн төг вээ"): ask which trip. Handing this to staff and pausing
@@ -1322,15 +1251,9 @@ async function handleMessage(
       }
     }
   }
-  if (hasDepartureDateAvailabilityIntent(text) && !hasProgramIntent(text)) {
+  if (hasDepartureDateAvailabilityIntent(intentText) && !hasProgramIntent(intentText)) {
     const trips = await getTrips();
-    const dateFastPathText = await getFastPathText();
-    const dateAvailabilityReply = buildDepartureDateAvailabilityReply({
-      userText: dateFastPathText,
-      // Catalog-wide answers honour "шууд нислэгтэй" / "газрын" / "хосолсон".
-      trips: filterTripsByTransportIntent(dateFastPathText, trips),
-      focusTrip: resolveFocusTripForDateQuestion(dateFastPathText, trips),
-    });
+    const dateAvailabilityReply = buildDateQuestionReply(intentText, await getFastPathText(), trips);
     if (dateAvailabilityReply) {
       const bookingNudge = customerWantsToBook
         ? " Захиалгаа баталгаажуулах бол нэр, утасны дугаараа үлдээгээрэй."
@@ -1362,7 +1285,20 @@ async function handleMessage(
       return;
     }
   }
-  if (hasSeatsIntent(text)) {
+  {
+    const groupReply = buildGroupSizeReply(await getFastPathText(), await getTrips());
+    if (groupReply) {
+      await deliverFastPathReply({
+        reply: appendLeadCaptureCta(sanitizeAssistantReply(groupReply), phoneAlreadyRequested),
+        failTag: "group_size",
+        rememberSource: "api.webhook.group_size",
+        counter: "webhook.group_size_total",
+        buttons: buildSmartButtons(groupReply, await getTrips()) || undefined,
+      });
+      return;
+    }
+  }
+  if (hasSeatsIntent(intentText)) {
     const trips = await getTrips();
     const seatsReply = buildSeatsReply(await getFastPathText(), trips);
     if (seatsReply) {
@@ -1379,7 +1315,7 @@ async function handleMessage(
       return;
     }
   }
-  if (hasBudgetIntent(text)) {
+  if (hasBudgetIntent(intentText)) {
     const trips = await getTrips();
     const budgetReply = buildBudgetReply(await getFastPathText(), trips);
     if (budgetReply) {
@@ -1396,7 +1332,7 @@ async function handleMessage(
       return;
     }
   }
-  if (hasDiscountIntent(text)) {
+  if (hasDiscountIntent(intentText)) {
     const trips = await getTrips();
     const discountReply = buildDiscountReply(await getFastPathText(), trips);
     if (discountReply) {
@@ -1418,7 +1354,7 @@ async function handleMessage(
   // trip it is must never get a DIFFERENT trip's price stated back as if it
   // matched. When no trip's price matches, hand off rather than let the
   // model improvise a nearby-priced trip.
-  if (hasStandalonePriceLookupIntent(text)) {
+  if (hasStandalonePriceLookupIntent(intentText)) {
     const trips = await getTrips();
     const priceLookupReply = buildStandalonePriceLookupReply(await getFastPathText(), trips);
     await deliverFastPathReply({
@@ -1598,7 +1534,7 @@ async function handleMessage(
             : undefined
           : buildSmartButtons(safeStructuredReply, trips) || undefined,
         afterDeliver: async () => {
-          if (hasTripPhotoIntent(text)) {
+          if (hasTripPhotoIntent(intentText)) {
             await sendTripMediaForReply(
               platform,
               senderId,
@@ -2127,6 +2063,7 @@ export default async function handler(
                 app_id?: number | string;
                 mid?: string;
                 text?: string;
+                quick_reply?: { payload?: string };
                 metadata?: string;
                 attachments?: Array<{ type?: string; payload?: { url?: string } }>;
               };
@@ -2308,10 +2245,15 @@ export default async function handler(
                   : typeof event?.postback?.payload === "string"
                     ? event.postback.payload.trim()
                     : "";
-              const messageText =
-                typeof event?.message?.text === "string"
-                  ? event.message.text.trim()
+              // A tapped quick reply: the payload is our full label; the text is
+              // Messenger's 20-character title ("1. <name cut off>...").
+              const quickReplyPayload =
+                typeof event?.message?.quick_reply?.payload === "string"
+                  ? event.message.quick_reply.payload.trim()
                   : "";
+              const messageText =
+                quickReplyPayload ||
+                (typeof event?.message?.text === "string" ? event.message.text.trim() : "");
               const text = messageText || postbackText;
               const attachments = Array.isArray(event?.message?.attachments)
                 ? event.message.attachments

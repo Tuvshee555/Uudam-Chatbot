@@ -102,16 +102,16 @@ test("short referential follow-ups use the previous assistant answer when availa
   const result = buildContextualUserText(
     [
       { role: "user", text: "Хайнан аялал сонирхож байна" },
-      { role: "assistant", text: "Хайнан 1,430,000₮..." },
+      { role: "assistant", text: "Альфа 1,111,111₮..." },
     ],
     "тэр хэд вэ?",
   );
-  assert.equal(result, "Хайнан 1,430,000₮...\nтэр хэд вэ?");
+  assert.equal(result, "Альфа 1,111,111₮...\n тэр хэд вэ?");
 });
 
 test("short referential follow-ups anchor to the previous assistant answer before stale user turns", () => {
   const previousAnswer =
-    "Хамгийн хямд аялал бол ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ-БЭЭЖИНГИЙН ГАЗРЫН АЯЛАЛ юм. Хүүхдийн үнэ: 1,120,000₮";
+    "Хамгийн хямд аялал бол ЗЭТ ТЭНГИС БУЮУ ЛУМИА-АЛЬФАГИЙН ГАЗРЫН АЯЛАЛ юм. Хүүхдийн үнэ: 999,999₮";
   const result = buildContextualUserText(
     [
       { role: "user", text: "шууд нислэгтэй нь хэд вэ?" },
@@ -121,26 +121,26 @@ test("short referential follow-ups anchor to the previous assistant answer befor
     ],
     "тэрний хүүхдийн үнэ?",
   );
-  assert.equal(result, `${previousAnswer}\nтэрний хүүхдийн үнэ?`);
+  assert.equal(result, `${previousAnswer}\n тэрний хүүхдийн үнэ?`);
 });
 
 test("short referential follow-ups skip generic assistant prompts", () => {
   const result = buildContextualUserText(
     [
-      { role: "user", text: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал" },
+      { role: "user", text: "Альфа + Зэт хаалга шууд нислэгтэй аялал" },
       { role: "assistant", text: "Үнэ, зураг, хөтөлбөрийн аль нь хэрэгтэй вэ?" },
     ],
     "зураг",
   );
-  assert.equal(result, "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал\nзураг");
+  assert.equal(result, "Альфа + Зэт хаалга шууд нислэгтэй аялал\n зураг");
 });
 
 test("passenger price follow-ups borrow the previous assistant answer", () => {
   const previousAnswer =
-    "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал. Том хүн 1,270,000₮, хүүхэд 1,200,000₮, нярай 1,050,000₮.";
+    "Лумиа шар тэнгисийн эрэг + Зэт газар нислэг хосолсон аялал. Том хүн 1,111,111₮, хүүхэд 999,999₮, нярай 888,888₮.";
   const result = buildContextualUserText(
     [{ role: "assistant", text: previousAnswer }],
     "нярай хүүхэд үнэтэй юу?",
   );
-  assert.equal(result, `${previousAnswer}\nнярай хүүхэд үнэтэй юу?`);
+  assert.equal(result, `${previousAnswer}\n нярай хүүхэд үнэтэй юу?`);
 });

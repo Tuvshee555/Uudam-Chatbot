@@ -109,6 +109,23 @@ function sleepForAttempt(baseDelayMs: number, attemptIndex: number) {
   return delayMs(withJitter(bounded));
 }
 
+// Bounded so the worst case (every retry waiting) still fits the webhook's
+// 60-second function budget.
+const MAX_RETRY_AFTER_MS = 8_000;
+
+/** Retry-After as milliseconds: `retry-after-ms`, `retry-after` (seconds), or OpenAI's `x-ratelimit-reset-*` ("6s", "450ms"). */
+export function parseRetryAfterMs(headers: Headers): number | null {
+  const ms = Number(headers.get("retry-after-ms"));
+  if (Number.isFinite(ms) && ms > 0) return ms;
+  const seconds = Number(headers.get("retry-after"));
+  if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000;
+  const reset = headers.get("x-ratelimit-reset-tokens") || headers.get("x-ratelimit-reset-requests");
+  const match = reset ? /^(?:(\d+)m)?(?:([\d.]+)s)?(?:(\d+)ms)?$/.exec(reset.trim()) : null;
+  if (!match) return null;
+  const total = Number(match[1] || 0) * 60_000 + Number(match[2] || 0) * 1000 + Number(match[3] || 0);
+  return total > 0 ? total : null;
+}
+
 function beginTimer(timeoutMs: number, controller: AbortController, upstream: string) {
   return setTimeout(() => {
     controller.abort(new TimeoutError(upstream, timeoutMs));
@@ -171,7 +188,11 @@ export async function fetchWithRetry(
         upstream: options.upstream,
         reason: "status",
       });
-      await sleepForAttempt(options.retryBaseDelayMs, attempt);
+      // A 429 says when capacity returns (OpenAI's tokens-per-minute window).
+      // Retrying after 300 ms just gets another 429.
+      const retryAfterMs = response.status === 429 ? parseRetryAfterMs(response.headers) : null;
+      if (retryAfterMs !== null) await delayMs(Math.min(retryAfterMs + 250, MAX_RETRY_AFTER_MS));
+      else await sleepForAttempt(options.retryBaseDelayMs, attempt);
     } catch (error) {
       clearTimeout(timeoutHandle);
       lastError = error;

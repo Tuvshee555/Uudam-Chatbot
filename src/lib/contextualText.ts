@@ -14,6 +14,7 @@
  * trip the customer is asking about right now.
  */
 
+import { joinContextAndTurn } from "./customerTurn";
 import { isKnownGreetingPhrase, isThanksOnly } from "./greetingPhrases";
 
 export function normalizeContextText(text: string) {
@@ -42,48 +43,9 @@ export function isLikelyContextDependentText(text: string) {
   if (isThanksOnly(text)) return false;
   const words = normalized.split(/\s+/).filter(Boolean);
   if (words.length <= 2) return true;
-  const referentialHints = [
-    "again",
-    "more",
-    "photo",
-    "photos",
-    "program",
-    "pdf",
-    "price",
-    "dates",
-    "seat",
-    "seats",
-    "zurag",
-    "үнэ",
-    "хэд",
-    "нийт",
-    "болох",
-    "хэзээ",
-    "сарын",
-    "огноо",
-    "суудал",
-    "хөтөлбөр",
-    "зураг",
-    "хүүхэд",
-    "хүүхдийн",
-    "нярай",
-    "тийзтэй",
-    "тийзгүй",
-    "ticket",
-    "дахин",
-    "дахиад",
-    "өөр",
-    "адил",
-    "энэ",
-    "тэр",
-    "эхний",
-    "эхнийх",
-    "эхнийх нь",
-    "нэгдүгээр",
-    "first",
-  ];
-  const hasHint = referentialHints.some((hint) => normalized.includes(hint));
-  if (!hasHint) return false;
+  // "11-13хүн байна", "бид 4 хүн": a group size for the trip on screen.
+  if (/^\s*(?:бид\s*|bid\s*)?\d{1,3}(?:\s*[-–]\s*\d{1,3})?\s*(?:хүн|hun)/i.test(text)) return true;
+  if (!hasReferentialHint(text)) return false;
   if (normalized.length <= 24) return true;
 
   // A hint word alone isn't enough on longer messages: if the message also
@@ -92,47 +54,113 @@ export function isLikelyContextDependentText(text: string) {
   const contentWords = words.filter(
     (word) =>
       word.length >= 4 &&
-      !referentialHints.includes(word) &&
-      ![
-        "аялал",
-        "аяллын",
-        "зураг",
-        "хөтөлбөр",
-        "program",
-        "price",
-        "dates",
-        "seat",
-        "seats",
-        "үнэ",
-        "хэд",
-        "вэ",
-        "юу",
-        "нь",
-        "нийт",
-        "болох",
-        "сарын",
-        "өөр",
-        "адил",
-        "нд",
-        "огноо",
-        "суудал",
-        "хүүхэд",
-        "хүүхдийн",
-        "нярай",
-        "тийзтэй",
-        "тийзгүй",
-        "ticket",
-        "том",
-        "хүн",
-        "үнэтэй",
-        "төлбөртэй",
-        "child",
-        "infant",
-        "adult",
-      ].includes(word),
+      !REFERENTIAL_HINTS.includes(word) &&
+      !NON_CONTENT_WORDS.includes(word),
   );
   return contentWords.length === 0;
 }
+
+/** Words that point back at something already on screen ("тэр", "үнэ", "нь"). */
+export function hasReferentialHint(text: string): boolean {
+  const normalized = normalizeContextText(text);
+  return (
+    REFERENTIAL_HINTS.some((hint) => normalized.includes(hint)) ||
+    /(?:^|\s)(?:нь|ni)(?:\s|$)/.test(normalized)
+  );
+}
+
+const REFERENTIAL_HINTS = [
+  "again",
+  "more",
+  "photo",
+  "photos",
+  "program",
+  "pdf",
+  "price",
+  "dates",
+  "seat",
+  "seats",
+  "zurag",
+  "үнэ",
+  "хэд",
+  "нийт",
+  "болох",
+  "хэзээ",
+  "сарын",
+  "огноо",
+  "суудал",
+  "хөтөлбөр",
+  "зураг",
+  "хүүхэд",
+  "хүүхдийн",
+  "нярай",
+  "тийзтэй",
+  "тийзгүй",
+  "ticket",
+  "дахин",
+  "дахиад",
+  "өөр",
+  "адил",
+  "энэ",
+  "тэр",
+  "эхний",
+  "эхнийх",
+  "эхнийх нь",
+  "нэгдүгээр",
+  "first",
+];
+
+const NON_CONTENT_WORDS = [
+  "аялал",
+  "аяллын",
+  "зураг",
+  "хөтөлбөр",
+  "program",
+  "price",
+  "dates",
+  "seat",
+  "seats",
+  "үнэ",
+  "хэд",
+  "вэ",
+  "юу",
+  "нь",
+  "нийт",
+  "болох",
+  "сарын",
+  "өөр",
+  "адил",
+  "нд",
+  "огноо",
+  "суудал",
+  "хүүхэд",
+  "хүүхдийн",
+  "нярай",
+  "тийзтэй",
+  "тийзгүй",
+  "ticket",
+  "том",
+  "хүн",
+  "үнэтэй",
+  "төлбөртэй",
+  "child",
+  "infant",
+  "adult",
+  // Question words, not trip names: "хамгийн сүүлийн аялал нь хэдэн
+  // сарын хэдэнд гарах вэ" right after a trip card asks about THAT trip.
+  "хамгийн",
+  "сүүлийн",
+  "сүүлд",
+  "эхний",
+  "дараагийн",
+  "хэдэн",
+  "хэдэнд",
+  "гарах",
+  "явах",
+  "хэзээ",
+  "хоног",
+  "өдөр",
+];
 
 function isGenericAssistantFollowup(text: string) {
   const normalized = normalizeContextText(text);
@@ -140,7 +168,10 @@ function isGenericAssistantFollowup(text: string) {
     normalized.includes("аль нь хэрэгтэй") ||
     normalized.includes("алийг хэлж") ||
     normalized.includes("аль аяллыг") ||
-    normalized.includes("нэг тодруулаад")
+    normalized.includes("нэг тодруулаад") ||
+    // The model asking "which city/trip are you interested in?" has not
+    // settled on a trip — its examples must not become the customer's pick.
+    /ямар\s+(?:\S+\s+)?(?:аял|хот|чиглэл)\S*\s+(?:\S+\s+){0,3}(?:сонирхож|авахыг|явахыг)/.test(normalized)
   );
 }
 
@@ -189,6 +220,13 @@ function likelyRefersToPreviousAssistantOption(text: string) {
   );
 }
 
+// "[1 зураг илгээсэн]" / "[Хэрэглэгч зураг илгээсэн]": history placeholders for
+// attachment-only rows. They name no trip, so they must never stand in as the
+// "previous reply" — after a photo send, every follow-up lost its trip.
+function isAttachmentPlaceholder(text: string) {
+  return /^\[[^\]]*илгээсэн\]$/i.test(text.trim());
+}
+
 export function buildContextualUserText(
   history: Array<{ role: "user" | "assistant"; text: string }>,
   userText: string,
@@ -196,26 +234,33 @@ export function buildContextualUserText(
   if (!isLikelyContextDependentText(userText)) return userText;
   const previousAssistantReply = [...history]
     .reverse()
-    .find((message) => message.role === "assistant" && message.text.trim())
+    .find(
+      (message) =>
+        message.role === "assistant" &&
+        message.text.trim() &&
+        !isAttachmentPlaceholder(message.text),
+    )
     ?.text.trim();
+  // The customer's current turn is marked (see customerTurn.ts): the context
+  // before it only identifies the trip, and must never be read as the question.
   if (previousAssistantReply && isFirstOptionFollowup(userText)) {
     const firstOption = firstAssistantOption(previousAssistantReply);
-    if (firstOption) return `${firstOption}\n${userText.trim()}`;
+    if (firstOption) return joinContextAndTurn(firstOption, userText);
   }
   if (previousAssistantReply && likelyRefersToPreviousAssistantOption(userText)) {
     const firstOption = firstAssistantOption(previousAssistantReply);
-    if (firstOption) return `${firstOption}\n${userText.trim()}`;
+    if (firstOption) return joinContextAndTurn(firstOption, userText);
   }
   if (previousAssistantReply && !isGenericAssistantFollowup(previousAssistantReply)) {
-    return `${previousAssistantReply}\n${userText.trim()}`;
+    return joinContextAndTurn(previousAssistantReply, userText);
   }
   const recentUserTurns = history
     .filter((message) => message.role === "user")
     .map((message) => message.text.trim())
-    .filter(Boolean)
+    .filter((message) => message && !isAttachmentPlaceholder(message))
     .slice(-4);
   if (recentUserTurns.length === 0) return userText;
-  return [...recentUserTurns, userText.trim()].join("\n");
+  return joinContextAndTurn(recentUserTurns.join("\n"), userText);
 }
 
 type TripResolution<TTrip> =

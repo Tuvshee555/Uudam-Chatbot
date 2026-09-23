@@ -7,12 +7,16 @@
  * 1. If we JUST asked "which of these trips?", the customer's answer is
  *    resolved against the OFFERED candidates first — never against the whole
  *    catalog, never against stale turns. An attribute answer that fits one
- *    candidate ("усан парктай") selects it; one that fits several ("шууд
- *    нислэгтэй" when both offered trips are direct flights) keeps the
+ *    candidate ("усан парктай", "<хот>-оос") selects it; one that fits several
+ *    ("шууд нислэгтэй" when both offered trips are direct flights) keeps the
  *    clarification scoped to exactly those; one that fits none means the
  *    customer changed topic and the state is dropped.
  * 2. Otherwise current-message-first routing (pickFastPathMatchText), while
  *    capturing any new ambiguity into clarification state for the next turn.
+ *
+ * The returned matchText always marks the customer's own turn (customerTurn.ts)
+ * so builders read intent from the customer's words, not from the trip name or
+ * the bot's previous reply that was prepended to identify the trip.
  */
 
 import {
@@ -20,8 +24,9 @@ import {
   setClarificationState,
   clearClarificationState,
 } from "./clarificationState";
-import { isLikelyContextDependentText, pickFastPathMatchText } from "./contextualText";
-import { parseDepartureDateText, tripMatchesRequestedDate } from "./travelDates";
+import { customerTurn, joinContextAndTurn } from "./customerTurn";
+import { hasReferentialHint, isLikelyContextDependentText, pickFastPathMatchText } from "./contextualText";
+import { parseDepartureDateText, resolveRequestedMonth, tripMatchesRequestedDate, tripDepartsInMonth } from "./travelDates";
 import { getTripSearchHaystack, phoneticLatinText, resolveTripFromUserMessage } from "./travelFastPathsSearch";
 import type { TravelTrip } from "./travelTypes";
 import { isKnownGreetingPhrase } from "./greetingPhrases";
@@ -80,6 +85,39 @@ export function filterCandidatesByAttribute(
   });
 }
 
+function addsNarrowing(text: string, candidates: TravelTrip[]): boolean {
+  if (hasReferentialHint(text)) return true;
+  const narrowed = filterCandidatesByAttribute(text, candidates);
+  return narrowed.length > 0 && narrowed.length < candidates.length;
+}
+
+function looseNorm(value: string): string {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+/**
+ * "2", "2.", "2)", "2-р", "2. <trip name, cut off>..." — the customer picking an
+ * option from a numbered list. Deliberately NOT "2 том хүн 2 хүүхэд" or
+ * "1 сард": a number followed by words is a passenger count or a month, and
+ * reading it as "option 2" answered with the wrong trip (replayed from real
+ * 2026-09-15 / 09-16 chats).
+ */
+export function parseNumberedChoice(text: string): { index: number; namePrefix: string } | null {
+  const ordinal = /^\s*(\d{1,2})\s*-?\s*(?:р|дугаар|дахь|dahi)(?:\s+(?:нь|аялал|ni))?\s*[.!?]?\s*$/iu.exec(text);
+  if (ordinal) return { index: Number(ordinal[1]) - 1, namePrefix: "" };
+  const numbered = /^\s*(\d{1,2})\s*(?:[.)]\s*([\s\S]*))?$/u.exec(text);
+  if (!numbered) return null;
+  const namePrefix = (numbered[2] || "").replace(/(?:\.\.\.|…)\s*$/u, "").trim();
+  return { index: Number(numbered[1]) - 1, namePrefix };
+}
+
+/** Trips whose name starts with a (possibly truncated) button title. */
+function tripsNamedByPrefix(prefix: string, pool: TravelTrip[]): TravelTrip[] {
+  const wanted = looseNorm(prefix);
+  if (wanted.replace(/\s/g, "").length < 3) return [];
+  return pool.filter((trip) => looseNorm(trip.route_name).startsWith(wanted));
+}
+
 export type FastPathRoute = {
   /** Text the deterministic matchers should see. */
   matchText: string;
@@ -108,6 +146,12 @@ export async function routeFastPathText(input: {
   const { senderId, text, contextualUserText, trips } = input;
   const resolve = (t: string, pool: TravelTrip[]) =>
     resolveTripFromUserMessage(t, pool, { allowLooseFallback: false });
+  const chose = async (trip: TravelTrip): Promise<FastPathRoute> => {
+    await clearClarificationState(senderId);
+    return { matchText: joinContextAndTurn(trip.route_name, text), scopedClarify: null };
+  };
+  const tappedOwnButton = isOwnButtonLabel(text);
+  const choice = parseNumberedChoice(text);
 
   // --- 1. Pending clarification: scope the answer to what we offered. ---
   const pending = await getClarificationState(senderId);
@@ -117,30 +161,46 @@ export async function routeFastPathText(input: {
         .filter((trip): trip is TravelTrip => Boolean(trip))
     : [];
   if (pendingTrips.length > 0) {
-    const numberedChoice = /^\s*(\d{1,2})(?:\D|$)/.exec(text);
-    if (numberedChoice) {
-      const index = Number.parseInt(numberedChoice[1], 10) - 1;
-      const chosen = pendingTrips[index];
-      if (chosen) {
-        await clearClarificationState(senderId);
-        return { matchText: `${chosen.route_name}\n${text}`, scopedClarify: null };
+    if (choice) {
+      // The NAME in a tapped "2. <trip name>..." outranks its number:
+      // the number belongs to whichever list the button came from, which may
+      // not be the list we asked last.
+      const byIndex = pendingTrips[choice.index];
+      const named = choice.namePrefix ? tripsNamedByPrefix(choice.namePrefix, trips) : [];
+      const namedPending = named.filter((trip) => pendingTrips.includes(trip));
+      if (named.length > 0) {
+        if (byIndex && named.includes(byIndex)) return chose(byIndex);
+        if (namedPending.length === 1) return chose(namedPending[0]);
+        if (named.length === 1) return chose(named[0]);
+        const scoped = namedPending.length > 1 ? namedPending : named;
+        await setClarificationState(senderId, scoped.map((trip) => trip.id));
+        return { matchText: text, scopedClarify: scoped };
       }
+      if (byIndex) return chose(byIndex);
+    }
+    // One of our own buttons ("Хөтөлбөр үзэх") is not an answer to "which
+    // trip?". Attribute-matching the label against candidates picked one at
+    // random (its words appear in a trip description) and sent that PDF.
+    if (tappedOwnButton) {
+      const contextual = contextualUserText !== text ? resolve(contextualUserText, trips) : null;
+      if (contextual?.status === "verified") return chose(contextual.trip);
+      await setClarificationState(senderId, pendingTrips.map((trip) => trip.id));
+      return { matchText: text, scopedClarify: pendingTrips };
     }
     const scoped = resolve(text, pendingTrips);
-    if (scoped.status === "verified") {
-      await clearClarificationState(senderId);
-      return { matchText: `${scoped.trip.route_name}\n${text}`, scopedClarify: null };
-    }
+    if (scoped.status === "verified") return chose(scoped.trip);
+    // An attribute answer that fits exactly one offered trip ("<хот>-оос",
+    // the departure city in one candidate's description) settles it before
+    // the whole catalog gets a say — the catalog check below took that city
+    // as an unrelated trip with the city in its NAME (2026-09-21).
+    const byAttribute = filterCandidatesByAttribute(text, pendingTrips);
+    if (byAttribute.length === 1) return chose(byAttribute[0]);
     const catalogDirect = resolve(text, trips);
     if (
       catalogDirect.status === "verified" &&
       !pendingTrips.some((trip) => trip.id === catalogDirect.trip.id)
     ) {
-      await clearClarificationState(senderId);
-      return {
-        matchText: `${catalogDirect.trip.route_name}\n${text}`,
-        scopedClarify: null,
-      };
+      return chose(catalogDirect.trip);
     }
     // A date answer ("8 сарын 24-нд хэд вэ") narrows by DEPARTURE DATE — the
     // name/attribute matchers can't read dates, which used to clear the state
@@ -152,10 +212,7 @@ export async function routeFastPathText(input: {
       const byDate = pendingTrips.filter((trip) =>
         tripMatchesRequestedDate(trip, requestedYmd),
       );
-      if (byDate.length === 1) {
-        await clearClarificationState(senderId);
-        return { matchText: `${byDate[0].route_name}\n${text}`, scopedClarify: null };
-      }
+      if (byDate.length === 1) return chose(byDate[0]);
       if (byDate.length > 1) {
         await setClarificationState(senderId, byDate.map((trip) => trip.id));
         const [, month, day] = requestedYmd.split("-");
@@ -166,25 +223,31 @@ export async function routeFastPathText(input: {
         };
       }
     }
+    // A month answer ("1 сард", "10sar", "11 сард бна уу") narrows the same
+    // way. When none of the offered trips departs that month, say so and list
+    // what they DO have, instead of silently answering about one of them.
+    const requestedMonth = requestedYmd ? null : resolveRequestedMonth(text);
+    if (requestedMonth) {
+      const byMonth = pendingTrips.filter((trip) => tripDepartsInMonth(trip, requestedMonth.month));
+      if (byMonth.length === 1) return chose(byMonth[0]);
+      await setClarificationState(senderId, (byMonth.length > 0 ? byMonth : pendingTrips).map((trip) => trip.id));
+      return {
+        matchText: text,
+        scopedClarify: byMonth.length > 0 ? byMonth : pendingTrips,
+        scopedClarifyNote: byMonth.length > 0
+          ? `${requestedMonth.month} сард эдгээр аялал гарна:`
+          : `${requestedMonth.month} сард гарах аялал эдгээрээс алга байна. Эдгээрийн гарах өдрүүд:`,
+      };
+    }
     if (scoped.status === "ambiguous") {
       // Refine the resolver's candidates with attribute containment: for
       // "5 өдөр нь" the resolver kept {4 өдөр, 5 өдөр} (digit-blind scoring),
       // but only one of them actually contains the customer's "5".
       const refined = filterCandidatesByAttribute(text, scoped.candidates);
-      if (refined.length === 1) {
-        await clearClarificationState(senderId);
-        return { matchText: `${refined[0].route_name}\n${text}`, scopedClarify: null };
-      }
+      if (refined.length === 1) return chose(refined[0]);
       const candidates = refined.length > 1 ? refined : scoped.candidates;
       await setClarificationState(senderId, candidates.map((trip) => trip.id));
       return { matchText: text, scopedClarify: candidates };
-    }
-    // The resolver saw nothing — try attribute containment ("усан парктай"
-    // is an answer a human understands but no name-matcher scores).
-    const byAttribute = filterCandidatesByAttribute(text, pendingTrips);
-    if (byAttribute.length === 1) {
-      await clearClarificationState(senderId);
-      return { matchText: `${byAttribute[0].route_name}\n${text}`, scopedClarify: null };
     }
     if (byAttribute.length > 1) {
       await setClarificationState(senderId, byAttribute.map((trip) => trip.id));
@@ -192,6 +255,17 @@ export async function routeFastPathText(input: {
     }
     // Nothing fits the offered options — the customer moved on.
     await clearClarificationState(senderId);
+  }
+
+  // A numbered button title with no (or an expired) pending question: its
+  // name alone identifies the trip.
+  if (choice?.namePrefix) {
+    const named = tripsNamedByPrefix(choice.namePrefix, trips);
+    if (named.length === 1) return { matchText: joinContextAndTurn(named[0].route_name, text), scopedClarify: null };
+    if (named.length > 1) {
+      await setClarificationState(senderId, named.map((trip) => trip.id));
+      return { matchText: text, scopedClarify: named };
+    }
   }
 
   // --- 2. Stateless current-message-first routing, capturing new ambiguity. ---
@@ -208,13 +282,12 @@ export async function routeFastPathText(input: {
   // Our own button label never names a trip, however well it scores against
   // one — skip straight to context so the tap applies to the trip the
   // customer was actually looking at.
-  const tappedOwnButton = isOwnButtonLabel(text);
   if (direct.status === "verified" && !tappedOwnButton) {
     return { matchText: text, scopedClarify: null };
   }
   const contextual = contextualUserText !== text ? resolve(contextualUserText, trips) : null;
   if (tappedOwnButton && contextual?.status === "verified") {
-    return { matchText: `${contextual.trip.route_name}\n${text}`, scopedClarify: null };
+    return { matchText: joinContextAndTurn(contextual.trip.route_name, text), scopedClarify: null };
   }
   // Bug (found 2026-07-17 replaying real traffic): "beejin" alone after a
   // Chunchin (unrelated) reply returned Chunchin. isLikelyContextDependentText
@@ -227,11 +300,17 @@ export async function routeFastPathText(input: {
   // already applies below) — otherwise it's a stale unrelated trip hijacking
   // an unrelated fresh query, exactly the class of bug this file's own
   // docstring warns about.
+  // Context may narrow an ambiguous message only when the message ADDS
+  // something ("шууд нислэгтэй нь", "газрын", "тэр үнэ"). A place name typed
+  // again ("<хот>" right after one of its trips' cards) asks for the
+  // destination again — it used to re-serve the card on screen instead of the
+  // list of that destination's trips.
   const directRejectsContextual =
     direct.status === "ambiguous" &&
     !(
       contextual?.status === "verified" &&
-      direct.candidates.some((trip) => trip.id === contextual.trip.id)
+      direct.candidates.some((trip) => trip.id === contextual.trip.id) &&
+      addsNarrowing(text, direct.candidates)
     );
   if (
     contextualUserText !== text &&
@@ -240,13 +319,15 @@ export async function routeFastPathText(input: {
     !directRejectsContextual
   ) {
     return {
-      matchText: `${contextual.trip.route_name}\n${text}`,
+      matchText: joinContextAndTurn(contextual.trip.route_name, text),
       scopedClarify: null,
     };
   }
-  const picked = pickFastPathMatchText(text, contextualUserText, (t) =>
-    t === text ? direct : contextual ?? resolve(t, trips),
-  );
+  const picked = directRejectsContextual
+    ? text
+    : pickFastPathMatchText(text, contextualUserText, (t) =>
+        t === text ? direct : contextual ?? resolve(t, trips),
+      );
 
   if (direct.status === "ambiguous") {
     await setClarificationState(senderId, direct.candidates.map((trip) => trip.id));
@@ -258,11 +339,15 @@ export async function routeFastPathText(input: {
   // answer back into price/date/program builders: it may contain stale
   // qualifiers ("тийзгүй", "7 сар", an old price) that override what the
   // customer asks in the current turn. Once context resolves one trip, reduce
-  // it to the canonical trip name plus the current message.
-  const matchText =
-    picked === contextualUserText && contextual?.status === "verified"
-      ? `${contextual.trip.route_name}\n${text}`
-      : picked;
-
-  return { matchText, scopedClarify: null };
+  // it to the canonical trip name plus the current message — and when context
+  // resolves NOTHING, it has nothing to offer: the bot's previous reply full
+  // of "үнэ"/"гарах" made "амжилт" a price question that matched no trip and
+  // silently handed the customer to staff.
+  if (picked === contextualUserText && contextual?.status === "verified") {
+    return { matchText: joinContextAndTurn(contextual.trip.route_name, text), scopedClarify: null };
+  }
+  if (picked === contextualUserText && contextual?.status !== "ambiguous") {
+    return { matchText: customerTurn(picked), scopedClarify: null };
+  }
+  return { matchText: picked, scopedClarify: null };
 }

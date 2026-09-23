@@ -3,6 +3,7 @@ import { getEnv } from "./env";
 import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboundKillSwitch";
 import { logInfo } from "./observability";
 import { fetchWithRetry } from "./resilience";
+import { quickReplyTitle } from "./quickReplyTitle";
 
 const env = getEnv();
 
@@ -141,10 +142,11 @@ export async function sendTypingOn(
   );
 }
 
+export { quickReplyTitle };
+
 /**
  * Send inline quick-reply buttons after a text message.
  * Buttons appear as tappable chips below the message in Messenger.
- * Labels must be ≤20 chars. Max 13 buttons (we cap at 5 to be safe).
  */
 export async function sendQuickReplies(
   recipientId: string,
@@ -155,8 +157,8 @@ export async function sendQuickReplies(
 ) {
   const quickReplies = labels.slice(0, 11).map((label) => ({
     content_type: "text",
-    title: label.slice(0, 25),
-    payload: label.slice(0, 25),
+    title: quickReplyTitle(label),
+    payload: label.slice(0, 1000),
   }));
   await postToMessenger(
     graphMessagesEndpoint(token),

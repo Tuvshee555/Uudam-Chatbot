@@ -4,7 +4,8 @@
  * scores trips against a query, and resolves which trip(s) a message is about.
  */
 
-import { filterFutureDepartureDates, type ResolvedDepartureDate } from "./travelDates";
+import { filterFutureDepartureDates, sortDepartureDatesForDisplay, type ResolvedDepartureDate } from "./travelDates";
+import { repairBirthYearAgeBands } from "./birthYearAgeBands";
 import { getPosterPdfPublicUrl, isUsableStoredPdfUrl } from "./poster/pdfUrl";
 import type { TravelTrip } from "./travelOps";
 
@@ -23,8 +24,8 @@ export function withFutureDepartureDates(trip: TravelTrip, now = new Date()): Tr
   const dates = trip.departure_dates || [];
   const resolved = ((trip.extra || {}) as Record<string, unknown>)
     .departure_dates_resolved as ResolvedDepartureDate[] | undefined;
-  const filtered = filterFutureDepartureDates(dates, now, resolved);
-  if (filtered.length === dates.length) return trip;
+  const filtered = sortDepartureDatesForDisplay(filterFutureDepartureDates(dates, now, resolved), now, resolved);
+  if (filtered.length === dates.length && filtered.every((date, index) => date === dates[index])) return trip;
   return { ...trip, departure_dates: filtered };
 }
 
@@ -905,8 +906,9 @@ function sanitizeGroup(
  * data exactly as entered.
  */
 export function sanitizeTripForCustomers(trip: TravelTrip): TravelTrip {
-  const extra = trip.extra;
-  if (!isRecord(extra)) return trip;
+  if (!isRecord(trip.extra)) return trip;
+  // "ХҮҮХЭД -2014-2015 ОН" saved as "14-20 нас" (see birthYearAgeBands.ts).
+  const extra = repairBirthYearAgeBands(trip.extra);
 
   const departureMonthDays = uniqueMonthDays(
     (trip.departure_dates || []).flatMap((value) => monthDaysIncludingIso(String(value ?? ""))),
@@ -938,7 +940,7 @@ export function sanitizeTripForCustomers(trip: TravelTrip): TravelTrip {
     if (fixed !== extra.age_rules.infant) setExtra("age_rules", { ...extra.age_rules, infant: fixed });
   }
 
-  return nextExtra === extra ? trip : { ...trip, extra: nextExtra };
+  return nextExtra === trip.extra ? trip : { ...trip, extra: nextExtra };
 }
 
 const SHANGHAI_SIGNALS = ["\u0448\u0430\u043d\u0445\u0430\u0439", "shanghai"];
@@ -997,10 +999,40 @@ function shanghaiZhangjiajieIntentScore(query: string, trip: TravelTrip): number
   return 0;
 }
 
+/**
+ * Two name words typed as one ("<Word1><Word2> аялал үнэ", 2026-09-20) match
+ * nothing and the customer was silently handed to staff. Split a long unknown
+ * word into a prefix of one catalog name word (its case ending dropped) plus
+ * another catalog name word. Driven by the catalog's own names, so nothing
+ * here knows any destination.
+ */
+function splitGluedWords(words: string[], trips: TravelTrip[]): string[] {
+  if (!words.some((word) => word.length >= 8)) return words;
+  const vocabulary = unique(trips.flatMap((trip) => keywordTokens(trip.route_name)));
+  const known = new Set(vocabulary);
+  const extra: string[] = [];
+  for (const word of words) {
+    if (word.length < 8 || known.has(word)) continue;
+    for (let cut = 3; cut <= word.length - 3; cut += 1) {
+      const head = word.slice(0, cut);
+      const tail = word.slice(cut);
+      const headWord = vocabulary.find((token) => token.startsWith(head) && token.length - head.length <= 3);
+      const tailWord = vocabulary.find(
+        (token) => token === tail || (token.startsWith(tail) && token.length - tail.length <= 3),
+      );
+      if (headWord && tailWord) {
+        extra.push(headWord, tailWord);
+        break;
+      }
+    }
+  }
+  return extra.length > 0 ? unique([...words, ...extra]) : words;
+}
+
 export function findTripMatches(text: string, trips: TravelTrip[], options?: TripMatchOptions): TripMatch[] {
   const query = normText(text);
   const queryPhonetic = phoneticLatinText(text);
-  const queryWords = unique(keywordTokens(text));
+  const queryWords = splitGluedWords(unique(keywordTokens(text)), trips);
   const queryPhoneticWords = unique(phoneticKeywordTokens(text));
   if (!queryWords.length && !queryPhoneticWords.length) return [];
   const landOnly = queryWantsLandOnlyEnhanced(text);
@@ -1216,6 +1248,15 @@ export function resolveTripFromUserMessage(
   });
   if (fullNameMentions.length === 1) {
     return { status: "verified", trip: fullNameMentions[0].trip, candidates: [] };
+  }
+  // Nearly the full name, in order ("<A> хаалга газар нислэг хослосон аялал???"
+  // — a case ending and a typo away from "<A> хаалганы газар нислэг хосолсон
+  // аялал"). A sibling that merely contains the same words in another order
+  // ("<B>- <C> (<A> хаалга / <D>) газар нислэг хосолсон аялал") must not win on
+  // score, as it did for a real customer on 2026-09-22.
+  const inOrderMentions = matches.filter((match) => nameContainsPhraseInOrder(match.trip.route_name, text));
+  if (inOrderMentions.length === 1) {
+    return { status: "verified", trip: inOrderMentions[0].trip, candidates: [] };
   }
 
   const shanghaiZhangjiajieMentions = hasShanghaiZhangjiajieIntent(text)
@@ -1541,6 +1582,36 @@ function tripNameCoversQuery(trip: TravelTrip, tokens: string[]): boolean {
   });
 }
 
+function isAdjacentSwap(a: string, b: string): boolean {
+  if (a.length !== b.length || a.length < 5) return false;
+  const diff = [...a].map((char, index) => (char === b[index] ? -1 : index)).filter((index) => index >= 0);
+  return diff.length === 2 && diff[1] === diff[0] + 1 && a[diff[0]] === b[diff[1]] && a[diff[1]] === b[diff[0]];
+}
+
+const PHRASE_FILLER_LATIN = new Set(
+  ["hi", "hii", "hello", "сайн", "байна", "уу", "юу", "вэ", "бэ", "үнэ", "хэд", "мэдээлэл", "авъя", "авья"].map(
+    (word) => phoneticLatinText(word),
+  ),
+);
+
+/**
+ * True when the customer's words (4 or more) appear IN ORDER as a contiguous
+ * run in the trip name, tolerating case endings, one-letter typos and swapped
+ * letters ("хослосон" ~ "хосолсон").
+ */
+function nameContainsPhraseInOrder(routeName: string, query: string): boolean {
+  const words = phoneticLatinText(query)
+    .split(/\s+/)
+    .filter((token) => token.length >= 2 && !PHRASE_FILLER_LATIN.has(token));
+  if (words.length < 4) return false;
+  const nameTokens = phoneticLatinText(routeName).split(/\s+/).filter((token) => token.length >= 2);
+  const same = (a: string, b: string) => a === b || phoneticTokenMatches(a, b) || isAdjacentSwap(a, b);
+  for (let start = 0; start + words.length <= nameTokens.length; start += 1) {
+    if (words.every((word, offset) => same(word, nameTokens[start + offset]))) return true;
+  }
+  return false;
+}
+
 function routeContentTokens(query: string): string[] {
   const filler = new Set([
     "хэд",
@@ -1833,19 +1904,41 @@ export function isStructuredTripQuestion(text: string) {
  */
 export function isGenericTripRequest(text: string): boolean {
   const tokens = normText(text).split(/\s+/).filter(Boolean);
-  if (tokens.length === 0 || tokens.length > 8) return false;
-  for (const token of tokens) {
-    if (/\d/.test(token)) return false;
-    if (!GENERIC_ROUTE_WORDS.has(token) && !GENERIC_REQUEST_WORDS.has(token)) return false;
-  }
-  return true;
+  if (tokens.length === 0 || tokens.length > 10) return false;
+  return tokens.every((token, index) => {
+    if (/\d/.test(token)) {
+      // "5tom hun 1huuhed", "2 том хүн": a passenger count is still no trip.
+      // Any other number ("10 сар") names a date and disqualifies it.
+      return PASSENGER_COUNT_TOKEN.test(token) ||
+        (/^\d{1,2}$/.test(token) && PASSENGER_WORDS.has(phoneticLatinText(tokens[index + 1] || "")));
+    }
+    return GENERIC_ROUTE_WORDS.has(token) || GENERIC_REQUEST_WORDS.has(token) ||
+      GENERIC_REQUEST_PHONETIC.has(phoneticLatinText(token));
+  });
 }
+
+const PASSENGER_WORDS = new Set(["tom", "hun", "huuhed", "huuhd", "nyrai", "narai", "huuhdiin"].map((w) => phoneticLatinText(w)));
+const PASSENGER_COUNT_TOKEN = /^\d{1,2}(?:том|хүн|хүүхэд|нярай|tom|hun|huuhed|huuhd|nyrai)$/;
+// The same request words as typed in Latin letters, plus the everyday verbs
+// around them ("hutulbur unii medeelel ywuulj uguuch", "дэлгэрэнгүй явуулаач").
+const GENERIC_REQUEST_PHONETIC = new Set(
+  [
+    ...GENERIC_REQUEST_WORDS, ...GENERIC_ROUTE_WORDS,
+    "hutulbur", "hutulbr", "xutulbur", "hotolbor", "delgerengui", "delgerengvi", "дэлгэрэнгүй",
+    "ywuulj", "yvuulj", "yavuulj", "явуулж", "явуулна", "явуулаач", "yavuulaach", "uguuch", "ugnuu",
+    "uguurei", "ugnu", "өгөөч", "өгнө", "өгөөрэй", "avii", "awii", "awah", "awya", "avya", "авмаар",
+    "hergtei", "heregtei", "хэрэгтэй", "medmeer", "мэдмээр", "bn", "bnu", "bna", "bga", "baigaa", "tom",
+    "hun", "том", "хүн", "хүүхэд", "huuhed", "нярай", "nyrai", "tanai", "манайх", "sonirhoj", "сонирхож",
+  ].map((word) => phoneticLatinText(word)),
+);
 
 export function hasProgramIntent(text: string) {
   const normalized = normText(text);
   return (
     PROGRAM_QUERY_SIGNALS.some((signal) => normalized.includes(signal)) ||
-    /хөтөлбөр|зураг|өдөр\s*өдөр|program|pdf|itinerary|day\s*by\s*day/i.test(text)
+    /хөтөлбөр|зураг|өдөр\s*өдөр|program|pdf|itinerary|day\s*by\s*day/i.test(text) ||
+    // Latin typing: "hutulbur hary", "hotolbor", "hutulbut" (a real typo), "zurag".
+    /\b(?:k?h)[uoө]t[uoө]lb[uoө][rt]\w*|\bzurag\w*/i.test(text)
   );
 }
 

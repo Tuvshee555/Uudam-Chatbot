@@ -8,6 +8,8 @@
  * user approved in the per-field review modal.
  */
 
+import { birthYearBand } from "../birthYearAgeBands";
+
 type PosterDay = {
   day?: number;
   route?: string;
@@ -128,8 +130,12 @@ function cleanColumnLabel(value: string): string {
  * only default to "нас" when the label had no unit word at all.
  */
 function extractAgeRange(label: string): string {
+  // "ХҮҮХЭД -2014-2015 ОН" is a birth-year tier; reading ages out of it gave
+  // "14-20 нас" (see birthYearAgeBands.ts).
+  const years = birthYearBand(label);
+  if (years) return years;
   const unit = /сар/i.test(label) ? "сар" : "нас";
-  const range = label.match(/(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*(?:сар|нас|age)?/i);
+  const range = label.match(/(?<!\d)(\d{1,2})\s*[-–—]\s*(\d{1,2})(?!\d)\s*(?:сар|нас|age)?/i);
   if (range) return `${Number(range[1])}-${Number(range[2])} ${unit}`;
   const single = label.match(/(\d{1,2})\s*(?:сар|нас|age)/i);
   return single ? `${Number(single[1])} ${unit}` : "";
@@ -262,7 +268,9 @@ function mapPrices(priceTable: PosterTrip["price_table"]): {
  * extractAgeRange, which normalises every band to "нас" for child rules.
  */
 function extractAgeBand(label: string): string {
-  const range = label.match(/(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*(нас|сар|age)?/i);
+  const years = birthYearBand(label);
+  if (years) return years;
+  const range = label.match(/(?<!\d)(\d{1,2})\s*[-–—]\s*(\d{1,2})(?!\d)\s*(нас|сар|age)?/i);
   if (range) {
     const unit = /сар/i.test(range[3] || "") ? "сар" : "нас";
     return `${Number(range[1])}-${Number(range[2])} ${unit}`;

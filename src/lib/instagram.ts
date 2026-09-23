@@ -3,7 +3,7 @@ import { getEnv } from "./env";
 import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboundKillSwitch";
 import { logInfo } from "./observability";
 import { fetchWithRetry } from "./resilience";
-import { BOT_MESSAGE_METADATA, type UpstreamTraceOptions } from "./messenger";
+import { BOT_MESSAGE_METADATA, quickReplyTitle, type UpstreamTraceOptions } from "./messenger";
 
 const env = getEnv();
 
@@ -82,8 +82,8 @@ export async function sendQuickReplies(
 
   const quickReplies = labels.slice(0, 11).map((label) => ({
     content_type: "text",
-    title: label.slice(0, 25),
-    payload: label.slice(0, 25),
+    title: quickReplyTitle(label),
+    payload: label.slice(0, 1000),
   }));
 
   const startedAt = Date.now();

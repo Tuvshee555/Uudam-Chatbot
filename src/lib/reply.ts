@@ -186,6 +186,24 @@ export function hasPaymentClaimIntent(userText: string): boolean {
 }
 
 /**
+ * "за дансаа", "дансны дугаараа явуулаач": the customer is ready to pay and
+ * wants the bank account. Account details are never given in chat (see
+ * WEBSITE_REPLY) — the model answered a real one with "your account and
+ * profile" nonsense (2026-09-12). Staff send the account; this only has to
+ * say so and alert them.
+ */
+const BANK_ACCOUNT_REQUEST_PATTERN =
+  /(?:^|[^\p{L}])(?:данс(?:(?:аа|ыг)(?!\p{L})|ны\s*(?:дугаар|мэдээлэл)\S*|\s+(?:явуул|өг|хэлээ|бичээ))|dans(?:(?:aa|iig)(?!\p{L})|nii|\s+(?:ywuul|yavuul|ug)))/iu;
+
+export function hasBankAccountRequest(userText: string): boolean {
+  const text = (userText || "").trim();
+  return text.length <= 80 && BANK_ACCOUNT_REQUEST_PATTERN.test(text) && !hasPaymentClaimIntent(text);
+}
+
+export const BANK_ACCOUNT_REQUEST_REPLY =
+  "Төлбөрийн дансны мэдээллийг манай аяллын зөвлөх танд албан ёсоор илгээнэ 🙌 Түр хүлээнэ үү.";
+
+/**
  * Backstops the prompt rule: no matter what the model wrote, a text-only
  * payment claim must never come back as a confirmed booking/payment. Only
  * runs when the customer's OWN message is a payment claim — normal trip

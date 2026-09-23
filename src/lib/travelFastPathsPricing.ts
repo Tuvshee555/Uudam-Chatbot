@@ -8,6 +8,7 @@
 import { filterFutureDepartureDates, parseDepartureDateText } from "./travelDates";
 import type { TravelTrip } from "./travelOps";
 import {
+  withFutureDepartureDates,
   formatMoney,
   getPriceGroups,
   getStructuredPriceGroups,
@@ -46,12 +47,17 @@ const DIRECT_FLIGHT_NEGATIVE_PATTERNS = [
 export function hasPriceIntent(text: string) {
   return (
     /үнэ|хэд\s+вэ|хэдээр|хэд\s+болох|нийт|төлбөр|price|cost|total/i.test(text) ||
+    // "хэд байсан бэ?", "хэд бэ", "хэдэн төгрөг": asked in the customer's own
+    // words, not borrowed from an "үнэ" in the bot's previous reply.
+    /хэд(?:эн)?\s*(?:байсан|бэ|төг\S*|мөнгө|болж)/i.test(text) ||
     /(\d{1,2}\s*(?:настай|нас|сар|сартай)\s*(?:хүүхэд|нярай)?|(?:хүүхэд|нярай)\s*\d{1,2}\s*(?:настай|нас|сар|сартай))/i.test(text)
   );
 }
 
 export function hasDurationIntent(text: string) {
-  return /хэдэн\s+өдөр|хэд\s+хоног|үргэлжил|duration|how long/i.test(text);
+  // "Үнэ хэдэн хоног" asked both; "хэдэн хоног" alone was missed and the
+  // card came back without its duration.
+  return /хэд(?:эн)?\s*(?:өдөр|хоног|шөнө)|үргэлжил|duration|how long|\bhed(?:en)?\s*(?:honog|udur|shun)/i.test(text);
 }
 
 export function hasScheduleIntent(text: string) {
@@ -125,8 +131,8 @@ export function formatPassengerPriceLines(input: {
   const adult = formatPassengerMoney(input.adult ?? null, input.currency);
   const child = input.childFree ? "Үнэгүй" : formatPassengerMoney(input.child ?? null, input.currency);
   const infant = input.infantFree ? "Үнэгүй" : formatPassengerMoney(input.infant ?? null, input.currency);
-  const childAge = input.childAge?.trim() ? ` /${input.childAge.trim()}/` : "";
-  const infantAge = input.infantAge?.trim() ? ` /${input.infantAge.trim()}/` : "";
+  const childAge = input.childAge?.trim() ? ` /${displayAgeBand(input.childAge)}/` : "";
+  const infantAge = input.infantAge?.trim() ? ` /${displayAgeBand(input.infantAge)}/` : "";
 
   if (adult) lines.push(`• Том хүн: ${adult}`);
   if (child) lines.push(`• Хүүхэд${childAge}: ${child}`);
@@ -1202,11 +1208,23 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
         infantFree: g.infant_price_free === true,
       });
       if (!priceLines.length) continue;
+      // Several child fares in one group (born 2014-2015 vs 2016-2023): the
+      // single child_price kept only the first and the other family paid a
+      // price the bot never mentioned.
+      const tierLines = groupChildTierLines(g, currency);
+      if (tierLines.length > 0) {
+        const adultLines = priceLines.filter((line) => line.startsWith("• Том"));
+        const otherLines = priceLines.filter((line) => !line.startsWith("• Том") && !line.startsWith("• Хүүхэд"));
+        priceLines.splice(0, priceLines.length, ...adultLines, ...tierLines, ...otherLines);
+      }
       const priceKey = priceLines.join("|");
       const rawDates = getPriceGroupDisplayDates(g);
       const futureDates = filterFutureDepartureDates(rawDates, now);
       if (rawDates.length > 0 && futureDates.length === 0) continue;
-      const label = typeof g.label === "string" ? g.label : "";
+      // "Үнэ" is the poster table's column header, not a departure label; as a
+      // heading it printed "💰 Үнэ:" followed by a second "Үнэ".
+      const rawLabel = typeof g.label === "string" ? g.label.trim() : "";
+      const label = /^(үнэ|үнийн мэдээлэл|price|prices)$/i.test(rawLabel) ? "" : rawLabel;
       const existing = grouped.find((entry) => entry.priceKey === priceKey);
       if (existing) existing.dates.push(...futureDates);
       else grouped.push({ priceKey, priceLines, dates: [...futureDates], label });
@@ -1324,6 +1342,27 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
  * the flat trip.child_price, in which case the existing single-line render is
  * already correct and adding a second identical line would be noise.
  */
+/** "2014-2015 он" → "2014-2015 онд төрсөн"; any other band unchanged. */
+export function displayAgeBand(band: string): string {
+  return band.trim().replace(/^((?:19|20)\d{2}\s*[-–]\s*(?:19|20)\d{2})\s*он$/u, "$1 онд төрсөн");
+}
+
+/** One "• Хүүхэд /band/: price" line per distinct non-infant fare in a price group. */
+function groupChildTierLines(group: Record<string, unknown>, currency: string): string[] {
+  const tiers = (Array.isArray(group.passenger_prices) ? group.passenger_prices : [])
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+    .filter((entry) => typeof entry.price === "number" && entry.price > 0)
+    .filter((entry) => !isInfantShapedAge(normText(String(entry.label ?? "")), String(entry.age_range ?? "")));
+  if (new Set(tiers.map((entry) => entry.price)).size < 2) return [];
+  return tiers
+    .map((entry) => {
+      const priceText = formatPassengerMoney(entry.price as number, currency);
+      const band = typeof entry.age_range === "string" ? displayAgeBand(entry.age_range) : "";
+      return priceText ? `• Хүүхэд${band ? ` /${band}/` : ""}: ${priceText}` : "";
+    })
+    .filter(Boolean);
+}
+
 function formatDistinctChildTiers(trip: TravelTrip, currency: string): string[] {
   const extra = (trip.extra || {}) as Record<string, unknown>;
   const rules = [extra.child_rules, extra.child_price_rules]
@@ -1340,7 +1379,7 @@ function formatDistinctChildTiers(trip: TravelTrip, currency: string): string[] 
     .map((rule) => {
       const priceText = formatPassengerMoney(rule.price as number, currency);
       if (!priceText) return "";
-      const ageRange = typeof rule.age_range === "string" && rule.age_range.trim() ? ` /${rule.age_range.trim()}/` : "";
+      const ageRange = typeof rule.age_range === "string" && rule.age_range.trim() ? ` /${displayAgeBand(rule.age_range)}/` : "";
       return `• Хүүхэд${ageRange}: ${priceText}`;
     })
     .filter((line): line is string => Boolean(line));
@@ -1443,7 +1482,8 @@ function firstStructuredPassengerPrice(trip: TravelTrip, key: "child_price" | "i
 // the client reported two of them as missing.
 const MAX_LISTED_TRIPS = 8;
 
-export function buildAmbiguousTripReply(trips: TravelTrip[]) {
+/** `heading` replaces the generic first line ("11 сард эдгээр аялал гарна:"). */
+export function buildAmbiguousTripReply(trips: TravelTrip[], heading?: string) {
   const names = trips.slice(0, MAX_LISTED_TRIPS).map((trip) => {
     const currency = trip.currency || "MNT";
     const adult = typeof trip.adult_price === "number" ? trip.adult_price : null;
@@ -1452,16 +1492,22 @@ export function buildAmbiguousTripReply(trips: TravelTrip[]) {
     const adultText = formatPassengerMoney(adult, currency);
     const childText = formatPassengerMoney(child, currency);
     const infantText = formatPassengerMoney(infant, currency);
+    // Next departures: customers pick by date, and a "none that month" re-ask
+    // is useless without them.
+    const upcoming = withFutureDepartureDates(trip).departure_dates.slice(0, 3);
     const details = [
       trip.duration_text,
       adultText ? `том хүн ${adultText}` : "",
       childText ? `хүүхэд ${childText}` : "",
       infantText ? `нярай ${infantText}` : "",
+      upcoming.length ? `гарах: ${upcoming.join(", ")}` : "",
     ].filter(Boolean);
     return `• ${trip.route_name}${details.length ? ` — ${details.join(" · ")}` : ""}`;
   });
   return [
-    "Энэ чиглэлээр хэд хэдэн сонголт байна 😊",
+    // Same-name duplicates collapse to one line upstream; "several options"
+    // above a single line read as a glitch.
+    heading || (names.length === 1 ? "Энэ чиглэлээр ийм аялал байна 😊" : "Энэ чиглэлээр хэд хэдэн сонголт байна 😊"),
     ...names,
     "",
     AMBIGUOUS_REPLY_MARKER,

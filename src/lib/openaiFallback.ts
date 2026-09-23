@@ -102,6 +102,13 @@ export async function askOpenAIChatParts(
         timeoutMs: options?.timeoutMs ?? env.openaiTimeoutMs,
         maxRetries: env.openaiMaxRetries,
         retryBaseDelayMs: env.openaiRetryBaseDelayMs,
+        // gpt-4o's 30k tokens/min fits two ~15k-token reply prompts. A 429 there
+        // goes straight to gpt-4o-mini (its own, larger limit) below instead of
+        // burning seconds retrying a window that is already full.
+        retryableStatusCodes:
+          model !== "gpt-4o-mini" && !options?.alternateModelAttempted
+            ? [408, 425, 500, 502, 503, 504]
+            : undefined,
         requestId: options?.requestId,
         correlationId: options?.correlationId,
         metricPrefix: "openai",

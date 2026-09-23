@@ -12,7 +12,8 @@ import { rateLimitAsync } from "./rateLimit";
 import { scheduleCustomerMemoryUpdate } from "./conversationMemory";
 import { scheduleCustomerAttachmentProcessing, scheduleCustomerImageProcessing, type FileAttachmentInput } from "./customerDocuments";
 import { isPaused } from "./pause";
-import { isPagePaused, listTrips } from "./travelOps";
+import { createLead, hasRecentOpenLead, isPagePaused, listTrips } from "./travelOps";
+import { notifyStaffOfLead } from "./staffAlerts";
 import { buildStructuredTripReply } from "./travelFastPaths";
 import { enforceWebsiteForPayment, sanitizeAssistantReply } from "./reply";
 import type { Platform } from "./webhookDedup";
@@ -316,9 +317,43 @@ export async function handleAttachmentOnlyMessage(input: {
     return;
   }
 
+  // The bot cannot listen to a voice note, but staff can. It used to get the
+  // generic "write it in text" ack and nothing else — a paying customer sent a
+  // dozen voice notes over a week that no alert ever pointed staff to.
+  const isVoiceNote = attachments.some((attachment) => attachment?.type === "audio");
+  if (isVoiceNote) {
+    try {
+      if (!(await hasRecentOpenLead(senderId, "handoff"))) {
+        await createLead({
+          kind: "handoff",
+          platform,
+          senderId,
+          customerMessage: "[Дуут мессеж]",
+          context: "Хэрэглэгч дуут мессеж илгээсэн — бот сонсож чадахгүй тул зөвлөх сонсоод хариулна уу.",
+        });
+        await notifyStaffOfLead(
+          { kind: "handoff", platform, customerMessage: "[Дуут мессеж]" },
+          { requestId: trace?.requestId, correlationId: trace?.correlationId, source: "api.webhook.voice_note" },
+        );
+      }
+    } catch (error) {
+      logWarn("webhook.voice_note_lead_failed", {
+        requestId: trace?.requestId,
+        platform,
+        senderHash: hashIdentifier(senderId),
+        classification: classifyError(error),
+      });
+    }
+  }
+
   // Ack file-like uploads at most once per 2 minutes — an album arrives as
   // several events and must not trigger a burst of identical acknowledgements.
-  const ackLimit = await rateLimitAsync(`attach_ack:${senderId}`, 1, 2 * 60 * 1000);
+  // Voice notes: once per 6 hours; the same line after every note reads as a wall.
+  const ackLimit = await rateLimitAsync(
+    `attach_ack:${isVoiceNote ? "voice:" : ""}${senderId}`,
+    1,
+    isVoiceNote ? 6 * 60 * 60 * 1000 : 2 * 60 * 1000,
+  );
   if (!ackLimit.allowed || platform !== "facebook" || !token) {
     scheduleCustomerMemoryUpdate({
       senderId,
@@ -328,9 +363,11 @@ export async function handleAttachmentOnlyMessage(input: {
     });
     return;
   }
-  const ack =
-    "Илгээсэн зүйлийг тань хүлээн авлаа 🙌 Асуултаа бичгээр илгээвэл би шууд хариулъя. " +
-    "Эсвэл утасны дугаараа үлдээвэл манай аяллын зөвлөх тантай холбогдоно 😊";
+  const ack = isVoiceNote
+    ? "Дуут мессежийг тань хүлээн авлаа 🙌 Манай аяллын зөвлөх сонсоод тантай холбогдоно. " +
+      "Аялал, үнэ, хуваарийн асуултаа бичгээр илгээвэл би шууд хариулъя 😊"
+    : "Илгээсэн зүйлийг тань хүлээн авлаа 🙌 Асуултаа бичгээр илгээвэл би шууд хариулъя. " +
+      "Эсвэл утасны дугаараа үлдээвэл манай аяллын зөвлөх тантай холбогдоно 😊";
   try {
     await sendTextMessage(senderId, ack, token, {
       requestId: trace?.requestId,

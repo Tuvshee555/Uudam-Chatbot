@@ -3,8 +3,9 @@
  * "send me the program" reply builder.
  */
 
-import { filterFutureDepartureDates, type ResolvedDepartureDate } from "./travelDates";
+import { filterFutureDepartureDates, sortDepartureDatesForDisplay, type ResolvedDepartureDate } from "./travelDates";
 import { TRIP_MEDIA_UNAVAILABLE_SILENT } from "./reply";
+import { intentTextOf } from "./customerTurn";
 import type { TravelTrip } from "./travelOps";
 import {
   findTripMatches,
@@ -195,10 +196,13 @@ function buildTripSummaryLines(trip: TravelTrip): string {
   const child = formatPrice(trip.child_price);
   if (adult && child) lines.push(`💰 Насанд хүрэгч: ${adult} | Хүүхэд: ${child}`);
   else if (adult) lines.push(`💰 Үнэ: ${adult}`);
-  const dates = filterFutureDepartureDates(
-    trip.departure_dates?.filter(Boolean) ?? [],
+  const resolvedDates = ((trip.extra || {}) as Record<string, unknown>).departure_dates_resolved as
+    | ResolvedDepartureDate[]
+    | undefined;
+  const dates = sortDepartureDatesForDisplay(
+    filterFutureDepartureDates(trip.departure_dates?.filter(Boolean) ?? [], new Date(), resolvedDates),
     new Date(),
-    ((trip.extra || {}) as Record<string, unknown>).departure_dates_resolved as ResolvedDepartureDate[] | undefined,
+    resolvedDates,
   );
   if (dates.length > 0) lines.push(`📅 Гарах өдрүүд: ${dates.slice(0, 5).join(", ")}${dates.length > 5 ? "…" : ""}`);
   return lines.join("\n");
@@ -212,7 +216,10 @@ export function buildTripProgramReply(
   text: string,
   trips: TravelTrip[],
 ): TripProgramReplyResult | null {
-  if (!hasProgramIntent(text)) return null;
+  // Asked by the customer, not implied by a trip NAME: tapping a trip named
+  // "<хот> [сар]-р сарын аяллын хөтөлбөр" is choosing it, not asking for its PDF.
+  const intentText = intentTextOf(text, trips);
+  if (!hasProgramIntent(intentText)) return null;
 
   const query = normText(text);
   const wantsCombo = queryWantsLandFlightCombo(text);
@@ -312,8 +319,8 @@ export function buildTripProgramReply(
   const brochure = getTripBrochureAsset(best);
 
   const wantsPicturesOnly =
-    /зураг|zurag|photo|picture|пост(?:ер)?/i.test(text) &&
-    !/хөтөлбөр|hutulbur|program|itinerary|өдөр\s*өдөр|day\s*by\s*day/i.test(text);
+    /зураг|zurag|photo|picture|пост(?:ер)?/i.test(intentText) &&
+    !/хөтөлбөр|hutulbur|program|itinerary|өдөр\s*өдөр|day\s*by\s*day/i.test(intentText);
   if (wantsPicturesOnly) {
     if (brochure) {
       return {
@@ -395,8 +402,8 @@ export function buildTripProgramReply(
   // below, so a customer asking for pictures of a trip that has pictures got
   // silence + a staff handoff on all 14 photo trips.
   const wantsPicturesOnlyFallback =
-    /зураг|zurag|photo|picture|пост(?:ер)?/i.test(text) &&
-    !/хөтөлбөр|hutulbur|program|itinerary|өдөр\s*өдөр|day\s*by\s*day/i.test(text);
+    /зураг|zurag|photo|picture|пост(?:ер)?/i.test(intentText) &&
+    !/хөтөлбөр|hutulbur|program|itinerary|өдөр\s*өдөр|day\s*by\s*day/i.test(intentText);
   if (wantsPicturesOnlyFallback) {
     const photoUrls = tripGeneralPhotoUrls(best);
     if (photoUrls.length > 0) {

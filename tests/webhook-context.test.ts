@@ -23,7 +23,7 @@ test("short referential follow-up still keeps recent user context", async () => 
 
   const result = webhookModule.buildContextualUserText(
     [
-      { role: "user" as const, text: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал" },
+      { role: "user" as const, text: "Альфа + Зэт хаалга шууд нислэгтэй аялал" },
       { role: "assistant" as const, text: "Үнэ, зураг, хөтөлбөрийн аль нь хэрэгтэй вэ?" },
     ],
     "зураг",
@@ -31,6 +31,6 @@ test("short referential follow-up still keeps recent user context", async () => 
 
   assert.equal(
     result,
-    "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал\nзураг",
+    "Альфа + Зэт хаалга шууд нислэгтэй аялал\n зураг",
   );
 });
