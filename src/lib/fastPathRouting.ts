@@ -115,7 +115,11 @@ export function parseNumberedChoice(text: string): { index: number; namePrefix: 
 function tripsNamedByPrefix(prefix: string, pool: TravelTrip[]): TravelTrip[] {
   const wanted = looseNorm(prefix);
   if (wanted.replace(/\s/g, "").length < 3) return [];
-  return pool.filter((trip) => looseNorm(trip.route_name).startsWith(wanted));
+  const named = pool.filter((trip) => trip.status !== "draft" && looseNorm(trip.route_name).startsWith(wanted));
+  // A sold-out sibling with the same opening words must not turn a tapped,
+  // bookable trip into a "which one?" question.
+  const bookable = named.filter((trip) => trip.status === "active");
+  return bookable.length > 0 ? bookable : named;
 }
 
 export type FastPathRoute = {

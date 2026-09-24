@@ -55,6 +55,8 @@ import { TRIP_MEDIA_UNAVAILABLE_SILENT } from "./reply";
 import {
   buildAmbiguousTripReply,
   buildAgeSpecificPriceReply,
+  childFareTiers,
+  isPassengerCountOnly,
   buildIncludedInPriceReply,
   buildPassengerTypePriceReply,
   buildSameTripPriceComparisonReply,
@@ -817,7 +819,8 @@ function extractPassengerCounts(text: string): { adult: number; child: number; i
     normalized.includes("нийт") ||
     normalized.includes("хэд болох") ||
     normalized.includes("нийлээд") ||
-    normalized.includes("total");
+    normalized.includes("total") ||
+    isPassengerCountOnly(text);
   if (!hasTotalIntent) return null;
 
   const readCount = (patterns: RegExp[]) => {
@@ -889,12 +892,29 @@ function buildPassengerTotalReply(
   };
 
   add("Том хүн", counts.adult, adultPrice, false);
-  add("Хүүхэд", counts.child, childPrice, isDocumentedFreeFare(trip, "child"));
+  // Several child fares by age/birth year: the total depends on which band
+  // each child is in, so give the range — never silently the first fare.
+  const tiers = counts.child > 0 && !isDocumentedFreeFare(trip, "child") ? childFareTiers(trip, selected) : [];
+  let spread = 0;
+  if (tiers.length >= 2) {
+    const prices = tiers.map((tier) => tier.price);
+    const low = Math.min(...prices);
+    spread = counts.child * (Math.max(...prices) - low);
+    total += counts.child * low;
+    for (const tier of tiers) {
+      rows.push(`• Хүүхэд${tier.band ? ` /${tier.band}/` : ""} ${counts.child} x ${formatMoney(tier.price, currency)} = ${formatMoney(counts.child * tier.price, currency)}`);
+    }
+  } else {
+    add("Хүүхэд", counts.child, childPrice, isDocumentedFreeFare(trip, "child"));
+  }
   add("Нярай", counts.infant, infantPrice, isDocumentedFreeFare(trip, "infant"));
   if (total <= 0) return null;
 
   const label = monthDay ? `${monthDay.month} сарын ${monthDay.day}-ны ` : "";
-  return [`✈️ ${trip.route_name}`, `💰 ${label}нийт: ${formatMoney(total, currency)}`, ...rows].join("\n");
+  const totalText = spread > 0
+    ? `${formatMoney(total, currency)} – ${formatMoney(total + spread, currency)} (хүүхдийн насаас хамаарна)`
+    : formatMoney(total, currency);
+  return [`✈️ ${trip.route_name}`, `💰 ${label}нийт: ${totalText}`, ...rows].join("\n");
 }
 
 /**
@@ -1452,10 +1472,12 @@ export function buildStructuredTripReply(
     if (combinedReply) return combinedReply;
   }
 
-  const routeOnlyCandidate = !isStructuredTripQuestion(intentText) && !hasDatePriceConstraint(intentText)
-    ? findBestTripMatch(text, trips)
-    : null;
-  if (!isStructuredTripQuestion(intentText) && !hasDatePriceConstraint(intentText)) {
+  // A bare head count ("2том хүн 2 хүүхэд") about the trip on screen is a
+  // price question: it used to get the same card back, with no total.
+  const asksStructured =
+    isStructuredTripQuestion(intentText) || hasDatePriceConstraint(intentText) || isPassengerCountOnly(intentText);
+  const routeOnlyCandidate = !asksStructured ? findBestTripMatch(text, trips) : null;
+  if (!asksStructured) {
     if (!routeOnlyCandidate?.best) {
       if (routeOnlyCandidate?.ambiguous?.length) {
         const totalReply = buildAmbiguousPassengerTotalReply(currentLine, routeOnlyCandidate.ambiguous);

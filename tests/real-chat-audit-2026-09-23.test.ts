@@ -458,3 +458,75 @@ test("'Хөтөлбөр үзэх' under a which-trip list does not pick the list
   const first = buildContextualUserText([{ role: "assistant", text: list }], "эхнийх");
   assert.ok(first.startsWith(OCT_TRIP.route_name), first);
 });
+
+// ── Live chats of 2026-09-23/24 ─────────────────────────────────────────────
+
+const VELMOR_SCHOOL = trip({ id: "velmor-school", route_name: "Вэлмор - Янмор шууд нислэг-сурагчдын амралтаар" });
+const VELMOR_FOUR = trip({ id: "velmor-four", route_name: "Вэлмор - Сэлвин – Пэлмак - Ормак – 4 ХОТЫН АЯЛАЛ", category: "Аялал" });
+const LUMIA_SCHOOL = trip({ id: "lumia-school", route_name: "ЛУМИА - БАРТЭНЛАНД -сурагчдын амралтын аялал" });
+const LUMIA_PELDOR_TRIP = trip({ id: "lumia-peldor", route_name: "Лумиа + Зэтгорийн хаалга шууд нислэгтэй аялал ( Пэлдор - Эмбар )" });
+const KARDAN_LAND = trip({ id: "kardan-land", route_name: "Сэрвэн тэнгис буюу Кардан-Вэлморгийн газрын аялал", category: "Аялал" });
+const LIVE_CATALOG = [VELMOR_SCHOOL, VELMOR_FOUR, LUMIA_SCHOOL, LUMIA_PELDOR_TRIP, KARDAN_LAND];
+
+test("an occasion ('school holiday') narrows the named city's trips — never another city's", () => {
+  const r = resolveTripFromUserMessage("Сурагчдын амралтын үеэр вэлмор", LIVE_CATALOG, { allowLooseFallback: false });
+  assert.equal(r.status, "verified");
+  assert.equal(r.trip?.id, "velmor-school");
+});
+
+test("a place misspelled with the same consonants still finds its trip", () => {
+  const r = resolveTripFromUserMessage("Сурагчдын амралтаар лумиа пэлдир аялал сонирхож бна", LIVE_CATALOG, { allowLooseFallback: false });
+  assert.equal(r.status, "verified");
+  assert.equal(r.trip?.id, "lumia-peldor");
+});
+
+test("two cities with no trip visiting both lists each city's trips", () => {
+  const r = resolveTripFromUserMessage("Velmor bolon lumiain aylaliin hutulbur aviya", LIVE_CATALOG, { allowLooseFallback: false });
+  assert.equal(r.status, "ambiguous");
+  const ids = r.candidates.map((t) => t.id);
+  assert.ok(ids.some((id) => id.startsWith("velmor")) && ids.some((id) => id.startsWith("lumia")), ids.join(","));
+});
+
+test("named cities beat a transport word the catalog never recorded", () => {
+  const r = resolveTripFromUserMessage("Вэлмор-Сэлвин газрын аяллын хөтөлбөр үзэх", LIVE_CATALOG, { allowLooseFallback: false });
+  assert.equal(r.trip?.id, "velmor-four");
+});
+
+test("a head count after a trip card gets the total, with a range for birth-year child fares", () => {
+  const tiered = trip({
+    id: "tiered",
+    route_name: "Кардан аялал",
+    adult_price: 1111111,
+    child_price: 999999,
+    extra: {
+      price_groups: [{
+        label: "Үнэ",
+        dates: [],
+        adult_price: 1111111,
+        child_price: 999999,
+        passenger_prices: [
+          { label: "ХҮҮХЭД 2014-2015 ОН", age_range: "2014-2015 он", price: 999999 },
+          { label: "ХҮҮХЭД 2016-2023 ОН", age_range: "2016-2023 он", price: 888888 },
+        ],
+      }],
+    },
+  });
+  const reply = buildStructuredTripReply(joinContextAndTurn(tiered.route_name, "2том хүн 2 хүүхэд"), [tiered]) || "";
+  assert.match(reply, /нийт: 3,999,998₮ – 4,222,220₮/);
+  assert.match(reply, /Том хүн 2 x 1,111,111₮ = 2,222,222₮/);
+});
+
+test("a tapped trip button ignores a sold-out sibling with the same opening words", async () => {
+  const open = trip({ id: "open", route_name: "ЛУМИА - -БАРТЭНЛЭНД -амралт -11/3" });
+  const soldOut = trip({ id: "sold", route_name: "ЛУМИА - БАРТЭНЛЭНД-10/08", status: "sold_out" });
+  const sender = "audit-prefix-active";
+  await clarification.clearClarificationState(sender);
+  const routed = await routing.routeFastPathText({
+    senderId: sender,
+    text: "1. ЛУМИА - -БАРТЭНЛ...",
+    contextualUserText: "1. ЛУМИА - -БАРТЭНЛ...",
+    trips: [open, soldOut],
+  });
+  assert.equal(routed.scopedClarify, null);
+  assert.ok(routed.matchText.includes(open.route_name), routed.matchText);
+});

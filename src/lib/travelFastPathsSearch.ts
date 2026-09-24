@@ -987,6 +987,10 @@ function editDistance(a: string, b: string): number {
   return previous[b.length];
 }
 
+function consonantOutline(word: string): string {
+  return word.replace(/[аэиоуөүеёюяыйьъaeiouy]/g, "");
+}
+
 /** The catalog words a customer word is plainly a spelling of (nearest first). */
 function catalogSpellingsOf(word: string, vocabulary: CatalogVocabulary): VocabularyEntry[] {
   const phonetic = phoneticLatinText(word).replace(/\s+/g, "");
@@ -1010,8 +1014,21 @@ function catalogSpellingsOf(word: string, vocabulary: CatalogVocabulary): Vocabu
       editDistance(word, entry.word) <= 1,
   );
   if (oneOff.length > 0 && oneOff.length <= 3) return oneOff;
-  // Looser guesses (vowel-blind "outlines", two-letter edits) were tried on all
-  // 419 real customer messages and turned everyday words into places
+  // Same consonants in the same order, vowels misheard ("жанжажи"): only for
+  // long words with four or more consonants and the same first two letters —
+  // shorter outlines turned everyday words into places.
+  const outline = consonantOutline(word);
+  if (word.length >= 6 && outline.length >= 4) {
+    const sameOutline = vocabulary.entries.filter(
+      (entry) =>
+        entry.word.length >= 6 &&
+        entry.word.slice(0, 2) === word.slice(0, 2) &&
+        consonantOutline(entry.word) === outline,
+    );
+    if (sameOutline.length > 0 && sameOutline.length <= 3) return sameOutline;
+  }
+  // Looser guesses (short vowel-blind outlines, two-letter edits) were tried on
+  // all 419 real customer messages and turned everyday words into places
   // ("мэндээ", "хилээр"). Other spellings of a place belong in that trip's
   // aliases in the admin — data, not code.
   return [];
@@ -1039,8 +1056,26 @@ function snapMisspelledWords(
 
 /** One word covers another: the same word, or one with a case ending ("<хот>тай"). */
 function sameWordStem(a: string, b: string): boolean {
-  return a.length >= 4 && b.length >= 4 && (a.startsWith(b) || b.startsWith(a));
+  if (a.length < 4 || b.length < 4) return false;
+  // "амралтын" / "амралтаар": one word, two case endings.
+  return a.startsWith(b) || b.startsWith(a) || commonPrefixLength(a, b) >= 6;
 }
+
+/**
+ * Words that say WHEN or WHY, not WHERE ("school holiday", "family",
+ * "health check"). Ordinary Mongolian travel vocabulary — never a place. They
+ * narrow a destination's trips; they must never outrank the destination
+ * ("<хот> сурагчдын амралтаар" answered with another city's school-break trip).
+ */
+const OCCASION_WORD_RE = /^(?:сурагч|амралт|шинжилгээ|эрүүл|мэнд|наадам|баяр|оюутан|ахмад|suragch|amralt)/;
+
+function isOccasionWord(word: string): boolean {
+  return OCCASION_WORD_RE.test(word);
+}
+
+// Transport and landscape nouns ("онгоцны тийз", "нуур", "арал") describe a
+// trip; they are not a second destination.
+const DESCRIPTIVE_NOUN_RE = /^(?:онгоц|тийз|нислэг|галт|тэрэг|автобус|круз|усан|далай|тэнгис|нуур|уул|арал|хот|аялал|аялл|далайн)/;
 
 /**
  * Catalog words the customer named: the same word, the same word romanised
@@ -1054,10 +1089,26 @@ function queryPlaceWords(queryWords: string[], vocabulary: CatalogVocabulary): s
       const romanised = vocabulary.entries.filter((entry) => entry.phonetic === phonetic);
       if (romanised.length > 0) return romanised.map((entry) => entry.word);
       return vocabulary.entries
-        .filter((entry) => word.length > entry.word.length && sameWordStem(word, entry.word))
+        .filter((entry) =>
+          (word.length > entry.word.length && sameWordStem(word, entry.word)) ||
+          (phonetic.length > entry.phonetic.length && entry.phonetic.length >= 4 && phonetic.startsWith(entry.phonetic)),
+        )
         .map((entry) => entry.word);
     }),
   ).filter((word) => word.length >= 4);
+}
+
+/** Catalog words a message names, split into places and occasions. */
+export function queryNamedPlaces(text: string, trips: TravelTrip[]): { places: string[]; occasions: string[] } {
+  const vocabulary = catalogVocabulary(trips);
+  const named = queryPlaceWords(
+    snapMisspelledWords(unique(keywordTokens(text)), [], vocabulary).words,
+    vocabulary,
+  );
+  return {
+    places: named.filter((word) => !isOccasionWord(word) && !DESCRIPTIVE_NOUN_RE.test(word)),
+    occasions: named.filter((word) => isOccasionWord(word)),
+  };
 }
 
 /**
@@ -1065,7 +1116,7 @@ function queryPlaceWords(queryWords: string[], vocabulary: CatalogVocabulary): s
  * description: it names every stop on the way and made a pasted poster of one
  * trip resolve to a sibling whose description happened to list the same stops.
  */
-function tripMentionsAllPlaces(trip: TravelTrip, places: string[]): boolean {
+export function tripMentionsAllPlaces(trip: TravelTrip, places: string[]): boolean {
   const tokens = getTripNameHaystack(trip).split(/\s+/);
   return places.every((place) => tokens.some((token) => sameWordStem(token, place)));
 }
@@ -1074,7 +1125,8 @@ function tripMentionsAllPlaces(trip: TravelTrip, places: string[]): boolean {
  * The customer named two or more places ("<хот> <хот> аялал"): the trip that
  * covers all of them is what they mean, over trips covering only one.
  */
-function multiPlaceScore(places: string[], trip: TravelTrip): number {
+function multiPlaceScore(named: string[], trip: TravelTrip): number {
+  const places = named.filter((word) => !isOccasionWord(word) && !DESCRIPTIVE_NOUN_RE.test(word));
   if (places.length < 2) return 0;
   return tripMentionsAllPlaces(trip, places) ? 220 : 0;
 }
@@ -1344,17 +1396,55 @@ export function resolveTripFromUserMessage(
     return { status: "verified", trip: inOrderMentions[0].trip, candidates: [] };
   }
 
+  const { places, occasions } = queryNamedPlaces(text, trips);
+  // Honour "шууд нислэгтэй" / "газрын" / "хосолсон" in every place-based pick —
+  // unless no trip of that kind visits the named places (a trip's transport
+  // is often not recorded), in which case the places decide.
+  const allBookable = trips.filter((trip) => canMatchTripStatus(trip, options));
+  const ofKind = hasSpecificTripPreference ? filterTripsByTransportIntent(text, allBookable) : allBookable;
+  const bookable = places.length > 0 && !ofKind.some((trip) => tripMentionsAllPlaces(trip, places.slice(0, 1)))
+    ? allBookable
+    : ofKind;
   // Several places named, and exactly one trip covers all of them.
-  const vocabulary = catalogVocabulary(trips);
-  const places = queryPlaceWords(
-    snapMisspelledWords(unique(keywordTokens(text)), [], vocabulary).words,
-    vocabulary,
-  );
   const allPlaceMentions = places.length >= 2
-    ? matches.filter((match) => tripMentionsAllPlaces(match.trip, places))
+    ? bookable.filter((trip) => tripMentionsAllPlaces(trip, places))
     : [];
+  const allPlaceAnyKind = places.length >= 2 && allPlaceMentions.length === 0
+    ? allBookable.filter((trip) => tripMentionsAllPlaces(trip, places))
+    : [];
+  if (allPlaceAnyKind.length === 1) {
+    return { status: "verified", trip: allPlaceAnyKind[0], candidates: [] };
+  }
   if (allPlaceMentions.length === 1) {
-    return { status: "verified", trip: allPlaceMentions[0].trip, candidates: [] };
+    return { status: "verified", trip: allPlaceMentions[0], candidates: [] };
+  }
+  // A place plus an occasion ("<хот> сурагчдын амралтаар"): the occasion picks
+  // among THAT place's trips — it never pulls in another city's trip.
+  if (places.length >= 1 && occasions.length >= 1) {
+    const atPlace = bookable.filter((trip) => tripMentionsAllPlaces(trip, places));
+    const forOccasion = atPlace.filter((trip) => tripMentionsAllPlaces(trip, occasions));
+    if (forOccasion.length === 1) return { status: "verified", trip: forOccasion[0], candidates: [] };
+    if (forOccasion.length > 1 && !hasSpecificTripPreference) {
+      return { status: "ambiguous", trip: null, candidates: forOccasion.slice(0, MAX_ROUTE_CANDIDATES) };
+    }
+    // The occasion fits none of this place's trips: the place still decides,
+    // through the ordinary matching below — never another city's trip.
+    if (atPlace.length === 1) return { status: "verified", trip: atPlace[0], candidates: [] };
+  }
+  // Two cities, no trip visiting both ("<хот> болон <хот>"): offer each city's
+  // trips rather than silently answering for only one of them.
+  if (places.length >= 2 && allPlaceMentions.length === 0) {
+    const perPlace = places.map((place) => bookable.filter((trip) => tripMentionsAllPlaces(trip, [place])));
+    if (perPlace.every((list) => list.length > 0)) {
+      const union: TravelTrip[] = [];
+      for (let index = 0; union.length < MAX_ROUTE_CANDIDATES && perPlace.some((list) => index < list.length); index += 1) {
+        for (const list of perPlace) {
+          const trip = list[index];
+          if (trip && !union.includes(trip) && union.length < MAX_ROUTE_CANDIDATES) union.push(trip);
+        }
+      }
+      return { status: "ambiguous", trip: null, candidates: union };
+    }
   }
 
   // Trips the customer's words do not rule out: every route word they typed

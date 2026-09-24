@@ -50,7 +50,8 @@ export function hasPriceIntent(text: string) {
     // "хэд байсан бэ?", "хэд бэ", "хэдэн төгрөг": asked in the customer's own
     // words, not borrowed from an "үнэ" in the bot's previous reply.
     /хэд(?:эн)?\s*(?:байсан|бэ|төг\S*|мөнгө|болж)/i.test(text) ||
-    /(\d{1,2}\s*(?:настай|нас|сар|сартай)\s*(?:хүүхэд|нярай)?|(?:хүүхэд|нярай)\s*\d{1,2}\s*(?:настай|нас|сар|сартай))/i.test(text)
+    /(\d{1,2}\s*(?:настай|нас|сар|сартай)\s*(?:хүүхэд|нярай)?|(?:хүүхэд|нярай)\s*\d{1,2}\s*(?:настай|нас|сар|сартай))/i.test(text) ||
+    isPassengerCountOnly(text)
   );
 }
 
@@ -1345,6 +1346,42 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
 /** "2014-2015 он" → "2014-2015 онд төрсөн"; any other band unchanged. */
 export function displayAgeBand(band: string): string {
   return band.trim().replace(/^((?:19|20)\d{2}\s*[-–]\s*(?:19|20)\d{2})\s*он$/u, "$1 онд төрсөн");
+}
+
+/**
+ * Distinct child fares by age band (birth-year bands included), from a price
+ * group's passenger prices or the trip's child rules. [] when there is only
+ * one child fare.
+ */
+export function childFareTiers(
+  trip: TravelTrip,
+  group?: Record<string, unknown> | null,
+): Array<{ price: number; band: string }> {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const fromGroup = group && Array.isArray(group.passenger_prices) ? group.passenger_prices : [];
+  const fromRules = [extra.child_rules, extra.child_price_rules].flatMap((value) => (Array.isArray(value) ? value : []));
+  for (const source of [fromGroup, fromRules]) {
+    const tiers = (source as unknown[])
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .filter((entry) => typeof entry.price === "number" && entry.price > 0)
+      .filter((entry) => !isInfantShapedAge(normText(String(entry.label ?? "")), String(entry.age_range ?? "")))
+      .filter((entry) => !/том|adult|насанд/i.test(String(entry.label ?? "")))
+      .map((entry) => ({
+        price: entry.price as number,
+        band: typeof entry.age_range === "string" ? displayAgeBand(entry.age_range) : "",
+      }));
+    if (new Set(tiers.map((tier) => tier.price)).size >= 2) return tiers;
+  }
+  return [];
+}
+
+/**
+ * The whole message is a head count ("2том хүн 2 хүүхэд", "3 хүн") — after a
+ * trip card that asks what it will cost them.
+ */
+export function isPassengerCountOnly(text: string): boolean {
+  const normalized = text.toLowerCase().replace(/[.,!?]/g, " ").trim();
+  return /^(?:\d{1,2}\s*(?:том(?:\s*хүн)?|хүүхэд|нярай|хүн|adult|child|infant)\s*)+(?:байна|бна|явна|yavna)?$/i.test(normalized);
 }
 
 /** One "• Хүүхэд /band/: price" line per distinct non-infant fare in a price group. */
