@@ -530,3 +530,79 @@ test("a tapped trip button ignores a sold-out sibling with the same opening word
   assert.equal(routed.scopedClarify, null);
   assert.ok(routed.matchText.includes(open.route_name), routed.matchText);
 });
+
+// ── Found by the compact-catalog replay (2026-09-24) ────────────────────────
+
+test("a payment line is cut from a reply; the rest of the answer is kept", async () => {
+  const { enforceWebsiteForPayment } = await import("../src/lib/reply");
+  const list = "• Альфа аялал — 1,111,111₮\n• Зэт аялал — 999,999₮\n• Кардан аялал — 888,888₮\nУрьдчилгааг дансаар шилжүүлнэ.";
+  assert.equal(enforceWebsiteForPayment(list), "• Альфа аялал — 1,111,111₮\n• Зэт аялал — 999,999₮\n• Кардан аялал — 888,888₮");
+  assert.match(enforceWebsiteForPayment("Төлбөрийг данс руу шилжүүлнэ үү."), /чат дээр баталгаажуулахгүй/);
+});
+
+test("a reply that is only the phone-number ask is treated as no answer", async () => {
+  const { shouldSilenceNoDataReply } = await import("../src/lib/reply");
+  assert.ok(shouldSilenceNoDataReply("Утасны дугаараа үлдээвэл манай аяллын зөвлөх тан руу шууд залгана 🙌."));
+  assert.ok(!shouldSilenceNoDataReply("Тийм ээ, болно 😊 Утасны дугаараа үлдээвэл манай аяллын зөвлөх тан руу шууд залгана 🙌"));
+});
+
+test("our own button under a one-trip list opens that trip", async () => {
+  const sender = "audit-one-trip-list";
+  await clarification.setClarificationState(sender, [DIRECT.id]);
+  const routed = await routing.routeFastPathText({ senderId: sender, text: "Хөтөлбөр үзэх", contextualUserText: "Хөтөлбөр үзэх", trips: CATALOG });
+  assert.equal(routed.scopedClarify, null);
+  assert.ok(routed.matchText.includes(DIRECT.route_name), routed.matchText);
+});
+
+test("a pasted poster (name, dates, price) is answered for that trip, not a price search", () => {
+  const poster = trip({ id: "poster", route_name: "ЗЭТ-МИНИ ЭМБАР-ЛУМИА ХОТЫН АЯЛАЛ", adult_price: 1111111, departure_dates: ["Пүрэв, Ням гариг"] });
+  const other = trip({ id: "other", route_name: "Кардан аялал", adult_price: 999999, departure_dates: ["10 сарын 29"] });
+  const reply = buildStructuredTripReply("🌍Лумиа хот - Зэт-Мини эмбар аялал\n10 сарын 29, 11 сарын 1\nТом хүн-1,111,111₮", [poster, other]) || "";
+  assert.doesNotMatch(reply, /яг таарах аялал олдсонгүй/);
+});
+
+test("a head count under a which-trip list prices every listed trip", async () => {
+  const sender = "audit-count-under-list";
+  const a = trip({ id: "a", route_name: "Лумиа хотын 11-р сарын аялал", adult_price: 1111111, child_price: 999999 });
+  const b = trip({ id: "b", route_name: "Лумиа хотын 12-р сарын аялал", adult_price: 888888, child_price: 777777 });
+  await clarification.setClarificationState(sender, [a.id, b.id]);
+  const routed = await routing.routeFastPathText({ senderId: sender, text: "2 том хүн 2 хүүхэд", contextualUserText: "2 том хүн 2 хүүхэд", trips: [a, b] });
+  assert.equal(routed.scopedClarify?.length, 2);
+  const { buildAmbiguousPassengerTotalReply } = await import("../src/lib/travelFastPaths");
+  const reply = buildAmbiguousPassengerTotalReply("2 том хүн 2 хүүхэд", [a, b]) || "";
+  assert.match(reply, /4,222,220₮/);
+  assert.match(reply, /3,333,330₮/);
+});
+
+test("a date list that moves to the next month is not read as half-numbers", async () => {
+  const { extractDatesFromText } = await import("../src/lib/travelFastPathsPricing");
+  assert.deepEqual(extractDatesFromText("10 сарын 29, 11 сарын 1"), [{ month: 10, day: 29 }, { month: 11, day: 1 }]);
+  assert.deepEqual(extractDatesFromText("7 сарын 9, 16, 23"), [{ month: 7, day: 9 }, { month: 7, day: 16 }, { month: 7, day: 23 }]);
+});
+
+test("a weekly-schedule trip is priced for a date on one of its weekdays", () => {
+  // 2026-10-29 is a Thursday, 2026-11-01 a Sunday.
+  const weekly = trip({ id: "weekly", route_name: "Зэт хотын аялал", adult_price: 1111111, departure_dates: ["Пүрэв, Ням гариг"] });
+  const reply = buildStructuredTripReply(joinContextAndTurn(weekly.route_name, "10 сарын 29, 11 сарын 1 үнэ"), [weekly], NOW_0921) || "";
+  assert.match(reply, /10 сарын 29: Том хүн: 1,111,111₮/);
+  assert.match(reply, /11 сарын 1: Том хүн: 1,111,111₮/);
+  assert.doesNotMatch(reply, /олдсонгүй/);
+});
+
+test("'send me the info' under a which-trip list re-offers the list", async () => {
+  const sender = "audit-generic-under-list";
+  const a = trip({ id: "ga", route_name: "Вэлмор хотын аялал" });
+  const b = trip({ id: "gb", route_name: "Вэлмор - Кардан аялал" });
+  await clarification.setClarificationState(sender, [a.id, b.id]);
+  const routed = await routing.routeFastPathText({ senderId: sender, text: "Medeelel yavuulsaad uguurei", contextualUserText: "Medeelel yavuulsaad uguurei", trips: [a, b] });
+  assert.equal(routed.scopedClarify?.length, 2);
+});
+
+test("a category question under a which-trip list is a new question, not 'tell me about these'", async () => {
+  const sender = "audit-category-under-list";
+  const a = trip({ id: "ca", route_name: "Эльдор газар нислэг хосолсон аялал" });
+  const b = trip({ id: "cb", route_name: "Эльдор- Пэлдор газар нислэг хосолсон аялал" });
+  await clarification.setClarificationState(sender, [a.id, b.id]);
+  const routed = await routing.routeFastPathText({ senderId: sender, text: "газрын аяллын мэдээлэл", contextualUserText: "газрын аяллын мэдээлэл", trips: [a, b] });
+  assert.notEqual(routed.scopedClarify?.length, 2);
+});

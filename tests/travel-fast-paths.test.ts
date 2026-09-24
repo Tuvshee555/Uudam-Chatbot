@@ -593,17 +593,17 @@ test("combined date and price query returns only the exact matching tour", () =>
 
 test("combined date and price query falls back to close matches on the same date only", () => {
   const reply = buildStructuredTripReply(
-    "7/9 1310000 Ð°ÑÐ»Ð°Ð»",
+    "7/9 1310000 аялал",
     [
       trip({
         id: "close-a",
-        route_name: "ÐšÐ°Ñ€Ð´Ð°Ð½+Ð’ÑÐ»Ð¼Ð¾Ñ€ Ð³Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³ Ñ…Ð¾ÑÐ¾Ð»ÑÐ¾Ð½ Ð°ÑÐ»Ð°Ð»",
-        duration_text: "9 Ó©Ð´Ó©Ñ€ / 8 ÑˆÓ©Ð½Ó©",
-        departure_dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 9"],
+        route_name: "Кардан+Вэлмор газар нислэг хосолсон аялал",
+        duration_text: "9 өдөр / 8 шөнө",
+        departure_dates: ["7 сарын 9"],
         extra: {
           price_groups: [
             {
-              dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 9"],
+              dates: ["7 сарын 9"],
               adult_price: 1270000,
               child_price: 1200000,
             },
@@ -612,13 +612,13 @@ test("combined date and price query falls back to close matches on the same date
       }),
       trip({
         id: "close-b",
-        route_name: "Ð’ÑÐ»Ð¼Ð¾Ñ€ ÑˆÑƒÑƒÐ´ Ð½Ð¸ÑÐ»ÑÐ³Ñ‚ÑÐ¹",
-        duration_text: "5 Ó©Ð´Ó©Ñ€ / 4 ÑˆÓ©Ð½Ó©",
-        departure_dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 9"],
+        route_name: "Вэлмор шууд нислэгтэй",
+        duration_text: "5 өдөр / 4 шөнө",
+        departure_dates: ["7 сарын 9"],
         extra: {
           price_groups: [
             {
-              dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 9"],
+              dates: ["7 сарын 9"],
               adult_price: 2301000,
               child_price: 1210000,
             },
@@ -627,13 +627,13 @@ test("combined date and price query falls back to close matches on the same date
       }),
       trip({
         id: "other-date",
-        route_name: "ÐœÐ¸Ñ€Ð²ÑÐ½ ÑˆÑƒÑƒÐ´ Ð½Ð¸ÑÐ»ÑÐ³Ñ‚ÑÐ¹",
-        duration_text: "8 Ó©Ð´Ó©Ñ€ / 7 ÑˆÓ©Ð½Ó©",
-        departure_dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 12"],
+        route_name: "Мирвэн шууд нислэгтэй",
+        duration_text: "8 өдөр / 7 шөнө",
+        departure_dates: ["7 сарын 12"],
         extra: {
           price_groups: [
             {
-              dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 12"],
+              dates: ["7 сарын 12"],
               adult_price: 1310000,
             },
           ],
@@ -644,9 +644,9 @@ test("combined date and price query falls back to close matches on the same date
   );
 
   assert.match(reply || "", /1310000|1,310,000/);
-  assert.match(reply || "", /ÐšÐ°Ñ€Ð´Ð°Ð½\+Ð’ÑÐ»Ð¼Ð¾Ñ€/);
-  assert.match(reply || "", /Ð’ÑÐ»Ð¼Ð¾Ñ€ ÑˆÑƒÑƒÐ´ Ð½Ð¸ÑÐ»ÑÐ³Ñ‚ÑÐ¹/);
-  assert.doesNotMatch(reply || "", /ÐœÐ¸Ñ€Ð²ÑÐ½/);
+  assert.match(reply || "", /Кардан\+Вэлмор/);
+  assert.match(reply || "", /Вэлмор шууд нислэгтэй/);
+  assert.doesNotMatch(reply || "", /Мирвэн/);
 });
 
 test("month-specific child price only returns that month and passenger type", () => {

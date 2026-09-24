@@ -877,7 +877,10 @@ export function normalizeMnDate(dateText: string): Array<{ month: number; day: n
     return [{ month: parseInt(slashMatch[1], 10), day: parseInt(slashMatch[2], 10) }];
   }
 
-  const yearMonthDayPattern = /(?:\d{4}\s*он\s*)?(\d{1,2})\s*сар(?:ын)?\s*(\d{1,2})((?:\s*,\s*\d{1,2}(?!\s*сар(?:ын)?))*)/g;
+  // "(?<!\d)" / "(?!\d)": never read half a number. "10 сарын 29, 11 сарын 1"
+  // was taking the last "1" of "11" as October 1st, then "1 сарын 1" as
+  // January 1st — a date with no price, so a pasted poster went unanswered.
+  const yearMonthDayPattern = /(?:\d{4}\s*он\s*)?(?<!\d)(\d{1,2})\s*сар(?:ын)?\s*(\d{1,2})(?!\d)((?:\s*,\s*\d{1,2}(?!\d)(?!\s*сар(?:ын)?))*)/g;
   let yearMonthDayMatch: RegExpExecArray | null;
   while ((yearMonthDayMatch = yearMonthDayPattern.exec(trimmed)) !== null) {
     const month = parseInt(yearMonthDayMatch[1], 10);
@@ -898,7 +901,7 @@ export function normalizeMnDate(dateText: string): Array<{ month: number; day: n
 
   // Mongolian format: parse all "N сарын D" segments, with optional trailing day numbers
   // Pattern: one or more "N сарын D[, D2, ...]" groups
-  const segmentPattern = /(\d{1,2})\s*сар(?:ын)?\s*(\d{1,2})((?:\s*,\s*\d{1,2})*)/g;
+  const segmentPattern = /(?<!\d)(\d{1,2})\s*сар(?:ын)?\s*(\d{1,2})(?!\d)((?:\s*,\s*\d{1,2}(?!\d)(?!\s*сар(?:ын)?))*)/g;
   let match: RegExpExecArray | null;
   while ((match = segmentPattern.exec(dateText)) !== null) {
     const month = parseInt(match[1], 10);
@@ -924,7 +927,8 @@ export function normalizeMnDate(dateText: string): Array<{ month: number; day: n
  */
 export function extractDatesFromText(text: string): Array<{ month: number; day: number }> {
   const results: Array<{ month: number; day: number }> = [];
-  const yearMonthDayPattern = /(?:\d{4}\s*он\s*)?(\d{1,2})\s*сар(?:ын)?\s*(\d{1,2})((?:\s*,\s*\d{1,2}(?!\s*сар(?:ын)?))*)/g;
+  // Same rule as the stored-date parser above: never read half a number.
+  const yearMonthDayPattern = /(?:\d{4}\s*он\s*)?(?<!\d)(\d{1,2})\s*сар(?:ын)?\s*(\d{1,2})(?!\d)((?:\s*,\s*\d{1,2}(?!\d)(?!\s*сар(?:ын)?))*)/g;
   let yearMonthDayMatch: RegExpExecArray | null;
   while ((yearMonthDayMatch = yearMonthDayPattern.exec(text)) !== null) {
     const month = parseInt(yearMonthDayMatch[1], 10);
@@ -944,7 +948,7 @@ export function extractDatesFromText(text: string): Array<{ month: number; day: 
   if (results.length > 0) return uniqueMonthDays(results);
 
   // Match "N сарын D" with optional extra days
-  const segmentPattern = /(\d{1,2})\s*сар(?:ын)?\s*(\d{1,2})((?:\s*,\s*\d{1,2}(?!\s*сар(?:ын)?))*)/g;
+  const segmentPattern = /(?<!\d)(\d{1,2})\s*сар(?:ын)?\s*(\d{1,2})(?!\d)((?:\s*,\s*\d{1,2}(?!\d)(?!\s*сар(?:ын)?))*)/g;
   let match: RegExpExecArray | null;
   while ((match = segmentPattern.exec(text)) !== null) {
     const month = parseInt(match[1], 10);

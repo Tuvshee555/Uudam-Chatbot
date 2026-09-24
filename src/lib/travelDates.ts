@@ -590,9 +590,11 @@ export function tripMatchesRequestedDate(
     const ymds = tripDateYmds(trip, dateText, now);
     if (ymds.some((ymd) => ymd.slice(5) === requestedMonthDay)) return true;
     if (ymds.length === 0 && !/\d/.test(dateText)) {
-      const weekday = MN_WEEKDAY_PATTERNS.find((w) => w.pattern.test(dateText));
-      if (!weekday) return true; // flexible schedule — any date works
-      if (requested.getDay() === weekday.day) return true;
+      // Every weekday named counts: "Пүрэв, Ням гариг" is Thursdays AND
+      // Sundays (only the first one found used to be checked).
+      const weekdays = MN_WEEKDAY_PATTERNS.filter((w) => w.pattern.test(dateText));
+      if (weekdays.length === 0) return true; // flexible schedule — any date works
+      if (weekdays.some((w) => requested.getDay() === w.day)) return true;
     }
   }
   return false;

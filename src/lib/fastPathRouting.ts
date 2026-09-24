@@ -27,7 +27,16 @@ import {
 import { customerTurn, joinContextAndTurn } from "./customerTurn";
 import { hasReferentialHint, isLikelyContextDependentText, pickFastPathMatchText } from "./contextualText";
 import { parseDepartureDateText, resolveRequestedMonth, tripMatchesRequestedDate, tripDepartsInMonth } from "./travelDates";
-import { getTripSearchHaystack, phoneticLatinText, resolveTripFromUserMessage } from "./travelFastPathsSearch";
+import {
+  getTripSearchHaystack,
+  isGenericTripRequest,
+  phoneticLatinText,
+  queryWantsDirectFlight,
+  queryWantsLandFlightCombo,
+  queryWantsLandOnlyEnhanced,
+  resolveTripFromUserMessage,
+} from "./travelFastPathsSearch";
+import { isPassengerCountOnly } from "./travelFastPathsPricing";
 import type { TravelTrip } from "./travelTypes";
 import { isKnownGreetingPhrase } from "./greetingPhrases";
 import { SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
@@ -186,8 +195,19 @@ export async function routeFastPathText(input: {
     // trip?". Attribute-matching the label against candidates picked one at
     // random (its words appear in a trip description) and sent that PDF.
     if (tappedOwnButton) {
+      // A "list" of one: there is nothing to choose between.
+      if (pendingTrips.length === 1) return chose(pendingTrips[0]);
       const contextual = contextualUserText !== text ? resolve(contextualUserText, trips) : null;
       if (contextual?.status === "verified") return chose(contextual.trip);
+      await setClarificationState(senderId, pendingTrips.map((trip) => trip.id));
+      return { matchText: text, scopedClarify: pendingTrips };
+    }
+    // A head count under the list ("2 том хүн 2 хүүхэд") prices every offered
+    // trip, and "мэдээлэл явуулаад өгөөрэй" asks about them — neither is a
+    // change of topic. Re-offer the list instead of handing it to the model.
+    const asksForCategory =
+      queryWantsDirectFlight(text) || queryWantsLandFlightCombo(text) || queryWantsLandOnlyEnhanced(text);
+    if (isPassengerCountOnly(text) || (isGenericTripRequest(text) && !asksForCategory)) {
       await setClarificationState(senderId, pendingTrips.map((trip) => trip.id));
       return { matchText: text, scopedClarify: pendingTrips };
     }

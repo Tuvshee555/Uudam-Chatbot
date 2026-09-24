@@ -15,6 +15,7 @@ import {
   buildDepartureDateAvailabilityReply,
   filterFutureDepartureDates,
   parseDepartureDateText,
+  tripMatchesRequestedDate,
 } from "./travelDates";
 import type { TravelTrip } from "./travelOps";
 import {
@@ -33,6 +34,8 @@ import {
   matchScoreForPriceKind,
   normText,
   resolveTripFromUserMessage,
+  queryNamedPlaces,
+  tripMentionsAllPlaces,
   findBestTripMatch,
   findTripMatches,
   getPriceGroups,
@@ -139,9 +142,14 @@ function tripHasDepartureMonthDay(
       }
     }
   }
-  return (trip.departure_dates || []).some((dateText) =>
-    parseDepartureDateText(dateText, now).some(matchesYmd),
-  );
+  if ((trip.departure_dates || []).some((dateText) => parseDepartureDateText(dateText, now).some(matchesYmd))) {
+    return true;
+  }
+  // A weekly schedule ("Пүрэв, Ням гариг") has no dates to compare: a pasted
+  // poster asking about a Thursday of a Thursday/Sunday trip was answered
+  // "no price for that date" and went silent.
+  const requested = parseDepartureDateText(`${month} сарын ${day}`, now)[0];
+  return Boolean(requested && tripMatchesRequestedDate(trip, requested, now));
 }
 
 function firstPassengerPrice(trip: TravelTrip, key: "adult_price" | "child_price" | "infant_price"): number | null {
@@ -161,7 +169,9 @@ function firstPassengerPrice(trip: TravelTrip, key: "adult_price" | "child_price
 
 function parsePassengerTotalRequest(text: string): { adultCount: number; childCount: number; infantCount: number } | null {
   const normalized = normText(text);
-  if (!/(нийт|niit|total|хэд болох|hed boloh)/i.test(normalized)) return null;
+  // A bare head count ("2 том хүн 2 хүүхэд") under a list of trips asks the
+  // same thing as "нийт хэд болох".
+  if (!/(нийт|niit|total|хэд болох|hed boloh)/i.test(normalized) && !isPassengerCountOnly(customerTurn(text))) return null;
 
   const findCount = (patterns: RegExp[]) => {
     for (const pattern of patterns) {
@@ -1463,13 +1473,26 @@ export function buildStructuredTripReply(
   // answered as if the customer had asked them.
   const intentText = intentTextOf(text, trips);
   const currentLine = intentText.replace(/\s*\n\s*/g, " ").trim();
-  const standalonePriceLookupReply = buildStandalonePriceLookupReply(currentLine, trips);
-  if (standalonePriceLookupReply) return standalonePriceLookupReply;
+  // "Which trip costs X₮ / leaves on D?" searches the whole catalog — but not
+  // when the message names one trip: a pasted poster (name + dates + price)
+  // was told "no trip matches that price" about the very trip it named.
+  // Only words that tell trips apart count as naming one — a word in most trip
+  // names ("аялал") names none.
+  const distinctivePlaces = queryNamedPlaces(text, trips).places.filter(
+    (place) => trips.filter((trip) => tripMentionsAllPlaces(trip, [place])).length <= Math.max(1, trips.length / 2),
+  );
+  const namesOneTrip =
+    distinctivePlaces.length > 0 &&
+    resolveTripFromUserMessage(text, trips, { allowLooseFallback: false }).status === "verified";
+  if (!namesOneTrip) {
+    const standalonePriceLookupReply = buildStandalonePriceLookupReply(currentLine, trips);
+    if (standalonePriceLookupReply) return standalonePriceLookupReply;
 
-  const combinedDatePrice = findCombinedDatePriceMatches(currentLine, trips);
-  if (combinedDatePrice) {
-    const combinedReply = formatCombinedDatePriceReply(combinedDatePrice);
-    if (combinedReply) return combinedReply;
+    const combinedDatePrice = findCombinedDatePriceMatches(currentLine, trips);
+    if (combinedDatePrice) {
+      const combinedReply = formatCombinedDatePriceReply(combinedDatePrice);
+      if (combinedReply) return combinedReply;
+    }
   }
 
   // A bare head count ("2том хүн 2 хүүхэд") about the trip on screen is a

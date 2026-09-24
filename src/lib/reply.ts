@@ -60,9 +60,23 @@ function containsLeakedPaymentInstruction(text: string) {
   return PAYMENT_LEAK_PATTERNS.some((pattern) => pattern.test(text));
 }
 
+/**
+ * Payment instructions (bank transfer, QPay) never go out in chat. Only the
+ * lines that carry them are removed: replacing the whole reply turned a trip
+ * list for "мэдээлэл явуулаад өгөөрэй" into a payment warning because one line
+ * mentioned paying "дансаар". When the payment lines were the answer (little
+ * else left), the reply is the standard warning.
+ */
 export function enforceWebsiteForPayment(text: string) {
-  if (containsLeakedPaymentInstruction(text)) return WEBSITE_REPLY;
-  return text;
+  if (!containsLeakedPaymentInstruction(text)) return text;
+  const kept = text
+    .split("\n")
+    .filter((line) => !containsLeakedPaymentInstruction(line))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (containsLeakedPaymentInstruction(kept) || kept.length < text.trim().length * 0.5) return WEBSITE_REPLY;
+  return kept;
 }
 
 export function reconcilePhotoAttachmentReply(text: string, hasAttachedMedia: boolean) {
@@ -99,9 +113,14 @@ const NO_DATA_REPLY_PATTERNS: RegExp[] = [
   /туслах боломжгүй/i,
 ];
 
+// The phone-number ask on its own ("Утасны дугаараа үлдээвэл … залгана 🙌")
+// answers nothing — a replayed real question about return seats got only this.
+const PHONE_ASK_ONLY = /^(?:утасны дугаараа үлдээвэл[^.!?]*?(?:залгана|холбогдоно)[^\p{L}]*)$/iu;
+
 export function shouldSilenceNoDataReply(text: string): boolean {
   const normalized = (text || "").replace(/\s+/g, " ").trim();
   if (!normalized) return true;
+  if (PHONE_ASK_ONLY.test(normalized)) return true;
   return NO_DATA_REPLY_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 

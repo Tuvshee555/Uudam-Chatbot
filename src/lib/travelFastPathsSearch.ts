@@ -2107,6 +2107,7 @@ const GENERIC_REQUEST_PHONETIC = new Set(
     ...GENERIC_REQUEST_WORDS, ...GENERIC_ROUTE_WORDS,
     "hutulbur", "hutulbr", "xutulbur", "hotolbor", "delgerengui", "delgerengvi", "дэлгэрэнгүй",
     "ywuulj", "yvuulj", "yavuulj", "явуулж", "явуулна", "явуулаач", "yavuulaach", "uguuch", "ugnuu",
+    "yavuulsaad", "yawuulsaad", "ywuulaad", "yavuulaad", "явуулаад", "явуулчих", "yavuulchih",
     "uguurei", "ugnu", "өгөөч", "өгнө", "өгөөрэй", "avii", "awii", "awah", "awya", "avya", "авмаар",
     "hergtei", "heregtei", "хэрэгтэй", "medmeer", "мэдмээр", "bn", "bnu", "bna", "bga", "baigaa", "tom",
     "hun", "том", "хүн", "хүүхэд", "huuhed", "нярай", "nyrai", "tanai", "манайх", "sonirhoj", "сонирхож",

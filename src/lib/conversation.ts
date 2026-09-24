@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { focusKnowledgeBase, tripsNamedInRecentMessages } from "./aiTripContext";
 import { buildTemporalPromptContext } from "./travelDates";
 import { dbGetHistory, dbAppendMessage, type ChatAttachment, type HistoryRow } from "./travelDb";
 
@@ -166,6 +167,7 @@ export function buildPromptParts(options: BuildPromptOptions): { system: string;
   lines.push("- Use ONLY what is explicitly written in the Context. Do not invent or assume anything — not routes, prices, dates, operators, visa details, or transport type.");
   lines.push("- TRANSPORT RULE: NEVER say a trip has a flight (нислэг) unless the Context explicitly says so. NEVER say train (галт тэрэг) unless the Context says so. NEVER say bus unless the Context says so. If transport is not in Context, do not mention it at all.");
   lines.push("- PAST DATES RULE: Never offer a departure date that is before the Current date shown in Time context. If every known departure date for a trip has already passed, treat the schedule as unknown and use REFER.");
+  lines.push("- SUMMARY LINES: a Context trip line ending in 'summary only' is a real, bookable trip shown in short form (category, duration, prices, next departures). Use it to list, compare and recommend trips. If the customer asks about a detail that line does not show (hotel, what is included, visa, age rules), do not guess: ask which trip they mean, or output REFER if they already named it.");
   lines.push("- CRITICAL RULE — REFER: If the trip or destination the user is asking about is NOT found in the Context, output exactly one word: REFER. Nothing else — the system will alert staff internally and stay silent to the customer.");
   lines.push("- BULK/CATALOG RULE: If the user asks for information about ALL trips or the whole catalog in general (not naming any specific trip or destination), that is NOT a 'trip not found' case — every trip IS in Context. NEVER output REFER for this. Either give a short organized summary grouped by category (шууд нислэгтэй / газрын / хосолсон), or ask ONE short question about which destination or category they want. The customer must always get a real reply, never silence.");
   lines.push("- PRICE-LOOKUP RULE: If the user states a price and asks which trip costs that amount, compare it against each trip's actual adult_price in Context. Only name a trip whose price matches (or is clearly the one meant). If no trip's price matches, output REFER — never name a trip with a different price as if it answered the question.");
@@ -226,7 +228,14 @@ export function buildPromptParts(options: BuildPromptOptions): { system: string;
   context.push("Context:");
 
   if (typeof business?.knowledgeBase === "string") {
-    context.push(business.knowledgeBase);
+    // Full detail only for the trips this message is about; one-line summaries
+    // for the rest (see aiTripContext.ts). Unchanged for general questions.
+    context.push(
+      focusKnowledgeBase(business.knowledgeBase, [
+        ...(relevantTripNames || []),
+        ...tripsNamedInRecentMessages(business.knowledgeBase, [...recentHistory, { text: userText }]),
+      ]),
+    );
   } else {
     context.push(JSON.stringify(business?.knowledgeBase || {}));
   }
