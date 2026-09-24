@@ -20,7 +20,7 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
     id: "trip-1",
     category: "Outbound",
     operator_name: "Uudam Travel",
-    route_name: "Бээжин аялал",
+    route_name: "Вэлмор аялал",
     duration_text: "4 өдөр",
     adult_price: 2500000,
     child_price: null,
@@ -78,7 +78,7 @@ test("answers direct tomorrow availability from active trip dates", () => {
 
   assert.match(reply || "", /Тийм ээ/);
   assert.match(reply || "", /маргааш буюу 5 сарын 31/);
-  assert.match(reply || "", /Бээжин аялал/);
+  assert.match(reply || "", /Вэлмор аялал/);
   assert.doesNotMatch(reply || "", /Цуцлагдсан/);
 });
 
@@ -118,7 +118,7 @@ test("recognizes date availability even when the user also wants to book", () =>
 test("date availability intent does not steal date-specific price questions", () => {
   assert.equal(
     hasDepartureDateAvailabilityIntent(
-      "Хайлаар Манжуур 5 өдөр 8 сарын 24-нд хэд вэ?",
+      "Торвал Нордэн 5 өдөр 8 сарын 24-нд хэд вэ?",
       NOW_IN_MONGOLIA,
     ),
     false,
@@ -132,14 +132,14 @@ test("broad month availability lists options instead of picking one trip", () =>
     now,
     trips: [
       trip({
-        id: "beijing",
-        route_name: "Бээжин газрын аялал",
+        id: "velmor",
+        route_name: "Вэлмор газрын аялал",
         adult_price: 1790000,
         departure_dates: ["7 сарын 9", "7 сарын 17"],
       }),
       trip({
-        id: "beidaihe",
-        route_name: "Бэйдайхэ далайтай аялал",
+        id: "kardan",
+        route_name: "Кардан далайтай аялал",
         adult_price: 1160000,
         departure_dates: ["7 сарын 16", "8 сарын 1"],
       }),
@@ -147,8 +147,8 @@ test("broad month availability lists options instead of picking one trip", () =>
   });
 
   assert.match(reply || "", /7 сар/);
-  assert.match(reply || "", /Бээжин газрын аялал/);
-  assert.match(reply || "", /Бэйдайхэ далайтай аялал/);
+  assert.match(reply || "", /Вэлмор газрын аялал/);
+  assert.match(reply || "", /Кардан далайтай аялал/);
   assert.match(reply || "", /Аль чиглэл/);
 });
 
@@ -297,12 +297,12 @@ test("availability matches a next-season trip via its write-time resolved map", 
     now,
     trips: [
       trip({
-        route_name: "Хайнан өвлийн аялал",
+        route_name: "Мирвэн өвлийн аялал",
         departure_dates: ["1 сарын 15"],
         extra: { departure_dates_resolved: [{ text: "1 сарын 15", ymd: "2027-01-15" }] },
       }),
     ],
   });
   assert.match(reply || "", /Тийм ээ/);
-  assert.match(reply || "", /Хайнан өвлийн аялал/);
+  assert.match(reply || "", /Мирвэн өвлийн аялал/);
 });

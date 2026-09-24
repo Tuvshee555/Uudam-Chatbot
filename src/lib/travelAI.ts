@@ -72,7 +72,7 @@ function buildBatchSourceParts(input: {
     "ACCURACY IS THE TOP PRIORITY. Read carefully and do not rush.",
     "Read EVERY trip/row in the source. Do not skip rows and do not stop early. If the source lists 12 trips, return actions for all 12.",
     "Never merge two different trips into one, and never split one trip into two. Each distinct route = one action.",
-    "MESSENGER-SPLIT POSTER RULE: if several attached images come from the same '*-messenger-split.zip', treat them as slices/pages of ONE poster unless a later slice clearly starts a new complete product with its own top-level title AND price/date table. Numbered day-card headings such as 'Day 6: Chongqing-Hohhot', city stop headings, meal rows, and route legs are itinerary items inside the parent tour, not separate trips.",
+    "MESSENGER-SPLIT POSTER RULE: if several attached images come from the same '*-messenger-split.zip', treat them as slices/pages of ONE poster unless a later slice clearly starts a new complete product with its own top-level title AND price/date table. Numbered day-card headings such as 'Day 6: <city>-<city>', city stop headings, meal rows, and route legs are itinerary items inside the parent tour, not separate trips.",
     "TRIP VARIANT RULE: the same destination with a different transport mode (flight, ground/bus, rail, combined), duration, itinerary, or package type is a DIFFERENT trip and must stay in a separate action. Different departure dates alone remain one trip with date groups.",
     "PHOTO SOURCE RULE: write the exact source label shown in Sources into fields.extra.source_file_name for every extracted action. When one ZIP contains trip-named folders, use each image's full folder path to decide which trip it belongs to; never assign a generic numbered image by list order.",
     "Copy prices, seat counts, and dates EXACTLY as written in the source — digit for digit. Do not round, estimate, convert, or 'fix' numbers. If a price is 1,111,111 write 1111111, not 1111000.",
@@ -390,7 +390,7 @@ function buildVerificationGuide(proposalActions: unknown): string {
     "",
     "Return ONLY JSON: { \"all_correct\": boolean, \"mismatches\": string[] }.",
     "- For each value that does NOT match the source, add one short Mongolian line to",
-    "  mismatches naming the trip and the wrong field (e.g. 'Бээжин: үнэ 1111111 гэж",
+    "  mismatches naming the trip and the wrong field (e.g. '<аялал>: үнэ 1111111 гэж",
     "  байгаа ч зурагт 2222222 байна').",
     "- CRITICAL: before reporting a mismatch, compare the two values as NUMBERS/DATES,",
     "  ignoring commas, currency symbols (₮, MNT), and whitespace. '1,111,111' and",
@@ -923,7 +923,7 @@ function mergeActionFields(existing: AITripAction, action: AITripAction): void {
       typeof value === "string" &&
       value.length > (target[field] as string).length
     ) {
-      // Prefer the MORE SPECIFIC name ("Жэжү арлын аялал 2026" over "Жэжү
+      // Prefer the MORE SPECIFIC name ("<хот> арлын аялал 2026" over "<хот>
       // арлын аялал") rather than whichever partial slice happened to come
       // first in the batch.
       target[field] = value;
@@ -1010,7 +1010,7 @@ function hasCompatibleProductVariant(left: AITripAction, right: AITripAction): b
  * Pass 1 groups by exact identity (trip_id, or exact-folded route name).
  * Pass 2 catches near-duplicates an exact key can't — the SAME poster
  * sliced across images sometimes yields the trip's name with and without a
- * trailing detail ("Жэжү арлын аялал 2026" vs "Жэжү арлын аялал"). When one
+ * trailing detail ("<хот> арлын аялал 2026" vs "<хот> арлын аялал"). When one
  * name is a superset of the other's tokens (fuzzy match, not just prefix),
  * they're merged automatically instead of asking the admin to pick — this
  * was previously surfaced as a "хоёр өөр нэр таарсан" question for what is
@@ -1219,7 +1219,7 @@ const PHOTO_LABEL_NOISE = new Set([
   "copy", "image", "img", "page", "slice", "poster", "аялал", "tour",
   // processing suffixes the zip/photo pipeline appends ("...-1.png.compressed.jpg").
   // "compressed" counting as an identity token halved coverage for one-word
-  // trip names (ЖАНЖИАЖИЭ АЯЛАЛ) and silently failed the 60% match bar.
+  // trip names (<хот> АЯЛАЛ) and silently failed the 60% match bar.
   "compressed", "converted", "resized", "scaled", "optimized", "edited",
 ]);
 
@@ -1227,7 +1227,7 @@ function photoMatchTokens(value: string): Set<string> {
   return new Set(
     value
       .toLowerCase()
-      .replace(/э/g, "е") // fold Mongolian е/э spelling variance (ЖАНЖИАЖИЭ vs Жанжиажие)
+      .replace(/э/g, "е") // fold Mongolian е/э spelling variance (<хот> vs Жанжиажие)
       .replace(/[^\p{L}\p{N}]+/gu, " ")
       .split(/\s+/)
       .filter((t) => t.length >= 3 && !PHOTO_LABEL_NOISE.has(t)),
@@ -1305,8 +1305,8 @@ export function attachPhotoUrlsToActions(
     //    with the filename. Two guards against misattaching (wrong poster on
     //    a trip is worse than no poster): at least one matched token of
     //    length >= 4, AND >= 60% of the filename's identity tokens must match
-    //    — so "ЖИНИНЬ ... МИНИ АВАТАР ХӨХ ХОТ.zip" can't latch onto the
-    //    separate "Мини Аватар - Хөх хот - Датон" trip on partial overlap.
+    //    — so "<хот> ... <хот> <хот>.zip" can't latch onto the
+    //    separate "<хот> - <хот> - <хот>" trip on partial overlap.
     const labelTokens = photoMatchTokens(label);
     const ranked: Array<{ index: number; score: number; coverage: number }> = [];
     actionTokens.forEach((tokens, i) => {

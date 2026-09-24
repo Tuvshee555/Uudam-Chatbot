@@ -152,7 +152,7 @@ function isDateBasedPricingConflict(
   if (hasMultiDateAction) return true;
 
   // Suppress if notes/source_description encodes date→price mapping
-  // (e.g. "6-р сарын 27: 3,590,000₮")
+  // (e.g. "6-р сарын 27: 1,111,111₮")
   const hasDatePriceNotes = actions.some((action) => {
     const notes = String(action.fields?.notes ?? action.fields?.source_description ?? "");
     return /[0-9]\s*сарын\s*[0-9].*[0-9]+,\d{3}/.test(notes);
@@ -379,8 +379,8 @@ export function validateAIChangeProposal(
           .join("\n");
         if (verb === "upsert") {
           // A file/poster upsert whose route fuzzy-matches SEVERAL existing
-          // trips (e.g. a "Хайлаар Манжуур Чичихар" poster vs the separate
-          // Манжуур and Чичихар products). Guessing which record to overwrite
+          // trips (e.g. a "<хот> <хот> <хот>" poster vs the separate
+          // <хот> and <хот> products). Guessing which record to overwrite
           // is how wrong trips get clobbered, but hard-blocking used to
           // dead-end the admin with an English message and no way forward.
           // Instead: keep the action as a CREATE (match stripped so apply

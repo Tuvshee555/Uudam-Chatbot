@@ -42,8 +42,8 @@ function poster(id: string, title: string, data: Record<string, unknown> = {}, u
 test("bulk poster plan processes only the newest duplicate poster title", () => {
   const plan = buildPosterBulkPlan(
     [
-      poster("poster-new", "Хайнан аялал"),
-      poster("poster-old", "Хайнан аялал"),
+      poster("poster-new", "Мирвэн аялал"),
+      poster("poster-old", "Мирвэн аялал"),
     ],
     [],
   );
@@ -57,8 +57,8 @@ test("bulk poster plan processes only the newest duplicate poster title", () => 
 test("bulk poster plan chooses newest duplicate by saved time, not input order", () => {
   const plan = buildPosterBulkPlan(
     [
-      poster("poster-old", "Хайнан аялал", {}, "2026-01-01T00:00:00.000Z"),
-      poster("poster-new", "Хайнан аялал", {}, "2026-02-01T00:00:00.000Z"),
+      poster("poster-old", "Мирвэн аялал", {}, "2026-01-01T00:00:00.000Z"),
+      poster("poster-new", "Мирвэн аялал", {}, "2026-02-01T00:00:00.000Z"),
     ],
     [],
   );
@@ -73,8 +73,8 @@ test("bulk poster plan chooses newest duplicate by saved time, not input order",
 
 test("bulk poster plan skips exact catalog trips that already have photos", () => {
   const plan = buildPosterBulkPlan(
-    [poster("poster-1", "Хайнан")],
-    [trip({ id: "hainan", route_name: "Хайнан аялал", photo_urls: ["https://example.com/poster.jpg"] })],
+    [poster("poster-1", "Мирвэн")],
+    [trip({ id: "mirven", route_name: "Мирвэн аялал", photo_urls: ["https://example.com/poster.jpg"] })],
   );
 
   assert.equal(plan.items[0].action, "skip");
@@ -84,21 +84,21 @@ test("bulk poster plan skips exact catalog trips that already have photos", () =
 test("bulk poster plan attaches exact empty trip and fills only missing fields", () => {
   const plan = buildPosterBulkPlan(
     [
-      poster("poster-1", "Бээжин аялал", {
+      poster("poster-1", "Вэлмор аялал", {
         duration_days: 5,
         duration_nights: 4,
         departures: [{ date: "2026-10-01" }],
         price_table: { columns: ["Adult", "Child"], rows: [{ dates: "Oct", cells: ["2,000,000₮", "1,500,000₮"] }] },
-        days: [{ hotel: "Beijing Hotel", meals: { breakfast: true } }],
+        days: [{ hotel: "Velmor Hotel", meals: { breakfast: true } }],
       }),
     ],
-    [trip({ id: "beijing", route_name: "Бээжин", adult_price: 1_900_000 })],
+    [trip({ id: "velmor", route_name: "Вэлмор", adult_price: 1_900_000 })],
   );
 
   assert.equal(plan.items[0].action, "attach_exact");
-  assert.equal(plan.items[0].targetTripId, "beijing");
+  assert.equal(plan.items[0].targetTripId, "velmor");
   assert.deepEqual(plan.items[0].fields.departure_dates, ["2026-10-01"]);
-  assert.equal(plan.items[0].fields.hotel, "Beijing Hotel");
+  assert.equal(plan.items[0].fields.hotel, "Velmor Hotel");
   assert.equal(plan.items[0].fields.has_food, true);
   assert.equal(plan.items[0].fields.adult_price, undefined);
   assert.equal(plan.items[0].fields.child_price, 1_500_000);
@@ -106,10 +106,10 @@ test("bulk poster plan attaches exact empty trip and fills only missing fields",
 
 test("bulk poster plan skips when multiple catalog trips have the same exact title", () => {
   const plan = buildPosterBulkPlan(
-    [poster("poster-1", "Манжуур")],
+    [poster("poster-1", "Нордэн")],
     [
-      trip({ id: "a", route_name: "Манжуур аялал" }),
-      trip({ id: "b", route_name: "Манжуур" }),
+      trip({ id: "a", route_name: "Нордэн аялал" }),
+      trip({ id: "b", route_name: "Нордэн" }),
     ],
   );
 
@@ -119,8 +119,8 @@ test("bulk poster plan skips when multiple catalog trips have the same exact tit
 
 test("bulk poster plan skips near matches instead of creating risky duplicates", () => {
   const plan = buildPosterBulkPlan(
-    [poster("poster-1", "Бээжин Жинин")],
-    [trip({ id: "near", route_name: "Бээжин Жинин онгоцтой аялал" })],
+    [poster("poster-1", "Вэлмор Сэлвин")],
+    [trip({ id: "near", route_name: "Вэлмор Сэлвин онгоцтой аялал" })],
   );
 
   assert.equal(plan.items[0].action, "skip");

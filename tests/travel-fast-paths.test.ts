@@ -36,37 +36,37 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
 }
 
 test("shared city-only trip resolver returns ambiguous instead of guessing", () => {
-  const resolution = resolveTripFromUserMessage("Tokyo une hed ve?", [
-    trip({ id: "tokyo-fuji", route_name: "Tokyo Fuji аялал" }),
-    trip({ id: "tokyo-universal", route_name: "Tokyo Universal аялал" }),
+  const resolution = resolveTripFromUserMessage("Surmak une hed ve?", [
+    trip({ id: "surmak-felmor", route_name: "Surmak Felmor аялал" }),
+    trip({ id: "surmak-anmor", route_name: "Surmak Anmor аялал" }),
   ]);
 
   assert.equal(resolution.status, "ambiguous");
   assert.deepEqual(
-    resolution.candidates.map((candidate) => candidate.id),
-    ["tokyo-fuji", "tokyo-universal"],
+    resolution.candidates.map((candidate) => candidate.id).sort(),
+    ["surmak-anmor", "surmak-felmor"],
   );
 });
 
 test("appendLeadCaptureCta adds the phone ask to a normal fast-path answer", () => {
-  const out = appendLeadCaptureCta("✈️ Бээжин аялал\n💰 Том хүн: 1,210,000₮", false);
+  const out = appendLeadCaptureCta("✈️ Вэлмор аялал\n💰 Том хүн: 1,210,000₮", false);
   assert.match(out, /1,210,000₮/);
   assert.ok(out.endsWith(LEAD_CAPTURE_CTA));
 });
 
 test("appendLeadCaptureCta skips when phone already collected", () => {
-  const reply = "✈️ Бээжин аялал\n💰 Том хүн: 1,210,000₮";
+  const reply = "✈️ Вэлмор аялал\n💰 Том хүн: 1,210,000₮";
   assert.equal(appendLeadCaptureCta(reply, true), reply);
 });
 
 test("smart buttons offer useful next taps for a matched trip with photos", () => {
   const buttons = buildSmartButtons(
-    "✈️ Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал\n💰 Том хүн: 1,270,000₮",
+    "✈️ Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал\n💰 Том хүн: 1,270,000₮",
     [
       trip({
-        id: "beidaihe-combo",
-        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
-        photo_urls: ["https://example.com/beidaihe-1.jpg"],
+        id: "kardan-combo",
+        route_name: "Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал",
+        photo_urls: ["https://example.com/kardan-1.jpg"],
       }),
     ],
   );
@@ -89,7 +89,7 @@ test("clarification buttons are numbered and messenger-sized", () => {
     }),
     trip({
       id: "sea-combo",
-      route_name: "Лумиа шар тэнгисийн эрэг + Зэт газар нислэг хосолсон аялал",
+      route_name: "Лумиа сэрвэн тэнгисийн эрэг + Зэт газар нислэг хосолсон аялал",
     }),
   ]);
 
@@ -104,9 +104,9 @@ test("clarification buttons are numbered and messenger-sized", () => {
 });
 
 test("appendLeadCaptureCta skips clarifying (ambiguous) replies", () => {
-  const ambiguous = buildStructuredTripReply("Tokyo une hed ve?", [
-    trip({ id: "tokyo-fuji", route_name: "Tokyo Fuji аялал", adult_price: 1490000 }),
-    trip({ id: "tokyo-universal", route_name: "Tokyo Universal аялал", adult_price: 1790000 }),
+  const ambiguous = buildStructuredTripReply("Surmak une hed ve?", [
+    trip({ id: "surmak-felmor", route_name: "Surmak Felmor аялал", adult_price: 1490000 }),
+    trip({ id: "surmak-anmor", route_name: "Surmak Anmor аялал", adult_price: 1790000 }),
   ]);
   assert.ok(ambiguous);
   const out = appendLeadCaptureCta(ambiguous as string, false);
@@ -120,22 +120,22 @@ test("appendLeadCaptureCta does not double-ask when reply already requests a pho
 });
 
 test("structured reply asks for clarification on shared city-only query", () => {
-  const reply = buildStructuredTripReply("Tokyo une hed ve?", [
-    trip({ id: "tokyo-fuji", route_name: "Tokyo Fuji аялал", adult_price: 1490000 }),
-    trip({ id: "tokyo-universal", route_name: "Tokyo Universal аялал", adult_price: 1790000 }),
+  const reply = buildStructuredTripReply("Surmak une hed ve?", [
+    trip({ id: "surmak-felmor", route_name: "Surmak Felmor аялал", adult_price: 1490000 }),
+    trip({ id: "surmak-anmor", route_name: "Surmak Anmor аялал", adult_price: 1790000 }),
   ]);
 
   assert.match(reply || "", /Аль аяллыг нь сонирхож/i);
-  assert.match(reply || "", /Tokyo Fuji/);
-  assert.match(reply || "", /Tokyo Universal/);
+  assert.match(reply || "", /Surmak Felmor/);
+  assert.match(reply || "", /Surmak Anmor/);
   assert.match(reply || "", /1,490,000/);
   assert.match(reply || "", /1,790,000/);
 });
 
 test("trip info reply never leaks an internal duration QA sentinel", () => {
-  const reply = buildSeatsReply("Тэнгэрийн хаалга суудал бий юу?", [
+  const reply = buildSeatsReply("Зэтгорийн хаалга суудал бий юу?", [
     trip({
-      id: "tengeriin-khaalga-unverified-duration",
+      id: "zetgoriin-khaalga-unverified-duration",
       duration_text: "Нийт хугацаа тодорхойгүй, баталгаажуулах шаардлагатай",
     }),
   ]);
@@ -145,21 +145,21 @@ test("trip info reply never leaks an internal duration QA sentinel", () => {
   assert.doesNotMatch(reply as string, /тодорхойгүй/);
 });
 
-test("broad Beijing price question clarifies instead of picking one variant", () => {
-  const resolution = resolveTripFromUserMessage("Бээжин аялал хэд вэ?", [
+test("broad Velmor price question clarifies instead of picking one variant", () => {
+  const resolution = resolveTripFromUserMessage("Вэлмор аялал хэд вэ?", [
     trip({
-      id: "beijing-four-city",
-      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+      id: "velmor-four-city",
+      route_name: "ВЭЛМОР - СЭЛВИН – ПЭЛМАК - ОРМАК – 4 ХОТЫН АЯЛАЛ",
       category: "Газрын аялал",
     }),
     trip({
-      id: "beidaihe-beijing-combo",
-      route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+      id: "kardan-velmor-combo",
+      route_name: "Кардан сэрвэн тэнгисийн эрэг+Вэлмор газар нислэг хосолсон аялал",
       category: "Газар нислэг хосолсон",
     }),
     trip({
-      id: "beijing-naadam-ground",
-      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН-наадмын амралтаар явах газрын аялал",
+      id: "velmor-naadam-ground",
+      route_name: "ВЭЛМОР - СЭЛВИН – ПЭЛМАК - ОРМАК-наадмын амралтаар явах газрын аялал",
       category: "Газрын аялал",
     }),
   ]);
@@ -167,21 +167,21 @@ test("broad Beijing price question clarifies instead of picking one variant", ()
   assert.equal(resolution.status, "ambiguous");
 });
 
-test("human correction not Beijing, the sea one picks the sea/beach variant", () => {
-  const resolution = resolveTripFromUserMessage("Бээжин биш, далайтай нь", [
+test("human correction not Velmor, the sea one picks the sea/beach variant", () => {
+  const resolution = resolveTripFromUserMessage("Вэлмор биш, далайтай нь", [
     trip({
-      id: "beijing-four-city",
-      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+      id: "velmor-four-city",
+      route_name: "ВЭЛМОР - СЭЛВИН – ПЭЛМАК - ОРМАК – 4 ХОТЫН АЯЛАЛ",
       category: "Газрын аялал",
     }),
     trip({
-      id: "beidaihe-beijing-combo",
-      route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+      id: "kardan-velmor-combo",
+      route_name: "Кардан сэрвэн тэнгисийн эрэг+Вэлмор газар нислэг хосолсон аялал",
       category: "Газар нислэг хосолсон",
     }),
     trip({
-      id: "beijing-naadam-ground",
-      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН-наадмын амралтаар явах газрын аялал",
+      id: "velmor-naadam-ground",
+      route_name: "ВЭЛМОР - СЭЛВИН – ПЭЛМАК - ОРМАК-наадмын амралтаар явах газрын аялал",
       category: "Газрын аялал",
     }),
   ]);
@@ -189,22 +189,22 @@ test("human correction not Beijing, the sea one picks the sea/beach variant", ()
   assert.equal(resolution.status, "verified");
   assert.equal(
     resolution.status === "verified" ? resolution.trip.id : null,
-    "beidaihe-beijing-combo",
+    "kardan-velmor-combo",
   );
 });
 
-test("direct-flight Beijing price does not answer with combo tour price", () => {
-  const reply = buildStructuredTripReply("Бээжин шууд нислэгтэй нь хэд вэ?", [
+test("direct-flight Velmor price does not answer with combo tour price", () => {
+  const reply = buildStructuredTripReply("Вэлмор шууд нислэгтэй нь хэд вэ?", [
     trip({
-      id: "beijing-four-city",
-      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+      id: "velmor-four-city",
+      route_name: "ВЭЛМОР - СЭЛВИН – ПЭЛМАК - ОРМАК – 4 ХОТЫН АЯЛАЛ",
       category: "Газрын аялал",
       adult_price: 1790000,
       child_price: 1490000,
     }),
     trip({
-      id: "beidaihe-beijing-combo",
-      route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+      id: "kardan-velmor-combo",
+      route_name: "Кардан сэрвэн тэнгисийн эрэг+Вэлмор газар нислэг хосолсон аялал",
       category: "Газар нислэг хосолсон",
       adult_price: 1270000,
       child_price: 1200000,
@@ -217,48 +217,48 @@ test("direct-flight Beijing price does not answer with combo tour price", () => 
 });
 
 test("sold-out direct-flight match is reported as sold out instead of unavailable", () => {
-  const reply = buildStructuredTripReply("Жинин Универсал шууд нислэгтэй хэд вэ, суудал байгаа юу?", [
+  const reply = buildStructuredTripReply("Сэлвин Универсал шууд нислэгтэй хэд вэ, суудал байгаа юу?", [
     trip({
-      id: "universal-sold-out",
-      route_name: "Бээжин - Юниверсал шууд нислэгтэй наадмын амралтаар гарах аялал",
+      id: "anmor-sold-out",
+      route_name: "Вэлмор - Янмор шууд нислэгтэй наадмын амралтаар гарах аялал",
       category: "Шууд нислэгтэй аялал",
       status: "sold_out",
       extra: {
-        aliases: ["Бээжин Юниверсал", "Универсал"],
+        aliases: ["Вэлмор Янмор", "Универсал"],
       },
     }),
     trip({
-      id: "jinin-ground",
-      route_name: "Жинин - Утай - Гүмбэн",
+      id: "selvin-ground",
+      route_name: "Сэлвин - Утай - Гүмбэн",
       category: "Газрын аялал",
     }),
   ]);
 
-  assert.match(reply || "", /Юниверсал/);
+  assert.match(reply || "", /Янмор/);
   assert.match(reply || "", /суудал дууссан/);
   assert.doesNotMatch(reply || "", /яг шууд нислэгтэй аялал одоогоор тодорхой олдсонгүй/);
-  assert.doesNotMatch(reply || "", /Жинин - Утай - Гүмбэн/);
+  assert.doesNotMatch(reply || "", /Сэлвин - Утай - Гүмбэн/);
 });
 
 test("sold-out reply pitches active same-destination trips instead of dead-ending", () => {
   const reply = buildStructuredTripReply("Универсал аялал суудал байгаа юу?", [
     trip({
-      id: "universal-sold-out",
-      route_name: "Бээжин - Юниверсал шууд нислэгтэй наадмын амралтаар гарах аялал",
+      id: "anmor-sold-out",
+      route_name: "Вэлмор - Янмор шууд нислэгтэй наадмын амралтаар гарах аялал",
       category: "Шууд нислэгтэй аялал",
       status: "sold_out",
-      extra: { aliases: ["Бээжин Юниверсал", "Универсал"] },
+      extra: { aliases: ["Вэлмор Янмор", "Универсал"] },
     }),
     trip({
-      id: "beijing-four-city",
-      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+      id: "velmor-four-city",
+      route_name: "ВЭЛМОР - СЭЛВИН – ПЭЛМАК - ОРМАК – 4 ХОТЫН АЯЛАЛ",
       category: "Газрын аялал",
       adult_price: 1170000,
       duration_text: "8 өдөр 7 шөнө",
     }),
     trip({
-      id: "hainan-unrelated",
-      route_name: "Хайнан - Саньяа шууд нислэгтэй аялал",
+      id: "mirven-unrelated",
+      route_name: "Мирвэн - Нарвэл шууд нислэгтэй аялал",
       category: "Шууд нислэгтэй аялал",
       adult_price: 1430000,
     }),
@@ -270,26 +270,26 @@ test("sold-out reply pitches active same-destination trips instead of dead-endin
   assert.match(reply || "", /4 ХОТЫН АЯЛАЛ/);
   assert.match(reply || "", /1,170,000/);
   // …but unrelated destinations are not dragged in.
-  assert.doesNotMatch(reply || "", /Хайнан/);
+  assert.doesNotMatch(reply || "", /Мирвэн/);
 });
 
 test("a paused trip is reported as not currently active, not sold out", () => {
-  const reply = buildStructuredTripReply("Жинин Универсал шууд нислэгтэй хэд вэ, суудал байгаа юу?", [
+  const reply = buildStructuredTripReply("Сэлвин Универсал шууд нислэгтэй хэд вэ, суудал байгаа юу?", [
     trip({
-      id: "universal-paused",
-      route_name: "Бээжин - Юниверсал шууд нислэгтэй наадмын амралтаар гарах аялал",
+      id: "anmor-paused",
+      route_name: "Вэлмор - Янмор шууд нислэгтэй наадмын амралтаар гарах аялал",
       category: "Шууд нислэгтэй аялал",
       status: "paused",
-      extra: { aliases: ["Бээжин Юниверсал", "Универсал"] },
+      extra: { aliases: ["Вэлмор Янмор", "Универсал"] },
     }),
     trip({
-      id: "jinin-ground",
-      route_name: "Жинин - Утай - Гүмбэн",
+      id: "selvin-ground",
+      route_name: "Сэлвин - Утай - Гүмбэн",
       category: "Газрын аялал",
     }),
   ]);
 
-  assert.match(reply || "", /Юниверсал/);
+  assert.match(reply || "", /Янмор/);
   assert.match(reply || "", /идэвхгүй/);
   assert.doesNotMatch(reply || "", /суудал дууссан/);
 });
@@ -297,15 +297,15 @@ test("a paused trip is reported as not currently active, not sold out", () => {
 test("a paused trip's reply pitches active same-destination trips too", () => {
   const reply = buildStructuredTripReply("Универсал аялал байгаа юу?", [
     trip({
-      id: "universal-paused",
-      route_name: "Бээжин - Юниверсал шууд нислэгтэй наадмын амралтаар гарах аялал",
+      id: "anmor-paused",
+      route_name: "Вэлмор - Янмор шууд нислэгтэй наадмын амралтаар гарах аялал",
       category: "Шууд нислэгтэй аялал",
       status: "paused",
-      extra: { aliases: ["Бээжин Юниверсал", "Универсал"] },
+      extra: { aliases: ["Вэлмор Янмор", "Универсал"] },
     }),
     trip({
-      id: "beijing-four-city",
-      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+      id: "velmor-four-city",
+      route_name: "ВЭЛМОР - СЭЛВИН – ПЭЛМАК - ОРМАК – 4 ХОТЫН АЯЛАЛ",
       category: "Газрын аялал",
       adult_price: 1170000,
       duration_text: "8 өдөр 7 шөнө",
@@ -318,16 +318,16 @@ test("a paused trip's reply pitches active same-destination trips too", () => {
 });
 
 test("program reply asks for clarification on shared city-only PDF request", () => {
-  const result = buildTripProgramReply("Tokyo program pdf", [
+  const result = buildTripProgramReply("Surmak program pdf", [
     trip({
-      id: "tokyo-fuji",
-      route_name: "Tokyo Fuji аялал",
-      extra: { program_images: ["https://example.com/fuji-program.jpg"] },
+      id: "surmak-felmor",
+      route_name: "Surmak Felmor аялал",
+      extra: { program_images: ["https://example.com/felmor-program.jpg"] },
     }),
     trip({
-      id: "tokyo-universal",
-      route_name: "Tokyo Universal аялал",
-      extra: { program_images: ["https://example.com/universal-program.jpg"] },
+      id: "surmak-anmor",
+      route_name: "Surmak Anmor аялал",
+      extra: { program_images: ["https://example.com/anmor-program.jpg"] },
     }),
   ]);
 
@@ -336,22 +336,22 @@ test("program reply asks for clarification on shared city-only PDF request", () 
   assert.deepEqual(result?.mediaUrls, []);
 });
 
-test("matches Zhangjiajie alias to the Shanghai + Tengeriin Khaalga route", () => {
+test("matches Peldor alias to the Lumia + Zetgoriin Khaalga route", () => {
   const reply = buildStructuredTripReply(
-    "Шанхай Жанжиажэ аяллын 6 сарын 27, 7 сарын 18 үнэ адилхан уу?",
+    "Лумиа Пэлдор аяллын 6 сарын 27, 7 сарын 18 үнэ адилхан уу?",
     [
       trip({
-        id: "shanghai",
-        route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
+        id: "lumia",
+        route_name: "Лумиа + Зэтгорийн хаалга шууд нислэгтэй аялал",
         duration_text: "6 өдөр / 5 шөнө",
-        adult_price: 3590000,
+        adult_price: 3601000,
         child_price: 1470000,
         extra: {
-          aliases: ["Жанжиажэ", "Zhangjiajie", "Шанхай Жанжиажэ"],
+          aliases: ["Пэлдор", "Peldor", "Лумиа Пэлдор"],
           departure_date_groups: [
             {
               dates: ["6 сарын 27"],
-              adult_price: 3590000,
+              adult_price: 3601000,
               child_price: 1470000,
             },
             {
@@ -363,35 +363,35 @@ test("matches Zhangjiajie alias to the Shanghai + Tengeriin Khaalga route", () =
         },
       }),
       trip({
-        id: "beidaihe",
-        route_name: "Бэйдайхэ, Далянь хотын аялал",
+        id: "kardan",
+        route_name: "Кардан, Тэлмор хотын аялал",
         duration_text: "8 өдөр / 7 шөнө",
-        adult_price: 2690000,
+        adult_price: 2701000,
         child_price: 1320000,
       }),
     ],
     NOW,
   );
 
-  assert.match(reply || "", /Шанхай \+ Тэнгэрийн хаалга/);
+  assert.match(reply || "", /Лумиа \+ Зэтгорийн хаалга/);
   assert.match(reply || "", /адил биш/);
-  assert.doesNotMatch(reply || "", /Бэйдайхэ/);
+  assert.doesNotMatch(reply || "", /Кардан/);
 });
 
-test("matches latin shanghai query to the Shanghai route", () => {
+test("matches latin lumia query to the Lumia route", () => {
   const resolution = resolveTripFromUserMessage(
-    "shanghai aylal medeelel",
+    "lumia aylal medeelel",
     [
       trip({
-        id: "shanghai-zhangjiajie",
-        route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
+        id: "lumia-peldor",
+        route_name: "Лумиа + Зэтгорийн хаалга шууд нислэгтэй аялал",
         extra: {
-          aliases: ["Шанхай Жанжиажэ", "Шанхай Тэнгэрийн хаалга", "Shanghai"],
+          aliases: ["Лумиа Пэлдор", "Лумиа Зэтгорийн хаалга", "Lumia"],
         },
       }),
       trip({
-        id: "beijing-ground",
-        route_name: "ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ-БЭЭЖИНГИЙН ГАЗРЫН АЯЛАЛ",
+        id: "velmor-ground",
+        route_name: "СЭРВЭН ТЭНГИС БУЮУ КАРДАН-ВЭЛМОРГИЙН ГАЗРЫН АЯЛАЛ",
       }),
     ],
   );
@@ -399,83 +399,83 @@ test("matches latin shanghai query to the Shanghai route", () => {
   assert.equal(resolution.status, "verified");
   assert.equal(
     resolution.status === "verified" ? resolution.trip.id : null,
-    "shanghai-zhangjiajie",
+    "lumia-peldor",
   );
 });
 
-test("prefers the direct-flight Tengeriin Khaalga trip over longer variants", () => {
+test("prefers the direct-flight Zetgoriin Khaalga trip over longer variants", () => {
   const reply = buildStructuredTripReply(
-    "Тэнгэрийн хаалга шууд нислэгтэй аялал хэд вэ?",
+    "Зэтгорийн хаалга шууд нислэгтэй аялал хэд вэ?",
     [
       trip({
         id: "base",
-        route_name: "Тэнгэрийн хаалга - шууд нислэгтэй",
+        route_name: "Зэтгорийн хаалга - шууд нислэгтэй",
         adult_price: 1480000,
         child_price: 1430000,
       }),
       trip({
-        id: "with-chongqing",
-        route_name: "Тэнгэрийн хаалга-Чунчин",
-        adult_price: 3590000,
+        id: "with-eldor",
+        route_name: "Зэтгорийн хаалга-Эльдор",
+        adult_price: 3601000,
         child_price: 1470000,
       }),
       trip({
-        id: "with-shanghai",
-        route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
-        adult_price: 3590000,
+        id: "with-lumia",
+        route_name: "Лумиа + Зэтгорийн хаалга шууд нислэгтэй аялал",
+        adult_price: 3601000,
         child_price: 1470000,
       }),
     ],
     NOW,
   );
 
-  assert.match(reply || "", /^✈️ Тэнгэрийн хаалга - шууд нислэгтэй/m);
+  assert.match(reply || "", /^✈️ Зэтгорийн хаалга - шууд нислэгтэй/m);
   assert.match(reply || "", /1,480,000₮/);
-  assert.doesNotMatch(reply || "", /Шанхай \+/);
-  assert.doesNotMatch(reply || "", /Чунчин/);
+  assert.doesNotMatch(reply || "", /Лумиа \+/);
+  assert.doesNotMatch(reply || "", /Эльдор/);
 });
 
-test("prefers inferred combo Tengeriin Khaalga trip when user asks газар нислэгтэй", () => {
+test("prefers inferred combo Zetgoriin Khaalga trip when user asks газар нислэгтэй", () => {
   const reply = buildStructuredTripReply(
-    "Тэнгэрийн хаалга газар нислэгтэй хэд вэ?",
+    "Зэтгорийн хаалга газар нислэгтэй хэд вэ?",
     [
       trip({
         id: "direct",
-        route_name: "Тэнгэрийн хаалга - шууд нислэгтэй",
+        route_name: "Зэтгорийн хаалга - шууд нислэгтэй",
         category: "шууд нислэгтэй аялал",
         adult_price: 1430000,
         child_price: 1410000,
-        source_description: "8 өдөр 7 шөнө. УБ - Жанжиажэ - УБ шууд нислэгтэй.",
+        source_description: "8 өдөр 7 шөнө. УБ - Пэлдор - УБ шууд нислэгтэй.",
       }),
       trip({
         id: "combo",
-        route_name: "Тэнгэрийн хаалга-Чунчин",
+        route_name: "Зэтгорийн хаалга-Эльдор",
         category: "",
         adult_price: 1480000,
         child_price: 1430000,
-        source_description: "8 өдөр 7 шөнө. Тэнгэрийн хаалга, Чунчин хосолсон аялал.",
+        source_description: "8 өдөр 7 шөнө. Зэтгорийн хаалга, Эльдор хосолсон аялал.",
       }),
     ],
     NOW,
   );
 
-  assert.match(reply || "", /^✈️ Тэнгэрийн хаалга-Чунчин/m);
+  assert.match(reply || "", /^✈️ Зэтгорийн хаалга-Эльдор/m);
   assert.match(reply || "", /1,480,000₮/);
-  assert.doesNotMatch(reply || "", /^✈️ Тэнгэрийн хаалга - шууд нислэгтэй/m);
+  assert.doesNotMatch(reply || "", /^✈️ Зэтгорийн хаалга - шууд нислэгтэй/m);
 });
 
 test("answers that hybrid land+flight route is not a direct flight", () => {
   const reply = buildStructuredTripReply(
-    "Бээжин Бэйдэхэ газар нислэг хосолсон аялал шууд нислэгтэй юу?",
+    "Вэлмор Кардэн газар нислэг хосолсон аялал шууд нислэгтэй юу?",
     [
       trip({
         id: "hybrid",
-        route_name: "Бэйдайхэ+Бээжин газар нислэг хосолсон аялал",
+        route_name: "Кардан+Вэлмор газар нислэг хосолсон аялал",
         duration_text: "9 өдөр / 8 шөнө",
         adult_price: 2030000,
         child_price: 1170000,
         source_description: "Газар нислэг хосолсон маршрут",
-        extra: { aliases: ["Бэйдэхэ", "Бэйдэйхэ", "Beidaihe"] },
+        extra: { aliases: ["Кардэн", "Бэйдэйхэ", "Kardan"] },
       }),
     ],
     NOW,
@@ -487,11 +487,11 @@ test("answers that hybrid land+flight route is not a direct flight", () => {
 
 test("discount questions still show regular price when no promo price is stored", () => {
   const reply = buildDiscountReply(
-    "Хайнан Хайкоу аяллын хямдралтай үнэ байгаа юу?",
+    "Мирвэн Хайкоу аяллын хямдралтай үнэ байгаа юу?",
     [
       trip({
         id: "haikou",
-        route_name: "Хайнан - Хайкоу шууд нислэгтэй аялал",
+        route_name: "Мирвэн - Хайкоу шууд нислэгтэй аялал",
         duration_text: "8 өдөр / 7 шөнө",
         adult_price: 1430000,
         child_price: 1410000,
@@ -509,16 +509,16 @@ test("discount questions still show regular price when no promo price is stored"
 
 test("same-price comparison fails safe when date-group prices are not stored", () => {
   const reply = buildStructuredTripReply(
-    "Шанхай Жанжиажэ аяллын 6 сарын 27, 7 сарын 18 үнэ адилхан уу?",
+    "Лумиа Пэлдор аяллын 6 сарын 27, 7 сарын 18 үнэ адилхан уу?",
     [
       trip({
-        id: "shanghai-missing-groups",
-        route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
+        id: "lumia-missing-groups",
+        route_name: "Лумиа + Зэтгорийн хаалга шууд нислэгтэй аялал",
         duration_text: "8 өдөр / 7 шөнө",
-        adult_price: 3590000,
+        adult_price: 3601000,
         child_price: 1470000,
         departure_dates: ["6 сарын 27", "7 сарын 18"],
-        extra: { aliases: ["Жанжиажэ", "Шанхай Жанжиажэ"] },
+        extra: { aliases: ["Пэлдор", "Лумиа Пэлдор"] },
       }),
     ],
     NOW,
@@ -534,8 +534,8 @@ test("combined date and price query returns only the exact matching tour", () =>
     "7/9 Ð½Ð¸Ð¹ 1270000 Ñ‹Ð½ Ð°ÑÐ»Ð°Ð»Ñ‹Ð³ Ò¯Ð·Ð¼ÑÑ€ Ð±Ð°Ð¹Ð½Ð°",
     [
       trip({
-        id: "beidaihe-flight",
-        route_name: "Ð‘ÑÐ¹Ð´Ð°Ð¹Ñ…Ñ+Ð‘ÑÑÐ¶Ð¸Ð½ Ð³Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³ Ñ…Ð¾ÑÐ¾Ð»ÑÐ¾Ð½ Ð°ÑÐ»Ð°Ð»",
+        id: "kardan-flight",
+        route_name: "ÐšÐ°Ñ€Ð´Ð°Ð½+Ð’ÑÐ»Ð¼Ð¾Ñ€ Ð³Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³ Ñ…Ð¾ÑÐ¾Ð»ÑÐ¾Ð½ Ð°ÑÐ»Ð°Ð»",
         duration_text: "9 Ó©Ð´Ó©Ñ€ / 8 ÑˆÓ©Ð½Ó©",
         adult_price: 2030000,
         child_price: 1170000,
@@ -560,7 +560,7 @@ test("combined date and price query returns only the exact matching tour", () =>
       }),
       trip({
         id: "wrong-price",
-        route_name: "Ð‘ÑÑÐ¶Ð¸Ð½ Ñ…Ð¾Ñ‚Ñ‹Ð½ Ð°ÑÐ»Ð°Ð»",
+        route_name: "Ð’ÑÐ»Ð¼Ð¾Ñ€ Ñ…Ð¾Ñ‚Ñ‹Ð½ Ð°ÑÐ»Ð°Ð»",
         duration_text: "5 Ó©Ð´Ó©Ñ€ / 4 ÑˆÓ©Ð½Ó©",
         adult_price: 1230000,
         departure_dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 9"],
@@ -576,7 +576,7 @@ test("combined date and price query returns only the exact matching tour", () =>
       }),
       trip({
         id: "same-date-other-route",
-        route_name: "Ð–Ð¸Ð½Ð¸Ð½ Ð¼Ð¸Ð½Ð¸ Ð°Ð²Ð°Ñ‚Ð°Ñ€",
+        route_name: "Ð¡ÑÐ»Ð²Ð¸Ð½ Ð¼Ð¸Ð½Ð¸ ÑÐ¼Ð±Ð°Ñ€",
         duration_text: "4 Ó©Ð´Ó©Ñ€ / 3 ÑˆÓ©Ð½Ó©",
         adult_price: 1110000,
         departure_dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 9"],
@@ -586,9 +586,9 @@ test("combined date and price query returns only the exact matching tour", () =>
   );
 
   assert.match(reply || "", /1270000|1,270,000/);
-  assert.match(reply || "", /Ð‘ÑÐ¹Ð´Ð°Ð¹Ñ…Ñ\+Ð‘ÑÑÐ¶Ð¸Ð½/);
-  assert.doesNotMatch(reply || "", /Ð–Ð¸Ð½Ð¸Ð½/);
-  assert.doesNotMatch(reply || "", /Ð‘ÑÑÐ¶Ð¸Ð½ Ñ…Ð¾Ñ‚Ñ‹Ð½ Ð°ÑÐ»Ð°Ð»/);
+  assert.match(reply || "", /ÐšÐ°Ñ€Ð´Ð°Ð½\+Ð’ÑÐ»Ð¼Ð¾Ñ€/);
+  assert.doesNotMatch(reply || "", /Ð¡ÑÐ»Ð²Ð¸Ð½/);
+  assert.doesNotMatch(reply || "", /Ð’ÑÐ»Ð¼Ð¾Ñ€ Ñ…Ð¾Ñ‚Ñ‹Ð½ Ð°ÑÐ»Ð°Ð»/);
 });
 
 test("combined date and price query falls back to close matches on the same date only", () => {
@@ -597,7 +597,7 @@ test("combined date and price query falls back to close matches on the same date
     [
       trip({
         id: "close-a",
-        route_name: "Ð‘ÑÐ¹Ð´Ð°Ð¹Ñ…Ñ+Ð‘ÑÑÐ¶Ð¸Ð½ Ð³Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³ Ñ…Ð¾ÑÐ¾Ð»ÑÐ¾Ð½ Ð°ÑÐ»Ð°Ð»",
+        route_name: "ÐšÐ°Ñ€Ð´Ð°Ð½+Ð’ÑÐ»Ð¼Ð¾Ñ€ Ð³Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³ Ñ…Ð¾ÑÐ¾Ð»ÑÐ¾Ð½ Ð°ÑÐ»Ð°Ð»",
         duration_text: "9 Ó©Ð´Ó©Ñ€ / 8 ÑˆÓ©Ð½Ó©",
         departure_dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 9"],
         extra: {
@@ -612,14 +612,14 @@ test("combined date and price query falls back to close matches on the same date
       }),
       trip({
         id: "close-b",
-        route_name: "Ð‘ÑÑÐ¶Ð¸Ð½ ÑˆÑƒÑƒÐ´ Ð½Ð¸ÑÐ»ÑÐ³Ñ‚ÑÐ¹",
+        route_name: "Ð’ÑÐ»Ð¼Ð¾Ñ€ ÑˆÑƒÑƒÐ´ Ð½Ð¸ÑÐ»ÑÐ³Ñ‚ÑÐ¹",
         duration_text: "5 Ó©Ð´Ó©Ñ€ / 4 ÑˆÓ©Ð½Ó©",
         departure_dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 9"],
         extra: {
           price_groups: [
             {
               dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 9"],
-              adult_price: 2290000,
+              adult_price: 2301000,
               child_price: 1210000,
             },
           ],
@@ -627,7 +627,7 @@ test("combined date and price query falls back to close matches on the same date
       }),
       trip({
         id: "other-date",
-        route_name: "Ð¥Ð°Ð¹Ð½Ð°Ð½ ÑˆÑƒÑƒÐ´ Ð½Ð¸ÑÐ»ÑÐ³Ñ‚ÑÐ¹",
+        route_name: "ÐœÐ¸Ñ€Ð²ÑÐ½ ÑˆÑƒÑƒÐ´ Ð½Ð¸ÑÐ»ÑÐ³Ñ‚ÑÐ¹",
         duration_text: "8 Ó©Ð´Ó©Ñ€ / 7 ÑˆÓ©Ð½Ó©",
         departure_dates: ["7 ÑÐ°Ñ€Ñ‹Ð½ 12"],
         extra: {
@@ -644,21 +644,21 @@ test("combined date and price query falls back to close matches on the same date
   );
 
   assert.match(reply || "", /1310000|1,310,000/);
-  assert.match(reply || "", /Ð‘ÑÐ¹Ð´Ð°Ð¹Ñ…Ñ\+Ð‘ÑÑÐ¶Ð¸Ð½/);
-  assert.match(reply || "", /Ð‘ÑÑÐ¶Ð¸Ð½ ÑˆÑƒÑƒÐ´ Ð½Ð¸ÑÐ»ÑÐ³Ñ‚ÑÐ¹/);
-  assert.doesNotMatch(reply || "", /Ð¥Ð°Ð¹Ð½Ð°Ð½/);
+  assert.match(reply || "", /ÐšÐ°Ñ€Ð´Ð°Ð½\+Ð’ÑÐ»Ð¼Ð¾Ñ€/);
+  assert.match(reply || "", /Ð’ÑÐ»Ð¼Ð¾Ñ€ ÑˆÑƒÑƒÐ´ Ð½Ð¸ÑÐ»ÑÐ³Ñ‚ÑÐ¹/);
+  assert.doesNotMatch(reply || "", /ÐœÐ¸Ñ€Ð²ÑÐ½/);
 });
 
 test("month-specific child price only returns that month and passenger type", () => {
   const reply = buildStructuredTripReply(
-    "Бэйдайхэ 8 сарын хүүхдийн үнэ өөр үү?",
+    "Кардан 8 сарын хүүхдийн үнэ өөр үү?",
     [
       trip({
-        id: "beidaihe-month-child",
-        route_name: "Бэйдайхэ + Бээжин газар нислэг хосолсон аялал",
+        id: "kardan-month-child",
+        route_name: "Кардан + Вэлмор газар нислэг хосолсон аялал",
         departure_dates: ["7 сарын 9", "7 сарын 18", "8 сарын 1", "8 сарын 8"],
         extra: {
-          aliases: ["Бэйдайхэ", "Бэйдэхэ"],
+          aliases: ["Кардан", "Кардэн"],
           price_groups: [
             {
               dates: ["7 сарын 9", "7 сарын 18"],
@@ -690,15 +690,15 @@ test("month-specific child price only returns that month and passenger type", ()
 
 test("route-only query uses spaced premium formatting", () => {
   const reply = buildStructuredTripReply(
-    "Бээжин Бэйдэхэ газар нислэг хосолсон аялал",
+    "Вэлмор Кардэн газар нислэг хосолсон аялал",
     [
       trip({
-        id: "beidaihe-premium",
-        route_name: "Бэйдайхэ + Бээжин газар нислэг хосолсон аялал",
+        id: "kardan-premium",
+        route_name: "Кардан + Вэлмор газар нислэг хосолсон аялал",
         duration_text: "9 өдөр / 8 шөнө",
         departure_dates: ["6 сарын 20", "6 сарын 27", "7 сарын 9", "7 сарын 18", "7 сарын 27", "8 сарын 1", "8 сарын 8", "8 сарын 15", "8 сарын 22"],
         extra: {
-          aliases: ["Бэйдэхэ", "Бэйдэйхэ", "Beidaihe"],
+          aliases: ["Кардэн", "Бэйдэйхэ", "Kardan"],
           price_groups: [
             {
               dates: ["6 сарын 20", "6 сарын 27"],
@@ -739,11 +739,11 @@ test("route-only query uses spaced premium formatting", () => {
 
 test("program request prefers brochure pdf over images and itinerary", () => {
   const result = buildTripProgramReply(
-    "Ð‘ÑÐ¹Ð´Ð°Ð¹Ñ…Ñ Ð°ÑÐ»Ð»Ñ‹Ð½ Ð´ÑÐ»Ð³ÑÑ€ÑÐ½Ð³Ò¯Ð¹ Ñ…Ó©Ñ‚Ó©Ð»Ð±Ó©Ñ€ pdf",
+    "ÐšÐ°Ñ€Ð´Ð°Ð½ Ð°ÑÐ»Ð»Ñ‹Ð½ Ð´ÑÐ»Ð³ÑÑ€ÑÐ½Ð³Ò¯Ð¹ Ñ…Ó©Ñ‚Ó©Ð»Ð±Ó©Ñ€ pdf",
     [
       trip({
         id: "program-pdf",
-        route_name: "Ð‘ÑÐ¹Ð´Ð°Ð¹Ñ…Ñ Ð°ÑÐ»Ð°Ð»",
+        route_name: "ÐšÐ°Ñ€Ð´Ð°Ð½ Ð°ÑÐ»Ð°Ð»",
         extra: {
           brochure_pdf_url: "https://example.com/program.pdf",
           program_images: ["https://example.com/program-1.jpg"],
@@ -763,34 +763,34 @@ test("program request prefers brochure pdf over images and itinerary", () => {
 
 test("poster-linked photo request sends the PDF brochure instead of photos", () => {
   const result = buildTripProgramReply(
-    "Жэжү poster зураг явуул",
+    "Талвин poster зураг явуул",
     [
       trip({
-        id: "jeju",
-        route_name: "Жэжү арлын аялал",
+        id: "talvin",
+        route_name: "Талвин арлын аялал",
         photo_urls: ["https://example.com/legacy-photo.jpg"],
         extra: {
-          poster_trip_id: "poster-jeju",
-          brochure_pdf_url: "https://example.com/jeju.pdf",
+          poster_trip_id: "poster-talvin",
+          brochure_pdf_url: "https://example.com/talvin.pdf",
         },
       }),
     ],
   );
 
-  assert.deepEqual(result?.brochure, { type: "url", value: "https://example.com/jeju.pdf" });
+  assert.deepEqual(result?.brochure, { type: "url", value: "https://example.com/talvin.pdf" });
   assert.deepEqual(result?.mediaUrls, []);
   assert.match(result?.reply || "", /PDF/);
 });
 
 test("poster-linked trip without PDF refuses legacy image fallback", () => {
   const result = buildTripProgramReply(
-    "Жэжү poster зураг явуул",
+    "Талвин poster зураг явуул",
     [
       trip({
-        id: "jeju-missing-pdf",
-        route_name: "Жэжү арлын аялал",
+        id: "talvin-missing-pdf",
+        route_name: "Талвин арлын аялал",
         photo_urls: ["https://example.com/legacy-photo.jpg"],
-        extra: { poster_trip_id: "poster-jeju" },
+        extra: { poster_trip_id: "poster-talvin" },
       }),
     ],
   );
@@ -805,17 +805,17 @@ test("poster-linked trip sends the rendered poster, not a stale upload or attach
   process.env.SITE_URL = "https://bot.example.com";
   try {
     const result = buildTripProgramReply(
-      "Жэжү poster зураг явуул",
+      "Талвин poster зураг явуул",
       [
         trip({
-          id: "jeju-connected",
-          route_name: "Жэжү арлын аялал",
+          id: "talvin-connected",
+          route_name: "Талвин арлын аялал",
           photo_urls: ["https://example.com/legacy-photo.jpg"],
           extra: {
-            poster_trip_id: "poster-jeju",
+            poster_trip_id: "poster-talvin",
             // Both of these predate the current poster edit.
             source_file_attachment_id: "fb-attachment-123",
-            brochure_pdf_url: "https://example.com/jeju.pdf",
+            brochure_pdf_url: "https://example.com/talvin.pdf",
           },
         }),
       ],
@@ -823,7 +823,7 @@ test("poster-linked trip sends the rendered poster, not a stale upload or attach
 
     assert.deepEqual(result?.brochure, {
       type: "url",
-      value: "https://bot.example.com/api/poster-pdf?id=poster-jeju",
+      value: "https://bot.example.com/api/poster-pdf?id=poster-talvin",
     });
     assert.deepEqual(result?.mediaUrls, []);
   } finally {
@@ -834,11 +834,11 @@ test("poster-linked trip sends the rendered poster, not a stale upload or attach
 
 test("a blocked Cloudinary raw PDF never counts as a brochure", () => {
   const result = buildTripProgramReply(
-    "Жэжү хөтөлбөр явуулаач",
+    "Талвин хөтөлбөр явуулаач",
     [
       trip({
-        id: "jeju-blocked-pdf",
-        route_name: "Жэжү арлын аялал",
+        id: "talvin-blocked-pdf",
+        route_name: "Талвин арлын аялал",
         photo_urls: [],
         extra: {
           brochure_pdf_url:
@@ -853,53 +853,53 @@ test("a blocked Cloudinary raw PDF never counts as a brochure", () => {
 
 test("program photo request prefers the longer combined route over a shorter shared route", () => {
   const result = buildTripProgramReply(
-    "Shanghai Tenger zurag",
+    "Lumia Zetgor zurag",
     [
       trip({
-        id: "tenger-direct",
-        route_name: "Tenger direct flight",
-        photo_urls: ["https://example.com/tenger-direct-1.jpg"],
+        id: "zetgor-direct",
+        route_name: "Zetgor direct flight",
+        photo_urls: ["https://example.com/zetgor-direct-1.jpg"],
       }),
       trip({
-        id: "shanghai-tenger",
-        route_name: "Shanghai Tenger direct flight",
-        photo_urls: ["https://example.com/shanghai-tenger-1.jpg", "https://example.com/shanghai-tenger-2.jpg"],
+        id: "lumia-zetgor",
+        route_name: "Lumia Zetgor direct flight",
+        photo_urls: ["https://example.com/lumia-zetgor-1.jpg", "https://example.com/lumia-zetgor-2.jpg"],
       }),
     ],
   );
 
-  assert.equal(result?.trip?.id, "shanghai-tenger");
+  assert.equal(result?.trip?.id, "lumia-zetgor");
   assert.deepEqual(result?.mediaUrls, [
-    "https://example.com/shanghai-tenger-1.jpg",
-    "https://example.com/shanghai-tenger-2.jpg",
+    "https://example.com/lumia-zetgor-1.jpg",
+    "https://example.com/lumia-zetgor-2.jpg",
   ]);
 });
 
-test("program request prefers the ground Beidaihe + Beijing tour for газрын аяллын phrasing", () => {
+test("program request prefers the ground Kardan + Velmor tour for газрын аяллын phrasing", () => {
   const result = buildTripProgramReply(
-    "Бээжин + Бэйдэхэ газрын аяллын хөтөлбөр үзэх",
+    "Вэлмор + Кардэн газрын аяллын хөтөлбөр үзэх",
     [
       trip({
         id: "ground-tour",
-        route_name: "Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал",
+        route_name: "Сэрвэн тэнгис буюу Кардан-Вэлморгийн газрын аялал",
         category: "газрын аялал",
         extra: {
           aliases: [
-            "Бэйдайхэ Бээжин газрын аялал",
-            "Бэйдэхэ Бээжин газрын",
-            "Шар тэнгис Бэйдайхэ Бээжин",
+            "Кардан Вэлмор газрын аялал",
+            "Кардэн Вэлмор газрын",
+            "Сэрвэн тэнгис Кардан Вэлмор",
           ],
           brochure_pdf_url: "https://example.com/ground-tour.pdf",
         },
       }),
       trip({
         id: "combo-tour",
-        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        route_name: "Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал",
         category: "газар + нислэг хосолсон",
         extra: {
           aliases: [
-            "Бээжин Бэйдэхэ газар нислэг хосолсон",
-            "Бэйдэхэ Бээжин газар нислэг",
+            "Вэлмор Кардэн газар нислэг хосолсон",
+            "Кардэн Вэлмор газар нислэг",
           ],
         },
       }),
@@ -909,64 +909,65 @@ test("program request prefers the ground Beidaihe + Beijing tour for газры�
   assert.equal(result?.trip?.id, "ground-tour");
   assert.deepEqual(result?.brochure, { type: "url", value: "https://example.com/ground-tour.pdf" });
   assert.deepEqual(result?.mediaUrls, []);
-  assert.match(result?.reply || "", /Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал/);
+  assert.match(result?.reply || "", /Сэрвэн тэнгис буюу Кардан-Вэлморгийн газрын аялал/);
   assert.match(result?.reply || "", /PDF хөтөлбөр/);
 });
 
-test("program request handles common Бэйдэхэ spelling without stored aliases", () => {
-  const result = buildTripProgramReply(
-    "Бээжин + Бэйдэхэ газрын аяллын хөтөлбөр үзэх",
-    [
-      trip({
-        id: "four-city",
-        route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
-        category: "газрын аялал",
-      }),
-      trip({
-        id: "ground-tour",
-        route_name: "Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал",
-        category: "газрын аялал",
-        extra: {
-          brochure_pdf_url: "https://example.com/ground-tour.pdf",
-        },
-      }),
-      trip({
-        id: "combo-tour",
-        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
-        category: "газар + нислэг хосолсон",
-      }),
-    ],
-  );
+test("close misspellings snap to the catalog; further ones are found through stored aliases", () => {
+  const catalog = (groundExtra: Record<string, unknown>) => [
+    trip({
+      id: "four-city",
+      route_name: "ВЭЛМОР - СЭЛВИН – ПЭЛМАК - ОРМАК – 4 ХОТЫН АЯЛАЛ",
+      category: "газрын аялал",
+    }),
+    trip({
+      id: "ground-tour",
+      route_name: "Сэрвэн тэнгис буюу Кардан-Вэлморгийн газрын аялал",
+      category: "газрын аялал",
+      extra: { brochure_pdf_url: "https://example.com/ground-tour.pdf", ...groundExtra },
+    }),
+    trip({
+      id: "combo-tour",
+      route_name: "Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал",
+      category: "газар + нислэг хосолсон",
+    }),
+  ];
+  // One letter off the catalog's spelling: found without any alias.
+  const oneOff = buildTripProgramReply("Вэлмор + Кардэн газрын аяллын хөтөлбөр үзэх", catalog({}));
+  assert.equal(oneOff?.trip?.id, "ground-tour");
 
-  assert.equal(result?.trip?.id, "ground-tour");
-  assert.deepEqual(result?.brochure, { type: "url", value: "https://example.com/ground-tour.pdf" });
-  assert.doesNotMatch(result?.reply || "", /4 ХОТЫН АЯЛАЛ/);
+  // Further off: found once staff store the spelling as an alias.
+  const question = "Вэлмор + Кордэн газрын аяллын хөтөлбөр үзэх";
+  const known = buildTripProgramReply(question, catalog({ aliases: ["Кордэн"] }));
+  assert.equal(known?.trip?.id, "ground-tour");
+  assert.deepEqual(known?.brochure, { type: "url", value: "https://example.com/ground-tour.pdf" });
+  assert.doesNotMatch(known?.reply || "", /4 ХОТЫН АЯЛАЛ/);
 });
 
 test("program request prefers the combo tour when user explicitly says газар нислэг хосолсон", () => {
   const result = buildTripProgramReply(
-    "Ð‘ÑÑÐ¶Ð¸Ð½ + Ð‘ÑÐ¹Ð´ÑÑ…Ñ Ð³Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³ Ñ…Ð¾ÑÐ¾Ð»ÑÐ¾Ð½ program",
+    "Ð’ÑÐ»Ð¼Ð¾Ñ€ + ÐšÐ°Ñ€Ð´ÑÐ½ Ð³Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³ Ñ…Ð¾ÑÐ¾Ð»ÑÐ¾Ð½ program",
     [
       trip({
         id: "ground-tour",
-        route_name: "Ð¨Ð°Ñ€ Ñ‚ÑÐ½Ð³Ð¸Ñ Ð±ÑƒÑŽÑƒ Ð‘ÑÐ¹Ð´Ð°Ð¹Ñ…Ñ-Ð‘ÑÑÐ¶Ð¸Ð½Ð³Ð¸Ð¹Ð½ Ð³Ð°Ð·Ñ€Ñ‹Ð½ Ð°ÑÐ»Ð°Ð»",
+        route_name: "Ð¡ÑÑ€Ð²ÑÐ½ Ñ‚ÑÐ½Ð³Ð¸Ñ Ð±ÑƒÑŽÑƒ ÐšÐ°Ñ€Ð´Ð°Ð½-Ð’ÑÐ»Ð¼Ð¾Ñ€Ð³Ð¸Ð¹Ð½ Ð³Ð°Ð·Ñ€Ñ‹Ð½ Ð°ÑÐ»Ð°Ð»",
         category: "Ð³Ð°Ð·Ñ€Ñ‹Ð½ Ð°ÑÐ»Ð°Ð»",
         extra: {
           aliases: [
-            "Ð‘ÑÐ¹Ð´Ð°Ð¹Ñ…Ñ Ð‘ÑÑÐ¶Ð¸Ð½ Ð³Ð°Ð·Ñ€Ñ‹Ð½ Ð°ÑÐ»Ð°Ð»",
-            "Ð‘ÑÐ¹Ð´ÑÑ…Ñ Ð‘ÑÑÐ¶Ð¸Ð½ Ð³Ð°Ð·Ñ€Ñ‹Ð½",
+            "ÐšÐ°Ñ€Ð´Ð°Ð½ Ð’ÑÐ»Ð¼Ð¾Ñ€ Ð³Ð°Ð·Ñ€Ñ‹Ð½ Ð°ÑÐ»Ð°Ð»",
+            "ÐšÐ°Ñ€Ð´ÑÐ½ Ð’ÑÐ»Ð¼Ð¾Ñ€ Ð³Ð°Ð·Ñ€Ñ‹Ð½",
           ],
           brochure_pdf_url: "https://example.com/ground-tour.pdf",
         },
       }),
       trip({
         id: "combo-tour",
-        route_name: "Ð‘ÑÐ¹Ð´Ð°Ð¹Ñ…Ñ ÑˆÐ°Ñ€ Ñ‚ÑÐ½Ð³Ð¸ÑÐ¸Ð¹Ð½ ÑÑ€ÑÐ³ + Ð‘ÑÑÐ¶Ð¸Ð½ Ð³Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³ Ñ…Ð¾ÑÐ¾Ð»ÑÐ¾Ð½ Ð°ÑÐ»Ð°Ð»",
+        route_name: "ÐšÐ°Ñ€Ð´Ð°Ð½ ÑÑÑ€Ð²ÑÐ½ Ñ‚ÑÐ½Ð³Ð¸ÑÐ¸Ð¹Ð½ ÑÑ€ÑÐ³ + Ð’ÑÐ»Ð¼Ð¾Ñ€ Ð³Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³ Ñ…Ð¾ÑÐ¾Ð»ÑÐ¾Ð½ Ð°ÑÐ»Ð°Ð»",
         category: "Ð³Ð°Ð·Ð°Ñ€ + Ð½Ð¸ÑÐ»ÑÐ³ Ñ…Ð¾ÑÐ¾Ð»ÑÐ¾Ð½",
         extra: {
           aliases: [
-            "Ð‘ÑÑÐ¶Ð¸Ð½ Ð‘ÑÐ¹Ð´ÑÑ…Ñ Ð³Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³ Ñ…Ð¾ÑÐ¾Ð»ÑÐ¾Ð½",
-            "Ð‘ÑÐ¹Ð´ÑÑ…Ñ Ð‘ÑÑÐ¶Ð¸Ð½ Ð³Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³",
+            "Ð’ÑÐ»Ð¼Ð¾Ñ€ ÐšÐ°Ñ€Ð´ÑÐ½ Ð³Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³ Ñ…Ð¾ÑÐ¾Ð»ÑÐ¾Ð½",
+            "ÐšÐ°Ñ€Ð´ÑÐ½ Ð’ÑÐ»Ð¼Ð¾Ñ€ Ð³Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³",
           ],
           brochure_pdf_url: "https://example.com/combo-tour.pdf",
         },
@@ -975,28 +976,28 @@ test("program request prefers the combo tour when user explicitly says газа�
   );
 
   assert.equal(result?.trip?.id, "combo-tour");
-  assert.match(result?.reply || "", /Ð‘ÑÐ¹Ð´Ð°Ð¹Ñ…Ñ ÑˆÐ°Ñ€ Ñ‚ÑÐ½Ð³Ð¸ÑÐ¸Ð¹Ð½ ÑÑ€ÑÐ³ \+ Ð‘ÑÑÐ¶Ð¸Ð½ Ð³Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³ Ñ…Ð¾ÑÐ¾Ð»ÑÐ¾Ð½ Ð°ÑÐ»Ð°Ð»/);
+  assert.match(result?.reply || "", /ÐšÐ°Ñ€Ð´Ð°Ð½ ÑÑÑ€Ð²ÑÐ½ Ñ‚ÑÐ½Ð³Ð¸ÑÐ¸Ð¹Ð½ ÑÑ€ÑÐ³ \+ Ð’ÑÐ»Ð¼Ð¾Ñ€ Ð³Ð°Ð·Ð°Ñ€ Ð½Ð¸ÑÐ»ÑÐ³ Ñ…Ð¾ÑÐ¾Ð»ÑÐ¾Ð½ Ð°ÑÐ»Ð°Ð»/);
   assert.doesNotMatch(result?.reply || "", /https:\/\/example\.com\/combo-tour\.pdf/);
 });
 
-test("program request asks for clarification on generic Beijing flight-tour wording", () => {
+test("program request asks for clarification on generic Velmor flight-tour wording", () => {
   const result = buildTripProgramReply(
-    "Бээжин нислэгтэй аяллын хөтөлбөр үзэх",
+    "Вэлмор нислэгтэй аяллын хөтөлбөр үзэх",
     [
       trip({
-        id: "beijing-direct",
-        route_name: "Бээжин - Юниверсал шууд нислэгтэй аялал",
+        id: "velmor-direct",
+        route_name: "Вэлмор - Янмор шууд нислэгтэй аялал",
         extra: {
-          aliases: ["Бээжин Юниверсал"],
-          program_images: ["https://example.com/beijing-direct-program.jpg"],
+          aliases: ["Вэлмор Янмор"],
+          program_images: ["https://example.com/velmor-direct-program.jpg"],
         },
       }),
       trip({
-        id: "beidaihe-combo",
-        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        id: "kardan-combo",
+        route_name: "Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал",
         extra: {
-          aliases: ["Бээжин Бэйдайхэ газар нислэг хосолсон", "Бэйдайхэ Бээжин"],
-          program_images: ["https://example.com/beidaihe-combo-program.jpg"],
+          aliases: ["Вэлмор Кардан газар нислэг хосолсон", "Кардан Вэлмор"],
+          program_images: ["https://example.com/kardan-combo-program.jpg"],
         },
       }),
     ],
@@ -1009,25 +1010,25 @@ test("program request asks for clarification on generic Beijing flight-tour word
   assert.doesNotMatch(result?.reply || "", /наадмын амралтаар явах газрын аялал/);
 });
 
-test("land-only existence query prefers the ground Beidaihe + Beijing tour", () => {
+test("land-only existence query prefers the ground Kardan + Velmor tour", () => {
   const reply = buildStructuredTripReply(
-    "Нислэггүй Бэйдайхэ Бээжин аялал байгаа юу?",
+    "Нислэггүй Кардан Вэлмор аялал байгаа юу?",
     [
       trip({
         id: "ground-tour-exists",
-        route_name: "Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал",
+        route_name: "Сэрвэн тэнгис буюу Кардан-Вэлморгийн газрын аялал",
         category: "газрын аялал",
         extra: {
-          aliases: ["Бэйдайхэ Бээжин газрын аялал", "Бэйдэхэ Бээжин газрын"],
+          aliases: ["Кардан Вэлмор газрын аялал", "Кардэн Вэлмор газрын"],
         },
       }),
       trip({
         id: "combo-tour-exists",
-        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        route_name: "Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал",
         category: "газар + нислэг хосолсон",
-        notes: "Энэ аялалд Эрээн Улаанхад чиглэлийн нислэг багтсан.",
+        notes: "Энэ аялалд Ормак Улаанхад чиглэлийн нислэг багтсан.",
         extra: {
-          aliases: ["Бэйдайхэ Бээжин газар нислэг", "Бээжин Бэйдайхэ газар нислэг хосолсон"],
+          aliases: ["Кардан Вэлмор газар нислэг", "Вэлмор Кардан газар нислэг хосолсон"],
           important_notes: ["Энэ нь газар + нислэг хосолсон аялал."],
         },
       }),
@@ -1035,35 +1036,35 @@ test("land-only existence query prefers the ground Beidaihe + Beijing tour", () 
     NOW,
   );
 
-  assert.match(reply || "", /Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал/);
+  assert.match(reply || "", /Сэрвэн тэнгис буюу Кардан-Вэлморгийн газрын аялал/);
   assert.doesNotMatch(reply || "", /газар нислэг хосолсон/);
 });
 
-test("latin land-only query still prefers the ground Beidaihe + Beijing tour", () => {
+test("latin land-only query still prefers the ground Kardan + Velmor tour", () => {
   const reply = buildStructuredTripReply(
-    "nisleggvi beidaihe beejin aylal bgaa yu?",
+    "nisleggvi kardan velmor aylal bgaa yu?",
     [
       trip({
         id: "ground-tour-latin",
-        route_name: "Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал",
+        route_name: "Сэрвэн тэнгис буюу Кардан-Вэлморгийн газрын аялал",
         category: "газрын аялал",
         extra: {
-          aliases: ["Beidaihe Beijing land tour", "beidaihe beejin"],
+          aliases: ["Kardan Velmor land tour", "kardan velmor"],
         },
       }),
       trip({
         id: "combo-tour-latin",
-        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        route_name: "Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал",
         category: "газар + нислэг хосолсон",
         extra: {
-          aliases: ["beidaihe beejin flight combo", "beidaihe beijing flight"],
+          aliases: ["kardan velmor flight combo", "kardan velmor flight"],
         },
       }),
     ],
     NOW,
   );
 
-  assert.match(reply || "", /Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал/);
+  assert.match(reply || "", /Сэрвэн тэнгис буюу Кардан-Вэлморгийн газрын аялал/);
   assert.doesNotMatch(reply || "", /газар нислэг хосолсон/);
 });
 
@@ -1091,9 +1092,9 @@ test("route plus date price query uses AND logic and stays on the Datun trip", (
       }),
       trip({
         id: "other-718",
-        route_name: "Шанхай аялал",
-        adult_price: 3990000,
-        child_price: 3590000,
+        route_name: "Лумиа аялал",
+        adult_price: 4001000,
+        child_price: 3601000,
         departure_dates: ["2026 он 7 сар 18"],
       }),
     ],
@@ -1104,22 +1105,22 @@ test("route plus date price query uses AND logic and stays on the Datun trip", (
   assert.match(reply || "", /1,400,000₮/);
   assert.match(reply || "", /1,310,000₮/);
   assert.match(reply || "", /32,200₮/);
-  assert.doesNotMatch(reply || "", /Шанхай аялал/);
+  assert.doesNotMatch(reply || "", /Лумиа аялал/);
 });
 
 test("discount question falls back to notes and matching date group text", () => {
   const reply = buildDiscountReply(
-    "Далянь аялал 7 сарын 3-нд хямдралтай юу?",
+    "Тэлмор аялал 7 сарын 3-нд хямдралтай юу?",
     [
       trip({
-        id: "dalian",
-        route_name: "Далянь хотын шууд нислэгтэй аялал",
+        id: "telmor",
+        route_name: "Тэлмор хотын шууд нислэгтэй аялал",
         adult_price: 1420000,
         child_price: 1320000,
         notes: "7 сарын 3-нд супер бонустай. 2 том хүн + 1 хүүхэд үнэгүй эсвэл 5 том хүн + 1 том хүн үнэгүй.",
         departure_dates: ["7 сарын 3", "7 сарын 10"],
         extra: {
-          aliases: ["Далянь аялал", "Далянь"],
+          aliases: ["Тэлмор аялал", "Тэлмор"],
           price_groups: [
             {
               dates: ["7 сарын 3"],
@@ -1133,7 +1134,7 @@ test("discount question falls back to notes and matching date group text", () =>
       }),
       trip({
         id: "other-july-3",
-        route_name: "Хайлаар Манжуурын аялал",
+        route_name: "Торвал Нордэнын аялал",
         adult_price: 1110000,
         child_price: 1100000,
         departure_dates: ["7 сарын 3"],
@@ -1142,25 +1143,25 @@ test("discount question falls back to notes and matching date group text", () =>
     NOW,
   );
 
-  assert.match(reply || "", /Далянь хотын шууд нислэгтэй аялал/);
+  assert.match(reply || "", /Тэлмор хотын шууд нислэгтэй аялал/);
   assert.match(reply || "", /7 сарын 3/);
   assert.match(reply || "", /супер бонус|бонустай/i);
   assert.match(reply || "", /1,420,000₮/);
   assert.match(reply || "", /1,320,000₮/);
-  assert.doesNotMatch(reply || "", /Хайлаар Манжуур/);
+  assert.doesNotMatch(reply || "", /Торвал Нордэн/);
 });
 
-test("ticketed Tokyo price query only shows the ticket-included group", () => {
+test("ticketed Surmak price query only shows the ticket-included group", () => {
   const reply = buildStructuredTripReply(
-    "Токио Фүжи тийзтэй үнэ хэд вэ?",
+    "Сурмак Фэлмор тийзтэй үнэ хэд вэ?",
     [
       trip({
-        id: "tokyo-fuji",
-        route_name: "Токио, Фүжи аялал",
+        id: "surmak-felmor",
+        route_name: "Сурмак, Фэлмор аялал",
         adult_price: 1490000,
         child_price: 1460000,
         extra: {
-          aliases: ["Токио Фүжи"],
+          aliases: ["Сурмак Фэлмор"],
           price_groups: [
             {
               label: "Онгоцны тийзгүй үнэ",
@@ -1200,17 +1201,17 @@ test("ticketed Tokyo price query only shows the ticket-included group", () => {
   assert.doesNotMatch(reply || "", /Онгоцны тийзгүй үнэ/);
 });
 
-test("ticketless Tokyo price query only shows the ticketless group", () => {
+test("ticketless Surmak price query only shows the ticketless group", () => {
   const reply = buildStructuredTripReply(
-    "Токио Фүжи тийзгүй үнэ хэд вэ?",
+    "Сурмак Фэлмор тийзгүй үнэ хэд вэ?",
     [
       trip({
-        id: "tokyo-fuji-ticketless",
-        route_name: "Токио, Фүжи аялал",
+        id: "surmak-felmor-ticketless",
+        route_name: "Сурмак, Фэлмор аялал",
         adult_price: 1490000,
         child_price: 1460000,
         extra: {
-          aliases: ["Токио Фүжи"],
+          aliases: ["Сурмак Фэлмор"],
           price_groups: [
             {
               label: "Онгоцны тийзгүй үнэ",
@@ -1247,15 +1248,15 @@ test("ticketless Tokyo price query only shows the ticketless group", () => {
 
 test("ticketed price query does not fall back to ticketless price when ticketed group is missing", () => {
   const reply = buildStructuredTripReply(
-    "Токио тийзтэй үнэ?",
+    "Сурмак тийзтэй үнэ?",
     [
       trip({
-        id: "tokyo-ticketed-missing",
-        route_name: "Токио, Фүжи аялал",
+        id: "surmak-ticketed-missing",
+        route_name: "Сурмак, Фэлмор аялал",
         adult_price: 1490000,
         child_price: 1460000,
         extra: {
-          aliases: ["Токио Фүжи", "Токио аялал"],
+          aliases: ["Сурмак Фэлмор", "Сурмак аялал"],
           price_groups: [
             {
               label: "Онгоцны тийзгүй үнэ",
@@ -1275,11 +1276,11 @@ test("ticketed price query does not fall back to ticketless price when ticketed 
 
 test("ticket price comparison keeps the included and excluded labels", () => {
   const reply = buildStructuredTripReply(
-    "Токио, Фүжи аялал\nтийзтэйгээ ялгаа?",
+    "Сурмак, Фэлмор аялал\nтийзтэйгээ ялгаа?",
     [
       trip({
-        id: "tokyo-ticket-comparison",
-        route_name: "Токио, Фүжи аялал",
+        id: "surmak-ticket-comparison",
+        route_name: "Сурмак, Фэлмор аялал",
         departure_dates: ["Баасан гариг болгон", "7 сарын 10"],
         extra: {
           price_groups: [
@@ -1311,15 +1312,15 @@ test("ticket price comparison keeps the included and excluded labels", () => {
 
 test("cruise price reply uses room price table when top-level prices are null", () => {
   const reply = buildStructuredTripReply(
-    "Усан онгоцны аялал Чежү Пусан хэд вэ?",
+    "Усан онгоцны аялал Талвин Вирдэн хэд вэ?",
     [
       trip({
         id: "cruise",
-        route_name: "Усан онгоцны аялал - Эрээн - Бээжин -Тяньжин - Чежү Пусан",
+        route_name: "Усан онгоцны аялал - Ормак - Вэлмор -Дорнэл - Талвин Вирдэн",
         adult_price: null,
         child_price: null,
         extra: {
-          aliases: ["Усан онгоцны аялал", "Чежү Пусан круз"],
+          aliases: ["Усан онгоцны аялал", "Талвин Вирдэн круз"],
           room_prices: [
             { room_type: "4 ортой цонхтой өрөө", price: 1210000, currency: "MNT" },
             { room_type: "2 ортой цонхтой өрөө", price: 1320000, currency: "MNT" },
@@ -1339,15 +1340,15 @@ test("cruise price reply uses room price table when top-level prices are null", 
 
 test("child age range query is not misread as a date and returns the matching child tier", () => {
   const reply = buildStructuredTripReply(
-    "Хайнан Саньяа хүүхэд 2-6 нас хэд вэ?",
+    "Мирвэн Нарвэл хүүхэд 2-6 нас хэд вэ?",
     [
       trip({
-        id: "sanya",
-        route_name: "Хайнан - Саньяа шууд нислэгтэй аялал",
+        id: "narvel",
+        route_name: "Мирвэн - Нарвэл шууд нислэгтэй аялал",
         adult_price: 1430000,
         child_price: 1410000,
         extra: {
-          aliases: ["Хайнан Саньяа", "Саньяа"],
+          aliases: ["Мирвэн Нарвэл", "Нарвэл"],
           price_groups: [
             {
               label: "Үндсэн үнэ",
@@ -1381,18 +1382,18 @@ test("child age range query is not misread as a date and returns the matching ch
 
 test("duration and date disambiguate Hailaar Manchurian variants", () => {
   const reply = buildStructuredTripReply(
-    "Хайлаар Манжуур 5 өдөр 8 сарын 24-нд хэд вэ?",
+    "Торвал Нордэн 5 өдөр 8 сарын 24-нд хэд вэ?",
     [
       trip({
         id: "hailaar-4",
-        route_name: "Хайлаар Манжуурын аялал - 4 өдөр 3 шөнө",
+        route_name: "Торвал Нордэнын аялал - 4 өдөр 3 шөнө",
         adult_price: 1100000,
         child_price: 1080000,
         departure_dates: ["8 сарын 21"],
         duration_text: "4 өдөр 3 шөнө",
-        source_description: "Хайлаар Манжуур 4 өдөр 8 сарын 21",
+        source_description: "Торвал Нордэн 4 өдөр 8 сарын 21",
         extra: {
-          aliases: ["Хайлаар Манжуур 4 өдөр"],
+          aliases: ["Торвал Нордэн 4 өдөр"],
           price_groups: [
             { dates: ["8 сарын 21"], adult_price: 1100000, child_price: 1080000 },
           ],
@@ -1401,14 +1402,14 @@ test("duration and date disambiguate Hailaar Manchurian variants", () => {
       }),
       trip({
         id: "hailaar-5",
-        route_name: "Хайлаар Манжуурын аялал - 5 өдөр 4 шөнө",
+        route_name: "Торвал Нордэнын аялал - 5 өдөр 4 шөнө",
         adult_price: 1100000,
         child_price: 1100000,
         departure_dates: ["8 сарын 24"],
         duration_text: "5 өдөр 4 шөнө",
-        source_description: "Хайлаар Манжуур 5 өдөр 8 сарын 24",
+        source_description: "Торвал Нордэн 5 өдөр 8 сарын 24",
         extra: {
-          aliases: ["Хайлаар Манжуур 5 өдөр"],
+          aliases: ["Торвал Нордэн 5 өдөр"],
           price_groups: [
             { dates: ["8 сарын 24"], adult_price: 1100000, child_price: 1100000 },
           ],
@@ -1419,7 +1420,7 @@ test("duration and date disambiguate Hailaar Manchurian variants", () => {
     NOW,
   );
 
-  assert.match(reply || "", /Хайлаар Манжуурын аялал - 5 өдөр 4 шөнө/);
+  assert.match(reply || "", /Торвал Нордэнын аялал - 5 өдөр 4 шөнө/);
   assert.match(reply || "", /8 сарын 24/);
   assert.match(reply || "", /1,100,000₮/);
   assert.match(reply || "", /250,000₮/);
@@ -1428,15 +1429,15 @@ test("duration and date disambiguate Hailaar Manchurian variants", () => {
 
 test("single child age query returns the matching age tier instead of the first child price", () => {
   const reply = buildStructuredTripReply(
-    "Хайнан Саньяа 2 настай хүүхэд хэдээр явах вэ?",
+    "Мирвэн Нарвэл 2 настай хүүхэд хэдээр явах вэ?",
     [
       trip({
-        id: "sanya",
-        route_name: "Хайнан - Саньяа шууд нислэгтэй аялал",
+        id: "narvel",
+        route_name: "Мирвэн - Нарвэл шууд нислэгтэй аялал",
         adult_price: 1430000,
         child_price: 1410000,
         extra: {
-          aliases: ["Хайнан Саньяа", "Саньяа"],
+          aliases: ["Мирвэн Нарвэл", "Нарвэл"],
           price_groups: [
             {
               label: "Үндсэн үнэ",
@@ -1469,13 +1470,13 @@ test("single child age query returns the matching age tier instead of the first 
 test("infant price follow-up stays on the contextual trip instead of matching expensive-word route", () => {
   const reply = buildStructuredTripReply(
     [
-      "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+      "Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал",
       "нярай хүүхэд үнэтэй юу?",
     ].join("\n"),
     [
       trip({
-        id: "beidaihe-combo",
-        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        id: "kardan-combo",
+        route_name: "Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал",
         adult_price: 1270000,
         child_price: 1200000,
         extra: {
@@ -1492,8 +1493,8 @@ test("infant price follow-up stays on the contextual trip instead of matching ex
         },
       }),
       trip({
-        id: "jining-expensive-test",
-        route_name: "Жинин - Мини аватар - Хөх хот + үнэтэй шинжилгээтэй",
+        id: "selvin-expensive-test",
+        route_name: "Сэлвин - Мини эмбар - Саргол хот + үнэтэй шинжилгээтэй",
         adult_price: 1100000,
         child_price: 1070000,
       }),
@@ -1501,7 +1502,7 @@ test("infant price follow-up stays on the contextual trip instead of matching ex
     NOW,
   );
 
-  assert.match(reply || "", /Бэйдайхэ шар тэнгисийн эрэг/);
+  assert.match(reply || "", /Кардан сэрвэн тэнгисийн эрэг/);
   assert.match(reply || "", /Нярай \/0-23 сар\/: 1,050,000₮/);
   assert.doesNotMatch(reply || "", /үнэтэй шинжилгээтэй/);
 });
@@ -1620,8 +1621,8 @@ test("fresh expensive objection does not match the paid-exam route by word alone
     "Үнэтэй юм байна",
     [
       trip({
-        id: "jining-expensive-test",
-        route_name: "Жинин - Мини аватар - Хөх хот + үнэтэй шинжилгээтэй",
+        id: "selvin-expensive-test",
+        route_name: "Сэлвин - Мини эмбар - Саргол хот + үнэтэй шинжилгээтэй",
         adult_price: 1100000,
         child_price: 1070000,
       }),
@@ -1633,17 +1634,17 @@ test("fresh expensive objection does not match the paid-exam route by word alone
 
 test("ambiguous passenger total question shows totals for each possible trip", () => {
   const reply = buildStructuredTripReply(
-    "Бэйдайхэ 2 том 1 хүүхэд нийт хэд вэ",
+    "Кардан 2 том 1 хүүхэд нийт хэд вэ",
     [
       trip({
-        id: "beidaihe-ground",
-        route_name: "ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ-БЭЭЖИНГИЙН ГАЗРЫН АЯЛАЛ",
+        id: "kardan-ground",
+        route_name: "СЭРВЭН ТЭНГИС БУЮУ КАРДАН-ВЭЛМОРГИЙН ГАЗРЫН АЯЛАЛ",
         adult_price: 1180000,
         child_price: 1160000,
       }),
       trip({
-        id: "beidaihe-combo",
-        route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+        id: "kardan-combo",
+        route_name: "Кардан сэрвэн тэнгисийн эрэг+Вэлмор газар нислэг хосолсон аялал",
         adult_price: 1270000,
         child_price: 1200000,
       }),
@@ -1660,7 +1661,7 @@ test("fresh expensive objection gets a generic budget follow-up without route gu
 
   assert.match(reply || "", /Үнэ өндөр санагдаж болно/);
   assert.match(reply || "", /төсөвтэй/);
-  assert.doesNotMatch(reply || "", /Жинин|шинжилгээ|хямдрал/i);
+  assert.doesNotMatch(reply || "", /Сэлвин|шинжилгээ|хямдрал/i);
 });
 
 test("generic discount negotiation asks for budget and group size instead of matching a random trip", () => {
@@ -1669,7 +1670,7 @@ test("generic discount negotiation asks for budget and group size instead of mat
   assert.match(reply || "", /ямар төсөв/);
   assert.match(reply || "", /аль аяллыг/);
   assert.doesNotMatch(reply || "", /хэдүүлээ/);
-  assert.doesNotMatch(reply || "", /Жинин|Хөх хот|Хайлаар|шинжилгээ/i);
+  assert.doesNotMatch(reply || "", /Сэлвин|Саргол хот|Торвал|шинжилгээ/i);
 });
 
 test("price objection helper does not swallow real price questions", () => {
@@ -1679,27 +1680,27 @@ test("price objection helper does not swallow real price questions", () => {
 
 test("broad infant-price query selects the related variant that stores an infant price", () => {
   const reply = buildStructuredTripReply(
-    "Бэйдайхэ нярай хэд вэ?",
+    "Кардан нярай хэд вэ?",
     [
       trip({
-        id: "beidaihe-ground-no-infant",
-        route_name: "ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ-БЭЭЖИНГИЙН ГАЗРЫН АЯЛАЛ",
+        id: "kardan-ground-no-infant",
+        route_name: "СЭРВЭН ТЭНГИС БУЮУ КАРДАН-ВЭЛМОРГИЙН ГАЗРЫН АЯЛАЛ",
         adult_price: 1160000,
         child_price: 1120000,
         extra: {
-          aliases: ["Бэйдайхэ"],
+          aliases: ["Кардан"],
           price_groups: [
             { dates: ["7 сарын 16"], adult_price: 1160000, child_price: 1120000 },
           ],
         },
       }),
       trip({
-        id: "beidaihe-combo-with-infant",
-        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        id: "kardan-combo-with-infant",
+        route_name: "Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал",
         adult_price: 1270000,
         child_price: 1200000,
         extra: {
-          aliases: ["Бэйдайхэ"],
+          aliases: ["Кардан"],
           price_groups: [
             {
               dates: ["7 сарын 18", "8 сарын 1"],
@@ -1722,11 +1723,11 @@ test("broad infant-price query selects the related variant that stores an infant
 
 test("past specific date price does not fall forward to a future departure", () => {
   const reply = buildStructuredTripReply(
-    "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал\n6 сарын 27-ны үнэ хэд вэ?",
+    "Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал\n6 сарын 27-ны үнэ хэд вэ?",
     [
       trip({
-        id: "beidaihe-combo",
-        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        id: "kardan-combo",
+        route_name: "Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал",
         adult_price: 1270000,
         child_price: 1200000,
         extra: {
@@ -1756,15 +1757,15 @@ test("past specific date price does not fall forward to a future departure", () 
 
 test("included-in-price question answers with ticket clarification instead of only the price", () => {
   const reply = buildStructuredTripReply(
-    "Бээжин Юниверсал наадмын аяллын үнэд нислэгийн тийз багтсан уу?",
+    "Вэлмор Янмор наадмын аяллын үнэд нислэгийн тийз багтсан уу?",
     [
       trip({
-        id: "universal",
-        route_name: "Бээжин - Юниверсал шууд нислэгтэй наадмын амралтаар гарах аялал",
+        id: "anmor",
+        route_name: "Вэлмор - Янмор шууд нислэгтэй наадмын амралтаар гарах аялал",
         adult_price: 1790000,
         child_price: 1170000,
         extra: {
-          aliases: ["Бээжин Юниверсал"],
+          aliases: ["Вэлмор Янмор"],
           price_groups: [
             {
               label: "Наадмын тусгай",
@@ -1774,7 +1775,7 @@ test("included-in-price question answers with ticket clarification instead of on
               child_price: 1170000,
             },
           ],
-          included_items: ["MIAT УБ-Бээжин-УБ нислэгийн тийз (асууж баталгаажуулах)"],
+          included_items: ["MIAT УБ-Вэлмор-УБ нислэгийн тийз (асууж баталгаажуулах)"],
           important_notes: ["Зарим материалд үнэ '+ тийз' гэж бичигдсэн байж болох тул нислэгийн тийзийн нөхцлийг аяллын зөвлөхөөр баталгаажуулна."],
         },
       }),
@@ -1790,44 +1791,44 @@ test("program request can still use exported JSON top-level aliases and brochure
   const groundTrip = {
     ...trip({
       id: "ground-export",
-      route_name: "Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал",
+      route_name: "Сэрвэн тэнгис буюу Кардан-Вэлморгийн газрын аялал",
       category: "газрын аялал",
       extra: {},
     }),
-    aliases: ["Бэйдэхэ Бээжин газрын"],
+    aliases: ["Кардэн Вэлмор газрын"],
     brochure_pdf_url: "https://example.com/export-ground.pdf",
   } as TravelTrip & { aliases: string[]; brochure_pdf_url: string };
 
   const comboTrip = {
     ...trip({
       id: "combo-export",
-      route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+      route_name: "Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал",
       category: "газар + нислэг хосолсон",
       extra: {},
     }),
-    aliases: ["Бээжин Бэйдэхэ газар нислэг хосолсон"],
+    aliases: ["Вэлмор Кардэн газар нислэг хосолсон"],
   } as TravelTrip & { aliases: string[] };
 
   const result = buildTripProgramReply(
-    "Бээжин + Бэйдэхэ газрын аяллын хөтөлбөр үзэх",
+    "Вэлмор + Кардэн газрын аяллын хөтөлбөр үзэх",
     [groundTrip, comboTrip],
   );
 
   assert.equal(result?.trip?.id, "ground-export");
   assert.deepEqual(result?.brochure, { type: "url", value: "https://example.com/export-ground.pdf" });
   assert.deepEqual(result?.mediaUrls, []);
-  assert.match(result?.reply || "", /Шар тэнгис/);
-  assert.doesNotMatch(result?.reply || "", /Бэйдайхэ шар тэнгисийн эрэг \+ Бээжин/);
+  assert.match(result?.reply || "", /Сэрвэн тэнгис/);
+  assert.doesNotMatch(result?.reply || "", /Кардан сэрвэн тэнгисийн эрэг \+ Вэлмор/);
   assert.match(result?.reply || "", /PDF хөтөлбөр/);
 });
 
 test("program request sends program images when brochure is missing", () => {
   const result = buildTripProgramReply(
-    "Ð¨Ð°Ð½Ñ…Ð°Ð¹ Ð°ÑÐ»Ð»Ñ‹Ð½ program Ð·ÑƒÑ€Ð°Ð³",
+    "Ð›ÑƒÐ¼Ð¸Ð° Ð°ÑÐ»Ð»Ñ‹Ð½ program Ð·ÑƒÑ€Ð°Ð³",
     [
       trip({
         id: "program-images",
-        route_name: "Ð¨Ð°Ð½Ñ…Ð°Ð¹ Ð°ÑÐ»Ð°Ð»",
+        route_name: "Ð›ÑƒÐ¼Ð¸Ð° Ð°ÑÐ»Ð°Ð»",
         extra: {
           media_assets: [
             { type: "program_image", url: "https://example.com/program-1.jpg" },
@@ -1846,14 +1847,14 @@ test("program request sends program images when brochure is missing", () => {
 
 test("program request summarizes itinerary when no file assets exist", () => {
   const result = buildTripProgramReply(
-    "Ð¥Ð°Ð¹Ð½Ð°Ð½ Ð°ÑÐ»Ð»Ñ‹Ð½ day by day program",
+    "ÐœÐ¸Ñ€Ð²ÑÐ½ Ð°ÑÐ»Ð»Ñ‹Ð½ day by day program",
     [
       trip({
         id: "program-itinerary",
-        route_name: "Ð¥Ð°Ð¹Ð½Ð°Ð½ Ð°ÑÐ»Ð°Ð»",
+        route_name: "ÐœÐ¸Ñ€Ð²ÑÐ½ Ð°ÑÐ»Ð°Ð»",
         extra: {
           itinerary_days: [
-            { day: 1, title: "Ð£Ð»Ð°Ð°Ð½Ð±Ð°Ð°Ñ‚Ð°Ñ€-Ð¡Ð°Ð½ÑŒÑÐ°", description: "ÐÐ¸ÑÐ½Ñ" },
+            { day: 1, title: "Ð£Ð»Ð°Ð°Ð½Ð±Ð°Ð°Ñ‚Ð°Ñ€-ÐÐ°Ñ€Ð²ÑÐ»", description: "ÐÐ¸ÑÐ½Ñ" },
             { day: 2, title: "Ð§Ó©Ð»Ó©Ó©Ñ‚ Ó©Ð´Ó©Ñ€", description: "ÐÐ°Ð»Ð°Ð¹Ð½ ÑÑ€ÑÐ³" },
           ],
         },
@@ -1930,16 +1931,16 @@ test("seat reply marks departure full only when seats_left is zero", () => {
 
 test("compare reply shows seat wording only for scarcity", () => {
   const reply = buildCompareReply(
-    "Тэнгэрийн хаалга Чүнчин харьцуул",
+    "Зэтгорийн хаалга Чүнчин харьцуул",
     [
       trip({
         id: "scarce",
-        route_name: "Тэнгэрийн хаалга - шууд нислэгтэй",
+        route_name: "Зэтгорийн хаалга - шууд нислэгтэй",
         seats_left: 4,
       }),
       trip({
         id: "plenty",
-        route_name: "Тэнгэрийн хаалга-Чүнчин",
+        route_name: "Зэтгорийн хаалга-Чүнчин",
         seats_left: 12,
       }),
     ],
@@ -1950,17 +1951,17 @@ test("compare reply shows seat wording only for scarcity", () => {
 });
 
 test("compare reply handles broad destination-vs-destination wording", () => {
-  const reply = buildCompareReply("Бээжин уу Хайнан уу, аль нь дээр вэ?", [
+  const reply = buildCompareReply("Вэлмор уу Мирвэн уу, аль нь дээр вэ?", [
     trip({
-      id: "beijing-ground",
-      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+      id: "velmor-ground",
+      route_name: "ВЭЛМОР - СЭЛВИН – ПЭЛМАК - ОРМАК – 4 ХОТЫН АЯЛАЛ",
       adult_price: 1170000,
       child_price: 1130000,
       duration_text: "8 өдөр 7 шөнө",
     }),
     trip({
-      id: "hainan-sanya",
-      route_name: "Хайнан - Саньяа шууд нислэгтэй аялал",
+      id: "mirven-narvel",
+      route_name: "Мирвэн - Нарвэл шууд нислэгтэй аялал",
       adult_price: 1430000,
       child_price: 1410000,
       duration_text: "9 өдөр / 8 шөнө",
@@ -1968,8 +1969,8 @@ test("compare reply handles broad destination-vs-destination wording", () => {
   ]);
 
   assert.match(reply || "", /Аялал харьцуулалт/);
-  assert.match(reply || "", /БЭЭЖИН/);
-  assert.match(reply || "", /Хайнан/);
+  assert.match(reply || "", /ВЭЛМОР/);
+  assert.match(reply || "", /Мирвэн/);
 });
 
 test("a direct-flight follow-up on a combo trip keeps the combo disclaimer even with stale contextual text prepended", () => {
@@ -1980,8 +1981,8 @@ test("a direct-flight follow-up on a combo trip keeps the combo disclaimer even 
   // child-price answer with no combo disclaimer at all.
   const trips = [
     trip({
-      id: "beidaihe-combo",
-      route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+      id: "kardan-combo",
+      route_name: "Кардан сэрвэн тэнгисийн эрэг+Вэлмор газар нислэг хосолсон аялал",
       category: "Газар нислэг хосолсон",
       adult_price: 1270000,
       child_price: 1200000,
@@ -1989,7 +1990,7 @@ test("a direct-flight follow-up on a combo trip keeps the combo disclaimer even 
     }),
   ];
   const staleContext =
-    "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аяллын хүүхдийн үнэ (2-10 нас) 1,200,000₮ байна.\n\nХэрэв танд илүү дэлгэрэнгүй мэдээлэл хэрэгтэй бол асуугаарай! 😊";
+    "Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аяллын хүүхдийн үнэ (2-10 нас) 1,200,000₮ байна.\n\nХэрэв танд илүү дэлгэрэнгүй мэдээлэл хэрэгтэй бол асуугаарай! 😊";
   const contextualText = joinContextAndTurn(staleContext, "тэр шууд нислэгтэй нь хэд байсан бэ?");
 
   const reply = buildStructuredTripReply(contextualText, trips);
@@ -2003,14 +2004,14 @@ test("a direct-flight follow-up on a combo trip keeps the combo disclaimer even 
 test("passenger-type price reply only reads the customer's current line, not stale prior context", () => {
   const trips = [
     trip({
-      id: "beidaihe-combo-2",
-      route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+      id: "kardan-combo-2",
+      route_name: "Кардан сэрвэн тэнгисийн эрэг+Вэлмор газар нислэг хосолсон аялал",
       adult_price: 1270000,
       child_price: 1200000,
     }),
   ];
   const staleContext =
-    "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аяллын хүүхдийн үнэ 1,200,000₮ байна.";
+    "Кардан сэрвэн тэнгисийн эрэг+Вэлмор газар нислэг хосолсон аяллын хүүхдийн үнэ 1,200,000₮ байна.";
   const contextualText = joinContextAndTurn(staleContext, "том хүн хэд вэ?");
 
   const reply = buildStructuredTripReply(contextualText, trips);
@@ -2026,8 +2027,8 @@ test("price reply surfaces a mandatory extra fee stored in a foreign currency", 
   // silently disappeared because no fast-path reply builder ever read
   // extra.extra_fees, even though it's rendered into the AI's own Context.
   const withFee = trip({
-    id: "hohhot-exam-fee",
-    route_name: "Хөх хотын шинжилгээтэй - газрын аялал",
+    id: "sargol-exam-fee",
+    route_name: "Саргол хотын шинжилгээтэй - газрын аялал",
     adult_price: 1100000,
     child_price: 1060000,
     extra: {
@@ -2038,7 +2039,7 @@ test("price reply surfaces a mandatory extra fee stored in a foreign currency", 
     },
   });
 
-  const reply = buildSeatsReply("Хөх хотын шинжилгээтэй аялал хэд вэ?", [withFee]);
+  const reply = buildSeatsReply("Саргол хотын шинжилгээтэй аялал хэд вэ?", [withFee]);
 
   assert.ok(reply);
   assert.match(reply as string, /Том хүн: 1,100,000₮/);
@@ -2049,17 +2050,17 @@ test("price reply surfaces a mandatory extra fee stored in a foreign currency", 
 test("picture-only request for a trip without visual assets goes silent, program request still answers", () => {
   const bare = trip({
     id: "no-media",
-    route_name: "Хайлаар Манжуурын аялал - 5 өдөр 4 шөнө",
+    route_name: "Торвал Нордэнын аялал - 5 өдөр 4 шөнө",
     adult_price: 1100000,
     extra: {},
     photo_urls: [],
   });
-  const photoAsk = buildTripProgramReply("Хайлаар Манжуур 5 өдөр зураг явуулаач", [bare]);
+  const photoAsk = buildTripProgramReply("Торвал Нордэн 5 өдөр зураг явуулаач", [bare]);
   assert.equal(photoAsk?.reply, "NOTRIPMEDIA");
 
-  const programAsk = buildTripProgramReply("Хайлаар Манжуур 5 өдөр хөтөлбөр", [bare]);
+  const programAsk = buildTripProgramReply("Торвал Нордэн 5 өдөр хөтөлбөр", [bare]);
   assert.notEqual(programAsk?.reply, "NOTRIPMEDIA");
-  assert.match(programAsk?.reply || "", /Хайлаар Манжуурын аялал/);
+  assert.match(programAsk?.reply || "", /Торвал Нордэнын аялал/);
 });
 
 test("picture-only request for a trip WITH photos sends those photos, never silence", () => {
@@ -2072,53 +2073,53 @@ test("picture-only request for a trip WITH photos sends those photos, never sile
   // trips. photo_urls must be the fallback media source.
   const withPhotos = trip({
     id: "with-photos",
-    route_name: "Далянь хотын шууд нислэгтэй аялал",
+    route_name: "Тэлмор хотын шууд нислэгтэй аялал",
     adult_price: 1420000,
     extra: {},
     photo_urls: [
-      "https://cdn.example.com/dalian-1.jpg",
-      "https://cdn.example.com/dalian-2.jpg",
-      "https://cdn.example.com/dalian-3.jpg",
-      "https://cdn.example.com/dalian-4.jpg",
+      "https://cdn.example.com/telmor-1.jpg",
+      "https://cdn.example.com/telmor-2.jpg",
+      "https://cdn.example.com/telmor-3.jpg",
+      "https://cdn.example.com/telmor-4.jpg",
     ],
   });
-  const photoAsk = buildTripProgramReply("Далянь аяллын зураг", [withPhotos]);
+  const photoAsk = buildTripProgramReply("Тэлмор аяллын зураг", [withPhotos]);
   assert.notEqual(photoAsk?.reply, "NOTRIPMEDIA");
   assert.deepEqual(photoAsk?.mediaUrls, withPhotos.photo_urls);
-  assert.match(photoAsk?.reply || "", /Далянь хотын шууд нислэгтэй аялал/);
+  assert.match(photoAsk?.reply || "", /Тэлмор хотын шууд нислэгтэй аялал/);
 });
 
 test("naming a trip by its own route-name words beats a competing trip's loose alias overlap", () => {
-  // Real bug (2026-07-17): "Beejin jinin janjakow ereen 4 hotiin aylal" —
+  // Real bug (2026-07-17): "Velmor selvin pelmak ormak 4 hotiin aylal" —
   // naming the 4-city trip by 4 of its own route-name words — matched the
-  // UNRELATED Erlian-Beijing-Tianjin-Jeju cruise instead, because the
-  // cruise's alias "Эрээн Бээжин Тяньжин Чежү Пусан круз" loosely shared 2
-  // generic waypoint tokens (Эрээн, Бээжин) and a flat alias-hit bonus (80)
+  // UNRELATED Ormak-Velmor-Dornel-Talvin cruise instead, because the
+  // cruise's alias "Ормак Вэлмор Дорнэл Талвин Вирдэн круз" loosely shared 2
+  // generic waypoint tokens (Ормак, Вэлмор) and a flat alias-hit bonus (80)
   // outscored the 4-city trip's real 4-word direct match (4*20=80, tied
   // before other boosts tipped it to the cruise).
   const fourCity = trip({
     id: "four-city",
-    route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+    route_name: "ВЭЛМОР - СЭЛВИН – ПЭЛМАК - ОРМАК – 4 ХОТЫН АЯЛАЛ",
     category: "Газрын аялал",
     extra: {},
   });
   const cruise = trip({
     id: "cruise",
-    route_name: "Усан онгоцны аялал - Эрээн - Бээжин -Тяньжин - Чежү Пусан",
+    route_name: "Усан онгоцны аялал - Ормак - Вэлмор -Дорнэл - Талвин Вирдэн",
     category: "Круйз",
     extra: {
       aliases: [
-        "Жэжү круз",
+        "Талвин круз",
         "Усан онгоцны аялал",
         "Круйз аялал",
-        "Эрээн Бээжин Тяньжин Чежү Пусан круз",
-        "Тяньжин Инчон Жэжү круз",
+        "Ормак Вэлмор Дорнэл Талвин Вирдэн круз",
+        "Дорнэл Инчон Талвин круз",
       ],
     },
   });
 
   const matches = findTripMatches(
-    "Beejin jinin janjakow ereen 4 hotiin aylal sonirhoj bna",
+    "Velmor selvin pelmak ormak 4 hotiin aylal sonirhoj bna",
     [fourCity, cruise],
   );
   assert.equal(matches[0]?.trip.id, "four-city");

@@ -65,10 +65,10 @@ test("the base-tab free flag also works for child, independently of infant", () 
 test("a real infant band in a price group wins over the base-tab free flag", () => {
   // If the trip HAS priced its infant tier per date group, that real number
   // must never be silently overridden by a leftover base-tab checkbox.
-  const g = group({ passenger_prices: [{ label: "Нярай", age_range: "0-23 сар", price: 350000, currency: "MNT" }] });
+  const g = group({ passenger_prices: [{ label: "Нярай", age_range: "0-23 сар", price: 361000, currency: "MNT" }] });
   const rules = deriveChildRules([g], { infant: true });
   assert.equal(rules.length, 1);
-  assert.equal(rules[0].price, 350000);
+  assert.equal(rules[0].price, 361000);
 });
 
 test("base-tab free flags are false by default and add nothing", () => {
@@ -93,10 +93,10 @@ test("withDerivedSummaryFields classifies by age shape, not label spelling", () 
   // Real catalog data: an infant tier mislabeled "Хүүхэд" but shaped like an
   // infant band (age in months) must still land in infant_price, not child_price.
   const g = group({
-    passenger_prices: [{ label: "Хүүхэд", age_range: "0-23 сар", price: 350000, currency: "MNT" }],
+    passenger_prices: [{ label: "Хүүхэд", age_range: "0-23 сар", price: 361000, currency: "MNT" }],
   });
   const result = withDerivedSummaryFields(g);
-  assert.equal(result.infant_price, 350000);
+  assert.equal(result.infant_price, 361000);
   assert.equal(result.child_price, null);
 });
 

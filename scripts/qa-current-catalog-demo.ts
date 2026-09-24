@@ -114,6 +114,12 @@ async function verifyPdf(url: string, expectedPosterId: string) {
   return null;
 }
 
+const LATIN: Record<string, string> = {
+  а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "yo", ж: "j", з: "z", и: "i", й: "i", к: "k", л: "l", м: "m",
+  н: "n", о: "o", ө: "u", п: "p", р: "r", с: "s", т: "t", у: "u", ү: "u", ф: "f", х: "h", ц: "ts", ч: "ch", ш: "sh",
+  щ: "sh", ъ: "", ы: "ii", ь: "i", э: "e", ю: "yu", я: "ya",
+};
+
 async function currentTrips(): Promise<TripRow[]> {
   const rows = (await pool.query(
     `SELECT
@@ -190,16 +196,31 @@ async function run() {
     console.log(`ok route=${trip.route_name} photos=${trip.photo_count} dates=${trip.departure_count} pdf=${program.brochureUrl ? "yes" : "no"}`);
   }
 
+  // Odd phrasings are built from the catalog too — never a real place written
+  // here (see golden-questions.mjs for why). A destination shared by several
+  // active trips, typed in Latin and in Cyrillic; an invented place; a date a
+  // month out.
+  const tripsByWord = new Map<string, TripRow[]>();
+  for (const trip of activeTrips) {
+    const words = new Set(trip.route_name.split(/[^\p{L}]+/u).filter((word) => word.length >= 5).map((word) => word.toLowerCase()));
+    for (const word of words) tripsByWord.set(word, [...(tripsByWord.get(word) || []), trip]);
+  }
+  const sharedWord = [...tripsByWord.entries()].sort((a, b) => b[1].length - a[1].length).find(([, list]) => list.length >= 2)?.[0];
+  const Shared = sharedWord ? sharedWord.charAt(0).toUpperCase() + sharedWord.slice(1) : "";
+  const latin = (word: string) => [...word].map((c) => LATIN[c] ?? c).join("");
+  const soon = new Date(Date.now() + 30 * 86_400_000);
+  const soonText = `${soon.getMonth() + 1} сарын ${soon.getDate()}`;
   const oddQuestions = [
-    { id: "shangai-latin", text: "bi shangai aylalin medeellel awya", expectAny: ["Шанхай", "Аль"] },
-    { id: "beidaihe-latin", text: "beidaihe une", expectAny: ["Бэйдайхэ"] },
-    { id: "hailaar-bad", text: "hailaariin ayalal medeelel", expectAny: ["Хайлаар", "Манжуур"] },
-    { id: "ambiguous-shanghai", text: "Шанхай аялал", expectAny: ["Аль", "Шанхай"] },
-    { id: "ambiguous-hailaar", text: "Хайлаар аялал", expectAny: ["Аль", "Хайлаар"] },
-    { id: "unknown", text: "Парис аялал байна уу", expectAny: ["зөвлөх", "холбож"] },
+    ...(Shared
+      ? [
+          { id: "shared-latin", text: `bi ${latin(sharedWord!)} aylalin medeellel awya`, expectAny: [Shared, "Аль"] },
+          { id: "shared-ambiguous", text: `${Shared} аялал`, expectAny: ["Аль", Shared] },
+          { id: "shared-date-price", text: `${Shared} ${soonText} үнэ хэд вэ`, expectAny: ["₮", Shared] },
+        ]
+      : []),
+    { id: "unknown", text: "Вэлмор аялал байна уу", expectAny: ["зөвлөх", "холбож"] },
     { id: "discount", text: "Хямдрал байгаа юу", expectAny: ["зөвлөх", "хямдрал", "одоогоор"] },
-    { id: "date-price", text: "Шанхай 9 сарын 17 үнэ хэд вэ", expectAny: ["₮", "Шанхай"] },
-    { id: "specific-date", text: "10 сарын 8-нд ямар аялал байна", expectAny: ["10 сарын 8"] },
+    { id: "specific-date", text: `${soonText}-нд ямар аялал байна`, expectAny: [soonText] },
     { id: "today", text: "өнөөдөр гарах аялал байна уу", expectAny: ["зөвлөх", "байхгүй", "одоогоор"] },
   ];
 
@@ -215,8 +236,10 @@ async function run() {
   }
 
   const bookingId = conversationId("booking-flow");
+  // Book a real trip by its full current name (read from the database above).
+  const bookTrip = activeTrips[0];
   const bookingTurns = [
-    { text: "Бэйдайхэ газар нислэг хосолсон аялал захиалмаар байна", expectAny: ["дугаар", "утас", "зөвлөх", "Бэйдайхэ"] },
+    { text: `${bookTrip?.route_name ?? ""} аялал захиалмаар байна`, expectAny: ["дугаар", "утас", "зөвлөх", "нэр"] },
     { text: "99112233", expectAny: ["Баярлалаа", "99112233", "зөвлөх"] },
     { text: "төлбөр төлчихлөө баталгаажуул", expectAny: ["баталгаажуулж чадахгүй", "зөвлөх"] },
   ];

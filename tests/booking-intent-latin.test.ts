@@ -32,6 +32,6 @@ test("ordinary questions are not mistaken for booking intent", () => {
   assert.equal(isBookingIntent("үнэ хэд вэ"), false);
   assert.equal(isBookingIntent("une hed ve"), false);
   assert.equal(isBookingIntent("hi"), false);
-  assert.equal(isBookingIntent("shanhai aylal medeelel"), false);
+  assert.equal(isBookingIntent("lumia aylal medeelel"), false);
   assert.equal(isBookingIntent(""), false);
 });

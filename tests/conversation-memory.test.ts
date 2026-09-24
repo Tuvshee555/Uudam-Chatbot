@@ -10,14 +10,14 @@ test("buildPrompt includes persistent customer memory before recent turns", asyn
     systemPrompt: "You are a travel assistant.",
     business: {
       name: "Uudam Travel",
-      knowledgeBase: "- Бээжин аялал: 5 өдөр, том хүн 1,210,000₮",
+      knowledgeBase: "- Вэлмор аялал: 5 өдөр, том хүн 1,210,000₮",
     },
     history: [
-      { role: "user", text: "Бээжин аялал сонирхож байна" },
-      { role: "assistant", text: "Бээжин аяллын мэдээлэл..." },
+      { role: "user", text: "Вэлмор аялал сонирхож байна" },
+      { role: "assistant", text: "Вэлмор аяллын мэдээлэл..." },
     ],
     customerMemory:
-      "Trips/products discussed\n- Customer is comparing Бээжин аялал and wants July dates.\nDecisions and current status\n- Plans to order next week.",
+      "Trips/products discussed\n- Customer is comparing Вэлмор аялал and wants July dates.\nDecisions and current status\n- Plans to order next week.",
     userText: "Тэрний 7 сарын үнэ хэд вэ?",
   });
 
@@ -34,9 +34,9 @@ test("buildPrompt includes persistent customer memory before recent turns", asyn
 test("buildCustomerMemoryPrompt asks for complete structured durable memory", async () => {
   const { buildCustomerMemoryPrompt } = await import("../src/lib/conversationMemory");
   const prompt = buildCustomerMemoryPrompt({
-    existingMemory: "Trips/products discussed\n- Customer asked about Хайнан.",
+    existingMemory: "Trips/products discussed\n- Customer asked about Мирвэн.",
     transcript:
-      "Customer: Same as before, but now 2 adults and 1 child.\nAssistant: Хайнан аяллын хүүхдийн үнийг тайлбарлав.",
+      "Customer: Same as before, but now 2 adults and 1 child.\nAssistant: Мирвэн аяллын хүүхдийн үнийг тайлбарлав.",
   });
 
   assert.match(prompt, /Return the complete updated memory, not a diff/);

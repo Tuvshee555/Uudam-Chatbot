@@ -36,10 +36,10 @@ export function isLikelyContextDependentText(text: string) {
   // actual greeting, which carries no question to resolve via context at
   // all. A real greeting is never context-dependent, checked BEFORE the
   // short-text catch-all (which still correctly keeps real short answers
-  // like "5" or "beejin" context-dependent/self-resolving).
+  // like "5" or "<city>" context-dependent/self-resolving).
   if (isKnownGreetingPhrase(text)) return false;
   // Same reasoning for a bare thank-you: it asks nothing, so it must not borrow
-  // the previous turns' trips (a real "Баярлалаа" got a Hainan trip list).
+  // the previous turns' trips (a real "Баярлалаа" got a <city> trip list).
   if (isThanksOnly(text)) return false;
   const words = normalized.split(/\s+/).filter(Boolean);
   if (words.length <= 2) return true;
@@ -247,7 +247,13 @@ export function buildContextualUserText(
     const firstOption = firstAssistantOption(previousAssistantReply);
     if (firstOption) return joinContextAndTurn(firstOption, userText);
   }
-  if (previousAssistantReply && likelyRefersToPreviousAssistantOption(userText)) {
+  // "Хөтөлбөр үзэх" under a "which trip?" list names no trip: taking the
+  // list's first line was a guess (a real customer got the wrong programme).
+  if (
+    previousAssistantReply &&
+    likelyRefersToPreviousAssistantOption(userText) &&
+    !isGenericAssistantFollowup(previousAssistantReply)
+  ) {
     const firstOption = firstAssistantOption(previousAssistantReply);
     if (firstOption) return joinContextAndTurn(firstOption, userText);
   }
@@ -275,7 +281,7 @@ type TripResolver<TTrip> = (text: string) => TripResolution<TTrip>;
  *
  * Priority: (1) the current message alone resolves a trip → use it;
  * (2) the current message is ambiguous and the contextual blob verifies one
- * OF THOSE candidates → use the context (legit narrowing: "Бээжин" earlier +
+ * OF THOSE candidates → use the context (legit narrowing: "<хот>" earlier +
  * "шууд нислэгтэй нь" now); a contextual winner OUTSIDE the candidates is a
  * stale unrelated trip hijacking the match and is rejected; (3) the current
  * message is ambiguous otherwise → clarify from what the customer JUST said;

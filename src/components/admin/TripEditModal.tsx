@@ -1001,7 +1001,7 @@ export function TripEditModal({
             <input
               className={cx(inputCls, "flex-1")}
               value={alias}
-              placeholder="ж: Хятад аялал, Beijing tour"
+              placeholder="ж: <хот> аялал, <city> tour"
               onChange={(e) => setTripAliases((prev) => prev.map((v, i) => i === idx ? e.target.value : v))}
             />
             <button type="button" className={delBtn} onClick={() => setTripAliases((prev) => prev.filter((_, i) => i !== idx))}>

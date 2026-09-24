@@ -61,7 +61,7 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
     id: "trip-1",
     category: "Шууд нислэгтэй",
     operator_name: "Uudam Travel",
-    route_name: "Бээжин шууд нислэгтэй аялал",
+    route_name: "Вэлмор шууд нислэгтэй аялал",
     duration_text: "5 өдөр / 4 шөнө",
     adult_price: 1210000,
     child_price: 1170000,
@@ -86,9 +86,9 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
 const TRIPS: TravelTrip[] = [
   trip({}),
   trip({
-    id: "hainan-no-price",
+    id: "mirven-no-price",
     category: "Далайн амралт",
-    route_name: "Хайнан Саньяа аялал",
+    route_name: "Мирвэн Нарвэл аялал",
     adult_price: null, // missing price must NOT surface as a sentinel
     child_price: null,
     departure_dates: ["8 сарын 1"],
@@ -96,24 +96,24 @@ const TRIPS: TravelTrip[] = [
 ];
 
 test("structured trip reply never leaks internal markers or past dates", () => {
-  const reply = buildStructuredTripReply("Бээжин шууд нислэгтэй үнэ хэд вэ?", TRIPS, NOW);
+  const reply = buildStructuredTripReply("Вэлмор шууд нислэгтэй үнэ хэд вэ?", TRIPS, NOW);
   assertNoRedFlags(reply, "structured price reply");
   // The stored "1 сарын 5" is in the past relative to NOW and must be gone.
   assert.doesNotMatch(reply || "", /1\/5\b|1 сарын 5/);
 });
 
 test("seats reply invents no seat count and leaks no marker", () => {
-  const reply = buildSeatsReply("Хайнан суудал байгаа юу?", TRIPS);
+  const reply = buildSeatsReply("Мирвэн суудал байгаа юу?", TRIPS);
   assertNoRedFlags(reply, "seats reply");
 });
 
 test("discount reply leaks no marker even with a priceless trip", () => {
-  const reply = buildDiscountReply("Хайнан хямдрал байгаа юу?", TRIPS, NOW);
+  const reply = buildDiscountReply("Мирвэн хямдрал байгаа юу?", TRIPS, NOW);
   assertNoRedFlags(reply, "discount reply");
 });
 
 test("lead-capture CTA is appended to a fresh answer and leaks no marker", () => {
-  const reply = buildStructuredTripReply("Бээжин шууд нислэгтэй үнэ хэд вэ?", TRIPS, NOW);
+  const reply = buildStructuredTripReply("Вэлмор шууд нислэгтэй үнэ хэд вэ?", TRIPS, NOW);
   const withCta = appendLeadCaptureCta(reply || "", false);
   assert.match(withCta, /утас/i);
   assertNoRedFlags(withCta, "reply + CTA");

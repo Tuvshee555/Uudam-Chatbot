@@ -8,16 +8,16 @@ import {
 } from "../src/lib/tripCompleteness";
 
 const complete = {
-  route_name: "Жэжү арлын аялал",
+  route_name: "Талвин арлын аялал",
   duration_text: "5 өдөр 4 шөнө",
-  adult_price: 4290000,
-  child_price: 4090000,
-  infant_price: 590000,
+  adult_price: 4301000,
+  child_price: 4101000,
+  infant_price: 601000,
   departure_dates: ["6 сарын 17-21"],
   photo_urls: ["https://example.com/1.jpg"],
   extra: {
-    itinerary_days: [{ day: 1, title: "УБ - Жэжү" }],
-    poster_trip_id: "poster-jeju",
+    itinerary_days: [{ day: 1, title: "УБ - Талвин" }],
+    poster_trip_id: "poster-talvin",
   },
 };
 

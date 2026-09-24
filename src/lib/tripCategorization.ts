@@ -28,7 +28,7 @@ const WINTER_MONTHS = new Set([12, 1, 2]);
 // Winter and cruise are decided here without the model — both are cheap,
 // objective signals (calendar month; an unambiguous transport keyword).
 // Land vs. flight vs. combined genuinely needs the itinerary read, since a
-// title alone (e.g. "Жанжиажэ") says nothing about how the trip GETS there —
+// title alone (e.g. "<хот>") says nothing about how the trip GETS there —
 // that classification is left entirely to the model, further down.
 const WINTER_NAME_PATTERN = /өвөл|өвлийн|winter/i;
 const CRUISE_NAME_PATTERN = /круз|cruise|усан онгоц/i;
@@ -108,9 +108,9 @@ export async function classifyTripCategory(
     categoryList,
     "",
     "How to decide (use the itinerary text, not the title alone):",
-    "- If travel between cities/border towns is by TRAIN or BUS the whole way (mentions Замын-Үүд, Эрээн, галт тэрэг, автобус, no flights), it is a land trip (газрын аялал / land).",
+    "- If travel between cities/border towns is by TRAIN or BUS the whole way (mentions a border crossing, галт тэрэг, автобус, no flights), it is a land trip (газрын аялал / land).",
     "- If the trip is a direct international FLIGHT with no long train/bus legs, it is a flight trip (шууд нислэгтэй / flight).",
-    "- If it genuinely combines both — e.g. train/bus to a border town THEN a domestic flight onward (Хөх хот, Чанша, Чунчин нислэг) — it is a combined trip (хосолсон / combined).",
+    "- If it genuinely combines both — e.g. train/bus to a border town THEN a domestic flight onward — it is a combined trip (хосолсон / combined).",
     "- If it is a cruise ship / усан онгоц voyage, it is the cruise category.",
     "",
     `Trip title: ${trip.route_name}`,

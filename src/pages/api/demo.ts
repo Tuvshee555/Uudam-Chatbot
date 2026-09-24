@@ -108,7 +108,7 @@ function buildDemoMedia(input: {
   // Same guard as `inferred` above, and for the same reason: this branch
   // independently re-resolves a trip straight from the raw user text, so
   // without the marker check it bypassed the ambiguity guard entirely and
-  // reintroduced the exact bug that guard exists to prevent — "Тэнгэрийн
+  // reintroduced the exact bug that guard exists to prevent — "<хот>
   // хаалга зураг" asked which of 3 tours while ALSO attaching one tour's
   // poster, because this branch never checked whether the reply it was
   // supposedly illustrating was actually a "which one?" question.
@@ -505,7 +505,7 @@ export default async function handler(
         }
       }
 
-      // Broad structured questions ("Бээжин аялал хэд вэ?") should clarify
+      // Broad structured questions ("<хот> аялал хэд вэ?") should clarify
       // from the DB when several active trips match. Do not send these to the
       // model and risk a silent REFER.
       {
@@ -674,7 +674,7 @@ export default async function handler(
         }
       }
 
-      // Fast path: standalone price lookup ("1,430,000 гэсэн аялал аль вэ?").
+      // Fast path: standalone price lookup ("1,111,111 гэсэн аялал аль вэ?").
       // Deterministic on purpose: a customer quoting a price and asking which
       // trip it is must never get a DIFFERENT trip's price stated back as if
       // it matched. When no trip's price matches, hand off rather than let

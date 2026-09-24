@@ -12,9 +12,9 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
     id: "trip-1",
     category: "Outbound",
     operator_name: "Uudam Travel",
-    route_name: "Shanghai + Heaven Gate",
+    route_name: "Lumia + Heaven Gate",
     duration_text: "8 days / 7 nights",
-    adult_price: 3590000,
+    adult_price: 3601000,
     child_price: 1470000,
     infant_price: null,
     currency: "MNT",
@@ -100,7 +100,7 @@ test("schedule maintenance preserves structured price groups as trip history", a
         departure_date_groups: [
           {
             dates: ["6 сарын 27", "7 сарын 18", "8 сарын 8"],
-            adult_price: 3590000,
+            adult_price: 3601000,
           },
           {
             dates: ["6 сарын 7"],
@@ -116,7 +116,7 @@ test("schedule maintenance preserves structured price groups as trip history", a
   const groups = result.trip.extra.departure_date_groups as Array<Record<string, unknown>>;
   assert.equal(groups.length, 2);
   assert.deepEqual(groups[0].dates, ["6 сарын 27", "7 сарын 18", "8 сарын 8"]);
-  assert.equal(groups[0].adult_price, 3590000);
+  assert.equal(groups[0].adult_price, 3601000);
 });
 
 test("schedule maintenance reactivates an auto-archived trip when a new future date is added", async () => {

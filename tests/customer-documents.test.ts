@@ -45,13 +45,13 @@ test("booking-code memory summary masks the raw code (it enters every AI prompt)
     doc({
       category: "booking_code",
       extracted_json: {
-        booking: { code: "XK92-77413", trip_name: "Бээжин шууд" },
+        booking: { code: "XK92-77413", trip_name: "Вэлмор шууд" },
       },
     }),
   );
   assert.doesNotMatch(summary, /XK92-77413/);
   assert.match(summary, /code ending •••413/);
-  assert.match(summary, /Бээжин шууд/);
+  assert.match(summary, /Вэлмор шууд/);
 });
 
 test("very short codes are fully masked, never echoed", () => {
@@ -96,11 +96,11 @@ test("trip screenshot summary surfaces what trip the customer is interested in",
   const summary = summarizeCustomerDocumentForMemory(
     doc({
       category: "trip_screenshot",
-      extracted_json: { trip: { title: "Хайнан - Саньяа аялал" } },
+      extracted_json: { trip: { title: "Мирвэн - Нарвэл аялал" } },
     }),
   );
   assert.match(summary, /trip screenshot sent/);
-  assert.match(summary, /Хайнан - Саньяа аялал/);
+  assert.match(summary, /Мирвэн - Нарвэл аялал/);
 });
 
 test("extractMongolianPhone pulls the customer phone from real transaction memos", () => {
@@ -123,27 +123,27 @@ test("extractMongolianPhone never captures a landline or account-number fragment
 
 test("matchTripFromDocument resolves a trip screenshot against the catalog", () => {
   const trips = [
-    { id: "hainan", route_name: "Хайнан - Саньяа шууд нислэгтэй аялал" },
-    { id: "beijing", route_name: "Бээжин газрын аялал" },
+    { id: "mirven", route_name: "Мирвэн - Нарвэл шууд нислэгтэй аялал" },
+    { id: "velmor", route_name: "Вэлмор газрын аялал" },
   ];
   const resolve = (text: string) =>
-    text.includes("Хайнан")
+    text.includes("Мирвэн")
       ? ({ status: "verified", trip: trips[0] } as const)
       : ({ status: "not_found" } as const);
   const match = matchTripFromDocument(
-    { trip: { title: "Хайнан - Саньяа", destination: "Хайнан" } },
+    { trip: { title: "Мирвэн - Нарвэл", destination: "Мирвэн" } },
     "trip_screenshot",
     trips,
     resolve,
   );
   assert.ok(match);
-  assert.equal(match!.id, "hainan");
+  assert.equal(match!.id, "mirven");
 });
 
 test("matchTripFromDocument reads the payment memo for booking context", () => {
-  const trips = [{ id: "dalian", route_name: "Далянь хотын шууд нислэгтэй аялал" }];
+  const trips = [{ id: "telmor", route_name: "Тэлмор хотын шууд нислэгтэй аялал" }];
   const resolve = (text: string) =>
-    /dalyan|далянь/i.test(text)
+    /dalyan|тэлмор/i.test(text)
       ? ({ status: "verified", trip: trips[0] } as const)
       : ({ status: "not_found" } as const);
   const match = matchTripFromDocument(
@@ -153,7 +153,7 @@ test("matchTripFromDocument reads the payment memo for booking context", () => {
     resolve,
   );
   assert.ok(match);
-  assert.equal(match!.id, "dalian");
+  assert.equal(match!.id, "telmor");
 });
 
 test("matchTripFromDocument returns null when nothing resolves (no guessing)", () => {
@@ -173,13 +173,13 @@ test("payment memory summary includes phone and matched trip when known", () => 
       category: "payment_screenshot",
       extracted_json: {
         payment: { amount: "11,860,000", currency: "MNT", phone: "99183371" },
-        trip_match: { id: "dalian", route_name: "Далянь хотын аялал" },
+        trip_match: { id: "telmor", route_name: "Тэлмор хотын аялал" },
       },
     }),
   );
   assert.match(summary, /11,860,000 MNT/);
   assert.match(summary, /phone 99183371/);
-  assert.match(summary, /trip: Далянь хотын аялал/);
+  assert.match(summary, /trip: Тэлмор хотын аялал/);
 });
 
 test("matched trip screenshot summary names the catalog trip for the bot", () => {
@@ -188,9 +188,9 @@ test("matched trip screenshot summary names the catalog trip for the bot", () =>
       category: "trip_screenshot",
       extracted_json: {
         trip: { title: "unreadable poster" },
-        trip_match: { id: "hainan", route_name: "Хайнан - Саньяа аялал" },
+        trip_match: { id: "mirven", route_name: "Мирвэн - Нарвэл аялал" },
       },
     }),
   );
-  assert.match(summary, /matched our trip: Хайнан - Саньяа аялал/);
+  assert.match(summary, /matched our trip: Мирвэн - Нарвэл аялал/);
 });

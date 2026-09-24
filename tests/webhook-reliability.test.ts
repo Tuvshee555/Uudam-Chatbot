@@ -888,7 +888,7 @@ test("the model saying it lacks the information is treated as no-data and never 
   }
   // A normal answer with a consultant tail is still sent.
   assert.equal(
-    shouldSilenceNoDataReply("Шанхай аялал 6 өдөр 5 шөнө, том хүн 2,890,000₮. Дэлгэрэнгүйг зөвлөхөөс авна уу."),
+    shouldSilenceNoDataReply("Лумиа аялал 6 өдөр 5 шөнө, том хүн 2,901,000₮. Дэлгэрэнгүйг зөвлөхөөс авна уу."),
     false,
   );
 });
@@ -905,7 +905,7 @@ test("catalog maintenance status text is logged but not answered as a customer q
   const { sends, openAiCalls } = await runInstagramText(
     "ig-user-catalog-note",
     "ig-mid-catalog-note-1",
-    "10 сарын 8-ны шанхай суудал дүүрсэн - 5 шөнө 6 өдөртэйй",
+    "10 сарын 8-ны лумиа суудал дүүрсэн - 5 шөнө 6 өдөртэйй",
   );
   assert.deepEqual(sends, [], "catalog/status notes must not get a customer-facing reply");
   assert.equal(openAiCalls, 0, "catalog/status notes must not be sent to the model");

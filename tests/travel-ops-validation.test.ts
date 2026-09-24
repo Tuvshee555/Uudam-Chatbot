@@ -95,7 +95,7 @@ test("validation marks suspicious child pricing for confirmation", async () => {
         action: "upsert",
         fields: {
           operator_name: "Uudam",
-          route_name: "Seoul tour",
+          route_name: "Solven tour",
           adult_price: 2000,
           child_price: 2500,
         },
@@ -120,7 +120,7 @@ test("validation keeps uniquely matched upserts eligible", async () => {
     actions: [
       {
         action: "upsert",
-        match: { operator_name: "Uudam", route_name: "Tokyo tour" },
+        match: { operator_name: "Uudam", route_name: "Surmak tour" },
         fields: { seats_left: 8 },
       },
     ],
@@ -130,7 +130,7 @@ test("validation keeps uniquely matched upserts eligible", async () => {
     makeTrip({
       id: "trip-1",
       operator_name: "Uudam",
-      route_name: "Tokyo tour",
+      route_name: "Surmak tour",
       status: "active",
       seats_left: 10,
       seats_total: 20,
@@ -148,7 +148,7 @@ test("validation keeps uniquely matched upserts eligible", async () => {
 });
 
 test("ambiguous upsert becomes a create with confirmation, not a dead-end", async () => {
-  // The real client case: a poster for "Хайлаар-Манжуур-Чичихар" fuzzy-matched
+  // The real client case: a poster for "Торвал-Нордэн-Лэмрин" fuzzy-matched
   // three existing trips at once. The old behavior dropped the action with an
   // English blocking conflict and no way forward.
   const { validateAIChangeProposal } = await loadTravelOps();
@@ -160,15 +160,15 @@ test("ambiguous upsert becomes a create with confirmation, not a dead-end", asyn
     actions: [
       {
         action: "upsert",
-        match: { operator_name: "UUDAM TRAVEL AGENCY", route_name: "Хайлаар Манжуур" },
-        fields: { route_name: "Хайлаар Манжуур Чичихар", operator_name: "UUDAM TRAVEL AGENCY", adult_price: 1500000 },
+        match: { operator_name: "UUDAM TRAVEL AGENCY", route_name: "Торвал Нордэн" },
+        fields: { route_name: "Торвал Нордэн Лэмрин", operator_name: "UUDAM TRAVEL AGENCY", adult_price: 1500000 },
       },
     ],
   };
 
   const result = validateAIChangeProposal(proposal, [
-    makeTrip({ id: "trip-1", operator_name: "UUDAM TRAVEL AGENCY", route_name: "Хайлаар Манжуурын аялал - 5 өдөр 4 шөнө" }),
-    makeTrip({ id: "trip-2", operator_name: "UUDAM TRAVEL AGENCY", route_name: "Хайлаар Манжуурын аялал - 4 өдөр 3 шөнө" }),
+    makeTrip({ id: "trip-1", operator_name: "UUDAM TRAVEL AGENCY", route_name: "Торвал Нордэнын аялал - 5 өдөр 4 шөнө" }),
+    makeTrip({ id: "trip-2", operator_name: "UUDAM TRAVEL AGENCY", route_name: "Торвал Нордэнын аялал - 4 өдөр 3 шөнө" }),
   ]);
 
   // Action survives as a create-new upsert: no trip_id, no match to re-resolve.
@@ -181,7 +181,7 @@ test("ambiguous upsert becomes a create with confirmation, not a dead-end", asyn
   assert.equal(result.proposal.needs_confirmation, true);
   const conflictText = result.proposal.conflicts.join(" ");
   assert.match(conflictText, /төстэй байна/);
-  assert.match(conflictText, /Хайлаар/);
+  assert.match(conflictText, /Торвал/);
   // Reads like a sentence, not a "Label:" machine string.
   assert.doesNotMatch(conflictText, /multiple trips match/i);
 });
@@ -196,21 +196,21 @@ test("ambiguous patch stays blocked with candidates named in Mongolian", async (
     actions: [
       {
         action: "patch",
-        match: { operator_name: "UUDAM TRAVEL AGENCY", route_name: "Хайлаар Манжуур" },
+        match: { operator_name: "UUDAM TRAVEL AGENCY", route_name: "Торвал Нордэн" },
         fields: { adult_price: 1600000 },
       },
     ],
   };
 
   const result = validateAIChangeProposal(proposal, [
-    makeTrip({ id: "trip-1", operator_name: "UUDAM TRAVEL AGENCY", route_name: "Хайлаар Манжуурын аялал - 5 өдөр 4 шөнө" }),
-    makeTrip({ id: "trip-2", operator_name: "UUDAM TRAVEL AGENCY", route_name: "Хайлаар Манжуурын аялал - 4 өдөр 3 шөнө" }),
+    makeTrip({ id: "trip-1", operator_name: "UUDAM TRAVEL AGENCY", route_name: "Торвал Нордэнын аялал - 5 өдөр 4 шөнө" }),
+    makeTrip({ id: "trip-2", operator_name: "UUDAM TRAVEL AGENCY", route_name: "Торвал Нордэнын аялал - 4 өдөр 3 шөнө" }),
   ]);
 
   assert.equal(result.proposal.actions.length, 0);
   assert.equal(result.blocking_conflicts.length, 1);
   assert.match(result.blocking_conflicts[0], /төстэй \d+ аялал байгаа/);
-  assert.match(result.blocking_conflicts[0], /Хайлаар Манжуурын аялал - 5 өдөр 4 шөнө/);
+  assert.match(result.blocking_conflicts[0], /Торвал Нордэнын аялал - 5 өдөр 4 шөнө/);
 });
 
 test("update-only instructions are detected in English and Mongolian", async () => {
@@ -235,7 +235,7 @@ test("validation blocks creates in update-only mode", async () => {
     conflicts: [],
     actions: [{
       action: "upsert",
-      fields: { operator_name: "Uudam", route_name: "Бээжин" },
+      fields: { operator_name: "Uudam", route_name: "Вэлмор" },
     }],
   };
 
@@ -271,8 +271,8 @@ test("validation blocks two different names targeting one trip", async () => {
     important_reason: "",
     conflicts: [],
     actions: [
-      { action: "patch", trip_id: "trip-1", fields: { route_name: "Бээжин" } },
-      { action: "patch", trip_id: "trip-1", fields: { route_name: "Шанхай" } },
+      { action: "patch", trip_id: "trip-1", fields: { route_name: "Вэлмор" } },
+      { action: "patch", trip_id: "trip-1", fields: { route_name: "Лумиа" } },
     ],
   };
 
@@ -303,7 +303,7 @@ test("validation warns before duplicate upsert creation", async () => {
         action: "upsert",
         fields: {
           operator_name: "Uudam",
-          route_name: "Beijing tour",
+          route_name: "Velmor tour",
           adult_price: 3000000,
         },
       },
@@ -314,7 +314,7 @@ test("validation warns before duplicate upsert creation", async () => {
     makeTrip({
       id: "trip-2",
       operator_name: "Uudam",
-      route_name: "Beijing tour",
+      route_name: "Velmor tour",
       status: "active",
       seats_left: 12,
       seats_total: 20,
@@ -388,7 +388,7 @@ test("validation downgrades generic confirmation for complete clean new trips", 
   const { validateAIChangeProposal } = await loadTravelOps();
   const proposal: AIChangeProposal = {
     summary:
-      'Шинэ "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал" маршрутыг нэмж байна.',
+      'Шинэ "Лумиа + Зэтгорийн хаалга шууд нислэгтэй аялал" маршрутыг нэмж байна.',
     needs_confirmation: true,
     important_reason:
       "Файлнаас шинэ аяллын мэдээлэл уншигдсан тул баталгаажуулалт шаардлагатай.",
@@ -398,7 +398,7 @@ test("validation downgrades generic confirmation for complete clean new trips", 
         action: "upsert",
         fields: {
           operator_name: "UUDAM Travel",
-          route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
+          route_name: "Лумиа + Зэтгорийн хаалга шууд нислэгтэй аялал",
           duration_text: "8 өдөр 7 шөнө",
           adult_price: 2_990_000,
           child_price: 2_660_000,
@@ -446,19 +446,19 @@ test("validation does not flag optional yuan add-ons as trip conflicts", async (
   const { validateAIChangeProposal } = await loadTravelOps();
   const proposal: AIChangeProposal = {
     summary:
-      'Шинэ "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал" маршрутыг нэмж байна.',
+      'Шинэ "Лумиа + Зэтгорийн хаалга шууд нислэгтэй аялал" маршрутыг нэмж байна.',
     needs_confirmation: true,
     important_reason:
       "Файлнаас шинэ аяллын мэдээлэл уншигдсан тул баталгаажуулалт шаардлагатай.",
     conflicts: [
-      '"Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал": нэмэлт төлбөрүүд CNY/юаниар байна.',
+      '"Лумиа + Зэтгорийн хаалга шууд нислэгтэй аялал": нэмэлт төлбөрүүд CNY/юаниар байна.',
     ],
     actions: [
       {
         action: "upsert",
         fields: {
           operator_name: "UUDAM Travel",
-          route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
+          route_name: "Лумиа + Зэтгорийн хаалга шууд нислэгтэй аялал",
           duration_text: "8 өдөр 7 шөнө",
           adult_price: 2_990_000,
           child_price: 2_660_000,
@@ -489,7 +489,7 @@ test("validation accepts recurring weekday departure schedules", async () => {
         action: "upsert",
         fields: {
           operator_name: "UUDAM Travel",
-          route_name: "ЖИНИН - МИНИ АВАТАР - ХӨХ ХОТ - ОРДОС ХОТЫН АЯЛАЛ",
+          route_name: "СЭЛВИН - МИНИ ЭМБАР - САРГОЛ ХОТ - ДАРКАН ХОТЫН АЯЛАЛ",
           duration_text: "8 өдөр 7 шөнө",
           adult_price: 1_090_000,
           child_price: 790_000,
@@ -552,14 +552,14 @@ test("validation treats documented meal exceptions as notes, not conflicts", asy
     important_reason:
       "Файлнаас шинэ аяллын мэдээлэл уншигдсан тул баталгаажуулалт шаардлагатай.",
     conflicts: [
-      '"Тэнгэрийн хаалга - Жанжиажэ": зарим оройн хоол аялагчдын өөрсдийн зардлаар байна.',
+      '"Зэтгорийн хаалга - Пэлдор": зарим оройн хоол аялагчдын өөрсдийн зардлаар байна.',
     ],
     actions: [
       {
         action: "upsert",
         fields: {
           operator_name: "UUDAM Travel",
-          route_name: "Тэнгэрийн хаалга - Жанжиажэ",
+          route_name: "Зэтгорийн хаалга - Пэлдор",
           duration_text: "10 өдөр 9 шөнө",
           adult_price: 2_550_000,
           child_price: 2_150_000,
@@ -591,7 +591,7 @@ test("structured warnings stay visible without blocking save", async () => {
       action: "upsert",
       fields: {
         operator_name: "UUDAM",
-        route_name: "Шанхайн аялал",
+        route_name: "Лумиан аялал",
         adult_price: 2_990_000,
         currency: "MNT",
         departure_dates: ["7 сарын 16"],
@@ -609,7 +609,7 @@ test("structured warnings stay visible without blocking save", async () => {
 
 test("corrupted OCR price patterns are promoted to blockers", async () => {
   const { validateAIChangeProposal } = await loadTravelOps();
-  const conflict = '"Шанхайн аялал" хүүхдийн үнэ 2,6360,000₮ гэж бичигдсэн байна.';
+  const conflict = '"Лумиан аялал" хүүхдийн үнэ 2,6360,000₮ гэж бичигдсэн байна.';
   const proposal: AIChangeProposal = {
     summary: "bad OCR price",
     needs_confirmation: false,
@@ -620,7 +620,7 @@ test("corrupted OCR price patterns are promoted to blockers", async () => {
       action: "upsert",
       fields: {
         operator_name: "UUDAM TRAVEL AGENCY",
-        route_name: "Шанхайн аялал",
+        route_name: "Лумиан аялал",
         adult_price: 2_990_000,
         departure_dates: ["7 сарын 16"],
         duration_text: "8 өдөр 7 шөнө",
@@ -635,7 +635,7 @@ test("corrupted OCR price patterns are promoted to blockers", async () => {
 
 test("validation removes a missing-date conflict when dates were extracted", async () => {
   const { validateAIChangeProposal } = await loadTravelOps();
-  const conflict = '"Тэнгэрийн хаалга" аяллын гарах огноо тодорхойгүй байна.';
+  const conflict = '"Зэтгорийн хаалга" аяллын гарах огноо тодорхойгүй байна.';
   const proposal: AIChangeProposal = {
     summary: "dates found",
     needs_confirmation: true,
@@ -646,7 +646,7 @@ test("validation removes a missing-date conflict when dates were extracted", asy
       action: "upsert",
       fields: {
         operator_name: "UUDAM TRAVEL AGENCY",
-        route_name: "Тэнгэрийн хаалга",
+        route_name: "Зэтгорийн хаалга",
         adult_price: 2_990_000,
         departure_dates: ["7 сарын 16", "7 сарын 23"],
         duration_text: "8 өдөр 7 шөнө",
@@ -675,7 +675,7 @@ test("validation removes generic multi-field extraction-miss questions", async (
       action: "upsert",
       fields: {
         operator_name: "UUDAM TRAVEL AGENCY",
-        route_name: "Жанжиажэ аялал",
+        route_name: "Пэлдор аялал",
         adult_price: 3_290_000,
         departure_dates: ["8 сарын 8"],
         duration_text: "8 өдөр 7 шөнө",
@@ -701,7 +701,7 @@ test("validation ignores filename-versus-operator pseudo conflicts", async () =>
       action: "upsert",
       fields: {
         operator_name: "UUDAM TRAVEL AGENCY",
-        route_name: "Хөх хотын аялал",
+        route_name: "Саргол хотын аялал",
         adult_price: 890_000,
         departure_dates: ["Пүрэв гараг бүр"],
         duration_text: "5 өдөр 4 шөнө",
@@ -728,7 +728,7 @@ test("validation keeps a real competing-header operator conflict", async () => {
       action: "upsert",
       fields: {
         operator_name: "UUDAM TRAVEL AGENCY",
-        route_name: "Шанхайн аялал",
+        route_name: "Лумиан аялал",
         adult_price: 2_990_000,
         departure_dates: ["7 сарын 16"],
         duration_text: "8 өдөр 7 шөнө",
@@ -749,7 +749,7 @@ test("operator aliases normalize and match as one UUDAM brand", async () => {
     makeTrip({
       id: "trip-uudam",
       operator_name: "Uudam Travel",
-      route_name: "Бээжин",
+      route_name: "Вэлмор",
       status: "active",
       seats_left: null,
       seats_total: null,
@@ -757,7 +757,7 @@ test("operator aliases normalize and match as one UUDAM brand", async () => {
       child_price: null,
       currency: "MNT",
     }),
-  ], "UUDAM TRAVEL AGENCY", "Бээжин");
+  ], "UUDAM TRAVEL AGENCY", "Вэлмор");
   assert.equal(matches.length, 1);
 });
 
@@ -827,27 +827,27 @@ test("recurring schedule and exact dates are both retained", async () => {
 
 test("date-based pricing conflict is suppressed when multiple departure dates exist", async () => {
   const { validateAIChangeProposal } = await loadTravelOps();
-  // Simulates the Shanghai + Tengeriin Haalga case: model flags multiple prices
+  // Simulates the Lumia + Zetgoriin Haalga case: model flags multiple prices
   // as a conflict but the action already has multiple departure_dates.
   const proposal: AIChangeProposal = {
-    summary: "Шанхай + Тэнгэрийн хаалга аялал нэмэх",
+    summary: "Лумиа + Зэтгорийн хаалга аялал нэмэх",
     needs_confirmation: true,
     important_reason: "Үнийн зөрүү байна.",
     conflicts: [
-      '"Шанхай + Тэнгэрийн хаалга": аяллын үнэ 3,590,000₮, 1,500,000₮, 1,470,000₮ байна — өөр үнэ тодорхойлогдлоо.',
+      '"Лумиа + Зэтгорийн хаалга": аяллын үнэ 3,601,000₮, 1,500,000₮, 1,470,000₮ байна — өөр үнэ тодорхойлогдлоо.',
     ],
     actions: [
       {
         action: "upsert",
         fields: {
           operator_name: "UUDAM TRAVEL AGENCY",
-          route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
+          route_name: "Лумиа + Зэтгорийн хаалга шууд нислэгтэй аялал",
           duration_text: "8 өдөр / 7 шөнө",
           adult_price: 3_660_000,
           child_price: 3_260_000,
           currency: "MNT",
           departure_dates: ["6 сарын 27", "7 сарын 18", "8 сарын 8"],
-          notes: "6 сарын 27: Том хүн 3,590,000₮ / Хүүхэд 1,470,000₮; 7,8-р сар: Том хүн 1,500,000₮ / Хүүхэд 1,470,000₮",
+          notes: "6 сарын 27: Том хүн 3,601,000₮ / Хүүхэд 1,470,000₮; 7,8-р сар: Том хүн 1,500,000₮ / Хүүхэд 1,470,000₮",
         },
       },
     ],
@@ -864,7 +864,7 @@ test("date-based pricing conflict is suppressed when multiple departure dates ex
 test("validation prunes past departure dates from AI import proposals", async () => {
   const { validateAIChangeProposal } = await loadTravelOps();
   const proposal: AIChangeProposal = {
-    summary: "Шанхай аялал нэмэх",
+    summary: "Лумиа аялал нэмэх",
     needs_confirmation: false,
     important_reason: "",
     conflicts: [],
@@ -873,7 +873,7 @@ test("validation prunes past departure dates from AI import proposals", async ()
         action: "upsert",
         fields: {
           operator_name: "UUDAM TRAVEL AGENCY",
-          route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
+          route_name: "Лумиа + Зэтгорийн хаалга шууд нислэгтэй аялал",
           duration_text: "8 өдөр / 7 шөнө",
           adult_price: 3_590_000,
           child_price: 3_260_000,
@@ -927,7 +927,7 @@ test("new upsert with sold_out status is overridden to active", async () => {
   const { validateAIChangeProposal } = await loadTravelOps();
   // Model hallucinated sold_out from "суудал нөөцлөх" booking phrase
   const proposal: AIChangeProposal = {
-    summary: "Жэжү арлын аялал нэмэх",
+    summary: "Талвин арлын аялал нэмэх",
     needs_confirmation: false,
     important_reason: "",
     conflicts: [],
@@ -936,7 +936,7 @@ test("new upsert with sold_out status is overridden to active", async () => {
         action: "upsert",
         fields: {
           operator_name: "UUDAM TRAVEL AGENCY",
-          route_name: "Жэжү арлын аялал 2026",
+          route_name: "Талвин арлын аялал 2026",
           duration_text: "5 өдөр / 4 шөнө",
           adult_price: 4_290_000,
           child_price: 4_090_000,

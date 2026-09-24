@@ -5,7 +5,7 @@ import { parseTripCalendar } from "../src/components/admin/TripCalendarTab";
 import type { TravelTrip } from "../src/lib/adminTypes";
 
 const trip: TravelTrip = { id:"fixture",route_name:"Trip",operator_name:"Uudam",category:"",duration_text:"3 өдөр 2 шөнө",
-  adult_price:1230000,child_price:990000,infant_price:null,currency:"MNT",departure_dates:[],seats_total:null,seats_left:null,
+  adult_price:1230000,child_price:1001000,infant_price:null,currency:"MNT",departure_dates:[],seats_total:null,seats_left:null,
   has_food:null,status:"active",notes:"",hotel:"",source_description:"",photo_urls:[],extra:{},updated_at:"",
   customer_visible:true,aliases:[],price_groups:[],discounts:[],child_rules:[],extra_fees:[],departure_rule:"",
   included_items:[],excluded_items:[],room_prices:[],important_notes:[],source_provenance:[],answer_hints:[],

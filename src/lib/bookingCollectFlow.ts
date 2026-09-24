@@ -67,7 +67,7 @@ export async function startBookingCollect(ctx: BookingCollectContext): Promise<b
   if (!isBookingIntent(ctx.text)) return false;
   if (await hasRecentOpenLead(ctx.senderId, "booking")) {
     // Already with staff. A bare repeat gets a short confirmation instead of
-    // being run through the trip matchers (it came back as a random Shanghai
+    // being run through the trip matchers (it came back as a random <city>
     // list); anything more than that is answered normally.
     if (!isBareBookingRequest(ctx.text)) return false;
     await appendMessage(ctx.senderId, "user", ctx.text).catch(() => {});

@@ -75,7 +75,7 @@ const GREETING_FILLER_WORDS = new Set([
  * Fuzzy greeting matcher: 1–5 words, every word a greeting word, at least one
  * a core greeting word ("сайн сайн байна уу", "сайн бна уу", "Sn bnuu",
  * "Өдрийн мэндээ"). Any other word — a name, a question — makes it a real
- * message, so "hi shanghai price" is never swallowed.
+ * message, so "hi <city> price" is never swallowed.
  */
 export function isGreetingLike(text: string): boolean {
   const tokens = text
@@ -106,7 +106,7 @@ const THANKS_FILLER_WORDS = new Set([
 /**
  * A bare thank-you ("Баярлалаа", "за баярлалаа", "thanks"). It asks nothing, so
  * it must never be treated as a follow-up that borrows the previous turns' trips
- * — a real customer's "Баярлалаа" was answered with a list of Hainan trips.
+ * — a real customer's "Баярлалаа" was answered with a list of <city> trips.
  * Anything beyond thanks + filler ("баярлалаа, үнэ хэд вэ") is a real message.
  */
 export function isThanksOnly(text: string): boolean {

@@ -2,7 +2,7 @@
 /**
  * Golden-question QA harness — run BEFORE going live and AFTER every data upload.
  *
- * Sends a fixed set of real-world customer questions to a running demo endpoint
+ * Builds customer-style questions from the live catalog, sends them to a running demo endpoint
  * and flags any reply that trips a red flag (a past date, an invented value, an
  * internal marker leak, a scolding phrase, the wrong staff title, etc.).
  *
@@ -18,72 +18,105 @@
  * deterministically by tests/golden-red-flags.test.ts).
  */
 
+import pg from "pg";
+
 const DEMO_URL = process.env.DEMO_URL || "http://localhost:3004/api/demo";
 
-// Each entry is one fresh conversation. `follow` messages run in the same
-// conversation, in order, to test multi-turn behaviour (e.g. no re-ask after a
-// phone number is given).
-const QUESTIONS = [
-  { id: "beijing-ambiguous", text: "Бээжин", note: "should ask which of the Beijing variants (clarify), no phone ask" },
-  { id: "beijing-broad-price", text: "Бээжин аялал хэд вэ?", note: "known broad Beijing price question should clarify, not go silent" },
-  { id: "beijing-direct-flight", text: "Бээжин шууд нислэгтэй үнэ хэд вэ?", note: "one trip, adult+child price" },
-  { id: "beijing-land", text: "нислэггүй Бээжин аялал", note: "land trip only" },
-  { id: "year-boundary", text: "1 сарын 15-нд гарах аялал байгаа юу?", note: "must not offer a past January date" },
-  { id: "specific-month", text: "7 сард ямар аялал байна?", note: "only July departures" },
-  { id: "seats", text: "Хайнан суудал байгаа юу?", note: "no invented seat count" },
-  { id: "visa", text: "Виз хэрэгтэй юу?", note: "REFER unless stored — no invented visa info" },
-  { id: "not-in-db", text: "Токио аялал байна уу?", note: "not in catalog → polite consultant handoff" },
-  { id: "translit", text: "beidaihe une", note: "transliteration should still match" },
-  { id: "greeting", text: "Сайн байна уу", note: "greeting once, friendly" },
-  { id: "discount", text: "Хямдрал байгаа юу?", note: "only real discounts from data" },
-  { id: "recommend", text: "Хүүхэдтэй гэр бүлд ямар аялал тохирох вэ?", note: "recommend 1-2, not the whole list" },
-  { id: "compare", text: "Бээжин уу Хайнан уу, аль нь дээр вэ?", note: "clear comparison" },
-  { id: "expensive", text: "Үнэтэй юм байна", note: "objection handling, not pushy, no invented discount" },
-  {
-    id: "phone-then-question",
-    text: "Бээжин аяллын үнэ хэд вэ?",
-    follow: ["99112233", "Хэдэн өдрийн аялал вэ?"],
-    note: "after phone given, must NOT ask for phone again",
-  },
-  { id: "repeat", text: "Бээжин аяллын үнэ хэд вэ?", follow: ["Бээжин аяллын үнэ хэд вэ?"], note: "no scolding on repeat" },
-  { id: "landline", text: "Манай оффис 77136633 руу залгаарай гэсэн үү?", note: "77136633 is a landline — must NOT be treated as a lead phone" },
-];
+// ── Questions are built from the LIVE catalog at run time ───────────────────
+// Never write a real trip name, price or date into this file: the catalog
+// changes every week and a hardcoded question goes stale (or, worse, passes
+// against a trip that no longer exists). The code only knows the SHAPE of a
+// question; the database supplies the places.
 
-const QUESTION_ASSERTIONS = {
-  // These are true unknown/no-data checks under the current lead-preservation
-  // policy: customer-side silence is allowed, but leaking REFER/SILENT is not.
-  "beijing-direct-flight": { allowSilent: true },
-  "beijing-broad-price": {
-    expectAny: ["Аль аяллыг", "БЭЭЖИН", "Бэйдайхэ"],
-  },
-  "year-boundary": { allowSilent: true },
-  visa: { allowSilent: true },
-  handoff: { allowSilent: true },
+const GENERIC_NAME_WORDS = new Set([
+  "аялал", "аяллын", "аялалд", "шууд", "нислэг", "нислэгтэй", "газар", "газрын", "хосолсон",
+  "хотын", "сарын", "хөтөлбөр", "амралт", "амралтаар", "амралтын", "сурагчдын", "буюу", "болон",
+  "өдөр", "шөнө", "хотод", "хот", "аяллууд",
+]);
+// Used for the "not in the catalog" check — an invented place, never a real one.
+const INVENTED_PLACE = "Вэлмор";
 
-  // A generic objection must not route-match the unrelated Jinin route whose
-  // name contains "үнэтэй шинжилгээтэй".
-  expensive: {
-    reject: ["Жинин", "шинжилгээтэй"],
-  },
-  compare: {
-    expectAny: ["харьцуулалт", "Харьцуулалт"],
-    reject: ["Энэ чиглэлээр хэд хэдэн сонголт"],
-  },
+async function loadActiveTripNames() {
+  const connectionString = process.env.NEON_DATABASE_URL || process.env.DATABASE_URL;
+  if (!connectionString) throw new Error("NEON_DATABASE_URL is required: questions are built from the live catalog.");
+  const local = /@(localhost|127\.0\.0\.1)[:/]/.test(connectionString);
+  const client = new pg.Client({ connectionString, ssl: local ? false : { rejectUnauthorized: false } });
+  await client.connect();
+  try {
+    const { rows } = await client.query("select route_name from travel_trip_entries where status = 'active'");
+    return rows.map((row) => String(row.route_name || "")).filter(Boolean);
+  } finally {
+    await client.end();
+  }
+}
 
-  // The second turn is the customer leaving a phone number. Demo and Messenger
-  // must both acknowledge it, not answer the previous trip question again.
-  "phone-then-question": {
-    follow: {
-      0: {
-        expectAny: ["Баярлалаа", "99112233"],
-        reject: ["Аль аяллыг", "БЭЭЖИН", "Бэйдайхэ"],
-      },
-      1: {
-        reject: ["Утасны дугаараа", "дугаараа үлдээ"],
-      },
-    },
-  },
+function nameWords(name) {
+  return Array.from(new Set(
+    name.split(/[^\p{L}]+/u).filter((word) => word.length >= 4 && !GENERIC_NAME_WORDS.has(word.toLowerCase())),
+  ));
+}
+
+function titleCase(word) {
+  return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+}
+
+const LATIN = {
+  а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "yo", ж: "j", з: "z", и: "i", й: "i", к: "k", л: "l", м: "m",
+  н: "n", о: "o", ө: "u", п: "p", р: "r", с: "s", т: "t", у: "u", ү: "u", ф: "f", х: "h", ц: "ts", ч: "ch", ш: "sh",
+  щ: "sh", ъ: "", ы: "ii", ь: "i", э: "e", ю: "yu", я: "ya",
 };
+const toLatin = (word) => [...word.toLowerCase()].map((c) => LATIN[c] ?? c).join("");
+
+function buildQuestions(names) {
+  const tripsByWord = new Map();
+  for (const name of names) {
+    for (const word of nameWords(name)) {
+      const key = word.toLowerCase();
+      tripsByWord.set(key, [...(tripsByWord.get(key) || []), name]);
+    }
+  }
+  const byCount = [...tripsByWord.entries()].sort((a, b) => b[1].length - a[1].length);
+  const shared = byCount.find(([, trips]) => trips.length >= 2)?.[0];
+  const singles = byCount.filter(([, trips]) => trips.length === 1).map(([word]) => word);
+  const single = singles[0];
+  // A different trip AND a different-looking word — not the same place spelled twice.
+  const other = singles.find(
+    (word) => tripsByWord.get(word)[0] !== tripsByWord.get(single)?.[0] && word.slice(0, 4) !== single?.slice(0, 4),
+  );
+  if (!shared || !single || !other) throw new Error("Catalog too small to build the golden questions.");
+  const Shared = titleCase(shared);
+  const Single = titleCase(single);
+  const Other = titleCase(other);
+
+  return [
+    { id: "shared-destination", text: Shared, note: `"${Shared}" is in several trips → must ask which, no phone ask`, expectAny: ["Аль аяллыг"] },
+    { id: "shared-broad-price", text: `${Shared} аялал хэд вэ?`, note: "broad price question on a shared destination → clarify, not silence", expectAny: ["Аль аяллыг"] },
+    { id: "single-price", text: `${Single} аялал үнэ хэд вэ?`, note: "one trip → its price", expectAny: ["₮"], allowSilent: true },
+    { id: "year-boundary", text: "1 сарын 15-нд гарах аялал байгаа юу?", note: "must not offer a past January date", allowSilent: true },
+    { id: "specific-month", text: "7 сард ямар аялал байна?", note: "only that month's departures", allowSilent: true },
+    { id: "seats", text: `${Single} суудал байгаа юу?`, note: "no invented seat count", allowSilent: true },
+    { id: "visa", text: "Виз хэрэгтэй юу?", note: "REFER unless stored — no invented visa info", allowSilent: true },
+    { id: "not-in-db", text: `${INVENTED_PLACE} аялал байна уу?`, note: "place not in catalog → no invented trip", allowSilent: true, reject: names },
+    { id: "translit", text: `${toLatin(single)} une`, note: "Latin spelling should still match", allowSilent: true },
+    { id: "greeting", text: "Сайн байна уу", note: "greeting once, friendly" },
+    { id: "discount", text: "Хямдрал байгаа юу?", note: "only real discounts from data", allowSilent: true },
+    { id: "recommend", text: "Хүүхэдтэй гэр бүлд ямар аялал тохирох вэ?", note: "recommend 1-2, not the whole list", allowSilent: true },
+    { id: "compare", text: `${Single} уу ${Other} уу, аль нь дээр вэ?`, note: "clear comparison", expectAny: ["харьцуулалт", "Харьцуулалт"], reject: ["Энэ чиглэлээр хэд хэдэн сонголт"] },
+    // A generic objection names no trip; answering with one is a false match.
+    { id: "expensive", text: "Үнэтэй юм байна", note: "objection handling, no trip picked out of thin air", reject: names },
+    {
+      id: "phone-then-question",
+      text: `${Shared} аяллын үнэ хэд вэ?`,
+      follow: [
+        { text: "99112233", expectAny: ["Баярлалаа", "99112233"], reject: ["Аль аяллыг"] },
+        { text: "Хэдэн өдрийн аялал вэ?", reject: ["Утасны дугаараа", "дугаараа үлдээ"], allowSilent: true },
+      ],
+      note: "after phone given, must NOT ask for phone again",
+    },
+    { id: "repeat", text: `${Shared} аяллын үнэ хэд вэ?`, follow: [`${Shared} аяллын үнэ хэд вэ?`], note: "no scolding on repeat" },
+    { id: "landline", text: "Манай оффис 77136633 руу залгаарай гэсэн үү?", note: "77136633 is a landline — must NOT be treated as a lead phone", allowSilent: true },
+  ];
+}
 
 // A red flag = a substring that should NEVER appear in a customer-facing reply.
 // `strip` (optional) removes legitimate text before the pattern is tested —
@@ -136,12 +169,14 @@ function checkRedFlags(reply) {
 }
 
 function normalizeTurnSpec(question, turn, followIndex) {
-  const base = typeof turn === "string" ? { text: turn } : turn;
-  const assertions = QUESTION_ASSERTIONS[question.id] || {};
-  const override = followIndex === -1
-    ? assertions
-    : (assertions.follow || {})[followIndex] || {};
-  return { ...base, ...override };
+  if (followIndex === -1) {
+    const first = { ...question };
+    delete first.follow;
+    delete first.note;
+    delete first.id;
+    return first;
+  }
+  return typeof turn === "string" ? { text: turn } : turn;
 }
 
 function checkTurnExpectations(reply, turn) {
@@ -161,6 +196,7 @@ function checkTurnExpectations(reply, turn) {
 
 async function main() {
   console.log(`Golden-question QA → ${DEMO_URL}\n`);
+  const QUESTIONS = buildQuestions(await loadActiveTripNames());
   let failures = 0;
   let checks = 0;
 

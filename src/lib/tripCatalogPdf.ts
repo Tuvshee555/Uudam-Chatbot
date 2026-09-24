@@ -441,8 +441,8 @@ type FareTier = { label: string; age: string; price: string; note: string };
  * Every fare tier the trip actually has, by passenger type.
  *
  * The per-date table only has three columns (adult/child/infant), so a trip
- * with two child bands — Хайнан sells 6-12 at 2,790,000₮ and 2-6 at
- * 2,190,000₮ — silently loses one, and a customer with a 4-year-old is quoted
+ * with two child bands — <хот> sells 6-12 at 1,111,111₮ and 2-6 at
+ * 1,111,111₮ — silently loses one, and a customer with a 4-year-old is quoted
  * the wrong price. `passenger_prices` and `child_rules` carry the full ladder;
  * this merges them and drops exact duplicates.
  */

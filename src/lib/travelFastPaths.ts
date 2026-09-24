@@ -453,7 +453,7 @@ function buildTripInfoReply(rawTrip: TravelTrip, now = new Date()) {
 
   if (isLandFlightCombo(trip)) {
     // No route claim here: the flight leg differs per trip. Naming a route
-    // in code once told customers every combo trip flies UB–Beidaihe.
+    // in code once told customers every combo trip flies UB–<city>.
     lines.push("", "Энэ нь газар + нислэг хосолсон аялал.");
   }
 
@@ -696,7 +696,7 @@ export function buildBudgetReply(
     });
 
   // Superlative questions want the trips AT that fare. Slicing to one hid two
-  // other tours selling at the very same 890,000₮ and made the plural heading
+  // other tours selling at the very same 1,111,111₮ and made the plural heading
   // ("Хамгийн хямд аяллууд:") a lie.
   const superlative = (wantsCheapest || wantsPriciest) && budgetLimit === null;
   const candidates = superlative
@@ -1330,8 +1330,8 @@ function buildUnavailableTripReply(
   if (!best) return null;
 
   // An unavailable answer that stops there buries the sellable catalog: a
-  // generic "Бээжин" question was leading with the dead Universal trip while
-  // three bookable Beijing trips went unmentioned. Pitch ACTIVE trips that
+  // generic "<хот>" question was leading with the dead <city> trip while
+  // three bookable <city> trips went unmentioned. Pitch ACTIVE trips that
   // share the unavailable trip's destination words (data-driven — never
   // hardcoded names) in the same breath, like a human agent would.
   const matchTokens = unique([
@@ -1389,12 +1389,12 @@ function buildUnavailableTripReply(
  * The customer's own message names a trip that is SOLD OUT (or paused) more
  * specifically than any active trip. Every other matcher only looks at active
  * trips, so an unavailable trip named exactly lost to a near-name sibling:
- * "ШАНХАЙ - ДИСНЕЙЛЭНД-10/08 үнэ хэд вэ" was answered with the 11/3 trip's price
+ * "<хот> - <хот>-10/08 үнэ хэд вэ" was answered with the 11/3 trip's price
  * as if it were the same tour. Say it is unavailable and offer the alternatives
  * at the same destination instead.
  *
  * Deliberately strict — the full trip name, or a clear score lead over the best
- * active match — so a bare "Шанхай" never gets an unavailable answer.
+ * active match — so a bare "<хот>" never gets an unavailable answer.
  */
 export function buildSoldOutPrecedenceReply(text: string, trips: TravelTrip[]): string | null {
   const unavailableTrips = trips.filter((trip) => trip.status === "sold_out" || trip.status === "paused");
@@ -1539,7 +1539,7 @@ export function buildStructuredTripReply(
 
   // If a broad destination match lands on a variant with no infant price,
   // prefer a uniquely matching sibling variant that actually has the detail
-  // the customer requested. This avoids referring "Бэйдайхэ нярай хэд вэ?"
+  // the customer requested. This avoids referring "<хот> нярай хэд вэ?"
   // when the combo itinerary has a stored infant price and the ground one does
   // not.
   if (
@@ -1816,7 +1816,7 @@ export function buildStructuredTripReply(
  * gets to try buildStructuredTripReply for a compound message that also asked
  * a real, answerable question ("Далянийн ... үнэ, ... зураг үзүүлээч" got
  * silence + human handoff for ALL of it, price included, purely because
- * Далянь happened to have zero photos at that moment).
+ * <хот> happened to have zero photos at that moment).
  *
  * Silence is still correct and preserved when there is truly nothing else to
  * say — a bare "зураг" request for a photo-less trip must stay silent per

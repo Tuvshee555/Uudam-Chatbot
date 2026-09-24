@@ -88,7 +88,7 @@ test("askOpenAI compatibility wrapper forwards systemInstruction and OpenAI mode
   }) as typeof fetch;
 
   try {
-    const result = await providerModule.askOpenAI("Тэнгэрийн хаалга хэд вэ?", {
+    const result = await providerModule.askOpenAI("Зэтгорийн хаалга хэд вэ?", {
       source: "test.openai",
       systemInstruction: "SYSTEM RULES: always answer in Mongolian, REFER if unknown.",
       openaiModel: "gpt-4o",

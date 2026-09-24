@@ -443,3 +443,18 @@ test("a group size after a trip card is answered for that trip", () => {
   assert.ok(contextual.includes(DIRECT.route_name), contextual);
   assert.equal(buildGroupSizeReply(joinContextAndTurn(DIRECT.route_name, "2 том хүн 1 хүүхэд нийт хэд"), CATALOG), null);
 });
+
+test("'Хөтөлбөр үзэх' under a which-trip list does not pick the list's first trip", () => {
+  const list = `Энэ чиглэлээр хэд хэдэн сонголт байна 😊\n• ${OCT_TRIP.route_name} — 6 өдөр\n• ${NOV_TRIP.route_name} — 5 өдөр\n\nАль аяллыг нь сонирхож байна вэ?`;
+  const contextual = buildContextualUserText(
+    [
+      { role: "user", text: "Лумиа Кардан" },
+      { role: "assistant", text: list },
+    ],
+    "Хөтөлбөр үзэх",
+  );
+  assert.ok(!contextual.startsWith(OCT_TRIP.route_name), contextual);
+  // "эхнийх" (the first one) is still the first one.
+  const first = buildContextualUserText([{ role: "assistant", text: list }], "эхнийх");
+  assert.ok(first.startsWith(OCT_TRIP.route_name), first);
+});

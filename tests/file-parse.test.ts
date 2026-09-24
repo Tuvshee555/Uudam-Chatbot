@@ -10,7 +10,7 @@ test("parseUpload reads XLSX workbooks after dependency overrides", async () => 
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Trips");
   sheet.addRow(["Маршрут", "Үнэ"]);
-  sheet.addRow(["Улаанбаатар - Бээжин", 1200000]);
+  sheet.addRow(["Улаанбаатар - Вэлмор", 1200000]);
 
   const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
   const parsed = await parseUpload({
@@ -23,7 +23,7 @@ test("parseUpload reads XLSX workbooks after dependency overrides", async () => 
   assert.equal(parsed.label, "trips.xlsx");
   assert.equal(parsed.inline, null);
   assert.match(parsed.text, /Trips/);
-  assert.match(parsed.text, /Улаанбаатар - Бээжин/);
+  assert.match(parsed.text, /Улаанбаатар - Вэлмор/);
   assert.match(parsed.text, /1200000/);
 });
 
@@ -53,7 +53,7 @@ test("parseUpload extracts text from .docx files", async () => {
   // Minimal valid DOCX: a ZIP whose word/document.xml holds two paragraphs.
   const documentXml =
     '<?xml version="1.0"?><w:document xmlns:w="x"><w:body>' +
-    "<w:p><w:r><w:t>Бангкок аялал</w:t></w:r></w:p>" +
+    "<w:p><w:r><w:t>Гэрмол аялал</w:t></w:r></w:p>" +
     "<w:p><w:r><w:t>Үнэ: 2400000</w:t></w:r></w:p>" +
     "</w:body></w:document>";
 
@@ -119,14 +119,14 @@ test("parseUpload extracts text from .docx files", async () => {
   });
 
   assert.equal(parsed.inline, null);
-  assert.match(parsed.text, /Бангкок аялал/);
+  assert.match(parsed.text, /Гэрмол аялал/);
   assert.match(parsed.text, /2400000/);
 });
 
 test("parseUpload preserves DOCX table cell boundaries", async () => {
   const { deflateRawSync } = await import("node:zlib");
   const xml = '<?xml version="1.0"?><w:document xmlns:w="x"><w:body>' +
-    '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Бангкок</w:t></w:r></w:p></w:tc>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Гэрмол</w:t></w:r></w:p></w:tc>' +
     '<w:tc><w:p><w:r><w:t>2400000</w:t></w:r></w:p></w:tc></w:tr></w:tbl>' +
     '</w:body></w:document>';
   const name = Buffer.from("word/document.xml");
@@ -146,7 +146,7 @@ test("parseUpload preserves DOCX table cell boundaries", async () => {
     dataBase64: docx.toString("base64"),
   });
 
-  assert.match(parsed.text, /Бангкок\s+2400000/);
+  assert.match(parsed.text, /Гэрмол\s+2400000/);
 });
 
 test("parseUpload rejects oversized decoded uploads before parsing", async () => {

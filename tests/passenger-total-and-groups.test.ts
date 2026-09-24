@@ -8,10 +8,10 @@ const NOW = new Date("2026-07-24T04:00:00.000Z");
 
 function trip(fields: Partial<TravelTrip>): TravelTrip {
   return {
-    id: "dalian",
+    id: "telmor",
     category: "шууд нислэгтэй аялал",
     operator_name: "Uudam Travel",
-    route_name: "Далянь хотын шууд нислэгтэй аялал",
+    route_name: "Тэлмор хотын шууд нислэгтэй аялал",
     duration_text: "8 өдөр / 7 шөнө",
     adult_price: 1420000,
     child_price: 1320000,
@@ -36,7 +36,7 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
 // ---- Passenger total: count must bind to the right noun regardless of word order ----
 
 test("total price reads '2 том хүн 1 хүүхэд' as 2 adults + 1 child (number-first order)", () => {
-  const reply = buildStructuredTripReply("Далянь 2 том хүн 1 хүүхэд нийт хэд вэ?", [trip({})], NOW) || "";
+  const reply = buildStructuredTripReply("Тэлмор 2 том хүн 1 хүүхэд нийт хэд вэ?", [trip({})], NOW) || "";
   // 2*1,420,000 + 1*1,320,000 = 4,160,000
   assert.match(reply, /4,160,000/);
   assert.match(reply, /Том хүн 2/);
@@ -44,7 +44,7 @@ test("total price reads '2 том хүн 1 хүүхэд' as 2 adults + 1 child (
 });
 
 test("total price still reads 'том хүн 2 хүүхэд 1' as 2 adults + 1 child (noun-first order)", () => {
-  const reply = buildStructuredTripReply("Далянь том хүн 2 хүүхэд 1 нийт хэд вэ?", [trip({})], NOW) || "";
+  const reply = buildStructuredTripReply("Тэлмор том хүн 2 хүүхэд 1 нийт хэд вэ?", [trip({})], NOW) || "";
   assert.match(reply, /4,160,000/);
   assert.match(reply, /Том хүн 2/);
 });
@@ -98,7 +98,7 @@ test("hasBudgetIntent recognises everyday price-ceiling phrasings", () => {
 
 test("hasBudgetIntent does not fire on ordinary 'until' phrasing", () => {
   assert.equal(hasBudgetIntent("8 сар хүртэл аялал байна уу?"), false);
-  assert.equal(hasBudgetIntent("Шанхай аялал байна уу?"), false);
+  assert.equal(hasBudgetIntent("Лумиа аялал байна уу?"), false);
 });
 
 test("a budget ask with no amount falls through instead of listing everything", () => {

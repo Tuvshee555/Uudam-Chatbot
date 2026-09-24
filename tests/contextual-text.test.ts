@@ -17,91 +17,91 @@ function makeResolver(map: Record<string, { status: string; trip?: FakeTrip; can
 
 test("pickFastPathMatchText: current message wins when it resolves a trip on its own", () => {
   const picked = pickFastPathMatchText(
-    "Хайнан аялал үнэ",
-    "Бээжин аялал\nХайнан аялал үнэ",
+    "Мирвэн аялал үнэ",
+    "Вэлмор аялал\nМирвэн аялал үнэ",
     makeResolver({
-      "Хайнан аялал үнэ": { status: "verified", trip: { id: "h", route_name: "Хайнан" } },
+      "Мирвэн аялал үнэ": { status: "verified", trip: { id: "h", route_name: "Мирвэн" } },
     }),
   );
-  assert.equal(picked, "Хайнан аялал үнэ");
+  assert.equal(picked, "Мирвэн аялал үнэ");
 });
 
 test("pickFastPathMatchText: contextual blob used when only it resolves (real follow-up)", () => {
   const picked = pickFastPathMatchText(
     "тэр ямар үнэтэй вэ?",
-    "Хайнан аялал\nтэр ямар үнэтэй вэ?",
+    "Мирвэн аялал\nтэр ямар үнэтэй вэ?",
     makeResolver({
-      "Хайнан аялал\nтэр ямар үнэтэй вэ?": {
+      "Мирвэн аялал\nтэр ямар үнэтэй вэ?": {
         status: "verified",
-        trip: { id: "h", route_name: "Хайнан" },
+        trip: { id: "h", route_name: "Мирвэн" },
       },
     }),
   );
-  assert.equal(picked, "Хайнан аялал\nтэр ямар үнэтэй вэ?");
+  assert.equal(picked, "Мирвэн аялал\nтэр ямар үнэтэй вэ?");
 });
 
 test("pickFastPathMatchText: raw ambiguity beats stale context when context resolves nothing", () => {
-  // The customer just asked about Beijing (3 variants). Clarify from what they
+  // The customer just asked about Velmor (3 variants). Clarify from what they
   // JUST said instead of borrowing old turns that resolve nothing.
   const picked = pickFastPathMatchText(
-    "Бээжин аялал",
-    "Шанхай аялал\nБээжин аялал",
+    "Вэлмор аялал",
+    "Лумиа аялал\nВэлмор аялал",
     makeResolver({
-      "Бээжин аялал": {
+      "Вэлмор аялал": {
         status: "ambiguous",
         candidates: [
-          { id: "b1", route_name: "Бээжин шууд" },
-          { id: "b2", route_name: "Бээжин газрын" },
+          { id: "b1", route_name: "Вэлмор шууд" },
+          { id: "b2", route_name: "Вэлмор газрын" },
         ],
       },
     }),
   );
-  assert.equal(picked, "Бээжин аялал");
+  assert.equal(picked, "Вэлмор аялал");
 });
 
 test("pickFastPathMatchText: contextual verified beats raw ambiguity", () => {
   // "шууд нислэгтэй нь" alone matches many direct-flight trips, but with the
-  // previous "Бээжин" turn it nails exactly one — context must win here.
+  // previous "Вэлмор" turn it nails exactly one — context must win here.
   const picked = pickFastPathMatchText(
     "шууд нислэгтэй нь",
-    "Бээжин аялал\nшууд нислэгтэй нь",
+    "Вэлмор аялал\nшууд нислэгтэй нь",
     makeResolver({
       "шууд нислэгтэй нь": {
         status: "ambiguous",
         candidates: [
-          { id: "a", route_name: "Бээжин шууд" },
-          { id: "b", route_name: "Далянь шууд" },
+          { id: "a", route_name: "Вэлмор шууд" },
+          { id: "b", route_name: "Тэлмор шууд" },
         ],
       },
-      "Бээжин аялал\nшууд нислэгтэй нь": {
+      "Вэлмор аялал\nшууд нислэгтэй нь": {
         status: "verified",
-        trip: { id: "a", route_name: "Бээжин шууд" },
+        trip: { id: "a", route_name: "Вэлмор шууд" },
       },
     }),
   );
-  assert.equal(picked, "Бээжин аялал\nшууд нислэгтэй нь");
+  assert.equal(picked, "Вэлмор аялал\nшууд нислэгтэй нь");
 });
 
 test("pickFastPathMatchText: identical texts short-circuit without calling the resolver", () => {
-  const picked = pickFastPathMatchText("Хайнан үнэ хэд вэ", "Хайнан үнэ хэд вэ", () => {
+  const picked = pickFastPathMatchText("Мирвэн үнэ хэд вэ", "Мирвэн үнэ хэд вэ", () => {
     throw new Error("resolver must not be called");
   });
-  assert.equal(picked, "Хайнан үнэ хэд вэ");
+  assert.equal(picked, "Мирвэн үнэ хэд вэ");
 });
 
 test("standalone messages with their own content words are not diluted with old turns", () => {
   const result = buildContextualUserText(
-    [{ role: "user", text: "shanghai aylal medeelel awy" }],
-    "Бээжин нислэгтэй аяллын хөтөлбөр үзэх",
+    [{ role: "user", text: "lumia aylal medeelel awy" }],
+    "Вэлмор нислэгтэй аяллын хөтөлбөр үзэх",
   );
-  assert.equal(result, "Бээжин нислэгтэй аяллын хөтөлбөр үзэх");
-  assert.equal(isLikelyContextDependentText("Бээжин нислэгтэй аяллын хөтөлбөр үзэх"), false);
+  assert.equal(result, "Вэлмор нислэгтэй аяллын хөтөлбөр үзэх");
+  assert.equal(isLikelyContextDependentText("Вэлмор нислэгтэй аяллын хөтөлбөр үзэх"), false);
 });
 
 test("short referential follow-ups use the previous assistant answer when available", () => {
   const result = buildContextualUserText(
     [
-      { role: "user", text: "Хайнан аялал сонирхож байна" },
+      { role: "user", text: "Мирвэн аялал сонирхож байна" },
       { role: "assistant", text: "Альфа 1,111,111₮..." },
     ],
     "тэр хэд вэ?",
@@ -115,7 +115,7 @@ test("short referential follow-ups anchor to the previous assistant answer befor
   const result = buildContextualUserText(
     [
       { role: "user", text: "шууд нислэгтэй нь хэд вэ?" },
-      { role: "user", text: "Хайнан сонирхож байна" },
+      { role: "user", text: "Мирвэн сонирхож байна" },
       { role: "user", text: "хамгийн хямд аялал юу байна" },
       { role: "assistant", text: previousAnswer },
     ],
@@ -137,7 +137,7 @@ test("short referential follow-ups skip generic assistant prompts", () => {
 
 test("passenger price follow-ups borrow the previous assistant answer", () => {
   const previousAnswer =
-    "Лумиа шар тэнгисийн эрэг + Зэт газар нислэг хосолсон аялал. Том хүн 1,111,111₮, хүүхэд 999,999₮, нярай 888,888₮.";
+    "Лумиа сэрвэн тэнгисийн эрэг + Зэт газар нислэг хосолсон аялал. Том хүн 1,111,111₮, хүүхэд 999,999₮, нярай 888,888₮.";
   const result = buildContextualUserText(
     [{ role: "assistant", text: previousAnswer }],
     "нярай хүүхэд үнэтэй юу?",

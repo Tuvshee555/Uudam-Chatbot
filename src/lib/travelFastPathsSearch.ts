@@ -119,9 +119,9 @@ const GENERIC_ROUTE_WORDS = new Set([
   "хөтөлбөр",
   // Request verbs from the "Хөтөлбөр үзэх" / "Зураг үзэх" buttons and everyday
   // phrasing. They are never part of a destination. Without this,
-  // "Хөтөлбөр үзэх" matched the trip "Ордос -намрын тахилга үзэх аялал" on the
-  // single word "үзэх" and two real customers were sent the Ordos PDF while
-  // they were looking at Shanghai.
+  // "Хөтөлбөр үзэх" matched the trip "<хот> -намрын тахилга үзэх аялал" on the
+  // single word "үзэх" and two real customers were sent the <city> PDF while
+  // they were looking at <city>.
   "үзэх",
   "үзүүлээч",
   "үзье",
@@ -130,7 +130,7 @@ const GENERIC_ROUTE_WORDS = new Set([
   "харуулаач",
   "харья",
   "харъя",
-  // Greeting words typed in front of a question ("hi Shanhai aylaliin medeelel
+  // Greeting words typed in front of a question ("hi <city> aylaliin medeelel
   // aviya"): never a destination, but they used to count as unmatched query
   // words and drag every candidate's score negative.
   "hi",
@@ -252,15 +252,9 @@ const PROGRAM_QUERY_SIGNALS = [
 // Only language/script normalizations here — no trip-specific city names.
 // City aliases and romanized destination names belong in each trip's
 // extra.aliases array in the database, editable via the admin panel.
+// Misspelled place names are handled by snapMisspelledWords(), which compares
+// against the live catalog's own words — never a city list in code.
 const ALIAS_REPLACEMENTS: Array<[RegExp, string]> = [
-  [/[бБ]эйд[эеэи]хэ/g, "бэйдайхэ"],
-  [/[бБ]айд[эеэи]хэ/g, "бэйдайхэ"],
-  // Zhangjiajie is spelled a dozen ways by customers and in the catalog
-  // ("Жанжиажэ", "ЖАНЖИАЖИЭ", "Жанжио", "Жанжиатай", "Жанжиэжэ"). Every word
-  // starting "жанжи" is that city; Zhangjiakou ("Жанжакоу") starts "жанжа" and is
-  // deliberately not touched. A precise rewrite, unlike fuzzy prefix matching,
-  // cannot collide with unrelated words ("байгаа" vs "байгалийн").
-  [/(?<![\p{L}\p{N}])жанжи\p{L}+/giu, "жанжиажэ"],
   [/\bnaadam\b/gi, "наадам"],
   [/наадмын/gi, "наадам"],
   [/\bnisleggvi\b/gi, "нислэггүй"],
@@ -376,6 +370,12 @@ export function phoneticLatinText(text: string) {
     .split("")
     .map((char) => CYRILLIC_TO_LATIN[char] ?? char)
     .join("")
+    // Pinyin-style spellings of Chinese places meet their Mongolian Cyrillic
+    // forms: "zh" is "ж", "ng" before a consonant is "н" ("-ngh-" / "-ngj-"),
+    // and "jie" is "жэ". Romanisation rules only — no place is named here.
+    .replace(/zh/g, "j")
+    .replace(/ng(?=[bcdfghjklmnpqrstvwxz])/g, "n")
+    .replace(/([jqx])ie/g, "$1e")
     .replace(/ts/g, "c")
     .replace(/ch/g, "c")
     .replace(/sh/g, "s")
@@ -441,7 +441,7 @@ function isOneEditApart(a: string, b: string): boolean {
 
 /**
  * True when the LONGER token is the shorter one plus a trailing Mongolian
- * case suffix — "далянийн" (genitive of "Далянь") vs "dalan"/"dalanin" in
+ * case suffix — "далянийн" (genitive of "<хот>") vs "dalan"/"dalanin" in
  * phonetic space: "dalanin".startsWith("dalan"). Case endings (genitive,
  * accusative, dative...) add letters rather than substitute them, so this is
  * NOT a typo (isOneEditApart's territory, capped at 1 substitution) — a real
@@ -550,7 +550,7 @@ export function isDocumentedFreeFare(trip: TravelTrip, target: "child" | "infant
   // the current year: real data labels an infant tier by BIRTH YEARS
   // ("2024-2026 он"), so as those children age out the range stops looking
   // infant-shaped and the very same 0/"Үнэгүй" rule would silently flip into
-  // "children are free" — handing out a real 750,000₮ child seat. Caught by a
+  // "children are free" — handing out a real 1,111,111₮ child seat. Caught by a
   // clock-shift sweep landing in 2028; without this guard the bug was
   // invisible today and would have surfaced on its own years later.
   const hasCompetingPaidFare = rules.some((rule) => {
@@ -762,7 +762,7 @@ function extractQueryMonthDays(text: string): MonthDay[] {
   }
   // Matched on the RAW text: normText turns "/" "." "-" into spaces, so running
   // this on `normalized` (as before) meant "10/28", "11/3" and "9-19" were never
-  // recognised as dates — "шанхай аялал 10/28 11/3" got no date boost at all.
+  // recognised as dates — "<хот> аялал 10/28 11/3" got no date boost at all.
   for (const match of text.toLowerCase().matchAll(/(?<![\d./-])(\d{1,2})[./-](\d{1,2})(?![\d./-])/g)) {
     push(Number(match[1]), Number(match[2]));
   }
@@ -870,9 +870,9 @@ function sanitizeGroup(
       );
     });
     // Nothing of this group's schedule is a real departure any more: its prices
-    // belong to departures that no longer exist (the Shanghai-Disney 10/29 trip
-    // carried a "9 сарын 29" group at 3,490,000₮ while the current base price is
-    // 3,590,000₮). Drop the whole group so the trip's own base prices win.
+    // belong to departures that no longer exist (the <city>-<city> 10/29 trip
+    // carried a "9 сарын 29" group at 1,111,111₮ while the current base price is
+    // 1,111,111₮). Drop the whole group so the trip's own base prices win.
     if (kept.length === 0) return null;
     if (kept.length !== group.dates.length) {
       set("dates", kept);
@@ -943,60 +943,140 @@ export function sanitizeTripForCustomers(trip: TravelTrip): TravelTrip {
   return nextExtra === trip.extra ? trip : { ...trip, extra: nextExtra };
 }
 
-const SHANGHAI_SIGNALS = ["\u0448\u0430\u043d\u0445\u0430\u0439", "shanghai"];
-const ZHANGJIAJIE_TENGER_SIGNALS = [
-  "\u0436\u0430\u043d\u0436\u0438\u0430\u0436\u044d",
-  "\u0436\u0430\u043d\u0433\u0436\u0438\u0430\u0436\u044d",
-  "zhangjiajie",
-  "\u0442\u044d\u043d\u0433\u044d\u0440\u0438\u0439\u043d \u0445\u0430\u0430\u043b\u0433\u0430",
-];
+type VocabularyEntry = { word: string; phonetic: string };
+type CatalogVocabulary = { entries: VocabularyEntry[]; known: Set<string>; knownPhonetic: Set<string> };
+const vocabularyCache = new WeakMap<TravelTrip[], CatalogVocabulary>();
 
-function includesAnySignal(text: string, signals: string[]): boolean {
-  return signals.some((signal) => text.includes(signal));
+/** Every word of every trip name and alias — the only "place list" the matcher knows. */
+function catalogVocabulary(trips: TravelTrip[]): CatalogVocabulary {
+  const cached = vocabularyCache.get(trips);
+  if (cached) return cached;
+  const names = trips.flatMap((trip) => [trip.route_name, ...getAliases(trip)]);
+  const entries = unique(names.flatMap((name) => keywordTokens(name)))
+    .filter((word) => !/\d/.test(word))
+    .map((word) => {
+      const phonetic = phoneticLatinText(word).replace(/\s+/g, "");
+      return { word, phonetic };
+    });
+  const vocabulary = {
+    entries,
+    known: new Set(entries.map((entry) => entry.word)),
+    knownPhonetic: new Set(entries.map((entry) => entry.phonetic)),
+  };
+  vocabularyCache.set(trips, vocabulary);
+  return vocabulary;
 }
 
-// Customers rarely spell Zhangjiajie the way the catalog does: "Жанжио",
-// "Жанжиатай", "Жанжиэжэ", "janjiaje". Any sufficiently long word that starts
-// "жанжи…" is that city — Zhangjiakou ("Жанжакоу") starts "жанжа" and is not
-// caught, which is what keeps the two apart.
-function queryMentionsZhangjiajie(normalizedQuery: string): boolean {
-  if (includesAnySignal(normalizedQuery, ZHANGJIAJIE_TENGER_SIGNALS)) return true;
-  return phoneticLatinText(normalizedQuery)
-    .split(/\s+/)
-    .some((token) => token.length >= 6 && token.startsWith("janji"));
+function commonPrefixLength(a: string, b: string): number {
+  let index = 0;
+  while (index < a.length && index < b.length && a[index] === b[index]) index += 1;
+  return index;
 }
 
-function hasShanghaiZhangjiajieIntent(query: string): boolean {
-  const normalizedQuery = normText(query);
-  return (
-    includesAnySignal(normalizedQuery, SHANGHAI_SIGNALS) &&
-    queryMentionsZhangjiajie(normalizedQuery)
+function editDistance(a: string, b: string): number {
+  const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    let diagonal = previous[0];
+    previous[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const above = previous[j];
+      previous[j] = Math.min(previous[j] + 1, previous[j - 1] + 1, diagonal + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diagonal = above;
+    }
+  }
+  return previous[b.length];
+}
+
+/** The catalog words a customer word is plainly a spelling of (nearest first). */
+function catalogSpellingsOf(word: string, vocabulary: CatalogVocabulary): VocabularyEntry[] {
+  const phonetic = phoneticLatinText(word).replace(/\s+/g, "");
+  if (word.length < 5 || /\d/.test(word) || vocabulary.known.has(word) || vocabulary.knownPhonetic.has(phonetic)) {
+    return [];
+  }
+  // A known word with a case ending, or cut short: leave it to the matcher.
+  if (vocabulary.entries.some((entry) => entry.word.startsWith(word) || word.startsWith(entry.word))) return [];
+  // Same script, same first six letters. Five was tried: two different real
+  // places share their first five letters, and one got the other's trips.
+  const samePrefix = vocabulary.entries.filter(
+    (entry) => entry.word.length >= 6 && commonPrefixLength(word, entry.word) >= 6,
   );
-}
-
-function tripTextForVariantSignals(trip: TravelTrip): string {
-  return normText([
-    trip.route_name,
-    trip.source_description || "",
-    ...getAliases(trip),
-  ].join(" "));
-}
-
-function tripMatchesShanghaiZhangjiajieVariant(trip: TravelTrip): boolean {
-  const tripText = tripTextForVariantSignals(trip);
-  return (
-    includesAnySignal(tripText, SHANGHAI_SIGNALS) &&
-    includesAnySignal(tripText, ZHANGJIAJIE_TENGER_SIGNALS)
+  if (samePrefix.length > 0) return samePrefix.slice(0, 3);
+  // One letter off ("кардэн" for "кардан"), same first four letters.
+  const oneOff = vocabulary.entries.filter(
+    (entry) =>
+      word.length >= 6 &&
+      entry.word.length >= 6 &&
+      commonPrefixLength(word, entry.word) >= 4 &&
+      editDistance(word, entry.word) <= 1,
   );
+  if (oneOff.length > 0 && oneOff.length <= 3) return oneOff;
+  // Looser guesses (vowel-blind "outlines", two-letter edits) were tried on all
+  // 419 real customer messages and turned everyday words into places
+  // ("мэндээ", "хилээр"). Other spellings of a place belong in that trip's
+  // aliases in the admin — data, not code.
+  return [];
 }
 
-function shanghaiZhangjiajieIntentScore(query: string, trip: TravelTrip): number {
-  if (!hasShanghaiZhangjiajieIntent(query)) return 0;
+/**
+ * Customers rarely spell a place the way the catalog does (one real place was
+ * typed five different ways in a week). Each word the catalog does not contain
+ * is joined by the catalog word(s) it is a spelling of. Driven by the live
+ * trip names, so a renamed or new trip needs no code change — no place name
+ * may ever be written into this file.
+ */
+function snapMisspelledWords(
+  words: string[],
+  phoneticWords: string[],
+  vocabulary: CatalogVocabulary,
+): { words: string[]; phoneticWords: string[] } {
+  const snapped = words.flatMap((word) => catalogSpellingsOf(word, vocabulary));
+  if (snapped.length === 0) return { words, phoneticWords };
+  return {
+    words: unique([...words, ...snapped.map((entry) => entry.word)]),
+    phoneticWords: unique([...phoneticWords, ...snapped.map((entry) => entry.phonetic)]),
+  };
+}
 
-  const tripText = tripTextForVariantSignals(trip);
-  if (includesAnySignal(tripText, SHANGHAI_SIGNALS)) return 220;
-  if (includesAnySignal(tripText, ZHANGJIAJIE_TENGER_SIGNALS)) return -160;
-  return 0;
+/** One word covers another: the same word, or one with a case ending ("<хот>тай"). */
+function sameWordStem(a: string, b: string): boolean {
+  return a.length >= 4 && b.length >= 4 && (a.startsWith(b) || b.startsWith(a));
+}
+
+/**
+ * Catalog words the customer named: the same word, the same word romanised
+ * ("<city>" for a Cyrillic name), or with a case ending.
+ */
+function queryPlaceWords(queryWords: string[], vocabulary: CatalogVocabulary): string[] {
+  return unique(
+    queryWords.flatMap((word) => {
+      if (vocabulary.known.has(word)) return [word];
+      const phonetic = phoneticLatinText(word).replace(/\s+/g, "");
+      const romanised = vocabulary.entries.filter((entry) => entry.phonetic === phonetic);
+      if (romanised.length > 0) return romanised.map((entry) => entry.word);
+      return vocabulary.entries
+        .filter((entry) => word.length > entry.word.length && sameWordStem(word, entry.word))
+        .map((entry) => entry.word);
+    }),
+  ).filter((word) => word.length >= 4);
+}
+
+/**
+ * Does the trip's NAME or aliases mention every one of these words? Never the
+ * description: it names every stop on the way and made a pasted poster of one
+ * trip resolve to a sibling whose description happened to list the same stops.
+ */
+function tripMentionsAllPlaces(trip: TravelTrip, places: string[]): boolean {
+  const tokens = getTripNameHaystack(trip).split(/\s+/);
+  return places.every((place) => tokens.some((token) => sameWordStem(token, place)));
+}
+
+/**
+ * The customer named two or more places ("<хот> <хот> аялал"): the trip that
+ * covers all of them is what they mean, over trips covering only one.
+ */
+function multiPlaceScore(places: string[], trip: TravelTrip): number {
+  if (places.length < 2) return 0;
+  return tripMentionsAllPlaces(trip, places) ? 220 : 0;
 }
 
 /**
@@ -1032,8 +1112,13 @@ function splitGluedWords(words: string[], trips: TravelTrip[]): string[] {
 export function findTripMatches(text: string, trips: TravelTrip[], options?: TripMatchOptions): TripMatch[] {
   const query = normText(text);
   const queryPhonetic = phoneticLatinText(text);
-  const queryWords = splitGluedWords(unique(keywordTokens(text)), trips);
-  const queryPhoneticWords = unique(phoneticKeywordTokens(text));
+  const vocabulary = catalogVocabulary(trips);
+  const { words: queryWords, phoneticWords: queryPhoneticWords } = snapMisspelledWords(
+    splitGluedWords(unique(keywordTokens(text)), trips),
+    unique(phoneticKeywordTokens(text)),
+    vocabulary,
+  );
+  const places = queryPlaceWords(queryWords, vocabulary);
   if (!queryWords.length && !queryPhoneticWords.length) return [];
   const landOnly = queryWantsLandOnlyEnhanced(text);
   const wantsCombo = queryWantsLandFlightCombo(text);
@@ -1058,19 +1143,19 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
     if (!routeKeywords.length && !routePhoneticKeywords.length) continue;
 
     // Check aliases — full string OR token-level overlap.
-    // This means an alias like "Жанжиажэ" (stored in DB) will match
-    // a query containing "жанжиажэ" even without hardcoded replacements.
+    // This means an alias like "<хот>" (stored in DB) will match
+    // a query containing "<хот>" even without hardcoded replacements.
     //
-    // Bug (found 2026-07-17 replaying real traffic): "Beejin jinin janjakow
-    // ereen 4 hotiin aylal" — naming the 4-city Beijing/Jining/Zhangjiakou/
-    // Erlian trip by 4 of its own route-name words — matched the UNRELATED
-    // Erlian-Beijing-Tianjin-Jeju CRUISE instead, because the cruise's alias
-    // "Эрээн Бээжин Тяньжин Чежү Пусан круз" loosely shares 2 destination
-    // tokens (Эрээн, Бээжин — both common waypoints on many China routes) and
+    // Bug (found 2026-07-17 replaying real traffic): "<city> <city> <city>
+    // <city> 4 hotiin aylal" — naming the 4-city <city>/<city>/<city>/
+    // <city> trip by 4 of its own route-name words — matched the UNRELATED
+    // <city>-<city>-<city>-<city> CRUISE instead, because the cruise's alias
+    // "<хот> <хот> <хот> <хот> <хот> круз" loosely shares 2 destination
+    // tokens (<хот>, <хот> — both common waypoints on many China routes) and
     // a full alias hit was worth a flat 80, drowning out the 4-city trip's 4
     // real matched route-name words (80 vs 4*20=80, plus the cruise's own
     // partial route match tipped it over). A full/exact alias string match is
-    // a strong, deliberate signal (e.g. "Жанжиажэ" naming a whole trip) and
+    // a strong, deliberate signal (e.g. "<хот>" naming a whole trip) and
     // keeps its full weight; a LOOSE token-overlap hit on a long multi-word
     // alias is only as strong as the fraction of that alias it covers, so 2
     // of 6 words no longer outweighs a direct 4-word route-name match.
@@ -1160,7 +1245,7 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
       discountBoost +
       intentBoost +
       dateBoost +
-      shanghaiZhangjiajieIntentScore(text, trip) +
+      multiPlaceScore(places, trip) +
       durationVariantScore(text, trip) +
       examFeeIntentScore(text, trip) -
       queryTripTokenCoveragePenalty(queryWords, trip);
@@ -1186,8 +1271,8 @@ const MAX_ROUTE_CANDIDATES = 8;
 
 /**
  * When the customer's words don't single out one trip, offer every trip that
- * shares the best match's strong destination word (all six Shanghai trips), not
- * an arbitrary top 3. A real customer asking about Shanghai saw 3 of 6 and the
+ * shares the best match's strong destination word (all six <city> trips), not
+ * an arbitrary top 3. A real customer asking about <city> saw 3 of 6 and the
  * client reported the rest as missing. Falls back to the top 3 when the best
  * match has no strong word to share.
  */
@@ -1195,9 +1280,9 @@ function candidatesForSameDestination(matches: TripMatch[]): TravelTrip[] {
   const best = matches[0];
   const strong = best.matchedWords.filter((word) => word.length >= 4);
   if (strong.length === 0) return matches.slice(0, 3).map((match) => match.trip);
-  // Must share at least half of the best match's strong words, so "Beijing +
-  // Jining + Zhangjiakou + Erlian" does not also pull in every trip that merely
-  // contains "Jining", while a bare "Shanghai" still lists every Shanghai trip.
+  // Must share at least half of the best match's strong words, so "<city> +
+  // <city> + <city> + <city>" does not also pull in every trip that merely
+  // contains "<city>", while a bare "<city>" still lists every <city> trip.
   const needed = Math.ceil(strong.length / 2);
   return matches
     .filter((match) => match.matchedWords.filter((word) => strong.includes(word)).length >= needed)
@@ -1238,8 +1323,8 @@ export function resolveTripFromUserMessage(
     hasDisambiguatingModifier(text);
   // Strongest possible signal: the customer typed one tour's COMPLETE name.
   // Checked before the ambiguity test below, because sibling tours are often
-  // supersets of each other's names ("Жинин-Мини аватар-Хөх хотын аялал" is a
-  // prefix of "…-Хөх хот - Ордос хотын аялал"), so name-word coverage alone
+  // supersets of each other's names ("<хот>-<хот>-<хот> аялал" is a
+  // prefix of "…-<хот> - <хот> хотын аялал"), so name-word coverage alone
   // would call a fully-typed name ambiguous and ask a pointless question.
   const normalizedQuery = normText(text);
   const fullNameMentions = matches.filter((match) => {
@@ -1250,7 +1335,7 @@ export function resolveTripFromUserMessage(
     return { status: "verified", trip: fullNameMentions[0].trip, candidates: [] };
   }
   // Nearly the full name, in order ("<A> хаалга газар нислэг хослосон аялал???"
-  // — a case ending and a typo away from "<A> хаалганы газар нислэг хосолсон
+  // — a case ending and a typo away from "<A> <хот> газар нислэг хосолсон
   // аялал"). A sibling that merely contains the same words in another order
   // ("<B>- <C> (<A> хаалга / <D>) газар нислэг хосолсон аялал") must not win on
   // score, as it did for a real customer on 2026-09-22.
@@ -1259,16 +1344,22 @@ export function resolveTripFromUserMessage(
     return { status: "verified", trip: inOrderMentions[0].trip, candidates: [] };
   }
 
-  const shanghaiZhangjiajieMentions = hasShanghaiZhangjiajieIntent(text)
-    ? matches.filter((match) => tripMatchesShanghaiZhangjiajieVariant(match.trip))
+  // Several places named, and exactly one trip covers all of them.
+  const vocabulary = catalogVocabulary(trips);
+  const places = queryPlaceWords(
+    snapMisspelledWords(unique(keywordTokens(text)), [], vocabulary).words,
+    vocabulary,
+  );
+  const allPlaceMentions = places.length >= 2
+    ? matches.filter((match) => tripMentionsAllPlaces(match.trip, places))
     : [];
-  if (shanghaiZhangjiajieMentions.length === 1) {
-    return { status: "verified", trip: shanghaiZhangjiajieMentions[0].trip, candidates: [] };
+  if (allPlaceMentions.length === 1) {
+    return { status: "verified", trip: allPlaceMentions[0].trip, candidates: [] };
   }
 
   // Trips the customer's words do not rule out: every route word they typed
   // appears in the trip's own name. When several qualify, their message simply
-  // does not say which tour they mean — "Тэнгэрийн хаалга" is the name of three
+  // does not say which tour they mean — "<хот>" is the name of three
   // different ones — so the top score is not evidence of intent. Committing to
   // it ships a wrong price, programme AND poster at full confidence, which is
   // how a customer ends up holding a poster for the tour they did not ask
@@ -1287,7 +1378,7 @@ export function resolveTripFromUserMessage(
       status: "ambiguous",
       trip: null,
       // Everything the destination covers, not just the top 3: a customer asking
-      // about "Shanghai" must be able to see all six Shanghai trips, and the
+      // about "<city>" must be able to see all six <city> trips, and the
       // numbered buttons / clarification state cover the same set.
       candidates: candidates.slice(0, MAX_ROUTE_CANDIDATES).map((match) => match.trip),
     };
@@ -1320,9 +1411,9 @@ export function resolveTripFromUserMessage(
 
   // Every candidate scored negative: the query shares only weak, generic signal
   // with these names — typically romanised input that did not transliterate
-  // cleanly ("shanghai" vs "шанхай" → "shanhai"). A negative best score is not
-  // evidence of intent, and guessing on it is how "shanghai tengerin haalga"
-  // returned the standalone Тэнгэрийн хаалга tour instead of the Шанхай one.
+  // cleanly ("<city>" vs "<хот>" → "<city>"). A negative best score is not
+  // evidence of intent, and guessing on it is how "<city> <city> <city>"
+  // returned the standalone <хот> tour instead of the <хот> one.
   if (best.score <= 0 && matches.length > 1) {
     return {
       status: "ambiguous",
@@ -1560,7 +1651,7 @@ function tripIdentityText(trip: TravelTrip): string {
  * name — i.e. nothing in their message rules this trip out.
  *
  * Checked against the Cyrillic name AND its phonetic Latin form, because real
- * customers type romanised Mongolian ("shanghai tengerin haalga"). Comparing
+ * customers type romanised Mongolian ("<city> <city> <city>"). Comparing
  * Latin input to a Cyrillic-only name matches nothing, which would make an
  * ambiguous query look specific and send one tour's price and poster.
  */
@@ -1574,9 +1665,9 @@ function tripNameCoversQuery(trip: TravelTrip, tokens: string[]): boolean {
     const latinToken = phoneticLatinText(token);
     if (!latinToken) return false;
     if (identityLatin.includes(latinToken)) return true;
-    // Case endings: "haalganii" (Хаалганы) must cover a name that spells it
+    // Case endings: "<city>" (<хот>) must cover a name that spells it
     // "хаалга". Substring matching only accepted the one trip whose name happens
-    // to use the same ending, so three "Тэнгэрийн хаалга" trips looked like one
+    // to use the same ending, so three "<хот>" trips looked like one
     // unique match and a price + poster were sent for a guess.
     return identityLatinTokens.some((identityToken) => phoneticTokenMatches(latinToken, identityToken));
   });
@@ -1637,7 +1728,7 @@ function routeContentTokens(query: string): string[] {
     "uu",
     "baina",
     "yu",
-    // Cyrillic counterparts of the Latin filler above. Without these, "Тэнгэрийн
+    // Cyrillic counterparts of the Latin filler above. Without these, "<хот>
     // хаалга үнэ хэд вэ?" keeps "үнэ" as a route token, no trip name contains
     // it, and the ambiguity check below silently concludes the query is
     // specific — the exact path that answered a 3-way ambiguous name with one
@@ -1900,7 +1991,7 @@ export function isStructuredTripQuestion(text: string) {
  * Deliberately strict: every word must be a known request/filler word, and a
  * number disqualifies it (a bare digit answers a clarification, "10 сар" names
  * a date). An unknown word — a city, a trip name — means the customer named
- * something we may simply not offer ("Жэжү"), which staff should see.
+ * something we may simply not offer ("<хот>"), which staff should see.
  */
 export function isGenericTripRequest(text: string): boolean {
   const tokens = normText(text).split(/\s+/).filter(Boolean);

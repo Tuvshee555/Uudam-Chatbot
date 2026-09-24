@@ -76,7 +76,7 @@ export function isFreePriceCell(cellText: string | undefined): boolean {
   return /үнэгүй|free/i.test(cellText || "");
 }
 
-/** "2,340,000₮" / "990.000₮" / "4,180 юань / 2,340,000₮" -> first tugrik-looking number.
+/** "1,111,111₮" / "990.000₮" / "4,180 юань / 1,111,111₮" -> first tugrik-looking number.
  * A cell written as "Үнэгүй" (free) maps to 0 when allowFree is set — only the
  * child/infant columns pass that; the adult column never does, so a stray
  * "Үнэгүй" typed in the wrong cell can never zero out a real adult fare. See

@@ -71,7 +71,7 @@ function compactValue(value: unknown): string {
   return String(value).trim();
 }
 
-/** "11860000.00 MNT" → "11,860,000₮"; non-MNT currencies keep their code. */
+/** "11860000.00 MNT" → "11,1,111,111₮"; non-MNT currencies keep their code. */
 function formatAmount(amount: unknown, currency?: unknown): string {
   const raw = compactValue(amount);
   if (!raw) return "";

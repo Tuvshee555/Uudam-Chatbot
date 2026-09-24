@@ -12,20 +12,20 @@ before(() => applyTestEnv());
 
 describe("tripPhotoImport normalize", () => {
   it("normalizes case and punctuation", () => {
-    assert.equal(normalizeTripName("ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ!"), "шар тэнгис буюу бэйдайхэ");
+    assert.equal(normalizeTripName("СЭРВЭН ТЭНГИС БУЮУ КАРДАН!"), "сэрвэн тэнгис буюу кардан");
   });
 
   it("treats hyphen, em-dash, and minus sign as spaces", () => {
     assert.equal(
-      normalizeTripName("ШАР ТЭНГИС–БЭЙДЭХЭ+БЭЭЖИНГИЙН ГАЗАР"),
-      "шар тэнгис бэйдэхэ бээжингийн газар",
+      normalizeTripName("СЭРВЭН ТЭНГИС–КАРДЭН+ВЭЛМОРГИЙН ГАЗАР"),
+      "сэрвэн тэнгис кардэн вэлморгийн газар",
     );
   });
 
   it("normalizes filenames with sequence markers", () => {
     assert.equal(
-      normalizeFilenameForMatch("01-ШАР ТЭНГИС-БЭЙДЭХЭ.jpg"),
-      "шар тэнгис бэйдэхэ",
+      normalizeFilenameForMatch("01-СЭРВЭН ТЭНГИС-КАРДЭН.jpg"),
+      "сэрвэн тэнгис кардэн",
     );
   });
 

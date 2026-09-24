@@ -9,10 +9,10 @@ import { normalizeExtra, normalizeExtraPatch } from "../src/lib/tripExtraSchema"
 // check once, then regress back to "missing data" on the very next save.
 const GROUP_WITH_FREE_INFANT = {
   label: "Үнэ", dates: [], display_dates: [], date_keys: [],
-  adult_price: 1190000, child_price: 890000, infant_price: 0,
+  adult_price: 1201000, child_price: 901000, infant_price: 0,
   child_age: "", infant_age: "", note: "",
   passenger_prices: [
-    { label: "Хүүхэд", age_range: "2-11 нас", price: 890000, currency: "MNT" },
+    { label: "Хүүхэд", age_range: "2-11 нас", price: 901000, currency: "MNT" },
     { label: "Нярай", age_range: "", price: 0, currency: "MNT", note: "Үнэгүй" },
   ],
 };

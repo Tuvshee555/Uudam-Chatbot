@@ -503,7 +503,7 @@ export function extractPhoneNumber(text: string): string {
  * True when the message is essentially JUST a phone number (the customer
  * answering the bot's "утасны дугаараа үлдээгээрэй" ask). Such messages get
  * a deterministic thank-you instead of an AI round-trip; a phone bundled
- * with a real question ("99119911 Бээжин явмаар байна") continues to the AI.
+ * with a real question ("99119911 <хот> явмаар байна") continues to the AI.
  */
 export function isPhoneOnlyMessage(text: string): boolean {
   const compact = text.replace(/[\s\-()+.]/g, "");

@@ -47,7 +47,7 @@ test("generic clarification labels describe the exact outcome", () => {
 test("filename is never offered as an operator choice", () => {
   const questions = buildProposalClarifications(
     proposalWithConflict(
-      'Файлын нэр "Шанхайн аялал" боловч оператор "UUDAM TRAVEL AGENCY" байна.',
+      'Файлын нэр "Лумиан аялал" боловч оператор "UUDAM TRAVEL AGENCY" байна.',
     ),
   );
   assert.equal(questions.length, 0);

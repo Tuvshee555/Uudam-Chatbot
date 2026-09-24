@@ -261,7 +261,7 @@ export function SettingsTab({
                 />
                 <input
                   className="h-9 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-ink transition-colors focus:border-brand"
-                  placeholder="Илгээгдэх мессеж — ж: Хөх хот аяллын үнэ хэд вэ?"
+                  placeholder="Илгээгдэх мессеж — ж: <Аяллын нэр> аяллын үнэ хэд вэ?"
                   value={btn.message}
                   maxLength={200}
                   onChange={(e) => {
@@ -459,7 +459,7 @@ export function SettingsTab({
 type TestChatMsg = { from: "user" | "bot"; text: string };
 
 const TEST_SUGGESTIONS = [
-  "Хөх хот аяллын үнэ хэд вэ?",
+  "<Аяллын нэр> аяллын үнэ хэд вэ?",
   "Ирэх сард ямар аяллууд байгаа вэ?",
   "Суудал хэд үлдсэн бэ?",
   "Хоол багтдаг уу?",

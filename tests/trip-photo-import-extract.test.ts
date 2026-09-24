@@ -16,9 +16,9 @@ describe("tripPhotoImport extract", () => {
   it("splits trip-named folders inside a ZIP into separate import items", async () => {
     const { buildImportItemsFromRawFiles } = await loadExtractors();
     const zip = new JSZip();
-    zip.file("Summer trips/Beidaihe ground/1.jpg", "a");
-    zip.file("Summer trips/Beidaihe ground/2.jpg", "b");
-    zip.file("Summer trips/Beidaihe flight/1.jpg", "c");
+    zip.file("Summer trips/Kardan ground/1.jpg", "a");
+    zip.file("Summer trips/Kardan ground/2.jpg", "b");
+    zip.file("Summer trips/Kardan flight/1.jpg", "c");
 
     const result = await buildImportItemsFromRawFiles([{
       fieldName: "files",
@@ -29,7 +29,7 @@ describe("tripPhotoImport extract", () => {
 
     assert.deepEqual(
       result.items.map((item) => [item.name, item.imageCount]),
-      [["Beidaihe flight", 1], ["Beidaihe ground", 2]],
+      [["Kardan flight", 1], ["Kardan ground", 2]],
     );
   });
 

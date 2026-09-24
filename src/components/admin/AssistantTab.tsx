@@ -157,12 +157,12 @@ export function AssistantTab({
               <button
                 type="button"
                 onClick={() => {
-                  setAiInput("Бангкок аяллын үнийг 4.5 сая болго");
+                  setAiInput("[Аяллын нэр] аяллын үнийг 4.5 сая болго");
                   inputRef.current?.focus();
                 }}
                 className="rounded text-brand underline decoration-brand/30 underline-offset-2 hover:decoration-brand"
               >
-                «Бангкок аяллын үнийг 4.5 сая болго»
+                «[Аяллын нэр] аяллын үнийг 4.5 сая болго»
               </button>
             </p>
             <button
@@ -851,7 +851,7 @@ function ChatBubble({
                             <input
                               value={getField(index, "route_name", f.route_name)}
                               onChange={(e) => setField(index, "route_name", e.target.value)}
-                              placeholder="ж: Бээжин аялал"
+                              placeholder="ж: <аяллын нэр>"
                               className={inputCls}
                             />
                           </div>

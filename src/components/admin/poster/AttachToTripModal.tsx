@@ -46,7 +46,7 @@ function formatFieldValue(key: string, value: FieldValue): string {
 }
 
 // Cosmetic normalization: posters write titles in ALL CAPS with en-dashes and
-// "8 өдөр / 7 шөнө" style separators. "БЭЭЖИН – ЖИНИН" vs "Бээжин - Жинин" is
+// "8 өдөр / 7 шөнө" style separators. "<хот> – <хот>" vs "<хот> - <хот>" is
 // NOT a real difference — proposing it as a pre-checked change would downgrade
 // a nicely-cased trip name to shouting caps on one click.
 function cosmetic(value: unknown): string {

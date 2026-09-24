@@ -23,13 +23,13 @@ before(async () => {
 
 test("buildTripIndexLines formats trips compactly and skips empty names", () => {
   const lines = buildTripIndexLines([
-    { route_name: "Бээжин шууд нислэгтэй аялал", category: "Шууд нислэгтэй", duration_text: "5 өдөр / 4 шөнө" },
+    { route_name: "Вэлмор шууд нислэгтэй аялал", category: "Шууд нислэгтэй", duration_text: "5 өдөр / 4 шөнө" },
     { route_name: "", category: "Газрын" },
-    { route_name: "Хайнан Саньяа аялал" },
+    { route_name: "Мирвэн Нарвэл аялал" },
   ]);
   assert.equal(lines.length, 2);
-  assert.equal(lines[0], "- Бээжин шууд нислэгтэй аялал (Шууд нислэгтэй, 5 өдөр / 4 шөнө)");
-  assert.equal(lines[1], "- Хайнан Саньяа аялал");
+  assert.equal(lines[0], "- Вэлмор шууд нислэгтэй аялал (Шууд нислэгтэй, 5 өдөр / 4 шөнө)");
+  assert.equal(lines[1], "- Мирвэн Нарвэл аялал");
 });
 
 test("buildTripIndexLines caps the index so a huge catalog can't bloat the prompt", () => {
@@ -39,18 +39,18 @@ test("buildTripIndexLines caps the index so a huge catalog can't bloat the promp
 
 test("buildReasoningPrompt includes memory, history, trips, and the labeled output contract", () => {
   const prompt = buildReasoningPrompt({
-    customerMemory: "Trips/products discussed:\n- Хайнан Саньяа аялал (2026-07-02)",
+    customerMemory: "Trips/products discussed:\n- Мирвэн Нарвэл аялал (2026-07-02)",
     history: [
-      { role: "user", text: "Хайнан аялал ямар үнэтэй вэ?" },
+      { role: "user", text: "Мирвэн аялал ямар үнэтэй вэ?" },
       { role: "assistant", text: "Том хүн 1,430,000₮." },
     ],
     userText: "Тэрийг маргааш захиалъя",
-    tripIndexLines: ["- Хайнан Саньяа аялал"],
+    tripIndexLines: ["- Мирвэн Нарвэл аялал"],
   });
   assert.match(prompt, /Persistent customer memory:/);
-  assert.match(prompt, /Хайнан Саньяа аялал \(2026-07-02\)/);
+  assert.match(prompt, /Мирвэн Нарвэл аялал \(2026-07-02\)/);
   assert.match(prompt, /Recent conversation:/);
-  assert.match(prompt, /User: Хайнан аялал ямар үнэтэй вэ\?/);
+  assert.match(prompt, /User: Мирвэн аялал ямар үнэтэй вэ\?/);
   assert.match(prompt, /Current message: Тэрийг маргааш захиалъя/);
   assert.match(prompt, /Known trips \(names only/);
   assert.match(prompt, /Intent: \.\.\./);
@@ -92,7 +92,7 @@ test("pre-answer reasoning runs only for messages that depend on prior context",
   assert.equal(shouldAnalyzeBeforeReply("өчигдөр ярьсан аялал"), true);
   assert.equal(shouldAnalyzeBeforeReply("Сайн байна уу"), false);
   assert.equal(shouldAnalyzeBeforeReply("Виз хэрэгтэй юу?"), false);
-  assert.equal(shouldAnalyzeBeforeReply("Хайнан Саньяа 7 настай хүүхэд хэд вэ?"), false);
+  assert.equal(shouldAnalyzeBeforeReply("Мирвэн Нарвэл 7 настай хүүхэд хэд вэ?"), false);
 });
 
 test("buildPrompt injects the private analysis block and the follow-it rule when reasoning is provided", () => {
@@ -101,11 +101,11 @@ test("buildPrompt injects the private analysis block and the follow-it rule when
     business: { name: "Uudam", knowledgeBase: "trips..." },
     history: [{ role: "user", text: "Сайн уу" }],
     customerMemory: "Preferences: далайн амралт",
-    reasoning: "Intent: book the Hainan trip discussed earlier.\nRefers to: Хайнан Саньяа аялал",
+    reasoning: "Intent: book the Mirven trip discussed earlier.\nRefers to: Мирвэн Нарвэл аялал",
     userText: "Тэрийг захиалъя",
   });
   assert.match(prompt, /Private pre-answer analysis \(never show to customer\):/);
-  assert.match(prompt, /Refers to: Хайнан Саньяа аялал/);
+  assert.match(prompt, /Refers to: Мирвэн Нарвэл аялал/);
   assert.match(prompt, /NEVER reveal, quote, or mention the analysis itself/);
   assert.match(prompt, /If the analysis conflicts with the trip data in Context, trust the Context/);
   // Memory block still present alongside it.

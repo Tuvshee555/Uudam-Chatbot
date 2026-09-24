@@ -562,7 +562,7 @@ async function handleMessage(
 
   // ── Bare thank-you ─────────────────────────────────────────────────────────
   // "Баярлалаа" asks nothing. It used to borrow the previous turns' trips and
-  // come back as a list of Hainan trips. Answer it deterministically (also keeps
+  // come back as a list of <city> trips. Answer it deterministically (also keeps
   // working when the model is down). Anything beyond thanks goes on as usual.
   if (isThanksOnly(text)) {
     await appendMessage(senderId, "user", text).catch(() => {});
@@ -907,7 +907,7 @@ async function handleMessage(
   const { systemPrompt: fileSystemPrompt, business: rawBusiness, pinnedButtonLabels } = await readBusinessData();
 
   // Narrow knowledgeBase to the best-matching trip when user clearly names one.
-  // This prevents the AI from confusing two trips that share keywords (e.g. two "Бээжин" trips).
+  // This prevents the AI from confusing two trips that share keywords (e.g. two "<хот>" trips).
   const business = (() => {
     if (!rawBusiness?.knowledgeBase || typeof rawBusiness.knowledgeBase !== "string") return rawBusiness;
     const norm = (s: string) => s.toLowerCase().replace(/[^\wа-яөүё\s]/gi, " ");
@@ -1183,7 +1183,7 @@ async function handleMessage(
       return;
     }
   }
-  // Broad structured questions ("Бээжин аялал хэд вэ?") should clarify from
+  // Broad structured questions ("<хот> аялал хэд вэ?") should clarify from
   // the DB when several active trips match. Do not send these to the model and
   // risk a silent REFER.
   {
@@ -1349,7 +1349,7 @@ async function handleMessage(
       return;
     }
   }
-  // Fast path: standalone price lookup ("1,430,000 гэсэн аялал аль вэ?").
+  // Fast path: standalone price lookup ("1,111,111 гэсэн аялал аль вэ?").
   // Deterministic on purpose: a customer quoting a price and asking which
   // trip it is must never get a DIFFERENT trip's price stated back as if it
   // matched. When no trip's price matches, hand off rather than let the

@@ -96,13 +96,13 @@ test("a trip departing only in winter months goes to the winter category", () =>
 });
 
 test("a trip with summer dates is never forced into winter", () => {
-  const t = trip({ route_name: "Токио аялал", departure_dates: ["7 сарын 6"] });
+  const t = trip({ route_name: "Сурмак аялал", departure_dates: ["7 сарын 6"] });
   const result = ruleBasedGuess(t, CATEGORIES);
   assert.notEqual(result?.id, "winter");
 });
 
 test("a cruise ship trip is recognised from its own title text", () => {
-  const t = trip({ route_name: "Дрийм усан онгоцны 10шөнө 11өдөр" });
+  const t = trip({ route_name: "Вэйдар усан онгоцны 10шөнө 11өдөр" });
   const result = ruleBasedGuess(t, CATEGORIES);
   assert.equal(result?.id, "cruise");
 });
@@ -116,12 +116,12 @@ test("winter takes priority over a cruise name when both signals are present", (
 });
 
 test("an ordinary land trip with no special signal is left for the model, not forced", () => {
-  const t = trip({ route_name: "ЖИНИН – ХӨХ ХОТ - ОРДОС", departure_dates: ["7 сарын 6"] });
+  const t = trip({ route_name: "СЭЛВИН – САРГОЛ ХОТ - ДАРКАН", departure_dates: ["7 сарын 6"] });
   const result = ruleBasedGuess(t, CATEGORIES);
   assert.equal(result, null);
 });
 
 test("when no categories exist at all, the rule-based guess never crashes", () => {
-  const t = trip({ route_name: "Дрийм усан онгоцны аялал" });
+  const t = trip({ route_name: "Вэйдар усан онгоцны аялал" });
   assert.equal(ruleBasedGuess(t, []), null);
 });

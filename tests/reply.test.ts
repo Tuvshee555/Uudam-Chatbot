@@ -5,7 +5,7 @@ import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, extractB
 test("enforcePaymentNeverSelfConfirmed replaces a fabricated booking confirmation", () => {
   const userText = "би 1,430,000 төлсөн, баталгаажуул";
   const reply =
-    "Таны 1,430,000₮-ийн төлбөрийг хүлээн авлаа. Одоо бид таны Тэнгэрийн хаалга - шууд нислэгтэй аяллыг баталгаажуулж байна.";
+    "Таны 1,430,000₮-ийн төлбөрийг хүлээн авлаа. Одоо бид таны Зэтгорийн хаалга - шууд нислэгтэй аяллыг баталгаажуулж байна.";
   const safe = enforcePaymentNeverSelfConfirmed(userText, reply);
   assert.doesNotMatch(safe, /баталгаажуулж байна/);
   assert.match(safe, /аяллын зөвлөх/);
@@ -27,14 +27,14 @@ test("enforcePaymentNeverSelfConfirmed blocks confirmation after a claimed scree
 });
 
 test("enforcePaymentNeverSelfConfirmed leaves unrelated replies untouched", () => {
-  const reply = "✈️ Хайнан - Саньяа шууд нислэгтэй аялал\n💰 Том хүн: 1,430,000₮";
-  const safe = enforcePaymentNeverSelfConfirmed("Хайнан Саньяа хэд вэ?", reply);
+  const reply = "✈️ Мирвэн - Нарвэл шууд нислэгтэй аялал\n💰 Том хүн: 1,430,000₮";
+  const safe = enforcePaymentNeverSelfConfirmed("Мирвэн Нарвэл хэд вэ?", reply);
   assert.equal(safe, reply);
 });
 
 test("enforcePaymentNeverSelfConfirmed leaves normal trip replies untouched even if they mention баталгаажуулах in another sense", () => {
   const reply = "Захиалгаа баталгаажуулах бол нэр, утасны дугаараа үлдээгээрэй.";
-  const safe = enforcePaymentNeverSelfConfirmed("Бээжин аялал хэд вэ?", reply);
+  const safe = enforcePaymentNeverSelfConfirmed("Вэлмор аялал хэд вэ?", reply);
   assert.equal(safe, reply);
 });
 
@@ -56,7 +56,7 @@ test("hasPaymentClaimIntent does not fire on an unrelated document/visa question
   // claims confirmation, but hasPaymentClaimIntent gates fast-path routing
   // directly, so it must not treat a document question as a payment claim.
   assert.equal(hasPaymentClaimIntent("Виз бүрдүүлэх бичиг баримт хэрэгтэй юу?"), false);
-  assert.equal(hasPaymentClaimIntent("Бээжин аялал хэд вэ?"), false);
+  assert.equal(hasPaymentClaimIntent("Вэлмор аялал хэд вэ?"), false);
 });
 
 test("hasPaymentClaimIntent handles the completive -чих- forms customers actually type", () => {
@@ -104,21 +104,21 @@ test("rewrites repeated generic clarifier after recent trip details", () => {
   const rewritten = rewriteRepeatedGenericClarifier({
     userText: "Mun bna kkk",
     replyText:
-      "Сайн байна уу? 😊 Таны аяллын талаар мэдээлэл авахад бэлэн байна. Ямар аялалд сонирхож байна вэ? Жишээлбэл, Бээжин, Шанхай, Хайнан гэх мэт. Тодорхой мэдээлэл өгвөл илүү сайн туслах боломжтой. ✈️",
+      "Сайн байна уу? 😊 Таны аяллын талаар мэдээлэл авахад бэлэн байна. Ямар аялалд сонирхож байна вэ? Жишээлбэл, Вэлмор, Лумиа, Мирвэн гэх мэт. Тодорхой мэдээлэл өгвөл илүү сайн туслах боломжтой. ✈️",
     recentAssistantReplies: [
-      "✈️ Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал — 9 өдөр / 8 шөнө\n💰 Том хүн: 1,120,000₮ | Хүүхэд: 850,000₮",
-      "Сайн байна уу? 😊 Таны аяллын талаар мэдээлэл авахад бэлэн байна. Ямар аялалд сонирхож байна вэ? Жишээлбэл, Бээжин, Шанхай, Хайнан гэх мэт. Тодорхой мэдээлэл өгвөл илүү сайн туслах боломжтой. ✈️",
+      "✈️ Сэрвэн тэнгис буюу Кардан-Вэлморгийн газрын аялал — 9 өдөр / 8 шөнө\n💰 Том хүн: 1,120,000₮ | Хүүхэд: 861,000₮",
+      "Сайн байна уу? 😊 Таны аяллын талаар мэдээлэл авахад бэлэн байна. Ямар аялалд сонирхож байна вэ? Жишээлбэл, Вэлмор, Лумиа, Мирвэн гэх мэт. Тодорхой мэдээлэл өгвөл илүү сайн туслах боломжтой. ✈️",
     ],
   });
 
   assert.match(rewritten, /Дээрх аяллын талаар/);
-  assert.doesNotMatch(rewritten, /Жишээлбэл, Бээжин, Шанхай, Хайнан/);
+  assert.doesNotMatch(rewritten, /Жишээлбэл, Вэлмор, Лумиа, Мирвэн/);
 });
 
 test("leaves normal non-generic replies unchanged", () => {
-  const reply = "✈️ Хайнан - Саньяа шууд нислэгтэй аялал\n💰 Том хүн: 1,430,000₮";
+  const reply = "✈️ Мирвэн - Нарвэл шууд нислэгтэй аялал\n💰 Том хүн: 1,430,000₮";
   const rewritten = rewriteRepeatedGenericClarifier({
-    userText: "Хайнан Саньяа хэд вэ?",
+    userText: "Мирвэн Нарвэл хэд вэ?",
     replyText: reply,
     recentAssistantReplies: [],
   });
@@ -127,10 +127,10 @@ test("leaves normal non-generic replies unchanged", () => {
 });
 
 test("strips repeated greeting after the first assistant turn", () => {
-  const reply = "Сайн байна уу!\n\n✈️ Бээжин аялал\n💰 Том хүн: 1,210,000₮";
+  const reply = "Сайн байна уу!\n\n✈️ Вэлмор аялал\n💰 Том хүн: 1,210,000₮";
   const stripped = stripRepeatedGreeting(reply, true);
 
-  assert.equal(stripped, "✈️ Бээжин аялал\n💰 Том хүн: 1,210,000₮");
+  assert.equal(stripped, "✈️ Вэлмор аялал\n💰 Том хүн: 1,210,000₮");
 });
 
 test("isReferReply catches REFER and legacy SILENT, ignores normal replies", () => {
@@ -138,7 +138,7 @@ test("isReferReply catches REFER and legacy SILENT, ignores normal replies", () 
   assert.equal(isReferReply("refer\nBUTTONS:"), true);
   assert.equal(isReferReply("SILENT"), true);
   assert.equal(isReferReply("  SILENT  "), true);
-  assert.equal(isReferReply("✈️ Бээжин аялал — 5 хоног"), false);
+  assert.equal(isReferReply("✈️ Вэлмор аялал — 5 хоног"), false);
   assert.equal(isReferReply("Танд REFER гэдэг үг хэрэгтэй юу?"), false);
 });
 
@@ -176,7 +176,7 @@ test("shouldSilenceNoDataReply never suppresses a real answer that merely lacks 
   // are not missing data; even if a stale build still emits the footnote,
   // the reply must go out.
   const fullProgramAnswer = [
-    "✈️ БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+    "✈️ ВЭЛМОР - СЭЛВИН – ПЭЛМАК - ОРМАК – 4 ХОТЫН АЯЛАЛ",
     "",
     "⏱ 8 өдөр 7 шөнө",
     "💰 Насанд хүрэгч: 1,170,000₮ | Хүүхэд: 1,130,000₮",
@@ -191,7 +191,7 @@ test("shouldSilenceNoDataReply catches deterministic fast-path no-data replies",
   const budgetMiss =
     "Одоогоор 3,000,000 MNT-аас доош шууд нислэгтэй аялал тодорхой олдсонгүй. Аяллын зөвлөхөөр ойролцоо хувилбар шалгуулъя.";
   const directMiss =
-    "Тэр чиглэлд яг шууд нислэгтэй аялал одоогоор тодорхой олдсонгүй.\nОйролцоо байгаа хувилбарууд:\n• Бээжин газрын аялал";
+    "Тэр чиглэлд яг шууд нислэгтэй аялал одоогоор тодорхой олдсонгүй.\nОйролцоо байгаа хувилбарууд:\n• Вэлмор газрын аялал";
   const pastDateMiss =
     "6 сарын 27-д тохирох үнийн мэдээлэл олдсонгүй. Аяллын зөвлөхтэй холбогдоорой.";
 

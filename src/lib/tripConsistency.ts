@@ -5,7 +5,7 @@
  * (see pickFastPathMatchText). This guard covers the ONE remaining opening: a
  * question falls through to the LLM, the customer clearly asked about trip A,
  * and the model answers — confidently, well-formatted — with a DIFFERENT
- * destination's price. That is the "asked Далянь, got Бээжин's price" class.
+ * destination's price. That is the "asked <хот>, got <хот>'s price" class.
  *
  * Deliberately high-precision, not high-recall. It fires only when ALL hold:
  *   1. The deterministic matcher resolved the question to specific trip(s)
@@ -18,7 +18,7 @@
  *   3. The reply confidently prices some OTHER catalog destination.
  *
  * Because (2) keys off the relevant trips' own destination tokens, a
- * same-destination variant ("Бээжин шууд" asked, "Бээжин галт тэрэг" answered)
+ * same-destination variant ("<хот> шууд" asked, "<хот> галт тэрэг" answered)
  * can never trip it — only a genuinely different place does. Nothing here is
  * hardcoded to a trip name; everything is derived from the live catalog.
  */
@@ -73,7 +73,7 @@ function normalize(text: string): string {
 
 /**
  * The place-naming tokens of a route: significant words (>= 4 chars) that are
- * not generic travel vocabulary. "Хайнан Саньяа аялал" -> ["хайнан","саньяа"].
+ * not generic travel vocabulary. "<хот> <хот> аялал" -> ["<хот>","<хот>"].
  */
 function destinationTokens(routeName: string): string[] {
   return normalize(routeName)
@@ -81,7 +81,7 @@ function destinationTokens(routeName: string): string[] {
     .filter((word) => word.length >= 4 && !GENERIC_ROUTE_WORDS.has(word) && !/^\d+$/.test(word));
 }
 
-// A grouped 6+ digit number (1,890,000 -> 1890000) or an explicit currency word
+// A grouped 6+ digit number (1,111,111 -> 1111111) or an explicit currency word
 // is the "this reply is quoting a price" signal.
 function mentionsPrice(replyText: string): boolean {
   if (/₮|төгрөг/i.test(replyText)) return true;

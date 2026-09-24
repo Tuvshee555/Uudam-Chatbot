@@ -5,11 +5,11 @@ import sharp from "sharp";
  * Drops photo URLs that show the SAME image as one already kept.
  *
  * Two levels, because staff re-export posters in several ways:
- *  1. byte hash  — an identical re-upload (observed on Далянь: 4 attachments,
+ *  1. byte hash  — an identical re-upload (observed on <хот>: 4 attachments,
  *     ~15MB, two MD5-identical pairs).
  *  2. perceptual hash — the same poster re-encoded or re-saved, so the bytes
- *     differ but the picture does not (observed on Хайлаар Чичихар: pages sent
- *     as PNG and again as JPG; and on Шанхай+Ханжоу: the same 2160x5160 page as
+ *     differ but the picture does not (observed on <хот> <хот>: pages sent
+ *     as PNG and again as JPG; and on <хот>+<хот>: the same 2160x5160 page as
  *     a 5.8MB PNG and a 721KB JPEG).
  * A plain `new Set()` on the URL can catch neither: every re-upload gets a fresh
  * Cloudinary public id.

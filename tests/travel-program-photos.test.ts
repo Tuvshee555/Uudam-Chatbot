@@ -8,7 +8,7 @@ function trip(overrides: Partial<TravelTrip>): TravelTrip {
     id: "trip-1",
     category: "direct flight",
     operator_name: "UUDAM TRAVEL AGENCY",
-    route_name: "Chongqing ground flight combo",
+    route_name: "Eldor ground flight combo",
     duration_text: "9 days / 8 nights",
     adult_price: 1270000,
     child_price: 1270000,
@@ -32,24 +32,24 @@ function trip(overrides: Partial<TravelTrip>): TravelTrip {
 
 test("photo requests send stored poster slices even when itinerary data also exists", () => {
   const photos = [
-    "https://example.com/chongqing-1.png",
-    "https://example.com/chongqing-2.png",
-    "https://example.com/chongqing-3.png",
+    "https://example.com/eldor-1.png",
+    "https://example.com/eldor-2.png",
+    "https://example.com/eldor-3.png",
   ];
-  const result = buildTripProgramReply("Chongqing ground flight zurag", [
+  const result = buildTripProgramReply("Eldor ground flight zurag", [
     trip({
       photo_urls: photos,
       extra: {
         itinerary_days: [
-          { day: 1, title: "UB-Chongqing" },
-          { day: 2, title: "Chongqing city" },
+          { day: 1, title: "UB-Eldor" },
+          { day: 2, title: "Eldor city" },
         ],
       },
     }),
   ]);
 
   assert.deepEqual(result?.mediaUrls, photos);
-  assert.match(result?.reply || "", /Chongqing ground flight combo/);
-  assert.doesNotMatch(result?.reply || "", /UB-Chongqing|Chongqing city/);
+  assert.match(result?.reply || "", /Eldor ground flight combo/);
+  assert.doesNotMatch(result?.reply || "", /UB-Eldor|Eldor city/);
   assert.doesNotMatch(result?.reply || "", /1,270,000/);
 });

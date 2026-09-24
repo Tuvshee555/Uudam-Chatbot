@@ -41,29 +41,33 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
   };
 }
 
-const ORDOS = trip({ route_name: "Ордос -намрын тахилга үзэх аялал", duration_text: "8 өдөр 7 шөнө", departure_dates: ["10 сарын 18"] });
-const SHANGHAI_ZHANGJIAJIE = trip({
-  route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал ( Жанжиажэ - Аватар )",
+const DARKAN = trip({ route_name: "Даркан -намрын тахилга үзэх аялал", duration_text: "8 өдөр 7 шөнө", departure_dates: ["10 сарын 18"] });
+// Other spellings of a place live in the trip's aliases (admin-editable data),
+// never in code — the matcher knows no place names of its own.
+const PELDOR_SPELLINGS = { aliases: ["Пэлдо", "Пэлдэр", "Пэлдяр", "Peldor"] };
+const LUMIA_PELDOR = trip({
+  route_name: "Лумиа + Зэтгорийн хаалга шууд нислэгтэй аялал ( Пэлдор - Эмбар )",
   duration_text: "8 өдөр 7 шөнө",
   departure_dates: ["11 сарын 19"],
+  extra: PELDOR_SPELLINGS,
 });
-const CHONGQING_ZHANGJIAJIE = trip({ route_name: "Чунчин- Жанжиажэ (Тэнгэрийн хаалга / Аватар) газар нислэг хосолсон аялал", duration_text: "10 өдөр 9 шөнө", departure_dates: ["10 сарын 8"] });
-const ZHANGJIAJIE_COMBO = trip({ route_name: "ЖАНЖИАЖИЭ ГАЗАР НИСЛЭГ ХОСОЛСОН АЯЛАЛ ( Жанжиажэ - Аватар )", duration_text: "10 өдөр 9 шөнө", departure_dates: ["10 сарын 13"] });
-const ZHANGJIAKOU = trip({ route_name: "Бээжин - Жинин – Жанжакоу - Эрээн – 4 хотын аялал", duration_text: "8 өдөр 7 шөнө", departure_dates: ["Ням гараг бүр"] });
-const SHANGHAI_NOV = trip({ route_name: "УБ-Шанхай хотын 11-р сарын аяллын хөтөлбөр", duration_text: "6 өдөр 5 шөнө", departure_dates: ["11 сарын 12", "11 сарын 26"] });
-const SHANGHAI_DISNEY_NOV3 = trip({ route_name: "ШАНХАЙ - -ДИСНЕЙЛЭНД -сурагчдын амралт -11/3", duration_text: "5 өдөр 4 шөнө", departure_dates: ["11 сарын 3"] });
-const SHANGHAI_DISNEY_OCT29 = trip({ route_name: "ШАНХАЙ - ДИСНЭЙЛАНД -сурагчдын амралтын аялал - 10/29", duration_text: "6 өдөр 5 шөнө", departure_dates: ["10 сарын 29"] });
-const NATURE_PARK = trip({ route_name: "И Сан По байгалийн цогцолборт газар", duration_text: "3 өдөр", departure_dates: ["9 сарын 26"] });
+const ELDOR_PELDOR = trip({ route_name: "Эльдор- Пэлдор (Зэтгорийн хаалга / Эмбар) газар нислэг хосолсон аялал", duration_text: "10 өдөр 9 шөнө", departure_dates: ["10 сарын 8"], extra: PELDOR_SPELLINGS });
+const PELDOR_COMBO = trip({ route_name: "ПЭЛДОРИЭ ГАЗАР НИСЛЭГ ХОСОЛСОН АЯЛАЛ ( Пэлдор - Эмбар )", duration_text: "10 өдөр 9 шөнө", departure_dates: ["10 сарын 13"], extra: PELDOR_SPELLINGS });
+const PELMAK = trip({ route_name: "Вэлмор - Сэлвин – Пэлмак - Ормак – 4 хотын аялал", duration_text: "8 өдөр 7 шөнө", departure_dates: ["Ням гараг бүр"] });
+const LUMIA_NOV = trip({ route_name: "УБ-Лумиа хотын 11-р сарын аяллын хөтөлбөр", duration_text: "6 өдөр 5 шөнө", departure_dates: ["11 сарын 12", "11 сарын 26"] });
+const LUMIA_BARTEN_NOV3 = trip({ route_name: "ЛУМИА - -БАРТЭНЛЭНД -сурагчдын амралт -11/3", duration_text: "5 өдөр 4 шөнө", departure_dates: ["11 сарын 3"] });
+const LUMIA_BARTEN_OCT29 = trip({ route_name: "ЛУМИА - БАРТЭНЛАНД -сурагчдын амралтын аялал - 10/29", duration_text: "6 өдөр 5 шөнө", departure_dates: ["10 сарын 29"] });
+const NATURE_PARK = trip({ route_name: "Мэл дэн по байгалийн цогцолборт газар", duration_text: "3 өдөр", departure_dates: ["9 сарын 26"] });
 
 const CATALOG = [
-  ORDOS,
-  SHANGHAI_ZHANGJIAJIE,
-  CHONGQING_ZHANGJIAJIE,
-  ZHANGJIAJIE_COMBO,
-  ZHANGJIAKOU,
-  SHANGHAI_NOV,
-  SHANGHAI_DISNEY_NOV3,
-  SHANGHAI_DISNEY_OCT29,
+  DARKAN,
+  LUMIA_PELDOR,
+  ELDOR_PELDOR,
+  PELDOR_COMBO,
+  PELMAK,
+  LUMIA_NOV,
+  LUMIA_BARTEN_NOV3,
+  LUMIA_BARTEN_OCT29,
   NATURE_PARK,
 ];
 
@@ -77,7 +81,7 @@ async function resolve(text: string) {
   return resolveTripFromUserMessage(text, CATALOG, { allowLooseFallback: false });
 }
 
-// ── Wrong PDF: "Хөтөлбөр үзэх" matched the Ordos trip on the word "үзэх" ─────────
+// ── Wrong PDF: "Хөтөлбөр үзэх" matched the Darkan trip on the word "үзэх" ─────────
 
 test("the 'Хөтөлбөр үзэх' / 'Зураг үзэх' buttons never pick a trip by the verb 'үзэх'", async () => {
   for (const text of ["Хөтөлбөр үзэх", "Зураг үзэх", "хөтөлбөр харъя"]) {
@@ -92,7 +96,7 @@ test("a bare 'Хөтөлбөр' is not a price question (it contains 'төлбө
   assert.equal(isStructuredTripQuestion("Хөтөлбөр үзэх"), false);
   // Real price questions are still structured.
   assert.equal(isStructuredTripQuestion("Үнэ"), true);
-  assert.equal(isStructuredTripQuestion("Тэнгэрийн хаалга төлбөр хэд вэ"), true);
+  assert.equal(isStructuredTripQuestion("Зэтгорийн хаалга төлбөр хэд вэ"), true);
 });
 
 // ── Generic price / info requests: ask which trip, never hand off to staff ────────
@@ -123,11 +127,11 @@ test("requests that name no destination are recognised as generic", async () => 
 test("a named destination, a date or a number is NOT a generic request", async () => {
   const { isGenericTripRequest } = await search();
   for (const text of [
-    "Жэжү аялал гарч байгаа юу?", // a place we may not offer: staff should see this
-    "Тэнгэрийн хаалга үнэ хэд вэ?",
+    "Талвин аялал гарч байгаа юу?", // a place we may not offer: staff should see this
+    "Зэтгорийн хаалга үнэ хэд вэ?",
     "10 сарын үнэ",
     "5",
-    "Шанхай",
+    "Лумиа",
     "",
   ]) {
     assert.equal(isGenericTripRequest(text), false, `must not be generic: "${text}"`);
@@ -144,7 +148,7 @@ test("typed greeting variants are greetings, not questions", () => {
 });
 
 test("a greeting with a real question attached is not swallowed", () => {
-  for (const text of ["сайн байна уу Шанхай үнэ хэд вэ", "hi shanghai price", "Үнэ", "Сайн байна уу 10 сарын аялал"]) {
+  for (const text of ["сайн байна уу Лумиа үнэ хэд вэ", "hi lumia price", "Үнэ", "Сайн байна уу 10 сарын аялал"]) {
     assert.equal(isKnownGreetingPhrase(text), false, text);
   }
 });
@@ -157,23 +161,23 @@ test("a bare thank-you is recognised and never treated as a follow-up", () => {
 });
 
 test("thanks plus a real message, or a lone 'за', is not a bare thank-you", () => {
-  for (const text of ["Баярлалаа. Дажгүй явж байнаа", "баярлалаа үнэ хэд вэ", "за", "баярлалаа Шанхай"]) {
+  for (const text of ["Баярлалаа. Дажгүй явж байнаа", "баярлалаа үнэ хэд вэ", "за", "баярлалаа Лумиа"]) {
     assert.equal(isThanksOnly(text), false, text);
   }
 });
 
-// ── Zhangjiajie spellings and unrelated-word collisions ──────────────────────
+// ── Peldor spellings and unrelated-word collisions ──────────────────────
 
-test("misspelled Zhangjiajie finds the Zhangjiajie trips, not Shanghai-Disney or Zhangjiakou", async () => {
-  const combo = await resolve("Шанхай Жанжио аялал");
+test("spellings stored as aliases find the right trips, not a similar-sounding place", async () => {
+  const combo = await resolve("Лумиа Пэлдо аялал");
   assert.equal(combo.status, "verified");
-  assert.ok(combo.status === "verified" && combo.trip.route_name.includes("Жанжиажэ"));
+  assert.ok(combo.status === "verified" && combo.trip.route_name.includes("Пэлдор"));
 
-  const combo2 = await resolve("Жанжиэжэ шанхайтай бна уу?");
+  const combo2 = await resolve("Пэлдэр лумиатай бна уу?");
   assert.equal(combo2.status, "verified");
-  assert.ok(combo2.status === "verified" && combo2.trip.id === SHANGHAI_ZHANGJIAJIE.id);
+  assert.ok(combo2.status === "verified" && combo2.trip.id === LUMIA_PELDOR.id);
 
-  for (const text of ["Жанжиотой аялал", "Жанжиатай аялал хөтөлбөр"]) {
+  for (const text of ["Пэлдотой аялал", "Пэлдотай аялал хөтөлбөр"]) {
     const result = await resolve(text);
     assert.notEqual(result.status, "not_found", text);
     const names =
@@ -182,24 +186,24 @@ test("misspelled Zhangjiajie finds the Zhangjiajie trips, not Shanghai-Disney or
         : result.status === "ambiguous"
           ? result.candidates.map((candidate) => candidate.route_name)
           : [];
-    assert.ok(names.length > 0 && names.every((name) => /жанжиа/i.test(name)), `${text} -> ${names.join(" | ")}`);
-    assert.ok(!names.some((name) => name.includes("Жанжакоу")), "Zhangjiakou must stay separate");
-    assert.ok(!names.some((name) => /дисней|дисней/i.test(name)), "must not fall back to Disney");
+    assert.ok(names.length > 0 && names.every((name) => /пэлдо/i.test(name)), `${text} -> ${names.join(" | ")}`);
+    assert.ok(!names.some((name) => name.includes("Пэлмак")), "Pelmak must stay separate");
+    assert.ok(!names.some((name) => /бартэн|бартэн/i.test(name)), "must not fall back to Barten");
   }
 });
 
 test("everyday words no longer collide with trip-name words", async () => {
   // "байгаа" (is there) ~ "байгалийн" (natural); "харин" (however) ~ "сарын" (month's).
-  assert.equal((await resolve("Жэжү аялал гарч байгаа юу?")).status, "not_found");
+  assert.equal((await resolve("Талвин аялал гарч байгаа юу?")).status, "not_found");
   assert.equal((await resolve("Yamr2 hotiin aylal baigaawe")).status, "not_found");
   assert.equal((await resolve("Би харин завгү чатаа харах завгүыл бгад бн")).status, "not_found");
   assert.equal((await resolve("Бид 10 сарын 3-нд хилээр гарахаар")).status, "not_found");
 });
 
 test("slash and dash dates are understood when matching a trip", async () => {
-  const result = await resolve("шанхай аялал 10/28 11/3");
+  const result = await resolve("лумиа аялал 10/28 11/3");
   assert.equal(result.status, "verified");
-  assert.ok(result.status === "verified" && result.trip.id === SHANGHAI_DISNEY_NOV3.id);
+  assert.ok(result.status === "verified" && result.trip.id === LUMIA_BARTEN_NOV3.id);
 });
 
 // ── Wrong facts from data-entry slips ────────────────────────────────────────
@@ -207,7 +211,7 @@ test("slash and dash dates are understood when matching a trip", async () => {
 test("an infant band entered as '0-23 нас' (years) is shown as months", async () => {
   const { sanitizeTripForCustomers } = await search();
   const slipped = trip({
-    route_name: "Шанхай + Тэнгэрийн хаалга",
+    route_name: "Лумиа + Зэтгорийн хаалга",
     departure_dates: ["11 сарын 19"],
     extra: {
       price_groups: [
@@ -215,8 +219,8 @@ test("an infant band entered as '0-23 нас' (years) is shown as months", async
           dates: ["11 сарын 19"],
           infant_age: "0-23 нас",
           passenger_prices: [
-            { label: "Хүүхэд", price: 3330000, age_range: "" },
-            { label: "0-23 САРТАЙ НЯРАЙ ХҮҮХЭД", price: 790000, age_range: "0-23 нас" },
+            { label: "Хүүхэд", price: 3341000, age_range: "" },
+            { label: "0-23 САРТАЙ НЯРАЙ ХҮҮХЭД", price: 801000, age_range: "0-23 нас" },
           ],
         },
       ],
@@ -246,9 +250,9 @@ test("a price group whose dates are all gone is dropped, so the base prices win"
   const { sanitizeTripForCustomers } = await search();
   // The top-asked trip: departs only 11/19, but a price group still said 9/19 and 10/10.
   const stale = trip({
-    route_name: "Шанхай + Тэнгэрийн хаалга",
+    route_name: "Лумиа + Зэтгорийн хаалга",
     departure_dates: ["11 сарын 19"],
-    adult_price: 3660000,
+    adult_price: 3671000,
     extra: {
       price_groups: [
         {
@@ -258,7 +262,7 @@ test("a price group whose dates are all gone is dropped, so the base prices win"
           date_keys: ["9 сарын 19", "9/19", "10 сарын 10", "10/10"],
           adult_price: 3560000, // an OLD price for departures that no longer exist
         },
-        { label: "11 сарын 19", dates: ["11 сарын 19"], adult_price: 3660000 },
+        { label: "11 сарын 19", dates: ["11 сарын 19"], adult_price: 3671000 },
       ],
     },
   });
@@ -266,7 +270,7 @@ test("a price group whose dates are all gone is dropped, so the base prices win"
   const groups = (fixed.extra as { price_groups: Array<Record<string, unknown>> }).price_groups;
   assert.equal(groups.length, 1, "the stale group (old price, old dates) is removed entirely");
   assert.deepEqual(groups[0].dates, ["11 сарын 19"]);
-  assert.equal(fixed.adult_price, 3660000, "the trip's own base price is untouched");
+  assert.equal(fixed.adult_price, 3671000, "the trip's own base price is untouched");
   // The admin's own data is never mutated.
   assert.equal((stale.extra as { price_groups: unknown[] }).price_groups.length, 2);
 });
@@ -317,63 +321,63 @@ test("a 'which of these trips?' question is still remembered when the customer a
 });
 
 
-// ── Client report: "2 trips' info looks incomplete" (Shanghai) ────────────────
+// ── Client report: "2 trips' info looks incomplete" (Lumia) ────────────────
 
-const HANGZHOU = trip({
-  route_name: "Улаанбаатар – Шанхай – Хүжөү – Пүюань – Ханжоу аялал",
+const HELVIN = trip({
+  route_name: "Улаанбаатар – Лумиа – Гортал – Тиранш – Хэлвин аялал",
   duration_text: "8 өдөр 7 шөнө",
-  adult_price: 3390000,
-  child_price: 2690000,
-  infant_price: 390000, // base infant price, shown in the admin as "Үндсэн Нярай"
+  adult_price: 3401000,
+  child_price: 2701000,
+  infant_price: 401000, // base infant price, shown in the admin as "Үндсэн Нярай"
   departure_dates: ["10 сарын 8", "10 сарын 15"],
   // Price groups carry NO infant figure and stale dates, exactly like the live trip.
-  extra: { price_groups: [{ dates: ["9 сарын 10", "9 сарын 17", "10 сарын 15"], adult_price: 3390000, child_price: 2690000, infant_price: null }] },
+  extra: { price_groups: [{ dates: ["9 сарын 10", "9 сарын 17", "10 сарын 15"], adult_price: 3401000, child_price: 2701000, infant_price: null }] },
 });
-const DISNEY_OCT29 = trip({
-  route_name: "ШАНХАЙ - ДИСНЭЙЛАНД -сурагчдын амралтын аялал - 10/29",
+const BARTEN_OCT29 = trip({
+  route_name: "ЛУМИА - БАРТЭНЛАНД -сурагчдын амралтын аялал - 10/29",
   duration_text: "6 өдөр 5 шөнө",
-  adult_price: 3590000,
-  child_price: 3150000,
-  infant_price: 490000,
+  adult_price: 3601000,
+  child_price: 3161000,
+  infant_price: 501000,
   departure_dates: ["10 сарын 29"],
-  extra: { price_groups: [{ dates: ["9 сарын 29"], adult_price: 3490000, child_price: 3290000, infant_price: null }] },
+  extra: { price_groups: [{ dates: ["9 сарын 29"], adult_price: 3501000, child_price: 3301000, infant_price: null }] },
 });
-const SHANGHAI_TRIPS = [SHANGHAI_NOV, HANGZHOU, SHANGHAI_DISNEY_NOV3, DISNEY_OCT29, SHANGHAI_ZHANGJIAJIE, trip({ route_name: "УБ-Шанхай хотын 12-р сарын аяллын хөтөлбөр", duration_text: "5 өдөр 4 шөнө", adult_price: 2890000, departure_dates: ["12 сарын 22"] })];
+const LUMIA_TRIPS = [LUMIA_NOV, HELVIN, LUMIA_BARTEN_NOV3, BARTEN_OCT29, LUMIA_PELDOR, trip({ route_name: "УБ-Лумиа хотын 12-р сарын аяллын хөтөлбөр", duration_text: "5 өдөр 4 шөнө", adult_price: 2901000, departure_dates: ["12 сарын 22"] })];
 
 test("a trip's base infant price is listed even when its price groups have none", async () => {
   const { buildAmbiguousTripReply } = await import("../src/lib/travelFastPaths");
   applyTestEnv();
-  const reply = buildAmbiguousTripReply([HANGZHOU, DISNEY_OCT29]);
-  assert.match(reply, /Ханжоу аялал — 8 өдөр 7 шөнө · том хүн 3,390,000₮ · хүүхэд 2,690,000₮ · нярай 390,000₮/);
-  assert.match(reply, /10\/29 — 6 өдөр 5 шөнө · том хүн 3,590,000₮ · хүүхэд 3,150,000₮ · нярай 490,000₮/);
+  const reply = buildAmbiguousTripReply([HELVIN, BARTEN_OCT29]);
+  assert.match(reply, /Хэлвин аялал — 8 өдөр 7 шөнө · том хүн 3,401,000₮ · хүүхэд 2,701,000₮ · нярай 401,000₮/);
+  assert.match(reply, /10\/29 — 6 өдөр 5 шөнө · том хүн 3,601,000₮ · хүүхэд 3,161,000₮ · нярай 501,000₮/);
 });
 
-test("Shanghai school-break 10/29 uses its own base prices when stale price groups were dropped", async () => {
+test("Lumia school-break 10/29 uses its own base prices when stale price groups were dropped", async () => {
   const { buildStructuredTripReply, sanitizeTripForCustomers } = await import("../src/lib/travelFastPaths");
   applyTestEnv();
-  const trips = SHANGHAI_TRIPS.map((item) => sanitizeTripForCustomers(item));
+  const trips = LUMIA_TRIPS.map((item) => sanitizeTripForCustomers(item));
   const reply = buildStructuredTripReply(
-    "Шанхай сурагчдын амралт 10 сарын 29 үнэ хэд вэ",
+    "Лумиа сурагчдын амралт 10 сарын 29 үнэ хэд вэ",
     trips,
     new Date("2026-09-20T00:00:00.000Z"),
   );
   assert.ok(reply);
   assert.match(reply!, /10\/29/);
-  assert.match(reply!, /10 сарын 29: Том хүн: 3,590,000₮ \| Хүүхэд: 3,150,000₮ \| Нярай: 490,000₮/);
+  assert.match(reply!, /10 сарын 29: Том хүн: 3,601,000₮ \| Хүүхэд: 3,161,000₮ \| Нярай: 501,000₮/);
   assert.doesNotMatch(reply!, /11\/3/);
   assert.doesNotMatch(reply!, /үнийн мэдээлэл олдсонгүй/);
 });
 
-test("asking about Shanghai lists EVERY Shanghai trip, not just the top 3", async () => {
+test("asking about Lumia lists EVERY Lumia trip, not just the top 3", async () => {
   const { resolveTripFromUserMessage } = await search();
   // The client's own message, and plain phrasings of the same question.
-  for (const text of ["hi Shanhai aylaliin medeelel aviya", "Shanghai", "Шанхай аялал", "shanhai aylal medeelel"]) {
-    const result = resolveTripFromUserMessage(text, SHANGHAI_TRIPS, { allowLooseFallback: false });
+  for (const text of ["hi Lumia aylaliin medeelel aviya", "Lumia", "Лумиа аялал", "lumia aylal medeelel"]) {
+    const result = resolveTripFromUserMessage(text, LUMIA_TRIPS, { allowLooseFallback: false });
     assert.equal(result.status, "ambiguous", text);
     assert.equal(
       result.status === "ambiguous" ? result.candidates.length : 0,
-      SHANGHAI_TRIPS.length,
-      `"${text}" must offer all ${SHANGHAI_TRIPS.length} Shanghai trips`,
+      LUMIA_TRIPS.length,
+      `"${text}" must offer all ${LUMIA_TRIPS.length} Lumia trips`,
     );
   }
 });
@@ -381,39 +385,39 @@ test("asking about Shanghai lists EVERY Shanghai trip, not just the top 3", asyn
 test("the numbered choice still works once more than three trips are offered", async () => {
   applyTestEnv();
   const { routeFastPathText } = await import("../src/lib/fastPathRouting");
-  const senderId = "shanghai-numbered-choice";
-  const first = await routeFastPathText({ senderId, text: "Shanghai", contextualUserText: "Shanghai", trips: SHANGHAI_TRIPS });
-  assert.ok(first.matchText.includes("Shanghai"));
-  const picked = await routeFastPathText({ senderId, text: "4. Улаанбаатар – Шанхай…", contextualUserText: "4. Улаанбаатар – Шанхай…", trips: SHANGHAI_TRIPS });
-  // Button 4 in the offered list is the Hangzhou trip (the buttons are numbered
+  const senderId = "lumia-numbered-choice";
+  const first = await routeFastPathText({ senderId, text: "Lumia", contextualUserText: "Lumia", trips: LUMIA_TRIPS });
+  assert.ok(first.matchText.includes("Lumia"));
+  const picked = await routeFastPathText({ senderId, text: "4. Улаанбаатар – Лумиа…", contextualUserText: "4. Улаанбаатар – Лумиа…", trips: LUMIA_TRIPS });
+  // Button 4 in the offered list is the Helvin trip (the buttons are numbered
   // in the order the reply lists the trips).
   assert.ok(
-    picked.matchText.includes(HANGZHOU.route_name),
-    `option 4 must resolve to the Hangzhou trip, got: ${picked.matchText.slice(0, 80)}`,
+    picked.matchText.includes(HELVIN.route_name),
+    `option 4 must resolve to the Helvin trip, got: ${picked.matchText.slice(0, 80)}`,
   );
 });
 
 // ── "10 сарын 20-27 хооронд явах шууд нислэгтэй ямар аялал байгаа вэ" ───────────
 
 const DIRECT_OCT20 = trip({
-  route_name: "Египет шууд нислэгтэй аялал",
+  route_name: "Цэрмак шууд нислэгтэй аялал",
   category: "Шууд нислэгтэй аялал",
   duration_text: "7 өдөр 6 шөнө",
   adult_price: 4990000,
   departure_dates: ["10 сарын 22"],
 });
 const LAND_OCT20 = trip({
-  route_name: "ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ-БЭЭЖИНГИЙН ГАЗРЫН АЯЛАЛ",
+  route_name: "СЭРВЭН ТЭНГИС БУЮУ КАРДАН-ВЭЛМОРГИЙН ГАЗРЫН АЯЛАЛ",
   category: "Газрын аялал",
   duration_text: "9 өдөр 8 шөнө",
-  adult_price: 1390000,
+  adult_price: 1401000,
   departure_dates: ["10 сарын 20"],
 });
 const COMBO_OCT20 = trip({
-  route_name: "ТЭНГЭРИЙН ХААЛГАНЫ ГАЗАР НИСЛЭГ ХОСОЛСОН АЯЛАЛ ( Жанжиажэ - Аватар )",
+  route_name: "ЗЭТГОРИЙН ХААЛГАНЫ ГАЗАР НИСЛЭГ ХОСОЛСОН АЯЛАЛ ( Пэлдор - Эмбар )",
   category: "Газар нислэг хосолсон аялал",
   duration_text: "10 өдөр 9 шөнө",
-  adult_price: 2650000,
+  adult_price: 2661000,
   departure_dates: ["10 сарын 20", "10 сарын 27"],
 });
 const DATE_CATALOG = [DIRECT_OCT20, LAND_OCT20, COMBO_OCT20];
@@ -427,7 +431,7 @@ test("a direct-flight date question lists only direct-flight trips", async () =>
   assert.deepEqual(narrowed.map((t) => t.route_name), [DIRECT_OCT20.route_name]);
   const reply = buildDepartureDateAvailabilityReply({ userText: text, trips: narrowed, now: NOW });
   assert.ok(reply);
-  assert.match(reply!, /Египет шууд нислэгтэй/);
+  assert.match(reply!, /Цэрмак шууд нислэгтэй/);
   assert.doesNotMatch(reply!, /ГАЗРЫН АЯЛАЛ|ГАЗАР НИСЛЭГ ХОСОЛСОН/, "land tours and combos must not be offered as direct flights");
 });
 
@@ -454,9 +458,9 @@ test("a day range covers every day in it, not just the first", async () => {
   });
   assert.ok(reply);
   // Trips departing on the 20th, the 22nd and the 27th all appear.
-  assert.match(reply!, /ШАР ТЭНГИС/);
-  assert.match(reply!, /Египет/);
-  assert.match(reply!, /ТЭНГЭРИЙН ХААЛГАНЫ/);
+  assert.match(reply!, /СЭРВЭН ТЭНГИС/);
+  assert.match(reply!, /Цэрмак/);
+  assert.match(reply!, /ЗЭТГОРИЙН ХААЛГАНЫ/);
   assert.match(reply!, /20–27-ны хооронд/);
 });
 
@@ -475,26 +479,26 @@ test("a bare number is recognised, and is never a greeting", async () => {
   }
 });
 
-// ── A trip the customer names is SOLD OUT ("10 сарын 8-ны Шанхай ... суудал дүүрсэн") ──
+// ── A trip the customer names is SOLD OUT ("10 сарын 8-ны Лумиа ... суудал дүүрсэн") ──
 
-const DISNEY_OCT8_SOLD = trip({
-  route_name: "ШАНХАЙ - ДИСНЕЙЛЭНД-10/08",
+const BARTEN_OCT8_SOLD = trip({
+  route_name: "ЛУМИА - БАРТЭНЛЭНД-10/08",
   status: "sold_out",
   duration_text: "6 өдөр 5 шөнө",
-  adult_price: 3290000,
+  adult_price: 3301000,
   departure_dates: ["10 сарын 8"],
 });
 
 test("naming a sold-out trip says it is full and offers open alternatives — never a sibling's price", async () => {
   const { buildSoldOutPrecedenceReply } = await import("../src/lib/travelFastPaths");
-  const catalog = [DISNEY_OCT8_SOLD, SHANGHAI_DISNEY_NOV3, DISNEY_OCT29, HANGZHOU, SHANGHAI_NOV];
+  const catalog = [BARTEN_OCT8_SOLD, LUMIA_BARTEN_NOV3, BARTEN_OCT29, HELVIN, LUMIA_NOV];
   for (const text of [
-    "ШАНХАЙ - ДИСНЕЙЛЭНД-10/08 үнэ хэд вэ",
-    "10 сарын 8-ны Шанхай Диснейлэнд суудал байна уу",
+    "ЛУМИА - БАРТЭНЛЭНД-10/08 үнэ хэд вэ",
+    "10 сарын 8-ны Лумиа Бартэнлэнд суудал байна уу",
   ]) {
     const reply = buildSoldOutPrecedenceReply(text, catalog);
     assert.ok(reply, `"${text}" must be answered as sold out`);
-    assert.match(reply!, /ШАНХАЙ - ДИСНЕЙЛЭНД-10\/08/);
+    assert.match(reply!, /ЛУМИА - БАРТЭНЛЭНД-10\/08/);
     assert.match(reply!, /суудал дууссан/);
     assert.match(reply!, /нээлттэй|ижил/, "open alternatives are offered");
   }
@@ -502,19 +506,19 @@ test("naming a sold-out trip says it is full and offers open alternatives — ne
 
 test("catalog/status maintenance rows are silenced before price or budget routing", async () => {
   assert.equal(
-    isLikelyCatalogMaintenanceText("10 сарын 8-ны шанхай суудал дүүрсэн - 5 шөнө 6 өдөртэйй"),
+    isLikelyCatalogMaintenanceText("10 сарын 8-ны лумиа суудал дүүрсэн - 5 шөнө 6 өдөртэйй"),
     true,
   );
   assert.equal(
-    isLikelyCatalogMaintenanceText("ШАНХАЙ - ДИСНЕЙЛЭНД-10/08 суудал дүүрсэн - 6 хоног 5 шөнө"),
+    isLikelyCatalogMaintenanceText("ЛУМИА - БАРТЭНЛЭНД-10/08 суудал дүүрсэн - 6 хоног 5 шөнө"),
     true,
   );
   assert.equal(
-    isLikelyCatalogMaintenanceText("10 сарын 8-ны Шанхай Диснейлэнд суудал дүүрсэн үү?"),
+    isLikelyCatalogMaintenanceText("10 сарын 8-ны Лумиа Бартэнлэнд суудал дүүрсэн үү?"),
     false,
   );
   assert.equal(
-    isLikelyCatalogMaintenanceText("10 сарын 8-ны Шанхай Диснейлэнд 5 шөнө 6 өдөртэй юу?"),
+    isLikelyCatalogMaintenanceText("10 сарын 8-ны Лумиа Бартэнлэнд 5 шөнө 6 өдөртэй юу?"),
     false,
   );
   assert.equal(
@@ -525,10 +529,10 @@ test("catalog/status maintenance rows are silenced before price or budget routin
 
 test("a generic destination question never gets a sold-out answer, and an active trip named exactly wins", async () => {
   const { buildSoldOutPrecedenceReply } = await import("../src/lib/travelFastPaths");
-  const catalog = [DISNEY_OCT8_SOLD, SHANGHAI_DISNEY_NOV3, DISNEY_OCT29, HANGZHOU, SHANGHAI_NOV];
-  for (const text of ["Shanghai", "Шанхай аялал", "hi Shanhai aylaliin medeelel aviya", "Диснейлэнд", SHANGHAI_DISNEY_NOV3.route_name + " үнэ"]) {
+  const catalog = [BARTEN_OCT8_SOLD, LUMIA_BARTEN_NOV3, BARTEN_OCT29, HELVIN, LUMIA_NOV];
+  for (const text of ["Lumia", "Лумиа аялал", "hi Lumia aylaliin medeelel aviya", "Бартэнлэнд", LUMIA_BARTEN_NOV3.route_name + " үнэ"]) {
     assert.equal(buildSoldOutPrecedenceReply(text, catalog), null, `"${text}" must go through the normal path`);
   }
   // No sold-out trips at all: always null.
-  assert.equal(buildSoldOutPrecedenceReply("ШАНХАЙ - ДИСНЕЙЛЭНД-10/08", [SHANGHAI_DISNEY_NOV3, HANGZHOU]), null);
+  assert.equal(buildSoldOutPrecedenceReply("ЛУМИА - БАРТЭНЛЭНД-10/08", [LUMIA_BARTEN_NOV3, HELVIN]), null);
 });

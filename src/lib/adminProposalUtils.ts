@@ -75,10 +75,10 @@ export function isLikelyTripRouteText(text: string): boolean {
   return (
     normalized.includes("аялал") ||
     normalized.includes("tour") ||
-    normalized.includes("хөх хот") ||
-    normalized.includes("эрээн") ||
-    normalized.includes("бээжин") ||
-    normalized.includes("seoul")
+    // A route ("<хот> - <хот>", "<хот>+<хот>") or a city, by shape — never by
+    // a hardcoded place name, which goes stale the day the catalog changes.
+    /\p{L}{3,}\s*[-–—+]\s*\p{L}{3,}/u.test(normalized) ||
+    /(?:^|\s)хот(?:ын)?(?:\s|$)/u.test(normalized)
   );
 }
 

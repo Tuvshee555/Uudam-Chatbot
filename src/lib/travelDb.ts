@@ -1786,7 +1786,7 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     const trip = sanitizeTripForCustomers(rawTrip);
     const details: string[] = [];
     // Category is the transport differentiator (газрын / шууд нислэгтэй /
-    // хосолсон) — without it the bot cannot distinguish the three "Бээжин"
+    // хосолсон) — without it the bot cannot distinguish the three "<хот>"
     // trips when a customer names only the destination.
     if (trip.category) {
       details.push(`Ангилал: ${trip.category}`);

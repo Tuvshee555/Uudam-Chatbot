@@ -13,7 +13,7 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
     id: "trip-1",
     category: "Outbound",
     operator_name: "Uudam Travel",
-    route_name: "Tokyo Fuji",
+    route_name: "Surmak Felmor",
     duration_text: "5 days",
     adult_price: 1000,
     child_price: 800,
@@ -27,7 +27,7 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
     notes: "",
     hotel: "",
     source_description: "",
-    photo_urls: ["https://example.com/tokyo-fuji-1.jpg", "https://example.com/tokyo-fuji-2.jpg"],
+    photo_urls: ["https://example.com/surmak-felmor-1.jpg", "https://example.com/surmak-felmor-2.jpg"],
     extra: {},
     created_at: "",
     updated_at: "",
@@ -37,9 +37,9 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
 
 test("normal information requests do not opt into photos", async () => {
   const { hasTripPhotoIntent } = await loadWelcomeFlow();
-  assert.equal(hasTripPhotoIntent("Бэйдайхэ аяллын үнэ хэд вэ?"), false);
-  assert.equal(hasTripPhotoIntent("Бэйдайхэ аяллын зураг явуулаач"), true);
-  assert.equal(hasTripPhotoIntent("beidaihe zurag"), true);
+  assert.equal(hasTripPhotoIntent("Кардан аяллын үнэ хэд вэ?"), false);
+  assert.equal(hasTripPhotoIntent("Кардан аяллын зураг явуулаач"), true);
+  assert.equal(hasTripPhotoIntent("kardan zurag"), true);
   assert.equal(hasTripPhotoIntent("send photos"), true);
 });
 
@@ -53,13 +53,13 @@ test("default welcome points customers to the website and contact numbers", asyn
 test("trip media fails closed when only a shared destination token matches", async () => {
   const { extractTripPhotosForReply } = await loadWelcomeFlow();
   const photos = extractTripPhotosForReply(
-    "Tokyo trip price is 1,000.",
+    "Surmak trip price is 1,000.",
     [
-      trip({ id: "fuji", route_name: "Tokyo Fuji" }),
+      trip({ id: "felmor", route_name: "Surmak Felmor" }),
       trip({
-        id: "universal",
-        route_name: "Tokyo Universal",
-        photo_urls: ["https://example.com/tokyo-universal.jpg"],
+        id: "anmor",
+        route_name: "Surmak Anmor",
+        photo_urls: ["https://example.com/surmak-anmor.jpg"],
       }),
     ],
   );
@@ -70,16 +70,16 @@ test("trip media fails closed when only a shared destination token matches", asy
 test("trip media requires user and reply to agree before sending attachments", async () => {
   const { extractTripPhotosForReply } = await loadWelcomeFlow();
   const photos = extractTripPhotosForReply(
-    "Tokyo Universal program images are ready.",
+    "Surmak Anmor program images are ready.",
     [
-      trip({ id: "fuji", route_name: "Tokyo Fuji" }),
+      trip({ id: "felmor", route_name: "Surmak Felmor" }),
       trip({
-        id: "universal",
-        route_name: "Tokyo Universal",
-        photo_urls: ["https://example.com/tokyo-universal.jpg"],
+        id: "anmor",
+        route_name: "Surmak Anmor",
+        photo_urls: ["https://example.com/surmak-anmor.jpg"],
       }),
     ],
-    { userText: "Please send Tokyo Fuji program" },
+    { userText: "Please send Surmak Felmor program" },
   );
 
   assert.deepEqual(photos, []);
@@ -88,62 +88,62 @@ test("trip media requires user and reply to agree before sending attachments", a
 test("trip media sends only after the same specific trip passes both gates", async () => {
   const { extractTripPhotosForReply } = await loadWelcomeFlow();
   const photos = extractTripPhotosForReply(
-    "Tokyo Fuji program images are ready.",
+    "Surmak Felmor program images are ready.",
     [
-      trip({ id: "fuji", route_name: "Tokyo Fuji" }),
+      trip({ id: "felmor", route_name: "Surmak Felmor" }),
       trip({
-        id: "universal",
-        route_name: "Tokyo Universal",
-        photo_urls: ["https://example.com/tokyo-universal.jpg"],
+        id: "anmor",
+        route_name: "Surmak Anmor",
+        photo_urls: ["https://example.com/surmak-anmor.jpg"],
       }),
     ],
-    { userText: "Please send Tokyo Fuji program" },
+    { userText: "Please send Surmak Felmor program" },
   );
 
   assert.deepEqual(photos, [
-    "https://example.com/tokyo-fuji-1.jpg",
-    "https://example.com/tokyo-fuji-2.jpg",
+    "https://example.com/surmak-felmor-1.jpg",
+    "https://example.com/surmak-felmor-2.jpg",
   ]);
 });
 
 test("photo-only mode prefers the combined route when the user names both destinations", async () => {
   const { extractTripPhotosForUserMessage } = await loadWelcomeFlow();
   const photos = extractTripPhotosForUserMessage(
-    "Shanghai Tenger photo",
+    "Lumia Zetgor photo",
     [
       trip({
-        id: "tenger",
-        route_name: "Tenger direct flight",
-        photo_urls: ["https://example.com/tenger-direct-1.jpg"],
+        id: "zetgor",
+        route_name: "Zetgor direct flight",
+        photo_urls: ["https://example.com/zetgor-direct-1.jpg"],
       }),
       trip({
-        id: "shanghai-tenger",
-        route_name: "Shanghai Tenger direct flight",
-        photo_urls: ["https://example.com/shanghai-tenger-1.jpg", "https://example.com/shanghai-tenger-2.jpg"],
+        id: "lumia-zetgor",
+        route_name: "Lumia Zetgor direct flight",
+        photo_urls: ["https://example.com/lumia-zetgor-1.jpg", "https://example.com/lumia-zetgor-2.jpg"],
       }),
     ],
   );
 
   assert.deepEqual(photos, [
-    "https://example.com/shanghai-tenger-1.jpg",
-    "https://example.com/shanghai-tenger-2.jpg",
+    "https://example.com/lumia-zetgor-1.jpg",
+    "https://example.com/lumia-zetgor-2.jpg",
   ]);
 });
 
 test("photo-only mode does not borrow photos from a shared-city trip with fewer query tokens", async () => {
   const { extractTripPhotosForUserMessage } = await loadWelcomeFlow();
   const photos = extractTripPhotosForUserMessage(
-    "Hohhot exam ground tour photo",
+    "Sargol exam ground tour photo",
     [
       trip({
-        id: "hohhot-exam",
-        route_name: "Hohhot exam ground tour",
+        id: "sargol-exam",
+        route_name: "Sargol exam ground tour",
         photo_urls: [],
       }),
       trip({
-        id: "jinin-hohhot",
-        route_name: "Jinin mini avatar Hohhot tour",
-        photo_urls: ["https://example.com/jinin-hohhot-1.jpg"],
+        id: "selvin-sargol",
+        route_name: "Selvin mini avatar Sargol tour",
+        photo_urls: ["https://example.com/selvin-sargol-1.jpg"],
       }),
     ],
   );
@@ -155,21 +155,21 @@ test("reply media does not borrow photos when the exact discussed trip has none"
   const { extractTripPhotosForReply } = await loadWelcomeFlow();
   const trips = [
     trip({
-      id: "hohhot-exam",
-      route_name: "Hohhot exam ground tour",
+      id: "sargol-exam",
+      route_name: "Sargol exam ground tour",
       photo_urls: [],
     }),
     trip({
-      id: "jinin-hohhot",
-      route_name: "Jinin mini avatar Hohhot tour",
-      photo_urls: ["https://example.com/jinin-hohhot-1.jpg"],
+      id: "selvin-sargol",
+      route_name: "Selvin mini avatar Sargol tour",
+      photo_urls: ["https://example.com/selvin-sargol-1.jpg"],
     }),
   ];
 
   const photos = extractTripPhotosForReply(
-    "Hohhot exam ground tour price is 1,100,000 MNT.",
+    "Sargol exam ground tour price is 1,100,000 MNT.",
     trips,
-    { userText: "Hohhot exam ground tour photo" },
+    { userText: "Sargol exam ground tour photo" },
   );
 
   assert.deepEqual(photos, []);
@@ -178,30 +178,30 @@ test("reply media does not borrow photos when the exact discussed trip has none"
 test("trip media keeps complete five-slice poster sets", async () => {
   const { extractTripPhotosForReply, extractTripPhotosForUserMessage } = await loadWelcomeFlow();
   const posterSlices = [
-    "https://example.com/tokyo-fuji-1.jpg",
-    "https://example.com/tokyo-fuji-2.jpg",
-    "https://example.com/tokyo-fuji-3.jpg",
-    "https://example.com/tokyo-fuji-4.jpg",
-    "https://example.com/tokyo-fuji-5.jpg",
+    "https://example.com/surmak-felmor-1.jpg",
+    "https://example.com/surmak-felmor-2.jpg",
+    "https://example.com/surmak-felmor-3.jpg",
+    "https://example.com/surmak-felmor-4.jpg",
+    "https://example.com/surmak-felmor-5.jpg",
   ];
   const trips = [
     trip({
-      id: "fuji",
-      route_name: "Tokyo Fuji",
+      id: "felmor",
+      route_name: "Surmak Felmor",
       photo_urls: posterSlices,
     }),
   ];
 
   assert.deepEqual(
     extractTripPhotosForReply(
-      "Tokyo Fuji program images are ready.",
+      "Surmak Felmor program images are ready.",
       trips,
-      { userText: "Please send Tokyo Fuji photos" },
+      { userText: "Please send Surmak Felmor photos" },
     ),
     posterSlices,
   );
   assert.deepEqual(
-    extractTripPhotosForUserMessage("Please send Tokyo Fuji photos", trips),
+    extractTripPhotosForUserMessage("Please send Surmak Felmor photos", trips),
     posterSlices,
   );
 });
@@ -209,21 +209,21 @@ test("trip media keeps complete five-slice poster sets", async () => {
 test("photo-only mode resolves the trip directly from the user message", async () => {
   const { extractTripPhotosForUserMessage } = await loadWelcomeFlow();
   const photos = extractTripPhotosForUserMessage(
-    "Бээжин Бэйдэхэ газар нислэг хосолсон аяллын зураг үзье",
+    "Вэлмор Кардэн газар нислэг хосолсон аяллын зураг үзье",
     [
       trip({
         id: "ground-tour",
-        route_name: "Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал",
+        route_name: "Сэрвэн тэнгис буюу Кардан-Вэлморгийн газрын аялал",
         photo_urls: ["https://example.com/ground-tour.jpg"],
       }),
       trip({
         id: "combo-tour",
-        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        route_name: "Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал",
         photo_urls: ["https://example.com/combo-tour-1.jpg", "https://example.com/combo-tour-2.jpg"],
         extra: {
           aliases: [
-            "Бээжин Бэйдэхэ газар нислэг хосолсон",
-            "Бэйдэхэ Бээжин газар нислэг",
+            "Вэлмор Кардэн газар нислэг хосолсон",
+            "Кардэн Вэлмор газар нислэг",
           ],
         },
       }),
@@ -239,21 +239,21 @@ test("photo-only mode resolves the trip directly from the user message", async (
 test("photo-only mode matches romanized travel text against Cyrillic trip aliases", async () => {
   const { extractTripPhotosForUserMessage } = await loadWelcomeFlow();
   const photos = extractTripPhotosForUserMessage(
-    "beejin beidehi gazr nisleg hosolson uzie",
+    "velmor beidehi gazr nisleg hosolson uzie",
     [
       trip({
         id: "ground-tour",
-        route_name: "Шар тэнгис буюу Бэйдайхэ-Бээжингийн газрын аялал",
+        route_name: "Сэрвэн тэнгис буюу Кардан-Вэлморгийн газрын аялал",
         photo_urls: ["https://example.com/ground-tour.jpg"],
       }),
       trip({
         id: "combo-tour",
-        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        route_name: "Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал",
         photo_urls: ["https://example.com/combo-tour-1.jpg", "https://example.com/combo-tour-2.jpg"],
         extra: {
           aliases: [
-            "Бээжин Бэйдэхэ газар нислэг хосолсон",
-            "Бэйдэхэ Бээжин газар нислэг",
+            "Вэлмор Кардэн газар нислэг хосолсон",
+            "Кардэн Вэлмор газар нислэг",
           ],
         },
       }),
@@ -269,72 +269,72 @@ test("photo-only mode matches romanized travel text against Cyrillic trip aliase
 test("photo-only mode treats gazrin phrasing as land-only and excludes combo trips", async () => {
   const { extractTripPhotosForUserMessage } = await loadWelcomeFlow();
   const photos = extractTripPhotosForUserMessage(
-    "beejin gazrin aylal bnu",
+    "velmor gazrin aylal bnu",
     [
       trip({
         id: "ground-tour",
-        route_name: "Бээжин газрын аялал",
+        route_name: "Вэлмор газрын аялал",
         category: "газрын аялал",
-        photo_urls: ["https://example.com/beijing-ground-1.jpg"],
+        photo_urls: ["https://example.com/velmor-ground-1.jpg"],
       }),
       trip({
         id: "combo-tour",
-        route_name: "Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал",
+        route_name: "Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал",
         category: "газар + нислэг хосолсон",
         photo_urls: ["https://example.com/combo-tour-1.jpg"],
         extra: {
           aliases: [
-            "Бээжин Бэйдэхэ газар нислэг хосолсон",
-            "Бэйдэхэ Бээжин газар нислэг",
+            "Вэлмор Кардэн газар нислэг хосолсон",
+            "Кардэн Вэлмор газар нислэг",
           ],
         },
       }),
     ],
   );
 
-  assert.deepEqual(photos, ["https://example.com/beijing-ground-1.jpg"]);
+  assert.deepEqual(photos, ["https://example.com/velmor-ground-1.jpg"]);
 });
 
 test("photo-only mode excludes cruise trips from gazrin land-tour phrasing", async () => {
   const { extractTripPhotosForUserMessage } = await loadWelcomeFlow();
   const photos = extractTripPhotosForUserMessage(
-    "beejin gazrin aylal bnu",
+    "velmor gazrin aylal bnu",
     [
       trip({
         id: "ground-tour",
-        route_name: "Бээжин газрын аялал",
+        route_name: "Вэлмор газрын аялал",
         category: "газрын аялал",
-        photo_urls: ["https://example.com/beijing-ground-1.jpg"],
+        photo_urls: ["https://example.com/velmor-ground-1.jpg"],
       }),
       trip({
         id: "cruise-tour",
-        route_name: "Усан онгоцны аялал - Эрээн - Бээжин - Тяньжин - Чежү Пусан",
+        route_name: "Усан онгоцны аялал - Ормак - Вэлмор - Дорнэл - Талвин Вирдэн",
         category: "круз аялал",
-        photo_urls: ["https://example.com/beijing-cruise-1.jpg"],
+        photo_urls: ["https://example.com/velmor-cruise-1.jpg"],
       }),
     ],
   );
 
-  assert.deepEqual(photos, ["https://example.com/beijing-ground-1.jpg"]);
+  assert.deepEqual(photos, ["https://example.com/velmor-ground-1.jpg"]);
 });
 
 test("brochure matching also refuses mismatched user and reply trips", async () => {
   const { extractTripBrochureAttachmentId } = await loadWelcomeFlow();
   const brochure = extractTripBrochureAttachmentId(
-    "Tokyo Universal PDF is ready.",
+    "Surmak Anmor PDF is ready.",
     [
       trip({
-        id: "fuji",
-        route_name: "Tokyo Fuji",
-        extra: { brochure_pdf_url: "https://example.com/fuji.pdf" },
+        id: "felmor",
+        route_name: "Surmak Felmor",
+        extra: { brochure_pdf_url: "https://example.com/felmor.pdf" },
       }),
       trip({
-        id: "universal",
-        route_name: "Tokyo Universal",
-        extra: { brochure_pdf_url: "https://example.com/universal.pdf" },
+        id: "anmor",
+        route_name: "Surmak Anmor",
+        extra: { brochure_pdf_url: "https://example.com/anmor.pdf" },
       }),
     ],
-    { userText: "Please send Tokyo Fuji PDF" },
+    { userText: "Please send Surmak Felmor PDF" },
   );
 
   assert.equal(brochure, null);
@@ -346,21 +346,21 @@ test("the webhook resolves a poster trip to the same rendered PDF the demo sends
   process.env.SITE_URL = "https://bot.example.com";
   try {
     const brochure = extractTripBrochureAttachmentId(
-      "Tokyo Fuji PDF хөтөлбөрийг хавсаргалаа.",
+      "Surmak Felmor PDF хөтөлбөрийг хавсаргалаа.",
       [
         trip({
-          id: "fuji",
-          route_name: "Tokyo Fuji",
-          photo_urls: ["https://example.com/fuji-photo.jpg"],
-          extra: { poster_trip_id: "poster-fuji" },
+          id: "felmor",
+          route_name: "Surmak Felmor",
+          photo_urls: ["https://example.com/felmor-photo.jpg"],
+          extra: { poster_trip_id: "poster-felmor" },
         }),
       ],
-      { userText: "Tokyo Fuji PDF явуулаач" },
+      { userText: "Surmak Felmor PDF явуулаач" },
     );
 
     assert.deepEqual(brochure, {
       type: "url",
-      value: "https://bot.example.com/api/poster-pdf?id=poster-fuji",
+      value: "https://bot.example.com/api/poster-pdf?id=poster-felmor",
     });
   } finally {
     if (previousSiteUrl === undefined) delete process.env.SITE_URL;

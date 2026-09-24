@@ -188,8 +188,8 @@ const VISION_USER_PROMPT = `Create structured data for a UUDAM Travel poster fro
 READ THE DOCUMENT VISUALLY as it appears on the page. The day program section lists days as "DAY 1", "DAY 2", etc. Each day has a route title and a body paragraph that belongs DIRECTLY UNDER that day's heading on the page. Match each day's body text to the correct day by its visual position — do not guess.
 
 Rules:
-- For "title": use the MAIN TRIP NAME, usually the largest travel title, e.g. "БЭЭЖИН - ЮНИВЕРСАЛ ШУУД НИСЛЭГТЭЙ АЯЛАЛ". NEVER use "UUDAM TRAVEL AGENCY" or the agency logo text as the title.
-- For "subtitle": use secondary date/route text if visible, such as "07/09-14 УБ-БЭЭЖИН-УБ". Do not put the whole title into subtitle if title is empty or agency text.
+- For "title": use the MAIN TRIP NAME, usually the largest travel title, e.g. "<ХОТ> - <ГАЗАР> ШУУД НИСЛЭГТЭЙ АЯЛАЛ". NEVER use "UUDAM TRAVEL AGENCY" or the agency logo text as the title.
+- For "subtitle": use secondary date/route text if visible, such as "<сар>/<өдөр>-<өдөр> УБ-<ХОТ>-УБ". Do not put the whole title into subtitle if title is empty or agency text.
 - Output Mongolian text for route/header fields only.
 - For each day "route": copy only the route/location title after the DAY/date prefix. Do not include "DAY 1", "ӨДӨР 1", or dates in the route field.
 - For "summary": copy the program/хөтөлбөр paragraph for that day WORD FOR WORD exactly as written under that day on the page. Match it to the CORRECT day by visual position. Never put one day's text under another day. If a day genuinely has no body text on the page, use "". Process EVERY day including the very last one — do not skip the final day.

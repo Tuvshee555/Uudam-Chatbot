@@ -23,19 +23,19 @@ describe("travelAI photo attachment", () => {
           action: "upsert",
           fields: {
             operator_name: "UUDAM TRAVEL AGENCY",
-            route_name: "Tokyo Fuji аялал",
+            route_name: "Surmak Felmor аялал",
           },
         },
       ],
     };
 
     attachPhotoUrlsToActions(
-      new Map([["random-upload-name.jpg", ["https://example.com/tokyo.jpg"]]]),
+      new Map([["random-upload-name.jpg", ["https://example.com/surmak.jpg"]]]),
       proposal,
     );
 
     assert.deepEqual(proposal.actions[0].fields?.photo_urls, [
-      "https://example.com/tokyo.jpg",
+      "https://example.com/surmak.jpg",
     ]);
   });
 
@@ -51,14 +51,14 @@ describe("travelAI photo attachment", () => {
           action: "upsert",
           fields: {
             operator_name: "UUDAM TRAVEL AGENCY",
-            route_name: "Бээжин Шанхай нислэгтэй аялал",
+            route_name: "Вэлмор Лумиа нислэгтэй аялал",
           },
         },
         {
           action: "upsert",
           fields: {
             operator_name: "UUDAM TRAVEL AGENCY",
-            route_name: "Токио Фүжи аялал",
+            route_name: "Сурмак Фэлмор аялал",
           },
         },
       ],
@@ -67,15 +67,15 @@ describe("travelAI photo attachment", () => {
     attachPhotoUrlsToActions(
       new Map([
         [
-          "01-Бээжин-Шанхай-messenger-split-1.png.compressed.jpg",
-          ["https://example.com/beijing-shanghai.jpg"],
+          "01-Вэлмор-Лумиа-messenger-split-1.png.compressed.jpg",
+          ["https://example.com/velmor-lumia.jpg"],
         ],
       ]),
       proposal,
     );
 
     assert.deepEqual(proposal.actions[0].fields?.photo_urls, [
-      "https://example.com/beijing-shanghai.jpg",
+      "https://example.com/velmor-lumia.jpg",
     ]);
     assert.equal(proposal.actions[1].fields?.photo_urls, undefined);
     assert.notEqual(
@@ -92,13 +92,13 @@ describe("travelAI photo attachment", () => {
       important_reason: "",
       conflicts: [],
       actions: [
-        { action: "upsert", fields: { route_name: "Beidaihe ground tour" } },
-        { action: "upsert", fields: { route_name: "Beidaihe flight tour" } },
+        { action: "upsert", fields: { route_name: "Kardan ground tour" } },
+        { action: "upsert", fields: { route_name: "Kardan flight tour" } },
       ],
     };
 
     attachPhotoUrlsToActions(
-      new Map([["summer.zip/Beidaihe/1.jpg", ["https://example.com/unknown.jpg"]]]),
+      new Map([["summer.zip/Kardan/1.jpg", ["https://example.com/unknown.jpg"]]]),
       proposal,
     );
 
@@ -143,8 +143,8 @@ describe("travelAI photo attachment", () => {
       important_reason: "",
       conflicts: [],
       actions: [
-        { action: "upsert", fields: { route_name: "Beidaihe tour ground" } },
-        { action: "upsert", fields: { route_name: "Beidaihe tour flight" } },
+        { action: "upsert", fields: { route_name: "Kardan tour ground" } },
+        { action: "upsert", fields: { route_name: "Kardan tour flight" } },
       ],
     };
 
@@ -161,8 +161,8 @@ describe("travelAI photo attachment", () => {
       important_reason: "",
       conflicts: [],
       actions: [
-        { action: "upsert", fields: { route_name: "Hailar tour", duration_text: "4 days" } },
-        { action: "upsert", fields: { route_name: "Hailar tour", duration_text: "5 days" } },
+        { action: "upsert", fields: { route_name: "Torval tour", duration_text: "4 days" } },
+        { action: "upsert", fields: { route_name: "Torval tour", duration_text: "5 days" } },
       ],
     };
 
@@ -181,25 +181,25 @@ describe("travelAI photo attachment", () => {
       actions: [
         {
           action: "patch",
-          trip_id: "trip-shanghai-heaven",
+          trip_id: "trip-lumia-heaven",
           fields: {
-            route_name: "Shanghai + Heaven Gate direct flight tour",
-            adult_price: 3590000,
+            route_name: "Lumia + Heaven Gate direct flight tour",
+            adult_price: 3601000,
             departure_dates: ["June 27", "July 18", "August 8"],
             extra: {
               source_file_name:
-                "Shanghai Heaven Gate-messenger-split.zip/Shanghai Heaven Gate-messenger-1.png.compressed.jpg",
+                "Lumia Heaven Gate-messenger-split.zip/Lumia Heaven Gate-messenger-1.png.compressed.jpg",
             },
           },
         },
         {
           action: "patch",
           fields: {
-            route_name: "Shanghai + Heaven Gate direct flight tour",
-            notes: "Includes Shanghai Tower exterior view, temple, Disneyland optional, zoo optional, Nanjing road, Huangpu river Bund.",
+            route_name: "Lumia + Heaven Gate direct flight tour",
+            notes: "Includes Lumia Tower exterior view, temple, Bartenland optional, zoo optional, Nanjing road, Huangpu river Bund.",
             extra: {
               source_file_name:
-                "Shanghai Heaven Gate-messenger-split.zip/Shanghai Heaven Gate-messenger-2.png.compressed.jpg",
+                "Lumia Heaven Gate-messenger-split.zip/Lumia Heaven Gate-messenger-2.png.compressed.jpg",
             },
           },
         },
@@ -207,12 +207,12 @@ describe("travelAI photo attachment", () => {
     };
     const photoUrls = new Map([
       [
-        "Shanghai Heaven Gate-messenger-split.zip/Shanghai Heaven Gate-messenger-1.png.compressed.jpg",
-        ["https://example.com/shanghai-1.jpg"],
+        "Lumia Heaven Gate-messenger-split.zip/Lumia Heaven Gate-messenger-1.png.compressed.jpg",
+        ["https://example.com/lumia-1.jpg"],
       ],
       [
-        "Shanghai Heaven Gate-messenger-split.zip/Shanghai Heaven Gate-messenger-2.png.compressed.jpg",
-        ["https://example.com/shanghai-2.jpg"],
+        "Lumia Heaven Gate-messenger-split.zip/Lumia Heaven Gate-messenger-2.png.compressed.jpg",
+        ["https://example.com/lumia-2.jpg"],
       ],
     ]);
 
@@ -220,12 +220,12 @@ describe("travelAI photo attachment", () => {
     attachPhotoUrlsToActions(photoUrls, proposal);
 
     assert.equal(proposal.actions.length, 1);
-    assert.equal(proposal.actions[0].trip_id, "trip-shanghai-heaven");
-    assert.equal(proposal.actions[0].fields?.adult_price, 3590000);
-    assert.match(String(proposal.actions[0].fields?.notes || ""), /Disneyland/);
+    assert.equal(proposal.actions[0].trip_id, "trip-lumia-heaven");
+    assert.equal(proposal.actions[0].fields?.adult_price, 3601000);
+    assert.match(String(proposal.actions[0].fields?.notes || ""), /Bartenland/);
     assert.deepEqual(proposal.actions[0].fields?.photo_urls, [
-      "https://example.com/shanghai-1.jpg",
-      "https://example.com/shanghai-2.jpg",
+      "https://example.com/lumia-1.jpg",
+      "https://example.com/lumia-2.jpg",
     ]);
     assert.notEqual(
       proposal.conflict_items?.some((item) => item.type === "photo_unmatched"),
@@ -245,24 +245,24 @@ describe("travelAI photo attachment", () => {
           action: "upsert",
           fields: {
             operator_name: "UUDAM TRAVEL AGENCY",
-            route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
-            adult_price: 3590000,
+            route_name: "Лумиа + Зэтгорийн хаалга шууд нислэгтэй аялал",
+            adult_price: 3601000,
             child_price: 1470000,
             departure_dates: ["6 сарын 27", "7 сарын 18", "8 сарын 8"],
             extra: {
               source_file_name:
-                "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй-messenger-split.zip/Шанхай + Тэнгэрийн хаалга шууд нислэгтэй-messenger-1.png.compressed.jpg",
+                "Лумиа + Зэтгорийн хаалга шууд нислэгтэй-messenger-split.zip/Лумиа + Зэтгорийн хаалга шууд нислэгтэй-messenger-1.png.compressed.jpg",
             },
           },
         },
         {
           action: "patch",
           fields: {
-            route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
+            route_name: "Лумиа + Зэтгорийн хаалга шууд нислэгтэй аялал",
             notes: "Буудлын үнийн гадна 800 юанийн төлбөр.",
             extra: {
               source_file_name:
-                "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй-messenger-split.zip/Шанхай + Тэнгэрийн хаалга шууд нислэгтэй-messenger-2.png.compressed.jpg",
+                "Лумиа + Зэтгорийн хаалга шууд нислэгтэй-messenger-split.zip/Лумиа + Зэтгорийн хаалга шууд нислэгтэй-messenger-2.png.compressed.jpg",
             },
           },
         },
@@ -270,12 +270,12 @@ describe("travelAI photo attachment", () => {
     };
     const photoUrls = new Map([
       [
-        "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй-messenger-split.zip/Шанхай + Тэнгэрийн хаалга шууд нислэгтэй-messenger-1.png.compressed.jpg",
-        ["https://example.com/shanghai-1.jpg"],
+        "Лумиа + Зэтгорийн хаалга шууд нислэгтэй-messenger-split.zip/Лумиа + Зэтгорийн хаалга шууд нислэгтэй-messenger-1.png.compressed.jpg",
+        ["https://example.com/lumia-1.jpg"],
       ],
       [
-        "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй-messenger-split.zip/Шанхай + Тэнгэрийн хаалга шууд нислэгтэй-messenger-2.png.compressed.jpg",
-        ["https://example.com/shanghai-2.jpg"],
+        "Лумиа + Зэтгорийн хаалга шууд нислэгтэй-messenger-split.zip/Лумиа + Зэтгорийн хаалга шууд нислэгтэй-messenger-2.png.compressed.jpg",
+        ["https://example.com/lumia-2.jpg"],
       ],
     ]);
 
@@ -284,11 +284,11 @@ describe("travelAI photo attachment", () => {
 
     assert.equal(proposal.actions.length, 1);
     assert.equal(proposal.actions[0].action, "upsert");
-    assert.equal(proposal.actions[0].fields?.adult_price, 3590000);
+    assert.equal(proposal.actions[0].fields?.adult_price, 3601000);
     assert.match(String(proposal.actions[0].fields?.notes || ""), /800/);
     assert.deepEqual(proposal.actions[0].fields?.photo_urls, [
-      "https://example.com/shanghai-1.jpg",
-      "https://example.com/shanghai-2.jpg",
+      "https://example.com/lumia-1.jpg",
+      "https://example.com/lumia-2.jpg",
     ]);
     assert.notEqual(
       proposal.conflict_items?.some((item) => item.type === "photo_unmatched"),
@@ -307,26 +307,26 @@ describe("travelAI photo attachment", () => {
         {
           action: "upsert",
           fields: {
-            route_name: "Chongqing ground flight combo",
+            route_name: "Eldor ground flight combo",
             adult_price: 1320000,
             child_price: 1270000,
             departure_dates: ["July 19", "July 26"],
             extra: {
               source_file_name:
-                "Chongqing ground flight combo-messenger-split.zip/Chongqing ground flight combo-messenger-1.png",
+                "Eldor ground flight combo-messenger-split.zip/Eldor ground flight combo-messenger-1.png",
             },
           },
         },
         {
           action: "upsert",
           fields: {
-            route_name: "Chongqing-Hohhot",
+            route_name: "Eldor-Sargol",
             duration_text: "8 days / 7 nights",
             has_food: true,
             extra: {
-              route: "Chongqing-Hohhot",
+              route: "Eldor-Sargol",
               source_file_name:
-                "Chongqing ground flight combo-messenger-split.zip/Chongqing ground flight combo-messenger-3.png",
+                "Eldor ground flight combo-messenger-split.zip/Eldor ground flight combo-messenger-3.png",
             },
           },
         },
@@ -336,7 +336,7 @@ describe("travelAI photo attachment", () => {
     mergeDuplicateTripActions(proposal);
 
     assert.equal(proposal.actions.length, 1);
-    assert.equal(proposal.actions[0].fields?.route_name, "Chongqing ground flight combo");
+    assert.equal(proposal.actions[0].fields?.route_name, "Eldor ground flight combo");
     assert.equal(proposal.actions[0].fields?.adult_price, 1320000);
   });
 
@@ -351,26 +351,26 @@ describe("travelAI photo attachment", () => {
         {
           action: "upsert",
           fields: {
-            route_name: "Chongqing ground flight combo",
+            route_name: "Eldor ground flight combo",
             adult_price: 1320000,
             child_price: 1270000,
             departure_dates: ["July 19", "July 26"],
             extra: {
               source_file_name:
-                "Chongqing ground flight combo-messenger-split.zip/Chongqing ground flight combo-messenger-1.png",
+                "Eldor ground flight combo-messenger-split.zip/Eldor ground flight combo-messenger-1.png",
             },
           },
         },
         {
           action: "upsert",
           fields: {
-            route_name: "Chongqing-Hohhot",
+            route_name: "Eldor-Sargol",
             duration_text: "8 days / 7 nights",
             has_food: true,
             extra: {
-              route: "Chongqing-Hohhot",
+              route: "Eldor-Sargol",
               source_file_name:
-                "Chongqing ground flight combo-messenger-split.zip/Chongqing ground flight combo-messenger-3.png",
+                "Eldor ground flight combo-messenger-split.zip/Eldor ground flight combo-messenger-3.png",
             },
           },
         },
@@ -378,16 +378,16 @@ describe("travelAI photo attachment", () => {
     };
     const photoUrls = new Map([
       [
-        "Chongqing ground flight combo-messenger-split.zip/Chongqing ground flight combo-messenger-1.png",
-        ["https://example.com/chongqing-1.jpg"],
+        "Eldor ground flight combo-messenger-split.zip/Eldor ground flight combo-messenger-1.png",
+        ["https://example.com/eldor-1.jpg"],
       ],
       [
-        "Chongqing ground flight combo-messenger-split.zip/Chongqing ground flight combo-messenger-2.png",
-        ["https://example.com/chongqing-2.jpg"],
+        "Eldor ground flight combo-messenger-split.zip/Eldor ground flight combo-messenger-2.png",
+        ["https://example.com/eldor-2.jpg"],
       ],
       [
-        "Chongqing ground flight combo-messenger-split.zip/Chongqing ground flight combo-messenger-3.png",
-        ["https://example.com/chongqing-3.jpg"],
+        "Eldor ground flight combo-messenger-split.zip/Eldor ground flight combo-messenger-3.png",
+        ["https://example.com/eldor-3.jpg"],
       ],
     ]);
 
@@ -396,9 +396,9 @@ describe("travelAI photo attachment", () => {
 
     assert.equal(proposal.actions.length, 1);
     assert.deepEqual(proposal.actions[0].fields?.photo_urls, [
-      "https://example.com/chongqing-1.jpg",
-      "https://example.com/chongqing-2.jpg",
-      "https://example.com/chongqing-3.jpg",
+      "https://example.com/eldor-1.jpg",
+      "https://example.com/eldor-2.jpg",
+      "https://example.com/eldor-3.jpg",
     ]);
     assert.notEqual(
       proposal.conflict_items?.some((item) => item.type === "photo_unmatched"),

@@ -5,7 +5,7 @@ import type { TravelTrip } from "../src/lib/travelTypes";
 import { normalizeExtraPatch } from "../src/lib/tripExtraSchema";
 
 const trip: TravelTrip = { id:"fixture",route_name:"Trip",operator_name:"Uudam",category:"",duration_text:"3 өдөр 2 шөнө",
-  adult_price:1230000,child_price:990000,infant_price:null,currency:"MNT",departure_dates:["2026-09-17"],seats_total:null,seats_left:null,
+  adult_price:1230000,child_price:1001000,infant_price:null,currency:"MNT",departure_dates:["2026-09-17"],seats_total:null,seats_left:null,
   has_food:null,status:"draft",notes:"",hotel:"",source_description:"",photo_urls:[],extra:{},created_at:"",updated_at:"" };
 test("renaming preserves poster photos, layout and departure-specific price table", () => {
   const prior={ title:"Trip",style:{photoScale:0.5},days:[{day:1,photo:"https://example.com/photo.jpg"}],price_table:{rows:[{cells:["100"]},{cells:["200"]}]} };
@@ -43,15 +43,15 @@ test("website departures inherit date-specific price group overrides", () => {
       {text:"8 сарын 24",ymd:"2026-08-24"},
     ],
     price_groups:[
-      {dates:["8 сарын 17"],adult_price:990000,child_price:890000,infant_price:390000},
-      {dates:["8 сарын 24"],adult_price:1190000,child_price:990000,infant_price:390000},
+      {dates:["8 сарын 17"],adult_price:1001000,child_price:901000,infant_price:401000},
+      {dates:["8 сарын 24"],adult_price:1201000,child_price:1001000,infant_price:401000},
     ],
   }},new Date("2026-07-16T04:00:00.000Z"));
   assert.equal(result.length,2);
-  assert.equal(result[0].price,990000);
-  assert.equal(result[0].childPrice,890000);
-  assert.equal(result[1].price,1190000);
-  assert.equal(result[1].childPrice,990000);
+  assert.equal(result[0].price,1001000);
+  assert.equal(result[0].childPrice,901000);
+  assert.equal(result[1].price,1201000);
+  assert.equal(result[1].childPrice,1001000);
 });
 test("partial metadata updates preserve visibility, prices and unrelated details", () => {
   const existing = {customer_visible:false,price_groups:[{adult_price:123}],included_items:["Hotel"],departure_rule:"Weekly"};

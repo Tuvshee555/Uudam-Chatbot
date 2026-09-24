@@ -368,7 +368,7 @@ function readAgeTiers(trip: TravelTrip): AgeTier[] {
     Array.isArray(value) ? (value as Array<Record<string, unknown>>) : [],
   );
   // No hand-written child rules: the trip's flat fares plus its saved age
-  // bands ARE the tiers ("Нярай 0-23 сар 300,000₮ / Хүүхэд 2-11 нас …"), so a
+  // bands ARE the tiers ("Нярай 0-23 сар 1,111,111₮ / Хүүхэд 2-11 нас …"), so a
   // "5 настай хүүхэд хэд вэ?" answers from the band that covers age 5, and a
   // 7-year-old on a trip whose child band ends at 6 is priced as an adult.
   if (rules.length === 0) {
@@ -1463,7 +1463,7 @@ function firstStructuredPassengerPrice(trip: TravelTrip, key: "child_price" | "i
   if (key === "child_price" && typeof trip.child_price === "number") return trip.child_price;
   // The trip's own base infant price ("Үндсэн Нярай" in the admin). Only the
   // child price used to have this fallback, so a trip whose price groups carry
-  // no infant figure (Shanghai-Disney 10/29, UB-Shanghai-Hangzhou) was listed to
+  // no infant figure (<city>-<city> 10/29, UB-<city>-<city>) was listed to
   // customers without its "нярай" price even though the admin shows one.
   if (key === "infant_price" && typeof trip.infant_price === "number") return trip.infant_price;
   for (const group of getStructuredPriceGroups(trip)) {
@@ -1478,7 +1478,7 @@ function firstStructuredPassengerPrice(trip: TravelTrip, key: "child_price" | "i
 }
 
 // Every matching trip is listed (up to this many). It was 5, and the resolver
-// only handed over 3, so "Shanghai" showed 3 of the 6 active Shanghai trips and
+// only handed over 3, so "<city>" showed 3 of the 6 active <city> trips and
 // the client reported two of them as missing.
 const MAX_LISTED_TRIPS = 8;
 

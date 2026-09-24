@@ -30,45 +30,45 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
 
 // The exact live catalog collision: the button label "Хөтөлбөр үзэх" contains
 // "үзэх", which is a real word in this trip's NAME.
-const ORDOS = trip({ id: "ordos", route_name: "Ордос -намрын тахилга үзэх аялал" });
-const SHANGHAI = trip({ id: "shanghai", route_name: "ШАНХАЙ - ДИСНЕЙЛЭНД-10/08" });
-const CATALOG = [ORDOS, SHANGHAI];
+const DARKAN = trip({ id: "darkan", route_name: "Даркан -намрын тахилга үзэх аялал" });
+const LUMIA = trip({ id: "lumia", route_name: "ЛУМИА - БАРТЭНЛЭНД-10/08" });
+const CATALOG = [DARKAN, LUMIA];
 
 test("tapping Хөтөлбөр үзэх keeps the trip the customer was looking at", async () => {
   // Regression, confirmed in a real Messenger conversation 2026-09-11: the
-  // customer was shown ШАНХАЙ, tapped "Хөтөлбөр үзэх", and got the Ордос
+  // customer was shown ЛУМИА, tapped "Хөтөлбөр үзэх", and got the Даркан
   // brochure — the bare label name-matched "…тахилга үзэх аялал".
   const routed = await routeFastPathText({
     senderId: "test-button-sender",
     text: SMART_BUTTON_LABELS.PROGRAM,
-    contextualUserText: `${SHANGHAI.route_name}\n${SMART_BUTTON_LABELS.PROGRAM}`,
+    contextualUserText: `${LUMIA.route_name}\n${SMART_BUTTON_LABELS.PROGRAM}`,
     trips: CATALOG,
   });
-  assert.match(routed.matchText, /ШАНХАЙ/);
-  assert.doesNotMatch(routed.matchText, /Ордос/);
+  assert.match(routed.matchText, /ЛУМИА/);
+  assert.doesNotMatch(routed.matchText, /Даркан/);
 });
 
-test("a customer genuinely naming the Ордос trip still gets Ордос", async () => {
+test("a customer genuinely naming the Даркан trip still gets Даркан", async () => {
   const routed = await routeFastPathText({
     senderId: "test-real-name-sender",
-    text: "Ордос -намрын тахилга үзэх аялал",
-    contextualUserText: "Ордос -намрын тахилга үзэх аялал",
+    text: "Даркан -намрын тахилга үзэх аялал",
+    contextualUserText: "Даркан -намрын тахилга үзэх аялал",
     trips: CATALOG,
   });
-  assert.match(routed.matchText, /Ордос/);
+  assert.match(routed.matchText, /Даркан/);
 });
 
 test("every smart-button set offers a way to reach a human", () => {
   // The operator option used to be appended only on the AI reply path, so
   // fast-path answers (price, programme, dates) silently dropped it — the
   // choice has to be visible to be a choice.
-  const buttons = buildSmartButtons(`✈️ ${SHANGHAI.route_name}`, CATALOG);
+  const buttons = buildSmartButtons(`✈️ ${LUMIA.route_name}`, CATALOG);
   assert.ok(buttons, "expected buttons for a resolvable trip");
   assert.ok(buttons!.includes(CONTACT_OPERATOR_LABEL));
 });
 
 test("smart buttons still lead with the programme and booking actions", () => {
-  const buttons = buildSmartButtons(`✈️ ${SHANGHAI.route_name}`, CATALOG)!;
+  const buttons = buildSmartButtons(`✈️ ${LUMIA.route_name}`, CATALOG)!;
   assert.equal(buttons[0], SMART_BUTTON_LABELS.PROGRAM);
   assert.ok(buttons.includes(SMART_BUTTON_LABELS.BOOK));
 });

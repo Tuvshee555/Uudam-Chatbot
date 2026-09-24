@@ -7,7 +7,7 @@
  * against the whole catalog plus recent turns — a distinctive trip name from
  * an older, unrelated turn could hijack the match and the bot would answer
  * about a trip it never offered (observed live: "шууд нислэгтэй" after a
- * two-Shanghai-trips clarification was answered with the Beidaihe combo from
+ * two-<city>-trips clarification was answered with the <city> combo from
  * a stale turn).
  *
  * Redis-backed with in-memory fallback, mirroring photoOnlyState.ts.

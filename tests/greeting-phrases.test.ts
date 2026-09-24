@@ -17,16 +17,16 @@ test("isKnownGreetingPhrase matches bare greetings (the mid-conversation greetin
 
 test("isKnownGreetingPhrase rejects trip questions so a real query is never greeted away", () => {
   // These reach the model / fast-paths; the greeting fast-path must NOT swallow
-  // them. In particular a greeting glued to a question ("сайн уу, Далянь үнэ")
+  // them. In particular a greeting glued to a question ("сайн уу, Тэлмор үнэ")
   // is a real question, not a bare greeting.
   for (const query of [
-    "Далянь аяллын үнэ",
-    "Бээжин",
-    "сайн уу Далянь аяллын үнэ хэд вэ",
+    "Тэлмор аяллын үнэ",
+    "Вэлмор",
+    "сайн уу Тэлмор аяллын үнэ хэд вэ",
     "зураг",
     "5",
     "8 сарын 15",
-    "hi Dalian price",
+    "hi Telmor price",
   ]) {
     assert.equal(isKnownGreetingPhrase(query), false, `must not treat as bare greeting: ${query}`);
   }

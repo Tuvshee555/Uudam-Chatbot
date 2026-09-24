@@ -38,9 +38,9 @@ import { SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
  * The text that arrives is our own label, not the customer's words, so it
  * carries no trip identity — the trip is whatever the conversation was
  * already about. Several labels collide with live trip names ("Хөтөлбөр
- * үзэх" vs "…аяллын хөтөлбөр" and "Ордос -намрын тахилга үзэх аялал"), and
+ * үзэх" vs "…аяллын хөтөлбөр" and "<хот> -намрын тахилга үзэх аялал"), and
  * the name matcher "verified" one of those from the bare label: tapping
- * Хөтөлбөр үзэх under a Шанхай reply sent the Ордос brochure instead
+ * Хөтөлбөр үзэх under a <хот> reply sent the <хот> brochure instead
  * (confirmed in a real Messenger conversation, 2026-09-11).
  */
 function isOwnButtonLabel(text: string): boolean {
@@ -289,12 +289,12 @@ export async function routeFastPathText(input: {
   if (tappedOwnButton && contextual?.status === "verified") {
     return { matchText: joinContextAndTurn(contextual.trip.route_name, text), scopedClarify: null };
   }
-  // Bug (found 2026-07-17 replaying real traffic): "beejin" alone after a
-  // Chunchin (unrelated) reply returned Chunchin. isLikelyContextDependentText
+  // Bug (found 2026-07-17 replaying real traffic): "<city>" alone after a
+  // <city> (unrelated) reply returned <city>. isLikelyContextDependentText
   // treats ANY 1-2 word message as a follow-up reference (needed for real
-  // pronouns like "тэр хэд вэ?"), but a bare destination name like "beejin"
+  // pronouns like "тэр хэд вэ?"), but a bare destination name like "<city>"
   // is a complete, self-sufficient query — it happened to resolve AMBIGUOUS
-  // (several real Beijing trips), not "nothing", so it has its own opinion
+  // (several real <city> trips), not "nothing", so it has its own opinion
   // that must be respected. Only let the contextual winner override when it's
   // actually one of the direct candidates (the same guard pickFastPathMatchText
   // already applies below) — otherwise it's a stale unrelated trip hijacking

@@ -115,9 +115,9 @@ describe("tripPhotoImport preview grouping", () => {
 describe("tripPhotoImport match", () => {
   it("exactly matches normalized route name", async () => {
     const { matchImportItemToTrips } = await loadMatcher();
-    const trips = [makeTrip("trip-1", "ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ-БЭЭЖИНГИЙН ГАЗРЫН АЯЛАЛ")];
+    const trips = [makeTrip("trip-1", "СЭРВЭН ТЭНГИС БУЮУ КАРДАН-ВЭЛМОРГИЙН ГАЗРЫН АЯЛАЛ")];
     const match = matchImportItemToTrips(
-      "ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ-БЭЭЖИНГИЙН ГАЗРЫН АЯЛАЛ.zip",
+      "СЭРВЭН ТЭНГИС БУЮУ КАРДАН-ВЭЛМОРГИЙН ГАЗРЫН АЯЛАЛ.zip",
       trips,
     );
     assert.equal(match.tripId, "trip-1");
@@ -134,16 +134,16 @@ describe("tripPhotoImport match", () => {
 
   it("fuzzy matches similar names", async () => {
     const { matchImportItemToTrips } = await loadMatcher();
-    const trips = [makeTrip("trip-3", "Бээжин-Шанхай нислэгтэй аялал")];
-    const match = matchImportItemToTrips("Бээжин Шанхай.zip", trips);
+    const trips = [makeTrip("trip-3", "Вэлмор-Лумиа нислэгтэй аялал")];
+    const match = matchImportItemToTrips("Вэлмор Лумиа.zip", trips);
     assert.equal(match.tripId, "trip-3");
     assert.equal(match.matchedBy, "exact");
   });
 
   it("returns none for unrelated names", async () => {
     const { matchImportItemToTrips } = await loadMatcher();
-    const trips = [makeTrip("trip-4", "Бангкок аялал")];
-    const match = matchImportItemToTrips("Токио.zip", trips);
+    const trips = [makeTrip("trip-4", "Гэрмол аялал")];
+    const match = matchImportItemToTrips("Сурмак.zip", trips);
     assert.equal(match.tripId, null);
     assert.equal(match.matchedBy, "none");
   });
@@ -151,11 +151,11 @@ describe("tripPhotoImport match", () => {
   it("does not guess between sibling trips when the folder only names the destination", async () => {
     const { matchImportItemToTrips } = await loadMatcher();
     const trips = [
-      makeTrip("ground", "Beidaihe ground tour"),
-      makeTrip("flight", "Beidaihe flight tour"),
+      makeTrip("ground", "Kardan ground tour"),
+      makeTrip("flight", "Kardan flight tour"),
     ];
 
-    const match = matchImportItemToTrips("Beidaihe photos.zip", trips);
+    const match = matchImportItemToTrips("Kardan photos.zip", trips);
 
     assert.equal(match.tripId, null);
     assert.match(match.reason, /Олон аялалтай/);
@@ -164,16 +164,16 @@ describe("tripPhotoImport match", () => {
   it("uses transport variant to choose the correct sibling trip", async () => {
     const { matchImportItemToTrips } = await loadMatcher();
     const trips = [
-      makeTrip("ground", "Beidaihe ground tour"),
-      makeTrip("flight", "Beidaihe flight tour"),
+      makeTrip("ground", "Kardan ground tour"),
+      makeTrip("flight", "Kardan flight tour"),
     ];
 
     assert.equal(
-      matchImportItemToTrips("Beidaihe ground photos.zip", trips).tripId,
+      matchImportItemToTrips("Kardan ground photos.zip", trips).tripId,
       "ground",
     );
     assert.equal(
-      matchImportItemToTrips("Beidaihe flight photos.zip", trips).tripId,
+      matchImportItemToTrips("Kardan flight photos.zip", trips).tripId,
       "flight",
     );
   });
@@ -181,18 +181,18 @@ describe("tripPhotoImport match", () => {
   it("uses duration and departure date to separate otherwise identical trips", async () => {
     const { matchImportItemToTrips } = await loadMatcher();
     const trips = [
-      makeTrip("four-day", "Hailar tour", [], {
+      makeTrip("four-day", "Torval tour", [], {
         duration: "4 days",
         dates: ["2026-07-10"],
       }),
-      makeTrip("five-day", "Hailar tour", [], {
+      makeTrip("five-day", "Torval tour", [], {
         duration: "5 days",
         dates: ["2026-07-18"],
       }),
     ];
 
     assert.equal(
-      matchImportItemToTrips("Hailar 5 days 07-18.zip", trips).tripId,
+      matchImportItemToTrips("Torval 5 days 07-18.zip", trips).tripId,
       "five-day",
     );
   });

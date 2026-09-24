@@ -89,10 +89,10 @@ test("buildPromptParts renders the relevant-trips hint as a hint, not a filter",
     systemPrompt: "Bot.",
     business: { knowledgeBase: "full catalog stays" },
     history: [],
-    relevantTripNames: ["Хайнан - Саньяа", "  ", "Бээжин шууд"],
+    relevantTripNames: ["Мирвэн - Нарвэл", "  ", "Вэлмор шууд"],
     userText: "hi",
   });
-  assert.match(parts.user, /Trips most likely relevant to this question .*Хайнан - Саньяа \| Бээжин шууд/);
+  assert.match(parts.user, /Trips most likely relevant to this question .*Мирвэн - Нарвэл \| Вэлмор шууд/);
   assert.match(parts.user, /full catalog stays/);
 });
 

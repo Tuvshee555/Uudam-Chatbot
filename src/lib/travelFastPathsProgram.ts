@@ -264,13 +264,13 @@ export function buildTripProgramReply(
     ? { status: "verified" as const, trip: trips[0], candidates: [] }
     : resolveTripFromUserMessage(text, trips, { allowLooseFallback: false });
   // The customer's words fit several tours. A single alias mention must not
-  // override that: "Тэнгэрийн хаалга" is registered as an alias of ONE tour but
+  // override that: "<хот>" is registered as an alias of ONE tour but
   // is equally the name of two others, so narrowing to the alias holder is how a
-  // customer asking for "Тэнгэрийн хаалга" photos received the wrong tour's
-  // poster — quoting a price 670,000₮ off. Ask, exactly as the price path does.
+  // customer asking for "<хот>" photos received the wrong tour's
+  // poster — quoting a price 1,111,111₮ off. Ask, exactly as the price path does.
   // …unless the customer typed exactly one tour's full ROUTE NAME, which settles
   // it — that is a naming, not a guess. Deliberately NOT exactMentionedTrips:
-  // that set also counts alias hits, and "Тэнгэрийн хаалга" is registered as an
+  // that set also counts alias hits, and "<хот>" is registered as an
   // alias of one tour while being equally the name of two others, which is what
   // sent the wrong poster in the first place.
   const exactRouteNameTrips = trips.filter((trip) => {

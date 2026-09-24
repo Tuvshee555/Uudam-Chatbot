@@ -7,7 +7,7 @@ function hasQuestionMarker(normalized: string): boolean {
 
 /**
  * Staff sometimes paste catalog/status rows into Messenger while testing:
- * "10 сарын 8-ны Шанхай суудал дүүрсэн - 5 шөнө 6 өдөртэй".
+ * "10 сарын 8-ны <хот> суудал дүүрсэн - 5 шөнө 6 өдөртэй".
  *
  * That is not a customer question. If we let it fall through, permissive
  * price/budget matchers can interpret the duration number as a budget ("5 сая")

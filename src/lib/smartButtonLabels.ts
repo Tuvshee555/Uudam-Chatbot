@@ -8,7 +8,7 @@
  * These are UI chrome, not customer prose: when a customer taps one, the
  * text that arrives is OURS. Several collide with real trip names in the
  * live catalog — "Хөтөлбөр үзэх" contains "хөтөлбөр" (two "…аяллын
- * хөтөлбөр" trips) and "үзэх" ("Ордос -намрын тахилга үзэх аялал") — so the
+ * хөтөлбөр" trips) and "үзэх" ("<хот> -намрын тахилга үзэх аялал") — so the
  * name matcher would "verify" one of those from the bare label. The router
  * treats them as carrying no trip identity and resolves from conversation
  * context instead.

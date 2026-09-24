@@ -49,22 +49,22 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
 // Mirrors the live catalog shape that produced the wrong-trip bug.
 const TRIPS: TravelTrip[] = [
   trip({
-    id: "beidaihe",
-    route_name: "ШАР ТЭНГИС БУЮУ БЭЙДАЙХЭ-БЭЭЖИНГИЙН ГАЗРЫН АЯЛАЛ",
+    id: "kardan",
+    route_name: "СЭРВЭН ТЭНГИС БУЮУ КАРДАН-ВЭЛМОРГИЙН ГАЗРЫН АЯЛАЛ",
     category: "Газрын",
-    extra: { aliases: ["Бэйдайхэ", "Beidaihe"] },
+    extra: { aliases: ["Кардан", "Kardan"] },
   }),
   trip({
-    id: "shanghai-tengeriin",
-    route_name: "Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал",
+    id: "lumia-zetgoriin",
+    route_name: "Лумиа + Зэтгорийн хаалга шууд нислэгтэй аялал",
     category: "Шууд нислэгтэй",
-    extra: { aliases: ["Shanghai"] },
+    extra: { aliases: ["Lumia"] },
   }),
   trip({
-    id: "shanghai-hanzhou",
-    route_name: "Шанхай+Ханжоу шууд нислэгтэй, усан парктай аялал",
+    id: "lumia-hanzhou",
+    route_name: "Лумиа+Хэлвин шууд нислэгтэй, усан парктай аялал",
     category: "Шууд нислэгтэй",
-    extra: { aliases: ["Shanghai", "Hangzhou"] },
+    extra: { aliases: ["Lumia", "Helvin"] },
   }),
 ];
 
@@ -72,37 +72,37 @@ test("LIVE BUG regression: clarification answer can never be hijacked by a stale
   const senderId = "route-test-hijack";
   await clearClarificationState(senderId);
 
-  // Turn 1: "shanghai aylal medelel awy" — ambiguous between the two Shanghai
+  // Turn 1: "lumia aylal medelel awy" — ambiguous between the two Lumia
   // trips; the router must remember those candidates and must NOT let the
-  // stale Beidaihe turn hijack the pick.
+  // stale Kardan turn hijack the pick.
   const turn1 = await routeFastPathText({
     senderId,
-    text: "shanghai aylal medelel awy",
-    contextualUserText: "beidaihe aylal une\nshanghai aylal medelel awy",
+    text: "lumia aylal medelel awy",
+    contextualUserText: "kardan aylal une\nshanghai aylal medelel awy",
     trips: TRIPS,
   });
-  assert.doesNotMatch(turn1.matchText, /beidaihe aylal une/);
+  assert.doesNotMatch(turn1.matchText, /kardan aylal une/);
   const pending = await getClarificationState(senderId);
   assert.ok(pending, "ambiguity must be captured as clarification state");
   assert.deepEqual(
     [...pending!.candidateTripIds].sort(),
-    ["shanghai-hanzhou", "shanghai-tengeriin"],
+    ["lumia-hanzhou", "lumia-zetgoriin"],
   );
 
-  // Turn 2: the customer answers "shud nislegtein" while a stale Beidaihe
+  // Turn 2: the customer answers "shud nislegtein" while a stale Kardan
   // turn still sits in the contextual window. Both offered trips are direct
   // flights, so the honest outcome is a scoped re-clarification between THOSE
-  // two — never the Beidaihe trip, and never a confident pick of one.
+  // two — never the Kardan trip, and never a confident pick of one.
   const turn2 = await routeFastPathText({
     senderId,
     text: "shud nislegtein",
-    contextualUserText: "beidaihe aylal une\nshanghai aylal medelel awy\nshud nislegtein",
+    contextualUserText: "kardan aylal une\nshanghai aylal medelel awy\nshud nislegtein",
     trips: TRIPS,
   });
   assert.ok(turn2.scopedClarify, "must re-ask, scoped to the offered candidates");
   assert.deepEqual(
     turn2.scopedClarify!.map((trip) => trip.id).sort(),
-    ["shanghai-hanzhou", "shanghai-tengeriin"],
+    ["lumia-hanzhou", "lumia-zetgoriin"],
   );
 
   // Turn 3: a discriminating answer picks exactly one offered trip.
@@ -113,8 +113,8 @@ test("LIVE BUG regression: clarification answer can never be hijacked by a stale
     trips: TRIPS,
   });
   assert.equal(turn3.scopedClarify, null);
-  assert.match(turn3.matchText, /Шанхай\+Ханжоу шууд нислэгтэй, усан парктай аялал/);
-  assert.doesNotMatch(turn3.matchText, /Тэнгэрийн хаалга/);
+  assert.match(turn3.matchText, /Лумиа\+Хэлвин шууд нислэгтэй, усан парктай аялал/);
+  assert.doesNotMatch(turn3.matchText, /Зэтгорийн хаалга/);
   assert.equal(await getClarificationState(senderId), null, "state cleared after resolution");
 });
 
@@ -123,25 +123,25 @@ test("an answer fitting none of the offered candidates drops the clarification (
   await clearClarificationState(senderId);
   await routeFastPathText({
     senderId,
-    text: "shanghai aylal",
-    contextualUserText: "shanghai aylal",
+    text: "lumia aylal",
+    contextualUserText: "lumia aylal",
     trips: TRIPS,
   });
   assert.ok(await getClarificationState(senderId));
 
   const next = await routeFastPathText({
     senderId,
-    text: "beidaihe une hed ve",
-    contextualUserText: "beidaihe une hed ve",
+    text: "kardan une hed ve",
+    contextualUserText: "kardan une hed ve",
     trips: TRIPS,
   });
   assert.equal(next.scopedClarify, null);
-  assert.match(next.matchText, /beidaihe une hed ve/);
-  // Old Shanghai clarification must not linger after the customer moved on.
+  assert.match(next.matchText, /kardan une hed ve/);
+  // Old Lumia clarification must not linger after the customer moved on.
   const after = await getClarificationState(senderId);
   assert.ok(
-    !after || !after.candidateTripIds.includes("shanghai-tengeriin"),
-    "stale Shanghai clarification must be dropped",
+    !after || !after.candidateTripIds.includes("lumia-zetgoriin"),
+    "stale Lumia clarification must be dropped",
   );
 });
 
@@ -149,72 +149,72 @@ test("numbered quick-reply choice resolves against the offered clarification lis
   const senderId = "route-test-numbered-choice";
   await clearClarificationState(senderId);
   const { setClarificationState } = await import("../src/lib/clarificationState");
-  await setClarificationState(senderId, ["shanghai-tengeriin", "shanghai-hanzhou"]);
+  await setClarificationState(senderId, ["lumia-zetgoriin", "lumia-hanzhou"]);
 
   const routed = await routeFastPathText({
     senderId,
-    text: "2. Шанхай+Ханжоу",
-    contextualUserText: "beidaihe aylal une\n2. Шанхай+Ханжоу",
+    text: "2. Лумиа+Хэлвин",
+    contextualUserText: "kardan aylal une\n2. Лумиа+Хэлвин",
     trips: TRIPS,
   });
 
   assert.equal(routed.scopedClarify, null);
-  assert.match(routed.matchText, /Шанхай\+Ханжоу|Ð¨Ð°Ð½Ñ…Ð°Ð¹\+Ð¥Ð°Ð½Ð¶Ð¾Ñƒ/);
+  assert.match(routed.matchText, /Лумиа\+Хэлвин|Ð›ÑƒÐ¼Ð¸Ð°\+Ð¥ÑÐ»Ð²Ð¸Ð½/);
   assert.equal(await getClarificationState(senderId), null);
 });
 
-test("specific combo query escapes stale Beijing ground-trip clarification", async () => {
-  const senderId = "route-test-beijing-combo-escape";
+test("specific combo query escapes stale Velmor ground-trip clarification", async () => {
+  const senderId = "route-test-velmor-combo-escape";
   await clearClarificationState(senderId);
   const trips = [
     trip({
-      id: "beijing-four-city",
-      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН – 4 ХОТЫН АЯЛАЛ",
+      id: "velmor-four-city",
+      route_name: "ВЭЛМОР - СЭЛВИН – ПЭЛМАК - ОРМАК – 4 ХОТЫН АЯЛАЛ",
       category: "Газрын аялал",
-      extra: { aliases: ["Бээжин", "Beijing"] },
+      extra: { aliases: ["Вэлмор", "Velmor"] },
     }),
     trip({
-      id: "beidaihe-beijing-combo",
-      route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+      id: "kardan-velmor-combo",
+      route_name: "Кардан сэрвэн тэнгисийн эрэг+Вэлмор газар нислэг хосолсон аялал",
       category: "Газар нислэг хосолсон",
-      extra: { aliases: ["Бээжин газар нислэг хосолсон", "Бэйдайхэ Бээжин"] },
+      extra: { aliases: ["Вэлмор газар нислэг хосолсон", "Кардан Вэлмор"] },
     }),
     trip({
-      id: "beijing-naadam-ground",
-      route_name: "БЭЭЖИН - ЖИНИН – ЖАНЖАКОУ - ЭРЭЭН-наадмын амралтаар явах газрын аялал",
+      id: "velmor-naadam-ground",
+      route_name: "ВЭЛМОР - СЭЛВИН – ПЭЛМАК - ОРМАК-наадмын амралтаар явах газрын аялал",
       category: "Газрын аялал",
-      extra: { aliases: ["Бээжин газрын аялал", "Beijing land tour"] },
+      extra: { aliases: ["Вэлмор газрын аялал", "Velmor land tour"] },
     }),
   ];
 
   await routeFastPathText({
     senderId,
-    text: "Бээжин аялал хэд вэ?",
-    contextualUserText: "Бээжин аялал хэд вэ?",
+    text: "Вэлмор аялал хэд вэ?",
+    contextualUserText: "Вэлмор аялал хэд вэ?",
     trips,
   });
 
   const ground = await routeFastPathText({
     senderId,
-    text: "Бээжин газрын аялал байна уу?",
-    contextualUserText: "Бээжин аялал хэд вэ?\nБээжин газрын аялал байна уу?",
+    text: "Вэлмор газрын аялал байна уу?",
+    contextualUserText: "Вэлмор аялал хэд вэ?\nВэлмор газрын аялал байна уу?",
     trips,
   });
   assert.ok(ground.scopedClarify, "ground query can still clarify between ground variants");
   assert.deepEqual(
     ground.scopedClarify!.map((candidate) => candidate.id).sort(),
-    ["beijing-four-city", "beijing-naadam-ground"],
+    ["velmor-four-city", "velmor-naadam-ground"],
   );
 
   const combo = await routeFastPathText({
     senderId,
-    text: "Бээжин газар нислэг хосолсон аяллын үнэ?",
+    text: "Вэлмор газар нислэг хосолсон аяллын үнэ?",
     contextualUserText:
-      "Бээжин аялал хэд вэ?\nБээжин газрын аялал байна уу?\nБээжин газар нислэг хосолсон аяллын үнэ?",
+      "Вэлмор аялал хэд вэ?\nВэлмор газрын аялал байна уу?\nВэлмор газар нислэг хосолсон аяллын үнэ?",
     trips,
   });
   assert.equal(combo.scopedClarify, null);
-  assert.match(combo.matchText, /Бэйдайхэ шар тэнгисийн эрэг\+Бээжин газар нислэг хосолсон аялал/);
+  assert.match(combo.matchText, /Кардан сэрвэн тэнгисийн эрэг\+Вэлмор газар нислэг хосолсон аялал/);
 });
 
 test("filterCandidatesByAttribute matches transliterated attribute answers", () => {
@@ -222,7 +222,7 @@ test("filterCandidatesByAttribute matches transliterated attribute answers", () 
   assert.equal(both.length, 2, "both offered trips are direct flights");
   const one = filterCandidatesByAttribute("усан парктай", [TRIPS[1], TRIPS[2]]);
   assert.equal(one.length, 1);
-  assert.equal(one[0].id, "shanghai-hanzhou");
+  assert.equal(one[0].id, "lumia-hanzhou");
   const none = filterCandidatesByAttribute("za", [TRIPS[1], TRIPS[2]]);
   assert.equal(none.length, 0, "low-signal answers must not fake-match");
 });
@@ -231,7 +231,7 @@ test("context resolves the trip but stale qualifiers are removed from builder in
   const senderId = "route-test-canonical-context";
   await clearClarificationState(senderId);
   const previous =
-    "✈️ Шанхай + Тэнгэрийн хаалга шууд нислэгтэй аялал\n💰 7 сарын үнэ: 3,590,000₮";
+    "✈️ Лумиа + Зэтгорийн хаалга шууд нислэгтэй аялал\n💰 7 сарын үнэ: 3,601,000₮";
   const current = "8 сарын хүүхдийн үнэ?";
   const routed = await routeFastPathText({
     senderId,
@@ -240,28 +240,28 @@ test("context resolves the trip but stale qualifiers are removed from builder in
     trips: TRIPS,
   });
 
-  assert.match(routed.matchText, /^Шанхай \+ Тэнгэрийн хаалга шууд нислэгтэй аялал/);
+  assert.match(routed.matchText, /^Лумиа \+ Зэтгорийн хаалга шууд нислэгтэй аялал/);
   assert.match(routed.matchText, /8 сарын хүүхдийн үнэ/);
-  assert.doesNotMatch(routed.matchText, /7 сарын үнэ|3,590,000/);
+  assert.doesNotMatch(routed.matchText, /7 сарын үнэ|3,601,000/);
 });
 
 // ── Hailaar follow-up regressions: duration digits + date answers ──────────
 const HAILAAR_TRIPS: TravelTrip[] = [
   trip({
     id: "hailaar-4d",
-    route_name: "Хайлаар Манжуурын аялал - 4 өдөр 3 шөнө",
+    route_name: "Торвал Нордэнын аялал - 4 өдөр 3 шөнө",
     duration_text: "4 өдөр / 3 шөнө",
     departure_dates: ["Баасан гариг бүр", "8 сарын 21", "8 сарын 28"],
   }),
   trip({
     id: "hailaar-5d",
-    route_name: "Хайлаар Манжуурын аялал - 5 өдөр 4 шөнө",
+    route_name: "Торвал Нордэнын аялал - 5 өдөр 4 шөнө",
     duration_text: "5 өдөр / 4 шөнө",
     departure_dates: ["Даваа гариг болгон", "8 сарын 17", "8 сарын 24"],
   }),
   trip({
     id: "hailaar-chichihar",
-    route_name: "ХАЙЛААР ЧИЧИХАРЫН АЯЛАЛ-шууд нислэгтэй",
+    route_name: "ТОРВАЛ ЛЭМРИНЫН АЯЛАЛ-шууд нислэгтэй",
     duration_text: "4 шөнө 5 өдөр",
     departure_dates: ["7 сарын 27", "8 сарын 10"],
   }),
@@ -362,49 +362,49 @@ test("date answer matching several candidates re-asks scoped with the date echoe
 
 test("a bare destination word that's ambiguous on its own is not hijacked by an unrelated previous reply", async () => {
   // Real bug (2026-07-17): customer asked about land+flight combo trips
-  // ("gazar nisleg hisolson"), got a Chunchin combo trip, then sent just
-  // "beejin" — a complete, self-sufficient destination name that resolves
-  // AMBIGUOUS on its own (several real Beijing trips exist). Because
+  // ("gazar nisleg hisolson"), got a Eldor combo trip, then sent just
+  // "velmor" — a complete, self-sufficient destination name that resolves
+  // AMBIGUOUS on its own (several real Velmor trips exist). Because
   // isLikelyContextDependentText treats any 1-2 word message as a follow-up
-  // reference, the router let the unrelated Chunchin reply's contextual
-  // resolution win outright, with no check that Chunchin was even one of
-  // "beejin"'s own candidates.
+  // reference, the router let the unrelated Eldor reply's contextual
+  // resolution win outright, with no check that Eldor was even one of
+  // "velmor"'s own candidates.
   const senderId = "route-test-short-word-not-context-hijacked";
   await clearClarificationState(senderId);
-  const chunchin = trip({
-    id: "chunchin-combo",
-    route_name: "Чунчин-Газар Нислэг Хосолсон",
+  const eldor = trip({
+    id: "eldor-combo",
+    route_name: "Эльдор-Газар Нислэг Хосолсон",
     category: "Газар нислэг хосолсон",
   });
-  // Two real Beijing-mentioning trips, matching the live catalog shape, so
-  // "beejin" resolves AMBIGUOUS on its own — not "verified" — which is what
+  // Two real Velmor-mentioning trips, matching the live catalog shape, so
+  // "velmor" resolves AMBIGUOUS on its own — not "verified" — which is what
   // actually made the original bug happen (an ambiguous direct result was
   // silently overridden by the unrelated contextual winner).
-  const beijingCombo = trip({
-    id: "beijing-combo",
-    route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+  const velmorCombo = trip({
+    id: "velmor-combo",
+    route_name: "Кардан сэрвэн тэнгисийн эрэг+Вэлмор газар нислэг хосолсон аялал",
     category: "Газар нислэг хосолсон",
-    extra: { aliases: ["Бээжин"] },
+    extra: { aliases: ["Вэлмор"] },
   });
-  const beijingCruise = trip({
-    id: "beijing-cruise",
-    route_name: "Усан онгоцны аялал - Эрээн - Бээжин -Тяньжин - Чежү Пусан",
+  const velmorCruise = trip({
+    id: "velmor-cruise",
+    route_name: "Усан онгоцны аялал - Ормак - Вэлмор -Дорнэл - Талвин Вирдэн",
     category: "Круйз",
-    extra: { aliases: ["Бээжин круз"] },
+    extra: { aliases: ["Вэлмор круз"] },
   });
-  const trips = [chunchin, beijingCombo, beijingCruise];
+  const trips = [eldor, velmorCombo, velmorCruise];
   const previousReply =
-    "Чунчин-Газар Нислэг Хосолсон аялал 8 шөнө 9 өдөр үргэлжилнэ.\n\n✈️ Чунчин-Газар Нислэг Хосолсон — 8 шөнө 9 өдөр\n💰 Том хүн: 2,290,000₮";
+    "Эльдор-Газар Нислэг Хосолсон аялал 8 шөнө 9 өдөр үргэлжилнэ.\n\n✈️ Эльдор-Газар Нислэг Хосолсон — 8 шөнө 9 өдөр\n💰 Том хүн: 2,301,000₮";
 
   const routed = await routeFastPathText({
     senderId,
-    text: "beejin",
+    text: "velmor",
     contextualUserText: `${previousReply}\nbeejin`,
     trips,
   });
 
-  // Must NOT resolve to the unrelated Chunchin trip.
-  assert.doesNotMatch(routed.matchText, /Чунчин/);
+  // Must NOT resolve to the unrelated Eldor trip.
+  assert.doesNotMatch(routed.matchText, /Эльдор/);
 });
 
 test("a plain greeting is never treated as a context-dependent follow-up", async () => {
@@ -414,24 +414,24 @@ test("a plain greeting is never treated as a context-dependent follow-up", async
   // words.length<=2 rule treats EVERY short message as a follow-up
   // reference, with no exception for an actual greeting — which asks
   // nothing and has no context to resolve. This is a wider case of the
-  // same bug class as the "beejin"/Chunchin fix above: a same-message
+  // same bug class as the "velmor"/Eldor fix above: a same-message
   // result (here, "no trip mentioned at all" rather than "ambiguous")
   // must not be silently overridden by an unrelated previous reply.
   const senderId = "route-test-greeting-not-context-hijacked";
   await clearClarificationState(senderId);
-  const beijingCombo = trip({
-    id: "beijing-combo",
-    route_name: "Бэйдайхэ шар тэнгисийн эрэг+Бээжин газар нислэг хосолсон аялал",
+  const velmorCombo = trip({
+    id: "velmor-combo",
+    route_name: "Кардан сэрвэн тэнгисийн эрэг+Вэлмор газар нислэг хосолсон аялал",
     category: "Газар нислэг хосолсон",
   });
   const previousReply =
-    "✈️ Бэйдайхэ шар тэнгисийн эрэг + Бээжин газар нислэг хосолсон аялал\n💰 Үнэ: Том хүн 1,270,000₮";
+    "✈️ Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал\n💰 Үнэ: Том хүн 1,270,000₮";
 
   const routed = await routeFastPathText({
     senderId,
     text: "hi",
     contextualUserText: `${previousReply}\nhi`,
-    trips: [beijingCombo],
+    trips: [velmorCombo],
   });
 
   assert.equal(routed.matchText, "hi");
@@ -440,39 +440,39 @@ test("a plain greeting is never treated as a context-dependent follow-up", async
 test("a newly named photo trip beats stale previous photo context", async () => {
   const senderId = "route-test-photo-topic-switch";
   await clearClarificationState(senderId);
-  const beidaihe = trip({
-    id: "beidaihe-combo-photo",
-    route_name: "\u0411\u044d\u0439\u0434\u0430\u0439\u0445\u044d \u0448\u0430\u0440 \u0442\u044d\u043d\u0433\u0438\u0441\u0438\u0439\u043d \u044d\u0440\u044d\u0433+\u0411\u044d\u044d\u0436\u0438\u043d \u0433\u0430\u0437\u0430\u0440 \u043d\u0438\u0441\u043b\u044d\u0433 \u0445\u043e\u0441\u043e\u043b\u0441\u043e\u043d \u0430\u044f\u043b\u0430\u043b",
+  const kardan = trip({
+    id: "kardan-combo-photo",
+    route_name: "\u041a\u0430\u0440\u0434\u0430\u043d \u0441\u044d\u0440\u0432\u044d\u043d \u0442\u044d\u043d\u0433\u0438\u0441\u0438\u0439\u043d \u044d\u0440\u044d\u0433+\u0412\u044d\u043b\u043c\u043e\u0440 \u0433\u0430\u0437\u0430\u0440 \u043d\u0438\u0441\u043b\u044d\u0433 \u0445\u043e\u0441\u043e\u043b\u0441\u043e\u043d \u0430\u044f\u043b\u0430\u043b",
     extra: {
       aliases: [
-        "\u0411\u044d\u0439\u0434\u0430\u0439\u0445\u044d \u0433\u0430\u0437\u0430\u0440 \u043d\u0438\u0441\u043b\u044d\u0433 \u0445\u043e\u0441\u043e\u043b\u0441\u043e\u043d",
+        "\u041a\u0430\u0440\u0434\u0430\u043d \u0433\u0430\u0437\u0430\u0440 \u043d\u0438\u0441\u043b\u044d\u0433 \u0445\u043e\u0441\u043e\u043b\u0441\u043e\u043d",
       ],
     },
   });
-  const tengerDirect = trip({
-    id: "tenger-direct-photo",
-    route_name: "\u0422\u044d\u043d\u0433\u044d\u0440\u0438\u0439\u043d \u0445\u0430\u0430\u043b\u0433\u0430 - \u0448\u0443\u0443\u0434 \u043d\u0438\u0441\u043b\u044d\u0433\u0442\u044d\u0439",
-    extra: { aliases: ["\u0416\u0430\u043d\u0436\u0438\u0430\u0436\u044d", "Zhangjiajie"] },
+  const zetgorDirect = trip({
+    id: "zetgor-direct-photo",
+    route_name: "\u0417\u044d\u0442\u0433\u043e\u0440\u0438\u0439\u043d \u0445\u0430\u0430\u043b\u0433\u0430 - \u0448\u0443\u0443\u0434 \u043d\u0438\u0441\u043b\u044d\u0433\u0442\u044d\u0439",
+    extra: { aliases: ["\u041f\u044d\u043b\u0434\u043e\u0440", "Peldor"] },
   });
-  const shanghaiTenger = trip({
-    id: "shanghai-tenger-photo",
-    route_name: "\u0428\u0430\u043d\u0445\u0430\u0439 + \u0422\u044d\u043d\u0433\u044d\u0440\u0438\u0439\u043d \u0445\u0430\u0430\u043b\u0433\u0430 \u0448\u0443\u0443\u0434 \u043d\u0438\u0441\u043b\u044d\u0433\u0442\u044d\u0439 \u0430\u044f\u043b\u0430\u043b",
+  const lumiaTenger = trip({
+    id: "lumia-zetgor-photo",
+    route_name: "\u041b\u0443\u043c\u0438\u0430 + \u0417\u044d\u0442\u0433\u043e\u0440\u0438\u0439\u043d \u0445\u0430\u0430\u043b\u0433\u0430 \u0448\u0443\u0443\u0434 \u043d\u0438\u0441\u043b\u044d\u0433\u0442\u044d\u0439 \u0430\u044f\u043b\u0430\u043b",
     extra: {
       aliases: [
-        "\u0428\u0430\u043d\u0445\u0430\u0439 \u0416\u0430\u043d\u0436\u0438\u0430\u0436\u044d",
-        "Shanghai Zhangjiajie",
+        "\u041b\u0443\u043c\u0438\u0430 \u041f\u044d\u043b\u0434\u043e\u0440",
+        "Lumia Peldor",
       ],
     },
   });
-  const current = "\u0428\u0430\u043d\u0445\u0430\u0439 \u0416\u0430\u043d\u0436\u0438\u0430\u0436\u044d \u0437\u0443\u0440\u0430\u0433";
+  const current = "\u041b\u0443\u043c\u0438\u0430 \u041f\u044d\u043b\u0434\u043e\u0440 \u0437\u0443\u0440\u0430\u0433";
   const stalePrevious =
-    "\u2708\ufe0f \u0411\u044d\u0439\u0434\u0430\u0439\u0445\u044d \u0448\u0430\u0440 \u0442\u044d\u043d\u0433\u0438\u0441\u0438\u0439\u043d \u044d\u0440\u044d\u0433+\u0411\u044d\u044d\u0436\u0438\u043d \u0433\u0430\u0437\u0430\u0440 \u043d\u0438\u0441\u043b\u044d\u0433 \u0445\u043e\u0441\u043e\u043b\u0441\u043e\u043d \u0430\u044f\u043b\u0430\u043b " +
+    "\u2708\ufe0f \u041a\u0430\u0440\u0434\u0430\u043d \u0441\u044d\u0440\u0432\u044d\u043d \u0442\u044d\u043d\u0433\u0438\u0441\u0438\u0439\u043d \u044d\u0440\u044d\u0433+\u0412\u044d\u043b\u043c\u043e\u0440 \u0433\u0430\u0437\u0430\u0440 \u043d\u0438\u0441\u043b\u044d\u0433 \u0445\u043e\u0441\u043e\u043b\u0441\u043e\u043d \u0430\u044f\u043b\u0430\u043b " +
     "\u041f\u043e\u0441\u0442\u0435\u0440 \u0437\u0443\u0440\u0433\u0443\u0443\u0434\u044b\u0433 \u043d\u044c \u0445\u0430\u0432\u0441\u0430\u0440\u0433\u0430\u043b\u0430\u0430.";
   const routed = await routeFastPathText({
     senderId,
     text: current,
     contextualUserText: `${stalePrevious}\n${current}`,
-    trips: [beidaihe, tengerDirect, shanghaiTenger],
+    trips: [kardan, zetgorDirect, lumiaTenger],
   });
 
   assert.equal(routed.scopedClarify, null);

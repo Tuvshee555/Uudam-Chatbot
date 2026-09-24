@@ -13,7 +13,7 @@ before(async () => {
 test("poster extraction merges parallel page results without losing later days", () => {
   const merged = mergeExtractedTrips([
     {
-      title: "Чунчин газар нислэг хосолсон",
+      title: "Эльдор газар нислэг хосолсон",
       subtitle: "7 сарын 19",
       duration_days: 9,
       duration_nights: 8,
@@ -24,8 +24,8 @@ test("poster extraction merges parallel page results without losing later days",
         note: "",
       },
       days: [
-        { day: 1, route: "УБ-Чунчин", summary: "Page one day one" },
-        { day: 2, route: "Чунчин", summary: "Page one day two" },
+        { day: 1, route: "УБ-Эльдор", summary: "Page one day one" },
+        { day: 2, route: "Эльдор", summary: "Page one day two" },
       ],
       includes: ["Зочид буудал"],
       excludes: [],
@@ -42,18 +42,18 @@ test("poster extraction merges parallel page results without losing later days",
         note: "",
       },
       days: [
-        { day: 3, route: "Чунчин-Хөх хот", summary: "Page two day three" },
-        { day: 4, route: "Хөх хот-УБ", summary: "Page two day four" },
+        { day: 3, route: "Эльдор-Саргол хот", summary: "Page two day three" },
+        { day: 4, route: "Саргол хот-УБ", summary: "Page two day four" },
       ],
       includes: ["Хөтөч"],
       excludes: ["Хувийн хэрэглээ"],
     },
   ]);
 
-  assert.equal(merged.title, "Чунчин газар нислэг хосолсон");
+  assert.equal(merged.title, "Эльдор газар нислэг хосолсон");
   assert.deepEqual(merged.departures, [{ date: "7 сарын 19" }, { date: "7 сарын 26" }]);
   assert.equal(merged.days?.length, 4);
-  assert.equal(merged.days?.[2]?.route, "Чунчин-Хөх хот");
+  assert.equal(merged.days?.[2]?.route, "Эльдор-Саргол хот");
   assert.deepEqual(merged.includes, ["Зочид буудал", "Хөтөч"]);
   assert.deepEqual(merged.excludes, ["Хувийн хэрэглээ"]);
   assert.equal(merged.price_table?.rows?.length, 2);

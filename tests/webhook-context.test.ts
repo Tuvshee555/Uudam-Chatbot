@@ -8,13 +8,13 @@ test("explicit trip request does not inherit previous destination context", asyn
 
   const result = webhookModule.buildContextualUserText(
     [
-      { role: "user" as const, text: "shanghai aylal medeelel awy" },
-      { role: "assistant" as const, text: "Шанхай чиглэлд 2 өөр аялал байна..." },
+      { role: "user" as const, text: "lumia aylal medeelel awy" },
+      { role: "assistant" as const, text: "Лумиа чиглэлд 2 өөр аялал байна..." },
     ],
-    "Бээжин нислэгтэй аяллын хөтөлбөр үзэх",
+    "Вэлмор нислэгтэй аяллын хөтөлбөр үзэх",
   );
 
-  assert.equal(result, "Бээжин нислэгтэй аяллын хөтөлбөр үзэх");
+  assert.equal(result, "Вэлмор нислэгтэй аяллын хөтөлбөр үзэх");
 });
 
 test("short referential follow-up still keeps recent user context", async () => {
