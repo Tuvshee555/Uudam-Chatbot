@@ -9,6 +9,7 @@
  */
 
 import { birthYearBand } from "../birthYearAgeBands";
+import { isPlaceholderDateText } from "../tripCompleteness";
 
 type PosterDay = {
   day?: number;
@@ -334,7 +335,11 @@ function normalizeDepartureText(value: string): string {
 function pushDepartureText(target: string[], value: string | undefined): void {
   const dates = expandPosterDateList(value);
   for (const text of dates) {
-    if (!text || /^үнэ$/i.test(text)) continue;
+    // An unfilled editor row ("Шинэ огноо") or bracket placeholder saved as if
+    // it were a real date — the live bug this guards against: a poster with
+    // one empty "add departure" row quoted "Шинэ огноо" to customers as a
+    // literal departure date, in the chat AND in the PDF.
+    if (!text || /^үнэ$/i.test(text) || isPlaceholderDateText(text)) continue;
     if (!target.includes(text)) target.push(text);
   }
 }

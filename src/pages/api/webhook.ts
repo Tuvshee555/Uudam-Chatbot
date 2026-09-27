@@ -27,7 +27,7 @@ import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
-import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, hasBankAccountRequest, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
+import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBot, trackSender } from "../../lib/pause";
 import { AUTO_PAUSE_RESET_DAYS, createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
@@ -1732,7 +1732,14 @@ async function handleMessage(
     ),
     recentAssistantReplies,
   });
-  const safeReply = enforcePaymentNeverSelfConfirmed(text, enforceWebsiteForPayment(rewrittenReply));
+  // Price guard: every ₮ figure in the reply must be a real, quotable price on
+  // one of the trips this turn actually resolved to. Catches a base fare
+  // quoted for a departure priced differently, or any invented amount,
+  // regardless of which path (AI or fast path) produced it.
+  const safeReply = guardUnverifiedPrices(
+    enforcePaymentNeverSelfConfirmed(text, enforceWebsiteForPayment(rewrittenReply)),
+    reasoningTrips.filter((trip) => relevantTripNames.includes(trip.route_name)),
+  );
   // Wrong-trip guard: the customer clearly asked about trip A but the model
   // answered with a DIFFERENT destination's price. Route to the same silent
   // handoff as a no-data reply rather than send a confident wrong answer.

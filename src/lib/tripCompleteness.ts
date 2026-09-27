@@ -7,6 +7,32 @@
  * so both the browser and the server can import it.
  */
 
+/**
+ * A tugrik figure under 1,000 is never a real fare in this catalog — it is a
+ * number typed to get past a required field ("1₮" for an untracked infant
+ * fare). The bot already hides these from customers (formatPassengerMoney),
+ * but the save guard should catch them at the source: a trip saved with one
+ * still shows it in the admin and in any raw export, and the underlying "we
+ * don't actually know this price" never gets fixed. Same threshold as
+ * formatPassengerMoney's guard in travelFastPathsPricing.ts — kept as its own
+ * small check here rather than importing that (much heavier) module.
+ */
+export function isPlaceholderTugrikFare(value: number | null | undefined): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value < 1000;
+}
+
+/**
+ * An unfilled poster-editor date row ("Шинэ огноо") or bracket placeholder
+ * ("[огноо 1]") saved as if it were a real departure date. Mirrors
+ * isPlaceholderDepartureText in travelDates.ts (kept independent here so this
+ * module stays dependency-free; the wording must stay in sync with that
+ * file's NEW_DATE_PLACEHOLDER).
+ */
+export function isPlaceholderDateText(text: string): boolean {
+  const trimmed = text.trim();
+  return /^\[[^\]]*\]$/.test(trimmed) || trimmed.toLowerCase() === "шинэ огноо";
+}
+
 export type TripGapSeverity = "blocking" | "warning";
 
 export type TripGap = {
@@ -66,7 +92,15 @@ function text(value: string | null | undefined): boolean {
 }
 
 function money(value: number | null | undefined): boolean {
-  return typeof value === "number" && Number.isFinite(value) && value > 0;
+  // A sub-1,000 figure ("1₮") is a placeholder, not a documented price — treat
+  // it as still missing so the save guard asks for the real number instead of
+  // silently accepting whatever got past the required-field check.
+  return typeof value === "number" && Number.isFinite(value) && value >= 1000;
+}
+
+/** At least one departure date that is not an unfilled editor placeholder. */
+function filledDates(value: readonly string[] | null | undefined): boolean {
+  return Array.isArray(value) && value.some((item) => item.trim().length > 0 && !isPlaceholderDateText(item));
 }
 
 /**
@@ -112,7 +146,7 @@ const RULES: Array<{
   { key: "infant_price", label: "Нярайн үнэ", where: "Үндсэн", severity: "blocking",
     ok: (t) => money(t.infant_price) || t.infant_fare_free === true },
   { key: "departure_dates", label: "Гарах өдөр", where: "Үнэ ба гаралт", severity: "blocking",
-    ok: (t) => filled(t.departure_dates) },
+    ok: (t) => filledDates(t.departure_dates) },
   { key: "photo_urls", label: "Зураг", where: "Үндсэн", severity: "blocking",
     ok: (t) => filled(t.photo_urls) || (t.poster_photo_count ?? 0) > 0 },
   // Editable on the poster, not in this form — flag it, never block the save here.

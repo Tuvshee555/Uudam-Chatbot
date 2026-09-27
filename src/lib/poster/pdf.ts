@@ -1,6 +1,7 @@
 import { PDFDocument } from "pdf-lib";
 import sharp from "sharp";
 import { sanitizePosterPdfFileName } from "./pdfUrl";
+import { isPlaceholderDateText } from "../tripCompleteness";
 
 export type PosterPdfRow = {
   id: string;
@@ -89,13 +90,21 @@ function formatMeal(day: PosterDay): string {
   return parts.length ? parts.join(", ") : "";
 }
 
-function formatPriceTable(data: Record<string, unknown>): string[] {
+/** Exported for unit tests only — pure text formatting, no rendering. */
+export function formatPriceTable(data: Record<string, unknown>): string[] {
   const table =
     data.price_table && typeof data.price_table === "object"
       ? (data.price_table as Record<string, unknown>)
       : {};
   const columns = asArray(table.columns).map(String).filter(Boolean);
-  const rows = asArray(table.rows).slice(0, 4);
+  // An unfilled "add row" ("Шинэ огноо") must never reach the customer-facing
+  // PDF as if it were a real departure/price row.
+  const rows = asArray(table.rows)
+    .filter((row) => {
+      const record = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
+      return !isPlaceholderDateText(asText(record.dates));
+    })
+    .slice(0, 4);
   if (!columns.length || !rows.length) return [];
   return rows.map((row) => {
     const record = row && typeof row === "object" ? (row as Record<string, unknown>) : {};
@@ -108,11 +117,12 @@ function formatPriceTable(data: Record<string, unknown>): string[] {
   });
 }
 
-function buildBlocks(poster: PosterPdfRow): Array<{ label: string; lines: string[] }> {
+/** Exported for unit tests only — pure text formatting, no rendering. */
+export function buildBlocks(poster: PosterPdfRow): Array<{ label: string; lines: string[] }> {
   const data = posterData(poster);
   const departures = asArray(data.departures)
     .map((item) => (item && typeof item === "object" ? asText((item as Record<string, unknown>).date) : ""))
-    .filter(Boolean);
+    .filter((date) => Boolean(date) && !isPlaceholderDateText(date));
   const days = asArray(data.days).filter((item): item is PosterDay => Boolean(item && typeof item === "object"));
   const durationDays = typeof data.duration_days === "number" ? data.duration_days : null;
   const durationNights = typeof data.duration_nights === "number" ? data.duration_nights : null;

@@ -1,3 +1,5 @@
+import type { TravelTrip } from "./travelTypes";
+
 const WEBSITE_URL = "";
 const WEBSITE_REPLY =
   "Төлбөрийн заавар, дансны мэдээллийг чат дээр баталгаажуулахгүй. Тухайн оператороос албан ёсоор баталгаажуулж авна уу.";
@@ -150,6 +152,83 @@ export function guardInventedBookingTerms(reply: string, promptUserText: string)
     (topic) => topic.reply.test(reply) && !topic.context.test(catalogContext),
   );
   return invented ? "REFER" : reply;
+}
+
+/**
+ * Every distinct tugrik amount a trip could truthfully be quoted at: base
+ * adult/child/infant fares plus every price-group tier (structured and
+ * legacy) and every child/infant rule's price. Real 0 tugrik/legacy free
+ * markers are excluded the same way formatPassengerMoney does, so a fare that
+ * would never be rendered is never treated as "confirmed" either.
+ */
+function tripQuotablePrices(trip: TravelTrip): Set<number> {
+  const prices = new Set<number>();
+  const add = (value: unknown) => {
+    if (typeof value === "number" && Number.isFinite(value) && value >= 1000) prices.add(Math.round(value));
+  };
+  add(trip.adult_price);
+  add(trip.child_price);
+  add(trip.infant_price);
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const groupSources = [
+    extra.price_groups,
+    extra.departure_date_groups,
+    extra.child_rules,
+    extra.child_price_rules,
+  ];
+  for (const source of groupSources) {
+    if (!Array.isArray(source)) continue;
+    for (const entry of source) {
+      if (!entry || typeof entry !== "object") continue;
+      const record = entry as Record<string, unknown>;
+      add(record.adult_price);
+      add(record.child_price);
+      add(record.infant_price);
+      add(record.price);
+      const passengerPrices = record.passenger_prices;
+      if (Array.isArray(passengerPrices)) {
+        for (const p of passengerPrices) {
+          if (p && typeof p === "object") add((p as Record<string, unknown>).price);
+        }
+      }
+    }
+  }
+  return prices;
+}
+
+// A tugrik figure in a reply: "3,490,000₮", "3.490.000 ₮", "3490000 төгрөг".
+// No trailing \b: "₮" is not a "word" character to JS regex, so \b right
+// after it never matches when followed by punctuation or end-of-string
+// (which is most of the time) — it silently matched nothing at all.
+const TUGRIK_AMOUNT_RE = /(\d{1,3}(?:[.,]\d{3}){1,4}|\d{4,})\s*(?:₮|төгрөг|tugrik|mnt)(?![\p{L}])/giu;
+
+/**
+ * Reads every ₮ amount out of an AI reply and confirms each one is a real,
+ * quotable price on one of the trips the reply is actually about. A price
+ * the model invented, misremembered, or copied from the wrong departure date
+ * (the base fare instead of that date's price-group fare) fails this check —
+ * REFER instead of a wrong number reaching the customer. Deliberately code
+ * only, no second model call: a checker that can itself hallucinate is not a
+ * safety net.
+ *
+ * `candidateTrips` should be the trip(s) the reply is grounded in — the
+ * resolved/relevant trip(s) for this turn, not the whole catalog, so a price
+ * that is real on some OTHER trip does not accidentally pass. When nothing
+ * resolved a specific trip (a broad "list your trips under 2 million"
+ * question, say), there is no single trip to check against — same as the
+ * wrong-trip guard, this stays out rather than silencing a legitimate broad
+ * answer it has no way to verify.
+ */
+export function guardUnverifiedPrices(reply: string, candidateTrips: TravelTrip[]): string {
+  if (candidateTrips.length === 0) return reply;
+  const amounts = [...reply.matchAll(TUGRIK_AMOUNT_RE)]
+    .map((m) => Number(m[1].replace(/[.,]/g, "")))
+    .filter((n) => Number.isFinite(n) && n >= 1000);
+  if (amounts.length === 0) return reply;
+  const allQuotable = new Set<number>();
+  for (const trip of candidateTrips) for (const price of tripQuotablePrices(trip)) allQuotable.add(price);
+  const unverified = amounts.some((amount) => !allQuotable.has(amount));
+  return unverified ? "REFER" : reply;
 }
 
 // A customer's own text claim ("5 сая шилжүүлсэн", "screenshot явуулсан",

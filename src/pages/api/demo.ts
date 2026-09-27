@@ -20,7 +20,7 @@ import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/c
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
-import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
+import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedPrices, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { dbGetRecentAdminMessages, getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
@@ -940,7 +940,13 @@ export default async function handler(
           }),
         ),
       );
-      const reply = isEnglishDemo ? localizeEnglishDemoReply(cleanedReply) : cleanedReply;
+      // Price guard (mirrors the webhook): every ₮ figure must be a real,
+      // quotable price on one of the trips this turn resolved to.
+      const priceCheckedReply = guardUnverifiedPrices(
+        cleanedReply,
+        reasoningTrips.filter((trip) => relevantTripNames.includes(trip.route_name)),
+      );
+      const reply = isEnglishDemo ? localizeEnglishDemoReply(priceCheckedReply) : priceCheckedReply;
       if (shouldHandoffSilently(reply)) return returnHandoff();
       // Wrong-trip guard (mirrors the webhook): asked about trip A, model priced
       // a different destination → silent handoff instead of a confident wrong answer.
