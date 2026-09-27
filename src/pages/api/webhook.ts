@@ -27,7 +27,7 @@ import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
-import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasBankAccountRequest, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
+import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, hasBankAccountRequest, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBot, trackSender } from "../../lib/pause";
 import { AUTO_PAUSE_RESET_DAYS, createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
@@ -948,6 +948,7 @@ async function handleMessage(
       senderId,
       text,
       contextualUserText,
+      history,
       trips: await getTrips(),
     });
     return routedCache;
@@ -1643,6 +1644,7 @@ async function handleMessage(
   // guessing on the next message), and tell the customer a human is taking
   // over — same acknowledgement whether the cause was missing data or an AI
   // outage.
+  aiReply = guardInventedBookingTerms(aiReply, promptParts.user);
   if (isReferReply(aiReply) && !aiOutage && isGenericTripRequest(text)) {
     // "Aylaluud", "Medeelel avay": no destination named, so the model had
     // nothing to look up and said REFER. Ask which trip rather than paging staff.

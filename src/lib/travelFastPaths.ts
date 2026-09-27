@@ -57,6 +57,7 @@ import { SMART_BUTTON_LABELS } from "./smartButtonLabels";
 import { TRIP_MEDIA_UNAVAILABLE_SILENT } from "./reply";
 import {
   buildAmbiguousTripReply,
+  adultFareOnDate,
   buildAgeSpecificPriceReply,
   childFareTiers,
   isPassengerCountOnly,
@@ -1053,6 +1054,7 @@ export function buildDateQuestionReply(
     // Catalog-wide answers honour "шууд нислэгтэй" / "газрын" / "хосолсон".
     trips: filterTripsByTransportIntent(intentText, scope.trips),
     focusTrip: scope.focusTrip,
+    adultFareOn: (trip, ymd) => adultFareOnDate(trip, ymd),
   });
 }
 

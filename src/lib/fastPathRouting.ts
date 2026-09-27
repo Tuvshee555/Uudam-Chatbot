@@ -25,9 +25,10 @@ import {
   clearClarificationState,
 } from "./clarificationState";
 import { customerTurn, joinContextAndTurn } from "./customerTurn";
-import { hasReferentialHint, isLikelyContextDependentText, pickFastPathMatchText } from "./contextualText";
+import { hasReferentialHint, isLikelyContextDependentText, lastAssistantReply, pickFastPathMatchText } from "./contextualText";
 import { parseDepartureDateText, resolveRequestedMonth, tripMatchesRequestedDate, tripDepartsInMonth } from "./travelDates";
 import {
+  filterTripsByTransportIntent,
   getTripSearchHaystack,
   isGenericTripRequest,
   phoneticLatinText,
@@ -36,7 +37,7 @@ import {
   queryWantsLandOnlyEnhanced,
   resolveTripFromUserMessage,
 } from "./travelFastPathsSearch";
-import { isPassengerCountOnly } from "./travelFastPathsPricing";
+import { AMBIGUOUS_REPLY_MARKER, isPassengerCountOnly } from "./travelFastPathsPricing";
 import type { TravelTrip } from "./travelTypes";
 import { isKnownGreetingPhrase } from "./greetingPhrases";
 import { SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
@@ -150,11 +151,18 @@ export type FastPathRoute = {
   scopedClarifyNote?: string;
 };
 
+/** A reply that asked the customer to pick a trip — the only kind a pending clarification belongs to. */
+function isTripChoiceQuestion(reply: string): boolean {
+  return reply.includes(AMBIGUOUS_REPLY_MARKER) || /аль\s+аялл/i.test(reply);
+}
+
 export async function routeFastPathText(input: {
   senderId: string;
   text: string;
   contextualUserText: string;
   trips: TravelTrip[];
+  /** Conversation so far; used to tell whether the last reply asked "which trip?". */
+  history?: Array<{ role: "user" | "assistant"; text: string }>;
 }): Promise<FastPathRoute> {
   const { senderId, text, contextualUserText, trips } = input;
   const resolve = (t: string, pool: TravelTrip[]) =>
@@ -167,7 +175,16 @@ export async function routeFastPathText(input: {
   const choice = parseNumberedChoice(text);
 
   // --- 1. Pending clarification: scope the answer to what we offered. ---
-  const pending = await getClarificationState(senderId);
+  // The state is saved whenever a message matches several trips, even when
+  // another branch then answered about one trip ("10 сарын 8-нд <хот>" got
+  // that day's single trip). A follow-up "Үнэ хэд вэ" re-listed all six. The
+  // list only counts if the last reply actually asked which trip; tapped
+  // buttons carry the trip's name and are still honoured.
+  const previousReply = input.history ? lastAssistantReply(input.history) : undefined;
+  const pendingIsStale =
+    previousReply !== undefined && !isTripChoiceQuestion(previousReply) && !choice && !tappedOwnButton;
+  const pending = pendingIsStale ? null : await getClarificationState(senderId);
+  if (pendingIsStale) await clearClarificationState(senderId);
   const pendingTrips = pending
     ? pending.candidateTripIds
         .map((id) => trips.find((trip) => trip.id === id))
@@ -231,11 +248,16 @@ export async function routeFastPathText(input: {
     // and re-clarify from the whole catalog. One departing candidate → that's
     // the trip; several → keep the clarification scoped to exactly those,
     // with the date echoed so the re-ask reads as informed.
+    // "…шууд нислэгтэй ямар аялал" under a list: the date narrows, but only
+    // to trips of that kind — a combo trip leaving that day was served as the
+    // answer to a direct-flight question. No trip of that kind among the
+    // offered ones means a fresh catalog question: fall through.
+    const ofAskedKind = (list: TravelTrip[]) => (asksForCategory ? filterTripsByTransportIntent(text, list) : list);
     const requestedYmd = parseDepartureDateText(text)[0];
     if (requestedYmd) {
-      const byDate = pendingTrips.filter((trip) =>
+      const byDate = ofAskedKind(pendingTrips.filter((trip) =>
         tripMatchesRequestedDate(trip, requestedYmd),
-      );
+      ));
       if (byDate.length === 1) return chose(byDate[0]);
       if (byDate.length > 1) {
         await setClarificationState(senderId, byDate.map((trip) => trip.id));
@@ -251,13 +273,13 @@ export async function routeFastPathText(input: {
     // way. When none of the offered trips departs that month, say so and list
     // what they DO have, instead of silently answering about one of them.
     const requestedMonth = requestedYmd ? null : resolveRequestedMonth(text);
-    if (requestedMonth) {
-      const byMonth = pendingTrips.filter((trip) => tripDepartsInMonth(trip, requestedMonth.month));
+    if (requestedMonth && (!asksForCategory || ofAskedKind(pendingTrips).length > 0)) {
+      const byMonth = ofAskedKind(pendingTrips.filter((trip) => tripDepartsInMonth(trip, requestedMonth.month)));
       if (byMonth.length === 1) return chose(byMonth[0]);
-      await setClarificationState(senderId, (byMonth.length > 0 ? byMonth : pendingTrips).map((trip) => trip.id));
+      await setClarificationState(senderId, (byMonth.length > 0 ? byMonth : ofAskedKind(pendingTrips)).map((trip) => trip.id));
       return {
         matchText: text,
-        scopedClarify: byMonth.length > 0 ? byMonth : pendingTrips,
+        scopedClarify: byMonth.length > 0 ? byMonth : ofAskedKind(pendingTrips),
         scopedClarifyNote: byMonth.length > 0
           ? `${requestedMonth.month} сард эдгээр аялал гарна:`
           : `${requestedMonth.month} сард гарах аялал эдгээрээс алга байна. Эдгээрийн гарах өдрүүд:`,

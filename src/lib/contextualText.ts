@@ -41,6 +41,10 @@ export function isLikelyContextDependentText(text: string) {
   // Same reasoning for a bare thank-you: it asks nothing, so it must not borrow
   // the previous turns' trips (a real "Баярлалаа" got a <city> trip list).
   if (isThanksOnly(text)) return false;
+  // "10р сарын аялал байна уу" asks the whole catalog about a month. Asked a
+  // second time, it was read as a follow-up to the previous list and answered
+  // with that list's trips — November trips included — instead of October's.
+  if (isFreshMonthCatalogQuestion(normalized)) return false;
   const words = normalized.split(/\s+/).filter(Boolean);
   if (words.length <= 2) return true;
   // "11-13хүн байна", "бид 4 хүн": a group size for the trip on screen.
@@ -60,14 +64,30 @@ export function isLikelyContextDependentText(text: string) {
   return contentWords.length === 0;
 }
 
+const POINTING_WORD = /(?:^|\s)(?:нь|ni|тэр|ter|энэ|ene)(?:\s|$)/;
+
+function isFreshMonthCatalogQuestion(normalized: string): boolean {
+  return (
+    /(?:^|\s)\d{1,2}\s*(?:р\s*)?(?:сар|sar)/.test(normalized) &&
+    /(?:^|\s)(?:аял|aylal|ayalal)/.test(normalized) &&
+    !POINTING_WORD.test(normalized)
+  );
+}
+
 /** Words that point back at something already on screen ("тэр", "үнэ", "нь"). */
 export function hasReferentialHint(text: string): boolean {
   const normalized = normalizeContextText(text);
   return (
     REFERENTIAL_HINTS.some((hint) => normalized.includes(hint)) ||
-    /(?:^|\s)(?:нь|ni)(?:\s|$)/.test(normalized)
+    /(?:^|\s)(?:нь|ni)(?:\s|$)/.test(normalized) ||
+    LATIN_REFERENTIAL_HINT.test(normalized)
   );
 }
+
+// The same hints typed in Latin letters ("Une hed ve"). Whole words only:
+// short Latin stems sit inside place names ("ter" in a Latin city spelling).
+const LATIN_REFERENTIAL_HINT =
+  /(?:^|\s)(?:une|unee|uni|unii|unetei|hed|heden|niit|hezee|ognoo|suudal|huuhed|huuhdiin|nyrai|hutulbur|ter|ene|dahiad|dahin)(?:\s|$)/;
 
 const REFERENTIAL_HINTS = [
   "again",
@@ -111,6 +131,9 @@ const REFERENTIAL_HINTS = [
 ];
 
 const NON_CONTENT_WORDS = [
+  // Latin-typed question words, as in LATIN_REFERENTIAL_HINT.
+  "unee", "unii", "unetei", "heden", "niit", "hezee", "ognoo", "suudal", "huuhed", "huuhdiin",
+  "nyrai", "hutulbur", "dahiad", "dahin", "aylal", "ayalal", "aylaliin", "baina", "bgaa", "yavah",
   "аялал",
   "аяллын",
   "зураг",
@@ -227,12 +250,11 @@ function isAttachmentPlaceholder(text: string) {
   return /^\[[^\]]*илгээсэн\]$/i.test(text.trim());
 }
 
-export function buildContextualUserText(
+/** The bot's last real reply (attachment placeholders skipped), if any. */
+export function lastAssistantReply(
   history: Array<{ role: "user" | "assistant"; text: string }>,
-  userText: string,
-) {
-  if (!isLikelyContextDependentText(userText)) return userText;
-  const previousAssistantReply = [...history]
+): string | undefined {
+  return [...history]
     .reverse()
     .find(
       (message) =>
@@ -241,6 +263,14 @@ export function buildContextualUserText(
         !isAttachmentPlaceholder(message.text),
     )
     ?.text.trim();
+}
+
+export function buildContextualUserText(
+  history: Array<{ role: "user" | "assistant"; text: string }>,
+  userText: string,
+) {
+  if (!isLikelyContextDependentText(userText)) return userText;
+  const previousAssistantReply = lastAssistantReply(history);
   // The customer's current turn is marked (see customerTurn.ts): the context
   // before it only identifies the trip, and must never be read as the question.
   if (previousAssistantReply && isFirstOptionFollowup(userText)) {

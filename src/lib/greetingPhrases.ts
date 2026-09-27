@@ -101,6 +101,8 @@ const THANKS_CORE_WORDS = new Set([
 ]);
 const THANKS_FILLER_WORDS = new Set([
   "за", "zaa", "za", "ok", "ок", "okay", "маш", "их", "танд", "танай", "тань", "аа", "you", "very", "much",
+  // "за баярлалаа, хүлээж байя" — thanks while waiting for staff.
+  "хүлээж", "хүлээе", "хүлээнэ", "хүлээлээ", "huleej", "huleeye", "huleene", "бай", "байя", "байъя", "baiy", "baiya",
 ]);
 
 /**

@@ -5,7 +5,7 @@
  * reply fragments reused by the top-level structured-reply builder.
  */
 
-import { filterFutureDepartureDates, parseDepartureDateText } from "./travelDates";
+import { filterFutureDepartureDates, isPlaceholderDepartureText, parseDepartureDateText } from "./travelDates";
 import type { TravelTrip } from "./travelOps";
 import {
   withFutureDepartureDates,
@@ -33,7 +33,17 @@ import {
  */
 export function formatPassengerMoney(value: number | null | undefined, currency: string) {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  if (isPlaceholderTugrikFare(value, currency)) return null;
   return formatMoney(value, currency);
+}
+
+/**
+ * A tugrik fare under 1,000₮ is a placeholder typed to get past a required
+ * field, not a price: the bot listed "нярай 1₮" to customers. Real fares in
+ * this catalog start in the hundreds of thousands.
+ */
+function isPlaceholderTugrikFare(value: number, currency: string) {
+  return (currency || "MNT").toUpperCase() === "MNT" && value < 1000;
 }
 
 const DIRECT_FLIGHT_POSITIVE_PATTERNS = [/шууд\s+нислэг/i];
@@ -50,6 +60,9 @@ export function hasPriceIntent(text: string) {
     // "хэд байсан бэ?", "хэд бэ", "хэдэн төгрөг": asked in the customer's own
     // words, not borrowed from an "үнэ" in the bot's previous reply.
     /хэд(?:эн)?\s*(?:байсан|бэ|төг\S*|мөнгө|болж)/i.test(text) ||
+    // The same asked in Latin letters ("une hed ve", "huuhed hed ve"): read as
+    // no question at all, it went to the model, which answered "anything else?".
+    /(?:^|[^a-z])(?:une|unee|unii|uniin|unetei)(?:[^a-z]|$)|(?:^|[^a-z])hed(?:en)?\s*(?:ve|vee|be|bolh\S*|tug\S*|mungu)(?:[^a-z]|$)/i.test(text) ||
     /(\d{1,2}\s*(?:настай|нас|сар|сартай)\s*(?:хүүхэд|нярай)?|(?:хүүхэд|нярай)\s*\d{1,2}\s*(?:настай|нас|сар|сартай))/i.test(text) ||
     isPassengerCountOnly(text)
   );
@@ -809,7 +822,10 @@ export function formatGroupDateLabel(dates: string[], suffix = "гаралт") {
 function getPriceGroupDisplayDates(group: Record<string, unknown> | DepartureDateGroup): string[] {
   const raw = group as Record<string, unknown>;
   const dates = Array.isArray(raw.dates)
-    ? raw.dates.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    ? raw.dates.filter(
+        (value): value is string =>
+          typeof value === "string" && value.trim().length > 0 && !isPlaceholderDepartureText(value),
+      )
     : [];
   if (dates.length > 0) {
     return dates.flatMap((dateText) => {
@@ -835,6 +851,24 @@ export function formatCompactDepartureList(dates: string[]) {
     return values.join(", ");
   }
   return compactDates(dates);
+}
+
+/**
+ * The adult fare for one departure: the price group that lists that date, else
+ * the trip's base fare. Date answers quoted the base fare, so a customer asking
+ * about a departure priced higher than the others was told the lower price.
+ */
+export function adultFareOnDate(trip: TravelTrip, ymd: string, now = new Date()): number | null {
+  const monthDay = ymd.slice(5);
+  const groups = [...getStructuredPriceGroups(trip), ...(getPriceGroups(trip) as Array<Record<string, unknown>>)];
+  for (const group of groups) {
+    if (typeof group.adult_price !== "number" || group.adult_price <= 0) continue;
+    const listsDate = getPriceGroupDisplayDates(group).some((dateText) =>
+      parseDepartureDateText(dateText, now).some((date) => date.slice(5) === monthDay),
+    );
+    if (listsDate) return group.adult_price;
+  }
+  return typeof trip.adult_price === "number" ? trip.adult_price : null;
 }
 
 export function findPriceGroupByYmd(
@@ -1202,15 +1236,19 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
     type GroupedPrice = { priceKey: string; priceLines: string[]; dates: string[]; label: string };
     const grouped: GroupedPrice[] = [];
     for (const g of structuredGroups) {
+      // A group with no infant figure falls back to the trip's own infant
+      // price, as the trip list already does — the card dropped "Нярай" while
+      // the list right above it showed one.
+      const groupHasInfant = typeof g.infant_price === "number" || g.infant_price_free === true;
       const priceLines = formatPassengerPriceLines({
         adult: typeof g.adult_price === "number" ? g.adult_price : null,
         child: typeof g.child_price === "number" ? g.child_price : null,
-        infant: typeof g.infant_price === "number" ? g.infant_price : null,
+        infant: groupHasInfant ? (g.infant_price as number | null) : trip.infant_price,
         childAge: typeof g.child_age === "string" ? g.child_age : "",
-        infantAge: typeof g.infant_age === "string" ? g.infant_age : "",
+        infantAge: typeof g.infant_age === "string" && g.infant_age ? g.infant_age : groupHasInfant ? "" : tripAgeBands(trip).infant,
         currency,
         childFree: g.child_price_free === true,
-        infantFree: g.infant_price_free === true,
+        infantFree: g.infant_price_free === true || (!groupHasInfant && isDocumentedFreeFare(trip, "infant")),
       });
       if (!priceLines.length) continue;
       // Several child fares in one group (born 2014-2015 vs 2016-2023): the
@@ -1265,7 +1303,7 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
       const priceLines = formatPassengerPriceLines({
         adult: group.adult_price ?? null,
         child: group.child_price ?? null,
-        infant: group.infant_price ?? null,
+        infant: group.infant_price ?? trip.infant_price ?? null,
         currency,
         childFree: isDocumentedFreeFare(trip, "child"),
         infantFree: isDocumentedFreeFare(trip, "infant"),

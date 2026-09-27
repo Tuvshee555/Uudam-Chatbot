@@ -7,6 +7,7 @@ import { upload as uploadToBlob } from "@vercel/blob/client";
 import Poster from "./Poster";
 import AttachToTripModal from "./AttachToTripModal";
 import { createDefaultTrip } from "@/lib/poster/defaultTrip";
+import { NEW_DATE_PLACEHOLDER } from "@/lib/travelDates";
 import { Badge, Button, Card, DatePicker, Icons, Input, Modal, Select, Spinner, cx } from "@/components/ui";
 import { TabHeader } from "@/components/admin/AdminShared";
 import type { PosterBulkPlan, PosterBulkPlanItem } from "@/lib/poster/bulkPlan";
@@ -623,7 +624,7 @@ export default function PosterTab({
       return normalizeTripData(clone as unknown as PosterTrip);
     });
 
-  const addDeparture = () => addItem(["departures"], { date: "Шинэ огноо" });
+  const addDeparture = () => addItem(["departures"], { date: NEW_DATE_PLACEHOLDER });
 
   const newDayObj = (): PosterDay => ({
     day: 0,
@@ -686,7 +687,7 @@ export default function PosterTab({
       if (!clone.price_table.columns?.length) clone.price_table.columns = ["Том хүн", "Хүүхэд", "Нярай"];
       clone.price_table.rows ||= [];
       if (clone.price_table.rows.length === 0) {
-        clone.price_table.rows.push({ dates: "Шинэ огноо", cells: clone.price_table.columns.map(() => "") });
+        clone.price_table.rows.push({ dates: NEW_DATE_PLACEHOLDER, cells: clone.price_table.columns.map(() => "") });
       }
       return normalizeTripData(clone);
     });
@@ -776,7 +777,7 @@ export default function PosterTab({
       clone.price_table ||= { columns: ["Том хүн", "Хүүхэд", "Нярай"], rows: [], note: "" };
       const cols = clone.price_table.columns?.length || 2;
       clone.price_table.rows ||= [];
-      clone.price_table.rows.push({ dates: "Шинэ огноо", cells: Array.from({ length: cols }, () => "") });
+      clone.price_table.rows.push({ dates: NEW_DATE_PLACEHOLDER, cells: Array.from({ length: cols }, () => "") });
       return clone;
     });
 

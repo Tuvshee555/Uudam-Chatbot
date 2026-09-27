@@ -20,7 +20,7 @@ import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/c
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
-import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
+import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { dbGetRecentAdminMessages, getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
@@ -380,6 +380,7 @@ export default async function handler(
           senderId: sessionId,
           text: normalizedText,
           contextualUserText,
+          history,
           trips: await getTrips(),
         });
         return routedCache;
@@ -914,7 +915,7 @@ export default async function handler(
         });
         aiReplyText = fallbackText || "REFER";
       }
-      const rawFixed = fixMojibake(aiReplyText);
+      const rawFixed = guardInventedBookingTerms(fixMojibake(aiReplyText), promptParts.user);
       // REFER (or legacy SILENT) = the model has no data for this question.
       // Mirror production: stay silent customer-side for missing data.
       if (isReferReply(rawFixed)) {

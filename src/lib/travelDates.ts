@@ -2,6 +2,18 @@ import type { TravelTrip } from "./travelOps";
 
 export const MONGOLIA_TIME_ZONE = "Asia/Ulaanbaatar";
 
+/** What the poster editor writes into a freshly added date row. */
+export const NEW_DATE_PLACEHOLDER = "Шинэ огноо";
+
+/**
+ * An editor placeholder that was never filled in ("Шинэ огноо", "[огноо 1]").
+ * It is not a date: the bot listed "гарах: … Шинэ огноо …" to customers.
+ */
+export function isPlaceholderDepartureText(text: string): boolean {
+  const trimmed = text.trim();
+  return /^\[[^\]]*\]$/.test(trimmed) || trimmed.toLowerCase() === NEW_DATE_PLACEHOLDER.toLowerCase();
+}
+
 type DateParts = {
   year: number;
   month: number;
@@ -515,10 +527,25 @@ function formatCustomerDate(ymd: string): string {
   return `${month} сарын ${day}`;
 }
 
-function formatTripSummary(match: DepartureDateMatch): string {
+/** Adult fare for one departure date; supplied by the pricing layer. */
+export type AdultFareOnDate = (trip: TravelTrip, ymd: string) => number | null;
+const baseAdultFare: AdultFareOnDate = (trip) => trip.adult_price;
+
+/** One price, or "min – max" when the listed departures are priced differently. */
+function formatFareForDates(trip: TravelTrip, ymds: string[], fareOn: AdultFareOnDate): string {
+  const fares = ymds.map((ymd) => fareOn(trip, ymd)).filter((fare): fare is number => typeof fare === "number");
+  if (fares.length === 0) return formatMoney(trip.adult_price, trip.currency);
+  const low = Math.min(...fares);
+  const high = Math.max(...fares);
+  return low === high
+    ? formatMoney(low, trip.currency)
+    : `${formatMoney(low, trip.currency)} – ${formatMoney(high, trip.currency)}`;
+}
+
+function formatTripSummary(match: DepartureDateMatch, ymd: string, fareOn: AdultFareOnDate): string {
   const { trip } = match;
   const details: string[] = [];
-  const adultPrice = formatMoney(trip.adult_price, trip.currency);
+  const adultPrice = formatFareForDates(trip, [ymd], fareOn);
   if (adultPrice) details.push(`том хүн ${adultPrice}`);
   if (typeof trip.seats_left === "number") details.push(`${trip.seats_left} суудал`);
 
@@ -791,18 +818,22 @@ function findRangeDepartures(
   return matches.sort((a, b) => a.ymd.localeCompare(b.ymd));
 }
 
-function formatMonthDepartureOptions(matches: Array<{ ymd: string; trip: TravelTrip }>): string {
-  const byTrip = new Map<string, { trip: TravelTrip; dates: string[] }>();
+function formatMonthDepartureOptions(
+  matches: Array<{ ymd: string; trip: TravelTrip }>,
+  fareOn: AdultFareOnDate,
+): string {
+  const byTrip = new Map<string, { trip: TravelTrip; dates: string[]; ymds: string[] }>();
   for (const match of matches) {
-    const existing = byTrip.get(match.trip.id) || { trip: match.trip, dates: [] };
+    const existing = byTrip.get(match.trip.id) || { trip: match.trip, dates: [], ymds: [] };
     existing.dates.push(formatCustomerDate(match.ymd));
+    existing.ymds.push(match.ymd);
     byTrip.set(match.trip.id, existing);
   }
 
   return Array.from(byTrip.values())
     .slice(0, 5)
-    .map(({ trip, dates }) => {
-      const price = formatMoney(trip.adult_price, trip.currency);
+    .map(({ trip, dates, ymds }) => {
+      const price = formatFareForDates(trip, ymds.slice(0, 5), fareOn);
       const lines = [
         `• ${trip.route_name}`,
         `  📅 ${dates.slice(0, 5).join(", ")}`,
@@ -842,8 +873,11 @@ export function buildDepartureDateAvailabilityReply(input: {
    * run that day. When set, the answer is about this trip and nothing else.
    */
   focusTrip?: TravelTrip | null;
+  /** Per-departure adult fare (price groups); defaults to the trip's base fare. */
+  adultFareOn?: AdultFareOnDate;
 }): string | null {
   const now = input.now || new Date();
+  const fareOn = input.adultFareOn || baseAdultFare;
   const requested = resolveRequestedDate(input.userText, now);
   if (!hasDepartureDateAvailabilityIntent(input.userText, now)) return null;
   const focusTrip = input.focusTrip && input.focusTrip.status === "active" ? input.focusTrip : null;
@@ -870,7 +904,14 @@ export function buildDepartureDateAvailabilityReply(input: {
     const options = fallback
       .map(({ ymd, trip }) => `• ${formatCustomerDate(ymd)} — ${trip.route_name}`)
       .join("\n");
-    return `${label} гарах аялал алга байна. Ойрхон гарах хувилбарууд:\n\n${options}`;
+    // Worded so the no-data guard ("гарах аялал алга байна") does not mistake
+    // this complete answer for a dead end: "4 сард ямар аялал гардаг вэ" used
+    // to go silent and pause the bot. Nothing after the requested month at all
+    // means that season's schedule is simply not out yet — say that.
+    if (upcoming.length === 0) {
+      return `${label} гарах аяллын хуваарь одоогоор гараагүй байна 🙏 Хамгийн ойрхон гарах аяллууд:\n\n${options}`;
+    }
+    return `${label} гарах аялал одоогоор байхгүй байна. Дараа нь гарах аяллууд:\n\n${options}`;
   };
 
   const range = resolveRequestedRange(input.userText, now);
@@ -880,7 +921,7 @@ export function buildDepartureDateAvailabilityReply(input: {
       const intro = focusTrip
         ? `Тийм ээ, ${tripPhrase(focusTrip)} ${range.label}-ны хооронд гарна 😊`
         : `Тийм ээ, ${range.label}-ны хооронд гарах аяллууд байна 😊`;
-      return `${intro}\n\n${formatMonthDepartureOptions(rangeMatches)}`;
+      return `${intro}\n\n${formatMonthDepartureOptions(rangeMatches, fareOn)}`;
     }
     return nearestAfterMiss(`${range.label}-ны хооронд`, range.startYmd) ?? "REFER";
   }
@@ -893,7 +934,7 @@ export function buildDepartureDateAvailabilityReply(input: {
       const monthStart = `${requestedMonth.year}-${String(requestedMonth.month).padStart(2, "0")}-01`;
       return nearestAfterMiss(`${requestedMonth.month} сард`, monthStart) ?? "REFER";
     }
-    const options = formatMonthDepartureOptions(monthMatches);
+    const options = formatMonthDepartureOptions(monthMatches, fareOn);
     if (focusTrip) {
       return `Тийм ээ, ${tripPhrase(focusTrip)} ${requestedMonth.month} сард гарна 😊\n\n${options}`;
     }
@@ -921,7 +962,7 @@ export function buildDepartureDateAvailabilityReply(input: {
   }
 
   if (matches.length > 0) {
-    const shown = matches.slice(0, 4).map((match) => `• ${formatTripSummary(match)}`).join("\n");
+    const shown = matches.slice(0, 4).map((match) => `• ${formatTripSummary(match, requested.ymd, fareOn)}`).join("\n");
     const extra =
       matches.length > 4 ? ` Нийт ${matches.length} аялал таарч байна.` : "";
     if (focusTrip) {

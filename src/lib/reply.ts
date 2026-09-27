@@ -124,6 +124,34 @@ export function shouldSilenceNoDataReply(text: string): boolean {
   return NO_DATA_REPLY_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
+// Booking terms the model must never make up: each topic is allowed in a reply
+// only when the catalog Context it was given talks about it.
+const BOOKING_TERM_TOPICS: Array<{ reply: RegExp; context: RegExp }> = [
+  { reply: /урьдчилгаа/i, context: /урьдчилгаа/i },
+  { reply: /цуцл|буцаалт|буцаан олгол/i, context: /цуцл|буцаалт|буцаан олгол/i },
+  { reply: /бичиг баримт|паспорт/i, context: /бичиг баримт|паспорт/i },
+  { reply: /(?:^|[^\p{L}])виз/iu, context: /(?:^|[^\p{L}])виз/iu },
+  { reply: /бүрэн\s+төл/i, context: /бүрэн\s+төл|төлбөрийн нөхцөл/i },
+];
+
+/**
+ * The prompt already says to answer deposits, documents, visas and
+ * cancellation only from a trip's 'Захиалгын нөхцөл'. The model still wrote
+ * "pay in full before the trip; contract, passport, visa" for a customer when
+ * no such terms existed. A reply that states a term the Context never
+ * mentions becomes REFER: staff answer it, the bot does not invent policy.
+ */
+export function guardInventedBookingTerms(reply: string, promptUserText: string): string {
+  const start = promptUserText.indexOf("Context:");
+  const tail = start >= 0 ? promptUserText.slice(start) : promptUserText;
+  const end = tail.search(/\n(?:Persistent customer memory|Private pre-answer analysis|Conversation so far|User):/);
+  const catalogContext = end >= 0 ? tail.slice(0, end) : tail;
+  const invented = BOOKING_TERM_TOPICS.some(
+    (topic) => topic.reply.test(reply) && !topic.context.test(catalogContext),
+  );
+  return invented ? "REFER" : reply;
+}
+
 // A customer's own text claim ("5 сая шилжүүлсэн", "screenshot явуулсан",
 // "миний төлбөр орсон уу?") is not proof of payment — the bot has no bank/QPay
 // access and can only see what the customer typed. The model is prompted not

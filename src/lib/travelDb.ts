@@ -14,6 +14,7 @@ import { ensureTravelSchema } from "./travelSchema";
 export { ensureTravelSchema } from "./travelSchema";
 import {
   filterFutureDepartureDates,
+  isPlaceholderDepartureText,
   prunePastDepartureDates,
   resolveDepartureDatesAtWrite,
   type ResolvedDepartureDate,
@@ -664,7 +665,9 @@ export function mapTripRow(row: Record<string, unknown>): TravelTrip {
     infant_price: parseInteger(row.infant_price),
     currency: normalizeStoredText(row.currency) || "MNT",
     departure_dates: Array.isArray(row.departure_dates)
-      ? row.departure_dates.map((value) => normalizeStoredText(value)).filter(Boolean)
+      ? row.departure_dates
+          .map((value) => normalizeStoredText(value))
+          .filter((value) => value && !isPlaceholderDepartureText(value))
       : [],
     seats_total: parseInteger(row.seats_total),
     seats_left: parseInteger(row.seats_left),
