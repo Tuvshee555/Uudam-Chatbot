@@ -1,10 +1,11 @@
 /**
  * Welcome flow + trip photo auto-send helpers.
  *
- * Feature A — Welcome greeting:
- *   First time a sender messages → send greeting text + quick-reply buttons.
- *   If the first message already asks about a specific trip, greet first and
- *   continue processing that real question in the same turn.
+ * Feature A — Welcome assets:
+ *   Facebook's page/admin greeting owns the first greeting bubble. The webhook
+ *   now consumes its one-time welcome slot without sending another greeting,
+ *   while these helpers still provide configured text/buttons/photo albums for
+ *   admin settings, tests and explicit greeting-button taps.
  *
  * Feature B — Trip photo auto-send:
  *   After each AI reply, detect if a specific trip was discussed and send

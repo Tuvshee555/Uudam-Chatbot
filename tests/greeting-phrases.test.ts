@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   GET_STARTED_QUIET_WINDOW_MS,
+  firstFacebookMessageGreetingPolicy,
   isGenericOpener,
   isGetStartedPostback,
   isKnownGreetingPhrase,
@@ -47,6 +48,29 @@ test("isKnownGreetingPhrase is narrower than isGenericOpener (no length<=2 catch
 test("the mid-conversation greeting reply is a friendly greeting with no trip data", () => {
   assert.match(MID_CONVERSATION_GREETING_REPLY, /Сайн байна уу/);
   assert.doesNotMatch(MID_CONVERSATION_GREETING_REPLY, /₮|\d{3,}/);
+});
+
+test("first Facebook greeting policy relies on the page greeting and only answers real questions", () => {
+  assert.deepEqual(firstFacebookMessageGreetingPolicy("hi"), {
+    suppressBotWelcome: true,
+    answerCustomerMessage: false,
+  });
+  assert.deepEqual(firstFacebookMessageGreetingPolicy("сайн байна уу"), {
+    suppressBotWelcome: true,
+    answerCustomerMessage: false,
+  });
+  assert.deepEqual(firstFacebookMessageGreetingPolicy("hi Lumia price"), {
+    suppressBotWelcome: true,
+    answerCustomerMessage: true,
+  });
+  assert.deepEqual(firstFacebookMessageGreetingPolicy("Лумиа аяллын үнэ хэд вэ"), {
+    suppressBotWelcome: true,
+    answerCustomerMessage: true,
+  });
+  assert.deepEqual(firstFacebookMessageGreetingPolicy("55"), {
+    suppressBotWelcome: false,
+    answerCustomerMessage: false,
+  });
 });
 
 test("isGetStartedPostback recognises the Get Started tap by title or payload", () => {

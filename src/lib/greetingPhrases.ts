@@ -59,6 +59,29 @@ export function isKnownGreetingPhrase(text: string): boolean {
   return GENERIC_OPENERS.some((w) => norm === w) || isGreetingLike(text);
 }
 
+export type FirstFacebookMessageGreetingPolicy = {
+  suppressBotWelcome: boolean;
+  answerCustomerMessage: boolean;
+};
+
+/**
+ * Facebook pages can already send an admin-configured greeting before the bot
+ * receives the first DM. The bot therefore consumes its one-time welcome slot
+ * without sending another greeting bubble. If the first DM is only "hi", stay
+ * quiet; if it contains a real question, answer the question directly.
+ */
+export function firstFacebookMessageGreetingPolicy(
+  text: string,
+): FirstFacebookMessageGreetingPolicy {
+  if (isBareNumber(text)) {
+    return { suppressBotWelcome: false, answerCustomerMessage: false };
+  }
+  return {
+    suppressBotWelcome: true,
+    answerCustomerMessage: !isKnownGreetingPhrase(text),
+  };
+}
+
 // Words a greeting is made of, including the everyday typed forms ("бна",
 // "бну", "sn", "bnuu"). A real customer wrote "сайн сайн байна уу?" and it was
 // treated as an unknown price question and handed to staff, pausing the bot.

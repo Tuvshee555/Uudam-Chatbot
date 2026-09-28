@@ -12,6 +12,7 @@ import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone } from ".
 import { buildContextualUserText, isLikelyContextDependentText } from "../../lib/contextualText";
 import {
   isBareNumber,
+  firstFacebookMessageGreetingPolicy,
   isGetStartedPostback,
   isKnownGreetingPhrase,
   isThanksOnly,
@@ -33,7 +34,7 @@ import { autoHandoffSender, isPaused, markGetStarted, pauseBot, trackSender } fr
 import { AUTO_PAUSE_RESET_DAYS, createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
 import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply, } from "../../lib/travelFastPaths";
-import { DEFAULT_WELCOME_TEXT, buildHandoffReplyWithContact, claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
+import { buildHandoffReplyWithContact, claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
   scheduleAttachmentDocumentPipeline,
@@ -476,53 +477,41 @@ async function handleMessage(
   }
 
   // ── First-message greeting ──────────────────────────────────────────────────
-  // Send once on the first real Facebook DM. If the first DM is just a generic
-  // opener, the welcome is the whole reply; if it already contains a trip
-  // question, the welcome goes first and the real question continues below.
+  // Facebook can already send an admin-configured page greeting before the bot
+  // sees the first DM. Consume our one-time welcome slot, but do not stack a
+  // second greeting bubble on top of Facebook's. A bare first "hi" stays quiet;
+  // a first message with an actual question continues below and gets answered.
   const greeting = resolveGreetingConfig(botSettings.extra);
+  const firstGreetingPolicy = firstFacebookMessageGreetingPolicy(text);
   if (
     platform === "facebook" &&
     token &&
     greeting.enabled &&
     senderMsgCount === 1 &&
-    !isBareNumber(text) &&
+    firstGreetingPolicy.suppressBotWelcome &&
     (await isFirstMessage(senderId))
   ) {
-    try {
-      const welcomeText =
-        greeting.text ||
-        botSettings.quick_info_reply ||
-        DEFAULT_WELCOME_TEXT;
-      const buttons = [
-        GREETING_BUTTONS.ALL_TRIPS,
-        ...(activeSeasonForGreeting ? [`${activeSeasonForGreeting.name} аяллууд`] : []),
-        GREETING_BUTTONS.SEE_ALL,
-      ];
-      // Send text + quick-reply buttons in one message
-      await sendQuickReplies(senderId, welcomeText, buttons, token, {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-      });
-      recordCounter("webhook.welcome_sent_total", 1, { platform });
-    } catch (error) {
-      logWarn("webhook.welcome_failed", {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        platform,
-        senderHash: hashIdentifier(senderId),
-        classification: classifyError(error),
-      });
-    }
-    if (isKnownGreetingPhrase(text)) {
+    logInfo("webhook.first_message_welcome_suppressed", {
+      requestId: trace?.requestId,
+      correlationId: trace?.correlationId,
+      platform,
+      senderHash: hashIdentifier(senderId),
+      answerCustomerMessage: firstGreetingPolicy.answerCustomerMessage,
+    });
+    recordCounter("webhook.first_message_welcome_suppressed_total", 1, {
+      platform,
+      answerCustomerMessage: String(firstGreetingPolicy.answerCustomerMessage),
+    });
+    if (!firstGreetingPolicy.answerCustomerMessage) {
+      await appendMessage(senderId, "user", text).catch(() => {});
       return;
     }
   }
 
   // ── Mid-conversation bare greeting ─────────────────────────────────────────
-  // The first-message welcome (with buttons) already returned above. A bare
-  // greeting on any later turn (or a first turn where the welcome didn't fire —
-  // Instagram, greeting disabled) gets a deterministic friendly reply instead
-  // of the model. Without this it falls through to the model, which — when the
+  // A bare greeting after the first Facebook turn, or anywhere Instagram still
+  // needs the bot to greet, gets a deterministic friendly reply instead of the
+  // model. Without this it falls through to the model, which — when the
   // previous turn was a multi-trip clarification — re-emits that clarification's
   // price list on "hi" ~50% of the time (found 2026-07-22). A greeting asks
   // nothing and must never re-serve a stale trip. Any attachment riding along
