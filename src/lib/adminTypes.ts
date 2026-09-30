@@ -3,6 +3,8 @@
    so that sub-files and utilities can import without a circular dep.
    ---------------------------------------------------------------- */
 
+import type { PriceRange } from "./priceRange";
+
 /**
  * "paused" = staff pulled bookings without cancelling the trip (schedule
  * being redone, temporarily out of stock, etc.). Unlike archived, it stays
@@ -41,6 +43,7 @@ export type PriceGroup = {
   display_dates: string[];
   date_keys: string[];
   adult_price: number | null;
+  adult_price_range: PriceRange | null;
   child_price: number | null;
   infant_price: number | null;
   child_age: string;

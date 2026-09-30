@@ -1,5 +1,6 @@
 import type { TravelTrip } from "./travelTypes";
 import { generateDateKeys, parseTripDepartureDateText } from "./travelDates";
+import { formatPriceRange } from "./priceRange";
 
 export function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -102,8 +103,12 @@ export function websiteExtraDetails(
     ...records(extra.price_groups).flatMap(group => {
       const dates = strings(group.display_dates).length ? strings(group.display_dates) : strings(group.dates);
       const dateLabel = dates.join(", ");
-      return records(group.passenger_prices).map(price =>
-        join([dateLabel, price.label, price.age_range, money(price.price, price.currency)]));
+      const adultRange = formatPriceRange(group.adult_price_range, String(fares?.currency || "MNT"));
+      return [
+        adultRange ? join([dateLabel, "Том хүн", adultRange]) : "",
+        ...records(group.passenger_prices).map(price =>
+          join([dateLabel, price.label, price.age_range, money(price.price, price.currency)])),
+      ];
     }),
   ].filter((value, index, all) => value && all.indexOf(value) === index);
   return {

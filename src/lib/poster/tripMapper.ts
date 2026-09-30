@@ -9,6 +9,7 @@
  */
 
 import { birthYearBand } from "../birthYearAgeBands";
+import { parsePriceRangeText, type PriceRange } from "../priceRange";
 import { isPlaceholderDateText } from "../tripCompleteness";
 
 type PosterDay = {
@@ -34,6 +35,7 @@ type MappedPriceGroup = {
   dates: string[];
   display_dates: string[];
   adult_price: number | null;
+  adult_price_range: PriceRange | null;
   child_price: number | null;
   infant_price: number | null;
   child_age: string;
@@ -201,6 +203,8 @@ function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup
   return priceTable.rows
     .map((row) => {
       const dates = expandPosterDateList(row.dates);
+      const adultCell = priceCell(row, columns, adultIdx >= 0 ? adultIdx : 0);
+      const adultPriceRange = parsePriceRangeText(adultCell);
       const passenger_prices = childColumns.map(({ column, index }) => {
         const cell = priceCell(row, columns, index);
         return {
@@ -218,7 +222,8 @@ function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup
         label: dates.join(", ") || normalizeDepartureText(row.dates || ""),
         dates,
         display_dates: dates,
-        adult_price: parsePriceToNumber(priceCell(row, columns, adultIdx >= 0 ? adultIdx : 0)),
+        adult_price: adultPriceRange?.min ?? parsePriceToNumber(adultCell),
+        adult_price_range: adultPriceRange,
         child_price: child?.price ?? null,
         infant_price: infant?.price ?? null,
         child_age: child?.age_range || "",

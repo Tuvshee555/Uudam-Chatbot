@@ -20,6 +20,7 @@ import {
   type ResolvedDepartureDate,
 } from "./travelDates";
 import { normalizeExtra, normalizeExtraPatch } from "./tripExtraSchema";
+import { formatPriceRange } from "./priceRange";
 import {
   normalizeTripName,
   tokenCoverageScore,
@@ -1892,15 +1893,22 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
         const ppArr = Array.isArray(g.passenger_prices) ? g.passenger_prices as Array<Record<string, unknown>> : [];
         let priceParts: string[];
         if (ppArr.length > 0) {
-          priceParts = ppArr.map((pp) => {
+          priceParts = [
+            formatPriceRange(g.adult_price_range, "MNT")
+              ? `Том ${formatPriceRange(g.adult_price_range, "MNT")}`
+              : typeof g.adult_price === "number" ? `Том ${g.adult_price}₮` : "",
+            ...ppArr.map((pp) => {
             const ppLabel = typeof pp.label === "string" && pp.label ? pp.label : "Зорчигч";
             const ppAge = typeof pp.age_range === "string" && pp.age_range ? ` (${pp.age_range})` : "";
             const ppPrice = typeof pp.price === "number" ? ` ${pp.price}₮` : "";
             return `${ppLabel}${ppAge}${ppPrice}`;
-          });
+            }),
+          ].filter(Boolean);
         } else {
           priceParts = [
-            typeof g.adult_price === "number" ? `Том ${g.adult_price}₮` : "",
+            formatPriceRange(g.adult_price_range, "MNT")
+              ? `Том ${formatPriceRange(g.adult_price_range, "MNT")}`
+              : typeof g.adult_price === "number" ? `Том ${g.adult_price}₮` : "",
             typeof g.child_price === "number" ? `Хүүхэд${g.child_age ? ` (${g.child_age})` : ""} ${g.child_price}₮` : "",
             typeof g.infant_price === "number" ? `Нярай${g.infant_age ? ` (${g.infant_age})` : ""} ${g.infant_price}₮` : "",
           ].filter(Boolean);

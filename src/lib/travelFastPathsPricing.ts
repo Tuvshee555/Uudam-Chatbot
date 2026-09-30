@@ -6,6 +6,7 @@
  */
 
 import { filterFutureDepartureDates, isPlaceholderDepartureText, parseDepartureDateText } from "./travelDates";
+import { formatPriceRange } from "./priceRange";
 import type { TravelTrip } from "./travelOps";
 import {
   withFutureDepartureDates,
@@ -128,6 +129,7 @@ export function formatRouteName(routeName: string) {
 
 export function formatPassengerPriceLines(input: {
   adult?: number | null;
+  adultText?: string | null;
   child?: number | null;
   infant?: number | null;
   childAge?: string | null;
@@ -142,7 +144,7 @@ export function formatPassengerPriceLines(input: {
   infantFree?: boolean;
 }) {
   const lines: string[] = [];
-  const adult = formatPassengerMoney(input.adult ?? null, input.currency);
+  const adult = input.adultText || formatPassengerMoney(input.adult ?? null, input.currency);
   const child = input.childFree ? "Үнэгүй" : formatPassengerMoney(input.child ?? null, input.currency);
   const infant = input.infantFree ? "Үнэгүй" : formatPassengerMoney(input.infant ?? null, input.currency);
   const childAge = input.childAge?.trim() ? ` /${displayAgeBand(input.childAge)}/` : "";
@@ -221,6 +223,7 @@ export function formatSelectedPriceGroups(
     // number under it, so skip the whole group instead.
     const priceLines = formatPassengerPriceLines({
       adult: typeof group.adult_price === "number" ? group.adult_price : null,
+      adultText: formatPriceRange(group.adult_price_range, currency),
       child: typeof group.child_price === "number" ? group.child_price : null,
       infant: typeof group.infant_price === "number" ? group.infant_price : null,
       childAge: typeof group.child_age === "string" ? group.child_age : "",
@@ -601,7 +604,10 @@ export function buildPassengerTypePriceReply(
           ? group.child_price_free === true
           : false;
       const priceText = isFree ? "Үнэгүй" : formatPassengerMoney(price, currency);
-      if (!priceText) continue;
+      const adultPriceText = target === "adult"
+        ? formatPriceRange(group.adult_price_range, currency) || priceText
+        : priceText;
+      if (!adultPriceText) continue;
       const age = target === "infant"
         ? (typeof group.infant_age === "string" ? group.infant_age.trim() : "")
         : target === "child"
@@ -616,7 +622,7 @@ export function buildPassengerTypePriceReply(
       found = true;
       const dateLabel = relevantDates.length > 0 ? formatGroupDateLabel(relevantDates) : "";
       const ageText = age ? ` /${age}/` : "";
-      lines.push(`${dateLabel ? `${dateLabel}: ` : ""}${label}${ageText}: ${priceText}`);
+      lines.push(`${dateLabel ? `${dateLabel}: ` : ""}${label}${ageText}: ${adultPriceText}`);
     }
     if (found) return lines.join("\n");
   }
@@ -630,7 +636,9 @@ export function buildPassengerTypePriceReply(
   }
 
   const price = target === "infant" ? trip.infant_price : target === "child" ? trip.child_price : trip.adult_price;
-  const flatPriceText = formatPassengerMoney(price, currency);
+  const flatPriceText = target === "adult"
+    ? formatPriceRange((trip.extra || {}).adult_price_range, currency) || formatPassengerMoney(price, currency)
+    : formatPassengerMoney(price, currency);
   if (flatPriceText) {
     const band = tripAgeBands(trip)[target];
     const bandText = band ? ` /${band}/` : "";
@@ -1242,6 +1250,7 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
       const groupHasInfant = typeof g.infant_price === "number" || g.infant_price_free === true;
       const priceLines = formatPassengerPriceLines({
         adult: typeof g.adult_price === "number" ? g.adult_price : null,
+        adultText: formatPriceRange(g.adult_price_range, currency),
         child: typeof g.child_price === "number" ? g.child_price : null,
         infant: groupHasInfant ? (g.infant_price as number | null) : trip.infant_price,
         childAge: typeof g.child_age === "string" ? g.child_age : "",
@@ -1357,6 +1366,7 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
   const bands = tripAgeBands(trip);
   const flatLines = formatPassengerPriceLines({
     adult: trip.adult_price,
+    adultText: formatPriceRange((trip.extra || {}).adult_price_range, currency),
     child: trip.child_price,
     infant: trip.infant_price,
     childAge: bands.child,

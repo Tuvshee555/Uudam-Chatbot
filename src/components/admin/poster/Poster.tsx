@@ -472,6 +472,11 @@ export default function Poster({
             {t.price_table ? (
               <button type="button" className="editor-only ptable-add-row-btn" onClick={addPriceRow}>+ Мөр нэмэх</button>
             ) : null}
+            {t.price_table ? (
+              <p className="editor-only mt-1 text-[11px] text-ink-subtle">
+                Үнэ зөрүүтэй бол `2,000,000 - 2,300,000₮` гэж нэг нүдэнд бичиж болно.
+              </p>
+            ) : null}
             </>
             ) : null}
             {priceNoteBoxes.length ? (

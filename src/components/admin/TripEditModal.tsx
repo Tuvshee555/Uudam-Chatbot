@@ -76,7 +76,7 @@ function emptyPassengerPrice(label = ""): PassengerPrice {
   return { label, age_range: "", price: null, currency: "MNT" };
 }
 function emptyPriceGroup(): PriceGroup {
-  return { label: "", dates: [], display_dates: [], date_keys: [], adult_price: null, child_price: null, infant_price: null, child_age: "", infant_age: "", passenger_prices: [], note: "" };
+  return { label: "", dates: [], display_dates: [], date_keys: [], adult_price: null, adult_price_range: null, child_price: null, infant_price: null, child_age: "", infant_age: "", passenger_prices: [], note: "" };
 }
 function emptyDiscountGroup(): DiscountGroup {
   return { label: "", dates: [], display_dates: [], date_keys: [], adult_price: null, child_price: null, infant_price: null, condition: "", note: "" };

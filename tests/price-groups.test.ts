@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { deriveChildRules, withDerivedSummaryFields } from "../src/lib/priceGroups";
 import type { PriceGroup } from "../src/lib/adminTypes";
+import { formatTripBasePricePremium } from "../src/lib/travelFastPathsPricing";
+import type { TravelTrip } from "../src/lib/travelTypes";
 
 function group(fields: Partial<PriceGroup>): PriceGroup {
   return {
     label: "", dates: [], display_dates: [], date_keys: [],
-    adult_price: null, child_price: null, infant_price: null,
+    adult_price: null, adult_price_range: null, child_price: null, infant_price: null,
     child_age: "", infant_age: "", passenger_prices: [], note: "",
     ...fields,
   };
@@ -110,4 +112,17 @@ test("withDerivedSummaryFields ignores an unpriced band", () => {
   const g = group({ passenger_prices: [{ label: "Нярай", age_range: "0-2 нас", price: null, currency: "MNT" }] });
   const result = withDerivedSummaryFields(g);
   assert.equal(result.infant_price, null);
+});
+
+test("bot price reply shows a date group's adult range instead of only its low bound", () => {
+  const trip = {
+    id: "range-trip", category: "Аялал", operator_name: "UUDAM", route_name: "Хайнань – Саньяа аялал",
+    duration_text: "9 өдөр 8 шөнө", adult_price: 2000000, child_price: 1700000, infant_price: null,
+    currency: "MNT", departure_dates: ["10 сарын 1"], seats_total: null, seats_left: null,
+    has_food: null, status: "active", notes: "", hotel: "", source_description: "", photo_urls: [],
+    extra: { price_groups: [{ dates: ["10 сарын 1"], adult_price: 2000000, adult_price_range: { min: 2000000, max: 2300000 }, child_price: 1700000 }] },
+    created_at: "", updated_at: "",
+  } satisfies TravelTrip;
+
+  assert.match(formatTripBasePricePremium(trip, new Date("2026-09-30T00:00:00Z")), /2,000,000–2,300,000₮/);
 });

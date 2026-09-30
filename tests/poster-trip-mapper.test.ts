@@ -80,3 +80,16 @@ test("poster price table supports a custom child age bracket", () => {
   assert.equal(fields.extra?.price_groups?.[0].child_age, "2-11 нас");
   assert.equal(fields.extra?.price_groups?.[1].adult_price, 3501000);
 });
+
+test("poster adult price ranges keep the low fare for lookup and the full range for replies", () => {
+  const fields = mapPosterTripToFields({
+    title: "Хайнань – Саньяа аялал",
+    price_table: {
+      columns: ["Огноо", "Том хүн", "Хүүхэд"],
+      rows: [{ dates: "10 сарын 1, 8, 15, 22", cells: ["2,000,000 - 2,300,000₮", "1,700,000₮"] }],
+    },
+  });
+
+  assert.equal(fields.adult_price, 2000000);
+  assert.deepEqual(fields.extra?.price_groups?.[0].adult_price_range, { min: 2000000, max: 2300000 });
+});

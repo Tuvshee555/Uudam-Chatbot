@@ -9,6 +9,7 @@
  */
 
 import { generateDateKeys } from "./travelDates";
+import { normalizePriceRange } from "./priceRange";
 
 // ─── known keys ──────────────────────────────────────────────────────────────
 
@@ -90,6 +91,9 @@ function normalizePriceGroups(raw: unknown): Record<string, unknown>[] {
         display_dates: asStringArray(g.display_dates),
         date_keys: asStringArray(g.date_keys),
         adult_price: asNumberOrNull(g.adult_price),
+        ...(normalizePriceRange(g.adult_price_range)
+          ? { adult_price_range: normalizePriceRange(g.adult_price_range) }
+          : {}),
         child_price: asNumberOrNull(g.child_price),
         infant_price: asNumberOrNull(g.infant_price),
         child_age: asString(g.child_age),
