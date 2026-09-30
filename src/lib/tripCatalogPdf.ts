@@ -112,9 +112,9 @@ function squash(value: string): string {
 
 /**
  * True when a note just restates something already printed on the page, e.g. a
- * "Буудал: Phoenix 5*…" note next to the hotel section that already says it.
- * Repeating one fact twice on one page is the scatter this brochure exists to
- * avoid.
+ * "Буудал: <хотел нэр> 5*…" note next to the hotel section that already says
+ * it. Repeating one fact twice on one page is the scatter this brochure
+ * exists to avoid.
  */
 function restatesShownField(note: string, shown: string[]): boolean {
   const a = squash(note);

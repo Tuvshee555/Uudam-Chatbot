@@ -83,7 +83,7 @@ test("poster price table supports a custom child age bracket", () => {
 
 test("poster adult price ranges keep the low fare for lookup and the full range for replies", () => {
   const fields = mapPosterTripToFields({
-    title: "Хайнань – Саньяа аялал",
+    title: "Вэлмор – Кардан аялал",
     price_table: {
       columns: ["Огноо", "Том хүн", "Хүүхэд"],
       rows: [{ dates: "10 сарын 1, 8, 15, 22", cells: ["2,000,000 - 2,300,000₮", "1,700,000₮"] }],
@@ -96,17 +96,17 @@ test("poster adult price ranges keep the low fare for lookup and the full range 
 
 test("poster hotel rows keep separate passenger tiers on the same date", () => {
   const fields = mapPosterTripToFields({
-    title: "Хайнань – Саньяа аялал",
+    title: "Вэлмор – Кардан аялал",
     price_table: {
       columns: ["Буудал", "Том хүн", "Хүүхэд 6-11 нас", "Хүүхэд 2-5 нас", "Нярай"],
       rows: [
-        { dates: "10 сарын 1", cells: ["Phoenix", "3,290,000₮", "3,090,000₮", "2,390,000₮", "450,000₮"] },
-        { dates: "10 сарын 1", cells: ["Paxton", "2,790,000₮", "2,590,000₮", "2,390,000₮", "450,000₮"] },
+        { dates: "10 сарын 1", cells: ["Alpha Bay", "3,290,000₮", "3,090,000₮", "2,390,000₮", "450,000₮"] },
+        { dates: "10 сарын 1", cells: ["Delta Cove", "2,790,000₮", "2,590,000₮", "2,390,000₮", "450,000₮"] },
       ],
     },
   });
   assert.equal(fields.adult_price, 2790000);
-  assert.deepEqual(fields.extra?.price_groups?.map((group) => group.hotel), ["Phoenix", "Paxton"]);
+  assert.deepEqual(fields.extra?.price_groups?.map((group) => group.hotel), ["Alpha Bay", "Delta Cove"]);
   assert.equal(fields.extra?.price_groups?.[0].passenger_prices[1].price, 2390000);
   assert.deepEqual(fields.extra?.child_rules, undefined);
 });

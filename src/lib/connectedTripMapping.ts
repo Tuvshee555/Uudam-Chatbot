@@ -99,23 +99,42 @@ export function websiteExtraDetails(
     : [];
   const priceGroups = records(extra.price_groups);
   const hasHotelChoices = priceGroups.some(group => typeof group.hotel === "string" && group.hotel.trim());
+  // Every fare fact this trip has ends up said at most ONCE. Base tiers,
+  // child_rules and per-date price groups used to be concatenated raw, so the
+  // same "Хүүхэд 2,590,000₮" appeared three times in three different phrasings
+  // (once as a base tier, once from a stale child_rules row, once per date
+  // group), and a malformed imported row ("Нярай - 1₮", "24-20 нас") went out
+  // to customers verbatim. A date-picker on the site already shows each
+  // departure's own price, so this block is a SUMMARY, not the full ledger:
+  // it states the base tiers once, and only adds a group's line when that
+  // group's fare for that passenger type actually differs from the base tier
+  // (a real date-specific override worth flagging) — not merely reformatted.
+  const baseFareFor = (target: "adult" | "child" | "infant"): number | null =>
+    target === "adult" ? fares?.adult ?? null : target === "child" ? fares?.child ?? null : fares?.infant ?? null;
+  const isInfantLabel = (label: string, ageRange: string) => /нярай|infant/i.test(`${label} ${ageRange}`);
   const groupLines = hasHotelChoices
     ? ["Үнэ нь гарах өдөр, буудлын сонголтоос хамаарна. Доорх хэсгээс сонгоно уу."]
     : priceGroups.flatMap(group => {
       const dates = strings(group.display_dates).length ? strings(group.display_dates) : strings(group.dates);
       const dateLabel = dates.join(", ");
+      if (!dateLabel) return [];
       const adultRange = formatPriceRange(group.adult_price_range, String(fares?.currency || "MNT"));
-      const hotel = typeof group.hotel === "string" ? group.hotel.trim() : "";
-      const adultFare = adultRange || money(group.adult_price, fares?.currency);
+      const groupAdult = typeof group.adult_price === "number" ? group.adult_price : null;
+      const adultDiffers = adultRange ? true : groupAdult != null && groupAdult !== baseFareFor("adult");
+      const adultFare = adultRange || (adultDiffers ? money(groupAdult, fares?.currency) : "");
+      const passengerLines = records(group.passenger_prices)
+        .filter(price => {
+          const target = isInfantLabel(String(price.label ?? ""), String(price.age_range ?? "")) ? "infant" : "child";
+          return typeof price.price === "number" && price.price !== baseFareFor(target);
+        })
+        .map(price => join([dateLabel, price.label, price.age_range, money(price.price, price.currency)]));
       return [
-        adultFare && (adultRange || hotel) ? join([dateLabel, hotel, "Том хүн", adultFare]) : "",
-        ...records(group.passenger_prices).map(price =>
-          join([dateLabel, hotel, price.label, price.age_range, money(price.price, price.currency)])),
+        adultFare ? join([dateLabel, "Том хүн", adultFare]) : "",
+        ...passengerLines,
       ];
     });
   const childNotes = [
     ...(hasHotelChoices ? [] : tierLines),
-    ...(hasHotelChoices ? [] : records(extra.child_rules).map(r => join([r.label,r.age_range,money(r.price,r.currency),r.note]))),
     ...groupLines,
   ].filter((value, index, all) => value && all.indexOf(value) === index);
   return {

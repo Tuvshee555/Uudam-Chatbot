@@ -116,7 +116,7 @@ test("withDerivedSummaryFields ignores an unpriced band", () => {
 
 test("bot price reply shows a date group's adult range instead of only its low bound", () => {
   const trip = {
-    id: "range-trip", category: "Аялал", operator_name: "UUDAM", route_name: "Хайнань – Саньяа аялал",
+    id: "range-trip", category: "Аялал", operator_name: "UUDAM", route_name: "Вэлмор – Кардан аялал",
     duration_text: "9 өдөр 8 шөнө", adult_price: 2000000, child_price: 1700000, infant_price: null,
     currency: "MNT", departure_dates: ["10 сарын 1"], seats_total: null, seats_left: null,
     has_food: null, status: "active", notes: "", hotel: "", source_description: "", photo_urls: [],
@@ -129,24 +129,24 @@ test("bot price reply shows a date group's adult range instead of only its low b
 
 test("bot keeps hotel names when two fares share a departure date", () => {
   const trip = {
-    id: "hotel-trip", category: "Аялал", operator_name: "UUDAM", route_name: "Хайнань – Саньяа аялал",
+    id: "hotel-trip", category: "Аялал", operator_name: "UUDAM", route_name: "Вэлмор – Кардан аялал",
     duration_text: "9 өдөр 8 шөнө", adult_price: 2790000, child_price: 2590000, infant_price: 450000,
     currency: "MNT", departure_dates: ["10 сарын 1"], seats_total: null, seats_left: null,
     has_food: null, status: "active", notes: "", hotel: "", source_description: "", photo_urls: [],
     extra: { price_groups: [
-      { label: "10 сарын 1", dates: ["10 сарын 1"], hotel: "Paxton", adult_price: 2790000, child_price: 2590000 },
-      { label: "10 сарын 1", dates: ["10 сарын 1"], hotel: "Phoenix", adult_price: 3290000, child_price: 3090000 },
+      { label: "10 сарын 1", dates: ["10 сарын 1"], hotel: "Delta Cove", adult_price: 2790000, child_price: 2590000 },
+      { label: "10 сарын 1", dates: ["10 сарын 1"], hotel: "Alpha Bay", adult_price: 3290000, child_price: 3090000 },
     ] }, created_at: "", updated_at: "",
   } satisfies TravelTrip;
   const reply = formatTripBasePricePremium(trip, new Date("2026-09-30T00:00:00Z"));
-  assert.match(reply, /Буудал: Paxton/);
-  assert.match(reply, /Буудал: Phoenix/);
+  assert.match(reply, /Буудал: Delta Cove/);
+  assert.match(reply, /Буудал: Alpha Bay/);
 });
 
 test("hotel-specific child prices do not become a trip-wide child rule", () => {
   const rules = deriveChildRules([
-    group({ hotel: "Phoenix", passenger_prices: [{ label: "Хүүхэд 6-11 нас", age_range: "6-11 нас", price: 3090000, currency: "MNT" }] }),
-    group({ hotel: "Paxton", passenger_prices: [{ label: "Хүүхэд 6-11 нас", age_range: "6-11 нас", price: 2590000, currency: "MNT" }] }),
+    group({ hotel: "Alpha Bay", passenger_prices: [{ label: "Хүүхэд 6-11 нас", age_range: "6-11 нас", price: 3090000, currency: "MNT" }] }),
+    group({ hotel: "Delta Cove", passenger_prices: [{ label: "Хүүхэд 6-11 нас", age_range: "6-11 нас", price: 2590000, currency: "MNT" }] }),
   ]);
   assert.deepEqual(rules, []);
 });

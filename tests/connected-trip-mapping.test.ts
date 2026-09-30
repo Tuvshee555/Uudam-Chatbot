@@ -57,8 +57,8 @@ test("website calendar keeps the lowest fare when hotels share a departure", () 
   const result = websiteDepartures({ ...trip, extra: {
     departure_dates_resolved: [{ text: "10 сарын 1", ymd: "2026-10-01" }],
     price_groups: [
-      { hotel: "Paxton", date_keys: ["2026-10-01"], adult_price: 2790000, child_price: 2590000 },
-      { hotel: "Phoenix", date_keys: ["2026-10-01"], adult_price: 3290000, child_price: 3090000 },
+      { hotel: "Delta Cove", date_keys: ["2026-10-01"], adult_price: 2790000, child_price: 2590000 },
+      { hotel: "Alpha Bay", date_keys: ["2026-10-01"], adult_price: 3290000, child_price: 3090000 },
     ],
   } }, new Date("2026-09-30T00:00:00Z"));
   assert.equal(result[0].price, 2790000);

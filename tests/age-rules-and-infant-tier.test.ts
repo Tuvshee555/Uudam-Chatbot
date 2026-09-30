@@ -77,7 +77,7 @@ test("hotel-priced trips keep the static website note compact", () => {
     {
       child_rules: [{ label: "Stale child fare", price: 99_999_999, currency: "MNT" }],
       price_groups: [{
-        hotel: "Phoenix",
+        hotel: "Alpha Bay",
         date_keys: ["2026-10-01"],
         adult_price: 3_290_000,
         passenger_prices: [{ label: "Хүүхэд 6-11 нас", age_range: "6-11 нас", price: 3_090_000, currency: "MNT" }],
@@ -87,5 +87,56 @@ test("hotel-priced trips keep the static website note compact", () => {
   );
   assert.deepEqual(details.childPriceNotes, [
     "Үнэ нь гарах өдөр, буудлын сонголтоос хамаарна. Доорх хэсгээс сонгоно уу.",
+  ]);
+});
+
+test("website notes state each fare once, not once per base tier + child_rules + date group", () => {
+  // The real bug (2026-09-30): a trip with a base child_price, a stale
+  // child_rules array, AND non-hotel price groups restating the SAME fares
+  // per date produced 7+ near-duplicate lines, including a malformed
+  // imported child_rules row a customer would have read as the real price.
+  const details = websiteExtraDetails(
+    {
+      age_rules: { adult: "12+ нас", child: "2-11 нас", infant: "0-23 сар" },
+      child_rules: [{ label: "Хүүхэд", age_range: "2-11 нас", price: 2_490_000, currency: "MNT" }],
+      price_groups: [
+        {
+          dates: ["9 сарын 15"],
+          display_dates: ["9 сарын 15"],
+          adult_price: 2_790_000,
+          passenger_prices: [{ label: "Хүүхэд", age_range: "2-11 нас", price: 2_490_000, currency: "MNT" }],
+        },
+        {
+          dates: ["9 сарын 22"],
+          display_dates: ["9 сарын 22"],
+          adult_price: 2_690_000,
+          passenger_prices: [],
+        },
+      ],
+    },
+    { adult: 2_790_000, child: 2_490_000, infant: 490_000, currency: "MNT" },
+  );
+  assert.deepEqual(details.childPriceNotes, [
+    "Том хүн (12+ нас) - 2,790,000₮",
+    "Хүүхэд (2-11 нас) - 2,490,000₮",
+    "Нярай (0-23 сар) - 490,000₮",
+    // 9/15's group matches the base fares exactly on every field — no line.
+    // 9/22 genuinely differs (2,690,000 vs base 2,790,000) — kept, once.
+    "9 сарын 22 - Том хүн - 2,690,000₮",
+  ]);
+});
+
+test("a malformed imported child_rules row never reaches the website on its own", () => {
+  // Real live data had a "Нярай - 1₮" / "24-20 нас" child_rules row that no
+  // longer has anywhere to render from — child_rules is never read directly.
+  const details = websiteExtraDetails(
+    {
+      child_rules: [{ label: "Нярай", age_range: "24-20 нас", price: 1, currency: "MNT" }],
+    },
+    { adult: 1_090_000, child: 890_000, infant: null, currency: "MNT" },
+  );
+  assert.deepEqual(details.childPriceNotes, [
+    "Том хүн - 1,090,000₮",
+    "Хүүхэд - 890,000₮",
   ]);
 });
