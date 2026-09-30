@@ -106,44 +106,90 @@ export function websiteExtraDetails(
   // Every fare fact this trip has ends up said at most ONCE. Base tiers,
   // child_rules and per-date price groups used to be concatenated raw, so the
   // same "Хүүхэд 2,590,000₮" appeared three times in three different phrasings
-  // (once as a base tier, once from a stale child_rules row, once per date
-  // group), and a malformed imported row ("Нярай - 1₮", "24-20 нас") went out
-  // to customers verbatim. A date-picker on the site already shows each
-  // departure's own price, so this block is a SUMMARY, not the full ledger:
-  // it states the base tiers once, and only adds a group's line when that
-  // group's fare for that passenger type actually differs from the base tier
-  // (a real date-specific override worth flagging) — not merely reformatted.
-  const baseFareFor = (target: "adult" | "child" | "infant"): number | null =>
-    target === "adult" ? fares?.adult ?? null : target === "child" ? fares?.child ?? null : fares?.infant ?? null;
-  const isInfantLabel = (label: string, ageRange: string) => /нярай|infant/i.test(`${label} ${ageRange}`);
+  // and a malformed imported row ("Нярай - 1₮", "24-20 нас") went out to
+  // customers verbatim. A date picker on the site already shows each
+  // departure's own price, so this block is a SUMMARY: the base price of every
+  // passenger tier once, then one line per set of departures whose prices
+  // differ from those base prices, naming only what differs.
+  const currency = String(fares?.currency || "MNT");
+  const dateListOf = (group: Record<string, unknown>) =>
+    strings(group.display_dates).length ? strings(group.display_dates) : strings(group.dates);
+  const tierKey = (price: Record<string, unknown>) => `${String(price.label ?? "").trim()}|${String(price.age_range ?? "").trim()}`;
+  const tierName = (price: Record<string, unknown>) => String(price.label ?? "").trim() || String(price.age_range ?? "").trim();
+  // The departure group that carries the base adult fare defines each tier's
+  // base price; without one, the first group does.
+  const baseGroup = priceGroups.find(group => group.adult_price === fares?.adult) ?? priceGroups[0];
+  const baseTier = new Map<string, number>();
+  for (const price of records(baseGroup?.passenger_prices)) {
+    if (typeof price.price === "number") baseTier.set(tierKey(price), price.price);
+  }
+  // Extra passenger tiers the three headline lines do not cover (a second
+  // child age band), each stated once at its base price.
+  const infantBand = band("infant");
+  const childBand = band("child");
+  const extraTierLines = hasHotelChoices ? [] : records(baseGroup?.passenger_prices)
+    .filter(price => typeof price.price === "number" && money(price.price, currency))
+    .filter(price => {
+      const ageRange = String(price.age_range ?? "").trim();
+      const isInfant = /нярай|infant/i.test(String(price.label ?? "")) || (infantBand && ageRange === infantBand);
+      if (isInfant) return price.price !== fares?.infant;
+      return !(price.price === fares?.child && (!childBand || !ageRange || ageRange === childBand));
+    })
+    .map(price => join([tierName(price), money(price.price, currency)]));
+  const bySignature = new Map<string, { dates: string[]; parts: string[] }>();
+  if (!hasHotelChoices) {
+    for (const group of priceGroups) {
+      if (group === baseGroup) continue;
+      const parts: string[] = [];
+      const adultRange = formatPriceRange(group.adult_price_range, currency);
+      if (adultRange) parts.push(`Том хүн ${adultRange}`);
+      else if (typeof group.adult_price === "number" && group.adult_price !== fares?.adult && money(group.adult_price, currency)) {
+        parts.push(`Том хүн ${money(group.adult_price, currency)}`);
+      }
+      for (const price of records(group.passenger_prices)) {
+        if (typeof price.price !== "number" || !money(price.price, currency)) continue;
+        const base = baseTier.get(tierKey(price));
+        if (base === price.price) continue;
+        parts.push(`${tierName(price)} ${money(price.price, currency)}`);
+      }
+      if (parts.length === 0) continue;
+      const signature = parts.join("|");
+      const entry = bySignature.get(signature) ?? { dates: [], parts };
+      entry.dates.push(...dateListOf(group));
+      bySignature.set(signature, entry);
+    }
+  }
   const groupLines = hasHotelChoices
     ? ["Үнэ нь гарах өдөр, буудлын сонголтоос хамаарна. Доорх хэсгээс сонгоно уу."]
-    : priceGroups.flatMap(group => {
-      const dates = strings(group.display_dates).length ? strings(group.display_dates) : strings(group.dates);
-      const dateLabel = dates.join(", ");
-      if (!dateLabel) return [];
-      const adultRange = formatPriceRange(group.adult_price_range, String(fares?.currency || "MNT"));
-      const groupAdult = typeof group.adult_price === "number" ? group.adult_price : null;
-      const adultDiffers = adultRange ? true : groupAdult != null && groupAdult !== baseFareFor("adult");
-      const adultFare = adultRange || (adultDiffers ? money(groupAdult, fares?.currency) : "");
-      const passengerLines = records(group.passenger_prices)
-        .filter(price => {
-          const target = isInfantLabel(String(price.label ?? ""), String(price.age_range ?? "")) ? "infant" : "child";
-          return typeof price.price === "number" && price.price !== baseFareFor(target);
-        })
-        .map(price => join([dateLabel, price.label, price.age_range, money(price.price, price.currency)]));
-      return [
-        adultFare ? join([dateLabel, "Том хүн", adultFare]) : "",
-        ...passengerLines,
-      ];
-    });
+    : [...bySignature.values()]
+      .filter(entry => entry.dates.length > 0)
+      .map(entry => join([[...new Set(entry.dates)].join(", "), entry.parts.join(" · ")]));
   const childNotes = [
     ...(hasHotelChoices ? [] : tierLines),
+    ...extraTierLines,
     ...groupLines,
   ].filter((value, index, all) => value && all.indexOf(value) === index);
+  // A solo traveller's own-room price, once per distinct price with the
+  // departures it applies to.
+  const singleByPrice = new Map<number, string[]>();
+  for (const group of priceGroups) {
+    if (typeof group.single_price !== "number" || !money(group.single_price, fares?.currency)) continue;
+    const dates = strings(group.display_dates).length ? strings(group.display_dates) : strings(group.dates);
+    singleByPrice.set(group.single_price, [...(singleByPrice.get(group.single_price) || []), ...dates]);
+  }
+  const singleLines = [...singleByPrice.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([price, dates]) => join([
+      "Ганцаараа явах (өрөөндөө ганцаараа)",
+      singleByPrice.size > 1 ? [...new Set(dates)].join(", ") : "",
+      money(price, fares?.currency),
+    ]));
   return {
     extraFees: records(extra.extra_fees).map(f => join([f.label,money(f.amount,f.currency),f.applies_to,f.note])),
-    roomPrices: records(extra.room_prices).map(r => join([r.room_type,money(r.price,r.currency),r.note])),
+    roomPrices: [
+      ...records(extra.room_prices).map(r => join([r.room_type,money(r.price,r.currency),r.note])),
+      ...singleLines,
+    ].filter(Boolean),
     childPriceNotes: childNotes,
   };
 }

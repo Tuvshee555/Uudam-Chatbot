@@ -392,6 +392,15 @@ export function filterFutureDepartureDates(
 ): string[] {
   const todayYmd = toYmd(getMongoliaDateParts(now));
   const lookup = resolvedLookup(resolved, now);
+  // The same departure is often spelled differently in a price group than in
+  // the trip's date list ("1 сарын 4" vs "1 сарын 04"). Match those by month
+  // and day, so the year the trip froze at write time still applies: a
+  // January departure saved in September is NEXT January, and the price
+  // groups for it vanished from answers as "already departed".
+  const lookupByMonthDay = new Map<string, string>();
+  for (const ymd of lookup ? lookup.values() : []) {
+    if (typeof ymd === "string" && !lookupByMonthDay.has(ymd.slice(5))) lookupByMonthDay.set(ymd.slice(5), ymd);
+  }
   return (dates || []).filter((dateText) => {
     const key = String(dateText || "");
     if (lookup && lookup.has(key)) {
@@ -400,7 +409,7 @@ export function filterFutureDepartureDates(
     }
     const parsed = parseTripDepartureDateText(key, now);
     if (parsed.length === 0) return true;
-    return parsed.some((ymd) => ymd >= todayYmd);
+    return parsed.some((ymd) => (lookupByMonthDay.get(ymd.slice(5)) ?? ymd) >= todayYmd);
   });
 }
 

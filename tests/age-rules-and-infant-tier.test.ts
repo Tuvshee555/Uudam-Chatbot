@@ -122,7 +122,7 @@ test("website notes state each fare once, not once per base tier + child_rules +
     "Нярай (0-23 сар) - 490,000₮",
     // 9/15's group matches the base fares exactly on every field — no line.
     // 9/22 genuinely differs (2,690,000 vs base 2,790,000) — kept, once.
-    "9 сарын 22 - Том хүн - 2,690,000₮",
+    "9 сарын 22 - Том хүн 2,690,000₮",
   ]);
 });
 

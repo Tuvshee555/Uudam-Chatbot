@@ -42,6 +42,8 @@ type MappedPriceGroup = {
   child_age: string;
   infant_age: string;
   passenger_prices: PassengerPrice[];
+  /** Price for one person travelling alone (own room), from a "Ганцаараа" column. */
+  single_price?: number | null;
   note: string;
 };
 
@@ -157,8 +159,14 @@ export function isInfantColumn(label: string): boolean {
   return /(^|[^\d])0\s*[-–—]\s*[12](?!\d)/.test(label);
 }
 
+/** "Ганцаараа явах", "1 хүний өрөө", "Single": one traveller's price with a room to themselves. */
+export function isSingleTravellerColumn(label: string): boolean {
+  return /ганцаар|single|1\s*хүний\s*өрөө/i.test(label);
+}
+
 function isChildColumn(label: string): boolean {
-  return /хүүх|child|нас|age/i.test(label) && !isAdultColumn(label) && !isInfantColumn(label);
+  return /хүүх|child|нас|age/i.test(label) && !isAdultColumn(label) && !isInfantColumn(label) &&
+    !isSingleTravellerColumn(label);
 }
 
 function expandPosterDateList(value: string | undefined): string[] {
@@ -193,7 +201,8 @@ function expandPosterDateList(value: string | undefined): string[] {
 function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup[] {
   if (!priceTable?.rows?.length) return [];
   const columns = priceTable.columns || [];
-  const adultIdx = findPriceColumnIndex(columns, ["том", "adult"]);
+  const singleIdx = columns.findIndex((column) => isSingleTravellerColumn(column));
+  const adultIdx = columns.findIndex((column, index) => index !== singleIdx && isAdultColumn(column));
   const hotelIdx = findPriceColumnIndex(columns, ["буудал", "hotel"]);
   // Every non-adult passenger column, infants included — the infant one is
   // recognised by its own header ("Нярай") or an infant-shaped age band, not
@@ -218,6 +227,7 @@ function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup
           ...(isFreePriceCell(cell) ? { note: "Үнэгүй" } : {}),
         };
       });
+      const singlePrice = singleIdx >= 0 ? parsePriceToNumber(priceCell(row, columns, singleIdx)) : null;
       const pricedPassengers = passenger_prices.filter((price) => price.price != null);
       const infant = pricedPassengers.find((price) => isInfantColumn(price.label));
       const child = pricedPassengers.find((price) => price !== infant) || pricedPassengers[0];
@@ -233,6 +243,7 @@ function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup
         child_age: child?.age_range || "",
         infant_age: infant?.age_range || "",
         passenger_prices,
+        ...(singlePrice != null ? { single_price: singlePrice } : {}),
         note: "",
       };
     })

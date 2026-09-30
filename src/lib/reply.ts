@@ -170,11 +170,19 @@ function tripQuotablePrices(trip: TravelTrip): Set<number> {
   add(trip.child_price);
   add(trip.infant_price);
   const extra = (trip.extra || {}) as Record<string, unknown>;
+  const tripRange = extra.adult_price_range;
+  if (tripRange && typeof tripRange === "object") {
+    add((tripRange as Record<string, unknown>).min);
+    add((tripRange as Record<string, unknown>).max);
+  }
   const groupSources = [
     extra.price_groups,
     extra.departure_date_groups,
     extra.child_rules,
     extra.child_price_rules,
+    // Real fares too: a solo traveller's own-room price, and room-type prices.
+    // Missing these made a correct answer about either one look invented.
+    extra.room_prices,
   ];
   for (const source of groupSources) {
     if (!Array.isArray(source)) continue;
@@ -184,7 +192,15 @@ function tripQuotablePrices(trip: TravelTrip): Set<number> {
       add(record.adult_price);
       add(record.child_price);
       add(record.infant_price);
+      add(record.single_price);
       add(record.price);
+      // An adult fare given as a range ("2,000,000 - 2,300,000₮") keeps only
+      // its low end in adult_price; the high end is just as real.
+      const range = record.adult_price_range;
+      if (range && typeof range === "object") {
+        add((range as Record<string, unknown>).min);
+        add((range as Record<string, unknown>).max);
+      }
       const passengerPrices = record.passenger_prices;
       if (Array.isArray(passengerPrices)) {
         for (const p of passengerPrices) {

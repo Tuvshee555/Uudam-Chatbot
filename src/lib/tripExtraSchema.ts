@@ -100,6 +100,7 @@ function normalizePriceGroups(raw: unknown): Record<string, unknown>[] {
         child_age: asString(g.child_age),
         infant_age: asString(g.infant_age),
         passenger_prices: normalizePassengerPrices(g.passenger_prices),
+        ...(asNumberOrNull(g.single_price) != null ? { single_price: asNumberOrNull(g.single_price) } : {}),
         note: asString(g.note || g.notes),
       }),
     );

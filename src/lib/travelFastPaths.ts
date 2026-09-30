@@ -58,6 +58,8 @@ import { TRIP_MEDIA_UNAVAILABLE_SILENT } from "./reply";
 import {
   buildAmbiguousTripReply,
   adultFareOnDate,
+  formatStructuredDayPrice,
+  tripResolvedDates,
   buildAgeSpecificPriceReply,
   childFareTiers,
   isPassengerCountOnly,
@@ -1716,8 +1718,15 @@ export function buildStructuredTripReply(
       // Specific day(s) requested — use month/day lookup
       const currency = best.currency || "MNT";
       for (const md of mnDates) {
-        const g = findPriceGroupByMonthDay(best, md.month, md.day, now);
         const label = `${md.month} сарын ${md.day}`;
+        const fullCard = findPriceGroupByMonthDay(best, md.month, md.day, now)
+          ? formatStructuredDayPrice(best, md.month, md.day, label, now)
+          : null;
+        if (fullCard) {
+          lines.push(fullCard);
+          continue;
+        }
+        const g = findPriceGroupByMonthDay(best, md.month, md.day, now);
         const fallbackToBasePrice = !g && tripHasDepartureMonthDay(best, md.month, md.day, now);
         if (!g && !fallbackToBasePrice) {
           lines.push(`💰 ${label}-д тохирох үнийн мэдээлэл олдсонгүй. Аяллын зөвлөхтэй холбогдоорой.`);
@@ -1772,7 +1781,7 @@ export function buildStructuredTripReply(
           }
           if (infant) priceParts.push(`Нярай: ${infant}`);
           const rawDates = Array.isArray(g.dates) ? g.dates as string[] : [];
-          const futureDates = filterFutureDepartureDates(rawDates, now);
+          const futureDates = filterFutureDepartureDates(rawDates, now, tripResolvedDates(best));
           // Only show dates belonging to this month
           const monthDates = futureDates.filter((d) => normalizeMnDate(d).some((nd) => nd.month === askedMonthOnly));
           if (rawDates.length > 0 && monthDates.length === 0) continue;
@@ -1805,7 +1814,7 @@ export function buildStructuredTripReply(
   // Schedule: filter departure_dates to asked month if applicable
   if (askedSchedule || (askedPrice && best.departure_dates.length > 0)) {
     if (askedMonthOnly !== null && best.departure_dates.length > 0) {
-      const monthDates = filterFutureDepartureDates(best.departure_dates, now).filter((d) => {
+      const monthDates = filterFutureDepartureDates(best.departure_dates, now, tripResolvedDates(best)).filter((d) => {
         // Match "N сарын D", "N/D", or ISO "YYYY-MM-DD"
         const mn = normalizeMnDate(d);
         if (mn.length > 0) return mn.some((nd) => nd.month === askedMonthOnly);

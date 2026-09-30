@@ -1914,6 +1914,9 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
             typeof g.infant_price === "number" ? `Нярай${g.infant_age ? ` (${g.infant_age})` : ""} ${g.infant_price}₮` : "",
           ].filter(Boolean);
         }
+        if (typeof g.single_price === "number" && g.single_price >= 1000) {
+          priceParts.push(`Ганцаараа явах (өрөөндөө ганцаараа) ${g.single_price}₮`);
+        }
         const note = typeof g.note === "string" && g.note ? ` — ${g.note}` : "";
         return `[${label}${displayDates}: ${hotel}${priceParts.filter(Boolean).join(" / ")}${note}]`;
       }).join("; ");
