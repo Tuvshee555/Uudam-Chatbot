@@ -500,6 +500,11 @@ export default function PosterTab({
   const [bulkReport, setBulkReport] = useState<PosterBulkRunReport | null>(null);
   const [bulkTripOptions, setBulkTripOptions] = useState<BulkTripOption[]>([]);
   const [bulkSelections, setBulkSelections] = useState<Record<string, BulkResolutionValue>>({});
+  const tripUndoRef = useRef<PosterTrip[]>([]);
+  const tripRedoRef = useRef<PosterTrip[]>([]);
+  const lastTripSnapshotRef = useRef<PosterTrip | null>(null);
+  const skipTripHistoryRef = useRef(false);
+  const [, setTripHistoryRevision] = useState(0);
 
   const page1Ref = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
@@ -514,6 +519,48 @@ export default function PosterTab({
     void openTrip(openPosterId).then(() => onPosterOpened?.());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openPosterId]);
+
+  useEffect(() => {
+    const previous = lastTripSnapshotRef.current;
+    const next = trip ? structuredClone(trip) : null;
+    const changed = previous && next && JSON.stringify(previous) !== JSON.stringify(next);
+
+    if (changed && !skipTripHistoryRef.current) {
+      tripUndoRef.current = [...tripUndoRef.current.slice(-49), previous];
+      tripRedoRef.current = [];
+      setTripHistoryRevision((revision) => revision + 1);
+    }
+
+    skipTripHistoryRef.current = false;
+    lastTripSnapshotRef.current = next;
+  }, [trip]);
+
+  function resetTripHistory() {
+    tripUndoRef.current = [];
+    tripRedoRef.current = [];
+    skipTripHistoryRef.current = true;
+    setTripHistoryRevision((revision) => revision + 1);
+  }
+
+  function undoTripChange() {
+    if (!trip || tripUndoRef.current.length === 0) return;
+    const previous = tripUndoRef.current.pop();
+    if (!previous) return;
+    tripRedoRef.current.push(structuredClone(trip));
+    skipTripHistoryRef.current = true;
+    setTripHistoryRevision((revision) => revision + 1);
+    setTrip(previous);
+  }
+
+  function redoTripChange() {
+    if (!trip || tripRedoRef.current.length === 0) return;
+    const next = tripRedoRef.current.pop();
+    if (!next) return;
+    tripUndoRef.current.push(structuredClone(trip));
+    skipTripHistoryRef.current = true;
+    setTripHistoryRevision((revision) => revision + 1);
+    setTrip(next);
+  }
 
   const upd: PosterUpdateFn = (path, value) => setTrip((t) => (t ? setPath(t, path, value) : t));
   const posterStyle = useMemo(() => normalizePosterStyle(trip?.style), [trip?.style]);
@@ -588,6 +635,7 @@ export default function PosterTab({
   const currentHistoryItem = tripId ? history.find((item) => item.id === tripId) || null : null;
 
   const startTemplate = () => {
+    resetTripHistory();
     setError("");
     setBusy("");
     setBulkPlan(null);
@@ -1760,6 +1808,7 @@ export default function PosterTab({
     if (r.error) throw new Error(r.error as string);
     const tripRow = r.trip as { id: string; data: PosterTrip; source_file: string | null };
     const nextTrip = normalizeTripData(tripRow.data) as PosterTrip;
+    resetTripHistory();
     setTrip(nextTrip);
     setTripId(tripRow.id);
     setSource(tripRow.source_file || "");
@@ -2010,6 +2059,7 @@ export default function PosterTab({
       const r = await fetchJson(`/api/admin/poster/trip?id=${encodeURIComponent(id)}`);
       if (r.error) throw new Error(r.error as string);
       const tripRow = r.trip as { id: string; data: PosterTrip; source_file: string | null };
+      resetTripHistory();
       setTrip(normalizeTripData(tripRow.data));
       setTripId(tripRow.id);
       setSource(tripRow.source_file || "");
@@ -2026,6 +2076,7 @@ export default function PosterTab({
     const previousHistory = history;
     setHistory((items) => items.filter((item) => item.id !== id));
     if (tripId === id) {
+      resetTripHistory();
       setTrip(null);
       setTripId(null);
       setSource("");
@@ -2123,6 +2174,24 @@ export default function PosterTab({
                 </div>
 
                 <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={undoTripChange}
+                    disabled={!!busy || tripUndoRef.current.length === 0}
+                    title="Сүүлийн засварыг буцаах"
+                  >
+                    <Icons.chevronLeft size={14} /> Буцаах
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={redoTripChange}
+                    disabled={!!busy || tripRedoRef.current.length === 0}
+                    title="Буцаасан засварыг дахин хийх"
+                  >
+                    <Icons.chevronRight size={14} /> Дахин хийх
+                  </Button>
                   <Button size="sm" variant="secondary" onClick={addDeparture}>+ Огноо</Button>
                   <Button size="sm" variant="secondary" onClick={addDay}>+ Өдөр</Button>
                   <Button size="sm" variant="secondary" onClick={removeLastDay} disabled={(trip.days || []).length <= 1}>
