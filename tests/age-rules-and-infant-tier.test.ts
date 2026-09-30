@@ -126,6 +126,22 @@ test("website notes state each fare once, not once per base tier + child_rules +
   ]);
 });
 
+test("a placeholder sub-1,000₮ fare never reaches the website as a real price", () => {
+  // Real live data: one trip's infant price was entered as "1₮" to get past
+  // a required field, not a documented free fare or real price. The label
+  // still shows (there IS an infant tier) but never with that number.
+  const details = websiteExtraDetails(
+    {},
+    { adult: 1_090_000, child: 890_000, infant: 1, currency: "MNT" },
+  );
+  assert.deepEqual(details.childPriceNotes, [
+    "Том хүн - 1,090,000₮",
+    "Хүүхэд - 890,000₮",
+    "Нярай",
+  ]);
+  assert.ok(!details.childPriceNotes.some((line) => /(?:^|\s)1₮(?:\s|$)/.test(line)));
+});
+
 test("a malformed imported child_rules row never reaches the website on its own", () => {
   // Real live data had a "Нярай - 1₮" / "24-20 нас" child_rules row that no
   // longer has anywhere to render from — child_rules is never read directly.

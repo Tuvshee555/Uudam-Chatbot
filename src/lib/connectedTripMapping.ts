@@ -78,7 +78,11 @@ export function websiteExtraDetails(
   extra: Record<string, unknown>,
   fares?: { adult: number | null; child: number | null; infant: number | null; currency: string },
 ) {
-  const money = (amount: unknown, currency: unknown) => typeof amount === "number" && Number.isFinite(amount)
+  // A sub-1,000₮ figure ("1₮") is a placeholder typed to get past a required
+  // field, not a real fare — same threshold the chatbot's own
+  // formatPassengerMoney uses. Without this the website printed "Нярай - 1₮"
+  // verbatim from data that was never meant to be a real price.
+  const money = (amount: unknown, currency: unknown) => typeof amount === "number" && Number.isFinite(amount) && amount >= 1000
     ? `${amount.toLocaleString("en-US")}${!currency || currency === "MNT" ? "₮" : ` ${currency}`}` : "";
   const join = (items: unknown[]) => items.filter(v => typeof v === "string" && v.trim()).join(" - ");
   // The trip's own passenger tiers with their age bands come first, so the
@@ -87,7 +91,7 @@ export function websiteExtraDetails(
   const band = (key: string) => (typeof bands[key] === "string" ? String(bands[key]).trim() : "");
   const tierLine = (label: string, ageBand: string, amount: number | null) => {
     if (!ageBand && amount == null) return "";
-    const fare = amount != null && amount > 0 ? money(amount, fares?.currency) : "";
+    const fare = money(amount, fares?.currency);
     return join([`${label}${ageBand ? ` (${ageBand})` : ""}`, fare]);
   };
   const tierLines = fares
