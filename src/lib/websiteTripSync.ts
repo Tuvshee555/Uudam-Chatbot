@@ -124,18 +124,21 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
     hasPriorTrip: Boolean(prior), freshHash: contentHash, priorHash: priorContentHash,
     priorUpdatedAt: prior?.updatedAt, priorLastSyncedAt: prior?.lastSyncedAt,
   });
+  const sourcePriceFields = websiteExtraDetails(source.extra, {
+    adult: source.adult_price, child: source.child_price, infant: source.infant_price ?? null,
+    currency: source.currency || "MNT",
+  });
   const contentFields: Record<string, unknown> = staffEditedSinceLastSync
     ? {}
     : {
         ...contentSnapshot, image,
         extraImages: photos.length || hadSourcePhotos ? photos.filter(p => p !== image) : prior?.extraImages || [],
-        ...websiteExtraDetails(source.extra, {
-          adult: source.adult_price, child: source.child_price, infant: source.infant_price ?? null,
-          currency: source.currency || "MNT",
-        }),
       };
   const data: Record<string, unknown> = {
     ...contentFields,
+    // Price tiers are transactional data from the poster, not editable sell
+    // copy. Keep them current even when a website editor's copy is protected.
+    ...sourcePriceFields,
     durationDays: d.days, durationNights: d.nights, price: source.adult_price ?? 0,
     childPrice: source.child_price, infantPrice: source.infant_price ?? null,
     currency: source.currency || "MNT",

@@ -71,3 +71,21 @@ test("website notes lead with the trip's own passenger tiers and age bands", () 
   // No bands saved and no fares → nothing invented.
   assert.deepEqual(websiteExtraDetails({}).childPriceNotes, []);
 });
+
+test("hotel-priced trips keep the static website note compact", () => {
+  const details = websiteExtraDetails(
+    {
+      child_rules: [{ label: "Stale child fare", price: 99_999_999, currency: "MNT" }],
+      price_groups: [{
+        hotel: "Phoenix",
+        date_keys: ["2026-10-01"],
+        adult_price: 3_290_000,
+        passenger_prices: [{ label: "Хүүхэд 6-11 нас", age_range: "6-11 нас", price: 3_090_000, currency: "MNT" }],
+      }],
+    },
+    { adult: 2_690_000, child: 2_590_000, infant: 450_000, currency: "MNT" },
+  );
+  assert.deepEqual(details.childPriceNotes, [
+    "Үнэ нь гарах өдөр, буудлын сонголтоос хамаарна. Доорх хэсгээс сонгоно уу.",
+  ]);
+});

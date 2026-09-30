@@ -97,10 +97,11 @@ export function websiteExtraDetails(
         tierLine("Нярай", band("infant"), fares.infant),
       ].filter(Boolean)
     : [];
-  const childNotes = [
-    ...tierLines,
-    ...records(extra.child_rules).map(r => join([r.label,r.age_range,money(r.price,r.currency),r.note])),
-    ...records(extra.price_groups).flatMap(group => {
+  const priceGroups = records(extra.price_groups);
+  const hasHotelChoices = priceGroups.some(group => typeof group.hotel === "string" && group.hotel.trim());
+  const groupLines = hasHotelChoices
+    ? ["Үнэ нь гарах өдөр, буудлын сонголтоос хамаарна. Доорх хэсгээс сонгоно уу."]
+    : priceGroups.flatMap(group => {
       const dates = strings(group.display_dates).length ? strings(group.display_dates) : strings(group.dates);
       const dateLabel = dates.join(", ");
       const adultRange = formatPriceRange(group.adult_price_range, String(fares?.currency || "MNT"));
@@ -111,7 +112,11 @@ export function websiteExtraDetails(
         ...records(group.passenger_prices).map(price =>
           join([dateLabel, hotel, price.label, price.age_range, money(price.price, price.currency)])),
       ];
-    }),
+    });
+  const childNotes = [
+    ...(hasHotelChoices ? [] : tierLines),
+    ...(hasHotelChoices ? [] : records(extra.child_rules).map(r => join([r.label,r.age_range,money(r.price,r.currency),r.note]))),
+    ...groupLines,
   ].filter((value, index, all) => value && all.indexOf(value) === index);
   return {
     extraFees: records(extra.extra_fees).map(f => join([f.label,money(f.amount,f.currency),f.applies_to,f.note])),
