@@ -93,3 +93,20 @@ test("poster adult price ranges keep the low fare for lookup and the full range 
   assert.equal(fields.adult_price, 2000000);
   assert.deepEqual(fields.extra?.price_groups?.[0].adult_price_range, { min: 2000000, max: 2300000 });
 });
+
+test("poster hotel rows keep separate passenger tiers on the same date", () => {
+  const fields = mapPosterTripToFields({
+    title: "Хайнань – Саньяа аялал",
+    price_table: {
+      columns: ["Буудал", "Том хүн", "Хүүхэд 6-11 нас", "Хүүхэд 2-5 нас", "Нярай"],
+      rows: [
+        { dates: "10 сарын 1", cells: ["Phoenix", "3,290,000₮", "3,090,000₮", "2,390,000₮", "450,000₮"] },
+        { dates: "10 сарын 1", cells: ["Paxton", "2,790,000₮", "2,590,000₮", "2,390,000₮", "450,000₮"] },
+      ],
+    },
+  });
+  assert.equal(fields.adult_price, 2790000);
+  assert.deepEqual(fields.extra?.price_groups?.map((group) => group.hotel), ["Phoenix", "Paxton"]);
+  assert.equal(fields.extra?.price_groups?.[0].passenger_prices[1].price, 2390000);
+  assert.deepEqual(fields.extra?.child_rules, undefined);
+});

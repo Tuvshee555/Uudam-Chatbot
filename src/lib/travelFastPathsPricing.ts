@@ -239,6 +239,7 @@ export function formatSelectedPriceGroups(
     const labelHasDates = normalizeMnDate(groupLabel).length > 0;
     if (groupLabel && !labelHasDates) lines.push("", groupLabel);
     if (dateLabel && dateLabel !== groupLabel) lines.push(dateLabel);
+    if (typeof group.hotel === "string" && group.hotel.trim()) lines.push(`Буудал: ${group.hotel.trim()}`);
     lines.push(...priceLines);
     pricedGroups += 1;
   }
@@ -622,7 +623,8 @@ export function buildPassengerTypePriceReply(
       found = true;
       const dateLabel = relevantDates.length > 0 ? formatGroupDateLabel(relevantDates) : "";
       const ageText = age ? ` /${age}/` : "";
-      lines.push(`${dateLabel ? `${dateLabel}: ` : ""}${label}${ageText}: ${adultPriceText}`);
+      const hotel = typeof group.hotel === "string" && group.hotel.trim() ? `${group.hotel.trim()} · ` : "";
+      lines.push(`${dateLabel ? `${dateLabel}: ` : ""}${hotel}${label}${ageText}: ${adultPriceText}`);
     }
     if (found) return lines.join("\n");
   }
@@ -1241,7 +1243,7 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
   const structuredGroups = getStructuredPriceGroups(trip);
 
   if (structuredGroups.length > 0) {
-    type GroupedPrice = { priceKey: string; priceLines: string[]; dates: string[]; label: string };
+    type GroupedPrice = { priceKey: string; priceLines: string[]; dates: string[]; label: string; hotel: string };
     const grouped: GroupedPrice[] = [];
     for (const g of structuredGroups) {
       // A group with no infant figure falls back to the trip's own infant
@@ -1269,7 +1271,8 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
         const otherLines = priceLines.filter((line) => !line.startsWith("• Том") && !line.startsWith("• Хүүхэд"));
         priceLines.splice(0, priceLines.length, ...adultLines, ...tierLines, ...otherLines);
       }
-      const priceKey = priceLines.join("|");
+      const hotel = typeof g.hotel === "string" ? g.hotel.trim() : "";
+      const priceKey = `${hotel}|${priceLines.join("|")}`;
       const rawDates = getPriceGroupDisplayDates(g);
       const futureDates = filterFutureDepartureDates(rawDates, now);
       if (rawDates.length > 0 && futureDates.length === 0) continue;
@@ -1279,7 +1282,7 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
       const label = /^(үнэ|үнийн мэдээлэл|price|prices)$/i.test(rawLabel) ? "" : rawLabel;
       const existing = grouped.find((entry) => entry.priceKey === priceKey);
       if (existing) existing.dates.push(...futureDates);
-      else grouped.push({ priceKey, priceLines, dates: [...futureDates], label });
+      else grouped.push({ priceKey, priceLines, dates: [...futureDates], label, hotel });
     }
     // Only commit to the price-group rendering if at least one group survived
     // the departed-dates filter; otherwise fall through so the room/flat price
@@ -1293,6 +1296,7 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
           ? `${groupLabel}\n${dateLabel}`
           : (dateLabel || (labelHasDates ? "" : groupLabel));
         if (heading) sections.push("", heading);
+        if (entry.hotel) sections.push(`Буудал: ${entry.hotel}`);
         sections.push(...entry.priceLines);
       }
       return sections.join("\n");

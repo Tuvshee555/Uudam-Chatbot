@@ -32,6 +32,7 @@ type PassengerPrice = {
 };
 type MappedPriceGroup = {
   label: string;
+  hotel?: string;
   dates: string[];
   display_dates: string[];
   adult_price: number | null;
@@ -193,6 +194,7 @@ function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup
   if (!priceTable?.rows?.length) return [];
   const columns = priceTable.columns || [];
   const adultIdx = findPriceColumnIndex(columns, ["том", "adult"]);
+  const hotelIdx = findPriceColumnIndex(columns, ["буудал", "hotel"]);
   // Every non-adult passenger column, infants included — the infant one is
   // recognised by its own header ("Нярай") or an infant-shaped age band, not
   // guessed from being the last column.
@@ -205,6 +207,7 @@ function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup
       const dates = expandPosterDateList(row.dates);
       const adultCell = priceCell(row, columns, adultIdx >= 0 ? adultIdx : 0);
       const adultPriceRange = parsePriceRangeText(adultCell);
+      const hotel = hotelIdx >= 0 ? cleanColumnLabel(priceCell(row, columns, hotelIdx) || "") : "";
       const passenger_prices = childColumns.map(({ column, index }) => {
         const cell = priceCell(row, columns, index);
         return {
@@ -220,6 +223,7 @@ function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup
       const child = pricedPassengers.find((price) => price !== infant) || pricedPassengers[0];
       return {
         label: dates.join(", ") || normalizeDepartureText(row.dates || ""),
+        ...(hotel ? { hotel } : {}),
         dates,
         display_dates: dates,
         adult_price: adultPriceRange?.min ?? parsePriceToNumber(adultCell),
@@ -397,7 +401,7 @@ export function mapPosterTripToFields(poster: PosterTrip): MappedTripFields {
   const includes = (poster.includes || []).filter(Boolean);
   const excludes = (poster.excludes || []).filter(Boolean);
   const priceGroups = mapPriceGroups(poster.price_table);
-  const childRules = priceGroups.flatMap((group) => group.passenger_prices)
+  const childRules = priceGroups.filter((group) => !group.hotel).flatMap((group) => group.passenger_prices)
     .filter((price, index, all) =>
       price.price != null &&
       index === all.findIndex((other) =>

@@ -53,6 +53,17 @@ test("website departures inherit date-specific price group overrides", () => {
   assert.equal(result[1].price,1201000);
   assert.equal(result[1].childPrice,1001000);
 });
+test("website calendar keeps the lowest fare when hotels share a departure", () => {
+  const result = websiteDepartures({ ...trip, extra: {
+    departure_dates_resolved: [{ text: "10 сарын 1", ymd: "2026-10-01" }],
+    price_groups: [
+      { hotel: "Paxton", date_keys: ["2026-10-01"], adult_price: 2790000, child_price: 2590000 },
+      { hotel: "Phoenix", date_keys: ["2026-10-01"], adult_price: 3290000, child_price: 3090000 },
+    ],
+  } }, new Date("2026-09-30T00:00:00Z"));
+  assert.equal(result[0].price, 2790000);
+  assert.equal(result[0].childPrice, 2590000);
+});
 test("partial metadata updates preserve visibility, prices and unrelated details", () => {
   const existing = {customer_visible:false,price_groups:[{adult_price:123}],included_items:["Hotel"],departure_rule:"Weekly"};
   const patch = normalizeExtraPatch({included_items:[],website_sync:{synced:true}});

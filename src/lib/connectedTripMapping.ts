@@ -104,10 +104,12 @@ export function websiteExtraDetails(
       const dates = strings(group.display_dates).length ? strings(group.display_dates) : strings(group.dates);
       const dateLabel = dates.join(", ");
       const adultRange = formatPriceRange(group.adult_price_range, String(fares?.currency || "MNT"));
+      const hotel = typeof group.hotel === "string" ? group.hotel.trim() : "";
+      const adultFare = adultRange || money(group.adult_price, fares?.currency);
       return [
-        adultRange ? join([dateLabel, "Том хүн", adultRange]) : "",
+        adultFare && (adultRange || hotel) ? join([dateLabel, hotel, "Том хүн", adultFare]) : "",
         ...records(group.passenger_prices).map(price =>
-          join([dateLabel, price.label, price.age_range, money(price.price, price.currency)])),
+          join([dateLabel, hotel, price.label, price.age_range, money(price.price, price.currency)])),
       ];
     }),
   ].filter((value, index, all) => value && all.indexOf(value) === index);
@@ -211,9 +213,11 @@ export function websiteDepartures(trip: TravelTrip, now = new Date()) {
       const depYmd = dep.start.slice(0, 10);
       const depKeys = new Set([depYmd, ...generateDateKeys(dep.label, now), ...generateDateKeys(depYmd, now)]);
       if (![...depKeys].some((key) => groupKeys.has(key))) continue;
-      dep.price = adultPrice;
-      dep.childPrice = childPrice;
-      dep.infantPrice = infantPrice;
+      if (adultPrice != null && (dep.price == null || adultPrice < dep.price)) {
+        dep.price = adultPrice;
+        dep.childPrice = childPrice;
+        dep.infantPrice = infantPrice;
+      }
     }
   }
   return [...dates.values()].sort((a, b) => a.start.localeCompare(b.start));

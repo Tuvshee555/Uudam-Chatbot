@@ -9,8 +9,8 @@ import { isInfantShapedAge } from "./travelFastPathsSearch";
  * meant to be exactly the deduped union of every group's passenger_prices,
  * but several had gone stale — extra or missing entries). Deriving it here
  * removes the drift entirely: whoever prices a date group is the only edit
- * that matters, and this mirrors the same dedup poster/tripMapper.ts already
- * does when mapping a POSTER's price table onto a trip.
+ * that matters. Hotel-specific tiers stay in their dated price groups instead
+ * of becoming a misleading trip-wide fare.
  */
 export function deriveChildRules(
   groups: readonly PriceGroup[],
@@ -20,7 +20,8 @@ export function deriveChildRules(
   // that type, so a real per-date band always wins over the blanket flag.
   baseFree: { child?: boolean; infant?: boolean } = {},
 ): ChildRule[] {
-  const passengerPrices: PassengerPrice[] = groups.flatMap((group) => group.passenger_prices ?? []);
+  const passengerPrices: PassengerPrice[] = groups.filter((group) => !group.hotel)
+    .flatMap((group) => group.passenger_prices ?? []);
   const seen = new Set<string>();
   const rules: ChildRule[] = [];
   for (const price of passengerPrices) {

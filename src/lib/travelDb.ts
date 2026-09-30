@@ -1889,6 +1889,7 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
           ? (g.display_dates as string[]).join(", ")
           : Array.isArray(g.dates) ? (g.dates as string[]).join(", ") : String(g.dates ?? "");
         const label = typeof g.label === "string" && g.label ? `${g.label}: ` : "";
+        const hotel = typeof g.hotel === "string" && g.hotel.trim() ? `Буудал ${g.hotel.trim()}: ` : "";
         // Use passenger_prices if present (more detailed), otherwise fallback to flat fields
         const ppArr = Array.isArray(g.passenger_prices) ? g.passenger_prices as Array<Record<string, unknown>> : [];
         let priceParts: string[];
@@ -1914,7 +1915,7 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
           ].filter(Boolean);
         }
         const note = typeof g.note === "string" && g.note ? ` — ${g.note}` : "";
-        return `[${label}${displayDates}: ${priceParts.filter(Boolean).join(" / ")}${note}]`;
+        return `[${label}${displayDates}: ${hotel}${priceParts.filter(Boolean).join(" / ")}${note}]`;
       }).join("; ");
       details.push(`Огноо тус бүрийн үнэ: ${pgText}`);
     }

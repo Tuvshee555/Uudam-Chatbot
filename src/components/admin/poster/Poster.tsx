@@ -449,7 +449,7 @@ export default function Poster({
                         {t.price_table ? (
                           <>
                             <Ed value={c} placeholder="Үнэ" onChange={(v) => upd(["price_table", "rows", ri, "cells", ci], v)} />
-                            {c.trim().toLowerCase() !== "үнэгүй" && (
+                            {!/буудал|hotel/i.test(priceTable.columns[ci] || "") && c.trim().toLowerCase() !== "үнэгүй" && (
                               <button
                                 type="button"
                                 className="editor-only pamt-free-btn"
@@ -474,7 +474,7 @@ export default function Poster({
             ) : null}
             {t.price_table ? (
               <p className="editor-only mt-1 text-[11px] text-ink-subtle">
-                Үнэ зөрүүтэй бол `2,000,000 - 2,300,000₮` гэж нэг нүдэнд бичиж болно.
+                Үнэ зөрүүтэй бол 2,000,000 - 2,300,000₮ гэж бичнэ. Буудал бүр өөр үнэтэй бол "Буудал" багана нэмээд нэг огноонд тус тусад нь мөр үүсгэнэ.
               </p>
             ) : null}
             </>

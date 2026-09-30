@@ -126,3 +126,27 @@ test("bot price reply shows a date group's adult range instead of only its low b
 
   assert.match(formatTripBasePricePremium(trip, new Date("2026-09-30T00:00:00Z")), /2,000,000–2,300,000₮/);
 });
+
+test("bot keeps hotel names when two fares share a departure date", () => {
+  const trip = {
+    id: "hotel-trip", category: "Аялал", operator_name: "UUDAM", route_name: "Хайнань – Саньяа аялал",
+    duration_text: "9 өдөр 8 шөнө", adult_price: 2790000, child_price: 2590000, infant_price: 450000,
+    currency: "MNT", departure_dates: ["10 сарын 1"], seats_total: null, seats_left: null,
+    has_food: null, status: "active", notes: "", hotel: "", source_description: "", photo_urls: [],
+    extra: { price_groups: [
+      { label: "10 сарын 1", dates: ["10 сарын 1"], hotel: "Paxton", adult_price: 2790000, child_price: 2590000 },
+      { label: "10 сарын 1", dates: ["10 сарын 1"], hotel: "Phoenix", adult_price: 3290000, child_price: 3090000 },
+    ] }, created_at: "", updated_at: "",
+  } satisfies TravelTrip;
+  const reply = formatTripBasePricePremium(trip, new Date("2026-09-30T00:00:00Z"));
+  assert.match(reply, /Буудал: Paxton/);
+  assert.match(reply, /Буудал: Phoenix/);
+});
+
+test("hotel-specific child prices do not become a trip-wide child rule", () => {
+  const rules = deriveChildRules([
+    group({ hotel: "Phoenix", passenger_prices: [{ label: "Хүүхэд 6-11 нас", age_range: "6-11 нас", price: 3090000, currency: "MNT" }] }),
+    group({ hotel: "Paxton", passenger_prices: [{ label: "Хүүхэд 6-11 нас", age_range: "6-11 нас", price: 2590000, currency: "MNT" }] }),
+  ]);
+  assert.deepEqual(rules, []);
+});
