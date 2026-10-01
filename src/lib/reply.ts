@@ -437,10 +437,19 @@ export function sanitizeAssistantReply(text: string) {
     // the emoji-prefixed detail lines are each preserved separately.
     const lines = block.split("\n");
     const uniqueLines: string[] = [];
+    // A price line repeated under a DIFFERENT departure heading is a real
+    // fact about that departure, not the model repeating itself: "• Нярай:
+    // 390,000₮" under a second date section was being deleted, so the later
+    // sections showed only the adult fare. Price lines are deduplicated
+    // within their own block only; everything else across the whole reply.
+    const seenPriceLinesInBlock = new Set<string>();
     for (const line of lines) {
       const norm = normalizeForCompare(line);
-      if (!norm || seenLines.has(norm)) continue;
-      seenLines.add(norm);
+      if (!norm) continue;
+      const isPriceLine = /\d[\d,.\s]*₮/.test(line);
+      const seen = isPriceLine ? seenPriceLinesInBlock : seenLines;
+      if (seen.has(norm)) continue;
+      seen.add(norm);
       uniqueLines.push(line.trim());
     }
     if (uniqueLines.length) {

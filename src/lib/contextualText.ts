@@ -59,12 +59,19 @@ export function isLikelyContextDependentText(text: string) {
     (word) =>
       word.length >= 4 &&
       !REFERENTIAL_HINTS.includes(word) &&
-      !NON_CONTENT_WORDS.includes(word),
+      !NON_CONTENT_WORDS.includes(word) &&
+      // A conditional verb ("явбал", "гарвал", "ирвэл", "yavbal") is never a
+      // place: "1 сарын 25-нд явбал хэд вэ" under a trip card asks about THAT
+      // trip, and was cut off from it and silenced as no-data.
+      !CONDITIONAL_VERB.test(word),
   );
   return contentWords.length === 0;
 }
 
 const POINTING_WORD = /(?:^|\s)(?:нь|ni|тэр|ter|энэ|ene)(?:\s|$)/;
+
+/** Mongolian conditional verb form ("-бал/-вал/-бол/-вол"), Cyrillic or Latin-typed. */
+const CONDITIONAL_VERB = /^[\p{L}]{2,}(?:[бв][аоэө]л|[bv][aoe]l)$/u;
 
 function isFreshMonthCatalogQuestion(normalized: string): boolean {
   return (
@@ -134,6 +141,7 @@ const NON_CONTENT_WORDS = [
   // Latin-typed question words, as in LATIN_REFERENTIAL_HINT.
   "unee", "unii", "unetei", "heden", "niit", "hezee", "ognoo", "suudal", "huuhed", "huuhdiin",
   "nyrai", "hutulbur", "dahiad", "dahin", "aylal", "ayalal", "aylaliin", "baina", "bgaa", "yavah",
+  "sariin", "sarin", "sard", "sarda", "udur", "ognoond",
   "аялал",
   "аяллын",
   "зураг",
@@ -215,6 +223,11 @@ function firstAssistantOption(text: string): string | null {
     if (!cleaned || cleaned.length < 4) continue;
     if (!/^[•*\-]|\d+[.)]/.test(line.trim())) continue;
     const normalized = normalizeContextText(cleaned);
+    // "Label: 6,490,000₮" is a price detail of the card, never a trip name
+    // (a list line reads "<trip> — <details>"). The solo-traveller line
+    // "Ганцаараа явбал: …₮" was taken as the trip, and "Хөтөлбөр үзэх" under
+    // that card got an AI summary instead of the trip's PDF.
+    if (/^[^—]{0,40}:\s*[\d][\d.,\s]*₮/.test(cleaned)) continue;
     if (
       normalized.startsWith("том хүн") ||
       normalized.startsWith("хүүхэд") ||

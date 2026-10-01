@@ -480,7 +480,9 @@ export function buildAgeSpecificPriceReply(trip: TravelTrip, text: string): stri
         const priceText = formatTierPrice(preferred, currency);
         if (priceText) {
           const label = preferred.label || (singleAgeIntent.target === "infant" ? "Нярай" : "Хүүхэд");
-          return `✈️ ${trip.route_name}\n💰 ${label} /${preferred.ageRange}/ үнэ: ${priceText}`;
+          // The tier label often already states its band ("Хүүхэд 2-6 нас").
+          const band = label.includes(preferred.ageRange) ? "" : ` /${preferred.ageRange}/`;
+          return `✈️ ${trip.route_name}\n💰 ${label}${band} үнэ: ${priceText}`;
         }
       }
       if (covering.length === 0) {

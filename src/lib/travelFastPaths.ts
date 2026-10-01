@@ -11,6 +11,8 @@
  *   - travelFastPathsPricing.ts  — date/price parsing + price formatting
  */
 
+import { buildPassengerTotalReply } from "./passengerTotalReply";
+import { buildHotelReply } from "./tripHotelReply";
 import {
   buildDepartureDateAvailabilityReply,
   filterFutureDepartureDates,
@@ -61,7 +63,6 @@ import {
   formatStructuredDayPrice,
   tripResolvedDates,
   buildAgeSpecificPriceReply,
-  childFareTiers,
   isPassengerCountOnly,
   buildIncludedInPriceReply,
   buildPassengerTypePriceReply,
@@ -826,110 +827,6 @@ export function buildStandalonePriceLookupReply(text: string, trips: TravelTrip[
   return lines.join("\n");
 }
 
-function extractPassengerCounts(text: string): { adult: number; child: number; infant: number } | null {
-  const normalized = normText(text);
-  const hasTotalIntent =
-    normalized.includes("нийт") ||
-    normalized.includes("хэд болох") ||
-    normalized.includes("нийлээд") ||
-    normalized.includes("total") ||
-    isPassengerCountOnly(text);
-  if (!hasTotalIntent) return null;
-
-  const readCount = (patterns: RegExp[]) => {
-    for (const pattern of patterns) {
-      const match = pattern.exec(normalized);
-      if (!match) continue;
-      const value = Number(match[1]);
-      if (Number.isInteger(value) && value >= 0 && value <= 50) return value;
-    }
-    return 0;
-  };
-
-  // "2 том хүн" (number first) vs "том хүн 2" (number after). Detect the convention
-  // so "том хүн (\d)" doesn't grab the NEXT group's number in "2 том хүн 1 хүүхэд".
-  const numberFirst = /\d+\s*(?:том\s+хүн|насанд хүрэгч|adult)/i.test(normalized);
-  const pick = (numFirst: RegExp[], nounFirst: RegExp[]) =>
-    numberFirst ? [...numFirst, ...nounFirst] : [...nounFirst, ...numFirst];
-  const adult = readCount(pick(
-    [/(\d{1,2})\s*(?:том(?:\s+хүн)?|насанд хүрэгч|adult)/i],
-    [/(?:том\s+хүн|насанд хүрэгч|adult)\s*(\d{1,2})/i],
-  ));
-  const child = readCount(pick(
-    [/(\d{1,2})\s*(?:хүүхэд|child)/i],
-    [/(?:хүүхэд|child)\s*(\d{1,2})/i],
-  ));
-  const infant = readCount(pick(
-    [/(\d{1,2})\s*(?:нярай|infant)/i],
-    [/(?:нярай|infant)\s*(\d{1,2})/i],
-  ));
-  if (adult + child + infant <= 0) return null;
-  return { adult, child, infant };
-}
-
-function buildPassengerTotalReply(
-  trip: TravelTrip,
-  text: string,
-  now = new Date(),
-): string | null {
-  const currentLine = text.split("\n").pop() || text;
-  const counts = extractPassengerCounts(currentLine);
-  if (!counts) return null;
-
-  const currency = trip.currency || "MNT";
-  const monthDay = extractDatesFromText(currentLine)[0];
-  const group = monthDay ? findPriceGroupByMonthDay(trip, monthDay.month, monthDay.day, now) : null;
-  const structuredGroup = !group ? getStructuredPriceGroups(trip)[0] : null;
-  const selected = (group || structuredGroup || null) as Record<string, unknown> | null;
-  const adultPrice = typeof selected?.adult_price === "number" ? selected.adult_price : trip.adult_price;
-  const childPrice = typeof selected?.child_price === "number" ? selected.child_price : trip.child_price;
-  const infantPrice = typeof selected?.infant_price === "number" ? selected.infant_price : null;
-
-  const rows: string[] = [];
-  let total = 0;
-  const add = (label: string, count: number, price: number | null | undefined, free: boolean) => {
-    if (count <= 0) return;
-    if (free) {
-      rows.push(`• ${label} ${count} x Үнэгүй`);
-      return;
-    }
-    // 0₮ means the poster never carried this fare — report it as unknown rather
-    // than billing the passenger nothing.
-    if (typeof price !== "number" || price <= 0) {
-      rows.push(`• ${label} ${count}: үнэ тодорхойгүй`);
-      return;
-    }
-    const subtotal = count * price;
-    total += subtotal;
-    rows.push(`• ${label} ${count} x ${formatMoney(price, currency)} = ${formatMoney(subtotal, currency)}`);
-  };
-
-  add("Том хүн", counts.adult, adultPrice, false);
-  // Several child fares by age/birth year: the total depends on which band
-  // each child is in, so give the range — never silently the first fare.
-  const tiers = counts.child > 0 && !isDocumentedFreeFare(trip, "child") ? childFareTiers(trip, selected) : [];
-  let spread = 0;
-  if (tiers.length >= 2) {
-    const prices = tiers.map((tier) => tier.price);
-    const low = Math.min(...prices);
-    spread = counts.child * (Math.max(...prices) - low);
-    total += counts.child * low;
-    for (const tier of tiers) {
-      rows.push(`• Хүүхэд${tier.band ? ` /${tier.band}/` : ""} ${counts.child} x ${formatMoney(tier.price, currency)} = ${formatMoney(counts.child * tier.price, currency)}`);
-    }
-  } else {
-    add("Хүүхэд", counts.child, childPrice, isDocumentedFreeFare(trip, "child"));
-  }
-  add("Нярай", counts.infant, infantPrice, isDocumentedFreeFare(trip, "infant"));
-  if (total <= 0) return null;
-
-  const label = monthDay ? `${monthDay.month} сарын ${monthDay.day}-ны ` : "";
-  const totalText = spread > 0
-    ? `${formatMoney(total, currency)} – ${formatMoney(total + spread, currency)} (хүүхдийн насаас хамаарна)`
-    : formatMoney(total, currency);
-  return [`✈️ ${trip.route_name}`, `💰 ${label}нийт: ${totalText}`, ...rows].join("\n");
-}
-
 /**
  * "1. <full trip name>". The label is the quick-reply PAYLOAD, so it carries
  * the whole name; Messenger shows a shortened title (messenger.ts). A label cut
@@ -1522,6 +1419,8 @@ export function buildStructuredTripReply(
     // answers it even though the operator wrote the answer into notes/has_food.
     const routeOnlyIncluded = buildIncludedInPriceReply(routeOnlyCandidate.best, intentText);
     if (routeOnlyIncluded) return routeOnlyIncluded;
+    const routeOnlyHotel = buildHotelReply(routeOnlyCandidate.best, intentText);
+    if (routeOnlyHotel) return routeOnlyHotel;
     return buildTripInfoReply(routeOnlyCandidate.best, now);
   }
 
