@@ -728,7 +728,7 @@ function TripCard({
               <p className="font-semibold text-ink">{trip.route_name || "—"}</p>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
-              {(trip.extra as Record<string, unknown>)?.needs_human_review === true && (
+              {blocking.length > 0 && (
                 <Badge tone="warning">Шалгах</Badge>
               )}
               {isHidden && <Badge tone="neutral">Нуусан</Badge>}

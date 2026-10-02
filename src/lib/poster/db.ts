@@ -124,11 +124,10 @@ export async function listPosterTrips(): Promise<PosterTripListRow[]> {
       ORDER BY p.updated_at DESC
       LIMIT 200`,
   );
-  return (res?.rows ?? []).map((row) => ({
-    ...row,
+  return (res?.rows ?? []).map((row) => {
     // Same rules TripsTab blocks a save on, so a gap here means the same
     // thing there — no separate "poster complete" idea to keep in sync.
-    missing_gaps: blockingGaps(
+    const gaps = blockingGaps(
       findTripGaps(
         // Reuse the shared flattener so a documented "Үнэгүй" fare reads the
         // same here as it does in the trip editor.
@@ -146,8 +145,19 @@ export async function listPosterTrips(): Promise<PosterTripListRow[]> {
           { posterPhotoCount: Number(row.photo_count) || 0, hasBrochure: true },
         ),
       ),
-    ),
-  }));
+    );
+    return {
+      ...row,
+      missing_gaps: gaps,
+      // The stored extra.needs_human_review flag is stamped once at
+      // poster-save time and never recomputed when a gap gets fixed some
+      // other way (editing the trip directly, a resync) — it was staying
+      // "Trip шалгах" for trips that were already complete. Recomputed here
+      // from the SAME live gaps used for missing_gaps so the two badges
+      // never disagree.
+      linked_trip_needs_review: gaps.length > 0,
+    };
+  });
 }
 
 export function linkedTripId(posterId: string): string {
