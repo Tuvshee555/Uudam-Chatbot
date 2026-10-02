@@ -9,6 +9,7 @@ import { withBookableDepartureDates } from "./departureAvailability";
 import { repairBirthYearAgeBands } from "./birthYearAgeBands";
 import { getPosterPdfPublicUrl, isUsableStoredPdfUrl } from "./poster/pdfUrl";
 import type { TravelTrip } from "./travelOps";
+import { isNoTripText } from "./customerTurn";
 
 /**
  * Returns a copy of the trip with past departure dates stripped, so every
@@ -801,6 +802,8 @@ function splitGluedWords(words: string[], trips: TravelTrip[]): string[] {
 }
 
 export function findTripMatches(text: string, trips: TravelTrip[], options?: TripMatchOptions): TripMatch[] {
+  // The understanding step already decided this message names no trip.
+  if (isNoTripText(text)) return [];
   const query = normText(text);
   const queryPhonetic = phoneticLatinText(text);
   const vocabulary = catalogVocabulary(trips);
@@ -1646,6 +1649,7 @@ export function tripIsCruise(trip: TravelTrip): boolean {
 }
 
 function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBrochureIntent?: boolean } & TripMatchOptions) {
+  if (isNoTripText(text)) return null;
   const query = normText(text);
   const queryPhonetic = phoneticLatinText(text);
   // Use keywordTokens() so generic route words (газар, нислэг, аялал, хосолсон…)

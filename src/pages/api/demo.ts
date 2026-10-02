@@ -17,6 +17,8 @@ import { buildCatalogListingReply } from "../../lib/catalogListing";
 import { setClarificationState } from "../../lib/clarificationState";
 import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
+import { notInCatalogReply, tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
+import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
@@ -383,6 +385,10 @@ export default async function handler(
           contextualUserText,
           history,
           trips: await getTrips(),
+          understand: tripUnderstandingEnabled()
+            ? async (pendingTripIds) =>
+                understandTripMessage({ text: normalizedText, history, trips: await getTrips(), pendingTripIds, ask: understandingModel(trace) })
+            : undefined,
         });
         return routedCache;
       };
@@ -484,6 +490,14 @@ export default async function handler(
             reply: clarifyReply,
             buttons: buildClarificationButtons(routed.scopedClarify),
           });
+        }
+        if (routed.notInCatalog) {
+          const reply = notInCatalogReply(routed.notInCatalog);
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", reply);
+          await rememberTurn();
+          recordCounter("demo.not_in_catalog_total", 1, {});
+          return res.status(200).json({ reply });
         }
       }
 
@@ -847,6 +861,8 @@ export default async function handler(
           })
         : null;
       const relevantTripNames = (() => {
+        const understood = (routedCache as FastPathRoute | null)?.understanding;
+    if (understood) return understood.trips.slice(0, 4).map((trip) => trip.route_name);
         if (reasoningTrips.length === 0) return [] as string[];
         const direct = resolveTripFromUserMessage(normalizedText, reasoningTrips, {
           allowLooseFallback: false,

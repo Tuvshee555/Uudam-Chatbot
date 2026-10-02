@@ -27,6 +27,22 @@ export function joinContextAndTurn(context: string, turn: string): string {
   return context.trim() ? `${context.trim()}\n${CUSTOMER_TURN_MARK}${cleanTurn}` : cleanTurn;
 }
 
+/**
+ * U+2063 INVISIBLE SEPARATOR — marks routed text the understanding step
+ * decided is about NO trip ("aylal", "Үнийн санал", a greeting). The trip
+ * matchers treat marked text as matching nothing, so a weak keyword can no
+ * longer pull a random trip into the answer downstream.
+ */
+export const NO_TRIP_MARK = "⁣";
+
+export function markNoTrip(text: string): string {
+  return text.includes(NO_TRIP_MARK) ? text : `${NO_TRIP_MARK}${text}`;
+}
+
+export function isNoTripText(text: string): boolean {
+  return text.includes(NO_TRIP_MARK);
+}
+
 /** The customer's own current message inside routed text. */
 export function customerTurn(text: string): string {
   const index = text.lastIndexOf(CUSTOMER_TURN_MARK);

@@ -24,7 +24,8 @@ import {
   setClarificationState,
   clearClarificationState,
 } from "./clarificationState";
-import { customerTurn, joinContextAndTurn } from "./customerTurn";
+import { customerTurn, joinContextAndTurn, markNoTrip } from "./customerTurn";
+import { unmetNote, type Understanding } from "./tripUnderstanding";
 import { hasReferentialHint, isLikelyContextDependentText, lastAssistantReply, pickFastPathMatchText } from "./contextualText";
 import { parseDepartureDateText, resolveRequestedMonth, tripMatchesRequestedDate, tripDepartsInMonth } from "./travelDates";
 import {
@@ -155,6 +156,10 @@ export type FastPathRoute = {
    * a dearer hotel tier) — re-matching the name then re-asks forever.
    */
   chosenTripId?: string;
+  /** What the understanding step read from the message, when it ran. */
+  understanding?: Understanding;
+  /** A destination the customer asked for that no trip goes to — answer that honestly. */
+  notInCatalog?: string;
 };
 
 /** A reply that asked the customer to pick a trip — the only kind a pending clarification belongs to. */
@@ -169,6 +174,12 @@ export async function routeFastPathText(input: {
   trips: TravelTrip[];
   /** Conversation so far; used to tell whether the last reply asked "which trip?". */
   history?: Array<{ role: "user" | "assistant"; text: string }>;
+  /**
+   * Reads which trip(s) the message is about (see tripUnderstanding.ts). Given
+   * the trips of the list the bot last offered, in order. Null = could not
+   * tell (model down, bad output) and the keyword routing below decides.
+   */
+  understand?: (pendingTripIds: string[]) => Promise<Understanding | null>;
 }): Promise<FastPathRoute> {
   const { senderId, text, contextualUserText, trips } = input;
   const resolve = (t: string, pool: TravelTrip[]) =>
@@ -196,6 +207,50 @@ export async function routeFastPathText(input: {
         .map((id) => trips.find((trip) => trip.id === id))
         .filter((trip): trip is TravelTrip => Boolean(trip))
     : [];
+
+  // --- 0. Understanding: one reading of the whole message decides the trip. ---
+  // A numbered pick ("2", "2. <name>…") and a tap on one of our own buttons
+  // stay deterministic below; everything else — names in any spelling,
+  // follow-ups, "тэр", a date or length that narrows a destination — is read
+  // once here instead of by keyword scoring.
+  if (input.understand && !choice && !tappedOwnButton) {
+    const understanding = await input.understand(pendingTrips.map((trip) => trip.id));
+    if (understanding) {
+      if (understanding.certainty === "one") {
+        return { ...(await chose(understanding.trips[0])), understanding };
+      }
+      if (understanding.certainty === "several" && understanding.intent !== "catalog") {
+        // A question ABOUT the trips we just listed ("4 одтой юу?") is not a
+        // new search: asking "which one?" again word for word reads as broken.
+        // Leave the list pending and let the answer cover them.
+        const offered = new Set(pendingTrips.map((trip) => trip.id));
+        const sameAsOffered =
+          !understanding.unmet &&
+          offered.size === understanding.trips.length &&
+          understanding.trips.every((trip) => offered.has(trip.id));
+        if (sameAsOffered) return { matchText: text, scopedClarify: null, understanding };
+        await setClarificationState(senderId, understanding.trips.map((trip) => trip.id));
+        return {
+          matchText: text,
+          scopedClarify: understanding.trips,
+          scopedClarifyNote: unmetNote(understanding),
+          understanding,
+        };
+      }
+      // No trip meant (or a catalog question): the trip matchers downstream
+      // must not pull one in from a weak word ("aylal", "мэнд", "үнэ").
+      await clearClarificationState(senderId);
+      // A named destination we do not sell — said plainly, but only when the
+      // keyword matcher agrees nothing fits, so a typo of a real destination
+      // can never be told "we don't have that".
+      const notInCatalog =
+        understanding.unknownDestination && resolve(text, trips).status === "not_found"
+          ? understanding.unknownDestination
+          : undefined;
+      return { matchText: markNoTrip(text), scopedClarify: null, understanding, notInCatalog };
+    }
+  }
+
   if (pendingTrips.length > 0) {
     if (choice) {
       // The NAME in a tapped "2. <trip name>..." outranks its number:

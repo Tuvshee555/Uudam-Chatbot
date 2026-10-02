@@ -21,6 +21,8 @@ import {
   THANKS_REPLY,
 } from "../../lib/greetingPhrases";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
+import { notInCatalogReply, tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
+import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { stripTripNamesForIntent } from "../../lib/customerTurn";
 import { buildCatalogListingReply } from "../../lib/catalogListing";
 import { fixMojibake } from "../../lib/encoding";
@@ -940,6 +942,10 @@ async function handleMessage(
       contextualUserText,
       history,
       trips: await getTrips(),
+      understand: tripUnderstandingEnabled()
+        ? async (pendingTripIds) =>
+            understandTripMessage({ text, history, trips: await getTrips(), pendingTripIds, ask: understandingModel(trace) })
+        : undefined,
     });
     return routedCache;
   };
@@ -1104,6 +1110,15 @@ async function handleMessage(
         rememberSource: "api.webhook.scoped_clarify",
         counter: "webhook.scoped_clarify_total",
         buttons: buildClarificationButtons(routed.scopedClarify),
+      });
+      return;
+    }
+    if (routed.notInCatalog) {
+      await deliverFastPathReply({
+        reply: notInCatalogReply(routed.notInCatalog),
+        failTag: "not_in_catalog",
+        rememberSource: "api.webhook.not_in_catalog",
+        counter: "webhook.not_in_catalog_total",
       });
       return;
     }
@@ -1552,6 +1567,8 @@ async function handleMessage(
   // Context stays in the prompt so the model can never be starved of the
   // right trip by a bad match.
   const relevantTripNames = (() => {
+    const understood = (routedCache as FastPathRoute | null)?.understanding;
+    if (understood) return understood.trips.slice(0, 4).map((trip) => trip.route_name);
     const source = reasoningTrips.length > 0 ? reasoningTrips : [];
     if (source.length === 0) return [] as string[];
     const direct = resolveTripFromUserMessage(text, source, { allowLooseFallback: false });
