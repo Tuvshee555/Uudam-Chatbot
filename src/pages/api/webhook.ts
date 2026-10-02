@@ -1112,7 +1112,7 @@ async function handleMessage(
   // the trip page). Before the structured-question gate on purpose — "<хот>
   // хүйтэн байна уу" reads as structured and would otherwise go silent.
   if (isWeatherTurn(intentText, history)) {
-    const weather = await buildTripWeatherReply(await getFastPathText(), await getTrips(), undefined, (await getRouted()).chosenTripId);
+    const weather = await buildTripWeatherReply(await getFastPathText(), await getTrips(), undefined, (await getRouted()).chosenTripId, intentText);
     if (weather.kind === "clarify") await setClarificationState(senderId, weather.candidates.map((t) => t.id));
     await deliverFastPathReply({
       reply: sanitizeAssistantReply(weather.reply),

@@ -489,7 +489,7 @@ export default async function handler(
 
       // Mirrors the webhook: weather from the booking website's own report.
       if (isWeatherTurn(intentText, history)) {
-        const weather = await buildTripWeatherReply(await getFastPathText(), await getTrips(), undefined, (await getRouted()).chosenTripId);
+        const weather = await buildTripWeatherReply(await getFastPathText(), await getTrips(), undefined, (await getRouted()).chosenTripId, intentText);
         if (weather.kind === "clarify") await setClarificationState(sessionId, weather.candidates.map((t) => t.id));
         const weatherReply = sanitizeAssistantReply(weather.reply);
         await appendMessage(sessionId, "user", normalizedText);

@@ -1,6 +1,7 @@
 import type { TravelTrip } from "./travelTypes";
 import { normText } from "./travelTextNorm";
 import { resolveTripFromUserMessage } from "./travelFastPathsSearch";
+import { parseDepartureDateText } from "./travelDates";
 import { AMBIGUOUS_REPLY_MARKER, buildAmbiguousTripReply } from "./travelFastPaths";
 import { BOOKING_WEBSITE_URL } from "./bookingWebsite";
 
@@ -67,9 +68,10 @@ const WEATHER_API_BASE = (process.env.BOOKING_WEBSITE_API_URL || BOOKING_WEBSITE
 
 type WeatherApiReport = { text?: string; tripSlug?: string };
 
-export async function fetchTripWeather(tripId: string): Promise<WeatherApiReport | null> {
+export async function fetchTripWeather(tripId: string, date?: string): Promise<WeatherApiReport | null> {
+  const dateParam = date ? `&date=${encodeURIComponent(date)}` : "";
   try {
-    const res = await fetch(`${WEATHER_API_BASE}/api/weather?source=${encodeURIComponent(tripId)}`, {
+    const res = await fetch(`${WEATHER_API_BASE}/api/weather?source=${encodeURIComponent(tripId)}${dateParam}`, {
       // A trip whose cities were never detected is detected on this first
       // request, which can take several seconds.
       signal: AbortSignal.timeout(15000),
@@ -98,9 +100,15 @@ export type WeatherReply =
 export async function buildTripWeatherReply(
   matchText: string,
   trips: TravelTrip[],
-  fetchWeather: (tripId: string) => Promise<WeatherApiReport | null> = fetchTripWeather,
+  fetchWeather: (tripId: string, date?: string) => Promise<WeatherApiReport | null> = fetchTripWeather,
   /** The trip picked from our own list, when the router knows it (see FastPathRoute.chosenTripId). */
   chosenTripId?: string,
+  /**
+   * The customer's own words with trip names removed (intentText). A date in
+   * it ("10 сарын 14-нд") picks that departure; dates inside trip NAMES must
+   * not, which is why this is not matchText.
+   */
+  askedText?: string,
 ): Promise<WeatherReply> {
   const chosen = chosenTripId ? trips.find((trip) => trip.id === chosenTripId) : undefined;
   // Strict match: a loose guess would forecast the wrong country.
@@ -119,7 +127,8 @@ export async function buildTripWeatherReply(
   }
   const best = resolution.trip;
 
-  const report = await fetchWeather(best.id);
+  const askedDate = askedText ? parseDepartureDateText(askedText)[0] : undefined;
+  const report = await fetchWeather(best.id, askedDate);
   const link = report?.tripSlug ? `${BOOKING_WEBSITE_URL}/mn/trips/${report.tripSlug}` : BOOKING_WEBSITE_URL;
   if (!report?.text) {
     // Never let this fall through to the model: it would make weather up.

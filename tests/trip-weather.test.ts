@@ -92,6 +92,19 @@ test("two trips with the SAME name: the picked trip id answers instead of re-ask
   assert.deepEqual(fetched, ["twin-b"]);
 });
 
+test("a date the customer names picks that departure; a date inside a trip NAME does not", async () => {
+  const dated: TravelTrip = { ...base, id: "dated", route_name: "Мөрвин аялал -10/08" };
+  const seen: (string | undefined)[] = [];
+  const stub = async (_id: string, date?: string) => {
+    seen.push(date);
+    return { text: "🌍 ok", tripSlug: "x" };
+  };
+  await buildTripWeatherReply("Мөрвин аялал -10/08 цаг агаар", [dated], stub, undefined, "цаг агаар");
+  await buildTripWeatherReply("Мөрвин аялал -10/08 2027 оны 10 сарын 15-нд цаг агаар", [dated], stub, undefined, "2027 оны 10 сарын 15-нд цаг агаар");
+  assert.equal(seen[0], undefined);
+  assert.equal(seen[1], "2027-10-15");
+});
+
 test("tapping a trip after 'which trip?' keeps answering the weather question", () => {
   const history = [
     { role: "user" as const, text: "Острин цаг агаар ямар байна" },
