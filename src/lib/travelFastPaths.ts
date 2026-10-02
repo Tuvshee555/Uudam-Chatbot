@@ -926,9 +926,10 @@ export function resolveDateQuestionScope(
     if (scoped.length === 1) return { focusTrip: scoped[0], trips };
     if (scoped.length > 1) return { focusTrip: null, trips: scoped };
   }
-  // A short destination such as "Хөх хот" can be too weak for the strict
+  // A short "<хот> хот" destination can be too weak for the strict
   // single-trip resolver because several tours share it. It still scopes the
-  // date question: never answer a Hohhot date ask with a Beidaihe departure.
+  // date question: never answer one destination's date ask with another
+  // destination's departure.
   const namedPlaces = dateless ? queryNamedPlaces(dateless, trips).places : [];
   if (namedPlaces.length > 0) {
     const scoped = trips.filter(

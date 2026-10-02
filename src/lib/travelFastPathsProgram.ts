@@ -28,6 +28,7 @@ import {
   tripIsLandFlightCombo,
   type ProgramAsset,
   type TripProgramReplyResult,
+  type TripResolution,
 } from "./travelFastPathsSearch";
 import { buildAmbiguousTripReply } from "./travelFastPathsPricing";
 
@@ -310,8 +311,8 @@ export function buildTripProgramReply(
         ? scopedTrips
         : trips;
   const routeQueryWords = keywordTokens(text).filter((word) => !PROGRAM_ONLY_QUERY_WORDS.has(word));
-  const directResolution = trips.length === 1
-    ? { status: "verified" as const, trip: trips[0], candidates: [] }
+  let directResolution: TripResolution = trips.length === 1
+    ? { status: "verified", trip: trips[0], candidates: [] }
     : resolveTripFromUserMessage(text, trips, { allowLooseFallback: false });
   // The customer's words fit several tours. A single alias mention must not
   // override that: "<хот>" is registered as an alias of ONE tour but
@@ -327,6 +328,20 @@ export function buildTripProgramReply(
     const name = normText(trip.route_name);
     return name.length >= 8 && query.includes(name);
   });
+  // A length ask ("8 хоногийн хөтөлбөр") settles an otherwise-ambiguous
+  // destination match itself when exactly one candidate is that length —
+  // this runs against the resolver's own (unscoped) candidates, since this
+  // check sits before scopedTrips/candidateTrips get a say below.
+  if (directResolution.status === "ambiguous" && requestedDuration) {
+    const byDuration = directResolution.candidates.filter((trip) =>
+      tripMatchesRequestedDuration(trip, requestedDuration),
+    );
+    if (byDuration.length === 1) {
+      directResolution = { status: "verified", trip: byDuration[0], candidates: [] };
+    } else if (byDuration.length > 1) {
+      directResolution = { status: "ambiguous", trip: null, candidates: byDuration };
+    }
+  }
   if (directResolution.status === "ambiguous" && exactRouteNameTrips.length !== 1) {
     return {
       reply: buildAmbiguousTripReply(uniqueTripsByRouteName(directResolution.candidates)),
