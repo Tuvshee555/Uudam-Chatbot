@@ -1786,6 +1786,25 @@ export function getTripBrochureAsset(trip: TravelTrip): ProgramAsset | null {
   return null;
 }
 
+const WEBSITE_BASE_URL = "https://uudamtravel.mn";
+
+/**
+ * The live booking-website page for this trip, instead of the PDF — the
+ * owner's call (2026-10-02): a link stays current automatically (prices,
+ * dates, photos) while a sent PDF is frozen the moment it is sent. Only
+ * returned when the website actually has this trip published under a real
+ * slug (never the hash fallback the sync writes before staff rename it, and
+ * never when the website has since unpublished it) — a customer gets no link
+ * sooner than a link that 404s.
+ */
+export function getTripWebsiteLink(trip: TravelTrip): string | null {
+  const slug = getTripLooseField(trip, "website_slug");
+  const published = getTripLooseField(trip, "website_published");
+  if (typeof slug !== "string" || !slug.trim() || published === false) return null;
+  if (/^trip-[0-9a-f]{20}$/.test(slug.trim())) return null;
+  return `${WEBSITE_BASE_URL}/trips/${slug.trim()}`;
+}
+
 export function isPosterLinkedTrip(trip: TravelTrip | null | undefined): boolean {
   if (!trip) return false;
   const posterTripId = getTripLooseField(trip, "poster_trip_id");

@@ -24,17 +24,37 @@ function bookingPool() {
 export async function withWebsiteDepartureAvailability(trips: TravelTrip[]): Promise<TravelTrip[]> {
   if (!process.env.BOOKING_DATABASE_URL || !trips.length) return trips;
   try {
-    const result = await bookingPool().query(`SELECT t."sourceTripId", d."startDate", d.status, d."seatsLeft"
-      FROM "Trip" t JOIN "Departure" d ON d."tripId"=t.id
-      WHERE t."sourceTripId"=ANY($1::text[])`, [trips.map((trip) => trip.id)]);
+    const [departureResult, slugResult] = await Promise.all([
+      bookingPool().query(`SELECT t."sourceTripId", d."startDate", d.status, d."seatsLeft"
+        FROM "Trip" t JOIN "Departure" d ON d."tripId"=t.id
+        WHERE t."sourceTripId"=ANY($1::text[])`, [trips.map((trip) => trip.id)]),
+      // The bot sends the live website page instead of the PDF; the slug is
+      // whatever the website currently has (staff can rename it there), never
+      // guessed here, so a changed slug on the website never 404s for a customer.
+      bookingPool().query(`SELECT "sourceTripId", slug, "isPublished" FROM "Trip"
+        WHERE "sourceTripId"=ANY($1::text[])`, [trips.map((trip) => trip.id)]),
+    ]);
     const byTrip = new Map<string, Array<{ date: string; status: string; seatsLeft: number | null }>>();
-    for (const row of result.rows) {
+    for (const row of departureResult.rows) {
       const entries = byTrip.get(row.sourceTripId) || [];
       entries.push({ date: new Date(new Date(row.startDate).getTime() + 8 * 3600000).toISOString().slice(0, 10), status: row.status, seatsLeft: row.seatsLeft });
       byTrip.set(row.sourceTripId, entries);
     }
-    return trips.map((trip) => byTrip.has(trip.id)
-      ? { ...trip, extra: { ...trip.extra, website_departure_availability: byTrip.get(trip.id) } } : trip);
+    const slugByTrip = new Map<string, { slug: string; isPublished: boolean }>();
+    for (const row of slugResult.rows) {
+      if (typeof row.slug === "string" && row.slug.trim()) {
+        slugByTrip.set(row.sourceTripId, { slug: row.slug.trim(), isPublished: Boolean(row.isPublished) });
+      }
+    }
+    return trips.map((trip) => {
+      const slugRow = slugByTrip.get(trip.id);
+      const extra = {
+        ...trip.extra,
+        ...(byTrip.has(trip.id) ? { website_departure_availability: byTrip.get(trip.id) } : {}),
+        ...(slugRow ? { website_slug: slugRow.slug, website_published: slugRow.isPublished } : {}),
+      };
+      return (byTrip.has(trip.id) || slugRow) ? { ...trip, extra } : trip;
+    });
   } catch {
     console.error("Could not read website departure availability");
     return trips;

@@ -18,6 +18,7 @@ import {
 } from "./welcomeFlow";
 import {
   getTripBrochureAsset,
+  getTripWebsiteLink,
   isPosterLinkedTrip,
   phoneticLatinText,
   resolveTripFromUserMessage,
@@ -248,8 +249,45 @@ export async function sendTripMediaForReply(
   if (platform !== "facebook" || !token) return;
   try {
     const tripsForPhotos = await listTrips({ limit: 5000 });
+    const activeTrips = tripsForPhotos.filter((trip) => trip.status === "active");
+    const mediaResolution = resolveTripFromUserMessage(userText || replyText, activeTrips, {
+      allowLooseFallback: false,
+    });
     const brochure = extractTripBrochureAttachmentId(replyText, tripsForPhotos, { userText });
     if (brochure) {
+      // The owner's call (2026-10-02): a link to the live trip page instead of
+      // the PDF file — it never goes stale, unlike a sent file. Only when the
+      // resolved trip is actually published on the website; otherwise the PDF
+      // is still what the customer gets rather than nothing.
+      const websiteLink = mediaResolution.status === "verified" ? getTripWebsiteLink(mediaResolution.trip) : null;
+      if (websiteLink) {
+        try {
+          await sendTextMessage(senderId, `Дэлгэрэнгүй мэдээлэл, үнэ, зургийг эндээс харна уу 👉 ${websiteLink}`, token, {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            source: "api.webhook.trip_link",
+          });
+          await appendMessage(senderId, "assistant", `👉 ${websiteLink}`);
+          recordCounter("webhook.trip_link_sent_total", 1, { platform });
+          logInfo("webhook.trip_link_sent", {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            platform,
+            pageId,
+            senderHash: hashIdentifier(senderId),
+          });
+          return;
+        } catch (error) {
+          logWarn("webhook.trip_link_send_failed", {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            platform,
+            pageId,
+            senderHash: hashIdentifier(senderId),
+            classification: classifyError(error),
+          });
+        }
+      }
       const sent =
         brochure.type === "id"
           ? await sendFbFileAttachment(senderId, brochure.value, token)
@@ -276,10 +314,6 @@ export async function sendTripMediaForReply(
         sourceType: brochure.type,
       });
     }
-    const activeTrips = tripsForPhotos.filter((trip) => trip.status === "active");
-    const mediaResolution = resolveTripFromUserMessage(userText || replyText, activeTrips, {
-      allowLooseFallback: false,
-    });
     // A poster trip's whole point is the PDF: Messenger recompresses poster
     // images until the itinerary text is unreadable, which is the complaint
     // this replaced. If the PDF is missing or its send failed, send nothing

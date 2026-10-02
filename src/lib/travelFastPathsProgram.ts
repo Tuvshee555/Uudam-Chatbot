@@ -11,6 +11,7 @@ import {
   findTripMatches,
   getAliases,
   getTripBrochureAsset,
+  getTripWebsiteLink,
   hasProgramIntent,
   isPosterLinkedTrip,
   isGenericConfirmationText,
@@ -317,11 +318,23 @@ export function buildTripProgramReply(
   const summary = buildTripSummaryLines(best);
   const summaryBlock = summary ? `\n\n${summary}` : "";
   const brochure = getTripBrochureAsset(best);
+  // The owner's call (2026-10-02): a link to the live trip page, not the PDF
+  // file — it never goes stale, and the website page already shows the same
+  // photos and itinerary the PDF would. Sent as plain text, no attachment.
+  const websiteLink = getTripWebsiteLink(best);
 
   const wantsPicturesOnly =
     /зураг|zurag|photo|picture|пост(?:ер)?/i.test(intentText) &&
     !/хөтөлбөр|hutulbur|program|itinerary|өдөр\s*өдөр|day\s*by\s*day/i.test(intentText);
   if (wantsPicturesOnly) {
+    if (brochure && websiteLink) {
+      return {
+        reply: `✈️ ${best.route_name}${summaryBlock}\n\nАяллын дэлгэрэнгүй мэдээлэл, зургийг эндээс харна уу 👉 ${websiteLink}`,
+        trip: best,
+        brochure: null,
+        mediaUrls: [],
+      };
+    }
     if (brochure) {
       return {
         reply: `✈️ ${best.route_name}${summaryBlock}\n\nPDF хөтөлбөрийг хавсаргалаа.`,
@@ -349,6 +362,15 @@ export function buildTripProgramReply(
     }
     return {
       reply: TRIP_MEDIA_UNAVAILABLE_SILENT,
+      trip: best,
+      brochure: null,
+      mediaUrls: [],
+    };
+  }
+
+  if (brochure && websiteLink) {
+    return {
+      reply: `✈️ ${best.route_name}${summaryBlock}\n\nАяллын дэлгэрэнгүй хөтөлбөр, үнэ, зургийг эндээс харна уу 👉 ${websiteLink}`,
       trip: best,
       brochure: null,
       mediaUrls: [],

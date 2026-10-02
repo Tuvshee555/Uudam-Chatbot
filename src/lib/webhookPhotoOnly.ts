@@ -11,7 +11,7 @@ import { sendImageMessage, sendTextMessage } from "./messenger";
 import { appendMessage } from "./conversation";
 import { createLead, hasRecentOpenLead, listTrips } from "./travelOps";
 import { notifyStaffOfLead } from "./staffAlerts";
-import { getTripBrochureAsset, isPosterLinkedTrip, resolveTripFromUserMessage } from "./travelFastPaths";
+import { getTripBrochureAsset, getTripWebsiteLink, isPosterLinkedTrip, resolveTripFromUserMessage } from "./travelFastPaths";
 import { isGenericOpener } from "./welcomeFlow";
 import { createPhotoOnlyState, getPhotoOnlyState, setPhotoOnlyState } from "./photoOnlyState";
 import {
@@ -103,13 +103,37 @@ export async function handlePhotoOnlyMode(input: {
     if (resolvedTrip) {
       const brochure = getTripBrochureAsset(resolvedTrip);
       let sentBrochure = false;
-      if (brochure) {
+      // The owner's call (2026-10-02): link to the live trip page instead of
+      // the PDF file, same as the normal reply path — see webhookMedia.ts.
+      const websiteLink = brochure ? getTripWebsiteLink(resolvedTrip) : null;
+      if (websiteLink) {
+        try {
+          await sendTextMessage(senderId, `Дэлгэрэнгүй мэдээлэл, үнэ, зургийг эндээс харна уу 👉 ${websiteLink}`, token, {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            source: "api.webhook.photo_only_trip_link",
+          });
+          await appendMessage(senderId, "assistant", `👉 ${websiteLink}`);
+          sentBrochure = true;
+        } catch (error) {
+          logWarn("webhook.photo_only_trip_link_send_failed", {
+            requestId: trace?.requestId,
+            correlationId: trace?.correlationId,
+            platform,
+            pageId,
+            senderHash: hashIdentifier(senderId),
+            classification: classifyError(error),
+          });
+        }
+      } else if (brochure) {
         sentBrochure =
           brochure.type === "id"
             ? await sendFbFileAttachment(senderId, brochure.value, token)
             : await sendFbFileByUrl(senderId, brochure.value, token);
+      }
+      if (brochure) {
         if (sentBrochure) {
-          await recordFileMessage(senderId, brochure.value);
+          if (!websiteLink) await recordFileMessage(senderId, brochure.value);
           await rememberTurn("api.webhook.photo_only_pdf_send");
           await setPhotoOnlyState(senderId, createPhotoOnlyState({
             activeTripId: resolvedTrip.id,
