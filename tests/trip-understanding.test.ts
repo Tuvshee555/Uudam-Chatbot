@@ -86,13 +86,52 @@ test("unreadable model output means no understanding, never a guess", () => {
 
 const understood = (u: Partial<Understanding>): Understanding => ({
   intent: "trip", place: null, trips: [], certainty: "none", date: null, range: null, month: null, days: null,
-  transport: null, unmet: null, unknownDestination: null, ...u,
+  transport: null, unmet: null, unknownRequirement: null, unknownDestination: null, ...u,
 });
 
 test("a transport the destination does not offer is reported, not ignored", () => {
   const u = tu.interpretUnderstanding('{"place":"вэлмор","intent":"trip","trips":["T2"],"certainty":"one","transport":"land"}', keysFor(CATALOG), NOW)!;
   assert.equal(u.unmet, "transport");
   assert.match(tu.unmetNote(u)!, /Газрын аялал энэ чиглэлд одоогоор байхгүй/);
+});
+
+test("missing transport and duration facts stay unknown instead of becoming matches", () => {
+  const unknown = trip({
+    id: "t-unknown",
+    route_name: "Лумиа хотын аялал",
+    category: "Аялал",
+    duration_text: "",
+  });
+  const keys = keysFor([unknown]);
+  const transport = tu.interpretUnderstanding(
+    '{"place":"лумиа","intent":"trip","trips":["T1"],"certainty":"one","transport":"land"}',
+    keys,
+    NOW,
+  )!;
+  assert.equal(transport.unmet, null);
+  assert.equal(transport.unknownRequirement, "transport");
+  const duration = tu.interpretUnderstanding(
+    '{"place":"лумиа","intent":"trip","trips":["T1"],"certainty":"one","days":[5,6]}',
+    keys,
+    NOW,
+  )!;
+  assert.equal(duration.unmet, null);
+  assert.equal(duration.unknownRequirement, "days");
+});
+
+test("conflicting transport evidence is unknown rather than whichever detector ran first", () => {
+  const conflicting = trip({
+    id: "t-conflict",
+    route_name: "Лумиа шууд нислэгтэй аялал",
+    source_description: "Автобусаар газрын аялал",
+  });
+  const u = tu.interpretUnderstanding(
+    '{"place":"лумиа","intent":"trip","trips":["T1"],"certainty":"one","transport":"direct_flight"}',
+    keysFor([conflicting]),
+    NOW,
+  )!;
+  assert.equal(u.unknownRequirement, "transport");
+  assert.equal(u.unmet, null);
 });
 
 test("a span of dates keeps only the trip that leaves inside it", () => {
@@ -166,14 +205,26 @@ test("no trip meant: downstream matchers cannot pull one in from a weak word", a
   assert.equal(resolveTripFromUserMessage(route.matchText, CATALOG).status, "not_found");
 });
 
-test("several understood trips ask which one, listing exactly those, with the unmet note", async () => {
+test("several trips that miss a requirement are informational alternatives, not a new choice question", async () => {
   const route = await routeFastPathText({
     senderId: "u-several", text: "вэлмор 5-6 хоног", contextualUserText: "вэлмор 5-6 хоног", trips: CATALOG, history: [],
     understand: async () => understood({ trips: [LONG, SHORT], certainty: "several", days: [5, 6], unmet: "days" }),
   });
   assert.deepEqual(route.scopedClarify?.map((t) => t.id), ["t-long", "t-short"]);
   assert.match(route.scopedClarifyNote || "", /5-6 өдрийн/);
-  assert.deepEqual((await getClarificationState("u-several"))?.candidateTripIds, ["t-long", "t-short"]);
+  assert.equal(route.informationalAlternatives, true);
+  assert.equal(await getClarificationState("u-several"), null);
+});
+
+test("one closest trip with an unmet requirement is an informational alternative, not a confirmed pick", async () => {
+  const route = await routeFastPathText({
+    senderId: "u-one-unmet", text: "вэлмор газрын аялал", contextualUserText: "вэлмор газрын аялал", trips: CATALOG, history: [],
+    understand: async () => understood({ trips: [SHORT], certainty: "one", transport: "land", unmet: "transport" }),
+  });
+  assert.equal(route.chosenTripId, undefined);
+  assert.equal(route.informationalAlternatives, true);
+  assert.deepEqual(route.scopedClarify?.map((t) => t.id), ["t-short"]);
+  assert.match(route.scopedClarifyNote || "", /Газрын аялал.*байхгүй/);
 });
 
 test("a catalog question with several trips is not turned into a which-trip question", async () => {

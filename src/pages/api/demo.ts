@@ -23,7 +23,7 @@ import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/c
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
-import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedPrices, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
+import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { dbGetRecentAdminMessages, getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
@@ -477,7 +477,11 @@ export default async function handler(
           const clarifyBody = routed.scopedClarifyNote
             ? totalReply
               ? `${routed.scopedClarifyNote}\n${totalReply}`
-              : buildAmbiguousTripReply(routed.scopedClarify, routed.scopedClarifyNote)
+              : buildAmbiguousTripReply(
+                  routed.scopedClarify,
+                  routed.scopedClarifyNote,
+                  { askToChoose: !routed.informationalAlternatives },
+                )
             : totalReply || buildAmbiguousTripReply(routed.scopedClarify);
           const clarifyReply = enforceWebsiteForPayment(
             sanitizeAssistantReply(clarifyBody),
@@ -488,7 +492,9 @@ export default async function handler(
           recordCounter("demo.scoped_clarify_total", 1, {});
           return res.status(200).json({
             reply: clarifyReply,
-            buttons: buildClarificationButtons(routed.scopedClarify),
+            buttons: routed.informationalAlternatives
+              ? undefined
+              : buildClarificationButtons(routed.scopedClarify),
           });
         }
         if (routed.notInCatalog) {
@@ -951,7 +957,12 @@ export default async function handler(
         });
         aiReplyText = fallbackText || "REFER";
       }
-      const rawFixed = guardInventedBookingTerms(fixMojibake(aiReplyText), promptParts.user);
+      const guardCandidateTrips = reasoningTrips.filter((trip) => relevantTripNames.includes(trip.route_name));
+      const rawFixed = guardInventedBookingTerms(
+        fixMojibake(aiReplyText),
+        promptParts.user,
+        guardCandidateTrips,
+      );
       // REFER (or legacy SILENT) = the model has no data for this question.
       // Mirror production: stay silent customer-side for missing data.
       if (isReferReply(rawFixed)) {
@@ -978,9 +989,10 @@ export default async function handler(
       );
       // Price guard (mirrors the webhook): every ₮ figure must be a real,
       // quotable price on one of the trips this turn resolved to.
-      const priceCheckedReply = guardUnverifiedPrices(
-        cleanedReply,
-        reasoningTrips.filter((trip) => relevantTripNames.includes(trip.route_name)),
+      const priceCheckedReply = guardUnverifiedDates(
+        guardUnverifiedPrices(cleanedReply, guardCandidateTrips),
+        guardCandidateTrips,
+        normalizedText,
       );
       const reply = isEnglishDemo ? localizeEnglishDemoReply(priceCheckedReply) : priceCheckedReply;
       if (shouldHandoffSilently(reply)) return returnHandoff();

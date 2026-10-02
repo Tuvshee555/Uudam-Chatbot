@@ -30,7 +30,7 @@ import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
-import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
+import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBot, trackSender } from "../../lib/pause";
 import { AUTO_PAUSE_RESET_DAYS, createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
@@ -1102,14 +1102,20 @@ async function handleMessage(
       const clarifyBody = routed.scopedClarifyNote
         ? totalReply
           ? `${routed.scopedClarifyNote}\n${totalReply}`
-          : buildAmbiguousTripReply(routed.scopedClarify, routed.scopedClarifyNote)
+          : buildAmbiguousTripReply(
+              routed.scopedClarify,
+              routed.scopedClarifyNote,
+              { askToChoose: !routed.informationalAlternatives },
+            )
         : totalReply || buildAmbiguousTripReply(routed.scopedClarify);
       await deliverFastPathReply({
         reply: enforceWebsiteForPayment(sanitizeAssistantReply(clarifyBody)),
         failTag: "scoped_clarify",
         rememberSource: "api.webhook.scoped_clarify",
         counter: "webhook.scoped_clarify_total",
-        buttons: buildClarificationButtons(routed.scopedClarify),
+        buttons: routed.informationalAlternatives
+          ? undefined
+          : buildClarificationButtons(routed.scopedClarify),
       });
       return;
     }
@@ -1671,7 +1677,8 @@ async function handleMessage(
   // guessing on the next message), and tell the customer a human is taking
   // over — same acknowledgement whether the cause was missing data or an AI
   // outage.
-  aiReply = guardInventedBookingTerms(aiReply, promptParts.user);
+  const guardCandidateTrips = reasoningTrips.filter((trip) => relevantTripNames.includes(trip.route_name));
+  aiReply = guardInventedBookingTerms(aiReply, promptParts.user, guardCandidateTrips);
   if (isReferReply(aiReply) && !aiOutage && isGenericTripRequest(text)) {
     // "Aylaluud", "Medeelel avay": no destination named, so the model had
     // nothing to look up and said REFER. Ask which trip rather than paging staff.
@@ -1763,9 +1770,13 @@ async function handleMessage(
   // one of the trips this turn actually resolved to. Catches a base fare
   // quoted for a departure priced differently, or any invented amount,
   // regardless of which path (AI or fast path) produced it.
-  const safeReply = guardUnverifiedPrices(
-    enforcePaymentNeverSelfConfirmed(text, enforceWebsiteForPayment(rewrittenReply)),
-    reasoningTrips.filter((trip) => relevantTripNames.includes(trip.route_name)),
+  const safeReply = guardUnverifiedDates(
+    guardUnverifiedPrices(
+      enforcePaymentNeverSelfConfirmed(text, enforceWebsiteForPayment(rewrittenReply)),
+      guardCandidateTrips,
+    ),
+    guardCandidateTrips,
+    text,
   );
   // Wrong-trip guard: the customer clearly asked about trip A but the model
   // answered with a DIFFERENT destination's price. Route to the same silent

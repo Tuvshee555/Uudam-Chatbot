@@ -1651,7 +1651,11 @@ function firstStructuredPassengerPrice(trip: TravelTrip, key: "child_price" | "i
 const MAX_LISTED_TRIPS = 8;
 
 /** `heading` replaces the generic first line ("11 сард эдгээр аялал гарна:"). */
-export function buildAmbiguousTripReply(trips: TravelTrip[], heading?: string) {
+export function buildAmbiguousTripReply(
+  trips: TravelTrip[],
+  heading?: string,
+  options: { askToChoose?: boolean } = {},
+) {
   const names = trips.slice(0, MAX_LISTED_TRIPS).map((trip) => {
     const currency = trip.currency || "MNT";
     const adult = typeof trip.adult_price === "number" ? trip.adult_price : null;
@@ -1677,8 +1681,7 @@ export function buildAmbiguousTripReply(trips: TravelTrip[], heading?: string) {
     // above a single line read as a glitch.
     heading || (names.length === 1 ? "Энэ чиглэлээр ийм аялал байна 😊" : "Энэ чиглэлээр хэд хэдэн сонголт байна 😊"),
     ...names,
-    "",
-    AMBIGUOUS_REPLY_MARKER,
+    ...(options.askToChoose === false ? [] : ["", AMBIGUOUS_REPLY_MARKER]),
   ].join("\n");
 }
 

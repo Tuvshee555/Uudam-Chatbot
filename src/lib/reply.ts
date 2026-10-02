@@ -1,4 +1,6 @@
 import type { TravelTrip } from "./travelTypes";
+import { parseDepartureDateText } from "./travelDates";
+import { mentionedOfferHotel, quotablePrices, tripBookingFacts, tripSupportsDate } from "./tripFacts";
 
 const WEBSITE_URL = "";
 const WEBSITE_REPLY =
@@ -143,73 +145,22 @@ const BOOKING_TERM_TOPICS: Array<{ reply: RegExp; context: RegExp }> = [
  * no such terms existed. A reply that states a term the Context never
  * mentions becomes REFER: staff answer it, the bot does not invent policy.
  */
-export function guardInventedBookingTerms(reply: string, promptUserText: string): string {
+export function guardInventedBookingTerms(
+  reply: string,
+  promptUserText: string,
+  candidateTrips: TravelTrip[] = [],
+): string {
   const start = promptUserText.indexOf("Context:");
   const tail = start >= 0 ? promptUserText.slice(start) : promptUserText;
   const end = tail.search(/\n(?:Persistent customer memory|Private pre-answer analysis|Conversation so far|User):/);
   const catalogContext = end >= 0 ? tail.slice(0, end) : tail;
+  const relevantContext = candidateTrips.length > 0
+    ? candidateTrips.map(tripBookingFacts).join("\n")
+    : catalogContext;
   const invented = BOOKING_TERM_TOPICS.some(
-    (topic) => topic.reply.test(reply) && !topic.context.test(catalogContext),
+    (topic) => topic.reply.test(reply) && !topic.context.test(relevantContext),
   );
   return invented ? "REFER" : reply;
-}
-
-/**
- * Every distinct tugrik amount a trip could truthfully be quoted at: base
- * adult/child/infant fares plus every price-group tier (structured and
- * legacy) and every child/infant rule's price. Real 0 tugrik/legacy free
- * markers are excluded the same way formatPassengerMoney does, so a fare that
- * would never be rendered is never treated as "confirmed" either.
- */
-function tripQuotablePrices(trip: TravelTrip): Set<number> {
-  const prices = new Set<number>();
-  const add = (value: unknown) => {
-    if (typeof value === "number" && Number.isFinite(value) && value >= 1000) prices.add(Math.round(value));
-  };
-  add(trip.adult_price);
-  add(trip.child_price);
-  add(trip.infant_price);
-  const extra = (trip.extra || {}) as Record<string, unknown>;
-  const tripRange = extra.adult_price_range;
-  if (tripRange && typeof tripRange === "object") {
-    add((tripRange as Record<string, unknown>).min);
-    add((tripRange as Record<string, unknown>).max);
-  }
-  const groupSources = [
-    extra.price_groups,
-    extra.departure_date_groups,
-    extra.child_rules,
-    extra.child_price_rules,
-    // Real fares too: a solo traveller's own-room price, and room-type prices.
-    // Missing these made a correct answer about either one look invented.
-    extra.room_prices,
-  ];
-  for (const source of groupSources) {
-    if (!Array.isArray(source)) continue;
-    for (const entry of source) {
-      if (!entry || typeof entry !== "object") continue;
-      const record = entry as Record<string, unknown>;
-      add(record.adult_price);
-      add(record.child_price);
-      add(record.infant_price);
-      add(record.single_price);
-      add(record.price);
-      // An adult fare given as a range ("2,000,000 - 2,300,000₮") keeps only
-      // its low end in adult_price; the high end is just as real.
-      const range = record.adult_price_range;
-      if (range && typeof range === "object") {
-        add((range as Record<string, unknown>).min);
-        add((range as Record<string, unknown>).max);
-      }
-      const passengerPrices = record.passenger_prices;
-      if (Array.isArray(passengerPrices)) {
-        for (const p of passengerPrices) {
-          if (p && typeof p === "object") add((p as Record<string, unknown>).price);
-        }
-      }
-    }
-  }
-  return prices;
 }
 
 // A tugrik figure in a reply: "3,490,000₮", "3.490.000 ₮", "3490000 төгрөг".
@@ -235,16 +186,73 @@ const TUGRIK_AMOUNT_RE = /(\d{1,3}(?:[.,]\d{3}){1,4}|\d{4,})\s*(?:₮|төгрө
  * wrong-trip guard, this stays out rather than silencing a legitimate broad
  * answer it has no way to verify.
  */
-export function guardUnverifiedPrices(reply: string, candidateTrips: TravelTrip[]): string {
+export function guardUnverifiedPrices(
+  reply: string,
+  candidateTrips: TravelTrip[],
+  now = new Date(),
+): string {
   if (candidateTrips.length === 0) return reply;
-  const amounts = [...reply.matchAll(TUGRIK_AMOUNT_RE)]
-    .map((m) => Number(m[1].replace(/[.,]/g, "")))
-    .filter((n) => Number.isFinite(n) && n >= 1000);
-  if (amounts.length === 0) return reply;
-  const allQuotable = new Set<number>();
-  for (const trip of candidateTrips) for (const price of tripQuotablePrices(trip)) allQuotable.add(price);
-  const unverified = amounts.some((amount) => !allQuotable.has(amount));
-  return unverified ? "REFER" : reply;
+  const lines = reply.split(/\r?\n/);
+  const allReplyDates = parseDepartureDateText(reply, now);
+  let activeDates = allReplyDates.length === 1 ? allReplyDates : [];
+  const activeHotels = new Map<string, string>();
+  for (const line of lines) {
+    const lineDates = parseDepartureDateText(line, now);
+    if (lineDates.length > 0) activeDates = lineDates;
+    for (const trip of candidateTrips) {
+      const hotel = mentionedOfferHotel(trip, line, now);
+      if (hotel) activeHotels.set(trip.id, hotel);
+    }
+    const amounts = [...line.matchAll(TUGRIK_AMOUNT_RE)]
+      .map((match) => Number(match[1].replace(/[.,]/g, "")))
+      .filter((amount) => Number.isFinite(amount) && amount >= 1_000);
+    if (amounts.length === 0) continue;
+    for (const amount of amounts) {
+      const supported = candidateTrips.some((trip) => {
+        const mentionedHotel = mentionedOfferHotel(trip, line, now);
+        const hotel = mentionedHotel || activeHotels.get(trip.id) || null;
+        if (activeDates.length === 0) return quotablePrices(trip, undefined, now, hotel).has(amount);
+        return activeDates.some((date) => quotablePrices(trip, date, now, hotel).has(amount));
+      });
+      if (!supported) return "REFER";
+    }
+  }
+  return reply;
+}
+
+// A reply claiming a date is this trip's departure or availability.
+const DATE_CLAIM_WORDS = /гарна|гарах|гардаг|идэвхтэй|боломжтой|суудал|нээлттэй|захиалга/i;
+
+/**
+ * Every explicit date in an AI reply (not "маргааш"/"өнөөдөр" — only ones
+ * precise enough to be wrong, "10 сарын 8", "2026-12-03") must be a real
+ * departure date of one of the trips this turn resolved to. Catches the
+ * model stating a date the trip does not actually run on — same shape and
+ * same reasoning as guardUnverifiedPrices: a checker with no model call of
+ * its own, so it cannot itself hallucinate a pass.
+ *
+ * `candidateTrips` must be the resolved trip(s) for this turn. Dates repeated
+ * from the customer's question are still checked because "yes, that date"
+ * is a factual confirmation.
+ */
+export function guardUnverifiedDates(
+  reply: string,
+  candidateTrips: TravelTrip[],
+  _customerText?: string,
+  now = new Date(),
+): string {
+  if (candidateTrips.length === 0) return reply;
+  if (!DATE_CLAIM_WORDS.test(reply)) return reply;
+  for (const line of reply.split(/\r?\n/)) {
+    const dates = parseDepartureDateText(line, now);
+    if (dates.length === 0) continue;
+    // A truthful denial may repeat a date that is absent from the schedule.
+    if (/байхгүй|алга|гарахгүй|хуваарьгүй/i.test(line)) continue;
+    for (const date of dates) {
+      if (!candidateTrips.some((trip) => tripSupportsDate(trip, date, now) === "match")) return "REFER";
+    }
+  }
+  return reply;
 }
 
 // A customer's own text claim ("5 сая шилжүүлсэн", "screenshot явуулсан",

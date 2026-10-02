@@ -9,18 +9,19 @@
 import type { TravelTrip } from "./travelTypes";
 import {
   getAliases,
-  tripDurationDays,
-  tripIsCruise,
-  tripIsDirectFlight,
-  tripIsLandFlightCombo,
-  tripMatchesRequestedDuration,
   withFutureDepartureDates,
 } from "./travelFastPathsSearch";
 import { keywordTokens, normText, phoneticLatinText } from "./travelTextNorm";
-import { tripDepartsInMonth, tripMatchesRequestedDate } from "./travelDates";
+import {
+  evaluateTripRequirement,
+  tripTransport,
+  type RequirementKind,
+  type TripRequirement,
+  type TripTransport,
+} from "./tripFacts";
 
 export type TripIntent = "trip" | "catalog" | "booking" | "human" | "smalltalk" | "other";
-export type Transport = "direct_flight" | "land" | "land_flight" | "cruise";
+export type Transport = TripTransport;
 
 export type Understanding = {
   intent: TripIntent;
@@ -35,7 +36,9 @@ export type Understanding = {
   days: [number, number] | null;
   transport: Transport | null;
   /** A requirement the customer stated that none of the trips meets. */
-  unmet: "date" | "range" | "month" | "days" | "transport" | null;
+  unmet: RequirementKind | null;
+  /** A requirement whose value is absent from every remaining trip. */
+  unknownRequirement: RequirementKind | null;
   /** A specific destination the customer asked for that no trip goes to. */
   unknownDestination: string | null;
 };
@@ -63,6 +66,7 @@ function catalogLine(key: string, trip: TravelTrip, now: Date): string {
     key,
     trip.route_name + (aliases.length ? ` (бас: ${aliases.slice(0, 6).join(", ")})` : ""),
     trip.duration_text || "?",
+    `тээвэр: ${tripTransport(trip) || "?"}`,
     `гарах: ${dates || "—"}`,
     trip.status === "sold_out" ? "суудал дууссан" : "",
   ]
@@ -158,13 +162,6 @@ function daysBetween(from: string, to: string): string[] {
   return out;
 }
 
-function transportFits(trip: TravelTrip, transport: Transport): boolean {
-  if (transport === "land_flight") return tripIsLandFlightCombo(trip);
-  if (transport === "direct_flight") return tripIsDirectFlight(trip) && !tripIsLandFlightCombo(trip);
-  if (transport === "cruise") return tripIsCruise(trip);
-  return !tripIsLandFlightCombo(trip) && !tripIsDirectFlight(trip) && !tripIsCruise(trip);
-}
-
 /** "жинин" matches "жинин", and a stem matches its suffixed form ("бээжин" ~ "бээжингийн"). */
 function wordMatches(word: string, token: string): boolean {
   if (word === token) return true;
@@ -228,25 +225,36 @@ export function interpretUnderstanding(raw: string, keys: Map<string, TravelTrip
   // trips and is reported, so the reply says so instead of passing a near
   // miss off as an answer.
   let unmet: Understanding["unmet"] = null;
+  let unknownRequirement: Understanding["unknownRequirement"] = null;
   let fitting = trips;
-  const checks: Array<[NonNullable<Understanding["unmet"]>, (trip: TravelTrip) => boolean]> = [];
-  if (transport) checks.push(["transport", (trip) => transportFits(trip, transport)]);
-  if (date) checks.push(["date", (trip) => tripMatchesRequestedDate(trip, date, now)]);
+  const checks: TripRequirement[] = [];
+  if (transport) checks.push({ kind: "transport", transport });
+  if (date) checks.push({ kind: "date", date });
   if (range) {
     const span = daysBetween(range[0], range[1]);
-    checks.push(["range", (trip) => span.some((ymd) => tripMatchesRequestedDate(trip, ymd, now))]);
+    checks.push({ kind: "range", dates: span });
   }
-  if (month) checks.push(["month", (trip) => tripDepartsInMonth(trip, month, now)]);
-  if (days) checks.push(["days", (trip) => tripDurationDays(trip) === null || tripMatchesRequestedDuration(trip, days)]);
-  for (const [name, ok] of checks) {
-    const kept = fitting.filter(ok);
-    if (kept.length === 0 && fitting.length > 0) {
-      unmet = name;
+  if (month) checks.push({ kind: "month", month });
+  if (days) checks.push({ kind: "days", days });
+  for (const requirement of checks) {
+    const evaluated = fitting.map((trip) => ({ trip, state: evaluateTripRequirement(trip, requirement, now) }));
+    const matches = evaluated.filter((row) => row.state === "match").map((row) => row.trip);
+    const unknown = evaluated.filter((row) => row.state === "unknown").map((row) => row.trip);
+    if (matches.length > 0) {
+      fitting = matches;
+      continue;
+    }
+    if (unknown.length > 0) {
+      fitting = unknown;
+      unknownRequirement ||= requirement.kind;
+      continue;
+    }
+    if (fitting.length > 0) {
+      unmet = requirement.kind;
       break;
     }
-    fitting = kept;
   }
-  if (!unmet && place && fitting.length > 1) fitting = narrowByPlaceWords(place, fitting);
+  if (!unmet && !unknownRequirement && place && fitting.length > 1) fitting = narrowByPlaceWords(place, fitting);
   // A sold-out trip is not a real alternative to a bookable one leaving the
   // same way — asking "which of these?" between them is a needless question.
   if (fitting.length > 1) {
@@ -256,7 +264,7 @@ export function interpretUnderstanding(raw: string, keys: Map<string, TravelTrip
 
   const certainty: Understanding["certainty"] =
     fitting.length === 0 ? "none" : fitting.length === 1 ? "one" : "several";
-  return { intent, place, trips: fitting, certainty, date, range, month, days, transport, unmet, unknownDestination };
+  return { intent, place, trips: fitting, certainty, date, range, month, days, transport, unmet, unknownRequirement, unknownDestination };
 }
 
 const TRANSPORT_LABEL: Record<Transport, string> = {
@@ -287,6 +295,21 @@ export function unmetNote(understanding: Understanding): string | undefined {
       return `${understanding.month} сард гарах хуваарь байхгүй. Энэ чиглэлийн гарах өдрүүд:`;
     case "transport":
       return `${TRANSPORT_LABEL[understanding.transport!]} аялал энэ чиглэлд одоогоор байхгүй. Энэ чиглэлийн аяллууд:`;
+    default:
+      return undefined;
+  }
+}
+
+export function unknownRequirementNote(understanding: Understanding): string | undefined {
+  switch (understanding.unknownRequirement) {
+    case "days":
+      return "Аяллын хоногийн мэдээлэл баталгаатай бүртгэгдээгүй байна. Боломжит аялал:";
+    case "date":
+    case "range":
+    case "month":
+      return "Гарах өдрийн мэдээлэл баталгаатай бүртгэгдээгүй байна. Боломжит аялал:";
+    case "transport":
+      return "Тээврийн төрөл баталгаатай бүртгэгдээгүй байна. Аяллын зөвлөхөөс тодруулж өгөх боломжит аялал:";
     default:
       return undefined;
   }

@@ -7,7 +7,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { TravelTrip } from "../src/lib/travelOps";
-import { guardUnverifiedPrices } from "../src/lib/reply";
+import { guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices } from "../src/lib/reply";
+
+const NOW = new Date("2026-10-02T04:00:00Z");
 
 function trip(fields: Partial<TravelTrip>): TravelTrip {
   return {
@@ -65,17 +67,13 @@ test("a price-group fare for a DIFFERENT date than base is still confirmed", () 
   assert.equal(guardUnverifiedPrices(reply, [t]), reply);
 });
 
-test("a base fare quoted for a date priced differently is still allowed through this guard alone", () => {
-  // This guard only confirms the amount is SOME real price on the trip — it
-  // cannot know which date the sentence is about. That's why adultFareOnDate
-  // (the date-formatting fix) is the real fix for date-specific answers; this
-  // guard is the backstop for amounts that are not real at all.
+test("a base fare quoted for a differently priced departure is rejected", () => {
   const t = trip({
     adult_price: 3390000,
     extra: { price_groups: [{ dates: ["10 сарын 8"], adult_price: 3490000 }] },
   });
   const reply = "10 сарын 8-нд: том хүн 3,390,000₮.";
-  assert.equal(guardUnverifiedPrices(reply, [t]), reply);
+  assert.equal(guardUnverifiedPrices(reply, [t], NOW), "REFER");
 });
 
 test("a fully invented amount with no resolved trip is left alone (nothing to verify against)", () => {
@@ -124,4 +122,57 @@ test("multiple candidate trips (an ambiguous list) can each supply the confirmed
   const b = trip({ id: "b", route_name: "Бета аялал", adult_price: 2000000 });
   const reply = "Альфа аялал 1,000,000₮, Бета аялал 2,000,000₮.";
   assert.equal(guardUnverifiedPrices(reply, [a, b]), reply);
+});
+
+test("a real date-specific fare is accepted for its own departure", () => {
+  const t = trip({
+    adult_price: 3390000,
+    extra: { price_groups: [{ dates: ["10 сарын 8"], adult_price: 3490000 }] },
+  });
+  const reply = "10 сарын 8-нд: том хүн 3,490,000₮.";
+  assert.equal(guardUnverifiedPrices(reply, [t], NOW), reply);
+});
+
+test("a hotel price is valid only for the hotel it belongs to", () => {
+  const t = trip({
+    adult_price: 3000000,
+    extra: {
+      price_groups: [
+        { dates: ["10 сарын 8"], hotel: "Hotel Alpha", adult_price: 3000000 },
+        { dates: ["10 сарын 8"], hotel: "Hotel Beta", adult_price: 4000000 },
+      ],
+    },
+  });
+  const correct = "10 сарын 8 · Hotel Alpha\nТом хүн: 3,000,000₮";
+  const swapped = "10 сарын 8 · Hotel Alpha\nТом хүн: 4,000,000₮";
+  assert.equal(guardUnverifiedPrices(correct, [t], NOW), correct);
+  assert.equal(guardUnverifiedPrices(swapped, [t], NOW), "REFER");
+});
+
+test("a date repeated from the customer is still checked before the bot confirms it", () => {
+  const t = trip({ departure_dates: ["10 сарын 17"] });
+  const reply = "Тийм ээ, 10 сарын 10-нд гарна.";
+  assert.equal(guardUnverifiedDates(reply, [t], "10 сарын 10-нд гарах уу", NOW), "REFER");
+});
+
+test("a real departure date passes and an honest unavailable-date reply also passes", () => {
+  const t = trip({ departure_dates: ["10 сарын 17"] });
+  const available = "10 сарын 17-нд гарна.";
+  const unavailable = "10 сарын 10-нд гарах хуваарь байхгүй.";
+  assert.equal(guardUnverifiedDates(available, [t], "", NOW), available);
+  assert.equal(guardUnverifiedDates(unavailable, [t], "", NOW), unavailable);
+});
+
+test("booking terms are checked against the resolved trip rather than another catalog trip", () => {
+  const selected = trip({ id: "selected", extra: { booking_terms: {} } });
+  const other = trip({ id: "other", extra: { booking_terms: { visa: "Required" } } });
+  const prompt = "Context:\nVisa information exists elsewhere.";
+  assert.equal(
+    guardInventedBookingTerms("Виз шаардлагатай.", prompt, [selected]),
+    "REFER",
+  );
+  assert.equal(
+    guardInventedBookingTerms("Виз шаардлагатай.", prompt, [other]),
+    "Виз шаардлагатай.",
+  );
 });

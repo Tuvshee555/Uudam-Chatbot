@@ -25,7 +25,7 @@ import {
   clearClarificationState,
 } from "./clarificationState";
 import { customerTurn, joinContextAndTurn, markNoTrip } from "./customerTurn";
-import { unmetNote, type Understanding } from "./tripUnderstanding";
+import { unmetNote, unknownRequirementNote, type Understanding } from "./tripUnderstanding";
 import { hasReferentialHint, isLikelyContextDependentText, lastAssistantReply, pickFastPathMatchText } from "./contextualText";
 import { parseDepartureDateText, resolveRequestedMonth, tripMatchesRequestedDate, tripDepartsInMonth } from "./travelDates";
 import {
@@ -160,6 +160,8 @@ export type FastPathRoute = {
   understanding?: Understanding;
   /** A destination the customer asked for that no trip goes to — answer that honestly. */
   notInCatalog?: string;
+  /** The list is informational because a stated requirement failed or is unknown. */
+  informationalAlternatives?: boolean;
 };
 
 /** A reply that asked the customer to pick a trip — the only kind a pending clarification belongs to. */
@@ -216,6 +218,16 @@ export async function routeFastPathText(input: {
   if (input.understand && !choice && !tappedOwnButton) {
     const understanding = await input.understand(pendingTrips.map((trip) => trip.id));
     if (understanding) {
+      if ((understanding.unmet || understanding.unknownRequirement) && understanding.trips.length > 0) {
+        await clearClarificationState(senderId);
+        return {
+          matchText: text,
+          scopedClarify: understanding.trips,
+          scopedClarifyNote: unmetNote(understanding) || unknownRequirementNote(understanding),
+          informationalAlternatives: true,
+          understanding,
+        };
+      }
       if (understanding.certainty === "one") {
         return { ...(await chose(understanding.trips[0])), understanding };
       }
