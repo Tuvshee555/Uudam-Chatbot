@@ -12,6 +12,7 @@
  */
 
 import { buildPassengerTotalReply } from "./passengerTotalReply";
+import { departureAvailability, departureIsClosed } from "./departureAvailability";
 import { buildHotelReply } from "./tripHotelReply";
 import {
   buildDepartureDateAvailabilityReply,
@@ -482,6 +483,8 @@ function buildTripInfoReply(rawTrip: TravelTrip, now = new Date()) {
 }
 
 export function buildSeatsReply(text: string, trips: TravelTrip[]): string | null {
+  const departureReply = buildDepartureUnavailableReply(text, trips);
+  if (departureReply) return departureReply;
   const { best, ambiguous } = findBestTripMatch(text, trips);
   if (!best) {
     const soldOut = buildSoldOutTripReply(text, trips);
@@ -947,6 +950,8 @@ export function buildDateQuestionReply(
   matchText: string,
   trips: TravelTrip[],
 ): string | null {
+  const departureReply = buildDepartureUnavailableReply(joinContextAndTurn(matchText, intentText), trips);
+  if (departureReply) return departureReply;
   const scope = resolveDateQuestionScope(matchText, trips);
   return buildDepartureDateAvailabilityReply({
     userText: intentText,
@@ -1327,7 +1332,29 @@ function buildUnavailableTripReply(
  * Deliberately strict — the full trip name, or a clear score lead over the best
  * active match — so a bare "<хот>" never gets an unavailable answer.
  */
+export function buildDepartureUnavailableReply(text: string, trips: TravelTrip[]): string | null {
+  const turn = customerTurn(text);
+  const dates = extractStructuredDates(turn);
+  if (!dates.length) return null;
+  const matches = findTripMatches(text, trips, { includeSoldOut: true, includePaused: true });
+  const match = matches[0];
+  if (!match || !match.matchedWords.some((word) => /\p{L}{4,}/u.test(word))) return null;
+  if (matches[1] && matches[1].score >= match.score - 5 && !normText(text).includes(normText(match.trip.route_name))) return null;
+  const explicitYear = /\b20\d{2}\b/.test(turn);
+  const requested = parseDepartureDateText(turn);
+  const closed = departureAvailability(match.trip).find((row) => departureIsClosed(row) &&
+    (!explicitYear || requested.includes(row.date)) &&
+    dates.some((date) => row.date.slice(5) === `${String(date.month).padStart(2, "0")}-${String(date.day).padStart(2, "0")}`));
+  if (!closed) return null;
+  const wording = closed.status === "SOLD_OUT" || closed.seatsLeft === 0 ? "Суудал дүүрсэн" : "Захиалга авах боломжгүй";
+  const open = departureAvailability(match.trip).filter((row) => !departureIsClosed(row) && row.date >= new Date().toISOString().slice(0, 10));
+  return [`${match.trip.route_name}`, `${closed.date} — ${wording}.`,
+    open.length ? `Нээлттэй гарах өдрүүд: ${open.map((row) => row.date).join(", ")}` : "Өөр гарах өдрийг аяллын зөвлөхөөс тодруулъя."].join("\n");
+}
+
 export function buildSoldOutPrecedenceReply(text: string, trips: TravelTrip[]): string | null {
+  const departureReply = buildDepartureUnavailableReply(text, trips);
+  if (departureReply) return departureReply;
   const unavailableTrips = trips.filter((trip) => trip.status === "sold_out" || trip.status === "paused");
   if (unavailableTrips.length === 0) return null;
   const unavailableMatches = findTripMatches(text, unavailableTrips, {
@@ -1356,7 +1383,7 @@ export function buildSoldOutPrecedenceReply(text: string, trips: TravelTrip[]): 
 }
 
 function buildSoldOutTripReply(text: string, trips: TravelTrip[]): string | null {
-  return buildUnavailableTripReply(text, trips, "sold_out") ?? buildUnavailableTripReply(text, trips, "paused");
+  return buildDepartureUnavailableReply(text, trips) ?? buildUnavailableTripReply(text, trips, "sold_out") ?? buildUnavailableTripReply(text, trips, "paused");
 }
 
 export function buildStructuredTripReply(
@@ -1364,6 +1391,8 @@ export function buildStructuredTripReply(
   trips: TravelTrip[],
   now = new Date(),
 ): string | null {
+  const departureReply = buildDepartureUnavailableReply(text, trips);
+  if (departureReply) return departureReply;
   // `text` = context that identifies the trip (a trip name, or the bot's own
   // previous reply full of real dates and prices) + the customer's marked
   // turn (customerTurn.ts). `text` is used ONLY to find the trip; every

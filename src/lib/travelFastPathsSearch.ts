@@ -5,6 +5,7 @@
  */
 
 import { filterFutureDepartureDates, sortDepartureDatesForDisplay, type ResolvedDepartureDate } from "./travelDates";
+import { withBookableDepartureDates } from "./departureAvailability";
 import { repairBirthYearAgeBands } from "./birthYearAgeBands";
 import { getPosterPdfPublicUrl, isUsableStoredPdfUrl } from "./poster/pdfUrl";
 import type { TravelTrip } from "./travelOps";
@@ -543,6 +544,7 @@ function sanitizeGroup(
  * data exactly as entered.
  */
 export function sanitizeTripForCustomers(trip: TravelTrip): TravelTrip {
+  trip = withBookableDepartureDates(trip);
   if (!isRecord(trip.extra)) return trip;
   // "ХҮҮХЭД -2014-2015 ОН" saved as "14-20 нас" (see birthYearAgeBands.ts).
   const extra = repairBirthYearAgeBands(trip.extra);

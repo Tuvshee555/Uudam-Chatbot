@@ -6,7 +6,8 @@ import { recordCounter } from "./observability";
 import { queryNeon } from "./neonDb";
 import { connectedTripMutation, ensureConnectedTripSchema, type PosterWrite } from "./connectedTripStore";
 import { withNeonClient } from "./neonDb";
-import { flushWebsiteSync } from "./websiteTripSync";
+import { flushWebsiteSync, withWebsiteDepartureAvailability } from "./websiteTripSync";
+import { departureAvailability, departureIsClosed } from "./departureAvailability";
 import { sharedMap } from "./processState";
 import { ensureTravelSchema } from "./travelSchema";
 // Re-exported so existing importers (travelOps, googleDriveSync, travelAI, …)
@@ -873,10 +874,10 @@ export async function listTrips(options?: {
     scheduled.filter((entry) => entry.changed).map((entry) => entry.trip),
   );
   const sanitized = scheduled.map((entry) => entry.trip);
-  return filterTripsForListing(sanitized, {
+  return withWebsiteDepartureAvailability(filterTripsForListing(sanitized, {
     status,
     includeArchived: options?.includeArchived,
-  });
+  }));
 }
 
 export async function getTripById(id: string): Promise<TravelTrip | null> {
@@ -913,7 +914,7 @@ export async function getTripById(id: string): Promise<TravelTrip | null> {
   if (!result?.rows?.[0]) return null;
   const sanitized = sanitizeTripScheduleForCurrentDate(mapTripRow(result.rows[0]));
   if (sanitized.changed) await persistTripScheduleMaintenance([sanitized.trip]);
-  return sanitized.trip;
+  return (await withWebsiteDepartureAvailability([sanitized.trip]))[0];
 }
 
 export async function getBotControl(): Promise<BotControl> {
@@ -1789,6 +1790,8 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     // price-group dates that are not real departures) before the model sees them.
     const trip = sanitizeTripForCustomers(rawTrip);
     const details: string[] = [];
+    const closedDates = departureAvailability(trip).filter(departureIsClosed);
+    if (closedDates.length) details.push(`Unavailable departures (do not offer booking): ${closedDates.map((row) => `${row.date}: ${row.status === "SOLD_OUT" || row.seatsLeft === 0 ? "суудал дүүрсэн" : row.status}`).join(", ")}. Other dates retain their own availability.`);
     // Category is the transport differentiator (газрын / шууд нислэгтэй /
     // хосолсон) — without it the bot cannot distinguish the three "<хот>"
     // trips when a customer names only the destination.

@@ -21,6 +21,26 @@ function bookingPool() {
   return pool;
 }
 
+export async function withWebsiteDepartureAvailability(trips: TravelTrip[]): Promise<TravelTrip[]> {
+  if (!process.env.BOOKING_DATABASE_URL || !trips.length) return trips;
+  try {
+    const result = await bookingPool().query(`SELECT t."sourceTripId", d."startDate", d.status, d."seatsLeft"
+      FROM "Trip" t JOIN "Departure" d ON d."tripId"=t.id
+      WHERE t."sourceTripId"=ANY($1::text[])`, [trips.map((trip) => trip.id)]);
+    const byTrip = new Map<string, Array<{ date: string; status: string; seatsLeft: number | null }>>();
+    for (const row of result.rows) {
+      const entries = byTrip.get(row.sourceTripId) || [];
+      entries.push({ date: new Date(new Date(row.startDate).getTime() + 8 * 3600000).toISOString().slice(0, 10), status: row.status, seatsLeft: row.seatsLeft });
+      byTrip.set(row.sourceTripId, entries);
+    }
+    return trips.map((trip) => byTrip.has(trip.id)
+      ? { ...trip, extra: { ...trip.extra, website_departure_availability: byTrip.get(trip.id) } } : trip);
+  } catch {
+    console.error("Could not read website departure availability");
+    return trips;
+  }
+}
+
 async function hostedPhoto(photo: string): Promise<string> {
   if (photo.startsWith("https://")) return photo;
   const hash = createHash("sha256").update(photo).digest("hex");
@@ -183,7 +203,7 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   const oldDepartures = (await client.query(`SELECT * FROM "Departure" WHERE "tripId"=$1`, [id])).rows;
   const keep: string[] = [];
   for (const dep of websiteDepartures(source)) {
-    const old = oldDepartures.find(row => new Date(row.startDate).toISOString().slice(0, 10) === dep.start.slice(0, 10));
+    const old = oldDepartures.find(row => new Date(new Date(row.startDate).getTime() + 8 * 3600000).toISOString().slice(0, 10) === dep.start.slice(0, 10));
     const depId = old?.id || randomUUID();
     keep.push(depId);
     const seatsChanged = !prior || (Object.keys(previousSnapshot).length > 0 &&
