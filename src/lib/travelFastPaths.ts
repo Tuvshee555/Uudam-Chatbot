@@ -36,6 +36,7 @@ import {
   keywordTokens,
   matchScoreForPriceKind,
   normText,
+  phoneticLatinText,
   resolveTripFromUserMessage,
   queryNamedPlaces,
   tripMentionsAllPlaces,
@@ -54,6 +55,7 @@ import {
   type TripProgramReplyResult,
 } from "./travelFastPathsSearch";
 import { buildTripProgramReply } from "./travelFastPathsProgram";
+import { phoneticTokenMatches } from "./travelTextNorm";
 import { CUSTOMER_TURN_MARK, customerTurn, intentTextOf, joinContextAndTurn } from "./customerTurn";
 import { CONTACT_OPERATOR_LABEL } from "./contactLabels";
 import { SMART_BUTTON_LABELS } from "./smartButtonLabels";
@@ -274,12 +276,18 @@ export function hasDiscountIntent(text: string): boolean {
   const normalized = normText(text);
   const hasMn = DISCOUNT_KEYWORDS_MN.some((keyword) => normalized.includes(keyword));
   const hasEn = DISCOUNT_KEYWORDS_EN.some((keyword) => normalized.includes(keyword));
-  return hasMn || hasEn;
+  return hasMn || hasEn || /хямдрах|хямдруул|hyamdrah|hyamdruul/i.test(normalized);
 }
 
 export function hasPriceObjectionIntent(text: string): boolean {
   const normalized = normText(text);
   if (!normalized) return false;
+  if (
+    /(?:үнэтэй|unetei).{0,24}(?:үнэгүй|unegui)|(?:үнэгүй|unegui).{0,24}(?:үнэтэй|unetei)/i.test(normalized) ||
+    /төлбөртэй.{0,24}төлбөргүй|төлбөргүй.{0,24}төлбөртэй/i.test(normalized)
+  ) {
+    return false;
+  }
   if (
     /хямдруул|хөнгөлж\s*болох|үнэ\s*буулга|үнээ\s*буулга|hyamdruul|hongolj\s*boloh|une\s*buulg/i.test(
       normalized,
@@ -510,6 +518,7 @@ const COMPARE_KEYWORDS_MN = [
   "vs",
 ];
 const COMPARE_KEYWORDS_EN = ["compare", "comparison", "vs", "versus", "difference", "better"];
+const COMPARE_KEYWORDS_LATIN_MN = ["ylgaa", "ylgaatai", "yalgatai", "yugaaraa", "yugara"];
 const COMPARE_QUERY_STOP_WORDS = new Set([
   "аль",
   "дээр",
@@ -555,7 +564,8 @@ export function hasCompareIntent(text: string): boolean {
   const normalized = normText(text);
   const hasMn = COMPARE_KEYWORDS_MN.some((keyword) => normalized.includes(keyword));
   const hasEn = COMPARE_KEYWORDS_EN.some((keyword) => normalized.includes(keyword));
-  return hasMn || hasEn;
+  const hasLatinMn = COMPARE_KEYWORDS_LATIN_MN.some((keyword) => normalized.includes(keyword));
+  return hasMn || hasEn || hasLatinMn;
 }
 
 const BUDGET_PHRASES = [
@@ -907,6 +917,26 @@ export function resolveDateQuestionScope(
     if (scoped.length > 1) return { focusTrip: null, trips: scoped };
     if (scoped.length === 1) return { focusTrip: scoped[0], trips };
   }
+  const shortCity = /([\p{L}]{2,})\s+хот(?:ын|од|оос)?/u.exec(normText(dateless));
+  if (shortCity) {
+    const phrase = `${shortCity[1]} хот`;
+    const scoped = trips.filter(
+      (trip) => isActive(trip) && getTripNameHaystack(trip).includes(phrase),
+    );
+    if (scoped.length === 1) return { focusTrip: scoped[0], trips };
+    if (scoped.length > 1) return { focusTrip: null, trips: scoped };
+  }
+  // A short destination such as "Хөх хот" can be too weak for the strict
+  // single-trip resolver because several tours share it. It still scopes the
+  // date question: never answer a Hohhot date ask with a Beidaihe departure.
+  const namedPlaces = dateless ? queryNamedPlaces(dateless, trips).places : [];
+  if (namedPlaces.length > 0) {
+    const scoped = trips.filter(
+      (trip) => isActive(trip) && tripMentionsAllPlaces(trip, namedPlaces),
+    );
+    if (scoped.length === 1) return { focusTrip: scoped[0], trips };
+    if (scoped.length > 1) return { focusTrip: null, trips: scoped };
+  }
   // 2. The trip the conversation is on. Only a context that settles ONE trip
   // counts — a previous list is not a scope (it hid a trip it had cut off).
   if (context) {
@@ -974,13 +1004,19 @@ export function buildCompareReply(text: string, trips: TravelTrip[]): string | n
 
   if (matched.length < 2) {
     const broadTokens = unique(keywordTokens(query))
-      .filter((word) => !COMPARE_QUERY_STOP_WORDS.has(word));
+      .filter((word) => word.length >= 4 && !COMPARE_QUERY_STOP_WORDS.has(word));
     const broadMatches: TravelTrip[] = [];
     for (const token of broadTokens) {
       // Name/alias only: a comparison names trips, so a token that merely turns
       // up in some other trip's notes or date labels must not nominate it.
       const best = activeTrips
-        .filter((trip) => getTripNameHaystack(trip).includes(token))
+        .filter((trip) => {
+          const name = getTripNameHaystack(trip);
+          const tokenLatin = phoneticLatinText(token);
+          const nameLatin = phoneticLatinText(name);
+          return name.includes(token) || nameLatin.includes(tokenLatin) ||
+            nameLatin.split(/\s+/).some((nameToken) => phoneticTokenMatches(tokenLatin, nameToken));
+        })
         .sort((a, b) => {
           const aPrice = typeof a.adult_price === "number" ? a.adult_price : Number.MAX_SAFE_INTEGER;
           const bPrice = typeof b.adult_price === "number" ? b.adult_price : Number.MAX_SAFE_INTEGER;

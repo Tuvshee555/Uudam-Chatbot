@@ -29,10 +29,11 @@ import type { TravelTrip } from "./travelTypes";
 const WHOLE_CATALOG_RE =
   /(?:^|\s)(?:бүх|bvh|buh|bukh|нийт)\s+(?:аял|ayl|ayal)|ямар\s+ямар\s+аял|yamar\s*yamar|(?:^|\s)(?:аяллууд|аялалууд|aylaluud|ayaluud)(?:\s|$)|аяллын\s+жагсаалт|all\s+(?:trips|tours)/i;
 const CRUISE_RE = /круз|усан\s+онгоц|cruise/i;
+const LUNAR_NEW_YEAR_RE = /сар\s*шин|sar\s*shin/i;
 const MAX_DETAILED = 8;
 const MAX_MESSAGE_CHARS = 1800;
 
-type Listing = { reply: string; listed: TravelTrip[] };
+type Listing = { reply: string; listed: TravelTrip[]; authoritative?: boolean };
 
 function nextDepartures(trip: TravelTrip): string[] {
   return withFutureDepartureDates(trip).departure_dates.slice(0, 2);
@@ -127,6 +128,23 @@ export function buildCatalogListingReply(intentText: string, trips: TravelTrip[]
   const normalized = normText(intentText);
   if (!normalized) return null;
   const active = trips.filter((trip) => trip.status === "active");
+  if (LUNAR_NEW_YEAR_RE.test(normalized)) {
+    const listed = active.filter((trip) =>
+      LUNAR_NEW_YEAR_RE.test([trip.route_name, ...(Array.isArray(trip.extra?.aliases) ? trip.extra.aliases : [])].join(" ")),
+    );
+    if (listed.length === 0) {
+      return {
+        reply: "Сар шинийн тусгай аялал одоогоор аяллын жагсаалтад бүртгэгдээгүй байна. Шинэ хуваарь нэмэгдэхэд аяллын зөвлөхөөс тодруулж өгье.",
+        listed: [],
+        authoritative: true,
+      };
+    }
+    return {
+      reply: ["Сар шинийн аяллууд 😊", ...listed.slice(0, MAX_DETAILED).map(detailLine), "", AMBIGUOUS_REPLY_MARKER].join("\n"),
+      listed: listed.slice(0, MAX_DETAILED),
+      authoritative: true,
+    };
+  }
   const wantsAll = WHOLE_CATALOG_RE.test(normalized);
   const wantsCruise = CRUISE_RE.test(normalized);
   if (SHORT_TRIP_RE.test(normalized)) return shortestTripsListing(intentText, active);
@@ -148,9 +166,20 @@ export function buildCatalogListingReply(intentText: string, trips: TravelTrip[]
   const destinations = namedDestinations(intentText, active);
   const destinationPool = destinations.length > 0 ? active.filter((trip) => nameHasAny(trip, destinations)) : [];
   const destinationCategoryPool = destinationPool.filter((trip) => categoryPool.includes(trip));
+  if (destinations.length > 0 && wantsCategory && destinationCategoryPool.length === 0) {
+    const requestedKind = categoryHeading(intentText).toLowerCase();
+    const available = destinationPool.slice(0, 3);
+    const lines = [
+      `${destinations.map(titleCase).join(", ")} чиглэлд ${requestedKind} одоогоор алга байна.`,
+    ];
+    if (available.length > 0) {
+      lines.push("Одоогийн өөр тээврийн хувилбарууд:", ...available.map(detailLine));
+    }
+    return { reply: lines.join("\n"), listed: available };
+  }
   const pool = destinations.length === 0
     ? categoryPool
-    : destinationCategoryPool.length > 0 ? destinationCategoryPool : destinationPool;
+    : destinationCategoryPool;
   const listed = [...pool].sort((a, b) => soonestKey(a).localeCompare(soonestKey(b)));
   if (listed.length === 0) return null;
 

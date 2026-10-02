@@ -507,10 +507,14 @@ export default async function handler(
       {
         const soldOutReply = buildSoldOutPrecedenceReply(normalizedText, await getTrips());
         const listing = soldOutReply ? null : buildCatalogListingReply(intentText, await getTrips());
-        const listingApplies = listing &&
-          resolveTripFromUserMessage(await getFastPathText(), await getTrips(), { allowLooseFallback: false }).status === "not_found";
+        const listingApplies = listing && (
+          listing.authoritative === true ||
+          resolveTripFromUserMessage(await getFastPathText(), await getTrips(), { allowLooseFallback: false }).status === "not_found"
+        );
         if (soldOutReply || listingApplies) {
-          if (listingApplies) await setClarificationState(sessionId, listing!.listed.map((trip) => trip.id));
+          if (listingApplies && listing!.listed.length > 0) {
+            await setClarificationState(sessionId, listing!.listed.map((trip) => trip.id));
+          }
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(soldOutReply || listing!.reply));
           await appendMessage(sessionId, "user", normalizedText);
           await appendMessage(sessionId, "assistant", safeReply);

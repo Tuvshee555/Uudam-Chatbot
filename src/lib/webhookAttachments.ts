@@ -14,7 +14,7 @@ import { scheduleCustomerAttachmentProcessing, scheduleCustomerImageProcessing, 
 import { isPaused } from "./pause";
 import { createLead, hasRecentOpenLead, isPagePaused, listTrips } from "./travelOps";
 import { notifyStaffOfLead } from "./staffAlerts";
-import { buildStructuredTripReply } from "./travelFastPaths";
+import { buildStructuredTripReply, sanitizeTripForCustomers } from "./travelFastPaths";
 import { enforceWebsiteForPayment, sanitizeAssistantReply } from "./reply";
 import type { Platform } from "./webhookDedup";
 import {
@@ -110,7 +110,7 @@ async function buildMatchedTripReply(docs: ProcessedDocumentLike[]): Promise<str
     (matched.extracted_json?.trip_match as Record<string, unknown>).route_name || "",
   ).trim();
   if (!routeName) return null;
-  const trips = await listTrips({ limit: 5000 }).catch(() => []);
+  const trips = (await listTrips({ limit: 5000 }).catch(() => [])).map(sanitizeTripForCustomers);
   const structured = trips.length > 0 ? buildStructuredTripReply(routeName, trips) : null;
   const intro = `Таны илгээсэн зураг манай «${routeName}» аялал байна ✨`;
   if (!structured) return intro;

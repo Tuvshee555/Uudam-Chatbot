@@ -1193,6 +1193,9 @@ function hasLooseAliasMatch(
 
 export function queryExplicitlyRejectsFlight(query: string): boolean {
   const normalized = normText(query);
+  const namesGroundLeg = /газраар|автобусаар|галт тэрэг/.test(normalized);
+  const namesFlightLeg = /нисэх|нислэг|онгоц/.test(normalized);
+  if (namesGroundLeg && namesFlightLeg) return false;
   return (
     normalized.includes("нислэггүй") ||
     normalized.includes("газрын аялал") ||
@@ -1233,7 +1236,8 @@ export function queryWantsLandFlightCombo(query: string): boolean {
   return (
     normalized.includes("газар нислэг") ||
     normalized.includes("нислэг хосолсон") ||
-    normalized.includes("хосолсон")
+    normalized.includes("хосолсон") ||
+    (/(?:газраар|автобусаар|галт тэрэг)/.test(normalized) && /(?:нисэх|нислэг|онгоц)/.test(normalized))
   );
 }
 
@@ -1296,6 +1300,52 @@ function tripHasSeaBeach(trip: TravelTrip): boolean {
     haystack.includes("sea") ||
     haystack.includes("seaside")
   );
+}
+
+/**
+ * Day-count the customer asked for ("5-6 хоногт", "7 хоногийн", "5 өдрийн
+ * аялал"), as [min, max] inclusive — or null when the message names no
+ * length. A live customer asked "5-6 хоногт... боломж байдаг уу?" for a
+ * destination whose only matches are 8-10 day tours, got those unfiltered,
+ * said so explicitly, and got the identical answer again (2026-10-02) — the
+ * day count was never read at all. "хоног" (full day) is treated the same as
+ * "өдөр" (the catalog's own word, which counts the travel/arrival day too).
+ */
+export function queryRequestsDurationDays(query: string): [number, number] | null {
+  const normalized = normText(query);
+  // normText intentionally removes punctuation, so "5-6 хоног" reaches this
+  // function as "5 6 хоног". Accept either representation and Mongolian case
+  // endings such as "хоногт".
+  const range = /(\d{1,2})\s*(?:[-–~]|\s+)\s*(\d{1,2})\s*(?:хоног|өдөр)(?:т|ийн|өөр|тэй)?/.exec(normalized);
+  if (range) {
+    const a = Number(range[1]);
+    const b = Number(range[2]);
+    return a <= b ? [a, b] : [b, a];
+  }
+  const single = /(\d{1,2})\s*(?:хоног|өдөр)(?:ийн|т|өөр|тэй)?/.exec(normalized);
+  if (single) {
+    const n = Number(single[1]);
+    return [n, n];
+  }
+  return null;
+}
+
+/** "8 өдөр 7 шөнө" / "5 шөнө / 6 өдөр" → 8 / 6. Null when unparseable. */
+export function tripDurationDays(trip: TravelTrip): number | null {
+  const text = trip.duration_text || "";
+  const match = /(\d{1,2})\s*өдөр/.exec(text);
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * Within ±1 day of what the customer asked ("5-6 хоногт" also fits a 7-day
+ * tour, a human travel agent would mention it too) — strict equality would
+ * turn "around a week" into a dead end on a catalog with sparse lengths.
+ */
+export function tripMatchesRequestedDuration(trip: TravelTrip, range: [number, number]): boolean {
+  const days = tripDurationDays(trip);
+  if (days == null) return false;
+  return days >= range[0] - 1 && days <= range[1] + 1;
 }
 
 function hasDisambiguatingModifier(query: string): boolean {

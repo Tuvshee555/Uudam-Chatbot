@@ -97,6 +97,13 @@ export const GENERIC_ROUTE_WORDS = new Set([
   "бас",
   "болон",
   "гэхдээ",
+  // "усан" (water) sits in both "усан парк" (water park, an amenity question
+  // about whatever trip is on screen) and "усан онгоц" (ship/cruise, a trip
+  // NAME). On its own it is never distinctive: a live customer asked "халуун
+  // рашаан усан парк нтр нь ажиллах уу" (does the hot-spring water park work)
+  // as a follow-up about the trip just discussed, and the single shared word
+  // "усан" matched the unrelated Dream Cruise trip instead (2026-10-02).
+  "усан",
 ]);
 
 /**

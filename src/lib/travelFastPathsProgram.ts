@@ -17,10 +17,14 @@ import {
   isGenericConfirmationText,
   keywordTokens,
   normText,
+  queryNamedPlaces,
+  queryRequestsDurationDays,
   queryWantsFlight,
   queryWantsLandFlightCombo,
   queryWantsLandOnlyEnhanced,
   resolveTripFromUserMessage,
+  tripMatchesRequestedDuration,
+  tripDurationDays,
   tripIsLandFlightCombo,
   type ProgramAsset,
   type TripProgramReplyResult,
@@ -220,7 +224,8 @@ export function buildTripProgramReply(
   // Asked by the customer, not implied by a trip NAME: tapping a trip named
   // "<хот> [сар]-р сарын аяллын хөтөлбөр" is choosing it, not asking for its PDF.
   const intentText = intentTextOf(text, trips);
-  if (!hasProgramIntent(intentText)) return null;
+  const requestedDuration = queryRequestsDurationDays(text);
+  if (!hasProgramIntent(intentText) && !requestedDuration) return null;
 
   const query = normText(text);
   const wantsCombo = queryWantsLandFlightCombo(text);
@@ -259,7 +264,51 @@ export function buildTripProgramReply(
       : mentionedTrips.length > 0
         ? mentionedTrips
         : destinationPool;
-  const candidateTrips = scopedTrips.length > 0 ? scopedTrips : trips;
+  // "5-6 хоногт... боломж байдаг уу?" — a trip-length ask. Narrow to tours of
+  // that length WITHIN the destination/transport scope already computed
+  // above; a destination with no trip that short still gets an answer (its
+  // own trips), never silence or the unfiltered catalog. A live customer
+  // asked this for a destination whose only matches ran 8-10 days, got those
+  // unfiltered, said so explicitly, and got back the identical answer
+  // (2026-10-02) — the day count was never read at all.
+  const durationScopedTrips = requestedDuration
+    ? scopedTrips.filter((trip) => tripMatchesRequestedDuration(trip, requestedDuration))
+    : [];
+  if (
+    requestedDuration &&
+    durationScopedTrips.length === 0 &&
+    destinationTrips.length > 0 &&
+    exactMentionedTrips.length === 0
+  ) {
+    const shortest = [...scopedTrips]
+      .map((trip) => ({ trip, days: tripDurationDays(trip) }))
+      .filter((row): row is { trip: TravelTrip; days: number } => row.days !== null)
+      .sort((a, b) => a.days - b.days)[0];
+    const requestedLabel = requestedDuration[0] === requestedDuration[1]
+      ? `${requestedDuration[0]} өдрийн`
+      : `${requestedDuration[0]}-${requestedDuration[1]} өдрийн`;
+    const destinationLabel = queryNamedPlaces(text, destinationTrips).places[0] || "Энэ";
+    const shortestDuration = shortest && !isGenericConfirmationText(shortest.trip.duration_text)
+      ? shortest.trip.duration_text
+      : shortest
+        ? `${shortest.days} өдөр`
+        : "";
+    const nearest = shortest
+      ? ` Хамгийн богино одоогийн хувилбар нь «${shortest.trip.route_name}» — ${shortestDuration}.`
+      : "";
+    return {
+      reply: `${destinationLabel} чиглэлд ${requestedLabel} аялал одоогоор алга байна.${nearest}`,
+      trip: null,
+      brochure: null,
+      mediaUrls: [],
+    };
+  }
+  const candidateTrips =
+    durationScopedTrips.length > 0
+      ? durationScopedTrips
+      : scopedTrips.length > 0
+        ? scopedTrips
+        : trips;
   const routeQueryWords = keywordTokens(text).filter((word) => !PROGRAM_ONLY_QUERY_WORDS.has(word));
   const directResolution = trips.length === 1
     ? { status: "verified" as const, trip: trips[0], candidates: [] }

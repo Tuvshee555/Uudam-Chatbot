@@ -1145,10 +1145,15 @@ async function handleMessage(
   // list it from the DB instead of a silent no-data handoff.
   {
     const listing = buildCatalogListingReply(intentText, await getTrips());
-    if (listing && resolveTripFromUserMessage(await getFastPathText(), await getTrips(), { allowLooseFallback: false }).status === "not_found") {
+    if (listing && (
+      listing.authoritative === true ||
+      resolveTripFromUserMessage(await getFastPathText(), await getTrips(), { allowLooseFallback: false }).status === "not_found"
+    )) {
       // The list is a "which trip?" question: a following "Хөтөлбөр үзэх"
       // must re-ask it, not take the first trip listed.
-      await setClarificationState(senderId, listing.listed.map((trip) => trip.id));
+      if (listing.listed.length > 0) {
+        await setClarificationState(senderId, listing.listed.map((trip) => trip.id));
+      }
       await deliverFastPathReply({
         reply: enforceWebsiteForPayment(sanitizeAssistantReply(listing.reply)),
         failTag: "catalog_listing",

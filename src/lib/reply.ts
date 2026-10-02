@@ -422,7 +422,10 @@ function isGreetingBlock(text: string) {
 }
 
 export function sanitizeAssistantReply(text: string) {
-  const cleaned = normalizeWhitespace(stripScoldingRepeatPhrases(stripControlTokens(stripMarkdown(stripLeakedPlaceholders(text)))));
+  const withoutInternalVocabulary = text
+    .replace(/\bContext-(?:д|т)/gi, "манай аяллын мэдээлэлд")
+    .replace(/\bContext\b/gi, "аяллын мэдээлэл");
+  const cleaned = normalizeWhitespace(stripScoldingRepeatPhrases(stripControlTokens(stripMarkdown(stripLeakedPlaceholders(withoutInternalVocabulary)))));
   if (!cleaned) return "Энэ мэдээлэл одоогоор тодорхойгүй байна. Хүний ажилтантай холбож өгье.";
 
   // Split on blank lines (paragraph breaks) — preserve them so the AI's
