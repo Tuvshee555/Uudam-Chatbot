@@ -98,7 +98,8 @@ export function startCollectState(originalMessage: string, trip = ""): CollectSt
  * customer who taps "Захиалах" wants to move NOW, and being asked several
  * questions before receiving anything reads as a form, not service.
  */
-export const BOOKING_WEBSITE_URL = "https://uudam-booking-web.vercel.app";
+import { BOOKING_WEBSITE_URL } from "./bookingWebsite";
+export { BOOKING_WEBSITE_URL };
 
 /** The opening question: name and phone together, naming the trip when known. */
 export function buildBookingStartPrompt(trip: string): string {

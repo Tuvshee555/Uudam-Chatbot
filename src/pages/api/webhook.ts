@@ -79,6 +79,7 @@ import {
 } from "../../lib/webhookDedup";
 import { sendPlatformMessage, recordImageMessage, recordFileMessage, sendPhotoAlbum, sendTripMediaForReply, fetchAndStoreFbName, sendFacebookTypingIndicator, normalizeLowerText, isQuickInfoKeyword, isHandoffRequest, CONTACT_OPERATOR_LABEL, DUPLICATE_REPLY_NUDGE, isBookingIntent, extractPhoneNumber, isPhoneOnlyMessage, isCommentTriggerMatch } from "../../lib/webhookMedia";
 import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
+import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
 const env = getEnv();
 const PAGE_TOKENS = new Map(env.facebookPages.map((p) => [p.pageId, p.token]));
 const FALLBACK_TOKEN = env.tokenPage;
@@ -1106,6 +1107,21 @@ async function handleMessage(
       });
       return;
     }
+  }
+  // Weather: answered from the booking website's own report (same text as
+  // the trip page). Before the structured-question gate on purpose — "<хот>
+  // хүйтэн байна уу" reads as structured and would otherwise go silent.
+  if (isWeatherTurn(intentText, history)) {
+    const weather = await buildTripWeatherReply(await getFastPathText(), await getTrips(), undefined, (await getRouted()).chosenTripId);
+    if (weather.kind === "clarify") await setClarificationState(senderId, weather.candidates.map((t) => t.id));
+    await deliverFastPathReply({
+      reply: sanitizeAssistantReply(weather.reply),
+      failTag: "weather_fast_path",
+      rememberSource: "api.webhook.weather_fast_path",
+      counter: "webhook.weather_fast_path_total",
+      buttons: weather.kind === "clarify" ? buildClarificationButtons(weather.candidates) : undefined,
+    });
+    return;
   }
   // The customer named a trip that is sold out: say so (and offer the same
   // destination's open trips) instead of quoting a near-name sibling's price.

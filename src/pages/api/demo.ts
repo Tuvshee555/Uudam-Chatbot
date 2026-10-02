@@ -15,6 +15,7 @@ import { isKnownGreetingPhrase, isThanksOnly, MID_CONVERSATION_GREETING_REPLY, T
 import { stripTripNamesForIntent } from "../../lib/customerTurn";
 import { buildCatalogListingReply } from "../../lib/catalogListing";
 import { setClarificationState } from "../../lib/clarificationState";
+import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
@@ -484,6 +485,21 @@ export default async function handler(
             buttons: buildClarificationButtons(routed.scopedClarify),
           });
         }
+      }
+
+      // Mirrors the webhook: weather from the booking website's own report.
+      if (isWeatherTurn(intentText, history)) {
+        const weather = await buildTripWeatherReply(await getFastPathText(), await getTrips(), undefined, (await getRouted()).chosenTripId);
+        if (weather.kind === "clarify") await setClarificationState(sessionId, weather.candidates.map((t) => t.id));
+        const weatherReply = sanitizeAssistantReply(weather.reply);
+        await appendMessage(sessionId, "user", normalizedText);
+        await appendMessage(sessionId, "assistant", weatherReply);
+        await rememberTurn();
+        recordCounter("demo.weather_fast_path_total", 1, {});
+        return res.status(200).json({
+          reply: weatherReply,
+          buttons: weather.kind === "clarify" ? buildClarificationButtons(weather.candidates) : [],
+        });
       }
 
       // Mirrors the webhook: a trip the customer named that is sold out, and a

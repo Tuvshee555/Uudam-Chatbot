@@ -149,6 +149,12 @@ export type FastPathRoute = {
    * an informed follow-up, not a blind re-ask.
    */
   scopedClarifyNote?: string;
+  /**
+   * The exact trip the customer picked from our list. `matchText` carries
+   * only its NAME, and two catalogue trips can share a name (a cheaper and
+   * a dearer hotel tier) — re-matching the name then re-asks forever.
+   */
+  chosenTripId?: string;
 };
 
 /** A reply that asked the customer to pick a trip — the only kind a pending clarification belongs to. */
@@ -169,7 +175,7 @@ export async function routeFastPathText(input: {
     resolveTripFromUserMessage(t, pool, { allowLooseFallback: false });
   const chose = async (trip: TravelTrip): Promise<FastPathRoute> => {
     await clearClarificationState(senderId);
-    return { matchText: joinContextAndTurn(trip.route_name, text), scopedClarify: null };
+    return { matchText: joinContextAndTurn(trip.route_name, text), scopedClarify: null, chosenTripId: trip.id };
   };
   const tappedOwnButton = isOwnButtonLabel(text);
   const choice = parseNumberedChoice(text);
