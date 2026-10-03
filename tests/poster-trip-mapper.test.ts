@@ -94,6 +94,22 @@ test("poster adult price ranges keep the low fare for lookup and the full range 
   assert.deepEqual(fields.extra?.price_groups?.[0].adult_price_range, { min: 2000000, max: 2300000 });
 });
 
+test("poster weekly range rows match by start date while preserving the range label", () => {
+  const fields = mapPosterTripToFields({
+    title: "Тайландын аялал",
+    price_table: {
+      columns: ["Хугацаа", "Том хүн", "Хүүхэд 2-11.99 нас"],
+      rows: [{ dates: "2026.11.14-11.21", cells: ["4,990,000₮", "3,990,000₮"] }],
+    },
+  });
+
+  const group = fields.extra?.price_groups?.[0];
+  assert.deepEqual(group?.dates, ["2026 оны 11 сарын 14"]);
+  assert.deepEqual(group?.display_dates, ["2026.11.14-11.21"]);
+  assert.equal(group?.label, "2026.11.14-11.21");
+  assert.equal(group?.child_age, "2-11.99 нас");
+});
+
 test("poster hotel rows keep separate passenger tiers on the same date", () => {
   const fields = mapPosterTripToFields({
     title: "Вэлмор – Кардан аялал",

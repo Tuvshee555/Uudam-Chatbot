@@ -114,7 +114,7 @@ function findPriceColumnIndex(columns: string[] | undefined, keywords: string[])
 }
 
 function dateColumnIndex(columns: string[] | undefined): number {
-  return (columns || []).findIndex((column) => /огноо|date/i.test(column));
+  return (columns || []).findIndex((column) => /огноо|хугацаа|date|duration/i.test(column));
 }
 
 function priceCell(row: PosterPriceRow, columns: string[] | undefined, columnIndex: number): string | undefined {
@@ -147,10 +147,11 @@ function extractAgeRange(label: string): string {
   const years = birthYearBand(label);
   if (years) return years;
   const unit = /сар/i.test(label) ? "сар" : "нас";
-  const range = label.match(/(?<!\d)(\d{1,2})\s*[-–—]\s*(\d{1,2})(?!\d)\s*(?:сар|нас|age)?/i);
-  if (range) return `${Number(range[1])}-${Number(range[2])} ${unit}`;
-  const single = label.match(/(\d{1,2})\s*(?:сар|нас|age)/i);
-  return single ? `${Number(single[1])} ${unit}` : "";
+  const numberPattern = String.raw`\d{1,2}(?:[.,]\d{1,2})?`;
+  const range = label.match(new RegExp(`(?<!\\d)(${numberPattern})\\s*[-–—]\\s*(${numberPattern})(?!\\d)\\s*(?:сар|нас|age)?`, "i"));
+  if (range) return `${range[1].replace(",", ".")}-${range[2].replace(",", ".")} ${unit}`;
+  const single = label.match(new RegExp(`(${numberPattern})\\s*(?:сар|нас|age)`, "i"));
+  return single ? `${single[1].replace(",", ".")} ${unit}` : "";
 }
 
 function isAdultColumn(label: string): boolean {
@@ -205,6 +206,29 @@ function expandPosterDateList(value: string | undefined): string[] {
   return [...new Set(dates.length > 0 ? dates : [text])];
 }
 
+function posterRangeStartDate(value: string | undefined): string | null {
+  const text = normalizeDepartureText(value || "");
+  const isoRange = text.match(/\b(20\d{2})[./-](\d{1,2})[./-](\d{1,2})\s*[-–—]/);
+  if (isoRange) {
+    return `${Number(isoRange[1])} оны ${Number(isoRange[2])} сарын ${String(Number(isoRange[3])).padStart(2, "0")}`;
+  }
+
+  const mongolianRange = text.match(/\b(20\d{2})\s*оны\s*(\d{1,2})\s*сарын\s*(\d{1,2})\s*[-–—]/i);
+  if (mongolianRange) {
+    return `${Number(mongolianRange[1])} оны ${Number(mongolianRange[2])} сарын ${String(Number(mongolianRange[3])).padStart(2, "0")}`;
+  }
+
+  return null;
+}
+
+function priceGroupDateScope(value: string | undefined): { dates: string[]; display_dates: string[] } {
+  const displayDate = normalizeDepartureText(value || "");
+  const rangeStartDate = posterRangeStartDate(displayDate);
+  const dates = rangeStartDate ? [rangeStartDate] : expandPosterDateList(displayDate);
+  const display_dates = displayDate ? [displayDate] : dates;
+  return { dates, display_dates };
+}
+
 function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup[] {
   if (!priceTable?.rows?.length) return [];
   const columns = priceTable.columns || [];
@@ -220,7 +244,7 @@ function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup
 
   return priceTable.rows
     .map((row) => {
-      const dates = expandPosterDateList(row.dates);
+      const { dates, display_dates } = priceGroupDateScope(row.dates);
       const adultCell = priceCell(row, columns, adultIdx >= 0 ? adultIdx : 0);
       const adultPriceRange = parsePriceRangeText(adultCell);
       const hotel = hotelIdx >= 0 ? cleanColumnLabel(priceCell(row, columns, hotelIdx) || "") : "";
@@ -239,10 +263,10 @@ function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup
       const infant = pricedPassengers.find((price) => isInfantColumn(price.label));
       const child = pricedPassengers.find((price) => price !== infant) || pricedPassengers[0];
       return {
-        label: dates.join(", ") || normalizeDepartureText(row.dates || ""),
+        label: display_dates.join(", ") || dates.join(", ") || normalizeDepartureText(row.dates || ""),
         ...(hotel ? { hotel } : {}),
         dates,
-        display_dates: dates,
+        display_dates,
         adult_price: adultPriceRange?.min ?? parsePriceToNumber(adultCell),
         adult_price_range: adultPriceRange,
         child_price: child?.price ?? null,
