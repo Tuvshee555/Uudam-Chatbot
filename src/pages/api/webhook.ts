@@ -23,6 +23,10 @@ import {
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { notInCatalogReply, tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
+import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
+import { verifyTripReply } from "../../lib/tripReplyVerification";
+import type { TripSelection } from "../../lib/tripRequest";
+import type { TravelTrip } from "../../lib/travelTypes";
 import { stripTripNamesForIntent } from "../../lib/customerTurn";
 import { buildCatalogListingReply } from "../../lib/catalogListing";
 import { fixMojibake } from "../../lib/encoding";
@@ -280,6 +284,9 @@ async function handleMessage(
    * state, schedule the memory merge, bump the counter. The fast paths below
    * were six copy-pasted versions of this block.
    */
+  let factualScope: TravelTrip[] | null = null;
+  let currentSelection: TripSelection | null = null;
+  let approvedPlanReply: string | null = null;
   const deliverFastPathReply = async (input: {
     reply: string;
     failTag: string;
@@ -288,8 +295,11 @@ async function handleMessage(
     buttons?: string[];
     afterDeliver?: () => Promise<void>;
   }) => {
-    const noDataReply = isReferReply(input.reply) || shouldSilenceNoDataReply(input.reply);
-    const reply = input.reply;
+    const reply = factualScope && input.reply !== approvedPlanReply
+      ? verifyTripReply({ reply: input.reply, trips: factualScope, selection: currentSelection })
+      : input.reply;
+    const noDataReply = isReferReply(reply) || shouldSilenceNoDataReply(reply);
+    if (reply !== input.reply) recordCounter("webhook.factual_reply_rejected_total", 1, { path: input.failTag });
     if (noDataReply) {
       logInfo("webhook.no_data_reply_suppressed", {
         requestId: trace?.requestId,
@@ -943,10 +953,14 @@ async function handleMessage(
       history,
       trips: await getTrips(),
       understand: tripUnderstandingEnabled()
-        ? async (pendingTripIds) =>
-            understandTripMessage({ text, history, trips: await getTrips(), pendingTripIds, ask: understandingModel(trace) })
+        ? async (pendingTripIds, selection) =>
+            understandTripMessage({ text, history, trips: await getTrips(), pendingTripIds, selection, ask: understandingModel(trace) })
         : undefined,
     });
+    currentSelection = routedCache.selection || null;
+    factualScope = routedCache.chosenTripId
+      ? (await getTrips()).filter((trip) => trip.id === routedCache?.chosenTripId)
+      : routedCache.scopedClarify || routedCache.understanding?.trips || [];
     return routedCache;
   };
   const getFastPathText = async (): Promise<string> => (await getRouted()).matchText;
@@ -1074,6 +1088,27 @@ async function handleMessage(
   // Compare questions intentionally mention multiple destinations/products.
   // Answer them as comparisons before scoped clarification narrows the message
   // to one destination family and asks the wrong follow-up.
+  {
+    const route = await getRouted();
+    const plan = await buildTripAnswerRuntime({ text, trips: await getTrips(), route });
+    if (plan) {
+      const reply = enforceWebsiteForPayment(sanitizeAssistantReply(plan.reply));
+      approvedPlanReply = reply;
+      recordCounter("webhook.answer_plan_total", 1, { status: plan.status });
+      if (plan.missingTopics.length) recordCounter("webhook.answer_plan_missing_topics_total", plan.missingTopics.length, {});
+      await deliverFastPathReply({
+        reply, failTag: "answer_plan", rememberSource: "api.webhook.answer_plan",
+        buttons: plan.status === "clarify" ? undefined : buildSmartButtons(reply, factualScope || []) || undefined,
+        afterDeliver: async () => {
+          if (platform !== "facebook" || !token) return;
+          if (plan.brochureUrl) await sendFbFileByUrl(senderId, plan.brochureUrl, token);
+          for (const url of plan.mediaUrls) await sendImageMessage(senderId, url, token);
+          if (plan.mediaUrls.length) await recordImageMessage(senderId, plan.mediaUrls);
+        },
+      });
+      return;
+    }
+  }
   if (hasCompareIntent(intentText)) {
     const trips = await getTrips();
     const compareReply = buildCompareReply(await getFastPathText(), trips);
@@ -1175,6 +1210,7 @@ async function handleMessage(
       if (listing.listed.length > 0) {
         await setClarificationState(senderId, listing.listed.map((trip) => trip.id));
       }
+      factualScope = listing.listed;
       await deliverFastPathReply({
         reply: enforceWebsiteForPayment(sanitizeAssistantReply(listing.reply)),
         failTag: "catalog_listing",
@@ -1677,7 +1713,7 @@ async function handleMessage(
   // guessing on the next message), and tell the customer a human is taking
   // over — same acknowledgement whether the cause was missing data or an AI
   // outage.
-  const guardCandidateTrips = reasoningTrips.filter((trip) => relevantTripNames.includes(trip.route_name));
+  const guardCandidateTrips = factualScope || reasoningTrips.filter((trip) => relevantTripNames.includes(trip.route_name));
   aiReply = guardInventedBookingTerms(aiReply, promptParts.user, guardCandidateTrips);
   if (isReferReply(aiReply) && !aiOutage && isGenericTripRequest(text)) {
     // "Aylaluud", "Medeelel avay": no destination named, so the model had
@@ -1770,7 +1806,7 @@ async function handleMessage(
   // one of the trips this turn actually resolved to. Catches a base fare
   // quoted for a departure priced differently, or any invented amount,
   // regardless of which path (AI or fast path) produced it.
-  const safeReply = guardUnverifiedDates(
+  const guardedReply = guardUnverifiedDates(
     guardUnverifiedPrices(
       enforcePaymentNeverSelfConfirmed(text, enforceWebsiteForPayment(rewrittenReply)),
       guardCandidateTrips,
@@ -1778,6 +1814,7 @@ async function handleMessage(
     guardCandidateTrips,
     text,
   );
+  const safeReply = verifyTripReply({ reply: guardedReply, trips: guardCandidateTrips, selection: currentSelection });
   // Wrong-trip guard: the customer clearly asked about trip A but the model
   // answered with a DIFFERENT destination's price. Route to the same silent
   // handoff as a no-data reply rather than send a confident wrong answer.

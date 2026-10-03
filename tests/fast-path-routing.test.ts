@@ -19,6 +19,31 @@ before(async () => {
   getClarificationState = state.getClarificationState;
 });
 
+test("explicit offer state survives hotel and passenger follow-ups with the model unavailable", async () => {
+  const now = new Date("2026-10-02T04:00:00Z");
+  const selected = trip({ id: "offer-state", route_name: "Неритийн нуурын аялал", departure_dates: ["2026-10-08"], extra: { price_groups: [
+    { dates: ["2026-10-08"], hotel: "Hotel Nerith Garden", adult_price: 2_000_000, child_price: 1_000_000 },
+    { dates: ["2026-10-08"], hotel: "Hotel Peln House", adult_price: 3_000_000, child_price: 2_000_000 },
+  ] } });
+  const senderId = "offer-state-followups";
+  const { setTripSelection } = await import("../src/lib/tripSelectionState");
+  const { buildTripAnswerPlan } = await import("../src/lib/tripAnswerPlan");
+  try {
+    const initial = await routeFastPathText({ senderId, text: "Неритийн нуурын аялал 2026-10-08 үнэ?", contextualUserText: "Неритийн нуурын аялал 2026-10-08 үнэ?", trips: [selected], now });
+    assert.equal(initial.selection?.date, "2026-10-08");
+    const hotel = await routeFastPathText({ senderId, text: "Hotel Peln House", contextualUserText: "Hotel Peln House", trips: [selected], now });
+    assert.equal(hotel.selection?.hotel, "Hotel Peln House");
+    const party = await routeFastPathText({ senderId, text: "2 том хүн 6 настай хүүхэд нийт хэд вэ?", contextualUserText: "2 том хүн 6 настай хүүхэд нийт хэд вэ?", trips: [selected], now });
+    assert.equal(party.chosenTripId, selected.id);
+    const plan = buildTripAnswerPlan({ text: "2 том хүн 6 настай хүүхэд нийт хэд вэ?", trips: [selected], route: party, now });
+    assert.match(plan!.reply, /Нийт: 8,000,000₮/);
+    assert.match(plan!.reply, /Hotel Peln House/);
+  } finally {
+    await setTripSelection(senderId, null);
+    await clearClarificationState(senderId);
+  }
+});
+
 function trip(fields: Partial<TravelTrip>): TravelTrip {
   return {
     id: "trip-1",
@@ -303,6 +328,7 @@ test("date answer selects the only candidate departing that date", async () => {
     senderId,
     text: "8 сарын 28-нд хэд вэ",
     contextualUserText: "8 сарын 28-нд хэд вэ",
+    now: new Date("2026-08-01T04:00:00Z"),
     trips: HAILAAR_TRIPS,
   });
 
@@ -352,6 +378,7 @@ test("date answer matching several candidates re-asks scoped with the date echoe
     senderId,
     text: "8 сарын 24-нд хэд вэ",
     contextualUserText: "8 сарын 24-нд хэд вэ",
+    now: new Date("2026-08-01T04:00:00Z"),
     trips: datedTrips,
   });
 

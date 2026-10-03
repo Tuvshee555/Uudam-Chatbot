@@ -10,7 +10,7 @@ export function understandingModel(trace?: { requestId?: string; correlationId?:
       systemText,
       jsonMode: true,
       temperature: 0,
-      maxOutputTokens: 200,
+      maxOutputTokens: 600,
       timeoutMs: UNDERSTANDING_TIMEOUT_MS,
       model: process.env.TRIP_UNDERSTANDING_MODEL || "gpt-4.1",
       source: "trip_understanding",

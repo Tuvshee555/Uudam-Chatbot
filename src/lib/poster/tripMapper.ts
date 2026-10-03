@@ -49,6 +49,8 @@ type MappedPriceGroup = {
 
 type PosterTrip = {
   title?: string;
+  destinations?: string[];
+  transport_type?: string;
   duration_days?: number;
   duration_nights?: number;
   departures?: Array<{ date?: string }>;
@@ -68,6 +70,10 @@ export type MappedTripFields = {
   hotel?: string;
   has_food?: boolean;
   extra?: {
+    destinations?: string[];
+    transport_type?: string;
+    duration_days?: number;
+    duration_nights?: number;
     included_items?: string[];
     excluded_items?: string[];
     price_groups?: MappedPriceGroup[];
@@ -183,14 +189,15 @@ function expandPosterDateList(value: string | undefined): string[] {
   for (let i = 0; i < markers.length; i++) {
     const marker = markers[i];
     const month = Number(marker[1]);
+    const year = [...text.slice(0, marker.index || 0).matchAll(/\b(20\d{2})\s*(?:оны|он)?/g)].at(-1)?.[1];
     const start = (marker.index || 0) + marker[0].length;
     const end = markers[i + 1]?.index ?? text.length;
-    const segment = text.slice(start, end);
+    const segment = text.slice(start, end).replace(/\b20\d{2}\s*(?:оны|он)?/g, "");
     const days = [...segment.matchAll(/\d{1,2}/g)].map((match) => match[0]);
     for (const rawDay of days) {
       const day = Number(rawDay);
       if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-        dates.push(`${month} сарын ${String(day).padStart(2, "0")}`);
+        dates.push(`${year ? `${year} оны ` : ""}${month} сарын ${String(day).padStart(2, "0")}`);
       }
     }
   }
@@ -324,11 +331,10 @@ function mapAgeRules(priceTable: PosterTrip["price_table"]): MappedAgeRules | un
 }
 
 function mapDurationText(durationDays?: number, durationNights?: number): string | undefined {
-  if (!durationDays && !durationNights) return undefined;
   const parts: string[] = [];
-  if (durationDays) parts.push(`${durationDays} өдөр`);
-  if (durationNights) parts.push(`${durationNights} шөнө`);
-  return parts.join(" ");
+  if (Number.isInteger(durationDays) && Number(durationDays) > 0) parts.push(`${durationDays} өдөр`);
+  if (Number.isInteger(durationNights) && Number(durationNights) >= 0) parts.push(`${durationNights} шөнө`);
+  return parts.length ? parts.join(" ") : undefined;
 }
 
 function mapHotel(days: PosterDay[] | undefined): string | undefined {
@@ -421,8 +427,19 @@ export function mapPosterTripToFields(poster: PosterTrip): MappedTripFields {
         other.price === price.price,
       ),
     );
-  if (includes.length || excludes.length || priceGroups.length || childRules.length || ageRules) {
+  const destinations = [...new Set((Array.isArray(poster.destinations) ? poster.destinations : [])
+    .filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+    .map(value => value.trim()))];
+  const transport = ["direct_flight", "land", "land_flight", "cruise"].includes(poster.transport_type || "")
+    ? poster.transport_type : undefined;
+  const days = Number.isInteger(poster.duration_days) && Number(poster.duration_days) > 0 ? poster.duration_days : undefined;
+  const nights = Number.isInteger(poster.duration_nights) && Number(poster.duration_nights) >= 0 ? poster.duration_nights : undefined;
+  if (includes.length || excludes.length || priceGroups.length || childRules.length || ageRules || destinations.length || transport || days !== undefined || nights !== undefined) {
     fields.extra = {
+      ...(destinations.length ? { destinations } : {}),
+      ...(transport ? { transport_type: transport } : {}),
+      ...(days !== undefined ? { duration_days: days } : {}),
+      ...(nights !== undefined ? { duration_nights: nights } : {}),
       ...(includes.length ? { included_items: includes } : {}),
       ...(excludes.length ? { excluded_items: excludes } : {}),
       ...(priceGroups.length ? { price_groups: priceGroups } : {}),

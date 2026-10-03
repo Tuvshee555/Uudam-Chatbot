@@ -26,6 +26,10 @@ export function withBookableDepartureDates(trip: TravelTrip, now = new Date()): 
     return parsed.filter((date) => !closed.has(date));
   });
   const future = rows.filter((row) => row.date >= now.toISOString().slice(0, 10));
+  const allClosed = trip.status === "active" && future.length > 0 && future.every(departureIsClosed);
+  const status = !allClosed ? trip.status
+    : future.every((row) => row.status === "SOLD_OUT" || row.seatsLeft === 0) ? "sold_out"
+      : future.every((row) => row.status === "CANCELLED") ? "cancelled" : "paused";
   return { ...trip, departure_dates: dates,
-    status: trip.status === "active" && future.length > 0 && future.every(departureIsClosed) ? "sold_out" : trip.status };
+    status };
 }

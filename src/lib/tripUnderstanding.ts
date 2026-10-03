@@ -12,6 +12,7 @@ import {
   withFutureDepartureDates,
 } from "./travelFastPathsSearch";
 import { keywordTokens, normText, phoneticLatinText } from "./travelTextNorm";
+import { TRIP_TOPICS, parseRequestedPassengers, type RequestedPassenger, type TripSelection, type TripTopic } from "./tripRequest";
 import {
   evaluateTripRequirement,
   tripTransport,
@@ -25,6 +26,10 @@ export type Transport = TripTransport;
 
 export type Understanding = {
   intent: TripIntent;
+  topics?: TripTopic[];
+  hotel?: string | null;
+  package?: string | null;
+  passengers?: RequestedPassenger[];
   /** The destination / trip words the customer used, if any. */
   place: string | null;
   /** Trips the message is about, after the code checks below. */
@@ -65,6 +70,7 @@ function catalogLine(key: string, trip: TravelTrip, now: Date): string {
   return [
     key,
     trip.route_name + (aliases.length ? ` (бас: ${aliases.slice(0, 6).join(", ")})` : ""),
+    Array.isArray(trip.extra?.destinations) ? `чиглэл: ${trip.extra.destinations.filter((city) => typeof city === "string").join(", ")}` : "",
     trip.duration_text || "?",
     `тээвэр: ${tripTransport(trip) || "?"}`,
     `гарах: ${dates || "—"}`,
@@ -75,14 +81,16 @@ function catalogLine(key: string, trip: TravelTrip, now: Date): string {
 }
 
 const SYSTEM_RULES = `You read customer messages for a Mongolian travel agency's chat and decide which catalog trip(s) a message is about. Customers write Mongolian in Cyrillic or Latin letters (e.g. "aylal" = аялал, "une" = үнэ, "hutulbur" = хөтөлбөр, "avi" = авъя), with typos, missing spaces and slang. Reply with ONLY this JSON object:
-{"place": string|null, "intent": "trip"|"catalog"|"booking"|"human"|"smalltalk"|"other", "trips": ["T1"], "certainty": "one"|"several"|"none", "date": "YYYY-MM-DD"|null, "from": "YYYY-MM-DD"|null, "to": "YYYY-MM-DD"|null, "month": 1-12|null, "days": [min,max]|null, "transport": "direct_flight"|"land"|"land_flight"|"cruise"|null, "unknown_destination": string|null}
+{"place": string|null, "intent": "trip"|"catalog"|"booking"|"human"|"smalltalk"|"other", "topics": ["price"], "hotel": string|null, "package": string|null, "passengers": [{"kind":"adult"|"child"|"infant","count":2,"age":number|null,"ageUnit":"year"|"month"}], "trips": ["T1"], "certainty": "one"|"several"|"none", "date": "YYYY-MM-DD"|null, "from": "YYYY-MM-DD"|null, "to": "YYYY-MM-DD"|null, "month": 1-12|null, "days": [min,max]|null, "transport": "direct_flight"|"land"|"land_flight"|"cruise"|null, "unknown_destination": string|null}
+
+topics: ALL questions asked in this turn, chosen from price, availability, dates, hotel, duration, transport, program, includes, booking_terms, weather, photos, comparison, budget, discount. Preserve multiple topics: asking dates AND prices needs both answers. hotel/package: only a hotel name or program/package explicitly requested in this turn, otherwise null. passengers: only counts/ages explicitly stated in this turn; keep each child's age and unit, never invent it. 6 months old means age 6, ageUnit month, not six years old. A hotel star number is not a passenger age. The Selected offer below is persistent context for follow-ups, not new customer requirements.
 
 place: the destination / trip words the CUSTOMER used in this message (any spelling), or null if they named none.
 
 trips — catalog keys ONLY, never invent one:
 1. Match the customer's place words against the trip names and aliases by meaning, across Cyrillic/Latin spellings and typos.
 2. If one trip's name matches the customer's words clearly better than every other (they named a combination of places only that trip has, or typed most of its name), that trip alone, certainty "one".
-3. If their place word is shared by several trips (a city or landmark several names contain), return ALL of those trips, certainty "several" — then keep only the ones that fit an explicit date, date range, month, length or transport they stated. If none fit, still return them (code reports the mismatch).
+3. If their place word is shared by several trips (a city or landmark several names contain), return ALL of those trips, certainty "several". Code checks their dates, length and transport against the full catalog. Do not discard a trip because its departure is not in the short next-departures list.
 4. No place in the message: a follow-up ("үнэ хэд вэ", "хүүхэд хэд вэ", "1.5 настай", "цаг агаар", "тэр", "нь", a date, ages, a head count, a hotel question, a transport wish such as "нэг талдаа нисэх", "авъя"/"avi"/"захиалъя") is about the trip in focus — the one the bot's last reply was about, or ALL trips of the bot's last list — and any requirement it states applies to those trips. A bare number or "2." after the bot listed trips picks that item.
 4b. Two destinations joined by "болон", "ба", "bolon", "," or "+" that NO single trip covers together → the trips of BOTH destinations, certainty "several".
 5. A question about a KIND of trip with no place ("сурагчдын амралтаар", "далайн эрэг", "хүүхэдтэй") → the trips whose names show that kind, certainty "several", intent "catalog".
@@ -108,6 +116,7 @@ export function buildUnderstandingPrompt(input: {
   history: UnderstandingHistory;
   trips: TravelTrip[];
   pendingTripIds?: string[];
+  selection?: TripSelection | null;
   now?: Date;
 }): { system: string; user: string; keys: Map<string, TravelTrip> } {
   const now = input.now ?? new Date();
@@ -137,6 +146,7 @@ export function buildUnderstandingPrompt(input: {
     "Conversation so far:",
     ...(recent.length ? recent : ["(none)"]),
     ...(pending.length ? ["", `Bot's last numbered trip list, in order: ${pending.map((key, i) => `${i + 1}=${key}`).join(", ")}`] : []),
+    ...(input.selection && keyOf.has(input.selection.tripId) ? ["", `Selected offer: ${JSON.stringify({ ...input.selection, tripId: keyOf.get(input.selection.tripId) })}`] : []),
     "",
     `Customer's new message: ${input.text.trim()}`,
   ].join("\n");
@@ -150,7 +160,8 @@ function parseDays(value: unknown): [number, number] | null {
   return [Math.min(...nums), Math.max(...nums)];
 }
 
-const isYmd = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+const isYmd = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)
+  && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 
 function daysBetween(from: string, to: string): string[] {
   const out: string[] = [];
@@ -264,7 +275,11 @@ export function interpretUnderstanding(raw: string, keys: Map<string, TravelTrip
 
   const certainty: Understanding["certainty"] =
     fitting.length === 0 ? "none" : fitting.length === 1 ? "one" : "several";
-  return { intent, place, trips: fitting, certainty, date, range, month, days, transport, unmet, unknownRequirement, unknownDestination };
+  const topics = Array.isArray(parsed.topics) ? parsed.topics.filter((topic): topic is TripTopic => TRIP_TOPICS.includes(topic as TripTopic)) : [];
+  const hotel = typeof parsed.hotel === "string" ? parsed.hotel.trim().slice(0, 160) || null : null;
+  const packageName = typeof parsed.package === "string" ? parsed.package.trim().slice(0, 160) || null : null;
+  const passengers = parseRequestedPassengers(parsed.passengers);
+  return { intent, topics, hotel, package: packageName, passengers, place, trips: fitting, certainty, date, range, month, days, transport, unmet, unknownRequirement, unknownDestination };
 }
 
 const TRANSPORT_LABEL: Record<Transport, string> = {
@@ -325,6 +340,7 @@ export async function understandTripMessage(input: {
   history: UnderstandingHistory;
   trips: TravelTrip[];
   pendingTripIds?: string[];
+  selection?: TripSelection | null;
   ask: AskJson;
   now?: Date;
 }): Promise<Understanding | null> {
@@ -332,7 +348,18 @@ export async function understandTripMessage(input: {
   if (keys.size === 0) return null;
   const raw = await input.ask(system, user).catch(() => null);
   if (!raw) return null;
-  return interpretUnderstanding(raw, keys, input.now);
+  let groundedRaw = raw;
+  // A follow-up retains an explicit selected ID even when a sibling shares its title.
+  if (input.selection && !input.pendingTripIds?.length) {
+    try {
+      const parsed = JSON.parse(raw.replace(/^```(?:json)?\s*|```\s*$/g, ""));
+      const selectedKey = [...keys].find(([, trip]) => trip.id === input.selection?.tripId)?.[0];
+      if (selectedKey && !parsed.place && parsed.intent === "trip") {
+        groundedRaw = JSON.stringify({ ...parsed, trips: [selectedKey] });
+      }
+    } catch { /* Invalid JSON is rejected by the parser below. */ }
+  }
+  return interpretUnderstanding(groundedRaw, keys, input.now);
 }
 
 /** True when trip understanding should run (it can be switched off without a deploy). */

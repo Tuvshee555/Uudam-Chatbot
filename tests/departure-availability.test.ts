@@ -49,3 +49,11 @@ test("all future departures full closes the customer trip; reopening restores it
   assert.deepEqual(withBookableDepartureDates(full, new Date("2027-10-01")).departure_dates, []);
   assert.equal(withBookableDepartureDates(trip, new Date("2027-10-01")).status, "active");
 });
+
+test("paused departures never become a false sold-out claim", () => {
+  const paused = { ...trip, extra: { website_departure_availability: [
+    { date: "2027-10-08", status: "PAUSED", seatsLeft: null },
+    { date: "2027-10-15", status: "PAUSED", seatsLeft: null },
+  ] } };
+  assert.equal(withBookableDepartureDates(paused, new Date("2027-10-01")).status, "paused");
+});

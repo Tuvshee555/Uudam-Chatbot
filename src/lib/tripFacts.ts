@@ -1,10 +1,8 @@
 import type { TravelTrip } from "./travelTypes";
-import { parseDepartureDateText, tripDepartsInMonth, tripMatchesRequestedDate } from "./travelDates";
-import { getGroupDateTexts } from "./travelFastPathsPricing";
+import { tripDepartsInMonth, tripMatchesRequestedDate } from "./travelDates";
+import { departureAvailability } from "./departureAvailability";
+import { normalizeTripOffers as canonicalOffers, resolveTripOffer, type OfferFare, type PassengerKind, type TripOfferSelection } from "./tripOffers";
 import {
-  getPriceGroups,
-  getStructuredDiscounts,
-  getStructuredPriceGroups,
   normText,
   tripDurationDays,
   tripIsCruise,
@@ -45,6 +43,8 @@ function tripText(trip: TravelTrip): string {
 
 /** Transport is unknown unless the catalog contains affirmative evidence. */
 export function tripTransport(trip: TravelTrip): TripTransport | null {
+  const structured = trip.extra?.transport_type;
+  if (["direct_flight", "land", "land_flight", "cruise"].includes(String(structured))) return structured as TripTransport;
   const text = tripText(trip);
   const combo = tripIsLandFlightCombo(trip);
   const cruise = tripIsCruise(trip);
@@ -63,6 +63,11 @@ export function evaluateTripRequirement(
   requirement: TripRequirement,
   now = new Date(),
 ): FactState {
+  // A closed departure is still scheduled; booking eligibility is resolved
+  // separately by tripOffers, even after a caller strips bookable dates.
+  const schedule = { ...trip, departure_dates: [...new Set([
+    ...(trip.departure_dates || []), ...departureAvailability(trip).map((entry) => entry.date),
+  ])] };
   switch (requirement.kind) {
     case "transport": {
       const actual = tripTransport(trip);
@@ -73,106 +78,35 @@ export function evaluateTripRequirement(
       return tripMatchesRequestedDuration(trip, requirement.days) ? "match" : "contradiction";
     }
     case "date":
-      if ((trip.departure_dates || []).length === 0) return "unknown";
-      return tripMatchesRequestedDate(trip, requirement.date, now) ? "match" : "contradiction";
+      if (schedule.departure_dates.length === 0) return "unknown";
+      return tripMatchesRequestedDate(schedule, requirement.date, now) ? "match" : "contradiction";
     case "range":
-      if ((trip.departure_dates || []).length === 0) return "unknown";
-      return requirement.dates.some((date) => tripMatchesRequestedDate(trip, date, now))
+      if (schedule.departure_dates.length === 0) return "unknown";
+      return requirement.dates.some((date) => tripMatchesRequestedDate(schedule, date, now))
         ? "match"
         : "contradiction";
     case "month":
-      if ((trip.departure_dates || []).length === 0) return "unknown";
-      return tripDepartsInMonth(trip, requirement.month, now) ? "match" : "contradiction";
+      if (schedule.departure_dates.length === 0) return "unknown";
+      return tripDepartsInMonth(schedule, requirement.month, now) ? "match" : "contradiction";
   }
 }
 
-function addPrice(target: Set<number>, value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value) && value >= 1_000) {
-    target.add(Math.round(value));
-  }
+function fareAmounts(fare: OfferFare): number[] {
+  if (fare.kind === "unknown") return [];
+  return fare.kind === "range" ? [fare.min, fare.max] : [fare.amount];
 }
 
-function pricesFromRecord(record: Record<string, unknown>): Set<number> {
-  const prices = new Set<number>();
-  for (const key of ["adult_price", "child_price", "infant_price", "single_price", "price", "amount"]) {
-    addPrice(prices, record[key]);
-  }
-  const range = record.adult_price_range;
-  if (range && typeof range === "object") {
-    addPrice(prices, (range as Record<string, unknown>).min);
-    addPrice(prices, (range as Record<string, unknown>).max);
-  }
-  for (const key of ["passenger_prices", "child_rules", "child_price_rules"]) {
-    const entries = record[key];
-    if (!Array.isArray(entries)) continue;
-    for (const entry of entries) {
-      if (entry && typeof entry === "object") {
-        for (const price of pricesFromRecord(entry as Record<string, unknown>)) prices.add(price);
-      }
-    }
-  }
-  return prices;
-}
-
-function groupDates(group: Record<string, unknown>, now: Date): string[] {
-  const dates = new Set<string>();
-  for (const text of getGroupDateTexts(group)) {
-    for (const ymd of parseDepartureDateText(text, now)) dates.add(ymd);
-  }
-  return [...dates];
-}
-
-function groupOffer(
-  group: Record<string, unknown>,
-  source: NormalizedOffer["source"],
-  now: Date,
-): NormalizedOffer {
-  return {
-    source,
-    dates: groupDates(group, now),
-    hotel: typeof group.hotel === "string" && group.hotel.trim() ? group.hotel.trim() : null,
-    prices: pricesFromRecord(group),
-  };
-}
-
-/** One normalized view over all current price representations. */
+/** Compatibility view; passenger identity remains available in tripOffers. */
 export function normalizeTripOffers(trip: TravelTrip, now = new Date()): NormalizedOffer[] {
-  const extra = (trip.extra || {}) as Record<string, unknown>;
-  const base = new Set<number>();
-  addPrice(base, trip.adult_price);
-  addPrice(base, trip.child_price);
-  addPrice(base, trip.infant_price);
-  const range = extra.adult_price_range;
-  if (range && typeof range === "object") {
-    addPrice(base, (range as Record<string, unknown>).min);
-    addPrice(base, (range as Record<string, unknown>).max);
-  }
-  for (const key of ["child_rules", "child_price_rules", "room_prices"]) {
-    const entries = extra[key];
-    if (!Array.isArray(entries)) continue;
-    for (const entry of entries) {
-      if (!entry || typeof entry !== "object") continue;
-      for (const price of pricesFromRecord(entry as Record<string, unknown>)) base.add(price);
-    }
-  }
-
-  const offers: NormalizedOffer[] = [{ source: "base", dates: [], hotel: trip.hotel || null, prices: base }];
-  const priceGroups = [
-    ...getStructuredPriceGroups(trip),
-    ...(getPriceGroups(trip) as Array<Record<string, unknown>>),
-  ];
-  for (const group of priceGroups) offers.push(groupOffer(group, "price_group", now));
-  const legacyDiscounts = Array.isArray(extra.discount_groups)
-    ? (extra.discount_groups as Array<Record<string, unknown>>)
-    : [];
-  for (const group of [...getStructuredDiscounts(trip), ...legacyDiscounts]) {
-    offers.push(groupOffer(group, "discount", now));
-  }
-  return offers;
-}
-
-function sameMonthDay(left: string, right: string): boolean {
-  return left.length >= 10 && right.length >= 10 && left.slice(5) === right.slice(5);
+  return canonicalOffers(trip, now).filter((offer) => !offer.discount || offer.discount.active).map((offer) => ({
+    source: offer.source === "legacy" ? "price_group" : offer.source,
+    dates: offer.source === "base" ? [] : offer.dates,
+    hotel: offer.hotel,
+    prices: new Set([
+      ...offer.fares.filter((fare) => fare.issues.length === 0).flatMap((fare) => fareAmounts(fare.fare)),
+      ...offer.supplementalFares.flatMap((fare) => fareAmounts(fare.fare)),
+    ]),
+  }));
 }
 
 /** Prices valid for a specific departure, or all quotable prices without one. */
@@ -191,27 +125,40 @@ export function quotablePrices(
   if (!date) {
     return new Set(hotelScoped.flatMap((offer) => [...offer.prices]));
   }
-  const dated = hotelScoped.filter(
-    (offer) => offer.dates.length > 0 && offer.dates.some((ymd) => sameMonthDay(ymd, date)),
-  );
-  if (dated.length === 0) return new Set(offers[0]?.prices || []);
+  const selected = resolveTripOffer(trip, { date, hotel }, now);
+  const selectedPrices = (result: ReturnType<typeof resolveTripOffer>): number[] => {
+    if (result.status !== "ready") return [];
+    const sourceIds = new Set([...result.offer.sourceOfferIds, result.offer.id]);
+    return [
+      ...result.offer.fares.flatMap((fare) => fareAmounts(fare.fare)),
+      ...canonicalOffers(trip, now).filter((offer) => sourceIds.has(offer.id)).flatMap((offer) => offer.supplementalFares.flatMap((fare) => fareAmounts(fare.fare))),
+    ];
+  };
+  if (selected.status === "ready") return new Set(selectedPrices(selected));
+  if (selected.status === "needs_selection" && selected.fields.includes("hotel")) {
+    return new Set(selected.options.flatMap((option) => {
+      const named = resolveTripOffer(trip, { date, hotel: option }, now);
+      return selectedPrices(named.status === "unavailable" ? resolveTripOffer(trip, { date, hotelId: option }, now) : named);
+    }));
+  }
+  return new Set();
+}
 
-  const prices = new Set<number>();
-  for (const offer of dated) for (const price of offer.prices) prices.add(price);
-  // Infant/age/room tiers are often trip-wide and omitted from each date row.
-  const extra = (trip.extra || {}) as Record<string, unknown>;
-  for (const key of ["child_rules", "child_price_rules", "room_prices"]) {
-    const entries = extra[key];
-    if (!Array.isArray(entries)) continue;
-    for (const entry of entries) {
-      if (!entry || typeof entry !== "object") continue;
-      for (const price of pricesFromRecord(entry as Record<string, unknown>)) prices.add(price);
-    }
-  }
-  if (![...dated].some((offer) => [...offer.prices].includes(trip.infant_price || -1))) {
-    addPrice(prices, trip.infant_price);
-  }
-  return prices;
+/** Category-aware validator: an adult amount cannot validate a child claim. */
+export function isTripOfferPrice(
+  trip: TravelTrip,
+  selection: TripOfferSelection,
+  kind: PassengerKind,
+  amount: number,
+  now = new Date(),
+): boolean {
+  if (!Number.isFinite(amount)) return false;
+  const result = resolveTripOffer(trip, selection, now);
+  if (result.status !== "ready") return false;
+  const fares = selection.passengers?.length
+    ? result.offer.passengerPrices.filter((p) => p.kind === kind).map((p) => p.fare)
+    : result.offer.fares.filter((f) => f.kind === kind).map((f) => f.fare);
+  return fares.some((fare) => fare.kind === "range" ? amount >= fare.min && amount <= fare.max : fare.kind !== "unknown" && fare.amount === amount);
 }
 
 export function mentionedOfferHotel(trip: TravelTrip, text: string, now = new Date()): string | null {

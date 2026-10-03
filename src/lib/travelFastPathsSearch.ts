@@ -1335,20 +1335,21 @@ export function queryRequestsDurationDays(query: string): [number, number] | nul
 
 /** "8 өдөр 7 шөнө" / "5 шөнө / 6 өдөр" → 8 / 6. Null when unparseable. */
 export function tripDurationDays(trip: TravelTrip): number | null {
+  const structured = trip.extra?.duration_days;
+  if (typeof structured === "number" && Number.isInteger(structured) && structured > 0) return structured;
   const text = trip.duration_text || "";
   const match = /(\d{1,2})\s*өдөр/.exec(text);
   return match ? Number(match[1]) : null;
 }
 
 /**
- * Within ±1 day of what the customer asked ("5-6 хоногт" also fits a 7-day
- * tour, a human travel agent would mention it too) — strict equality would
- * turn "around a week" into a dead end on a catalog with sparse lengths.
+ * Stated duration requirements are exact. Nearby tours may be suggested as
+ * alternatives, but cannot be returned as satisfying this requirement.
  */
 export function tripMatchesRequestedDuration(trip: TravelTrip, range: [number, number]): boolean {
   const days = tripDurationDays(trip);
   if (days == null) return false;
-  return days >= range[0] - 1 && days <= range[1] + 1;
+  return days >= range[0] && days <= range[1];
 }
 
 function hasDisambiguatingModifier(query: string): boolean {
@@ -1545,6 +1546,8 @@ function routeContentTokens(query: string): string[] {
 
 // Whether a trip is a land+flight combo based on its category or name.
 export function tripIsLandFlightCombo(trip: TravelTrip): boolean {
+  const structured = trip.extra?.transport_type;
+  if (["direct_flight", "land", "land_flight", "cruise"].includes(String(structured))) return structured === "land_flight";
   const haystack = normText(
     [
       trip.category || "",
@@ -1582,6 +1585,8 @@ function tripMatchesLandFlightComboIntent(trip: TravelTrip): boolean {
 }
 
 function tripIsLandOnly(trip: TravelTrip): boolean {
+  const structured = trip.extra?.transport_type;
+  if (["direct_flight", "land", "land_flight", "cruise"].includes(String(structured))) return structured === "land";
   if (tripIsLandFlightCombo(trip)) return false;
   const haystack = normText(
     [
@@ -1603,6 +1608,8 @@ function tripIsLandOnly(trip: TravelTrip): boolean {
 }
 
 export function tripIsDirectFlight(trip: TravelTrip): boolean {
+  const structured = trip.extra?.transport_type;
+  if (["direct_flight", "land", "land_flight", "cruise"].includes(String(structured))) return structured === "direct_flight";
   if (tripIsLandFlightCombo(trip)) return false;
   const haystack = normText(
     [
@@ -1638,6 +1645,8 @@ export function filterTripsByTransportIntent(text: string, trips: TravelTrip[]):
 }
 
 export function tripIsCruise(trip: TravelTrip): boolean {
+  const structured = trip.extra?.transport_type;
+  if (["direct_flight", "land", "land_flight", "cruise"].includes(String(structured))) return structured === "cruise";
   const category = normText(trip.category || "");
   const name = normText(trip.route_name);
   return (

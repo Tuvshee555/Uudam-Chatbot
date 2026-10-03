@@ -2,7 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 import { queryNeon, withNeonClient } from "./neonDb";
 import { ensureConnectedTripSchema } from "./connectedTripStore";
-import { duration, posterPhotos, record, records, strings, websiteDepartures, websiteExtraDetails, websiteMarketingBadge } from "./connectedTripMapping";
+import { duration, posterPhotos, record, records, strings, websiteDepartureSchedule, websiteExtraDetails, websiteMarketingBadge } from "./connectedTripMapping";
+import { websiteAvailabilityForResync, websiteTripPayload } from "./websiteTripPayload";
 import { getEnv } from "./env";
 import { getPosterPdfPublicUrl } from "./poster/pdfUrl";
 import { classifyTripCategory } from "./tripCategorization";
@@ -25,7 +26,7 @@ export async function withWebsiteDepartureAvailability(trips: TravelTrip[]): Pro
   if (!process.env.BOOKING_DATABASE_URL || !trips.length) return trips;
   try {
     const [departureResult, slugResult] = await Promise.all([
-      bookingPool().query(`SELECT t."sourceTripId", d."startDate", d.status, d."seatsLeft"
+      bookingPool().query(`SELECT t."sourceTripId", t."sourceMetadata", d."startDate", d.status, d."seatsLeft"
         FROM "Trip" t JOIN "Departure" d ON d."tripId"=t.id
         WHERE t."sourceTripId"=ANY($1::text[])`, [trips.map((trip) => trip.id)]),
       // The bot sends the live website page instead of the PDF; the slug is
@@ -37,7 +38,10 @@ export async function withWebsiteDepartureAvailability(trips: TravelTrip[]): Pro
     const byTrip = new Map<string, Array<{ date: string; status: string; seatsLeft: number | null }>>();
     for (const row of departureResult.rows) {
       const entries = byTrip.get(row.sourceTripId) || [];
-      entries.push({ date: new Date(new Date(row.startDate).getTime() + 8 * 3600000).toISOString().slice(0, 10), status: row.status, seatsLeft: row.seatsLeft });
+      entries.push(websiteAvailabilityForResync({
+        date: new Date(new Date(row.startDate).getTime() + 8 * 3600000).toISOString().slice(0, 10),
+        status: row.status, seatsLeft: row.seatsLeft,
+      }, record(row.sourceMetadata).canonicalOffers));
       byTrip.set(row.sourceTripId, entries);
     }
     const slugByTrip = new Map<string, { slug: string; isPublished: boolean }>();
@@ -128,12 +132,32 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   const d = duration(source.duration_text);
   const photos = [...new Set([...posterPhotos(poster), ...source.photo_urls])];
   const previousSnapshot = record(record(prior?.sourceMetadata).connectedSource);
+  const now = new Date();
+  const oldDepartures = (await client.query(`SELECT * FROM "Departure" WHERE "tripId"=$1`, [id])).rows;
+  const seatsChanged = !prior || (Object.keys(previousSnapshot).length > 0 &&
+    (previousSnapshot.seats_total !== source.seats_total || previousSnapshot.seats_left !== source.seats_left));
+  const reopened = ["cancelled", "sold_out", "paused"].includes(String(previousSnapshot.status)) && source.status === "active";
+  const liveSource: TravelTrip = { ...source, extra: { ...source.extra,
+    website_departure_availability: oldDepartures.map(departure => {
+      const availability = websiteAvailabilityForResync({
+        date: new Date(new Date(departure.startDate).getTime() + 8 * 3600000).toISOString().slice(0, 10),
+        status: departure.status, seatsLeft: departure.seatsLeft,
+      }, record(prior?.sourceMetadata).canonicalOffers);
+      return { ...availability,
+        status: reopened ? "OPEN" : availability.status,
+        seatsLeft: seatsChanged ? source.seats_left : availability.seatsLeft,
+      };
+    }),
+  } };
+  const offering = websiteTripPayload(liveSource, websiteDepartureSchedule(source, now), now);
   const hadSourcePhotos = strings(previousSnapshot.photos).length > 0;
   const image = photos[0] || (hadSourcePhotos ? "" : prior?.image || "");
   const pdf = getPosterPdfPublicUrl(String(source.extra.poster_trip_id));
   if (!pdf) throw new Error("SITE_URL is required for the shared poster PDF");
   const marketingBadge = websiteMarketingBadge(source);
-  const metadata = { ...record(prior?.sourceMetadata), ...source.extra, marketingBadge, connectedSource: { ...source, photos, poster, marketingBadge } };
+  const metadata = { ...record(prior?.sourceMetadata), ...source.extra,
+    price_groups: offering.priceGroups, canonicalOffers: offering.canonicalOffers,
+    marketingBadge, connectedSource: { ...source, photos, poster, marketingBadge } };
   // Never override a category staff picked by hand — only classify a trip
   // that has none yet (a brand-new sync, or one that predates this feature).
   const categoryId = prior?.categoryId
@@ -164,8 +188,8 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
     hasPriorTrip: Boolean(prior), freshHash: contentHash, priorHash: priorContentHash,
     priorUpdatedAt: prior?.updatedAt, priorLastSyncedAt: prior?.lastSyncedAt,
   });
-  const sourcePriceFields = websiteExtraDetails(source.extra, {
-    adult: source.adult_price, child: source.child_price, infant: source.infant_price ?? null,
+  const sourcePriceFields = websiteExtraDetails({ ...source.extra, age_rules: offering.ageRules, price_groups: offering.priceGroups }, {
+    adult: offering.price, child: offering.childPrice, infant: offering.infantPrice,
     currency: source.currency || "MNT",
   });
   const contentFields: Record<string, unknown> = staffEditedSinceLastSync
@@ -179,8 +203,9 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
     // Price tiers are transactional data from the poster, not editable sell
     // copy. Keep them current even when a website editor's copy is protected.
     ...sourcePriceFields,
-    durationDays: d.days, durationNights: d.nights, price: source.adult_price ?? 0,
-    childPrice: source.child_price, infantPrice: source.infant_price ?? null,
+    durationDays: source.extra.duration_days ?? d.days, durationNights: source.extra.duration_nights ?? d.nights,
+    price: offering.price ?? 0,
+    childPrice: offering.childPrice, infantPrice: offering.infantPrice,
     currency: source.currency || "MNT",
     foodIncluded: source.has_food,
     departureRule: source.extra.departure_rule || null,
@@ -220,29 +245,22 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
       [meals.breakfast ? "Өглөө" : "", meals.lunch ? "Өдөр" : "", meals.dinner ? "Орой" : ""].filter(Boolean), day.photo || null]);
   }
   await client.query(`DELETE FROM "ItineraryDay" WHERE "tripId"=$1 AND NOT ("dayNumber"=ANY($2::int[]))`, [id, dayNumbers]);
-  const oldDepartures = (await client.query(`SELECT * FROM "Departure" WHERE "tripId"=$1`, [id])).rows;
   const keep: string[] = [];
-  for (const dep of websiteDepartures(source)) {
+  for (const dep of offering.departures) {
     const old = oldDepartures.find(row => new Date(new Date(row.startDate).getTime() + 8 * 3600000).toISOString().slice(0, 10) === dep.start.slice(0, 10));
     const depId = old?.id || randomUUID();
     keep.push(depId);
-    const seatsChanged = !prior || (Object.keys(previousSnapshot).length > 0 &&
-      (previousSnapshot.seats_total !== source.seats_total || previousSnapshot.seats_left !== source.seats_left));
-    const reopened = ["cancelled", "sold_out", "paused"].includes(String(previousSnapshot.status)) && source.status === "active";
-    const status = source.status === "cancelled" ? "CANCELLED"
-      : source.status === "sold_out" ? "SOLD_OUT"
-      : source.status === "paused" ? "PAUSED"
-      : reopened ? "OPEN" : old?.status || "OPEN";
+    const status = dep.status;
     if (old) {
       await client.query(`UPDATE "Departure" SET label=$2,"endDate"=$3,status=$4::"DepartureStatus",
         "seatsTotal"=$5,"seatsLeft"=$6,price=$7,"childPrice"=$8,"infantPrice"=$9 WHERE id=$1`,
         [depId, dep.label, dep.end, status,
-        seatsChanged ? source.seats_total : old.seatsTotal, seatsChanged ? source.seats_left : old.seatsLeft,
+        seatsChanged ? source.seats_total : old.seatsTotal, dep.seatsLeft,
         dep.price ?? null, dep.childPrice ?? null, dep.infantPrice ?? null]);
     } else {
       await client.query(`INSERT INTO "Departure" (id,"tripId",label,"startDate","endDate","seatsTotal","seatsLeft",price,"childPrice","infantPrice",status)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::"DepartureStatus")`,
-        [depId,id,dep.label,dep.start,dep.end,source.seats_total,source.seats_left,
+        [depId,id,dep.label,dep.start,dep.end,source.seats_total,dep.seatsLeft,
         dep.price ?? null, dep.childPrice ?? null, dep.infantPrice ?? null,status]);
     }
   }

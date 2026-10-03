@@ -8,7 +8,7 @@ import {
   rateLimitAsync,
 } from "../../lib/rateLimit";
 import { readBusinessData } from "../../lib/businessData";
-import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone } from "../../lib/conversation";
+import { appendMessage as appendConversationMessage, buildPromptParts, getHistory, hasAskedForPhone } from "../../lib/conversation";
 import { buildContextualUserText } from "../../lib/contextualText";
 import { isLikelyCatalogMaintenanceText } from "../../lib/customerTextClassification";
 import { isKnownGreetingPhrase, isThanksOnly, MID_CONVERSATION_GREETING_REPLY, THANKS_REPLY } from "../../lib/greetingPhrases";
@@ -19,6 +19,10 @@ import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { notInCatalogReply, tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
+import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
+import { verifyTripReply } from "../../lib/tripReplyVerification";
+import type { TripSelection } from "../../lib/tripRequest";
+import type { TravelTrip } from "../../lib/travelTypes";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
@@ -230,6 +234,29 @@ export default async function handler(
       // booking nudge) instead of silently diverging into the model.
       const botSettings = await getTravelBotSettings();
       const sessionId = `demo:${normalizedConversationId}`;
+      let factualScope: TravelTrip[] | null = null;
+      let currentSelection: TripSelection | null = null;
+      let approvedPlanReply: string | null = null;
+      const checkedReply = (reply: string) => factualScope && reply !== approvedPlanReply
+        ? verifyTripReply({ reply, trips: factualScope, selection: currentSelection }) : reply;
+      const appendMessage = (...args: Parameters<typeof appendConversationMessage>) => {
+        if (args[1] === "assistant") {
+          args[2] = checkedReply(args[2]);
+          if (isReferReply(args[2])) {
+            args[2] = buildHandoffAcknowledgement();
+            args[3] = undefined;
+          }
+        }
+        return appendConversationMessage(...args);
+      };
+      const sendJson = res.json.bind(res);
+      res.json = (body) => {
+        if (body && typeof body.reply === "string" && isReferReply(checkedReply(body.reply))) {
+          recordCounter("demo.factual_reply_rejected_total", 1, {});
+          return sendJson({ reply: buildHandoffAcknowledgement(), buttons: [], mediaUrls: [], brochureUrl: null, handoff: true });
+        }
+        return sendJson(body);
+      };
       const history = await getHistory(sessionId);
       const detectedPhone = extractPhoneNumber(normalizedText);
       const phoneCollected =
@@ -386,10 +413,14 @@ export default async function handler(
           history,
           trips: await getTrips(),
           understand: tripUnderstandingEnabled()
-            ? async (pendingTripIds) =>
-                understandTripMessage({ text: normalizedText, history, trips: await getTrips(), pendingTripIds, ask: understandingModel(trace) })
+            ? async (pendingTripIds, selection) =>
+                understandTripMessage({ text: normalizedText, history, trips: await getTrips(), pendingTripIds, selection, ask: understandingModel(trace) })
             : undefined,
         });
+        currentSelection = routedCache.selection || null;
+        factualScope = routedCache.chosenTripId
+          ? (await getTrips()).filter((trip) => trip.id === routedCache?.chosenTripId)
+          : routedCache.scopedClarify || routedCache.understanding?.trips || [];
         return routedCache;
       };
       const getFastPathText = async (): Promise<string> => (await getRouted()).matchText;
@@ -451,6 +482,21 @@ export default async function handler(
       // Compare questions mention multiple destinations on purpose. Let the
       // comparison fast path answer before scoped clarification narrows to one
       // destination family and turns "A уу B уу?" into "which A variant?".
+      {
+        const route = await getRouted();
+        const plan = await buildTripAnswerRuntime({ text: normalizedText, trips: await getTrips(), route });
+        if (plan) {
+          const reply = enforceWebsiteForPayment(sanitizeAssistantReply(plan.reply));
+          approvedPlanReply = reply;
+          await appendMessage(sessionId, "user", normalizedText);
+          if (plan.status === "handoff") return returnHandoff();
+          await appendMessage(sessionId, "assistant", reply, imageAttachments(plan.mediaUrls));
+          await rememberTurn();
+          recordCounter("demo.answer_plan_total", 1, { status: plan.status });
+          if (plan.missingTopics.length) recordCounter("demo.answer_plan_missing_topics_total", plan.missingTopics.length, {});
+          return res.status(200).json({ reply, buttons: plan.status === "clarify" ? [] : buildSmartButtons(reply, factualScope || []) || [], mediaUrls: plan.mediaUrls, brochureUrl: plan.brochureUrl });
+        }
+      }
       if (hasCompareIntent(intentText)) {
         const trips = await getTrips();
         const compareReply = buildCompareReply(await getFastPathText(), trips);
@@ -532,6 +578,7 @@ export default async function handler(
           resolveTripFromUserMessage(await getFastPathText(), await getTrips(), { allowLooseFallback: false }).status === "not_found"
         );
         if (soldOutReply || listingApplies) {
+          if (listingApplies) factualScope = listing!.listed;
           if (listingApplies && listing!.listed.length > 0) {
             await setClarificationState(sessionId, listing!.listed.map((trip) => trip.id));
           }
@@ -957,7 +1004,7 @@ export default async function handler(
         });
         aiReplyText = fallbackText || "REFER";
       }
-      const guardCandidateTrips = reasoningTrips.filter((trip) => relevantTripNames.includes(trip.route_name));
+      const guardCandidateTrips = factualScope || reasoningTrips.filter((trip) => relevantTripNames.includes(trip.route_name));
       const rawFixed = guardInventedBookingTerms(
         fixMojibake(aiReplyText),
         promptParts.user,
@@ -994,7 +1041,8 @@ export default async function handler(
         guardCandidateTrips,
         normalizedText,
       );
-      const reply = isEnglishDemo ? localizeEnglishDemoReply(priceCheckedReply) : priceCheckedReply;
+      const verifiedReply = verifyTripReply({ reply: priceCheckedReply, trips: guardCandidateTrips, selection: currentSelection });
+      const reply = isEnglishDemo ? localizeEnglishDemoReply(verifiedReply) : verifiedReply;
       if (shouldHandoffSilently(reply)) return returnHandoff();
       // Wrong-trip guard (mirrors the webhook): asked about trip A, model priced
       // a different destination → silent handoff instead of a confident wrong answer.

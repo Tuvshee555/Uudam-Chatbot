@@ -16,6 +16,7 @@ import { POSTER_PHOTO_COUNT_SQL } from "../../../lib/poster/photoCount";
 import { queryNeon } from "../../../lib/neonDb";
 import { getTripById } from "../../../lib/travelDb";
 import type { TravelTrip } from "../../../lib/travelTypes";
+import { auditTripCatalog, auditTripFacts, TripDataValidationError } from "../../../lib/tripDataValidation";
 
 function asText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -76,6 +77,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const allowed = await requireAdminAccess(req, res, "api.admin.trips");
     if (!allowed) return;
 
+    if (req.method === "GET" && asText(req.query.action) === "fact-audit") {
+      // Raw SELECT only: listTrips/getTripById bootstrap schemas and maintain schedules.
+      const rows = await queryNeon<Record<string, unknown>>(
+        "SELECT * FROM travel_trip_entries ORDER BY id",
+      );
+      if (!rows) return res.status(503).json({ error: "Database is not configured; catalog facts could not be audited." });
+      return res.status(200).json({ ok: true, factAudit: auditTripCatalog(rows.rows) });
+    }
+
     if (req.method === "GET") {
       const search = asText(req.query.search);
       const status = asText(req.query.status);
@@ -97,12 +107,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await ensureConnectedTripSchema();
       const connections = new Map((await websiteSyncStatus()).map(row => [row.trip_id, row]));
       const posterPhotoCounts = await posterPhotoCountsByTrip();
+      const rawTrips = trips.length ? await queryNeon<Record<string, unknown>>(
+        "SELECT * FROM travel_trip_entries WHERE id = ANY($1::text[])",
+        [trips.map(trip => trip.id)],
+      ) : null;
       return res.status(200).json({ ok: true, trips: trips.map(trip => ({ ...trip,
         extra: {
           ...trip.extra,
           website_sync: connections.get(trip.id) || null,
           poster_photo_count: posterPhotoCounts.get(trip.id) || 0,
-        } })), control });
+        } })), control, factAudit: auditTripCatalog(rawTrips?.rows || []) });
     }
 
     if (req.method === "POST") {
@@ -118,7 +132,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         fields,
       });
       if (!saved) return res.status(500).json({ error: "failed_to_save_trip" });
-      return res.status(200).json({ ok: true, trip: saved });
+      return res.status(200).json({ ok: true, trip: saved, factAudit: auditTripFacts(saved) });
     }
 
     if (req.method === "PATCH") {
@@ -138,7 +152,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       const saved = await patchTrip(id.trim(), fields);
       if (!saved) return res.status(404).json({ error: "trip_not_found_or_no_changes" });
-      return res.status(200).json({ ok: true, trip: saved });
+      return res.status(200).json({ ok: true, trip: saved, factAudit: auditTripFacts(saved) });
     }
 
     if (req.method === "DELETE") {
@@ -154,6 +168,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     return res.status(405).end();
+  } catch (error) {
+    if (error instanceof TripDataValidationError) return res.status(error.statusCode).json(error.toResponse());
+    throw error;
   } finally {
     finishRequestTrace(trace, res.statusCode || 500);
   }

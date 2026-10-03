@@ -1,6 +1,8 @@
 import type { TravelTrip } from "./travelTypes";
-import { generateDateKeys, parseTripDepartureDateText } from "./travelDates";
+import { parseTripDepartureDateText } from "./travelDates";
 import { formatPriceRange } from "./priceRange";
+import { websiteTripPayload } from "./websiteTripPayload";
+import { normalizeTripOffers } from "./tripOffers";
 
 export function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -28,6 +30,9 @@ export function tripToPoster(trip: TravelTrip, prior: unknown, before?: TravelTr
     const d = duration(trip.duration_text);
     data.duration_days = d.days;
     data.duration_nights = d.nights;
+  }
+  for (const key of ["destinations", "transport_type", "duration_days", "duration_nights"]) {
+    if (extraChanged(key) && trip.extra[key] !== undefined) data[key] = trip.extra[key];
   }
   if (changed("departure_dates")) data.departures = trip.departure_dates.map(date => ({ date }));
   if (changed("adult_price") || changed("child_price")) {
@@ -82,8 +87,9 @@ export function websiteExtraDetails(
   // field, not a real fare — same threshold the chatbot's own
   // formatPassengerMoney uses. Without this the website printed "Нярай - 1₮"
   // verbatim from data that was never meant to be a real price.
-  const money = (amount: unknown, currency: unknown) => typeof amount === "number" && Number.isFinite(amount) && amount >= 1000
-    ? `${amount.toLocaleString("en-US")}${!currency || currency === "MNT" ? "₮" : ` ${currency}`}` : "";
+  const money = (amount: unknown, currency: unknown, free = false) => amount === 0 && free ? "Үнэгүй"
+    : typeof amount === "number" && Number.isFinite(amount) && (currency && currency !== "MNT" ? amount > 0 : amount >= 1000)
+      ? `${amount.toLocaleString("en-US")}${!currency || currency === "MNT" ? "₮" : ` ${currency}`}` : "";
   const join = (items: unknown[]) => items.filter(v => typeof v === "string" && v.trim()).join(" - ");
   // The trip's own passenger tiers with their age bands come first, so the
   // website says exactly who is an infant/child/adult on THIS trip.
@@ -91,7 +97,10 @@ export function websiteExtraDetails(
   const band = (key: string) => (typeof bands[key] === "string" ? String(bands[key]).trim() : "");
   const tierLine = (label: string, ageBand: string, amount: number | null) => {
     if (!ageBand && amount == null) return "";
-    const fare = money(amount, fares?.currency);
+    const free = records(extra.price_groups).some(group => records(group.passenger_prices)
+      .some(price => price.price === 0 && /үнэгүй|free/i.test(String(price.note || ""))
+        && (label === "Нярай" ? /нярай|infant/i.test(String(price.label)) : label === "Хүүхэд" && /хүүхэд|child/i.test(String(price.label)))));
+    const fare = money(amount, fares?.currency, free);
     return join([`${label}${ageBand ? ` (${ageBand})` : ""}`, fare]);
   };
   const tierLines = fares
@@ -242,17 +251,15 @@ export function expandRecurringWeekday(text: string, now = new Date(), occurrenc
   return dates;
 }
 
-export function websiteDepartures(trip: TravelTrip, now = new Date()) {
+export function websiteDepartureSchedule(trip: TravelTrip, now = new Date()) {
   const resolved = records(trip.extra.departure_dates_resolved);
   const dates = new Map<string, {
     start: string;
     end: string;
     label: string;
-    price?: number | null;
-    childPrice?: number | null;
-    infantPrice?: number | null;
   }>();
-  const days = duration(trip.duration_text).days;
+  const days = typeof trip.extra.duration_days === "number" && Number.isInteger(trip.extra.duration_days) && trip.extra.duration_days > 0
+    ? trip.extra.duration_days : duration(trip.duration_text).days;
   const add = (ymd: string, label: string) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return;
     const start = new Date(`${ymd}T00:00:00Z`);
@@ -273,26 +280,15 @@ export function websiteDepartures(trip: TravelTrip, now = new Date()) {
     for (const ymd of expandRecurringWeekday(text, now)) add(ymd, text);
   }
 
-  for (const group of records(trip.extra.price_groups)) {
-    const groupKeys = new Set([
-      ...strings(group.date_keys),
-      ...strings(group.dates).flatMap((date) => generateDateKeys(date, now)),
-      ...strings(group.display_dates).flatMap((date) => generateDateKeys(date, now)),
-    ]);
-    if (groupKeys.size === 0) continue;
-    const adultPrice = typeof group.adult_price === "number" ? group.adult_price : null;
-    const childPrice = typeof group.child_price === "number" ? group.child_price : null;
-    const infantPrice = typeof group.infant_price === "number" ? group.infant_price : null;
-    for (const dep of dates.values()) {
-      const depYmd = dep.start.slice(0, 10);
-      const depKeys = new Set([depYmd, ...generateDateKeys(dep.label, now), ...generateDateKeys(depYmd, now)]);
-      if (![...depKeys].some((key) => groupKeys.has(key))) continue;
-      if (adultPrice != null && (dep.price == null || adultPrice < dep.price)) {
-        dep.price = adultPrice;
-        dep.childPrice = childPrice;
-        dep.infantPrice = infantPrice;
-      }
+  for (const offer of normalizeTripOffers(trip, now)) {
+    if (offer.source === "price_group" || offer.source === "legacy") {
+      for (const ymd of offer.dates) if (!dates.has(ymd)) add(ymd, ymd);
     }
   }
+
   return [...dates.values()].sort((a, b) => a.start.localeCompare(b.start));
+}
+
+export function websiteDepartures(trip: TravelTrip, now = new Date()) {
+  return websiteTripPayload(trip, websiteDepartureSchedule(trip, now), now).departures;
 }

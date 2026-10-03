@@ -621,10 +621,9 @@ export function tripMatchesRequestedDate(
 ): boolean {
   const requested = new Date(`${requestedYmd}T00:00:00`);
   if (Number.isNaN(requested.getTime())) return false;
-  const requestedMonthDay = requestedYmd.slice(5);
   for (const dateText of trip.departure_dates || []) {
     const ymds = tripDateYmds(trip, dateText, now);
-    if (ymds.some((ymd) => ymd.slice(5) === requestedMonthDay)) return true;
+    if (ymds.includes(requestedYmd)) return true;
     if (ymds.length === 0 && !/\d/.test(dateText)) {
       // Every weekday named counts: "Пүрэв, Ням гариг" is Thursdays AND
       // Sundays (only the first one found used to be checked).

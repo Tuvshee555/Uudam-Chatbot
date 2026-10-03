@@ -21,6 +21,7 @@ import {
   type ResolvedDepartureDate,
 } from "./travelDates";
 import { normalizeExtra, normalizeExtraPatch } from "./tripExtraSchema";
+import { assertValidTripDataChange, type TripFactInput } from "./tripDataValidation";
 import { formatPriceRange } from "./priceRange";
 import {
   normalizeTripName,
@@ -131,7 +132,7 @@ function coerceTripStatus(value: unknown): TripStatus {
   return "active";
 }
 
-export function cleanFields(input: TripMutationFields): TripMutationFields {
+export function cleanFields(input: TripMutationFields, preserveExplicitYears = false): TripMutationFields {
   const cleaned: TripMutationFields = {};
   if (typeof input.category === "string") cleaned.category = input.category.trim();
   if (typeof input.operator_name === "string") {
@@ -143,7 +144,7 @@ export function cleanFields(input: TripMutationFields): TripMutationFields {
     cleaned.currency = input.currency.trim().toUpperCase();
   }
   if (Array.isArray(input.departure_dates)) {
-    cleaned.departure_dates = expandMongolianDepartureDates(input.departure_dates)
+    cleaned.departure_dates = expandMongolianDepartureDates(input.departure_dates, preserveExplicitYears)
       .slice(0, 60);
   }
   if (input.adult_price === null || typeof input.adult_price === "number") {
@@ -185,7 +186,7 @@ export function cleanFields(input: TripMutationFields): TripMutationFields {
   return cleaned;
 }
 
-export function expandMongolianDepartureDates(values: unknown[]): string[] {
+export function expandMongolianDepartureDates(values: unknown[], preserveExplicitYears = false): string[] {
   const result: string[] = [];
   const add = (value: string) => {
     const cleaned = value.trim();
@@ -208,8 +209,13 @@ export function expandMongolianDepartureDates(values: unknown[]): string[] {
   };
 
   for (const rawValue of values) {
-    const value = fixHallucinatedYear(String(rawValue || "").trim());
+    const rawText = String(rawValue || "").trim();
+    const value = preserveExplicitYears ? rawText : fixHallucinatedYear(rawText);
     if (!value) continue;
+    if (preserveExplicitYears && /(?<!\d)\d{4}\s*(?:оны|он|year)/i.test(value)) {
+      add(value);
+      continue;
+    }
     const monthMatches = Array.from(
       value.matchAll(/(\d{1,2})\s*(?:-?р\s*)?сарын\s*/gi),
     );
@@ -1070,15 +1076,18 @@ export async function upsertTrip(input: {
   const ready = await ensureTravelSchema();
   if (!ready) return null;
 
-  const cleaned = cleanFields(input.fields);
-  if (input.id && await getTripById(input.id)) {
-    return patchTrip(input.id, cleaned, input.syncPoster !== false, input.posterWrite);
+  const cleaned = cleanFields(input.fields, true);
+  const requestedId = input.id?.trim();
+  // Read raw facts: getTripById performs schedule maintenance and overlays availability.
+  if (requestedId && (await queryNeon("SELECT id FROM travel_trip_entries WHERE id=$1", [requestedId]))?.rows[0]) {
+    return patchTrip(requestedId, input.fields, input.syncPoster !== false, input.posterWrite);
   }
+  assertValidTripDataChange(input.fields);
   const routeName = cleaned.route_name?.trim() || "";
   if (!routeName || /^\(?\s*нэргүй\s+аялал\s*\)?$/i.test(routeName)) {
     throw new Error("Аяллын нэр хоосон тул хадгалсангүй.");
   }
-  const id = input.id?.trim() || `trip-${randomUUID()}`;
+  const id = requestedId || `trip-${randomUUID()}`;
   const departureDatesForWrite = cleaned.departure_dates || [];
   const row: TravelTrip = {
     id,
@@ -1118,6 +1127,8 @@ export async function upsertTrip(input: {
     created_at: "",
     updated_at: "",
   };
+
+  assertValidTripDataChange(row);
 
   const result = await connectedTripMutation<Record<string, unknown>>(
     `
@@ -1202,23 +1213,36 @@ export async function patchTrip(id: string, fields: TripMutationFields, syncPost
   const ready = await ensureTravelSchema();
   if (!ready) return null;
 
-  const cleaned = cleanFields(fields);
+  const cleaned = cleanFields(fields, true);
+  if (!Object.keys(cleaned).length) return null;
+  const previous = (await queryNeon<Record<string, unknown>>("SELECT * FROM travel_trip_entries WHERE id=$1", [id]))?.rows[0];
+  if (!previous) return null;
+  const previousExtra = (previous.extra || {}) as Record<string, unknown>;
+  const incomingExtra = fields.extra || {};
+  const rawExtra = { ...previousExtra, ...incomingExtra };
+  // A supplied legacy group array replaces the canonical mirror too, as normalizeExtraPatch does.
+  if ("departure_date_groups" in incomingExtra && !("price_groups" in incomingExtra)) rawExtra.price_groups = incomingExtra.departure_date_groups;
+  // Old frozen dates are superseded when a schedule is replaced.
+  const scheduleChanged = Array.isArray(cleaned.departure_dates) && JSON.stringify(cleaned.departure_dates) !== JSON.stringify(previous.departure_dates);
+  if (scheduleChanged) delete rawExtra.departure_dates_resolved;
+  assertValidTripDataChange({ ...previous, ...fields, extra: rawExtra } as TripFactInput, previous);
   // Freeze write-time ISO dates whenever departure_dates changes. If the patch
   // only changed dates, merge just this metadata key into extra so existing AI
   // import metadata is not overwritten by normalizer defaults.
-  if (Array.isArray(cleaned.departure_dates)) {
+  if (scheduleChanged) {
     const resolvedDates = resolveDepartureDatesAtWrite(
       cleaned.departure_dates as string[],
     );
     if (cleaned.extra && typeof cleaned.extra === "object") {
-      (cleaned.extra as Record<string, unknown>).departure_dates_resolved =
-        resolvedDates;
+      cleaned.extra = { ...cleaned.extra, departure_dates_resolved: resolvedDates };
     } else {
       cleaned.extra = { departure_dates_resolved: resolvedDates };
     }
   }
   const keys = Object.keys(cleaned) as Array<keyof TripMutationFields>;
   if (!keys.length) return null;
+  const normalizedExtra = normalizeExtraPatch((cleaned.extra || {}) as Record<string, unknown>);
+  assertValidTripDataChange({ ...previous, ...cleaned, extra: { ...previousExtra, ...normalizedExtra } } as TripFactInput, previous);
 
   const columnMap: Record<keyof TripMutationFields, string> = {
     category: "category",
@@ -1250,8 +1274,7 @@ export async function patchTrip(id: string, fields: TripMutationFields, syncPost
     const column = columnMap[key];
     if (key === "extra") {
       // Normalise then merge into existing extra (preserves keys set by AI import)
-      const normalisedExtra = normalizeExtraPatch((cleaned[key] ?? {}) as Record<string, unknown>);
-      values.push(JSON.stringify(normalisedExtra));
+      values.push(JSON.stringify(normalizedExtra));
       sets.push(`${column} = COALESCE(${column}, '{}'::jsonb) || $${values.length}::jsonb`);
     } else if (JSONB_KEYS.has(key)) {
       values.push(JSON.stringify(cleaned[key] ?? []));

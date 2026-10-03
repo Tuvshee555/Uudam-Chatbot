@@ -18,6 +18,9 @@
     "qa:golden": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/golden-questions.mjs",
     "qa:current-catalog": "node --env-file=.env --env-file=.env.local --import tsx scripts/qa-current-catalog-demo.ts",
     "qa:real": "node scripts/replay-real-conversations.mjs",
+    "qa:accuracy": "node --import tsx scripts/chatbot-accuracy.ts",
+    "qa:accuracy:fixture": "node --import tsx scripts/chatbot-accuracy.ts --pipeline-fixture --require-pass",
+    "audit:trip-facts": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/audit-trip-facts.ts",
     "preflight": "node --import tsx scripts/preflight.ts",
     "validate": "npm run lint && npm run typecheck && npm run test && npm run build",
     "fb:subscribe-page": "node scripts/subscribe-page-app.mjs"

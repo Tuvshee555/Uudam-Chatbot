@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "@/lib/adminAccess";
 import { listPosterTrips, savePosterTrip } from "@/lib/poster/db";
+import { TripDataValidationError } from "@/lib/tripDataValidation";
 
 export const config = {
   api: { bodyParser: { sizeLimit: "25mb" } },
@@ -26,15 +27,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       note?: unknown;
     };
     const title = typeof body.title === "string" ? body.title : "";
-    const saved = await savePosterTrip({
-      id: typeof body.id === "string" ? body.id : null,
-      title,
-      data: body.data ?? {},
-      source_file: typeof body.source_file === "string" ? body.source_file : null,
-      note: typeof body.note === "string" ? body.note : null,
-    });
-    if (!saved) return res.status(500).json({ error: "Хадгалж чадсангүй (DB тохиргоо?)" });
-    return res.status(200).json({ id: saved.id });
+    try {
+      const saved = await savePosterTrip({
+        id: typeof body.id === "string" ? body.id : null,
+        title,
+        data: body.data ?? {},
+        source_file: typeof body.source_file === "string" ? body.source_file : null,
+        note: typeof body.note === "string" ? body.note : null,
+      });
+      if (!saved) return res.status(500).json({ error: "Хадгалж чадсангүй (DB тохиргоо?)" });
+      return res.status(200).json({ id: saved.id });
+    } catch (error) {
+      if (error instanceof TripDataValidationError) return res.status(error.statusCode).json(error.toResponse());
+      throw error;
+    }
   }
 
   return res.status(405).end();

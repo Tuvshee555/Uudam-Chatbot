@@ -42,6 +42,8 @@ import { AMBIGUOUS_REPLY_MARKER, isPassengerCountOnly } from "./travelFastPathsP
 import type { TravelTrip } from "./travelTypes";
 import { isKnownGreetingPhrase } from "./greetingPhrases";
 import { SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
+import { buildTripRequest, mergeTripSelection, type TripSelection } from "./tripRequest";
+import { getTripSelection, setTripSelection } from "./tripSelectionState";
 
 /**
  * Did the customer tap one of OUR quick-reply buttons?
@@ -162,6 +164,7 @@ export type FastPathRoute = {
   notInCatalog?: string;
   /** The list is informational because a stated requirement failed or is unknown. */
   informationalAlternatives?: boolean;
+  selection?: TripSelection;
 };
 
 /** A reply that asked the customer to pick a trip — the only kind a pending clarification belongs to. */
@@ -176,19 +179,26 @@ export async function routeFastPathText(input: {
   trips: TravelTrip[];
   /** Conversation so far; used to tell whether the last reply asked "which trip?". */
   history?: Array<{ role: "user" | "assistant"; text: string }>;
+  now?: Date;
   /**
    * Reads which trip(s) the message is about (see tripUnderstanding.ts). Given
    * the trips of the list the bot last offered, in order. Null = could not
    * tell (model down, bad output) and the keyword routing below decides.
    */
-  understand?: (pendingTripIds: string[]) => Promise<Understanding | null>;
+  understand?: (pendingTripIds: string[], selection?: TripSelection | null) => Promise<Understanding | null>;
 }): Promise<FastPathRoute> {
   const { senderId, text, contextualUserText, trips } = input;
+  const now = input.now || new Date();
+  const storedSelection = await getTripSelection(senderId);
+  const previousSelection = storedSelection && trips.some((trip) => trip.id === storedSelection.tripId)
+    ? storedSelection : null;
   const resolve = (t: string, pool: TravelTrip[]) =>
     resolveTripFromUserMessage(t, pool, { allowLooseFallback: false });
-  const chose = async (trip: TravelTrip): Promise<FastPathRoute> => {
+  const chose = async (trip: TravelTrip, understanding?: Understanding): Promise<FastPathRoute> => {
     await clearClarificationState(senderId);
-    return { matchText: joinContextAndTurn(trip.route_name, text), scopedClarify: null, chosenTripId: trip.id };
+    const selection = mergeTripSelection(trip.id, buildTripRequest(text, trips, understanding, now), previousSelection);
+    await setTripSelection(senderId, selection);
+    return { matchText: joinContextAndTurn(trip.route_name, text), scopedClarify: null, chosenTripId: trip.id, selection };
   };
   const tappedOwnButton = isOwnButtonLabel(text);
   const choice = parseNumberedChoice(text);
@@ -216,7 +226,7 @@ export async function routeFastPathText(input: {
   // follow-ups, "тэр", a date or length that narrows a destination — is read
   // once here instead of by keyword scoring.
   if (input.understand && !choice && !tappedOwnButton) {
-    const understanding = await input.understand(pendingTrips.map((trip) => trip.id));
+    const understanding = await input.understand(pendingTrips.map((trip) => trip.id), previousSelection);
     if (understanding) {
       if ((understanding.unmet || understanding.unknownRequirement) && understanding.trips.length > 0) {
         await clearClarificationState(senderId);
@@ -229,7 +239,7 @@ export async function routeFastPathText(input: {
         };
       }
       if (understanding.certainty === "one") {
-        return { ...(await chose(understanding.trips[0])), understanding };
+        return { ...(await chose(understanding.trips[0], understanding)), understanding };
       }
       if (understanding.certainty === "several" && understanding.intent !== "catalog") {
         // A question ABOUT the trips we just listed ("4 одтой юу?") is not a
@@ -252,6 +262,7 @@ export async function routeFastPathText(input: {
       // No trip meant (or a catalog question): the trip matchers downstream
       // must not pull one in from a weak word ("aylal", "мэнд", "үнэ").
       await clearClarificationState(senderId);
+      if (understanding.intent === "catalog" || understanding.unknownDestination) await setTripSelection(senderId, null);
       // A named destination we do not sell — said plainly, but only when the
       // keyword matcher agrees nothing fits, so a typo of a real destination
       // can never be told "we don't have that".
@@ -326,10 +337,10 @@ export async function routeFastPathText(input: {
     // answer to a direct-flight question. No trip of that kind among the
     // offered ones means a fresh catalog question: fall through.
     const ofAskedKind = (list: TravelTrip[]) => (asksForCategory ? filterTripsByTransportIntent(text, list) : list);
-    const requestedYmd = parseDepartureDateText(text)[0];
+    const requestedYmd = parseDepartureDateText(text, now)[0];
     if (requestedYmd) {
       const byDate = ofAskedKind(pendingTrips.filter((trip) =>
-        tripMatchesRequestedDate(trip, requestedYmd),
+        tripMatchesRequestedDate(trip, requestedYmd, now),
       ));
       if (byDate.length === 1) return chose(byDate[0]);
       if (byDate.length > 1) {
@@ -345,9 +356,9 @@ export async function routeFastPathText(input: {
     // A month answer ("1 сард", "10sar", "11 сард бна уу") narrows the same
     // way. When none of the offered trips departs that month, say so and list
     // what they DO have, instead of silently answering about one of them.
-    const requestedMonth = requestedYmd ? null : resolveRequestedMonth(text);
+    const requestedMonth = requestedYmd ? null : resolveRequestedMonth(text, now);
     if (requestedMonth && (!asksForCategory || ofAskedKind(pendingTrips).length > 0)) {
-      const byMonth = ofAskedKind(pendingTrips.filter((trip) => tripDepartsInMonth(trip, requestedMonth.month)));
+      const byMonth = ofAskedKind(pendingTrips.filter((trip) => tripDepartsInMonth(trip, requestedMonth.month, now)));
       if (byMonth.length === 1) return chose(byMonth[0]);
       await setClarificationState(senderId, (byMonth.length > 0 ? byMonth : ofAskedKind(pendingTrips)).map((trip) => trip.id));
       return {
@@ -380,7 +391,7 @@ export async function routeFastPathText(input: {
   // name alone identifies the trip.
   if (choice?.namePrefix) {
     const named = tripsNamedByPrefix(choice.namePrefix, trips);
-    if (named.length === 1) return { matchText: joinContextAndTurn(named[0].route_name, text), scopedClarify: null };
+    if (named.length === 1) return chose(named[0]);
     if (named.length > 1) {
       await setClarificationState(senderId, named.map((trip) => trip.id));
       return { matchText: text, scopedClarify: named };
@@ -402,11 +413,21 @@ export async function routeFastPathText(input: {
   // one — skip straight to context so the tap applies to the trip the
   // customer was actually looking at.
   if (direct.status === "verified" && !tappedOwnButton) {
-    return { matchText: text, scopedClarify: null };
+    return { ...(await chose(direct.trip)), matchText: text };
+  }
+  const followupRequest = previousSelection ? buildTripRequest(text, trips, undefined, now) : null;
+  const passengerWords = text.toLowerCase().replace(/[^\p{L}]+/gu, " ").trim().split(/\s+/);
+  const onlyPassengerQuestion = Boolean(followupRequest?.passengers.length) && passengerWords.every((word) =>
+    /^(?:том|хүн|хүүхэд|хүүхдүүд|нярай|настай|сартай|нийт|үнэ|хэд|хэдэн|төгрөг|вэ|ве|бид|явбал|байна|бна|бол|нэг|tom|hun|huuhed|nyarai|nastai|nas|niit|une|hed|heden|ve|adult|adults|child|children|infant|infants|years?|months?|old|total|price|how|much|for|and|with)$/iu.test(word));
+  if (previousSelection && direct.status === "not_found" && !isKnownGreetingPhrase(text)
+    && (tappedOwnButton || Boolean(followupRequest?.hotel) || onlyPassengerQuestion
+      || (isLikelyContextDependentText(text) && Boolean(followupRequest?.topics.length)))) {
+    const focused = trips.find((trip) => trip.id === previousSelection.tripId);
+    if (focused) return chose(focused);
   }
   const contextual = contextualUserText !== text ? resolve(contextualUserText, trips) : null;
   if (tappedOwnButton && contextual?.status === "verified") {
-    return { matchText: joinContextAndTurn(contextual.trip.route_name, text), scopedClarify: null };
+    return chose(contextual.trip);
   }
   // Bug (found 2026-07-17 replaying real traffic): "<city>" alone after a
   // <city> (unrelated) reply returned <city>. isLikelyContextDependentText
@@ -437,10 +458,7 @@ export async function routeFastPathText(input: {
     contextual?.status === "verified" &&
     !directRejectsContextual
   ) {
-    return {
-      matchText: joinContextAndTurn(contextual.trip.route_name, text),
-      scopedClarify: null,
-    };
+    return chose(contextual.trip);
   }
   const picked = directRejectsContextual
     ? text
@@ -463,7 +481,7 @@ export async function routeFastPathText(input: {
   // of "үнэ"/"гарах" made "амжилт" a price question that matched no trip and
   // silently handed the customer to staff.
   if (picked === contextualUserText && contextual?.status === "verified") {
-    return { matchText: joinContextAndTurn(contextual.trip.route_name, text), scopedClarify: null };
+    return chose(contextual.trip);
   }
   if (picked === contextualUserText && contextual?.status !== "ambiguous") {
     return { matchText: customerTurn(picked), scopedClarify: null };
