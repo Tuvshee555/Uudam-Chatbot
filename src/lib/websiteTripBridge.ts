@@ -16,6 +16,12 @@ function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function fareOrNull(value: unknown, currency: unknown): number | null {
+  const amount = numberOrNull(value);
+  if (amount === null) return null;
+  return String(currency || "MNT").toUpperCase() === "MNT" && amount < 1000 ? null : amount;
+}
+
 function strings(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map(text).filter(Boolean)
@@ -88,9 +94,9 @@ export function websiteTripToCanonicalFields(input: unknown): {
       if (!date) return null;
       return {
         dates: [date],
-        adult_price: numberOrNull(departure.price),
-        child_price: numberOrNull(departure.childPrice),
-        infant_price: numberOrNull(departure.infantPrice),
+        adult_price: fareOrNull(departure.price, trip.currency),
+        child_price: fareOrNull(departure.childPrice, trip.currency),
+        infant_price: fareOrNull(departure.infantPrice, trip.currency),
       };
     })
     .filter((group): group is NonNullable<typeof group> => Boolean(group));
@@ -128,9 +134,9 @@ export function websiteTripToCanonicalFields(input: unknown): {
       operator_name: text(priorSource.operator_name) || "UUDAM TRAVEL AGENCY",
       route_name: text(trip.title),
       duration_text: durationText(trip.durationDays, trip.durationNights),
-      adult_price: numberOrNull(trip.price),
-      child_price: numberOrNull(trip.childPrice),
-      infant_price: numberOrNull(trip.infantPrice),
+      adult_price: fareOrNull(trip.price, trip.currency),
+      child_price: fareOrNull(trip.childPrice, trip.currency),
+      infant_price: fareOrNull(trip.infantPrice, trip.currency),
       currency: text(trip.currency) || "MNT",
       departure_dates: uniqueDates,
       seats_total: null,

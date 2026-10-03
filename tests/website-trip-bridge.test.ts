@@ -52,6 +52,32 @@ test("an empty website summary is an explicit removal", () => {
   assert.equal(result.fields.source_description, "");
 });
 
+test("website-created incomplete trips sync without fake zero fares", () => {
+  const result = websiteTripToCanonicalFields({
+    sourceTripId: "trip-web-draft",
+    title: "Шинэ аялал",
+    description: "",
+    price: 0,
+    childPrice: 0,
+    infantPrice: 0,
+    durationDays: 1,
+    durationNights: 0,
+    image: "",
+    extraImages: [],
+    isPublished: false,
+    departures: [{ startDate: "2026-12-01T00:00:00.000Z", price: 0, childPrice: 0, infantPrice: 0, status: "OPEN" }],
+  });
+
+  assert.equal(result.fields.status, "draft");
+  assert.equal(result.fields.adult_price, null);
+  assert.equal(result.fields.child_price, null);
+  assert.equal(result.fields.infant_price, null);
+  assert.deepEqual(result.fields.photo_urls, []);
+  assert.deepEqual(result.fields.extra?.price_groups, [
+    { dates: ["2026-12-01"], adult_price: null, child_price: null, infant_price: null },
+  ]);
+});
+
 test("website-authored passenger price groups sync to canonical extra", () => {
   const result = websiteTripToCanonicalFields({
     sourceTripId: "trip-web-3",
