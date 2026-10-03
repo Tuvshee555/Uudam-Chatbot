@@ -2,6 +2,7 @@
 import { focusKnowledgeBase, tripsNamedInRecentMessages } from "./aiTripContext";
 import { buildTemporalPromptContext } from "./travelDates";
 import { dbGetHistory, dbAppendMessage, type ChatAttachment, type HistoryRow } from "./travelDb";
+import { CHATBOT_REPLY_RULES } from "./chatbotReplyPolicy";
 
 export type ChatRole = "user" | "assistant";
 
@@ -117,15 +118,14 @@ export function buildPromptParts(options: BuildPromptOptions): { system: string;
   } else {
     lines.push("- ALWAYS reply in Mongolian only. Even if the user writes in English or mixes languages, reply fully in Mongolian.");
   }
-  lines.push("- Be warm, friendly and personable — like a favourite travel agent who is genuinely happy to help, not a formal help desk. A brief friendly touch is welcome (e.g. 'Өө, сайхан сонголт шүү 😊' or 'Баяртай байна!'), but ALWAYS lead with the direct answer first — never open with empty filler and never repeat the customer's question back to them.");
+  for (const rule of CHATBOT_REPLY_RULES) lines.push(`- ${rule}`);
   if (phoneCollected) {
-    lines.push("- PHONE ALREADY COLLECTED: the customer has already left their phone number in this conversation. Do NOT ask for it again. A travel consultant will call them soon — meanwhile keep answering their questions normally and helpfully.");
+    lines.push("- PHONE ALREADY COLLECTED: the customer has already left their phone number in this conversation. Do NOT ask for it again. Keep answering their questions normally; do not promise a callback time that has not been confirmed.");
   } else if (phoneRequested) {
     lines.push("- PHONE ALREADY REQUESTED: you already asked for the customer's phone number. Do NOT repeat the request. Answer their current question normally.");
   } else {
-    lines.push("- LEAD CAPTURE (top priority business rule): After your FIRST real answer (any trip info, price, dates, seats, or program), ALWAYS end your reply by asking for their phone number ONLY. Say something like: 'Утасны дугаараа үлдээвэл манай аяллын зөвлөх тан руу шууд залгана 🙌'. Do NOT ask for their name — phone number only. Do this once, naturally at the end of your reply. If they already gave a phone number in this conversation, do NOT ask again.");
+    lines.push("- LEAD CAPTURE: When the customer wants to book, asks for a callback or needs a travel consultant, you may ask for their phone number once, after answering. Do not ask for their name, interrupt a clarification with a phone request, or attach a phone request to every informational answer. Do not promise an immediate call.");
   }
-  lines.push("- Emojis add warmth: use 1-3 relevant emojis in a normal reply — a friendly 😊 or 🙌 plus travel/detail icons where they fit (✈️ 💰 📅 🏨). Keep it natural — never put an emoji on every line or let them clutter the answer.");
   const toneSamples = (toneExamples || [])
     .map((example) => example.trim())
     .filter(Boolean)
@@ -150,16 +150,14 @@ export function buildPromptParts(options: BuildPromptOptions): { system: string;
   // anchor the model can echo as a quote when the context lacks a price — and
   // it silently goes stale the moment the agency changes that price.
   lines.push("- Example good format for a trip reply (placeholders only — NEVER copy these numbers, always use the real values from Context):");
-  lines.push("  ✈️ [Аяллын нэр] — [X] хоног");
-  lines.push("  💰 Том хүн: 1,111,111₮ | Хүүхэд: 999,999₮");
-  lines.push("  📅 Гарах: [огноо], [огноо]");
-  lines.push("  🏨 Буудал: [Буудлын нэр]");
-  lines.push("- For a general price or overview request, show adult and child prices together when both exist. If the customer asks only for a child or infant tier, answer only that tier.");
-  lines.push("- If a tour has departure_date_groups with different prices per date, list each date group with its price. Shape only, do not copy these numbers: '[огноо]: Том хүн 1,111,111₮ / Хүүхэд 999,999₮ | [огноо]: Том хүн 2,222,222₮ / Хүүхэд 999,999₮'.");
+  lines.push("  [Асуусан үнийн ангилал]: [баталгаатай үнэ]₮");
+  lines.push("  [Зөвхөн үнийг зөв ойлгоход шаардлагатай огноо/буудал/нөхцөл]");
+  lines.push("- For a general price or overview request, show adult and child prices together when both exist. If the customer asks only for adult, child or infant, answer only that tier. A unit-fare question is not a request for the previously discussed party total.");
+  lines.push("- If fares differ by date or hotel, use the customer's selection. If missing, ask one selection question with a compact list. Never dump every date/hotel/fare combination unless the customer explicitly requests all prices.");
   lines.push("- Seat availability rule: mention seats ONLY when seats_left is a confirmed number from context.");
   lines.push("- If seats_left is null, missing, empty, or unknown, do NOT mention seats at all.");
   lines.push("- If seats_left is greater than 7, do NOT mention seats.");
-  lines.push("- If seats_left is between 1 and 7, add a polite urgency line.");
+  lines.push("- Mention a confirmed remaining seat count only when asked about availability or booking. Do not add urgency or scarcity claims to unrelated answers.");
   lines.push("- If seats_left is exactly 0, clearly say the departure is full and suggest the next departure date.");
   lines.push("- Never say seat info is unavailable, never invent positive seat availability, and never say sold out unless seats_left is exactly 0.");
   lines.push("- NEVER use markdown syntax (* ** # [] etc). Plain text and emojis only.");
@@ -183,7 +181,7 @@ export function buildPromptParts(options: BuildPromptOptions): { system: string;
   lines.push("- NEVER say 'Тэр мэдээллийг өмнө нь хуваалцсан' or similar ('I already shared that', 'as I mentioned before'). If the user asks again, answer again fully — they may have missed it or be asking from a different angle.");
   lines.push("- When referring staff, ALWAYS say 'аяллын зөвлөх' or 'манай аяллын зөвлөх'. NEVER say 'хүний нөөцийн менежер' — that is HR, not a travel consultant.");
   lines.push("- Before answering: identify the exact tour by matching keywords in the user's question against the trip names and aliases in Context. If the user names a multi-city or multi-stop tour, match ONLY that exact tour. NEVER answer with a different tour because it has similar keywords.");
-  lines.push("- For price questions without a specific date: show ALL departure_date_groups if they exist, not just the first one. Each group must show: dates, adult price, child price, infant price (if available).");
+  lines.push("- For price questions without a specific date: quote a fare only if it applies to all matching departures; otherwise ask which date. Never choose the first date or cheapest hotel silently.");
   lines.push("- For discount questions: look in notes and source_description for хямдрал/тусгай/үнэгүй/promotion text. If found, state it clearly. NEVER say 'мэдээлэл байхгүй' when the discount is mentioned in the trip's notes.");
   lines.push("- Discount answer format — keep it SHORT: state yes/no, then prices on one line: 'Тийм. Хямдралтай үнэ: том хүн X₮, хүүхэд Y₮. Үндсэн үнэ: том хүн A₮, хүүхэд B₮.' No lengthy preamble.");
   lines.push("- For flexible schedule tours (15+ групп, хүссэн өдрөө сонгоно): say 'Энэ аялал тогтсон хуваарьгүй. 15+ хүнтэй групп хүссэн өдрөө сонгоно.' — do NOT invent departure dates.");

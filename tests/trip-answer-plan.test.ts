@@ -150,3 +150,104 @@ test("published trip pages remain preferred over frozen photo or PDF attachments
   assert.deepEqual(plan?.mediaUrls, []);
   assert.equal(plan?.brochureUrl, null);
 });
+
+test("adult-only prices omit unrelated passenger tiers without losing hotel/date qualifications", () => {
+  const plan = buildTripAnswerPlan({ text: "том хүний үнэ хэд вэ", trips: [trip()], route: route(), now });
+  assert.match(plan!.reply, /2,000,000₮/);
+  assert.doesNotMatch(plan!.reply, /Хүүхэд:|Нярай:/);
+  assert.match(plan!.reply, /Hotel Lumi/);
+});
+
+test("a meal question selects only meal facts and preserves breakfast-only qualification", () => {
+  const plan = buildTripAnswerPlan({ text: "хоол үнэд багтсан уу", trips: [trip({ extra: {
+    included_items: ["Зөвхөн өглөөний хоол", "Нислэгийн тийз", "Hotel Lumi"], excluded_items: ["Өдрийн хоол", "Хувийн зардал"],
+  } })], route: route(), now });
+  assert.equal(plan?.status, "answered");
+  assert.match(plan!.reply, /Зөвхөн өглөөний хоол|Өдрийн хоол/);
+  assert.doesNotMatch(plan!.reply, /Нислэгийн тийз|Хувийн зардал|Hotel Lumi/);
+});
+
+test("a deposit question does not dump visa, document or refund terms", () => {
+  const plan = buildTripAnswerPlan({ text: "урьдчилгаа хэд вэ", trips: [trip({ extra: { booking_terms: {
+    deposit: "Үнийн 30 хувь", payment: "Аялахаас өмнө", visa: "Виз шаардлагатай", documents: "Паспорт", cancellation: "Гэрээний дагуу",
+  } } })], route: route(), now });
+  assert.match(plan!.reply, /Урьдчилгаа: Үнийн 30 хувь/);
+  assert.doesNotMatch(plan!.reply, /Виз шаардлагатай|Паспорт|Гэрээний дагуу|Аялахаас өмнө/);
+});
+
+test("multiple requested terms include known facts and identify the missing one", () => {
+  const plan = buildTripAnswerPlan({ text: "виз болон буцаалт ямар вэ", trips: [trip({ extra: { booking_terms: { visa: "Виз шаардлагагүй" } } })], route: route(), now });
+  assert.match(plan!.reply, /Виз шаардлагагүй/);
+  assert.match(plan!.reply, /Цуцлалт, буцаалт: аяллын зөвлөхөөс/);
+});
+
+test("a program link does not dump an itinerary, but an explicit full program keeps all days", () => {
+  const itinerary_days = Array.from({ length: 15 }, (_, i) => ({ day: i + 1, title: `Зочлох газар ${i + 1}` }));
+  const t = trip({ extra: { itinerary_days, website_slug: "lumi", website_published: true } });
+  const compact = buildTripAnswerPlan({ text: "хөтөлбөр явуулна уу", trips: [t], route: route(), now });
+  assert.match(compact!.reply, /uudamtravel.mn/);
+  assert.doesNotMatch(compact!.reply, /1-р өдөр:/);
+  const full = buildTripAnswerPlan({ text: "бүтэн өдөр бүрийн хөтөлбөр", trips: [t], route: route(), now });
+  assert.match(full!.reply, /15-р өдөр: Зочлох газар 15/);
+});
+
+test("date menus stay within the asked month and disclose other dates rather than flooding", () => {
+  const departure_dates = ["2026-10-08", "2026-10-15", "2026-10-22", "2026-10-29", "2026-11-05"];
+  const compact = buildTripAnswerPlan({ text: "10 сард гарах өдрүүд", trips: [trip({ departure_dates })], route: route(), now });
+  assert.doesNotMatch(compact!.reply, /2026-11-05|2026-10-29/);
+  assert.match(compact!.reply, /Өөр 1 сонголт/);
+  const full = buildTripAnswerPlan({ text: "10 сард гарах бүх өдрүүд", trips: [trip({ departure_dates })], route: route(), now });
+  assert.match(full!.reply, /2026-10-29/);
+  assert.doesNotMatch(full!.reply, /2026-11-05/);
+});
+
+test("unknown infant fare does not produce an answered date-only price card", () => {
+  const plan = buildTripAnswerPlan({ text: "нярайн үнэ хэд вэ", trips: [trip({ infant_price: null })], route: route(), now });
+  assert.equal(plan?.status, "handoff");
+  assert.equal(plan?.reply, "REFER");
+});
+
+test("a child-fare follow-up does not answer with the previously selected adult party total", () => {
+  const first = buildTripAnswerPlan({ text: "2 том хүн нийт үнэ хэд вэ", trips: [trip()], route: route(), now })!;
+  const followup = buildTripAnswerPlan({ text: "хүүхдийн үнэ хэд вэ", trips: [trip()], route: { ...route(), selection: first.selection }, now })!;
+  assert.match(followup.reply, /Хүүхэд.*1,500,000₮/);
+  assert.doesNotMatch(followup.reply, /Том хүн|Нийт:/);
+  assert.deepEqual(followup.selection.passengers, first.selection.passengers);
+});
+
+test("an age-specific unit-fare follow-up preserves context without quoting the whole party", () => {
+  const first = buildTripAnswerPlan({ text: "2 том хүн нийт үнэ хэд вэ", trips: [trip()], route: route(), now })!;
+  const followup = buildTripAnswerPlan({ text: "6 настай хүүхдийн үнэ хэд вэ", trips: [trip()], route: { ...route(), selection: first.selection }, now })!;
+  assert.match(followup.reply, /Хүүхэд.*1,500,000₮/);
+  assert.doesNotMatch(followup.reply, /Том хүн|Нийт:/);
+  assert.equal(followup.selection.passengers.length, 2);
+});
+
+test("a month-specific date menu never mixes different years", () => {
+  const t = trip({ departure_dates: ["2026-10-08", "2027-10-08", "2027-01-08", "2028-01-08"] });
+  const october = buildTripAnswerPlan({ text: "2026 оны 10 сард гарах бүх өдрүүд", trips: [t], route: route(), now })!;
+  assert.match(october.reply, /2026-10-08/);
+  assert.doesNotMatch(october.reply, /2027-10-08/);
+  const january = buildTripAnswerPlan({ text: "1 сард гарах бүх өдрүүд", trips: [t], route: route(), now })!;
+  assert.match(january.reply, /2027-01-08/);
+  assert.doesNotMatch(january.reply, /2028-01-08/);
+});
+
+test("a new month fare question replaces the stale selected departure", () => {
+  const t = trip({ departure_dates: ["2026-10-08", "2026-11-05"], extra: { price_groups: [
+    { dates: ["2026-10-08"], adult_price: 2_000_000 }, { dates: ["2026-11-05"], adult_price: 3_000_000 },
+  ] } });
+  const first = buildTripAnswerPlan({ text: "10 сарын 8-нд үнэ", trips: [t], route: route(), now })!;
+  const november = buildTripAnswerPlan({ text: "11 сард том хүний үнэ", trips: [t], route: { ...route(), selection: first.selection }, now })!;
+  assert.match(november.reply, /2026-11-05|3,000,000₮/);
+  assert.doesNotMatch(november.reply, /2026-10-08|2,000,000₮/);
+  assert.equal(november.selection.date, "2026-11-05");
+});
+
+test("a scoped month with no schedule does not quote the old selected offer", () => {
+  const first = buildTripAnswerPlan({ text: "10 сарын 8-нд үнэ", trips: [trip()], route: route(), now })!;
+  const november = buildTripAnswerPlan({ text: "11 сард үнэ", trips: [trip()], route: { ...route(), selection: first.selection }, now })!;
+  assert.equal(november.status, "handoff");
+  assert.equal(november.reply, "REFER");
+  assert.equal(november.selection.date, null);
+});

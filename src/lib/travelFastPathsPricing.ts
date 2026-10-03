@@ -1687,7 +1687,7 @@ export function buildAmbiguousTripReply(
 
 /** The single lead-capture ask reused by every fast-path answer. */
 export const LEAD_CAPTURE_CTA =
-  "Утасны дугаараа үлдээвэл манай аяллын зөвлөх тан руу шууд холбогдоно 🙌";
+  "Утасны дугаараа үлдээж аяллын зөвлөхтэй холбогдож болно.";
 
 /**
  * Appends the phone-number ask to a fast-path reply so the deterministic

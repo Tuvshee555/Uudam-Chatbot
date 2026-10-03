@@ -18,6 +18,7 @@ export type TripRequest = {
   passengers: RequestedPassenger[];
   days: [number, number] | null;
   month: number | null;
+  year: number | null;
 };
 
 export function parseRequestedPassengers(value: unknown): RequestedPassenger[] {
@@ -94,9 +95,15 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
   const namedHotels = hotels.filter((hotel) => turn.toLowerCase().includes(hotel.toLowerCase()));
   const hotel = understanding?.hotel || (namedHotels.length === 1 ? namedHotels[0] : null);
   if (hotel) { topics.add("hotel"); topics.add("price"); }
+  const requestedMonth = resolveRequestedMonth(turn, now);
+  const month = understanding?.month || requestedMonth?.month || null;
+  const clock = new Date(now.getTime() + 8 * 3_600_000);
+  const explicitYear = /(?<!\d)(20\d{2})(?!\d)/.exec(turn);
+  const year = explicitYear ? Number(explicitYear[1]) : requestedMonth?.year
+    || (month ? clock.getUTCFullYear() + (month < clock.getUTCMonth() + 1 ? 1 : 0) : null);
   return {
     topics: [...topics], date, hotel, package: understanding?.package || null,
-    passengers, days: understanding?.days || queryRequestsDurationDays(turn), month: understanding?.month || resolveRequestedMonth(turn)?.month || null,
+    passengers, days: understanding?.days || queryRequestsDurationDays(turn), month, year,
   };
 }
 

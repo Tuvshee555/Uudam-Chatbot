@@ -25,6 +25,9 @@ import { notInCatalogReply, tripUnderstandingEnabled, understandTripMessage } fr
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
 import { verifyTripReply } from "../../lib/tripReplyVerification";
+import { presentAssistantReply } from "../../lib/chatbotReplyPolicy";
+import { recordPrimaryReplyDelivery, recordReplyPresentation } from "../../lib/chatbotReplyTelemetry";
+import { getReplyMediaPolicy, limitReplyPhotos, recordReplyMediaDelivery } from "../../lib/replyMediaPolicy";
 import type { TripSelection } from "../../lib/tripRequest";
 import type { TravelTrip } from "../../lib/travelTypes";
 import { stripTripNamesForIntent } from "../../lib/customerTurn";
@@ -34,7 +37,7 @@ import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
-import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
+import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBot, trackSender } from "../../lib/pause";
 import { AUTO_PAUSE_RESET_DAYS, createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
@@ -57,6 +60,7 @@ import { parseWebhookJson, PayloadTooLargeError, verifyMetaSignature, } from "..
 import {
   type Platform,
   type PendingConversationPayload,
+  type PendingConversationHead,
   RetryableWebhookError,
   isRetryableWebhookError,
   verifyToken,
@@ -72,7 +76,8 @@ import {
   refreshConversationLockConsistent,
   withConversationLockHeartbeat,
   enqueuePendingConversationConsistent,
-  drainPendingConversationConsistent,
+  peekPendingConversationConsistent,
+  acknowledgePendingConversationConsistent,
   getLastReplyConsistent,
   setLastReplyConsistent,
   addActiveConversation,
@@ -83,7 +88,7 @@ import {
   getWebhookRuntimeDiagnostics as getWebhookRuntimeDiagnosticsInternal,
   resetWebhookStateForTests as resetWebhookStateForTestsInternal,
 } from "../../lib/webhookDedup";
-import { sendPlatformMessage, recordImageMessage, recordFileMessage, sendPhotoAlbum, sendTripMediaForReply, fetchAndStoreFbName, sendFacebookTypingIndicator, normalizeLowerText, isQuickInfoKeyword, isHandoffRequest, CONTACT_OPERATOR_LABEL, DUPLICATE_REPLY_NUDGE, isBookingIntent, extractPhoneNumber, isPhoneOnlyMessage, isCommentTriggerMatch } from "../../lib/webhookMedia";
+import { sendPlatformMessage, recordImageMessage, recordFileMessage, sendPhotoAlbum, sendTripMediaForReply, fetchAndStoreFbName, sendFacebookTypingIndicator, normalizeLowerText, isQuickInfoKeyword, isHandoffRequest, CONTACT_OPERATOR_LABEL, isBookingIntent, extractPhoneNumber, isPhoneOnlyMessage, isCommentTriggerMatch } from "../../lib/webhookMedia";
 import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
 import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
 const env = getEnv();
@@ -117,7 +122,7 @@ async function handleMessage(
   text: string,
   pageId: string,
   igUserId?: string | null,
-  token?: string,
+  token?: string | null,
   trace?: { requestId: string; correlationId: string; source: string },
   ensureLockHealthy?: () => Promise<void> | void,
 ) {
@@ -263,6 +268,7 @@ async function handleMessage(
   }
   await assertLockHealthy();
   // Independent reads — run them together instead of two serial round trips.
+  const replyStartedAt = Date.now();
   const [history, customerMemory] = await Promise.all([
     getHistory(senderId),
     getCustomerMemoryText(senderId),
@@ -295,11 +301,15 @@ async function handleMessage(
     buttons?: string[];
     afterDeliver?: () => Promise<void>;
   }) => {
+    const presented = presentAssistantReply({ reply: input.reply, userText: text,
+      hasPriorReply: history.some((message) => message.role === "assistant"),
+      phoneAlreadyRequested: Boolean(extractPhoneNumber(text)) || hasAskedForPhone(history) || history.some((message) => message.role === "user" && Boolean(extractPhoneNumber(message.text))),
+    });
     const reply = factualScope && input.reply !== approvedPlanReply
-      ? verifyTripReply({ reply: input.reply, trips: factualScope, selection: currentSelection })
-      : input.reply;
+      ? verifyTripReply({ reply: presented, trips: factualScope, selection: currentSelection })
+      : presented;
     const noDataReply = isReferReply(reply) || shouldSilenceNoDataReply(reply);
-    if (reply !== input.reply) recordCounter("webhook.factual_reply_rejected_total", 1, { path: input.failTag });
+    if (reply !== presented) recordCounter("webhook.factual_reply_rejected_total", 1, { path: input.failTag });
     if (noDataReply) {
       logInfo("webhook.no_data_reply_suppressed", {
         requestId: trace?.requestId,
@@ -351,6 +361,7 @@ async function handleMessage(
       if (input.counter) recordCounter(input.counter, 1, { platform });
       return;
     }
+    recordReplyPresentation({ reply, userText: text, path: "webhook_code", latencyMs: Date.now() - replyStartedAt });
     await assertLockHealthy();
     let delivered: boolean;
     // Always include the operator button — customer can tap it any time,
@@ -403,6 +414,7 @@ async function handleMessage(
         { allowFallback: false },
       );
     }
+    recordPrimaryReplyDelivery({ path: "webhook_code", accepted: delivered, latencyMs: Date.now() - replyStartedAt });
     if (!delivered) {
       throw new RetryableWebhookError(`delivery_failed:${input.failTag}`);
     }
@@ -1101,9 +1113,15 @@ async function handleMessage(
         buttons: plan.status === "clarify" ? undefined : buildSmartButtons(reply, factualScope || []) || undefined,
         afterDeliver: async () => {
           if (platform !== "facebook" || !token) return;
-          if (plan.brochureUrl) await sendFbFileByUrl(senderId, plan.brochureUrl, token);
-          for (const url of plan.mediaUrls) await sendImageMessage(senderId, url, token);
-          if (plan.mediaUrls.length) await recordImageMessage(senderId, plan.mediaUrls);
+          const mediaPolicy = getReplyMediaPolicy(intentText, reply);
+          if (!mediaPolicy.allowed) return;
+          if (plan.brochureUrl) {
+            recordReplyMediaDelivery("pdf", "attempted");
+            const sent = await sendFbFileByUrl(senderId, plan.brochureUrl, token);
+            recordReplyMediaDelivery("pdf", sent ? "sent" : "failed");
+            if (sent) await recordFileMessage(senderId, plan.brochureUrl);
+          }
+          await sendPhotoAlbum(senderId, limitReplyPhotos(plan.mediaUrls, mediaPolicy.photoLimit), token, trace);
         },
       });
       return;
@@ -1302,18 +1320,6 @@ async function handleMessage(
         ),
         phoneAlreadyRequested,
       );
-      if (lastReply && isDuplicateReply(lastReply.text, safeDateReply)) {
-        recordCounter("webhook.duplicate_reply_avoided_total", 1, { platform });
-        // Neutral nudge — never a fake error and never "I already told you".
-        // Persisted as the last reply so a third identical question is not
-        // met with the exact same nudge again.
-        await deliverFastPathReply({
-          reply: DUPLICATE_REPLY_NUDGE,
-          failTag: "duplicate_reply_notice",
-          rememberSource: "api.webhook.date_duplicate_nudge",
-        });
-        return;
-      }
       await deliverFastPathReply({
         reply: safeDateReply,
         failTag: "date_availability_reply",
@@ -1453,6 +1459,8 @@ async function handleMessage(
         buttons: programButtons,
         afterDeliver: async () => {
           if (platform !== "facebook" || !token) return;
+          const mediaPolicy = getReplyMediaPolicy(programFastPathText, safeProgramReply);
+          if (!mediaPolicy.allowed) return;
           // The reply literally says "PDF хөтөлбөрийг хавсаргалаа", so the
           // brochure the program builder already resolved must be the one
           // sent. This used to fall through to sendTripMediaForReply, which
@@ -1490,17 +1498,7 @@ async function handleMessage(
             return;
           }
           if (programReply.mediaUrls.length > 0) {
-            for (const url of programReply.mediaUrls) {
-              try {
-                await sendImageMessage(senderId, url, token, {
-                  requestId: trace?.requestId,
-                  correlationId: trace?.correlationId,
-                  source: "api.webhook.program_media",
-                });
-              } catch {
-              }
-            }
-            await recordImageMessage(senderId, programReply.mediaUrls);
+            await sendPhotoAlbum(senderId, limitReplyPhotos(programReply.mediaUrls, mediaPolicy.photoLimit), token, trace);
           } else if (programReply.trip) {
             await sendTripMediaForReply(
               platform,
@@ -1547,20 +1545,6 @@ async function handleMessage(
             allowLooseFallback: false,
           })
         : null;
-      // The date fast-path and the AI path both refuse to repeat themselves;
-      // this one did not, so a customer could be sent the same price block
-      // twice in a row (seen live 2026-09-11 — the identical block bracketed
-      // a PDF reply). Re-sending what someone just read trains them to stop
-      // reading.
-      if (lastReply && isDuplicateReply(lastReply.text, safeStructuredReply)) {
-        recordCounter("webhook.duplicate_reply_avoided_total", 1, { platform });
-        await deliverFastPathReply({
-          reply: DUPLICATE_REPLY_NUDGE,
-          failTag: "duplicate_reply_notice",
-          rememberSource: "api.webhook.structured_duplicate_nudge",
-        });
-        return;
-      }
       await deliverFastPathReply({
         reply: safeStructuredReply,
         failTag: "structured_trip_fast_path",
@@ -1814,7 +1798,9 @@ async function handleMessage(
     guardCandidateTrips,
     text,
   );
-  const safeReply = verifyTripReply({ reply: guardedReply, trips: guardCandidateTrips, selection: currentSelection });
+  const safeReply = verifyTripReply({ reply: presentAssistantReply({ reply: guardedReply, userText: text,
+    hasPriorReply: history.some((message) => message.role === "assistant"), phoneAlreadyRequested,
+  }), trips: guardCandidateTrips, selection: currentSelection });
   // Wrong-trip guard: the customer clearly asked about trip A but the model
   // answered with a DIFFERENT destination's price. Route to the same silent
   // handoff as a no-data reply rather than send a confident wrong answer.
@@ -1894,18 +1880,7 @@ async function handleMessage(
     });
     return;
   }
-  if (lastReply && isDuplicateReply(lastReply.text, safeReply)) {
-    recordCounter("webhook.duplicate_reply_avoided_total", 1, { platform });
-    // The prompt forbids "Тэр мэдээллийг өмнө нь хуваалцсан" — the code must
-    // not say it either. Neutral nudge instead, persisted as the last reply
-    // so a third identical question is not answered with the same nudge.
-    await deliverFastPathReply({
-      reply: DUPLICATE_REPLY_NUDGE,
-      failTag: "duplicate_reply_notice",
-      rememberSource: "api.webhook.duplicate_nudge",
-    });
-    return;
-  }
+  recordReplyPresentation({ reply: safeReply, userText: text, path: "webhook_ai", latencyMs: Date.now() - replyStartedAt });
   let replyButtons: string[] = [...aiButtons];
   if (platform === "facebook") {
     try {
@@ -1960,6 +1935,7 @@ async function handleMessage(
       platform, senderId, safeReply, token, pageId, igUserId, trace, { allowFallback: false },
     );
   }
+  recordPrimaryReplyDelivery({ path: "webhook_ai", accepted: delivered, latencyMs: Date.now() - replyStartedAt });
   if (!delivered) {
     throw new RetryableWebhookError("delivery_failed:assistant_reply");
   }
@@ -1991,11 +1967,19 @@ async function processConversationWithPendingQueue(
   conversationKey: string,
   initial: PendingConversationPayload,
   lockToken: string | null,
+  initialHead: PendingConversationHead | null = null,
+  checkpoint?: { eventKey: string; complete: () => Promise<void> },
 ) {
   addActiveConversation(conversationKey);
   updateConcurrencyGauges();
   try {
-    let current = initial;
+    // The page access token is deliberately stripped before a payload is
+    // persisted to the pending queue/Redis (never store a secret there), so a
+    // drained message comes back with token: null. Re-derive it from pageId
+    // the same way the initial handler does — it's a cheap in-memory lookup,
+    // not the queued value.
+    let current = { ...initial, token: initial.token ?? PAGE_TOKENS.get(initial.pageId) ?? FALLBACK_TOKEN };
+    let head = initialHead;
     while (current) {
       const lockHealthy = await refreshConversationLockConsistent(
         conversationKey,
@@ -2006,7 +1990,7 @@ async function processConversationWithPendingQueue(
         logWarn("webhook.conversation_lock_lost", {
           conversationKeyHash: hashIdentifier(conversationKey),
         });
-        break;
+        throw new RetryableWebhookError("conversation_lock_lost");
       }
       await withConversationLockHeartbeat(
         conversationKey,
@@ -2027,9 +2011,14 @@ async function processConversationWithPendingQueue(
             ensureLockHealthy,
           ),
       );
-      const pending = await drainPendingConversationConsistent(conversationKey);
+      if (head && !(await acknowledgePendingConversationConsistent(conversationKey, head))) {
+        throw new RetryableWebhookError("pending_ack_mismatch");
+      }
+      if (checkpoint && current.eventKey === checkpoint.eventKey) await checkpoint.complete();
+      const pending = await peekPendingConversationConsistent(conversationKey);
       if (!pending) break;
-      current = pending;
+      current = { ...pending.payload, token: pending.payload.token ?? PAGE_TOKENS.get(pending.payload.pageId) ?? FALLBACK_TOKEN };
+      head = pending;
       updateConcurrencyGauges();
     }
   } finally {
@@ -2390,7 +2379,7 @@ export default async function handler(
               await runEventWithClaim(
                 eventKey,
                 { platform, eventType: "dm" },
-                async () => {
+                async (completeEvent) => {
                   if (!token) {
                     logError("webhook.missing_page_token", {
                       requestId: trace.requestId,
@@ -2423,6 +2412,7 @@ export default async function handler(
                     pageId,
                     igUserId: platform === "instagram" ? pageId : undefined,
                     token,
+                    eventKey,
                     trace: {
                       requestId: trace.requestId,
                       correlationId: trace.correlationId,
@@ -2447,21 +2437,37 @@ export default async function handler(
                     return;
                   }
                   let initialPayload = payloadForConversation;
-                  const pendingBefore = await drainPendingConversationConsistent(
-                    conversationKey,
-                  );
-                  if (pendingBefore) {
-                    await enqueuePendingConversationConsistent(
+                  let transferredLock = false;
+                  try {
+                    const pendingBefore = await peekPendingConversationConsistent(
                       conversationKey,
-                      payloadForConversation,
                     );
-                    initialPayload = pendingBefore;
+                    if (pendingBefore) {
+                      await enqueuePendingConversationConsistent(conversationKey, payloadForConversation);
+                      initialPayload = pendingBefore.payload;
+                    }
+                    transferredLock = true;
+                    await processConversationWithPendingQueue(
+                      conversationKey, initialPayload, lockToken, pendingBefore,
+                      { eventKey, complete: completeEvent },
+                    );
+                  } finally {
+                    if (!transferredLock) await releaseConversationLockConsistent(conversationKey, lockToken);
                   }
-                  await processConversationWithPendingQueue(
-                    conversationKey,
-                    initialPayload,
-                    lockToken,
-                  );
+                },
+                async () => {
+                  const conversationKey = `${platform}:${pageId}:${senderId}`;
+                  const lockToken = await acquireConversationLockConsistent(conversationKey);
+                  if (lockToken === "") return;
+                  let transferredLock = false;
+                  try {
+                    const pending = await peekPendingConversationConsistent(conversationKey);
+                    if (!pending) return;
+                    transferredLock = true;
+                    await processConversationWithPendingQueue(conversationKey, pending.payload, lockToken, pending);
+                  } finally {
+                    if (!transferredLock) await releaseConversationLockConsistent(conversationKey, lockToken);
+                  }
                 },
               );
             }

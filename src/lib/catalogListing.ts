@@ -21,9 +21,8 @@ import {
   queryWantsLandFlightCombo,
   queryWantsLandOnlyEnhanced,
   tripIsCruise,
-  withFutureDepartureDates,
 } from "./travelFastPaths";
-import { parseTripDepartureDateText } from "./travelDates";
+import { normalizeTripOffers, summarizeTripOfferPrices } from "./tripOffers";
 import type { TravelTrip } from "./travelTypes";
 
 const WHOLE_CATALOG_RE =
@@ -31,31 +30,78 @@ const WHOLE_CATALOG_RE =
 const CRUISE_RE = /круз|усан\s+онгоц|cruise/i;
 const LUNAR_NEW_YEAR_RE = /сар\s*шин|sar\s*shin/i;
 const MAX_DETAILED = 8;
+const MAX_COMPACT = 3;
+// Keep this detector local: reply policy imports the reply/fast-path graph.
+const FULL_LIST_RE = /(?:^|\s)(?:бүх|бүгд\S*|нийт|bvh|buh|bukh|bugd\S*|all|full)(?:\s|$)|бүтэн|дэлгэрэнгүй|buten|delgerengui|complete\s+list/i;
 const MAX_MESSAGE_CHARS = 1800;
 
 type Listing = { reply: string; listed: TravelTrip[]; authoritative?: boolean };
 
-function nextDepartures(trip: TravelTrip): string[] {
-  return withFutureDepartureDates(trip).departure_dates.slice(0, 2);
+function nextDepartures(trip: TravelTrip, now: Date): string[] {
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ulaanbaatar", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  const availability = normalizeTripOffers(trip, now).filter((offer) => offer.source !== "discount").flatMap((offer) => offer.availability);
+  const allowed = new Set(availability.filter((row) => row.date >= today && ["open", "unknown"].includes(row.status)).map((row) => row.date));
+  for (const row of availability) if (!["open", "unknown"].includes(row.status)) allowed.delete(row.date);
+  return [...allowed].sort().slice(0, 2);
 }
 
-function soonestKey(trip: TravelTrip): string {
-  for (const text of withFutureDepartureDates(trip).departure_dates) {
-    const ymd = parseTripDepartureDateText(text)[0];
-    if (ymd) return ymd;
-  }
-  return "9999";
+function soonestKey(trip: TravelTrip, now: Date): string {
+  return nextDepartures(trip, now)[0] || "9999";
 }
 
-function detailLine(trip: TravelTrip): string {
-  const price = formatPassengerMoney(trip.adult_price, trip.currency || "MNT");
-  const dates = nextDepartures(trip);
+function priceDetail(trip: TravelTrip, now: Date): string {
+  if (!nextDepartures(trip, now).length) return "";
+  const result = summarizeTripOfferPrices(trip, {}, now);
+  if (result.status !== "ready") return "";
+  const { summary } = result;
+  const fare = summary.prices.adult;
+  if (!fare || fare.kind === "unknown") return "";
+  const money = (value: number) => formatPassengerMoney(value, summary.currency);
+  const price = fare.kind === "free" ? "Үнэгүй" : fare.kind === "range"
+    ? money(fare.min) && money(fare.max) ? `${money(fare.min)} - ${money(fare.max)}` : null
+    : money(fare.amount);
+  if (!price) return "";
+  const ages = [...new Set(summary.fares.filter((row) => row.kind === "adult").map((row) => row.ageRange).filter(Boolean))];
+  const qualified = [
+    `том хүн${ages.length ? ` (${ages.join(", ")})` : ""} ${price}`,
+    summary.hotel || summary.hotelId,
+    summary.packageId,
+    ...summary.conditions,
+  ].filter(Boolean).join(" · ");
+  // Omit the entire fare rather than dropping an essential qualification.
+  return qualified.length <= 220 ? qualified : "";
+}
+
+function detailLine(trip: TravelTrip, now: Date): string {
+  const price = priceDetail(trip, now);
+  const dates = nextDepartures(trip, now);
   const details = [
     trip.duration_text?.trim() || "",
-    price ? `том хүн ${price}` : "",
+    price,
     dates.length ? `гарах: ${dates.join(", ")}` : "",
   ].filter(Boolean);
   return `• ${trip.route_name}${details.length ? ` — ${details.join(" · ")}` : ""}`;
+}
+
+function renderListing(pool: TravelTrip[], heading: string, limit: number, now: Date, grouped = false): Listing {
+  const lines = [heading], listed: TravelTrip[] = [];
+  const footer = (count: number) => [
+    ...(pool.length > count ? ["", `Өөр ${pool.length - count} сонголт бий. Бүгдийг эндээс харна уу: ${BOOKING_WEBSITE_URL}`] : []),
+    "", AMBIGUOUS_REPLY_MARKER,
+  ];
+  let previousCategory = "";
+  for (const trip of pool.slice(0, limit)) {
+    const category = trip.category?.trim() || "Бусад аялал";
+    const dates = nextDepartures(trip, now);
+    const additions = grouped
+      ? [...(category !== previousCategory ? ["", `${category}:`] : []), `• ${trip.route_name}${dates.length ? ` — ${dates[0]}` : ""}`]
+      : [detailLine(trip, now)];
+    if ([...lines, ...additions, ...footer(listed.length + 1)].join("\n").length > MAX_MESSAGE_CHARS) break;
+    lines.push(...additions);
+    listed.push(trip);
+    previousCategory = category;
+  }
+  return { reply: [...lines, ...footer(listed.length)].join("\n"), listed };
 }
 
 // Words that describe a KIND of trip and also appear inside trip names
@@ -100,16 +146,14 @@ function durationDays(trip: TravelTrip): number {
   return nights ? Number(nights[1]) + 1 : Number.POSITIVE_INFINITY;
 }
 
-function shortestTripsListing(intentText: string, active: TravelTrip[]): Listing | null {
+function shortestTripsListing(intentText: string, active: TravelTrip[], now: Date): Listing | null {
   const destinations = namedDestinations(intentText, active);
   const pool = destinations.length > 0 ? active.filter((trip) => nameHasAny(trip, destinations)) : active;
-  const listed = pool
+  const sorted = pool
     .filter((trip) => Number.isFinite(durationDays(trip)))
-    .sort((a, b) => durationDays(a) - durationDays(b) || soonestKey(a).localeCompare(soonestKey(b)))
-    .slice(0, MAX_SHORTEST);
-  if (listed.length === 0) return null;
-  const reply = ["Хамгийн цөөн хоногтой аяллууд 😊", ...listed.map(detailLine), "", AMBIGUOUS_REPLY_MARKER].join("\n");
-  return { reply, listed };
+    .sort((a, b) => durationDays(a) - durationDays(b) || soonestKey(a, now).localeCompare(soonestKey(b, now)));
+  if (sorted.length === 0) return null;
+  return renderListing(sorted, "Хамгийн цөөн хоногтой аяллууд 😊", FULL_LIST_RE.test(normText(intentText)) ? MAX_SHORTEST : 2, now);
 }
 
 function categoryHeading(text: string): string {
@@ -124,10 +168,11 @@ function categoryHeading(text: string): string {
  * The caller must also check that the conversation context does not already
  * identify one trip ("шууд нислэгтэй юу?" after a trip card asks about THAT trip).
  */
-export function buildCatalogListingReply(intentText: string, trips: TravelTrip[]): Listing | null {
+export function buildCatalogListingReply(intentText: string, trips: TravelTrip[], now = new Date()): Listing | null {
   const normalized = normText(intentText);
   if (!normalized) return null;
   const active = trips.filter((trip) => trip.status === "active");
+  const full = FULL_LIST_RE.test(normalized);
   if (LUNAR_NEW_YEAR_RE.test(normalized)) {
     const listed = active.filter((trip) =>
       LUNAR_NEW_YEAR_RE.test([trip.route_name, ...(Array.isArray(trip.extra?.aliases) ? trip.extra.aliases : [])].join(" ")),
@@ -139,15 +184,11 @@ export function buildCatalogListingReply(intentText: string, trips: TravelTrip[]
         authoritative: true,
       };
     }
-    return {
-      reply: ["Сар шинийн аяллууд 😊", ...listed.slice(0, MAX_DETAILED).map(detailLine), "", AMBIGUOUS_REPLY_MARKER].join("\n"),
-      listed: listed.slice(0, MAX_DETAILED),
-      authoritative: true,
-    };
+    return { ...renderListing(listed, "Сар шинийн аяллууд 😊", full ? MAX_DETAILED : MAX_COMPACT, now), authoritative: true };
   }
   const wantsAll = WHOLE_CATALOG_RE.test(normalized);
   const wantsCruise = CRUISE_RE.test(normalized);
-  if (SHORT_TRIP_RE.test(normalized)) return shortestTripsListing(intentText, active);
+  if (SHORT_TRIP_RE.test(normalized)) return shortestTripsListing(intentText, active, now);
   const wantsCategory =
     wantsCruise ||
     queryWantsDirectFlight(intentText) ||
@@ -168,29 +209,20 @@ export function buildCatalogListingReply(intentText: string, trips: TravelTrip[]
   const destinationCategoryPool = destinationPool.filter((trip) => categoryPool.includes(trip));
   if (destinations.length > 0 && wantsCategory && destinationCategoryPool.length === 0) {
     const requestedKind = categoryHeading(intentText).toLowerCase();
-    const available = destinationPool.slice(0, 3);
-    const lines = [
-      `${destinations.map(titleCase).join(", ")} чиглэлд ${requestedKind} одоогоор алга байна.`,
-    ];
-    if (available.length > 0) {
-      lines.push("Одоогийн өөр тээврийн хувилбарууд:", ...available.map(detailLine));
-    }
-    return { reply: lines.join("\n"), listed: available };
+    const heading = `${destinations.map(titleCase).join(", ")} чиглэлд ${requestedKind} одоогоор алга байна.`;
+    return renderListing(destinationPool, heading, full ? MAX_DETAILED : MAX_COMPACT, now);
   }
   const pool = destinations.length === 0
     ? categoryPool
     : destinationCategoryPool;
-  const listed = [...pool].sort((a, b) => soonestKey(a).localeCompare(soonestKey(b)));
+  const listed = [...pool].sort((a, b) => soonestKey(a, now).localeCompare(soonestKey(b, now)));
   if (listed.length === 0) return null;
 
-  if (wantsCategory || listed.length <= MAX_DETAILED) {
+  if (!full || wantsCategory || listed.length <= MAX_DETAILED) {
     const heading = destinations.length > 0 && destinationCategoryPool.length === 0
       ? `${destinations.map(titleCase).join(", ")} чиглэлийн аяллууд`
       : wantsCategory ? categoryHeading(intentText) : "Манай аяллууд";
-    const lines = [`${heading} 😊`, ...listed.slice(0, MAX_DETAILED).map(detailLine)];
-    if (listed.length > MAX_DETAILED) lines.push("", `Бүгдийг нь эндээс харна уу 👉 ${BOOKING_WEBSITE_URL}`);
-    lines.push("", AMBIGUOUS_REPLY_MARKER);
-    return { reply: lines.join("\n"), listed: listed.slice(0, 10) };
+    return renderListing(listed, `${heading} 😊`, full ? MAX_DETAILED : MAX_COMPACT, now);
   }
 
   // The whole catalog does not fit one message with prices: names grouped by
@@ -200,19 +232,5 @@ export function buildCatalogListingReply(intentText: string, trips: TravelTrip[]
     const key = trip.category?.trim() || "Бусад аялал";
     groups.set(key, [...(groups.get(key) || []), trip]);
   }
-  const lines = ["Одоо захиалга авч байгаа аяллууд 😊"];
-  for (const [category, group] of groups) {
-    lines.push("", `${category}:`);
-    for (const trip of group) {
-      const dates = nextDepartures(trip);
-      lines.push(`• ${trip.route_name}${dates.length ? ` — ${dates[0]}` : ""}`);
-    }
-  }
-  const footer = ["", `Үнэ, хөтөлбөрийг нь эндээс харна уу 👉 ${BOOKING_WEBSITE_URL}`, AMBIGUOUS_REPLY_MARKER];
-  let reply = [...lines, ...footer].join("\n");
-  while (reply.length > MAX_MESSAGE_CHARS && lines.length > 2) {
-    lines.pop();
-    reply = [...lines, "…", ...footer].join("\n");
-  }
-  return { reply, listed: listed.slice(0, 10) };
+  return renderListing([...groups.values()].flat(), "Манай аяллууд 😊", MAX_DETAILED, now, true);
 }

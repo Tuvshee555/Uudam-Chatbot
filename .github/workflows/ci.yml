@@ -47,6 +47,9 @@ jobs:
       - name: Test
         run: npm run test
 
+      - name: Deterministic chatbot accuracy gate
+        run: npm run qa:accuracy:fixture
+
       - name: Build
         run: npm run build
 

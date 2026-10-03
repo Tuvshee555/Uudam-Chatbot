@@ -21,19 +21,22 @@ import { notInCatalogReply, tripUnderstandingEnabled, understandTripMessage } fr
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
 import { verifyTripReply } from "../../lib/tripReplyVerification";
+import { presentAssistantReply } from "../../lib/chatbotReplyPolicy";
+import { recordReplyPresentation } from "../../lib/chatbotReplyTelemetry";
 import type { TripSelection } from "../../lib/tripRequest";
 import type { TravelTrip } from "../../lib/travelTypes";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
-import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasPaymentClaimIntent, isDuplicateReply, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
+import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { dbGetRecentAdminMessages, getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
 import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply } from "../../lib/travelFastPaths";
-import { extractTripPhotosForReply, extractTripPhotosForUserMessage, hasTripPhotoIntent, MAX_TRIP_PHOTOS } from "../../lib/welcomeFlow";
-import { CONTACT_OPERATOR_LABEL, DUPLICATE_REPLY_NUDGE, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
+import { extractTripPhotosForReply } from "../../lib/welcomeFlow";
+import { buildReplyMedia } from "../../lib/replyMediaPolicy";
+import { CONTACT_OPERATOR_LABEL, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
 import { getEnv } from "../../lib/env";
 import {
   beginRequestTrace,
@@ -100,39 +103,7 @@ function buildDemoMedia(input: {
   explicitMediaUrls?: string[];
   brochureUrl?: string | null;
 }): DemoMedia {
-  const explicit = input.explicitMediaUrls || [];
-  // Never infer photos for a "which of these tours did you mean?" reply. That
-  // reply deliberately carries no media, but it lists candidate trip NAMES —
-  // inferring from its text picks one of them and attaches that tour's poster,
-  // so the bot asks which tour the customer wants while simultaneously sending
-  // one tour's prices as an image. Silence on media is the whole point here.
-  const inferred =
-    explicit.length > 0 ||
-    !hasTripPhotoIntent(input.userText) ||
-    input.reply.includes(AMBIGUOUS_REPLY_MARKER)
-      ? []
-      : extractTripPhotosForReply(input.reply, input.trips, { userText: input.userText });
-  // Same guard as `inferred` above, and for the same reason: this branch
-  // independently re-resolves a trip straight from the raw user text, so
-  // without the marker check it bypassed the ambiguity guard entirely and
-  // reintroduced the exact bug that guard exists to prevent — "<хот>
-  // хаалга зураг" asked which of 3 tours while ALSO attaching one tour's
-  // poster, because this branch never checked whether the reply it was
-  // supposedly illustrating was actually a "which one?" question.
-  const directFromUser =
-    inferred.length === 0 &&
-    explicit.length === 0 &&
-    hasTripPhotoIntent(input.userText) &&
-    !input.reply.includes(AMBIGUOUS_REPLY_MARKER)
-      ? extractTripPhotosForUserMessage(input.userText, input.trips)
-      : [];
-  const mediaUrls = Array.from(new Set([...explicit, ...inferred, ...directFromUser]))
-    .filter((url) => typeof url === "string" && url.startsWith("https://"))
-    .slice(0, MAX_TRIP_PHOTOS);
-  const brochureUrl = input.brochureUrl && input.brochureUrl.startsWith("https://")
-    ? input.brochureUrl
-    : null;
-  return { mediaUrls, brochureUrl };
+  return buildReplyMedia(input);
 }
 
 export default async function handler(
@@ -237,8 +208,12 @@ export default async function handler(
       let factualScope: TravelTrip[] | null = null;
       let currentSelection: TripSelection | null = null;
       let approvedPlanReply: string | null = null;
-      const checkedReply = (reply: string) => factualScope && reply !== approvedPlanReply
-        ? verifyTripReply({ reply, trips: factualScope, selection: currentSelection }) : reply;
+      const checkedReply = (reply: string) => {
+        const presented = presentAssistantReply({ reply, userText: normalizedText,
+          hasPriorReply: history.some((message) => message.role === "assistant"), phoneAlreadyRequested });
+        return factualScope && reply !== approvedPlanReply
+          ? verifyTripReply({ reply: presented, trips: factualScope, selection: currentSelection }) : presented;
+      };
       const appendMessage = (...args: Parameters<typeof appendConversationMessage>) => {
         if (args[1] === "assistant") {
           args[2] = checkedReply(args[2]);
@@ -251,9 +226,14 @@ export default async function handler(
       };
       const sendJson = res.json.bind(res);
       res.json = (body) => {
-        if (body && typeof body.reply === "string" && isReferReply(checkedReply(body.reply))) {
-          recordCounter("demo.factual_reply_rejected_total", 1, {});
-          return sendJson({ reply: buildHandoffAcknowledgement(), buttons: [], mediaUrls: [], brochureUrl: null, handoff: true });
+        if (body && typeof body.reply === "string") {
+          const reply = checkedReply(body.reply);
+          if (isReferReply(reply)) {
+            recordCounter("demo.factual_reply_rejected_total", 1, {});
+            return sendJson({ reply: buildHandoffAcknowledgement(), buttons: [], mediaUrls: [], brochureUrl: null, handoff: true });
+          }
+          recordReplyPresentation({ reply, userText: normalizedText, path: "demo", latencyMs: Date.now() - trace.startedAtMs });
+          return sendJson({ ...body, reply });
         }
         return sendJson(body);
       };
@@ -490,11 +470,12 @@ export default async function handler(
           approvedPlanReply = reply;
           await appendMessage(sessionId, "user", normalizedText);
           if (plan.status === "handoff") return returnHandoff();
-          await appendMessage(sessionId, "assistant", reply, imageAttachments(plan.mediaUrls));
+          const media = buildDemoMedia({ reply, userText: normalizedText, trips: factualScope || [], explicitMediaUrls: plan.mediaUrls, brochureUrl: plan.brochureUrl });
+          await appendMessage(sessionId, "assistant", reply, imageAttachments(media.mediaUrls));
           await rememberTurn();
           recordCounter("demo.answer_plan_total", 1, { status: plan.status });
           if (plan.missingTopics.length) recordCounter("demo.answer_plan_missing_topics_total", plan.missingTopics.length, {});
-          return res.status(200).json({ reply, buttons: plan.status === "clarify" ? [] : buildSmartButtons(reply, factualScope || []) || [], mediaUrls: plan.mediaUrls, brochureUrl: plan.brochureUrl });
+          return res.status(200).json({ reply, buttons: plan.status === "clarify" ? [] : buildSmartButtons(reply, factualScope || []) || [], ...media });
         }
       }
       if (hasCompareIntent(intentText)) {
@@ -1051,23 +1032,8 @@ export default async function handler(
         return returnHandoff();
       }
 
-      // Skip duplicate replies (same as Messenger behavior)
-      const lastMessages = history.filter((m) => m.role === "assistant");
-      const lastReplyText = lastMessages.length > 0 ? lastMessages[lastMessages.length - 1].text : null;
-      if (lastReplyText && isDuplicateReply(lastReplyText, reply)) {
-        recordCounter("demo.duplicate_reply_avoided_total", 1, {});
-        const nudge = isEnglishDemo
-          ? "I've answered that just above 🙂 Anything else — dates, prices, seats?"
-          : DUPLICATE_REPLY_NUDGE;
-        await appendMessage(sessionId, "assistant", nudge);
-        await rememberTurn();
-        return res.status(200).json({
-          reply: nudge,
-          buttons: [],
-          mediaUrls: [],
-          brochureUrl: null,
-        });
-      }
+      // A repeated customer question deserves the answer again. Delivery/event
+      // retries are deduplicated separately, not by comparing reply wording.
 
       // Button parity with Messenger: the AI reply carries the model's own
       // BUTTONS line, plus deterministic smart buttons, plus the contact-operator

@@ -13,7 +13,6 @@ import {
   extractTripBrochureAttachmentId,
   extractTripPhotosForReply,
   extractTripPhotosForUserMessage,
-  hasTripPhotoIntent,
   MAX_TRIP_PHOTOS,
 } from "./welcomeFlow";
 import {
@@ -32,8 +31,10 @@ import {
   logInfo,
   logWarn,
   recordCounter,
+  recordHistogram,
 } from "./observability";
 import type { Platform } from "./webhookDedup";
+import { getReplyMediaPolicy, limitReplyPhotos, recordReplyMediaDelivery } from "./replyMediaPolicy";
 import {
   isFrustratedHandoffRequest as detectFrustratedHandoffRequest,
   isHandoffRequest as detectHandoffRequest,
@@ -46,14 +47,24 @@ export async function sendPlatformMessage(
   platform: Platform,
   senderId: string,
   text: string,
-  token: string | undefined,
+  token: string | null | undefined,
   pageId: string,
   igUserId?: string | null,
   trace?: { requestId: string; correlationId: string; source: string },
   options?: { allowFallback?: boolean },
 ) {
+  const startedAt = Date.now();
+  const finish = (
+    delivered: boolean,
+    outcome: "primary_sent" | "primary_failed" | "fallback_sent" | "fallback_failed" | "missing_token",
+  ) => {
+    recordCounter("webhook.send.delivery_total", 1, { platform, outcome });
+    recordHistogram("webhook.send.latency_ms", Date.now() - startedAt, { platform, outcome });
+    return delivered;
+  };
   const allowFallback = options?.allowFallback ?? true;
   if (!token) {
+    recordCounter("webhook.send.missing_token_total", 1, { platform });
     logError("webhook.send.missing_token", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
@@ -61,8 +72,9 @@ export async function sendPlatformMessage(
       pageId,
       senderHash: hashIdentifier(senderId),
     });
-    return false;
+    return finish(false, "missing_token");
   }
+  recordCounter("webhook.send.attempted_total", 1, { platform });
   try {
     if (platform === "facebook") {
       await sendTextMessage(senderId, text, token, trace);
@@ -70,7 +82,7 @@ export async function sendPlatformMessage(
       await sendIgTextMessage(igUserId || "", senderId, text, token, trace);
     }
     recordCounter("webhook.send.success_total", 1, { platform });
-    return true;
+    return finish(true, "primary_sent");
   } catch (error) {
     recordCounter("webhook.send.failed_total", 1, { platform });
     logError("webhook.send.primary_failed", {
@@ -87,8 +99,10 @@ export async function sendPlatformMessage(
           : undefined,
     });
     if (!allowFallback || text === FALLBACK_SEND_ERROR_MESSAGE) {
-      return false;
+      return finish(false, "primary_failed");
     }
+    recordCounter("webhook.send.fallback_attempted_total", 1, { platform });
+    let fallbackSent = false;
     try {
       if (platform === "facebook") {
         await sendTextMessage(senderId, FALLBACK_SEND_ERROR_MESSAGE, token, trace);
@@ -102,7 +116,9 @@ export async function sendPlatformMessage(
         );
       }
       recordCounter("webhook.send.fallback_success_total", 1, { platform });
+      fallbackSent = true;
     } catch (fallbackError) {
+      recordCounter("webhook.send.fallback_failed_total", 1, { platform });
       logError("webhook.send.fallback_failed", {
         requestId: trace?.requestId,
         correlationId: trace?.correlationId,
@@ -124,7 +140,7 @@ export async function sendPlatformMessage(
             : undefined,
       });
     }
-    return false;
+    return finish(false, fallbackSent ? "fallback_sent" : "fallback_failed");
   }
 }
 function imageAttachment(url: string): { type: "image"; url: string } {
@@ -209,7 +225,7 @@ export function buildPhotoOnlyAmbiguousPrompt(trips: TravelTrip[]) {
 export async function sendPhotoAlbum(
   senderId: string,
   photoUrls: string[],
-  token: string | undefined,
+  token?: string | null,
   trace?: { requestId: string; correlationId: string },
 ): Promise<void> {
   if (!token || photoUrls.length === 0) return;
@@ -218,6 +234,8 @@ export async function sendPhotoAlbum(
     correlationId: trace?.correlationId,
     source: "api.webhook.album",
   };
+  const delivered: string[] = [];
+  recordReplyMediaDelivery("photo", "attempted", photoUrls.length);
   try {
     await sendImageCarousel(
       senderId,
@@ -225,15 +243,19 @@ export async function sendPhotoAlbum(
       token,
       traceOpts,
     );
+    delivered.push(...photoUrls);
   } catch {
     for (const url of photoUrls) {
       try {
         await sendImageMessage(senderId, url, token, traceOpts);
+        delivered.push(url);
       } catch {
       }
     }
   }
-  await recordImageMessage(senderId, photoUrls);
+  recordReplyMediaDelivery("photo", "sent", delivered.length);
+  recordReplyMediaDelivery("photo", "failed", photoUrls.length - delivered.length);
+  await recordImageMessage(senderId, delivered);
 }
 
 export async function sendTripMediaForReply(
@@ -241,12 +263,18 @@ export async function sendTripMediaForReply(
   senderId: string,
   replyText: string,
   userText: string,
-  token: string | undefined,
+  token: string | null | undefined,
   pageId: string,
   igUserId?: string | null,
   trace?: { requestId: string; correlationId: string; source: string },
 ) {
-  if (platform !== "facebook" || !token) return;
+  if (platform !== "facebook" || !token) {
+    recordCounter("webhook.trip_media_skipped_total", 1, { platform, reason: !token ? "missing_token" : "unsupported_platform" });
+    return;
+  }
+  const policy = getReplyMediaPolicy(userText, replyText);
+  recordCounter("webhook.trip_media_policy_total", 1, { platform, reason: policy.reason });
+  if (!policy.allowed) return;
   try {
     const tripsForPhotos = await listTrips({ limit: 5000 });
     const activeTrips = tripsForPhotos.filter((trip) => trip.status === "active");
@@ -261,13 +289,15 @@ export async function sendTripMediaForReply(
       // is still what the customer gets rather than nothing.
       const websiteLink = mediaResolution.status === "verified" ? getTripWebsiteLink(mediaResolution.trip) : null;
       if (websiteLink) {
+        recordReplyMediaDelivery("trip_link", "attempted");
         try {
           await sendTextMessage(senderId, `Дэлгэрэнгүй мэдээлэл, үнэ, зургийг эндээс харна уу 👉 ${websiteLink}`, token, {
             requestId: trace?.requestId,
             correlationId: trace?.correlationId,
             source: "api.webhook.trip_link",
           });
-          await appendMessage(senderId, "assistant", `👉 ${websiteLink}`);
+          recordReplyMediaDelivery("trip_link", "sent");
+          await appendMessage(senderId, "assistant", `👉 ${websiteLink}`).catch(() => {});
           recordCounter("webhook.trip_link_sent_total", 1, { platform });
           logInfo("webhook.trip_link_sent", {
             requestId: trace?.requestId,
@@ -278,6 +308,7 @@ export async function sendTripMediaForReply(
           });
           return;
         } catch (error) {
+          recordReplyMediaDelivery("trip_link", "failed");
           logWarn("webhook.trip_link_send_failed", {
             requestId: trace?.requestId,
             correlationId: trace?.correlationId,
@@ -288,11 +319,13 @@ export async function sendTripMediaForReply(
           });
         }
       }
+      recordReplyMediaDelivery("pdf", "attempted");
       const sent =
         brochure.type === "id"
           ? await sendFbFileAttachment(senderId, brochure.value, token)
           : await sendFbFileByUrl(senderId, brochure.value, token);
       if (sent) {
+        recordReplyMediaDelivery("pdf", "sent");
         await recordFileMessage(senderId, brochure.value);
         recordCounter("webhook.trip_pdf_sent_total", 1, { platform });
         logInfo("webhook.trip_pdf_sent", {
@@ -305,6 +338,7 @@ export async function sendTripMediaForReply(
         });
         return;
       }
+      recordReplyMediaDelivery("pdf", "failed");
       logWarn("webhook.trip_pdf_send_failed", {
         requestId: trace?.requestId,
         correlationId: trace?.correlationId,
@@ -319,6 +353,7 @@ export async function sendTripMediaForReply(
     // this replaced. If the PDF is missing or its send failed, send nothing
     // and leave it for staff rather than falling back to those images.
     if (mediaResolution.status === "verified" && isPosterLinkedTrip(mediaResolution.trip)) {
+      recordCounter("webhook.trip_media_skipped_total", 1, { platform, reason: "poster_pdf_unavailable_or_failed" });
       if (!getTripBrochureAsset(mediaResolution.trip)) {
         logWarn("webhook.poster_linked_trip_missing_pdf", {
           requestId: trace?.requestId,
@@ -335,12 +370,13 @@ export async function sendTripMediaForReply(
       return;
     }
     const inferredPhotos = extractTripPhotosForReply(replyText, tripsForPhotos, { userText });
-    const tripPhotos =
+    const tripPhotos = limitReplyPhotos(
       inferredPhotos.length > 0
         ? inferredPhotos
-        : hasTripPhotoIntent(userText)
-          ? extractTripPhotosForUserMessage(userText, tripsForPhotos)
-          : [];
+        : extractTripPhotosForUserMessage(userText, tripsForPhotos), policy.photoLimit);
+    if (tripPhotos.length === 0) {
+      recordCounter("webhook.trip_media_skipped_total", 1, { platform, reason: "no_matching_photos" });
+    }
     logInfo("webhook.trip_photos_selected", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
@@ -356,14 +392,19 @@ export async function sendTripMediaForReply(
         }
       }),
     });
+    const deliveredPhotos: string[] = [];
     for (const url of tripPhotos) {
+      recordReplyMediaDelivery("photo", "attempted");
       try {
         await sendImageMessage(senderId, url, token, {
           requestId: trace?.requestId,
           correlationId: trace?.correlationId,
           source: "api.webhook.trip_photo",
         });
+        deliveredPhotos.push(url);
+        recordReplyMediaDelivery("photo", "sent");
       } catch (error) {
+        recordReplyMediaDelivery("photo", "failed");
         logWarn("webhook.trip_photo_send_failed", {
           requestId: trace?.requestId,
           correlationId: trace?.correlationId,
@@ -387,14 +428,15 @@ export async function sendTripMediaForReply(
         });
       }
     }
-    if (tripPhotos.length > 0) {
-      await recordImageMessage(senderId, tripPhotos);
+    if (deliveredPhotos.length > 0) {
+      await recordImageMessage(senderId, deliveredPhotos);
       recordCounter("webhook.trip_photos_sent_total", 1, {
         platform,
-        photoCount: String(tripPhotos.length),
+        photoCount: String(deliveredPhotos.length),
       });
     }
   } catch (error) {
+    recordCounter("webhook.trip_media_stage_failed_total", 1, { platform });
     logWarn("webhook.trip_media_stage_failed", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
@@ -434,7 +476,7 @@ export async function fetchAndStoreFbName(senderId: string, token: string): Prom
 }
 export async function sendFacebookTypingIndicator(
   recipientId: string,
-  token: string | undefined,
+  token: string | null | undefined,
   pageId: string,
   trace?: { requestId: string; correlationId: string; source: string },
 ) {

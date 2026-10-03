@@ -1,11 +1,11 @@
 import type { NextApiRequest } from "next";
+import { randomUUID } from "node:crypto";
 import { getEnv } from "./env";
 import { sharedMap, sharedSet } from "./processState";
 import { withRedis } from "./redisState";
 import {
   hashIdentifier,
   logError,
-  logWarn,
   recordCounter,
   setGauge,
 } from "./observability";
@@ -21,13 +21,19 @@ export type PendingConversationPayload = {
   text: string;
   pageId: string;
   igUserId?: string | null;
-  token?: string;
+  token?: string | null;
+  eventKey?: string;
   trace?: { requestId: string; correlationId: string };
 };
 export type PendingEnvelope = {
   payload: PendingConversationPayload;
   enqueuedAt: number;
   sequence: number;
+  receipt: string;
+};
+export type PendingConversationHead = {
+  payload: PendingConversationPayload;
+  receipt: string;
 };
 export type EventClaimState = "acquired" | "already_completed" | "in_progress";
 export type EventClaim = {
@@ -61,6 +67,31 @@ return 0
 const REDIS_CONVERSATION_REFRESH_LUA = `
 if redis.call("GET", KEYS[1]) == ARGV[1] then
   return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+end
+return 0
+`;
+const REDIS_PENDING_ENQUEUE_LUA = `
+if ARGV[3] ~= "" then
+  local pending = redis.call("LRANGE", KEYS[1], 0, tonumber(ARGV[1]) - 1)
+  for _, raw in ipairs(pending) do
+    local item = cjson.decode(raw)
+    local payload = item.payload or item
+    if payload.eventKey == ARGV[3] then
+      return 2
+    end
+  end
+end
+if redis.call("LLEN", KEYS[1]) >= tonumber(ARGV[1]) then
+  return 0
+end
+redis.call("RPUSH", KEYS[1], ARGV[2])
+redis.call("PERSIST", KEYS[1])
+return 1
+`;
+const REDIS_PENDING_ACK_LUA = `
+if redis.call("LINDEX", KEYS[1], 0) == ARGV[1] then
+  redis.call("LPOP", KEYS[1])
+  return 1
 end
 return 0
 `;
@@ -246,7 +277,10 @@ export async function claimEventForProcessingConsistent(key: string): Promise<Ev
             processingEventRedisKey(key),
             token,
           );
-          await pipeline.exec();
+          const results = await pipeline.exec();
+          if (!results || results.some(([error]) => error)) {
+            throw new RetryableWebhookError("redis_replay_unavailable:event_complete");
+          }
           return true;
         });
         if (!completed) {
@@ -308,7 +342,8 @@ export async function claimEventForProcessingConsistent(key: string): Promise<Ev
 export async function runEventWithClaim(
   key: string,
   tags: { platform: string; eventType: "dm" | "feed" },
-  task: () => Promise<void>,
+  task: (complete: () => Promise<void>) => Promise<void>,
+  onAlreadyCompleted?: () => Promise<void>,
 ) {
   const claim = await claimEventForProcessingConsistent(key);
   if (claim.state === "already_completed") {
@@ -317,6 +352,13 @@ export async function runEventWithClaim(
       event_type: tags.eventType,
       reason: "already_completed",
     });
+    if (onAlreadyCompleted) {
+      try {
+        await onAlreadyCompleted();
+      } catch (error) {
+        throw asRetryableWebhookError(error, "event_recovery_failed");
+      }
+    }
     return;
   }
   if (claim.state === "in_progress") {
@@ -327,18 +369,37 @@ export async function runEventWithClaim(
     });
     return;
   }
+  let completed = false;
+  let completion: Promise<void> | null = null;
+  const complete = () => {
+    if (!completion) {
+      completion = (async () => {
+        await claim.complete();
+        completed = true;
+        recordCounter("webhook.event_completed_total", 1, {
+          platform: tags.platform,
+          event_type: tags.eventType,
+        });
+      })();
+    }
+    return completion;
+  };
   try {
-    await task();
-    await claim.complete();
-    recordCounter("webhook.event_completed_total", 1, {
-      platform: tags.platform,
-      event_type: tags.eventType,
-    });
+    await task(complete);
+    await complete();
   } catch (error) {
-    try {
-      await claim.release();
-    } catch (releaseError) {
-      throw asRetryableWebhookError(releaseError, "event_claim_release_failed");
+    // An in-flight checkpoint must settle before deciding whether to release.
+    // TS's closure analysis narrows `completion` to `null` here (it cannot
+    // see that `complete`, called via `task` above, may have reassigned it)
+    // — the cast reflects the real runtime type, not a type-safety bypass.
+    const inFlight = completion as Promise<void> | null;
+    if (inFlight) await inFlight.catch(() => {});
+    if (!completed) {
+      try {
+        await claim.release();
+      } catch (releaseError) {
+        throw asRetryableWebhookError(releaseError, "event_claim_release_failed");
+      }
     }
     throw asRetryableWebhookError(error, "event_processing_failed");
   }
@@ -362,65 +423,28 @@ export function updateConcurrencyGauges() {
   setGauge("webhook.pending_conversations", pendingConversations.size);
   setGauge("webhook.pending_messages", pendingConversationMessageCount);
 }
-function findOldestPendingEnvelope() {
-  let oldestConversationKey: string | null = null;
-  let oldestEnvelope: PendingEnvelope | null = null;
-  for (const [conversationKey, queue] of pendingConversations.entries()) {
-    const first = queue[0];
-    if (!first) continue;
-    if (!oldestEnvelope || first.sequence < oldestEnvelope.sequence) {
-      oldestEnvelope = first;
-      oldestConversationKey = conversationKey;
-    }
-  }
-  return { oldestConversationKey, oldestEnvelope };
-}
-function evictOldestPendingEnvelope(reason: "overflow_global" | "overflow_conversation") {
-  const { oldestConversationKey, oldestEnvelope } = findOldestPendingEnvelope();
-  if (!oldestConversationKey || !oldestEnvelope) return false;
-  const queue = pendingConversations.get(oldestConversationKey);
-  if (!queue?.length) return false;
-  queue.shift();
-  pendingConversationMessageCount = Math.max(0, pendingConversationMessageCount - 1);
-  if (!queue.length) pendingConversations.delete(oldestConversationKey);
-  recordCounter("webhook.pending_evicted_total", 1, { reason });
-  logWarn("webhook.pending_evicted", {
-    reason,
-    conversationKeyHash: hashIdentifier(oldestConversationKey),
-    maxPendingConversations: MAX_PENDING_CONVERSATIONS,
-    maxPendingPerConversation: MAX_PENDING_PER_CONVERSATION,
-  });
-  return true;
-}
 function enqueuePendingConversation(
   conversationKey: string,
   payload: PendingConversationPayload,
 ) {
-  while (pendingConversationMessageCount >= MAX_PENDING_CONVERSATIONS) {
-    if (!evictOldestPendingEnvelope("overflow_global")) break;
-  }
   const queue = pendingConversations.get(conversationKey) || [];
+  if (payload.eventKey && queue.some((head) => head.payload.eventKey === payload.eventKey)) {
+    return;
+  }
+  if (pendingConversationMessageCount >= MAX_PENDING_CONVERSATIONS) {
+    throw new RetryableWebhookError("pending_overflow:global");
+  }
+  if (queue.length >= MAX_PENDING_PER_CONVERSATION) {
+    throw new RetryableWebhookError("pending_overflow:conversation");
+  }
   queue.push({
-    payload,
+    payload: { ...payload, token: null, trace: payload.trace && { ...payload.trace } },
     enqueuedAt: Date.now(),
     sequence: ++pendingSequence,
+    receipt: randomUUID(),
   });
   pendingConversations.set(conversationKey, queue);
   pendingConversationMessageCount += 1;
-  while (queue.length > MAX_PENDING_PER_CONVERSATION) {
-    const dropped = queue.shift();
-    if (dropped) {
-      pendingConversationMessageCount = Math.max(0, pendingConversationMessageCount - 1);
-      recordCounter("webhook.pending_evicted_total", 1, {
-        reason: "overflow_conversation",
-      });
-      logWarn("webhook.pending_evicted", {
-        reason: "overflow_conversation",
-        conversationKeyHash: hashIdentifier(conversationKey),
-        maxPendingPerConversation: MAX_PENDING_PER_CONVERSATION,
-      });
-    }
-  }
   recordCounter("webhook.pending_enqueued_total", 1, {
     mode: queue.length > 1 ? "append" : "new",
   });
@@ -581,12 +605,20 @@ export async function enqueuePendingConversationConsistent(
   if (env.redisConversationEnabled) {
     const redisQueued = await withRedis("webhook.pending_enqueue", async (redis) => {
       const key = conversationPendingRedisKey(conversationKey);
-      await redis.rpush(key, JSON.stringify(payload));
-      await redis.ltrim(key, -MAX_PENDING_PER_CONVERSATION, -1);
-      await redis.pexpire(key, env.redisLockTtlMs * 4);
-      return true;
+      return await redis.eval(
+        REDIS_PENDING_ENQUEUE_LUA,
+        1,
+        key,
+        String(MAX_PENDING_PER_CONVERSATION),
+        JSON.stringify({ payload: { ...payload, token: null }, receipt: randomUUID() }),
+        payload.eventKey || "",
+      );
     });
-    if (redisQueued) {
+    if (redisQueued === 2) return;
+    if (redisQueued === 0) {
+      throw new RetryableWebhookError("pending_overflow:conversation");
+    }
+    if (redisQueued === 1) {
       recordCounter("webhook.pending_enqueued_total", 1, {
         mode: "append",
         backend: "redis",
@@ -601,6 +633,55 @@ export async function enqueuePendingConversationConsistent(
   }
   enqueuePendingConversation(conversationKey, payload);
 }
+function parsePendingPayload(raw: string): PendingConversationPayload {
+  const parsed = JSON.parse(raw);
+  const payload = parsed.payload ?? parsed;
+  return { ...payload, token: null };
+}
+// Consume under the existing conversation lock; acknowledge only after processing succeeds.
+export async function peekPendingConversationConsistent(
+  conversationKey: string,
+): Promise<PendingConversationHead | null> {
+  if (env.redisConversationEnabled) {
+    const head = await withRedis("webhook.pending_peek", async (redis) => {
+      const raw = await redis.lindex(conversationPendingRedisKey(conversationKey), 0);
+      return { head: raw === null ? null : { payload: parsePendingPayload(raw), receipt: raw } };
+    });
+    if (head) return head.head;
+    recordConsistencyDegraded("conversation", "pending_peek");
+    throw new RetryableWebhookError("redis_conversation_unavailable:pending_peek");
+  }
+  const head = pendingConversations.get(conversationKey)?.[0];
+  return head ? {
+    payload: { ...head.payload, trace: head.payload.trace && { ...head.payload.trace } },
+    receipt: head.receipt,
+  } : null;
+}
+export async function acknowledgePendingConversationConsistent(
+  conversationKey: string,
+  expectedHead: PendingConversationHead,
+): Promise<boolean> {
+  if (env.redisConversationEnabled) {
+    const result = await withRedis("webhook.pending_ack", async (redis) => redis.eval(
+      REDIS_PENDING_ACK_LUA, 1, conversationPendingRedisKey(conversationKey), expectedHead.receipt,
+    ));
+    if (result === 0) return false;
+    if (result === 1) {
+      recordCounter("webhook.pending_drained_total", 1, { backend: "redis" });
+      return true;
+    }
+    recordConsistencyDegraded("conversation", "pending_ack");
+    throw new RetryableWebhookError("redis_conversation_unavailable:pending_ack");
+  }
+  const queue = pendingConversations.get(conversationKey);
+  if (!queue?.length || queue[0].receipt !== expectedHead.receipt) return false;
+  queue.shift();
+  pendingConversationMessageCount = Math.max(0, pendingConversationMessageCount - 1);
+  if (!queue.length) pendingConversations.delete(conversationKey);
+  recordCounter("webhook.pending_drained_total", 1, { backend: "memory" });
+  updateConcurrencyGauges();
+  return true;
+}
 export async function drainPendingConversationConsistent(
   conversationKey: string,
 ): Promise<PendingConversationPayload | null> {
@@ -611,7 +692,7 @@ export async function drainPendingConversationConsistent(
       if (!raw) return { found: false } as const;
       return {
         found: true,
-        payload: JSON.parse(raw) as PendingConversationPayload,
+        payload: parsePendingPayload(raw),
       } as const;
     });
     if (redisPayload) {

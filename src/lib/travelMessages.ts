@@ -9,15 +9,9 @@
 
 import { ensureTravelSchema } from "./travelOps";
 import { queryNeon } from "./neonDb";
+import { minimizeAnalyticsEntry } from "./analyticsMinimization";
 
-/** Normalize a message for grouping: lowercase, strip punctuation, collapse spaces. */
-export function normalizeQuestion(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+export { normalizeQuestion } from "./analyticsMinimization";
 
 /**
  * Log one inbound customer message. Best-effort: swallows all errors so a
@@ -33,12 +27,13 @@ export async function logInboundMessage(input: {
     if (!text) return;
     // Skip very long pastes — they're not "questions" and bloat the table.
     if (text.length > 500) return;
+    const entry = minimizeAnalyticsEntry({ ...input, text });
     const ready = await ensureTravelSchema();
     if (!ready) return;
     await queryNeon(
       `INSERT INTO travel_messages (platform, sender_id, text, norm)
        VALUES ($1, $2, $3, $4)`,
-      [input.platform, input.senderId, text.slice(0, 500), normalizeQuestion(text).slice(0, 500)],
+      [entry.platform, entry.senderId, entry.text, entry.norm],
     );
   } catch {
     // Logging must never break the bot.

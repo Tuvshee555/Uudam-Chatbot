@@ -20,6 +20,8 @@
     "qa:real": "node scripts/replay-real-conversations.mjs",
     "qa:accuracy": "node --import tsx scripts/chatbot-accuracy.ts",
     "qa:accuracy:fixture": "node --import tsx scripts/chatbot-accuracy.ts --pipeline-fixture --require-pass",
+    "qa:quality": "node --import tsx scripts/chatbot-quality.ts",
+    "qa:baseline": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/export-chatbot-baseline.ts",
     "audit:trip-facts": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/audit-trip-facts.ts",
     "preflight": "node --import tsx scripts/preflight.ts",
     "validate": "npm run lint && npm run typecheck && npm run test && npm run build",
