@@ -1,0 +1,141 @@
+import type { TripMutationFields } from "./travelTypes";
+
+type UnknownRecord = Record<string, unknown>;
+
+function record(value: unknown): UnknownRecord {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as UnknownRecord
+    : {};
+}
+
+function text(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function strings(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map(text).filter(Boolean)
+    : [];
+}
+
+function dateKey(value: unknown): string {
+  const raw = text(value);
+  const match = raw.match(/^\d{4}-\d{2}-\d{2}/);
+  return match?.[0] || "";
+}
+
+function durationText(days: unknown, nights: unknown): string {
+  const dayCount = Math.max(1, Math.trunc(numberOrNull(days) ?? 1));
+  const nightCount = Math.max(0, Math.trunc(numberOrNull(nights) ?? Math.max(0, dayCount - 1)));
+  return `${dayCount} өдөр ${nightCount} шөнө`;
+}
+
+function availabilityStatus(value: unknown): "OPEN" | "SOLD_OUT" | "PAUSED" | "CANCELLED" {
+  const status = text(value).toUpperCase();
+  if (status === "SOLD_OUT") return "SOLD_OUT";
+  if (status === "CANCELLED" || status === "DEPARTED") return "CANCELLED";
+  if (status === "PAUSED") return "PAUSED";
+  return "OPEN";
+}
+
+/**
+ * Converts the shared customer-facing fields from the website's trip shape to
+ * the canonical chatbot record. Website-only editorial metadata deliberately
+ * stays on the website; it cannot affect a chatbot answer or a poster.
+ */
+export function websiteTripToCanonicalFields(input: unknown): {
+  sourceTripId: string;
+  fields: TripMutationFields;
+} {
+  const trip = record(input);
+  const sourceTripId = text(trip.sourceTripId);
+  if (!sourceTripId) throw new Error("Website trip is missing sourceTripId");
+
+  const metadata = record(trip.sourceMetadata);
+  const priorSource = record(metadata.connectedSource);
+  const priorExtra = record(priorSource.extra);
+  const departures = Array.isArray(trip.departures) ? trip.departures.map(record) : [];
+  const dates = departures.map(departure => dateKey(departure.startDate)).filter(Boolean);
+  const uniqueDates = [...new Set(dates)];
+  const image = text(trip.image);
+  const photos = [...new Set([image, ...strings(trip.extraImages)].filter(Boolean))];
+  const itinerary = (Array.isArray(trip.itinerary) ? trip.itinerary.map(record) : [])
+    .map((day, index) => ({
+      day: index + 1,
+      title: text(day.title),
+      description: text(day.description),
+      hotel: text(day.accommodation),
+      meals: {
+        breakfast: strings(day.meals).some(meal => /өглөө/i.test(meal)),
+        lunch: strings(day.meals).some(meal => /өдөр/i.test(meal)),
+        dinner: strings(day.meals).some(meal => /орой/i.test(meal)),
+      },
+      ...(text(day.image) ? { photo: text(day.image) } : {}),
+    }))
+    .filter(day => day.title || day.description || day.hotel);
+
+  const priceGroups = Array.isArray(priorExtra.price_groups) ? priorExtra.price_groups : [];
+  const simpleDepartureGroups = departures
+    .map(departure => {
+      const date = dateKey(departure.startDate);
+      if (!date) return null;
+      return {
+        dates: [date],
+        adult_price: numberOrNull(departure.price),
+        child_price: numberOrNull(departure.childPrice),
+        infant_price: numberOrNull(departure.infantPrice),
+      };
+    })
+    .filter((group): group is NonNullable<typeof group> => Boolean(group));
+
+  const extra = {
+    ...priorExtra,
+    website_summary: text(trip.summary),
+    included_items: strings(trip.included),
+    excluded_items: strings(trip.excluded),
+    important_notes: strings(trip.importantNotes),
+    departure_rule: text(trip.departureRule),
+    itinerary_days: itinerary,
+    customer_visible: trip.isPublished !== false,
+    website_departure_availability: departures
+      .map(departure => {
+        const date = dateKey(departure.startDate);
+        return date ? {
+          date,
+          status: availabilityStatus(departure.status),
+          seatsLeft: numberOrNull(departure.seatsLeft),
+        } : null;
+      })
+      .filter((value): value is NonNullable<typeof value> => Boolean(value)),
+    // A source with hotel/package pricing is richer than the website's simple
+    // scalar editor. Preserve it; otherwise capture per-date website prices.
+    price_groups: priceGroups.length ? priceGroups : simpleDepartureGroups,
+  };
+
+  return {
+    sourceTripId,
+    fields: {
+      operator_name: text(priorSource.operator_name) || "UUDAM TRAVEL AGENCY",
+      route_name: text(trip.title),
+      duration_text: durationText(trip.durationDays, trip.durationNights),
+      adult_price: numberOrNull(trip.price),
+      child_price: numberOrNull(trip.childPrice),
+      infant_price: numberOrNull(trip.infantPrice),
+      currency: text(trip.currency) || "MNT",
+      departure_dates: uniqueDates,
+      seats_total: null,
+      seats_left: null,
+      has_food: typeof trip.foodIncluded === "boolean" ? trip.foodIncluded : null,
+      status: trip.isPublished === false ? "draft" : "active",
+      notes: text(trip.description),
+      hotel: text(trip.hotel),
+      source_description: text(trip.summary),
+      photo_urls: photos,
+      extra,
+    },
+  };
+}

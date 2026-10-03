@@ -88,7 +88,7 @@ async function hostedPhoto(photo: string): Promise<string> {
 }
 
 export type ContentSnapshot = {
-  title: string; description: string; hotel: string | null;
+  title: string; summary: string | null; description: string; hotel: string | null;
   included: string[]; excluded: string[]; importantNotes: string[];
 };
 export function contentSnapshotHash(snapshot: ContentSnapshot): string {
@@ -176,7 +176,11 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   // stays the source of truth, this only stops a NO-OP resync from
   // clobbering a same-day website edit.
   const contentSnapshot: ContentSnapshot = {
-    title: source.route_name, description: source.notes || String(poster.subtitle || source.route_name),
+    title: source.route_name,
+    summary: typeof source.extra.website_summary === "string" && source.extra.website_summary.trim()
+      ? source.extra.website_summary.trim()
+      : null,
+    description: source.notes || String(poster.subtitle || source.route_name),
     hotel: source.hotel || null,
     included: strings(source.extra.included_items), excluded: strings(source.extra.excluded_items),
     importantNotes: strings(source.extra.important_notes),

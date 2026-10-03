@@ -40,6 +40,7 @@ const KNOWN_EXTRA_KEYS = new Set([
   "itinerary_days",
   "age_rules",
   "marketing_badge",
+  "website_summary",
 ]);
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -386,6 +387,7 @@ export function normalizeExtra(
     itinerary_days: normalizeItineraryDays(raw.itinerary_days),
     age_rules: normalizeAgeRules(raw.age_rules),
     marketing_badge: normalizeMarketingBadge(raw.marketing_badge),
+    website_summary: asString(raw.website_summary).trim(),
   };
 
   return { extra, warnings };

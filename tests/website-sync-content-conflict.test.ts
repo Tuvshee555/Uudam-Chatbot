@@ -15,7 +15,7 @@ before(async () => {
 });
 
 const SNAPSHOT: ContentSnapshot = {
-  title: "СЭЛВИН – САРГОЛ ХОТ - ДАРКАН", description: "Тайлбар", hotel: "4 od zochid buudal",
+  title: "СЭЛВИН – САРГОЛ ХОТ - ДАРКАН", summary: "Товч", description: "Тайлбар", hotel: "4 od zochid buudal",
   included: ["Тийз"], excluded: ["Оройн хоол"], importantNotes: [],
 };
 

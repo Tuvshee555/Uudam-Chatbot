@@ -26,6 +26,7 @@ export function tripToPoster(trip: TravelTrip, prior: unknown, before?: TravelTr
   const extraChanged = (key: string) => !before || JSON.stringify(trip.extra[key]) !== JSON.stringify(before.extra[key]);
   data.title = trip.route_name;
   data.agency = trip.operator_name || "UUDAM TRAVEL AGENCY";
+  if (changed("source_description")) data.subtitle = trip.source_description || "";
   if (changed("duration_text")) {
     const d = duration(trip.duration_text);
     data.duration_days = d.days;
