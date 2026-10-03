@@ -173,7 +173,7 @@ function daysBetween(from: string, to: string): string[] {
   return out;
 }
 
-/** "жинин" matches "жинин", and a stem matches its suffixed form ("бээжин" ~ "бээжингийн"). */
+/** A word matches itself, and a stem matches its suffixed form ("<хот>" ~ "<хот>ын"). */
 function wordMatches(word: string, token: string): boolean {
   if (word === token) return true;
   return Math.min(word.length, token.length) >= 4 && (word.startsWith(token) || token.startsWith(word));
