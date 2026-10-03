@@ -89,6 +89,9 @@ function normalizePriceGroups(raw: unknown): Record<string, unknown>[] {
       enrichDateKeys({
         label: asString(g.label),
         ...(asString(g.hotel).trim() ? { hotel: asString(g.hotel).trim() } : {}),
+        ...(asString(g.package_id || g.package).trim()
+          ? { package_id: asString(g.package_id || g.package).trim() }
+          : {}),
         dates: asStringArray(g.dates),
         display_dates: asStringArray(g.display_dates),
         date_keys: asStringArray(g.date_keys),
@@ -114,6 +117,9 @@ function normalizeDiscountGroups(raw: unknown): Record<string, unknown>[] {
     .map((g) =>
       enrichDateKeys({
         label: asString(g.label),
+        ...(asString(g.package_id || g.package).trim()
+          ? { package_id: asString(g.package_id || g.package).trim() }
+          : {}),
         dates: asStringArray(g.dates),
         display_dates: asStringArray(g.display_dates),
         date_keys: asStringArray(g.date_keys),
