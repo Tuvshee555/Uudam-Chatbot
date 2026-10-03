@@ -62,6 +62,8 @@ export type TripEditModalProps = {
   tripSourceProvenance: SourceProvenance[];
   tripAnswerHints: AnswerHint[];
   setTripAnswerHints: React.Dispatch<React.SetStateAction<AnswerHint[]>>;
+  /** Jumps to the AI туслах tab with this trip named in the instruction box — not available for a brand-new, unsaved trip. */
+  onAskAi?: (tripName: string) => void;
 };
 
 const inputCls = "w-full rounded-md border border-line-strong bg-surface px-3 py-1.5 text-sm text-ink transition-colors placeholder:text-ink-subtle focus:border-brand";
@@ -112,7 +114,15 @@ function splitDraftList(value: string | undefined): string[] {
   return (value || "").split(",").map((item) => item.trim()).filter(Boolean);
 }
 
-function GapWarning({ gaps, isNewTrip }: { gaps: TripGap[]; isNewTrip: boolean }) {
+function GapWarning({
+  gaps,
+  isNewTrip,
+  onAskAi,
+}: {
+  gaps: TripGap[];
+  isNewTrip: boolean;
+  onAskAi?: () => void;
+}) {
   const blocking = gaps.filter((gap) => gap.severity === "blocking");
   const warnings = gaps.filter((gap) => gap.severity === "warning");
   if (gaps.length === 0) {
@@ -165,6 +175,12 @@ function GapWarning({ gaps, isNewTrip }: { gaps: TripGap[]; isNewTrip: boolean }
               </span>
             ))}
           </div>
+          {onAskAi && (
+            <Button size="sm" variant="secondary" className="mt-2.5" onClick={onAskAi}>
+              <Icons.bot size={14} />
+              AI туслахаар бөглүүлэх
+            </Button>
+          )}
         </div>
       </div>
     </div>
@@ -551,6 +567,7 @@ export function TripEditModal({
   tripSourceProvenance,
   tripAnswerHints,
   setTripAnswerHints,
+  onAskAi,
 }: TripEditModalProps) {
   const [activeTab, setActiveTab] = React.useState<TripEditorTab>("base");
   const [confirmingIncomplete, setConfirmingIncomplete] = React.useState(false);
@@ -660,7 +677,15 @@ export function TripEditModal({
         )
       }
     >
-      <GapWarning gaps={gaps} isNewTrip={isNewTrip} />
+      <GapWarning
+        gaps={gaps}
+        isNewTrip={isNewTrip}
+        onAskAi={
+          !isNewTrip && onAskAi && tripDraft.route_name
+            ? () => onAskAi(tripDraft.route_name)
+            : undefined
+        }
+      />
       <div className="mb-4 flex flex-wrap gap-2 border-b border-line pb-4">
         <EditorTabButton active={activeTab === "base"} label="Үндсэн" onClick={() => setActiveTab("base")} />
         <EditorTabButton active={activeTab === "pricing"} label="Үнэ ба гаралт" onClick={() => setActiveTab("pricing")} />

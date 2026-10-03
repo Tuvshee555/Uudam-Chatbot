@@ -1517,6 +1517,22 @@ export default function AdminPage() {
       setBusyKey("");
     }
   }
+  /**
+   * Shortcut from a trip card/poster to the AI туслах tab: names the trip in
+   * the instruction box so staff don't have to retype/search for it, and
+   * leaves sending to them — the assistant's own propose → review → confirm
+   * flow is the save path, this only gets them to a pre-filled box faster.
+   */
+  function askAiAboutTrip(tripName: string) {
+    setAiInput(`"${tripName}" аяллыг `);
+    setTab("assistant");
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+  }
   async function sendBroadcast() {
     if (!broadcastMessage.trim() || broadcastSending) return;
     setBroadcastSending(true);
@@ -1841,6 +1857,7 @@ export default function AdminPage() {
                 setPosterToOpen(posterId);
                 setTab("poster");
               }}
+              onAskAi={askAiAboutTrip}
               businessName={settings?.business_name || ""}
               onToggleVisible={async (trip) => {
                 const currentlyHidden =
@@ -1988,6 +2005,7 @@ export default function AdminPage() {
               apiFetch={fetchWithAdmin}
               openPosterId={posterToOpen}
               onPosterOpened={() => setPosterToOpen(null)}
+              onAskAi={askAiAboutTrip}
             />
           )}
           {tab === "json" && (
@@ -2064,6 +2082,10 @@ export default function AdminPage() {
         tripSourceProvenance={tripSourceProvenance}
         tripAnswerHints={tripAnswerHints}
         setTripAnswerHints={setTripAnswerHints}
+        onAskAi={(tripName) => {
+          closeTripModal();
+          askAiAboutTrip(tripName);
+        }}
       />
       <AdminConfirmModals
         deletingTrip={deletingTrip}

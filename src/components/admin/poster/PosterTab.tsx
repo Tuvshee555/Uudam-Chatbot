@@ -459,11 +459,14 @@ export default function PosterTab({
   apiFetch,
   openPosterId,
   onPosterOpened,
+  onAskAi,
 }: {
   apiFetch: ApiFetch;
   /** Set by the trips tab's "postert зураг нэмэх" redirect — opens this poster once, then clears. */
   openPosterId?: string | null;
   onPosterOpened?: () => void;
+  /** Jumps to the AI туслах tab with this trip named in the instruction box. */
+  onAskAi?: (tripName: string) => void;
 }) {
   // apiFetch(url, init) injects the admin secret header (from admin.tsx).
   const fetchJson = async (url: string, init?: RequestInit): Promise<JsonRecord> => {
@@ -2218,7 +2221,7 @@ export default function PosterTab({
                           <p className="mt-1 truncate text-xs text-brand/90">{currentHistoryItem.linked_trip_name}</p>
                         )}
                       </div>
-                      <div className="flex flex-wrap gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <Badge tone={currentHistoryItem?.linked_trip_id ? "brand" : "danger"}>
                           {currentHistoryItem?.linked_trip_id ? "Trip холбоотой" : "Trip байхгүй"}
                         </Badge>
@@ -2226,6 +2229,17 @@ export default function PosterTab({
                           {currentHistoryItem?.linked_trip_has_pdf ? "PDF бэлэн" : "PDF дутуу"}
                         </Badge>
                         {currentHistoryItem?.linked_trip_needs_review && <Badge tone="warning">Шалгах</Badge>}
+                        {onAskAi && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => onAskAi(currentHistoryItem?.linked_trip_name || trip?.title || "")}
+                            title="Үнэ, огноо, хөтөлбөр өөрчлөх зааварчилгааг AI туслахад бичиж оруулна"
+                          >
+                            <Icons.bot size={14} />
+                            AI-аар засах
+                          </Button>
+                        )}
                       </div>
                     </div>
                   </div>

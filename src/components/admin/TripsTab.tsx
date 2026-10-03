@@ -25,6 +25,7 @@ export function TripsTab({
   onFetchAllTrips,
   businessName,
   onFixPhotosOnPoster,
+  onAskAi,
 }: {
   apiFetch: (url: string, init?: RequestInit) => Promise<Response>;
   trips: TravelTrip[];
@@ -45,6 +46,8 @@ export function TripsTab({
   businessName: string;
   /** Jumps to the poster tab and opens the exact poster missing photos — the gallery lives there, not in this form. */
   onFixPhotosOnPoster: (posterId: string) => void;
+  /** Jumps to the AI туслах tab with this trip named in the instruction box. */
+  onAskAi: (tripName: string) => void;
 }) {
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [brochureFilter, setBrochureFilter] = useState<"all" | "with" | "without">("all");
@@ -353,6 +356,7 @@ export function TripsTab({
           onDelete={onDelete}
           onToggleVisible={onToggleVisible}
           onFixPhotosOnPoster={onFixPhotosOnPoster}
+          onAskAi={onAskAi}
         />
       )}
     </div>
@@ -579,12 +583,14 @@ function TripGroups({
   onDelete,
   onToggleVisible,
   onFixPhotosOnPoster,
+  onAskAi,
 }: {
   trips: TravelTrip[];
   onEdit: (trip: TravelTrip) => void;
   onDelete: (trip: TravelTrip) => void;
   onToggleVisible: (trip: TravelTrip) => void;
   onFixPhotosOnPoster: (posterId: string) => void;
+  onAskAi: (tripName: string) => void;
 }) {
   const groups = useMemo(() => {
     const meaningfulCategories = new Set(
@@ -650,6 +656,7 @@ function TripGroups({
                     onDelete={() => onDelete(trip)}
                     onToggleVisible={() => onToggleVisible(trip)}
                     onFixPhotosOnPoster={onFixPhotosOnPoster}
+                    onAskAi={() => onAskAi(trip.route_name)}
                   />
                 ))}
               </div>
@@ -667,12 +674,14 @@ function TripCard({
   onDelete,
   onToggleVisible,
   onFixPhotosOnPoster,
+  onAskAi,
 }: {
   trip: TravelTrip;
   onEdit: () => void;
   onDelete: () => void;
   onToggleVisible: () => void;
   onFixPhotosOnPoster: (posterId: string) => void;
+  onAskAi: () => void;
 }) {
   const isHidden = (trip.extra as Record<string, unknown>)?.customer_visible === false;
   const isPosterSynced = isPosterSyncedTrip(trip);
@@ -838,6 +847,15 @@ function TripCard({
             }
           >
             {isHidden ? "Харуулах" : "Нуух"}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={onAskAi}
+            title="Үнэ, огноо, хөтөлбөр өөрчлөх зааварчилгааг AI туслахад бичиж оруулна"
+          >
+            <Icons.bot size={15} />
+            AI-аар засах
           </Button>
           <Button size="sm" variant="secondary" onClick={onEdit}>
             <Icons.edit size={15} />
