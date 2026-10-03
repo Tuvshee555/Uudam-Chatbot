@@ -64,8 +64,12 @@ function fareRow(offer: ResolvedTripOffer, sourceRows: Map<string, Record<string
   const adult = offer.prices.adult;
   const adultSource = offer.fares.find(fare => fare.kind === "adult")?.sourceOfferId;
   const source = adultSource ? sourceRows.get(adultSource) : undefined;
+  const sourceWithoutDimensions = { ...(source || {}) };
+  delete sourceWithoutDimensions.hotel;
+  delete sourceWithoutDimensions.hotel_id;
+  delete sourceWithoutDimensions.package_id;
   return {
-    ...source,
+    ...sourceWithoutDimensions,
     ...(typeof source?.single_price === "number" ? { single_price: source.single_price } : {}),
     id: offer.id,
     label: offer.date,

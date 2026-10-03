@@ -90,6 +90,18 @@ test("cheapest calendar fare preserves one hotel's passenger prices and every ag
   assert.ok(projected.canonicalOffers.entries.every(entry => entry.fareCard.status === "ready"));
 });
 
+test("trip-level included hotel text does not create hotel choices", () => {
+  const projected = payload({ ...trip, hotel: "Jomtien Palm Beach / Pullman Bangkok", extra: { price_groups: [
+    { dates: ["2026-10-01"], adult_price: 2_000_000, child_price: 1_500_000 },
+  ] } });
+
+  assert.equal(projected.departures[0].price, 2_000_000);
+  assert.equal(projected.priceGroups[0].hotel, undefined);
+  const ready = projected.canonicalOffers.entries.filter(entry => entry.fareCard.status === "ready");
+  assert.equal(ready.length, 1);
+  if (ready[0]?.fareCard.status === "ready") assert.equal(ready[0].fareCard.offer.hotel, null);
+});
+
 test("website fare cards retain closed departure prices without reopening or borrowing another year's availability", () => {
   const projected = payload({ ...trip, departure_dates: ["2026-10-01", "2027-10-01"], extra: {
     price_groups: [{ dates: ["2026-10-01"], adult_price: 2_000_000 }],

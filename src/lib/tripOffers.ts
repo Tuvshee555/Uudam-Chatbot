@@ -277,7 +277,7 @@ function discountInfo(raw: Row, now: Date): CanonicalTripOffer["discount"] {
 export function normalizeTripOffers(trip: TravelTrip, now = new Date()): CanonicalTripOffer[] {
   const extra = trip.extra || {};
   const records: Array<{ source: CanonicalTripOffer["source"]; raw: Row }> = [
-    { source: "base", raw: { ...extra, adult_price: trip.adult_price, child_price: trip.child_price, infant_price: trip.infant_price, hotel: trip.hotel, currency: trip.currency } },
+    { source: "base", raw: { ...extra, adult_price: trip.adult_price, child_price: trip.child_price, infant_price: trip.infant_price, currency: trip.currency } },
     ...rows(extra.departure_date_groups).map((raw) => ({ source: "legacy" as const, raw })),
     ...rows(extra.price_groups).map((raw) => ({ source: "price_group" as const, raw })),
     ...[...rows(extra.discounts), ...rows(extra.discount_groups)].map((raw) => ({ source: "discount" as const, raw })),
@@ -288,7 +288,10 @@ export function normalizeTripOffers(trip: TravelTrip, now = new Date()): Canonic
     const scoped = source === "base" ? { dates: baseDates, dateScoped: false, issues: [] } : offerDates(raw, trip, now);
     return {
       id, source, ...scoped,
-      hotel: str(raw.hotel) || (source === "base" ? null : str(trip.hotel)) || null,
+      // Only explicit offer rows create hotel choices. A trip-level hotel is
+      // included accommodation text, not a selectable package; inheriting it
+      // made ordinary date-specific prices look like "hotel picker" options.
+      hotel: str(raw.hotel) || null,
       hotelId: str(raw.hotel_id) || null,
       packageId: str(raw.package_id) || str(raw.package) || null,
       currency: (str(raw.currency) || trip.currency || "MNT").toUpperCase(),
