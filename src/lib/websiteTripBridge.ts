@@ -78,7 +78,10 @@ export function websiteTripToCanonicalFields(input: unknown): {
     }))
     .filter(day => day.title || day.description || day.hotel);
 
-  const priceGroups = Array.isArray(priorExtra.price_groups) ? priorExtra.price_groups : [];
+  const metadataPriceGroups = Array.isArray(metadata.price_groups) ? metadata.price_groups : [];
+  const priceGroups = metadataPriceGroups.length
+    ? metadataPriceGroups
+    : Array.isArray(priorExtra.price_groups) ? priorExtra.price_groups : [];
   const simpleDepartureGroups = departures
     .map(departure => {
       const date = dateKey(departure.startDate);
@@ -114,6 +117,9 @@ export function websiteTripToCanonicalFields(input: unknown): {
     // A source with hotel/package pricing is richer than the website's simple
     // scalar editor. Preserve it; otherwise capture per-date website prices.
     price_groups: priceGroups.length ? priceGroups : simpleDepartureGroups,
+    ...(record(metadata.age_rules).adult || record(metadata.age_rules).child || record(metadata.age_rules).infant
+      ? { age_rules: record(metadata.age_rules) }
+      : {}),
   };
 
   return {

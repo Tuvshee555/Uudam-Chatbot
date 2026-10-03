@@ -51,3 +51,36 @@ test("an empty website summary is an explicit removal", () => {
   assert.equal(result.fields.extra?.website_summary, "");
   assert.equal(result.fields.source_description, "");
 });
+
+test("website-authored passenger price groups sync to canonical extra", () => {
+  const result = websiteTripToCanonicalFields({
+    sourceTripId: "trip-web-3",
+    title: "Бангкок аялал",
+    description: "Тайлбар",
+    price: 2_340_000,
+    durationDays: 7,
+    durationNights: 6,
+    isPublished: true,
+    sourceMetadata: {
+      age_rules: { adult: "12+ нас", child: "2-11 нас", infant: "0-2 нас" },
+      price_groups: [{
+        label: "Үндсэн үнэ",
+        dates: [],
+        date_keys: [],
+        adult_price: 2_340_000,
+        passenger_prices: [
+          { label: "Хүүхэд", age_range: "2-4 нас", price: 1_350_000, currency: "MNT" },
+          { label: "Нярай", age_range: "0-2 нас", price: 0, currency: "MNT", note: "Үнэгүй" },
+        ],
+      }],
+    },
+  });
+
+  const groups = result.fields.extra?.price_groups as Array<Record<string, unknown>>;
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0].passenger_prices, [
+    { label: "Хүүхэд", age_range: "2-4 нас", price: 1_350_000, currency: "MNT" },
+    { label: "Нярай", age_range: "0-2 нас", price: 0, currency: "MNT", note: "Үнэгүй" },
+  ]);
+  assert.deepEqual(result.fields.extra?.age_rules, { adult: "12+ нас", child: "2-11 нас", infant: "0-2 нас" });
+});
