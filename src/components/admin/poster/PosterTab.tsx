@@ -545,7 +545,7 @@ export default function PosterTab({
     setTripHistoryRevision((revision) => revision + 1);
   }
 
-  function undoTripChange() {
+  async function undoTripChange() {
     if (!trip || tripUndoRef.current.length === 0) return;
     const previous = tripUndoRef.current.pop();
     if (!previous) return;
@@ -553,9 +553,10 @@ export default function PosterTab({
     skipTripHistoryRef.current = true;
     setTripHistoryRevision((revision) => revision + 1);
     setTrip(previous);
+    if (tripId) await persistTrip(previous);
   }
 
-  function redoTripChange() {
+  async function redoTripChange() {
     if (!trip || tripRedoRef.current.length === 0) return;
     const next = tripRedoRef.current.pop();
     if (!next) return;
@@ -563,6 +564,7 @@ export default function PosterTab({
     skipTripHistoryRef.current = true;
     setTripHistoryRevision((revision) => revision + 1);
     setTrip(next);
+    if (tripId) await persistTrip(next);
   }
 
   const upd: PosterUpdateFn = (path, value) => setTrip((t) => (t ? setPath(t, path, value) : t));
@@ -636,6 +638,8 @@ export default function PosterTab({
     ? bulkPlan.items.filter((item) => item.action === "skip" && (bulkSelections[item.posterId] || "skip") === "skip").length
     : 0;
   const currentHistoryItem = tripId ? history.find((item) => item.id === tripId) || null : null;
+  const canUndoTrip = tripUndoRef.current.length > 0;
+  const canRedoTrip = tripRedoRef.current.length > 0;
 
   const startTemplate = () => {
     resetTripHistory();
@@ -2123,6 +2127,15 @@ export default function PosterTab({
               onDragLeave={(e) => e.currentTarget.classList.remove("ring-2", "ring-brand")}
               onDrop={(e) => { e.preventDefault(); e.currentTarget.classList.remove("ring-2", "ring-brand"); handleFiles(e.dataTransfer.files); }}
             >
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => void undoTripChange()}
+                disabled={!!busy || !canUndoTrip}
+                title="Сүүлийн хийсэн өөрчлөлтийг буцаах"
+              >
+                <Icons.chevronLeft size={14} /> Back
+              </Button>
               <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm text-ink-muted hover:text-ink">
                 <input type="file" multiple accept=".pdf,.docx,.txt,image/*" className="hidden" onChange={(e) => handleFiles(e.target.files)} />
                 <Icons.upload size={16} className="shrink-0" />
@@ -2180,17 +2193,17 @@ export default function PosterTab({
                   <Button
                     size="sm"
                     variant="secondary"
-                    onClick={undoTripChange}
-                    disabled={!!busy || tripUndoRef.current.length === 0}
+                    onClick={() => void undoTripChange()}
+                    disabled={!!busy || !canUndoTrip}
                     title="Сүүлийн засварыг буцаах"
                   >
-                    <Icons.chevronLeft size={14} /> Буцаах
+                    <Icons.chevronLeft size={14} /> Back / Буцах
                   </Button>
                   <Button
                     size="sm"
                     variant="secondary"
-                    onClick={redoTripChange}
-                    disabled={!!busy || tripRedoRef.current.length === 0}
+                    onClick={() => void redoTripChange()}
+                    disabled={!!busy || !canRedoTrip}
                     title="Буцаасан засварыг дахин хийх"
                   >
                     <Icons.chevronRight size={14} /> Дахин хийх
