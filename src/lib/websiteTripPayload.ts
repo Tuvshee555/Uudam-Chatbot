@@ -25,6 +25,34 @@ function exactAmount(fare: OfferFare | undefined): number | null {
   return fare?.kind === "exact" || fare?.kind === "free" ? fare.amount : null;
 }
 
+/**
+ * A trip can have more than one child band (for example 2-5 and 6-11). The
+ * offer resolver deliberately refuses to pretend those are one fare, but the
+ * website's legacy `childPrice` column still needs the explicitly-published
+ * headline fare for date lists and admin views. The complete tier list stays
+ * in `passenger_prices`; this is only its backwards-compatible projection.
+ */
+function scalarAmount(source: Record<string, unknown> | undefined, kind: "adult" | "child" | "infant") {
+  const value = source?.[`${kind}_price`];
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function displayAmount(
+  offer: ResolvedTripOffer,
+  kind: "adult" | "child" | "infant",
+  source: Record<string, unknown> | undefined,
+) {
+  const resolved = offer.prices[kind];
+  const exact = exactAmount(resolved);
+  if (exact !== null) return exact;
+  // Only restore a scalar when the resolver withheld it because several age
+  // bands need a passenger-age choice. A range, missing fare, or a catalog
+  // conflict must stay non-exact and therefore quote-only.
+  return resolved?.kind === "unknown" && resolved.reason === "passenger_age_required"
+    ? scalarAmount(source, kind)
+    : null;
+}
+
 function displayOffer(entry: WebsiteOfferEntry): ResolvedTripOffer | null {
   if (entry.fareCard.status !== "ready") return null;
   const availability = entry.result.status === "unavailable" ? entry.result.availability : undefined;
@@ -61,9 +89,8 @@ export function websiteAvailabilityForResync(
 }
 
 function fareRow(offer: ResolvedTripOffer, sourceRows: Map<string, Record<string, unknown>>) {
-  const adult = offer.prices.adult;
-  const adultSource = offer.fares.find(fare => fare.kind === "adult")?.sourceOfferId;
-  const source = adultSource ? sourceRows.get(adultSource) : undefined;
+  const source = offer.sourceOfferIds.map(id => sourceRows.get(id)).find(Boolean);
+  const adult = displayAmount(offer, "adult", source);
   const sourceWithoutDimensions = { ...(source || {}) };
   delete sourceWithoutDimensions.hotel;
   delete sourceWithoutDimensions.hotel_id;
@@ -77,9 +104,9 @@ function fareRow(offer: ResolvedTripOffer, sourceRows: Map<string, Record<string
     ...(offer.hotel ? { hotel: offer.hotel } : {}),
     ...(offer.hotelId ? { hotel_id: offer.hotelId } : {}),
     ...(offer.packageId ? { package_id: offer.packageId } : {}),
-    adult_price: exactAmount(adult),
-    adult_price_range: adult?.kind === "range" ? { min: adult.min, max: adult.max } : null,
-    child_price: exactAmount(offer.prices.child), infant_price: exactAmount(offer.prices.infant),
+    adult_price: adult,
+    adult_price_range: offer.prices.adult?.kind === "range" ? { min: offer.prices.adult.min, max: offer.prices.adult.max } : null,
+    child_price: displayAmount(offer, "child", source), infant_price: displayAmount(offer, "infant", source),
     passenger_prices: offer.fares.filter(fare => fare.kind !== "adult").map(fare => ({
       label: `${fare.kind === "infant" ? "Нярай" : "Хүүхэд"}${fare.ageRange ? ` ${fare.ageRange}` : ""}`,
       age_range: fare.ageRange || "", price: exactAmount(fare.fare), currency: fare.currency,
@@ -136,21 +163,26 @@ export function websiteTripPayload(trip: TravelTrip, schedule: WebsiteDepartureD
   const departures: WebsiteDeparture[] = schedule.map(departure => {
     const date = departure.start.slice(0, 10);
     const scoped = entries.filter(entry => entry.selection.date === date);
-    const offers = scoped.map(displayOffer).filter((offer): offer is ResolvedTripOffer => Boolean(offer));
-    const bookable = offers.filter(offer => confirmedOpen(offer.availability));
+    const offers = scoped.flatMap(entry => {
+      const offer = displayOffer(entry);
+      if (!offer) return [];
+      const source = offer.sourceOfferIds.map(id => sourceRows.get(id)).find(Boolean);
+      return [{ offer, source }];
+    });
+    const bookable = offers.filter(({ offer }) => confirmedOpen(offer.availability));
     const choices = bookable.length ? bookable : offers;
     const primary = [...choices].sort((left, right) =>
-      (exactAmount(left.prices.adult) ?? Infinity) - (exactAmount(right.prices.adult) ?? Infinity))[0];
+      (displayAmount(left.offer, "adult", left.source) ?? Infinity) - (displayAmount(right.offer, "adult", right.source) ?? Infinity))[0];
     const unavailable = scoped.find(entry => entry.result.status === "unavailable");
-    const availability = primary?.availability
+    const availability = primary?.offer.availability
       || (unavailable?.result.status === "unavailable" ? unavailable.result.availability : undefined)
       || { status: "unavailable", seatsLeft: null };
     return {
       ...departure,
-      price: exactAmount(primary?.prices.adult),
-      childPrice: exactAmount(primary?.prices.child),
-      infantPrice: exactAmount(primary?.prices.infant),
-      status: primary && exactAmount(primary.prices.adult) === null && confirmedOpen(availability)
+      price: primary ? displayAmount(primary.offer, "adult", primary.source) : null,
+      childPrice: primary ? displayAmount(primary.offer, "child", primary.source) : null,
+      infantPrice: primary ? displayAmount(primary.offer, "infant", primary.source) : null,
+      status: primary && displayAmount(primary.offer, "adult", primary.source) === null && confirmedOpen(availability)
         ? "PAUSED" : websiteStatus(availability.status, availability.seatsLeft), seatsLeft: availability.seatsLeft,
     };
   });

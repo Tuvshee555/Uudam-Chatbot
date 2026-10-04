@@ -90,6 +90,26 @@ test("cheapest calendar fare preserves one hotel's passenger prices and every ag
   assert.ok(projected.canonicalOffers.entries.every(entry => entry.fareCard.status === "ready"));
 });
 
+test("a published main child fare survives alongside multiple child age bands", () => {
+  const projected = payload({ ...trip, extra: { price_groups: [{
+    dates: ["2026-10-01"], adult_price: 4_990_000, child_price: 4_590_000, infant_price: 390_000,
+    passenger_prices: [
+      { label: "Хүүхэд", age_range: "6-11 нас", price: 4_590_000 },
+      { label: "Хүүхэд", age_range: "2-5 нас", price: 4_190_000 },
+      { label: "Нярай", age_range: "0-2 нас", price: 390_000 },
+    ],
+  }] } });
+
+  // The specialised tiers remain available to the booking UI, while the
+  // legacy per-departure columns retain the explicitly published headline.
+  assert.equal(projected.departures[0].childPrice, 4_590_000);
+  assert.equal(projected.departures[0].infantPrice, 390_000);
+  assert.equal(projected.priceGroups[0].child_price, 4_590_000);
+  assert.deepEqual(projected.priceGroups[0].passenger_prices.map(fare => [fare.age_range, fare.price]), [
+    ["6-11 нас", 4_590_000], ["2-5 нас", 4_190_000], ["0-2 нас", 390_000],
+  ]);
+});
+
 test("trip-level included hotel text does not create hotel choices", () => {
   const projected = payload({ ...trip, hotel: "Jomtien Palm Beach / Pullman Bangkok", extra: { price_groups: [
     { dates: ["2026-10-01"], adult_price: 2_000_000, child_price: 1_500_000 },
