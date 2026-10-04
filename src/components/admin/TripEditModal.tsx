@@ -709,61 +709,6 @@ export function TripEditModal({
           onChange={(e) => setTripDraft((p) => ({ ...p, duration_text: e.target.value }))}
           error={gapKeys.has("duration_text") ? "Заавал бөглөх" : undefined}
         />
-        {tripPriceGroups.length > 0 && (
-          <div className="rounded-lg border border-warning/30 bg-warning-soft p-2.5 text-xs text-ink sm:col-span-2">
-            Энэ аялал &ldquo;Үнэ ба гаралт&rdquo; таб дээр огноо тус бүрийн үнэтэй байна — бот, вэбсайт хоёулаа
-            ХАМГИЙН ОЙРХОН огнооны үнийг харуулна, доорх үндсэн үнийг биш. Доорх нь зөвхөн шинэ огноо
-            хараахан ороогүй үед л харагдана.
-          </div>
-        )}
-        <MoneyInput
-          label="Том хүний үнэ"
-          value={tripDraft.adult_price}
-          onChange={(value) => setTripDraft((p) => ({ ...p, adult_price: value }))}
-          missing={gapKeys.has("adult_price")}
-        />
-        <MoneyInput
-          label="Хүүхдийн үнэ"
-          value={tripDraft.child_price}
-          onChange={(value) => setTripDraft((p) => ({ ...p, child_price: value }))}
-          missing={gapKeys.has("child_price")}
-          free={tripDraft.child_price_free === "true"}
-          onFreeChange={(free) => setTripDraft((p) => ({ ...p, child_price_free: free ? "true" : "", child_price: free ? "" : p.child_price }))}
-        />
-        <MoneyInput
-          label="Нярайн үнэ"
-          value={tripDraft.infant_price}
-          onChange={(value) => setTripDraft((p) => ({ ...p, infant_price: value }))}
-          missing={gapKeys.has("infant_price")}
-          free={tripDraft.infant_price_free === "true"}
-          onFreeChange={(free) => setTripDraft((p) => ({ ...p, infant_price_free: free ? "true" : "", infant_price: free ? "" : p.infant_price }))}
-        />
-        <div className="rounded-lg border border-line bg-surface-sunken p-3 sm:col-span-2">
-          <p className="text-sm font-semibold text-ink">Насны ангилал</p>
-          <p className="mt-0.5 text-xs text-ink-muted">
-            Энэ аялалд хэн нярай, хэн хүүхэд, хэн том хүн болохыг энд бичнэ — аялал бүр өөр байж болно. Бот болон вэбсайт яг энэ ангиллаар үнэ хэлнэ.
-          </p>
-          <div className="mt-2 grid gap-2 sm:grid-cols-3">
-            <Input
-              label="Нярай"
-              placeholder="ж: 0-23 сар"
-              value={tripDraft.age_infant || ""}
-              onChange={(e) => setTripDraft((p) => ({ ...p, age_infant: e.target.value }))}
-            />
-            <Input
-              label="Хүүхэд"
-              placeholder="ж: 2-11 нас"
-              value={tripDraft.age_child || ""}
-              onChange={(e) => setTripDraft((p) => ({ ...p, age_child: e.target.value }))}
-            />
-            <Input
-              label="Том хүн"
-              placeholder="ж: 12+ нас"
-              value={tripDraft.age_adult || ""}
-              onChange={(e) => setTripDraft((p) => ({ ...p, age_adult: e.target.value }))}
-            />
-          </div>
-        </div>
         <Select
           label="Төлөв"
           value={tripDraft.status}
@@ -826,11 +771,6 @@ export function TripEditModal({
         <p className="text-xs text-ink-subtle sm:col-span-2">
           Вэб карт дээр “ХЯМДРАЛ”, үлдсэн суудлын хувь, бодит үлдсэн суудлын тоог харуулахад ашиглана.
         </p>
-        <DepartureDateEditor
-          value={tripDraft.departure_dates}
-          onChange={(value) => setTripDraft((p) => ({ ...p, departure_dates: value }))}
-          missing={gapKeys.has("departure_dates")}
-        />
       </div>
       <div className="mt-3">
         <Input
@@ -1044,12 +984,73 @@ export function TripEditModal({
 
       {activeTab === "pricing" && (
         <>
+      <p className={sectionHdr}>Үнэ, насны ангилал ба гаралт</p>
+      <p className="mt-1 text-xs text-ink-muted">
+        Огноо бүрийн үнэ, хүүхэд/нярайн насны ангилал болон гарах өдрөө нэг дор тохируулна. Энэ мэдээлэл бот болон вэбсайт дээр ижил харагдана.
+      </p>
+      {tripPriceGroups.length === 0 && (
+        <div className="mt-3 rounded-lg border border-line bg-surface-sunken p-3">
+          <p className="text-sm font-semibold text-ink">Нэг ижил үнэтэй гаралтууд</p>
+          <p className="mt-0.5 text-xs text-ink-muted">
+            Бүх гаралт ижил үнэтэй бол энд оруулна. Өөр өөр үнэтэй огноо байвал доорх “Үнийн бүлэг нэмэх”-ийг ашиглана.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <MoneyInput
+              label="Том хүний үнэ"
+              value={tripDraft.adult_price}
+              onChange={(value) => setTripDraft((p) => ({ ...p, adult_price: value }))}
+              missing={gapKeys.has("adult_price")}
+            />
+            <MoneyInput
+              label="Хүүхдийн үнэ"
+              value={tripDraft.child_price}
+              onChange={(value) => setTripDraft((p) => ({ ...p, child_price: value }))}
+              missing={gapKeys.has("child_price")}
+              free={tripDraft.child_price_free === "true"}
+              onFreeChange={(free) => setTripDraft((p) => ({ ...p, child_price_free: free ? "true" : "", child_price: free ? "" : p.child_price }))}
+            />
+            <MoneyInput
+              label="Нярайн үнэ"
+              value={tripDraft.infant_price}
+              onChange={(value) => setTripDraft((p) => ({ ...p, infant_price: value }))}
+              missing={gapKeys.has("infant_price")}
+              free={tripDraft.infant_price_free === "true"}
+              onFreeChange={(free) => setTripDraft((p) => ({ ...p, infant_price_free: free ? "true" : "", infant_price: free ? "" : p.infant_price }))}
+            />
+            <DepartureDateEditor
+              value={tripDraft.departure_dates}
+              onChange={(value) => setTripDraft((p) => ({ ...p, departure_dates: value }))}
+              missing={gapKeys.has("departure_dates")}
+            />
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            <Input
+              label="Нярай"
+              placeholder="ж: 0-23 сар"
+              value={tripDraft.age_infant || ""}
+              onChange={(e) => setTripDraft((p) => ({ ...p, age_infant: e.target.value }))}
+            />
+            <Input
+              label="Хүүхэд"
+              placeholder="ж: 2-11 нас"
+              value={tripDraft.age_child || ""}
+              onChange={(e) => setTripDraft((p) => ({ ...p, age_child: e.target.value }))}
+            />
+            <Input
+              label="Том хүн"
+              placeholder="ж: 12+ нас"
+              value={tripDraft.age_adult || ""}
+              onChange={(e) => setTripDraft((p) => ({ ...p, age_adult: e.target.value }))}
+            />
+          </div>
+        </div>
+      )}
       {/* B. Price groups — one entry per set of departure dates. Adult price is
           always a single value; child/infant are a flexible list of price
           bands (a trip can have more than one child age tier) with a Free
           option, and that list is the ONLY place either is entered — no
           separate "child price"/"infant price" fields to keep in sync. */}
-      <p className={sectionHdr}>Огноо тус бүрийн үнэ</p>
+      <p className={sectionHdr}>{tripPriceGroups.length > 0 ? "Огноо тус бүрийн үнэ" : "Өөр өөр үнэтэй гаралтууд"}</p>
       <div className="mt-2 space-y-3">
         {tripPriceGroups.map((g, idx) => (
           <div key={idx} className="rounded-lg border border-line bg-surface-sunken p-3 text-sm">
