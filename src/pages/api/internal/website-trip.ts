@@ -25,8 +25,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const deleted = await deleteTrip(sourceTripId);
       return res.status(deleted ? 200 : 404).json({ ok: deleted });
     }
-    const { sourceTripId, fields } = websiteTripToCanonicalFields(req.body?.trip);
+    const { sourceTripId } = websiteTripToCanonicalFields(req.body?.trip);
     const existing = await getTripById(sourceTripId);
+    const { fields } = websiteTripToCanonicalFields(req.body?.trip, existing?.status ?? null);
     const trip = existing
       ? await patchTrip(sourceTripId, fields)
       : await upsertTrip({ id: sourceTripId, fields });

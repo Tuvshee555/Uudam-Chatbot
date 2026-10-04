@@ -71,6 +71,20 @@ function repairPassengerPrices(groups: unknown[]): unknown[] {
   });
 }
 
+/**
+ * The website's `price_groups` metadata is the chatbot's own projection, not
+ * staff-authored data: every row for a plain trip is the chatbot's base fare
+ * (`<id>:base:N`) or a legacy date group (`<id>:legacy:N`) stamped onto each
+ * departure. Echoing those rows back as real price groups froze the old base
+ * fare per date, so the next price edit contradicted them (`adult_fare_conflict`)
+ * and every departure was paused. Only rows that came from a real
+ * `price_groups` source (or have no projection id at all) are authored data.
+ */
+function isProjectedFareRow(group: unknown): boolean {
+  const id = record(group).id;
+  return typeof id === "string" && /:(?:base|legacy):\d+$/.test(id);
+}
+
 function dateKey(value: unknown): string {
   const raw = text(value);
   const match = raw.match(/^\d{4}-\d{2}-\d{2}/);
@@ -91,12 +105,19 @@ function availabilityStatus(value: unknown): "OPEN" | "SOLD_OUT" | "PAUSED" | "C
   return "OPEN";
 }
 
+/** Only publishing state is website-owned; every other status is left as the chatbot has it. */
+function tripStatusPatch(published: boolean, existingStatus?: string | null): Pick<TripMutationFields, "status"> {
+  if (!published) return { status: "draft" };
+  if (existingStatus == null) return { status: "active" };
+  return ["draft", "archived"].includes(existingStatus) ? { status: "active" } : {};
+}
+
 /**
  * Converts the shared customer-facing fields from the website's trip shape to
  * the canonical chatbot record. Website-only editorial metadata deliberately
  * stays on the website; it cannot affect a chatbot answer or a poster.
  */
-export function websiteTripToCanonicalFields(input: unknown): {
+export function websiteTripToCanonicalFields(input: unknown, existingStatus?: string | null): {
   sourceTripId: string;
   fields: TripMutationFields;
 } {
@@ -127,19 +148,44 @@ export function websiteTripToCanonicalFields(input: unknown): {
     }))
     .filter(day => day.title || day.description || day.hotel);
 
-  const metadataPriceGroups = Array.isArray(metadata.price_groups) ? metadata.price_groups : [];
-  const priceGroups = repairPassengerPrices(metadataPriceGroups.length
-    ? metadataPriceGroups
-    : Array.isArray(priorExtra.price_groups) ? priorExtra.price_groups : []);
+  const metadataPriceGroups = (Array.isArray(metadata.price_groups) ? metadata.price_groups : [])
+    .filter(group => !isProjectedFareRow(group));
+  const priorPriceGroups = (Array.isArray(priorExtra.price_groups) ? priorExtra.price_groups : [])
+    .filter(group => !isProjectedFareRow(group));
+  const priceGroups = repairPassengerPrices(metadataPriceGroups.length ? metadataPriceGroups : priorPriceGroups);
+
+  // A departure price is only a per-date override when staff typed something
+  // other than the trip's own fare AND other than what the chatbot last
+  // projected onto that date. Anything else is the base fare copied onto the
+  // departure by the sync, and must keep following the base fare.
+  const baseFares = {
+    adult: fareOrNull(trip.price, trip.currency),
+    child: fareOrNull(trip.childPrice, trip.currency),
+    infant: fareOrNull(trip.infantPrice, trip.currency),
+  };
+  const projectedDepartures = Array.isArray(record(metadata.canonicalOffers).departures)
+    ? (record(metadata.canonicalOffers).departures as unknown[]).map(record) : [];
   const simpleDepartureGroups = departures
     .map(departure => {
       const date = dateKey(departure.startDate);
       if (!date) return null;
+      const projected = projectedDepartures.find(row => text(row.start).slice(0, 10) === date);
+      const fares = {
+        adult: fareOrNull(departure.price, trip.currency),
+        child: fareOrNull(departure.childPrice, trip.currency),
+        infant: fareOrNull(departure.infantPrice, trip.currency),
+      };
+      const overridden = (["adult", "child", "infant"] as const).some(kind => {
+        const key = kind === "adult" ? "price" : `${kind}Price`;
+        const projectedFare = projected ? fareOrNull(projected[key], trip.currency) : null;
+        return fares[kind] !== null && fares[kind] !== baseFares[kind] && fares[kind] !== projectedFare;
+      });
+      if (!overridden) return null;
       return {
         dates: [date],
-        adult_price: fareOrNull(departure.price, trip.currency),
-        child_price: fareOrNull(departure.childPrice, trip.currency),
-        infant_price: fareOrNull(departure.infantPrice, trip.currency),
+        adult_price: fares.adult,
+        child_price: fares.child,
+        infant_price: fares.infant,
       };
     })
     .filter((group): group is NonNullable<typeof group> => Boolean(group));
@@ -182,10 +228,11 @@ export function websiteTripToCanonicalFields(input: unknown): {
       infant_price: fareOrNull(trip.infantPrice, trip.currency),
       currency: text(trip.currency) || "MNT",
       departure_dates: uniqueDates,
-      seats_total: null,
-      seats_left: null,
+      // Seat counts and sold-out/paused/cancelled state are owned by the
+      // chatbot. The website form cannot express them, so sending nulls (or a
+      // blanket "active") on every save erased them and reopened closed trips.
       has_food: typeof trip.foodIncluded === "boolean" ? trip.foodIncluded : null,
-      status: trip.isPublished === false ? "draft" : "active",
+      ...tripStatusPatch(trip.isPublished !== false, existingStatus),
       notes: text(trip.description),
       hotel: text(trip.hotel),
       source_description: text(trip.summary),
