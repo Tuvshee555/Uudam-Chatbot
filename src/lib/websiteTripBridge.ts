@@ -28,6 +28,49 @@ function strings(value: unknown): string[] {
     : [];
 }
 
+/**
+ * Older imports sometimes repeated one age band several times in a price
+ * group, each with a different fare. That is not a selectable offer: the
+ * canonical trip validator rightly rejects it. Keep the row that matches the
+ * group's explicit child/infant fare (or the first row when no flat fare is
+ * available) so a website-only edit is never blocked by stale duplicate data.
+ */
+function repairPassengerPrices(groups: unknown[]): unknown[] {
+  return groups.map(group => {
+    const source = record(group);
+    const rows = Array.isArray(source.passenger_prices) ? source.passenger_prices : [];
+    if (!rows.length) return group;
+
+    const preferredChildFare = numberOrNull(source.child_price);
+    const preferredInfantFare = numberOrNull(source.infant_price);
+    const byBand = new Map<string, UnknownRecord>();
+
+    for (const rowValue of rows) {
+      const row = record(rowValue);
+      const label = text(row.label) || text(row.category) || text(row.age_group);
+      const ageRange = text(row.age_range) || text(row.age);
+      const currency = text(row.currency) || text(source.currency) || "MNT";
+      const key = `${label.toLowerCase()}|${ageRange.toLowerCase()}|${currency.toUpperCase()}`;
+      const current = byBand.get(key);
+      if (!current) {
+        byBand.set(key, row);
+        continue;
+      }
+
+      const candidateFare = numberOrNull(row.price);
+      const currentFare = numberOrNull(current.price);
+      const preferredFare = /нярай|infant/i.test(`${label} ${ageRange}`)
+        ? preferredInfantFare
+        : preferredChildFare;
+      if (preferredFare !== null && candidateFare === preferredFare && currentFare !== preferredFare) {
+        byBand.set(key, row);
+      }
+    }
+
+    return { ...source, passenger_prices: [...byBand.values()] };
+  });
+}
+
 function dateKey(value: unknown): string {
   const raw = text(value);
   const match = raw.match(/^\d{4}-\d{2}-\d{2}/);
@@ -85,9 +128,9 @@ export function websiteTripToCanonicalFields(input: unknown): {
     .filter(day => day.title || day.description || day.hotel);
 
   const metadataPriceGroups = Array.isArray(metadata.price_groups) ? metadata.price_groups : [];
-  const priceGroups = metadataPriceGroups.length
+  const priceGroups = repairPassengerPrices(metadataPriceGroups.length
     ? metadataPriceGroups
-    : Array.isArray(priorExtra.price_groups) ? priorExtra.price_groups : [];
+    : Array.isArray(priorExtra.price_groups) ? priorExtra.price_groups : []);
   const simpleDepartureGroups = departures
     .map(departure => {
       const date = dateKey(departure.startDate);
