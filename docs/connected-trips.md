@@ -8,13 +8,16 @@ poster commits both records and a website delivery event in one transaction.
 ## Configuration
 
 Set the chatbot project's server-only `BOOKING_DATABASE_URL` to the booking
-site database connection. Set `SITE_URL` to the chatbot's public production
+tables' database connection. After consolidation, it must identify the same
+database as `NEON_DATABASE_URL`; the website's `DATABASE_URL` and `DIRECT_URL`
+must also identify that database. Website projection and sync status then
+commit in the same transaction. Set `SITE_URL` to the chatbot's public production
 origin. Never expose database credentials using `NEXT_PUBLIC_` variables.
 
 The website projection writes the existing Trip, ItineraryDay and Departure
-tables. It keeps trip IDs, slugs and bookings. Deleted trips with booking history
-are unpublished instead of erasing their booking records. Removed departures
-with bookings are cancelled, preserving the booking's original price snapshot.
+tables. It keeps trip IDs, slugs, bookings and website-authored itinerary days.
+Deleted chatbot trips are unpublished on the website. Removed departures are
+cancelled and retained, preserving history and each booking's price snapshot.
 
 Each save attempts delivery immediately. Unfinished events remain in
 `trip_website_sync`; admin status polling and the existing daily cron retry them.

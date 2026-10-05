@@ -8,6 +8,7 @@ import { getEnv } from "./env";
 import { getPosterPdfPublicUrl } from "./poster/pdfUrl";
 import { classifyTripCategory } from "./tripCategorization";
 import type { TravelTrip } from "./travelTypes";
+import { sameDatabase, websiteProjectionTransaction } from "./websiteSyncTransaction";
 
 let pool: Pool | undefined;
 function bookingPool() {
@@ -248,7 +249,7 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
       day.summary || null, day.hotel || null,
       [meals.breakfast ? "Өглөө" : "", meals.lunch ? "Өдөр" : "", meals.dinner ? "Орой" : ""].filter(Boolean), day.photo || null]);
   }
-  await client.query(`DELETE FROM "ItineraryDay" WHERE "tripId"=$1 AND NOT ("dayNumber"=ANY($2::int[]))`, [id, dayNumbers]);
+  // Keep website-authored days even when they are absent from the poster.
   const keep: string[] = [];
   for (const dep of offering.departures) {
     const old = oldDepartures.find(row => new Date(new Date(row.startDate).getTime() + 8 * 3600000).toISOString().slice(0, 10) === dep.start.slice(0, 10));
@@ -270,8 +271,6 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   }
   // Keep records referenced by bookings, but close removed dates to new bookings.
   await client.query(`UPDATE "Departure" SET status='CANCELLED' WHERE "tripId"=$1 AND NOT(id=ANY($2::text[]))`, [id, keep]);
-  await client.query(`DELETE FROM "Departure" d WHERE d."tripId"=$1 AND NOT(d.id=ANY($2::text[]))
-    AND NOT EXISTS(SELECT 1 FROM "Booking" b WHERE b."departureId"=d.id)`, [id, keep]);
   return { id, slug, contentConflict: staffEditedSinceLastSync };
 }
 
@@ -289,23 +288,22 @@ export async function flushWebsiteSync(tripId?: string, limit = 5) {
           WHERE revision > synced_revision AND ($1::text IS NULL OR trip_id=$1)
           ORDER BY updated_at FOR UPDATE SKIP LOCKED LIMIT 1`, [tripId || null])).rows[0];
         if (!job) { await sourceDb.query("COMMIT"); return null; }
+        const sourceTripId = job.trip_id;
         const source = (await sourceDb.query(`SELECT * FROM travel_trip_entries WHERE id=$1`, [job.trip_id])).rows[0] as TravelTrip | undefined;
-        const target = await bookingPool().connect();
+        const sharedDatabase = sameDatabase(getEnv().neonDatabaseUrl, process.env.BOOKING_DATABASE_URL);
+        const target = sharedDatabase ? sourceDb : await bookingPool().connect();
         let linked: { id: string; slug: string; contentConflict: boolean } | undefined;
         try {
-          await target.query("BEGIN");
-          if (source) {
-            const p = (await sourceDb.query(`SELECT data FROM poster_trips WHERE id=$1`, [source.extra.poster_trip_id])).rows[0];
-            if (!p) throw new Error("Connected poster is missing");
-            linked = await upsertWebsiteTrip(target, source, await materializePoster(p.data));
-          } else {
-            await target.query(`UPDATE "Trip" SET "isPublished"=false,"updatedAt"=NOW() WHERE "sourceTripId"=$1`, [job.trip_id]);
-            await target.query(`DELETE FROM "Trip" t WHERE "sourceTripId"=$1
-              AND NOT EXISTS(SELECT 1 FROM "Booking" b WHERE b."tripId"=t.id)`, [job.trip_id]);
-          }
-          await target.query("COMMIT");
-        } catch (error) { await target.query("ROLLBACK"); throw error; }
-        finally { target.release(); }
+          await websiteProjectionTransaction(target, sharedDatabase, async client => {
+            if (source) {
+              const p = (await sourceDb.query(`SELECT data FROM poster_trips WHERE id=$1`, [source.extra.poster_trip_id])).rows[0];
+              if (!p) throw new Error("Connected poster is missing");
+              linked = await upsertWebsiteTrip(client, source, await materializePoster(p.data));
+            } else {
+              await client.query(`UPDATE "Trip" SET "isPublished"=false,"updatedAt"=NOW() WHERE "sourceTripId"=$1`, [sourceTripId]);
+            }
+          });
+        } finally { if (!sharedDatabase) target.release(); }
         await sourceDb.query(`UPDATE trip_website_sync SET synced_revision=$2,synced_at=NOW(),last_error=NULL,
           website_trip_id=$3,website_slug=$4,content_conflict=$5 WHERE trip_id=$1`,
           [job.trip_id,job.revision,linked?.id || null,linked?.slug || null,linked?.contentConflict || false]);
