@@ -128,7 +128,11 @@ export function buildTripAnswerPlan(input: {
       // A closed offer cannot be sold or priced as an available booking.
       if (request.topics.includes("price")) answered.add("price");
     } else if (result.status === "ready") {
-      if (request.topics.includes("price")) sections.price = renderTripOfferReply(result, { fareKinds: preferences.fareKinds, showTotal: wantsPartyTotal }) || undefined;
+      if (request.topics.includes("price")) {
+        const reply = renderTripOfferReply(result, { fareKinds: preferences.fareKinds, showTotal: wantsPartyTotal });
+        const baseHotel = !result.offer.hotel && offers.every((offer) => !offer.hotel) && trip.hotel;
+        sections.price = reply ? [baseHotel ? `Буудал: ${baseHotel}` : null, reply].filter(Boolean).join("\n") : undefined;
+      }
       if (request.topics.includes("availability")) {
         sections.availability = result.offer.availability.status === "open"
           ? `${result.offer.date}: захиалга нээлттэй${result.offer.availability.seatsLeft !== null ? `, ${result.offer.availability.seatsLeft} суудал үлдсэн` : ""}.`
@@ -171,7 +175,7 @@ export function buildTripAnswerPlan(input: {
   if (request.topics.includes("hotel")) {
     const hotels = [...new Set(offers.filter((offer) => (!selection.date || !offer.dateScoped || offer.dates.includes(selection.date)) && (!selection.hotel || offer.hotel?.toLowerCase() === selection.hotel.toLowerCase())).map((offer) => offer.hotel).filter((hotel): hotel is string => Boolean(hotel)))];
     if (hotels.length) sections.hotel = `Буудал:\n${compactReplyOptions(hotels, intentText).map((hotel) => `• ${hotel}`).join("\n")}`;
-    else if (trip.hotel && !selection.hotel && !selection.date) sections.hotel = `Буудал: ${trip.hotel}`;
+    else if (trip.hotel && !selection.hotel && offers.every((offer) => !offer.hotel)) sections.hotel = `Буудал: ${trip.hotel}`;
   }
   if (request.topics.includes("includes")) {
     const included = strings(trip.extra.included_items).filter((item) => !preferences.includes.length || preferences.includes.some((target) => target.pattern.test(item)));
@@ -187,7 +191,9 @@ export function buildTripAnswerPlan(input: {
     ].join("\n");
   }
   if (request.topics.includes("booking_terms")) {
-    const terms = trip.extra.booking_terms && typeof trip.extra.booking_terms === "object" ? trip.extra.booking_terms as Record<string, unknown> : {};
+    const storedTerms = trip.extra.booking_terms && typeof trip.extra.booking_terms === "object" ? trip.extra.booking_terms as Record<string, unknown> : {};
+    const website = trip.extra.website_details && typeof trip.extra.website_details === "object" ? trip.extra.website_details as Record<string, unknown> : {};
+    const terms = { ...storedTerms, documents: storedTerms.documents || website.requirements, cancellation: storedTerms.cancellation || website.cancellationPolicy } as Record<string, unknown>;
     const labels: Record<string, string> = { deposit: "Урьдчилгаа", payment: "Төлбөр", documents: "Бичиг баримт", visa: "Виз", cancellation: "Цуцлалт, буцаалт" };
     const requestedTerms = Object.entries(labels).filter(([key]) => !preferences.termKeys.length || preferences.termKeys.includes(key as typeof preferences.termKeys[number]));
     const termsLines = requestedTerms.flatMap(([key, label]) => typeof terms[key] === "string" && terms[key] ? [`${label}: ${terms[key]}`] : []);

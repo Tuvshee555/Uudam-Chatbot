@@ -18,32 +18,26 @@ export function AdminConfirmModals({
   onCloseClear: () => void;
   onConfirmClear: () => void;
 }) {
-  const linkedPosterId =
-    typeof deletingTrip?.extra?.poster_trip_id === "string"
-      ? deletingTrip.extra.poster_trip_id
-      : "";
   return (
     <>
       <Modal
         open={deletingTrip != null}
         onClose={onCloseDelete}
-        title={linkedPosterId ? "Аялал болон постерыг устгах уу?" : "Аяллыг устгах уу?"}
-        description={`"${deletingTrip?.route_name || deletingTrip?.operator_name}" - энэ үйлдлийг буцаах боломжгүй.`}
+        title="Аяллыг архивлах уу?"
+        description={`"${deletingTrip?.route_name || deletingTrip?.operator_name}"`}
         footer={
           <>
             <Button variant="secondary" onClick={onCloseDelete}>
               Болих
             </Button>
             <Button variant="danger" loading={deleteBusy} onClick={onConfirmDelete}>
-              Устгах
+              Архивлах
             </Button>
           </>
         }
       >
         <p className="text-sm text-ink-muted">
-          {linkedPosterId
-            ? "Энэ аялал poster generator-той sync хийгдсэн тул live trip болон poster history хоёулаа устна."
-            : "Устгасны дараа бот энэ аяллын мэдээллийг хариултдаа ашиглахгүй болно."}
+          Аялал нийтэд харагдахгүй болно. Аяллын мэдээлэл, постер болон хувилбарын түүх хадгалагдана.
         </p>
       </Modal>
 

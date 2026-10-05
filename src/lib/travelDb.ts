@@ -4,9 +4,9 @@ import { getEnv } from "./env";
 import { fixMojibake } from "./encoding";
 import { recordCounter } from "./observability";
 import { queryNeon } from "./neonDb";
-import { connectedTripMutation, ensureConnectedTripSchema, type PosterWrite } from "./connectedTripStore";
-import { withNeonClient } from "./neonDb";
+import { connectedTripMutation, type PosterWrite } from "./connectedTripStore";
 import { flushWebsiteSync, withWebsiteDepartureAvailability } from "./websiteTripSync";
+import { applyWebsiteDetailsPatch } from "./websiteTripDetails";
 import { departureAvailability, departureIsClosed } from "./departureAvailability";
 import { sharedMap } from "./processState";
 import { ensureTravelSchema } from "./travelSchema";
@@ -694,8 +694,8 @@ export function mapTripRow(row: Record<string, unknown>): TravelTrip {
       row.extra && typeof row.extra === "object" && !Array.isArray(row.extra)
         ? (row.extra as Record<string, unknown>)
         : {},
-    created_at: String(row.created_at || ""),
-    updated_at: String(row.updated_at || ""),
+    created_at: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at || ""),
+    updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at || ""),
   };
 }
 
@@ -1209,16 +1209,20 @@ export async function upsertTrip(input: {
   return result?.rows?.[0] ? mapTripRow(result.rows[0]) : null;
 }
 
-export async function patchTrip(id: string, fields: TripMutationFields, syncPoster = true, posterWrite?: PosterWrite) {
+export async function patchTrip(id: string, fields: TripMutationFields, syncPoster = true, posterWrite?: PosterWrite, expectedUpdatedAt?: string) {
   const ready = await ensureTravelSchema();
   if (!ready) return null;
 
   const cleaned = cleanFields(fields, true);
-  if (!Object.keys(cleaned).length) return null;
-  const previous = (await queryNeon<Record<string, unknown>>("SELECT * FROM travel_trip_entries WHERE id=$1", [id]))?.rows[0];
+  const previous = (await queryNeon<Record<string, unknown>>("SELECT *, updated_at::text AS write_version FROM travel_trip_entries WHERE id=$1", [id]))?.rows[0];
   if (!previous) return null;
+  if (expectedUpdatedAt && new Date(expectedUpdatedAt).getTime() !== new Date(previous.updated_at as string).getTime()) {
+    throw new Error("trip_edit_conflict");
+  }
+  if (!Object.keys(cleaned).length) return mapTripRow(previous);
   const previousExtra = (previous.extra || {}) as Record<string, unknown>;
   const incomingExtra = fields.extra || {};
+  if (incomingExtra.website_details_patch) applyWebsiteDetailsPatch((incomingExtra.website_details_patch as Record<string, unknown>).base, incomingExtra.website_details_patch);
   const rawExtra = { ...previousExtra, ...incomingExtra };
   // A supplied legacy group array replaces the canonical mirror too, as normalizeExtraPatch does.
   if ("departure_date_groups" in incomingExtra && !("price_groups" in incomingExtra)) rawExtra.price_groups = incomingExtra.departure_date_groups;
@@ -1301,32 +1305,15 @@ export async function patchTrip(id: string, fields: TripMutationFields, syncPost
     id,
     syncPoster,
     posterWrite,
+    String(previous.write_version),
   );
   await flushWebsiteSync(id, 1);
   return result?.rows?.[0] ? mapTripRow(result.rows[0]) : null;
 }
 
 export async function deleteTrip(id: string): Promise<boolean> {
-  const ready = await ensureTravelSchema();
-  if (!ready) return false;
-  await ensureConnectedTripSchema();
-  const deleted = await withNeonClient(async client => {
-    await client.query("BEGIN");
-    try {
-      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [id]);
-      const result = await client.query(`DELETE FROM travel_trip_entries WHERE id=$1 RETURNING extra->>'poster_trip_id' AS poster_id`, [id]);
-      const posterId = result.rows[0]?.poster_id;
-      if (posterId) {
-        await client.query("DELETE FROM poster_trip_versions WHERE trip_id=$1", [posterId]);
-        await client.query("DELETE FROM poster_trips WHERE id=$1", [posterId]);
-        await client.query("DELETE FROM poster_pdf_cache WHERE poster_id=$1", [posterId]);
-      }
-      await client.query("COMMIT");
-      return Boolean(result.rowCount);
-    } catch (error) { await client.query("ROLLBACK"); throw error; }
-  });
-  await flushWebsiteSync(id, 1);
-  return Boolean(deleted);
+  // Archiving preserves the canonical record, poster versions and payment links.
+  return Boolean(await patchTrip(id, { status: "archived", extra: { customer_visible: false } }));
 }
 
 export async function deleteAllTrips(): Promise<number> {
@@ -2006,6 +1993,7 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     // cancellation questions from stored data instead of REFER. Empty fields
     // are omitted, so a field the trip lacks stays "unknown" → REFER.
     const bookingTerms = (extra.booking_terms || {}) as Record<string, unknown>;
+    const website = extra.website_details && typeof extra.website_details === "object" ? extra.website_details as Record<string, unknown> : {};
     const btParts: string[] = [];
     if (typeof bookingTerms.deposit === "string" && bookingTerms.deposit.trim()) btParts.push(`Урьдчилгаа: ${bookingTerms.deposit.trim()}`);
     if (typeof bookingTerms.payment === "string" && bookingTerms.payment.trim()) btParts.push(`Төлбөрийн нөхцөл: ${bookingTerms.payment.trim()}`);
@@ -2013,6 +2001,14 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     if (typeof bookingTerms.visa === "string" && bookingTerms.visa.trim()) btParts.push(`Виз: ${bookingTerms.visa.trim()}`);
     if (typeof bookingTerms.cancellation === "string" && bookingTerms.cancellation.trim()) btParts.push(`Цуцлалт/буцаалт: ${bookingTerms.cancellation.trim()}`);
     if (btParts.length > 0) details.push(`Захиалгын нөхцөл: ${btParts.join(" | ")}`);
+    if (!trip.notes && typeof website.description === "string" && website.description.trim()) details.push(`Вебсайтын аяллын тайлбар: ${website.description}`);
+    if (!bookingTerms.documents && typeof website.requirements === "string" && website.requirements.trim()) details.push(`Аяллын шаардлага: ${website.requirements}`);
+    if (!bookingTerms.cancellation && typeof website.cancellationPolicy === "string" && website.cancellationPolicy.trim()) details.push(`Аяллын цуцлалтын нөхцөл: ${website.cancellationPolicy}`);
+    if (!extra.destinations && Array.isArray(website.destinations) && website.destinations.length) details.push(`Веб аяллын очих газрууд: ${website.destinations.join(", ")}`);
+    if (Array.isArray(website.highlights) && website.highlights.length) details.push(`Веб аяллын онцлох зүйлс: ${website.highlights.join(" | ")}`);
+    if (typeof website.meetingPoint === "string" && website.meetingPoint.trim()) details.push(`Цугларах газар: ${website.meetingPoint}`);
+    if (!extra.transport_type && Array.isArray(website.transport) && website.transport.length) details.push(`Веб аяллын тээвэр: ${website.transport.join(", ")}`);
+    if (Array.isArray(website.languages) && website.languages.length) details.push(`Хөтчийн хэл: ${website.languages.join(", ")}`);
     // Emit answer_hints so the bot gets explicit expected answers per intent
     const answerHints = Array.isArray(extra.answer_hints) ? extra.answer_hints as Array<Record<string, unknown>> : [];
     if (answerHints.length > 0) {

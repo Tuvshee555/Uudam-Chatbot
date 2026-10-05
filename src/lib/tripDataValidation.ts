@@ -226,7 +226,8 @@ export function auditTripFacts(trip: TripFactInput, now = new Date()): TripFactA
         add("invalid_seat_count", "error", [`${path}${key}`], `${path}${key}: enter a non-negative whole number or null.`, [identity, key, value]);
       }
     }
-    const total = row[totalKey], left = row[leftKey], status = row[statusKey];
+    const total = row[totalKey], left = row[leftKey];
+    const status = statuses === DEPARTURE_STATUSES && typeof row[statusKey] === "string" ? String(row[statusKey]).toUpperCase() : row[statusKey];
     if (typeof total === "number" && typeof left === "number" && left > total) {
       add("seats_exceed_total", "error", [`${path}${leftKey}`, `${path}${totalKey}`], `${path}${leftKey} (${left}) exceeds ${totalKey} (${total}). Correct the seat counts.`, [identity, total, left]);
     }

@@ -150,7 +150,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const incomplete = await incompleteResponse(fields, existing, confirmIncomplete === true);
         if (incomplete) return res.status(409).json(incomplete);
       }
-      const saved = await patchTrip(id.trim(), fields);
+      const saved = await patchTrip(id.trim(), fields, true, undefined, typeof req.body?.expectedUpdatedAt === "string" ? req.body.expectedUpdatedAt : undefined);
       if (!saved) return res.status(404).json({ error: "trip_not_found_or_no_changes" });
       return res.status(200).json({ ok: true, trip: saved, factAudit: auditTripFacts(saved) });
     }
@@ -169,6 +169,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(405).end();
   } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Invalid website")) return res.status(400).json({ error: error.message });
+    if (error instanceof Error && error.message === "trip_edit_conflict") return res.status(409).json({ error: "Аяллыг өөр ажилтан шинэчилсэн байна. Засвараа хадгалаад, шинэ мэдээллийг дахин нээнэ үү." });
     if (error instanceof TripDataValidationError) return res.status(error.statusCode).json(error.toResponse());
     throw error;
   } finally {

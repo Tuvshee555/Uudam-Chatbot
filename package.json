@@ -23,6 +23,7 @@
     "qa:quality": "node --import tsx scripts/chatbot-quality.ts",
     "qa:baseline": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/export-chatbot-baseline.ts",
     "audit:trip-facts": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/audit-trip-facts.ts",
+    "audit:website-parity": "node --import tsx scripts/audit-website-parity.ts",
     "preflight": "node --import tsx scripts/preflight.ts",
     "validate": "npm run lint && npm run typecheck && npm run test && npm run build",
     "fb:subscribe-page": "node scripts/subscribe-page-app.mjs"

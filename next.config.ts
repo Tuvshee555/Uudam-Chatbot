@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   reactStrictMode: true,
   // Poster extraction uses these node-only libs on the server; keep them out of
   // the bundle so their dynamic/subpath imports resolve at runtime.

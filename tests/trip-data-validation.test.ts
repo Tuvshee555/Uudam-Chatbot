@@ -250,6 +250,7 @@ test("DB save boundary rejects conflicts before writes and preserves unrelated l
     id: "trip-1", route_name: "Legacy trip", currency: "MNT", status: "active", hotel: "",
     adult_price: -1, child_price: 500000, infant_price: 0, duration_text: "8 days / 7 nights",
     departure_dates: ["2023-11-01"], seats_total: 10, seats_left: 4,
+    updated_at: new Date("2026-10-05T00:00:00.000Z"),
     extra: { price_groups: [group(100), group(200)], duration_days: 8, duration_nights: 7,
       transport_type: "land_flight", destinations: ["Alpha", "Beta"],
       departure_dates_resolved: [{ text: "2023-11-01", ymd: "2023-11-01" }] },
@@ -259,7 +260,7 @@ test("DB save boundary rejects conflicts before writes and preserves unrelated l
   const query = async (sql: string, params: unknown[] = []) => {
     queries.push(sql);
     if (sql === "SELECT * FROM travel_trip_entries ORDER BY id") return { rows: [structuredClone(stored)], rowCount: 1 };
-    if (/^SELECT (?:\*|id) FROM travel_trip_entries WHERE id=\$1/.test(sql)) return { rows: [structuredClone(stored)], rowCount: 1 };
+    if (/^SELECT (?:\*(?:, updated_at::text AS write_version)?|id) FROM travel_trip_entries WHERE id=\$1/.test(sql)) return { rows: [{ ...structuredClone(stored), write_version: "2026-10-05 00:00:00+00" }], rowCount: 1 };
     if (/^\s*(?:UPDATE|INSERT INTO) travel_trip_entries/.test(sql)) {
       writes.push({ sql, params });
       return { rows: [structuredClone(stored)], rowCount: 1 };
@@ -271,6 +272,10 @@ test("DB save boundary rejects conflicts before writes and preserves unrelated l
   const db = await import("../src/lib/travelDb");
   const { closeNeonPool } = await import("../src/lib/neonDb");
   try {
+    const unchanged = await db.patchTrip("trip-1", {}, false, undefined, stored.updated_at.toISOString());
+    assert.equal(unchanged?.id, stored.id);
+    assert.equal(writes.length, 0);
+    await assert.rejects(db.patchTrip("trip-1", {}, false, undefined, "2026-10-04T00:00:00.000Z"), /trip_edit_conflict/);
     assert.deepEqual(db.cleanFields({ departure_dates: ["2028 оны 11 сарын 1"] }, true).departure_dates, ["2028 оны 11 сарын 1"]);
     await assert.rejects(db.patchTrip("trip-1", { seats_left: 11 }, false), TripDataValidationError);
     await assert.rejects(db.upsertTrip({ id: "trip-1", fields: { seats_left: 11 }, syncPoster: false }), TripDataValidationError);

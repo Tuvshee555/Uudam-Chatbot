@@ -80,14 +80,17 @@ export async function syncTripPoster(client: PoolClient, trip: TravelTrip, befor
 
 /** The trip, reverse poster update and durable delivery event commit together. */
 export async function connectedTripMutation<T extends QueryResultRow>(
-  sql: string, params: unknown[], id: string, updatePoster = true, poster?: PosterWrite,
+  sql: string, params: unknown[], id: string, updatePoster = true, poster?: PosterWrite, expectedVersion?: string,
 ) {
   await ensureConnectedTripSchema();
   return withNeonClient(async client => {
     await client.query("BEGIN");
     try {
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [id]);
-      const prior = await client.query("SELECT * FROM travel_trip_entries WHERE id=$1", [id]);
+      const prior = await client.query("SELECT *, updated_at::text AS write_version FROM travel_trip_entries WHERE id=$1 FOR UPDATE", [id]);
+      if (expectedVersion && prior.rows[0]?.write_version !== expectedVersion) {
+        throw new Error("trip_edit_conflict");
+      }
       if (poster) {
         await client.query(`INSERT INTO poster_trips(id,title,data,source_file) VALUES($1,$2,$3::jsonb,$4)
           ON CONFLICT(id) DO UPDATE SET title=EXCLUDED.title,data=EXCLUDED.data,

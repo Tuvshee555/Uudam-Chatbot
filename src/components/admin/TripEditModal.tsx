@@ -1,4 +1,5 @@
 import React from "react";
+import { WebsiteTripFields, TripTextComparison } from "./WebsiteTripFields";
 import { Button, DatePicker, Icons, Input, Modal, Select, Spinner, Textarea, cx } from "@/components/ui";
 import { getPosterBrochureHref } from "@/lib/poster/pdfUrl";
 import { blockingGaps, documentedFreeFare, findTripGaps, type TripGap } from "@/lib/tripCompleteness";
@@ -72,7 +73,7 @@ const sectionHdr = "mt-5 text-sm font-semibold text-ink";
 const rowCls = "flex items-start gap-1.5";
 const delBtn = "shrink-0 rounded-md p-1 text-ink-muted transition-colors hover:bg-danger-soft hover:text-danger";
 
-type TripEditorTab = "base" | "pricing" | "itinerary" | "advanced";
+type TripEditorTab = "base" | "pricing" | "itinerary" | "terms" | "website" | "advanced";
 
 function emptyPassengerPrice(label = ""): PassengerPrice {
   return { label, age_range: "", price: null, currency: "MNT" };
@@ -504,12 +505,14 @@ function EditorTabButton({
   return (
     <button
       type="button"
+      role="tab"
+      aria-selected={active}
       onClick={onClick}
       className={cx(
-        "rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
+        "shrink-0 rounded-md px-3 py-2 text-sm font-medium transition-colors",
         active
-          ? "border-brand bg-brand text-white"
-          : "border-line-strong bg-surface text-ink-muted hover:border-brand hover:text-ink",
+          ? "bg-brand-soft text-brand"
+          : "text-ink-muted hover:bg-surface-sunken hover:text-ink",
       )}
     >
       {label}
@@ -686,11 +689,13 @@ export function TripEditModal({
             : undefined
         }
       />
-      <div className="mb-4 flex flex-wrap gap-2 border-b border-line pb-4">
+      <div role="tablist" aria-label="Аяллын мэдээлэл" className="sticky top-0 z-10 mb-4 flex gap-1 overflow-x-auto border-b border-line bg-surface py-2">
         <EditorTabButton active={activeTab === "base"} label="Үндсэн" onClick={() => setActiveTab("base")} />
         <EditorTabButton active={activeTab === "pricing"} label="Үнэ ба гаралт" onClick={() => setActiveTab("pricing")} />
         <EditorTabButton active={activeTab === "itinerary"} label="Хөтөлбөр" onClick={() => setActiveTab("itinerary")} />
-        <EditorTabButton active={activeTab === "advanced"} label="Нэмэлт" onClick={() => setActiveTab("advanced")} />
+        <EditorTabButton active={activeTab === "terms"} label="Нөхцөл" onClick={() => setActiveTab("terms")} />
+        <EditorTabButton active={activeTab === "website"} label="Веб мэдээлэл" onClick={() => setActiveTab("website")} />
+        <EditorTabButton active={activeTab === "advanced"} label="Харьцуулах" onClick={() => setActiveTab("advanced")} />
       </div>
 
       {activeTab === "base" && (
@@ -956,7 +961,7 @@ export function TripEditModal({
         </>
       )}
 
-      {activeTab === "advanced" && (
+      {activeTab === "base" && (
         <>
       {/* A. Aliases */}
       <p className={sectionHdr}>Өөр нэршил / хайлтын нэр</p>
@@ -1348,7 +1353,7 @@ export function TripEditModal({
         </>
       )}
 
-      {activeTab === "advanced" && (
+      {activeTab === "terms" && (
         <>
       {/* G. Included items */}
       <p className={sectionHdr}>Багтсан зүйлс</p>
@@ -1477,6 +1482,12 @@ export function TripEditModal({
         </div>
       </div>
 
+        </>
+      )}
+      {activeTab === "website" && <WebsiteTripFields trip={editingTrip} draft={tripDraft.websiteDetails} onChange={(websiteDetails) => setTripDraft((previous) => ({ ...previous, websiteDetails }))} />}
+      {activeTab === "advanced" && (
+        <>
+      <TripTextComparison trip={editingTrip} />
       {/* K. Metadata toggles */}
       <p className={sectionHdr}>Тохиргоо / мета</p>
       <div className="mt-2 grid gap-3 sm:grid-cols-2">

@@ -49,7 +49,9 @@ test("an empty website summary is an explicit removal", () => {
     durationDays: 2, durationNights: 1, summary: "", isPublished: true,
   });
   assert.equal(result.fields.extra?.website_summary, "");
-  assert.equal(result.fields.source_description, "");
+  assert.equal(result.fields.source_description, undefined);
+  assert.equal(result.fields.seats_total, undefined);
+  assert.equal(result.fields.seats_left, undefined);
 });
 
 test("website-created incomplete trips sync without fake zero fares", () => {

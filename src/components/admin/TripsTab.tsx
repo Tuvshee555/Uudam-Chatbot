@@ -168,18 +168,18 @@ export function TripsTab({
 
   return (
     <div className="space-y-3">
-      {/* Delete-all confirmation modal */}
+      {/* Archiving retains linked records and history. */}
       <Modal
         open={confirmDeleteAll}
         onClose={() => setConfirmDeleteAll(false)}
-        title="Бүх аялал устгах уу?"
+        title="Бүх аяллыг архивлах уу?"
       >
         <div className="space-y-4">
           <p className="text-sm text-ink-muted">
-            Одоо байгаа <span className="font-semibold text-ink">{trips.length} аялал</span> бүгдийг устгах гэж байна. Энэ үйлдлийг буцаах боломжгүй.
+            Одоо байгаа <span className="font-semibold text-ink">{trips.length} аялал</span> бүгдийг нийтэд харагдахгүй болгоно. Аяллын мэдээлэл, захиалга болон түүх хадгалагдана.
           </p>
           <p className="text-sm text-ink-muted">
-            Устгахын өмнө доорх товчоор татаж авахыг зөвлөж байна.
+            Доорх товчоор одоогийн мэдээллийг татаж авч болно.
           </p>
           {/* Backups only. The PDF brochure is deliberately NOT offered here —
               it drops hidden/inactive trips and every internal field, so it
@@ -206,7 +206,7 @@ export function TripsTab({
               }}
             >
               <Icons.trash size={15} />
-              Бүгдийг устгах
+              Бүгдийг архивлах
             </Button>
           </div>
         </div>
@@ -318,7 +318,7 @@ export function TripsTab({
                 className="ml-auto flex items-center gap-1.5 rounded-md border border-danger/30 bg-surface px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/5"
               >
                 <Icons.trash size={13} />
-                Бүгдийг устгах
+                Бүгдийг архивлах
               </button>
             </div>
           )}
@@ -732,11 +732,11 @@ function TripCard({
     <Card className={cx("card-lift p-3.5", isHidden && "opacity-70")}>
       <div className="flex gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-col items-start justify-between gap-2 sm:flex-row sm:gap-3">
             <div className="min-w-0">
-              <p className="font-semibold text-ink">{trip.route_name || "—"}</p>
+              <p className="break-words text-sm font-semibold text-ink">{trip.route_name || "—"}</p>
             </div>
-            <div className="flex shrink-0 items-center gap-1.5">
+            <div className="flex max-w-full flex-wrap items-center gap-1.5">
               {blocking.length > 0 && (
                 <Badge tone="warning">Шалгах</Badge>
               )}
@@ -763,15 +763,15 @@ function TripCard({
               ))}
             </div>
           )}
-          <DepartureCalendar dates={trip.departure_dates || []} />
+          <details className="mt-2 text-xs text-ink-muted"><summary className="cursor-pointer font-medium">Гарах огноо ({trip.departure_dates?.length || 0})</summary><DepartureCalendar dates={trip.departure_dates || []} /></details>
           {isPosterSynced && (
-            <div className="mt-2 rounded-md border border-brand/15 bg-brand-soft px-2.5 py-2 text-xs text-brand">
+            <details className="mt-2 border-t border-line pt-2 text-xs text-ink-muted"><summary className="cursor-pointer font-medium">Холбоос, эх сурвалж</summary>
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="font-semibold">Холбоо:</span>
                 {Boolean((trip.extra.website_sync as { website_slug?: string } | undefined)?.website_slug) && (
-                  <a className="font-semibold underline" href={`https://uudam-booking-web.vercel.app/mn/trips/${encodeURIComponent((trip.extra.website_sync as { website_slug: string }).website_slug)}`} target="_blank" rel="noopener noreferrer">Вэбсайт дээр үзэх</a>
+                  <a className="font-semibold underline" href={`https://uudamtravel.mn/mn/trips/${encodeURIComponent((trip.extra.website_sync as { website_slug: string }).website_slug)}`} target="_blank" rel="noopener noreferrer">Вэбсайт дээр үзэх</a>
                 )}
-                <span className="rounded-[6px] bg-surface px-1.5 py-0.5 font-mono text-[11px]">{connection.posterId}</span>
+                <span className="max-w-full break-all font-mono text-[11px]">{connection.posterId}</span>
                 {connection.sourceFile && <span className="truncate text-brand/80">эх: {connection.sourceFile}</span>}
                 {connection.pdfUrl && (
                   <a
@@ -784,14 +784,13 @@ function TripCard({
                   </a>
                 )}
               </div>
-            </div>
+            </details>
           )}
           {Boolean((trip.extra.website_sync as { content_conflict?: boolean } | undefined)?.content_conflict) && (
             <div className="mt-2 rounded-md border border-danger/30 bg-danger-soft px-2.5 py-2 text-xs text-danger">
               <div className="flex items-center gap-1.5">
                 <Icons.alert size={14} className="shrink-0" />
-                <span className="font-semibold">Вэбсайт дээр гараар засвар орсон:</span>
-                <span>Гарчиг/тайлбар зэрэг зарим талбарыг вэбсайт дээрээс өөрчилсөн тул автомат синк тэдгээрийг дарж бичихгүй. Энд дахин засвар хийвэл шинэ засвар нь дарж бичнэ.</span>
+                <span className="font-semibold">Вебсайт ба chatbot мэдээлэл зөрүүтэй. Хоёр хувилбар хадгалагдсан.</span>
               </div>
             </div>
           )}
@@ -830,11 +829,11 @@ function TripCard({
           )}
         </div>
       </div>
-      <div className="mt-3 flex items-center justify-between gap-2">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3">
         <span className="text-xs text-ink-subtle">
           Шинэчилсэн: {formatTime(trip.updated_at)}
         </span>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-1.5">
           <Button
             size="sm"
             variant="ghost"
@@ -866,10 +865,10 @@ function TripCard({
             variant="ghost"
             className="text-danger"
             onClick={onDelete}
-            title={isPosterSynced ? "Холбоотой постер хамт устна" : undefined}
+            title="Аялал болон хувилбарын түүх хадгалагдана"
           >
             <Icons.trash size={15} />
-            Устгах
+            Архивлах
           </Button>
         </div>
       </div>

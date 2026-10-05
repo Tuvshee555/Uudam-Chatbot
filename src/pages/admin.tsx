@@ -6,6 +6,8 @@ import { buildProposalClarifications } from "@/lib/adminProposalUtils";
 import { AdminConfirmModals } from "@/components/admin/AdminConfirmModals";
 import { AdminLoginGate } from "@/components/admin/AdminLoginGate";
 import { AdminSidebarItem, NAV_GROUPS } from "@/components/admin/AdminSidebarItem";
+import { websiteDetailsPatch } from "@/lib/websiteTripDetails";
+import { sameParityValue } from "@/lib/tripWebsiteParityValue";
 import { AssistantTab } from "@/components/admin/AssistantTab";
 import { AnalyticsTab } from "@/components/admin/AnalyticsTab";
 import { BotTab } from "@/components/admin/BotTab";
@@ -47,7 +49,7 @@ export default function AdminPage() {
   const [driveSync, setDriveSync] = useState<DriveSyncDiagnostics | null>(null);
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
   const [systemLoaded, setSystemLoaded] = useState(false);
-  const [tab, setTab] = useState<TabKey>("assistant");
+  const [tab, setTab] = useState<TabKey>("trips");
   // Set by the trips tab's "Постерт зураг нэмэх" button — opens that exact
   // poster once the poster tab mounts, instead of leaving them to hunt for it.
   const [posterToOpen, setPosterToOpen] = useState<string | null>(null);
@@ -123,6 +125,7 @@ export default function AdminPage() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const secretRef = useRef(secret);
   const searchRef = useRef(search);
+  const tripLoadRevision = useRef(0);
   const statusFilterRef = useRef(statusFilter);
   useEffect(() => {
     secretRef.current = secret;
@@ -174,6 +177,7 @@ export default function AdminPage() {
       nextStatusFilter = statusFilterRef.current,
       options: { showLoading?: boolean } = {},
     ) => {
+      const revision = ++tripLoadRevision.current;
       if (options.showLoading) setLoading(true);
       try {
         const tripRes = await fetchWithAdmin(
@@ -186,6 +190,7 @@ export default function AdminPage() {
           return;
         }
         const tripJson = await tripRes.json();
+        if (revision !== tripLoadRevision.current) return;
         setRequiresAuth(false);
         const nextTrips = Array.isArray(tripJson?.trips) ? tripJson.trips : [];
         setTrips(nextTrips);
@@ -194,7 +199,7 @@ export default function AdminPage() {
       } catch {
         toast.error("Аяллын мэдээлэл ачаалж чадсангүй.");
       } finally {
-        if (options.showLoading) setLoading(false);
+        if (options.showLoading && revision === tripLoadRevision.current) setLoading(false);
       }
     },
     [fetchWithAdmin, markAdminLocked, toast],
@@ -1400,7 +1405,7 @@ export default function AdminPage() {
       adult_price: asInt(tripDraft.adult_price || ""),
       child_price: asInt(tripDraft.child_price || ""),
       infant_price: asInt(tripDraft.infant_price || ""),
-      currency: "MNT",
+      currency: tripDraft.currency || "MNT",
       seats_total: asInt(tripDraft.seats_total || ""),
       seats_left: asInt(tripDraft.seats_left || ""),
       status: tripDraft.status || "active",
@@ -1417,6 +1422,7 @@ export default function AdminPage() {
       source_description: tripDraft.source_description || "",
       photo_urls: tripPhotoUrls,
       extra: {
+        ...(tripDraft.websiteDetails && editingTrip ? { website_details_patch: websiteDetailsPatch(editingTrip.extra.website_details, JSON.parse(tripDraft.websiteDetails)) } : {}),
         aliases: tripAliases.filter(Boolean),
         price_groups: tripPriceGroups.map(withDerivedSummaryFields),
         discounts: tripDiscounts,
@@ -1473,17 +1479,33 @@ export default function AdminPage() {
     }
     setBusyKey("save-trip");
     try {
+      const changedExtra = editingTrip ? Object.fromEntries(Object.entries(fields.extra).filter(([key, value]) => {
+        const before = key === "price_groups" && Array.isArray(editingTrip.extra.price_groups)
+          ? (editingTrip.extra.price_groups as PriceGroup[]).map(withDerivedSummaryFields) : editingTrip.extra[key];
+        return !sameParityValue(before, value);
+      })) : fields.extra;
+      if (editingTrip && !("price_groups" in changedExtra)
+        && tripDraft.child_price_free !== "true" && tripDraft.infant_price_free !== "true") delete changedExtra.child_rules;
+      const patchFields = editingTrip ? {
+        ...Object.fromEntries(Object.entries(fields).filter(([key, value]) => key !== "extra" && !sameParityValue(editingTrip[key as keyof TravelTrip], value))),
+        ...(Object.keys(changedExtra).length ? { extra: changedExtra } : {}),
+      } : fields;
+      if (!Object.keys(patchFields).length) {
+        toast.success("Өөрчлөлт ороогүй байна.");
+        closeTripModal();
+        return;
+      }
       const res = await fetchWithAdmin("/api/admin/trips", {
         method: isNewTrip ? "POST" : "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
           isNewTrip
             ? { fields, confirmIncomplete }
-            : { id: editingTrip?.id, fields, confirmIncomplete },
+            : { id: editingTrip?.id, fields: patchFields, confirmIncomplete, expectedUpdatedAt: editingTrip?.updated_at },
         ),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json?.error || "Хадгалж чадсангүй.");
+      if (!res.ok) throw new Error(json?.message || json?.error || "Хадгалж чадсангүй.");
       toast.success(isNewTrip ? "Шинэ аялал нэмэгдлээ." : "Аялал шинэчлэгдлээ.");
       closeTripModal();
       await loadTrips(searchRef.current, statusFilterRef.current, {
@@ -1507,7 +1529,7 @@ export default function AdminPage() {
       );
       const json = await readJsonSafe(res);
       if (!res.ok) throw new Error(String(json?.error || "Устгаж чадсангүй."));
-      toast.success(`"${trip.route_name || trip.operator_name}" устгагдлаа.`);
+      toast.success(`"${trip.route_name || trip.operator_name}" архивлагдлаа.`);
       await loadTrips(searchRef.current, statusFilterRef.current, {
         showLoading: true,
       });
@@ -1780,7 +1802,8 @@ export default function AdminPage() {
             </div>
           )}
           {readiness && readiness.issues.length > 0 && (
-            <div className="mb-4">
+            <details className="mb-4 border-b border-line pb-3" open={readiness.issues.some((issue) => issue.severity === "critical")}>
+              <summary className="cursor-pointer text-sm font-medium text-ink-muted">Системийн шалгалт: {readiness.score}/10 · {readiness.issues.length} анхааруулга</summary>
               <Alert
                 tone={
                   readiness.issues.some((issue) => issue.severity === "critical")
@@ -1794,7 +1817,7 @@ export default function AdminPage() {
                   .map((issue) => issue.message)
                   .join(" ")}
               </Alert>
-            </div>
+            </details>
           )}
           <div key={tab} className="animate-fade-up">
           {tab === "assistant" && (
@@ -1899,7 +1922,7 @@ export default function AdminPage() {
                   });
                   const json = await res.json();
                   if (!res.ok) throw new Error(json?.error || "failed");
-                  toast.success(`${json.deleted ?? 0} аялал устгагдлаа`);
+                  toast.success(`${json.deleted ?? 0} аялал архивлагдлаа`);
                   void loadTrips("", "", { showLoading: true });
                 } catch {
                   toast.error("Устгахад алдаа гарлаа.");
