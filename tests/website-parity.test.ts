@@ -20,13 +20,14 @@ test("conflicting copy retains both values for individual review", () => {
   assert.deepEqual(difference, { websiteField: "description", chatbotField: "notes", kind: "different", websiteValue: "Website text", chatbotValue: "Chatbot text" });
 });
 
-test("unmapped website fields and canonical seat resets are inventoried", () => {
+test("unmapped website fields and existing canonical seat counts are inventoried", () => {
   const web = { ...website, requirements: "Passport", hotelMedia: [{ url: "photo" }], weather: { city: "Sanya" } };
   const chatbot = { ...websiteTripToCanonicalFields(web).fields, seats_total: 20, seats_left: 8 };
   const audit = auditTripPair(web, chatbot);
   assert.equal(audit.websiteSeparateValues.requirements, "Passport");
   assert.deepEqual(audit.websiteSeparateValues.weather, { city: "Sanya" });
-  assert.equal(audit.websiteSaveResetsCanonicalSeats, true);
+  assert.equal(audit.canonicalSeatCountsPresent, true);
+  assert.equal('websiteSaveResetsCanonicalSeats' in audit, false);
 });
 
 test("zero and false are real values, and object key order is not a conflict", () => {
@@ -42,7 +43,8 @@ test("duration wording, hosted itinerary photos and import filenames are not con
     extra: { included_items: ["Flight"], itinerary_days: [{ day: 1, title: "Day", description: "Tour", meals: {} }] } };
   const audit = auditTripPair(web, chatbot, { subtitle: "Poster subtitle" });
   assert.deepEqual(audit.differences, []);
-  assert.equal(audit.websiteSaveWouldReplaceImportSource, true);
+  assert.equal(audit.projectedDescriptionDiffersFromImportSource, true);
+  assert.equal('websiteSaveWouldReplaceImportSource' in audit, false);
   assert.equal(audit.itineraryDetailsNotRepresented.length, 1);
   assert.equal(audit.customerTextNotStoredInCanonical.length, 1);
 });

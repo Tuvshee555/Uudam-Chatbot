@@ -123,12 +123,12 @@ export function auditTripPair(website: Row, chatbot: Row, poster: Row = {}) {
     published: website.isPublished, differences, fareDifferences,
     customerTextNotStoredInCanonical,
     importSourceDescription: chatbot.source_description,
-    websiteSaveWouldReplaceImportSource: !sameParityValue(fields.source_description, chatbot.source_description),
+    projectedDescriptionDiffersFromImportSource: !sameParityValue(fields.source_description, chatbot.source_description),
     websiteSeparateValues: Object.fromEntries(websiteFields.map(key => [key, website[key]])),
     chatbotSeparateValues: Object.fromEntries(chatbotFields.map(key => [key, extra[key]])),
     itineraryDetailsNotRepresented: (Array.isArray(website.itinerary) ? website.itinerary : [])
       .filter(day => hasParityValue(parityRecord(day).location) || hasParityValue(parityRecord(day).video) || hasParityValue(parityRecord(day).image))
       .map(day => { const row = parityRecord(day); return { dayNumber: row.dayNumber, location: row.location, video: row.video, image: row.image }; }),
-    websiteSaveResetsCanonicalSeats: hasParityValue(chatbot.seats_total) || hasParityValue(chatbot.seats_left),
+    canonicalSeatCountsPresent: hasParityValue(chatbot.seats_total) || hasParityValue(chatbot.seats_left),
   };
 }
