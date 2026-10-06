@@ -877,17 +877,15 @@ export function formatCompactDepartureList(dates: string[]) {
  * the trip's base fare. Date answers quoted the base fare, so a customer asking
  * about a departure priced higher than the others was told the lower price.
  */
+/**
+ * The adult fare one departure sells at, from the same canonical offers the
+ * reply verifier checks. Null when that date has no single adult fare (several
+ * hotels or packages): quoting the base or first-found price there made the
+ * verifier reject the whole answer, and the customer got silence.
+ */
 export function adultFareOnDate(trip: TravelTrip, ymd: string, now = new Date()): number | null {
-  const monthDay = ymd.slice(5);
-  const groups = [...getStructuredPriceGroups(trip), ...(getPriceGroups(trip) as Array<Record<string, unknown>>)];
-  for (const group of groups) {
-    if (typeof group.adult_price !== "number" || group.adult_price <= 0) continue;
-    const listsDate = getPriceGroupDisplayDates(group).some((dateText) =>
-      parseDepartureDateText(dateText, now).some((date) => date.slice(5) === monthDay),
-    );
-    if (listsDate) return group.adult_price;
-  }
-  return typeof trip.adult_price === "number" ? trip.adult_price : null;
+  const result = resolveTripOfferFareCard(trip, { date: ymd }, now);
+  return result.status === "ready" ? exactFare(result.offer, "adult") : null;
 }
 
 export function findPriceGroupByYmd(

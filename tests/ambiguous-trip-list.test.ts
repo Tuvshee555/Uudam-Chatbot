@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildAmbiguousTripReply } from "../src/lib/travelFastPathsPricing";
+import { adultFareOnDate, buildAmbiguousTripReply } from "../src/lib/travelFastPathsPricing";
 import { verifyTripReply } from "../src/lib/tripReplyVerification";
 import type { TravelTrip } from "../src/lib/travelTypes";
 
@@ -49,4 +49,17 @@ test("a date written as '<month> сарын <day>' beside a child fare is not re
   const plain = trip("B");
   const reply = `Туршилтын аялал B — хүүхэд 800,000₮ · гарах: ${customerDate(soon)}`;
   assert.equal(verifyTripReply({ reply, trips: [plain] }), reply);
+});
+
+test("a departure's adult fare comes from that date's offer, and two hotel prices give no single fare", () => {
+  assert.equal(adultFareOnDate(pricedPerDate, soon), 1_100_000);
+  assert.equal(adultFareOnDate(pricedPerDate, later), 1_000_000);
+  const twoHotels = trip("C", { extra: {
+    age_rules: { adult: "12+ нас", child: "2-11 нас", infant: "0-1 нас" },
+    price_groups: [
+      { dates: [soon], hotel: "Зочид буудал 1", adult_price: 1_200_000 },
+      { dates: [soon], hotel: "Зочид буудал 2", adult_price: 1_400_000 },
+    ],
+  } });
+  assert.equal(adultFareOnDate(twoHotels, soon), null);
 });

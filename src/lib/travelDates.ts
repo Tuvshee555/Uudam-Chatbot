@@ -543,7 +543,8 @@ const baseAdultFare: AdultFareOnDate = (trip) => trip.adult_price;
 /** One price, or "min – max" when the listed departures are priced differently. */
 function formatFareForDates(trip: TravelTrip, ymds: string[], fareOn: AdultFareOnDate): string {
   const fares = ymds.map((ymd) => fareOn(trip, ymd)).filter((fare): fare is number => typeof fare === "number");
-  if (fares.length === 0) return formatMoney(trip.adult_price, trip.currency);
+  // No single fare for these dates: say nothing rather than a price they don't sell at.
+  if (fares.length === 0) return "";
   const low = Math.min(...fares);
   const high = Math.max(...fares);
   return low === high
