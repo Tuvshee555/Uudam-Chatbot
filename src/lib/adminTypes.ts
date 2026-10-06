@@ -39,6 +39,7 @@ export type AnswerHint = {
 
 export type PriceGroup = {
   label: string;
+  package_id?: string;
   hotel?: string;
   dates: string[];
   display_dates: string[];

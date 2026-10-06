@@ -5,7 +5,7 @@ import { getPosterBrochureHref } from "@/lib/poster/pdfUrl";
 import { blockingGaps, documentedFreeFare, findTripGaps, type TripGap } from "@/lib/tripCompleteness";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
 import { deriveChildRules } from "@/lib/priceGroups";
-import { isInfantShapedAge } from "@/lib/travelFastPathsSearch";
+import { pricingDates, pricingDateRows, patchPricingDate, reconcilePricingDates, passengerPricingRows, type PricingGroup } from "@/lib/adminDatePricing";
 import type { AnswerHint, BookingTerms, DiscountGroup, ExtraFee, ItineraryDay, PassengerPrice, PriceGroup, RoomPrice, SourceProvenance, TravelTrip } from "@/lib/adminTypes";
 
 export type TripDraftState = Record<string, string>;
@@ -73,7 +73,7 @@ const sectionHdr = "mt-5 text-sm font-semibold text-ink";
 const rowCls = "flex items-start gap-1.5";
 const delBtn = "shrink-0 rounded-md p-1 text-ink-muted transition-colors hover:bg-danger-soft hover:text-danger";
 
-type TripEditorTab = "base" | "pricing" | "itinerary" | "terms" | "website" | "advanced";
+type TripEditorTab = "base" | "pricing" | "itinerary" | "media" | "terms" | "website" | "advanced";
 
 function emptyPassengerPrice(label = ""): PassengerPrice {
   return { label, age_range: "", price: null, currency: "MNT" };
@@ -212,7 +212,7 @@ function MoneyInput({
       <span className="mb-1 block text-sm font-semibold text-ink">{label}</span>
       <span
         className={cx(
-          "flex h-12 items-center rounded-md border bg-surface px-3 transition-colors focus-within:border-brand",
+          "flex h-10 items-center rounded-md border bg-surface px-3 transition-colors focus-within:border-brand",
           missing ? "border-danger" : "border-line-strong",
         )}
       >
@@ -399,9 +399,11 @@ function AgeRangePicker({
     onChange(formatAgeRange(merged.min, merged.max, merged.unit));
   };
   return (
-    <div className="flex items-stretch gap-1">
+    <div className="flex min-w-0 items-stretch gap-1">
       <input
-        className={cx(inputCls, "w-14 text-center")}
+        className={cx(inputCls.replace("w-full", ""), "min-w-0 flex-1 text-center")}
+        style={{ width: 0 }}
+        aria-label="Насны доод хязгаар"
         inputMode="numeric"
         value={min}
         placeholder="0"
@@ -409,14 +411,18 @@ function AgeRangePicker({
       />
       <span className="flex items-center text-ink-subtle">–</span>
       <input
-        className={cx(inputCls, "w-14 text-center")}
+        className={cx(inputCls.replace("w-full", ""), "min-w-0 flex-1 text-center")}
+        style={{ width: 0 }}
+        aria-label="Насны дээд хязгаар"
         inputMode="numeric"
         value={max}
         placeholder="23"
         onChange={(e) => setPart({ max: e.target.value.replace(/[^\d]/g, "") })}
       />
       <select
-        className={cx(inputCls, "w-20")}
+        className={cx(inputCls.replace("w-full", ""), "shrink-0")}
+        style={{ width: 64 }}
+        aria-label="Насны нэгж"
         value={unit}
         onChange={(e) => setPart({ unit: e.target.value as "сар" | "нас" })}
       >
@@ -442,11 +448,12 @@ function PassengerBandRow({
 }) {
   const free = isFreeFare(price);
   return (
-    <div className="grid gap-2 rounded-lg border border-line bg-surface p-2.5 sm:grid-cols-[1.2fr_1fr_1fr_auto]">
+    <div className="grid min-w-0 grid-cols-2 gap-2 border-b border-line py-3 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] [&>div]:min-w-0">
       <div>
         <label className="mb-0.5 block text-xs text-ink-muted">Ангилал</label>
         <input
           className={inputCls}
+          aria-label="Зорчигчийн ангилал"
           value={price.label}
           placeholder="ж: Хүүхэд, Нярай"
           onChange={(e) => onChange({ ...price, label: e.target.value })}
@@ -463,13 +470,14 @@ function PassengerBandRow({
         <label className="mb-0.5 block text-xs text-ink-muted">Үнэ</label>
         <input
           className={numCls}
+          aria-label={`${price.label || "Зорчигч"} үнэ`}
           inputMode="numeric"
           disabled={free}
           value={free ? "" : price.price ?? ""}
           placeholder={free ? "Үнэгүй" : ""}
           onChange={(e) => {
             const digits = e.target.value.replace(/[^\d]/g, "");
-            onChange({ ...price, price: digits === "" ? null : Number(digits), note: "" });
+            onChange({ ...price, price: digits === "" ? null : Number(digits), note: free ? "" : price.note });
           }}
         />
         <label className="mt-1 flex items-center gap-1.5 text-xs text-ink-subtle">
@@ -485,12 +493,84 @@ function PassengerBandRow({
         </label>
       </div>
       <div className="flex items-start justify-end pt-5">
-        <button type="button" className={delBtn} onClick={onRemove} title="Устгах">
+        <button type="button" className={delBtn} onClick={onRemove} title="Насны ангилал хасах" aria-label="Насны ангилал хасах">
           <Icons.trash size={13} />
         </button>
       </div>
     </div>
   );
+}
+
+export function TripDatePriceEditor({ groups, onChange }: { groups: PriceGroup[]; onChange: React.Dispatch<React.SetStateAction<PriceGroup[]>> }) {
+  const [selection, setSelection] = React.useState("");
+  const [search, setSearch] = React.useState("");
+  const records = groups as (PriceGroup & PricingGroup)[];
+  const rows = pricingDateRows(records);
+  const key = (row: typeof rows[number]) => `${row.date}|${row.groupIndex}`;
+  const selected = rows.find((row) => key(row) === selection) || rows[0];
+  const visible = rows.filter((row) => [row.date, records[row.groupIndex].hotel, records[row.groupIndex].label, records[row.groupIndex].note].join(" ").toLowerCase().includes(search.toLowerCase()));
+  const group = selected ? groups[selected.groupIndex] : null;
+  const bands = group ? passengerPricingRows(records[selected.groupIndex]) as PassengerPrice[] : [];
+  const update = (patch: Partial<PriceGroup>) => {
+    if (!selected || !group) return;
+    const nextIndex = selected.groupIndex + (pricingDates(records[selected.groupIndex]).length > 1 && selected.date ? 1 : 0);
+    onChange((current) => patchPricingDate(current as (PriceGroup & PricingGroup)[], selected, {
+      ...(!group.passenger_prices?.length ? { passenger_prices: bands } : {}),
+      ...patch,
+    }));
+    setSelection(`${selected.date}|${nextIndex}`);
+  };
+  return <div className="mt-4 grid min-w-0 gap-5 md:grid-cols-[240px_minmax(0,1fr)]">
+    <div className="min-w-0">
+      <div className="md:hidden"><Select label="Гарах огноо" aria-label="Гарах огноо сонгох" value={selected ? key(selected) : ""} onChange={(e) => setSelection(e.target.value)}>
+        {rows.map((row) => <option key={key(row)} value={key(row)}>{row.date || "Шинэ гаралт"} · {String(records[row.groupIndex].package_id || records[row.groupIndex].hotel || records[row.groupIndex].note || "")} · {records[row.groupIndex].adult_price?.toLocaleString("mn-MN") || "—"}</option>)}
+      </Select></div>
+      <div className="hidden md:block"><Input label="Гарах огноо" aria-label="Огноо хайх" placeholder="Огноо хайх" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
+      <div className="mt-2 hidden max-h-[360px] overflow-y-auto border-y border-line md:block" role="list" aria-label="Гарах огноонууд">
+        {visible.map((row) => {
+          const item = records[row.groupIndex];
+          return <button key={key(row)} type="button" aria-pressed={!!selected && key(row) === key(selected)} onClick={() => setSelection(key(row))} className={cx("flex w-full items-center justify-between gap-2 border-b border-line px-3 py-3 text-left text-sm last:border-0", selected && key(row) === key(selected) ? "border-l-2 border-l-brand bg-brand-soft" : "hover:bg-surface-sunken")}>
+            <span className="min-w-0"><span className="block font-medium">{row.date || "Үндсэн үнэ"}</span><span className="block truncate text-xs text-ink-muted">{String(item.package_id || item.hotel || item.note || item.label || "")}</span></span>
+            <span className="shrink-0 text-xs tabular-nums">{item.adult_price != null ? item.adult_price.toLocaleString("mn-MN") : "—"}</span>
+          </button>;
+        })}
+        {!visible.length && <p className="py-3 text-sm text-ink-muted">Огноо олдсонгүй.</p>}
+      </div>
+      <Button variant="secondary" size="sm" className="mt-3" onClick={() => {
+        onChange((current) => [...current, emptyPriceGroup()]);
+        setSelection(`|${groups.length}`);
+        setSearch("");
+      }}><Icons.plus size={14} />Гаралт нэмэх</Button>
+    </div>
+    {group && <div className="min-w-0">
+      <div className="mb-3 flex items-center justify-between gap-3 border-b border-line pb-3">
+        <div className="min-w-0"><h3 className="text-sm font-semibold">{selected.date || "Шинэ гаралт"}</h3><p className="break-words text-xs text-ink-muted">{String(records[selected.groupIndex].package_id || group.note || "")}{group.hotel ? ` · ${group.hotel}` : ""}</p></div>
+        <button type="button" className={delBtn} title="Гаралт хасах" aria-label="Сонгосон гаралт хасах" onClick={() => {
+          if (!window.confirm(`${selected.date || "Энэ"} гаралтыг хасах уу?`)) return;
+          const dates = pricingDates(records[selected.groupIndex]).filter((date) => date !== selected.date);
+          onChange((current) => current.flatMap((item, index) => index !== selected.groupIndex ? [item] : dates.length ? [{ ...item, dates, date_keys: dates, display_dates: dates }] : []));
+          setSelection("");
+        }}><Icons.trash size={14} /></button>
+      </div>
+      <MoneyInput label="Том хүний үнэ" value={group.adult_price != null ? String(group.adult_price) : ""} onChange={(value) => update({ adult_price: value === "" ? null : Number(value), adult_price_range: null })} />
+      {bands.map((price, index) => <PassengerBandRow key={index} price={price}
+        onChange={(next) => update({ passenger_prices: bands.map((item, i) => i === index ? next : item) })}
+        onRemove={() => update({ passenger_prices: bands.filter((_, i) => i !== index) })} />)}
+      <div className="flex gap-3 py-3">{["Хүүхэд", "Нярай"].map((label) => <Button key={label} variant="ghost" size="sm" onClick={() => update({ passenger_prices: [...bands, emptyPassengerPrice(label)] })}><Icons.plus size={14} />{label}</Button>)}</div>
+      <details className="border-t border-line pt-3" open={!selected.date}><summary className="cursor-pointer text-sm text-ink-muted">Огноо, багц, буудал, тэмдэглэл</summary>
+        <div className="mt-3 space-y-3">
+          <PriceGroupDateChips dates={selected.date ? [selected.date] : group.dates} onChange={(dates) => {
+            update({ dates, display_dates: dates, date_keys: dates });
+            setSelection(`${dates[0] || ""}|${selected.groupIndex + (pricingDates(records[selected.groupIndex]).length > 1 && selected.date ? 1 : 0)}`);
+          }} />
+          <Input label="Үнийн нэр" value={group.label} onChange={(e) => update({ label: e.target.value })} />
+          <Input label="Аяллын төрөл" value={group.package_id || ""} onChange={(e) => update({ package_id: e.target.value })} />
+          <Input label="Буудал" value={group.hotel || ""} onChange={(e) => update({ hotel: e.target.value })} />
+          <Input label="Тэмдэглэл" value={group.note} onChange={(e) => update({ note: e.target.value })} />
+        </div>
+      </details>
+    </div>}
+  </div>;
 }
 
 function EditorTabButton({
@@ -509,10 +589,10 @@ function EditorTabButton({
       aria-selected={active}
       onClick={onClick}
       className={cx(
-        "shrink-0 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+        "shrink-0 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
         active
-          ? "bg-brand-soft text-brand"
-          : "text-ink-muted hover:bg-surface-sunken hover:text-ink",
+          ? "border-brand text-brand"
+          : "border-transparent text-ink-muted hover:text-ink",
       )}
     >
       {label}
@@ -680,7 +760,7 @@ export function TripEditModal({
         )
       }
     >
-      <GapWarning
+      {gaps.some((gap) => gap.severity === "blocking") && <GapWarning
         gaps={gaps}
         isNewTrip={isNewTrip}
         onAskAi={
@@ -688,11 +768,12 @@ export function TripEditModal({
             ? () => onAskAi(tripDraft.route_name)
             : undefined
         }
-      />
+      />}
       <div role="tablist" aria-label="Аяллын мэдээлэл" className="sticky top-0 z-10 mb-4 flex gap-1 overflow-x-auto border-b border-line bg-surface py-2">
         <EditorTabButton active={activeTab === "base"} label="Үндсэн" onClick={() => setActiveTab("base")} />
         <EditorTabButton active={activeTab === "pricing"} label="Үнэ ба гаралт" onClick={() => setActiveTab("pricing")} />
         <EditorTabButton active={activeTab === "itinerary"} label="Хөтөлбөр" onClick={() => setActiveTab("itinerary")} />
+        <EditorTabButton active={activeTab === "media"} label="Зураг, бичлэг" onClick={() => setActiveTab("media")} />
         <EditorTabButton active={activeTab === "terms"} label="Нөхцөл" onClick={() => setActiveTab("terms")} />
         <EditorTabButton active={activeTab === "website"} label="Веб мэдээлэл" onClick={() => setActiveTab("website")} />
         <EditorTabButton active={activeTab === "advanced"} label="Харьцуулах" onClick={() => setActiveTab("advanced")} />
@@ -740,6 +821,10 @@ export function TripEditModal({
           <option value="true">Багтсан</option>
           <option value="false">Багтаагүй</option>
         </Select>
+      </div>
+      <details className="mt-4 border-t border-line pt-3">
+        <summary className="cursor-pointer text-sm text-ink-muted">Суудал, урамшуулал</summary>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <Input
           label="Нийт суудал"
           inputMode="numeric"
@@ -760,7 +845,7 @@ export function TripEditModal({
           onChange={(e) => setTripDraft((p) => ({ ...p, seats_percent_left: e.target.value.replace(/[^\d]/g, "").slice(0, 3) }))}
         />
         <Select
-          label="Хямдралын badge"
+          label="Хямдралын тэмдэг"
           value={tripDraft.sale_badge_enabled || "false"}
           onChange={(e) => setTripDraft((p) => ({ ...p, sale_badge_enabled: e.target.value }))}
         >
@@ -768,15 +853,13 @@ export function TripEditModal({
           <option value="true">Асаалттай</option>
         </Select>
         <Input
-          label="Badge текст"
+          label="Тэмдгийн бичвэр"
           placeholder="ж: ХЯМДРАЛ"
           value={tripDraft.sale_badge_label || ""}
           onChange={(e) => setTripDraft((p) => ({ ...p, sale_badge_label: e.target.value }))}
         />
-        <p className="text-xs text-ink-subtle sm:col-span-2">
-          Вэб карт дээр “ХЯМДРАЛ”, үлдсэн суудлын хувь, бодит үлдсэн суудлын тоог харуулахад ашиглана.
-        </p>
       </div>
+      </details>
       <div className="mt-3">
         <Input
           label="Зочид буудал"
@@ -794,6 +877,10 @@ export function TripEditModal({
         />
       </div>
 
+        </>
+      )}
+      {activeTab === "media" && (
+        <>
       {isPosterLinked && (
         <div className="mt-4 rounded-lg border border-success/25 bg-success-soft px-3 py-2.5 text-sm text-success">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -964,7 +1051,7 @@ export function TripEditModal({
       {activeTab === "base" && (
         <>
       {/* A. Aliases */}
-      <p className={sectionHdr}>Өөр нэршил / хайлтын нэр</p>
+      <details className="mt-5 border-t border-line pt-3"><summary className="cursor-pointer text-sm text-ink-muted">Өөр нэршил / хайлтын нэр</summary>
       <div className="mt-2 space-y-1">
         {tripAliases.map((alias, idx) => (
           <div key={idx} className={rowCls}>
@@ -983,6 +1070,7 @@ export function TripEditModal({
       <button type="button" className="mt-1 text-xs text-brand hover:underline" onClick={() => setTripAliases((prev) => [...prev, ""])}>
         + Нэршил нэмэх
       </button>
+      </details>
 
         </>
       )}
@@ -990,9 +1078,6 @@ export function TripEditModal({
       {activeTab === "pricing" && (
         <>
       <p className={sectionHdr}>Үнэ, насны ангилал ба гаралт</p>
-      <p className="mt-1 text-xs text-ink-muted">
-        Огноо бүрийн үнэ, хүүхэд/нярайн насны ангилал болон гарах өдрөө нэг дор тохируулна. Энэ мэдээлэл бот болон вэбсайт дээр ижил харагдана.
-      </p>
       {tripPriceGroups.length === 0 && (
         <div className="mt-3 rounded-lg border border-line bg-surface-sunken p-3">
           <p className="text-sm font-semibold text-ink">Нэг ижил үнэтэй гаралтууд</p>
@@ -1050,89 +1135,26 @@ export function TripEditModal({
           </div>
         </div>
       )}
-      {/* B. Price groups — one entry per set of departure dates. Adult price is
-          always a single value; child/infant are a flexible list of price
-          bands (a trip can have more than one child age tier) with a Free
-          option, and that list is the ONLY place either is entered — no
-          separate "child price"/"infant price" fields to keep in sync. */}
-      <p className={sectionHdr}>{tripPriceGroups.length > 0 ? "Огноо тус бүрийн үнэ" : "Өөр өөр үнэтэй гаралтууд"}</p>
-      <div className="mt-2 space-y-3">
-        {tripPriceGroups.map((g, idx) => (
-          <div key={idx} className="rounded-lg border border-line bg-surface-sunken p-3 text-sm">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs font-medium text-ink-muted">
-                {g.dates.length ? g.dates.join(", ") : `Огноо сонгоогүй үнэ ${idx + 1}`}
-              </span>
-              <button type="button" className={delBtn} onClick={() => setTripPriceGroups((prev) => prev.filter((_, i) => i !== idx))}>
-                <Icons.trash size={13} />
-              </button>
-            </div>
+      <TripDatePriceEditor groups={tripPriceGroups} onChange={(updater) => {
+        const next = typeof updater === "function" ? updater(tripPriceGroups) : updater;
+        setTripPriceGroups(next);
+        setTripDraft((current) => ({
+          ...current,
+          departure_dates: joinDepartureDraft(reconcilePricingDates(
+            splitDepartureDraft(current.departure_dates),
+            tripPriceGroups as (PriceGroup & PricingGroup)[],
+            next as (PriceGroup & PricingGroup)[],
+          )),
+        }));
+      }} />
 
-            <PriceGroupDateChips
-              dates={g.dates}
-              onChange={(dates) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, dates, display_dates: dates } : v))}
-            />
 
-            <div className="mt-3">
-              <MoneyInput
-                label="Том хүний үнэ"
-                value={g.adult_price != null ? String(g.adult_price) : ""}
-                onChange={(value) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, adult_price: value === "" ? null : Number(value) } : v))}
-              />
-            </div>
-
-            {(() => {
-              const bands = g.passenger_prices ?? [];
-              const isInfantBand = (pp: PassengerPrice) => isInfantShapedAge(pp.label.toLowerCase(), pp.age_range);
-              const childBands = bands.map((pp, ppIdx) => ({ pp, ppIdx })).filter(({ pp }) => !isInfantBand(pp));
-              const infantBands = bands.map((pp, ppIdx) => ({ pp, ppIdx })).filter(({ pp }) => isInfantBand(pp));
-              const updateBand = (ppIdx: number, next: PassengerPrice) =>
-                setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.map((p2, j) => j === ppIdx ? next : p2) } : v));
-              const removeBand = (ppIdx: number) =>
-                setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: v.passenger_prices.filter((_, j) => j !== ppIdx) } : v));
-              const addBand = (label: string) =>
-                setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, passenger_prices: [...(v.passenger_prices ?? []), emptyPassengerPrice(label)] } : v));
-              return (
-                <>
-                  <div className="mt-3">
-                    <p className="mb-1.5 text-xs font-semibold text-ink">Хүүхдийн үнэ</p>
-                    <div className="space-y-1.5">
-                      {childBands.map(({ pp, ppIdx }) => (
-                        <PassengerBandRow key={ppIdx} price={pp} onChange={(next) => updateBand(ppIdx, next)} onRemove={() => removeBand(ppIdx)} />
-                      ))}
-                    </div>
-                    <button type="button" className="mt-1.5 text-xs text-brand hover:underline" onClick={() => addBand("Хүүхэд")}>
-                      + Хүүхдийн үнэ нэмэх
-                    </button>
-                  </div>
-
-                  <div className="mt-3">
-                    <p className="mb-1.5 text-xs font-semibold text-ink">Нярайн үнэ</p>
-                    <p className="mb-1.5 text-xs text-ink-subtle">Ихэвчлэн сараар тоологдоно (ж: 0-23 сар).</p>
-                    <div className="space-y-1.5">
-                      {infantBands.map(({ pp, ppIdx }) => (
-                        <PassengerBandRow key={ppIdx} price={pp} onChange={(next) => updateBand(ppIdx, next)} onRemove={() => removeBand(ppIdx)} />
-                      ))}
-                    </div>
-                    <button type="button" className="mt-1.5 text-xs text-brand hover:underline" onClick={() => addBand("Нярай")}>
-                      + Нярайн үнэ нэмэх
-                    </button>
-                  </div>
-                </>
-              );
-            })()}
-
-            <div className="mt-3">
-              <label className="mb-0.5 block text-xs text-ink-muted">Тайлбар</label>
-              <input className={inputCls} value={g.note} onChange={(e) => setTripPriceGroups((prev) => prev.map((v, i) => i === idx ? { ...v, note: e.target.value } : v))} />
-            </div>
-          </div>
-        ))}
-      </div>
-      <button type="button" className="mt-1 text-xs text-brand hover:underline" onClick={() => setTripPriceGroups((prev) => [...prev, emptyPriceGroup()])}>
-        + Үнийн бүлэг нэмэх
-      </button>
-
+      {tripPriceGroups.length > 0 && <details className="mt-5 border-t border-line pt-3"><summary className="cursor-pointer text-sm text-ink-muted">Үндсэн насны тохиргоо</summary><div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <Input label="Том хүний нас" value={tripDraft.age_adult || ""} onChange={(e) => setTripDraft((current) => ({ ...current, age_adult: e.target.value }))} />
+        <Input label="Хүүхдийн нас" value={tripDraft.age_child || ""} onChange={(e) => setTripDraft((current) => ({ ...current, age_child: e.target.value }))} />
+        <Input label="Нярайн нас" value={tripDraft.age_infant || ""} onChange={(e) => setTripDraft((current) => ({ ...current, age_infant: e.target.value }))} />
+      </div></details>}
+      <details className="mt-5 border-t border-line pt-3"><summary className="cursor-pointer text-sm text-ink-muted">Хямдрал, нэмэлт төлбөр</summary>
       {/* C. Discounts */}
       <p className={sectionHdr}>Хямдрал / урамшуулал</p>
       <div className="mt-2 space-y-3">
@@ -1222,6 +1244,7 @@ export function TripEditModal({
         + Нэмэлт төлбөр нэмэх
       </button>
 
+      </details>
       {/* E. Departure rule */}
       <p className={sectionHdr}>Гарах өдрийн дүрэм</p>
       <div className="mt-2">
@@ -1245,9 +1268,12 @@ export function TripEditModal({
       </p>
       <div className="mt-2 space-y-2">
         {tripItineraryDays.map((d, idx) => (
-          <div key={idx} className="rounded-lg border border-line bg-surface-sunken p-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-ink-muted">Өдөр {idx + 1}</span>
+          <details key={idx} open={idx === 0 || !d.title} className="group border-b border-line py-3">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-medium [&::-webkit-details-marker]:hidden">
+              <span className="min-w-0 break-words">Өдөр {idx + 1} · {d.title || "Шинэ өдөр"}</span>
+              <Icons.chevronRight size={14} className="shrink-0 rotate-90 transition-transform group-open:-rotate-90" />
+            </summary>
+            <div className="mt-3 flex justify-end gap-2">
               <div className="flex items-center gap-1">
                 <button
                   type="button"
@@ -1316,7 +1342,7 @@ export function TripEditModal({
                 onChange={(e) => setTripItineraryDays((prev) => prev.map((v, i) => i === idx ? { ...v, description: e.target.value } : v))}
               />
             </div>
-            <div className="mt-2 flex gap-1.5">
+            <div className="mt-2 flex flex-wrap gap-3">
               {([
                 ["breakfast", "Өглөөний хоол"],
                 ["lunch", "Өдрийн хоол"],
@@ -1324,23 +1350,19 @@ export function TripEditModal({
               ] as const).map(([key, label]) => {
                 const on = Boolean(d.meals?.[key]);
                 return (
-                  <button
+                  <label
                     key={key}
-                    type="button"
-                    className={cx(
-                      "rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
-                      on ? "border-brand bg-brand-soft text-brand" : "border-line-strong bg-surface text-ink-muted",
-                    )}
-                    onClick={() => setTripItineraryDays((prev) => prev.map((v, i) =>
-                      i === idx ? { ...v, meals: { ...v.meals, [key]: !on } } : v,
-                    ))}
+                    className="flex items-center gap-1.5 text-xs text-ink-muted"
                   >
+                    <input type="checkbox" checked={on} onChange={() => setTripItineraryDays((prev) => prev.map((v, i) =>
+                      i === idx ? { ...v, meals: { ...v.meals, [key]: !on } } : v,
+                    ))} className="accent-brand" />
                     {label}
-                  </button>
+                  </label>
                 );
               })}
             </div>
-          </div>
+          </details>
         ))}
       </div>
       <button
@@ -1487,6 +1509,7 @@ export function TripEditModal({
       {activeTab === "website" && <WebsiteTripFields trip={editingTrip} draft={tripDraft.websiteDetails} onChange={(websiteDetails) => setTripDraft((previous) => ({ ...previous, websiteDetails }))} />}
       {activeTab === "advanced" && (
         <>
+      <GapWarning gaps={gaps} isNewTrip={isNewTrip} onAskAi={!isNewTrip && onAskAi && tripDraft.route_name ? () => onAskAi(tripDraft.route_name) : undefined} />
       <TripTextComparison trip={editingTrip} />
       {/* K. Metadata toggles */}
       <p className={sectionHdr}>Тохиргоо / мета</p>
