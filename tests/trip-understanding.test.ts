@@ -259,3 +259,21 @@ test("a numbered pick from the offered list stays deterministic — the model is
   assert.equal(asked, false);
   assert.equal(route.chosenTripId, "t-short");
 });
+
+test("a place plus a month checks every trip at that place, not only the ones the model kept", () => {
+  const u = tu.interpretUnderstanding('{"place":"вэлмор","intent":"trip","trips":["T2"],"certainty":"one","month":12}', keysFor(CATALOG), NOW, "вэлмор 12 сард аялал байна уу")!;
+  assert.deepEqual(u.trips.map((t) => t.id).sort(), ["t-long", "t-short"]);
+  assert.equal(u.certainty, "several");
+});
+
+test("a place plus a date lands on the trip at that place that departs then", () => {
+  const u = tu.interpretUnderstanding('{"place":"вэлмор","intent":"trip","trips":["T2"],"certainty":"one","date":"2026-12-10"}', keysFor(CATALOG), NOW, "вэлмор 12/10-нд")!;
+  assert.deepEqual(u.trips.map((t) => t.id), ["t-long"]);
+  assert.equal(u.unmet, null);
+});
+
+test("a trip the customer named in full is never swapped for a sibling that fits the date", () => {
+  const u = tu.interpretUnderstanding('{"place":"вэлмор","intent":"trip","trips":["T2"],"certainty":"one","date":"2026-12-10"}', keysFor(CATALOG), NOW, "Вэлмор шууд нислэгтэй аялал 12/10-нд гарах уу")!;
+  assert.deepEqual(u.trips.map((t) => t.id), ["t-short"]);
+  assert.equal(u.unmet, "date");
+});

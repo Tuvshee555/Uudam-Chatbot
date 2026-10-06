@@ -71,8 +71,10 @@ function catalogLine(key: string, trip: TravelTrip, now: Date): string {
     key,
     trip.route_name + (aliases.length ? ` (бас: ${aliases.slice(0, 6).join(", ")})` : ""),
     Array.isArray(trip.extra?.destinations) ? `чиглэл: ${trip.extra.destinations.filter((city) => typeof city === "string").join(", ")}` : "",
-    trip.duration_text || "?",
-    `тээвэр: ${tripTransport(trip) || "?"}`,
+    trip.duration_text || "",
+    // Unknown is left out rather than shown as "?": when only some trips
+    // recorded a transport, the model passed over the "?" ones.
+    tripTransport(trip) ? `тээвэр: ${tripTransport(trip)}` : "",
     `гарах: ${dates || "—"}`,
     trip.status === "sold_out" ? "суудал дууссан" : "",
   ]
@@ -185,27 +187,45 @@ function wordMatches(word: string, token: string): boolean {
  * (or alias) contains every place word the customer used — only when they used
  * two or more, so one shared city never narrows to an arbitrary trip.
  */
+function mentionsEveryPlaceWord(trip: TravelTrip, tokens: string[]): boolean {
+  const destinations = Array.isArray(trip.extra?.destinations)
+    ? trip.extra.destinations.filter((city): city is string => typeof city === "string")
+    : [];
+  const text = [trip.route_name, ...getAliases(trip), ...destinations].join(" ");
+  const words = normText(text).split(/\s+/);
+  const phonetic = phoneticLatinText(text).split(/\s+/);
+  return tokens.every(
+    (token) =>
+      words.some((word) => wordMatches(word, token)) ||
+      phonetic.some((word) => wordMatches(word, phoneticLatinText(token))),
+  );
+}
+
 function narrowByPlaceWords(place: string, trips: TravelTrip[]): TravelTrip[] {
   const tokens = keywordTokens(place).filter((token) => token.length >= 3);
   if (tokens.length < 2) return trips;
-  const covering = trips.filter((trip) => {
-    const text = [trip.route_name, ...getAliases(trip)].join(" ");
-    const words = normText(text).split(/\s+/);
-    const phonetic = phoneticLatinText(text).split(/\s+/);
-    return tokens.every(
-      (token) =>
-        words.some((word) => wordMatches(word, token)) ||
-        phonetic.some((word) => wordMatches(word, phoneticLatinText(token))),
-    );
-  });
+  const covering = trips.filter((trip) => mentionsEveryPlaceWord(trip, tokens));
   return covering.length === 1 ? covering : trips;
+}
+
+/**
+ * "<place> in <month/dates>": every trip at that place, so the date check
+ * below decides. The model kept only some of a city's trips (by name or
+ * because others had less recorded detail) and the rest could never return.
+ */
+function withEveryTripAtPlace(place: string, picked: TravelTrip[], catalog: TravelTrip[]): TravelTrip[] {
+  const tokens = keywordTokens(place).filter((token) => token.length >= 3);
+  if (!tokens.length || !picked.length) return picked;
+  const atPlace = catalog.filter((trip) => mentionsEveryPlaceWord(trip, tokens));
+  if (atPlace.length <= picked.length || !picked.every((trip) => atPlace.includes(trip))) return picked;
+  return atPlace;
 }
 
 /**
  * Turns the model's JSON into an Understanding, keeping only real catalog
  * trips and re-checking every stated requirement against the trip data.
  */
-export function interpretUnderstanding(raw: string, keys: Map<string, TravelTrip>, now = new Date()): Understanding | null {
+export function interpretUnderstanding(raw: string, keys: Map<string, TravelTrip>, now = new Date(), customerText = ""): Understanding | null {
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(raw.replace(/^```(?:json)?\s*|```\s*$/g, ""));
@@ -237,7 +257,11 @@ export function interpretUnderstanding(raw: string, keys: Map<string, TravelTrip
   // miss off as an answer.
   let unmet: Understanding["unmet"] = null;
   let unknownRequirement: Understanding["unknownRequirement"] = null;
-  let fitting = trips;
+  // A trip the customer named in full stays theirs; only a place is widened.
+  const namedInFull = trips.some((trip) => normText(trip.route_name).length >= 8 && normText(customerText).includes(normText(trip.route_name)));
+  let fitting = place && intent === "trip" && (date || range || month) && !namedInFull
+    ? withEveryTripAtPlace(place, trips, [...keys.values()])
+    : trips;
   const checks: TripRequirement[] = [];
   if (transport) checks.push({ kind: "transport", transport });
   if (date) checks.push({ kind: "date", date });
@@ -359,7 +383,7 @@ export async function understandTripMessage(input: {
       }
     } catch { /* Invalid JSON is rejected by the parser below. */ }
   }
-  return interpretUnderstanding(groundedRaw, keys, input.now);
+  return interpretUnderstanding(groundedRaw, keys, input.now, input.text);
 }
 
 /** True when trip understanding should run (it can be switched off without a deploy). */
