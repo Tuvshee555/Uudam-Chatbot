@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { pricingDates, pricingDateRows, patchPricingDate, reconcilePricingDates, renamePricingDate, passengerPricingRows } from "../src/lib/adminDatePricing";
+import { pricingDates, pricingDateRows, patchPricingDate, reconcilePricingDates, renamePricingDate, passengerPricingRows, passengerName } from "../src/lib/adminDatePricing";
+
+test("age is displayed separately without rewriting stored names or custom categories", () => {
+  const row = { label: "Хүүхэд 4-12 нас", age_range: "4-12 нас" };
+  assert.equal(passengerName(row), "Хүүхэд");
+  assert.equal(row.label, "Хүүхэд 4-12 нас");
+  assert.equal(passengerName({ label: "Хүүхэд тусдаа ортой", age_range: "4-12 нас" }), "Хүүхэд тусдаа ортой");
+  assert.equal(passengerName({ label: "Нярай", age_range: "0-23 сар" }), "Нярай");
+});
 
 const bands = [
   { label: "Child", age_range: "6-11", price: 4590000, currency: "MNT", note: "Own bed" },

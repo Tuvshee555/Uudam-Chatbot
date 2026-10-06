@@ -2072,6 +2072,7 @@ export default function AdminPage() {
         saveDisabled={photoUploading.length > 0}
         busyKey={busyKey}
         handlePhotoFiles={handlePhotoFiles}
+        apiFetch={fetchWithAdmin}
         onClose={closeTripModal}
         onSave={(confirmIncomplete) => void saveTrip(confirmIncomplete)}
         tripAliases={tripAliases}

@@ -28,8 +28,8 @@ export const websiteDetailFields = [
   { key: "childPriceNotes", label: "Хүүхдийн үнийн тэмдэглэл", type: "list" },
   { key: "video", label: "Бичлэгийн URL", type: "text" },
   { key: "videos", label: "Нэмэлт бичлэгүүд", type: "list" },
-  { key: "hotelMedia", label: "Буудлын зураг, бичлэг", type: "media" },
-  { key: "travelerMedia", label: "Аялагчдын зураг, бичлэг", type: "media" },
+  { key: "hotelMedia", label: "Буудлын зураг, бичлэг, холбоос", type: "media" },
+  { key: "travelerMedia", label: "Аялагчдын зураг, бичлэг, холбоос", type: "media" },
 ] as const;
 
 export function websiteDetailsSnapshot(value: unknown): Row {

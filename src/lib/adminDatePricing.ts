@@ -1,6 +1,13 @@
 export type PricingGroup = Record<string, unknown>;
 export type PricingDateRow = { groupIndex: number; date: string };
 
+// Older rows embed the age in their name as well as in age_range.
+export function passengerName(group: PricingGroup): string {
+  const label = String(group.label || "").trim();
+  const age = String(group.age_range || "").trim();
+  return age && label.endsWith(` ${age}`) ? label.slice(0, -age.length).trimEnd() : label;
+}
+
 export function passengerPricingRows(group: PricingGroup): PricingGroup[] {
   if (Array.isArray(group.passenger_prices) && group.passenger_prices.length) {
     return group.passenger_prices.map((value) => value && typeof value === "object" ? { ...value } : {});

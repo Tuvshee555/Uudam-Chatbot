@@ -5,7 +5,7 @@ import { getPosterBrochureHref } from "@/lib/poster/pdfUrl";
 import { blockingGaps, documentedFreeFare, findTripGaps, type TripGap } from "@/lib/tripCompleteness";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
 import { deriveChildRules } from "@/lib/priceGroups";
-import { pricingDates, pricingDateRows, patchPricingDate, reconcilePricingDates, passengerPricingRows, type PricingGroup } from "@/lib/adminDatePricing";
+import { pricingDates, pricingDateRows, patchPricingDate, reconcilePricingDates, passengerPricingRows, passengerName, type PricingGroup } from "@/lib/adminDatePricing";
 import type { AnswerHint, BookingTerms, DiscountGroup, ExtraFee, ItineraryDay, PassengerPrice, PriceGroup, RoomPrice, SourceProvenance, TravelTrip } from "@/lib/adminTypes";
 
 export type TripDraftState = Record<string, string>;
@@ -27,6 +27,7 @@ export type TripEditModalProps = {
   saveDisabled?: boolean;
   busyKey: string;
   handlePhotoFiles: (files: FileList | File[]) => void;
+  apiFetch?: (url: string, init?: RequestInit) => Promise<Response>;
   onClose: () => void;
   /** confirmIncomplete is true when the user accepted the missing-fields prompt. */
   onSave: (confirmIncomplete?: boolean) => void;
@@ -450,24 +451,24 @@ function PassengerBandRow({
   return (
     <div className="grid min-w-0 grid-cols-2 gap-2 border-b border-line py-3 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] [&>div]:min-w-0">
       <div>
-        <label className="mb-0.5 block text-xs text-ink-muted">Ангилал</label>
+        <label className="mb-0.5 block text-xs text-ink-muted">Зорчигчийн нэр</label>
         <input
           className={inputCls}
           aria-label="Зорчигчийн ангилал"
-          value={price.label}
+          value={passengerName(price as PassengerPrice & PricingGroup)}
           placeholder="ж: Хүүхэд, Нярай"
           onChange={(e) => onChange({ ...price, label: e.target.value })}
         />
       </div>
       <div>
-        <label className="mb-0.5 block text-xs text-ink-muted">Нас</label>
+        <label className="mb-0.5 block text-xs text-ink-muted">Насны хүрээ</label>
         <AgeRangePicker
           value={price.age_range}
-          onChange={(age_range) => onChange({ ...price, age_range })}
+          onChange={(age_range) => onChange({ ...price, label: passengerName(price as PassengerPrice & PricingGroup), age_range })}
         />
       </div>
       <div>
-        <label className="mb-0.5 block text-xs text-ink-muted">Үнэ</label>
+        <label className="mb-0.5 block text-xs text-ink-muted">Нэг хүний үнэ ({price.currency === "MNT" ? "₮" : price.currency})</label>
         <input
           className={numCls}
           aria-label={`${price.label || "Зорчигч"} үнэ`}
@@ -577,16 +578,19 @@ function EditorTabButton({
   active,
   label,
   onClick,
+  disabled,
 }: {
   active: boolean;
   label: string;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       role="tab"
       aria-selected={active}
+      disabled={disabled}
       onClick={onClick}
       className={cx(
         "shrink-0 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
@@ -617,6 +621,7 @@ export function TripEditModal({
   saveDisabled = false,
   busyKey,
   handlePhotoFiles,
+  apiFetch,
   onClose,
   onSave,
   tripAliases,
@@ -654,6 +659,7 @@ export function TripEditModal({
 }: TripEditModalProps) {
   const [activeTab, setActiveTab] = React.useState<TripEditorTab>("base");
   const [confirmingIncomplete, setConfirmingIncomplete] = React.useState(false);
+  const [websiteMediaUploading, setWebsiteMediaUploading] = React.useState(false);
 
   React.useEffect(() => {
     if (open) setActiveTab("base");
@@ -720,7 +726,7 @@ export function TripEditModal({
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={() => { if (!websiteMediaUploading) onClose(); }}
       title={isNewTrip ? "Шинэ аялал нэмэх" : "Аялал засах"}
       description={isNewTrip ? undefined : editingTrip?.route_name || undefined}
       panelClassName="max-w-4xl"
@@ -741,7 +747,7 @@ export function TripEditModal({
             </Button>
             <Button
               variant="danger"
-              disabled={saveDisabled}
+              disabled={saveDisabled || websiteMediaUploading}
               loading={busyKey === "save-trip"}
               onClick={() => onSave(true)}
             >
@@ -750,10 +756,10 @@ export function TripEditModal({
           </>
         ) : (
           <>
-            <Button variant="secondary" onClick={onClose}>
+            <Button variant="secondary" disabled={websiteMediaUploading} onClick={onClose}>
               Болих
             </Button>
-            <Button disabled={saveDisabled} loading={busyKey === "save-trip"} onClick={handleSave}>
+            <Button disabled={saveDisabled || websiteMediaUploading} loading={busyKey === "save-trip"} onClick={handleSave}>
               Хадгалах
             </Button>
           </>
@@ -770,13 +776,13 @@ export function TripEditModal({
         }
       />}
       <div role="tablist" aria-label="Аяллын мэдээлэл" className="sticky top-0 z-10 mb-4 flex gap-1 overflow-x-auto border-b border-line bg-surface py-2">
-        <EditorTabButton active={activeTab === "base"} label="Үндсэн" onClick={() => setActiveTab("base")} />
-        <EditorTabButton active={activeTab === "pricing"} label="Үнэ ба гаралт" onClick={() => setActiveTab("pricing")} />
-        <EditorTabButton active={activeTab === "itinerary"} label="Хөтөлбөр" onClick={() => setActiveTab("itinerary")} />
-        <EditorTabButton active={activeTab === "media"} label="Зураг, бичлэг" onClick={() => setActiveTab("media")} />
-        <EditorTabButton active={activeTab === "terms"} label="Нөхцөл" onClick={() => setActiveTab("terms")} />
-        <EditorTabButton active={activeTab === "website"} label="Веб мэдээлэл" onClick={() => setActiveTab("website")} />
-        <EditorTabButton active={activeTab === "advanced"} label="Харьцуулах" onClick={() => setActiveTab("advanced")} />
+        <EditorTabButton disabled={websiteMediaUploading} active={activeTab === "base"} label="Үндсэн" onClick={() => setActiveTab("base")} />
+        <EditorTabButton disabled={websiteMediaUploading} active={activeTab === "pricing"} label="Үнэ ба гаралт" onClick={() => setActiveTab("pricing")} />
+        <EditorTabButton disabled={websiteMediaUploading} active={activeTab === "itinerary"} label="Хөтөлбөр" onClick={() => setActiveTab("itinerary")} />
+        <EditorTabButton disabled={websiteMediaUploading} active={activeTab === "media"} label="Зураг, бичлэг" onClick={() => setActiveTab("media")} />
+        <EditorTabButton disabled={websiteMediaUploading} active={activeTab === "terms"} label="Нөхцөл" onClick={() => setActiveTab("terms")} />
+        <EditorTabButton disabled={websiteMediaUploading} active={activeTab === "website"} label="Веб мэдээлэл" onClick={() => setActiveTab("website")} />
+        <EditorTabButton disabled={websiteMediaUploading} active={activeTab === "advanced"} label="Харьцуулах" onClick={() => setActiveTab("advanced")} />
       </div>
 
       {activeTab === "base" && (
@@ -861,14 +867,6 @@ export function TripEditModal({
       </div>
       </details>
       <div className="mt-3">
-        <Input
-          label="Зочид буудал"
-          placeholder="ж: Shangri-La Ulaanbaatar (4*)"
-          value={tripDraft.hotel}
-          onChange={(e) => setTripDraft((p) => ({ ...p, hotel: e.target.value }))}
-        />
-      </div>
-      <div className="mt-3">
         <Textarea
           label="Тэмдэглэл"
           rows={2}
@@ -881,6 +879,11 @@ export function TripEditModal({
       )}
       {activeTab === "media" && (
         <>
+      <section className="mb-6 space-y-4">
+        <h3 className="text-sm font-semibold text-ink">Зочид буудал</h3>
+        <Input label="Буудлын нэр" value={tripDraft.hotel} onChange={(e) => setTripDraft((p) => ({ ...p, hotel: e.target.value }))} />
+        <WebsiteTripFields scope="media" trip={editingTrip} draft={tripDraft.websiteDetails} onChange={(websiteDetails) => setTripDraft((previous) => ({ ...previous, websiteDetails }))} apiFetch={apiFetch} onBusyChange={setWebsiteMediaUploading} />
+      </section>
       {isPosterLinked && (
         <div className="mt-4 rounded-lg border border-success/25 bg-success-soft px-3 py-2.5 text-sm text-success">
           <div className="flex flex-wrap items-center justify-between gap-2">
