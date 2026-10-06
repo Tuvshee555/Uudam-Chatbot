@@ -7,6 +7,7 @@
 
 import { filterFutureDepartureDates, isPlaceholderDepartureText, parseDepartureDateText, type ResolvedDepartureDate } from "./travelDates";
 import { formatPriceRange } from "./priceRange";
+import { resolveTripOfferFareCard, type PassengerKind, type ResolvedTripOffer } from "./tripOffers";
 import type { TravelTrip } from "./travelOps";
 import {
   withFutureDepartureDates,
@@ -1651,6 +1652,48 @@ function firstStructuredPassengerPrice(trip: TravelTrip, key: "child_price" | "i
 const MAX_LISTED_TRIPS = 8;
 
 /** `heading` replaces the generic first line ("11 сард эдгээр аялал гарна:"). */
+type ListedFares = { adult: number | null; child: number | null; infant: number | null };
+
+function exactFare(offer: ResolvedTripOffer, kind: PassengerKind): number | null {
+  const fare = offer.fares.find((entry) => entry.kind === kind && entry.fare.kind === "exact")?.fare;
+  return fare?.kind === "exact" ? fare.amount : null;
+}
+
+/**
+ * The fares one listed line may quote, and the departures that sell at them.
+ * The list used to pair the trip's flat base price with its next dates; when a
+ * date sold at another price the reply verifier rightly rejected it, and the
+ * whole "which trip?" question became silence plus a paused customer.
+ */
+function listedFaresAndDates(trip: TravelTrip): { fares: ListedFares | null; dates: string[] } {
+  const upcoming = withFutureDepartureDates(trip).departure_dates.slice(0, 8);
+  if (!upcoming.length) {
+    return { fares: {
+      adult: typeof trip.adult_price === "number" ? trip.adult_price : null,
+      child: firstStructuredPassengerPrice(trip, "child_price"),
+      infant: firstStructuredPassengerPrice(trip, "infant_price"),
+    }, dates: [] };
+  }
+  const card = (date: string) => {
+    const result = resolveTripOfferFareCard(trip, { date });
+    return result.status === "ready" ? result.offer : null;
+  };
+  const first = card(upcoming[0]);
+  // Several hotels or packages on that date: no single price is true, so the
+  // line names the trip and its dates and the price comes once they choose.
+  if (!first) return { fares: null, dates: upcoming.slice(0, 3) };
+  const fares = { adult: exactFare(first, "adult"), child: exactFare(first, "child"), infant: exactFare(first, "infant") };
+  const sameFares = (offer: ResolvedTripOffer | null) =>
+    offer !== null && (["adult", "child", "infant"] as const).every((kind) => exactFare(offer, kind) === fares[kind]);
+  return { fares, dates: upcoming.filter((date) => date === upcoming[0] || sameFares(card(date))).slice(0, 3) };
+}
+
+/** "2026-10-08" → "10 сарын 8", as every other reply writes dates; other text unchanged. */
+function customerDate(date: string): string {
+  const iso = /^\d{4}-(\d{2})-(\d{2})$/.exec(date);
+  return iso ? `${Number(iso[1])} сарын ${Number(iso[2])}` : date;
+}
+
 export function buildAmbiguousTripReply(
   trips: TravelTrip[],
   heading?: string,
@@ -1658,21 +1701,19 @@ export function buildAmbiguousTripReply(
 ) {
   const names = trips.slice(0, MAX_LISTED_TRIPS).map((trip) => {
     const currency = trip.currency || "MNT";
-    const adult = typeof trip.adult_price === "number" ? trip.adult_price : null;
-    const child = firstStructuredPassengerPrice(trip, "child_price");
-    const infant = firstStructuredPassengerPrice(trip, "infant_price");
-    const adultText = formatPassengerMoney(adult, currency);
-    const childText = formatPassengerMoney(child, currency);
-    const infantText = formatPassengerMoney(infant, currency);
+    const listed = listedFaresAndDates(trip);
+    const adultText = formatPassengerMoney(listed.fares?.adult, currency);
+    const childText = formatPassengerMoney(listed.fares?.child, currency);
+    const infantText = formatPassengerMoney(listed.fares?.infant, currency);
     // Next departures: customers pick by date, and a "none that month" re-ask
     // is useless without them.
-    const upcoming = withFutureDepartureDates(trip).departure_dates.slice(0, 3);
+    const upcoming = listed.dates;
     const details = [
       trip.duration_text,
       adultText ? `том хүн ${adultText}` : "",
       childText ? `хүүхэд ${childText}` : "",
       infantText ? `нярай ${infantText}` : "",
-      upcoming.length ? `гарах: ${upcoming.join(", ")}` : "",
+      upcoming.length ? `гарах: ${upcoming.map(customerDate).join(", ")}` : "",
     ].filter(Boolean);
     return `• ${trip.route_name}${details.length ? ` — ${details.join(" · ")}` : ""}`;
   });

@@ -36,7 +36,8 @@ export function verifyTripReply(input: {
     for (const fragment of line.split(/(?=том\s*хүн|насанд\s*хүрэгч|adult|нярай|infant|хүүх(?:эд|дийн)|child)/i)) {
       const kind = /том\s*хүн|насанд\s*хүрэгч|adult/i.test(fragment) ? "adult" : /нярай|infant/i.test(fragment) ? "infant" : /хүүх(?:эд|дийн)|child/i.test(fragment) ? "child" : null;
       const amounts = [...fragment.matchAll(AMOUNT)].map((match) => Number(match[1].replace(/[.,]/g, "")));
-      const age = /(?<![\d.,])(\d{1,2}(?:\.\d+)?)\s*(?:[-–]\s*\d{1,2}\s*)?(?:нас|настай|years?\s*old|сар|months?)/i.exec(fragment);
+      // "10 сарын 26" is a date ("the 26th of month 10"), never a 10-month-old.
+      const age = /(?<![\d.,])(\d{1,2}(?:\.\d+)?)\s*(?:[-–]\s*\d{1,2}\s*)?(?:нас|настай|years?\s*old|сар(?!ын)|months?)/i.exec(fragment);
       if (kind && amounts.length) {
         for (const amount of amounts) {
           const supported = active.some((trip) => {
