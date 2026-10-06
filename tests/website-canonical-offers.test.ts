@@ -15,9 +15,9 @@ const trip: TravelTrip = {
 };
 const payload = (source: TravelTrip) => websiteTripPayload(source, websiteDepartureSchedule(source, now), now);
 
-test("unknown seats keep website departures paused while preserving prices and canonical unknown availability", () => {
+test("unknown seats keep website departures bookable while preserving prices and canonical unknown availability", () => {
   const projected = payload({ ...trip, seats_left: null });
-  assert.equal(projected.departures[0].status, "PAUSED");
+  assert.equal(projected.departures[0].status, "OPEN");
   assert.equal(projected.departures[0].seatsLeft, null);
   assert.equal(projected.departures[0].price, trip.adult_price);
   const card = projected.canonicalOffers.entries[0].fareCard;
@@ -38,14 +38,18 @@ test("an explicit OPEN departure confirms booking status without inventing a sea
 
 test("resync retains unknown availability and can reopen an automatic pause when seats become known", () => {
   const initial = payload({ ...trip, seats_left: null });
+  // Projections stored before unknown seats became bookable recorded the pause.
+  const legacy = { ...initial.canonicalOffers, departures: (initial.canonicalOffers.departures as Array<Record<string, unknown>>)
+    .map((departure) => ({ ...departure, status: "PAUSED" })) };
   const row = { date: "2026-10-01", status: "PAUSED", seatsLeft: null };
-  const restored = websiteAvailabilityForResync(row, initial.canonicalOffers);
+  assert.deepEqual(websiteAvailabilityForResync(row, initial.canonicalOffers), row);
+  const restored = websiteAvailabilityForResync(row, legacy);
   assert.equal(restored.status, "UNKNOWN");
   const customerTrip = withBookableDepartureDates({ ...trip, seats_left: null, extra: { website_departure_availability: [restored] } }, now);
   assert.equal(customerTrip.status, "active");
   assert.deepEqual(customerTrip.departure_dates, ["2026-10-01"]);
   const unchanged = payload({ ...trip, seats_left: null, extra: { website_departure_availability: [restored] } });
-  assert.equal(unchanged.departures[0].status, "PAUSED");
+  assert.equal(unchanged.departures[0].status, "OPEN");
   assert.equal(unchanged.priceGroups[0].availability.status, "unknown");
   const confirmed = payload({ ...trip, extra: { website_departure_availability: [{ ...restored, seatsLeft: 8 }] } });
   assert.equal(confirmed.departures[0].status, "OPEN");
