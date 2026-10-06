@@ -66,7 +66,10 @@ function confirmedOpen(availability: OfferAvailability): boolean {
 function websiteStatus(status: string, seatsLeft: number | null): WebsiteDeparture["status"] {
   if (status === "sold_out") return "SOLD_OUT";
   if (status === "cancelled" || status === "departed") return "CANCELLED";
-  if (status === "open" && seatsLeft !== 0) return "OPEN";
+  // A missing seat count means staff have not published a count, not that the
+  // departure is closed. Keep it selectable unless somebody explicitly pauses
+  // or closes that date.
+  if ((status === "open" || status === "unknown") && seatsLeft !== 0) return "OPEN";
   return "PAUSED";
 }
 

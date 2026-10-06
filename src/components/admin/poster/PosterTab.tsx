@@ -2143,9 +2143,9 @@ export default function PosterTab({
               >
                 <Icons.chevronLeft size={14} /> Back
               </Button>
-              <Button size="sm" variant="secondary" onClick={closeTrip} className="shrink-0">
-                <Icons.chevronLeft size={14} />
-                Буцах
+              <Button size="sm" variant="secondary" onClick={closeTrip} className="shrink-0" title="Нээлттэй постерыг хаагаад жагсаалт руу буцах">
+                <Icons.trips size={14} />
+                Жагсаалт
               </Button>
               <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm text-ink-muted hover:text-ink">
                 <input type="file" multiple accept=".pdf,.docx,.txt,image/*" className="hidden" onChange={(e) => handleFiles(e.target.files)} />

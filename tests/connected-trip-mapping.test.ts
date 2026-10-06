@@ -53,6 +53,15 @@ test("website departures inherit date-specific price group overrides", () => {
   assert.equal(result[1].price,1201000);
   assert.equal(result[1].childPrice,1001000);
 });
+test("a priced date with no supplied seat count remains open", () => {
+  const result = websiteDepartures({
+    ...trip,
+    status: "active",
+    departure_dates: ["2026-09-17"],
+  }, new Date("2026-07-16T04:00:00.000Z"));
+  assert.equal(result[0].status, "OPEN");
+  assert.equal(result[0].seatsLeft, null);
+});
 test("website calendar keeps the lowest fare when hotels share a departure", () => {
   const result = websiteDepartures({ ...trip, extra: {
     departure_dates_resolved: [{ text: "10 сарын 1", ymd: "2026-10-01" }],
