@@ -19,9 +19,9 @@ function isProductionRuntime() {
   );
 }
 
-export function getReadinessReport(env: ValidatedEnv): ReadinessReport {
+export function getReadinessReport(env: ValidatedEnv, operationalIssues: ReadinessIssue[] = []): ReadinessReport {
   const production = isProductionRuntime();
-  const issues: ReadinessIssue[] = [];
+  const issues: ReadinessIssue[] = [...operationalIssues];
   const add = (
     severity: ReadinessIssue["severity"],
     key: string,

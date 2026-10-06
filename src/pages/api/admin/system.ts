@@ -7,6 +7,7 @@ import {
 } from "../../../lib/googleDriveSync";
 import { getDbDiagnostics } from "../../../lib/travelOps";
 import { getReadinessReport } from "../../../lib/readiness";
+import { getOperationalIssues } from "../../../lib/aiHealth";
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
 
 const env = getEnv();
@@ -33,9 +34,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     scheduleDriveAutoSync({ source: "api.admin.system" });
-    const [diagnostics, driveSync] = await Promise.all([
+    const [diagnostics, driveSync, operationalIssues] = await Promise.all([
       getDbDiagnostics(),
       getDriveSyncDiagnostics(),
+      getOperationalIssues(env),
     ]);
     return res.status(200).json({
       ok: true,
@@ -43,7 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       authorized: true,
       db: diagnostics,
       drive_sync: driveSync,
-      readiness: getReadinessReport(env),
+      readiness: getReadinessReport(env, operationalIssues),
     });
   } finally {
     finishRequestTrace(trace, res.statusCode || 500);

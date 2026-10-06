@@ -7,6 +7,7 @@ import { safeSecretCompare } from "../../../lib/adminAuth";
 import { waitUntil } from "@vercel/functions";
 import { flushWebsiteSync } from "../../../lib/websiteTripSync";
 import { pruneErrorLogs } from "../../../lib/errorLogStore";
+import { runDailyHealthCheck } from "../../../lib/dailyHealthCheck";
 
 // Vercel cron secret — must match CRON_SECRET env var.
 // FAIL CLOSED in production: a missing secret used to mean "allow everyone",
@@ -35,6 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // the admin. Runs once a day regardless of traffic so a quiet trip doesn't
   // stay live past its last date just because nobody asked about it.
   waitUntil(listTrips({ limit: 5000 }).then(() => {}));
+  waitUntil(runDailyHealthCheck());
 
   const env = getEnv();
   // PSIDs are page-scoped: a sender who messaged page B does not exist for

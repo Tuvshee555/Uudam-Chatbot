@@ -75,8 +75,21 @@ export async function notifyStaffOfLead(
   alert: StaffLeadAlert,
   trace?: UpstreamTraceOptions,
 ): Promise<StaffAlertDeliveryResult> {
+  return notifyStaff(buildAlertText(alert), alert.kind, trace);
+}
+
+export function hasStaffAlertChannel(env = getEnv()): boolean {
+  return env.staffNotifyPsids.length > 0 || Boolean(env.telegramBotToken && env.telegramStaffChatIds.length > 0);
+}
+
+/** Every configured staff channel receives `text`; `kind` labels logs and metrics. Never throws. */
+export async function notifyStaff(
+  text: string,
+  kind: string,
+  trace?: UpstreamTraceOptions,
+): Promise<StaffAlertDeliveryResult> {
   const env = getEnv();
-  const text = buildAlertText(alert);
+  const alert = { kind };
   let attempted = 0;
   let delivered = 0;
 

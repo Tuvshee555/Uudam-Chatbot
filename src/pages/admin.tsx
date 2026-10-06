@@ -1813,7 +1813,7 @@ export default function AdminPage() {
               >
                 Бэлэн байдлын оноо {readiness.score}/10.{" "}
                 {readiness.issues
-                  .slice(0, 2)
+                  .slice(0, 3)
                   .map((issue) => issue.message)
                   .join(" ")}
               </Alert>

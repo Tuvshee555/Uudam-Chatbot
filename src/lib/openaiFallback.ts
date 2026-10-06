@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { aiFailureKind, reportAiOutage } from "./aiHealth";
 import { fixMojibake } from "./encoding";
 import { getEnv } from "./env";
 import {
@@ -158,6 +159,7 @@ export async function askOpenAIChatParts(
     };
   } catch (error) {
     const classification = classifyError(error);
+    const failureKind = aiFailureKind(error);
     recordCounter("openai.fallback_failures_total", 1, {
       model,
       source,
@@ -165,6 +167,7 @@ export async function askOpenAIChatParts(
     });
     if (
       classification.category === "rate_limited" &&
+      failureKind !== "credits_exhausted" &&
       model !== "gpt-4o-mini" &&
       !options?.alternateModelAttempted
     ) {
@@ -183,8 +186,10 @@ export async function askOpenAIChatParts(
     logError("openai.fallback_failed", {
       source,
       model,
+      failure_kind: failureKind,
       message: error instanceof Error ? error.message : String(error),
     });
+    void reportAiOutage(failureKind);
     return null;
   }
 }
