@@ -2077,6 +2077,13 @@ export default function PosterTab({
     }
   }
 
+  function closeTrip() {
+    resetTripHistory();
+    setTrip(null);
+    setTripId(null);
+    setSource("");
+  }
+
   async function deleteTrip(id: string) {
     setBulkPlan(null);
     setBulkReport(null);
@@ -2135,6 +2142,10 @@ export default function PosterTab({
                 title="Сүүлийн хийсэн өөрчлөлтийг буцаах"
               >
                 <Icons.chevronLeft size={14} /> Back
+              </Button>
+              <Button size="sm" variant="secondary" onClick={closeTrip} className="shrink-0">
+                <Icons.chevronLeft size={14} />
+                Буцах
               </Button>
               <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-sm text-ink-muted hover:text-ink">
                 <input type="file" multiple accept=".pdf,.docx,.txt,image/*" className="hidden" onChange={(e) => handleFiles(e.target.files)} />
