@@ -1704,6 +1704,10 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
       hasLooseAliasMatch(query, queryKeywords, alias, queryPhonetic, queryPhoneticKeywords),
     ) ? 1 : 0;
     const exactRouteHit = query.includes(routeNorm) || (routePhonetic.length > 0 && queryPhonetic.includes(routePhonetic)) ? 1 : 0;
+    // Date, transport, beach and brochure bonuses only rank trips the customer
+    // actually named. Alone they once made "<date> 2 том хүн 1 хүүхэд" (no place
+    // at all) a confident answer for whichever trip departs that day.
+    if (!exactRouteHit && !aliasExactHit && !aliasTokenHit && !matchedWordCount && !phoneticMatchedWordCount) continue;
     let score =
       exactRouteHit * 10 +
       aliasExactHit * 8 +
