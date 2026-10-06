@@ -63,3 +63,16 @@ test("a departure's adult fare comes from that date's offer, and two hotel price
   } });
   assert.equal(adultFareOnDate(twoHotels, soon), null);
 });
+
+test("a price without a hotel is true on a date sold at several hotel prices when one hotel sells at it", () => {
+  const twoHotels = trip("D", { extra: {
+    age_rules: { adult: "12+ нас", child: "2-11 нас", infant: "0-1 нас" },
+    price_groups: [
+      { dates: [soon], hotel: "Зочид буудал 1", adult_price: 1_200_000 },
+      { dates: [soon], hotel: "Зочид буудал 2", adult_price: 1_400_000 },
+    ],
+  } });
+  const real = `Туршилтын аялал D — том хүн 1,200,000₮ · гарах: ${customerDate(soon)}`;
+  assert.equal(verifyTripReply({ reply: real, trips: [twoHotels] }), real);
+  assert.equal(verifyTripReply({ reply: `Туршилтын аялал D — том хүн 1,300,000₮ · гарах: ${customerDate(soon)}`, trips: [twoHotels] }), "REFER");
+});

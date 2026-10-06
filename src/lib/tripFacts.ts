@@ -154,6 +154,11 @@ export function isTripOfferPrice(
 ): boolean {
   if (!Number.isFinite(amount)) return false;
   const result = resolveTripOffer(trip, selection, now);
+  // No hotel named on a date that sells several: a price is true when one of
+  // those hotel options sells at it. Rejecting it silenced whole answers.
+  if (result.status === "needs_selection" && result.fields.includes("hotel") && !selection.hotel && !selection.hotelId) {
+    return result.options.some((option) => isTripOfferPrice(trip, { ...selection, hotel: option }, kind, amount, now));
+  }
   if (result.status !== "ready") return false;
   const fares = selection.passengers?.length
     ? result.offer.passengerPrices.filter((p) => p.kind === kind).map((p) => p.fare)
