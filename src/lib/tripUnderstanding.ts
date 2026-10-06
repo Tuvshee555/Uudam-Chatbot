@@ -187,8 +187,8 @@ function wordMatches(word: string, token: string): boolean {
  * (or alias) contains every place word the customer used — only when they used
  * two or more, so one shared city never narrows to an arbitrary trip.
  */
-function mentionsEveryPlaceWord(trip: TravelTrip, tokens: string[]): boolean {
-  const destinations = Array.isArray(trip.extra?.destinations)
+function mentionsEveryPlaceWord(trip: TravelTrip, tokens: string[], includeDestinations = false): boolean {
+  const destinations = includeDestinations && Array.isArray(trip.extra?.destinations)
     ? trip.extra.destinations.filter((city): city is string => typeof city === "string")
     : [];
   const text = [trip.route_name, ...getAliases(trip), ...destinations].join(" ");
@@ -201,6 +201,7 @@ function mentionsEveryPlaceWord(trip: TravelTrip, tokens: string[]): boolean {
   );
 }
 
+/** Narrowing goes by the trip's own name and aliases: a city a trip merely visits must not tie it with the trip named after that city. */
 function narrowByPlaceWords(place: string, trips: TravelTrip[]): TravelTrip[] {
   const tokens = keywordTokens(place).filter((token) => token.length >= 3);
   if (tokens.length < 2) return trips;
@@ -216,7 +217,7 @@ function narrowByPlaceWords(place: string, trips: TravelTrip[]): TravelTrip[] {
 function withEveryTripAtPlace(place: string, picked: TravelTrip[], catalog: TravelTrip[]): TravelTrip[] {
   const tokens = keywordTokens(place).filter((token) => token.length >= 3);
   if (!tokens.length || !picked.length) return picked;
-  const atPlace = catalog.filter((trip) => mentionsEveryPlaceWord(trip, tokens));
+  const atPlace = catalog.filter((trip) => mentionsEveryPlaceWord(trip, tokens, true));
   if (atPlace.length <= picked.length || !picked.every((trip) => atPlace.includes(trip))) return picked;
   return atPlace;
 }
