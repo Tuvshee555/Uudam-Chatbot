@@ -276,12 +276,14 @@ function normalizeItineraryDays(raw: unknown): Record<string, unknown>[] {
       const title = asString(d.title);
       const description = asString(d.description);
       const hotel = asString(d.hotel);
+      const photo = asString(d.photo).trim();
       const mealsRaw = d.meals && typeof d.meals === "object" ? (d.meals as Record<string, unknown>) : {};
       return {
         day: index + 1,
         title,
         description,
         ...(hotel ? { hotel } : {}),
+        ...(photo.startsWith("https://") ? { photo } : {}),
         meals: {
           breakfast: Boolean(mealsRaw.breakfast),
           lunch: Boolean(mealsRaw.lunch),

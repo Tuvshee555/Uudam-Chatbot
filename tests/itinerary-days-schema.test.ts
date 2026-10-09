@@ -17,6 +17,14 @@ test("normalizeExtra keeps itinerary_days with title/description/hotel/meals, re
   assert.ok(!warnings.some((w) => w.includes("itinerary_days")));
 });
 
+test("normalizeExtra preserves a valid itinerary-day photo", () => {
+  const { extra } = normalizeExtra({
+    itinerary_days: [{ title: "Улаанбаатар - Эрээн", photo: "https://images.example.com/border.jpg", meals: {} }],
+  });
+  const days = extra.itinerary_days as Record<string, unknown>[];
+  assert.equal(days[0].photo, "https://images.example.com/border.jpg");
+});
+
 test("normalizeExtra keeps blank itinerary rows instead of silently dropping them", () => {
   const { extra } = normalizeExtra({ itinerary_days: [{ title: "", description: "", meals: {} }] });
   assert.deepEqual(extra.itinerary_days, [{ day: 1, title: "", description: "", meals: { breakfast: false, lunch: false, dinner: false } }]);
