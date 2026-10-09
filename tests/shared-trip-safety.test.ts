@@ -59,6 +59,11 @@ test("shared content updates only unchanged fields and retains each conflict", (
   assert.equal(result.conflicts.length, 2);
   assert.deepEqual(current, { ...base, description: "Website version", price: 1_100_000 });
 });
+test("canonical projection replaces an older website representation", () => {
+  const base = { description: "Old" };
+  const result = mergeWebsiteContent({ description: "Website version" }, base, { description: "Canonical version" }, { preferIncoming: true });
+  assert.deepEqual(result, { data: { description: "Canonical version" }, conflicts: [] });
+});
 test("website extras edit only changed keys, including clearing an existing list", () => {
   const before = { requirements: "Passport", videos: ["https://example.com/a.mp4"], country: "Mongolia" };
   const patch = websiteDetailsPatch(before, { ...before, videos: [] });

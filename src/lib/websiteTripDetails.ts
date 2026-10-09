@@ -67,11 +67,12 @@ export function applyWebsiteDetailsPatch(current: unknown, patch: unknown) {
   return { data, conflicts };
 }
 
-/** Existing differences stay separate; a shared save never picks a winner. */
-export function mergeWebsiteContent(current: Row, baseline: Row, incoming: Row) {
+/** Existing differences stay separate unless the caller has already made the
+ * incoming canonical record authoritative (the normal website sync path). */
+export function mergeWebsiteContent(current: Row, baseline: Row, incoming: Row, options?: { preferIncoming?: boolean }) {
   const data: Row = {}, conflicts: Row[] = [];
   for (const [key, value] of Object.entries(incoming)) {
-    if (sameParityValue(current[key], value) || sameParityValue(current[key], baseline[key])) data[key] = value;
+    if (options?.preferIncoming || sameParityValue(current[key], value) || sameParityValue(current[key], baseline[key])) data[key] = value;
     else conflicts.push({ field: key, website: current[key] ?? null, chatbot: value, base: baseline[key] ?? null });
   }
   return { data, conflicts };

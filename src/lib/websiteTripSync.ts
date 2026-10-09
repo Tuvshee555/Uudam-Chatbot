@@ -176,8 +176,9 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
     ? undefined
     : await classifyTripCategory(client, source).catch(() => null);
 
-  // Compare each field against the prior projection; preserve independent
-  // website and chatbot edits as reviewable variants, including real conflicts.
+  // Website edits first update the canonical chatbot record through the private
+  // bridge. This projection is therefore authoritative: a second, stale
+  // website representation must not survive as a competing customer fact.
   const contentSnapshot: ContentSnapshot = {
     title: source.route_name,
     summary: typeof source.extra.website_summary === "string" && source.extra.website_summary.trim()
@@ -218,12 +219,14 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
     price: offering.price ?? 0, childPrice: offering.childPrice, infantPrice: offering.infantPrice,
     currency: source.currency || "MNT", foodIncluded: source.has_food, departureRule: source.extra.departure_rule || null,
   };
-  const mergedContent = prior ? mergeWebsiteContent(prior, { ...fallbackBaseline, ...baselineContent }, proposedContent) : { data: proposedContent, conflicts: [] };
+  const mergedContent = prior ? mergeWebsiteContent(prior, { ...fallbackBaseline, ...baselineContent }, proposedContent, { preferIncoming: true }) : { data: proposedContent, conflicts: [] };
   const details = applyWebsiteDetailsPatch(prior, source.extra.website_details_patch);
-  const oldConflicts = records(record(prior?.sourceMetadata).contentConflicts);
   const newConflicts = [...mergedContent.conflicts, ...details.conflicts];
-  const allConflicts = [...oldConflicts];
-  for (const conflict of newConflicts) if (!allConflicts.some((entry) => sameParityValue(entry, conflict))) allConflicts.push(conflict);
+  // Conflicts describe the current three-way merge only. Keeping historical
+  // conflicts here made an already-resolved trip look permanently divergent.
+  const allConflicts = newConflicts.filter((conflict, index, entries) =>
+    entries.findIndex(entry => sameParityValue(entry, conflict)) === index,
+  );
   const contentFields = mergedContent.data;
   const data: Record<string, unknown> = {
     ...contentFields,
@@ -267,7 +270,7 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
       const oldMeals = record(previousDay?.meals);
       const baseline = { title: previousDay?.route, description: previousDay?.summary || null, accommodation: previousDay?.hotel || null,
         meals: [oldMeals.breakfast ? "Өглөө" : "", oldMeals.lunch ? "Өдөр" : "", oldMeals.dinner ? "Орой" : ""].filter(Boolean), image: previousDay?.photo || null };
-      const result = mergeWebsiteContent(oldDay, baseline, dayFields);
+      const result = mergeWebsiteContent(oldDay, baseline, dayFields, { preferIncoming: true });
       const entries = Object.entries(result.data);
       if (entries.length) await client.query(`UPDATE "ItineraryDay" SET ${entries.map(([key], index) => `"${key}"=$${index + 2}`).join(",")} WHERE id=$1`, [oldDay.id, ...entries.map(([, value]) => value)]);
       for (const conflict of result.conflicts) {
@@ -307,7 +310,7 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
       const protectedFares = mergeWebsiteContent(old, {
         price: previousDeparture?.price ?? null, childPrice: previousDeparture?.childPrice ?? null, infantPrice: previousDeparture?.infantPrice ?? null,
         label: previousDeparture?.label ?? null, endDate: previousDeparture?.end ?? null,
-      }, { price: dep.price ?? null, childPrice: dep.childPrice ?? null, infantPrice: dep.infantPrice ?? null, label: dep.label, endDate: dep.end });
+      }, { price: dep.price ?? null, childPrice: dep.childPrice ?? null, infantPrice: dep.infantPrice ?? null, label: dep.label, endDate: dep.end }, { preferIncoming: true });
       for (const conflict of protectedFares.conflicts) {
         const entry = { ...conflict, field: `departure.${dep.start.slice(0, 10)}.${conflict.field}` };
         newConflicts.push(entry);
