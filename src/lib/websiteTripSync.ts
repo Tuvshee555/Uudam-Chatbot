@@ -74,26 +74,69 @@ export async function withWebsiteDepartureAvailability(trips: TravelTrip[]): Pro
   }
 }
 
-async function hostedPhoto(photo: string): Promise<string> {
-  if (photo.startsWith("https://")) return photo;
-  const hash = createHash("sha256").update(photo).digest("hex");
-  const cached = await queryNeon<{ url: string }>("SELECT url FROM connected_trip_assets WHERE hash=$1", [hash]);
-  if (cached?.rows[0]) return cached.rows[0].url;
+// The website only draws photos from these hosts (next.config remotePatterns).
+// Any other https photo is copied to Cloudinary first, or it shows as a broken image.
+const SITE_PHOTO_HOSTS = /^https:\/\/(res\.cloudinary\.com|images\.unsplash\.com)\//;
+export function isSitePhotoHost(photo: string): boolean {
+  return SITE_PHOTO_HOSTS.test(photo);
+}
+
+const MAX_REMOTE_PHOTO_BYTES = 12 * 1024 * 1024;
+
+async function uploadToCloudinary(file: string | Blob, hash: string): Promise<string | null> {
   const env = getEnv();
-  if (!env.cloudinaryApiSecret || !env.cloudinaryCloudName || !env.cloudinaryApiKey) throw new Error("Photo hosting is not configured");
   const timestamp = Math.floor(Date.now() / 1000);
   const publicId = `uudam-connected-trips/${hash}`;
   const signature = createHash("sha256")
     .update(`public_id=${publicId}&timestamp=${timestamp}${env.cloudinaryApiSecret}`).digest("hex");
   const form = new FormData();
-  Object.entries({ file: photo, public_id: publicId, timestamp: String(timestamp),
-    api_key: env.cloudinaryApiKey, signature }).forEach(([key, value]) => form.append(key, value));
+  form.append("file", file);
+  Object.entries({ public_id: publicId, timestamp: String(timestamp), api_key: env.cloudinaryApiKey, signature })
+    .forEach(([key, value]) => form.append(key, String(value)));
   const response = await fetch(`https://api.cloudinary.com/v1_1/${env.cloudinaryCloudName}/image/upload`,
-    { method: "POST", body: form, signal: AbortSignal.timeout(20000) });
-  const body = await response.json();
-  if (!response.ok || typeof body.secure_url !== "string") throw new Error(`Photo upload failed (${response.status})`);
-  await queryNeon("INSERT INTO connected_trip_assets(hash,url) VALUES ($1,$2) ON CONFLICT(hash) DO NOTHING", [hash, body.secure_url]);
-  return body.secure_url;
+    { method: "POST", body: form, signal: AbortSignal.timeout(25000) });
+  const body = await response.json().catch(() => ({}));
+  return response.ok && typeof body.secure_url === "string" ? body.secure_url : null;
+}
+
+async function downloadRemotePhoto(url: string): Promise<Blob | null> {
+  const response = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 (compatible; UudamTravel/1.0)" }, redirect: "follow", signal: AbortSignal.timeout(15000) });
+  const type = response.headers.get("content-type") || "";
+  if (!response.ok || !type.startsWith("image/")) return null;
+  const bytes = await response.arrayBuffer();
+  return bytes.byteLength > 0 && bytes.byteLength <= MAX_REMOTE_PHOTO_BYTES ? new Blob([bytes], { type }) : null;
+}
+
+async function hostedPhoto(photo: string): Promise<string> {
+  if (isSitePhotoHost(photo)) return photo;
+  const remote = photo.startsWith("https://");
+  const hash = createHash("sha256").update(photo).digest("hex");
+  const cached = await queryNeon<{ url: string }>("SELECT url FROM connected_trip_assets WHERE hash=$1", [hash]);
+  if (cached?.rows[0]) return cached.rows[0].url;
+  const env = getEnv();
+  if (!env.cloudinaryApiSecret || !env.cloudinaryCloudName || !env.cloudinaryApiKey) {
+    if (remote) return photo;
+    throw new Error("Photo hosting is not configured");
+  }
+  let url: string | null = null;
+  try {
+    // A web photo: let Cloudinary fetch it; if the source refuses that, download it here and upload the bytes.
+    url = await uploadToCloudinary(photo, hash);
+    if (!url && remote) {
+      const blob = await downloadRemotePhoto(photo);
+      if (blob) url = await uploadToCloudinary(blob, hash);
+    }
+  } catch (error) {
+    if (!remote) throw error;
+    console.warn("Could not copy an outside photo to Cloudinary:", error instanceof Error ? error.message : error);
+  }
+  // A dead or refused outside link must never block saving a trip: keep it as it was.
+  if (!url) {
+    if (remote) return photo;
+    throw new Error("Photo upload failed");
+  }
+  await queryNeon("INSERT INTO connected_trip_assets(hash,url) VALUES ($1,$2) ON CONFLICT(hash) DO NOTHING", [hash, url]);
+  return url;
 }
 
 export type ContentSnapshot = {
