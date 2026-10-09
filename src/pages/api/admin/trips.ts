@@ -104,13 +104,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         getBotControl(),
       ]);
 
-      await ensureConnectedTripSchema();
-      const connections = new Map((await websiteSyncStatus()).map(row => [row.trip_id, row]));
-      const posterPhotoCounts = await posterPhotoCountsByTrip();
-      const rawTrips = trips.length ? await queryNeon<Record<string, unknown>>(
-        "SELECT * FROM travel_trip_entries WHERE id = ANY($1::text[])",
-        [trips.map(trip => trip.id)],
-      ) : null;
+      // Independent reads: one round trip's wait instead of four in a row.
+      const [connectionRows, posterPhotoCounts, rawTrips] = await Promise.all([
+        ensureConnectedTripSchema().then(() => websiteSyncStatus()),
+        posterPhotoCountsByTrip(),
+        trips.length ? queryNeon<Record<string, unknown>>(
+          "SELECT * FROM travel_trip_entries WHERE id = ANY($1::text[])",
+          [trips.map(trip => trip.id)],
+        ) : Promise.resolve(null),
+      ]);
+      const connections = new Map(connectionRows.map(row => [row.trip_id, row]));
       return res.status(200).json({ ok: true, trips: trips.map(trip => ({ ...trip,
         extra: {
           ...trip.extra,

@@ -29,7 +29,10 @@ export async function withWebsiteDepartureAvailability(trips: TravelTrip[]): Pro
   if (!process.env.BOOKING_DATABASE_URL || !trips.length) return trips;
   try {
     const [departureResult, slugResult] = await Promise.all([
-      bookingPool().query(`SELECT t."sourceTripId", t."sourceMetadata", d."startDate", d.status, d."seatsLeft"
+      // No sourceMetadata here: it is ~15 KB per trip and the join repeats it on
+      // every departure row (35 MB for 343 departures, 90 s). The trip rows
+      // fetched below carry it once.
+      bookingPool().query(`SELECT t."sourceTripId", d."startDate", d.status, d."seatsLeft"
         FROM "Trip" t JOIN "Departure" d ON d."tripId"=t.id
         WHERE t."sourceTripId"=ANY($1::text[])`, [trips.map((trip) => trip.id)]),
       // The bot sends the live website page instead of the PDF; the slug is
@@ -38,13 +41,16 @@ export async function withWebsiteDepartureAvailability(trips: TravelTrip[]): Pro
       bookingPool().query(`SELECT t.*, (SELECT jsonb_agg(i ORDER BY i."dayNumber") FROM "ItineraryDay" i WHERE i."tripId"=t.id AND i."dayNumber">0) AS itinerary FROM "Trip" t
         WHERE "sourceTripId"=ANY($1::text[])`, [trips.map((trip) => trip.id)]),
     ]);
+    const canonicalOffersByTrip = new Map<string, unknown>(
+      slugResult.rows.map((row) => [row.sourceTripId as string, record(row.sourceMetadata).canonicalOffers]),
+    );
     const byTrip = new Map<string, Array<{ date: string; status: string; seatsLeft: number | null }>>();
     for (const row of departureResult.rows) {
       const entries = byTrip.get(row.sourceTripId) || [];
       entries.push(websiteAvailabilityForResync({
         date: new Date(new Date(row.startDate).getTime() + 8 * 3600000).toISOString().slice(0, 10),
         status: row.status, seatsLeft: row.seatsLeft,
-      }, record(row.sourceMetadata).canonicalOffers));
+      }, canonicalOffersByTrip.get(row.sourceTripId)));
       byTrip.set(row.sourceTripId, entries);
     }
     const slugByTrip = new Map<string, { slug: string; isPublished: boolean; details: Record<string, unknown> }>();
