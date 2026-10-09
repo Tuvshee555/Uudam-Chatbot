@@ -148,7 +148,11 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   const oldDepartures = (await client.query(`SELECT * FROM "Departure" WHERE "tripId"=$1`, [id])).rows;
   const seatsChanged = !prior || (Object.keys(previousSnapshot).length > 0 &&
     (previousSnapshot.seats_total !== source.seats_total || previousSnapshot.seats_left !== source.seats_left));
-  const reopened = ["cancelled", "sold_out", "paused"].includes(String(previousSnapshot.status)) && source.status === "active";
+  // A draft source can already have a website departure. Publishing it must
+  // reopen that departure just like resuming a paused or sold-out source.
+  const reopened = Boolean(previousSnapshot.status)
+    && previousSnapshot.status !== "active"
+    && source.status === "active";
   const liveSource: TravelTrip = { ...source, extra: { ...source.extra,
     website_departure_availability: oldDepartures.map(departure => {
       const availability = websiteAvailabilityForResync({

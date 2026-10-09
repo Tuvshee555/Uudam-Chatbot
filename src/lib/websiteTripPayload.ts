@@ -191,6 +191,11 @@ export function websiteTripPayload(trip: TravelTrip, schedule: WebsiteDepartureD
   });
   const primaryDate = departures.find(departure => departure.status === "OPEN" && departure.price !== null)
     || departures.find(departure => departure.price !== null);
+  // Some published trips intentionally have no departure date yet. Keep their
+  // canonical base fares on the website card instead of projecting a zero price.
+  const baseAdultPrice = typeof trip.adult_price === "number" && Number.isFinite(trip.adult_price) ? trip.adult_price : null;
+  const baseChildPrice = typeof trip.child_price === "number" && Number.isFinite(trip.child_price) ? trip.child_price : null;
+  const baseInfantPrice = typeof trip.infant_price === "number" && Number.isFinite(trip.infant_price) ? trip.infant_price : null;
   const headlineOffers = entries.filter(entry => entry.selection.date === primaryDate?.start.slice(0, 10))
     .map(displayOffer).filter((offer): offer is ResolvedTripOffer => Boolean(offer))
     .filter(offer => exactAmount(offer.prices.adult) === primaryDate?.price);
@@ -201,9 +206,9 @@ export function websiteTripPayload(trip: TravelTrip, schedule: WebsiteDepartureD
   }));
   return {
     departures,
-    price: primaryDate?.price ?? null,
-    childPrice: primaryDate?.childPrice ?? null,
-    infantPrice: primaryDate?.infantPrice ?? null,
+    price: primaryDate?.price ?? baseAdultPrice,
+    childPrice: primaryDate?.childPrice ?? baseChildPrice,
+    infantPrice: primaryDate?.infantPrice ?? baseInfantPrice,
     ageRules,
     priceGroups: entries.map(displayOffer).filter((offer): offer is ResolvedTripOffer => Boolean(offer))
       .map(offer => fareRow(offer, sourceRows)),

@@ -26,6 +26,14 @@ test("unknown seats keep website departures bookable while preserving prices and
   assert.equal(projected.priceGroups[0].availability.status, "unknown");
 });
 
+test("a published trip without a dated departure retains its base fares for the website card", () => {
+  const projected = payload({ ...trip, departure_dates: [] });
+  assert.equal(projected.departures.length, 0);
+  assert.equal(projected.price, trip.adult_price);
+  assert.equal(projected.childPrice, trip.child_price);
+  assert.equal(projected.infantPrice, null);
+});
+
 test("an explicit OPEN departure confirms booking status without inventing a seat count", () => {
   const projected = payload({ ...trip, seats_left: null, extra: {
     website_departure_availability: [{ date: "2026-10-01", status: "OPEN", seatsLeft: null }],
