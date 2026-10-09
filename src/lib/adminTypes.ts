@@ -96,10 +96,9 @@ export type ItineraryDayMeals = {
 };
 
 /**
- * One day of the itinerary. Photos are deliberately NOT part of this shape —
- * day photos stay a Poster-tab-only concern; editing them here would let a
- * chatbot-trip save silently clobber what the poster's richer per-day layout
- * carries (photo, captions, etc).
+ * One day of the itinerary. The day's photo is shown here but only added or
+ * changed in the Poster tab: editing it here could let a chatbot-trip save
+ * clobber what the poster's richer per-day layout carries (captions, etc).
  */
 export type ItineraryDay = {
   day: number;
@@ -107,6 +106,8 @@ export type ItineraryDay = {
   description: string;
   hotel?: string;
   meals?: ItineraryDayMeals;
+  /** Shown in the editor; added or changed only in the Poster tab. */
+  photo?: string;
 };
 
 /** Booking terms a customer asks before committing. Freeform Mongolian strings. */

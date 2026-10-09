@@ -1,4 +1,5 @@
 import React from "react";
+import { DayMealToggles, DayPhotoPreview } from "./ItineraryDayControls";
 import { WebsiteTripFields, TripTextComparison } from "./WebsiteTripFields";
 import { Button, DatePicker, Icons, Input, Modal, Select, Spinner, Textarea, cx } from "@/components/ui";
 import { getPosterBrochureHref } from "@/lib/poster/pdfUrl";
@@ -1345,26 +1346,13 @@ export function TripEditModal({
                 onChange={(e) => setTripItineraryDays((prev) => prev.map((v, i) => i === idx ? { ...v, description: e.target.value } : v))}
               />
             </div>
-            <div className="mt-2 flex flex-wrap gap-3">
-              {([
-                ["breakfast", "Өглөөний хоол"],
-                ["lunch", "Өдрийн хоол"],
-                ["dinner", "Оройн хоол"],
-              ] as const).map(([key, label]) => {
-                const on = Boolean(d.meals?.[key]);
-                return (
-                  <label
-                    key={key}
-                    className="flex items-center gap-1.5 text-xs text-ink-muted"
-                  >
-                    <input type="checkbox" checked={on} onChange={() => setTripItineraryDays((prev) => prev.map((v, i) =>
-                      i === idx ? { ...v, meals: { ...v.meals, [key]: !on } } : v,
-                    ))} className="accent-brand" />
-                    {label}
-                  </label>
-                );
-              })}
-            </div>
+            <DayPhotoPreview photo={d.photo} title={d.title || `Өдөр ${idx + 1}`} />
+            <DayMealToggles
+              meals={d.meals}
+              onToggle={(key) => setTripItineraryDays((prev) => prev.map((v, i) =>
+                i === idx ? { ...v, meals: { ...v.meals, [key]: !v.meals?.[key] } } : v,
+              ))}
+            />
           </details>
         ))}
       </div>

@@ -179,6 +179,8 @@ function posterItineraryDays(data: Record<string, unknown>): Record<string, unkn
       const description = typeof day.summary === "string" ? day.summary.trim() : "";
       const hotel = typeof day.hotel === "string" ? day.hotel.trim() : "";
       const meals = day.meals && typeof day.meals === "object" ? day.meals : undefined;
+      // The day's photo travels with it so the chatbot's trip editor can show it.
+      const photo = typeof day.photo === "string" && /^https:\/\//.test(day.photo) ? day.photo : "";
       if (!title && !description && !hotel) return null;
       return {
         day: dayNumber,
@@ -186,6 +188,7 @@ function posterItineraryDays(data: Record<string, unknown>): Record<string, unkn
         description,
         ...(hotel ? { hotel } : {}),
         ...(meals ? { meals } : {}),
+        ...(photo ? { photo } : {}),
       };
     })
     .filter((item): item is Record<string, unknown> => item !== null);
