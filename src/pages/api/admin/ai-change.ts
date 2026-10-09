@@ -9,6 +9,8 @@ import {
   rollbackAIRequest,
   reviseAIRequest,
 } from "../../../lib/travelOps";
+import { logAssistantEvent, recentAssistantContext } from "../../../lib/assistantLog";
+import { createQuickProposal, type QuickActionRequest } from "../../../lib/assistantQuickActions";
 import {
   beginRequestTrace,
   finishRequestTrace,
@@ -65,8 +67,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const { instruction, request_id, apply, rollback, confirm, clarification, proposal_direct } =
+    const { instruction, request_id, apply, rollback, confirm, clarification, proposal_direct, quick, session_id } =
       req.body || {};
+    const resultText = (result: { results?: unknown; message?: unknown }) =>
+      Array.isArray(result.results) ? result.results.join(" • ") : String(result.message || "");
 
     if (typeof request_id === "number" && rollback === true) {
       if (confirm !== true) {
@@ -76,6 +80,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       }
       const rolledBack = await rollbackAIRequest(request_id);
+      await logAssistantEvent({ sessionId: session_id, requestId: request_id, role: "assistant", kind: "rolled_back", text: resultText(rolledBack) || "Буцаасан." });
       return res.status(rolledBack.ok ? 200 : 409).json(rolledBack);
     }
 
@@ -88,6 +93,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       }
       const applied = await applyAIProposalDirect(proposal_direct, instruction.trim());
+      await logAssistantEvent({ sessionId: session_id, role: "assistant", kind: "applied", text: resultText(applied) || "Хэрэгжүүлсэн." });
       return res.status(applied.ok ? 200 : 409).json(applied);
     }
 
@@ -99,6 +105,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       }
       const applied = await applyAIRequest(request_id);
+      await logAssistantEvent({ sessionId: session_id, requestId: request_id, role: "assistant", kind: "applied", text: resultText(applied) || "Хэрэгжүүлсэн." });
       return res.status(applied.ok ? 200 : 409).json(applied);
     }
 
@@ -114,8 +121,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           max_chars: MAX_AI_CHANGE_CLARIFICATION_CHARS,
         });
       }
+      await logAssistantEvent({ sessionId: session_id, requestId: request_id, role: "admin", kind: "clarification", text: trimmedClarification });
       const revised = await reviseAIRequest(request_id, trimmedClarification);
       return res.status(revised.ok ? 200 : 409).json(revised);
+    }
+
+    if (quick && typeof quick === "object") {
+      const created = await createQuickProposal(quick as QuickActionRequest);
+      if (!created.ok) return res.status(400).json({ ok: false, error: "quick_action_invalid", message: created.message });
+      await logAssistantEvent({ sessionId: session_id, requestId: created.request_id, role: "admin", kind: "quick_action", text: created.proposal.summary });
+      return res.status(200).json({ ok: true, proposal: created.proposal, request_id: created.request_id, requires_confirmation: true });
     }
 
     if (typeof instruction !== "string" || !instruction.trim()) {
@@ -130,7 +145,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const proposal = await generateAIProposal(trimmedInstruction);
+    const context = await recentAssistantContext(session_id);
+    await logAssistantEvent({ sessionId: session_id, role: "admin", kind: "instruction", text: trimmedInstruction });
+    const proposal = await generateAIProposal(trimmedInstruction, { context });
+    await logAssistantEvent({
+      sessionId: session_id,
+      requestId: proposal.request_id,
+      role: "assistant",
+      kind: "proposal",
+      text: [proposal.proposal.summary, proposal.proposal.conflicts?.[0]].filter(Boolean).join(" — "),
+    });
     const failure = getAIProposalFailureResponse(proposal.proposal);
     if (failure) {
       return res.status(failure.statusCode).json({

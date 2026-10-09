@@ -902,7 +902,7 @@ function looksLikeBulkPaste(instruction: string): boolean {
   return priceCues >= 8;
 }
 
-export async function generateAIProposal(instruction: string) {
+export async function generateAIProposal(instruction: string, options?: { context?: string }) {
   // Big pasted price lists go through the batched (chunk + merge) pipeline so a
   // single oversized prompt can't time out or get rate-limited. Normal short
   // commands keep the fast, direct single-request path.
@@ -918,7 +918,12 @@ export async function generateAIProposal(instruction: string) {
 
   return createProposal({
     instruction,
-    userParts: [{ text: `Хэрэглэгчийн хүсэлт: ${instruction}` }],
+    userParts: [{ text: options?.context
+      ? `Өмнөх яриа (зөвхөн ойлгоход; одоогийн хүсэлтийг биелүүл):
+${options.context}
+
+Хэрэглэгчийн хүсэлт: ${instruction}`
+      : `Хэрэглэгчийн хүсэлт: ${instruction}` }],
     source: "travel.ops.ai_change",
     timeoutMs: AI_CHANGE_OPENAI_TIMEOUT_MS,
     maxRetries: AI_CHANGE_OPENAI_MAX_RETRIES,

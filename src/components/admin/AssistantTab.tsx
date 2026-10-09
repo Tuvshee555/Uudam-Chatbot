@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Button, Card, Icons, cx } from "@/components/ui";
+import { AssistantQuickActions, type QuickActionKind } from "./AssistantQuickActions";
 import type {
   AttachedFile,
   ChatMessage,
@@ -10,7 +11,6 @@ import type {
 import { describeAction, summarizeConflict } from "@/lib/adminProposalUtils";
 import {
   MAX_AI_INPUT_CHARS,
-  QUICK_ACTIONS,
   formatBytes,
 } from "@/lib/adminUtils";
 import { diffTripFields, type TripExtraDiff } from "@/lib/tripExtraSchema";
@@ -82,6 +82,9 @@ export function AssistantTab({
   applyBusyId,
   clarifyBusyId,
   onSend,
+  onQuickAction,
+  onEditTripPrice,
+  onNewTrip,
   onApply,
   onRollback,
   onSubmitClarificationForm,
@@ -105,6 +108,9 @@ export function AssistantTab({
   applyBusyId: string;
   clarifyBusyId: string;
   onSend: () => void;
+  onQuickAction: (kind: QuickActionKind, trip: TravelTrip, value?: number | boolean) => void;
+  onEditTripPrice: (trip: TravelTrip) => void;
+  onNewTrip: () => void;
   onApply: (message: ProposalMsg) => void;
   onRollback: (message: ProposalMsg) => void;
   onSubmitClarificationForm: (
@@ -244,21 +250,13 @@ export function AssistantTab({
       </div>
 
       <div className="border-t border-line">
-        <div className="scroll-area flex gap-1.5 overflow-x-auto px-3 pt-2.5">
-          {QUICK_ACTIONS.map((action) => (
-            <button
-              key={action.label}
-              type="button"
-              onClick={() => {
-                setAiInput(action.prompt);
-                inputRef.current?.focus();
-              }}
-              className="shrink-0 rounded-full bg-surface-sunken px-3 py-1 text-xs font-medium text-ink-muted transition-colors duration-150 hover:bg-brand-soft hover:text-brand"
-            >
-              {action.label}
-            </button>
-          ))}
-        </div>
+        <AssistantQuickActions
+          trips={existingTrips}
+          busy={busy}
+          onQuick={onQuickAction}
+          onEditPrice={onEditTripPrice}
+          onNewTrip={onNewTrip}
+        />
 
         {attachedFiles.length > 0 && (
           <div className="px-3 pt-2.5">

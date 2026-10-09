@@ -120,6 +120,8 @@ export default function AdminPage() {
   const [broadcastSending, setBroadcastSending] = useState(false);
   const [broadcastResult, setBroadcastResult] = useState<{ sent: number; failed: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // One id per page load: the server keeps this admin's assistant conversation (never shown here) and reads follow-ups against it.
+  const assistantSession = useRef(uid());
   const photoFileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -798,6 +800,56 @@ export default function AdminPage() {
   function removeAttachedFile(fileId: string) {
     setAttachedFiles((prev) => prev.filter((file) => file.id !== fileId));
   }
+  async function sendQuickAction(kind: "cancel" | "seats" | "food", trip: TravelTrip, value?: number | boolean) {
+    if (busyKey === "ai-send") return;
+    const label =
+      kind === "cancel"
+        ? "цуцлах"
+        : kind === "seats"
+          ? `үлдсэн суудал ${value}`
+          : value
+            ? "хоол багтсан"
+            : "хоол багтаагүй";
+    pushMessage({ id: uid(), role: "admin", text: `«${trip.route_name}» — ${label}` });
+    setBusyKey("ai-send");
+    setAiBusyProgress(null);
+    setAiBusyLabel("Санал бэлдэж байна…");
+    try {
+      const res = await fetchWithAdmin("/api/admin/ai-change", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quick: { kind, trip_id: trip.id, value }, session_id: assistantSession.current }),
+      });
+      const data = (await readJsonSafe(res)) as AIProposalResponse;
+      if (!res.ok || !data.proposal) throw new Error(apiErrorMessage(data, "Санал үүсгэж чадсангүй."));
+      pushMessage({
+        id: uid(),
+        role: "assistant",
+        kind: "proposal",
+        proposal: data.proposal,
+        requestId: typeof data.request_id === "number" ? data.request_id : null,
+        instruction: `${trip.route_name} — ${label}`,
+        sourceNames: [],
+        sourceText: "",
+        status: "pending",
+        confirmChecked: false,
+        clarifications: [],
+        clarificationAnswers: [],
+        answeredClarificationIds: [],
+        customReply: "",
+      });
+    } catch (err) {
+      pushMessage({
+        id: uid(),
+        role: "assistant",
+        kind: "note",
+        tone: "error",
+        text: err instanceof Error ? err.message : "Алдаа гарлаа.",
+      });
+    } finally {
+      setBusyKey("");
+    }
+  }
   async function sendAssistant() {
     const text = aiInput.trim();
     const files = attachedFiles;
@@ -866,7 +918,7 @@ export default function AdminPage() {
         const res = await fetchWithAdmin("/api/admin/ai-change", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ instruction: text }),
+          body: JSON.stringify({ instruction: text, session_id: assistantSession.current }),
         });
         const json = await readJsonSafe(res);
         const data = json as AIProposalResponse;
@@ -965,6 +1017,7 @@ export default function AdminPage() {
           body: JSON.stringify({
             request_id: message.requestId,
             clarification: trimmed,
+            session_id: assistantSession.current,
           }),
         });
         const json = await readJsonSafe(res);
@@ -1048,8 +1101,9 @@ export default function AdminPage() {
     try {
       const body =
         message.requestId != null
-          ? { request_id: message.requestId, apply: true, confirm: true }
+          ? { request_id: message.requestId, apply: true, confirm: true, session_id: assistantSession.current }
           : {
+              session_id: assistantSession.current,
               apply: true,
               confirm: true,
               proposal_direct: message.proposal,
@@ -1124,6 +1178,7 @@ export default function AdminPage() {
           request_id: message.requestId,
           rollback: true,
           confirm: true,
+          session_id: assistantSession.current,
         }),
       });
       const json = await readJsonSafe(res);
@@ -1848,6 +1903,9 @@ export default function AdminPage() {
                 busyKey.startsWith("clarify-") ? busyKey.slice(8) : ""
               }
               onSend={() => void sendAssistant()}
+              onQuickAction={(kind, trip, value) => void sendQuickAction(kind, trip, value)}
+              onEditTripPrice={(trip) => beginEditTrip(trip)}
+              onNewTrip={() => beginCreateTrip()}
               onApply={(message) => void applyProposal(message)}
               onRollback={(message) => void rollbackProposal(message)}
               onSubmitClarificationForm={(message, answers) =>
