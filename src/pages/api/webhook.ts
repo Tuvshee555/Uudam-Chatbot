@@ -40,7 +40,7 @@ import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } fro
 import { buildContactReply, contactSettingsOf } from "../../lib/contactReplies";
 import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
-import { autoHandoffSender, isPaused, markGetStarted, pauseBot, trackSender } from "../../lib/pause";
+import { autoHandoffSender, isPaused, markGetStarted, pauseBookedCustomer, pauseBot, trackSender } from "../../lib/pause";
 import { AUTO_PAUSE_RESET_DAYS, createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
 import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply, } from "../../lib/travelFastPaths";
@@ -610,7 +610,6 @@ async function handleMessage(
     senderId,
     text,
     contextualUserText,
-    pauseMs: botSettings.handoff_pause_minutes > 0 ? botSettings.handoff_pause_minutes * 60_000 : undefined,
     send: async (message, tag) => {
       await assertLockHealthy();
       const ok = await sendPlatformMessage(platform, senderId, message, token, pageId, igUserId, trace, { allowFallback: false });
@@ -848,6 +847,9 @@ async function handleMessage(
         );
         recordCounter("webhook.phone_lead_captured_total", 1, { platform });
       }
+      // The phone number is the hand-off: staff call from here. This turn is
+      // still answered (the pause is read before routing); later turns are not.
+      await pauseBookedCustomer(senderId);
     } catch (error) {
       logWarn("webhook.phone_lead_capture_failed", {
         requestId: trace?.requestId,
@@ -1093,6 +1095,7 @@ async function handleMessage(
       rememberSource: "api.webhook.payment_claim_deferred",
       counter: "webhook.payment_claim_deferred_total",
     });
+    await pauseBookedCustomer(senderId).catch(() => {});
     return;
   }
 

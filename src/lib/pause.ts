@@ -24,6 +24,19 @@ export async function isPaused(senderId: string): Promise<boolean> {
   return dbIsPaused(senderId);
 }
 
+/**
+ * A customer who has booked, sent documents, asked for the bank account or
+ * said they paid belongs to staff from then on. The 60-minute handoff pause
+ * let the bot return the next day and re-send the trip card over a staff
+ * member's own replies (2026-10-06..08). Meta's staff-reply echoes do not
+ * reach the webhook, so this cannot wait for an operator echo to pause it.
+ */
+export const BOOKED_CUSTOMER_PAUSE_MS = 3 * 24 * 60 * 60 * 1000;
+
+export async function pauseBookedCustomer(senderId: string): Promise<void> {
+  await dbPauseSender(senderId, BOOKED_CUSTOMER_PAUSE_MS, "booked_customer");
+}
+
 export async function pauseBot(
   senderId: string,
   durationMs?: number,

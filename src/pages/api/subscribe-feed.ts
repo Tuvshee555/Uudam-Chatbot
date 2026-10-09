@@ -10,7 +10,6 @@ import {
   logError,
   recordCounter,
 } from "../../lib/observability";
-import { fetchWithRetry } from "../../lib/resilience";
 
 const env = getEnv();
 
@@ -48,39 +47,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(401).json({ error: "Unauthorized" });
     }
 
-    const fields = "feed,messages,messaging_postbacks,message_reads,messaging_echoes";
-    const url = `https://graph.facebook.com/v19.0/${env.facebookPageId}/subscribed_apps`;
+    // "message_echoes" (not "messaging_echoes", which Meta rejects and which
+    // failed the whole request) is what tells the bot a staff member replied
+    // from the Page inbox, so it can step aside. Every configured page needs it.
+    const fields = "feed,messages,messaging_postbacks,message_reads,message_echoes";
 
     try {
-      const { response, attempts, durationMs } = await fetchWithRetry(
-        url,
-        {
+      const results = [];
+      for (const page of env.facebookPages) {
+        // Plain fetch: Meta's error body (missing permission, bad field) is the
+        // answer this admin call exists to show.
+        const response = await fetch(`https://graph.facebook.com/v19.0/${page.pageId}/subscribed_apps`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            subscribed_fields: fields,
-            access_token: env.tokenPage,
-          }),
-        },
-        {
-          upstream: "meta.subscribe_feed",
-          timeoutMs: env.metaApiTimeoutMs,
-          maxRetries: env.metaSubscribeMaxRetries,
-          retryBaseDelayMs: env.metaRetryBaseDelayMs,
-          requestId: trace.requestId,
-          correlationId: trace.correlationId,
-          metricPrefix: "meta_api",
-        },
-      );
-
-      const body = await response.json();
-      return res.status(200).json({
-        success: true,
-        subscribed_fields: fields,
-        response: body,
-        attempts,
-        duration_ms: durationMs,
-      });
+          body: JSON.stringify({ subscribed_fields: fields, access_token: page.token }),
+          signal: AbortSignal.timeout(env.metaApiTimeoutMs),
+        });
+        const body = await response.json().catch(() => null);
+        const current = await fetch(`https://graph.facebook.com/v19.0/${page.pageId}/subscribed_apps?access_token=${encodeURIComponent(page.token)}`, {
+          signal: AbortSignal.timeout(env.metaApiTimeoutMs),
+        }).then((r) => r.json()).catch(() => null);
+        results.push({ pageId: page.pageId, status: response.status, response: body, subscribed: current });
+      }
+      return res.status(results.every((r) => r.status === 200) ? 200 : 502).json({ subscribed_fields: fields, results });
     } catch (error) {
       const classification = classifyError(error);
       logError("subscribe_feed.failed", {

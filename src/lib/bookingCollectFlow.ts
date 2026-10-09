@@ -18,7 +18,7 @@ import {
 } from "./bookingCollect";
 import { appendMessage } from "./conversation";
 import { classifyError, hashIdentifier, logWarn, recordCounter } from "./observability";
-import { autoHandoffSender, pauseBot } from "./pause";
+import { autoHandoffSender, pauseBookedCustomer } from "./pause";
 import { notifyStaffOfLead } from "./staffAlerts";
 import { createLead, dbStoreSenderName, hasRecentOpenLead, listTrips } from "./travelOps";
 import { resolveTripFromUserMessage, sanitizeTripForCustomers } from "./travelFastPaths";
@@ -33,7 +33,6 @@ export type BookingCollectContext = {
   /** The conversation-aware text (previous reply + this message), used to pre-fill the trip. */
   contextualUserText: string;
   /** Pause applied once the booking is handed to staff; undefined = default. */
-  pauseMs?: number;
   /** Delivers a message; must throw when delivery fails so Meta retries. */
   send: (message: string, tag: string) => Promise<void>;
   trace?: { requestId?: string; correlationId?: string };
@@ -121,7 +120,7 @@ export async function continueBookingCollect(ctx: BookingCollectContext): Promis
   // validated answer to "нэрээ бичнэ үү".
   if (done.name.trim()) await dbStoreSenderName(ctx.senderId, done.name.trim()).catch(() => {});
   await autoHandoffSender(ctx.senderId);
-  await pauseBot(ctx.senderId, ctx.pauseMs, "handoff");
+  await pauseBookedCustomer(ctx.senderId);
   try {
     await createLead({
       kind: "booking",

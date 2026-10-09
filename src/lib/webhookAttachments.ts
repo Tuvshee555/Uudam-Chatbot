@@ -11,7 +11,7 @@ import { appendMessage } from "./conversation";
 import { rateLimitAsync } from "./rateLimit";
 import { scheduleCustomerMemoryUpdate } from "./conversationMemory";
 import { scheduleCustomerAttachmentProcessing, scheduleCustomerImageProcessing, type FileAttachmentInput } from "./customerDocuments";
-import { isPaused } from "./pause";
+import { isPaused, pauseBookedCustomer } from "./pause";
 import { createLead, hasRecentOpenLead, isPagePaused, listTrips } from "./travelOps";
 import { notifyStaffOfLead } from "./staffAlerts";
 import { buildStructuredTripReply, sanitizeTripForCustomers } from "./travelFastPaths";
@@ -182,6 +182,9 @@ export function scheduleImageDocumentPipeline(input: {
           break;
         }
       }
+      // A passport, receipt or booking code means the booking is with staff
+      // now; a trip screenshot alone (no confirmation) keeps the bot talking.
+      if (confirmation) await pauseBookedCustomer(senderId).catch(() => {});
     },
   });
 }
