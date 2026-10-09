@@ -577,7 +577,98 @@ function IncompleteTripsBanner({
   );
 }
 
-function TripGroups({
+/** Statuses that are published on the website. Drafts and cancelled/archived trips are not. */
+const LIVE_STATUSES = new Set(["active", "sold_out", "paused"]);
+
+/**
+ * Live trips first, as customers see them; drafts below (not on the website);
+ * cancelled and archived last. The two lower sections start closed so the
+ * page opens on what is actually live.
+ */
+export function TripGroups({
+  trips,
+  ...handlers
+}: {
+  trips: TravelTrip[];
+  onEdit: (trip: TravelTrip) => void;
+  onDelete: (trip: TravelTrip) => void;
+  onToggleVisible: (trip: TravelTrip) => void;
+  onFixPhotosOnPoster: (posterId: string) => void;
+  onAskAi: (tripName: string) => void;
+}) {
+  const live = useMemo(() => trips.filter((trip) => LIVE_STATUSES.has(trip.status)), [trips]);
+  const drafts = useMemo(() => trips.filter((trip) => trip.status === "draft"), [trips]);
+  const other = useMemo(() => trips.filter((trip) => !LIVE_STATUSES.has(trip.status) && trip.status !== "draft"), [trips]);
+  const onlyOneKind = [live, drafts, other].filter((list) => list.length > 0).length <= 1;
+
+  return (
+    <div className="space-y-5">
+      {live.length > 0 && (
+        <TripSection title="Идэвхтэй аялал" note="Сайт болон ботод харагдаж байгаа" count={live.length} tone="live" collapsible={false}>
+          <CategoryGroups trips={live} {...handlers} />
+        </TripSection>
+      )}
+      {drafts.length > 0 && (
+        <TripSection title="Ноорог" note="Сайтад харагдахгүй" count={drafts.length} tone="draft" collapsible defaultOpen={onlyOneKind}>
+          <CategoryGroups trips={drafts} {...handlers} />
+        </TripSection>
+      )}
+      {other.length > 0 && (
+        <TripSection title="Цуцлагдсан, архивласан" note="Сайтад харагдахгүй" count={other.length} tone="other" collapsible defaultOpen={onlyOneKind}>
+          <CategoryGroups trips={other} {...handlers} />
+        </TripSection>
+      )}
+    </div>
+  );
+}
+
+function TripSection({
+  title,
+  note,
+  count,
+  tone,
+  collapsible,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  note: string;
+  count: number;
+  tone: "live" | "draft" | "other";
+  collapsible: boolean;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(!collapsible || defaultOpen);
+  const header = (
+    <>
+      <span className={cx("h-2 w-2 shrink-0 rounded-full", tone === "live" ? "bg-success" : tone === "draft" ? "bg-warning" : "bg-ink-subtle")} />
+      <h2 className="text-base font-semibold text-ink">{title}</h2>
+      <span className="rounded-full bg-surface-sunken px-2 py-0.5 text-xs tabular-nums text-ink-muted">{count}</span>
+      <span className="text-xs text-ink-subtle">{note}</span>
+    </>
+  );
+  return (
+    <section>
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          className="mb-2.5 flex w-full items-center gap-2 text-left"
+        >
+          {header}
+          <Icons.chevronRight size={15} className={cx("ml-auto shrink-0 text-ink-muted transition-transform", open && "rotate-90")} />
+        </button>
+      ) : (
+        <div className="mb-2.5 flex items-center gap-2">{header}</div>
+      )}
+      {open && children}
+    </section>
+  );
+}
+
+function CategoryGroups({
   trips,
   onEdit,
   onDelete,

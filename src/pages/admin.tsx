@@ -1725,10 +1725,17 @@ export default function AdminPage() {
   const pausedPageCount = pageControls.filter((page) => page.bot_paused).length;
   const botPaused = pausedPageCount > 0;
   const headerTripCount = tripsLoaded ? trips.length : dbInfo?.trips ?? 0;
+  // Live = what customers can see on the website; drafts are not published.
+  const liveTripCount = trips.filter((trip) => ["active", "sold_out", "paused"].includes(trip.status)).length;
+  const draftTripCount = trips.filter((trip) => trip.status === "draft").length;
+  const headerTripSummary =
+    tripsLoaded && statusFilter === ""
+      ? `${liveTripCount} идэвхтэй${draftTripCount > 0 ? ` · ${draftTripCount} ноорог` : ""}`
+      : `${headerTripCount} аялал`;
   const headerTripLabel = requiresAuth
     ? "Админ түгжээтэй"
     : tripsLoaded || dbInfo
-      ? `${headerTripCount} аялал`
+      ? headerTripSummary
       : "Аялал ачаалж байна";
   const navBadges: Partial<Record<TabKey, number>> = {
     bot: handoffRows.length || undefined,
