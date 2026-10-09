@@ -20,6 +20,23 @@ test("photo removal clears gallery slots while retaining day descriptions", () =
   assert.deepEqual(posterPhotos(result),[]);
   assert.equal((result.days as {summary:string}[])[0].summary,"Day one");
 });
+test("changing the photo list keeps each day's own photo instead of dealing photos out by position", () => {
+  const [a, b, c, d] = ["https://example.com/a.jpg", "https://example.com/b.jpg", "https://example.com/c.jpg", "https://example.com/d.jpg"];
+  const prior = { days: [
+    { day: 1, route: "Arrival", photo: b },
+    { day: 2, route: "Zoo", photo: c },
+    { day: 3, route: "Theme park", photo: a },
+    { day: 4, route: "Flight home", photo: null },
+  ] };
+  const result = tripToPoster({ ...trip, photo_urls: [a, b, c, d] }, prior, { ...trip, photo_urls: [a, b, c] });
+  const days = result.days as { day: number; route: string; photo: string | null }[];
+  assert.deepEqual(days.map(day => [day.route, day.photo]), [["Arrival", b], ["Zoo", c], ["Theme park", a], ["Flight home", null], ["", d]]);
+  assert.equal(days[4].day, 5);
+  assert.equal(result.hero_image, a);
+
+  const removed = tripToPoster({ ...trip, photo_urls: [a, b] }, prior, { ...trip, photo_urls: [a, b, c] });
+  assert.deepEqual((removed.days as { photo: string | null }[]).map(day => day.photo), [b, null, a, null]);
+});
 test("departure parser never turns null or invalid dates into epoch dates", () => {
   const result=websiteDepartures({...trip,extra:{departure_dates_resolved:[{ymd:null},{ymd:"2026-02-31"},{ymd:"2026-09-17"},{ymd:"2026-09-17"}]} });
   assert.equal(result.length,1);

@@ -63,15 +63,34 @@ export function tripToPoster(trip: TravelTrip, prior: unknown, before?: TravelTr
     }));
   }
   if (changed("photo_urls")) {
-    const days = records(data.days);
-    const count = Math.max(days.length, trip.photo_urls.length);
-    data.days = Array.from({ length: count }, (_, i) => ({
-      ...(days[i] || { day: i + 1, route: "", summary: "" }), photo: trip.photo_urls[i] || null,
-    }));
+    data.days = photosOntoDays(records(data.days), trip.photo_urls);
     data.hero_image = trip.photo_urls[0] || null;
   }
   if (changed("notes")) data.price_desc = trip.notes;
   return data;
+}
+
+/**
+ * A day's photo shows that day (the Universal shot on the Universal day), so a
+ * change to the trip's photo list must not deal the photos out by position.
+ * Days keep their own photo while it is still in the list; a removed photo
+ * leaves its day empty; photos no day shows are kept as photo-only slots after
+ * the itinerary so they stay in the gallery. Only a trip whose days have no
+ * photos yet gets them in list order.
+ */
+function photosOntoDays(days: Record<string, unknown>[], urls: string[]) {
+  const pinned = days.some(day => typeof day.photo === "string" && day.photo);
+  if (!pinned) {
+    return Array.from({ length: Math.max(days.length, urls.length) }, (_, i) => ({
+      ...(days[i] || { day: i + 1, route: "", summary: "" }), photo: urls[i] || null,
+    }));
+  }
+  const content: Record<string, unknown>[] = days.filter(day => day.route || day.summary || day.hotel)
+    .map(day => ({ ...day, photo: urls.includes(String(day.photo)) ? day.photo : null }));
+  const shown = new Set(content.map(day => day.photo));
+  const lastDay = content.reduce((max, day, i) => Math.max(max, Number(day.day) || i + 1), 0);
+  const loose = urls.filter(url => !shown.has(url));
+  return [...content, ...loose.map((photo, i) => ({ day: lastDay + i + 1, route: "", summary: "", photo }))];
 }
 
 export function posterPhotos(data: unknown): string[] {
