@@ -66,6 +66,55 @@ node --import tsx scripts/import-poster-trip-json.ts tmp/trip.json
 - Put day-by-day photos in the poster data when available; the linked chatbot
   trip and website projection read from the same poster data.
 
+## Standard itinerary for trips that leave Ulaanbaatar by train (Erenhot route)
+
+Every trip that starts with the overnight train to the border and ends with the
+train home is written the same way. Do not shorten it to "Улаанбаатар - Эрээн":
+the train, the border and the arrival time are part of the product. Copy these
+days word for word, and write the days in between in the same style.
+
+**First two days**
+
+1. Title `УЛААНБААТАР – ЗАМЫН ҮҮД`. No hotel, no meals, no photo.
+   "Улаанбаатар төмөр замын буудал дээр 15:30 цагт цугларан 276-р гал тэргээр
+   Замын Үүд хотыг зорино. Энэ өдөр галт тэргэнд хононо. Та бүхэн замын хүнсээ
+   зэхэн аялалдаа гараарай."
+2. Title `ЗАМЫН ҮҮД – ЭРЭЭН …` (add the next stop). "Өглөө 07:20 цагт Замын Үүдэд
+   буугаад автобусанд сууж хил гаалиар нэвтэрнэ. Эрээн хотод ирж …" and then the
+   source's own stops, hotel and meals.
+
+**Last two days**
+
+- Title `ЭРЭЭН – ЗАМЫН ҮҮД – УЛААНБААТАР` (or the source's last stop first).
+  "… Өдөр Эрээнээс автобусаар Замын Үүд рүү хил гаалиар нэвтэрч Замын Үүдэд
+  орно. Бид Замын Үүдээс 18:05 цагт Улаанбаатар хотын зүг 275-р галт тэргээр
+  Нийслэл хотыг зорьсноор бидний баялаг аялал баяртайгаар өндөрлөх болно.
+  Энэ шөнө галт тэргэнд хононо."
+- Final day, title `УЛААНБААТАР ХОТ`, no hotel, no photo:
+  "Өглөө 09:20 цагт Улаанбаатар хотод ирснээр аялал өндөрлөнө."
+
+**Rules that follow**
+
+- Duration counts the whole door-to-door trip: the train day through the day of
+  arrival in Ulaanbaatar (a trip with this opening and closing and five days
+  abroad is 10 days / 9 nights, not 8 / 7).
+- The Word or PDF source often skips the train legs because it starts at the
+  border. Add them; keep every date, flight time, hotel and meal from the source.
+  If the source gives a different train time, the source wins.
+- Titles are upper case with ` – ` between stops. Descriptions are full,
+  formal sentences like the first and last days above, never fragments.
+- Photos go on days that show something to see. Travel days (train, border,
+  arrival) get none.
+- Included and excluded lists come from the poster's own headings (transport,
+  hotels, insurance, guide, sights and meals in the program / personal spending,
+  meals and sights outside the program), plus anything the source names, such
+  as a paid optional entrance.
+- Typing check: never mix Latin and Cyrillic letters inside one Mongolian word.
+- Age bands: an infant is 0-23 months and a child starts at exactly 2 years.
+  Ads that say "0-2 / 2-9" mean the same; store "0-23 сар" and "2-9 нас".
+- A poster price-table column header must not contain the word "буудал"
+  (hotel): the mapper reads such a column as a hotel and invents hotel choices.
+
 ## Verification
 
 After saving, check:
