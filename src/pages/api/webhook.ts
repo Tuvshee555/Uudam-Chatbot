@@ -38,6 +38,7 @@ import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/c
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { buildContactReply, contactSettingsOf } from "../../lib/contactReplies";
+import { fetchThreadMessages, latestStaffReplyAt, STAFF_TAKEOVER_MS } from "../../lib/staffTakeover";
 import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBookedCustomer, pauseBot, trackSender } from "../../lib/pause";
@@ -248,6 +249,10 @@ async function handleMessage(
     }
     // No pause, no return — processing continues so the message gets answered.
   }
+  // Started now so the Meta round trip overlaps the pause lookups below.
+  const staffThread = platform === "facebook" && token
+    ? fetchThreadMessages({ token, senderId, timeoutMs: 4000 })
+    : Promise.resolve(null);
   if (await isPagePaused(pageId)) {
     logInfo("webhook.page_pause_active", {
       requestId: trace?.requestId,
@@ -266,6 +271,26 @@ async function handleMessage(
       senderHash: hashIdentifier(senderId),
     });
     return;
+  }
+  // Staff replies never reach this webhook as echoes, so read the thread: a
+  // staff member who wrote here in the last 3 days owns the conversation.
+  {
+    const thread = await staffThread;
+    const staffAt = thread ? latestStaffReplyAt({ messages: thread, pageId }) : null;
+    if (staffAt) {
+      const remainingMs = staffAt.getTime() + STAFF_TAKEOVER_MS - Date.now();
+      await pauseBot(senderId, remainingMs, "operator_reply").catch(() => {});
+      logInfo("webhook.staff_takeover_detected", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        pageId,
+        senderHash: hashIdentifier(senderId),
+        staffReplyAt: staffAt.toISOString(),
+      });
+      recordCounter("webhook.staff_takeover_detected_total", 1, { platform });
+      return;
+    }
   }
   await assertLockHealthy();
   // Independent reads — run them together instead of two serial round trips.
