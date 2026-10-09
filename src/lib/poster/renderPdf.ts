@@ -11,6 +11,8 @@ import type { PosterTrip } from "@/components/admin/poster/PosterTab";
 import { queryNeon } from "../neonDb";
 import { ensureConnectedTripSchema } from "../connectedTripStore";
 import type { PosterPdfRow } from "./pdf";
+import { isAllowedPosterPdfImageUrl } from "./pdfImagePolicy";
+import { posterPdfHeight } from "./pdfLayout";
 
 const noop = () => {};
 
@@ -42,7 +44,7 @@ function optimizePosterImagesForPdf(trip: PosterTrip): PosterTrip {
 export async function renderPosterPdf(poster: PosterPdfRow) {
   await ensureConnectedTripSchema();
   const trip = optimizePosterImagesForPdf(poster.data as PosterTrip);
-  const hash = createHash("sha256").update(`poster-render-v1:${JSON.stringify(trip)}`).digest("hex");
+  const hash = createHash("sha256").update(`poster-render-v3:${JSON.stringify(trip)}`).digest("hex");
   const cached = await queryNeon<{ pdf: Buffer }>("SELECT pdf FROM poster_pdf_cache WHERE poster_id=$1 AND hash=$2", [poster.id, hash]);
   if (cached?.rows[0]) return cached.rows[0].pdf;
   const root = process.cwd();
@@ -73,7 +75,7 @@ export async function renderPosterPdf(poster: PosterPdfRow) {
     // This renderer may load images, never arbitrary document scripts or local URLs.
     await page.route("**/*", route => {
       const url = new URL(route.request().url());
-      const allowed = url.protocol === "https:" && ["res.cloudinary.com", "images.unsplash.com"].includes(url.hostname);
+      const allowed = isAllowedPosterPdfImageUrl(url.toString());
       return allowed ? route.continue() : route.abort();
     });
     await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>
@@ -81,7 +83,6 @@ export async function renderPosterPdf(poster: PosterPdfRow) {
       @font-face{font-family:PosterNoto;src:url(data:font/ttf;base64,${bold.toString("base64")});font-weight:700}
       ${css}
       html,body{margin:0;background:white} .poster-root{font-family:PosterNoto,sans-serif}
-      @page{size:1080px 1528px;margin:0}
       .poster-root .page{margin:0;box-shadow:none;break-after:auto}
       .dayrow,.photo-tile,.head,.hero,.sec,.foot{break-inside:avoid}
       .photo-tile.empty,.hidden-input,.editor-only{display:none!important}
@@ -122,12 +123,16 @@ export async function renderPosterPdf(poster: PosterPdfRow) {
         new Promise(resolve => setTimeout(resolve, 8000)),
       ]);
     });
+    const height = posterPdfHeight(await page.evaluate(() => {
+      const poster = document.querySelector<HTMLElement>(".poster-root .page");
+      return poster?.scrollHeight || document.documentElement.scrollHeight;
+    }));
     let pdf: Buffer;
     try {
-      pdf = await page.pdf({ width: "1080px", height: "1528px", printBackground: true, preferCSSPageSize: true });
+      pdf = await page.pdf({ width: "1080px", height: `${height}px`, printBackground: true });
     } catch {
       await page.waitForTimeout(500);
-      pdf = await page.pdf({ width: "1080px", height: "1528px", printBackground: true, preferCSSPageSize: true });
+      pdf = await page.pdf({ width: "1080px", height: `${height}px`, printBackground: true });
     }
     // Free the renderer (and every decoded photo in it) before the database
     // round-trip: Vercel reuses a warm container between requests, so holding
