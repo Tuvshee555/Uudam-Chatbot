@@ -12,6 +12,7 @@ import type {
   TravelBotSettings,
   TripStatus,
 } from "./adminTypes";
+import { docxDocumentXmlToText } from "./docxText";
 /* ----------------------------------------------------------------
    Constants & helpers
    ---------------------------------------------------------------- */
@@ -718,21 +719,7 @@ async function buildOfficeUploadUnits(file: File): Promise<ParseUploadUnit[]> {
         `"${file.name}" Word файлыг уншиж чадсангүй. PDF болгож хадгалаад дахин оруулна уу.`,
       );
     }
-    text = xml
-      .replace(/<w:tab\b[^>]*\/?>/g, "\t")
-      .replace(/<\/w:tc>/g, "\t")
-      .replace(/<\/w:tr>/g, "\n")
-      .replace(/<\/w:p>/g, "\n")
-      .replace(/<w:br\b[^>]*\/?>/g, "\n")
-      .replace(/<[^>]+>/g, "")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, '"')
-      .replace(/&apos;/g, "'")
-      .replace(/[ \t]+\n/g, "\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
+    text = docxDocumentXmlToText(xml);
   } else {
     const XLSX = await import("xlsx");
     const workbook = XLSX.read(new Uint8Array(buffer), { type: "array" });

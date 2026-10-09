@@ -146,7 +146,7 @@ test("parseUpload preserves DOCX table cell boundaries", async () => {
     dataBase64: docx.toString("base64"),
   });
 
-  assert.match(parsed.text, /Гэрмол\s+2400000/);
+  assert.match(parsed.text, /Гэрмол\s+\|\s+2400000/);
 });
 
 test("parseUpload rejects oversized decoded uploads before parsing", async () => {

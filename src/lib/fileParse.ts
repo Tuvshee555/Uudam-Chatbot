@@ -9,6 +9,7 @@
  */
 import ExcelJS from "exceljs";
 import { inflateRawSync } from "node:zlib";
+import { docxDocumentXmlToText } from "./docxText";
 
 export type ParsedUpload = {
   /** Short human label for the source, e.g. "price-list.xlsx". */
@@ -282,24 +283,7 @@ function docxToText(buffer: Buffer): string {
       "Word файлыг уншиж чадсангүй. PDF болгож хадгалаад эсвэл текстээ хуулж оруулна уу.",
     );
   }
-  const xml = xmlBuf.toString("utf8");
-  const withBreaks = xml
-    .replace(/<w:tab\b[^>]*\/?>/g, "\t")
-    .replace(/<\/w:tc>/g, "\t")
-    .replace(/<\/w:tr>/g, "\n")
-    .replace(/<\/w:p>/g, "\n")
-    .replace(/<w:br\b[^>]*\/?>/g, "\n");
-  const text = withBreaks
-    .replace(/<[^>]+>/g, "")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-  return text;
+  return docxDocumentXmlToText(xmlBuf.toString("utf8"));
 }
 
 async function pdfToText(buffer: Buffer): Promise<string> {

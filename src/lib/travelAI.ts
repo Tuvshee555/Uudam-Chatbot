@@ -171,6 +171,144 @@ function countNumberedTrips(text: string): number {
   return matches ? matches.length : 0;
 }
 
+function sourceDigits(text: string): string {
+  return text.replace(/[^\d]/g, "");
+}
+
+function numericValueAppearsInSource(value: number, text: string): boolean {
+  if (!Number.isFinite(value)) return true;
+  const digits = String(Math.trunc(Math.abs(value)));
+  if (!digits || digits === "0") return true;
+  return sourceDigits(text).includes(digits);
+}
+
+function pushSourceEvidenceBlocker(proposal: AIChangeProposal, text: string): void {
+  proposal.needs_confirmation = true;
+  if (!proposal.conflicts.includes(text)) proposal.conflicts.unshift(text);
+  proposal.conflict_items = proposal.conflict_items || [];
+  if (!proposal.conflict_items.some((item) => item.text === text)) {
+    proposal.conflict_items.unshift({
+      text,
+      severity: "blocker" as ConflictSeverity,
+      type: "source_evidence_missing",
+    });
+  }
+}
+
+function isPriceOrSeatKey(key: string): boolean {
+  return /price|fare|fee|seat|суудал|үнэ/i.test(key);
+}
+
+function removeUnsupportedNestedNumbers(
+  value: unknown,
+  sourceText: string,
+): unknown {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => removeUnsupportedNestedNumbers(item, sourceText))
+      .filter((item) => item !== undefined);
+  }
+  if (!value || typeof value !== "object") return value;
+
+  const output: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (
+      typeof child === "number" &&
+      isPriceOrSeatKey(key) &&
+      !numericValueAppearsInSource(child, sourceText)
+    ) {
+      continue;
+    }
+    const cleaned = removeUnsupportedNestedNumbers(child, sourceText);
+    if (cleaned !== undefined) output[key] = cleaned;
+  }
+  return output;
+}
+
+function stripUnsupportedExplicitYears(dates: string[], sourceText: string): string[] {
+  const sourceYears = new Set(
+    Array.from(sourceText.matchAll(/(?<!\d)(20\d{2})(?!\d)/g)).map((match) => match[1]),
+  );
+  return dates.map((date) => {
+    const text = String(date || "").trim();
+    const iso = text.match(/^(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+    if (iso && !sourceYears.has(iso[1])) {
+      return `${Number(iso[2])} сарын ${Number(iso[3])}`;
+    }
+    const mongolian = text.match(/^(20\d{2})\s*оны\s*(\d{1,2})\s*сарын\s*(\d{1,2})/i);
+    if (mongolian && !sourceYears.has(mongolian[1])) {
+      return `${Number(mongolian[2])} сарын ${Number(mongolian[3])}`;
+    }
+    return text;
+  });
+}
+
+function sourceTextForAction(
+  action: AITripAction,
+  textByLabel: Map<string, string>,
+  allText: string,
+): string {
+  const extra = action.fields?.extra as Record<string, unknown> | undefined;
+  const label = typeof extra?.source_file_name === "string" ? extra.source_file_name.trim() : "";
+  if (label && textByLabel.has(label)) return textByLabel.get(label) || "";
+  if (textByLabel.size === 1) return Array.from(textByLabel.values())[0] || "";
+  return allText;
+}
+
+export function enforceTextSourceEvidence(
+  proposal: AIChangeProposal,
+  sources: Array<{
+    label: string;
+    contentText?: string;
+    inline?: { mimeType: string; data: string } | null;
+  }>,
+): AIChangeProposal {
+  const textSources = sources.filter((source) => source.contentText?.trim() && !source.inline);
+  if (textSources.length === 0 || proposal.actions.length === 0) return proposal;
+
+  const textByLabel = new Map(
+    textSources.map((source) => [source.label, source.contentText?.trim() || ""]),
+  );
+  const allText = textSources.map((source) => source.contentText || "").join("\n\n");
+
+  for (const action of proposal.actions) {
+    const fields = action.fields as Record<string, unknown> | undefined;
+    if (!fields) continue;
+    const evidence = sourceTextForAction(action, textByLabel, allText);
+    if (!evidence.trim()) continue;
+    const label = fields.route_name?.toString().trim() || action.match?.route_name || "Аялал";
+
+    for (const key of ["adult_price", "child_price", "infant_price", "seats_total", "seats_left"]) {
+      const value = fields[key];
+      if (typeof value !== "number" || numericValueAppearsInSource(value, evidence)) continue;
+      delete fields[key];
+      const fieldLabel = key.includes("price") ? "үнэ" : "суудлын тоо";
+      pushSourceEvidenceBlocker(
+        proposal,
+        `${label}: AI ${fieldLabel} ${value} гэж санал болгосон боловч эх файлд энэ тоо олдсонгүй. Файлын үнийг/суудлыг гараар шалгана уу.`,
+      );
+    }
+
+    if (Array.isArray(fields.departure_dates)) {
+      const before = fields.departure_dates.map((date) => String(date || "").trim()).filter(Boolean);
+      const after = stripUnsupportedExplicitYears(before, evidence);
+      if (JSON.stringify(before) !== JSON.stringify(after)) {
+        fields.departure_dates = after;
+        pushSourceEvidenceBlocker(
+          proposal,
+          `${label}: эх файлд жил бичигдээгүй байхад AI гарах огноонд жил нэмсэн тул жилийг хаслаа. Яг аль жил болохыг баталгаажуулна уу.`,
+        );
+      }
+    }
+
+    if (fields.extra && typeof fields.extra === "object") {
+      fields.extra = removeUnsupportedNestedNumbers(fields.extra, evidence);
+    }
+  }
+
+  return proposal;
+}
+
 /**
  * Splits a plain-text string into chunks at numbered-trip boundaries
  * ("1.", "2." …). Each chunk holds at most MAX_TRIPS_PER_CHUNK trips and
@@ -1554,6 +1692,7 @@ export async function generateAIProposalFromContentBatched(input: {
 
       // One trip = one action, even when it arrived as several poster slices.
       mergeDuplicateTripActions(merged);
+      enforceTextSourceEvidence(merged, sources);
 
       // Code-side completeness check: count numbered trip markers in source text
       // and warn if the model returned far fewer actions than expected.
