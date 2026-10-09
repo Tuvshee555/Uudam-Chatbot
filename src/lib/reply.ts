@@ -320,6 +320,10 @@ const STRONG_PAYMENT_CLAIM_PATTERNS: RegExp[] = [
       `(?:хий|өг|явуул|илгээ|тушаа|оруул)(?:чих)?(?:сэн|сан|лээ|лаа|лөө|лоо)${MN_WORD_TAIL}`,
     "i",
   ),
+  // The same claims typed in Latin letters: "Uridchilgaa 30% tulluu" got the
+  // trip's seat status back instead of the payment acknowledgement (2026-10-06).
+  /(?:^|[^a-z])(?:t[uo]l(?:chi[hx])?(?:luu|loo|sun|son)|shilj[uü]+l(?:chi[hx])?(?:sen|lee|luu))(?![a-z])/i,
+  /(?:tulbur|mungu|mongo|uridchilgaa|guilgee|dans)\S*(?:\s+\S+){0,2}\s+(?:hii|ug|yavuul|ywuul|ilgee)(?:chi[hx])?(?:sen|san|lee|laa|luu|loo)(?![a-z])/i,
 ];
 
 /**
@@ -343,7 +347,7 @@ export function hasPaymentClaimIntent(userText: string): boolean {
  * say so and alert them.
  */
 const BANK_ACCOUNT_REQUEST_PATTERN =
-  /(?:^|[^\p{L}])(?:данс(?:(?:аа|ыг)(?!\p{L})|ны\s*(?:дугаар|мэдээлэл)\S*|\s+(?:явуул|өг|хэлээ|бичээ))|dans(?:(?:aa|iig)(?!\p{L})|nii|\s+(?:ywuul|yavuul|ug)))/iu;
+  /(?:^|[^\p{L}])(?:данс(?:(?:аа|ыг)(?!\p{L})|ны\s*(?:дугаар|мэдээлэл)\S*|\s+(?:явуул|өг|хэлээ|бичээ|руу))|dans(?:(?:aa|iig)(?!\p{L})|nii|\s+(?:ywuul|yavuul|ug|ruu|ru\b)))/iu;
 
 export function hasBankAccountRequest(userText: string): boolean {
   const text = (userText || "").trim();

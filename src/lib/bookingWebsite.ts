@@ -3,4 +3,4 @@
  * waiting on anyone. Dependency-free on purpose: importing it must not pull
  * in Redis or the environment checks (bookingCollect.ts re-exports it).
  */
-export const BOOKING_WEBSITE_URL = "https://uudam-booking-web.vercel.app";
+export const BOOKING_WEBSITE_URL = "https://uudamtravel.mn";

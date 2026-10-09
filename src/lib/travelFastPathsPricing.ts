@@ -7,7 +7,7 @@
 
 import { filterFutureDepartureDates, isPlaceholderDepartureText, parseDepartureDateText, type ResolvedDepartureDate } from "./travelDates";
 import { formatPriceRange } from "./priceRange";
-import { resolveTripOfferFareCard, type PassengerKind, type ResolvedTripOffer } from "./tripOffers";
+import { resolveTripOffer, resolveTripOfferFareCard, type PassengerKind, type ResolvedTripOffer } from "./tripOffers";
 import type { TravelTrip } from "./travelOps";
 import {
   withFutureDepartureDates,
@@ -1657,14 +1657,23 @@ function exactFare(offer: ResolvedTripOffer, kind: PassengerKind): number | null
   return fare?.kind === "exact" ? fare.amount : null;
 }
 
+const NOT_ON_SALE = new Set(["sold_out", "paused", "cancelled", "unavailable", "departed"]);
+
 /**
  * The fares one listed line may quote, and the departures that sell at them.
  * The list used to pair the trip's flat base price with its next dates; when a
  * date sold at another price the reply verifier rightly rejected it, and the
  * whole "which trip?" question became silence plus a paused customer.
  */
-function listedFaresAndDates(trip: TravelTrip): { fares: ListedFares | null; dates: string[] } {
-  const upcoming = withFutureDepartureDates(trip).departure_dates.slice(0, 8);
+function listedFaresAndDates(trip: TravelTrip): { fares: ListedFares | null; dates: string[]; soldOut?: boolean } {
+  const future = withFutureDepartureDates(trip).departure_dates.slice(0, 8);
+  // A sold-out or closed departure is not on sale: listing it with a price made
+  // the verifier reject the whole list, and the customer got silence.
+  const upcoming = future.filter((date) => {
+    const result = resolveTripOffer(trip, { date });
+    return result.status !== "unavailable" || !NOT_ON_SALE.has(result.reason);
+  });
+  if (future.length && !upcoming.length) return { fares: null, dates: [], soldOut: true };
   if (!upcoming.length) {
     return { fares: {
       adult: typeof trip.adult_price === "number" ? trip.adult_price : null,
@@ -1712,6 +1721,7 @@ export function buildAmbiguousTripReply(
       childText ? `хүүхэд ${childText}` : "",
       infantText ? `нярай ${infantText}` : "",
       upcoming.length ? `гарах: ${upcoming.map(customerDate).join(", ")}` : "",
+      listed.soldOut ? "суудал дүүрсэн" : "",
     ].filter(Boolean);
     return `• ${trip.route_name}${details.length ? ` — ${details.join(" · ")}` : ""}`;
   });

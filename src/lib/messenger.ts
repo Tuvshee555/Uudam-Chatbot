@@ -4,6 +4,7 @@ import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboun
 import { logInfo } from "./observability";
 import { fetchWithRetry } from "./resilience";
 import { quickReplyTitle } from "./quickReplyTitle";
+import { isReferReply } from "./reply";
 
 const env = getEnv();
 
@@ -38,6 +39,7 @@ export type UpstreamTraceOptions = {
 
 export const BOT_MESSAGE_METADATA = "uudam-bot-message";
 
+
 async function postToMessenger(
   endpoint: string,
   body: Record<string, unknown>,
@@ -45,6 +47,13 @@ async function postToMessenger(
 ) {
   if (isMetaOutboundDisabled()) {
     logMetaOutboundSuppressed(trace?.source || "meta.messenger", trace);
+    return;
+  }
+  // Last line of defence: REFER/SILENT are internal "stay quiet" signals, never
+  // text for a customer, whichever reply path let one through.
+  const message = body.message as { text?: unknown } | undefined;
+  if (typeof message?.text === "string" && isReferReply(message.text)) {
+    logInfo("meta.messenger.machine_token_blocked", { requestId: trace?.requestId, source: trace?.source || "unknown" });
     return;
   }
 

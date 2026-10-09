@@ -2,6 +2,8 @@ import { useMemo, useRef, useState } from "react";
 import { Badge, Button, Card, Icons, Input, Spinner, Switch, Textarea, cx, useToast } from "@/components/ui";
 import type { ControlState, CustomerDocument, PageControlState, PauseRow, RecentRow, TravelBotSettings } from "@/lib/adminTypes";
 import { SectionHeading, TabHeader } from "./AdminShared";
+import { ContactInfoCard } from "./ContactInfoCard";
+import { contactSettingsOf } from "@/lib/contactReplies";
 import { DURATIONS, formatTime, shortId, timeLeft } from "@/lib/adminUtils";
 
 function greetingEnabled(settings: TravelBotSettings | null): boolean {
@@ -623,6 +625,7 @@ export function BotTab({
         }}
       />
 
+      <ContactInfoCard key={JSON.stringify(contactSettingsOf(settings?.extra))} settings={settings} apiFetch={apiFetch} onSettingsChanged={onSettingsChanged} />
       <ReminderCard settings={settings} apiFetch={apiFetch} onSettingsChanged={onSettingsChanged} />
 
       <Card className="p-4">

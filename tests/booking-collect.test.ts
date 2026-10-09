@@ -24,7 +24,7 @@ test("the flow starts at the contact step and pre-fills the trip being discussed
   assert.match(prompt, /Нэр, утасны дугаараа бичнэ үү/);
   assert.ok(prompt.includes(`«${TRIP}»`));
   // The catalogue link still goes out with the very first question.
-  assert.match(prompt, /https:\/\/uudam-booking-web\.vercel\.app/);
+  assert.match(prompt, /https:\/\/uudamtravel\.mn/);
 });
 
 test("name and phone in one message complete the booking when the trip is known", () => {

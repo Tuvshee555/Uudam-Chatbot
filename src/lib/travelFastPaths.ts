@@ -14,6 +14,7 @@
 import { buildPassengerTotalReply } from "./passengerTotalReply";
 import { departureAvailability, departureIsClosed } from "./departureAvailability";
 import { buildHotelReply } from "./tripHotelReply";
+import { buildPlaceDaysReply } from "./tripPlaceDaysReply";
 import {
   buildDepartureDateAvailabilityReply,
   filterFutureDepartureDates,
@@ -1423,6 +1424,13 @@ function buildSoldOutTripReply(text: string, trips: TravelTrip[]): string | null
   return buildDepartureUnavailableReply(text, trips) ?? buildUnavailableTripReply(text, trips, "sold_out") ?? buildUnavailableTripReply(text, trips, "paused");
 }
 
+/** True when the customer's own words point at a trip, without the routed context. */
+function namesTripItself(turn: string, trips: TravelTrip[]): boolean {
+  if (!turn.trim()) return false;
+  const match = findBestTripMatch(turn, trips);
+  return Boolean(match.best) || match.ambiguous.length > 0;
+}
+
 export function buildStructuredTripReply(
   text: string,
   trips: TravelTrip[],
@@ -1487,6 +1495,14 @@ export function buildStructuredTripReply(
     if (routeOnlyIncluded) return routeOnlyIncluded;
     const routeOnlyHotel = buildHotelReply(routeOnlyCandidate.best, intentText);
     if (routeOnlyHotel) return routeOnlyHotel;
+    const placeDays = buildPlaceDaysReply(routeOnlyCandidate.best, customerTurn(text));
+    if (placeDays) return placeDays;
+    // The trip came only from context and the customer's own words neither name
+    // a trip nor ask anything this card answers ("За ойлголоо", "Гэрээ болж
+    // байна уу?", "<хот> орохгүй юм биш үү?"). Re-sending the card is not an
+    // answer: one customer got the same card three times while asking for the
+    // bank account. Leave it to the paths that read the whole conversation.
+    if (text.includes(CUSTOMER_TURN_MARK) && !namesTripItself(customerTurn(text), trips)) return null;
     return buildTripInfoReply(routeOnlyCandidate.best, now);
   }
 

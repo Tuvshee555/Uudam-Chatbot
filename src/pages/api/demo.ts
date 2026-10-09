@@ -29,6 +29,7 @@ import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/c
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
+import { buildContactReply, contactSettingsOf } from "../../lib/contactReplies";
 import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { dbGetRecentAdminMessages, getTravelBotSettings, listTrips } from "../../lib/travelOps";
@@ -345,6 +346,15 @@ export default async function handler(
           mediaUrls: [],
           brochureUrl: null,
         });
+      }
+
+      // Contact / address buttons → the admin's contact settings, exactly like Messenger.
+      const contactReply = isEnglishDemo ? null : buildContactReply(normalizedText, contactSettingsOf(botSettings.extra));
+      if (contactReply) {
+        await appendMessage(sessionId, "user", normalizedText);
+        await appendMessage(sessionId, "assistant", contactReply);
+        await rememberTurn();
+        return res.status(200).json({ reply: contactReply, buttons: [], mediaUrls: [], brochureUrl: null });
       }
 
       // Quick-info keyword → the admin's canned reply, exactly like Messenger.
@@ -845,6 +855,10 @@ export default async function handler(
         }
         const structuredReply = buildStructuredTripReply(await getFastPathText(), trips);
         if (structuredReply) {
+          // Same as the webhook: a "which trip?" list is checked against the trips it names.
+          if (structuredReply.includes(AMBIGUOUS_REPLY_MARKER) && factualScope) {
+            factualScope = [...new Set([...factualScope, ...trips.filter((trip) => structuredReply.includes(trip.route_name))])];
+          }
           const safeReply = appendLeadCaptureCta(
             enforceWebsiteForPayment(sanitizeAssistantReply(structuredReply)),
             phoneAlreadyRequested,

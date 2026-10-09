@@ -37,6 +37,7 @@ import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
+import { buildContactReply, contactSettingsOf } from "../../lib/contactReplies";
 import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBot, trackSender } from "../../lib/pause";
@@ -772,6 +773,19 @@ async function handleMessage(
       await appendMessage(senderId, "assistant", handoffMsg);
       await setLastReplyConsistent(sessionId, handoffMsg);
       await rememberTurn("api.webhook.handoff");
+    } catch { /* non-critical */ }
+    return;
+  }
+  const contactReply = buildContactReply(text, contactSettingsOf(botSettings.extra));
+  if (contactReply) {
+    await assertLockHealthy();
+    const delivered = await sendPlatformMessage(platform, senderId, contactReply, token, pageId, igUserId, trace, { allowFallback: false });
+    if (!delivered) throw new RetryableWebhookError("delivery_failed:contact_reply");
+    try {
+      await appendMessage(senderId, "user", text);
+      await appendMessage(senderId, "assistant", contactReply);
+      await setLastReplyConsistent(sessionId, contactReply);
+      await rememberTurn("api.webhook.contact_reply");
     } catch { /* non-critical */ }
     return;
   }
@@ -1545,6 +1559,12 @@ async function handleMessage(
             allowLooseFallback: false,
           })
         : null;
+      // A "which trip?" list is checked line by line against the trips it names.
+      // Checking it against only the routed trip rejected every other line, and
+      // a park name got silence because a second trip also visits that park.
+      if (structuredTripReply.includes(AMBIGUOUS_REPLY_MARKER) && factualScope) {
+        factualScope = [...new Set([...factualScope, ...trips.filter((trip) => structuredTripReply.includes(trip.route_name))])];
+      }
       await deliverFastPathReply({
         reply: safeStructuredReply,
         failTag: "structured_trip_fast_path",
@@ -1809,7 +1829,19 @@ async function handleMessage(
     relevantTripNames,
     catalog: reasoningTrips,
   });
-  if (shouldSilenceNoDataReply(safeReply) || wrongTripLeak) {
+  // The price/date/fact guards above can turn a reply into REFER after the
+  // model's own REFER was already handled, so check the token again here: four
+  // customers were sent the bare word "REFER" (2026-10-06..07).
+  if (isReferReply(safeReply) && isGenericTripRequest(text)) {
+    await deliverFastPathReply({
+      reply: WHICH_TRIP_CLARIFY_REPLY,
+      failTag: "generic_trip_request_guarded",
+      rememberSource: "api.webhook.generic_trip_request_guarded",
+      counter: "webhook.generic_trip_request_total",
+    });
+    return;
+  }
+  if (isReferReply(safeReply) || shouldSilenceNoDataReply(safeReply) || wrongTripLeak) {
     if (wrongTripLeak) {
       logInfo("webhook.ai_wrong_trip_reply_suppressed", {
         requestId: trace?.requestId,

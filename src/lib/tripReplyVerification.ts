@@ -37,7 +37,12 @@ export function verifyTripReply(input: {
       const kind = /том\s*хүн|насанд\s*хүрэгч|adult/i.test(fragment) ? "adult" : /нярай|infant/i.test(fragment) ? "infant" : /хүүх(?:эд|дийн)|child/i.test(fragment) ? "child" : null;
       const amounts = [...fragment.matchAll(AMOUNT)].map((match) => Number(match[1].replace(/[.,]/g, "")));
       // "10 сарын 26" is a date ("the 26th of month 10"), never a 10-month-old.
-      const age = /(?<![\d.,])(\d{1,2}(?:\.\d+)?)\s*(?:[-–]\s*\d{1,2}\s*)?(?:нас|настай|years?\s*old|сар(?!ын)|months?)/i.exec(fragment);
+      const ageMatch = /(?<![\d.,])(\d{1,2}(?:\.\d+)?)\s*(?:[-–]\s*(\d{1,2})\s*)?(?:нас|настай|years?\s*old|сар(?!ын)|months?)/i.exec(fragment);
+      // "Хүүхэд /2-11 нас/" labels the fare's band. Its LOWER end read as a
+      // 2-year-old made the infant rule reject the real child fare, and the
+      // customer who tapped that trip got silence (2026-10-09). The upper end
+      // still sits inside the band, so a 2-5 band quoted at the 6-11 fare fails.
+      const age = ageMatch ? [ageMatch[0], ageMatch[2] ?? ageMatch[1]] as const : null;
       if (kind && amounts.length) {
         for (const amount of amounts) {
           const supported = active.some((trip) => {

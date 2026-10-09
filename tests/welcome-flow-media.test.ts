@@ -45,7 +45,7 @@ test("normal information requests do not opt into photos", async () => {
 
 test("default welcome points customers to the website and contact numbers", async () => {
   const { DEFAULT_WELCOME_TEXT } = await loadWelcomeFlow();
-  assert.match(DEFAULT_WELCOME_TEXT, /uudam-booking-web\.vercel\.app/);
+  assert.match(DEFAULT_WELCOME_TEXT, /uudamtravel\.mn/);
   assert.match(DEFAULT_WELCOME_TEXT, /7713 6633/);
   assert.match(DEFAULT_WELCOME_TEXT, /Та ямар төрлийн аялал сонирхож байна вэ/);
 });
