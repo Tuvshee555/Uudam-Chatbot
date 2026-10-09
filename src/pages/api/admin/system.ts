@@ -37,7 +37,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const [diagnostics, driveSync, operationalIssues] = await Promise.all([
       getDbDiagnostics(),
       getDriveSyncDiagnostics(),
-      getOperationalIssues(env),
+      getOperationalIssues(),
     ]);
     return res.status(200).json({
       ok: true,

@@ -1,4 +1,3 @@
-import type { ValidatedEnv } from "./env";
 import type { queryNeon as QueryNeon } from "./neonDb";
 import { logError, logWarn } from "./observability";
 import type { ReadinessIssue } from "./readiness";
@@ -58,10 +57,9 @@ export async function reportAiOutage(kind: AiFailureKind): Promise<void> {
 }
 
 type AiFailureSummary = { failures: number; minutes_since_last: number | null; credits: boolean; unauthorized: boolean };
-type WaitingLeads = { waiting: number };
 
 /** Problems an operator must act on, shown in the admin system check. */
-export async function getOperationalIssues(_env: ValidatedEnv): Promise<ReadinessIssue[]> {
+export async function getOperationalIssues(): Promise<ReadinessIssue[]> {
   const issues: ReadinessIssue[] = [];
   try {
     const failures = (await queryNeon<AiFailureSummary>(

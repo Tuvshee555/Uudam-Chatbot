@@ -303,6 +303,16 @@ export default function AdminPage() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
+      // The data loads do not depend on the system check, which can take 10 s+
+      // on a cold server; starting them first keeps it from delaying the trips.
+      const dataLoads = Promise.all([
+        loadTrips(searchRef.current, statusFilterRef.current),
+        loadPauseState(),
+        loadSettingsState(),
+        loadLeadsState(),
+        loadDocumentStats(),
+      ]);
+      dataLoads.catch(() => undefined);
       const systemRes = await fetchWithAdmin("/api/admin/system");
       if (systemRes.status === 401) {
         markAdminLocked();
@@ -321,13 +331,7 @@ export default function AdminPage() {
       setDriveSync((systemJson?.drive_sync as DriveSyncDiagnostics) || null);
       setReadiness((systemJson?.readiness as ReadinessReport) || null);
       setSystemLoaded(true);
-      await Promise.all([
-        loadTrips(searchRef.current, statusFilterRef.current),
-        loadPauseState(),
-        loadSettingsState(),
-        loadLeadsState(),
-        loadDocumentStats(),
-      ]);
+      await dataLoads;
     } catch {
       toast.error("Системийн өгөгдөл ачаалж чадсангүй.");
     } finally {
