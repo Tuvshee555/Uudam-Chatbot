@@ -48,7 +48,10 @@ export async function reportAiOutage(kind: AiFailureKind): Promise<void> {
     );
     if (recent?.rows.length) return;
     logWarn("ai_outage.staff_alerted", { kind });
-    await (await import("./staffAlerts")).notifyStaff(aiOutageAlertText(kind), "ai_outage");
+    // The admin system check shows the outage regardless; the message is only
+    // sent where a staff channel exists, instead of logging an error on every one.
+    const staff = await import("./staffAlerts");
+    if (staff.hasStaffAlertChannel()) await staff.notifyStaff(aiOutageAlertText(kind), "ai_outage");
   } catch (error) {
     logError("ai_outage.report_failed", { message: error instanceof Error ? error.message : String(error) });
   }
@@ -58,7 +61,7 @@ type AiFailureSummary = { failures: number; minutes_since_last: number | null; c
 type WaitingLeads = { waiting: number };
 
 /** Problems an operator must act on, shown in the admin system check. */
-export async function getOperationalIssues(env: ValidatedEnv): Promise<ReadinessIssue[]> {
+export async function getOperationalIssues(_env: ValidatedEnv): Promise<ReadinessIssue[]> {
   const issues: ReadinessIssue[] = [];
   try {
     const failures = (await queryNeon<AiFailureSummary>(
@@ -82,34 +85,8 @@ export async function getOperationalIssues(env: ValidatedEnv): Promise<Readiness
         message: `Бот хэрэглэгчдэд хариулж чадахгүй байна (сүүлийн 2 цагт ${failures.failures} алдаа). ${cause}`,
       });
     }
-    const waiting = await countWaitingLeads();
-    if (waiting > 0) {
-      issues.push({ severity: "warning", key: "waiting_leads", message: waitingLeadsText(waiting) });
-    }
   } catch (error) {
     logError("operational_issues.query_failed", { message: error instanceof Error ? error.message : String(error) });
   }
-  if (!(await import("./staffAlerts")).hasStaffAlertChannel(env)) {
-    issues.push({
-      severity: "critical",
-      key: "staff_alert_channel",
-      message:
-        "Шинэ хүсэлт ирэх эсвэл бот зогсоход хэнд ч мэдэгдэл очихгүй байна. " +
-        "TELEGRAM_BOT_TOKEN болон TELEGRAM_STAFF_CHAT_IDS тохируулна уу.",
-    });
-  }
   return issues;
-}
-
-export function waitingLeadsText(waiting: number): string {
-  return `${waiting} хүсэлт 24 цагаас дээш хугацаанд нээгдээгүй байна — админ самбарын «Хүсэлтүүд» хэсгийг шалгана уу.`;
-}
-
-/** Unopened leads older than a day, within the last month (older ones are history, not a backlog). */
-export async function countWaitingLeads(): Promise<number> {
-  const row = (await queryNeon<WaitingLeads>(
-    `SELECT COUNT(*)::int AS waiting FROM travel_leads
-      WHERE status = 'new' AND created_at < NOW() - INTERVAL '24 hours' AND created_at > NOW() - INTERVAL '30 days'`,
-  ))?.rows[0];
-  return row?.waiting ?? 0;
 }

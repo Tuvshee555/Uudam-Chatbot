@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { aiFailureKind, aiOutageAlertText, waitingLeadsText } from "../src/lib/aiHealth";
+import { aiFailureKind, aiOutageAlertText } from "../src/lib/aiHealth";
 import { UpstreamHttpError, TimeoutError } from "../src/lib/resilience";
 
 const body = (code: string, type: string) => JSON.stringify({ error: { message: "x", type, code } });
@@ -17,8 +17,7 @@ test("a rejected key is reported, every other failure is not an outage", () => {
   assert.equal(aiFailureKind(new Error("boom")), "other");
 });
 
-test("outage and backlog alerts tell staff what to do and where the leads are", () => {
+test("the outage alert tells staff what to do and where the leads are", () => {
   assert.match(aiOutageAlertText("credits_exhausted"), /кредит дууссан[\s\S]*Billing[\s\S]*Хүсэлтүүд/);
   assert.match(aiOutageAlertText("unauthorized"), /OPENAI_API_KEY[\s\S]*Хүсэлтүүд/);
-  assert.match(waitingLeadsText(37), /^37 хүсэлт 24 цагаас дээш/);
 });

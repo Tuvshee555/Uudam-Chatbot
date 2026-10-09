@@ -41,13 +41,13 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
 test("a real base fare passes untouched", () => {
   const t = trip({});
   const reply = "Альфа аялал: том хүн 1,111,111₮, хүүхэд 999,999₮.";
-  assert.equal(guardUnverifiedPrices(reply, [t]), reply);
+  assert.equal(guardUnverifiedPrices(reply, [t], NOW), reply);
 });
 
 test("a price that matches no trip's data becomes REFER", () => {
   const t = trip({});
   const reply = "Альфа аялал: том хүн 2,500,000₮.";
-  assert.equal(guardUnverifiedPrices(reply, [t]), "REFER");
+  assert.equal(guardUnverifiedPrices(reply, [t], NOW), "REFER");
 });
 
 test("a price-group fare for a DIFFERENT date than base is still confirmed", () => {
@@ -64,7 +64,7 @@ test("a price-group fare for a DIFFERENT date than base is still confirmed", () 
     },
   });
   const reply = "Улаанбаатар – Альфа аялал 10 сарын 8-нд: том хүн 3,490,000₮.";
-  assert.equal(guardUnverifiedPrices(reply, [t]), reply);
+  assert.equal(guardUnverifiedPrices(reply, [t], NOW), reply);
 });
 
 test("a base fare quoted for a differently priced departure is rejected", () => {
@@ -78,13 +78,13 @@ test("a base fare quoted for a differently priced departure is rejected", () => 
 
 test("a fully invented amount with no resolved trip is left alone (nothing to verify against)", () => {
   const reply = "Манай аяллуудын үнэ дунджаар 2,000,000₮ орчим байдаг.";
-  assert.equal(guardUnverifiedPrices(reply, []), reply);
+  assert.equal(guardUnverifiedPrices(reply, [], NOW), reply);
 });
 
 test("a reply with no ₮ amount at all is never touched", () => {
   const t = trip({});
   const reply = "Тийм ээ, энэ аялал 8 өдөр 7 шөнө үргэлжилнэ.";
-  assert.equal(guardUnverifiedPrices(reply, [t]), reply);
+  assert.equal(guardUnverifiedPrices(reply, [t], NOW), reply);
 });
 
 test("child/infant rule tiers and legacy departure_date_groups fares are all quotable", () => {
@@ -98,7 +98,7 @@ test("child/infant rule tiers and legacy departure_date_groups fares are all quo
     },
   });
   const reply = "Том хүн 1,111,111₮, хүүхэд 888,888₮, нярай 222,222₮.";
-  assert.equal(guardUnverifiedPrices(reply, [t]), reply);
+  assert.equal(guardUnverifiedPrices(reply, [t], NOW), reply);
 });
 
 test("a placeholder sub-1,000₮ figure never counts as a quotable price to match against", () => {
@@ -107,13 +107,13 @@ test("a placeholder sub-1,000₮ figure never counts as a quotable price to matc
   // be checked against genuine fares only — the placeholder must not silently
   // legitimize other made-up numbers.
   const reply = "Том хүн 1,111,111₮, нярай 500,000₮.";
-  assert.equal(guardUnverifiedPrices(reply, [t]), "REFER");
+  assert.equal(guardUnverifiedPrices(reply, [t], NOW), "REFER");
 });
 
 test("amounts in different real-world formats are all recognised", () => {
   const t = trip({ adult_price: 3490000 });
   for (const formatted of ["3,490,000₮", "3.490.000₮", "3490000 төгрөг", "3,490,000 MNT"]) {
-    assert.equal(guardUnverifiedPrices(`Үнэ: ${formatted}.`, [t]), `Үнэ: ${formatted}.`, formatted);
+    assert.equal(guardUnverifiedPrices(`Үнэ: ${formatted}.`, [t], NOW), `Үнэ: ${formatted}.`, formatted);
   }
 });
 
@@ -121,7 +121,7 @@ test("multiple candidate trips (an ambiguous list) can each supply the confirmed
   const a = trip({ id: "a", route_name: "Альфа аялал", adult_price: 1000000 });
   const b = trip({ id: "b", route_name: "Бета аялал", adult_price: 2000000 });
   const reply = "Альфа аялал 1,000,000₮, Бета аялал 2,000,000₮.";
-  assert.equal(guardUnverifiedPrices(reply, [a, b]), reply);
+  assert.equal(guardUnverifiedPrices(reply, [a, b], NOW), reply);
 });
 
 test("a real date-specific fare is accepted for its own departure", () => {
