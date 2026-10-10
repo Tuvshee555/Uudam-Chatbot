@@ -124,6 +124,8 @@ export function websiteTripToCanonicalFields(input: unknown): {
     // A source with hotel/package pricing is richer than the website's simple
     // scalar editor. Preserve it; otherwise capture per-date website prices.
     price_groups: priceGroups.length ? priceGroups : simpleDepartureGroups,
+    ...(Array.isArray(metadata.hotel_profiles) ? { hotel_profiles: metadata.hotel_profiles } : {}),
+    ...(Array.isArray(metadata.hotel_links) ? { hotel_links: metadata.hotel_links } : {}),
     ...(record(metadata.age_rules).adult || record(metadata.age_rules).child || record(metadata.age_rules).infant
       ? { age_rules: record(metadata.age_rules) }
       : {}),

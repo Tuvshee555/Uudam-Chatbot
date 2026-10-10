@@ -112,3 +112,31 @@ test("website-authored passenger price groups sync to canonical extra", () => {
   ]);
   assert.deepEqual(result.fields.extra?.age_rules, { adult: "12+ нас", child: "2-11 нас", infant: "0-2 нас" });
 });
+
+test("website hotel records sync as one canonical name, link, description and media unit", () => {
+  const hotelProfiles = [{
+    name: "Jomtien Palm Beach Hotel & Resort",
+    url: "https://www.jomtien-palmbeach.com/",
+    description: "Beach hotel",
+    media: [{ url: "https://res.cloudinary.com/demo/image/upload/hotel.webp", caption: "Pool" }],
+  }];
+  const result = websiteTripToCanonicalFields({
+    sourceTripId: "trip-hotels",
+    title: "Thailand",
+    description: "Trip",
+    price: 1_000_000,
+    durationDays: 2,
+    durationNights: 1,
+    isPublished: true,
+    sourceMetadata: {
+      hotel_profiles: hotelProfiles,
+      hotel_links: hotelProfiles.map(({ name, url }) => ({ name, url })),
+    },
+  });
+
+  assert.deepEqual(result.fields.extra?.hotel_profiles, hotelProfiles);
+  assert.deepEqual(result.fields.extra?.hotel_links, [{
+    name: "Jomtien Palm Beach Hotel & Resort",
+    url: "https://www.jomtien-palmbeach.com/",
+  }]);
+});
