@@ -1910,13 +1910,30 @@ test("seat reply omits seat wording when more than seven seats remain", () => {
   assert.doesNotMatch(reply || "", /12|үлдсэн суудал|цөөн үлдсэн|суудал дүүрсэн/i);
 });
 
-test("seat reply shows urgency when only a few seats remain", () => {
+const lowDay = (date: string) => ({ date, status: "ALMOST_FULL", seatsLeft: null });
+const openDay = (date: string) => ({ date, status: "OPEN", seatsLeft: null });
+
+test("a trip-wide seat count never calls the whole trip low", () => {
   const reply = buildSeatsReply(
     "Зэт хаалга аяллын суудал байна уу?",
     [trip({ seats_left: 3, seats_total: 20 })],
   );
 
-  assert.match(reply || "", /Суудал цөөн үлдсэн тул захиалга өгөх бол аяллын зөвлөхтэй хурдан холбогдоорой./);
+  assert.doesNotMatch(reply || "", /цөөн суудал|Суудал цөөн/i);
+});
+
+test("seat reply flags only the date staff marked as few seats", () => {
+  const reply = buildSeatsReply(
+    "Зэт хаалга аяллын суудал байна уу?",
+    [trip({
+      departure_dates: ["2099-03-10", "2099-03-17"], seats_left: 3,
+      extra: { website_departure_availability: [openDay("2099-03-10"), lowDay("2099-03-17")] },
+    })],
+  );
+
+  assert.match(reply || "", /2099\.3\.17 \(цөөн суудал\)/);
+  assert.doesNotMatch(reply || "", /2099\.3\.10 \(цөөн/);
+  assert.match(reply || "", /Цөөн суудалтай гэж тэмдэглэсэн өдрөөр захиалга өгөх бол/);
 });
 
 test("seat reply marks departure full only when seats_left is zero", () => {
@@ -1929,14 +1946,15 @@ test("seat reply marks departure full only when seats_left is zero", () => {
   assert.match(reply || "", /Дараагийн гарах өдрийг санал болгоё/);
 });
 
-test("compare reply shows seat wording only for scarcity", () => {
+test("compare reply names few-seat dates only for the trip that has them", () => {
   const reply = buildCompareReply(
     "Зэтгорийн хаалга Чүнчин харьцуул",
     [
       trip({
         id: "scarce",
         route_name: "Зэтгорийн хаалга - шууд нислэгтэй",
-        seats_left: 4,
+        departure_dates: ["2099-03-10", "2099-03-17"], seats_left: 4,
+        extra: { website_departure_availability: [openDay("2099-03-10"), lowDay("2099-03-17")] },
       }),
       trip({
         id: "plenty",
@@ -1946,7 +1964,8 @@ test("compare reply shows seat wording only for scarcity", () => {
     ],
   );
 
-  assert.match(reply || "", /Суудал цөөн үлдсэн тул захиалга өгөх бол аяллын зөвлөхтэй хурдан холбогдоорой./);
+  assert.match(reply || "", /Цөөн суудалтай өдөр: 2099\.3\.17/);
+  assert.doesNotMatch(reply || "", /Суудал цөөн үлдсэн тул/);
   assert.doesNotMatch(reply || "", /Үлдсэн суудал: 12/);
 });
 

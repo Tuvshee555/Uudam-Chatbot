@@ -42,8 +42,9 @@ function durationText(days: unknown, nights: unknown): string {
   return `${dayCount} өдөр ${nightCount} шөнө`;
 }
 
-function availabilityStatus(value: unknown): "OPEN" | "SOLD_OUT" | "PAUSED" | "CANCELLED" {
+function availabilityStatus(value: unknown): "OPEN" | "ALMOST_FULL" | "SOLD_OUT" | "PAUSED" | "CANCELLED" {
   const status = text(value).toUpperCase();
+  if (status === "ALMOST_FULL") return "ALMOST_FULL";
   if (status === "SOLD_OUT") return "SOLD_OUT";
   if (status === "CANCELLED" || status === "DEPARTED") return "CANCELLED";
   if (status === "PAUSED") return "PAUSED";

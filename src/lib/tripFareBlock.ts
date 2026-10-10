@@ -12,6 +12,7 @@
 import type { TravelTrip } from "./travelTypes";
 import { parseDepartureDateText } from "./travelDates";
 import { tripSupportsDate } from "./tripFacts";
+import { lowSeatDates } from "./departureAvailability";
 import { normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard, type NormalizedPassengerFare, type OfferFare, type PassengerKind } from "./tripOffers";
 
 const ORDER: PassengerKind[] = ["adult", "child", "infant"];
@@ -87,7 +88,19 @@ export function onSaleDepartureText(trip: TravelTrip, now = new Date(), limit = 
     return !(sale.status === "unavailable" && NOT_ON_SALE.has(sale.reason));
   });
   if (!open.length) return "Ойрын гарах өдрүүдийн суудал дүүрсэн байна.";
-  return `${open.slice(0, limit).map((date) => shortDate(date, now)).join(", ")}${open.length > limit ? " …" : ""}`;
+  return dateList(open.slice(0, limit), trip, now) + (open.length > limit ? " …" : "");
+}
+
+/** "10/13, 10/15 (цөөн суудал), 10/20": only a date staff flagged carries the note. */
+function dateList(dates: string[], trip: TravelTrip, now: Date): string {
+  const low = lowSeatDates(trip, todayInUb(now));
+  return dates.map((date) => shortDate(date, now) + (low.has(date) ? " (цөөн суудал)" : "")).join(", ");
+}
+
+/** Bookable dates flagged "few seats left", nearest first. */
+export function onSaleLowDates(trip: TravelTrip, now = new Date()): string[] {
+  const low = lowSeatDates(trip, todayInUb(now));
+  return upcomingDepartures(trip, now).filter((date) => low.has(date));
 }
 
 /** Every upcoming departure the canonical resolver knows for this trip. */
@@ -123,7 +136,7 @@ export function buildFarePriceLines(trip: TravelTrip, now = new Date()): { lines
   // longer than one Messenger message. Later dates are listed below.
   const shown = groups.slice(0, MAX_PRICE_GROUPS);
   if (shown.length === 1) lines.push(...shown[0].lines);
-  else for (const group of shown) lines.push("", `${group.dates.map((date) => shortDate(date, now)).join(", ")}:`, ...group.lines);
+  else for (const group of shown) lines.push("", `${dateList(group.dates, trip, now)}:`, ...group.lines);
   if (groups.length > shown.length) lines.push("", "Бусад гарах өдрийн үнийг хүсвэл өдрөө бичээрэй.");
   return { lines, onSale: [...new Set(groups.flatMap((group) => group.dates))].sort() };
 }
@@ -134,7 +147,7 @@ export function buildFareSection(trip: TravelTrip, now = new Date()): string[] |
   if (!block) return null;
   if (!block.onSale.length) return block.lines;
   const { onSale } = block;
-  return [...block.lines, "", "📅 Гарах өдрүүд:", `${onSale.slice(0, 10).map((date) => shortDate(date, now)).join(", ")}${onSale.length > 10 ? " …" : ""}`];
+  return [...block.lines, "", "📅 Гарах өдрүүд:", dateList(onSale.slice(0, 10), trip, now) + (onSale.length > 10 ? " …" : "")];
 }
 
 /**

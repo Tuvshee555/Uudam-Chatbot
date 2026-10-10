@@ -42,6 +42,8 @@ export type NormalizedPassengerFare = {
 export type OfferAvailability = {
   status: "open" | "unknown" | "sold_out" | "paused" | "cancelled" | "departed" | "unavailable" | "conflict";
   seatsLeft: number | null;
+  /** This date is flagged "few seats left" (website status ALMOST_FULL); it is still bookable. */
+  low?: boolean;
 };
 export type CanonicalTripOffer = {
   id: string;
@@ -241,7 +243,10 @@ function availability(raw: Row, fallbackSeats: number | null): OfferAvailability
   if (["sold_out", "paused", "cancelled", "departed"].includes(status)) return { status: status as OfferAvailability["status"], seatsLeft };
   if (["draft", "archived", "closed"].includes(status)) return { status: "unavailable", seatsLeft };
   if (seatsLeft === 0) return { status: "sold_out", seatsLeft };
-  return { status: ["open", "active", "available"].includes(status) || seatsLeft !== null ? "open" : "unknown", seatsLeft };
+  // Few seats is a flag staff set on one date, not something read from a count:
+  // typed counts are never decremented, so a stale "3" kept calling dates low.
+  const low = status === "almost_full";
+  return { status: ["open", "active", "available"].includes(status) || low || seatsLeft !== null ? "open" : "unknown", seatsLeft, ...(low ? { low: true } : {}) };
 }
 
 function departureAvailability(trip: TravelTrip, date: string, raw: Row, now: Date): OfferAvailability {
@@ -482,7 +487,7 @@ function resolve(trip: TravelTrip, selection: TripOfferSelection, now: Date, dis
     packageId: candidates.find((o) => o.packageId)?.packageId || null,
     currency: effective[0].currency, prices, fares: effective, passengerPrices,
     total: passengerPrices.length ? sum(passengerPrices.map((p) => p.lineTotal)) : null,
-    availability: { status: selectedAvailability.status, seatsLeft: selectedAvailability.seatsLeft }, sourceOfferIds: unique(effective.map((f) => f.sourceOfferId)),
+    availability: { status: selectedAvailability.status, seatsLeft: selectedAvailability.seatsLeft, ...(selectedAvailability.low ? { low: true } : {}) }, sourceOfferIds: unique(effective.map((f) => f.sourceOfferId)),
     conditions: unique(candidates.flatMap((o) => o.discount?.condition ? [o.discount.condition] : [])),
   } };
 }

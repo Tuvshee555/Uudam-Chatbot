@@ -15,7 +15,7 @@ import { buildPassengerTotalReply } from "./passengerTotalReply";
 import { departureAvailability, departureIsClosed } from "./departureAvailability";
 import { buildHotelReply } from "./tripHotelReply";
 import { buildPlaceDaysReply } from "./tripPlaceDaysReply";
-import { buildFareSection, onSaleDepartureText, shortDate } from "./tripFareBlock";
+import { buildFareSection, onSaleDepartureText, onSaleLowDates, shortDate } from "./tripFareBlock";
 import {
   buildDepartureDateAvailabilityReply,
   filterFutureDepartureDates,
@@ -448,10 +448,8 @@ function getSeatSalesMessage(trip: TravelTrip): string | null {
     return "Уучлаарай, энэ гаралтын суудал дүүрсэн байна.\nДараагийн гарах өдрийг санал болгоё.";
   }
 
-  if (trip.seats_left >= 1 && trip.seats_left <= 7) {
-    return "Суудал цөөн үлдсэн тул захиалга өгөх бол аяллын зөвлөхтэй хурдан холбогдоорой.";
-  }
-
+  // A trip-wide count never says "few seats": that is flagged on the one date it
+  // is true for (lowSeatDates), and shown beside that date, not over the whole trip.
   return null;
 }
 
@@ -486,6 +484,8 @@ function buildTripInfoReply(rawTrip: TravelTrip, now = new Date()) {
   const seatMessage = getSeatSalesMessage(trip);
   if (seatMessage) {
     lines.push("", seatMessage);
+  } else if (onSaleLowDates(rawTrip, now).length > 0) {
+    lines.push("", "Цөөн суудалтай гэж тэмдэглэсэн өдрөөр захиалга өгөх бол аяллын зөвлөхтэй хурдан холбогдоорой.");
   }
 
   if (isLandFlightCombo(trip)) {
@@ -1064,8 +1064,11 @@ export function buildCompareReply(text: string, trips: TravelTrip[]): string | n
       );
     }
     const seatMessage = getSeatSalesMessage(trip);
+    const lowDates = onSaleLowDates(trip);
     if (seatMessage) {
       lines.push(seatMessage);
+    } else if (lowDates.length > 0) {
+      lines.push(`Цөөн суудалтай өдөр: ${lowDates.slice(0, 3).map((date) => shortDate(date)).join(", ")}`);
     }
     lines.push("");
   }

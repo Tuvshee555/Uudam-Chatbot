@@ -33,3 +33,19 @@ export function withBookableDepartureDates(trip: TravelTrip, now = new Date()): 
   return { ...trip, departure_dates: dates,
     status };
 }
+
+/** Flagged "few seats left" on this one date (website status ALMOST_FULL) and still bookable. */
+export function departureIsLow(row: DepartureAvailability): boolean {
+  return row.status === "ALMOST_FULL" && !departureIsClosed(row);
+}
+
+/** Upcoming dates staff flagged "few seats left" — never inferred from a count. */
+export function lowSeatDates(trip: TravelTrip, today = new Date().toISOString().slice(0, 10)): Set<string> {
+  return new Set(departureAvailability(trip).filter((row) => row.date >= today && departureIsLow(row)).map((row) => row.date));
+}
+
+/** How a bookable date's availability reads in a reply: "захиалга нээлттэй" or, when flagged, "цөөн суудал үлдсэн". */
+export function openDateWording(availability: { seatsLeft: number | null; low?: boolean }): string {
+  if (availability.low) return `захиалга нээлттэй, цөөн суудал үлдсэн${availability.seatsLeft !== null ? ` (${availability.seatsLeft})` : ""}`;
+  return `захиалга нээлттэй${availability.seatsLeft !== null ? `, ${availability.seatsLeft} суудал үлдсэн` : ""}`;
+}

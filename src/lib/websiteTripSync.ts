@@ -11,6 +11,7 @@ import type { TravelTrip } from "./travelTypes";
 import { sameDatabase, websiteProjectionTransaction } from "./websiteSyncTransaction";
 import { applyWebsiteDetailsPatch, mergeWebsiteContent, websiteDetailsSnapshot } from "./websiteTripDetails";
 import { sameParityValue } from "./tripWebsiteParityValue";
+import { departureSeatsAfterTripEdit } from "./departureSeats";
 
 let pool: Pool | undefined;
 function bookingPool() {
@@ -203,8 +204,14 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
         status: departure.status, seatsLeft: departure.seatsLeft,
       }, record(prior?.sourceMetadata).canonicalOffers);
       return { ...availability,
-        status: reopened ? "OPEN" : availability.status,
-        seatsLeft: seatsChanged ? source.seats_left : availability.seatsLeft,
+        // Re-activating a trip reopens closed dates; a date flagged "few seats" stays flagged.
+        status: reopened && availability.status !== "ALMOST_FULL" ? "OPEN" : availability.status,
+        seatsLeft: departureSeatsAfterTripEdit({
+          tripChanged: seatsChanged,
+          previousTripSeatsLeft: typeof previousSnapshot.seats_left === "number" ? previousSnapshot.seats_left : null,
+          tripSeatsLeft: source.seats_left,
+          rowSeatsLeft: availability.seatsLeft,
+        }),
       };
     }),
   } };
@@ -381,6 +388,31 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   await client.query(`UPDATE "Departure" SET status='CANCELLED' WHERE "tripId"=$1 AND NOT(id=ANY($2::text[]))`, [id, keep]);
   await client.query(`UPDATE "Trip" SET "sourceMetadata"=jsonb_set("sourceMetadata",'{contentConflicts}',$2::jsonb) WHERE id=$1`, [id, JSON.stringify(allConflicts)]);
   return { id, slug, contentConflict: newConflicts.length > 0 };
+}
+
+export type DateSeatState = "open" | "low" | "full";
+
+/**
+ * Sets ONE departure date's seat state straight on the website's departure row
+ * (the row both admins, the website and the bot read), so it is true everywhere
+ * at once. "low" is the status ALMOST_FULL: still bookable, shown as few seats
+ * on that date only. Returns false when the trip has no such live departure.
+ */
+export async function setDepartureSeatState(sourceTripId: string, date: string, state: DateSeatState): Promise<boolean> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const status = state === "low" ? "ALMOST_FULL" : state === "full" ? "SOLD_OUT" : "OPEN";
+  const result = await bookingPool().query(
+    `UPDATE "Departure" d SET status=$3::"DepartureStatus",
+       -- a stale zero count would keep a reopened date sold out
+       "seatsLeft"=CASE WHEN $3 <> 'SOLD_OUT' AND d."seatsLeft"=0 THEN NULL ELSE d."seatsLeft" END
+     FROM "Trip" t
+     WHERE d."tripId"=t.id AND t."sourceTripId"=$1
+       AND (d."startDate" + interval '8 hours')::date = $2::date
+       AND d.status NOT IN ('CANCELLED','DEPARTED')
+     RETURNING d.id`,
+    [sourceTripId, date, status],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 export async function flushWebsiteSync(tripId?: string, limit = 5) {

@@ -11,7 +11,7 @@ export type WebsiteDeparture = {
   price: number | null;
   childPrice: number | null;
   infantPrice: number | null;
-  status: "OPEN" | "SOLD_OUT" | "PAUSED" | "CANCELLED";
+  status: "OPEN" | "ALMOST_FULL" | "SOLD_OUT" | "PAUSED" | "CANCELLED";
   seatsLeft: number | null;
 };
 export type WebsiteDepartureDate = Pick<WebsiteDeparture, "start" | "end" | "label">;
@@ -63,13 +63,13 @@ function confirmedOpen(availability: OfferAvailability): boolean {
   return availability.status === "open";
 }
 
-function websiteStatus(status: string, seatsLeft: number | null): WebsiteDeparture["status"] {
+function websiteStatus(status: string, seatsLeft: number | null, low = false): WebsiteDeparture["status"] {
   if (status === "sold_out") return "SOLD_OUT";
   if (status === "cancelled" || status === "departed") return "CANCELLED";
   // A missing seat count means staff have not published a count, not that the
   // departure is closed. Keep it selectable unless somebody explicitly pauses
   // or closes that date.
-  if ((status === "open" || status === "unknown") && seatsLeft !== 0) return "OPEN";
+  if ((status === "open" || status === "unknown") && seatsLeft !== 0) return low ? "ALMOST_FULL" : "OPEN";
   return "PAUSED";
 }
 
@@ -186,7 +186,7 @@ export function websiteTripPayload(trip: TravelTrip, schedule: WebsiteDepartureD
       childPrice: primary ? displayAmount(primary.offer, "child", primary.source) : null,
       infantPrice: primary ? displayAmount(primary.offer, "infant", primary.source) : null,
       status: primary && displayAmount(primary.offer, "adult", primary.source) === null && confirmedOpen(availability)
-        ? "PAUSED" : websiteStatus(availability.status, availability.seatsLeft), seatsLeft: availability.seatsLeft,
+        ? "PAUSED" : websiteStatus(availability.status, availability.seatsLeft, availability.low === true), seatsLeft: availability.seatsLeft,
     };
   });
   const primaryDate = departures.find(departure => departure.status === "OPEN" && departure.price !== null)

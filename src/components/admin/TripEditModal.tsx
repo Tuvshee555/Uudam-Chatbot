@@ -1,5 +1,6 @@
 import React from "react";
 import { DayMealToggles, DayPhotoPreview } from "./ItineraryDayControls";
+import { DateSeatsEditor } from "./DateSeatsEditor";
 import { WebsiteTripFields, TripTextComparison } from "./WebsiteTripFields";
 import { Button, DatePicker, Icons, Input, Modal, Select, Spinner, Textarea, cx } from "@/components/ui";
 import { getPosterBrochureHref } from "@/lib/poster/pdfUrl";
@@ -844,13 +845,10 @@ export function TripEditModal({
           value={tripDraft.seats_left}
           onChange={(e) => setTripDraft((p) => ({ ...p, seats_left: e.target.value }))}
         />
-        <Input
-          label="Үлдсэн суудлын хувь"
-          inputMode="numeric"
-          placeholder="ж: 30"
-          value={tripDraft.seats_percent_left || ""}
-          onChange={(e) => setTripDraft((p) => ({ ...p, seats_percent_left: e.target.value.replace(/[^\d]/g, "").slice(0, 3) }))}
-        />
+        <p className="text-xs text-ink-subtle sm:col-span-2">
+          Эдгээр нь бүх аялалд хамаарах нийт тоо. Үлдсэн суудлыг 0 болговол бүх өдөр дүүрнэ.
+          Нэг өдөрт «Цөөн суудал» гэж тэмдэглэхийг «Огноо бүрийн суудал» хэсгээс хийнэ.
+        </p>
         <Select
           label="Хямдралын тэмдэг"
           value={tripDraft.sale_badge_enabled || "false"}
@@ -1151,7 +1149,7 @@ export function TripEditModal({
           )),
         }));
       }} />
-
+      {!isNewTrip && editingTrip && apiFetch && <DateSeatsEditor trip={editingTrip} apiFetch={apiFetch} />}
 
       {tripPriceGroups.length > 0 && <details className="mt-5 border-t border-line pt-3"><summary className="cursor-pointer text-sm text-ink-muted">Үндсэн насны тохиргоо</summary><div className="mt-3 grid gap-3 sm:grid-cols-3">
         <Input label="Том хүний нас" value={tripDraft.age_adult || ""} onChange={(e) => setTripDraft((current) => ({ ...current, age_adult: e.target.value }))} />

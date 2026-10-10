@@ -4,7 +4,7 @@ import { buildTripRequest, mergeTripSelection, type TripRequest, type TripSelect
 import { normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard, renderTripOfferReply, type TripOfferResult } from "./tripOffers";
 import { evaluateTripRequirement, tripTransport, type TripRequirement } from "./tripFacts";
 import { tripDurationDays, getTripBrochureAsset, getTripWebsiteLink } from "./travelFastPathsSearch";
-import { departureAvailability, departureIsClosed } from "./departureAvailability";
+import { departureAvailability, departureIsClosed, departureIsLow, openDateWording } from "./departureAvailability";
 import { compactReplyOptions, presentAssistantReply, replyPreferences } from "./chatbotReplyPolicy";
 import { stripTripNamesForIntent } from "./customerTurn";
 
@@ -135,7 +135,7 @@ export function buildTripAnswerPlan(input: {
       }
       if (request.topics.includes("availability")) {
         sections.availability = result.offer.availability.status === "open"
-          ? `${result.offer.date}: захиалга нээлттэй${result.offer.availability.seatsLeft !== null ? `, ${result.offer.availability.seatsLeft} суудал үлдсэн` : ""}.`
+          ? `${result.offer.date}: ${openDateWording(result.offer.availability)}.`
           : `${result.offer.date}: гарах хуваарьтай. Суудлын үлдэгдлийг аяллын зөвлөхөөс тодруулна уу.`;
       }
     } else {
@@ -143,7 +143,7 @@ export function buildTripAnswerPlan(input: {
         const date = selection.date || (dates.length === 1 ? dates[0] : null);
         const availability = date ? offers[0]?.availability.find((row) => row.date === date) : null;
         if (availability && ["open", "unknown"].includes(availability.status)) sections.availability = availability.status === "open"
-          ? `${date}: захиалга нээлттэй${availability.seatsLeft !== null ? `, ${availability.seatsLeft} суудал үлдсэн` : ""}.`
+          ? `${date}: ${openDateWording(availability)}.`
           : `${date}: гарах хуваарьтай. Суудлын үлдэгдлийг аяллын зөвлөхөөс тодруулна уу.`;
       }
       const preview = request.topics.includes("price") && !request.topics.includes("availability") ? stableFarePreview(trip, { ...selection, passengers: pricePassengers }, result, now, intentText) : null;
@@ -161,7 +161,7 @@ export function buildTripAnswerPlan(input: {
   if (request.topics.includes("dates")) {
     sections.dates = scopedDates.length ? `Гарах өдрүүд:\n${compactReplyOptions(scopedDates.map((date) => {
       const row = websiteAvailability.find((entry) => entry.date === date);
-      return `• ${date}${row && departureIsClosed(row) ? " — захиалга хаалттай" : ""}`;
+      return `• ${date}${row && departureIsClosed(row) ? " — захиалга хаалттай" : row && departureIsLow(row) ? " — цөөн суудал" : ""}`;
     }), intentText).join("\n")}` : undefined;
   }
   if (request.topics.includes("duration")) {
