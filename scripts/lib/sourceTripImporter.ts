@@ -22,6 +22,7 @@ export type SourceTripImport = {
   destinations?: string[];
   transportType?: "direct_flight" | "land" | "land_flight" | "cruise";
   category?: string;
+  hotelLinks?: Array<{ name: string; url: string }>;
   hotel?: string;
   photoQueries: string[];
   days: Array<{
@@ -217,6 +218,7 @@ export async function importSourceTrip(input: SourceTripImport) {
       original_title_text: input.title,
       destinations: input.destinations || [],
       transport_type: input.transportType || "land_flight",
+      hotel_links: input.hotelLinks || [],
       website_departure_availability: input.dates.map((date) => ({
         date,
         status: "OPEN",
