@@ -1,4 +1,6 @@
 /** Pure catalog audit. No normalization, persistence, or inferred passenger defaults. */
+import { itineraryEndsInUlaanbaatar, itineraryStartsInUlaanbaatar } from "./tripItineraryBoundaries";
+
 export type TripFactInput = {
   id?: unknown;
   route_name?: unknown;
@@ -126,6 +128,27 @@ export function auditTripFacts(trip: TripFactInput, now = new Date()): TripFactA
   }
   if (trip.departure_dates != null && !Array.isArray(trip.departure_dates)) {
     add("invalid_date_list", "error", ["departure_dates"], "departure_dates must be an array of dates or recurring schedules.", trip.departure_dates);
+  }
+
+  const itinerary = rows(extra.itinerary_days);
+  if (itinerary.length > 0 && !itineraryStartsInUlaanbaatar(itinerary[0])) {
+    add(
+      "itinerary_missing_ulaanbaatar_start",
+      "error",
+      ["extra.itinerary_days[0]"],
+      "Өдөр 1 Улаанбаатараас эхэлж, гадагш хөдөлж буйг тодорхой бичнэ үү.",
+      [text(trip.id), text(itinerary[0].title), text(itinerary[0].description)],
+    );
+  }
+  if (itinerary.length > 0 && !itineraryEndsInUlaanbaatar(itinerary[itinerary.length - 1])) {
+    const last = itinerary.length - 1;
+    add(
+      "itinerary_missing_ulaanbaatar_end",
+      "error",
+      [`extra.itinerary_days[${last}]`],
+      "Сүүлийн өдөр Улаанбаатар эсвэл Чингис Хаан нисэх буудалд ирж аялал өндөрлөж буйг тодорхой бичнэ үү.",
+      [text(trip.id), text(itinerary[last].title), text(itinerary[last].description)],
+    );
   }
 
   function dates(value: unknown, path: string): CalendarDate[] {
