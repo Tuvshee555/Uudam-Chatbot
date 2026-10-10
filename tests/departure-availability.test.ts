@@ -27,8 +27,9 @@ test("date-specific price and seat questions explain full status and suggest ano
   const result = withBookableDepartureDates(trip, new Date("2027-10-01"));
   for (const builder of [buildDepartureUnavailableReply, buildStructuredTripReply, buildSeatsReply]) {
     const reply = builder("Вэлмор Кардан 10 сарын 8 үнэ хэд вэ", [result]);
-    assert.match(reply || "", /2027-10-08 — Суудал дүүрсэн/);
-    assert.match(reply || "", /Нээлттэй гарах өдрүүд: 2027-10-15/);
+    // Same short date format as the trip card; a date about a year out keeps its year.
+    assert.match(reply || "", /(?:2027\.10\.8|10\/8) — Суудал дүүрсэн/);
+    assert.match(reply || "", /Нээлттэй гарах өдрүүд: (?:2027\.10\.15|10\/15)/);
   }
   assert.equal(buildDepartureUnavailableReply("Вэлмор Кардан 10 сарын 15 үнэ", [result]), null);
   assert.equal(buildDepartureUnavailableReply("Вэлмор Кардан 2028-10-08 үнэ", [result]), null);

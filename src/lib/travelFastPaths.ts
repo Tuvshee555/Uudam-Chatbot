@@ -15,6 +15,7 @@ import { buildPassengerTotalReply } from "./passengerTotalReply";
 import { departureAvailability, departureIsClosed } from "./departureAvailability";
 import { buildHotelReply } from "./tripHotelReply";
 import { buildPlaceDaysReply } from "./tripPlaceDaysReply";
+import { buildFareSection, onSaleDepartureText, shortDate } from "./tripFareBlock";
 import {
   buildDepartureDateAvailabilityReply,
   filterFutureDepartureDates,
@@ -463,13 +464,23 @@ function buildTripInfoReply(rawTrip: TravelTrip, now = new Date()) {
     lines.push(`🗓 Хугацаа: ${infoDuration}`, "");
   }
 
-  const priceBlock = formatTripBasePricePremium(trip, now);
-  lines.push(priceBlock);
-
-  const departureText = formatCompactDepartureList(trip.departure_dates).trim();
-  const showDepartureSection = Boolean(departureText && !priceBlock.includes(departureText));
-  if (showDepartureSection) {
-    lines.push("", `📅 Гарах өдрүүд:`, departureText);
+  // Prices and dates come from the canonical resolver (tripFareBlock.ts), the
+  // same one the reply checker uses, so the card can no longer be rejected as
+  // contradicting itself. The raw-field block stays only for trips without
+  // dated fares (weekly "<гараг> бүр" schedules).
+  const fareSection = buildFareSection(rawTrip, now);
+  let showDepartureSection = false;
+  if (fareSection) {
+    lines.push(...fareSection);
+    showDepartureSection = fareSection.includes("📅 Гарах өдрүүд:");
+  } else {
+    const priceBlock = formatTripBasePricePremium(trip, now);
+    lines.push(priceBlock);
+    const departureText = formatCompactDepartureList(trip.departure_dates).trim();
+    showDepartureSection = Boolean(departureText && !priceBlock.includes(departureText));
+    if (showDepartureSection) {
+      lines.push("", `📅 Гарах өдрүүд:`, departureText);
+    }
   }
 
   const seatMessage = getSeatSalesMessage(trip);
@@ -1385,9 +1396,11 @@ export function buildDepartureUnavailableReply(text: string, trips: TravelTrip[]
     dates.some((date) => row.date.slice(5) === `${String(date.month).padStart(2, "0")}-${String(date.day).padStart(2, "0")}`));
   if (!closed) return null;
   const wording = closed.status === "SOLD_OUT" || closed.seatsLeft === 0 ? "Суудал дүүрсэн" : "Захиалга авах боломжгүй";
-  const open = departureAvailability(match.trip).filter((row) => !departureIsClosed(row) && row.date >= new Date().toISOString().slice(0, 10));
-  return [`${match.trip.route_name}`, `${closed.date} — ${wording}.`,
-    open.length ? `Нээлттэй гарах өдрүүд: ${open.map((row) => row.date).join(", ")}` : "Өөр гарах өдрийг аяллын зөвлөхөөс тодруулъя."].join("\n");
+  // The open dates come from the same on-sale list as the trip card: sorted,
+  // without departed or copied-year dates (it used to print every raw row).
+  const open = onSaleDepartureText(match.trip);
+  return [`${match.trip.route_name}`, `${shortDate(closed.date)} — ${wording}.`,
+    open && !open.startsWith("Ойрын") ? `Нээлттэй гарах өдрүүд: ${open}` : "Өөр гарах өдрийг аяллын зөвлөхөөс тодруулъя."].join("\n");
 }
 
 export function buildSoldOutPrecedenceReply(text: string, trips: TravelTrip[]): string | null {

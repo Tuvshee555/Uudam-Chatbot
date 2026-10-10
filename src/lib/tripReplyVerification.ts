@@ -3,11 +3,17 @@ import type { TripSelection } from "./tripRequest";
 import { guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, isReferReply } from "./reply";
 import { tripDurationDays } from "./travelFastPathsSearch";
 import { tripTransport, isTripOfferPrice } from "./tripFacts";
-import { normalizeTripOffers, resolveTripOffer } from "./tripOffers";
+import { normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard } from "./tripOffers";
 import { parseDepartureDateText } from "./travelDates";
 import { departureAvailability, departureIsClosed } from "./departureAvailability";
 
 const AMOUNT = /(\d{1,3}(?:[.,]\d{3})+|\d{4,})\s*(?:₮|төгрөг|MNT)/giu;
+
+/** "2-12 нас" / "2 – 12 нас" → "2-12нас"; "" when there is no band. */
+function bandKey(text: string): string {
+  const match = /(\d{1,2})\s*[-–]\s*(\d{1,2})\s*(нас|сар|years?|months?)?/i.exec(text);
+  return match ? `${match[1]}-${match[2]}${/сар|month/i.test(match[3] || "") ? "сар" : "нас"}` : "";
+}
 
 /** Shared final check for AI and code-generated replies in both channels. */
 export function verifyTripReply(input: {
@@ -25,12 +31,16 @@ export function verifyTripReply(input: {
   let active = trips;
   let date = selection?.date || null;
   let hotel = selection?.hotel || null;
+  // A header listing several departures ("12/19, 12/22:") scopes the fare lines under it.
+  let dateSet: string[] = [];
   for (const line of reply.split(/\r?\n|[|;]/)) {
     const named = trips.filter((trip) => line.includes(trip.route_name));
     if (named.length) { active = named; date = selection?.tripId === named[0].id ? selection.date : null; hotel = selection?.tripId === named[0].id ? selection.hotel : null; }
     const dates = parseDepartureDateText(line, now);
-    if (dates.length === 1) date = dates[0];
-    const hotels = active.flatMap((trip) => normalizeTripOffers(trip, now).map((offer) => offer.hotel)).filter((value): value is string => Boolean(value));
+    if (dates.length === 1) { date = dates[0]; dateSet = []; } else if (dates.length > 1) { date = null; dateSet = dates; }
+    // Longest name first: "Lotus + Pearl" must not be read as "Lotus" (same rule as mentionedOfferHotel).
+    const hotels = active.flatMap((trip) => normalizeTripOffers(trip, now).map((offer) => offer.hotel))
+      .filter((value): value is string => Boolean(value)).sort((a, b) => b.length - a.length);
     const mentioned = hotels.find((value) => line.toLowerCase().includes(value.toLowerCase()));
     if (mentioned) hotel = mentioned;
     for (const fragment of line.split(/(?=том\s*хүн|насанд\s*хүрэгч|adult|нярай|infant|хүүх(?:эд|дийн)|child)/i)) {
@@ -43,10 +53,25 @@ export function verifyTripReply(input: {
       // customer who tapped that trip got silence (2026-10-09). The upper end
       // still sits inside the band, so a 2-5 band quoted at the 6-11 fare fails.
       const age = ageMatch ? [ageMatch[0], ageMatch[2] ?? ageMatch[1]] as const : null;
+      // A band printed exactly as one of the trip's own fares ("Хүүхэд /2-12 нас/:
+      // 3,250,000₮") is that fare. Turning the band into one age broke wherever a
+      // trip's bands touch ("2-12" next to "12+", "0-2" next to "2-8").
+      const printedBand = ageMatch?.[2] ? bandKey(ageMatch[0]) : null;
       if (kind && amounts.length) {
         for (const amount of amounts) {
+          // Asked of the resolver, so a hotel row that inherits the trip's infant
+          // fare is judged exactly as the card that printed it was built.
+          const ownFare = printedBand !== null && active.some((trip) => {
+            const departures = date ? [date] : dateSet.length ? dateSet : [...new Set(normalizeTripOffers(trip, now).flatMap((offer) => offer.dates))];
+            return departures.some((departure) => {
+              const card = resolveTripOfferFareCard(trip, { date: departure, ...(hotel ? { hotel } : {}) }, now);
+              return card.status === "ready" && card.offer.fares.some((fare) => fare.kind === kind && bandKey(fare.ageRange || "") === printedBand
+                && (fare.fare.kind === "exact" || fare.fare.kind === "free") && fare.fare.amount === amount);
+            });
+          });
+          if (ownFare) continue;
           const supported = active.some((trip) => {
-            const possibleDates = date ? [date] : [...new Set(normalizeTripOffers(trip, now).flatMap((offer) => offer.dates))];
+            const possibleDates = date ? [date] : dateSet.length ? dateSet : [...new Set(normalizeTripOffers(trip, now).flatMap((offer) => offer.dates))];
             if (!possibleDates.length) {
               return normalizeTripOffers(trip, now).some((offer) => (!hotel || offer.hotel === hotel) && offer.fares.some((fare) => fare.kind === kind && (fare.fare.kind === "exact" || fare.fare.kind === "free") && fare.fare.amount === amount));
             }

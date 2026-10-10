@@ -8,6 +8,7 @@
 import { filterFutureDepartureDates, isPlaceholderDepartureText, parseDepartureDateText, type ResolvedDepartureDate } from "./travelDates";
 import { formatPriceRange } from "./priceRange";
 import { resolveTripOffer, resolveTripOfferFareCard, type PassengerKind, type ResolvedTripOffer } from "./tripOffers";
+import { buildFarePriceLines, onSaleDepartureText } from "./tripFareBlock";
 import type { TravelTrip } from "./travelOps";
 import {
   withFutureDepartureDates,
@@ -125,9 +126,11 @@ export function isLandFlightCombo(trip: TravelTrip) {
   );
 }
 
-export function formatDepartureDates(trip: TravelTrip) {
+export function formatDepartureDates(trip: TravelTrip, now = new Date()) {
   if (!trip.departure_dates.length) return "Гарах өдрийн мэдээлэл одоогоор баталгаажаагүй байна.";
-  return trip.departure_dates.join(", ");
+  // Bookable departures from the canonical resolver; the raw list (past,
+  // sold-out and ISO dates) only for weekly schedules it cannot date.
+  return onSaleDepartureText(trip, now) ?? trip.departure_dates.join(", ");
 }
 
 export function formatRouteName(routeName: string) {
@@ -1267,7 +1270,10 @@ export function formatExtraFeesLine(trip: TravelTrip): string {
 }
 
 export function formatTripBasePricePremium(trip: TravelTrip, now = new Date()) {
-  const priceBlock = formatTripBasePricePremiumCore(trip, now);
+  // Same canonical fares as the trip card and the reply checker (tripFareBlock.ts);
+  // the raw-field reader below is only for trips without dated fares.
+  const shared = buildFarePriceLines(trip, now);
+  const priceBlock = shared ? shared.lines.join("\n") : formatTripBasePricePremiumCore(trip, now);
   const feesLine = formatExtraFeesLine(trip);
   return feesLine ? `${priceBlock}\n${feesLine}` : priceBlock;
 }

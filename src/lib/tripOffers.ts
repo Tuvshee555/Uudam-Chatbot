@@ -273,8 +273,23 @@ function discountInfo(raw: Row, now: Date): CanonicalTripOffer["discount"] {
   return { condition, validFrom, validUntil, active: (!validFrom || boundaryMet(validFrom, false)) && (!validUntil || boundaryMet(validUntil, true)) };
 }
 
+// Every price answer and the reply checker resolve many dates per trip; parsing
+// the raw trip each time made one card take seconds. The view depends only on
+// the trip object and the time (a discount can expire at a set hour), so it is
+// computed once per trip per minute; every lookup in one reply shares it.
+const offerCache = new WeakMap<TravelTrip, { minute: number; offers: CanonicalTripOffer[] }>();
+
 /** Pure catalog view; raw catalog objects are never rewritten or repaired. */
 export function normalizeTripOffers(trip: TravelTrip, now = new Date()): CanonicalTripOffer[] {
+  const minute = Math.floor(now.getTime() / 60_000);
+  const cached = offerCache.get(trip);
+  if (cached && cached.minute === minute) return cached.offers;
+  const offers = computeTripOffers(trip, now);
+  offerCache.set(trip, { minute, offers });
+  return offers;
+}
+
+function computeTripOffers(trip: TravelTrip, now: Date): CanonicalTripOffer[] {
   const extra = trip.extra || {};
   const records: Array<{ source: CanonicalTripOffer["source"]; raw: Row }> = [
     { source: "base", raw: { ...extra, adult_price: trip.adult_price, child_price: trip.child_price, infant_price: trip.infant_price, currency: trip.currency } },

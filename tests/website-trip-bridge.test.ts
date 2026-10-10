@@ -19,7 +19,7 @@ test("website trip updates retain shared facts for chatbot and poster", () => {
     included: ["Нислэг"],
     excluded: ["Хувийн зардал"],
     importantNotes: ["Паспорт"],
-    hotel: "Phoenix",
+    hotel: "Lotus",
     foodIncluded: true,
     departureRule: "Пүрэв гараг бүр",
     isPublished: true,
@@ -27,7 +27,7 @@ test("website trip updates retain shared facts for chatbot and poster", () => {
       { startDate: "2026-10-01T00:00:00.000Z", price: 2_690_000, childPrice: 2_390_000, infantPrice: 490_000, seatsLeft: 8, status: "OPEN" },
       { startDate: "2026-10-29T00:00:00.000Z", price: 3_090_000, childPrice: 2_790_000, infantPrice: 490_000, seatsLeft: 0, status: "SOLD_OUT" },
     ],
-    itinerary: [{ title: "УБ - Саньяа", description: "Нислэг", accommodation: "Phoenix", meals: ["Өглөө"], image: "https://example.com/day.jpg" }],
+    itinerary: [{ title: "УБ - Зандан", description: "Нислэг", accommodation: "Lotus", meals: ["Өглөө"], image: "https://example.com/day.jpg" }],
   });
 
   assert.equal(result.sourceTripId, "trip-web-1");

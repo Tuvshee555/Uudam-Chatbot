@@ -169,9 +169,12 @@ export function isTripOfferPrice(
 export function mentionedOfferHotel(trip: TravelTrip, text: string, now = new Date()): string | null {
   const normalized = normText(text);
   if (!normalized) return null;
+  // Longest name first: "Lotus + Pearl" must not be read as "Lotus",
+  // whose prices differ.
   const hotels = normalizeTripOffers(trip, now)
     .map((offer) => offer.hotel)
-    .filter((hotel): hotel is string => Boolean(hotel));
+    .filter((hotel): hotel is string => Boolean(hotel))
+    .sort((a, b) => b.length - a.length);
   return hotels.find((hotel) => {
     const value = normText(hotel);
     return value.length >= 3 && normalized.includes(value);
