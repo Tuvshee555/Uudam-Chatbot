@@ -10,13 +10,28 @@ export type SourceTripImport = {
   sourceUrl: string;
   operator?: string;
   durationText: string;
+  durationDays?: number;
+  durationNights?: number;
   dates: string[];
   adultPrice?: number | null;
   childPrice?: number | null;
   infantPrice?: number | null;
+  adultAge?: string;
+  childAge?: string;
+  infantAge?: string;
+  destinations?: string[];
+  transportType?: "direct_flight" | "land" | "land_flight" | "cruise";
+  category?: string;
   hotel?: string;
   photoQueries: string[];
-  days: Array<{ title: string; description: string }>;
+  days: Array<{
+    title: string;
+    description: string;
+    activities?: string[];
+    meals?: { breakfast?: boolean; lunch?: boolean; dinner?: boolean };
+    hotel?: string;
+    flight?: string | null;
+  }>;
   includes?: string[];
   excludes?: string[];
   reviewReasons?: string[];
@@ -111,11 +126,22 @@ async function pickPhotos(queries: string[], count = 6): Promise<Photo[]> {
 }
 
 function priceTable(input: SourceTripImport) {
-  const rows = [];
-  if (typeof input.adultPrice === "number") rows.push({ dates: "Том хүн", cells: ["Том хүн", `${input.adultPrice.toLocaleString("mn-MN")}₮`] });
-  if (typeof input.childPrice === "number") rows.push({ dates: "Хүүхэд", cells: ["Хүүхэд", `${input.childPrice.toLocaleString("mn-MN")}₮`] });
-  if (typeof input.infantPrice === "number") rows.push({ dates: "Нярай", cells: ["Нярай", `${input.infantPrice.toLocaleString("mn-MN")}₮`] });
-  return rows.length ? { columns: ["Ангилал", "Үнэ"], rows } : null;
+  if (![input.adultPrice, input.childPrice, input.infantPrice].some((price) => typeof price === "number")) return null;
+  const columns = [
+    "Хугацаа",
+    `Том хүн ${input.adultAge || "12+ нас"}`,
+    `Хүүхэд ${input.childAge || "2-12 нас"}`,
+    `Нярай ${input.infantAge || "0-2 нас"}`,
+  ];
+  const rows = input.dates.map((date) => ({
+    dates: date,
+    cells: [
+      typeof input.adultPrice === "number" ? `${input.adultPrice.toLocaleString("mn-MN")}₮` : "-",
+      typeof input.childPrice === "number" ? `${input.childPrice.toLocaleString("mn-MN")}₮` : "-",
+      typeof input.infantPrice === "number" ? `${input.infantPrice.toLocaleString("mn-MN")}₮` : "-",
+    ],
+  }));
+  return { columns, rows };
 }
 
 function posterData(input: SourceTripImport, photos: Photo[]) {
@@ -125,6 +151,10 @@ function posterData(input: SourceTripImport, photos: Photo[]) {
     operator: input.operator || "Global Travel Corporation",
     duration: input.durationText,
     duration_text: input.durationText,
+    duration_days: input.durationDays,
+    duration_nights: input.durationNights,
+    destinations: input.destinations || [],
+    transport_type: input.transportType,
     departures: input.dates.map((date) => ({ date })),
     currency: "MNT",
     adult_price: input.adultPrice ?? null,
@@ -137,9 +167,11 @@ function posterData(input: SourceTripImport, photos: Photo[]) {
       day: index + 1,
       route: day.title,
       summary: day.description,
+      activities: day.activities || [],
       photo: photos[(index + 1) % photos.length].url,
-      meals: { breakfast: "Багтсан", lunch: "Багтаагүй", dinner: "Багтаагүй" },
-      hotel: input.hotel || "",
+      meals: day.meals || { breakfast: false, lunch: false, dinner: false },
+      hotel: day.hotel ?? input.hotel ?? "",
+      flight: day.flight ?? null,
     })),
     includes: input.includes || [
       "Олон улсын нислэг",
@@ -176,17 +208,34 @@ export async function importSourceTrip(input: SourceTripImport) {
     hotel: input.hotel || "",
     has_food: true,
     status: "active",
+    category: input.category || "газар + нислэг хосолсон",
     photo_urls: photos.map((photo) => photo.url),
     source_description: input.sourceUrl,
     extra: {
       poster_trip_id: input.posterId,
       source_urls: [input.sourceUrl],
       original_title_text: input.title,
+      destinations: input.destinations || [],
+      transport_type: input.transportType || "land_flight",
+      website_departure_availability: input.dates.map((date) => ({
+        date,
+        status: "OPEN",
+        seatsLeft: null,
+      })),
+      ...(input.durationDays !== undefined ? { duration_days: input.durationDays } : {}),
+      ...(input.durationNights !== undefined ? { duration_nights: input.durationNights } : {}),
       brochure_pdf_required: true,
       needs_human_review: Boolean(input.reviewReasons?.length),
       review_reasons: input.reviewReasons || [],
       photo_repair_sources: photos,
-      itinerary_days: input.days.map((day, index) => ({ day: index + 1, title: day.title, description: day.description })),
+      itinerary_days: input.days.map((day, index) => ({
+        day: index + 1,
+        title: day.title,
+        description: day.description,
+        ...(day.hotel ? { hotel: day.hotel } : {}),
+        meals: day.meals || { breakfast: false, lunch: false, dinner: false },
+        photo: photos[(index + 1) % photos.length].url,
+      })),
       included_items: input.includes || [],
       excluded_items: input.excludes || [],
     },

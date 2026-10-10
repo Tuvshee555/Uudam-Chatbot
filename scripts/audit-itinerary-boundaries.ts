@@ -1,5 +1,7 @@
-import { closeNeonPool, withNeonClient } from "../src/lib/neonDb";
+import { loadEnvConfig } from "@next/env";
 import { itineraryEndsInUlaanbaatar, itineraryStartsInUlaanbaatar } from "../src/lib/tripItineraryBoundaries";
+
+loadEnvConfig(process.cwd());
 
 type Day = {
   day?: unknown;
@@ -15,6 +17,7 @@ function text(day: Day | undefined) {
 }
 
 async function main() {
+  const { withNeonClient } = await import("../src/lib/neonDb");
   const rows = await withNeonClient(async (client) => {
     await client.query("BEGIN READ ONLY");
     try {
@@ -87,4 +90,7 @@ main()
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   })
-  .finally(() => closeNeonPool());
+  .finally(async () => {
+    const { closeNeonPool } = await import("../src/lib/neonDb");
+    await closeNeonPool();
+  });
