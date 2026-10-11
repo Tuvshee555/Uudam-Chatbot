@@ -34,7 +34,7 @@ import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceW
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { dbGetRecentAdminMessages, getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply } from "../../lib/travelFastPaths";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply } from "../../lib/travelFastPaths";
 import { extractTripPhotosForReply } from "../../lib/welcomeFlow";
 import { buildReplyMedia } from "../../lib/replyMediaPolicy";
 import { CONTACT_OPERATOR_LABEL, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
@@ -758,6 +758,22 @@ export default async function handler(
       // trip it is must never get a DIFFERENT trip's price stated back as if
       // it matched. When no trip's price matches, hand off rather than let
       // the model improvise a nearby-priced trip.
+      // A message that is only a price pasted from an advert: same as the webhook.
+      if (isBarePriceMessage(normalizedText)) {
+        const trips = await getTrips();
+        const barePriceReply = buildBarePriceReply(normalizedText, trips);
+        if (barePriceReply) {
+          const safeReply = appendLeadCaptureCta(
+            enforceWebsiteForPayment(sanitizeAssistantReply(barePriceReply)),
+            phoneAlreadyRequested,
+          );
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
+          recordCounter("demo.bare_price_fast_path_total", 1, {});
+          return res.status(200).json({ reply: safeReply, buttons: buildSmartButtons(safeReply, trips) || [] });
+        }
+      }
       if (hasStandalonePriceLookupIntent(intentText)) {
         const trips = await getTrips();
         const priceLookupReply = buildStandalonePriceLookupReply(await getFastPathText(), trips);

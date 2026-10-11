@@ -103,6 +103,30 @@ export function onSaleLowDates(trip: TravelTrip, now = new Date()): string[] {
   return upcomingDepartures(trip, now).filter((date) => low.has(date));
 }
 
+/**
+ * Trips that sell some fare at exactly this price on an upcoming bookable date,
+ * with the fare's label ("Том хүн", "Хүүхэд /2-11 нас/") and the dates it applies
+ * to. Read from the same fare lines the card prints, so the reply checker agrees.
+ */
+export function tripsAtPrice(trips: TravelTrip[], price: number, now = new Date()): Array<{ trip: TravelTrip; label: string; dates: string[] }> {
+  const amount = `${price.toLocaleString("en-US")}₮`;
+  const found: Array<{ trip: TravelTrip; label: string; dates: string[] }> = [];
+  for (const trip of trips) {
+    if (trip.status !== "active") continue;
+    const groups = onSaleFareGroups(trip, upcomingDepartures(trip, now).slice(0, 16), now);
+    let label = "";
+    const dates: string[] = [];
+    for (const group of groups) {
+      const line = group.lines.find((entry) => entry.startsWith("• ") && entry.endsWith(`: ${amount}`));
+      if (!line) continue;
+      label ||= line.slice(2, line.lastIndexOf(":"));
+      dates.push(...group.dates);
+    }
+    if (label) found.push({ trip, label, dates: [...new Set(dates)].sort() });
+  }
+  return found;
+}
+
 /** Every upcoming departure the canonical resolver knows for this trip. */
 export function upcomingDepartures(trip: TravelTrip, now = new Date()): string[] {
   const today = todayInUb(now);

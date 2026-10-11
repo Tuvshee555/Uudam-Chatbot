@@ -15,7 +15,7 @@ import { buildPassengerTotalReply } from "./passengerTotalReply";
 import { departureAvailability, departureIsClosed } from "./departureAvailability";
 import { buildHotelReply } from "./tripHotelReply";
 import { buildPlaceDaysReply } from "./tripPlaceDaysReply";
-import { buildFareSection, onSaleDepartureText, onSaleLowDates, shortDate } from "./tripFareBlock";
+import { buildFareSection, onSaleDepartureText, onSaleLowDates, shortDate, tripsAtPrice } from "./tripFareBlock";
 import {
   buildDepartureDateAvailabilityReply,
   filterFutureDepartureDates,
@@ -800,51 +800,53 @@ export function hasStandalonePriceLookupIntent(text: string): boolean {
   );
 }
 
+/**
+ * True when the whole message is just a price ("4,990,000", "5.89 сая", "3 сая 990",
+ * "2,690,000₮ аялал"): what a customer pastes straight from an advert. Anything
+ * else around the number (a date, a place, a question) is a different message.
+ */
+export function isBarePriceMessage(text: string): boolean {
+  if (extractNormalizedPrice(text) === null) return false;
+  const rest = normText(text)
+    .replace(/\d+(?:[.,]\d+)*/g, " ")
+    .replace(/[₮.,:;!?()\-–—]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((word) => !BARE_PRICE_FILLER.has(word));
+  return rest.length === 0;
+}
+const BARE_PRICE_FILLER = new Set(["аялал", "аяллын", "аяллууд", "үнэ", "үнэтэй", "төгрөг", "мнт", "mnt", "сая", "саяын", "саяд", "aylal", "une"]);
+
+/**
+ * The trips that have exactly this price, or null. A bare price with no exact
+ * match returns null and changes nothing: it is not a lookup the bot can answer,
+ * so it goes on to the other paths instead of being handed to staff.
+ */
+export function buildBarePriceReply(text: string, trips: TravelTrip[]): string | null {
+  if (!isBarePriceMessage(text)) return null;
+  return priceLookupReply(extractNormalizedPrice(text) as number, trips);
+}
+
 export function buildStandalonePriceLookupReply(text: string, trips: TravelTrip[]): string | null {
   if (!hasStandalonePriceLookupIntent(text)) return null;
   const price = extractNormalizedPrice(text);
   if (price === null) return null;
+  return priceLookupReply(price, trips);
+}
 
-  const matches: Array<{ trip: TravelTrip; label: string }> = [];
-  const seen = new Set<string>();
-  const add = (trip: TravelTrip, label: string, value: number | null | undefined) => {
-    if (typeof value !== "number" || value !== price || seen.has(trip.id)) return;
-    seen.add(trip.id);
-    matches.push({ trip, label });
-  };
-
-  for (const trip of trips) {
-    if (trip.status !== "active") continue;
-    add(trip, "Том хүн", trip.adult_price);
-    add(trip, "Хүүхэд", trip.child_price);
-
-    for (const group of getStructuredPriceGroups(trip)) {
-      for (const value of getPriceValuesFromGroup(group, "adult")) {
-        add(trip, value.kind === "child" ? "Хүүхэд" : value.kind === "infant" ? "Нярай" : "Том хүн", value.value);
-      }
-    }
-    for (const group of getPriceGroups(trip)) {
-      for (const value of getPriceValuesFromGroup(group, "adult")) {
-        add(trip, value.kind === "child" ? "Хүүхэд" : value.kind === "infant" ? "Нярай" : "Том хүн", value.value);
-      }
-    }
-    for (const discount of getStructuredDiscounts(trip)) {
-      for (const value of getPriceValuesFromGroup(discount, "discount")) {
-        add(trip, value.kind === "discount" ? "Хямдрал" : value.kind === "child" ? "Хүүхэд" : "Том хүн", value.value);
-      }
-    }
-  }
-
+function priceLookupReply(price: number, trips: TravelTrip[]): string | null {
+  // Fares come from the shared resolver-based writer (tripFareBlock.ts), the same
+  // one the reply checker reads: the raw-field version quoted prices and dates the
+  // checker rejected, so a customer pasting an advertised price got silence.
+  const matches = tripsAtPrice(trips, price);
   if (matches.length === 0) return null;
   const priceText = formatMoney(price, "MNT") || `${price}`;
   const lines = [`${priceText} үнэтэй тохирох аяллууд:`];
-  for (const { trip, label } of matches.slice(0, 6)) {
+  for (const { trip, label, dates } of matches.slice(0, 6)) {
     const duration = safeDurationText(trip.duration_text);
     const parts = [`• ${trip.route_name}`, label];
     if (duration) parts.push(duration);
-    if (trip.departure_dates.length > 0) {
-      parts.push(`гарах: ${formatCompactDepartureList(trip.departure_dates)}`);
-    }
+    if (dates.length) parts.push(`гарах: ${dates.slice(0, 6).map((date) => shortDate(date)).join(", ")}${dates.length > 6 ? " …" : ""}`);
     lines.push(parts.join(" — "));
   }
   if (matches.length > 6) lines.push(`... нийт ${matches.length} тохирол байна.`);
