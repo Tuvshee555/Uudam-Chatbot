@@ -614,6 +614,9 @@ export default async function handler(
             allowLooseFallback: false,
           });
           if (resolution.status === "ambiguous" && resolution.candidates.length > 1) {
+            // Mirrors the webhook fix: remember exactly the list shown, so a
+            // numbered/named answer on the next turn resolves against it.
+            await setClarificationState(sessionId, resolution.candidates.map((trip) => trip.id));
             const totalReply = buildAmbiguousPassengerTotalReply(fastPathText, resolution.candidates);
             const clarifyReply = enforceWebsiteForPayment(
               sanitizeAssistantReply(totalReply || buildAmbiguousTripReply(resolution.candidates)),
@@ -842,6 +845,9 @@ export default async function handler(
                 allowLooseFallback: false,
               })
             : null;
+          if (programResolution?.status === "ambiguous") {
+            await setClarificationState(sessionId, programResolution.candidates.map((trip) => trip.id));
+          }
           const buttons =
             programResolution?.status === "ambiguous"
               ? buildClarificationButtons(programResolution.candidates)
@@ -894,6 +900,9 @@ export default async function handler(
                 allowLooseFallback: false,
               })
             : null;
+          if (structuredResolution?.status === "ambiguous") {
+            await setClarificationState(sessionId, structuredResolution.candidates.map((trip) => trip.id));
+          }
           return res.status(200).json({
             reply: safeReply,
             buttons: structuredReply.includes(AMBIGUOUS_REPLY_MARKER)

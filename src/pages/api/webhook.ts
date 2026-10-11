@@ -1307,6 +1307,12 @@ async function handleMessage(
         allowLooseFallback: false,
       });
       if (resolution.status === "ambiguous" && resolution.candidates.length > 1) {
+        // The list about to be shown must be exactly what the NEXT turn's
+        // numbered/named answer is checked against. Without this, two real
+        // customers typed "2. <the option's own name, copied verbatim>" and
+        // got silence: nothing had remembered the list had ever been offered
+        // (found replaying 2026-10-08..11 chats).
+        await setClarificationState(senderId, resolution.candidates.map((trip) => trip.id));
         const totalReply = buildAmbiguousPassengerTotalReply(fastPathText, resolution.candidates);
         await deliverFastPathReply({
           reply: enforceWebsiteForPayment(
@@ -1509,6 +1515,12 @@ async function handleMessage(
       const programResolution = programReply.reply.includes(AMBIGUOUS_REPLY_MARKER)
         ? resolveTripFromUserMessage(programFastPathText, trips, { allowLooseFallback: false })
         : null;
+      // Same reasoning as structured_clarify/structured_trip_fast_path below:
+      // whatever list is actually shown must be what the next numbered/named
+      // answer is checked against.
+      if (programResolution?.status === "ambiguous") {
+        await setClarificationState(senderId, programResolution.candidates.map((trip) => trip.id));
+      }
       const programButtons =
         programResolution?.status === "ambiguous"
           ? buildClarificationButtons(programResolution.candidates)
@@ -1607,6 +1619,14 @@ async function handleMessage(
             allowLooseFallback: false,
           })
         : null;
+      // This is the list the customer actually sees — remember it so a
+      // numbered or named answer on the next turn resolves against it, the
+      // same fix as structured_clarify and program_fast_path above (found
+      // replaying 2026-10-08..11 chats: two customers answered a list from
+      // this exact block and got silence).
+      if (structuredResolution?.status === "ambiguous") {
+        await setClarificationState(senderId, structuredResolution.candidates.map((trip) => trip.id));
+      }
       // A "which trip?" list is checked line by line against the trips it names.
       // Checking it against only the routed trip rejected every other line, and
       // a park name got silence because a second trip also visits that park.
