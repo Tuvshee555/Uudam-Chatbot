@@ -132,7 +132,7 @@ test("known closed/conflicting departures are never advertised as upcoming booka
     ] } });
     const result = listing("аяллууд", [value]);
     assert.ok(!result.reply.includes("2026-12-17"));
-    assert.match(result.reply, /гарах: 2026-12-20/);
+    assert.match(result.reply, /гарах: 12 сарын 20/);
   }
   const closed = listing("аяллууд", [trip(0, { seats_left: 0 })]);
   assert.ok(!closed.reply.includes("гарах:"));
@@ -158,7 +158,7 @@ test("expired departures are excluded using Mongolia's day boundary while today 
   const result = buildCatalogListingReply("аяллууд", [value], now);
   assert.ok(result);
   assert.ok(!result.reply.includes("2026-10-03"));
-  assert.match(result.reply, /гарах: 2026-10-04, 2026-10-05/);
+  assert.match(result.reply, /гарах: 10 сарын 4, 10 сарын 5/);
 });
 
 test("active trips with all departures closed use neutral compact and grouped headings", () => {
@@ -177,4 +177,19 @@ test("catalog and reply-policy modules load in either order without a new runtim
     const result = spawnSync(process.execPath, ["--import", "tsx", "--eval", code], { encoding: "utf8", env: process.env });
     assert.equal(result.status, 0, result.stderr);
   }
+});
+
+test("a plain \"нислэгтэй аялал\" question lists the direct-flight trips instead of reaching the model", () => {
+  const trips = [trip(0), trip(1, { category: "Газрын аялал", route_name: "Занданзуу0 газрын аялал", extra: { transport_type: "land" } })];
+  for (const text of ["Уб-аас нислэгтэй аялал бн уу", "нислэгтэй аялал байна уу", "nislegtei aylal bn uu"]) {
+    const result = listing(text, trips);
+    assert.deepEqual(result.listed.map((t) => t.id), ["invented-0"]);
+    assert.match(result.reply, /^Шууд нислэгтэй аяллууд/);
+  }
+});
+
+test("catalog lists write departures as month and day, never ISO", () => {
+  const result = listing("шууд нислэгтэй аяллууд", [trip(0)]);
+  assert.match(result.reply, /гарах: 12 сарын 17/);
+  assert.doesNotMatch(result.reply, /\d{4}-\d{2}-\d{2}/);
 });

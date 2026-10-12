@@ -8,7 +8,8 @@
 import { filterFutureDepartureDates, isPlaceholderDepartureText, parseDepartureDateText, type ResolvedDepartureDate } from "./travelDates";
 import { formatPriceRange } from "./priceRange";
 import { resolveTripOffer, resolveTripOfferFareCard, type PassengerKind, type ResolvedTripOffer } from "./tripOffers";
-import { buildFarePriceLines, onSaleDepartureText } from "./tripFareBlock";
+import { buildFarePriceLines, onSaleDepartureText, upcomingDepartures } from "./tripFareBlock";
+import { verifyTripReply } from "./tripReplyVerification";
 import type { TravelTrip } from "./travelOps";
 import {
   withFutureDepartureDates,
@@ -1672,7 +1673,12 @@ const NOT_ON_SALE = new Set(["sold_out", "paused", "cancelled", "unavailable", "
  * whole "which trip?" question became silence plus a paused customer.
  */
 function listedFaresAndDates(trip: TravelTrip): { fares: ListedFares | null; dates: string[]; soldOut?: boolean } {
-  const future = withFutureDepartureDates(trip).departure_dates.slice(0, 8);
+  // The dated departures come from the same resolver the reply checker uses, so a
+  // line can never print a date the checker does not know (a cancelled or copied
+  // date made it reject the whole list). Weekly schedules ("Ням гараг бүр") have no
+  // calendar dates and keep the trip's own text.
+  const dated = upcomingDepartures(trip).slice(0, 8);
+  const future = dated.length ? dated : withFutureDepartureDates(trip).departure_dates.slice(0, 8);
   // A sold-out or closed departure is not on sale: listing it with a price made
   // the verifier reject the whole list, and the customer got silence.
   const upcoming = future.filter((date) => {
@@ -1729,7 +1735,10 @@ export function buildAmbiguousTripReply(
       upcoming.length ? `гарах: ${upcoming.map(customerDate).join(", ")}` : "",
       listed.soldOut ? "суудал дүүрсэн" : "",
     ].filter(Boolean);
-    return `• ${trip.route_name}${details.length ? ` — ${details.join(" · ")}` : ""}`;
+    const line = `• ${trip.route_name}${details.length ? ` — ${details.join(" · ")}` : ""}`;
+    // A line the checker would reject is cut back to the trip's name: a name-only
+    // line is always true, and a rejected list meant silence for the customer.
+    return details.length && verifyTripReply({ reply: line, trips: [trip] }) !== line ? `• ${trip.route_name}` : line;
   });
   return [
     // Same-name duplicates collapse to one line upstream; "several options"

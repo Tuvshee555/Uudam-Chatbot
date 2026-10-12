@@ -87,14 +87,14 @@ export function inventedPipelineInputs() {
   });
   add("closed-departure", "Тармиз 2026-12-22 суудал, үнэ?", { trips: ["T4"], date: "2026-12-22", topics: ["price", "availability"] }, {
     ...na, wrong_trip: { allOf: [closed.route_name] },
-    incorrect_availability: { allOf: ["2026-12-22", "суудал дүүрсэн"], noneOf: ["захиалга нээлттэй", "суудал үлдсэн"] },
-    ignored_constraint: { allOf: ["2026-12-22"] }, needless_clarification: { action: "answer" },
+    incorrect_availability: { allOf: ["12 сарын 22", "суудал дүүрсэн"], noneOf: ["захиалга нээлттэй", "суудал үлдсэн"] },
+    ignored_constraint: { allOf: ["12 сарын 22"] }, needless_clarification: { action: "answer" },
     unanswered: { allOf: ["суудал дүүрсэн"], action: "answer" },
   });
   add("unknown-seats", "Лумиа 2026-12-23 суудал байгаа юу?", { trips: ["T5"], date: "2026-12-23", topics: ["availability"] }, {
     ...na, wrong_trip: { allOf: [unknown.route_name] },
     incorrect_availability: { allOf: ["Суудлын үлдэгдлийг"], noneOf: ["захиалга нээлттэй", "суудал үлдсэн"] },
-    needless_clarification: { action: "answer" }, unanswered: { action: "answer", allOf: ["2026-12-23"] },
+    needless_clarification: { action: "answer" }, unanswered: { action: "answer", allOf: ["12 сарын 23"] },
   });
   add("conversation-offer", "Нерит 2026-12-20 Nerith House B үнэ?", { trips: ["T3"], date: "2026-12-20", hotel: "Nerith House B", topics: ["price", "hotel"] }, hotelChecks, "conversation", "offer-followup", "offer-followup", 1);
   add("conversation-total", "2 том хүн, 6 настай нэг хүүхэд нийт хэд вэ?", { trips: ["T3"], topics: ["price"], passengers }, {

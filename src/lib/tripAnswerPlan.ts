@@ -7,6 +7,7 @@ import { tripDurationDays, getTripBrochureAsset, getTripWebsiteLink } from "./tr
 import { departureAvailability, departureIsClosed, departureIsLow, openDateWording } from "./departureAvailability";
 import { compactReplyOptions, presentAssistantReply, replyPreferences } from "./chatbotReplyPolicy";
 import { stripTripNamesForIntent } from "./customerTurn";
+import { buildOptionalExtrasReply } from "./tripExtrasReply";
 
 export type TripAnswerPlan = {
   status: "answered" | "clarify" | "handoff";
@@ -26,6 +27,12 @@ const records = (value: unknown): Record<string, unknown>[] => Array.isArray(val
 const today = (now: Date) => new Date(now.getTime() + 8 * 3_600_000).toISOString().slice(0, 10);
 const TRANSPORT = { direct_flight: "Шууд нислэгтэй аялал.", land: "Газрын аялал.", land_flight: "Газар + нислэг хосолсон аялал.", cruise: "Усан онгоцны аялал." };
 
+/** "2026-11-05" → "11 сарын 5": customers read dates the way staff write them, not as ISO. */
+function mnDate(value: string): string {
+  const iso = /^\d{4}-(\d{2})-(\d{2})$/.exec(value);
+  return iso ? `${Number(iso[1])} сарын ${Number(iso[2])}` : value;
+}
+
 function selectionQuestion(result: TripOfferResult, text: string): string | null {
   if (result.status !== "needs_selection") return null;
   const field = result.fields[0];
@@ -34,12 +41,12 @@ function selectionQuestion(result: TripOfferResult, text: string): string | null
       : field === "package" ? "Аль багцыг сонгох вэ?"
         : field === "passengers" ? "Хүүхэд тус бүрийн насыг хэлнэ үү."
           : "Хямдралын нөхцөл танд тохирох эсэхийг тодруулна уу.";
-  return [question, ...compactReplyOptions(result.options, text).map((option) => `• ${option}`)].join("\n");
+  return [question, ...compactReplyOptions(result.options, text).map((option) => `• ${field === "date" ? mnDate(option) : option}`)].join("\n");
 }
 
 function unavailableText(result: TripOfferResult): string | null {
   if (result.status !== "unavailable") return null;
-  const date = result.date ? `${result.date}: ` : "";
+  const date = result.date ? `${mnDate(result.date)}: ` : "";
   switch (result.reason) {
     case "sold_out": return `${date}суудал дүүрсэн.`;
     case "paused": return `${date}захиалга түр хаалттай.`;
@@ -81,6 +88,13 @@ export function buildTripAnswerPlan(input: {
   const intentText = stripTripNamesForIntent(input.text, trips);
   const preferences = replyPreferences(intentText);
   const request = buildTripRequest(input.text, trips, route.understanding, now);
+  const extrasReply = buildOptionalExtrasReply(trip, intentText);
+  if (extrasReply) {
+    return {
+      status: "answered", tripId: trip.id, selection: mergeTripSelection(trip.id, request, route.selection || null), request,
+      reply: extrasReply, offer: null, answeredTopics: request.topics, missingTopics: [], mediaUrls: [], brochureUrl: null,
+    };
+  }
   if (!request.topics.length || request.topics.some((topic) => ["comparison", "budget"].includes(topic))) return null;
   if (request.topics.includes("weather") && !input.weatherReply) return null;
   const selection = mergeTripSelection(trip.id, request, route.selection || null);
@@ -135,16 +149,16 @@ export function buildTripAnswerPlan(input: {
       }
       if (request.topics.includes("availability")) {
         sections.availability = result.offer.availability.status === "open"
-          ? `${result.offer.date}: ${openDateWording(result.offer.availability)}.`
-          : `${result.offer.date}: гарах хуваарьтай. Суудлын үлдэгдлийг аяллын зөвлөхөөс тодруулна уу.`;
+          ? `${mnDate(result.offer.date)}: ${openDateWording(result.offer.availability)}.`
+          : `${mnDate(result.offer.date)}: гарах хуваарьтай. Суудлын үлдэгдлийг аяллын зөвлөхөөс тодруулна уу.`;
       }
     } else {
       if (request.topics.includes("availability") && result.status === "missing" && result.reason === "fare_missing" && offers.every((offer) => offer.source === "base")) {
         const date = selection.date || (dates.length === 1 ? dates[0] : null);
         const availability = date ? offers[0]?.availability.find((row) => row.date === date) : null;
         if (availability && ["open", "unknown"].includes(availability.status)) sections.availability = availability.status === "open"
-          ? `${date}: ${openDateWording(availability)}.`
-          : `${date}: гарах хуваарьтай. Суудлын үлдэгдлийг аяллын зөвлөхөөс тодруулна уу.`;
+          ? `${mnDate(date ?? "")}: ${openDateWording(availability)}.`
+          : `${mnDate(date ?? "")}: гарах хуваарьтай. Суудлын үлдэгдлийг аяллын зөвлөхөөс тодруулна уу.`;
       }
       const preview = request.topics.includes("price") && !request.topics.includes("availability") ? stableFarePreview(trip, { ...selection, passengers: pricePassengers }, result, now, intentText) : null;
       if (preview) sections.price = preview;
@@ -161,7 +175,7 @@ export function buildTripAnswerPlan(input: {
   if (request.topics.includes("dates")) {
     sections.dates = scopedDates.length ? `Гарах өдрүүд:\n${compactReplyOptions(scopedDates.map((date) => {
       const row = websiteAvailability.find((entry) => entry.date === date);
-      return `• ${date}${row && departureIsClosed(row) ? " — захиалга хаалттай" : row && departureIsLow(row) ? " — цөөн суудал" : ""}`;
+      return `• ${mnDate(date)}${row && departureIsClosed(row) ? " — захиалга хаалттай" : row && departureIsLow(row) ? " — цөөн суудал" : ""}`;
     }), intentText).join("\n")}` : undefined;
   }
   if (request.topics.includes("duration")) {

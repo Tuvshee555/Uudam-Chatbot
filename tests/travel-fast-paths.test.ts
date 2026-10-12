@@ -120,9 +120,11 @@ test("appendLeadCaptureCta does not double-ask when reply already requests a pho
 });
 
 test("structured reply asks for clarification on shared city-only query", () => {
+  // The list prices the next departure by the real clock, so the fixtures leave on a date that is always ahead.
+  const departs = [new Date(Date.now() + 45 * 864e5).toISOString().slice(0, 10)];
   const reply = buildStructuredTripReply("Surmak une hed ve?", [
-    trip({ id: "surmak-felmor", route_name: "Surmak Felmor аялал", adult_price: 1490000 }),
-    trip({ id: "surmak-anmor", route_name: "Surmak Anmor аялал", adult_price: 1790000 }),
+    trip({ id: "surmak-felmor", route_name: "Surmak Felmor аялал", adult_price: 1490000, departure_dates: departs }),
+    trip({ id: "surmak-anmor", route_name: "Surmak Anmor аялал", adult_price: 1790000, departure_dates: departs }),
   ]);
 
   assert.match(reply || "", /Аль аяллыг нь сонирхож/i);

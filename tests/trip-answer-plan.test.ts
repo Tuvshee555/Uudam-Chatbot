@@ -194,11 +194,11 @@ test("a program link does not dump an itinerary, but an explicit full program ke
 test("date menus stay within the asked month and disclose other dates rather than flooding", () => {
   const departure_dates = ["2026-10-08", "2026-10-15", "2026-10-22", "2026-10-29", "2026-11-05"];
   const compact = buildTripAnswerPlan({ text: "10 сард гарах өдрүүд", trips: [trip({ departure_dates })], route: route(), now });
-  assert.doesNotMatch(compact!.reply, /2026-11-05|2026-10-29/);
+  assert.doesNotMatch(compact!.reply, /11 сарын 5|10 сарын 29/);
   assert.match(compact!.reply, /Өөр 1 сонголт/);
   const full = buildTripAnswerPlan({ text: "10 сард гарах бүх өдрүүд", trips: [trip({ departure_dates })], route: route(), now });
-  assert.match(full!.reply, /2026-10-29/);
-  assert.doesNotMatch(full!.reply, /2026-11-05/);
+  assert.match(full!.reply, /10 сарын 29/);
+  assert.doesNotMatch(full!.reply, /11 сарын 5/);
 });
 
 test("unknown infant fare does not produce an answered date-only price card", () => {

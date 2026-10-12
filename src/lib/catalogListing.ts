@@ -45,6 +45,12 @@ function nextDepartures(trip: TravelTrip, now: Date): string[] {
   return [...allowed].sort().slice(0, 2);
 }
 
+/** "2026-10-15" → "10 сарын 15", the way every other reply writes a date. */
+function customerDate(ymd: string): string {
+  const iso = /^\d{4}-(\d{2})-(\d{2})$/.exec(ymd);
+  return iso ? `${Number(iso[1])} сарын ${Number(iso[2])}` : ymd;
+}
+
 function soonestKey(trip: TravelTrip, now: Date): string {
   return nextDepartures(trip, now)[0] || "9999";
 }
@@ -78,7 +84,7 @@ function detailLine(trip: TravelTrip, now: Date): string {
   const details = [
     trip.duration_text?.trim() || "",
     price,
-    dates.length ? `гарах: ${dates.join(", ")}` : "",
+    dates.length ? `гарах: ${dates.map(customerDate).join(", ")}` : "",
   ].filter(Boolean);
   return `• ${trip.route_name}${details.length ? ` — ${details.join(" · ")}` : ""}`;
 }
@@ -94,7 +100,7 @@ function renderListing(pool: TravelTrip[], heading: string, limit: number, now: 
     const category = trip.category?.trim() || "Бусад аялал";
     const dates = nextDepartures(trip, now);
     const additions = grouped
-      ? [...(category !== previousCategory ? ["", `${category}:`] : []), `• ${trip.route_name}${dates.length ? ` — ${dates[0]}` : ""}`]
+      ? [...(category !== previousCategory ? ["", `${category}:`] : []), `• ${trip.route_name}${dates.length ? ` — ${customerDate(dates[0])}` : ""}`]
       : [detailLine(trip, now)];
     if ([...lines, ...additions, ...footer(listed.length + 1)].join("\n").length > MAX_MESSAGE_CHARS) break;
     lines.push(...additions);
@@ -163,12 +169,22 @@ function categoryHeading(text: string): string {
   return "Газрын аяллууд";
 }
 
+// "Уб-аас нислэгтэй аялал бн уу": a customer who says only "нислэгтэй" (with a
+// flight from Ulaanbaatar in mind) wants the trips that fly. Without this the
+// question reached the model, which listed 3 of the 11 direct-flight trips.
+const PLAIN_FLIGHT_RE = /(?:^|\s)(?:нислэгтэй|nislegtei|nisleg\s*tei)(?:\s|$)/i;
+function withFlightIntent(text: string): string {
+  if (queryWantsDirectFlight(text) || queryWantsLandFlightCombo(text) || queryWantsLandOnlyEnhanced(text)) return text;
+  return PLAIN_FLIGHT_RE.test(normText(text)) ? `шууд нислэгтэй ${text}` : text;
+}
+
 /**
  * The catalog answer, or null when the message is not a catalog question.
  * The caller must also check that the conversation context does not already
  * identify one trip ("шууд нислэгтэй юу?" after a trip card asks about THAT trip).
  */
-export function buildCatalogListingReply(intentText: string, trips: TravelTrip[], now = new Date()): Listing | null {
+export function buildCatalogListingReply(rawIntentText: string, trips: TravelTrip[], now = new Date()): Listing | null {
+  const intentText = withFlightIntent(rawIntentText);
   const normalized = normText(intentText);
   if (!normalized) return null;
   const active = trips.filter((trip) => trip.status === "active");
