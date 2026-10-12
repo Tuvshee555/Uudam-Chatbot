@@ -119,14 +119,53 @@ function validIso(value: string): boolean {
 
 function hasYear(value: string): boolean { return /\b20\d{2}\b/.test(value); }
 
-function catalogDates(trip: TravelTrip, now: Date): string[] {
+/** The trip's own date list as calendar dates, a yearless one at its frozen year. */
+function ownDates(trip: TravelTrip, now: Date): string[] {
   const frozen = rows(trip.extra?.departure_dates_resolved);
-  const dates = (trip.departure_dates || []).flatMap((text) => {
+  return (trip.departure_dates || []).flatMap((text) => {
     if (hasYear(text)) return parseTripDepartureDateText(text, now);
     const saved = frozen.filter((r) => r.text === text && validIso(str(r.ymd))).map((r) => str(r.ymd));
     return saved.length ? saved : parseTripDepartureDateText(text, now);
   });
-  return unique([...dates, ...rows(trip.extra?.website_departure_availability).map((r) => str(r.date)).filter(validIso)]).sort();
+}
+
+function catalogDates(trip: TravelTrip, now: Date): string[] {
+  const dates = ownDates(trip, now);
+  // A cancelled website row is a date that was taken off the schedule (the sync
+  // closes removed dates that way); it must not come back as a departure. The bot
+  // offered "2026-10-11, 2026-11-01" for a trip that departs 10/31 and 12/30 (2026-10-11).
+  const website = rows(trip.extra?.website_departure_availability)
+    .filter((r) => !["CANCELLED", "DEPARTED"].includes(str(r.status).toUpperCase()))
+    .map((r) => str(r.date)).filter(validIso);
+  return unique(dropYearCopies(trip, now, unique([...dates, ...website]), everListedDates(trip, dates))).sort();
+}
+
+/** Every date the trip ever listed, cancelled and departed website rows and frozen resolutions included. */
+function everListedDates(trip: TravelTrip, listed: string[]): string[] {
+  const website = rows(trip.extra?.website_departure_availability).map((r) => str(r.date));
+  const frozen = rows(trip.extra?.departure_dates_resolved).map((r) => str(r.ymd));
+  return unique([...listed, ...website, ...frozen].filter(validIso));
+}
+
+// An old sync rolled every date into later years, the website published those as
+// OPEN rows and the bridge wrote them back, so one departure showed as "10/22" and
+// "2027-10-22" (a 2026 trip even listed 2028). The trip's own date list decides:
+// - a date in the trip's own list is kept, and its same day in a later year is a copy;
+// - any other day keeps only the first year it was ever listed in.
+// A trip with no date list of its own (website-only) is left as published.
+function dropYearCopies(trip: TravelTrip, now: Date, dates: string[], reference = dates): string[] {
+  const own = trip.departure_dates || [];
+  if (!own.length) return dates;
+  const typed = new Set(ownDates(trip, now));
+  const today = now.toISOString().slice(0, 10);
+  // The earliest year a day was ever listed (cancelled or departed rows count: a
+  // departed 2026 date is the original, its 2027 twin the copy).
+  const first = new Map<string, string>();
+  for (const ymd of [...reference, ...typed].sort()) if (!first.has(ymd.slice(5))) first.set(ymd.slice(5), ymd);
+  return dates.filter((ymd) => {
+    if (typed.has(ymd) || ymd < today) return true;
+    return (first.get(ymd.slice(5)) || ymd) >= ymd;
+  });
 }
 
 function offerDates(raw: Row, trip: TravelTrip, now: Date): { dates: string[]; dateScoped: boolean; issues: string[] } {
@@ -158,7 +197,9 @@ function offerDates(raw: Row, trip: TravelTrip, now: Date): { dates: string[]; d
       return known.length ? known : [date];
     });
   });
-  return { dates: unique(dates).sort(), dateScoped: dated, issues: unique(issues) };
+  // Price rows carry the same copied-year dates; the trip's own catalog decides
+  // which year a yearless departure is.
+  return { dates: dropYearCopies(trip, now, unique(dates), everListedDates(trip, catalog)).sort(), dateScoped: dated, issues: unique(issues) };
 }
 
 /** Inclusive completed ages: 2-11 years covers months 24 through 143. */

@@ -269,3 +269,20 @@ test("an undated overview does not combine different date fares, hotels, or age 
   if (unresolved.status === "needs_selection") assert.deepEqual(unresolved.fields, ["hotel"]);
   assert.equal(summarizeTripOfferPrices(hotels, { hotel: "Alpha" }, NOW).status, "ready");
 });
+
+test("a cancelled website date is not a departure", () => {
+  const value = trip({ departure_dates: ["2026-10-31", "2026-12-30"], extra: { website_departure_availability: [
+    { date: "2026-10-31", status: "OPEN" }, { date: "2026-11-01", status: "CANCELLED" }, { date: "2026-10-11", status: "DEPARTED" },
+  ] } });
+  assert.deepEqual(normalizeTripOffers(value, NOW)[0].dates, ["2026-10-31", "2026-12-30"]);
+});
+
+test("a yearless date is one departure: its rolled-forward copies in later years are dropped", () => {
+  const value = trip({ departure_dates: ["10 сарын 22", "11 сарын 5"], extra: {
+    departure_dates_resolved: [{ ymd: "2026-10-22", text: "10 сарын 22" }, { ymd: "2026-11-05", text: "11 сарын 5" }],
+    website_departure_availability: [
+      { date: "2026-10-08", status: "CANCELLED" }, { date: "2026-10-22", status: "OPEN" }, { date: "2026-11-05", status: "OPEN" },
+      { date: "2027-10-08", status: "OPEN" }, { date: "2027-10-22", status: "OPEN" }, { date: "2027-11-05", status: "OPEN" },
+    ] } });
+  assert.deepEqual(normalizeTripOffers(value, NOW)[0].dates, ["2026-10-22", "2026-11-05"]);
+});
