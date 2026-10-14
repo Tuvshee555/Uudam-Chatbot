@@ -62,7 +62,7 @@ export function inventedPipelineInputs() {
   const hotelChecks: AccuracyCase["checks"] = {
     ...na, wrong_trip: { allOf: [hotel.route_name], noneOf: [direct.route_name] },
     wrong_price: { allOf: ["3,000,000", "2,000,000"], noneOf: ["3,500,000", "2,500,000", "500,000"] },
-    ignored_constraint: { allOf: ["2026-12-20", "Nerith House B"], noneOf: ["Nerith House A", "2026-12-21"] },
+    ignored_constraint: { allOf: ["12 сарын 20", "Nerith House B"], noneOf: ["Nerith House A", "12 сарын 21"] },
     needless_clarification: { action: "answer" }, unanswered: { action: "answer", allOf: ["3,000,000"] },
   };
   const cases: AccuracyCase[] = [];
@@ -72,7 +72,7 @@ export function inventedPipelineInputs() {
     modelOutputs[id] = JSON.stringify({ intent: "trip", ...model });
   }
   add("direct-multi-topic", "Вэлмор 2026-12-17 үнэ, хугацаа, нислэг?", { trips: ["T1"], date: "2026-12-17", topics: ["price", "duration", "transport"] }, {
-    ...directChecks, ignored_constraint: { allOf: ["2026-12-17", "8 өдөр", "Шууд нислэгтэй"] },
+    ...directChecks, ignored_constraint: { allOf: ["12 сарын 17", "8 өдөр", "Шууд нислэгтэй"] },
     incorrect_availability: { allOf: ["Суудлын үлдэгдлийг"], noneOf: ["захиалга нээлттэй", "суудал үлдсэн"] },
   });
   add("duration-narrows-model-picks", "Вэлмор 8 хоногийн аяллын үнэ?", { trips: ["T1", "T2", "T99"], days: [8, 8], topics: ["price", "duration"] }, {

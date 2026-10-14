@@ -1,4 +1,5 @@
 import { parseTripDepartureDateText } from "./travelDates";
+import { customerDate } from "./customerDate";
 import type { TravelTrip } from "./travelTypes";
 
 export type PassengerKind = "adult" | "child" | "infant";
@@ -579,10 +580,15 @@ export function renderTripOfferReply(result: TripOfferResult, options: { fareKin
   if (result.status !== "ready") return null;
   const { offer } = result;
   const labels = { adult: "Том хүн", child: "Хүүхэд", infant: "Нярай" };
-  const lines = [offer.date, offer.hotel].filter(Boolean) as string[];
+  const lines = [customerDate(offer.date), offer.hotel].filter(Boolean) as string[];
   if (offer.passengerPrices.length) {
     for (const p of offer.passengerPrices) lines.push(`${labels[p.kind]}${p.ageRange ? ` (${p.ageRange})` : ""} x ${p.count}: ${renderFare(p.fare, offer.currency)}`);
   } else for (const f of offer.fares.filter((fare) => !options.fareKinds?.length || options.fareKinds.includes(fare.kind))) {
+    // The same fare listed twice, once bare and once with its age band ("Хүүхэд: 2,590,000₮"
+    // beside "Хүүхэд (2-11 нас): 2,590,000₮"), reads as two prices: keep the one with the band.
+    const bareTwin = !f.ageRange && offer.fares.some((other) => other !== f && other.kind === f.kind && other.ageRange
+      && renderFare(other.fare, offer.currency) === renderFare(f.fare, offer.currency));
+    if (bareTwin) continue;
     if (f.fare.kind !== "unknown") lines.push(`${labels[f.kind]}${f.ageRange ? ` (${f.ageRange})` : ""}: ${renderFare(f.fare, offer.currency)}`);
   }
   if (!offer.passengerPrices.length && options.fareKinds?.length && !offer.fares.some((fare) => options.fareKinds!.includes(fare.kind) && fare.fare.kind !== "unknown")) return null;

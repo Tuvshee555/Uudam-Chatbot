@@ -10,6 +10,7 @@ import { formatPriceRange } from "./priceRange";
 import { resolveTripOffer, resolveTripOfferFareCard, type PassengerKind, type ResolvedTripOffer } from "./tripOffers";
 import { buildFarePriceLines, onSaleDepartureText, upcomingDepartures } from "./tripFareBlock";
 import { verifyTripReply } from "./tripReplyVerification";
+import { customerDate } from "./customerDate";
 import type { TravelTrip } from "./travelOps";
 import {
   withFutureDepartureDates,
@@ -1707,12 +1708,6 @@ function listedFaresAndDates(trip: TravelTrip): { fares: ListedFares | null; dat
   return { fares, dates: upcoming.filter((date) => date === upcoming[0] || sameFares(card(date))).slice(0, 3) };
 }
 
-/** "2026-10-08" → "10 сарын 8", as every other reply writes dates; other text unchanged. */
-function customerDate(date: string): string {
-  const iso = /^\d{4}-(\d{2})-(\d{2})$/.exec(date);
-  return iso ? `${Number(iso[1])} сарын ${Number(iso[2])}` : date;
-}
-
 export function buildAmbiguousTripReply(
   trips: TravelTrip[],
   heading?: string,
@@ -1732,7 +1727,7 @@ export function buildAmbiguousTripReply(
       adultText ? `том хүн ${adultText}` : "",
       childText ? `хүүхэд ${childText}` : "",
       infantText ? `нярай ${infantText}` : "",
-      upcoming.length ? `гарах: ${upcoming.map(customerDate).join(", ")}` : "",
+      upcoming.length ? `гарах: ${upcoming.map((date) => customerDate(date)).join(", ")}` : "",
       listed.soldOut ? "суудал дүүрсэн" : "",
     ].filter(Boolean);
     const line = `• ${trip.route_name}${details.length ? ` — ${details.join(" · ")}` : ""}`;

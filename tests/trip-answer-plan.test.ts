@@ -226,11 +226,11 @@ test("an age-specific unit-fare follow-up preserves context without quoting the 
 test("a month-specific date menu never mixes different years", () => {
   const t = trip({ departure_dates: ["2026-10-08", "2027-10-08", "2027-01-08", "2028-01-08"] });
   const october = buildTripAnswerPlan({ text: "2026 оны 10 сард гарах бүх өдрүүд", trips: [t], route: route(), now })!;
-  assert.match(october.reply, /2026-10-08/);
-  assert.doesNotMatch(october.reply, /2027-10-08/);
+  assert.match(october.reply, /10 сарын 8/);
+  assert.doesNotMatch(october.reply, /2027 оны 10 сарын 8/);
   const january = buildTripAnswerPlan({ text: "1 сард гарах бүх өдрүүд", trips: [t], route: route(), now })!;
-  assert.match(january.reply, /2027-01-08/);
-  assert.doesNotMatch(january.reply, /2028-01-08/);
+  assert.match(january.reply, /1 сарын 8/);
+  assert.doesNotMatch(january.reply, /2028 оны 1 сарын 8/);
 });
 
 test("a new month fare question replaces the stale selected departure", () => {
@@ -250,4 +250,23 @@ test("a scoped month with no schedule does not quote the old selected offer", ()
   assert.equal(november.status, "handoff");
   assert.equal(november.reply, "REFER");
   assert.equal(november.selection.date, null);
+});
+
+test("a date menu offers only departures that can still be booked", () => {
+  const t = trip({ departure_dates: ["2026-10-13", "2026-10-20", "2026-10-27"], extra: { website_departure_availability: [
+    { date: "2026-10-13", status: "OPEN", seatsLeft: 5 }, { date: "2026-10-20", status: "SOLD_OUT", seatsLeft: 0 }, { date: "2026-10-27", status: "OPEN", seatsLeft: 4 },
+  ] } });
+  const plan = buildTripAnswerPlan({ text: "2 том хүн хэд вэ", trips: [t], route: route(), now })!;
+  assert.match(plan.reply, /10 сарын 13/);
+  assert.match(plan.reply, /10 сарын 27/);
+  assert.doesNotMatch(plan.reply, /10 сарын 20/);
+});
+
+test("a fare listed bare and with its age band prints once, with the band", () => {
+  const t = trip({ departure_dates: ["2026-10-22"], extra: { age_rules: { adult: "12+ нас", child: "2-11 нас", infant: "0-1 нас" }, price_groups: [
+    { dates: ["2026-10-22"], adult_price: 2_990_000, child_price: 2_590_000, passenger_prices: [{ label: "Хүүхэд", age_range: "2-11 нас", price: 2_590_000 }] },
+  ] } });
+  const plan = buildTripAnswerPlan({ text: "10 сарын 22 үнэ", trips: [t], route: route(), now })!;
+  assert.equal((plan.reply.match(/Хүүхэд/g) || []).length, 1, plan.reply);
+  assert.match(plan.reply, /Хүүхэд \(2-11 нас\): 2,590,000₮/);
 });

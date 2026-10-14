@@ -23,6 +23,7 @@ import {
   tripIsCruise,
 } from "./travelFastPaths";
 import { normalizeTripOffers, summarizeTripOfferPrices } from "./tripOffers";
+import { customerDate } from "./customerDate";
 import type { TravelTrip } from "./travelTypes";
 
 const WHOLE_CATALOG_RE =
@@ -43,12 +44,6 @@ function nextDepartures(trip: TravelTrip, now: Date): string[] {
   const allowed = new Set(availability.filter((row) => row.date >= today && ["open", "unknown"].includes(row.status)).map((row) => row.date));
   for (const row of availability) if (!["open", "unknown"].includes(row.status)) allowed.delete(row.date);
   return [...allowed].sort().slice(0, 2);
-}
-
-/** "2026-10-15" → "10 сарын 15", the way every other reply writes a date. */
-function customerDate(ymd: string): string {
-  const iso = /^\d{4}-(\d{2})-(\d{2})$/.exec(ymd);
-  return iso ? `${Number(iso[1])} сарын ${Number(iso[2])}` : ymd;
 }
 
 function soonestKey(trip: TravelTrip, now: Date): string {
@@ -84,7 +79,7 @@ function detailLine(trip: TravelTrip, now: Date): string {
   const details = [
     trip.duration_text?.trim() || "",
     price,
-    dates.length ? `гарах: ${dates.map(customerDate).join(", ")}` : "",
+    dates.length ? `гарах: ${dates.map((date) => customerDate(date, now)).join(", ")}` : "",
   ].filter(Boolean);
   return `• ${trip.route_name}${details.length ? ` — ${details.join(" · ")}` : ""}`;
 }
@@ -100,7 +95,7 @@ function renderListing(pool: TravelTrip[], heading: string, limit: number, now: 
     const category = trip.category?.trim() || "Бусад аялал";
     const dates = nextDepartures(trip, now);
     const additions = grouped
-      ? [...(category !== previousCategory ? ["", `${category}:`] : []), `• ${trip.route_name}${dates.length ? ` — ${customerDate(dates[0])}` : ""}`]
+      ? [...(category !== previousCategory ? ["", `${category}:`] : []), `• ${trip.route_name}${dates.length ? ` — ${customerDate(dates[0], now)}` : ""}`]
       : [detailLine(trip, now)];
     if ([...lines, ...additions, ...footer(listed.length + 1)].join("\n").length > MAX_MESSAGE_CHARS) break;
     lines.push(...additions);

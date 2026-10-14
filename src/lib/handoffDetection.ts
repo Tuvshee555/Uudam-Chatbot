@@ -24,6 +24,10 @@ export function isFrustratedHandoffRequest(text: string): boolean {
     // WHETHER a human even exists ("хүн байхгүй юу", "хүн алга юм уу").
     /хүн\s*(?:байхгүй|алга|үгүй)\s*(?:юм\s*)?(?:уу|бэ)?/i,
     /робот\s*биш/i,
+    // "Call me if a seat opens": a sold-out departure the customer still wants. Repeating
+    // "суудал дүүрсэн" ignores the request; staff must take it.
+    /суудал\s+(?:гарвал|гарвал|нэмэгдвэл|чөлөөлөгдвөл|гарах\s+бол)[\s\S]{0,40}(?:холбогд|мэдэгд|дуудаарай|залгаарай)/i,
+    /suudal\s+(?:garwal|garval|nemegdvel)[\s\S]{0,40}(?:holbogd|medegd|zalgaarai)/i,
   ].some((pattern) => pattern.test(normalized));
 }
 

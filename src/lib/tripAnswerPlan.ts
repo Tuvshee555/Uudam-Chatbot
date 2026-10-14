@@ -8,6 +8,8 @@ import { departureAvailability, departureIsClosed, departureIsLow, openDateWordi
 import { compactReplyOptions, presentAssistantReply, replyPreferences } from "./chatbotReplyPolicy";
 import { stripTripNamesForIntent } from "./customerTurn";
 import { buildOptionalExtrasReply } from "./tripExtrasReply";
+import { customerDate as mnDate } from "./customerDate";
+import { dateIsOnSale } from "./tripFareBlock";
 
 export type TripAnswerPlan = {
   status: "answered" | "clarify" | "handoff";
@@ -26,12 +28,6 @@ const strings = (value: unknown): string[] => Array.isArray(value) ? value.filte
 const records = (value: unknown): Record<string, unknown>[] => Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object")) : [];
 const today = (now: Date) => new Date(now.getTime() + 8 * 3_600_000).toISOString().slice(0, 10);
 const TRANSPORT = { direct_flight: "Шууд нислэгтэй аялал.", land: "Газрын аялал.", land_flight: "Газар + нислэг хосолсон аялал.", cruise: "Усан онгоцны аялал." };
-
-/** "2026-11-05" → "11 сарын 5": customers read dates the way staff write them, not as ISO. */
-function mnDate(value: string): string {
-  const iso = /^\d{4}-(\d{2})-(\d{2})$/.exec(value);
-  return iso ? `${Number(iso[1])} сарын ${Number(iso[2])}` : value;
-}
 
 function selectionQuestion(result: TripOfferResult, text: string): string | null {
   if (result.status !== "needs_selection") return null;
@@ -72,7 +68,7 @@ function stableFarePreview(trip: TravelTrip, selection: TripSelection, result: T
   if (!cards.length || !signature(cards[0]) || cards.some((card) => signature(card) !== signature(cards[0]))) return null;
   const first = cards[0];
   if (first.status !== "ready") return null;
-  return renderTripOfferReply(first, { fareKinds })?.split("\n").filter((line) => line !== first.offer.date).join("\n") || null;
+  return renderTripOfferReply(first, { fareKinds })?.split("\n").filter((line) => line !== mnDate(first.offer.date)).join("\n") || null;
 }
 
 /** All factual sections are built from the same ID and offer selection. */
@@ -136,6 +132,12 @@ export function buildTripAnswerPlan(input: {
       if (!scopedDates.length) result = { status: "missing", reason: "requested_schedule_missing" };
       else if (result.status === "needs_selection" && result.fields[0] === "date") result = { ...result, options: result.options.filter((date) => scopedDates.includes(date)) };
     }
+    // Offering a sold-out date to choose from ("10 сарын 20", then "суудал дүүрсэн") wastes the
+    // customer's turn; the menu lists only dates that can be booked.
+    if (result.status === "needs_selection" && result.fields[0] === "date") {
+      const bookable = result.options.filter((date) => dateIsOnSale(trip, date, now));
+      if (bookable.length && bookable.length < result.options.length) result = { ...result, options: bookable };
+    }
     const unavailable = unavailableText(result);
     if (unavailable) {
       sections.availability = unavailable;
@@ -160,7 +162,9 @@ export function buildTripAnswerPlan(input: {
           ? `${mnDate(date ?? "")}: ${openDateWording(availability)}.`
           : `${mnDate(date ?? "")}: гарах хуваарьтай. Суудлын үлдэгдлийг аяллын зөвлөхөөс тодруулна уу.`;
       }
-      const preview = request.topics.includes("price") && !request.topics.includes("availability") ? stableFarePreview(trip, { ...selection, passengers: pricePassengers }, result, now, intentText) : null;
+      // "Is there a <trip>?" is answered with the fare as well as the date question when every date sells at one price.
+      const wantsPreview = request.topics.includes("price") ? !request.topics.includes("availability") : request.topics.every((topic) => topic === "availability");
+      const preview = wantsPreview ? stableFarePreview(trip, { ...selection, passengers: pricePassengers }, result, now, intentText) : null;
       if (preview) sections.price = preview;
       const question = selectionQuestion(result, intentText);
       if (question && !preview) {

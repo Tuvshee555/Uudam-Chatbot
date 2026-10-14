@@ -59,6 +59,12 @@ export function shortDate(iso: string, now = new Date()): string {
   return yearAway ? `${y}.${m}.${d}` : `${m}/${d}`;
 }
 
+/** A departure that can still be booked: a sold-out, paused, cancelled or departed date is not. */
+export function dateIsOnSale(trip: TravelTrip, date: string, now = new Date()): boolean {
+  const sale = resolveTripOffer(trip, { date }, now);
+  return !(sale.status === "unavailable" && NOT_ON_SALE.has(sale.reason));
+}
+
 function todayInUb(now: Date): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ulaanbaatar", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
 }

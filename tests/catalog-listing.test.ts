@@ -193,3 +193,9 @@ test("catalog lists write departures as month and day, never ISO", () => {
   assert.match(result.reply, /гарах: 12 сарын 17/);
   assert.doesNotMatch(result.reply, /\d{4}-\d{2}-\d{2}/);
 });
+
+test("\"call me if a seat opens\" is a handoff request, not another sold-out answer", async () => {
+  const { isHandoffRequest } = await import("../src/lib/handoffDetection");
+  for (const text of ["Суудал гарвал холбогдоорой", "суудал гарвал мэдэгдээрэй", "suudal garwal holbogdooroi"]) assert.equal(isHandoffRequest(text, []), true, text);
+  assert.equal(isHandoffRequest("суудал хэд вэ", []), false);
+});
