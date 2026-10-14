@@ -42,6 +42,7 @@ import { fetchThreadMessages, latestStaffReplyAt, STAFF_TAKEOVER_MS } from "../.
 import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBookedCustomer, pauseBot, trackSender } from "../../lib/pause";
+import { pickReferral, rememberAdReferral } from "../../lib/adReferral";
 import { AUTO_PAUSE_RESET_DAYS, createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
 import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply, } from "../../lib/travelFastPaths";
@@ -2211,6 +2212,7 @@ export default async function handler(
                 attachments?: Array<{ type?: string; payload?: { url?: string } }>;
               };
               postback?: { title?: string; payload?: string };
+              referral?: Record<string, unknown>;
             }>;
           }>;
         };
@@ -2378,6 +2380,16 @@ export default async function handler(
                 continue;
               }
               const senderId = String(event.sender.id).trim();
+              // A chat opened from a post's "Send message" button names the ad that
+              // opened it; the trip it is about becomes the selected trip so a first
+              // "1" or "vne" is not guessed. Never blocks or fails the reply.
+              const adReferral = pickReferral(event);
+              if (adReferral && senderId) {
+                await rememberAdReferral({
+                  senderId, platform: payload.object === "instagram" ? "instagram" : "facebook", referral: adReferral,
+                  trips: await listTrips({ limit: 5000 }).catch(() => []), pageToken: PAGE_TOKENS.get(pageId) ?? FALLBACK_TOKEN,
+                });
+              }
               // Postback taps (Get Started button, persistent menu) carry no
               // message.text — they were silently dropped, so a brand-new
               // customer tapping Get Started got nothing. Treat the button
