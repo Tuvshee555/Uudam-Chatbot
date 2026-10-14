@@ -84,6 +84,11 @@ export function websiteAvailabilityForResync(
     .find(row => typeof row.start === "string" && row.start.slice(0, 10) === departure.date) : undefined;
   if (departure.status !== "PAUSED" || departure.seatsLeft !== null
     || projected?.status !== "PAUSED" || projected.seatsLeft !== null) return departure;
+  // We paused this date ourselves because it had no price we could show (none
+  // typed yet, or a currency clash). Reopen it once that is fixed; the fresh
+  // projection pauses it again if it still has no price. A date staff paused
+  // keeps its price in the projection, so it is never reopened here.
+  if (projected.price === null || projected.price === undefined) return { ...departure, status: "OPEN" };
   const entries = Array.isArray(metadata.entries) ? metadata.entries.map(object) : [];
   const availability = entries.filter(entry => object(entry.selection).date === departure.date)
     .map(entry => object(object(object(entry.fareCard).offer).availability))

@@ -69,6 +69,22 @@ test("resync retains unknown availability and can reopen an automatic pause when
   assert.deepEqual(websiteAvailabilityForResync(row, staffPaused.canonicalOffers), row);
 });
 
+test("a date paused only for lacking a price reopens once the price is added", () => {
+  const unpriced = payload({ ...trip, adult_price: null, child_price: null, seats_left: null });
+  assert.equal(unpriced.departures[0].status, "PAUSED");
+  assert.equal(unpriced.departures[0].price, null);
+  const row = { date: "2026-10-01", status: "PAUSED", seatsLeft: null };
+  const reopened = websiteAvailabilityForResync(row, unpriced.canonicalOffers);
+  assert.equal(reopened.status, "OPEN");
+  const priced = payload({ ...trip, seats_left: null, extra: { website_departure_availability: [reopened] } });
+  assert.equal(priced.departures[0].status, "OPEN");
+  assert.equal(priced.departures[0].price, trip.adult_price);
+  // Still no price: the fresh projection pauses it again instead of selling it blind.
+  const stillUnpriced = payload({ ...trip, adult_price: null, child_price: null, seats_left: null,
+    extra: { website_departure_availability: [reopened] } });
+  assert.equal(stillUnpriced.departures[0].status, "PAUSED");
+});
+
 test("website canonical prices keep the full departure year", () => {
   const projected = payload({ ...trip, departure_dates: ["2026-10-01", "2027-10-01"], extra: {
     price_groups: [
