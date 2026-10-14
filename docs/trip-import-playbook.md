@@ -75,10 +75,14 @@ days word for word, and write the days in between in the same style.
 
 **First two days**
 
-1. Title `УЛААНБААТАР – ЗАМЫН ҮҮД`. No hotel, no meals, no photo.
-   "Улаанбаатар төмөр замын буудал дээр 15:30 цагт цугларан 276-р гал тэргээр
-   Замын Үүд хотыг зорино. Энэ өдөр галт тэргэнд хононо. Та бүхэн замын хүнсээ
-   зэхэн аялалдаа гараарай."
+1. Title `УЛААНБААТАР – ЗАМЫН ҮҮД`. No hotel, no meals, no photo. The owner's
+   wording (2026-10-14), exactly:
+   "УБ - Замын Үүд чиглэлийн галт тэрэг 16:40-д хөдлөх бөгөөд 1 цагийн өмнө
+   галт тэрэгний буудал дээр цуглана."
+   Use it on every trip that leaves Ulaanbaatar by this train, including
+   land + flight trips that fly later from China. Not on trips that fly out of
+   Ulaanbaatar. If the source gives a different train time, or day 1 also covers
+   the border crossing, keep the source and ask the owner.
 2. Title `ЗАМЫН ҮҮД – ЭРЭЭН …` (add the next stop). "Өглөө 07:20 цагт Замын Үүдэд
    буугаад автобусанд сууж хил гаалиар нэвтэрнэ. Эрээн хотод ирж …" and then the
    source's own stops, hotel and meals.
