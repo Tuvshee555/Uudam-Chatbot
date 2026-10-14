@@ -102,7 +102,7 @@ test("marketing badge settings normalize and map to website metadata", () => {
     marketing_badge: { sale_enabled: true, sale_label: "SUPER SALE LONG LABEL", seats_percent_left: 130 },
   });
   assert.deepEqual(patch, {
-    marketing_badge: { sale_enabled: true, sale_label: "SUPER SALE LONG LABEL", seats_percent_left: 100 },
+    marketing_badge: { sale_enabled: true, sale_label: "SUPER SALE LONG LABEL", sale_ends_at: null, seats_percent_left: 100 },
   });
   const badge = websiteMarketingBadge({
     ...trip,
@@ -113,8 +113,18 @@ test("marketing badge settings normalize and map to website metadata", () => {
   assert.deepEqual(badge, {
     saleEnabled: true,
     saleLabel: "SUPER SALE LONG LABEL",
+    saleEndsAt: null,
     seatsPercentLeft: 100,
     seatsLeft: 6,
     seatsTotal: 20,
   });
+});
+test("the sale end date is kept when valid, dropped when not, and reaches the website", () => {
+  const kept = normalizeExtraPatch({ marketing_badge: { sale_enabled: true, sale_label: "Sale", sale_ends_at: "2026-10-01" } });
+  assert.equal((kept.marketing_badge as Record<string, unknown>).sale_ends_at, "2026-10-01");
+  assert.equal(websiteMarketingBadge({ ...trip, extra: kept }).saleEndsAt, "2026-10-01");
+  for (const bad of ["10 сарын 1", "2026-10-1", "", 20261001]) {
+    const dropped = normalizeExtraPatch({ marketing_badge: { sale_enabled: true, sale_ends_at: bad } });
+    assert.equal((dropped.marketing_badge as Record<string, unknown>).sale_ends_at, null, `${String(bad)} is not a date`);
+  }
 });

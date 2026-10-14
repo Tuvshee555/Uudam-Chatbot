@@ -863,6 +863,15 @@ export function TripEditModal({
           value={tripDraft.sale_badge_label || ""}
           onChange={(e) => setTripDraft((p) => ({ ...p, sale_badge_label: e.target.value }))}
         />
+        <Input
+          label="Хямдрал дуусах өдөр"
+          type="date"
+          value={tripDraft.sale_badge_ends || ""}
+          onChange={(e) => setTripDraft((p) => ({ ...p, sale_badge_ends: e.target.value }))}
+        />
+        <p className="text-xs text-ink-subtle sm:col-span-2">
+          Энэ өдрийн дараа тэмдэг сайтаас өөрөө алга болно. Хоосон бол асаалттай үед үргэлж харагдана.
+        </p>
       </div>
       </details>
       <div className="mt-3">

@@ -418,9 +418,13 @@ function normalizeAgeRules(raw: unknown): Record<string, string> {
 function normalizeMarketingBadge(raw: unknown): Record<string, unknown> {
   const src = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const saleLabel = asString(src.sale_label, "ХЯМДРАЛ").trim() || "ХЯМДРАЛ";
+  const endsAt = asString(src.sale_ends_at).trim();
   return {
     sale_enabled: src.sale_enabled === true,
     sale_label: saleLabel.slice(0, 24),
+    // Last day the badge shows (Ulaanbaatar date). Without it the badge stayed
+    // on forever and kept advertising a sale that had already ended.
+    sale_ends_at: /^\d{4}-\d{2}-\d{2}$/.test(endsAt) ? endsAt : null,
     seats_percent_left: clampPercent(asNumberOrNull(src.seats_percent_left)),
   };
 }

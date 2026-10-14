@@ -234,6 +234,7 @@ export function websiteMarketingBadge(trip: TravelTrip) {
   return {
     saleEnabled: raw.sale_enabled === true,
     saleLabel,
+    saleEndsAt: typeof raw.sale_ends_at === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw.sale_ends_at) ? raw.sale_ends_at : null,
     seatsPercentLeft: percent,
     seatsLeft: trip.seats_left,
     seatsTotal: trip.seats_total,

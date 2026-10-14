@@ -782,7 +782,10 @@ function TripCard({
   const marketingBadge = (trip.extra as Record<string, unknown> | undefined)?.marketing_badge as
     | Record<string, unknown>
     | undefined;
-  const saleEnabled = marketingBadge?.sale_enabled === true;
+  const saleEndsAt = typeof marketingBadge?.sale_ends_at === "string" ? marketingBadge.sale_ends_at : "";
+  const saleEnded = Boolean(saleEndsAt) && saleEndsAt < new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Ulaanbaatar" });
+  // An ended sale is no longer on the website, so this list must not show it as live.
+  const saleEnabled = marketingBadge?.sale_enabled === true && !saleEnded;
   const saleLabel =
     typeof marketingBadge?.sale_label === "string" && marketingBadge.sale_label.trim()
       ? marketingBadge.sale_label.trim()
@@ -796,7 +799,9 @@ function TripCard({
     facts.push(`Үлдсэн хувь: ${seatsPercentLeft}%`);
   }
   if (saleEnabled) {
-    facts.push(`Badge: ${saleLabel}`);
+    facts.push(`Badge: ${saleLabel}${saleEndsAt ? ` (${saleEndsAt} хүртэл)` : ""}`);
+  } else if (marketingBadge?.sale_enabled === true && saleEnded) {
+    facts.push(`Badge дууссан: ${saleLabel} (${saleEndsAt})`);
   }
   // A trip with date-specific price groups never actually quotes this flat
   // price to a customer (the nearest upcoming group's price wins) — label it
