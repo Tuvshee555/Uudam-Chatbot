@@ -148,6 +148,18 @@ export function contentSnapshotHash(snapshot: ContentSnapshot): string {
   return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
 }
 /**
+ * A description staff cleared on the website stays cleared. This projection
+ * otherwise always fills it, and the chatbot stores both "never written" and
+ * "cleared" as "", so falling back to the poster subtitle used to refill every
+ * cleared description on the very next sync. No website row yet = fill it.
+ */
+export function websiteDescription(
+  websiteDescriptionNow: unknown, notes: string | null | undefined, subtitle: unknown, routeName: string,
+): string {
+  if (websiteDescriptionNow !== undefined && websiteDescriptionNow !== null && !String(websiteDescriptionNow).trim()) return "";
+  return notes || String(subtitle || routeName);
+}
+/**
  * Legacy hash-policy helper, retained for compatibility with older callers.
  * The active projection uses mergeWebsiteContent's per-field three-way check.
  * A staff edit on the website only wins when the chatbot side truly has not
@@ -238,7 +250,7 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
     summary: typeof source.extra.website_summary === "string" && source.extra.website_summary.trim()
       ? source.extra.website_summary.trim()
       : null,
-    description: source.notes || String(poster.subtitle || source.route_name),
+    description: websiteDescription(prior?.description, source.notes, poster.subtitle, source.route_name),
     hotel: source.hotel || null,
     included: strings(source.extra.included_items), excluded: strings(source.extra.excluded_items),
     importantNotes: strings(source.extra.important_notes),

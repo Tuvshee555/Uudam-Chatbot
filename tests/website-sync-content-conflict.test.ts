@@ -10,8 +10,25 @@ applyTestEnv();
 // tests/trip-categorization.test.ts.
 let contentSnapshotHash: typeof import("../src/lib/websiteTripSync").contentSnapshotHash;
 let staffEditHoldsContent: typeof import("../src/lib/websiteTripSync").staffEditHoldsContent;
+let websiteDescription: typeof import("../src/lib/websiteTripSync").websiteDescription;
 before(async () => {
-  ({ contentSnapshotHash, staffEditHoldsContent } = await import("../src/lib/websiteTripSync"));
+  ({ contentSnapshotHash, staffEditHoldsContent, websiteDescription } = await import("../src/lib/websiteTripSync"));
+});
+
+test("a description staff cleared on the website is not refilled from the poster subtitle", () => {
+  // The chatbot stores the cleared description as "" — the same as never written.
+  assert.equal(websiteDescription("", "", "Постерын дэд гарчиг", "Туршилтын аялал"), "");
+  assert.equal(websiteDescription("   ", "", "Постерын дэд гарчиг", "Туршилтын аялал"), "");
+});
+
+test("a brand-new website trip still gets the poster subtitle as its description", () => {
+  assert.equal(websiteDescription(undefined, "", "Постерын дэд гарчиг", "Туршилтын аялал"), "Постерын дэд гарчиг");
+  assert.equal(websiteDescription(undefined, "", "", "Туршилтын аялал"), "Туршилтын аялал");
+});
+
+test("an existing website description keeps following the chatbot notes", () => {
+  assert.equal(websiteDescription("Хуучин", "Шинэ тайлбар", "Дэд гарчиг", "Нэр"), "Шинэ тайлбар");
+  assert.equal(websiteDescription("Хуучин", "", "Дэд гарчиг", "Нэр"), "Дэд гарчиг");
 });
 
 const SNAPSHOT: ContentSnapshot = {
