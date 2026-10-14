@@ -277,3 +277,19 @@ test("a trip the customer named in full is never swapped for a sibling that fits
   assert.deepEqual(u.trips.map((t) => t.id), ["t-short"]);
   assert.equal(u.unmet, "date");
 });
+
+test("a trip the model picks with nothing to base it on is dropped, so the bot asks which trip", async () => {
+  const guess = async () => '{"place":null,"intent":"trip","topics":["price"],"trips":["T1"],"certainty":"one"}';
+  const ask = (history: Array<{ role: "user" | "assistant"; text: string }>, extra: Record<string, unknown> = {}) =>
+    tu.understandTripMessage({ text: "vne", history, trips: CATALOG, ask: guess, now: NOW, ...extra });
+  // First messages "1", "vne": nothing names a trip, no earlier bot reply, no list.
+  const cold = await ask([{ role: "user", text: "1" }, { role: "user", text: "vne" }]);
+  assert.equal(cold?.certainty, "none");
+  assert.equal(cold?.trips.length, 0);
+  // The same pick stands once the bot has already shown the customer something.
+  const warm = await ask([{ role: "assistant", text: "Вэлмор шууд нислэгтэй аялал — 8 өдөр" }, { role: "user", text: "vne" }]);
+  assert.equal(warm?.certainty, "one");
+  // ...or when the customer's own words name the trip.
+  const named = await tu.understandTripMessage({ text: "Тармиз нуурын аялал vne", history: [], trips: CATALOG, ask: guess, now: NOW });
+  assert.equal(named?.certainty, "one");
+});

@@ -384,7 +384,30 @@ export async function understandTripMessage(input: {
       }
     } catch { /* Invalid JSON is rejected by the parser below. */ }
   }
+  // A pick needs a basis. With no place named, no list or selected offer in play, no
+  // earlier bot reply and no trip name in the customer's words, the model is guessing
+  // ("1", "vne" as a first message became the first trip in the catalog, and a customer
+  // who came from a Beijing ad got Hainan prices). Drop the guess: the bot asks which trip.
+  try {
+    const parsed = JSON.parse(groundedRaw.replace(/^```(?:json)?\s*|```\s*$/g, ""));
+    const named = typeof parsed.place === "string" && parsed.place.trim().length > 0;
+    const hasBasis = named || (input.pendingTripIds?.length ?? 0) > 0 || Boolean(input.selection)
+      || input.history.some((message) => message.role === "assistant") || customerNamesATrip(input.text, [...keys.values()]);
+    if (!hasBasis && Array.isArray(parsed.trips) && parsed.trips.length > 0) {
+      groundedRaw = JSON.stringify({ ...parsed, trips: [], unknown_destination: null });
+    }
+  } catch { /* Invalid JSON is rejected by the parser below. */ }
   return interpretUnderstanding(groundedRaw, keys, input.now, input.text);
+}
+
+/** The customer's words contain a trip's full name or one of its aliases. */
+function customerNamesATrip(text: string, trips: TravelTrip[]): boolean {
+  const said = normText(text);
+  if (said.length < 4) return false;
+  return trips.some((trip) => [trip.route_name, ...getAliases(trip)].some((name) => {
+    const wanted = normText(name);
+    return wanted.length >= 4 && said.includes(wanted);
+  }));
 }
 
 /** True when trip understanding should run (it can be switched off without a deploy). */
