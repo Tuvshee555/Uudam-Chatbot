@@ -303,11 +303,26 @@ export async function routeFastPathText(input: {
       await setClarificationState(senderId, pendingTrips.map((trip) => trip.id));
       return { matchText: text, scopedClarify: pendingTrips };
     }
+    // "Огноо нь" asks about the options already on screen. Re-render those
+    // exact options with their dates instead of clearing the list and going
+    // silent because the phrase names no individual trip.
+    const pendingDateQuestion = /^(?:огноо(?:\s+нь)?|гарах\s+огноо(?:\s+нь)?|хэзээ(?:\s+гарах)?|ognoo(?:\s+ni)?|garah\s+ognoo(?:\s+ni)?|hezee(?:\s+garah)?)$/iu.test(looseNorm(text));
+    if (pendingDateQuestion) {
+      await setClarificationState(senderId, pendingTrips.map((trip) => trip.id));
+      return {
+        matchText: text,
+        scopedClarify: pendingTrips,
+        scopedClarifyNote: "Эдгээр аяллын гарах өдрүүд:",
+      };
+    }
     // A head count under the list ("2 том хүн 2 хүүхэд") prices every offered
     // trip, and "мэдээлэл явуулаад өгөөрэй" asks about them — neither is a
     // change of topic. Re-offer the list instead of handing it to the model.
     const asksForCategory =
       queryWantsDirectFlight(text) || queryWantsLandFlightCombo(text) || queryWantsLandOnlyEnhanced(text);
+    const refersToOfferedTrip =
+      hasReferentialHint(text) ||
+      /(?:аялал|aylal|ayalal)\s*(?:нь|ni)\b|(?:aylal|ayalal)n\b/iu.test(looseNorm(text));
     if (isPassengerCountOnly(text) || (isGenericTripRequest(text) && !asksForCategory)) {
       await setClarificationState(senderId, pendingTrips.map((trip) => trip.id));
       return { matchText: text, scopedClarify: pendingTrips };
@@ -326,6 +341,23 @@ export async function routeFastPathText(input: {
       !pendingTrips.some((trip) => trip.id === catalogDirect.trip.id)
     ) {
       return chose(catalogDirect.trip);
+    }
+    // If the current words identify a fresh trip, the branch above wins. With
+    // no fresh match, "энэ/аялал нь ...?" is a question about the options on
+    // screen, not a request for an unrelated whole-catalog transport list.
+    if (asksForCategory && refersToOfferedTrip && filterTripsByTransportIntent(text, pendingTrips).length === 0) {
+      const requestedKind = queryWantsDirectFlight(text)
+        ? "шууд нислэгтэй"
+        : queryWantsLandFlightCombo(text)
+          ? "газар + нислэг хосолсон"
+          : "газрын";
+      await setClarificationState(senderId, pendingTrips.map((trip) => trip.id));
+      return {
+        matchText: text,
+        scopedClarify: pendingTrips,
+        scopedClarifyNote: `Эдгээр аялал ${requestedKind} биш. Одоогийн мэдээллээр:`,
+        informationalAlternatives: true,
+      };
     }
     // A date answer ("8 сарын 24-нд хэд вэ") narrows by DEPARTURE DATE — the
     // name/attribute matchers can't read dates, which used to clear the state

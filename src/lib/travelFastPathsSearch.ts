@@ -1264,6 +1264,10 @@ export function queryWantsDirectFlight(query: string): boolean {
   return (
     normalized.includes("шууд нислэг") ||
     normalized.includes("шууд нислэгтэй") ||
+    normalized.includes("shuud nisleg") ||
+    normalized.includes("shuud nislegtei") ||
+    normalized.includes("shuud нислэг") ||
+    normalized.includes("shuud нислэгтэй") ||
     normalized.includes("direct flight")
   );
 }

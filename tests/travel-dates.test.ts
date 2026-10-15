@@ -125,6 +125,22 @@ test("date availability intent does not steal date-specific price questions", ()
   );
 });
 
+test("live compact dates remain availability questions when availability and price are both asked", () => {
+  const now = new Date("2026-10-15T04:00:00.000Z");
+  const combined = "11.25-ны Вэлмор аялал байгаа юу? Байгаа бол хэд вэ?";
+  assert.equal(resolveRequestedDate(combined, now)?.ymd, "2026-11-25");
+  assert.equal(hasDepartureDateAvailabilityIntent(combined, now), true);
+  assert.equal(hasDepartureDateAvailabilityIntent("1/4-5нд явах 14хүн", now), true);
+
+  const rangeReply = buildDepartureDateAvailabilityReply({
+    userText: "1/4-5нд явах 14хүн",
+    now,
+    trips: [trip({ departure_dates: ["2027-01-05"] })],
+  });
+  assert.match(rangeReply || "", /1 сарын 4–5-ны хооронд/);
+  assert.match(rangeReply || "", /1 сарын 5/);
+});
+
 test("broad month availability lists options instead of picking one trip", () => {
   const now = new Date("2026-07-08T04:00:00.000Z");
   const reply = buildDepartureDateAvailabilityReply({

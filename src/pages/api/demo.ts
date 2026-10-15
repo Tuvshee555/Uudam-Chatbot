@@ -416,6 +416,8 @@ export default async function handler(
       const getFastPathText = async (): Promise<string> => (await getRouted()).matchText;
       // Same as the webhook: intent comes from the customer's words, trip names removed.
       const intentText = stripTripNamesForIntent(normalizedText, await getTrips());
+      const wantsDateAvailability =
+        hasDepartureDateAvailabilityIntent(intentText) && !hasProgramIntent(intentText);
 
       if (isLikelyCatalogMaintenanceText(normalizedText)) {
         await appendMessage(sessionId, "user", normalizedText);
@@ -509,7 +511,7 @@ export default async function handler(
       // those (mirrors the production webhook).
       {
         const routed = await getRouted();
-        if (routed.scopedClarify && routed.scopedClarify.length > 0) {
+        if (routed.scopedClarify && routed.scopedClarify.length > 0 && !wantsDateAvailability) {
           const totalReply = buildAmbiguousPassengerTotalReply(await getFastPathText(), routed.scopedClarify);
           const clarifyBody = routed.scopedClarifyNote
             ? totalReply
@@ -613,7 +615,11 @@ export default async function handler(
           const resolution = resolveTripFromUserMessage(fastPathText, await getTrips(), {
             allowLooseFallback: false,
           });
-          if (resolution.status === "ambiguous" && resolution.candidates.length > 1) {
+          if (
+            resolution.status === "ambiguous" &&
+            resolution.candidates.length > 1 &&
+            !wantsDateAvailability
+          ) {
             // Mirrors the webhook fix: remember exactly the list shown, so a
             // numbered/named answer on the next turn resolves against it.
             await setClarificationState(sessionId, resolution.candidates.map((trip) => trip.id));
@@ -653,7 +659,7 @@ export default async function handler(
       }
 
       // Fast path: departure date availability
-      if (hasDepartureDateAvailabilityIntent(intentText) && !hasProgramIntent(intentText)) {
+      if (wantsDateAvailability) {
         const trips = await getTrips();
         const dateReply = buildDateQuestionReply(intentText, await getFastPathText(), trips);
         if (dateReply) {

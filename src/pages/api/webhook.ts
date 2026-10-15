@@ -1021,6 +1021,8 @@ async function handleMessage(
   // What is being ASKED: the customer's words with trip names removed. A tapped
   // "…шууд нислэгтэй аялал" button is a choice of trip, not a flight question.
   const intentText = stripTripNamesForIntent(text, await getTrips());
+  const wantsDateAvailability =
+    hasDepartureDateAvailabilityIntent(intentText) && !hasProgramIntent(intentText);
 
   // Staff/catalog maintenance notes are not customer questions. They often
   // contain dates, "суудал дүүрсэн", and duration numbers; answering those as
@@ -1193,7 +1195,7 @@ async function handleMessage(
   // names would confidently pick one, which is a guess, not an answer.
   {
     const routed = await getRouted();
-    if (routed.scopedClarify && routed.scopedClarify.length > 0) {
+    if (routed.scopedClarify && routed.scopedClarify.length > 0 && !wantsDateAvailability) {
       const totalReply = buildAmbiguousPassengerTotalReply(await getFastPathText(), routed.scopedClarify);
       const clarifyBody = routed.scopedClarifyNote
         ? totalReply
@@ -1307,7 +1309,11 @@ async function handleMessage(
       const resolution = resolveTripFromUserMessage(fastPathText, await getTrips(), {
         allowLooseFallback: false,
       });
-      if (resolution.status === "ambiguous" && resolution.candidates.length > 1) {
+      if (
+        resolution.status === "ambiguous" &&
+        resolution.candidates.length > 1 &&
+        !wantsDateAvailability
+      ) {
         // The list about to be shown must be exactly what the NEXT turn's
         // numbered/named answer is checked against. Without this, two real
         // customers typed "2. <the option's own name, copied verbatim>" and
@@ -1356,7 +1362,7 @@ async function handleMessage(
       }
     }
   }
-  if (hasDepartureDateAvailabilityIntent(intentText) && !hasProgramIntent(intentText)) {
+  if (wantsDateAvailability) {
     const trips = await getTrips();
     const dateAvailabilityReply = buildDateQuestionReply(intentText, await getFastPathText(), trips);
     if (dateAvailabilityReply) {

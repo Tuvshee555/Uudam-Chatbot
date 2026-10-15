@@ -153,6 +153,38 @@ test("a list that did ask 'which trip?' still scopes the next generic request", 
   assert.deepEqual(routed.scopedClarify?.map((t) => t.id), [TWO_FARES.id, other.id]);
 });
 
+test("asking 'Огноо нь' after a which-trip list re-renders those options with dates", async () => {
+  const other = trip({ id: "other-date", route_name: "Вэлмор хотын 12-р сарын аялал" });
+  const sender = "live-clarify-dates";
+  await clarification.setClarificationState(sender, [TWO_FARES.id, other.id]);
+  const routed = await routing.routeFastPathText({
+    senderId: sender,
+    text: "Огноо нь",
+    contextualUserText: "Огноо нь",
+    trips: [TWO_FARES, other],
+    history: [{ role: "assistant", text: "Аль аяллыг нь сонирхож байна вэ?" }],
+  });
+  assert.deepEqual(routed.scopedClarify?.map((item) => item.id), [TWO_FARES.id, other.id]);
+  assert.equal(routed.scopedClarifyNote, "Эдгээр аяллын гарах өдрүүд:");
+});
+
+test("a transport question about the offered trips does not become a global unrelated list", async () => {
+  const comboA = trip({ id: "combo-a", route_name: "Чунчин газар нислэг хосолсон", category: "Газар нислэг хосолсон" });
+  const comboB = trip({ id: "combo-b", route_name: "Чунчин Жанжиажэ хосолсон", category: "Газар нислэг хосолсон" });
+  const sender = "live-clarify-transport";
+  await clarification.setClarificationState(sender, [comboA.id, comboB.id]);
+  const routed = await routing.routeFastPathText({
+    senderId: sender,
+    text: "Hotiiin aylaln Shuud nislegtei yu",
+    contextualUserText: "Hotiiin aylaln Shuud nislegtei yu",
+    trips: [comboA, comboB],
+    history: [{ role: "assistant", text: "Аль аяллыг нь сонирхож байна вэ?" }],
+  });
+  assert.deepEqual(routed.scopedClarify?.map((item) => item.id), [comboA.id, comboB.id]);
+  assert.match(routed.scopedClarifyNote || "", /шууд нислэгтэй биш/);
+  assert.equal(routed.informationalAlternatives, true);
+});
+
 test("a bare 'aylal' names no trip, even when an alias ends in 'аялал'", () => {
   const aliased = trip({ id: "aliased", route_name: "Зэтгор Лумиа аялал", extra: { aliases: ["Лумиа аялал", "Zetgor tour"] } });
   assert.equal(resolveTripFromUserMessage("aylal", [aliased]).status, "not_found");

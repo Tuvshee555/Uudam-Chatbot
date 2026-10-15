@@ -193,7 +193,7 @@ function explicitDateCandidates(
   // as the CURRENT year, so an explicitly past-year date looked like a future one.
   // …and "11-13хүн", "2-11 нас", "3-4 сая" are counts, ages and money, not
   // November 13th (a group-size answer was read back as a date question).
-  for (const match of text.matchAll(/(?<![\d./-])(\d{1,2})[./-](\d{1,2})(?![\d./-])(?!\s*(?:хүн|hun|нас|nas|сая|saya|кг|kg|хоног|шөнө|өдөр|удаа|мянга|₮|төг))/gi)) {
+  for (const match of text.matchAll(/(?<![\d./-])(\d{1,2})[./-](\d{1,2})(?:\s*-?\s*(?:ны|ний|нд|д))?(?![\d./-])(?!\s*(?:хүн|hun|нас|nas|сая|saya|кг|kg|хоног|шөнө|өдөр|удаа|мянга|₮|төг))/gi)) {
     const month = Number(match[1]);
     const day = Number(match[2]);
     push(resolveYear(month, day), month, day);
@@ -465,7 +465,16 @@ export function prunePastDepartureDates(
 function isDepartureAvailabilityQuestion(text: string): boolean {
   const normalized = text.trim().toLowerCase();
   if (!normalized) return false;
-  if (/үнэ|үнийн|хэд\s*вэ|хэдээр|төлбөр|төгрөг|₮|\bmnt\b|\bcny\b|\busd\b/i.test(normalized)) {
+  const explicitlyAsksAvailability =
+    /байгаа\s*(?:юу|бол)|байна\s*(?:уу|үү)|(?:bgaa|baigaa|baina)\s*(?:yu|uu|bol)|боломж(?:той)?\s*(?:уу|үү)|available/i.test(normalized);
+  // A pure "date + how much?" question belongs to the detailed price path.
+  // When the customer explicitly asks BOTH availability and price, however,
+  // availability must win first; otherwise an ambiguous destination list eats
+  // the exact date (seen live with "11.25-ны ... байгаа юу? Байгаа бол хэд вэ?").
+  if (
+    /үнэ|үнийн|хэд\s*вэ|хэдээр|төлбөр|төгрөг|₮|\bmnt\b|\bcny\b|\busd\b/i.test(normalized) &&
+    !explicitlyAsksAvailability
+  ) {
     return false;
   }
 
@@ -731,6 +740,10 @@ function findMonthDepartures(
 // Oct 20 alone.
 const DATE_RANGE_RE = /(\d{1,2})\s*(?:-?р\s*)?сар(?:ын)?\s*(\d{1,2})\s*[-–—]\s*(\d{1,2})(?!\d)/i;
 
+// "1/4-5нд": a compact same-month range common in Messenger. Keep this
+// separate from ordinary M/D parsing so "11-13 хүн" remains a head count.
+const COMPACT_DATE_RANGE_RE = /(?<![\d./-])(\d{1,2})[./](\d{1,2})\s*[-–—]\s*(\d{1,2})(?:\s*-?\s*(?:ны|ний|нд|д))?(?![\d./])/i;
+
 // "9.30-10.20", "10/28 - 11/3": a window across months. The single-date
 // parser can't read these at all (its lookarounds reject a date glued to a
 // dash), so "9.30-10.20ний хооронд … аялал байгаа юу" got no date answer.
@@ -767,6 +780,17 @@ function resolveRequestedRange(text: string, now: Date): RequestedRange | null {
     const month = Number(sameMonth[1]);
     const startDay = Number(sameMonth[2]);
     const endDay = Number(sameMonth[3]);
+    if (month < 1 || month > 12 || startDay < 1 || endDay <= startDay || endDay > 31) return null;
+    const start = resolveRequestedDate(`${month} сарын ${startDay}`, now);
+    if (!start) return null;
+    const [year, monthPart] = start.ymd.split("-");
+    return buildRange(start.ymd, `${year}-${monthPart}-${String(endDay).padStart(2, "0")}`);
+  }
+  const compactSameMonth = COMPACT_DATE_RANGE_RE.exec(normalized);
+  if (compactSameMonth) {
+    const month = Number(compactSameMonth[1]);
+    const startDay = Number(compactSameMonth[2]);
+    const endDay = Number(compactSameMonth[3]);
     if (month < 1 || month > 12 || startDay < 1 || endDay <= startDay || endDay > 31) return null;
     const start = resolveRequestedDate(`${month} сарын ${startDay}`, now);
     if (!start) return null;

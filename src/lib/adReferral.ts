@@ -6,7 +6,7 @@
  */
 import type { TravelTrip } from "./travelTypes";
 import { resolveTripFromUserMessage } from "./travelFastPathsSearch";
-import { getTripSelection, setTripSelection } from "./tripSelectionState";
+import { setTripSelection } from "./tripSelectionState";
 import { queryNeon } from "./neonDb";
 import { logInfo, logWarn } from "./observability";
 
@@ -69,6 +69,9 @@ function ensureTable() {
 /**
  * Records the referral (so what Meta really sends can be read back) and, when the ad names
  * exactly one trip, makes it the customer's selected trip so a first "vne" is about it.
+ * Opening a new post is fresh context: it replaces an older selection, and an
+ * unresolvable post clears the older selection rather than letting (for example)
+ * an old Hainan conversation answer a new Beijing-post customer.
  * Never throws: the message itself must still be answered.
  */
 export async function rememberAdReferral(input: {
@@ -77,9 +80,9 @@ export async function rememberAdReferral(input: {
   try {
     const postText = await fetchPostText(input.referral.ads_context_data?.post_id, input.pageToken);
     const trip = tripFromAdText(referralText(input.referral, postText), input.trips);
-    if (trip && !(await getTripSelection(input.senderId))) {
-      await setTripSelection(input.senderId, { tripId: trip.id, date: null, hotel: null, package: null, passengers: [] });
-    }
+    await setTripSelection(input.senderId, trip
+      ? { tripId: trip.id, date: null, hotel: null, package: null, passengers: [] }
+      : null);
     logInfo("webhook.ad_referral", {
       source: input.referral.source ?? null, type: input.referral.type ?? null, adId: input.referral.ad_id ?? null,
       postId: input.referral.ads_context_data?.post_id ?? null, titleLength: input.referral.ads_context_data?.ad_title?.length ?? 0,
