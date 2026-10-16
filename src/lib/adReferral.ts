@@ -36,6 +36,18 @@ function referralText(referral: AdReferral, postText: string): string {
 }
 
 /**
+ * The website's "chat with staff" button opens m.me/<page>?ref=<trip slug>, so the ref IS the
+ * trip: its website slug (or id). Exact, unlike reading an ad's words.
+ */
+export function tripFromRef(ref: unknown, trips: TravelTrip[]): TravelTrip | null {
+  const wanted = typeof ref === "string" ? ref.trim().toLowerCase() : "";
+  if (!wanted) return null;
+  const matches = trips.filter((trip) => trip.status !== "draft"
+    && (trip.id.toLowerCase() === wanted || String(trip.extra?.website_slug ?? "").trim().toLowerCase() === wanted));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+/**
  * The one trip the ad is about, or null. Only a single clear match counts: a post that
  * could be several trips must not pick one for the customer.
  */
@@ -79,7 +91,7 @@ export async function rememberAdReferral(input: {
 }): Promise<TravelTrip | null> {
   try {
     const postText = await fetchPostText(input.referral.ads_context_data?.post_id, input.pageToken);
-    const trip = tripFromAdText(referralText(input.referral, postText), input.trips);
+    const trip = tripFromRef(input.referral.ref, input.trips) ?? tripFromAdText(referralText(input.referral, postText), input.trips);
     await setTripSelection(input.senderId, trip
       ? { tripId: trip.id, date: null, hotel: null, package: null, passengers: [] }
       : null);

@@ -1677,17 +1677,17 @@ const NOT_ON_SALE = new Set(["sold_out", "paused", "cancelled", "unavailable", "
  * date sold at another price the reply verifier rightly rejected it, and the
  * whole "which trip?" question became silence plus a paused customer.
  */
-function listedFaresAndDates(trip: TravelTrip): { fares: ListedFares | null; dates: string[]; soldOut?: boolean } {
+function listedFaresAndDates(trip: TravelTrip, now = new Date()): { fares: ListedFares | null; dates: string[]; soldOut?: boolean } {
   // The dated departures come from the same resolver the reply checker uses, so a
   // line can never print a date the checker does not know (a cancelled or copied
   // date made it reject the whole list). Weekly schedules ("Ням гараг бүр") have no
   // calendar dates and keep the trip's own text.
-  const dated = upcomingDepartures(trip).slice(0, 8);
-  const future = dated.length ? dated : withFutureDepartureDates(trip).departure_dates.slice(0, 8);
+  const dated = upcomingDepartures(trip, now).slice(0, 8);
+  const future = dated.length ? dated : withFutureDepartureDates(trip, now).departure_dates.slice(0, 8);
   // A sold-out or closed departure is not on sale: listing it with a price made
   // the verifier reject the whole list, and the customer got silence.
   const upcoming = future.filter((date) => {
-    const result = resolveTripOffer(trip, { date });
+    const result = resolveTripOffer(trip, { date }, now);
     return result.status !== "unavailable" || !NOT_ON_SALE.has(result.reason);
   });
   if (future.length && !upcoming.length) return { fares: null, dates: [], soldOut: true };
@@ -1699,7 +1699,7 @@ function listedFaresAndDates(trip: TravelTrip): { fares: ListedFares | null; dat
     }, dates: [] };
   }
   const card = (date: string) => {
-    const result = resolveTripOfferFareCard(trip, { date });
+    const result = resolveTripOfferFareCard(trip, { date }, now);
     return result.status === "ready" ? result.offer : null;
   };
   const first = card(upcoming[0]);
@@ -1716,10 +1716,11 @@ export function buildAmbiguousTripReply(
   trips: TravelTrip[],
   heading?: string,
   options: { askToChoose?: boolean } = {},
+  now = new Date(),
 ) {
   const names = trips.slice(0, MAX_LISTED_TRIPS).map((trip) => {
     const currency = trip.currency || "MNT";
-    const listed = listedFaresAndDates(trip);
+    const listed = listedFaresAndDates(trip, now);
     const adultText = formatPassengerMoney(listed.fares?.adult, currency);
     const childText = formatPassengerMoney(listed.fares?.child, currency);
     const infantText = formatPassengerMoney(listed.fares?.infant, currency);
@@ -1731,13 +1732,13 @@ export function buildAmbiguousTripReply(
       adultText ? `том хүн ${adultText}` : "",
       childText ? `хүүхэд ${childText}` : "",
       infantText ? `нярай ${infantText}` : "",
-      upcoming.length ? `гарах: ${upcoming.map((date) => customerDate(date)).join(", ")}` : "",
+      upcoming.length ? `гарах: ${upcoming.map((date) => customerDate(date, now)).join(", ")}` : "",
       listed.soldOut ? "суудал дүүрсэн" : "",
     ].filter(Boolean);
     const line = `• ${trip.route_name}${details.length ? ` — ${details.join(" · ")}` : ""}`;
     // A line the checker would reject is cut back to the trip's name: a name-only
     // line is always true, and a rejected list meant silence for the customer.
-    return details.length && verifyTripReply({ reply: line, trips: [trip] }) !== line ? `• ${trip.route_name}` : line;
+    return details.length && verifyTripReply({ reply: line, trips: [trip], now }) !== line ? `• ${trip.route_name}` : line;
   });
   return [
     // Same-name duplicates collapse to one line upstream; "several options"

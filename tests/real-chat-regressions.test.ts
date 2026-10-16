@@ -347,7 +347,7 @@ const LUMIA_TRIPS = [LUMIA_NOV, HELVIN, LUMIA_BARTEN_NOV3, BARTEN_OCT29, LUMIA_P
 test("a trip's base infant price is listed even when its price groups have none", async () => {
   const { buildAmbiguousTripReply } = await import("../src/lib/travelFastPaths");
   applyTestEnv();
-  const reply = buildAmbiguousTripReply([HELVIN, BARTEN_OCT29]);
+  const reply = buildAmbiguousTripReply([HELVIN, BARTEN_OCT29], undefined, {}, new Date("2026-09-20T00:00:00.000Z"));
   assert.match(reply, /Хэлвин аялал — 8 өдөр 7 шөнө · том хүн 3,401,000₮ · хүүхэд 2,701,000₮ · нярай 401,000₮/);
   assert.match(reply, /10\/29 — 6 өдөр 5 шөнө · том хүн 3,601,000₮ · хүүхэд 3,161,000₮ · нярай 501,000₮/);
 });

@@ -133,6 +133,50 @@ function titleCase(word: string): string {
   return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
+// "11 сард гарах аялал", "11. сарын маршрут": a month with no day and no place — the
+// customer wants the trips leaving that month. It used to reach neither a fast path nor
+// the model, and the customer got silence.
+const MONTH_ASK_RE = /(?:^|[^\d])(\d{1,2})\s*[-.]?\s*(?:р\s*)?сар(?:ын|д|аас|аар|ийн)?(?=[^\p{L}\d]|$)/u;
+const TRIP_WORD_RE = /аял|гарах|гарна|маршрут|хөтөлбөр|явах|явмаар|ayal|garah|marshrut/iu;
+
+function askedMonth(normalized: string): number | null {
+  const match = MONTH_ASK_RE.exec(normalized);
+  if (!match || !TRIP_WORD_RE.test(normalized)) return null;
+  // A day after the month ("11 сарын 25") is a date question, answered elsewhere.
+  if (/сар(?:ын|ийн)?\s*\d/u.test(normalized) || /\d{1,2}\s*[./]\s*\d{1,2}/.test(normalized)) return null;
+  const month = Number(match[1]);
+  return month >= 1 && month <= 12 ? month : null;
+}
+
+function monthDepartures(trip: TravelTrip, month: number, now: Date): string[] {
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ulaanbaatar", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  const availability = normalizeTripOffers(trip, now).filter((offer) => offer.source !== "discount").flatMap((offer) => offer.availability);
+  const open = new Set(availability.filter((row) => row.date >= today && ["open", "unknown"].includes(row.status)).map((row) => row.date));
+  for (const row of availability) if (!["open", "unknown"].includes(row.status)) open.delete(row.date);
+  const thisYear = Number(today.slice(0, 4));
+  const year = month >= Number(today.slice(5, 7)) ? thisYear : thisYear + 1;
+  return [...open].filter((date) => date.startsWith(`${year}-${String(month).padStart(2, "0")}-`)).sort();
+}
+
+function monthListing(pool: TravelTrip[], month: number, now: Date): Listing | null {
+  const rows = pool.map((trip) => ({ trip, dates: monthDepartures(trip, month, now) })).filter((row) => row.dates.length > 0)
+    .sort((a, b) => a.dates[0].localeCompare(b.dates[0]));
+  if (!rows.length) {
+    return { reply: `${month} сард гарах аялал одоогоор алга байна. Өөр сарын хуваарийг эндээс харна уу: ${BOOKING_WEBSITE_URL}`, listed: [], authoritative: true };
+  }
+  const listed: TravelTrip[] = [];
+  const lines = [`${month} сард гарах аяллууд 😊`];
+  const footer = (count: number) => [...(rows.length > count ? ["", `Өөр ${rows.length - count} аялал бий. Бүгдийг эндээс харна уу: ${BOOKING_WEBSITE_URL}`] : []), "", AMBIGUOUS_REPLY_MARKER];
+  for (const { trip, dates } of rows.slice(0, MAX_DETAILED)) {
+    const price = priceDetail(trip, now);
+    const line = `• ${trip.route_name} — ${[trip.duration_text?.trim(), price, `гарах: ${dates.slice(0, 4).map((date) => customerDate(date, now)).join(", ")}`].filter(Boolean).join(" · ")}`;
+    if ([...lines, line, ...footer(listed.length + 1)].join("\n").length > MAX_MESSAGE_CHARS) break;
+    lines.push(line);
+    listed.push(trip);
+  }
+  return { reply: [...lines, ...footer(listed.length)].join("\n"), listed, authoritative: true };
+}
+
 // "арай бага хоногтой нь байхгүй юу": the model answered with whichever trip
 // it liked (a 6-day one while 5-day trips existed). Sort the catalog instead.
 const SHORT_TRIP_RE =
@@ -205,6 +249,11 @@ export function buildCatalogListingReply(rawIntentText: string, trips: TravelTri
     queryWantsDirectFlight(intentText) ||
     queryWantsLandFlightCombo(intentText) ||
     queryWantsLandOnlyEnhanced(intentText);
+  const month = askedMonth(normalized);
+  if (month && namedDestinations(intentText, active).length === 0) {
+    const pool = wantsCategory ? (wantsCruise ? active.filter(tripIsCruise) : filterTripsByTransportIntent(intentText, active)) : active;
+    return monthListing(pool, month, now);
+  }
   if (!wantsAll && !wantsCategory) return null;
 
   const categoryPool = wantsCategory

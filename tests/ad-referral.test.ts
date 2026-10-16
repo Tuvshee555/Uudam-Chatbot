@@ -26,3 +26,12 @@ test("an ad names a trip only when its text clearly matches exactly one", () => 
   assert.equal(mod.tripFromAdText("Сайхан амралт", CATALOG), null);
   assert.equal(mod.tripFromAdText("", CATALOG), null);
 });
+
+test("the website's chat button ref (the trip's website slug or id) names the trip exactly", () => {
+  const withSlug = [{ ...CATALOG[0], extra: { website_slug: "velmor-nuur" } }, { ...CATALOG[1], extra: { website_slug: "trip-0123abcd" } }];
+  assert.equal(mod.tripFromRef("trip-0123abcd", withSlug)?.id, "b");
+  assert.equal(mod.tripFromRef("VELMOR-NUUR", withSlug)?.id, "a");
+  assert.equal(mod.tripFromRef("a", withSlug)?.id, "a");
+  assert.equal(mod.tripFromRef("unknown-slug", withSlug), null);
+  assert.equal(mod.tripFromRef(undefined, withSlug), null);
+});

@@ -199,3 +199,19 @@ test("\"call me if a seat opens\" is a handoff request, not another sold-out ans
   for (const text of ["Суудал гарвал холбогдоорой", "суудал гарвал мэдэгдээрэй", "suudal garwal holbogdooroi"]) assert.equal(isHandoffRequest(text, []), true, text);
   assert.equal(isHandoffRequest("суудал хэд вэ", []), false);
 });
+
+test("a month with no day or place lists the trips leaving that month", () => {
+  const trips = [trip(0), trip(1, { departure_dates: ["2026-11-05"] })];
+  const december = buildCatalogListingReply("12 сард гарах аялал", trips, NOW)!;
+  assert.deepEqual(december.listed.map((t) => t.id), ["invented-0"]);
+  assert.match(december.reply, /^12 сард гарах аяллууд/);
+  assert.match(december.reply, /гарах: 12 сарын 17/);
+  const november = buildCatalogListingReply("11. Сарын аялалын маршрут явуулаарай", trips, NOW)!;
+  assert.deepEqual(november.listed.map((t) => t.id), ["invented-1"]);
+  const none = buildCatalogListingReply("9 сард гарах аялал", trips, NOW)!;
+  assert.equal(none.listed.length, 0);
+  assert.match(none.reply, /9 сард гарах аялал одоогоор алга/);
+  // A day, or a date written 12/17, makes it a date question for the other paths.
+  assert.equal(buildCatalogListingReply("12 сарын 17 аялал", trips, NOW), null);
+  assert.equal(buildCatalogListingReply("12/17 гарах аялал", trips, NOW), null);
+});
