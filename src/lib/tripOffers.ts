@@ -169,8 +169,22 @@ function dropYearCopies(trip: TravelTrip, now: Date, dates: string[], reference 
   });
 }
 
+/**
+ * generateDateKeys pads every yearless date with an ISO key for the following
+ * year too, so a search near New Year still matches. That padding is a lookup
+ * alias, not a departure: read as one, "7 сарын 20" sold both 2027-07-20 and
+ * 2028-07-20 on the website (Шар тэнгис, Хайлаар Манжуур, 2026-10-16).
+ */
+function departureDateKeys(raw: Row): string[] {
+  const keys = strings(raw.date_keys);
+  const primary = [...strings(raw.dates), ...strings(raw.display_dates), str(raw.date)];
+  if (primary.some(hasYear)) return keys;
+  const iso = new Set(keys.filter(validIso));
+  return keys.filter((key) => !validIso(key) || !iso.has(`${Number(key.slice(0, 4)) - 1}${key.slice(4)}`));
+}
+
 function offerDates(raw: Row, trip: TravelTrip, now: Date): { dates: string[]; dateScoped: boolean; issues: string[] } {
-  const texts = unique([...strings(raw.dates), ...strings(raw.display_dates), ...strings(raw.date_keys), ...(str(raw.date) ? [str(raw.date)] : [])]);
+  const texts = unique([...strings(raw.dates), ...strings(raw.display_dates), ...departureDateKeys(raw), ...(str(raw.date) ? [str(raw.date)] : [])]);
   const dated = texts.length > 0;
   const issues: string[] = [];
   const explicit = texts.filter(hasYear).flatMap((text) => parseTripDepartureDateText(text, now));

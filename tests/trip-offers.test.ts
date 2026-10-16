@@ -286,3 +286,24 @@ test("a yearless date is one departure: its rolled-forward copies in later years
     ] } });
   assert.deepEqual(normalizeTripOffers(value, NOW)[0].dates, ["2026-10-22", "2026-11-05"]);
 });
+
+test("a yearless price row's next-year search key is not a second departure", () => {
+  // Шар тэнгис: generateDateKeys padded "7 сарын 20" with 2027 and 2028 ISO keys,
+  // and the website sold both years.
+  const value = trip({ departure_dates: ["10 сарын 20"], extra: {
+    departure_dates_resolved: [{ ymd: "2026-10-20", text: "10 сарын 20" }],
+    price_groups: [{ dates: ["7 сарын 20"], label: "7 сарын 20", adult_price: 1_690_000,
+      date_keys: ["7 сарын 20", "07 сарын 20", "7/20", "07/20", "2027-07-20", "2028-07-20"] }],
+  } });
+  const row = normalizeTripOffers(value, NOW).find((offer) => offer.source === "price_group");
+  assert.deepEqual(row?.dates, ["2027-07-20"]);
+});
+
+test("a dated price row keeps every ISO key of its own year", () => {
+  const value = trip({ departure_dates: ["2026-10-08", "2026-10-15"], extra: {
+    price_groups: [{ dates: ["2026.10.08, 15"], adult_price: 2_690_000,
+      date_keys: ["2026.10.08, 15", "2026-10-08", "2026-10-15"] }],
+  } });
+  const row = normalizeTripOffers(value, NOW).find((offer) => offer.source === "price_group");
+  assert.deepEqual(row?.dates, ["2026-10-08", "2026-10-15"]);
+});
