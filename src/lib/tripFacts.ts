@@ -134,13 +134,22 @@ export function quotablePrices(
       ...canonicalOffers(trip, now).filter((offer) => sourceIds.has(offer.id)).flatMap((offer) => offer.supplementalFares.flatMap((fare) => fareAmounts(fare.fare))),
     ];
   };
+  // A hotel sold as several packages (Хөтөлбөртэй / Хөтөлбөргүй) needs one
+  // more choice; every package's real fare is quotable, as every hotel's is.
+  const packagePrices = (result: ReturnType<typeof resolveTripOffer>, selection: { date: string; hotel?: string | null; hotelId?: string }): number[] =>
+    result.status === "needs_selection" && result.fields.includes("package")
+      ? result.options.flatMap((packageId) => selectedPrices(resolveTripOffer(trip, { ...selection, packageId }, now)))
+      : selectedPrices(result);
   if (selected.status === "ready") return new Set(selectedPrices(selected));
   if (selected.status === "needs_selection" && selected.fields.includes("hotel")) {
     return new Set(selected.options.flatMap((option) => {
       const named = resolveTripOffer(trip, { date, hotel: option }, now);
-      return selectedPrices(named.status === "unavailable" ? resolveTripOffer(trip, { date, hotelId: option }, now) : named);
+      return named.status === "unavailable"
+        ? packagePrices(resolveTripOffer(trip, { date, hotelId: option }, now), { date, hotelId: option })
+        : packagePrices(named, { date, hotel: option });
     }));
   }
+  if (selected.status === "needs_selection" && selected.fields.includes("package")) return new Set(packagePrices(selected, { date, hotel }));
   return new Set();
 }
 
@@ -158,6 +167,11 @@ export function isTripOfferPrice(
   // those hotel options sells at it. Rejecting it silenced whole answers.
   if (result.status === "needs_selection" && result.fields.includes("hotel") && !selection.hotel && !selection.hotelId) {
     return result.options.some((option) => isTripOfferPrice(trip, { ...selection, hotel: option }, kind, amount, now));
+  }
+  // The same for a hotel sold as several packages: Санья's "Phoenix Island +
+  // Paxton" fares were rejected for lacking a package, and the trip card went silent.
+  if (result.status === "needs_selection" && result.fields.includes("package") && !selection.packageId && !selection.package) {
+    return result.options.some((packageId) => isTripOfferPrice(trip, { ...selection, packageId }, kind, amount, now));
   }
   if (result.status !== "ready") return false;
   const fares = selection.passengers?.length

@@ -457,12 +457,17 @@ export function sanitizeAssistantReply(text: string) {
     // 390,000₮" under a second date section was being deleted, so the later
     // sections showed only the adult fare. Price lines are deduplicated
     // within their own block only; everything else across the whole reply.
+    // The same holds for a section's own headings: a second "Буудал: …" or
+    // "11 сарын 4-ний гаралт" deleted from a later section left its fares under
+    // the previous hotel (Санья, 2026-10-16).
     const seenPriceLinesInBlock = new Set<string>();
     for (const line of lines) {
       const norm = normalizeForCompare(line);
       if (!norm) continue;
       const isPriceLine = /\d[\d,.\s]*₮/.test(line);
-      const seen = isPriceLine ? seenPriceLinesInBlock : seenLines;
+      const isSectionHeading = /^\s*(?:буудал|багц)\s*:/i.test(line)
+        || (line.length <= 120 && !/[.?!]\s*$/.test(line.trim()) && parseDepartureDateText(line).length > 0);
+      const seen = isPriceLine || isSectionHeading ? seenPriceLinesInBlock : seenLines;
       if (seen.has(norm)) continue;
       seen.add(norm);
       uniqueLines.push(line.trim());

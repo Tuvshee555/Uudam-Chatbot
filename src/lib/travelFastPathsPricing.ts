@@ -1333,13 +1333,16 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
   const structuredGroups = getStructuredPriceGroups(trip);
 
   if (structuredGroups.length > 0) {
-    type GroupedPrice = { priceKey: string; priceLines: string[]; dates: string[]; label: string; hotel: string };
+    type GroupedPrice = { priceKey: string; priceLines: string[]; dates: string[]; label: string; hotel: string; packageId: string };
     const grouped: GroupedPrice[] = [];
     for (const g of structuredGroups) {
       const priceLines = structuredGroupPriceLines(trip, g, currency);
       if (!priceLines.length) continue;
       const hotel = typeof g.hotel === "string" ? g.hotel.trim() : "";
-      const priceKey = `${hotel}|${priceLines.join("|")}`;
+      // A hotel sold as several packages: without the package name the card
+      // showed the same hotel twice at two prices (Санья, 2026-10-16).
+      const packageId = typeof g.package_id === "string" ? g.package_id.trim() : "";
+      const priceKey = `${hotel}|${packageId}|${priceLines.join("|")}`;
       const rawDates = getPriceGroupDisplayDates(g);
       const futureDates = filterFutureDepartureDates(rawDates, now, tripResolvedDates(trip));
       if (rawDates.length > 0 && futureDates.length === 0) continue;
@@ -1349,7 +1352,7 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
       const label = /^(үнэ|үнийн мэдээлэл|price|prices)$/i.test(rawLabel) ? "" : rawLabel;
       const existing = grouped.find((entry) => entry.priceKey === priceKey);
       if (existing) existing.dates.push(...futureDates);
-      else grouped.push({ priceKey, priceLines, dates: [...futureDates], label, hotel });
+      else grouped.push({ priceKey, priceLines, dates: [...futureDates], label, hotel, packageId });
     }
     // Only commit to the price-group rendering if at least one group survived
     // the departed-dates filter; otherwise fall through so the room/flat price
@@ -1364,6 +1367,7 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
           : (dateLabel || (labelHasDates ? "" : groupLabel));
         if (heading) sections.push("", heading);
         if (entry.hotel) sections.push(`Буудал: ${entry.hotel}`);
+        if (entry.packageId && entry.packageId !== groupLabel) sections.push(`Багц: ${entry.packageId}`);
         sections.push(...entry.priceLines);
       }
       return sections.join("\n");

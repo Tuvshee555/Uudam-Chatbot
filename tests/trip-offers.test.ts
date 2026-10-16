@@ -307,3 +307,13 @@ test("a dated price row keeps every ISO key of its own year", () => {
   const row = normalizeTripOffers(value, NOW).find((offer) => offer.source === "price_group");
   assert.deepEqual(row?.dates, ["2026-10-08", "2026-10-15"]);
 });
+
+test("a hotel sold as two packages: either package's real fare is a quotable price", () => {
+  const value = trip({ departure_dates: ["2026-11-04"], extra: { price_groups: [
+    { dates: ["2026-11-04"], hotel: "Phoenix + Paxton", package_id: "Хөтөлбөргүй", adult_price: 2_690_000 },
+    { dates: ["2026-11-04"], hotel: "Phoenix + Paxton", package_id: "Хөтөлбөртэй", adult_price: 2_990_000 },
+  ] } });
+  for (const amount of [2_690_000, 2_990_000]) assert.equal(isTripOfferPrice(value, { date: "2026-11-04", hotel: "Phoenix + Paxton" }, "adult", amount, NOW), true);
+  assert.equal(isTripOfferPrice(value, { date: "2026-11-04", hotel: "Phoenix + Paxton" }, "adult", 2_390_000, NOW), false);
+  assert.equal(isTripOfferPrice(value, { date: "2026-11-04", hotel: "Phoenix + Paxton", packageId: "Хөтөлбөртэй" }, "adult", 2_690_000, NOW), false);
+});

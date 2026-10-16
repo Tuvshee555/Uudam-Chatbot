@@ -64,9 +64,13 @@ export function verifyTripReply(input: {
           const ownFare = printedBand !== null && active.some((trip) => {
             const departures = date ? [date] : dateSet.length ? dateSet : [...new Set(normalizeTripOffers(trip, now).flatMap((offer) => offer.dates))];
             return departures.some((departure) => {
-              const card = resolveTripOfferFareCard(trip, { date: departure, ...(hotel ? { hotel } : {}) }, now);
-              return card.status === "ready" && card.offer.fares.some((fare) => fare.kind === kind && bandKey(fare.ageRange || "") === printedBand
-                && (fare.fare.kind === "exact" || fare.fare.kind === "free") && fare.fare.amount === amount);
+              const selection = { date: departure, ...(hotel ? { hotel } : {}) };
+              const first = resolveTripOfferFareCard(trip, selection, now);
+              // A hotel sold as several packages prints one card per package.
+              const cards = first.status === "needs_selection" && first.fields.includes("package")
+                ? first.options.map((packageId) => resolveTripOfferFareCard(trip, { ...selection, packageId }, now)) : [first];
+              return cards.some((card) => card.status === "ready" && card.offer.fares.some((fare) => fare.kind === kind && bandKey(fare.ageRange || "") === printedBand
+                && (fare.fare.kind === "exact" || fare.fare.kind === "free") && fare.fare.amount === amount));
             });
           });
           if (ownFare) continue;

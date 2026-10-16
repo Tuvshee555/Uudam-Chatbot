@@ -237,3 +237,17 @@ test("the trip-media silence token survives sanitize and is suppressed", async (
     true,
   );
 });
+
+test("a hotel or date heading repeated under a later section is kept with that section", async () => {
+  const { sanitizeAssistantReply } = await import("../src/lib/reply");
+  // Санья: the second "Буудал: …" was deleted and its fares read as the hotel above.
+  const reply = [
+    "11 сарын 4-ний гаралт", "Буудал: Phoenix Island + Paxton", "Багц: Хөтөлбөргүй", "• Том хүн: 2,690,000₮", "",
+    "11 сарын 4-ний гаралт", "Буудал: Phoenix Island + Paxton", "Багц: Хөтөлбөртэй", "• Том хүн: 2,990,000₮", "",
+    "11 сарын 4-ний гаралт", "Буудал: Phoenix Island 5*", "Багц: Хөтөлбөргүй", "• Том хүн: 3,290,000₮",
+  ].join("\n");
+  const blocks = sanitizeAssistantReply(reply).split("\n\n");
+  assert.equal(blocks.length, 3);
+  assert.match(blocks[1], /11 сарын 4-ний гаралт\nБуудал: Phoenix Island \+ Paxton\nБагц: Хөтөлбөртэй\n• Том хүн: 2,990,000₮/);
+  assert.match(blocks[2], /Буудал: Phoenix Island 5\*\nБагц: Хөтөлбөргүй/);
+});
