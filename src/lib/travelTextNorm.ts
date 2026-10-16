@@ -164,7 +164,7 @@ export const GENERIC_REQUEST_WORDS = new Set([
   // the answer is the question "which trip?", not a hand-off.
   "хүүхдийн", "нярайн", "болох", "урьдчилгаа", "нислэгийн", "цаг", "газар", "хаана", "зардал", "нэмэлт",
   "ганцаараа", "ганц", "нэг", "хүнээр", "явж", "даатгал", "хоол", "хоолны", "буудал", "буудлын", "одтой",
-  "багтсан", "багтаа", "явахад", "виз", "паспорт", "төлөх", "яаж", "данс", "хөнгөлөлт", "хямдрал", "групп", "бүлэг", "уулзах",
+  "багтсан", "багтаа", "явахад", "аялах", "асуулт", "асуух", "үнийнмэдээлэл", "abiya", "aviya", "away", "medeell", "uniin", "ayliin", "aylliin", "uzej", "uzeh", "boloh", "asuult", "asuuh", "виз", "паспорт", "төлөх", "яаж", "данс", "хөнгөлөлт", "хямдрал", "групп", "бүлэг", "уулзах",
   // A first message in English ("Can you tell me more about your ad?") names no trip either.
   "can", "could", "you", "tell", "me", "more", "about", "your", "this", "the", "ad", "ads", "advertisement",
   "post", "info", "information", "details", "detail", "price", "prices", "pricing", "cost", "how", "much",

@@ -70,6 +70,9 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
   const topics = new Set<TripTopic>(understanding?.topics || []);
   const asksIncludes = hasIncludedInPriceIntent(turn);
   if (hasPriceIntent(turn) && (!asksIncludes || /үнэ.{0,12}хэд|хэд.{0,12}үнэ|хэдэн\s*төг|(?:price|cost|une).{0,12}(?:how|hed)/i.test(turn))) topics.add("price");
+  // "Урьдчилгаа хэд вэ" asks the deposit, not the trip price; "хэд вэ" alone made it a price question
+  // and the customer got the full fare card instead of an answer about the deposit.
+  if (/урьдчилгаа|deposit|uridchilgaa/i.test(turn) && !/үнэ|une|price|төгрөг/i.test(turn)) topics.delete("price");
   if (hasDurationIntent(turn)) topics.add("duration");
   if (hasScheduleIntent(turn)) topics.add("dates");
   if (asksIncludes) topics.add("includes");
@@ -84,6 +87,13 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
     ["comparison", /харьцуул|ялгаа|compare/i],
     ["budget", /хамгийн\s*хямд|төсөв|budget|cheapest/i],
     ["discount", /хямдрал|discount|promo/i],
+    // Latin-typed follow-ups ("hezee garah ve", "hool bagtsan uu") and the meeting point / solo
+    // traveller questions found no topic and fell to silence when the model was not consulted.
+    ["dates", /hezee|garah\s*(?:udur|odor|ognoo)|ogno|хэзээ|огноо/i],
+    ["duration", /hed\s*honog|honog|hugatsaa/i],
+    ["includes", /bagts|hool|orson\s*(?:uu|yu)|ганцаараа|ganz?aaraa|single/i],
+    ["program", /hotolbor|xutulbur|hutulbr|цуглах|уулзах|tsuglah|uulzah|marshrut|маршрут/i],
+    ["availability", /\b(?:bga|bgaa|bn\s*uu|bnu|baigaa)\b/i],
   ];
   for (const [topic, pattern] of patterns) if (pattern.test(turn)) topics.add(topic);
   const dates = parseDepartureDateText(turn, now);

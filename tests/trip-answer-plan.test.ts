@@ -270,3 +270,24 @@ test("a fare listed bare and with its age band prints once, with the band", () =
   assert.equal((plan.reply.match(/Хүүхэд/g) || []).length, 1, plan.reply);
   assert.match(plan.reply, /Хүүхэд \(2-11 нас\): 2,590,000₮/);
 });
+
+test("a seats question with no date gets the fare and the dates to pick, not a hand-off", () => {
+  const t = trip({ departure_dates: ["2026-10-08", "2026-10-15"] });
+  const plan = buildTripAnswerPlan({ text: "суудал байна уу", trips: [t], route: route(), now })!;
+  assert.notEqual(plan.reply, "REFER");
+  assert.match(plan.reply, /2,000,000₮/);
+  assert.match(plan.reply, /10 сарын 8/);
+});
+
+test("a deposit question is not answered with the trip price", () => {
+  const plan = buildTripAnswerPlan({ text: "урьдчилгаа хэд вэ", trips: [trip()], route: route(), now })!;
+  assert.ok(!plan.request.topics.includes("price"));
+  assert.ok(plan.request.topics.includes("booking_terms"));
+});
+
+test("Latin-typed follow-ups and the meeting point find their topic", () => {
+  for (const [text, topic] of [["hezee garah ve", "dates"], ["hool bagtsan uu", "includes"], ["hed honog ve", "duration"], ["хаана цуглах вэ", "program"]] as const) {
+    const plan = buildTripAnswerPlan({ text, trips: [trip()], route: route(), now });
+    assert.ok(plan?.request.topics.includes(topic), `${text} -> ${topic}`);
+  }
+});

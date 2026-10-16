@@ -240,3 +240,24 @@ test("when / season / length / 'other trips' questions list the catalogue instea
   assert.equal(cruise.listed.length, 0);
   assert.match(cruise.reply, /круз\) аялал нээлттэй байхгүй/);
 });
+
+test("a span of days, a Latin month, a discount or a warm-place question gets an answer, not silence", () => {
+  const trips = [
+    trip(0, { duration_text: "3 өдөр 2 шөнө" }),
+    trip(1, { departure_dates: ["2026-11-05"], duration_text: "5 өдөр 4 шөнө" }),
+    trip(2, { departure_dates: ["2027-01-04"], duration_text: "8 өдөр 7 шөнө", route_name: "Вэлмор далайн аялал" }),
+  ];
+  const ids = (text: string) => buildCatalogListingReply(text, trips, NOW)?.listed.map((t) => t.id);
+  assert.deepEqual(ids("11/1-ээс 11/6 аялалын хөтөлбөр илгээнэ үү"), ["invented-1"]);
+  assert.deepEqual(ids("12/10-12/20"), ["invented-0"]);
+  assert.deepEqual(ids("1/4-5нд явах 14хүн"), ["invented-2"]);
+  assert.deepEqual(ids("11сарын 1-с хойш гарах аялал"), ["invented-1"]); // after-date: the next 30 days
+  assert.deepEqual(ids("11 sard ymar aylal gardag ve"), ["invented-1"]);
+  assert.deepEqual(ids("Haluun gazar baih"), ["invented-2"]);
+  const discount = buildCatalogListingReply("Ger buliin hyamdral bgaa yu", trips, NOW)!;
+  assert.equal(discount.listed.length, 0);
+  assert.match(discount.reply, /Хөнгөлөлтийн талаар аяллын зөвлөх тантай тохирно/);
+  // A single date (no span) and a price are other paths' questions.
+  assert.equal(buildCatalogListingReply("11 сарын 25 аялал", trips, NOW), null);
+  assert.equal(buildCatalogListingReply("2.890.000 гэсэн аялал", trips, NOW), null);
+});

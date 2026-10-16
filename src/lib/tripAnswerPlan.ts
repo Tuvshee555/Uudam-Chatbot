@@ -167,7 +167,11 @@ export function buildTripAnswerPlan(input: {
       const preview = wantsPreview ? stableFarePreview(trip, { ...selection, passengers: pricePassengers }, result, now, intentText) : null;
       if (preview) sections.price = preview;
       const question = selectionQuestion(result, intentText);
-      if (question && !preview) {
+      // A seats question with no date ("суудал байна уу") gets the fare and the bookable dates to
+      // pick from; it used to get the preview dropped and nothing else, so the bot handed off.
+      const availabilityOnly = !request.topics.includes("price");
+      if (question && (!preview || availabilityOnly)) {
+        if (preview) lines.push(preview);
         lines.push(question);
         needsSelection = true;
         // The specific missing selection is a useful answer, not a staff handoff.

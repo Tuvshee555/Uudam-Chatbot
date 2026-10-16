@@ -257,6 +257,9 @@ export function guardUnverifiedDates(
     if (dates.length === 0) continue;
     // A truthful denial may repeat a date that is absent from the schedule.
     if (/байхгүй|алга|гарахгүй|хуваарьгүй/i.test(line)) continue;
+    // "11 сарын 1 – 11 сарын 6-ны хооронд" restates the span the customer asked about; the trips under
+    // it carry their own dates, which are checked line by line.
+    if (dates.length === 2 && /хооронд|хүртэл/i.test(line)) continue;
     for (const date of dates) {
       if (!candidateTrips.some((trip) => tripSupportsDate(trip, date, now) === "match")) return "REFER";
     }

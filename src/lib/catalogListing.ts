@@ -138,8 +138,8 @@ function titleCase(word: string): string {
 // "11 сард гарах аялал", "ойрын аялал", "өвлийн аялал", "10 хоногийн аялал", "өөр аялал": a question
 // about WHEN or HOW LONG, naming no trip. None of these reached a fast path or the model, and
 // the customer got silence; the catalogue answers every one of them.
-const MONTH_ASK_RE = /(?:^|[^\d])(\d{1,2})\s*[-.]?\s*(?:р\s*)?сар(?:ын|д|аас|аар|ийн)?(?=[^\p{L}\d]|$)/u;
-const TRIP_WORD_RE = /аял|гарах|гарна|маршрут|хөтөлбөр|явах|явмаар|ayal|garah|marshrut/iu;
+const MONTH_ASK_RE = /(?:^|[^\d])(\d{1,2})\s*[-.]?\s*(?:р\s*)?(?:сар(?:ын|д|аас|аар|ийн)?|sar(?:d|iin|yn|aas)?)(?=[^\p{L}\d]|$)/u;
+const TRIP_WORD_RE = /аял|гарах|гарна|маршрут|хөтөлбөр|явах|явмаар|явдаг|yavdag|yawdag|ayal|aylal|garah|gardag|garsan|garsn|huwi|marshrut/iu;
 const SOONEST_RE = /ойр(?:ын|хон|доо)|удахгүй|одоо\s+гарах|энэ\s+(?:долоо\s+хоног|сар)/u;
 const NEXT_MONTH_RE = /ирэх\s+сар|дараа(?:х|гийн)?\s+сар/u;
 const OTHER_TRIPS_RE = /^(?:өөр|бусад|дахиад)(?:\s+(?:аялал|юу|байна|уу|байгаа|вэ|байдаг))*\s*[?.!]*$/u;
@@ -152,9 +152,16 @@ const SEASONS: Array<{ re: RegExp; months: number[]; heading: string }> = [
   { re: /наадм/u, months: [7], heading: "Наадмын үеэр (7 сард) гарах аяллууд" },
 ];
 
-type When = { months: number[]; heading: string; soonest?: boolean };
+type When = { months: number[]; heading: string; soonest?: boolean; span?: [string, string] };
+const DISCOUNT_ASK_RE = /хямдрал|хөнгөлөлт|hyamdral|hymdral|hungulult|hongololt|discount|promo/iu;
+const DISCOUNT_ASK_REPLY = "Хөнгөлөлтийн талаар аяллын зөвлөх тантай тохирно 😊 Аль аялал, хэдэн хүн явахаа бичээд утасны дугаараа үлдээгээрэй — зөвлөх тантай холбогдоно.";
+const WARM_PLACE_RE = /халуун\s*газар|дулаан\s*газар|haluun\s*(?:gazar|газар)|dulaan\s*(?:gazar|газар)/iu;
 
-function askedWhen(normalized: string, now: Date): When | null {
+function askedWhen(normalized: string, now: Date, raw = normalized): When | null {
+  const span = askedSpan(raw, now);
+  if (span && (TRIP_WORD_RE.test(normalized) || /^[0-9\s/.,-]+$/.test(raw.trim()) || AFTER_RE.test(raw))) {
+    return { months: [], heading: `${customerDate(span[0], now)} – ${customerDate(span[1], now)}-ны хооронд гарах аяллууд`, span };
+  }
   const month = askedMonth(normalized);
   if (month) return { months: [month], heading: `${month} сард гарах аяллууд` };
   if (!TRIP_WORD_RE.test(normalized)) return null;
@@ -172,13 +179,57 @@ function askedMonth(normalized: string): number | null {
   const match = MONTH_ASK_RE.exec(normalized);
   if (!match || !TRIP_WORD_RE.test(normalized)) return null;
   // A day after the month ("11 сарын 25") is a date question, answered elsewhere.
-  if (/сар(?:ын|ийн)?\s*\d/u.test(normalized) || /\d{1,2}\s*[./]\s*\d{1,2}/.test(normalized)) return null;
+  if (/(?:сар(?:ын|ийн)?|sar(?:iin|yn)?)\s*\d/u.test(normalized) || /\d{1,2}\s*[./]\s*\d{1,2}/.test(normalized)) return null;
   const month = Number(match[1]);
   return month >= 1 && month <= 12 ? month : null;
 }
 
 function todayInUb(now: Date): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ulaanbaatar", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+}
+
+// "11/1-ээс 11/6", "10/31-11-04", "1/4-5нд", "10-р сарын 10-аас 10-р сарын 12-ны хооронд", "11сарын 6-с хойш":
+// a span of departure days with no trip named. The date parser read one end at most, so these got
+// silence; the answer is the trips leaving inside the span.
+const AFTER_RE = /хойш|hoish|hoishoo|after|since/iu;
+
+function nextOccurrence(month: number, day: number, now: Date): string | null {
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const today = todayInUb(now);
+  const year = Number(today.slice(0, 4));
+  const ymd = (y: number) => `${y}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const probe = new Date(`${ymd(year)}T00:00:00Z`);
+  if (Number.isNaN(probe.getTime()) || probe.getUTCDate() !== day) return null;
+  return ymd(year) >= today ? ymd(year) : ymd(year + 1);
+}
+
+function askedSpan(raw: string, now: Date): [string, string] | null {
+  const text = raw.replace(/[–—]/g, "-");
+  const found: Array<{ at: number; date: string }> = [];
+  const add = (at: number, month: number, day: number) => {
+    const date = nextOccurrence(month, day, now);
+    if (date && !found.some((entry) => entry.at === at)) found.push({ at, date });
+  };
+  // "11/1", "11.1" — never part of a price ("2.890.000") or a longer number.
+  for (const match of text.matchAll(/(?<![\d.,])(\d{1,2})\s*[/.]\s*(\d{1,2})(?![\d.,]\d)(?:\s*-\s*(\d{1,2})(?![\d/.-]))?/g)) {
+    add(match.index!, Number(match[1]), Number(match[2]));
+    if (match[3]) add(match.index! + match[0].length, Number(match[1]), Number(match[3]));
+  }
+  // "10/31-11-04": the second end written month-day with a hyphen.
+  for (const match of text.matchAll(/-\s*(\d{1,2})-(\d{1,2})(?![\d])/g)) add(match.index!, Number(match[1]), Number(match[2]));
+  // "10-р сарын 10", "11сарын 6", "12 sariin 20".
+  for (const match of text.matchAll(/(\d{1,2})\s*-?\s*(?:р\s*)?(?:сар(?:ын)?|sar(?:iin|yn)?)\s*(\d{1,2})/giu)) add(match.index!, Number(match[1]), Number(match[2]));
+  const dates = found.sort((a, b) => a.at - b.at).map((entry) => entry.date);
+  if (dates.length >= 2) {
+    const [from, to] = [dates[0], dates[dates.length - 1]].sort();
+    return from === to ? null : [from, to];
+  }
+  if (dates.length === 1 && AFTER_RE.test(text)) {
+    const end = new Date(`${dates[0]}T00:00:00Z`);
+    end.setUTCDate(end.getUTCDate() + 30);
+    return [dates[0], end.toISOString().slice(0, 10)];
+  }
+  return null;
 }
 
 /** Dates a customer can still book: open or unknown, today or later, never a closed one. */
@@ -201,7 +252,8 @@ function inMonths(dates: string[], months: number[], now: Date): string[] {
 function whenListing(pool: TravelTrip[], when: When, now: Date): Listing | null {
   const rows = pool.map((trip) => {
     const all = bookableDates(trip, now);
-    return { trip, dates: when.soonest ? all : inMonths(all, when.months, now) };
+    const dates = when.span ? all.filter((date) => date >= when.span![0] && date <= when.span![1]) : when.soonest ? all : inMonths(all, when.months, now);
+    return { trip, dates };
   }).filter((row) => row.dates.length > 0).sort((a, b) => a.dates[0].localeCompare(b.dates[0]));
   if (!rows.length) {
     return { reply: `${when.heading.replace(/ гарах аяллууд$/, " гарах аялал")} одоогоор алга байна. Бусад хуваарийг эндээс харна уу: ${BOOKING_WEBSITE_URL}`, listed: [], authoritative: true };
@@ -310,13 +362,16 @@ export function buildCatalogListingReply(rawIntentText: string, trips: TravelTri
     queryWantsLandFlightCombo(intentText) ||
     queryWantsLandOnlyEnhanced(intentText);
   const quiet = namedDestinations(intentText, active).length === 0;
-  const when = quiet ? askedWhen(normalized, now) : null;
+  const when = quiet ? askedWhen(normalized, now, rawIntentText) : null;
   if (when) {
     const pool = wantsCategory ? (wantsCruise ? active.filter(tripIsCruise) : filterTripsByTransportIntent(intentText, active)) : active;
     return whenListing(pool, when, now);
   }
-  // "Далайтай аялал байна уу": the trips whose own text says sea or beach.
-  if (quiet && queryWantsSeaBeach(intentText) && !wantsCategory) {
+  // A discount asked with no trip named: nothing is advertised to quote, and a group or family price is
+  // agreed with staff (one ad promises it). Ask for the trip and head count instead of going silent.
+  if (quiet && DISCOUNT_ASK_RE.test(normalized)) return { reply: DISCOUNT_ASK_REPLY, listed: [], authoritative: true };
+  // "Далайтай аялал байна уу", "халуун газар": the trips whose own text says sea or beach.
+  if (quiet && (queryWantsSeaBeach(intentText) || WARM_PLACE_RE.test(normalized)) && !wantsCategory) {
     const sea = active.filter((trip) => tripHasSeaBeach(trip) && bookableDates(trip, now).length > 0).sort((a, b) => soonestKey(a, now).localeCompare(soonestKey(b, now)));
     if (sea.length) return { ...renderListing(sea, "Далайн амралтын аяллууд 😊", MAX_COMPACT, now), authoritative: true };
   }

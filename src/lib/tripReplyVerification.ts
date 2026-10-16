@@ -15,6 +15,55 @@ function bandKey(text: string): string {
   return match ? `${match[1]}-${match[2]}${/сар|month/i.test(match[3] || "") ? "сар" : "нас"}` : "";
 }
 
+const FARE_LINE = /том\s*хүн|хүүх(?:эд|дийн)|нярай|adult|child|infant|нийт\s*:/i;
+const squash = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
+
+/** Everything the operator wrote about a trip in their own words: program, inclusions, notes. */
+function tripOwnText(trip: TravelTrip): string {
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const list = (value: unknown) => Array.isArray(value) ? value.flatMap((item) => typeof item === "string" ? [item] : item && typeof item === "object" ? Object.values(item).filter((v): v is string => typeof v === "string") : []) : [];
+  return squash([
+    ...list(extra.itinerary_days), ...list(extra.included_items), ...list(extra.excluded_items), ...list(extra.important_notes),
+    typeof extra.important_notes === "string" ? extra.important_notes : "",
+  ].join(" | "));
+}
+
+/**
+ * A line copied word for word from the trip's own program or inclusion list cannot invent a
+ * price or a date — "Өрөөнд ганцаараа байрлах нэмэлт төлбөр 990,000₮", "✈ 12:00 – 16:30" — but the
+ * price and date guards read those numbers as quoted fares and departures and rejected the whole
+ * reply: the customer asking "what is included?" or "program" got silence. Such lines are left
+ * out of the checks; every other line is checked as before.
+ */
+function withoutOwnText(reply: string, trips: TravelTrip[]): string {
+  const own = trips.map(tripOwnText).join(" | ");
+  return reply.split(/\r?\n/).filter((line) => {
+    const core = squash(line.replace(/^\s*[•\-*]\s*/, "").replace(/^\d{1,2}-р өдөр:\s*[^—]*—\s*/, ""));
+    // Fare lines are always checked: a stale price in the program text must never pass as a fare.
+    return core.length < 12 || FARE_LINE.test(line) || !own.includes(core);
+  }).join("\n");
+}
+
+/**
+ * "Нийт: 7,670,000₮" under "Том хүн x 2: 2,690,000₮" and "Хүүхэд x 1: 2,290,000₮" is arithmetic on
+ * fares that are checked line by line; the price guard does not add up, so it read the total as an
+ * unknown fare and the party-total answer became silence. A total that equals the sum of the
+ * per-person lines above it is dropped from the check; any other total is still checked.
+ */
+function withoutAddedUpTotals(text: string): string {
+  let sum = 0;
+  const out: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const each = /x\s*(\d{1,3})\s*:\s*([\d.,]+)\s*₮/i.exec(line);
+    if (each) sum += Number(each[1]) * Number(each[2].replace(/[.,]/g, ""));
+    const total = /^\s*нийт\s*:\s*([\d.,]+)\s*₮\s*$/i.exec(line);
+    if (total && sum > 0 && Number(total[1].replace(/[.,]/g, "")) === sum) { sum = 0; continue; }
+    if (total) sum = 0;
+    out.push(line);
+  }
+  return out.join("\n");
+}
+
 /** Shared final check for AI and code-generated replies in both channels. */
 export function verifyTripReply(input: {
   reply: string; trips: TravelTrip[]; selection?: TripSelection | null; now?: Date;
@@ -23,17 +72,19 @@ export function verifyTripReply(input: {
   const now = input.now || new Date();
   if (isReferReply(reply)) return reply;
   if (!trips.length) return [...reply.matchAll(AMOUNT)].length ? "REFER" : reply;
-  const priceChecked = guardUnverifiedPrices(reply, trips, now);
+  // Links (a poster PDF id is full of digits) are not prices or dates.
+  const checked = withoutAddedUpTotals(withoutOwnText(reply.replace(/https?:\/\/\S+/g, " "), trips));
+  const priceChecked = guardUnverifiedPrices(checked, trips, now);
   if (isReferReply(priceChecked)) return "REFER";
-  const datesChecked = guardUnverifiedDates(reply, trips, undefined, now);
+  const datesChecked = guardUnverifiedDates(checked, trips, undefined, now);
   if (isReferReply(datesChecked)) return "REFER";
-  if (isReferReply(guardInventedBookingTerms(reply, "", trips))) return "REFER";
+  if (isReferReply(guardInventedBookingTerms(checked, "", trips))) return "REFER";
   let active = trips;
   let date = selection?.date || null;
   let hotel = selection?.hotel || null;
   // A header listing several departures ("12/19, 12/22:") scopes the fare lines under it.
   let dateSet: string[] = [];
-  for (const line of reply.split(/\r?\n|[|;]/)) {
+  for (const line of checked.split(/\r?\n|[|;]/)) {
     const named = trips.filter((trip) => line.includes(trip.route_name));
     if (named.length) { active = named; date = selection?.tripId === named[0].id ? selection.date : null; hotel = selection?.tripId === named[0].id ? selection.hotel : null; }
     const dates = parseDepartureDateText(line, now);
