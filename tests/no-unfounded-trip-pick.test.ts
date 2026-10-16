@@ -32,3 +32,15 @@ test("a date or an everyday word does not pick a trip that only shares a number 
   // A real name still resolves.
   assert.equal(findBestTripMatch("Тармиз аялал үнэ", CATALOG).best?.id, "tar");
 });
+
+test("a message made only of describing words is not one trip, even when an alias contains it", () => {
+  const catalog = [
+    trip("peak", "Лумиа - Гортал аялал", { aliases: ["Лумиа - Гортал уулын аялал"] }),
+    trip("kids", "БАРТЭН -сурагчдын амралтын аялал"),
+    trip("hk", "Тиранш – Хонконг аялал"),
+  ];
+  for (const text of ["Уулын аялал", "Амралтын өдрүүдээр", "Оюутан хөнгөлөлт"]) {
+    assert.equal(findBestTripMatch(text, catalog).best, null, text);
+  }
+  assert.equal(findBestTripMatch("Гортал уулын аялал", catalog).best?.id, "peak");
+});

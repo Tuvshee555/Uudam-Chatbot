@@ -153,9 +153,6 @@ const SEASONS: Array<{ re: RegExp; months: number[]; heading: string }> = [
 ];
 
 type When = { months: number[]; heading: string; soonest?: boolean; span?: [string, string] };
-const DISCOUNT_ASK_RE = /хямдрал|хөнгөлөлт|hyamdral|hymdral|hungulult|hongololt|discount|promo/iu;
-const DISCOUNT_ASK_REPLY = "Хөнгөлөлтийн талаар аяллын зөвлөх тантай тохирно 😊 Аль аялал, хэдэн хүн явахаа бичээд утасны дугаараа үлдээгээрэй — зөвлөх тантай холбогдоно.";
-const WARM_PLACE_RE = /халуун\s*газар|дулаан\s*газар|haluun\s*(?:gazar|газар)|dulaan\s*(?:gazar|газар)/iu;
 
 function askedWhen(normalized: string, now: Date, raw = normalized): When | null {
   const span = askedSpan(raw, now);
@@ -369,9 +366,8 @@ export function buildCatalogListingReply(rawIntentText: string, trips: TravelTri
   }
   // A discount asked with no trip named: nothing is advertised to quote, and a group or family price is
   // agreed with staff (one ad promises it). Ask for the trip and head count instead of going silent.
-  if (quiet && DISCOUNT_ASK_RE.test(normalized)) return { reply: DISCOUNT_ASK_REPLY, listed: [], authoritative: true };
   // "Далайтай аялал байна уу", "халуун газар": the trips whose own text says sea or beach.
-  if (quiet && (queryWantsSeaBeach(intentText) || WARM_PLACE_RE.test(normalized)) && !wantsCategory) {
+  if (quiet && queryWantsSeaBeach(intentText) && !wantsCategory) {
     const sea = active.filter((trip) => tripHasSeaBeach(trip) && bookableDates(trip, now).length > 0).sort((a, b) => soonestKey(a, now).localeCompare(soonestKey(b, now)));
     if (sea.length) return { ...renderListing(sea, "Далайн амралтын аяллууд 😊", MAX_COMPACT, now), authoritative: true };
   }

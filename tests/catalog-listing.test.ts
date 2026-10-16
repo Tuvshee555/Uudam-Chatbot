@@ -241,7 +241,7 @@ test("when / season / length / 'other trips' questions list the catalogue instea
   assert.match(cruise.reply, /круз\) аялал нээлттэй байхгүй/);
 });
 
-test("a span of days, a Latin month, a discount or a warm-place question gets an answer, not silence", () => {
+test("a span of days or a Latin month gets the trips; a discount or a vague 'warm place' is left to staff", () => {
   const trips = [
     trip(0, { duration_text: "3 өдөр 2 шөнө" }),
     trip(1, { departure_dates: ["2026-11-05"], duration_text: "5 өдөр 4 шөнө" }),
@@ -253,10 +253,9 @@ test("a span of days, a Latin month, a discount or a warm-place question gets an
   assert.deepEqual(ids("1/4-5нд явах 14хүн"), ["invented-2"]);
   assert.deepEqual(ids("11сарын 1-с хойш гарах аялал"), ["invented-1"]); // after-date: the next 30 days
   assert.deepEqual(ids("11 sard ymar aylal gardag ve"), ["invented-1"]);
-  assert.deepEqual(ids("Haluun gazar baih"), ["invented-2"]);
-  const discount = buildCatalogListingReply("Ger buliin hyamdral bgaa yu", trips, NOW)!;
-  assert.equal(discount.listed.length, 0);
-  assert.match(discount.reply, /Хөнгөлөлтийн талаар аяллын зөвлөх тантай тохирно/);
+  // The owner's rule: no data, no answer. Nothing records a discount, and "warm" is a guess.
+  assert.equal(buildCatalogListingReply("Ger buliin hyamdral bgaa yu", trips, NOW), null);
+  assert.equal(buildCatalogListingReply("Haluun gazar baih", trips, NOW), null);
   // A single date (no span) and a price are other paths' questions.
   assert.equal(buildCatalogListingReply("11 сарын 25 аялал", trips, NOW), null);
   assert.equal(buildCatalogListingReply("2.890.000 гэсэн аялал", trips, NOW), null);

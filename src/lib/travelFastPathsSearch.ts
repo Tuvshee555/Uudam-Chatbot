@@ -725,7 +725,8 @@ const DESCRIPTIVE_NOUN_RE = /^(?:онгоц|тийз|нислэг|галт|тэ�
 // a district alias of one trip ("...хороо" + "-нд"), and "10/20-23-ны хооронд эхлэх аялал"
 // was answered about that one trip (2026-10-16). Never a place, whatever the catalogue holds.
 const NEVER_A_PLACE = new Set(["хооронд", "хоорондоо", "хүртэл", "хүртэлх", "хойш", "өмнө", "дараа", "эхлэх",
-  "эхэлнэ", "эхэлдэг", "эхлэн", "хамт", "хамтдаа", "болон", "бөгөөд", "hoorond", "hurtel", "hoish", "daraa", "umnu"]);
+  "эхэлнэ", "эхэлдэг", "эхлэн", "хамт", "хамтдаа", "болон", "бөгөөд", "hoorond", "hurtel", "hoish", "daraa", "umnu",
+  "хөнгөлөлт", "хөнгөлөлттэй", "хямдрал", "хямдралтай", "hungulult", "hyamdral"]);
 
 function queryPlaceWords(queryWords: string[], vocabulary: CatalogVocabulary): string[] {
   return unique(
@@ -862,9 +863,13 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
     // of 6 words no longer outweighs a direct 4-word route-name match.
     const aliases = getAliases(trip);
     let aliasHit = 0;
+    // The whole message sitting inside an alias only names the trip when the message has a word of
+    // its own: "уулын аялал" (a mountain trip) is inside "<city> - <peak> уулын аялал" and got that
+    // one trip's card.
+    const distinctQuery = queryWords.some((word) => word.length >= 3 && !DESCRIPTIVE_NOUN_RE.test(word));
     for (const alias of aliases) {
       const aliasNorm = normText(alias);
-      if (query.includes(aliasNorm) || aliasNorm.includes(query)) {
+      if (query.includes(aliasNorm) || (distinctQuery && aliasNorm.includes(query))) {
         aliasHit = 1;
         break;
       }
@@ -872,12 +877,12 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
       if (
         aliasPhonetic &&
         queryPhonetic &&
-        (queryPhonetic.includes(aliasPhonetic) || aliasPhonetic.includes(queryPhonetic))
+        (queryPhonetic.includes(aliasPhonetic) || (distinctQuery && aliasPhonetic.includes(queryPhonetic)))
       ) {
         aliasHit = 1;
         break;
       }
-      if (hasLooseAliasMatch(query, queryWords, alias, queryPhonetic, queryPhoneticWords)) {
+      if (distinctQuery && hasLooseAliasMatch(query, queryWords, alias, queryPhonetic, queryPhoneticWords)) {
         const aliasTokenCount = Math.max(1, unique(keywordTokens(alias)).length);
         const looseStrength = aliasTokenCount <= 2 ? 1 : Math.min(1, 2 / aliasTokenCount);
         aliasHit = Math.max(aliasHit, looseStrength);
@@ -992,10 +997,12 @@ function candidatesForSameDestination(matches: TripMatch[]): TravelTrip[] {
 }
 
 export function resolveTripFromUserMessage(
-  text: string,
+  rawText: string,
   trips: TravelTrip[],
   options: { allowLooseFallback?: boolean } & TripMatchOptions = {},
 ): TripResolution {
+  // "Амралтын өдрүүдээр" means "at the weekend", not a school-holiday trip.
+  const text = rawText.replace(/амралтын\s+өдр\S*/giu, " ");
   const allowLooseFallback = options.allowLooseFallback === true;
   const matches = findTripMatches(text, trips, options);
   if (!matches.length) {
@@ -1280,18 +1287,15 @@ export function queryWantsDirectFlight(query: string): boolean {
 }
 
 export function queryWantsSeaBeach(query: string): boolean {
-  const normalized = normText(query);
-  return (
-    normalized.includes("далай") ||
-    normalized.includes("далайн") ||
-    normalized.includes("далайтай") ||
-    normalized.includes("тэнгис") ||
-    normalized.includes("тэнгисийн") ||
-    normalized.includes("эрэг") ||
-    normalized.includes("beach") ||
-    normalized.includes("sea") ||
-    normalized.includes("seaside")
-  );
+  return isSeaWordText(normText(query));
+}
+
+/** A word that means sea or beach — whole words, so "Зэрэглээ" (эрэг inside) or "season" are not the sea. */
+function isSeaWordText(text: string): boolean {
+  return text.split(/[^\p{L}]+/u).some((word) =>
+    word.startsWith("далай") || word.startsWith("тэнгис") ||
+    (word.startsWith("эрэг") && !word.startsWith("эрэгтэй")) ||
+    word === "beach" || word === "sea" || word === "seaside");
 }
 
 export function tripHasSeaBeach(trip: TravelTrip): boolean {
@@ -1304,16 +1308,9 @@ export function tripHasSeaBeach(trip: TravelTrip): boolean {
       ...getAliases(trip),
     ].join(" "),
   );
-  return (
-    haystack.includes("далай") ||
-    haystack.includes("далайн") ||
-    haystack.includes("тэнгис") ||
-    haystack.includes("тэнгисийн") ||
-    haystack.includes("эрэг") ||
-    haystack.includes("beach") ||
-    haystack.includes("sea") ||
-    haystack.includes("seaside")
-  );
+  // Whole words only: "sea" inside "season" and "эрэг" inside "эрэгтэй" made a health-check
+  // trip with no coast a "sea" trip.
+  return isSeaWordText(haystack);
 }
 
 /**
