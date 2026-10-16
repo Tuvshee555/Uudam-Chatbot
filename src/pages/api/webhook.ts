@@ -39,7 +39,7 @@ import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { buildContactReply, contactSettingsOf } from "../../lib/contactReplies";
 import { fetchThreadMessages, latestStaffReplyAt, STAFF_TAKEOVER_MS } from "../../lib/staffTakeover";
-import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
+import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBookedCustomer, pauseBot, trackSender } from "../../lib/pause";
 import { pickReferral, rememberAdReferral } from "../../lib/adReferral";
@@ -1345,7 +1345,7 @@ async function handleMessage(
         // the bot was the most common way a real customer got no answer.
         if (isGenericTripRequest(text)) {
           await deliverFastPathReply({
-            reply: WHICH_TRIP_CLARIFY_REPLY,
+            reply: whichTripClarifyReply(text),
             failTag: "generic_trip_request",
             rememberSource: "api.webhook.generic_trip_request",
             counter: "webhook.generic_trip_request_total",
@@ -1798,7 +1798,7 @@ async function handleMessage(
     // "Aylaluud", "Medeelel avay": no destination named, so the model had
     // nothing to look up and said REFER. Ask which trip rather than paging staff.
     await deliverFastPathReply({
-      reply: WHICH_TRIP_CLARIFY_REPLY,
+      reply: whichTripClarifyReply(text),
       failTag: "generic_trip_request_ai",
       rememberSource: "api.webhook.generic_trip_request_ai",
       counter: "webhook.generic_trip_request_total",
@@ -1909,7 +1909,7 @@ async function handleMessage(
   // customers were sent the bare word "REFER" (2026-10-06..07).
   if (isReferReply(safeReply) && isGenericTripRequest(text)) {
     await deliverFastPathReply({
-      reply: WHICH_TRIP_CLARIFY_REPLY,
+      reply: whichTripClarifyReply(text),
       failTag: "generic_trip_request_guarded",
       rememberSource: "api.webhook.generic_trip_request_guarded",
       counter: "webhook.generic_trip_request_total",

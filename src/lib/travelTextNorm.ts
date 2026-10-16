@@ -160,6 +160,17 @@ export const GENERIC_REQUEST_WORDS = new Set([
   "надад",
   "манай",
   "танай",
+  // Questions about a trip the customer has not named yet ("Хүүхдийн үнэ хэд вэ", "Хоол багтсан уу"):
+  // the answer is the question "which trip?", not a hand-off.
+  "хүүхдийн", "нярайн", "болох", "урьдчилгаа", "нислэгийн", "цаг", "газар", "хаана", "зардал", "нэмэлт",
+  "ганцаараа", "ганц", "нэг", "хүнээр", "явж", "даатгал", "хоол", "хоолны", "буудал", "буудлын", "одтой",
+  "багтсан", "багтаа", "явахад", "виз", "паспорт", "төлөх", "яаж", "данс", "хөнгөлөлт", "хямдрал", "групп", "бүлэг", "уулзах",
+  // A first message in English ("Can you tell me more about your ad?") names no trip either.
+  "can", "could", "you", "tell", "me", "more", "about", "your", "this", "the", "ad", "ads", "advertisement",
+  "post", "info", "information", "details", "detail", "price", "prices", "pricing", "cost", "how", "much",
+  "trip", "trips", "tour", "tours", "travel", "hi", "hello", "hey", "please", "want", "know", "what",
+  "is", "are", "do", "have", "available", "interested", "program", "programme", "itinerary", "package",
+  "packages", "offer", "offers", "send", "give", "i", "a", "an", "to", "for", "of", "and", "it", "on",
 ]);
 
 export const STRUCTURED_QUERY_SIGNALS = [

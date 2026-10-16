@@ -215,3 +215,28 @@ test("a month with no day or place lists the trips leaving that month", () => {
   assert.equal(buildCatalogListingReply("12 сарын 17 аялал", trips, NOW), null);
   assert.equal(buildCatalogListingReply("12/17 гарах аялал", trips, NOW), null);
 });
+
+test("when / season / length / 'other trips' questions list the catalogue instead of going silent", () => {
+  const trips = [
+    trip(0, { duration_text: "3 өдөр 2 шөнө" }),
+    trip(1, { departure_dates: ["2026-11-05"], duration_text: "5 өдөр 4 шөнө" }),
+    trip(2, { departure_dates: ["2027-07-12"], duration_text: "8 өдөр 7 шөнө", route_name: "Вэлмор далайн аялал" }),
+  ];
+  const ids = (text: string) => buildCatalogListingReply(text, trips, NOW)?.listed.map((t) => t.id);
+  assert.deepEqual(ids("Хамгийн ойрын гарах аялал"), ["invented-1", "invented-0", "invented-2"]);
+  assert.deepEqual(ids("Ирэх сард гарах аялал"), ["invented-1"]); // NOW is October
+  assert.deepEqual(ids("Өвлийн аялал байна уу"), ["invented-0"]);
+  assert.deepEqual(ids("Наадмаар аялал байна уу"), ["invented-2"]);
+  assert.deepEqual(ids("Зуны аялал байна уу"), ["invented-2"]);
+  assert.deepEqual(ids("5 хоногийн аялал байна уу"), ["invented-1"]);
+  assert.deepEqual(ids("Далайтай аялал байна уу"), ["invented-2"]);
+  assert.equal(ids("Өөр аялал байна уу")?.length, 3);
+  // No trip of that length: say so and offer the nearest lengths.
+  const none = buildCatalogListingReply("10 хоногийн аялал байна уу", trips, NOW)!;
+  assert.match(none.reply, /10 өдрийн аялал одоогоор алга байна/);
+  assert.ok(none.listed.length > 0);
+  // No cruise in the catalogue: an honest answer, not silence.
+  const cruise = buildCatalogListingReply("Усан онгоцны аялал байна уу", trips, NOW)!;
+  assert.equal(cruise.listed.length, 0);
+  assert.match(cruise.reply, /круз\) аялал нээлттэй байхгүй/);
+});

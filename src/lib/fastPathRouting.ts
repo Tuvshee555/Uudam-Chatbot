@@ -108,6 +108,8 @@ function looseNorm(value: string): string {
   return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+const DATES_ONLY_RE = /^(?:огноо|огноог|өдөр|өдрүүд|гарах\s+өдөр(?:үүд)?|хэзээ|ogno|udur|hezee)(?:\s+(?:нь|ni|вэ|ve|юу|yu))*\s*[?.!]*$/iu;
+
 /**
  * "2", "2.", "2)", "2-р", "2. <trip name, cut off>..." — the customer picking an
  * option from a numbered list. Deliberately NOT "2 том хүн 2 хүүхэд" or
@@ -219,6 +221,12 @@ export async function routeFastPathText(input: {
         .map((id) => trips.find((trip) => trip.id === id))
         .filter((trip): trip is TravelTrip => Boolean(trip))
     : [];
+
+  // "Огноо нь", "хэзээ вэ" right after a "which trip?" list: the customer wants THOSE trips' dates.
+  // Nothing names a trip, so it used to fall through to silence while staff were paged.
+  if (pendingTrips.length > 1 && DATES_ONLY_RE.test(text.trim())) {
+    return { matchText: text, scopedClarify: pendingTrips, scopedClarifyNote: "Эдгээр аяллын гарах өдрүүд:", informationalAlternatives: true };
+  }
 
   // --- 0. Understanding: one reading of the whole message decides the trip. ---
   // A numbered pick ("2", "2. <name>…") and a tap on one of our own buttons

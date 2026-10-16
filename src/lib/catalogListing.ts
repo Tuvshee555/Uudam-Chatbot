@@ -18,6 +18,8 @@ import {
   keywordTokens,
   normText,
   queryWantsDirectFlight,
+  queryWantsSeaBeach,
+  tripHasSeaBeach,
   queryWantsLandFlightCombo,
   queryWantsLandOnlyEnhanced,
   tripIsCruise,
@@ -133,11 +135,38 @@ function titleCase(word: string): string {
   return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
-// "11 сард гарах аялал", "11. сарын маршрут": a month with no day and no place — the
-// customer wants the trips leaving that month. It used to reach neither a fast path nor
-// the model, and the customer got silence.
+// "11 сард гарах аялал", "ойрын аялал", "өвлийн аялал", "10 хоногийн аялал", "өөр аялал": a question
+// about WHEN or HOW LONG, naming no trip. None of these reached a fast path or the model, and
+// the customer got silence; the catalogue answers every one of them.
 const MONTH_ASK_RE = /(?:^|[^\d])(\d{1,2})\s*[-.]?\s*(?:р\s*)?сар(?:ын|д|аас|аар|ийн)?(?=[^\p{L}\d]|$)/u;
 const TRIP_WORD_RE = /аял|гарах|гарна|маршрут|хөтөлбөр|явах|явмаар|ayal|garah|marshrut/iu;
+const SOONEST_RE = /ойр(?:ын|хон|доо)|удахгүй|одоо\s+гарах|энэ\s+(?:долоо\s+хоног|сар)/u;
+const NEXT_MONTH_RE = /ирэх\s+сар|дараа(?:х|гийн)?\s+сар/u;
+const OTHER_TRIPS_RE = /^(?:өөр|бусад|дахиад)(?:\s+(?:аялал|юу|байна|уу|байгаа|вэ|байдаг))*\s*[?.!]*$/u;
+const DURATION_ASK_RE = /(\d{1,2})\s*(?:хоног|өдөр)/u;
+const SEASONS: Array<{ re: RegExp; months: number[]; heading: string }> = [
+  { re: /өвөл|өвлийн|өвлөө/u, months: [12, 1, 2], heading: "Өвлийн улиралд гарах аяллууд" },
+  { re: /хавар|хаврын/u, months: [3, 4, 5], heading: "Хаврын улиралд гарах аяллууд" },
+  { re: /зун(?!\p{L})|зуны|зуслан/u, months: [6, 7, 8], heading: "Зуны улиралд гарах аяллууд" },
+  { re: /намар|намрын/u, months: [9, 10, 11], heading: "Намрын улиралд гарах аяллууд" },
+  { re: /наадм/u, months: [7], heading: "Наадмын үеэр (7 сард) гарах аяллууд" },
+];
+
+type When = { months: number[]; heading: string; soonest?: boolean };
+
+function askedWhen(normalized: string, now: Date): When | null {
+  const month = askedMonth(normalized);
+  if (month) return { months: [month], heading: `${month} сард гарах аяллууд` };
+  if (!TRIP_WORD_RE.test(normalized)) return null;
+  if (NEXT_MONTH_RE.test(normalized)) {
+    const next = (Number(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ulaanbaatar", month: "2-digit" }).format(now)) % 12) + 1;
+    return { months: [next], heading: `Ирэх сард (${next} сард) гарах аяллууд` };
+  }
+  const season = SEASONS.find((entry) => entry.re.test(normalized));
+  if (season) return { months: season.months, heading: season.heading };
+  if (SOONEST_RE.test(normalized)) return { months: [], heading: "Ойрын гарах аяллууд", soonest: true };
+  return null;
+}
 
 function askedMonth(normalized: string): number | null {
   const match = MONTH_ASK_RE.exec(normalized);
@@ -148,33 +177,64 @@ function askedMonth(normalized: string): number | null {
   return month >= 1 && month <= 12 ? month : null;
 }
 
-function monthDepartures(trip: TravelTrip, month: number, now: Date): string[] {
-  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ulaanbaatar", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+function todayInUb(now: Date): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ulaanbaatar", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+}
+
+/** Dates a customer can still book: open or unknown, today or later, never a closed one. */
+function bookableDates(trip: TravelTrip, now: Date): string[] {
+  const today = todayInUb(now);
   const availability = normalizeTripOffers(trip, now).filter((offer) => offer.source !== "discount").flatMap((offer) => offer.availability);
   const open = new Set(availability.filter((row) => row.date >= today && ["open", "unknown"].includes(row.status)).map((row) => row.date));
   for (const row of availability) if (!["open", "unknown"].includes(row.status)) open.delete(row.date);
-  const thisYear = Number(today.slice(0, 4));
-  const year = month >= Number(today.slice(5, 7)) ? thisYear : thisYear + 1;
-  return [...open].filter((date) => date.startsWith(`${year}-${String(month).padStart(2, "0")}-`)).sort();
+  return [...open].sort();
 }
 
-function monthListing(pool: TravelTrip[], month: number, now: Date): Listing | null {
-  const rows = pool.map((trip) => ({ trip, dates: monthDepartures(trip, month, now) })).filter((row) => row.dates.length > 0)
-    .sort((a, b) => a.dates[0].localeCompare(b.dates[0]));
+function inMonths(dates: string[], months: number[], now: Date): string[] {
+  const today = todayInUb(now);
+  const thisYear = Number(today.slice(0, 4));
+  const thisMonth = Number(today.slice(5, 7));
+  const wanted = new Set(months.map((month) => `${month >= thisMonth ? thisYear : thisYear + 1}-${String(month).padStart(2, "0")}`));
+  return dates.filter((date) => wanted.has(date.slice(0, 7)));
+}
+
+function whenListing(pool: TravelTrip[], when: When, now: Date): Listing | null {
+  const rows = pool.map((trip) => {
+    const all = bookableDates(trip, now);
+    return { trip, dates: when.soonest ? all : inMonths(all, when.months, now) };
+  }).filter((row) => row.dates.length > 0).sort((a, b) => a.dates[0].localeCompare(b.dates[0]));
   if (!rows.length) {
-    return { reply: `${month} сард гарах аялал одоогоор алга байна. Өөр сарын хуваарийг эндээс харна уу: ${BOOKING_WEBSITE_URL}`, listed: [], authoritative: true };
+    return { reply: `${when.heading.replace(/ гарах аяллууд$/, " гарах аялал")} одоогоор алга байна. Бусад хуваарийг эндээс харна уу: ${BOOKING_WEBSITE_URL}`, listed: [], authoritative: true };
   }
   const listed: TravelTrip[] = [];
-  const lines = [`${month} сард гарах аяллууд 😊`];
+  const lines = [`${when.heading} 😊`];
   const footer = (count: number) => [...(rows.length > count ? ["", `Өөр ${rows.length - count} аялал бий. Бүгдийг эндээс харна уу: ${BOOKING_WEBSITE_URL}`] : []), "", AMBIGUOUS_REPLY_MARKER];
   for (const { trip, dates } of rows.slice(0, MAX_DETAILED)) {
     const price = priceDetail(trip, now);
-    const line = `• ${trip.route_name} — ${[trip.duration_text?.trim(), price, `гарах: ${dates.slice(0, 4).map((date) => customerDate(date, now)).join(", ")}`].filter(Boolean).join(" · ")}`;
+    const line = `• ${trip.route_name} — ${[trip.duration_text?.trim(), price, `гарах: ${dates.slice(0, when.soonest ? 2 : 4).map((date) => customerDate(date, now)).join(", ")}`].filter(Boolean).join(" · ")}`;
     if ([...lines, line, ...footer(listed.length + 1)].join("\n").length > MAX_MESSAGE_CHARS) break;
     lines.push(line);
     listed.push(trip);
   }
   return { reply: [...lines, ...footer(listed.length)].join("\n"), listed, authoritative: true };
+}
+
+function tripDays(trip: TravelTrip): number | null {
+  const text = trip.duration_text || "";
+  const days = /(\d{1,2})\s*өдөр/iu.exec(text);
+  if (days) return Number(days[1]);
+  const nights = /(\d{1,2})\s*шөнө/iu.exec(text);
+  return nights ? Number(nights[1]) + 1 : null;
+}
+
+/** "10 хоногийн аялал байна уу": the trips of that length, or the nearest lengths when none is. */
+function durationListing(active: TravelTrip[], wanted: number, now: Date): Listing | null {
+  const sized = active.map((trip) => ({ trip, days: tripDays(trip) })).filter((row): row is { trip: TravelTrip; days: number } => row.days !== null && bookableDates(row.trip, now).length > 0);
+  const exact = sized.filter((row) => row.days === wanted).map((row) => row.trip);
+  if (exact.length) return { ...renderListing(exact, `${wanted} өдрийн аяллууд 😊`, MAX_DETAILED, now), authoritative: true };
+  const nearest = [...sized].sort((a, b) => Math.abs(a.days - wanted) - Math.abs(b.days - wanted) || a.days - b.days).slice(0, MAX_COMPACT).map((row) => row.trip);
+  if (!nearest.length) return null;
+  return { ...renderListing(nearest, `${wanted} өдрийн аялал одоогоор алга байна. Хамгийн ойрын хугацаатай аяллууд:`, MAX_COMPACT, now), authoritative: true };
 }
 
 // "арай бага хоногтой нь байхгүй юу": the model answered with whichever trip
@@ -249,11 +309,24 @@ export function buildCatalogListingReply(rawIntentText: string, trips: TravelTri
     queryWantsDirectFlight(intentText) ||
     queryWantsLandFlightCombo(intentText) ||
     queryWantsLandOnlyEnhanced(intentText);
-  const month = askedMonth(normalized);
-  if (month && namedDestinations(intentText, active).length === 0) {
+  const quiet = namedDestinations(intentText, active).length === 0;
+  const when = quiet ? askedWhen(normalized, now) : null;
+  if (when) {
     const pool = wantsCategory ? (wantsCruise ? active.filter(tripIsCruise) : filterTripsByTransportIntent(intentText, active)) : active;
-    return monthListing(pool, month, now);
+    return whenListing(pool, when, now);
   }
+  // "Далайтай аялал байна уу": the trips whose own text says sea or beach.
+  if (quiet && queryWantsSeaBeach(intentText) && !wantsCategory) {
+    const sea = active.filter((trip) => tripHasSeaBeach(trip) && bookableDates(trip, now).length > 0).sort((a, b) => soonestKey(a, now).localeCompare(soonestKey(b, now)));
+    if (sea.length) return { ...renderListing(sea, "Далайн амралтын аяллууд 😊", MAX_COMPACT, now), authoritative: true };
+  }
+  // "10 хоногийн аялал байна уу" (a length, no month, no place).
+  const length = DURATION_ASK_RE.exec(normalized);
+  if (quiet && length && TRIP_WORD_RE.test(normalized) && !/сар/u.test(normalized)) {
+    return durationListing(active, Number(length[1]), now);
+  }
+  // "Өөр аялал байна уу": the customer wants to see more of what exists.
+  if (OTHER_TRIPS_RE.test(normalized)) return renderListing(active.filter((trip) => bookableDates(trip, now).length > 0).sort((a, b) => soonestKey(a, now).localeCompare(soonestKey(b, now))), "Манай аяллууд 😊", MAX_COMPACT, now);
   if (!wantsAll && !wantsCategory) return null;
 
   const categoryPool = wantsCategory
@@ -276,6 +349,9 @@ export function buildCatalogListingReply(rawIntentText: string, trips: TravelTri
     ? categoryPool
     : destinationCategoryPool;
   const listed = [...pool].sort((a, b) => soonestKey(a, now).localeCompare(soonestKey(b, now)));
+  if (listed.length === 0 && wantsCruise && destinations.length === 0) {
+    return { reply: `Одоогоор усан онгоцны (круз) аялал нээлттэй байхгүй байна. Бусад аяллыг эндээс харна уу: ${BOOKING_WEBSITE_URL}`, listed: [], authoritative: true };
+  }
   if (listed.length === 0) return null;
 
   if (!full || wantsCategory || listed.length <= MAX_DETAILED) {

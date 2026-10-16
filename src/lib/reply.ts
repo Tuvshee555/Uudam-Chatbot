@@ -40,6 +40,15 @@ export const NO_DATA_HANDOFF_REPLY =
 export const WHICH_TRIP_CLARIFY_REPLY =
   "Аль аяллын талаар асууж байна вэ? 😊 Чиглэл (жишээ нь хотын нэр) эсвэл аяллын нэрээ бичвэл үнэ, хөтөлбөр, гарах өдрийг нь шууд хэлье.";
 
+/** The same question for a customer writing English (an ad reaches foreigners too): both languages, so nobody is left guessing. */
+export const WHICH_TRIP_CLARIFY_REPLY_EN =
+  "Hello! 😊 Which trip or destination are you interested in? Write the destination or the trip name and I'll send the price, program and departure dates.\n\n" + WHICH_TRIP_CLARIFY_REPLY;
+
+export function whichTripClarifyReply(text: string): string {
+  const english = !/[\u0400-\u04FF]/.test(text) && /\b(?:you|your|the|about|can|could|tell|ad|ads|please|info|information|details|hello|hi|how|much|price|tour|trip|travel)\b/i.test(text);
+  return english ? WHICH_TRIP_CLARIFY_REPLY_EN : WHICH_TRIP_CLARIFY_REPLY;
+}
+
 export const AI_OUTAGE_HANDOFF_REPLY =
   "Таны асуултыг аяллын зөвлөхөд дамжууллаа. Мэдээллийг шалгаад танд энд хариу өгнө 🙏";
 

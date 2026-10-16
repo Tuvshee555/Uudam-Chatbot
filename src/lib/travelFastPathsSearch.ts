@@ -1287,7 +1287,7 @@ export function queryWantsSeaBeach(query: string): boolean {
   );
 }
 
-function tripHasSeaBeach(trip: TravelTrip): boolean {
+export function tripHasSeaBeach(trip: TravelTrip): boolean {
   const haystack = normText(
     [
       trip.category || "",

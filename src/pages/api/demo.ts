@@ -30,7 +30,7 @@ import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } fro
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { buildContactReply, contactSettingsOf } from "../../lib/contactReplies";
-import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, WHICH_TRIP_CLARIFY_REPLY } from "../../lib/reply";
+import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { dbGetRecentAdminMessages, getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
@@ -649,9 +649,9 @@ export default async function handler(
             // exactly like the webhook.
             if (isGenericTripRequest(normalizedText)) {
               await appendMessage(sessionId, "user", normalizedText);
-              await appendMessage(sessionId, "assistant", WHICH_TRIP_CLARIFY_REPLY);
+              await appendMessage(sessionId, "assistant", whichTripClarifyReply(text));
               await rememberTurn();
-              return res.status(200).json({ reply: WHICH_TRIP_CLARIFY_REPLY, buttons: [] });
+              return res.status(200).json({ reply: whichTripClarifyReply(text), buttons: [] });
             }
             return returnHandoff();
           }
