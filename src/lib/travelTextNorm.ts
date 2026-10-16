@@ -372,7 +372,9 @@ export function unique<T>(values: T[]) {
 
 function isOneEditApart(a: string, b: string): boolean {
   if (a === b) return true;
-  if (Math.min(a.length, b.length) < 5 || Math.abs(a.length - b.length) > 1) return false;
+  // Five letters with one edit made everyday words into places ("дулаан"/"удаан" read as "улаан",
+  // so "warm place" got one trip's card). A typo keeps the first letter and needs six letters.
+  if (Math.min(a.length, b.length) < 6 || Math.abs(a.length - b.length) > 1 || a[0] !== b[0]) return false;
   let i = 0;
   let j = 0;
   let edits = 0;

@@ -211,7 +211,7 @@ function askedSpan(raw: string, now: Date): [string, string] | null {
     if (date && !found.some((entry) => entry.at === at)) found.push({ at, date });
   };
   // "11/1", "11.1" — never part of a price ("2.890.000") or a longer number.
-  for (const match of text.matchAll(/(?<![\d.,])(\d{1,2})\s*[/.]\s*(\d{1,2})(?![\d.,]\d)(?:\s*-\s*(\d{1,2})(?![\d/.-]))?/g)) {
+  for (const match of text.matchAll(/(?<![\d.,])(\d{1,2})\s*[/.]\s*(\d{1,2})(?![\d.,]\d)(?:\s*-\s*(\d{1,2})(?!\d|[/.-]\d))?/g)) {
     add(match.index!, Number(match[1]), Number(match[2]));
     if (match[3]) add(match.index! + match[0].length, Number(match[1]), Number(match[3]));
   }

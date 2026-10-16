@@ -686,7 +686,7 @@ function snapMisspelledWords(
   phoneticWords: string[],
   vocabulary: CatalogVocabulary,
 ): { words: string[]; phoneticWords: string[] } {
-  const snapped = words.flatMap((word) => catalogSpellingsOf(word, vocabulary));
+  const snapped = words.flatMap((word) => NEVER_A_PLACE.has(word) ? [] : catalogSpellingsOf(word, vocabulary));
   if (snapped.length === 0) return { words, phoneticWords };
   return {
     words: unique([...words, ...snapped.map((entry) => entry.word)]),
@@ -721,9 +721,16 @@ const DESCRIPTIVE_NOUN_RE = /^(?:онгоц|тийз|нислэг|галт|тэ�
  * Catalog words the customer named: the same word, the same word romanised
  * ("<city>" for a Cyrillic name), or with a case ending.
  */
+// Everyday words that sound like a place word with a case ending. "хооронд" (between) read as
+// a district alias of one trip ("...хороо" + "-нд"), and "10/20-23-ны хооронд эхлэх аялал"
+// was answered about that one trip (2026-10-16). Never a place, whatever the catalogue holds.
+const NEVER_A_PLACE = new Set(["хооронд", "хоорондоо", "хүртэл", "хүртэлх", "хойш", "өмнө", "дараа", "эхлэх",
+  "эхэлнэ", "эхэлдэг", "эхлэн", "хамт", "хамтдаа", "болон", "бөгөөд", "hoorond", "hurtel", "hoish", "daraa", "umnu"]);
+
 function queryPlaceWords(queryWords: string[], vocabulary: CatalogVocabulary): string[] {
   return unique(
     queryWords.flatMap((word) => {
+      if (NEVER_A_PLACE.has(word)) return [];
       if (vocabulary.known.has(word)) return [word];
       const phonetic = phoneticLatinText(word).replace(/\s+/g, "");
       const romanised = vocabulary.entries.filter((entry) => entry.phonetic === phonetic);
@@ -989,7 +996,7 @@ export function resolveTripFromUserMessage(
   trips: TravelTrip[],
   options: { allowLooseFallback?: boolean } & TripMatchOptions = {},
 ): TripResolution {
-  const allowLooseFallback = options.allowLooseFallback !== false;
+  const allowLooseFallback = options.allowLooseFallback === true;
   const matches = findTripMatches(text, trips, options);
   if (!matches.length) {
     const looseBest = allowLooseFallback ? findLooseTripMatch(text, trips, options) : null;
