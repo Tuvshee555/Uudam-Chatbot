@@ -6,6 +6,8 @@ import { BOT_MESSAGE_METADATA, replyToComment, sendImageMessage, sendQuickReplie
 import { sendQuickReplies as sendIgQuickReplies } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { getClarificationState, setClarificationState } from "../../lib/clarificationState";
+import { getTripSelection } from "../../lib/tripSelectionState";
+import { ungroundedTripInReply } from "../../lib/tripGrounding";
 import { isLikelyCatalogMaintenanceText } from "../../lib/customerTextClassification";
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone } from "../../lib/conversation";
@@ -318,6 +320,24 @@ async function handleMessage(
    * were six copy-pasted versions of this block.
    */
   let factualScope: TravelTrip[] | null = null;
+  // The exit check every reply passes (tripGrounding.ts): a reply about ONE trip must be about a
+  // trip this conversation points to — the customer's words, an open list, the selected trip, an
+  // earlier turn, or what the router settled on. 26 branches pick trips their own way; checking
+  // here closes every door at once. Fails open: an error never silences a customer.
+  let groundingRoutedTripIds: string[] = [];
+  let groundingTrips: TravelTrip[] | null = null;
+  const findUngroundedTrip = async (reply: string): Promise<TravelTrip | null> => {
+    try {
+      groundingTrips ||= (await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers);
+      const [pending, selection] = await Promise.all([getClarificationState(senderId), getTripSelection(senderId)]);
+      return ungroundedTripInReply(reply, {
+        customerText: text, history, pendingTripIds: pending?.candidateTripIds || [],
+        selectionTripId: selection?.tripId || null, routedTripIds: groundingRoutedTripIds, trips: groundingTrips,
+      });
+    } catch {
+      return null;
+    }
+  };
   let currentSelection: TripSelection | null = null;
   let approvedPlanReply: string | null = null;
   const deliverFastPathReply = async (input: {
@@ -335,8 +355,14 @@ async function handleMessage(
     const reply = factualScope && input.reply !== approvedPlanReply
       ? verifyTripReply({ reply: presented, trips: factualScope, selection: currentSelection })
       : presented;
-    const noDataReply = isReferReply(reply) || shouldSilenceNoDataReply(reply);
+    const ungroundedTrip = isReferReply(reply) || shouldSilenceNoDataReply(reply) ? null : await findUngroundedTrip(reply);
+    const noDataReply = isReferReply(reply) || shouldSilenceNoDataReply(reply) || Boolean(ungroundedTrip);
     if (reply !== presented) recordCounter("webhook.factual_reply_rejected_total", 1, { path: input.failTag });
+    if (ungroundedTrip) {
+      logInfo("webhook.ungrounded_trip_reply_suppressed", { requestId: trace?.requestId, correlationId: trace?.correlationId,
+        platform, senderHash: hashIdentifier(senderId), failTag: input.failTag, tripId: ungroundedTrip.id });
+      recordCounter("webhook.ungrounded_trip_reply_suppressed_total", 1, { path: input.failTag });
+    }
     if (noDataReply) {
       logInfo("webhook.no_data_reply_suppressed", {
         requestId: trace?.requestId,
@@ -353,7 +379,7 @@ async function handleMessage(
             platform,
             senderId,
             customerMessage: text,
-            context: `Бот мэдээлэлгүй fast-path хариуг зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй: ${input.failTag}`,
+            context: `Бот мэдээлэлгүй fast-path хариуг зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй: ${input.failTag}${ungroundedTrip ? ` (харилцаанд дурдагдаагүй аялал: ${ungroundedTrip.route_name})` : ""}`,
           });
           await notifyStaffOfLead(
             { kind: "handoff", platform, customerMessage: text },
@@ -1012,6 +1038,8 @@ async function handleMessage(
         : undefined,
     });
     currentSelection = routedCache.selection || null;
+    groundingRoutedTripIds = [routedCache.chosenTripId, ...(routedCache.scopedClarify || []).map((trip) => trip.id)]
+      .filter((id): id is string => Boolean(id));
     factualScope = routedCache.chosenTripId
       ? (await getTrips()).filter((trip) => trip.id === routedCache?.chosenTripId)
       : routedCache.scopedClarify || routedCache.understanding?.trips || [];
@@ -1918,7 +1946,13 @@ async function handleMessage(
     });
     return;
   }
-  if (isReferReply(safeReply) || shouldSilenceNoDataReply(safeReply) || wrongTripLeak) {
+  const aiUngroundedTrip = isReferReply(safeReply) || shouldSilenceNoDataReply(safeReply) ? null : await findUngroundedTrip(safeReply);
+  if (isReferReply(safeReply) || shouldSilenceNoDataReply(safeReply) || wrongTripLeak || aiUngroundedTrip) {
+    if (aiUngroundedTrip) {
+      logInfo("webhook.ai_ungrounded_trip_reply_suppressed", { requestId: trace?.requestId, correlationId: trace?.correlationId,
+        platform, senderHash: hashIdentifier(senderId), tripId: aiUngroundedTrip.id });
+      recordCounter("webhook.ungrounded_trip_reply_suppressed_total", 1, { path: "ai" });
+    }
     if (wrongTripLeak) {
       logInfo("webhook.ai_wrong_trip_reply_suppressed", {
         requestId: trace?.requestId,

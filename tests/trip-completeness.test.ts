@@ -143,3 +143,11 @@ test("an explicit brochure result overrides what extra suggests", () => {
   const gaps = findTripGaps(tripCompletenessInput(complete, { hasBrochure: false }));
   assert.ok(gaps.some((gap) => gap.key === "brochure" && gap.severity === "warning"));
 });
+
+test("a date written into the trip name is flagged (a warning, never a block)", () => {
+  for (const route_name of ["ЛУМИА - ПАРК -сурагчдын амралт - 10/29", "Лумиа хотын 11-р сарын аялал"]) {
+    const gap = findTripGaps(tripCompletenessInput({ ...complete, route_name })).find((entry) => entry.key === "route_name_date");
+    assert.equal(gap?.severity, "warning", route_name);
+  }
+  assert.ok(!findTripGaps(tripCompletenessInput(complete)).some((entry) => entry.key === "route_name_date"));
+});

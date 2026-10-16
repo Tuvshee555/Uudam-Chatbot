@@ -154,6 +154,10 @@ const RULES: Array<{
     ok: (t) => filled(t.itinerary_days) },
   { key: "brochure", label: "PDF хөтөлбөр", where: "Постер", severity: "warning",
     ok: (t) => t.has_brochure !== false },
+  // A date written into the NAME ("…аялал - 10/29") was read as a match for every customer who
+  // typed that date, and outlives the departure itself. Dates belong in the departure list.
+  { key: "route_name_date", label: "Аяллын нэрэнд огноо бичсэн — огноог гарах өдөрт оруулна уу", where: "Үндсэн", severity: "warning",
+    ok: (t) => !text(t.route_name) || !/\d{1,2}\s*[\/.]\s*\d{1,2}|\d{1,2}\s*-?\s*р\s*сар/u.test(t.route_name ?? "") },
 ];
 
 export function findTripGaps(input: TripCompletenessInput): TripGap[] {
