@@ -1794,9 +1794,11 @@ async function handleMessage(
   // outage.
   const guardCandidateTrips = factualScope || reasoningTrips.filter((trip) => relevantTripNames.includes(trip.route_name));
   aiReply = guardInventedBookingTerms(aiReply, promptParts.user, guardCandidateTrips);
-  if (isReferReply(aiReply) && !aiOutage && isGenericTripRequest(text)) {
+  if (isReferReply(aiReply) && isGenericTripRequest(text)) {
     // "Aylaluud", "Medeelel avay": no destination named, so the model had
     // nothing to look up and said REFER. Ask which trip rather than paging staff.
+    // The question needs no model, so it is asked during an AI outage too (on 10-05/06
+    // an empty OpenAI balance silenced dozens of "Medeelel" / "Асуулт асуух" openers).
     await deliverFastPathReply({
       reply: whichTripClarifyReply(text),
       failTag: "generic_trip_request_ai",
