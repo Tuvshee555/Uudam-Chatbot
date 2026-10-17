@@ -20,7 +20,8 @@ import type {
   CustomerDocumentCategory,
   DocumentSenderSummary,
 } from "@/lib/adminTypes";
-import { formatTime, shortId } from "@/lib/adminUtils";
+import { formatTime } from "@/lib/adminUtils";
+import { DocumentPreview, PhotoLightbox } from "./CustomerDocumentPreview";
 
 const DOCUMENT_CATEGORY_LABELS: Record<CustomerDocumentCategory, string> = {
   payment_screenshot: "Төлбөрийн баримт",
@@ -195,8 +196,21 @@ const PAYMENT_STATUS_TONE = {
   cancelled: "danger",
 } as const;
 
+/** "Нэргүй хэрэглэгч" while Facebook has not given a name (the page asks for it on load). */
 function senderTitle(input: { display_name: string; sender_id: string }) {
-  return input.display_name || `Хэрэглэгч …${shortId(input.sender_id)}`;
+  return input.display_name || "Нэргүй хэрэглэгч";
+}
+
+function idTail(senderId: string) {
+  return senderId ? `ID …${senderId.slice(-4)}` : "";
+}
+
+function Avatar({ name, size = "md" }: { name: string; size?: "sm" | "md" }) {
+  return (
+    <div className={cx("flex shrink-0 items-center justify-center rounded-full bg-brand-soft font-bold text-brand", size === "sm" ? "h-8 w-8 text-sm" : "h-10 w-10 text-base")}>
+      {name ? name.slice(0, 1).toUpperCase() : <Icons.user size={size === "sm" ? 15 : 18} />}
+    </div>
+  );
 }
 
 type EditFields = {
@@ -323,15 +337,6 @@ function buildEditedJson(doc: CustomerDocument, fields: EditFields): Record<stri
 
 const VISIBLE_DETAIL_ROWS = 4;
 
-function isImageDocument(doc: CustomerDocument): boolean {
-  return /^image\//i.test(doc.mime_type || "");
-}
-
-function documentFileName(doc: CustomerDocument): string {
-  const file = record(doc.extracted_json?.file);
-  return compactValue(file.name) || compactValue(doc.source_url.split("/").pop()) || "attachment";
-}
-
 function DocumentCard({
   doc,
   busyId,
@@ -339,11 +344,13 @@ function DocumentCard({
   onDelete,
   onRestore,
   onOpenPerson,
+  onZoom,
   senderLabel,
   showSender,
   showDeleted,
 }: {
   doc: CustomerDocument;
+  onZoom: (url: string) => void;
   busyId: number | null;
   onEdit: (doc: CustomerDocument) => void;
   onDelete: (doc: CustomerDocument) => void;
@@ -357,41 +364,13 @@ function DocumentCard({
   const rows = extractedRows(doc);
   const visibleRows = expanded ? rows : rows.slice(0, VISIBLE_DETAIL_ROWS);
   const hiddenRowCount = rows.length - visibleRows.length;
-  const imageUrl = doc.stored_url || doc.source_url;
   const matchedTrip = tripMatchName(doc);
   const category = documentCategory(doc.category);
   const busy = busyId === doc.id;
-  const imageLike = isImageDocument(doc);
   return (
-    <Card className="overflow-hidden p-0">
-      <div className="grid gap-0 sm:grid-cols-[168px_1fr]">
-        <a
-          href={imageUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={imageLike ? "Зургийг бүтнээр нээх" : "Файлыг нээх"}
-          className="group relative flex min-h-52 items-center justify-center bg-surface-sunken"
-        >
-          {imageLike ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={imageUrl}
-              alt=""
-              className="h-52 w-full object-contain p-1.5 transition-opacity group-hover:opacity-90 sm:h-full sm:max-h-72"
-              loading="lazy"
-            />
-          ) : (
-            <div className="flex w-full flex-col items-center gap-2 px-3 py-6 text-center">
-              <Icons.file size={30} className="text-brand" />
-              <span className="max-w-full truncate text-xs font-semibold text-ink">
-                {documentFileName(doc)}
-              </span>
-              <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] text-ink-muted">
-                {doc.mime_type || "file"}
-              </span>
-            </div>
-          )}
-        </a>
+    <Card className="flex flex-col overflow-hidden p-0">
+      <DocumentPreview doc={doc} onZoom={onZoom} />
+      <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex min-w-0 flex-col p-3.5">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
@@ -469,7 +448,7 @@ function DocumentCard({
             ) : (
               <>
                 {visibleRows.map((row) => (
-                  <div key={row.label} className="grid grid-cols-[108px_1fr] gap-2 text-xs leading-5">
+                  <div key={row.label} className="grid grid-cols-[96px_1fr] gap-2 text-xs leading-5">
                     <span className="text-ink-subtle">{row.label}</span>
                     <span className="min-w-0 wrap-break-word font-medium text-ink">{row.value}</span>
                   </div>
@@ -502,7 +481,7 @@ function DocumentCard({
               onClick={() => onOpenPerson?.(doc.sender_id)}
               className="mt-2.5 self-start rounded text-xs font-medium text-brand hover:text-brand-hover"
             >
-              {senderLabel || `Хэрэглэгч …${shortId(doc.sender_id)}`} — бүх зураг →
+              {senderLabel || "Нэргүй хэрэглэгч"} — бүх зураг →
             </button>
           )}
         </div>
@@ -544,6 +523,7 @@ export function CustomerDocumentsTab({
   const [dateTo, setDateTo] = useState("");
   const [showDeleted, setShowDeleted] = useState(false);
   const [editing, setEditing] = useState<CustomerDocument | null>(null);
+  const [zoomUrl, setZoomUrl] = useState<string | null>(null);
   const [editFields, setEditFields] = useState<EditFields>(() => editFieldsFromDocument({ extracted_json: {} } as CustomerDocument));
 
   const loadSenders = useCallback(async (options?: { quiet?: boolean }) => {
@@ -824,7 +804,7 @@ export function CustomerDocumentsTab({
                   : "bg-surface-sunken text-ink-muted hover:text-ink",
               )}
             >
-              🗑 Устгасан
+              <span className="inline-flex items-center gap-1.5"><Icons.trash size={13} /> Устгасан</span>
             </button>
             <IconButton
               label="Шинэчлэх"
@@ -873,16 +853,18 @@ export function CustomerDocumentsTab({
         </div>
 
         <div className="flex items-center gap-2.5">
+          <div className="min-w-0 flex-1">
           <Input
             placeholder={
               showPeopleList
                 ? "Нэр, ID-аар хайх…"
-                : "Нэр, утас, дүн, журнал №, паспорт, аялал…"
+                : "Нэр, утас, дүн, журнал №, паспорт, аялалаар хайх…"
             }
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="flex-1"
+            className="w-full"
           />
+          </div>
           {!anyLoading && (
             <span className="shrink-0 text-xs text-ink-subtle">
               {resultCount} {resultNoun}
@@ -916,15 +898,13 @@ export function CustomerDocumentsTab({
                 >
                   <Card className="h-full p-3.5 transition-colors hover:border-brand">
                     <div className="flex min-w-0 items-center gap-2.5">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-soft text-sm font-bold text-brand">
-                        {(sender.display_name || "?").slice(0, 1).toUpperCase()}
-                      </div>
+                      <Avatar name={sender.display_name} />
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-ink">
+                        <p className={cx("truncate text-sm font-semibold", sender.display_name ? "text-ink" : "text-ink-muted")}>
                           {senderTitle(sender)}
                         </p>
                         <p className="text-[11px] text-ink-subtle">
-                          {sender.total} зураг · {formatTime(sender.last_at)}
+                          {sender.total} файл · {formatTime(sender.last_at)}{sender.display_name ? "" : ` · ${idTail(sender.sender_id)}`}
                         </p>
                       </div>
                     </div>
@@ -956,18 +936,16 @@ export function CustomerDocumentsTab({
             <IconButton label="Буцах" onClick={() => setSelectedSender(null)}>
               <Icons.chevronLeft size={17} />
             </IconButton>
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-soft text-sm font-bold text-brand">
-              {(selectedSenderSummary?.display_name || "?").slice(0, 1).toUpperCase()}
-            </div>
+            <Avatar name={selectedSenderSummary?.display_name || ""} size="sm" />
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-ink">
                 {selectedSenderSummary
                   ? senderTitle(selectedSenderSummary)
-                  : `Хэрэглэгч …${shortId(selectedSender || "")}`}
+                  : "Нэргүй хэрэглэгч"}
               </p>
               {selectedSenderSummary && (
                 <p className="text-[11px] text-ink-subtle">
-                  {selectedSenderSummary.total} зураг · сүүлд {formatTime(selectedSenderSummary.last_at)}
+                  {selectedSenderSummary.total} файл · сүүлд {formatTime(selectedSenderSummary.last_at)}
                 </p>
               )}
             </div>
@@ -994,7 +972,7 @@ export function CustomerDocumentsTab({
                     {DOCUMENT_CATEGORY_ICONS[key]} {DOCUMENT_CATEGORY_LABELS[key]}{" "}
                     <span className="font-normal text-ink-subtle">({docs.length})</span>
                   </p>
-                  <div className="grid gap-3 lg:grid-cols-2">
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     {docs.map((doc) => (
                       <DocumentCard
                         key={doc.id}
@@ -1003,6 +981,7 @@ export function CustomerDocumentsTab({
                         onEdit={openEdit}
                         onDelete={(target) => void deleteDocument(target)}
                         onRestore={(target) => void restoreDocument(target)}
+                        onZoom={setZoomUrl}
                         showSender={false}
                         showDeleted={showDeleted}
                       />
@@ -1026,7 +1005,7 @@ export function CustomerDocumentsTab({
               />
             </Card>
           ) : (
-            <div className="grid gap-3 lg:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {visibleDocuments.map((doc) => (
                 <DocumentCard
                   key={doc.id}
@@ -1036,6 +1015,7 @@ export function CustomerDocumentsTab({
                   onDelete={(target) => void deleteDocument(target)}
                   onRestore={(target) => void restoreDocument(target)}
                   onOpenPerson={openPerson}
+                  onZoom={setZoomUrl}
                   senderLabel={senderNameById.get(doc.sender_id)}
                   showSender
                   showDeleted={showDeleted}
@@ -1050,6 +1030,8 @@ export function CustomerDocumentsTab({
           )}
         </>
       )}
+
+      <PhotoLightbox url={zoomUrl} onClose={() => setZoomUrl(null)} />
 
       <Modal
         open={Boolean(editing)}

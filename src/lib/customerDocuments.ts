@@ -2,6 +2,7 @@ import { createHash } from "crypto";
 import { waitUntil } from "@vercel/functions";
 import { askOpenAIParts, type OpenAIPart } from "./openaiProvider";
 import { queryNeon } from "./neonDb";
+import { fillSenderName } from "./senderNames";
 import {
   classifyError,
   hashIdentifier,
@@ -310,6 +311,54 @@ async function downloadImage(url: string): Promise<DownloadedImage> {
   };
 }
 
+/**
+ * A shared reel or link arrives as a web page, so staff saw a file icon named after the
+ * post. Keep what the page shows of itself: its cover image (stored, since Instagram's
+ * image links expire), its title and the address to open it.
+ */
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(Number(dec)))
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+
+export function pageMeta(html: string): { image: string; title: string; url: string } {
+  const meta = (name: string) => {
+    const tag = html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${name}["'][^>]*>`, "i"))?.[0] || "";
+    return decodeEntities(tag.match(/content=["']([^"']*)["']/i)?.[1] || "").trim();
+  };
+  return { image: meta("og:image") || meta("twitter:image"), title: meta("og:title") || meta("twitter:title"), url: meta("og:url") };
+}
+
+/** Facebook wraps outside links as l.facebook.com/l.php?u=<real address>. */
+export function unwrapFacebookLink(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (/^l[m]?\.facebook\.com$/i.test(parsed.hostname)) return parsed.searchParams.get("u") || url;
+  } catch {
+    // not a URL
+  }
+  return url;
+}
+
+export async function linkPreview(html: string, sourceUrl: string): Promise<Record<string, string>> {
+  const { image, title, url } = pageMeta(html);
+  const out: Record<string, string> = { link_url: url || unwrapFacebookLink(sourceUrl) };
+  if (title) out.link_title = title.slice(0, 300);
+  if (!/^https:\/\//i.test(image)) return out;
+  try {
+    const res = await fetch(image, { signal: AbortSignal.timeout(10_000) });
+    const type = (res.headers.get("content-type") || "").split(";")[0].trim();
+    if (res.ok && type.startsWith("image/")) {
+      out.preview_url = await uploadImageToCloudinary(Buffer.from(await res.arrayBuffer()), `link-preview-${Date.now()}`, type);
+    }
+  } catch {
+    // the link and title still show
+  }
+  return out;
+}
+
 async function downloadFileAttachment(input: FileAttachmentInput): Promise<DownloadedFile> {
   const res = await fetch(input.url, { signal: AbortSignal.timeout(20_000) });
   if (!res.ok) {
@@ -369,6 +418,7 @@ function buildExtractionParts(image: DownloadedImage): OpenAIPart[] {
       text: [
         "You classify and extract customer-sent travel chatbot images.",
         "Return JSON only. Do not invent unreadable data.",
+        "Language: write summary, trip.title, trip.destination and booking.notes in Mongolian (Cyrillic) even when the image text is Russian, Chinese or English — staff read Mongolian. visible_text stays as written.",
         "Categories — classify by MEANING, not visual style:",
         "- passport: passport bio page/photo or official passport image.",
         "- travel_document: visa, ID, ticket, booking document, certificate, or other customer travel document.",
@@ -531,6 +581,8 @@ function buildCustomerFileExtractionPrompt(input: {
     "You classify and extract a customer-sent travel chatbot attachment.",
     "Return JSON only. Do not invent unreadable data.",
     "Classify by meaning, not file type.",
+    "Language: write summary, trip.title, trip.destination and booking.notes in Mongolian (Cyrillic) even when the file or post is in Russian, Chinese or English — staff read Mongolian. visible_text stays as written.",
+    "",
     "Categories:",
     "- passport: passport bio page/photo or official passport image.",
     "- travel_document: visa, ID, ticket, booking document, certificate, flight ticket, insurance, or other customer travel document.",
@@ -674,7 +726,7 @@ async function extractFileData(
     extracted = {
       category: "other",
       confidence: 0.2,
-      summary: "Customer sent a file attachment, but it could not be read automatically.",
+      summary: "Хэрэглэгч файл илгээсэн, автоматаар уншиж чадсангүй.",
       passport: {},
       trip: {},
       payment: {},
@@ -919,6 +971,7 @@ export async function processCustomerFileAttachment(
       name: file.fileName,
       mime_type: file.mimeType,
       attachment_type: input.attachmentType || "file",
+      ...(file.mimeType === "text/html" ? await linkPreview(file.buffer.toString("utf8"), input.url) : {}),
     };
 
     const duplicateOfId = await findDuplicateDocument({
@@ -1521,7 +1574,17 @@ export async function listDocumentSenders(options?: {
     `,
     values,
   );
-  return (result?.rows || []).map((row) => ({
+  // Customers who only sent photos or voice notes never had their name looked up;
+  // fill the missing ones now (stored, so each is asked once), within a few seconds.
+  const rows = result?.rows || [];
+  const nameless = rows.filter((row) => !row.display_name && (row.platform || "facebook") === "facebook").slice(0, 20);
+  if (nameless.length) {
+    await Promise.race([
+      Promise.all(nameless.map(async (row) => { row.display_name = await fillSenderName(row.sender_id).catch(() => ""); })),
+      new Promise((resolve) => setTimeout(resolve, 6000)),
+    ]);
+  }
+  return rows.map((row) => ({
     sender_id: row.sender_id,
     platform: row.platform || "facebook",
     display_name: row.display_name || "",

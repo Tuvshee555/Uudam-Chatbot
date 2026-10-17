@@ -93,7 +93,8 @@ import {
   getWebhookRuntimeDiagnostics as getWebhookRuntimeDiagnosticsInternal,
   resetWebhookStateForTests as resetWebhookStateForTestsInternal,
 } from "../../lib/webhookDedup";
-import { sendPlatformMessage, recordImageMessage, recordFileMessage, sendPhotoAlbum, sendTripMediaForReply, fetchAndStoreFbName, sendFacebookTypingIndicator, normalizeLowerText, isQuickInfoKeyword, isHandoffRequest, CONTACT_OPERATOR_LABEL, isBookingIntent, extractPhoneNumber, isPhoneOnlyMessage, isCommentTriggerMatch } from "../../lib/webhookMedia";
+import { rememberSenderName } from "../../lib/senderNames";
+import { sendPlatformMessage, recordImageMessage, recordFileMessage, sendPhotoAlbum, sendTripMediaForReply, sendFacebookTypingIndicator, normalizeLowerText, isQuickInfoKeyword, isHandoffRequest, CONTACT_OPERATOR_LABEL, isBookingIntent, extractPhoneNumber, isPhoneOnlyMessage, isCommentTriggerMatch } from "../../lib/webhookMedia";
 import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
 import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
 const env = getEnv();
@@ -193,9 +194,6 @@ async function handleMessage(
     prev_msg_at: prevMsgAt,
     get_started_at: getStartedAt,
   } = await trackSender(senderId, platform);
-  if (platform === "facebook" && token && !hasProgramIntent(text)) {
-    void fetchAndStoreFbName(senderId, token);
-  }
   // "hi" typed right after tapping Get Started: Meta's automated response has
   // just greeted this customer, so the bot stays quiet instead of stacking a
   // second greeting. The message is still saved for the admin inbox, and the
@@ -2470,6 +2468,8 @@ export default async function handler(
               const platform: Platform =
                 payload.object === "instagram" ? "instagram" : "facebook";
               const token = PAGE_TOKENS.get(pageId) ?? FALLBACK_TOKEN;
+              // Staff see the customer's name, also for photo- or voice-only senders.
+              if (platform === "facebook") rememberSenderName(senderId, pageId);
               // Attachment-only message (image, voice note, sticker, share).
               // These used to be silently DROPPED — no reply, no history row;
               // a customer sending a trip-poster screenshot was just ignored.

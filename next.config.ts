@@ -3,6 +3,8 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   distDir: process.env.NEXT_DIST_DIR || ".next",
   reactStrictMode: true,
+  // The dev-only "N" badge sat on the admin sidebar's last link ("JSON засвар").
+  devIndicators: { position: "bottom-right" },
   // Poster extraction uses these node-only libs on the server; keep them out of
   // the bundle so their dynamic/subpath imports resolve at runtime.
   serverExternalPackages: ["pdf-parse", "mammoth", "pdf-lib", "jpeg-js", "@sparticuz/chromium", "playwright-core"],
