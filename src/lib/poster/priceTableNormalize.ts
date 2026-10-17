@@ -28,10 +28,12 @@ function isDateColumn(table: PriceTable, index: number): boolean {
 }
 
 /** Folds date-shaped columns into each row's `dates` and removes them. Returns the same object when nothing changes. */
-export function normalizePriceTable<T extends PriceTable | null | undefined>(table: T): T {
-  if (!table || !Array.isArray(table.columns) || !Array.isArray(table.rows)) return table;
+export function normalizePriceTable<T extends PriceTable | null | undefined>(input: T): T {
+  if (!input || !Array.isArray(input.columns) || !Array.isArray(input.rows)) return input;
+  const table = input as PriceTable & { columns: string[]; rows: PriceTableRow[] };
   const dateColumns = table.columns.map((_, index) => index).filter((index) => isDateColumn(table, index));
-  if (!dateColumns.length || dateColumns.length >= table.columns.length) return table;
+  // Date columns first: the currency check below reads price cells only.
+  if (!dateColumns.length || dateColumns.length >= table.columns.length) return mergeStackedCurrencyRows(table) as T;
   const keep = (index: number) => !dateColumns.includes(index);
   const rows = table.rows.map((row) => {
     const cells = Array.isArray(row.cells) ? row.cells : [];
@@ -45,7 +47,48 @@ export function normalizePriceTable<T extends PriceTable | null | undefined>(tab
       cells: cells.filter((_, index) => keep(index)),
     };
   });
-  return { ...table, columns: table.columns.filter((_, index) => keep(index)), rows } as T;
+  return mergeStackedCurrencyRows({ ...table, columns: table.columns.filter((_, index) => keep(index)), rows }) as T;
+}
+
+/** Amount and currency of a cell that holds exactly one price ("3780юань", "2,337,000₮"). */
+function singleAmount(cell: string): { amount: number; currency: "CNY" | "MNT" } | null {
+  const text = cell.trim();
+  if (!text || text.includes("/")) return null;
+  const currency = /юань|yuan|cny|¥/iu.test(text) ? "CNY" : /₮|төг/iu.test(text) ? "MNT" : null;
+  const digits = text.replace(/[^\d]/g, "");
+  return currency && digits ? { amount: Number(digits), currency } : null;
+}
+
+/**
+ * A price cell merged DOWN across two date rows, showing the partner's land price in юань above
+ * the selling price in ₮ ("Лант үнэ (юань) / Монголд зарах үнэ (₮)"), came out of extraction as
+ * row 1 = юань, row 2 = ₮ — so the first departure was priced in yuan and the second in tugrik.
+ * Two neighbouring rows where every cell of the first is юань, every cell of the second is ₮, and
+ * each ₮/юань pair sits at a yuan exchange rate are one price in two currencies: both rows get
+ * "X юань / Y₮". The model was told this and still split it, so the rule lives in code.
+ */
+function mergeStackedCurrencyRows(table: PriceTable): PriceTable {
+  const rows = table.rows || [];
+  let changed = false;
+  const out = rows.map((row) => ({ ...row, cells: [...(row.cells || [])] }));
+  for (let i = 0; i + 1 < out.length; i++) {
+    const top = out[i].cells.map((cell) => singleAmount(String(cell)));
+    const bottom = out[i + 1].cells.map((cell) => singleAmount(String(cell)));
+    if (!top.length || top.length !== bottom.length) continue;
+    const paired = top.every((a, index) => {
+      const b = bottom[index];
+      if (!a || !b || a.currency !== "CNY" || b.currency !== "MNT" || !a.amount) return false;
+      const rate = b.amount / a.amount;
+      return rate >= 300 && rate <= 900;
+    });
+    if (!paired) continue;
+    const merged = out[i].cells.map((cell, index) => `${String(cell).trim()} / ${String(out[i + 1].cells[index]).trim()}`);
+    out[i].cells = merged;
+    out[i + 1].cells = [...merged];
+    changed = true;
+    i++;
+  }
+  return changed ? { ...table, rows: out } : table;
 }
 
 /** The same fix applied to a whole poster's data object (`price_table` lives on it). */
