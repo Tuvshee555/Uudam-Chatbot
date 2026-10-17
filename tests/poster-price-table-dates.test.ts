@@ -17,8 +17,8 @@ const SPLIT = {
 test("date columns are folded into the row date and never shown as fares", () => {
   const fixed = normalizePriceTable(SPLIT)!;
   assert.deepEqual(fixed.columns, ["Том хүн", "3-11настай хүүхэд оргүй"]);
-  // Rows 1-2 are one price in юань over ₮ (merged down in the source) — see the test below.
-  assert.deepEqual(fixed.rows!.map((row) => row.cells), [["2460юань / 1600000₮", "2060юань / 1400000₮"], ["2460юань / 1600000₮", "2060юань / 1400000₮"], ["1700000₮", "1500000₮"]]);
+  // Rows 1-2 are one price in юань over ₮ (merged down in the source); the юань is never a fare.
+  assert.deepEqual(fixed.rows!.map((row) => row.cells), [["1600000₮", "1400000₮"], ["1600000₮", "1400000₮"], ["1700000₮", "1500000₮"]]);
   assert.equal(fixed.rows![2].dates, "2026 он 12 сар 9"); // built from the pieces when the row had no date
   // A normal table is returned untouched.
   const normal = { columns: ["Том хүн", "Хүүхэд"], rows: [{ dates: "11 сарын 5", cells: ["1,000,000₮", "800,000₮"] }] };
@@ -44,14 +44,33 @@ test("a price merged down two date rows as юань over ₮ is one price for bo
     { dates: "2026 он 11 сар 11,25", cells: ["2026 он 11 сар", "11,25", "2337000₮", "2077000₮"] },
   ], note: "" };
   const fixed = normalizePriceTable(table)!;
-  assert.deepEqual(fixed.rows!.map((row) => row.cells), [
-    ["3780юань / 2337000₮", "3280юань / 2077000₮"], ["3780юань / 2337000₮", "3280юань / 2077000₮"],
-  ]);
+  assert.deepEqual(fixed.rows!.map((row) => row.cells), [["2337000₮", "2077000₮"], ["2337000₮", "2077000₮"]]);
   const fields = mapPosterTripToFields(normalizePosterPriceTable({ title: "ВЭЛМОР", duration_days: 10, price_table: table }) as never) as {
     adult_price: number; extra: { price_groups: Array<{ adult_price: number; currency?: string }> };
   };
   assert.ok(fields.extra.price_groups.every((group) => group.adult_price === 2_337_000));
-  // Rows that are really different prices (no yuan rate between them) stay apart.
+  // Rows that are really different prices (no yuan rate between them) stay apart: the yuan-only row has no price.
   const separate = { columns: ["Том хүн"], rows: [{ dates: "10 сарын 1", cells: ["3780юань"] }, { dates: "11 сарын 1", cells: ["9,990,000₮"] }] };
-  assert.equal(normalizePriceTable(separate), separate);
+  assert.deepEqual(normalizePriceTable(separate)!.rows!.map((row) => row.cells), [[""], ["9,990,000₮"]]);
+});
+
+test("юань is never a price: yuan-only tables leave the trip without a fare", () => {
+  const yuanOnly = { columns: ["Том хүн", "Хүүхэд"], rows: [{ dates: "2026 оны 11 сарын 13", cells: ["9800юань", "7600 юань"] }], note: "" };
+  const fixed = normalizePriceTable(yuanOnly)!;
+  assert.deepEqual(fixed.rows!.map((row) => row.cells), [["", ""]]);
+  assert.equal(fixed.rows![0].dates, "2026 оны 11 сарын 13");
+  const fields = mapPosterTripToFields(normalizePosterPriceTable({ title: "ВЭЛМОР", duration_days: 8, price_table: yuanOnly }) as never) as {
+    adult_price?: number | null; child_price?: number | null; currency?: string;
+  };
+  assert.ok(fields.adult_price == null);
+  assert.ok(fields.child_price == null);
+  assert.notEqual(fields.currency, "CNY");
+  // A yuan-only column beside ₮ fares is removed; the ₮ fares stay.
+  const mixed = { columns: ["Лант үнэ (юань)", "Том хүн"], rows: [{ dates: "11 сарын 5", cells: ["2460юань", "1,600,000₮"] }] };
+  const cleaned = normalizePriceTable(mixed)!;
+  assert.deepEqual(cleaned.columns, ["Том хүн"]);
+  assert.deepEqual(cleaned.rows![0].cells, ["1,600,000₮"]);
+  // A ₮ table is untouched.
+  const tugrik = { columns: ["Том хүн"], rows: [{ dates: "11 сарын 5", cells: ["1,600,000₮"] }] };
+  assert.equal(normalizePriceTable(tugrik), tugrik);
 });

@@ -104,6 +104,14 @@ export const GENERIC_ROUTE_WORDS = new Set([
   // as a follow-up about the trip just discussed, and the single shared word
   // "усан" matched the unrelated Dream Cruise trip instead (2026-10-02).
   "усан",
+  // "онгоц" is a plane as often as a ship: "10/29 очоод 11/06 ирэхээр онгоцны билетээ
+  // өөрсдөө бичүүлсэн" (we booked our own plane tickets) matched the cruise trip, whose
+  // name says "Усан онгоцны". A cruise is asked for as "усан онгоц" / "круз", read by the
+  // catalogue listing; the cruise trip is still found by its own place names.
+  "онгоц",
+  "онгоцны",
+  "онгоцоор",
+  "онгоцтой",
 ]);
 
 /**

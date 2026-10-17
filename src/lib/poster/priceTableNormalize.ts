@@ -33,7 +33,7 @@ export function normalizePriceTable<T extends PriceTable | null | undefined>(inp
   const table = input as PriceTable & { columns: string[]; rows: PriceTableRow[] };
   const dateColumns = table.columns.map((_, index) => index).filter((index) => isDateColumn(table, index));
   // Date columns first: the currency check below reads price cells only.
-  if (!dateColumns.length || dateColumns.length >= table.columns.length) return mergeStackedCurrencyRows(table) as T;
+  if (!dateColumns.length || dateColumns.length >= table.columns.length) return dropYuan(mergeStackedCurrencyRows(table)) as T;
   const keep = (index: number) => !dateColumns.includes(index);
   const rows = table.rows.map((row) => {
     const cells = Array.isArray(row.cells) ? row.cells : [];
@@ -47,7 +47,38 @@ export function normalizePriceTable<T extends PriceTable | null | undefined>(inp
       cells: cells.filter((_, index) => keep(index)),
     };
   });
-  return mergeStackedCurrencyRows({ ...table, columns: table.columns.filter((_, index) => keep(index)), rows }) as T;
+  return dropYuan(mergeStackedCurrencyRows({ ...table, columns: table.columns.filter((_, index) => keep(index)), rows })) as T;
+}
+
+const YUAN = /юань|yuan|cny|rmb|元|人民币|¥/iu;
+const TUGRIK_AMOUNT = /\d[\d.,\s]*\d\s*(?:₮|төг\p{L}*)|\d\s*(?:₮|төг\p{L}*)/giu;
+
+/** A cell without its юань amounts: "3780юань / 2337000₮" → "2337000₮", "3780юань" → "" (no price). */
+function withoutYuan(cell: string): string {
+  if (!YUAN.test(cell)) return cell;
+  return (cell.match(TUGRIK_AMOUNT) || []).map((amount) => amount.trim()).join(" / ");
+}
+
+/**
+ * Owner's rule: юань is the partner's land price, never the customer's. A yuan amount is not a
+ * fare — it is removed, and a cell that held only yuan is left empty (the trip shows "price on
+ * request" until staff enter the ₮ price). A column that held only yuan is removed when another
+ * column still has fares. Runs after the юань-over-₮ merge so a merged ₮ price reaches both dates.
+ */
+function dropYuan(table: PriceTable): PriceTable {
+  const rows = table.rows || [];
+  if (!rows.some((row) => (row.cells || []).some((cell) => YUAN.test(String(cell))))) return table;
+  const cleaned = rows.map((row) => ({ ...row, cells: (row.cells || []).map((cell) => withoutYuan(String(cell ?? ""))) }));
+  const columns = table.columns || [];
+  const emptied = columns.map((_, index) => cleaned.every((row) => !String(row.cells[index] || "").trim())
+    && rows.some((row) => YUAN.test(String(row.cells?.[index] ?? ""))));
+  const dropAny = emptied.some(Boolean) && emptied.some((gone) => !gone);
+  const keep = (index: number) => !dropAny || !emptied[index];
+  return {
+    ...table,
+    columns: dropAny ? columns.filter((_, index) => keep(index)) : columns,
+    rows: cleaned.map((row) => ({ ...row, cells: dropAny ? row.cells.filter((_, index) => keep(index)) : row.cells })),
+  };
 }
 
 /** Amount and currency of a cell that holds exactly one price ("3780юань", "2,337,000₮"). */
