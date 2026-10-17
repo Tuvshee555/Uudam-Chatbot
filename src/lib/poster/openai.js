@@ -188,6 +188,7 @@ const VISION_USER_PROMPT = `Create structured data for a UUDAM Travel poster fro
 READ THE DOCUMENT VISUALLY as it appears on the page. The day program section lists days as "DAY 1", "DAY 2", etc. Each day has a route title and a body paragraph that belongs DIRECTLY UNDER that day's heading on the page. Match each day's body text to the correct day by its visual position — do not guess.
 
 Rules:
+- Treat the uploaded PDF as ONE document. If it repeats the same title, duration, route, prices, and numbered itinerary in a second language, that is a translation of the SAME trip: merge the evidence and output each itinerary day exactly once. Photo/facility-only pages support that trip and are not separate trips.
 - For "title": use the MAIN TRIP NAME, usually the largest travel title, e.g. "<ХОТ> - <ГАЗАР> ШУУД НИСЛЭГТЭЙ АЯЛАЛ". NEVER use "UUDAM TRAVEL AGENCY" or the agency logo text as the title.
 - For "subtitle": use secondary date/route text if visible, such as "<сар>/<өдөр>-<өдөр> УБ-<ХОТ>-УБ". Do not put the whole title into subtitle if title is empty or agency text.
 - Output Mongolian text for route/header fields only.
@@ -196,6 +197,8 @@ Rules:
 - For "activities": copy bullet points or sentences from the source exactly. Do not add, remove, or change any words. If none exist use [].
 - Prices: copy the exact price text from the page (e.g. "1,111,111₮"). Do not reformat numbers.
 - If the document has an "АЯЛЛЫН ҮНЭ" or price table area, price_table must NOT be null. Extract visible columns such as "Том хүн" and "Хүүхэд 2-11 нас", and include visible price cells exactly, including "+ тийз" when shown.
+- If prices are organized by room/cabin category and occupancy, preserve the room/cabin label as the first column and preserve EVERY occupancy-price column. Keep the printed currency exactly; never convert it or claim conversion is required.
+- If a visually merged price cell spans several room/cabin rows, repeat that exact printed value in each affected row so every row still has the same number of cells as columns.
 - In price_table, columns must NOT include a date/огноо column — dates go in the "dates" field of each row only. Copy the date text EXACTLY as written on the page (e.g. "7 сарын 2, 8, 9, 16, 20, 23"). Do NOT convert to ISO/numeric format like 2026-07-02.
 - Each row's cells array must match columns length exactly with the real price values. Do not leave cells empty.
 - If a price has both yuan and tugrik, put both like "4,180 юань / 2,340,000₮".
@@ -228,7 +231,7 @@ export function normalizeExtractedTrip(trip) {
     day.summary ||= "";
     day.activities ||= [];
     day.bonus ||= [];
-    day.meals ||= { breakfast: true, lunch: false, dinner: true };
+    day.meals ||= { breakfast: false, lunch: false, dinner: false };
     day.hotel ??= null;
     day.flight ??= null;
     if (!day.flight) {
@@ -336,7 +339,7 @@ Rules:
 - If a price has both yuan and tugrik (e.g. "4180 юань / 2,340,000₮"), put both in the cell like "4,180 юань / 2,340,000₮".
 - The dates field per row should be the departure date(s) (e.g. "2026-07-04").
 - columns must NOT include a date/огноо column — dates go in the "dates" field only.
-- Infer meals from the document. If unclear, breakfast is usually included after day 1, lunch is often not included, dinner is included only when stated or likely from the program.
+- Copy meals only when the source states or marks them. If unclear or absent, set all three meal booleans to false; never infer a likely meal.
 - Use null for unknown flights/hotels/photos, not made-up data.
 - Keep includes and excludes arrays empty unless the source clearly lists them.
 

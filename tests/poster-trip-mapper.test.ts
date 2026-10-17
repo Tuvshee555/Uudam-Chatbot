@@ -2,6 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mapPosterTripToFields } from "../src/lib/poster/tripMapper";
 
+test("maps occupancy pricing without converting its documented currency", () => {
+  const fields = mapPosterTripToFields({
+    title: "Fictional Sea Route",
+    price_table: {
+      columns: ["Room", "2 person room", "3 person room", "Child without bed"],
+      rows: [
+        { dates: "", cells: ["Inside cabin", "4,500 CNY", "4,100 CNY", "2,000 CNY"] },
+      ],
+    },
+  });
+
+  assert.equal(fields.adult_price, 4100);
+  assert.equal(fields.child_price, 2000);
+  assert.equal(fields.currency, "CNY");
+  assert.equal(fields.extra?.price_groups?.[0]?.hotel, "Inside cabin");
+});
+
 test("poster price table preserves date-specific adult and child age fares", () => {
   const fields = mapPosterTripToFields({
     title: "Торвал Нордэнын аялал",

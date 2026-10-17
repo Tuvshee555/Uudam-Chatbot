@@ -131,7 +131,12 @@ export function auditTripFacts(trip: TripFactInput, now = new Date()): TripFactA
   }
 
   const itinerary = rows(extra.itinerary_days);
-  if (itinerary.length > 0 && !itineraryStartsInUlaanbaatar(itinerary[0])) {
+  // Poster-linked trips are source-grounded packages and may intentionally
+  // begin/end outside the agency's home city. Requiring invented transfer
+  // days would corrupt the uploaded itinerary. Manually entered catalog
+  // trips retain the stricter home-boundary audit.
+  const requiresHomeBoundary = !text(extra.poster_trip_id);
+  if (requiresHomeBoundary && itinerary.length > 0 && !itineraryStartsInUlaanbaatar(itinerary[0])) {
     add(
       "itinerary_missing_ulaanbaatar_start",
       "error",
@@ -140,7 +145,7 @@ export function auditTripFacts(trip: TripFactInput, now = new Date()): TripFactA
       [text(trip.id), text(itinerary[0].title), text(itinerary[0].description)],
     );
   }
-  if (itinerary.length > 0 && !itineraryEndsInUlaanbaatar(itinerary[itinerary.length - 1])) {
+  if (requiresHomeBoundary && itinerary.length > 0 && !itineraryEndsInUlaanbaatar(itinerary[itinerary.length - 1])) {
     const last = itinerary.length - 1;
     add(
       "itinerary_missing_ulaanbaatar_end",

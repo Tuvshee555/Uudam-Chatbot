@@ -25,7 +25,7 @@ type PassengerPrice = {
   label: string;
   age_range: string;
   price: number | null;
-  currency: "MNT";
+  currency: string;
   /** "Үнэгүй" when the cell documented this fare as free — see isDocumentedFreeFare,
    * which only trusts a 0 price when this note says so, never a bare 0. */
   note?: string;
@@ -36,6 +36,7 @@ type MappedPriceGroup = {
   dates: string[];
   display_dates: string[];
   adult_price: number | null;
+  currency?: string;
   adult_price_range: PriceRange | null;
   child_price: number | null;
   infant_price: number | null;
@@ -67,6 +68,7 @@ export type MappedTripFields = {
   adult_price?: number | null;
   child_price?: number | null;
   infant_price?: number | null;
+  currency?: string;
   hotel?: string;
   has_food?: boolean;
   extra?: {
@@ -158,6 +160,18 @@ function isAdultColumn(label: string): boolean {
   return /том|adult/i.test(label);
 }
 
+function isOccupancyPriceColumn(label: string): boolean {
+  return /(?:\d+\s*(?:хүн|хүний|person)|(?:өрөө|room).*\d+\s*(?:хүн|person))/i.test(label);
+}
+
+function priceCurrency(cellText: string | undefined): string | undefined {
+  const value = cellText || "";
+  if (/₮|\bMNT\b/i.test(value)) return "MNT";
+  if (/юань|元|人民币|\b(?:CNY|RMB)\b|¥/i.test(value)) return "CNY";
+  if (/\bUSD\b|US\$|\$/i.test(value)) return "USD";
+  return undefined;
+}
+
 /** "Нярай", "Infant", or an age band given in months / starting at 0 ("0-2 нас"). */
 export function isInfantColumn(label: string): boolean {
   if (isAdultColumn(label)) return false;
@@ -233,8 +247,16 @@ function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup
   if (!priceTable?.rows?.length) return [];
   const columns = priceTable.columns || [];
   const singleIdx = columns.findIndex((column) => isSingleTravellerColumn(column));
-  const adultIdx = columns.findIndex((column, index) => index !== singleIdx && isAdultColumn(column));
   const hotelIdx = findPriceColumnIndex(columns, ["буудал", "hotel"]);
+  const roomLabelIdx = findPriceColumnIndex(columns, ["өрөө", "room"]);
+  const accommodationIdx = hotelIdx >= 0 ? hotelIdx : roomLabelIdx;
+  const adultIndexes = columns
+    .map((column, index) => ({ column, index }))
+    .filter(({ column, index }) =>
+      index !== singleIdx && index !== hotelIdx && index !== roomLabelIdx &&
+      (isAdultColumn(column) || isOccupancyPriceColumn(column)),
+    )
+    .map(({ index }) => index);
   // Every non-adult passenger column, infants included — the infant one is
   // recognised by its own header ("Нярай") or an infant-shaped age band, not
   // guessed from being the last column.
@@ -245,16 +267,22 @@ function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup
   return priceTable.rows
     .map((row) => {
       const { dates, display_dates } = priceGroupDateScope(row.dates);
-      const adultCell = priceCell(row, columns, adultIdx >= 0 ? adultIdx : 0);
+      const explicitAdultCells = adultIndexes.map((index) => priceCell(row, columns, index)).filter(Boolean);
+      const adultCell = explicitAdultCells
+        .map((cell) => ({ cell, price: parsePriceToNumber(cell) }))
+        .filter((candidate) => candidate.price != null)
+        .sort((left, right) => Number(left.price) - Number(right.price))[0]?.cell;
       const adultPriceRange = parsePriceRangeText(adultCell);
-      const hotel = hotelIdx >= 0 ? cleanColumnLabel(priceCell(row, columns, hotelIdx) || "") : "";
+      const hotel = accommodationIdx >= 0
+        ? cleanColumnLabel(priceCell(row, columns, accommodationIdx) || "")
+        : "";
       const passenger_prices = childColumns.map(({ column, index }) => {
         const cell = priceCell(row, columns, index);
         return {
           label: column,
           age_range: extractAgeRange(column),
           price: parsePriceToNumber(cell, true),
-          currency: "MNT" as const,
+          currency: priceCurrency(cell) || "MNT",
           ...(isFreePriceCell(cell) ? { note: "Үнэгүй" } : {}),
         };
       });
@@ -268,6 +296,7 @@ function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup
         dates,
         display_dates,
         adult_price: adultPriceRange?.min ?? parsePriceToNumber(adultCell),
+        ...(priceCurrency(adultCell) ? { currency: priceCurrency(adultCell) } : {}),
         adult_price_range: adultPriceRange,
         child_price: child?.price ?? null,
         infant_price: infant?.price ?? null,
@@ -291,6 +320,7 @@ function mapPrices(priceTable: PosterTrip["price_table"]): {
   adult_price: number | null;
   child_price: number | null;
   infant_price: number | null;
+  currency?: string;
 } {
   if (!priceTable?.rows?.length) return { adult_price: null, child_price: null, infant_price: null };
 
@@ -298,12 +328,14 @@ function mapPrices(priceTable: PosterTrip["price_table"]): {
   const priced = groups
     .filter((group) => group.adult_price != null)
     .sort((a, b) => (a.adult_price || 0) - (b.adult_price || 0));
+  const firstChild = groups.find((group) => group.child_price != null)?.child_price ?? null;
   const firstInfant = groups.find((group) => group.infant_price != null)?.infant_price ?? null;
   if (priced.length > 0) {
     return {
       adult_price: priced[0].adult_price,
-      child_price: priced[0].child_price,
+      child_price: priced[0].child_price ?? firstChild,
       infant_price: priced[0].infant_price ?? firstInfant,
+      currency: priced[0].currency,
     };
   }
 
@@ -311,6 +343,7 @@ function mapPrices(priceTable: PosterTrip["price_table"]): {
     adult_price: groups.find((group) => group.adult_price != null)?.adult_price ?? null,
     child_price: groups.find((group) => group.child_price != null)?.child_price ?? null,
     infant_price: firstInfant,
+    currency: groups.find((group) => group.currency)?.currency,
   };
 }
 
@@ -427,10 +460,11 @@ export function mapPosterTripToFields(poster: PosterTrip): MappedTripFields {
   const dates = mapDepartureDates(poster);
   if (dates.length) fields.departure_dates = dates;
 
-  const { adult_price, child_price, infant_price } = mapPrices(poster.price_table);
+  const { adult_price, child_price, infant_price, currency } = mapPrices(poster.price_table);
   if (adult_price != null) fields.adult_price = adult_price;
   if (child_price != null) fields.child_price = child_price;
   if (infant_price != null) fields.infant_price = infant_price;
+  if (currency) fields.currency = currency;
   const ageRules = mapAgeRules(poster.price_table);
 
   const hotel = mapHotel(poster.days);

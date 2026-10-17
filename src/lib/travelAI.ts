@@ -68,6 +68,7 @@ function buildBatchSourceParts(input: {
     input.note ? `Admin note: ${input.note}` : "",
     "Extract travel information from the attached files, images, or text, including route, operator, price, seats, departure date, meals, and status.",
     "EVIDENCE RULE: sources whose names share the same original filename are text and visual evidence for ONE document. Reconcile them into one tour record; never create duplicate actions for parsed-text and visual-page sources.",
+    "TRANSLATION RULE: when the same title, duration, route, prices, and numbered itinerary are repeated in another language, that is one bilingual copy of the SAME tour. Merge it into one action and count every itinerary day only once. Photo/facility-only pages are supporting media, not extra tours.",
     "Use BOTH the parsed text and rendered page image. Before declaring a field missing, re-check page 1 visually, its headings, and nearby blocks. A missed extraction is not a document conflict.",
     "ACCURACY IS THE TOP PRIORITY. Read carefully and do not rush.",
     "Read EVERY trip/row in the source. Do not skip rows and do not stop early. If the source lists 12 trips, return actions for all 12.",
@@ -94,6 +95,8 @@ function buildBatchSourceParts(input: {
     "If recurring text (Пүрэв/Баасан гариг болгон, долоо хоног бүр, сар бүр) and exact dates both exist, keep BOTH: recurring text in departure_dates and fields.extra.recurring_schedule, exact dates in departure_dates. They support each other and are not a conflict.",
     "Normalize duration such as '8 өдөр / 7 шөнө' into duration_text and fields.extra.duration_days=8, duration_nights=7. Matching repeated durations are not conflicts; two different meaningful durations are blockers.",
     "When a trip has base prices in MNT plus a medical/exam fee in CNY, store the base adult/child prices as MNT and write the CNY fee clearly in notes/source_description.",
+    "ROOM/CABIN PRICE TABLE RULE: if the source prices the trip by room/cabin category or occupancy, preserve every documented option in fields.extra.price_groups. Set adult_price to the lowest documented adult/per-person base fare, child_price to the explicit child fare when present, and keep the printed currency unchanged. Do not convert currencies and do not leave all base prices empty merely because several room options exist.",
+    "ITINERARY RULE: when the source contains numbered day programs, store every day once in fields.extra.itinerary_days. A translated duplicate of the same numbered program is supporting evidence, not additional days.",
     "Keep currencies separate: adult_price/child_price and currency hold the base price, while CNY medical fees, infant prices, and single-room supplements go into fields.extra.foreign_currency_fees / infant_prices / single_room_supplements and are repeated clearly in notes. Never add MNT and CNY together.",
     "A malformed price such as '2,6360,000₮' is a real OCR warning. Do not guess. Create one precise blocker quoting the exact malformed text and plausible interpretations when justified.",
     "Store transport, included items, excluded items, daily itinerary, source filename, and per-field confidence in fields.extra. Confidence is high when page-1 label/visual and text agree, medium when readable once, low only when cut off/garbled/ambiguous.",
@@ -1705,7 +1708,11 @@ export async function generateAIProposalFromContentBatched(input: {
         .map((s) => s.contentText ?? "")
         .join("\n");
       if (allSourceText.trim()) {
-        const numberedMatches = allSourceText.match(/(?:^|\n)\s*\d{1,2}[\.\)]/gm);
+        // Numbered itinerary days and numbered table rows are not tours. Only
+        // use explicit trip/tour-labelled markers for this safety check.
+        const numberedMatches = allSourceText.match(
+          /(?:^|\n)\s*(?:аялал|trip|tour)\s*(?:#|№|no\.?\s*)?\d{1,2}\s*[\.\):\-]?/gimu,
+        );
         const detectedCount = numberedMatches ? numberedMatches.length : 0;
         const actionCount = merged.actions.length;
         // Only warn when there's a clear gap: 3+ numbered items detected and

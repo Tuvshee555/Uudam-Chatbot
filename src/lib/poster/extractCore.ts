@@ -173,27 +173,6 @@ export function mergeExtractedTrips(trips: ExtractedTripLike[]): ExtractedTripLi
   };
 }
 
-async function splitPdfPages(buffer: Buffer, filename: string): Promise<UploadLike[]> {
-  const { PDFDocument } = await import("pdf-lib");
-  const source = await PDFDocument.load(buffer, { ignoreEncryption: true });
-  const pageCount = Math.min(source.getPageCount(), MAX_PARALLEL_PAGE_EXTRACTS);
-  if (pageCount <= 1) return [{ buffer, filename, mimeType: "application/pdf" }];
-
-  return Promise.all(
-    Array.from({ length: pageCount }, async (_, pageIndex) => {
-      const doc = await PDFDocument.create();
-      const [page] = await doc.copyPages(source, [pageIndex]);
-      doc.addPage(page);
-      const bytes = await doc.save();
-      return {
-        buffer: Buffer.from(bytes),
-        filename: `${filename.replace(/\.pdf$/i, "")}-page-${pageIndex + 1}.pdf`,
-        mimeType: "application/pdf",
-      };
-    }),
-  );
-}
-
 function isImageUpload(upload: UploadLike): boolean {
   const name = upload.filename.toLowerCase();
   return IMAGE_TYPES.includes(upload.mimeType) || /\.(jpe?g|png|webp|gif|bmp)$/.test(name);
@@ -226,17 +205,11 @@ export async function runExtraction(buffer: Buffer, filename: string, mime: stri
   }
 
   if (name.endsWith(".pdf") || mime === "application/pdf") {
-    const pages = await splitPdfPages(buffer, filename);
-    const pageTripPromise =
-      pages.length > 1
-        ? Promise.all(
-            pages.map((page) =>
-              extractPdfTripText(page.buffer.toString("base64"), page.filename),
-            ),
-          ).then(mergeExtractedTrips)
-        : extractPdfTripText(buffer.toString("base64"), filename);
     const [trip, pdfImages, pdfFacts] = await Promise.all([
-      pageTripPromise,
+      // Keep all pages in one model request. Splitting a bilingual document
+      // made its translated itinerary look like a second trip and destroyed
+      // table column context across pages.
+      extractPdfTripText(buffer.toString("base64"), filename),
       extractPdfImagesGuarded(buffer),
       extractPdfFacts(buffer),
     ]);

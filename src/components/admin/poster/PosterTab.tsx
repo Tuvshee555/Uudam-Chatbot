@@ -185,7 +185,6 @@ const PDF_COMPRESSION_STEPS = [
   { maxWidth: 900, quality: 0.58 },
   { maxWidth: 760, quality: 0.52 },
 ] as const;
-const PDF_PAGE_EXTRACTION_LIMIT = 5;
 const MAX_UPLOAD_FILES = 10;
 const MAX_UPLOAD_SIZE_MB = 100;
 const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
@@ -489,6 +488,7 @@ export default function PosterTab({
   const [historyGroup, setHistoryGroup] = useState<HistoryGroupMode>("date");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [scale, setScale] = useState(0.6);
   const [totalH, setTotalH] = useState(0);
   const [attachModalOpen, setAttachModalOpen] = useState(false);
@@ -644,6 +644,7 @@ export default function PosterTab({
   const startTemplate = () => {
     resetTripHistory();
     setError("");
+    setNotice("");
     setBusy("");
     setBulkPlan(null);
     setBulkReport(null);
@@ -1086,6 +1087,7 @@ export default function PosterTab({
   async function handleFiles(files: FileList | null | undefined) {
     if (!files || files.length === 0) return;
     setError("");
+    setNotice("");
     setBulkPlan(null);
     setBulkReport(null);
     let fileList = Array.from(files).filter((f) => f instanceof File);
@@ -1128,9 +1130,11 @@ export default function PosterTab({
       setBusy(`${uniqueFiles.length} зургийн хэсгийг зэрэг уншиж байна: ${label}…`);
       try {
         const { trip, source_file } = await extractImageSliceBatch(uniqueFiles);
-        setBusy(`${uniqueFiles.length} зургийн хэсгийг нэг аялал болгож хадгалж байна…`);
-        const { id } = await saveTripData(trip, source_file || label);
-        saved.push({ file: source_file || label, trip, id });
+        resetTripHistory();
+        setTrip(normalizeTripData(trip));
+        setTripId(null);
+        setSource(source_file || label);
+        setNotice("Файлыг уншлаа. Мэдээллээ шалгаж, зассаны дараа “Хадгалах + аялал sync” дарна уу.");
       } catch (e) {
         console.error("image slice batch failed:", label, e);
         failed.push({ file: label, error: String((e as { message?: string })?.message || e) });
@@ -1141,6 +1145,14 @@ export default function PosterTab({
       setBusy(`${uniqueFiles.length} файлаас ${i + 1}-г уншиж байна: ${file.name}…`);
       try {
         const { trip, source_file } = await extractOne(file);
+        if (uniqueFiles.length === 1) {
+          resetTripHistory();
+          setTrip(normalizeTripData(trip));
+          setTripId(null);
+          setSource(source_file || file.name);
+          setNotice("Файлыг уншлаа. Мэдээллээ шалгаж, зассаны дараа “Хадгалах + аялал sync” дарна уу.");
+          continue;
+        }
         setBusy(`${uniqueFiles.length} файлаас ${i + 1}-г хадгалж байна: ${file.name}…`);
         const { id } = await saveTripData(trip, source_file || file.name);
         saved.push({ file: file.name, trip, id });
@@ -1164,7 +1176,9 @@ export default function PosterTab({
 
     const messages = [...warnings];
     if (failed.length > 0) {
-      messages.push(`${failed.length} файл уншихад алдаа гарлаа: ${failed.map((f) => f.file).join(", ")}`);
+      messages.push(
+        `${failed.length} файл уншихад алдаа гарлаа: ${failed.map((f) => `${f.file} — ${f.error}`).join("; ")}`,
+      );
     }
     if (messages.length > 0) setError(messages.join(" "));
   }
@@ -2032,6 +2046,7 @@ export default function PosterTab({
     const savingId = tripId || `poster-${crypto.randomUUID()}`;
     setTripId(savingId);
     setError("");
+    setNotice("");
     setBulkPlan(null);
     setBulkReport(null);
     setBusy("Хадгалж байна…");
@@ -2061,6 +2076,7 @@ export default function PosterTab({
   }
 
   async function openTrip(id: string) {
+    setNotice("");
     setBusy("Ачааллаж байна…");
     try {
       const r = await fetchJson(`/api/admin/poster/trip?id=${encodeURIComponent(id)}`);
@@ -2082,6 +2098,7 @@ export default function PosterTab({
     setTrip(null);
     setTripId(null);
     setSource("");
+    setNotice("");
   }
 
   async function deleteTrip(id: string) {
@@ -2123,6 +2140,11 @@ export default function PosterTab({
           ⚠ {error}
         </div>
       )}
+      {notice && (
+        <div className="rounded-lg border border-brand/30 bg-brand-soft px-3 py-2 text-sm text-brand">
+          ✓ {notice}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_320px] lg:items-start">
         <div className="min-w-0 space-y-3" ref={mainRef}>
@@ -2161,7 +2183,7 @@ export default function PosterTab({
             <Card className="p-5">
               <p className="text-sm text-ink-muted">
                 Хятадаас ирсэн файлаа оруулаад, брэнд постер бэлдэнэ.{" "}
-                <span className="text-ink-subtle">Систем уншиж, аяллын постерийг ойролцоогоор 10 секундэд үүсгэнэ.</span>
+                <span className="text-ink-subtle">Систем уншиж, хадгалахаас өмнө шалгаж засах постер нээнэ.</span>
               </p>
               <label
                 className="mt-3 flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed border-line-strong bg-surface-sunken p-8 text-center transition-colors hover:border-brand"
@@ -2173,7 +2195,7 @@ export default function PosterTab({
                 <Icons.upload size={26} className="text-ink-subtle" />
                 <p className="text-sm font-medium text-ink">Файл эсвэл зураг энд чирж тавь</p>
                 <p className="text-xs text-ink-subtle">{`Дээд тал нь ${MAX_UPLOAD_FILES} файл · тус бүр ${MAX_UPLOAD_SIZE_MB}MB хүртэл · Word (.docx), PDF, .txt · JPG, PNG, WEBP зураг`}</p>
-                <p className="text-xs text-ink-subtle">{`PDF уншилт: эхний ${PDF_PAGE_EXTRACTION_LIMIT} хуудсыг зэрэг уншина. PNG/PDF таталт Messenger-д таарахаар хэсэглэгдэнэ.`}</p>
+                <p className="text-xs text-ink-subtle">PDF-ийн бүх хуудсыг нэг баримт болгон уншина. PNG/PDF таталт Messenger-д таарахаар хэсэглэгдэнэ.</p>
               </label>
               <div className="mt-3 flex flex-col items-center gap-1.5 text-center">
                 <Button onClick={startTemplate}>Хоосон загвараар эхлэх</Button>

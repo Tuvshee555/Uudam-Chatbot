@@ -40,3 +40,18 @@ test("catalog validation rejects an itinerary missing either Ulaanbaatar boundar
     "itinerary_missing_ulaanbaatar_end",
   ]);
 });
+
+test("source-grounded poster itinerary keeps its documented foreign boundaries", () => {
+  const result = auditTripFacts({
+    id: "trip-poster-source",
+    extra: {
+      poster_trip_id: "poster-source",
+      itinerary_days: [
+        { title: "Fictional Port A - Fictional Port B", description: "Package begins at the documented port." },
+        { title: "Fictional Port B - Fictional Port C", description: "Package ends at the documented port." },
+      ],
+    },
+  });
+
+  assert.equal(result.errors.some((issue) => issue.code.startsWith("itinerary_missing_")), false);
+});
