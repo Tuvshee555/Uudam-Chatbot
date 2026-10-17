@@ -1651,7 +1651,7 @@ export function buildStructuredTripReply(
   const askedExistence = hasExistenceIntent(intentText);
   const passengerTotalReply = askedPrice ? buildPassengerTotalReply(best, currentLine, now) : null;
   if (passengerTotalReply) return passengerTotalReply;
-  const ageSpecificReply = askedPrice ? buildAgeSpecificPriceReply(best, currentLine) : null;
+  const ageSpecificReply = askedPrice ? buildAgeSpecificPriceReply(best, currentLine, now) : null;
   if (ageSpecificReply) return ageSpecificReply;
   const passengerTypeReply = askedPrice ? buildPassengerTypePriceReply(best, currentLine, now) : null;
   if (passengerTypeReply) return passengerTypeReply;

@@ -453,7 +453,7 @@ function findSingleAgePriceInText(text: string, target: "child" | "infant", age:
   return null;
 }
 
-export function buildAgeSpecificPriceReply(trip: TravelTrip, text: string): string | null {
+export function buildAgeSpecificPriceReply(trip: TravelTrip, text: string, now = new Date()): string | null {
   const lines = text.split("\n");
   const currentLine = lines[lines.length - 1] || text;
   if (extractDatesFromText(currentLine).length > 0) return null;
@@ -471,17 +471,56 @@ export function buildAgeSpecificPriceReply(trip: TravelTrip, text: string): stri
   // while printing the very range that excludes them.
   if (singleAgeIntent) {
     const ageUnit = singleAgeIntent.unit;
-    const tiers = readAgeTiers(trip).filter((tier) => tier.ageRange.trim().length > 0);
+    // Detailed passenger_prices are the source of truth for posters with two
+    // child bands. The legacy trip.child_price/age_rules pair is only a
+    // one-child-tier summary and can point at the older child's fare.
+    const currentGroups = getStructuredPriceGroups(trip).filter((group) => {
+      const dates = getPriceGroupDisplayDates(group);
+      return dates.length === 0 || filterFutureDepartureDates(dates, now, tripResolvedDates(trip)).length > 0;
+    });
+    const groupTiers = currentGroups.flatMap((group) =>
+      (Array.isArray(group.passenger_prices) ? group.passenger_prices : [])
+        .filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === "object")
+        .map((rule) => {
+          const note = normText(typeof rule.note === "string" ? rule.note : "");
+          const price = typeof rule.price === "number" ? rule.price : null;
+          return {
+            rule,
+            label: typeof rule.label === "string" ? rule.label.trim() : "",
+            ageRange: typeof rule.age_range === "string" ? rule.age_range : "",
+            price,
+            documentedFree: price === 0 && (note.includes("үнэгүй") || note.includes("free")),
+          } satisfies AgeTier;
+        }),
+    );
+    const tiers = (groupTiers.length > 0 ? groupTiers : readAgeTiers(trip))
+      .filter((tier) => tier.ageRange.trim().length > 0);
     if (tiers.length > 0) {
       const covering = tiers.filter(
         (tier) => ageBandCoversAge(tier.ageRange, singleAgeIntent.age, ageUnit) === true,
       );
+      // Printed ranges such as 0-2 and 2-5 share the completed age 2. The
+      // poster does not say which endpoint is exclusive, so choosing either
+      // fare would be an invented policy. Let staff confirm it.
+      const coveringKinds = unique(covering.map((tier) =>
+        ruleMatchesTarget(tier.rule, "infant") ? "infant" : "child",
+      ));
+      if (coveringKinds.length > 1) return "REFER";
+
+      const quotable = covering.filter((tier) => Boolean(formatTierPrice(tier, currency)));
+      const distinctFares = unique(quotable.map((tier) => `${tier.price}|${tier.documentedFree}`));
+      // The same age can cost differently by departure/hotel/package. Without
+      // one of those selections, show the full grounded table instead of
+      // taking whichever price group happened to be stored first.
+      if (distinctFares.length > 1) {
+        return `✈️ ${trip.route_name}\n${formatTripBasePricePremium(trip, now)}`;
+      }
       // Prefer a tier whose kind matches how the customer described the child
       // ("нярай" vs "хүүхэд"); otherwise the narrowest covering tier wins.
       const preferred =
-        covering.find((tier) =>
+        quotable.find((tier) =>
           ruleMatchesTarget(tier.rule, singleAgeIntent.target),
-        ) || covering[0];
+        ) || quotable[0];
       if (preferred) {
         const priceText = formatTierPrice(preferred, currency);
         if (priceText) {
@@ -608,6 +647,27 @@ export function buildPassengerTypePriceReply(
     const lines = [`✈️ ${trip.route_name}`, heading];
     let found = false;
     for (const group of groups) {
+      const rawDates = Array.isArray(group.dates) ? group.dates as string[] : [];
+      const futureDates = filterFutureDepartureDates(rawDates, now, tripResolvedDates(trip));
+      const relevantDates = requestedMonth === null
+        ? futureDates
+        : futureDates.filter((date) => normalizeMnDate(date).some((value) => value.month === requestedMonth));
+      if (rawDates.length > 0 && relevantDates.length === 0) continue;
+      const dateLabel = relevantDates.length > 0 ? formatGroupDateLabel(relevantDates) : "";
+      const hotel = typeof group.hotel === "string" && group.hotel.trim() ? group.hotel.trim() : "";
+
+      // A poster may publish younger-child and older-child fares separately.
+      // Never collapse those rows into group.child_price when the customer
+      // asks the otherwise-ambiguous generic "child price?" question.
+      const childTiers = target === "child" ? groupChildTierLines(group, currency) : [];
+      if (childTiers.length > 0) {
+        found = true;
+        const scope = [dateLabel, hotel].filter(Boolean).join(" · ");
+        if (scope) lines.push(`${scope}:`);
+        lines.push(...childTiers);
+        continue;
+      }
+
       const price = target === "infant"
         ? (typeof group.infant_price === "number" ? group.infant_price : null)
         : target === "child"
@@ -628,17 +688,10 @@ export function buildPassengerTypePriceReply(
         : target === "child"
           ? (typeof group.child_age === "string" ? group.child_age.trim() : "")
           : "";
-      const rawDates = Array.isArray(group.dates) ? group.dates as string[] : [];
-      const futureDates = filterFutureDepartureDates(rawDates, now, tripResolvedDates(trip));
-      const relevantDates = requestedMonth === null
-        ? futureDates
-        : futureDates.filter((date) => normalizeMnDate(date).some((value) => value.month === requestedMonth));
-      if (rawDates.length > 0 && relevantDates.length === 0) continue;
       found = true;
-      const dateLabel = relevantDates.length > 0 ? formatGroupDateLabel(relevantDates) : "";
       const ageText = age ? ` /${age}/` : "";
-      const hotel = typeof group.hotel === "string" && group.hotel.trim() ? `${group.hotel.trim()} · ` : "";
-      lines.push(`${dateLabel ? `${dateLabel}: ` : ""}${hotel}${label}${ageText}: ${adultPriceText}`);
+      const hotelPrefix = hotel ? `${hotel} · ` : "";
+      lines.push(`${dateLabel ? `${dateLabel}: ` : ""}${hotelPrefix}${label}${ageText}: ${adultPriceText}`);
     }
     if (found) return lines.join("\n");
   }
@@ -1517,7 +1570,9 @@ function groupChildTierLines(group: Record<string, unknown>, currency: string): 
     .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
     .filter((entry) => typeof entry.price === "number" && entry.price > 0)
     .filter((entry) => !isInfantShapedAge(normText(String(entry.label ?? "")), String(entry.age_range ?? "")));
-  if (new Set(tiers.map((entry) => entry.price)).size < 2) return [];
+  // Separate printed bands remain separate categories even when this one
+  // departure happens to charge them the same amount.
+  if (new Set(tiers.map((entry) => String(entry.age_range || entry.label || "").trim())).size < 2) return [];
   return tiers
     .map((entry) => {
       const priceText = formatPassengerMoney(entry.price as number, currency);

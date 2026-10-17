@@ -197,6 +197,7 @@ Rules:
 - For "activities": copy bullet points or sentences from the source exactly. Do not add, remove, or change any words. If none exist use [].
 - Prices: copy the exact price text from the page (e.g. "1,111,111₮"). Do not reformat numbers.
 - If the document has an "АЯЛЛЫН ҮНЭ" or price table area, price_table must NOT be null. Extract visible columns such as "Том хүн" and "Хүүхэд 2-11 нас", and include visible price cells exactly, including "+ тийз" when shown.
+- Preserve EVERY passenger tier as its own column. If the source separately lists an adult, two or more child age bands, and an infant, output all of them; never merge the child bands into one generic "Хүүхэд" column or drop a tier because another tier has the same price.
 - If prices are organized by room/cabin category and occupancy, preserve the room/cabin label as the first column and preserve EVERY occupancy-price column. Keep the printed currency exactly; never convert it or claim conversion is required.
 - If a visually merged price cell spans several room/cabin rows, repeat that exact printed value in each affected row so every row still has the same number of cells as columns.
 - In price_table, columns must NOT include a date/огноо column — dates go in the "dates" field of each row only. Copy the date text EXACTLY as written on the page (e.g. "7 сарын 2, 8, 9, 16, 20, 23"). Do NOT convert to ISO/numeric format like 2026-07-02.

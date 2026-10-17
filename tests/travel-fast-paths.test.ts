@@ -1431,7 +1431,7 @@ test("duration and date disambiguate Hailaar Manchurian variants", () => {
 
 test("single child age query returns the matching age tier instead of the first child price", () => {
   const reply = buildStructuredTripReply(
-    "Мирвэн Нарвэл 2 настай хүүхэд хэдээр явах вэ?",
+    "Мирвэн Нарвэл 3 настай хүүхэд хэдээр явах вэ?",
     [
       trip({
         id: "narvel",
@@ -2337,6 +2337,75 @@ test("distinct age-banded child fares are broken out instead of one flat price",
   assert.match(reply || "", /1,160,000₮/);
   assert.match(reply || "", /1,130,000₮/);
   assert.match(reply || "", /Нярай:\s*Үнэгүй/);
+});
+
+test("poster passenger tiers drive age-specific and generic child answers", () => {
+  const fourTierTrip = trip({
+    id: "four-passenger-tiers",
+    route_name: "Лүмэр – Савин аялал",
+    adult_price: 3710000,
+    child_price: 3310000,
+    infant_price: 410000,
+    departure_dates: ["7 сарын 18"],
+    extra: {
+      age_rules: { adult: "12+ нас", child: "2-11 нас", infant: "0-2 нас" },
+      price_groups: [{
+        dates: ["7 сарын 18"],
+        adult_price: 3710000,
+        child_price: 3310000,
+        infant_price: 410000,
+        passenger_prices: [
+          { label: "Ахлах хүүхэд", age_range: "6-11 нас", price: 3310000 },
+          { label: "Бага хүүхэд", age_range: "2-5 нас", price: 2910000 },
+          { label: "Нярай", age_range: "0-2 нас", price: 410000 },
+        ],
+      }],
+    },
+  });
+
+  const younger = buildStructuredTripReply(
+    `${fourTierTrip.route_name} 3 настай хүүхдийн үнэ хэд вэ?`,
+    [fourTierTrip],
+    NOW,
+  );
+  assert.match(younger || "", /2,910,000₮/);
+  assert.doesNotMatch(younger || "", /3,310,000₮/);
+
+  const generic = buildStructuredTripReply(
+    `${fourTierTrip.route_name} хүүхдийн үнэ хэд вэ?`,
+    [fourTierTrip],
+    NOW,
+  );
+  assert.match(generic || "", /6-11 нас[^\n]*3,310,000₮/);
+  assert.match(generic || "", /2-5 нас[^\n]*2,910,000₮/);
+
+  // The source printed both 0-2 and 2-5. It did not define whether the second
+  // birthday belongs to the infant or child tier, so the bot must not choose.
+  assert.equal(buildStructuredTripReply(
+    `${fourTierTrip.route_name} 2 настай хүүхдийн үнэ хэд вэ?`,
+    [fourTierTrip],
+    NOW,
+  ), "REFER");
+});
+
+test("equal-priced child bands still remain visible as separate poster categories", () => {
+  const samePriceBands = trip({
+    id: "same-price-bands",
+    route_name: "Нарин – Товэр аялал",
+    departure_dates: ["7 сарын 18"],
+    extra: { price_groups: [{
+      dates: ["7 сарын 18"],
+      adult_price: 3710000,
+      child_price: 3010000,
+      passenger_prices: [
+        { label: "Ахлах хүүхэд", age_range: "6-11 нас", price: 3010000 },
+        { label: "Бага хүүхэд", age_range: "2-5 нас", price: 3010000 },
+      ],
+    }] },
+  });
+  const reply = buildStructuredTripReply(`${samePriceBands.route_name} хүүхдийн үнэ хэд вэ?`, [samePriceBands], NOW);
+  assert.match(reply || "", /6-11 нас/);
+  assert.match(reply || "", /2-5 нас/);
 });
 
 test("a genitive-case trip name ('X-ийн') still resolves to the trip", () => {
