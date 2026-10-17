@@ -310,6 +310,24 @@ export function parseTripDepartureDateText(text: string, now = new Date()): stri
 }
 
 /**
+ * A yearless price-row date ("7 сарын 20") read as its NEAREST occurrence: July read
+ * in October is the July that passed, January read in October is the coming one.
+ * Rolling every passed day a year ahead sold a left-over summer row as next summer.
+ */
+export function nearestOccurrenceOfYearless(text: string, now = new Date()): string[] {
+  // A date that states its year keeps it.
+  if (/(?:^|[^\d])20\d{2}(?:[^\d]|$)/.test(text)) return parseTripDepartureDateText(text, now);
+  const today = getMongoliaDateParts(now);
+  const todayUtc = Date.UTC(today.year, today.month - 1, today.day);
+  return parseTripDepartureDateText(text, now).map((ymd) => {
+    const [, month, day] = ymd.split("-").map(Number);
+    const options = [today.year - 1, today.year, today.year + 1].filter((year) => isValidDateParts(year, month, day));
+    const best = options.sort((a, b) => Math.abs(Date.UTC(a, month - 1, day) - todayUtc) - Math.abs(Date.UTC(b, month - 1, day) - todayUtc))[0] ?? today.year;
+    return toYmd({ year: best, month, day });
+  });
+}
+
+/**
  * A stored map from each departure-date display string to the ISO date it was
  * resolved to AT WRITE TIME (or null for recurring/flexible text with no
  * calendar date). Kept in `extra.departure_dates_resolved`.

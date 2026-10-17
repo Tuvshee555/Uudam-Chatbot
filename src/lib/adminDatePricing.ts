@@ -1,3 +1,5 @@
+import { nearestOccurrenceOfYearless } from "./travelDates";
+
 export type PricingGroup = Record<string, unknown>;
 export type PricingDateRow = { groupIndex: number; date: string };
 
@@ -19,7 +21,19 @@ export function passengerPricingRows(group: PricingGroup): PricingGroup[] {
 }
 
 
-export function pricingDates(group: PricingGroup): string[] {
+export function pricingDates(group: PricingGroup, at?: Date | number): string[] {
+  // Also used as an array callback (`groups.map(pricingDates)`), where the 2nd argument is an index.
+  const now = at instanceof Date ? at : new Date();
+  // Yearless rows ("7 сарын 20") carry ISO search keys padded a year ahead; those are
+  // aliases, not departures. The row's own day is read at its nearest occurrence, so the
+  // editor never shows — or writes back into the trip's dates — a made-up next year.
+  const primary = [group.dates, group.display_dates].flatMap((value) => Array.isArray(value) ? value.map(String).filter(Boolean) : []);
+  if (primary.length && !primary.some((value) => /(?:^|[^\d])20\d{2}(?:[^\d]|$)/.test(value))) {
+    return [...new Set(primary.flatMap((text) => {
+      const dates = nearestOccurrenceOfYearless(text, now);
+      return dates.length ? dates : [text];
+    }))];
+  }
   const values = [group.date_keys, group.dates, group.display_dates].flatMap((value) => Array.isArray(value) ? value : []);
   const iso = [...new Set(values.map((value) => String(value).match(/^\d{4}-\d{2}-\d{2}/)?.[0] || "").filter(Boolean))];
   return iso.length ? iso : [...new Set((Array.isArray(group.dates) ? group.dates : []).map(String).filter(Boolean))];
@@ -49,10 +63,20 @@ export function patchPricingDate<T extends PricingGroup>(groups: readonly T[], r
   ]);
 }
 
+/** The calendar day a departure entry stands for ("10 сарын 8" and "2026-10-08" are one day); other text stays itself. */
+function departureDay(text: string): string {
+  return nearestOccurrenceOfYearless(text)[0] || text;
+}
+
+// The trip's own departure list follows the price rows, compared by calendar day so one
+// departure is never listed twice in two spellings and removing a row removes its date.
 export function reconcilePricingDates(current: readonly string[], before: readonly PricingGroup[], after: readonly PricingGroup[]): string[] {
-  const oldDates = new Set(before.flatMap(pricingDates));
-  const newDates = new Set(after.flatMap(pricingDates));
-  return [...new Set([...current.filter((date) => !oldDates.has(date) || newDates.has(date)), ...newDates])];
+  const oldDays = new Set(before.flatMap((group) => pricingDates(group)).map(departureDay));
+  const newDates = [...new Set(after.flatMap((group) => pricingDates(group)))];
+  const newDays = new Set(newDates.map(departureDay));
+  const kept = current.filter((date) => !oldDays.has(departureDay(date)) || newDays.has(departureDay(date)));
+  const keptDays = new Set(kept.map(departureDay));
+  return [...new Set([...kept, ...newDates.filter((date) => !keptDays.has(departureDay(date)))])];
 }
 
 export function renamePricingDate(groups: readonly PricingGroup[], from: string, to: string): PricingGroup[] {

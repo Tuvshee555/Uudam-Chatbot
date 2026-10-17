@@ -950,6 +950,7 @@ export function Modal({
   description,
   children,
   footer,
+  toolbar,
   panelClassName,
 }: {
   open: boolean;
@@ -958,6 +959,8 @@ export function Modal({
   description?: string;
   children: ReactNode;
   footer?: ReactNode;
+  /** Stays put above the scrolling body (tabs, filters): content never slides behind it. */
+  toolbar?: ReactNode;
   panelClassName?: string;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -1050,6 +1053,8 @@ export function Modal({
             <Icons.close />
           </button>
         </div>
+
+        {toolbar && <div className="shrink-0 border-b border-line px-5">{toolbar}</div>}
 
         <div className="scroll-area min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {children}

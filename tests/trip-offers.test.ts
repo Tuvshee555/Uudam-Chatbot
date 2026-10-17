@@ -287,16 +287,35 @@ test("a yearless date is one departure: its rolled-forward copies in later years
   assert.deepEqual(normalizeTripOffers(value, NOW)[0].dates, ["2026-10-22", "2026-11-05"]);
 });
 
-test("a yearless price row's next-year search key is not a second departure", () => {
+test("a yearless price row's next-year search keys are never departures", () => {
   // Шар тэнгис: generateDateKeys padded "7 сарын 20" with 2027 and 2028 ISO keys,
-  // and the website sold both years.
+  // the website sold both years, and the OPEN rows came back through the bridge.
   const value = trip({ departure_dates: ["10 сарын 20"], extra: {
     departure_dates_resolved: [{ ymd: "2026-10-20", text: "10 сарын 20" }],
     price_groups: [{ dates: ["7 сарын 20"], label: "7 сарын 20", adult_price: 1_690_000,
       date_keys: ["7 сарын 20", "07 сарын 20", "7/20", "07/20", "2027-07-20", "2028-07-20"] }],
+    website_departure_availability: [
+      { date: "2026-10-20", status: "OPEN" }, { date: "2027-07-20", status: "OPEN" }, { date: "2028-07-20", status: "CANCELLED" },
+    ],
   } });
-  const row = normalizeTripOffers(value, NOW).find((offer) => offer.source === "price_group");
-  assert.deepEqual(row?.dates, ["2027-07-20"]);
+  const offers = normalizeTripOffers(value, NOW);
+  // The left-over July row is this year's July — already past, not next summer.
+  assert.deepEqual(offers.find((offer) => offer.source === "price_group")?.dates, ["2026-07-20"]);
+  assert.deepEqual(offers.find((offer) => offer.source === "base")?.dates, ["2026-10-20"]);
+});
+
+test("a dated price row's child band is not printed as a base fare", () => {
+  // extra.child_rules summarises every row's bands; the base used to read them all and
+  // printed an old August child fare beside the October one.
+  const band = (price: number) => ({ label: "Хүүхэд", age_range: "2-8 нас", price, currency: "MNT", note: "" });
+  const value = trip({ departure_dates: ["10 сарын 26"], adult_price: 990_000, child_price: 890_000, extra: {
+    departure_dates_resolved: [{ ymd: "2026-10-26", text: "10 сарын 26" }],
+    price_groups: [{ dates: ["8 сарын 24"], adult_price: 1_190_000, passenger_prices: [band(990_000)] }],
+    child_rules: [band(890_000), band(990_000)],
+  } });
+  const base = normalizeTripOffers(value, NOW).find((offer) => offer.source === "base");
+  const childFares = base?.fares.filter((fare) => fare.kind === "child").map((fare) => fare.fare);
+  assert.ok(childFares?.every((fare) => fare.kind === "exact" && fare.amount === 890_000));
 });
 
 test("a dated price row keeps every ISO key of its own year", () => {

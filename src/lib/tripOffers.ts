@@ -1,4 +1,4 @@
-import { parseTripDepartureDateText } from "./travelDates";
+import { nearestOccurrenceOfYearless, parseTripDepartureDateText } from "./travelDates";
 import { customerDate } from "./customerDate";
 import type { TravelTrip } from "./travelTypes";
 
@@ -135,7 +135,13 @@ function catalogDates(trip: TravelTrip, now: Date): string[] {
   // A cancelled website row is a date that was taken off the schedule (the sync
   // closes removed dates that way); it must not come back as a departure. The bot
   // offered "2026-10-11, 2026-11-01" for a trip that departs 10/31 and 12/30 (2026-10-11).
-  const website = rows(trip.extra?.website_departure_availability)
+  // When every listed entry is a calendar date, the list IS the schedule: a website row
+  // it does not hold was published from a wrong reading and written back by the bridge
+  // (2027 copies of a left-over summer price row kept returning as OPEN departures).
+  // A list with weekly or flexible text ("Пүрэв гараг бүр") still takes its dates there.
+  const listed = trip.departure_dates || [];
+  const complete = listed.length > 0 && listed.every((text) => ownDates({ ...trip, departure_dates: [text] }, now).length > 0);
+  const website = complete ? [] : rows(trip.extra?.website_departure_availability)
     .filter((r) => !["CANCELLED", "DEPARTED"].includes(str(r.status).toUpperCase()))
     .map((r) => str(r.date)).filter(validIso);
   return unique(dropYearCopies(trip, now, unique([...dates, ...website]), everListedDates(trip, dates))).sort();
@@ -184,7 +190,23 @@ function departureDateKeys(raw: Row): string[] {
 }
 
 function offerDates(raw: Row, trip: TravelTrip, now: Date): { dates: string[]; dateScoped: boolean; issues: string[] } {
-  const texts = unique([...strings(raw.dates), ...strings(raw.display_dates), ...departureDateKeys(raw), ...(str(raw.date) ? [str(raw.date)] : [])]);
+  // A yearless price row takes its year from the trip's own departure list, else its
+  // nearest occurrence. Its ISO search keys are aliases padded a year ahead, not dates:
+  // read as dates, a left-over July row became 2027-07-20 and was sold as an OPEN
+  // departure while the trip's real dates were Sep–Oct (Шар тэнгис, Хайлаар Манжуур,
+  // 2026-10-17). A July row read in October is the July that passed.
+  const primary = unique([...strings(raw.dates), ...strings(raw.display_dates), ...(str(raw.date) ? [str(raw.date)] : [])]);
+  if ((trip.departure_dates || []).length && primary.length && !primary.some(hasYear) && typeof raw.year !== "number") {
+    const catalog = ownDates(trip, now);
+    const issues: string[] = [];
+    const dates = primary.flatMap((text) => nearestOccurrenceOfYearless(text, now).flatMap((date) => {
+      const known = catalog.filter((d) => d.slice(5) === date.slice(5));
+      if (known.length > 1) issues.push("departure_year_ambiguous");
+      return known.length ? known : [date];
+    }));
+    return { dates: unique(dates).sort(), dateScoped: true, issues: unique(issues) };
+  }
+  const texts =unique([...strings(raw.dates), ...strings(raw.display_dates), ...departureDateKeys(raw), ...(str(raw.date) ? [str(raw.date)] : [])]);
   const dated = texts.length > 0;
   const issues: string[] = [];
   const explicit = texts.filter(hasYear).flatMap((text) => parseTripDepartureDateText(text, now));
@@ -352,8 +374,16 @@ export function normalizeTripOffers(trip: TravelTrip, now = new Date()): Canonic
 
 function computeTripOffers(trip: TravelTrip, now: Date): CanonicalTripOffer[] {
   const extra = trip.extra || {};
+  // extra.child_rules is a summary of every price row's bands (deriveChildRules);
+  // read as base fares, a late-August child fare was printed beside the October one.
+  // A row with calendar dates prices its own dates, so its bands leave the base; a
+  // row without (a weekly "<гараг> бүр" trip) reaches the resolver only through it.
+  const bandKey = (r: Row) => `${str(r.label)}|${str(r.age_range)}|${String(r.price)}`;
+  const groupBands = new Set(rows(extra.price_groups).filter((group) => offerDates(group, trip, now).dates.length > 0)
+    .flatMap((group) => rows(group.passenger_prices)).map(bandKey));
+  const baseChildRules = rows(extra.child_rules).filter((rule) => !groupBands.has(bandKey(rule)));
   const records: Array<{ source: CanonicalTripOffer["source"]; raw: Row }> = [
-    { source: "base", raw: { ...extra, adult_price: trip.adult_price, child_price: trip.child_price, infant_price: trip.infant_price, currency: trip.currency } },
+    { source: "base", raw: { ...extra, child_rules: baseChildRules, adult_price: trip.adult_price, child_price: trip.child_price, infant_price: trip.infant_price, currency: trip.currency } },
     ...rows(extra.departure_date_groups).map((raw) => ({ source: "legacy" as const, raw })),
     ...rows(extra.price_groups).map((raw) => ({ source: "price_group" as const, raw })),
     ...[...rows(extra.discounts), ...rows(extra.discount_groups)].map((raw) => ({ source: "discount" as const, raw })),

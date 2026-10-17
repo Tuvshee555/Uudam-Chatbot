@@ -73,9 +73,9 @@ export function DateSeatsEditor({
   }
 
   return (
-    <section className="mt-5 border-t border-line pt-4">
+    <section className="rounded-xl border border-line bg-surface p-4 sm:p-5">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-sm font-semibold text-ink">Огноо бүрийн суудал</h3>
+        <h3 className="text-[15px] font-semibold text-ink">Огноо бүрийн суудал</h3>
         {lowCount > 0 && <span className="text-xs font-medium text-warning">{lowCount} өдөр «Цөөн суудал» гэж харагдаж байна</span>}
       </div>
       <p className="mt-1 text-xs text-ink-subtle">

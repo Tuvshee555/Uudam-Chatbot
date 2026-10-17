@@ -136,18 +136,18 @@ const RULES: Array<{
     ok: (t) => text(t.route_name) },
   { key: "duration_text", label: "Хугацаа", where: "Үндсэн", severity: "blocking",
     ok: (t) => text(t.duration_text) },
-  { key: "adult_price", label: "Том хүний үнэ", where: "Үндсэн", severity: "blocking",
+  { key: "adult_price", label: "Том хүний үнэ", where: "Үнэ ба гаралт", severity: "blocking",
     ok: (t) => money(t.adult_price) },
-  { key: "child_price", label: "Хүүхдийн үнэ", where: "Үндсэн", severity: "blocking",
+  { key: "child_price", label: "Хүүхдийн үнэ", where: "Үнэ ба гаралт", severity: "blocking",
     ok: (t) => money(t.child_price) || t.child_fare_free === true },
   // Infants have their own fare on every trip — customers ask, and 0/blank
   // would read as "babies fly free", a promise the agency never made. A fare
   // the operator DID write down as free is complete, not missing.
-  { key: "infant_price", label: "Нярайн үнэ", where: "Үндсэн", severity: "blocking",
+  { key: "infant_price", label: "Нярайн үнэ", where: "Үнэ ба гаралт", severity: "blocking",
     ok: (t) => money(t.infant_price) || t.infant_fare_free === true },
   { key: "departure_dates", label: "Гарах өдөр", where: "Үнэ ба гаралт", severity: "blocking",
     ok: (t) => filledDates(t.departure_dates) },
-  { key: "photo_urls", label: "Зураг", where: "Үндсэн", severity: "blocking",
+  { key: "photo_urls", label: "Зураг", where: "Зураг, бичлэг", severity: "blocking",
     ok: (t) => filled(t.photo_urls) || (t.poster_photo_count ?? 0) > 0 },
   // Editable on the poster, not in this form — flag it, never block the save here.
   { key: "itinerary_days", label: "Өдрийн хөтөлбөр", where: "Хөтөлбөр", severity: "warning",

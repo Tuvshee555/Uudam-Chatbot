@@ -75,3 +75,18 @@ test("renaming a departure moves every hotel option without touching other dates
   assert.deepEqual(result.map(pricingDates), [["2026-12-13"], ["2026-12-20"], ["2026-12-13"], ["2026-12-20"]]);
   assert.equal(result[3].hotel, "Hotel B");
 });
+test("a yearless price row is read at its nearest occurrence, never at its padded search keys", () => {
+  const now = new Date("2026-10-17T04:00:00Z");
+  const row = { dates: ["7 сарын 20", "1 сарын 6"], date_keys: ["7 сарын 20", "2027-07-20", "2028-07-20", "1 сарын 6", "2027-01-06"] };
+  // July read in October is the July that passed; January is the coming one.
+  assert.deepEqual(pricingDates(row, now), ["2026-07-20", "2027-01-06"]);
+  // A date with its year keeps it.
+  assert.deepEqual(pricingDates({ dates: ["2027 оны 7 сарын 20"] }, now), ["2027 оны 7 сарын 20"]);
+});
+test("one departure is not listed twice in two spellings", () => {
+  const before = [{ dates: ["10 сарын 22"] }];
+  const after = [{ dates: ["10 сарын 22", "11 сарын 5"] }];
+  const result = reconcilePricingDates(["10 сарын 22"], before, after);
+  assert.equal(result.length, 2);
+  assert.ok(result.includes("10 сарын 22"));
+});
