@@ -197,7 +197,9 @@ function expandPosterDateList(value: string | undefined): string[] {
     .trim();
   if (!text || /^үнэ$/i.test(text)) return [];
 
-  const markers = [...text.matchAll(/(\d{1,2})\s*(?:-?\s*р)?\s*сарын/gi)];
+  // "2026 он 11 сар 11,25" (a table cell) is the same as "11 сарын 11, 25": without "-ын" it used to
+  // stay one text, and every reader took only its first day — the 25th was never a departure.
+  const markers = [...text.matchAll(/(\d{1,2})\s*(?:-?\s*р)?\s*сар(?:ын)?(?=[\s\d,.]|$)/gi)];
   if (markers.length === 0) return [text];
 
   const dates: string[] = [];
@@ -325,8 +327,11 @@ function mapPrices(priceTable: PosterTrip["price_table"]): {
   if (!priceTable?.rows?.length) return { adult_price: null, child_price: null, infant_price: null };
 
   const groups = mapPriceGroups(priceTable);
-  const priced = groups
-    .filter((group) => group.adult_price != null)
+  // A table priced in two currencies (one row in юань, the rest in ₮) must not compare 2,460 with
+  // 1,600,000 and call the yuan row the cheapest: the trip's base fare comes from the tugrik rows.
+  const allPriced = groups.filter((group) => group.adult_price != null);
+  const tugrik = allPriced.filter((group) => !group.currency || group.currency === "MNT");
+  const priced = (tugrik.length ? tugrik : allPriced)
     .sort((a, b) => (a.adult_price || 0) - (b.adult_price || 0));
   const firstChild = groups.find((group) => group.child_price != null)?.child_price ?? null;
   const firstInfant = groups.find((group) => group.infant_price != null)?.infant_price ?? null;

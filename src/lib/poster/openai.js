@@ -200,7 +200,7 @@ Rules:
 - Preserve EVERY passenger tier as its own column. If the source separately lists an adult, two or more child age bands, and an infant, output all of them; never merge the child bands into one generic "Хүүхэд" column or drop a tier because another tier has the same price.
 - If prices are organized by room/cabin category and occupancy, preserve the room/cabin label as the first column and preserve EVERY occupancy-price column. Keep the printed currency exactly; never convert it or claim conversion is required.
 - If a visually merged price cell spans several room/cabin rows, repeat that exact printed value in each affected row so every row still has the same number of cells as columns.
-- In price_table, columns must NOT include a date/огноо column — dates go in the "dates" field of each row only. Copy the date text EXACTLY as written on the page (e.g. "7 сарын 2, 8, 9, 16, 20, 23"). Do NOT convert to ISO/numeric format like 2026-07-02.
+- In price_table, columns must NOT include a date/огноо column — dates go in the "dates" field of each row only. This includes a table that prints the date as separate columns (year / "Гарах сар" / "Өдөр"): join them into that row's "dates" (e.g. "2026 оны 11 сарын 11, 25") and never output them as columns. Copy the date text EXACTLY as written on the page (e.g. "7 сарын 2, 8, 9, 16, 20, 23"). Do NOT convert to ISO/numeric format like 2026-07-02.
 - Each row's cells array must match columns length exactly with the real price values. Do not leave cells empty.
 - If a price has both yuan and tugrik, put both like "4,180 юань / 2,340,000₮".
 - MEALS — read very carefully. To the RIGHT of each day's row there is a small vertical list of THREE meal lines in this fixed top-to-bottom order: Өглөөний цай (breakfast), Өдрийн хоол (lunch), Оройн хоол (dinner). Each line has a mark next to it: a GREEN CHECK (✓) = included → true, a RED CROSS / X (✗) = NOT included → false. These marks sit in a column aligned BY ROW to each day — read straight across from the day to its three marks, and do not shift up or down to a neighbouring day's marks. Set meals.breakfast / meals.lunch / meals.dinner exactly from the ✓/✗ for THAT day. If a day's row has NO marks at all (blank, like the last days sometimes are), set all three to false. Never assume a default — only use what the marks show.
@@ -339,7 +339,7 @@ Rules:
 - CRITICALLY: DO NOT leave cells empty. Each row's cells array must match columns length exactly with the actual price values.
 - If a price has both yuan and tugrik (e.g. "4180 юань / 2,340,000₮"), put both in the cell like "4,180 юань / 2,340,000₮".
 - The dates field per row should be the departure date(s) (e.g. "2026-07-04").
-- columns must NOT include a date/огноо column — dates go in the "dates" field only.
+- columns must NOT include a date/огноо column — dates go in the "dates" field only. Year, month ("Гарах сар") and day ("Өдөр") columns are parts of the date: join them into "dates", never columns.
 - Copy meals only when the source states or marks them. If unclear or absent, set all three meal booleans to false; never infer a likely meal.
 - Use null for unknown flights/hotels/photos, not made-up data.
 - Keep includes and excludes arrays empty unless the source clearly lists them.

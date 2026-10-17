@@ -6,6 +6,7 @@ import { fileToImages, fileToText } from "@/lib/poster/parse";
 import { extractTrip, extractTripFromImage, extractTripFromPdf } from "@/lib/poster/openai";
 import { extractPdfImages } from "@/lib/poster/pdfImages";
 import { applyDayText, applyMealMarks, extractPdfFacts } from "@/lib/poster/pdfMeals";
+import { normalizePosterPriceTable } from "@/lib/poster/priceTableNormalize";
 
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp"];
 export const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
@@ -190,7 +191,7 @@ export async function runMultiImageExtraction(uploads: UploadLike[]) {
     ),
   );
   return {
-    trip: mergeExtractedTrips(trips),
+    trip: normalizePosterPriceTable(mergeExtractedTrips(trips)),
     source_file: images.map((upload) => upload.filename).join(", "),
   };
 }
@@ -201,7 +202,7 @@ export async function runExtraction(buffer: Buffer, filename: string, mime: stri
   if (IMAGE_TYPES.includes(mime) || /\.(jpe?g|png|webp|gif|bmp)$/.test(name)) {
     const b64 = buffer.toString("base64");
     const trip = await extractTripFromImage(b64, mime || "image/jpeg");
-    return { trip, source_file: filename };
+    return { trip: normalizePosterPriceTable(trip), source_file: filename };
   }
 
   if (name.endsWith(".pdf") || mime === "application/pdf") {
@@ -216,7 +217,7 @@ export async function runExtraction(buffer: Buffer, filename: string, mime: stri
     applyDayText(trip, pdfFacts.days);
     applyMealMarks(trip, pdfFacts.meals);
     assignPhotos(trip, pdfImages);
-    return { trip, source_file: filename };
+    return { trip: normalizePosterPriceTable(trip), source_file: filename };
   }
 
   const text = await fileToText(buffer, filename);
@@ -228,7 +229,7 @@ export async function runExtraction(buffer: Buffer, filename: string, mime: stri
     fileToImages(buffer, filename),
   ]);
   assignPhotos(trip, fileImages);
-  return { trip, source_file: filename };
+  return { trip: normalizePosterPriceTable(trip), source_file: filename };
 }
 
 export function assertReadableDocument(buffer: Buffer, filename: string, mime: string): void {

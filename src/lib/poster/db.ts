@@ -12,6 +12,7 @@ import { posterPhotos } from "@/lib/connectedTripMapping";
 import { materializePoster } from "@/lib/websiteTripSync";
 import { getPosterPdfPublicUrl } from "./pdfUrl";
 import { POSTER_PHOTO_COUNT_SQL } from "./photoCount";
+import { normalizePosterPriceTable } from "./priceTableNormalize";
 import {
   INCOMPLETE_REVIEW_PREFIX,
   blockingGaps,
@@ -318,7 +319,9 @@ export async function getPosterTrip(id: string): Promise<PosterTripRow | null> {
     `SELECT id, title, source_file, data, updated_at FROM poster_trips WHERE id = $1`,
     [id],
   );
-  return res?.rows?.[0] ?? null;
+  const row = res?.rows?.[0] ?? null;
+  // A poster saved before date columns were folded into the row date opens already fixed.
+  return row ? { ...row, data: normalizePosterPriceTable(row.data) } : null;
 }
 
 export async function savePosterTrip(input: {
@@ -336,7 +339,7 @@ export async function savePosterTrip(input: {
     id: tripId,
     title: input.title,
     source_file: input.source_file ?? null,
-    data: await materializePoster(input.data ?? {}),
+    data: await materializePoster(normalizePosterPriceTable(input.data ?? {})),
   };
   const syncedTrip = await syncPosterTrip(row, { ...row, note: input.note });
   if (!syncedTrip) {
