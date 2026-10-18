@@ -767,6 +767,12 @@ const COMPACT_DATE_RANGE_RE = /(?<![\d./-])(\d{1,2})[./](\d{1,2})\s*[-–—]\s*
 // dash), so "9.30-10.20ний хооронд … аялал байгаа юу" got no date answer.
 const CROSS_MONTH_RANGE_RE = /(?<![\d./-])(\d{1,2})[./](\d{1,2})\s*[-–—]\s*(\d{1,2})[./](\d{1,2})(?![\d./])/;
 
+// "11/1-ээс 11/6", "11/1-ээс 6 хүртэл": "from <date> to <date>". The first date is
+// glued to the "-ээс" ending, which the single-date parser rejects on purpose, so
+// only the second date was seen and "trips from the 1st to the 6th" was answered
+// with the one trip leaving on the 6th (2026-10-16).
+const FROM_TO_RANGE_RE = /(?<![\d./-])(\d{1,2})[./](\d{1,2})\s*-?\s*(?:ээс|аас|оос|өөс|ees|aas|oos)\s+(?:(\d{1,2})[./])?(\d{1,2})(?![\d./])/i;
+
 // "9 сарын сүүлээр 10 сарын эхээр": parts of a month, in customer words.
 const MONTH_PART_RE =
   /(\d{1,2})\s*(?:-?\s*р)?\s*(?:сарын|сар|sariin|sar)\s*(эх\S*|ehe\S*|ehn\S*|дунд\S*|dund\S*|сүүл\S*|suul\S*)/gi;
@@ -815,6 +821,15 @@ function resolveRequestedRange(text: string, now: Date): RequestedRange | null {
     const [year, monthPart] = start.ymd.split("-");
     return buildRange(start.ymd, `${year}-${monthPart}-${String(endDay).padStart(2, "0")}`);
   }
+  const fromTo = FROM_TO_RANGE_RE.exec(normalized);
+  if (fromTo) {
+    const start = resolveRequestedDate(`${fromTo[1]} сарын ${fromTo[2]}`, now);
+    const end = resolveRequestedDate(`${fromTo[3] || fromTo[1]} сарын ${fromTo[4]}`, now);
+    if (start && end) {
+      const range = buildRange(start.ymd, end.ymd);
+      if (range) return range;
+    }
+  }
   const crossMonth = CROSS_MONTH_RANGE_RE.exec(normalized);
   if (crossMonth) {
     const start = resolveRequestedDate(`${crossMonth[1]} сарын ${crossMonth[2]}`, now);
@@ -843,6 +858,15 @@ function resolveRequestedRange(text: string, now: Date): RequestedRange | null {
     if (bounds.length > 0) return buildRange(bounds[0], bounds[bounds.length - 1]);
   }
   return null;
+}
+
+/**
+ * True when the message gives a span of departure dates ("11/1-ээс 11/6", "10 сарын 20-27",
+ * "11 сарын эхээр"). Used to let "send the programmes of trips from <date> to <date>" — no
+ * trip named — be answered with the trips leaving in that window instead of silence.
+ */
+export function requestsDateWindow(text: string, now = new Date()): boolean {
+  return resolveRequestedRange(text, now) !== null;
 }
 
 function findRangeDepartures(

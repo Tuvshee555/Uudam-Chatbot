@@ -6,7 +6,7 @@ import type { TravelTrip } from "../src/lib/travelTypes";
 /**
  * Real bug, found replaying 2026-10-08..11 Messenger chats: two different
  * customers were shown a "which trip?" list, answered by COPYING one option
- * verbatim with its number ("2. ЖИНИН-МИНИ АВАТАР-ХӨХ ХОТЫН АЯЛАЛ"), and got
+ * verbatim with its number ("2. ТАЛАЙ-ХАРСАЙ-ЗАНДАН ХОТЫН АЯЛАЛ"), and got
  * silence — `structured_trip_fast_path` logged a no-data hand-off.
  *
  * Root cause: the list shown to the customer was built by resolving the
@@ -18,7 +18,7 @@ import type { TravelTrip } from "../src/lib/travelTypes";
  * resolve against and fell through to a whole-catalogue search, which a
  * message starting "2. " does not survive.
  *
- * These trips are invented fixtures shaped like the real ones from the
+ * These trips are invented fixtures shaped like the ones in the
  * conversation, never the live catalogue.
  */
 
@@ -49,18 +49,18 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
   };
 }
 
-const KHUKH_KHOT_BUS = trip({
-  route_name: "ХӨХ ХОТЫН БИЕИЙН ШИНЖИЛГЭЭТЭЙ АЯЛАЛ - АВТОБУСТАЙ",
+const ZANDAN_BUS = trip({
+  route_name: "ЗАНДАН ХОТЫН РАШААНТАЙ АЯЛАЛ - АВТОБУСТАЙ",
   duration_text: "7 өдөр 6 шөнө",
   adult_price: 890000,
   departure_dates: ["10 сарын 11", "10 сарын 14", "10 сарын 18"],
 });
-const JINING_MINI_AVATAR = trip({
-  route_name: "ЖИНИН-МИНИ АВАТАР-ХӨХ ХОТЫН АЯЛАЛ",
+const TALAI_HARSAI = trip({
+  route_name: "ТАЛАЙ-ХАРСАЙ-ЗАНДАН ХОТЫН АЯЛАЛ",
   duration_text: "7 өдөр 6 шөнө",
   departure_dates: ["Пүрэв", "Ням"],
 });
-const CATALOG = [KHUKH_KHOT_BUS, JINING_MINI_AVATAR];
+const CATALOG = [ZANDAN_BUS, TALAI_HARSAI];
 
 test("a numbered answer that copies the shown option verbatim resolves to that trip once the list is remembered", async () => {
   applyTestEnv();
@@ -72,7 +72,7 @@ test("a numbered answer that copies the shown option verbatim resolves to that t
     // displayed are saved, exactly as the three corrected call sites now do.
     await setClarificationState(senderId, CATALOG.map((t) => t.id));
 
-    const text = "2. ЖИНИН-МИНИ АВАТАР-ХӨХ ХОТЫН АЯЛАЛ";
+    const text = "2. ТАЛАЙ-ХАРСАЙ-ЗАНДАН ХОТЫН АЯЛАЛ";
     const routed = await routeFastPathText({
       senderId,
       text,
@@ -81,7 +81,7 @@ test("a numbered answer that copies the shown option verbatim resolves to that t
       history: [{ role: "assistant", text: "Энэ чиглэлээр хэд хэдэн сонголт байна 😊 Аль аяллыг нь сонирхож байна вэ?" }],
     });
 
-    assert.equal(routed.chosenTripId, JINING_MINI_AVATAR.id, "must resolve to the trip actually named, not silence");
+    assert.equal(routed.chosenTripId, TALAI_HARSAI.id, "must resolve to the trip actually named, not silence");
   } finally {
     await clearClarificationState(senderId);
   }
@@ -95,7 +95,7 @@ test("without the saved list, the same numbered answer has nothing to resolve ag
   await clearClarificationState(senderId);
   assert.equal(await getClarificationState(senderId), null, "precondition: nothing pending, as the old call sites left it");
 
-  const text = "2. ЖИНИН-МИНИ АВАТАР-ХӨХ ХОТЫН АЯЛАЛ";
+  const text = "2. ТАЛАЙ-ХАРСАЙ-ЗАНДАН ХОТЫН АЯЛАЛ";
   const routed = await routeFastPathText({
     senderId,
     text,
@@ -120,13 +120,13 @@ test("the second offered trip also resolves by number alone, in both list orders
   const senderId = "clarify-persist-index";
   const history = [{ role: "assistant" as const, text: "Аль аяллыг нь сонирхож байна вэ?" }];
   try {
-    await setClarificationState(senderId, [KHUKH_KHOT_BUS.id, JINING_MINI_AVATAR.id]);
+    await setClarificationState(senderId, [ZANDAN_BUS.id, TALAI_HARSAI.id]);
     const first = await routeFastPathText({ senderId, text: "1", contextualUserText: "1", trips: CATALOG, history });
-    assert.equal(first.chosenTripId, KHUKH_KHOT_BUS.id);
+    assert.equal(first.chosenTripId, ZANDAN_BUS.id);
 
-    await setClarificationState(senderId, [KHUKH_KHOT_BUS.id, JINING_MINI_AVATAR.id]);
+    await setClarificationState(senderId, [ZANDAN_BUS.id, TALAI_HARSAI.id]);
     const second = await routeFastPathText({ senderId, text: "2", contextualUserText: "2", trips: CATALOG, history });
-    assert.equal(second.chosenTripId, JINING_MINI_AVATAR.id);
+    assert.equal(second.chosenTripId, TALAI_HARSAI.id);
   } finally {
     await clearClarificationState(senderId);
   }

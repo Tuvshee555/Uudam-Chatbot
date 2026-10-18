@@ -82,6 +82,7 @@ import {
   findPriceGroupByMonthDay,
   formatChildRules,
   formatCompactDepartureList,
+  formatAlternativeTripLine,
   formatDepartureDates,
   formatExtraFeesLine,
   formatPassengerMoney,
@@ -1350,14 +1351,7 @@ function buildUnavailableTripReply(
     .map((candidate) => candidate.trip);
 
   if (alternatives.length > 0) {
-    const altLines = alternatives.map((trip) => {
-      const duration = safeDurationText(trip.duration_text);
-      const price = formatPassengerMoney(trip.adult_price, trip.currency || "MNT");
-      const details = [duration, price ? `Том хүн: ${price}` : ""]
-        .filter(Boolean)
-        .join(" — ");
-      return `• ${trip.route_name}${details ? ` (${details})` : ""}`;
-    });
+    const altLines = alternatives.map((trip) => formatAlternativeTripLine(trip, safeDurationText(trip.duration_text)));
     return [
       `✈️ ${best.route_name} — ${wording.inlineSuffix}`,
       "",

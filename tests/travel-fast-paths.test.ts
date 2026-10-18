@@ -257,6 +257,10 @@ test("sold-out reply pitches active same-destination trips instead of dead-endin
       category: "Газрын аялал",
       adult_price: 1170000,
       duration_text: "8 өдөр 7 шөнө",
+      // A bookable alternative has a future departure. With only the fixture's past
+      // default dates its price is no live fare: the reply checker rejects it, and a
+      // sold-out answer quoting it became silence (2026-10-16).
+      departure_dates: ["2099-07-18"],
     }),
     trip({
       id: "mirven-unrelated",

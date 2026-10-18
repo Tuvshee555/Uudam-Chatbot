@@ -1767,6 +1767,20 @@ function listedFaresAndDates(trip: TravelTrip, now = new Date()): { fares: Liste
   return { fares, dates: upcoming.filter((date) => date === upcoming[0] || sameFares(card(date))).slice(0, 3) };
 }
 
+/**
+ * "• <trip> (<length> — Том хүн: <fare>)": an open trip offered in place of a sold-out or
+ * paused one. Reads the same fare the "which trip?" list prints, never the trip's top-level
+ * adult_price — that field can be stale against the per-date fares, the reply checker then
+ * rejected the whole sold-out answer, and two customers who named a sold-out trip got
+ * silence (2026-10-16). A line the checker would still reject is cut back to the name.
+ */
+export function formatAlternativeTripLine(trip: TravelTrip, duration: string, now = new Date()): string {
+  const adult = formatPassengerMoney(listedFaresAndDates(trip, now).fares?.adult, trip.currency || "MNT");
+  const details = [duration, adult ? `Том хүн: ${adult}` : ""].filter(Boolean).join(" — ");
+  const line = `• ${trip.route_name}${details ? ` (${details})` : ""}`;
+  return details && verifyTripReply({ reply: line, trips: [trip], now }) !== line ? `• ${trip.route_name}` : line;
+}
+
 export function buildAmbiguousTripReply(
   trips: TravelTrip[],
   heading?: string,

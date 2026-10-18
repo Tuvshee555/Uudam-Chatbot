@@ -50,7 +50,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // "message_echoes" (not "messaging_echoes", which Meta rejects and which
     // failed the whole request) is what tells the bot a staff member replied
     // from the Page inbox, so it can step aside. Every configured page needs it.
-    const fields = "feed,messages,messaging_postbacks,message_reads,message_echoes";
+    // messaging_referrals: a customer who already has a thread and taps an ad (or an m.me
+    // link) arrives as a separate referral event; without it the bot never learns which ad,
+    // and "Can you tell me more about your ad?" names no trip (Meta webhook docs).
+    const fields = "feed,messages,messaging_postbacks,message_reads,message_echoes,messaging_referrals";
 
     try {
       const results = [];

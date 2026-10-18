@@ -1,13 +1,14 @@
 const PAGE_ID = process.env.FACEBOOK_PAGE_ID?.trim();
 const PAGE_TOKEN = process.env.TOKEN_PAGE?.trim();
-// Must include messaging_echoes: without it, Meta never tells the webhook
+// Must include message_echoes (Meta's field name; "messaging_echoes" is not a
+// field and was never subscribed by this script): without it, Meta never tells the webhook
 // about messages a human sent from the Page inbox, so the operator-echo
 // pause (webhook.ts "webhook.operator_echo_pause") never fires and the bot
 // keeps replying to a customer staff already took over. Keep this list in
 // sync with src/pages/api/subscribe-feed.ts's field list.
 const SUBSCRIBED_FIELDS =
   process.env.FACEBOOK_SUBSCRIBED_FIELDS?.trim() ||
-  "messages,messaging_postbacks,messaging_echoes,message_reads";
+  "messages,messaging_postbacks,message_echoes,message_reads,messaging_referrals";
 
 if (!PAGE_ID) {
   console.error(

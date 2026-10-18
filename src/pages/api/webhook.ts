@@ -46,7 +46,7 @@ import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBookedCustomer, pauseBot, trackSender } from "../../lib/pause";
 import { pickReferral, rememberAdReferral } from "../../lib/adReferral";
 import { AUTO_PAUSE_RESET_DAYS, createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
-import { hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
+import { hasDepartureDateAvailabilityIntent, requestsDateWindow } from "../../lib/travelDates";
 import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply, } from "../../lib/travelFastPaths";
 import { buildHandoffReplyWithContact, claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
@@ -1048,7 +1048,12 @@ async function handleMessage(
   // "…шууд нислэгтэй аялал" button is a choice of trip, not a flight question.
   const intentText = stripTripNamesForIntent(text, await getTrips());
   const wantsDateAvailability =
-    hasDepartureDateAvailabilityIntent(intentText) && !hasProgramIntent(intentText);
+    (hasDepartureDateAvailabilityIntent(intentText) && !hasProgramIntent(intentText))
+    // "11/1-ээс 11/6 аяллын хөтөлбөр илгээнэ үү": a programme ask over a date window that
+    // names no trip has no programme to send — list the trips leaving in that window (a
+    // "which trip?" the customer can pick from) instead of silence (2026-10-16).
+    || (hasProgramIntent(intentText) && requestsDateWindow(intentText)
+      && resolveTripFromUserMessage(text, await getTrips(), { allowLooseFallback: false }).status === "not_found");
 
   // Staff/catalog maintenance notes are not customer questions. They often
   // contain dates, "суудал дүүрсэн", and duration numbers; answering those as

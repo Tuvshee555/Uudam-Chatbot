@@ -9,6 +9,7 @@
 import type { TravelTrip } from "./travelTypes";
 import {
   getAliases,
+  isCalendarWeekPhrase,
   withFutureDepartureDates,
 } from "./travelFastPathsSearch";
 import { keywordTokens, normText, phoneticLatinText } from "./travelTextNorm";
@@ -111,6 +112,7 @@ Requirements — fill ONLY when the customer states them in this message; never 
 - from/to: a span of departure dates they ask about ("10/31-11/4", "10 сарын 20-оос 31") — both ends, YYYY-MM-DD.
 - month: a month they ask about (1-12) when no exact date or span.
 - days: trip length ONLY when they use хоног / өдөр / шөнө / day with a number ("5-6 хоног" → [5,6]). "од", "одтой", "odtoi" means hotel STARS, never days.
+- "эхний 7 хоног" / "сүүлийн 7 хоног" / "ирэх долоо хоног" is a calendar WEEK, never a trip length: put it in from/to ("11 сарын эхний 7 хоног" → from the 1st to the 7th of that month) and leave days null.
 - transport: "шууд нислэг" = direct_flight, "газрын"/"газраар"/"автобус"/"галт тэрэг" = land, a mix such as "газраар явж нислэгээр ирэх" or "хосолсон" = land_flight, "усан онгоц"/"круз" = cruise.`;
 
 export function buildUnderstandingPrompt(input: {
@@ -247,7 +249,8 @@ export function interpretUnderstanding(raw: string, keys: Map<string, TravelTrip
     !date && isYmd(parsed.from) && isYmd(parsed.to) && parsed.from <= parsed.to ? [parsed.from, parsed.to] : null;
   const monthNum = Number(parsed.month);
   const month = Number.isInteger(monthNum) && monthNum >= 1 && monthNum <= 12 && !date && !range ? monthNum : null;
-  const days = parseDays(parsed.days);
+  // The model also reads "эхний 7 хоног" (the first WEEK) as a 7-day trip; never a length.
+  const days = isCalendarWeekPhrase(customerText) ? null : parseDays(parsed.days);
   const transport = TRANSPORTS.includes(parsed.transport as Transport) ? (parsed.transport as Transport) : null;
   const unknownRaw = typeof parsed.unknown_destination === "string" ? parsed.unknown_destination.trim() : "";
   const unknownDestination = unknownRaw && trips.length === 0 ? unknownRaw.replace(/[«»"]/g, "").slice(0, 40) : null;

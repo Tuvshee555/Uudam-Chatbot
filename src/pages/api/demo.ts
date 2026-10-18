@@ -33,7 +33,7 @@ import { buildContactReply, contactSettingsOf } from "../../lib/contactReplies";
 import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { dbGetRecentAdminMessages, getTravelBotSettings, listTrips } from "../../lib/travelOps";
-import { hasDepartureDateAvailabilityIntent } from "../../lib/travelDates";
+import { hasDepartureDateAvailabilityIntent, requestsDateWindow } from "../../lib/travelDates";
 import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply } from "../../lib/travelFastPaths";
 import { extractTripPhotosForReply } from "../../lib/welcomeFlow";
 import { buildReplyMedia } from "../../lib/replyMediaPolicy";
@@ -417,7 +417,12 @@ export default async function handler(
       // Same as the webhook: intent comes from the customer's words, trip names removed.
       const intentText = stripTripNamesForIntent(normalizedText, await getTrips());
       const wantsDateAvailability =
-        hasDepartureDateAvailabilityIntent(intentText) && !hasProgramIntent(intentText);
+        (hasDepartureDateAvailabilityIntent(intentText) && !hasProgramIntent(intentText))
+    // "11/1-ээс 11/6 аяллын хөтөлбөр илгээнэ үү": a programme ask over a date window that
+    // names no trip has no programme to send — list the trips leaving in that window (a
+    // "which trip?" the customer can pick from) instead of silence (2026-10-16).
+    || (hasProgramIntent(intentText) && requestsDateWindow(intentText)
+      && resolveTripFromUserMessage(normalizedText, await getTrips(), { allowLooseFallback: false }).status === "not_found");
 
       if (isLikelyCatalogMaintenanceText(normalizedText)) {
         await appendMessage(sessionId, "user", normalizedText);

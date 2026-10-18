@@ -1314,6 +1314,17 @@ export function tripHasSeaBeach(trip: TravelTrip): boolean {
 }
 
 /**
+ * "эхний 7 хоног", "сүүлийн 7 хоног", "ирэх долоо хоног", "ehnii 7 honog": a calendar
+ * WEEK (a span of dates), not a trip that lasts seven days. "<сар> эхний 7 хоногт байгаа
+ * юу" ("anything in the first week of <month>?") was answered with one trip's length
+ * and "shall I find one that long?" (2026-10-17). A bare "7 хоногийн аялал" stays a length.
+ */
+export function isCalendarWeekPhrase(query: string): boolean {
+  const normalized = normText(query);
+  return /(?:эхний|сүүлийн|сүүлчийн|дараагийн|дараа|ирэх|энэ|өнгөрсөн|\d\s*(?:дахь|дэх|дугаар)|хоёр\s*дахь|гурав\s*дахь|ehnii|suuliin|daraagiin|ireh|ene)\s+(?:7|долоо|doloo)\s*(?:хоног|honog)/u.test(normalized);
+}
+
+/**
  * Day-count the customer asked for ("5-6 хоногт", "7 хоногийн", "5 өдрийн
  * аялал"), as [min, max] inclusive — or null when the message names no
  * length. A live customer asked "5-6 хоногт... боломж байдаг уу?" for a
@@ -1323,6 +1334,7 @@ export function tripHasSeaBeach(trip: TravelTrip): boolean {
  * "өдөр" (the catalog's own word, which counts the travel/arrival day too).
  */
 export function queryRequestsDurationDays(query: string): [number, number] | null {
+  if (isCalendarWeekPhrase(query)) return null;
   const normalized = normText(query);
   // normText intentionally removes punctuation, so "5-6 хоног" reaches this
   // function as "5 6 хоног". Accept either representation and Mongolian case
@@ -1801,7 +1813,21 @@ export function isStructuredTripQuestion(text: string) {
  * a date). An unknown word — a city, a trip name — means the customer named
  * something we may simply not offer ("<хот>"), which staff should see.
  */
+/**
+ * The text Messenger pre-fills when someone taps "Send message" on an ad ("Can you tell me
+ * more about your ad?", "Is this still available?"). It asks for information but names no
+ * trip — the ad does, through the referral, which is not always delivered. Without a trip
+ * selected from the referral it is the same request as a bare "мэдээлэл авъя"; one such
+ * customer got silence while the ads were running (2026-10-16).
+ */
+const AD_PREFILL_RE = /^(?:hi|hello)?[!.,\s]*(?:can\s+(?:you|i)\s+(?:tell\s+me|get)\s+more\s+(?:about|info(?:rmation)?\s+(?:on|about))\s+(?:your|this)\s+ad|can\s+i\s+get\s+more\s+info(?:rmation)?\s+(?:on|about)\s+this|is\s+this\s+(?:still\s+)?available|i'?m\s+interested(?:\s+in\s+this)?|tell\s+me\s+more(?:\s+about\s+(?:this|your\s+ad))?)\s*[?.!]*$/i;
+
+export function isAdPrefillMessage(text: string): boolean {
+  return AD_PREFILL_RE.test(text.trim());
+}
+
 export function isGenericTripRequest(text: string): boolean {
+  if (isAdPrefillMessage(text)) return true;
   const tokens = normText(text).split(/\s+/).filter(Boolean);
   if (tokens.length === 0 || tokens.length > 10) return false;
   return tokens.every((token, index) => {
