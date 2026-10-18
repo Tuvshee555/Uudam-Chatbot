@@ -910,3 +910,9 @@ test("catalog maintenance status text is logged but not answered as a customer q
   assert.deepEqual(sends, [], "catalog/status notes must not get a customer-facing reply");
   assert.equal(openAiCalls, 0, "catalog/status notes must not be sent to the model");
 });
+
+test("a typed 'Get started' gets no bot reply (Meta's own greeting covers it) and never reaches the model", async () => {
+  const { sends, openAiCalls } = await runInstagramText("ig-user-get-started-text", "ig-mid-get-started-text-1", "Get started");
+  assert.deepEqual(sends, [], "the bot must not stack its greeting on Meta's");
+  assert.equal(openAiCalls, 0);
+});

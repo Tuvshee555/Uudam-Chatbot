@@ -171,6 +171,17 @@ export function isGetStartedPostback(
 }
 
 /**
+ * The same tap arriving as plain message text: some Messenger clients send "Get started" as a
+ * message instead of a postback, so the postback check never saw it and the bot answered with
+ * its own greeting on top of Meta's (2026-10-17). English phrase only: the Mongolian button
+ * title ("Эхлэх") is an ordinary word a customer could type on purpose.
+ */
+export function isGetStartedText(text: unknown): boolean {
+  if (typeof text !== "string") return false;
+  return text.trim().toLowerCase().replace(/[\s_-]+/g, " ").replace(/[!?.]+$/u, "").trim() === "get started";
+}
+
+/**
  * How long after a Get Started tap a bare greeting ("hi") is treated as part of
  * the same opening gesture. Meta's own automated response already greeted the
  * customer at the tap, so a "hi" typed right after must not draw a second

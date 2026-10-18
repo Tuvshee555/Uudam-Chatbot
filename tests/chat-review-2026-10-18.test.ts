@@ -96,3 +96,16 @@ test("Messenger's ad pre-fill names no trip and is a generic information request
     assert.equal(search.isAdPrefillMessage(text), false, text);
   }
 });
+
+// ── "Get started" typed as text ─────────────────────────────────────────────────────
+
+test("'Get started' typed as text is recognised, but not a Mongolian message or a question", async () => {
+  applyTestEnv();
+  const { isGetStartedText } = await import("../src/lib/greetingPhrases");
+  for (const text of ["Get started", "get started", "Get Started", "  GET STARTED  ", "get_started", "Get started!"]) {
+    assert.equal(isGetStartedText(text), true, text);
+  }
+  for (const text of ["Эхлэх", "get started with Zandan price", "hi", "", "Zandan", undefined, null, 42]) {
+    assert.equal(isGetStartedText(text), false, String(text));
+  }
+});

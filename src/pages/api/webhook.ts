@@ -16,6 +16,7 @@ import {
   isBareNumber,
   firstFacebookMessageGreetingPolicy,
   isGetStartedPostback,
+  isGetStartedText,
   isKnownGreetingPhrase,
   isThanksOnly,
   isWithinGetStartedQuietWindow,
@@ -2509,7 +2510,7 @@ export default async function handler(
               // message. Only the tap time is recorded (not counted as a
               // message) so the first real message still gets the welcome flow
               // and a "hi" typed right after is not greeted a second time.
-              if (!messageText && isGetStartedPostback(event?.postback)) {
+              if ((!messageText && isGetStartedPostback(event?.postback)) || isGetStartedText(messageText)) {
                 await runEventWithClaim(
                   eventKey,
                   { platform, eventType: "dm" },
