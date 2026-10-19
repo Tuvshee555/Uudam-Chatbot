@@ -24,6 +24,10 @@ export function isFrustratedHandoffRequest(text: string): boolean {
     // WHETHER a human even exists ("хүн байхгүй юу", "хүн алга юм уу").
     /хүн\s*(?:байхгүй|алга|үгүй)\s*(?:юм\s*)?(?:уу|бэ)?/i,
     /робот\s*биш/i,
+    // Messenger's stock opener for a page ("Is anyone available to chat?") asks for a
+    // person, not a trip; it got "which trip?" from the model (2026-10-18).
+    /\b(?:is\s+)?(?:any\s*one|some\s*one|anybody|somebody)\s+(?:available|there|online|here)\b/i,
+    /\b(?:talk|speak|chat)\s+(?:to|with)\s+(?:a\s+)?(?:human|person|real\s+person|agent|someone|staff)\b/i,
     // "Call me if a seat opens": a sold-out departure the customer still wants. Repeating
     // "суудал дүүрсэн" ignores the request; staff must take it.
     /суудал\s+(?:гарвал|гарвал|нэмэгдвэл|чөлөөлөгдвөл|гарах\s+бол)[\s\S]{0,40}(?:холбогд|мэдэгд|дуудаарай|залгаарай)/i,

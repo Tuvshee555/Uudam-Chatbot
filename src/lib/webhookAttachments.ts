@@ -118,6 +118,42 @@ async function buildMatchedTripReply(docs: ProcessedDocumentLike[]): Promise<str
 }
 
 /**
+ * A trip screenshot the catalog could not place is a question about a trip the bot cannot
+ * answer: staff take it (owner's rule — silence plus a lead). It used to be treated like an
+ * unrelated image, so a customer who sent the agency's own ad got neither a reply nor a
+ * lead (2026-10-18).
+ */
+async function leadForUnmatchedTripScreenshot(
+  docs: ProcessedDocumentLike[],
+  input: { platform: Platform; senderId: string; trace?: { requestId: string; correlationId: string } },
+) {
+  const unmatched = docs.find((doc) => doc.category === "trip_screenshot" && !doc.extracted_json?.trip_match);
+  if (!unmatched || docs.some((doc) => doc.category === "trip_screenshot" && doc.extracted_json?.trip_match)) return;
+  try {
+    if (await hasRecentOpenLead(input.senderId, "handoff")) return;
+    const summary = typeof unmatched.extracted_json?.summary === "string" ? unmatched.extracted_json.summary : "";
+    await createLead({
+      kind: "handoff",
+      platform: input.platform,
+      senderId: input.senderId,
+      customerMessage: "[Аяллын зураг]",
+      context: `Хэрэглэгч аяллын зураг илгээсэн${summary ? ` (${summary})` : ""}, аль аялал болохыг бот тогтоож чадсангүй — «Ирсэн зургууд»-аас үзээд хариулна уу.`,
+    });
+    await notifyStaffOfLead(
+      { kind: "handoff", platform: input.platform, customerMessage: "[Аяллын зураг]" },
+      { requestId: input.trace?.requestId, correlationId: input.trace?.correlationId, source: "api.webhook.trip_screenshot_unmatched" },
+    );
+  } catch (error) {
+    logWarn("webhook.trip_screenshot_lead_failed", {
+      requestId: input.trace?.requestId,
+      platform: input.platform,
+      senderHash: hashIdentifier(input.senderId),
+      classification: classifyError(error),
+    });
+  }
+}
+
+/**
  * Fire-and-forget vision processing + post-classification confirmation. The
  * pipeline (download + Cloudinary + AI extraction per image) must NEVER sit
  * between the customer and their reply/ack — it used to be awaited inline,
@@ -147,6 +183,7 @@ export function scheduleImageDocumentPipeline(input: {
         correlationId: trace?.correlationId,
         source: "api.webhook.image_documents",
       });
+      await leadForUnmatchedTripScreenshot(docs, { platform, senderId, trace });
       if (platform !== "facebook" || !token) return;
       const confirmation = buildDocumentReceivedMessage(docs);
       const tripReply = await buildMatchedTripReply(docs);
@@ -226,6 +263,7 @@ export function scheduleAttachmentDocumentPipeline(input: {
         correlationId: trace?.correlationId,
         source: "api.webhook.attachments",
       });
+      await leadForUnmatchedTripScreenshot(docs, { platform, senderId, trace });
       if (platform !== "facebook" || !token) return;
       const confirmation = buildDocumentReceivedMessage(docs);
       const tripReply = await buildMatchedTripReply(docs);

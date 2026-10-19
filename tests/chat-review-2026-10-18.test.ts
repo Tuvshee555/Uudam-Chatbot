@@ -109,3 +109,24 @@ test("'Get started' typed as text is recognised, but not a Mongolian message or 
     assert.equal(isGetStartedText(text), false, String(text));
   }
 });
+
+test("a trip named by its kind is not a transport question", async () => {
+  const { buildTripRequest } = await import("../src/lib/tripRequest");
+  assert.ok(!buildTripRequest("альфа шууд нислэгтэй аялал", []).topics.includes("transport"));
+  assert.ok(buildTripRequest("альфа аялал шууд нислэгтэй юу?", []).topics.includes("transport"));
+  assert.ok(buildTripRequest("газраар явах уу", []).topics.includes("transport"));
+});
+
+test("a trip screenshot whose place fits two trips is settled by the price on it", async () => {
+  const { matchTripFromDocument } = await import("../src/lib/customerDocuments");
+  const trips = [
+    { id: "t-a", route_name: "Альфа - Бета аялал", adult_price: 1_090_000, child_price: 890_000, extra: {} },
+    { id: "t-b", route_name: "Гамма - Бета 4 хотын аялал", adult_price: 1_590_000, child_price: 1_390_000, extra: {} },
+  ];
+  const resolve = () => ({ status: "ambiguous", candidates: trips }) as never;
+  const extracted = { trip: { title: "Бета хотын аялал", destination: "Бета", price_text: "Аяллын үнэ 1.590.000₮" } };
+  assert.deepEqual(matchTripFromDocument(extracted, "trip_screenshot", trips, resolve), { id: "t-b", route_name: "Гамма - Бета 4 хотын аялал" });
+  // No price, or a price no candidate sells at: still no guess.
+  assert.equal(matchTripFromDocument({ trip: { title: "Бета", destination: "Бета", price_text: "" } }, "trip_screenshot", trips, resolve), null);
+  assert.equal(matchTripFromDocument({ trip: { title: "Бета", destination: "Бета", price_text: "2,000,000₮" } }, "trip_screenshot", trips, resolve), null);
+});

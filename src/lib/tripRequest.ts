@@ -96,6 +96,10 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
     ["availability", /\b(?:bga|bgaa|bn\s*uu|bnu|baigaa)\b/i],
   ];
   for (const [topic, pattern] of patterns) if (pattern.test(turn)) topics.add(topic);
+  // "бээжин шууд нислэгтэй аялал" names the trip by its kind; it does not ask how one
+  // travels. Read as a transport question it got only "Шууд нислэгтэй аялал." (2026-10-18).
+  // Transport is the question only when the message asks something.
+  if (!/[?？]|(?:^|[^\p{L}])(?:уу|үү|юу|юү|вэ|бэ|yu|uu|ve|be|vee|ямар|хэд\p{L}*|хэзээ|яаж|хэрхэн|эсэх|how|what|which|when|does|is)(?:[^\p{L}]|$)/iu.test(turn)) topics.delete("transport");
   const dates = parseDepartureDateText(turn, now);
   const date = understanding?.date || (dates.length === 1 ? dates[0] : null);
   if (date) topics.add("availability");

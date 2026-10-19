@@ -537,7 +537,35 @@ export function matchTripFromDocument(
       return { id: result.trip.id, route_name: result.trip.route_name };
     }
   }
+  // The place fits several trips (a town on two routes): the price printed on the
+  // screenshot picks the one trip that sells at it. The agency's own ad ("<хот>-ын
+  // аялал, 1.590.000₮") matched two trips and got no answer (2026-10-18).
+  const amounts = category === "trip_screenshot" ? screenshotAmounts(compactValue(trip.price_text)) : [];
+  if (amounts.length) {
+    for (const candidate of candidates) {
+      if (!candidate || candidate.length < 3) continue;
+      const result = resolve(candidate, trips) as { status: string; candidates?: unknown };
+      const pool = result.status === "ambiguous" && Array.isArray(result.candidates)
+        ? (result.candidates as Array<{ id: string; route_name: string } & Record<string, unknown>>) : [];
+      const priced = pool.filter((option) => tripFares(option).some((fare) => amounts.includes(fare)));
+      if (priced.length === 1) return { id: priced[0].id, route_name: priced[0].route_name };
+    }
+  }
   return null;
+}
+
+/** "Аяллын үнэ 1.590.000₮" → [1590000]; small numbers (days, ages) are not prices. */
+function screenshotAmounts(text: string): number[] {
+  return (text.match(/\d{1,3}(?:[.,\s]\d{3})+|\d{6,}/g) || [])
+    .map((value) => Number(value.replace(/[^\d]/g, "")))
+    .filter((value) => value >= 100_000);
+}
+
+function tripFares(trip: Record<string, unknown>): number[] {
+  const extra = trip.extra && typeof trip.extra === "object" ? (trip.extra as Record<string, unknown>) : {};
+  const groups = Array.isArray(extra.price_groups) ? (extra.price_groups as Array<Record<string, unknown>>) : [];
+  return [trip.adult_price, trip.child_price, ...groups.flatMap((group) => [group.adult_price, group.child_price])]
+    .filter((value): value is number => typeof value === "number" && value > 0);
 }
 
 async function extractImageData(

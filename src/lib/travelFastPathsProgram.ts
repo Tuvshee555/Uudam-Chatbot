@@ -5,6 +5,8 @@
 
 import { filterFutureDepartureDates, sortDepartureDatesForDisplay, type ResolvedDepartureDate } from "./travelDates";
 import { TRIP_MEDIA_UNAVAILABLE_SILENT } from "./reply";
+import { buildFareSection } from "./tripFareBlock";
+import { customerDate } from "./customerDate";
 import { intentTextOf } from "./customerTurn";
 import type { TravelTrip } from "./travelOps";
 import {
@@ -198,6 +200,14 @@ function buildTripSummaryLines(trip: TravelTrip): string {
   if (trip.duration_text && !isGenericConfirmationText(trip.duration_text)) {
     lines.push(`⏱ ${trip.duration_text}`);
   }
+  // The same fare and date lines as every other trip card: this card printed the trip's
+  // top-level price (can be stale against per-date fares) and the stored date text,
+  // so a customer read "Гарах өдрүүд: 2026-12-30" (2026-10-17).
+  const fareSection = buildFareSection(trip);
+  if (fareSection) {
+    lines.push(...fareSection);
+    return lines.join("\n");
+  }
   const adult = formatPrice(trip.adult_price);
   const child = formatPrice(trip.child_price);
   if (adult && child) lines.push(`💰 Насанд хүрэгч: ${adult} | Хүүхэд: ${child}`);
@@ -210,7 +220,7 @@ function buildTripSummaryLines(trip: TravelTrip): string {
     new Date(),
     resolvedDates,
   );
-  if (dates.length > 0) lines.push(`📅 Гарах өдрүүд: ${dates.slice(0, 5).join(", ")}${dates.length > 5 ? "…" : ""}`);
+  if (dates.length > 0) lines.push(`📅 Гарах өдрүүд: ${dates.slice(0, 5).map((date) => customerDate(date)).join(", ")}${dates.length > 5 ? "…" : ""}`);
   return lines.join("\n");
 }
 

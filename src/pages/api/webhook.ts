@@ -40,7 +40,7 @@ import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
-import { buildContactReply, contactSettingsOf } from "../../lib/contactReplies";
+import { buildContactReply, contactSettingsOf, isRepeatOfLastReply } from "../../lib/contactReplies";
 import { fetchThreadMessages, latestStaffReplyAt, STAFF_TAKEOVER_MS } from "../../lib/staffTakeover";
 import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
@@ -829,6 +829,13 @@ async function handleMessage(
   const contactReply = buildContactReply(text, contactSettingsOf(botSettings.extra));
   if (contactReply) {
     await assertLockHealthy();
+    // The phone/address button tapped again within two minutes: it was just answered.
+    // Three taps sent the same numbers three times in one minute (2026-10-18).
+    const previousReply = await getLastReplyConsistent(sessionId);
+    if (isRepeatOfLastReply(previousReply, contactReply)) {
+      try { await appendMessage(senderId, "user", text); } catch { /* non-critical */ }
+      return;
+    }
     const delivered = await sendPlatformMessage(platform, senderId, contactReply, token, pageId, igUserId, trace, { allowFallback: false });
     if (!delivered) throw new RetryableWebhookError("delivery_failed:contact_reply");
     try {
@@ -1826,7 +1833,7 @@ async function handleMessage(
   // outage.
   const guardCandidateTrips = factualScope || reasoningTrips.filter((trip) => relevantTripNames.includes(trip.route_name));
   aiReply = guardInventedBookingTerms(aiReply, promptParts.user, guardCandidateTrips);
-  if (isReferReply(aiReply) && isGenericTripRequest(text)) {
+  if ((isReferReply(aiReply) || shouldSilenceNoDataReply(aiReply)) && isGenericTripRequest(text)) {
     // "Aylaluud", "Medeelel avay": no destination named, so the model had
     // nothing to look up and said REFER. Ask which trip rather than paging staff.
     // The question needs no model, so it is asked during an AI outage too (on 10-05/06
@@ -1941,7 +1948,9 @@ async function handleMessage(
   // The price/date/fact guards above can turn a reply into REFER after the
   // model's own REFER was already handled, so check the token again here: four
   // customers were sent the bare word "REFER" (2026-10-06..07).
-  if (isReferReply(safeReply) && isGenericTripRequest(text)) {
+  // A refusal the guards silence counts too: "Can you tell me more about your ad?" got
+  // "Уучлаарай, энэ талаар мэдээлэл өгөх боломжгүй…" (2026-10-18) instead of "which trip?".
+  if ((isReferReply(safeReply) || shouldSilenceNoDataReply(safeReply)) && isGenericTripRequest(text)) {
     await deliverFastPathReply({
       reply: whichTripClarifyReply(text),
       failTag: "generic_trip_request_guarded",

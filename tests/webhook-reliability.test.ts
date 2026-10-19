@@ -808,7 +808,7 @@ test("webhook stays silent to the customer when OpenAI is down (outage is never 
   }
 });
 
-async function runInstagramText(senderId: string, mid: string, text: string) {
+async function runInstagramText(senderId: string, mid: string, text: string, aiReply = "REFER") {
   applyTestEnv();
   const handler = await loadWebhookHandler();
   const originalFetch = globalThis.fetch;
@@ -821,7 +821,7 @@ async function runInstagramText(senderId: string, mid: string, text: string) {
       openAiCalls += 1;
       return new Response(
         JSON.stringify({
-          choices: [{ message: { content: "REFER" } }],
+          choices: [{ message: { content: aiReply } }],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         }),
         { status: 200 },
@@ -915,4 +915,53 @@ test("a typed 'Get started' gets no bot reply (Meta's own greeting covers it) an
   const { sends, openAiCalls } = await runInstagramText("ig-user-get-started-text", "ig-mid-get-started-text-1", "Get started");
   assert.deepEqual(sends, [], "the bot must not stack its greeting on Meta's");
   assert.equal(openAiCalls, 0);
+});
+
+// 2026-10-18 chats: the ad's pre-filled question got the model's refusal ("Уучлаарай, энэ талаар
+// мэдээлэл өгөх боломжгүй…"), which no guard caught.
+const REFUSAL = "Уучлаарай, энэ талаар мэдээлэл өгөх боломжгүй байна. Та манай аяллын зөвлөхтэй холбогдож дэлгэрэнгүй мэдээлэл авах боломжтой.";
+
+test("the ad's pre-filled question asks which trip even when the model writes a refusal", async () => {
+  const { sends } = await runInstagramText("ig-user-ad-prefill-refusal", "ig-mid-ad-prefill-refusal-1", "Can you tell me more about your ad?", REFUSAL);
+  assert.equal(sends.length, 1);
+  assert.doesNotMatch(sends[0], /боломжгүй/);
+});
+
+test("a model refusal to a real question is never sent", async () => {
+  const { sends } = await runInstagramText("ig-user-refusal-site", "ig-mid-refusal-site-1", "вэбсайт чинь хаана байна",
+    "Уучлаарай, вэбсайтын хаяг өгөх боломжгүй байна. Та манай аяллын зөвлөхтэй холбогдоно уу. 😊");
+  assert.ok(sends.every((body) => !/боломжгүй/.test(body)), "the refusal must not reach the customer");
+});
+
+test("Messenger's 'Is anyone available to chat?' is a request for a person", async () => {
+  const { isHandoffRequest } = await import("../src/lib/handoffDetection");
+  assert.equal(isHandoffRequest("Is anyone available to chat?", []), true);
+  assert.equal(isHandoffRequest("Can I talk to a real person?", []), true);
+  assert.equal(isHandoffRequest("Бээжин аялал хэд вэ", []), false);
+});
+
+test("refusals in other words are no-data; real answers and the not-in-catalog answer are not", async () => {
+  const { shouldSilenceNoDataReply } = await import("../src/lib/reply");
+  for (const reply of [
+    REFUSAL,
+    "Уучлаарай, PDF баримт шууд илгээх боломжгүй байна.",
+    "Уучлаарай, би QR код унших боломжгүй байна.",
+    "Альфа газар нислэг хосолсон аялалын талаар мэдээлэл харагдахгүй байна. Та манай аяллын зөвлөхтэй холбогдоорой.",
+    "Уучлаарай, энэ асуулт аялалтай холбоогүй байна.",
+    "Истанбул хотыг багтаасан аялал одоогоор Context-д байхгүй байна.",
+  ]) assert.equal(shouldSilenceNoDataReply(reply), true, reply);
+  const { notInCatalogReply } = await import("../src/lib/tripUnderstanding");
+  for (const reply of [
+    notInCatalogReply("Альфа"),
+    "Альфа аялал 6 өдөр 5 шөнө, том хүн 2,901,000₮. Утасны дугаараа үлдээвэл манай аяллын зөвлөх тан руу шууд залгана 🙌",
+  ]) assert.equal(shouldSilenceNoDataReply(reply), false, reply);
+});
+
+test("tapping the phone-number button again right away does not resend the same numbers", async () => {
+  const { isRepeatOfLastReply } = await import("../src/lib/contactReplies");
+  const now = 1_000_000;
+  assert.equal(isRepeatOfLastReply({ text: "Манай утас", timestamp: now - 5_000 }, "Манай утас", now), true);
+  assert.equal(isRepeatOfLastReply({ text: "Манай утас", timestamp: now - 600_000 }, "Манай утас", now), false, "asked again later: answer");
+  assert.equal(isRepeatOfLastReply({ text: "Манай хаяг", timestamp: now - 5_000 }, "Манай утас", now), false);
+  assert.equal(isRepeatOfLastReply(null, "Манай утас", now), false);
 });

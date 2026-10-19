@@ -43,3 +43,8 @@ export function buildContactReply(text: string, contact: ContactSettings): strin
   }
   return null;
 }
+
+/** The same reply was sent moments ago (a button tapped twice): don't send it again. */
+export function isRepeatOfLastReply(previous: { text: string; timestamp: number } | null | undefined, reply: string, now = Date.now()): boolean {
+  return Boolean(previous && previous.text === reply && now - previous.timestamp < 120_000);
+}
