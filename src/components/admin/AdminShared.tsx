@@ -5,8 +5,9 @@ import type { StructuredRow } from "@/lib/adminTypes";
 /** Full-panel loading placeholder for a tab's initial data fetch. */
 export function LoadingPanel() {
   return (
-    <div className="flex items-center justify-center py-16">
+    <div role="status" className="flex items-center justify-center gap-3 py-16 text-sm text-ink-muted">
       <Spinner className="text-brand" />
+      Мэдээлэл ачаалж байна…
     </div>
   );
 }
@@ -25,7 +26,7 @@ export function TabHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <div className="flex flex-col gap-4 pb-1 sm:flex-row sm:items-start sm:justify-between">
       <div className="flex min-w-0 items-start gap-3">
         {icon && (
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-brand-soft text-brand">
@@ -33,9 +34,9 @@ export function TabHeader({
           </div>
         )}
         <div className="min-w-0">
-          <h1 className="text-lg font-bold tracking-tight text-ink">{title}</h1>
+          <h1 className="text-xl font-bold tracking-tight text-ink sm:text-2xl">{title}</h1>
           {description && (
-            <p className="mt-0.5 max-w-2xl text-sm text-ink-muted">{description}</p>
+            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-ink-muted">{description}</p>
           )}
         </div>
       </div>
@@ -57,13 +58,13 @@ export function StatCard({
   tone?: string;
 }) {
   return (
-    <Card className="p-3.5">
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-subtle">
+    <Card className="p-4 sm:p-5">
+      <p className="text-xs font-medium text-ink-muted">
         {label}
       </p>
       <p
         className={cx(
-          "mt-1.5 text-[26px] font-extrabold leading-none tracking-tight tabular-nums",
+          "mt-2.5 text-[28px] font-bold leading-none tracking-tight tabular-nums",
           tone ?? "text-ink",
         )}
       >

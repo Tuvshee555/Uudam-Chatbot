@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Button, Card, Icons, cx } from "@/components/ui";
 import { AssistantQuickActions, type QuickActionKind } from "./AssistantQuickActions";
 import type {
@@ -35,27 +35,30 @@ function formatMoneyMnt(value: unknown): string {
 export function FileChip({
   file,
   onRemove,
+  disabled = false,
 }: {
   file: AttachedFile;
   onRemove: () => void;
+  disabled?: boolean;
 }) {
   return (
     <span
-      className="flex max-w-full items-center gap-1.5 rounded-md border border-line-strong bg-surface py-1 pl-2 pr-1 text-xs text-ink"
+      className="flex max-w-full items-center gap-1.5 rounded-lg border border-line bg-surface py-1 pl-2.5 pr-1 text-xs text-ink shadow-xs"
       title={`${file.name} • ${formatBytes(file.sizeBytes)}`}
     >
       <span aria-hidden="true" className="shrink-0 text-sm leading-none">
         {fileGlyph(file)}
       </span>
-      <span className="truncate font-medium" style={{ maxWidth: "11rem" }}>
+      <span className="min-w-0 truncate font-medium" style={{ maxWidth: "11rem" }}>
         {file.name}
       </span>
-      <span className="shrink-0 text-ink-subtle">{formatBytes(file.sizeBytes)}</span>
+      <span className="shrink-0 text-ink-muted">{formatBytes(file.sizeBytes)}</span>
       <button
         type="button"
         onClick={onRemove}
+        disabled={disabled}
         aria-label={`${file.name} устгах`}
-        className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-ink-subtle hover:bg-surface-sunken hover:text-danger"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-muted hover:bg-surface-sunken hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
       >
         <Icons.close size={13} />
       </button>
@@ -123,66 +126,94 @@ export function AssistantTab({
   chatEndRef: React.RefObject<HTMLDivElement | null>;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
 }) {
+  const composerId = useId();
   const attachedTotalBytes = attachedFiles.reduce(
     (sum, file) => sum + file.sizeBytes,
     0,
   );
-  const isEmpty = messages.length <= 1 && messages[0]?.id === "intro";
+  const isEmpty = messages.length === 0 || (messages.length === 1 && messages[0]?.id === "intro");
   const canSend = !busy && (Boolean(aiInput.trim()) || attachedFiles.length > 0);
+  const progress = busyProgress == null ? null : Math.min(100, Math.max(0, busyProgress));
+
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+  }, [aiInput, inputRef]);
 
   return (
     <Card
       className={cx(
-        "flex flex-col overflow-hidden transition-shadow",
+        "relative flex min-w-0 flex-col overflow-hidden transition-shadow",
         dragOver && "ring-2 ring-brand",
       )}
       onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
         e.preventDefault();
+        e.dataTransfer.dropEffect = busy ? "none" : "copy";
+        if (busy) return;
         setDragOver(true);
       }}
-      onDragLeave={() => setDragOver(false)}
+      onDragLeave={(e) => {
+        if (!(e.relatedTarget instanceof Node) || !e.currentTarget.contains(e.relatedTarget)) setDragOver(false);
+      }}
       onDrop={(e) => {
+        const files = e.dataTransfer.files;
+        if (!files?.length) return;
         e.preventDefault();
         setDragOver(false);
-        const files = e.dataTransfer.files;
-        if (files?.length) onDropFiles(files);
+        if (!busy) onDropFiles(files);
       }}
     >
-      <div className="scroll-area max-h-[62dvh] min-h-[22rem] space-y-3 overflow-y-auto p-3.5 sm:p-4">
+      <div className="flex items-center gap-3 border-b border-line px-4 py-3.5 sm:px-5">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand">
+          <Icons.ai size={19} />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-ink">Аяллын туслах</h2>
+          <p className="mt-0.5 text-xs leading-5 text-ink-muted">Би санал бэлдэнэ. Та хянаад хадгална.</p>
+        </div>
+      </div>
+      {dragOver && !busy && (
+        <div className="pointer-events-none absolute inset-2 z-10 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-brand bg-surface/95 p-5 text-center" role="status">
+          <Icons.upload size={28} className="text-brand" />
+          <p className="text-base font-semibold text-ink">Файлаа энд тавиарай</p>
+          <p className="text-sm text-ink-muted">Уншаад өөрчлөлтийн санал бэлдье.</p>
+        </div>
+      )}
+      <div className="scroll-area max-h-[60dvh] min-h-[18rem] space-y-4 overflow-y-auto bg-canvas/40 p-3.5 sm:min-h-[22rem] sm:p-5" role="log" aria-label="Туслахтай ярилцсан түүх" aria-relevant="additions text">
         {isEmpty ? (
-          <div className="flex h-full min-h-[20rem] flex-col items-center justify-center px-4 text-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-soft text-brand">
-              <Icons.ai size={24} />
-            </div>
-            <p className="mt-3 text-base font-semibold text-ink">
-              Аяллын мэдээллээ энд өөрчилнө
+          <div className="flex h-full min-h-[16rem] flex-col items-center justify-center px-2 py-5 text-center sm:min-h-[20rem] sm:px-4">
+            <p className="text-xl font-semibold tracking-tight text-ink sm:text-2xl">
+              Юуг шинэчлэх вэ?
             </p>
             <p className="mt-1.5 max-w-md text-sm leading-6 text-ink-muted">
-              Постер, прайс жагсаалтаа хавсаргавал би уншаад аялал болгож санал
-              болгоно. Эсвэл бичгээр хэлээрэй, ж:{" "}
+              Аяллын постер, үнийн жагсаалтаа оруулаарай. Би уншаад юуг нэмэх,
+              өөрчлөхийг санал болгоно. Эсвэл{" "}
               <button
                 type="button"
                 onClick={() => {
-                  setAiInput("[Аяллын нэр] аяллын үнийг 4.5 сая болго");
+                  setAiInput("[Аяллын нэр] аяллын мэдээллийг шинэчлэх");
                   inputRef.current?.focus();
                 }}
                 className="rounded text-brand underline decoration-brand/30 underline-offset-2 hover:decoration-brand"
               >
-                «[Аяллын нэр] аяллын үнийг 4.5 сая болго»
+                хийх зүйлээ бичээрэй.
               </button>
             </p>
             <button
               type="button"
               onClick={onPickFile}
-              className="mt-5 flex w-full max-w-md flex-col items-center gap-1 rounded-xl border-2 border-dashed border-line-strong px-6 py-6 transition-colors hover:border-brand hover:bg-brand-soft/40"
+              disabled={busy}
+              className="mt-5 flex w-full max-w-md flex-col items-center gap-2 rounded-2xl border border-dashed border-brand-border bg-surface px-4 py-5 transition-colors hover:border-brand hover:bg-brand-soft/40 disabled:cursor-wait disabled:opacity-60 sm:px-6"
             >
               <span className="flex items-center gap-2 text-sm font-semibold text-ink">
                 <Icons.upload size={17} className="text-brand" />
                 Файл сонгох эсвэл энд чирж тавих
               </span>
-              <span className="text-xs text-ink-subtle">
-                Зураг · PDF · Excel — олон файл зэрэг болно, би санал болгоно, та
-                баталгаажуулна
+              <span className="text-xs leading-5 text-ink-muted">
+                Зураг · PDF · Excel · Word · Олон файл зэрэг оруулж болно
               </span>
             </button>
           </div>
@@ -204,14 +235,14 @@ export function AssistantTab({
 
         {busy && (
           <div className="flex justify-start">
-            {busyProgress != null ? (
+            {progress != null ? (
               <div className="w-full max-w-md rounded-2xl rounded-bl-md border border-line bg-surface px-4 py-3.5 shadow-xs">
                 <div className="flex items-center justify-between gap-3">
                   <p className="min-w-0 truncate text-sm font-medium text-ink">
                     {busyLabel || "Файл уншиж байна"}
                   </p>
                   <span className="shrink-0 font-mono text-sm font-semibold text-brand">
-                    {Math.round(busyProgress)}%
+                    {Math.round(progress)}%
                   </span>
                 </div>
                 <div
@@ -220,11 +251,11 @@ export function AssistantTab({
                   aria-label="Файл боловсруулах явц"
                   aria-valuemin={0}
                   aria-valuemax={100}
-                  aria-valuenow={Math.round(busyProgress)}
+                  aria-valuenow={Math.round(progress)}
                 >
                   <div
                     className="h-full rounded-full bg-brand transition-[width] duration-500"
-                    style={{ width: `${busyProgress}%` }}
+                    style={{ width: `${progress}%` }}
                   />
                 </div>
               </div>
@@ -232,7 +263,7 @@ export function AssistantTab({
               <div
                 className="flex items-center gap-2.5 rounded-2xl rounded-bl-md border border-line bg-surface px-4 py-3 shadow-xs"
                 role="status"
-                aria-label="AI хариу бэлдэж байна"
+                aria-label="Туслах хариу бэлдэж байна"
               >
                 <span className="flex items-center gap-1" aria-hidden="true">
                   <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-ink-subtle [animation-delay:-0.32s]" />
@@ -249,7 +280,7 @@ export function AssistantTab({
         <div ref={chatEndRef} />
       </div>
 
-      <div className="border-t border-line">
+      <div className="border-t border-line bg-surface">
         <AssistantQuickActions
           trips={existingTrips}
           busy={busy}
@@ -266,10 +297,11 @@ export function AssistantTab({
               </span>
               <button
                 type="button"
+                disabled={busy}
                 onClick={() =>
                   attachedFiles.forEach((file) => onRemoveAttachedFile(file.id))
                 }
-                className="rounded text-xs font-medium text-brand hover:text-brand-hover"
+                className="rounded px-1 py-1 text-xs font-medium text-brand hover:text-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Бүгдийг арилгах
               </button>
@@ -279,6 +311,7 @@ export function AssistantTab({
                 <FileChip
                   key={file.id}
                   file={file}
+                  disabled={busy}
                   onRemove={() => onRemoveAttachedFile(file.id)}
                 />
               ))}
@@ -287,30 +320,39 @@ export function AssistantTab({
         )}
 
         <div className="p-2.5 sm:p-3">
-          <div className="flex items-end gap-1 rounded-2xl bg-surface-sunken p-1.5 ring-1 ring-transparent transition-shadow focus-within:ring-brand/40">
+          <div className="flex items-end gap-1 rounded-2xl border border-line-strong bg-surface p-1.5 shadow-xs transition-shadow focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/10">
             <button
               type="button"
               onClick={onPickFile}
+              disabled={busy}
               aria-label="Файл хавсаргах"
               title="Файл хавсаргах"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-ink-muted transition-colors hover:bg-surface hover:text-brand"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-ink-muted transition-colors hover:bg-brand-soft hover:text-brand disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Icons.paperclip size={17} />
             </button>
             <textarea
               ref={inputRef}
+              id={composerId}
+              aria-label="Туслахад илгээх мессеж"
+              aria-describedby={`${composerId}-hint`}
               value={aiInput}
               onChange={(e) => setAiInput(e.target.value)}
+              onPaste={(e) => {
+                if (!e.clipboardData.files.length) return;
+                e.preventDefault();
+                if (!busy) onDropFiles(e.clipboardData.files);
+              }}
               maxLength={MAX_AI_INPUT_CHARS}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
-                  onSend();
+                  if (canSend) onSend();
                 }
               }}
               rows={1}
-              placeholder="Мессеж бичих…"
-              className="scroll-area max-h-32 min-h-9 flex-1 resize-none border-0 bg-transparent px-2 py-2 text-sm text-ink placeholder:text-ink-muted focus-visible:[box-shadow:none]"
+              placeholder={attachedFiles.length ? "Файлаар юу хийхийг хэлээрэй…" : "Аялал нэмэх, үнэ эсвэл суудал өөрчлөх…"}
+              className="scroll-area max-h-40 min-h-10 min-w-0 flex-1 resize-none border-0 bg-transparent px-1 py-2.5 text-sm leading-5 text-ink placeholder:text-ink-muted focus-visible:[box-shadow:none]"
             />
             <button
               type="button"
@@ -319,19 +361,22 @@ export function AssistantTab({
               aria-label="Илгээх"
               title="Илгээх"
               className={cx(
-                "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors",
+                "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-colors",
                 canSend
                   ? "bg-brand text-white hover:bg-brand-hover"
-                  : "cursor-not-allowed bg-surface text-ink-subtle ring-1 ring-line",
+                  : "cursor-not-allowed bg-surface-sunken text-ink-muted",
               )}
             >
               <Icons.send size={16} />
             </button>
           </div>
-          <p className="mt-1.5 px-1.5 text-[11px] leading-4 text-ink-subtle">
-            Enter — илгээх · Shift+Enter — шинэ мөр · Том файлыг систем хэсэглэн
-            уншина
-          </p>
+          <div id={`${composerId}-hint`} className="mt-2 flex items-center justify-between gap-3 px-1.5 text-[11px] leading-4 text-ink-muted">
+            <span className="hidden sm:inline">Enter — илгээх · Shift+Enter — шинэ мөр</span>
+            <span className="sm:hidden">Хадгалахаас өмнө саналаа хянаарай.</span>
+            {aiInput.length >= MAX_AI_INPUT_CHARS * 0.8 && (
+              <span className="shrink-0 font-mono" role="status">{aiInput.length.toLocaleString()} / {MAX_AI_INPUT_CHARS.toLocaleString()}</span>
+            )}
+          </div>
         </div>
       </div>
     </Card>
@@ -363,6 +408,7 @@ function ChatBubble({
   ) => void;
   onCancelProposal: (id: string) => void;
 }) {
+  const fieldId = useId();
   const [formDraft, setFormDraft] = useState<Record<string, string>>({});
   const [fieldOverrides, setFieldOverrides] = useState<Record<string, string>>({});
   const [showAllChanges, setShowAllChanges] = useState(false);
@@ -372,14 +418,14 @@ function ChatBubble({
     const hasRealText = Boolean(message.text) && message.text !== "Файл орууллаа";
     return (
       <div className="animate-fade-up flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-brand px-3.5 py-2.5 text-sm leading-6 text-white shadow-xs sm:max-w-lg">
+        <div className="min-w-0 max-w-[92%] rounded-2xl rounded-br-md bg-brand px-3.5 py-2.5 text-sm leading-6 text-white shadow-xs sm:max-w-lg">
           {hasRealText && (
             <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
           )}
           {message.fileNames && message.fileNames.length > 0 ? (
             <div className={hasRealText ? "mt-2 border-t border-white/20 pt-2" : undefined}>
               {message.fileNames.map((name) => (
-                <p key={name} className="truncate text-xs text-white/90">
+                <p key={name} className="truncate text-xs text-white/90" title={name}>
                   📎 {name}
                 </p>
               ))}
@@ -395,19 +441,9 @@ function ChatBubble({
   }
 
   if (message.kind === "note") {
-    // A genuine failure (upload broke, network error) reads as distinct from a
-    // normal reply; everything else is just the assistant talking and looks
-    // like an ordinary chat bubble.
     return (
       <div className="animate-fade-up flex justify-start">
-        <div
-          className={cx(
-            "max-w-[85%] rounded-2xl rounded-bl-md px-4 py-2.5 text-sm leading-6 shadow-xs sm:max-w-lg",
-            message.tone === "error"
-              ? "border border-danger/25 bg-danger-soft text-danger"
-              : "border border-line bg-surface text-ink",
-          )}
-        >
+        <div className="min-w-0 max-w-[92%] rounded-2xl rounded-bl-md border border-line bg-surface px-4 py-2.5 text-sm leading-6 text-ink shadow-xs sm:max-w-lg">
           <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
         </div>
       </div>
@@ -527,15 +563,15 @@ function ChatBubble({
   }
 
   const inputCls =
-    "h-9 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-ink transition-colors placeholder:text-ink-subtle focus:border-brand";
+    "h-10 w-full rounded-lg border border-line-strong bg-surface px-3 text-sm text-ink transition-colors placeholder:text-ink-muted focus:border-brand";
   const textareaCls =
-    "min-h-[72px] w-full rounded-md border border-line-strong bg-surface px-3 py-2 text-sm text-ink transition-colors placeholder:text-ink-subtle focus:border-brand";
+    "min-h-[72px] w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm text-ink transition-colors placeholder:text-ink-muted focus:border-brand";
 
   return (
     <div className="animate-fade-up flex justify-start">
-      <div className="w-full max-w-3xl rounded-2xl rounded-bl-md border border-line bg-surface p-4 shadow-xs sm:p-5">
+      <div className="min-w-0 w-full max-w-3xl rounded-2xl rounded-bl-md border border-line bg-surface p-3.5 shadow-xs sm:p-5">
         {/* What I understood, in one sentence */}
-        <div className="flex items-start justify-between gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-2.5">
           <p className="min-w-0 text-[15px] font-semibold leading-6 text-ink">
             {proposal.summary}
           </p>
@@ -548,19 +584,19 @@ function ChatBubble({
                   : "bg-success-soft text-success",
               )}
             >
-              {reviewCount > 0 ? "Хариулт хүлээж байна" : "Бэлэн"}
+              {reviewCount > 0 ? "Тодруулах зүйл байна" : "Хадгалахад бэлэн"}
             </span>
           )}
         </div>
         {message.sourceNames && message.sourceNames.length > 0 && (
-          <p className="mt-1 truncate text-xs text-ink-subtle">
+          <p className="mt-1.5 wrap-break-word text-xs leading-5 text-ink-muted">
             📎 {message.sourceNames.join(" · ")}
           </p>
         )}
 
         {/* Anything worth a heads-up, said plainly */}
         {compactWarnings.length > 0 && (
-          <div className="mt-3.5 space-y-2 rounded-xl bg-brand-soft/60 px-3.5 py-3">
+          <div className="mt-3.5 space-y-2">
             {compactWarnings.map((item) => (
               <p
                 key={item}
@@ -576,14 +612,15 @@ function ChatBubble({
         {visibleActions.length > 0 && (
           <section className="mt-4" aria-label="Санал болгосон өөрчлөлтүүд">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="text-xs font-semibold text-ink-subtle">
+              <h3 className="text-xs font-semibold text-ink-muted">
                 Өөрчлөлт · {describedActions.length}
               </h3>
               {describedActions.length > 5 && (
                 <button
                   type="button"
                   onClick={() => setShowAllChanges((shown) => !shown)}
-                  className="rounded text-xs font-medium text-brand hover:text-brand-hover"
+                  aria-expanded={showAllChanges}
+                  className="rounded px-1 py-1 text-xs font-medium text-brand hover:text-brand-hover"
                 >
                   {showAllChanges ? "Хураах" : "Бүгдийг харах"}
                 </button>
@@ -633,7 +670,7 @@ function ChatBubble({
                             {d.label}:{" "}
                             {d.kind === "changed" && (
                               <>
-                                <span className="text-ink-subtle line-through">
+                                <span className="text-ink-muted line-through">
                                   {d.before}
                                 </span>{" "}
                                 <span className="font-medium text-ink">{d.after}</span>
@@ -654,7 +691,7 @@ function ChatBubble({
               })}
             </ul>
             {hiddenActionCount > 0 && !showAllChanges && (
-              <p className="mt-1 text-xs text-ink-subtle">
+              <p className="mt-1 text-xs text-ink-muted">
                 +{hiddenActionCount} өөр өөрчлөлт
               </p>
             )}
@@ -663,7 +700,7 @@ function ChatBubble({
 
         {message.clarificationAnswers.length > 0 && (
           <details className="mt-3.5">
-            <summary className="cursor-pointer rounded text-xs font-medium text-ink-subtle hover:text-ink-muted">
+            <summary className="cursor-pointer rounded text-xs font-medium text-ink-muted hover:text-ink">
               Өмнө сонгосон хариултууд · {message.clarificationAnswers.length}
             </summary>
             <div className="mt-2 space-y-1.5">
@@ -686,7 +723,7 @@ function ChatBubble({
               return (
                 <div key={q.id} className="rounded-xl bg-surface-sunken px-3.5 py-3">
                   {reviewCount > 1 && (
-                    <p className="text-[11px] font-semibold text-ink-subtle">
+                    <p className="text-[11px] font-semibold text-ink-muted">
                       Асуулт {qIndex + 1}/{reviewCount}
                     </p>
                   )}
@@ -696,17 +733,18 @@ function ChatBubble({
                   {q.detail && (
                     <p className="mt-1 text-xs leading-5 text-ink-muted">{q.detail}</p>
                   )}
-                  <div className="mt-2.5 flex flex-wrap gap-1.5">
+                  <div className="mt-2.5 flex flex-wrap gap-1.5" role="group" aria-label={q.prompt}>
                     {q.options.map((opt) => (
                       <button
                         key={opt.label}
                         type="button"
                         disabled={clarifyBusy}
+                        aria-pressed={selected === opt.answer}
                         onClick={() =>
                           setFormDraft((prev) => ({ ...prev, [q.id]: opt.answer }))
                         }
                         className={cx(
-                          "rounded-full px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-60",
+                          "rounded-xl px-3 py-2 text-left text-sm font-medium transition-colors disabled:opacity-60",
                           selected === opt.answer
                             ? "bg-brand text-white"
                             : "bg-surface text-ink ring-1 ring-line-strong hover:text-brand hover:ring-brand",
@@ -718,6 +756,8 @@ function ChatBubble({
                   </div>
                   {q.allowCustom && (
                     <input
+                      aria-label={`${q.prompt} Өөрийн хариулт`}
+                      disabled={clarifyBusy}
                       value={q.options.some((o) => o.answer === selected) ? "" : selected}
                       onChange={(e) =>
                         setFormDraft((prev) => ({ ...prev, [q.id]: e.target.value }))
@@ -729,7 +769,7 @@ function ChatBubble({
                 </div>
               );
             })}
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button
                 size="sm"
                 loading={clarifyBusy}
@@ -759,7 +799,7 @@ function ChatBubble({
               >
                 Хариулт илгээх
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => onCancelProposal(message.id)}>
+              <Button size="sm" variant="ghost" disabled={clarifyBusy} onClick={() => onCancelProposal(message.id)}>
                 Болих
               </Button>
             </div>
@@ -817,7 +857,10 @@ function ChatBubble({
                           onClick={() =>
                             setOpenEditors((prev) => ({ ...prev, [index]: !editing }))
                           }
-                          className="flex shrink-0 items-center gap-1 rounded text-xs font-medium text-brand hover:text-brand-hover"
+                          aria-expanded={editing}
+                          aria-controls={`${fieldId}-${index}-editor`}
+                          disabled={applyBusy}
+                          className="flex shrink-0 items-center gap-1 rounded px-1 py-1 text-xs font-medium text-brand hover:text-brand-hover disabled:opacity-50"
                         >
                           <Icons.edit size={13} />
                           {editing ? "Хураах" : "Засах"}
@@ -829,7 +872,7 @@ function ChatBubble({
                           {summaryRows.map(([label, value]) => (
                             <div key={label} className="flex items-baseline gap-2">
                               <dt className="shrink-0 text-xs text-ink-muted">{label}</dt>
-                              <dd className="min-w-0 truncate text-sm text-ink" title={value}>
+                              <dd className="min-w-0 wrap-break-word text-sm text-ink">
                                 {value}
                               </dd>
                             </div>
@@ -843,40 +886,48 @@ function ChatBubble({
                       )}
 
                       {editing && (
-                        <div className="mt-3 space-y-3">
+                        <fieldset id={`${fieldId}-${index}-editor`} disabled={applyBusy} className="mt-3 min-w-0 space-y-3">
                           <div>
-                            <label className="mb-1 block text-xs text-ink-muted">Аяллын нэр</label>
+                            <label htmlFor={`${fieldId}-${index}-name`} className="mb-1 block text-xs text-ink-muted">Аяллын нэр</label>
                             <input
+                              id={`${fieldId}-${index}-name`}
                               value={getField(index, "route_name", f.route_name)}
                               onChange={(e) => setField(index, "route_name", e.target.value)}
-                              placeholder="ж: <аяллын нэр>"
+                              placeholder="Аяллын нэрийг бичээрэй"
                               className={inputCls}
                             />
                           </div>
                           <div>
-                            <label className="mb-1 block text-xs text-ink-muted">Хугацаа</label>
+                            <label htmlFor={`${fieldId}-${index}-duration`} className="mb-1 block text-xs text-ink-muted">Хугацаа</label>
                             <input
+                              id={`${fieldId}-${index}-duration`}
                               value={getField(index, "duration_text", f.duration_text)}
                               onChange={(e) => setField(index, "duration_text", e.target.value)}
-                              placeholder="5 хоног"
+                              placeholder="Өдөр, шөнийн тоо"
                               className={inputCls}
                             />
                           </div>
                           <div className="grid grid-cols-2 gap-2">
                             <div>
-                              <label className="mb-1 block text-xs text-ink-muted">Том хүн үнэ ₮</label>
+                              <label htmlFor={`${fieldId}-${index}-adult`} className="mb-1 block text-xs text-ink-muted">Том хүний үнэ ₮</label>
                               <input
+                                id={`${fieldId}-${index}-adult`}
                                 type="number"
+                                min={0}
+                                inputMode="decimal"
                                 value={getField(index, "adult_price", f.adult_price)}
                                 onChange={(e) => setField(index, "adult_price", e.target.value)}
-                                placeholder="1111111"
+                                placeholder="Үнэ оруулах"
                                 className={inputCls}
                               />
                             </div>
                             <div>
-                              <label className="mb-1 block text-xs text-ink-muted">Хүүхэд үнэ ₮</label>
+                              <label htmlFor={`${fieldId}-${index}-child`} className="mb-1 block text-xs text-ink-muted">Хүүхдийн үнэ ₮</label>
                               <input
+                                id={`${fieldId}-${index}-child`}
                                 type="number"
+                                min={0}
+                                inputMode="decimal"
                                 value={getField(index, "child_price", f.child_price)}
                                 onChange={(e) => setField(index, "child_price", e.target.value)}
                                 placeholder="заавал биш"
@@ -885,10 +936,11 @@ function ChatBubble({
                             </div>
                           </div>
                           <div>
-                            <label className="mb-1 block text-xs text-ink-muted">
+                            <label htmlFor={`${fieldId}-${index}-departures`} className="mb-1 block text-xs text-ink-muted">
                               Ирээдүйн гарах өдрүүд — таслалаар
                             </label>
                             <input
+                              id={`${fieldId}-${index}-departures`}
                               value={getField(
                                 index,
                                 "departure_dates",
@@ -897,15 +949,18 @@ function ChatBubble({
                                   : "",
                               )}
                               onChange={(e) => setField(index, "departure_dates", e.target.value)}
-                              placeholder="7 сарын 9, 7 сарын 18, 8 сарын 1"
+                              placeholder="Гарах өдрүүдийг таслалаар тусгаарлаарай"
                               className={inputCls}
                             />
                           </div>
                           <div className="grid grid-cols-2 gap-2">
                             <div>
-                              <label className="mb-1 block text-xs text-ink-muted">Суудал</label>
+                              <label htmlFor={`${fieldId}-${index}-seats`} className="mb-1 block text-xs text-ink-muted">Суудал</label>
                               <input
+                                id={`${fieldId}-${index}-seats`}
                                 type="number"
+                                min={0}
+                                inputMode="numeric"
                                 value={getField(index, "seats_total", f.seats_total)}
                                 onChange={(e) => setField(index, "seats_total", e.target.value)}
                                 placeholder="заавал биш"
@@ -913,8 +968,9 @@ function ChatBubble({
                               />
                             </div>
                             <div>
-                              <label className="mb-1 block text-xs text-ink-muted">Хоол</label>
+                              <label htmlFor={`${fieldId}-${index}-food`} className="mb-1 block text-xs text-ink-muted">Хоол</label>
                               <select
+                                id={`${fieldId}-${index}-food`}
                                 value={getField(index, "has_food", f.has_food == null ? "" : String(f.has_food))}
                                 onChange={(e) => setField(index, "has_food", e.target.value)}
                                 className={inputCls}
@@ -927,8 +983,9 @@ function ChatBubble({
                           </div>
                           <div className="grid grid-cols-2 gap-2">
                             <div>
-                              <label className="mb-1 block text-xs text-ink-muted">Буудал</label>
+                              <label htmlFor={`${fieldId}-${index}-hotel`} className="mb-1 block text-xs text-ink-muted">Буудал</label>
                               <input
+                                id={`${fieldId}-${index}-hotel`}
                                 value={getField(index, "hotel", f.hotel)}
                                 onChange={(e) => setField(index, "hotel", e.target.value)}
                                 placeholder="заавал биш"
@@ -936,8 +993,9 @@ function ChatBubble({
                               />
                             </div>
                             <div>
-                              <label className="mb-1 block text-xs text-ink-muted">Нэмэлт тэмдэглэл</label>
+                              <label htmlFor={`${fieldId}-${index}-notes`} className="mb-1 block text-xs text-ink-muted">Нэмэлт тэмдэглэл</label>
                               <textarea
+                                id={`${fieldId}-${index}-notes`}
                                 value={getField(index, "notes", f.notes)}
                                 onChange={(e) => setField(index, "notes", e.target.value)}
                                 placeholder="заавал биш"
@@ -945,7 +1003,7 @@ function ChatBubble({
                               />
                             </div>
                           </div>
-                        </div>
+                        </fieldset>
                       )}
                     </div>
                   );
@@ -953,10 +1011,10 @@ function ChatBubble({
               </div>
             )}
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 size="sm"
-                variant="success"
+                variant="primary"
                 loading={applyBusy}
                 disabled={!isReadyToApply || applyBusy}
                 onClick={() => onApply(buildMessageWithOverrides())}
@@ -964,10 +1022,10 @@ function ChatBubble({
                 <Icons.check size={15} />
                 Хадгалах
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => onCancelProposal(message.id)}>
+              <Button size="sm" variant="ghost" disabled={applyBusy} onClick={() => onCancelProposal(message.id)}>
                 Болих
               </Button>
-              <span className="text-xs text-ink-subtle">
+              <span className="text-xs text-ink-muted">
                 Хадгалсны дараа буцаах боломжтой
               </span>
             </div>
@@ -1001,7 +1059,7 @@ function ChatBubble({
           </p>
         )}
         {message.status === "cancelled" && (
-          <p className="mt-3.5 border-t border-line pt-3 text-xs text-ink-subtle">
+          <p className="mt-3.5 border-t border-line pt-3 text-xs text-ink-muted">
             Цуцлагдсан.
           </p>
         )}

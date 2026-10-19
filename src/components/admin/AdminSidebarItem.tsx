@@ -65,9 +65,9 @@ export function AdminSidebarItem({
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       className={cx(
-        "relative flex w-full items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium transition-all duration-150",
+        "relative flex min-h-10 w-full items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] font-medium transition-colors duration-150",
         active
-          ? "bg-brand-soft text-brand"
+          ? "bg-brand-soft font-semibold text-brand"
           : "text-ink-muted hover:bg-surface-sunken hover:text-ink",
       )}
     >
@@ -81,7 +81,7 @@ export function AdminSidebarItem({
       <span
         className={cx(
           "shrink-0 transition-colors",
-          active ? "text-brand" : "text-ink-subtle",
+          active ? "text-brand" : "text-ink-muted",
         )}
       >
         {icon}

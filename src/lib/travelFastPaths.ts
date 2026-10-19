@@ -19,6 +19,7 @@ import { buildFareSection, onSaleDepartureText, onSaleLowDates, shortDate, trips
 import {
   buildDepartureDateAvailabilityReply,
   filterFutureDepartureDates,
+  hasUnsupportedCalendarWeekWindow,
   parseDepartureDateText,
   tripMatchesRequestedDate,
 } from "./travelDates";
@@ -996,6 +997,7 @@ export function buildDateQuestionReply(
   matchText: string,
   trips: TravelTrip[],
 ): string | null {
+  if (hasUnsupportedCalendarWeekWindow(intentText)) return "REFER";
   const departureReply = buildDepartureUnavailableReply(joinContextAndTurn(matchText, intentText), trips);
   if (departureReply) return departureReply;
   const scope = resolveDateQuestionScope(matchText, trips);

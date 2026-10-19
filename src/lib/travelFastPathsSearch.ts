@@ -1321,7 +1321,7 @@ export function tripHasSeaBeach(trip: TravelTrip): boolean {
  */
 export function isCalendarWeekPhrase(query: string): boolean {
   const normalized = normText(query);
-  return /(?:эхний|сүүлийн|сүүлчийн|дараагийн|дараа|ирэх|энэ|өнгөрсөн|\d\s*(?:дахь|дэх|дугаар)|хоёр\s*дахь|гурав\s*дахь|ehnii|suuliin|daraagiin|ireh|ene)\s+(?:7|долоо|doloo)\s*(?:хоног|honog)/u.test(normalized);
+  return /(?:эхний|сүүлийн|сүүлчийн|дараагийн|дараа|ирэх|энэ|өнгөрсөн|\d\s*(?:дахь|дэх|дугаар)|хоёр\s*дахь|гурав\s*дахь|ehnii|suuliin|daraagiin|ireh|ene)\s+(?:[1-4]\s+)?(?:7|долоо|doloo)\s*(?:хоног|honog)/u.test(normalized);
 }
 
 /**

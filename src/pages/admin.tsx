@@ -1,11 +1,12 @@
 ﻿import Head from "next/head";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Badge, Button, Icons, Logo, Modal, cx, useToast } from "@/components/ui";
+import { Alert, Badge, Button, Icons, Logo, Modal, useToast } from "@/components/ui";
 import { extractGoogleDriveFileIds } from "@/lib/googleDriveLinks";
 import { buildProposalClarifications } from "@/lib/adminProposalUtils";
 import { AdminConfirmModals } from "@/components/admin/AdminConfirmModals";
 import { AdminLoginGate } from "@/components/admin/AdminLoginGate";
-import { AdminSidebarItem, NAV_GROUPS } from "@/components/admin/AdminSidebarItem";
+import { AdminNavigation } from "@/components/admin/AdminNavigation";
+import { NAV_GROUPS } from "@/components/admin/AdminSidebarItem";
 import { websiteDetailsPatch } from "@/lib/websiteTripDetails";
 import { sameParityValue } from "@/lib/tripWebsiteParityValue";
 import { AssistantTab } from "@/components/admin/AssistantTab";
@@ -1747,6 +1748,7 @@ export default function AdminPage() {
     leads: newLeadCount || undefined,
     documents: documentUnreviewedCount || undefined,
   };
+  const currentSection = NAV_GROUPS.flatMap((group) => group.items).find((item) => item.key === tab);
   function selectAdminTab(nextTab: TabKey) {
     setTab(nextTab);
     setMobileNavOpen(false);
@@ -1763,40 +1765,49 @@ export default function AdminPage() {
   return (
     <div className="flex h-dvh flex-col overflow-hidden">
       <Head>
-        <title>Аяллын удирдлагын самбар</title>
+        <title>{currentSection?.label} · Аяллын удирдлага</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
+      <a href="#admin-content" className="sr-only z-50 rounded-md bg-brand px-4 py-3 text-sm font-semibold text-white focus:not-sr-only focus:fixed focus:left-3 focus:top-2">
+        Үндсэн хэсэгт очих
+      </a>
       {/* Top bar */}
-      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-line bg-surface/85 px-3 backdrop-blur-md sm:px-5">
+      <header className="flex min-h-16 shrink-0 items-center justify-between gap-3 border-b border-line bg-surface/95 px-3 sm:px-5">
         <div className="flex min-w-0 items-center gap-2">
           <button
             type="button"
-            aria-label="Цэс нээх/хаах"
-            aria-expanded={mobileNavOpen || !sidebarHidden}
-            onClick={() => {
-              // Desktop collapses the rail in place; mobile toggles the overlay.
-              if (window.matchMedia("(min-width: 768px)").matches) {
-                setSidebarHidden((hidden) => !hidden);
-              } else {
-                setMobileNavOpen((open) => !open);
-              }
-            }}
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink"
+            aria-label="Цэс нээх"
+            aria-expanded={mobileNavOpen}
+            onClick={() => setMobileNavOpen(true)}
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink md:hidden"
           >
-            {mobileNavOpen ? <Icons.close size={20} /> : <Icons.menu size={20} />}
+            <Icons.menu size={20} />
           </button>
-          <Logo />
+          <button
+            type="button"
+            aria-label={sidebarHidden ? "Цэс харуулах" : "Цэс хураах"}
+            aria-controls="admin-navigation"
+            aria-expanded={!sidebarHidden}
+            onClick={() => setSidebarHidden((hidden) => !hidden)}
+            className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink md:flex"
+          >
+            <Icons.menu size={20} />
+          </button>
+          <Logo className="min-w-0" />
+          <div className="ml-3 hidden min-w-0 items-center gap-3 border-l border-line pl-5 text-sm text-ink-muted lg:flex">
+            <span className="truncate">{currentSection?.label}</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           {handoffRows.length > 0 && (
-            <button type="button" onClick={() => setTab("bot")}>
+            <button type="button" aria-label={`${handoffRows.length} хэрэглэгч зөвлөх хүлээж байна. Ботын хяналт нээх`} onClick={() => selectAdminTab("bot")} className="rounded-full transition-opacity hover:opacity-80">
               <Badge tone="warning" dot>
-                🙋 {handoffRows.length}
+                <Icons.user size={13} /> {handoffRows.length}
               </Badge>
             </button>
           )}
-          <Badge tone={botPaused ? "danger" : "success"} dot>
-            {botPaused ? `${pausedPageCount} хуудас зогссон` : "Бот идэвхтэй"}
+          <Badge tone={botPaused ? "danger" : "success"} dot className="whitespace-nowrap">
+            {botPaused ? <><span className="sm:hidden">Бот зогссон</span><span className="hidden sm:inline">{pausedPageCount} хуудас зогссон</span></> : "Бот идэвхтэй"}
           </Badge>
           <span className="hidden sm:inline-flex">
             <Badge
@@ -1810,42 +1821,16 @@ export default function AdminPage() {
       </header>
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
-        {mobileNavOpen && (
-          <button
-            type="button"
-            aria-label="Цэс хаах"
-            className="animate-overlay-in fixed inset-0 top-14 z-30 bg-nav-deep/45 backdrop-blur-[2px] md:hidden"
-            onClick={() => setMobileNavOpen(false)}
-          />
-        )}
-        {/* Sidebar — light rail, grouped nav */}
-        <aside className={cx(
-          "scroll-area fixed bottom-0 left-0 top-14 z-40 flex w-[17rem] shrink-0 flex-col overflow-y-auto border-r border-line bg-surface px-3 pb-6 pt-1 transition-transform md:static md:z-auto md:w-64 md:translate-x-0",
-          mobileNavOpen ? "translate-x-0 shadow-lg" : "-translate-x-full md:shadow-none",
-          sidebarHidden && "md:hidden",
-        )}>
-          {NAV_GROUPS.map((group) => (
-            <div key={group.label}>
-              <p className="px-3 pb-1.5 pt-4 text-[10px] font-bold uppercase tracking-[0.16em] text-ink-subtle">
-                {group.label}
-              </p>
-              <div className="flex flex-col gap-0.5">
-                {group.items.map((item) => (
-                  <AdminSidebarItem
-                    key={item.key}
-                    icon={item.icon}
-                    label={item.label}
-                    active={tab === item.key}
-                    badge={navBadges[item.key]}
-                    onClick={() => selectAdminTab(item.key)}
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-        </aside>
+        <AdminNavigation
+          tab={tab}
+          badges={navBadges}
+          mobileOpen={mobileNavOpen}
+          desktopHidden={sidebarHidden}
+          onClose={() => setMobileNavOpen(false)}
+          onSelect={selectAdminTab}
+        />
         {/* Content */}
-        <main className="scroll-area min-w-0 flex-1 overflow-y-auto p-3 sm:p-5 lg:p-7">
+        <main id="admin-content" tabIndex={-1} className="scroll-area min-w-0 flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
           <div className="mx-auto w-full max-w-6xl">
           {botPaused && (
             <div className="mb-4 rounded-xl border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger">
@@ -1855,7 +1840,7 @@ export default function AdminPage() {
                   <div>
                     <p className="font-semibold">Ботын хуудас зогссон байна.</p>
                     <p className="mt-0.5 text-danger/80">
-                      Vercel webhook 200 гэж харагдсан ч энэ үед бот зориуд хариу илгээхгүй.
+                      Зогсоосон хуудсанд бот хариу илгээхгүй. Хэрэглэгчтэй ажилтан үргэлжлүүлэн харилцана.
                     </p>
                   </div>
                 </div>
@@ -2024,6 +2009,7 @@ export default function AdminPage() {
                 void runPauseAction(action, senderId, ms, pageId)
               }
               onSettingsChanged={() => void loadSettingsState()}
+              onConversationsChanged={() => void loadPauseState()}
             />
           )}
           {tab === "leads" && (

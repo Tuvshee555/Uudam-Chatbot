@@ -34,21 +34,23 @@ export function AdminLoginGate({
           <p className="mt-1.5 text-sm text-ink-muted">
             Үргэлжлүүлэхийн тулд админ нууц үгээ оруулна уу.
           </p>
-          <div className="mt-5 space-y-3">
+          <form className="mt-5 space-y-4" onSubmit={(event) => {
+            event.preventDefault();
+            onSubmit();
+          }}>
             <Input
+              label="Админ нууц үг"
               type="password"
-              placeholder="Админ нууц үг"
+              autoComplete="current-password"
+              required
               autoFocus
               value={secretDraft}
               onChange={(event) => onSecretDraftChange(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") onSubmit();
-              }}
             />
-            <Button block size="lg" onClick={onSubmit}>
+            <Button block size="lg" type="submit" disabled={!secretDraft.trim()}>
               Нэвтрэх
             </Button>
-          </div>
+          </form>
         </div>
         <p className="mt-5 text-center text-xs text-nav-ink-soft">
           Уудам Трэвэл · Аяллын AI туслах

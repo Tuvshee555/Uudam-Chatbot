@@ -26,6 +26,7 @@ import {
 } from "./travelFastPaths";
 import { normalizeTripOffers, summarizeTripOfferPrices } from "./tripOffers";
 import { customerDate } from "./customerDate";
+import { hasCalendarWeekWindow } from "./travelDates";
 import type { TravelTrip } from "./travelTypes";
 
 const WHOLE_CATALOG_RE =
@@ -332,6 +333,7 @@ function withFlightIntent(text: string): string {
  * identify one trip ("шууд нислэгтэй юу?" after a trip card asks about THAT trip).
  */
 export function buildCatalogListingReply(rawIntentText: string, trips: TravelTrip[], now = new Date()): Listing | null {
+  if (hasCalendarWeekWindow(rawIntentText)) return null;
   const intentText = withFlightIntent(rawIntentText);
   const normalized = normText(intentText);
   if (!normalized) return null;

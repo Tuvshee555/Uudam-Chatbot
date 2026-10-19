@@ -66,6 +66,10 @@ const RELATIVE_DATE_PATTERNS: Array<{
   },
 ];
 
+// Calendar weeks have exact boundaries; the broader "month beginning" window
+// must not stretch a first-week request through day ten or cut two weeks short.
+const MONTH_WEEK_RE = /(?<!\d)(?:(20\d{2})\s*(?:оны|он|onii|oni|on)?\s*)?(\d{1,2})\s*(?:-?\s*р)?\s*(?:сарын|сар|sariin|sar)\s*(?:(эхний|сүүлийн|сүүлчийн|ehnii|suuliin)\s*(?:(\d{1,2})\s+)?|(\d{1,2})\s*(?:дахь|дэх|дугаар|dahi|dah|deh)\s+)(?:7|долоо|doloo)\s*(?:хоног|honog)(?:ийн|т|оос|оор|ийг|iin|t|oos|oor|iig)?(?![\p{L}\d])/iu;
+
 function getMongoliaDateParts(now = new Date()): DateParts {
   const parts = MN_DATE_FORMAT.formatToParts(now);
   const lookup = new Map(parts.map((part) => [part.type, part.value]));
@@ -162,6 +166,8 @@ function explicitDateCandidates(
   yearMode: YearInferenceMode = "roll-forward",
   applyRecentPastGrace = false,
 ): DateParts[] {
+  // In "<month> 2 дахь долоо хоног" the two is a week number, never a day.
+  text = text.replace(MONTH_WEEK_RE, " ");
   const candidates: DateParts[] = [];
   const resolveYear = (month: number, day: number) =>
     yearMode === "current-year"
@@ -534,10 +540,19 @@ export function hasDepartureDateAvailabilityIntent(text: string, now = new Date(
   const requestedRange = resolveRequestedRange(text, now);
   if (!requestedDate && !requestedMonth && !requestedRange) return false;
   if (isDepartureAvailabilityQuestion(text)) return true;
+  // Unsupported week constraints still belong to the date path, which hands
+  // them to staff silently. A price-only question keeps its existing owner.
+  if (requestedRange === "unsupported") return !/үнэ|үнийн|хэд\s*вэ|хэдээр|төлбөр|төгрөг|₮|\bmnt\b|\bcny\b|\busd\b|price|cost/i.test(text);
   // A date or month on its own, typically answering "which departure?" after a
   // trip card ("10sar", "9-19 nd"). It used to reach no fast path and the trip
   // card came back as "✈️ … Энэ аялал шууд нислэгтэй" with no dates at all.
   if (isBareDateOrMonthMessage(text)) return true;
+  if (requestedRange && MONTH_WEEK_RE.test(text)) {
+    // A follow-up such as "<month>'s first two weeks, interested" is the
+    // customer's departure preference even without the word "trip".
+    const rest = text.replace(MONTH_WEEK_RE, " ").replace(/(?:сонирхож|sonirhoj)\s*(?:байна|бна|baina|bna)?/gi, " ");
+    if (isBareDateOrMonthMessage(rest)) return true;
+  }
   const normalized = text.toLowerCase();
   if (/үнэ|үнийн|хэд\s*вэ|хэдээр|төлбөр|төгрөг|₮|\bmnt\b|\bcny\b|\busd\b|price|cost/i.test(normalized)) {
     return false;
@@ -797,8 +812,31 @@ function buildRange(startYmd: string, endYmd: string): RequestedRange | null {
   return { startYmd, endYmd, label: rangeLabel(startYmd, endYmd) };
 }
 
-function resolveRequestedRange(text: string, now: Date): RequestedRange | null {
+function resolveRequestedRange(text: string, now: Date): RequestedRange | "unsupported" | null {
   const normalized = text.normalize("NFKC");
+  const weekPattern = new RegExp(MONTH_WEEK_RE.source, `${MONTH_WEEK_RE.flags}g`);
+  const weeks = Array.from(normalized.matchAll(weekPattern));
+  const week = weeks[0];
+  if (week) {
+    const rest = normalized.replace(weekPattern, " ");
+    // Never select just the first window, or broaden an excluded week to the
+    // generic month-beginning window below. Compound constraints need staff.
+    const negated = /(?:^|[^\p{L}])(?:биш(?:ээ)?|бус(?:ад)?|үгүй|оронд|bish|bishee|bus|ugui|not|except|instead)(?!\p{L})|явахгүй|явж\s*чадахгүй|амжихгүй|тохирохгүй|боломжгүй|yavahgui|bolomjgui|эс\s+тооцвол/iu.test(normalized);
+    const anotherDate = /\d{1,2}\s*(?:-?\s*р)?\s*(?:сарын|сард|сар|sariin|sard|sar)|\d{1,2}\s*[./-]\s*\d{1,2}|\d{1,2}\s*-?\s*(?:наас|нээс|ны|ний|нд)|(?:эхний|сүүлийн|сүүлчийн|дараагийн|ирэх|энэ|ehnii|suuliin|daraagiin|ireh|ene|\d\s*(?:дахь|дэх|дугаар))\s+(?:\d{1,2}\s+)?(?:7|долоо|doloo)\s*(?:хоног|honog)/iu.test(rest);
+    if (weeks.length > 1 || negated || anotherDate) return "unsupported";
+    const today = getMongoliaDateParts(now);
+    const month = Number(week[2]);
+    const year = week[1] ? Number(week[1]) : month < today.month ? today.year + 1 : today.year;
+    if (!isValidDateParts(year, month, 1)) return "unsupported";
+    const monthEnd = lastDayOfMonth(year, month);
+    const count = Number(week[4] || 1);
+    const ordinal = Number(week[5] || 0);
+    if (count < 1 || count > 4 || (week[5] && (ordinal < 1 || ordinal > 4))) return "unsupported";
+    const fromEnd = /^(?:сүүл|suul)/i.test(week[3] || "");
+    const startDay = ordinal ? (ordinal - 1) * 7 + 1 : fromEnd ? Math.max(1, monthEnd - count * 7 + 1) : 1;
+    const endDay = ordinal ? Math.min(ordinal * 7, monthEnd) : fromEnd ? monthEnd : Math.min(count * 7, monthEnd);
+    return buildRange(toYmd({ year, month, day: startDay }), toYmd({ year, month, day: endDay }));
+  }
   const sameMonth = DATE_RANGE_RE.exec(normalized);
   if (sameMonth) {
     const month = Number(sameMonth[1]);
@@ -867,6 +905,16 @@ function resolveRequestedRange(text: string, now: Date): RequestedRange | null {
  */
 export function requestsDateWindow(text: string, now = new Date()): boolean {
   return resolveRequestedRange(text, now) !== null;
+}
+
+/** Week-specific constraints are handled by the date path, never a whole-month list. */
+export function hasCalendarWeekWindow(text: string): boolean {
+  return MONTH_WEEK_RE.test(text.normalize("NFKC"));
+}
+
+/** A partial interpretation of these constraints would answer a different question. */
+export function hasUnsupportedCalendarWeekWindow(text: string, now = new Date()): boolean {
+  return resolveRequestedRange(text, now) === "unsupported";
 }
 
 function findRangeDepartures(
@@ -990,6 +1038,7 @@ export function buildDepartureDateAvailabilityReply(input: {
   };
 
   const range = resolveRequestedRange(input.userText, now);
+  if (range === "unsupported") return "REFER";
   if (range) {
     const rangeMatches = findRangeDepartures(scopedTrips, range.startYmd, range.endYmd, now);
     if (rangeMatches.length > 0) {
