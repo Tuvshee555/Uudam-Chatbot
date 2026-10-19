@@ -62,7 +62,9 @@ export async function sendPlatformMessage(
     recordHistogram("webhook.send.latency_ms", Date.now() - startedAt, { platform, outcome });
     return delivered;
   };
-  const allowFallback = options?.allowFallback ?? true;
+  // A failed send is logged and retried, never covered by telling the customer
+  // "Уучлаарай, мессеж илгээхэд алдаа гарлаа." — callers must opt in explicitly.
+  const allowFallback = options?.allowFallback ?? false;
   if (!token) {
     recordCounter("webhook.send.missing_token_total", 1, { platform });
     logError("webhook.send.missing_token", {

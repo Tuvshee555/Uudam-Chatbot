@@ -24,7 +24,7 @@ import {
   THANKS_REPLY,
 } from "../../lib/greetingPhrases";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
-import { notInCatalogReply, tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
+import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
 import { verifyTripReply } from "../../lib/tripReplyVerification";
@@ -1257,8 +1257,11 @@ async function handleMessage(
       return;
     }
     if (routed.notInCatalog) {
+      // A place no trip goes to is a question the bot cannot answer: silence and a staff
+      // lead, never "Уучлаарай, «<газар>» чиглэлийн аялал манайд байхгүй" (owner's rule;
+      // the place reading is a guess — "Кантон", "Shopping" were read as destinations).
       await deliverFastPathReply({
-        reply: notInCatalogReply(routed.notInCatalog),
+        reply: "REFER",
         failTag: "not_in_catalog",
         rememberSource: "api.webhook.not_in_catalog",
         counter: "webhook.not_in_catalog_total",

@@ -131,6 +131,11 @@ const NO_DATA_REPLY_PATTERNS: RegExp[] = [
   /(?:өгөх|хуваалцах|илгээх|унших|нээх|татах)\s+боломжгүй/i,
   /(?:мэдээлэл|аялал)[^.!?]{0,40}харагдахгүй\s+байна/i,
   /аялалтай\s+холбоогүй/i,
+  // "<газар> чиглэлийн аялал манайд байхгүй", "систем алдаатай байна", "… татаж чадсангүй",
+  // "мессеж илгээхэд алдаа гарлаа": the bot saying it has nothing or failed is not an answer.
+  /манайд\s+(?:одоогоор\s+)?байхгүй/i,
+  /алдаатай\s+байна|алдаа\s+гарлаа/i,
+  /(?:татаж|олж|уншиж|илгээж|нээж|хариулж)\s+чадсангүй/i,
   // The prompt's own section name leaking into a reply ("одоогоор Context-д байхгүй").
   /(?:^|[^\p{L}])context(?:[^\p{L}]|$)/iu,
 ];
@@ -139,10 +144,18 @@ const NO_DATA_REPLY_PATTERNS: RegExp[] = [
 // answers nothing — a replayed real question about return seats got only this.
 const PHONE_ASK_ONLY = /^(?:утасны дугаараа үлдээвэл[^.!?]*?(?:залгана|холбогдоно)[^\p{L}]*)$/iu;
 
+// "Contact our consultant for details" as the WHOLE answer: no number, no price, nothing
+// from the data — a deflection, e.g. "Хувиараа явах гэж байгаа бол аяллын зөвлөхтэй
+// холбогдож дэлгэрэнгүй мэдээлэл авахыг зөвлөж байна." Staff take these silently.
+const CONSULTANT_REDIRECT = /зөвлөх(?:тэй|өөс|өд)\s+(?:холбогдо|хандаж|тодруул)/i;
+
 export function shouldSilenceNoDataReply(text: string): boolean {
   const normalized = (text || "").replace(/\s+/g, " ").trim();
   if (!normalized) return true;
   if (PHONE_ASK_ONLY.test(normalized)) return true;
+  // A reply that names a trip (catalog names are written in capitals) carries a fact and is kept.
+  if (CONSULTANT_REDIRECT.test(normalized) && !/[А-ЯӨҮЁ]{4,}/.test(normalized)
+    && !/\d|https?:\/\//.test(normalized.replace(/Утасны дугаараа үлдээвэл[^.!?🙌]*[.!?🙌]*/gi, ""))) return true;
   return NO_DATA_REPLY_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 

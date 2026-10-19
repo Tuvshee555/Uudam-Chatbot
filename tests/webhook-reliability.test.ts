@@ -950,9 +950,7 @@ test("refusals in other words are no-data; real answers and the not-in-catalog a
     "Уучлаарай, энэ асуулт аялалтай холбоогүй байна.",
     "Истанбул хотыг багтаасан аялал одоогоор Context-д байхгүй байна.",
   ]) assert.equal(shouldSilenceNoDataReply(reply), true, reply);
-  const { notInCatalogReply } = await import("../src/lib/tripUnderstanding");
   for (const reply of [
-    notInCatalogReply("Альфа"),
     "Альфа аялал 6 өдөр 5 шөнө, том хүн 2,901,000₮. Утасны дугаараа үлдээвэл манай аяллын зөвлөх тан руу шууд залгана 🙌",
   ]) assert.equal(shouldSilenceNoDataReply(reply), false, reply);
 });
@@ -964,4 +962,25 @@ test("tapping the phone-number button again right away does not resend the same 
   assert.equal(isRepeatOfLastReply({ text: "Манай утас", timestamp: now - 600_000 }, "Манай утас", now), false, "asked again later: answer");
   assert.equal(isRepeatOfLastReply({ text: "Манай хаяг", timestamp: now - 5_000 }, "Манай утас", now), false);
   assert.equal(isRepeatOfLastReply(null, "Манай утас", now), false);
+});
+
+test("no apology for a failure or a missing place ever reaches a customer", async () => {
+  const { shouldSilenceNoDataReply } = await import("../src/lib/reply");
+  for (const reply of [
+    "Уучлаарай, «Альфа» чиглэлийн аялал одоогоор манайд байхгүй байна.",
+    "Уучлаарай, систем түр алдаатай байна.",
+    "Уучлаарай, мессеж илгээхэд алдаа гарлаа.",
+    "Уучлаарай, яг одоо цаг агаарын мэдээг татаж чадсангүй.",
+  ]) assert.equal(shouldSilenceNoDataReply(reply), true, reply);
+  // A real answer from the data that happens to apologise is still sent.
+  assert.equal(shouldSilenceNoDataReply("Уучлаарай, энэ гаралтын суудал дүүрсэн байна.\nДараагийн гарах өдрийг санал болгоё."), false);
+});
+
+test("'ask our consultant' with nothing from the data is not an answer", async () => {
+  const { shouldSilenceNoDataReply } = await import("../src/lib/reply");
+  assert.equal(shouldSilenceNoDataReply("Хувиараа явах гэж байгаа бол аяллын зөвлөхтэй холбогдож дэлгэрэнгүй мэдээлэл авахыг зөвлөж байна. Утасны дугаараа үлдээвэл манай аяллын зөвлөх тан руу шууд залгана 🙌"), true);
+  assert.equal(shouldSilenceNoDataReply("Группын аялалд хямдрал авах боломжтой эсэхийг мэдэхийн тулд манай аяллын зөвлөхтэй холбогдоорой."), true);
+  // A fact with the same tail is still an answer.
+  assert.equal(shouldSilenceNoDataReply("Альфа аялал 7 өдөр 6 шөнө, том хүн 1,390,000₮. Дэлгэрэнгүйг аяллын зөвлөхтэй холбогдож тодруулаарай."), false);
+  assert.equal(shouldSilenceNoDataReply("АЛЬФА АЯЛАЛ нь газрын аялал тул нислэг ороогүй. Нислэгтэйг аяллын зөвлөхтэй холбогдож тодруулаарай."), false);
 });

@@ -17,7 +17,7 @@ import { buildCatalogListingReply } from "../../lib/catalogListing";
 import { setClarificationState } from "../../lib/clarificationState";
 import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
-import { notInCatalogReply, tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
+import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
 import { verifyTripReply } from "../../lib/tripReplyVerification";
@@ -542,12 +542,9 @@ export default async function handler(
           });
         }
         if (routed.notInCatalog) {
-          const reply = notInCatalogReply(routed.notInCatalog);
-          await appendMessage(sessionId, "user", normalizedText);
-          await appendMessage(sessionId, "assistant", reply);
-          await rememberTurn();
+          // Same as the webhook: a place no trip goes to is not answered.
           recordCounter("demo.not_in_catalog_total", 1, {});
-          return res.status(200).json({ reply });
+          return returnHandoff();
         }
       }
 
@@ -556,6 +553,7 @@ export default async function handler(
         const weather = await buildTripWeatherReply(await getFastPathText(), await getTrips(), undefined, (await getRouted()).chosenTripId, intentText);
         if (weather.kind === "clarify") await setClarificationState(sessionId, weather.candidates.map((t) => t.id));
         const weatherReply = sanitizeAssistantReply(weather.reply);
+        if (shouldHandoffSilently(weatherReply)) return returnHandoff();
         await appendMessage(sessionId, "user", normalizedText);
         await appendMessage(sessionId, "assistant", weatherReply);
         await rememberTurn();

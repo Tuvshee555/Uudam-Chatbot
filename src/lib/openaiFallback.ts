@@ -134,7 +134,8 @@ export async function askOpenAIChatParts(
     } else if (finishReason === "length" || finishReason === "content_filter") {
       logWarn("openai.incomplete_completion", { source, model, finishReason });
     }
-    const raw = completion || "Уучлаарай, систем түр алдаатай байна.";
+    // Nothing came back: that is "no answer" (silence + staff lead), never an apology to the customer.
+    const raw = completion || "REFER";
 
     const usage = data?.usage ?? {};
     recordCounter("openai.fallback_success_total", 1, { model, source });

@@ -135,7 +135,8 @@ export async function buildTripWeatherReply(
     return {
       kind: "answer",
       trip: best,
-      reply: `Уучлаарай, яг одоо цаг агаарын мэдээг татаж чадсангүй. Аяллын хуудаснаас харах боломжтой 👉 ${link}`,
+      // No report, no answer: staff take it. An apology about failing to load it is not an answer.
+      reply: "REFER",
     };
   }
   return { kind: "answer", trip: best, reply: `${report.text}\n\n📲 Дэлгэрэнгүй: ${link}` };

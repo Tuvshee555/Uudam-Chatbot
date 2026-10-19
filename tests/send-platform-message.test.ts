@@ -12,8 +12,10 @@ const fallbackText = "Уучлаарай, мессеж илгээхэд алда
 for (const scenario of [
   { name: "Facebook primary success", platform: "facebook", statuses: [200], result: true, outcome: "primary_sent" },
   { name: "Instagram primary success", platform: "instagram", statuses: [200], result: true, outcome: "primary_sent" },
-  { name: "fallback success preserves false result", platform: "facebook", statuses: [400, 200], result: false, outcome: "fallback_sent" },
-  { name: "Instagram fallback failure", platform: "instagram", statuses: [400, 400], result: false, outcome: "fallback_failed" },
+  // The apology fallback is opt-in only (2026-10-19): by default a failed send tells the customer nothing.
+  { name: "failed send says nothing to the customer by default", platform: "facebook", statuses: [400], result: false, outcome: "primary_failed" },
+  { name: "fallback success preserves false result", platform: "facebook", statuses: [400, 200], result: false, outcome: "fallback_sent", allowFallback: true },
+  { name: "Instagram fallback failure", platform: "instagram", statuses: [400, 400], result: false, outcome: "fallback_failed", allowFallback: true },
   { name: "fallback disabled", platform: "facebook", statuses: [400], result: false, outcome: "primary_failed", allowFallback: false },
   { name: "fallback text never recurses", platform: "facebook", statuses: [400], result: false, outcome: "primary_failed", text: fallbackText },
 ] as const) {

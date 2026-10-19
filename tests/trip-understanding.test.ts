@@ -157,7 +157,8 @@ test("no note above a trip list is ever swallowed by the no-data silence guard",
   ]) {
     assert.equal(shouldSilenceNoDataReply(tu.unmetNote(u)!), false, tu.unmetNote(u));
   }
-  assert.equal(shouldSilenceNoDataReply(tu.notInCatalogReply("Тармиз")), false);
+  // Owner's rule (2026-10-19): "no trip goes to <place>" is not sent — staff take it.
+  assert.equal(shouldSilenceNoDataReply(tu.notInCatalogReply("Тармиз")), true);
 });
 
 test("asking about the trips just listed does not repeat the same which-trip question", async () => {

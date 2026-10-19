@@ -69,11 +69,10 @@ test("no trip named → ask which trip instead of going silent", async () => {
   assert.deepEqual(result, { kind: "ask", reply: WEATHER_WHICH_TRIP_REPLY });
 });
 
-test("website unreachable → honest message with a link, never an invented forecast", async () => {
+test("website unreachable → no answer (staff take it), never an apology or an invented forecast", async () => {
   const result = await buildTripWeatherReply("Вэлмор цаг агаар", trips, async () => null);
   assert.equal(result.kind, "answer");
-  assert.match(result.reply, /татаж чадсангүй/);
-  assert.doesNotMatch(result.reply, /°/);
+  assert.equal(result.reply, "REFER");
 });
 
 test("two trips with the SAME name: the picked trip id answers instead of re-asking forever", async () => {
