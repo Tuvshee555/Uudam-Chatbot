@@ -1763,7 +1763,7 @@ export default function AdminPage() {
     );
   }
   return (
-    <div className="flex h-dvh flex-col overflow-hidden">
+    <div className="flex h-dvh overflow-hidden">
       <Head>
         <title>{currentSection?.label} · Аяллын удирдлага</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -1771,8 +1771,17 @@ export default function AdminPage() {
       <a href="#admin-content" className="sr-only z-50 rounded-md bg-brand px-4 py-3 text-sm font-semibold text-white focus:not-sr-only focus:fixed focus:left-3 focus:top-2">
         Үндсэн хэсэгт очих
       </a>
+      <AdminNavigation
+        tab={tab}
+        badges={navBadges}
+        mobileOpen={mobileNavOpen}
+        desktopHidden={sidebarHidden}
+        onClose={() => setMobileNavOpen(false)}
+        onSelect={selectAdminTab}
+      />
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
       {/* Top bar */}
-      <header className="flex min-h-16 shrink-0 items-center justify-between gap-3 border-b border-line bg-surface/95 px-3 sm:px-5">
+      <header className="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-line bg-surface px-3 sm:px-5">
         <div className="flex min-w-0 items-center gap-2">
           <button
             type="button"
@@ -1793,9 +1802,11 @@ export default function AdminPage() {
           >
             <Icons.menu size={20} />
           </button>
-          <Logo className="min-w-0" />
-          <div className="ml-3 hidden min-w-0 items-center gap-3 border-l border-line pl-5 text-sm text-ink-muted lg:flex">
-            <span className="truncate">{currentSection?.label}</span>
+          <Logo className="min-w-0 md:hidden" />
+          <div className="hidden min-w-0 items-center gap-2 text-sm md:flex">
+            <span className="text-ink-subtle">Удирдлага</span>
+            <span aria-hidden="true" className="text-line-strong">/</span>
+            <span className="truncate font-semibold text-ink">{currentSection?.label}</span>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
@@ -1819,16 +1830,6 @@ export default function AdminPage() {
           </span>
         </div>
       </header>
-      {/* Body */}
-      <div className="flex flex-1 overflow-hidden">
-        <AdminNavigation
-          tab={tab}
-          badges={navBadges}
-          mobileOpen={mobileNavOpen}
-          desktopHidden={sidebarHidden}
-          onClose={() => setMobileNavOpen(false)}
-          onSelect={selectAdminTab}
-        />
         {/* Content */}
         <main id="admin-content" tabIndex={-1} className="scroll-area min-w-0 flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
           <div className="mx-auto w-full max-w-6xl">

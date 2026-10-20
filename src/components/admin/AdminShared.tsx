@@ -15,30 +15,23 @@ export function LoadingPanel() {
 /** Page-level tab header: icon tile + title + description + actions.
     One pattern for every tab so the product reads as one system. */
 export function TabHeader({
-  icon,
   title,
   description,
   actions,
 }: {
+  /** Accepted for call-site compatibility; the header no longer shows an icon tile. */
   icon?: ReactNode;
   title: string;
   description?: string;
   actions?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-4 pb-1 sm:flex-row sm:items-start sm:justify-between">
-      <div className="flex min-w-0 items-start gap-3">
-        {icon && (
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-brand-soft text-brand">
-            {icon}
-          </div>
+    <div className="flex flex-col gap-4 pb-2 sm:flex-row sm:items-end sm:justify-between">
+      <div className="min-w-0">
+        <h1 className="text-[26px] font-extrabold leading-8 tracking-tight text-ink sm:text-[28px] sm:leading-9">{title}</h1>
+        {description && (
+          <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink-muted">{description}</p>
         )}
-        <div className="min-w-0">
-          <h1 className="text-xl font-bold tracking-tight text-ink sm:text-2xl">{title}</h1>
-          {description && (
-            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-ink-muted">{description}</p>
-          )}
-        </div>
       </div>
       {actions && (
         <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>
@@ -59,12 +52,12 @@ export function StatCard({
 }) {
   return (
     <Card className="p-4 sm:p-5">
-      <p className="text-xs font-medium text-ink-muted">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-muted">
         {label}
       </p>
       <p
         className={cx(
-          "mt-2.5 text-[28px] font-bold leading-none tracking-tight tabular-nums",
+          "mt-3 text-[32px] font-extrabold leading-none tracking-tight tabular-nums",
           tone ?? "text-ink",
         )}
       >

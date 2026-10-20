@@ -23,17 +23,19 @@
   --color-sun-soft: #fff1e6;
 
   /* Surfaces — warm neutral */
-  --color-canvas: #f4f4f2;
+  --color-canvas: #f6f6f3;
   --color-surface: #ffffff;
   --color-surface-sunken: #f0f1ef;
 
   /* Dark charcoal navigation surface (sidebar / login backdrop) */
-  --color-nav: #171a1c;
-  --color-nav-deep: #0f1213;
-  --color-nav-raised: #262b2d;
-  --color-nav-line: #272d2f;
-  --color-nav-ink: #d5d9d8;
-  --color-nav-ink-soft: #8e9694;
+  --color-nav: #13191a;
+  --color-nav-deep: #0c1011;
+  --color-nav-raised: #222a2b;
+  --color-nav-hover: #1b2324;
+  --color-nav-line: #232c2d;
+  --color-nav-ink: #e3e8e6;
+  --color-nav-ink-soft: #8d9997;
+  --color-nav-accent: #3fc1b3;
 
   /* Lines */
   --color-line: #e5e6e3;
@@ -61,7 +63,8 @@
   --radius-xl: 18px;
 
   /* Shadow scale — neutral, one light source (top) */
-  --shadow-xs: 0 1px 2px rgba(20, 24, 24, 0.06);
+  --shadow-xs: 0 1px 2px rgba(20, 24, 24, 0.05);
+  --shadow-card: 0 1px 2px rgba(20, 24, 24, 0.04), 0 1px 1px rgba(20, 24, 24, 0.02);
   --shadow-sm: 0 1px 2px rgba(20, 24, 24, 0.05), 0 2px 8px rgba(20, 24, 24, 0.05);
   --shadow-md: 0 2px 6px rgba(20, 24, 24, 0.06), 0 12px 32px rgba(20, 24, 24, 0.12);
   --shadow-lg: 0 4px 14px rgba(14, 17, 17, 0.12), 0 28px 64px rgba(14, 17, 17, 0.24);
@@ -159,19 +162,6 @@
   body {
     min-height: 100dvh;
     background-color: var(--color-canvas);
-    /* Quiet ambient depth: teal top-right, warm sun bottom-left */
-    background-image:
-      radial-gradient(
-        1100px 620px at 88% -12%,
-        rgba(15, 118, 110, 0.06),
-        transparent 62%
-      ),
-      radial-gradient(
-        900px 540px at -12% 112%,
-        rgba(232, 132, 61, 0.05),
-        transparent 60%
-      );
-    background-attachment: fixed;
     color: var(--color-ink);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;

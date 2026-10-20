@@ -250,20 +250,38 @@ export const Icons = {
 /* ----------------------------------------------------------------
    Logo
    ---------------------------------------------------------------- */
-export function Logo({ className }: { className?: string }) {
+export function Logo({
+  className,
+  tone = "default",
+}: {
+  className?: string;
+  /** "inverse" is for the dark navigation surface. */
+  tone?: "default" | "inverse";
+}) {
+  const inverse = tone === "inverse";
   return (
     <span className={cx("flex items-center gap-2.5", className)}>
       <span
         aria-hidden="true"
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-brand-hover via-brand to-brand-active text-base font-extrabold text-white shadow-sm shadow-brand/30"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-br from-nav-accent via-brand-hover to-brand text-base font-extrabold text-white shadow-xs ring-1 ring-white/15"
       >
         У
       </span>
       <span className="flex min-w-0 flex-col leading-tight">
-        <span className="truncate text-sm font-semibold text-ink">
+        <span
+          className={cx(
+            "truncate text-sm font-bold tracking-tight",
+            inverse ? "text-white" : "text-ink",
+          )}
+        >
           {t.app.name}
         </span>
-        <span className="truncate text-[11px] font-medium text-ink-subtle">
+        <span
+          className={cx(
+            "truncate text-[11px] font-medium",
+            inverse ? "text-nav-ink-soft" : "text-ink-subtle",
+          )}
+        >
           {t.app.tagline}
         </span>
       </span>
@@ -309,13 +327,13 @@ type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "success";
 type ButtonSize = "sm" | "md" | "lg";
 
 const BTN_BASE =
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border font-semibold transition-all duration-150 select-none active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100";
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg border font-semibold transition-all duration-150 select-none active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100";
 
 const BTN_VARIANT: Record<ButtonVariant, string> = {
   primary:
-    "border-transparent bg-brand text-white shadow-xs shadow-brand/30 hover:bg-brand-hover hover:shadow-sm hover:shadow-brand/30 active:bg-brand-active",
+    "border-brand-active/40 bg-brand text-white shadow-xs hover:bg-brand-hover active:bg-brand-active",
   secondary:
-    "border-line-strong bg-surface text-ink shadow-xs hover:border-brand-border hover:bg-brand-soft/40",
+    "border-line-strong bg-surface text-ink shadow-xs hover:border-ink-subtle hover:bg-surface-sunken/60",
   ghost:
     "border-transparent bg-transparent text-ink-muted hover:bg-surface-sunken hover:text-ink",
   danger:
@@ -390,7 +408,7 @@ export function Card({
   return (
     <div
       className={cx(
-        "rounded-xl border border-line bg-surface shadow-sm",
+        "rounded-xl border border-line bg-surface shadow-card",
         className,
       )}
       {...rest}
@@ -463,7 +481,7 @@ export function Badge({
   return (
     <span
       className={cx(
-        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold",
+        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-[3px] text-xs font-semibold ring-1 ring-inset ring-black/[0.04]",
         BADGE_TONE[tone],
         className,
       )}

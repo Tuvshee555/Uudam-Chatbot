@@ -167,7 +167,7 @@ export function AssistantTab({
       }}
     >
       <div className="flex items-center gap-3 border-b border-line px-4 py-3.5 sm:px-5">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-nav text-nav-accent">
           <Icons.ai size={19} />
         </span>
         <div className="min-w-0">
@@ -184,38 +184,55 @@ export function AssistantTab({
       )}
       <div className="scroll-area max-h-[60dvh] min-h-[18rem] space-y-4 overflow-y-auto bg-canvas/40 p-3.5 sm:min-h-[22rem] sm:p-5" role="log" aria-label="Туслахтай ярилцсан түүх" aria-relevant="additions text">
         {isEmpty ? (
-          <div className="flex h-full min-h-[16rem] flex-col items-center justify-center px-2 py-5 text-center sm:min-h-[20rem] sm:px-4">
-            <p className="text-xl font-semibold tracking-tight text-ink sm:text-2xl">
-              Юуг шинэчлэх вэ?
-            </p>
-            <p className="mt-1.5 max-w-md text-sm leading-6 text-ink-muted">
-              Аяллын постер, үнийн жагсаалтаа оруулаарай. Би уншаад юуг нэмэх,
-              өөрчлөхийг санал болгоно. Эсвэл{" "}
-              <button
-                type="button"
-                onClick={() => {
-                  setAiInput("[Аяллын нэр] аяллын мэдээллийг шинэчлэх");
-                  inputRef.current?.focus();
-                }}
-                className="rounded text-brand underline decoration-brand/30 underline-offset-2 hover:decoration-brand"
-              >
-                хийх зүйлээ бичээрэй.
-              </button>
-            </p>
+          <div className="mx-auto flex h-full min-h-[16rem] w-full max-w-3xl flex-col justify-center gap-6 px-1 py-4 sm:min-h-[20rem] sm:px-3">
+            <div>
+              <p className="text-2xl font-extrabold tracking-tight text-ink sm:text-[28px]">
+                Юуг шинэчлэх вэ?
+              </p>
+              <p className="mt-2 max-w-xl text-sm leading-6 text-ink-muted">
+                Постер, үнийн жагсаалтаа оруулаарай. Би уншаад юуг нэмэх, өөрчлөхийг санал болгоно.
+                Эсвэл{" "}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAiInput("[Аяллын нэр] аяллын мэдээллийг шинэчлэх");
+                    inputRef.current?.focus();
+                  }}
+                  className="rounded font-medium text-brand underline decoration-brand/30 underline-offset-2 hover:decoration-brand"
+                >
+                  хийх зүйлээ бичээрэй.
+                </button>
+              </p>
+            </div>
             <button
               type="button"
               onClick={onPickFile}
               disabled={busy}
-              className="mt-5 flex w-full max-w-md flex-col items-center gap-2 rounded-2xl border border-dashed border-brand-border bg-surface px-4 py-5 transition-colors hover:border-brand hover:bg-brand-soft/40 disabled:cursor-wait disabled:opacity-60 sm:px-6"
+              className="group flex w-full items-center gap-4 rounded-xl border border-dashed border-line-strong bg-surface px-5 py-5 text-left transition-colors hover:border-brand hover:bg-brand-soft/30 disabled:cursor-wait disabled:opacity-60"
             >
-              <span className="flex items-center gap-2 text-sm font-semibold text-ink">
-                <Icons.upload size={17} className="text-brand" />
-                Файл сонгох эсвэл энд чирж тавих
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-nav text-nav-accent transition-transform group-hover:-translate-y-0.5">
+                <Icons.upload size={20} />
               </span>
-              <span className="text-xs leading-5 text-ink-muted">
-                Зураг · PDF · Excel · Word · Олон файл зэрэг оруулж болно
+              <span className="min-w-0">
+                <span className="block text-sm font-bold text-ink">Файл сонгох эсвэл энд чирж тавих</span>
+                <span className="mt-0.5 block text-xs leading-5 text-ink-muted">
+                  Зураг · PDF · Excel · Word — олон файл зэрэг оруулж болно
+                </span>
               </span>
             </button>
+            <ol className="grid gap-3 sm:grid-cols-3">
+              {[
+                ["1", "Уншина", "Постер, үнийн жагсаалтаас аялал, үнэ, огноог гаргана."],
+                ["2", "Санал болгоно", "Юу өөрчлөгдөхийг өмнөх утгатай нь зэрэгцүүлж харуулна."],
+                ["3", "Та баталгаажуулна", "Та зөвшөөрөөгүй зүйл хадгалагдахгүй. Буцаах боломжтой."],
+              ].map(([n, title, body]) => (
+                <li key={n} className="rounded-xl border border-line bg-surface p-3.5">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-surface-sunken text-xs font-bold text-ink-muted">{n}</span>
+                  <p className="mt-2.5 text-sm font-semibold text-ink">{title}</p>
+                  <p className="mt-1 text-xs leading-5 text-ink-muted">{body}</p>
+                </li>
+              ))}
+            </ol>
           </div>
         ) : (
           messages.map((message) => (
