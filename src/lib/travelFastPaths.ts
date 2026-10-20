@@ -12,6 +12,7 @@
  */
 
 import { buildPassengerTotalReply } from "./passengerTotalReply";
+import { websiteTripLinksInText } from "./bookingWebsite";
 import { departureAvailability, departureIsClosed } from "./departureAvailability";
 import { buildHotelReply } from "./tripHotelReply";
 import { buildPlaceDaysReply } from "./tripPlaceDaysReply";
@@ -1383,7 +1384,7 @@ function buildUnavailableTripReply(
  * active match — so a bare "<хот>" never gets an unavailable answer.
  */
 export function buildDepartureUnavailableReply(text: string, trips: TravelTrip[]): string | null {
-  const turn = customerTurn(text);
+  const turn = websiteTripLinksInText(customerTurn(text)).textWithoutUrls;
   const dates = extractStructuredDates(turn);
   if (!dates.length) return null;
   const matches = findTripMatches(text, trips, { includeSoldOut: true, includePaused: true });

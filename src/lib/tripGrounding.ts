@@ -13,6 +13,7 @@
 import type { TravelTrip } from "./travelTypes";
 import { normText } from "./travelTextNorm";
 import { queryNamedPlaces, resolveTripFromUserMessage, tripMentionsAllPlaces } from "./travelFastPathsSearch";
+import { websiteTripLinksInText } from "./bookingWebsite";
 
 export type GroundingContext = {
   /** The customer's message this turn. */
@@ -46,12 +47,15 @@ export function tripsNamedIn(text: string, trips: TravelTrip[]): TravelTrip[] {
 /** Trips the customer's own words name or narrow to (a trip name, an alias, a place). */
 function tripsFromWords(text: string, trips: TravelTrip[]): TravelTrip[] {
   if (!text.trim()) return [];
+  const website = websiteTripLinksInText(text);
   const resolution = resolveTripFromUserMessage(text, trips, { allowLooseFallback: false });
   const resolved = resolution.status === "verified" && resolution.trip ? [resolution.trip]
     : resolution.status === "ambiguous" ? resolution.candidates : [];
-  const places = queryNamedPlaces(text, trips).places;
+  if (website.slugs.length > 0) return resolved;
+  const words = website.textWithoutUrls;
+  const places = queryNamedPlaces(words, trips).places;
   const byPlace = places.length ? trips.filter((trip) => tripMentionsAllPlaces(trip, places)) : [];
-  return [...resolved, ...byPlace, ...tripsNamedIn(text, trips), ...tripsSharingNameWords(text, trips)];
+  return [...resolved, ...byPlace, ...tripsNamedIn(words, trips), ...tripsSharingNameWords(words, trips)];
 }
 
 const nameWords = (text: string) => normText(text).split(/[^\p{L}]+/u).filter((word) => word.length >= 4);
@@ -71,6 +75,11 @@ function tripsSharingNameWords(text: string, trips: TravelTrip[]): TravelTrip[] 
 
 /** Every trip this conversation gives the bot a reason to talk about. */
 export function groundedTripIds(context: GroundingContext): Set<string> {
+  if (websiteTripLinksInText(context.customerText).slugs.length > 0) {
+    // A newly shared page replaces prior chat context, including a stale
+    // selection. An unknown page gives no permission to answer about an old trip.
+    return new Set(tripsFromWords(context.customerText, context.trips).map(trip => trip.id));
+  }
   const ids = new Set<string>([
     ...(context.pendingTripIds || []),
     ...(context.selectionTripId ? [context.selectionTripId] : []),
@@ -91,6 +100,10 @@ export function groundedTripIds(context: GroundingContext): Set<string> {
  */
 export function ungroundedTripInReply(reply: string, context: GroundingContext): TravelTrip | null {
   const named = tripsNamedIn(reply, context.trips);
+  if (websiteTripLinksInText(context.customerText).slugs.length > 0) {
+    const allowed = groundedTripIds(context);
+    return named.find(trip => !allowed.has(trip.id)) || null;
+  }
   if (named.length !== 1) return null;
   // A bullet or numbered line is an item of a list the customer asked for ("which trips leave on
   // the 8th?", "the cheapest", "trips to <place>") even when the list has one item.

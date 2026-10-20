@@ -9,6 +9,7 @@ import { resolveTripFromUserMessage } from "./travelFastPathsSearch";
 import { setTripSelection } from "./tripSelectionState";
 import { queryNeon } from "./neonDb";
 import { logInfo, logWarn } from "./observability";
+import { tripsForWebsiteReference } from "./bookingWebsite";
 
 export type AdReferral = {
   source?: string;
@@ -31,7 +32,9 @@ export function pickReferral(event: unknown): AdReferral | null {
 
 /** Everything in the referral that can name a trip. */
 function referralText(referral: AdReferral, postText: string): string {
-  return [referral.ads_context_data?.ad_title, postText, typeof referral.ref === "string" ? referral.ref.replace(/[_-]+/g, " ") : ""]
+  // A website ref is an exact identity, not ad copy. Unknown or old slugs
+  // must not turn into destination words and select a different trip.
+  return [referral.ads_context_data?.ad_title, postText]
     .filter((part): part is string => typeof part === "string" && part.trim().length > 0).join(" \n");
 }
 
@@ -40,10 +43,7 @@ function referralText(referral: AdReferral, postText: string): string {
  * trip: its website slug (or id). Exact, unlike reading an ad's words.
  */
 export function tripFromRef(ref: unknown, trips: TravelTrip[]): TravelTrip | null {
-  const wanted = typeof ref === "string" ? ref.trim().toLowerCase() : "";
-  if (!wanted) return null;
-  const matches = trips.filter((trip) => trip.status !== "draft"
-    && (trip.id.toLowerCase() === wanted || String(trip.extra?.website_slug ?? "").trim().toLowerCase() === wanted));
+  const matches = tripsForWebsiteReference(ref, trips);
   return matches.length === 1 ? matches[0] : null;
 }
 
@@ -90,8 +90,10 @@ export async function rememberAdReferral(input: {
   senderId: string; platform: string; referral: AdReferral; trips: TravelTrip[]; pageToken?: string | null;
 }): Promise<TravelTrip | null> {
   try {
-    const postText = await fetchPostText(input.referral.ads_context_data?.post_id, input.pageToken);
-    const trip = tripFromRef(input.referral.ref, input.trips) ?? tripFromAdText(referralText(input.referral, postText), input.trips);
+    const exactRef = typeof input.referral.ref === "string" && Boolean(input.referral.ref.trim());
+    const postText = exactRef ? "" : await fetchPostText(input.referral.ads_context_data?.post_id, input.pageToken);
+    const trip = exactRef ? tripFromRef(input.referral.ref, input.trips)
+      : tripFromAdText(referralText(input.referral, postText), input.trips);
     await setTripSelection(input.senderId, trip
       ? { tripId: trip.id, date: null, hotel: null, package: null, passengers: [] }
       : null);

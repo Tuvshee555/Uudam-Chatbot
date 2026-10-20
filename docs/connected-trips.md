@@ -27,12 +27,36 @@ Website edits also commit a durable retry payload in `Trip.sourceMetadata`
 before attempting delivery. The editor exposes a retry action if delivery fails.
 The website's existing page cache can take up to 60 seconds to refresh.
 
+Delivery batches skip busy trips and attempt a failing trip only once, leaving
+the rest of the batch available for other changes. A delayed failure cannot
+mark a newer edit or an already delivered revision as broken. When the website
+connection is absent, queued changes stay pending without accumulating errors.
+
+The Trips page distinguishes pending delivery, delivery errors and content
+conflicts, including conflicts on otherwise delivered trips. Review opens a
+fresh copy of the trip; both versions remain available for staff to compare.
+An unavailable status response is an error, never an empty successful queue.
+
 Both editors send changed fields and a saved-record version. Stale saves return
 409 instead of overwriting another editor's work. Projection uses a three-way
 comparison against the prior synced content. Independently changed text and
 fares remain in `contentConflicts` or `extra.shared_conflicts` for individual
 review; neither app silently wins. Website-only details can be edited from the
 chatbot editor, while the website editor exposes canonical aliases and terms.
+
+Partial website deliveries preserve omitted fields and saved counterparts of
+paired controls. Retrying an accepted change or an existing conflict does not
+rewrite the canonical trip or enqueue another update. Invalid facts and
+mismatched snapshot identities are rejected before writes; temporary delivery
+failures return a retryable response.
+
+Published trip pages can be shared in both directions, including their persisted
+generated slugs. The chatbot sends the current website page without requiring
+a PDF first. Pasted official detail URLs and the website's Messenger reference
+identify trips exactly; unknown references clear stale selection. URL paths and
+tracking parameters do not become price, date or passenger instructions. The
+reply grounding check uses the newly shared page instead of an older trip in
+the conversation.
 
 The shared `/api/poster-pdf?id=...` file renders the actual Poster component,
 including its CSS, embedded Mongolian fonts, photos and saved size settings.

@@ -20,3 +20,13 @@
 - Before pushing any change to trip matching, routing or reply wording, run `npm run gate` (read-only, no AI calls) and read every changed decision it prints. `npm run gate -- --save` only after the changes are judged correct.
 - Never write a real trip, place, price or date into code, comments, tests or scripts; use invented names.
 - Several agents have edited this repo at the same time and fixed the same bug twice. Pull first, check `git log`, and stage only your own files.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

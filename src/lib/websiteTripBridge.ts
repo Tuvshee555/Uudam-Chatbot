@@ -4,6 +4,78 @@ import { duration } from "./connectedTripMapping";
 
 type UnknownRecord = Record<string, unknown>;
 
+export class WebsiteTripPayloadError extends Error {}
+
+const owns = (value: UnknownRecord, key: string) => Object.prototype.hasOwnProperty.call(value, key);
+
+export function websiteTripSourceId(input: unknown): string {
+  const trip = record(input);
+  const id = text(trip.sourceTripId);
+  if (!id) throw new WebsiteTripPayloadError("Website trip is missing sourceTripId");
+  return id;
+}
+
+export function validateWebsiteTripPayload(input: unknown): void {
+  websiteTripSourceId(input);
+  const trip = record(input);
+  const fail = (field: string): never => { throw new WebsiteTripPayloadError(`Invalid website trip field: ${field}`); };
+  for (const key of ["title", "summary", "description", "hotel", "departureRule", "image"]) {
+    if (owns(trip, key) && trip[key] !== null && typeof trip[key] !== "string") fail(key);
+  }
+  if (owns(trip, "title") && !text(trip.title)) fail("title");
+  for (const key of ["extraImages", "included", "excluded", "importantNotes"]) {
+    if (owns(trip, key) && (!Array.isArray(trip[key]) || !(trip[key] as unknown[]).every(item => typeof item === "string"))) fail(key);
+  }
+  for (const key of ["price", "childPrice", "infantPrice"]) {
+    if (owns(trip, key) && trip[key] !== null && (numberOrNull(trip[key]) === null || Number(trip[key]) < 0)) fail(key);
+  }
+  for (const key of ["durationDays", "durationNights"]) {
+    if (owns(trip, key) && (!Number.isInteger(trip[key]) || Number(trip[key]) < (key === "durationDays" ? 1 : 0))) fail(key);
+  }
+  for (const key of ["isPublished", "foodIncluded"]) {
+    if (owns(trip, key) && !(key === "foodIncluded" && trip[key] === null) && typeof trip[key] !== "boolean") fail(key);
+  }
+  if (owns(trip, "currency") && !/^[a-z]{3}$/i.test(text(trip.currency))) fail("currency");
+  if (owns(trip, "sourceMetadata") && (trip.sourceMetadata === null || typeof trip.sourceMetadata !== "object" || Array.isArray(trip.sourceMetadata))) fail("sourceMetadata");
+  for (const key of ["departures", "itinerary"]) {
+    if (!owns(trip, key)) continue;
+    if (!Array.isArray(trip[key])) fail(key);
+    const dates = new Set<string>();
+    for (const value of trip[key] as unknown[]) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) fail(key);
+      const row = record(value);
+      if (key === "departures") {
+        const date = dateKey(row.startDate);
+        if (!date || dates.has(date)) fail("departures.startDate");
+        dates.add(date);
+        if (!["OPEN", "ALMOST_FULL", "SOLD_OUT", "PAUSED", "CANCELLED", "DEPARTED"].includes(text(row.status).toUpperCase())) fail("departures.status");
+        for (const fare of ["price", "childPrice", "infantPrice"]) {
+          if (owns(row, fare) && row[fare] !== null && (numberOrNull(row[fare]) === null || Number(row[fare]) < 0)) fail(`departures.${fare}`);
+        }
+        if (owns(row, "seatsLeft") && row.seatsLeft !== null && (!Number.isInteger(row.seatsLeft) || Number(row.seatsLeft) < 0)) fail("departures.seatsLeft");
+      } else {
+        for (const field of ["title", "description", "accommodation", "image"]) {
+          if (owns(row, field) && row[field] !== null && typeof row[field] !== "string") fail(`itinerary.${field}`);
+        }
+        if (owns(row, "meals") && (!Array.isArray(row.meals) || !(row.meals as unknown[]).every(item => typeof item === "string"))) fail("itinerary.meals");
+      }
+    }
+  }
+  const metadata = record(trip.sourceMetadata);
+  for (const key of ["price_groups", "hotel_profiles", "hotel_links"]) {
+    if (owns(metadata, key) && (!Array.isArray(metadata[key]) || !(metadata[key] as unknown[]).every(item => item && typeof item === "object" && !Array.isArray(item)))) fail(`sourceMetadata.${key}`);
+  }
+  if (owns(metadata, "age_rules") && (!metadata.age_rules || typeof metadata.age_rules !== "object" || Array.isArray(metadata.age_rules))) fail("sourceMetadata.age_rules");
+  const manual = record(record(metadata.canonicalExtraPatch).values);
+  for (const [key, value] of Object.entries(manual)) {
+    if (["aliases", "destinations", "review_reasons"].includes(key) && (!Array.isArray(value) || !value.every(item => typeof item === "string"))) fail(`canonicalExtraPatch.${key}`);
+    if (["customer_visible", "needs_human_review"].includes(key) && typeof value !== "boolean") fail(`canonicalExtraPatch.${key}`);
+    if (key === "transport_type" && typeof value !== "string") fail(`canonicalExtraPatch.${key}`);
+    if (key === "booking_terms" && (!value || typeof value !== "object" || Array.isArray(value) || !Object.values(value).every(item => typeof item === "string"))) fail(`canonicalExtraPatch.${key}`);
+    if (["discounts", "extra_fees", "room_prices", "answer_hints"].includes(key) && (!Array.isArray(value) || !value.every(item => item && typeof item === "object" && !Array.isArray(item)))) fail(`canonicalExtraPatch.${key}`);
+  }
+}
+
 function record(value: unknown): UnknownRecord {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as UnknownRecord
@@ -32,8 +104,12 @@ function strings(value: unknown): string[] {
 
 function dateKey(value: unknown): string {
   const raw = text(value);
-  const match = raw.match(/^\d{4}-\d{2}-\d{2}/);
-  return match?.[0] || "";
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$/);
+  if (!match) return "";
+  const parsed = new Date(`${match[1]}T00:00:00.000Z`);
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== match[1]) return "";
+  if (raw.includes("T") && !Number.isFinite(Date.parse(raw))) return "";
+  return match[1];
 }
 
 function durationText(days: unknown, nights: unknown): string {
@@ -59,9 +135,15 @@ export function websiteTripToCanonicalFields(input: unknown): {
   sourceTripId: string;
   fields: TripMutationFields;
 } {
+  validateWebsiteTripPayload(input);
   const trip = record(input);
-  const sourceTripId = text(trip.sourceTripId);
-  if (!sourceTripId) throw new Error("Website trip is missing sourceTripId");
+  if (owns(trip, "durationDays") !== owns(trip, "durationNights")) throw new WebsiteTripPayloadError("Both duration fields are required without a previous snapshot");
+  return mapWebsiteTrip(input);
+}
+
+function mapWebsiteTrip(input: unknown): { sourceTripId: string; fields: TripMutationFields } {
+  const trip = record(input);
+  const sourceTripId = websiteTripSourceId(trip);
 
   const metadata = record(trip.sourceMetadata);
   const priorSource = record(metadata.connectedSource);
@@ -84,10 +166,10 @@ export function websiteTripToCanonicalFields(input: unknown): {
       },
       ...(text(day.image) ? { photo: text(day.image) } : {}),
     }))
-    .filter(day => day.title || day.description || day.hotel);
+    .filter(day => day.title || day.description || day.hotel || "photo" in day || Object.values(day.meals).some(Boolean));
 
   const metadataPriceGroups = Array.isArray(metadata.price_groups) ? metadata.price_groups : [];
-  const priceGroups = metadataPriceGroups.length
+  const priceGroups = owns(metadata, "price_groups")
     ? metadataPriceGroups
     : Array.isArray(priorExtra.price_groups) ? priorExtra.price_groups : [];
   const simpleDepartureGroups = departures
@@ -123,24 +205,22 @@ export function websiteTripToCanonicalFields(input: unknown): {
       .filter((value): value is NonNullable<typeof value> => Boolean(value)),
     // A source with hotel/package pricing is richer than the website's simple
     // scalar editor. Preserve it; otherwise capture per-date website prices.
-    price_groups: priceGroups.length ? priceGroups : simpleDepartureGroups,
+    price_groups: owns(metadata, "price_groups") || priceGroups.length ? priceGroups : simpleDepartureGroups,
     ...(Array.isArray(metadata.hotel_profiles) ? { hotel_profiles: metadata.hotel_profiles } : {}),
     ...(Array.isArray(metadata.hotel_links) ? { hotel_links: metadata.hotel_links } : {}),
-    ...(record(metadata.age_rules).adult || record(metadata.age_rules).child || record(metadata.age_rules).infant
+    ...(owns(metadata, "age_rules")
       ? { age_rules: record(metadata.age_rules) }
       : {}),
   };
 
-  return {
-    sourceTripId,
-    fields: {
+  const fields: TripMutationFields = {
       operator_name: text(priorSource.operator_name) || "UUDAM TRAVEL AGENCY",
       route_name: text(trip.title),
       duration_text: durationText(trip.durationDays, trip.durationNights),
       adult_price: fareOrNull(trip.price, trip.currency),
       child_price: fareOrNull(trip.childPrice, trip.currency),
       infant_price: fareOrNull(trip.infantPrice, trip.currency),
-      currency: text(trip.currency) || "MNT",
+      currency: text(trip.currency).toUpperCase() || "MNT",
       departure_dates: uniqueDates,
       has_food: typeof trip.foodIncluded === "boolean" ? trip.foodIncluded : null,
       status: trip.isPublished === false ? "draft" : "active",
@@ -148,29 +228,79 @@ export function websiteTripToCanonicalFields(input: unknown): {
       hotel: text(trip.hotel),
       photo_urls: photos,
       extra,
-    },
   };
+  // Missing properties are not removals. The website can send only the fields
+  // changed in this save, including an explicit empty string/list or false.
+  const direct: Record<string, string[]> = {
+    route_name: ["title"], duration_text: ["durationDays", "durationNights"],
+    adult_price: ["price"], child_price: ["childPrice"], infant_price: ["infantPrice"],
+    currency: ["currency"], departure_dates: ["departures"], has_food: ["foodIncluded"],
+    status: ["isPublished"], notes: ["description"], hotel: ["hotel"], photo_urls: ["image", "extraImages"],
+  };
+  for (const [key, sources] of Object.entries(direct)) {
+    if (!sources.some(source => owns(trip, source))) delete (fields as UnknownRecord)[key];
+  }
+  const structured: Record<string, string> = {
+    website_summary: "summary", included_items: "included", excluded_items: "excluded", important_notes: "importantNotes",
+    departure_rule: "departureRule", itinerary_days: "itinerary", customer_visible: "isPublished", website_departure_availability: "departures",
+  };
+  for (const [key, source] of Object.entries(structured)) {
+    if (!owns(trip, source)) delete (extra as UnknownRecord)[key];
+  }
+  if (!owns(trip, "departures") && !owns(metadata, "price_groups")) delete (extra as UnknownRecord).price_groups;
+  if (!Object.keys(extra).length) delete fields.extra;
+  return { sourceTripId, fields };
 }
 
 /** A reverse sync is a three-way edit, never a replacement of a stale snapshot. */
 export function websiteTripPatch(input: unknown, previousInput: unknown, canonicalInput: unknown): TripMutationFields {
+  validateWebsiteTripPayload(input);
   const canonical = record(canonicalInput);
   const canonicalExtra = record(canonical.extra);
-  const next = websiteTripToCanonicalFields(input).fields;
+  const incoming = record(input);
+  const sourceTripId = websiteTripSourceId(input);
+  if (text(canonical.id) && text(canonical.id) !== sourceTripId) throw new WebsiteTripPayloadError("Canonical trip identity does not match");
   const previous = record(previousInput);
-  const before = Object.keys(previous).length ? websiteTripToCanonicalFields(previous).fields : null;
-  const baselineSource = record(record(record(input).sourceMetadata).connectedSource);
+  if (Object.keys(previous).length && websiteTripSourceId(previous) !== sourceTripId) throw new WebsiteTripPayloadError("Previous trip identity does not match");
+  const baselineSource = record(record(incoming.sourceMetadata).connectedSource);
+  if (text(baselineSource.id) && text(baselineSource.id) !== sourceTripId) throw new WebsiteTripPayloadError("Source snapshot identity does not match");
+  // Coupled controls (cover/gallery, day/night counts and currency/fares) need
+  // the unchanged half from the saved website snapshot, not an invented default.
+  const currentDuration = duration(text(canonical.duration_text));
+  const nextInput = {
+    currency: canonical.currency,
+    durationDays: currentDuration.days,
+    durationNights: currentDuration.nights,
+    ...previous,
+    ...incoming,
+    sourceMetadata: { ...record(previous.sourceMetadata), ...record(incoming.sourceMetadata) },
+  };
+  if (!owns(incoming, "durationDays") && !owns(incoming, "durationNights") && !owns(previous, "durationDays") && !owns(previous, "durationNights")) {
+    delete (nextInput as UnknownRecord).durationDays;
+    delete (nextInput as UnknownRecord).durationNights;
+  }
+  if (owns(incoming, "durationDays") !== owns(incoming, "durationNights") && !text(canonical.duration_text) && !owns(previous, "durationDays") && !owns(previous, "durationNights")) {
+    throw new WebsiteTripPayloadError("The unchanged duration field is unavailable");
+  }
+  const currentPhotos = strings(canonical.photo_urls);
+  if (owns(incoming, "image") && !owns(incoming, "extraImages") && !owns(previous, "extraImages")) (nextInput as UnknownRecord).extraImages = currentPhotos.slice(1);
+  if (owns(incoming, "extraImages") && !owns(incoming, "image") && !owns(previous, "image")) (nextInput as UnknownRecord).image = currentPhotos[0] || "";
+  const next = mapWebsiteTrip(nextInput).fields;
+  if (!owns(incoming, "currency") && !owns(previous, "currency")) delete next.currency;
+  const before = Object.keys(previous).length ? mapWebsiteTrip(previous).fields : null;
   const baselineExtra = record(baselineSource.extra);
   const conflicts = Array.isArray(canonicalExtra.shared_conflicts) ? [...canonicalExtra.shared_conflicts] : [];
   const fields: TripMutationFields = {};
   const extra: UnknownRecord = {};
   const accept = (path: string, current: unknown, base: unknown, incoming: unknown, set: () => void) => {
-    if (sameParityValue(current, incoming) || sameParityValue(current, base)) { set(); return; }
+    if (sameParityValue(current, incoming)) return;
+    if (sameParityValue(current, base)) { set(); return; }
     const conflict = { field: path, chatbot: current ?? null, website: incoming ?? null, base: base ?? null };
     if (!conflicts.some((entry) => sameParityValue(entry, conflict))) conflicts.push(conflict);
   };
   for (const [key, value] of Object.entries(next)) {
     if (key === "extra" || key === "operator_name") continue;
+    if (sameParityValue(canonical[key], value)) continue;
     if (key === "status" && !["draft", "archived"].includes(String(canonical.status))) continue;
     if (before && sameParityValue(value, before[key as keyof TripMutationFields])) continue;
     const baseValue = before ? before[key as keyof TripMutationFields] : baselineSource[key];
@@ -182,7 +312,7 @@ export function websiteTripPatch(input: unknown, previousInput: unknown, canonic
   }
   for (const [key, value] of Object.entries(next.extra || {})) {
     if (before && sameParityValue(value, before.extra?.[key])) continue;
-    const base = ["price_groups", "age_rules"].includes(key) ? baselineExtra[key] : before?.extra?.[key] ?? baselineExtra[key];
+    const base = before?.extra && owns(before.extra, key) ? before.extra[key] : baselineExtra[key];
     if (key === "itinerary_days" && before && Array.isArray(value)) {
       const facts = (raw: unknown) => (Array.isArray(raw) ? raw : []).map((item, index) => {
         const day = record(item), meals = record(day.meals);
@@ -219,7 +349,10 @@ export function websiteTripPatch(input: unknown, previousInput: unknown, canonic
     if (!["aliases", "booking_terms", "discounts", "extra_fees", "room_prices", "answer_hints", "review_reasons", "customer_visible", "needs_human_review", "transport_type", "destinations"].includes(key)) continue;
     accept(`extra.${key}`, canonicalExtra[key], manualBase[key], value, () => { extra[key] = value; });
   }
-  if (conflicts.length) extra.shared_conflicts = conflicts;
+  if (!sameParityValue(conflicts, canonicalExtra.shared_conflicts || [])) extra.shared_conflicts = conflicts;
+  for (const [key, value] of Object.entries(extra)) {
+    if (sameParityValue(value, canonicalExtra[key])) delete extra[key];
+  }
   if (Object.keys(extra).length) fields.extra = extra;
   return fields;
 }

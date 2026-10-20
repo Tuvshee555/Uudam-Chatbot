@@ -31,7 +31,7 @@ test("both independently changed descriptions remain available for review", () =
 });
 test("retrying an accepted website edit is idempotent", () => {
   const patch = websiteTripPatch({ ...website, description: "Edited" }, website, { ...canonical(), notes: "Edited" });
-  assert.equal(patch.notes, "Edited");
+  assert.deepEqual(patch, {});
   assert.equal(patch.extra?.shared_conflicts, undefined);
 });
 

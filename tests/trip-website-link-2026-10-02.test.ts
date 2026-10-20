@@ -20,12 +20,12 @@ function trip(fields: Partial<TravelTrip>): TravelTrip {
   };
 }
 
-test("getTripWebsiteLink only returns a link for a real, published website slug", () => {
+test("getTripWebsiteLink returns the persisted published route, including generated slugs", () => {
   assert.equal(getTripWebsiteLink(trip({})), null);
   assert.equal(
     getTripWebsiteLink(trip({ extra: { website_slug: "trip-0123456789abcdef0123", website_published: true } })),
-    null,
-    "a hash-fallback slug (never renamed by staff) is not a real link yet",
+    "https://uudamtravel.mn/trips/trip-0123456789abcdef0123",
+    "the website serves a published trip under its generated slug too",
   );
   assert.equal(
     getTripWebsiteLink(trip({ extra: { website_slug: "velmor-kardan-ayalal", website_published: false } })),

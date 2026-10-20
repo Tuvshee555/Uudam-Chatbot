@@ -44,6 +44,7 @@ import { isKnownGreetingPhrase } from "./greetingPhrases";
 import { SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
 import { buildTripRequest, mergeTripSelection, type TripSelection } from "./tripRequest";
 import { getTripSelection, setTripSelection } from "./tripSelectionState";
+import { websiteTripLinksInText } from "./bookingWebsite";
 
 /**
  * Did the customer tap one of OUR quick-reply buttons?
@@ -200,8 +201,21 @@ export async function routeFastPathText(input: {
     await clearClarificationState(senderId);
     const selection = mergeTripSelection(trip.id, buildTripRequest(text, trips, understanding, now), previousSelection);
     await setTripSelection(senderId, selection);
-    return { matchText: joinContextAndTurn(trip.route_name, text), scopedClarify: null, chosenTripId: trip.id, selection };
+    return { matchText: joinContextAndTurn(trip.route_name, websiteTripLinksInText(text).textWithoutUrls), scopedClarify: null, chosenTripId: trip.id, selection };
   };
+  // A shared website page identifies its trip before model interpretation,
+  // old conversation context or a pending list can replace that identity.
+  if (websiteTripLinksInText(text).slugs.length > 0) {
+    const linked = resolve(text, trips);
+    if (linked.status === "verified") return chose(linked.trip);
+    await setTripSelection(senderId, null);
+    await clearClarificationState(senderId);
+    if (linked.status === "ambiguous") {
+      await setClarificationState(senderId, linked.candidates.map((trip) => trip.id));
+      return { matchText: text, scopedClarify: linked.candidates };
+    }
+    return { matchText: markNoTrip(text), scopedClarify: null };
+  }
   const tappedOwnButton = isOwnButtonLabel(text);
   const choice = parseNumberedChoice(text);
 

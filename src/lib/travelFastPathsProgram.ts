@@ -401,7 +401,7 @@ export function buildTripProgramReply(
     /зураг|zurag|photo|picture|пост(?:ер)?/i.test(intentText) &&
     !/хөтөлбөр|hutulbur|program|itinerary|өдөр\s*өдөр|day\s*by\s*day/i.test(intentText);
   if (wantsPicturesOnly) {
-    if (brochure && websiteLink) {
+    if (websiteLink) {
       return {
         reply: `✈️ ${best.route_name}${summaryBlock}\n\nАяллын дэлгэрэнгүй мэдээлэл, зургийг эндээс харна уу 👉 ${websiteLink}`,
         trip: best,
@@ -442,7 +442,7 @@ export function buildTripProgramReply(
     };
   }
 
-  if (brochure && websiteLink) {
+  if (websiteLink) {
     return {
       reply: `✈️ ${best.route_name}${summaryBlock}\n\nАяллын дэлгэрэнгүй хөтөлбөр, үнэ, зургийг эндээс харна уу 👉 ${websiteLink}`,
       trip: best,

@@ -10,6 +10,7 @@ import { repairBirthYearAgeBands } from "./birthYearAgeBands";
 import { getPosterPdfPublicUrl, isUsableStoredPdfUrl } from "./poster/pdfUrl";
 import type { TravelTrip } from "./travelOps";
 import { isNoTripText } from "./customerTurn";
+import { publishedTripWebsiteLink, storedWebsiteTripSlug, tripsForWebsiteReference, websiteTripLinksInText } from "./bookingWebsite";
 
 /**
  * Returns a copy of the trip with past departure dates stripped, so every
@@ -1001,8 +1002,24 @@ export function resolveTripFromUserMessage(
   trips: TravelTrip[],
   options: { allowLooseFallback?: boolean } & TripMatchOptions = {},
 ): TripResolution {
+  if (isNoTripText(rawText)) return { status: "not_found", trip: null, candidates: [] };
+  const website = websiteTripLinksInText(rawText);
+  if (website.slugs.length > 0) {
+    const linkedTrips: TravelTrip[] = [];
+    for (const slug of website.slugs) {
+      const matches = tripsForWebsiteReference(slug, trips).filter((trip) =>
+        canMatchTripStatus(trip, options) && publishedTripWebsiteLink(trip)
+        && storedWebsiteTripSlug(trip)?.toLowerCase() === slug.toLowerCase());
+      // A missing or hidden page must not be reinterpreted as a similarly named trip.
+      if (matches.length === 0) return { status: "not_found", trip: null, candidates: [] };
+      for (const trip of matches) if (!linkedTrips.some((linked) => linked.id === trip.id)) linkedTrips.push(trip);
+    }
+    return linkedTrips.length === 1
+      ? { status: "verified", trip: linkedTrips[0], candidates: [] }
+      : { status: "ambiguous", trip: null, candidates: linkedTrips.slice(0, MAX_ROUTE_CANDIDATES) };
+  }
   // "Амралтын өдрүүдээр" means "at the weekend", not a school-holiday trip.
-  const text = rawText.replace(/амралтын\s+өдр\S*/giu, " ");
+  const text = website.textWithoutUrls.replace(/амралтын\s+өдр\S*/giu, " ");
   const allowLooseFallback = options.allowLooseFallback === true;
   const matches = findTripMatches(text, trips, options);
   if (!matches.length) {
@@ -1887,23 +1904,13 @@ export function getTripBrochureAsset(trip: TravelTrip): ProgramAsset | null {
   return null;
 }
 
-const WEBSITE_BASE_URL = "https://uudamtravel.mn";
-
 /**
- * The live booking-website page for this trip, instead of the PDF — the
- * owner's call (2026-10-02): a link stays current automatically (prices,
- * dates, photos) while a sent PDF is frozen the moment it is sent. Only
- * returned when the website actually has this trip published under a real
- * slug (never the hash fallback the sync writes before staff rename it, and
- * never when the website has since unpublished it) — a customer gets no link
- * sooner than a link that 404s.
+ * The persisted, published website page stays current after a trip edit.
+ * A generated slug is valid too: the website routes by its saved slug,
+ * regardless of whether staff have renamed it.
  */
 export function getTripWebsiteLink(trip: TravelTrip): string | null {
-  const slug = getTripLooseField(trip, "website_slug");
-  const published = getTripLooseField(trip, "website_published");
-  if (typeof slug !== "string" || !slug.trim() || published === false) return null;
-  if (/^trip-[0-9a-f]{20}$/.test(slug.trim())) return null;
-  return `${WEBSITE_BASE_URL}/trips/${slug.trim()}`;
+  return publishedTripWebsiteLink(trip);
 }
 
 export function isPosterLinkedTrip(trip: TravelTrip | null | undefined): boolean {

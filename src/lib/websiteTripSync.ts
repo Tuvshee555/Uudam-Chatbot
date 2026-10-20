@@ -12,6 +12,7 @@ import { sameDatabase, websiteProjectionTransaction } from "./websiteSyncTransac
 import { applyWebsiteDetailsPatch, mergeWebsiteContent, websiteDetailsSnapshot } from "./websiteTripDetails";
 import { sameParityValue } from "./tripWebsiteParityValue";
 import { departureSeatsAfterTripEdit } from "./departureSeats";
+import type { WebsiteSyncRow } from "./websiteSyncStatus";
 
 let pool: Pool | undefined;
 function bookingPool() {
@@ -428,8 +429,12 @@ export async function setDepartureSeatState(sourceTripId: string, date: string, 
 }
 
 export async function flushWebsiteSync(tripId?: string, limit = 5) {
+  // A deployment without the optional website connection keeps its durable
+  // events pending until configured; it must not turn them all into errors.
+  if (!process.env.BOOKING_DATABASE_URL) return { processed: 0 };
   await ensureConnectedTripSchema();
   let processed = 0;
+  const visited = new Set<string>();
   const deadline = Date.now() + 40000;
   for (let i = 0; i < limit; i++) {
     if (Date.now() >= deadline) break;
@@ -439,14 +444,18 @@ export async function flushWebsiteSync(tripId?: string, limit = 5) {
       try {
         const candidate = (await sourceDb.query(`SELECT trip_id FROM trip_website_sync
           WHERE revision > synced_revision AND ($1::text IS NULL OR trip_id=$1)
-          ORDER BY updated_at LIMIT 1`, [tripId || null])).rows[0];
+            AND NOT(trip_id=ANY($2::text[]))
+          ORDER BY updated_at,trip_id LIMIT 1`, [tripId || null, [...visited]])).rows[0];
         if (!candidate) { await sourceDb.query("COMMIT"); return null; }
+        // One attempt per trip per batch: a busy or failing oldest trip must
+        // leave the remaining budget available to unrelated queued changes.
+        visited.add(candidate.trip_id);
         // Match the canonical save lock order before locking the delivery row.
         const locked = (await sourceDb.query("SELECT pg_try_advisory_xact_lock(hashtext($1)) AS locked", [candidate.trip_id])).rows[0]?.locked;
-        if (!locked) { await sourceDb.query("ROLLBACK"); return null; }
+        if (!locked) { await sourceDb.query("ROLLBACK"); return false; }
         job = (await sourceDb.query(`SELECT * FROM trip_website_sync
           WHERE trip_id=$1 AND revision>synced_revision FOR UPDATE SKIP LOCKED`, [candidate.trip_id])).rows[0];
-        if (!job) { await sourceDb.query("COMMIT"); return null; }
+        if (!job) { await sourceDb.query("COMMIT"); return false; }
         const sourceTripId = job.trip_id;
         const source = (await sourceDb.query(`SELECT * FROM travel_trip_entries WHERE id=$1`, [job.trip_id])).rows[0] as TravelTrip | undefined;
         const sharedDatabase = sameDatabase(getEnv().neonDatabaseUrl, process.env.BOOKING_DATABASE_URL);
@@ -470,8 +479,11 @@ export async function flushWebsiteSync(tripId?: string, limit = 5) {
         return true;
       } catch (error) {
         await sourceDb.query("ROLLBACK");
-        if (job) await queryNeon(`UPDATE trip_website_sync SET attempts=attempts+1,last_error=$2,updated_at=NOW() WHERE trip_id=$1`,
-          [job.trip_id, error instanceof Error ? error.message.replace(/postgres(?:ql)?:\/\/\S+/g, "[database]").slice(0, 300) : "Website sync failed"]);
+        // Rollback releases the row/advisory locks. Another save or worker may
+        // already have replaced or delivered this revision before we log its failure.
+        if (job) await queryNeon(`UPDATE trip_website_sync SET attempts=attempts+1,last_error=$2,updated_at=NOW()
+          WHERE trip_id=$1 AND revision=$3 AND revision>synced_revision`,
+          [job.trip_id, error instanceof Error ? error.message.replace(/postgres(?:ql)?:\/\/\S+/g, "[database]").slice(0, 300) : "Website sync failed", job.revision]);
         return false;
       }
     });
@@ -482,11 +494,16 @@ export async function flushWebsiteSync(tripId?: string, limit = 5) {
 }
 
 export async function websiteSyncStatus() {
-  return (await queryNeon(`SELECT s.trip_id,s.revision=s.synced_revision AS synced,s.last_error,
-      s.website_trip_id,s.website_slug,s.synced_at,s.content_conflict
+  const result = await queryNeon<WebsiteSyncRow>(`SELECT s.trip_id,t.route_name AS trip_name,t.status AS trip_status,
+      s.revision=s.synced_revision AS synced,s.last_error,s.attempts,s.updated_at,
+      s.website_trip_id,s.website_slug,s.synced_at,s.content_conflict,
+      CASE WHEN jsonb_typeof(t.extra->'shared_conflicts')='array'
+        THEN jsonb_array_length(t.extra->'shared_conflicts') ELSE 0 END AS shared_conflict_count
     FROM trip_website_sync s
     LEFT JOIN travel_trip_entries t ON t.id=s.trip_id
     WHERE t.id IS NOT NULL OR s.last_error IS NOT NULL OR s.revision > s.synced_revision OR s.content_conflict
-    ORDER BY s.updated_at DESC`))?.rows || [];
+    ORDER BY (s.revision > s.synced_revision) DESC,s.content_conflict DESC,s.updated_at DESC`);
+  if (!result) throw new Error("Website sync status unavailable");
+  return result.rows;
 }
 export async function closeBookingPool() { await pool?.end(); pool = undefined; }

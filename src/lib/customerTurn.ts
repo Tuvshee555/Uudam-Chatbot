@@ -17,6 +17,7 @@
  */
 
 import type { TravelTrip } from "./travelTypes";
+import { websiteTripLinksInText } from "./bookingWebsite";
 
 /** U+2029 PARAGRAPH SEPARATOR — never typed by customers; whitespace to every matcher. */
 export const CUSTOMER_TURN_MARK = " ";
@@ -83,7 +84,7 @@ export function stripTripNamesForIntent(text: string, trips: TravelTrip[]): stri
   const names = Array.from(new Set(trips.map((trip) => trip.route_name).filter(Boolean)))
     .sort((a, b) => b.length - a.length);
   const looseNames = names.map(looseNorm);
-  return text
+  return websiteTripLinksInText(text).textWithoutUrls
     .split("\n")
     .map((line) => {
       const button = NUMBERED_BUTTON_LINE.exec(line);

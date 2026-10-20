@@ -7,6 +7,7 @@ import { STATUS_TONE, formatTime } from "@/lib/adminUtils";
 import { getPosterBrochureHref } from "@/lib/poster/pdfUrl";
 import { blockingGaps, findTripGaps, tripCompletenessInput, type TripGap } from "@/lib/tripCompleteness";
 import { WebsiteSyncStatus } from "./WebsiteSyncStatus";
+import { publishedTripWebsiteLink } from "@/lib/bookingWebsite";
 
 export function TripsTab({
   apiFetch,
@@ -54,17 +55,17 @@ export function TripsTab({
   const [pdfProgress, setPdfProgress] = useState("");
   const toast = useToast();
 
-  const tripsWithoutPdf = useMemo(
-    () => trips.filter((t) => !tripHasPdf(t)),
+  const tripsWithoutProgram = useMemo(
+    () => trips.filter((t) => !tripHasProgram(t)),
     [trips],
   );
-  const tripsWithPdf = useMemo(
-    () => trips.filter((t) => tripHasPdf(t)),
+  const tripsWithProgram = useMemo(
+    () => trips.filter((t) => tripHasProgram(t)),
     [trips],
   );
   const visibleTrips =
-    brochureFilter === "without" ? tripsWithoutPdf :
-    brochureFilter === "with" ? tripsWithPdf :
+    brochureFilter === "without" ? tripsWithoutProgram :
+    brochureFilter === "with" ? tripsWithProgram :
     trips;
 
   /**
@@ -236,7 +237,15 @@ export function TripsTab({
         }
       />
 
-      <WebsiteSyncStatus apiFetch={apiFetch} />
+      <WebsiteSyncStatus apiFetch={apiFetch} onReviewTrip={async (tripId) => {
+        try {
+          const trip = (await onFetchAllTrips()).find(row => row.id === tripId);
+          if (!trip) throw new Error("missing_trip");
+          onEdit(trip);
+        } catch {
+          toast.error("Аяллын мэдээллийг нээж чадсангүй. Дахин ачаалаад оролдоорой.");
+        }
+      }} />
       <IncompleteTripsBanner trips={trips} onEdit={onEdit} onFixPhotosOnPoster={onFixPhotosOnPoster} />
       <Card className="p-3.5">
         <div className="flex flex-col gap-2">
@@ -269,8 +278,8 @@ export function TripsTab({
               {(
                 [
                   { key: "all", label: "Бүгд", count: trips.length },
-                  { key: "with", label: "PDF-тэй", count: tripsWithPdf.length },
-                  { key: "without", label: "PDFгүй", count: tripsWithoutPdf.length },
+                  { key: "with", label: "Хөтөлбөртэй", count: tripsWithProgram.length },
+                  { key: "without", label: "Хөтөлбөргүй", count: tripsWithoutProgram.length },
                 ] as const
               ).map((opt) => (
                 <button
@@ -325,11 +334,11 @@ export function TripsTab({
         </div>
       </Card>
 
-      {tripsWithoutPdf.length > 0 && brochureFilter === "all" && (
+      {tripsWithoutProgram.length > 0 && brochureFilter === "all" && (
         <div className="flex items-center gap-2 rounded-xl border border-danger/30 bg-danger-soft px-3.5 py-2.5 text-sm text-danger">
           <Icons.alert size={16} className="shrink-0" />
           <span>
-            {tripsWithoutPdf.length} аялалд автоматаар илгээх PDF алга байна.{" "}
+            {tripsWithoutProgram.length} аялалд илгээх вэб хуудас эсвэл PDF хөтөлбөр алга байна.{" "}
             <button
               type="button"
               onClick={() => setBrochureFilter("without")}
@@ -370,6 +379,10 @@ function tripHasPdf(trip: TravelTrip): boolean {
     (typeof extra.brochure_pdf_url === "string" && extra.brochure_pdf_url.startsWith("https://")) ||
     (typeof extra.source_file_attachment_id === "string" && extra.source_file_attachment_id.trim().length > 0)
   );
+}
+
+function tripHasProgram(trip: TravelTrip): boolean {
+  return Boolean(publishedTripWebsiteLink(trip)) || tripHasPdf(trip);
 }
 
 function isPosterSyncedTrip(trip: TravelTrip): boolean {
@@ -485,7 +498,7 @@ function archivedReasonHint(trip: TravelTrip): string | null {
 
 /** Same rules the trip editor blocks on, so both screens name gaps identically. */
 function getTripGaps(trip: TravelTrip): TripGap[] {
-  return findTripGaps(tripCompletenessInput(trip, { hasBrochure: tripHasPdf(trip) }));
+  return findTripGaps(tripCompletenessInput(trip, { hasBrochure: tripHasProgram(trip) }));
 }
 
 /**
@@ -778,6 +791,7 @@ function TripCard({
   const isPosterSynced = isPosterSyncedTrip(trip);
   const connection = tripConnectionDetails(trip);
   const hasPdf = tripHasPdf(trip);
+  const websiteLink = publishedTripWebsiteLink(trip);
   const facts: string[] = [];
   const marketingBadge = (trip.extra as Record<string, unknown> | undefined)?.marketing_badge as
     | Record<string, unknown>
@@ -838,9 +852,9 @@ function TripCard({
               )}
               {isHidden && <Badge tone="neutral">Нуусан</Badge>}
               {saleEnabled && <Badge tone="warning">{saleLabel}</Badge>}
-              {isPosterSynced && <Badge tone="brand">Poster sync</Badge>}
-              <Badge tone={hasPdf ? "success" : "danger"}>
-                {hasPdf ? "PDF бэлэн" : "PDF дутуу"}
+              {isPosterSynced && <Badge tone="brand">Постертой холбосон</Badge>}
+              <Badge tone={websiteLink || hasPdf ? "success" : "danger"}>
+                {websiteLink ? "Вэб хуудас бэлэн" : hasPdf ? "PDF бэлэн" : "Хөтөлбөр дутуу"}
               </Badge>
               <Badge tone={STATUS_TONE[trip.status]}>
                 {STATUS_LABELS[trip.status]}
