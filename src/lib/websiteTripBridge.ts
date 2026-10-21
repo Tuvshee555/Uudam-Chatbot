@@ -1,6 +1,8 @@
 import type { TripMutationFields } from "./travelTypes";
 import { sameParityValue } from "./tripWebsiteParityValue";
 import { duration } from "./connectedTripMapping";
+import { websiteDepartureDateKey } from "./websiteDepartureDate";
+import { currentWebsiteDepartureRows } from "./websiteDepartureRows";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -40,14 +42,12 @@ export function validateWebsiteTripPayload(input: unknown): void {
   for (const key of ["departures", "itinerary"]) {
     if (!owns(trip, key)) continue;
     if (!Array.isArray(trip[key])) fail(key);
-    const dates = new Set<string>();
     for (const value of trip[key] as unknown[]) {
       if (!value || typeof value !== "object" || Array.isArray(value)) fail(key);
       const row = record(value);
       if (key === "departures") {
         const date = dateKey(row.startDate);
-        if (!date || dates.has(date)) fail("departures.startDate");
-        dates.add(date);
+        if (!date) fail("departures.startDate");
         if (!["OPEN", "ALMOST_FULL", "SOLD_OUT", "PAUSED", "CANCELLED", "DEPARTED"].includes(text(row.status).toUpperCase())) fail("departures.status");
         for (const fare of ["price", "childPrice", "infantPrice"]) {
           if (owns(row, fare) && row[fare] !== null && (numberOrNull(row[fare]) === null || Number(row[fare]) < 0)) fail(`departures.${fare}`);
@@ -60,6 +60,7 @@ export function validateWebsiteTripPayload(input: unknown): void {
         if (owns(row, "meals") && (!Array.isArray(row.meals) || !(row.meals as unknown[]).every(item => typeof item === "string"))) fail("itinerary.meals");
       }
     }
+    if (key === "departures") canonicalDepartures(trip[key] as unknown[]);
   }
   const metadata = record(trip.sourceMetadata);
   for (const key of ["price_groups", "hotel_profiles", "hotel_links"]) {
@@ -103,13 +104,27 @@ function strings(value: unknown): string[] {
 }
 
 function dateKey(value: unknown): string {
-  const raw = text(value);
-  const match = raw.match(/^(\d{4}-\d{2}-\d{2})(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$/);
-  if (!match) return "";
-  const parsed = new Date(`${match[1]}T00:00:00.000Z`);
-  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== match[1]) return "";
-  if (raw.includes("T") && !Number.isFinite(Date.parse(raw))) return "";
-  return match[1];
+  return websiteDepartureDateKey(value);
+}
+
+/** Retained cancelled rows are history, not competing current departures. */
+function canonicalDepartures(values: unknown[]): UnknownRecord[] {
+  const byDay = new Map<string, UnknownRecord[]>();
+  for (const row of currentWebsiteDepartureRows(values.map(record))) {
+    const day = dateKey(row.startDate);
+    if (!day) throw new WebsiteTripPayloadError("Invalid website trip field: departures.startDate");
+    const group = byDay.get(day) || [];
+    group.push(row);
+    byDay.set(day, group);
+  }
+  return Array.from(byDay.values(), rows => {
+    if (rows.length === 1) return rows[0];
+    const current = rows.filter(row => !["CANCELLED", "DEPARTED"].includes(text(row.status).toUpperCase()));
+    const facts = (row: UnknownRecord) => ({ status: availabilityStatus(row.status), seatsLeft: numberOrNull(row.seatsLeft),
+      price: numberOrNull(row.price), childPrice: numberOrNull(row.childPrice), infantPrice: numberOrNull(row.infantPrice) });
+    if (current.length === 0 && rows.every(row => sameParityValue(facts(row), facts(rows[0])))) return rows[0];
+    throw new WebsiteTripPayloadError("Invalid website trip field: departures.startDate");
+  });
 }
 
 function durationText(days: unknown, nights: unknown): string {
@@ -148,7 +163,7 @@ function mapWebsiteTrip(input: unknown): { sourceTripId: string; fields: TripMut
   const metadata = record(trip.sourceMetadata);
   const priorSource = record(metadata.connectedSource);
   const priorExtra = record(priorSource.extra);
-  const departures = Array.isArray(trip.departures) ? trip.departures.map(record) : [];
+  const departures = Array.isArray(trip.departures) ? canonicalDepartures(trip.departures) : [];
   const dates = departures.map(departure => dateKey(departure.startDate)).filter(Boolean);
   const uniqueDates = [...new Set(dates)];
   const image = text(trip.image);

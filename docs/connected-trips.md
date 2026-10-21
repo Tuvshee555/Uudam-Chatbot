@@ -50,6 +50,14 @@ rewrite the canonical trip or enqueue another update. Invalid facts and
 mismatched snapshot identities are rejected before writes; temporary delivery
 failures return a retryable response.
 
+Departure timestamps use the website's business day in both directions. SQL
+timestamps without a timezone and API timestamps ending in `Z` represent the
+same UTC instant; explicit date-only values already name the departure day.
+Identical cancelled history rows can share a day without blocking a save. A
+single current departure takes precedence over cancelled history on that day;
+competing current records or conflicting historical facts require review.
+The original departure records and booking history are retained.
+
 Published trip pages can be shared in both directions, including their persisted
 generated slugs. The chatbot sends the current website page without requiring
 a PDF first. Pasted official detail URLs and the website's Messenger reference
@@ -105,3 +113,9 @@ resolve conflicts. Scalar fare
 and current-projection differences need date/hotel/age/availability review,
 not an automatic choice of either price. Production content, Messenger delivery
 and real submitted bookings/payments are not modified or exercised by this audit.
+
+Archived itinerary days are excluded, matching the website's API. Invalid
+website payloads appear in the report's `invalidPairs` list while valid pairs
+still finish comparison. The summary separates `linkedPairs`, `auditedPairs`
+and `invalidPairs`; invalid records cause a nonzero exit after the report is
+written. Database, schema and access failures still stop the audit.

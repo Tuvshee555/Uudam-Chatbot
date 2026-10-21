@@ -13,6 +13,8 @@ import { applyWebsiteDetailsPatch, mergeWebsiteContent, websiteDetailsSnapshot }
 import { sameParityValue } from "./tripWebsiteParityValue";
 import { departureSeatsAfterTripEdit } from "./departureSeats";
 import type { WebsiteSyncRow } from "./websiteSyncStatus";
+import { websiteDepartureDateKey } from "./websiteDepartureDate";
+import { currentWebsiteDepartureRows } from "./websiteDepartureRows";
 
 let pool: Pool | undefined;
 function bookingPool() {
@@ -34,7 +36,7 @@ export async function withWebsiteDepartureAvailability(trips: TravelTrip[]): Pro
       // No sourceMetadata here: it is ~15 KB per trip and the join repeats it on
       // every departure row (35 MB for 343 departures, 90 s). The trip rows
       // fetched below carry it once.
-      bookingPool().query(`SELECT t."sourceTripId", d."startDate", d.status, d."seatsLeft"
+      bookingPool().query<{ sourceTripId: string; startDate: string; status: string; seatsLeft: number | null }>(`SELECT t."sourceTripId", d."startDate"::text AS "startDate", d.status, d."seatsLeft"
         FROM "Trip" t JOIN "Departure" d ON d."tripId"=t.id
         WHERE t."sourceTripId"=ANY($1::text[])`, [trips.map((trip) => trip.id)]),
       // The bot sends the live website page instead of the PDF; the slug is
@@ -46,15 +48,18 @@ export async function withWebsiteDepartureAvailability(trips: TravelTrip[]): Pro
     const canonicalOffersByTrip = new Map<string, unknown>(
       slugResult.rows.map((row) => [row.sourceTripId as string, record(row.sourceMetadata).canonicalOffers]),
     );
-    const byTrip = new Map<string, Array<{ date: string; status: string; seatsLeft: number | null }>>();
+    const rowsByTrip = new Map<string, typeof departureResult.rows>();
     for (const row of departureResult.rows) {
-      const entries = byTrip.get(row.sourceTripId) || [];
-      entries.push(websiteAvailabilityForResync({
-        date: new Date(new Date(row.startDate).getTime() + 8 * 3600000).toISOString().slice(0, 10),
-        status: row.status, seatsLeft: row.seatsLeft,
-      }, canonicalOffersByTrip.get(row.sourceTripId)));
-      byTrip.set(row.sourceTripId, entries);
+      const entries = rowsByTrip.get(row.sourceTripId) || [];
+      entries.push(row);
+      rowsByTrip.set(row.sourceTripId, entries);
     }
+    const byTrip = new Map(Array.from(rowsByTrip, ([sourceTripId, rows]) => [sourceTripId,
+      currentWebsiteDepartureRows(rows).map(row => websiteAvailabilityForResync({
+        date: websiteDepartureDateKey(row.startDate),
+        status: row.status, seatsLeft: row.seatsLeft,
+      }, canonicalOffersByTrip.get(sourceTripId))),
+    ]));
     const slugByTrip = new Map<string, { slug: string; isPublished: boolean; details: Record<string, unknown> }>();
     for (const row of slugResult.rows) {
       if (typeof row.slug === "string" && row.slug.trim()) {
@@ -202,7 +207,8 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   const now = new Date();
   const previousSource = previousSnapshot.id ? { ...previousSnapshot, extra: record(previousSnapshot.extra), photo_urls: strings(previousSnapshot.photo_urls), departure_dates: strings(previousSnapshot.departure_dates) } as unknown as TravelTrip : null;
   const previousOffering = previousSource ? websiteTripPayload(previousSource, websiteDepartureSchedule(previousSource, now), now) : null;
-  const oldDepartures = (await client.query(`SELECT * FROM "Departure" WHERE "tripId"=$1`, [id])).rows;
+  const oldDepartures = (await client.query(`SELECT *, "startDate"::text AS "startDate" FROM "Departure" WHERE "tripId"=$1`, [id])).rows;
+  const currentDepartures = currentWebsiteDepartureRows(oldDepartures);
   const seatsChanged = !prior || (Object.keys(previousSnapshot).length > 0 &&
     (previousSnapshot.seats_total !== source.seats_total || previousSnapshot.seats_left !== source.seats_left));
   // A draft source can already have a website departure. Publishing it must
@@ -211,9 +217,9 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
     && previousSnapshot.status !== "active"
     && source.status === "active";
   const liveSource: TravelTrip = { ...source, extra: { ...source.extra,
-    website_departure_availability: oldDepartures.map(departure => {
+    website_departure_availability: currentDepartures.map(departure => {
       const availability = websiteAvailabilityForResync({
-        date: new Date(new Date(departure.startDate).getTime() + 8 * 3600000).toISOString().slice(0, 10),
+        date: websiteDepartureDateKey(departure.startDate),
         status: departure.status, seatsLeft: departure.seatsLeft,
       }, record(prior?.sourceMetadata).canonicalOffers);
       return { ...availability,
@@ -368,7 +374,7 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   }
   const keep: string[] = [];
   for (const dep of offering.departures) {
-    const old = oldDepartures.find(row => new Date(new Date(row.startDate).getTime() + 8 * 3600000).toISOString().slice(0, 10) === dep.start.slice(0, 10));
+    const old = currentDepartures.find(row => websiteDepartureDateKey(row.startDate) === dep.start.slice(0, 10));
     const depId = old?.id || randomUUID();
     keep.push(depId);
     const status = dep.status;

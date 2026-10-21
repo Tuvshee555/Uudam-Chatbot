@@ -4,11 +4,9 @@ import { parseEnv } from "node:util";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { Pool } from "pg";
-import { auditFaqParity, auditTripPair, hasParityValue, parityRecord } from "../src/lib/tripWebsiteParity";
-import { websiteDepartureSchedule } from "../src/lib/connectedTripMapping";
-import { websiteAvailabilityForResync, websiteTripPayload } from "../src/lib/websiteTripPayload";
-import type { TravelTrip } from "../src/lib/travelTypes";
+import { auditFaqParity, hasParityValue, parityRecord } from "../src/lib/tripWebsiteParity";
 import { auditTripCatalog } from "../src/lib/tripDataValidation";
+import { auditWebsiteParityPairs } from "./lib/websiteParityPairs";
 
 async function main() {
   const output = resolve(process.argv[2] || "tmp/website-parity-audit.json");
@@ -25,7 +23,7 @@ async function main() {
   try {
     await client.query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
     const website = (await client.query(`SELECT t.*,
-      COALESCE((SELECT jsonb_agg(to_jsonb(d) ORDER BY d."dayNumber") FROM "ItineraryDay" d WHERE d."tripId"=t.id),'[]'::jsonb) itinerary,
+      COALESCE((SELECT jsonb_agg(to_jsonb(d) ORDER BY d."dayNumber") FROM "ItineraryDay" d WHERE d."tripId"=t.id AND d."dayNumber">0),'[]'::jsonb) itinerary,
       COALESCE((SELECT jsonb_agg(to_jsonb(d) ORDER BY d."startDate", d.id) FROM "Departure" d WHERE d."tripId"=t.id),'[]'::jsonb) departures,
       COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.id) FROM "Category" c JOIN "_TripCategories" j ON j."A"=c.id WHERE j."B"=t.id),'[]'::jsonb) categories,
       COALESCE((SELECT jsonb_agg(to_jsonb(tag) ORDER BY tag.id) FROM "Tag" tag JOIN "_TripTags" j ON j."A"=tag.id WHERE j."B"=t.id),'[]'::jsonb) tags
@@ -65,26 +63,17 @@ async function main() {
     const posterById = new Map(posters.map(row => [row.id, parityRecord(row.data)]));
     const now = new Date();
     const factAudit = auditTripCatalog(canonical, now);
-    const pairs = website.filter(row => canonicalById.has(row.sourceTripId)).map(row => {
+    const { pairs, invalidPairs } = auditWebsiteParityPairs(website.filter(row => canonicalById.has(row.sourceTripId)).map(row => {
       const source = canonicalById.get(row.sourceTripId)!;
-      const liveSource = { ...source, extra: { ...parityRecord(source.extra), website_departure_availability: row.departures.map((departure: Record<string, unknown>) =>
-        websiteAvailabilityForResync({ date: new Date(new Date(String(departure.startDate)).getTime() + 8 * 3600000).toISOString().slice(0, 10), status: String(departure.status), seatsLeft: departure.seatsLeft as number | null }, parityRecord(row.sourceMetadata).canonicalOffers)) } } as TravelTrip;
-      const projected = websiteTripPayload(liveSource, websiteDepartureSchedule(liveSource, now), now);
-      const projectionFareDifferences = ["price", "childPrice", "infantPrice"].filter(key =>
-        (key === "price" ? projected.price ?? 0 : projected[key as "childPrice" | "infantPrice"]) !== row[key])
-        .map(key => ({ field: key, websiteValue: row[key], expectedProjection: projected[key as "price" | "childPrice" | "infantPrice"] ?? (key === "price" ? 0 : null) }));
-      return { ...auditTripPair(row, source, posterById.get(parityRecord(source.extra).poster_trip_id)),
-        projectionFareDifferences,
-        generatedDepartureCount: projected.departures.length, storedDepartureCount: row.departures.length,
-        publishedCanonicalVisibilityMatches: row.isPublished === (["active", "sold_out", "paused"].includes(source.status) && parityRecord(source.extra).customer_visible !== false),
-      };
-    });
+      return { website: row, source, poster: posterById.get(parityRecord(source.extra).poster_trip_id) };
+    }), now);
     const countKeys = (values: Record<string, unknown>[]) => {
       const counts: Record<string, number> = {};
       for (const value of values) for (const [key, item] of Object.entries(value)) if (hasParityValue(item)) counts[key] = (counts[key] || 0) + 1;
       return counts;
     };
-    const summary = { websiteTrips: website.length, canonicalTrips: canonical.length, posters: posters.length, linkedPairs: pairs.length,
+    const summary = { websiteTrips: website.length, canonicalTrips: canonical.length, posters: posters.length,
+      linkedPairs: pairs.length + invalidPairs.length, auditedPairs: pairs.length, invalidPairs: invalidPairs.length,
       unlinkedWebsiteTrips: website.filter(row => !canonicalById.has(row.sourceTripId)).map(row => ({ id: row.id, slug: row.slug })),
       canonicalWithoutWebsite: canonical.filter(row => !website.some(web => web.sourceTripId === row.id)).map(row => ({ id: row.id, title: row.route_name })),
       tripsWithContentDifferences: pairs.filter(pair => pair.differences.length).length,
@@ -115,7 +104,7 @@ async function main() {
         "Current projection fare differences can depend on dates, availability, hotel and age selection; they are review candidates, not confirmed wrong quotes.",
         "Website-only fields and canonical-only fields are inventories, not a claim that every field must have an identical widget.",
         "Poster-derived descriptions can match the website without being present in the chatbot's canonical answer context."],
-      summary, pairs, globalContent, factAudit, columns, sync,
+      summary, pairs, invalidPairs, globalContent, factAudit, columns, sync,
       inputFingerprint: createHash("sha256").update(JSON.stringify({ website, canonical, posters })).digest("hex") };
     await client.query("COMMIT");
   } catch (error) {
@@ -128,6 +117,7 @@ async function main() {
   await mkdir(dirname(output), { recursive: true });
   await writeFile(output, JSON.stringify(report, null, 2));
   console.log(JSON.stringify({ ...report.summary, output }, null, 2));
+  if (report.invalidPairs.length) process.exitCode = 1;
 }
 
 main().catch(error => { console.error(error instanceof Error ? error.message : "Audit failed"); process.exitCode = 1; });
