@@ -108,6 +108,10 @@ statuses are preserved. Staff website content-edit protections remain intact.
 - `npm run qa:accuracy -- <options>`: scores private captured outputs offline.
 
 See `chatbot-accuracy.md` for six-metric review and capture requirements.
+Both offline gates also run in `prebuild`, before Next.js compilation. A failed
+gate stops `npm run build`, so the deployment build checks these contracts
+before publishing. The live-catalog replay gate remains a separate read-only
+review because it needs private database access and human decision review.
 No automatic repair guesses an intended fare, year or inclusive age boundary.
 Staff must confirm ambiguous source facts. Model understanding, provider
 availability and external data can still fail; zero errors are not promised.
