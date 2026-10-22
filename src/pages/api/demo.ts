@@ -20,6 +20,8 @@ import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting
 import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
+import { decideTripAnswer } from "../../lib/tripAnswerDecision";
+import { setTripSelection } from "../../lib/tripSelectionState";
 import { verifyTripReply } from "../../lib/tripReplyVerification";
 import { presentAssistantReply } from "../../lib/chatbotReplyPolicy";
 import { recordReplyPresentation } from "../../lib/chatbotReplyTelemetry";
@@ -208,11 +210,10 @@ export default async function handler(
       const sessionId = `demo:${normalizedConversationId}`;
       let factualScope: TravelTrip[] | null = null;
       let currentSelection: TripSelection | null = null;
-      let approvedPlanReply: string | null = null;
       const checkedReply = (reply: string) => {
         const presented = presentAssistantReply({ reply, userText: normalizedText,
           hasPriorReply: history.some((message) => message.role === "assistant"), phoneAlreadyRequested });
-        return factualScope && reply !== approvedPlanReply
+        return factualScope
           ? verifyTripReply({ reply: presented, trips: factualScope, selection: currentSelection }) : presented;
       };
       const appendMessage = (...args: Parameters<typeof appendConversationMessage>) => {
@@ -483,16 +484,21 @@ export default async function handler(
         const route = await getRouted();
         const plan = await buildTripAnswerRuntime({ text: normalizedText, trips: await getTrips(), route });
         if (plan) {
-          const reply = enforceWebsiteForPayment(sanitizeAssistantReply(plan.reply));
-          approvedPlanReply = reply;
+          const decision = decideTripAnswer(plan, { userText: normalizedText,
+            hasPriorReply: history.some((message) => message.role === "assistant"), phoneAlreadyRequested });
+          const reply = decision.reply;
+          currentSelection = plan.selection;
           await appendMessage(sessionId, "user", normalizedText);
-          if (plan.status === "handoff") return returnHandoff();
+          recordCounter("demo.answer_plan_total", 1, { status: decision.outcome });
+          if (decision.outcome === "handoff") return returnHandoff();
+          await setTripSelection(sessionId, plan.selection);
           const media = buildDemoMedia({ reply, userText: normalizedText, trips: factualScope || [], explicitMediaUrls: plan.mediaUrls, brochureUrl: plan.brochureUrl });
-          await appendMessage(sessionId, "assistant", reply, imageAttachments(media.mediaUrls));
+          await appendConversationMessage(sessionId, "assistant", reply, imageAttachments(media.mediaUrls));
           await rememberTurn();
-          recordCounter("demo.answer_plan_total", 1, { status: plan.status });
           if (plan.missingTopics.length) recordCounter("demo.answer_plan_missing_topics_total", plan.missingTopics.length, {});
-          return res.status(200).json({ reply, buttons: plan.status === "clarify" ? [] : buildSmartButtons(reply, factualScope || []) || [], ...media });
+          recordReplyPresentation({ reply, userText: normalizedText, path: "demo", latencyMs: Date.now() - trace.startedAtMs });
+          res.status(200);
+          return sendJson({ reply, buttons: decision.outcome === "clarify" ? [] : buildSmartButtons(reply, factualScope || []) || [], ...media });
         }
       }
       if (hasCompareIntent(intentText)) {

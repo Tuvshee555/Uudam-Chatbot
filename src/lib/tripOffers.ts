@@ -475,7 +475,11 @@ function resolve(trip: TravelTrip, selection: TripOfferSelection, now: Date, dis
   if (baseAvailability.status === "conflict") return conflict(["departure_availability_conflict"]);
   if (!displayOnly && !["open", "unknown"].includes(baseAvailability.status)) return { status: "unavailable", reason: baseAvailability.status, date, availability: baseAvailability };
   let candidates = regular.filter((o) => !o.dateScoped || o.dates.includes(date));
-  if (selection.hotel || selection.hotelId) {
+  // Accommodation text does not create selectable hotel packages, but a
+  // customer repeating that exact accommodation must not invalidate the fare.
+  const accommodationHotel = selection.hotel && !selection.hotelId && key(selection.hotel) === key(trip.hotel)
+    && regular.every((offer) => !offer.hotel && !offer.hotelId) ? str(trip.hotel) : null;
+  if ((selection.hotel || selection.hotelId) && !accommodationHotel) {
     const hotel = key(selection.hotel);
     const matches = (o: CanonicalTripOffer) => (!hotel || key(o.hotel) === hotel || key(o.hotelId) === hotel) && (!selection.hotelId || o.hotelId === selection.hotelId);
     if (!candidates.some(matches)) return { status: "unavailable", reason: "hotel_not_offered", date };
@@ -569,7 +573,7 @@ function resolve(trip: TravelTrip, selection: TripOfferSelection, now: Date, dis
   const primary = [...candidates].sort((a, b) => SOURCE_PRIORITY[b.source] - SOURCE_PRIORITY[a.source])[0];
   const hotelOffer = candidates.find((o) => o.hotel || o.hotelId);
   return { status: "ready", offer: {
-    id: primary.id, tripId: trip.id, date, hotel: hotelOffer?.hotel || null, hotelId: hotelOffer?.hotelId || null,
+    id: primary.id, tripId: trip.id, date, hotel: hotelOffer?.hotel || accommodationHotel || null, hotelId: hotelOffer?.hotelId || null,
     packageId: candidates.find((o) => o.packageId)?.packageId || null,
     currency: effective[0].currency, prices, fares: effective, passengerPrices,
     total: passengerPrices.length ? sum(passengerPrices.map((p) => p.lineTotal)) : null,

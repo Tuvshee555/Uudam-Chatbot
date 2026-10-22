@@ -50,6 +50,9 @@ jobs:
       - name: Deterministic chatbot accuracy gate
         run: npm run qa:accuracy:fixture
 
+      - name: Signed webhook conversation gate (offline)
+        run: npm run qa:conversations
+
       - name: Build
         run: npm run build
 

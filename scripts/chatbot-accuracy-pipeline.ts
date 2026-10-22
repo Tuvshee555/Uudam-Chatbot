@@ -73,7 +73,7 @@ export function inventedPipelineInputs() {
   }
   add("direct-multi-topic", "Вэлмор 2026-12-17 үнэ, хугацаа, нислэг?", { trips: ["T1"], date: "2026-12-17", topics: ["price", "duration", "transport"] }, {
     ...directChecks, ignored_constraint: { allOf: ["12 сарын 17", "8 өдөр", "Шууд нислэгтэй"] },
-    incorrect_availability: { allOf: ["Суудлын үлдэгдлийг"], noneOf: ["захиалга нээлттэй", "суудал үлдсэн"] },
+    incorrect_availability: { allOf: ["12 сарын 17", "гарах хуваарьтай"], noneOf: ["захиалга нээлттэй", "суудал үлдсэн", "зөвлөх"] },
   });
   add("duration-narrows-model-picks", "Вэлмор 8 хоногийн аяллын үнэ?", { trips: ["T1", "T2", "T99"], days: [8, 8], topics: ["price", "duration"] }, {
     ...directChecks, ignored_constraint: { allOf: ["8 өдөр"], noneOf: ["10 өдөр"] },
@@ -92,9 +92,9 @@ export function inventedPipelineInputs() {
     unanswered: { allOf: ["суудал дүүрсэн"], action: "answer" },
   });
   add("unknown-seats", "Лумиа 2026-12-23 суудал байгаа юу?", { trips: ["T5"], date: "2026-12-23", topics: ["availability"] }, {
-    ...na, wrong_trip: { allOf: [unknown.route_name] },
-    incorrect_availability: { allOf: ["Суудлын үлдэгдлийг"], noneOf: ["захиалга нээлттэй", "суудал үлдсэн"] },
-    needless_clarification: { action: "answer" }, unanswered: { action: "answer", allOf: ["12 сарын 23"] },
+    ...na, wrong_trip: { action: "handoff", noneOf: catalog.map(trip => trip.route_name) },
+    incorrect_availability: { action: "handoff", noneOf: ["захиалга нээлттэй", "суудал үлдсэн", "гарах хуваарьтай", "зөвлөх"] },
+    needless_clarification: { action: "handoff" }, unanswered: { action: "handoff", allOf: ["REFER"] },
   });
   add("conversation-offer", "Нерит 2026-12-20 Nerith House B үнэ?", { trips: ["T3"], date: "2026-12-20", hotel: "Nerith House B", topics: ["price", "hotel"] }, hotelChecks, "conversation", "offer-followup", "offer-followup", 1);
   add("conversation-total", "2 том хүн, 6 настай нэг хүүхэд нийт хэд вэ?", { trips: ["T3"], topics: ["price"], passengers }, {

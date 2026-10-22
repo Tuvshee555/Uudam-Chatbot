@@ -175,10 +175,11 @@ test("a deposit question does not dump visa, document or refund terms", () => {
   assert.doesNotMatch(plan!.reply, /Виз шаардлагатай|Паспорт|Гэрээний дагуу|Аялахаас өмнө/);
 });
 
-test("multiple requested terms include known facts and identify the missing one", () => {
+test("multiple requested terms hand off when one required term is missing", () => {
   const plan = buildTripAnswerPlan({ text: "виз болон буцаалт ямар вэ", trips: [trip({ extra: { booking_terms: { visa: "Виз шаардлагагүй" } } })], route: route(), now });
-  assert.match(plan!.reply, /Виз шаардлагагүй/);
-  assert.match(plan!.reply, /Цуцлалт, буцаалт: аяллын зөвлөхөөс/);
+  assert.equal(plan?.status, "handoff");
+  assert.equal(plan?.reply, "REFER");
+  assert.deepEqual(plan?.missingFacts, ["booking_terms.cancellation"]);
 });
 
 test("a program link does not dump an itinerary, but an explicit full program keeps all days", () => {

@@ -287,9 +287,10 @@ test("a trip the model picks with nothing to base it on is dropped, so the bot a
   const cold = await ask([{ role: "user", text: "1" }, { role: "user", text: "vne" }]);
   assert.equal(cold?.certainty, "none");
   assert.equal(cold?.trips.length, 0);
-  // The same pick stands once the bot has already shown the customer something.
-  const warm = await ask([{ role: "assistant", text: "Вэлмор шууд нислэгтэй аялал — 8 өдөр" }, { role: "user", text: "vne" }]);
+  // A customer's earlier destination supplies a scope; a bot turn alone does not.
+  const warm = await ask([{ role: "user", text: "Вэлмор шууд нислэгтэй аялал" }, { role: "assistant", text: "Вэлмор шууд нислэгтэй аялал — 8 өдөр" }, { role: "user", text: "vne" }]);
   assert.equal(warm?.certainty, "one");
+  assert.equal(warm?.trips[0].id, SHORT.id, "the model's different valid ID cannot replace the historical customer scope");
   // ...or when the customer's own words name the trip.
   const named = await tu.understandTripMessage({ text: "Тармиз нуурын аялал vne", history: [], trips: CATALOG, ask: guess, now: NOW });
   assert.equal(named?.certainty, "one");

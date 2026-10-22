@@ -1,19 +1,21 @@
 /**
- * Which trip is this message about? One AI step answers that the way a person
- * reads it — Cyrillic, Latin spelling, typos, "тэр", "1", a follow-up with no
- * trip name — instead of dozens of keyword rules each taking its own guess.
- * The model can only pick keys from the catalog it is shown, so it cannot
- * invent a trip; code then checks every pick against the trip data (date,
- * date range, month, length, transport) before anything is answered.
+ * The model proposes an interpretation of Cyrillic, Latin spelling, typos and
+ * follow-ups. Catalog keys prove existence, not customer intent. Independent
+ * customer evidence bounds the identity, and the shared request parser checks
+ * current constraints before a proposal may become a stored selection.
  */
 import type { TravelTrip } from "./travelTypes";
 import {
   getAliases,
   isCalendarWeekPhrase,
+  resolveTripFromUserMessage,
   withFutureDepartureDates,
 } from "./travelFastPathsSearch";
 import { keywordTokens, normText, phoneticLatinText } from "./travelTextNorm";
-import { TRIP_TOPICS, parseRequestedPassengers, type RequestedPassenger, type TripSelection, type TripTopic } from "./tripRequest";
+import { TRIP_TOPICS, buildTripRequest, parseRequestedPassengers, type RequestedPassenger, type TripSelection, type TripTopic } from "./tripRequest";
+import { websiteTripLinksInText } from "./bookingWebsite";
+import { isKnownGreetingPhrase, isThanksOnly } from "./greetingPhrases";
+import { REQUESTED_FACT_FIELDS, parseRequestedFacts, type RequestedFact } from "./requestedFacts";
 import {
   evaluateTripRequirement,
   tripTransport,
@@ -47,6 +49,14 @@ export type Understanding = {
   unknownRequirement: RequirementKind | null;
   /** A specific destination the customer asked for that no trip goes to. */
   unknownDestination: string | null;
+  /** Independently derived identity scope, before any selected ID is persisted. */
+  evidence?: CustomerTripEvidence;
+  requestedFacts?: RequestedFact[];
+};
+
+export type CustomerTripEvidence = {
+  source: "current" | "pending" | "selection" | "history" | "none";
+  tripIds: string[];
 };
 
 export type UnderstandingHistory = Array<{ role: "user" | "assistant"; text: string }>;
@@ -84,9 +94,11 @@ function catalogLine(key: string, trip: TravelTrip, now: Date): string {
 }
 
 const SYSTEM_RULES = `You read customer messages for a Mongolian travel agency's chat and decide which catalog trip(s) a message is about. Customers write Mongolian in Cyrillic or Latin letters (e.g. "aylal" = аялал, "une" = үнэ, "hutulbur" = хөтөлбөр, "avi" = авъя), with typos, missing spaces and slang. Reply with ONLY this JSON object:
-{"place": string|null, "intent": "trip"|"catalog"|"booking"|"human"|"smalltalk"|"other", "topics": ["price"], "hotel": string|null, "package": string|null, "passengers": [{"kind":"adult"|"child"|"infant","count":2,"age":number|null,"ageUnit":"year"|"month"}], "trips": ["T1"], "certainty": "one"|"several"|"none", "date": "YYYY-MM-DD"|null, "from": "YYYY-MM-DD"|null, "to": "YYYY-MM-DD"|null, "month": 1-12|null, "days": [min,max]|null, "transport": "direct_flight"|"land"|"land_flight"|"cruise"|null, "unknown_destination": string|null}
+{"place": string|null, "intent": "trip"|"catalog"|"booking"|"human"|"smalltalk"|"other", "topics": ["price"], "requestedFacts": [{"field":"hotel.connectivity","evidence":"exact span from the new customer message"}], "hotel": string|null, "package": string|null, "passengers": [{"kind":"adult"|"child"|"infant","count":2,"age":number|null,"ageUnit":"year"|"month"}], "trips": ["T1"], "certainty": "one"|"several"|"none", "date": "YYYY-MM-DD"|null, "from": "YYYY-MM-DD"|null, "to": "YYYY-MM-DD"|null, "month": 1-12|null, "days": [min,max]|null, "transport": "direct_flight"|"land"|"land_flight"|"cruise"|null, "unknown_destination": string|null}
 
 topics: ALL questions asked in this turn, chosen from price, availability, dates, hotel, duration, transport, program, includes, booking_terms, weather, photos, comparison, budget, discount. Preserve multiple topics: asking dates AND prices needs both answers. hotel/package: only a hotel name or program/package explicitly requested in this turn, otherwise null. passengers: only counts/ages explicitly stated in this turn; keep each child's age and unit, never invent it. 6 months old means age 6, ageUnit month, not six years old. A hotel star number is not a passenger age. The Selected offer below is persistent context for follow-ups, not new customer requirements.
+
+requestedFacts: preserve specific subquestions that a broad topic cannot answer. Allowed fields: ${REQUESTED_FACT_FIELDS.join(", ")}. Hotel connectivity, facilities, room properties, location/distance and rating are separate facts: naming a hotel or quoting its fare does not answer those questions. Other factual questions outside the listed topics belong to other.unsupported. For EACH such requirement copy its evidence exactly from the NEW customer message; never copy from history or catalog. A property word inside the trip/hotel's proper name alone is not a question about that property. Keep these alongside all ordinary topics in compound requests; do not omit a subquestion because it is unsupported.
 
 place: the destination / trip words the CUSTOMER used in this message (any spelling), or null if they named none.
 
@@ -244,14 +256,29 @@ export function interpretUnderstanding(raw: string, keys: Map<string, TravelTrip
     .map((key) => keys.get(String(key).trim()))
     .filter((trip): trip is TravelTrip => Boolean(trip));
   const trips = [...new Map(picked.map((trip) => [trip.id, trip])).values()];
-  const date = isYmd(parsed.date) ? parsed.date : null;
-  const range: [string, string] | null =
+  let date = isYmd(parsed.date) ? parsed.date : null;
+  let range: [string, string] | null =
     !date && isYmd(parsed.from) && isYmd(parsed.to) && parsed.from <= parsed.to ? [parsed.from, parsed.to] : null;
   const monthNum = Number(parsed.month);
-  const month = Number.isInteger(monthNum) && monthNum >= 1 && monthNum <= 12 && !date && !range ? monthNum : null;
+  let month = Number.isInteger(monthNum) && monthNum >= 1 && monthNum <= 12 && !date && !range ? monthNum : null;
   // The model also reads "эхний 7 хоног" (the first WEEK) as a 7-day trip; never a length.
-  const days = isCalendarWeekPhrase(customerText) ? null : parseDays(parsed.days);
-  const transport = TRANSPORTS.includes(parsed.transport as Transport) ? (parsed.transport as Transport) : null;
+  let days = isCalendarWeekPhrase(customerText) ? null : parseDays(parsed.days);
+  let transport = TRANSPORTS.includes(parsed.transport as Transport) ? (parsed.transport as Transport) : null;
+  let topics = Array.isArray(parsed.topics) ? parsed.topics.filter((topic): topic is TripTopic => TRIP_TOPICS.includes(topic as TripTopic)) : [];
+  let hotel = typeof parsed.hotel === "string" ? parsed.hotel.trim().slice(0, 160) || null : null;
+  let packageName = typeof parsed.package === "string" ? parsed.package.trim().slice(0, 160) || null : null;
+  let passengers = parseRequestedPassengers(parsed.passengers);
+  let requestedFacts = parseRequestedFacts(parsed.requestedFacts, customerText);
+  let unsupportedDateWindow = false;
+  if (customerText.trim()) {
+    const request = buildTripRequest(customerText, [...keys.values()], { topics, hotel, package: packageName, passengers, date, range, month, days, transport, requestedFacts }, now);
+    ({ date, month, days, hotel, passengers, topics } = request);
+    range = request.range || null;
+    transport = request.transport || null;
+    packageName = request.package;
+    unsupportedDateWindow = Boolean(request.unsupportedDateWindow);
+    requestedFacts = request.requestedFacts || [];
+  }
   const unknownRaw = typeof parsed.unknown_destination === "string" ? parsed.unknown_destination.trim() : "";
   const unknownDestination = unknownRaw && trips.length === 0 ? unknownRaw.replace(/[«»"]/g, "").slice(0, 40) : null;
 
@@ -263,7 +290,7 @@ export function interpretUnderstanding(raw: string, keys: Map<string, TravelTrip
   let unknownRequirement: Understanding["unknownRequirement"] = null;
   // A trip the customer named in full stays theirs; only a place is widened.
   const namedInFull = trips.some((trip) => normText(trip.route_name).length >= 8 && normText(customerText).includes(normText(trip.route_name)));
-  let fitting = place && intent === "trip" && (date || range || month) && !namedInFull
+  let fitting = unsupportedDateWindow ? [] : place && intent === "trip" && (date || range || month) && !namedInFull
     ? withEveryTripAtPlace(place, trips, [...keys.values()])
     : trips;
   const checks: TripRequirement[] = [];
@@ -303,11 +330,7 @@ export function interpretUnderstanding(raw: string, keys: Map<string, TravelTrip
 
   const certainty: Understanding["certainty"] =
     fitting.length === 0 ? "none" : fitting.length === 1 ? "one" : "several";
-  const topics = Array.isArray(parsed.topics) ? parsed.topics.filter((topic): topic is TripTopic => TRIP_TOPICS.includes(topic as TripTopic)) : [];
-  const hotel = typeof parsed.hotel === "string" ? parsed.hotel.trim().slice(0, 160) || null : null;
-  const packageName = typeof parsed.package === "string" ? parsed.package.trim().slice(0, 160) || null : null;
-  const passengers = parseRequestedPassengers(parsed.passengers);
-  return { intent, topics, hotel, package: packageName, passengers, place, trips: fitting, certainty, date, range, month, days, transport, unmet, unknownRequirement, unknownDestination };
+  return { intent, topics, hotel, package: packageName, passengers, place, trips: fitting, certainty, date, range, month, days, transport, unmet, unknownRequirement, unknownDestination, requestedFacts };
 }
 
 const TRANSPORT_LABEL: Record<Transport, string> = {
@@ -376,41 +399,75 @@ export async function understandTripMessage(input: {
   if (keys.size === 0) return null;
   const raw = await input.ask(system, user).catch(() => null);
   if (!raw) return null;
-  let groundedRaw = raw;
-  // A follow-up retains an explicit selected ID even when a sibling shares its title.
-  if (input.selection && !input.pendingTripIds?.length) {
-    try {
-      const parsed = JSON.parse(raw.replace(/^```(?:json)?\s*|```\s*$/g, ""));
-      const selectedKey = [...keys].find(([, trip]) => trip.id === input.selection?.tripId)?.[0];
-      if (selectedKey && !parsed.place && parsed.intent === "trip") {
-        groundedRaw = JSON.stringify({ ...parsed, trips: [selectedKey] });
-      }
-    } catch { /* Invalid JSON is rejected by the parser below. */ }
-  }
-  // A pick needs a basis. With no place named, no list or selected offer in play, no
-  // earlier bot reply and no trip name in the customer's words, the model is guessing
-  // ("1", "vne" as a first message became the first trip in the catalog, and a customer
-  // who came from a Beijing ad got Hainan prices). Drop the guess: the bot asks which trip.
   try {
-    const parsed = JSON.parse(groundedRaw.replace(/^```(?:json)?\s*|```\s*$/g, ""));
-    const named = typeof parsed.place === "string" && parsed.place.trim().length > 0;
-    const hasBasis = named || (input.pendingTripIds?.length ?? 0) > 0 || Boolean(input.selection)
-      || input.history.some((message) => message.role === "assistant") || customerNamesATrip(input.text, [...keys.values()]);
-    if (!hasBasis && Array.isArray(parsed.trips) && parsed.trips.length > 0) {
-      groundedRaw = JSON.stringify({ ...parsed, trips: [], unknown_destination: null });
+    const parsed = JSON.parse(raw.replace(/^```(?:json)?\s*|```\s*$/g, ""));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    let evidence = customerTripEvidence(input, parsed.place);
+    if (evidence.source !== "current" && parsed.intent !== "trip" && parsed.intent !== "booking"
+      && buildTripRequest(input.text, [...keys.values()], undefined, input.now).topics.length === 0) {
+      evidence = { source: "none", tripIds: [] };
     }
-  } catch { /* Invalid JSON is rejected by the parser below. */ }
-  return interpretUnderstanding(groundedRaw, keys, input.now, input.text);
+    const allowed = new Set(evidence.tripIds);
+    const groundedKeys = [...keys].filter(([, trip]) => allowed.has(trip.id)).map(([key]) => key);
+    // A catalog key proves existence, not intent. Start from the independently
+    // supported scope, then let the shared request checks narrow it. Otherwise
+    // a model omission or arbitrary subset silently drops real alternatives.
+    const place = evidence.source === "current" && customerMentions(input.text, parsed.place) ? parsed.place : null;
+    const unknown = !groundedKeys.length && customerMentions(input.text, parsed.unknown_destination)
+      ? parsed.unknown_destination : null;
+    const interpreted = interpretUnderstanding(JSON.stringify({
+      ...parsed, place, trips: groundedKeys,
+      intent: evidence.source === "current" ? "trip" : parsed.intent,
+      unknown_destination: unknown,
+    }), keys, input.now, input.text);
+    return interpreted ? { ...interpreted, evidence } : null;
+  } catch { return null; }
 }
 
-/** The customer's words contain a trip's full name or one of its aliases. */
-function customerNamesATrip(text: string, trips: TravelTrip[]): boolean {
-  const said = normText(text);
-  if (said.length < 4) return false;
-  return trips.some((trip) => [trip.route_name, ...getAliases(trip)].some((name) => {
-    const wanted = normText(name);
-    return wanted.length >= 4 && said.includes(wanted);
-  }));
+function customerMentions(text: string, value: unknown): value is string {
+  if (typeof value !== "string" || value.trim().length < 3) return false;
+  const normalized = normText(value), phonetic = phoneticLatinText(value);
+  return normalized.length >= 3 && normText(text).includes(normalized)
+    || phonetic.length >= 3 && phoneticLatinText(text).includes(phonetic);
+}
+
+/** A model may interpret an evidenced scope; it cannot create that scope itself. */
+export function customerTripEvidence(input: {
+  text: string; history: UnderstandingHistory; trips: TravelTrip[];
+  pendingTripIds?: string[]; selection?: TripSelection | null;
+}, proposedPlace?: unknown): CustomerTripEvidence {
+  const catalog = input.trips.filter(trip => trip.status === "active" || trip.status === "sold_out");
+  const resolve = (text: string) => {
+    const said = normText(text);
+    const named = catalog.filter(trip => normText(trip.route_name).length >= 8 && said.includes(normText(trip.route_name)));
+    const distinct = named.filter(trip => !named.some(other => normText(other.route_name).length > normText(trip.route_name).length
+      && normText(other.route_name).includes(normText(trip.route_name))));
+    if (distinct.length) return distinct.map(trip => trip.id);
+    const result = resolveTripFromUserMessage(text, catalog, { allowLooseFallback: false });
+    return result.status === "verified" ? [result.trip.id]
+      : result.status === "ambiguous" ? result.candidates.map(trip => trip.id) : [];
+  };
+  const current = resolve(input.text);
+  if (current.length) return { source: "current", tripIds: current };
+  if (websiteTripLinksInText(input.text).slugs.length || isKnownGreetingPhrase(input.text) || isThanksOnly(input.text)) {
+    return { source: "none", tripIds: [] };
+  }
+  // A destination span present in the actual turn may be isolated from its
+  // question words for the existing spelling-tolerant resolver. An unknown
+  // fresh destination must not inherit the previous trip.
+  if (customerMentions(input.text, proposedPlace)) return { source: "current", tripIds: resolve(proposedPlace) };
+  const catalogIds = new Set(catalog.map(trip => trip.id));
+  const pending = (input.pendingTripIds || []).filter(id => catalogIds.has(id));
+  if (pending.length) return { source: "pending", tripIds: pending };
+  if (input.selection && catalogIds.has(input.selection.tripId)) return { source: "selection", tripIds: [input.selection.tripId] };
+  const prior = input.history.at(-1)?.role === "user" && input.history.at(-1)?.text.trim() === input.text.trim()
+    ? input.history.slice(0, -1) : input.history;
+  for (const message of prior.slice(-HISTORY_TURNS).reverse()) {
+    if (message.role !== "user") continue;
+    const ids = resolve(message.text);
+    if (ids.length) return { source: "history", tripIds: ids };
+  }
+  return { source: "none", tripIds: [] };
 }
 
 /** True when trip understanding should run (it can be switched off without a deploy). */

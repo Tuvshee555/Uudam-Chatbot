@@ -6,6 +6,23 @@ connects to a database, calls an AI provider, invokes the webhook/demo endpoint,
 or sends messages. Inputs are read-only; reports go to stdout. Package commands
 are `npm run qa:accuracy -- <options>` and `npm run qa:accuracy:fixture`.
 
+`npm run qa:conversations` is a separate required CI gate for the actual signed
+webhook handler. It maintains mocked durable conversation/lead/pause records
+across turns and injects deliberately contradictory model IDs, dates, hotels,
+passenger counts and final-answer lists. A second invented catalog changes
+names, order, fares and departure dates. Assertions inspect delivered text,
+stored selection/history, silence and durable handoff, including known complete
+composite requests and unknown required fields. The command removes inherited
+production credentials/endpoints; SQL and messaging/model transports stay mocked.
+It makes no real AI calls and sends no real customer messages.
+
+These are executable regressions for defined failure classes, not a measured
+production accuracy rate. The small pure planner fixture cannot validate the
+whole conversation, and neither fixture measures a real provider's language
+understanding. The read-only `npm run gate` remains necessary to review changed
+historical resolver decisions; its historical held-reply count is a diagnostic,
+not a labeled error rate or a delivery replay.
+
 ```powershell
 node --import tsx scripts/chatbot-accuracy.ts --fixture
 node --import tsx scripts/chatbot-accuracy.ts --fixture --split held_out --kind paraphrase

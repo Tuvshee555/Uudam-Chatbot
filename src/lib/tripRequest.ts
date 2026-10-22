@@ -1,10 +1,13 @@
 import type { Understanding } from "./tripUnderstanding";
 import type { TravelTrip } from "./travelTypes";
 import { stripTripNamesForIntent } from "./customerTurn";
-import { parseDepartureDateText, resolveRequestedMonth } from "./travelDates";
+import { resolveRequestedDate, resolveRequestedMonth, resolveRequestedRange } from "./travelDates";
 import { hasDurationIntent, hasIncludedInPriceIntent, hasPriceIntent, hasScheduleIntent } from "./travelFastPathsPricing";
-import { queryRequestsDurationDays } from "./travelFastPathsSearch";
+import { queryRequestsDurationDays, queryWantsDirectFlight, queryWantsLandFlightCombo, queryWantsLandOnlyEnhanced } from "./travelFastPathsSearch";
 import { normalizeTripOffers } from "./tripOffers";
+import { normText, phoneticLatinText } from "./travelTextNorm";
+import type { TripTransport } from "./tripFacts";
+import { parseRequestedFacts, requestedFactsFromText, type RequestedFact } from "./requestedFacts";
 
 export const TRIP_TOPICS = ["price", "availability", "dates", "hotel", "duration", "transport", "program", "includes", "booking_terms", "weather", "photos", "comparison", "budget", "discount"] as const;
 export type TripTopic = typeof TRIP_TOPICS[number];
@@ -19,6 +22,10 @@ export type TripRequest = {
   days: [number, number] | null;
   month: number | null;
   year: number | null;
+  range?: [string, string] | null;
+  transport?: TripTransport | null;
+  unsupportedDateWindow?: boolean;
+  requestedFacts?: RequestedFact[];
 };
 
 export function parseRequestedPassengers(value: unknown): RequestedPassenger[] {
@@ -65,11 +72,12 @@ export function requestedPassengersFromText(text: string): RequestedPassenger[] 
 }
 
 /** One topic set is reused by the answer planner and legacy fallbacks. */
-export function buildTripRequest(text: string, trips: TravelTrip[], understanding?: Understanding, now = new Date()): TripRequest {
+export function buildTripRequest(text: string, trips: TravelTrip[], understanding?: Partial<Understanding>, now = new Date()): TripRequest {
   const turn = stripTripNamesForIntent(text, trips);
   const topics = new Set<TripTopic>(understanding?.topics || []);
   const asksIncludes = hasIncludedInPriceIntent(turn);
-  if (hasPriceIntent(turn) && (!asksIncludes || /үнэ.{0,12}хэд|хэд.{0,12}үнэ|хэдэн\s*төг|(?:price|cost|une).{0,12}(?:how|hed)/i.test(turn))) topics.add("price");
+  const priceTurn = turn.replace(/(?<!\d)\d{1,2}\s*(?:-?р\s*)?сар(?:ын|д)(?!\p{L})/giu, " ");
+  if (hasPriceIntent(priceTurn) && (!asksIncludes || /үнэ.{0,12}хэд|хэд.{0,12}үнэ|хэдэн\s*төг|(?:price|cost|une).{0,12}(?:how|hed)/i.test(turn))) topics.add("price");
   // "Урьдчилгаа хэд вэ" asks the deposit, not the trip price; "хэд вэ" alone made it a price question
   // and the customer got the full fare card instead of an answer about the deposit.
   if (/урьдчилгаа|deposit|uridchilgaa/i.test(turn) && !/үнэ|une|price|төгрөг/i.test(turn)) topics.delete("price");
@@ -100,24 +108,48 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
   // travels. Read as a transport question it got only "Шууд нислэгтэй аялал." (2026-10-18).
   // Transport is the question only when the message asks something.
   if (!/[?？]|(?:^|[^\p{L}])(?:уу|үү|юу|юү|вэ|бэ|yu|uu|ve|be|vee|ямар|хэд\p{L}*|хэзээ|яаж|хэрхэн|эсэх|how|what|which|when|does|is)(?:[^\p{L}]|$)/iu.test(turn)) topics.delete("transport");
-  const dates = parseDepartureDateText(turn, now);
-  const date = understanding?.date || (dates.length === 1 ? dates[0] : null);
+  // Model fields supplement the customer's words; they never replace an
+  // independently readable constraint or turn a span into one departure.
+  const requestedRange = resolveRequestedRange(turn, now);
+  const explicitDate = requestedRange ? null : resolveRequestedDate(turn, now)?.ymd || null;
+  const requestedMonth = requestedRange || explicitDate ? null : resolveRequestedMonth(turn, now);
+  const date = explicitDate;
+  const range: [string, string] | null = requestedRange && requestedRange !== "unsupported"
+    ? [requestedRange.startYmd, requestedRange.endYmd]
+    : null;
   if (date) topics.add("availability");
-  const passengers = understanding?.passengers?.length ? understanding.passengers : requestedPassengersFromText(turn);
+  const explicitPassengers = requestedPassengersFromText(turn);
+  const passengerLanguage = /том\s*хүн|хүүх|нярай|настай|сартай|tom\s*hun|huuhe|nyarai|nas(?:tai)?|adult|child|infant|years?\s*old|months?\s*old/i.test(turn);
+  const passengers = explicitPassengers.length ? explicitPassengers : passengerLanguage ? parseRequestedPassengers(understanding?.passengers) : [];
   if (passengers.length) topics.add("price");
-  const hotels = [...new Set(trips.flatMap((trip) => normalizeTripOffers(trip, now).map((offer) => offer.hotel)).filter((hotel): hotel is string => Boolean(hotel && hotel.length >= 3)))];
-  const namedHotels = hotels.filter((hotel) => turn.toLowerCase().includes(hotel.toLowerCase()));
-  const hotel = understanding?.hotel || (namedHotels.length === 1 ? namedHotels[0] : null);
+  const hotels = [...new Set(trips.flatMap((trip) => [trip.hotel, ...normalizeTripOffers(trip, now).map((offer) => offer.hotel)]).filter((hotel): hotel is string => Boolean(hotel && hotel.length >= 3)))];
+  const mentions = (value: string) => {
+    const normalized = normText(value);
+    const phonetic = phoneticLatinText(value);
+    return normalized.length >= 3 && (normText(turn).includes(normalized)
+      || phonetic.length >= 3 && phoneticLatinText(turn).includes(phonetic));
+  };
+  const namedHotels = hotels.filter(mentions).sort((a, b) => b.length - a.length);
+  const distinctHotels = namedHotels.filter(hotel => !namedHotels.some(other => other !== hotel && normText(other).includes(normText(hotel))));
+  const hotel = distinctHotels.length === 1 ? distinctHotels[0] : distinctHotels.length ? null
+    : understanding?.hotel && mentions(understanding.hotel) ? understanding.hotel : null;
   if (hotel) { topics.add("hotel"); topics.add("price"); }
-  const requestedMonth = resolveRequestedMonth(turn, now);
-  const month = understanding?.month || requestedMonth?.month || null;
+  const month = requestedMonth?.month || null;
   const clock = new Date(now.getTime() + 8 * 3_600_000);
   const explicitYear = /(?<!\d)(20\d{2})(?!\d)/.exec(turn);
   const year = explicitYear ? Number(explicitYear[1]) : requestedMonth?.year
     || (month ? clock.getUTCFullYear() + (month < clock.getUTCMonth() + 1 ? 1 : 0) : null);
+  const requestedFacts = [...new Map([
+    ...parseRequestedFacts(understanding?.requestedFacts, text),
+    ...requestedFactsFromText(text, { ignoredPhrases: [...trips.map(trip => trip.route_name), ...hotels], hotelContext: topics.has("hotel") || Boolean(hotel) }),
+  ].map(fact => [`${fact.field}:${normText(fact.evidence)}`, fact])).values()];
   return {
-    topics: [...topics], date, hotel, package: understanding?.package || null,
-    passengers, days: understanding?.days || queryRequestsDurationDays(turn), month, year,
+    topics: [...topics], date, range, hotel,
+    package: understanding?.package && mentions(understanding.package) ? understanding.package : null,
+    passengers, days: queryRequestsDurationDays(turn), month, year, requestedFacts,
+    transport: queryWantsLandFlightCombo(turn) ? "land_flight" : queryWantsDirectFlight(turn) ? "direct_flight"
+      : queryWantsLandOnlyEnhanced(turn) ? "land" : /усан\s*онгоц|круз|cruise/i.test(turn) ? "cruise" : null,
+    ...(requestedRange === "unsupported" ? { unsupportedDateWindow: true } : {}),
   };
 }
 
@@ -129,8 +161,11 @@ export function mergeTripSelection(tripId: string, request: TripRequest, previou
       : [...(same?.passengers || []).filter((passenger) => !suppliedKinds.has(passenger.kind)), ...request.passengers]
     : same?.passengers || [];
   return {
-    tripId, date: request.date || same?.date || null,
-    hotel: request.hotel || same?.hotel || null, package: request.package || same?.package || null,
+    tripId, date: request.date || (request.range || request.month && same?.date
+      && (Number(same.date.slice(5, 7)) !== request.month || request.year && Number(same.date.slice(0, 4)) !== request.year)
+      ? null : same?.date || null),
+    hotel: request.hotel || same?.hotel || null,
+    package: request.package || (request.hotel && request.hotel !== same?.hotel ? null : same?.package || null),
     passengers,
   };
 }

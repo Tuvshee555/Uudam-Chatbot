@@ -371,6 +371,10 @@ export const PERSISTED_INFO_EVENTS: ReadonlySet<string> = new Set([
   "webhook.staff_takeover_detected",
   "webhook.ai_refer",
   "webhook.ai_wrong_trip_reply_suppressed",
+  "webhook.no_data_reply_suppressed",
+  "webhook.ungrounded_trip_reply_suppressed",
+  "webhook.ai_ungrounded_trip_reply_suppressed",
+  "webhook.trip_answer_decision",
 ]);
 
 // Never persisted: the DB layer's own failures (storing them needs the DB that
@@ -416,6 +420,8 @@ export function logEvent(
     service: SERVICE_NAME,
     event,
     ...safeFields,
+    ...(/^[a-f0-9]{40,64}$/i.test(process.env.VERCEL_GIT_COMMIT_SHA || "")
+      ? { deploymentRevision: process.env.VERCEL_GIT_COMMIT_SHA } : {}),
   };
   toConsoleMethod(level)(JSON.stringify(record));
   queueSinkRecord(record as Record<string, LogValue>);

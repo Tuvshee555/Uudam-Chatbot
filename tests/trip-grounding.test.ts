@@ -35,6 +35,6 @@ test("a reply about a trip the conversation points to is sent", async () => {
   none(card(TAR), { customerText: "2", pendingTripIds: ["vel", "tar"] });                // open list
   none(card(TAR), { customerText: "vne", selectionTripId: "tar" });                       // selected / ad / website link
   none(card(DATON), { customerText: "Мини аватар датон үнэ" });                           // best name-word fit
-  none(`10 сард гарах аяллууд 😊\n• ${TAR.route_name} — гарах: 10 сарын 22`, { customerText: "10 сард гарах аялал" }); // a list item
+  none(`10 сард гарах аяллууд 😊\n• ${TAR.route_name} — гарах: 10 сарын 22`, { customerText: "10 сард гарах аялал", catalogTripIds: [TAR.id] }); // explicit catalog result
   none("Манай утасны дугаарууд: 7700 0000", { customerText: "Холбоо барих" });            // no trip at all
 });

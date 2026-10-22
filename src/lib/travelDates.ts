@@ -812,7 +812,7 @@ function buildRange(startYmd: string, endYmd: string): RequestedRange | null {
   return { startYmd, endYmd, label: rangeLabel(startYmd, endYmd) };
 }
 
-function resolveRequestedRange(text: string, now: Date): RequestedRange | "unsupported" | null {
+export function resolveRequestedRange(text: string, now: Date): RequestedRange | "unsupported" | null {
   const normalized = text.normalize("NFKC");
   const weekPattern = new RegExp(MONTH_WEEK_RE.source, `${MONTH_WEEK_RE.flags}g`);
   const weeks = Array.from(normalized.matchAll(weekPattern));

@@ -187,6 +187,8 @@ export type FastPathRoute = {
   selection?: TripSelection;
   /** No offered/selected trip has this requested date: silently hand the question to staff. */
   unavailableDateWithinScope?: boolean;
+  /** Original customer question answered by a bare choice in the last trip menu. */
+  requestText?: string;
 };
 
 /** A reply that asked the customer to pick a trip — the only kind a pending clarification belongs to. */
@@ -211,6 +213,18 @@ export async function routeFastPathText(input: {
 }): Promise<FastPathRoute> {
   const { senderId, text, contextualUserText, trips } = input;
   const now = input.now || new Date();
+  const numericChoice = parseNumberedChoice(text);
+  let requestText = text;
+  if (numericChoice && !numericChoice.namePrefix && input.history) {
+    // Choosing an option completes the pending question; the digit does not
+    // replace its requested facts. Use only the question before the latest
+    // actual trip menu, never arbitrary older assistant prose.
+    const lastReplyIndex = input.history.findLastIndex(message => message.role === "assistant");
+    if (lastReplyIndex >= 0 && isTripChoiceQuestion(input.history[lastReplyIndex].text)) {
+      const original = input.history.slice(0, lastReplyIndex).findLast(message => message.role === "user");
+      if (original && !parseNumberedChoice(original.text)) requestText = original.text;
+    }
+  }
   const storedSelection = await getTripSelection(senderId);
   const previousSelection = storedSelection && trips.some((trip) => trip.id === storedSelection.tripId)
     ? storedSelection : null;
@@ -218,9 +232,10 @@ export async function routeFastPathText(input: {
     resolveTripFromUserMessage(t, pool, { allowLooseFallback: false });
   const chose = async (trip: TravelTrip, understanding?: Understanding): Promise<FastPathRoute> => {
     await clearClarificationState(senderId);
-    const selection = mergeTripSelection(trip.id, buildTripRequest(text, trips, understanding, now), previousSelection);
+    const selection = mergeTripSelection(trip.id, buildTripRequest(requestText, trips, understanding, now), previousSelection);
     await setTripSelection(senderId, selection);
-    return { matchText: joinContextAndTurn(trip.route_name, websiteTripLinksInText(text).textWithoutUrls), scopedClarify: null, chosenTripId: trip.id, selection };
+    return { matchText: joinContextAndTurn(trip.route_name, websiteTripLinksInText(text).textWithoutUrls), scopedClarify: null, chosenTripId: trip.id, selection,
+      ...(requestText !== text ? { requestText } : {}) };
   };
   // A shared website page identifies its trip before model interpretation,
   // old conversation context or a pending list can replace that identity.

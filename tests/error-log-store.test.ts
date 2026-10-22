@@ -20,6 +20,9 @@ test("info events that explain a silent bot are persisted", () => {
   assert.equal(shouldPersistLog("info", "webhook.operator_echo_pause"), true);
   assert.equal(shouldPersistLog("info", "webhook.ai_refer"), true);
   assert.equal(shouldPersistLog("info", "webhook.ai_wrong_trip_reply_suppressed"), true);
+  assert.equal(shouldPersistLog("info", "webhook.no_data_reply_suppressed"), true);
+  assert.equal(shouldPersistLog("info", "webhook.ungrounded_trip_reply_suppressed"), true);
+  assert.equal(shouldPersistLog("info", "webhook.trip_answer_decision"), true);
 });
 
 test("the database layer's own errors are never persisted (would loop)", () => {

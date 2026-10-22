@@ -6,8 +6,8 @@ import { BOT_MESSAGE_METADATA, replyToComment, sendImageMessage, sendQuickReplie
 import { sendQuickReplies as sendIgQuickReplies } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { getClarificationState, setClarificationState } from "../../lib/clarificationState";
-import { getTripSelection } from "../../lib/tripSelectionState";
-import { ungroundedTripInReply } from "../../lib/tripGrounding";
+import { getTripSelection, setTripSelection } from "../../lib/tripSelectionState";
+import { tripsNamedIn, ungroundedTripInReply } from "../../lib/tripGrounding";
 import { isLikelyCatalogMaintenanceText } from "../../lib/customerTextClassification";
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone } from "../../lib/conversation";
@@ -27,6 +27,7 @@ import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting
 import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
+import { decideTripAnswer, type TripAnswerDecision } from "../../lib/tripAnswerDecision";
 import { verifyTripReply } from "../../lib/tripReplyVerification";
 import { presentAssistantReply } from "../../lib/chatbotReplyPolicy";
 import { recordPrimaryReplyDelivery, recordReplyPresentation } from "../../lib/chatbotReplyTelemetry";
@@ -296,11 +297,13 @@ async function handleMessage(
     }
   }
   await assertLockHealthy();
-  // Independent reads — run them together instead of two serial round trips.
+  // Read history and pre-routing identity evidence together.
   const replyStartedAt = Date.now();
-  const [history, customerMemory] = await Promise.all([
+  const [history, customerMemory, groundingPending, groundingSelection] = await Promise.all([
     getHistory(senderId),
     getCustomerMemoryText(senderId),
+    getClarificationState(senderId),
+    getTripSelection(senderId),
   ]);
   const contextualUserText = buildContextualUserText(history, text);  const sessionId = `${platform}:${pageId}:${senderId}`;
   // Non-blocking: the memory merge continues after the response via waitUntil.
@@ -334,19 +337,17 @@ async function handleMessage(
   };
   let pauseAfterContactCapture = false;
   let factualScope: TravelTrip[] | null = null;
-  // The exit check every reply passes (tripGrounding.ts): a reply about ONE trip must be about a
+  // The exit check every reply passes (tripGrounding.ts): named trips must be supported by
   // trip this conversation points to — the customer's words, an open list, the selected trip, an
-  // earlier turn, or what the router settled on. 26 branches pick trips their own way; checking
-  // here closes every door at once. Unavailable grounding must remain retryable.
-  let groundingRoutedTripIds: string[] = [];
+  // earlier turn. Freeze that evidence before routing: a newly selected model ID cannot
+  // authorize its own answer. Unavailable grounding must remain retryable.
   let groundingTrips: TravelTrip[] | null = null;
-  const findUngroundedTrip = async (reply: string): Promise<TravelTrip | null> => {
+  const findUngroundedTrip = async (reply: string, catalogTripIds?: string[]): Promise<TravelTrip | null> => {
     try {
       groundingTrips ||= (await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers);
-      const [pending, selection] = await Promise.all([getClarificationState(senderId), getTripSelection(senderId)]);
       return ungroundedTripInReply(reply, {
-        customerText: text, history, pendingTripIds: pending?.candidateTripIds || [],
-        selectionTripId: selection?.tripId || null, routedTripIds: groundingRoutedTripIds, trips: groundingTrips,
+        customerText: text, history, pendingTripIds: groundingPending?.candidateTripIds || [],
+        selectionTripId: groundingSelection?.tripId || null, catalogTripIds, trips: groundingTrips,
       });
     } catch (cause) {
       const error = new RetryableWebhookError("grounding_unavailable");
@@ -355,7 +356,6 @@ async function handleMessage(
     }
   };
   let currentSelection: TripSelection | null = null;
-  let approvedPlanReply: string | null = null;
   const deliverFastPathReply = async (input: {
     reply: string;
     failTag: string;
@@ -363,16 +363,19 @@ async function handleMessage(
     counter?: string;
     buttons?: string[];
     afterDeliver?: () => Promise<void>;
+    decision?: TripAnswerDecision;
+    catalogTripIds?: string[];
   }) => {
-    const presented = presentAssistantReply({ reply: input.reply, userText: text,
+    const presented = input.decision?.reply ?? presentAssistantReply({ reply: input.reply, userText: text,
       hasPriorReply: history.some((message) => message.role === "assistant"),
       phoneAlreadyRequested: Boolean(extractPhoneNumber(text)) || hasAskedForPhone(history) || history.some((message) => message.role === "user" && Boolean(extractPhoneNumber(message.text))),
     });
-    const reply = factualScope && input.reply !== approvedPlanReply
+    const reply = factualScope && !input.decision
       ? verifyTripReply({ reply: presented, trips: factualScope, selection: currentSelection })
       : presented;
-    const ungroundedTrip = isReferReply(reply) || shouldSilenceNoDataReply(reply) ? null : await findUngroundedTrip(reply);
-    const noDataReply = isReferReply(reply) || shouldSilenceNoDataReply(reply) || Boolean(ungroundedTrip);
+    const missingData = input.decision ? input.decision.outcome === "handoff" : isReferReply(reply) || shouldSilenceNoDataReply(reply);
+    const ungroundedTrip = missingData ? null : await findUngroundedTrip(reply, input.catalogTripIds);
+    const noDataReply = missingData || Boolean(ungroundedTrip);
     if (reply !== presented) recordCounter("webhook.factual_reply_rejected_total", 1, { path: input.failTag });
     if (ungroundedTrip) {
       logInfo("webhook.ungrounded_trip_reply_suppressed", { requestId: trace?.requestId, correlationId: trace?.correlationId,
@@ -390,7 +393,7 @@ async function handleMessage(
       recordCounter("webhook.no_data_reply_suppressed_total", 1, { platform });
       await captureLead({
         kind: "handoff",
-        context: `Бот мэдээлэлгүй fast-path хариуг зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй: ${input.failTag}${ungroundedTrip ? ` (харилцаанд дурдагдаагүй аялал: ${ungroundedTrip.route_name})` : ""}`,
+        context: `Бот мэдээлэлгүй fast-path хариуг зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй: ${input.failTag}${input.decision?.missingFacts.length ? ` [${input.decision.missingFacts.join(", ")}]` : ""}${ungroundedTrip ? ` (харилцаанд дурдагдаагүй аялал: ${ungroundedTrip.route_name})` : ""}`,
       }, "api.webhook.no_data_handoff");
       // The bot doesn't know the answer, so it says NOTHING to the customer (owner's
       // rule: an unknown answer is met with silence, never a "passed to a
@@ -966,8 +969,6 @@ async function handleMessage(
         : undefined,
     });
     currentSelection = routedCache.selection || null;
-    groundingRoutedTripIds = [routedCache.chosenTripId, ...(routedCache.scopedClarify || []).map((trip) => trip.id)]
-      .filter((id): id is string => Boolean(id));
     factualScope = routedCache.chosenTripId
       ? (await getTrips()).filter((trip) => trip.id === routedCache?.chosenTripId)
       : routedCache.scopedClarify || routedCache.understanding?.trips || [];
@@ -1062,13 +1063,25 @@ async function handleMessage(
     const route = await getRouted();
     const plan = await buildTripAnswerRuntime({ text, trips: await getTrips(), route });
     if (plan) {
-      const reply = enforceWebsiteForPayment(sanitizeAssistantReply(plan.reply));
-      approvedPlanReply = reply;
-      recordCounter("webhook.answer_plan_total", 1, { status: plan.status });
+      const decision = decideTripAnswer(plan, { userText: text,
+        hasPriorReply: history.some((message) => message.role === "assistant"),
+        phoneAlreadyRequested,
+      });
+      const reply = decision.reply;
+      currentSelection = plan.selection;
+      if (decision.outcome !== "handoff") await setTripSelection(senderId, plan.selection);
+      logInfo("webhook.trip_answer_decision", {
+        requestId: trace?.requestId, correlationId: trace?.correlationId, platform,
+        senderHash: hashIdentifier(senderId), outcome: decision.outcome, tripId: plan.tripId,
+        evidenceSource: route.understanding?.evidence?.source || "deterministic",
+        catalogFingerprint: hashIdentifier(JSON.stringify(factualScope || [])),
+        requestedTopics: plan.request.topics, missingFacts: decision.missingFacts,
+      });
+      recordCounter("webhook.answer_plan_total", 1, { status: decision.outcome });
       if (plan.missingTopics.length) recordCounter("webhook.answer_plan_missing_topics_total", plan.missingTopics.length, {});
       await deliverFastPathReply({
-        reply, failTag: "answer_plan", rememberSource: "api.webhook.answer_plan",
-        buttons: plan.status === "clarify" ? undefined : buildSmartButtons(reply, factualScope || []) || undefined,
+        reply, decision, failTag: "answer_plan", rememberSource: "api.webhook.answer_plan",
+        buttons: decision.outcome === "clarify" ? undefined : buildSmartButtons(reply, factualScope || []) || undefined,
         afterDeliver: async () => {
           if (platform !== "facebook" || !token) return;
           const mediaPolicy = getReplyMediaPolicy(intentText, reply);
@@ -1095,6 +1108,7 @@ async function handleMessage(
           phoneAlreadyRequested,
         ),
         failTag: "compare_fast_path",
+        catalogTripIds: tripsNamedIn(compareReply, trips).map(trip => trip.id),
         rememberSource: "api.webhook.compare_fast_path",
         counter: "webhook.compare_fast_path_total",
       });
@@ -1122,6 +1136,7 @@ async function handleMessage(
       await deliverFastPathReply({
         reply: enforceWebsiteForPayment(sanitizeAssistantReply(clarifyBody)),
         failTag: "scoped_clarify",
+        catalogTripIds: routed.scopedClarify.map(trip => trip.id),
         rememberSource: "api.webhook.scoped_clarify",
         counter: "webhook.scoped_clarify_total",
         buttons: routed.informationalAlternatives
@@ -1152,6 +1167,7 @@ async function handleMessage(
     await deliverFastPathReply({
       reply: sanitizeAssistantReply(weather.reply),
       failTag: "weather_fast_path",
+      catalogTripIds: weather.kind === "clarify" ? weather.candidates.map(trip => trip.id) : undefined,
       rememberSource: "api.webhook.weather_fast_path",
       counter: "webhook.weather_fast_path_total",
       buttons: weather.kind === "clarify" ? buildClarificationButtons(weather.candidates) : undefined,
@@ -1169,6 +1185,7 @@ async function handleMessage(
           phoneAlreadyRequested,
         ),
         failTag: "sold_out_named",
+        catalogTripIds: tripsNamedIn(soldOutReply, await getTrips()).map(trip => trip.id),
         rememberSource: "api.webhook.sold_out_named",
         counter: "webhook.sold_out_named_total",
       });
@@ -1193,6 +1210,7 @@ async function handleMessage(
       await deliverFastPathReply({
         reply: enforceWebsiteForPayment(sanitizeAssistantReply(listing.reply)),
         failTag: "catalog_listing",
+        catalogTripIds: listing.listed.map(trip => trip.id),
         rememberSource: "api.webhook.catalog_listing",
         counter: "webhook.catalog_listing_total",
         buttons: buildClarificationButtons(listing.listed),
@@ -1242,6 +1260,7 @@ async function handleMessage(
             sanitizeAssistantReply(totalReply || buildAmbiguousTripReply(resolution.candidates)),
           ),
           failTag: "structured_clarify",
+          catalogTripIds: resolution.candidates.map(trip => trip.id),
           rememberSource: "api.webhook.structured_clarify",
           counter: "webhook.structured_clarify_total",
           buttons: buildClarificationButtons(resolution.candidates),
@@ -1296,6 +1315,7 @@ async function handleMessage(
       await deliverFastPathReply({
         reply: safeDateReply,
         failTag: "date_availability_reply",
+        catalogTripIds: tripsNamedIn(dateAvailabilityReply, routed.scopedClarify || trips).map(trip => trip.id),
         rememberSource: "api.webhook.date_fast_path",
         buttons: buildSmartButtons(safeDateReply, trips) || undefined,
       });
@@ -1342,6 +1362,7 @@ async function handleMessage(
           phoneAlreadyRequested,
         ),
         failTag: "budget_fast_path",
+        catalogTripIds: tripsNamedIn(budgetReply, trips).map(trip => trip.id),
         rememberSource: "api.webhook.budget_fast_path",
         counter: "webhook.budget_fast_path_total",
         buttons: buildSmartButtons(budgetReply, trips) || undefined,
@@ -1359,6 +1380,7 @@ async function handleMessage(
           phoneAlreadyRequested,
         ),
         failTag: "discount_fast_path",
+        catalogTripIds: tripsNamedIn(discountReply, trips).map(trip => trip.id),
         rememberSource: "api.webhook.discount_fast_path",
         counter: "webhook.discount_fast_path_total",
         buttons: buildSmartButtons(discountReply, trips) || undefined,
@@ -1379,6 +1401,7 @@ async function handleMessage(
           phoneAlreadyRequested,
         ),
         failTag: "bare_price_fast_path",
+        catalogTripIds: tripsNamedIn(barePriceReply, trips).map(trip => trip.id),
         rememberSource: "api.webhook.bare_price_fast_path",
         counter: "webhook.bare_price_fast_path_total",
         buttons: buildSmartButtons(barePriceReply, trips) || undefined,
@@ -1402,6 +1425,7 @@ async function handleMessage(
           )
         : "REFER",
       failTag: "price_lookup_fast_path",
+      catalogTripIds: priceLookupReply ? tripsNamedIn(priceLookupReply, trips).map(trip => trip.id) : undefined,
       rememberSource: "api.webhook.price_lookup_fast_path",
       counter: "webhook.price_lookup_fast_path_total",
       buttons: priceLookupReply ? (buildSmartButtons(priceLookupReply, trips) || undefined) : undefined,
@@ -1453,6 +1477,7 @@ async function handleMessage(
       await deliverFastPathReply({
         reply: safeProgramReply,
         failTag: "program_fast_path",
+        catalogTripIds: programResolution?.status === "ambiguous" ? programResolution.candidates.map(trip => trip.id) : undefined,
         rememberSource: "api.webhook.program_fast_path",
         counter: "webhook.program_fast_path_total",
         buttons: programButtons,

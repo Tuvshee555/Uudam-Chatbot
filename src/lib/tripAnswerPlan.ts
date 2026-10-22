@@ -7,9 +7,11 @@ import { tripDurationDays, getTripBrochureAsset, getTripWebsiteLink } from "./tr
 import { departureAvailability, departureIsClosed, departureIsLow, openDateWording } from "./departureAvailability";
 import { compactReplyOptions, presentAssistantReply, replyPreferences } from "./chatbotReplyPolicy";
 import { stripTripNamesForIntent } from "./customerTurn";
-import { buildOptionalExtrasReply } from "./tripExtrasReply";
+import { isOptionalExtrasQuestion } from "./tripExtrasReply";
 import { customerDate as mnDate } from "./customerDate";
 import { dateIsOnSale } from "./tripFareBlock";
+import { hasSeatsIntent } from "./travelFastPaths";
+import { isReferReply } from "./reply";
 
 export type TripAnswerPlan = {
   status: "answered" | "clarify" | "handoff";
@@ -20,6 +22,8 @@ export type TripAnswerPlan = {
   offer: TripOfferResult | null;
   answeredTopics: TripTopic[];
   missingTopics: TripTopic[];
+  /** Requested facts the data could not establish; never inferred from reply prose. */
+  missingFacts: string[];
   mediaUrls: string[];
   brochureUrl: string | null;
 };
@@ -106,33 +110,48 @@ export function buildTripAnswerPlan(input: {
   const trip = trips.find((candidate) => candidate.id === route.chosenTripId);
   if (!trip) return null;
   const now = input.now || new Date();
-  const intentText = stripTripNamesForIntent(input.text, trips);
+  const requestText = route.requestText || input.text;
+  const intentText = stripTripNamesForIntent(requestText, trips);
   const preferences = replyPreferences(intentText);
-  const request = buildTripRequest(input.text, trips, route.understanding, now);
-  const extrasReply = buildOptionalExtrasReply(trip, intentText);
-  if (extrasReply) {
+  const request = buildTripRequest(requestText, trips, route.understanding, now);
+  const selection = mergeTripSelection(trip.id, request, route.selection || null);
+  if (request.unsupportedDateWindow) {
     return {
-      status: "answered", tripId: trip.id, selection: mergeTripSelection(trip.id, request, route.selection || null), request,
-      reply: extrasReply, offer: null, answeredTopics: request.topics, missingTopics: [], mediaUrls: [], brochureUrl: null,
+      status: "handoff", tripId: trip.id, selection, request, reply: "REFER", offer: null,
+      answeredTopics: [], missingTopics: request.topics, missingFacts: ["dates.window"], mediaUrls: [], brochureUrl: null,
+    };
+  }
+  if (request.requestedFacts?.length) {
+    // The catalog has no typed source for these requested properties. A hotel
+    // name, a fare, or another answered topic cannot establish them.
+    return {
+      status: "handoff", tripId: trip.id, selection, request, reply: "REFER", offer: null,
+      answeredTopics: [], missingTopics: request.topics,
+      missingFacts: [...new Set(request.requestedFacts.map(fact => fact.field))], mediaUrls: [], brochureUrl: null,
+    };
+  }
+  if (isOptionalExtrasQuestion(intentText)) {
+    // Listing an add-on and its price cannot establish whether it is mandatory.
+    // No supported mandatory/optional field exists in the source schema yet.
+    return {
+      status: "handoff", tripId: trip.id, selection, request,
+      reply: "REFER", offer: null, answeredTopics: [], missingTopics: request.topics,
+      missingFacts: ["extras.mandatory"], mediaUrls: [], brochureUrl: null,
     };
   }
   if (!request.topics.length || request.topics.some((topic) => ["comparison", "budget"].includes(topic))) return null;
-  if (request.topics.includes("weather") && !input.weatherReply) return null;
-  const selection = mergeTripSelection(trip.id, request, route.selection || null);
   const wantsPartyTotal = /нийт|total|\d+\s*(?:том\s*хүн|хүүхэд|нярай|adult|child|infant|tom\s*hun|huuhed|nyarai)/i.test(intentText) || !preferences.fareKinds.length;
   const pricePassengers = wantsPartyTotal ? selection.passengers
     : request.passengers.length ? request.passengers
       : [];
   const requirements: TripRequirement[] = [];
   if (request.days) requirements.push({ kind: "days", days: request.days });
-  if (route.understanding?.transport) requirements.push({ kind: "transport", transport: route.understanding.transport });
+  if (request.transport) requirements.push({ kind: "transport", transport: request.transport });
   const failed = requirements.find((requirement) => evaluateTripRequirement(trip, requirement, now) !== "match");
   if (failed) {
     return {
-      status: "clarify", tripId: trip.id, selection, request, offer: null,
-      reply: failed.kind === "days" ? `«${trip.route_name}» аяллын хугацаа: ${trip.duration_text || "аяллын зөвлөхөөс тодруулна"}. Таны хүссэн хоногт тохирох хувилбарыг тодруулах уу?`
-        : `«${trip.route_name}» аяллын тээврийн төрөл таны хүсэлттэй таарах эсэхийг аяллын зөвлөхөөс тодруулъя.`,
-      answeredTopics: [], missingTopics: request.topics, mediaUrls: [], brochureUrl: null,
+      status: "handoff", tripId: trip.id, selection, request, offer: null, reply: "REFER",
+      answeredTopics: [], missingTopics: request.topics, missingFacts: [`requirement.${failed.kind}`], mediaUrls: [], brochureUrl: null,
     };
   }
   const lines = [trip.route_name];
@@ -141,13 +160,16 @@ export function buildTripAnswerPlan(input: {
   const dates = [...new Set(offers.filter((offer) => offer.source !== "discount").flatMap((offer) => offer.dates))].filter((date) => date >= today(now)).sort();
   const scopedDates = dates.filter((date) => (!request.month || Number(date.slice(5, 7)) === request.month)
     && (!request.year || Number(date.slice(0, 4)) === request.year)
-    && (!route.understanding?.range || (date >= route.understanding.range[0] && date <= route.understanding.range[1])));
+    && (!request.range || (date >= request.range[0] && date <= request.range[1])));
   const websiteAvailability = departureAvailability(trip);
   const sections: Partial<Record<TripTopic, string>> = {};
+  const incomplete = new Map<TripTopic, string[]>();
+  const missingFact = (topic: TripTopic, field: string) => incomplete.set(topic, [...(incomplete.get(topic) || []), `${topic}.${field}`]);
+  const asksSeats = hasSeatsIntent(intentText);
   let result: TripOfferResult | null = null;
   let needsSelection = false;
   if (request.topics.includes("price") || request.topics.includes("availability") || request.topics.includes("discount")) {
-    const hasDateScope = Boolean(request.month || request.year || route.understanding?.range);
+    const hasDateScope = Boolean(request.month || request.year || request.range);
     // A newly requested month overrides an old exact-date selection. Never use
     // October's stored offer to answer a November fare question.
     if (hasDateScope && !request.date && selection.date && !scopedDates.includes(selection.date)) selection.date = null;
@@ -175,17 +197,19 @@ export function buildTripAnswerPlan(input: {
         sections.price = reply ? [baseHotel ? `Буудал: ${baseHotel}` : null, reply].filter(Boolean).join("\n") : undefined;
       }
       if (request.topics.includes("availability")) {
-        sections.availability = result.offer.availability.status === "open"
-          ? `${mnDate(result.offer.date)}: ${openDateWording(result.offer.availability)}.`
-          : `${mnDate(result.offer.date)}: гарах хуваарьтай. Суудлын үлдэгдлийг аяллын зөвлөхөөс тодруулна уу.`;
+        if (result.offer.availability.status === "open") sections.availability = `${mnDate(result.offer.date)}: ${openDateWording(result.offer.availability)}.`;
+        else if (asksSeats) missingFact("availability", "seats");
+        else sections.availability = `${mnDate(result.offer.date)}: гарах хуваарьтай.`;
       }
     } else {
       if (request.topics.includes("availability") && result.status === "missing" && result.reason === "fare_missing" && offers.every((offer) => offer.source === "base")) {
         const date = selection.date || (dates.length === 1 ? dates[0] : null);
         const availability = date ? offers[0]?.availability.find((row) => row.date === date) : null;
-        if (availability && ["open", "unknown"].includes(availability.status)) sections.availability = availability.status === "open"
-          ? `${mnDate(date ?? "")}: ${openDateWording(availability)}.`
-          : `${mnDate(date ?? "")}: гарах хуваарьтай. Суудлын үлдэгдлийг аяллын зөвлөхөөс тодруулна уу.`;
+        if (availability?.status === "open") sections.availability = `${mnDate(date ?? "")}: ${openDateWording(availability)}.`;
+        else if (availability?.status === "unknown") {
+          if (asksSeats) missingFact("availability", "seats");
+          else sections.availability = `${mnDate(date ?? "")}: гарах хуваарьтай.`;
+        }
       }
       // "Is there a <trip>?" is answered with the fare as well as the date question when every date sells at one price.
       const wantsPreview = request.topics.includes("price") ? !request.topics.includes("availability") : request.topics.every((topic) => topic === "availability");
@@ -228,7 +252,8 @@ export function buildTripAnswerPlan(input: {
   if (request.topics.includes("hotel")) {
     const hotels = [...new Set(offers.filter((offer) => (!selection.date || !offer.dateScoped || offer.dates.includes(selection.date)) && (!selection.hotel || offer.hotel?.toLowerCase() === selection.hotel.toLowerCase())).map((offer) => offer.hotel).filter((hotel): hotel is string => Boolean(hotel)))];
     if (hotels.length) sections.hotel = `Буудал:\n${compactReplyOptions(hotels, intentText).map((hotel) => `• ${hotel}`).join("\n")}`;
-    else if (trip.hotel && !selection.hotel && offers.every((offer) => !offer.hotel)) sections.hotel = `Буудал: ${trip.hotel}`;
+    else if (trip.hotel && (!selection.hotel || selection.hotel.trim().toLowerCase() === trip.hotel.trim().toLowerCase())
+      && offers.every((offer) => !offer.hotel && !offer.hotelId)) sections.hotel = `Буудал: ${trip.hotel}`;
   }
   if (request.topics.includes("includes")) {
     const included = strings(trip.extra.included_items).filter((item) => !preferences.includes.length || preferences.includes.some((target) => target.pattern.test(item)));
@@ -236,11 +261,11 @@ export function buildTripAnswerPlan(input: {
     const foodTarget = preferences.includes.find((target) => target.label === "Хоол");
     const foodFallback = foodTarget && ![...included, ...excluded].some((item) => foodTarget.pattern.test(item)) && trip.has_food !== null;
     const unknownTargets = preferences.includes.filter((target) => !(target.label === "Хоол" && foodFallback) && ![...included, ...excluded].some((item) => target.pattern.test(item)));
+    for (const target of unknownTargets) missingFact("includes", target.label);
     if (included.length || excluded.length || foodFallback) sections.includes = [
       ...(included.length ? ["Үнэд багтсан:", ...included.map((item) => `• ${item}`)] : []),
       ...(excluded.length ? ["Үнэд багтаагүй:", ...excluded.map((item) => `• ${item}`)] : []),
       ...(foodFallback ? [`Хоол: ${trip.has_food ? "багтсан" : "багтаагүй"}.`] : []),
-      ...unknownTargets.map((target) => `${target.label}: аяллын зөвлөхөөс тодруулах шаардлагатай.`),
     ].join("\n");
   }
   if (request.topics.includes("booking_terms")) {
@@ -250,7 +275,7 @@ export function buildTripAnswerPlan(input: {
     const labels: Record<string, string> = { deposit: "Урьдчилгаа", payment: "Төлбөр", documents: "Бичиг баримт", visa: "Виз", cancellation: "Цуцлалт, буцаалт" };
     const requestedTerms = Object.entries(labels).filter(([key]) => !preferences.termKeys.length || preferences.termKeys.includes(key as typeof preferences.termKeys[number]));
     const termsLines = requestedTerms.flatMap(([key, label]) => typeof terms[key] === "string" && terms[key] ? [`${label}: ${terms[key]}`] : []);
-    if (termsLines.length) termsLines.push(...requestedTerms.filter(([key]) => typeof terms[key] !== "string" || !terms[key]).map(([, label]) => `${label}: аяллын зөвлөхөөс тодруулах шаардлагатай.`));
+    for (const [key] of requestedTerms) if (typeof terms[key] !== "string" || !terms[key]) missingFact("booking_terms", key);
     if (termsLines.length) sections.booking_terms = termsLines.join("\n");
   }
   let mediaUrls: string[] = [];
@@ -277,7 +302,10 @@ export function buildTripAnswerPlan(input: {
       if (mediaUrls.length) sections.photos = "Аяллын зургуудыг хавсаргалаа.";
     }
   }
-  if (request.topics.includes("weather")) sections.weather = input.weatherReply;
+  if (request.topics.includes("weather")) {
+    if (input.weatherReply?.trim() && !isReferReply(input.weatherReply)) sections.weather = input.weatherReply;
+    else missingFact("weather", "report");
+  }
   if (request.topics.includes("discount")) {
     const discounts = offers.filter((offer) => offer.discount?.active && (!selection.date || !offer.dateScoped || offer.dates.includes(selection.date)) && (!selection.hotel || !offer.hotel || offer.hotel.toLowerCase() === selection.hotel.toLowerCase()));
     const conditions = [...new Set(discounts.flatMap((offer) => offer.discount?.condition ? [offer.discount.condition] : []))];
@@ -286,11 +314,14 @@ export function buildTripAnswerPlan(input: {
     else if (result?.status === "ready") sections.discount = "Сонгосон гаралт, буудалд үйлчлэх баталгаажсан хямдралыг үнэд тооцсон.";
   }
   for (const topic of request.topics) if (sections[topic]) { lines.push(sections[topic]!); answered.add(topic); }
+  for (const topic of incomplete.keys()) answered.delete(topic);
   const missing = request.topics.filter((topic) => !answered.has(topic));
-  if (missing.length && answered.size) lines.push("Үлдсэн асуултын баталгаатай мэдээлэл одоогоор алга. Аяллын зөвлөхөөс тодруулах шаардлагатай.");
+  const missingFacts = [...new Set(missing.flatMap((topic) => incomplete.get(topic) || [topic]))];
+  const handoff = missing.length > 0;
   return {
-    status: answered.size === 0 ? "handoff" : needsSelection ? "clarify" : "answered",
-    tripId: trip.id, selection, request, reply: answered.size ? presentAssistantReply({ reply: [...new Set(lines)].join("\n\n"), userText: intentText }) : "REFER",
-    offer: result, answeredTopics: [...answered], missingTopics: missing, mediaUrls, brochureUrl,
+    status: handoff ? "handoff" : needsSelection ? "clarify" : "answered",
+    tripId: trip.id, selection, request, reply: handoff ? "REFER" : presentAssistantReply({ reply: [...new Set(lines)].join("\n\n"), userText: intentText }),
+    offer: result, answeredTopics: [...answered], missingTopics: missing, missingFacts,
+    mediaUrls: handoff ? [] : mediaUrls, brochureUrl: handoff ? null : brochureUrl,
   };
 }

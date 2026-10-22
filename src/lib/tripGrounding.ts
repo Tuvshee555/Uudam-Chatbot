@@ -1,15 +1,4 @@
-/**
- * The one check every reply passes before it is sent: a reply about ONE trip must be
- * about a trip the conversation actually points to.
- *
- * Why it exists: 26 reply branches and some 56 call sites each pick a trip their own
- * way (strict and loose name matching, date scoping, place words, the model, ad links).
- * Each wrong-trip bug was fixed in the branch it came through, and the next one came
- * through another: Hainan quoted to a customer who wrote only "1", "vne" (model door),
- * the Ordos trip for "any trip Oct 20–23?" ("хооронд" read as an alias — date door).
- * Checking at the exit covers every door at once. The owner's rule decides the outcome:
- * a reply the conversation does not support is not sent; staff take the question.
- */
+/** Customer evidence at the delivery boundary must predate the answer's selection. */
 import type { TravelTrip } from "./travelTypes";
 import { normText } from "./travelTextNorm";
 import { queryNamedPlaces, resolveTripFromUserMessage, tripMentionsAllPlaces } from "./travelFastPathsSearch";
@@ -24,8 +13,10 @@ export type GroundingContext = {
   pendingTripIds?: string[];
   /** The trip the customer is on (picked earlier, or opened from an ad / the website). */
   selectionTripId?: string | null;
-  /** Trips the router settled on this turn from a sound basis. */
+  /** Legacy caller field. A router's newly selected IDs cannot authorize themselves. */
   routedTripIds?: string[];
+  /** Explicit alternatives produced by a deterministic catalog/clarification builder. */
+  catalogTripIds?: string[];
   trips: TravelTrip[];
 };
 
@@ -53,9 +44,14 @@ function tripsFromWords(text: string, trips: TravelTrip[]): TravelTrip[] {
     : resolution.status === "ambiguous" ? resolution.candidates : [];
   if (website.slugs.length > 0) return resolved;
   const words = website.textWithoutUrls;
+  const named = tripsNamedIn(words, trips);
+  if (named.length) return named;
+  if (resolved.length) return resolved;
+  const shared = tripsSharingNameWords(words, trips);
+  if (shared.length) return shared;
   const places = queryNamedPlaces(words, trips).places;
   const byPlace = places.length ? trips.filter((trip) => tripMentionsAllPlaces(trip, places)) : [];
-  return [...resolved, ...byPlace, ...tripsNamedIn(words, trips), ...tripsSharingNameWords(words, trips)];
+  return byPlace;
 }
 
 const nameWords = (text: string) => normText(text).split(/[^\p{L}]+/u).filter((word) => word.length >= 4);
@@ -75,40 +71,33 @@ function tripsSharingNameWords(text: string, trips: TravelTrip[]): TravelTrip[] 
 
 /** Every trip this conversation gives the bot a reason to talk about. */
 export function groundedTripIds(context: GroundingContext): Set<string> {
+  const current = tripsFromWords(context.customerText, context.trips).map(trip => trip.id);
+  const catalog = context.catalogTripIds || [];
   if (websiteTripLinksInText(context.customerText).slugs.length > 0) {
     // A newly shared page replaces prior chat context, including a stale
     // selection. An unknown page gives no permission to answer about an old trip.
-    return new Set(tripsFromWords(context.customerText, context.trips).map(trip => trip.id));
+    return new Set(current);
   }
-  const ids = new Set<string>([
-    ...(context.pendingTripIds || []),
-    ...(context.selectionTripId ? [context.selectionTripId] : []),
-    ...(context.routedTripIds || []),
-  ]);
-  for (const trip of tripsFromWords(context.customerText, context.trips)) ids.add(trip.id);
-  for (const message of context.history.slice(-RECENT_TURNS)) {
-    const trips = message.role === "user" ? tripsFromWords(message.text, context.trips) : tripsNamedIn(message.text, context.trips);
-    for (const trip of trips) ids.add(trip.id);
+  if (current.length) return new Set([...current, ...catalog]);
+  if (context.pendingTripIds?.length) return new Set([...context.pendingTripIds, ...catalog]);
+  if (context.selectionTripId) return new Set([context.selectionTripId, ...catalog]);
+  const recent = context.history.slice(-RECENT_TURNS).reverse();
+  for (const role of ["user", "assistant"] as const) {
+    for (const message of recent) {
+      if (message.role !== role) continue;
+      const trips = role === "user" ? tripsFromWords(message.text, context.trips) : tripsNamedIn(message.text, context.trips);
+      if (trips.length) return new Set([...trips.map(trip => trip.id), ...catalog]);
+    }
   }
-  return ids;
+  return new Set(catalog);
 }
 
 /**
- * The trip a single-trip reply is about when nothing in the conversation points to it,
- * else null. A reply naming several trips is a list the customer asked for (a month, a
- * kind, a "which one?") and is judged by the other checks.
+ * Formatting and the number of named trips confer no authority. Catalog builders
+ * supply their explicit result IDs; model prose must use existing customer scope.
  */
 export function ungroundedTripInReply(reply: string, context: GroundingContext): TravelTrip | null {
   const named = tripsNamedIn(reply, context.trips);
-  if (websiteTripLinksInText(context.customerText).slugs.length > 0) {
-    const allowed = groundedTripIds(context);
-    return named.find(trip => !allowed.has(trip.id)) || null;
-  }
-  if (named.length !== 1) return null;
-  // A bullet or numbered line is an item of a list the customer asked for ("which trips leave on
-  // the 8th?", "the cheapest", "trips to <place>") even when the list has one item.
-  const name = normText(named[0].route_name);
-  const listed = reply.split(/\r?\n/).some((line) => /^\s*(?:[•*\-]|\d{1,2}[.)])\s*/.test(line) && normText(line).includes(name));
-  if (listed) return null;
-  return groundedTripIds(context).has(named[0].id) ? null : named[0];
+  const allowed = groundedTripIds(context);
+  return named.find(trip => !allowed.has(trip.id)) || null;
 }
