@@ -60,10 +60,33 @@ function unavailableText(result: TripOfferResult): string | null {
   }
 }
 
+function ageQualifiedPartyCoversKind(text: string, result: Extract<TripOfferResult, { status: "ready" }>, kind: "adult" | "child" | "infant") {
+  if (kind === "adult") return false;
+  const label = kind === "child" ? "(?:хүүх(?:эд|дийн)|child(?:ren)?|huuhed|huuhdiin)" : "(?:нярай(?:н)?|infant(?:s)?|nyarai)";
+  return result.offer.passengerPrices.some(passenger => {
+    if (passenger.age === null || passenger.fare.kind === "unknown") return false;
+    const age = String(passenger.age).replace(".", "[.,]");
+    const unit = passenger.ageUnit === "month" ? "(?:сартай|months?\\s*old)" : "(?:настай|nas(?:tai)?|years?\\s*old)";
+    // An age-named child may legitimately use the adult fare. Only that
+    // customer's age/label phrase authorizes the reclassification; another
+    // adult's age cannot answer a separate child-fare question.
+    return new RegExp(`(?<![\\d.,])${age}\\s*${unit}\\s*${label}|${label}\\s*(?:(?:нь|is|aged)\\s*)?${age}\\s*${unit}`, "iu").test(text);
+  });
+}
+
+function missingRequestedFares(result: TripOfferResult, kinds: ReturnType<typeof replyPreferences>["requiredFareKinds"], customerText = "") {
+  if (result.status !== "ready") return [];
+  if (result.offer.passengerPrices.length) return kinds.filter(kind =>
+    !result.offer.passengerPrices.some(passenger => passenger.kind === kind && passenger.fare.kind !== "unknown")
+    && !ageQualifiedPartyCoversKind(customerText, result, kind));
+  return kinds.filter(kind => !result.offer.fares.some(fare => fare.kind === kind && fare.fare.kind !== "unknown"));
+}
+
 function stableFarePreview(trip: TravelTrip, selection: TripSelection, result: TripOfferResult, now: Date, text: string): string | null {
   if (selection.passengers.length || result.status !== "needs_selection" || result.fields[0] !== "date") return null;
   const cards = result.options.map((date) => resolveTripOfferFareCard(trip, { date, hotel: selection.hotel, packageId: selection.package }, now));
-  const { fareKinds } = replyPreferences(text);
+  const { fareKinds, requiredFareKinds } = replyPreferences(text);
+  if (cards.some(card => missingRequestedFares(card, requiredFareKinds).length)) return null;
   const signature = (card: TripOfferResult) => card.status === "ready" ? JSON.stringify({
     hotel: card.offer.hotel, package: card.offer.packageId, currency: card.offer.currency,
     conditions: [...card.offer.conditions].sort(),
@@ -82,7 +105,7 @@ function stableFarePreview(trip: TravelTrip, selection: TripSelection, result: T
  */
 function hotelFarePreview(trip: TravelTrip, selection: TripSelection, result: TripOfferResult, now: Date, text: string): string | null {
   if (result.status !== "needs_selection" || result.fields[0] !== "hotel" || !selection.date || result.options.length > 4) return null;
-  const { fareKinds } = replyPreferences(text);
+  const { fareKinds, requiredFareKinds } = replyPreferences(text);
   const blocks: string[] = [];
   for (const hotel of result.options) {
     const first = resolveTripOfferFareCard(trip, { date: selection.date, hotel, packageId: selection.package }, now);
@@ -90,7 +113,7 @@ function hotelFarePreview(trip: TravelTrip, selection: TripSelection, result: Tr
     const packages = first.status === "needs_selection" && first.fields[0] === "package" ? first.options : [null];
     for (const packageId of packages) {
       const card = packageId ? resolveTripOfferFareCard(trip, { date: selection.date, hotel, packageId }, now) : first;
-      if (card.status !== "ready") return null;
+      if (card.status !== "ready" || missingRequestedFares(card, requiredFareKinds).length) return null;
       const body = renderTripOfferReply(card, { fareKinds })?.split("\n").filter((line) => line !== mnDate(card.offer.date) && !/^Буудал:/.test(line) && ![hotel, packageId, `${hotel} · ${packageId}`].includes(line.trim())).join("\n");
       if (!body) return null;
       blocks.push(`Буудал: ${hotel}${packageId ? ` · ${packageId}` : ""}\n${body}`);
@@ -192,6 +215,7 @@ export function buildTripAnswerPlan(input: {
       if (request.topics.includes("price")) answered.add("price");
     } else if (result.status === "ready") {
       if (request.topics.includes("price")) {
+        for (const kind of missingRequestedFares(result, preferences.requiredFareKinds, intentText)) missingFact("price", kind);
         const reply = renderTripOfferReply(result, { fareKinds: preferences.fareKinds, showTotal: wantsPartyTotal });
         const baseHotel = !result.offer.hotel && offers.every((offer) => !offer.hotel) && trip.hotel;
         sections.price = reply ? [baseHotel ? `Буудал: ${baseHotel}` : null, reply].filter(Boolean).join("\n") : undefined;
@@ -258,9 +282,9 @@ export function buildTripAnswerPlan(input: {
   if (request.topics.includes("includes")) {
     const included = strings(trip.extra.included_items).filter((item) => !preferences.includes.length || preferences.includes.some((target) => target.pattern.test(item)));
     const excluded = strings(trip.extra.excluded_items).filter((item) => !preferences.includes.length || preferences.includes.some((target) => target.pattern.test(item)));
-    const foodTarget = preferences.includes.find((target) => target.label === "Хоол");
+    const foodTarget = preferences.requiredIncludes.find((target) => target.label === "Хоол");
     const foodFallback = foodTarget && ![...included, ...excluded].some((item) => foodTarget.pattern.test(item)) && trip.has_food !== null;
-    const unknownTargets = preferences.includes.filter((target) => !(target.label === "Хоол" && foodFallback) && ![...included, ...excluded].some((item) => target.pattern.test(item)));
+    const unknownTargets = preferences.requiredIncludes.filter((target) => !(target.label === "Хоол" && foodFallback) && ![...included, ...excluded].some((item) => target.pattern.test(item)));
     for (const target of unknownTargets) missingFact("includes", target.label);
     if (included.length || excluded.length || foodFallback) sections.includes = [
       ...(included.length ? ["Үнэд багтсан:", ...included.map((item) => `• ${item}`)] : []),
@@ -273,8 +297,9 @@ export function buildTripAnswerPlan(input: {
     const website = trip.extra.website_details && typeof trip.extra.website_details === "object" ? trip.extra.website_details as Record<string, unknown> : {};
     const terms = { ...storedTerms, documents: storedTerms.documents || website.requirements, cancellation: storedTerms.cancellation || website.cancellationPolicy } as Record<string, unknown>;
     const labels: Record<string, string> = { deposit: "Урьдчилгаа", payment: "Төлбөр", documents: "Бичиг баримт", visa: "Виз", cancellation: "Цуцлалт, буцаалт" };
-    const requestedTerms = Object.entries(labels).filter(([key]) => !preferences.termKeys.length || preferences.termKeys.includes(key as typeof preferences.termKeys[number]));
-    const termsLines = requestedTerms.flatMap(([key, label]) => typeof terms[key] === "string" && terms[key] ? [`${label}: ${terms[key]}`] : []);
+    const requestedTerms = Object.entries(labels).filter(([key]) => !preferences.requiredTermKeys.length || preferences.requiredTermKeys.includes(key as typeof preferences.requiredTermKeys[number]));
+    const displayedTerms = Object.entries(labels).filter(([key]) => !preferences.termKeys.length || preferences.termKeys.includes(key as typeof preferences.termKeys[number]));
+    const termsLines = displayedTerms.flatMap(([key, label]) => typeof terms[key] === "string" && terms[key] ? [`${label}: ${terms[key]}`] : []);
     for (const [key] of requestedTerms) if (typeof terms[key] !== "string" || !terms[key]) missingFact("booking_terms", key);
     if (termsLines.length) sections.booking_terms = termsLines.join("\n");
   }

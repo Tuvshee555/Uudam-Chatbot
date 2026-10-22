@@ -34,9 +34,11 @@ export function replyPreferences(text: string) {
     { label: "Виз", pattern: /виз|visa/i },
     { label: "Унаа", pattern: /унаа|transfer|тээвэр|transport|unaa/i },
   ].filter((target) => target.pattern.test(text));
+  const termKeys = terms.filter(([, pattern]) => pattern.test(text)).map(([key]) => key);
+  // Detail changes what is displayed, never which requested facts need support.
   return { full, optionLimit: full ? Infinity : 3, fareKinds: full ? [] : fareKinds,
-    termKeys: full ? [] : terms.filter(([, pattern]) => pattern.test(text)).map(([key]) => key),
-    includes: full ? [] : includes };
+    termKeys: full ? [] : termKeys, includes: full ? [] : includes,
+    requiredFareKinds: fareKinds, requiredTermKeys: termKeys, requiredIncludes: includes };
 }
 
 export function compactReplyOptions(options: string[], text: string): string[] {

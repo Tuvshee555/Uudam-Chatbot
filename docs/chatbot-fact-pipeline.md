@@ -39,6 +39,12 @@ unavailable weather report. Missing required facts produce a terminal handoff
 plan without media. Known exclusions and explicit closed departures remain
 valid factual answers; missing data never means a negative fact.
 
+Required inclusion items, booking term keys and passenger fare categories are
+kept separate from display preferences. Asking for full details can expand the
+display, but cannot erase a requested subquestion or let another fare stand in
+for an unknown requested category. Completeness checks always use the required
+targets, even when presentation shows all known information.
+
 `requestedFacts` preserves evidence-backed subquestions that broad topics cannot
 answer. Hotel connectivity, facilities, room properties, location and rating
 are separate requirements; the current catalog has no typed source for them, so

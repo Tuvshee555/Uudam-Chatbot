@@ -70,5 +70,47 @@ test("actual demo and signed webhook deliver identical structured coverage outco
       assert.ok(webhook.leads.some(lead => lead.kind === "handoff" && lead.context.includes("hotel.connectivity")));
       assert.equal(demo.body.handoff, true);
     });
+    await context.test("requesting full details preserves missing inclusion requirements in both channels", async () => {
+      const trip = fixture();
+      trip.extra = { ...trip.extra, included_items: ["Хоол"], excluded_items: [] };
+      harness.catalog([trip]);
+      for (const [index, detail] of ["", " дэлгэрэнгүй", " бүх мэдээллийг"].entries()) {
+        const text = `${trip.route_name} хоол болон даатгал үнэд багтсан уу${detail}`;
+        const model = { tripId: trip.id, place: trip.route_name, topics: ["includes"] };
+        const webhook = await harness.turn(`parity-webhook-full-includes-${index}`, text, model);
+        const demo = await harness.demoTurn(`parity-demo-full-includes-${index}`, text, model);
+        assert.equal(webhook.status, 200); assert.equal(demo.status, 200);
+        assert.deepEqual(webhook.sends, [], "unknown insurance cannot be covered by a known food answer");
+        assert.ok(webhook.leads.some(lead => lead.kind === "handoff" && lead.context.includes("includes.Даатгал")));
+        assert.equal(demo.body.handoff, true);
+      }
+    });
+    await context.test("full detail keeps supported booking terms answerable without requiring unasked terms", async () => {
+      const trip = fixture(true, true); harness.catalog([trip]);
+      const text = `${trip.route_name} визний нөхцөл дэлгэрэнгүй`;
+      const model = { tripId: trip.id, place: trip.route_name, topics: ["booking_terms"] };
+      const webhook = await harness.turn("parity-webhook-full-visa", text, model);
+      const demo = await harness.demoTurn("parity-demo-full-visa", text, model);
+      assert.equal(webhook.status, 200); assert.equal(demo.status, 200);
+      assert.equal(webhook.sends.length, 1); assert.equal(webhook.leads.length, 0);
+      assert.equal(demo.body.handoff, undefined);
+      assert.equal(demo.body.reply, webhook.sends[0].text);
+      assert.match(String(demo.body.reply), /Виз шаардахгүй/);
+    });
+    await context.test("a full fare card cannot replace an unknown requested child fare with an adult fare", async () => {
+      const trip = fixture();
+      trip.child_price = null;
+      harness.catalog([trip]);
+      for (const [index, question] of ["хүүхдийн үнэ дэлгэрэнгүй", "2 том хүн хүүхдийн үнэ дэлгэрэнгүй"].entries()) {
+        const text = `${trip.route_name} ${question}`;
+        const model = { tripId: trip.id, place: trip.route_name, topics: ["price"] };
+        const webhook = await harness.turn(`parity-webhook-full-child-${index}`, text, model);
+        const demo = await harness.demoTurn(`parity-demo-full-child-${index}`, text, model);
+        assert.equal(webhook.status, 200); assert.equal(demo.status, 200);
+        assert.deepEqual(webhook.sends, []);
+        assert.ok(webhook.leads.some(lead => lead.kind === "handoff"));
+        assert.equal(demo.body.handoff, true);
+      }
+    });
   } finally { await harness.close(); }
 });
