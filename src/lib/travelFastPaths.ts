@@ -1301,6 +1301,40 @@ const UNAVAILABLE_STATUS_WORDING: Record<"sold_out" | "paused", {
   },
 };
 
+/**
+ * Active trips sharing the unavailable trip's destination words (data-driven, never
+ * hardcoded names), cheapest first — what a human agent would offer instead.
+ */
+function sameDestinationOpenTrips(best: TravelTrip, trips: TravelTrip[]): TravelTrip[] {
+  // A weekly schedule has no dated list (null) and stays; a trip whose every date is full goes.
+  const isBookable = (trip: TravelTrip) => !onSaleDepartureText(trip)?.startsWith("Ойрын");
+  const matchTokens = unique([
+    ...keywordTokens(best.route_name),
+    ...getAliases(best).flatMap((alias) => keywordTokens(alias)),
+  ]).filter((token) => token.length >= 4);
+  return trips
+    // Only trips that can still be booked: an "open" alternative with no open date is not one.
+    .filter((trip) => trip.status === "active" && trip.id !== best.id && isBookable(trip))
+    .map((trip) => {
+      const candidateTokens = new Set([
+        ...keywordTokens(trip.route_name),
+        ...getAliases(trip).flatMap((alias) => keywordTokens(alias)),
+        ...keywordTokens(trip.source_description || ""),
+      ]);
+      const overlap = matchTokens.filter((token) => candidateTokens.has(token));
+      return { trip, score: overlap.length, overlap };
+    })
+    .filter((candidate) => candidate.score > 0)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      const aPrice = typeof a.trip.adult_price === "number" ? a.trip.adult_price : Number.MAX_SAFE_INTEGER;
+      const bPrice = typeof b.trip.adult_price === "number" ? b.trip.adult_price : Number.MAX_SAFE_INTEGER;
+      return aPrice - bPrice;
+    })
+    .slice(0, 3)
+    .map((candidate) => candidate.trip);
+}
+
 function buildUnavailableTripReply(
   text: string,
   trips: TravelTrip[],
@@ -1328,30 +1362,7 @@ function buildUnavailableTripReply(
   // three bookable <city> trips went unmentioned. Pitch ACTIVE trips that
   // share the unavailable trip's destination words (data-driven — never
   // hardcoded names) in the same breath, like a human agent would.
-  const matchTokens = unique([
-    ...keywordTokens(best.route_name),
-    ...getAliases(best).flatMap((alias) => keywordTokens(alias)),
-  ]).filter((token) => token.length >= 4);
-  const alternatives = trips
-    .filter((trip) => trip.status === "active" && trip.id !== best.id)
-    .map((trip) => {
-      const candidateTokens = new Set([
-        ...keywordTokens(trip.route_name),
-        ...getAliases(trip).flatMap((alias) => keywordTokens(alias)),
-        ...keywordTokens(trip.source_description || ""),
-      ]);
-      const overlap = matchTokens.filter((token) => candidateTokens.has(token));
-      return { trip, score: overlap.length, overlap };
-    })
-    .filter((candidate) => candidate.score > 0)
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      const aPrice = typeof a.trip.adult_price === "number" ? a.trip.adult_price : Number.MAX_SAFE_INTEGER;
-      const bPrice = typeof b.trip.adult_price === "number" ? b.trip.adult_price : Number.MAX_SAFE_INTEGER;
-      return aPrice - bPrice;
-    })
-    .slice(0, 3)
-    .map((candidate) => candidate.trip);
+  const alternatives = sameDestinationOpenTrips(best, trips);
 
   if (alternatives.length > 0) {
     const altLines = alternatives.map((trip) => formatAlternativeTripLine(trip, safeDurationText(trip.duration_text)));
@@ -1401,8 +1412,18 @@ export function buildDepartureUnavailableReply(text: string, trips: TravelTrip[]
   // The open dates come from the same on-sale list as the trip card: sorted,
   // without departed or copied-year dates (it used to print every raw row).
   const open = onSaleDepartureText(match.trip);
-  return [`${match.trip.route_name}`, `${shortDate(closed.date)} — ${wording}.`,
-    open && !open.startsWith("Ойрын") ? `Нээлттэй гарах өдрүүд: ${open}` : "Өөр гарах өдрийг аяллын зөвлөхөөс тодруулъя."].join("\n");
+  if (open && !open.startsWith("Ойрын")) {
+    return [`${match.trip.route_name}`, `${shortDate(closed.date)} — ${wording}.`, `Нээлттэй гарах өдрүүд: ${open}`].join("\n");
+  }
+  // Nothing else open on this trip: offer the same destination's open trips, as the
+  // whole-trip sold-out answer does. "Өөр гарах өдрийг аяллын зөвлөхөөс тодруулъя." sent a
+  // customer away while other trips to the same city were open (2026-10-21).
+  const alternatives = sameDestinationOpenTrips(match.trip, trips);
+  if (alternatives.length) {
+    return [`${match.trip.route_name}`, `${shortDate(closed.date)} — ${wording}.`, "", "Гэхдээ ижил чиглэлд эдгээр аялал нээлттэй байна:",
+      ...alternatives.map((trip) => formatAlternativeTripLine(trip, safeDurationText(trip.duration_text))), "", "Аль нь сонирхол татаж байна вэ? 😊"].join("\n");
+  }
+  return [`${match.trip.route_name}`, `${shortDate(closed.date)} — ${wording}.`, "Өөр гарах өдрийг аяллын зөвлөхөөс тодруулъя."].join("\n");
 }
 
 export function buildSoldOutPrecedenceReply(text: string, trips: TravelTrip[]): string | null {

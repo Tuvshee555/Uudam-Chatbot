@@ -64,6 +64,18 @@ function withoutAddedUpTotals(text: string): string {
   return out.join("\n");
 }
 
+/**
+ * "3 сарын 1–14-ны хооронд гарах аяллууд" restates the window the customer asked about; its
+ * ends are not departures. Read as dates, "3 сарын 1" was an unknown departure and the whole
+ * correct list became silence whenever a "which trip?" list was open (2026-10-19). Only the
+ * window phrase is dropped — every departure listed under it is still checked.
+ */
+function withoutAskedWindows(text: string): string {
+  return text
+    .replace(/\d{1,2}\s*(?:-?\s*р)?\s*сарын\s*\d{1,2}\s*[–—-]\s*(?:\d{1,2}\s*(?:-?\s*р)?\s*сарын\s*)?\d{1,2}\s*(?:-?\s*(?:ны|ний|нд|ний))?\s*(?:хооронд|хүртэл)/giu, " ")
+    .replace(/\d{1,2}\s*(?:-?\s*р)?\s*сарын\s*\d{1,2}\s*-?\s*(?:ны|ний)?\s*-?(?:аас|ээс|оос|өөс|наас|нээс)\s*(?:\d{1,2}\s*(?:-?\s*р)?\s*сарын\s*)?\d{1,2}\s*-?\s*(?:ны|ний)?\s*(?:хооронд|хүртэл)/giu, " ");
+}
+
 /** Shared final check for AI and code-generated replies in both channels. */
 export function verifyTripReply(input: {
   reply: string; trips: TravelTrip[]; selection?: TripSelection | null; now?: Date;
@@ -73,7 +85,7 @@ export function verifyTripReply(input: {
   if (isReferReply(reply)) return reply;
   if (!trips.length) return [...reply.matchAll(AMOUNT)].length ? "REFER" : reply;
   // Links (a poster PDF id is full of digits) are not prices or dates.
-  const checked = withoutAddedUpTotals(withoutOwnText(reply.replace(/https?:\/\/\S+/g, " "), trips));
+  const checked = withoutAskedWindows(withoutAddedUpTotals(withoutOwnText(reply.replace(/https?:\/\/\S+/g, " "), trips)));
   const priceChecked = guardUnverifiedPrices(checked, trips, now);
   if (isReferReply(priceChecked)) return "REFER";
   const datesChecked = guardUnverifiedDates(checked, trips, undefined, now);

@@ -291,3 +291,14 @@ test("Latin-typed follow-ups and the meeting point find their topic", () => {
     assert.ok(plan?.request.topics.includes(topic), `${text} -> ${topic}`);
   }
 });
+
+test("a price question for a date sold at two hotels shows both hotels' fares", () => {
+  const t = trip({ hotel: "", extra: { price_groups: [
+    { dates: ["2026-10-08"], hotel: "Hotel Lumi", adult_price: 2_000_000 },
+    { dates: ["2026-10-08"], hotel: "Hotel Peln", adult_price: 3_000_000 },
+  ] } });
+  const plan = buildTripAnswerPlan({ text: "10 сарын 8-нд явах аялал байгаа юу? хэд вэ?", trips: [t], route: route(), now });
+  assert.match(plan!.reply, /Буудал: Hotel Lumi[\s\S]*2,000,000₮/);
+  assert.match(plan!.reply, /Буудал: Hotel Peln[\s\S]*3,000,000₮/);
+  assert.doesNotMatch(plan!.reply, /Аль буудлын/);
+});

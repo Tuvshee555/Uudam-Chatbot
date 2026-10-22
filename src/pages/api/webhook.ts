@@ -622,6 +622,25 @@ async function handleMessage(
     }
   }
 
+  // ── Emoji / punctuation only ("😊", "????") ────────────────────────────────
+  // No words, nothing to look up. The model read a lone "😊" as interest in a trip
+  // from the customer's memory and asked about it (2026-10-21). An emoji gets nothing;
+  // question marks mean the customer is waiting, so staff get a lead (no reply).
+  if (!/[\p{L}\p{N}]/u.test(text)) {
+    if (/[?？]/.test(text)) {
+      await deliverFastPathReply({
+        reply: "REFER",
+        failTag: "punctuation_only",
+        rememberSource: "api.webhook.punctuation_only",
+        counter: "webhook.punctuation_only_total",
+      });
+    } else {
+      await appendMessage(senderId, "user", text).catch(() => {});
+      recordCounter("webhook.emoji_only_silent_total", 1, { platform });
+    }
+    return;
+  }
+
   // ── Bare thank-you ─────────────────────────────────────────────────────────
   // "Баярлалаа" asks nothing. It used to borrow the previous turns' trips and
   // come back as a list of <city> trips. Answer it deterministically (also keeps

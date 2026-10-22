@@ -71,6 +71,31 @@ function stableFarePreview(trip: TravelTrip, selection: TripSelection, result: T
   return renderTripOfferReply(first, { fareKinds })?.split("\n").filter((line) => line !== mnDate(first.offer.date)).join("\n") || null;
 }
 
+/**
+ * A price question for a date sold at several hotels: each hotel's fare for that date.
+ * "11 сарын 25-нд … хэд вэ?" got only "Аль буудлын хувилбарыг сонгох вэ?" — the
+ * customer asked the price and both prices are known (2026-10-21).
+ */
+function hotelFarePreview(trip: TravelTrip, selection: TripSelection, result: TripOfferResult, now: Date, text: string): string | null {
+  if (result.status !== "needs_selection" || result.fields[0] !== "hotel" || !selection.date || result.options.length > 4) return null;
+  const { fareKinds } = replyPreferences(text);
+  const blocks: string[] = [];
+  for (const hotel of result.options) {
+    const first = resolveTripOfferFareCard(trip, { date: selection.date, hotel, packageId: selection.package }, now);
+    // A hotel sold in packages (with / without the programme): one fare per package.
+    const packages = first.status === "needs_selection" && first.fields[0] === "package" ? first.options : [null];
+    for (const packageId of packages) {
+      const card = packageId ? resolveTripOfferFareCard(trip, { date: selection.date, hotel, packageId }, now) : first;
+      if (card.status !== "ready") return null;
+      const body = renderTripOfferReply(card, { fareKinds })?.split("\n").filter((line) => line !== mnDate(card.offer.date) && !/^Буудал:/.test(line) && ![hotel, packageId, `${hotel} · ${packageId}`].includes(line.trim())).join("\n");
+      if (!body) return null;
+      blocks.push(`Буудал: ${hotel}${packageId ? ` · ${packageId}` : ""}\n${body}`);
+    }
+  }
+  if (blocks.length > 4) return null;
+  return blocks.length ? [mnDate(selection.date), ...blocks].join("\n\n") : null;
+}
+
 /** All factual sections are built from the same ID and offer selection. */
 export function buildTripAnswerPlan(input: {
   text: string; trips: TravelTrip[]; route: FastPathRoute; now?: Date; weatherReply?: string;
@@ -164,13 +189,19 @@ export function buildTripAnswerPlan(input: {
       }
       // "Is there a <trip>?" is answered with the fare as well as the date question when every date sells at one price.
       const wantsPreview = request.topics.includes("price") ? !request.topics.includes("availability") : request.topics.every((topic) => topic === "availability");
-      const preview = wantsPreview ? stableFarePreview(trip, { ...selection, passengers: pricePassengers }, result, now, intentText) : null;
+      // A party total depends on the hotel, so that question still asks for one first.
+      const hotelPreview = request.topics.includes("price") && !pricePassengers.length ? hotelFarePreview(trip, selection, result, now, intentText) : null;
+      const preview = hotelPreview || (wantsPreview ? stableFarePreview(trip, { ...selection, passengers: pricePassengers }, result, now, intentText) : null);
       if (preview) sections.price = preview;
+      if (hotelPreview) {
+        answered.add("price");
+        if (request.topics.includes("availability")) answered.add("availability");
+      }
       const question = selectionQuestion(result, intentText);
       // A seats question with no date ("суудал байна уу") gets the fare and the bookable dates to
       // pick from; it used to get the preview dropped and nothing else, so the bot handed off.
       const availabilityOnly = !request.topics.includes("price");
-      if (question && (!preview || availabilityOnly)) {
+      if (question && !hotelPreview && (!preview || availabilityOnly)) {
         if (preview) lines.push(preview);
         lines.push(question);
         needsSelection = true;
