@@ -26,8 +26,17 @@ export type AttentionStatsData = {
   recentIssues: { event: string; level: string; count: number; lastSeenAt: string }[];
   handoffReasons: { reason: string; count: number }[];
 };
+/** What a manager reads first: this period's customers, who still needs a call, what they ask about. */
+export type OverviewData = {
+  customers: number; previousCustomers: number; answeredCustomers: number;
+  handedOff: number; phoneLeads: number; bookingRequests: number;
+  daily: { date: string; customers: number; handedOff: number }[];
+  callBack: number; recentHandoffs: number; recentBookings: number; backlog: number; oldestBacklogAt: string | null;
+  tripDemand: { trip: string; customers: number }[];
+};
 export type AnalyticsResponse = {
   ok: true; generatedAt: string; periodDays: AnalyticsPeriod; timezone: string;
+  overview?: OverviewData | null;
   stats: AnalyticsStatsData; activity: ActivityStatsData | null;
   attention: AttentionStatsData | null; faq: FaqStatsData | null; warnings: string[];
 };

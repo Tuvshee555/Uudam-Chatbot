@@ -1,5 +1,5 @@
 import { redactAnalyticsText } from "./analyticsMinimization";
-import { ANALYTICS_TIMEZONE, type AnalyticsPeriod, type AnalyticsStatsData, type ActivityStatsData, type FaqStatsData, type AnalyticsResponse } from "./adminAnalyticsTypes";
+import { ANALYTICS_TIMEZONE, type AnalyticsPeriod, type AnalyticsStatsData, type ActivityStatsData, type FaqStatsData, type AnalyticsResponse, type OverviewData } from "./adminAnalyticsTypes";
 export * from "./adminAnalyticsTypes";
 type Row = Record<string, unknown>;
 export type AnalyticsQuery = (sql: string, params?: unknown[]) => Promise<{ rows: Row[] } | null>;
@@ -55,18 +55,87 @@ async function activityStats(query: AnalyticsQuery, period: AnalyticsPeriod, win
       inboundMessages: count(byDay.get(date)?.inbound ?? 0), assistantMessages: count(byDay.get(date)?.assistant ?? 0) })) };
 }
 
+/** Emoji and broken glyphs from tapped buttons ("Холбоо барих дугаар 😊", "…�") are not words. */
+function cleanQuestion(text: string): string {
+  return text.replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{FFFD}]/gu, "").replace(/\s+/g, " ").trim();
+}
+
+// Menu buttons, greetings and placeholders are taps, not questions: they filled the
+// "most asked" list ("Холбоо барих дугаар", "Манай хаяг", "hi", "[phone]") and hid the
+// questions staff should answer in the trip data.
+const NOT_A_QUESTION = /^(?:холбоо барих дугаар|манай хаяг|хөтөлбөр үзэх|зураг үзэх|асуулт асуух|захиалга өгөх|зөвлөхтэй холбогдох|мэдээлэл|мэдээлэл авах|get started|эхлэх|hi+|hello|hey|сайн\s*б(?:айна|на)\s*уу|сайн уу|sain\s*b(?:aina|n)\s*uu|sn\s*bn?u+|\[[a-z_]+\]|\[хэрэглэгч[^\]]*\]|can you tell me more about your ad\??|is anyone available to chat\??|\?+|ok|за|баярлалаа)$/i;
+export function isNotAQuestion(text: string): boolean {
+  return NOT_A_QUESTION.test(text.trim().replace(/[.!]+$/, ""));
+}
+
 async function faqStats(query: AnalyticsQuery, now: string): Promise<FaqStatsData> {
   const top = async (days: number | null) => {
     const rows = await read(query, `SELECT (ARRAY_AGG(text ORDER BY created_at DESC, id DESC))[1] AS question, COUNT(*)::text AS count
       FROM travel_messages WHERE norm <> '' AND created_at < $1::timestamptz
       ${days === null ? "" : "AND created_at >= $1::timestamptz - ($2::int * INTERVAL '1 day')"}
-      GROUP BY norm ORDER BY COUNT(*) DESC, MAX(created_at) DESC, norm LIMIT 8`, days === null ? [now] : [now, days]);
-    return rows.map(row => ({ question: redactAnalyticsText(String(row.question)).slice(0, 500), count: count(row.count) }));
+      GROUP BY norm ORDER BY COUNT(*) DESC, MAX(created_at) DESC, norm LIMIT 40`, days === null ? [now] : [now, days]);
+    return rows.map(row => ({ question: cleanQuestion(redactAnalyticsText(String(row.question))).slice(0, 500), count: count(row.count) }))
+      .filter(row => row.question && !isNotAQuestion(row.question)).slice(0, 8);
   };
   const [week, month, allTime, total] = await Promise.all([
     top(7), top(30), top(null), read(query, "SELECT COUNT(*)::text AS count FROM travel_messages WHERE created_at < $1::timestamptz", [now]),
   ]);
   return { week, month, allTime, totalMessages: count(total[0]?.count) };
+}
+
+/**
+ * The manager's view of one period — counts only, never customer records:
+ * how many people wrote (and the period before), how many the bot answered, how many went
+ * to staff or left a phone number, per day; who still waits for a call; which trips people
+ * were shown on their own (a reply that opens with the trip's name — a card, a price, a
+ * matched screenshot — not a list of several).
+ */
+async function overviewStats(query: AnalyticsQuery, period: AnalyticsPeriod, window: ReturnType<typeof analyticsWindow>): Promise<OverviewData> {
+  const previousStart = new Date(Date.parse(window.start) - period * 86_400_000).toISOString();
+  const [people, peopleDaily, leads, leadsDaily, attention, demand] = await Promise.all([
+    read(query, `/* overview:people */ SELECT
+      COUNT(DISTINCT sender_id) FILTER (WHERE role='user' AND created_at >= $1::timestamptz)::text AS customers,
+      COUNT(DISTINCT sender_id) FILTER (WHERE role='user' AND created_at < $1::timestamptz)::text AS previous_customers,
+      COUNT(DISTINCT sender_id) FILTER (WHERE role='assistant' AND created_at >= $1::timestamptz)::text AS answered
+      FROM travel_conversations WHERE created_at >= $3::timestamptz AND created_at < $2::timestamptz
+      AND sender_id NOT LIKE 'demo:%'`, [window.start, window.end, previousStart]),
+    read(query, `/* overview:people_daily */ SELECT (created_at AT TIME ZONE 'Asia/Ulaanbaatar')::date::text AS date,
+      COUNT(DISTINCT sender_id) FILTER (WHERE role='user')::text AS customers
+      FROM travel_conversations WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz
+      AND sender_id NOT LIKE 'demo:%' GROUP BY 1 ORDER BY 1`, [window.start, window.end]),
+    read(query, `/* overview:leads */ SELECT
+      COUNT(DISTINCT sender_id) FILTER (WHERE kind='handoff')::text AS handed_off,
+      COUNT(DISTINCT sender_id) FILTER (WHERE COALESCE(contact_phone,'') <> '')::text AS phone_leads,
+      COUNT(*) FILTER (WHERE kind='booking')::text AS bookings
+      FROM travel_leads WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz`, [window.start, window.end]),
+    read(query, `/* overview:leads_daily */ SELECT (created_at AT TIME ZONE 'Asia/Ulaanbaatar')::date::text AS date,
+      COUNT(DISTINCT sender_id) FILTER (WHERE kind='handoff')::text AS handed_off
+      FROM travel_leads WHERE created_at >= $1::timestamptz AND created_at < $2::timestamptz GROUP BY 1 ORDER BY 1`, [window.start, window.end]),
+    read(query, `/* overview:attention */ SELECT
+      COUNT(DISTINCT sender_id) FILTER (WHERE COALESCE(contact_phone,'') <> '' AND created_at >= $1::timestamptz - INTERVAL '14 days')::text AS call_back,
+      COUNT(*) FILTER (WHERE kind='handoff' AND created_at >= $1::timestamptz - INTERVAL '14 days')::text AS recent_handoffs,
+      COUNT(*) FILTER (WHERE kind='booking' AND created_at >= $1::timestamptz - INTERVAL '14 days')::text AS recent_bookings,
+      COUNT(*) FILTER (WHERE created_at < $1::timestamptz - INTERVAL '14 days')::text AS backlog,
+      MIN(created_at) FILTER (WHERE created_at < $1::timestamptz - INTERVAL '14 days') AS oldest_backlog
+      FROM travel_leads WHERE lead_status='new_lead' AND created_at < $1::timestamptz`, [window.end]),
+    read(query, `/* overview:trip_demand */ SELECT t.route_name AS trip, COUNT(DISTINCT c.sender_id)::text AS customers
+      FROM travel_conversations c JOIN travel_trip_entries t
+        ON length(t.route_name) >= 6 AND position(t.route_name IN c.text) BETWEEN 1 AND 40
+      WHERE c.role='assistant' AND c.created_at >= $1::timestamptz AND c.created_at < $2::timestamptz
+      AND c.sender_id NOT LIKE 'demo:%' AND c.text NOT LIKE 'Энэ чиглэлээр%' AND c.text NOT LIKE 'Тийм ээ,%'
+      GROUP BY t.route_name ORDER BY COUNT(DISTINCT c.sender_id) DESC, t.route_name LIMIT 8`, [window.start, window.end]),
+  ]);
+  const customersByDay = new Map(peopleDaily.map(row => [String(row.date), count(row.customers)]));
+  const handoffsByDay = new Map(leadsDaily.map(row => [String(row.date), count(row.handed_off)]));
+  return {
+    customers: count(people[0]?.customers ?? 0), previousCustomers: count(people[0]?.previous_customers ?? 0),
+    answeredCustomers: count(people[0]?.answered ?? 0),
+    handedOff: count(leads[0]?.handed_off ?? 0), phoneLeads: count(leads[0]?.phone_leads ?? 0), bookingRequests: count(leads[0]?.bookings ?? 0),
+    daily: window.dates.map(date => ({ date, customers: customersByDay.get(date) ?? 0, handedOff: handoffsByDay.get(date) ?? 0 })),
+    callBack: count(attention[0]?.call_back ?? 0), recentHandoffs: count(attention[0]?.recent_handoffs ?? 0), recentBookings: count(attention[0]?.recent_bookings ?? 0),
+    backlog: count(attention[0]?.backlog ?? 0), oldestBacklogAt: iso(attention[0]?.oldest_backlog ?? null),
+    tripDemand: demand.map(row => ({ trip: String(row.trip), customers: count(row.customers) })),
+  };
 }
 
 /** Aggregate reads only. Stored history counts do not certify delivery or answer quality. */
@@ -105,7 +174,8 @@ export async function collectAdminAnalytics(query: AnalyticsQuery, periodDays: A
   const optional = async <T>(work: () => Promise<T>, warning: string): Promise<T | null> => {
     try { return await work(); } catch { warnings.push(warning); return null; }
   };
-  const [activity, faq, issues] = await Promise.all([
+  const [overview, activity, faq, issues] = await Promise.all([
+    optional(() => overviewStats(query, periodDays, window), "Тоймын үндсэн тоог ачаалж чадсангүй."),
     optional(() => activityStats(query, periodDays, window), "Ярианы статистикийг ачаалж чадсангүй."),
     optional(() => faqStats(query, window.end), "Түгээмэл асуултын статистикийг ачаалж чадсангүй."),
     optional(async () => {
@@ -118,7 +188,7 @@ export async function collectAdminAnalytics(query: AnalyticsQuery, periodDays: A
       })) };
     }, "Алдааны бүртгэлийг ачаалж чадсангүй."),
   ]);
-  return { ok: true, generatedAt: window.end, periodDays, timezone: ANALYTICS_TIMEZONE, stats, activity, faq, warnings,
+  return { ok: true, generatedAt: window.end, periodDays, timezone: ANALYTICS_TIMEZONE, overview, stats, activity, faq, warnings,
     attention: { pendingHandoffs: count(lead.pending_handoffs), oldestPendingHandoffAt: iso(lead.oldest_handoff),
       newBookingRequests: count(lead.new_bookings), errors24h: issues?.count ?? null, recentIssues: issues?.recent ?? [], handoffReasons: [] } };
 }

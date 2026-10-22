@@ -1,15 +1,15 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Alert, Badge, Button, Card, Icons, Skeleton, cx } from "@/components/ui";
-import { ADMIN_ISSUE_LABELS, type AnalyticsResponse } from "@/lib/adminAnalyticsTypes";
+import { ADMIN_ISSUE_LABELS, type AnalyticsResponse, type OverviewData } from "@/lib/adminAnalyticsTypes";
 import type { TabKey } from "@/lib/adminTypes";
-import { StatCard, TabHeader } from "./AdminShared";
+import { TabHeader } from "./AdminShared";
 
-const STATUS_LABELS: Record<string, string> = {
-  new_lead: "Шинэ", contacted: "Холбогдсон", booked: "Захиалсан", no_answer: "Хариугүй",
-};
-const KIND_LABELS: Record<string, string> = {
-  booking: "Захиалгын хүсэлт", handoff: "Зөвлөхөд шилжсэн", inquiry: "Лавлагаа", contact: "Холбогдох хүсэлт",
-};
+/**
+ * The manager's first screen: how many people wrote this period and what happened to them,
+ * who still needs a call, which trips and questions came up — and only then the system.
+ * It used to lead with all-time counters ("163 шинэ хүсэлт" since June), button taps as
+ * "questions" and raw event names; none of it said what to do today.
+ */
 
 function number(value: number) {
   return value.toLocaleString("mn-MN");
@@ -22,8 +22,129 @@ function snapshotTime(value: string) {
     : "—";
 }
 
+function shortDay(value: string) {
+  const date = new Date(`${value}T00:00:00Z`);
+  return `${date.getUTCMonth() + 1}/${date.getUTCDate()}`;
+}
+
+const WEEKDAYS = ["Ня", "Да", "Мя", "Лх", "Пү", "Ба", "Бя"];
+function weekday(value: string) {
+  return WEEKDAYS[new Date(`${value}T00:00:00Z`).getUTCDay()];
+}
+
 function EmptyNote({ children }: { children: ReactNode }) {
   return <p className="rounded-lg bg-surface-sunken/60 px-4 py-5 text-sm leading-6 text-ink-muted">{children}</p>;
+}
+
+function Segmented<T extends string | number>({ value, options, onChange, label }: {
+  value: T; options: Array<{ value: T; label: string }>; onChange: (value: T) => void; label: string;
+}) {
+  return (
+    <div role="group" aria-label={label} className="inline-flex rounded-lg border border-line bg-surface p-0.5">
+      {options.map((option) => (
+        <button key={String(option.value)} type="button" aria-pressed={value === option.value} onClick={() => onChange(option.value)}
+          className={cx("rounded-md px-3 py-1.5 text-xs font-semibold transition-colors", value === option.value ? "bg-brand-soft text-brand" : "text-ink-muted hover:bg-surface-sunken hover:text-ink")}>
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A headline number with what it means in one line, and the change against the previous period when there is one. */
+function Kpi({ label, value, detail, change }: { label: string; value: number; detail: ReactNode; change?: number | null }) {
+  return (
+    <Card className="flex flex-col p-4 sm:p-5">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-muted">{label}</p>
+      <div className="mt-3 flex items-baseline gap-2">
+        <span className="text-[32px] font-extrabold leading-none tracking-tight tabular-nums text-ink">{number(value)}</span>
+        {change != null && Number.isFinite(change) && change !== 0 && (
+          <span className={cx("inline-flex items-center rounded-md px-1.5 py-0.5 text-xs font-semibold tabular-nums", change > 0 ? "bg-success-soft text-success" : "bg-surface-sunken text-ink-muted")}>
+            {change > 0 ? "▲" : "▼"} {Math.abs(change)}%
+          </span>
+        )}
+      </div>
+      <p className="mt-2 text-xs leading-5 text-ink-muted">{detail}</p>
+    </Card>
+  );
+}
+
+/** People who wrote, per day. One series in the brand colour; the exact numbers are in the tooltip. */
+function DailyChart({ days }: { days: OverviewData["daily"] }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const max = Math.max(1, ...days.map((day) => day.customers));
+  const busiest = days.reduce((best, day, index) => (day.customers > days[best].customers ? index : best), 0);
+  const dense = days.length > 10;
+  return (
+    <div className="relative pt-5">
+      <div className="flex h-48 items-end gap-[2px] border-b border-line sm:gap-1.5" role="list" aria-label="Өдөр бүр бичсэн хүний тоо">
+        {days.map((day, index) => {
+          const active = hover === index;
+          return (
+            <div key={day.date} role="listitem" tabIndex={0}
+              aria-label={`${shortDay(day.date)}: ${day.customers} хүн бичсэн, ${day.handedOff} нь ажилтанд шилжсэн`}
+              onMouseEnter={() => setHover(index)} onMouseLeave={() => setHover(null)} onFocus={() => setHover(index)} onBlur={() => setHover(null)}
+              className="group relative flex h-full min-w-0 flex-1 cursor-default flex-col items-center justify-end outline-none">
+              {(index === busiest && day.customers > 0 && hover === null) && (
+                <span className="mb-1 text-[11px] font-semibold tabular-nums text-ink-muted">{day.customers}</span>
+              )}
+              <div className={cx("w-full max-w-9 rounded-t-[4px] transition-colors", active ? "bg-brand" : "bg-brand/75 group-hover:bg-brand")}
+                style={{ height: `${Math.max(day.customers ? 3 : 0, (day.customers / max) * 100)}%` }} />
+              {active && (
+                <div className="pointer-events-none absolute bottom-full z-10 mb-2 w-max -translate-x-0 rounded-lg border border-line bg-surface px-3 py-2 text-xs shadow-lg">
+                  <p className="font-semibold text-ink">{shortDay(day.date)} · {weekday(day.date)}</p>
+                  <p className="mt-1 tabular-nums text-ink-muted"><span className="font-semibold text-ink">{day.customers}</span> хүн бичсэн</p>
+                  <p className="tabular-nums text-ink-muted"><span className="font-semibold text-ink">{day.handedOff}</span> нь ажилтанд шилжсэн</p>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-2 flex gap-[2px] sm:gap-1.5">
+        {days.map((day, index) => (
+          <span key={day.date} className="min-w-0 flex-1 text-center text-[10px] tabular-nums text-ink-muted">
+            {!dense || index === 0 || index === days.length - 1 || index % 7 === 0 ? (dense ? shortDay(day.date) : <>{shortDay(day.date)}<br />{weekday(day.date)}</>) : ""}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ActionRow({ label, count, detail, onClick }: { label: string; count: number | null; detail: string; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className="group flex w-full items-center justify-between gap-3 rounded-lg px-3 py-3 text-left transition-colors hover:bg-surface-sunken">
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold text-ink group-hover:text-brand">{label}</span>
+        <span className="mt-0.5 block text-xs leading-5 text-ink-muted">{detail}</span>
+      </span>
+      <span className="flex shrink-0 items-center gap-2">
+        <span className={cx("min-w-8 rounded-lg px-2 py-1 text-center text-lg font-bold tabular-nums", count ? "bg-warning-soft text-warning" : "bg-surface-sunken text-ink-muted")}>{count == null ? "—" : number(count)}</span>
+        <Icons.chevronRight size={15} className="text-ink-subtle group-hover:text-brand" />
+      </span>
+    </button>
+  );
+}
+
+/** Trips people opened on their own (a trip card, its price, a matched screenshot) — one series, values printed. */
+function TripDemand({ trips }: { trips: OverviewData["tripDemand"] }) {
+  const max = Math.max(1, ...trips.map((trip) => trip.customers));
+  return (
+    <ol className="space-y-3">
+      {trips.map((trip) => (
+        <li key={trip.trip} className="min-w-0">
+          <div className="flex items-baseline justify-between gap-3 text-sm">
+            <span className="min-w-0 truncate text-ink" title={trip.trip}>{trip.trip}</span>
+            <span className="shrink-0 tabular-nums font-semibold text-ink">{number(trip.customers)} <span className="font-normal text-ink-muted">хүн</span></span>
+          </div>
+          <div className="mt-1.5 h-2 rounded-full bg-surface-sunken" aria-hidden="true">
+            <div className="h-2 rounded-full bg-brand/80" style={{ width: `${(trip.customers / max) * 100}%` }} />
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
 }
 
 export function AnalyticsTab({
@@ -74,22 +195,25 @@ export function AnalyticsTab({
     };
   }, [apiFetch, onUnauthorized, periodDays, refresh]);
 
+  const overview = snapshot?.overview ?? null;
   const stats = snapshot?.stats;
-  const activity = snapshot?.activity;
   const attention = snapshot?.attention;
   const faq = snapshot?.faq;
-  const days = activity?.daily ?? [];
-  const dayMax = Math.max(1, ...days.map((day) => Math.max(day.inboundMessages, day.assistantMessages)));
   const questions = faq?.[faqPeriod] ?? [];
+  const change = overview && overview.previousCustomers > 0
+    ? Math.round(((overview.customers - overview.previousCustomers) / overview.previousCustomers) * 100) : null;
+  const answeredShare = overview && overview.customers > 0 ? Math.min(100, Math.round((overview.answeredCustomers / overview.customers) * 100)) : null;
+  const periodLabel = periodDays === 7 ? "Энэ 7 хоног" : "Сүүлийн 30 хоног";
 
   return (
     <div className="space-y-5" aria-busy={loading}>
       <TabHeader
         title="Тойм"
-        description="Харилцааны идэвх, ажилтны анхаарах хүсэлт, системийн сүүлийн алдаа."
+        description="Хэдэн хүн бичсэн, хэнд залгах, юу асууж байгаа нь."
         actions={
           <>
-            {snapshot?.generatedAt && <span className="text-xs text-ink-muted">{snapshotTime(snapshot.generatedAt)} · УБ</span>}
+            <Segmented label="Хугацаа" value={periodDays} onChange={setPeriodDays}
+              options={[{ value: 7, label: "7 хоног" }, { value: 30, label: "30 хоног" }]} />
             <Button variant="secondary" size="sm" loading={loading} onClick={() => setRefresh((value) => value + 1)}>
               {!loading && <Icons.refresh size={15} />} Шинэчлэх
             </Button>
@@ -98,130 +222,129 @@ export function AnalyticsTab({
       />
 
       {error && <Alert tone="danger">{error}{snapshot && " Доор хамгийн сүүлд ачаалсан мэдээллийг харуулж байна."}</Alert>}
-      {Boolean(snapshot?.warnings?.length) && <Alert tone="warning">Тоймын зарим мэдээллийг ачаалж чадсангүй. Дахин шинэчилнэ үү.</Alert>}
-      {attention?.staffAlertsConfigured === false && (
-        <Alert tone="warning">
-          <span className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:gap-4">
-            <span>Ажилтанд мэдэгдэх суваг тохируулаагүй байна. Шилжүүлгийн хүсэлтүүдийг Хүсэлтүүд хэсгээс тогтмол шалгаарай.</span>
-            <Button variant="secondary" size="sm" onClick={() => onNavigate("leads")}>Хүсэлтүүд нээх <Icons.chevronRight size={14} /></Button>
-          </span>
-        </Alert>
-      )}
+      {Boolean(snapshot?.warnings?.length) && <Alert tone="warning">Тоймын зарим хэсгийг ачаалж чадсангүй. Шинэчилнэ үү.</Alert>}
 
       {!snapshot && loading && (
         <div role="status" aria-label="Тойм ачаалж байна" className="space-y-4">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-32 rounded-xl" />)}</div>
-          <Skeleton className="h-60 rounded-xl" />
+          <Skeleton className="h-64 rounded-xl" />
         </div>
       )}
 
-      {stats && (
+      {snapshot && (
         <>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-ink">Харилцааны идэвх</h2>
-              <p className="mt-1 text-xs text-ink-muted">Сүүлийн {activity?.periodDays ?? periodDays} хоног · Улаанбаатарын цагаар</p>
-            </div>
-            <div role="group" aria-label="Харилцааны хугацаа" className="inline-flex rounded-lg border border-line bg-surface p-1">
-              {([7, 30] as const).map((value) => (
-                <button key={value} type="button" aria-pressed={periodDays === value} onClick={() => setPeriodDays(value)} className={cx("rounded-md px-3 py-1.5 text-xs font-semibold transition-colors", periodDays === value ? "bg-brand-soft text-brand" : "text-ink-muted hover:bg-surface-sunken")}>{value} хоног</button>
-              ))}
-            </div>
-          </div>
-
-          {activity ? (
+          {overview ? (
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <StatCard label="Харилцагчийн мессеж" value={number(activity.inboundMessages)} description={`${activity.periodDays} хоногт бүртгэгдсэн`} />
-              <StatCard label="Бүртгэгдсэн хариу" value={number(activity.assistantMessages)} tone="text-brand" description="Харилцааны түүхэд хадгалагдсан" />
-              <StatCard label="Идэвхтэй харилцаа" value={number(activity.activeConversations)} description="Энэ хугацаанд мессеж ирсэн" />
-              <StatCard label="Зөвлөхийн шинэ хүсэлт" value={attention ? number(attention.pendingHandoffs) : "—"} tone={attention?.pendingHandoffs ? "text-warning" : undefined} description="Шинэ төлөвтэй шилжүүлгийн хүсэлт" />
+              <Kpi label="Бичсэн хүн" value={overview.customers} change={change}
+                detail={`${periodLabel} · өмнөх ${periodDays} хоногт ${number(overview.previousCustomers)}`} />
+              <Kpi label="Бот хариулсан" value={overview.answeredCustomers}
+                detail={answeredShare == null ? "Энэ хугацаанд бичсэн хүн алга" : `Бичсэн хүмүүсийн ${answeredShare}% нь хариу авсан`} />
+              <Kpi label="Ажилтанд шилжсэн" value={overview.handedOff}
+                detail="Бот мэдээлэлгүй тул чимээгүй үлдэж, зөвлөхөд ирсэн" />
+              <Kpi label="Утсаа үлдээсэн" value={overview.phoneLeads}
+                detail={`Захиалгын хүсэлт ${number(overview.bookingRequests)}`} />
             </div>
-          ) : <EmptyNote>Харилцааны статистик ачаалагдсангүй. Дахин шинэчилнэ үү.</EmptyNote>}
+          ) : <EmptyNote>Энэ хугацааны тоог ачаалж чадсангүй. Шинэчилнэ үү.</EmptyNote>}
 
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
             <Card className="min-w-0 p-4 sm:p-5">
-              <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-                <div><h3 className="text-sm font-semibold text-ink">Өдөр тутмын харилцаа</h3><p className="mt-1 text-xs text-ink-muted">Ирсэн мессеж ба түүхэд хадгалсан хариу</p></div>
-                <div className="flex flex-wrap gap-3 text-[11px] text-ink-muted"><span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-sm bg-brand" />Мессеж</span><span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-sm bg-brand/30" />Хариу</span></div>
+              <div className="mb-4">
+                <h3 className="text-sm font-semibold text-ink">Өдөр бүр бичсэн хүн</h3>
+                <p className="mt-1 text-xs text-ink-muted">{periodLabel} · Улаанбаатарын цагаар · баганан дээр очиж тоог харна</p>
               </div>
-              {!activity ? <EmptyNote>Харилцааны мэдээлэл ачаалагдсангүй.</EmptyNote> : activity.inboundMessages + activity.assistantMessages === 0 ? <EmptyNote>Энэ хугацаанд харилцааны мессеж бүртгэгдээгүй байна.</EmptyNote> : (
-                <div className="flex h-44 gap-1 sm:gap-2" role="list" aria-label="Өдрөөрх мессеж болон хариуны тоо">
-                  {days.map((day, index) => (
-                    <div key={day.date} role="listitem" aria-label={`${day.date}: ${day.inboundMessages} мессеж, ${day.assistantMessages} хариу`} title={`${day.date}: ${day.inboundMessages} мессеж · ${day.assistantMessages} хариу`} className="flex min-w-0 flex-1 flex-col items-center justify-end gap-2">
-                      <div className="flex h-36 w-full items-end justify-center gap-px sm:gap-1" aria-hidden="true">
-                        <div className="w-1/2 max-w-5 rounded-t-sm bg-brand" style={{ height: `${day.inboundMessages / dayMax * 100}%` }} />
-                        <div className="w-1/2 max-w-5 rounded-t-sm bg-brand/30" style={{ height: `${day.assistantMessages / dayMax * 100}%` }} />
-                      </div>
-                      <span className="h-4 text-[10px] tabular-nums text-ink-muted">{days.length <= 7 || index === 0 || index === days.length - 1 || index % 7 === 0 ? day.date.slice(5).replace("-", "/") : ""}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <p className="mt-4 border-t border-line pt-3 text-xs leading-5 text-ink-muted">Хариуны бүртгэл нь хүргэлт амжилттай болсон эсэх, хариуны зөв байдлыг дангаараа батлахгүй.</p>
+              {!overview ? <EmptyNote>Өдрийн мэдээлэл ачаалагдсангүй.</EmptyNote>
+                : overview.customers === 0 ? <EmptyNote>Энэ хугацаанд хэн ч бичээгүй байна.</EmptyNote>
+                  : <DailyChart days={overview.daily} />}
             </Card>
 
             <Card className="min-w-0 p-4 sm:p-5">
-              <h3 className="text-sm font-semibold text-ink">Одоо анхаарах</h3>
-              {attention ? (
-                <div className="mt-3 divide-y divide-line">
-                  <AttentionLink label="Зөвлөхийн шинэ хүсэлт" count={attention.pendingHandoffs} detail={attention.oldestPendingHandoffAt ? `Хамгийн эртний: ${snapshotTime(attention.oldestPendingHandoffAt)}` : "Шинэ шилжүүлгийн хүсэлтгүй"} onClick={() => onNavigate("leads")} />
-                  <AttentionLink label="Шинэ захиалгын хүсэлт" count={attention.newBookingRequests} detail="Ажилтан холбогдож баталгаажуулна" onClick={() => onNavigate("leads")} />
-                  <AttentionLink label="Системийн асуудал · 24 цаг" count={attention.errors24h} detail={attention.errors24h == null ? "Алдааны бүртгэл ачаалагдсангүй" : "Алдаа, анхааруулгын бүртгэл"} onClick={() => onNavigate("errors")} />
+              <h3 className="text-sm font-semibold text-ink">Одоо хийх</h3>
+              <p className="mt-1 text-xs text-ink-muted">Шийдсэн хүсэлтээ «Холбогдсон» болговол энд хасагдана.</p>
+              {overview ? (
+                <div className="-mx-3 mt-3 space-y-0.5">
+                  <ActionRow label="Залгах хүн" count={overview.callBack} detail="Сүүлийн 14 хоногт утсаа үлдээсэн, хараахан холбогдоогүй" onClick={() => onNavigate("leads")} />
+                  <ActionRow label="Ботын хариулж чадаагүй асуулт" count={overview.recentHandoffs} detail="Сүүлийн 14 хоногт зөвлөхөд шилжсэн" onClick={() => onNavigate("leads")} />
+                  <ActionRow label="Захиалгын хүсэлт" count={overview.recentBookings} detail="Сүүлийн 14 хоногт ирсэн, баталгаажуулаагүй" onClick={() => onNavigate("leads")} />
                 </div>
-              ) : <div className="mt-4"><EmptyNote>Хүлээгдэж буй хүсэлтийн мэдээлэл ачаалагдсангүй.</EmptyNote></div>}
+              ) : <div className="mt-4"><EmptyNote>Хүсэлтийн мэдээлэл ачаалагдсангүй.</EmptyNote></div>}
+              {overview && overview.backlog > 0 && (
+                <p className="mt-3 border-t border-line pt-3 text-xs leading-5 text-ink-muted">
+                  Үүнээс гадна 14 хоногоос өмнөх <span className="font-semibold text-ink">{number(overview.backlog)}</span> хүсэлт
+                  {overview.oldestBacklogAt ? ` (${snapshotTime(overview.oldestBacklogAt)}-аас хойш)` : ""} шинэ төлөвтэй хэвээр байна.
+                </p>
+              )}
             </Card>
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
             <Card className="min-w-0 p-4 sm:p-5">
-              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-                <div><h3 className="text-sm font-semibold text-ink">Бүртгэгдсэн асуултууд</h3><p className="mt-1 text-xs text-ink-muted">Их асуусан сэдвээр мэдээллээ нөхөөрэй</p></div>
-                <div role="group" aria-label="Асуултын хугацаа" className="inline-flex rounded-lg bg-surface-sunken p-0.5">
-                  {([{ key: "week", label: "7 хоног" }, { key: "month", label: "30 хоног" }, { key: "allTime", label: "Нийт" }] as const).map((period) => <button key={period.key} type="button" aria-pressed={faqPeriod === period.key} onClick={() => setFaqPeriod(period.key)} className={cx("rounded-md px-2.5 py-1.5 text-xs font-medium", faqPeriod === period.key ? "bg-surface text-ink shadow-xs" : "text-ink-muted hover:text-ink")}>{period.label}</button>)}
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-ink">Хамгийн их үзсэн аяллууд</h3>
+                  <p className="mt-1 text-xs text-ink-muted">{periodLabel} · аяллын карт, үнэ эсвэл зургаар нь тодорхой асуусан хүн</p>
                 </div>
+                <Button variant="ghost" size="sm" onClick={() => onNavigate("trips")}>Аяллууд <Icons.chevronRight size={14} /></Button>
               </div>
-              {!faq ? <EmptyNote>Асуултын мэдээлэл ачаалагдсангүй.</EmptyNote> : questions.length === 0 ? <EmptyNote>Энэ хугацаанд асуулт бүртгэгдээгүй байна.</EmptyNote> : (
-                <ol className="divide-y divide-line">
-                  {questions.map((question, index) => <li key={question.question} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0"><span className="mt-0.5 w-4 shrink-0 text-xs tabular-nums text-ink-subtle">{index + 1}</span><p className="min-w-0 flex-1 break-words text-sm leading-6 text-ink">{question.question}</p><Badge className="mt-0.5 shrink-0 tabular-nums">{number(question.count)}</Badge></li>)}
-                </ol>
-              )}
+              {!overview ? <EmptyNote>Аяллын мэдээлэл ачаалагдсангүй.</EmptyNote>
+                : overview.tripDemand.length === 0 ? <EmptyNote>Энэ хугацаанд тодорхой аялал асуусан хүн алга.</EmptyNote>
+                  : <TripDemand trips={overview.tripDemand} />}
             </Card>
 
             <Card className="min-w-0 p-4 sm:p-5">
-              <div className="mb-4 flex items-center justify-between gap-3"><h3 className="text-sm font-semibold text-ink">Сүүлийн системийн асуудлууд</h3><Button variant="ghost" size="sm" onClick={() => onNavigate("errors")}>Бүртгэл <Icons.chevronRight size={14} /></Button></div>
-              {!attention || attention.errors24h == null ? <EmptyNote>Алдааны мэдээлэл ачаалагдсангүй.</EmptyNote> : attention.recentIssues.length === 0 ? <EmptyNote>Сүүлийн 24 цагт системийн асуудал бүртгэгдээгүй байна.</EmptyNote> : (
-                <ul className="divide-y divide-line">{attention.recentIssues.map((issue) => <li key={`${issue.level}:${issue.event}`} className="flex items-start justify-between gap-3 py-3 first:pt-0 last:pb-0"><div className="min-w-0"><p className="break-words text-sm font-medium text-ink">{ADMIN_ISSUE_LABELS[issue.event] ?? issue.event}</p><p className="mt-1 text-xs text-ink-muted">{snapshotTime(issue.lastSeenAt)}</p></div><Badge tone={issue.level === "error" ? "danger" : "warning"} className="shrink-0">{number(issue.count)}</Badge></li>)}</ul>
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-ink">Хүмүүсийн асуусан зүйл</h3>
+                  <p className="mt-1 text-xs text-ink-muted">Товч дарсан, мэндэлсэн мессежийг оруулаагүй</p>
+                </div>
+                <Segmented label="Асуултын хугацаа" value={faqPeriod} onChange={setFaqPeriod}
+                  options={[{ value: "week", label: "7 хоног" }, { value: "month", label: "30 хоног" }, { value: "allTime", label: "Нийт" }]} />
+              </div>
+              {!faq ? <EmptyNote>Асуултын мэдээлэл ачаалагдсангүй.</EmptyNote> : questions.length === 0 ? <EmptyNote>Энэ хугацаанд асуулт бүртгэгдээгүй байна.</EmptyNote> : (
+                <ol className="divide-y divide-line">
+                  {questions.map((question, index) => (
+                    <li key={`${index}-${question.question}`} className="flex items-start gap-3 py-2.5 first:pt-0 last:pb-0">
+                      <span className="mt-0.5 w-4 shrink-0 text-xs tabular-nums text-ink-subtle">{index + 1}</span>
+                      <p className="min-w-0 flex-1 break-words text-sm leading-6 text-ink">{question.question}</p>
+                      {question.count > 1 && <Badge className="mt-0.5 shrink-0 tabular-nums">{number(question.count)}×</Badge>}
+                    </li>
+                  ))}
+                </ol>
               )}
             </Card>
           </div>
 
           <Card className="p-4 sm:p-5">
-            <div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="text-sm font-semibold text-ink">Хүсэлт ба аяллын сан</h2><p className="mt-1 text-xs text-ink-muted">Нийт хугацааны мэдээлэл · Захиалгын хүсэлт нь баталгаажсан захиалга биш</p></div><Button variant="ghost" size="sm" onClick={() => onNavigate("leads")}>Хүсэлтүүд <Icons.chevronRight size={14} /></Button></div>
-            <dl className="mt-5 grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-4">
-              {[
-                { label: "Нийт хүсэлт", value: stats.totalLeads },
-                { label: "Шинэ хүсэлт", value: stats.newLeads },
-                { label: "Захиалгын хүсэлт", value: stats.bookingLeads },
-                { label: "Харилцагч", value: stats.totalContacts },
-              ].map((item) => <div key={item.label}><dt className="text-xs text-ink-muted">{item.label}</dt><dd className="mt-1.5 text-xl font-bold tabular-nums text-ink">{number(item.value)}</dd></div>)}
-            </dl>
-            <div className="mt-5 grid gap-5 border-t border-line pt-4 sm:grid-cols-2">
-              <div><p className="mb-2 text-xs font-semibold text-ink-muted">Хүсэлтийн явц</p><div className="flex flex-wrap gap-2">{Object.entries(stats.leadsByStatus).map(([status, count]) => <Badge key={status}>{STATUS_LABELS[status] ?? "Бусад"} · {number(count)}</Badge>)}{Object.keys(stats.leadsByStatus).length === 0 && <span className="text-xs text-ink-muted">Хүсэлт бүртгэгдээгүй</span>}</div></div>
-              <div><p className="mb-2 text-xs font-semibold text-ink-muted">Хүсэлтийн төрөл</p><div className="flex flex-wrap gap-2">{stats.leadsByKind.map((item) => <Badge key={item.kind}>{KIND_LABELS[item.kind] ?? "Бусад"} · {number(item.count)}</Badge>)}{stats.leadsByKind.length === 0 && <span className="text-xs text-ink-muted">Хүсэлт бүртгэгдээгүй</span>}</div></div>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className={cx("flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
+                  attention?.errors24h ? "bg-warning-soft text-warning" : "bg-success-soft text-success")}>
+                  {attention?.errors24h ? <Icons.alert size={17} /> : <Icons.check size={17} />}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-ink">
+                    {attention?.errors24h == null ? "Системийн бүртгэл ачаалагдсангүй"
+                      : attention.errors24h === 0 ? "Сүүлийн 24 цагт систем хэвийн ажилласан"
+                        : `Сүүлийн 24 цагт ${number(attention.errors24h)} техникийн асуудал бүртгэгдсэн`}
+                  </p>
+                  {attention && attention.recentIssues.length > 0 && (
+                    <p className="mt-0.5 truncate text-xs text-ink-muted">
+                      {[...new Set(attention.recentIssues.map((issue) => ADMIN_ISSUE_LABELS[issue.event] ?? "Техникийн алдаа"))].slice(0, 3).join(" · ")}
+                    </p>
+                  )}
+                  {attention?.staffAlertsConfigured === false && (
+                    <p className="mt-0.5 text-xs text-ink-muted">Ажилтанд шууд мэдэгдэл очихгүй тохиргоотой — хүсэлтүүдийг энэ самбараас шалгаарай.</p>
+                  )}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {stats && <span className="text-xs text-ink-muted">Идэвхтэй аялал <span className="font-semibold tabular-nums text-ink">{number(stats.activeTrips)}</span> / {number(stats.totalTrips)}</span>}
+                <Button variant="ghost" size="sm" onClick={() => onNavigate("errors")}>Бүртгэл <Icons.chevronRight size={14} /></Button>
+              </div>
             </div>
-            <div className="mt-4 flex items-center justify-between gap-3 border-t border-line pt-3 text-sm"><p className="text-ink-muted">Идэвхтэй аялал <span className="font-semibold tabular-nums text-ink">{number(stats.activeTrips)}</span> / {number(stats.totalTrips)}</p><Button variant="ghost" size="sm" onClick={() => onNavigate("trips")}>Аяллууд <Icons.chevronRight size={14} /></Button></div>
           </Card>
+          {snapshot.generatedAt && <p className="text-right text-[11px] text-ink-subtle">Шинэчилсэн: {snapshotTime(snapshot.generatedAt)} · УБ</p>}
         </>
       )}
     </div>
-  );
-}
-
-function AttentionLink({ label, count, detail, onClick }: { label: string; count: number | null; detail: string; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} className="group flex w-full items-start justify-between gap-3 py-3.5 text-left first:pt-0 last:pb-0">
-      <span className="min-w-0"><span className="block text-sm font-medium text-ink group-hover:text-brand">{label}</span><span className="mt-1 block text-xs leading-5 text-ink-muted">{detail}</span></span>
-      <span className="flex shrink-0 items-center gap-2"><span className={cx("text-xl font-bold tabular-nums", count ? "text-warning" : "text-ink")}>{count == null ? "—" : number(count)}</span><Icons.chevronRight size={15} className="mt-1 text-ink-subtle group-hover:text-brand" /></span>
-    </button>
   );
 }

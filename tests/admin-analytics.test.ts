@@ -6,8 +6,18 @@ import { applyTestEnv } from "./helpers/env";
 
 const now = new Date("2098-01-01T17:00:00.000Z");
 
-function fixtureQuery(fail?: "core" | "activity" | "faq" | "errors"): AnalyticsQuery {
+function fixtureQuery(fail?: "core" | "activity" | "faq" | "errors" | "overview"): AnalyticsQuery {
   return async (sql, params) => {
+    if (sql.includes("/* overview:")) {
+      assert.doesNotMatch(sql, /\b(?:INSERT|UPDATE|DELETE|CREATE|ALTER)\b|SELECT \*/i);
+      if (fail === "overview") throw new Error("Fixture overview unavailable");
+      if (sql.includes("overview:people_daily")) return { rows: [{ date: "2098-01-02", customers: "4" }] };
+      if (sql.includes("overview:people")) return { rows: [{ customers: "5", previous_customers: "4", answered: "4" }] };
+      if (sql.includes("overview:leads_daily")) return { rows: [{ date: "2098-01-02", handed_off: "1" }] };
+      if (sql.includes("overview:leads")) return { rows: [{ handed_off: "2", phone_leads: "1", bookings: "1" }] };
+      if (sql.includes("overview:attention")) return { rows: [{ call_back: "1", recent_handoffs: "2", recent_bookings: "1", backlog: "3", oldest_backlog: "2097-11-01T03:00:00Z" }] };
+      if (sql.includes("overview:trip_demand")) return { rows: [{ trip: "ВЭЛМОР АЯЛАЛ", customers: "3" }] };
+    }
     assert.match(sql, /^SELECT /);
     assert.doesNotMatch(sql, /\b(?:INSERT|UPDATE|DELETE|CREATE|ALTER)\b|\btrip_name\b|SELECT \*/i);
     if (sql.includes("FROM travel_leads")) {
@@ -35,7 +45,10 @@ function fixtureQuery(fail?: "core" | "activity" | "faq" | "errors"): AnalyticsQ
     }
     if (sql.includes("FROM travel_messages")) {
       if (fail === "faq") throw new Error("Fixture FAQ unavailable");
-      if (sql.includes("ARRAY_AGG")) return { rows: [{ question: "Вэлмор аялал үнэ? example@example.invalid access_token=fixture-secret", count: "3" }] };
+      if (sql.includes("ARRAY_AGG")) return { rows: [
+        { question: "Холбоо барих дугаар 😊", count: "9" }, { question: "[phone]", count: "4" }, { question: "hi", count: "3" },
+        { question: "Вэлмор аялал үнэ? example@example.invalid access_token=fixture-secret", count: "3" },
+      ] };
       return { rows: [{ count: "9" }] };
     }
     if (sql.includes("FROM travel_error_logs")) {
@@ -121,4 +134,22 @@ test("analytics API protects access, rejects invalid periods and reports unavail
     const { closeNeonPool } = await import("../src/lib/neonDb");
     await closeNeonPool();
   }
+});
+
+test("the overview leads with this period's people and drops button taps from the questions", async () => {
+  const result = await collectAdminAnalytics(fixtureQuery(), 7, now);
+  assert.equal(result.overview?.customers, 5);
+  assert.equal(result.overview?.previousCustomers, 4);
+  assert.equal(result.overview?.answeredCustomers, 4);
+  assert.equal(result.overview?.handedOff, 2);
+  assert.equal(result.overview?.callBack, 1);
+  assert.equal(result.overview?.recentBookings, 1);
+  assert.equal(result.overview?.backlog, 3);
+  assert.deepEqual(result.overview?.daily.at(-1), { date: "2098-01-02", customers: 4, handedOff: 1 });
+  assert.deepEqual(result.overview?.tripDemand, [{ trip: "ВЭЛМОР АЯЛАЛ", customers: 3 }]);
+  assert.equal(result.faq!.week.length, 1, "button taps, placeholders and greetings are not questions");
+  assert.match(result.faq!.week[0].question, /Вэлмор аялал/);
+  const degraded = await collectAdminAnalytics(fixtureQuery("overview"), 7, now);
+  assert.equal(degraded.overview, null);
+  assert.equal(degraded.warnings.length, 1);
 });
