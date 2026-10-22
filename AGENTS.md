@@ -13,6 +13,11 @@
 - Before reporting a change as done, run the relevant checks for the scope of the change.
 - Prefer `npm run typecheck`, targeted tests, full tests, and production build when the change touches bot routing, payments, customer documents, webhook behavior, or admin UI.
 
+## Admin Appearance
+
+- Keep the admin interface in the user's white/light theme, including the desktop sidebar, mobile navigation, login, and content.
+- Preserve that theme when improving layouts unless the user explicitly requests another theme.
+
 ## Bot answer rules (owner's, non-negotiable)
 
 - No data, no answer: if the trip data does not hold the answer, the bot sends nothing and staff get a hand-off lead. Never a guessed trip, a vague-word mapping, or a polite deflection presented as an answer.

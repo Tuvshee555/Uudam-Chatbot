@@ -167,7 +167,7 @@ export function AssistantTab({
       }}
     >
       <div className="flex items-center gap-3 border-b border-line px-4 py-3.5 sm:px-5">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-nav text-nav-accent">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand">
           <Icons.ai size={19} />
         </span>
         <div className="min-w-0">
@@ -210,7 +210,7 @@ export function AssistantTab({
               disabled={busy}
               className="group flex w-full items-center gap-4 rounded-xl border border-dashed border-line-strong bg-surface px-5 py-5 text-left transition-colors hover:border-brand hover:bg-brand-soft/30 disabled:cursor-wait disabled:opacity-60"
             >
-              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-nav text-nav-accent transition-transform group-hover:-translate-y-0.5">
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand transition-transform group-hover:-translate-y-0.5">
                 <Icons.upload size={20} />
               </span>
               <span className="min-w-0">

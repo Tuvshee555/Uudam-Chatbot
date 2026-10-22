@@ -34,7 +34,7 @@ export function AdminNavigation({
       <nav aria-label="Удирдлагын цэс" className="space-y-6">
         {NAV_GROUPS.map((group) => (
           <div key={group.label}>
-            <p className="mb-1.5 px-3 text-[10.5px] font-bold uppercase tracking-[0.08em] text-nav-ink-soft/70">
+            <p className="mb-1.5 px-3 text-[10.5px] font-bold uppercase tracking-[0.08em] text-ink-muted">
               {group.label}
             </p>
             <div className="space-y-0.5">
@@ -61,15 +61,15 @@ export function AdminNavigation({
         id="admin-navigation"
         aria-label="Удирдлагын хэсгүүд"
         className={cx(
-          "scroll-area-dark hidden w-60 shrink-0 flex-col overflow-y-auto border-r border-nav-line bg-nav lg:w-64",
+          "scroll-area hidden w-60 shrink-0 flex-col overflow-y-auto border-r border-line bg-surface lg:w-64",
           !desktopHidden && "md:flex",
         )}
       >
-        <div className="flex h-14 shrink-0 items-center border-b border-nav-line px-5">
-          <Logo tone="inverse" className="min-w-0" />
+        <div className="flex h-14 shrink-0 items-center border-b border-line px-5">
+          <Logo className="min-w-0" />
         </div>
         <div className="flex-1 px-3 py-5">{links()}</div>
-        <p className="shrink-0 border-t border-nav-line px-5 py-3 text-[11px] text-nav-ink-soft">
+        <p className="shrink-0 border-t border-line px-5 py-3 text-[11px] text-ink-muted">
           Uudam · Аялал ба харилцагчийн удирдлага
         </p>
       </aside>
@@ -79,7 +79,7 @@ export function AdminNavigation({
         title="Удирдлагын цэс"
         panelClassName="max-w-sm"
       >
-        <div className="-m-1 rounded-xl bg-nav p-3">{links()}</div>
+        <div className="-m-1 rounded-xl bg-surface p-3">{links()}</div>
       </Modal>
     </>
   );

@@ -45,7 +45,7 @@ export const NAV_GROUPS: Array<{
   },
 ];
 
-/** One row of the dark admin nav rail. */
+/** One row of the admin navigation. */
 export function AdminSidebarItem({
   icon,
   label,
@@ -65,23 +65,23 @@ export function AdminSidebarItem({
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       className={cx(
-        "relative flex min-h-10 w-full items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors duration-150 focus-visible:outline-nav-accent",
+        "relative flex min-h-10 w-full items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors duration-150 focus-visible:outline-brand",
         active
-          ? "bg-nav-raised font-semibold text-white"
-          : "text-nav-ink-soft hover:bg-nav-hover hover:text-nav-ink",
+          ? "bg-brand-soft font-semibold text-brand"
+          : "text-ink-muted hover:bg-surface-sunken hover:text-ink",
       )}
     >
       <span
         aria-hidden="true"
         className={cx(
-          "absolute -left-3 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-nav-accent transition-opacity duration-150",
+          "absolute -left-3 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-brand transition-opacity duration-150",
           active ? "opacity-100" : "opacity-0",
         )}
       />
       <span
         className={cx(
           "shrink-0 transition-colors",
-          active ? "text-nav-accent" : "text-nav-ink-soft",
+          active ? "text-brand" : "text-ink-muted",
         )}
       >
         {icon}
