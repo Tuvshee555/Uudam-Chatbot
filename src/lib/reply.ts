@@ -200,6 +200,19 @@ export function guardInventedBookingTerms(
 // (which is most of the time) — it silently matched nothing at all.
 const TUGRIK_AMOUNT_RE = /(\d{1,3}(?:[.,]\d{3}){1,4}|\d{4,})\s*(?:₮|төгрөг|tugrik|mnt)(?![\p{L}])/giu;
 
+/** Exact names scope a reply section; an embedded shorter name is not a second trip. */
+export function replySectionTrips(line: string, trips: TravelTrip[]): TravelTrip[] {
+  let remaining = line.normalize("NFKC").toLowerCase();
+  const named: TravelTrip[] = [];
+  for (const trip of [...trips].sort((a, b) => b.route_name.length - a.route_name.length)) {
+    const name = trip.route_name.trim().normalize("NFKC").toLowerCase();
+    if (!name || !remaining.includes(name)) continue;
+    named.push(trip);
+    remaining = remaining.split(name).join(" ");
+  }
+  return named;
+}
+
 /**
  * Reads every ₮ amount out of an AI reply and confirms each one is a real,
  * quotable price on one of the trips the reply is actually about. A price
@@ -226,11 +239,25 @@ export function guardUnverifiedPrices(
   const lines = reply.split(/\r?\n/);
   const allReplyDates = parseDepartureDateText(reply, now);
   let activeDates = allReplyDates.length === 1 ? allReplyDates : [];
+  let activeTrips = candidateTrips;
   const activeHotels = new Map<string, string>();
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
+    const named = replySectionTrips(line, candidateTrips);
+    if (named.length) {
+      activeTrips = named;
+      // A date can be printed below its fare. Look only within this trip's
+      // section, so neither earlier nor later trips can supply that date.
+      const sectionDates = new Set<string>();
+      for (let next = index; next < lines.length; next++) {
+        if (next > index && replySectionTrips(lines[next], candidateTrips).length) break;
+        for (const date of parseDepartureDateText(lines[next], now)) sectionDates.add(date);
+      }
+      activeDates = sectionDates.size === 1 ? [...sectionDates] : [];
+      activeHotels.clear();
+    }
     const lineDates = parseDepartureDateText(line, now);
     if (lineDates.length > 0) activeDates = lineDates;
-    for (const trip of candidateTrips) {
+    for (const trip of activeTrips) {
       const hotel = mentionedOfferHotel(trip, line, now);
       if (hotel) activeHotels.set(trip.id, hotel);
     }
@@ -239,7 +266,7 @@ export function guardUnverifiedPrices(
       .filter((amount) => Number.isFinite(amount) && amount >= 1_000);
     if (amounts.length === 0) continue;
     for (const amount of amounts) {
-      const supported = candidateTrips.some((trip) => {
+      const supported = activeTrips.some((trip) => {
         const mentionedHotel = mentionedOfferHotel(trip, line, now);
         const hotel = mentionedHotel || activeHotels.get(trip.id) || null;
         if (activeDates.length === 0) return quotablePrices(trip, undefined, now, hotel).has(amount);
@@ -274,7 +301,10 @@ export function guardUnverifiedDates(
 ): string {
   if (candidateTrips.length === 0) return reply;
   if (!DATE_CLAIM_WORDS.test(reply)) return reply;
+  let activeTrips = candidateTrips;
   for (const line of reply.split(/\r?\n/)) {
+    const named = replySectionTrips(line, candidateTrips);
+    if (named.length) activeTrips = named;
     const dates = parseDepartureDateText(line, now);
     if (dates.length === 0) continue;
     // A truthful denial may repeat a date that is absent from the schedule.
@@ -283,7 +313,7 @@ export function guardUnverifiedDates(
     // it carry their own dates, which are checked line by line.
     if (dates.length === 2 && /хооронд|хүртэл/i.test(line)) continue;
     for (const date of dates) {
-      if (!candidateTrips.some((trip) => tripSupportsDate(trip, date, now) === "match")) return "REFER";
+      if (!activeTrips.some((trip) => tripSupportsDate(trip, date, now) === "match")) return "REFER";
     }
   }
   return reply;

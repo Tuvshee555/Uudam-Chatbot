@@ -1,12 +1,37 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { execFile } from "node:child_process";
-import test from "node:test";
+import test, { after, before, mock } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
-import { applyTestEnv } from "./helpers/env";
+import { applyTestEnv as applyBaseTestEnv } from "./helpers/env";
 
 const execFileAsync = promisify(execFile);
+const persistedLeadSenders = new Set<string>();
+
+function applyTestEnv() {
+  applyBaseTestEnv({ NEON_DATABASE_URL: "postgres://test:test@127.0.0.1:1/webhook-reliability-fixture" });
+}
+
+before(async () => {
+  const { Pool } = await import("pg");
+  const query = async (sql: string, params: unknown[] = []) => {
+    if (/COUNT[\s\S]*FROM travel_leads/i.test(sql)) return { rows: [{ count: persistedLeadSenders.has(String(params[0])) ? "1" : "0" }], rowCount: 1 };
+    if (/INSERT INTO travel_leads/i.test(sql)) {
+      persistedLeadSenders.add(String(params[2]));
+      return { rows: [{ id: persistedLeadSenders.size, kind: params[0], platform: params[1], sender_id: params[2], status: "new" }], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 0 };
+  };
+  mock.method(Pool.prototype, "query", query as unknown as typeof Pool.prototype.query);
+  mock.method(Pool.prototype, "connect", (async () => ({ query, release() {} })) as unknown as typeof Pool.prototype.connect);
+});
+
+after(async () => {
+  const { closeNeonPool } = await import("../src/lib/neonDb");
+  await closeNeonPool();
+  mock.restoreAll();
+});
 
 type WebhookHandler = (
   req: unknown,
@@ -428,6 +453,7 @@ test("webhook stays silent when the model refers unknown data to staff", async (
     assert.equal(result.statusCode, 200);
     assert.equal(sendCount, 0, "an unknown answer is met with silence, not a notice");
     assert.equal(sentBody, "");
+    assert.ok(persistedLeadSenders.has("ig-user-refer"));
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -483,11 +509,11 @@ test("webhook stays silent when a reply is suppressed as no-data", async () => {
 
     const result = await callWebhook(handler, payload);
 
-    // Never silent: a suppressed/no-data reply must still hand the customer
-    // off to a human instead of leaving them with nothing.
+    // Missing data stays silent, with a durable request available to staff.
     assert.equal(result.statusCode, 200);
     assert.equal(sendCount, 0, "a suppressed no-data reply must not be replaced by a notice");
     assert.equal(sentBody, "");
+    assert.ok(persistedLeadSenders.has("ig-user-suppressed"));
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -659,6 +685,7 @@ test("redis disconnect in replay/conversation mode fails closed with 503", async
       process.env.REDIS_URL = "redis://127.0.0.1:6399";
       process.env.REDIS_CONNECT_TIMEOUT_MS = "100";
       process.env.REDIS_COMMAND_TIMEOUT_MS = "100";
+      delete process.env.NEON_DATABASE_URL;
 
       const envModule = (await import("./src/lib/env")).default;
       const rateLimitModule = (await import("./src/lib/rateLimit")).default;
@@ -803,6 +830,7 @@ test("webhook stays silent to the customer when OpenAI is down (outage is never 
       [],
       "an AI outage must not send the customer any message (no apology, no hand-off notice)",
     );
+    assert.ok(persistedLeadSenders.has("ig-user-outage"));
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -875,6 +903,7 @@ test("when the AI itself answers REFER (does not know), the customer gets nothin
   const { sends, openAiCalls } = await runInstagramText("ig-user-ai-refer", "ig-mid-ai-refer-1", "ai refer check");
   assert.ok(openAiCalls >= 1, "the model must actually have been asked");
   assert.deepEqual(sends, [], "REFER means silence: no reply, no hand-off notice");
+  assert.ok(persistedLeadSenders.has("ig-user-ai-refer"));
 });
 
 test("the model saying it lacks the information is treated as no-data and never sent", async () => {
@@ -909,6 +938,7 @@ test("catalog maintenance status text is logged but not answered as a customer q
   );
   assert.deepEqual(sends, [], "catalog/status notes must not get a customer-facing reply");
   assert.equal(openAiCalls, 0, "catalog/status notes must not be sent to the model");
+  assert.ok(persistedLeadSenders.has("ig-user-catalog-note"));
 });
 
 test("a typed 'Get started' gets no bot reply (Meta's own greeting covers it) and never reaches the model", async () => {
@@ -931,6 +961,7 @@ test("a model refusal to a real question is never sent", async () => {
   const { sends } = await runInstagramText("ig-user-refusal-site", "ig-mid-refusal-site-1", "вэбсайт чинь хаана байна",
     "Уучлаарай, вэбсайтын хаяг өгөх боломжгүй байна. Та манай аяллын зөвлөхтэй холбогдоно уу. 😊");
   assert.ok(sends.every((body) => !/боломжгүй/.test(body)), "the refusal must not reach the customer");
+  assert.ok(persistedLeadSenders.has("ig-user-refusal-site"));
 });
 
 test("Messenger's 'Is anyone available to chat?' is a request for a person", async () => {

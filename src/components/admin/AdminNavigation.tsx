@@ -70,7 +70,7 @@ export function AdminNavigation({
         </div>
         <div className="flex-1 px-3 py-5">{links()}</div>
         <p className="shrink-0 border-t border-nav-line px-5 py-3 text-[11px] text-nav-ink-soft">
-          Таны өөрчлөлт хадгалахаас өмнө хянагдана
+          Uudam · Аялал ба харилцагчийн удирдлага
         </p>
       </aside>
       <Modal

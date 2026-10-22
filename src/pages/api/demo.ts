@@ -664,7 +664,9 @@ export default async function handler(
       // Fast path: departure date availability
       if (wantsDateAvailability) {
         const trips = await getTrips();
-        const dateReply = buildDateQuestionReply(intentText, await getFastPathText(), trips);
+        const routed = await getRouted();
+        const dateReply = routed.unavailableDateWithinScope ? "REFER"
+          : buildDateQuestionReply(intentText, await getFastPathText(), routed.scopedClarify || trips);
         if (dateReply) {
           // Mirror the webhook: a booking-intent date question gets nudged for
           // name + phone so the answer ends the same way Messenger's does.

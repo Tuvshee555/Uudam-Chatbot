@@ -7,10 +7,9 @@
  * about one of several matching trips.
  */
 import { sendFbFileAttachment, sendFbFileByUrl } from "./fbAttachmentUpload";
-import { sendImageMessage, sendTextMessage } from "./messenger";
+import { sendImageMessage } from "./messenger";
 import { appendMessage } from "./conversation";
-import { createLead, hasRecentOpenLead, listTrips } from "./travelOps";
-import { notifyStaffOfLead } from "./staffAlerts";
+import { listTrips } from "./travelOps";
 import { getTripBrochureAsset, getTripWebsiteLink, isPosterLinkedTrip, resolveTripFromUserMessage } from "./travelFastPaths";
 import { isGenericOpener } from "./welcomeFlow";
 import { createPhotoOnlyState, getPhotoOnlyState, setPhotoOnlyState } from "./photoOnlyState";
@@ -24,8 +23,9 @@ import {
   recordImageMessage,
 } from "./webhookMedia";
 import type { TravelTrip } from "./travelTypes";
-import type { Platform } from "./webhookDedup";
+import { RetryableWebhookError, type Platform } from "./webhookDedup";
 import { classifyError, hashIdentifier, logInfo, logWarn } from "./observability";
+import { recordReplyMediaDelivery } from "./replyMediaPolicy";
 
 export async function handlePhotoOnlyMode(input: {
   platform: Platform;
@@ -36,8 +36,10 @@ export async function handlePhotoOnlyMode(input: {
   contextualUserText: string;
   trace?: { requestId: string; correlationId: string; source: string };
   rememberTurn: (source: string) => Promise<unknown> | unknown;
+  /** Uses the webhook's shared verification, delivery and silent-handoff boundary. */
+  deliverReply: (reply: string, tag: string) => Promise<void>;
 }): Promise<void> {
-  const { platform, senderId, pageId, token, text, contextualUserText, trace, rememberTurn } =
+  const { platform, senderId, pageId, token, text, contextualUserText, trace, rememberTurn, deliverReply } =
     input;
   const trips = await listTrips({ status: "active" });
   const photoOnlyState = await getPhotoOnlyState(senderId);
@@ -105,64 +107,53 @@ export async function handlePhotoOnlyMode(input: {
       let sentBrochure = false;
       // The owner's call (2026-10-02): link to the live trip page instead of
       // the PDF file, same as the normal reply path — see webhookMedia.ts.
-      const websiteLink = brochure ? getTripWebsiteLink(resolvedTrip) : null;
+      const websiteLink = getTripWebsiteLink(resolvedTrip);
       if (websiteLink) {
-        try {
-          await sendTextMessage(senderId, `Дэлгэрэнгүй мэдээлэл, үнэ, зургийг эндээс харна уу 👉 ${websiteLink}`, token, {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            source: "api.webhook.photo_only_trip_link",
-          });
-          await appendMessage(senderId, "assistant", `👉 ${websiteLink}`);
-          sentBrochure = true;
-        } catch (error) {
-          logWarn("webhook.photo_only_trip_link_send_failed", {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            platform,
-            pageId,
-            senderHash: hashIdentifier(senderId),
-            classification: classifyError(error),
-          });
-        }
+        await deliverReply(`Дэлгэрэнгүй мэдээлэл, үнэ, зургийг эндээс харна уу 👉 ${websiteLink}`, "photo_only_trip_link");
+        sentBrochure = true;
       } else if (brochure) {
         sentBrochure =
           brochure.type === "id"
             ? await sendFbFileAttachment(senderId, brochure.value, token)
             : await sendFbFileByUrl(senderId, brochure.value, token);
       }
-      if (brochure) {
-        if (sentBrochure) {
-          if (!websiteLink) await recordFileMessage(senderId, brochure.value);
+      if (sentBrochure) {
+        if (brochure && !websiteLink) {
+          await recordFileMessage(senderId, brochure.value);
           await rememberTurn("api.webhook.photo_only_pdf_send");
-          await setPhotoOnlyState(senderId, createPhotoOnlyState({
-            activeTripId: resolvedTrip.id,
-            pendingTripIds: [],
-            lastPromptKind: null,
-            lastPromptAt: 0,
-          }));
-        } else {
-          logWarn("webhook.photo_only_pdf_send_failed", {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            platform,
-            pageId,
-            senderHash: hashIdentifier(senderId),
-            sourceType: brochure.type,
-          });
         }
+        await setPhotoOnlyState(senderId, createPhotoOnlyState({
+          activeTripId: resolvedTrip.id,
+          pendingTripIds: [],
+          lastPromptKind: null,
+          lastPromptAt: 0,
+        }));
+      } else if (brochure) {
+        logWarn("webhook.photo_only_pdf_send_failed", {
+          requestId: trace?.requestId,
+          correlationId: trace?.correlationId,
+          platform,
+          pageId,
+          senderHash: hashIdentifier(senderId),
+          sourceType: brochure.type,
+        });
       }
 
       photos = sentBrochure || isPosterLinkedTrip(resolvedTrip) ? [] : getTripPhotoUrls(resolvedTrip);
       if (!sentBrochure && photos.length > 0) {
+        const deliveredPhotos: string[] = [];
         for (const url of photos) {
+          recordReplyMediaDelivery("photo", "attempted");
           try {
             await sendImageMessage(senderId, url, token, {
               requestId: trace?.requestId,
               correlationId: trace?.correlationId,
               source: "api.webhook.photo_only",
             });
+            deliveredPhotos.push(url);
+            recordReplyMediaDelivery("photo", "sent");
           } catch (error) {
+            recordReplyMediaDelivery("photo", "failed");
             logWarn("webhook.photo_only_send_failed", {
               requestId: trace?.requestId,
               correlationId: trace?.correlationId,
@@ -182,7 +173,9 @@ export async function handlePhotoOnlyMode(input: {
             });
           }
         }
+        photos = deliveredPhotos;
         await recordImageMessage(senderId, photos);
+        if (!photos.length) throw new RetryableWebhookError("delivery_failed:photo_only_photos");
         await rememberTurn("api.webhook.photo_only_send");
         await setPhotoOnlyState(senderId, createPhotoOnlyState({
           activeTripId: resolvedTrip.id,
@@ -190,36 +183,10 @@ export async function handlePhotoOnlyMode(input: {
           lastPromptKind: null,
           lastPromptAt: 0,
         }));
-      } else {
-        try {
-          if (!(await hasRecentOpenLead(senderId, "handoff"))) {
-            await createLead({
-              kind: "handoff",
-              platform,
-              senderId,
-              customerMessage: text,
-              context: `Photo-only mode: ${resolvedTrip.route_name} аяллын зураг системд ороогүй тул хэрэглэгчид no-data хариу илгээсэнгүй.`,
-            });
-            await notifyStaffOfLead(
-              { kind: "handoff", platform, customerMessage: text },
-              {
-                requestId: trace?.requestId,
-                correlationId: trace?.correlationId,
-                source: "api.webhook.photo_only_no_data_silent",
-              },
-            );
-          }
-        } catch (error) {
-          logWarn("webhook.photo_only_no_data_lead_failed", {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            platform,
-            pageId,
-            senderHash: hashIdentifier(senderId),
-            classification: classifyError(error),
-          });
-        }
-        await rememberTurn("api.webhook.photo_only_no_photos_silent");
+      } else if (!sentBrochure) {
+        // Existing media that failed delivery needs a retry, not a missing-data lead.
+        if (brochure) throw new RetryableWebhookError("delivery_failed:photo_only_brochure");
+        await deliverReply("REFER", "photo_only_no_photos");
         promptKind = "no_photos";
       }
     } else if (ambiguousTrips.length > 0) {
@@ -235,25 +202,7 @@ export async function handlePhotoOnlyMode(input: {
   }
 
   if (clarification) {
-    try {
-      await sendTextMessage(senderId, clarification, token, {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        source: "api.webhook.photo_only_clarify",
-      });
-      await appendMessage(senderId, "assistant", clarification);
-      await rememberTurn("api.webhook.photo_only_clarify");
-    } catch (error) {
-      logWarn("webhook.photo_only_clarify_failed", {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        platform,
-        pageId,
-        senderHash: hashIdentifier(senderId),
-        classification: classifyError(error),
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
+    await deliverReply(clarification, "photo_only_clarify");
   }
   logInfo("webhook.photo_only_mode", {
     requestId: trace?.requestId,

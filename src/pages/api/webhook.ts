@@ -1,4 +1,4 @@
-﻿import type { NextApiRequest, NextApiResponse } from "next";
+import type { NextApiRequest, NextApiResponse } from "next";
 import { askOpenAI } from "../../lib/openaiProvider";
 import { askOpenAIChatParts } from "../../lib/openaiFallback";
 import { matchFlow, findTriggeredFlow, getFlowState, setFlowState, clearFlowState, newRuntimeState, runFlowFrom, resumeFlowWithInput, type FlowRule, type FlowDoc, type FlowEffects, type FlowRuntimeState, type RunOutcome, } from "../../lib/flowEngine";
@@ -46,7 +46,7 @@ import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWe
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBookedCustomer, pauseBot, trackSender } from "../../lib/pause";
 import { pickReferral, rememberAdReferral } from "../../lib/adReferral";
-import { AUTO_PAUSE_RESET_DAYS, createLead, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, hasRecentOpenLead, isPagePaused, listTrips, } from "../../lib/travelOps";
+import { AUTO_PAUSE_RESET_DAYS, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { hasDepartureDateAvailabilityIntent, requestsDateWindow } from "../../lib/travelDates";
 import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply, } from "../../lib/travelFastPaths";
 import { buildHandoffReplyWithContact, claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
@@ -56,6 +56,7 @@ import {
   handleAttachmentOnlyMessage,
 } from "../../lib/webhookAttachments";
 import { notifyStaffOfLead } from "../../lib/staffAlerts";
+import { ensureDurableLead } from "../../lib/durableLead";
 import { logInboundMessage } from "../../lib/travelMessages";
 import { getCollectState } from "../../lib/bookingCollect";
 import { continueBookingCollect, startBookingCollect, type BookingCollectContext } from "../../lib/bookingCollectFlow";
@@ -318,11 +319,25 @@ async function handleMessage(
    * state, schedule the memory merge, bump the counter. The fast paths below
    * were six copy-pasted versions of this block.
    */
+  const captureLead = async (
+    input: Omit<Parameters<typeof ensureDurableLead>[0], "platform" | "senderId" | "customerMessage"> & { customerMessage?: string },
+    source: string,
+  ) => {
+    const details = { platform, senderId, customerMessage: text, ...input };
+    const result = await ensureDurableLead(details);
+    if (result.created) {
+      await notifyStaffOfLead(details, {
+        requestId: trace?.requestId, correlationId: trace?.correlationId, source,
+      });
+    }
+    return result;
+  };
+  let pauseAfterContactCapture = false;
   let factualScope: TravelTrip[] | null = null;
   // The exit check every reply passes (tripGrounding.ts): a reply about ONE trip must be about a
   // trip this conversation points to — the customer's words, an open list, the selected trip, an
   // earlier turn, or what the router settled on. 26 branches pick trips their own way; checking
-  // here closes every door at once. Fails open: an error never silences a customer.
+  // here closes every door at once. Unavailable grounding must remain retryable.
   let groundingRoutedTripIds: string[] = [];
   let groundingTrips: TravelTrip[] | null = null;
   const findUngroundedTrip = async (reply: string): Promise<TravelTrip | null> => {
@@ -333,8 +348,10 @@ async function handleMessage(
         customerText: text, history, pendingTripIds: pending?.candidateTripIds || [],
         selectionTripId: selection?.tripId || null, routedTripIds: groundingRoutedTripIds, trips: groundingTrips,
       });
-    } catch {
-      return null;
+    } catch (cause) {
+      const error = new RetryableWebhookError("grounding_unavailable");
+      error.cause = cause;
+      throw error;
     }
   };
   let currentSelection: TripSelection | null = null;
@@ -371,33 +388,10 @@ async function handleMessage(
         failTag: input.failTag,
       });
       recordCounter("webhook.no_data_reply_suppressed_total", 1, { platform });
-      try {
-        if (!(await hasRecentOpenLead(senderId, "handoff"))) {
-          await createLead({
-            kind: "handoff",
-            platform,
-            senderId,
-            customerMessage: text,
-            context: `Бот мэдээлэлгүй fast-path хариуг зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй: ${input.failTag}${ungroundedTrip ? ` (харилцаанд дурдагдаагүй аялал: ${ungroundedTrip.route_name})` : ""}`,
-          });
-          await notifyStaffOfLead(
-            { kind: "handoff", platform, customerMessage: text },
-            {
-              requestId: trace?.requestId,
-              correlationId: trace?.correlationId,
-              source: "api.webhook.no_data_handoff",
-            },
-          );
-        }
-      } catch (error) {
-        logWarn("webhook.no_data_handoff_lead_failed", {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          platform,
-          senderHash: hashIdentifier(senderId),
-          classification: classifyError(error),
-        });
-      }
+      await captureLead({
+        kind: "handoff",
+        context: `Бот мэдээлэлгүй fast-path хариуг зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй: ${input.failTag}${ungroundedTrip ? ` (харилцаанд дурдагдаагүй аялал: ${ungroundedTrip.route_name})` : ""}`,
+      }, "api.webhook.no_data_handoff");
       // The bot doesn't know the answer, so it says NOTHING to the customer (owner's
       // rule: an unknown answer is met with silence, never a "passed to a
       // consultant" notice). Staff got the lead + alert above, and the bot is
@@ -490,12 +484,14 @@ async function handleMessage(
     }
     if (!noDataReply && input.afterDeliver) await input.afterDeliver();
     await rememberTurn(noDataReply ? `${input.rememberSource}_handoff` : input.rememberSource);
+    if (pauseAfterContactCapture) await pauseBookedCustomer(senderId);
     if (input.counter) recordCounter(input.counter, 1, { platform });
   };
 
   // Photo-only mode: send photos only when we have a real trip signal.
   // Stay silent on greetings, unrelated text, or unknown requests. Full
   // behavior lives in webhookPhotoOnly.ts (extracted for the 2,000-line cap).
+  const botSettings = await getTravelBotSettings();
   const botControl = await getBotControl();
   if (botControl.photo_only && platform === "facebook" && token) {
     await handlePhotoOnlyMode({
@@ -507,6 +503,7 @@ async function handleMessage(
       contextualUserText,
       trace,
       rememberTurn,
+      deliverReply: (reply, tag) => deliverFastPathReply({ reply, failTag: tag, rememberSource: `api.webhook.${tag}` }),
     });
     return;
   }
@@ -514,7 +511,6 @@ async function handleMessage(
   if (platform === "facebook") {
     await sendFacebookTypingIndicator(senderId, token, pageId, trace);
   }
-  const botSettings = await getTravelBotSettings();
   void logInboundMessage({ platform, senderId, text });
 
   // ── Greeting button tap handler ─────────────────────────────────────────────
@@ -712,14 +708,12 @@ async function handleMessage(
         ).catch(() => {});
       },
       captureLead: async (state: FlowRuntimeState) => {
-        await createLead({
-          kind: "booking",
-          platform,
-          senderId,
+        await ensureDurableLead({
+          kind: "booking", platform, senderId,
           customerMessage: state.fields.message || text,
           contactPhone: state.fields.phone || "",
           context: JSON.stringify(state.fields),
-        }).catch(() => {});
+        });
       },
     };
   }
@@ -736,6 +730,7 @@ async function handleMessage(
     if (outcome.status === "handoff_to_ai") {
       return { handedToAi: true, systemPromptOverride: outcome.systemPromptOverride };
     }
+    if (pauseAfterContactCapture) await pauseBookedCustomer(senderId);
     return { handedToAi: false };
   }
   if (flowDocs.length > 0) {
@@ -757,45 +752,8 @@ async function handleMessage(
     text.trim() === CONTACT_OPERATOR_LABEL ||
     (botSettings.handoff_enabled && isHandoffRequest(text, botSettings.handoff_keywords))
   ) {
-    // 14-day auto-reset so bot re-engages after 2 weeks if consultant hasn't followed up
-    await autoHandoffSender(senderId);
-    const pauseMs =
-      botSettings.handoff_pause_minutes > 0
-        ? botSettings.handoff_pause_minutes * 60_000
-        : undefined;
-    await pauseBot(senderId, pauseMs, "handoff");
-    recordCounter("webhook.handoff_requested_total", 1, { platform });
-    logInfo("webhook.handoff_requested", {
-      requestId: trace?.requestId,
-      correlationId: trace?.correlationId,
-      platform,
-      senderHash: hashIdentifier(senderId),
-      pauseMinutes: botSettings.handoff_pause_minutes,
-    });
-    try {
-      await createLead({
-        kind: "handoff",
-        platform,
-        senderId,
-        customerMessage: text,
-      });
-      await notifyStaffOfLead(
-        { kind: "handoff", platform, customerMessage: text },
-        {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          source: "api.webhook",
-        },
-      );
-    } catch (error) {
-      logWarn("webhook.handoff_lead_failed", {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        platform,
-        senderHash: hashIdentifier(senderId),
-        classification: classifyError(error),
-      });
-    }
+    await captureLead({ kind: "handoff" }, "api.webhook.handoff");
+    await appendMessage(senderId, "user", text);
     const handoffConfirmation =
       botSettings.handoff_reply ||
       "Таны хүсэлтийг хүлээн авлаа. Манай ажилтан удахгүй тантай холбогдоно.";
@@ -804,26 +762,15 @@ async function handleMessage(
       platform === "facebook" && token
         ? buildHandoffReplyWithContact(handoffConfirmation, botSettings.extra)
         : handoffConfirmation;
-    await assertLockHealthy();
-    const delivered = await sendPlatformMessage(
-      platform,
-      senderId,
-      handoffMsg,
-      token,
-      pageId,
-      igUserId,
-      trace,
-      { allowFallback: false },
-    );
-    if (!delivered) {
-      throw new RetryableWebhookError("delivery_failed:handoff");
-    }
-    try {
-      await appendMessage(senderId, "user", text);
-      await appendMessage(senderId, "assistant", handoffMsg);
-      await setLastReplyConsistent(sessionId, handoffMsg);
-      await rememberTurn("api.webhook.handoff");
-    } catch { /* non-critical */ }
+    await deliverFastPathReply({ reply: handoffMsg, failTag: "handoff", rememberSource: "api.webhook.handoff" });
+    await autoHandoffSender(senderId);
+    const pauseMs = botSettings.handoff_pause_minutes > 0 ? botSettings.handoff_pause_minutes * 60_000 : undefined;
+    await pauseBot(senderId, pauseMs, "handoff");
+    recordCounter("webhook.handoff_requested_total", 1, { platform });
+    logInfo("webhook.handoff_requested", {
+      requestId: trace?.requestId, correlationId: trace?.correlationId, platform,
+      senderHash: hashIdentifier(senderId), pauseMinutes: botSettings.handoff_pause_minutes,
+    });
     return;
   }
   const contactReply = buildContactReply(text, contactSettingsOf(botSettings.extra));
@@ -880,64 +827,20 @@ async function handleMessage(
   // falls through so the AI answers the question too.
   const detectedPhone = extractPhoneNumber(text);
   if (detectedPhone) {
-    try {
-      if (!(await hasRecentOpenLead(senderId, "booking"))) {
-        await createLead({
-          kind: "booking",
-          platform,
-          senderId,
-          customerMessage: text,
-          contactPhone: detectedPhone,
-          context: "Чатад утасны дугаараа үлдээсэн.",
-        });
-        await notifyStaffOfLead(
-          {
-            kind: "booking",
-            platform,
-            customerMessage: text,
-            contactPhone: detectedPhone,
-          },
-          {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            source: "api.webhook.phone_capture",
-          },
-        );
-        recordCounter("webhook.phone_lead_captured_total", 1, { platform });
-      }
-      // The phone number is the hand-off: staff call from here. This turn is
-      // still answered (the pause is read before routing); later turns are not.
-      await pauseBookedCustomer(senderId);
-    } catch (error) {
-      logWarn("webhook.phone_lead_capture_failed", {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        platform,
-        senderHash: hashIdentifier(senderId),
-        classification: classifyError(error),
-      });
-    }
+    const captured = await captureLead({
+      kind: "booking", contactPhone: detectedPhone, context: "Чатад утасны дугаараа үлдээсэн.",
+    }, "api.webhook.phone_capture");
+    if (captured.created) recordCounter("webhook.phone_lead_captured_total", 1, { platform });
     if (isPhoneOnlyMessage(text)) {
-      try {
-        await appendMessage(senderId, "user", text);
-      } catch { /* non-critical */ }
-      const confirmation =
-        `Баярлалаа! 🙌 Манай аяллын зөвлөх таны ${detectedPhone} дугаарт удахгүй холбогдоно. ` +
-        "Өөр асуух зүйл байвал чөлөөтэй бичээрэй 😊";
-      await assertLockHealthy();
-      const delivered = await sendPlatformMessage(
-        platform, senderId, confirmation, token, pageId, igUserId, trace, { allowFallback: false },
-      );
-      if (!delivered) {
-        throw new RetryableWebhookError("delivery_failed:phone_capture_confirmation");
-      }
-      try {
-        await appendMessage(senderId, "assistant", confirmation);
-        await setLastReplyConsistent(sessionId, confirmation);
-        await rememberTurn("api.webhook.phone_capture_confirmation");
-      } catch { /* non-critical */ }
+      await appendMessage(senderId, "user", text);
+      await deliverFastPathReply({
+        reply: `Баярлалаа! Манай аяллын зөвлөх таны ${detectedPhone} дугаарт холбогдоно.`,
+        failTag: "phone_capture_confirmation", rememberSource: "api.webhook.phone_capture_confirmation",
+      });
+      await pauseBookedCustomer(senderId);
       return;
     }
+    pauseAfterContactCapture = true;
   }
   if (flowDocs.length > 0) {
     const triggered = findTriggeredFlow(text, flowDocs);
@@ -1069,34 +972,10 @@ async function handleMessage(
   // "5 сая" conversation. Save the inbound text for the inbox, alert staff,
   // and stay quiet to the customer.
   if (isLikelyCatalogMaintenanceText(text)) {
-    try {
-      if (!(await hasRecentOpenLead(senderId, "handoff"))) {
-        await createLead({
-          kind: "handoff",
-          platform,
-          senderId,
-          customerMessage: text,
-          contactPhone: detectedPhone || "",
-          context: "Дотоод каталог/status тэмдэглэл шиг харагдсан тул бот автоматаар хариулаагүй.",
-        });
-        await notifyStaffOfLead(
-          { kind: "handoff", platform, customerMessage: text, contactPhone: detectedPhone || "" },
-          {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            source: "api.webhook.catalog_note_suppressed",
-          },
-        );
-      }
-    } catch (error) {
-      logWarn("webhook.catalog_note_lead_failed", {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        platform,
-        senderHash: hashIdentifier(senderId),
-        classification: classifyError(error),
-      });
-    }
+    await captureLead({
+      kind: "handoff", contactPhone: detectedPhone || "",
+      context: "Дотоод каталог/status тэмдэглэл шиг харагдсан тул бот автоматаар хариулаагүй.",
+    }, "api.webhook.catalog_note_suppressed");
     logInfo("webhook.catalog_note_suppressed", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
@@ -1124,36 +1003,12 @@ async function handleMessage(
     // about it. A payment claim is the strongest buy signal there is; without
     // this lead+alert, a paying customer would wait on a follow-up nobody
     // knew to make.
-    try {
-      if (!(await hasRecentOpenLead(senderId, "handoff"))) {
-        await createLead({
-          kind: "handoff",
-          platform,
-          senderId,
-          customerMessage: text,
-          contactPhone: detectedPhone || "",
-          context: asksBankAccount
-            ? "Хэрэглэгч төлбөрийн дансны мэдээлэл асуусан — зөвлөх албан ёсоор илгээнэ үү."
-            : "Төлбөр шилжүүлсэн гэж мэдэгдсэн — зөвлөх шалгаж баталгаажуулна уу.",
-        });
-        await notifyStaffOfLead(
-          { kind: "handoff", platform, customerMessage: text, contactPhone: detectedPhone || "" },
-          {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            source: "api.webhook.payment_claim",
-          },
-        );
-      }
-    } catch (error) {
-      logWarn("webhook.payment_claim_lead_failed", {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        platform,
-        senderHash: hashIdentifier(senderId),
-        classification: classifyError(error),
-      });
-    }
+    await captureLead({
+      kind: "handoff", contactPhone: detectedPhone || "",
+      context: asksBankAccount
+        ? "Хэрэглэгч төлбөрийн дансны мэдээлэл асуусан — зөвлөх албан ёсоор илгээнэ үү."
+        : "Төлбөр шилжүүлсэн гэж мэдэгдсэн — зөвлөх шалгаж баталгаажуулна уу.",
+    }, "api.webhook.payment_claim");
     await deliverFastPathReply({
       reply: asksBankAccount
         ? BANK_ACCOUNT_REQUEST_REPLY
@@ -1406,7 +1261,9 @@ async function handleMessage(
   }
   if (wantsDateAvailability) {
     const trips = await getTrips();
-    const dateAvailabilityReply = buildDateQuestionReply(intentText, await getFastPathText(), trips);
+    const routed = await getRouted();
+    const dateAvailabilityReply = routed.unavailableDateWithinScope ? "REFER"
+      : buildDateQuestionReply(intentText, await getFastPathText(), routed.scopedClarify || trips);
     if (dateAvailabilityReply) {
       const bookingNudge = customerWantsToBook
         ? " Захиалгаа баталгаажуулах бол нэр, утасны дугаараа үлдээгээрэй."
@@ -1861,36 +1718,10 @@ async function handleMessage(
       platform,
       reason: aiOutage ? "ai_outage" : "no_data",
     });
-    try {
-      if (!(await hasRecentOpenLead(senderId, "handoff"))) {
-        await createLead({
-          kind: "handoff",
-          platform,
-          senderId,
-          customerMessage: text,
-          contactPhone: detectedPhone || "",
-          context: aiOutage
-            ? "AI түр саатсан тул зөвлөхөд шилжүүлэв."
-            : "Бот мэдээлэлгүй асуулт тул зөвлөхөд шилжүүлэв.",
-        });
-        await notifyStaffOfLead(
-          { kind: "handoff", platform, customerMessage: text },
-          {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            source: "api.webhook.ai_refer",
-          },
-        );
-      }
-    } catch (error) {
-      logWarn("webhook.ai_refer_lead_failed", {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        platform,
-        senderHash: hashIdentifier(senderId),
-        classification: classifyError(error),
-      });
-    }
+    await captureLead({
+      kind: "handoff", contactPhone: detectedPhone || "",
+      context: aiOutage ? "AI түр саатсан тул зөвлөхөд шилжүүлэв." : "Бот мэдээлэлгүй асуулт тул зөвлөхөд шилжүүлэв.",
+    }, "api.webhook.ai_refer");
     await autoHandoffSender(senderId);
     const referPauseMs =
       botSettings.handoff_pause_minutes > 0
@@ -1988,36 +1819,12 @@ async function handleMessage(
       });
       recordCounter("webhook.ai_no_data_reply_suppressed_total", 1, { platform });
     }
-    try {
-      if (!(await hasRecentOpenLead(senderId, "handoff"))) {
-        await createLead({
-          kind: "handoff",
-          platform,
-          senderId,
-          customerMessage: text,
-          contactPhone: detectedPhone || "",
-          context: wrongTripLeak
-            ? `AI өөр аяллын (${wrongTripLeak.offendingTripName}) хариу өгөх гэсэн тул хэрэглэгчид илгээлгүй зөвлөхөд шилжүүлэв.`
-            : "AI мэдээлэлгүй өгүүлбэр бичсэн тул зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй.",
-        });
-        await notifyStaffOfLead(
-          { kind: "handoff", platform, customerMessage: text, contactPhone: detectedPhone || "" },
-          {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            source: "api.webhook.ai_no_data_handoff",
-          },
-        );
-      }
-    } catch (error) {
-      logWarn("webhook.ai_no_data_handoff_lead_failed", {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        platform,
-        senderHash: hashIdentifier(senderId),
-        classification: classifyError(error),
-      });
-    }
+    await captureLead({
+      kind: "handoff", contactPhone: detectedPhone || "",
+      context: wrongTripLeak
+        ? `AI өөр аяллын (${wrongTripLeak.offendingTripName}) хариу өгөх гэсэн тул хэрэглэгчид илгээлгүй зөвлөхөд шилжүүлэв.`
+        : "AI мэдээлэлгүй өгүүлбэр бичсэн тул зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй.",
+    }, "api.webhook.ai_no_data_handoff");
     await autoHandoffSender(senderId);
     const suppressedPauseMs =
       botSettings.handoff_pause_minutes > 0
@@ -2121,6 +1928,7 @@ async function handleMessage(
     igUserId,
     trace,
   );
+  if (pauseAfterContactCapture) await pauseBookedCustomer(senderId);
 }
 async function processConversationWithPendingQueue(
   conversationKey: string,

@@ -1,6 +1,6 @@
 import type { TravelTrip } from "./travelTypes";
 import type { TripSelection } from "./tripRequest";
-import { guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, isReferReply } from "./reply";
+import { guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, isReferReply, replySectionTrips } from "./reply";
 import { tripDurationDays } from "./travelFastPathsSearch";
 import { tripTransport, isTripOfferPrice } from "./tripFacts";
 import { normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard } from "./tripOffers";
@@ -85,8 +85,13 @@ export function verifyTripReply(input: {
   // A header listing several departures ("12/19, 12/22:") scopes the fare lines under it.
   let dateSet: string[] = [];
   for (const line of checked.split(/\r?\n|[|;]/)) {
-    const named = trips.filter((trip) => line.includes(trip.route_name));
-    if (named.length) { active = named; date = selection?.tripId === named[0].id ? selection.date : null; hotel = selection?.tripId === named[0].id ? selection.hotel : null; }
+    const named = replySectionTrips(line, trips);
+    if (named.length) {
+      active = named;
+      date = selection?.tripId === named[0].id ? selection.date : null;
+      hotel = selection?.tripId === named[0].id ? selection.hotel : null;
+      dateSet = [];
+    }
     const dates = parseDepartureDateText(line, now);
     if (dates.length === 1) { date = dates[0]; dateSet = []; } else if (dates.length > 1) { date = null; dateSet = dates; }
     // Longest name first: "Lotus + Pearl" must not be read as "Lotus" (same rule as mentionedOfferHotel).
@@ -141,7 +146,7 @@ export function verifyTripReply(input: {
     if (!/байхгүй|биш|гарахгүй|таарахгүй|хүссэн|хүсэлт|асууж|хуваарьгүй/i.test(line)) {
       const duration = /(?:хугацаа\s*:|үргэлжлэх(?:\s+хугацаа)?\s*:?)\s*(\d{1,2})\s*(?:өдөр|хоног)/i.exec(line);
       if (duration && !active.some((trip) => tripDurationDays(trip) === Number(duration[1]))) return "REFER";
-      if (/шууд\s+нислэгтэй/i.test(line) && !named.length && !active.some((trip) => tripTransport(trip) === "direct_flight")) return "REFER";
+      if (/шууд\s+нислэгтэй/i.test(line) && !active.some((trip) => tripTransport(trip) === "direct_flight")) return "REFER";
       if (date && /захиалга\s+нээлттэй|суудал\s+байгаа|суудал\s+байна/i.test(line)) {
         const supported = active.some((trip) => {
           const row = departureAvailability(trip).find((entry) => entry.date === date);

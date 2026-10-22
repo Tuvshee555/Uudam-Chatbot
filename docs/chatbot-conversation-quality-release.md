@@ -1,5 +1,64 @@
 # Conversation quality release
 
+## Retained-history review and hardening
+
+The review scanned all 24,155 retained conversation rows. Of these, 2,478 rows
+belonged to 504 non-demo conversation keys; 21,677 rows belonged to demo
+sessions. These populations must be reported separately. Stored assistant
+messages, attachment-only rows, a last unanswered turn, and automated detector
+flags do not establish customer delivery or an answer-quality percentage.
+Flagged and recent conversations received focused review; this is not a claim
+that every historical answer received a human rating.
+
+Verified defects fixed in this release:
+
+- A date-only follow-up after a destination list could be interpreted as a
+  numbered choice or matched against an unrelated destination. The offered or
+  selected trips now retain ownership of that date question. An unsupported
+  date stays silent and creates a staff handoff.
+- Named trip sections could borrow a sibling trip's fare or departure date,
+  while a grouped date could leak into the next section. Verification now
+  scopes these facts to the current section and checks direct-flight claims
+  even when the trip is named on that line.
+- Photo-only mode could create a missing-media handoff after successfully
+  sending a brochure, require a PDF before offering a real website link, or
+  record failed photos as sent. Successful content no longer creates a false
+  handoff; accepted photos alone enter history, and complete send failure is
+  retryable.
+- A failed lead insert could be swallowed before pausing or confirming a
+  handoff. Handoff and booking paths now require a persisted or existing open
+  lead first. Booking state survives persistence and send failures, and a
+  completed confirmation is retained when finishing a pause needs a retry.
+  Unavailable exit grounding also retries rather than sending unchecked text.
+- A phone bundled with a question no longer pauses the customer before their
+  answer is successfully delivered. Explicit operator and phone-only requests
+  retain their inbound history and use the shared response boundary.
+
+The overview now reads actual schema fields instead of requesting a nonexistent
+lead trip-name field and reporting database failure as a successful set of
+zeros. It presents agency-local daily activity, unresolved CRM requests, recent
+system issues, a staff-notification configuration warning, and recorded
+questions. Demo sessions are excluded from customer activity. Core read failure
+returns an unavailable response; optional sections remain explicitly unknown.
+Refresh failure preserves the last snapshot with an error, and expired login
+clears it. Booking requests are not labeled completed bookings, and recorded
+replies are not labeled confirmed customer delivery.
+
+The read-only catalog audit flags one archived, unpublished record whose two
+source-documented starting-point options share a date without distinct package
+IDs. Both adult/child fare pairs match the stored poster and its saved versions;
+neither fare should be replaced or deleted. The options need explicit identity
+before reactivation. Historical age/date warnings remain review findings; this
+release does not overwrite live fares. Existing staff-notification configuration
+also requires a recipient channel before external alerts can be delivered; the
+Leads screen remains the durable queue.
+
+Regression coverage includes signed webhook requests, failed persistence and
+delivery followed by replay of the same event, grounding-read failure, scoped
+date follow-ups, per-trip factual verification, photo outcomes, timezone
+boundaries, absent analytics data, and authentication. The overview was also
+checked on desktop and mobile with isolated invented data.
+
 ## What is enforced
 
 - Shared response presentation for the live code/AI paths and demo. The prompt

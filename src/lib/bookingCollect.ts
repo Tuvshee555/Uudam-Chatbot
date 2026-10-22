@@ -28,6 +28,8 @@ export type CollectState = {
   trip: string;
   originalMessage: string;
   startedAt: number;
+  /** Lets a retry finish the staff pause without sending the confirmation again. */
+  confirmationSent?: boolean;
 };
 
 /** Result of feeding one customer message into the flow. */

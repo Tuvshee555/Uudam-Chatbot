@@ -17,10 +17,11 @@ import {
   startCollectState,
 } from "./bookingCollect";
 import { appendMessage } from "./conversation";
-import { classifyError, hashIdentifier, logWarn, recordCounter } from "./observability";
+import { recordCounter } from "./observability";
+import { ensureDurableLead } from "./durableLead";
 import { autoHandoffSender, pauseBookedCustomer } from "./pause";
 import { notifyStaffOfLead } from "./staffAlerts";
-import { createLead, dbStoreSenderName, hasRecentOpenLead, listTrips } from "./travelOps";
+import { dbStoreSenderName, hasRecentOpenLead, listTrips } from "./travelOps";
 import { resolveTripFromUserMessage, sanitizeTripForCustomers } from "./travelFastPaths";
 import type { TravelTrip } from "./travelTypes";
 import { extractPhoneNumber, isBookingIntent, normalizeLowerText } from "./webhookMedia";
@@ -93,7 +94,7 @@ export async function startBookingCollect(ctx: BookingCollectContext): Promise<b
  */
 export async function continueBookingCollect(ctx: BookingCollectContext): Promise<boolean> {
   const state = await getCollectState(ctx.senderId);
-  if (!state || state.step === "done") return false;
+  if (!state) return false;
   const trips = await loadTrips();
   const answer = state.step === "trip" ? verifiedTripName(ctx.text, trips) || ctx.text : ctx.text;
   const result = advanceCollectState(state, answer, extractPhoneNumber(ctx.text), {
@@ -114,22 +115,20 @@ export async function continueBookingCollect(ctx: BookingCollectContext): Promis
     return true;
   }
 
-  const done = result.state;
-  await clearCollectState(ctx.senderId);
+  let done = result.state;
+  const { created } = await ensureDurableLead({
+    kind: "booking",
+    platform: ctx.platform,
+    senderId: ctx.senderId,
+    customerMessage: done.originalMessage,
+    contactPhone: done.phone,
+    context: buildLeadContext(done),
+  });
+  await setCollectState(ctx.senderId, done);
   // The ONLY place a chat message becomes the stored customer name: a
   // validated answer to "нэрээ бичнэ үү".
   if (done.name.trim()) await dbStoreSenderName(ctx.senderId, done.name.trim()).catch(() => {});
-  await autoHandoffSender(ctx.senderId);
-  await pauseBookedCustomer(ctx.senderId);
-  try {
-    await createLead({
-      kind: "booking",
-      platform: ctx.platform,
-      senderId: ctx.senderId,
-      customerMessage: done.originalMessage,
-      contactPhone: done.phone,
-      context: buildLeadContext(done),
-    });
+  if (created) {
     await notifyStaffOfLead(
       {
         kind: "booking",
@@ -140,17 +139,16 @@ export async function continueBookingCollect(ctx: BookingCollectContext): Promis
       { requestId: ctx.trace?.requestId, correlationId: ctx.trace?.correlationId, source: "api.webhook" },
     );
     recordCounter("webhook.booking_collect_completed_total", 1, { platform: ctx.platform });
-  } catch (error) {
-    logWarn("webhook.booking_collect_lead_failed", {
-      requestId: ctx.trace?.requestId,
-      correlationId: ctx.trace?.correlationId,
-      platform: ctx.platform,
-      senderHash: hashIdentifier(ctx.senderId),
-      classification: classifyError(error),
-    });
   }
-  const completion = buildCompletionMessage(done);
-  await ctx.send(completion, "booking_collect_done");
-  await appendMessage(ctx.senderId, "assistant", completion).catch(() => {});
+  if (!done.confirmationSent) {
+    const completion = buildCompletionMessage(done);
+    await ctx.send(completion, "booking_collect_done");
+    done = { ...done, confirmationSent: true };
+    await setCollectState(ctx.senderId, done);
+    await appendMessage(ctx.senderId, "assistant", completion).catch(() => {});
+  }
+  await autoHandoffSender(ctx.senderId);
+  await pauseBookedCustomer(ctx.senderId);
+  await clearCollectState(ctx.senderId);
   return true;
 }

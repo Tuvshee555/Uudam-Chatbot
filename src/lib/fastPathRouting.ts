@@ -27,7 +27,7 @@ import {
 import { customerTurn, joinContextAndTurn, markNoTrip } from "./customerTurn";
 import { unmetNote, unknownRequirementNote, type Understanding } from "./tripUnderstanding";
 import { hasReferentialHint, isLikelyContextDependentText, lastAssistantReply, pickFastPathMatchText } from "./contextualText";
-import { parseDepartureDateText, resolveRequestedMonth, tripMatchesRequestedDate, tripDepartsInMonth } from "./travelDates";
+import { hasDepartureDateAvailabilityIntent, parseDepartureDateText, requestsDateWindow, resolveRequestedDate, resolveRequestedMonth, tripMatchesRequestedDate, tripDepartsInMonth } from "./travelDates";
 import {
   filterTripsByTransportIntent,
   getTripSearchHaystack,
@@ -111,6 +111,23 @@ function looseNorm(value: string): string {
 
 const DATES_ONLY_RE = /^(?:огноо|огноог|өдөр|өдрүүд|гарах\s+өдөр(?:үүд)?|хэзээ|ogno|udur|hezee)(?:\s+(?:нь|ni|вэ|ve|юу|yu))*\s*[?.!]*$/iu;
 
+const DATE_FOLLOWUP_WORDS = new Set([
+  "оны", "он", "сарын", "сар", "нд", "д", "ны", "ний", "нь", "ni", "nii", "nd", "sariin", "sar",
+  "өнөөдөр", "маргааш", "нөгөөдөр", "today", "tomorrow", "margaash", "margash", "nuguudur",
+  "аялал", "аяллын", "aylal", "aylaliin", "үнэ", "une", "vne", "хэд", "хэдэн", "hed", "heden",
+  "вэ", "ве", "ve", "байна", "байгаа", "бол", "уу", "юу", "uu", "yu", "бну", "бна", "bnu", "bna", "baina",
+  "гарах", "явах", "garah", "yavah", "yvah", "хөтөлбөр", "үзэх", "hutulbur", "uzey", "uzye",
+]);
+
+/** A date and generic question words carry no new destination identity. */
+function dateFollowup(text: string, now: Date): string | null {
+  if (!hasDepartureDateAvailabilityIntent(text, now) || requestsDateWindow(text, now)) return null;
+  const requested = resolveRequestedDate(text, now);
+  if (!requested) return null;
+  const words = text.normalize("NFKC").toLowerCase().replace(/[^\p{L}]+/gu, " ").trim().split(/\s+/).filter(Boolean);
+  return words.every(word => DATE_FOLLOWUP_WORDS.has(word)) ? requested.ymd : null;
+}
+
 /**
  * "2", "2.", "2)", "2-р", "2. <trip name, cut off>..." — the customer picking an
  * option from a numbered list. Deliberately NOT "2 том хүн 2 хүүхэд" or
@@ -168,6 +185,8 @@ export type FastPathRoute = {
   /** The list is informational because a stated requirement failed or is unknown. */
   informationalAlternatives?: boolean;
   selection?: TripSelection;
+  /** No offered/selected trip has this requested date: silently hand the question to staff. */
+  unavailableDateWithinScope?: boolean;
 };
 
 /** A reply that asked the customer to pick a trip — the only kind a pending clarification belongs to. */
@@ -240,6 +259,22 @@ export async function routeFastPathText(input: {
   // Nothing names a trip, so it used to fall through to silence while staff were paged.
   if (pendingTrips.length > 1 && DATES_ONLY_RE.test(text.trim())) {
     return { matchText: text, scopedClarify: pendingTrips, scopedClarifyNote: "Эдгээр аяллын гарах өдрүүд:", informationalAlternatives: true };
+  }
+
+  // A date under a trip or a destination list is a follow-up to that scope.
+  // Run before model interpretation and whole-catalog matching: a missing
+  // date must never replace the destination with an unrelated departure.
+  // A dotted date can also resemble a numbered button ("4.11 ..."). Its
+  // complete date shape takes precedence over that syntactic interpretation.
+  const requestedFollowupDate = !tappedOwnButton ? dateFollowup(text, now) : null;
+  const dateScope = pendingTrips.length ? pendingTrips
+    : previousSelection ? trips.filter(trip => trip.id === previousSelection.tripId) : [];
+  if (requestedFollowupDate && dateScope.length) {
+    const departing = dateScope.filter(trip => trip.status === "active" && tripMatchesRequestedDate(trip, requestedFollowupDate, now));
+    if (departing.length === 1) return chose(departing[0]);
+    const candidates = departing.length ? departing : dateScope;
+    await setClarificationState(senderId, candidates.map(trip => trip.id));
+    return { matchText: text, scopedClarify: candidates, unavailableDateWithinScope: departing.length === 0 };
   }
 
   // --- 0. Understanding: one reading of the whole message decides the trip. ---

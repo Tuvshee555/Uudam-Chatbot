@@ -1,25 +1,6 @@
 import type { FlowRule } from "@/lib/adminTypes";
 
-export type AnalyticsStatsData = {
-  totalLeads: number;
-  newLeads: number;
-  bookingLeads: number;
-  leadsByDay: { date: string; count: number }[];
-  leadsByTrip: { trip: string; count: number }[];
-  leadsByStatus: Record<string, number>;
-  totalTrips: number;
-  activeTrips: number;
-  totalContacts: number;
-  topTrips: { name: string; price: number; seats_left: number }[];
-};
-
-type TopQuestion = { question: string; count: number };
-export type FaqStatsData = {
-  week: TopQuestion[];
-  month: TopQuestion[];
-  allTime: TopQuestion[];
-  totalMessages: number;
-};
+export type { AnalyticsStatsData, FaqStatsData } from "@/lib/adminAnalyticsTypes";
 
 export type SeasonItem = {
   id: string;

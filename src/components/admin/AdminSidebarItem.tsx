@@ -10,6 +10,7 @@ export const NAV_GROUPS: Array<{
   {
     label: "Үндсэн",
     items: [
+      { key: "analytics", label: "Тойм", icon: <Icons.chart size={16} /> },
       { key: "assistant", label: "AI туслах", icon: <Icons.ai size={16} /> },
       { key: "trips", label: "Аяллууд", icon: <Icons.trips size={16} /> },
       { key: "calendar", label: "Календарь", icon: <Icons.calendar size={16} /> },
@@ -36,7 +37,6 @@ export const NAV_GROUPS: Array<{
     label: "Систем",
     items: [
       { key: "settings", label: "Тохиргоо", icon: <Icons.settings size={16} /> },
-      { key: "analytics", label: "Аналитик", icon: <Icons.chart size={16} /> },
       { key: "flow", label: "Урсгал", icon: <Icons.play size={16} /> },
       { key: "payments", label: "Төлбөр", icon: <Icons.card size={16} /> },
       { key: "errors", label: "Алдааны бүртгэл", icon: <Icons.alert size={16} /> },

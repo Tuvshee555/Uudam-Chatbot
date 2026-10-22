@@ -45,10 +45,12 @@ export function StatCard({
   label,
   value,
   tone,
+  description,
 }: {
   label: string;
   value: ReactNode;
   tone?: string;
+  description?: string;
 }) {
   return (
     <Card className="p-4 sm:p-5">
@@ -63,6 +65,7 @@ export function StatCard({
       >
         {value}
       </p>
+      {description && <p className="mt-2 text-xs leading-5 text-ink-muted">{description}</p>}
     </Card>
   );
 }

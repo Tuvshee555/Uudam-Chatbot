@@ -1,267 +1,227 @@
-import { useEffect, useState } from "react";
-import { Alert, Card, Icons, cx } from "@/components/ui";
-import { LoadingPanel, StatCard, TabHeader } from "./AdminShared";
-import type { AnalyticsStatsData, FaqStatsData } from "./adminTabData";
-// Survives tab switches: revisits render the last stats instantly while a
-// background refresh replaces them, instead of a spinner on every visit.
-let analyticsCache: { stats: AnalyticsStatsData; faq: FaqStatsData | null } | null = null;
+import { useEffect, useState, type ReactNode } from "react";
+import { Alert, Badge, Button, Card, Icons, Skeleton, cx } from "@/components/ui";
+import { ADMIN_ISSUE_LABELS, type AnalyticsResponse } from "@/lib/adminAnalyticsTypes";
+import type { TabKey } from "@/lib/adminTypes";
+import { StatCard, TabHeader } from "./AdminShared";
+
+const STATUS_LABELS: Record<string, string> = {
+  new_lead: "Шинэ", contacted: "Холбогдсон", booked: "Захиалсан", no_answer: "Хариугүй",
+};
+const KIND_LABELS: Record<string, string> = {
+  booking: "Захиалгын хүсэлт", handoff: "Зөвлөхөд шилжсэн", inquiry: "Лавлагаа", contact: "Холбогдох хүсэлт",
+};
+
+function number(value: number) {
+  return value.toLocaleString("mn-MN");
+}
+
+function snapshotTime(value: string) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime())
+    ? new Intl.DateTimeFormat("mn-MN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Ulaanbaatar" }).format(date)
+    : "—";
+}
+
+function EmptyNote({ children }: { children: ReactNode }) {
+  return <p className="rounded-lg bg-surface-sunken/60 px-4 py-5 text-sm leading-6 text-ink-muted">{children}</p>;
+}
 
 export function AnalyticsTab({
   apiFetch,
+  onNavigate,
+  onUnauthorized,
 }: {
   apiFetch: (url: string, init?: RequestInit) => Promise<Response>;
+  onNavigate: (tab: TabKey) => void;
+  onUnauthorized?: () => void;
 }) {
-  const [stats, setStats] = useState<AnalyticsStatsData | null>(analyticsCache?.stats ?? null);
-  const [faq, setFaq] = useState<FaqStatsData | null>(analyticsCache?.faq ?? null);
+  const [snapshot, setSnapshot] = useState<AnalyticsResponse | null>(null);
+  const [periodDays, setPeriodDays] = useState<7 | 30>(7);
   const [faqPeriod, setFaqPeriod] = useState<"week" | "month" | "allTime">("week");
-  const [loading, setLoading] = useState(analyticsCache == null);
+  const [refresh, setRefresh] = useState(0);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      if (analyticsCache == null) setLoading(true);
+    const controller = new AbortController();
+    let active = true;
+    const load = async () => {
+      setLoading(true);
       setError("");
       try {
-        const res = await apiFetch("/api/admin/analytics");
-        const data: { ok?: boolean; stats?: AnalyticsStatsData; faq?: FaqStatsData } =
-          await res.json();
-        if (cancelled) return;
-        if (data?.ok && data.stats) {
-          setStats(data.stats);
-          setFaq(data.faq ?? null);
-          analyticsCache = { stats: data.stats, faq: data.faq ?? null };
-        } else {
-          setError("Мэдээлэл ачаалж чадсангүй.");
+        const response = await apiFetch(`/api/admin/analytics?days=${periodDays}`, { signal: controller.signal });
+        if (!active) return;
+        if (response.status === 401) {
+          setSnapshot(null);
+          setError("Нэвтрэх эрх дууссан байна. Дахин нэвтэрнэ үү.");
+          onUnauthorized?.();
+          return;
         }
+        const data = await response.json() as AnalyticsResponse;
+        if (!active) return;
+        if (!response.ok || !data.ok || !data.stats) throw new Error("analytics_unavailable");
+        setSnapshot(data);
       } catch {
-        if (!cancelled) setError("Мэдээлэл ачаалж чадсангүй.");
+        if (active) setError("Тойм ачаалж чадсангүй. Дахин оролдоно уу.");
       } finally {
-        if (!cancelled) setLoading(false);
+        if (active) setLoading(false);
       }
     };
-    void run();
+    void load();
     return () => {
-      cancelled = true;
+      active = false;
+      controller.abort();
     };
-  }, [apiFetch]);
+  }, [apiFetch, onUnauthorized, periodDays, refresh]);
 
-  if (loading) {
-    return <LoadingPanel />;
-  }
-
-  if (error || !stats) {
-    return (
-      <div className="py-8">
-        <Alert tone="danger">{error || "Мэдээлэл ачаалж чадсангүй."}</Alert>
-      </div>
-    );
-  }
-
-  const STATUS_MN: Record<string, string> = {
-    new_lead: "Шинэ",
-    contacted: "Холбогдсон",
-    booked: "Захиалсан",
-    no_answer: "Хариугүй",
-  };
-
-  const dayMax = Math.max(1, ...stats.leadsByDay.map((d) => d.count));
-  const tripMax = Math.max(1, ...stats.leadsByTrip.map((t) => t.count));
+  const stats = snapshot?.stats;
+  const activity = snapshot?.activity;
+  const attention = snapshot?.attention;
+  const faq = snapshot?.faq;
+  const days = activity?.daily ?? [];
+  const dayMax = Math.max(1, ...days.map((day) => Math.max(day.inboundMessages, day.assistantMessages)));
+  const questions = faq?.[faqPeriod] ?? [];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5" aria-busy={loading}>
       <TabHeader
-        icon={<Icons.chart size={20} />}
-        title="Аналитик"
-        description="Хүсэлт болон аяллын нийлбэр статистик."
+        title="Тойм"
+        description="Харилцааны идэвх, ажилтны анхаарах хүсэлт, системийн сүүлийн алдаа."
+        actions={
+          <>
+            {snapshot?.generatedAt && <span className="text-xs text-ink-muted">{snapshotTime(snapshot.generatedAt)} · УБ</span>}
+            <Button variant="secondary" size="sm" loading={loading} onClick={() => setRefresh((value) => value + 1)}>
+              {!loading && <Icons.refresh size={15} />} Шинэчлэх
+            </Button>
+          </>
+        }
       />
 
-      {/* Row 1 — 4 stat cards */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard label="Нийт хүсэлт" value={stats.totalLeads} />
-        <StatCard label="Шинэ хүсэлт" value={stats.newLeads} tone="text-brand" />
-        <StatCard label="Захиалга" value={stats.bookingLeads} tone="text-success" />
-        <StatCard label="Нийт харилцагч" value={stats.totalContacts} />
-      </div>
+      {error && <Alert tone="danger">{error}{snapshot && " Доор хамгийн сүүлд ачаалсан мэдээллийг харуулж байна."}</Alert>}
+      {Boolean(snapshot?.warnings?.length) && <Alert tone="warning">Тоймын зарим мэдээллийг ачаалж чадсангүй. Дахин шинэчилнэ үү.</Alert>}
+      {attention?.staffAlertsConfigured === false && (
+        <Alert tone="warning">
+          <span className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:gap-4">
+            <span>Ажилтанд мэдэгдэх суваг тохируулаагүй байна. Шилжүүлгийн хүсэлтүүдийг Хүсэлтүүд хэсгээс тогтмол шалгаарай.</span>
+            <Button variant="secondary" size="sm" onClick={() => onNavigate("leads")}>Хүсэлтүүд нээх <Icons.chevronRight size={14} /></Button>
+          </span>
+        </Alert>
+      )}
 
-      {/* Row 2 — bar charts */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <Card className="p-4">
-          <h3 className="mb-3 text-sm font-semibold text-ink">Өдрөөр (14 хоног)</h3>
-          {stats.leadsByDay.length === 0 ? (
-            <p className="text-sm text-ink-subtle">Өгөгдөл байхгүй.</p>
-          ) : (
-            <div className="space-y-1.5">
-              {stats.leadsByDay.map((item) => {
-                const pct = Math.round((item.count / dayMax) * 100);
-                return (
-                  <div key={item.date}>
-                    <div className="flex justify-between text-xs mb-0.5">
-                      <span className="text-ink truncate">{item.date}</span>
-                      <span className="text-ink-muted ml-2 shrink-0">{item.count}</span>
-                    </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-surface-sunken">
-                      <div className="h-full rounded-full bg-gradient-to-r from-brand to-brand-hover transition-[width] duration-500" style={{ width: `${pct}%` }} />
-                    </div>
-                  </div>
-                );
-              })}
+      {!snapshot && loading && (
+        <div role="status" aria-label="Тойм ачаалж байна" className="space-y-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-32 rounded-xl" />)}</div>
+          <Skeleton className="h-60 rounded-xl" />
+        </div>
+      )}
+
+      {stats && (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-ink">Харилцааны идэвх</h2>
+              <p className="mt-1 text-xs text-ink-muted">Сүүлийн {activity?.periodDays ?? periodDays} хоног · Улаанбаатарын цагаар</p>
             </div>
-          )}
-        </Card>
-
-        <Card className="p-4">
-          <h3 className="mb-3 text-sm font-semibold text-ink">Аяллаар</h3>
-          {stats.leadsByTrip.length === 0 ? (
-            <p className="text-sm text-ink-subtle">Өгөгдөл байхгүй.</p>
-          ) : (
-            <div className="space-y-1.5">
-              {stats.leadsByTrip.map((item) => {
-                const pct = Math.round((item.count / tripMax) * 100);
-                return (
-                  <div key={item.trip}>
-                    <div className="flex justify-between text-xs mb-0.5">
-                      <span className="text-ink truncate">{item.trip}</span>
-                      <span className="text-ink-muted ml-2 shrink-0">{item.count}</span>
-                    </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-surface-sunken">
-                      <div className="h-full rounded-full bg-gradient-to-r from-brand to-brand-hover transition-[width] duration-500" style={{ width: `${pct}%` }} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </Card>
-      </div>
-
-      {/* Row 3 — status breakdown + active trips table */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <Card className="p-4">
-          <h3 className="mb-3 text-sm font-semibold text-ink">Статусаар</h3>
-          {Object.keys(stats.leadsByStatus).length === 0 ? (
-            <p className="text-sm text-ink-subtle">Өгөгдөл байхгүй.</p>
-          ) : (
-            <div className="space-y-2">
-              {Object.entries(stats.leadsByStatus).map(([status, count]) => (
-                <div key={status} className="flex items-center justify-between text-sm">
-                  <span className="text-ink">{STATUS_MN[status] ?? status}</span>
-                  <span className="font-semibold text-ink">{count}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
-
-        <Card className="p-4">
-          <h3 className="mb-3 text-sm font-semibold text-ink">
-            Идэвхтэй аяллууд{" "}
-            <span className="font-normal text-ink-muted">
-              ({stats.activeTrips}/{stats.totalTrips})
-            </span>
-          </h3>
-          {stats.topTrips.length === 0 ? (
-            <p className="text-sm text-ink-subtle">Идэвхтэй аялал байхгүй.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-line text-left text-xs text-ink-muted">
-                    <th className="pb-2 font-medium">Аяллын нэр</th>
-                    <th className="pb-2 font-medium text-right">Үнэ</th>
-                    <th className="pb-2 font-medium text-right">Суудал</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-line">
-                  {stats.topTrips.map((trip) => (
-                    <tr key={trip.name}>
-                      <td className="py-2 pr-3 text-ink truncate max-w-[160px]">
-                        {trip.name}
-                      </td>
-                      <td className="py-2 text-right text-ink-muted">
-                        {trip.price > 0 ? trip.price.toLocaleString("en-US") : "—"}
-                      </td>
-                      <td className="py-2 text-right text-ink-muted">
-                        {trip.seats_left}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
-
-        {/* Most asked questions */}
-        <Card className="p-4">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold text-ink">
-              Түгээмэл асуултууд{" "}
-              <span className="font-normal text-ink-muted">
-                (нийт {faq?.totalMessages ?? 0} мессеж)
-              </span>
-            </h3>
-            <div className="inline-flex rounded-lg border border-line bg-surface-sunken p-0.5">
-              {[
-                { key: "week" as const, label: "7 хоног" },
-                { key: "month" as const, label: "30 хоног" },
-                { key: "allTime" as const, label: "Нийт" },
-              ].map((p) => (
-                <button
-                  key={p.key}
-                  type="button"
-                  onClick={() => setFaqPeriod(p.key)}
-                  className={cx(
-                    "rounded-md px-3 py-1 text-xs font-medium transition-colors",
-                    faqPeriod === p.key
-                      ? "bg-surface text-ink shadow-sm"
-                      : "text-ink-muted hover:text-ink",
-                  )}
-                >
-                  {p.label}
-                </button>
+            <div role="group" aria-label="Харилцааны хугацаа" className="inline-flex rounded-lg border border-line bg-surface p-1">
+              {([7, 30] as const).map((value) => (
+                <button key={value} type="button" aria-pressed={periodDays === value} onClick={() => setPeriodDays(value)} className={cx("rounded-md px-3 py-1.5 text-xs font-semibold transition-colors", periodDays === value ? "bg-brand-soft text-brand" : "text-ink-muted hover:bg-surface-sunken")}>{value} хоног</button>
               ))}
             </div>
           </div>
-          {(() => {
-            const list = faq ? faq[faqPeriod] : [];
-            if (!list || list.length === 0) {
-              return (
-                <p className="py-4 text-center text-sm text-ink-subtle">
-                  Энэ хугацаанд асуулт бүртгэгдээгүй байна.
-                </p>
-              );
-            }
-            const max = Math.max(1, ...list.map((q) => q.count));
-            return (
-              <div className="space-y-2.5">
-                {list.map((q, i) => (
-                  <div key={i} className="flex items-center gap-3">
-                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-brand-soft text-[11px] font-bold text-brand">
-                      {i + 1}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <p className="truncate text-sm text-ink">{q.question}</p>
-                        <span className="shrink-0 text-xs font-medium text-ink-muted">
-                          {q.count}
-                        </span>
-                      </div>
-                      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-surface-sunken">
-                        <div
-                          className="h-full rounded-full bg-gradient-to-r from-brand to-brand-hover transition-[width] duration-500"
-                          style={{ width: `${(q.count / max) * 100}%` }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ))}
+
+          {activity ? (
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <StatCard label="Харилцагчийн мессеж" value={number(activity.inboundMessages)} description={`${activity.periodDays} хоногт бүртгэгдсэн`} />
+              <StatCard label="Бүртгэгдсэн хариу" value={number(activity.assistantMessages)} tone="text-brand" description="Харилцааны түүхэд хадгалагдсан" />
+              <StatCard label="Идэвхтэй харилцаа" value={number(activity.activeConversations)} description="Энэ хугацаанд мессеж ирсэн" />
+              <StatCard label="Зөвлөхийн шинэ хүсэлт" value={attention ? number(attention.pendingHandoffs) : "—"} tone={attention?.pendingHandoffs ? "text-warning" : undefined} description="Шинэ төлөвтэй шилжүүлгийн хүсэлт" />
+            </div>
+          ) : <EmptyNote>Харилцааны статистик ачаалагдсангүй. Дахин шинэчилнэ үү.</EmptyNote>}
+
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
+            <Card className="min-w-0 p-4 sm:p-5">
+              <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+                <div><h3 className="text-sm font-semibold text-ink">Өдөр тутмын харилцаа</h3><p className="mt-1 text-xs text-ink-muted">Ирсэн мессеж ба түүхэд хадгалсан хариу</p></div>
+                <div className="flex flex-wrap gap-3 text-[11px] text-ink-muted"><span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-sm bg-brand" />Мессеж</span><span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-sm bg-brand/30" />Хариу</span></div>
               </div>
-            );
-          })()}
-        </Card>
-      </div>
+              {!activity ? <EmptyNote>Харилцааны мэдээлэл ачаалагдсангүй.</EmptyNote> : activity.inboundMessages + activity.assistantMessages === 0 ? <EmptyNote>Энэ хугацаанд харилцааны мессеж бүртгэгдээгүй байна.</EmptyNote> : (
+                <div className="flex h-44 gap-1 sm:gap-2" role="list" aria-label="Өдрөөрх мессеж болон хариуны тоо">
+                  {days.map((day, index) => (
+                    <div key={day.date} role="listitem" aria-label={`${day.date}: ${day.inboundMessages} мессеж, ${day.assistantMessages} хариу`} title={`${day.date}: ${day.inboundMessages} мессеж · ${day.assistantMessages} хариу`} className="flex min-w-0 flex-1 flex-col items-center justify-end gap-2">
+                      <div className="flex h-36 w-full items-end justify-center gap-px sm:gap-1" aria-hidden="true">
+                        <div className="w-1/2 max-w-5 rounded-t-sm bg-brand" style={{ height: `${day.inboundMessages / dayMax * 100}%` }} />
+                        <div className="w-1/2 max-w-5 rounded-t-sm bg-brand/30" style={{ height: `${day.assistantMessages / dayMax * 100}%` }} />
+                      </div>
+                      <span className="h-4 text-[10px] tabular-nums text-ink-muted">{days.length <= 7 || index === 0 || index === days.length - 1 || index % 7 === 0 ? day.date.slice(5).replace("-", "/") : ""}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="mt-4 border-t border-line pt-3 text-xs leading-5 text-ink-muted">Хариуны бүртгэл нь хүргэлт амжилттай болсон эсэх, хариуны зөв байдлыг дангаараа батлахгүй.</p>
+            </Card>
+
+            <Card className="min-w-0 p-4 sm:p-5">
+              <h3 className="text-sm font-semibold text-ink">Одоо анхаарах</h3>
+              {attention ? (
+                <div className="mt-3 divide-y divide-line">
+                  <AttentionLink label="Зөвлөхийн шинэ хүсэлт" count={attention.pendingHandoffs} detail={attention.oldestPendingHandoffAt ? `Хамгийн эртний: ${snapshotTime(attention.oldestPendingHandoffAt)}` : "Шинэ шилжүүлгийн хүсэлтгүй"} onClick={() => onNavigate("leads")} />
+                  <AttentionLink label="Шинэ захиалгын хүсэлт" count={attention.newBookingRequests} detail="Ажилтан холбогдож баталгаажуулна" onClick={() => onNavigate("leads")} />
+                  <AttentionLink label="Системийн асуудал · 24 цаг" count={attention.errors24h} detail={attention.errors24h == null ? "Алдааны бүртгэл ачаалагдсангүй" : "Алдаа, анхааруулгын бүртгэл"} onClick={() => onNavigate("errors")} />
+                </div>
+              ) : <div className="mt-4"><EmptyNote>Хүлээгдэж буй хүсэлтийн мэдээлэл ачаалагдсангүй.</EmptyNote></div>}
+            </Card>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card className="min-w-0 p-4 sm:p-5">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div><h3 className="text-sm font-semibold text-ink">Бүртгэгдсэн асуултууд</h3><p className="mt-1 text-xs text-ink-muted">Их асуусан сэдвээр мэдээллээ нөхөөрэй</p></div>
+                <div role="group" aria-label="Асуултын хугацаа" className="inline-flex rounded-lg bg-surface-sunken p-0.5">
+                  {([{ key: "week", label: "7 хоног" }, { key: "month", label: "30 хоног" }, { key: "allTime", label: "Нийт" }] as const).map((period) => <button key={period.key} type="button" aria-pressed={faqPeriod === period.key} onClick={() => setFaqPeriod(period.key)} className={cx("rounded-md px-2.5 py-1.5 text-xs font-medium", faqPeriod === period.key ? "bg-surface text-ink shadow-xs" : "text-ink-muted hover:text-ink")}>{period.label}</button>)}
+                </div>
+              </div>
+              {!faq ? <EmptyNote>Асуултын мэдээлэл ачаалагдсангүй.</EmptyNote> : questions.length === 0 ? <EmptyNote>Энэ хугацаанд асуулт бүртгэгдээгүй байна.</EmptyNote> : (
+                <ol className="divide-y divide-line">
+                  {questions.map((question, index) => <li key={question.question} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0"><span className="mt-0.5 w-4 shrink-0 text-xs tabular-nums text-ink-subtle">{index + 1}</span><p className="min-w-0 flex-1 break-words text-sm leading-6 text-ink">{question.question}</p><Badge className="mt-0.5 shrink-0 tabular-nums">{number(question.count)}</Badge></li>)}
+                </ol>
+              )}
+            </Card>
+
+            <Card className="min-w-0 p-4 sm:p-5">
+              <div className="mb-4 flex items-center justify-between gap-3"><h3 className="text-sm font-semibold text-ink">Сүүлийн системийн асуудлууд</h3><Button variant="ghost" size="sm" onClick={() => onNavigate("errors")}>Бүртгэл <Icons.chevronRight size={14} /></Button></div>
+              {!attention || attention.errors24h == null ? <EmptyNote>Алдааны мэдээлэл ачаалагдсангүй.</EmptyNote> : attention.recentIssues.length === 0 ? <EmptyNote>Сүүлийн 24 цагт системийн асуудал бүртгэгдээгүй байна.</EmptyNote> : (
+                <ul className="divide-y divide-line">{attention.recentIssues.map((issue) => <li key={`${issue.level}:${issue.event}`} className="flex items-start justify-between gap-3 py-3 first:pt-0 last:pb-0"><div className="min-w-0"><p className="break-words text-sm font-medium text-ink">{ADMIN_ISSUE_LABELS[issue.event] ?? issue.event}</p><p className="mt-1 text-xs text-ink-muted">{snapshotTime(issue.lastSeenAt)}</p></div><Badge tone={issue.level === "error" ? "danger" : "warning"} className="shrink-0">{number(issue.count)}</Badge></li>)}</ul>
+              )}
+            </Card>
+          </div>
+
+          <Card className="p-4 sm:p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="text-sm font-semibold text-ink">Хүсэлт ба аяллын сан</h2><p className="mt-1 text-xs text-ink-muted">Нийт хугацааны мэдээлэл · Захиалгын хүсэлт нь баталгаажсан захиалга биш</p></div><Button variant="ghost" size="sm" onClick={() => onNavigate("leads")}>Хүсэлтүүд <Icons.chevronRight size={14} /></Button></div>
+            <dl className="mt-5 grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-4">
+              {[
+                { label: "Нийт хүсэлт", value: stats.totalLeads },
+                { label: "Шинэ хүсэлт", value: stats.newLeads },
+                { label: "Захиалгын хүсэлт", value: stats.bookingLeads },
+                { label: "Харилцагч", value: stats.totalContacts },
+              ].map((item) => <div key={item.label}><dt className="text-xs text-ink-muted">{item.label}</dt><dd className="mt-1.5 text-xl font-bold tabular-nums text-ink">{number(item.value)}</dd></div>)}
+            </dl>
+            <div className="mt-5 grid gap-5 border-t border-line pt-4 sm:grid-cols-2">
+              <div><p className="mb-2 text-xs font-semibold text-ink-muted">Хүсэлтийн явц</p><div className="flex flex-wrap gap-2">{Object.entries(stats.leadsByStatus).map(([status, count]) => <Badge key={status}>{STATUS_LABELS[status] ?? "Бусад"} · {number(count)}</Badge>)}{Object.keys(stats.leadsByStatus).length === 0 && <span className="text-xs text-ink-muted">Хүсэлт бүртгэгдээгүй</span>}</div></div>
+              <div><p className="mb-2 text-xs font-semibold text-ink-muted">Хүсэлтийн төрөл</p><div className="flex flex-wrap gap-2">{stats.leadsByKind.map((item) => <Badge key={item.kind}>{KIND_LABELS[item.kind] ?? "Бусад"} · {number(item.count)}</Badge>)}{stats.leadsByKind.length === 0 && <span className="text-xs text-ink-muted">Хүсэлт бүртгэгдээгүй</span>}</div></div>
+            </div>
+            <div className="mt-4 flex items-center justify-between gap-3 border-t border-line pt-3 text-sm"><p className="text-ink-muted">Идэвхтэй аялал <span className="font-semibold tabular-nums text-ink">{number(stats.activeTrips)}</span> / {number(stats.totalTrips)}</p><Button variant="ghost" size="sm" onClick={() => onNavigate("trips")}>Аяллууд <Icons.chevronRight size={14} /></Button></div>
+          </Card>
+        </>
+      )}
     </div>
   );
 }
 
+function AttentionLink({ label, count, detail, onClick }: { label: string; count: number | null; detail: string; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className="group flex w-full items-start justify-between gap-3 py-3.5 text-left first:pt-0 last:pb-0">
+      <span className="min-w-0"><span className="block text-sm font-medium text-ink group-hover:text-brand">{label}</span><span className="mt-1 block text-xs leading-5 text-ink-muted">{detail}</span></span>
+      <span className="flex shrink-0 items-center gap-2"><span className={cx("text-xl font-bold tabular-nums", count ? "text-warning" : "text-ink")}>{count == null ? "—" : number(count)}</span><Icons.chevronRight size={15} className="mt-1 text-ink-subtle group-hover:text-brand" /></span>
+    </button>
+  );
+}

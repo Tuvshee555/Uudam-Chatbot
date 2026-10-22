@@ -50,7 +50,7 @@ export default function AdminPage() {
   const [driveSync, setDriveSync] = useState<DriveSyncDiagnostics | null>(null);
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
   const [systemLoaded, setSystemLoaded] = useState(false);
-  const [tab, setTab] = useState<TabKey>("trips");
+  const [tab, setTab] = useState<TabKey>("analytics");
   // Set by the trips tab's "Постерт зураг нэмэх" button — opens that exact
   // poster once the poster tab mounts, instead of leaving them to hunt for it.
   const [posterToOpen, setPosterToOpen] = useState<string | null>(null);
@@ -1817,8 +1817,8 @@ export default function AdminPage() {
               </Badge>
             </button>
           )}
-          <Badge tone={botPaused ? "danger" : "success"} dot className="whitespace-nowrap">
-            {botPaused ? <><span className="sm:hidden">Бот зогссон</span><span className="hidden sm:inline">{pausedPageCount} хуудас зогссон</span></> : "Бот идэвхтэй"}
+          <Badge tone={!control ? "neutral" : botPaused ? "warning" : "success"} dot className="whitespace-nowrap">
+            {!control ? "Ботын төлөв шалгаж байна" : botPaused ? `${pausedPageCount} хуудас зогссон` : "Бот идэвхтэй"}
           </Badge>
           <span className="hidden sm:inline-flex">
             <Badge
@@ -2048,7 +2048,7 @@ export default function AdminPage() {
             />
           )}
           {tab === "analytics" && (
-            <AnalyticsTab apiFetch={fetchWithAdmin} />
+            <AnalyticsTab apiFetch={fetchWithAdmin} onNavigate={selectAdminTab} onUnauthorized={markAdminLocked} />
           )}
           {tab === "flow" && (
             <FlowBuilderTab
