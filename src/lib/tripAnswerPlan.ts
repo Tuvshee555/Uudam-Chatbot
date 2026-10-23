@@ -100,7 +100,7 @@ function stableFarePreview(trip: TravelTrip, selection: TripSelection, result: T
 
 /**
  * A price question for a date sold at several hotels: each hotel's fare for that date.
- * "11 сарын 25-нд … хэд вэ?" got only "Аль буудлын хувилбарыг сонгох вэ?" — the
+ * "<сар> сарын <өдөр>-нд … хэд вэ?" got only "Аль буудлын хувилбарыг сонгох вэ?" — the
  * customer asked the price and both prices are known (2026-10-21).
  */
 function hotelFarePreview(trip: TravelTrip, selection: TripSelection, result: TripOfferResult, now: Date, text: string): string | null {

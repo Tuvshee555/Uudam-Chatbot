@@ -202,7 +202,7 @@ function buildTripSummaryLines(trip: TravelTrip): string {
   }
   // The same fare and date lines as every other trip card: this card printed the trip's
   // top-level price (can be stale against per-date fares) and the stored date text,
-  // so a customer read "Гарах өдрүүд: 2026-12-30" (2026-10-17).
+  // so a customer read a raw ISO date under "Гарах өдрүүд" (2026-10-17).
   const fareSection = buildFareSection(trip);
   if (fareSection) {
     lines.push(...fareSection);

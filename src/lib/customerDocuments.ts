@@ -538,8 +538,8 @@ export function matchTripFromDocument(
     }
   }
   // The place fits several trips (a town on two routes): the price printed on the
-  // screenshot picks the one trip that sells at it. The agency's own ad ("<хот>-ын
-  // аялал, 1.590.000₮") matched two trips and got no answer (2026-10-18).
+  // screenshot picks the one trip that sells at it. The agency's own ad (a town name
+  // plus one price) matched two trips and got no answer (2026-10-18).
   const amounts = category === "trip_screenshot" ? screenshotAmounts(compactValue(trip.price_text)) : [];
   if (amounts.length) {
     for (const candidate of candidates) {
@@ -554,7 +554,7 @@ export function matchTripFromDocument(
   return null;
 }
 
-/** "Аяллын үнэ 1.590.000₮" → [1590000]; small numbers (days, ages) are not prices. */
+/** "Аяллын үнэ 1.234.000₮" → [1234000]; small numbers (days, ages) are not prices. */
 function screenshotAmounts(text: string): number[] {
   return (text.match(/\d{1,3}(?:[.,\s]\d{3})+|\d{6,}/g) || [])
     .map((value) => Number(value.replace(/[^\d]/g, "")))

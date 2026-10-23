@@ -178,8 +178,8 @@ function dropYearCopies(trip: TravelTrip, now: Date, dates: string[], reference 
 /**
  * generateDateKeys pads every yearless date with an ISO key for the following
  * year too, so a search near New Year still matches. That padding is a lookup
- * alias, not a departure: read as one, "7 сарын 20" sold both 2027-07-20 and
- * 2028-07-20 on the website (Шар тэнгис, Хайлаар Манжуур, 2026-10-16).
+ * alias, not a departure: read as one, a yearless July row sold departures a year
+ * and two years ahead on the website (2026-10-16).
  */
 function departureDateKeys(raw: Row): string[] {
   const keys = strings(raw.date_keys);
@@ -192,9 +192,9 @@ function departureDateKeys(raw: Row): string[] {
 function offerDates(raw: Row, trip: TravelTrip, now: Date): { dates: string[]; dateScoped: boolean; issues: string[] } {
   // A yearless price row takes its year from the trip's own departure list, else its
   // nearest occurrence. Its ISO search keys are aliases padded a year ahead, not dates:
-  // read as dates, a left-over July row became 2027-07-20 and was sold as an OPEN
-  // departure while the trip's real dates were Sep–Oct (Шар тэнгис, Хайлаар Манжуур,
-  // 2026-10-17). A July row read in October is the July that passed.
+  // read as dates, a left-over July row became next July's date and was sold as an OPEN
+  // departure while the trip's real dates were Sep–Oct (2026-10-17). A July row read
+  // in October is the July that passed.
   const primary = unique([...strings(raw.dates), ...strings(raw.display_dates), ...(str(raw.date) ? [str(raw.date)] : [])]);
   if ((trip.departure_dates || []).length && primary.length && !primary.some(hasYear) && typeof raw.year !== "number") {
     const catalog = ownDates(trip, now);

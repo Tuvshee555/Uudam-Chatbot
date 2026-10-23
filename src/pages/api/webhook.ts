@@ -1159,7 +1159,7 @@ async function handleMessage(
     if (routed.notInCatalog) {
       // A place no trip goes to is a question the bot cannot answer: silence and a staff
       // lead, never "Уучлаарай, «<газар>» чиглэлийн аялал манайд байхгүй" (owner's rule;
-      // the place reading is a guess — "Кантон", "Shopping" were read as destinations).
+      // the place reading is a guess — ordinary words were read as destinations).
       await deliverFastPathReply({
         reply: "REFER",
         failTag: "not_in_catalog",

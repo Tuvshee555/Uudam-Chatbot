@@ -968,7 +968,7 @@ test("Messenger's 'Is anyone available to chat?' is a request for a person", asy
   const { isHandoffRequest } = await import("../src/lib/handoffDetection");
   assert.equal(isHandoffRequest("Is anyone available to chat?", []), true);
   assert.equal(isHandoffRequest("Can I talk to a real person?", []), true);
-  assert.equal(isHandoffRequest("Бээжин аялал хэд вэ", []), false);
+  assert.equal(isHandoffRequest("Бета аялал хэд вэ", []), false);
 });
 
 test("refusals in other words are no-data; real answers and the not-in-catalog answer are not", async () => {
