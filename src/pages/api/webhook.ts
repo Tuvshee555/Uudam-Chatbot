@@ -621,6 +621,17 @@ async function handleMessage(
         senderHash: hashIdentifier(senderId),
       });
       recordCounter("webhook.bare_number_silent_total", 1, { platform });
+      // A number without an open numbered list or booking question contains no
+      // usable customer evidence. Keep it away from the model (which previously
+      // treated values such as "1" as a trip/menu choice), but do not silently
+      // lose the customer: the owner's no-data rule requires a durable staff
+      // handoff whenever the bot cannot answer.
+      await deliverFastPathReply({
+        reply: "REFER",
+        failTag: "bare_number_without_context",
+        rememberSource: "api.webhook.bare_number_without_context",
+        counter: "webhook.bare_number_handoff_total",
+      });
       return;
     }
   }

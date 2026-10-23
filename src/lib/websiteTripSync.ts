@@ -42,8 +42,31 @@ export async function withWebsiteDepartureAvailability(trips: TravelTrip[]): Pro
       // The bot sends the live website page instead of the PDF; the slug is
       // whatever the website currently has (staff can rename it there), never
       // guessed here, so a changed slug on the website never 404s for a customer.
-      bookingPool().query(`SELECT t.*, (SELECT jsonb_agg(i ORDER BY i."dayNumber") FROM "ItineraryDay" i WHERE i."tripId"=t.id AND i."dayNumber">0) AS itinerary FROM "Trip" t
-        WHERE "sourceTripId"=ANY($1::text[])`, [trips.map((trip) => trip.id)]),
+      //
+      // Do not SELECT t.* here. sourceMetadata contains a complete connected
+      // source/poster snapshot and accounted for most of a multi-megabyte row
+      // transfer on every catalogue read. Availability only needs its canonical
+      // offers, while the admin detail snapshot needs contentConflicts plus the
+      // explicit editorial fields below.
+      bookingPool().query(`SELECT
+          t."sourceTripId", t.slug, t.title, t.summary, t.description,
+          t.country, t.city, t.region, t.destinations, t.transport, t.languages,
+          t."meetingPoint", t."mapUrl", t.season, t.difficulty,
+          t."minTravelers", t."maxTravelers", t."oldPrice", t.discount,
+          t."singleSupplement", t."brochurePdfUrl", t."isFeatured", t.highlights,
+          t.requirements, t."cancellationPolicy", t."extraFees", t."roomPrices",
+          t."childPriceNotes", t.video, t.videos, t."hotelMedia", t."travelerMedia",
+          t.weather, t."updatedAt", t."isPublished", t.price, t."childPrice",
+          t."infantPrice", t.currency,
+          jsonb_build_object(
+            'canonicalOffers', COALESCE(t."sourceMetadata"->'canonicalOffers', '[]'::jsonb),
+            'contentConflicts', COALESCE(t."sourceMetadata"->'contentConflicts', '[]'::jsonb)
+          ) AS "sourceMetadata",
+          (SELECT jsonb_agg(i ORDER BY i."dayNumber")
+             FROM "ItineraryDay" i
+            WHERE i."tripId"=t.id AND i."dayNumber">0) AS itinerary
+        FROM "Trip" t
+        WHERE t."sourceTripId"=ANY($1::text[])`, [trips.map((trip) => trip.id)]),
     ]);
     const canonicalOffersByTrip = new Map<string, unknown>(
       slugResult.rows.map((row) => [row.sourceTripId as string, record(row.sourceMetadata).canonicalOffers]),

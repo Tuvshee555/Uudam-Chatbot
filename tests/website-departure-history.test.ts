@@ -35,7 +35,10 @@ test("availability reads ignore cancelled and departed history in either row ord
   let departures: Record<string, unknown>[] = [];
   const fixture = await mockDatabase(context, async (sql) => {
     if (sql.includes('JOIN "Departure"')) return { rows: departures };
-    if (sql.includes("SELECT t.*")) return { rows: [{ sourceTripId: "velmor", slug: "trip-velmor", isPublished: true }] };
+    if (sql.includes('FROM "Trip" t') && sql.includes('FROM "ItineraryDay"')) {
+      assert.doesNotMatch(sql, /SELECT\s+t\.\*/i, "availability reads must not transfer the full website source snapshot");
+      return { rows: [{ sourceTripId: "velmor", slug: "trip-velmor", isPublished: true }] };
+    }
     return { rows: [] };
   });
   try {

@@ -35,6 +35,7 @@ import { resolveAgeRules } from "@/lib/ageRules";
 import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, emptyChunkResult, fileToDataUrl, getSecretStorage, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, mergeAIProposals, settingsToForm, shortId, splitLines, uid } from "@/lib/adminPageUtils";
 const BLANK_TRIP_DRAFT: Record<string, string> = { category: "Аялал", operator_name: "UUDAM TRAVEL AGENCY", route_name: "", duration_text: "", adult_price: "", child_price: "", infant_price: "", child_price_free: "", infant_price_free: "", age_infant: "0-23 сар", age_child: "2-11 нас", age_adult: "12+ нас", currency: "MNT", seats_total: "", seats_left: "", seats_percent_left: "", sale_badge_enabled: "false", sale_badge_label: "ХЯМДРАЛ", sale_badge_ends: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
 const MAX_AI_SOURCE_TEXT_CHARS = 20_000;
+const TRIP_DATA_TABS = new Set<TabKey>(["assistant", "trips", "calendar", "greeting", "photos"]);
 export default function AdminPage() {
   const toast = useToast();
   const [secret, setSecret] = useState("");
@@ -51,6 +52,7 @@ export default function AdminPage() {
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
   const [systemLoaded, setSystemLoaded] = useState(false);
   const [tab, setTab] = useState<TabKey>("analytics");
+  const tabRef = useRef<TabKey>("analytics");
   // Set by the trips tab's "Постерт зураг нэмэх" button — opens that exact
   // poster once the poster tab mounts, instead of leaving them to hunt for it.
   const [posterToOpen, setPosterToOpen] = useState<string | null>(null);
@@ -139,6 +141,9 @@ export default function AdminPage() {
   useEffect(() => {
     statusFilterRef.current = statusFilter;
   }, [statusFilter]);
+  useEffect(() => {
+    tabRef.current = tab;
+  }, [tab]);
   const fetchWithAdmin = useCallback(
     async (url: string, init?: RequestInit) => {
       const headers = new Headers(init?.headers || {});
@@ -308,8 +313,15 @@ export default function AdminPage() {
     try {
       // The data loads do not depend on the system check, which can take 10 s+
       // on a cold server; starting them first keeps it from delaying the trips.
+      // The full catalogue includes rich itinerary and website-editing data.
+      // Loading it on every dashboard visit made the lightweight overview wait
+      // behind a large cross-database request even though that tab never reads
+      // a trip row. Fetch it only for screens that actually render trip data.
+      const tripLoads = TRIP_DATA_TABS.has(tabRef.current)
+        ? [loadTrips(searchRef.current, statusFilterRef.current)]
+        : [];
       const dataLoads = Promise.all([
-        loadTrips(searchRef.current, statusFilterRef.current),
+        ...tripLoads,
         loadPauseState(),
         loadSettingsState(),
         loadLeadsState(),
@@ -395,12 +407,13 @@ export default function AdminPage() {
     void loadAll();
   }, [loadAll]);
   useEffect(() => {
+    if (!TRIP_DATA_TABS.has(tab)) return;
     if (requiresAuth || (!openAccess && !secret.trim())) return;
     const timer = window.setTimeout(() => {
       void loadTrips(search, statusFilter, { showLoading: true });
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [loadTrips, openAccess, requiresAuth, search, secret, statusFilter]);
+  }, [loadTrips, openAccess, requiresAuth, search, secret, statusFilter, tab]);
   useEffect(() => {
     const timer = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(timer);

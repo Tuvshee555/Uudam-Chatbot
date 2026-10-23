@@ -79,6 +79,14 @@ test("chat review 10-22: date window under a list, emoji, question marks, an imp
     assert.equal(leads.length, leadsBefore + 1);
     assert.equal(aiCalls, aiBefore, "emoji and question marks never reach the model");
 
+    // A Messenger post button can start a chat with only a literal number.
+    // With no open numbered list, it must never select or invent a trip; keep
+    // the customer-facing side silent and create a durable staff handoff.
+    const numericLeadsBefore = leads.length;
+    assert.deepEqual(await send("rv-bare-number", "1"), []);
+    assert.equal(leads.length, numericLeadsBefore + 1);
+    assert.equal(aiCalls, aiBefore, "a context-free number never reaches the model");
+
     // "Hariu ugnu uu" (please answer): a person takes over.
     const impatient = await send("rv-impatient", "Hariu ugnu uu");
     assert.equal(impatient.length, 1);

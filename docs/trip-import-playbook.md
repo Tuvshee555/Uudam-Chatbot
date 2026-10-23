@@ -63,6 +63,12 @@ node --import tsx scripts/import-poster-trip-json.ts tmp/trip.json
   `price_table.rows[].dates`; the mapper preserves it for display and matches by
   the start date.
 - Put every real start date in `data.departures`.
+- A trip saved without any departure date is archived automatically
+  (`archived_reason: no_departure_dates`) and leaves the website. It comes
+  back on its own as soon as a date is added in the admin. Never invent a date
+  to keep it live; tell the owner it is waiting for dates.
+- A source with no ₮ price is still imported without a price; the owner adds
+  prices himself.
 - Put day-by-day photos in the poster data when available; the linked chatbot
   trip and website projection read from the same poster data.
 
@@ -87,16 +93,18 @@ days word for word, and write the days in between in the same style.
    буугаад автобусанд сууж хил гаалиар нэвтэрнэ. Эрээн хотод ирж …" and then the
    source's own stops, hotel and meals.
 
-**Last two days**
+**Last two days** (owner's standard, 2026-10-17)
 
-- Second-to-last day, title `ЭРЭЭН – ЗАМЫН ҮҮД` (or the source's last stop first). The
-  trip does NOT end on this day: it ends on arrival, the next morning.
-  "Өглөөний цайны дараа Эрээн хотод чөлөөт цагтай. Өдөр Эрээнээс автобусаар
-  Замын Үүд рүү явж, хил гаалиар нэвтэрнэ. Замын Үүдээс 18:05 цагт 275-р
-  галт тэргээр Улаанбаатар хотыг зорино. Энэ шөнө галт тэргэнд хононо."
+- Second-to-last day, title `ЭРЭЭН – ЗАМЫН ҮҮД` (or the source's last stop first).
+  Breakfast only, no hotel, no photo. The trip does NOT end on this day: it ends
+  on arrival, the next morning. Exactly, one sentence per line:
+  "Өглөөний цай.
+  12.00 цагт хил гаалиар гарч Замын-Үүдэд ирнэ.
+  18.00 цагт хөдлөх Замын-Үүд УБ чиглэлийн галт тэргэнд сууна."
+  If the source gives free time in Эрээн that morning, add it as its own line
+  after "Өглөөний цай.".
 - Final day, title `УЛААНБААТАР ХОТ`, no hotel, no meals, no photo:
-  "Өглөө 09:20 цагт Улаанбаатар хотод ирснээр бидний баялаг аялал баяртайгаар
-  өндөрлөнө."
+  "Өглөө 09.20 цагт Улаанбаатарт ирснээр манай аялал өндөрлөнө."
 
 **Rules that follow**
 
