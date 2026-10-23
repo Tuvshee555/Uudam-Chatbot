@@ -1,22 +1,54 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { NextApiRequest, NextApiResponse } from "next";
-import { analyticsWindow, collectAdminAnalytics, type AnalyticsQuery } from "../src/lib/adminAnalytics";
+import { analyticsWindow, collectAdminAnalytics, type AnalyticsQuery, type WebsiteDetailsReader } from "../src/lib/adminAnalytics";
 import { applyTestEnv } from "./helpers/env";
 
 const now = new Date("2098-01-01T17:00:00.000Z");
+const noWebsite: WebsiteDetailsReader = async (trips) => trips;
+const FAST_PATH = "Бот мэдээлэлгүй fast-path хариуг зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй: ";
+
+// Newest first, as the overview reads them: one hand-off of each kind the bot records.
+const SILENCES = [
+  { context: `${FAST_PATH}answer_plan [booking_terms.visa]`, message: "Вэлмор аялалд виз хэрэгтэй юу? example@example.invalid" },
+  { context: `${FAST_PATH}bare_number_without_context`, message: "1" },
+  { context: "AI түр саатсан тул зөвлөхөд шилжүүлэв.", message: "Вэлмор аяллын хөтөлбөр" },
+  { context: "", message: "Хүнтэй ярьмаар байна" },
+  { context: `${FAST_PATH}answer_plan [weather.report]`, message: "Тэнд хүйтэн үү, хэзээ очих нь дээр вэ?" },
+  { context: `${FAST_PATH}structured_trip_not_found`, message: "Хоол нь үнэдээ багтсан уу?" },
+  { context: "Хэрэглэгч дуут мессеж илгээсэн — бот сонсож чадахгүй тул зөвлөх сонсоод хариулна уу.", message: "[Дуут мессеж]" },
+  { context: "Бот мэдээлэлгүй асуулт тул зөвлөхөд шилжүүлэв.", message: "Сайн байна уу" },
+].map((row, index) => ({ ...row, created_at: new Date(Date.parse("2098-01-01T12:00:00Z") - index * 3_600_000) }));
+
+// Two active trips: one with a full program, hotel and deposit terms; one with only a
+// fare group, a departure rule and photos (its visa text lives on the website page).
+const ACTIVE_TRIPS = [
+  { id: "trip-velmor", adult_price: "1000", hotel: "Вэлмор зочид буудал", departure_dates: ["2098-02-01"], photo_urls: [],
+    extra: { itinerary_days: [{ title: "1-р өдөр" }], included_items: ["Хоол"], booking_terms: { deposit: "Урьдчилгаа тохиролцоно" } } },
+  { id: "trip-orlan", adult_price: "0", hotel: "", departure_dates: [], photo_urls: ["https://res.cloudinary.com/fixture/orlan.jpg"],
+    extra: { price_groups: [{ adult_price: 500 }], departure_rule: "Сар бүр" } },
+];
 
 function fixtureQuery(fail?: "core" | "activity" | "faq" | "errors" | "overview"): AnalyticsQuery {
   return async (sql, params) => {
     if (sql.includes("/* overview:")) {
       assert.doesNotMatch(sql, /\b(?:INSERT|UPDATE|DELETE|CREATE|ALTER)\b|SELECT \*/i);
       if (fail === "overview") throw new Error("Fixture overview unavailable");
-      if (sql.includes("overview:people_daily")) return { rows: [{ date: "2098-01-02", customers: "4" }] };
+      if (sql.includes("overview:people_daily")) return { rows: [{ date: "2098-01-02", customers: "4", answered: "3" }] };
       if (sql.includes("overview:people")) return { rows: [{ customers: "5", previous_customers: "4", answered: "4" }] };
       if (sql.includes("overview:leads_daily")) return { rows: [{ date: "2098-01-02", handed_off: "1" }] };
       if (sql.includes("overview:leads")) return { rows: [{ handed_off: "2", phone_leads: "1", bookings: "1" }] };
-      if (sql.includes("overview:attention")) return { rows: [{ call_back: "1", recent_handoffs: "2", recent_bookings: "1", backlog: "3", oldest_backlog: "2097-11-01T03:00:00Z" }] };
+      if (sql.includes("overview:silences")) {
+        assert.match(sql, /kind='handoff'/);
+        return { rows: SILENCES };
+      }
+      if (sql.includes("overview:coverage")) {
+        assert.match(sql, /status='active'/);
+        return { rows: ACTIVE_TRIPS };
+      }
+      if (sql.includes("overview:outages")) return { rows: [{ outages: "2", last_outage: "2098-01-01T09:00:00Z" }] };
       if (sql.includes("overview:trip_demand")) return { rows: [{ trip: "ВЭЛМОР АЯЛАЛ", customers: "3" }] };
+      throw new Error("Unexpected overview query");
     }
     assert.match(sql, /^SELECT /);
     assert.doesNotMatch(sql, /\b(?:INSERT|UPDATE|DELETE|CREATE|ALTER)\b|\btrip_name\b|SELECT \*/i);
@@ -53,14 +85,18 @@ function fixtureQuery(fail?: "core" | "activity" | "faq" | "errors" | "overview"
     }
     if (sql.includes("FROM travel_error_logs")) {
       if (fail === "errors") throw new Error("Fixture logs unavailable");
-      return { rows: [{ event: "staff_alert.no_channel_configured", level: "error", count: "2", last_seen: now }] };
+      return { rows: [
+        { event: "staff_alert.no_channel_configured", level: "error", count: "2", last_seen: now },
+        { event: "webhook.staff_takeover_detected", level: "warn", count: "4", last_seen: now },
+        { event: "openai.request_failed", level: "error", count: "1", last_seen: now },
+      ] };
     }
     throw new Error("Unexpected fixture query");
   };
 }
 
 test("overview aggregates actual schema counts and fills local calendar gaps without reading customer records", async () => {
-  const result = await collectAdminAnalytics(fixtureQuery(), 7, now);
+  const result = await collectAdminAnalytics(fixtureQuery(), 7, now, noWebsite);
   assert.equal(result.stats.totalLeads, 8);
   assert.equal(result.stats.newLeads, 5);
   assert.equal(result.stats.bookingLeads, 2, "booking requests are not completed bookings");
@@ -73,7 +109,8 @@ test("overview aggregates actual schema counts and fills local calendar gaps wit
   assert.deepEqual(result.activity?.daily[0], { date: "2097-12-27", inboundMessages: 0, assistantMessages: 0 });
   assert.equal(result.attention?.pendingHandoffs, 4);
   assert.equal(result.attention?.newBookingRequests, 1);
-  assert.equal(result.attention?.errors24h, 2);
+  assert.equal(result.attention?.errors24h, 1, "staff replying and the unused alert channel are not failures");
+  assert.deepEqual(result.attention?.recentIssues.map((issue) => issue.event), ["openai.request_failed"]);
   assert.equal(result.attention?.oldestPendingHandoffAt, "2097-12-28T03:00:00.000Z");
   assert.deepEqual(result.warnings, []);
   assert.match(result.faq!.week[0].question, /Вэлмор аялал/);
@@ -82,7 +119,7 @@ test("overview aggregates actual schema counts and fills local calendar gaps wit
 
 test("unavailable optional data stays explicitly unknown while healthy metrics survive", async () => {
   for (const section of ["activity", "faq", "errors"] as const) {
-    const result = await collectAdminAnalytics(fixtureQuery(section), 7, now);
+    const result = await collectAdminAnalytics(fixtureQuery(section), 7, now, noWebsite);
     assert.equal(result.stats.totalLeads, 8);
     assert.equal(result.warnings.length, 1);
     if (section === "errors") assert.equal(result.attention?.errors24h, null);
@@ -92,9 +129,9 @@ test("unavailable optional data stays explicitly unknown while healthy metrics s
 });
 
 test("missing core records and absent configuration cannot become an all-zero success", async () => {
-  await assert.rejects(collectAdminAnalytics(fixtureQuery("core"), 7, now));
-  await assert.rejects(collectAdminAnalytics(async () => null, 7, now));
-  await assert.rejects(collectAdminAnalytics(async () => ({ rows: [] }), 7, now));
+  await assert.rejects(collectAdminAnalytics(fixtureQuery("core"), 7, now, noWebsite));
+  await assert.rejects(collectAdminAnalytics(async () => null, 7, now, noWebsite));
+  await assert.rejects(collectAdminAnalytics(async () => ({ rows: [] }), 7, now, noWebsite));
 });
 
 test("period windows cross month/year boundaries at agency midnight rather than host midnight", () => {
@@ -137,19 +174,56 @@ test("analytics API protects access, rejects invalid periods and reports unavail
 });
 
 test("the overview leads with this period's people and drops button taps from the questions", async () => {
-  const result = await collectAdminAnalytics(fixtureQuery(), 7, now);
-  assert.equal(result.overview?.customers, 5);
-  assert.equal(result.overview?.previousCustomers, 4);
-  assert.equal(result.overview?.answeredCustomers, 4);
-  assert.equal(result.overview?.handedOff, 2);
-  assert.equal(result.overview?.callBack, 1);
-  assert.equal(result.overview?.recentBookings, 1);
-  assert.equal(result.overview?.backlog, 3);
-  assert.deepEqual(result.overview?.daily.at(-1), { date: "2098-01-02", customers: 4, handedOff: 1 });
-  assert.deepEqual(result.overview?.tripDemand, [{ trip: "ВЭЛМОР АЯЛАЛ", customers: 3 }]);
+  const result = await collectAdminAnalytics(fixtureQuery(), 7, now, noWebsite);
+  const overview = result.overview!;
+  assert.equal(overview.customers, 5);
+  assert.equal(overview.previousCustomers, 4);
+  assert.equal(overview.answeredCustomers, 4);
+  assert.equal(overview.handedOff, 2);
+  assert.equal(overview.phoneLeads, 1);
+  assert.equal(overview.bookingRequests, 1);
+  assert.deepEqual(overview.daily.at(-1), { date: "2098-01-02", customers: 4, answered: 3, handedOff: 1 });
+  assert.deepEqual(overview.daily[0], { date: "2097-12-27", customers: 0, answered: 0, handedOff: 0 });
+  assert.deepEqual(overview.tripDemand, [{ trip: "ВЭЛМОР АЯЛАЛ", customers: 3 }]);
+  assert.equal(overview.aiOutages24h, 2);
+  assert.equal(overview.lastAiOutageAt, "2098-01-01T09:00:00.000Z");
   assert.equal(result.faq!.week.length, 1, "button taps, placeholders and greetings are not questions");
   assert.match(result.faq!.week[0].question, /Вэлмор аялал/);
-  const degraded = await collectAdminAnalytics(fixtureQuery("overview"), 7, now);
+  const degraded = await collectAdminAnalytics(fixtureQuery("overview"), 7, now, noWebsite);
   assert.equal(degraded.overview, null);
   assert.equal(degraded.warnings.length, 1);
+});
+
+test("the overview says why the bot stayed silent and lists the questions it could not answer", async () => {
+  const overview = (await collectAdminAnalytics(fixtureQuery(), 7, now, noWebsite)).overview!;
+  assert.deepEqual(overview.silenceReasons, [
+    { reason: "no_data", count: 3 }, { reason: "unclear_trip", count: 1 }, { reason: "ai_outage", count: 1 },
+    { reason: "asked_person", count: 1 }, { reason: "not_found", count: 1 }, { reason: "media", count: 1 },
+  ]);
+  // A bare number and a greeting are not questions; outages, media and requests for a person
+  // are not questions the trip data failed to answer.
+  assert.deepEqual(overview.unanswered.map(({ question, reason, topic }) => ({ question, reason, topic })), [
+    { question: "Вэлмор аялалд виз хэрэгтэй юу? [email]", reason: "no_data", topic: "documents" },
+    // The bot recorded a weather fact as missing: its words ("хэзээ") do not make it a dates question.
+    { question: "Тэнд хүйтэн үү, хэзээ очих нь дээр вэ?", reason: "no_data", topic: null },
+    { question: "Хоол нь үнэдээ багтсан уу?", reason: "not_found", topic: "includes" },
+  ]);
+  assert.equal(overview.unanswered[0].at, "2098-01-01T12:00:00.000Z");
+  assert.doesNotMatch(JSON.stringify(overview), /example@example/);
+});
+
+test("coverage counts the topics each active trip can answer, website page included", async () => {
+  const fromStore = (await collectAdminAnalytics(fixtureQuery(), 7, now, noWebsite)).overview!;
+  const byTopic = (overview: typeof fromStore) => Object.fromEntries(overview.coverage.map(({ topic, trips, asked }) => [topic, [trips, asked]]));
+  assert.equal(fromStore.activeTrips, 2);
+  assert.deepEqual(byTopic(fromStore), {
+    price: [2, 0], dates: [2, 0], program: [1, 0], hotel: [1, 0], includes: [1, 1], documents: [0, 1], terms: [1, 0], photos: [1, 0],
+  });
+  const seen: string[] = [];
+  const withWebsite = (await collectAdminAnalytics(fixtureQuery(), 7, now, async (trips) => trips.map((trip) => {
+    seen.push(trip.id);
+    return trip.id === "trip-orlan" ? { ...trip, extra: { ...trip.extra, website_details: { requirements: "Гадаад паспорт" } } } : trip;
+  }))).overview!;
+  assert.deepEqual(seen, ["trip-velmor", "trip-orlan"]);
+  assert.deepEqual(byTopic(withWebsite).documents, [1, 1], "the website page's requirements answer document questions");
 });

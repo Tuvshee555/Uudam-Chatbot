@@ -21,17 +21,26 @@ export type ActivityStatsData = {
 };
 export type AttentionStatsData = {
   pendingHandoffs: number; oldestPendingHandoffAt: string | null; newBookingRequests: number;
-  staffAlertsConfigured?: boolean;
   errors24h: number | null;
   recentIssues: { event: string; level: string; count: number; lastSeenAt: string }[];
   handoffReasons: { reason: string; count: number }[];
 };
-/** What a manager reads first: this period's customers, who still needs a call, what they ask about. */
+/** Why the bot stayed silent and handed a customer to staff (from the hand-off record). */
+export type SilenceReason = "no_data" | "not_found" | "sold_out" | "unclear_trip" | "asked_person" | "media" | "payment" | "ai_outage" | "other";
+/** What customers ask about; each is answerable only when the trip data holds it. */
+export type CoverageTopic = "price" | "dates" | "program" | "hotel" | "includes" | "documents" | "terms" | "photos";
+
+/** The overview: this period's people and the bot's answers — never a staff to-do list. */
 export type OverviewData = {
   customers: number; previousCustomers: number; answeredCustomers: number;
   handedOff: number; phoneLeads: number; bookingRequests: number;
-  daily: { date: string; customers: number; handedOff: number }[];
-  callBack: number; recentHandoffs: number; recentBookings: number; backlog: number; oldestBacklogAt: string | null;
+  daily: { date: string; customers: number; answered: number; handedOff: number }[];
+  silenceReasons: { reason: SilenceReason; count: number }[];
+  unanswered: { question: string; at: string; reason: SilenceReason; topic: CoverageTopic | null }[];
+  /** Active trips holding each topic, and how many unanswered questions this period asked about it. */
+  coverage: { topic: CoverageTopic; trips: number; asked: number }[];
+  activeTrips: number;
+  aiOutages24h: number; lastAiOutageAt: string | null;
   tripDemand: { trip: string; customers: number }[];
 };
 export type AnalyticsResponse = {
