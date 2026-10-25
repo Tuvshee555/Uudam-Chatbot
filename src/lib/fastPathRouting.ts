@@ -24,10 +24,10 @@ import {
   setClarificationState,
   clearClarificationState,
 } from "./clarificationState";
-import { customerTurn, joinContextAndTurn, markNoTrip } from "./customerTurn";
+import { customerTurn, intentTextOf, joinContextAndTurn, markNoTrip } from "./customerTurn";
 import { unmetNote, unknownRequirementNote, type Understanding } from "./tripUnderstanding";
 import { hasReferentialHint, isLikelyContextDependentText, lastAssistantReply, pickFastPathMatchText } from "./contextualText";
-import { hasDepartureDateAvailabilityIntent, parseDepartureDateText, requestsDateWindow, resolveRequestedDate, resolveRequestedMonth, tripMatchesRequestedDate, tripDepartsInMonth } from "./travelDates";
+import { departureMatchesScope, hasDepartureDateAvailabilityIntent, parseDepartureDateText, requestedDepartureScope, requestsDateWindow, resolveRequestedDate, resolveRequestedMonth, tripMatchesRequestedDate, tripDepartsInMonth } from "./travelDates";
 import {
   filterTripsByTransportIntent,
   getTripSearchHaystack,
@@ -45,6 +45,7 @@ import { SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
 import { buildTripRequest, mergeTripSelection, type TripSelection } from "./tripRequest";
 import { getTripSelection, setTripSelection } from "./tripSelectionState";
 import { websiteTripLinksInText } from "./bookingWebsite";
+import { upcomingDepartures } from "./tripFareBlock";
 
 /**
  * Did the customer tap one of OUR quick-reply buttons?
@@ -109,6 +110,14 @@ function looseNorm(value: string): string {
   return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+/** Destination membership cannot establish where an itinerary starts. */
+export function hasUnsupportedOriginRequest(text: string): boolean {
+  const normalized = text.normalize("NFKC");
+  return /\p{L}{2,}(?:аас|ээс|оос|өөс)\s+(?:(?:аялал\p{L}*|шууд|нислэг\p{L}*)\s+){0,3}(?:эхл\p{L}*|хөдл\p{L}*|гар(?:ах|даг|на|даггүй)\p{L}*)/iu.test(normalized)
+    || /[a-z]{2,}(?:aas|ees|oos|uus)\s+(?:(?:aylal\w*|shuud|nisleg\w*)\s+){0,3}(?:ehle\w*|hodlo\w*|garah\w*)/iu.test(normalized)
+    || /\b(?:depart(?:s|ing|ure)?|start(?:s|ing)?|leav(?:e|es|ing))\s+(?:from|in)\s+\p{L}/iu.test(normalized);
+}
+
 const DATES_ONLY_RE = /^(?:огноо|огноог|өдөр|өдрүүд|гарах\s+өдөр(?:үүд)?|хэзээ|ogno|udur|hezee)(?:\s+(?:нь|ni|вэ|ve|юу|yu))*\s*[?.!]*$/iu;
 
 const DATE_FOLLOWUP_WORDS = new Set([
@@ -118,6 +127,20 @@ const DATE_FOLLOWUP_WORDS = new Set([
   "вэ", "ве", "ve", "байна", "байгаа", "бол", "уу", "юу", "uu", "yu", "бну", "бна", "bnu", "bna", "baina",
   "гарах", "явах", "garah", "yavah", "yvah", "хөтөлбөр", "үзэх", "hutulbur", "uzey", "uzye",
 ]);
+
+const CALENDAR_FOLLOWUP_WORDS = new Set([
+  ...DATE_FOLLOWUP_WORDS, "сард", "сарынх", "сарых", "sard", "sariinh", "р", "дугаар", "дахь", "дэх",
+  "эхний", "эхээр", "эхэнд", "сүүлийн", "сүүлчийн", "сүүлээр", "дунд", "дундуур", "долоо", "хоног", "хоногт", "хоногийн", "хооронд",
+  "ehnii", "eheer", "ehend", "suuliin", "suuleer", "dund", "doloo", "honog", "hoorond",
+  "сонирхож", "sonirhoj", "болох", "боломжтой", "суудал", "suudal", "bga", "bgaa", "baigaa",
+  "шууд", "нислэгтэй", "нислэг", "shuud", "nislegtei", "nisleg", "хэдээр", "үнэтэй", "price", "cost",
+  "нэг", "хоёр", "гурав", "дөрөв", "тав", "зургаа", "долоо", "найм", "ес", "арав", "арван",
+]);
+
+function calendarWordsAreContextOnly(text: string): boolean {
+  const words = text.normalize("NFKC").toLowerCase().replace(/[^\p{L}]+/gu, " ").trim().split(/\s+/).filter(Boolean);
+  return words.every(word => CALENDAR_FOLLOWUP_WORDS.has(word));
+}
 
 /** A date and generic question words carry no new destination identity. */
 function dateFollowup(text: string, now: Date): string | null {
@@ -187,6 +210,8 @@ export type FastPathRoute = {
   selection?: TripSelection;
   /** No offered/selected trip has this requested date: silently hand the question to staff. */
   unavailableDateWithinScope?: boolean;
+  /** A requested property or new identity cannot be established from the available source. */
+  unsupportedRequest?: boolean;
   /** Original customer question answered by a bare choice in the last trip menu. */
   requestText?: string;
 };
@@ -237,6 +262,9 @@ export async function routeFastPathText(input: {
     return { matchText: joinContextAndTurn(trip.route_name, websiteTripLinksInText(text).textWithoutUrls), scopedClarify: null, chosenTripId: trip.id, selection,
       ...(requestText !== text ? { requestText } : {}) };
   };
+  if (hasUnsupportedOriginRequest(text)) {
+    return { matchText: markNoTrip(text), scopedClarify: null, unsupportedRequest: true };
+  }
   // A shared website page identifies its trip before model interpretation,
   // old conversation context or a pending list can replace that identity.
   if (websiteTripLinksInText(text).slugs.length > 0) {
@@ -290,6 +318,36 @@ export async function routeFastPathText(input: {
     const candidates = departing.length ? departing : dateScope;
     await setClarificationState(senderId, candidates.map(trip => trip.id));
     return { matchText: text, scopedClarify: candidates, unavailableDateWithinScope: departing.length === 0 };
+  }
+
+  // Read a calendar constraint before a model or an attribute scorer can
+  // replace it with a generic destination menu. Keep the source trips intact;
+  // presentation uses the same constraint to select their displayed dates.
+  const calendarScope = !tappedOwnButton ? requestedDepartureScope(intentTextOf(text, trips), now) : null;
+  if (calendarScope) {
+    const current = resolve(text, trips);
+    const named = current.status === "verified" ? [current.trip]
+      : current.status === "ambiguous" ? current.candidates : [];
+    const contextOnly = calendarWordsAreContextOnly(text);
+    // A date does not erase a new, unresolved destination. Prior selection is
+    // evidence only for an actual follow-up, never for a different name that
+    // happens to ask about the same month.
+    const scope = named.length ? named : contextOnly ? dateScope : [];
+    if (!named.length && dateScope.length && !contextOnly) {
+      return { matchText: markNoTrip(text), scopedClarify: null, unsupportedRequest: true };
+    }
+    if (calendarScope.kind === "unsupported") {
+      return { matchText: text, scopedClarify: scope.length ? scope : null, unavailableDateWithinScope: true };
+    }
+    if (scope.length) {
+      const ofKind = filterTripsByTransportIntent(text, scope);
+      const matching = ofKind.filter(trip => upcomingDepartures(trip, now).some(date => departureMatchesScope(date, calendarScope))
+        || (calendarScope.kind === "dates" && calendarScope.dates.some(date => tripMatchesRequestedDate(trip, date, now))));
+      if (matching.length === 1) return chose(matching[0]);
+      const candidates = matching.length ? matching : scope;
+      await setClarificationState(senderId, candidates.map(trip => trip.id));
+      return { matchText: text, scopedClarify: candidates, unavailableDateWithinScope: matching.length === 0 };
+    }
   }
 
   // --- 0. Understanding: one reading of the whole message decides the trip. ---

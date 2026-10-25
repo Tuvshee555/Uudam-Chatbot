@@ -475,6 +475,11 @@ function resolve(trip: TravelTrip, selection: TripOfferSelection, now: Date, dis
   if (baseAvailability.status === "conflict") return conflict(["departure_availability_conflict"]);
   if (!displayOnly && !["open", "unknown"].includes(baseAvailability.status)) return { status: "unavailable", reason: baseAvailability.status, date, availability: baseAvailability };
   let candidates = regular.filter((o) => !o.dateScoped || o.dates.includes(date));
+  // A supplied package limits the hotel choices to hotels that sell it.
+  if (packageId) {
+    if (!candidates.some(offer => offer.packageId === packageId)) return { status: "unavailable", reason: "package_not_offered", date };
+    candidates = candidates.filter(offer => !offer.packageId || offer.packageId === packageId);
+  }
   // Accommodation text does not create selectable hotel packages, but a
   // customer repeating that exact accommodation must not invalidate the fare.
   const accommodationHotel = selection.hotel && !selection.hotelId && key(selection.hotel) === key(trip.hotel)

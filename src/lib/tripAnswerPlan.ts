@@ -137,11 +137,21 @@ export function buildTripAnswerPlan(input: {
   const intentText = stripTripNamesForIntent(requestText, trips);
   const preferences = replyPreferences(intentText);
   const request = buildTripRequest(requestText, trips, route.understanding, now);
+  // Package identities belong to the selected trip; a sibling's labels cannot
+  // make this trip's customer-supplied package ambiguous.
+  const packageRequest = buildTripRequest(requestText, [trip], route.understanding, now);
+  request.package = packageRequest.package;
   const selection = mergeTripSelection(trip.id, request, route.selection || null);
   if (request.unsupportedDateWindow) {
     return {
       status: "handoff", tripId: trip.id, selection, request, reply: "REFER", offer: null,
       answeredTopics: [], missingTopics: request.topics, missingFacts: ["dates.window"], mediaUrls: [], brochureUrl: null,
+    };
+  }
+  if (request.packagePreference && !selection.package) {
+    return {
+      status: "handoff", tripId: trip.id, selection, request, reply: "REFER", offer: null,
+      answeredTopics: [], missingTopics: request.topics, missingFacts: ["price.package"], mediaUrls: [], brochureUrl: null,
     };
   }
   if (request.requestedFacts?.length) {
@@ -181,9 +191,11 @@ export function buildTripAnswerPlan(input: {
   const answered = new Set<TripTopic>();
   const offers = normalizeTripOffers(trip, now);
   const dates = [...new Set(offers.filter((offer) => offer.source !== "discount").flatMap((offer) => offer.dates))].filter((date) => date >= today(now)).sort();
-  const scopedDates = dates.filter((date) => (!request.month || Number(date.slice(5, 7)) === request.month)
-    && (!request.year || Number(date.slice(0, 4)) === request.year)
-    && (!request.range || (date >= request.range[0] && date <= request.range[1])));
+  const dateScope = selection.dateScope || request;
+  const scopedDates = dates.filter((date) => (!dateScope.month || Number(date.slice(5, 7)) === dateScope.month)
+    && (!dateScope.year || Number(date.slice(0, 4)) === dateScope.year)
+    && (!dateScope.range || (date >= dateScope.range[0] && date <= dateScope.range[1]))
+    && (!dateScope.dates || dateScope.dates.includes(date)));
   const websiteAvailability = departureAvailability(trip);
   const sections: Partial<Record<TripTopic, string>> = {};
   const incomplete = new Map<TripTopic, string[]>();
@@ -192,7 +204,7 @@ export function buildTripAnswerPlan(input: {
   let result: TripOfferResult | null = null;
   let needsSelection = false;
   if (request.topics.includes("price") || request.topics.includes("availability") || request.topics.includes("discount")) {
-    const hasDateScope = Boolean(request.month || request.year || request.range);
+    const hasDateScope = Boolean(dateScope.month || dateScope.year || dateScope.range || dateScope.dates);
     // A newly requested month overrides an old exact-date selection. Never use
     // October's stored offer to answer a November fare question.
     if (hasDateScope && !request.date && selection.date && !scopedDates.includes(selection.date)) selection.date = null;
@@ -260,7 +272,8 @@ export function buildTripAnswerPlan(input: {
     }
   }
   if (request.topics.includes("dates")) {
-    sections.dates = scopedDates.length ? `Гарах өдрүүд:\n${compactReplyOptions(scopedDates.map((date) => {
+    if (needsSelection && result?.status === "needs_selection" && result.fields[0] === "date") answered.add("dates");
+    else sections.dates = scopedDates.length ? `Гарах өдрүүд:\n${compactReplyOptions(scopedDates.map((date) => {
       const row = websiteAvailability.find((entry) => entry.date === date);
       return `• ${mnDate(date)}${row && departureIsClosed(row) ? " — захиалга хаалттай" : row && departureIsLow(row) ? " — цөөн суудал" : ""}`;
     }), intentText).join("\n")}` : undefined;

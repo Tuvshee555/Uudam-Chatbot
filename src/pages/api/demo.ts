@@ -16,7 +16,7 @@ import { stripTripNamesForIntent } from "../../lib/customerTurn";
 import { buildCatalogListingReply } from "../../lib/catalogListing";
 import { setClarificationState } from "../../lib/clarificationState";
 import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
-import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
+import { hasUnsupportedOriginRequest, routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
@@ -462,6 +462,10 @@ export default async function handler(
       // question in Mongolian on the live page. Route English questions
       // straight to the model instead; the AI path keeps the same guards
       // (wrong-trip suppression, REFER handoff, payment enforcement).
+      if (hasUnsupportedOriginRequest(normalizedText)) {
+        await appendMessage(sessionId, "user", normalizedText);
+        return returnHandoff();
+      }
       if (!isEnglishDemo) {
       // Generic price objections must run before route matching. Otherwise a
       // plain complaint can match a trip note that happens to contain "unetei".
@@ -482,6 +486,10 @@ export default async function handler(
       // destination family and turns "A уу B уу?" into "which A variant?".
       {
         const route = await getRouted();
+        if (route.unsupportedRequest) {
+          await appendMessage(sessionId, "user", normalizedText);
+          return returnHandoff();
+        }
         const plan = await buildTripAnswerRuntime({ text: normalizedText, trips: await getTrips(), route });
         if (plan) {
           const decision = decideTripAnswer(plan, { userText: normalizedText,
@@ -530,13 +538,14 @@ export default async function handler(
               : buildAmbiguousTripReply(
                   routed.scopedClarify,
                   routed.scopedClarifyNote,
-                  { askToChoose: !routed.informationalAlternatives },
+                  { askToChoose: !routed.informationalAlternatives, customerText: normalizedText },
                 )
-            : totalReply || buildAmbiguousTripReply(routed.scopedClarify);
+            : totalReply || buildAmbiguousTripReply(routed.scopedClarify, undefined, { customerText: normalizedText });
           const clarifyReply = enforceWebsiteForPayment(
             sanitizeAssistantReply(clarifyBody),
           );
           await appendMessage(sessionId, "user", normalizedText);
+          if (shouldHandoffSilently(clarifyReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", clarifyReply);
           await rememberTurn();
           recordCounter("demo.scoped_clarify_total", 1, {});
@@ -634,9 +643,10 @@ export default async function handler(
             await setClarificationState(sessionId, resolution.candidates.map((trip) => trip.id));
             const totalReply = buildAmbiguousPassengerTotalReply(fastPathText, resolution.candidates);
             const clarifyReply = enforceWebsiteForPayment(
-              sanitizeAssistantReply(totalReply || buildAmbiguousTripReply(resolution.candidates)),
+              sanitizeAssistantReply(totalReply || buildAmbiguousTripReply(resolution.candidates, undefined, { customerText: normalizedText })),
             );
             await appendMessage(sessionId, "user", normalizedText);
+            if (shouldHandoffSilently(clarifyReply)) return returnHandoff();
             await appendMessage(sessionId, "assistant", clarifyReply);
             await rememberTurn();
             recordCounter("demo.structured_clarify_total", 1, {});

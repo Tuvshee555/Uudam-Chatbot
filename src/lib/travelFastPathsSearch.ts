@@ -4,7 +4,7 @@
  * scores trips against a query, and resolves which trip(s) a message is about.
  */
 
-import { filterFutureDepartureDates, sortDepartureDatesForDisplay, type ResolvedDepartureDate } from "./travelDates";
+import { filterFutureDepartureDates, requestedDepartureScope, sortDepartureDatesForDisplay, type ResolvedDepartureDate } from "./travelDates";
 import { withBookableDepartureDates } from "./departureAvailability";
 import { repairBirthYearAgeBands } from "./birthYearAgeBands";
 import { getPosterPdfPublicUrl, isUsableStoredPdfUrl } from "./poster/pdfUrl";
@@ -396,6 +396,11 @@ function extractQueryMonthDays(text: string): MonthDay[] {
     if (month < 1 || month > 12 || day < 1 || day > 31) return;
     values.push({ month, day });
   };
+
+  const scope = requestedDepartureScope(text);
+  if (scope?.kind === "dates" && scope.dates.length > 1) {
+    for (const date of scope.dates) push(Number(date.slice(5, 7)), Number(date.slice(8, 10)));
+  }
 
   for (const match of normalized.matchAll(/(\d{1,2})\s*(?:р\s*)?сар(?:ын)?\s*(\d{1,2})/g)) {
     push(Number(match[1]), Number(match[2]));
@@ -1030,15 +1035,6 @@ export function resolveTripFromUserMessage(
   }
 
   const [best, second] = matches;
-  const requestedMonthDays = extractQueryMonthDays(text);
-  if (requestedMonthDays.length > 0) {
-    const datedMatches = matches.filter((match) =>
-      requestedMonthDays.some((date) => tripHasMonthDay(match.trip, date)),
-    );
-    if (datedMatches.length === 1) {
-      return { status: "verified", trip: datedMatches[0].trip, candidates: [] };
-    }
-  }
   const hasSpecificTripPreference =
     queryWantsLandOnlyEnhanced(text) ||
     queryWantsLandFlightCombo(text) ||
@@ -1067,6 +1063,19 @@ export function resolveTripFromUserMessage(
   const inOrderMentions = matches.filter((match) => nameContainsPhraseInOrder(match.trip.route_name, text));
   if (inOrderMentions.length === 1) {
     return { status: "verified", trip: inOrderMentions[0].trip, candidates: [] };
+  }
+
+  // A requested departure narrows a destination's variants only after an
+  // explicit trip identity has had its say. A sibling leaving on that date
+  // cannot replace the fully named trip whose schedule the customer asked.
+  const requestedMonthDays = extractQueryMonthDays(text);
+  if (requestedMonthDays.length > 0) {
+    const datedMatches = matches.filter((match) =>
+      requestedMonthDays.some((date) => tripHasMonthDay(match.trip, date)),
+    );
+    if (datedMatches.length === 1) {
+      return { status: "verified", trip: datedMatches[0].trip, candidates: [] };
+    }
   }
 
   const { places, occasions } = queryNamedPlaces(text, trips);

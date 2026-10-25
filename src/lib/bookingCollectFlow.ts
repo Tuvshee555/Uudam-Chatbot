@@ -33,9 +33,10 @@ export type BookingCollectContext = {
   text: string;
   /** The conversation-aware text (previous reply + this message), used to pre-fill the trip. */
   contextualUserText: string;
-  /** Pause applied once the booking is handed to staff; undefined = default. */
-  /** Delivers a message; must throw when delivery fails so Meta retries. */
-  send: (message: string, tag: string) => Promise<void>;
+  /** False means the shared reply boundary handed off silently; transport failures must throw. */
+  send: (message: string, tag: string) => Promise<boolean | void>;
+  /** The shared webhook sender records the exact presented reply itself. */
+  sendRecordsHistory?: boolean;
   trace?: { requestId?: string; correlationId?: string };
 };
 
@@ -71,8 +72,11 @@ export async function startBookingCollect(ctx: BookingCollectContext): Promise<b
     // list); anything more than that is answered normally.
     if (!isBareBookingRequest(ctx.text)) return false;
     await appendMessage(ctx.senderId, "user", ctx.text).catch(() => {});
-    await ctx.send(BOOKING_ALREADY_RECEIVED_REPLY, "booking_already_received");
-    await appendMessage(ctx.senderId, "assistant", BOOKING_ALREADY_RECEIVED_REPLY).catch(() => {});
+    if ((await ctx.send(BOOKING_ALREADY_RECEIVED_REPLY, "booking_already_received")) === false) {
+      await clearCollectState(ctx.senderId);
+      return true;
+    }
+    if (!ctx.sendRecordsHistory) await appendMessage(ctx.senderId, "assistant", BOOKING_ALREADY_RECEIVED_REPLY).catch(() => {});
     return true;
   }
   const trips = await loadTrips();
@@ -81,8 +85,11 @@ export async function startBookingCollect(ctx: BookingCollectContext): Promise<b
   await setCollectState(ctx.senderId, state);
   const prompt = promptForStep(state.step, state);
   await appendMessage(ctx.senderId, "user", ctx.text).catch(() => {});
-  await ctx.send(prompt, "booking_collect_start");
-  await appendMessage(ctx.senderId, "assistant", prompt).catch(() => {});
+  if ((await ctx.send(prompt, "booking_collect_start")) === false) {
+    await clearCollectState(ctx.senderId);
+    return true;
+  }
+  if (!ctx.sendRecordsHistory) await appendMessage(ctx.senderId, "assistant", prompt).catch(() => {});
   recordCounter("webhook.booking_collect_started_total", 1, { platform: ctx.platform, tripKnown: String(Boolean(trip)) });
   return true;
 }
@@ -110,8 +117,11 @@ export async function continueBookingCollect(ctx: BookingCollectContext): Promis
   await appendMessage(ctx.senderId, "user", ctx.text).catch(() => {});
   if (result.kind === "ask") {
     await setCollectState(ctx.senderId, result.state);
-    await ctx.send(result.prompt, "booking_collect_step");
-    await appendMessage(ctx.senderId, "assistant", result.prompt).catch(() => {});
+    if ((await ctx.send(result.prompt, "booking_collect_step")) === false) {
+      await clearCollectState(ctx.senderId);
+      return true;
+    }
+    if (!ctx.sendRecordsHistory) await appendMessage(ctx.senderId, "assistant", result.prompt).catch(() => {});
     return true;
   }
 
@@ -142,10 +152,13 @@ export async function continueBookingCollect(ctx: BookingCollectContext): Promis
   }
   if (!done.confirmationSent) {
     const completion = buildCompletionMessage(done);
-    await ctx.send(completion, "booking_collect_done");
+    if ((await ctx.send(completion, "booking_collect_done")) === false) {
+      await clearCollectState(ctx.senderId);
+      return true;
+    }
     done = { ...done, confirmationSent: true };
     await setCollectState(ctx.senderId, done);
-    await appendMessage(ctx.senderId, "assistant", completion).catch(() => {});
+    if (!ctx.sendRecordsHistory) await appendMessage(ctx.senderId, "assistant", completion).catch(() => {});
   }
   await autoHandoffSender(ctx.senderId);
   await pauseBookedCustomer(ctx.senderId);

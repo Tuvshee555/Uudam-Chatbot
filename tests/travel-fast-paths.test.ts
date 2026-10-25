@@ -1647,14 +1647,17 @@ test("ambiguous passenger total question shows totals for each possible trip", (
         route_name: "СЭРВЭН ТЭНГИС БУЮУ КАРДАН-ВЭЛМОРГИЙН ГАЗРЫН АЯЛАЛ",
         adult_price: 1180000,
         child_price: 1160000,
+        departure_dates: ["2098-03-08"],
       }),
       trip({
         id: "kardan-combo",
         route_name: "Кардан сэрвэн тэнгисийн эрэг+Вэлмор газар нислэг хосолсон аялал",
         adult_price: 1270000,
         child_price: 1200000,
+        departure_dates: ["2098-03-08"],
       }),
     ],
+    new Date("2098-02-01T04:00:00Z"),
   );
 
   assert.match(reply || "", /3,520,000₮/);

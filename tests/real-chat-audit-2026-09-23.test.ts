@@ -161,14 +161,15 @@ test("an attribute answer that fits one offered trip beats a catalog trip with t
   assert.ok(routed.matchText.startsWith(fromCity.route_name));
 });
 
-test("a month none of the offered trips departs in says so instead of picking one", async () => {
+test("a month none of the offered trips departs in requires a silent handoff", async () => {
   const sender = "audit-month";
   const a = trip({ id: "a", route_name: "Альфа паркийн аялал", departure_dates: ["12 сарын 20"] });
   const b = trip({ id: "b", route_name: "Альфа паркийн сурагчдын аялал", departure_dates: ["12 сарын 27"] });
   await clarification.setClarificationState(sender, [a.id, b.id]);
   const routed = await routing.routeFastPathText({ senderId: sender, text: "3 сард", contextualUserText: "3 сард", trips: [a, b] });
   assert.equal(routed.scopedClarify?.length, 2);
-  assert.match(routed.scopedClarifyNote || "", /3 сард гарах аялал эдгээрээс алга/);
+  assert.equal(routed.unavailableDateWithinScope, true);
+  assert.equal(routed.chosenTripId, undefined);
 });
 
 // ── Resolver ────────────────────────────────────────────────────────────────

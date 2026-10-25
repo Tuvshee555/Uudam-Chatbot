@@ -5,6 +5,7 @@ import { logInfo } from "./observability";
 import { fetchWithRetry } from "./resilience";
 import { quickReplyTitle } from "./quickReplyTitle";
 import { isReferReply } from "./reply";
+import { deliverMessengerText } from "./metaTextDelivery";
 
 const env = getEnv();
 
@@ -35,6 +36,7 @@ export type UpstreamTraceOptions = {
   requestId?: string;
   correlationId?: string;
   source?: string;
+  deliveryKey?: string;
 };
 
 export const BOT_MESSAGE_METADATA = "uudam-bot-message";
@@ -112,15 +114,20 @@ export async function sendTextMessage(
   token: string,
   trace?: UpstreamTraceOptions,
 ) {
-  await postToMessenger(
+  if (isReferReply(text) || isMetaOutboundDisabled()) {
+    // Keep the transport's existing sentinel/kill-switch boundary before splitting.
+    await postToMessenger(graphMessagesEndpoint(token), { recipient: { id: recipientId }, message: { text } }, trace);
+    return;
+  }
+  await deliverMessengerText(recipientId, text, async part => postToMessenger(
     graphMessagesEndpoint(token),
     {
       messaging_type: "RESPONSE",
       recipient: { id: recipientId },
-      message: { text, metadata: BOT_MESSAGE_METADATA },
+      message: { text: part, metadata: BOT_MESSAGE_METADATA },
     },
     trace,
-  );
+  ), trace?.deliveryKey);
 }
 
 export async function replyToComment(
@@ -169,15 +176,19 @@ export async function sendQuickReplies(
     title: quickReplyTitle(label),
     payload: label.slice(0, 1000),
   }));
-  await postToMessenger(
+  if (isReferReply(text) || isMetaOutboundDisabled()) {
+    await postToMessenger(graphMessagesEndpoint(token), { recipient: { id: recipientId }, message: { text } }, trace);
+    return;
+  }
+  await deliverMessengerText(recipientId, text, async (part, last) => postToMessenger(
     graphMessagesEndpoint(token),
     {
       messaging_type: "RESPONSE",
       recipient: { id: recipientId },
-      message: { text, quick_replies: quickReplies, metadata: BOT_MESSAGE_METADATA },
+      message: { text: part, ...(last ? { quick_replies: quickReplies } : {}), metadata: BOT_MESSAGE_METADATA },
     },
     trace,
-  );
+  ), trace?.deliveryKey);
 }
 
 /**

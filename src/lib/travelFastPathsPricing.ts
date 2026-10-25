@@ -5,7 +5,7 @@
  * reply fragments reused by the top-level structured-reply builder.
  */
 
-import { filterFutureDepartureDates, isPlaceholderDepartureText, parseDepartureDateText, type ResolvedDepartureDate } from "./travelDates";
+import { departureMatchesScope, filterFutureDepartureDates, isPlaceholderDepartureText, parseDepartureDateText, requestedDepartureScope, type RequestedDepartureScope, type ResolvedDepartureDate } from "./travelDates";
 import { formatPriceRange } from "./priceRange";
 import { resolveTripOffer, resolveTripOfferFareCard, type PassengerKind, type ResolvedTripOffer } from "./tripOffers";
 import { buildFarePriceLines, onSaleDepartureText, upcomingDepartures } from "./tripFareBlock";
@@ -1561,7 +1561,7 @@ export function childFareTiers(
  */
 export function isPassengerCountOnly(text: string): boolean {
   const normalized = text.toLowerCase().replace(/[.,!?]/g, " ").trim();
-  return /^(?:\d{1,2}\s*(?:том(?:\s*хүн)?|хүүхэд|нярай|хүн|adult|child|infant)\s*)+(?:байна|бна|явна|yavna)?$/i.test(normalized);
+  return /^(?:\d{1,2}\s*(?:том(?:\s*хүн)?|хүүхэд|нярай|хүн|tom\s*hun|huuhed|nyarai|adult|child|infant)\s*)+(?:байна|бна|явна|yavna)?$/i.test(normalized);
 }
 
 /** One "• Хүүхэд /band/: price" line per distinct non-infant fare in a price group. */
@@ -1732,12 +1732,13 @@ const NOT_ON_SALE = new Set(["sold_out", "paused", "cancelled", "unavailable", "
  * date sold at another price the reply verifier rightly rejected it, and the
  * whole "which trip?" question became silence plus a paused customer.
  */
-function listedFaresAndDates(trip: TravelTrip, now = new Date()): { fares: ListedFares | null; dates: string[]; soldOut?: boolean } {
+function listedFaresAndDates(trip: TravelTrip, now = new Date(), scope: RequestedDepartureScope | null = null): { fares: ListedFares | null; dates: string[]; soldOut?: boolean; outsideScope?: boolean } {
   // The dated departures come from the same resolver the reply checker uses, so a
   // line can never print a date the checker does not know (a cancelled or copied
   // date made it reject the whole list). Weekly schedules ("Ням гараг бүр") have no
   // calendar dates and keep the trip's own text.
-  const dated = upcomingDepartures(trip, now).slice(0, 8);
+  const dated = upcomingDepartures(trip, now).filter(date => departureMatchesScope(date, scope)).slice(0, 8);
+  if (scope && !dated.length) return { fares: null, dates: [], outsideScope: true };
   const future = dated.length ? dated : withFutureDepartureDates(trip, now).departure_dates.slice(0, 8);
   // A sold-out or closed departure is not on sale: listing it with a price made
   // the verifier reject the whole list, and the customer got silence.
@@ -1784,12 +1785,16 @@ export function formatAlternativeTripLine(trip: TravelTrip, duration: string, no
 export function buildAmbiguousTripReply(
   trips: TravelTrip[],
   heading?: string,
-  options: { askToChoose?: boolean } = {},
+  options: { askToChoose?: boolean; customerText?: string } = {},
   now = new Date(),
 ) {
-  const names = trips.slice(0, MAX_LISTED_TRIPS).map((trip) => {
+  const scope = options.customerText ? requestedDepartureScope(options.customerText, now) : null;
+  if (scope?.kind === "unsupported") return "REFER";
+  const candidates = scope ? trips.filter(trip => upcomingDepartures(trip, now).some(date => departureMatchesScope(date, scope))) : trips;
+  const names = candidates.slice(0, MAX_LISTED_TRIPS).flatMap((trip) => {
     const currency = trip.currency || "MNT";
-    const listed = listedFaresAndDates(trip, now);
+    const listed = listedFaresAndDates(trip, now, scope);
+    if (listed.outsideScope) return [];
     const adultText = formatPassengerMoney(listed.fares?.adult, currency);
     const childText = formatPassengerMoney(listed.fares?.child, currency);
     const infantText = formatPassengerMoney(listed.fares?.infant, currency);
@@ -1807,8 +1812,9 @@ export function buildAmbiguousTripReply(
     const line = `• ${trip.route_name}${details.length ? ` — ${details.join(" · ")}` : ""}`;
     // A line the checker would reject is cut back to the trip's name: a name-only
     // line is always true, and a rejected list meant silence for the customer.
-    return details.length && verifyTripReply({ reply: line, trips: [trip], now }) !== line ? `• ${trip.route_name}` : line;
+    return [details.length && verifyTripReply({ reply: line, trips: [trip], now }) !== line ? `• ${trip.route_name}` : line];
   });
+  if (!names.length) return "REFER";
   return [
     // Same-name duplicates collapse to one line upstream; "several options"
     // above a single line read as a glitch.

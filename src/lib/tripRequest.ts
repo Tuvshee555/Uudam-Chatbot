@@ -1,7 +1,7 @@
 import type { Understanding } from "./tripUnderstanding";
 import type { TravelTrip } from "./travelTypes";
 import { stripTripNamesForIntent } from "./customerTurn";
-import { resolveRequestedDate, resolveRequestedMonth, resolveRequestedRange } from "./travelDates";
+import { requestedDepartureScope, resolveRequestedDate, resolveRequestedMonth, resolveRequestedRange } from "./travelDates";
 import { hasDurationIntent, hasIncludedInPriceIntent, hasPriceIntent, hasScheduleIntent } from "./travelFastPathsPricing";
 import { queryRequestsDurationDays, queryWantsDirectFlight, queryWantsLandFlightCombo, queryWantsLandOnlyEnhanced } from "./travelFastPathsSearch";
 import { normalizeTripOffers } from "./tripOffers";
@@ -12,17 +12,20 @@ import { parseRequestedFacts, requestedFactsFromText, type RequestedFact } from 
 export const TRIP_TOPICS = ["price", "availability", "dates", "hotel", "duration", "transport", "program", "includes", "booking_terms", "weather", "photos", "comparison", "budget", "discount"] as const;
 export type TripTopic = typeof TRIP_TOPICS[number];
 export type RequestedPassenger = { kind: "adult" | "child" | "infant"; count: number; age?: number; ageUnit?: "year" | "month" };
-export type TripSelection = { tripId: string; date: string | null; hotel: string | null; package: string | null; passengers: RequestedPassenger[] };
+export type TripDateScope = { month: number | null; year: number | null; range: [string, string] | null; dates?: string[] };
+export type TripSelection = { tripId: string; date: string | null; hotel: string | null; package: string | null; passengers: RequestedPassenger[]; dateScope?: TripDateScope };
 export type TripRequest = {
   topics: TripTopic[];
   date: string | null;
   hotel: string | null;
   package: string | null;
+  packagePreference?: "with_program" | "without_program";
   passengers: RequestedPassenger[];
   days: [number, number] | null;
   month: number | null;
   year: number | null;
   range?: [string, string] | null;
+  dates?: string[];
   transport?: TripTransport | null;
   unsupportedDateWindow?: boolean;
   requestedFacts?: RequestedFact[];
@@ -71,6 +74,13 @@ export function requestedPassengersFromText(text: string): RequestedPassenger[] 
   return result;
 }
 
+function programPreference(text: string): TripRequest["packagePreference"] {
+  const normalized = normText(text);
+  if (/хөтөлбөргүй|чөлөөт\s+аялал|hutulburgui|hotolborgui|chuluut\s+aylal|without\s+(?:a\s+)?(?:program|itinerary)/i.test(normalized)) return "without_program";
+  if (/хөтөлбөртэй|hutulburtei|hotolbortei|with\s+(?:a\s+)?(?:program|itinerary)/i.test(normalized)) return "with_program";
+  return undefined;
+}
+
 /** One topic set is reused by the answer planner and legacy fallbacks. */
 export function buildTripRequest(text: string, trips: TravelTrip[], understanding?: Partial<Understanding>, now = new Date()): TripRequest {
   const turn = stripTripNamesForIntent(text, trips);
@@ -111,7 +121,9 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
   // Model fields supplement the customer's words; they never replace an
   // independently readable constraint or turn a span into one departure.
   const requestedRange = resolveRequestedRange(turn, now);
-  const explicitDate = requestedRange ? null : resolveRequestedDate(turn, now)?.ymd || null;
+  const calendarScope = requestedDepartureScope(turn, now);
+  const requestedDates = calendarScope?.kind === "dates" && calendarScope.dates.length > 1 ? calendarScope.dates : undefined;
+  const explicitDate = requestedRange || requestedDates ? null : resolveRequestedDate(turn, now)?.ymd || null;
   const requestedMonth = requestedRange || explicitDate ? null : resolveRequestedMonth(turn, now);
   const date = explicitDate;
   const range: [string, string] | null = requestedRange && requestedRange !== "unsupported"
@@ -143,13 +155,25 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
     ...parseRequestedFacts(understanding?.requestedFacts, text),
     ...requestedFactsFromText(text, { ignoredPhrases: [...trips.map(trip => trip.route_name), ...hotels], hotelContext: topics.has("hotel") || Boolean(hotel) }),
   ].map(fact => [`${fact.field}:${normText(fact.evidence)}`, fact])).values()];
+  const packagePreference = programPreference(turn);
+  if (packagePreference) {
+    topics.add("price");
+    if (!/явуул|үзэх|бүтэн|өдөр\s*бүр|send|show|full|day.by.day/i.test(turn)) topics.delete("program");
+  }
+  const packages = [...new Set(trips.flatMap(trip => normalizeTripOffers(trip, now).map(offer => offer.packageId)).filter((value): value is string => Boolean(value)))];
+  const namedPackages = packages.filter(mentions);
+  const matchingPackages = packagePreference ? packages.filter(value => programPreference(value) === packagePreference) : [];
+  const selectedPackage = namedPackages.length === 1 ? namedPackages[0]
+    : matchingPackages.length === 1 ? matchingPackages[0]
+      : understanding?.package && mentions(understanding.package) ? understanding.package : null;
   return {
     topics: [...topics], date, range, hotel,
-    package: understanding?.package && mentions(understanding.package) ? understanding.package : null,
+    package: selectedPackage, ...(packagePreference ? { packagePreference } : {}),
     passengers, days: queryRequestsDurationDays(turn), month, year, requestedFacts,
+    ...(requestedDates ? { dates: requestedDates } : {}),
     transport: queryWantsLandFlightCombo(turn) ? "land_flight" : queryWantsDirectFlight(turn) ? "direct_flight"
       : queryWantsLandOnlyEnhanced(turn) ? "land" : /усан\s*онгоц|круз|cruise/i.test(turn) ? "cruise" : null,
-    ...(requestedRange === "unsupported" ? { unsupportedDateWindow: true } : {}),
+    ...(requestedRange === "unsupported" || calendarScope?.kind === "unsupported" ? { unsupportedDateWindow: true } : {}),
   };
 }
 
@@ -160,12 +184,15 @@ export function mergeTripSelection(tripId: string, request: TripRequest, previou
     ? request.passengers.some((passenger) => passenger.kind === "adult") ? request.passengers
       : [...(same?.passengers || []).filter((passenger) => !suppliedKinds.has(passenger.kind)), ...request.passengers]
     : same?.passengers || [];
+  const dateScope = request.date ? undefined : request.range || request.month || request.year || request.dates
+    ? { month: request.month, year: request.year, range: request.range || null, ...(request.dates ? { dates: request.dates } : {}) } : same?.dateScope;
   return {
-    tripId, date: request.date || (request.range || request.month && same?.date
+    tripId, date: request.date || (request.range || request.dates && same?.date && !request.dates.includes(same.date) || request.month && same?.date
       && (Number(same.date.slice(5, 7)) !== request.month || request.year && Number(same.date.slice(0, 4)) !== request.year)
       ? null : same?.date || null),
     hotel: request.hotel || same?.hotel || null,
-    package: request.package || (request.hotel && request.hotel !== same?.hotel ? null : same?.package || null),
+    package: request.package || (request.packagePreference || request.hotel && request.hotel !== same?.hotel ? null : same?.package || null),
     passengers,
+    ...(dateScope ? { dateScope } : {}),
   };
 }

@@ -16,12 +16,16 @@ import { websiteTripLinksInText } from "./bookingWebsite";
 import { departureAvailability, departureIsClosed } from "./departureAvailability";
 import { buildHotelReply } from "./tripHotelReply";
 import { buildPlaceDaysReply } from "./tripPlaceDaysReply";
-import { buildFareSection, onSaleDepartureText, onSaleLowDates, shortDate, tripsAtPrice } from "./tripFareBlock";
+import { buildFareSection, onSaleDepartureText, onSaleLowDates, shortDate, tripsAtPrice, upcomingDepartures } from "./tripFareBlock";
+import { buildTripRequest } from "./tripRequest";
+import { resolveTripOffer, type OfferFare, type ResolvedTripOffer } from "./tripOffers";
 import {
   buildDepartureDateAvailabilityReply,
   filterFutureDepartureDates,
   hasUnsupportedCalendarWeekWindow,
   parseDepartureDateText,
+  requestedDepartureScope,
+  departureMatchesScope,
   tripMatchesRequestedDate,
 } from "./travelDates";
 import type { TravelTrip } from "./travelOps";
@@ -35,7 +39,6 @@ import {
   getStructuredPriceGroups,
   getTripNameHaystack,
   getTripSearchHaystack,
-  isDocumentedFreeFare,
   isGenericConfirmationText,
   keywordTokens,
   matchScoreForPriceKind,
@@ -164,21 +167,6 @@ function tripHasDepartureMonthDay(
   return Boolean(requested && tripMatchesRequestedDate(trip, requested, now));
 }
 
-function firstPassengerPrice(trip: TravelTrip, key: "adult_price" | "child_price" | "infant_price"): number | null {
-  if (key === "adult_price" && typeof trip.adult_price === "number") return trip.adult_price;
-  if (key === "child_price" && typeof trip.child_price === "number") return trip.child_price;
-  if (key === "infant_price" && typeof trip.infant_price === "number") return trip.infant_price;
-  for (const group of getStructuredPriceGroups(trip)) {
-    const value = group[key];
-    if (typeof value === "number") return value;
-  }
-  for (const group of getPriceGroups(trip)) {
-    const value = group[key];
-    if (typeof value === "number") return value;
-  }
-  return null;
-}
-
 function parsePassengerTotalRequest(text: string): { adultCount: number; childCount: number; infantCount: number } | null {
   const normalized = normText(text);
   // A bare head count ("2 том хүн 2 хүүхэд") under a list of trips asks the
@@ -218,57 +206,52 @@ function parsePassengerTotalRequest(text: string): { adultCount: number; childCo
   return { adultCount, childCount, infantCount };
 }
 
-function formatPassengerTotalLine(trip: TravelTrip, counts: { adultCount: number; childCount: number; infantCount: number }): string | null {
-  const currency = trip.currency || "MNT";
-  const adult = firstPassengerPrice(trip, "adult_price");
-  const child = firstPassengerPrice(trip, "child_price");
-  const infant = firstPassengerPrice(trip, "infant_price");
-  const parts: string[] = [];
-  let total = 0;
-
-  // A non-positive fare is normally missing poster data, not a free seat — EXCEPT
-  // when child_rules explicitly documents it as free (isDocumentedFreeFare), in
-  // which case quoting 0 for that passenger is the correct total, not a gap.
-  const childFree = isDocumentedFreeFare(trip, "child");
-  const infantFree = isDocumentedFreeFare(trip, "infant");
-  if (counts.adultCount > 0) {
-    if (typeof adult !== "number" || adult <= 0) return null;
-    total += counts.adultCount * adult;
-    parts.push(`${counts.adultCount} том хүн x ${formatMoney(adult, currency)}`);
+function formatPassengerTotalLine(trip: TravelTrip, text: string, counts: { adultCount: number; childCount: number; infantCount: number }, now: Date): string | null {
+  const turn = customerTurn(text);
+  const request = buildTripRequest(turn, [trip], undefined, now);
+  if (request.unsupportedDateWindow || request.packagePreference && !request.package) return null;
+  const passengers = request.passengers.length ? request.passengers : [
+    { kind: "adult" as const, count: counts.adultCount },
+    { kind: "child" as const, count: counts.childCount },
+    { kind: "infant" as const, count: counts.infantCount },
+  ].filter(passenger => passenger.count > 0);
+  const scope = requestedDepartureScope(turn, now);
+  const dates = upcomingDepartures(trip, now).filter(date => departureMatchesScope(date, scope));
+  const offers: ResolvedTripOffer[] = [];
+  for (const date of dates) {
+    const result = resolveTripOffer(trip, { date, hotel: request.hotel, packageId: request.package, passengers }, now);
+    if (result.status !== "ready" || !result.offer.total) return null;
+    offers.push(result.offer);
   }
-  if (counts.childCount > 0) {
-    if (childFree) {
-      parts.push(`${counts.childCount} хүүхэд x Үнэгүй`);
-    } else {
-      if (typeof child !== "number" || child <= 0) return null;
-      total += counts.childCount * child;
-      parts.push(`${counts.childCount} хүүхэд x ${formatMoney(child, currency)}`);
-    }
-  }
-  if (counts.infantCount > 0) {
-    if (infantFree) {
-      parts.push(`${counts.infantCount} нярай x Үнэгүй`);
-    } else {
-      if (typeof infant !== "number" || infant <= 0) return null;
-      total += counts.infantCount * infant;
-      parts.push(`${counts.infantCount} нярай x ${formatMoney(infant, currency)}`);
-    }
-  }
-
-  return `• ${trip.route_name}: ${formatMoney(total, currency)} (${parts.join(" + ")})`;
+  if (!offers.length) return null;
+  // An undated total is valid only when every available offer has the same
+  // passenger fares, accommodation and package. Otherwise the customer chooses.
+  const signature = (offer: ResolvedTripOffer) => JSON.stringify({
+    total: offer.total, currency: offer.currency, hotel: offer.hotel, package: offer.packageId,
+    passengers: offer.passengerPrices.map(passenger => ({ kind: passenger.kind, age: passenger.age, count: passenger.count, fare: passenger.fare, ageRange: passenger.ageRange })),
+    conditions: offer.conditions,
+  });
+  const first = offers[0];
+  if (offers.some(offer => signature(offer) !== signature(first))) return null;
+  const money = (fare: OfferFare) => fare.kind === "free" ? "Үнэгүй" : fare.kind === "exact" ? formatMoney(fare.amount, first.currency)
+    : fare.kind === "range" ? `${formatMoney(fare.min, first.currency)}–${formatMoney(fare.max, first.currency)}` : null;
+  const labels = { adult: "том хүн", child: "хүүхэд", infant: "нярай" };
+  const parts = first.passengerPrices.map(passenger => `${passenger.count} ${labels[passenger.kind]}${passenger.ageRange ? ` /${passenger.ageRange}/` : ""} x ${money(passenger.fare)}`);
+  const qualifications = [first.hotel, first.packageId, ...first.conditions].filter(Boolean);
+  return `• ${trip.route_name}: ${money(first.total!)} (${parts.join(" + ")})${qualifications.length ? ` · ${qualifications.join(" · ")}` : ""}`;
 }
 
 export function buildAmbiguousPassengerTotalReply(
   text: string,
   trips: TravelTrip[],
+  now = new Date(),
 ): string | null {
   const counts = parsePassengerTotalRequest(text);
   if (!counts || trips.length < 2) return null;
   const lines = trips
     .slice(0, 8)
-    .map((trip) => formatPassengerTotalLine(trip, counts))
-    .filter((line): line is string => Boolean(line));
-  if (lines.length < 2) return null;
+    .map((trip) => formatPassengerTotalLine(trip, text, counts, now));
+  if (lines.length < 2 || lines.some(line => !line)) return null;
   return [
     "Энэ чиглэлээр хэд хэдэн хувилбар байгаа тул нийт үнийг тус бүрээр нь бодож өгье:",
     ...lines,
@@ -333,7 +316,7 @@ export function buildDiscountReply(
   const { best: bestRaw, ambiguous } = findBestTripMatch(text, trips);
   if (!bestRaw) {
     if (ambiguous.length) {
-      const totalReply = buildAmbiguousPassengerTotalReply(text, ambiguous);
+      const totalReply = buildAmbiguousPassengerTotalReply(text, ambiguous, now);
       if (totalReply) return totalReply;
       return buildAmbiguousTripReply(ambiguous);
     }
@@ -505,7 +488,7 @@ function buildTripInfoReply(rawTrip: TravelTrip, now = new Date()) {
   return lines.join("\n");
 }
 
-export function buildSeatsReply(text: string, trips: TravelTrip[]): string | null {
+export function buildSeatsReply(text: string, trips: TravelTrip[], now = new Date()): string | null {
   const departureReply = buildDepartureUnavailableReply(text, trips);
   if (departureReply) return departureReply;
   const { best, ambiguous } = findBestTripMatch(text, trips);
@@ -513,7 +496,7 @@ export function buildSeatsReply(text: string, trips: TravelTrip[]): string | nul
     const soldOut = buildSoldOutTripReply(text, trips);
     if (soldOut) return soldOut;
     if (ambiguous.length) {
-      const totalReply = buildAmbiguousPassengerTotalReply(text, ambiguous);
+      const totalReply = buildAmbiguousPassengerTotalReply(text, ambiguous, now);
       if (totalReply) return totalReply;
       return buildAmbiguousTripReply(ambiguous);
     }
@@ -1514,9 +1497,9 @@ export function buildStructuredTripReply(
   if (!asksStructured) {
     if (!routeOnlyCandidate?.best) {
       if (routeOnlyCandidate?.ambiguous?.length) {
-        const totalReply = buildAmbiguousPassengerTotalReply(currentLine, routeOnlyCandidate.ambiguous);
+        const totalReply = buildAmbiguousPassengerTotalReply(currentLine, routeOnlyCandidate.ambiguous, now);
         if (totalReply) return totalReply;
-        return buildAmbiguousTripReply(routeOnlyCandidate.ambiguous);
+        return buildAmbiguousTripReply(routeOnlyCandidate.ambiguous, undefined, { customerText: customerTurn(text) }, now);
       }
       const soldOut = buildSoldOutTripReply(text, trips);
       if (soldOut) return soldOut;
@@ -1557,9 +1540,9 @@ export function buildStructuredTripReply(
   }
   if (!bestRaw) {
     if (ambiguous.length) {
-      const totalReply = buildAmbiguousPassengerTotalReply(currentLine, ambiguous);
+      const totalReply = buildAmbiguousPassengerTotalReply(currentLine, ambiguous, now);
       if (totalReply) return totalReply;
-      return buildAmbiguousTripReply(ambiguous);
+      return buildAmbiguousTripReply(ambiguous, undefined, { customerText: customerTurn(text) }, now);
     }
     const soldOut = buildSoldOutTripReply(text, trips);
     if (soldOut) return soldOut;
@@ -1569,7 +1552,7 @@ export function buildStructuredTripReply(
   }
   let best = withFutureDepartureDates(bestRaw, now);
   const currentMonthDays = extractDatesFromText(currentLine);
-  if (currentMonthDays.length > 0) {
+  if (currentMonthDays.length > 0 && !textNamesTrip(text, best)) {
     const bestHasRequestedDate = currentMonthDays.some((md) =>
       Boolean(findPriceGroupByMonthDay(best, md.month, md.day, now)) ||
       tripHasDepartureMonthDay(best, md.month, md.day, now),

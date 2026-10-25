@@ -50,7 +50,7 @@ export async function sendPlatformMessage(
   token: string | null | undefined,
   pageId: string,
   igUserId?: string | null,
-  trace?: { requestId: string; correlationId: string; source: string },
+  trace?: { requestId: string; correlationId: string; source: string; deliveryKey?: string },
   options?: { allowFallback?: boolean },
 ) {
   const startedAt = Date.now();

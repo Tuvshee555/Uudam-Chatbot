@@ -289,6 +289,13 @@ export function resolveRequestedMonth(
     return buildMonth(entry.month, year);
   }
 
+  const wordMonths = ["нэг", "хоёр", "гурав", "дөрөв", "тав", "зургаа", "долоо", "найм", "ес", "арав", "арван нэг", "арван хоёр"];
+  const wordMonth = /(?<!\p{L})(арван\s+хоёр|арван\s+нэг|нэг|хоёр|гурав|дөрөв|тав|зургаа|долоо|найм|ес|арав)\s+сар(?:д|ын|ых|ынх)?(?!\p{L}|\s*\d)/iu.exec(text);
+  if (wordMonth && !/(?:дараагийн|ирэх|энэ)\s*$/iu.test(text.slice(0, wordMonth.index))) {
+    const month = wordMonths.indexOf(wordMonth[1].toLowerCase().replace(/\s+/g, " ")) + 1;
+    return buildMonth(month, month < today.month ? today.year + 1 : today.year);
+  }
+
   const match = /(?:^|[^\d])(\d{1,2})\s*(?:-?\s*р)?\s*(?:сард|сарын|сар|sard|sariin|sar)(?!\s*\d)/i.exec(text);
   if (!match) return null;
   const month = Number(match[1]);
@@ -299,6 +306,43 @@ export function resolveRequestedMonth(
     month,
     label: `${month} сар`,
   };
+}
+
+export type RequestedDepartureScope =
+  | { kind: "dates"; dates: string[] }
+  | { kind: "range"; startYmd: string; endYmd: string }
+  | { kind: "month"; year: number; month: number }
+  | { kind: "unsupported" };
+
+/** A comma-separated day list keeps its shared month; it is not a continuous range. */
+function sharedMonthDayList(text: string, now: Date): string[] | null {
+  const match = /(?<![\d./-])(\d{1,2})[./](\d{1,2}(?:\s*[,，]\s*\d{1,2})+)(?!\d)/u.exec(text.normalize("NFKC"));
+  if (!match) return null;
+  const month = Number(match[1]);
+  const days = match[2].split(/\s*[,，]\s*/).map(Number);
+  const dates = days.map(day => resolveRequestedDate(`${month} сарын ${day}`, now)?.ymd || null);
+  return dates.every((date): date is string => date !== null) ? [...new Set(dates)] : [];
+}
+
+/** The same customer calendar constraint is shared by routing and list presentation. */
+export function requestedDepartureScope(text: string, now = new Date()): RequestedDepartureScope | null {
+  const listedDays = sharedMonthDayList(text, now);
+  if (listedDays) return listedDays.length ? { kind: "dates", dates: listedDays } : { kind: "unsupported" };
+  const range = resolveRequestedRange(text, now);
+  if (range === "unsupported") return { kind: "unsupported" };
+  if (range) return { kind: "range", startYmd: range.startYmd, endYmd: range.endYmd };
+  const date = resolveRequestedDate(text, now);
+  if (date) return { kind: "dates", dates: [date.ymd] };
+  const month = resolveRequestedMonth(text, now);
+  return month ? { kind: "month", year: month.year, month: month.month } : null;
+}
+
+export function departureMatchesScope(ymd: string, scope: RequestedDepartureScope | null): boolean {
+  if (!scope) return true;
+  if (scope.kind === "unsupported") return false;
+  if (scope.kind === "dates") return scope.dates.includes(ymd);
+  if (scope.kind === "range") return ymd >= scope.startYmd && ymd <= scope.endYmd;
+  return ymd.startsWith(`${scope.year}-${String(scope.month).padStart(2, "0")}-`);
 }
 
 export function parseDepartureDateText(text: string, now = new Date()): string[] {
@@ -814,6 +858,11 @@ function buildRange(startYmd: string, endYmd: string): RequestedRange | null {
 
 export function resolveRequestedRange(text: string, now: Date): RequestedRange | "unsupported" | null {
   const normalized = text.normalize("NFKC");
+  // The calendar bounds of "at the end of the year" are not established by
+  // the customer's words. Never silently replace that preference with any
+  // upcoming date, or invent a month on the customer's behalf.
+  if (/(?:оны|жилийн|onii|jiliin)\s*(?:сүүл\p{L}*|suul\p{L}*)|(?:end\s+of\s+(?:the\s+)?year|year[ -]?end)/iu.test(normalized)) return "unsupported";
+  if (sharedMonthDayList(normalized, now)) return null;
   const weekPattern = new RegExp(MONTH_WEEK_RE.source, `${MONTH_WEEK_RE.flags}g`);
   const weeks = Array.from(normalized.matchAll(weekPattern));
   const week = weeks[0];
@@ -1039,6 +1088,13 @@ export function buildDepartureDateAvailabilityReply(input: {
 
   const range = resolveRequestedRange(input.userText, now);
   if (range === "unsupported") return "REFER";
+  const listedDays = sharedMonthDayList(input.userText, now);
+  if (listedDays) {
+    if (!listedDays.length) return "REFER";
+    const matches = listedDays.flatMap(ymd => findDepartureMatches(scopedTrips, ymd, now).map(match => ({ ymd, trip: match.trip })));
+    if (!matches.length) return "REFER";
+    return `Эдгээр өдрүүдэд гарах аяллууд:\n\n${formatMonthDepartureOptions(matches, fareOn)}`;
+  }
   if (range) {
     const rangeMatches = findRangeDepartures(scopedTrips, range.startYmd, range.endYmd, now);
     if (rangeMatches.length > 0) {

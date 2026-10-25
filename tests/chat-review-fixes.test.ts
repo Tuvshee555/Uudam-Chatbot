@@ -31,8 +31,7 @@ test("the page's contact and address buttons get the saved contact details, neve
   assert.ok(isAddressRequest("Манай хаяг  😊"));
   assert.match(buildContactReply("Холбоо барих дугаар  😊", contact)!, /1111 2222/);
   assert.match(buildContactReply("Манай хаяг  😊", contact)!, /Төв дүүрэг, 1-р байр/);
-  const noAddress = buildContactReply("Манай хаяг 😊", { ...contact, address: "" })!;
-  assert.match(noAddress, /зөвлөхөөс лавлана/);
+  assert.equal(buildContactReply("Манай хаяг 😊", { ...contact, address: "" }), null);
   assert.equal(buildContactReply("Зандан аялал хэд вэ", contact), null);
 });
 

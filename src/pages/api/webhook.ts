@@ -41,7 +41,7 @@ import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
-import { buildContactReply, contactSettingsOf, isRepeatOfLastReply } from "../../lib/contactReplies";
+import { buildContactReply, contactSettingsOf, isAddressRequest, isPhoneRequest, isRepeatOfLastReply } from "../../lib/contactReplies";
 import { fetchThreadMessages, latestStaffReplyAt, STAFF_TAKEOVER_MS } from "../../lib/staffTakeover";
 import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
@@ -132,7 +132,7 @@ async function handleMessage(
   pageId: string,
   igUserId?: string | null,
   token?: string | null,
-  trace?: { requestId: string; correlationId: string; source: string },
+  trace?: { requestId: string; correlationId: string; source: string; deliveryKey?: string },
   ensureLockHealthy?: () => Promise<void> | void,
 ) {
   const assertLockHealthy = async () => {
@@ -213,12 +213,54 @@ async function handleMessage(
     });
     return;
   }
-  // Re-engagement contact info: a customer coming back after 30+ min of
-  // silence gets the consultant contact message ONCE per 14 days (when the
-  // goodbye toggle is on) — and then their message is ALWAYS answered.
-  // The old behaviour (24h pause + early return) swallowed the returning
-  // customer's actual question and muted the bot for a day, which killed
-  // every conversation that naturally resumed hours later.
+  // Started now so the Meta round trip overlaps the pause lookups below.
+  const staffThread = platform === "facebook" && token
+    ? fetchThreadMessages({ token, senderId, timeoutMs: 4000 })
+    : Promise.resolve(null);
+  if (await isPagePaused(pageId)) {
+    await appendMessage(senderId, "user", text);
+    logInfo("webhook.page_pause_active", {
+      requestId: trace?.requestId,
+      correlationId: trace?.correlationId,
+      platform,
+      pageId,
+      senderHash: hashIdentifier(senderId),
+    });
+    return;
+  }
+  if (await isPaused(senderId)) {
+    await appendMessage(senderId, "user", text);
+    logInfo("webhook.sender_paused", {
+      requestId: trace?.requestId,
+      correlationId: trace?.correlationId,
+      platform,
+      senderHash: hashIdentifier(senderId),
+    });
+    return;
+  }
+  // Staff replies never reach this webhook as echoes, so read the thread: a
+  // staff member who wrote here in the last 3 days owns the conversation.
+  {
+    const thread = await staffThread;
+    const staffAt = thread ? latestStaffReplyAt({ messages: thread, pageId }) : null;
+    if (staffAt) {
+      await appendMessage(senderId, "user", text);
+      const remainingMs = staffAt.getTime() + STAFF_TAKEOVER_MS - Date.now();
+      await pauseBot(senderId, remainingMs, "operator_reply").catch(() => {});
+      logInfo("webhook.staff_takeover_detected", {
+        requestId: trace?.requestId,
+        correlationId: trace?.correlationId,
+        platform,
+        pageId,
+        senderHash: hashIdentifier(senderId),
+        staffReplyAt: staffAt.toISOString(),
+      });
+      recordCounter("webhook.staff_takeover_detected_total", 1, { platform });
+      return;
+    }
+  }
+  // A returning customer can receive the enabled contact message once per
+  // cooldown only while the bot owns the thread. Their question still runs.
   const INACTIVITY_MS = 30 * 60 * 1000;
   if (
     platform === "facebook" &&
@@ -252,49 +294,6 @@ async function handleMessage(
       }
     }
     // No pause, no return — processing continues so the message gets answered.
-  }
-  // Started now so the Meta round trip overlaps the pause lookups below.
-  const staffThread = platform === "facebook" && token
-    ? fetchThreadMessages({ token, senderId, timeoutMs: 4000 })
-    : Promise.resolve(null);
-  if (await isPagePaused(pageId)) {
-    logInfo("webhook.page_pause_active", {
-      requestId: trace?.requestId,
-      correlationId: trace?.correlationId,
-      platform,
-      pageId,
-      senderHash: hashIdentifier(senderId),
-    });
-    return;
-  }
-  if (await isPaused(senderId)) {
-    logInfo("webhook.sender_paused", {
-      requestId: trace?.requestId,
-      correlationId: trace?.correlationId,
-      platform,
-      senderHash: hashIdentifier(senderId),
-    });
-    return;
-  }
-  // Staff replies never reach this webhook as echoes, so read the thread: a
-  // staff member who wrote here in the last 3 days owns the conversation.
-  {
-    const thread = await staffThread;
-    const staffAt = thread ? latestStaffReplyAt({ messages: thread, pageId }) : null;
-    if (staffAt) {
-      const remainingMs = staffAt.getTime() + STAFF_TAKEOVER_MS - Date.now();
-      await pauseBot(senderId, remainingMs, "operator_reply").catch(() => {});
-      logInfo("webhook.staff_takeover_detected", {
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        platform,
-        pageId,
-        senderHash: hashIdentifier(senderId),
-        staffReplyAt: staffAt.toISOString(),
-      });
-      recordCounter("webhook.staff_takeover_detected_total", 1, { platform });
-      return;
-    }
   }
   await assertLockHealthy();
   // Read history and pre-routing identity evidence together.
@@ -342,19 +341,21 @@ async function handleMessage(
   // earlier turn. Freeze that evidence before routing: a newly selected model ID cannot
   // authorize its own answer. Unavailable grounding must remain retryable.
   let groundingTrips: TravelTrip[] | null = null;
-  const findUngroundedTrip = async (reply: string, catalogTripIds?: string[]): Promise<TravelTrip | null> => {
+  const getGroundingTrips = async (): Promise<TravelTrip[]> => {
     try {
       groundingTrips ||= (await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers);
-      return ungroundedTripInReply(reply, {
-        customerText: text, history, pendingTripIds: groundingPending?.candidateTripIds || [],
-        selectionTripId: groundingSelection?.tripId || null, catalogTripIds, trips: groundingTrips,
-      });
+      return groundingTrips;
     } catch (cause) {
       const error = new RetryableWebhookError("grounding_unavailable");
       error.cause = cause;
       throw error;
     }
   };
+  const findUngroundedTrip = async (reply: string, catalogTripIds?: string[]): Promise<TravelTrip | null> =>
+    ungroundedTripInReply(reply, {
+      customerText: text, history, pendingTripIds: groundingPending?.candidateTripIds || [],
+      selectionTripId: groundingSelection?.tripId || null, catalogTripIds, trips: await getGroundingTrips(),
+    });
   let currentSelection: TripSelection | null = null;
   const deliverFastPathReply = async (input: {
     reply: string;
@@ -365,13 +366,15 @@ async function handleMessage(
     afterDeliver?: () => Promise<void>;
     decision?: TripAnswerDecision;
     catalogTripIds?: string[];
+    verifyConfiguredFacts?: boolean;
   }) => {
     const presented = input.decision?.reply ?? presentAssistantReply({ reply: input.reply, userText: text,
       hasPriorReply: history.some((message) => message.role === "assistant"),
       phoneAlreadyRequested: Boolean(extractPhoneNumber(text)) || hasAskedForPhone(history) || history.some((message) => message.role === "user" && Boolean(extractPhoneNumber(message.text))),
     });
-    const reply = factualScope && !input.decision
-      ? verifyTripReply({ reply: presented, trips: factualScope, selection: currentSelection })
+    const verificationScope = input.verifyConfiguredFacts ? await getGroundingTrips() : factualScope;
+    const reply = verificationScope && !input.decision
+      ? verifyTripReply({ reply: presented, trips: verificationScope, selection: currentSelection })
       : presented;
     const missingData = input.decision ? input.decision.outcome === "handoff" : isReferReply(reply) || shouldSilenceNoDataReply(reply);
     const ungroundedTrip = missingData ? null : await findUngroundedTrip(reply, input.catalogTripIds);
@@ -408,7 +411,7 @@ async function handleMessage(
           : undefined;
       await pauseBot(senderId, noDataPauseMs, "no_data_handoff");
       if (input.counter) recordCounter(input.counter, 1, { platform });
-      return;
+      return false;
     }
     recordReplyPresentation({ reply, userText: text, path: "webhook_code", latencyMs: Date.now() - replyStartedAt });
     await assertLockHealthy();
@@ -425,12 +428,14 @@ async function handleMessage(
           await sendQuickReplies(senderId, reply, buttons, token, {
             requestId: trace?.requestId,
             correlationId: trace?.correlationId,
+            deliveryKey: trace?.deliveryKey,
             source: `api.webhook.${input.failTag}_buttons`,
           });
         } else {
           await sendIgQuickReplies(igUserId || "", senderId, reply, buttons, token, {
             requestId: trace?.requestId,
             correlationId: trace?.correlationId,
+            deliveryKey: trace?.deliveryKey,
             source: `api.webhook.${input.failTag}_buttons`,
           });
         }
@@ -489,6 +494,7 @@ async function handleMessage(
     await rememberTurn(noDataReply ? `${input.rememberSource}_handoff` : input.rememberSource);
     if (pauseAfterContactCapture) await pauseBookedCustomer(senderId);
     if (input.counter) recordCounter(input.counter, 1, { platform });
+    return true;
   };
 
   // Photo-only mode: send photos only when we have a real trip signal.
@@ -506,7 +512,7 @@ async function handleMessage(
       contextualUserText,
       trace,
       rememberTurn,
-      deliverReply: (reply, tag) => deliverFastPathReply({ reply, failTag: tag, rememberSource: `api.webhook.${tag}` }),
+      deliverReply: async (reply, tag) => { await deliverFastPathReply({ reply, failTag: tag, rememberSource: `api.webhook.${tag}` }); },
     });
     return;
   }
@@ -690,31 +696,26 @@ async function handleMessage(
     senderId,
     text,
     contextualUserText,
-    send: async (message, tag) => {
-      await assertLockHealthy();
-      const ok = await sendPlatformMessage(platform, senderId, message, token, pageId, igUserId, trace, { allowFallback: false });
-      if (!ok) throw new RetryableWebhookError(`delivery_failed:${tag}`);
-    },
+    send: (message, tag) => deliverFastPathReply({ reply: message, failTag: tag, rememberSource: `api.webhook.${tag}` }),
+    sendRecordsHistory: true,
     trace,
   };
   if (botSettings.handoff_enabled && (await continueBookingCollect(bookingCtx))) return;
   let flowAiPromptOverride: string | undefined;
+  let flowWithheld = false;
   const flowDocs: FlowDoc[] = Array.isArray(botSettings.extra?.flowDocs)
     ? (botSettings.extra.flowDocs as FlowDoc[])
     : [];
   function buildFlowEffects(): FlowEffects {
     return {
       sendText: async (msg: string) => {
-        await assertLockHealthy();
-        const ok = await sendPlatformMessage(
-          platform, senderId, msg, token, pageId, igUserId, trace, { allowFallback: false },
-        );
-        if (!ok) throw new RetryableWebhookError("delivery_failed:flow_message");
-        await appendMessage(senderId, "assistant", msg).catch(() => {});
-        await rememberTurn("api.webhook.flow_message");
+        if (flowWithheld) return;
+        flowWithheld = !(await deliverFastPathReply({ reply: msg, verifyConfiguredFacts: true,
+          failTag: "flow_message", rememberSource: "api.webhook.flow_message" }));
       },
       sendImage: token && platform === "facebook"
         ? async (url: string) => {
+            if (flowWithheld) return;
             await sendImageMessage(senderId, url, token, {
               requestId: trace?.requestId,
               correlationId: trace?.correlationId,
@@ -725,22 +726,20 @@ async function handleMessage(
         : undefined,
       sendQuickReplies: token && platform === "facebook"
         ? async (msg: string, labels: string[]) => {
-            await sendQuickReplies(senderId, msg, labels, token, {
-              requestId: trace?.requestId,
-              correlationId: trace?.correlationId,
-              source: "api.webhook.flow_quick",
-            });
-            await appendMessage(senderId, "assistant", msg).catch(() => {});
-            await rememberTurn("api.webhook.flow_quick");
+            if (flowWithheld) return;
+            flowWithheld = !(await deliverFastPathReply({ reply: msg, buttons: labels, verifyConfiguredFacts: true,
+              failTag: "flow_quick", rememberSource: "api.webhook.flow_quick" }));
           }
         : undefined,
       notifyOwner: async (msg: string) => {
+        if (flowWithheld) return;
         await notifyStaffOfLead(
           { kind: "handoff", platform, customerMessage: msg },
           { requestId: trace?.requestId, correlationId: trace?.correlationId, source: "api.webhook.flow" },
         ).catch(() => {});
       },
       captureLead: async (state: FlowRuntimeState) => {
+        if (flowWithheld) return;
         await ensureDurableLead({
           kind: "booking", platform, senderId,
           customerMessage: state.fields.message || text,
@@ -755,6 +754,10 @@ async function handleMessage(
     state: FlowRuntimeState,
     outcome: RunOutcome,
   ): Promise<{ handedToAi: boolean; systemPromptOverride?: string }> {
+    if (flowWithheld) {
+      await clearFlowState(senderId, platform);
+      return { handedToAi: false };
+    }
     if (outcome.status === "waiting_input") {
       await setFlowState(senderId, platform, state);
       return { handedToAi: false };
@@ -807,49 +810,26 @@ async function handleMessage(
     return;
   }
   const contactReply = buildContactReply(text, contactSettingsOf(botSettings.extra));
-  if (contactReply) {
+  if (contactReply || isPhoneRequest(text) || isAddressRequest(text)) {
     await assertLockHealthy();
     // The phone/address button tapped again within two minutes: it was just answered.
     // Three taps sent the same numbers three times in one minute (2026-10-18).
     const previousReply = await getLastReplyConsistent(sessionId);
-    if (isRepeatOfLastReply(previousReply, contactReply)) {
+    if (contactReply && isRepeatOfLastReply(previousReply, contactReply)) {
       try { await appendMessage(senderId, "user", text); } catch { /* non-critical */ }
       return;
     }
-    const delivered = await sendPlatformMessage(platform, senderId, contactReply, token, pageId, igUserId, trace, { allowFallback: false });
-    if (!delivered) throw new RetryableWebhookError("delivery_failed:contact_reply");
-    try {
-      await appendMessage(senderId, "user", text);
-      await appendMessage(senderId, "assistant", contactReply);
-      await setLastReplyConsistent(sessionId, contactReply);
-      await rememberTurn("api.webhook.contact_reply");
-    } catch { /* non-critical */ }
+    await appendMessage(senderId, "user", text);
+    await deliverFastPathReply({ reply: contactReply || "REFER", failTag: "contact_reply", rememberSource: "api.webhook.contact_reply" });
     return;
   }
   if (
     botSettings.quick_info_reply &&
     isQuickInfoKeyword(text, botSettings.quick_info_keywords)
   ) {
-    await assertLockHealthy();
-    const delivered = await sendPlatformMessage(
-      platform,
-      senderId,
-      botSettings.quick_info_reply,
-      token,
-      pageId,
-      igUserId,
-      trace,
-      { allowFallback: false },
-    );
-    if (!delivered) {
-      throw new RetryableWebhookError("delivery_failed:quick_info_keyword");
-    }
-    try {
-      await appendMessage(senderId, "user", text);
-      await appendMessage(senderId, "assistant", botSettings.quick_info_reply);
-      await setLastReplyConsistent(sessionId, botSettings.quick_info_reply);
-      await rememberTurn("api.webhook.quick_info");
-    } catch { /* non-critical */ }
+    await appendMessage(senderId, "user", text);
+    await deliverFastPathReply({ reply: botSettings.quick_info_reply, verifyConfiguredFacts: true,
+      failTag: "quick_info_keyword", rememberSource: "api.webhook.quick_info" });
     return;
   }
   // ── Phone-number lead capture ───────────────────────────────────────────────
@@ -903,27 +883,9 @@ async function handleMessage(
     const matchedRule = matchFlow(text, flowRules);
     if (matchedRule) {
       recordCounter("webhook.flow_rule_matched_total", 1, { platform });
-      await assertLockHealthy();
-      const delivered = await sendPlatformMessage(
-        platform,
-        senderId,
-        matchedRule.reply,
-        token,
-        pageId,
-        igUserId,
-        trace,
-        { allowFallback: false },
-      );
-      if (!delivered) {
-        throw new RetryableWebhookError("delivery_failed:flow_rule");
-      }
-      try {
-        await appendMessage(senderId, "user", text);
-        await appendMessage(senderId, "assistant", matchedRule.reply);
-        await setLastReplyConsistent(sessionId, matchedRule.reply);
-        await rememberTurn("api.webhook.flow_rule");
-      } catch {
-      }
+      await appendMessage(senderId, "user", text);
+      await deliverFastPathReply({ reply: matchedRule.reply, buttons: matchedRule.buttons, verifyConfiguredFacts: true,
+        failTag: "flow_rule", rememberSource: "api.webhook.flow_rule" });
       return;
     }
   }
@@ -1067,6 +1029,12 @@ async function handleMessage(
     }
   }
 
+  if ((await getRouted()).unsupportedRequest) {
+    await deliverFastPathReply({ reply: "REFER", failTag: "unsupported_request",
+      rememberSource: "api.webhook.unsupported_request" });
+    return;
+  }
+
   // Compare questions intentionally mention multiple destinations/products.
   // Answer them as comparisons before scoped clarification narrows the message
   // to one destination family and asks the wrong follow-up.
@@ -1141,9 +1109,9 @@ async function handleMessage(
           : buildAmbiguousTripReply(
               routed.scopedClarify,
               routed.scopedClarifyNote,
-              { askToChoose: !routed.informationalAlternatives },
+              { askToChoose: !routed.informationalAlternatives, customerText: text },
             )
-        : totalReply || buildAmbiguousTripReply(routed.scopedClarify);
+        : totalReply || buildAmbiguousTripReply(routed.scopedClarify, undefined, { customerText: text });
       await deliverFastPathReply({
         reply: enforceWebsiteForPayment(sanitizeAssistantReply(clarifyBody)),
         failTag: "scoped_clarify",
@@ -1268,7 +1236,7 @@ async function handleMessage(
         const totalReply = buildAmbiguousPassengerTotalReply(fastPathText, resolution.candidates);
         await deliverFastPathReply({
           reply: enforceWebsiteForPayment(
-            sanitizeAssistantReply(totalReply || buildAmbiguousTripReply(resolution.candidates)),
+            sanitizeAssistantReply(totalReply || buildAmbiguousTripReply(resolution.candidates, undefined, { customerText: text })),
           ),
           failTag: "structured_clarify",
           catalogTripIds: resolution.candidates.map(trip => trip.id),
@@ -1932,12 +1900,14 @@ async function handleMessage(
         await sendQuickReplies(senderId, safeReply, replyButtons, token, {
           requestId: trace?.requestId,
           correlationId: trace?.correlationId,
+          deliveryKey: trace?.deliveryKey,
           source: "api.webhook.reply_buttons",
         });
       } else {
         await sendIgQuickReplies(igUserId || "", senderId, safeReply, replyButtons, token, {
           requestId: trace?.requestId,
           correlationId: trace?.correlationId,
+          deliveryKey: trace?.deliveryKey,
           source: "api.webhook.reply_buttons",
         });
       }
@@ -2029,6 +1999,7 @@ async function processConversationWithPendingQueue(
               requestId: current.trace?.requestId || "",
               correlationId: current.trace?.correlationId || "",
               source: "api.webhook",
+              deliveryKey: current.eventKey,
             },
             ensureLockHealthy,
           ),

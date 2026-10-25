@@ -313,21 +313,22 @@ export async function handleAttachmentOnlyMessage(input: {
   trace?: { requestId: string; correlationId: string };
 }) {
   const { platform, senderId, pageId, token, attachments, trace } = input;
-  if (await isPagePaused(pageId)) return;
-  if (await isPaused(senderId)) return;
-
   const kinds = Array.from(
     new Set(attachments.map((a) => ATTACHMENT_LABELS[a?.type || ""] || "файл")),
   );
-  const storedImages = attachments
-    .filter((a) => a?.type === "image" && typeof a?.payload?.url === "string")
-    .map((a) => ({ type: "image" as const, url: String(a.payload?.url) }));
+  const storedAttachments = attachments
+    .filter((a) => typeof a?.payload?.url === "string")
+    .map((a) => ({ type: a.type === "image" ? "image" as const : "file" as const, url: String(a.payload?.url) }));
   await appendMessage(
     senderId,
     "user",
     `[Хэрэглэгч ${kinds.join(", ")} илгээсэн]`,
-    storedImages,
-  ).catch(() => {});
+    storedAttachments,
+  );
+  // Staff still need the customer's evidence while the bot is muted. Store
+  // it before the pause check; keep automated extraction and replies paused.
+  if (await isPagePaused(pageId)) return;
+  if (await isPaused(senderId)) return;
   // Document pipeline runs in the background — the customer gets the ack
   // immediately, then a category-aware confirmation once classification lands.
   scheduleAttachmentDocumentPipeline({

@@ -34,12 +34,11 @@ export function isAddressRequest(text: string): boolean {
 export function buildContactReply(text: string, contact: ContactSettings): string | null {
   const phoneLine = contact.phones ? `📞 ${contact.phones}` : "";
   if (isPhoneRequest(text)) {
-    return phoneLine ? `Манай утасны дугаарууд:\n${phoneLine}\n\nТа утасны дугаараа үлдээвэл манай зөвлөх тантай холбогдоно 😊` : null;
+    return phoneLine ? `Манай утасны дугаарууд:\n${phoneLine}` : null;
   }
   if (isAddressRequest(text)) {
     if (contact.address) return [`📍 Манай оффис: ${contact.address}`, phoneLine].filter(Boolean).join("\n");
-    // No address on file: say where to ask instead of letting the model invent one.
-    return phoneLine ? `Оффисын хаягийг манай зөвлөхөөс лавлана уу:\n${phoneLine}` : null;
+    return null;
   }
   return null;
 }
