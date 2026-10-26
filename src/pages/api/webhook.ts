@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { askOpenAI } from "../../lib/openaiProvider";
 import { askOpenAIChatParts } from "../../lib/openaiFallback";
 import { matchFlow, findTriggeredFlow, getFlowState, setFlowState, clearFlowState, newRuntimeState, runFlowFrom, resumeFlowWithInput, type FlowRule, type FlowDoc, type FlowEffects, type FlowRuntimeState, type RunOutcome, } from "../../lib/flowEngine";
-import { BOT_MESSAGE_METADATA, replyToComment, sendImageMessage, sendQuickReplies, sendTextMessage } from "../../lib/messenger";
+import { BOT_MESSAGE_METADATA, replyToComment, sendImageMessage, sendQuickReplies } from "../../lib/messenger";
 import { sendQuickReplies as sendIgQuickReplies } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { getClarificationState, setClarificationState } from "../../lib/clarificationState";
@@ -259,42 +259,6 @@ async function handleMessage(
       return;
     }
   }
-  // A returning customer can receive the enabled contact message once per
-  // cooldown only while the bot owns the thread. Their question still runs.
-  const INACTIVITY_MS = 30 * 60 * 1000;
-  if (
-    platform === "facebook" &&
-    token &&
-    senderMsgCount > 1 &&
-    prevMsgAt &&
-    Date.now() - new Date(prevMsgAt).getTime() >= INACTIVITY_MS
-  ) {
-    const shouldSendGoodbye = await dbClaimGoodbye(senderId);
-    if (shouldSendGoodbye) {
-      try {
-        const goodbyeSettings = await getTravelBotSettings();
-        if (resolveGoodbyeEnabled(goodbyeSettings.extra)) {
-          await sendTextMessage(senderId, resolveGoodbyeContactText(goodbyeSettings.extra), token, {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            source: "api.webhook.inactivity_goodbye",
-          });
-          recordCounter("webhook.reengagement_contact_sent_total", 1, { platform });
-        }
-      } catch (error) {
-        logWarn("webhook.inactivity_goodbye_failed", {
-          requestId: trace?.requestId,
-          correlationId: trace?.correlationId,
-          platform,
-          pageId,
-          senderHash: hashIdentifier(senderId),
-          classification: classifyError(error),
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    // No pause, no return — processing continues so the message gets answered.
-  }
   await assertLockHealthy();
   // Read history and pre-routing identity evidence together.
   const replyStartedAt = Date.now();
@@ -372,7 +336,8 @@ async function handleMessage(
       hasPriorReply: history.some((message) => message.role === "assistant"),
       phoneAlreadyRequested: Boolean(extractPhoneNumber(text)) || hasAskedForPhone(history) || history.some((message) => message.role === "user" && Boolean(extractPhoneNumber(message.text))),
     });
-    const verificationScope = input.verifyConfiguredFacts ? await getGroundingTrips() : factualScope;
+    const verificationScope = input.verifyConfiguredFacts ? await getGroundingTrips()
+      : input.catalogTripIds ? (await getGroundingTrips()).filter(trip => input.catalogTripIds!.includes(trip.id)) : factualScope;
     const reply = verificationScope && !input.decision
       ? verifyTripReply({ reply: presented, trips: verificationScope, selection: currentSelection })
       : presented;
@@ -502,6 +467,22 @@ async function handleMessage(
   // behavior lives in webhookPhotoOnly.ts (extracted for the 2,000-line cap).
   const botSettings = await getTravelBotSettings();
   const botControl = await getBotControl();
+  // Reengagement copy is editable text, so verify it through the same boundary
+  // before answering the current question. A withheld message hands off once.
+  const INACTIVITY_MS = 30 * 60 * 1000;
+  if (platform === "facebook" && token && senderMsgCount > 1 && prevMsgAt
+    && Date.now() - new Date(prevMsgAt).getTime() >= INACTIVITY_MS
+    && resolveGoodbyeEnabled(botSettings.extra) && await dbClaimGoodbye(senderId)) {
+    const delivered = await deliverFastPathReply({
+      reply: resolveGoodbyeContactText(botSettings.extra), verifyConfiguredFacts: true,
+      failTag: "inactivity_goodbye", rememberSource: "api.webhook.inactivity_goodbye",
+    });
+    if (!delivered) {
+      await appendMessage(senderId, "user", text);
+      return;
+    }
+    recordCounter("webhook.reengagement_contact_sent_total", 1, { platform });
+  }
   if (botControl.photo_only && platform === "facebook" && token) {
     await handlePhotoOnlyMode({
       platform,
@@ -1109,9 +1090,9 @@ async function handleMessage(
           : buildAmbiguousTripReply(
               routed.scopedClarify,
               routed.scopedClarifyNote,
-              { askToChoose: !routed.informationalAlternatives, customerText: text },
+              { askToChoose: !routed.informationalAlternatives, customerText: routed.requestText || text },
             )
-        : totalReply || buildAmbiguousTripReply(routed.scopedClarify, undefined, { customerText: text });
+        : totalReply || buildAmbiguousTripReply(routed.scopedClarify, undefined, { customerText: routed.requestText || text });
       await deliverFastPathReply({
         reply: enforceWebsiteForPayment(sanitizeAssistantReply(clarifyBody)),
         failTag: "scoped_clarify",

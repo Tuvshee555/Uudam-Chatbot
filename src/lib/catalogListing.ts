@@ -24,9 +24,9 @@ import {
   queryWantsLandOnlyEnhanced,
   tripIsCruise,
 } from "./travelFastPaths";
-import { normalizeTripOffers, summarizeTripOfferPrices } from "./tripOffers";
+import { normalizeTripOffers, resolveTripOfferFareCard, summarizeTripOfferPrices } from "./tripOffers";
 import { customerDate } from "./customerDate";
-import { hasCalendarWeekWindow } from "./travelDates";
+import { departureMatchesScope, hasCalendarWeekWindow, requestedDepartureScope, type RequestedDepartureScope } from "./travelDates";
 import type { TravelTrip } from "./travelTypes";
 
 const WHOLE_CATALOG_RE =
@@ -53,11 +53,11 @@ function soonestKey(trip: TravelTrip, now: Date): string {
   return nextDepartures(trip, now)[0] || "9999";
 }
 
-function priceDetail(trip: TravelTrip, now: Date): string {
+function priceDetail(trip: TravelTrip, now: Date, date?: string): string {
   if (!nextDepartures(trip, now).length) return "";
-  const result = summarizeTripOfferPrices(trip, {}, now);
+  const result = date ? resolveTripOfferFareCard(trip, { date, passengers: [] }, now) : summarizeTripOfferPrices(trip, {}, now);
   if (result.status !== "ready") return "";
-  const { summary } = result;
+  const summary = "summary" in result ? result.summary : result.offer;
   const fare = summary.prices.adult;
   if (!fare || fare.kind === "unknown") return "";
   const money = (value: number) => formatPassengerMoney(value, summary.currency);
@@ -153,7 +153,7 @@ const SEASONS: Array<{ re: RegExp; months: number[]; heading: string }> = [
   { re: /наадм/u, months: [7], heading: "Наадмын үеэр (7 сард) гарах аяллууд" },
 ];
 
-type When = { months: number[]; heading: string; soonest?: boolean; span?: [string, string] };
+type When = { months: number[]; heading: string; soonest?: boolean; span?: [string, string]; scope?: RequestedDepartureScope };
 
 function askedWhen(normalized: string, now: Date, raw = normalized): When | null {
   const span = askedSpan(raw, now);
@@ -247,20 +247,22 @@ function inMonths(dates: string[], months: number[], now: Date): string[] {
   return dates.filter((date) => wanted.has(date.slice(0, 7)));
 }
 
-function whenListing(pool: TravelTrip[], when: When, now: Date): Listing | null {
+function whenListing(pool: TravelTrip[], when: When, now: Date, limit = MAX_DETAILED): Listing | null {
   const rows = pool.map((trip) => {
     const all = bookableDates(trip, now);
-    const dates = when.span ? all.filter((date) => date >= when.span![0] && date <= when.span![1]) : when.soonest ? all : inMonths(all, when.months, now);
+    const dates = when.scope ? all.filter(date => departureMatchesScope(date, when.scope!))
+      : when.span ? all.filter((date) => date >= when.span![0] && date <= when.span![1]) : when.soonest ? all : inMonths(all, when.months, now);
     return { trip, dates };
   }).filter((row) => row.dates.length > 0).sort((a, b) => a.dates[0].localeCompare(b.dates[0]));
   if (!rows.length) {
+    if (when.scope) return { reply: "REFER", listed: [], authoritative: true };
     return { reply: `${when.heading.replace(/ гарах аяллууд$/, " гарах аялал")} одоогоор алга байна. Бусад хуваарийг эндээс харна уу: ${BOOKING_WEBSITE_URL}`, listed: [], authoritative: true };
   }
   const listed: TravelTrip[] = [];
   const lines = [`${when.heading} 😊`];
   const footer = (count: number) => [...(rows.length > count ? ["", `Өөр ${rows.length - count} аялал бий. Бүгдийг эндээс харна уу: ${BOOKING_WEBSITE_URL}`] : []), "", AMBIGUOUS_REPLY_MARKER];
-  for (const { trip, dates } of rows.slice(0, MAX_DETAILED)) {
-    const price = priceDetail(trip, now);
+  for (const { trip, dates } of rows.slice(0, limit)) {
+    const price = priceDetail(trip, now, when.scope && dates.length === 1 ? dates[0] : undefined);
     const line = `• ${trip.route_name} — ${[trip.duration_text?.trim(), price, `гарах: ${dates.slice(0, when.soonest ? 2 : 4).map((date) => customerDate(date, now)).join(", ")}`].filter(Boolean).join(" · ")}`;
     if ([...lines, line, ...footer(listed.length + 1)].join("\n").length > MAX_MESSAGE_CHARS) break;
     lines.push(line);
@@ -360,6 +362,18 @@ export function buildCatalogListingReply(rawIntentText: string, trips: TravelTri
     queryWantsDirectFlight(intentText) ||
     queryWantsLandFlightCombo(intentText) ||
     queryWantsLandOnlyEnhanced(intentText);
+  // A category request can also name exact departure days. Apply the shared
+  // calendar scope before limiting options, and print only those departures.
+  const departureScope = requestedDepartureScope(rawIntentText, now);
+  if (departureScope && (wantsCategory || wantsAll)) {
+    const categoryPool = wantsCategory
+      ? wantsCruise ? active.filter(tripIsCruise) : filterTripsByTransportIntent(intentText, active)
+      : active;
+    const destinations = namedDestinations(intentText, active);
+    const pool = destinations.length ? categoryPool.filter(trip => nameHasAny(trip, destinations)) : categoryPool;
+    return whenListing(pool, { months: [], heading: wantsCategory ? categoryHeading(intentText) : "Манай аяллууд", scope: departureScope },
+      now, full ? MAX_DETAILED : MAX_COMPACT);
+  }
   const quiet = namedDestinations(intentText, active).length === 0;
   const when = quiet ? askedWhen(normalized, now, rawIntentText) : null;
   if (when) {

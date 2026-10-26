@@ -46,6 +46,7 @@ import { buildTripRequest, mergeTripSelection, type TripSelection } from "./trip
 import { getTripSelection, setTripSelection } from "./tripSelectionState";
 import { websiteTripLinksInText } from "./bookingWebsite";
 import { upcomingDepartures } from "./tripFareBlock";
+import { tripFromRecentMenu, tripMenuQuestionIndex } from "./tripMenuChoice";
 
 /**
  * Did the customer tap one of OUR quick-reply buttons?
@@ -240,15 +241,31 @@ export async function routeFastPathText(input: {
   const now = input.now || new Date();
   const numericChoice = parseNumberedChoice(text);
   let requestText = text;
-  if (numericChoice && !numericChoice.namePrefix && input.history) {
+  if (numericChoice && input.history) {
     // Choosing an option completes the pending question; the digit does not
     // replace its requested facts. Use only the question before the latest
     // actual trip menu, never arbitrary older assistant prose.
     const lastReplyIndex = input.history.findLastIndex(message => message.role === "assistant");
     if (lastReplyIndex >= 0 && isTripChoiceQuestion(input.history[lastReplyIndex].text)) {
       const original = input.history.slice(0, lastReplyIndex).findLast(message => message.role === "user");
-      if (original && !parseNumberedChoice(original.text)) requestText = original.text;
+      const menu = input.history[lastReplyIndex].text;
+      const belongsToMenu = !numericChoice.namePrefix || tripsNamedByPrefix(numericChoice.namePrefix, trips)
+        .some(trip => looseNorm(menu).includes(looseNorm(trip.route_name)));
+      if (belongsToMenu && original && !parseNumberedChoice(original.text)) requestText = original.text;
     }
+  }
+  // A destination supplied in answer to a calendar-only question completes
+  // that request. Keep its date until the customer supplies a new one.
+  if (!numericChoice && input.history && !requestedDepartureScope(intentTextOf(text, trips), now)) {
+    const lastReplyIndex = input.history.findLastIndex(message => message.role === "assistant");
+    const reply = input.history[lastReplyIndex]?.text || "";
+    const original = input.history.slice(0, lastReplyIndex).findLast(message => message.role === "user");
+    const current = resolveTripFromUserMessage(text, trips, { allowLooseFallback: false });
+    const displaysTripList = /(?:^|\n)\s*[•*-]\s+/u.test(reply)
+      && trips.filter(trip => looseNorm(reply).includes(looseNorm(trip.route_name))).length > 1;
+    if (original && (displaysTripList || /(?:аль|ямар)\s+(?:аялл?|чиглэл)|which\s+(?:trip|destination)/iu.test(reply))
+      && calendarWordsAreContextOnly(original.text) && requestedDepartureScope(original.text, now)
+      && current.status !== "not_found") requestText = `${original.text}\n${text}`;
   }
   const storedSelection = await getTripSelection(senderId);
   const previousSelection = storedSelection && trips.some((trip) => trip.id === storedSelection.tripId)
@@ -277,6 +294,12 @@ export async function routeFastPathText(input: {
       return { matchText: text, scopedClarify: linked.candidates };
     }
     return { matchText: markNoTrip(text), scopedClarify: null };
+  }
+  if (tripMenuQuestionIndex(text) !== null) {
+    const explicit = resolve(text, trips);
+    if (explicit.status === "verified") return chose(explicit.trip);
+    const trip = explicit.status === "ambiguous" ? null : tripFromRecentMenu(text, input.history || [], trips);
+    return trip ? chose(trip) : { matchText: markNoTrip(text), scopedClarify: null, unsupportedRequest: true };
   }
   const tappedOwnButton = isOwnButtonLabel(text);
   const choice = parseNumberedChoice(text);
@@ -323,7 +346,8 @@ export async function routeFastPathText(input: {
   // Read a calendar constraint before a model or an attribute scorer can
   // replace it with a generic destination menu. Keep the source trips intact;
   // presentation uses the same constraint to select their displayed dates.
-  const calendarScope = !tappedOwnButton ? requestedDepartureScope(intentTextOf(text, trips), now) : null;
+  const calendarScope = !tappedOwnButton && !(numericChoice && requestText !== text)
+    ? requestedDepartureScope(intentTextOf(requestText, trips), now) : null;
   if (calendarScope) {
     const current = resolve(text, trips);
     const named = current.status === "verified" ? [current.trip]
@@ -337,7 +361,8 @@ export async function routeFastPathText(input: {
       return { matchText: markNoTrip(text), scopedClarify: null, unsupportedRequest: true };
     }
     if (calendarScope.kind === "unsupported") {
-      return { matchText: text, scopedClarify: scope.length ? scope : null, unavailableDateWithinScope: true };
+      return { matchText: requestText, scopedClarify: scope.length ? scope : null, unavailableDateWithinScope: true,
+        unsupportedRequest: true, ...(requestText !== text ? { requestText } : {}) };
     }
     if (scope.length) {
       const ofKind = filterTripsByTransportIntent(text, scope);
@@ -346,7 +371,13 @@ export async function routeFastPathText(input: {
       if (matching.length === 1) return chose(matching[0]);
       const candidates = matching.length ? matching : scope;
       await setClarificationState(senderId, candidates.map(trip => trip.id));
-      return { matchText: text, scopedClarify: candidates, unavailableDateWithinScope: matching.length === 0 };
+      return { matchText: requestText, scopedClarify: candidates, unavailableDateWithinScope: matching.length === 0,
+        ...(requestText !== text ? { requestText, ...(matching.length ? {} : { unsupportedRequest: true }) } : {}) };
+    }
+    if (calendarScope.kind === "dates" && hasDepartureDateAvailabilityIntent(text, now)
+      && !filterTripsByTransportIntent(text, trips).some(trip => upcomingDepartures(trip, now)
+      .some(date => departureMatchesScope(date, calendarScope)))) {
+      return { matchText: markNoTrip(text), scopedClarify: null, unsupportedRequest: true };
     }
   }
 

@@ -3,11 +3,11 @@ import type { TripSelection } from "./tripRequest";
 import { guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, isReferReply, replySectionTrips } from "./reply";
 import { tripDurationDays } from "./travelFastPathsSearch";
 import { tripTransport, isTripOfferPrice } from "./tripFacts";
-import { normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard } from "./tripOffers";
+import { normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard, type PassengerKind } from "./tripOffers";
 import { parseDepartureDateText } from "./travelDates";
 import { departureAvailability, departureIsClosed } from "./departureAvailability";
 
-const AMOUNT = /(\d{1,3}(?:[.,]\d{3})+|\d{4,})\s*(?:₮|төгрөг|MNT)/giu;
+const AMOUNT = /(\d{1,3}(?:[.,]\d{3})+|\d+)\s*(?:₮|төгрөг|MNT)(?![\p{L}])/giu;
 
 /** "2-12 нас" / "2 – 12 нас" → "2-12нас"; "" when there is no band. */
 function bandKey(text: string): string {
@@ -36,8 +36,11 @@ function tripOwnText(trip: TravelTrip): string {
  * out of the checks; every other line is checked as before.
  */
 function withoutOwnText(reply: string, trips: TravelTrip[]): string {
-  const own = trips.map(tripOwnText).join(" | ");
+  let active = trips;
   return reply.split(/\r?\n/).filter((line) => {
+    const named = replySectionTrips(line, trips);
+    if (named.length) active = named;
+    const own = active.map(tripOwnText).join(" | ");
     const core = squash(line.replace(/^\s*[•\-*]\s*/, "").replace(/^\d{1,2}-р өдөр:\s*[^—]*—\s*/, ""));
     // Fare lines are always checked: a stale price in the program text must never pass as a fare.
     return core.length < 12 || FARE_LINE.test(line) || !own.includes(core);
@@ -48,7 +51,8 @@ function withoutOwnText(reply: string, trips: TravelTrip[]): string {
  * "Нийт: 7,670,000₮" under "Том хүн x 2: 2,690,000₮" and "Хүүхэд x 1: 2,290,000₮" is arithmetic on
  * fares that are checked line by line; the price guard does not add up, so it read the total as an
  * unknown fare and the party-total answer became silence. A total that equals the sum of the
- * per-person lines above it is dropped from the check; any other total is still checked.
+ * per-person lines above it is dropped from the check; a conflicting total is rejected even
+ * when that number happens to match one of the trip's unit fares.
  */
 function withoutAddedUpTotals(text: string): string {
   let sum = 0;
@@ -58,6 +62,7 @@ function withoutAddedUpTotals(text: string): string {
     if (each) sum += Number(each[1]) * Number(each[2].replace(/[.,]/g, ""));
     const total = /^\s*нийт\s*:\s*([\d.,]+)\s*₮\s*$/i.exec(line);
     if (total && sum > 0 && Number(total[1].replace(/[.,]/g, "")) === sum) { sum = 0; continue; }
+    if (total && sum > 0) return "REFER";
     if (total) sum = 0;
     out.push(line);
   }
@@ -94,6 +99,7 @@ export function verifyTripReply(input: {
   let active = trips;
   let date = selection?.date || null;
   let hotel = selection?.hotel || null;
+  let packageId = selection?.package || null;
   // A header listing several departures ("12/19, 12/22:") scopes the fare lines under it.
   let dateSet: string[] = [];
   for (const line of checked.split(/\r?\n|[|;]/)) {
@@ -102,8 +108,10 @@ export function verifyTripReply(input: {
       active = named;
       date = selection?.tripId === named[0].id ? selection.date : null;
       hotel = selection?.tripId === named[0].id ? selection.hotel : null;
+      packageId = selection?.tripId === named[0].id ? selection.package || null : null;
       dateSet = [];
     }
+    if (isReferReply(guardInventedBookingTerms(line, "", active))) return "REFER";
     const dates = parseDepartureDateText(line, now);
     if (dates.length === 1) { date = dates[0]; dateSet = []; } else if (dates.length > 1) { date = null; dateSet = dates; }
     // Longest name first: "Lotus + Pearl" must not be read as "Lotus" (same rule as mentionedOfferHotel).
@@ -111,9 +119,15 @@ export function verifyTripReply(input: {
       .filter((value): value is string => Boolean(value)).sort((a, b) => b.length - a.length);
     const mentioned = hotels.find((value) => line.toLowerCase().includes(value.toLowerCase()));
     if (mentioned) hotel = mentioned;
+    const packages = active.flatMap((trip) => normalizeTripOffers(trip, now).map((offer) => offer.packageId))
+      .filter((value): value is string => Boolean(value)).sort((a, b) => b.length - a.length);
+    const mentionedPackage = packages.find((value) => line.toLowerCase().includes(value.toLowerCase()));
+    if (mentionedPackage) packageId = mentionedPackage;
     for (const fragment of line.split(/(?=том\s*хүн|насанд\s*хүрэгч|adult|нярай|infant|хүүх(?:эд|дийн)|child)/i)) {
       const kind = /том\s*хүн|насанд\s*хүрэгч|adult/i.test(fragment) ? "adult" : /нярай|infant/i.test(fragment) ? "infant" : /хүүх(?:эд|дийн)|child/i.test(fragment) ? "child" : null;
       const amounts = [...fragment.matchAll(AMOUNT)].map((match) => Number(match[1].replace(/[.,]/g, "")));
+      const freeFare = /^(?:том\s*хүн|насанд\s*хүрэгч|adults?|нярай|infants?|хүүх(?:эд|дийн)|child(?:ren)?)(?:\s*(?:\([^)]*\)|\/[^/]*\/))?\s*(?:x\s*\d+)?\s*:?\s*(?:үнэгүй|free)\s*[.!]?\s*$/iu.test(fragment.trim());
+      if (kind && freeFare) amounts.push(0);
       // "10 сарын 26" is a date ("the 26th of month 10"), never a 10-month-old.
       const ageMatch = /(?<![\d.,])(\d{1,2}(?:\.\d+)?)\s*(?:[-–]\s*(\d{1,2})\s*)?(?:нас|настай|years?\s*old|сар(?!ын)|months?)/i.exec(fragment);
       // "Хүүхэд /2-11 нас/" labels the fare's band. Its LOWER end read as a
@@ -125,14 +139,14 @@ export function verifyTripReply(input: {
       // 3,250,000₮") is that fare. Turning the band into one age broke wherever a
       // trip's bands touch ("2-12" next to "12+", "0-2" next to "2-8").
       const printedBand = ageMatch?.[2] ? bandKey(ageMatch[0]) : null;
-      if (kind && amounts.length) {
+      if ((kind || packageId || amounts.some((amount) => amount < 1_000)) && amounts.length) {
         for (const amount of amounts) {
           // Asked of the resolver, so a hotel row that inherits the trip's infant
           // fare is judged exactly as the card that printed it was built.
           const ownFare = printedBand !== null && active.some((trip) => {
             const departures = date ? [date] : dateSet.length ? dateSet : [...new Set(normalizeTripOffers(trip, now).flatMap((offer) => offer.dates))];
             return departures.some((departure) => {
-              const selection = { date: departure, ...(hotel ? { hotel } : {}) };
+              const selection = { date: departure, ...(hotel ? { hotel } : {}), ...(packageId ? { packageId } : {}) };
               const first = resolveTripOfferFareCard(trip, selection, now);
               // A hotel sold as several packages prints one card per package.
               const cards = first.status === "needs_selection" && first.fields.includes("package")
@@ -143,13 +157,22 @@ export function verifyTripReply(input: {
           });
           if (ownFare) continue;
           const supported = active.some((trip) => {
-            const possibleDates = date ? [date] : dateSet.length ? dateSet : [...new Set(normalizeTripOffers(trip, now).flatMap((offer) => offer.dates))];
+            const offers = normalizeTripOffers(trip, now);
+            const possibleDates = date ? [date] : dateSet.length ? dateSet : [...new Set(offers.flatMap((offer) => offer.dates))];
+            if (!kind && offers.some((offer) => (!offer.discount || offer.discount.active)
+              && (!hotel || !offer.hotel || offer.hotel === hotel)
+              && (!packageId || !offer.packageId || offer.packageId === packageId)
+              && (!offer.dateScoped || possibleDates.some((departure) => offer.dates.includes(departure)))
+              && offer.supplementalFares.some(({ fare }) => fare.kind === "range" ? amount >= fare.min && amount <= fare.max : fare.kind !== "unknown" && fare.amount === amount))) return true;
             if (!possibleDates.length) {
-              return normalizeTripOffers(trip, now).some((offer) => (!hotel || offer.hotel === hotel) && offer.fares.some((fare) => fare.kind === kind && (fare.fare.kind === "exact" || fare.fare.kind === "free") && fare.fare.amount === amount));
+              return offers.some((offer) => (!hotel || offer.hotel === hotel)
+                && (!packageId || offer.packageId === packageId)
+                && offer.fares.some((fare) => (!kind || fare.kind === kind) && (fare.fare.kind === "exact" || fare.fare.kind === "free") && fare.fare.amount === amount));
             }
-            return possibleDates.some((departure) => isTripOfferPrice(trip, { date: departure, hotel,
-              ...(age ? { passengers: [{ kind, age: Number(age[1]), ageUnit: /сар|month/i.test(age[0]) ? "month" : "year", count: 1 }] } : {}),
-            }, kind, amount, now));
+            const kinds: PassengerKind[] = kind ? [kind] : ["adult", "child", "infant"];
+            return possibleDates.some((departure) => kinds.some((fareKind) => isTripOfferPrice(trip, { date: departure, hotel, packageId,
+              ...(age ? { passengers: [{ kind: fareKind, age: Number(age[1]), ageUnit: /сар|month/i.test(age[0]) ? "month" : "year", count: 1 }] } : {}),
+            }, fareKind, amount, now)));
           });
           if (!supported) return "REFER";
         }
@@ -163,7 +186,7 @@ export function verifyTripReply(input: {
         const supported = active.some((trip) => {
           const row = departureAvailability(trip).find((entry) => entry.date === date);
           if (row && departureIsClosed(row)) return false;
-          const result = resolveTripOffer(trip, { date, hotel }, now);
+          const result = resolveTripOffer(trip, { date, hotel, packageId }, now);
           return result.status === "ready" && result.offer.availability.status === "open";
         });
         if (!supported) return "REFER";

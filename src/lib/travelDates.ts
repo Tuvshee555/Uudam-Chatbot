@@ -296,7 +296,7 @@ export function resolveRequestedMonth(
     return buildMonth(month, month < today.month ? today.year + 1 : today.year);
   }
 
-  const match = /(?:^|[^\d])(\d{1,2})\s*(?:-?\s*р)?\s*(?:сард|сарын|сар|sard|sariin|sar)(?!\s*\d)/i.exec(text);
+  const match = /(?:^|[^\d])(\d{1,2})\s*(?:-?\s*р)?\s*(?:сар(?:ынх|ын|ых|д)?|sard|sariin|sar)(?!\p{L}|\s*\d)/iu.exec(text);
   if (!match) return null;
   const month = Number(match[1]);
   if (!Number.isInteger(month) || month < 1 || month > 12) return null;
@@ -834,7 +834,7 @@ const FROM_TO_RANGE_RE = /(?<![\d./-])(\d{1,2})[./](\d{1,2})\s*-?\s*(?:ээс|а
 
 // "9 сарын сүүлээр 10 сарын эхээр": parts of a month, in customer words.
 const MONTH_PART_RE =
-  /(\d{1,2})\s*(?:-?\s*р)?\s*(?:сарын|сар|sariin|sar)\s*(эх\S*|ehe\S*|ehn\S*|дунд\S*|dund\S*|сүүл\S*|suul\S*)/gi;
+  /(\d{1,2})\s*(?:-?\s*р)?\s*(?:сарын|сар|sari{1,2}n|sar)\s*(эх\S*|ehe\S*|ehn\S*|дунд\S*|dund\S*|сүүл\S*|su{1,2}l\S*)/gi;
 const MAX_WINDOW_DAYS = 62;
 
 type RequestedRange = { startYmd: string; endYmd: string; label: string };

@@ -142,6 +142,12 @@ export function buildTripAnswerPlan(input: {
   const packageRequest = buildTripRequest(requestText, [trip], route.understanding, now);
   request.package = packageRequest.package;
   const selection = mergeTripSelection(trip.id, request, route.selection || null);
+  if (request.unsupportedPassengerSelection) {
+    return {
+      status: "handoff", tripId: trip.id, selection, request, reply: "REFER", offer: null,
+      answeredTopics: [], missingTopics: request.topics, missingFacts: ["price.passengers"], mediaUrls: [], brochureUrl: null,
+    };
+  }
   if (request.unsupportedDateWindow) {
     return {
       status: "handoff", tripId: trip.id, selection, request, reply: "REFER", offer: null,

@@ -473,9 +473,10 @@ function stripControlTokens(text: string): string {
 
 function stripScoldingRepeatPhrases(text: string): string {
   return text
-    .replace(/[^.\n!?]*өмнө нь хэлсэн[^.\n!?]*[.!?]?/gi, "")
-    .replace(/[^.\n!?]*as I mentioned[^.\n!?]*[.!?]?/gi, "")
-    .replace(/[^.\n!?]*already (?:told|shared)[^.\n!?]*[.!?]?/gi, "");
+    // Remove the preface, not the answer and conditions in the same sentence.
+    .replace(/өмнө нь хэлсэн(?:члэн|ээр)?\s*[,;:]?\s*/gi, "")
+    .replace(/\bas I mentioned(?:\s+(?:earlier|before))?\s*[,;:]?\s*/gi, "")
+    .replace(/\b(?:I(?:'ve| have)?\s+)?already (?:told|shared)(?:\s+(?:you|this))?\s*[,;:]?\s*/gi, "");
 }
 
 function normalizeWhitespace(text: string) {
@@ -487,21 +488,25 @@ function normalizeForCompare(text: string) {
 }
 
 function isGreetingBlock(text: string) {
-  const normalized = normalizeForCompare(text);
-  return (
-    normalized.startsWith("сайн байна") ||
-    normalized.startsWith("сайн уу") ||
-    normalized.startsWith("тавтай морил") ||
-    normalized.startsWith("hello") ||
-    normalized.startsWith("hi ")
-  );
+  // A greeting paragraph may also hold the fare or an essential condition.
+  // Only discard a paragraph made entirely of a greeting and decoration.
+  return /^(?:сайн\s+байна(?:\s+уу)?|сайн\s+уу|тавтай\s+морил(?:но\s+уу)?|hello|hi)(?:[\s!,.?…:;]|\p{Extended_Pictographic}|\p{Emoji_Modifier}|\uFE0F|\u200D)*$/iu.test(text.trim());
 }
 
 export function sanitizeAssistantReply(text: string) {
-  const withoutInternalVocabulary = text
+  // URLs can contain underscores, control words and case-sensitive signatures.
+  // Keep them outside prose cleanup, including internal-vocabulary replacement.
+  let urlPrefix = "REPLYURLPLACEHOLDER";
+  while (text.includes(urlPrefix)) urlPrefix += "X";
+  const urls: string[] = [];
+  const protectedText = text
+    .replace(/\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g, "$2")
+    .replace(/https?:\/\/[^\s<>]+/g, (url) => `${urlPrefix}${urls.push(url) - 1}END`);
+  const withoutInternalVocabulary = protectedText
     .replace(/\bContext-(?:д|т)/gi, "манай аяллын мэдээлэлд")
     .replace(/\bContext\b/gi, "аяллын мэдээлэл");
-  const cleaned = normalizeWhitespace(stripScoldingRepeatPhrases(stripControlTokens(stripMarkdown(stripLeakedPlaceholders(withoutInternalVocabulary)))));
+  const cleaned = normalizeWhitespace(stripScoldingRepeatPhrases(stripControlTokens(stripMarkdown(stripLeakedPlaceholders(withoutInternalVocabulary)))))
+    .replace(new RegExp(`${urlPrefix}(\\d+)END`, "g"), (_, index: string) => urls[Number(index)]);
   if (!cleaned) return "Энэ мэдээлэл одоогоор тодорхойгүй байна. Хүний ажилтантай холбож өгье.";
 
   // Split on blank lines (paragraph breaks) — preserve them so the AI's
@@ -526,7 +531,7 @@ export function sanitizeAssistantReply(text: string) {
     // the previous hotel (Санья, 2026-10-16).
     const seenPriceLinesInBlock = new Set<string>();
     for (const line of lines) {
-      const norm = normalizeForCompare(line);
+      const norm = /https?:\/\//i.test(line) ? line.trim() : normalizeForCompare(line);
       if (!norm) continue;
       const isPriceLine = /\d[\d,.\s]*₮/.test(line);
       const isSectionHeading = /^\s*(?:буудал|багц)\s*:/i.test(line)

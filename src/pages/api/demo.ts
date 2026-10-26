@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { NextApiRequest, NextApiResponse } from "next";
+import { tripsNamedIn } from "../../lib/tripGrounding";
 import { askOpenAI } from "../../lib/openaiProvider";
 import { askOpenAIChatParts } from "../../lib/openaiFallback";
 import {
@@ -538,9 +539,9 @@ export default async function handler(
               : buildAmbiguousTripReply(
                   routed.scopedClarify,
                   routed.scopedClarifyNote,
-                  { askToChoose: !routed.informationalAlternatives, customerText: normalizedText },
+                  { askToChoose: !routed.informationalAlternatives, customerText: routed.requestText || normalizedText },
                 )
-            : totalReply || buildAmbiguousTripReply(routed.scopedClarify, undefined, { customerText: normalizedText });
+            : totalReply || buildAmbiguousTripReply(routed.scopedClarify, undefined, { customerText: routed.requestText || normalizedText });
           const clarifyReply = enforceWebsiteForPayment(
             sanitizeAssistantReply(clarifyBody),
           );
@@ -694,6 +695,7 @@ export default async function handler(
             enforceWebsiteForPayment(sanitizeAssistantReply(fixMojibake(`${dateReply}${bookingNudge}`))),
             phoneAlreadyRequested,
           );
+          factualScope = tripsNamedIn(safeReply, routed.scopedClarify || trips);
           await appendMessage(sessionId, "user", normalizedText);
           if (shouldHandoffSilently(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", safeReply);

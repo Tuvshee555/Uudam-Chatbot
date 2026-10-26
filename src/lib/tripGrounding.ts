@@ -3,6 +3,7 @@ import type { TravelTrip } from "./travelTypes";
 import { normText } from "./travelTextNorm";
 import { queryNamedPlaces, resolveTripFromUserMessage, tripMentionsAllPlaces } from "./travelFastPathsSearch";
 import { websiteTripLinksInText } from "./bookingWebsite";
+import { tripFromRecentMenu, tripMenuQuestionIndex } from "./tripMenuChoice";
 
 export type GroundingContext = {
   /** The customer's message this turn. */
@@ -79,6 +80,10 @@ export function groundedTripIds(context: GroundingContext): Set<string> {
     return new Set(current);
   }
   if (current.length) return new Set([...current, ...catalog]);
+  if (tripMenuQuestionIndex(context.customerText) !== null) {
+    const trip = tripFromRecentMenu(context.customerText, context.history, context.trips);
+    return new Set(trip ? [trip.id] : []);
+  }
   if (context.pendingTripIds?.length) return new Set([...context.pendingTripIds, ...catalog]);
   if (context.selectionTripId) return new Set([context.selectionTripId, ...catalog]);
   const recent = context.history.slice(-RECENT_TURNS).reverse();

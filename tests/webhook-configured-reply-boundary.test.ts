@@ -19,6 +19,7 @@ test("configured text replies share grounding and paused customers retain inboun
   let quickInfoReply = "ВЭЛМОР АЯЛАЛ — 1,731,000₮";
   let legacyReply = quickInfoReply;
   let graphReply = quickInfoReply;
+  let goodbyeText = "Зөвлөхийн холбоо: 1111 2222";
   let failPartAttempts = 0;
   let acceptedPartBeforeFailure = 0;
   let failStorage = false;
@@ -37,7 +38,7 @@ test("configured text replies share grounding and paused customers retain inboun
       handoff_enabled: true, handoff_keywords: [], quick_info_keywords: ["товч мэдээлэл", "ВЭЛМОР АЯЛАЛ товч мэдээлэл"],
       quick_info_reply: quickInfoReply, chat_buttons: [],
       extra: { contact_phones: contactPhones, office_address: officeAddress,
-        greeting: { enabled: false }, goodbye: { enabled: true, text: "Зөвлөхийн холбоо: 1111 2222" }, reminder_enabled: false,
+        greeting: { enabled: false }, goodbye: { enabled: true, text: goodbyeText }, reminder_enabled: false,
         flowDocs: [{ id: "fixture-graph", name: "Fixture graph", enabled: true, nodes: [
           { id: "start", position: { x: 0, y: 0 }, data: { kind: "trigger", triggerType: "keyword", keywords: ["граф", "ВЭЛМОР АЯЛАЛ граф"], matchType: "exact" } },
           { id: "first", position: { x: 0, y: 1 }, data: { kind: "message", text: graphReply, quickReplies: ["Сонгох"], imageUrls: ["https://fixture.invalid/graph.png"] } },
@@ -52,7 +53,7 @@ test("configured text replies share grounding and paused customers retain inboun
     if (/SELECT paused, expires_at FROM travel_senders/i.test(sql)) return result(paused.has(sender)
       ? [{ paused: true, expires_at: "2098-02-03T04:00:00Z" }] : []);
     if (/INSERT INTO travel_senders \(sender_id, platform,/i.test(sql)) return result([{
-      msg_count: sender.includes("-paused") || sender === "staff-return" ? 2 : 1,
+      msg_count: sender.includes("-paused") || sender.endsWith("-return") ? 2 : 1,
       prev_msg_at: "2098-01-31T04:00:00Z", get_started_at: null }]);
     if (/INSERT INTO travel_senders \(sender_id, paused,/i.test(sql)) { paused.add(sender); return result(); }
     if (/SET goodbye_sent_at/i.test(sql)) { goodbyeClaims++; return result([{ claimed: true }]); }
@@ -104,6 +105,31 @@ test("configured text replies share grounding and paused customers retain inboun
     return { status, sends: sends.slice(before) };
   };
   try {
+    await context.test("reengagement text cannot send an unrelated configured trip before grounding", async () => {
+      goodbyeText = quickInfoReply;
+      const response = await call("unrelated-return", "Сайн байна уу", { facebook: true });
+      assert.equal(response.status, 200);
+      assert.deepEqual(response.sends, []);
+      assert.ok(leads.has("unrelated-return"));
+      assert.ok(history.some(row => row.sender === "unrelated-return" && row.role === "user"));
+      goodbyeText = "Зөвлөхийн холбоо: 1111 2222";
+    });
+    await context.test("reengagement text rejects stale fares even for a customer-named trip", async () => {
+      goodbyeText = "ВЭЛМОР АЯЛАЛ — 8,765,000₮";
+      const response = await call("stale-fare-return", "ВЭЛМОР АЯЛАЛ товч мэдээлэл", { facebook: true });
+      assert.equal(response.status, 200);
+      assert.deepEqual(response.sends, []);
+      assert.ok(leads.has("stale-fare-return"));
+      goodbyeText = "Зөвлөхийн холбоо: 1111 2222";
+    });
+    await context.test("verified reengagement contact is persisted and customer question still runs", async () => {
+      const response = await call("contact-return", "Сайн байна уу", { facebook: true });
+      assert.equal(response.status, 200);
+      assert.equal(response.sends[0], goodbyeText);
+      assert.ok(response.sends.length > 1);
+      assert.ok(history.some(row => row.sender === "contact-return" && row.role === "assistant" && row.text === goodbyeText));
+      assert.ok(!leads.has("contact-return"));
+    });
     for (const [label, text] of [["quick-info", "товч мэдээлэл"], ["legacy-flow", "урсгал"], ["address", "Манай хаяг"]]) {
       await context.test(`${label} cannot name an unrelated trip`, async () => {
         const response = await call(label, text);

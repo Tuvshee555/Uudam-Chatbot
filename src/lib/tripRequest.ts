@@ -28,6 +28,8 @@ export type TripRequest = {
   dates?: string[];
   transport?: TripTransport | null;
   unsupportedDateWindow?: boolean;
+  unsupportedPassengerSelection?: boolean;
+  passengerAgeFollowup?: boolean;
   requestedFacts?: RequestedFact[];
 };
 
@@ -47,31 +49,54 @@ export function parseRequestedPassengers(value: unknown): RequestedPassenger[] {
   });
 }
 
-export function requestedPassengersFromText(text: string): RequestedPassenger[] {
+function parsePassengerText(text: string): { passengers: RequestedPassenger[]; unsupported: boolean } {
   const result: RequestedPassenger[] = [];
-  for (const match of text.matchAll(/(\d{1,2})\s*(том\s*хүн|том|adult(?:s)?|tom\s*hun|хүүхэд|huuhed|child(?:ren)?|нярай|nyarai|infant(?:s)?)/gi)) {
+  let unsupported = false;
+  for (const match of text.matchAll(/(?<![\d.,-])(-?\d+(?:[.,]\d+)?)\s*(том\s*хүн|том|adult(?:s)?|tom\s*hun|хүүхэд|huuhed|child(?:ren)?|нярай|nyarai|infant(?:s)?)/gi)) {
     const kind = /том|adult|tom/i.test(match[2]) ? "adult" : /нярай|nyarai|infant/i.test(match[2]) ? "infant" : "child";
-    if (Number(match[1]) > 0) result.push({ kind, count: Number(match[1]) });
+    const count = Number(match[1]);
+    if (!Number.isInteger(count) || count < 1 || count > 100) unsupported = true;
+    else result.push({ kind, count });
   }
   const ages: Array<{ age: number; ageUnit: "year" | "month" }> = [];
-  for (const match of text.matchAll(/(\d{1,2}(?:\.\d+)?(?:\s*[,/]\s*\d{1,2}(?:\.\d+)?)*)\s*(настай|nas(?:tai)?|years?\s*old|сартай|months?\s*old)/gi)) {
+  for (const match of text.matchAll(/(?<![\d.,/-])(-?\d+(?:\.\d+)?(?:\s*[,/]\s*\d+(?:\.\d+)?)*)\s*(настай|nas(?:tai)?|years?\s*old|сартай|months?\s*old)/gi)) {
     const parts = match[1].split(/\s*[,/]\s*/);
     // An unspaced comma may mean a decimal age. Do not guess without a count.
     const childCount = result.filter((row) => row.kind !== "adult").reduce((sum, row) => sum + row.count, 0);
-    if (/\d,\d/.test(match[1]) && childCount !== parts.length) continue;
-    for (const part of parts) if (Number.isFinite(Number(part))) ages.push({ age: Number(part), ageUnit: /сартай|month/i.test(match[2]) ? "month" : "year" });
+    const hasCountedAdults = result.some(row => row.kind === "adult");
+    const beforeAge = text.slice(0, match.index);
+    const afterAge = text.slice((match.index || 0) + match[0].length);
+    const childAfterAge = /^\s*(?:(?:\d+|нэг|one)\s+)?(?:хүүх|huuhe|child|нярай|nyarai|infant)/iu.test(afterAge);
+    const ageUnit = /сартай|month/i.test(match[2]) ? "month" : "year";
+    const hasAdultAge = parts.some(part => Number(part) / (ageUnit === "month" ? 12 : 1) >= 12);
+    const adultAge = /^\s*(?:том\s*хүн|том|adult(?:s)?|tom\s*hun)(?!\p{L})/iu.test(afterAge)
+      || hasAdultAge && !childAfterAge && /(?:том\s*хүн|том|adult(?:s)?|tom\s*hun)\s*[,;:]?\s*(?:(?:нь|is|are|aged|and|болон|ба)\s*)?$/iu.test(beforeAge);
+    // A counted adult's age does not establish an additional traveler. The
+    // parser cannot bind a shared age to counted adults without guessing.
+    if (hasCountedAdults && (adultAge || hasAdultAge && !/хүүх|huuhe|child|нярай|nyarai|infant/iu.test(text))) unsupported = true;
+    if (/\d,\d/.test(match[1]) && childCount !== parts.length) { unsupported = true; continue; }
+    for (const part of parts) {
+      const age = Number(part);
+      if (!Number.isFinite(age) || age < 0 || age > (ageUnit === "month" ? 1440 : 120)) unsupported = true;
+      else ages.push({ age, ageUnit });
+    }
   }
   // Explicit ages replace an unqualified child count, never silently invent ages.
   if (ages.length) {
     const adults = result.filter((row) => row.kind === "adult");
     const childCount = result.filter((row) => row.kind !== "adult").reduce((sum, row) => sum + row.count, 0);
-    if (childCount > ages.length) return result;
-    return [...adults, ...ages.map(({ age, ageUnit }) => {
+    if (childCount > ages.length) return { passengers: result, unsupported };
+    return { passengers: [...adults, ...ages.map(({ age, ageUnit }) => {
       const years = ageUnit === "month" ? age / 12 : age;
       return { kind: (years < 2 ? "infant" : years < 12 ? "child" : "adult") as RequestedPassenger["kind"], count: 1, age, ...(ageUnit === "month" ? { ageUnit } : {}) };
-    })];
+    })], unsupported };
   }
-  return result;
+  return { passengers: result, unsupported };
+}
+
+export function requestedPassengersFromText(text: string): RequestedPassenger[] {
+  const parsed = parsePassengerText(text);
+  return parsed.unsupported ? [] : parsed.passengers;
 }
 
 function programPreference(text: string): TripRequest["packagePreference"] {
@@ -130,9 +155,10 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
     ? [requestedRange.startYmd, requestedRange.endYmd]
     : null;
   if (date) topics.add("availability");
-  const explicitPassengers = requestedPassengersFromText(turn);
+  const passengerText = parsePassengerText(turn);
+  const explicitPassengers = passengerText.unsupported ? [] : passengerText.passengers;
   const passengerLanguage = /том\s*хүн|хүүх|нярай|настай|сартай|tom\s*hun|huuhe|nyarai|nas(?:tai)?|adult|child|infant|years?\s*old|months?\s*old/i.test(turn);
-  const passengers = explicitPassengers.length ? explicitPassengers : passengerLanguage ? parseRequestedPassengers(understanding?.passengers) : [];
+  const passengers = explicitPassengers.length ? explicitPassengers : passengerLanguage && !passengerText.unsupported ? parseRequestedPassengers(understanding?.passengers) : [];
   if (passengers.length) topics.add("price");
   const hotels = [...new Set(trips.flatMap((trip) => [trip.hotel, ...normalizeTripOffers(trip, now).map((offer) => offer.hotel)]).filter((hotel): hotel is string => Boolean(hotel && hotel.length >= 3)))];
   const mentions = (value: string) => {
@@ -174,16 +200,42 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
     transport: queryWantsLandFlightCombo(turn) ? "land_flight" : queryWantsDirectFlight(turn) ? "direct_flight"
       : queryWantsLandOnlyEnhanced(turn) ? "land" : /усан\s*онгоц|круз|cruise/i.test(turn) ? "cruise" : null,
     ...(requestedRange === "unsupported" || calendarScope?.kind === "unsupported" ? { unsupportedDateWindow: true } : {}),
+    ...(passengerText.unsupported ? { unsupportedPassengerSelection: true } : {}),
+    ...(passengers.length && passengers.every(passenger => passenger.age !== undefined)
+      && !/том\s*хүн|(?:^|[^\p{L}])том(?:[^\p{L}]|$)|adult|tom\s*hun/iu.test(turn) ? { passengerAgeFollowup: true } : {}),
   };
 }
 
 export function mergeTripSelection(tripId: string, request: TripRequest, previous: TripSelection | null): TripSelection {
   const same = previous?.tripId === tripId ? previous : null;
   const suppliedKinds = new Set(request.passengers.map((passenger) => passenger.kind));
-  const passengers = request.passengers.length
+  let passengers = request.passengers.length
     ? request.passengers.some((passenger) => passenger.kind === "adult") ? request.passengers
       : [...(same?.passengers || []).filter((passenger) => !suppliedKinds.has(passenger.kind)), ...request.passengers]
     : same?.passengers || [];
+  // An answer to the child-age question refines the existing people even if
+  // the supplied age moves them into another fare category.
+  if (same && request.passengerAgeFollowup && request.passengers.length && request.passengers.every(passenger => passenger.age !== undefined)) {
+    const waiting = same.passengers.filter(passenger => passenger.kind !== "adult" && passenger.age === undefined);
+    const waitingCount = waiting.reduce((count, passenger) => count + passenger.count, 0);
+    const suppliedCount = request.passengers.reduce((count, passenger) => count + passenger.count, 0);
+    if (waitingCount >= suppliedCount) {
+      const slots = same.passengers.map(passenger => ({ passenger, remaining: passenger.count }));
+      for (const supplied of request.passengers) {
+        let remaining = supplied.count;
+        const preferredKind = supplied.kind === "adult" ? "child" : supplied.kind;
+        const candidates = slots.filter(slot => slot.passenger.kind !== "adult" && slot.passenger.age === undefined)
+          .sort((left, right) => Number(right.passenger.kind === preferredKind) - Number(left.passenger.kind === preferredKind));
+        for (const slot of candidates) {
+          const filled = Math.min(remaining, slot.remaining);
+          slot.remaining -= filled;
+          remaining -= filled;
+        }
+      }
+      const retained = slots.flatMap(slot => slot.remaining ? [{ ...slot.passenger, count: slot.remaining }] : []);
+      passengers = [...retained, ...request.passengers];
+    }
+  }
   const dateScope = request.date ? undefined : request.range || request.month || request.year || request.dates
     ? { month: request.month, year: request.year, range: request.range || null, ...(request.dates ? { dates: request.dates } : {}) } : same?.dateScope;
   return {
