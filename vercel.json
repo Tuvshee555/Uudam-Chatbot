@@ -4,6 +4,10 @@
     {
       "path": "/api/cron/reminder",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/partner-sync",
+      "schedule": "0 * * * *"
     }
   ]
 }
