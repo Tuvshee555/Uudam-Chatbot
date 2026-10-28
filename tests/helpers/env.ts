@@ -49,6 +49,9 @@ const DEFAULT_BOOLEAN_ENV: Record<string, string> = {
 const DEFAULT_OPTIONAL_ENV: Record<string, string> = {
   NODE_ENV: "test",
   REDIS_KEY_PREFIX: "nexonbot-test",
+  // Most webhook tests pin the keyword answer paths (the fallback when the model
+  // is unavailable) with no model calls; conversational-agent tests turn it on.
+  CONVERSATIONAL_AGENT: "off",
 };
 
 const RESET_ONLY_ENV_KEYS = [

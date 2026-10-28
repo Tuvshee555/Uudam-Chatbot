@@ -31,6 +31,7 @@ import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
 import { decideTripAnswer, type TripAnswerDecision } from "../../lib/tripAnswerDecision";
 import { verifyTripReply } from "../../lib/tripReplyVerification";
 import { presentAssistantReply } from "../../lib/chatbotReplyPolicy";
+import { conversationalAgentEnabled, runConversationalAgent, type AgentTurn } from "../../lib/conversationalAgent";
 import { recordPrimaryReplyDelivery, recordReplyPresentation } from "../../lib/chatbotReplyTelemetry";
 import { getReplyMediaPolicy, limitReplyPhotos, recordReplyMediaDelivery } from "../../lib/replyMediaPolicy";
 import type { TripSelection } from "../../lib/tripRequest";
@@ -333,14 +334,17 @@ async function handleMessage(
     afterDeliver?: () => Promise<void>;
     decision?: TripAnswerDecision;
     catalogTripIds?: string[];
+    /** Trips whose facts the reply states: the fact-check scope only, never grounding permission. */
+    verifyTripIds?: string[];
     verifyConfiguredFacts?: boolean;
   }) => {
     const presented = input.decision?.reply ?? presentAssistantReply({ reply: input.reply, userText: text,
       hasPriorReply: history.some((message) => message.role === "assistant"),
       phoneAlreadyRequested: Boolean(extractPhoneNumber(text)) || hasAskedForPhone(history) || history.some((message) => message.role === "user" && Boolean(extractPhoneNumber(message.text))),
     });
+    const scopeIds = input.catalogTripIds || input.verifyTripIds;
     const verificationScope = input.verifyConfiguredFacts ? await getGroundingTrips()
-      : input.catalogTripIds ? (await getGroundingTrips()).filter(trip => input.catalogTripIds!.includes(trip.id)) : factualScope;
+      : scopeIds ? (await getGroundingTrips()).filter(trip => scopeIds.includes(trip.id)) : factualScope;
     const reply = verificationScope && !input.decision
       ? verifyTripReply({ reply: presented, trips: verificationScope, selection: currentSelection })
       : presented;
@@ -470,6 +474,9 @@ async function handleMessage(
   // behavior lives in webhookPhotoOnly.ts (extracted for the 2,000-line cap).
   const botSettings = await getTravelBotSettings();
   const botControl = await getBotControl();
+  // The model leads trip conversations (conversationalAgent.ts); the keyword
+  // paths below it only answer when the model is unavailable.
+  const agentOn = conversationalAgentEnabled(botSettings.extra as Record<string, unknown> | undefined);
   // Reengagement copy is editable text, so verify it through the same boundary
   // before answering the current question. A withheld message hands off once.
   const INACTIVITY_MS = 30 * 60 * 1000;
@@ -597,7 +604,9 @@ async function handleMessage(
   // A number on its own answers a numbered list the customer was just shown, or a
   // booking question. Outside those it means nothing: the model read "5" as "5
   // million" and offered a budget search. Stay silent unless one is pending.
-  if (isBareNumber(text)) {
+  // With the conversational agent on, the chat history gives the number its
+  // meaning ("2" after "how many people?"), so it goes to the agent instead.
+  if (isBareNumber(text) && !agentOn) {
     const [pendingClarification, pendingBooking] = await Promise.all([
       getClarificationState(senderId),
       getCollectState(senderId),
@@ -630,7 +639,8 @@ async function handleMessage(
   // No words, nothing to look up. The model read a lone "😊" as interest in a trip
   // from the customer's memory and asked about it (2026-10-21). An emoji gets nothing;
   // question marks mean the customer is waiting, so staff get a lead (no reply).
-  if (!/[\p{L}\p{N}]/u.test(text)) {
+  // With the agent on, "????" (a customer still waiting) gets a human answer.
+  if (!/[\p{L}\p{N}]/u.test(text) && !(agentOn && /[?？]/.test(text))) {
     if (/[?？]/.test(text)) {
       await deliverFastPathReply({
         reply: "REFER",
@@ -996,6 +1006,64 @@ async function handleMessage(
     });
     await pauseBookedCustomer(senderId).catch(() => {});
     return;
+  }
+
+  // ── Conversational agent ───────────────────────────────────────────────────
+  // One short, human message with at most one question, written by the model
+  // from the catalog and checked at the shared exit (deliverFastPathReply).
+  // Null (model down / unusable output) falls through to the keyword paths.
+  if (agentOn && typeof business?.knowledgeBase === "string") {
+    const catalogTrips = (await getTrips()).filter((trip) =>
+      trip.status === "active" && (trip.extra as Record<string, unknown> | undefined)?.customer_visible !== false);
+    const focusTripNames = (() => {
+      const names = catalogTrips.filter((trip) => trip.id === groundingSelection?.tripId).map((trip) => trip.route_name);
+      const match = resolveTripFromUserMessage(contextualUserText, catalogTrips, { allowLooseFallback: false });
+      if (match.status === "verified") names.push(match.trip.route_name);
+      if (match.status === "ambiguous") names.push(...match.candidates.slice(0, 6).map((trip) => trip.route_name));
+      return names;
+    })();
+    const factProblem = async (turn: AgentTurn): Promise<string | null> => {
+      if (isReferReply(verifyTripReply({ reply: turn.reply, trips: turn.trips }))) {
+        return "a price, date, duration or booking term in it is not written in the catalog for the trips listed in \"trips\" (or a fact was stated without listing its trip). State only exact catalog values for trips you list, or leave the detail out.";
+      }
+      if (shouldSilenceNoDataReply(turn.reply)) {
+        return "it told the customer the information is unavailable. If the catalog cannot answer, set handoff to true; otherwise answer from the catalog.";
+      }
+      const ungrounded = await findUngroundedTrip(turn.reply);
+      return ungrounded
+        ? `it named the trip «${ungrounded.route_name}», which this customer has not asked about. Do not bring up specific trips they have not mentioned; ask what destination or kind of trip they want instead.`
+        : null;
+    };
+    const turn = await runConversationalAgent({
+      ask: async ({ system, user }) => (await askOpenAI(user, {
+        requestId: trace?.requestId, correlationId: trace?.correlationId, source: "api.webhook.agent",
+        systemInstruction: system, jsonMode: true, temperature: 0.4, maxOutputTokens: 700,
+        openaiModel: process.env.OPENAI_REPLY_MODEL || "gpt-4o", preferOpenAI: true,
+      })).text,
+      knowledgeBase: business.knowledgeBase, trips: catalogTrips, history, userText: text,
+      customerMemory, focusTripNames, phoneCollected, check: factProblem,
+    });
+    if (turn) {
+      recordCounter("webhook.agent_turn_total", 1, { platform, outcome: turn.handoff ? "handoff" : "reply" });
+      await deliverFastPathReply({
+        reply: turn.handoff ? "REFER" : turn.reply,
+        buttons: turn.buttons,
+        verifyTripIds: turn.trips.map((trip) => trip.id),
+        failTag: turn.handoff ? "conversational_agent_handoff" : "conversational_agent",
+        rememberSource: "api.webhook.conversational_agent",
+        afterDeliver: async () => {
+          // Photos of the one trip being discussed, and nothing else: the reply
+          // already carries any link, so no second text bubble.
+          const photos = turn.trips.length === 1 ? turn.trips[0].photo_urls.slice(0, 6) : [];
+          if (!turn.sendPhotos || platform !== "facebook" || !token || !photos.length) return;
+          await sendPhotoAlbum(senderId, photos, token, trace);
+        },
+      });
+      return;
+    }
+    logWarn("webhook.agent_unavailable", { requestId: trace?.requestId, correlationId: trace?.correlationId,
+      platform, senderHash: hashIdentifier(senderId) });
+    recordCounter("webhook.agent_unavailable_total", 1, { platform });
   }
 
   // Generic price objections must run before route matching. Otherwise a

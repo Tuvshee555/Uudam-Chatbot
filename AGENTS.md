@@ -24,6 +24,7 @@
 - Every customer-facing reply must leave through `deliverFastPathReply` (or the model path) in `src/pages/api/webhook.ts`, where `tripGrounding.ts` holds back a one-trip reply about a trip the conversation never pointed to. Do not add a branch that sends around it.
 - Before pushing any change to trip matching, routing or reply wording, run `npm run gate` (read-only, no AI calls) and read every changed decision it prints. `npm run gate -- --save` only after the changes are judged correct.
 - Never write a real trip, place, price or date into code, comments, tests or scripts; use invented names.
+- Customer trip conversations are led by `src/lib/conversationalAgent.ts`: one short message (≤ 420 characters), at most one question, asking about the customer's plan instead of listing the catalog. Fix tone, length or flow problems in its rules and examples — do not add another keyword fast path or reply template for them. The keyword paths in `webhook.ts` are the fallback for when the model is unavailable (or `CONVERSATIONAL_AGENT=off` / bot settings `extra.conversational_agent: false`).
 - Several agents have edited this repo at the same time and fixed the same bug twice. Pull first, check `git log`, and stage only your own files.
 
 <!-- BEGIN:nextjs-agent-rules -->

@@ -25,6 +25,8 @@ import { decideTripAnswer } from "../../lib/tripAnswerDecision";
 import { setTripSelection } from "../../lib/tripSelectionState";
 import { verifyTripReply } from "../../lib/tripReplyVerification";
 import { presentAssistantReply } from "../../lib/chatbotReplyPolicy";
+import { conversationalAgentEnabled, runConversationalAgent } from "../../lib/conversationalAgent";
+import { ungroundedTripInReply } from "../../lib/tripGrounding";
 import { recordReplyPresentation } from "../../lib/chatbotReplyTelemetry";
 import type { TripSelection } from "../../lib/tripRequest";
 import type { TravelTrip } from "../../lib/travelTypes";
@@ -454,6 +456,49 @@ export default async function handler(
         await rememberTurn();
         recordCounter("demo.payment_claim_deferred_total", 1, {});
         return res.status(200).json({ reply: deferralReply, buttons: [] });
+      }
+
+      // Conversational agent, as in the production webhook: one short message,
+      // one question, facts checked against the trips it names. Null falls
+      // through to the keyword paths below.
+      if (!isEnglishDemo && conversationalAgentEnabled(botSettings.extra as Record<string, unknown> | undefined)
+        && typeof business?.knowledgeBase === "string") {
+        const catalogTrips = (await getTrips()).filter((trip) =>
+          trip.status === "active" && (trip.extra as Record<string, unknown> | undefined)?.customer_visible !== false);
+        const match = resolveTripFromUserMessage(contextualUserText, catalogTrips, { allowLooseFallback: false });
+        const focusTripNames = match.status === "verified" ? [match.trip.route_name]
+          : match.status === "ambiguous" ? match.candidates.slice(0, 6).map((trip) => trip.route_name) : [];
+        const turn = await runConversationalAgent({
+          ask: async ({ system, user }) => (await askOpenAI(user, {
+            requestId: trace.requestId, correlationId: trace.correlationId, source: "api.demo.agent",
+            systemInstruction: system, jsonMode: true, temperature: 0.4, maxOutputTokens: 700,
+            openaiModel: process.env.OPENAI_REPLY_MODEL || "gpt-4o", preferOpenAI: true,
+          })).text,
+          knowledgeBase: business.knowledgeBase, trips: catalogTrips, history, userText: normalizedText,
+          customerMemory, focusTripNames, phoneCollected,
+          check: (draft) => {
+            if (isReferReply(verifyTripReply({ reply: draft.reply, trips: draft.trips }))) {
+              return "a price, date, duration or booking term in it is not written in the catalog for the trips listed in \"trips\" (or a fact was stated without listing its trip). State only exact catalog values for trips you list, or leave the detail out.";
+            }
+            if (shouldSilenceNoDataReply(draft.reply)) {
+              return "it told the customer the information is unavailable. If the catalog cannot answer, set handoff to true; otherwise answer from the catalog.";
+            }
+            const ungrounded = ungroundedTripInReply(draft.reply, { customerText: normalizedText, history, trips: catalogTrips });
+            return ungrounded
+              ? `it named the trip «${ungrounded.route_name}», which this customer has not asked about. Do not bring up specific trips they have not mentioned; ask what destination or kind of trip they want instead.`
+              : null;
+          },
+        });
+        if (turn) {
+          await appendMessage(sessionId, "user", normalizedText);
+          if (turn.handoff) return returnHandoff();
+          factualScope = turn.trips;
+          await appendMessage(sessionId, "assistant", turn.reply);
+          await rememberTurn();
+          recordCounter("demo.agent_turn_total", 1, {});
+          const photos = turn.sendPhotos && turn.trips.length === 1 ? turn.trips[0].photo_urls.slice(0, 6) : [];
+          return res.status(200).json({ reply: turn.reply, buttons: turn.buttons, mediaUrls: photos, brochureUrl: null });
+        }
       }
 
       // English demo: every deterministic fast path below is a Mongolian
