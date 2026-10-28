@@ -1,0 +1,29 @@
+name: Partner trip sync
+
+on:
+  schedule:
+    - cron: '7,37 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+concurrency:
+  group: partner-trip-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - name: Sync partner data and verify completion
+        env:
+          PARTNER_SYNC_URL: ${{ vars.PARTNER_SYNC_URL }}
+          CRON_SECRET: ${{ secrets.PARTNER_SYNC_CRON_SECRET }}
+        run: |
+          test -n "$PARTNER_SYNC_URL" && test -n "$CRON_SECRET"
+          curl --fail-with-body --silent --show-error --retry 2 --retry-delay 15 \
+            --max-time 310 --request POST \
+            --header "Authorization: Bearer $CRON_SECRET" "$PARTNER_SYNC_URL" \
+            --output "$RUNNER_TEMP/partner-sync.json"
+          jq -e '.ok == true and (.results | length > 0) and all(.results[]; .status == "synced" or .status == "unchanged")' "$RUNNER_TEMP/partner-sync.json"
+          jq '{ok, results: [.results[] | {slug, status, reason, price}]}' "$RUNNER_TEMP/partner-sync.json"

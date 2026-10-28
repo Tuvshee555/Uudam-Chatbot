@@ -330,6 +330,11 @@ function availability(raw: Row, fallbackSeats: number | null): OfferAvailability
 function departureAvailability(trip: TravelTrip, date: string, raw: Row, now: Date): OfferAvailability {
   if (date < today(now)) return { status: "departed", seatsLeft: null };
   if (trip.status !== "active") return availability({ status: trip.status }, trip.seats_left);
+  // A mirrored hotel can be sold out while another hotel on that date is open.
+  // Its source-owned availability takes precedence over the aggregate website row.
+  if (row(trip.extra?.partner_sync).source_url && raw.partner_source === true) return availability(raw, null);
+  const partnerDate = rows(trip.extra?.partner_departure_availability).find((entry) => entry.date === date);
+  if (row(trip.extra?.partner_sync).source_url && partnerDate) return availability(partnerDate, null);
   const website = rows(trip.extra?.website_departure_availability).filter((r) => r.date === date);
   const values = website.map((r) => availability(r, null));
   if (unique(values.map((v) => JSON.stringify(v))).length > 1) return { status: "conflict", seatsLeft: null };

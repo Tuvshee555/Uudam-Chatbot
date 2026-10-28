@@ -1,92 +1,63 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- these tests inspect loosely-typed poster JSON */
-// The partner payload is only correct if the repo's own poster mapper reads it back correctly.
-// These tests run the real mapper over the real payload, so a change to either side fails here
-// instead of silently publishing a trip with a null price (which is what happened on 2026-10-28).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildPosterData } from "../src/lib/partnerSync/posterPayload";
-import { mapPosterTripToFields } from "../src/lib/poster/tripMapper";
-import type { PartnerOffer, PartnerTour } from "../src/lib/partnerSync/globalTravel";
+import { partnerTripFields } from "../src/lib/partnerSync/tripPayload";
+import { normalizeExtraPatch } from "../src/lib/tripExtraSchema";
+import { websiteTripPayload } from "../src/lib/websiteTripPayload";
+import { websiteDepartureSchedule } from "../src/lib/connectedTripMapping";
+import type { TravelTrip } from "../src/lib/travelTypes";
+import { prices, row, tour } from "./fixtures/partner-tour";
 
-const offer = (date: string, packageLabel: string, hotelLabel: string, adultPrice: number, inStock = true): PartnerOffer =>
-  ({ date, packageLabel, hotelLabel, adultPrice, currency: "MNT", inStock });
+const source = (input = tour()): TravelTrip => ({
+  id: "sample-trip", category: "sample", operator_name: "Sample", route_name: "Sample tour", duration_text: "", adult_price: null,
+  child_price: null, infant_price: null, currency: "MNT", departure_dates: [], seats_total: null, seats_left: null, has_food: null,
+  status: "active", notes: "", hotel: "", source_description: "", photo_urls: [], created_at: "", updated_at: "",
+  ...partnerTripFields(input), extra: normalizeExtraPatch(partnerTripFields(input).extra ?? {}),
+});
+const groups = (extra: Record<string, unknown>) => extra.price_groups as Record<string, unknown>[];
+const now = new Date("2099-06-01T00:00:00Z");
 
-const tour: PartnerTour = {
-  sourceUrl: "https://global-travel.mn/tours/hainan-aylal",
-  title: "ХАЙНАН Саняа аялал",
-  description: "Хайнан арал руу шууд нислэгээр",
-  heroImage: null,
-  durationDays: 9,
-  durationNights: 8,
-  destinations: ["Sanya"],
-  hotels: ["Phoenix Island Resort Sanya", "Grand Metropark Bay Hotel Sanya"],
-  offers: [
-    offer("2026-11-11", "Чөлөөт аялал", "Phoenix+Paxton", 2990000),
-    offer("2026-11-11", "Хөтөлбөртэй аялал", "Phoenix+Paxton", 3290000),
-    offer("2026-11-11", "Чөлөөт аялал", "Phoenix", 3490000),
-    offer("2026-11-11", "Хөтөлбөртэй аялал", "Phoenix", 3790000),
-    offer("2026-12-30", "Чөлөөт аялал", "Phoenix+Paxton", 3990000),
-  ],
-  dates: ["2026-11-11", "2026-12-30"],
-  packages: ["Чөлөөт аялал", "Хөтөлбөртэй аялал"],
-  hotelOptions: ["Phoenix+Paxton", "Phoenix"],
-  days: [
-    { day: 1, title: "Улаанбаатар - Саняа", lines: ["21:30 цагт цугларна", "23:50 нислэг"] },
-    { day: 2, title: "Чөлөөт өдөр", lines: ["Далайн эрэг"] },
-  ],
-  includes: ["Бүх өдрийн Буфет өглөөний цай", "Аяллын даатгал"],
-  excludes: ["Хувийн хэрэглээний зардал"],
-  faq: [],
-  dateModified: "2026-10-23",
-  contentHash: "hash-contract",
-};
-
-const mapped = () => mapPosterTripToFields(buildPosterData(tour, "Global Travel Corporation") as never) as Record<string, any>;
-
-test("the mapper reads a real adult price, never null, from the partner payload", () => {
-  const trip = mapped();
-  assert.equal(typeof trip.adult_price, "number");
-  assert.equal(trip.adult_price, 2990000, "the cheapest published fare becomes the headline price");
+test("normalization preserves every date, hotel, passenger band and availability", () => {
+  const trip = source();
+  const extra = normalizeExtraPatch(trip.extra);
+  assert.equal(groups(extra).length, 4);
+  const group = groups(extra)[0];
+  assert.deepEqual(group.dates, ["2099-06-12"]);
+  assert.equal(group.adult_price, 2100000);
+  assert.equal(group.infant_price, 320000);
+  assert.equal(group.single_price, 520000);
+  assert.equal(group.partner_source, true);
+  assert.equal(group.status, "open");
+  assert.equal((group.passenger_prices as unknown[]).length, 3);
 });
 
-test("every partner departure date survives the mapping, on the right day", () => {
-  const dates: string[] = mapped().departure_dates ?? [];
-  // A timezone slip would turn 2026-11-11 into 2026-11-10, which is how the first bad sync looked.
-  assert.ok(dates.includes("2026-11-11"), `expected 2026-11-11 in ${JSON.stringify(dates)}`);
-  assert.ok(dates.includes("2026-12-30"), `expected 2026-12-30 in ${JSON.stringify(dates)}`);
+test("website projection preserves distinct fares and both child age bands", () => {
+  const trip = source();
+  const website = websiteTripPayload(trip, websiteDepartureSchedule(trip, now), now);
+  assert.equal(website.price, 2100000);
+  assert.equal(website.departures.length, 2);
+  assert.equal(website.priceGroups.length, 4);
+  const first = website.priceGroups.find((g) => g.adult_price === 2100000)!;
+  assert.equal(first.infant_price, 320000);
+  assert.equal(first.single_price, 520000);
+  assert.deepEqual((first.passenger_prices as { price: number }[]).map((p) => p.price).sort((a,b) => a-b), [320000, 1200000, 1600000]);
 });
 
-test("each package and hotel combination keeps its own price after mapping", () => {
-  const groups: any[] = mapped().extra?.price_groups ?? [];
-  assert.ok(groups.length >= 4, `expected one group per combination, got ${groups.length}`);
-  const find = (date: string, hotel: string, price: number) =>
-    groups.find((g) => (g.dates || []).includes(date) && String(g.hotel || "").includes(hotel) && g.adult_price === price);
-  assert.ok(find("2026-11-11", "Phoenix+Paxton · Чөлөөт", 2990000), "11-11 Phoenix+Paxton free-package 2,990,000 missing");
-  assert.ok(find("2026-11-11", "Phoenix · Чөлөөт", 3490000), "11-11 Phoenix free-package 3,490,000 missing");
-  assert.ok(find("2026-11-11", "Phoenix+Paxton · Хөтөлбөртэй", 3290000), "11-11 Phoenix+Paxton programme 3,290,000 missing");
-  assert.ok(find("2026-12-30", "Phoenix+Paxton · Чөлөөт", 3990000), "12-30 Phoenix+Paxton free-package 3,990,000 missing");
-});
-
-test("no child or infant fare is invented when the partner publishes none", () => {
-  const trip = mapped();
-  assert.equal(trip.child_price ?? null, null);
-  assert.equal(trip.infant_price ?? null, null);
-  for (const group of trip.extra?.price_groups ?? []) {
-    assert.equal(group.child_price ?? null, null, `group ${group.label} gained a child price`);
+test("a sold-out hotel does not close another hotel on the same date", () => {
+  const trip = source(tour([row(undefined, "Example Bay", { open: false, seats: 0 }), row(undefined, "Example Garden")]));
+  const website = websiteTripPayload(trip, websiteDepartureSchedule(trip, now), now);
+  assert.equal(website.departures[0].status, "OPEN");
+  assert.equal(website.priceGroups.length, 4);
+  for (const group of website.priceGroups) {
+    const availability = group.availability as { status: string };
+    assert.equal(availability.status, String(group.hotel).includes("Bay") ? "sold_out" : "open");
   }
 });
 
-test("the included and excluded lists reach the mapped trip", () => {
-  const trip = mapped();
-  assert.deepEqual(trip.extra?.included_items, ["Бүх өдрийн Буфет өглөөний цай", "Аяллын даатгал"]);
-  assert.deepEqual(trip.extra?.excluded_items, ["Хувийн хэрэглээний зардал"]);
-});
-
-test("the itinerary is written in the shape the poster mapper reads", () => {
-  const data = buildPosterData(tour, "Global Travel Corporation") as Record<string, any>;
-  assert.equal(data.days.length, 2);
-  // PosterDay uses route/summary; title/lines alone are never read by the mapper or the poster UI.
-  assert.equal(data.days[0].route, "Улаанбаатар - Саняа");
-  assert.match(data.days[0].summary, /23:50 нислэг/);
-  assert.equal(data.days[0].day, 1);
+test("all sold-out source offers close the departure and removed fares are explicitly null", () => {
+  const trip = source(tour([row(undefined, undefined, { open: false, prices: prices({ infant: null, child2to5: null, child6to11: null, programAdult: null }) })]));
+  assert.equal(trip.child_price, null);
+  assert.equal(trip.infant_price, null);
+  assert.deepEqual(trip.extra.departure_date_groups, []);
+  const website = websiteTripPayload(trip, websiteDepartureSchedule(trip, now), now);
+  assert.equal(website.departures[0].status, "SOLD_OUT");
 });

@@ -240,7 +240,9 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
     && previousSnapshot.status !== "active"
     && source.status === "active";
   const liveSource: TravelTrip = { ...source, extra: { ...source.extra,
-    website_departure_availability: currentDepartures.map(departure => {
+    website_departure_availability: record(source.extra.partner_sync).source_url
+      ? records(source.extra.partner_departure_availability)
+      : currentDepartures.map(departure => {
       const availability = websiteAvailabilityForResync({
         date: websiteDepartureDateKey(departure.startDate),
         status: departure.status, seatsLeft: departure.seatsLeft,

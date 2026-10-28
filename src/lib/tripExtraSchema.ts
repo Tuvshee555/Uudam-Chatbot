@@ -88,6 +88,11 @@ function normalizePriceGroups(raw: unknown): Record<string, unknown>[] {
     .map((g) =>
       enrichDateKeys({
         label: asString(g.label),
+        ...(g.partner_source === true ? {
+          partner_source: true,
+          status: asString(g.status),
+          seats_left: asNumberOrNull(g.seats_left),
+        } : {}),
         ...(asString(g.hotel).trim() ? { hotel: asString(g.hotel).trim() } : {}),
         ...(asString(g.package_id || g.package).trim()
           ? { package_id: asString(g.package_id || g.package).trim() }

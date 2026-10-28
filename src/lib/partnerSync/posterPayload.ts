@@ -1,136 +1,168 @@
-// Turns a partner tour (see globalTravel.ts) into the poster shape the admin itself saves, so the
-// mirrored trip flows through the normal poster -> chatbot -> website pipeline with no special cases.
-import type { PartnerOffer, PartnerTour } from "./globalTravel";
+// Turns a GTC tour (see globalTravel.ts) into Uudam's poster data, so the copied prices, dates, hotels
+// and programme flow through the normal poster -> chatbot -> website pipeline with no special cases.
+//
+// The poster is MERGED, not replaced: Uudam's own photos, layout, contacts and wording stay, and
+// everything GTC publishes (prices, dates, hotels, programme text, included/excluded) is copied over.
+import type { PartnerDay, PartnerRow, PartnerTour } from "./globalTravel";
 
-const money = (amount: number) => `${amount.toLocaleString("en-US")}₮`;
-
-/**
- * The poster price table, in the exact shape src/lib/poster/tripMapper.ts reads:
- * a "Буудал" column it recognises as the accommodation label, and a "Том хүний үнэ"
- * column it recognises as the adult fare (see isAdultColumn / findPriceColumnIndex there).
- * One row per departure date x package x hotel, because a row carries a single adult price.
- *
- * Writing a wider table with one column per package, as the partner's own page does, makes the
- * mapper find no adult column at all and store a null price, so the shape below is deliberate.
- */
-export const PRICE_TABLE_COLUMNS = ["Явах огноо", "Буудал", "Том хүний үнэ"] as const;
+const fmt = (amount: number) => `${amount.toLocaleString("en-US")}₮`;
+const cell = (amount: number | null) => (amount == null ? "-" : fmt(amount));
 
 /**
- * The accommodation label the rest of the system keys fares on. The partner sells the same hotel at
- * two prices depending on the package, so the package has to be part of the label: with the hotel
- * alone, tripDataValidation rejects the trip for holding two different adult fares for one hotel,
- * date and passenger category, which is the correct complaint about an ambiguous offer.
+ * The poster price table, in the exact shape src/lib/poster/tripMapper.ts reads. It finds the adult
+ * column by its header ("Том хүн"), the hotel by "Буудал", children by "Хүүхэд ..." and infants by
+ * "Нярай ...", so the headers below are load-bearing: a differently named column is silently read as
+ * no price at all (a first version of this stored a null price that way).
  */
-export const accommodationLabel = (offer: PartnerOffer) => `${offer.hotelLabel} · ${offer.packageLabel}`;
+export const PRICE_TABLE_COLUMNS = [
+  "Буудал",
+  "Том хүн",
+  "Хүүхэд 6-11 нас оргүй",
+  "Хүүхэд 2-5 нас оргүй",
+  "Нярай 0-2 нас",
+  "Ганцаараа байрлах нэмэлт",
+] as const;
+
+export const PACKAGE_FREE = "Хөтөлбөргүй";
+export const PACKAGE_PROGRAM = "Хөтөлбөртэй";
+
+/**
+ * The hotel label the rest of the system keys fares on. GTC sells each hotel at two prices (with and
+ * without the daily programme), and the validator rejects two different adult fares for one hotel,
+ * date and passenger category, so the package is part of the label.
+ */
+export const accommodationLabel = (hotel: string, packageLabel: string) => `${hotel} · ${packageLabel}`;
+
+type PackagePrices = { package: string; adult: number | null; child2to5: number | null; child6to11: number | null };
+
+/** The two package variants GTC publishes for a row; a variant with no adult fare is not offered. */
+export function packageVariants(row: PartnerRow): PackagePrices[] {
+  const { prices } = row;
+  const variants: PackagePrices[] = [
+    { package: PACKAGE_FREE, adult: prices.adult, child2to5: prices.child2to5, child6to11: prices.child6to11 },
+    { package: PACKAGE_PROGRAM, adult: prices.programAdult, child2to5: prices.programChild2to5, child6to11: prices.programChild6to11 },
+  ];
+  return variants.filter((variant) => variant.adult != null);
+}
 
 export function buildPriceTable(tour: PartnerTour) {
   return {
-    note: `Үнэ, огноо, буудлыг ${new URL(tour.sourceUrl).host}-аас автоматаар авсан. Том хүний үнэ.`,
+    note: "",
     columns: [...PRICE_TABLE_COLUMNS],
-    rows: tour.offers.map((offer) => ({
-      dates: offer.date,
-      cells: [
-        offer.date,
-        accommodationLabel(offer),
-        offer.inStock ? money(offer.adultPrice) : `${money(offer.adultPrice)} (дууссан)`,
-      ],
-    })),
+    rows: tour.rows.flatMap((row) =>
+      packageVariants(row).map((variant) => ({
+        dates: row.date,
+        cells: [
+          accommodationLabel(row.hotel, variant.package),
+          cell(variant.adult),
+          cell(variant.child6to11),
+          cell(variant.child2to5),
+          cell(row.prices.infant),
+          cell(row.prices.single),
+        ],
+      })),
+    ),
   };
 }
 
-/**
- * price_groups drive the chatbot's fare answers: one group per date x package x hotel.
- * Only the adult price is published by the partner, so child/infant are left unset rather than
- * invented; the bot then says it does not know instead of quoting a made-up number.
- */
-export function buildPriceGroups(tour: PartnerTour) {
-  return tour.offers.map((offer) => ({
-    id: `${tour.sourceUrl}#${offer.date}|${offer.packageLabel}|${offer.hotelLabel}`,
-    label: offer.date,
-    dates: [offer.date],
-    display_dates: [offer.date],
-    date_keys: [offer.date],
-    hotel: accommodationLabel(offer),
-    package_id: offer.packageLabel,
-    adult_price: offer.adultPrice,
-    currency: offer.currency,
-    sold_out: !offer.inStock,
-    note: "",
-  }));
-}
-
-/** The lowest adult price the partner currently advertises, used as the trip's headline price. */
+/** The cheapest adult fare GTC currently shows for a bookable date; the trip's headline price. */
 export function lowestAdultPrice(tour: PartnerTour): number | null {
-  const available = tour.offers.filter((offer) => offer.inStock).map((offer) => offer.adultPrice);
-  const prices = available.length ? available : tour.offers.map((offer) => offer.adultPrice);
+  const open = tour.rows.filter((row) => row.open);
+  const rows = open.length ? open : tour.rows;
+  const prices = rows.flatMap((row) => packageVariants(row).map((variant) => variant.adult)).filter((price): price is number => price != null);
   return prices.length ? Math.min(...prices) : null;
 }
 
-export function buildPosterData(tour: PartnerTour, agencyName: string): Record<string, unknown> {
-  const adultPrice = lowestAdultPrice(tour);
-  return {
-    title: tour.title,
-    subtitle: tour.destinations.join(", "),
-    agency: agencyName,
-    operator: agencyName,
-    source_url: tour.sourceUrl,
-    hero_image: tour.heroImage,
-    duration_days: tour.durationDays,
-    duration_nights: tour.durationNights,
-    duration_text: tour.durationDays ? `${tour.durationDays} өдөр ${tour.durationNights} шөнө` : "",
-    destinations: tour.destinations,
-    hotel: tour.hotels.join(", "),
-    hotels: tour.hotels,
-    currency: tour.offers[0]?.currency ?? "MNT",
-    adult_price: adultPrice,
-    price_desc: tour.description,
-    price_note: `Эх сурвалж: ${tour.sourceUrl}`,
-    price_table: buildPriceTable(tour),
-    departures: tour.dates.map((date) => ({ date })),
-    // The poster mapper reads `route` and `summary` per day (see PosterDay in poster/tripMapper.ts);
-    // `title`/`lines` would be carried along but never read, so the day text is written into both.
-    days: tour.days.map((day) => ({
+type Existing = Record<string, unknown>;
+const asRecord = (value: unknown): Existing => (value && typeof value === "object" && !Array.isArray(value) ? (value as Existing) : {});
+
+/** Keep presentation assets; replace the source-owned itinerary facts. */
+function mergeDays(existing: unknown, days: PartnerDay[]): Existing[] {
+  const current = Array.isArray(existing) ? existing.map(asRecord) : [];
+  return days.map((day, index) => {
+    const own = current.find((item) => Number(item.day) === day.day) ?? current[index] ?? {};
+    return {
+      ...own,
       day: day.day,
       route: day.title,
       summary: day.lines.join("\n"),
-      title: day.title,
-      lines: day.lines,
-    })),
+      distance: day.distance ?? "",
+      flight: day.transportation ?? "",
+      meals: day.meals,
+      show_meals: true,
+      // GTC names a hotel only on the arrival day. Another day keeps no old hotel text of Uudam's, or
+      // a hotel GTC does not offer would still be quoted (the old poster named Gentle Grown here).
+      hotel: day.accommodation ?? "",
+    };
+  });
+}
+
+/** Flight times come from the day-1 / last-day text GTC writes ("23:50 цагт … нислэг"). */
+function flightLines(days: PartnerDay[]): Existing {
+  const outbound = days[0]?.lines.find((line) => /нислэг/i.test(line));
+  const back = days[days.length - 1]?.lines.find((line) => /Улаанбаатар\s+чиглэлд|нисээд/i.test(line));
+  return { outbound: outbound ?? "", return: back ?? "" };
+}
+
+export function buildPosterData(tour: PartnerTour, existing: unknown = {}): Existing {
+  const own = asRecord(existing);
+  const adult = lowestAdultPrice(tour);
+  return {
+    ...own,
+    source_url: tour.sourceUrl,
+    subtitle: tour.description,
+    destinations: tour.destinations,
+    duration_days: tour.durationDays ?? own.duration_days,
+    duration_nights: tour.durationNights ?? own.duration_nights,
+    price_desc: tour.description,
+    price_note: adult != null ? `Том хүн: ${fmt(adult)}-с` : own.price_note,
+    price_table: buildPriceTable(tour),
+    departures: tour.dates.map((date) => ({ date })),
+    days: mergeDays(own.days, tour.days),
+    flights: flightLines(tour.days),
     includes: tour.includes,
     excludes: tour.excludes,
-    faq: tour.faq,
-    package_options: tour.packages.map((label) => ({ id: label, label, note: "" })),
-    price_groups: buildPriceGroups(tour),
-    partner_sync: {
-      source_url: tour.sourceUrl,
-      content_hash: tour.contentHash,
-      partner_updated: tour.dateModified,
-      synced_at: new Date().toISOString(),
-    },
   };
 }
 
-/** A short human summary of what changed between two syncs, for the Telegram message. */
-export function describeChanges(before: PartnerTour | null, after: PartnerTour): string[] {
-  if (!before) return [`Анхны хуулалт: ${after.offers.length} үнэ, ${after.dates.length} огноо.`];
-  const lines: string[] = [];
-  const key = (offer: PartnerOffer) => `${offer.date}|${offer.packageLabel}|${offer.hotelLabel}`;
-  const previous = new Map(before.offers.map((offer) => [key(offer), offer]));
-  const current = new Map(after.offers.map((offer) => [key(offer), offer]));
+type Field = { label: string; read: (row: PartnerRow, pkg: PackagePrices) => number | null };
+const FIELDS: Field[] = [
+  { label: "Том хүн", read: (_row, pkg) => pkg.adult },
+  { label: "Хүүхэд 6-11", read: (_row, pkg) => pkg.child6to11 },
+  { label: "Хүүхэд 2-5", read: (_row, pkg) => pkg.child2to5 },
+  { label: "Нярай", read: (row) => row.prices.infant },
+  { label: "Ганцаараа", read: (row) => row.prices.single },
+];
 
-  for (const [id, offer] of current) {
-    const was = previous.get(id);
-    if (!was) { lines.push(`➕ ${offer.date} ${offer.packageLabel} · ${offer.hotelLabel}: ${money(offer.adultPrice)}`); continue; }
-    if (was.adultPrice !== offer.adultPrice) {
-      const delta = offer.adultPrice - was.adultPrice;
-      lines.push(`${delta > 0 ? "📈" : "📉"} ${offer.date} ${offer.packageLabel} · ${offer.hotelLabel}: ${money(was.adultPrice)} → ${money(offer.adultPrice)}`);
+function flatten(tour: PartnerTour) {
+  const cells = new Map<string, { row: PartnerRow; pkg: PackagePrices }>();
+  for (const row of tour.rows) for (const pkg of packageVariants(row)) cells.set(`${row.date}|${accommodationLabel(row.hotel, pkg.package)}`, { row, pkg });
+  return cells;
+}
+
+/** What changed between two copies of the GTC tour, one line each, for the Telegram message. */
+export function describeChanges(before: PartnerTour | null, after: PartnerTour): string[] {
+  if (!before) return [`Анхны хуулалт: ${after.rows.length} огноо·буудал, ${after.dates.length} огноо.`];
+  const lines: string[] = [];
+  const was = flatten(before);
+  const now = flatten(after);
+
+  for (const [key, current] of now) {
+    const previous = was.get(key);
+    const [date, hotel] = key.split("|");
+    if (!previous) { lines.push(`➕ ${date} ${hotel}: ${cell(current.pkg.adult)}`); continue; }
+    for (const field of FIELDS) {
+      const a = field.read(previous.row, previous.pkg);
+      const b = field.read(current.row, current.pkg);
+      if (a !== b) lines.push(`${b != null && a != null && b < a ? "📉" : "📈"} ${date} ${hotel} ${field.label}: ${cell(a)} → ${cell(b)}`);
     }
-    if (was.inStock !== offer.inStock) lines.push(`${offer.inStock ? "✅" : "❌"} ${offer.date} ${offer.packageLabel} · ${offer.hotelLabel}: ${offer.inStock ? "дахин нээгдлээ" : "дууссан"}`);
+    if (previous.row.open !== current.row.open) lines.push(`${current.row.open ? "✅" : "❌"} ${date} ${hotel}: ${current.row.open ? "дахин нээгдлээ" : "суудал дүүрсэн"}`);
   }
-  for (const [id, offer] of previous) {
-    if (!current.has(id)) lines.push(`➖ ${offer.date} ${offer.packageLabel} · ${offer.hotelLabel} жагсаалтаас хасагдлаа`);
-  }
+  for (const key of was.keys()) if (!now.has(key)) lines.push(`➖ ${key.replace("|", " ")} жагсаалтаас хасагдлаа`);
+
   if (before.days.length !== after.days.length) lines.push(`📝 Хөтөлбөр: ${before.days.length} → ${after.days.length} өдөр`);
-  if (before.includes.length !== after.includes.length) lines.push(`📝 Үнэд багтсан: ${before.includes.length} → ${after.includes.length} зүйл`);
+  if (JSON.stringify(before.days) !== JSON.stringify(after.days) && before.days.length === after.days.length) lines.push("📝 Хөтөлбөрийн текст өөрчлөгдсөн");
+  if (JSON.stringify(before.includes) !== JSON.stringify(after.includes)) lines.push(`📝 Үнэд багтсан: ${before.includes.length} → ${after.includes.length} зүйл`);
+  if (JSON.stringify(before.excludes) !== JSON.stringify(after.excludes)) lines.push(`📝 Үнэд багтаагүй: ${before.excludes.length} → ${after.excludes.length} зүйл`);
   return lines;
 }

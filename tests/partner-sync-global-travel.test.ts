@@ -1,98 +1,71 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- these tests inspect loosely-typed poster JSON */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildPosterData, buildPriceGroups, buildPriceTable, describeChanges, lowestAdultPrice } from "../src/lib/partnerSync/posterPayload";
-import type { PartnerOffer, PartnerTour } from "../src/lib/partnerSync/globalTravel";
+import { readRows } from "../src/lib/partnerSync/globalTravel";
+import { buildPosterData, buildPriceTable, describeChanges, lowestAdultPrice, packageVariants } from "../src/lib/partnerSync/posterPayload";
+import { prices, row, tour } from "./fixtures/partner-tour";
 
-const offer = (date: string, packageLabel: string, hotelLabel: string, adultPrice: number, inStock = true): PartnerOffer =>
-  ({ date, packageLabel, hotelLabel, adultPrice, currency: "MNT", inStock });
-
-const tour = (overrides: Partial<PartnerTour> = {}): PartnerTour => ({
-  sourceUrl: "https://global-travel.mn/tours/hainan-aylal",
-  title: "ХАЙНАН Саняа аялал",
-  description: "Тайлбар",
-  heroImage: null,
-  durationDays: 9,
-  durationNights: 8,
-  destinations: ["Sanya"],
-  hotels: ["Phoenix Island Resort Sanya"],
-  offers: [
-    offer("2026-11-11", "Чөлөөт аялал", "Phoenix+Paxton", 2990000),
-    offer("2026-11-11", "Хөтөлбөртэй аялал", "Phoenix+Paxton", 3290000),
-    offer("2026-11-11", "Чөлөөт аялал", "Phoenix", 3490000),
-    offer("2026-11-18", "Чөлөөт аялал", "Phoenix+Paxton", 2990000),
-  ],
-  dates: ["2026-11-11", "2026-11-18"],
-  packages: ["Чөлөөт аялал", "Хөтөлбөртэй аялал"],
-  hotelOptions: ["Phoenix+Paxton", "Phoenix"],
-  days: [{ day: 1, title: "Улаанбаатар - Саняа", lines: ["23:50 нислэг"] }],
-  includes: ["Буфет өглөөний цай"],
-  excludes: ["Хувийн хэрэглээний зардал"],
-  faq: [{ question: "Үнэ хэд вэ?", answer: "2,990,000₮-с." }],
-  dateModified: "2026-10-23",
-  contentHash: "hash-a",
-  ...overrides,
+test("public API rows preserve each passenger price and skip deleted/padding rows", () => {
+  const rows = readRows([
+    { departure_date: "2099-06-12", hotel_name: "Example Bay", seats: null, prices: { adult_price: "2100000", infant_price: "320000" } },
+    { departure_date: "2099-06-12", hotel_name: null, prices: {} },
+    { departure_date: "2099-06-12", hotel_name: "Removed", prices: { adult_price: "1" }, deleted_at: "2099-01-01" },
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].prices.adult, 2100000);
+  assert.equal(rows[0].prices.infant, 320000);
+  assert.equal(rows[0].prices.child2to5, null);
+  assert.equal(rows[0].seats, null);
 });
 
-test("the price table uses the columns the poster mapper understands", () => {
+test("zero seats close an otherwise active row; newest duplicate wins", () => {
+  const raw = { departure_date: "2099-06-12", hotel_name: "Example Bay", prices: { adult_price: "2100000" } };
+  const rows = readRows([{ ...raw, seats: 10, updated_at: "2099-01-01" }, { ...raw, availability: "Захиалга авч байна", seats: 0, updated_at: "2099-02-01" }]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].open, false);
+});
+
+test("invalid calendar dates and corrupt prices fail instead of silently deleting offers", () => {
+  assert.throws(() => readRows([{ departure_date: "2099-02-30", hotel_name: "Example", prices: { adult_price: "2100000" } }]), /invalid departure/);
+  assert.throws(() => readRows([{ departure_date: "2099-06-12", hotel_name: "Example", prices: { adult_price: "bad" } }]), /invalid fare/);
+});
+
+test("programme-only rows remain available and missing variants are not invented", () => {
+  const rows = readRows([{ departure_date: "2099-06-12", hotel_name: "Example", prices: { program_adult_price: "2400000" } }]);
+  assert.equal(rows.length, 1);
+  assert.equal(packageVariants(rows[0]).length, 1);
+  assert.equal(packageVariants(rows[0])[0].adult, 2400000);
+});
+
+test("table preserves both child bands, infant and supplement per date and package", () => {
   const table = buildPriceTable(tour());
-  assert.deepEqual(table.columns, ["Явах огноо", "Буудал", "Том хүний үнэ"]);
-  // one row per date x package x hotel, because a row carries a single adult price
   assert.equal(table.rows.length, 4);
-  assert.deepEqual(table.rows[0].cells, ["2026-11-11", "Phoenix+Paxton · Чөлөөт аялал", "2,990,000₮"]);
-  assert.equal(table.rows[0].dates, "2026-11-11");
+  assert.deepEqual(table.rows[0].cells.slice(1), ["2,100,000₮", "1,600,000₮", "1,200,000₮", "320,000₮", "520,000₮"]);
+  assert.deepEqual(table.rows[1].cells.slice(1), ["2,400,000₮", "1,900,000₮", "1,300,000₮", "320,000₮", "520,000₮"]);
+  assert.equal(table.rows[2].cells[4], "340,000₮");
+  assert.equal(table.rows[2].cells[5], "620,000₮");
 });
 
-test("a sold-out departure is marked, not hidden or silently repriced", () => {
-  const table = buildPriceTable(tour({ offers: [offer("2026-11-11", "Чөлөөт аялал", "Phoenix", 3490000, false)] }));
-  assert.match(table.rows[0].cells[2], /дууссан/);
+test("headline uses a bookable offer, not a cheaper sold-out fare", () => {
+  assert.equal(lowestAdultPrice(tour([row(undefined, undefined, { open: false, prices: prices({ adult: 1100000 }) }), row("2099-06-19")])), 2100000);
 });
 
-test("price groups carry only the adult price the partner publishes, never a guessed child fare", () => {
-  const groups = buildPriceGroups(tour());
-  assert.equal(groups.length, 4);
-  assert.equal(groups[0].adult_price, 2990000);
-  assert.equal("child_price" in groups[0], false);
-  assert.equal("infant_price" in groups[0], false);
-  assert.deepEqual(groups[0].dates, ["2026-11-11"]);
+test("copy retains branding/photos while replacing text, hotels, flights and complete days", () => {
+  const data = buildPosterData(tour(), { title: "Own title", hero_image: "https://example.com/hero.jpg", contacts: { phone: "sample" },
+    price_desc: "Old hotels", flights: { return: "Old return" }, days: [{ day: 1, photo: "https://example.com/day.jpg", hotel: "Old hotel" }, { day: 2, hotel: "Old hotel" }] });
+  assert.equal(data.title, "Own title");
+  assert.equal(data.hero_image, "https://example.com/hero.jpg");
+  const days = data.days as Record<string, unknown>[];
+  assert.equal(days[0].photo, "https://example.com/day.jpg");
+  assert.equal(days[0].summary, tour().days[0].lines.join("\n"));
+  assert.equal(days[1].hotel, "");
+  assert.equal((data.flights as Record<string, unknown>).return, "");
+  assert.equal(data.price_desc, tour().description);
+  assert.deepEqual(data.includes, tour().includes);
 });
 
-test("the headline price is the cheapest available departure", () => {
-  assert.equal(lowestAdultPrice(tour()), 2990000);
-  // when everything is sold out the cheapest is still reported rather than null
-  const soldOut = tour({ offers: tour().offers.map((o) => ({ ...o, inStock: false })) });
-  assert.equal(lowestAdultPrice(soldOut), 2990000);
-});
-
-test("the poster payload records where the data came from", () => {
-  const data = buildPosterData(tour(), "Global Travel Corporation") as Record<string, any>;
-  assert.equal(data.agency, "Global Travel Corporation");
-  assert.equal(data.source_url, "https://global-travel.mn/tours/hainan-aylal");
-  assert.equal(data.partner_sync.content_hash, "hash-a");
-  assert.equal(data.duration_text, "9 өдөр 8 шөнө");
-  assert.deepEqual(data.includes, ["Буфет өглөөний цай"]);
-});
-
-test("the change report names every price move, new date and sold-out flip", () => {
-  const before = tour();
-  const after = tour({
-    offers: [
-      offer("2026-11-11", "Чөлөөт аялал", "Phoenix+Paxton", 3190000), // +200,000
-      offer("2026-11-11", "Хөтөлбөртэй аялал", "Phoenix+Paxton", 3290000), // unchanged
-      offer("2026-11-11", "Чөлөөт аялал", "Phoenix", 3490000, false), // sold out
-      offer("2026-12-02", "Чөлөөт аялал", "Phoenix+Paxton", 2990000), // new date
-    ],
-  });
-  const lines = describeChanges(before, after).join("\n");
-  assert.match(lines, /📈 2026-11-11 Чөлөөт аялал · Phoenix\+Paxton: 2,990,000₮ → 3,190,000₮/);
-  assert.match(lines, /❌ 2026-11-11 Чөлөөт аялал · Phoenix.*дууссан/);
-  assert.match(lines, /➕ 2026-12-02/);
-  assert.match(lines, /➖ 2026-11-18/);
-  assert.equal(/Хөтөлбөртэй аялал · Phoenix\+Paxton: /.test(lines), false, "an unchanged price is not reported");
-});
-
-test("the first sync reports a plain summary instead of a diff", () => {
-  const lines = describeChanges(null, tour());
-  assert.equal(lines.length, 1);
-  assert.match(lines[0], /Анхны хуулалт: 4 үнэ, 2 огноо/);
+test("change report detects infant-only and child-only price changes", () => {
+  const after = tour([row(undefined, undefined, { prices: prices({ infant: 350000, programChild2to5: 1400000 }) })]);
+  const report = describeChanges(tour([row()]), after).join("\n");
+  assert.match(report, /320,000₮ → 350,000₮/);
+  assert.match(report, /1,300,000₮ → 1,400,000₮/);
 });

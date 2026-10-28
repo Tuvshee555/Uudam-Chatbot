@@ -1,183 +1,165 @@
-// Mirrors a Global Travel Corporation tour page into a poster trip, so the partner's listing stays
-// copied exactly: every departure date, package, hotel and price, plus the itinerary and the
-// included/excluded lists, as the partner publishes them.
+// Reads one Global Travel Corporation (GTC) tour from their public API.
 //
-// The page ships schema.org JSON-LD with one Offer per date x package x hotel, which is far more
-// stable than reading the HTML tables, so prices and dates come from there. The itinerary and the
-// included/excluded lists exist only as HTML, so those are read from the markup.
-//
-// Nothing here writes to the database. `fetchGlobalTravelTour` returns a plain object, and the
-// caller (scripts/sync-global-travel.ts) decides what to do with it.
+// GTC's tour page is a JavaScript app: the HTML only carries adult fares, while the booking panel
+// (child, infant, single-room, programme variants, per-hotel, per-date, seats) loads from
+// api.global-travel.mn after the page renders. That API is what the page itself uses, so it is the
+// source copied here. Nothing in this file writes anywhere; it returns a plain object.
 
-export type PartnerOffer = {
-  /** ISO departure date, e.g. "2026-11-11" */
-  date: string;
-  /** Package name exactly as the partner writes it, e.g. "Чөлөөт аялал" */
-  packageLabel: string;
-  /** Hotel option exactly as the partner writes it, e.g. "Phoenix+Paxton" */
-  hotelLabel: string;
-  adultPrice: number;
-  currency: string;
-  /** true when the partner marks the offer as available */
-  inStock: boolean;
+export type PartnerPrices = {
+  adult: number | null;
+  child2to5: number | null;
+  child6to11: number | null;
+  infant: number | null;
+  single: number | null;
+  programAdult: number | null;
+  programChild2to5: number | null;
+  programChild6to11: number | null;
 };
 
-export type PartnerDay = { day: number; title: string; lines: string[] };
+export type PartnerRow = {
+  /** ISO departure date */
+  date: string;
+  /** Hotel option exactly as the source names it. */
+  hotel: string;
+  /** false when GTC shows the date as sold out */
+  open: boolean;
+  seats: number | null;
+  prices: PartnerPrices;
+};
+
+export type PartnerDay = {
+  day: number;
+  title: string;
+  route: string;
+  lines: string[];
+  meals: { breakfast: boolean; lunch: boolean; dinner: boolean };
+  accommodation: string | null;
+  distance?: string;
+  transportation?: string | null;
+};
 
 export type PartnerTour = {
+  slug: string;
   sourceUrl: string;
   title: string;
   description: string;
-  heroImage: string | null;
+  destinations: string[];
+  airlines: string[];
   durationDays: number | null;
   durationNights: number | null;
-  destinations: string[];
-  hotels: string[];
-  offers: PartnerOffer[];
-  dates: string[];
-  packages: string[];
-  hotelOptions: string[];
-  days: PartnerDay[];
+  hotels: { name: string; stars: number | null; description: string }[];
   includes: string[];
   excludes: string[];
-  faq: { question: string; answer: string }[];
-  /** The partner's own "last updated" date, when the page states one. */
-  dateModified: string | null;
-  /** Hash of everything above, so an unchanged page is a no-op. */
+  days: PartnerDay[];
+  rows: PartnerRow[];
+  dates: string[];
+  hotelOptions: string[];
+  /** GTC's own "last updated" stamp for the tour record. */
+  updatedAt: string | null;
+  /** Hash of everything above, so an unchanged tour is a no-op. */
   contentHash: string;
 };
 
-const MAX_HTML_BYTES = 4_000_000;
-
-/** Decode the HTML entities that appear in this page's markup. */
-function decodeEntities(text: string): string {
-  return text
-    .replace(/&(?:nbsp|#160);/g, " ")
-    .replace(/&(?:amp|#38);/g, "&")
-    .replace(/&(?:lt|#60);/g, "<")
-    .replace(/&(?:gt|#62);/g, ">")
-    .replace(/&(?:quot|#34);/g, '"')
-    .replace(/&(?:#39|apos|rsquo|#8217);/g, "'")
-    .replace(/&(?:mdash|#8212);/g, "—")
-    .replace(/&(?:ndash|#8211);/g, "–")
-    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)));
-}
-
-/** Strip tags from an HTML fragment and collapse whitespace. */
-function text(html: string): string {
-  return decodeEntities(html.replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim();
-}
-
-/** Every <script type="application/ld+json"> payload on the page, parsed; unparseable blocks are skipped. */
-function jsonLdBlocks(html: string): Record<string, unknown>[] {
-  const blocks: Record<string, unknown>[] = [];
-  for (const match of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
-    try {
-      const parsed = JSON.parse(match[1].trim());
-      for (const item of Array.isArray(parsed) ? parsed : [parsed]) {
-        if (item && typeof item === "object") blocks.push(item as Record<string, unknown>);
-      }
-    } catch {
-      // A malformed block is ignored: the others still carry the offers.
-    }
-  }
-  return blocks;
-}
-
-const typesOf = (node: Record<string, unknown>): string[] => {
-  const raw = node["@type"];
-  return (Array.isArray(raw) ? raw : [raw]).filter((x): x is string => typeof x === "string");
-};
-
-/**
- * The partner names each offer "<tour> · <date> · <package> · <hotel>".
- * The date also arrives as itemOffered.departureTime, which is the reliable field;
- * the package and hotel are only in the name, so they are read from its tail.
- */
-function splitOfferName(name: string): { packageLabel: string; hotelLabel: string } | null {
-  const parts = name.split("·").map((part) => part.trim()).filter(Boolean);
-  if (parts.length < 2) return null;
-  return { packageLabel: parts[parts.length - 2], hotelLabel: parts[parts.length - 1] };
-}
-
+const API = "https://api.global-travel.mn/api";
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-function readOffers(product: Record<string, unknown>): PartnerOffer[] {
-  const raw = Array.isArray(product.offers) ? product.offers : product.offers ? [product.offers] : [];
-  const offers: PartnerOffer[] = [];
-  for (const entry of raw) {
-    if (!entry || typeof entry !== "object") continue;
-    const offer = entry as Record<string, unknown>;
-    const item = (offer.itemOffered && typeof offer.itemOffered === "object" ? offer.itemOffered : {}) as Record<string, unknown>;
-    const date = String(item.departureTime ?? "").slice(0, 10);
-    const price = Number(offer.price);
-    const named = splitOfferName(String(offer.name ?? item.name ?? ""));
-    if (!ISO_DATE.test(date) || !Number.isFinite(price) || price <= 0 || !named) continue;
-    offers.push({
+export function validDate(value: string): boolean {
+  return ISO_DATE.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
+}
+
+async function getJson(path: string, timeoutMs: number): Promise<Record<string, unknown>> {
+  const response = await fetch(`${API}${path}`, {
+    headers: { accept: "application/json", "user-agent": "UudamTravelSync/1.0 (+https://uudamtravel.mn)" },
+    signal: AbortSignal.timeout(timeoutMs),
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error(`GTC ${path} returned HTTP ${response.status}`);
+  const body = (await response.json()) as Record<string, unknown>;
+  if (body.success === false) throw new Error(`GTC ${path} reported failure`);
+  return body;
+}
+
+const record = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+
+const strings = (value: unknown): string[] =>
+  Array.isArray(value) ? value.map((item) => String(item ?? "").trim()).filter(Boolean) : [];
+
+/** "3490000" -> 3490000; anything empty, zero or non-numeric -> null (never an invented 0). */
+function money(value: unknown): number | null {
+  if (value == null || value === "" || value === 0 || value === "0") return null;
+  const number = Number(value);
+  if ((typeof value !== "number" && typeof value !== "string") || !Number.isSafeInteger(number) || number <= 0) throw new Error("GTC returned an invalid fare");
+  return number;
+}
+
+function readPrices(raw: unknown): PartnerPrices {
+  const p = record(raw);
+  return {
+    adult: money(p.adult_price),
+    child2to5: money(p.child_2_5_price),
+    child6to11: money(p.child_6_11_price),
+    infant: money(p.infant_price),
+    single: money(p.single_supply_price),
+    programAdult: money(p.program_adult_price),
+    programChild2to5: money(p.program_child_2_5_price),
+    programChild6to11: money(p.program_child_6_11_price),
+  };
+}
+
+/** One row per date x hotel. GTC pads the table with empty rows (no hotel, no prices): those are skipped. */
+export function readRows(raw: unknown): PartnerRow[] {
+  const byKey = new Map<string, { row: PartnerRow; updated: string }>();
+  for (const entry of Array.isArray(raw) ? raw : []) {
+    const item = record(entry);
+    if (item.deleted_at) continue;
+    const date = String(item.departure_date ?? "").slice(0, 10);
+    const meta = record(item.meta);
+    const hotel = String(item.hotel_name ?? meta.hotel_name ?? "").trim();
+    const prices = readPrices(item.prices);
+    if (!hotel && Object.keys(record(item.prices)).length === 0) continue;
+    if (!validDate(date) || !hotel) throw new Error("GTC returned an invalid departure date or hotel");
+    if (prices.adult == null && prices.programAdult == null) {
+      if (Object.values(record(item.prices)).some((value) => value != null && value !== "")) throw new Error("GTC returned a priced row without a valid adult fare");
+      continue;
+    }
+    const availability = String(item.availability ?? "");
+    const seats = item.seats == null || item.seats === "" ? NaN : Number(item.seats);
+    const row: PartnerRow = {
       date,
-      packageLabel: named.packageLabel,
-      hotelLabel: named.hotelLabel,
-      adultPrice: Math.round(price),
-      currency: String(offer.priceCurrency ?? "MNT"),
-      inStock: !/OutOfStock|SoldOut/i.test(String(offer.availability ?? "")),
+      hotel,
+      open: seats !== 0 && !/дүүрсэн|sold\s*out|full|closed|cancelled|inactive/i.test(`${availability} ${item.status ?? ""}`),
+      seats: Number.isInteger(seats) && seats >= 0 ? seats : null,
+      prices,
+    };
+    const key = `${date}|${hotel}`;
+    const updated = String(item.updated_at ?? "");
+    const kept = byKey.get(key);
+    if (!kept || updated > kept.updated) byKey.set(key, { row, updated });
+  }
+  return [...byKey.values()].map((entry) => entry.row).sort((a, b) => a.date.localeCompare(b.date) || a.hotel.localeCompare(b.hotel));
+}
+
+function readDays(raw: unknown): PartnerDay[] {
+  const days: PartnerDay[] = [];
+  for (const entry of Array.isArray(raw) ? raw : []) {
+    const item = record(entry);
+    const day = Number(item.day);
+    if (!Number.isInteger(day) || day < 1) continue;
+    const route = Array.isArray(item.route) && item.route.length ? record(item.route[0]) : {};
+    const meals = record(item.meals);
+    days.push({
+      day,
+      title: String(item.title ?? "").trim(),
+      route: [route.from, route.to].filter(Boolean).join(" - "),
+      lines: strings(item.description),
+      meals: { breakfast: Boolean(meals.breakfast), lunch: Boolean(meals.lunch), dinner: Boolean(meals.dinner) },
+      accommodation: typeof item.accommodation === "string" && item.accommodation.trim() ? item.accommodation.trim() : null,
+      distance: String(route.distance ?? ""),
+      transportation: typeof item.transportation === "string" ? item.transportation : null,
     });
   }
-  // Stable order: by date, then package, then hotel, so an unchanged page hashes identically.
-  return offers.sort((a, b) =>
-    a.date.localeCompare(b.date) || a.packageLabel.localeCompare(b.packageLabel) || a.hotelLabel.localeCompare(b.hotelLabel));
-}
-
-/** "P9D" -> 9 */
-function isoDurationDays(value: unknown): number | null {
-  const match = /^P(\d+)D$/.exec(String(value ?? ""));
-  return match ? Number(match[1]) : null;
-}
-
-/**
- * The itinerary lives in the HTML as a heading per day followed by a list.
- * Headings look like "1-р өдөр: Улаанбаатар - Саняа".
- */
-function readDays(html: string): PartnerDay[] {
-  const days: PartnerDay[] = [];
-  const headingPattern = /<h[23][^>]*>\s*(\d{1,2})\s*-?\s*р\s+өдөр\s*:?\s*([^<]*)<\/h[23]>/gi;
-  const matches = [...html.matchAll(headingPattern)];
-  for (let index = 0; index < matches.length; index += 1) {
-    const match = matches[index];
-    const start = match.index! + match[0].length;
-    const end = index + 1 < matches.length ? matches[index + 1].index! : Math.min(html.length, start + 8000);
-    const body = html.slice(start, end);
-    const lines = [...body.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/gi)].map((li) => text(li[1])).filter(Boolean);
-    if (!lines.length) {
-      const paragraphs = [...body.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)].map((p) => text(p[1])).filter(Boolean);
-      lines.push(...paragraphs);
-    }
-    days.push({ day: Number(match[1]), title: text(match[2]), lines });
-  }
   return days.sort((a, b) => a.day - b.day);
-}
-
-/** The bullet list that follows a given heading, e.g. "Үнэд багтсан". */
-function readListAfterHeading(html: string, heading: string): string[] {
-  const headingAt = html.search(new RegExp(`<h[23][^>]*>\\s*${heading}[^<]*<\\/h[23]>`, "i"));
-  if (headingAt < 0) return [];
-  const listMatch = /<ul[^>]*>([\s\S]*?)<\/ul>/i.exec(html.slice(headingAt, headingAt + 6000));
-  if (!listMatch) return [];
-  return [...listMatch[1].matchAll(/<li[^>]*>([\s\S]*?)<\/li>/gi)].map((li) => text(li[1])).filter(Boolean);
-}
-
-function readFaq(blocks: Record<string, unknown>[]): { question: string; answer: string }[] {
-  const page = blocks.find((block) => typesOf(block).includes("FAQPage"));
-  const entities = page && Array.isArray(page.mainEntity) ? page.mainEntity : [];
-  const faq: { question: string; answer: string }[] = [];
-  for (const entry of entities) {
-    if (!entry || typeof entry !== "object") continue;
-    const node = entry as Record<string, unknown>;
-    const accepted = (node.acceptedAnswer && typeof node.acceptedAnswer === "object" ? node.acceptedAnswer : {}) as Record<string, unknown>;
-    const question = text(String(node.name ?? ""));
-    const answer = text(String(accepted.text ?? ""));
-    if (question && answer) faq.push({ question, answer });
-  }
-  return faq;
 }
 
 async function sha256Hex(value: string): Promise<string> {
@@ -185,52 +167,51 @@ async function sha256Hex(value: string): Promise<string> {
   return createHash("sha256").update(value).digest("hex");
 }
 
-/** Reads one partner tour page. Throws when the page cannot be read or carries no offers. */
-export async function fetchGlobalTravelTour(sourceUrl: string, options: { timeoutMs?: number } = {}): Promise<PartnerTour> {
-  const response = await fetch(sourceUrl, {
-    headers: { "user-agent": "UudamTravelSync/1.0 (+https://uudamtravel.mn)", accept: "text/html" },
-    signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
-  });
-  if (!response.ok) throw new Error(`Partner page returned HTTP ${response.status}`);
-  const html = (await response.text()).slice(0, MAX_HTML_BYTES);
+/** Reads a tour by its GTC slug (the last part of https://global-travel.mn/tours/<slug>). Throws when it cannot be read. */
+export async function fetchGlobalTravelTour(slug: string, options: { timeoutMs?: number } = {}): Promise<PartnerTour> {
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const tourBody = await getJson(`/tours/${encodeURIComponent(slug)}`, timeoutMs);
+  const tour = record(tourBody.tour);
+  const tourId = String(tour.id ?? "");
+  if (!tourId) throw new Error("GTC returned no tour");
 
-  const blocks = jsonLdBlocks(html);
-  const product = blocks.find((block) => typesOf(block).some((type) => type === "TouristTrip" || type === "Product"));
-  if (!product) throw new Error("Partner page has no TouristTrip/Product structured data");
+  const [itineraryBody, tableBody] = await Promise.all([
+    getJson(`/itinerary/tour/${encodeURIComponent(tourId)}`, timeoutMs),
+    getJson(`/tours/${encodeURIComponent(slug)}/price-table?audience=public&includeSoldOut=true`, timeoutMs),
+  ]);
 
-  const offers = readOffers(product);
-  if (!offers.length) throw new Error("Partner page listed no usable offers");
+  const rows = readRows(tableBody.data);
+  if (!rows.length) throw new Error("GTC listed no priced departures");
+  const days = readDays(itineraryBody.itineraryDays);
+  if (!Array.isArray(tour.included_items) || !Array.isArray(tour.excluded_items) || !Array.isArray(tour.hotels)
+    || !days.length || new Set(days.map((day) => day.day)).size !== days.length) {
+    throw new Error("GTC returned incomplete tour content");
+  }
 
-  const days = readDays(html);
-  const includes = readListAfterHeading(html, "Үнэд багтсан");
-  const excludes = readListAfterHeading(html, "Үнэд багтаагүй");
-  const hotels = readListAfterHeading(html, "Зочид буудал");
-  const durationDays = isoDurationDays(product.duration);
+  const durationDays = Number(tour.duration_day);
+  const durationNights = Number(tour.duration_night);
+  const hotels = (Array.isArray(tour.hotels) ? tour.hotels : [])
+    .map((entry) => record(entry))
+    .map((hotel) => ({ name: String(hotel.name ?? "").trim(), description: String(hotel.description ?? "").trim(), stars: Number.isFinite(Number(hotel.stars)) && Number(hotel.stars) > 0 ? Number(hotel.stars) : null }))
+    .filter((hotel) => hotel.name);
 
-  const destinationRaw = product.destination;
-  const destinations = (Array.isArray(destinationRaw) ? destinationRaw : destinationRaw ? [destinationRaw] : [])
-    .map((entry) => (entry && typeof entry === "object" ? String((entry as Record<string, unknown>).name ?? "") : String(entry)))
-    .map((name) => text(name))
-    .filter(Boolean);
-
-  const tour: Omit<PartnerTour, "contentHash"> = {
-    sourceUrl,
-    title: text(String(product.name ?? "")),
-    description: text(String(product.description ?? "")),
-    heroImage: typeof product.image === "string" ? product.image : null,
-    durationDays,
-    durationNights: durationDays ? durationDays - 1 : null,
-    destinations,
+  const data: Omit<PartnerTour, "contentHash"> = {
+    slug,
+    sourceUrl: `https://global-travel.mn/tours/${slug}`,
+    title: String(tour.title ?? "").trim(),
+    description: String(tour.description ?? "").trim(),
+    destinations: strings(tour.cities),
+    airlines: strings(tour.airlines),
+    durationDays: Number.isInteger(durationDays) && durationDays > 0 ? durationDays : null,
+    durationNights: Number.isInteger(durationNights) && durationNights >= 0 ? durationNights : null,
     hotels,
-    offers,
-    dates: [...new Set(offers.map((offer) => offer.date))].sort(),
-    packages: [...new Set(offers.map((offer) => offer.packageLabel))],
-    hotelOptions: [...new Set(offers.map((offer) => offer.hotelLabel))],
+    includes: strings(tour.included_items),
+    excludes: strings(tour.excluded_items),
     days,
-    includes,
-    excludes,
-    faq: readFaq(blocks),
-    dateModified: typeof product.dateModified === "string" ? product.dateModified.slice(0, 10) : null,
+    rows,
+    dates: [...new Set(rows.map((row) => row.date))].sort(),
+    hotelOptions: [...new Set(rows.map((row) => row.hotel))],
+    updatedAt: typeof tour.updated_at === "string" ? tour.updated_at : null,
   };
-  return { ...tour, contentHash: await sha256Hex(JSON.stringify(tour)) };
+  return { ...data, contentHash: await sha256Hex(JSON.stringify(data)) };
 }
