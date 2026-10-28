@@ -62,7 +62,7 @@ import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { ensureDurableLead } from "../../lib/durableLead";
 import { logInboundMessage } from "../../lib/travelMessages";
 import { getCollectState } from "../../lib/bookingCollect";
-import { continueBookingCollect, startBookingCollect, type BookingCollectContext } from "../../lib/bookingCollectFlow";
+import { continueBookingCollect, isBareBookingRequest, startBookingCollect, type BookingCollectContext } from "../../lib/bookingCollectFlow";
 import { getEnv } from "../../lib/env";
 import { isMetaOutboundDisabled } from "../../lib/metaOutboundKillSwitch";
 import { beginRequestTrace, classifyError, finishRequestTrace, hashIdentifier, logError, logInfo, logWarn, recordCounter, } from "../../lib/observability";
@@ -589,7 +589,9 @@ async function handleMessage(
   // price list on "hi" ~50% of the time (found 2026-07-22). A greeting asks
   // nothing and must never re-serve a stale trip. Any attachment riding along
   // with the text is still processed by scheduleAttachmentDocumentPipeline.
-  if (isKnownGreetingPhrase(text)) {
+  // With the agent on it answers these itself: "ок" is an acknowledgement, and
+  // a canned "Сайн байна уу!" in the middle of a chat reads like a robot.
+  if (isKnownGreetingPhrase(text) && !agentOn) {
     await appendMessage(senderId, "user", text).catch(() => {});
     await deliverFastPathReply({
       reply: MID_CONVERSATION_GREETING_REPLY,
@@ -899,8 +901,10 @@ async function handleMessage(
       (message) => message.role === "user" && extractPhoneNumber(message.text),
     );
   const phoneAlreadyRequested = phoneCollected || hasAskedForPhone(history);
+  // With the agent on, only a bare "I want to book" starts the name/phone form;
+  // a question that merely mentions booking ("20 хүн захиалвал болох уу") is answered.
   const customerWantsToBook =
-    botSettings.handoff_enabled && isBookingIntent(text);
+    botSettings.handoff_enabled && isBookingIntent(text) && (!agentOn || isBareBookingRequest(text));
   if (customerWantsToBook && (await startBookingCollect(bookingCtx))) return;
   await appendMessage(senderId, "user", text);
   let cachedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
@@ -1043,6 +1047,11 @@ async function handleMessage(
       knowledgeBase: business.knowledgeBase, trips: catalogTrips, history, userText: text,
       customerMemory, focusTripNames, phoneCollected, check: factProblem,
     });
+    if (turn?.noReply) {
+      recordCounter("webhook.agent_turn_total", 1, { platform, outcome: "no_reply" });
+      await rememberTurn("api.webhook.conversational_agent_no_reply");
+      return;
+    }
     if (turn) {
       recordCounter("webhook.agent_turn_total", 1, { platform, outcome: turn.handoff ? "handoff" : "reply" });
       await deliverFastPathReply({

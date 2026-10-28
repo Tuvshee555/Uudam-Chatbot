@@ -64,6 +64,9 @@ test("the model's JSON is read into catalog trips, short buttons and an explicit
   assert.equal(handoff?.reply, "");
   assert.equal(agent.parseAgentTurn("Сайн байна уу", [north]), null);
   assert.equal(agent.parseAgentTurn('{"reply":""}', [north]), null);
+  const quiet = agent.parseAgentTurn('{"reply":"Ок","no_reply":true}', [north]);
+  assert.equal(quiet?.noReply, true);
+  assert.equal(quiet?.reply, "");
 });
 
 test("an essay or a failed fact check is rewritten once with the reason", async () => {
@@ -196,6 +199,17 @@ test("the webhook sends one short agent message, rewrites wrong facts, and hands
     modelReplies.push(JSON.stringify({ reply: "Ойлголоо, 2 хүн. Аль сард явах вэ?", trips: [] }));
     await say("agent-e", "2");
     assert.deepEqual(sends, ["Ойлголоо, 2 хүн. Аль сард явах вэ?"]);
+
+    // "Ок" is not a greeting: no canned "Сайн байна уу!", and nothing at all when nothing is pending.
+    modelReplies.push(JSON.stringify({ reply: "", no_reply: true }));
+    await say("agent-f", "Ок");
+    assert.equal(modelRequests.length, 1);
+    assert.deepEqual(sends, []);
+
+    // A question that mentions booking is answered, not turned into a name/phone form.
+    modelReplies.push(JSON.stringify({ reply: "Тийм ээ, 20 хүнээр явж болно 😊 Хэдэн сард явахаар төлөвлөж байна вэ?", trips: [] }));
+    await say("agent-g", "20н хүн захиалга өгвөл болох уу");
+    assert.deepEqual(sends, ["Тийм ээ, 20 хүнээр явж болно 😊 Хэдэн сард явахаар төлөвлөж байна вэ?"]);
   } finally {
     await closeNeonPool();
   }

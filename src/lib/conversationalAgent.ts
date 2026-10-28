@@ -39,6 +39,8 @@ export type AgentTurn = {
   handoff: boolean;
   /** The customer asked to see photos of the trip(s) in `trips`. */
   sendPhotos: boolean;
+  /** Nothing to say ("ok", "👍" after an answer): a person would not reply either. */
+  noReply: boolean;
 };
 
 export type AgentAsk = (prompt: { system: string; user: string }) => Promise<string>;
@@ -78,6 +80,7 @@ const STYLE_RULES = [
   "Show you listen: use what the customer already told you (dates, number of people, children, budget) and never ask for it again.",
   "If the customer repeats themselves or seems frustrated (\"????\", \"hariu ugnu uu\", \"yu bolj bgaa ve\"), apologize briefly in a human way and answer the actual question more simply. Never resend the same message.",
   "Do not greet again if the conversation has already started. Do not thank them for every message.",
+  "If the customer only acknowledges (\"ok\", \"за\", \"ойлголоо\", \"👍\") and you have nothing useful to add, set no_reply to true — a person would not answer that either. If they greet you mid-conversation, greet back briefly and ask how you can help.",
   "FACTS ONLY FROM THE CATALOG: every trip name, price, date, duration, hotel, meal, visa or booking term you state must be written in the Catalog below for that trip, copied exactly. Prices in ₮ exactly as written. Never offer a departure date before today. Never say seats are limited unless the catalog shows 1-7 seats left.",
   "Catalog lines ending in 'summary only' show the key facts of other trips; use them to recommend or compare, but do not state details they do not show.",
   "If the customer's question needs a fact that is not in the catalog (visa rules, a hotel name, what is included, a trip we do not have), set handoff to true and leave reply empty — a consultant will answer. If the question is only unclear, ask one short question instead of handing off.",
@@ -89,11 +92,12 @@ const STYLE_RULES = [
 
 const OUTPUT_RULES = [
   "Return ONLY a JSON object with these keys:",
-  '{"reply": "<message to the customer>", "buttons": ["<0-3 short tap answers to YOUR question, each under 20 characters>"], "trips": ["<exact catalog trip names your reply is about>"], "handoff": false, "send_photos": false}',
+  '{"reply": "<message to the customer>", "buttons": ["<0-3 short tap answers to YOUR question, each under 20 characters>"], "trips": ["<exact catalog trip names your reply is about>"], "handoff": false, "send_photos": false, "no_reply": false}',
   "- trips: every catalog trip whose facts you state, written exactly as in the catalog. Empty when you state no trip facts.",
   "- buttons: only when they make answering easier (months, number of people, the 2-3 options you mentioned). Never a button that repeats a whole trip name longer than 20 characters.",
   "- send_photos: true only when the customer asks to see photos/pictures.",
   "- handoff: true only when the catalog cannot answer (see the rules); then reply is \"\".",
+  "- no_reply: true only for a bare acknowledgement that needs no answer; then reply is \"\".",
 ];
 
 // Invented trips and placeholders only — real names or prices here would be
@@ -186,13 +190,15 @@ export function parseAgentTurn(raw: string, trips: TravelTrip[]): AgentTurn | nu
   }
   const reply = typeof data.reply === "string" ? data.reply.replace(/\r\n/g, "\n").trim() : "";
   const handoff = data.handoff === true;
-  if (!reply && !handoff) return null;
+  const noReply = !handoff && data.no_reply === true;
+  if (!reply && !handoff && !noReply) return null;
   const buttons = (Array.isArray(data.buttons) ? data.buttons : [])
     .filter((label): label is string => typeof label === "string")
     .map((label) => label.trim())
     .filter((label) => label && label.length <= MAX_BUTTON_CHARS)
     .slice(0, MAX_BUTTONS);
-  return { reply: handoff ? "" : reply, buttons, trips: tripsByName(data.trips, trips), handoff, sendPhotos: data.send_photos === true };
+  return { reply: handoff || noReply ? "" : reply, buttons, trips: tripsByName(data.trips, trips), handoff,
+    sendPhotos: data.send_photos === true, noReply };
 }
 
 /** Why a reply breaks the style contract, or null. */
@@ -242,7 +248,7 @@ export async function runConversationalAgent(input: {
       continue;
     }
     last = turn;
-    if (turn.handoff) return turn;
+    if (turn.handoff || turn.noReply) return turn;
     const problem = agentStyleProblem(turn.reply) || (input.check ? await input.check(turn) : null);
     if (!problem) return turn;
     feedback = problem;

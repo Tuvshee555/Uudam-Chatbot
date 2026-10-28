@@ -302,7 +302,8 @@ export default async function handler(
       // price list on "hi" ~50% of the time (found 2026-07-22 in the
       // 100-question sweep). A greeting asks nothing; it must never re-serve a
       // stale trip. Mirrors the production webhook's mid-conversation greeting.
-      if (isKnownGreetingPhrase(normalizedText)) {
+      const agentOn = !isEnglishDemo && conversationalAgentEnabled(botSettings.extra as Record<string, unknown> | undefined);
+      if (isKnownGreetingPhrase(normalizedText) && !agentOn) {
         const greetingReply = isEnglishDemo
           ? "Hello! 😊 Ask me anything about our tours — prices, departure dates, seats, meals or itineraries."
           : MID_CONVERSATION_GREETING_REPLY;
@@ -461,8 +462,7 @@ export default async function handler(
       // Conversational agent, as in the production webhook: one short message,
       // one question, facts checked against the trips it names. Null falls
       // through to the keyword paths below.
-      if (!isEnglishDemo && conversationalAgentEnabled(botSettings.extra as Record<string, unknown> | undefined)
-        && typeof business?.knowledgeBase === "string") {
+      if (agentOn && typeof business?.knowledgeBase === "string") {
         const catalogTrips = (await getTrips()).filter((trip) =>
           trip.status === "active" && (trip.extra as Record<string, unknown> | undefined)?.customer_visible !== false);
         const match = resolveTripFromUserMessage(contextualUserText, catalogTrips, { allowLooseFallback: false });
@@ -492,6 +492,10 @@ export default async function handler(
         if (turn) {
           await appendMessage(sessionId, "user", normalizedText);
           if (turn.handoff) return returnHandoff();
+          if (turn.noReply) {
+            await rememberTurn();
+            return res.status(200).json({ reply: "", buttons: [], mediaUrls: [], brochureUrl: null, silent: true });
+          }
           factualScope = turn.trips;
           await appendMessage(sessionId, "assistant", turn.reply);
           await rememberTurn();
