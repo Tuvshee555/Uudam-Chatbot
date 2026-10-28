@@ -134,6 +134,14 @@ const NO_DATA_REPLY_PATTERNS: RegExp[] = [
   // "<газар> чиглэлийн аялал манайд байхгүй", "систем алдаатай байна", "… татаж чадсангүй",
   // "мессеж илгээхэд алдаа гарлаа": the bot saying it has nothing or failed is not an answer.
   /манайд\s+(?:одоогоор\s+)?байхгүй/i,
+  // The model denying a kind of trip ("Хайнан чиглэлд шууд нислэгтэй аялал байхгүй байна") while
+  // the catalogue has them (real chat 10-26). Which trips fly direct is answered from the data
+  // by code, never by the model; its own "there is none" is a guess.
+  /(?:нислэгтэй|нислэг\s+хосолсон|газрын)\s+аялал\s+(?:одоогоор\s+)?байхгүй/i,
+  // The same for a date: "2-р сарын 3-нд гарах аялал байхгүй байна" / "1 сарын 20-нд гарах Хайнан
+  // чиглэлийн аялал байхгүй" for a trip that does depart then (real chats 10-26, 10-27).
+  // Which dates a trip leaves on is read from its data by code; the model's "none" is a guess.
+  /гарах\s+(?:\S+\s+){0,3}аялал\s+(?:одоогоор\s+)?байхгүй/i,
   /алдаатай\s+байна|алдаа\s+гарлаа/i,
   /(?:татаж|олж|уншиж|илгээж|нээж|хариулж)\s+чадсангүй/i,
   // The prompt's own section name leaking into a reply ("одоогоор Context-д байхгүй").

@@ -1308,7 +1308,10 @@ export function queryWantsDirectFlight(query: string): boolean {
     normalized.includes("shuud nislegtei") ||
     normalized.includes("shuud нислэг") ||
     normalized.includes("shuud нислэгтэй") ||
-    normalized.includes("direct flight")
+    normalized.includes("direct flight") ||
+    // Typed fast on a phone: "shuud nudleg", "shud nisleg".
+    // (normText already turns a correctly typed "nislegtei" into Cyrillic.)
+    /(?:^|\s)shuu?d\s+(?:n[iu][sd]?l[ei]g|нислэг)/.test(normalized)
   );
 }
 

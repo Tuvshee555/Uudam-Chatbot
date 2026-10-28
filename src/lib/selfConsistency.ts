@@ -11,6 +11,7 @@
  */
 import type { TravelTrip } from "./travelTypes";
 import { buildStructuredTripReply } from "./travelFastPaths";
+import { sanitizeTripForCustomers } from "./travelFastPathsSearch";
 import { buildAmbiguousTripReply } from "./travelFastPathsPricing";
 import { verifyTripReply } from "./tripReplyVerification";
 import { presentAssistantReply } from "./chatbotReplyPolicy";
@@ -23,7 +24,10 @@ export type SelfConsistencyReport = { trips: number; answers: number; failures: 
 const LIVE = new Set(["active", "sold_out", "paused"]);
 
 export function checkSelfConsistency(trips: TravelTrip[], now = new Date()): SelfConsistencyReport {
-  const live = trips.filter((trip) => LIVE.has(trip.status));
+  // The trips as the webhook builds replies from them (closed departures dropped, fare groups
+  // cleaned). Raw rows made a sold-out date look like a bot disagreement: four rejections for
+  // one trip on 10-28 that no customer ever met.
+  const live = trips.map(sanitizeTripForCustomers).filter((trip) => LIVE.has(trip.status));
   const failures: SelfConsistencyFailure[] = [];
   let answers = 0;
   for (const trip of live) {

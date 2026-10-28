@@ -68,7 +68,7 @@ const RELATIVE_DATE_PATTERNS: Array<{
 
 // Calendar weeks have exact boundaries; the broader "month beginning" window
 // must not stretch a first-week request through day ten or cut two weeks short.
-const MONTH_WEEK_RE = /(?<!\d)(?:(20\d{2})\s*(?:оны|он|onii|oni|on)?\s*)?(\d{1,2})\s*(?:-?\s*р)?\s*(?:сарын|сар|sariin|sar)\s*(?:(эхний|сүүлийн|сүүлчийн|ehnii|suuliin)\s*(?:(\d{1,2})\s+)?|(\d{1,2})\s*(?:дахь|дэх|дугаар|dahi|dah|deh)\s+)(?:7|долоо|doloo)\s*(?:хоног|honog)(?:ийн|т|оос|оор|ийг|iin|t|oos|oor|iig)?(?![\p{L}\d])/iu;
+const MONTH_WEEK_RE = /(?<!\d)(?:(20\d{2})\s*(?:оны|он|onii|oni|on)?\s*)?(\d{1,2})\s*(?:-?\s*[рr])?\s*(?:сарын|сар|sar(?:iin|in|yn|un)?)\s*(?:(эхний|сүүлийн|сүүлчийн|ehnii|suuliin)\s*(?:(\d{1,2})\s+)?|(\d{1,2})\s*(?:дахь|дэх|дугаар|dahi|dah|deh)\s+)(?:7|долоо|doloo)\s*(?:хоног|honog)(?:ийн|т|оос|оор|ийг|iin|t|oos|oor|iig)?(?![\p{L}\d])/iu;
 
 function getMongoliaDateParts(now = new Date()): DateParts {
   const parts = MN_DATE_FORMAT.formatToParts(now);
@@ -186,7 +186,7 @@ function explicitDateCandidates(
   }
 
   for (const match of text.matchAll(
-    /(?:(20\d{2})\s*(?:оны|он|onii|oni|on)?\s*)?(\d{1,2})\s*(?:-?\s*р)?\s*(?:сарын|сар|sariin|sar)\s*(\d{1,2})/gi,
+    /(?:(20\d{2})\s*(?:оны|он|onii|oni|on)?\s*)?(\d{1,2})\s*(?:-?\s*[рr])?\s*(?:сарын|сар|sar(?:iin|in|yn|un)?)\s*(\d{1,2})/gi,
   )) {
     const month = Number(match[2]);
     const day = Number(match[3]);
@@ -296,7 +296,7 @@ export function resolveRequestedMonth(
     return buildMonth(month, month < today.month ? today.year + 1 : today.year);
   }
 
-  const match = /(?:^|[^\d])(\d{1,2})\s*(?:-?\s*р)?\s*(?:сар(?:ынх|ын|ых|д)?|sard|sariin|sar)(?!\p{L}|\s*\d)/iu.exec(text);
+  const match = /(?:^|[^\d])(\d{1,2})\s*(?:-?\s*[рr])?\s*(?:сар(?:ынх|ын|ых|д)?|sard|sar(?:iin|in|yn|un)?)(?!\p{L}|\s*\d)/iu.exec(text);
   if (!match) return null;
   const month = Number(match[1]);
   if (!Number.isInteger(month) || month < 1 || month > 12) return null;
@@ -570,7 +570,7 @@ function isBareDateOrMonthMessage(text: string): boolean {
   const rest = text
     .toLowerCase()
     .replace(/\d{1,4}\s*[./-]\s*\d{1,2}(?:\s*[./-]\s*\d{1,4})?/g, " ")
-    .replace(/\d{1,2}\s*(?:-?\s*р)?\s*(?:сарын|сард|сар|sariin|sard|sar)/g, " ")
+    .replace(/\d{1,2}\s*(?:-?\s*[рr])?\s*(?:сарын|сард|сар|sard|sar(?:iin|in|yn|un)?)/g, " ")
     .replace(/\d+/g, " ")
     .replace(/[^\p{L}\s]/gu, " ")
     .split(/\s+/)
@@ -834,7 +834,7 @@ const FROM_TO_RANGE_RE = /(?<![\d./-])(\d{1,2})[./](\d{1,2})\s*-?\s*(?:ээс|а
 
 // "9 сарын сүүлээр 10 сарын эхээр": parts of a month, in customer words.
 const MONTH_PART_RE =
-  /(\d{1,2})\s*(?:-?\s*р)?\s*(?:сарын|сар|sari{1,2}n|sar)\s*(эх\S*|ehe\S*|ehn\S*|дунд\S*|dund\S*|сүүл\S*|su{1,2}l\S*)/gi;
+  /(\d{1,2})\s*(?:-?\s*[рr])?\s*(?:сарын|сар|sari{1,2}n|sar)\s*(эх\S*|ehe\S*|ehn\S*|дунд\S*|dund\S*|сүүл\S*|su{1,2}l\S*)/gi;
 const MAX_WINDOW_DAYS = 62;
 
 type RequestedRange = { startYmd: string; endYmd: string; label: string };
@@ -871,7 +871,7 @@ export function resolveRequestedRange(text: string, now: Date): RequestedRange |
     // Never select just the first window, or broaden an excluded week to the
     // generic month-beginning window below. Compound constraints need staff.
     const negated = /(?:^|[^\p{L}])(?:биш(?:ээ)?|бус(?:ад)?|үгүй|оронд|bish|bishee|bus|ugui|not|except|instead)(?!\p{L})|явахгүй|явж\s*чадахгүй|амжихгүй|тохирохгүй|боломжгүй|yavahgui|bolomjgui|эс\s+тооцвол/iu.test(normalized);
-    const anotherDate = /\d{1,2}\s*(?:-?\s*р)?\s*(?:сарын|сард|сар|sariin|sard|sar)|\d{1,2}\s*[./-]\s*\d{1,2}|\d{1,2}\s*-?\s*(?:наас|нээс|ны|ний|нд)|(?:эхний|сүүлийн|сүүлчийн|дараагийн|ирэх|энэ|ehnii|suuliin|daraagiin|ireh|ene|\d\s*(?:дахь|дэх|дугаар))\s+(?:\d{1,2}\s+)?(?:7|долоо|doloo)\s*(?:хоног|honog)/iu.test(rest);
+    const anotherDate = /\d{1,2}\s*(?:-?\s*[рr])?\s*(?:сарын|сард|сар|sard|sar(?:iin|in|yn|un)?)|\d{1,2}\s*[./-]\s*\d{1,2}|\d{1,2}\s*-?\s*(?:наас|нээс|ны|ний|нд)|(?:эхний|сүүлийн|сүүлчийн|дараагийн|ирэх|энэ|ehnii|suuliin|daraagiin|ireh|ene|\d\s*(?:дахь|дэх|дугаар))\s+(?:\d{1,2}\s+)?(?:7|долоо|doloo)\s*(?:хоног|honog)/iu.test(rest);
     if (weeks.length > 1 || negated || anotherDate) return "unsupported";
     const today = getMongoliaDateParts(now);
     const month = Number(week[2]);

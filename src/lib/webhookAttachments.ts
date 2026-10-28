@@ -78,19 +78,20 @@ type ProcessedDocumentLike = {
  * screenshots get their own matched-trip answer, misc images stay covered by
  * the generic ack alone.
  */
-function buildDocumentReceivedMessage(docs: ProcessedDocumentLike[]): string | null {
+export function buildDocumentReceivedMessage(docs: ProcessedDocumentLike[]): string | null {
   const categories = new Set(docs.map((doc) => doc.category));
   const received: string[] = [];
   if (categories.has("payment_screenshot")) {
     // Do not echo OCR-read amounts to the customer. A misread number can feel
     // like payment verification; staff see the amount in the review tab.
-    received.push("төлбөрийн баримт");
+    received.push("төлбөрийн баримтыг");
   }
-  if (categories.has("passport")) received.push("паспортын зураг");
-  if (categories.has("booking_code")) received.push("захиалгын код");
-  if (categories.has("travel_document")) received.push("бичиг баримт");
+  // Each item carries its own accusative ending ("баримт-ыг" read as a typo to customers).
+  if (categories.has("passport")) received.push("паспортын зургийг");
+  if (categories.has("booking_code")) received.push("захиалгын кодыг");
+  if (categories.has("travel_document")) received.push("бичиг баримтыг");
   if (received.length === 0) return null;
-  return `Таны илгээсэн ${received.join(", ")}-ыг хүлээн авч бүртгэлээ ✅ Манай аяллын зөвлөх шалгаад баталгаажуулна. Баярлалаа! 🙌`;
+  return `Таны илгээсэн ${received.join(", ")} хүлээн авч бүртгэлээ ✅ Манай аяллын зөвлөх шалгаад баталгаажуулна. Баярлалаа! 🙌`;
 }
 
 /**

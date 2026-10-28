@@ -31,6 +31,21 @@ const catalog: TravelTrip[] = [
   // The nearest departure is sold out; later ones still sell.
   base("soldout", "ТОЛЬ НУУРЫН АЯЛАЛ", { age_rules: { adult: "12+ нас", child: "2-11 нас" },
     website_departure_availability: [{ date: "2099-02-10", status: "SOLD_OUT", seatsLeft: 0 }] }),
+  // The nearest departure is sold out but still sits in shared and date-only fare rows (the owner
+  // closes a date on the website without editing the fare table): the card must not print it, or the
+  // checker rejects the whole card and the customer gets silence (live 10-28; the audit read raw rows).
+  base("closedrows", "ХУВИЛБАР НУУРЫН АЯЛАЛ", { age_rules: { adult: "12+ нас", child: "2-11 нас", infant: "0-2 нас" }, price_groups:
+    // One row per date, two packages, age-band fares; the first date shares its fares with the last.
+    (["2099-02-10", "2099-02-17", "2099-02-24"] as const).flatMap((date) => ["Хөтөлбөргүй", "Хөтөлбөртэй"].map((packageId) => {
+      const withProgram = packageId === "Хөтөлбөртэй" ? 300_000 : 0;
+      const single = date === "2099-02-17" ? 900_000 : 650_000;
+      return { dates: [date], hotel: "Lotus", package_id: packageId, adult_price: 3_100_000 + withProgram, child_price: 2_600_000 + withProgram,
+        infant_price: 450_000, single_price: single, passenger_prices: [
+          { label: "Хүүхэд 6-11 нас", price: 2_600_000 + withProgram, age_range: "6-11 нас" },
+          { label: "Хүүхэд 2-5 нас", price: 2_400_000 + withProgram, age_range: "2-5 нас" },
+          { label: "Нярай 0-2 нас", price: 450_000, age_range: "0-2 нас" },
+        ] };
+    })), website_departure_availability: [{ date: "2099-02-10", status: "SOLD_OUT", seatsLeft: null }] }),
 ];
 
 test("the bot accepts every answer it builds about the catalog", () => {

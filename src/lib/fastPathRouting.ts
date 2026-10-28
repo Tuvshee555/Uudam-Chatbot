@@ -126,16 +126,22 @@ const DATE_FOLLOWUP_WORDS = new Set([
   "өнөөдөр", "маргааш", "нөгөөдөр", "today", "tomorrow", "margaash", "margash", "nuguudur",
   "аялал", "аяллын", "aylal", "aylaliin", "үнэ", "une", "vne", "хэд", "хэдэн", "hed", "heden",
   "вэ", "ве", "ve", "байна", "байгаа", "бол", "уу", "юу", "uu", "yu", "бну", "бна", "bnu", "bna", "baina",
+  // Phone typing: "11 sard bn", "11.04нийг сонирхож бна" (accusative -ийг).
+  "bn", "bnuu", "bgayu", "бнуу", "бга", "бгаа", "бгаюу", "нийг", "ыг", "ийг", "sarin", "saryn", "sarun",
   "гарах", "явах", "garah", "yavah", "yvah", "хөтөлбөр", "үзэх", "hutulbur", "uzey", "uzye",
 ]);
 
 const CALENDAR_FOLLOWUP_WORDS = new Set([
-  ...DATE_FOLLOWUP_WORDS, "сард", "сарынх", "сарых", "sard", "sariinh", "р", "дугаар", "дахь", "дэх",
+  ...DATE_FOLLOWUP_WORDS, "сард", "сарынх", "сарых", "sard", "sariinh", "р", "r", "дугаар", "дахь", "дэх",
   "эхний", "эхээр", "эхэнд", "сүүлийн", "сүүлчийн", "сүүлээр", "дунд", "дундуур", "долоо", "хоног", "хоногт", "хоногийн", "хооронд",
   "ehnii", "eheer", "ehend", "suuliin", "suuleer", "dund", "doloo", "honog", "hoorond",
+  // "1 сарын 20доор" = around the 20th.
+  "доор", "door", "орчим", "orchim",
   "сонирхож", "sonirhoj", "болох", "боломжтой", "суудал", "suudal", "bga", "bgaa", "baigaa",
   "шууд", "нислэгтэй", "нислэг", "shuud", "nislegtei", "nisleg", "хэдээр", "үнэтэй", "price", "cost",
   "нэг", "хоёр", "гурав", "дөрөв", "тав", "зургаа", "долоо", "найм", "ес", "арав", "арван",
+  // Who travels is not a new destination: "12/20 nd 2 hun", "11/4-нд 3 хүн", "2 том хүн 1 хүүхэд".
+  "хүн", "хүний", "hun", "huun", "humuus", "том", "tom", "хүүхэд", "хүүхдийн", "huuhed", "huuhdiin", "нярай", "nyarai",
 ]);
 
 function calendarWordsAreContextOnly(text: string): boolean {

@@ -12,6 +12,9 @@ export async function runDailyHealthCheck(): Promise<void> {
       model: "gpt-4o-mini",
       maxOutputTokens: 1,
       temperature: 0,
+      // One token always ends on "length"; that is not an incomplete answer and must not
+      // put a warning in the admin system check every day.
+      truncationExpected: true,
       source: "daily_health_check",
     });
     logInfo("daily_health_check.openai", { ok: Boolean(ping) });

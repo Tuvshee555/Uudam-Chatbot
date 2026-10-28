@@ -37,6 +37,8 @@ export async function askOpenAIChatParts(
     systemText?: string;
     /** Internal recursion guard for the lower-cost alternate model. */
     alternateModelAttempted?: boolean;
+    /** A reply cut off by maxOutputTokens is intended (a one-token liveness probe), not a failure. */
+    truncationExpected?: boolean;
   },
 ): Promise<OpenAIResult | null> {
   const key = env.openaiApiKey;
@@ -131,7 +133,7 @@ export async function askOpenAIChatParts(
         finishReason,
         refusal: data?.choices?.[0]?.message?.refusal ?? null,
       });
-    } else if (finishReason === "length" || finishReason === "content_filter") {
+    } else if ((finishReason === "length" && !options?.truncationExpected) || finishReason === "content_filter") {
       logWarn("openai.incomplete_completion", { source, model, finishReason });
     }
     // Nothing came back: that is "no answer" (silence + staff lead), never an apology to the customer.

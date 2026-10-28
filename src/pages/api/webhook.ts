@@ -23,6 +23,7 @@ import {
   MID_CONVERSATION_GREETING_REPLY,
   THANKS_REPLY,
 } from "../../lib/greetingPhrases";
+import { optionChosenByNumber } from "../../lib/selectionAnswer";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
@@ -268,6 +269,8 @@ async function handleMessage(
     getClarificationState(senderId),
     getTripSelection(senderId),
   ]);
+  // "1" under a bulleted hotel / package / date question is that option, not a number with no list.
+  text = optionChosenByNumber(history, text) ?? text;
   const contextualUserText = buildContextualUserText(history, text);  const sessionId = `${platform}:${pageId}:${senderId}`;
   // Non-blocking: the memory merge continues after the response via waitUntil.
   // It used to be awaited inline while holding the conversation lock, which
