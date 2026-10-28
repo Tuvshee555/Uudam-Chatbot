@@ -167,6 +167,11 @@ async function sha256Hex(value: string): Promise<string> {
   return createHash("sha256").update(value).digest("hex");
 }
 
+/** The partner writes its own brand into the blurb ("GTC-тэй хамт …"); our customers must not read that. */
+export function ownVoice(text: string): string {
+  return text.replace(/GTC\S*\s+хамт\s+/gi, "").replace(/\s+/g, " ").trim();
+}
+
 /** Reads a tour by its GTC slug (the last part of https://global-travel.mn/tours/<slug>). Throws when it cannot be read. */
 export async function fetchGlobalTravelTour(slug: string, options: { timeoutMs?: number } = {}): Promise<PartnerTour> {
   const timeoutMs = options.timeoutMs ?? 30_000;
@@ -199,7 +204,7 @@ export async function fetchGlobalTravelTour(slug: string, options: { timeoutMs?:
     slug,
     sourceUrl: `https://global-travel.mn/tours/${slug}`,
     title: String(tour.title ?? "").trim(),
-    description: String(tour.description ?? "").trim(),
+    description: ownVoice(String(tour.description ?? "")),
     destinations: strings(tour.cities),
     airlines: strings(tour.airlines),
     durationDays: Number.isInteger(durationDays) && durationDays > 0 ? durationDays : null,

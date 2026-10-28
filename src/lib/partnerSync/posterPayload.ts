@@ -105,13 +105,23 @@ function flightLines(days: PartnerDay[]): Existing {
   return { outbound: outbound ?? "", return: back ?? "" };
 }
 
+/** The poster header fits a line or two, so it gets whole sentences up to a length, not the full blurb. */
+export function posterSubtitle(description: string, max = 180): string {
+  let out = "";
+  for (const sentence of description.match(/[^.!?]+[.!?]+\s*/g) ?? [description]) {
+    if (out && (out + sentence).trim().length > max) break;
+    out += sentence;
+  }
+  return out.trim();
+}
+
 export function buildPosterData(tour: PartnerTour, existing: unknown = {}): Existing {
   const own = asRecord(existing);
   const adult = lowestAdultPrice(tour);
   return {
     ...own,
     source_url: tour.sourceUrl,
-    subtitle: tour.description,
+    subtitle: posterSubtitle(tour.description),
     destinations: tour.destinations,
     duration_days: tour.durationDays ?? own.duration_days,
     duration_nights: tour.durationNights ?? own.duration_nights,
