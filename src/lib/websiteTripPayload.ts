@@ -98,6 +98,8 @@ export function websiteAvailabilityForResync(
 
 function fareRow(offer: ResolvedTripOffer, sourceRows: Map<string, Record<string, unknown>>) {
   const source = offer.sourceOfferIds.map(id => sourceRows.get(id)).find(Boolean);
+  const partnerPassengers = source?.partner_source === true && Array.isArray(source.passenger_prices)
+    ? source.passenger_prices.filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === "object")) : [];
   const adult = displayAmount(offer, "adult", source);
   const sourceWithoutDimensions = { ...(source || {}) };
   delete sourceWithoutDimensions.hotel;
@@ -116,7 +118,10 @@ function fareRow(offer: ResolvedTripOffer, sourceRows: Map<string, Record<string
     adult_price_range: offer.prices.adult?.kind === "range" ? { min: offer.prices.adult.min, max: offer.prices.adult.max } : null,
     child_price: displayAmount(offer, "child", source), infant_price: displayAmount(offer, "infant", source),
     passenger_prices: offer.fares.filter(fare => fare.kind !== "adult").map(fare => ({
-      label: `${fare.kind === "infant" ? "Нярай" : "Хүүхэд"}${fare.ageRange ? ` ${fare.ageRange}` : ""}`,
+      label: source?.partner_source === true
+        ? String(partnerPassengers.find((price) => price.age_range === fare.ageRange)?.label
+          || `${fare.kind === "infant" ? "Нярай" : "Хүүхэд"}${fare.ageRange ? ` ${fare.ageRange}` : ""}`)
+        : `${fare.kind === "infant" ? "Нярай" : "Хүүхэд"}${fare.ageRange ? ` ${fare.ageRange}` : ""}`,
       age_range: fare.ageRange || "", price: exactAmount(fare.fare), currency: fare.currency,
       ...(fare.fare.kind === "free" ? { note: "Үнэгүй" } : {}),
       ...(fare.fare.kind === "range" ? { price_range: { min: fare.fare.min, max: fare.fare.max } } : {}),

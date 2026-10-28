@@ -4,6 +4,7 @@
 // The poster is MERGED, not replaced: Uudam's own photos, layout, contacts and wording stay, and
 // everything GTC publishes (prices, dates, hotels, programme text, included/excluded) is copied over.
 import type { PartnerDay, PartnerRow, PartnerTour } from "./globalTravel";
+import { isDeepStrictEqual } from "node:util";
 
 const fmt = (amount: number) => `${amount.toLocaleString("en-US")}₮`;
 const cell = (amount: number | null) => (amount == null ? "-" : fmt(amount));
@@ -161,8 +162,8 @@ export function describeChanges(before: PartnerTour | null, after: PartnerTour):
   for (const key of was.keys()) if (!now.has(key)) lines.push(`➖ ${key.replace("|", " ")} жагсаалтаас хасагдлаа`);
 
   if (before.days.length !== after.days.length) lines.push(`📝 Хөтөлбөр: ${before.days.length} → ${after.days.length} өдөр`);
-  if (JSON.stringify(before.days) !== JSON.stringify(after.days) && before.days.length === after.days.length) lines.push("📝 Хөтөлбөрийн текст өөрчлөгдсөн");
-  if (JSON.stringify(before.includes) !== JSON.stringify(after.includes)) lines.push(`📝 Үнэд багтсан: ${before.includes.length} → ${after.includes.length} зүйл`);
-  if (JSON.stringify(before.excludes) !== JSON.stringify(after.excludes)) lines.push(`📝 Үнэд багтаагүй: ${before.excludes.length} → ${after.excludes.length} зүйл`);
+  if (!isDeepStrictEqual(before.days, after.days) && before.days.length === after.days.length) lines.push("📝 Хөтөлбөрийн текст өөрчлөгдсөн");
+  if (!isDeepStrictEqual(before.includes, after.includes)) lines.push(`📝 Үнэд багтсан: ${before.includes.length} → ${after.includes.length} зүйл`);
+  if (!isDeepStrictEqual(before.excludes, after.excludes)) lines.push(`📝 Үнэд багтаагүй: ${before.excludes.length} → ${after.excludes.length} зүйл`);
   return lines;
 }

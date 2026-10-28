@@ -31,6 +31,8 @@ export function buildTripFields(tour: PartnerTour, poster: Record<string, unknow
       ...mapped.extra,
       price_groups: groups,
       departure_date_groups: [], discounts: [], discount_groups: [], child_rules: [], child_price_rules: [], passenger_prices: [],
+      room_prices: [], extra_fees: [], answer_hints: [], hotel_links: [], recurring_schedule: "",
+      package_options: [...new Set(variants.map(({ pkg }) => pkg.package))].map((label) => ({ id: label, label, note: "" })),
       departure_rule: "",
       included_items: tour.includes, excluded_items: tour.excludes,
       itinerary_days: tour.days.map((day) => ({ day: day.day, title: day.title, description: day.lines.join("\n"), hotel: day.accommodation ?? "", meals: day.meals })),

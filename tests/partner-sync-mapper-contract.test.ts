@@ -40,6 +40,7 @@ test("website projection preserves distinct fares and both child age bands", () 
   assert.equal(first.infant_price, 320000);
   assert.equal(first.single_price, 520000);
   assert.deepEqual((first.passenger_prices as { price: number }[]).map((p) => p.price).sort((a,b) => a-b), [320000, 1200000, 1600000]);
+  assert.ok((first.passenger_prices as { label: string }[]).some((p) => /оргүй/.test(p.label)), "no-bed condition survives projection");
 });
 
 test("a sold-out hotel does not close another hotel on the same date", () => {
