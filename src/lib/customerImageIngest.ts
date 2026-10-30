@@ -2,7 +2,7 @@ import { waitUntil } from "@vercel/functions";
 import { processCustomerImageAttachment, type CustomerDocument } from "./customerDocuments";
 import { queryNeon } from "./neonDb";
 import { ensureTravelSchema } from "./travelSchema";
-import { classifyError, hashIdentifier, logWarn, recordCounter } from "./observability";
+import { classifyError, hashIdentifier, logError, logWarn, recordCounter } from "./observability";
 import type { Platform } from "./webhookDedup";
 import { listTrips, type TravelTrip } from "./travelOps";
 
@@ -104,7 +104,15 @@ export async function processReservedCustomerImages(
         return result;
       } catch (error) {
         const reason = classifyError(error);
-        await retryImage(row.id, row.ingest_attempts || 1, reason.category);
+        // A storage problem (not configured, access denied, store missing) is an operator's
+        // problem, not a one-off: an error the admin issues list and quality panel count.
+        const storageCode = error instanceof Error && (error.message === "private_blob_not_configured" || /^Blob/.test(error.name))
+          ? (error.message === "private_blob_not_configured" ? error.message : error.name) : null;
+        if (storageCode) {
+          logError("customer_documents.private_storage_failed", { requestId: trace?.requestId, correlationId: trace?.correlationId,
+            senderHash: hashIdentifier(row.sender_id), documentId: row.id, error: storageCode, attempt: row.ingest_attempts || 1 });
+        }
+        await retryImage(row.id, row.ingest_attempts || 1, storageCode || reason.category);
         logWarn("customer_documents.ingest_retry", {
           requestId: trace?.requestId, correlationId: trace?.correlationId,
           senderHash: hashIdentifier(row.sender_id), documentId: row.id, classification: reason,

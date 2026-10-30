@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { Readable } from "node:stream";
 import { queryNeon } from "../../../lib/neonDb";
 import { readCustomerImage } from "../../../lib/customerImageStorage";
-import { verifyCustomerImagePreview } from "../../../lib/customerImageAccess";
+import { isPrivateStoreUrl, verifyCustomerImagePreview } from "../../../lib/customerImageAccess";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).end();
@@ -15,7 +15,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       WHERE id=$1 AND retention_hidden_at IS NULL LIMIT 1`, [id],
   );
   const row = result?.rows[0];
-  if (!row?.stored_url || !row.mime_type.startsWith("image/")) return res.status(404).end();
+  // Images from any store; other customer files only from the private store.
+  if (!row?.stored_url || (!row.mime_type.startsWith("image/") && !isPrivateStoreUrl(row.stored_url))) return res.status(404).end();
   res.setHeader("Cache-Control", "private, no-store");
   res.setHeader("Content-Security-Policy", "default-src 'none'");
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -25,7 +26,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (url.hostname.endsWith(".blob.vercel-storage.com")) {
       const blob = await readCustomerImage(row.stored_url);
       if (!blob || blob.statusCode !== 200) return res.status(404).end();
-      res.setHeader("Content-Type", blob.blob.contentType.startsWith("image/") ? blob.blob.contentType : "application/octet-stream");
+      const type = blob.blob.contentType || "";
+      const inline = type.startsWith("image/") || type === "application/pdf";
+      res.setHeader("Content-Type", inline ? type : "application/octet-stream");
+      // Anything but an image or a PDF is downloaded, never rendered in the admin's browser.
+      if (!inline) res.setHeader("Content-Disposition", "attachment");
       await new Promise<void>((resolve, reject) => {
         Readable.fromWeb(blob.stream as Parameters<typeof Readable.fromWeb>[0])
           .on("error", reject).pipe(res).on("finish", resolve).on("error", reject);

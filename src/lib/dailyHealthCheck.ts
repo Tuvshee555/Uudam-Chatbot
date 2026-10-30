@@ -21,4 +21,14 @@ export async function runDailyHealthCheck(): Promise<void> {
   } catch (error) {
     logError("daily_health_check.failed", { message: error instanceof Error ? error.message : String(error) });
   }
+  // The private customer-image store, tested end to end once a day; staff are told when it fails.
+  try {
+    const [{ checkCustomerImageStorage, customerImageStorageIssues }, { notifyStaff }] = await Promise.all([
+      import("./customerImageStorage"), import("./staffAlerts"),
+    ]);
+    const issues = await customerImageStorageIssues(await checkCustomerImageStorage({ force: true }));
+    if (issues.length) await notifyStaff(`⚠️ ${issues[0].message}`, "customer_image_storage");
+  } catch (error) {
+    logError("daily_health_check.storage_failed", { message: error instanceof Error ? error.name : "storage_check_failed" });
+  }
 }

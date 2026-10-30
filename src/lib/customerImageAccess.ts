@@ -24,8 +24,14 @@ export function verifyCustomerImagePreview(id: number, expires: number, candidat
   return timingSafeEqual(expected, Buffer.from(candidate, "hex"));
 }
 
+/** A file kept in the private Blob store (images and, since the merge, other customer files). */
+export function isPrivateStoreUrl(url: string | undefined): boolean {
+  try { return Boolean(url) && new URL(url!).hostname.endsWith(".blob.vercel-storage.com"); } catch { return false; }
+}
+
 export function adminCustomerDocument(doc: CustomerDocument): CustomerDocument {
-  if (!doc.mime_type?.startsWith("image/")) return doc;
+  // Images, and any file in the private store, are reached only through a signed admin link.
+  if (!doc.mime_type?.startsWith("image/") && !isPrivateStoreUrl(doc.stored_url)) return doc;
   return {
     ...doc,
     source_url: "",

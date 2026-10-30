@@ -134,5 +134,7 @@ export async function getOperationalIssues(): Promise<ReadinessIssue[]> {
   }
   // Spend over the daily production budget is the warning that comes before an empty balance.
   issues.push(...await (await import("./aiUsage")).getAiSpendIssues());
+  // Passports and payment slips are kept only in the private store: a broken store is critical.
+  issues.push(...await (await import("./customerImageStorage")).customerImageStorageIssues().catch(() => []));
   return issues;
 }

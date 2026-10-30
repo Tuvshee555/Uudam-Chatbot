@@ -6,12 +6,13 @@ import { fillSenderName } from "./senderNames";
 import {
   classifyError,
   hashIdentifier,
+  logError,
   logInfo,
   logWarn,
   recordCounter,
 } from "./observability";
 import { ensureTravelSchema } from "./travelSchema";
-import { uploadFileToCloudinary, uploadImageToCloudinary } from "./tripPhotoImport/upload";
+import { uploadImageToCloudinary } from "./tripPhotoImport/upload";
 import { storeCustomerImage } from "./customerImageStorage";
 import { createPaymentRecord, listPayments } from "./travelPayments";
 import { listTrips, type TravelTrip } from "./travelOps";
@@ -999,21 +1000,19 @@ export async function processCustomerFileAttachment(
       return processCustomerImageAttachment({ ...input, url: input.url, trips: input.trips });
     }
 
+    // Customer files (PDF passports, payment slips, bookings) go to the private store like
+    // images, never to public Cloudinary. If it fails the record keeps only the temporary
+    // Messenger link and staff see an error; nothing is published as a fallback.
     let storedUrl = input.url;
     try {
-      storedUrl = await uploadFileToCloudinary(
-        file.buffer,
-        `customer-${input.senderId}-${Date.now()}-${file.fileName}`,
-        file.mimeType,
-      );
+      storedUrl = await storeCustomerImage(file.buffer, file.mimeType, `files/${randomUUID()}`);
     } catch (error) {
-      logWarn("customer_documents.file_store_failed", {
+      logError("customer_documents.private_storage_failed", {
         requestId: input.trace?.requestId,
         correlationId: input.trace?.correlationId,
         senderHash: hashIdentifier(input.senderId),
-        fileName: file.fileName,
-        classification: classifyError(error),
-        message: error instanceof Error ? error.message : String(error),
+        kind: "file",
+        error: error instanceof Error && error.message === "private_blob_not_configured" ? error.message : error instanceof Error ? error.name : "storage_error",
       });
     }
 
