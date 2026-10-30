@@ -13,6 +13,26 @@
 - Before reporting a change as done, run the relevant checks for the scope of the change.
 - Prefer `npm run typecheck`, targeted tests, full tests, and production build when the change touches bot routing, payments, customer documents, webhook behavior, or admin UI.
 
+## Conversation-level regression (owner's standard, mandatory)
+
+Reliability and the real customer experience come before any single fix. Unit tests alone are not
+evidence that the chatbot works.
+
+- Every change to replies, routing, trip matching, pricing, dates, booking, leads or the webhook must keep
+  `npm run qa:conversations` green. It runs the customer-journey suites
+  (`tests/conversation-journeys.test.ts`, `tests/forensic-regressions.test.ts`, and others) in CI and in the
+  Vercel prebuild, so a broken journey cannot deploy.
+- A fix for a conversation failure adds or extends a journey reproducing that conversation's shape
+  (invented trips only), and that journey must fail without the fix.
+- Before merging such a change, run `npm run qa:live` (live catalogue read-only, real model, nothing sent).
+  It must report 0 fact issues; read every changed reply.
+- Never weaken or delete a journey assertion to make a change pass. If an expectation must change, say
+  why in the commit message.
+- When measuring real behaviour from `travel_conversations`, exclude `demo:` senders (test sessions,
+  87% of rows as of 2026-10-30).
+- Known open failures stay visible as `test.todo` and in `docs/chatbot-followups.md`; never report the
+  chatbot as fully reliable while one is open.
+
 ## Admin Appearance
 
 - Keep the admin interface in the user's white/light theme, including the desktop sidebar, mobile navigation, login, and content.
