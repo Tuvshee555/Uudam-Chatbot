@@ -1,3 +1,4 @@
+import { tracedSend } from "./inboundTrace";
 import { createHmac } from "crypto";
 import { getEnv } from "./env";
 import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboundKillSwitch";
@@ -31,7 +32,7 @@ export async function sendTextMessage(
   }
 
   const startedAt = Date.now();
-  const { attempts } = await fetchWithRetry(
+  const { attempts } = await tracedSend(fetchWithRetry(
     graphMessagesEndpoint(igUserId, token),
     {
       method: "POST",
@@ -51,7 +52,7 @@ export async function sendTextMessage(
       correlationId: trace?.correlationId,
       metricPrefix: "meta_api",
     },
-  );
+  ));
 
   logInfo("meta.instagram.request_success", {
     requestId: trace?.requestId,
@@ -87,7 +88,7 @@ export async function sendQuickReplies(
   }));
 
   const startedAt = Date.now();
-  const { attempts } = await fetchWithRetry(
+  const { attempts } = await tracedSend(fetchWithRetry(
     graphMessagesEndpoint(igUserId, token),
     {
       method: "POST",
@@ -107,7 +108,7 @@ export async function sendQuickReplies(
       correlationId: trace?.correlationId,
       metricPrefix: "meta_api",
     },
-  );
+  ));
 
   logInfo("meta.instagram.request_success", {
     requestId: trace?.requestId,

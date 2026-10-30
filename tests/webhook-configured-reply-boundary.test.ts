@@ -51,8 +51,8 @@ test("configured text replies share grounding and paused customers retain inboun
         flows: [{ id: "fixture-rule", keywords: "урсгал", reply: legacyReply, buttons: [] }] } }]);
     if (/SELECT[\s\S]*FROM travel_bot_control/i.test(sql)) return result([{ bot_paused: false, photo_only: false }]);
     if (/SELECT[\s\S]*FROM travel_page_control/i.test(sql)) return result([{ bot_paused: pagePaused }]);
-    if (/SELECT paused, expires_at FROM travel_senders/i.test(sql)) return result(paused.has(sender)
-      ? [{ paused: true, expires_at: "2098-02-03T04:00:00Z" }] : []);
+    if (/SELECT paused, expires_at(?:, pause_reason)? FROM travel_senders/i.test(sql)) return result(paused.has(sender)
+      ? [{ paused: true, expires_at: "2098-02-03T04:00:00Z", pause_reason: "manual" }] : []);
     if (/INSERT INTO travel_senders \(sender_id, platform,/i.test(sql)) return result([{
       msg_count: sender.includes("-paused") || sender.endsWith("-return") ? 2 : 1,
       prev_msg_at: "2098-01-31T04:00:00Z", get_started_at: null }]);

@@ -59,6 +59,35 @@ export async function hasRecentOpenLead(
   return Number(result?.rows?.[0]?.count || 0) > 0;
 }
 
+/** The customer's latest lead in the window, a booking before a handoff of the same age. */
+export async function latestCustomerLead(senderId: string, withinDays = 14): Promise<TravelLead | null> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return null;
+  const result = await queryNeon<Record<string, unknown>>(
+    `SELECT * FROM travel_leads WHERE sender_id = $1 AND created_at > NOW() - ($2::int * INTERVAL '1 day')
+     ORDER BY (kind = 'booking') DESC, created_at DESC LIMIT 1`,
+    [senderId, withinDays],
+  );
+  const row = result?.rows[0];
+  return row ? mapLeadRow(row) : null;
+}
+
+/**
+ * A message from a customer staff already own: appended to their lead, which goes back to
+ * unread so it shows in the Leads tab again. The CRM status staff set is kept. Returns
+ * whether the lead was updated.
+ */
+export async function recordLeadFollowup(leadId: number, line: string): Promise<boolean> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return false;
+  const result = await queryNeon<{ id: number }>(
+    `UPDATE travel_leads SET status = 'new', seen_at = NULL, context = RIGHT(context || E'\\n' || $2, 4000)
+     WHERE id = $1 RETURNING id`,
+    [leadId, line],
+  );
+  return Boolean(result?.rows.length);
+}
+
 export async function createLead(input: {
   kind: LeadKind;
   platform: string;

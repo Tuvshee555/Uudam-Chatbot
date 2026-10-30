@@ -141,7 +141,10 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
   const topics = new Set<TripTopic>(understanding?.topics || []);
   const asksIncludes = hasIncludedInPriceIntent(turn);
   const priceTurn = turn.replace(/(?<!\d)\d{1,2}\s*(?:-?р\s*)?сар(?:ын|д)(?!\p{L})/giu, " ");
-  if (hasPriceIntent(priceTurn) && (!asksIncludes || /үнэ.{0,12}хэд|хэд.{0,12}үнэ|хэдэн\s*төг|(?:price|cost|une).{0,12}(?:how|hed)/i.test(turn))) topics.add("price");
+  // "<feature> багтсан үнэ", "<feature> included price" ask the price of the trip that includes
+  // the feature; the inclusion word describes the trip and must not drop the price.
+  const featurePrice = /(?:багтсан|bagtsan|орсон|orson|included|including)\s+(?:аяллын\s+|ayalliin\s+|aylliin\s+|trip\s+|tour\s+)?(?:үнэ|une|vne|price|cost)/i.test(turn);
+  if (hasPriceIntent(priceTurn) && (!asksIncludes || featurePrice || /үнэ.{0,12}хэд|хэд.{0,12}үнэ|хэдэн\s*төг|(?:price|cost|une|vne).{0,12}(?:how|hed)/i.test(turn))) topics.add("price");
   // "Урьдчилгаа хэд вэ" asks the deposit, not the trip price; "хэд вэ" alone made it a price question
   // and the customer got the full fare card instead of an answer about the deposit.
   if (/урьдчилгаа|deposit|uridchilgaa/i.test(turn) && !/үнэ|une|price|төгрөг/i.test(turn)) topics.delete("price");

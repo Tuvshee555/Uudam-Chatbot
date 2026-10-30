@@ -3,6 +3,7 @@ import { focusKnowledgeBase, tripsNamedInRecentMessages } from "./aiTripContext"
 import { buildTemporalPromptContext } from "./travelDates";
 import { dbGetHistory, dbAppendMessage, type ChatAttachment, type HistoryRow } from "./travelDb";
 import { CHATBOT_REPLY_RULES } from "./chatbotReplyPolicy";
+import { noteInbound } from "./inboundTrace";
 
 export type ChatRole = "user" | "assistant";
 
@@ -43,7 +44,11 @@ export async function appendMessage(
   text: string,
   attachments?: ChatAttachment[],
 ) {
-  await dbAppendMessage(id, role, text, attachments);
+  const rowId = await dbAppendMessage(id, role, text, attachments);
+  if (role === "user") noteInbound((outcome) => {
+    outcome.stored = true;
+    if (rowId !== null) outcome.userRowIds.push(rowId);
+  });
 }
 
 // REFER protocol lives in reply.ts (env-free) so callers/tests don't drag in

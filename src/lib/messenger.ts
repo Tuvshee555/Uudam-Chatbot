@@ -1,3 +1,4 @@
+import { tracedSend } from "./inboundTrace";
 import { createHmac } from "crypto";
 import { getEnv } from "./env";
 import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboundKillSwitch";
@@ -60,7 +61,7 @@ async function postToMessenger(
   }
 
   const startedAt = Date.now();
-  const { attempts } = await fetchWithRetry(
+  const { attempts } = await tracedSend(fetchWithRetry(
     endpoint,
     {
       method: "POST",
@@ -76,7 +77,7 @@ async function postToMessenger(
       correlationId: trace?.correlationId,
       metricPrefix: "meta_api",
     },
-  );
+  ));
   logInfo("meta.messenger.request_success", {
     requestId: trace?.requestId,
     correlationId: trace?.correlationId,

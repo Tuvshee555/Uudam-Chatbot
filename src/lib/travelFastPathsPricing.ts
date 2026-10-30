@@ -75,7 +75,9 @@ export function hasPriceIntent(text: string) {
     /хэд(?:эн)?\s*(?:байсан|бэ|төг\S*|мөнгө|болж)/i.test(text) ||
     // The same asked in Latin letters ("une hed ve", "huuhed hed ve"): read as
     // no question at all, it went to the model, which answered "anything else?".
-    /(?:^|[^a-z])(?:une|unee|unii|uniin|unetei)(?:[^a-z]|$)|(?:^|[^a-z])hed(?:en)?\s*(?:ve|vee|be|bolh\S*|tug\S*|mungu)(?:[^a-z]|$)/i.test(text) ||
+    // "vne": ү typed as v ("<attraction> bagtsan vne" got the inclusions without the price whenever
+    // the model was not consulted, e.g. during the 2026-10-30 credit outage).
+    /(?:^|[^a-z])(?:une|unee|unii|uniin|unetei|vne|vnee|vnii|vniin|vnetei)(?:[^a-z]|$)|(?:^|[^a-z])hed(?:en)?\s*(?:ve|vee|be|bolh\S*|tug\S*|mungu)(?:[^a-z]|$)/i.test(text) ||
     /(\d{1,2}\s*(?:настай|нас|сар|сартай)\s*(?:хүүхэд|нярай)?|(?:хүүхэд|нярай)\s*\d{1,2}\s*(?:настай|нас|сар|сартай))/i.test(text) ||
     isPassengerCountOnly(text)
   );

@@ -101,11 +101,11 @@ export async function dbAppendMessage(
   role: "user" | "assistant",
   text: string,
   attachments: ChatAttachment[] = [],
-): Promise<void> {
+): Promise<number | null> {
   const ready = await ensureTravelSchema();
-  if (!ready) return;
-  await queryNeon(
-    `INSERT INTO travel_conversations (sender_id, role, text, attachments) VALUES ($1, $2, $3, $4)`,
+  if (!ready) return null;
+  const inserted = await queryNeon<{ id: number }>(
+    `INSERT INTO travel_conversations (sender_id, role, text, attachments) VALUES ($1, $2, $3, $4) RETURNING id`,
     [senderId, role, text, JSON.stringify(attachments)],
   );
   // Prune ONLY rows that are BOTH past the retention window AND already
@@ -124,6 +124,21 @@ export async function dbAppendMessage(
          0
        )`,
     [senderId],
+  );
+  const id = inserted?.rows[0]?.id;
+  return id === undefined || id === null ? null : Number(id);
+}
+
+/**
+ * Removes the customer rows a failed webhook attempt wrote before anything was sent: Meta
+ * redelivers the message and the next attempt writes it again, so a message that failed
+ * five times used to appear five times in the inbox.
+ */
+export async function dbRemoveFailedAttemptRows(senderId: string, ids: number[]): Promise<void> {
+  if (!ids.length) return;
+  await queryNeon(
+    `DELETE FROM travel_conversations WHERE sender_id = $1 AND role = 'user' AND id = ANY($2::bigint[])`,
+    [senderId, ids],
   );
 }
 
@@ -489,15 +504,20 @@ export function pauseRowStillActive(
 }
 
 export async function dbIsPaused(senderId: string): Promise<boolean> {
+  return (await dbPauseReason(senderId)) !== null;
+}
+
+/** Why an active pause holds ("booked_customer", "operator_reply", "manual", …), or null when not paused. */
+export async function dbPauseReason(senderId: string): Promise<string | null> {
   const ready = await ensureTravelSchema();
-  if (!ready) return false;
-  const result = await queryNeon<{ paused: boolean; expires_at: string | null }>(
-    `SELECT paused, expires_at FROM travel_senders WHERE sender_id = $1`,
+  if (!ready) return null;
+  const result = await queryNeon<{ paused: boolean; expires_at: string | null; pause_reason?: string | null }>(
+    `SELECT paused, expires_at, pause_reason FROM travel_senders WHERE sender_id = $1`,
     [senderId],
   );
   const row = result?.rows[0];
-  if (!row) return false;
-  if (pauseRowStillActive(row)) return true;
+  if (!row) return null;
+  if (pauseRowStillActive(row)) return row.pause_reason || "manual";
   if (row.paused) {
     // Expired, or never given an expiry — clear it so the row stops lying.
     await queryNeon(
@@ -505,7 +525,7 @@ export async function dbIsPaused(senderId: string): Promise<boolean> {
       [senderId],
     );
   }
-  return false;
+  return null;
 }
 
 const MAX_PAUSE_MS = AUTO_PAUSE_RESET_DAYS * 24 * 60 * 60 * 1000;

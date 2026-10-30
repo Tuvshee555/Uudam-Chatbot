@@ -24,6 +24,11 @@ const catalog = [
   combo("a3", "ЛУМАРА В ГАЗАР НИСЛЭГ ХОСОЛСОН", 2_291_000, ["2098-03-11", "2098-03-18"]),
   trip("sea", "ВЭЛМОР ДАЛАЙН ЭРГИЙН АЯЛАЛ", ["2098-02-15", "2098-03-06", "2098-03-20"], [1_391_000, 1_191_000, null]),
   trip("city", "НОРВЕЛ ХОТЫН АЯЛАЛ", ["2098-03-15", "2098-03-29"], [1_791_000, 1_591_000, 381_000], { extra: { customer_visible: true, aliases: ["Норвел"] } }),
+  trip("kaldor", "КАЛДОР ХОТЫН АЯЛАЛ", ["2098-03-14", "2098-03-28"], [1_691_000, 1_291_000, 381_000], { extra: { customer_visible: true, aliases: ["Калдор"] } }),
+  trip("park", "КАЛДОР - ЛУНАРИА ПАРК ШУУД НИСЛЭГТЭЙ АЯЛАЛ", ["2098-03-12", "2098-03-26"], [2_391_000, 1_991_000, 381_000], { extra: {
+    customer_visible: true, aliases: ["Лунариа", "Lunaria"], age_rules: { adult: "12+ нас", child: "2-11 нас", infant: "0-23 сар" },
+    included_items: ["Нислэгийн тийз", "Lunaria Park орох тасалбар"], excluded_items: ["Хувийн зардал"],
+  } }),
   trip("family", "ОРВЕЛИЯ ГЭР БҮЛИЙН АМРАЛТ", ["2098-03-06", "2098-03-20"], [1_891_000, 1_491_000, 391_000], { hotel: "Orvelia Bay Hotel", extra: {
     customer_visible: true, aliases: ["Орвелия"], age_rules: { adult: "12+ нас", child: "2-11 нас", infant: "0-23 сар" },
     itinerary_days: [{ day: 1, title: "Ирэх, буудалд байрлах" }, { day: 2, title: "Эргийн аялал" }, { day: 3, title: "Чөлөөт өдөр" }],
@@ -80,9 +85,40 @@ test("customer journeys reach their goal with grounded facts", async (context) =
       assert.match(phone.leads[0].context, /ЛУМАРА А ГАЗАР НИСЛЭГ ХОСОЛСОН/);
       assert.match(phone.leads[0].context, /90000000/);
       assert.equal(phone.text, "ЛУМАРА А ГАЗАР НИСЛЭГ ХОСОЛСОН\nЗахиалгын хүсэлтийг хүлээн авлаа.");
+      // Live 2026-10-30: the booked customer's "хэзээ холбогдох вэ" got silence (the bot's own
+      // booking pause), and nobody saw it. Now: one reply from the lead record, and the question
+      // goes onto the lead. Never a confirmation or a call time.
       const after = await say("book", "Хэзээ холбогдох вэ?");
-      assert.equal(after.sends.length, 0, "a booked customer belongs to staff");
+      assert.equal(after.sends.length, 1, "a booked customer's question is answered, never silence");
+      assert.equal(after.text, "Таны захиалгын хүсэлт бүртгэгдсэн.\nАялал: ЛУМАРА А ГАЗАР НИСЛЭГ ХОСОЛСОН\nХолбогдох утас: ••••0000\n"
+        + "Аяллын зөвлөх тантай хараахан холбогдоогүй байна. Асуултыг тань зөвлөхөд дамжууллаа.");
+      assert.doesNotMatch(after.text, /баталгаажсан|баталгаажлаа|залгана|цагт/, "no confirmation, no call time");
       assert.equal(after.leads.length, 0, "no second lead");
+      const booking = harness.leads.find(lead => lead.sender_id === "book" && lead.kind === "booking")!;
+      assert.match(booking.context, /Хариулаагүй асуулт \([^)]+\): Хэзээ холбогдох вэ\?/, "staff see the question on the lead");
+      assert.equal(booking.status, "new", "and the lead is unread again");
+      const again = await say("book", "Над руу залгах уу?");
+      assert.equal(again.sends.length, 0, "told once; later messages go to staff only");
+      assert.match(booking.context, /Над руу залгах уу\?/);
+      assert.equal((await say("book", "Баярлалаа")).sends.length, 0, "thanks needs no reply");
+    });
+
+    await context.test("a booked customer hears what staff recorded, and a consultant's takeover stays silent but visible", async () => {
+      await say("book-called", "Нислэг газар хосолсон", comboList);
+      await say("book-called", "2");
+      await say("book-called", "Захиалга өгье");
+      await say("book-called", "90001234");
+      const booking = harness.leads.find(lead => lead.sender_id === "book-called" && lead.kind === "booking")!;
+      harness.updateLead(booking.id, { lead_status: "no_answer", status: "seen" });
+      const status = await say("book-called", "Захиалга маань юу болсон бэ?");
+      assert.match(status.text, /Аяллын зөвлөх тан руу залгасан боловч холбогдож чадаагүй гэж бүртгэлд байна\./);
+      assert.match(status.text, /••••1234/);
+      assert.equal(booking.status, "new", "reopened for staff");
+      // A consultant took the chat over (their own pause): the bot sends nothing, the lead is reopened.
+      harness.pause("book-called", undefined, "operator_reply");
+      const taken = await say("book-called", "Хэзээ залгах вэ?");
+      assert.equal(taken.sends.length, 0, "the bot never talks over a consultant");
+      assert.match(booking.context, /Хэзээ залгах вэ\?/);
     });
 
     await context.test("family pricing follows each change to the party", async () => {
@@ -149,6 +185,30 @@ test("customer journeys reach their goal with grounded facts", async (context) =
       assert.match(april.text, /^Тэр хугацаанд гарах аялал алга\. Гарах өдрүүд:\n• ЛУМАРА/, "those trips' real departures again");
     });
 
+    // "<attraction> bagtsan vne" (the price of the trip that includes the park) got the inclusions
+    // without the price whenever the model was not consulted (2026-10-30 credit outage): "vne"
+    // was not read as үнэ, and "bagtsan"/"included" dropped the price topic.
+    await context.test("a price asked by the attraction a trip includes gets that trip's fares, with or without the model", async () => {
+      for (const [sender, text] of [["park-latin", "Lunaria bagtsan vne"], ["park-city", "Калдор Lunaria үнэ"],
+        ["park-cyrillic", "Лунариа багтсан аялал хэд вэ?"], ["park-english", "Lunaria included price"]]) {
+        const live = await say(sender, text, one("park", { topics: ["price", "includes"] }));
+        assert.match(live.text, /^КАЛДОР - ЛУНАРИА ПАРК ШУУД НИСЛЭГТЭЙ АЯЛАЛ\n/, text);
+        assert.match(live.text, /Том хүн[^\n]*: 2,391,000₮/, `${text}: the price`);
+        const down = await say(`${sender}-down`, text, { unavailable: true });
+        assert.match(down.text, /^КАЛДОР - ЛУНАРИА ПАРК ШУУД НИСЛЭГТЭЙ АЯЛАЛ\n/, `${text}: model unavailable`);
+        assert.match(down.text, /Том хүн[^\n]*: 2,391,000₮/, `${text}: the price even when the model is unavailable`);
+      }
+      // A customer who first asked about the city's other trip.
+      for (const [sender, model] of [["park-after", one("park", { topics: ["price", "includes"] })], ["park-after-down", { unavailable: true }]] as const) {
+        const before = await say(sender, "Калдор хотын аялал үнэ", one("kaldor"));
+        assert.match(before.text, /1,691,000₮/);
+        const moved = await say(sender, "Lunaria bagtsan vne", model);
+        assert.match(moved.text, /^КАЛДОР - ЛУНАРИА ПАРК ШУУД НИСЛЭГТЭЙ АЯЛАЛ\n/, `${sender}: the new trip is named`);
+        assert.match(moved.text, /2,391,000₮/);
+        assert.doesNotMatch(moved.text, /1,691,000₮/, "never the other trip's fare");
+      }
+    });
+
     await context.test("changing destination mid-conversation moves every answer to the new trip", async () => {
       await say("switch", "Вэлмор далай үнэ", one("sea"));
       const moved = await say("switch", "Норвел хотын аялал үнэ хэд вэ", one("city"));
@@ -165,6 +225,8 @@ test("customer journeys reach their goal with grounded facts", async (context) =
       const paused = await say("takeover", "Үнэ хэд вэ дахиад", one("city"));
       assert.equal(paused.sends.length, 0);
       assert.ok(paused.history.some((row) => row.role === "user" && row.text === "Үнэ хэд вэ дахиад"), "staff still see what the customer wrote");
+      assert.equal(paused.leads.length, 1, "and the unanswered question lands in the Leads tab");
+      assert.match(paused.leads[0].context, /Хариулаагүй асуулт \([^)]+\): Үнэ хэд вэ дахиад/);
     });
 
     await context.test("a customer returning after 40 days is not answered from a stale trip", async () => {

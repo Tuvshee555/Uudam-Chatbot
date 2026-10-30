@@ -1,6 +1,7 @@
 import {
   dbAutoHandoffSender,
   dbIsPaused,
+  dbPauseReason,
   dbListPaused,
   dbListRecent,
   dbMarkGetStarted,
@@ -22,6 +23,11 @@ export type RecentSender = { sender_id: string; last_seen: string; display_name?
 
 export async function isPaused(senderId: string): Promise<boolean> {
   return dbIsPaused(senderId);
+}
+
+/** The active pause's reason, or null. "booked_customer" is the bot's own pause after a booking. */
+export async function pauseReason(senderId: string): Promise<string | null> {
+  return dbPauseReason(senderId);
 }
 
 /**

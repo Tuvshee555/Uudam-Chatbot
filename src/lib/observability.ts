@@ -375,6 +375,14 @@ export const PERSISTED_INFO_EVENTS: ReadonlySet<string> = new Set([
   "webhook.ungrounded_trip_reply_suppressed",
   "webhook.ai_ungrounded_trip_reply_suppressed",
   "webhook.trip_answer_decision",
+  // Inbound message trail (inboundTrace.ts): receipt, redelivery skip, deliberate ignore,
+  // and what finally happened. Ids are hashed; no message text.
+  "webhook.inbound_received",
+  "webhook.inbound_duplicate",
+  "webhook.inbound_outcome",
+  "webhook.get_started_silent",
+  "webhook.booked_followup",
+  "webhook.disabled",
 ]);
 
 // Never persisted: the DB layer's own failures (storing them needs the DB that

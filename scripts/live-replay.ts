@@ -47,7 +47,7 @@ test("live replay", { timeout: 900_000 }, async (context) => {
   // 2. In-memory database (same contract as tests/helpers/conversationGateHarness.ts).
   const history: Array<{ id: number; sender_id: string; role: string; text: string; attachments: unknown[]; created_at: string }> = [];
   const leads: Array<Record<string, string>> = [];
-  const pauses = new Map<string, { paused: boolean; expires_at: string | null }>();
+  const pauses = new Map<string, { paused: boolean; expires_at: string | null; pause_reason: string }>();
   const seen = new Map<string, number>();
   const quick = new Set<string>();
   const result = (rows: unknown[] = []) => ({ rows, rowCount: rows.length });
@@ -64,8 +64,16 @@ test("live replay", { timeout: 900_000 }, async (context) => {
     if (/SELECT[\s\S]*FROM travel_bot_settings/i.test(sql)) return result([settingsRow]);
     if (/SELECT[\s\S]*FROM travel_(?:bot_control|page_control)/i.test(sql)) return result([{ bot_paused: false, photo_only: false }]);
     if (/INSERT INTO travel_conversations/i.test(sql)) {
-      history.push({ id: history.length + 1, sender_id: sender, role: String(params[1]), text: String(params[2]),
+      const id = (history.at(-1)?.id || 0) + 1;
+      history.push({ id, sender_id: sender, role: String(params[1]), text: String(params[2]),
         attachments: JSON.parse(String(params[3] || "[]")), created_at: new Date().toISOString() });
+      return result([{ id }]);
+    }
+    if (/DELETE FROM travel_conversations WHERE sender_id = \$1 AND role = 'user' AND id = ANY/i.test(sql)) {
+      const ids = new Set((params[1] as number[]).map(Number));
+      for (let index = history.length - 1; index >= 0; index -= 1) {
+        if (history[index].sender_id === sender && history[index].role === "user" && ids.has(history[index].id)) history.splice(index, 1);
+      }
       return result();
     }
     if (/SELECT[\s\S]*FROM travel_conversations/i.test(sql)) {
@@ -74,11 +82,22 @@ test("live replay", { timeout: 900_000 }, async (context) => {
     }
     if (/COUNT[\s\S]*FROM travel_leads/i.test(sql)) return result([{ count: String(leads.filter((lead) => lead.sender_id === sender && lead.kind === params[1]).length) }]);
     if (/INSERT INTO travel_leads/i.test(sql)) {
-      const lead = { id: String(leads.length + 1), kind: String(params[0]), platform: String(params[1]), sender_id: String(params[2]), customer_message: String(params[3]), context: String(params[5]), status: "new" };
+      const lead = { id: String(leads.length + 1), kind: String(params[0]), platform: String(params[1]), sender_id: String(params[2]), customer_message: String(params[3]),
+        contact_phone: String(params[4] || ""), context: String(params[5]), status: "new", lead_status: "new_lead", created_at: new Date().toISOString() };
       leads.push(lead); return result([lead]);
     }
-    if (/SELECT paused, expires_at FROM travel_senders/i.test(sql)) return result(pauses.has(sender) ? [pauses.get(sender)!] : []);
-    if (/INSERT INTO travel_senders \(sender_id, paused,/i.test(sql)) { pauses.set(sender, { paused: true, expires_at: String(params[2]) }); return result(); }
+    if (/SELECT \* FROM travel_leads WHERE sender_id = \$1/i.test(sql)) {
+      const own = leads.filter((lead) => lead.sender_id === sender).sort((a, b) => Number(b.kind === "booking") - Number(a.kind === "booking") || Number(b.id) - Number(a.id));
+      return result(own.slice(0, 1));
+    }
+    if (/UPDATE travel_leads SET status = 'new'/i.test(sql)) {
+      const lead = leads.find((row) => row.id === String(params[0]));
+      if (!lead) return result();
+      lead.status = "new"; lead.context = `${lead.context}\n${String(params[1])}`;
+      return result([{ id: Number(lead.id) }]);
+    }
+    if (/SELECT paused, expires_at(?:, pause_reason)? FROM travel_senders/i.test(sql)) return result(pauses.has(sender) ? [pauses.get(sender)!] : []);
+    if (/INSERT INTO travel_senders \(sender_id, paused,/i.test(sql)) { pauses.set(sender, { paused: true, expires_at: String(params[2]), pause_reason: String(params[1]) }); return result(); }
     if (/INSERT INTO travel_senders \(sender_id, platform,/i.test(sql)) {
       seen.set(sender, (seen.get(sender) || 0) + 1);
       return result([{ msg_count: seen.get(sender), prev_msg_at: null, get_started_at: null }]);
@@ -154,7 +173,7 @@ test("live replay", { timeout: 900_000 }, async (context) => {
       // "#tap3": send exactly the third quick-reply button the bot last offered, as Messenger does.
       const tap = /^#tap(\d)$/.exec(raw);
       const text = tap ? lastButtons[Number(tap[1]) - 1] || raw : raw;
-      if (text === "#pause") { pauses.set(sender, { paused: true, expires_at: new Date(Date.now() + 86_400_000).toISOString() }); turns.push({ user: text, bot: [], leads: [] }); continue; }
+      if (text === "#pause") { pauses.set(sender, { paused: true, expires_at: new Date(Date.now() + 86_400_000).toISOString(), pause_reason: "manual" }); turns.push({ user: text, bot: [], leads: [] }); continue; }
       if (text === "#later") {
         // Back after 40 days: the stored turns age, short-lived selection and list state expire.
         for (const row of history) if (row.sender_id === sender) row.created_at = new Date(Date.parse(row.created_at) - 40 * 86_400_000).toISOString();

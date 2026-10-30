@@ -11,6 +11,8 @@ import { groundedTripIds, tripsNamedIn, ungroundedTripInReply, type GroundingCon
 import { isLikelyCatalogMaintenanceText } from "../../lib/customerTextClassification";
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone } from "../../lib/conversation";
+import { queryNeon } from "../../lib/neonDb";
+import { dbRemoveFailedAttemptRows } from "../../lib/travelSessionDb";
 import { buildContextualUserText, isLikelyContextDependentText } from "../../lib/contextualText";
 import {
   isBareNumber,
@@ -35,7 +37,7 @@ import { displayedClarificationTrips } from "../../lib/clarificationOptions";
 import { recordPrimaryReplyDelivery, recordReplyPresentation } from "../../lib/chatbotReplyTelemetry";
 import { getReplyMediaPolicy, limitReplyPhotos, recordReplyMediaDelivery } from "../../lib/replyMediaPolicy";
 import type { TripSelection } from "../../lib/tripRequest";
-import type { TravelTrip } from "../../lib/travelTypes";
+import type { TravelLead, TravelTrip } from "../../lib/travelTypes";
 import { stripTripNamesForIntent } from "../../lib/customerTurn";
 import { buildCatalogListingReply } from "../../lib/catalogListing";
 import { fixMojibake } from "../../lib/encoding";
@@ -47,7 +49,10 @@ import { buildContactReply, contactSettingsOf, isAddressRequest, isPhoneRequest,
 import { fetchThreadMessages, latestStaffReplyAt, STAFF_TAKEOVER_MS } from "../../lib/staffTakeover";
 import { AI_OUTAGE_HANDOFF_REPLY, BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
-import { autoHandoffSender, isPaused, markGetStarted, pauseBookedCustomer, pauseBot, trackSender } from "../../lib/pause";
+import { autoHandoffSender, markGetStarted, pauseBookedCustomer, pauseBot, pauseReason, trackSender } from "../../lib/pause";
+import { BOOKED_STATUS_HEADING, bookedFollowupReply, followupLeadLine } from "../../lib/bookedFollowup";
+import { inboundStatus, newInboundOutcome, noteInbound, traceInbound, type InboundOutcome } from "../../lib/inboundTrace";
+import { latestCustomerLead, recordLeadFollowup } from "../../lib/travelLeadsDb";
 import { buildDateNotScheduledReply } from "../../lib/travelFastPathsPricing";
 import { conversationLeadContext } from "../../lib/leadContext";
 import { withoutNegatedTrips } from "../../lib/negatedTrip";
@@ -221,6 +226,7 @@ async function handleMessage(
     try {
       await appendMessage(senderId, "user", text);
     } catch { /* non-critical */ }
+    noteInbound((outcome) => { outcome.silent = "greeting_after_get_started"; });
     logInfo("webhook.greeting_after_get_started_skipped", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
@@ -235,6 +241,7 @@ async function handleMessage(
     : Promise.resolve(null);
   if (await isPagePaused(pageId)) {
     if (!attachmentReply) await appendMessage(senderId, "user", text);
+    noteInbound((outcome) => { outcome.silent = "page_paused"; });
     logInfo("webhook.page_pause_active", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
@@ -244,13 +251,35 @@ async function handleMessage(
     });
     return;
   }
-  if (await isPaused(senderId)) {
+  // A message from a customer staff own is kept on their lead, which goes back to unread in the
+  // Leads tab (and pings staff when a channel is set): it used to be stored where nobody looked.
+  const recordPausedFollowup = async (): Promise<TravelLead | null> => {
+    const line = followupLeadLine(text);
+    const lead = await latestCustomerLead(senderId).catch(() => null);
+    const details = { platform, senderId, customerMessage: text, kind: lead?.kind || "handoff" as const, context: line };
+    if (lead) {
+      if (!await recordLeadFollowup(lead.id, line).catch(() => false)) return null;
+    } else {
+      const created = await ensureDurableLead(details).catch(() => null);
+      if (!created?.lead) return null;
+    }
+    await notifyStaffOfLead(details, { requestId: trace?.requestId, correlationId: trace?.correlationId, source: "api.webhook.paused_followup" }).catch(() => {});
+    return lead || await latestCustomerLead(senderId).catch(() => null);
+  };
+  const activePause = await pauseReason(senderId);
+  // A consultant's pause (manual, or a staff reply seen in the thread): the bot stays out.
+  // The bot's own pause after a booking is answered below with the lead's real status.
+  if (activePause && (activePause !== "booked_customer" || attachmentReply)) {
     if (!attachmentReply) await appendMessage(senderId, "user", text);
+    const followup = !attachmentReply && !isThanksOnly(text) ? await recordPausedFollowup() : null;
+    noteInbound((outcome) => { outcome.silent = `paused:${activePause}`; });
     logInfo("webhook.sender_paused", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
       platform,
       senderHash: hashIdentifier(senderId),
+      pauseReason: activePause,
+      followupRecorded: Boolean(followup),
     });
     return;
   }
@@ -263,6 +292,8 @@ async function handleMessage(
       if (!attachmentReply) await appendMessage(senderId, "user", text);
       const remainingMs = staffAt.getTime() + STAFF_TAKEOVER_MS - Date.now();
       await pauseBot(senderId, remainingMs, "operator_reply").catch(() => {});
+      if (!attachmentReply && !isThanksOnly(text)) await recordPausedFollowup();
+      noteInbound((outcome) => { outcome.silent = "staff_takeover"; });
       logInfo("webhook.staff_takeover_detected", {
         requestId: trace?.requestId,
         correlationId: trace?.correlationId,
@@ -389,6 +420,7 @@ async function handleMessage(
       recordCounter("webhook.ungrounded_trip_reply_suppressed_total", 1, { path: input.failTag });
     }
     if (noDataReply) {
+      noteInbound((outcome) => { outcome.silent = `no_data:${input.failTag}`; });
       logInfo("webhook.no_data_reply_suppressed", {
         requestId: trace?.requestId,
         correlationId: trace?.correlationId,
@@ -411,6 +443,7 @@ async function handleMessage(
       if (input.counter) recordCounter(input.counter, 1, { platform });
       return false;
     }
+    noteInbound((outcome) => { outcome.route = input.failTag; });
     recordReplyPresentation({ reply, userText: text, path: "webhook_code", latencyMs: Date.now() - replyStartedAt });
     await assertLockHealthy();
     let delivered: boolean;
@@ -489,6 +522,26 @@ async function handleMessage(
     if (input.counter) recordCounter(input.counter, 1, { platform });
     return true;
   };
+
+  // The bot's own pause after a booking, and no staff reply in the thread: one status reply
+  // from the lead record, then silence while the customer keeps writing (each message still
+  // reopens the lead for staff). Never a confirmation or a call time (bookedFollowup.ts).
+  if (activePause === "booked_customer") {
+    await appendMessage(senderId, "user", text);
+    const lead = isThanksOnly(text) ? null : await recordPausedFollowup();
+    const alreadyTold = Boolean(history.findLast((message) => message.role === "assistant")?.text.startsWith(BOOKED_STATUS_HEADING));
+    const reply = lead && !alreadyTold ? bookedFollowupReply(lead) : null;
+    if (!reply) noteInbound((outcome) => { outcome.silent = lead ? "booked_followup_already_told" : "booked_followup_thanks_or_unrecorded"; });
+    logInfo("webhook.booked_followup", {
+      requestId: trace?.requestId, correlationId: trace?.correlationId, platform, senderHash: hashIdentifier(senderId),
+      outcome: reply ? "status_reply" : lead ? "recorded_only" : "not_recorded", leadStatus: lead?.lead_status || null,
+    });
+    if (reply) {
+      await deliverFastPathReply({ reply, failTag: "booked_followup", rememberSource: "api.webhook.booked_followup",
+        counter: "webhook.booked_followup_total" });
+    }
+    return;
+  }
 
   // Photo-only mode: send photos only when we have a real trip signal.
   // Stay silent on greetings, unrelated text, or unknown requests. Full
@@ -1103,8 +1156,14 @@ async function handleMessage(
       // A preference the data cannot answer (villa/resort) goes to staff with the answer. The
       // reply says so only once the lead is written.
       if (decision.outcome !== "handoff" && plan.staffLine && plan.staffNotes?.length) {
-        const written = await captureLead({ kind: "handoff", contactPhone: detectedPhone || "", context: plan.staffNotes.join("\n") },
-          "api.webhook.answer_plan_preference").then(() => true, () => false);
+        const notes = plan.staffNotes.join("\n");
+        // An open lead from the last hours is not duplicated: the note goes onto it instead.
+        const written = await captureLead({ kind: "handoff", contactPhone: detectedPhone || "", context: notes }, "api.webhook.answer_plan_preference")
+          .then(async (result) => {
+            if (result.created) return true;
+            const open = await latestCustomerLead(senderId);
+            return open ? recordLeadFollowup(open.id, notes) : false;
+          }).catch(() => false);
         if (!written) decision = { ...decision, reply: decision.reply.split("\n").filter((line) => line !== plan.staffLine).join("\n").replace(/\n{3,}/g, "\n\n").trim() };
       }
       const reply = decision.reply;
@@ -1867,6 +1926,7 @@ async function handleMessage(
     // customer's message is already in history for whoever picks it up.
     // Logged as a warning so a "the bot ignored me" complaint can be traced to
     // this in the error log instead of guessed at.
+    noteInbound((outcome) => { outcome.silent = aiOutage ? "ai_outage" : "ai_refer"; });
     logWarn(aiOutage ? "webhook.ai_outage_customer_silenced" : "webhook.ai_refer_customer_silenced", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
@@ -1962,6 +2022,7 @@ async function handleMessage(
     // Silent: a reply the guards suppressed (no data / another trip's facts) is
     // never replaced by a notice to the customer. The lead is above; no pause,
     // so the customer's next, answerable question is still answered.
+    noteInbound((outcome) => { outcome.silent = "ai_no_data"; });
     logWarn("webhook.ai_no_data_customer_silenced", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
@@ -2053,6 +2114,56 @@ async function handleMessage(
   );
   if (pauseAfterContactCapture) await pauseBookedCustomer(senderId);
 }
+/** One persisted record of what happened to a customer message (inboundTrace.ts). */
+function logInboundOutcome(message: PendingConversationPayload, outcome: InboundOutcome, failure?: { reason: string; attempt: number }) {
+  const fields = {
+    requestId: message.trace?.requestId, correlationId: message.trace?.correlationId,
+    platform: message.platform, pageId: message.pageId, senderHash: hashIdentifier(message.senderId),
+    eventKeyHash: hashIdentifier(message.eventKey || ""), kind: message.attachmentReply ? "attachment_result" : "text",
+    status: failure ? "failed" : inboundStatus(outcome), stored: outcome.stored, sent: outcome.sent,
+    sendFailed: outcome.sendFailed, silent: outcome.silent, route: outcome.route, ...failure,
+  };
+  if (failure) logWarn("webhook.inbound_outcome", fields);
+  else logInfo("webhook.inbound_outcome", fields);
+}
+
+/**
+ * Meta redelivers a message until the webhook accepts it. One that fails every time used
+ * to be retried until Meta gave up — 31 deliveries of one question on 2026-10-10 — and was
+ * never stored, answered or seen by staff. After a few failed attempts the message is kept
+ * in the conversation, staff get a lead, and the event is accepted so the loop ends.
+ */
+const MAX_FAILED_ATTEMPTS = 6;
+
+async function preserveAfterRepeatedFailures(message: PendingConversationPayload, outcome: InboundOutcome, error: unknown): Promise<boolean> {
+  const reason = (error instanceof Error ? error.message : String(error)).replace(/\d{6,}/g, "#").slice(0, 120);
+  const eventKeyHash = hashIdentifier(message.eventKey || "");
+  const earlier = await queryNeon<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM travel_error_logs WHERE event = 'webhook.inbound_outcome'
+       AND fields->>'eventKeyHash' = $1 AND fields->>'status' = 'failed' AND created_at > NOW() - INTERVAL '1 day'`,
+    [eventKeyHash],
+  ).catch(() => null);
+  const attempt = (earlier?.rows[0]?.n ?? 0) + 1;
+  logInboundOutcome(message, outcome, { reason, attempt });
+  if (message.attachmentReply) return false;
+  if (attempt < MAX_FAILED_ATTEMPTS) {
+    // Nothing reached the customer: the redelivery writes the message again, so this
+    // attempt's copy goes (a partly delivered answer keeps its history as it is).
+    if (!outcome.sent) await dbRemoveFailedAttemptRows(message.senderId, outcome.userRowIds).catch(() => {});
+    return false;
+  }
+  try {
+    if (!outcome.stored) await appendMessage(message.senderId, "user", message.text);
+    await ensureDurableLead({ platform: message.platform, senderId: message.senderId, customerMessage: message.text, kind: "handoff",
+      context: `Бот энэ мессежийг ${attempt} удаа боловсруулж чадсангүй (${reason.split(":")[0]}); хэрэглэгчид хариу ${outcome.sent ? "дутуу" : "очоогүй"}.` });
+    logWarn("webhook.inbound_preserved_after_failures", { platform: message.platform, senderHash: hashIdentifier(message.senderId),
+      eventKeyHash, attempt, reason, sent: outcome.sent });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function processConversationWithPendingQueue(
   conversationKey: string,
   initial: PendingConversationPayload,
@@ -2082,27 +2193,34 @@ async function processConversationWithPendingQueue(
         });
         throw new RetryableWebhookError("conversation_lock_lost");
       }
-      await withConversationLockHeartbeat(
-        conversationKey,
-        lockToken,
-        async (ensureLockHealthy) =>
-          handleMessage(
-            current.platform,
-            current.senderId,
-            current.text,
-            current.pageId,
-            current.igUserId,
-            current.token,
-            {
-              requestId: current.trace?.requestId || "",
-              correlationId: current.trace?.correlationId || "",
-              source: "api.webhook",
-              deliveryKey: current.eventKey,
-            },
-            ensureLockHealthy,
-            current.attachmentReply,
-          ),
-      );
+      const outcome = newInboundOutcome();
+      const message = current;
+      try {
+        await withConversationLockHeartbeat(
+          conversationKey,
+          lockToken,
+          async (ensureLockHealthy) => traceInbound(outcome, () =>
+            handleMessage(
+              message.platform,
+              message.senderId,
+              message.text,
+              message.pageId,
+              message.igUserId,
+              message.token,
+              {
+                requestId: message.trace?.requestId || "",
+                correlationId: message.trace?.correlationId || "",
+                source: "api.webhook",
+                deliveryKey: message.eventKey,
+              },
+              ensureLockHealthy,
+              message.attachmentReply,
+            )),
+        );
+        logInboundOutcome(message, outcome);
+      } catch (error) {
+        if (!(await preserveAfterRepeatedFailures(message, outcome, error))) throw error;
+      }
       if (head && !(await acknowledgePendingConversationConsistent(conversationKey, head))) {
         throw new RetryableWebhookError("pending_ack_mismatch");
       }
@@ -2447,6 +2565,16 @@ export default async function handler(
               const platform: Platform =
                 payload.object === "instagram" ? "instagram" : "facebook";
               const token = PAGE_TOKENS.get(pageId) ?? FALLBACK_TOKEN;
+              // Persisted receipt of every delivery (redeliveries included), keyed like the
+              // outcome record, so "never received" can be told from "received and lost".
+              logInfo("webhook.inbound_received", {
+                requestId: trace.requestId, correlationId: trace.correlationId, platform, pageId,
+                senderHash: hashIdentifier(senderId),
+                eventKeyHash: hashIdentifier(text && !event?.message?.mid
+                  ? buildEventKey(platform, senderId, { message: { text } }) : buildEventKey(platform, senderId, event)),
+                kind: !text ? "attachment" : quickReplyPayload ? "quick_reply" : messageText ? "text" : "postback",
+                textLength: text.length, attachmentCount: attachments.length,
+              });
               // Staff see the customer's name, also for photo- or voice-only senders.
               if (platform === "facebook") rememberSenderName(senderId, pageId);
               // Attachment-only message (image, voice note, sticker, share).

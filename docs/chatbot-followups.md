@@ -65,19 +65,29 @@ and the bot looks inattentive, which is the pattern behind customers dropping of
 `npm run qa:live` includes the shape (`family_opening_multi_constraint`) with every constraint addressed,
 and there are 0 fact issues.
 
-## P1-2 — Booked customer's follow-up gets silence — OPEN
-After a booking request the customer belongs to staff, so a question such as "хэзээ холбогдох вэ" ("when
-will you contact me?") gets no reply, and staff alerts have no delivery channel. Configure an alert channel,
-or send one short acknowledgement per booked customer.
+## P1-2 — Booked customer's follow-up gets silence — FIXED (2026-10-30)
+**Root cause.** After a booking with a phone the bot pauses itself for 3 days (`booked_customer`), and
+every paused message was stored and dropped: no reply, and nothing on the lead, so with no alert channel
+nobody saw it. Before 661c6bd (2026-10-25) paused messages were not even stored.
+**Now.** The bot's own booking pause: one reply built from the lead record (request received, trip,
+masked phone, what staff marked: not yet contacted / called without answer / handling), never a
+confirmation or a call time; later messages are only recorded. A consultant's pause (manual, or a staff
+reply seen in the thread): no bot message. In both cases the question is appended to the customer's
+lead, which goes back to unread in the Leads tab (staff are pinged when a channel is configured).
+Journeys: `booking intent then a phone…`, `a booked customer hears what staff recorded…`, `during a human
+takeover…`.
 
 ## P1-3 — Test traffic in the production conversation table — OPEN
 `demo:` sessions (87% of rows) are written beside real customers. Flag them or store them separately, so
 every metric uses real traffic.
 
-## P1-4 — "Universal bagtsan vne" answered without the price — RECHECK after P0-1
-Earlier on 2026-10-30 the reply carried the fares and inclusions. Later runs (production and branch code
-alike) gave the inclusions only. Those runs coincided with the exhausted model balance, so recheck once
-credit is restored before treating this as a code defect.
+## P1-4 — "Universal bagtsan vne" answered without the price — FIXED (2026-10-30)
+**Root cause.** With the model available the request is read correctly (live replay: all six phrasings,
+also after another Beijing tour, give the Universal trip's fares, 0 fact issues). Without it (the credit
+outage) the keyword reader decides, and it took "vne" (ү typed as v) for no price word and let
+"bagtsan"/"included" drop the price topic, so only the inclusions were sent.
+**Now.** "vne" reads as үнэ and "<feature> багтсан/included үнэ/price" asks the price. Journey `a price
+asked by the attraction a trip includes…` runs each phrasing with the model and with it unavailable.
 
 ## P2-1 — Fare question under a fresh multi-trip list — OPEN
 "хүүхдийн үнэ" ("child price?") right after a new list gets "Аль аялал вэ?" instead of the child fare of the
@@ -91,5 +101,24 @@ listed trips.
 Fuzzy matching can take a destination one letter away for another. Needs a data-side "not this place"
 field, not code.
 
-## P2-4 — Un-ingested inbound messages — OPEN
-A message absent from the database cannot be diagnosed. Log every inbound event ID before routing.
+## P2-4 — Inbound messages missing from the conversation table — FIXED (2026-10-30)
+**Evidence (production, read-only).** Five real customers had messages counted but none stored. Four
+wrote while paused, before paused messages were stored (fixed 661c6bd). One question was delivered 31
+times on 2026-10-10 and failed every time: never stored, answered or seen. On 2026-10-24, 39 replies over
+2,000 characters were rejected by Meta and redelivered in a loop (long replies are split since).
+Runtime logs are kept 1 hour on this plan, so none of it could be explained afterwards.
+**Now.** Persisted, privacy-safe trail in `travel_error_logs` (7 days; admin error-log view):
+`webhook.inbound_received` (every delivery, retries included), `webhook.inbound_duplicate`,
+`webhook.get_started_silent`, `webhook.inbound_outcome` (answered / silent with reason / stored without
+reply / failed with reason and attempt, plus route, stored, sent), `webhook.send.primary_failed`, and
+`webhook.inbound_preserved_after_failures`. Ids are hashed (`senderHash`, `eventKeyHash`); no text or
+phone. After 6 failed attempts of one message it is stored once, staff get a lead, and the event is
+accepted so the loop ends; a failed attempt that sent nothing removes the copy it wrote.
+**Reading it.** No `inbound_received` → Meta never delivered it. `inbound_duplicate` → a redelivery
+skipped. `inbound_outcome` status `silent` → a deliberate rule (the reason says which). `failed` with
+reason `delivery_failed:*` → Meta refused the reply; any other reason → processing failed.
+
+## P2-5 — Test rows in the production database — OPEN
+`travel_page_control` holds rows for fixture pages ("fixture-page", "1234567890", "000000000000000",
+updated as late as 2026-10-30): some test or script run used the production database. Find the run and
+point it at a fixture database.

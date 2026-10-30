@@ -6,6 +6,7 @@ import { withRedis } from "./redisState";
 import {
   hashIdentifier,
   logError,
+  logInfo,
   recordCounter,
   setGauge,
 } from "./observability";
@@ -353,6 +354,11 @@ export async function runEventWithClaim(
   onAlreadyCompleted?: () => Promise<void>,
 ) {
   const claim = await claimEventForProcessingConsistent(key);
+  if (claim.state !== "acquired") {
+    // Persisted (observability allowlist): a redelivery skipped here is why a message can be
+    // received and not processed again.
+    logInfo("webhook.inbound_duplicate", { eventKeyHash: hashIdentifier(key), state: claim.state, platform: tags.platform, eventType: tags.eventType });
+  }
   if (claim.state === "already_completed") {
     recordCounter("webhook.duplicate_event_skipped_total", 1, {
       platform: tags.platform,
