@@ -57,14 +57,22 @@ const FILE_LABEL: Array<[RegExp, string]> = [
 export function DocumentPreview({ doc, onZoom }: { doc: CustomerDocument; onZoom: (url: string) => void }) {
   const kind = documentKind(doc);
   const info = fileInfo(doc);
-  const [broken, setBroken] = useState(false);
+  const [failedUrl, setFailedUrl] = useState("");
+  const broken = failedUrl === info.url;
   const box = "relative flex aspect-[4/3] w-full items-center justify-center overflow-hidden bg-surface-sunken";
+
+  if (kind === "image" && !doc.stored_url) {
+    return <div className={cx(box, "flex-col gap-2 text-ink-muted")}>
+      <Icons.image size={28} />
+      <span className="text-xs">{doc.ingest_status === "failed" ? "Зургийг татаж чадсангүй" : doc.ingest_status === "retry" ? "Зургийг дахин татаж байна" : "Зураг боловсруулж байна"}</span>
+    </div>;
+  }
 
   if (kind === "image" && !broken) {
     return (
       <button type="button" onClick={() => onZoom(info.url)} className={cx(box, "group cursor-zoom-in")} title="Бүтнээр харах">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={info.url} alt="" loading="lazy" onError={() => setBroken(true)} className="h-full w-full object-contain" />
+        <img src={info.url} alt="" loading="lazy" onError={() => setFailedUrl(info.url)} className="h-full w-full object-contain" />
         <span className="absolute bottom-2 right-2 flex items-center gap-1 rounded-full bg-black/60 px-2 py-1 text-[11px] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100">
           <Icons.search size={12} /> Томруулах
         </span>
