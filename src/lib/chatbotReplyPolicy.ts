@@ -101,9 +101,10 @@ export function presentAssistantReply(input: {
   }
   const wantsContact = /захиал|залга|холбо|зөвлөх|оператор|book\b|booking|call\b|consultant|human|zahial|holbo/i.test(input.userText);
   const compact = removeReplyPadding(reply, wantsContact && !input.phoneAlreadyRequested);
-  // A bare greeting remains a greeting; never turn it into an empty factual
-  // answer or an accidental no-data handoff.
-  reply = compact.trim() ? compact : /^(?:сайн\s+(?:байна\s+уу|уу)|hello|hi)[\s!,.😊]*$/iu.test(reply) ? "Сайн уу!" : compact;
+  // Cleanup only trims padding around an answer. When nothing else is left the
+  // reply IS the answer (a booking flow's one phone question, a bare greeting):
+  // an empty result would be read as "no data" and silence the customer.
+  reply = compact.trim() ? compact : reply;
   let emojis = 0;
   reply = reply.replace(/https?:\/\/\S+|\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*/gu,
     (value) => value.startsWith("http") || ++emojis <= 1 ? value : "");

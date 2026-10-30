@@ -32,7 +32,19 @@ test("a customer mentioning an earlier phone conversation gets one clarification
     reply: "Сайн байна уу! Та утсаар ярьсан аяллынхаа талаар дэлгэрэнгүй мэдээлэл авахыг хүсэж байна уу? Та аль аяллыг сонирхож байгаа вэ?" });
   assert.equal((reply.match(/\?/g) || []).length, 1);
   assert.match(reply, /аль аяллыг/);
-  assert.equal(presentAssistantReply({ userText: "hi", reply: "Сайн байна уу!" }), "Сайн уу!");
+  assert.equal(presentAssistantReply({ userText: "hi", reply: "Сайн байна уу!" }), "Сайн байна уу!");
+});
+
+test("a reply that is only a stripped phrase is kept, never emptied into silence", () => {
+  // Live 2026-10-30: a returning customer tapped "Захиалга өгөх", the booking flow's one
+  // phone question was filtered to "", and the empty reply was suppressed as "no data".
+  const ask = "Утасны дугаараа бичнэ үү.";
+  for (const userText of ["Захиалга өгөх", "Бүртгүүлэх", "zahialga"]) {
+    for (const phoneAlreadyRequested of [true, false]) {
+      assert.equal(presentAssistantReply({ userText, reply: ask, phoneAlreadyRequested }), ask);
+    }
+  }
+  assert.equal(presentAssistantReply({ userText: "үнэ", reply: "Өөр асуулт байвал хэлээрэй." }), "Өөр асуулт байвал хэлээрэй.");
 });
 
 test("padding cleanup preserves hotel names and conditions that mention contact", () => {
