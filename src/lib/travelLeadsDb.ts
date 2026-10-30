@@ -30,8 +30,25 @@ function mapLeadRow(row: Record<string, unknown>): TravelLead {
     lead_status,
     created_at: String(row.created_at || ""),
     seen_at: row.seen_at ? String(row.seen_at) : null,
+    last_activity_at: row.last_activity_at ? String(row.last_activity_at) : null,
+    ...(row.staff_replied_at ? { staff_replied_at: new Date(String(row.staff_replied_at)).toISOString() } : {}),
   };
 }
+
+/**
+ * When the customer last added to a lead (a follow-up reopens an older lead). Added here on
+ * first use rather than in the schema bootstrap; null on rows from before it existed, where
+ * the creation time stands in (leadAttention.ts).
+ */
+let leadActivityColumn: Promise<void> | null = null;
+function ensureLeadActivityColumn(): Promise<void> {
+  leadActivityColumn ||= queryNeon(`ALTER TABLE travel_leads ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ NULL`)
+    .then(() => undefined, (error) => { leadActivityColumn = null; throw error; });
+  return leadActivityColumn;
+}
+
+/** Test sessions (/api/demo and the QA scripts behind it) never count as a customer lead. */
+const REAL_SENDER = `sender_id NOT LIKE 'demo:%'`;
 
 /**
  * Returns true if an unresolved lead of the same kind already exists for this
@@ -80,8 +97,9 @@ export async function latestCustomerLead(senderId: string, withinDays = 14): Pro
 export async function recordLeadFollowup(leadId: number, line: string): Promise<boolean> {
   const ready = await ensureTravelSchema();
   if (!ready) return false;
+  await ensureLeadActivityColumn();
   const result = await queryNeon<{ id: number }>(
-    `UPDATE travel_leads SET status = 'new', seen_at = NULL, context = RIGHT(context || E'\\n' || $2, 4000)
+    `UPDATE travel_leads SET status = 'new', seen_at = NULL, last_activity_at = NOW(), context = RIGHT(context || E'\\n' || $2, 4000)
      WHERE id = $1 RETURNING id`,
     [leadId, line],
   );
@@ -122,11 +140,17 @@ export async function listLeads(limit = 50): Promise<TravelLead[]> {
   const ready = await ensureTravelSchema();
   if (!ready) return [];
   const safeLimit = Math.min(Math.max(limit, 1), 200);
+  // A lead the customer just wrote to again comes first, not where its creation date puts it.
+  const activity = await ensureLeadActivityColumn().then(() => "COALESCE(last_activity_at, created_at)", () => "created_at");
+  // A consultant's reply seen in the thread after the lead (pause "operator_reply") tells the
+  // Leads tab the customer was answered in Messenger (leadAttention.ts).
   const result = await queryNeon<Record<string, unknown>>(
     `
-      SELECT *
-      FROM travel_leads
-      ORDER BY (status = 'new') DESC, created_at DESC
+      SELECT l.*, CASE WHEN s.pause_reason = 'operator_reply' THEN s.paused_at END AS staff_replied_at
+      FROM travel_leads l
+      LEFT JOIN travel_senders s ON s.sender_id = l.sender_id
+      WHERE l.${REAL_SENDER}
+      ORDER BY (l.status = 'new') DESC, ${activity.replace(/(last_activity_at|created_at)/g, "l.$1")} DESC
       LIMIT $1
     `,
     [safeLimit],
@@ -138,7 +162,7 @@ export async function countNewLeads(): Promise<number> {
   const ready = await ensureTravelSchema();
   if (!ready) return 0;
   const result = await queryNeon<{ count: string }>(
-    `SELECT COUNT(*)::text AS count FROM travel_leads WHERE status = 'new'`,
+    `SELECT COUNT(*)::text AS count FROM travel_leads WHERE status = 'new' AND ${REAL_SENDER}`,
   );
   return Number(result?.rows?.[0]?.count || 0);
 }
@@ -196,24 +220,24 @@ export async function getLeadStats(): Promise<LeadStats> {
         COUNT(*) FILTER (WHERE created_at >= date_trunc('day', NOW()))::text AS today,
         COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '7 days')::text AS last7days,
         COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days')::text AS last30days
-      FROM travel_leads
+      FROM travel_leads WHERE ${REAL_SENDER}
     `),
     queryNeon<{ platform: string; count: string }>(`
       SELECT COALESCE(NULLIF(platform, ''), 'unknown') AS platform, COUNT(*)::text AS count
-      FROM travel_leads
+      FROM travel_leads WHERE ${REAL_SENDER}
       GROUP BY 1
       ORDER BY COUNT(*) DESC
     `),
     queryNeon<{ kind: string; count: string }>(`
       SELECT COALESCE(NULLIF(kind, ''), 'handoff') AS kind, COUNT(*)::text AS count
-      FROM travel_leads
+      FROM travel_leads WHERE ${REAL_SENDER}
       GROUP BY 1
       ORDER BY COUNT(*) DESC
     `),
     queryNeon<{ day: string; count: string }>(`
       SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day, COUNT(*)::text AS count
       FROM travel_leads
-      WHERE created_at >= NOW() - INTERVAL '7 days'
+      WHERE created_at >= NOW() - INTERVAL '7 days' AND ${REAL_SENDER}
       GROUP BY 1
       ORDER BY 1
     `),

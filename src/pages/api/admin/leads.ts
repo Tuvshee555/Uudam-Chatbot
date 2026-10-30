@@ -9,6 +9,7 @@ import {
 } from "../../../lib/travelOps";
 import type { LeadCrmStatus } from "../../../lib/travelOps";
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
+import { summarizeLeadAttention } from "../../../lib/leadAttention";
 
 const VALID_CRM_STATUSES: LeadCrmStatus[] = ["new_lead", "contacted", "booked", "no_answer"];
 
@@ -26,16 +27,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!allowed) return;
 
     if (req.method === "GET") {
+      // ?summary=1: the dashboard's background check — how many leads need a person now,
+      // and when the newest activity was, so an open dashboard can alert (leadAttention.ts).
+      if (req.query.summary) {
+        const attention = summarizeLeadAttention(await listLeads(200));
+        return res.status(200).json({ ok: true, attention });
+      }
       // ?stats=1 returns dashboard aggregates alongside the lead list.
       if (req.query.stats) {
         const [leads, newCount, stats] = await Promise.all([
-          listLeads(80),
+          listLeads(120),
           countNewLeads(),
           getLeadStats(),
         ]);
         return res
           .status(200)
-          .json({ ok: true, leads, new_count: newCount, stats });
+          .json({ ok: true, leads, new_count: newCount, stats, attention: summarizeLeadAttention(leads) });
       }
       const [leads, newCount] = await Promise.all([
         listLeads(80),

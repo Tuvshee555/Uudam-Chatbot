@@ -1,8 +1,26 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { Badge, Button, Card, EmptyState, IconButton, Icons, Input, Select, Skeleton, Spinner, Textarea, cx } from "@/components/ui";
 import { StatCard, TabHeader } from "./AdminShared";
 import type { LeadCrmStatus, LeadStats, TravelLead } from "@/lib/adminTypes";
 import { formatTime } from "@/lib/adminUtils";
+import { ATTENTION_DAYS, TIER_LABELS, compareLeadsByAttention, leadAttention, type LeadAttention } from "@/lib/leadAttention";
+
+/** Browser notifications for this dashboard: only ever shown while it is open in a browser. */
+function NotificationToggle() {
+  const [asked, setAsked] = useState<NotificationPermission | null>(null);
+  const current = useSyncExternalStore(() => () => {},
+    () => (typeof Notification === "undefined" ? "unsupported" : Notification.permission), () => "unsupported" as const);
+  const permission = asked ?? current;
+  const setPermission = setAsked;
+  if (permission === "unsupported") return null;
+  if (permission === "granted") return <Badge tone="success">Мэдэгдэл асаалттай</Badge>;
+  if (permission === "denied") return <Badge tone="neutral">Мэдэгдэл хаалттай (хөтчийн тохиргоо)</Badge>;
+  return (
+    <Button size="sm" variant="secondary" onClick={() => void Notification.requestPermission().then(setPermission)}>
+      Мэдэгдэл асаах
+    </Button>
+  );
+}
 
 export function LeadsDashboard({ stats }: { stats: LeadStats }) {
   const platformLabel = (p: string) =>
@@ -126,26 +144,30 @@ export function LeadsTab({
   onBroadcastSend: () => void;
 }) {
   const [search, setSearch] = useState("");
-  const [view, setView] = useState<"all" | "unread" | "booking" | "human">("all");
+  // Opens on what needs a person: the customer waiting on an answer first (leadAttention.ts).
+  const [view, setView] = useState<"attention" | "all" | "unread" | "booking" | "human">("attention");
   const [status, setStatus] = useState<LeadCrmStatus | "all">("all");
+  const attentionById = useMemo(() => new Map(leads.map((lead) => [lead.id, leadAttention(lead)])), [leads]);
   const filteredLeads = useMemo(() => {
     const query = search.trim().toLocaleLowerCase("mn-MN");
     return leads.filter((lead) => {
+      if (view === "attention" && !attentionById.get(lead.id)?.needsAttention) return false;
       if (view === "unread" && lead.status !== "new") return false;
       if (view === "booking" && lead.kind !== "booking") return false;
       if (view === "human" && lead.kind === "booking") return false;
       if (status !== "all" && (lead.lead_status ?? "new_lead") !== status) return false;
       return !query || [lead.customer_message, lead.contact_phone, lead.sender_id]
         .some((value) => value?.toLocaleLowerCase("mn-MN").includes(query));
-    });
-  }, [leads, search, status, view]);
+    }).sort((a, b) => compareLeadsByAttention(attentionById.get(a.id)!, attentionById.get(b.id)!));
+  }, [attentionById, leads, search, status, view]);
   const views = [
+    { value: "attention", label: "Анхаарах", count: leads.filter((lead) => attentionById.get(lead.id)?.needsAttention).length },
     { value: "all", label: "Бүгд", count: leads.length },
     { value: "unread", label: "Үзээгүй", count: leads.filter((lead) => lead.status === "new").length },
     { value: "booking", label: "Захиалга", count: leads.filter((lead) => lead.kind === "booking").length },
     { value: "human", label: "Зөвлөхтэй ярих", count: leads.filter((lead) => lead.kind !== "booking").length },
   ] as const;
-  const hasFilters = Boolean(search.trim()) || status !== "all" || view !== "all";
+  const hasFilters = Boolean(search.trim()) || status !== "all" || (view !== "all" && view !== "attention");
 
   return (
     <div className="space-y-5">
@@ -154,9 +176,12 @@ export function LeadsTab({
         title="Хүсэлтүүд"
         description="Хүнтэй ярих хүсэлт болон захиалгын сонирхол гаргасан хэрэглэгчид."
         actions={
-          <IconButton label="Хүсэлтүүдийг шинэчлэх" onClick={onRefresh} disabled={loading}>
-            {loading ? <Spinner /> : <Icons.refresh size={17} />}
-          </IconButton>
+          <>
+            <NotificationToggle />
+            <IconButton label="Хүсэлтүүдийг шинэчлэх" onClick={onRefresh} disabled={loading}>
+              {loading ? <Spinner /> : <Icons.refresh size={17} />}
+            </IconButton>
+          </>
         }
       />
 
@@ -223,8 +248,10 @@ export function LeadsTab({
         <Card className="p-5">
           <EmptyState
             icon={hasFilters ? <Icons.search size={26} /> : <Icons.user size={26} />}
-            title={hasFilters ? "Тохирох хүсэлт олдсонгүй" : "Одоогоор хүсэлт алга"}
-            description={hasFilters ? "Өөр үгээр хайх эсвэл шүүлтүүрээ арилгаарай." : "Хэрэглэгч зөвлөхтэй ярих эсвэл захиалга хийх сонирхол гаргавал энд харагдана."}
+            title={hasFilters ? "Тохирох хүсэлт олдсонгүй" : view === "attention" ? "Анхаарах хүсэлт алга" : "Одоогоор хүсэлт алга"}
+            description={hasFilters ? "Өөр үгээр хайх эсвэл шүүлтүүрээ арилгаарай."
+              : view === "attention" ? `Сүүлийн ${ATTENTION_DAYS} хоногт үзээгүй хүсэлт алга. Бусдыг «Бүгд» хэсгээс харна уу.`
+                : "Хэрэглэгч зөвлөхтэй ярих эсвэл захиалга хийх сонирхол гаргавал энд харагдана."}
           />
           {hasFilters && (
             <div className="flex justify-center pb-4">
@@ -238,6 +265,7 @@ export function LeadsTab({
             <LeadCard
               key={lead.id}
               lead={lead}
+              attention={attentionById.get(lead.id)!}
               onMarkSeen={() => onMarkSeen(lead)}
               onUpdateStatus={(status) => onUpdateStatus(lead, status)}
             />
@@ -296,10 +324,12 @@ const CRM_STATUS_TONES: Record<LeadCrmStatus, "neutral" | "warning" | "success" 
 
 function LeadCard({
   lead,
+  attention,
   onMarkSeen,
   onUpdateStatus,
 }: {
   lead: TravelLead;
+  attention: LeadAttention;
   onMarkSeen: () => void;
   onUpdateStatus: (status: LeadCrmStatus) => void;
 }) {
@@ -307,16 +337,22 @@ function LeadCard({
   const isBooking = lead.kind === "booking";
   const channel = lead.platform === "instagram" ? "Instagram" : "Facebook";
   const crmStatus: LeadCrmStatus = lead.lead_status ?? "new_lead";
+  const waiting = attention.needsAttention && attention.tier === "waiting";
 
   return (
     <Card
       className={cx(
         "p-4 sm:p-5",
         isNew && "border-brand-border",
+        waiting && "border-danger",
       )}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
+          {attention.needsAttention && (
+            <Badge tone={waiting ? "danger" : "brand"} dot>{TIER_LABELS[attention.tier]}</Badge>
+          )}
+          {attention.tier === "staff" && <Badge tone="success">{TIER_LABELS.staff}</Badge>}
           <Badge tone={isBooking ? "success" : "warning"} dot>
             {isBooking ? "Захиалгын сонирхол" : "Зөвлөхтэй ярих хүсэлт"}
           </Badge>
@@ -328,6 +364,13 @@ function LeadCard({
           {CRM_STATUS_LABELS[crmStatus]}
         </Badge>
       </div>
+
+      {attention.latestNote && (
+        <p className={cx("mt-4 whitespace-pre-wrap break-words rounded-xl border px-4 py-3 text-sm font-medium leading-relaxed [overflow-wrap:anywhere]",
+          waiting ? "border-danger bg-danger-soft text-ink" : "border-line bg-surface text-ink")}>
+          Сүүлийн мессеж: {attention.latestNote}
+        </p>
+      )}
 
       <p className="mt-4 whitespace-pre-wrap break-words rounded-xl bg-surface-sunken px-4 py-3 text-sm leading-relaxed text-ink [overflow-wrap:anywhere]">
         {lead.customer_message || "Текст зурвас үлдээгээгүй байна."}
@@ -355,7 +398,9 @@ function LeadCard({
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
         <span className="text-xs leading-relaxed text-ink-muted">
-          {formatTime(lead.created_at)} · Хэрэглэгч …{lead.sender_id.slice(-6)}
+          {formatTime(lead.created_at)}
+          {attention.lastActivityAt > new Date(Date.parse(lead.created_at) + 60_000).toISOString() && ` · сүүлд ${formatTime(attention.lastActivityAt)}`}
+          {" "}· Хэрэглэгч …{lead.sender_id.slice(-6)}
         </span>
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           {/* CRM status selector */}

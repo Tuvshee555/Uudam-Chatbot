@@ -3,6 +3,7 @@ import { Alert, Badge, Button, Card, Icons, Skeleton, cx } from "@/components/ui
 import { ADMIN_ISSUE_LABELS, type AnalyticsResponse, type CoverageTopic, type OverviewData, type SilenceReason } from "@/lib/adminAnalyticsTypes";
 import type { TabKey } from "@/lib/adminTypes";
 import { TabHeader } from "./AdminShared";
+import { QualityPanel } from "./QualityPanel";
 
 /**
  * The owner's first screen, about the bot's answers: how many people wrote and how many the
@@ -311,6 +312,8 @@ export function AnalyticsTab({
           </>
         }
       />
+
+      <QualityPanel apiFetch={apiFetch} />
 
       {error && <Alert tone="danger">{error}{snapshot && " Доор хамгийн сүүлд ачаалсан мэдээллийг харуулж байна."}</Alert>}
       {Boolean(snapshot?.warnings?.length) && <Alert tone="warning">Тоймын зарим хэсгийг ачаалж чадсангүй. Шинэчилнэ үү.</Alert>}

@@ -32,6 +32,7 @@ import { emptyBookingTerms, toBookingTermsForm } from "@/lib/adminTypes";
 import { deriveChildRules, withDerivedSummaryFields } from "@/lib/priceGroups";
 import { documentedFreeFare } from "@/lib/tripCompleteness";
 import { resolveAgeRules } from "@/lib/ageRules";
+import type { LeadAttentionSummary } from "@/lib/leadAttention";
 import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, emptyChunkResult, fileToDataUrl, getSecretStorage, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, mergeAIProposals, settingsToForm, shortId, splitLines, uid } from "@/lib/adminPageUtils";
 const BLANK_TRIP_DRAFT: Record<string, string> = { category: "Аялал", operator_name: "UUDAM TRAVEL AGENCY", route_name: "", duration_text: "", adult_price: "", child_price: "", infant_price: "", child_price_free: "", infant_price_free: "", age_infant: "0-23 сар", age_child: "2-11 нас", age_adult: "12+ нас", currency: "MNT", seats_total: "", seats_left: "", seats_percent_left: "", sale_badge_enabled: "false", sale_badge_label: "ХЯМДРАЛ", sale_badge_ends: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
 const MAX_AI_SOURCE_TEXT_CHARS = 20_000;
@@ -118,6 +119,8 @@ export default function AdminPage() {
   const [leads, setLeads] = useState<TravelLead[]>([]);
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [leadStats, setLeadStats] = useState<LeadStats | null>(null);
+  const [leadAttentionSummary, setLeadAttentionSummary] = useState<LeadAttentionSummary | null>(null);
+  const lastLeadActivityRef = useRef<string | null | undefined>(undefined);
   const [documentUnreviewedCount, setDocumentUnreviewedCount] = useState(0);
   const [broadcastMessage, setBroadcastMessage] = useState("");
   const [broadcastSending, setBroadcastSending] = useState(false);
@@ -285,6 +288,9 @@ export default function AdminPage() {
           ? (leadsJson.stats as LeadStats)
           : null,
       );
+      if (leadsJson?.attention && typeof leadsJson.attention === "object") {
+        setLeadAttentionSummary(leadsJson.attention as LeadAttentionSummary);
+      }
       return true;
     } catch {
       toast.error("Хүсэлтүүд ачаалж чадсангүй.");
@@ -463,6 +469,40 @@ export default function AdminPage() {
     }, PAUSE_POLL_MS);
     return () => clearInterval(poll);
   }, [loadPauseState, openAccess, requiresAuth]);
+  // Leads that need a person (leadAttention.ts), checked every 20 s even while this browser tab
+  // is in the background. New activity raises a browser notification (when staff allowed it)
+  // and a toast. Only an open dashboard is alerted: nothing is sent anywhere else from here.
+  useEffect(() => {
+    const LEAD_POLL_MS = 20_000;
+    let stopped = false;
+    const check = async () => {
+      if (stopped || requiresAuth || (!openAccess && !secretRef.current.trim())) return;
+      try {
+        const res = await fetchWithAdmin("/api/admin/leads?summary=1");
+        if (!res.ok) return;
+        const json = await res.json().catch(() => null) as { attention?: LeadAttentionSummary } | null;
+        const summary = json?.attention;
+        if (!summary || stopped) return;
+        setLeadAttentionSummary(summary);
+        const previous = lastLeadActivityRef.current;
+        lastLeadActivityRef.current = summary.latestActivityAt;
+        const isNewActivity = previous !== undefined && summary.latestActivityAt !== null
+          && (previous === null || summary.latestActivityAt > previous);
+        if (!isNewActivity || summary.needsAttention === 0) return;
+        const message = summary.waiting > 0
+          ? `${summary.waiting} хэрэглэгч хариу хүлээж байна`
+          : `${summary.needsAttention} хүсэлт анхаарал хүлээж байна`;
+        toast.info(message);
+        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+          new Notification("Уудам — шинэ хүсэлт", { body: message, tag: "uudam-leads" });
+        }
+        if (tabRef.current === "leads") void loadLeadsState();
+      } catch { /* the next check retries */ }
+    };
+    void check();
+    const poll = setInterval(() => void check(), LEAD_POLL_MS);
+    return () => { stopped = true; clearInterval(poll); };
+  }, [fetchWithAdmin, loadLeadsState, openAccess, requiresAuth, toast]);
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages]);
@@ -1758,7 +1798,8 @@ export default function AdminPage() {
       : "Аялал ачаалж байна";
   const navBadges: Partial<Record<TabKey, number>> = {
     bot: handoffRows.length || undefined,
-    leads: newLeadCount || undefined,
+    // Leads that need a person now, not every unread lead ever (172 on 2026-10-30).
+    leads: (leadAttentionSummary ? leadAttentionSummary.needsAttention : newLeadCount) || undefined,
     documents: documentUnreviewedCount || undefined,
   };
   const currentSection = NAV_GROUPS.flatMap((group) => group.items).find((item) => item.key === tab);
@@ -1778,7 +1819,7 @@ export default function AdminPage() {
   return (
     <div className="flex h-dvh overflow-hidden">
       <Head>
-        <title>{currentSection?.label} · Аяллын удирдлага</title>
+        <title>{`${leadAttentionSummary?.needsAttention ? `(${leadAttentionSummary.needsAttention}) ` : ""}${currentSection?.label ?? ""} · Аяллын удирдлага`}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
       <a href="#admin-content" className="sr-only z-50 rounded-md bg-brand px-4 py-3 text-sm font-semibold text-white focus:not-sr-only focus:fixed focus:left-3 focus:top-2">

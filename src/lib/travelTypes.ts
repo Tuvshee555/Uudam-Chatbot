@@ -173,6 +173,10 @@ export type TravelLead = {
   lead_status: LeadCrmStatus;
   created_at: string;
   seen_at: string | null;
+  /** Latest customer activity (a follow-up reopens an older lead); null on older rows. */
+  last_activity_at?: string | null;
+  /** A consultant reply seen in the Messenger thread after the lead (operator_reply pause). */
+  staff_replied_at?: string | null;
 };
 
 export type LeadStats = {
