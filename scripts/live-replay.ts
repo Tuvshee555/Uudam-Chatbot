@@ -7,7 +7,8 @@
  * add up, or a code placeholder. Scenarios: LIVE_SCENARIOS (default scripts/live-replay-scenarios.json).
  * Directives: "#tapN" sends the Nth quick-reply button just offered, "#pause" is a staff takeover,
  * "#later" ages the conversation by 40 days. The report (customer text) goes to tmp/, never to Git.
- * Needs NEON_DATABASE_URL and OPENAI_API_KEY; costs a few cents of model calls per run.
+ * Needs NEON_DATABASE_URL (read) and LIVE_REPLAY_OPENAI_API_KEY: a separate, budget-limited key, never the
+ * production one (LIVE_REPLAY_ALLOW_PRODUCTION_KEY=1 overrides). Each run makes roughly 100 model calls.
  */
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
@@ -18,13 +19,22 @@ type Scenario = { id: string; turns: string[] };
 const scenarios: Scenario[] = JSON.parse(readFileSync(process.env.LIVE_SCENARIOS || "scripts/live-replay-scenarios.json", "utf8"));
 
 test("live replay", { timeout: 900_000 }, async (context) => {
-  // 1. Snapshot real catalogue + settings while the real env is loaded (read-only SELECTs).
-  const { queryNeon, closeNeonPool } = await import("../src/lib/neonDb");
-  const catalogRows = ((await queryNeon("SELECT * FROM travel_trip_entries"))?.rows || []) as Array<{ id: string; status: string }>;
-  const settingsRow = (await queryNeon("SELECT * FROM travel_bot_settings LIMIT 1"))?.rows?.[0];
-  await closeNeonPool();
-  const openaiKey = process.env.OPENAI_API_KEY!;
-  assert.ok(catalogRows.length > 0 && openaiKey);
+  // The replay spends model credit. It never runs on the production key unless explicitly told to:
+  // on 2026-10-30 a day of replays on the shared key helped exhaust the production balance.
+  const openaiKey = process.env.LIVE_REPLAY_OPENAI_API_KEY
+    || (process.env.LIVE_REPLAY_ALLOW_PRODUCTION_KEY === "1" ? process.env.OPENAI_API_KEY : "");
+  assert.ok(openaiKey, "Set LIVE_REPLAY_OPENAI_API_KEY (a separate, budget-limited key).");
+
+  // 1. Snapshot the real catalogue + settings on a separate read-only connection. The bot's own
+  // database module is only loaded after the fixture URL is in place: loaded first, it kept the
+  // production URL and late log writes reached the production error log.
+  const { Client } = await import("pg");
+  const snapshot = new Client({ connectionString: process.env.NEON_DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  await snapshot.connect();
+  const catalogRows = (await snapshot.query("SELECT * FROM travel_trip_entries")).rows as Array<{ id: string; status: string }>;
+  const settingsRow = (await snapshot.query("SELECT * FROM travel_bot_settings LIMIT 1")).rows[0];
+  await snapshot.end();
+  assert.ok(catalogRows.length > 0);
   const { applyTestEnv } = await import("../tests/helpers/env");
   applyTestEnv({ NEON_DATABASE_URL: "postgres://fixture:fixture@127.0.0.1:1/live-replay", BOOKING_DATABASE_URL: undefined,
     OPENAI_API_KEY: openaiKey, TRIP_UNDERSTANDING: "on", OPENAI_TIMEOUT_MS: "45000", OPENAI_MAX_RETRIES: "1",
@@ -158,5 +168,7 @@ test("live replay", { timeout: 900_000 }, async (context) => {
   console.log(`live replay: ${report.length} journeys, ${report.reduce((n, s) => n + s.turns.length, 0)} turns, ${issues.length} fact issues, ${silent.length} silent turns`);
   for (const turn of silent) console.log(`  silent: ${turn}`);
   assert.deepEqual(issues, [], "every amount and date must come from the catalogue");
-  await new Promise((resolve) => setImmediate(resolve));
+  // Background writes (memory merge, persisted logs) finish against the in-memory database before
+  // the mocks are restored, never against a real one.
+  await new Promise((resolve) => setTimeout(resolve, 3_000));
 });

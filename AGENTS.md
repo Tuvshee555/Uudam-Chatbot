@@ -25,7 +25,9 @@ evidence that the chatbot works.
 - A fix for a conversation failure adds or extends a journey reproducing that conversation's shape
   (invented trips only), and that journey must fail without the fix.
 - Before merging such a change, run `npm run qa:live` (live catalogue read-only, real model, nothing sent).
-  It must report 0 fact issues; read every changed reply.
+  It must report 0 fact issues; read every changed reply. It runs on `LIVE_REPLAY_OPENAI_API_KEY`, a
+  separate budget-limited key, never the production key: on 2026-10-30, replays on the shared key helped
+  exhaust the production OpenAI balance.
 - Never weaken or delete a journey assertion to make a change pass. If an expectation must change, say
   why in the commit message.
 - When measuring real behaviour from `travel_conversations`, exclude `demo:` senders (test sessions,

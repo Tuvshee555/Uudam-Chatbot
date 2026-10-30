@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 20
     env:
       NEON_DATABASE_URL: ${{ secrets.LIVE_REPLAY_NEON_DATABASE_URL }}
-      OPENAI_API_KEY: ${{ secrets.LIVE_REPLAY_OPENAI_API_KEY }}
+      LIVE_REPLAY_OPENAI_API_KEY: ${{ secrets.LIVE_REPLAY_OPENAI_API_KEY }}
       VERIFY_TOKEN: ci-verify-token
       FACEBOOK_PAGES: "000000000000000:ci-not-a-real-token"
       META_APP_SECRET: ci-meta-secret
@@ -34,24 +34,24 @@ jobs:
       REDIS_PAUSE_ENABLED: "false"
     steps:
       - name: Skip without secrets
-        if: env.NEON_DATABASE_URL == '' || env.OPENAI_API_KEY == ''
+        if: env.NEON_DATABASE_URL == '' || env.LIVE_REPLAY_OPENAI_API_KEY == ''
         run: echo "::notice::Live replay skipped - add LIVE_REPLAY_NEON_DATABASE_URL and LIVE_REPLAY_OPENAI_API_KEY secrets to enable it."
 
       - name: Checkout
-        if: env.NEON_DATABASE_URL != '' && env.OPENAI_API_KEY != ''
+        if: env.NEON_DATABASE_URL != '' && env.LIVE_REPLAY_OPENAI_API_KEY != ''
         uses: actions/checkout@v4
 
       - name: Setup Node
-        if: env.NEON_DATABASE_URL != '' && env.OPENAI_API_KEY != ''
+        if: env.NEON_DATABASE_URL != '' && env.LIVE_REPLAY_OPENAI_API_KEY != ''
         uses: actions/setup-node@v4
         with:
           node-version-file: ".nvmrc"
           cache: "npm"
 
       - name: Install
-        if: env.NEON_DATABASE_URL != '' && env.OPENAI_API_KEY != ''
+        if: env.NEON_DATABASE_URL != '' && env.LIVE_REPLAY_OPENAI_API_KEY != ''
         run: npm ci
 
       - name: Replay customer journeys
-        if: env.NEON_DATABASE_URL != '' && env.OPENAI_API_KEY != ''
+        if: env.NEON_DATABASE_URL != '' && env.LIVE_REPLAY_OPENAI_API_KEY != ''
         run: npm run qa:live

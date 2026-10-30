@@ -4,6 +4,20 @@ Open customer-experience failures confirmed by conversation replay. Each one sta
 the test suite where possible, until a journey proves it fixed. Evidence: `docs/chatbot-forensic-audit.md`,
 `docs/chatbot-conversation-quality.md`.
 
+## P0-1 — OpenAI balance exhausted — OPEN (owner action)
+Since about 07:43 UTC on 2026-10-30, every OpenAI call fails with 429 `credits_exhausted` (production logs
+tagged f441aaf). Deterministic paths still answer: lists, cards, number picks, booking with phone, family
+pricing on keyword routing. Every AI-dependent turn ends in silence plus a staff lead on Messenger, and in
+"passed to an advisor" on the website chat. Live replays run on the same key that day helped drain it.
+**Fix:** top up the OpenAI balance and add a low-balance alert. Replays now require a separate
+`LIVE_REPLAY_OPENAI_API_KEY`.
+
+## P1-0 — Latin-script month words — FIX READY (branch `fix/latin-month-words`, awaiting approval)
+Production 2026-10-30: "<place> aylal neg sariin eheer sonirhoj bb" (early January, Latin script) got
+December dates; "neg sard" got silence. Months written as Latin number words (neg, hoyor, gurav …) were
+not read, and "neg" counted as a possible new destination. The fix reads them like digits and names a trip
+new to the conversation. Journey `a month written as a Latin number word…` fails without it.
+
 ## P1-1 — Multi-constraint family opening (Oct 24 shape) — OPEN
 
 **Conversation shape.** First message: a family with children of given ages, a flexible date ("around
@@ -42,6 +56,11 @@ or send one short acknowledgement per booked customer.
 ## P1-3 — Test traffic in the production conversation table — OPEN
 `demo:` sessions (87% of rows) are written beside real customers. Flag them or store them separately, so
 every metric uses real traffic.
+
+## P1-4 — "Universal bagtsan vne" answered without the price — RECHECK after P0-1
+Earlier on 2026-10-30 the reply carried the fares and inclusions. Later runs (production and branch code
+alike) gave the inclusions only. Those runs coincided with the exhausted model balance, so recheck once
+credit is restored before treating this as a code defect.
 
 ## P2-1 — Fare question under a fresh multi-trip list — OPEN
 "хүүхдийн үнэ" ("child price?") right after a new list gets "Аль аялал вэ?" instead of the child fare of the
