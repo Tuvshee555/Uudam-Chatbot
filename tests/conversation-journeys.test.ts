@@ -99,6 +99,17 @@ test("customer journeys reach their goal with grounded facts", async (context) =
       assert.doesNotMatch(windowed.text, /ВЭЛМОР ДАЛАЙН/, "no trip outside the window");
     });
 
+    // Live 2026-10-30 on production: "<place> aylal neg sariin eheer sonirhoj bb" (early January, Latin
+    // script) got December dates, then "neg sard" got silence — Latin month words were not read.
+    await context.test("a month written as a Latin number word is honoured and never answered with silence", async () => {
+      const early = await say("latin-month", "norvel aylal hoyor sariin eheer sonirhoj bb", one("city"));
+      assert.match(early.text, /^Тэр хугацаанд гарах аялал алга\. Гарах өдрүүд:/, "nothing departs early February: said, with the real dates");
+      assert.match(early.text, /3 сарын 15/);
+      const march = await say("latin-month", "gurav sard", one("city", { topics: [] }));
+      assert.equal(march.sends.length, 1, "a month follow-up is answered");
+      assert.match(march.text, /3 сарын 15/);
+    });
+
     await context.test("changing destination mid-conversation moves every answer to the new trip", async () => {
       await say("switch", "Вэлмор далай үнэ", one("sea"));
       const moved = await say("switch", "Норвел хотын аялал үнэ хэд вэ", one("city"));

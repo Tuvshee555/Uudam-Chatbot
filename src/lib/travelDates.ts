@@ -208,10 +208,29 @@ function explicitDateCandidates(
   return candidates;
 }
 
+const LATIN_MONTH_WORDS: Array<[RegExp, number]> = [
+  [/arvan\s+(?:hoyor|hoyr|hoer|khoyor)/, 12], [/arvan\s+(?:neg|nig)/, 11], [/neg|nig/, 1], [/hoyor|hoyr|hoer|khoyor/, 2],
+  [/gurav|guraw|gurwa|gurvan/, 3], [/dorov|duruv|dorvon|durvun/, 4], [/tav|taw/, 5], [/zurgaa|zurgan/, 6],
+  [/doloo/, 7], [/naim/, 8], [/yes|yos/, 9], [/arav|araw/, 10],
+];
+
+/**
+ * "neg sariin eheer", "hoyor sard": a month written as a number word in Latin script reads
+ * as its digit ("1 sariin eheer"). The Cyrillic words and digits were understood, the Latin
+ * words were not: a customer asking for early January was shown December (live 2026-10-30).
+ */
+function latinMonthWordsAsDigits(text: string): string {
+  return text.replace(/(?<!\p{L})(arvan\s+\p{L}+|\p{L}+)(\s+sar\p{L}*)/giu, (whole, word: string, rest: string) => {
+    const hit = LATIN_MONTH_WORDS.find(([pattern]) => new RegExp(`^(?:${pattern.source})$`, "i").test(word.trim()));
+    return hit ? `${hit[1]}${rest}` : whole;
+  });
+}
+
 export function resolveRequestedDate(
   text: string,
   now = new Date(),
 ): RequestedDate | null {
+  text = latinMonthWordsAsDigits(text);
   const today = getMongoliaDateParts(now);
 
   for (const candidate of RELATIVE_DATE_PATTERNS) {
@@ -241,6 +260,7 @@ export function resolveRequestedMonth(
   text: string,
   now = new Date(),
 ): RequestedMonth | null {
+  text = latinMonthWordsAsDigits(text);
   if (explicitDateCandidates(text, now).length > 0) return null;
   const today = getMongoliaDateParts(now);
   const normalized = text.toLowerCase();
@@ -877,7 +897,7 @@ function buildRange(startYmd: string, endYmd: string): RequestedRange | null {
 }
 
 export function resolveRequestedRange(text: string, now: Date): RequestedRange | "unsupported" | null {
-  const normalized = text.normalize("NFKC");
+  const normalized = latinMonthWordsAsDigits(text.normalize("NFKC"));
   // The calendar bounds of "at the end of the year" are not established by
   // the customer's words. Never silently replace that preference with any
   // upcoming date, or invent a month on the customer's behalf.
