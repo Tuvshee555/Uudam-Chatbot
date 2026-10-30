@@ -112,3 +112,44 @@ test("partial duration needs an actual saved counterpart and image-only itinerar
   ] }).fields;
   assert.equal((fields.extra?.itinerary_days as unknown[]).length, 2);
 });
+
+// 2026-10-30: a fare a consultant typed for one departure on the website, for a trip whose
+// hotel/package pricing is richer than the website's single fare, was dropped without a trace
+// and the next projection showed the trip's fare again. The rich pricing is still kept (which
+// package a single fare belongs to is the owner's decision); the typed fare is now a visible
+// conflict in the trip editor, beside the package fares it would contradict.
+test("a departure fare typed on the website for a package-priced trip is a visible conflict, not a silent drop", () => {
+  const groups = [{ label: "Вэлмор багц", hotel: "Вэлмор буудал", package_id: "velmor-package", date_keys: ["2098-03-17"], adult_price: 1_234_567 }];
+  const old = { ...website(), sourceMetadata: { price_groups: groups } };
+  const patch = websiteTripPatch({ sourceTripId: old.sourceTripId, departures: [{ ...old.departures[0], price: 1_111_111 }] }, old, canonical(old));
+  assert.equal(patch.extra?.price_groups, undefined, "package pricing is not replaced by a single fare");
+  const conflicts = (patch.extra?.shared_conflicts ?? []) as Array<Record<string, unknown>>;
+  assert.equal(conflicts.length, 1);
+  assert.equal(conflicts[0].field, "departure.2098-03-17.price");
+  assert.equal(conflicts[0].website, 1_111_111);
+  assert.equal(conflicts[0].base, 1_234_567);
+  assert.deepEqual(conflicts[0].chatbot, [{ label: "Вэлмор багц", adult_price: 1_234_567 }]);
+  // The same save again is a no-op, not a second conflict.
+  const again = websiteTripPatch({ sourceTripId: old.sourceTripId, departures: [{ ...old.departures[0], price: 1_111_111 }] }, old,
+    { ...canonical(old), extra: { ...canonical(old).extra, shared_conflicts: conflicts } });
+  assert.equal(again.extra?.shared_conflicts, undefined);
+});
+
+test("a departure fare typed on the website for a simply priced trip becomes that date's fare", () => {
+  const old = website();
+  const patch = websiteTripPatch({ sourceTripId: old.sourceTripId, departures: [{ ...old.departures[0], price: 1_111_111 }] }, old, canonical(old));
+  assert.deepEqual((patch.extra?.price_groups as Array<Record<string, unknown>>)?.map((group) => [group.dates, group.adult_price]), [[["2098-03-17"], 1_111_111]]);
+  assert.equal(patch.extra?.shared_conflicts, undefined);
+});
+
+test("a departure fare typed for a trip without package pricing becomes that date's fare, keeping the trip's other fares", () => {
+  // The projection writes an empty price_groups list into the website metadata of such trips.
+  const old = { ...website(), childPrice: 834_000, sourceMetadata: { price_groups: [] } };
+  const base = canonical(old as unknown as ReturnType<typeof website>);
+  const typed = websiteTripPatch({ sourceTripId: old.sourceTripId, departures: [{ ...old.departures[0], price: 1_111_111 }] }, old, base);
+  assert.deepEqual(typed.extra?.price_groups, [{ dates: ["2098-03-17"], adult_price: 1_111_111, child_price: 834_000, infant_price: null }]);
+  assert.equal(typed.extra?.shared_conflicts, undefined, "nothing ambiguous, no conflict");
+  // The trip's own fare typed again is no per-date fare at all.
+  const same = websiteTripPatch({ sourceTripId: old.sourceTripId, departures: [{ ...old.departures[0], price: 1_234_567 }] }, old, base);
+  assert.equal(same.extra?.price_groups, undefined);
+});

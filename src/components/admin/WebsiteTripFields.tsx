@@ -104,7 +104,13 @@ const FIELD_LABEL: Record<string, string> = {
   website_departure_availability: "Гарах өдрүүд (суудал)", departures: "Гарах өдрүүд",
   title: "Аяллын нэр", description: "Тайлбар", summary: "Товч тайлбар", price: "Том хүний үнэ", childPrice: "Хүүхдийн үнэ", infantPrice: "Нярайн үнэ",
 };
-const fieldLabel = (key: string) => { const bare = key.replace(/^(?:website|extra)\./, ""); return FIELD_LABEL[bare] || bare; };
+const DEPARTURE_FARE_LABEL: Record<string, string> = { price: "том хүний үнэ", childPrice: "хүүхдийн үнэ", infantPrice: "нярайн үнэ" };
+const fieldLabel = (key: string) => {
+  // A fare typed on the website for one departure of a package-priced trip (websiteTripBridge.ts).
+  const departure = /^departure\.(\d{4}-\d{2}-\d{2})\.(price|childPrice|infantPrice)$/.exec(key);
+  if (departure) return `${departure[1]} гарах өдрийн ${DEPARTURE_FARE_LABEL[departure[2]]}`;
+  const bare = key.replace(/^(?:website|extra)\./, ""); return FIELD_LABEL[bare] || bare;
+};
 function valueText(value: unknown): string {
   if (value == null || value === "") return "—";
   if (typeof value === "number") return value.toLocaleString("en-US");

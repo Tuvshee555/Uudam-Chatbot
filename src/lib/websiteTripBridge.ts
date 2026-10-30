@@ -364,6 +364,55 @@ export function websiteTripPatch(input: unknown, previousInput: unknown, canonic
     if (!["aliases", "booking_terms", "discounts", "extra_fees", "room_prices", "answer_hints", "review_reasons", "customer_visible", "needs_human_review", "transport_type", "destinations"].includes(key)) continue;
     accept(`extra.${key}`, canonicalExtra[key], manualBase[key], value, () => { extra[key] = value; });
   }
+  // Fares a consultant typed for single departures on the website (2026-10-30: every one was
+  // dropped, because the projection writes `price_groups` into every trip's metadata — often an
+  // empty list — and owning the key read as hotel/package pricing).
+  // - A trip with hotel/package pricing keeps it over the website's single fare per departure
+  //   (which package a single fare belongs to is the owner's call): the typed fare is recorded
+  //   as a visible conflict beside the package fares for that date, never dropped silently.
+  // - A trip without such pricing takes the typed fare as that date's fare, as mapWebsiteTrip
+  //   does for trips whose metadata has no price groups; a fare left empty is the trip's own.
+  const nextMetadata = record(nextInput.sourceMetadata);
+  const metadataGroups = nextMetadata.price_groups;
+  const sourceGroups = record(record(nextMetadata.connectedSource).extra).price_groups;
+  const packagePriced = (Array.isArray(metadataGroups) && metadataGroups.length > 0) || (Array.isArray(sourceGroups) && sourceGroups.length > 0);
+  if (!packagePriced && owns(nextMetadata, "price_groups") && !owns(record(incoming.sourceMetadata), "price_groups")
+    && owns(incoming, "departures") && Array.isArray(incoming.departures)) {
+    const base = {
+      adult_price: numberOrNull(fields.adult_price ?? canonical.adult_price),
+      child_price: numberOrNull(fields.child_price ?? canonical.child_price),
+      infant_price: numberOrNull(fields.infant_price ?? canonical.infant_price),
+    };
+    const perDate = currentWebsiteDepartureRows(incoming.departures.map(record)).flatMap((row) => {
+      const date = dateKey(row.startDate);
+      const typed = { adult_price: numberOrNull(row.price), child_price: numberOrNull(row.childPrice), infant_price: numberOrNull(row.infantPrice) };
+      const differs = (Object.keys(typed) as Array<keyof typeof typed>).some((key) => typed[key] !== null && typed[key] !== base[key]);
+      return date && differs ? [{ dates: [date], adult_price: typed.adult_price ?? base.adult_price,
+        child_price: typed.child_price ?? base.child_price, infant_price: typed.infant_price ?? base.infant_price }] : [];
+    });
+    const current = Array.isArray(canonicalExtra.price_groups) ? canonicalExtra.price_groups : [];
+    if (!sameParityValue(perDate, current)) extra.price_groups = perDate;
+  }
+  if (packagePriced && owns(incoming, "departures") && Array.isArray(incoming.departures)) {
+    const savedRows = Array.isArray(previous.departures) ? currentWebsiteDepartureRows(previous.departures.map(record)) : [];
+    const saved = new Map(savedRows.map((row) => [dateKey(row.startDate), row]));
+    const groups = (Array.isArray(canonicalExtra.price_groups) ? canonicalExtra.price_groups : []).map(record);
+    for (const row of currentWebsiteDepartureRows(incoming.departures.map(record))) {
+      const date = dateKey(row.startDate);
+      if (!date) continue;
+      for (const fare of ["price", "childPrice", "infantPrice"] as const) {
+        if (!owns(row, fare)) continue;
+        const typed = numberOrNull(row[fare]);
+        const before = saved.has(date) ? numberOrNull(saved.get(date)![fare]) : null;
+        if (typed === null || sameParityValue(typed, before)) continue;
+        const priceKey = fare === "price" ? "adult_price" : fare === "childPrice" ? "child_price" : "infant_price";
+        const forDate = groups.filter((group) => [...strings(group.dates), ...strings(group.date_keys)].includes(date))
+          .map((group) => ({ label: text(group.label) || text(group.hotel) || "Үнэ", [priceKey]: group[priceKey] ?? null }));
+        const conflict = { field: `departure.${date}.${fare}`, chatbot: forDate, website: typed, base: before };
+        if (!conflicts.some((entry) => sameParityValue(entry, conflict))) conflicts.push(conflict);
+      }
+    }
+  }
   if (!sameParityValue(conflicts, canonicalExtra.shared_conflicts || [])) extra.shared_conflicts = conflicts;
   for (const [key, value] of Object.entries(extra)) {
     if (sameParityValue(value, canonicalExtra[key])) delete extra[key];
