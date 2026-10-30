@@ -1,4 +1,4 @@
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { waitUntil } from "@vercel/functions";
 import { askOpenAIParts, type OpenAIPart } from "./openaiProvider";
 import { queryNeon } from "./neonDb";
@@ -6,12 +6,14 @@ import { fillSenderName } from "./senderNames";
 import {
   classifyError,
   hashIdentifier,
+  logError,
   logInfo,
   logWarn,
   recordCounter,
 } from "./observability";
 import { ensureTravelSchema } from "./travelSchema";
-import { uploadFileToCloudinary, uploadImageToCloudinary } from "./tripPhotoImport/upload";
+import { uploadImageToCloudinary } from "./tripPhotoImport/upload";
+import { storeCustomerImage } from "./customerImageStorage";
 import { createPaymentRecord, listPayments } from "./travelPayments";
 import { listTrips, type TravelTrip } from "./travelOps";
 import { resolveTripFromUserMessage } from "./travelFastPathsSearch";
@@ -42,6 +44,7 @@ export type CustomerDocument = {
   source_url: string;
   stored_url: string;
   image_sha256: string;
+  content_sha256?: string;
   mime_type: string;
   category: CustomerDocumentCategory;
   extracted_json: Record<string, unknown>;
@@ -59,6 +62,14 @@ export type CustomerDocument = {
   updated_at: string;
   reviewed_at?: string | null;
   retention_hidden_at?: string | null;
+  event_key?: string;
+  attachment_index?: number;
+  attachment_id?: string;
+  ingest_status?: "pending" | "processing" | "retry" | "stored" | "failed";
+  ingest_attempts?: number;
+  ingest_retry_at?: string | null;
+  ingest_error?: string;
+  received_at?: string | null;
 };
 
 export type ImageAttachmentInput = {
@@ -221,6 +232,7 @@ async function writeDocumentAudit(input: {
 async function findDuplicateDocument(input: {
   senderId: string;
   imageSha256: string;
+  excludeId?: number;
 }): Promise<number | null> {
   if (!input.imageSha256) return null;
   const ready = await ensureTravelSchema();
@@ -229,11 +241,11 @@ async function findDuplicateDocument(input: {
     `
       SELECT id
       FROM travel_customer_documents
-      WHERE sender_id = $1 AND image_sha256 = $2
+      WHERE sender_id = $1 AND image_sha256 = $2 AND id <> $3
       ORDER BY created_at ASC
       LIMIT 1
     `,
-    [input.senderId, input.imageSha256],
+    [input.senderId, input.imageSha256, input.excludeId || 0],
   );
   return result?.rows?.[0]?.id ? Number(result.rows[0].id) : null;
 }
@@ -406,7 +418,7 @@ async function applySensitiveRetentionPolicy() {
       SET retention_hidden_at = NOW(), updated_at = NOW()
       WHERE retention_hidden_at IS NULL
         AND category IN ('passport', 'travel_document', 'booking_code')
-        AND created_at < NOW() - ($1::text || ' days')::interval
+        AND COALESCE(received_at,created_at) < NOW() - ($1::text || ' days')::interval
     `,
     [String(SENSITIVE_RETENTION_DAYS)],
   ).catch(() => {});
@@ -847,25 +859,21 @@ async function insertCustomerDocument(input: {
 }
 
 export async function processCustomerImageAttachment(
-  input: ImageAttachmentInput & { trips?: TravelTrip[] },
+  input: ImageAttachmentInput & { trips?: TravelTrip[]; documentId?: number },
 ) {
   try {
     const image = await downloadImage(input.url);
-    let storedUrl = input.url;
-    try {
-      storedUrl = await uploadImageToCloudinary(
-        image.buffer,
-        `customer-${input.senderId}-${Date.now()}`,
-        image.mimeType,
+    const storedUrl = input.documentId
+      ? await storeCustomerImage(image.buffer, image.mimeType, String(input.documentId))
+      : await storeCustomerImage(image.buffer, image.mimeType, randomUUID());
+    // Store bytes before AI extraction. A model failure must not lose the photo.
+    if (input.documentId) {
+      await queryNeon(
+        `UPDATE travel_customer_documents SET stored_url=$2, content_sha256=$3,
+          mime_type=$4, ingest_status='stored', ingest_retry_at=NULL, ingest_error='', updated_at=NOW()
+         WHERE id=$1 AND sender_id=$5`,
+        [input.documentId, storedUrl, image.hash, image.mimeType, input.senderId],
       );
-    } catch (error) {
-      logWarn("customer_documents.cloudinary_store_failed", {
-        requestId: input.trace?.requestId,
-        correlationId: input.trace?.correlationId,
-        senderHash: hashIdentifier(input.senderId),
-        classification: classifyError(error),
-        message: error instanceof Error ? error.message : String(error),
-      });
     }
 
     const { extracted, category } = await extractImageData(image, input.trace);
@@ -886,9 +894,10 @@ export async function processCustomerImageAttachment(
     if (tripMatch) {
       extracted.trip_match = { id: tripMatch.id, route_name: tripMatch.route_name };
     }
-    const duplicateOfId = await findDuplicateDocument({
+    let duplicateOfId = await findDuplicateDocument({
       senderId: input.senderId,
       imageSha256: image.hash,
+      excludeId: input.documentId,
     });
     const paymentMatch = await matchOrCreatePayment({
       platform: input.platform,
@@ -896,7 +905,7 @@ export async function processCustomerImageAttachment(
       imageSha256: image.hash,
       extracted,
     });
-    const row = await insertCustomerDocument({
+    const documentFields = {
       platform: input.platform,
       senderId: input.senderId,
       pageId: input.pageId,
@@ -911,7 +920,33 @@ export async function processCustomerImageAttachment(
       matchedTripId: tripMatch?.id ?? null,
       duplicateOfId,
       autoAction: paymentMatch.autoAction,
-    });
+    };
+    const saveQueued = async (duplicateId: number | null) => (await queryNeon<CustomerDocument>(
+          `UPDATE travel_customer_documents SET category=$2, extracted_json=$3::jsonb,
+             confidence=$4, matched_payment_id=$5, matched_trip_id=$6,
+             duplicate_of_id=$7, auto_action=$8,
+             image_sha256=CASE WHEN $7::bigint IS NULL THEN $9 ELSE '' END,
+             status=CASE WHEN status='needs_review' AND $7::bigint IS NOT NULL
+               THEN 'duplicate' ELSE status END,
+             reviewed_at=CASE WHEN status='needs_review' AND $7::bigint IS NOT NULL
+               THEN NOW() ELSE reviewed_at END,
+             updated_at=NOW() WHERE id=$1 RETURNING *`,
+          [input.documentId, category, JSON.stringify(extracted), confidence,
+            paymentMatch.id, tripMatch?.id ?? null, duplicateId, paymentMatch.autoAction, image.hash],
+        ))?.rows?.[0] ?? null;
+    let row: CustomerDocument | null;
+    if (input.documentId) {
+      try {
+        row = await saveQueued(duplicateOfId);
+      } catch (error) {
+        // Two identical images in one album may finish extraction together.
+        if ((error as { code?: string })?.code !== "23505") throw error;
+        duplicateOfId = await findDuplicateDocument({ senderId: input.senderId,
+          imageSha256: image.hash, excludeId: input.documentId });
+        if (!duplicateOfId) throw error;
+        row = await saveQueued(duplicateOfId);
+      }
+    } else row = await insertCustomerDocument(documentFields);
     if (row?.id) {
       await writeDocumentAudit({
         documentId: row.id,
@@ -927,6 +962,7 @@ export async function processCustomerImageAttachment(
       }
     }
 
+    if (!row) throw new Error("customer_document_write_failed");
     recordCounter("customer_documents.processed_total", 1, {
       platform: input.platform,
       category,
@@ -950,6 +986,7 @@ export async function processCustomerImageAttachment(
       classification: classifyError(error),
       message: error instanceof Error ? error.message : String(error),
     });
+    if (input.documentId) throw error;
     return null;
   }
 }
@@ -963,21 +1000,19 @@ export async function processCustomerFileAttachment(
       return processCustomerImageAttachment({ ...input, url: input.url, trips: input.trips });
     }
 
+    // Customer files (PDF passports, payment slips, bookings) go to the private store like
+    // images, never to public Cloudinary. If it fails the record keeps only the temporary
+    // Messenger link and staff see an error; nothing is published as a fallback.
     let storedUrl = input.url;
     try {
-      storedUrl = await uploadFileToCloudinary(
-        file.buffer,
-        `customer-${input.senderId}-${Date.now()}-${file.fileName}`,
-        file.mimeType,
-      );
+      storedUrl = await storeCustomerImage(file.buffer, file.mimeType, `files/${randomUUID()}`);
     } catch (error) {
-      logWarn("customer_documents.file_store_failed", {
+      logError("customer_documents.private_storage_failed", {
         requestId: input.trace?.requestId,
         correlationId: input.trace?.correlationId,
         senderHash: hashIdentifier(input.senderId),
-        fileName: file.fileName,
-        classification: classifyError(error),
-        message: error instanceof Error ? error.message : String(error),
+        kind: "file",
+        error: error instanceof Error && error.message === "private_blob_not_configured" ? error.message : error instanceof Error ? error.name : "storage_error",
       });
     }
 
@@ -1082,7 +1117,7 @@ export async function processCustomerImageAttachments(input: {
 }) {
   const urls = Array.from(
     new Set(input.urls.map((url) => url.trim()).filter((url) => url.startsWith("http"))),
-  ).slice(0, 5);
+  );
   if (urls.length === 0) return [];
   // One catalog fetch per batch — used to resolve trip screenshots and
   // payment memos against real trips.
@@ -1216,6 +1251,8 @@ export async function listCustomerDocuments(options?: {
   dateTo?: string;
   deleted?: boolean;
   limit?: number;
+  offset?: number;
+  search?: string;
 }) {
   const ready = await ensureTravelSchema();
   if (!ready) return [];
@@ -1237,14 +1274,23 @@ export async function listCustomerDocuments(options?: {
   }
   if (options?.dateFrom?.trim()) {
     values.push(options.dateFrom.trim());
-    where.push(`d.created_at >= $${values.length}::date`);
+    where.push(`COALESCE(d.received_at,d.created_at) >= $${values.length}::date`);
   }
   if (options?.dateTo?.trim()) {
     values.push(options.dateTo.trim());
-    where.push(`d.created_at < ($${values.length}::date + INTERVAL '1 day')`);
+    where.push(`COALESCE(d.received_at,d.created_at) < ($${values.length}::date + INTERVAL '1 day')`);
+  }
+  if (options?.search?.trim()) {
+    values.push(`%${options.search.trim().slice(0, 120)}%`);
+    where.push(`(d.sender_id ILIKE $${values.length} OR s.display_name ILIKE $${values.length}
+      OR d.extracted_json::text ILIKE $${values.length} OR d.category ILIKE $${values.length}
+      OR d.matched_trip_id ILIKE $${values.length} OR p.customer_name ILIKE $${values.length}
+      OR p.trip_name ILIKE $${values.length} OR p.amount::text ILIKE $${values.length})`);
   }
   const limit = Math.min(Math.max(Math.trunc(options?.limit || 100), 1), 300);
+  const offset = Math.max(Math.trunc(options?.offset || 0), 0);
   values.push(limit);
+  values.push(offset);
   const result = await queryNeon<CustomerDocument>(
     `
       SELECT
@@ -1255,9 +1301,10 @@ export async function listCustomerDocuments(options?: {
         p.trip_name AS matched_payment_trip_name
       FROM travel_customer_documents d
       LEFT JOIN travel_payments p ON p.id = d.matched_payment_id
+      LEFT JOIN travel_senders s ON s.sender_id = d.sender_id
       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-      ORDER BY d.created_at DESC
-      LIMIT $${values.length}
+      ORDER BY COALESCE(d.received_at,d.created_at) DESC, d.id DESC
+      LIMIT $${values.length - 1} OFFSET $${values.length}
     `,
     values,
   );
@@ -1551,6 +1598,9 @@ export async function listDocumentSenders(options?: {
   dateFrom?: string;
   dateTo?: string;
   deleted?: boolean;
+  limit?: number;
+  offset?: number;
+  search?: string;
 }): Promise<DocumentSenderSummary[]> {
   const ready = await ensureTravelSchema();
   if (!ready) return [];
@@ -1559,12 +1609,19 @@ export async function listDocumentSenders(options?: {
   const values: unknown[] = [];
   if (options?.dateFrom?.trim()) {
     values.push(options.dateFrom.trim());
-    where.push(`d.created_at >= $${values.length}::date`);
+    where.push(`COALESCE(d.received_at,d.created_at) >= $${values.length}::date`);
   }
   if (options?.dateTo?.trim()) {
     values.push(options.dateTo.trim());
-    where.push(`d.created_at < ($${values.length}::date + INTERVAL '1 day')`);
+    where.push(`COALESCE(d.received_at,d.created_at) < ($${values.length}::date + INTERVAL '1 day')`);
   }
+  if (options?.search?.trim()) {
+    values.push(`%${options.search.trim().slice(0, 120)}%`);
+    where.push(`(d.sender_id ILIKE $${values.length} OR s.display_name ILIKE $${values.length})`);
+  }
+  const limit = Math.min(Math.max(Math.trunc(options?.limit || 101), 1), 300);
+  const offset = Math.max(Math.trunc(options?.offset || 0), 0);
+  values.push(limit, offset);
   const result = await queryNeon<{
     sender_id: string;
     platform: string;
@@ -1586,7 +1643,7 @@ export async function listDocumentSenders(options?: {
         COALESCE(MAX(NULLIF(s.display_name, '')), '') AS display_name,
         COUNT(*)::text AS total,
         COUNT(*) FILTER (WHERE d.status = 'needs_review')::text AS needs_review,
-        MAX(d.created_at)::text AS last_at,
+        MAX(COALESCE(d.received_at,d.created_at))::text AS last_at,
         COUNT(*) FILTER (WHERE d.category = 'passport')::text AS passports,
         COUNT(*) FILTER (WHERE d.category = 'travel_document')::text AS travel_docs,
         COUNT(*) FILTER (WHERE d.category = 'booking_code')::text AS booking_codes,
@@ -1597,8 +1654,8 @@ export async function listDocumentSenders(options?: {
       LEFT JOIN travel_senders s ON s.sender_id = d.sender_id
       WHERE ${where.join(" AND ")}
       GROUP BY d.sender_id
-      ORDER BY MAX(d.created_at) DESC
-      LIMIT 200
+      ORDER BY MAX(COALESCE(d.received_at,d.created_at)) DESC, d.sender_id DESC
+      LIMIT $${values.length - 1} OFFSET $${values.length}
     `,
     values,
   );

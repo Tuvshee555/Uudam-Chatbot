@@ -10,6 +10,7 @@ import { appendMessage } from "./conversation";
 import { rateLimitAsync } from "./rateLimit";
 import { scheduleCustomerMemoryUpdate } from "./conversationMemory";
 import { scheduleCustomerAttachmentProcessing, scheduleCustomerImageProcessing, type FileAttachmentInput } from "./customerDocuments";
+import { reserveCustomerImages, scheduleReservedCustomerImages } from "./customerImageIngest";
 import { isPaused } from "./pause";
 import { createLead, hasRecentOpenLead, isPagePaused, listTrips } from "./travelOps";
 import { notifyStaffOfLead } from "./staffAlerts";
@@ -40,7 +41,8 @@ export function extractImageAttachmentUrls(
 export function extractFileAttachmentInputs(
   attachments: Array<{
     type?: string;
-    payload?: { url?: string };
+    id?: string;
+    payload?: { url?: string; attachment_id?: string };
     title?: string;
     name?: string;
     mime_type?: string;
@@ -48,7 +50,8 @@ export function extractFileAttachmentInputs(
   base: Pick<FileAttachmentInput, "platform" | "senderId" | "pageId" | "trace">,
 ): FileAttachmentInput[] {
   return attachments
-    .filter((a) => a?.type !== "image" && typeof a?.payload?.url === "string")
+    .filter((a) => a?.type !== "image" && !a?.mime_type?.startsWith("image/")
+      && typeof a?.payload?.url === "string")
     .map((a) => ({
       ...base,
       url: String(a.payload?.url || "").trim(),
@@ -183,7 +186,7 @@ async function leadForUnmatchedTripScreenshot(
 
 /**
  * Fire-and-forget vision processing + post-classification confirmation. The
- * pipeline (download + Cloudinary + AI extraction per image) must NEVER sit
+ * pipeline (download + private storage + AI extraction per image) must NEVER sit
  * between the customer and their reply/ack — it used to be awaited inline,
  * stalling text replies for up to minutes and risking a killed function on
  * multi-image albums.
@@ -209,14 +212,17 @@ export function scheduleImageDocumentPipeline(input: {
   });
 }
 
-export function scheduleAttachmentDocumentPipeline(input: {
+export async function scheduleAttachmentDocumentPipeline(input: {
   platform: Platform;
   senderId: string;
   pageId: string;
+  eventKey: string;
+  timestamp?: number;
   token?: string;
   attachments: Array<{
     type?: string;
-    payload?: { url?: string };
+    id?: string;
+    payload?: { url?: string; attachment_id?: string };
     title?: string;
     name?: string;
     mime_type?: string;
@@ -225,19 +231,26 @@ export function scheduleAttachmentDocumentPipeline(input: {
   trace?: { requestId: string; correlationId: string };
 }) {
   const { platform, senderId, pageId, attachments, trace } = input;
-  const imageUrls = extractImageAttachmentUrls(attachments);
+  // Persist each image before acknowledging the webhook. Slow byte transfer and
+  // classification continue in waitUntil and can be retried from this receipt.
+  const receipts = await reserveCustomerImages({
+    platform, senderId, pageId, eventKey: input.eventKey,
+    timestamp: input.timestamp, attachments,
+  });
   const files = extractFileAttachmentInputs(attachments, {
     platform,
     senderId,
     pageId,
     trace,
   });
-  if (imageUrls.length === 0 && files.length === 0) return;
+  if (receipts.length === 0 && files.length === 0) return;
+  scheduleReservedCustomerImages(receipts, trace, (docs) => deliverProcessedDocuments(input, docs));
+  if (files.length === 0) return;
   scheduleCustomerAttachmentProcessing({
     platform,
     senderId,
     pageId,
-    imageUrls,
+    imageUrls: [],
     files,
     trace,
     onProcessed: (docs) => deliverProcessedDocuments(input, docs),
@@ -253,46 +266,46 @@ export async function handleAttachmentOnlyMessage(input: {
   platform: Platform;
   senderId: string;
   pageId: string;
+  eventKey: string;
+  timestamp?: number;
   token?: string;
-  attachments: Array<{ type?: string; payload?: { url?: string } }>;
+  attachments: Array<{ type?: string; id?: string; mime_type?: string;
+    payload?: { url?: string; attachment_id?: string } }>;
   deliverReply: AttachmentDelivery;
   trace?: { requestId: string; correlationId: string };
 }) {
   const { platform, senderId, pageId, token, attachments, trace } = input;
   const kinds = Array.from(
-    new Set(attachments.map((a) => ATTACHMENT_LABELS[a?.type || ""] || "файл")),
+    new Set(attachments.map((a) => a?.mime_type?.startsWith("image/")
+      ? "зураг" : ATTACHMENT_LABELS[a?.type || ""] || "файл")),
   );
   const storedAttachments = attachments
     .filter((a) => typeof a?.payload?.url === "string")
-    .map((a) => ({ type: a.type === "image" ? "image" as const : "file" as const, url: String(a.payload?.url) }));
+    .map((a) => ({ type: a.type === "image" || a.mime_type?.startsWith("image/")
+      ? "image" as const : "file" as const, url: String(a.payload?.url) }));
   await appendMessage(
     senderId,
     "user",
     `[Хэрэглэгч ${kinds.join(", ")} илгээсэн]`,
     storedAttachments,
   );
-  // Staff still need the customer's evidence while the bot is muted. Store
-  // it before the pause check; keep automated extraction and replies paused.
+  await scheduleAttachmentDocumentPipeline({
+    platform, senderId, pageId, token,
+    eventKey: input.eventKey, timestamp: input.timestamp,
+    attachments, deliverReply: input.deliverReply, trace,
+  });
+  // Staff still need the image while the bot is muted. Storage continues;
+  // post-classification replies are suppressed by deliverProcessedDocuments.
   if (await isPagePaused(pageId)) return;
   if (await isPaused(senderId)) return;
-  // Document pipeline runs in the background — the customer gets the ack
-  // immediately, then a category-aware confirmation once classification lands.
-  scheduleAttachmentDocumentPipeline({
-    platform,
-    senderId,
-    pageId,
-    token,
-    attachments,
-    deliverReply: input.deliverReply,
-    trace,
-  });
 
   recordCounter("webhook.attachment_only_total", 1, {
     platform,
     kinds: kinds.join(","),
   });
 
-  const hasFileLikeAttachment = attachments.some((attachment) => attachment?.type !== "image");
+  const hasFileLikeAttachment = attachments.some((attachment) => attachment?.type !== "image"
+    && !attachment?.mime_type?.startsWith("image/"));
   if (!hasFileLikeAttachment) {
     // Image-only messages can be unknown screenshots. The background pipeline
     // will send a category-specific confirmation for payment/passport/booking

@@ -199,11 +199,19 @@ function pruneProcessedEvents() {
 export function buildEventKey(
   platform: Platform,
   senderId: string,
-  event: { message?: { mid?: string; text?: string } },
+  event: { timestamp?: number; message?: { mid?: string; text?: string;
+    attachments?: Array<{ id?: string; payload?: { url?: string; attachment_id?: string } }> } },
 ) {
   const mid = event.message?.mid?.trim();
   if (mid) return `${platform}:mid:${mid}`;
   const normalizedText = (event.message?.text || "").trim().toLowerCase();
+  const attachments = event.message?.attachments || [];
+  if (attachments.length) {
+    const identity = attachments.map((attachment) =>
+      attachment.payload?.attachment_id || attachment.id || attachment.payload?.url || "",
+    ).join("|");
+    return `${platform}:fallback:${senderId}:${hashIdentifier(`${normalizedText}|${identity}|${event.timestamp || ""}`)}`;
+  }
   return `${platform}:fallback:${senderId}:${hashIdentifier(normalizedText)}`;
 }
 function processedEventRedisKey(key: string) {

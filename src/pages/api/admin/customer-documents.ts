@@ -1,4 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { waitUntil } from "@vercel/functions";
 import { requireAdminAccess } from "../../../lib/adminAccess";
 import {
   deleteCustomerDocument,
@@ -12,6 +13,8 @@ import {
   type CustomerDocumentStatus,
 } from "../../../lib/customerDocuments";
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
+import { adminCustomerDocument } from "../../../lib/customerImageAccess";
+import { requeueCustomerImage, retryDueCustomerImages, scheduleReservedCustomerImages } from "../../../lib/customerImageIngest";
 
 const VALID_STATUSES: CustomerDocumentStatus[] = [
   "needs_review",
@@ -45,6 +48,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!allowed) return;
 
     if (req.method === "GET") {
+      if (!req.query.stats) {
+        try { waitUntil(retryDueCustomerImages(6).then(() => {})); } catch { /* local runtime */ }
+      }
       if (req.query.stats) {
         const stats = await getCustomerDocumentStats();
         return res.status(200).json({ ok: true, stats });
@@ -53,8 +59,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const dateFrom = typeof req.query.from === "string" ? req.query.from : undefined;
         const dateTo = typeof req.query.to === "string" ? req.query.to : undefined;
         const deleted = req.query.deleted === "true";
-        const senders = await listDocumentSenders({ dateFrom, dateTo, deleted });
-        return res.status(200).json({ ok: true, senders });
+        const limit = 100;
+        const offset = Number.isSafeInteger(Number(req.query.offset))
+          ? Math.max(0, Number(req.query.offset)) : 0;
+        const senders = await listDocumentSenders({ dateFrom, dateTo, deleted,
+          search: typeof req.query.q === "string" ? req.query.q : undefined,
+          limit: limit + 1, offset });
+        return res.status(200).json({ ok: true, senders: senders.slice(0, limit), hasMore: senders.length > limit });
       }
       const senderId =
         typeof req.query.sender_id === "string" ? req.query.sender_id : undefined;
@@ -70,7 +81,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         categoryRaw === "all" || VALID_CATEGORIES.includes(categoryRaw as CustomerDocumentCategory)
           ? (categoryRaw as CustomerDocumentCategory | "all")
           : "all";
-      const limit = Number(req.query.limit || 100);
+      const requestedLimit = Number(req.query.limit);
+      const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+        ? Math.min(100, Math.max(1, Math.trunc(requestedLimit))) : 100;
+      const offset = Number.isSafeInteger(Number(req.query.offset))
+        ? Math.max(0, Number(req.query.offset)) : 0;
       const dateFrom = typeof req.query.from === "string" ? req.query.from : undefined;
       const dateTo = typeof req.query.to === "string" ? req.query.to : undefined;
       const deleted = req.query.deleted === "true";
@@ -81,9 +96,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         dateFrom,
         dateTo,
         deleted,
-        limit: Number.isFinite(limit) ? limit : 100,
+        limit: limit + 1,
+        offset,
+        search: typeof req.query.q === "string" ? req.query.q : undefined,
       });
-      return res.status(200).json({ ok: true, documents });
+      return res.status(200).json({ ok: true,
+        documents: documents.slice(0, limit).map(adminCustomerDocument), hasMore: documents.length > limit });
     }
 
     if (req.method === "PATCH") {
@@ -91,6 +109,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const status = req.body?.status === undefined ? undefined : String(req.body.status);
       if (!Number.isInteger(id) || id <= 0) {
         return res.status(400).json({ error: "valid id is required" });
+      }
+      if (req.body?.retry === true) {
+        const row = await requeueCustomerImage(id);
+        if (!row) return res.status(404).json({ error: "image_not_retryable" });
+        scheduleReservedCustomerImages([row]);
+        return res.status(200).json({ ok: true, document: adminCustomerDocument(row) });
       }
       if (status !== undefined && !VALID_STATUSES.includes(status as CustomerDocumentStatus)) {
         return res.status(400).json({ error: "invalid status" });
@@ -128,7 +152,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           actor: "admin",
         });
         if (!updated) return res.status(404).json({ error: "document_not_found" });
-        return res.status(200).json({ ok: true, document: updated });
+        return res.status(200).json({ ok: true, document: adminCustomerDocument(updated) });
       }
       if (status === undefined) return res.status(400).json({ error: "status required" });
       const updated = await updateCustomerDocumentStatus(id, status as CustomerDocumentStatus, "admin");

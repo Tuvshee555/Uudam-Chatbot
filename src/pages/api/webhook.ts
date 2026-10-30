@@ -2339,6 +2339,7 @@ export default async function handler(
             messaging?: Array<{
               sender?: { id?: string };
               recipient?: { id?: string };
+              timestamp?: number;
               message?: {
                 is_echo?: boolean;
                 app_id?: number | string;
@@ -2346,7 +2347,8 @@ export default async function handler(
                 text?: string;
                 quick_reply?: { payload?: string };
                 metadata?: string;
-                attachments?: Array<{ type?: string; payload?: { url?: string } }>;
+                attachments?: Array<{ type?: string; id?: string; mime_type?: string;
+                  payload?: { url?: string; attachment_id?: string } }>;
               };
               postback?: { title?: string; payload?: string };
               referral?: Record<string, unknown>;
@@ -2590,6 +2592,8 @@ export default async function handler(
                       platform,
                       senderId,
                       pageId,
+                      eventKey: attachmentKey,
+                      timestamp: event.timestamp,
                       token,
                       attachments,
                       deliverReply: reply => enqueueAttachmentReply({ platform, senderId, pageId, token,
@@ -2607,7 +2611,7 @@ export default async function handler(
               // derived text so two DIFFERENT button taps never dedup-collide.
               const eventKey = event?.message?.mid
                 ? buildEventKey(platform, senderId, event)
-                : buildEventKey(platform, senderId, { message: { text } });
+                : buildEventKey(platform, senderId, attachments.length ? event : { message: { text } });
               // Get Started tap: Meta's own automated response already greets
               // the customer, so the bot says nothing and waits for a real
               // message. Only the tap time is recorded (not counted as a
@@ -2657,10 +2661,12 @@ export default async function handler(
                   // Images riding along with text are processed in the
                   // background — the text must be answered immediately, not
                   // after a multi-image vision pipeline finishes.
-                  scheduleAttachmentDocumentPipeline({
+                  await scheduleAttachmentDocumentPipeline({
                     platform,
                     senderId,
                     pageId,
+                    eventKey,
+                    timestamp: event.timestamp,
                     token,
                     attachments,
                     deliverReply: reply => enqueueAttachmentReply({ platform, senderId, pageId, token,

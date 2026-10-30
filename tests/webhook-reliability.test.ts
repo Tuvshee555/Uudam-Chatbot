@@ -16,6 +16,11 @@ function applyTestEnv() {
 before(async () => {
   const { Pool } = await import("pg");
   const query = async (sql: string, params: unknown[] = []) => {
+    if (/INSERT INTO travel_customer_documents/i.test(sql)) return { rows: [{
+      id: 1, platform: params[0], sender_id: params[1], page_id: params[2],
+      source_url: params[6], mime_type: "image/unknown", ingest_status: "pending",
+      ingest_attempts: 0,
+    }], rowCount: 1 };
     if (/COUNT[\s\S]*FROM travel_leads/i.test(sql)) return { rows: [{ count: persistedLeadSenders.has(String(params[0])) ? "1" : "0" }], rowCount: 1 };
     if (/INSERT INTO travel_leads/i.test(sql)) {
       persistedLeadSenders.add(String(params[2]));

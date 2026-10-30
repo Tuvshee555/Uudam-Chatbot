@@ -379,6 +379,28 @@ export async function ensureTravelSchema() {
       `);
       await client.query(`
         ALTER TABLE travel_customer_documents
+          ADD COLUMN IF NOT EXISTS event_key TEXT NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS attachment_index INTEGER NOT NULL DEFAULT -1,
+          ADD COLUMN IF NOT EXISTS attachment_id TEXT NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS content_sha256 TEXT NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS ingest_status TEXT NOT NULL DEFAULT 'stored',
+          ADD COLUMN IF NOT EXISTS ingest_attempts INTEGER NOT NULL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS ingest_retry_at TIMESTAMPTZ NULL,
+          ADD COLUMN IF NOT EXISTS ingest_error TEXT NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ NULL;
+      `);
+      await client.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_travel_customer_documents_event_attachment
+          ON travel_customer_documents (platform, page_id, sender_id, event_key, attachment_index)
+          WHERE event_key <> '';
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_travel_customer_documents_ingest_retry
+          ON travel_customer_documents (ingest_retry_at, id)
+          WHERE ingest_status IN ('pending', 'retry', 'processing');
+      `);
+      await client.query(`
+        ALTER TABLE travel_customer_documents
           ADD COLUMN IF NOT EXISTS confidence REAL NOT NULL DEFAULT 0,
           ADD COLUMN IF NOT EXISTS duplicate_of_id BIGINT NULL,
           ADD COLUMN IF NOT EXISTS matched_payment_id BIGINT NULL,
