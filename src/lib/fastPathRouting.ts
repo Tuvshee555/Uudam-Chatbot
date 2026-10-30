@@ -140,6 +140,8 @@ const CALENDAR_FOLLOWUP_WORDS = new Set([
   "сонирхож", "sonirhoj", "болох", "боломжтой", "суудал", "suudal", "bga", "bgaa", "baigaa",
   "шууд", "нислэгтэй", "нислэг", "shuud", "nislegtei", "nisleg", "хэдээр", "үнэтэй", "price", "cost",
   "нэг", "хоёр", "гурав", "дөрөв", "тав", "зургаа", "долоо", "найм", "ес", "арав", "арван",
+  // The same month numbers typed in Latin: "neg sard" read as a new destination and got silence (live 2026-10-30).
+  "neg", "nig", "tav", "hoyor", "hoyr", "hoer", "gurav", "guraw", "dorov", "duruv", "taw", "zurgaa", "naim", "yes", "yos", "arav", "araw", "arvan",
   // Who travels is not a new destination: "12/20 nd 2 hun", "11/4-нд 3 хүн", "2 том хүн 1 хүүхэд".
   "хүн", "хүний", "hun", "huun", "humuus", "том", "tom", "хүүхэд", "хүүхдийн", "huuhed", "huuhdiin", "нярай", "nyarai",
   // A start-date constraint is not a destination either: "Хүүхдийн амралт 11.1-с эхлэх гээд бдаг...яах вэ".
@@ -224,8 +226,8 @@ export type FastPathRoute = {
   unsupportedRequest?: boolean;
   /** Original customer question answered by a bare choice in the last trip menu. */
   requestText?: string;
-  /** The trip came only from old turns; the answer names it. */
-  fromHistory?: boolean;
+  /** The trip enters the conversation this turn (no earlier selection of it): the answer names it. */
+  newTrip?: boolean;
 };
 
 /** A reply that asked the customer to pick a trip — the only kind a pending clarification belongs to. */
@@ -294,13 +296,12 @@ export async function routeFastPathText(input: {
     // bare digit the turn asked for nothing, so no card was built and the free-text
     // model answered instead (or nothing was sent) — live replay 2026-10-30.
     const turn = numericChoice && !numericChoice.namePrefix ? trip.route_name : websiteTripLinksInText(text).textWithoutUrls;
+    // A trip that enters the conversation this turn is named in the answer: "tailand …" has several
+    // trips, a pick by number names none, and a customer back after weeks may not remember. A follow-up
+    // on the trip already selected stays compact (2026-10-30).
     return { matchText: joinContextAndTurn(trip.route_name, turn), scopedClarify: null, chosenTripId: trip.id, selection,
-      ...(requestText !== text ? { requestText } : {}) };
+      ...(requestText !== text ? { requestText } : {}), ...(previousSelection?.tripId !== trip.id ? { newTrip: true } : {}) };
   };
-  // A trip read only from old turns (no live selection, no open list): the answer must say
-  // which trip it prices, or a customer back after weeks cannot tell (2026-10-30).
-  const historyChoice = async (trip: TravelTrip, understanding?: Understanding): Promise<FastPathRoute> =>
-    ({ ...(await chose(trip, understanding)), ...(!previousSelection && !pendingTrips.length ? { fromHistory: true } : {}) });
   if (hasUnsupportedOriginRequest(text)) {
     return { matchText: markNoTrip(text), scopedClarify: null, unsupportedRequest: true };
   }
@@ -431,11 +432,7 @@ export async function routeFastPathText(input: {
         };
       }
       if (understanding.certainty === "one") {
-        const picked = understanding.trips[0];
-        const named = resolve(text, trips);
-        const namedHere = named.status === "verified" ? named.trip.id === picked.id
-          : named.status === "ambiguous" && named.candidates.some((candidate) => candidate.id === picked.id);
-        return { ...(namedHere ? await chose(picked, understanding) : await historyChoice(picked, understanding)), understanding };
+        return { ...(await chose(understanding.trips[0], understanding)), understanding };
       }
       if (understanding.certainty === "several" && understanding.intent !== "catalog") {
         // A question ABOUT the trips we just listed ("4 одтой юу?") is not a
@@ -686,7 +683,7 @@ export async function routeFastPathText(input: {
     contextual?.status === "verified" &&
     !directRejectsContextual
   ) {
-    return historyChoice(contextual.trip);
+    return chose(contextual.trip);
   }
   const picked = directRejectsContextual
     ? text
@@ -709,7 +706,7 @@ export async function routeFastPathText(input: {
   // of "үнэ"/"гарах" made "амжилт" a price question that matched no trip and
   // silently handed the customer to staff.
   if (picked === contextualUserText && contextual?.status === "verified") {
-    return historyChoice(contextual.trip);
+    return chose(contextual.trip);
   }
   if (picked === contextualUserText && contextual?.status !== "ambiguous") {
     return { matchText: customerTurn(picked), scopedClarify: null };
