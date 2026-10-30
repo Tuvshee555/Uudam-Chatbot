@@ -100,6 +100,16 @@ staff on the lead; anyone else is answered as usual. The Leads tab has "Би х�
 customer) and "Ботод буцаах" (hand it back). Graph calls use one version (v25.0, what Meta was already
 serving for the pinned v19.0).
 Journeys: `tests/staff-takeover-journeys.test.ts` (14 cases; 2, 9, 10–12 and 14 fail without the fix).
+**Hotfix 2026-10-31 (5762088).** Live 2026-10-30 22:37 UTC a brand-new customer's first message got
+silence: Meta's automated welcome greeting, sent just before it, was read as a desktop consultant (the
+rule became active at 20:05 UTC with the first recorded outbound id). Now the conversation's opening run
+(a thread read from its start, before the customer's first message and before any Page message that is not
+an automation) is Meta's; `source:mobile` is checked before the stored-reply match; an image (no text)
+matches a stored bot reply only if that reply carried an attachment. The affected customer's wrong pause
+was cleared after `/api/admin/takeover-diagnostics?sender_id=` showed no consultant in the thread.
+Journeys 15–16 fail without it. **Still open (owner decision):** a desktop consultant replying within 20 s
+of the customer is read as Meta's automation; a Meta automation more than 20 s after the customer (or a bot
+message whose id was not recorded and that has no stored copy) is read as a consultant.
 **Owner action for the strongest signal.** Reconnect the Page to the Meta app with `pages_manage_metadata`
 and subscribe the app to `messages` and `message_echoes` (POST `/api/subscribe-feed`); echoes then name the
 sending app on every Page message.
@@ -125,9 +135,16 @@ catalogue, no model call, and still lets the customer choose. Other questions ("
 their path. Journey `a fare question right under a fresh list…` fails without the fix; live replay 0
 fact issues.
 
-## P2-2 — Website chat endpoint answers weakly — OPEN (to investigate)
+## P2-2 — Website chat endpoint answers weakly — NOT REPRODUCED; one real gap (2026-10-31)
 `/api/demo` (the website chat) answered "Бээжин" and "Бээжин үнэ" with a generic question during the
 2026-10-30 smoke check, while Messenger lists the trips. Its pipeline differs from the webhook.
+**Investigation 2026-10-31.** On current code the two endpoints gave the same replies: 12 turns on the live
+catalogue with the real model (place, place + price, then "хүүхдийн үнэ"; 0 fact issues) and 8 cases offline.
+The 2026-10-30 observation fell on the day of the OpenAI credit outage. **Real gap:** when the website chat
+has no answer it tells the visitor "Энэ асуултыг манай аяллын зөвлөхөд дамжууллаа" but creates no lead and
+alerts nobody (0 `demo:` leads exist). **Impact:** the endpoint serves this app's own landing page and the
+admin test chat, not the booking website; the last 30 days hold 0 landing-page/admin sessions (all `demo:`
+sessions were QA tooling), so no real customer was affected in that period.
 
 ## P2-3 — Look-alike destinations — OPEN
 Fuzzy matching can take a destination one letter away for another. Needs a data-side "not this place"
