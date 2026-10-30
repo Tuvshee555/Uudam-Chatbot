@@ -85,8 +85,10 @@ export async function ensureTravelSchema() {
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
       `);
-      // Seed a row for every configured page (idempotent).
-      for (const page of env.facebookPages) {
+      // Seed a row for every configured page (idempotent). Only the production deployment does:
+      // local scripts run against the production database with placeholder page ids left rows
+      // such as "000000000000000" and "fixture-page" there (P2-5). A missing row means "not paused".
+      for (const page of process.env.VERCEL_ENV === "production" ? env.facebookPages : []) {
         await client.query(
           `
             INSERT INTO travel_page_control (page_id, bot_paused, pause_reason)

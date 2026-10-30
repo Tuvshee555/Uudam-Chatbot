@@ -104,9 +104,10 @@ Journeys: `tests/staff-takeover-journeys.test.ts` (14 cases; 2, 9, 10–12 and 1
 and subscribe the app to `messages` and `message_echoes` (POST `/api/subscribe-feed`); echoes then name the
 sending app on every Page message.
 
-## P1-3 — Test traffic in the production conversation table — OPEN
-`demo:` sessions (87% of rows) are written beside real customers. Flag them or store them separately, so
-every metric uses real traffic.
+## P1-3 — Test traffic in the production conversation table — MITIGATED (2026-10-30)
+`demo:` sessions (87% of rows) are written beside real customers. Every analytics and quality query on
+conversations excludes `demo:` senders, the Leads tab does too, and the demo path writes no leads
+(0 `demo:` leads in production). Still open: storing test sessions separately.
 
 ## P1-4 — "Universal bagtsan vne" answered without the price — FIXED (2026-10-30)
 **Root cause.** With the model available the request is read correctly (live replay: all six phrasings,
@@ -149,7 +150,9 @@ accepted so the loop ends; a failed attempt that sent nothing removes the copy i
 skipped. `inbound_outcome` status `silent` → a deliberate rule (the reason says which). `failed` with
 reason `delivery_failed:*` → Meta refused the reply; any other reason → processing failed.
 
-## P2-5 — Test rows in the production database — OPEN
-`travel_page_control` holds rows for fixture pages ("fixture-page", "1234567890", "000000000000000",
-updated as late as 2026-10-30): some test or script run used the production database. Find the run and
-point it at a fixture database.
+## P2-5 — Test rows in the production database — FIXED (2026-10-30)
+`travel_page_control` held rows for fixture pages ("fixture-page", "1234567890", "000000000000000", "0",
+"1"). Cause: the schema bootstrap seeds a row per configured page, and local scripts (the gate, replays)
+run against the production database with placeholder page ids from `.env.local`. Now only the production
+deployment seeds page rows (a missing row means "not paused"); the five fixture rows were deleted, the two
+real pages kept.
