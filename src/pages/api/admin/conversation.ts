@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
 import { getFullHistory } from "../../../lib/conversation";
+import { adminConversationMessages } from "../../../lib/customerImageAccess";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const allowed = await requireAdminAccess(req, res, "api.admin.conversation");
@@ -13,6 +14,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: "sender_id required" });
   }
 
-  const messages = await getFullHistory(sender_id.trim());
+  // Attachments leave only as signed links (customerImageAccess.ts), never Meta CDN URLs.
+  const messages = adminConversationMessages(await getFullHistory(sender_id.trim()));
   return res.status(200).json({ ok: true, messages });
 }

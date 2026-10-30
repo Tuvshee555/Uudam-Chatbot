@@ -31,4 +31,11 @@ export async function runDailyHealthCheck(): Promise<void> {
   } catch (error) {
     logError("daily_health_check.storage_failed", { message: error instanceof Error ? error.name : "storage_check_failed" });
   }
+  // Permanent deletions whose stored file could not be removed are tried again.
+  try {
+    const purged = await (await import("./customerDocumentPurge")).retryFailedStorageDeletions();
+    if (purged) logInfo("daily_health_check.storage_deletions_retried", { purged });
+  } catch (error) {
+    logError("daily_health_check.storage_delete_retry_failed", { message: error instanceof Error ? error.name : "retry_failed" });
+  }
 }
