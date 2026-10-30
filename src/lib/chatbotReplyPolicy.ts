@@ -112,5 +112,20 @@ export function presentAssistantReply(input: {
   reply = reply.replace(/https?:\/\/\S+|\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*/gu,
     (value, offset: number, whole: string) => value.startsWith("http") || /(?:^|\n)[ \t]*$/.test(whole.slice(0, offset)) || ++emojis <= 1 ? value : "");
   // One blank line may separate blocks (list entries, card sections); longer gaps collapse.
-  return reply.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  reply = reply.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return withoutBrokenValues(reply);
+}
+
+const BROKEN_VALUE = /(?<![\p{L}\p{N}])(?:undefined|null|NaN)(?![\p{L}\p{N}])|Invalid Date/u;
+
+/**
+ * A code placeholder never reaches a customer: "📅 undefined/undefined" went out in every
+ * list holding a weekly-schedule trip (live 2026-10-30). A line carrying one is dropped (links
+ * are not inspected); a reply with nothing else left becomes REFER, the silent staff hand-off.
+ */
+export function withoutBrokenValues(reply: string): string {
+  if (!BROKEN_VALUE.test(reply.replace(/https?:\/\/\S+/g, " "))) return reply;
+  const kept = reply.split("\n").filter((line) => !BROKEN_VALUE.test(line.replace(/https?:\/\/\S+/g, " ")))
+    .join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return /[\p{L}\p{N}]/u.test(kept) ? kept : "REFER";
 }

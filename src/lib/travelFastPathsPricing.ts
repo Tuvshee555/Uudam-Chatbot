@@ -1865,7 +1865,9 @@ export function formatTripListCard(
     `${number}. ${trip.route_name}`,
     details.duration?.trim() ? `⏳ ${details.duration.trim()}` : "",
     details.fare ? `💰 ${details.fare}` : "",
-    details.dates?.length ? `📅 ${details.dates.map((date) => shortDate(date, now)).join(", ")}` : "",
+    // A weekly schedule ("Ням гараг бүр") is text, not a date: printed as is. Run through
+    // the month/day formatter it became "undefined/undefined" (live 2026-10-30).
+    details.dates?.length ? `📅 ${details.dates.map((date) => /^\d{4}-\d{2}-\d{2}$/.test(date) ? shortDate(date, now) : date).join(", ")}` : "",
     details.note || "",
   ].filter(Boolean).join("\n");
 }

@@ -54,6 +54,8 @@ export function fareLines(fares: NormalizedPassengerFare[], currency: string): s
 
 /** "10/13"; a date a year or more away keeps its year ("2027.10.13") so it cannot be read as the nearer one. */
 export function shortDate(iso: string, now = new Date()): string {
+  // Only a real YYYY-MM-DD is reformatted; anything else ("Ням гараг бүр") is already text.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
   const [y, m, d] = iso.split("-").map(Number);
   const yearAway = Date.UTC(y, m - 1, d) - now.getTime() > 330 * 24 * 60 * 60 * 1000;
   return yearAway ? `${y}.${m}.${d}` : `${m}/${d}`;
