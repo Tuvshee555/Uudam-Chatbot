@@ -39,6 +39,7 @@ import {
   isFrustratedHandoffRequest as detectFrustratedHandoffRequest,
   isHandoffRequest as detectHandoffRequest,
 } from "./handoffDetection";
+import { GRAPH_API_BASE } from "./metaGraph";
 
 const FALLBACK_SEND_ERROR_MESSAGE = "Уучлаарай, мессеж илгээхэд алдаа гарлаа.";
 const MAX_PHOTO_ONLY_PHOTOS = MAX_TRIP_PHOTOS;
@@ -458,7 +459,7 @@ export async function fetchAndStoreFbName(senderId: string, token: string): Prom
     const pageId = getEnv().facebookPages[0]?.pageId ?? "";
     if (!pageId) return;
     const url =
-      `https://graph.facebook.com/v19.0/${encodeURIComponent(pageId)}/conversations` +
+      `${GRAPH_API_BASE}/${encodeURIComponent(pageId)}/conversations` +
       `?user_id=${encodeURIComponent(senderId)}&fields=participants&access_token=${encodeURIComponent(token)}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return;

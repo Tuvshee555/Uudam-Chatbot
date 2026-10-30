@@ -16,7 +16,8 @@ Object.assign(env, { NODE_ENV: "test", OPENAI_API_KEY: "conversation-fixture-key
 const result = spawnSync(process.execPath, ["--import", "tsx", "--test", "--test-reporter=spec",
   "tests/conversation-journeys.test.ts", "tests/forensic-regressions.test.ts", "tests/conversation-followups.test.ts",
   "tests/list-card-dates.test.ts", "tests/inbound-visibility.test.ts",
-  "tests/webhook-conversations.test.ts", "tests/demo-conversation-parity.test.ts", "tests/webhook-durable-handoff.test.ts", "tests/website-chat-webhook.test.ts"],
+  "tests/webhook-conversations.test.ts", "tests/demo-conversation-parity.test.ts", "tests/webhook-durable-handoff.test.ts", "tests/website-chat-webhook.test.ts",
+  "tests/staff-takeover-journeys.test.ts"],
 { cwd: process.cwd(), env, stdio: "inherit" });
 if (result.error) console.error(result.error.message);
 process.exit(result.status ?? 1);

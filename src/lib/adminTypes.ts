@@ -413,6 +413,9 @@ export type TravelLead = {
   notified_at?: string | null;
   /** The consultant who took the lead. */
   assigned_to?: string;
+  /** The bot is stopped for this customer, and why ("manual", "operator_reply", "booked_customer", …). */
+  bot_paused?: boolean;
+  bot_pause_reason?: string;
 };
 
 export type LeadStats = {

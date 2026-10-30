@@ -46,11 +46,11 @@ import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/c
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { buildContactReply, contactSettingsOf, isAddressRequest, isPhoneRequest, isRepeatOfLastReply } from "../../lib/contactReplies";
-import { fetchThreadMessages, latestStaffReplyAt, STAFF_TAKEOVER_MS } from "../../lib/staffTakeover";
+import { detectStaffTakeover, fetchThreadMessages, markStaffReply, STAFF_TAKEOVER_MS, takeoverRisk, type TakeoverCheck } from "../../lib/staffTakeover";
 import { AI_OUTAGE_HANDOFF_REPLY, BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, markGetStarted, pauseBookedCustomer, pauseBot, pauseReason, trackSender } from "../../lib/pause";
-import { BOOKED_STATUS_HEADING, bookedFollowupReply, followupLeadLine } from "../../lib/bookedFollowup";
+import { BOOKED_STATUS_HEADING, bookedFollowupReply, bookedStatusTurn, followupLeadLine, isBookingStatusQuestion } from "../../lib/bookedFollowup";
 import { inboundStatus, newInboundOutcome, noteInbound, traceInbound, type InboundOutcome } from "../../lib/inboundTrace";
 import { latestCustomerLead, recordLeadFollowup } from "../../lib/travelLeadsDb";
 import { buildDateNotScheduledReply } from "../../lib/travelFastPathsPricing";
@@ -239,6 +239,8 @@ async function handleMessage(
   const staffThread = platform === "facebook" && token
     ? fetchThreadMessages({ token, senderId, timeoutMs: 4000 })
     : Promise.resolve(null);
+  // Not awaited when a pause or other early exit returns first; it must never reject unhandled.
+  staffThread.catch(() => {});
   if (await isPagePaused(pageId)) {
     if (!attachmentReply) await appendMessage(senderId, "user", text);
     noteInbound((outcome) => { outcome.silent = "page_paused"; });
@@ -253,8 +255,8 @@ async function handleMessage(
   }
   // A message from a customer staff own is kept on their lead, which goes back to unread in the
   // Leads tab (and pings staff when a channel is set): it used to be stored where nobody looked.
-  const recordPausedFollowup = async (): Promise<TravelLead | null> => {
-    const line = followupLeadLine(text);
+  const recordPausedFollowup = async (label?: string, options: { notify?: boolean } = {}): Promise<TravelLead | null> => {
+    const line = followupLeadLine(text, undefined, label);
     const lead = await latestCustomerLead(senderId).catch(() => null);
     const details = { platform, senderId, customerMessage: text, kind: lead?.kind || "handoff" as const, context: line };
     if (lead) {
@@ -263,13 +265,20 @@ async function handleMessage(
       const created = await ensureDurableLead(details).catch(() => null);
       if (!created?.lead) return null;
     }
-    await notifyStaffOfLead(details, { requestId: trace?.requestId, correlationId: trace?.correlationId, source: "api.webhook.paused_followup" }).catch(() => {});
+    if (options.notify !== false) {
+      await notifyStaffOfLead(details, { requestId: trace?.requestId, correlationId: trace?.correlationId, source: "api.webhook.paused_followup" }).catch(() => {});
+    }
     return lead || await latestCustomerLead(senderId).catch(() => null);
   };
   const activePause = await pauseReason(senderId);
-  // A consultant's pause (manual, or a staff reply seen in the thread): the bot stays out.
-  // The bot's own pause after a booking is answered below with the lead's real status.
-  if (activePause && (activePause !== "booked_customer" || attachmentReply)) {
+  // The bot's own marker after a booking request ("booked_customer") does not silence it on
+  // Facebook: a customer waiting for a consultant keeps getting help, and the thread check below
+  // stops the bot as soon as a consultant replies. Instagram has no thread check, so there the
+  // marker still hands the conversation to staff (status reply below).
+  const waitingForConsultant = activePause === "booked_customer" && platform === "facebook" && Boolean(token);
+  // A human's pause (a consultant took over, a manual pause, the customer asked for a person):
+  // the bot stays out.
+  if (activePause && !waitingForConsultant && (activePause !== "booked_customer" || attachmentReply)) {
     if (!attachmentReply) await appendMessage(senderId, "user", text);
     const followup = !attachmentReply && !isThanksOnly(text) ? await recordPausedFollowup() : null;
     noteInbound((outcome) => { outcome.silent = `paused:${activePause}`; });
@@ -283,15 +292,19 @@ async function handleMessage(
     });
     return;
   }
-  // Staff replies never reach this webhook as echoes, so read the thread: a
-  // staff member who wrote here in the last 3 days owns the conversation.
-  {
-    const thread = await staffThread;
-    const staffAt = thread ? latestStaffReplyAt({ messages: thread, pageId }) : null;
-    if (staffAt) {
+  // Staff replies do not reach this webhook as echoes, so the thread is read: a consultant who
+  // wrote here in the last 3 days owns the conversation (staffTakeover.ts tells the bot's own
+  // messages, a consultant on the phone or on a computer, and Meta's automations apart).
+  if (platform === "facebook" && token) {
+    const lookup = (await staffThread) ?? { status: "unverified" as const, reason: "api_error" as const };
+    const takeover: TakeoverCheck = await detectStaffTakeover({ lookup, pageId, senderId })
+      .catch(() => ({ status: "unverified" as const, reason: "api_error" as const }));
+    if (takeover.status === "checked" && takeover.staff) {
+      const staffAt = takeover.staff.at;
       if (!attachmentReply) await appendMessage(senderId, "user", text);
       const remainingMs = staffAt.getTime() + STAFF_TAKEOVER_MS - Date.now();
       await pauseBot(senderId, remainingMs, "operator_reply").catch(() => {});
+      await markStaffReply(senderId, staffAt).catch(() => {});
       if (!attachmentReply && !isThanksOnly(text)) await recordPausedFollowup();
       noteInbound((outcome) => { outcome.silent = "staff_takeover"; });
       logInfo("webhook.staff_takeover_detected", {
@@ -301,9 +314,27 @@ async function handleMessage(
         pageId,
         senderHash: hashIdentifier(senderId),
         staffReplyAt: staffAt.toISOString(),
+        origin: takeover.staff.origin,
       });
-      recordCounter("webhook.staff_takeover_detected_total", 1, { platform });
+      recordCounter("webhook.staff_takeover_detected_total", 1, { platform, origin: takeover.staff.origin });
       return;
+    }
+    // The thread could not be read: never taken as "no consultant". Where a consultant may own
+    // the conversation the message waits for staff (visible on the lead, staff pinged); any
+    // other customer is answered as usual, so one failed lookup does not silence the bot.
+    if (takeover.status === "unverified") {
+      const risk = await takeoverRisk(senderId);
+      logWarn("webhook.staff_takeover_unverified", {
+        requestId: trace?.requestId, correlationId: trace?.correlationId, platform, pageId,
+        senderHash: hashIdentifier(senderId), reason: takeover.reason, risk: risk ?? "none",
+      });
+      recordCounter("webhook.staff_takeover_unverified_total", 1, { reason: takeover.reason, held: String(Boolean(risk)) });
+      if (risk) {
+        if (!attachmentReply) await appendMessage(senderId, "user", text);
+        await recordPausedFollowup("Бот хариулаагүй — ажилтны хариуг шалгаж чадсангүй");
+        noteInbound((outcome) => { outcome.silent = `takeover_unverified:${takeover.reason}`; });
+        return;
+      }
     }
   }
   await assertLockHealthy();
@@ -523,10 +554,33 @@ async function handleMessage(
     return true;
   };
 
-  // The bot's own pause after a booking, and no staff reply in the thread: one status reply
+  // Facebook: a customer waiting for a consultant after a booking request, and no consultant
+  // reply in the thread. A status question gets the lead's real status (deterministic, never a
+  // confirmation or a call time) and pings staff; every other message is answered as usual —
+  // it used to get silence for three days — and is added to the lead for staff to read.
+  if (waitingForConsultant && !attachmentReply) {
+    if (isBookingStatusQuestion(text)) {
+      await appendMessage(senderId, "user", text);
+      const lead = await recordPausedFollowup("Захиалгын төлөв асуусан");
+      const reply = lead ? bookedStatusTurn(lead, history.findLast((message) => message.role === "assistant")?.text) : null;
+      if (!reply) noteInbound((outcome) => { outcome.silent = lead ? "booked_status_repeat" : "booked_status_unrecorded"; });
+      logInfo("webhook.booked_followup", {
+        requestId: trace?.requestId, correlationId: trace?.correlationId, platform, senderHash: hashIdentifier(senderId),
+        outcome: reply ? "status_reply" : lead ? "repeat_recorded" : "not_recorded", leadStatus: lead?.lead_status || null,
+      });
+      if (reply) {
+        await deliverFastPathReply({ reply, failTag: "booked_followup", rememberSource: "api.webhook.booked_followup",
+          counter: "webhook.booked_followup_total" });
+      }
+      return;
+    }
+    if (!isThanksOnly(text)) await recordPausedFollowup("Хүлээж байхдаа асуусан (бот хариулсан)", { notify: false });
+  }
+
+  // Instagram (no thread check there): the bot's own pause after a booking gives one status reply
   // from the lead record, then silence while the customer keeps writing (each message still
   // reopens the lead for staff). Never a confirmation or a call time (bookedFollowup.ts).
-  if (activePause === "booked_customer") {
+  if (activePause === "booked_customer" && !waitingForConsultant) {
     await appendMessage(senderId, "user", text);
     const lead = isThanksOnly(text) ? null : await recordPausedFollowup();
     const alreadyTold = Boolean(history.findLast((message) => message.role === "assistant")?.text.startsWith(BOOKED_STATUS_HEADING));

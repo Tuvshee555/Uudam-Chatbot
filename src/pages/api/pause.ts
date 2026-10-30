@@ -17,6 +17,7 @@ import {
   finishRequestTrace,
   hashIdentifier,
 } from "../../lib/observability";
+import { GRAPH_API_BASE } from "../../lib/metaGraph";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const trace = beginRequestTrace({
@@ -111,7 +112,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const token = env.facebookPages[0]?.token ?? env.tokenPage;
         if (!token || !pageId) return res.status(400).json({ error: "no page token or pageId configured" });
         try {
-          const url = `https://graph.facebook.com/v19.0/${encodeURIComponent(pageId)}/conversations?fields=participants&limit=100&access_token=${encodeURIComponent(token)}`;
+          const url = `${GRAPH_API_BASE}/${encodeURIComponent(pageId)}/conversations?fields=participants&limit=100&access_token=${encodeURIComponent(token)}`;
           const fbRes = await fetch(url, { signal: AbortSignal.timeout(10000) });
           const data = (await fbRes.json()) as {
             data?: Array<{ participants?: { data?: Array<{ name?: string; id?: string }> } }>;

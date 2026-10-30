@@ -2,11 +2,13 @@ import { tracedSend } from "./inboundTrace";
 import { createHmac } from "crypto";
 import { getEnv } from "./env";
 import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboundKillSwitch";
-import { logInfo } from "./observability";
+import { logInfo, logWarn } from "./observability";
+import { recordOutboundMessage } from "./outboundMessages";
 import { fetchWithRetry } from "./resilience";
 import { quickReplyTitle } from "./quickReplyTitle";
 import { isReferReply } from "./reply";
 import { deliverMessengerText } from "./metaTextDelivery";
+import { GRAPH_API_BASE } from "./metaGraph";
 
 const env = getEnv();
 
@@ -61,7 +63,7 @@ async function postToMessenger(
   }
 
   const startedAt = Date.now();
-  const { attempts } = await tracedSend(fetchWithRetry(
+  const { response, attempts } = await tracedSend(fetchWithRetry(
     endpoint,
     {
       method: "POST",
@@ -85,6 +87,14 @@ async function postToMessenger(
     attempts,
     durationMs: Date.now() - startedAt,
   });
+  // The id Meta gives this message, so the thread check knows it was the bot (outboundMessages.ts).
+  const sent = await response.json().catch(() => null) as { message_id?: string; recipient_id?: string } | null;
+  const recipient = (body.recipient as { id?: string } | undefined)?.id ?? "";
+  if (sent?.message_id) {
+    await recordOutboundMessage(String(sent.message_id), String(sent.recipient_id || recipient)).catch((error) => {
+      logWarn("meta.messenger.outbound_record_failed", { requestId: trace?.requestId, message: error instanceof Error ? error.name : "unknown" });
+    });
+  }
 }
 
 function graphMessagesEndpoint(token: string) {
@@ -95,7 +105,7 @@ function graphMessagesEndpoint(token: string) {
       createHmac("sha256", env.metaAppSecret).update(token).digest("hex"),
     );
   }
-  return `https://graph.facebook.com/v19.0/me/messages?${params.toString()}`;
+  return `${GRAPH_API_BASE}/me/messages?${params.toString()}`;
 }
 
 function graphCommentEndpoint(commentId: string, token: string) {
@@ -106,7 +116,7 @@ function graphCommentEndpoint(commentId: string, token: string) {
       createHmac("sha256", env.metaAppSecret).update(token).digest("hex"),
     );
   }
-  return `https://graph.facebook.com/v19.0/${commentId}/comments?${params.toString()}`;
+  return `${GRAPH_API_BASE}/${commentId}/comments?${params.toString()}`;
 }
 
 export async function sendTextMessage(

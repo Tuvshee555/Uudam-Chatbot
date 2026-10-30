@@ -76,6 +76,33 @@ reply seen in the thread): no bot message. In both cases the question is appende
 lead, which goes back to unread in the Leads tab (staff are pinged when a channel is configured).
 Journeys: `booking intent then a phone…`, `a booked customer hears what staff recorded…`, `during a human
 takeover…`.
+**Since 2026-10-30 (takeover rebuild, Facebook).** A customer waiting for a consultant keeps getting
+answers: a status question gets the lead's status (a repeat gets one "nothing new" line, then nothing),
+any other question is answered as usual and added to the lead. Only a consultant silences the bot
+(P1-5). Instagram has no thread check, so it keeps the behaviour above.
+
+## P1-5 — The bot talked over consultants replying from a computer — FIXED (2026-10-30)
+**Evidence (production threads of 60 customers, takeover diagnostics).** A consultant on the phone app
+is tagged `source:mobile` (341 messages). The bot, a consultant in Business Suite on a computer and
+Meta's automations are all `source:web`, so the old rule (only `source:mobile` counts) never saw a
+desktop consultant. Meta's `message_echoes` webhook would say who sent each message, but the page token
+holds only `pages_messaging` and `public_profile`: no `pages_manage_metadata`, so the app cannot keep that
+subscription (echoes stopped after 2026-08-01). The token's data access expired 2026-09-10.
+**Now (`staffTakeover.ts`).** The bot records the id Meta returns for every message it sends
+(`travel_outbound_messages`). In the thread, its own messages are known by that id (or by a reply it
+stored at that moment); `source:mobile` is a consultant; any other `source:web` Page message is a consultant
+on a computer, except Meta's automations and inbox notices (within 20 s of the customer, or a notice
+text). Messages from before the ids were recorded count as before. A consultant's message silences the
+bot for three days from that message. A thread that cannot be read (timeout, permission, API error,
+incomplete) is never taken as "no consultant": where staff may own the conversation (a consultant replied
+in the last week, an assigned lead, an open request from the last three days) the message waits for
+staff on the lead; anyone else is answered as usual. The Leads tab has "Би хариулна" (stop the bot for this
+customer) and "Ботод буцаах" (hand it back). Graph calls use one version (v25.0, what Meta was already
+serving for the pinned v19.0).
+Journeys: `tests/staff-takeover-journeys.test.ts` (14 cases; 2, 9, 10–12 and 14 fail without the fix).
+**Owner action for the strongest signal.** Reconnect the Page to the Meta app with `pages_manage_metadata`
+and subscribe the app to `messages` and `message_echoes` (POST `/api/subscribe-feed`); echoes then name the
+sending app on every Page message.
 
 ## P1-3 — Test traffic in the production conversation table — OPEN
 `demo:` sessions (87% of rows) are written beside real customers. Flag them or store them separately, so

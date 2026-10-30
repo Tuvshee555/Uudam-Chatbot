@@ -35,6 +35,8 @@ function mapLeadRow(row: Record<string, unknown>): TravelLead {
     notify_status: String(row.notify_status || ""),
     notified_at: row.notified_at ? new Date(String(row.notified_at)).toISOString() : null,
     assigned_to: String(row.assigned_to || ""),
+    bot_paused: Boolean(row.bot_paused),
+    bot_pause_reason: row.bot_paused ? String(row.bot_pause_reason || "manual") : "",
   };
 }
 
@@ -187,7 +189,8 @@ export async function listLeads(limit = 50): Promise<TravelLead[]> {
   // Leads tab the customer was answered in Messenger (leadAttention.ts).
   const result = await queryNeon<Record<string, unknown>>(
     `
-      SELECT l.*, CASE WHEN s.pause_reason = 'operator_reply' THEN s.paused_at END AS staff_replied_at
+      SELECT l.*, CASE WHEN s.pause_reason = 'operator_reply' THEN s.paused_at END AS staff_replied_at,
+             (s.paused AND s.expires_at > NOW()) AS bot_paused, s.pause_reason AS bot_pause_reason
       FROM travel_leads l
       LEFT JOIN travel_senders s ON s.sender_id = l.sender_id
       WHERE l.${REAL_SENDER}

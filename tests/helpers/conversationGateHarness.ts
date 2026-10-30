@@ -8,6 +8,10 @@ export type FixtureTrip = TravelTrip & { id: string };
 type HistoryRow = { id: number; sender_id: string; role: string; text: string; attachments: unknown[]; created_at: string };
 type LeadRow = { id: number; sender_id: string; kind: string; platform: string; customer_message: string; contact_phone: string; context: string; status: string;
   lead_status: string; created_at: string; seen_at: string | null };
+/** A Messenger thread as Meta's Conversations API returns it, or how reading it fails. */
+export type ThreadScript =
+  | { fail: "timeout" | "permission" | "api_error" | "incomplete" }
+  | { messages: Array<{ from: "customer" | "page"; text?: string; agoMs: number; source?: "mobile" | "web"; id?: string }> };
 export type ModelOverride = Partial<{ tripId: string; place: string | null; date: string | null; hotel: string | null;
   passengers: Array<{ kind: "adult" | "child"; count: number; age?: number }>; topics: string[]; certainty: string; intent: string; finalReply: string;
   /** The provider refuses every call (HTTP 429 insufficient_quota), as during the 2026-10-30 credit outage. */
@@ -30,9 +34,35 @@ export async function conversationGateHarness(context: TestContext) {
   let catalog: FixtureTrip[] = [];
   let override: ModelOverride = {};
   let serial = 0;
+  // Staff takeover (staffTakeover.ts): the scripted Meta thread per customer, the ids the bot
+  // recorded for its own sends, and when a consultant last replied.
+  const threads = new Map<string, ThreadScript>();
+  const outbound = new Map<string, { recipient: string; at: number }>();
+  const lastStaffReply = new Map<string, string>();
   const result = (rows: unknown[] = []) => ({ rows, rowCount: rows.length });
   const query = async (sql: string, params: unknown[] = []) => {
     const sender = String(params[0] ?? "");
+    if (/INSERT INTO travel_outbound_messages/i.test(sql)) {
+      if (!outbound.has(sender)) outbound.set(sender, { recipient: String(params[1] ?? ""), at: Date.now() });
+      return result();
+    }
+    if (/SELECT mid FROM travel_outbound_messages WHERE mid = ANY/i.test(sql)) {
+      return result(((params[0] as string[]) || []).filter((mid) => outbound.has(mid)).map((mid) => ({ mid })));
+    }
+    if (/SELECT min\(created_at\) AS since FROM travel_outbound_messages/i.test(sql)) {
+      const first = Math.min(...[...outbound.values()].map((entry) => entry.at));
+      return result([{ since: Number.isFinite(first) ? new Date(first).toISOString() : null }]);
+    }
+    if (/SELECT created_at AS at, text FROM travel_conversations/i.test(sql)) {
+      return result(history.filter((row) => row.sender_id === sender && row.role === "assistant").map((row) => ({ at: row.created_at, text: row.text })));
+    }
+    if (/UPDATE travel_senders SET last_staff_reply_at/i.test(sql)) { lastStaffReply.set(sender, String(params[1])); return result(); }
+    if (/AS staff,[\s\S]*AS assigned,[\s\S]*AS open/i.test(sql)) {
+      const staffAt = lastStaffReply.get(sender);
+      const open = leads.some((lead) => lead.sender_id === sender && ["new_lead", "contacted", "no_answer"].includes(lead.lead_status)
+        && Date.now() - Date.parse(lead.created_at) < 3 * 86_400_000);
+      return result([{ staff: Boolean(staffAt && Date.now() - Date.parse(staffAt) < 7 * 86_400_000), assigned: false, open }]);
+    }
     if (/SELECT[\s\S]*FROM travel_trip_entries/i.test(sql)) {
       if (/WHERE\s+id\s*=\s*\$1/i.test(sql)) return result(catalog.filter(trip => trip.id === sender));
       if (params[1] === "archived") return result();
@@ -125,6 +155,24 @@ export async function conversationGateHarness(context: TestContext) {
       else if (prompt.includes("Reply rules:")) { answerModels.push(prompt); content = override.finalReply || "REFER"; }
       return new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: "stop" }] }), { status: 200 });
     }
+    if (/^https:\/\/graph\.facebook\.com\/[^/]+\/me\/conversations\?platform=messenger&user_id=/.test(url)) {
+      const customer = new URL(url).searchParams.get("user_id") || "";
+      const script = threads.get(customer);
+      if (script && "fail" in script) {
+        if (script.fail === "timeout") throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+        if (script.fail === "permission") return Response.json({ error: { message: "(#200) Permissions error", code: 200 } }, { status: 403 });
+        if (script.fail === "api_error") return Response.json({ error: { message: "An unknown error occurred", code: 1 } }, { status: 500 });
+        return Response.json({ paging: {} });
+      }
+      const messages = (script?.messages ?? []).map((entry, index) => ({
+        id: entry.id ?? `m_thread_${index}`,
+        from: { id: entry.from === "page" ? "1234567890" : customer },
+        message: entry.text ?? "",
+        created_time: new Date(Date.now() - entry.agoMs).toISOString(),
+        tags: { data: [{ name: "inbox" }, { name: "read" }, { name: "sent" }, ...(entry.from === "page" ? [{ name: `source:${entry.source ?? "web"}` }] : [])] },
+      }));
+      return Response.json(script ? { data: [{ messages: { data: messages } }] } : { data: [] });
+    }
     if (/^https:\/\/graph\.(?:facebook|instagram)\.com\//.test(url)) {
       if (failingRecipients.has(String(body.recipient?.id || ""))) {
         return new Response(JSON.stringify({ error: { message: "(#100) Length of param message[text] must be less than or equal to 2000", code: 100 } }), { status: 400 });
@@ -141,10 +189,15 @@ export async function conversationGateHarness(context: TestContext) {
   const demo = await import("../../src/pages/api/demo");
   const { getTripSelection } = await import("../../src/lib/tripSelectionState");
   const { closeNeonPool } = await import("../../src/lib/neonDb");
-  const turn = async (senderId: string, text: string, model: ModelOverride = {}, eventId = `gate-event-${++serial}`) => {
+  const turn = async (senderId: string, text: string, model: ModelOverride = {}, eventId = `gate-event-${++serial}`,
+    options: { platform?: "facebook" | "instagram" } = {}) => {
     override = model;
     const beforeSend = sends.length, beforeLead = leads.length, beforeModel = models.length, beforeAnswerModel = answerModels.length;
-    const payload = { object: "instagram", entry: [{ id: "gate-page", messaging: [{ sender: { id: senderId }, message: { mid: eventId, text } }] }] };
+    // Facebook (the configured fixture page): the bot reads the Messenger thread before replying.
+    const payload = options.platform === "facebook"
+      ? { object: "page", entry: [{ id: "1234567890", time: Date.now(), messaging: [{ sender: { id: senderId }, recipient: { id: "1234567890" },
+        timestamp: Date.now(), message: { mid: eventId, text } }] }] }
+      : { object: "instagram", entry: [{ id: "gate-page", messaging: [{ sender: { id: senderId }, message: { mid: eventId, text } }] }] };
     const raw = Buffer.from(JSON.stringify(payload));
     const req = { method: "POST", url: "/api/webhook", query: {}, headers: { "content-type": "application/json", "content-length": String(raw.length),
       "x-hub-signature-256": `sha256=${createHmac("sha256", "test-meta-secret").update(raw).digest("hex")}` },
@@ -172,6 +225,13 @@ export async function conversationGateHarness(context: TestContext) {
     /** Meta rejects every message to this customer (as the over-long replies of 2026-10-24). */
     failSends(senderId: string, failing = true) { if (failing) failingRecipients.add(senderId); else failingRecipients.delete(senderId); },
     catalog(value: FixtureTrip[]) { catalog = value; webhook.resetWebhookStateForTests(); },
+    /** The Messenger thread Meta returns for this customer (or how reading it fails). */
+    thread(senderId: string, script: ThreadScript) { threads.set(senderId, script); },
+    /** Ids of the messages the bot sent (recorded at send time, staffTakeover.ts). */
+    botMids() { return [...outbound.keys()]; },
+    /** A consultant hands the conversation back (admin "release"). */
+    resume(senderId: string) { pauses.delete(senderId); },
+    pauseState(senderId: string) { return pauses.get(senderId) ?? null; },
     /** A staff member took this conversation over: the stored pause the webhook honours. */
     pause(senderId: string, until = new Date(Date.now() + 3 * 86_400_000).toISOString(), reason = "manual") { pauses.set(senderId, { paused: true, expires_at: until, pause_reason: reason }); },
     /** Staff changed the lead in the Leads tab (seen, or a CRM status such as "no_answer"). */

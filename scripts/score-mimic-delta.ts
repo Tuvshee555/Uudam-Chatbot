@@ -36,7 +36,7 @@ function loadEnvFile(path: string) {
 loadEnvFile(resolve(process.cwd(), ".env.local"));
 loadEnvFile(resolve(process.cwd(), ".env"));
 
-const GRAPH_VERSION = "v19.0";
+const GRAPH_VERSION = "v25.0";
 type GraphMessage = { message?: string; from?: { id?: string }; created_time?: string };
 type GraphConversation = { id: string; messages?: { data?: GraphMessage[] } };
 

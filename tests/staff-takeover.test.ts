@@ -31,3 +31,69 @@ test("a staff message older than the takeover window lets the bot answer again",
   const messages = [msg(PAGE, "2099-05-01T09:00:00Z", "mobile", "Өдрийн мэнд")];
   assert.equal(latestStaffReplyAt({ messages, pageId: PAGE, now }), null);
 });
+
+/*
+ * 2026-10-30 rebuild. Production threads: the bot, a consultant on a computer (Business
+ * Suite) and Meta's automations are all `source:web`; only the phone app is `source:mobile`.
+ * The bot's own messages are known by the id it recorded when sending; anything else the Page
+ * wrote on the web is a consultant, unless it is Meta's automation (within seconds of the
+ * customer, or an inbox notice). Messages from before the ids were recorded count as before.
+ */
+const at = (iso: string) => Date.parse(iso);
+const page = (iso: string, source: "mobile" | "web", text: string, id?: string): ThreadMessage =>
+  ({ ...msg(PAGE, iso, source, text), ...(id ? { id } : {}) });
+const recorded = { pageId: PAGE, recordingSince: at("2099-05-01T00:00:00Z") };
+
+test("a consultant writing from Business Suite on a computer owns the conversation", async () => {
+  const { latestStaffReply } = await import("../src/lib/staffTakeover");
+  const messages = [
+    msg("customer", "2099-05-10T08:00:00Z", "mobile", "Захиалъя"),
+    page("2099-05-10T08:00:03Z", "web", "бот хариулт", "m_bot1"),
+    page("2099-05-10T08:12:00Z", "web", "Сайн байна уу, би зөвлөх байна", "m_staff1"),
+  ];
+  assert.deepEqual(latestStaffReply({ messages, now, botMids: new Set(["m_bot1"]), ...recorded }),
+    { at: new Date("2099-05-10T08:12:00Z"), origin: "staff_web" });
+});
+
+test("the bot's own web messages, Meta's instant reply and inbox notices are not a consultant", async () => {
+  const { latestStaffReply, classifyPageMessage } = await import("../src/lib/staffTakeover");
+  const messages = [
+    msg("customer", "2099-05-10T08:00:00Z", "mobile", "Сайн уу"),
+    page("2099-05-10T08:00:02Z", "web", "Hi Bat! Please let us know how we can help you.", "m_meta"),
+    page("2099-05-10T08:00:40Z", "web", "Bat replied to your automated welcome message.", "m_notice"),
+    page("2099-05-10T09:30:00Z", "web", "✈️ Аялал — үнэ …", "m_bot2"),
+  ];
+  assert.equal(latestStaffReply({ messages, now, botMids: new Set(["m_bot2"]), ...recorded }), null);
+  assert.equal(classifyPageMessage(messages[1], at("2099-05-10T08:00:00Z"), recorded), "automation", "within seconds of the customer");
+  assert.equal(classifyPageMessage(messages[2], at("2099-05-10T08:00:00Z"), recorded), "automation", "an inbox notice");
+  // An unrecorded bot reply is still recognised by the reply the bot stored at that moment.
+  assert.equal(classifyPageMessage(page("2099-05-10T09:30:00Z", "web", "✈️ Аялал — үнэ …"), at("2099-05-10T09:25:00Z"),
+    { ...recorded, botReplies: [{ at: at("2099-05-10T09:29:58Z"), text: "✈️ Аялал — үнэ … дэлгэрэнгүй" }] }), "bot");
+});
+
+test("web messages from before the bot recorded its ids count as before (phone app only)", async () => {
+  const { classifyPageMessage, latestStaffReply } = await import("../src/lib/staffTakeover");
+  const old = page("2099-04-30T10:00:00Z", "web", "Өдрийн мэнд, зөвлөх");
+  assert.equal(classifyPageMessage(old, at("2099-04-30T09:00:00Z"), recorded), "legacy");
+  assert.equal(classifyPageMessage(old, at("2099-04-30T09:00:00Z"), { pageId: PAGE, recordingSince: null }), "legacy");
+  assert.equal(latestStaffReply({ messages: [old], now: new Date("2099-05-01T12:00:00Z"), ...recorded }), null);
+});
+
+test("a thread that cannot be read is reported as unverified, never as 'no consultant'", async (context) => {
+  const { fetchThreadMessages } = await import("../src/lib/staffTakeover");
+  const cases: Array<[() => Promise<Response>, string]> = [
+    [async () => { throw Object.assign(new Error("timed out"), { name: "TimeoutError" }); }, "timeout"],
+    [async () => Response.json({ error: { code: 200, message: "permission" } }, { status: 403 }), "permission"],
+    [async () => Response.json({ error: { code: 190 } }, { status: 400 }), "permission"],
+    [async () => Response.json({ error: { code: 2 } }, { status: 500 }), "api_error"],
+    [async () => Response.json({ paging: {} }), "incomplete"],
+    [async () => Response.json({ data: [{ id: "t_1" }] }), "incomplete"],
+  ];
+  for (const [respond, reason] of cases) {
+    context.mock.method(globalThis, "fetch", respond);
+    assert.deepEqual(await fetchThreadMessages({ token: "fixture", senderId: "fixture-customer", timeoutMs: 100 }), { status: "unverified", reason });
+    context.mock.restoreAll();
+  }
+  context.mock.method(globalThis, "fetch", async () => Response.json({ data: [] }));
+  assert.deepEqual(await fetchThreadMessages({ token: "fixture", senderId: "fixture-customer", timeoutMs: 100 }), { status: "ok", messages: [] });
+});

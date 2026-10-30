@@ -446,6 +446,21 @@ export async function ensureTravelSchema() {
           ADD COLUMN IF NOT EXISTS storage_delete_attempts INTEGER NOT NULL DEFAULT 0,
           ADD COLUMN IF NOT EXISTS purged_at TIMESTAMPTZ NULL;
       `);
+      // The bot's own sent messages by Meta id (outboundMessages.ts), to tell them from staff.
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_outbound_messages (
+          mid TEXT PRIMARY KEY,
+          recipient_id TEXT NOT NULL DEFAULT '',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_travel_outbound_messages_created ON travel_outbound_messages (created_at);
+      `);
+      // When a consultant last replied in the Messenger thread (staffTakeover.ts).
+      await client.query(`
+        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS last_staff_reply_at TIMESTAMPTZ NULL;
+      `);
       // One row per historical document moved from public Cloudinary to the private store
       // (documentMigration.ts): every step's result, so a run can be retried and audited.
       await client.query(`
