@@ -8,6 +8,7 @@ import { waitUntil } from "@vercel/functions";
 import { flushWebsiteSync } from "../../../lib/websiteTripSync";
 import { pruneErrorLogs } from "../../../lib/errorLogStore";
 import { runDailyHealthCheck } from "../../../lib/dailyHealthCheck";
+import { retryDueCustomerImages } from "../../../lib/customerImageIngest";
 
 // Vercel cron secret — must match CRON_SECRET env var.
 // FAIL CLOSED in production: a missing secret used to mean "allow everyone",
@@ -37,6 +38,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // stay live past its last date just because nobody asked about it.
   waitUntil(listTrips({ limit: 5000 }).then(() => {}));
   waitUntil(runDailyHealthCheck());
+  waitUntil(retryDueCustomerImages(12).then(() => {}).catch(() => {}));
 
   const env = getEnv();
   // PSIDs are page-scoped: a sender who messaged page B does not exist for

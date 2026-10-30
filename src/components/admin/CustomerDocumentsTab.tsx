@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Badge,
   Button,
@@ -166,22 +166,6 @@ function extractedRows(doc: CustomerDocument) {
   return rows.slice(0, 10);
 }
 
-function documentSearchText(doc: CustomerDocument): string {
-  const rows = extractedRows(doc).flatMap((row) => [row.label, row.value]);
-  return [
-    doc.sender_id,
-    doc.matched_trip_id,
-    doc.matched_payment_id,
-    doc.matched_payment_status,
-    doc.matched_payment_amount,
-    doc.matched_payment_customer_name,
-    doc.matched_payment_trip_name,
-    documentTitle(doc),
-    tripMatchName(doc),
-    ...rows,
-  ].map(compactValue).filter(Boolean).join(" ").toLowerCase();
-}
-
 const PAYMENT_STATUS_LABELS = {
   pending: "Хүлээгдэж байна",
   paid: "Төлсөн",
@@ -343,6 +327,7 @@ function DocumentCard({
   onEdit,
   onDelete,
   onRestore,
+  onRetry,
   onOpenPerson,
   onZoom,
   senderLabel,
@@ -355,6 +340,7 @@ function DocumentCard({
   onEdit: (doc: CustomerDocument) => void;
   onDelete: (doc: CustomerDocument) => void;
   onRestore: (doc: CustomerDocument) => void;
+  onRetry: (doc: CustomerDocument) => void;
   onOpenPerson?: (senderId: string) => void;
   senderLabel?: string;
   showSender: boolean;
@@ -386,7 +372,7 @@ function DocumentCard({
                   {DOCUMENT_CATEGORY_ICONS[category]} {DOCUMENT_CATEGORY_LABELS[category]}
                 </span>
                 <span aria-hidden="true">·</span>
-                <span>{formatTime(doc.created_at)}</span>
+                <span>{formatTime(doc.received_at || doc.created_at)}</span>
                 {doc.retention_hidden_at && (
                   <>
                     <span aria-hidden="true">·</span>
@@ -425,6 +411,12 @@ function DocumentCard({
               )}
             </div>
           </div>
+
+          {doc.ingest_status === "failed" && !showDeleted && (
+            <Button size="sm" variant="secondary" onClick={() => onRetry(doc)}>
+              <Icons.refresh size={14} /> Дахин татах
+            </Button>
+          )}
 
           {(doc.matched_payment_status || matchedTrip) && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -513,9 +505,13 @@ export function CustomerDocumentsTab({
   const [view, setView] = useState<"people" | "all">("people");
   const [senders, setSenders] = useState<DocumentSenderSummary[]>([]);
   const [sendersLoading, setSendersLoading] = useState(false);
+  const [sendersMore, setSendersMore] = useState(false);
+  const senderRequest = useRef(0);
   const [selectedSender, setSelectedSender] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [documents, setDocuments] = useState<CustomerDocument[]>([]);
+  const [documentsMore, setDocumentsMore] = useState(false);
+  const documentRequest = useRef(0);
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [category, setCategory] = useState<CustomerDocumentCategory | "all">("all");
@@ -526,51 +522,66 @@ export function CustomerDocumentsTab({
   const [zoomUrl, setZoomUrl] = useState<string | null>(null);
   const [editFields, setEditFields] = useState<EditFields>(() => editFieldsFromDocument({ extracted_json: {} } as CustomerDocument));
 
-  const loadSenders = useCallback(async (options?: { quiet?: boolean }) => {
+  const loadSenders = useCallback(async (options?: { quiet?: boolean; offset?: number }) => {
+    const request = ++senderRequest.current;
     setSendersLoading(true);
     try {
       const params = new URLSearchParams({ group: "senders" });
       if (dateFrom) params.set("from", dateFrom);
       if (dateTo) params.set("to", dateTo);
       if (showDeleted) params.set("deleted", "true");
+      if (search.trim()) params.set("q", search.trim());
+      if (options?.offset) params.set("offset", String(options.offset));
       const res = await apiFetch(`/api/admin/customer-documents?${params.toString()}`);
       const json = (await res.json().catch(() => ({}))) as {
         senders?: DocumentSenderSummary[];
+        hasMore?: boolean;
         error?: string;
       };
       if (!res.ok) throw new Error(json.error || "load_failed");
-      setSenders(Array.isArray(json.senders) ? json.senders : []);
+      if (request !== senderRequest.current) return;
+      const page = Array.isArray(json.senders) ? json.senders : [];
+      setSenders((previous) => options?.offset ? [...previous, ...page] : page);
+      setSendersMore(Boolean(json.hasMore));
     } catch {
-      if (!options?.quiet) toast.error("Хэрэглэгчдийн жагсаалтыг ачаалж чадсангүй.");
+      if (request === senderRequest.current && !options?.quiet) toast.error("Хэрэглэгчдийн жагсаалтыг ачаалж чадсангүй.");
     } finally {
-      setSendersLoading(false);
+      if (request === senderRequest.current) setSendersLoading(false);
     }
-  }, [apiFetch, dateFrom, dateTo, showDeleted, toast]);
+  }, [apiFetch, dateFrom, dateTo, showDeleted, search, toast]);
 
-  const loadDocuments = useCallback(async () => {
+  const loadDocuments = useCallback(async (offset = 0) => {
+    const request = ++documentRequest.current;
     setLoading(true);
     try {
       const params = new URLSearchParams(
         selectedSender
-          ? { sender_id: selectedSender, status: "all", limit: "300" }
-          : { status: "all", category: "all", limit: "300" },
+          ? { sender_id: selectedSender, status: "all", limit: "100" }
+          : { status: "all", category: "all", limit: "100" },
       );
+      params.set("category", category);
+      if (search.trim()) params.set("q", search.trim());
+      if (offset) params.set("offset", String(offset));
       if (dateFrom) params.set("from", dateFrom);
       if (dateTo) params.set("to", dateTo);
       if (showDeleted) params.set("deleted", "true");
       const res = await apiFetch(`/api/admin/customer-documents?${params.toString()}`);
       const json = (await res.json().catch(() => ({}))) as {
         documents?: CustomerDocument[];
+        hasMore?: boolean;
         error?: string;
       };
       if (!res.ok) throw new Error(json.error || "load_failed");
-      setDocuments(Array.isArray(json.documents) ? json.documents : []);
+      if (request !== documentRequest.current) return;
+      const page = Array.isArray(json.documents) ? json.documents : [];
+      setDocuments((previous) => offset ? [...previous, ...page] : page);
+      setDocumentsMore(Boolean(json.hasMore));
     } catch {
-      toast.error("Зургаар ирсэн бичиг баримтуудыг ачаалж чадсангүй.");
+      if (request === documentRequest.current) toast.error("Зургаар ирсэн бичиг баримтуудыг ачаалж чадсангүй.");
     } finally {
-      setLoading(false);
+      if (request === documentRequest.current) setLoading(false);
     }
-  }, [apiFetch, dateFrom, dateTo, selectedSender, showDeleted, toast]);
+  }, [apiFetch, category, dateFrom, dateTo, selectedSender, showDeleted, search, toast]);
 
   useEffect(() => {
     if (view === "people" && !selectedSender) {
@@ -591,28 +602,16 @@ export function CustomerDocumentsTab({
     return map;
   }, [senders]);
 
-  const filteredSenders = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) return senders;
-    return senders.filter(
-      (sender) =>
-        sender.display_name.toLowerCase().includes(query) ||
-        sender.sender_id.includes(query) ||
-        String(sender.total).includes(query) ||
-        Object.values(sender.by_category).some((count) => String(count).includes(query)),
-    );
-  }, [search, senders]);
+  const filteredSenders = senders;
 
   const visibleDocuments = useMemo(
     () => {
-      const query = search.trim().toLowerCase();
       return documents.filter((doc) => {
         if (category !== "all" && documentCategory(doc.category) !== category) return false;
-        if (!query) return true;
-        return documentSearchText(doc).includes(query);
+        return true;
       });
     },
-    [category, documents, search],
+    [category, documents],
   );
 
   const documentsByCategory = useMemo(() => {
@@ -667,6 +666,21 @@ export function CustomerDocumentsTab({
     }
   }
 
+  async function retryDocument(doc: CustomerDocument) {
+    setBusyId(doc.id);
+    try {
+      const response = await apiFetch("/api/admin/customer-documents", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: doc.id, retry: true }),
+      });
+      const json = (await response.json().catch(() => ({}))) as { document?: CustomerDocument };
+      if (!response.ok || !json.document) throw new Error("retry_failed");
+      setDocuments((previous) => previous.map((item) => item.id === doc.id ? json.document! : item));
+      toast.success("Зургийг дахин татаж байна.");
+    } catch { toast.error("Дахин татаж чадсангүй."); }
+    finally { setBusyId(null); }
+  }
+
   function openEdit(doc: CustomerDocument) {
     setEditing(doc);
     setEditFields(editFieldsFromDocument(doc));
@@ -703,6 +717,7 @@ export function CustomerDocumentsTab({
   }
 
   function openPerson(senderId: string) {
+    setSearch("");
     setSelectedSender(senderId);
     setView("people");
   }
@@ -736,7 +751,9 @@ export function CustomerDocumentsTab({
   const showPersonDetail = view === "people" && Boolean(selectedSender);
   const editingCategory = editing ? documentCategory(editing.category) : "other";
   const anyLoading = sendersLoading || loading;
-  const resultCount = showPeopleList ? filteredSenders.length : visibleDocuments.length;
+  const resultCount = showPeopleList
+    ? `${filteredSenders.length}${sendersMore ? "+" : ""}`
+    : `${visibleDocuments.length}${documentsMore ? "+" : ""}`;
   const resultNoun = showPeopleList ? "хэрэглэгч" : "зураг";
 
   return (
@@ -893,7 +910,7 @@ export function CustomerDocumentsTab({
                 <button
                   key={sender.sender_id}
                   type="button"
-                  onClick={() => setSelectedSender(sender.sender_id)}
+                  onClick={() => { setSearch(""); setSelectedSender(sender.sender_id); }}
                   className="rounded-xl text-left"
                 >
                   <Card className="h-full p-3.5 transition-colors hover:border-brand">
@@ -928,6 +945,10 @@ export function CustomerDocumentsTab({
             </div>
           )}
         </>
+      )}
+      {showPeopleList && sendersMore && (
+        <div className="flex justify-center"><Button variant="secondary" loading={sendersLoading}
+          onClick={() => void loadSenders({ offset: senders.length })}>Цааш харах</Button></div>
       )}
 
       {showPersonDetail && (
@@ -981,6 +1002,7 @@ export function CustomerDocumentsTab({
                         onEdit={openEdit}
                         onDelete={(target) => void deleteDocument(target)}
                         onRestore={(target) => void restoreDocument(target)}
+                        onRetry={(target) => void retryDocument(target)}
                         onZoom={setZoomUrl}
                         showSender={false}
                         showDeleted={showDeleted}
@@ -1014,6 +1036,7 @@ export function CustomerDocumentsTab({
                   onEdit={openEdit}
                   onDelete={(target) => void deleteDocument(target)}
                   onRestore={(target) => void restoreDocument(target)}
+                  onRetry={(target) => void retryDocument(target)}
                   onOpenPerson={openPerson}
                   onZoom={setZoomUrl}
                   senderLabel={senderNameById.get(doc.sender_id)}
@@ -1029,6 +1052,10 @@ export function CustomerDocumentsTab({
             </div>
           )}
         </>
+      )}
+      {!showPeopleList && documentsMore && (
+        <div className="flex justify-center"><Button variant="secondary" loading={loading}
+          onClick={() => void loadDocuments(documents.length)}>Цааш харах</Button></div>
       )}
 
       <PhotoLightbox url={zoomUrl} onClose={() => setZoomUrl(null)} />

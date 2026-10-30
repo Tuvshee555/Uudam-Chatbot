@@ -446,6 +446,7 @@ export type CustomerDocument = {
   source_url: string;
   stored_url: string;
   image_sha256: string;
+  content_sha256?: string;
   mime_type: string;
   category: CustomerDocumentCategory;
   extracted_json: Record<string, unknown>;
@@ -463,6 +464,9 @@ export type CustomerDocument = {
   updated_at: string;
   reviewed_at?: string | null;
   retention_hidden_at?: string | null;
+  ingest_status?: "pending" | "processing" | "retry" | "stored" | "failed";
+  ingest_attempts?: number;
+  received_at?: string | null;
 };
 
 export type DocumentSenderSummary = {

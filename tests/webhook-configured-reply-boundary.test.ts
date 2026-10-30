@@ -9,6 +9,7 @@ test("configured text replies share grounding and paused customers retain inboun
     TELEGRAM_BOT_TOKEN: undefined, TELEGRAM_STAFF_CHAT_IDS: undefined });
   context.mock.timers.enable({ apis: ["Date"], now: new Date("2098-02-01T04:00:00Z") });
   const history: Array<{ sender: string; role: string; text: string; attachments: unknown[] }> = [];
+  const imageReceipts: Array<{ sender: string; url: string }> = [];
   const paused = new Set<string>();
   const leads = new Set<string>();
   const leadKinds = new Set<string>();
@@ -32,6 +33,12 @@ test("configured text replies share grounding and paused customers retain inboun
   const result = (rows: unknown[] = []) => ({ rows, rowCount: rows.length });
   const query = async (sql: string, params: unknown[] = []) => {
     const sender = String(params[0] || "");
+    if (/INSERT INTO travel_customer_documents/i.test(sql)) {
+      imageReceipts.push({ sender: String(params[1]), url: String(params[6]) });
+      return result([{ id: imageReceipts.length, platform: params[0], sender_id: params[1],
+        page_id: params[2], source_url: params[6], mime_type: "image/unknown",
+        ingest_status: "pending", ingest_attempts: 0 }]);
+    }
     if (/SELECT[\s\S]*FROM travel_trip_entries/i.test(sql)) return result([{ id: "velmor", route_name: "ВЭЛМОР АЯЛАЛ",
       status: "active", duration_text: "5 өдөр", departure_dates: ["2098-03-17"], adult_price: 1_731_000,
       currency: "MNT", photo_urls: [], extra: {} }]);
@@ -277,7 +284,7 @@ test("configured text replies share grounding and paused customers retain inboun
         pagePaused = false;
       });
     }
-    await context.test("paused attachments retain image and voice links without extraction or replies", async () => {
+    await context.test("paused attachments retain links and an image receipt without replies", async () => {
       const sender = "paused-evidence";
       paused.add(sender);
       const response = await call(sender, "", { attachments: [{ type: "image", payload: { url: "https://fixture.invalid/poster.png" } },
@@ -286,6 +293,7 @@ test("configured text replies share grounding and paused customers retain inboun
       assert.deepEqual(response.sends, []);
       assert.deepEqual(history.find(row => row.sender === sender)?.attachments, [
         { type: "image", url: "https://fixture.invalid/poster.png" }, { type: "file", url: "https://fixture.invalid/note.mp3" }]);
+      assert.equal(imageReceipts.filter(row => row.sender === sender).length, 1);
     });
     await context.test("paused inbound storage failure leaves the event retryable", async () => {
       const sender = "paused-retry";
