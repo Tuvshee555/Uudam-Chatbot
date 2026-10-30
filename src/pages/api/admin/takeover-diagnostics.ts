@@ -53,6 +53,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const signatures = new Map<string, { total: number; matchedBot: number; unmatched: number; unmatchedSoonAfterCustomer: number; unmatchedRepeatedText: number }>();
   const texts = new Map<string, number>();
   const unmatchedRecords: Array<{ signature: string; soon: boolean; text: string }> = [];
+  // Unmatched source:web page messages, broken down (counts only).
+  const web = { beforeStoredHistory: 0, gapUnder5s: 0, gap5to20s: 0, gap20to120s: 0, gapOver120s: 0, noCustomerBefore: 0,
+    firstPageMessageInThread: 0, len0: 0, lenUnder60: 0, len60to200: 0, lenOver200: 0, withinOneMinuteOfStaffMobile: 0 };
+  let assistantRowsWithoutThreadMatch = 0, assistantRowsInThreadWindow = 0;
   let threadsRead = 0, threadFailures = 0;
   const idPrefixes = new Set<string>();
   const token = pages[0]?.token;
@@ -63,13 +67,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (thread.status !== 200 || !messages) { threadFailures += 1; continue; }
     threadsRead += 1;
     const assistantRows = (await queryNeon<{ at: string; text: string }>(
-      "SELECT created_at AS at, text FROM travel_conversations WHERE sender_id=$1 AND role='assistant' AND created_at > NOW() - INTERVAL '30 days'",
+      "SELECT created_at AS at, text FROM travel_conversations WHERE sender_id=$1 AND role='assistant' AND created_at > NOW() - INTERVAL '120 days'",
       [sender_id],
     ))?.rows ?? [];
     const ordered = [...messages].sort((a, b) => Date.parse(a.created_time ?? "") - Date.parse(b.created_time ?? ""));
+    const oldestStored = assistantRows.length ? Math.min(...assistantRows.map((row) => Date.parse(row.at))) : Infinity;
+    const threadStart = Date.parse(ordered[0]?.created_time ?? "");
+    for (const row of assistantRows) {
+      const at = Date.parse(row.at);
+      if (at < threadStart) continue;
+      assistantRowsInThreadWindow += 1;
+      if (!ordered.some((m) => m.from?.id === pageId && Math.abs(Date.parse(m.created_time ?? "") - at) < 120_000)) assistantRowsWithoutThreadMatch += 1;
+    }
+    let pageMessagesSeen = 0;
     ordered.forEach((message, index) => {
       if (message.id) idPrefixes.add(message.id.slice(0, 2));
       if (message.from?.id !== pageId) return;
+      pageMessagesSeen += 1;
       const at = Date.parse(message.created_time ?? "");
       const signature = (message.tags?.data ?? []).map((tag) => tag.name ?? "").sort().join(",") || "(none)";
       const entry = signatures.get(signature) ?? { total: 0, matchedBot: 0, unmatched: 0, unmatchedSoonAfterCustomer: 0, unmatchedRepeatedText: 0 };
@@ -83,6 +97,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const previous = ordered.slice(0, index).reverse().find((candidate) => candidate.from?.id !== pageId);
         const soon = Boolean(previous && at - Date.parse(previous.created_time ?? "") < 15_000);
         if (soon) entry.unmatchedSoonAfterCustomer += 1;
+        if (signature === "inbox,read,sent,source:web") {
+          const gap = previous ? at - Date.parse(previous.created_time ?? "") : null;
+          if (at < oldestStored) web.beforeStoredHistory += 1;
+          if (gap === null) web.noCustomerBefore += 1;
+          else if (gap < 5_000) web.gapUnder5s += 1;
+          else if (gap < 20_000) web.gap5to20s += 1;
+          else if (gap < 120_000) web.gap20to120s += 1;
+          else web.gapOver120s += 1;
+          if (pageMessagesSeen === 1) web.firstPageMessageInThread += 1;
+          const length = text.length;
+          if (length === 0) web.len0 += 1; else if (length < 60) web.lenUnder60 += 1; else if (length <= 200) web.len60to200 += 1; else web.lenOver200 += 1;
+          if (ordered.some((m) => m.from?.id === pageId && (m.tags?.data ?? []).some((tag) => tag.name === "source:mobile")
+            && Math.abs(Date.parse(m.created_time ?? "") - at) < 60_000)) web.withinOneMinuteOfStaffMobile += 1;
+        }
         texts.set(text, (texts.get(text) ?? 0) + 1);
         unmatchedRecords.push({ signature, soon, text });
       }
@@ -96,5 +124,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     pages: pageReports,
     threads: { sendersChecked: senders.length, threadsRead, threadFailures, messageIdPrefixes: [...idPrefixes] },
     pageMessageSignatures: Object.fromEntries([...signatures.entries()].sort((a, b) => b[1].total - a[1].total)),
+    unmatchedWebBreakdown: web,
+    storedBotReplies: { inThreadWindow: assistantRowsInThreadWindow, withoutAnyPageMessageNearby: assistantRowsWithoutThreadMatch },
   });
 }
