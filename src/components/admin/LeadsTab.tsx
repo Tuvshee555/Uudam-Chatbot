@@ -126,6 +126,7 @@ export function LeadsTab({
   onMarkSeen,
   onUpdateStatus,
   onAssign,
+  onSetBotPaused,
   broadcastMessage,
   broadcastSending,
   broadcastResult,
@@ -139,6 +140,7 @@ export function LeadsTab({
   onMarkSeen: (lead: TravelLead) => void;
   onUpdateStatus: (lead: TravelLead, status: LeadCrmStatus) => void;
   onAssign: (lead: TravelLead, assignee: string) => void;
+  onSetBotPaused: (lead: TravelLead, paused: boolean) => void;
   broadcastMessage: string;
   broadcastSending: boolean;
   broadcastResult: { sent: number; failed: number } | null;
@@ -271,6 +273,7 @@ export function LeadsTab({
               onMarkSeen={() => onMarkSeen(lead)}
               onUpdateStatus={(status) => onUpdateStatus(lead, status)}
               onAssign={(assignee) => onAssign(lead, assignee)}
+              onSetBotPaused={(paused) => onSetBotPaused(lead, paused)}
             />
           ))}
         </div>
@@ -338,13 +341,17 @@ function LeadCard({
   onMarkSeen,
   onUpdateStatus,
   onAssign,
+  onSetBotPaused,
 }: {
   lead: TravelLead;
   attention: LeadAttention;
   onMarkSeen: () => void;
   onUpdateStatus: (status: LeadCrmStatus) => void;
   onAssign: (assignee: string) => void;
+  onSetBotPaused: (paused: boolean) => void;
 }) {
+  // The bot's own marker after a booking request does not stop it; a person's pause does.
+  const humanOwned = Boolean(lead.bot_paused) && lead.bot_pause_reason !== "booked_customer";
   const [assignee, setAssignee] = useState(lead.assigned_to ?? "");
   const notifyBadge = NOTIFY_BADGES[lead.notify_status ?? ""];
   const isNew = lead.status === "new";
@@ -374,6 +381,7 @@ function LeadCard({
           {isNew && <Badge tone="brand">Үзээгүй</Badge>}
           {notifyBadge && <Badge tone={notifyBadge.tone}>{notifyBadge.label}</Badge>}
           {lead.assigned_to && <Badge tone="success">Хариуцагч: {lead.assigned_to}</Badge>}
+          {humanOwned && <Badge tone="warning">Бот зогссон — зөвлөх хариулна</Badge>}
         </div>
         {/* CRM status badge */}
         <Badge tone={CRM_STATUS_TONES[crmStatus]}>
@@ -439,6 +447,10 @@ function LeadCard({
               <option key={val} value={val}>{label}</option>
             ))}
           </select>
+          <Button size="sm" variant="secondary" onClick={() => onSetBotPaused(!humanOwned)}
+            title={humanOwned ? "Бот энэ хэрэглэгчид дахин хариулна" : "Бот энэ хэрэглэгчид хариулахаа зогсооно; та хариулна"}>
+            {humanOwned ? "Ботод буцаах" : "Би хариулна"}
+          </Button>
           {isNew && (
             <Button size="sm" variant="secondary" onClick={onMarkSeen}>
               <Icons.check size={15} />

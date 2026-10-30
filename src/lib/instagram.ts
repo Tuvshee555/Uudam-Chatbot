@@ -5,6 +5,7 @@ import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboun
 import { logInfo } from "./observability";
 import { fetchWithRetry } from "./resilience";
 import { BOT_MESSAGE_METADATA, quickReplyTitle, type UpstreamTraceOptions } from "./messenger";
+import { GRAPH_API_BASE } from "./metaGraph";
 
 const env = getEnv();
 
@@ -16,7 +17,7 @@ function graphMessagesEndpoint(igUserId: string, token: string) {
       createHmac("sha256", env.metaAppSecret).update(token).digest("hex"),
     );
   }
-  return `https://graph.facebook.com/v19.0/${igUserId}/messages?${params.toString()}`;
+  return `${GRAPH_API_BASE}/${igUserId}/messages?${params.toString()}`;
 }
 
 export async function sendTextMessage(

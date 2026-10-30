@@ -11,6 +11,7 @@ import { waitUntil } from "@vercel/functions";
 import { getEnv } from "./env";
 import { queryNeon } from "./neonDb";
 import { dbStoreSenderName } from "./travelSessionDb";
+import { GRAPH_API_BASE } from "./metaGraph";
 
 /** The sender's name as the page sees it, trying the page the message came to first. */
 export async function lookupFacebookName(senderId: string, preferredPageId?: string): Promise<string | null> {
@@ -18,7 +19,7 @@ export async function lookupFacebookName(senderId: string, preferredPageId?: str
   for (const page of pages) {
     if (!page.pageId || !page.token) continue;
     try {
-      const url = `https://graph.facebook.com/v19.0/${encodeURIComponent(page.pageId)}/conversations`
+      const url = `${GRAPH_API_BASE}/${encodeURIComponent(page.pageId)}/conversations`
         + `?user_id=${encodeURIComponent(senderId)}&fields=participants&access_token=${encodeURIComponent(page.token)}`;
       const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
       if (!res.ok) continue;

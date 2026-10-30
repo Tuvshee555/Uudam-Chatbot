@@ -57,7 +57,7 @@ function loadEnvFile(path: string) {
 loadEnvFile(resolve(process.cwd(), ".env.local"));
 loadEnvFile(resolve(process.cwd(), ".env"));
 
-const GRAPH_VERSION = "v19.0";
+const GRAPH_VERSION = "v25.0";
 const MAX_CONVERSATIONS = 60;
 const MAX_MESSAGES_PER_CONVERSATION = 40;
 const MAX_SAMPLES_TO_COLLECT = 250;

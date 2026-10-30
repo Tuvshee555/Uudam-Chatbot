@@ -31,6 +31,12 @@ export async function runDailyHealthCheck(): Promise<void> {
   } catch (error) {
     logError("daily_health_check.storage_failed", { message: error instanceof Error ? error.name : "storage_check_failed" });
   }
+  // The bot's sent-message ids are needed for three days (staffTakeover.ts); keep 30.
+  try {
+    await (await import("./outboundMessages")).pruneOutboundMessages();
+  } catch (error) {
+    logError("daily_health_check.outbound_prune_failed", { message: error instanceof Error ? error.name : "prune_failed" });
+  }
   // Permanent deletions whose stored file could not be removed are tried again.
   try {
     const purged = await (await import("./customerDocumentPurge")).retryFailedStorageDeletions();

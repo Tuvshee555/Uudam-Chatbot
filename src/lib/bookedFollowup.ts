@@ -31,7 +31,33 @@ export function bookedFollowupReply(lead: TravelLead): string | null {
 }
 
 /** The line added to the lead so staff see what the customer asked while waiting. */
-export function followupLeadLine(text: string, now = new Date()): string {
+export function followupLeadLine(text: string, now = new Date(), label = "Хариулаагүй асуулт"): string {
   const clock = new Date(now.getTime() + 8 * 3_600_000).toISOString().slice(5, 16).replace("T", " ");
-  return `Хариулаагүй асуулт (${clock}): ${text.replace(/\s+/g, " ").trim().slice(0, 300)}`;
+  return `${label} (${clock}): ${text.replace(/\s+/g, " ").trim().slice(0, 300)}`;
+}
+
+/**
+ * "Хэзээ холбогдох вэ?", "Над руу залгах уу?", "Захиалга маань юу болсон бэ?" — a waiting
+ * customer asking about their own request (Cyrillic or Latin script), answered from the lead.
+ */
+export function isBookingStatusQuestion(text: string): boolean {
+  const value = text.toLowerCase().replace(/\s+/g, " ").trim();
+  return /хэзээ\s+(?:холбогд|залга|ярь|хариу)|(?:холбогдох|залгах)\s+(?:уу|юм\s+уу|вэ|бол)|над\s+(?:руу|луу)\s+залга/u.test(value)
+    || /захиалга\s*(?:маань|минь|чинь)?\s*(?:юу\s+болсон|яасан|ямар\s+байна|баталгаажсан\s+уу|болсон\s+уу|хаана\s+явна)/u.test(value)
+    || /hezee\s+(?:holbogd|zalga|yari|hariu)|(?:holbogdoh|zalgah)\s+(?:uu|yu|ve)|nad\s+(?:ruu|luu)\s+zalga|zahialga\s*(?:maani|mini)?\s*(?:yu\s+bolson|yaasan|bolson\s+uu)/u.test(value);
+}
+
+export const NO_NEWS_LINE = "Шинэ мэдээлэл алга байна — аяллын зөвлөх тантай холбогдоно. Асуултыг тань дамжууллаа.";
+
+/**
+ * The reply to a status question: the lead's status; right after that same status, a one-line
+ * "nothing new"; after that line, nothing more (the question still reaches staff on the lead).
+ */
+export function bookedStatusTurn(lead: TravelLead, previousReply?: string): string | null {
+  const status = bookedFollowupReply(lead)
+    ?? `Таны хүсэлт бүртгэгдсэн. ${STATUS_LINE[lead.lead_status]} Асуултыг тань зөвлөхөд дамжууллаа.`;
+  if (!previousReply) return status;
+  if (previousReply.trim() === NO_NEWS_LINE) return null;
+  if (previousReply.trim() === status.trim()) return NO_NEWS_LINE;
+  return status;
 }

@@ -10,6 +10,7 @@ import {
   logError,
   recordCounter,
 } from "../../lib/observability";
+import { GRAPH_API_BASE } from "../../lib/metaGraph";
 
 const env = getEnv();
 
@@ -60,14 +61,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       for (const page of env.facebookPages) {
         // Plain fetch: Meta's error body (missing permission, bad field) is the
         // answer this admin call exists to show.
-        const response = await fetch(`https://graph.facebook.com/v19.0/${page.pageId}/subscribed_apps`, {
+        const response = await fetch(`${GRAPH_API_BASE}/${page.pageId}/subscribed_apps`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ subscribed_fields: fields, access_token: page.token }),
           signal: AbortSignal.timeout(env.metaApiTimeoutMs),
         });
         const body = await response.json().catch(() => null);
-        const current = await fetch(`https://graph.facebook.com/v19.0/${page.pageId}/subscribed_apps?access_token=${encodeURIComponent(page.token)}`, {
+        const current = await fetch(`${GRAPH_API_BASE}/${page.pageId}/subscribed_apps?access_token=${encodeURIComponent(page.token)}`, {
           signal: AbortSignal.timeout(env.metaApiTimeoutMs),
         }).then((r) => r.json()).catch(() => null);
         results.push({ pageId: page.pageId, status: response.status, response: body, subscribed: current });

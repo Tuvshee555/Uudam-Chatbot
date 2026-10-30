@@ -1739,6 +1739,23 @@ export default function AdminPage() {
       await loadLeadsState({ showLoading: true });
     }
   }
+  // A consultant takes the conversation (the bot stops for this customer) or hands it back.
+  async function setLeadBotPaused(lead: TravelLead, paused: boolean) {
+    setLeads((prev) => prev.map((item) => item.sender_id === lead.sender_id
+      ? { ...item, bot_paused: paused, bot_pause_reason: paused ? "manual" : "" } : item));
+    try {
+      const res = await fetchWithAdmin("/api/pause", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: paused ? "pause" : "resume", sender_id: lead.sender_id }),
+      });
+      if (!res.ok) throw new Error("failed");
+      toast.success(paused ? "Бот энэ хэрэглэгчид хариулахгүй — та хариулна." : "Харилцааг ботод буцаалаа.");
+    } catch {
+      toast.error("Ботын төлөвийг өөрчилж чадсангүй.");
+      await loadLeadsState({ showLoading: true });
+    }
+  }
   async function assignLead(lead: TravelLead, assignee: string) {
     setLeads((prev) => prev.map((item) => item.id === lead.id ? { ...item, assigned_to: assignee, status: "seen" } : item));
     try {
@@ -2090,6 +2107,7 @@ export default function AdminPage() {
               onMarkSeen={(lead) => void markLeadSeen(lead)}
               onUpdateStatus={(lead, status) => void updateLeadCrmStatus(lead, status)}
               onAssign={(lead, assignee) => void assignLead(lead, assignee)}
+              onSetBotPaused={(lead, paused) => void setLeadBotPaused(lead, paused)}
               broadcastMessage={broadcastMessage}
               broadcastSending={broadcastSending}
               broadcastResult={broadcastResult}

@@ -10,6 +10,7 @@ import { setTripSelection } from "./tripSelectionState";
 import { queryNeon } from "./neonDb";
 import { logInfo, logWarn } from "./observability";
 import { tripsForWebsiteReference } from "./bookingWebsite";
+import { GRAPH_API_BASE } from "./metaGraph";
 
 export type AdReferral = {
   source?: string;
@@ -61,7 +62,7 @@ export function tripFromAdText(text: string, trips: TravelTrip[]): TravelTrip | 
 async function fetchPostText(postId: string | undefined, token: string | null | undefined): Promise<string> {
   if (!postId || !token) return "";
   try {
-    const response = await fetch(`https://graph.facebook.com/v21.0/${encodeURIComponent(postId)}?fields=message&access_token=${encodeURIComponent(token)}`, { signal: AbortSignal.timeout(2500) });
+    const response = await fetch(`${GRAPH_API_BASE}/${encodeURIComponent(postId)}?fields=message&access_token=${encodeURIComponent(token)}`, { signal: AbortSignal.timeout(2500) });
     if (!response.ok) return "";
     const body = await response.json() as { message?: unknown };
     return typeof body.message === "string" ? body.message.slice(0, 2000) : "";
