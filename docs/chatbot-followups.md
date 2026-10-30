@@ -76,10 +76,27 @@ reply seen in the thread): no bot message. In both cases the question is appende
 lead, which goes back to unread in the Leads tab (staff are pinged when a channel is configured).
 Journeys: `booking intent then a phone…`, `a booked customer hears what staff recorded…`, `during a human
 takeover…`.
+**Next (branch `feat/handoff-followups`, 384da9c, awaiting the owner's approval).** One status reply then
+silence was still not acceptable. On Facebook the bot's own marker no longer silences: status questions get
+the lead's status (a different one right after gets "nothing new", the same one again nothing), every other
+message is answered as usual, and each reaches the lead. Only a consultant (staff reply in the thread,
+manual pause) or the customer asking for a person silences the bot. Instagram keeps the old behaviour.
+Residual risk: a consultant reply typed in a desktop browser is tagged like the bot's and is not detected
+(64 of 69 checked threads were staff-app replies).
 
-## P1-3 — Test traffic in the production conversation table — OPEN
-`demo:` sessions (87% of rows) are written beside real customers. Flag them or store them separately, so
-every metric uses real traffic.
+## P1-3 — Test traffic in the production conversation table — MOSTLY RESOLVED
+Recent: `demo:` sessions were 12% of rows in the last 30 days (the 87% was historical); none reach senders
+or leads. Analytics, lead lists/stats and the quality overview exclude them; QA scripts use recognisable
+ids (`golden-`, `replay-`, `qa-`). `npm test` now strips database settings like the conversation gate.
+Open: local development (`.env.local`) points at the production database, which is how fixture page rows
+got in (P2-5). A separate development database branch fixes it (owner action). Historical rows are kept.
+
+## P1-5 — Leads nobody opens — DASHBOARD PART DEPLOYED (c45f37e)
+All 172 real leads of the last 30 days were unread: staff answer in Messenger. The Leads tab now opens on
+what needs a person (waiting on an answer > booking request > other), recognises a consultant's Messenger
+reply, and an open dashboard alerts (toast, title count, browser notification if allowed). Open: a push
+channel outside the dashboard needs `TELEGRAM_BOT_TOKEN` + `TELEGRAM_STAFF_CHAT_IDS` (owner action);
+`STAFF_NOTIFY_PSIDS` Messenger pings depend on Meta's 24-hour window and are unreliable.
 
 ## P1-4 — "Universal bagtsan vne" answered without the price — FIXED (2026-10-30)
 **Root cause.** With the model available the request is read correctly (live replay: all six phrasings,
