@@ -32,7 +32,8 @@ import {
   type TripProgramReplyResult,
   type TripResolution,
 } from "./travelFastPathsSearch";
-import { buildAmbiguousTripReply } from "./travelFastPathsPricing";
+import { buildAmbiguousTripReply, hasPriceIntent } from "./travelFastPathsPricing";
+import { replyPreferences } from "./chatbotReplyPolicy";
 
 const PROGRAM_ONLY_QUERY_WORDS = new Set([
   "хөтөлбөр",
@@ -225,7 +226,7 @@ function buildTripSummaryLines(trip: TravelTrip): string {
 }
 
 function buildShortMediaReply(trip: TravelTrip): string {
-  return `✈️ ${trip.route_name}\n\nПостер зургуудыг нь хавсаргалаа.`;
+  return `${trip.route_name}\nЗураг хавсаргалаа.`;
 }
 
 export function buildTripProgramReply(
@@ -389,8 +390,10 @@ export function buildTripProgramReply(
   if (resolution.status !== "verified") return null;
   const best = resolution.trip;
 
-  const summary = buildTripSummaryLines(best);
-  const summaryBlock = summary ? `\n\n${summary}` : "";
+  // A program request does not request every hotel, fare and departure.
+  const priceIntent = intentText.replace(/хөтөлбөр\p{L}*/giu, "");
+  const summary = hasPriceIntent(priceIntent) ? buildTripSummaryLines(best) : "";
+  const summaryBlock = summary ? `\n${summary}` : "";
   const brochure = getTripBrochureAsset(best);
   // The owner's call (2026-10-02): a link to the live trip page, not the PDF
   // file — it never goes stale, and the website page already shows the same
@@ -403,7 +406,7 @@ export function buildTripProgramReply(
   if (wantsPicturesOnly) {
     if (websiteLink) {
       return {
-        reply: `✈️ ${best.route_name}${summaryBlock}\n\nАяллын дэлгэрэнгүй мэдээлэл, зургийг эндээс харна уу 👉 ${websiteLink}`,
+        reply: `${best.route_name}${summaryBlock}\n${websiteLink}`,
         trip: best,
         brochure: null,
         mediaUrls: [],
@@ -411,7 +414,7 @@ export function buildTripProgramReply(
     }
     if (brochure) {
       return {
-        reply: `✈️ ${best.route_name}${summaryBlock}\n\nPDF хөтөлбөрийг хавсаргалаа.`,
+        reply: `${best.route_name}${summaryBlock}\nPDF хөтөлбөр хавсаргалаа.`,
         trip: best,
         brochure,
         mediaUrls: [],
@@ -444,7 +447,7 @@ export function buildTripProgramReply(
 
   if (websiteLink) {
     return {
-      reply: `✈️ ${best.route_name}${summaryBlock}\n\nАяллын дэлгэрэнгүй хөтөлбөр, үнэ, зургийг эндээс харна уу 👉 ${websiteLink}`,
+      reply: `${best.route_name}${summaryBlock}\n${websiteLink}`,
       trip: best,
       brochure: null,
       mediaUrls: [],
@@ -453,7 +456,7 @@ export function buildTripProgramReply(
 
   if (brochure) {
     return {
-      reply: `✈️ ${best.route_name}${summaryBlock}\n\nPDF хөтөлбөрийг хавсаргалаа.`,
+      reply: `${best.route_name}${summaryBlock}\nPDF хөтөлбөр хавсаргалаа.`,
       trip: best,
       brochure,
       mediaUrls: [],
@@ -474,7 +477,7 @@ export function buildTripProgramReply(
 
   if (mediaUrls.length > 0) {
     return {
-      reply: `✈️ ${best.route_name}${summaryBlock}\n\nДэлгэрэнгүй хөтөлбөрийн зургуудыг хавсаргалаа.`,
+      reply: `${best.route_name}${summaryBlock}\nХөтөлбөрийн зураг хавсаргалаа.`,
       trip: best,
       brochure: null,
       mediaUrls,
@@ -482,8 +485,14 @@ export function buildTripProgramReply(
   }
 
   if (itineraryLines.length > 0) {
+    const full = replyPreferences(intentText).full || /өдөр\s*өдөр|day\s*by\s*day/i.test(intentText);
+    const days = Array.isArray(best.extra?.itinerary_days) ? best.extra.itinerary_days : [];
+    const highlights = days.flatMap((day) => {
+      const title = day && typeof day === "object" ? (day as Record<string, unknown>).title : null;
+      return typeof title === "string" && title.trim() ? [title.trim()] : [];
+    }).slice(0, 2);
     return {
-      reply: [`✈️ ${best.route_name}`, summary, "", "Өдөр өдрийн хөтөлбөр:", ...itineraryLines].filter(s => s !== "").join("\n"),
+      reply: [best.route_name, summary, ...(full ? itineraryLines : highlights.length ? highlights.map((line) => `• ${line}`) : itineraryLines.slice(0, 2))].filter(Boolean).join("\n"),
       trip: best,
       brochure: null,
       mediaUrls: [],
@@ -504,7 +513,7 @@ export function buildTripProgramReply(
     const photoUrls = tripGeneralPhotoUrls(best);
     if (photoUrls.length > 0) {
       return {
-        reply: `✈️ ${best.route_name}${summaryBlock}\n\nАяллын зургуудыг хавсаргалаа.`,
+        reply: `${best.route_name}${summaryBlock}\nЗураг хавсаргалаа.`,
         trip: best,
         brochure: null,
         mediaUrls: photoUrls,
@@ -527,7 +536,7 @@ export function buildTripProgramReply(
   // footnote was noise for the customer and, worse, pattern-matched the
   // no-data silence rule, which suppressed the entire correct answer.
   return {
-    reply: `✈️ ${best.route_name}${summaryBlock}`,
+    reply: summary ? `${best.route_name}${summaryBlock}` : TRIP_MEDIA_UNAVAILABLE_SILENT,
     trip: best,
     brochure: null,
     mediaUrls: [],

@@ -130,8 +130,8 @@ test("signed webhook retains calendar scope after named choices and switches ord
     assert.ok(!chosen.sends[0]?.text.includes("2 сарын"));
     const switched = await harness.turn("menu-live-month", "3 iin hotolboriig hary");
     assert.equal(switched.selection?.tripId, trips[2].id);
-    assert.ok(switched.sends[0]?.text.includes(trips[2].route_name));
     assert.ok(switched.sends[0]?.text.includes("program-2.pdf"));
+    assert.ok(!switched.sends[0]?.text.includes("program-1.pdf"), "the chosen program remains correct when its title is omitted");
     assert.equal(switched.leads.length, 0);
     const calendar = await harness.turn("menu-date-before-name", "3 сарын 17-нд явах аялал байна уу");
     assert.ok(calendar.sends.length > 0);

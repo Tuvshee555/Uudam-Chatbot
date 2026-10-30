@@ -15,6 +15,12 @@ const env = getEnv();
 const VERIFY_TOKEN = env.verifyToken;
 
 export type Platform = "facebook" | "instagram";
+export type AttachmentReplyPayload = {
+  reply: string;
+  /** Internal, catalog-resolved screenshot identity; never read from Meta's payload. */
+  tripId?: string;
+  pauseAfter?: boolean;
+};
 export type PendingConversationPayload = {
   platform: Platform;
   senderId: string;
@@ -23,6 +29,7 @@ export type PendingConversationPayload = {
   igUserId?: string | null;
   token?: string | null;
   eventKey?: string;
+  attachmentReply?: AttachmentReplyPayload;
   trace?: { requestId: string; correlationId: string };
 };
 export type PendingEnvelope = {

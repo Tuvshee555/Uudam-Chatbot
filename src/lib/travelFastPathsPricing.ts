@@ -67,7 +67,9 @@ const DIRECT_FLIGHT_NEGATIVE_PATTERNS = [
 
 export function hasPriceIntent(text: string) {
   return (
-    /үнэ|хэд\s+вэ|хэдээр|хэд\s+болох|нийт|төлбөр|price|cost|total/i.test(text) ||
+    /үнэ|хэд\s+вэ|хэдээр|хэд\s+болох|нийт|price|cost|total/i.test(text) ||
+    // The payment word must start a word; it also occurs inside "хөтөлбөр".
+    /(?:^|[^\p{L}])төлбөр/iu.test(text) ||
     // "хэд байсан бэ?", "хэд бэ", "хэдэн төгрөг": asked in the customer's own
     // words, not borrowed from an "үнэ" in the bot's previous reply.
     /хэд(?:эн)?\s*(?:байсан|бэ|төг\S*|мөнгө|болж)/i.test(text) ||
@@ -1711,10 +1713,10 @@ function firstStructuredPassengerPrice(trip: TravelTrip, key: "child_price" | "i
   return null;
 }
 
-// Every matching trip is listed (up to this many). It was 5, and the resolver
-// only handed over 3, so "<city>" showed 3 of the 6 active <city> trips and
-// the client reported two of them as missing.
+// A compact first menu avoids making the customer read the whole catalog.
 const MAX_LISTED_TRIPS = 8;
+const MAX_COMPACT_TRIPS = 3;
+const FULL_LIST_RE = /(?:^|\s)(?:бүх|бүгд\S*|bvh|buh|bukh|bugd\S*|all|full)(?:\s|$)|бүтэн|дэлгэрэнгүй|buten|delgerengui|complete\s+list/i;
 
 /** `heading` replaces the generic first line ("11 сард эдгээр аялал гарна:"). */
 type ListedFares = { adult: number | null; child: number | null; infant: number | null };
@@ -1732,12 +1734,12 @@ const NOT_ON_SALE = new Set(["sold_out", "paused", "cancelled", "unavailable", "
  * date sold at another price the reply verifier rightly rejected it, and the
  * whole "which trip?" question became silence plus a paused customer.
  */
-function listedFaresAndDates(trip: TravelTrip, now = new Date(), scope: RequestedDepartureScope | null = null): { fares: ListedFares | null; dates: string[]; soldOut?: boolean; outsideScope?: boolean } {
+function listedFaresAndDates(trip: TravelTrip, now = new Date(), scope: RequestedDepartureScope | null = null): { fares: ListedFares | null; dates: string[]; soldOut?: boolean; outsideScope?: boolean; qualifications?: string[]; ageLabels?: Partial<Record<PassengerKind, string>> } {
   // The dated departures come from the same resolver the reply checker uses, so a
   // line can never print a date the checker does not know (a cancelled or copied
   // date made it reject the whole list). Weekly schedules ("Ням гараг бүр") have no
   // calendar dates and keep the trip's own text.
-  const dated = upcomingDepartures(trip, now).filter(date => departureMatchesScope(date, scope)).slice(0, 8);
+  const dated = upcomingDepartures(trip, now).filter(date => departureMatchesScope(date, scope)).slice(0, scope?.kind === "dates" ? scope.dates.length : 8);
   if (scope && !dated.length) return { fares: null, dates: [], outsideScope: true };
   const future = dated.length ? dated : withFutureDepartureDates(trip, now).departure_dates.slice(0, 8);
   // A sold-out or closed departure is not on sale: listing it with a price made
@@ -1761,11 +1763,16 @@ function listedFaresAndDates(trip: TravelTrip, now = new Date(), scope: Requeste
   const first = card(upcoming[0]);
   // Several hotels or packages on that date: no single price is true, so the
   // line names the trip and its dates and the price comes once they choose.
-  if (!first) return { fares: null, dates: upcoming.slice(0, 3) };
+  if (!first) return { fares: null, dates: upcoming.slice(0, scope?.kind === "dates" ? scope.dates.length : 3) };
   const fares = { adult: exactFare(first, "adult"), child: exactFare(first, "child"), infant: exactFare(first, "infant") };
   const sameFares = (offer: ResolvedTripOffer | null) =>
-    offer !== null && (["adult", "child", "infant"] as const).every((kind) => exactFare(offer, kind) === fares[kind]);
-  return { fares, dates: upcoming.filter((date) => date === upcoming[0] || sameFares(card(date))).slice(0, 3) };
+    offer !== null && (["adult", "child", "infant"] as const).every((kind) => exactFare(offer, kind) === fares[kind])
+      && offer.hotel === first.hotel && offer.packageId === first.packageId
+      && JSON.stringify(offer.conditions) === JSON.stringify(first.conditions);
+  return { fares, dates: upcoming.filter((date) => date === upcoming[0] || sameFares(card(date))).slice(0, scope?.kind === "dates" ? scope.dates.length : 3),
+    qualifications: [first.hotel || first.hotelId, first.packageId, ...first.conditions].filter((value): value is string => Boolean(value)),
+    ageLabels: Object.fromEntries((["adult", "child", "infant"] as const).map(kind =>
+      [kind, [...new Set(first.fares.filter(fare => fare.kind === kind).map(fare => fare.ageRange).filter(Boolean))].join(", ")])) };
 }
 
 /**
@@ -1791,7 +1798,15 @@ export function buildAmbiguousTripReply(
   const scope = options.customerText ? requestedDepartureScope(options.customerText, now) : null;
   if (scope?.kind === "unsupported") return "REFER";
   const candidates = scope ? trips.filter(trip => upcomingDepartures(trip, now).some(date => departureMatchesScope(date, scope))) : trips;
-  const names = candidates.slice(0, MAX_LISTED_TRIPS).flatMap((trip) => {
+  const text = options.customerText || "";
+  const full = FULL_LIST_RE.test(text);
+  const limit = full ? MAX_LISTED_TRIPS : MAX_COMPACT_TRIPS;
+  const asksPrice = /үнэ|үнэтэй|хэд|price|une|vne|hed/i.test(text);
+  const asksAdult = /том\s*хүн|adult|tom\s*hun/i.test(text);
+  const asksChild = /хүүх|child|huuh|huvh/i.test(text);
+  const asksInfant = /нярай|infant|nyarai/i.test(text);
+  const asksDuration = /хоног|өдөр|хугацаа|duration|days|honog|udur/i.test(text);
+  const names = candidates.slice(0, limit).flatMap((trip) => {
     const currency = trip.currency || "MNT";
     const listed = listedFaresAndDates(trip, now, scope);
     if (listed.outsideScope) return [];
@@ -1801,12 +1816,15 @@ export function buildAmbiguousTripReply(
     // Next departures: customers pick by date, and a "none that month" re-ask
     // is useless without them.
     const upcoming = listed.dates;
+    const fareLine = (kind: PassengerKind, label: string, value: string | null) => value
+      ? `${label}${listed.ageLabels?.[kind] ? ` (${listed.ageLabels[kind]})` : ""} ${value}` : "";
     const details = [
-      trip.duration_text,
-      adultText ? `том хүн ${adultText}` : "",
-      childText ? `хүүхэд ${childText}` : "",
-      infantText ? `нярай ${infantText}` : "",
-      upcoming.length ? `гарах: ${upcoming.map((date) => customerDate(date, now)).join(", ")}` : "",
+      full || asksDuration ? trip.duration_text : "",
+      full || asksAdult || (!asksChild && !asksInfant) ? fareLine("adult", "том хүн", adultText) : "",
+      full || asksChild || (asksPrice && !asksAdult && !asksInfant) ? fareLine("child", "хүүхэд", childText) : "",
+      full || asksInfant ? fareLine("infant", "нярай", infantText) : "",
+      ...((adultText || childText || infantText) ? listed.qualifications || [] : []),
+      upcoming.length ? `гарах: ${upcoming.slice(0, scope?.kind === "dates" ? scope.dates.length : full ? 3 : 1).map((date) => customerDate(date, now)).join(", ")}` : "",
       listed.soldOut ? "суудал дүүрсэн" : "",
     ].filter(Boolean);
     const line = `• ${trip.route_name}${details.length ? ` — ${details.join(" · ")}` : ""}`;
@@ -1816,34 +1834,22 @@ export function buildAmbiguousTripReply(
   });
   if (!names.length) return "REFER";
   return [
-    // Same-name duplicates collapse to one line upstream; "several options"
-    // above a single line read as a glitch.
-    heading || (names.length === 1 ? "Энэ чиглэлээр ийм аялал байна 😊" : "Энэ чиглэлээр хэд хэдэн сонголт байна 😊"),
+    heading || "Аяллууд:",
     ...names,
+    ...(candidates.length > names.length ? [`Өөр ${candidates.length - names.length} сонголт бий.`] : []),
     ...(options.askToChoose === false ? [] : ["", AMBIGUOUS_REPLY_MARKER]),
   ].join("\n");
 }
 
-/** The single lead-capture ask reused by every fast-path answer. */
+/** Legacy text for integrations that explicitly request contact. */
 export const LEAD_CAPTURE_CTA =
   "Утасны дугаараа үлдээж аяллын зөвлөхтэй холбогдож болно.";
 
-/**
- * Appends the phone-number ask to a fast-path reply so the deterministic
- * answers capture leads the same way the AI path does. The fast paths used to
- * answer price/seats/dates and stop — exactly the hot-buyer questions — so the
- * best leads were never asked for a number.
- *
- * Skips when: the phone is already collected; the reply is a clarifying
- * (ambiguous) question, where a phone ask is explicitly disallowed; or the
- * reply already requests contact details (no double ask).
- */
+/** Contact collection belongs to the customer's explicit booking flow.
+ * Keep the existing call signature without adding a sales ask to answers. */
 export function appendLeadCaptureCta(reply: string, phoneCollected: boolean): string {
-  const text = (reply || "").trim();
-  if (!text || phoneCollected) return reply;
-  if (text.includes(AMBIGUOUS_REPLY_MARKER)) return reply;
-  if (/утас|дугаар/i.test(text)) return reply;
-  return `${text}\n\n${LEAD_CAPTURE_CTA}`;
+  void phoneCollected;
+  return reply;
 }
 
 export function buildSameTripPriceComparisonReply(

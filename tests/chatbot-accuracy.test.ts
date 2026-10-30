@@ -229,6 +229,33 @@ test("runtime conversation uses the generated offer selection and assistant repl
   assert.deepEqual(fixture.traces.find((t) => t.id === "transport-narrows-model-picks")!.interpretedTripIds, ["invented-direct"]);
 });
 
+test("runtime trip checks grade selected identity without requiring a repeated marketing title", async () => {
+  const { runInventedPipelineFixture, inventedPipelineInputs } = await import("../scripts/chatbot-accuracy-pipeline");
+  const fixture = await runInventedPipelineFixture();
+  const catalog = inventedPipelineInputs().catalog;
+  const original = fixture.replay.observations[0];
+  assert.deepEqual(original.tripIds, [catalog[0].id]);
+  assert.ok(!original.reply.includes(catalog[0].route_name));
+  assert.equal(evaluateChatbotAccuracy(fixture.dataset, fixture.replay).metrics.wrong_trip.errors, 0);
+
+  const wrongIdentity = structuredClone(fixture.replay);
+  wrongIdentity.observations[0].tripIds = [catalog[1].id];
+  wrongIdentity.observations[0].reply = `${catalog[0].route_name}\n${original.reply}`;
+  assert.equal(evaluateChatbotAccuracy(fixture.dataset, wrongIdentity).metrics.wrong_trip.errors, 1,
+    "correct-looking prose cannot conceal an incorrect selected trip");
+
+  const wrongProse = structuredClone(fixture.replay);
+  wrongProse.observations[0].reply = `${catalog[1].route_name}\n${original.reply}`;
+  assert.equal(evaluateChatbotAccuracy(fixture.dataset, wrongProse).metrics.wrong_trip.errors, 1,
+    "a correct selected ID cannot authorize prose about another trip");
+
+  const extraIdentity = structuredClone(fixture.replay);
+  extraIdentity.observations[0].tripIds!.push(catalog[1].id);
+  assert.equal(evaluateChatbotAccuracy(fixture.dataset, extraIdentity).metrics.wrong_trip.errors, 1);
+  delete extraIdentity.observations[0].tripIds;
+  assert.equal(evaluateChatbotAccuracy(fixture.dataset, extraIdentity).metrics.wrong_trip.errors, 1);
+});
+
 test("an actual null answer plan is scored as unanswered, never replaced with an authored reply", async () => {
   const { runInventedPipelineFixture, inventedPipelineInputs } = await import("../scripts/chatbot-accuracy-pipeline");
   const inputs = inventedPipelineInputs();

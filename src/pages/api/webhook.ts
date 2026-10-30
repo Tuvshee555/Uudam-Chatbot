@@ -7,7 +7,7 @@ import { sendQuickReplies as sendIgQuickReplies } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { getClarificationState, setClarificationState } from "../../lib/clarificationState";
 import { getTripSelection, setTripSelection } from "../../lib/tripSelectionState";
-import { tripsNamedIn, ungroundedTripInReply } from "../../lib/tripGrounding";
+import { groundedTripIds, tripsNamedIn, ungroundedTripInReply, type GroundingContext } from "../../lib/tripGrounding";
 import { isLikelyCatalogMaintenanceText } from "../../lib/customerTextClassification";
 import { readBusinessData } from "../../lib/businessData";
 import { appendMessage, buildPromptParts, getHistory, hasAskedForPhone } from "../../lib/conversation";
@@ -30,7 +30,8 @@ import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
 import { decideTripAnswer, type TripAnswerDecision } from "../../lib/tripAnswerDecision";
 import { verifyTripReply } from "../../lib/tripReplyVerification";
-import { presentAssistantReply } from "../../lib/chatbotReplyPolicy";
+import { presentAssistantReply, replyPreferences } from "../../lib/chatbotReplyPolicy";
+import { displayedClarificationTrips } from "../../lib/clarificationOptions";
 import { recordPrimaryReplyDelivery, recordReplyPresentation } from "../../lib/chatbotReplyTelemetry";
 import { getReplyMediaPolicy, limitReplyPhotos, recordReplyMediaDelivery } from "../../lib/replyMediaPolicy";
 import type { TripSelection } from "../../lib/tripRequest";
@@ -68,6 +69,7 @@ import { beginRequestTrace, classifyError, finishRequestTrace, hashIdentifier, l
 import { parseWebhookJson, PayloadTooLargeError, verifyMetaSignature, } from "../../lib/webhookSecurity";
 import {
   type Platform,
+  type AttachmentReplyPayload,
   type PendingConversationPayload,
   type PendingConversationHead,
   RetryableWebhookError,
@@ -106,6 +108,10 @@ const PAGE_TOKENS = new Map(env.facebookPages.map((p) => [p.pageId, p.token]));
 const FALLBACK_TOKEN = env.tokenPage;
 const META_APP_SECRET = env.metaAppSecret;
 
+export function answerPlanHasCustomerEvidence(tripId: string, context: GroundingContext): boolean {
+  return groundedTripIds(context).has(tripId);
+}
+
 export const config = {
   api: {
     bodyParser: false,
@@ -135,6 +141,7 @@ async function handleMessage(
   token?: string | null,
   trace?: { requestId: string; correlationId: string; source: string; deliveryKey?: string },
   ensureLockHealthy?: () => Promise<void> | void,
+  attachmentReply?: AttachmentReplyPayload,
 ) {
   const assertLockHealthy = async () => {
     if (ensureLockHealthy) await ensureLockHealthy();
@@ -197,7 +204,7 @@ async function handleMessage(
     msg_count: senderMsgCount,
     prev_msg_at: prevMsgAt,
     get_started_at: getStartedAt,
-  } = await trackSender(senderId, platform);
+  } = attachmentReply ? { msg_count: 2, prev_msg_at: null, get_started_at: null } : await trackSender(senderId, platform);
   // "hi" typed right after tapping Get Started: Meta's automated response has
   // just greeted this customer, so the bot stays quiet instead of stacking a
   // second greeting. The message is still saved for the admin inbox, and the
@@ -219,7 +226,7 @@ async function handleMessage(
     ? fetchThreadMessages({ token, senderId, timeoutMs: 4000 })
     : Promise.resolve(null);
   if (await isPagePaused(pageId)) {
-    await appendMessage(senderId, "user", text);
+    if (!attachmentReply) await appendMessage(senderId, "user", text);
     logInfo("webhook.page_pause_active", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
@@ -230,7 +237,7 @@ async function handleMessage(
     return;
   }
   if (await isPaused(senderId)) {
-    await appendMessage(senderId, "user", text);
+    if (!attachmentReply) await appendMessage(senderId, "user", text);
     logInfo("webhook.sender_paused", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
@@ -245,7 +252,7 @@ async function handleMessage(
     const thread = await staffThread;
     const staffAt = thread ? latestStaffReplyAt({ messages: thread, pageId }) : null;
     if (staffAt) {
-      await appendMessage(senderId, "user", text);
+      if (!attachmentReply) await appendMessage(senderId, "user", text);
       const remainingMs = staffAt.getTime() + STAFF_TAKEOVER_MS - Date.now();
       await pauseBot(senderId, remainingMs, "operator_reply").catch(() => {});
       logInfo("webhook.staff_takeover_detected", {
@@ -345,8 +352,15 @@ async function handleMessage(
       ? verifyTripReply({ reply: presented, trips: verificationScope, selection: currentSelection })
       : presented;
     const missingData = input.decision ? input.decision.outcome === "handoff" : isReferReply(reply) || shouldSilenceNoDataReply(reply);
+    // Compact fact answers may omit the trip title. Authorize the plan's ID
+    // against evidence frozen before routing, not the newly written selection.
+    const ungroundedPlan = !missingData && input.decision && !answerPlanHasCustomerEvidence(input.decision.plan.tripId, {
+      customerText: text, history, pendingTripIds: groundingPending?.candidateTripIds || [],
+      selectionTripId: groundingSelection?.tripId || null, catalogTripIds: input.catalogTripIds,
+      trips: await getGroundingTrips(),
+    });
     const ungroundedTrip = missingData ? null : await findUngroundedTrip(reply, input.catalogTripIds);
-    const noDataReply = missingData || Boolean(ungroundedTrip);
+    const noDataReply = missingData || Boolean(ungroundedTrip) || Boolean(ungroundedPlan);
     if (reply !== presented) recordCounter("webhook.factual_reply_rejected_total", 1, { path: input.failTag });
     if (ungroundedTrip) {
       logInfo("webhook.ungrounded_trip_reply_suppressed", { requestId: trace?.requestId, correlationId: trace?.correlationId,
@@ -364,7 +378,7 @@ async function handleMessage(
       recordCounter("webhook.no_data_reply_suppressed_total", 1, { platform });
       await captureLead({
         kind: "handoff",
-        context: `Бот мэдээлэлгүй fast-path хариуг зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй: ${input.failTag}${input.decision?.missingFacts.length ? ` [${input.decision.missingFacts.join(", ")}]` : ""}${ungroundedTrip ? ` (харилцаанд дурдагдаагүй аялал: ${ungroundedTrip.route_name})` : ""}`,
+        context: `Бот мэдээлэлгүй fast-path хариуг зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй: ${input.failTag}${input.decision?.missingFacts.length ? ` [${input.decision.missingFacts.join(", ")}]` : ""}${ungroundedTrip ? ` (харилцаанд дурдагдаагүй аялал: ${ungroundedTrip.route_name})` : ""}${ungroundedPlan ? ` [plan.trip=${input.decision!.plan.tripId}]` : ""}`,
       }, "api.webhook.no_data_handoff");
       // The bot doesn't know the answer, so it says NOTHING to the customer (owner's
       // rule: an unknown answer is met with silence, never a "passed to a
@@ -384,12 +398,7 @@ async function handleMessage(
     recordReplyPresentation({ reply, userText: text, path: "webhook_code", latencyMs: Date.now() - replyStartedAt });
     await assertLockHealthy();
     let delivered: boolean;
-    // Always include the operator button — customer can tap it any time,
-    // even on a fast-path reply that didn't propose its own buttons.
-    const quickButtons = input.buttons?.filter(Boolean).slice(0, 10) || [];
-    const buttons = quickButtons.includes(CONTACT_OPERATOR_LABEL)
-      ? quickButtons
-      : [...quickButtons, CONTACT_OPERATOR_LABEL].slice(0, 11);
+    const buttons = input.buttons?.filter(Boolean).slice(0, replyPreferences(text).full ? 10 : 3) || [];
     if (token && buttons.length > 0) {
       try {
         if (platform === "facebook") {
@@ -470,6 +479,29 @@ async function handleMessage(
   // behavior lives in webhookPhotoOnly.ts (extracted for the 2,000-line cap).
   const botSettings = await getTravelBotSettings();
   const botControl = await getBotControl();
+  if (attachmentReply) {
+    // The vision pipeline has already matched this customer-supplied poster.
+    // Reload its canonical ID before it can become grounding evidence.
+    const trip = attachmentReply.tripId
+      ? (await getGroundingTrips()).find(candidate => candidate.id === attachmentReply.tripId) : null;
+    let reply = attachmentReply.reply;
+    if (attachmentReply.tripId) {
+      if (!trip || trip.status !== "active") reply = "REFER";
+      else {
+        text = trip.route_name;
+        factualScope = [trip];
+        currentSelection = groundingSelection?.tripId === trip.id ? groundingSelection
+          : { tripId: trip.id, date: null, hotel: null, package: null, passengers: [] };
+        reply = `${trip.route_name}${currentSelection.date ? "" : "\nАль өдөр явах вэ?"}`;
+      }
+    }
+    await deliverFastPathReply({ reply, failTag: "attachment_reply", rememberSource: "api.webhook.attachment_reply",
+      afterDeliver: async () => {
+        if (trip && currentSelection) await setTripSelection(senderId, currentSelection);
+        if (attachmentReply.pauseAfter) await pauseBookedCustomer(senderId);
+      } });
+    return;
+  }
   // Reengagement copy is editable text, so verify it through the same boundary
   // before answering the current question. A withheld message hands off once.
   const INACTIVITY_MS = 30 * 60 * 1000;
@@ -831,7 +863,7 @@ async function handleMessage(
     if (isPhoneOnlyMessage(text)) {
       await appendMessage(senderId, "user", text);
       await deliverFastPathReply({
-        reply: `Баярлалаа! Манай аяллын зөвлөх таны ${detectedPhone} дугаарт холбогдоно.`,
+        reply: "Дугаарыг бүртгэлээ.",
         failTag: "phone_capture_confirmation", rememberSource: "api.webhook.phone_capture_confirmation",
       });
       await pauseBookedCustomer(senderId);
@@ -1096,6 +1128,8 @@ async function handleMessage(
               { askToChoose: !routed.informationalAlternatives, customerText: routed.requestText || text },
             )
         : totalReply || buildAmbiguousTripReply(routed.scopedClarify, undefined, { customerText: routed.requestText || text });
+      const displayed = displayedClarificationTrips(clarifyBody, routed.scopedClarify);
+      if (!routed.informationalAlternatives && displayed.length) await setClarificationState(senderId, displayed.map(trip => trip.id));
       await deliverFastPathReply({
         reply: enforceWebsiteForPayment(sanitizeAssistantReply(clarifyBody)),
         failTag: "scoped_clarify",
@@ -1104,7 +1138,7 @@ async function handleMessage(
         counter: "webhook.scoped_clarify_total",
         buttons: routed.informationalAlternatives
           ? undefined
-          : buildClarificationButtons(routed.scopedClarify),
+          : buildClarificationButtons(displayed),
       });
       return;
     }
@@ -1181,6 +1215,12 @@ async function handleMessage(
       return;
     }
   }
+  if (isGenericTripRequest(text)
+    && resolveTripFromUserMessage(await getFastPathText(), await getTrips(), { allowLooseFallback: false }).status === "not_found") {
+    await deliverFastPathReply({ reply: whichTripClarifyReply(text), failTag: "generic_trip_request",
+      rememberSource: "api.webhook.generic_trip_request", counter: "webhook.generic_trip_request_total" });
+    return;
+  }
   // Broad structured questions ("<хот> аялал хэд вэ?") should clarify from
   // the DB when several active trips match. Do not send these to the model and
   // risk a silent REFER.
@@ -1216,17 +1256,19 @@ async function handleMessage(
         // customers typed "2. <the option's own name, copied verbatim>" and
         // got silence: nothing had remembered the list had ever been offered
         // (found replaying 2026-10-08..11 chats).
-        await setClarificationState(senderId, resolution.candidates.map((trip) => trip.id));
         const totalReply = buildAmbiguousPassengerTotalReply(fastPathText, resolution.candidates);
+        const clarifyReply = totalReply || buildAmbiguousTripReply(resolution.candidates, undefined, { customerText: text });
+        const displayed = displayedClarificationTrips(clarifyReply, resolution.candidates);
+        await setClarificationState(senderId, displayed.map(trip => trip.id));
         await deliverFastPathReply({
           reply: enforceWebsiteForPayment(
-            sanitizeAssistantReply(totalReply || buildAmbiguousTripReply(resolution.candidates, undefined, { customerText: text })),
+            sanitizeAssistantReply(clarifyReply),
           ),
           failTag: "structured_clarify",
           catalogTripIds: resolution.candidates.map(trip => trip.id),
           rememberSource: "api.webhook.structured_clarify",
           counter: "webhook.structured_clarify_total",
-          buttons: buildClarificationButtons(resolution.candidates),
+          buttons: buildClarificationButtons(displayed),
         });
         return;
       }
@@ -1431,11 +1473,11 @@ async function handleMessage(
       // whatever list is actually shown must be what the next numbered/named
       // answer is checked against.
       if (programResolution?.status === "ambiguous") {
-        await setClarificationState(senderId, programResolution.candidates.map((trip) => trip.id));
+        await setClarificationState(senderId, displayedClarificationTrips(programReply.reply, programResolution.candidates).map((trip) => trip.id));
       }
       const programButtons =
         programResolution?.status === "ambiguous"
-          ? buildClarificationButtons(programResolution.candidates)
+          ? buildClarificationButtons(displayedClarificationTrips(programReply.reply, programResolution.candidates))
           : buildSmartButtons(safeProgramReply, trips) || undefined;
       await deliverFastPathReply({
         reply: safeProgramReply,
@@ -1538,7 +1580,7 @@ async function handleMessage(
       // replaying 2026-10-08..11 chats: two customers answered a list from
       // this exact block and got silence).
       if (structuredResolution?.status === "ambiguous") {
-        await setClarificationState(senderId, structuredResolution.candidates.map((trip) => trip.id));
+        await setClarificationState(senderId, displayedClarificationTrips(structuredTripReply, structuredResolution.candidates).map((trip) => trip.id));
       }
       // A "which trip?" list is checked line by line against the trips it names.
       // Checking it against only the routed trip rejected every other line, and
@@ -1553,7 +1595,7 @@ async function handleMessage(
         counter: "webhook.trip_fast_path_total",
         buttons: structuredTripReply.includes(AMBIGUOUS_REPLY_MARKER)
           ? structuredResolution?.status === "ambiguous"
-            ? buildClarificationButtons(structuredResolution.candidates)
+            ? buildClarificationButtons(displayedClarificationTrips(structuredTripReply, structuredResolution.candidates))
             : undefined
           : buildSmartButtons(safeStructuredReply, trips) || undefined,
         afterDeliver: async () => {
@@ -1871,11 +1913,7 @@ async function handleMessage(
     } catch {
     }
   }
-  // Always include contact button as the last one — customer can tap any time
-  replyButtons = replyButtons.slice(0, 10);
-  if (!replyButtons.includes(CONTACT_OPERATOR_LABEL)) {
-    replyButtons.push(CONTACT_OPERATOR_LABEL);
-  }
+  replyButtons = replyButtons.slice(0, replyPreferences(text).full ? 10 : 3);
   await assertLockHealthy();
   let delivered: boolean;
   if (token && replyButtons.length > 0) {
@@ -1986,6 +2024,7 @@ async function processConversationWithPendingQueue(
               deliveryKey: current.eventKey,
             },
             ensureLockHealthy,
+            current.attachmentReply,
           ),
       );
       if (head && !(await acknowledgePendingConversationConsistent(conversationKey, head))) {
@@ -2002,6 +2041,34 @@ async function processConversationWithPendingQueue(
     deleteActiveConversation(conversationKey);
     await releaseConversationLockConsistent(conversationKey, lockToken);
     updateConcurrencyGauges();
+  }
+}
+/** Internal document results use the same serialized and verified delivery as text. */
+export async function enqueueAttachmentReply(input: {
+  platform: Platform; senderId: string; pageId: string; token?: string;
+  trace?: { requestId: string; correlationId: string };
+}, attachmentReply: AttachmentReplyPayload) {
+  const conversationKey = `${input.platform}:${input.pageId}:${input.senderId}`;
+  const payload: PendingConversationPayload = { ...input, text: "[Хэрэглэгч файл илгээсэн]", attachmentReply,
+    igUserId: input.platform === "instagram" ? input.pageId : undefined,
+    eventKey: `attachment:${input.trace?.requestId || ""}:${hashIdentifier(attachmentReply.reply)}` };
+  if (await hasConversationLockConsistent(conversationKey)) {
+    await enqueuePendingConversationConsistent(conversationKey, payload);
+    return;
+  }
+  const lockToken = await acquireConversationLockConsistent(conversationKey);
+  if (lockToken === "") {
+    await enqueuePendingConversationConsistent(conversationKey, payload);
+    return;
+  }
+  let transferredLock = false;
+  try {
+    const pending = await peekPendingConversationConsistent(conversationKey);
+    if (pending) await enqueuePendingConversationConsistent(conversationKey, payload);
+    transferredLock = true;
+    await processConversationWithPendingQueue(conversationKey, pending?.payload || payload, lockToken, pending);
+  } finally {
+    if (!transferredLock) await releaseConversationLockConsistent(conversationKey, lockToken);
   }
 }
 export default async function handler(
@@ -2321,6 +2388,8 @@ export default async function handler(
                       pageId,
                       token,
                       attachments,
+                      deliverReply: reply => enqueueAttachmentReply({ platform, senderId, pageId, token,
+                        trace: { requestId: trace.requestId, correlationId: trace.correlationId } }, reply),
                       trace: {
                         requestId: trace.requestId,
                         correlationId: trace.correlationId,
@@ -2390,6 +2459,8 @@ export default async function handler(
                     pageId,
                     token,
                     attachments,
+                    deliverReply: reply => enqueueAttachmentReply({ platform, senderId, pageId, token,
+                      trace: { requestId: trace.requestId, correlationId: trace.correlationId } }, reply),
                     trace: {
                       requestId: trace.requestId,
                       correlationId: trace.correlationId,

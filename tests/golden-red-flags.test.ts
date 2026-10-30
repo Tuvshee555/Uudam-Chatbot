@@ -112,10 +112,10 @@ test("discount reply leaks no marker even with a priceless trip", () => {
   assertNoRedFlags(reply, "discount reply");
 });
 
-test("lead-capture CTA is appended to a fresh answer and leaks no marker", () => {
+test("a fresh answer stays complete without an unsolicited contact request or marker", () => {
   const reply = buildStructuredTripReply("Вэлмор шууд нислэгтэй үнэ хэд вэ?", TRIPS, NOW);
   const withCta = appendLeadCaptureCta(reply || "", false);
-  assert.match(withCta, /утас/i);
+  assert.equal(withCta, reply);
   assertNoRedFlags(withCta, "reply + CTA");
 });
 

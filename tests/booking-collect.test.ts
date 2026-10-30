@@ -20,11 +20,9 @@ test("the flow starts at the contact step and pre-fills the trip being discussed
   const state = mod.startCollectState("Захиалах", TRIP);
   assert.equal(state.step, "phone");
   assert.equal(state.trip, TRIP);
-  const prompt = mod.promptForStep(state.step, state);
-  assert.match(prompt, /Нэр, утасны дугаараа бичнэ үү/);
-  assert.ok(prompt.includes(`«${TRIP}»`));
-  // The catalogue link still goes out with the very first question.
-  assert.match(prompt, /https:\/\/uudamtravel\.mn/);
+  const prompt = mod.promptForStep(state.step);
+  assert.equal(prompt, "Утасны дугаараа бичнэ үү.");
+  assert.doesNotMatch(prompt, /Нэр|https?:|\n/);
 });
 
 test("name and phone in one message complete the booking when the trip is known", () => {
@@ -37,13 +35,13 @@ test("name and phone in one message complete the booking when the trip is known"
   assert.equal(result.state.trip, TRIP);
 });
 
-test("a name alone is kept and the phone is asked for by name", () => {
+test("a volunteered name is kept without adding another required question", () => {
   const state = mod.startCollectState("Захиалах", TRIP);
   const result = mod.advanceCollectState(state, "Бат", "");
   assert.equal(result.kind, "ask");
   if (result.kind !== "ask") return;
   assert.equal(result.state.name, "Бат");
-  assert.match(result.prompt, /Баярлалаа, Бат!.*утасны дугаараа/);
+  assert.equal(result.prompt, "Утасны дугаараа бичнэ үү.");
   const done = mod.advanceCollectState(result.state, "99112233", "99112233");
   assert.equal(done.kind, "done");
 });
@@ -122,21 +120,11 @@ test("buildLeadContext includes only the fields that were actually collected", (
   assert.match(context, /Анхны мессеж: Захиалга авмаар байна/);
 });
 
-test("buildCompletionMessage names the trip and the number staff will call", () => {
-  const state: CollectState = {
-    step: "done",
-    name: "Бат",
-    phone: "99112233",
-    trip: TRIP,
-    originalMessage: "test",
-    startedAt: Date.now(),
-  };
-  const msg = mod.buildCompletionMessage(state);
-  assert.match(msg, /^Бат, баярлалаа!/);
-  assert.ok(msg.includes(`«${TRIP}»`));
-  assert.match(msg, /99112233 дугаарт/);
-  const anonymous = mod.buildCompletionMessage({ ...state, name: "", trip: "" });
-  assert.match(anonymous, /^Баярлалаа! Захиалгын хүсэлтийг хүлээн авлаа/);
+test("completion confirms the saved request without a callback or reservation promise", () => {
+  assert.equal(mod.buildCompletionMessage(), "Захиалгын хүсэлтийг хүлээн авлаа.");
+  assert.doesNotMatch(mod.buildCompletionMessage(), /холбогдоно|баталгааж|https?:|\n/);
+  assert.equal(mod.buildCompletionMessage({ trip: TRIP }), `${TRIP}\nЗахиалгын хүсэлтийг хүлээн авлаа.`);
+  assert.equal(mod.BOOKING_ALREADY_RECEIVED_REPLY, "Захиалгын хүсэлт бүртгэгдсэн.");
 });
 
 test("isBareBookingRequest recognises a repeated 'book it' but not a new question", () => {

@@ -55,12 +55,12 @@ export function inventedPipelineInputs() {
   const catalog = [direct, land, hotel, closed, unknown];
   const na = Object.fromEntries(ACCURACY_METRICS.map((key) => [key, null]));
   const directChecks: AccuracyCase["checks"] = {
-    ...na, wrong_trip: { allOf: [direct.route_name], noneOf: [land.route_name, hotel.route_name] },
+    ...na, wrong_trip: { tripIds: [direct.id], noneOf: [land.route_name, hotel.route_name] },
     wrong_price: { allOf: ["1,200,000", "900,000"], noneOf: ["2,400,000", "3,000,000"] },
     needless_clarification: { action: "answer" }, unanswered: { action: "answer", allOf: ["1,200,000"] },
   };
   const hotelChecks: AccuracyCase["checks"] = {
-    ...na, wrong_trip: { allOf: [hotel.route_name], noneOf: [direct.route_name] },
+    ...na, wrong_trip: { tripIds: [hotel.id], noneOf: [direct.route_name] },
     wrong_price: { allOf: ["3,000,000", "2,000,000"], noneOf: ["3,500,000", "2,500,000", "500,000"] },
     ignored_constraint: { allOf: ["12 сарын 20", "Nerith House B"], noneOf: ["Nerith House A", "12 сарын 21"] },
     needless_clarification: { action: "answer" }, unanswered: { action: "answer", allOf: ["3,000,000"] },
@@ -86,7 +86,7 @@ export function inventedPipelineInputs() {
     ...hotelChecks, wrong_price: { ...hotelChecks.wrong_price!, allOf: ["3,000,000", "2,000,000", "8,000,000"] },
   });
   add("closed-departure", "Тармиз 2026-12-22 суудал, үнэ?", { trips: ["T4"], date: "2026-12-22", topics: ["price", "availability"] }, {
-    ...na, wrong_trip: { allOf: [closed.route_name] },
+    ...na, wrong_trip: { tripIds: [closed.id] },
     incorrect_availability: { allOf: ["12 сарын 22", "суудал дүүрсэн"], noneOf: ["захиалга нээлттэй", "суудал үлдсэн"] },
     ignored_constraint: { allOf: ["12 сарын 22"] }, needless_clarification: { action: "answer" },
     unanswered: { allOf: ["суудал дүүрсэн"], action: "answer" },
@@ -134,6 +134,7 @@ export async function runInventedPipelineFixture(inputs = inventedPipelineInputs
     const observation: AccuracyObservation = {
       id: c.id, status: "ok", reply: plan?.reply ?? "",
       action: !plan?.reply ? "silent" : plan.status === "answered" ? "answer" : plan.status,
+      tripIds: plan ? [plan.tripId] : [],
     };
     observations.push(observation);
     if (plan) selections.set(c.conversationId, plan.selection);

@@ -6,17 +6,14 @@
  * (payment receipts, passports, trip screenshots) and the ack path for
  * messages that arrive with attachments but no text.
  */
-import { sendTextMessage } from "./messenger";
 import { appendMessage } from "./conversation";
 import { rateLimitAsync } from "./rateLimit";
 import { scheduleCustomerMemoryUpdate } from "./conversationMemory";
 import { scheduleCustomerAttachmentProcessing, scheduleCustomerImageProcessing, type FileAttachmentInput } from "./customerDocuments";
-import { isPaused, pauseBookedCustomer } from "./pause";
+import { isPaused } from "./pause";
 import { createLead, hasRecentOpenLead, isPagePaused, listTrips } from "./travelOps";
 import { notifyStaffOfLead } from "./staffAlerts";
-import { buildStructuredTripReply, sanitizeTripForCustomers } from "./travelFastPaths";
-import { enforceWebsiteForPayment, sanitizeAssistantReply } from "./reply";
-import type { Platform } from "./webhookDedup";
+import type { AttachmentReplyPayload, Platform } from "./webhookDedup";
 import {
   classifyError,
   hashIdentifier,
@@ -71,6 +68,8 @@ type ProcessedDocumentLike = {
   extracted_json?: Record<string, unknown>;
 };
 
+type AttachmentDelivery = (reply: AttachmentReplyPayload) => Promise<void>;
+
 /**
  * Category-aware confirmation sent AFTER the vision pipeline classified what
  * the customer sent. Only for documents a customer anxiously waits on
@@ -91,16 +90,17 @@ export function buildDocumentReceivedMessage(docs: ProcessedDocumentLike[]): str
   if (categories.has("booking_code")) received.push("захиалгын кодыг");
   if (categories.has("travel_document")) received.push("бичиг баримтыг");
   if (received.length === 0) return null;
-  return `Таны илгээсэн ${received.join(", ")} хүлээн авч бүртгэлээ ✅ Манай аяллын зөвлөх шалгаад баталгаажуулна. Баярлалаа! 🙌`;
+  const documents = received.join(", ");
+  return `${documents[0].toUpperCase()}${documents.slice(1)} хүлээн авлаа. Зөвлөх шалгана.`;
 }
 
 /**
  * A trip screenshot that resolved against the REAL catalog gets an instant
  * answer — the customer asking "what is this trip?" via screenshot receives
- * the same price/dates reply they'd get by typing the trip name, with no
- * staff involvement.
+ * a compact identification. Canonical facts and selection are checked at the
+ * shared delivery boundary, not trusted from OCR text.
  */
-async function buildMatchedTripReply(docs: ProcessedDocumentLike[]): Promise<string | null> {
+export async function buildMatchedTripReply(docs: ProcessedDocumentLike[]): Promise<AttachmentReplyPayload | null> {
   const matched = docs.find((doc) => {
     if (doc.category !== "trip_screenshot") return false;
     const match = doc.extracted_json?.trip_match;
@@ -111,11 +111,38 @@ async function buildMatchedTripReply(docs: ProcessedDocumentLike[]): Promise<str
     (matched.extracted_json?.trip_match as Record<string, unknown>).route_name || "",
   ).trim();
   if (!routeName) return null;
-  const trips = (await listTrips({ limit: 5000 }).catch(() => [])).map(sanitizeTripForCustomers);
-  const structured = trips.length > 0 ? buildStructuredTripReply(routeName, trips) : null;
-  const intro = `Таны илгээсэн зураг манай «${routeName}» аялал байна ✨`;
-  if (!structured) return intro;
-  return `${intro}\n\n${enforceWebsiteForPayment(sanitizeAssistantReply(structured))}`;
+  const match = matched.extracted_json?.trip_match as Record<string, unknown>;
+  const trips = await listTrips({ limit: 5000 });
+  const exact = trips.filter((trip) => trip.route_name === routeName && (!match.id || trip.id === match.id));
+  if (exact.length !== 1) return { reply: "REFER" };
+  return { reply: routeName, tripId: exact[0].id };
+}
+
+async function deliverProcessedDocuments(input: {
+  platform: Platform; senderId: string; pageId: string;
+  trace?: { requestId: string; correlationId: string };
+  deliverReply: AttachmentDelivery;
+}, docs: ProcessedDocumentLike[]) {
+  const { platform, senderId, pageId, trace } = input;
+  scheduleCustomerMemoryUpdate({ senderId, requestId: trace?.requestId,
+    correlationId: trace?.correlationId, source: "api.webhook.attachments" });
+  await leadForUnmatchedTripScreenshot(docs, { platform, senderId, trace });
+  if ((await isPagePaused(pageId)) || (await isPaused(senderId))) {
+    recordCounter("webhook.document_received_suppressed_total", 1, { platform });
+    return;
+  }
+  // One response per upload: sensitive documents go to staff; a trip poster
+  // identifies its canonical trip without adding an unsolicited brochure.
+  const confirmation = buildDocumentReceivedMessage(docs);
+  const reply = confirmation ? { reply: confirmation, pauseAfter: true } : await buildMatchedTripReply(docs);
+  if (!reply) return;
+  try {
+    await input.deliverReply(reply);
+  } catch (error) {
+    logWarn("webhook.document_received_send_failed", { requestId: trace?.requestId,
+      correlationId: trace?.correlationId, platform, pageId, senderHash: hashIdentifier(senderId),
+      classification: classifyError(error), message: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 /**
@@ -167,9 +194,10 @@ export function scheduleImageDocumentPipeline(input: {
   pageId: string;
   token?: string;
   imageUrls: string[];
+  deliverReply: AttachmentDelivery;
   trace?: { requestId: string; correlationId: string };
 }) {
-  const { platform, senderId, pageId, token, imageUrls, trace } = input;
+  const { platform, senderId, pageId, imageUrls, trace } = input;
   if (imageUrls.length === 0) return;
   scheduleCustomerImageProcessing({
     platform,
@@ -177,53 +205,7 @@ export function scheduleImageDocumentPipeline(input: {
     pageId,
     urls: imageUrls,
     trace,
-    onProcessed: async (docs) => {
-      scheduleCustomerMemoryUpdate({
-        senderId,
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        source: "api.webhook.image_documents",
-      });
-      await leadForUnmatchedTripScreenshot(docs, { platform, senderId, trace });
-      if (platform !== "facebook" || !token) return;
-      const confirmation = buildDocumentReceivedMessage(docs);
-      const tripReply = await buildMatchedTripReply(docs);
-      if (!confirmation && !tripReply) return;
-      // Pause state is re-checked at SEND time, not schedule time: a payment
-      // receipt is exactly the moment staff jump in manually (operator echo
-      // pauses the bot), and processing takes long enough for that to happen.
-      // The document is still stored either way — only the bot's voice stops.
-      if ((await isPagePaused(pageId)) || (await isPaused(senderId))) {
-        recordCounter("webhook.document_received_suppressed_total", 1, { platform });
-        return;
-      }
-      for (const message of [confirmation, tripReply].filter(
-        (value): value is string => Boolean(value),
-      )) {
-        try {
-          await sendTextMessage(senderId, message, token, {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            source: "api.webhook.document_received",
-          });
-          await appendMessage(senderId, "assistant", message).catch(() => {});
-        } catch (error) {
-          logWarn("webhook.document_received_send_failed", {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            platform,
-            pageId,
-            senderHash: hashIdentifier(senderId),
-            classification: classifyError(error),
-            message: error instanceof Error ? error.message : String(error),
-          });
-          break;
-        }
-      }
-      // A passport, receipt or booking code means the booking is with staff
-      // now; a trip screenshot alone (no confirmation) keeps the bot talking.
-      if (confirmation) await pauseBookedCustomer(senderId).catch(() => {});
-    },
+    onProcessed: (docs) => deliverProcessedDocuments(input, docs),
   });
 }
 
@@ -239,9 +221,10 @@ export function scheduleAttachmentDocumentPipeline(input: {
     name?: string;
     mime_type?: string;
   }>;
+  deliverReply: AttachmentDelivery;
   trace?: { requestId: string; correlationId: string };
 }) {
-  const { platform, senderId, pageId, token, attachments, trace } = input;
+  const { platform, senderId, pageId, attachments, trace } = input;
   const imageUrls = extractImageAttachmentUrls(attachments);
   const files = extractFileAttachmentInputs(attachments, {
     platform,
@@ -257,46 +240,7 @@ export function scheduleAttachmentDocumentPipeline(input: {
     imageUrls,
     files,
     trace,
-    onProcessed: async (docs) => {
-      scheduleCustomerMemoryUpdate({
-        senderId,
-        requestId: trace?.requestId,
-        correlationId: trace?.correlationId,
-        source: "api.webhook.attachments",
-      });
-      await leadForUnmatchedTripScreenshot(docs, { platform, senderId, trace });
-      if (platform !== "facebook" || !token) return;
-      const confirmation = buildDocumentReceivedMessage(docs);
-      const tripReply = await buildMatchedTripReply(docs);
-      if (!confirmation && !tripReply) return;
-      if ((await isPagePaused(pageId)) || (await isPaused(senderId))) {
-        recordCounter("webhook.document_received_suppressed_total", 1, { platform });
-        return;
-      }
-      for (const message of [confirmation, tripReply].filter(
-        (value): value is string => Boolean(value),
-      )) {
-        try {
-          await sendTextMessage(senderId, message, token, {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            source: "api.webhook.document_received",
-          });
-          await appendMessage(senderId, "assistant", message).catch(() => {});
-        } catch (error) {
-          logWarn("webhook.document_received_send_failed", {
-            requestId: trace?.requestId,
-            correlationId: trace?.correlationId,
-            platform,
-            pageId,
-            senderHash: hashIdentifier(senderId),
-            classification: classifyError(error),
-            message: error instanceof Error ? error.message : String(error),
-          });
-          break;
-        }
-      }
-    },
+    onProcessed: (docs) => deliverProcessedDocuments(input, docs),
   });
 }
 
@@ -311,6 +255,7 @@ export async function handleAttachmentOnlyMessage(input: {
   pageId: string;
   token?: string;
   attachments: Array<{ type?: string; payload?: { url?: string } }>;
+  deliverReply: AttachmentDelivery;
   trace?: { requestId: string; correlationId: string };
 }) {
   const { platform, senderId, pageId, token, attachments, trace } = input;
@@ -338,6 +283,7 @@ export async function handleAttachmentOnlyMessage(input: {
     pageId,
     token,
     attachments,
+    deliverReply: input.deliverReply,
     trace,
   });
 
@@ -406,18 +352,9 @@ export async function handleAttachmentOnlyMessage(input: {
     });
     return;
   }
-  const ack = isVoiceNote
-    ? "Дуут мессежийг тань хүлээн авлаа 🙌 Манай аяллын зөвлөх сонсоод тантай холбогдоно. " +
-      "Аялал, үнэ, хуваарийн асуултаа бичгээр илгээвэл би шууд хариулъя 😊"
-    : "Илгээсэн зүйлийг тань хүлээн авлаа 🙌 Асуултаа бичгээр илгээвэл би шууд хариулъя. " +
-      "Эсвэл утасны дугаараа үлдээвэл манай аяллын зөвлөх тантай холбогдоно 😊";
+  const ack = isVoiceNote ? "Дуут мессеж хүлээн авлаа." : "Файл хүлээн авлаа.";
   try {
-    await sendTextMessage(senderId, ack, token, {
-      requestId: trace?.requestId,
-      correlationId: trace?.correlationId,
-      source: "api.webhook.attachment_ack",
-    });
-    await appendMessage(senderId, "assistant", ack).catch(() => {});
+    await input.deliverReply({ reply: ack });
   } catch (error) {
     logWarn("webhook.attachment_ack_failed", {
       requestId: trace?.requestId,

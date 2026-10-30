@@ -38,11 +38,11 @@ export const NO_DATA_HANDOFF_REPLY =
  * can, by asking the same thing a person would.
  */
 export const WHICH_TRIP_CLARIFY_REPLY =
-  "Аль аяллын талаар асууж байна вэ? 😊 Чиглэл (жишээ нь хотын нэр) эсвэл аяллын нэрээ бичвэл үнэ, хөтөлбөр, гарах өдрийг нь шууд хэлье.";
+  "Аль аялал вэ?";
 
-/** The same question for a customer writing English (an ad reaches foreigners too): both languages, so nobody is left guessing. */
+/** The same single question for a customer writing English. */
 export const WHICH_TRIP_CLARIFY_REPLY_EN =
-  "Hello! 😊 Which trip or destination are you interested in? Write the destination or the trip name and I'll send the price, program and departure dates.\n\n" + WHICH_TRIP_CLARIFY_REPLY;
+  "Which trip?";
 
 export function whichTripClarifyReply(text: string): string {
   const english = !/[\u0400-\u04FF]/.test(text) && /\b(?:you|your|the|about|can|could|tell|ad|ads|please|info|information|details|hello|hi|how|much|price|tour|trip|travel)\b/i.test(text);

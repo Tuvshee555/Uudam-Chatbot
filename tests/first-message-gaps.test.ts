@@ -10,14 +10,13 @@ function trip(id: string, route_name: string): TravelTrip {
 }
 const PAIR = [trip("a", "Вэлмор нуурын аялал"), trip("b", "Тармиз Кардан аялал")];
 
-test("an English first message that names no trip is asked which trip, in both languages", async () => {
+test("an English first message that names no trip gets one short question", async () => {
   applyTestEnv();
   const { isGenericTripRequest } = await import("../src/lib/travelFastPaths");
   const { whichTripClarifyReply, WHICH_TRIP_CLARIFY_REPLY } = await import("../src/lib/reply");
   for (const text of ["Can you tell me more about your ad?", "hello, price please", "How much is the tour?", "Hi, I want more information"]) {
     assert.equal(isGenericTripRequest(text), true, text);
-    assert.match(whichTripClarifyReply(text), /Which trip or destination/);
-    assert.ok(whichTripClarifyReply(text).includes(WHICH_TRIP_CLARIFY_REPLY));
+    assert.equal(whichTripClarifyReply(text), "Which trip?");
   }
   // A destination makes it a real question, and Mongolian stays Mongolian-only.
   assert.equal(isGenericTripRequest("Do you have a Bali tour?"), false);

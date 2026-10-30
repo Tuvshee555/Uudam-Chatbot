@@ -209,4 +209,4 @@ export function isWithinGetStartedQuietWindow(
  * 100-question sweep). A greeting asks nothing and must never re-serve a trip.
  */
 export const MID_CONVERSATION_GREETING_REPLY =
-  "Сайн байна уу! 😊 Аяллын талаар асуух зүйл байвал надад хэлээрэй. Би танд туслахад бэлэн байна.";
+  "Ямар аялал сонирхож байна?";

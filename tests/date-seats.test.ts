@@ -66,8 +66,8 @@ test("a website admin edit of one date keeps the flag when it comes back to the 
   assert.deepEqual(rows.map((r) => r.status), ["OPEN", "ALMOST_FULL"]);
 });
 
-test("the bot's trip card marks only the flagged date and still passes its own checker", () => {
-  const card = buildStructuredTripReply("ЗАНДАН ДАЛАЙН АЯЛАЛ", [flagged], NOW)!;
+test("the requested full trip card marks only the flagged date and still passes its own checker", () => {
+  const card = buildStructuredTripReply("ЗАНДАН ДАЛАЙН АЯЛАЛ дэлгэрэнгүй", [flagged], NOW)!;
   assert.match(card, /2\/17 \(цөөн суудал\)/);
   assert.doesNotMatch(card, /2\/10 \(цөөн/);
   assert.doesNotMatch(card, /2\/24 \(цөөн/);

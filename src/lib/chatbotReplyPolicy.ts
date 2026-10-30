@@ -2,19 +2,20 @@ import { sanitizeAssistantReply, stripRepeatedGreeting } from "./reply";
 import type { PassengerKind } from "./tripOffers";
 
 export const CHATBOT_REPLY_RULES = [
-  "Answer the customer's current question first. Be polite and natural, without empty enthusiasm or repeating the question.",
-  "For one fact, normally use 1-3 short lines. For multiple questions, answer every requested part in a compact list. Essential fare conditions must never be omitted to meet a length budget.",
+  "Answer directly, like a brief human message. Prefer labels and facts over complete sentences. No introduction, sales pitch, repeated question, repeated trip name, or closing offer to help.",
+  "For one fact, aim for about 10 words on one line. Use extra lines only for requested facts or necessary fare qualifications. No paragraphs or unsolicited trip overview. Essential fare conditions must never be omitted to meet a length budget.",
   "Show only the requested passenger fare when they specify adult, child or infant. Do not add unrelated dates, visas, hotels or itineraries.",
-  "Ask at most one necessary clarification at a time. Use the known trip/date/hotel/passengers; never ask again for information already provided.",
+  "Ask at most one necessary clarification at a time, using a few words. Ask only when the missing detail blocks the answer; otherwise answer and stop. Use the known trip/date/hotel/passengers; never ask again for information already provided.",
   "Offer at most three options initially, and say more options exist when relevant. Show the full list when explicitly requested.",
   "A program request normally gets a short summary or the published trip link. Give the full day-by-day program only when explicitly requested. Send photos or files only when requested.",
-  "Use zero or one relevant emoji, not emoji headings on every line. Do not repeat greetings or pressure customers for contact information.",
+  "Prefer no emoji; use at most one when useful. Do not add greetings to factual answers, ask if more help is needed, or pressure customers for contact information. 'I will think about it' needs no sales pitch or phone request.",
   "If the customer asks again, answer again. Never scold them or replace the answer with 'already answered'.",
   "Never promise a reservation, refund, staff callback or completed handoff unless the application has actually confirmed that action. Keep each customer's private information separate.",
 ] as const;
 
 export function replyPreferences(text: string) {
-  const full = /бүх|бүгд|дэлгэрэнгүй|бүтэн|нэг\s*бүр|өдөр\s*бүр|all\b|full\b|detailed|every\s*day|bugd|delgerengui|buten/i.test(text);
+  const full = /(?:^|[^\p{L}])(?:бүх|бүгд\p{L}*|дэлгэрэнгүй|бүтэн|нэг\s*бүр|all|full|detailed|bugd\p{L}*|delgerengui|buten)(?=$|[^\p{L}])/iu.test(text)
+    || /(?:өдөр\s*бүр(?:ийн)?|every\s*day|day.by.day).{0,15}(?:хөтөлбөр|itinerary|program)|(?:хөтөлбөр\p{L}*|itinerary|program).{0,15}(?:өдөр\s*бүр|every\s*day|day.by.day)/iu.test(text);
   const fareKinds: PassengerKind[] = [];
   if (/том\s*хүн|насанд\s*хүрэгч|adult|tom\s*hun/i.test(text)) fareKinds.push("adult");
   if (/хүүх(?:эд|дийн)|child|huuhed|huuhdiin/i.test(text)) fareKinds.push("child");
@@ -44,7 +45,35 @@ export function replyPreferences(text: string) {
 export function compactReplyOptions(options: string[], text: string): string[] {
   const limit = replyPreferences(text).optionLimit;
   const unique = [...new Set(options)];
-  return [...unique.slice(0, limit), ...(unique.length > limit ? [`Өөр ${unique.length - limit} сонголт бий. Бүх сонголтыг хүсвэл хэлээрэй.`] : [])];
+  return [...unique.slice(0, limit), ...(unique.length > limit ? [`Өөр ${unique.length - limit} сонголт бий.`] : [])];
+}
+
+// Remove only recognizable conversational padding, never arbitrary words or
+// factual sentences. Protect URLs before sentence cleanup (including signed URLs).
+function removeReplyPadding(text: string, allowContact: boolean): string {
+  const urls: string[] = [];
+  let prefix = "COMPACTREPLYURL";
+  while (text.includes(prefix)) prefix += "X";
+  let reply = text.replace(/https?:\/\/[^\s<>]+/g, url => `${prefix}${urls.push(url) - 1}END`);
+  reply = reply
+    .replace(/(?:^|\n)\s*(?:Сайн\s+байна\s+уу|Сайн\s+уу|Hello|Hi)(?=$|[\s!,.😊])[!,.\s]*(?:😊\s*)?/giu, "\n")
+    .replace(/(?:^|\n)\s*(?:Би\s+танд\s+туслахад\s+бэлэн\s+байна|Мэдээллийг\s+хүргэж\s+байна|Here\s+(?:is|are)\s+the\s+(?:information|details))\s*[.!:]?\s*/giu, "\n")
+    .replace(/(?:^|\n)\s*Та\s+[^\n?\d₮]*?(?:талаар\s+)?(?:дэлгэрэнгүй\s+)?мэдээлэл\s+авахыг\s+хүсэж\s+байна\s+уу\?\s*/giu, "\n")
+    .replace(/(?:^|[.!?]\s+|\n)(?:Өөр\s+(?:асуулт|мэдээлэл)[^\n.!?]*?(?:байвал\s+хэлээрэй|хэрэгтэй\s+юу|байна\s+уу)|Let\s+me\s+know\s+if\s+you\s+(?:need|have)[^\n.!?]*)[.!?]?\s*$/iu, "");
+  if (!allowContact) {
+    // A request can share a line with a factual answer: remove just the contact
+    // sentence, preserving the amount and its conditions on the same line.
+    reply = reply.replace(/(?:^|(?<=[.!?])\s+|\n)(?:(?:Баярлалаа[^.!?\n]*!\s*)?(?:Нэр,?\s*)?(?:Тантай\s+холбогдох\s+)?(?:утасны\s+)?дугаараа\s+(?:(?:бичнэ|үлдээнэ)\s+үү|бичээрэй|үлдээгээрэй)(?=$|[\s.!?—–])|(?:утасны\s+)?дугаараа\s+үлдээвэл\s+(?:манай\s+)?(?:аяллын\s+)?зөвлөх\s+(?:тантай\s+)?(?:удахгүй\s+)?холбогдоно(?=$|[.!?\n])|Please\s+(?:leave|share)\s+your\s+phone(?:\s+number)?(?=$|[.!?\n]))[.!?]?/giu, "");
+    reply = reply.replace(/(^|\n)\s*[—–]\s*/g, "$1");
+  }
+  // Only discard later standalone clarification sentences. Conditions, quoted
+  // questions and questions with factual numeric answers are not chopped.
+  let questionSeen = false;
+  reply = reply.replace(/(?:^|(?<=[.!?])\s+|\n)((?:Та\s+)?(?:Аль|Ямар|Хэзээ|Хэдүүлээ|Хэдэн\s+(?:хүн|настай)|Which|What|When|How\s+many)(?=\s|\?)[^?\n]*\?)/giu, (whole, question: string) => {
+    if (!questionSeen) { questionSeen = true; return whole; }
+    return /[\d₮]|https?:/u.test(question) ? whole : "";
+  });
+  return reply.replace(new RegExp(`${prefix}(\\d+)END`, "g"), (_, index: string) => urls[Number(index)]);
 }
 
 // Only independent labelled fare lines are removed. Never truncate arbitrary
@@ -71,13 +100,14 @@ export function presentAssistantReply(input: {
     }).join("\n");
   }
   const wantsContact = /захиал|залга|холбо|зөвлөх|оператор|book\b|booking|call\b|consultant|human|zahial|holbo/i.test(input.userText);
-  if (input.phoneAlreadyRequested || !wantsContact) {
-    const lines = reply.split("\n");
-    const filtered = lines.filter((line) => !/^\s*(?:утасны\s+дугаараа|дугаараа\s+үлдээ|please\s+(?:leave|share)\s+your\s+phone)/i.test(line));
-    if (filtered.some((line) => line.trim())) reply = filtered.join("\n");
-  }
+  const compact = removeReplyPadding(reply, wantsContact && !input.phoneAlreadyRequested);
+  // A bare greeting remains a greeting; never turn it into an empty factual
+  // answer or an accidental no-data handoff.
+  reply = compact.trim() ? compact : /^(?:сайн\s+(?:байна\s+уу|уу)|hello|hi)[\s!,.😊]*$/iu.test(reply) ? "Сайн уу!" : compact;
   let emojis = 0;
   reply = reply.replace(/https?:\/\/\S+|\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*/gu,
     (value) => value.startsWith("http") || ++emojis <= 1 ? value : "");
-  return reply.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  // Compact messages are a single group of lines. Explicit detailed requests
+  // retain their section spacing; factual content is never cut to a word cap.
+  return reply.replace(/[ \t]+\n/g, "\n").replace(preferences.full ? /\n{3,}/g : /\n{2,}/g, preferences.full ? "\n\n" : "\n").trim();
 }

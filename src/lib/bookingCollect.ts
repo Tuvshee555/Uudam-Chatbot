@@ -1,7 +1,7 @@
 /**
  * Booking info collector — the short mini-flow that runs BEFORE handoff.
  *
- * Flow: booking intent ("Захиалах") → ask name + phone in one message (the trip
+ * Flow: booking intent ("Захиалах") → ask for a phone number (the trip
  * the customer was looking at is pre-filled) → ask which trip only if it is
  * still unknown → create a full lead → hand off to a human. State is stored in
  * Redis (with in-memory fallback) keyed by sender.
@@ -94,38 +94,21 @@ export function startCollectState(originalMessage: string, trip = ""): CollectSt
   };
 }
 
-/**
- * Where a customer can see every trip, its full programme and prices without
- * waiting on anyone. Offered alongside the very first booking question: a
- * customer who taps "Захиалах" wants to move NOW, and being asked several
- * questions before receiving anything reads as a form, not service.
- */
-import { BOOKING_WEBSITE_URL } from "./bookingWebsite";
-export { BOOKING_WEBSITE_URL };
+export { BOOKING_WEBSITE_URL } from "./bookingWebsite";
 
-/** The opening question: name and phone together, naming the trip when known. */
-export function buildBookingStartPrompt(trip: string): string {
-  const lead = trip
-    ? `«${trip}» аялалд захиалга өгөхөд тань туслъя 🙌`
-    : "Захиалга өгөхөд тань туслъя 🙌";
-  return [
-    lead,
-    "Нэр, утасны дугаараа бичнэ үү — манай аяллын зөвлөх тантай холбогдож захиалгыг баталгаажуулна.",
-    "",
-    `Бүх аяллыг үнэ, хөтөлбөрийн хамт эндээс харж болно 👉 ${BOOKING_WEBSITE_URL}`,
-  ].join("\n");
+/** Ask for one missing contact detail; the selected trip stays in flow state. */
+export function buildBookingStartPrompt(): string {
+  return "Утасны дугаараа бичнэ үү.";
 }
 
 /** Returns the question to ask for the current step. */
-export function promptForStep(step: CollectStep, state?: Pick<CollectState, "name" | "trip">): string {
+export function promptForStep(step: CollectStep): string {
   switch (step) {
     case "name":
     case "phone":
-      return state?.name
-        ? `Баярлалаа, ${state.name}! Тантай холбогдох утасны дугаараа бичнэ үү 🙌`
-        : buildBookingStartPrompt(state?.trip || "");
+      return buildBookingStartPrompt();
     case "trip":
-      return "Аль аялалд бүртгүүлэхийг хүсэж байна вэ? (аяллын нэр)";
+      return "Аль аялал вэ?";
     default:
       return "";
   }
@@ -206,7 +189,7 @@ export function advanceCollectState(
   }
   if (!state.name && looksLikePersonName(text) && !options.looksLikeTrip?.(text)) {
     const named: CollectState = { ...state, step: "phone", name: text.slice(0, 100) };
-    return { kind: "ask", state: named, prompt: promptForStep("phone", named) };
+    return { kind: "ask", state: named, prompt: promptForStep("phone") };
   }
   return { kind: "abandon" };
 }
@@ -226,17 +209,13 @@ export function buildLeadContext(state: CollectState): string {
   return lines.join("\n");
 }
 
-export function buildCompletionMessage(state: CollectState): string {
-  const greeting = state.name ? `${state.name}, баярлалаа! ` : "Баярлалаа! ";
-  const trip = state.trip ? `«${state.trip}» аяллын захиалгын хүсэлтийг хүлээн авлаа. ` : "Захиалгын хүсэлтийг хүлээн авлаа. ";
-  const call = state.phone
-    ? `Манай аяллын зөвлөх ${state.phone} дугаарт удахгүй холбогдоно 🙌`
-    : "Манай аяллын зөвлөх удахгүй тантай холбогдоно 🙌";
-  return `${greeting}${trip}${call}`;
+export function buildCompletionMessage(state?: Pick<CollectState, "trip">): string {
+  // Keep the selected identity visible to the shared grounding check.
+  return [state?.trip, "Захиалгын хүсэлтийг хүлээн авлаа."].filter(Boolean).join("\n");
 }
 
 /** Reply to "Захиалах" when this customer's booking request is already with staff. */
 export const BOOKING_ALREADY_RECEIVED_REPLY =
-  "Таны захиалгын хүсэлт манайд ирсэн байгаа 🙌 Манай аяллын зөвлөх тантай удахгүй холбогдоно. Өөр асуух зүйл байвал чөлөөтэй бичээрэй.";
+  "Захиалгын хүсэлт бүртгэгдсэн.";
 
 logInfo("booking_collect.module_loaded", {});

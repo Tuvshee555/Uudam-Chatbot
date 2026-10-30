@@ -45,8 +45,8 @@ test("isKnownGreetingPhrase is narrower than isGenericOpener (no length<=2 catch
   assert.equal(isKnownGreetingPhrase("ww"), false);
 });
 
-test("the mid-conversation greeting reply is a friendly greeting with no trip data", () => {
-  assert.match(MID_CONVERSATION_GREETING_REPLY, /Сайн байна уу/);
+test("the mid-conversation greeting reply is one short question with no trip data", () => {
+  assert.equal(MID_CONVERSATION_GREETING_REPLY, "Ямар аялал сонирхож байна?");
   assert.doesNotMatch(MID_CONVERSATION_GREETING_REPLY, /₮|\d{3,}/);
 });
 

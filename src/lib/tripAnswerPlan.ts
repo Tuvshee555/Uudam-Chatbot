@@ -33,7 +33,7 @@ const records = (value: unknown): Record<string, unknown>[] => Array.isArray(val
 const today = (now: Date) => new Date(now.getTime() + 8 * 3_600_000).toISOString().slice(0, 10);
 const TRANSPORT = { direct_flight: "Шууд нислэгтэй аялал.", land: "Газрын аялал.", land_flight: "Газар + нислэг хосолсон аялал.", cruise: "Усан онгоцны аялал." };
 
-function selectionQuestion(result: TripOfferResult, text: string): string | null {
+function selectionQuestion(result: TripOfferResult, text: string, quote?: (option: string) => string | null): string | null {
   if (result.status !== "needs_selection") return null;
   const field = result.fields[0];
   const question = field === "date" ? "Аль гарах өдрөөр аялах вэ?"
@@ -41,7 +41,28 @@ function selectionQuestion(result: TripOfferResult, text: string): string | null
       : field === "package" ? "Аль багцыг сонгох вэ?"
         : field === "passengers" ? "Хүүхэд тус бүрийн насыг хэлнэ үү."
           : "Хямдралын нөхцөл танд тохирох эсэхийг тодруулна уу.";
-  return [question, ...compactReplyOptions(result.options, text).map((option) => `• ${field === "date" ? mnDate(option) : option}`)].join("\n");
+  return [question, ...compactReplyOptions(result.options, text).map((option) => {
+    const price = result.options.includes(option) ? quote?.(option) : null;
+    return `• ${field === "date" ? mnDate(option) : option}${price ? `\n${price}` : ""}`;
+  })].join("\n");
+}
+
+/** A missing choice should help the customer compare, rather than repeat a
+ * bare menu. Unit fares never imply a total for an unselected hotel/package. */
+function selectionFareQuote(trip: TravelTrip, selection: TripSelection, result: TripOfferResult, now: Date, text: string) {
+  if (result.status !== "needs_selection" || !selection.date || !["hotel", "package"].includes(result.fields[0])) return undefined;
+  const preferences = replyPreferences(text);
+  const fareKinds = preferences.full || preferences.fareKinds.length ? preferences.fareKinds : ["adult", "child"] as const;
+  return (option: string): string | null => {
+    const card = resolveTripOfferFareCard(trip, { date: selection.date,
+      hotel: result.fields[0] === "hotel" ? option : selection.hotel,
+      packageId: result.fields[0] === "package" ? option : selection.package,
+    }, now);
+    if (card.status !== "ready" || missingRequestedFares(card, preferences.requiredFareKinds).length) return null;
+    return renderTripOfferReply(card, { fareKinds: [...fareKinds], showTotal: false })?.split("\n")
+      .filter(line => line !== mnDate(card.offer.date)
+        && line !== (result.fields[0] === "hotel" ? card.offer.hotel : card.offer.packageId)).join("\n") || null;
+  };
 }
 
 function unavailableText(result: TripOfferResult): string | null {
@@ -193,7 +214,9 @@ export function buildTripAnswerPlan(input: {
       answeredTopics: [], missingTopics: request.topics, missingFacts: [`requirement.${failed.kind}`], mediaUrls: [], brochureUrl: null,
     };
   }
-  const lines = [trip.route_name];
+  // The resolved trip is already recorded in the plan/selection. Repeating its
+  // full marketing title adds no answer to a one-fact follow-up.
+  const lines: string[] = [];
   const answered = new Set<TripTopic>();
   const offers = normalizeTripOffers(trip, now);
   const dates = [...new Set(offers.filter((offer) => offer.source !== "discount").flatMap((offer) => offer.dates))].filter((date) => date >= today(now)).sort();
@@ -234,7 +257,9 @@ export function buildTripAnswerPlan(input: {
     } else if (result.status === "ready") {
       if (request.topics.includes("price")) {
         for (const kind of missingRequestedFares(result, preferences.requiredFareKinds, intentText)) missingFact("price", kind);
-        const reply = renderTripOfferReply(result, { fareKinds: preferences.fareKinds, showTotal: wantsPartyTotal });
+        const fareKinds = preferences.full || preferences.fareKinds.length || result.offer.passengerPrices.length
+          ? preferences.fareKinds : ["adult", "child"] as const;
+        const reply = renderTripOfferReply(result, { fareKinds: [...fareKinds], showTotal: wantsPartyTotal });
         const baseHotel = !result.offer.hotel && offers.every((offer) => !offer.hotel) && trip.hotel;
         sections.price = reply ? [baseHotel ? `Буудал: ${baseHotel}` : null, reply].filter(Boolean).join("\n") : undefined;
       }
@@ -263,7 +288,8 @@ export function buildTripAnswerPlan(input: {
         answered.add("price");
         if (request.topics.includes("availability")) answered.add("availability");
       }
-      const question = selectionQuestion(result, intentText);
+      const question = selectionQuestion(result, intentText, request.topics.includes("price")
+        ? selectionFareQuote(trip, selection, result, now, intentText) : undefined);
       // A seats question with no date ("суудал байна уу") gets the fare and the bookable dates to
       // pick from; it used to get the preview dropped and nothing else, so the bot handed off.
       const availabilityOnly = !request.topics.includes("price");

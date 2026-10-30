@@ -96,9 +96,11 @@ test("the model's own 'there is no such trip / departure' is never sent: the dat
 
 test("the receipt confirmation names each document with its own ending", () => {
   const receipt = buildDocumentReceivedMessage([{ category: "payment_screenshot" }]);
-  assert.match(receipt!, /^Таны илгээсэн төлбөрийн баримтыг хүлээн авч бүртгэлээ/);
+  assert.match(receipt!, /^Төлбөрийн баримтыг хүлээн авлаа/);
+  assert.match(receipt!, /Зөвлөх шалгана/);
+  assert.doesNotMatch(receipt!, /баталгаажсан|баталгаажууллаа/);
   assert.doesNotMatch(receipt!, /-ыг/);
   const several = buildDocumentReceivedMessage([{ category: "payment_screenshot" }, { category: "passport" }, { category: "booking_code" }]);
-  assert.match(several!, /төлбөрийн баримтыг, паспортын зургийг, захиалгын кодыг хүлээн авч/);
+  assert.match(several!, /Төлбөрийн баримтыг, паспортын зургийг, захиалгын кодыг хүлээн авлаа/);
   assert.equal(buildDocumentReceivedMessage([{ category: "misc" }]), null);
 });

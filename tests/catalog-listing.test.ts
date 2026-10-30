@@ -32,7 +32,8 @@ test("category and generic lists default to three with remaining count; explicit
   for (const text of ["шууд нислэгтэй аяллууд", "аяллууд"]) {
     const result = listing(text, trips);
     assert.equal(result.listed.length, 3);
-    assert.match(result.reply, /Өөр 9 сонголт бий.*https:/);
+    assert.match(result.reply, /Өөр 9 сонголт бий/);
+    assert.doesNotMatch(result.reply, /https:/);
     assert.ok(!result.reply.includes(trips[3].route_name));
   }
   for (const text of ["бүх шууд нислэгтэй аяллууд", "full шууд нислэгтэй аяллууд", "all trips"]) {

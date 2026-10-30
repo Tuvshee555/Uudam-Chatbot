@@ -206,7 +206,7 @@ test("configured text replies share grounding and paused customers retain inboun
     await context.test("booking prompt delivery failures preserve retryable state until the reply succeeds", async () => {
       const sender = "booking-prompt-retry";
       const { getCollectState } = await import("../src/lib/bookingCollect");
-      failPartAttempts = 2;
+      failPartAttempts = 1;
       const failed = await call(sender, "Захиалах", { event: "booking-prompt-event" });
       assert.equal(failed.status, 503);
       assert.deepEqual(failed.sends, []);
@@ -239,7 +239,7 @@ test("configured text replies share grounding and paused customers retain inboun
       const { presentAssistantReply } = await import("../src/lib/chatbotReplyPolicy");
       const expected = presentAssistantReply({ reply: quickInfoReply, userText: "ВЭЛМОР АЯЛАЛ товч мэдээлэл" });
       acceptedPartBeforeFailure = 1;
-      failPartAttempts = 2;
+      failPartAttempts = 1;
       const first = await call("long-configured", "ВЭЛМОР АЯЛАЛ товч мэдээлэл", { facebook: true, event: "long-event" });
       assert.equal(first.status, 503);
       assert.equal(first.sends.length, 1, "quick send and its fallback cannot repeat the accepted first part");

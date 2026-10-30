@@ -8,13 +8,11 @@ applyTestEnv();
 let routeFastPathText: typeof import("../src/lib/fastPathRouting").routeFastPathText;
 let buildSmartButtons: typeof import("../src/lib/travelFastPaths").buildSmartButtons;
 let SMART_BUTTON_LABELS: typeof import("../src/lib/smartButtonLabels").SMART_BUTTON_LABELS;
-let CONTACT_OPERATOR_LABEL: string;
 
 before(async () => {
   ({ routeFastPathText } = await import("../src/lib/fastPathRouting"));
   ({ buildSmartButtons } = await import("../src/lib/travelFastPaths"));
   ({ SMART_BUTTON_LABELS } = await import("../src/lib/smartButtonLabels"));
-  ({ CONTACT_OPERATOR_LABEL } = await import("../src/lib/contactLabels"));
 });
 
 function trip(fields: Partial<TravelTrip>): TravelTrip {
@@ -58,17 +56,14 @@ test("a customer genuinely naming the Даркан trip still gets Даркан"
   assert.match(routed.matchText, /Даркан/);
 });
 
-test("every smart-button set offers a way to reach a human", () => {
-  // The operator option used to be appended only on the AI reply path, so
-  // fast-path answers (price, programme, dates) silently dropped it — the
-  // choice has to be visible to be a choice.
+test("complete replies stop without appending a smart-button set", () => {
   const buttons = buildSmartButtons(`✈️ ${LUMIA.route_name}`, CATALOG);
-  assert.ok(buttons, "expected buttons for a resolvable trip");
-  assert.ok(buttons!.includes(CONTACT_OPERATOR_LABEL));
+  assert.equal(buttons, null);
 });
 
-test("smart buttons still lead with the programme and booking actions", () => {
-  const buttons = buildSmartButtons(`✈️ ${LUMIA.route_name}`, CATALOG)!;
-  assert.equal(buttons[0], SMART_BUTTON_LABELS.PROGRAM);
-  assert.ok(buttons.includes(SMART_BUTTON_LABELS.BOOK));
+test("a necessary trip clarification offers only its displayed choices", () => {
+  const text = `${CATALOG.map(trip => `• ${trip.route_name}`).join("\n")}\nАль аяллыг нь сонирхож байна вэ?`;
+  const buttons = buildSmartButtons(text, CATALOG)!;
+  assert.deepEqual(buttons, CATALOG.map((trip, index) => `${index + 1}. ${trip.route_name}`));
+  assert.ok(!buttons.includes(SMART_BUTTON_LABELS.BOOK));
 });

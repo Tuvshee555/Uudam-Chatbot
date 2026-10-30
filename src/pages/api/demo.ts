@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { NextApiRequest, NextApiResponse } from "next";
-import { tripsNamedIn } from "../../lib/tripGrounding";
+import { groundedTripIds, tripsNamedIn } from "../../lib/tripGrounding";
+import { displayedClarificationTrips } from "../../lib/clarificationOptions";
 import { askOpenAI } from "../../lib/openaiProvider";
 import { askOpenAIChatParts } from "../../lib/openaiFallback";
 import {
@@ -15,14 +16,14 @@ import { isLikelyCatalogMaintenanceText } from "../../lib/customerTextClassifica
 import { isKnownGreetingPhrase, isThanksOnly, MID_CONVERSATION_GREETING_REPLY, THANKS_REPLY } from "../../lib/greetingPhrases";
 import { stripTripNamesForIntent } from "../../lib/customerTurn";
 import { buildCatalogListingReply } from "../../lib/catalogListing";
-import { setClarificationState } from "../../lib/clarificationState";
+import { getClarificationState, setClarificationState } from "../../lib/clarificationState";
 import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
 import { hasUnsupportedOriginRequest, routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
 import { decideTripAnswer } from "../../lib/tripAnswerDecision";
-import { setTripSelection } from "../../lib/tripSelectionState";
+import { getTripSelection, setTripSelection } from "../../lib/tripSelectionState";
 import { verifyTripReply } from "../../lib/tripReplyVerification";
 import { presentAssistantReply } from "../../lib/chatbotReplyPolicy";
 import { recordReplyPresentation } from "../../lib/chatbotReplyTelemetry";
@@ -241,6 +242,9 @@ export default async function handler(
         return sendJson(body);
       };
       const history = await getHistory(sessionId);
+      const [groundingSelection, groundingClarification] = await Promise.all([
+        getTripSelection(sessionId), getClarificationState(sessionId),
+      ]);
       const detectedPhone = extractPhoneNumber(normalizedText);
       const phoneCollected =
         Boolean(detectedPhone) ||
@@ -279,10 +283,8 @@ export default async function handler(
       // instead of sending the bare number through trip matching.
       if (detectedPhone && isPhoneOnlyMessage(normalizedText)) {
         const confirmation = isEnglishDemo
-          ? `Thank you! 🙌 Our travel consultant will contact you at ${detectedPhone} shortly. ` +
-            "Feel free to ask anything else 😊"
-          : `Баярлалаа! 🙌 Манай аяллын зөвлөх таны ${detectedPhone} дугаарт удахгүй холбогдоно. ` +
-            "Өөр асуух зүйл байвал чөлөөтэй бичээрэй 😊";
+          ? "Phone received."
+          : "Дугаарыг хүлээн авлаа.";
         await appendMessage(sessionId, "user", normalizedText);
         await appendMessage(sessionId, "assistant", confirmation);
         await rememberTurn();
@@ -302,7 +304,7 @@ export default async function handler(
       // stale trip. Mirrors the production webhook's mid-conversation greeting.
       if (isKnownGreetingPhrase(normalizedText)) {
         const greetingReply = isEnglishDemo
-          ? "Hello! 😊 Ask me anything about our tours — prices, departure dates, seats, meals or itineraries."
+          ? "Which trip?"
           : MID_CONVERSATION_GREETING_REPLY;
         await appendMessage(sessionId, "user", normalizedText);
         await appendMessage(sessionId, "assistant", greetingReply);
@@ -496,10 +498,16 @@ export default async function handler(
           const decision = decideTripAnswer(plan, { userText: normalizedText,
             hasPriorReply: history.some((message) => message.role === "assistant"), phoneAlreadyRequested });
           const reply = decision.reply;
+          // A short answer may omit the trip name; validate its hidden identity
+          // against customer evidence captured before the router selected it.
+          const allowed = groundedTripIds({ customerText: normalizedText, history,
+            selectionTripId: groundingSelection?.tripId,
+            pendingTripIds: groundingClarification?.candidateTripIds,
+            trips: await getTrips() });
           currentSelection = plan.selection;
           await appendMessage(sessionId, "user", normalizedText);
           recordCounter("demo.answer_plan_total", 1, { status: decision.outcome });
-          if (decision.outcome === "handoff") return returnHandoff();
+          if (decision.outcome === "handoff" || !allowed.has(plan.tripId)) return returnHandoff();
           await setTripSelection(sessionId, plan.selection);
           const media = buildDemoMedia({ reply, userText: normalizedText, trips: factualScope || [], explicitMediaUrls: plan.mediaUrls, brochureUrl: plan.brochureUrl });
           await appendConversationMessage(sessionId, "assistant", reply, imageAttachments(media.mediaUrls));
@@ -507,7 +515,7 @@ export default async function handler(
           if (plan.missingTopics.length) recordCounter("demo.answer_plan_missing_topics_total", plan.missingTopics.length, {});
           recordReplyPresentation({ reply, userText: normalizedText, path: "demo", latencyMs: Date.now() - trace.startedAtMs });
           res.status(200);
-          return sendJson({ reply, buttons: decision.outcome === "clarify" ? [] : buildSmartButtons(reply, factualScope || []) || [], ...media });
+          return sendJson({ reply, buttons: [], ...media });
         }
       }
       if (hasCompareIntent(intentText)) {
@@ -545,6 +553,8 @@ export default async function handler(
           const clarifyReply = enforceWebsiteForPayment(
             sanitizeAssistantReply(clarifyBody),
           );
+          const displayed = displayedClarificationTrips(clarifyReply, routed.scopedClarify);
+          if (!routed.informationalAlternatives) await setClarificationState(sessionId, displayed.map(trip => trip.id));
           await appendMessage(sessionId, "user", normalizedText);
           if (shouldHandoffSilently(clarifyReply)) return returnHandoff();
           await appendMessage(sessionId, "assistant", clarifyReply);
@@ -554,7 +564,7 @@ export default async function handler(
             reply: clarifyReply,
             buttons: routed.informationalAlternatives
               ? undefined
-              : buildClarificationButtons(routed.scopedClarify),
+              : buildClarificationButtons(displayed),
           });
         }
         if (routed.notInCatalog) {
@@ -641,11 +651,12 @@ export default async function handler(
           ) {
             // Mirrors the webhook fix: remember exactly the list shown, so a
             // numbered/named answer on the next turn resolves against it.
-            await setClarificationState(sessionId, resolution.candidates.map((trip) => trip.id));
             const totalReply = buildAmbiguousPassengerTotalReply(fastPathText, resolution.candidates);
             const clarifyReply = enforceWebsiteForPayment(
               sanitizeAssistantReply(totalReply || buildAmbiguousTripReply(resolution.candidates, undefined, { customerText: normalizedText })),
             );
+            const displayed = displayedClarificationTrips(clarifyReply, resolution.candidates);
+            await setClarificationState(sessionId, displayed.map(trip => trip.id));
             await appendMessage(sessionId, "user", normalizedText);
             if (shouldHandoffSilently(clarifyReply)) return returnHandoff();
             await appendMessage(sessionId, "assistant", clarifyReply);
@@ -653,7 +664,7 @@ export default async function handler(
             recordCounter("demo.structured_clarify_total", 1, {});
             return res.status(200).json({
               reply: clarifyReply,
-              buttons: buildClarificationButtons(resolution.candidates),
+              buttons: buildClarificationButtons(displayed),
             });
           }
           if (
@@ -875,11 +886,11 @@ export default async function handler(
               })
             : null;
           if (programResolution?.status === "ambiguous") {
-            await setClarificationState(sessionId, programResolution.candidates.map((trip) => trip.id));
+            await setClarificationState(sessionId, displayedClarificationTrips(safeReply, programResolution.candidates).map((trip) => trip.id));
           }
           const buttons =
             programResolution?.status === "ambiguous"
-              ? buildClarificationButtons(programResolution.candidates)
+              ? buildClarificationButtons(displayedClarificationTrips(safeReply, programResolution.candidates))
               : buildSmartButtons(safeReply, trips) || [];
           return res.status(200).json({ reply: safeReply, buttons, ...media });
         }
@@ -930,13 +941,13 @@ export default async function handler(
               })
             : null;
           if (structuredResolution?.status === "ambiguous") {
-            await setClarificationState(sessionId, structuredResolution.candidates.map((trip) => trip.id));
+            await setClarificationState(sessionId, displayedClarificationTrips(safeReply, structuredResolution.candidates).map((trip) => trip.id));
           }
           return res.status(200).json({
             reply: safeReply,
             buttons: structuredReply.includes(AMBIGUOUS_REPLY_MARKER)
               ? structuredResolution?.status === "ambiguous"
-                ? buildClarificationButtons(structuredResolution.candidates)
+                ? buildClarificationButtons(displayedClarificationTrips(safeReply, structuredResolution.candidates))
                 : []
               : buildSmartButtons(safeReply, trips) || [],
             ...media,

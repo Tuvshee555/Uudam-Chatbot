@@ -61,7 +61,7 @@ export function isBareBookingRequest(text: string): boolean {
 }
 
 /**
- * "Захиалах" / "zahialga hiie": start collecting name + phone, pre-filling the
+ * "Захиалах" / "zahialga hiie": ask for the phone, pre-filling the
  * trip the customer was looking at. Returns true when a reply was sent.
  */
 export async function startBookingCollect(ctx: BookingCollectContext): Promise<boolean> {
@@ -83,7 +83,7 @@ export async function startBookingCollect(ctx: BookingCollectContext): Promise<b
   const trip = verifiedTripName(ctx.text, trips) || verifiedTripName(ctx.contextualUserText, trips);
   const state = startCollectState(ctx.text, trip);
   await setCollectState(ctx.senderId, state);
-  const prompt = promptForStep(state.step, state);
+  const prompt = promptForStep(state.step);
   await appendMessage(ctx.senderId, "user", ctx.text).catch(() => {});
   if ((await ctx.send(prompt, "booking_collect_start")) === false) {
     await clearCollectState(ctx.senderId);
@@ -135,8 +135,7 @@ export async function continueBookingCollect(ctx: BookingCollectContext): Promis
     context: buildLeadContext(done),
   });
   await setCollectState(ctx.senderId, done);
-  // The ONLY place a chat message becomes the stored customer name: a
-  // validated answer to "нэрээ бичнэ үү".
+  // Only keep a validated, voluntarily supplied name.
   if (done.name.trim()) await dbStoreSenderName(ctx.senderId, done.name.trim()).catch(() => {});
   if (created) {
     await notifyStaffOfLead(

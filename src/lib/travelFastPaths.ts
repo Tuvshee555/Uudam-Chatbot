@@ -16,9 +16,10 @@ import { websiteTripLinksInText } from "./bookingWebsite";
 import { departureAvailability, departureIsClosed } from "./departureAvailability";
 import { buildHotelReply } from "./tripHotelReply";
 import { buildPlaceDaysReply } from "./tripPlaceDaysReply";
-import { buildFareSection, onSaleDepartureText, onSaleLowDates, shortDate, tripsAtPrice, upcomingDepartures } from "./tripFareBlock";
+import { buildFareSection, dateIsOnSale, onSaleDepartureText, onSaleLowDates, shortDate, tripsAtPrice, upcomingDepartures } from "./tripFareBlock";
 import { buildTripRequest } from "./tripRequest";
-import { resolveTripOffer, type OfferFare, type ResolvedTripOffer } from "./tripOffers";
+import { renderTripOfferReply, resolveTripOffer, type OfferFare, type ResolvedTripOffer } from "./tripOffers";
+import { compactReplyOptions, replyPreferences } from "./chatbotReplyPolicy";
 import {
   buildDepartureDateAvailabilityReply,
   filterFutureDepartureDates,
@@ -64,10 +65,9 @@ import {
 import { buildTripProgramReply } from "./travelFastPathsProgram";
 import { phoneticTokenMatches } from "./travelTextNorm";
 import { CUSTOMER_TURN_MARK, customerTurn, intentTextOf, joinContextAndTurn } from "./customerTurn";
-import { CONTACT_OPERATOR_LABEL } from "./contactLabels";
-import { SMART_BUTTON_LABELS } from "./smartButtonLabels";
 import { TRIP_MEDIA_UNAVAILABLE_SILENT } from "./reply";
 import {
+  AMBIGUOUS_REPLY_MARKER,
   buildAmbiguousTripReply,
   adultFareOnDate,
   formatStructuredDayPrice,
@@ -249,14 +249,13 @@ export function buildAmbiguousPassengerTotalReply(
   const counts = parsePassengerTotalRequest(text);
   if (!counts || trips.length < 2) return null;
   const lines = trips
-    .slice(0, 8)
+    .slice(0, replyPreferences(text).full ? 8 : 3)
     .map((trip) => formatPassengerTotalLine(trip, text, counts, now));
   if (lines.length < 2 || lines.some(line => !line)) return null;
   return [
-    "Энэ чиглэлээр хэд хэдэн хувилбар байгаа тул нийт үнийг тус бүрээр нь бодож өгье:",
     ...lines,
-    "",
-    "Аль аяллынх нь зөв болохыг сонгоорой.",
+    ...(trips.length > lines.length ? [`Өөр ${trips.length - lines.length} сонголт бий.`] : []),
+    "Аль аялал вэ?",
   ].join("\n");
 }
 
@@ -295,17 +294,9 @@ export function hasPriceObjectionIntent(text: string): boolean {
 
 export function buildPriceObjectionReply(text: string): string | null {
   if (!hasPriceObjectionIntent(text)) return null;
-  const normalized = normText(text);
-  const alreadyGavePartySize =
-    /\d+\s*(?:том|adult|хүн|hun|хүүхэд|huuhed|нярай|infant)|\b\d+\s*(?:pax|people)\b/i.test(
-      normalized,
-    );
-  return [
-    "Тийм ээ, ойлгож байна. Үнэ өндөр санагдаж болно.",
-    alreadyGavePartySize
-      ? "Яг аль аяллыг сонирхож байна, ойролцоогоор ямар төсөв барьж байгаа вэ? Тэрэнд нь ойр аяллын хувилбар байвал шүүж өгье."
-      : "Та ойролцоогоор хэдэн төгрөгийн төсөвтэй, хэдүүлээ явах вэ? Тэрэнд нь ойр аяллын хувилбар байвал шүүж өгье.",
-  ].join("\n");
+  return /\d[\d,. ]*\s*(?:₮|төгрөг|сая|мянга)|төсөв.{0,20}\d/iu.test(text)
+    ? "Ойлголоо."
+    : "Төсөв хэд вэ?";
 }
 
 export function buildDiscountReply(
@@ -439,8 +430,47 @@ function getSeatSalesMessage(trip: TravelTrip): string | null {
   return null;
 }
 
-function buildTripInfoReply(rawTrip: TravelTrip, now = new Date()) {
+function buildTripInfoReply(rawTrip: TravelTrip, now = new Date(), intentText = "") {
   const trip = withFutureDepartureDates(rawTrip, now);
+  if (!replyPreferences(intentText).full) {
+    const lines = [formatRouteName(trip.route_name)];
+    if (hasSeatsIntent(intentText) && rawTrip.seats_left === 0) return `${lines[0]}\nСуудал дүүрсэн.`;
+    let offer = resolveTripOffer(rawTrip, {}, now);
+    if (offer.status === "needs_selection" && offer.fields[0] === "date") {
+      const dates = offer.options.filter((date) => dateIsOnSale(rawTrip, date, now));
+      if (dates.length === 1) offer = resolveTripOffer(rawTrip, { date: dates[0] }, now);
+      else if (dates.length > 1) offer = { ...offer, options: dates };
+      else return "REFER";
+    }
+    if (offer.status === "needs_selection") {
+      const field = offer.fields[0];
+      const question = field === "date" ? "Аль гарах өдрөөр аялах вэ?"
+        : field === "hotel" ? "Аль буудлын хувилбарыг сонгох вэ?"
+          : field === "package" ? "Аль багцыг сонгох вэ?" : null;
+      if (question) {
+        const low = hasSeatsIntent(intentText) ? new Set(onSaleLowDates(rawTrip, now)) : new Set<string>();
+        lines.push(question, ...compactReplyOptions(offer.options, intentText).map((option) => {
+          const date = field === "date" && /^\d{4}-\d{2}-\d{2}$/.test(option);
+          return `• ${date ? shortDate(option, now) + (low.has(option) ? " (цөөн суудал)" : "") : option}`;
+        }));
+        return lines.join("\n");
+      }
+    }
+    if (offer.status === "ready") {
+      const fare = renderTripOfferReply(offer, { fareKinds: ["adult", "child"] });
+      if (fare) {
+        if (offer.offer.packageId && !fare.includes(offer.offer.packageId)) lines.push(offer.offer.packageId);
+        lines.push(fare);
+        const fees = formatExtraFeesLine(rawTrip);
+        if (fees) lines.push(fees);
+      }
+    } else {
+      const duration = safeDurationText(trip.duration_text);
+      if (duration) lines.push(duration);
+      else return "REFER";
+    }
+    return lines.join("\n");
+  }
   const lines = [`✈️ ${formatRouteName(trip.route_name)}`, ""];
 
   const infoDuration = safeDurationText(trip.duration_text);
@@ -491,6 +521,7 @@ function buildTripInfoReply(rawTrip: TravelTrip, now = new Date()) {
 export function buildSeatsReply(text: string, trips: TravelTrip[], now = new Date()): string | null {
   const departureReply = buildDepartureUnavailableReply(text, trips);
   if (departureReply) return departureReply;
+  if (hasPriceIntent(intentTextOf(text, trips))) return buildStructuredTripReply(text, trips, now);
   const { best, ambiguous } = findBestTripMatch(text, trips);
   if (!best) {
     const soldOut = buildSoldOutTripReply(text, trips);
@@ -503,7 +534,7 @@ export function buildSeatsReply(text: string, trips: TravelTrip[], now = new Dat
     return null;
   }
 
-  return buildTripInfoReply(best);
+  return buildTripInfoReply(best, now, intentTextOf(text, trips));
 }
 
 const COMPARE_KEYWORDS_MN = [
@@ -855,19 +886,9 @@ export function buildClarificationButtons(trips: TravelTrip[]): string[] {
 export { SMART_BUTTON_LABELS, SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
 
 export function buildSmartButtons(replyText: string, trips: TravelTrip[]): string[] | null {
-  const { best } = findBestTripMatch(replyText, trips);
-  if (!best) return null;
-
-  const buttons: string[] = [SMART_BUTTON_LABELS.PROGRAM];
-  if (Array.isArray(best.photo_urls) && best.photo_urls.length > 0) {
-    buttons.push(SMART_BUTTON_LABELS.PHOTOS);
-  }
-  buttons.push(SMART_BUTTON_LABELS.BOOK);
-  if (best.seats_left !== null) buttons.push(SMART_BUTTON_LABELS.SEATS);
-  // Always offer a human. A customer who cannot see the option assumes it
-  // does not exist; the choice being visible is most of its value.
-  buttons.push(CONTACT_OPERATOR_LABEL);
-  return buttons;
+  if (!replyText.includes(AMBIGUOUS_REPLY_MARKER)) return null;
+  const listed = trips.filter((trip) => replyText.includes(trip.route_name));
+  return listed.length > 1 ? buildClarificationButtons(listed) : null;
 }
 
 /**
@@ -1516,13 +1537,16 @@ export function buildStructuredTripReply(
     if (routeOnlyHotel) return routeOnlyHotel;
     const placeDays = buildPlaceDaysReply(routeOnlyCandidate.best, customerTurn(text));
     if (placeDays) return placeDays;
+    if (hasCompareIntent(intentText) && /тийз|ticket/i.test(intentText)) {
+      return `${routeOnlyCandidate.best.route_name}\n${formatTripBasePricePremium(routeOnlyCandidate.best, now)}`;
+    }
     // The trip came only from context and the customer's own words neither name
     // a trip nor ask anything this card answers ("За ойлголоо", "Гэрээ болж
     // байна уу?", "<хот> орохгүй юм биш үү?"). Re-sending the card is not an
     // answer: one customer got the same card three times while asking for the
     // bank account. Leave it to the paths that read the whole conversation.
     if (text.includes(CUSTOMER_TURN_MARK) && !namesTripItself(customerTurn(text), trips)) return null;
-    return buildTripInfoReply(routeOnlyCandidate.best, now);
+    return buildTripInfoReply(routeOnlyCandidate.best, now, intentText);
   }
 
   const matchedTrip = findBestTripMatch(text, trips);
@@ -1664,7 +1688,7 @@ export function buildStructuredTripReply(
     return "REFER";
   }
   if (!askedPrice && !askedDuration && !askedSchedule && !askedDirectFlight && !askedExistence) {
-    return buildTripInfoReply(best);
+    return buildTripInfoReply(best, now, intentText);
   }
   // Scoped to the current line only (see comment on `currentLine` above): a
   // bare "N-M" pattern like an age range "(2-10 нас)" surviving from a stale

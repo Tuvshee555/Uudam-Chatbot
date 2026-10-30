@@ -38,7 +38,7 @@ test("the webhook carries official website identity through grounded price and p
   env.resetEnvCacheForTests();
   const webhook = await import("../src/pages/api/webhook");
   const { closeNeonPool } = await import("../src/lib/neonDb");
-  const { setTripSelection } = await import("../src/lib/tripSelectionState");
+  const { getTripSelection, setTripSelection } = await import("../src/lib/tripSelectionState");
   const page = `${BOOKING_WEBSITE_URL}/trips/trip-0123456789abcdef0123`;
   try {
     for (const [index, text] of [`${page}?date=2098-03-10 үнэ хэд вэ`, `${page} хөтөлбөр`, `${BOOKING_WEBSITE_URL}/trips/velmor-old-page үнэ хэд вэ`].entries()) {
@@ -58,7 +58,7 @@ test("the webhook carries official website identity through grounded price and p
       assert.equal(status, 200);
       if (index === 0) {
         assert.equal(sends.length, 1);
-        assert.match(sends[0], /ВЭЛМОР АЯЛАЛ/);
+        assert.equal((await getTripSelection(senderId))?.tripId, "web-a");
         assert.match(sends[0], /1,700,000/);
       } else if (index === 1) {
         assert.equal(sends.length, 1);

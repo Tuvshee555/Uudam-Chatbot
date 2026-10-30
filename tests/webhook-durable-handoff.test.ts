@@ -16,7 +16,7 @@ test("the webhook retries unavailable grounding and handoff persistence before c
   const messages: Array<{ senderId: string; role: string; text: string }> = [];
   const query = async (sql: string, params: unknown[] = []) => {
     if (/SELECT[\s\S]*FROM travel_trip_entries/i.test(sql)) {
-      if (failGrounding && /findUngroundedTrip/.test(new Error().stack || "")) {
+      if (failGrounding && /getGroundingTrips/.test(new Error().stack || "")) {
         groundingReadFailed = true;
         throw new Error("fixture grounding catalog unavailable");
       }
@@ -109,7 +109,7 @@ test("the webhook retries unavailable grounding and handoff persistence before c
     });
     await context.test("a question containing a phone number pauses only after its answer is accepted", async () => {
       reset();
-      failedSends = 2;
+      failedSends = 1;
       const text = "Вэлмор аялал үнэ хэд вэ 99110000";
       assert.equal(await call("phone-question-send-failure", text), 503);
       assert.ok(leads.has("phone-question-send-failure"));

@@ -24,8 +24,8 @@ test("signed webhook conversation gate: catalog facts beat model guesses across 
     check(result.sends.length === 1, "knownAnswerMissing", "one complete grounded answer is required when fixture facts cover the request");
     return result.sends[0].text;
   };
-  const quote = (reply: string, trip: FixtureTrip, others: FixtureTrip[]) => {
-    const rightTrip = reply.includes(trip.route_name) && !others.some(other => reply.includes(other.route_name));
+  const quote = (reply: string, trip: FixtureTrip, others: FixtureTrip[], selectedTripId: string | undefined) => {
+    const rightTrip = selectedTripId === trip.id && !others.some(other => reply.includes(other.route_name));
     const rightPrice = reply.includes(trip.adult_price!.toLocaleString("en-US")) && !others.some(other => reply.includes(other.adult_price!.toLocaleString("en-US")));
     if (!rightTrip) metrics.wrongTrip++;
     if (!rightPrice) metrics.wrongPrice++;
@@ -43,7 +43,7 @@ test("signed webhook conversation gate: catalog facts beat model guesses across 
         const result = await harness.turn(sender("identity"), `${first.route_name} үнэ хэд вэ`, { tripId: other.id, place: other.route_name });
         assert.equal(result.status, 200); expectedReply(result);
         assert.ok(result.modelCalls > 0, "the adversarial model boundary must actually execute");
-        quote(result.sends[0].text, first, [sibling, other]);
+        quote(result.sends[0].text, first, [sibling, other], result.selection?.tripId);
       });
       await context.test(`catalog ${variant}: current name replaces stale selection and follow-up keeps it`, async () => {
         metrics.conversations++;
@@ -53,7 +53,7 @@ test("signed webhook conversation gate: catalog facts beat model guesses across 
           const text = index === 2 ? "үнэ нь хэд вэ" : `${trip.route_name} үнэ хэд вэ`;
           const result = await harness.turn(id, text, { tripId: hostile.id, place: text.includes(trip.route_name) ? hostile.route_name : null });
           assert.equal(result.status, 200); expectedReply(result);
-          quote(result.sends[0].text, trip, trips.filter(candidate => candidate !== trip));
+          quote(result.sends[0].text, trip, trips.filter(candidate => candidate !== trip), result.selection?.tripId);
           assert.equal(result.selection?.tripId, trip.id);
         }
         assert.equal(harness.history.filter(row => row.sender_id === id && row.role === "user").length, 3, "all real inbound turns survive across handler invocations");
@@ -79,7 +79,7 @@ test("signed webhook conversation gate: catalog facts beat model guesses across 
         metrics.conversations++; metrics.turns += 2;
         const id = sender("model-list");
         const known = await harness.turn(id, `${first.route_name} үнэ хэд вэ`, { tripId: first.id, place: first.route_name });
-        quote(expectedReply(known), first, [sibling, other]);
+        quote(expectedReply(known), first, [sibling, other], known.selection?.tripId);
         const result = await harness.turn(id, "Энгийнээр тайлбарлаад өгөөч", { tripId: first.id,
           place: null, topics: [], finalReply: `• ${first.route_name}\n• ${other.route_name}` });
         assert.equal(result.status, 200);
@@ -98,14 +98,14 @@ test("signed webhook conversation gate: catalog facts beat model guesses across 
         metrics.turns++;
         const chosen = await harness.turn(id, "2", { tripId: other.id, place: other.route_name });
         assert.equal(chosen.status, 200); expectedReply(chosen);
-        quote(chosen.sends[0].text, ordered[1], trips.filter(trip => trip !== ordered[1]));
+        quote(chosen.sends[0].text, ordered[1], trips.filter(trip => trip !== ordered[1]), chosen.selection?.tripId);
       });
       await context.test(`catalog ${variant}: a fabricated model date cannot replace the written date`, async () => {
         metrics.conversations++; metrics.turns++;
         const writtenDate = first.departure_dates[0];
         const result = await harness.turn(sender("date"), `${first.route_name} ${writtenDate} үнэ хэд вэ`, { tripId: first.id, place: first.route_name, date: sibling.departure_dates[0] });
         assert.equal(result.status, 200); expectedReply(result);
-        quote(result.sends[0].text, first, [sibling, other]);
+        quote(result.sends[0].text, first, [sibling, other], result.selection?.tripId);
         check(result.selection?.date === writtenDate, "wrongDate", "selected date follows explicit current evidence");
         const words = (date: string) => { const [, month, day] = date.split("-"); return `${Number(month)} сарын ${Number(day)}`; };
         check(result.sends[0].text.includes(words(writtenDate)) && !result.sends[0].text.includes(words(sibling.departure_dates[0])),
@@ -116,7 +116,7 @@ test("signed webhook conversation gate: catalog facts beat model guesses across 
         const result = await harness.turn(sender("offer"), `${first.route_name} үнэ хэд вэ`, { tripId: first.id, place: first.route_name,
           hotel: sibling.hotel!, date: first.departure_dates[0], passengers: [{ kind: "adult", count: 9 }, { kind: "child", count: 7, age: 5 }] });
         assert.equal(result.status, 200); expectedReply(result);
-        quote(result.sends[0].text, first, [sibling, other]);
+        quote(result.sends[0].text, first, [sibling, other], result.selection?.tripId);
         assert.deepEqual(result.selection?.passengers, [], "invented party must not persist into follow-up totals");
         assert.notEqual(result.selection?.hotel, sibling.hotel, "unspoken hotel cannot replace the offer");
         check(result.selection?.date === null, "wrongDate", "a model-only departure date cannot persist as a customer choice");
@@ -127,7 +127,7 @@ test("signed webhook conversation gate: catalog facts beat model guesses across 
           tripId: first.id, place: first.route_name, hotel: sibling.hotel!, passengers: [{ kind: "adult", count: 9 }],
         });
         assert.equal(result.status, 200); expectedReply(result);
-        quote(result.sends[0].text, first, [sibling, other]);
+        quote(result.sends[0].text, first, [sibling, other], result.selection?.tripId);
         assert.equal(result.selection?.hotel, first.hotel);
         assert.deepEqual(result.selection?.passengers.map(passenger => ({ kind: passenger.kind, count: passenger.count,
           age: passenger.age ?? null, ageUnit: passenger.ageUnit || "year" })), [
@@ -149,7 +149,7 @@ test("signed webhook conversation gate: catalog facts beat model guesses across 
           tripId: first.id, place: first.route_name, topics: ["price", "duration", "includes"],
         });
         assert.equal(result.status, 200); expectedReply(result);
-        quote(result.sends[0].text, first, [sibling, other]);
+        quote(result.sends[0].text, first, [sibling, other], result.selection?.tripId);
         assert.match(result.sends[0].text, /8\s*(?:өдөр|хоног)/);
         assert.match(result.sends[0].text, /Өглөөний цай/);
         assert.equal(result.leads.length, 0, "complete known facts do not create a no-data handoff");

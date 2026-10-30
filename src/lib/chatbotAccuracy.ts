@@ -13,6 +13,8 @@ export type AccuracyCheck = {
   anyOf?: string[];
   noneOf?: string[];
   action?: AccuracyAction;
+  /** Exact trip identities selected by the application, independent of prose. */
+  tripIds?: string[];
 };
 export type AccuracyCase = {
   id: string;
@@ -30,6 +32,7 @@ export type AccuracyObservation = {
   status: "ok" | "provider_failure" | "harness_failure";
   reply: string;
   action: AccuracyAction;
+  tripIds?: string[];
 };
 export type AccuracyReplay = {
   schemaVersion: 1;
@@ -126,12 +129,14 @@ export function parseAccuracyDataset(value: unknown): AccuracyDataset {
       for (const check of Object.values(checks)) {
         if (check === null) continue;
         const rule = object(check);
-        fields(rule, ["allOf", "anyOf", "noneOf", "action"]);
+        fields(rule, ["allOf", "anyOf", "noneOf", "action", "tripIds"]);
         requireCondition(Object.keys(rule).length > 0, "Empty accuracy check");
         for (const key of ["allOf", "anyOf", "noneOf"]) {
           if (rule[key] !== undefined) requireCondition(Array.isArray(rule[key]) && rule[key].length > 0 && rule[key].every(nonempty), "Check markers must be nonempty string arrays");
         }
         if (rule.action !== undefined) requireCondition(member(rule.action, actions), "Unknown check action");
+        if (rule.tripIds !== undefined) requireCondition(Array.isArray(rule.tripIds) && rule.tripIds.length > 0
+          && rule.tripIds.every(nonempty) && new Set(rule.tripIds).size === rule.tripIds.length, "Expected distinct trip identity checks");
       }
     }
   }
@@ -157,11 +162,13 @@ export function parseAccuracyReplay(value: unknown): AccuracyReplay {
   const ids = new Set<string>();
   for (const raw of replay.observations) {
     const row = object(raw);
-    fields(row, ["id", "status", "reply", "action"]);
+    fields(row, ["id", "status", "reply", "action", "tripIds"]);
     requireCondition(nonempty(row.id) && !ids.has(row.id), "Missing or duplicate observation identifier");
     ids.add(row.id);
     requireCondition(member(row.status, ["ok", "provider_failure", "harness_failure"]), "Unknown observation status");
     requireCondition(typeof row.reply === "string" && member(row.action, actions), "Expected reply text and action");
+    if (row.tripIds !== undefined) requireCondition(Array.isArray(row.tripIds) && row.tripIds.every(nonempty)
+      && new Set(row.tripIds).size === row.tripIds.length, "Expected distinct observed trip identities");
     if (row.status === "ok") requireCondition((row.action === "silent") === !row.reply.trim(), "Silent action must match empty reply");
   }
   return value as AccuracyReplay;
@@ -193,7 +200,8 @@ function matches(rule: AccuracyCheck, observation: AccuracyObservation): boolean
   return (!rule.allOf || rule.allOf.every(has)) &&
     (!rule.anyOf || rule.anyOf.some(has)) &&
     (!rule.noneOf || !rule.noneOf.some(has)) &&
-    (!rule.action || observation.action === rule.action);
+    (!rule.action || observation.action === rule.action) &&
+    (!rule.tripIds || (observation.tripIds?.length === rule.tripIds.length && rule.tripIds.every(id => observation.tripIds!.includes(id))));
 }
 function rate(numerator: number, denominator: number): number | null {
   return denominator ? numerator / denominator : null;

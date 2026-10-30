@@ -28,9 +28,9 @@ const pricedPerDate = trip("A", { extra: {
 } });
 
 test("a 'which trip?' line quotes the listed departure's own fare, not the trip's base price", () => {
-  const reply = buildAmbiguousTripReply([pricedPerDate, trip("B")]);
+  const reply = buildAmbiguousTripReply([pricedPerDate, trip("B")], undefined, { customerText: "үнэ" });
   const line = reply.split("\n").find((entry) => entry.includes("Туршилтын аялал A"))!;
-  assert.match(line, /том хүн 1,100,000₮ · хүүхэд 900,000₮/);
+  assert.match(line, /том хүн.*1,100,000₮ · хүүхэд.*900,000₮/);
   assert.match(line, new RegExp(`гарах: ${customerDate(soon)}$`));
   assert.doesNotMatch(line, /1,000,000₮/);
 });
@@ -41,7 +41,7 @@ test("the reply verifier lets that question through instead of silencing the cus
 });
 
 test("departures selling at the same fare are listed together", () => {
-  const line = buildAmbiguousTripReply([trip("B")]).split("\n")[1];
+  const line = buildAmbiguousTripReply([trip("B")], undefined, { customerText: "бүх гарах өдөр" }).split("\n")[1];
   assert.match(line, new RegExp(`гарах: ${customerDate(soon)}, ${customerDate(later)}, ${customerDate(latest)}$`));
 });
 

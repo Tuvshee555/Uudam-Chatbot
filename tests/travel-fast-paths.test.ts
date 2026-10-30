@@ -48,10 +48,11 @@ test("shared city-only trip resolver returns ambiguous instead of guessing", () 
   );
 });
 
-test("appendLeadCaptureCta adds the phone ask to a normal fast-path answer", () => {
-  const out = appendLeadCaptureCta("✈️ Вэлмор аялал\n💰 Том хүн: 1,210,000₮", false);
+test("appendLeadCaptureCta leaves a completed answer without a phone ask", () => {
+  const answer = "✈️ Вэлмор аялал\n💰 Том хүн: 1,210,000₮";
+  const out = appendLeadCaptureCta(answer, false);
   assert.match(out, /1,210,000₮/);
-  assert.ok(out.endsWith(LEAD_CAPTURE_CTA));
+  assert.equal(out, answer);
 });
 
 test("appendLeadCaptureCta skips when phone already collected", () => {
@@ -59,7 +60,7 @@ test("appendLeadCaptureCta skips when phone already collected", () => {
   assert.equal(appendLeadCaptureCta(reply, true), reply);
 });
 
-test("smart buttons offer useful next taps for a matched trip with photos", () => {
+test("a completed answer does not append an unsolicited action menu", () => {
   const buttons = buildSmartButtons(
     "✈️ Кардан сэрвэн тэнгисийн эрэг + Вэлмор газар нислэг хосолсон аялал\n💰 Том хүн: 1,270,000₮",
     [
@@ -71,14 +72,7 @@ test("smart buttons offer useful next taps for a matched trip with photos", () =
     ],
   );
 
-  // "Зөвлөхтэй холбогдох" rides along on every set: reaching a human has to
-  // be a visible choice, not one the customer has to know to ask for.
-  assert.deepEqual(buttons, [
-    "Хөтөлбөр үзэх",
-    "Зураг үзэх",
-    "Захиалах",
-    "Зөвлөхтэй холбогдох",
-  ]);
+  assert.equal(buttons, null);
 });
 
 test("clarification buttons are numbered and messenger-sized", () => {
@@ -694,7 +688,7 @@ test("month-specific child price only returns that month and passenger type", ()
   assert.doesNotMatch(reply || "", /Том хүн|Нярай/);
 });
 
-test("route-only query uses spaced premium formatting", () => {
+test("route-only query asks one selection instead of sending every dated fare", () => {
   const reply = buildStructuredTripReply(
     "Вэлмор Кардэн газар нислэг хосолсон аялал",
     [
@@ -730,16 +724,12 @@ test("route-only query uses spaced premium formatting", () => {
     NOW,
   );
 
-  assert.match(reply || "", /\n\n🗓 Хугацаа:/);
-  assert.match(reply || "", /\n\n💰 Үнэ:/);
-  assert.match(reply || "", /• Том хүн:/);
-  assert.match(reply || "", /• Хүүхэд/);
-  assert.match(reply || "", /\n\n📅 Гарах өдрүүд:\n/);
+  assert.doesNotMatch(reply || "", /Үнэ:|Том хүн:|Хүүхэд|🗓|💰|undefined/);
   // 6/20 is before NOW (2026-06-24) so it is filtered out as a past departure;
   // the schedule line starts at the first future date, 6/27.
-  assert.match(reply || "", /6\/27, 7\/9/);
+  assert.match(reply || "", /• 6\/27\n• 7\/9/);
   assert.doesNotMatch(reply || "", /6\/20/);
-  assert.match(reply || "", /Та аль гарах өдрийг сонирхож байна вэ/);
+  assert.match(reply || "", /Аль гарах өдрөөр аялах вэ/);
   assert.doesNotMatch(reply || "", /\|/);
 });
 
@@ -1662,24 +1652,25 @@ test("ambiguous passenger total question shows totals for each possible trip", (
 
   assert.match(reply || "", /3,520,000₮/);
   assert.match(reply || "", /3,740,000₮/);
-  assert.match(reply || "", /Аль аяллынх нь зөв болохыг сонгоорой/);
+  assert.match(reply || "", /Аль аялал вэ\?/);
 });
 
 test("fresh expensive objection gets a generic budget follow-up without route guessing", () => {
   const reply = buildPriceObjectionReply("Үнэтэй юм байна");
 
-  assert.match(reply || "", /Үнэ өндөр санагдаж болно/);
-  assert.match(reply || "", /төсөвтэй/);
+  assert.equal(reply, "Төсөв хэд вэ?");
   assert.doesNotMatch(reply || "", /Сэлвин|шинжилгээ|хямдрал/i);
 });
 
-test("generic discount negotiation asks for budget and group size instead of matching a random trip", () => {
+test("generic discount negotiation asks only for the missing budget", () => {
   const reply = buildPriceObjectionReply("2 том хүн 1 хүүхэд явна, хямдруулж болох уу?");
 
-  assert.match(reply || "", /ямар төсөв/);
-  assert.match(reply || "", /аль аяллыг/);
-  assert.doesNotMatch(reply || "", /хэдүүлээ/);
+  assert.equal(reply, "Төсөв хэд вэ?");
   assert.doesNotMatch(reply || "", /Сэлвин|Саргол хот|Торвал|шинжилгээ/i);
+});
+
+test("an expensive objection with a supplied budget stops without re-asking", () => {
+  assert.equal(buildPriceObjectionReply("2 сая бол үнэтэй санагдаж байна"), "Ойлголоо.");
 });
 
 test("price objection helper does not swallow real price questions", () => {
@@ -1942,7 +1933,7 @@ test("seat reply flags only the date staff marked as few seats", () => {
 
   assert.match(reply || "", /2099\.3\.17 \(цөөн суудал\)/);
   assert.doesNotMatch(reply || "", /2099\.3\.10 \(цөөн/);
-  assert.match(reply || "", /Цөөн суудалтай гэж тэмдэглэсэн өдрөөр захиалга өгөх бол/);
+  assert.doesNotMatch(reply || "", /хурдан холбогдоорой|Цөөн суудалтай гэж тэмдэглэсэн өдрөөр/);
 });
 
 test("seat reply marks departure full only when seats_left is zero", () => {
@@ -1951,8 +1942,8 @@ test("seat reply marks departure full only when seats_left is zero", () => {
     [trip({ seats_left: 0, seats_total: 20, status: "active" })],
   );
 
-  assert.match(reply || "", /энэ гаралтын суудал дүүрсэн байна/);
-  assert.match(reply || "", /Дараагийн гарах өдрийг санал болгоё/);
+  assert.match(reply || "", /Суудал дүүрсэн\./);
+  assert.doesNotMatch(reply || "", /Дараагийн гарах өдрийг санал болгоё/);
 });
 
 test("compare reply names few-seat dates only for the trip that has them", () => {
@@ -2075,7 +2066,7 @@ test("price reply surfaces a mandatory extra fee stored in a foreign currency", 
   assert.match(reply as string, /300.*CNY/);
 });
 
-test("picture-only request for a trip without visual assets goes silent, program request still answers", () => {
+test("missing photos or program do not send unrelated price details as an answer", () => {
   const bare = trip({
     id: "no-media",
     route_name: "Торвал Нордэнын аялал - 5 өдөр 4 шөнө",
@@ -2087,8 +2078,7 @@ test("picture-only request for a trip without visual assets goes silent, program
   assert.equal(photoAsk?.reply, "NOTRIPMEDIA");
 
   const programAsk = buildTripProgramReply("Торвал Нордэн 5 өдөр хөтөлбөр", [bare]);
-  assert.notEqual(programAsk?.reply, "NOTRIPMEDIA");
-  assert.match(programAsk?.reply || "", /Торвал Нордэнын аялал/);
+  assert.equal(programAsk?.reply, "NOTRIPMEDIA");
 });
 
 test("picture-only request for a trip WITH photos sends those photos, never silence", () => {

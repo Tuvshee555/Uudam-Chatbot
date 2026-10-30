@@ -161,13 +161,9 @@ test("webhook retries transient send failure then dedupes completed event", asyn
 
     if (url.includes("/messages")) {
       sendAttempts += 1;
-      // Quick-reply sends now fall back to a plain-text retry within the
-      // same request (matching Messenger's existing resilience — see
-      // sendQuickReplies/sendIgQuickReplies callers), so a single transient
-      // failure gets absorbed inline. Fail the first TWO attempts so the
-      // outer per-delivery retry-then-dedupe path this test targets still
-      // gets exercised.
-      if (sendAttempts <= 2) {
+      // Plain replies make one delivery attempt per signed event. Fail that
+      // attempt so the outer retry and dedupe path is exercised.
+      if (sendAttempts <= 1) {
         return new Response("temporary send failure", { status: 500 });
       }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
@@ -200,7 +196,7 @@ test("webhook retries transient send failure then dedupes completed event", asyn
     assert.equal(first.statusCode, 503);
     assert.equal(second.statusCode, 200);
     assert.equal(third.statusCode, 200);
-    assert.equal(sendAttempts, 3);
+    assert.equal(sendAttempts, 2);
     // This self-contained message needs only the answer call. Two real attempts
     // ran; the deduped third delivery must add no model calls at all.
     assert.equal(openaiAttempts, 2);
@@ -210,7 +206,7 @@ test("webhook retries transient send failure then dedupes completed event", asyn
   }
 });
 
-test("webhook includes the connect-to-operator quick reply on Instagram, not just Facebook", async () => {
+test("webhook keeps a greeting reply free of unsolicited operator buttons", async () => {
   applyTestEnv();
   const handler = await loadWebhookHandler();
 
@@ -259,10 +255,7 @@ test("webhook includes the connect-to-operator quick reply on Instagram, not jus
     const result = await callWebhook(handler, payload);
 
     assert.equal(result.statusCode, 200);
-    assert.ok(
-      quickReplyTitles.includes("Зөвлөхтэй холбогдох"),
-      `expected the operator quick reply on Instagram, got: ${JSON.stringify(quickReplyTitles)}`,
-    );
+    assert.deepEqual(quickReplyTitles, []);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -878,7 +871,7 @@ test("a bare price question with no trip named asks which trip, instead of handi
   for (const [index, text] of ["Үнэ", "Vne", "Хэд хоногийн аялал хэдэн төг вээ"].entries()) {
     const { sends } = await runInstagramText(`ig-user-generic-${index}`, `ig-mid-generic-${index}`, text);
     assert.equal(sends.length, 1, `"${text}" must get exactly one reply`);
-    assert.match(sends[0], /Аль аяллын талаар асууж байна вэ/, `"${text}" must ask which trip`);
+    assert.match(sends[0], /Аль аялал вэ\?/, `"${text}" must ask which trip`);
     assert.doesNotMatch(sends[0], /зөвлөхөд дамжууллаа/, `"${text}" must not be handed off as no-data`);
   }
 });
@@ -894,7 +887,7 @@ test("a bare thank-you gets a short friendly reply and never a trip list", async
 test("a typed greeting variant is answered as a greeting, not handed off", async () => {
   const { sends } = await runInstagramText("ig-user-greet-typo", "ig-mid-greet-typo-1", "сайн сайн байна уу?");
   assert.equal(sends.length, 1);
-  assert.match(sends[0], /Сайн байна уу/);
+  assert.match(sends[0], /Ямар аялал сонирхож байна\?/);
   assert.doesNotMatch(sends[0], /зөвлөхөд дамжууллаа/);
 });
 

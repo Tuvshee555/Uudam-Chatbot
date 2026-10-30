@@ -54,11 +54,11 @@ test("the bot accepts every answer it builds about the catalog", () => {
   assert.deepEqual(report.failures.map((f) => `${f.routeName} — ${f.question}`), []);
 });
 
-test("the trip card leaves sold-out departures out and keeps each hotel's own prices", () => {
+test("the trip card leaves sold-out departures out and full details keep each hotel's own prices", () => {
   const soldOut = buildStructuredTripReply("ТОЛЬ НУУРЫН АЯЛАЛ", catalog, NOW)!;
   assert.doesNotMatch(soldOut, /2\/10/);
   assert.match(soldOut, /2\/17/);
-  const hotels = buildStructuredTripReply("НАРАН АРЛЫН АЯЛАЛ", catalog, NOW)!;
+  const hotels = buildStructuredTripReply("НАРАН АРЛЫН АЯЛАЛ дэлгэрэнгүй", catalog, NOW)!;
   assert.match(hotels, /Буудал: Lotus\n• Том хүн: 3,600,000₮/);
   assert.match(hotels, /Буудал: Lotus \+ Pearl\n• Том хүн: 3,200,000₮/);
 });
