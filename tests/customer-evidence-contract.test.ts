@@ -147,12 +147,27 @@ test("routing persists the reconciled current identity and never the model's uns
 test("routing cannot persist a model-picked outsider under a genuine offered list", async () => {
   const senderId = "evidence-pending-route";
   await setClarificationState(senderId, [A.id, B.id]);
-  const text = "Үнэ хэд вэ";
+  // 2026-10-30: this used "Үнэ хэд вэ". A bare fare question under a list is now answered from
+  // the listed trips before the model is asked (P2-1, below), so the model path is exercised
+  // with a price question that also refers to the trips.
+  const text = "Тэр аяллын үнэ хэд вэ";
   const route = await routeFastPathText({ senderId, text, contextualUserText: text, trips: CATALOG, now: NOW,
     history: [{ role: "assistant", text: `${A.route_name}\n${B.route_name}\nАль аяллыг нь сонирхож байна вэ?` }],
     understand: (pendingTripIds, selection) => understandTripMessage({ text, trips: CATALOG, history: [], pendingTripIds, selection, now: NOW, ask: async () => JSON.stringify(proposal()) }) });
   assert.equal(route.chosenTripId, undefined);
   assert.deepEqual(route.understanding?.trips.map(t => t.id), [A.id, B.id]);
+  assert.equal(await getTripSelection(senderId), null);
+});
+
+test("a bare fare question under an offered list prices exactly the offered trips, with no model pick", async () => {
+  const senderId = "evidence-pending-fare";
+  await setClarificationState(senderId, [A.id, B.id]);
+  const text = "Үнэ хэд вэ";
+  const route = await routeFastPathText({ senderId, text, contextualUserText: text, trips: CATALOG, now: NOW,
+    history: [{ role: "assistant", text: `${A.route_name}\n${B.route_name}\nАль аяллыг нь сонирхож байна вэ?` }],
+    understand: async () => { throw new Error("a fare question under the list is answered from the list"); } });
+  assert.equal(route.chosenTripId, undefined);
+  assert.deepEqual(route.scopedClarify?.map(t => t.id), [A.id, B.id], "only the offered trips");
   assert.equal(await getTripSelection(senderId), null);
 });
 

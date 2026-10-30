@@ -121,6 +121,18 @@ export function hasUnsupportedOriginRequest(text: string): boolean {
 
 const DATES_ONLY_RE = /^(?:огноо|огноог|өдөр|өдрүүд|гарах\s+өдөр(?:үүд)?|хэзээ|ogno|udur|hezee)(?:\s+(?:нь|ni|вэ|ve|юу|yu))*\s*[?.!]*$/iu;
 
+// A fare question that names nothing else: "хүүхдийн үнэ", "үнэ хэд вэ", "нярай хэд вэ",
+// "huuhdiin une hed ve". Every word must be a fare word, a passenger word or a filler.
+const FARE_WORDS = new Set(["үнэ", "үнийг", "үнийн", "үнэтэй", "vne", "une", "price", "хэд", "hed"]);
+const PASSENGER_WORDS = new Set(["хүүхэд", "хүүхдийн", "хүүхдэд", "хүүхдүүд", "хүүхдүүдийн", "том", "хүн", "хүний", "томчуудын",
+  "нярай", "нярайн", "нярайд", "huuhed", "huuhdiin", "huuhded", "tom", "hun", "hunii", "nyarai", "nyarain", "child", "adult", "infant"]);
+const FARE_FILLER = new Set(["нь", "ni", "вэ", "ve", "бэ", "be", "юу", "yu", "уу", "uu", "байна", "бна", "bna", "bn", "бол", "bol"]);
+export function isFareOnlyQuestion(text: string): boolean {
+  const words = text.toLowerCase().replace(/[?.!,]+/g, " ").split(/\s+/).filter(Boolean);
+  return words.length > 0 && words.length <= 6 && words.some((word) => FARE_WORDS.has(word))
+    && words.every((word) => FARE_WORDS.has(word) || PASSENGER_WORDS.has(word) || FARE_FILLER.has(word));
+}
+
 const DATE_FOLLOWUP_WORDS = new Set([
   "оны", "он", "сарын", "сар", "нд", "д", "ны", "ний", "нь", "ni", "nii", "nd", "sariin", "sar",
   "өнөөдөр", "маргааш", "нөгөөдөр", "today", "tomorrow", "margaash", "margash", "nuguudur",
@@ -364,6 +376,13 @@ export async function routeFastPathText(input: {
   // drop the list and answer "Аль аялал вэ?", and asking again re-sent the list
   // without totals (live 2026-10-26).
   if (pendingTrips.length > 1 && !choice && !tappedOwnButton && isPassengerCountOnly(text)) {
+    await setClarificationState(senderId, pendingTrips.map((trip) => trip.id));
+    return { matchText: text, scopedClarify: pendingTrips };
+  }
+
+  // A fare question right under the list ("хүүхдийн үнэ") asks the listed trips' fares. It got
+  // "Аль аялал вэ?" (P2-1); the list now shows each trip's fare and still lets them choose.
+  if (pendingTrips.length > 1 && !choice && !tappedOwnButton && isFareOnlyQuestion(text)) {
     await setClarificationState(senderId, pendingTrips.map((trip) => trip.id));
     return { matchText: text, scopedClarify: pendingTrips };
   }

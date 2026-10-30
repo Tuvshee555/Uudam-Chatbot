@@ -116,9 +116,13 @@ outage) the keyword reader decides, and it took "vne" (ү typed as v) for no pri
 **Now.** "vne" reads as үнэ and "<feature> багтсан/included үнэ/price" asks the price. Journey `a price
 asked by the attraction a trip includes…` runs each phrasing with the model and with it unavailable.
 
-## P2-1 — Fare question under a fresh multi-trip list — OPEN
-"хүүхдийн үнэ" ("child price?") right after a new list gets "Аль аялал вэ?" instead of the child fare of the
-listed trips.
+## P2-1 — Fare question under a fresh multi-trip list — FIXED (2026-10-30)
+"хүүхдийн үнэ" ("child price?") right after a new list got "Аль аялал вэ?" instead of the child fare of the
+listed trips. **Now** a question made only of fare, passenger and filler words ("хүүхдийн үнэ", "үнэ хэд вэ",
+"huuhdiin une hed ve") under a list shows each listed trip's fare (child fare with its age rule) from the
+catalogue, no model call, and still lets the customer choose. Other questions ("хэд хоног вэ") keep
+their path. Journey `a fare question right under a fresh list…` fails without the fix; live replay 0
+fact issues.
 
 ## P2-2 — Website chat endpoint answers weakly — OPEN (to investigate)
 `/api/demo` (the website chat) answered "Бээжин" and "Бээжин үнэ" with a generic question during the

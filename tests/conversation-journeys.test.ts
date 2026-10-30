@@ -75,6 +75,23 @@ test("customer journeys reach their goal with grounded facts", async (context) =
       assert.match(tapped.text, /• Том хүн: 2,291,000₮/);
     });
 
+    // P2-1 (docs/chatbot-followups.md): "хүүхдийн үнэ" right after a fresh list of trips got
+    // "Аль аялал вэ?" instead of those trips' child fares.
+    await context.test("a fare question right under a fresh list gives the listed trips' fares", async () => {
+      await say("list-fare", "Нислэг газар хосолсон", comboList);
+      const child = await say("list-fare", "хүүхдийн үнэ");
+      for (const fare of ["2,591,000₮", "2,251,000₮", "1,891,000₮"]) assert.ok(child.text.includes(fare), `child fare ${fare}: ${child.text}`);
+      assert.doesNotMatch(child.text, /^Аль аялал вэ\?$/m, "not just a counter-question");
+      assert.equal(child.answerModelCalls, 0, "answered from the catalogue");
+      await say("list-fare-latin", "Нислэг газар хосолсон", comboList);
+      const latin = await say("list-fare-latin", "huuhdiin une hed ve");
+      assert.ok(latin.text.includes("2,251,000₮"), latin.text);
+      // A question that is not a fare ("how many days?") keeps its own path.
+      await say("list-fare-other", "Нислэг газар хосолсон", comboList);
+      const days = await say("list-fare-other", "хэд хоног вэ");
+      assert.doesNotMatch(days.text, /2,591,000₮/);
+    });
+
     await context.test("booking intent then a phone writes one lead with the trip, then staff own the chat", async () => {
       await say("book", "Нислэг газар хосолсон", comboList);
       await say("book", "1");
