@@ -230,9 +230,18 @@ export type FastPathRoute = {
   newTrip?: boolean;
 };
 
+/** The message asks something besides when the trip departs. */
+function asksBeyondDate(text: string, trips: TravelTrip[], now: Date): boolean {
+  const request = buildTripRequest(text, trips, undefined, now);
+  return request.passengers.length > 0 || Boolean(request.lodging)
+    || request.topics.some((topic) => topic !== "availability" && topic !== "dates");
+}
+
 /** A reply that asked the customer to pick a trip — the only kind a pending clarification belongs to. */
 function isTripChoiceQuestion(reply: string): boolean {
-  return reply.includes(AMBIGUOUS_REPLY_MARKER) || /аль\s+аялл/i.test(reply);
+  // "Not then; these trips depart on …" keeps those trips in scope: "hoyor sard" right after it
+  // asks about them and got silence once the list counted as stale (live replay 2026-10-30).
+  return reply.includes(AMBIGUOUS_REPLY_MARKER) || /аль\s+аялл/i.test(reply) || reply.startsWith(DATE_NOT_SCHEDULED_HEADING);
 }
 
 export async function routeFastPathText(input: {
@@ -401,6 +410,11 @@ export async function routeFastPathText(input: {
       const matching = ofKind.filter(trip => upcomingDepartures(trip, now).some(date => departureMatchesScope(date, calendarScope))
         || (calendarScope.kind === "dates" && calendarScope.dates.some(date => tripMatchesRequestedDate(trip, date, now))));
       if (matching.length === 1) return chose(matching[0]);
+      // One trip, nothing departing in the asked time, and the message asks more than the date
+      // (the children's fares, the programme, the hotel): the trip's answer covers every part
+      // and offers the nearest departures. "Not then, here are the dates" alone ignored the rest
+      // of a family's opening message (Oct 24 shape).
+      if (!matching.length && scope.length === 1 && asksBeyondDate(requestText, trips, now)) return chose(scope[0]);
       const candidates = matching.length ? matching : scope;
       await setClarificationState(senderId, candidates.map(trip => trip.id));
       return { matchText: requestText, scopedClarify: candidates, unavailableDateWithinScope: matching.length === 0,

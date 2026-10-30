@@ -35,6 +35,8 @@ export type TripRequest = {
   /** "Одоо 3 том хүн": a change to the stated kind only; the rest of the party stays. */
   passengersUpdate?: boolean;
   requestedFacts?: RequestedFact[];
+  /** A villa/resort preference: passed to staff, never answered from data. */
+  lodging?: { evidence: string; kinds: string[]; dative: string };
 };
 
 export function parseRequestedPassengers(value: unknown): RequestedPassenger[] {
@@ -63,8 +65,10 @@ function parsePassengerText(text: string): { passengers: RequestedPassenger[]; u
     else result.push({ kind, count });
   }
   const ages: Array<{ age: number; ageUnit: "year" | "month" }> = [];
-  for (const match of text.matchAll(/(?<![\d.,/-])(-?\d+(?:\.\d+)?(?:\s*[,/]\s*\d+(?:\.\d+)?)*)\s*(настай|nas(?:tai)?|years?\s*old|сартай|months?\s*old)/gi)) {
-    const parts = match[1].split(/\s*[,/]\s*/);
+  // "6 болон 2 насны 2 хүүхэдтэй" (Oct 24 shape): ages joined by "болон" and given as "насны"
+  // were not read, so the family's children lost their ages.
+  for (const match of text.matchAll(/(?<![\d.,/-])(-?\d+(?:\.\d+)?(?:\s*(?:[,/]|болон|ба|bolon|and)\s*\d+(?:\.\d+)?)*)\s*(настай|насны|нас(?!\p{L})|nas(?:tai|nii|ny)?(?!\p{L})|years?\s*old|сартай|months?\s*old)/giu)) {
+    const parts = match[1].split(/\s*(?:[,/]|болон|ба|bolon|and)\s*/iu);
     // An unspaced comma may mean a decimal age. Do not guess without a count.
     const childCount = result.filter((row) => row.kind !== "adult").reduce((sum, row) => sum + row.count, 0);
     const hasCountedAdults = result.some(row => row.kind === "adult");
@@ -96,6 +100,27 @@ function parsePassengerText(text: string): { passengers: RequestedPassenger[]; u
     })], unsupported };
   }
   return { passengers: result, unsupported };
+}
+
+const LODGING_KINDS: Array<{ pattern: RegExp; label: string; dative: string }> = [
+  { pattern: /^(?:вилл|villa)/iu, label: "вилла", dative: "виллад" },
+  { pattern: /^(?:ресорт|resort)/iu, label: "ресорт", dative: "ресортод" },
+  { pattern: /^(?:бунгало|bungalo)/iu, label: "бунгало", dative: "бунгалод" },
+];
+const LODGING_WORD = /(?<!\p{L})(?:вилл|villa|ресорт|resort|бунгало|bungalo)\p{L}*/giu;
+
+/**
+ * A lodging-type preference ("Вилла эсвэл ресортод байрлана"). The catalogue has no
+ * lodging-type field, so it is never answered from data: it goes to staff with the lead,
+ * while the rest of the message is still answered (Oct 24 shape).
+ */
+export function lodgingPreferenceFromText(text: string): { evidence: string; kinds: string[]; dative: string } | null {
+  const words = [...text.matchAll(LODGING_WORD)].map((match) => match[0]);
+  if (!words.length) return null;
+  const kinds = LODGING_KINDS.filter((kind) => words.some((word) => kind.pattern.test(word)));
+  const labels = kinds.map((kind) => kind.label);
+  const dative = [...labels.slice(0, -1), kinds.at(-1)!.dative].join("/");
+  return { evidence: words.join(", "), kinds: labels, dative };
 }
 
 export function requestedPassengersFromText(text: string): RequestedPassenger[] {
@@ -163,7 +188,7 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
   if (date) topics.add("availability");
   const passengerText = parsePassengerText(turn);
   const explicitPassengers = passengerText.unsupported ? [] : passengerText.passengers;
-  const passengerLanguage = /том\s*хүн|хүүх|нярай|настай|сартай|tom\s*hun|huuhe|nyarai|nas(?:tai)?|adult|child|infant|years?\s*old|months?\s*old/i.test(turn);
+  const passengerLanguage = /том\s*хүн|хүүх|нярай|настай|насны|сартай|tom\s*hun|huuhe|nyarai|nas(?:tai)?|adult|child|infant|years?\s*old|months?\s*old/i.test(turn);
   const passengers = explicitPassengers.length ? explicitPassengers : passengerLanguage && !passengerText.unsupported ? parseRequestedPassengers(understanding?.passengers) : [];
   if (passengers.length) topics.add("price");
   const hotels = [...new Set(trips.flatMap((trip) => [trip.hotel, ...normalizeTripOffers(trip, now).map((offer) => offer.hotel)]).filter((hotel): hotel is string => Boolean(hotel && hotel.length >= 3)))];
@@ -183,10 +208,14 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
   const explicitYear = /(?<!\d)(20\d{2})(?!\d)/.exec(turn);
   const year = explicitYear ? Number(explicitYear[1]) : requestedMonth?.year
     || (month ? clock.getUTCFullYear() + (month < clock.getUTCMonth() + 1 ? 1 : 0) : null);
+  const lodging = lodgingPreferenceFromText(turn);
+  // The model may file the lodging preference as an unsupported fact; it is a preference for
+  // staff, not a question that silences the rest of the answer.
   const requestedFacts = [...new Map([
     ...parseRequestedFacts(understanding?.requestedFacts, text),
     ...requestedFactsFromText(text, { ignoredPhrases: [...trips.map(trip => trip.route_name), ...hotels], hotelContext: topics.has("hotel") || Boolean(hotel) }),
-  ].map(fact => [`${fact.field}:${normText(fact.evidence)}`, fact])).values()];
+  ].filter(fact => !(lodging && lodgingPreferenceFromText(fact.evidence)))
+    .map(fact => [`${fact.field}:${normText(fact.evidence)}`, fact])).values()];
   // A date window is itself the question when nothing else is asked ("Хүүхдийн амралт
   // 11.1-с эхлэх гээд бдаг"): answer with the departures inside it.
   if (!topics.size && (range || requestedDates || month)) topics.add("dates");
@@ -206,6 +235,7 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
     package: selectedPackage, ...(packagePreference ? { packagePreference } : {}),
     passengers, days: queryRequestsDurationDays(turn), month, year, requestedFacts,
     ...(requestedDates ? { dates: requestedDates } : {}),
+    ...(lodging ? { lodging } : {}),
     transport: queryWantsLandFlightCombo(turn) ? "land_flight" : queryWantsDirectFlight(turn) ? "direct_flight"
       : queryWantsLandOnlyEnhanced(turn) ? "land" : /усан\s*онгоц|круз|cruise/i.test(turn) ? "cruise" : null,
     ...(requestedRange === "unsupported" || calendarScope?.kind === "unsupported" ? { unsupportedDateWindow: true } : {}),

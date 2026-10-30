@@ -24,6 +24,10 @@ const catalog = [
   combo("a3", "ЛУМАРА В ГАЗАР НИСЛЭГ ХОСОЛСОН", 2_291_000, ["2098-03-11", "2098-03-18"]),
   trip("sea", "ВЭЛМОР ДАЛАЙН ЭРГИЙН АЯЛАЛ", ["2098-02-15", "2098-03-06", "2098-03-20"], [1_391_000, 1_191_000, null]),
   trip("city", "НОРВЕЛ ХОТЫН АЯЛАЛ", ["2098-03-15", "2098-03-29"], [1_791_000, 1_591_000, 381_000], { extra: { customer_visible: true, aliases: ["Норвел"] } }),
+  trip("family", "ОРВЕЛИЯ ГЭР БҮЛИЙН АМРАЛТ", ["2098-03-06", "2098-03-20"], [1_891_000, 1_491_000, 391_000], { hotel: "Orvelia Bay Hotel", extra: {
+    customer_visible: true, aliases: ["Орвелия"], age_rules: { adult: "12+ нас", child: "2-11 нас", infant: "0-23 сар" },
+    itinerary_days: [{ day: 1, title: "Ирэх, буудалд байрлах" }, { day: 2, title: "Эргийн аялал" }, { day: 3, title: "Чөлөөт өдөр" }],
+  } }),
 ];
 const comboList = { certainty: "several", trips: ["T1", "T2", "T3"], intent: "catalog" };
 const one = (tripId: string, extra: Record<string, unknown> = {}) => ({ certainty: "one", tripId, ...extra });
@@ -110,6 +114,41 @@ test("customer journeys reach their goal with grounded facts", async (context) =
       assert.match(march.text, /3 сарын 15/);
     });
 
+    // Oct 24 shape: a family's first message names a trip, a flexible date it does not depart on,
+    // the children's ages, a villa/resort preference and "send the programme". It was answered
+    // on the date alone ("not then, here are the dates"); the rest was ignored.
+    await context.test("a family's multi-part opening is answered part by part, the preference passed to staff", async () => {
+      const opening = await say("family-open", "6 болон 2 насны 2 хүүхэдтэй айл 2 сарын 25 хавьцаа явахаар Орвелия аялал сонирхож бна. Вилла эсвэл ресортод байрлана. Хөтөлбөр бвал явуулаарай");
+      assert.equal(opening.sends.length, 1, "one reply, never silence");
+      assert.match(opening.text, /^ОРВЕЛИЯ ГЭР БҮЛИЙН АМРАЛТ\n/, "names the trip");
+      assert.match(opening.text, /Таны асуусан хугацаанд гарах хуваарь байхгүй\.\nОйрын гарах өдрүүд:\n• 3 сарын 6\n• 3 сарын 20/, "the nearest departures");
+      assert.match(opening.text, /Хүүхэд[^\n]*: 1,491,000₮/, "the children's fare");
+      assert.match(opening.text, /1-р өдөр: Ирэх, буудалд байрлах/, "the programme");
+      assert.match(opening.text, /Буудал: Orvelia Bay Hotel/, "the hotel the data holds");
+      assert.doesNotMatch(opening.text.replace(/[^\n]*зөвлөхөд дамжууллаа[^\n]*/, ""), /вилла|ресорт/i, "villa/resort is never inferred");
+      assert.match(opening.text, /Вилла\/ресортод байрлах хүсэлтийг тань аяллын зөвлөхөд дамжууллаа\./);
+      assert.match(opening.text, /Хэдэн том хүн явах вэ\?$/, "the one missing fact is asked last");
+      assert.equal(opening.leads.length, 1, "staff get the preference");
+      assert.match(opening.leads[0].context, /Байрлах хүсэлт: Вилла, ресортод/);
+      const parents = await say("family-open", "2 том хүн", one("family", { passengers: [{ kind: "adult", count: 2 }] }));
+      assert.match(parents.text, /Нийт: 6,764,000₮/, "both parents and both children");
+      // When the flexible date does fit departures, the answer says which ones.
+      const fits = await say("family-fits", "6 болон 2 насны 2 хүүхэдтэй айл 3 сарын 13 хавьцаа Орвелия аялал сонирхож бна. Хөтөлбөр бвал явуулаарай");
+      assert.match(fits.text, /^ОРВЕЛИЯ ГЭР БҮЛИЙН АМРАЛТ\n\nГарах өдрүүд:\n• 3 сарын 6\n• 3 сарын 20\n/);
+      assert.match(fits.text, /1,491,000₮[\s\S]*1-р өдөр/, "fares and programme follow");
+    });
+
+    // Live 2026-10-30: "<place> aylal neg sariin eheer" got "not then, these depart on …" for
+    // several trips, then "hoyor sard" got silence: the list no longer counted as the scope.
+    await context.test("a month asked right after a 'not then' list is answered for those trips", async () => {
+      const early = await say("latin-list", "lumara aylal hoyor sariin eheer sonirhoj bb");
+      assert.match(early.text, /^Тэр хугацаанд гарах аялал алга\. Гарах өдрүүд:/);
+      // No trip at all departs in April, so no catalogue month list can stand in for the scope.
+      const april = await say("latin-list", "dorov sard", { certainty: "none", trips: [] });
+      assert.equal(april.sends.length, 1, "never silence");
+      assert.match(april.text, /^Тэр хугацаанд гарах аялал алга\. Гарах өдрүүд:\n• ЛУМАРА/, "those trips' real departures again");
+    });
+
     await context.test("changing destination mid-conversation moves every answer to the new trip", async () => {
       await say("switch", "Вэлмор далай үнэ", one("sea"));
       const moved = await say("switch", "Норвел хотын аялал үнэ хэд вэ", one("city"));
@@ -143,8 +182,3 @@ test("customer journeys reach their goal with grounded facts", async (context) =
     await harness.close();
   }
 });
-
-// Known gap (Oct 24 shape, see docs/chatbot-conversation-quality.md backlog): one opening message
-// carrying a date window, the children's ages, a lodging preference and "send the programme" is
-// answered on the date alone. Kept visible here until it is built.
-test.todo("a multi-constraint family opening (dates + ages + villa/resort + programme) addresses every constraint");

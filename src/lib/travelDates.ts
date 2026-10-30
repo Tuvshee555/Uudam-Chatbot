@@ -372,9 +372,28 @@ export function requestedDepartureScope(text: string, now = new Date()): Request
   if (range === "unsupported") return { kind: "unsupported" };
   if (range) return { kind: "range", startYmd: range.startYmd, endYmd: range.endYmd };
   const date = resolveRequestedDate(text, now);
-  if (date) return { kind: "dates", dates: [date.ymd] };
+  if (date) {
+    const around = date.source === "explicit" ? aroundDateWindow(text, date.ymd, now) : null;
+    return around ? { kind: "range", startYmd: around[0], endYmd: around[1] } : { kind: "dates", dates: [date.ymd] };
+  }
   const month = resolveRequestedMonth(text, now);
   return month ? { kind: "month", year: month.year, month: month.month } : null;
+}
+
+const AROUND_DATE_RE = /\d(?:\s*-?\s*(?:ны|ний|нд|ын|ийн|н|д))?\s*(?:хавьцаа|хавьд|хавиар|хавь|орчим\p{L}*|орчмоор|үеэр|тойро?н?|around|orchim\p{L}*|havi(?:tsaa|d|ar)?)(?!\p{L})/iu;
+const AROUND_DATE_DAYS = 7;
+
+/**
+ * "2 сарын 5 хавьцаа" (around Feb 5) is a flexible date, not that one day: a departure a
+ * few days off is what the customer is after (Oct 24 shape). A week either side, never
+ * before today.
+ */
+function aroundDateWindow(text: string, ymd: string, now: Date): [string, string] | null {
+  if (!AROUND_DATE_RE.test(text)) return null;
+  const shift = (days: number) => new Date(Date.parse(`${ymd}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+  const today = toYmd(getMongoliaDateParts(now));
+  const start = shift(-AROUND_DATE_DAYS);
+  return [start < today ? today : start, shift(AROUND_DATE_DAYS)];
 }
 
 export function departureMatchesScope(ymd: string, scope: RequestedDepartureScope | null): boolean {

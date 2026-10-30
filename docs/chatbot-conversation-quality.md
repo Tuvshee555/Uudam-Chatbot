@@ -126,13 +126,12 @@ issues.**
 | Staff takeover, then questions and "захиалга өгье" | No bot message; inbound kept for staff ✓ |
 | Returning after 40 days: greeting, then "үнэ" | Greeting without the old trip; "үнэ" re-lists the earlier trips rather than pricing one silently ✓ |
 | "мэдээлэл", greeting, "мэдээлэл" | Company intro once; the second time "Аль аялал вэ?" ✓ |
-| **Oct 24 shape: family, ~Feb 5, children 6 and 2, villa/resort, "send the programme"** | **Not repaired.** It answers only "no departure then" plus that destination's other dates and writes a staff lead. Children, lodging and the programme request are ignored. |
+| **Oct 24 shape: family, ~Feb 5, children 6 and 2, villa/resort, "send the programme"** | **Repaired 2026-10-30.** Departures in the window, the children's fares, the programme, the hotel, "how many adults?"; villa/resort passed to staff with a lead, never inferred (see `docs/chatbot-followups.md` P1-1). |
 
-**Impact of the open Oct 24 gap.** It affects first messages that pack several constraints together. That
-is a minority of openings, but typical of high-value family bookings. The customer gets a factual but
-incomplete answer (no wrong fact) and staff get a lead. The bot cannot yet weigh lodging type (the catalogue
-has no villa/resort field) or send the programme in the same reply. The chatbot is therefore **not "fully
-repaired"** for this shape. It is tracked as a visible `test.todo` in `tests/conversation-journeys.test.ts`.
+**The Oct 24 gap (closed 2026-10-30).** It affected first messages that pack several constraints together,
+typical of high-value family bookings. They are now answered part by part; lodging type still cannot be
+answered from data (the catalogue has no villa/resort field), so that part goes to staff. The journey
+`a family's multi-part opening…` in `tests/conversation-journeys.test.ts` guards it.
 
 Also fixed during this replay: when the model resolves a trip only from old turns (no live selection, for
 example a customer back after weeks), the answer now names that trip instead of quoting a bare price.

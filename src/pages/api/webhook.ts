@@ -1096,10 +1096,17 @@ async function handleMessage(
     const route = await getRouted();
     const plan = await buildTripAnswerRuntime({ text, trips: await getTrips(), route });
     if (plan) {
-      const decision = decideTripAnswer(plan, { userText: text,
+      let decision = decideTripAnswer(plan, { userText: text,
         hasPriorReply: history.some((message) => message.role === "assistant"),
         phoneAlreadyRequested,
       });
+      // A preference the data cannot answer (villa/resort) goes to staff with the answer. The
+      // reply says so only once the lead is written.
+      if (decision.outcome !== "handoff" && plan.staffLine && plan.staffNotes?.length) {
+        const written = await captureLead({ kind: "handoff", contactPhone: detectedPhone || "", context: plan.staffNotes.join("\n") },
+          "api.webhook.answer_plan_preference").then(() => true, () => false);
+        if (!written) decision = { ...decision, reply: decision.reply.split("\n").filter((line) => line !== plan.staffLine).join("\n").replace(/\n{3,}/g, "\n\n").trim() };
+      }
       const reply = decision.reply;
       currentSelection = plan.selection;
       if (decision.outcome !== "handoff") await setTripSelection(senderId, plan.selection);

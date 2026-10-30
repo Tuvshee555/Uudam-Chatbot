@@ -248,8 +248,11 @@ test("a new month fare question replaces the stale selected departure", () => {
 test("a scoped month with no schedule does not quote the old selected offer", () => {
   const first = buildTripAnswerPlan({ text: "10 сарын 8-нд үнэ", trips: [trip()], route: route(), now })!;
   const november = buildTripAnswerPlan({ text: "11 сард үнэ", trips: [trip()], route: { ...route(), selection: first.selection }, now })!;
-  assert.equal(november.status, "handoff");
-  assert.equal(november.reply, "REFER");
+  // Since 2026-10-30 the answer is the schedule itself (as the routing path already did): no
+  // November departure, the real nearest one, and its fare. It used to be silence plus a lead.
+  assert.equal(november.status, "answered");
+  assert.match(november.reply, /^Таны асуусан хугацаанд гарах хуваарь байхгүй\.\nОйрын гарах өдрүүд:\n• 10 сарын 8\n\n/, "said plainly, with the real departure");
+  assert.doesNotMatch(november.reply, /11 сар/, "never presented as a November fare");
   assert.equal(november.selection.date, null);
 });
 

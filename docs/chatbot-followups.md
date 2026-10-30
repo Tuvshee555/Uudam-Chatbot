@@ -16,19 +16,32 @@ OpenAI key for production and testing.
 **Optional, not required:** a real-time staff channel (`STAFF_NOTIFY_PSIDS` or Telegram) so alerts are
 pushed, not only shown in admin.
 
-## P1-0 — Latin-script month words — FIX READY (branch `fix/latin-month-words`, awaiting approval)
+## P1-0 — Latin-script month words — FIXED (deployed 2026-10-30)
 Production 2026-10-30: "<place> aylal neg sariin eheer sonirhoj bb" (early January, Latin script) got
 December dates; "neg sard" got silence. Months written as Latin number words (neg, hoyor, gurav …) were
 not read, and "neg" counted as a possible new destination. The fix reads them like digits and names a trip
 new to the conversation. Journey `a month written as a Latin number word…` fails without it.
 
-## P1-1 — Multi-constraint family opening (Oct 24 shape) — OPEN
+## P1-1 — Multi-constraint family opening (Oct 24 shape) — FIXED (2026-10-30)
+
+**Now.** One trip named: the reply names it, gives the departures in the asked window (or, when
+none, says so and gives the nearest three), the fares for the children, the programme, the hotel
+names the data holds, then asks the one missing fact (how many adults). "6 болон 2 насны" ages and
+"хавьцаа/орчим" (a week either side) are read. Villa/resort is never inferred: the reply says the
+preference went to an advisor and a staff lead carries it (the line is dropped if the lead fails).
+A list (no trip named) is answered the same way once the customer picks a trip. Live replay of the
+real Oct 24 message and three related shapes: every part answered, 0 fact issues. Journeys: `a
+family's multi-part opening…`, `a month asked right after a 'not then' list…` (both fail without
+the fix). Also fixed: two children at one fare printed as one "x 1" line while the total counted both.
+**Still not possible:** answering villa/resort from data (no lodging-type field; add one to the trip
+schema and admin if the owner wants it answered automatically). Several trips named with no departure
+in the window still get only "not then, these depart on …".
 
 **Conversation shape.** First message: a family with children of given ages, a flexible date ("around
 <month> <day>"), a destination, a lodging preference (villa / resort) and "send the programme if you have
 one".
 
-**Current behaviour (live replay, production ad89535).** The reply says no departure on that date,
+**Behaviour before the fix (live replay, production ad89535).** The reply says no departure on that date,
 lists the destination's other departure dates and writes a staff lead. The children's ages, the
 lodging preference and the programme request are ignored. No wrong fact is stated.
 

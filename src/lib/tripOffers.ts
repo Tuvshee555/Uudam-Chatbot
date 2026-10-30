@@ -640,7 +640,17 @@ export function renderTripOfferReply(result: TripOfferResult, options: { fareKin
   const labels = { adult: "Том хүн", child: "Хүүхэд", infant: "Нярай" };
   const lines = [customerDate(offer.date), offer.hotel, offer.packageId].filter(Boolean) as string[];
   if (offer.passengerPrices.length) {
-    for (const p of offer.passengerPrices) lines.push(`${labels[p.kind]}${p.ageRange ? ` (${p.ageRange})` : ""} x ${p.count}: ${renderFare(p.fare, offer.currency)}`);
+    // Children given one by one ("6 болон 2 насны") at the same fare are one line with their
+    // count: two identical "x 1" lines collapsed into one and the total no longer added up.
+    const rows = new Map<string, number>();
+    for (const p of offer.passengerPrices) {
+      const key = `${labels[p.kind]}${p.ageRange ? ` (${p.ageRange})` : ""}\u0000${renderFare(p.fare, offer.currency)}`;
+      rows.set(key, (rows.get(key) || 0) + p.count);
+    }
+    for (const [key, count] of rows) {
+      const [label, fare] = key.split("\u0000");
+      lines.push(`${label} x ${count}: ${fare}`);
+    }
   } else for (const f of offer.fares.filter((fare) => !options.fareKinds?.length || options.fareKinds.includes(fare.kind))) {
     // The same fare listed twice, once bare and once with its age band ("Хүүхэд: 2,590,000₮"
     // beside "Хүүхэд (2-11 нас): 2,590,000₮"), reads as two prices: keep the one with the band.

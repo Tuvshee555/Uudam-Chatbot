@@ -27,7 +27,15 @@ export type TripAnswerPlan = {
   missingFacts: string[];
   mediaUrls: string[];
   brochureUrl: string | null;
+  /** Preferences the data cannot answer, for the staff lead written with this answer. */
+  staffNotes?: string[];
+  /** The reply's line telling the customer those preferences went to staff; dropped if no lead was written. */
+  staffLine?: string;
 };
+
+/** Said when the asked date or window has no departure; the nearest departures follow. */
+export const REQUESTED_TIME_NOT_SCHEDULED = "Таны асуусан хугацаанд гарах хуваарь байхгүй.";
+const NEAREST_DEPARTURES = 3;
 
 const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())) : [];
 const records = (value: unknown): Record<string, unknown>[] => Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object")) : [];
@@ -259,7 +267,41 @@ export function buildTripAnswerPlan(input: {
   const asksSeats = hasSeatsIntent(intentText);
   let result: TripOfferResult | null = null;
   let needsSelection = false;
-  if (request.topics.includes("price") || request.topics.includes("availability") || request.topics.includes("discount")) {
+  // This turn asked for a date or a window the trip does not depart in. A departed or sold-out
+  // date is a listed one and keeps its own wording below.
+  const listedDates = new Set(offers.filter((offer) => offer.source !== "discount").flatMap((offer) => offer.dates));
+  const askedWindow = !request.date && Boolean(request.range || request.month || request.dates);
+  const missedAnchor = request.date && !listedDates.has(request.date) ? request.date
+    : askedWindow && !scopedDates.length ? request.range ? midpoint(request.range)
+      : request.dates?.[0] || (request.month ? `${request.year || today(now).slice(0, 4)}-${String(request.month).padStart(2, "0")}-15` : null)
+      : null;
+  const nearest = missedAnchor ? nearestDepartures(dates.filter((date) => dateIsOnSale(trip, date, now)), missedAnchor) : [];
+  if (missedAnchor && nearest.length) {
+    // The Oct 24 family heard only "not then, here are the dates": the nearest departures
+    // are said first, then every other part of the message is answered for them.
+    selection.date = null;
+    delete selection.dateScope;
+    const wantsPrice = request.topics.includes("price");
+    result = resolveTripOffer(trip, { date: nearest.length === 1 ? nearest[0] : null, hotel: selection.hotel, packageId: selection.package, passengers: wantsPrice ? pricePassengers : [] }, now);
+    if (result.status === "needs_selection" && result.fields[0] === "date") result = { ...result, options: nearest };
+    lines.push([REQUESTED_TIME_NOT_SCHEDULED, "Ойрын гарах өдрүүд:", ...nearest.map((date) => `• ${mnDate(date)}`)].join("\n"));
+    answered.add("availability");
+    answered.add("dates");
+    if (wantsPrice) {
+      // The departures are listed just above, so a fare valid for them does not restate a date.
+      const price = result.status === "ready"
+        ? renderTripOfferReply(result, { fareKinds: [...(preferences.full || preferences.fareKinds.length || result.offer.passengerPrices.length ? preferences.fareKinds : ["adult", "child"] as const)], showTotal: wantsPartyTotal && !minorsOnly })
+          ?.split("\n").filter((line) => line !== mnDate(nearest[0])).join("\n") || null
+        : stableFarePreview(trip, { ...selection, passengers: pricePassengers }, result, now, intentText);
+      if (price) sections.price = price;
+      else if (result.status === "needs_selection") {
+        // Fares differ by date: the date is chosen from the departures just listed.
+        lines.push("Аль гарах өдрөөр аялах вэ?");
+        needsSelection = true;
+        answered.add("price");
+      }
+    }
+  } else if (request.topics.includes("price") || request.topics.includes("availability") || request.topics.includes("discount")) {
     const hasDateScope = Boolean(dateScope.month || dateScope.year || dateScope.range || dateScope.dates);
     // A newly requested month overrides an old exact-date selection. Never use
     // October's stored offer to answer a November fare question.
@@ -333,12 +375,13 @@ export function buildTripAnswerPlan(input: {
       }
     }
   }
-  if (request.topics.includes("dates")) {
+  const datesSection = (list: string[]) => `Гарах өдрүүд:\n${compactReplyOptions(list.map((date) => {
+    const row = websiteAvailability.find((entry) => entry.date === date);
+    return `• ${mnDate(date)}${row && departureIsClosed(row) ? " — захиалга хаалттай" : row && departureIsLow(row) ? " — цөөн суудал" : ""}`;
+  }), intentText).join("\n")}`;
+  if (request.topics.includes("dates") && !answered.has("dates")) {
     if (needsSelection && result?.status === "needs_selection" && result.fields[0] === "date") answered.add("dates");
-    else sections.dates = scopedDates.length ? `Гарах өдрүүд:\n${compactReplyOptions(scopedDates.map((date) => {
-      const row = websiteAvailability.find((entry) => entry.date === date);
-      return `• ${mnDate(date)}${row && departureIsClosed(row) ? " — захиалга хаалттай" : row && departureIsLow(row) ? " — цөөн суудал" : ""}`;
-    }), intentText).join("\n")}` : undefined;
+    else sections.dates = scopedDates.length ? datesSection(scopedDates) : undefined;
   }
   if (request.topics.includes("duration")) {
     const days = tripDurationDays(trip);
@@ -414,6 +457,22 @@ export function buildTripAnswerPlan(input: {
     else if (result?.status === "ready") sections.discount = "Сонгосон гаралт, буудалд үйлчлэх баталгаажсан хямдралыг үнэд тооцсон.";
   }
   for (const topic of request.topics) if (sections[topic]) { lines.push(sections[topic]!); answered.add(topic); }
+  // The customer named a time ("2 сарын 5 хавьцаа", "2 сарын сүүлээр"). An answer that neither
+  // asks for a date nor prices one departure says which departures fall in it: the family's
+  // fares and programme came back without the dates they asked about (live replay 2026-10-30).
+  if (askedWindow && scopedDates.length && !missedAnchor && !needsSelection && !answered.has("dates")
+    && result?.status !== "ready" && lines.length) lines.unshift(datesSection(scopedDates));
+  // A villa/resort preference: the data holds only the hotel names, so those are given and
+  // the preference itself goes to staff with the lead (never inferred from a name).
+  let staffLine: string | undefined;
+  const staffNotes: string[] = [];
+  if (request.lodging && lines.length) {
+    const hotels = [...new Set([...offers.map((offer) => offer.hotel), trip.hotel].filter((hotel): hotel is string => Boolean(hotel?.trim())))];
+    if (hotels.length && hotels.length <= 4 && !lines.some((line) => /(?:^|\n)Буудал:/.test(line))) lines.push(`Буудал: ${hotels.join(", ")}`);
+    staffNotes.push(`Байрлах хүсэлт: ${request.lodging.evidence}`);
+    staffLine = `${request.lodging.dative.charAt(0).toUpperCase()}${request.lodging.dative.slice(1)} байрлах хүсэлтийг тань аяллын зөвлөхөд дамжууллаа.`;
+    lines.push(staffLine);
+  }
   if (minorsOnly && sections.price && !needsSelection) {
     lines.push(ADULT_COUNT_QUESTION);
     needsSelection = true;
@@ -429,5 +488,17 @@ export function buildTripAnswerPlan(input: {
     tripId: trip.id, selection, request, reply: handoff ? "REFER" : presentAssistantReply({ reply: [...new Set(lines)].join("\n\n"), userText: intentText }),
     offer: result, answeredTopics: [...answered], missingTopics: missing, missingFacts,
     mediaUrls: handoff ? [] : mediaUrls, brochureUrl: handoff ? null : brochureUrl,
+    ...(staffLine && !handoff ? { staffNotes, staffLine } : {}),
   };
+}
+
+function midpoint([start, end]: [string, string]): string {
+  return new Date((Date.parse(`${start}T00:00:00Z`) + Date.parse(`${end}T00:00:00Z`)) / 2).toISOString().slice(0, 10);
+}
+
+/** The departures closest to the asked date, in calendar order. */
+function nearestDepartures(dates: string[], anchor: string): string[] {
+  const at = Date.parse(`${anchor}T00:00:00Z`);
+  return [...dates].sort((a, b) => Math.abs(Date.parse(`${a}T00:00:00Z`) - at) - Math.abs(Date.parse(`${b}T00:00:00Z`) - at) || a.localeCompare(b))
+    .slice(0, NEAREST_DEPARTURES).sort();
 }
