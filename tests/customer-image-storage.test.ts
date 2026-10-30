@@ -116,8 +116,10 @@ test("signed admin preview links are bound to one document and expire within an 
     stored_url: "https://store.private.blob.vercel-storage.com/customer-documents/files/x" } as never);
   assert.match(pdf.stored_url, /^\/api\/admin\/customer-image\?id=9&/);
   assert.equal(pdf.source_url, "");
+  // 2026-10-30 (owner): historical files are no longer returned with their public Cloudinary URL;
+  // they too go through the signed link (the files themselves stay public until migrated).
   const legacy = adminCustomerDocument({ id: 10, mime_type: "application/pdf", source_url: "", stored_url: "https://res.cloudinary.com/x/raw/upload/old.pdf" } as never);
-  assert.equal(legacy.stored_url, "https://res.cloudinary.com/x/raw/upload/old.pdf", "older files are left for the separate migration");
+  assert.match(legacy.stored_url, /^\/api\/admin\/customer-image\?id=10&/);
 
   // The preview endpoint refuses a bad or expired link before it reads anything.
   const { default: handler } = await import("../src/pages/api/admin/customer-image");
