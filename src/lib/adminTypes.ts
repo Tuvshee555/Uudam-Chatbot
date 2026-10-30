@@ -408,6 +408,11 @@ export type TravelLead = {
   last_activity_at?: string | null;
   /** A consultant reply seen in the Messenger thread after the lead (operator_reply pause). */
   staff_replied_at?: string | null;
+  /** Staff ping for this lead: "sent", "failed", "no_channel" or "" (none yet). */
+  notify_status?: string;
+  notified_at?: string | null;
+  /** The consultant who took the lead. */
+  assigned_to?: string;
 };
 
 export type LeadStats = {

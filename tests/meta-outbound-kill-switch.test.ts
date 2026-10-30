@@ -13,7 +13,7 @@ afterEach(() => {
   process.env = { ...ORIGINAL_ENV };
 });
 
-test("the bot is ON by default when WEBHOOK_BOT_DISABLED is unset, in every environment", () => {
+test("the bot is ON by default when WEBHOOK_BOT_DISABLED is unset, in production and locally", () => {
   // Regression: the previous logic disabled outbound sends whenever
   // VERCEL_ENV === "production" AND the var was not the literal string "0" —
   // which includes the var simply being unset. That meant a fresh production
@@ -23,11 +23,19 @@ test("the bot is ON by default when WEBHOOK_BOT_DISABLED is unset, in every envi
   process.env.VERCEL_ENV = "production";
   assert.equal(isMetaOutboundDisabled(), false);
 
-  process.env.VERCEL_ENV = "preview";
-  assert.equal(isMetaOutboundDisabled(), false);
-
   delete process.env.VERCEL_ENV;
   assert.equal(isMetaOutboundDisabled(), false);
+});
+
+// 2026-10-30 (owner): Preview must never message real customers, so a Preview deployment is
+// off unless explicitly opted in. Production and local stay on by default (above).
+test("a Preview deployment sends nothing to Meta unless PREVIEW_META_OUTBOUND_ALLOWED=1", () => {
+  process.env.VERCEL_ENV = "preview";
+  assert.equal(isMetaOutboundDisabled(), true);
+  process.env.PREVIEW_META_OUTBOUND_ALLOWED = "1";
+  assert.equal(isMetaOutboundDisabled(), false);
+  delete process.env.PREVIEW_META_OUTBOUND_ALLOWED;
+  delete process.env.VERCEL_ENV;
 });
 
 test("WEBHOOK_BOT_DISABLED=1 disables outbound sends regardless of environment", () => {

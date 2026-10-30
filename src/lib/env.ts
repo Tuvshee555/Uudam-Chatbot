@@ -565,7 +565,9 @@ export function getEnv(): ValidatedEnv {
     .map((value) => value.trim())
     .filter(Boolean);
   const telegramBotToken = readOptionalString("TELEGRAM_BOT_TOKEN", source);
-  const telegramStaffChatIds = (readOptionalString("TELEGRAM_STAFF_CHAT_IDS", source) || "")
+  // TELEGRAM_CHAT_ID is the name Production has used since the start (the partner-sync notices
+  // went there until 2026-10-28); TELEGRAM_STAFF_CHAT_IDS, when set, takes precedence.
+  const telegramStaffChatIds = (readOptionalString("TELEGRAM_STAFF_CHAT_IDS", source) || readOptionalString("TELEGRAM_CHAT_ID", source) || "")
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);

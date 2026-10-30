@@ -32,7 +32,48 @@ function mapLeadRow(row: Record<string, unknown>): TravelLead {
     seen_at: row.seen_at ? String(row.seen_at) : null,
     last_activity_at: row.last_activity_at ? String(row.last_activity_at) : null,
     ...(row.staff_replied_at ? { staff_replied_at: new Date(String(row.staff_replied_at)).toISOString() } : {}),
+    notify_status: String(row.notify_status || ""),
+    notified_at: row.notified_at ? new Date(String(row.notified_at)).toISOString() : null,
+    assigned_to: String(row.assigned_to || ""),
   };
+}
+
+/** The lead a staff ping is about: the given id, else the customer's latest lead. */
+async function leadForAlert(target: { leadId?: number; senderId?: string }) {
+  if (!target.leadId && !target.senderId) return null;
+  const result = await queryNeon<{ id: string; notify_status: string; notified_at: string | null }>(
+    target.leadId
+      ? "SELECT id, notify_status, notified_at FROM travel_leads WHERE id=$1"
+      : "SELECT id, notify_status, notified_at FROM travel_leads WHERE sender_id=$1 ORDER BY id DESC LIMIT 1",
+    [target.leadId ?? target.senderId],
+  ).catch(() => null);
+  return result?.rows[0] ?? null;
+}
+
+/** True when staff were already pinged for this lead in the last ten minutes. */
+export async function leadRecentlyNotified(target: { leadId?: number; senderId?: string }, withinMs = 10 * 60_000): Promise<boolean> {
+  const lead = await leadForAlert(target);
+  return Boolean(lead?.notify_status === "sent" && lead.notified_at && Date.now() - Date.parse(lead.notified_at) < withinMs);
+}
+
+/** Records on the lead whether staff were reached, so the Leads tab can show it. Never throws. */
+export async function recordLeadNotification(target: { leadId?: number; senderId?: string }, status: "sent" | "failed" | "no_channel", error = ""): Promise<void> {
+  const lead = await leadForAlert(target);
+  if (!lead) return;
+  await queryNeon("UPDATE travel_leads SET notify_status=$2, notify_error=$3, notified_at=NOW() WHERE id=$1", [lead.id, status, error.slice(0, 200)])
+    .catch(() => null);
+}
+
+export async function assignLead(id: number, assignee: string): Promise<boolean> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return false;
+  const name = assignee.trim().slice(0, 80);
+  const result = await queryNeon(
+    `UPDATE travel_leads SET assigned_to=$2, assigned_at=CASE WHEN $2='' THEN NULL ELSE NOW() END,
+        status='seen', seen_at=COALESCE(seen_at, NOW()) WHERE id=$1`,
+    [id, name],
+  );
+  return (result?.rowCount ?? 0) > 0;
 }
 
 /**

@@ -11,7 +11,14 @@ import { logInfo } from "./observability";
  * function's own default was the thing silencing it, not the var's value.
  */
 export function isMetaOutboundDisabled() {
-  return process.env.WEBHOOK_BOT_DISABLED === "1" || process.env.WEBHOOK_BOT_DISABLED === "true";
+  if (process.env.WEBHOOK_BOT_DISABLED === "1" || process.env.WEBHOOK_BOT_DISABLED === "true") return true;
+  // A Vercel Preview deployment never messages real customers, even if page tokens are
+  // added to it again (2026-10-30: they were shared with Preview until then).
+  return isVercelPreview() && process.env.PREVIEW_META_OUTBOUND_ALLOWED !== "1";
+}
+
+export function isVercelPreview() {
+  return process.env.VERCEL_ENV === "preview";
 }
 
 export function logMetaOutboundSuppressed(source: string, trace?: {

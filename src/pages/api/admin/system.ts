@@ -9,6 +9,7 @@ import { getDbDiagnostics } from "../../../lib/travelOps";
 import { getReadinessReport } from "../../../lib/readiness";
 import { getOperationalIssues } from "../../../lib/aiHealth";
 import { getAiUsageSummary } from "../../../lib/aiUsage";
+import { staffAlertChannelStatus } from "../../../lib/staffAlerts";
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
 
 const env = getEnv();
@@ -35,12 +36,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     scheduleDriveAutoSync({ source: "api.admin.system" });
-    const [diagnostics, driveSync, operationalIssues, aiUsage] = await Promise.all([
+    const [diagnostics, driveSync, operationalIssues, aiUsage, staffAlerts] = await Promise.all([
       getDbDiagnostics(),
       getDriveSyncDiagnostics(),
       getOperationalIssues(),
       // Model calls, tokens and estimated cost per day, environment and model (14 days).
       getAiUsageSummary(14).catch(() => []),
+      // Which staff channel can deliver a lead alert (chat kind only, no token or id).
+      staffAlertChannelStatus().catch(() => null),
     ]);
     return res.status(200).json({
       ok: true,
@@ -50,6 +53,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       drive_sync: driveSync,
       readiness: getReadinessReport(env, operationalIssues),
       ai_usage: aiUsage,
+      staff_alerts: staffAlerts,
     });
   } finally {
     finishRequestTrace(trace, res.statusCode || 500);

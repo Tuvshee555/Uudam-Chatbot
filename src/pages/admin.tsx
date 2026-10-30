@@ -1739,6 +1739,20 @@ export default function AdminPage() {
       await loadLeadsState({ showLoading: true });
     }
   }
+  async function assignLead(lead: TravelLead, assignee: string) {
+    setLeads((prev) => prev.map((item) => item.id === lead.id ? { ...item, assigned_to: assignee, status: "seen" } : item));
+    try {
+      const res = await fetchWithAdmin("/api/admin/leads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: lead.id, assigned_to: assignee }),
+      });
+      if (!res.ok) throw new Error("failed");
+    } catch {
+      toast.error("Хариуцагч хадгалж чадсангүй.");
+      await loadLeadsState({ showLoading: true });
+    }
+  }
   async function saveSettings() {
     if (!settingsForm) return;
     setBusyKey("save-settings");
@@ -2075,6 +2089,7 @@ export default function AdminPage() {
               onRefresh={() => void loadLeadsState({ showLoading: true })}
               onMarkSeen={(lead) => void markLeadSeen(lead)}
               onUpdateStatus={(lead, status) => void updateLeadCrmStatus(lead, status)}
+              onAssign={(lead, assignee) => void assignLead(lead, assignee)}
               broadcastMessage={broadcastMessage}
               broadcastSending={broadcastSending}
               broadcastResult={broadcastResult}

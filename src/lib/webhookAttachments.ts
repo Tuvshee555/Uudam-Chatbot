@@ -171,7 +171,7 @@ async function leadForUnmatchedTripScreenshot(
       context: `Хэрэглэгч аяллын зураг илгээсэн${summary ? ` (${summary})` : ""}, аль аялал болохыг бот тогтоож чадсангүй — «Ирсэн зургууд»-аас үзээд хариулна уу.`,
     });
     await notifyStaffOfLead(
-      { kind: "handoff", platform: input.platform, customerMessage: "[Аяллын зураг]" },
+      { kind: "handoff", platform: input.platform, customerMessage: "[Аяллын зураг]", senderId: input.senderId },
       { requestId: input.trace?.requestId, correlationId: input.trace?.correlationId, source: "api.webhook.trip_screenshot_unmatched" },
     );
   } catch (error) {
@@ -334,7 +334,7 @@ export async function handleAttachmentOnlyMessage(input: {
           context: "Хэрэглэгч дуут мессеж илгээсэн — бот сонсож чадахгүй тул зөвлөх сонсоод хариулна уу.",
         });
         await notifyStaffOfLead(
-          { kind: "handoff", platform, customerMessage: "[Дуут мессеж]" },
+          { kind: "handoff", platform, customerMessage: "[Дуут мессеж]", senderId },
           { requestId: trace?.requestId, correlationId: trace?.correlationId, source: "api.webhook.voice_note" },
         );
       }

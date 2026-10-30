@@ -125,6 +125,7 @@ export function LeadsTab({
   onRefresh,
   onMarkSeen,
   onUpdateStatus,
+  onAssign,
   broadcastMessage,
   broadcastSending,
   broadcastResult,
@@ -137,6 +138,7 @@ export function LeadsTab({
   onRefresh: () => void;
   onMarkSeen: (lead: TravelLead) => void;
   onUpdateStatus: (lead: TravelLead, status: LeadCrmStatus) => void;
+  onAssign: (lead: TravelLead, assignee: string) => void;
   broadcastMessage: string;
   broadcastSending: boolean;
   broadcastResult: { sent: number; failed: number } | null;
@@ -268,6 +270,7 @@ export function LeadsTab({
               attention={attentionById.get(lead.id)!}
               onMarkSeen={() => onMarkSeen(lead)}
               onUpdateStatus={(status) => onUpdateStatus(lead, status)}
+              onAssign={(assignee) => onAssign(lead, assignee)}
             />
           ))}
         </div>
@@ -322,17 +325,28 @@ const CRM_STATUS_TONES: Record<LeadCrmStatus, "neutral" | "warning" | "success" 
   no_answer: "danger",
 };
 
+// Whether staff were pinged for the lead (Telegram), as recorded by staffAlerts.ts.
+const NOTIFY_BADGES: Record<string, { tone: "success" | "danger" | "warning"; label: string }> = {
+  sent: { tone: "success", label: "Ажилтанд мэдэгдсэн" },
+  failed: { tone: "danger", label: "Мэдэгдэл очоогүй" },
+  no_channel: { tone: "warning", label: "Мэдэгдэх суваг алга" },
+};
+
 function LeadCard({
   lead,
   attention,
   onMarkSeen,
   onUpdateStatus,
+  onAssign,
 }: {
   lead: TravelLead;
   attention: LeadAttention;
   onMarkSeen: () => void;
   onUpdateStatus: (status: LeadCrmStatus) => void;
+  onAssign: (assignee: string) => void;
 }) {
+  const [assignee, setAssignee] = useState(lead.assigned_to ?? "");
+  const notifyBadge = NOTIFY_BADGES[lead.notify_status ?? ""];
   const isNew = lead.status === "new";
   const isBooking = lead.kind === "booking";
   const channel = lead.platform === "instagram" ? "Instagram" : "Facebook";
@@ -358,6 +372,8 @@ function LeadCard({
           </Badge>
           <span className="text-xs text-ink-muted">{channel}</span>
           {isNew && <Badge tone="brand">Үзээгүй</Badge>}
+          {notifyBadge && <Badge tone={notifyBadge.tone}>{notifyBadge.label}</Badge>}
+          {lead.assigned_to && <Badge tone="success">Хариуцагч: {lead.assigned_to}</Badge>}
         </div>
         {/* CRM status badge */}
         <Badge tone={CRM_STATUS_TONES[crmStatus]}>
@@ -403,6 +419,15 @@ function LeadCard({
           {" "}· Хэрэглэгч …{lead.sender_id.slice(-6)}
         </span>
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+          <input
+            value={assignee}
+            onChange={(event) => setAssignee(event.target.value)}
+            onBlur={() => { if (assignee.trim() !== (lead.assigned_to ?? "")) onAssign(assignee.trim()); }}
+            placeholder="Хариуцагч"
+            maxLength={80}
+            aria-label="Хүсэлтийг хариуцах зөвлөх"
+            className="min-h-10 w-full rounded-md border border-line-strong bg-surface px-3 py-2 text-sm text-ink transition-colors focus:border-brand sm:w-36"
+          />
           {/* CRM status selector */}
           <select
             value={crmStatus}

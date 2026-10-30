@@ -831,7 +831,7 @@ async function handleMessage(
       notifyOwner: async (msg: string) => {
         if (flowWithheld) return;
         await notifyStaffOfLead(
-          { kind: "handoff", platform, customerMessage: msg },
+          { kind: "handoff", platform, customerMessage: msg, senderId },
           { requestId: trace?.requestId, correlationId: trace?.correlationId, source: "api.webhook.flow" },
         ).catch(() => {});
       },

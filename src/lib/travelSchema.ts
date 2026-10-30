@@ -204,6 +204,15 @@ export async function ensureTravelSchema() {
         ALTER TABLE travel_leads
           ADD COLUMN IF NOT EXISTS lead_status TEXT NOT NULL DEFAULT 'new_lead';
       `);
+      // Whether staff were pinged for a lead (staffAlerts.ts) and who took it (Leads tab).
+      await client.query(`
+        ALTER TABLE travel_leads
+          ADD COLUMN IF NOT EXISTS notify_status TEXT NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS notify_error TEXT NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ NULL,
+          ADD COLUMN IF NOT EXISTS assigned_to TEXT NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ NULL;
+      `);
       // Migration: add photo_urls to trips (idempotent)
       await client.query(`
         ALTER TABLE travel_trip_entries

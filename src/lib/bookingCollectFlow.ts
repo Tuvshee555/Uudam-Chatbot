@@ -154,6 +154,7 @@ export async function continueBookingCollect(ctx: BookingCollectContext): Promis
         platform: ctx.platform,
         customerMessage: [done.name, done.phone, done.trip].filter(Boolean).join(" | "),
         contactPhone: done.phone,
+        senderId: ctx.senderId,
       },
       { requestId: ctx.trace?.requestId, correlationId: ctx.trace?.correlationId, source: "api.webhook" },
     );

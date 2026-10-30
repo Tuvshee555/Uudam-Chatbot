@@ -10,6 +10,7 @@ import {
 import type { LeadCrmStatus } from "../../../lib/travelOps";
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
 import { summarizeLeadAttention } from "../../../lib/leadAttention";
+import { assignLead } from "../../../lib/travelLeadsDb";
 
 const VALID_CRM_STATUSES: LeadCrmStatus[] = ["new_lead", "contacted", "booked", "no_answer"];
 
@@ -52,10 +53,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === "PATCH") {
-      const { id, lead_status } = req.body || {};
+      const { id, lead_status, assigned_to } = req.body || {};
       const leadId = Number(id);
       if (!Number.isInteger(leadId) || leadId <= 0) {
         return res.status(400).json({ error: "valid id is required" });
+      }
+
+      // A consultant takes the lead (free-text name; "" clears it).
+      if (typeof assigned_to === "string") {
+        const updated = await assignLead(leadId, assigned_to);
+        if (!updated) return res.status(404).json({ error: "lead_not_found" });
+        return res.status(200).json({ ok: true });
       }
 
       // If lead_status provided, update CRM status; otherwise just mark seen

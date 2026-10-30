@@ -51,8 +51,19 @@ function isRetryableConnectionError(error: unknown): boolean {
   );
 }
 
+// A Vercel Preview deployment opens no database unless an isolated one (its own Neon
+// branch, never Production) is configured and marked with PREVIEW_DATABASE_ISOLATED=1.
+let previewRefusalLogged = false;
+
 function getPool() {
   if (!env.neonDatabaseUrl) return null;
+  if (process.env.VERCEL_ENV === "preview" && process.env.PREVIEW_DATABASE_ISOLATED !== "1") {
+    if (!previewRefusalLogged) {
+      previewRefusalLogged = true;
+      logError("neon.preview_database_refused", { hint: "Preview needs its own database branch and PREVIEW_DATABASE_ISOLATED=1." });
+    }
+    return null;
+  }
   if (!pool) {
     pool = createPool(env.neonDatabaseUrl);
     pool.on("error", (error) => {
