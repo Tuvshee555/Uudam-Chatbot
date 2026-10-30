@@ -93,12 +93,63 @@ by running them against `main`'s `src/`).
 Updated tests whose expectation was the old behaviour: `booking-collect` (the phone completes),
 `compact-booking-webhook`, `webhook-configured-reply-boundary` (a booked customer belongs to staff).
 
-## 5. Verification
+## 5. Verification (final branch state, rebased on the production hotfix d8c236f)
 
-- `npm test`: 1,498 / 1,498 pass.
-- `npm run gate`: the trip decisions over 1,395 real messages are byte-identical before and after this
-  branch; trip-less sentences 0/25; own answers rejected 0/247.
-- `npm run qa:conversations` 38/38; `npm run qa:accuracy:fixture` 10/10; `tsc` and `eslint` clean.
+- `npm test`: 1,509 pass, 0 fail, 1 todo (the open multi-constraint gap, kept visible on purpose).
+- `npm run gate`: the trip decisions over 1,430 real messages are byte-identical to production (d8c236f);
+  trip-less sentences 0/25; own answers rejected 0/247.
+- `npm run qa:conversations` (the CI and Vercel prebuild gate): 66 pass, 1 todo, 0 fail (was 38 tests).
+  `npm run qa:accuracy:fixture` 10/10; `tsc` and `eslint` clean.
+- `npm run qa:live`: 12 journeys, 42 turns, 0 fact issues; the 3 silent turns are a booked customer and a
+  staff takeover, both by design.
+
+## 5a. Final end-to-end replay of customer journeys (live model, live catalogue)
+
+16 journeys covering every area under review. Every reply was also fact-checked: each ₮ amount must be a
+stored catalogue number or a total that adds up, and each month/day must be a stored departure. **0 fact
+issues.**
+
+| Journey | Result |
+|---|---|
+| Pick by typed number, then "Үнэ" | Full card of the 2nd shown trip; price of that trip ✓ |
+| Pick by tapping button 3, then "хүүхдийн үнэ" | Full card of trip 3; its child fare ✓ |
+| Pick, "zahialga hiie", phone | Phone asked once; request received naming the trip; lead carries trip + phone ✓ |
+| "Захиалга өгөх", destination, phone | Lead carries the trips that were shown ✓ (the trip is not chosen, so it is not named) |
+| Children only → "2" → "Одоо 3 том хүн" | Child fare + adult question; totals 2 adults + 2 children, then 3 + 2, arithmetic correct ✓ |
+| "2 том хүн 1 хүүхэд" → "зөвхөн 2 том хүн" | Total for the party, then for 2 adults only ✓ |
+| "Хүүхдийн амралт 11.20-с эхлэх…" on a picked trip | Only departures from 11/20 ✓ |
+| "11/14-с хойш" under a destination list | That destination's trips from 11/14 ✓ |
+| "11.10-15-ны хооронд эхлэх аялал" | Every trip departing in the window ✓ |
+| Destination list, "12 сард" | December departures of that destination ✓ |
+| Switch destination mid-conversation | New destination's list ✓; a following "хүүхдийн үнэ" under that list got "Аль аялал вэ?" (acceptable, not ideal: P2) |
+| "<place> биш, далайтай нь" | Sea trips, the ruled-out place excluded ✓ |
+| Staff takeover, then questions and "захиалга өгье" | No bot message; inbound kept for staff ✓ |
+| Returning after 40 days: greeting, then "үнэ" | Greeting without the old trip; "үнэ" re-lists the earlier trips rather than pricing one silently ✓ |
+| "мэдээлэл", greeting, "мэдээлэл" | Company intro once; the second time "Аль аялал вэ?" ✓ |
+| **Oct 24 shape: family, ~Feb 5, children 6 and 2, villa/resort, "send the programme"** | **Not repaired.** It answers only "no departure then" plus that destination's other dates and writes a staff lead. Children, lodging and the programme request are ignored. |
+
+**Impact of the open Oct 24 gap.** It affects first messages that pack several constraints together. That
+is a minority of openings, but typical of high-value family bookings. The customer gets a factual but
+incomplete answer (no wrong fact) and staff get a lead. The bot cannot yet weigh lodging type (the catalogue
+has no villa/resort field) or send the programme in the same reply. The chatbot is therefore **not "fully
+repaired"** for this shape. It is tracked as a visible `test.todo` in `tests/conversation-journeys.test.ts`.
+
+Also fixed during this replay: when the model resolves a trip only from old turns (no live selection, for
+example a customer back after weeks), the answer now names that trip instead of quoting a bare price.
+
+## 5b. Conversation-level quality gate
+
+- `tests/conversation-journeys.test.ts`, `tests/forensic-regressions.test.ts`,
+  `tests/conversation-followups.test.ts` and `tests/list-card-dates.test.ts` now run inside
+  `npm run qa:conversations`. That gate runs in GitHub CI on every push and pull request **and in the
+  Vercel prebuild**, so a change that breaks a customer journey fails the build and cannot deploy.
+- Each journey asserts the outcome the customer needed (the right card, a lead naming the trip, a correct
+  total, the right departures, silence during a takeover). Every reply in the journey suite is also checked
+  against the catalogue for amounts, dates, totals and placeholders.
+- `npm run qa:live` (`scripts/live-replay.ts`) replays journeys against the live catalogue and the real
+  model and fails on any fact issue. `.github/workflows/live-replay.yml` runs it on pull requests that touch
+  the bot, weekly, and on demand. It needs two repository secrets, `LIVE_REPLAY_NEON_DATABASE_URL` (read-only
+  role recommended) and `LIVE_REPLAY_OPENAI_API_KEY`, and is skipped with a notice until they exist.
 
 ## 6. Prioritised backlog (evidence → impact)
 
@@ -106,7 +157,9 @@ Updated tests whose expectation was the old behaviour: `booking-collect` (the ph
 |---|---|---|---|
 | P1 | Model-only multi-constraint openings (dates + party + lodging + "send the programme") ignore all but the date | Oct 24 conversation; turn #12 | Lost family leads |
 | P1 | Test sessions write to the production conversation table | 87% of rows are `demo:` | Every dashboard and audit is skewed; add a flag or a separate table |
-| P1 | No conversation-level metric in CI | §3.4 of the audit | Regressions pass unit tests; make the live replay a scheduled, budgeted job |
+| P1 | A booked customer asking a follow-up ("хэзээ холбогдох вэ") gets no reply until staff answer, and staff alerts have no channel | Live replay, booking journey | The customer can wait unanswered; add an alert channel or one acknowledgement |
+| Done | Conversation-level gate in CI and Vercel prebuild; live replay workflow | §5b | — |
+| P2 | A fare-kind question under a fresh multi-trip list ("хүүхдийн үнэ") gets "Аль аялал вэ?" instead of that fare for the listed trips | Live replay, destination switch | One extra turn |
 | P2 | Fuzzy match crosses look-alike destinations (one letter apart) | One destination read as a look-alike other (earlier finding) | Wrong trip; needs a data-side "not this place" field |
 | P2 | Un-ingested messages are invisible | Oct 6 "Universal bagtsan vne" absent from the DB | Log every inbound event ID before routing |
 | P2 | Staff alerts have no channel | `staff_alert.no_channel_configured` | Leads wait until someone opens the Leads tab |
@@ -121,11 +174,15 @@ Updated tests whose expectation was the old behaviour: `booking-collect` (the ph
 
 ## 8. Deploy and rollback
 
-- This branch is **not merged and not deployed to production**. Pushing the branch creates only a Vercel
-  preview.
+- Production runs **d8c236f** (the isolated list-date hotfix). This branch is rebased on it and **not
+  merged**; pushing it creates only a Vercel preview.
 - Schema: no new column in this branch. `quick_info_sent_at` was added earlier by 58e9f0c with
-  `ADD COLUMN IF NOT EXISTS`, and is safe to keep on rollback.
-- To deploy after approval: merge to `main`. Vercel builds (prebuild runs the QA gates), then check the
-  deployment is Ready and send one real test message from a staff account.
-- Rollback: Vercel → Deployments → promote the previous production deployment (58e9f0c or 2265779), or
-  `git revert` the merge commit. No data migration is involved.
+  `ADD COLUMN IF NOT EXISTS`, and is safe to keep on rollback. Booking state written by the old flow at its
+  "trip" step still completes (covered by `booking-collect.test.ts`).
+- To deploy after approval: fast-forward `main` to the branch. Vercel builds (the prebuild runs the
+  conversation gate), then confirm the deployment is Ready for that commit and send one test conversation
+  from a staff account (list → number → "захиалга" → a staff phone).
+- Rollback: Vercel → Deployments → promote d8c236f (the current production deployment), or
+  `git revert` the merge. No data migration is involved.
+- Watch after deploy: `webhook.no_data_reply_suppressed` and `booking_collect_completed_total` counters, and
+  new leads' context lines.

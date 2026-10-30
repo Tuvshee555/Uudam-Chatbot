@@ -1,0 +1,57 @@
+name: Live conversation replay
+
+# Customer journeys through the real webhook with the live catalogue (read-only) and the real model.
+# Nothing is sent to customers and nothing is written. Fails when a reply carries a price or date the
+# catalogue does not hold, a total that does not add up, or a code placeholder.
+# Needs repository secrets LIVE_REPLAY_NEON_DATABASE_URL (a read-only role is enough) and
+# LIVE_REPLAY_OPENAI_API_KEY; without them the job is skipped with a notice.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 1 * * 1'
+  pull_request:
+    paths:
+      - 'src/lib/**'
+      - 'src/pages/api/webhook.ts'
+      - 'scripts/live-replay*'
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NEON_DATABASE_URL: ${{ secrets.LIVE_REPLAY_NEON_DATABASE_URL }}
+      OPENAI_API_KEY: ${{ secrets.LIVE_REPLAY_OPENAI_API_KEY }}
+      VERIFY_TOKEN: ci-verify-token
+      FACEBOOK_PAGES: "000000000000000:ci-not-a-real-token"
+      META_APP_SECRET: ci-meta-secret
+      ADMIN_SECRET: ci-admin-secret
+      REDIS_STATE_ENABLED: "false"
+      REDIS_RATE_LIMIT_ENABLED: "false"
+      REDIS_REPLAY_ENABLED: "false"
+      REDIS_CONVERSATION_ENABLED: "false"
+      REDIS_PAUSE_ENABLED: "false"
+    steps:
+      - name: Skip without secrets
+        if: env.NEON_DATABASE_URL == '' || env.OPENAI_API_KEY == ''
+        run: echo "::notice::Live replay skipped - add LIVE_REPLAY_NEON_DATABASE_URL and LIVE_REPLAY_OPENAI_API_KEY secrets to enable it."
+
+      - name: Checkout
+        if: env.NEON_DATABASE_URL != '' && env.OPENAI_API_KEY != ''
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        if: env.NEON_DATABASE_URL != '' && env.OPENAI_API_KEY != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+
+      - name: Install
+        if: env.NEON_DATABASE_URL != '' && env.OPENAI_API_KEY != ''
+        run: npm ci
+
+      - name: Replay customer journeys
+        if: env.NEON_DATABASE_URL != '' && env.OPENAI_API_KEY != ''
+        run: npm run qa:live

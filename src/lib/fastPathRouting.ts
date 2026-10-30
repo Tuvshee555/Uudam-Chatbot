@@ -224,6 +224,8 @@ export type FastPathRoute = {
   unsupportedRequest?: boolean;
   /** Original customer question answered by a bare choice in the last trip menu. */
   requestText?: string;
+  /** The trip came only from old turns; the answer names it. */
+  fromHistory?: boolean;
 };
 
 /** A reply that asked the customer to pick a trip — the only kind a pending clarification belongs to. */
@@ -295,6 +297,10 @@ export async function routeFastPathText(input: {
     return { matchText: joinContextAndTurn(trip.route_name, turn), scopedClarify: null, chosenTripId: trip.id, selection,
       ...(requestText !== text ? { requestText } : {}) };
   };
+  // A trip read only from old turns (no live selection, no open list): the answer must say
+  // which trip it prices, or a customer back after weeks cannot tell (2026-10-30).
+  const historyChoice = async (trip: TravelTrip, understanding?: Understanding): Promise<FastPathRoute> =>
+    ({ ...(await chose(trip, understanding)), ...(!previousSelection && !pendingTrips.length ? { fromHistory: true } : {}) });
   if (hasUnsupportedOriginRequest(text)) {
     return { matchText: markNoTrip(text), scopedClarify: null, unsupportedRequest: true };
   }
@@ -425,7 +431,11 @@ export async function routeFastPathText(input: {
         };
       }
       if (understanding.certainty === "one") {
-        return { ...(await chose(understanding.trips[0], understanding)), understanding };
+        const picked = understanding.trips[0];
+        const named = resolve(text, trips);
+        const namedHere = named.status === "verified" ? named.trip.id === picked.id
+          : named.status === "ambiguous" && named.candidates.some((candidate) => candidate.id === picked.id);
+        return { ...(namedHere ? await chose(picked, understanding) : await historyChoice(picked, understanding)), understanding };
       }
       if (understanding.certainty === "several" && understanding.intent !== "catalog") {
         // A question ABOUT the trips we just listed ("4 одтой юу?") is not a
@@ -676,7 +686,7 @@ export async function routeFastPathText(input: {
     contextual?.status === "verified" &&
     !directRejectsContextual
   ) {
-    return chose(contextual.trip);
+    return historyChoice(contextual.trip);
   }
   const picked = directRejectsContextual
     ? text
@@ -699,7 +709,7 @@ export async function routeFastPathText(input: {
   // of "үнэ"/"гарах" made "амжилт" a price question that matched no trip and
   // silently handed the customer to staff.
   if (picked === contextualUserText && contextual?.status === "verified") {
-    return chose(contextual.trip);
+    return historyChoice(contextual.trip);
   }
   if (picked === contextualUserText && contextual?.status !== "ambiguous") {
     return { matchText: customerTurn(picked), scopedClarify: null };

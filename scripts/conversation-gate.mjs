@@ -10,7 +10,12 @@ Object.assign(env, { NODE_ENV: "test", OPENAI_API_KEY: "conversation-fixture-key
   TOKEN_PAGE: "conversation-fixture-token", FACEBOOK_PAGE_ID: "1234567890", META_APP_SECRET: "test-meta-secret",
   ADMIN_SECRET: "conversation-fixture-secret", REDIS_STATE_ENABLED: "false", REDIS_RATE_LIMIT_ENABLED: "false",
   REDIS_REPLAY_ENABLED: "false", REDIS_CONVERSATION_ENABLED: "false", REDIS_PAUSE_ENABLED: "false" });
+// Customer journeys come first: each is the shape of real conversations that failed in production
+// (docs/chatbot-forensic-audit.md). This gate runs in CI and in the Vercel prebuild, so a change that
+// breaks a journey cannot deploy.
 const result = spawnSync(process.execPath, ["--import", "tsx", "--test", "--test-reporter=spec",
+  "tests/conversation-journeys.test.ts", "tests/forensic-regressions.test.ts", "tests/conversation-followups.test.ts",
+  "tests/list-card-dates.test.ts",
   "tests/webhook-conversations.test.ts", "tests/demo-conversation-parity.test.ts", "tests/webhook-durable-handoff.test.ts", "tests/website-chat-webhook.test.ts"],
 { cwd: process.cwd(), env, stdio: "inherit" });
 if (result.error) console.error(result.error.message);

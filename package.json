@@ -29,7 +29,8 @@
     "audit:website-parity": "node --import tsx scripts/audit-website-parity.ts",
     "preflight": "node --import tsx scripts/preflight.ts",
     "validate": "npm run lint && npm run typecheck && npm run test && npm run build",
-    "fb:subscribe-page": "node scripts/subscribe-page-app.mjs"
+    "fb:subscribe-page": "node scripts/subscribe-page-app.mjs",
+    "qa:live": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx --test scripts/live-replay.ts"
   },
   "dependencies": {
     "@sparticuz/chromium": "^149.0.0",

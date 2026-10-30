@@ -418,6 +418,8 @@ export function buildTripAnswerPlan(input: {
     lines.push(ADULT_COUNT_QUESTION);
     needsSelection = true;
   }
+  // Read from old turns only: say which trip, the customer may be back after weeks.
+  if (route.fromHistory && lines.length) lines.unshift(trip.route_name);
   for (const topic of incomplete.keys()) answered.delete(topic);
   const missing = request.topics.filter((topic) => !answered.has(topic));
   const missingFacts = [...new Set(missing.flatMap((topic) => incomplete.get(topic) || [topic]))];

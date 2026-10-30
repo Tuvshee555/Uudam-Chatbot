@@ -133,6 +133,8 @@ export async function conversationGateHarness(context: TestContext) {
   };
   return { turn, demoTurn, history, leads, models, blockedNetwork,
     catalog(value: FixtureTrip[]) { catalog = value; webhook.resetWebhookStateForTests(); },
+    /** A staff member took this conversation over: the stored pause the webhook honours. */
+    pause(senderId: string, until = new Date(Date.now() + 3 * 86_400_000).toISOString()) { pauses.set(senderId, { paused: true, expires_at: until }); },
     reset() { webhook.resetWebhookStateForTests(); },
     async close() { await new Promise(resolve => setImmediate(resolve)); assert.deepEqual(blockedNetwork, [], "all nonfixture network must stay blocked"); await closeNeonPool(); },
   };
