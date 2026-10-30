@@ -16,16 +16,24 @@ const CDN = "https://scontent.xx.fbcdn.net/v/t1.15752-9/fixture.jpg?oh=fixture&o
 
 test("inbox messages carry signed attachment links only; post links customers share stay readable", async () => {
   const { adminConversationMessages, verifyConversationAttachmentPreview, verifyCustomerImagePreview } = await import("../src/lib/customerImageAccess");
-  const [customer, bot] = adminConversationMessages([
+  const [customer, bot, customerFile] = adminConversationMessages([
     { id: 501, role: "user", created_at: "2098-01-01T00:00:00Z", text: `see https://www.facebook.com/share/p/fixture/ and ${CDN}`,
       attachments: [{ type: "image", url: CDN }, { type: "file", url: "https://cdn.fbsbx.com/v/t59/fixture.pdf?oe=1" }] },
     { id: 502, role: "assistant", created_at: "2098-01-01T00:00:01Z", text: "Аяллын зураг",
-      attachments: [{ type: "image", url: "https://res.cloudinary.com/fixture/image/upload/v1/trip.jpg", caption: "Аялал" }] },
+      attachments: [{ type: "image", url: "https://res.cloudinary.com/fixture/image/upload/v1/trip.jpg", caption: "Аялал" },
+        { type: "file", url: "https://admin.example.test/api/poster-pdf?trip=fixture-trip" }] },
+    // A customer's file is signed whatever host it came from.
+    { id: 503, role: "user", created_at: "2098-01-01T00:00:02Z", text: "",
+      attachments: [{ type: "file", url: "https://admin.example.test/api/poster-pdf?trip=fixture-trip" }] },
   ]);
   assert.doesNotMatch(JSON.stringify([customer, bot]), /fbcdn|fbsbx|cloudinary|blob\.vercel-storage/, "no raw file URL in the inbox payload");
   assert.match(customer.text, /facebook\.com\/share\/p\/fixture/, "a shared post link stays visible to staff");
   assert.equal(customer.attachments!.length, 2);
   assert.equal(bot.attachments![0].caption, "Аялал");
+  assert.match(bot.attachments![0].url, /^\/api\/admin\/conversation-attachment\?row=502&index=0&/, "a trip photo on a file CDN is signed too");
+  assert.equal(bot.attachments![1].url, "https://admin.example.test/api/poster-pdf?trip=fixture-trip",
+    "the bot's link to this app's own public trip PDF stays openable");
+  assert.match(customerFile.attachments![0].url, /^\/api\/admin\/conversation-attachment\?row=503&index=0&/);
   const link = new URL(customer.attachments![1].url, "https://admin.example.test");
   const [row, index, expires, signature] = ["row", "index", "expires", "signature"].map((key) => link.searchParams.get(key)!);
   assert.deepEqual([row, index], ["501", "1"]);

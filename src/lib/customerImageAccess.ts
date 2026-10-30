@@ -94,17 +94,17 @@ export function adminCustomerDocument(doc: CustomerDocument): CustomerDocument {
   };
 }
 
-/**
- * The inbox's shape of a conversation: every attachment (a customer's photo or file, or a
- * trip photo the bot sent) is a signed link the server resolves to the private copy; the
- * Meta CDN, Cloudinary or Blob URL never reaches the browser.
- */
 // In message text only file-CDN links go; a Facebook post a customer shares stays readable.
 const FILE_CDN_HOST = /(?:^|\.)(?:cloudinary\.com|fbcdn\.net|fbsbx\.com|cdninstagram\.com|blob\.vercel-storage\.com)$/i;
-const withoutFileCdnUrls = (text: string) => text.replace(URL_IN_TEXT, (url) => {
-  try { return FILE_CDN_HOST.test(new URL(url).hostname) ? "" : url; } catch { return url; }
-});
+const onFileCdn = (url: string) => { try { return FILE_CDN_HOST.test(new URL(url).hostname); } catch { return false; } };
+const withoutFileCdnUrls = (text: string) => text.replace(URL_IN_TEXT, (url) => (onFileCdn(url) ? "" : url));
 
+/**
+ * The inbox's shape of a conversation: a customer's photo or file, and anything the bot sent
+ * from a file CDN or store, is a signed link the server resolves to the private copy; the
+ * Meta CDN, Cloudinary or Blob URL never reaches the browser. Only the bot's links to this
+ * app's own public trip PDFs (/api/poster-pdf) are kept as they are.
+ */
 export function adminConversationMessages(messages: HistoryRow[]): HistoryRow[] {
   return messages.map((message) => ({
     ...message,
@@ -112,7 +112,9 @@ export function adminConversationMessages(messages: HistoryRow[]): HistoryRow[] 
     attachments: (message.attachments ?? []).map((attachment, index) => ({
       type: attachment.type,
       ...(attachment.caption ? { caption: attachment.caption } : {}),
-      url: attachment.url ? conversationAttachmentPreviewUrl(message.id, index) : "",
+      url: !attachment.url ? ""
+        : message.role === "assistant" && !onFileCdn(attachment.url) ? attachment.url
+          : conversationAttachmentPreviewUrl(message.id, index),
     })),
   }));
 }
