@@ -19,6 +19,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== "GET") return res.status(405).end();
   const env = getEnv();
   const pages = env.facebookPages.length ? env.facebookPages : env.tokenPage ? [{ pageId: env.facebookPageId, token: env.tokenPage }] : [];
+
+  // One customer's thread as the webhook classifies it now: who sent each message, when, and
+  // what the bot concludes. Times, tags, origins and lengths only — no text, no ids.
+  if (typeof req.query.sender_id === "string" && req.query.sender_id.trim()) {
+    const senderId = req.query.sender_id.trim();
+    const { fetchThreadMessages, takeoverContext, classifyThread, latestStaffReply } = await import("../../../lib/staffTakeover");
+    for (const page of pages) {
+      const lookup = await fetchThreadMessages({ token: page.token, senderId, timeoutMs: 8000 });
+      if (lookup.status !== "ok" || !lookup.messages.length) continue;
+      const context = await takeoverContext({ messages: lookup.messages, pageId: page.pageId, senderId });
+      const timeline = classifyThread(lookup.messages, context).map(({ message, origin }) => ({
+        at: message.created_time,
+        from: origin === "customer" ? "customer" : "page",
+        ...(origin === "customer" ? {} : { tags: (message.tags?.data ?? []).map((tag) => tag.name ?? "").filter((name) => name.startsWith("source:")), origin }),
+        textLength: String(message.message ?? "").length,
+      }));
+      const state = (await queryNeon<Record<string, unknown>>(
+        `SELECT s.paused, s.pause_reason, s.paused_at, s.expires_at, s.last_staff_reply_at,
+                l.lead_status, l.assigned_to <> '' AS assigned, l.seen_at, l.notify_status
+           FROM travel_senders s LEFT JOIN LATERAL (SELECT * FROM travel_leads WHERE sender_id = s.sender_id ORDER BY id DESC LIMIT 1) l ON TRUE
+          WHERE s.sender_id = $1`, [senderId],
+      ))?.rows[0] ?? null;
+      return res.status(200).json({ ok: true, page: `…${page.pageId.slice(-4)}`, threadComplete: context.threadComplete,
+        recordingSince: context.recordingSince ? new Date(context.recordingSince).toISOString() : null,
+        verdict: latestStaffReply({ messages: lookup.messages, ...context }), timeline, state });
+    }
+    return res.status(404).json({ ok: false, error: "thread_not_found" });
+  }
   const graph = async (path: string, token: string) => {
     const separator = path.includes("?") ? "&" : "?";
     const response = await fetch(`https://graph.facebook.com/${path}${separator}access_token=${encodeURIComponent(token)}`,

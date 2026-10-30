@@ -14,8 +14,9 @@
  *   (outboundMessages.ts), or by matching a reply the bot stored at that moment;
  * - `source:mobile` is a consultant;
  * - any other `source:web` Page message is a consultant on a computer, except Meta's
- *   automations and notices, which come within seconds of the customer's message (or read as a
- *   notice);
+ *   automations and notices, which come within seconds of the customer's message, open the
+ *   conversation before the customer's first message (the automated welcome greeting, live
+ *   2026-10-30 22:37 UTC), or read as a notice;
  * - a `source:web` message from before the bot recorded its ids cannot be told apart and
  *   counts only as before (not a consultant).
  * A lookup that fails says so ("unverified"); it never reads as "no consultant".
@@ -47,33 +48,48 @@ const META_NOTICE = /(?:replied to|responded to|clicked (?:on )?(?:your|an) ad|v
 
 export type ClassifyContext = {
   pageId: string;
+  /** The thread was read from its start (fewer messages than the lookup's limit). */
+  threadComplete?: boolean;
   /** Ids the bot recorded when sending (outboundMessages.ts). */
   botMids?: Set<string>;
   /** When the bot began recording ids; null: unknown, every source:web message is legacy. */
   recordingSince?: number | null;
-  /** Replies the bot stored for this customer (time and text), the fallback for an unrecorded id. */
-  botReplies?: Array<{ at: number; text: string }>;
+  /** Replies the bot stored for this customer, the fallback for an unrecorded id. */
+  botReplies?: Array<{ at: number; text: string; attachments?: number }>;
 };
+
+/** Messages per thread lookup (fetchThreadMessages); a full page may not start at the beginning. */
+export const THREAD_LOOKUP_LIMIT = 25;
 
 const tagsOf = (message: ThreadMessage) => (message.tags?.data ?? []).map((tag) => tag.name ?? "");
 
 function matchesStoredReply(message: ThreadMessage, at: number, replies: ClassifyContext["botReplies"]): boolean {
   const text = String(message.message ?? "").trim();
+  // An image (no text) matches only a stored reply that carried one: a consultant's photo sent
+  // right after a bot reply is not the bot.
   return (replies ?? []).some((reply) => Math.abs(reply.at - at) < 120_000
-    && (text === "" || reply.text.trim().startsWith(text.slice(0, 40)) || reply.text.includes(text.slice(0, 30))));
+    && (text === "" ? (reply.attachments ?? 0) > 0 : reply.text.trim().startsWith(text.slice(0, 40)) || reply.text.includes(text.slice(0, 30))));
 }
 
-/** Who sent one Page message; `previousCustomerAt` is the customer's last message before it. */
-export function classifyPageMessage(message: ThreadMessage, previousCustomerAt: number | null, context: ClassifyContext): PageMessageOrigin {
+/**
+ * Who sent one Page message; `previousCustomerAt` is the customer's last message before it, and
+ * `opener` says it opens the conversation (only Meta's automations before it, in a thread read
+ * from its start).
+ */
+export function classifyPageMessage(message: ThreadMessage, previousCustomerAt: number | null, context: ClassifyContext, opener = false): PageMessageOrigin {
   const at = Date.parse(message.created_time ?? "");
   const tags = tagsOf(message);
   if (message.id && context.botMids?.has(message.id)) return "bot";
-  if (matchesStoredReply(message, at, context.botReplies)) return "bot";
+  // The phone app is only ever a person; the bot sends from the web.
   if (tags.includes("source:mobile")) return "staff_mobile";
   if (!tags.includes("source:web")) return "other";
+  if (matchesStoredReply(message, at, context.botReplies)) return "bot";
   const since = context.recordingSince ?? null;
   if (since === null || !(at >= since)) return "legacy";
   if (META_NOTICE.test(String(message.message ?? ""))) return "automation";
+  // The conversation's opener, before the customer's first message: Meta's automated welcome
+  // greeting, never a consultant replying.
+  if (opener && previousCustomerAt === null) return "automation";
   if (previousCustomerAt !== null && at - previousCustomerAt >= 0 && at - previousCustomerAt < AUTOMATION_WINDOW_MS) return "automation";
   return "staff_web";
 }
@@ -86,18 +102,38 @@ export function latestStaffReply(input: {
 } & ClassifyContext): { at: Date; origin: "staff_mobile" | "staff_web" } | null {
   const now = (input.now ?? new Date()).getTime();
   const windowMs = input.windowMs ?? STAFF_TAKEOVER_MS;
-  const ordered = [...input.messages].sort((a, b) => Date.parse(a.created_time ?? "") - Date.parse(b.created_time ?? ""));
-  let previousCustomerAt: number | null = null;
   let latest: { at: Date; origin: "staff_mobile" | "staff_web" } | null = null;
-  for (const message of ordered) {
-    const at = Date.parse(message.created_time ?? "");
-    if (Number.isNaN(at)) continue;
-    if (message.from?.id !== input.pageId) { previousCustomerAt = at; continue; }
+  for (const { at, origin } of classifyThread(input.messages, input)) {
     if (now - at > windowMs) continue;
-    const origin = classifyPageMessage(message, previousCustomerAt, input);
     if ((origin === "staff_mobile" || origin === "staff_web") && (!latest || at > latest.at.getTime())) latest = { at: new Date(at), origin };
   }
   return latest;
+}
+
+/**
+ * Every message of the thread in time order, each Page message with its origin. The opening run —
+ * in a thread read from its start, before the customer's first message and before any Page message
+ * that is not an automation — is Meta's automated greeting.
+ */
+export function classifyThread(messages: ThreadMessage[], context: ClassifyContext): Array<{ message: ThreadMessage; at: number; origin: PageMessageOrigin | "customer" }> {
+  const ordered = [...messages].sort((a, b) => Date.parse(a.created_time ?? "") - Date.parse(b.created_time ?? ""));
+  let previousCustomerAt: number | null = null;
+  let opening = context.threadComplete ?? messages.length < THREAD_LOOKUP_LIMIT;
+  const classified: Array<{ message: ThreadMessage; at: number; origin: PageMessageOrigin | "customer" }> = [];
+  for (const message of ordered) {
+    const at = Date.parse(message.created_time ?? "");
+    if (Number.isNaN(at)) continue;
+    if (message.from?.id !== context.pageId) {
+      previousCustomerAt = at;
+      opening = false;
+      classified.push({ message, at, origin: "customer" });
+      continue;
+    }
+    const origin = classifyPageMessage(message, previousCustomerAt, context, opening);
+    if (origin !== "automation") opening = false;
+    classified.push({ message, at, origin });
+  }
+  return classified;
 }
 
 /** Back-compatible: the latest consultant message time, or null. */
@@ -114,7 +150,7 @@ export async function fetchThreadMessages(input: {
   timeoutMs: number;
 }): Promise<ThreadLookup> {
   const url = `${GRAPH_API_BASE}/me/conversations?platform=messenger&user_id=${encodeURIComponent(input.senderId)}`
-    + `&fields=messages.limit(25){id,from,message,created_time,tags}&access_token=${encodeURIComponent(input.token)}`;
+    + `&fields=messages.limit(${THREAD_LOOKUP_LIMIT}){id,from,message,created_time,tags}&access_token=${encodeURIComponent(input.token)}`;
   let response: Response;
   try {
     response = await fetch(url, { signal: AbortSignal.timeout(input.timeoutMs) });
@@ -138,23 +174,30 @@ export type TakeoverCheck =
   | { status: "checked"; staff: { at: Date; origin: "staff_mobile" | "staff_web" } | null }
   | { status: "unverified"; reason: "timeout" | "permission" | "api_error" | "incomplete" };
 
-/** The thread, classified with the bot's recorded ids and stored replies. */
-export async function detectStaffTakeover(input: { lookup: ThreadLookup; pageId: string; senderId: string; now?: Date }): Promise<TakeoverCheck> {
-  if (input.lookup.status !== "ok") return input.lookup;
-  const pageMessages = input.lookup.messages.filter((message) => message.from?.id === input.pageId);
-  if (!pageMessages.length) return { status: "checked", staff: null };
+/** What the classification needs besides the thread: the bot's recorded ids and stored replies. */
+export async function takeoverContext(input: { messages: ThreadMessage[]; pageId: string; senderId: string }): Promise<ClassifyContext> {
+  const pageMessages = input.messages.filter((message) => message.from?.id === input.pageId);
   const { knownOutboundMids, outboundRecordingSince } = await import("./outboundMessages");
   const { queryNeon } = await db();
   const [botMids, recordingSince, replies] = await Promise.all([
     knownOutboundMids(pageMessages.map((message) => message.id ?? "").filter(Boolean)).catch(() => new Set<string>()),
     outboundRecordingSince().catch(() => null),
-    queryNeon<{ at: string; text: string }>(
-      `SELECT created_at AS at, text FROM travel_conversations
+    queryNeon<{ at: string; text: string; attachments: number }>(
+      `SELECT created_at AS at, text, CASE WHEN jsonb_typeof(attachments) = 'array' THEN jsonb_array_length(attachments) ELSE 0 END AS attachments
+         FROM travel_conversations
         WHERE sender_id=$1 AND role='assistant' AND created_at > NOW() - INTERVAL '4 days'`, [input.senderId],
     ).catch(() => null),
   ]);
-  const botReplies = (replies?.rows ?? []).map((row) => ({ at: Date.parse(String(row.at)), text: String(row.text ?? "") }));
-  return { status: "checked", staff: latestStaffReply({ messages: input.lookup.messages, pageId: input.pageId, now: input.now, botMids, recordingSince, botReplies }) };
+  const botReplies = (replies?.rows ?? []).map((row) => ({ at: Date.parse(String(row.at)), text: String(row.text ?? ""), attachments: Number(row.attachments) || 0 }));
+  return { pageId: input.pageId, botMids, recordingSince, botReplies, threadComplete: input.messages.length < THREAD_LOOKUP_LIMIT };
+}
+
+/** The thread, classified with the bot's recorded ids and stored replies. */
+export async function detectStaffTakeover(input: { lookup: ThreadLookup; pageId: string; senderId: string; now?: Date }): Promise<TakeoverCheck> {
+  if (input.lookup.status !== "ok") return input.lookup;
+  if (!input.lookup.messages.some((message) => message.from?.id === input.pageId)) return { status: "checked", staff: null };
+  const context = await takeoverContext({ messages: input.lookup.messages, pageId: input.pageId, senderId: input.senderId });
+  return { status: "checked", staff: latestStaffReply({ messages: input.lookup.messages, now: input.now, ...context }) };
 }
 
 /** Records when a consultant last replied, so a later failed lookup still knows staff are involved. */
