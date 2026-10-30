@@ -18,7 +18,8 @@ import { evaluationCallBudget, requireApprovedEvaluation } from "./lib/evalGuard
 import { processAiTotals } from "../src/lib/aiUsage";
 import test from "node:test";
 
-type Scenario = { id: string; turns: string[] };
+/** channel "facebook" sends through the Page (the production channel); Instagram otherwise. */
+type Scenario = { id: string; turns: string[]; channel?: "facebook" | "instagram" };
 const scenarios: Scenario[] = JSON.parse(readFileSync(process.env.LIVE_SCENARIOS || "scripts/live-replay-scenarios.json", "utf8"));
 
 test("live replay", { timeout: 900_000 }, async (context) => {
@@ -129,9 +130,12 @@ test("live replay", { timeout: 900_000 }, async (context) => {
   env.resetEnvCacheForTests();
   const webhook = await import("../src/pages/api/webhook");
   let serial = 0;
-  const turn = async (senderId: string, text: string) => {
+  const turn = async (senderId: string, text: string, channel: Scenario["channel"] = "instagram") => {
     const before = sends.length, beforeLeads = leads.length;
-    const payload = { object: "instagram", entry: [{ id: "replay-page", messaging: [{ sender: { id: senderId }, message: { mid: `replay-${++serial}`, text } }] }] };
+    const message = { sender: { id: senderId }, message: { mid: `replay-${++serial}`, text } };
+    const payload = channel === "facebook"
+      ? { object: "page", entry: [{ id: "1234567890", messaging: [{ ...message, recipient: { id: "1234567890" } }] }] }
+      : { object: "instagram", entry: [{ id: "replay-page", messaging: [message] }] };
     const raw = Buffer.from(JSON.stringify(payload));
     const req = { method: "POST", url: "/api/webhook", query: {}, headers: { "content-type": "application/json", "content-length": String(raw.length),
       "x-hub-signature-256": `sha256=${createHmac("sha256", "test-meta-secret").update(raw).digest("hex")}` }, async *[Symbol.asyncIterator]() { yield raw; } };
@@ -180,7 +184,7 @@ test("live replay", { timeout: 900_000 }, async (context) => {
         await setTripSelection(sender, null); await clearClarificationState(sender);
         turns.push({ user: text, bot: [], leads: [] }); continue;
       }
-      const out = await turn(sender, text);
+      const out = await turn(sender, text, scenario.channel);
       lastButtons = out.sends.flatMap((send) => send.buttons);
       const issues = out.sends.flatMap((send) => factIssues(send.text));
       turns.push({ user: text, bot: out.sends.map((send) => send.text + (send.buttons.length ? `\n  [buttons: ${send.buttons.join(" | ")}]` : "")),

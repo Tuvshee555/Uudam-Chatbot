@@ -23,6 +23,10 @@ export async function conversationGateHarness(context: TestContext) {
   const pauses = new Map<string, { paused: boolean; expires_at: string | null; pause_reason: string }>();
   const logs: Array<{ level: string; event: string; senderHash: string; fields: Record<string, unknown> }> = [];
   const failingRecipients = new Set<string>();
+  /** Senders whose messages arrive through the Facebook Page (the production channel) instead of Instagram. */
+  const facebookSenders = new Set<string>();
+  /** A consultant's reply in the customer's Messenger thread (staff app), by customer. */
+  const staffReplies = new Map<string, string>();
   const seen = new Map<string, number>();
   const models: Array<{ user: string; response: ModelOverride }> = [];
   const answerModels: string[] = [];
@@ -125,6 +129,13 @@ export async function conversationGateHarness(context: TestContext) {
       else if (prompt.includes("Reply rules:")) { answerModels.push(prompt); content = override.finalReply || "REFER"; }
       return new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: "stop" }] }), { status: 200 });
     }
+    if (/^https:\/\/graph\.facebook\.com\/[^/]+\/me\/conversations\?/.test(url)) {
+      // The Messenger thread the webhook reads to see whether a consultant has replied.
+      const user = new URL(url).searchParams.get("user_id") || "";
+      const at = staffReplies.get(user);
+      return new Response(JSON.stringify({ data: at ? [{ messages: { data: [{ from: { id: "1234567890" }, message: "Сайн байна уу, би зөвлөх",
+        created_time: at, tags: { data: [{ name: "source:mobile" }] } }] } }] : [] }), { status: 200 });
+    }
     if (/^https:\/\/graph\.(?:facebook|instagram)\.com\//.test(url)) {
       if (failingRecipients.has(String(body.recipient?.id || ""))) {
         return new Response(JSON.stringify({ error: { message: "(#100) Length of param message[text] must be less than or equal to 2000", code: 100 } }), { status: 400 });
@@ -144,7 +155,9 @@ export async function conversationGateHarness(context: TestContext) {
   const turn = async (senderId: string, text: string, model: ModelOverride = {}, eventId = `gate-event-${++serial}`) => {
     override = model;
     const beforeSend = sends.length, beforeLead = leads.length, beforeModel = models.length, beforeAnswerModel = answerModels.length;
-    const payload = { object: "instagram", entry: [{ id: "gate-page", messaging: [{ sender: { id: senderId }, message: { mid: eventId, text } }] }] };
+    const payload = facebookSenders.has(senderId)
+      ? { object: "page", entry: [{ id: "1234567890", messaging: [{ sender: { id: senderId }, recipient: { id: "1234567890" }, message: { mid: eventId, text } }] }] }
+      : { object: "instagram", entry: [{ id: "gate-page", messaging: [{ sender: { id: senderId }, message: { mid: eventId, text } }] }] };
     const raw = Buffer.from(JSON.stringify(payload));
     const req = { method: "POST", url: "/api/webhook", query: {}, headers: { "content-type": "application/json", "content-length": String(raw.length),
       "x-hub-signature-256": `sha256=${createHmac("sha256", "test-meta-secret").update(raw).digest("hex")}` },
@@ -170,6 +183,10 @@ export async function conversationGateHarness(context: TestContext) {
   };
   return { turn, demoTurn, history, leads, models, blockedNetwork, logs,
     /** Meta rejects every message to this customer (as the over-long replies of 2026-10-24). */
+    /** This customer writes through the Facebook Page (all real traffic on 2026-10-30). */
+    viaFacebook(senderId: string) { facebookSenders.add(senderId); },
+    /** A consultant wrote to this Facebook customer from the Pages app (as the thread shows it). */
+    staffReplied(senderId: string, at = new Date(Date.now() - 60_000).toISOString()) { staffReplies.set(senderId, at); },
     failSends(senderId: string, failing = true) { if (failing) failingRecipients.add(senderId); else failingRecipients.delete(senderId); },
     catalog(value: FixtureTrip[]) { catalog = value; webhook.resetWebhookStateForTests(); },
     /** A staff member took this conversation over: the stored pause the webhook honours. */

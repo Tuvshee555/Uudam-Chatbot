@@ -31,11 +31,13 @@ export async function pauseReason(senderId: string): Promise<string | null> {
 }
 
 /**
- * A customer who has booked, sent documents, asked for the bank account or
- * said they paid belongs to staff from then on. The 60-minute handoff pause
- * let the bot return the next day and re-send the trip card over a staff
- * member's own replies (2026-10-06..08). Meta's staff-reply echoes do not
- * reach the webhook, so this cannot wait for an operator echo to pause it.
+ * Marks a customer who has made a booking request, sent documents, asked for the
+ * bank account or said they paid: waiting for a consultant, for three days.
+ * It used to silence the bot (staff replies were invisible to the webhook,
+ * 2026-10-06..08). The webhook now reads the thread and pauses for a real staff
+ * reply ("operator_reply"), so this marker no longer silences: the bot keeps
+ * helping and answers status questions from the lead (bookedFollowup.ts).
+ * Scheduled re-engagement messages still skip these customers.
  */
 export const BOOKED_CUSTOMER_PAUSE_MS = 3 * 24 * 60 * 60 * 1000;
 

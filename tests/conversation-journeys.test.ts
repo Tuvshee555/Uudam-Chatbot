@@ -75,7 +75,8 @@ test("customer journeys reach their goal with grounded facts", async (context) =
       assert.match(tapped.text, /• Том хүн: 2,291,000₮/);
     });
 
-    await context.test("booking intent then a phone writes one lead with the trip, then staff own the chat", async () => {
+    await context.test("booking intent then a phone writes one lead; the waiting customer is still helped and told the real status", async () => {
+      harness.viaFacebook("book");
       await say("book", "Нислэг газар хосолсон", comboList);
       await say("book", "1");
       assert.equal((await say("book", "Захиалга өгье")).text, "Утасны дугаараа бичнэ үү.");
@@ -95,15 +96,23 @@ test("customer journeys reach their goal with grounded facts", async (context) =
       assert.doesNotMatch(after.text, /баталгаажсан|баталгаажлаа|залгана|цагт/, "no confirmation, no call time");
       assert.equal(after.leads.length, 0, "no second lead");
       const booking = harness.leads.find(lead => lead.sender_id === "book" && lead.kind === "booking")!;
-      assert.match(booking.context, /Хариулаагүй асуулт \([^)]+\): Хэзээ холбогдох вэ\?/, "staff see the question on the lead");
+      assert.match(booking.context, /Захиалгын төлөв асуусан \([^)]+\): Хэзээ холбогдох вэ\?/, "staff see the question on the lead");
       assert.equal(booking.status, "new", "and the lead is unread again");
+      // 2026-10-30 (owner): one status reply then silence for three days was not acceptable. A
+      // different status question gets a one-line "nothing new"; the same question again gets
+      // nothing (no spam); other questions are answered as for anyone. All reach the lead.
       const again = await say("book", "Над руу залгах уу?");
-      assert.equal(again.sends.length, 0, "told once; later messages go to staff only");
-      assert.match(booking.context, /Над руу залгах уу\?/);
-      assert.equal((await say("book", "Баярлалаа")).sends.length, 0, "thanks needs no reply");
+      assert.equal(again.text, "Шинэ мэдээлэл алга: Аяллын зөвлөх тантай хараахан холбогдоогүй байна. Асуултыг тань зөвлөхөд дахин дамжууллаа.");
+      assert.equal((await say("book", "Над руу залгах уу?")).sends.length, 0, "the very same question twice is not answered twice");
+      assert.match(booking.context, /Над руу залгах уу\?[\s\S]*Над руу залгах уу\?/, "both reach staff");
+      const question = await say("book", "Хүүхдийн үнэ хэд вэ?", one("a1"));
+      assert.match(question.text, /2,591,000₮/, "a trip question from a waiting customer is answered");
+      assert.match(booking.context, /Захиалгын дараах мессеж \([^)]+\): Хүүхдийн үнэ хэд вэ\?/);
+      assert.doesNotMatch(harness.leads.map(lead => lead.context).join("\n"), /баталгаажсан/, "nothing calls the request confirmed");
     });
 
     await context.test("a booked customer hears what staff recorded, and a consultant's takeover stays silent but visible", async () => {
+      harness.viaFacebook("book-called");
       await say("book-called", "Нислэг газар хосолсон", comboList);
       await say("book-called", "2");
       await say("book-called", "Захиалга өгье");
@@ -118,7 +127,27 @@ test("customer journeys reach their goal with grounded facts", async (context) =
       harness.pause("book-called", undefined, "operator_reply");
       const taken = await say("book-called", "Хэзээ залгах вэ?");
       assert.equal(taken.sends.length, 0, "the bot never talks over a consultant");
-      assert.match(booking.context, /Хэзээ залгах вэ\?/);
+      assert.match(booking.context, /Хариулаагүй асуулт \([^)]+\): Хэзээ залгах вэ\?/, "marked unanswered for staff");
+      // A consultant answers a waiting Facebook customer in Messenger: from then on the bot
+      // stays out, even for a question it could answer, and the message is marked for staff.
+      harness.viaFacebook("book-staff");
+      await say("book-staff", "Нислэг газар хосолсон", comboList);
+      await say("book-staff", "1");
+      await say("book-staff", "Захиалга өгье");
+      await say("book-staff", "90002468");
+      harness.staffReplied("book-staff");
+      const afterStaff = await say("book-staff", "Хүүхдийн үнэ хэд вэ?", one("a1"));
+      assert.equal(afterStaff.sends.length, 0, "the consultant owns the chat");
+      assert.match(harness.leads.find(lead => lead.sender_id === "book-staff" && lead.kind === "booking")!.context,
+        /Хариулаагүй асуулт \([^)]+\): Хүүхдийн үнэ хэд вэ\?/);
+      // Instagram has no staff-reply check, so a waiting Instagram customer stays with staff.
+      await say("book-ig", "Нислэг газар хосолсон", comboList);
+      await say("book-ig", "1");
+      await say("book-ig", "Захиалга өгье");
+      await say("book-ig", "90005678");
+      const instagram = await say("book-ig", "Хүүхдийн үнэ хэд вэ?", one("a1"));
+      assert.equal(instagram.sends.length, 0);
+      assert.match(harness.leads.find(lead => lead.sender_id === "book-ig" && lead.kind === "booking")!.context, /Хариулаагүй асуулт \([^)]+\): Хүүхдийн үнэ хэд вэ\?/);
     });
 
     await context.test("family pricing follows each change to the party", async () => {
