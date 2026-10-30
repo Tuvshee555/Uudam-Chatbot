@@ -37,6 +37,13 @@ export type BookingCollectContext = {
   send: (message: string, tag: string) => Promise<boolean | void>;
   /** The shared webhook sender records the exact presented reply itself. */
   sendRecordsHistory?: boolean;
+  /**
+   * The trip this conversation has selected and a context note for staff. The trip
+   * used to be read only from the words of the last reply; once follow-up answers
+   * stopped repeating the trip title, a customer who had picked a trip was asked
+   * "Аль аялал вэ?" after giving their phone (live replay 2026-10-30).
+   */
+  conversation?: () => Promise<{ selectedTripName: string; context: string }>;
   trace?: { requestId?: string; correlationId?: string };
 };
 
@@ -80,7 +87,8 @@ export async function startBookingCollect(ctx: BookingCollectContext): Promise<b
     return true;
   }
   const trips = await loadTrips();
-  const trip = verifiedTripName(ctx.text, trips) || verifiedTripName(ctx.contextualUserText, trips);
+  const trip = verifiedTripName(ctx.text, trips) || (await ctx.conversation?.())?.selectedTripName
+    || verifiedTripName(ctx.contextualUserText, trips);
   const state = startCollectState(ctx.text, trip);
   await setCollectState(ctx.senderId, state);
   const prompt = promptForStep(state.step);
@@ -126,13 +134,15 @@ export async function continueBookingCollect(ctx: BookingCollectContext): Promis
   }
 
   let done = result.state;
+  const conversation = await ctx.conversation?.().catch(() => null);
+  if (!done.trip && conversation?.selectedTripName) done = { ...done, trip: conversation.selectedTripName.slice(0, 200) };
   const { created } = await ensureDurableLead({
     kind: "booking",
     platform: ctx.platform,
     senderId: ctx.senderId,
     customerMessage: done.originalMessage,
     contactPhone: done.phone,
-    context: buildLeadContext(done),
+    context: [buildLeadContext(done), conversation?.context].filter(Boolean).join("\n"),
   });
   await setCollectState(ctx.senderId, done);
   // Only keep a validated, voluntarily supplied name.

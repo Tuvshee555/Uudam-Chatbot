@@ -27,14 +27,14 @@ test("compact booking asks one missing detail, saves the request, and permits qu
 
     const unknown = await harness.turn("compact-book-unknown", "Захиалах");
     assert.equal(unknown.sends[0].text, "Утасны дугаараа бичнэ үү.");
+    // The phone completes the request at once: no "Аль аялал вэ?" holding the lead back.
     const contact = await harness.turn("compact-book-unknown", "99113344");
-    assert.equal(contact.sends[0].text, "Аль аялал вэ?");
-    assert.equal(contact.leads.length, 0, "an unknown trip requests only that missing detail");
-    const selected = await harness.turn("compact-book-unknown", trip.route_name);
-    assert.equal(selected.leads.length, 1);
-    assert.ok(selected.leads[0].context.includes("99113344"), "contact is retained while selecting the trip");
-    assert.equal(selected.sends.length, 1);
-    assert.doesNotMatch(selected.sends[0].text, /утасны|нэрээ|холбогдоно|баталгааж|https?:/i);
+    assert.equal(contact.leads.length, 1, "the lead is written when the phone arrives");
+    assert.ok(contact.leads[0].context.includes("99113344"));
+    assert.ok(contact.leads[0].context.includes("Захиалах"), "staff see what the customer wrote");
+    assert.equal(contact.sends.length, 1);
+    assert.equal(contact.sends[0].text, "Захиалгын хүсэлтийг хүлээн авлаа.");
+    assert.doesNotMatch(contact.sends[0].text, /Аль аялал|утасны|холбогдоно|https?:/i);
 
     await harness.turn("compact-book-question", `${trip.route_name} захиалга хийе`);
     const question = await harness.turn("compact-book-question", `${trip.route_name} том хүн үнэ хэд вэ`, { tripId: trip.id, place: trip.route_name });

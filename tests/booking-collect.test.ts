@@ -46,15 +46,17 @@ test("a volunteered name is kept without adding another required question", () =
   assert.equal(done.kind, "done");
 });
 
-test("without a known trip the flow asks which one after the phone", () => {
+test("the phone completes the request even when no trip is known yet", () => {
+  // Asking "Аль аялал вэ?" after the phone held the lead back until a second answer
+  // (live replay 2026-10-30); the webhook fills the trip from the conversation.
   const state = mod.startCollectState("Захиалах");
   const result = mod.advanceCollectState(state, "99112233", "99112233");
-  assert.equal(result.kind, "ask");
-  if (result.kind !== "ask") return;
-  assert.equal(result.state.step, "trip");
-  const done = mod.advanceCollectState(result.state, "Альфа аялал", "");
-  assert.equal(done.kind, "done");
-  if (done.kind === "done") assert.equal(done.state.trip, "Альфа аялал");
+  assert.equal(result.kind, "done");
+  if (result.kind === "done") { assert.equal(result.state.phone, "99112233"); assert.equal(result.state.trip, ""); }
+  // A flow stored at the legacy "trip" step still finishes with the answer.
+  const legacy = mod.advanceCollectState({ ...state, phone: "99112233", step: "trip" }, "Альфа аялал", "");
+  assert.equal(legacy.kind, "done");
+  if (legacy.kind === "done") assert.equal(legacy.state.trip, "Альфа аялал");
 });
 
 test("questions and button taps are NOT taken as a name or phone (replayed 2026-09-11 / 07-29 chats)", () => {

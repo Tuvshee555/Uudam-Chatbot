@@ -23,7 +23,7 @@ import {
   MID_CONVERSATION_GREETING_REPLY,
   THANKS_REPLY,
 } from "../../lib/greetingPhrases";
-import { optionChosenByNumber } from "../../lib/selectionAnswer";
+import { adultCountAnswer, optionChosenByNumber } from "../../lib/selectionAnswer";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
@@ -49,6 +49,8 @@ import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWe
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBookedCustomer, pauseBot, trackSender } from "../../lib/pause";
 import { buildDateNotScheduledReply } from "../../lib/travelFastPathsPricing";
+import { conversationLeadContext } from "../../lib/leadContext";
+import { withoutNegatedTrips } from "../../lib/negatedTrip";
 import { pickReferral, rememberAdReferral } from "../../lib/adReferral";
 import { AUTO_PAUSE_RESET_DAYS, dbAppendAdminMessage, dbClaimGoodbye, dbClaimQuickInfo, dbReleaseQuickInfo, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { hasDepartureDateAvailabilityIntent, requestsDateWindow } from "../../lib/travelDates";
@@ -278,7 +280,20 @@ async function handleMessage(
     getTripSelection(senderId),
   ]);
   // "1" under a bulleted hotel / package / date question is that option, not a number with no list.
-  text = optionChosenByNumber(history, text) ?? text;
+  text = adultCountAnswer(history, text) ?? optionChosenByNumber(history, text) ?? text;
+  // "<place> биш, …" rules that place out: only the rest is matched, and that place's
+  // trips are left out of this turn's catalogue (negatedTrip.ts).
+  const excludedTripIds = new Set<string>();
+  if (/биш|bish/iu.test(text)) {
+    const active = (await listTrips({ limit: 5000 })).filter((trip) => trip.status === "active").map(sanitizeTripForCustomers);
+    const resolve = (word: string) => resolveTripFromUserMessage(word, active, { allowLooseFallback: false });
+    const corrected = withoutNegatedTrips(text, (word) => resolve(word).status !== "not_found");
+    for (const word of corrected.negated) {
+      const ruledOut = resolve(word);
+      for (const trip of ruledOut.status === "verified" ? [ruledOut.trip] : ruledOut.status === "ambiguous" ? ruledOut.candidates : []) excludedTripIds.add(trip.id);
+    }
+    text = corrected.text;
+  }
   const contextualUserText = buildContextualUserText(history, text);  const sessionId = `${platform}:${pageId}:${senderId}`;
   // Non-blocking: the memory merge continues after the response via waitUntil.
   // It used to be awaited inline while holding the conversation lock, which
@@ -700,6 +715,14 @@ async function handleMessage(
       });
     }
   }
+  // The trip this conversation selected (or just offered) and the customer's last
+  // messages, for every lead written from here on (booking flow, a typed phone).
+  const conversationLeadNote = async () => {
+    const trips = (await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers);
+    const selectedTrip = groundingSelection ? trips.find((trip) => trip.id === groundingSelection.tripId && trip.status === "active") || null : null;
+    const shownTrips = (groundingPending?.candidateTripIds || []).map((id) => trips.find((trip) => trip.id === id)).filter((trip): trip is TravelTrip => Boolean(trip));
+    return { selectedTrip, context: conversationLeadContext({ history, currentText: text, selectedTrip, shownTrips }) };
+  };
   // Booking collector (name + phone before handoff). Answers are validated in
   // bookingCollect.ts; a message that is not an answer drops the flow and is
   // answered normally below.
@@ -711,6 +734,10 @@ async function handleMessage(
     send: (message, tag) => deliverFastPathReply({ reply: message, failTag: tag, rememberSource: `api.webhook.${tag}` }),
     sendRecordsHistory: true,
     trace,
+    conversation: async () => {
+      const lead = await conversationLeadNote();
+      return { selectedTripName: lead.selectedTrip?.route_name || "", context: lead.context };
+    },
   };
   if (botSettings.handoff_enabled && (await continueBookingCollect(bookingCtx))) return;
   let flowAiPromptOverride: string | undefined;
@@ -861,8 +888,9 @@ async function handleMessage(
   // falls through so the AI answers the question too.
   const detectedPhone = extractPhoneNumber(text);
   if (detectedPhone) {
+    const note = (await conversationLeadNote().catch(() => null))?.context;
     const captured = await captureLead({
-      kind: "booking", contactPhone: detectedPhone, context: "Чатад утасны дугаараа үлдээсэн.",
+      kind: "booking", contactPhone: detectedPhone, context: note ? `Чатад утасны дугаараа үлдээсэн.\n${note}` : "Чатад утасны дугаараа үлдээсэн.",
     }, "api.webhook.phone_capture");
     if (captured.created) recordCounter("webhook.phone_lead_captured_total", 1, { platform });
     if (isPhoneOnlyMessage(text)) {
@@ -933,7 +961,7 @@ async function handleMessage(
   let cachedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
   const getTrips = async () => {
     if (cachedTrips) return cachedTrips;
-    cachedTrips = (await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers);
+    cachedTrips = (await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers).filter((trip) => !excludedTripIds.has(trip.id));
     return cachedTrips;
   };
   // Only fetched on the miss path (nothing in the active catalogue matched),
@@ -1169,7 +1197,10 @@ async function handleMessage(
       });
       return;
     }
-    if (routed.notInCatalog) {
+    // "далайтай нь" is a kind of trip the catalogue lists (sea, direct flight, a month),
+    // not an unknown place: the model's place reading must not silence that list.
+    const categoryListing = routed.notInCatalog ? buildCatalogListingReply(intentText, await getTrips()) : null;
+    if (routed.notInCatalog && !(categoryListing?.authoritative && categoryListing.listed.length)) {
       // A place no trip goes to is a question the bot cannot answer: silence and a staff
       // lead, never "Уучлаарай, «<газар>» чиглэлийн аялал манайд байхгүй" (owner's rule;
       // the place reading is a guess — ordinary words were read as destinations).

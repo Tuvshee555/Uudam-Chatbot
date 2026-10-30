@@ -325,7 +325,27 @@ function sharedMonthDayList(text: string, now: Date): string[] | null {
 }
 
 /** The same customer calendar constraint is shared by routing and list presentation. */
+/** How far "from <date> on" looks ahead: an open start still needs an end to list departures. */
+const FROM_DATE_ONWARD_DAYS = 120;
+
+/**
+ * "11.1-с эхлэх", "11/14-с хойш", "11 сарын 1-ээс хойш": departures from that day on.
+ * Unread, the school-break constraint got the trip card again (2026-10-15) or silence
+ * (2026-10-26), and "сарын 1-ээс хойш" was taken as that single day.
+ */
+function fromDateOnward(text: string, now: Date): RequestedDepartureScope | null {
+  const match = /(?<![\d.])(\d{1,2})\s*(?:[./]\s*(\d{1,2})|сарын\s*(\d{1,2}))\s*-?\s*(?:ны|ний|ны\s*өдр)?\s*-?\s*(?:аас|ээс|оос|өөс|наас|нээс|с|aas|ees|oos|s)\s+(?:хойш\p{L}*|эхл\p{L}*|эхэл\p{L}*|hoish\p{L}*|ehl\p{L}*|ehel\p{L}*)/iu.exec(text.normalize("NFKC"));
+  if (!match) return null;
+  const start = parseDepartureDateText(`${Number(match[1])} сарын ${Number(match[2] || match[3])}`, now)[0];
+  if (!start) return null;
+  const [year, month, day] = start.split("-").map(Number);
+  const end = new Date(Date.UTC(year, month - 1, day + FROM_DATE_ONWARD_DAYS)).toISOString().slice(0, 10);
+  return { kind: "range", startYmd: start, endYmd: end };
+}
+
 export function requestedDepartureScope(text: string, now = new Date()): RequestedDepartureScope | null {
+  const onward = fromDateOnward(text, now);
+  if (onward) return onward;
   const listedDays = sharedMonthDayList(text, now);
   if (listedDays) return listedDays.length ? { kind: "dates", dates: listedDays } : { kind: "unsupported" };
   const range = resolveRequestedRange(text, now);

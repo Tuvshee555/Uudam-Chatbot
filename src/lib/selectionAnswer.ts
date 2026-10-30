@@ -19,6 +19,17 @@ export function selectionOptions(reply: string): string[] {
     .filter((option) => option && !/^Өөр\s+\d+\s+сонголт/iu.test(option));
 }
 
+/** Asked when the party so far is only children or infants; the one fact a total still needs. */
+export const ADULT_COUNT_QUESTION = "Хэдэн том хүн явах вэ?";
+
+/** "2" answering "Хэдэн том хүн явах вэ?" is two adults, not a menu choice or a bare number. */
+export function adultCountAnswer(history: Array<{ role: string; text: string }>, text: string): string | null {
+  const picked = NUMBER_ONLY.exec(text);
+  if (!picked || Number(picked[1]) < 1) return null;
+  const last = history.findLast((message) => message.role === "assistant");
+  return last?.text.trim().endsWith(ADULT_COUNT_QUESTION) ? `${Number(picked[1])} том хүн` : null;
+}
+
 /** The option the customer's bare number picks from the last reply, or null. */
 export function optionChosenByNumber(history: Array<{ role: string; text: string }>, text: string): string | null {
   const picked = NUMBER_ONLY.exec(text);

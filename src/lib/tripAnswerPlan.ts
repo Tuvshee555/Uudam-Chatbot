@@ -12,6 +12,7 @@ import { customerDate as mnDate } from "./customerDate";
 import { dateIsOnSale } from "./tripFareBlock";
 import { hasSeatsIntent } from "./travelFastPaths";
 import { isReferReply } from "./reply";
+import { ADULT_COUNT_QUESTION } from "./selectionAnswer";
 
 export type TripAnswerPlan = {
   status: "answered" | "clarify" | "handoff";
@@ -104,7 +105,8 @@ function missingRequestedFares(result: TripOfferResult, kinds: ReturnType<typeof
 }
 
 function stableFarePreview(trip: TravelTrip, selection: TripSelection, result: TripOfferResult, now: Date, text: string): string | null {
-  if (selection.passengers.length || result.status !== "needs_selection" || result.fields[0] !== "date") return null;
+  if (result.status !== "needs_selection" || result.fields[0] !== "date") return null;
+  if (selection.passengers.length) return stablePartyTotal(trip, selection, result.options, now, text);
   const cards = result.options.map((date) => resolveTripOfferFareCard(trip, { date, hotel: selection.hotel, packageId: selection.package }, now));
   const { fareKinds, requiredFareKinds } = replyPreferences(text);
   if (cards.some(card => missingRequestedFares(card, requiredFareKinds).length)) return null;
@@ -117,6 +119,26 @@ function stableFarePreview(trip: TravelTrip, selection: TripSelection, result: T
   const first = cards[0];
   if (first.status !== "ready") return null;
   return renderTripOfferReply(first, { fareKinds })?.split("\n").filter((line) => line !== mnDate(first.offer.date)).join("\n") || null;
+}
+
+/**
+ * "2 том хүн 1 хүүхэд" for a trip whose every date sells at the same fares: the party
+ * total is the same whichever date is picked, so it is given now. The date question
+ * came back instead, and again after "одоо 3 том хүн" (live replay 2026-10-30).
+ * Null whenever any date would give a different total or cannot be priced.
+ */
+function stablePartyTotal(trip: TravelTrip, selection: TripSelection, dates: string[], now: Date, text: string): string | null {
+  const offers = dates.map((date) => resolveTripOffer(trip, { date, hotel: selection.hotel, packageId: selection.package, passengers: selection.passengers }, now));
+  if (!offers.length || offers.some((offer) => offer.status !== "ready" || !offer.offer.total)) return null;
+  const signature = (offer: TripOfferResult) => offer.status === "ready" ? JSON.stringify({
+    total: offer.offer.total, hotel: offer.offer.hotel, package: offer.offer.packageId, currency: offer.offer.currency,
+    conditions: [...offer.offer.conditions].sort(), passengers: offer.offer.passengerPrices.map((passenger) => ({ kind: passenger.kind, count: passenger.count, fare: passenger.fare })),
+  }) : null;
+  if (offers.some((offer) => signature(offer) !== signature(offers[0]))) return null;
+  const first = offers[0];
+  if (first.status !== "ready") return null;
+  return renderTripOfferReply(first, { fareKinds: replyPreferences(text).fareKinds, showTotal: true })
+    ?.split("\n").filter((line) => line !== mnDate(first.offer.date)).join("\n") || null;
 }
 
 /**
@@ -201,9 +223,14 @@ export function buildTripAnswerPlan(input: {
   }
   if (!request.topics.length || request.topics.some((topic) => ["comparison", "budget"].includes(topic))) return null;
   const wantsPartyTotal = /нийт|total|\d+\s*(?:том\s*хүн|хүүхэд|нярай|adult|child|infant|tom\s*hun|huuhed|nyarai)/i.test(intentText) || !preferences.fareKinds.length;
-  const pricePassengers = wantsPartyTotal ? selection.passengers
+  const partyPassengers = wantsPartyTotal ? selection.passengers
     : request.passengers.length ? request.passengers
       : [];
+  // Children or infants with no adult ("2 хүүхэдтэй"): a "Нийт" over the minors alone
+  // read as the family's price (live replay 2026-10-30). Their per-person fares are
+  // given and the one missing fact, the number of adults, is asked.
+  const minorsOnly = request.topics.includes("price") && partyPassengers.length > 0 && !partyPassengers.some((passenger) => passenger.kind === "adult");
+  const pricePassengers = minorsOnly ? [] : partyPassengers;
   const requirements: TripRequirement[] = [];
   if (request.days) requirements.push({ kind: "days", days: request.days });
   if (request.transport) requirements.push({ kind: "transport", transport: request.transport });
@@ -259,7 +286,7 @@ export function buildTripAnswerPlan(input: {
         for (const kind of missingRequestedFares(result, preferences.requiredFareKinds, intentText)) missingFact("price", kind);
         const fareKinds = preferences.full || preferences.fareKinds.length || result.offer.passengerPrices.length
           ? preferences.fareKinds : ["adult", "child"] as const;
-        const reply = renderTripOfferReply(result, { fareKinds: [...fareKinds], showTotal: wantsPartyTotal });
+        const reply = renderTripOfferReply(result, { fareKinds: [...fareKinds], showTotal: wantsPartyTotal && !minorsOnly });
         const baseHotel = !result.offer.hotel && offers.every((offer) => !offer.hotel) && trip.hotel;
         sections.price = reply ? [baseHotel ? `Буудал: ${baseHotel}` : null, reply].filter(Boolean).join("\n") : undefined;
       }
@@ -293,7 +320,10 @@ export function buildTripAnswerPlan(input: {
       // A seats question with no date ("суудал байна уу") gets the fare and the bookable dates to
       // pick from; it used to get the preview dropped and nothing else, so the bot handed off.
       const availabilityOnly = !request.topics.includes("price");
-      if (question && !hotelPreview && (!preview || availabilityOnly)) {
+      // A party total valid for every date still needs a date to book: the total and
+      // the bookable dates go out together, so neither has to be asked for again.
+      const partyTotal = Boolean(preview) && pricePassengers.length > 0;
+      if (question && !hotelPreview && (!preview || availabilityOnly || partyTotal)) {
         if (preview) lines.push(preview);
         lines.push(question);
         needsSelection = true;
@@ -384,6 +414,10 @@ export function buildTripAnswerPlan(input: {
     else if (result?.status === "ready") sections.discount = "Сонгосон гаралт, буудалд үйлчлэх баталгаажсан хямдралыг үнэд тооцсон.";
   }
   for (const topic of request.topics) if (sections[topic]) { lines.push(sections[topic]!); answered.add(topic); }
+  if (minorsOnly && sections.price && !needsSelection) {
+    lines.push(ADULT_COUNT_QUESTION);
+    needsSelection = true;
+  }
   for (const topic of incomplete.keys()) answered.delete(topic);
   const missing = request.topics.filter((topic) => !answered.has(topic));
   const missingFacts = [...new Set(missing.flatMap((topic) => incomplete.get(topic) || [topic]))];

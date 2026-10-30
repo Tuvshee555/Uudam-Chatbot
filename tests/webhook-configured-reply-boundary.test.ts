@@ -186,7 +186,8 @@ test("configured text replies share grounding and paused customers retain inboun
     await context.test("booking collection records each presented reply once through the shared exit", async () => {
       const sender = "booking-shared-exit";
       const { getCollectState } = await import("../src/lib/bookingCollect");
-      for (const text of ["Захиалах", "89110000", "ВЭЛМОР АЯЛАЛ"]) {
+      // The phone completes the request; the booked customer then belongs to staff.
+      for (const text of ["Захиалах", "89110000"]) {
         const beforeReplies = history.filter(row => row.sender === sender && row.role === "assistant").length;
         const response = await call(sender, text);
         assert.equal(response.status, 200);

@@ -180,12 +180,12 @@ export function advanceCollectState(
   }
 
   // Contact step ("name" is the legacy first step of flows stored before this change).
+  // The phone completes the request. Asking "Аль аялал вэ?" after it held the lead
+  // back until a second answer, and a customer who left then was lost; the caller
+  // fills the trip from the conversation and staff see the context on the lead.
   if (phone) {
     const name = (state.name || nameAlongsidePhone(text, phone)).slice(0, 100);
-    const next: CollectState = { ...state, name, phone: phone.slice(0, 40) };
-    if (next.trip) return { kind: "done", state: { ...next, step: "done" } };
-    const asking: CollectState = { ...next, step: "trip" };
-    return { kind: "ask", state: asking, prompt: promptForStep("trip") };
+    return { kind: "done", state: { ...state, name, phone: phone.slice(0, 40), step: "done" } };
   }
   if (!state.name && looksLikePersonName(text) && !options.looksLikeTrip?.(text)) {
     const named: CollectState = { ...state, step: "phone", name: text.slice(0, 100) };

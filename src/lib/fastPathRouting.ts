@@ -142,6 +142,9 @@ const CALENDAR_FOLLOWUP_WORDS = new Set([
   "нэг", "хоёр", "гурав", "дөрөв", "тав", "зургаа", "долоо", "найм", "ес", "арав", "арван",
   // Who travels is not a new destination: "12/20 nd 2 hun", "11/4-нд 3 хүн", "2 том хүн 1 хүүхэд".
   "хүн", "хүний", "hun", "huun", "humuus", "том", "tom", "хүүхэд", "хүүхдийн", "huuhed", "huuhdiin", "нярай", "nyarai",
+  // A start-date constraint is not a destination either: "Хүүхдийн амралт 11.1-с эхлэх гээд бдаг...яах вэ".
+  "с", "аас", "ээс", "оос", "өөс", "хойш", "хойшоо", "эхлэх", "эхлэн", "эхэлнэ", "эхэлдэг", "эхлэхээр", "hoish", "ehleh", "ehlen",
+  "амралт", "амралтаар", "амралтанд", "amralt", "сургууль", "хичээл", "гээд", "geed", "бдаг", "байдаг", "bdag", "яах", "yah",
 ]);
 
 function calendarWordsAreContextOnly(text: string): boolean {
@@ -285,7 +288,11 @@ export async function routeFastPathText(input: {
     await clearClarificationState(senderId);
     const selection = mergeTripSelection(trip.id, buildTripRequest(requestText, trips, understanding, now), previousSelection);
     await setTripSelection(senderId, selection);
-    return { matchText: joinContextAndTurn(trip.route_name, websiteTripLinksInText(text).textWithoutUrls), scopedClarify: null, chosenTripId: trip.id, selection,
+    // A typed "3" picks the trip exactly as tapping its "3. <name>…" button does. As a
+    // bare digit the turn asked for nothing, so no card was built and the free-text
+    // model answered instead (or nothing was sent) — live replay 2026-10-30.
+    const turn = numericChoice && !numericChoice.namePrefix ? trip.route_name : websiteTripLinksInText(text).textWithoutUrls;
+    return { matchText: joinContextAndTurn(trip.route_name, turn), scopedClarify: null, chosenTripId: trip.id, selection,
       ...(requestText !== text ? { requestText } : {}) };
   };
   if (hasUnsupportedOriginRequest(text)) {

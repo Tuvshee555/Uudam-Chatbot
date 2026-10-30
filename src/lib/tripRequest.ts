@@ -30,6 +30,10 @@ export type TripRequest = {
   unsupportedDateWindow?: boolean;
   unsupportedPassengerSelection?: boolean;
   passengerAgeFollowup?: boolean;
+  /** "зөвхөн 3 том хүн", "хүүхэдгүй": the stated people are the whole party. */
+  passengersExclusive?: boolean;
+  /** "Одоо 3 том хүн": a change to the stated kind only; the rest of the party stays. */
+  passengersUpdate?: boolean;
   requestedFacts?: RequestedFact[];
 };
 
@@ -148,12 +152,14 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
   const requestedRange = resolveRequestedRange(turn, now);
   const calendarScope = requestedDepartureScope(turn, now);
   const requestedDates = calendarScope?.kind === "dates" && calendarScope.dates.length > 1 ? calendarScope.dates : undefined;
-  const explicitDate = requestedRange || requestedDates ? null : resolveRequestedDate(turn, now)?.ymd || null;
-  const requestedMonth = requestedRange || explicitDate ? null : resolveRequestedMonth(turn, now);
+  // "11 сарын 1-ээс хойш": a start date, not that single day (travelDates fromDateOnward).
+  const onward = !requestedRange && calendarScope?.kind === "range" ? calendarScope : null;
+  const explicitDate = requestedRange || requestedDates || onward ? null : resolveRequestedDate(turn, now)?.ymd || null;
+  const requestedMonth = requestedRange || explicitDate || onward ? null : resolveRequestedMonth(turn, now);
   const date = explicitDate;
   const range: [string, string] | null = requestedRange && requestedRange !== "unsupported"
     ? [requestedRange.startYmd, requestedRange.endYmd]
-    : null;
+    : onward ? [onward.startYmd, onward.endYmd] : null;
   if (date) topics.add("availability");
   const passengerText = parsePassengerText(turn);
   const explicitPassengers = passengerText.unsupported ? [] : passengerText.passengers;
@@ -181,6 +187,9 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
     ...parseRequestedFacts(understanding?.requestedFacts, text),
     ...requestedFactsFromText(text, { ignoredPhrases: [...trips.map(trip => trip.route_name), ...hotels], hotelContext: topics.has("hotel") || Boolean(hotel) }),
   ].map(fact => [`${fact.field}:${normText(fact.evidence)}`, fact])).values()];
+  // A date window is itself the question when nothing else is asked ("Хүүхдийн амралт
+  // 11.1-с эхлэх гээд бдаг"): answer with the departures inside it.
+  if (!topics.size && (range || requestedDates || month)) topics.add("dates");
   const packagePreference = programPreference(turn);
   if (packagePreference) {
     topics.add("price");
@@ -203,15 +212,30 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
     ...(passengerText.unsupported ? { unsupportedPassengerSelection: true } : {}),
     ...(passengers.length && passengers.every(passenger => passenger.age !== undefined)
       && !/том\s*хүн|(?:^|[^\p{L}])том(?:[^\p{L}]|$)|adult|tom\s*hun/iu.test(turn) ? { passengerAgeFollowup: true } : {}),
+    ...(passengers.length && /зөвхөн|zuvhun|zovhon|хүүхэдгүй|huuhedgui|\bonly\b|\bjust\b/iu.test(turn) ? { passengersExclusive: true } : {}),
+    ...(passengers.length && /одоо|odoo|болсон|bolson|нэмэгд|nemegd|хасагд|hasagd|\bnow\b|instead/iu.test(turn) ? { passengersUpdate: true } : {}),
   };
 }
 
 export function mergeTripSelection(tripId: string, request: TripRequest, previous: TripSelection | null): TripSelection {
   const same = previous?.tripId === tripId ? previous : null;
   const suppliedKinds = new Set(request.passengers.map((passenger) => passenger.kind));
+  // Several groups ("2 том хүн 1 хүүхэд") or "зөвхөн" restate the party. Adults are kept
+  // with the earlier children when they complete a party of minors (the answer to "Хэдэн
+  // том хүн явах вэ?") or the message says it changes one count ("Одоо 3 том хүн"); both
+  // used to drop the children (live replay 2026-10-30). Otherwise adults restate it.
+  const previousHasAdults = Boolean(same?.passengers.some((passenger) => passenger.kind === "adult"));
+  const keepsOthers = !request.passengersExclusive && (!suppliedKinds.has("adult")
+    || (request.passengers.length === 1 && (Boolean(request.passengersUpdate) || !previousHasAdults)));
+  // Routing and the answer plan both merge the same turn: a selection that already holds
+  // this single update is that merge, not an earlier party to restate.
+  const alreadyMerged = request.passengers.length === 1 && !request.passengersExclusive && Boolean(same?.passengers.some((passenger) =>
+    passenger.kind === request.passengers[0].kind && passenger.count === request.passengers[0].count && passenger.age === request.passengers[0].age));
   let passengers = request.passengers.length
-    ? request.passengers.some((passenger) => passenger.kind === "adult") ? request.passengers
-      : [...(same?.passengers || []).filter((passenger) => !suppliedKinds.has(passenger.kind)), ...request.passengers]
+    ? alreadyMerged ? same!.passengers
+    : keepsOthers
+      ? [...(same?.passengers || []).filter((passenger) => !suppliedKinds.has(passenger.kind)), ...request.passengers]
+      : request.passengers
     : same?.passengers || [];
   // An answer to the child-age question refines the existing people even if
   // the supplied age moves them into another fare category.
