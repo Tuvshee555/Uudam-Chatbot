@@ -7,12 +7,15 @@
  * add up, or a code placeholder. Scenarios: LIVE_SCENARIOS (default scripts/live-replay-scenarios.json).
  * Directives: "#tapN" sends the Nth quick-reply button just offered, "#pause" is a staff takeover,
  * "#later" ages the conversation by 40 days. The report (customer text) goes to tmp/, never to Git.
- * Needs NEON_DATABASE_URL (read) and LIVE_REPLAY_OPENAI_API_KEY: a separate, budget-limited key, never the
- * production one (LIVE_REPLAY_ALLOW_PRODUCTION_KEY=1 overrides). Each run makes roughly 100 model calls.
+ * Spends model credit, so it runs only through scripts/lib/evalGuard.mjs: EVAL_OPENAI_API_KEY (a separate,
+ * budget-limited key, never production), EVAL_RUN_APPROVED=1 for this run, at most EVAL_MAX_MODEL_CALLS calls.
+ * Needs NEON_DATABASE_URL (read only).
  */
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { evaluationCallBudget, requireApprovedEvaluation } from "./lib/evalGuard.mjs";
+import { processAiTotals } from "../src/lib/aiUsage";
 import test from "node:test";
 
 type Scenario = { id: string; turns: string[] };
@@ -21,9 +24,10 @@ const scenarios: Scenario[] = JSON.parse(readFileSync(process.env.LIVE_SCENARIOS
 test("live replay", { timeout: 900_000 }, async (context) => {
   // The replay spends model credit. It never runs on the production key unless explicitly told to:
   // on 2026-10-30 a day of replays on the shared key helped exhaust the production balance.
-  const openaiKey = process.env.LIVE_REPLAY_OPENAI_API_KEY
-    || (process.env.LIVE_REPLAY_ALLOW_PRODUCTION_KEY === "1" ? process.env.OPENAI_API_KEY : "");
-  assert.ok(openaiKey, "Set LIVE_REPLAY_OPENAI_API_KEY (a separate, budget-limited key).");
+  const turnCount = scenarios.reduce((count, scenario) => count + scenario.turns.length, 0);
+  const openaiKey = requireApprovedEvaluation({ name: "live replay", estimatedModelCalls: turnCount * 3 });
+  const callBudget = evaluationCallBudget();
+  let modelCalls = 0;
 
   // 1. Snapshot the real catalogue + settings on a separate read-only connection. The bot's own
   // database module is only loaded after the fixture URL is in place: loaded first, it kept the
@@ -88,7 +92,11 @@ test("live replay", { timeout: 900_000 }, async (context) => {
   const sends: Array<{ senderId: string; text: string; buttons: string[] }> = [];
   context.mock.method(globalThis, "fetch", async (input: unknown, init?: RequestInit) => {
     const url = String(input);
-    if (url.startsWith("https://api.openai.com/")) return realFetch(input as string, init);
+    if (url.startsWith("https://api.openai.com/")) {
+      // Hard cap: a run that grows past its approved budget stops instead of draining the key.
+      if (++modelCalls > callBudget) throw new Error(`live replay stopped: model call budget of ${callBudget} reached`);
+      return realFetch(input as string, init);
+    }
     if (/^https:\/\/graph\.(?:facebook|instagram)\.com\//.test(url)) {
       const body = JSON.parse(String(init?.body || "{}"));
       if (body.message?.text) sends.push({ senderId: String(body.recipient?.id || ""), text: body.message.text,
@@ -165,6 +173,8 @@ test("live replay", { timeout: 900_000 }, async (context) => {
   writeFileSync(process.env.LIVE_REPORT || "tmp/live-replay-report.json", JSON.stringify(report, null, 1));
   const issues = report.flatMap((scenario) => scenario.turns.flatMap((turn) => (turn.issues || []).map((issue) => `${scenario.id} / ${turn.user}: ${issue}`)));
   const silent = report.flatMap((scenario) => scenario.turns.filter((turn) => !turn.user.startsWith("#") && !turn.bot.length).map((turn) => `${scenario.id} / ${turn.user}`));
+  const spend = processAiTotals();
+  console.log(`model use: ${spend.calls} calls, ${spend.promptTokens + spend.completionTokens} tokens, about ${spend.costUsd.toFixed(2)} (environment "evaluation")`);
   console.log(`live replay: ${report.length} journeys, ${report.reduce((n, s) => n + s.turns.length, 0)} turns, ${issues.length} fact issues, ${silent.length} silent turns`);
   for (const turn of silent) console.log(`  silent: ${turn}`);
   assert.deepEqual(issues, [], "every amount and date must come from the catalogue");

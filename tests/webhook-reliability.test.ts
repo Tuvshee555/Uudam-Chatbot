@@ -773,7 +773,10 @@ test("redis disconnect in replay/conversation mode fails closed with 503", async
   assert.equal(result.body?.error, "retryable_failure");
 });
 
-test("webhook stays silent to the customer when OpenAI is down (outage is never announced)", async () => {
+// Owner, 2026-10-30: an AI outage is never unexplained silence. After the staff lead is saved the
+// customer gets one short Mongolian notice, not repeated while the outage lasts. (Missing data is
+// a different case and stays silent.)
+test("an OpenAI outage gets one short notice after the staff lead, never silence and never repeated", async () => {
   applyTestEnv();
   const handler = await loadWebhookHandler();
 
@@ -818,12 +821,14 @@ test("webhook stays silent to the customer when OpenAI is down (outage is never 
 
     assert.equal(result.statusCode, 200);
     assert.ok(openAiCalls >= 1, "the model must actually have been tried");
-    assert.deepEqual(
-      sends,
-      [],
-      "an AI outage must not send the customer any message (no apology, no hand-off notice)",
-    );
-    assert.ok(persistedLeadSenders.has("ig-user-outage"));
+    assert.ok(persistedLeadSenders.has("ig-user-outage"), "the staff hand-off is saved first");
+    assert.equal(sends.length, 1, "exactly one notice");
+    assert.match(sends[0], /систем түр саатаж/);
+    assert.match(sends[0], /зөвлөхөд дамжууллаа/);
+
+    const again = { ...payload, entry: [{ ...payload.entry[0], messaging: [{ sender: { id: "ig-user-outage" }, message: { mid: "ig-mid-outage-2", text: "ai outage check again" } }] }] };
+    assert.equal((await callWebhook(handler, again)).statusCode, 200);
+    assert.equal(sends.filter((send) => /систем түр саатаж/.test(send)).length, 1, "the notice is not repeated while the outage lasts");
   } finally {
     globalThis.fetch = originalFetch;
   }

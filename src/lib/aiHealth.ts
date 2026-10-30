@@ -8,42 +8,83 @@ import { UpstreamHttpError } from "./resilience";
 // stay importable without it.
 const queryNeon: typeof QueryNeon = async (...args) => (await import("./neonDb")).queryNeon(...args);
 
-export type AiFailureKind = "credits_exhausted" | "unauthorized" | "other";
+export type AiFailureKind = "credits_exhausted" | "unauthorized" | "quota" | "provider" | "other";
 
 /**
  * OpenAI answers both a passing rate limit and an empty balance with 429; only
  * the body tells them apart. An empty balance silenced every customer for
  * three days in 2026-10 while the logs said nothing but "returned 429".
+ * Billing, a rejected key, a sustained rate limit and an unreachable provider are
+ * all told apart so the administrator is told what to fix.
  */
 export function aiFailureKind(error: unknown): AiFailureKind {
-  if (!(error instanceof UpstreamHttpError)) return "other";
-  if (/insufficient_quota|credit_balance_exhausted/.test(error.bodySnippet)) return "credits_exhausted";
-  if (error.status === 401) return "unauthorized";
+  if (error instanceof UpstreamHttpError) {
+    if (/insufficient_quota|credit_balance_exhausted|billing_hard_limit/.test(error.bodySnippet)) return "credits_exhausted";
+    if (error.status === 401 || error.status === 403) return "unauthorized";
+    if (error.status === 429) return "quota";
+    if (error.status >= 500) return "provider";
+    return "other";
+  }
+  // Timeouts, aborted requests and network failures: the provider could not be reached.
+  if (error instanceof Error && /abort|time(?:d)?\s*out|timeout|fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|socket/i.test(`${error.name} ${error.message}`)) return "provider";
   return "other";
 }
 
-const ALERT_INTERVAL_HOURS = 6;
+/** The provider's own error code from a failed response ("insufficient_quota"), for the logs. */
+export function aiErrorCode(error: unknown): string | undefined {
+  if (!(error instanceof UpstreamHttpError)) return undefined;
+  return /"code"\s*:\s*"([a-z_]+)"/.exec(error.bodySnippet)?.[1] || /"type"\s*:\s*"([a-z_]+)"/.exec(error.bodySnippet)?.[1];
+}
+
+/** Billing and a rejected key stop every answer at once; they are reported on the first failure. */
+const IMMEDIATE_KINDS = new Set<AiFailureKind>(["credits_exhausted", "unauthorized"]);
+/** A rate limit or an unreachable provider is reported once it persists (not for one blip). */
+const SUSTAINED_FAILURES = 3;
+const SUSTAINED_WINDOW_MINUTES = 10;
+const ALERT_INTERVAL_MINUTES = 60;
 const LEADS_PATH = "Энэ хооронд ирсэн хүсэлтүүд админ самбарын «Хүсэлтүүд» хэсэгт хадгалагдаж байна.";
 
 export function aiOutageAlertText(kind: Exclude<AiFailureKind, "other">): string {
-  return kind === "credits_exhausted"
-    ? `⚠️ Чатбот хэрэглэгчдэд хариулахаа больсон: OpenAI-ийн кредит дууссан.\nplatform.openai.com → Billing хэсэгт кредит нэмнэ үү. ${LEADS_PATH}`
-    : `⚠️ Чатбот хэрэглэгчдэд хариулахаа больсон: OpenAI түлхүүр хүчингүй байна.\nOPENAI_API_KEY-г шалгана уу. ${LEADS_PATH}`;
+  switch (kind) {
+    case "credits_exhausted":
+      return `⚠️ Чатбот AI ашиглаж чадахгүй байна: OpenAI-ийн кредит дууссан.\nplatform.openai.com → Billing хэсэгт кредит нэмнэ үү. ${LEADS_PATH}`;
+    case "unauthorized":
+      return `⚠️ Чатбот AI ашиглаж чадахгүй байна: OpenAI түлхүүр хүчингүй эсвэл эрхгүй байна.\nVercel дээрх OPENAI_API_KEY-г шалгана уу. ${LEADS_PATH}`;
+    case "quota":
+      return `⚠️ Чатбот AI-ийн хүсэлт хязгаарт хүрсэн (OpenAI 429, rate limit).\nplatform.openai.com → Limits хэсгийг шалгана уу. ${LEADS_PATH}`;
+    case "provider":
+      return `⚠️ OpenAI үйлчилгээ хариу өгөхгүй байна (алдаа эсвэл хугацаа хэтэрсэн).\nstatus.openai.com-оос шалгана уу. ${LEADS_PATH}`;
+  }
 }
 
-let lastAlertAtMs = 0;
+const lastAlertAtMs = new Map<AiFailureKind, number>();
 
-/** Tells staff nobody is being answered — at most once per six hours across instances. Never throws. */
+/**
+ * Tells administrators the bot cannot use AI. Billing and key problems are reported on the first
+ * failure, a rate limit or provider failure once it persists; each kind at most hourly across
+ * instances. The admin dashboard shows it as a critical warning; staff channels get it when
+ * configured. Never throws.
+ */
 export async function reportAiOutage(kind: AiFailureKind): Promise<void> {
   if (kind === "other") return;
   try {
     const now = Date.now();
-    if (now - lastAlertAtMs < ALERT_INTERVAL_HOURS * 3_600_000) return;
-    lastAlertAtMs = now;
+    if (now - (lastAlertAtMs.get(kind) ?? 0) < ALERT_INTERVAL_MINUTES * 60_000) return;
+    if (!IMMEDIATE_KINDS.has(kind)) {
+      const failures = (await queryNeon<{ n: number }>(
+        `SELECT COUNT(*)::int AS n FROM travel_error_logs
+          WHERE event = 'openai.fallback_failed' AND fields->>'failure_kind' = $1
+            AND created_at > NOW() - make_interval(mins => $2)`,
+        [kind, SUSTAINED_WINDOW_MINUTES],
+      ))?.rows[0]?.n ?? 0;
+      if (failures + 1 < SUSTAINED_FAILURES) return;
+    }
+    lastAlertAtMs.set(kind, now);
     const recent = await queryNeon(
       `SELECT 1 FROM travel_error_logs
-        WHERE event = 'ai_outage.staff_alerted' AND created_at > NOW() - make_interval(hours => $1) LIMIT 1`,
-      [ALERT_INTERVAL_HOURS],
+        WHERE event = 'ai_outage.staff_alerted' AND fields->>'kind' = $1
+          AND created_at > NOW() - make_interval(mins => $2) LIMIT 1`,
+      [kind, ALERT_INTERVAL_MINUTES],
     );
     if (recent?.rows.length) return;
     logWarn("ai_outage.staff_alerted", { kind });
@@ -56,7 +97,7 @@ export async function reportAiOutage(kind: AiFailureKind): Promise<void> {
   }
 }
 
-type AiFailureSummary = { failures: number; minutes_since_last: number | null; credits: boolean; unauthorized: boolean };
+type AiFailureSummary = { failures: number; minutes_since_last: number | null; credits: boolean; unauthorized: boolean; quota: boolean };
 
 /** Problems an operator must act on, shown in the admin system check. */
 export async function getOperationalIssues(): Promise<ReadinessIssue[]> {
@@ -66,9 +107,12 @@ export async function getOperationalIssues(): Promise<ReadinessIssue[]> {
       `SELECT COUNT(*)::int AS failures,
               (EXTRACT(EPOCH FROM NOW() - MAX(created_at)) / 60)::int AS minutes_since_last,
               COALESCE(BOOL_OR(fields::text LIKE '%credits_exhausted%'), FALSE) AS credits,
-              COALESCE(BOOL_OR(fields::text LIKE '%"unauthorized"%'), FALSE) AS unauthorized
+              COALESCE(BOOL_OR(fields::text LIKE '%"unauthorized"%'), FALSE) AS unauthorized,
+              COALESCE(BOOL_OR(fields->>'failure_kind' = 'quota'), FALSE) AS quota
          FROM travel_error_logs
-        WHERE event = 'openai.fallback_failed' AND created_at > NOW() - INTERVAL '2 hours'`,
+        WHERE event = 'openai.fallback_failed' AND created_at > NOW() - INTERVAL '2 hours'
+          -- Deployed code only: a local script's failures (no revision) must not raise the alarm.
+          AND fields ? 'deploymentRevision'`,
     ))?.rows[0];
     const ongoing = failures && failures.minutes_since_last !== null && failures.minutes_since_last <= 30;
     if (ongoing && (failures.credits || failures.unauthorized || failures.failures >= 3)) {
@@ -76,7 +120,9 @@ export async function getOperationalIssues(): Promise<ReadinessIssue[]> {
         ? "OpenAI-ийн кредит дууссан — platform.openai.com → Billing."
         : failures.unauthorized
           ? "OpenAI түлхүүр хүчингүй — OPENAI_API_KEY-г шалгана уу."
-          : "OpenAI хариу өгөхгүй байна.";
+          : failures.quota
+            ? "OpenAI хүсэлтийн хязгаарт хүрсэн (rate limit) — platform.openai.com → Limits."
+            : "OpenAI хариу өгөхгүй байна — status.openai.com.";
       issues.push({
         severity: "critical",
         key: "ai_outage",
@@ -86,5 +132,7 @@ export async function getOperationalIssues(): Promise<ReadinessIssue[]> {
   } catch (error) {
     logError("operational_issues.query_failed", { message: error instanceof Error ? error.message : String(error) });
   }
+  // Spend over the daily production budget is the warning that comes before an empty balance.
+  issues.push(...await (await import("./aiUsage")).getAiSpendIssues());
   return issues;
 }

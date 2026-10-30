@@ -25,6 +25,7 @@
  */
 
 import { Client } from "pg";
+import { requireApprovedEvaluation } from "./lib/evalGuard.mjs";
 import { createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
@@ -50,6 +51,8 @@ loadEnvFile(".env.local");
 loadEnvFile(".env");
 
 const DEMO_URL = process.env.DEMO_URL || "http://localhost:3004/api/demo";
+// Spends model credit through the demo endpoint: a separate key, never production, approved per run.
+requireApprovedEvaluation({ name: "real-conversation replay", estimatedModelCalls: 200, baseUrl: DEMO_URL });
 const SENDER_FILTER = process.env.SENDER_ID || null;
 const LIMIT = Math.max(1, Number(process.env.LIMIT || 100));
 const MAX_TURNS_PER_SENDER = Math.max(1, Number(process.env.MAX_TURNS_PER_SENDER || 20));

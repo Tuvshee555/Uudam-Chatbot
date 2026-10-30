@@ -451,6 +451,22 @@ export async function ensureTravelSchema() {
         CREATE INDEX IF NOT EXISTS idx_travel_senders_last_seen
           ON travel_senders (last_seen DESC);
       `);
+      // Model spend per day, environment, model and call site (aiUsage.ts): production and
+      // testing are always counted apart.
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_ai_usage (
+          day               DATE NOT NULL,
+          environment       TEXT NOT NULL,
+          model             TEXT NOT NULL,
+          source            TEXT NOT NULL,
+          calls             INTEGER NOT NULL DEFAULT 0,
+          prompt_tokens     BIGINT NOT NULL DEFAULT 0,
+          completion_tokens BIGINT NOT NULL DEFAULT 0,
+          est_cost_usd      NUMERIC(14, 6) NOT NULL DEFAULT 0,
+          updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (day, environment, model, source)
+        );
+      `);
       return true;
     });
 

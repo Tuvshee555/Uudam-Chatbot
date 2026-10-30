@@ -1,28 +1,34 @@
-name: Live conversation replay
+name: Live conversation replay (manual, approved runs only)
 
-# Customer journeys through the real webhook with the live catalogue (read-only) and the real model.
-# Nothing is sent to customers and nothing is written. Fails when a reply carries a price or date the
-# catalogue does not hold, a total that does not add up, or a code placeholder.
-# Needs repository secrets LIVE_REPLAY_NEON_DATABASE_URL (a read-only role is enough) and
-# LIVE_REPLAY_OPENAI_API_KEY; without them the job is skipped with a notice.
+# Customer journeys through the real webhook with the live catalogue (read-only) and a real model.
+# It SPENDS MODEL CREDIT, so it never runs on a schedule or on pull requests: an owner starts it by
+# hand and confirms. Routine CI (ci.yml) runs the same journeys on mocked model responses.
+# Needs repository secrets LIVE_REPLAY_NEON_DATABASE_URL (a read-only database role) and
+# LIVE_REPLAY_OPENAI_API_KEY: a key from a SEPARATE OpenAI project with its own budget limit,
+# never the production key (scripts/lib/evalGuard.mjs refuses otherwise).
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 1 * * 1'
-  pull_request:
-    paths:
-      - 'src/lib/**'
-      - 'src/pages/api/webhook.ts'
-      - 'scripts/live-replay*'
+    inputs:
+      approve:
+        description: 'This run spends model credit (about 130 calls, roughly $4 at the cap). Type "yes" to approve.'
+        required: true
+        default: "no"
+      max_model_calls:
+        description: "Hard cap on model calls for this run"
+        required: true
+        default: "150"
 
 jobs:
   replay:
+    if: github.event.inputs.approve == 'yes'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       NEON_DATABASE_URL: ${{ secrets.LIVE_REPLAY_NEON_DATABASE_URL }}
-      LIVE_REPLAY_OPENAI_API_KEY: ${{ secrets.LIVE_REPLAY_OPENAI_API_KEY }}
+      EVAL_OPENAI_API_KEY: ${{ secrets.LIVE_REPLAY_OPENAI_API_KEY }}
+      EVAL_RUN_APPROVED: "1"
+      EVAL_MAX_MODEL_CALLS: ${{ github.event.inputs.max_model_calls }}
       VERIFY_TOKEN: ci-verify-token
       FACEBOOK_PAGES: "000000000000000:ci-not-a-real-token"
       META_APP_SECRET: ci-meta-secret
@@ -33,25 +39,23 @@ jobs:
       REDIS_CONVERSATION_ENABLED: "false"
       REDIS_PAUSE_ENABLED: "false"
     steps:
-      - name: Skip without secrets
-        if: env.NEON_DATABASE_URL == '' || env.LIVE_REPLAY_OPENAI_API_KEY == ''
-        run: echo "::notice::Live replay skipped - add LIVE_REPLAY_NEON_DATABASE_URL and LIVE_REPLAY_OPENAI_API_KEY secrets to enable it."
+      - name: Require secrets
+        if: env.NEON_DATABASE_URL == '' || env.EVAL_OPENAI_API_KEY == ''
+        run: |
+          echo "::error::Add LIVE_REPLAY_NEON_DATABASE_URL and LIVE_REPLAY_OPENAI_API_KEY (separate project key) secrets first."
+          exit 1
 
       - name: Checkout
-        if: env.NEON_DATABASE_URL != '' && env.LIVE_REPLAY_OPENAI_API_KEY != ''
         uses: actions/checkout@v4
 
       - name: Setup Node
-        if: env.NEON_DATABASE_URL != '' && env.LIVE_REPLAY_OPENAI_API_KEY != ''
         uses: actions/setup-node@v4
         with:
           node-version-file: ".nvmrc"
           cache: "npm"
 
       - name: Install
-        if: env.NEON_DATABASE_URL != '' && env.LIVE_REPLAY_OPENAI_API_KEY != ''
         run: npm ci
 
       - name: Replay customer journeys
-        if: env.NEON_DATABASE_URL != '' && env.LIVE_REPLAY_OPENAI_API_KEY != ''
         run: npm run qa:live

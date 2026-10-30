@@ -8,6 +8,7 @@ import {
 import { getDbDiagnostics } from "../../../lib/travelOps";
 import { getReadinessReport } from "../../../lib/readiness";
 import { getOperationalIssues } from "../../../lib/aiHealth";
+import { getAiUsageSummary } from "../../../lib/aiUsage";
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
 
 const env = getEnv();
@@ -34,10 +35,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     scheduleDriveAutoSync({ source: "api.admin.system" });
-    const [diagnostics, driveSync, operationalIssues] = await Promise.all([
+    const [diagnostics, driveSync, operationalIssues, aiUsage] = await Promise.all([
       getDbDiagnostics(),
       getDriveSyncDiagnostics(),
       getOperationalIssues(),
+      // Model calls, tokens and estimated cost per day, environment and model (14 days).
+      getAiUsageSummary(14).catch(() => []),
     ]);
     return res.status(200).json({
       ok: true,
@@ -46,6 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       db: diagnostics,
       drive_sync: driveSync,
       readiness: getReadinessReport(env, operationalIssues),
+      ai_usage: aiUsage,
     });
   } finally {
     finishRequestTrace(trace, res.statusCode || 500);

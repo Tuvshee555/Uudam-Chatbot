@@ -147,9 +147,13 @@ test("handoff acknowledgement text stays safe when used", () => {
   assert.match(noData, /аяллын зөвлөхөд дамжууллаа/);
   assert.doesNotMatch(noData, /REFER|SILENT|database|тодорхойгүй/i);
 
+  // An AI outage is explained in one friendly line (owner, 2026-10-30), never silence, and the
+  // no-data silencer must not swallow it.
   const outage = buildHandoffAcknowledgement({ aiOutage: true });
+  assert.match(outage, /систем түр саатаж/);
   assert.match(outage, /зөвлөхөд дамжууллаа/);
-  assert.doesNotMatch(outage, /Уучлаарай|түр саатал|чадахгүй/i);
+  assert.doesNotMatch(outage, /REFER|алдаа|боломжгүй|байхгүй/i);
+  assert.equal(shouldSilenceNoDataReply(outage), false);
 });
 
 test("shouldSilenceNoDataReply catches unknown-detail fallback wording", () => {

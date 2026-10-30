@@ -45,7 +45,7 @@ import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { buildContactReply, contactSettingsOf, isAddressRequest, isPhoneRequest, isRepeatOfLastReply } from "../../lib/contactReplies";
 import { fetchThreadMessages, latestStaffReplyAt, STAFF_TAKEOVER_MS } from "../../lib/staffTakeover";
-import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
+import { AI_OUTAGE_HANDOFF_REPLY, BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBookedCustomer, pauseBot, trackSender } from "../../lib/pause";
 import { buildDateNotScheduledReply } from "../../lib/travelFastPathsPricing";
@@ -127,8 +127,13 @@ export { buildEventKey, markEventProcessed, markRecentIncomingText };
 export function getWebhookRuntimeDiagnostics() {
   return getWebhookRuntimeDiagnosticsInternal();
 }
+/** When each customer last got the AI-outage notice: told once per outage, not on every message. */
+const outageNoticeSentAt = new Map<string, number>();
+const OUTAGE_NOTICE_INTERVAL_MS = 30 * 60_000;
+
 export function resetWebhookStateForTests() {
   resetWebhookStateForTestsInternal();
+  outageNoticeSentAt.clear();
 }
 
 // Implementation moved to contextualText.ts so the demo endpoint shares the
@@ -1829,15 +1834,30 @@ async function handleMessage(
       kind: "handoff", contactPhone: detectedPhone || "",
       context: aiOutage ? "AI түр саатсан тул зөвлөхөд шилжүүлэв." : "Бот мэдээлэлгүй асуулт тул зөвлөхөд шилжүүлэв.",
     }, "api.webhook.ai_refer");
-    // An outage would fail the next message too, so the customer is left to staff.
-    // An unknown answer is not paused: the next question may well be answerable.
+    // An AI outage is never unexplained silence (owner, 2026-10-30): once the lead above is
+    // saved, the customer is told in one short line, at most once until the bot replies again.
+    // The bot is not paused, so the customer is answered normally as soon as the AI recovers.
     if (aiOutage) {
-      await autoHandoffSender(senderId);
-      await pauseBot(senderId, botSettings.handoff_pause_minutes > 0 ? botSettings.handoff_pause_minutes * 60_000 : undefined, "ai_outage");
+      // History covers other instances; the in-process note covers a reply not yet in history.
+      const alreadyTold = history.slice(-4).some((message) => message.role === "assistant" && message.text.includes("систем түр саатаж"))
+        || Date.now() - (outageNoticeSentAt.get(senderId) ?? 0) < OUTAGE_NOTICE_INTERVAL_MS;
+      if (!alreadyTold) {
+        outageNoticeSentAt.set(senderId, Date.now());
+        await deliverFastPathReply({
+          reply: AI_OUTAGE_HANDOFF_REPLY,
+          failTag: "ai_outage_notice",
+          rememberSource: "api.webhook.ai_outage_notice",
+          counter: "webhook.ai_outage_notice_total",
+        });
+      }
+      logWarn("webhook.ai_outage_customer_notified", {
+        requestId: trace?.requestId, correlationId: trace?.correlationId, platform,
+        senderHash: hashIdentifier(senderId), alreadyTold,
+      });
+      return;
     }
-    // Owner's rule: whether the model failed or simply does not know, the
-    // customer gets NO message. Staff got the lead; the customer's message is
-    // already in history for whoever picks it up.
+    // Missing data (owner's rule): the customer gets NO message. Staff got the lead; the
+    // customer's message is already in history for whoever picks it up.
     // Logged as a warning so a "the bot ignored me" complaint can be traced to
     // this in the error log instead of guessed at.
     logWarn(aiOutage ? "webhook.ai_outage_customer_silenced" : "webhook.ai_refer_customer_silenced", {

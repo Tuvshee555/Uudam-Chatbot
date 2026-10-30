@@ -28,6 +28,22 @@ evidence that the chatbot works.
   It must report 0 fact issues; read every changed reply. It runs on `LIVE_REPLAY_OPENAI_API_KEY`, a
   separate budget-limited key, never the production key: on 2026-10-30, replays on the shared key helped
   exhaust the production OpenAI balance.
+
+## AI spend safeguards (owner's, non-negotiable)
+
+- Routine tests never call a model: `scripts/run-tests.mjs` strips every provider key and runs with a mock.
+- Every script that spends model credit (`qa:live`, golden questions, catalogue demo, real-conversation
+  replay, mimic scoring) goes through `scripts/lib/evalGuard.mjs`. It refuses unless all of these hold:
+  `EVAL_OPENAI_API_KEY` (alias `LIVE_REPLAY_OPENAI_API_KEY`) is set and is not the production key, the
+  target is not the production site, and `EVAL_RUN_APPROVED=1`. It prints the estimated calls and cost
+  first. `EVAL_MAX_MODEL_CALLS` (default 150) is a hard stop. Never set `EVAL_RUN_APPROVED=1` without the
+  owner's approval for that run, and never add a bypass.
+- The GitHub "Live replay" workflow is manual only and needs `approve: yes`.
+- Model spend is recorded per day, environment, model and source in `travel_ai_usage` (admin System
+  page). `AI_DAILY_BUDGET_USD` (default 20) raises a critical issue when production spend passes it.
+- When the model fails on Messenger, the customer gets one short Mongolian notice
+  (`AI_OUTAGE_HANDOFF_REPLY`) after the staff lead, never silence and never repeated within 30 minutes.
+  Billing and key failures alert staff at once; rate-limit and provider failures alert once they persist.
 - Never weaken or delete a journey assertion to make a change pass. If an expectation must change, say
   why in the commit message.
 - When measuring real behaviour from `travel_conversations`, exclude `demo:` senders (test sessions,

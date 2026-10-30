@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { aiFailureKind, reportAiOutage } from "./aiHealth";
+import { aiErrorCode, aiFailureKind, reportAiOutage } from "./aiHealth";
+import { aiEnvironment, recordAiUsage } from "./aiUsage";
 import { fixMojibake } from "./encoding";
 import { getEnv } from "./env";
 import {
@@ -141,6 +142,7 @@ export async function askOpenAIChatParts(
 
     const usage = data?.usage ?? {};
     recordCounter("openai.fallback_success_total", 1, { model, source });
+    recordAiUsage({ model, source, usage: { prompt_tokens: usage.prompt_tokens ?? 0, completion_tokens: usage.completion_tokens ?? 0 } });
     logInfo("openai.fallback_success", {
       source,
       model,
@@ -190,6 +192,9 @@ export async function askOpenAIChatParts(
       source,
       model,
       failure_kind: failureKind,
+      // The provider's own code ("insufficient_quota"): the exact cause, not just "returned 429".
+      error_code: aiErrorCode(error),
+      environment: aiEnvironment(),
       message: error instanceof Error ? error.message : String(error),
     });
     void reportAiOutage(failureKind);

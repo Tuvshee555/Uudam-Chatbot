@@ -32,11 +32,22 @@ if (testFiles.length === 0) {
   process.exit(1);
 }
 
+// Routine tests run on mocked model responses only. Real credentials are removed and a fake key
+// set, so a test that escapes its mock fails instead of spending credit (the production balance ran
+// out on 2026-10-30). Live-model evaluation is a separate, approved run (scripts/lib/evalGuard.mjs).
+const env = { ...process.env };
+for (const key of Object.keys(env)) {
+  if (/OPENAI|ANTHROPIC|GEMINI|^EVAL_|^LIVE_REPLAY_/i.test(key)) delete env[key];
+}
+env.OPENAI_API_KEY = "test-openai-key-mocked";
+env.AI_USAGE_ENVIRONMENT = "test";
+
 const result = spawnSync(
   process.execPath,
   ["--import", "tsx", "--test", ...testFiles],
   {
     cwd: process.cwd(),
+    env,
     stdio: "inherit",
   },
 );

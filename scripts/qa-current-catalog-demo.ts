@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 import pg from "pg";
+import { requireApprovedEvaluation } from "./lib/evalGuard.mjs";
 import { PDFDocument } from "pdf-lib";
 
 const DEMO_URL = process.env.DEMO_URL || "http://localhost:3004/api/demo";
+// Spends model credit through the demo endpoint: a separate key, never production, approved per run.
+requireApprovedEvaluation({ name: "current catalogue QA", estimatedModelCalls: 200, baseUrl: DEMO_URL });
 const RUN_ID = Date.now().toString(36);
 const { Pool } = pg;
 

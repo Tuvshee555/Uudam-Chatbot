@@ -4,13 +4,17 @@ Open customer-experience failures confirmed by conversation replay. Each one sta
 the test suite where possible, until a journey proves it fixed. Evidence: `docs/chatbot-forensic-audit.md`,
 `docs/chatbot-conversation-quality.md`.
 
-## P0-1 — OpenAI balance exhausted — OPEN (owner action)
-Since about 07:43 UTC on 2026-10-30, every OpenAI call fails with 429 `credits_exhausted` (production logs
-tagged f441aaf). Deterministic paths still answer: lists, cards, number picks, booking with phone, family
-pricing on keyword routing. Every AI-dependent turn ends in silence plus a staff lead on Messenger, and in
-"passed to an advisor" on the website chat. Live replays run on the same key that day helped drain it.
-**Fix:** top up the OpenAI balance and add a low-balance alert. Replays now require a separate
-`LIVE_REPLAY_OPENAI_API_KEY`.
+## P0-1 — OpenAI balance exhausted — RESTORED; safeguards on branch `fix/ai-billing-safeguards`
+From about 07:43 UTC on 2026-10-30, every OpenAI call failed with 429 `credits_exhausted` (production logs
+tagged f441aaf). Deterministic paths still answered; every AI-dependent turn ended in silence plus a staff
+lead. Live replays run on the same key that day helped drain it. The balance was restored by 08:02 UTC
+(Messenger webhook AI calls succeeded again; one controlled demo test at 08:09 succeeded on all models).
+**Safeguards (awaiting deploy approval):** mocked CI, approval-gated evaluation on a separate key,
+spend tracking per environment with a daily budget alert, an outage notice to the customer instead of
+silence, immediate staff alerts on billing/key failures.
+**Owner actions still open:** separate OpenAI project + key with a hard budget for testing (GitHub secret
+`LIVE_REPLAY_OPENAI_API_KEY`); usage alerts and a monthly limit on the production project; a real-time
+staff channel (`STAFF_NOTIFY_PSIDS` or Telegram) so alerts are pushed, not only shown in admin.
 
 ## P1-0 — Latin-script month words — FIX READY (branch `fix/latin-month-words`, awaiting approval)
 Production 2026-10-30: "<place> aylal neg sariin eheer sonirhoj bb" (early January, Latin script) got

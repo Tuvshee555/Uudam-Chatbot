@@ -49,8 +49,13 @@ export function whichTripClarifyReply(text: string): string {
   return english ? WHICH_TRIP_CLARIFY_REPLY_EN : WHICH_TRIP_CLARIFY_REPLY;
 }
 
+/**
+ * Sent when the AI provider cannot be used (billing, key, rate limit, outage) and only after the
+ * staff lead was saved: an outage is never unexplained silence (owner, 2026-10-30). Missing data
+ * is a different case and stays silent.
+ */
 export const AI_OUTAGE_HANDOFF_REPLY =
-  "Таны асуултыг аяллын зөвлөхөд дамжууллаа. Мэдээллийг шалгаад танд энд хариу өгнө 🙏";
+  "Уучлаарай, систем түр саатаж байна. Таны асуултыг аяллын зөвлөхөд дамжууллаа, удахгүй энд хариулна 🙏";
 
 export function buildHandoffAcknowledgement(options: { aiOutage?: boolean } = {}) {
   return options.aiOutage ? AI_OUTAGE_HANDOFF_REPLY : NO_DATA_HANDOFF_REPLY;

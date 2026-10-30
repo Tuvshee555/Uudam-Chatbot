@@ -19,8 +19,11 @@
  */
 
 import pg from "pg";
+import { requireApprovedEvaluation } from "./lib/evalGuard.mjs";
 
 const DEMO_URL = process.env.DEMO_URL || "http://localhost:3004/api/demo";
+// Spends model credit through the demo endpoint: a separate key, never production, approved per run.
+requireApprovedEvaluation({ name: "golden questions", estimatedModelCalls: 120, baseUrl: DEMO_URL });
 
 // ── Questions are built from the LIVE catalog at run time ───────────────────
 // Never write a real trip name, price or date into this file: the catalog
