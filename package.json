@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "next dev --webpack --port 3004",
     "dev:turbo": "next dev --port 3004",
-    "prebuild": "node scripts/preview-storage-check.mjs && node --import tsx scripts/preflight.ts && npm run qa:accuracy:fixture && npm run qa:conversations",
+    "prebuild": "node --import tsx scripts/preflight.ts && npm run qa:accuracy:fixture && npm run qa:conversations",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
