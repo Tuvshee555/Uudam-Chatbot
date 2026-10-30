@@ -1,27 +1,48 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { getEnv } from "./env";
 import type { CustomerDocument } from "./customerDocuments";
+import type { HistoryRow } from "./travelSessionDb";
 
-function signature(id: number, expires: number) {
+const LINK_TTL_SECONDS = 60 * 60;
+
+function sign(message: string) {
   const secret = getEnv().adminSecret;
   if (!secret) throw new Error("admin_image_signing_unavailable");
-  return createHmac("sha256", secret)
-    .update(`${id}:${expires}`)
-    .digest("hex");
+  return createHmac("sha256", secret).update(message).digest("hex");
 }
 
+// A document link signs "<id>:<expires>"; an inbox attachment link signs
+// "attachment:<row>:<index>:<expires>", so neither can be replayed as the other.
+const documentMessage = (id: number, expires: number) => `${id}:${expires}`;
+const attachmentMessage = (rowId: number, index: number, expires: number) => `attachment:${rowId}:${index}:${expires}`;
+
+function verify(message: string, expires: number, candidate: string) {
+  if (!getEnv().adminSecret) return false;
+  const now = Math.floor(Date.now() / 1000);
+  if (!Number.isSafeInteger(expires) || expires < now || expires > now + LINK_TTL_SECONDS
+    || !/^[a-f0-9]{64}$/.test(candidate)) return false;
+  return timingSafeEqual(Buffer.from(sign(message), "hex"), Buffer.from(candidate, "hex"));
+}
+
+const validId = (value: number) => Number.isSafeInteger(value) && value > 0;
+
 export function customerImagePreviewUrl(id: number, now = Date.now()) {
-  const expires = Math.floor(now / 1000) + 60 * 60;
-  return `/api/admin/customer-image?id=${id}&expires=${expires}&signature=${signature(id, expires)}`;
+  const expires = Math.floor(now / 1000) + LINK_TTL_SECONDS;
+  return `/api/admin/customer-image?id=${id}&expires=${expires}&signature=${sign(documentMessage(id, expires))}`;
 }
 
 export function verifyCustomerImagePreview(id: number, expires: number, candidate: string) {
-  if (!getEnv().adminSecret) return false;
-  if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(expires)
-    || expires < Math.floor(Date.now() / 1000) || expires > Math.floor(Date.now() / 1000) + 3600
-    || !/^[a-f0-9]{64}$/.test(candidate)) return false;
-  const expected = Buffer.from(signature(id, expires), "hex");
-  return timingSafeEqual(expected, Buffer.from(candidate, "hex"));
+  return validId(id) && verify(documentMessage(id, expires), expires, candidate);
+}
+
+export function conversationAttachmentPreviewUrl(rowId: number, index: number, now = Date.now()) {
+  const expires = Math.floor(now / 1000) + LINK_TTL_SECONDS;
+  return `/api/admin/conversation-attachment?row=${rowId}&index=${index}&expires=${expires}&signature=${sign(attachmentMessage(rowId, index, expires))}`;
+}
+
+export function verifyConversationAttachmentPreview(rowId: number, index: number, expires: number, candidate: string) {
+  return validId(rowId) && Number.isSafeInteger(index) && index >= 0 && index < 50
+    && verify(attachmentMessage(rowId, index, expires), expires, candidate);
 }
 
 /**
@@ -71,4 +92,27 @@ export function adminCustomerDocument(doc: CustomerDocument): CustomerDocument {
     event_key: "",
     extracted_json: (withoutPublicFileUrls(doc.extracted_json ?? {}) || {}) as Record<string, unknown>,
   };
+}
+
+/**
+ * The inbox's shape of a conversation: every attachment (a customer's photo or file, or a
+ * trip photo the bot sent) is a signed link the server resolves to the private copy; the
+ * Meta CDN, Cloudinary or Blob URL never reaches the browser.
+ */
+// In message text only file-CDN links go; a Facebook post a customer shares stays readable.
+const FILE_CDN_HOST = /(?:^|\.)(?:cloudinary\.com|fbcdn\.net|fbsbx\.com|cdninstagram\.com|blob\.vercel-storage\.com)$/i;
+const withoutFileCdnUrls = (text: string) => text.replace(URL_IN_TEXT, (url) => {
+  try { return FILE_CDN_HOST.test(new URL(url).hostname) ? "" : url; } catch { return url; }
+});
+
+export function adminConversationMessages(messages: HistoryRow[]): HistoryRow[] {
+  return messages.map((message) => ({
+    ...message,
+    text: withoutFileCdnUrls(message.text ?? ""),
+    attachments: (message.attachments ?? []).map((attachment, index) => ({
+      type: attachment.type,
+      ...(attachment.caption ? { caption: attachment.caption } : {}),
+      url: attachment.url ? conversationAttachmentPreviewUrl(message.id, index) : "",
+    })),
+  }));
 }

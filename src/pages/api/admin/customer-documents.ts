@@ -165,6 +165,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!Number.isInteger(id) || id <= 0) {
         return res.status(400).json({ error: "valid id is required" });
       }
+      // Permanent: only a document already deleted (hidden) loses its stored file.
+      if (req.query.permanent === "true" || req.body?.permanent === true) {
+        const { purgeCustomerDocument } = await import("../../../lib/customerDocumentPurge");
+        const result = await purgeCustomerDocument(id, "admin");
+        const status = result.outcome === "purged" || result.outcome === "already_purged" ? 200
+          : result.outcome === "not_found" ? 404 : result.outcome === "storage_failed" ? 502 : 409;
+        return res.status(status).json({ ok: status === 200, outcome: result.outcome, error: result.error });
+      }
       const ok = await deleteCustomerDocument(id, "admin");
       if (!ok) return res.status(404).json({ error: "document_not_found" });
       return res.status(200).json({ ok: true });

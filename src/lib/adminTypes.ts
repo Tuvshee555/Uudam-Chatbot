@@ -467,6 +467,8 @@ export type CustomerDocument = {
   ingest_status?: "pending" | "processing" | "retry" | "stored" | "failed";
   ingest_attempts?: number;
   received_at?: string | null;
+  storage_delete_status?: string;
+  purged_at?: string | null;
 };
 
 export type DocumentSenderSummary = {

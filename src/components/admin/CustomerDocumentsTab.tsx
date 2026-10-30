@@ -327,6 +327,7 @@ function DocumentCard({
   onEdit,
   onDelete,
   onRestore,
+  onPurge,
   onRetry,
   onOpenPerson,
   onZoom,
@@ -340,6 +341,7 @@ function DocumentCard({
   onEdit: (doc: CustomerDocument) => void;
   onDelete: (doc: CustomerDocument) => void;
   onRestore: (doc: CustomerDocument) => void;
+  onPurge: (doc: CustomerDocument) => void;
   onRetry: (doc: CustomerDocument) => void;
   onOpenPerson?: (senderId: string) => void;
   senderLabel?: string;
@@ -390,11 +392,22 @@ function DocumentCard({
             <div className="flex shrink-0 items-center gap-0.5">
               {busy ? (
                 <Spinner className="mx-1.5 h-4 w-4 text-brand" />
+              ) : showDeleted && doc.purged_at ? (
+                <span className="px-1.5 text-xs text-ink-muted">Файл бүр мөсөн устгагдсан</span>
               ) : showDeleted ? (
-                <Button size="sm" variant="success" onClick={() => onRestore(doc)}>
-                  <Icons.refresh size={14} />
-                  Сэргээх
-                </Button>
+                <>
+                  <Button size="sm" variant="success" onClick={() => onRestore(doc)}>
+                    <Icons.refresh size={14} />
+                    Сэргээх
+                  </Button>
+                  <IconButton
+                    label={doc.storage_delete_status === "failed" ? "Файлыг устгаж чадаагүй — дахин оролдох" : "Бүр мөсөн устгах (сэргээх боломжгүй)"}
+                    onClick={() => onPurge(doc)}
+                    className="hover:bg-danger-soft hover:text-danger"
+                  >
+                    <Icons.trash size={15} />
+                  </IconButton>
+                </>
               ) : (
                 <>
                   <IconButton label="Засах" onClick={() => onEdit(doc)}>
@@ -661,6 +674,24 @@ export function CustomerDocumentsTab({
       toast.success("Зураг сэргээгдлээ.");
     } catch {
       toast.error("Зураг сэргээж чадсангүй.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  // Permanent: the stored file is deleted and cannot be restored (customerDocumentPurge.ts).
+  async function purgeDocument(doc: CustomerDocument) {
+    if (!window.confirm("Энэ баримтын файлыг бүр мөсөн устгах уу? Дараа нь сэргээх боломжгүй.")) return;
+    setBusyId(doc.id);
+    try {
+      const res = await apiFetch(`/api/admin/customer-documents?id=${doc.id}&permanent=true`, { method: "DELETE" });
+      const json = (await res.json().catch(() => ({}))) as { outcome?: string };
+      if (json.outcome === "linked_to_payment") { toast.error("Төлбөртэй холбоотой баримтыг устгахгүй."); return; }
+      if (!res.ok) throw new Error(json.outcome || "purge_failed");
+      setDocuments((prev) => prev.map((item) => item.id === doc.id ? { ...item, stored_url: "", purged_at: new Date().toISOString() } : item));
+      toast.success("Файл бүр мөсөн устгагдлаа.");
+    } catch {
+      toast.error("Файлыг устгаж чадсангүй. Админ системийн шалгалтад харагдана, өдөр бүр дахин оролдоно.");
     } finally {
       setBusyId(null);
     }
@@ -1002,6 +1033,7 @@ export function CustomerDocumentsTab({
                         onEdit={openEdit}
                         onDelete={(target) => void deleteDocument(target)}
                         onRestore={(target) => void restoreDocument(target)}
+                        onPurge={(target) => void purgeDocument(target)}
                         onRetry={(target) => void retryDocument(target)}
                         onZoom={setZoomUrl}
                         showSender={false}
@@ -1036,6 +1068,7 @@ export function CustomerDocumentsTab({
                   onEdit={openEdit}
                   onDelete={(target) => void deleteDocument(target)}
                   onRestore={(target) => void restoreDocument(target)}
+                  onPurge={(target) => void purgeDocument(target)}
                   onRetry={(target) => void retryDocument(target)}
                   onOpenPerson={openPerson}
                   onZoom={setZoomUrl}

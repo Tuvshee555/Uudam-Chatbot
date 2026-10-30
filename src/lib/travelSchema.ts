@@ -428,6 +428,53 @@ export async function ensureTravelSchema() {
         CREATE INDEX IF NOT EXISTS idx_travel_customer_document_audit_document
           ON travel_customer_document_audit (document_id, created_at DESC);
       `);
+      // Permanent deletion of a document an admin already deleted (customerDocumentPurge.ts):
+      // the stored file is removed, its state recorded and retried, the row kept as a tombstone.
+      await client.query(`
+        ALTER TABLE travel_customer_documents
+          ADD COLUMN IF NOT EXISTS storage_delete_status TEXT NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS storage_delete_error TEXT NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS storage_delete_attempts INTEGER NOT NULL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS purged_at TIMESTAMPTZ NULL;
+      `);
+      // One row per historical document moved from public Cloudinary to the private store
+      // (documentMigration.ts): every step's result, so a run can be retried and audited.
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_document_migration (
+          document_id BIGINT PRIMARY KEY,
+          status TEXT NOT NULL DEFAULT 'pending',
+          source TEXT NOT NULL DEFAULT '',
+          old_url TEXT NOT NULL DEFAULT '',
+          blob_url TEXT NOT NULL DEFAULT '',
+          sha256 TEXT NOT NULL DEFAULT '',
+          bytes INTEGER NOT NULL DEFAULT 0,
+          detected_type TEXT NOT NULL DEFAULT '',
+          error TEXT NOT NULL DEFAULT '',
+          attempts INTEGER NOT NULL DEFAULT 0,
+          original_deleted_at TIMESTAMPTZ NULL,
+          cdn_status INTEGER NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+      // Private copies of inbox attachments that are not customer documents
+      // (conversation-attachment.ts resolves a signed inbox link through this table).
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_conversation_attachments (
+          conversation_id BIGINT NOT NULL,
+          idx INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT '',
+          document_id BIGINT NULL,
+          blob_url TEXT NOT NULL DEFAULT '',
+          sha256 TEXT NOT NULL DEFAULT '',
+          mime_type TEXT NOT NULL DEFAULT '',
+          bytes INTEGER NOT NULL DEFAULT 0,
+          error TEXT NOT NULL DEFAULT '',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (conversation_id, idx)
+        );
+      `);
       // Long-term per-customer memory. Chat rows are still kept for recent
       // detail, while this table preserves durable context after pruning.
       await client.query(`

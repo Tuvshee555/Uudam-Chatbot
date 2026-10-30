@@ -437,12 +437,7 @@ export function BotTab({
                                 rel="noopener noreferrer"
                                 className="block overflow-hidden rounded-xl ring-1 ring-black/5 transition hover:opacity-90"
                               >
-                                <img
-                                  src={att.url}
-                                  alt={att.caption || "Зураг"}
-                                  className="max-h-48 w-full object-cover"
-                                  loading="lazy"
-                                />
+                                <InboxImage src={att.url} alt={att.caption || "Зураг"} />
                               </a>
                             );
                           })}
@@ -1200,3 +1195,15 @@ function QuickToggleCard({
 /* ----------------------------------------------------------------
    Settings tab
    ---------------------------------------------------------------- */
+
+/**
+ * An inbox photo behind its signed admin link. A link Meta has expired (never copied
+ * privately) answers 410: a short note replaces the broken image.
+ */
+function InboxImage({ src, alt }: { src: string; alt: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed || !src) {
+    return <span className="block px-3 py-2 text-xs text-ink-muted">Зураг нээгдэхгүй байна (Meta-гийн холбоосын хугацаа дууссан).</span>;
+  }
+  return <img src={src} alt={alt} className="max-h-48 w-full object-cover" loading="lazy" onError={() => setFailed(true)} />;
+}

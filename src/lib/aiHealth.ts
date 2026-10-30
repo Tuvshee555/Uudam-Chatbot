@@ -136,5 +136,7 @@ export async function getOperationalIssues(): Promise<ReadinessIssue[]> {
   issues.push(...await (await import("./aiUsage")).getAiSpendIssues());
   // Passports and payment slips are kept only in the private store: a broken store is critical.
   issues.push(...await (await import("./customerImageStorage")).customerImageStorageIssues().catch(() => []));
+  // A purge whose file could not be deleted is retried daily; until then it is visible here.
+  issues.push(...await (await import("./customerDocumentPurge")).storageDeletionIssues().catch(() => []));
   return issues;
 }

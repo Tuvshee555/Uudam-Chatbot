@@ -70,6 +70,10 @@ export type CustomerDocument = {
   ingest_retry_at?: string | null;
   ingest_error?: string;
   received_at?: string | null;
+  /** Permanent deletion (customerDocumentPurge.ts): "", "pending", "failed" or "deleted". */
+  storage_delete_status?: string;
+  storage_delete_error?: string;
+  purged_at?: string | null;
 };
 
 export type ImageAttachmentInput = {
@@ -1361,7 +1365,7 @@ export async function restoreCustomerDocument(id: number, actor = "admin") {
         retention_hidden_at = NULL,
         status = CASE WHEN status = 'ignored' THEN 'needs_review' ELSE status END,
         updated_at = NOW()
-      WHERE id = $1
+      WHERE id = $1 AND purged_at IS NULL AND storage_delete_status <> 'pending'
     `,
     [id],
   );
