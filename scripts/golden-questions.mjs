@@ -22,7 +22,7 @@ import pg from "pg";
 import { requireApprovedEvaluation } from "./lib/evalGuard.mjs";
 
 const DEMO_URL = process.env.DEMO_URL || "http://localhost:3004/api/demo";
-// Spends model credit through the demo endpoint: a separate key, never production, approved per run.
+// Spends model credit through the demo endpoint: opted in per run, capped, never the production site.
 requireApprovedEvaluation({ name: "golden questions", estimatedModelCalls: 120, baseUrl: DEMO_URL });
 
 // ── Questions are built from the LIVE catalog at run time ───────────────────

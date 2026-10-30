@@ -7,8 +7,8 @@
  * add up, or a code placeholder. Scenarios: LIVE_SCENARIOS (default scripts/live-replay-scenarios.json).
  * Directives: "#tapN" sends the Nth quick-reply button just offered, "#pause" is a staff takeover,
  * "#later" ages the conversation by 40 days. The report (customer text) goes to tmp/, never to Git.
- * Spends model credit, so it runs only through scripts/lib/evalGuard.mjs: EVAL_OPENAI_API_KEY (a separate,
- * budget-limited key, never production), EVAL_RUN_APPROVED=1 for this run, at most EVAL_MAX_MODEL_CALLS calls.
+ * Spends model credit, so it runs only through scripts/lib/evalGuard.mjs: EVAL_RUN_APPROVED=1 for this run, at most
+ * EVAL_MAX_MODEL_CALLS calls, one run at a time.
  * Needs NEON_DATABASE_URL (read only).
  */
 import assert from "node:assert/strict";
@@ -22,8 +22,8 @@ type Scenario = { id: string; turns: string[] };
 const scenarios: Scenario[] = JSON.parse(readFileSync(process.env.LIVE_SCENARIOS || "scripts/live-replay-scenarios.json", "utf8"));
 
 test("live replay", { timeout: 900_000 }, async (context) => {
-  // The replay spends model credit. It never runs on the production key unless explicitly told to:
-  // on 2026-10-30 a day of replays on the shared key helped exhaust the production balance.
+  // The replay spends model credit, so it is opted in and capped: on 2026-10-30 a day of
+  // uncontrolled replays helped exhaust the balance.
   const turnCount = scenarios.reduce((count, scenario) => count + scenario.turns.length, 0);
   const openaiKey = requireApprovedEvaluation({ name: "live replay", estimatedModelCalls: turnCount * 3 });
   const callBudget = evaluationCallBudget();

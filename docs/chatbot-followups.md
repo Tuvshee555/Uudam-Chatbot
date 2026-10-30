@@ -9,12 +9,12 @@ From about 07:43 UTC on 2026-10-30, every OpenAI call failed with 429 `credits_e
 tagged f441aaf). Deterministic paths still answered; every AI-dependent turn ended in silence plus a staff
 lead. Live replays run on the same key that day helped drain it. The balance was restored by 08:02 UTC
 (Messenger webhook AI calls succeeded again; one controlled demo test at 08:09 succeeded on all models).
-**Safeguards (awaiting deploy approval):** mocked CI, approval-gated evaluation on a separate key,
-spend tracking per environment with a daily budget alert, an outage notice to the customer instead of
-silence, immediate staff alerts on billing/key failures.
-**Owner actions still open:** separate OpenAI project + key with a hard budget for testing (GitHub secret
-`LIVE_REPLAY_OPENAI_API_KEY`); usage alerts and a monthly limit on the production project; a real-time
-staff channel (`STAFF_NOTIFY_PSIDS` or Telegram) so alerts are pushed, not only shown in admin.
+**Safeguards:** mocked CI, opted-in and capped evaluation runs (one at a time, never against the
+production site), spend tracking per environment with a daily budget alert, an outage notice to the
+customer instead of silence, immediate staff alerts on billing/key failures. The owner chose to keep one
+OpenAI key for production and testing.
+**Optional, not required:** a real-time staff channel (`STAFF_NOTIFY_PSIDS` or Telegram) so alerts are
+pushed, not only shown in admin.
 
 ## P1-0 — Latin-script month words — FIX READY (branch `fix/latin-month-words`, awaiting approval)
 Production 2026-10-30: "<place> aylal neg sariin eheer sonirhoj bb" (early January, Latin script) got

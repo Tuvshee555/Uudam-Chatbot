@@ -25,19 +25,18 @@ evidence that the chatbot works.
 - A fix for a conversation failure adds or extends a journey reproducing that conversation's shape
   (invented trips only), and that journey must fail without the fix.
 - Before merging such a change, run `npm run qa:live` (live catalogue read-only, real model, nothing sent).
-  It must report 0 fact issues; read every changed reply. It runs on `LIVE_REPLAY_OPENAI_API_KEY`, a
-  separate budget-limited key, never the production key: on 2026-10-30, replays on the shared key helped
-  exhaust the production OpenAI balance.
+  It must report 0 fact issues; read every changed reply. The owner allows it on the normal OpenAI key
+  (2026-10-30); it stays opted in and capped (below).
 
 ## AI spend safeguards (owner's, non-negotiable)
 
 - Routine tests never call a model: `scripts/run-tests.mjs` strips every provider key and runs with a mock.
 - Every script that spends model credit (`qa:live`, golden questions, catalogue demo, real-conversation
-  replay, mimic scoring) goes through `scripts/lib/evalGuard.mjs`. It refuses unless all of these hold:
-  `EVAL_OPENAI_API_KEY` (alias `LIVE_REPLAY_OPENAI_API_KEY`) is set and is not the production key, the
-  target is not the production site, and `EVAL_RUN_APPROVED=1`. It prints the estimated calls and cost
-  first. `EVAL_MAX_MODEL_CALLS` (default 150) is a hard stop. Never set `EVAL_RUN_APPROVED=1` without the
-  owner's approval for that run, and never add a bypass.
+  replay, mimic scoring) goes through `scripts/lib/evalGuard.mjs`. It uses the normal `OPENAI_API_KEY`
+  (or an optional `EVAL_OPENAI_API_KEY`) and refuses unless `EVAL_RUN_APPROVED=1` is set for the run, the
+  target is not the production site, and no other evaluation run is going. It prints the estimated calls
+  and cost first. `EVAL_MAX_MODEL_CALLS` (default 150) is a hard stop. The owner allows reasonable test
+  runs on the existing credit without asking each time; never loop runs or remove the cap.
 - The GitHub "Live replay" workflow is manual only and needs `approve: yes`.
 - Model spend is recorded per day, environment, model and source in `travel_ai_usage` (admin System
   page). `AI_DAILY_BUDGET_USD` (default 20) raises a critical issue when production spend passes it.

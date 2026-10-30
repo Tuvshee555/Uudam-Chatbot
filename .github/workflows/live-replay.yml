@@ -3,9 +3,8 @@ name: Live conversation replay (manual, approved runs only)
 # Customer journeys through the real webhook with the live catalogue (read-only) and a real model.
 # It SPENDS MODEL CREDIT, so it never runs on a schedule or on pull requests: an owner starts it by
 # hand and confirms. Routine CI (ci.yml) runs the same journeys on mocked model responses.
-# Needs repository secrets LIVE_REPLAY_NEON_DATABASE_URL (a read-only database role) and
-# LIVE_REPLAY_OPENAI_API_KEY: a key from a SEPARATE OpenAI project with its own budget limit,
-# never the production key (scripts/lib/evalGuard.mjs refuses otherwise).
+# Uses the LIVE_REPLAY_* secrets when present, otherwise the normal NEON_DATABASE_URL and
+# OPENAI_API_KEY secrets. The catalogue is only read; scripts/lib/evalGuard.mjs caps the calls.
 
 on:
   workflow_dispatch:
@@ -25,8 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      NEON_DATABASE_URL: ${{ secrets.LIVE_REPLAY_NEON_DATABASE_URL }}
-      EVAL_OPENAI_API_KEY: ${{ secrets.LIVE_REPLAY_OPENAI_API_KEY }}
+      NEON_DATABASE_URL: ${{ secrets.LIVE_REPLAY_NEON_DATABASE_URL || secrets.NEON_DATABASE_URL }}
+      EVAL_OPENAI_API_KEY: ${{ secrets.LIVE_REPLAY_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
       EVAL_RUN_APPROVED: "1"
       EVAL_MAX_MODEL_CALLS: ${{ github.event.inputs.max_model_calls }}
       VERIFY_TOKEN: ci-verify-token
@@ -42,7 +41,7 @@ jobs:
       - name: Require secrets
         if: env.NEON_DATABASE_URL == '' || env.EVAL_OPENAI_API_KEY == ''
         run: |
-          echo "::error::Add LIVE_REPLAY_NEON_DATABASE_URL and LIVE_REPLAY_OPENAI_API_KEY (separate project key) secrets first."
+          echo "::error::Add a NEON_DATABASE_URL and an OPENAI_API_KEY repository secret first."
           exit 1
 
       - name: Checkout

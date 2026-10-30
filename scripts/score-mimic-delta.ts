@@ -53,7 +53,7 @@ async function main() {
   const { getEnv } = await import("../src/lib/env");
   const { dbGetRecentAdminMessages } = await import("../src/lib/travelDb");
   const { buildPromptParts } = await import("../src/lib/conversation");
-  // Spends model credit: a separate key, never production, approved per run.
+  // Spends model credit: opted in per run, capped, never the production site.
   const { requireApprovedEvaluation } = await import("./lib/evalGuard.mjs");
   requireApprovedEvaluation({ name: "mimic scoring", estimatedModelCalls: 100 });
   const { askOpenAI } = await import("../src/lib/openaiProvider");
