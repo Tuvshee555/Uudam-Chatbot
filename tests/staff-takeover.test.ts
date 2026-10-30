@@ -97,3 +97,62 @@ test("a thread that cannot be read is reported as unverified, never as 'no consu
   context.mock.method(globalThis, "fetch", async () => Response.json({ data: [] }));
   assert.deepEqual(await fetchThreadMessages({ token: "fixture", senderId: "fixture-customer", timeoutMs: 100 }), { status: "ok", messages: [] });
 });
+
+/*
+ * Hotfix 2026-10-31. Live 2026-10-30 22:37 UTC: a brand-new customer's first message got
+ * silence because Meta's automated welcome greeting, sent 5 s before it, was read as a
+ * consultant on a computer. And a consultant's photo (no text) sent from the phone right after a
+ * bot reply was read as the bot, because the stored-reply match ran before the phone check.
+ */
+const welcome = "Hi Bat! Please let us know how we can help you.";
+
+test("1. Meta's automated greeting that opens the conversation never silences the bot", async () => {
+  const { latestStaffReply, classifyPageMessage } = await import("../src/lib/staffTakeover");
+  const messages = [page("2099-05-10T08:00:00Z", "web", welcome, "m_greeting"), msg("customer", "2099-05-10T08:00:05Z", "mobile", "Сайн байна уу")];
+  assert.equal(latestStaffReply({ messages, now, botMids: new Set(), ...recorded }), null);
+  assert.equal(classifyPageMessage(messages[0], null, recorded, true), "automation");
+  // A full page of 25 messages may not start at the conversation's start: nothing is assumed there.
+  assert.equal(latestStaffReply({ messages, now, botMids: new Set(), ...recorded, threadComplete: false })?.origin, "staff_web");
+  // Only the opening run: a web message the bot did not send, after the bot's own message, is a
+  // consultant even when the thread shows no customer message before it.
+  assert.equal(latestStaffReply({ messages: [page("2099-05-10T08:00:00Z", "web", "НОРВЕЛ", "m_bot0"),
+    page("2099-05-10T08:05:00Z", "web", "Захиалгыг тань авлаа", "m_x")], now, botMids: new Set(["m_bot0"]), ...recorded })?.origin, "staff_web");
+});
+
+test("2. a genuine desktop consultant reply after the greeting still takes the conversation over", async () => {
+  const { latestStaffReply } = await import("../src/lib/staffTakeover");
+  const messages = [
+    page("2099-05-10T08:00:00Z", "web", welcome, "m_greeting"),
+    msg("customer", "2099-05-10T08:00:05Z", "mobile", "Үнэ хэд вэ"),
+    page("2099-05-10T08:00:09Z", "web", "НОРВЕЛ ХОТЫН АЯЛАЛ", "m_bot1"),
+    page("2099-05-10T08:06:00Z", "web", "Сайн байна уу, би аяллын зөвлөх", "m_staff"),
+  ];
+  assert.deepEqual(latestStaffReply({ messages, now, botMids: new Set(["m_bot1"]), ...recorded }),
+    { at: new Date("2099-05-10T08:06:00Z"), origin: "staff_web" });
+});
+
+test("3. the bot's own messages are never a consultant, including its images", async () => {
+  const { latestStaffReply } = await import("../src/lib/staffTakeover");
+  const messages = [
+    msg("customer", "2099-05-10T08:00:00Z", "mobile", "Зураг байна уу"),
+    page("2099-05-10T08:00:04Z", "web", "Аяллын зураг", "m_bot_text"),
+    // The bot's photo whose id was not recorded: matched to the stored reply that carried it.
+    page("2099-05-10T08:00:40Z", "web", "", "m_bot_photo_unrecorded"),
+  ];
+  assert.equal(latestStaffReply({ messages, now, botMids: new Set(["m_bot_text"]), ...recorded,
+    botReplies: [{ at: at("2099-05-10T08:00:39Z"), text: "", attachments: 2 }] }), null);
+});
+
+test("4. a consultant's photo (no text) right after a bot reply is a consultant, from the phone or a computer", async () => {
+  const { latestStaffReply } = await import("../src/lib/staffTakeover");
+  const replies = [{ at: at("2099-05-10T08:00:04Z"), text: "НОРВЕЛ ХОТЫН АЯЛАЛ — үнэ", attachments: 0 }];
+  for (const source of ["mobile", "web"] as const) {
+    const messages = [
+      msg("customer", "2099-05-10T08:00:00Z", "mobile", "Дансны дугаар"),
+      page("2099-05-10T08:00:04Z", "web", "НОРВЕЛ ХОТЫН АЯЛАЛ — үнэ", "m_bot"),
+      page("2099-05-10T08:01:00Z", source, "", "m_staff_photo"),
+    ];
+    assert.deepEqual(latestStaffReply({ messages, now, botMids: new Set(["m_bot"]), ...recorded, botReplies: replies }),
+      { at: new Date("2099-05-10T08:01:00Z"), origin: source === "mobile" ? "staff_mobile" : "staff_web" }, source);
+  }
+});

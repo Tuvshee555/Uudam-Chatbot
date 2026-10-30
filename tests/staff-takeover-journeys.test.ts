@@ -183,6 +183,45 @@ test("staff takeover journeys on Facebook", async (context) => {
       assert.equal(after.sends.length, 0, "the consultant answers, not the bot's status line");
       assert.equal(harness.pauseState("booked-staff")?.pause_reason, "operator_reply");
     });
+    // Hotfix 2026-10-31 — live 2026-10-30 22:37 UTC, a brand-new customer's first message.
+    await context.test("15. Meta's automated welcome greeting before a new customer's first message does not silence the bot", async () => {
+      harness.thread("greeted", { messages: [
+        { from: "page", id: "m_meta_welcome", source: "web", text: "Hi Bat! Please let us know how we can help you.", agoMs: 5_000 },
+        { from: "customer", text: "Норвел хотын аялал үнэ", agoMs: 0 },
+      ] });
+      const first = await fb("greeted", "Норвел хотын аялал үнэ", one);
+      assert.equal(first.sends.length, 1, "the new customer is answered");
+      assert.match(answeredPrice(first), /1,791,000₮/);
+      assert.equal(harness.pauseState("greeted"), null, "and not paused for three days");
+    });
+
+    await context.test("16. a consultant's photo from the phone right after a bot reply silences the bot", async () => {
+      const botMid = await opened("photo");
+      // The consultant's photo (no text) comes 60 s after the bot's reply was stored.
+      harness.thread("photo", { messages: [
+        { from: "customer", text: "Норвел хотын аялал үнэ", agoMs: 10 * MIN },
+        { from: "page", id: botMid, source: "web", text: "НОРВЕЛ ХОТЫН АЯЛАЛ", agoMs: 10 * MIN - 2_000 },
+        { from: "page", id: "m_staff_photo", source: "mobile", text: "", agoMs: 9 * MIN },
+      ] });
+      const after = await fb("photo", "Ойлголоо, баярлалаа. Хэзээ гарах вэ?", one);
+      assert.equal(after.sends.length, 0);
+      assert.equal(harness.pauseState("photo")?.pause_reason, "operator_reply");
+    });
+
+    await context.test("17. a failed lookup never lets the bot answer over a consultant who replied this week", async () => {
+      const botMid = await opened("recent-staff");
+      harness.thread("recent-staff", { messages: [
+        { from: "customer", text: "Норвел хотын аялал үнэ", agoMs: 10 * MIN },
+        { from: "page", id: botMid, source: "web", agoMs: 10 * MIN - 2_000 },
+        { from: "page", source: "mobile", text: "Сайн байна уу, зөвлөх байна", agoMs: 2 * MIN },
+      ] });
+      await fb("recent-staff", "Ойлголоо", one); // the consultant's reply is seen and recorded
+      tick(3 * 86_400_000 + 3_600_000); // the three-day pause has ended
+      harness.thread("recent-staff", { fail: "timeout" });
+      const held = await fb("recent-staff", "Хүүхдийн үнэ хэд вэ?", one);
+      assert.equal(held.sends.length, 0, "the thread cannot be read and a consultant replied this week: no bot reply");
+      assert.match(leadContext("recent-staff"), /Бот хариулаагүй — ажилтны хариуг шалгаж чадсангүй/);
+    });
   } finally {
     await harness.close();
   }
