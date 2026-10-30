@@ -89,7 +89,7 @@ test("a selected trip's missing date stays scoped, while an explicitly new desti
   } finally { await cleanup(senderId); }
 });
 
-test("Messenger date follow-ups either hand off silently or answer only the offered destination", async (context) => {
+test("Messenger date follow-ups answer only from the offered destination, never another one", async (context) => {
   context.mock.timers.enable({ apis: ["Date"], now });
   const pg = await import("pg");
   let catalog = baseTrips;
@@ -154,7 +154,13 @@ test("Messenger date follow-ups either hand off silently or answer only the offe
         assert.doesNotMatch(sends[0], /ВЭЛМОР/);
         assert.equal(leads.length, priorLeads);
       } else {
-        assert.deepEqual(sends, []);
+        // Off the offered trips' schedule: their own departures, never the other
+        // destination that does leave that day; staff still get the lead.
+        assert.equal(sends.length, 1);
+        assert.match(sends[0], /^Тэр хугацаанд гарах аялал алга\. Гарах өдрүүд:/);
+        assert.match(sends[0], /НЕРИТ НУУРЫН АЯЛАЛ: 4 сарын 12/);
+        assert.match(sends[0], /НЕРИТ УУЛЫН АЯЛАЛ: 4 сарын 16/);
+        assert.doesNotMatch(sends[0], /ВЭЛМОР/);
         assert.equal(leads.length, priorLeads + 1);
       }
       await cleanup(sender);

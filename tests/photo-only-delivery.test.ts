@@ -88,7 +88,7 @@ test("photo-only delivery distinguishes sent media, missing data and upstream fa
       assert.deepEqual(sends, []);
       assert.deepEqual(replies, [{ reply: "REFER", tag: "photo_only_no_photos" }]);
     });
-    await context.test("the real webhook persists the missing-media lead and pause without sending an answer", async () => {
+    await context.test("the real webhook persists the missing-media lead without sending an answer or pausing", async () => {
       const webhook = await import("../src/pages/api/webhook");
       webhook.resetWebhookStateForTests();
       const payload = { object: "page", entry: [{ id: "1234567890", messaging: [{ sender: { id: "photo-webhook-missing" },
@@ -105,7 +105,8 @@ test("photo-only delivery distinguishes sent media, missing data and upstream fa
       await webhook.default(req as never, res as never);
       assert.equal(status, 200);
       assert.equal(leads, before + 1);
-      assert.ok(pauseReasons.includes("no_data_handoff"));
+      // No pause: the customer's next, answerable message is still answered.
+      assert.ok(!pauseReasons.includes("no_data_handoff"));
       assert.deepEqual(sends, []);
     });
   } finally { await closeNeonPool(); }

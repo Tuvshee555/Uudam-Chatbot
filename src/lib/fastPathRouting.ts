@@ -38,7 +38,7 @@ import {
   queryWantsLandOnlyEnhanced,
   resolveTripFromUserMessage,
 } from "./travelFastPathsSearch";
-import { AMBIGUOUS_REPLY_MARKER, isPassengerCountOnly } from "./travelFastPathsPricing";
+import { AMBIGUOUS_REPLY_MARKER, DATE_NOT_SCHEDULED_HEADING, isPassengerCountOnly } from "./travelFastPathsPricing";
 import type { TravelTrip } from "./travelTypes";
 import { isKnownGreetingPhrase } from "./greetingPhrases";
 import { SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
@@ -269,7 +269,10 @@ export async function routeFastPathText(input: {
     const current = resolveTripFromUserMessage(text, trips, { allowLooseFallback: false });
     const displaysTripList = /(?:^|\n)\s*[•*-]\s+/u.test(reply)
       && trips.filter(trip => looseNorm(reply).includes(looseNorm(trip.route_name))).length > 1;
-    if (original && (displaysTripList || /(?:аль|ямар)\s+(?:аялл?|чиглэл)|which\s+(?:trip|destination)/iu.test(reply))
+    // Not after "that date has no departure; here are the dates": the customer
+    // was told the date is off the schedule, so picking a trip drops it.
+    if (original && !reply.startsWith(DATE_NOT_SCHEDULED_HEADING)
+      && (displaysTripList || /(?:аль|ямар)\s+(?:аялл?|чиглэл)|which\s+(?:trip|destination)/iu.test(reply))
       && calendarWordsAreContextOnly(original.text) && requestedDepartureScope(original.text, now)
       && current.status !== "not_found") requestText = `${original.text}\n${text}`;
   }
@@ -331,6 +334,15 @@ export async function routeFastPathText(input: {
   // Nothing names a trip, so it used to fall through to silence while staff were paged.
   if (pendingTrips.length > 1 && DATES_ONLY_RE.test(text.trim())) {
     return { matchText: text, scopedClarify: pendingTrips, scopedClarifyNote: "Эдгээр аяллын гарах өдрүүд:", informationalAlternatives: true };
+  }
+
+  // A head count under the list ("2 том хүн 1 нярай") prices the offered trips.
+  // Decided before model interpretation: a reading of "the same trips" used to
+  // drop the list and answer "Аль аялал вэ?", and asking again re-sent the list
+  // without totals (live 2026-10-26).
+  if (pendingTrips.length > 1 && !choice && !tappedOwnButton && isPassengerCountOnly(text)) {
+    await setClarificationState(senderId, pendingTrips.map((trip) => trip.id));
+    return { matchText: text, scopedClarify: pendingTrips };
   }
 
   // A date under a trip or a destination list is a follow-up to that scope.

@@ -248,10 +248,14 @@ export function buildAmbiguousPassengerTotalReply(
 ): string | null {
   const counts = parsePassengerTotalRequest(text);
   if (!counts || trips.length < 2) return null;
-  const lines = trips
-    .slice(0, replyPreferences(text).full ? 8 : 3)
-    .map((trip) => formatPassengerTotalLine(trip, text, counts, now));
-  if (lines.length < 2 || lines.some(line => !line)) return null;
+  const shown = trips.slice(0, replyPreferences(text).full ? 8 : 3);
+  const totals = shown.map((trip) => formatPassengerTotalLine(trip, text, counts, now));
+  // One trip whose total the data cannot give alone (no infant fare, or it depends
+  // on a date, hotel or child age) must not throw away the totals the others do
+  // give: that left the customer with the same list again (live 2026-10-26).
+  // That trip keeps its name only — never an estimated total.
+  if (shown.length < 2 || !totals.some(Boolean)) return null;
+  const lines = totals.map((line, index) => line || `• ${shown[index].route_name}`);
   return [
     ...lines,
     ...(trips.length > lines.length ? [`Өөр ${trips.length - lines.length} сонголт бий.`] : []),

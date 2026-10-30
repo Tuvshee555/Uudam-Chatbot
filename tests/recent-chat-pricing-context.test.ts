@@ -100,21 +100,29 @@ test("ambiguous totals use canonical dated passenger fares rather than stale sca
 });
 
 test("ambiguous totals do not assume a date, hotel or child age", () => {
-  const simple = trip({ id: "simple", departure_dates: ["2098-03-08"] });
-  const changing = trip({ extra: { price_groups: [{ dates: ["2098-04-05"], adult_price: 901_000 }] } });
-  assert.equal(buildAmbiguousPassengerTotalReply("2 том хүн 1 хүүхэд", [simple, changing], now), null);
-  const hotels = trip({ departure_dates: ["2098-03-08"], extra: { price_groups: [
+  // The trip that depends on a choice keeps its name only; the other trip's total is still given.
+  const simple = trip({ id: "simple", route_name: "Вэлмор энгийн аялал", departure_dates: ["2098-03-08"] });
+  const nameOnly = (other: ReturnType<typeof trip>) => {
+    const reply = buildAmbiguousPassengerTotalReply("2 том хүн 1 хүүхэд", [simple, other], now) || "";
+    assert.match(reply, /^• Вэлмор энгийн аялал: 1,795,000₮/m);
+    assert.ok(reply.split("\n").includes(`• ${other.route_name}`), reply);
+  };
+  const changing = trip({ route_name: "Вэлмор өөрчлөгдөх аялал", extra: { price_groups: [{ dates: ["2098-04-05"], adult_price: 901_000 }] } });
+  nameOnly(changing);
+  const hotels = trip({ route_name: "Вэлмор буудлын аялал", departure_dates: ["2098-03-08"], extra: { price_groups: [
     { dates: ["2098-03-08"], hotel: "Lumen Lodge", adult_price: 901_000 },
     { dates: ["2098-03-08"], hotel: "Sable Lodge", adult_price: 1_001_000 },
   ] } });
-  assert.equal(buildAmbiguousPassengerTotalReply("2 том хүн 1 хүүхэд", [simple, hotels], now), null);
-  const ages = trip({ departure_dates: ["2098-03-08"], extra: { price_groups: [
+  nameOnly(hotels);
+  const ages = trip({ route_name: "Вэлмор насны аялал", departure_dates: ["2098-03-08"], extra: { price_groups: [
     { dates: ["2098-03-08"], passenger_prices: [
       { label: "Хүүхэд", age_range: "2-5 нас", price: 201_000 },
       { label: "Хүүхэд", age_range: "6-11 нас", price: 401_000 },
     ] },
   ] } });
-  assert.equal(buildAmbiguousPassengerTotalReply("2 том хүн 1 хүүхэд", [simple, ages], now), null);
+  nameOnly(ages);
+  // No trip with a computable total: nothing to add over the plain list.
+  assert.equal(buildAmbiguousPassengerTotalReply("2 том хүн 1 хүүхэд", [changing, hotels], now), null);
 });
 
 test("a month-scoped destination list filters before limiting dates and uses that month's fare", () => {

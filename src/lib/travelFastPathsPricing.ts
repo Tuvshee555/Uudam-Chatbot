@@ -1563,7 +1563,8 @@ export function childFareTiers(
  */
 export function isPassengerCountOnly(text: string): boolean {
   const normalized = text.toLowerCase().replace(/[.,!?]/g, " ").trim();
-  return /^(?:\d{1,2}\s*(?:том(?:\s*хүн)?|хүүхэд|нярай|хүн|tom\s*hun|huuhed|nyarai|adult|child|infant)\s*)+(?:байна|бна|явна|yavna)?$/i.test(normalized);
+  // "2 том хүн 1 нярай хэд болох вэ" is still only a head count plus "how much".
+  return /^(?:\d{1,2}\s*(?:том(?:\s*хүн)?|хүүхэд|нярай|хүн|tom\s*hun|huuhed|nyarai|adult|child|infant)\s*)+(?:байна|бна|явна|yavna)?(?:\s*(?:нийт|үнэ|хэд|хэдэн|болох|бол|вэ|ве|niit|une|vne|hed|heden|boloh|ve))*$/i.test(normalized);
 }
 
 /** One "• Хүүхэд /band/: price" line per distinct non-infant fare in a price group. */
@@ -1838,6 +1839,28 @@ export function buildAmbiguousTripReply(
     ...names,
     ...(candidates.length > names.length ? [`Өөр ${candidates.length - names.length} сонголт бий.`] : []),
     ...(options.askToChoose === false ? [] : ["", AMBIGUOUS_REPLY_MARKER]),
+  ].join("\n");
+}
+
+/**
+ * The customer asked for a date or month that none of the trips on screen
+ * departs in. The schedule IS the data, so answer with it: the real upcoming
+ * departures of those trips. This used to be a silent hand-off, and the
+ * customer who asked "1 сарын 20-нд бга юу" under a list heard nothing (live
+ * 2026-10-26). Null (still a hand-off) when no trip has a listed departure.
+ */
+export const DATE_NOT_SCHEDULED_HEADING = "Тэр хугацаанд гарах аялал алга. Гарах өдрүүд:";
+
+export function buildDateNotScheduledReply(trips: TravelTrip[], now = new Date()): string | null {
+  const scheduled = trips
+    .map((trip) => ({ trip, dates: upcomingDepartures(trip, now) }))
+    .filter(({ trip, dates }) => trip.status === "active" && dates.length > 0);
+  if (!scheduled.length) return null;
+  const shown = scheduled.slice(0, MAX_COMPACT_TRIPS);
+  return [
+    DATE_NOT_SCHEDULED_HEADING,
+    ...shown.map(({ trip, dates }) => `• ${trip.route_name}: ${dates.slice(0, 3).map((date) => customerDate(date, now)).join(", ")}`),
+    ...(scheduled.length > shown.length ? [`Өөр ${scheduled.length - shown.length} сонголт бий.`] : []),
   ].join("\n");
 }
 

@@ -48,6 +48,7 @@ import { fetchThreadMessages, latestStaffReplyAt, STAFF_TAKEOVER_MS } from "../.
 import { BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBookedCustomer, pauseBot, trackSender } from "../../lib/pause";
+import { buildDateNotScheduledReply } from "../../lib/travelFastPathsPricing";
 import { pickReferral, rememberAdReferral } from "../../lib/adReferral";
 import { AUTO_PAUSE_RESET_DAYS, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { hasDepartureDateAvailabilityIntent, requestsDateWindow } from "../../lib/travelDates";
@@ -382,16 +383,11 @@ async function handleMessage(
       }, "api.webhook.no_data_handoff");
       // The bot doesn't know the answer, so it says NOTHING to the customer (owner's
       // rule: an unknown answer is met with silence, never a "passed to a
-      // consultant" notice). Staff got the lead + alert above, and the bot is
-      // paused for this customer the same way an explicit "холбогдох" request does
-      // — a human takes over instead of the bot risking another wrong or empty
-      // reply on the next message.
-      await autoHandoffSender(senderId);
-      const noDataPauseMs =
-        botSettings.handoff_pause_minutes > 0
-          ? botSettings.handoff_pause_minutes * 60_000
-          : undefined;
-      await pauseBot(senderId, noDataPauseMs, "no_data_handoff");
+      // consultant" notice). Staff got the lead above. The bot is NOT paused: one
+      // unknown answer used to silence every later message for an hour, and with no
+      // staff alert channel no human came — real customers asked answerable
+      // questions into that silence and left (2026-10-26..29). A staff reply in
+      // the thread still pauses the bot (staff takeover check above).
       if (input.counter) recordCounter(input.counter, 1, { platform });
       return false;
     }
@@ -1111,6 +1107,28 @@ async function handleMessage(
     }
   }
 
+  // A date or month none of the trips in scope departs in: their real
+  // departures answer it (this was a silent hand-off). Staff still hear about
+  // the date the customer wanted, in case another one can be arranged.
+  {
+    const routed = await getRouted();
+    const notScheduledReply = routed.unavailableDateWithinScope && routed.scopedClarify?.length
+      ? buildDateNotScheduledReply(routed.scopedClarify) : null;
+    if (notScheduledReply && routed.scopedClarify) {
+      await captureLead({ kind: "handoff", contactPhone: detectedPhone || "",
+        context: "Хэрэглэгчийн асуусан огноонд гарах аялал хуваарьт алга; бот бусад гарах өдрүүдийг хэлсэн." },
+      "api.webhook.date_not_scheduled");
+      await deliverFastPathReply({
+        reply: notScheduledReply,
+        failTag: "date_not_scheduled",
+        catalogTripIds: routed.scopedClarify.map(trip => trip.id),
+        rememberSource: "api.webhook.date_not_scheduled",
+        counter: "webhook.date_not_scheduled_total",
+      });
+      return;
+    }
+  }
+
   // The customer's answer fits SEVERAL of the trips we just offered ("шууд
   // нислэгтэй" when both options are direct flights) — re-ask scoped to
   // exactly those, like a human agent would. Letting a matcher rescore the
@@ -1771,15 +1789,15 @@ async function handleMessage(
       kind: "handoff", contactPhone: detectedPhone || "",
       context: aiOutage ? "AI түр саатсан тул зөвлөхөд шилжүүлэв." : "Бот мэдээлэлгүй асуулт тул зөвлөхөд шилжүүлэв.",
     }, "api.webhook.ai_refer");
-    await autoHandoffSender(senderId);
-    const referPauseMs =
-      botSettings.handoff_pause_minutes > 0
-        ? botSettings.handoff_pause_minutes * 60_000
-        : undefined;
-    await pauseBot(senderId, referPauseMs, aiOutage ? "ai_outage" : "no_data_handoff");
+    // An outage would fail the next message too, so the customer is left to staff.
+    // An unknown answer is not paused: the next question may well be answerable.
+    if (aiOutage) {
+      await autoHandoffSender(senderId);
+      await pauseBot(senderId, botSettings.handoff_pause_minutes > 0 ? botSettings.handoff_pause_minutes * 60_000 : undefined, "ai_outage");
+    }
     // Owner's rule: whether the model failed or simply does not know, the
-    // customer gets NO message. The bot is paused (above) and staff got the lead
-    // alert; the customer's message is already in history for whoever picks it up.
+    // customer gets NO message. Staff got the lead; the customer's message is
+    // already in history for whoever picks it up.
     // Logged as a warning so a "the bot ignored me" complaint can be traced to
     // this in the error log instead of guessed at.
     logWarn(aiOutage ? "webhook.ai_outage_customer_silenced" : "webhook.ai_refer_customer_silenced", {
@@ -1874,18 +1892,9 @@ async function handleMessage(
         ? `AI өөр аяллын (${wrongTripLeak.offendingTripName}) хариу өгөх гэсэн тул хэрэглэгчид илгээлгүй зөвлөхөд шилжүүлэв.`
         : "AI мэдээлэлгүй өгүүлбэр бичсэн тул зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй.",
     }, "api.webhook.ai_no_data_handoff");
-    await autoHandoffSender(senderId);
-    const suppressedPauseMs =
-      botSettings.handoff_pause_minutes > 0
-        ? botSettings.handoff_pause_minutes * 60_000
-        : undefined;
-    await pauseBot(
-      senderId,
-      suppressedPauseMs,
-      wrongTripLeak ? "wrong_trip_handoff" : "no_data_handoff",
-    );
     // Silent: a reply the guards suppressed (no data / another trip's facts) is
-    // never replaced by a notice to the customer. Lead + alert + pause are above.
+    // never replaced by a notice to the customer. The lead is above; no pause,
+    // so the customer's next, answerable question is still answered.
     logWarn("webhook.ai_no_data_customer_silenced", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,

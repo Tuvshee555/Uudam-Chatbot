@@ -57,7 +57,20 @@ function withoutOwnText(reply: string, trips: TravelTrip[]): string {
 function withoutAddedUpTotals(text: string): string {
   let sum = 0;
   const out: string[] = [];
+  const amount = (value: string) => Number(value.replace(/[.,]/g, ""));
   for (const line of text.split(/\r?\n/)) {
+    // The same arithmetic on one line, as the "which trip?" totals print it:
+    // "• <trip>: 6,833,000₮ (2 том хүн x 3,111,000₮ + 1 нярай x 611,000₮)".
+    // The unit fares stay in the line and are checked; only a total that adds up is dropped.
+    const inline = /^(.*?:\s*)([\d.,]+)\s*₮\s*\(([^()]*)\)(.*)$/u.exec(line);
+    // Terms are joined by " + "; an age band like "/12+ нас/" has no space before its "+".
+    const parts = inline ? inline[3].split(/\s\+\s/) : [];
+    const terms = parts.map((part) => /^\s*(\d{1,3})\s+.*x\s*([\d.,]+)\s*₮\s*$/u.exec(part));
+    if (inline && terms.length && terms.every(Boolean)) {
+      if (terms.reduce((total, term) => total + Number(term![1]) * amount(term![2]), 0) !== amount(inline[2])) return "REFER";
+      out.push(`${inline[1]}(${inline[3]})${inline[4]}`);
+      continue;
+    }
     const each = /x\s*(\d{1,3})\s*:\s*([\d.,]+)\s*₮/i.exec(line);
     if (each) sum += Number(each[1]) * Number(each[2].replace(/[.,]/g, ""));
     const total = /^\s*нийт\s*:\s*([\d.,]+)\s*₮\s*$/i.exec(line);
