@@ -25,6 +25,8 @@ export {
   dbAutoHandoffSender,
   dbClaimGreeting,
   dbClaimGoodbye,
+  dbClaimQuickInfo,
+  dbReleaseQuickInfo,
   dbClaimReminder,
   dbGetPendingReminders,
   dbClaimSeasonSend,

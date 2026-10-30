@@ -267,7 +267,7 @@ export async function routeFastPathText(input: {
     const reply = input.history[lastReplyIndex]?.text || "";
     const original = input.history.slice(0, lastReplyIndex).findLast(message => message.role === "user");
     const current = resolveTripFromUserMessage(text, trips, { allowLooseFallback: false });
-    const displaysTripList = /(?:^|\n)\s*[•*-]\s+/u.test(reply)
+    const displaysTripList = /(?:^|\n)\s*(?:[•*-]|\d{1,2}\.)\s+/u.test(reply)
       && trips.filter(trip => looseNorm(reply).includes(looseNorm(trip.route_name))).length > 1;
     // Not after "that date has no departure; here are the dates": the customer
     // was told the date is off the schedule, so picking a trip drops it.

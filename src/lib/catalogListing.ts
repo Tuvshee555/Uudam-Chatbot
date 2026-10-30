@@ -12,6 +12,8 @@
 import { BOOKING_WEBSITE_URL } from "./bookingCollect";
 import {
   AMBIGUOUS_REPLY_MARKER,
+  formatTripListCard,
+  tripChoiceFooter,
   filterTripsByTransportIntent,
   formatPassengerMoney,
   getTripNameHaystack,
@@ -76,30 +78,27 @@ function priceDetail(trip: TravelTrip, now: Date, date?: string): string {
   return qualified.length <= 220 ? qualified : "";
 }
 
-function detailLine(trip: TravelTrip, now: Date, showDuration: boolean): string {
+function detailCard(number: number, trip: TravelTrip, now: Date): string {
   const price = priceDetail(trip, now);
-  const dates = nextDepartures(trip, now);
-  const details = [
-    showDuration ? trip.duration_text?.trim() || "" : "",
-    price,
-    dates.length ? `гарах: ${dates.map((date) => customerDate(date, now)).join(", ")}` : "",
-  ].filter(Boolean);
-  return `• ${trip.route_name}${details.length ? ` — ${details.join(" · ")}` : ""}`;
+  return formatTripListCard(number, trip, {
+    duration: trip.duration_text, fare: price ? price[0].toUpperCase() + price.slice(1) : "", dates: nextDepartures(trip, now),
+  }, now);
 }
 
-function renderListing(pool: TravelTrip[], heading: string, limit: number, now: Date, grouped = false, showDuration = limit > MAX_COMPACT): Listing {
+function renderListing(pool: TravelTrip[], heading: string, limit: number, now: Date, grouped = false): Listing {
   const lines = [heading], listed: TravelTrip[] = [];
   const footer = (count: number) => [
     ...(pool.length > count ? ["", `Өөр ${pool.length - count} сонголт бий.${limit > MAX_COMPACT ? ` ${BOOKING_WEBSITE_URL}` : ""}`] : []),
-    "", AMBIGUOUS_REPLY_MARKER,
+    "", ...(grouped ? [AMBIGUOUS_REPLY_MARKER] : tripChoiceFooter(count)),
   ];
   let previousCategory = "";
   for (const trip of pool.slice(0, limit)) {
     const category = trip.category?.trim() || "Бусад аялал";
     const dates = nextDepartures(trip, now);
+    // A long grouped catalogue stays one row per trip; a short list gets a card per trip.
     const additions = grouped
       ? [...(category !== previousCategory ? ["", `${category}:`] : []), `• ${trip.route_name}${dates.length ? ` — ${customerDate(dates[0], now)}` : ""}`]
-      : [detailLine(trip, now, showDuration)];
+      : ["", detailCard(listed.length + 1, trip, now)];
     if ([...lines, ...additions, ...footer(listed.length + 1)].join("\n").length > MAX_MESSAGE_CHARS) break;
     lines.push(...additions);
     listed.push(trip);
@@ -260,13 +259,15 @@ function whenListing(pool: TravelTrip[], when: When, now: Date, limit = MAX_COMP
   }
   const listed: TravelTrip[] = [];
   const lines = [when.heading];
-  const footer = (count: number) => [...(rows.length > count ? ["", `Өөр ${rows.length - count} аялал бий.${limit > MAX_COMPACT ? ` ${BOOKING_WEBSITE_URL}` : ""}`] : []), "", AMBIGUOUS_REPLY_MARKER];
+  const footer = (count: number) => [...(rows.length > count ? ["", `Өөр ${rows.length - count} аялал бий.${limit > MAX_COMPACT ? ` ${BOOKING_WEBSITE_URL}` : ""}`] : []), "", ...tripChoiceFooter(count)];
   for (const { trip, dates } of rows.slice(0, limit)) {
     const price = priceDetail(trip, now, when.scope && dates.length === 1 ? dates[0] : undefined);
     const shownDates = dates.slice(0, when.scope?.kind === "dates" ? when.scope.dates.length : limit > MAX_COMPACT ? 4 : 2);
-    const line = `• ${trip.route_name} — ${[limit > MAX_COMPACT ? trip.duration_text?.trim() : "", price, `гарах: ${shownDates.map((date) => customerDate(date, now)).join(", ")}`].filter(Boolean).join(" · ")}`;
-    if ([...lines, line, ...footer(listed.length + 1)].join("\n").length > MAX_MESSAGE_CHARS) break;
-    lines.push(line);
+    const card = formatTripListCard(listed.length + 1, trip, {
+      duration: trip.duration_text, fare: price ? price[0].toUpperCase() + price.slice(1) : "", dates: shownDates,
+    }, now);
+    if ([...lines, "", card, ...footer(listed.length + 1)].join("\n").length > MAX_MESSAGE_CHARS) break;
+    lines.push("", card);
     listed.push(trip);
   }
   return { reply: [...lines, ...footer(listed.length)].join("\n"), listed, authoritative: true };
@@ -284,10 +285,10 @@ function tripDays(trip: TravelTrip): number | null {
 function durationListing(active: TravelTrip[], wanted: number, now: Date, full = false): Listing | null {
   const sized = active.map((trip) => ({ trip, days: tripDays(trip) })).filter((row): row is { trip: TravelTrip; days: number } => row.days !== null && bookableDates(row.trip, now).length > 0);
   const exact = sized.filter((row) => row.days === wanted).map((row) => row.trip);
-  if (exact.length) return { ...renderListing(exact, `${wanted} өдрийн аяллууд`, full ? MAX_DETAILED : MAX_COMPACT, now, false, true), authoritative: true };
+  if (exact.length) return { ...renderListing(exact, `${wanted} өдрийн аяллууд`, full ? MAX_DETAILED : MAX_COMPACT, now), authoritative: true };
   const nearest = [...sized].sort((a, b) => Math.abs(a.days - wanted) - Math.abs(b.days - wanted) || a.days - b.days).slice(0, MAX_COMPACT).map((row) => row.trip);
   if (!nearest.length) return null;
-  return { ...renderListing(nearest, `${wanted} өдрийн аялал одоогоор алга байна. Хамгийн ойрын хугацаатай аяллууд:`, MAX_COMPACT, now, false, true), authoritative: true };
+  return { ...renderListing(nearest, `${wanted} өдрийн аялал одоогоор алга байна. Хамгийн ойрын хугацаатай аяллууд:`, MAX_COMPACT, now), authoritative: true };
 }
 
 // "арай бага хоногтой нь байхгүй юу": the model answered with whichever trip
@@ -311,7 +312,7 @@ function shortestTripsListing(intentText: string, active: TravelTrip[], now: Dat
     .filter((trip) => Number.isFinite(durationDays(trip)))
     .sort((a, b) => durationDays(a) - durationDays(b) || soonestKey(a, now).localeCompare(soonestKey(b, now)));
   if (sorted.length === 0) return null;
-  return renderListing(sorted, "Хамгийн цөөн хоногтой аяллууд", FULL_LIST_RE.test(normText(intentText)) ? MAX_SHORTEST : 2, now, false, true);
+  return renderListing(sorted, "Хамгийн цөөн хоногтой аяллууд", FULL_LIST_RE.test(normText(intentText)) ? MAX_SHORTEST : 2, now);
 }
 
 function categoryHeading(text: string): string {
@@ -353,7 +354,7 @@ export function buildCatalogListingReply(rawIntentText: string, trips: TravelTri
         authoritative: true,
       };
     }
-    return { ...renderListing(listed, "Сар шинийн аяллууд 😊", full ? MAX_DETAILED : MAX_COMPACT, now), authoritative: true };
+    return { ...renderListing(listed, "✈️ Сар шинийн аяллууд", full ? MAX_DETAILED : MAX_COMPACT, now), authoritative: true };
   }
   const wantsAll = WHOLE_CATALOG_RE.test(normalized);
   const wantsCruise = CRUISE_RE.test(normalized);
@@ -386,7 +387,7 @@ export function buildCatalogListingReply(rawIntentText: string, trips: TravelTri
   // "Далайтай аялал байна уу", "халуун газар": the trips whose own text says sea or beach.
   if (quiet && queryWantsSeaBeach(intentText) && !wantsCategory) {
     const sea = active.filter((trip) => tripHasSeaBeach(trip) && bookableDates(trip, now).length > 0).sort((a, b) => soonestKey(a, now).localeCompare(soonestKey(b, now)));
-    if (sea.length) return { ...renderListing(sea, "Далайн амралтын аяллууд 😊", MAX_COMPACT, now), authoritative: true };
+    if (sea.length) return { ...renderListing(sea, "✈️ Далайн амралтын аяллууд", MAX_COMPACT, now), authoritative: true };
   }
   // "10 хоногийн аялал байна уу" (a length, no month, no place).
   const length = DURATION_ASK_RE.exec(normalized);
@@ -394,7 +395,7 @@ export function buildCatalogListingReply(rawIntentText: string, trips: TravelTri
     return durationListing(active, Number(length[1]), now, full);
   }
   // "Өөр аялал байна уу": the customer wants to see more of what exists.
-  if (OTHER_TRIPS_RE.test(normalized)) return renderListing(active.filter((trip) => bookableDates(trip, now).length > 0).sort((a, b) => soonestKey(a, now).localeCompare(soonestKey(b, now))), "Манай аяллууд 😊", MAX_COMPACT, now);
+  if (OTHER_TRIPS_RE.test(normalized)) return renderListing(active.filter((trip) => bookableDates(trip, now).length > 0).sort((a, b) => soonestKey(a, now).localeCompare(soonestKey(b, now))), "✈️ Манай аяллууд", MAX_COMPACT, now);
   if (!wantsAll && !wantsCategory) return null;
 
   const categoryPool = wantsCategory
@@ -426,7 +427,7 @@ export function buildCatalogListingReply(rawIntentText: string, trips: TravelTri
     const heading = destinations.length > 0 && destinationCategoryPool.length === 0
       ? `${destinations.map(titleCase).join(", ")} чиглэлийн аяллууд`
       : wantsCategory ? categoryHeading(intentText) : "Манай аяллууд";
-    return renderListing(listed, `${heading} 😊`, full ? MAX_DETAILED : MAX_COMPACT, now);
+    return renderListing(listed, `✈️ ${heading}`, full ? MAX_DETAILED : MAX_COMPACT, now);
   }
 
   // The whole catalog does not fit one message with prices: names grouped by

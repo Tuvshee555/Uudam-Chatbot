@@ -13,6 +13,7 @@ test("configured text replies share grounding and paused customers retain inboun
   const leads = new Set<string>();
   const leadKinds = new Set<string>();
   const sends: string[] = [];
+  const quickInfoSent = new Set<string>();
   let pagePaused = false;
   let contactPhones = "1111 2222";
   let officeAddress = "ВЭЛМОР АЯЛАЛ";
@@ -57,6 +58,11 @@ test("configured text replies share grounding and paused customers retain inboun
       prev_msg_at: "2098-01-31T04:00:00Z", get_started_at: null }]);
     if (/INSERT INTO travel_senders \(sender_id, paused,/i.test(sql)) { paused.add(sender); return result(); }
     if (/SET goodbye_sent_at/i.test(sql)) { goodbyeClaims++; return result([{ claimed: true }]); }
+    if (/SET quick_info_sent_at = NOW\(\)/i.test(sql)) {
+      if (quickInfoSent.has(sender)) return result();
+      quickInfoSent.add(sender); return result([{ claimed: true }]);
+    }
+    if (/SET quick_info_sent_at = NULL/i.test(sql)) { quickInfoSent.delete(sender); return result(); }
     if (/COUNT[\s\S]*FROM travel_leads/i.test(sql)) return result([{ count: leadKinds.has(`${sender}:${params[1]}`) ? "1" : "0" }]);
     if (/INSERT INTO travel_leads/i.test(sql)) {
       if (params[0] === "booking") bookingLeads++;
@@ -248,9 +254,10 @@ test("configured text replies share grounding and paused customers retain inboun
       assert.equal([...first.sends, ...retry.sends].join(""), expected);
       assert.ok([...first.sends, ...retry.sends].every(part => part.length <= 2_000));
       assert.deepEqual((await call("long-configured", "ВЭЛМОР АЯЛАЛ товч мэдээлэл", { facebook: true, event: "long-event" })).sends, []);
+      // The owner's rule: the configured intro goes to a customer once, ever.
       const repeatedQuestion = await call("long-configured", "ВЭЛМОР АЯЛАЛ товч мэдээлэл", { facebook: true, event: "new-long-event" });
       assert.equal(repeatedQuestion.status, 200);
-      assert.equal(repeatedQuestion.sends.join(""), expected, "a fresh inbound question may request the same complete answer again");
+      assert.ok(!repeatedQuestion.sends.join("").includes("Хөтөлбөрийн баталгаатай тайлбар"), "the quick-info reply is never sent twice");
       quickInfoReply = "ВЭЛМОР АЯЛАЛ — 1,731,000₮";
     });
     for (const mode of ["sender", "page", "staff"] as const) {

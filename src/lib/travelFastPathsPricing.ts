@@ -8,7 +8,7 @@
 import { departureMatchesScope, filterFutureDepartureDates, isPlaceholderDepartureText, parseDepartureDateText, requestedDepartureScope, type RequestedDepartureScope, type ResolvedDepartureDate } from "./travelDates";
 import { formatPriceRange } from "./priceRange";
 import { resolveTripOffer, resolveTripOfferFareCard, type PassengerKind, type ResolvedTripOffer } from "./tripOffers";
-import { buildFarePriceLines, onSaleDepartureText, upcomingDepartures } from "./tripFareBlock";
+import { buildFarePriceLines, onSaleDepartureText, shortDate, upcomingDepartures } from "./tripFareBlock";
 import { verifyTripReply } from "./tripReplyVerification";
 import { customerDate } from "./customerDate";
 import type { TravelTrip } from "./travelOps";
@@ -128,6 +128,16 @@ export function isLandFlightCombo(trip: TravelTrip) {
     normalized.includes("газар нислэг хосолсон") ||
     normalized.includes("газар нислэг")
   );
+}
+
+/**
+ * "Энэ нь газар + нислэг хосолсон аялал." only when the title does not already
+ * say so: under "…ГАЗАР НИСЛЭГ ХОСОЛСОН" it repeated the heading (owner, 2026-10-30).
+ */
+export function needsLandFlightComboNote(trip: TravelTrip): boolean {
+  if (!isLandFlightCombo(trip)) return false;
+  const name = normText(trip.route_name.toLowerCase());
+  return !/газар\s*\+\s*нислэг/.test(trip.route_name.toLowerCase()) && !name.includes("газар нислэг");
 }
 
 export function formatDepartureDates(trip: TravelTrip, now = new Date()) {
@@ -1806,40 +1816,65 @@ export function buildAmbiguousTripReply(
   const asksAdult = /том\s*хүн|adult|tom\s*hun/i.test(text);
   const asksChild = /хүүх|child|huuh|huvh/i.test(text);
   const asksInfant = /нярай|infant|nyarai/i.test(text);
-  const asksDuration = /хоног|өдөр|хугацаа|duration|days|honog|udur/i.test(text);
-  const names = candidates.slice(0, limit).flatMap((trip) => {
+  const shown = candidates.slice(0, limit)
+    .map((trip) => ({ trip, listed: listedFaresAndDates(trip, now, scope) }))
+    .filter(({ listed }) => !listed.outsideScope);
+  const cards = shown.map(({ trip, listed }, index) => {
     const currency = trip.currency || "MNT";
-    const listed = listedFaresAndDates(trip, now, scope);
-    if (listed.outsideScope) return [];
     const adultText = formatPassengerMoney(listed.fares?.adult, currency);
     const childText = formatPassengerMoney(listed.fares?.child, currency);
     const infantText = formatPassengerMoney(listed.fares?.infant, currency);
-    // Next departures: customers pick by date, and a "none that month" re-ask
-    // is useless without them.
-    const upcoming = listed.dates;
     const fareLine = (kind: PassengerKind, label: string, value: string | null) => value
       ? `${label}${listed.ageLabels?.[kind] ? ` (${listed.ageLabels[kind]})` : ""} ${value}` : "";
-    const details = [
-      full || asksDuration ? trip.duration_text : "",
-      full || asksAdult || (!asksChild && !asksInfant) ? fareLine("adult", "том хүн", adultText) : "",
-      full || asksChild || (asksPrice && !asksAdult && !asksInfant) ? fareLine("child", "хүүхэд", childText) : "",
-      full || asksInfant ? fareLine("infant", "нярай", infantText) : "",
+    const fare = [
+      full || asksAdult || (!asksChild && !asksInfant) ? fareLine("adult", "Том хүн", adultText) : "",
+      full || asksChild || (asksPrice && !asksAdult && !asksInfant) ? fareLine("child", "Хүүхэд", childText) : "",
+      full || asksInfant ? fareLine("infant", "Нярай", infantText) : "",
       ...((adultText || childText || infantText) ? listed.qualifications || [] : []),
-      upcoming.length ? `гарах: ${upcoming.slice(0, scope?.kind === "dates" ? scope.dates.length : full ? 3 : 1).map((date) => customerDate(date, now)).join(", ")}` : "",
-      listed.soldOut ? "суудал дүүрсэн" : "",
-    ].filter(Boolean);
-    const line = `• ${trip.route_name}${details.length ? ` — ${details.join(" · ")}` : ""}`;
-    // A line the checker would reject is cut back to the trip's name: a name-only
-    // line is always true, and a rejected list meant silence for the customer.
-    return [details.length && verifyTripReply({ reply: line, trips: [trip], now }) !== line ? `• ${trip.route_name}` : line];
+    ].filter(Boolean).join(" · ");
+    // Next departures: customers pick by date, and a "none that month" re-ask
+    // is useless without them.
+    const dates = listed.dates.slice(0, scope?.kind === "dates" ? scope.dates.length : full ? 3 : 2);
+    const card = formatTripListCard(index + 1, trip, { duration: trip.duration_text, fare, dates, note: listed.soldOut ? "Суудал дүүрсэн" : "" }, now);
+    // A card the checker would reject is cut back to the trip's name: a name-only
+    // row is always true, and a rejected list meant silence for the customer.
+    return card.includes("\n") && verifyTripReply({ reply: card, trips: [trip], now }) !== card ? `${index + 1}. ${trip.route_name}` : card;
   });
-  if (!names.length) return "REFER";
+  if (!cards.length) return "REFER";
   return [
     heading || "Аяллууд:",
-    ...names,
-    ...(candidates.length > names.length ? [`Өөр ${candidates.length - names.length} сонголт бий.`] : []),
-    ...(options.askToChoose === false ? [] : ["", AMBIGUOUS_REPLY_MARKER]),
+    "",
+    cards.join("\n\n"),
+    ...(candidates.length > cards.length ? ["", `Өөр ${candidates.length - cards.length} сонголт бий.`] : []),
+    ...(options.askToChoose === false ? [] : ["", ...tripChoiceFooter(cards.length)]),
   ].join("\n");
+}
+
+/**
+ * One trip of a "which trip?" list as a small card the eye can scan: numbered
+ * name, then length, fare and dates on their own lines (owner, 2026-10-30:
+ * the one-line "• name — length · fare · dates" rows were a wall of text).
+ */
+export function formatTripListCard(
+  number: number,
+  trip: TravelTrip,
+  details: { duration?: string | null; fare?: string; dates?: string[]; note?: string },
+  now = new Date(),
+): string {
+  return [
+    `${number}. ${trip.route_name}`,
+    details.duration?.trim() ? `⏳ ${details.duration.trim()}` : "",
+    details.fare ? `💰 ${details.fare}` : "",
+    details.dates?.length ? `📅 ${details.dates.map((date) => shortDate(date, now)).join(", ")}` : "",
+    details.note || "",
+  ].filter(Boolean).join("\n");
+}
+
+/** The question under a numbered list, with how to answer it. */
+export function tripChoiceFooter(count: number): string[] {
+  if (count < 2) return [AMBIGUOUS_REPLY_MARKER];
+  const numbers = Array.from({ length: count }, (_, index) => String(index + 1));
+  return [AMBIGUOUS_REPLY_MARKER, `${numbers.slice(0, -1).join(", ")} эсвэл ${numbers.at(-1)} гэж бичээрэй 😊`];
 }
 
 /**

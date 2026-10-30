@@ -105,10 +105,12 @@ export function presentAssistantReply(input: {
   // reply IS the answer (a booking flow's one phone question, a bare greeting):
   // an empty result would be read as "no data" and silence the customer.
   reply = compact.trim() ? compact : reply;
+  // An icon that opens a line (\u2708\uFE0F name, \u23F3 length, \uD83D\uDCB0 fare, \uD83D\uDCC5 dates) is layout, not
+  // decoration: the owner wants trip cards and lists scannable. Only emojis inside
+  // the text are limited to one per reply.
   let emojis = 0;
   reply = reply.replace(/https?:\/\/\S+|\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*/gu,
-    (value) => value.startsWith("http") || ++emojis <= 1 ? value : "");
-  // Compact messages are a single group of lines. Explicit detailed requests
-  // retain their section spacing; factual content is never cut to a word cap.
-  return reply.replace(/[ \t]+\n/g, "\n").replace(preferences.full ? /\n{3,}/g : /\n{2,}/g, preferences.full ? "\n\n" : "\n").trim();
+    (value, offset: number, whole: string) => value.startsWith("http") || /(?:^|\n)[ \t]*$/.test(whole.slice(0, offset)) || ++emojis <= 1 ? value : "");
+  // One blank line may separate blocks (list entries, card sections); longer gaps collapse.
+  return reply.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }

@@ -22,8 +22,8 @@ test("exact-date flight listings filter the catalog before limits and print only
   const land = trip("land", ["2098-03-19"], { route_name: "Нерит газрын аялал", extra: { transport_type: "land" }, category: "Газрын аялал" });
   const result = buildCatalogListingReply("3.19 nii shuud nislegtei aylal medeelel avii", [...early, matching, land], now)!;
   assert.deepEqual(result.listed.map(t => t.id), [matching.id]);
-  assert.match(result.reply, /гарах: 3 сарын 19/);
-  assert.doesNotMatch(result.reply, /2 сарын 2|2 сарын 3|4 сарын 21|early-|Нерит/);
+  assert.match(result.reply, /📅 3\/19$/m);
+  assert.doesNotMatch(result.reply, /\b2\/2\b|\b2\/3\b|\b4\/21\b|2 сарын 2|2 сарын 3|4 сарын 21|early-|Нерит/);
 });
 
 test("a missing or closed requested flight date returns a silent handoff signal", () => {
@@ -43,8 +43,8 @@ test("category lists preserve shared-month alternative days and their destinatio
   const other = trip("other", ["2098-03-19"], { route_name: "Нерит шууд нислэгтэй аялал" });
   const result = buildCatalogListingReply("Зорвин 3.19,21-nd шууд нислэгтэй аялал", [other, matching], now)!;
   assert.deepEqual(result.listed.map(t => t.id), [matching.id]);
-  assert.match(result.reply, /гарах: 3 сарын 19, 3 сарын 21/);
-  assert.doesNotMatch(result.reply, /3 сарын 18|3 сарын 20|Нерит/);
+  assert.match(result.reply, /📅 3\/19, 3\/21$/m);
+  assert.doesNotMatch(result.reply, /\b3\/18\b|\b3\/20\b|3 сарын 18|3 сарын 20|Нерит/);
 });
 
 test("a scoped category question cannot replace a missing flight with a land alternative", () => {

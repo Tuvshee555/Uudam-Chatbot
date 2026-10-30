@@ -339,6 +339,36 @@ export async function dbClaimGreeting(senderId: string): Promise<boolean> {
   return (result?.rows[0]?.claimed) === true;
 }
 
+/**
+ * The admin "quick info" reply (company intro, website, phone numbers) goes to a
+ * customer once, ever. It was sent on every bare "Мэдээлэл", so returning
+ * customers kept getting the same welcome (2026-10-18..27). Atomic like the
+ * greeting claim; a send still in history (before this column existed) counts
+ * as already sent. An admin resets it by clearing quick_info_sent_at.
+ */
+export async function dbClaimQuickInfo(senderId: string, replyOpening: string): Promise<boolean> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return false;
+  const opening = replyOpening.trim().slice(0, 40);
+  const result = await queryNeon<{ claimed: boolean }>(
+    `UPDATE travel_senders
+     SET quick_info_sent_at = NOW(), updated_at = NOW()
+     WHERE sender_id = $1 AND quick_info_sent_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM travel_conversations
+         WHERE sender_id = $1 AND role = 'assistant' AND $2 <> '' AND left(text, length($2)) = $2)
+     RETURNING TRUE AS claimed`,
+    [senderId, opening],
+  );
+  return (result?.rows[0]?.claimed) === true;
+}
+
+/** Undo a claim whose reply was withheld or failed to send, so a retry can still deliver it. */
+export async function dbReleaseQuickInfo(senderId: string): Promise<void> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return;
+  await queryNeon(`UPDATE travel_senders SET quick_info_sent_at = NULL, updated_at = NOW() WHERE sender_id = $1`, [senderId]);
+}
+
 // Returns true if we should send the goodbye message now (not sent in the last 2 days).
 // Atomically sets goodbye_sent_at so it won't fire again within the cooldown window.
 export async function dbClaimGoodbye(senderId: string): Promise<boolean> {

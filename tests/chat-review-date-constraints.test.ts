@@ -126,17 +126,17 @@ test("demo date menus stay in scope and missing origins or months hand off silen
     harness.catalog(trips);
     const month = await harness.demoTurn("calendar-demo-month", "Вэлмор шууд нислэгтэй, 3сарынх");
     assert.equal(month.status, 200);
-    assert.match(String(month.body.reply), /3 сарын/);
-    assert.doesNotMatch(String(month.body.reply), /2 сарын|НЕРИТ/);
+    assert.match(String(month.body.reply), /📅 3\/\d/);
+    assert.doesNotMatch(String(month.body.reply), /\b2\/\d|2 сарын|НЕРИТ/);
     const dates = await harness.demoTurn("calendar-demo-days", "3.28,30-nd Вэлмор shuud nisleg bga yu?");
     assert.equal(dates.status, 200);
-    assert.match(String(dates.body.reply), /3 сарын (?:28|30)/);
-    assert.doesNotMatch(String(dates.body.reply), /2 сарын|3 сарын 29|ВЭЛМОР ТӨВ|НЕРИТ/);
+    assert.match(String(dates.body.reply), /3 сарын (?:28|30)|\b3\/(?:28|30)\b/);
+    assert.doesNotMatch(String(dates.body.reply), /\b2\/\d|2 сарын|3 сарын 29|\b3\/29\b|ВЭЛМОР ТӨВ|НЕРИТ/);
     for (const [index, text] of ["Вэлмор шууд нислэгтэй, 4сарынх", "Вэлмор хотоос эхлэх аялал", "Вэлмор оны сүүлээр гарах уу"].entries()) {
       const result = await harness.demoTurn(`calendar-demo-missing-${index}`, text);
       assert.equal(result.status, 200);
       assert.equal(result.body.handoff, true);
-      assert.doesNotMatch(String(result.body.reply), /REFER|ВЭЛМОР|2 сарын|3 сарын/);
+      assert.doesNotMatch(String(result.body.reply), /REFER|ВЭЛМОР|2 сарын|3 сарын|📅/);
       assert.equal(result.history.some(row => row.role === "assistant" && row.text === "REFER"), false);
     }
     const original = await harness.demoTurn("calendar-demo-new-destination", `${north.route_name} үнэ хэд вэ`);

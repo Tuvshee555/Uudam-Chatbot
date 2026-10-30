@@ -65,6 +65,45 @@ test("follow-ups under a trip list are answered from the data, never looped or s
   }
 });
 
+// The owner's 2026-10-30 review of a real thread: lists were one long line per trip, and the
+// picked trip's card repeated the travel type its own title already named.
+test("a trip list is numbered cards, and the picked trip gets the full card without repeating its type", async (context) => {
+  const harness = await conversationGateHarness(context);
+  const combo = (id: string, name: string, days: string, adult: number, dates: string[]) => ({
+    ...trip(id, name, adult, adult - 400_000, 351_000, dates), duration_text: days, source_description: "газар нислэг хосолсон",
+  } as unknown as FixtureTrip);
+  harness.catalog([
+    combo("c1", "ЛУМАРА – ТЭВРИН газар нислэг хосолсон аялал", "10 өдөр 9 шөнө", 2_991_000, ["2098-03-08", "2098-03-22"]),
+    combo("c2", "ЦЭНХЭР ХААЛГАНЫ ГАЗАР НИСЛЭГ ХОСОЛСОН АЯЛАЛ", "10 өдөр 9 шөнө", 2_651_000, ["2098-03-08", "2098-03-13"]),
+    combo("c3", "ЛУМАРА-ГАЗАР НИСЛЭГ ХОСОЛСОН", "9 өдөр 8 шөнө", 2_291_000, ["2098-03-11", "2098-03-18"]),
+  ]);
+  try {
+    const catalogAsk = { certainty: "several", trips: ["T1", "T2", "T3"], intent: "catalog" };
+    const list = (await harness.turn("cards", "Нислэг газар хосолсон", catalogAsk)).sends[0]?.text || "";
+    assert.match(list, /^✈️ Газар \+ нислэг хосолсон аяллууд\n\n1\. /);
+    // Each trip keeps its own length line, even when two trips share it.
+    assert.equal((list.match(/^⏳ 10 өдөр 9 шөнө$/gm) || []).length, 2);
+    assert.match(list, /\n\n3\. ЛУМАРА-ГАЗАР НИСЛЭГ ХОСОЛСОН\n⏳ 9 өдөр 8 шөнө\n💰 Том хүн \(12\+ нас\) 2,291,000₮\n📅 3\/11, 3\/18\n/);
+    assert.match(list, /1, 2 эсвэл 3 гэж бичээрэй/);
+
+    const card = (await harness.turn("cards", "3. ЛУМАРА-ГАЗАР НИС…")).sends[0]?.text || "";
+    assert.match(card, /^✈️ ЛУМАРА-ГАЗАР НИСЛЭГ ХОСОЛСОН\n\n🗓 Хугацаа: 9 өдөр 8 шөнө\n\n💰 Үнэ:/);
+    assert.match(card, /Нярай \/0-23 сар\/: 351,000₮/);
+    assert.doesNotMatch(card, /Энэ нь газар \+ нислэг хосолсон аялал/, "the title already says it");
+    assert.doesNotMatch(card, /дугаараа/, "no phone request on a trip card");
+  } finally {
+    await harness.close();
+  }
+});
+
+test("quick-reply buttons follow the order the list shows", async () => {
+  const { buildSmartButtons } = await import("../src/lib/travelFastPaths");
+  const [first, second] = trips;
+  const reply = `Аяллууд:\n\n1. ${second.route_name}\n\n2. ${first.route_name}\n\nАль аяллыг нь сонирхож байна вэ?`;
+  assert.deepEqual(buildSmartButtons(reply, trips)?.map((label) => label.slice(0, 3)), ["1. ", "2. "]);
+  assert.match(buildSmartButtons(reply, trips)![0], /ГАЗРЫН/);
+});
+
 test("a head count followed by 'how much' is still only a head count", () => {
   for (const text of ["2 том хүн 1 нярай", "2 том хүн 1 нярай хэд болох вэ", "2tom hun 2huuhed hed ve", "3 хүн үнэ хэд вэ"]) {
     assert.equal(isPassengerCountOnly(text), true, text);

@@ -8,6 +8,7 @@ import type { TravelTrip } from "../src/lib/travelTypes";
 const isoInDays = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
 const [soon, later, latest] = [isoInDays(20), isoInDays(27), isoInDays(34)];
 const customerDate = (iso: string) => `${Number(iso.slice(5, 7))} сарын ${Number(iso.slice(8, 10))}`;
+const shortDate = (iso: string) => `${Number(iso.slice(5, 7))}\\/${Number(iso.slice(8, 10))}`;
 
 function trip(id: string, fields: Partial<TravelTrip> = {}): TravelTrip {
   return {
@@ -29,10 +30,10 @@ const pricedPerDate = trip("A", { extra: {
 
 test("a 'which trip?' line quotes the listed departure's own fare, not the trip's base price", () => {
   const reply = buildAmbiguousTripReply([pricedPerDate, trip("B")], undefined, { customerText: "үнэ" });
-  const line = reply.split("\n").find((entry) => entry.includes("Туршилтын аялал A"))!;
-  assert.match(line, /том хүн.*1,100,000₮ · хүүхэд.*900,000₮/);
-  assert.match(line, new RegExp(`гарах: ${customerDate(soon)}$`));
-  assert.doesNotMatch(line, /1,000,000₮/);
+  const card = reply.split("\n\n").find((block) => block.includes("Туршилтын аялал A"))!;
+  assert.match(card, /Том хүн.*1,100,000₮ · Хүүхэд.*900,000₮/);
+  assert.match(card, new RegExp(`📅 ${shortDate(soon)}$`));
+  assert.doesNotMatch(card, /1,000,000₮/);
 });
 
 test("the reply verifier lets that question through instead of silencing the customer", () => {
@@ -41,8 +42,8 @@ test("the reply verifier lets that question through instead of silencing the cus
 });
 
 test("departures selling at the same fare are listed together", () => {
-  const line = buildAmbiguousTripReply([trip("B")], undefined, { customerText: "бүх гарах өдөр" }).split("\n")[1];
-  assert.match(line, new RegExp(`гарах: ${customerDate(soon)}, ${customerDate(later)}, ${customerDate(latest)}$`));
+  const reply = buildAmbiguousTripReply([trip("B")], undefined, { customerText: "бүх гарах өдөр" });
+  assert.match(reply, new RegExp(`📅 ${shortDate(soon)}, ${shortDate(later)}, ${shortDate(latest)}$`, "m"));
 });
 
 test("a date written as '<month> сарын <day>' beside a child fare is not read as a child's age", () => {

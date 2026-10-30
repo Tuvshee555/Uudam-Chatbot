@@ -50,7 +50,7 @@ import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, isPaused, markGetStarted, pauseBookedCustomer, pauseBot, trackSender } from "../../lib/pause";
 import { buildDateNotScheduledReply } from "../../lib/travelFastPathsPricing";
 import { pickReferral, rememberAdReferral } from "../../lib/adReferral";
-import { AUTO_PAUSE_RESET_DAYS, dbAppendAdminMessage, dbClaimGoodbye, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, isPagePaused, listTrips, } from "../../lib/travelOps";
+import { AUTO_PAUSE_RESET_DAYS, dbAppendAdminMessage, dbClaimGoodbye, dbClaimQuickInfo, dbReleaseQuickInfo, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { hasDepartureDateAvailabilityIntent, requestsDateWindow } from "../../lib/travelDates";
 import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply, } from "../../lib/travelFastPaths";
 import { buildHandoffReplyWithContact, claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
@@ -835,13 +835,22 @@ async function handleMessage(
     await deliverFastPathReply({ reply: contactReply || "REFER", failTag: "contact_reply", rememberSource: "api.webhook.contact_reply" });
     return;
   }
+  // Once per customer, ever: a second "Мэдээлэл" goes on to the normal answer
+  // ("Аль аялал вэ?") instead of the same company intro again.
   if (
     botSettings.quick_info_reply &&
-    isQuickInfoKeyword(text, botSettings.quick_info_keywords)
+    isQuickInfoKeyword(text, botSettings.quick_info_keywords) &&
+    (await dbClaimQuickInfo(senderId, botSettings.quick_info_reply))
   ) {
     await appendMessage(senderId, "user", text);
-    await deliverFastPathReply({ reply: botSettings.quick_info_reply, verifyConfiguredFacts: true,
-      failTag: "quick_info_keyword", rememberSource: "api.webhook.quick_info" });
+    let delivered = false;
+    try {
+      delivered = await deliverFastPathReply({ reply: botSettings.quick_info_reply, verifyConfiguredFacts: true,
+        failTag: "quick_info_keyword", rememberSource: "api.webhook.quick_info" });
+    } finally {
+      // Withheld or failed: the customer has not had it yet, so a retry may still send it.
+      if (!delivered) await dbReleaseQuickInfo(senderId).catch(() => {});
+    }
     return;
   }
   // ── Phone-number lead capture ───────────────────────────────────────────────

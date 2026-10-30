@@ -21,9 +21,13 @@ function trip(index = 0, fields: Partial<TravelTrip> = {}): TravelTrip {
 function listing(text: string, trips: TravelTrip[]) {
   const result = buildCatalogListingReply(text, trips, NOW);
   assert.ok(result);
-  const visible = result.reply.split("\n").filter((line) => line.startsWith("• "));
+  // Rows are "• name — …" (grouped catalogue) or numbered cards "1. name".
+  const visible = result.reply.split("\n").flatMap((line) => {
+    const row = /^(?:• |\d{1,2}\. )(.+)$/.exec(line);
+    return row ? [row[1].split(" — ")[0]] : [];
+  });
   assert.equal(result.listed.length, visible.length);
-  assert.deepEqual(result.listed.map((t) => t.route_name), visible.map((line) => line.slice(2).split(" — ")[0]));
+  assert.deepEqual(result.listed.map((t) => t.route_name), visible);
   return result;
 }
 
@@ -50,7 +54,7 @@ test("explicit whole catalog stays grouped and listed IDs match visible rows", (
   assert.equal(result.listed.length, 8);
   assert.match(result.reply, /Ангилал А:/);
   assert.match(result.reply, /Ангилал Б:/);
-  assert.ok(!result.reply.includes("том хүн"));
+  assert.ok(!/том хүн/i.test(result.reply));
 });
 
 test("shortest recommendations show two by default and five explicitly requested", () => {
@@ -93,7 +97,7 @@ test("canonical hotel/date fare replaces stale scalar without choosing an arbitr
     { hotel: "Other Lodge", adult_price: 5_000_000 },
   ] } });
   const uncertain = listing("аяллууд", [ambiguous]);
-  assert.ok(!uncertain.reply.includes("том хүн"));
+  assert.ok(!/том хүн/i.test(uncertain.reply));
   assert.ok(!uncertain.reply.includes("Lodge"));
   assert.ok(!uncertain.reply.includes("1,200,000"));
 });
@@ -110,7 +114,7 @@ test("different date prices, conflicting groups and unverified fares omit price 
   ];
   for (const value of variants) {
     const result = listing("аяллууд", [value]);
-    assert.ok(!result.reply.includes("том хүн"));
+    assert.ok(!/том хүн/i.test(result.reply));
     assert.ok(!result.reply.includes("1,200,000"));
   }
 });
@@ -119,9 +123,9 @@ test("verified ranges and free fares survive with hotel/package qualifications",
   const range = listing("аяллууд", [trip(0, { adult_price: 3_000_000, extra: { adult_price_range: { min: 3_000_000, max: 4_000_000 } } })]);
   assert.match(range.reply, /3,000,000₮ - 4,000,000₮/);
   const free = listing("аяллууд", [trip(0, { adult_price: 0, extra: { adult_price_free: true } })]);
-  assert.match(free.reply, /том хүн Үнэгүй/);
+  assert.match(free.reply, /Том хүн Үнэгүй/);
   const longQualifier = listing("аяллууд", [trip(0, { extra: { price_groups: [{ hotel: "а".repeat(230), adult_price: 4_000_000 }] } })]);
-  assert.ok(!longQualifier.reply.includes("том хүн"));
+  assert.ok(!/том хүн/i.test(longQualifier.reply));
   assert.ok(!longQualifier.reply.includes("4,000,000"));
 });
 
@@ -132,18 +136,18 @@ test("known closed/conflicting departures are never advertised as upcoming booka
       { date: "2026-12-20", status: "OPEN", seatsLeft: 5 },
     ] } });
     const result = listing("аяллууд", [value]);
-    assert.ok(!result.reply.includes("2026-12-17"));
-    assert.match(result.reply, /гарах: 12 сарын 20/);
+    assert.ok(!result.reply.includes("2026-12-17") && !/📅[^\n]*\b12\/17\b/.test(result.reply));
+    assert.match(result.reply, /📅 12\/20/);
   }
   const closed = listing("аяллууд", [trip(0, { seats_left: 0 })]);
-  assert.ok(!closed.reply.includes("гарах:"));
-  assert.ok(!closed.reply.includes("том хүн"));
+  assert.ok(!closed.reply.includes("📅"));
+  assert.ok(!/том хүн/i.test(closed.reply));
   const groupClosed = listing("аяллууд", [trip(0, { extra: { price_groups: [{ dates: ["2026-12-17"], status: "closed" }] } })]);
-  assert.ok(!groupClosed.reply.includes("2026-12-17"));
+  assert.ok(!groupClosed.reply.includes("2026-12-17") && !/📅[^\n]*\b12\/17\b/.test(groupClosed.reply));
   const conflict = listing("аяллууд", [trip(0, { extra: { website_departure_availability: [
     { date: "2026-12-17", status: "OPEN", seatsLeft: 4 }, { date: "2026-12-17", status: "SOLD_OUT", seatsLeft: 0 },
   ] } })]);
-  assert.ok(!conflict.reply.includes("2026-12-17"));
+  assert.ok(!conflict.reply.includes("2026-12-17") && !/📅[^\n]*\b12\/17\b/.test(conflict.reply));
 });
 
 test("expired departures are excluded using Mongolia's day boundary while today and future remain", () => {
@@ -158,17 +162,17 @@ test("expired departures are excluded using Mongolia's day boundary while today 
   } });
   const result = buildCatalogListingReply("аяллууд", [value], now);
   assert.ok(result);
-  assert.ok(!result.reply.includes("2026-10-03"));
-  assert.match(result.reply, /гарах: 10 сарын 4, 10 сарын 5/);
+  assert.ok(!result.reply.includes("2026-10-03") && !/📅[^\n]*\b10\/3\b/.test(result.reply));
+  assert.match(result.reply, /📅 10\/4, 10\/5/);
 });
 
 test("active trips with all departures closed use neutral compact and grouped headings", () => {
   const trips = Array.from({ length: 10 }, (_, i) => trip(i, { seats_left: 0 }));
   for (const text of ["аяллууд", "all trips"]) {
     const result = listing(text, trips);
-    assert.match(result.reply, /^Манай аяллууд/);
+    assert.match(result.reply, /^(?:✈️ )?Манай аяллууд/);
     assert.ok(!result.reply.includes("Одоо захиалга"));
-    assert.ok(!result.reply.includes("2026-12-17"));
+    assert.ok(!result.reply.includes("2026-12-17") && !/📅[^\n]*\b12\/17\b/.test(result.reply));
   }
 });
 
@@ -185,13 +189,13 @@ test("a plain \"нислэгтэй аялал\" question lists the direct-flight
   for (const text of ["Уб-аас нислэгтэй аялал бн уу", "нислэгтэй аялал байна уу", "nislegtei aylal bn uu"]) {
     const result = listing(text, trips);
     assert.deepEqual(result.listed.map((t) => t.id), ["invented-0"]);
-    assert.match(result.reply, /^Шууд нислэгтэй аяллууд/);
+    assert.match(result.reply, /^✈️ Шууд нислэгтэй аяллууд/);
   }
 });
 
 test("catalog lists write departures as month and day, never ISO", () => {
   const result = listing("шууд нислэгтэй аяллууд", [trip(0)]);
-  assert.match(result.reply, /гарах: 12 сарын 17/);
+  assert.match(result.reply, /📅 12\/17/);
   assert.doesNotMatch(result.reply, /\d{4}-\d{2}-\d{2}/);
 });
 
@@ -206,7 +210,7 @@ test("a month with no day or place lists the trips leaving that month", () => {
   const december = buildCatalogListingReply("12 сард гарах аялал", trips, NOW)!;
   assert.deepEqual(december.listed.map((t) => t.id), ["invented-0"]);
   assert.match(december.reply, /^12 сард гарах аяллууд/);
-  assert.match(december.reply, /гарах: 12 сарын 17/);
+  assert.match(december.reply, /📅 12\/17/);
   const november = buildCatalogListingReply("11. Сарын аялалын маршрут явуулаарай", trips, NOW)!;
   assert.deepEqual(november.listed.map((t) => t.id), ["invented-1"]);
   const none = buildCatalogListingReply("9 сард гарах аялал", trips, NOW)!;

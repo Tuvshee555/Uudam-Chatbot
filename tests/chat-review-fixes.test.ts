@@ -61,9 +61,9 @@ test("a sold-out departure is left out of the trip list instead of silencing it"
   const soldOut: TravelTrip = { ...base, id: "fixture-b", extra: { ...base.extra, website_departure_availability: [
     { date: "2099-03-10", status: "sold_out", seatsLeft: 0 }, { date: "2099-03-17", status: "sold_out", seatsLeft: 0 },
   ] } };
-  const line = buildAmbiguousTripReply([soldOut]).split("\n").find((entry) => entry.startsWith("•"))!;
-  assert.match(line, /суудал дүүрсэн/);
-  assert.doesNotMatch(line, /₮/);
+  const card = buildAmbiguousTripReply([soldOut]).split("\n\n").find((block) => block.startsWith("1. "))!;
+  assert.match(card, /Суудал дүүрсэн/);
+  assert.doesNotMatch(card, /₮/);
 });
 
 test("a follow-up that names no trip and asks nothing on the card does not get the card again", () => {

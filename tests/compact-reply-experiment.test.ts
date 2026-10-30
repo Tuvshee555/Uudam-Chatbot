@@ -100,3 +100,9 @@ test("the model prompt makes concise answers authoritative and removes contact p
   assert.match(prompt, /Do not request their phone/);
   assert.doesNotMatch(prompt, /утасны дугаар асуу|Хэдүүлээ, хүүхэдтэй юу/);
 });
+
+test("line icons and single blank lines survive presentation; inline emojis stay capped", () => {
+  const reply = presentAssistantReply({ userText: "Вэлмор", hasPriorReply: true,
+    reply: "✈️ ВЭЛМОР АЯЛАЛ\n\n\n\n⏳ 5 өдөр\n💰 Том хүн 901,001₮\n📅 3/8\n\nСонирхолтой 😊 аялал 🎉 шүү 🌍" });
+  assert.equal(reply, "✈️ ВЭЛМОР АЯЛАЛ\n\n⏳ 5 өдөр\n💰 Том хүн 901,001₮\n📅 3/8\n\nСонирхолтой 😊 аялал  шүү");
+});

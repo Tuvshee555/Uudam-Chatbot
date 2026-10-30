@@ -37,9 +37,9 @@ test("ordinary month-end menus filter every displayed date before taking three t
   const late = Array.from({ length: 4 }, (_, index) => trip(index + 7, ["2098-03-05", "2098-03-27"]));
   const result = buildCatalogListingReply("3 сарын сүүлээр аялал гарах уу", [...early, ...late], now)!;
   assert.deepEqual(result.listed.map(value => value.id), late.slice(0, 3).map(value => value.id));
-  assert.equal((result.reply.match(/^• /gm) || []).length, 3);
-  assert.match(result.reply, /3 сарын 27/);
-  assert.doesNotMatch(result.reply, /3 сарын 5|compact-0/);
+  assert.equal((result.reply.match(/^\d+\. /gm) || []).length, 3);
+  assert.match(result.reply, /📅 3\/27/);
+  assert.doesNotMatch(result.reply, /\b3\/5\b|3 сарын 5|compact-0/);
   assert.match(result.reply, /Өөр 1 аялал бий/);
   assert.equal(buildCatalogListingReply("3 сарын сүүлээр аялал гарах уу", early, now)?.reply, "REFER");
 });
@@ -55,13 +55,13 @@ test("ordinary month and duration menus remain compact while explicit full reque
 test("destination options show three compact choices with a truthful remaining count", () => {
   const catalog = Array.from({ length: 7 }, (_, index) => trip(index));
   const reply = buildAmbiguousTripReply(catalog, undefined, { customerText: "Вэлмор" }, now);
-  assert.equal((reply.match(/^• /gm) || []).length, 3);
+  assert.equal((reply.match(/^\d+\. /gm) || []).length, 3);
   assert.match(reply, /Өөр 4 сонголт бий/);
-  assert.doesNotMatch(reply, /хүүхэд|нярай|5 өдөр|4 шөнө|Вэлмор 3 аялал/);
+  assert.doesNotMatch(reply, /хүүхэд|нярай|Вэлмор 3 аялал/i);
   assert.equal((reply.match(/\?/g) || []).length, 1);
   const full = buildAmbiguousTripReply(catalog, undefined, { customerText: "Вэлмор бүх сонголт" }, now);
-  assert.equal((full.match(/^• /gm) || []).length, 7);
-  assert.match(full, /хүүхэд|нярай/);
+  assert.equal((full.match(/^\d+\. /gm) || []).length, 7);
+  assert.match(full, /хүүхэд|нярай/i);
 });
 
 test("focused child menus retain the selected fare's age, hotel and package conditions", () => {
@@ -69,9 +69,9 @@ test("focused child menus retain the selected fare's age, hotel and package cond
     passenger_prices: [{ label: "Хүүхэд", age_range: "3-9 нас", price: 401_001 }, { label: "Том хүн", age_range: "10+ нас", price: 901_001 }],
   }] });
   const reply = buildAmbiguousTripReply([value], undefined, { customerText: "Вэлмор хүүхдийн үнэ" }, now);
-  assert.match(reply, /хүүхэд \(3-9 нас\) 401,001₮/);
+  assert.match(reply, /Хүүхэд \(3-9 нас\) 401,001₮/);
   assert.match(reply, /Lumen Lodge.*standard/);
-  assert.doesNotMatch(reply, /том хүн|нярай/);
+  assert.doesNotMatch(reply, /том хүн|нярай/i);
 });
 
 test("compact menus keep every explicitly requested departure in a shared-month list", () => {
@@ -80,6 +80,6 @@ test("compact menus keep every explicitly requested departure in a shared-month 
     buildAmbiguousTripReply([value], undefined, { customerText: "Вэлмор 3.23,25,27-нд үнэ" }, now),
     buildCatalogListingReply("3.23,25,27-нд бүх аялал", [value], now)!.reply,
   ]) {
-    assert.match(reply, /3 сарын 23, 3 сарын 25, 3 сарын 27/);
+    assert.match(reply, /3\/23, 3\/25, 3\/27/);
   }
 });

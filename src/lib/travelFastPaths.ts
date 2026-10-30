@@ -106,6 +106,7 @@ import {
   hasSamePriceComparisonIntent,
   hasScheduleIntent,
   isLandFlightCombo,
+  needsLandFlightComboNote,
   normalizeMnDate,
   parseLooseMonthDays,
   priceGroupMatchesTicketPreference,
@@ -436,7 +437,12 @@ function getSeatSalesMessage(trip: TravelTrip): string | null {
 
 function buildTripInfoReply(rawTrip: TravelTrip, now = new Date(), intentText = "") {
   const trip = withFutureDepartureDates(rawTrip, now);
-  if (!replyPreferences(intentText).full) {
+  // A picked or named trip gets the full card (title, length, fares, dates): the
+  // owner prefers it to a bare "which date?" (2026-10-30). Specific questions are
+  // answered by the answer plan. The short form stays for a seat question and for
+  // a trip whose fares differ by date or hotel: its card is a whole fare table.
+  const fareGroups = (buildFareSection(rawTrip, now) || []).filter((line) => /^\s*•\s*Том хүн/i.test(line)).length;
+  if (!replyPreferences(intentText).full && (hasSeatsIntent(intentText) || fareGroups > 1)) {
     const lines = [formatRouteName(trip.route_name)];
     if (hasSeatsIntent(intentText) && rawTrip.seats_left === 0) return `${lines[0]}\nСуудал дүүрсэн.`;
     let offer = resolveTripOffer(rawTrip, {}, now);
@@ -508,7 +514,7 @@ function buildTripInfoReply(rawTrip: TravelTrip, now = new Date(), intentText = 
     lines.push("", "Цөөн суудалтай гэж тэмдэглэсэн өдрөөр захиалга өгөх бол аяллын зөвлөхтэй хурдан холбогдоорой.");
   }
 
-  if (isLandFlightCombo(trip)) {
+  if (needsLandFlightComboNote(trip)) {
     // No route claim here: the flight leg differs per trip. Naming a route
     // in code once told customers every combo trip flies UB–<city>.
     lines.push("", "Энэ нь газар + нислэг хосолсон аялал.");
@@ -891,7 +897,9 @@ export { SMART_BUTTON_LABELS, SMART_BUTTON_LABEL_LIST } from "./smartButtonLabel
 
 export function buildSmartButtons(replyText: string, trips: TravelTrip[]): string[] | null {
   if (!replyText.includes(AMBIGUOUS_REPLY_MARKER)) return null;
-  const listed = trips.filter((trip) => replyText.includes(trip.route_name));
+  // Same order as the numbered list on screen, so button "2." is the list's 2.
+  const listed = trips.filter((trip) => replyText.includes(trip.route_name))
+    .sort((a, b) => replyText.indexOf(a.route_name) - replyText.indexOf(b.route_name));
   return listed.length > 1 ? buildClarificationButtons(listed) : null;
 }
 
@@ -1233,7 +1241,7 @@ function formatCombinedDatePriceReply(
         const formatted = formatMoney(field.value, match.trip.currency || "MNT");
         if (formatted) lines.push(`💰 ${field.label}: ${formatted}`);
       }
-      if (isLandFlightCombo(match.trip)) {
+      if (needsLandFlightComboNote(match.trip)) {
         lines.push("Энэ нь газар + нислэг хосолсон аялал.");
       }
       return lines.join("\n");

@@ -348,8 +348,8 @@ test("a trip's base infant price is listed even when its price groups have none"
   const { buildAmbiguousTripReply } = await import("../src/lib/travelFastPaths");
   applyTestEnv();
   const reply = buildAmbiguousTripReply([HELVIN, BARTEN_OCT29], undefined, { customerText: "бүх дэлгэрэнгүй" }, new Date("2026-09-20T00:00:00.000Z"));
-  assert.match(reply, /Хэлвин аялал — 8 өдөр 7 шөнө · том хүн 3,401,000₮ · хүүхэд 2,701,000₮ · нярай 401,000₮/);
-  assert.match(reply, /10\/29 — 6 өдөр 5 шөнө · том хүн 3,601,000₮ · хүүхэд 3,161,000₮ · нярай 501,000₮/);
+  assert.match(reply, /Хэлвин аялал\n⏳ 8 өдөр 7 шөнө\n💰 Том хүн 3,401,000₮ · Хүүхэд 2,701,000₮ · Нярай 401,000₮/);
+  assert.match(reply, /10\/29\n⏳ 6 өдөр 5 шөнө\n💰 Том хүн 3,601,000₮ · Хүүхэд 3,161,000₮ · Нярай 501,000₮/);
 });
 
 test("Lumia school-break 10/29 uses its own base prices when stale price groups were dropped", async () => {

@@ -130,11 +130,11 @@ test("a month-scoped destination list filters before limiting dates and uses tha
     price_groups: [{ dates: ["2098-04-05"], adult_price: 901_000 }],
   } });
   const reply = buildAmbiguousTripReply([t], undefined, { customerText: "4сарынх" }, now);
-  assert.match(reply, /4 сарын 5/);
+  assert.match(reply, /📅 4\/5$/m);
   assert.match(reply, /901,000₮/);
-  assert.doesNotMatch(reply, /3 сарын|731,000/);
+  assert.doesNotMatch(reply, /\b3\/\d|3 сарын|731,000/);
   assert.equal(buildAmbiguousTripReply([t], undefined, { customerText: "5 сарынх" }, now), "REFER");
   assert.equal(buildAmbiguousTripReply([t], undefined, { customerText: "оны сүүлээр" }, now), "REFER");
   const earlier = Array.from({ length: 9 }, (_, i) => trip({ id: `earlier-${i}`, departure_dates: ["2098-03-08"] }));
-  assert.match(buildAmbiguousTripReply([...earlier, t], undefined, { customerText: "4сарынх" }, now), /4 сарын 5/);
+  assert.match(buildAmbiguousTripReply([...earlier, t], undefined, { customerText: "4сарынх" }, now), /📅 4\/5$/m);
 });

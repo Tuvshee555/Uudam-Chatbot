@@ -541,7 +541,9 @@ export function sanitizeAssistantReply(text: string) {
     for (const line of lines) {
       const norm = /https?:\/\//i.test(line) ? line.trim() : normalizeForCompare(line);
       if (!norm) continue;
-      const isPriceLine = /\d[\d,.\s]*₮/.test(line);
+      // A list card's length/fare/dates line belongs to its own trip: two trips
+      // of the same length both keep "⏳ 10 өдөр 9 шөнө".
+      const isPriceLine = /\d[\d,.\s]*₮/.test(line) || /^\s*(?:⏳|💰|📅)/u.test(line);
       const isSectionHeading = /^\s*(?:буудал|багц)\s*:/i.test(line)
         || (line.length <= 120 && !/[.?!]\s*$/.test(line.trim()) && parseDepartureDateText(line).length > 0);
       const seen = isPriceLine || isSectionHeading ? seenPriceLinesInBlock : seenLines;
