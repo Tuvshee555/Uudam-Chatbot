@@ -124,10 +124,20 @@ export function latestStaffReply(input: {
  * Every message of the thread in time order, each Page message with its origin. The opening run —
  * in a thread read from its start, before the customer's first message and before any Page message
  * that is not an automation — is Meta's automated greeting.
+ *
+ * Meta's keyword automations also fire in bursts and repeat themselves word for word: on
+ * 2026-10-31 one sent the same phone-number line 4, 17 and 20.0 s after the customer — the last
+ * one just outside the 20-s window, 11 s after the bot's own reply — and was read as a consultant
+ * on a computer, silencing the customer. So a `source:web` message that would count as a
+ * consultant is an automation when it repeats an earlier Page message of the thread verbatim, or
+ * follows a bot or automated Page message within the automation window. A phone message
+ * (`source:mobile`) is never affected: only a person sends from the phone app.
  */
 export function classifyThread(messages: ThreadMessage[], context: ClassifyContext): Array<{ message: ThreadMessage; at: number; origin: PageMessageOrigin | "customer" }> {
   const ordered = [...messages].sort((a, b) => Date.parse(a.created_time ?? "") - Date.parse(b.created_time ?? ""));
   let previousCustomerAt: number | null = null;
+  let previousAutomatedAt: number | null = null;
+  const earlierPageTexts = new Set<string>();
   let opening = context.threadComplete ?? messages.length < THREAD_LOOKUP_LIMIT;
   const classified: Array<{ message: ThreadMessage; at: number; origin: PageMessageOrigin | "customer" }> = [];
   for (const message of ordered) {
@@ -139,8 +149,15 @@ export function classifyThread(messages: ThreadMessage[], context: ClassifyConte
       classified.push({ message, at, origin: "customer" });
       continue;
     }
-    const origin = classifyPageMessage(message, previousCustomerAt, context, opening);
+    let origin = classifyPageMessage(message, previousCustomerAt, context, opening);
+    const text = String(message.message ?? "").trim();
+    if (origin === "staff_web" && ((text && earlierPageTexts.has(text))
+      || (previousAutomatedAt !== null && at - previousAutomatedAt >= 0 && at - previousAutomatedAt < AUTOMATION_WINDOW_MS))) {
+      origin = "automation";
+    }
     if (origin !== "automation") opening = false;
+    if (origin === "bot" || origin === "automation") previousAutomatedAt = at;
+    if (text) earlierPageTexts.add(text);
     classified.push({ message, at, origin });
   }
   return classified;

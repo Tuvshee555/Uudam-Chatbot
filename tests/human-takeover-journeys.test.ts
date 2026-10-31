@@ -95,6 +95,25 @@ test("human takeover journeys", async (context) => {
       assert.equal(harness.echoes().at(-1)?.verdict, "automation");
     });
 
+    await context.test("4b. a keyword automation repeating itself in a burst is not a consultant (production 2026-10-31)", async () => {
+      // The live shape: the same automated line 4, 17 and 20.0 s after the customer, the last one
+      // just outside the 20-s window and 11 s after the bot's reply. It paused a real customer.
+      tick(MIN);
+      await fb("burst", "Норвел хотын аялал үнэ");
+      harness.thread("burst", { messages: [
+        { from: "customer", text: "Утасны дугаар", agoMs: 20_000 },
+        { from: "page", text: "Сайн байна уу, аяллынхаа нэрийг бичнэ үү", agoMs: 17_000, source: "web", id: "m_burst_1" },
+        { from: "page", text: "11110000, 22220000", agoMs: 16_000, source: "web", id: "m_burst_2" },
+        { from: "page", text: "Манай утасны дугаарууд: 1111 0000", agoMs: 11_000, source: "web", id: harness.botMids().at(-1) },
+        { from: "page", text: "11110000, 22220000", agoMs: 3_000, source: "web", id: "m_burst_3" },
+        { from: "page", text: "11110000, 22220000", agoMs: 0, source: "web", id: "m_burst_4" },
+      ] });
+      await harness.echoTurn("burst", { appId: INBOX, mid: "m_burst_4", text: "11110000, 22220000" });
+      assert.equal(harness.echoes().at(-1)?.verdict, "automation", "a verbatim repeat / a burst after the bot is Meta's automation");
+      assert.equal(harness.pauseState("burst"), null, "the customer is not silenced");
+      assert.equal((await fb("burst", "Хүүхдийн үнэ хэд вэ?")).sends.length, 1, "and is answered");
+    });
+
     await context.test("5. other Page-connected apps and comment private replies never pause", async () => {
       const before = threadReads("integration");
       await harness.echoTurn("integration", { appId: 424242424242, mid: "m_other_app_1", text: "Захиалгын баталгаа" });
