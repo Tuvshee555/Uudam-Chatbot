@@ -53,6 +53,24 @@ test("the admin list's slim trip rows keep every fact the list shows and flag co
     "a slim row's marker can never be saved");
 });
 
+test("a settings save sends only what this person changed since the form loaded", async () => {
+  const { changedSettingsFields, settingsToForm } = await import("../src/lib/adminPageUtils");
+  const loaded = {
+    business_name: "Вэлмор Трэвэл", system_prompt: "Эелдэг хариул.", quick_info_reply: "Сайн байна уу",
+    quick_info_keywords: ["үнэ"], comment_trigger_patterns: [], comment_public_reply: "", comment_dm_reply: "",
+    special_offers: [], discount_policies: [], verified_credentials: [], faq: [{ question: "Виз?", answer: "Хэрэггүй" }],
+    handoff_enabled: true, handoff_keywords: ["хүн"], handoff_reply: "Зөвлөх холбогдоно.", handoff_pause_minutes: 60,
+    chat_buttons: [], extra: {}, updated_at: "2027-01-01T00:00:00.000Z",
+  } as never;
+  const form = settingsToForm(loaded);
+  assert.deepEqual(changedSettingsFields(loaded, form), {}, "an untouched form changes nothing");
+  // Someone else meanwhile changed the FAQ; this person only edits the handoff reply.
+  const edited = { ...form, handoff_reply: "Манай зөвлөх удахгүй холбогдоно." };
+  assert.deepEqual(changedSettingsFields(loaded, edited), { handoff_reply: "Манай зөвлөх удахгүй холбогдоно." },
+    "the stale FAQ in this form is not sent back");
+  assert.ok(Object.keys(changedSettingsFields(null, form)).length > 10, "without a baseline every field is sent");
+});
+
 test("hiding a trip patches only the visibility flag", () => {
   assert.deepEqual(Object.keys(normalizeExtraPatch({ customer_visible: true })), ["customer_visible"]);
 });

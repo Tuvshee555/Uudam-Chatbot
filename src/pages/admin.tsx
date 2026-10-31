@@ -34,7 +34,8 @@ import { deriveChildRules, withDerivedSummaryFields } from "@/lib/priceGroups";
 import { documentedFreeFare } from "@/lib/tripCompleteness";
 import { resolveAgeRules } from "@/lib/ageRules";
 import type { LeadAttentionSummary } from "@/lib/leadAttention";
-import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, emptyChunkResult, fileToDataUrl, getSecretStorage, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, mergeAIProposals, settingsToForm, shortId, splitLines, uid } from "@/lib/adminPageUtils";
+import { changedSettingsFields } from "@/lib/adminPageUtils";
+import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, emptyChunkResult, fileToDataUrl, getSecretStorage, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, mergeAIProposals, settingsToForm, shortId, uid } from "@/lib/adminPageUtils";
 const BLANK_TRIP_DRAFT: Record<string, string> = { category: "Аялал", operator_name: "UUDAM TRAVEL AGENCY", route_name: "", duration_text: "", adult_price: "", child_price: "", infant_price: "", child_price_free: "", infant_price_free: "", age_infant: "0-23 сар", age_child: "2-11 нас", age_adult: "12+ нас", currency: "MNT", seats_total: "", seats_left: "", seats_percent_left: "", sale_badge_enabled: "false", sale_badge_label: "ХЯМДРАЛ", sale_badge_ends: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
 const MAX_AI_SOURCE_TEXT_CHARS = 20_000;
 const TRIP_DATA_TABS = new Set<TabKey>(["assistant", "trips", "calendar", "greeting", "photos"]);
@@ -86,6 +87,7 @@ export default function AdminPage() {
   const [pauseReason, setPauseReason] = useState("");
   const [settings, setSettings] = useState<TravelBotSettings | null>(null);
   const [settingsForm, setSettingsForm] = useState<SettingsForm | null>(null);
+  const settingsBaselineRef = useRef<TravelBotSettings | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     {
       id: "intro",
@@ -185,6 +187,8 @@ export default function AdminPage() {
   const markAdminLocked = useCallback(() => {
     authRef.current = "signed_out";
     setAuthState("signed_out");
+    settingsBaselineRef.current = null;
+    setSettingsForm(null);
     setDbInfo(null);
     setDriveSync(null);
     setReadiness(null);
@@ -274,9 +278,12 @@ export default function AdminPage() {
       const settingsJson = await settingsRes.json().catch(() => ({}));
       if (settingsJson?.settings) {
         setSettings(settingsJson.settings as TravelBotSettings);
-        setSettingsForm((prev) =>
-          prev ? prev : settingsToForm(settingsJson.settings as TravelBotSettings),
-        );
+        // The form starts from the first load and keeps the person's edits after that; the
+        // baseline records what it started from, so a save sends only real changes.
+        if (!settingsBaselineRef.current) {
+          settingsBaselineRef.current = settingsJson.settings as TravelBotSettings;
+          setSettingsForm(settingsToForm(settingsJson.settings as TravelBotSettings));
+        }
       }
       return true;
     } catch {
@@ -1935,38 +1942,25 @@ export default function AdminPage() {
       await loadLeadsState({ showLoading: true });
     }
   }
+  /** Saves only what this person changed since the form was loaded (changedSettingsFields). */
   async function saveSettings() {
     if (!settingsForm) return;
+    const changed = changedSettingsFields(settingsBaselineRef.current, settingsForm);
+    if (Object.keys(changed).length === 0) {
+      toast.success("Өөрчлөлт ороогүй байна.");
+      return;
+    }
     setBusyKey("save-settings");
     try {
-      const fields = {
-        business_name: settingsForm.business_name.trim(),
-        system_prompt: settingsForm.system_prompt.trim(),
-        quick_info_reply: settingsForm.quick_info_reply.trim(),
-        quick_info_keywords: splitLines(settingsForm.quick_info_keywords),
-        comment_trigger_patterns: splitLines(
-          settingsForm.comment_trigger_patterns,
-        ),
-        comment_public_reply: settingsForm.comment_public_reply.trim(),
-        comment_dm_reply: settingsForm.comment_dm_reply.trim(),
-        special_offers: settingsForm.special_offers,
-        discount_policies: settingsForm.discount_policies,
-        verified_credentials: settingsForm.verified_credentials,
-        faq: settingsForm.faq,
-        handoff_enabled: settingsForm.handoff_enabled,
-        handoff_keywords: splitLines(settingsForm.handoff_keywords),
-        handoff_reply: settingsForm.handoff_reply.trim(),
-        handoff_pause_minutes: asInt(settingsForm.handoff_pause_minutes) ?? 60,
-        chat_buttons: settingsForm.chat_buttons,
-      };
       const res = await fetchWithAdmin("/api/admin/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fields }),
+        body: JSON.stringify({ fields: changed }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json?.error || "Тохиргоо хадгалж чадсангүй.");
       if (json?.settings) {
+        settingsBaselineRef.current = json.settings as TravelBotSettings;
         setSettings(json.settings as TravelBotSettings);
         setSettingsForm(settingsToForm(json.settings as TravelBotSettings));
       }

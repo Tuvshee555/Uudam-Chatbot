@@ -952,6 +952,53 @@ function splitLines(value: string): string[] {
     .filter(Boolean);
 }
 
+/** The settings API fields a Settings form represents. */
+function settingsFormFields(form: SettingsForm) {
+  return {
+    business_name: form.business_name.trim(),
+    system_prompt: form.system_prompt.trim(),
+    quick_info_reply: form.quick_info_reply.trim(),
+    quick_info_keywords: splitLines(form.quick_info_keywords),
+    comment_trigger_patterns: splitLines(form.comment_trigger_patterns),
+    comment_public_reply: form.comment_public_reply.trim(),
+    comment_dm_reply: form.comment_dm_reply.trim(),
+    special_offers: form.special_offers,
+    discount_policies: form.discount_policies,
+    verified_credentials: form.verified_credentials,
+    faq: form.faq,
+    handoff_enabled: form.handoff_enabled,
+    handoff_keywords: splitLines(form.handoff_keywords),
+    handoff_reply: form.handoff_reply.trim(),
+    handoff_pause_minutes: asInt(form.handoff_pause_minutes) ?? 60,
+    chat_buttons: form.chat_buttons,
+  };
+}
+
+/** Same-shaped values compare equal regardless of object key order. */
+function sameSettingValue(left: unknown, right: unknown): boolean {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.keys(value as Record<string, unknown>).sort()
+        .map((key) => [key, canonical((value as Record<string, unknown>)[key])]));
+    }
+    return value ?? null;
+  };
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+}
+
+/**
+ * Only the fields this person changed since the form was loaded from `baseline`.
+ * Sending every field put back stale copies of anything another staff member (or
+ * a Bot-tab switch) changed while the form was open. No baseline: every field.
+ */
+function changedSettingsFields(baseline: TravelBotSettings | null, form: SettingsForm): Partial<ReturnType<typeof settingsFormFields>> {
+  const fields = settingsFormFields(form);
+  if (!baseline) return fields;
+  const before = settingsFormFields(settingsToForm(baseline));
+  return Object.fromEntries(Object.entries(fields).filter(([key, value]) => !sameSettingValue(value, before[key as keyof typeof before])));
+}
+
 function handoffDurationSelectValue(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return "60";
@@ -1700,6 +1747,7 @@ function buildProposalClarifications(
 
 
 export {
+  changedSettingsFields,
   ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, DURATIONS, FIELD_LABELS, MAX_PARSE_UPLOAD_BYTES,
   HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS,
   QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS,
