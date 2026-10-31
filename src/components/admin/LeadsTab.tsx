@@ -335,6 +335,18 @@ const NOTIFY_BADGES: Record<string, { tone: "success" | "danger" | "warning"; la
   no_channel: { tone: "warning", label: "Мэдэгдэх суваг алга" },
 };
 
+// Who stopped the bot for this customer and when: a consultant's Messenger reply (phone app or
+// Business Suite on a computer) or "Би хариулна" here.
+const TAKEOVER_SOURCES: Record<string, string> = { staff_mobile: "утаснаас", staff_web: "компьютерээс" };
+
+function takeoverLabel(lead: TravelLead): string {
+  const at = lead.bot_paused_at ? formatTime(lead.bot_paused_at) : "";
+  const who = lead.bot_pause_reason === "operator_reply"
+    ? `Зөвлөх ${TAKEOVER_SOURCES[lead.bot_takeover_source ?? ""] ?? "Messenger-ээс"} хариулсан`
+    : lead.bot_pause_reason === "manual" ? "«Би хариулна» дарсан" : "Зөвлөх хариулна";
+  return `Бот зогссон — ${who}${at ? ` · ${at}` : ""}`;
+}
+
 function LeadCard({
   lead,
   attention,
@@ -381,7 +393,7 @@ function LeadCard({
           {isNew && <Badge tone="brand">Үзээгүй</Badge>}
           {notifyBadge && <Badge tone={notifyBadge.tone}>{notifyBadge.label}</Badge>}
           {lead.assigned_to && <Badge tone="success">Хариуцагч: {lead.assigned_to}</Badge>}
-          {humanOwned && <Badge tone="warning">Бот зогссон — зөвлөх хариулна</Badge>}
+          {humanOwned && <Badge tone="warning">{takeoverLabel(lead)}</Badge>}
         </div>
         {/* CRM status badge */}
         <Badge tone={CRM_STATUS_TONES[crmStatus]}>

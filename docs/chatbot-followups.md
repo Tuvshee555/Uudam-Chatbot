@@ -114,9 +114,16 @@ of the customer is read as Meta's automation; a Meta automation more than 20 s a
 message whose id was not recorded and that has no stored copy) is read as a consultant.
 **Owner action for the strongest signal.** The Meta-app migration (`docs/meta-app-migration.md`) connects a
 new app the owner controls with `pages_manage_metadata` and subscribes it to `message_echoes`; echoes then
-name the sending app on every Page message. Echo-based takeover stays observe-only (`echoObserver.ts`,
-`ECHO_TAKEOVER_MODE`) until real echoes prove which app ids are human surfaces; an unknown app id is never
-treated as a consultant, and the thread check above remains the enforcement path meanwhile.
+name the sending app on every Page message.
+**Echo takeover (2026-10-31).** Echoes now reach the webhook. Real ones proved that consultants on the
+phone and Meta's automations share one app id (Meta's inbox app), so an echo pauses the customer only
+when Meta's record of that exact message proves a consultant (`echoObserver.ts verifyHumanEcho`, evidence
+in `docs/meta-app-migration.md`). A reply the bot is still composing when the consultant writes is
+refused at send time (`takeoverGuard.ts`), the 12-hour reminder skips conversations a consultant
+answered, and the Messenger menu carries «Хүнтэй холбогдох» (`scripts/messenger-menu.ts`). Journeys:
+`tests/human-takeover-journeys.test.ts`. Still open: no desktop Business Suite echo has been observed
+in production yet — its classification (web, not within 20 s of the customer) is the thread check's
+rule, untested on a real desktop echo.
 
 ## P1-3 — Test traffic in the production conversation table — MITIGATED (2026-10-30)
 `demo:` sessions (87% of rows) are written beside real customers. Every analytics and quality query on

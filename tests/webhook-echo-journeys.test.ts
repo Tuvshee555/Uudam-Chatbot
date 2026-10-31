@@ -50,7 +50,9 @@ test("dual-app migration journeys (observe mode)", async (context) => {
       const second = await fb("both-apps", "Норвел хотын аялал үнэ", one, "mid-both-apps", { signSecret: "next-meta-secret" });
       assert.equal(second.sends.length, 0, "the second app's delivery of the SAME mid is absorbed");
       // The persisted trail is the owner's evidence in the test-user step: both apps delivered.
-      await new Promise((resolve) => setImmediate(resolve));
+      // Log rows land fire-and-forget; wait for both receipts and the absorbed duplicate.
+      await harness.settle(() => harness.logs.slice(logsBefore).filter((log) => log.event === "webhook.inbound_received").length >= 2
+        && harness.logs.slice(logsBefore).some((log) => log.event === "webhook.inbound_duplicate"));
       const trail = harness.logs.slice(logsBefore);
       assert.deepEqual(trail.filter((log) => log.event === "webhook.inbound_received").map((log) => log.fields.deliveredBy),
         ["current", "next"], "each delivery's receipt names the app that delivered it");
@@ -101,7 +103,7 @@ test("dual-app migration journeys (observe mode)", async (context) => {
           message: { mid: "mid-standby-1", text: "Норвел хотын аялал үнэ" } }] }] }, "next-meta-secret");
       assert.equal(standby.status, 200, "accepted, so Meta does not redeliver");
       assert.equal(standby.sends.length, 0, "Meta: do not respond to standby messages");
-      await new Promise((resolve) => setImmediate(resolve));
+      await harness.settle(() => harness.logs.some((log) => log.event === "webhook.standby_observed"));
       assert.ok(harness.logs.some((log) => log.event === "webhook.standby_observed" && log.fields.deliveredBy === "next"),
         "counted as routing evidence");
     });

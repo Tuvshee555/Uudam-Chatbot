@@ -479,6 +479,11 @@ export async function ensureTravelSchema() {
       await client.query(`
         ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS bot_released_at TIMESTAMPTZ NULL;
       `);
+      // Which surface the consultant took the conversation over from ("staff_mobile" = the phone
+      // app, "staff_web" = Business Suite on a computer), set with last_staff_reply_at.
+      await client.query(`
+        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS takeover_source TEXT NOT NULL DEFAULT '';
+      `);
       // One row per message echo received during the Meta-app migration (echoObserver.ts):
       // who sent a Page message, by app id — the evidence for echo-based takeover. Shapes and
       // ids only; NEVER message text.
@@ -499,6 +504,11 @@ export async function ensureTravelSchema() {
       `);
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_travel_echo_events_created ON travel_echo_events (created_at DESC);
+      `);
+      // What Meta's own record of the message proved (echoObserver.ts verifyHumanEcho): "human",
+      // "automation", "unverified", … — empty when the echo was not checked.
+      await client.query(`
+        ALTER TABLE travel_echo_events ADD COLUMN IF NOT EXISTS verdict TEXT NOT NULL DEFAULT '';
       `);
       // One row per historical document moved from public Cloudinary to the private store
       // (documentMigration.ts): every step's result, so a run can be retried and audited.

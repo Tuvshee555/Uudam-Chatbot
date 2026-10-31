@@ -41,7 +41,7 @@ import { hasDepartureDateAvailabilityIntent, requestsDateWindow } from "../../li
 import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply } from "../../lib/travelFastPaths";
 import { extractTripPhotosForReply } from "../../lib/welcomeFlow";
 import { buildReplyMedia } from "../../lib/replyMediaPolicy";
-import { CONTACT_OPERATOR_LABEL, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
+import { CONTACT_OPERATOR_LABEL, isContactOperatorTap, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
 import { getEnv } from "../../lib/env";
 import {
   beginRequestTrace,
@@ -332,7 +332,7 @@ export default async function handler(
       // test bot deliberately doesn't reproduce; only the customer-facing reply
       // is mirrored so testers see the real handoff wording.
       if (
-        normalizedText === CONTACT_OPERATOR_LABEL ||
+        isContactOperatorTap(normalizedText) ||
         normalizedText === CONTACT_OPERATOR_LABEL_EN ||
         (botSettings.handoff_enabled && isHandoffRequest(normalizedText, botSettings.handoff_keywords))
       ) {

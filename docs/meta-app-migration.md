@@ -14,7 +14,7 @@ running behaviour is today's, except the two reviewed fixes listed under "On mer
 | Webhook handshake | `VERIFY_TOKEN` or `VERIFY_TOKEN_NEXT`. |
 | Which app sends | `META_NEXT_SEND`: `off` (default) → old app for everyone; `testers` → new app ONLY for the PSIDs in `META_NEXT_TESTER_IDS`; `all` → new app for every customer of the pages in `FACEBOOK_PAGES_NEXT` (the cutover: sends, thread reads, alerts, crons). `appsecret_proof` always uses the secret of the app that issued the token. |
 | Duplicates | Both apps deliver every event with the same Meta `mid`. Events with a `mid` are remembered 48 h; button taps / events without a `mid` keep the 2-minute window, so a customer tapping the same menu button again is answered. |
-| Echoes | Recorded observe-only in `travel_echo_events` (app id, metadata flag, lengths, attachment types, delivering app — never text). The bot's own echoes are known by its send metadata or `META_APP_ID`. Unknown app ids NEVER count as a consultant. Echo-based takeover needs `ECHO_TAKEOVER_MODE=enforce` + proven `ECHO_HUMAN_APP_IDS`, a later decision. The thread lookup stays the enforcement path. |
+| Echoes | Every echo is recorded in `travel_echo_events` (app id, metadata flag, lengths, attachment types, delivering app, `verdict` — never text). The bot's own echoes are known by its send metadata or `META_APP_ID`. With `ECHO_TAKEOVER_MODE=enforce`, an echo from an app in `ECHO_HUMAN_APP_IDS` pauses the customer at once **only if Meta's own record of that message proves a consultant** (`echoObserver.ts verifyHumanEcho`: `source:mobile`, or `source:web` not within 20 s of the customer / not the conversation opener) — see "Echo evidence" below. Unknown app ids, automations and messages Meta's record does not show yet NEVER count as a consultant; the thread lookup on the next customer message stays the backstop. |
 | `standby` events | Never answered (Meta: "Do not respond to standby messages"); counted as `webhook.standby_observed`. |
 | Bad settings | Fail SAFE: an invalid migration variable is ignored as a whole (old app keeps serving), logged as `env.meta_migration_settings_ignored`, shown in diagnostics — and the build preflight refuses to deploy it. |
 | Evidence | `GET /api/admin/takeover-diagnostics` → `migration` (flags, `nextTokens` = Meta's own check of the stored new token: valid, `appIdMatches`, `pageMatches`, `hasRequiredScopes`, expiry) and `echoMatrix` (what each app id actually sent). |
@@ -33,7 +33,24 @@ no longer re-pause a conversation staff handed back. Everything else waits for t
 | `FACEBOOK_PAGES_NEXT` | `1010493442437235:<uudam-v2 page token>` | Stage 2 (holding it sends nothing) | yes |
 | `META_NEXT_TESTER_IDS` | the testers' page-scoped ids (PSIDs), comma-separated | Stage 4 | no |
 | `META_NEXT_SEND` | `testers` (Stage 4), then `all` (Stage 6) | Stage 4 / 6 | no |
-| `ECHO_TAKEOVER_MODE`, `ECHO_HUMAN_APP_IDS` | **do not set** — only after the echo matrix proves a split | later | no |
+| `ECHO_TAKEOVER_MODE` | `enforce` (set 2026-10-31 after the evidence below; `observe` turns echo takeover off again) | done | no |
+| `ECHO_HUMAN_APP_IDS` | `263902037430900` — Meta's inbox app (Business Suite / Pages app) | done | no |
+
+### Echo evidence (production, 2026-10-31)
+
+104 echoes of 80 messages, each matched by `mid` to Meta's own record (Conversations API tags) and to
+the bot's recorded send ids:
+
+| App id | Meta's record | Bot evidence | Count | What it is |
+|---|---|---|---|---|
+| `1350045020372966` (Uudam-chatbot) | `source:web` | send metadata + recorded id | 17 | the bot |
+| `263902037430900` (Meta inbox) | `source:mobile` | none | 57 | consultants on the phone app |
+| `263902037430900` (Meta inbox) | `source:web`, 2–6 s after the customer | none | 5 | Meta's automated replies |
+| `263902037430900` (Meta inbox) | `source:pages:private_reply` | none | 1 | a comment private reply |
+
+So the inbox app id covers people AND automations: it is only a candidate, never proof. No desktop
+(Business Suite on a computer) consultant reply had been seen yet; it is `source:web` from the same
+app, told from an automation by timing, exactly as the thread check has done since 2026-10-30.
 
 No other variable is needed. The second page (596733917653582) has no NEXT entry and stays on the
 old app. Vercel applies a variable only to NEW deployments: after every change, Deployments →

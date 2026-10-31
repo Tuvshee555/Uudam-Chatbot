@@ -37,6 +37,8 @@ function mapLeadRow(row: Record<string, unknown>): TravelLead {
     assigned_to: String(row.assigned_to || ""),
     bot_paused: Boolean(row.bot_paused),
     bot_pause_reason: row.bot_paused ? String(row.bot_pause_reason || "manual") : "",
+    ...(row.bot_paused && row.bot_paused_at ? { bot_paused_at: new Date(String(row.bot_paused_at)).toISOString() } : {}),
+    ...(row.bot_paused && row.bot_takeover_source ? { bot_takeover_source: String(row.bot_takeover_source) } : {}),
   };
 }
 
@@ -190,7 +192,8 @@ export async function listLeads(limit = 50): Promise<TravelLead[]> {
   const result = await queryNeon<Record<string, unknown>>(
     `
       SELECT l.*, CASE WHEN s.pause_reason = 'operator_reply' THEN s.paused_at END AS staff_replied_at,
-             (s.paused AND s.expires_at > NOW()) AS bot_paused, s.pause_reason AS bot_pause_reason
+             (s.paused AND s.expires_at > NOW()) AS bot_paused, s.pause_reason AS bot_pause_reason,
+             s.paused_at AS bot_paused_at, s.takeover_source AS bot_takeover_source
       FROM travel_leads l
       LEFT JOIN travel_senders s ON s.sender_id = l.sender_id
       WHERE l.${REAL_SENDER}

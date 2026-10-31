@@ -5,6 +5,7 @@ import {
   sendTypingOn,
 } from "./messenger";
 import { sendTextMessage as sendIgTextMessage } from "./instagram";
+import { isStaffTakeoverSendBlocked } from "./takeoverGuard";
 import { appendMessage } from "./conversation";
 import { sendFbFileAttachment, sendFbFileByUrl } from "./fbAttachmentUpload";
 import { storeSenderName } from "./pause";
@@ -87,6 +88,8 @@ export async function sendPlatformMessage(
     recordCounter("webhook.send.success_total", 1, { platform });
     return finish(true, "primary_sent");
   } catch (error) {
+    // Not a failure: a consultant owns the conversation now. The turn ends silently (webhook.ts).
+    if (isStaffTakeoverSendBlocked(error)) throw error;
     recordCounter("webhook.send.failed_total", 1, { platform });
     logError("webhook.send.primary_failed", {
       requestId: trace?.requestId,
@@ -532,7 +535,7 @@ export function isFrustratedHandoffRequest(text: string): boolean {
 }
 // Defined in the dependency-free leaf module so travelFastPaths.ts can offer
 // this label on every quick-reply set without importing this file.
-export { CONTACT_OPERATOR_LABEL } from "./contactLabels";
+export { CONTACT_OPERATOR_LABEL, isContactOperatorTap } from "./contactLabels";
 // Sent when the bot would repeat its previous reply word-for-word. Must never
 // scold ("өмнө нь хэлсэн") and never fake an error.
 export const DUPLICATE_REPLY_NUDGE =

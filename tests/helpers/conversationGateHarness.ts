@@ -11,7 +11,7 @@ type LeadRow = { id: number; sender_id: string; kind: string; platform: string; 
 /** A Messenger thread as Meta's Conversations API returns it, or how reading it fails. */
 export type ThreadScript =
   | { fail: "timeout" | "permission" | "api_error" | "incomplete" }
-  | { messages: Array<{ from: "customer" | "page"; text?: string; agoMs: number; source?: "mobile" | "web"; id?: string }> };
+  | { messages: Array<{ from: "customer" | "page"; text?: string; agoMs: number; source?: "mobile" | "web" | "pages:private_reply"; id?: string }> };
 export type ModelOverride = Partial<{ tripId: string; place: string | null; date: string | null; hotel: string | null;
   passengers: Array<{ kind: "adult" | "child"; count: number; age?: number }>; topics: string[]; certainty: string; intent: string; finalReply: string;
   /** The provider refuses every call (HTTP 429 insufficient_quota), as during the 2026-10-30 credit outage. */
@@ -39,12 +39,20 @@ export async function conversationGateHarness(context: TestContext, options: { e
   const threads = new Map<string, ThreadScript>();
   const outbound = new Map<string, { recipient: string; at: number }>();
   const lastStaffReply = new Map<string, string>();
+  // Which surface a consultant took over from (travel_senders.takeover_source).
+  const takeoverSource = new Map<string, string>();
   // When staff handed the conversation back to the bot (travel_senders.bot_released_at).
   const released = new Map<string, string>();
   const graphAuth: Array<{ kind: "send" | "thread" | "other"; customer: string; token: string; proof: string }> = [];
   // Echo observations (travel_echo_events): shape and app id, never text (echoObserver.ts).
-  const echoes: Array<{ recipient: string; appId: string; classification: string; hasBotMetadata: boolean; deliveredBy: string }> = [];
+  const echoes: Array<{ recipient: string; appId: string; classification: string; hasBotMetadata: boolean; deliveredBy: string; verdict: string }> = [];
+  // Runs once at the next model call: something that happens while the bot is composing.
+  let duringModel: (() => void) | null = null;
   const result = (rows: unknown[] = []) => ({ rows, rowCount: rows.length });
+  /** Waits (real time, up to 2 s) until fire-and-forget writes make `done` true. Only Date is mocked. */
+  const settle = async (done: () => boolean) => {
+    for (let waited = 0; waited < 2000 && !done(); waited += 5) await new Promise((resolve) => setTimeout(resolve, 5));
+  };
   const query = async (sql: string, params: unknown[] = []) => {
     const sender = String(params[0] ?? "");
     if (/INSERT INTO travel_outbound_messages/i.test(sql)) {
@@ -61,13 +69,26 @@ export async function conversationGateHarness(context: TestContext, options: { e
     if (/SELECT created_at AS at, text FROM travel_conversations/i.test(sql)) {
       return result(history.filter((row) => row.sender_id === sender && row.role === "assistant").map((row) => ({ at: row.created_at, text: row.text })));
     }
-    if (/UPDATE travel_senders SET last_staff_reply_at/i.test(sql)) { lastStaffReply.set(sender, String(params[1])); return result(); }
+    if (/UPDATE travel_senders SET last_staff_reply_at/i.test(sql)) {
+      lastStaffReply.set(sender, String(params[1]));
+      if (params[2]) takeoverSource.set(sender, String(params[2]));
+      return result();
+    }
     if (/SELECT bot_released_at AS released FROM travel_senders/i.test(sql)) {
       return result([{ released: released.get(sender) ?? null }]);
     }
     if (/INSERT INTO travel_echo_events/i.test(sql)) {
       echoes.push({ recipient: String(params[1]), appId: String(params[3]), hasBotMetadata: Boolean(params[4]),
-        classification: String(params[5]), deliveredBy: String(params[8]) });
+        classification: String(params[5]), deliveredBy: String(params[8]), verdict: String(params[9] ?? "") });
+      return result();
+    }
+    // A consultant's message read from the thread or proven by its echo (dbAppendStaffMessages):
+    // role 'staff', stored once per Meta message id.
+    if (/INSERT INTO travel_conversations \(sender_id, role, text, attachments, created_at, mid\)/i.test(sql)) {
+      if (!history.some((row) => (row as HistoryRow & { mid?: string }).mid === String(params[3]))) {
+        history.push(Object.assign({ id: (history.at(-1)?.id || 0) + 1, sender_id: sender, role: "staff", text: String(params[1]),
+          attachments: [], created_at: String(params[2]) }, { mid: String(params[3]) }));
+      }
       return result();
     }
     if (/AS staff,[\s\S]*AS assigned,[\s\S]*AS open/i.test(sql)) {
@@ -153,6 +174,7 @@ export async function conversationGateHarness(context: TestContext, options: { e
       return new Response(JSON.stringify({ error: { message: "quota", type: "insufficient_quota", code: "insufficient_quota" } }), { status: 429 });
     }
     if (url === "https://api.openai.com/v1/chat/completions") {
+      if (duringModel) { const hook = duringModel; duringModel = null; hook(); }
       const messages = body.messages as Array<{ content: string | Array<{ text?: string }> }>;
       const prompt = messages.map(message => typeof message.content === "string" ? message.content : message.content.map(part => part.text || "").join("\n")).join("\n");
       let content = "REFER";
@@ -267,14 +289,16 @@ export async function conversationGateHarness(context: TestContext, options: { e
     /** A message echo from Meta: the Page (any app) sent `customerId` a message. */
     async echoTurn(customerId: string, echo: { appId?: string | number; metadata?: string; text?: string; mid?: string;
       attachments?: Array<{ type?: string }>; signSecret?: string } = {}) {
-      const beforeSend = sends.length;
+      const beforeSend = sends.length, beforeEchoes = echoes.length;
       const status = await deliver({ object: "page", entry: [{ id: "1234567890", time: Date.now(), messaging: [{
         sender: { id: "1234567890" }, recipient: { id: customerId }, timestamp: Date.now(),
         message: { is_echo: true, mid: echo.mid ?? `m_echo_${++serial}`, ...(echo.appId === undefined ? {} : { app_id: echo.appId }),
           ...(echo.metadata === undefined ? {} : { metadata: echo.metadata }), ...(echo.text === undefined ? {} : { text: echo.text }),
           ...(echo.attachments === undefined ? {} : { attachments: echo.attachments }) } }] }] }, echo.signSecret);
-      // recordEchoEvent is fire-and-forget; let it land before the test reads `echoes`.
-      await new Promise((resolve) => setImmediate(resolve));
+      // recordEchoEvent is fire-and-forget; let it land before the test reads `echoes`. Every
+      // accepted echo is recorded, so wait (up to 2 s) for its row rather than a single tick,
+      // which was not enough on a loaded machine.
+      await settle(() => status !== 200 || echoes.length > beforeEchoes);
       return { status, sends: sends.slice(beforeSend) };
     },
     /** The echo observations recorded so far (travel_echo_events). */
@@ -288,6 +312,12 @@ export async function conversationGateHarness(context: TestContext, options: { e
       return { status, sends: sends.slice(beforeSend) };
     },
     pauseState(senderId: string) { return pauses.get(senderId) ?? null; },
+    /** Which surface the consultant took over from, as markStaffReply recorded it. */
+    takeoverSource(senderId: string) { return takeoverSource.get(senderId) ?? null; },
+    /** Runs `hook` at the next model call — e.g. a consultant replies while the bot composes. */
+    duringNextModelCall(hook: () => void) { duringModel = hook; },
+    /** Waits (up to 2 s) for fire-and-forget writes — persisted logs, echo rows — to land. */
+    settle,
     /** A staff member took this conversation over: the stored pause the webhook honours. */
     pause(senderId: string, until = new Date(Date.now() + 3 * 86_400_000).toISOString(), reason = "manual") { pauses.set(senderId, { paused: true, expires_at: until, pause_reason: reason }); },
     /** Staff changed the lead in the Leads tab (seen, or a CRM status such as "no_answer"). */

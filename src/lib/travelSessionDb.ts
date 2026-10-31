@@ -497,7 +497,11 @@ export async function dbGetPendingReminders(): Promise<ReminderCandidate[]> {
        AND last_msg_at < NOW() - INTERVAL '12 hours'
        AND last_msg_at > NOW() - INTERVAL '24 hours'
        AND (reminder_sent_at IS NULL OR reminder_sent_at < $1)
-       AND (paused = FALSE OR expires_at < NOW())`,
+       AND (paused = FALSE OR expires_at < NOW())
+       -- A consultant's conversation gets no automated follow-up, even after the pause ends,
+       -- unless staff handed it back to the bot ("Ботод буцаах") after their last reply.
+       AND (last_staff_reply_at IS NULL OR last_staff_reply_at < NOW() - INTERVAL '3 days'
+            OR last_staff_reply_at <= COALESCE(bot_released_at, '-infinity'::timestamptz))`,
     [SIX_MONTHS_AGO],
   );
   return result?.rows ?? [];

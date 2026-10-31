@@ -47,7 +47,8 @@ import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { buildContactReply, contactSettingsOf, isAddressRequest, isPhoneRequest, isRepeatOfLastReply } from "../../lib/contactReplies";
 import { detectStaffTakeover, fetchThreadMessages, markStaffReply, STAFF_TAKEOVER_MS, takeoverRisk, type TakeoverCheck } from "../../lib/staffTakeover";
-import { classifyEcho, echoEnforcementEnabled, recordEchoEvent } from "../../lib/echoObserver";
+import { isStaffTakeoverSendBlocked } from "../../lib/takeoverGuard";
+import { classifyEcho, echoEnforcementEnabled, recordEchoEvent, verifyHumanEcho, type EchoVerdict } from "../../lib/echoObserver";
 import { AI_OUTAGE_HANDOFF_REPLY, BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, markGetStarted, pauseBookedCustomer, pauseBot, pauseReason, trackSender } from "../../lib/pause";
@@ -58,7 +59,7 @@ import { buildDateNotScheduledReply } from "../../lib/travelFastPathsPricing";
 import { conversationLeadContext } from "../../lib/leadContext";
 import { withoutNegatedTrips } from "../../lib/negatedTrip";
 import { pickReferral, rememberAdReferral } from "../../lib/adReferral";
-import { AUTO_PAUSE_RESET_DAYS, dbAppendAdminMessage, dbClaimGoodbye, dbClaimQuickInfo, dbReleaseQuickInfo, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, isPagePaused, listTrips, } from "../../lib/travelOps";
+import { dbAppendAdminMessage, dbClaimGoodbye, dbClaimQuickInfo, dbReleaseQuickInfo, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { dbAppendStaffMessages } from "../../lib/travelDb";
 import { hasDepartureDateAvailabilityIntent, requestsDateWindow } from "../../lib/travelDates";
 import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply, } from "../../lib/travelFastPaths";
@@ -110,7 +111,7 @@ import {
   resetWebhookStateForTests as resetWebhookStateForTestsInternal,
 } from "../../lib/webhookDedup";
 import { rememberSenderName } from "../../lib/senderNames";
-import { sendPlatformMessage, recordImageMessage, recordFileMessage, sendPhotoAlbum, sendTripMediaForReply, sendFacebookTypingIndicator, normalizeLowerText, isQuickInfoKeyword, isHandoffRequest, CONTACT_OPERATOR_LABEL, isBookingIntent, extractPhoneNumber, isPhoneOnlyMessage, isCommentTriggerMatch } from "../../lib/webhookMedia";
+import { sendPlatformMessage, recordImageMessage, recordFileMessage, sendPhotoAlbum, sendTripMediaForReply, sendFacebookTypingIndicator, normalizeLowerText, isQuickInfoKeyword, isHandoffRequest, isContactOperatorTap, isBookingIntent, extractPhoneNumber, isPhoneOnlyMessage, isCommentTriggerMatch } from "../../lib/webhookMedia";
 import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
 import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
 const env = getEnv();
@@ -150,7 +151,30 @@ export function resetWebhookStateForTests() {
 // exact same reference-resolution behavior (it previously diverged silently).
 export { isLikelyContextDependentText, buildContextualUserText };
 
-async function handleMessage(
+/**
+ * One customer turn. A consultant who answers while the bot is still composing takes over at
+ * once (their echo pauses the customer); the bot's reply is then refused at send time
+ * (takeoverGuard.ts) and the turn ends here, quietly: no retry, no error, nothing sent. The
+ * customer's message stays in the history; the consultant already has it in their inbox.
+ */
+async function handleMessage(...args: Parameters<typeof handleMessageTurn>) {
+  try {
+    return await handleMessageTurn(...args);
+  } catch (error) {
+    if (!isStaffTakeoverSendBlocked(error)) throw error;
+    const [platform, senderId, text, pageId, , , trace, , attachmentReply] = args;
+    noteInbound((outcome) => { outcome.silent = "staff_takeover_mid_reply"; });
+    if (!attachmentReply) {
+      const last = (await getHistory(senderId).catch(() => [])).at(-1);
+      if (!(last?.role === "user" && last.text === text)) await appendMessage(senderId, "user", text).catch(() => {});
+    }
+    logInfo("webhook.staff_takeover_mid_reply", { requestId: trace?.requestId, correlationId: trace?.correlationId,
+      platform, pageId, senderHash: hashIdentifier(senderId), pauseReason: error.reason });
+    recordCounter("webhook.staff_takeover_mid_reply_total", 1, { platform, reason: error.reason });
+  }
+}
+
+async function handleMessageTurn(
   platform: Platform,
   senderId: string,
   text: string,
@@ -316,7 +340,7 @@ async function handleMessage(
       if (!attachmentReply) await appendMessage(senderId, "user", text);
       const remainingMs = staffAt.getTime() + STAFF_TAKEOVER_MS - Date.now();
       await pauseBot(senderId, remainingMs, "operator_reply").catch(() => {});
-      await markStaffReply(senderId, staffAt).catch(() => {});
+      await markStaffReply(senderId, staffAt, takeover.staff.origin).catch(() => {});
       if (!attachmentReply && !isThanksOnly(text)) await recordPausedFollowup();
       noteInbound((outcome) => { outcome.silent = "staff_takeover"; });
       logInfo("webhook.staff_takeover_detected", {
@@ -948,7 +972,7 @@ async function handleMessage(
     }
   }
   if (
-    text.trim() === CONTACT_OPERATOR_LABEL ||
+    isContactOperatorTap(text) ||
     (botSettings.handoff_enabled && isHandoffRequest(text, botSettings.handoff_keywords))
   ) {
     await captureLead({ kind: "handoff" }, "api.webhook.handoff");
@@ -2538,12 +2562,13 @@ export default async function handler(
             for (const event of messagingEvents) {
               if (!event?.sender?.id) continue;
               // Echo = the Page sent a message to a customer: this bot, a consultant (desktop
-              // or phone), Meta's own automations, or another connected app — told apart by
-              // our send metadata and the echo's app_id (echoObserver.ts). Until real echoes
-              // prove that split, this branch OBSERVES and records; the thread lookup below
-              // remains what actually stops the bot when a consultant has replied. Without
-              // that gate, Meta's automated welcome greeting (an echo with no metadata) would
-              // re-create the 3-day false silence of 2026-10-30 on every new conversation.
+              // or phone), Meta's own automations, or another connected app. Our send metadata
+              // marks the bot; Meta's inbox app id covers consultants AND Meta's automations,
+              // so a human-surface echo pauses the bot only once Meta's own record of that
+              // message proves a consultant sent it (echoObserver.ts verifyHumanEcho). Without
+              // that proof, Meta's automated welcome greeting would re-create the 3-day false
+              // silence of 2026-10-30 on every new conversation. The thread check on the next
+              // customer message stays the backstop for anything the echo could not prove.
               if (event?.message?.is_echo) {
                 const customerId = String(event.recipient?.id ?? "").trim();
                 if (!customerId) continue;
@@ -2561,46 +2586,69 @@ export default async function handler(
                     : [],
                 };
                 const echoClass = classifyEcho(echo);
-                // Fire-and-forget: the observation row must never delay the webhook.
-                void recordEchoEvent(echo, echoClass).catch(() => {});
-                if (echoClass === "bot") {
-                  logInfo("webhook.bot_echo_skip", {
-                    requestId: trace.requestId,
-                    customerHash: hashIdentifier(customerId),
-                    pageId,
-                  });
+                if (echoClass !== "human" || !echoEnforcementEnabled()) {
+                  // Fire-and-forget: the observation row must never delay the webhook.
+                  void recordEchoEvent(echo, echoClass).catch(() => {});
+                  if (echoClass === "bot") {
+                    logInfo("webhook.bot_echo_skip", {
+                      requestId: trace.requestId,
+                      customerHash: hashIdentifier(customerId),
+                      pageId,
+                    });
+                  }
                   continue;
                 }
-                // A proven human surface, with enforcement explicitly on: the consultant owns
-                // the conversation. An UNKNOWN app id never pauses — log + counter only.
-                if (echoClass === "human" && echoEnforcementEnabled()) {
-                  const operatorPauseMs = AUTO_PAUSE_RESET_DAYS * 24 * 60 * 60 * 1000;
-                  // A failed pause write must be visible, or the bot keeps answering a
-                  // customer staff already took over with no error anywhere.
-                  await dbPauseSender(customerId, operatorPauseMs, "operator_reply").catch(
-                    (error) => {
-                      logWarn("webhook.operator_echo_pause_failed", {
-                        requestId: trace.requestId,
-                        customerHash: hashIdentifier(customerId),
-                        pageId,
-                        classification: classifyError(error),
-                        message: error instanceof Error ? error.message : String(error),
-                      });
-                    },
-                  );
-                  await markStaffReply(customerId, new Date()).catch(() => {});
-                  logInfo("webhook.operator_echo_pause", {
+                // A human-surface echo with enforcement on. Both Meta apps deliver every echo:
+                // the message is verified (and acted on) once, keyed by its Meta id.
+                let verdict: EchoVerdict | null = null;
+                await runEventWithClaim(`facebook:echo:${echo.mid || `${customerId}:${event.timestamp ?? ""}`}`,
+                  { platform: "facebook", eventType: "dm" }, async () => {
+                    verdict = await verifyHumanEcho({ pageId, customerId, mid: echo.mid, token: pageTokenFor(pageId, customerId) || "" })
+                      .catch((): EchoVerdict => ({ verdict: "unverified", reason: "api_error" }));
+                  });
+                const proven = verdict as EchoVerdict | null;
+                void recordEchoEvent(echo, echoClass, proven?.verdict ?? "duplicate").catch(() => {});
+                if (proven?.verdict !== "human") {
+                  if (proven) {
+                    logInfo("webhook.echo_not_human", { requestId: trace.requestId, customerHash: hashIdentifier(customerId),
+                      pageId, appId: echo.appId || null, verdict: proven.verdict, reason: proven.reason });
+                    recordCounter("webhook.echo_not_human_total", 1, { verdict: proven.verdict });
+                  }
+                  continue;
+                }
+                // A consultant replied: the bot stays out of this conversation from now on
+                // (until "Ботод буцаах" or the takeover window ends), and any reply the bot is
+                // still composing is stopped at send time (takeoverGuard.ts).
+                const remainingMs = proven.at.getTime() + STAFF_TAKEOVER_MS - Date.now();
+                // A failed pause write must be visible, or the bot keeps answering a customer
+                // staff already took over with no error anywhere.
+                if (remainingMs > 0) await dbPauseSender(customerId, remainingMs, "operator_reply").catch((error) => {
+                  logWarn("webhook.operator_echo_pause_failed", {
                     requestId: trace.requestId,
                     customerHash: hashIdentifier(customerId),
                     pageId,
-                    appId: echo.appId || null,
-                    hasText: echoText.length > 0,
-                    attachmentTypes: echo.attachmentTypes,
+                    classification: classifyError(error),
+                    message: error instanceof Error ? error.message : String(error),
                   });
-                }
-                // "Mimic Myself" tone capture: only a PROVEN human surface feeds the sample
+                });
+                await markStaffReply(customerId, proven.at, proven.origin).catch(() => {});
+                // The consultant's message joins the conversation history as role 'staff'
+                // (the admin inbox tells human from AI); the mid keeps it stored once.
+                if (echo.mid) await dbAppendStaffMessages(customerId, [{ mid: echo.mid, text: proven.text, at: proven.at }]).catch(() => {});
+                logInfo("webhook.operator_echo_pause", {
+                  requestId: trace.requestId,
+                  customerHash: hashIdentifier(customerId),
+                  pageId,
+                  appId: echo.appId || null,
+                  origin: proven.origin,
+                  staffReplyAt: proven.at.toISOString(),
+                  hasText: echoText.length > 0,
+                  attachmentTypes: echo.attachmentTypes,
+                });
+                recordCounter("webhook.operator_echo_pause_total", 1, { origin: proven.origin });
+                // "Mimic Myself" tone capture: only a PROVEN consultant message feeds the sample
                 // pool — automations and unknown apps would poison the owner's voice.
-                if (echoClass === "human" && echoText.length >= 8) {
+                if (echoText.length >= 8) {
                   void dbAppendAdminMessage(customerId, echoText).catch(() => {});
                 }
                 continue;

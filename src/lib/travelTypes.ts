@@ -185,6 +185,9 @@ export type TravelLead = {
   /** The bot is stopped for this customer, and why ("manual", "operator_reply", "booked_customer", …). */
   bot_paused?: boolean;
   bot_pause_reason?: string;
+  /** When the bot was stopped, and from where a consultant took over ("staff_mobile", "staff_web"). */
+  bot_paused_at?: string;
+  bot_takeover_source?: string;
 };
 
 export type LeadStats = {

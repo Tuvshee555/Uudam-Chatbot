@@ -28,7 +28,13 @@ test("echo enforcement journeys", async (context) => {
     await context.test("1. a PROVEN human surface's echo silences the bot for that customer", async () => {
       const first = await fb("enforced", "Норвел хотын аялал үнэ");
       assert.equal(first.sends.length, 1);
-      const consultant = await harness.echoTurn("enforced", { appId: "777000333", text: "Сайн байна уу, би зөвлөх байна" });
+      // The listed app id alone is not proof (Meta's automations share it): Meta's record of the
+      // message shows a consultant on the phone (echoObserver.ts verifyHumanEcho).
+      harness.thread("enforced", { messages: [
+        { from: "customer", text: "Норвел хотын аялал үнэ", agoMs: 3 * 60_000 },
+        { from: "page", text: "Сайн байна уу, би зөвлөх байна", agoMs: 0, source: "mobile", id: "m_enforced_1" },
+      ] });
+      const consultant = await harness.echoTurn("enforced", { appId: "777000333", mid: "m_enforced_1", text: "Сайн байна уу, би зөвлөх байна" });
       assert.equal(consultant.status, 200);
       assert.equal(harness.pauseState("enforced")?.pause_reason, "operator_reply");
       const held = await fb("enforced", "Хүүхдийн үнэ хэд вэ?");

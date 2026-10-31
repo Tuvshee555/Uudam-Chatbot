@@ -7,6 +7,7 @@ import {
   listBroadcasts,
 } from "../../../lib/travelOps";
 import { sendTextMessage } from "../../../lib/messenger";
+import { isStaffTakeoverSendBlocked } from "../../../lib/takeoverGuard";
 import { getEnv } from "../../../lib/env";
 import {
   beginRequestTrace,
@@ -92,6 +93,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Fire and collect results — sequential to avoid rate limits
       let sentCount = 0;
       let failedCount = 0;
+      let skippedCount = 0;
       for (const senderId of recipients) {
         try {
           await sendTextMessage(senderId, trimmedMessage, token, {
@@ -101,6 +103,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
           sentCount++;
         } catch (error) {
+          // A customer a consultant is talking to right now is left out, not failed.
+          if (isStaffTakeoverSendBlocked(error)) { skippedCount++; continue; }
           failedCount++;
           logWarn("broadcast.send_failed", {
             requestId: trace.requestId,
@@ -121,12 +125,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         platform,
         sentCount,
         failedCount,
+        skippedCount,
       });
 
       return res.status(200).json({
         ok: true,
         sent: sentCount,
         failed: failedCount,
+        skipped: skippedCount,
       });
     }
 

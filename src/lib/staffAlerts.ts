@@ -137,7 +137,7 @@ export async function notifyStaff(
   for (const psid of env.staffNotifyPsids) {
     attempted += 1;
     try {
-      await sendTextMessage(psid, text, env.tokenPage, trace);
+      await sendTextMessage(psid, text, env.tokenPage, { ...trace, allowDuringTakeover: true });
       delivered += 1;
       recordCounter("staff_alert.sent_total", 1, { kind: alert.kind, channel: "messenger" });
       logInfo("staff_alert.sent", { kind: alert.kind, channel: "messenger" });

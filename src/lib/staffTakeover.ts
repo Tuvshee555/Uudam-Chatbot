@@ -1,13 +1,10 @@
 /**
  * Has a consultant replied to this customer, so the bot must stay out?
  *
- * Meta can tell the webhook through `message_echoes`, but the page tokens only hold
- * `pages_messaging` (no `pages_manage_metadata`), so that subscription was never delivered —
- * no echo has ever reached this webhook (the 2026-08-01 admin-message rows were a backfill
- * script, not echoes; verified 2026-10-31). The Conversations API is readable with the page
- * token, so the bot reads the thread before replying. The Meta-app migration
- * (docs/meta-app-migration.md) adds real echoes in observe-only mode; this thread check stays
- * the enforcement path until echo classification is proven on real events.
+ * Two paths answer it with the SAME classification below. Since 2026-10-31 `message_echoes`
+ * reach the webhook: a consultant's echo, proven against Meta's record of that message, pauses
+ * the customer at once (echoObserver.ts verifyHumanEcho). And before replying, the bot reads the
+ * thread (Conversations API), which catches anything an echo could not prove.
  *
  * Every Page message comes back "from" the Page — this bot, a consultant, Meta's automations
  * and inbox notices alike. Production threads (takeover diagnostics, 2026-10-30, 60 customers):
@@ -248,12 +245,16 @@ export async function detectStaffTakeover(input: { lookup: ThreadLookup; pageId:
   };
 }
 
-/** Records when a consultant last replied, so a later failed lookup still knows staff are involved. */
-export async function markStaffReply(senderId: string, at: Date): Promise<void> {
+/**
+ * Records when a consultant last replied, so a later failed lookup still knows staff are involved,
+ * and from which surface (the admin shows who took over).
+ */
+export async function markStaffReply(senderId: string, at: Date, origin?: "staff_mobile" | "staff_web"): Promise<void> {
   const { queryNeon } = await db();
   await queryNeon(
-    `UPDATE travel_senders SET last_staff_reply_at = GREATEST(COALESCE(last_staff_reply_at, $2::timestamptz), $2::timestamptz)
-      WHERE sender_id = $1`, [senderId, at.toISOString()],
+    `UPDATE travel_senders SET last_staff_reply_at = GREATEST(COALESCE(last_staff_reply_at, $2::timestamptz), $2::timestamptz),
+            takeover_source = COALESCE($3, takeover_source)
+      WHERE sender_id = $1`, [senderId, at.toISOString(), origin ?? null],
   );
 }
 

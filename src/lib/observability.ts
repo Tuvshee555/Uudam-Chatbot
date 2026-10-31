@@ -368,6 +368,8 @@ async function flushSink(reason: "interval" | "threshold" | "manual") {
  */
 export const PERSISTED_INFO_EVENTS: ReadonlySet<string> = new Set([
   "webhook.operator_echo_pause",
+  "webhook.echo_not_human",
+  "webhook.staff_takeover_mid_reply",
   "webhook.staff_takeover_detected",
   "webhook.ai_refer",
   "webhook.ai_wrong_trip_reply_suppressed",
