@@ -304,9 +304,10 @@ async function handleMessage(
     const lookup = (await staffThread) ?? { status: "unverified" as const, reason: "api_error" as const };
     const takeover: TakeoverCheck = await detectStaffTakeover({ lookup, pageId, senderId })
       .catch(() => ({ status: "unverified" as const, reason: "api_error" as const }));
-    // Consultant replies never reach this webhook (no echoes), so this thread read is the only
-    // place the bot sees them. Stored as role 'staff' for the admin inbox — AI and human replies
-    // stay tellable apart there; the model and routing never read 'staff' rows.
+    // Consultant replies are known from this thread read (echoes, once the new Meta app delivers
+    // them, are observe-only until their app ids are proven — echoObserver.ts). Stored as role
+    // 'staff' for the admin inbox — AI and human replies stay tellable apart there; the model and
+    // routing never read 'staff' rows.
     if (takeover.status === "checked" && takeover.staffMessages.length > 0) {
       await dbAppendStaffMessages(senderId, takeover.staffMessages).catch(() => {});
     }
