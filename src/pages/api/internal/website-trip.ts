@@ -13,6 +13,14 @@ import { flushWebsiteSync, withWebsiteDepartureAvailability } from "@/lib/websit
 import { waitUntil } from "@vercel/functions";
 import { TripDataValidationError } from "@/lib/tripDataValidation";
 
+/**
+ * A website delivery carries the trip, its baseline and their departures.
+ * Next's default 1 MB body limit refused the 2026-10-26 Санья edit (HTTP 413)
+ * on every attempt; the website now sends only what this route reads, and
+ * this limit (under Vercel's 4.5 MB request cap) keeps a large trip in reach.
+ */
+export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
+
 type Row = Record<string, unknown>;
 const record = (value: unknown): Row => value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
 const CANONICAL_COLUMNS = new Set(["route_name", "duration_text", "adult_price", "child_price", "infant_price", "currency", "departure_dates", "has_food", "status", "notes", "hotel", "photo_urls"]);
