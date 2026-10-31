@@ -883,6 +883,10 @@ function timeLeft(expiresAt: string | null): string {
   if (!expiresAt) return "∞";
   const diff = new Date(expiresAt).getTime() - Date.now();
   if (diff <= 0) return "Дууссан";
+  // A consultant's take-over is stored with a far-future expiry: it ends only with «Ботод буцаах».
+  if (diff > 365 * 86_400_000) return "«Ботод буцаах» хүртэл";
+  const days = Math.floor(diff / 86_400_000);
+  if (days >= 1) return `${days} хоног ${Math.floor((diff % 86_400_000) / 3_600_000)} цаг`;
   const minutes = Math.floor(diff / 60000);
   const seconds = Math.floor((diff % 60000) / 1000);
   return minutes <= 0 ? `${seconds}с` : `${minutes}м ${seconds}с`;

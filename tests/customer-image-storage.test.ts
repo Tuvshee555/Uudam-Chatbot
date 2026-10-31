@@ -85,7 +85,9 @@ test("an image arriving while the private store is not configured is kept for re
     assert.equal(row.ingest_status, "retry", "the receipt is kept and retried, not dropped");
     assert.equal(row.ingest_error, "private_blob_not_configured", "the reason is recorded on the document");
     assert.deepEqual(uploads.filter((host) => /cloudinary/.test(host)), [], "never uploaded to a public store instead");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // The error row is written fire-and-forget; wait for that write itself, not for a guessed delay.
+    const { flushPersistedLogs } = await import("../src/lib/observability");
+    await flushPersistedLogs();
     assert.ok(errors.some((entry) => entry.event === "customer_documents.private_storage_failed" && entry.fields.error === "private_blob_not_configured"),
       "an error the admin issues list counts");
   } finally {

@@ -234,16 +234,18 @@ async function writeLog(record: PersistableLogRecord): Promise<void> {
 /**
  * Called by observability.logEvent for every record. Returns immediately; the
  * write finishes in the background (kept alive past the response by waitUntil
- * on Vercel, a detached promise elsewhere).
+ * on Vercel, a detached promise elsewhere). The returned promise settles when
+ * the write has (never rejects), so observability.flushPersistedLogs can await it.
  */
-export function persistLogRecord(record: PersistableLogRecord): void {
-  if (!shouldPersistLog(record.level, record.event)) return;
+export function persistLogRecord(record: PersistableLogRecord): Promise<void> {
+  if (!shouldPersistLog(record.level, record.event)) return Promise.resolve();
   const work = writeLog(record);
   try {
     waitUntil(work);
   } catch {
     void work;
   }
+  return work;
 }
 
 /** Deletes rows past the retention window, then trims to the row ceiling. */

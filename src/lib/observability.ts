@@ -404,6 +404,8 @@ export function shouldPersistLog(level: unknown, event: unknown): boolean {
 }
 
 const ERROR_LOG_DB_ENABLED = booleanEnv("ERROR_LOG_DB_ENABLED", true);
+// Log writes still on their way to travel_error_logs (the lazy import plus the insert).
+const pendingPersists = new Set<Promise<void>>();
 
 /**
  * Copies error/warn records into the self-cleaning travel_error_logs table
@@ -414,11 +416,22 @@ function persistToDatabase(record: Record<string, LogValue>) {
   if (!ERROR_LOG_DB_ENABLED) return;
   if (!shouldPersistLog(record.level, record.event)) return;
   if (!optionalEnv("NEON_DATABASE_URL") && !optionalEnv("DATABASE_URL")) return;
-  void import("./errorLogStore")
+  const write = import("./errorLogStore")
     .then((store) => store.persistLogRecord(record))
     .catch(() => {
       // Logging must never break the caller.
     });
+  pendingPersists.add(write);
+  void write.finally(() => pendingPersists.delete(write));
+}
+
+/**
+ * Resolves once every log record written so far has reached the database (or failed to). The
+ * caller never has to guess how long a fire-and-forget write takes: tests await this instead of
+ * a timer, which raced the write on a loaded machine.
+ */
+export async function flushPersistedLogs(): Promise<void> {
+  while (pendingPersists.size) await Promise.allSettled([...pendingPersists]);
 }
 
 export function logEvent(

@@ -121,9 +121,19 @@ when Meta's record of that exact message proves a consultant (`echoObserver.ts v
 in `docs/meta-app-migration.md`). A reply the bot is still composing when the consultant writes is
 refused at send time (`takeoverGuard.ts`), the 12-hour reminder skips conversations a consultant
 answered, and the Messenger menu carries «Хүнтэй холбогдох» (`scripts/messenger-menu.ts`). Journeys:
-`tests/human-takeover-journeys.test.ts`. Still open: no desktop Business Suite echo has been observed
-in production yet — its classification (web, not within 20 s of the customer) is the thread check's
-rule, untested on a real desktop echo.
+`tests/human-takeover-journeys.test.ts`.
+**Ownership until release (owner, 2026-10-31).** A consultant's take-over (`operator_reply`) and
+"Би хариулна"/«Гараар» (`manual`) no longer end after three days: they hold until staff press
+«Ботод буцаах» (stored as a far-future expiry, `UNTIL_RELEASED_AT`; timed pauses keep their time). The
+45 conversations held at the switch were re-verified against Meta's threads and moved over (one false
+take-over — Meta's welcome burst — was released instead). Every customer message while held still
+reaches staff as a lead follow-up and a Telegram ping.
+**OPEN — desktop consultant within 20 s.** Meta tags a consultant on a computer and its own automations
+alike; a desktop consultant's FIRST reply within 20 s of the customer's message reads as an automation,
+so the bot may answer the customer's next message once (`test.todo`). 14 days of threads held no
+desktop consultant at all (1,261 phone replies, which are never affected), and the live desktop test is
+pending. If desktop use grows, the fix is a memory of Meta's automation texts (the same text sent to
+many customers), which would let a unique message within 20 s count as a person.
 
 ## P1-3 — Test traffic in the production conversation table — MITIGATED (2026-10-30)
 `demo:` sessions (87% of rows) are written beside real customers. Every analytics and quality query on

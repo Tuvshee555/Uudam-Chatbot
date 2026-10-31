@@ -89,7 +89,9 @@ test("staff takeover journeys on Facebook", async (context) => {
       assert.match(answeredPrice(after), /1,791,000₮/);
     });
 
-    await context.test("5. repeated consultant replies keep the bot out, counted from the latest", async () => {
+    // Owner, 2026-10-31: a consultant's conversation stays with staff until «Ботод буцаах» — it used
+    // to return to the bot three days after the latest consultant message.
+    await context.test("5. repeated consultant replies keep the bot out until staff release it, not for three days", async () => {
       const botMid = await opened("repeat");
       harness.thread("repeat", { messages: [
         { from: "customer", text: "Норвел хотын аялал үнэ", agoMs: 10 * MIN },
@@ -100,8 +102,8 @@ test("staff takeover journeys on Facebook", async (context) => {
       const first = await fb("repeat", "Ойлголоо", one);
       const second = await fb("repeat", "Хүүхэд хэд вэ?", one);
       assert.deepEqual([first.sends.length, second.sends.length], [0, 0]);
-      const until = Date.parse(harness.pauseState("repeat")!.expires_at!);
-      assert.ok(Math.abs(until - (Date.now() - MIN + 3 * 86_400_000)) < 5_000, "three days from the latest consultant message");
+      const { UNTIL_RELEASED_AT } = await import("../src/lib/travelSessionDb");
+      assert.equal(harness.pauseState("repeat")!.expires_at, UNTIL_RELEASED_AT, "held until «Ботод буцаах», not for a set time");
     });
 
     await context.test("6. a consultant's manual take-over silences the bot; 8. later messages stay with staff", async () => {
@@ -216,7 +218,10 @@ test("staff takeover journeys on Facebook", async (context) => {
         { from: "page", source: "mobile", text: "Сайн байна уу, зөвлөх байна", agoMs: 2 * MIN },
       ] });
       await fb("recent-staff", "Ойлголоо", one); // the consultant's reply is seen and recorded
-      tick(3 * 86_400_000 + 3_600_000); // the three-day pause has ended
+      // No active pause any more — as for a take-over paused before 2026-10-31, when pauses still
+      // ended after three days (they now last until «Ботод буцаах»).
+      harness.pause("recent-staff", new Date(Date.now() - 1_000).toISOString(), "operator_reply");
+      tick(3_600_000);
       harness.thread("recent-staff", { fail: "timeout" });
       const held = await fb("recent-staff", "Хүүхдийн үнэ хэд вэ?", one);
       assert.equal(held.sends.length, 0, "the thread cannot be read and a consultant replied this week: no bot reply");

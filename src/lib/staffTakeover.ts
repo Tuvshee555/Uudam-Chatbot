@@ -40,11 +40,25 @@ export type ThreadLookup =
 
 export type PageMessageOrigin = "bot" | "staff_mobile" | "staff_web" | "automation" | "legacy" | "other";
 
-/** How long the bot stays quiet after the latest staff message. */
+/**
+ * How recent a consultant message in the thread must be to take the conversation over when the
+ * customer next writes. The takeover itself lasts until «Ботод буцаах» (travelSessionDb.ts).
+ */
 export const STAFF_TAKEOVER_MS = 3 * 24 * 60 * 60 * 1000;
 /** Meta's instant replies, away messages and inbox notices follow the customer within seconds. */
 export const AUTOMATION_WINDOW_MS = 20_000;
-const META_NOTICE = /(?:replied to|responded to|clicked (?:on )?(?:your|an) ad|via an ad|from an ad|automated (?:welcome )?message|started (?:this|a) conversation)/i;
+/** Meta sends an automation's parts together (welcome burst: notice, greeting, card within ~2 s). */
+export const AUTOMATION_BURST_MS = 5_000;
+/**
+ * Faster than a person reads and types: a long text that arrives sooner after the customer than
+ * this rate allows was not typed — a personalised automated reply (204 characters, 21 s after the
+ * customer, 2026-10-31) was read as a consultant on a computer.
+ */
+export const HUMAN_TYPING_CHARS_PER_SECOND = 6;
+const TYPED_TEXT_MIN_CHARS = 40;
+// Meta's own inbox notices and prompts, shown in the thread as Page messages (14-day study,
+// 2026-10-31: "Lead stage set to …" in 50 conversations, comment private-reply notices).
+const META_NOTICE = /(?:replied to|responded to|responding to a (?:user )?comment|clicked (?:on )?(?:your|an) ad|via an ad|from an ad|automated (?:welcome )?message|started (?:this|a) conversation|lead stage set to|call now for faster service)/i;
 
 export type ClassifyContext = {
   pageId: string;
@@ -98,6 +112,9 @@ export function classifyPageMessage(message: ThreadMessage, previousCustomerAt: 
   // greeting, never a consultant replying.
   if (opener && previousCustomerAt === null) return "automation";
   if (previousCustomerAt !== null && at - previousCustomerAt >= 0 && at - previousCustomerAt < AUTOMATION_WINDOW_MS) return "automation";
+  const text = String(message.message ?? "").trim();
+  if (previousCustomerAt !== null && text.length >= TYPED_TEXT_MIN_CHARS
+    && text.length / Math.max(1, (at - previousCustomerAt) / 1000) > HUMAN_TYPING_CHARS_PER_SECOND) return "automation";
   return "staff_web";
 }
 
@@ -127,16 +144,19 @@ export function latestStaffReply(input: {
  *
  * Meta's keyword automations also fire in bursts and repeat themselves word for word: on
  * 2026-10-31 one sent the same phone-number line 4, 17 and 20.0 s after the customer — the last
- * one just outside the 20-s window, 11 s after the bot's own reply — and was read as a consultant
- * on a computer, silencing the customer. So a `source:web` message that would count as a
- * consultant is an automation when it repeats an earlier Page message of the thread verbatim, or
- * follows a bot or automated Page message within the automation window. A phone message
- * (`source:mobile`) is never affected: only a person sends from the phone app.
+ * one just outside the 20-s window — and was read as a consultant on a computer, silencing the
+ * customer. So a `source:web` message that would count as a consultant is an automation when it
+ * repeats an earlier Page message of the thread verbatim, or comes within AUTOMATION_BURST_MS of
+ * one of Meta's automations or notices: Meta re-sends its welcome burst (notice, greeting, card,
+ * "Call now") to a returning customer with no customer message near it. The bot's own replies do
+ * NOT open such a window: 9% of real consultant take-overs come within 20 s of the bot's reply
+ * (14-day study, 300 threads). A phone message (`source:mobile`) is never affected: only a person
+ * sends from the phone app.
  */
 export function classifyThread(messages: ThreadMessage[], context: ClassifyContext): Array<{ message: ThreadMessage; at: number; origin: PageMessageOrigin | "customer" }> {
   const ordered = [...messages].sort((a, b) => Date.parse(a.created_time ?? "") - Date.parse(b.created_time ?? ""));
   let previousCustomerAt: number | null = null;
-  let previousAutomatedAt: number | null = null;
+  let previousAutomationAt: number | null = null;
   const earlierPageTexts = new Set<string>();
   let opening = context.threadComplete ?? messages.length < THREAD_LOOKUP_LIMIT;
   const classified: Array<{ message: ThreadMessage; at: number; origin: PageMessageOrigin | "customer" }> = [];
@@ -152,11 +172,11 @@ export function classifyThread(messages: ThreadMessage[], context: ClassifyConte
     let origin = classifyPageMessage(message, previousCustomerAt, context, opening);
     const text = String(message.message ?? "").trim();
     if (origin === "staff_web" && ((text && earlierPageTexts.has(text))
-      || (previousAutomatedAt !== null && at - previousAutomatedAt >= 0 && at - previousAutomatedAt < AUTOMATION_WINDOW_MS))) {
+      || (previousAutomationAt !== null && at - previousAutomationAt >= 0 && at - previousAutomationAt < AUTOMATION_BURST_MS))) {
       origin = "automation";
     }
     if (origin !== "automation") opening = false;
-    if (origin === "bot" || origin === "automation") previousAutomatedAt = at;
+    if (origin === "automation") previousAutomationAt = at;
     if (text) earlierPageTexts.add(text);
     classified.push({ message, at, origin });
   }

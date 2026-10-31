@@ -9,6 +9,7 @@
  */
 
 import { queryNeon } from "./neonDb";
+import { HUMAN_OWNER_REASONS } from "./takeoverGuard";
 import { ensureTravelSchema } from "./travelSchema";
 
 const MAX_HISTORY_ROWS = 50;
@@ -604,6 +605,16 @@ export async function dbPauseReason(senderId: string): Promise<string | null> {
 
 const MAX_PAUSE_MS = AUTO_PAUSE_RESET_DAYS * 24 * 60 * 60 * 1000;
 
+/**
+ * A person's take-over with no chosen duration — a consultant's Messenger reply ("operator_reply")
+ * or "Би хариулна" / «Гараар» ("manual") — lasts until staff press «Ботод буцаах» (owner,
+ * 2026-10-31): time alone never hands a consultant's customer back to the bot. Stored as a
+ * far-future expiry, never NULL — a NULL expiry reads as expired (pauseRowStillActive), the guard
+ * against the forever-silent rows of 2026-09-11. While held, every customer message still reaches
+ * staff as a lead follow-up.
+ */
+export const UNTIL_RELEASED_AT = "2999-12-31T00:00:00.000Z";
+
 export async function dbPauseSender(
   senderId: string,
   durationMs?: number,
@@ -611,12 +622,11 @@ export async function dbPauseSender(
 ): Promise<void> {
   const ready = await ensureTravelSchema();
   if (!ready) return;
-  // Forever pauses are confusing and easy to forget; cap every per-sender pause at the takeover window.
-  const effectiveMs =
-    typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs > 0
-      ? Math.min(durationMs, MAX_PAUSE_MS)
-      : MAX_PAUSE_MS;
-  const expiresAt = new Date(Date.now() + effectiveMs).toISOString();
+  const chosen = typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs > 0;
+  // Timed pauses and the bot's own markers are capped at 30 days; a person's take-over is not.
+  const expiresAt = !chosen && HUMAN_OWNER_REASONS.has(reason)
+    ? UNTIL_RELEASED_AT
+    : new Date(Date.now() + (chosen ? Math.min(durationMs, MAX_PAUSE_MS) : MAX_PAUSE_MS)).toISOString();
   await queryNeon(
     `INSERT INTO travel_senders (sender_id, paused, pause_reason, paused_at, expires_at, updated_at)
      VALUES ($1, TRUE, $2, NOW(), $3, NOW())

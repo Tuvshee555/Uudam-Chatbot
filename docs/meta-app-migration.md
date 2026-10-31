@@ -14,7 +14,7 @@ running behaviour is today's, except the two reviewed fixes listed under "On mer
 | Webhook handshake | `VERIFY_TOKEN` or `VERIFY_TOKEN_NEXT`. |
 | Which app sends | `META_NEXT_SEND`: `off` (default) → old app for everyone; `testers` → new app ONLY for the PSIDs in `META_NEXT_TESTER_IDS`; `all` → new app for every customer of the pages in `FACEBOOK_PAGES_NEXT` (the cutover: sends, thread reads, alerts, crons). `appsecret_proof` always uses the secret of the app that issued the token. |
 | Duplicates | Both apps deliver every event with the same Meta `mid`. Events with a `mid` are remembered 48 h; button taps / events without a `mid` keep the 2-minute window, so a customer tapping the same menu button again is answered. |
-| Echoes | Every echo is recorded in `travel_echo_events` (app id, metadata flag, lengths, attachment types, delivering app, `verdict` — never text). The bot's own echoes are known by its send metadata or `META_APP_ID`. With `ECHO_TAKEOVER_MODE=enforce`, an echo from an app in `ECHO_HUMAN_APP_IDS` pauses the customer at once **only if Meta's own record of that message proves a consultant** (`echoObserver.ts verifyHumanEcho`: `source:mobile`, or `source:web` not within 20 s of the customer / not the conversation opener) — see "Echo evidence" below. Unknown app ids, automations and messages Meta's record does not show yet NEVER count as a consultant; the thread lookup on the next customer message stays the backstop. |
+| Echoes | Every echo is recorded in `travel_echo_events` (app id, metadata flag, lengths, attachment types, delivering app, `verdict` — never text). The bot's own echoes are known by its send metadata or `META_APP_ID`. With `ECHO_TAKEOVER_MODE=enforce`, an echo from an app in `ECHO_HUMAN_APP_IDS` pauses the customer at once **only if Meta's own record of that message proves a consultant** (`echoObserver.ts verifyHumanEcho` with `staffTakeover.ts classifyThread`: `source:mobile`, or a `source:web` message that passes the automation tests in "Echo evidence" below). Unknown app ids, automations and messages Meta's record does not show yet NEVER count as a consultant; the thread lookup on the next customer message stays the backstop. A consultant's take-over lasts until «Ботод буцаах» (2026-10-31; it used to end after three days). |
 | `standby` events | Never answered (Meta: "Do not respond to standby messages"); counted as `webhook.standby_observed`. |
 | Bad settings | Fail SAFE: an invalid migration variable is ignored as a whole (old app keeps serving), logged as `env.meta_migration_settings_ignored`, shown in diagnostics — and the build preflight refuses to deploy it. |
 | Evidence | `GET /api/admin/takeover-diagnostics` → `migration` (flags, `nextTokens` = Meta's own check of the stored new token: valid, `appIdMatches`, `pageMatches`, `hasRequiredScopes`, expiry) and `echoMatrix` (what each app id actually sent). |
@@ -52,8 +52,43 @@ So the inbox app id covers people AND automations: it is only a candidate, never
 (Business Suite on a computer) consultant reply had been seen yet; it is `source:web` from the same
 app, told from an automation by timing, exactly as the thread check has done since 2026-10-30.
 
-No other variable is needed. The second page (596733917653582) has no NEXT entry and stays on the
-old app. Vercel applies a variable only to NEW deployments: after every change, Deployments →
+**14-day study (300 real threads, 2026-10-31).** 1,261 consultant messages were from the phone app; none
+from a computer. Every Page message the old rules read as a desktop consultant was Meta's own: a
+returning customer's welcome burst, "Lead stage set to …" (50 conversations), a comment private-reply
+notice, a personalised automated reply 21 s after the customer. A `source:web` message now counts as a
+consultant only if it is none of: within 20 s of the customer's message; within 5 s of a Meta
+automation/notice; a Meta notice; the conversation's opener; a verbatim repeat of an earlier Page
+message; 40+ characters arriving faster than 6 a second since the customer wrote. The bot's own reply
+opens no window (9% of real take-overs come within 20 s of it). Replayed on the same threads: 0
+desktop false positives (was 4), phone detection unchanged. **Known gap:** a desktop consultant's
+FIRST reply within 20 s of the customer's message still reads as an automation (`test.todo` in
+`tests/human-takeover-journeys.test.ts`, live desktop test pending).
+
+### uudam-v2's page webhook — REMOVED 2026-10-31 11:40 UTC (duplicates), backup below
+
+Since the original app holds `message_echoes` (09:35 → 11:40 UTC: every customer message was delivered by
+both apps; every echo too, minus rows lost to database connection timeouts), uudam-v2's app-level
+`page` webhook subscription was deleted to stop the duplicate deliveries. The app, its secret, its page
+token and every `*_NEXT` Vercel variable are untouched; `META_NEXT_SEND` stays `off`. The deleted
+configuration, to restore it (Stage 1–2 of a future cutover):
+
+```
+POST https://graph.facebook.com/v25.0/2959934047708039/subscriptions
+  object=page
+  callback_url=https://uudam-chatbot.vercel.app/api/webhook
+  fields=message_echoes,messages,messaging_postbacks,messaging_referrals   (versions were v26.0)
+  verify_token=<VERIFY_TOKEN or VERIFY_TOKEN_NEXT — either is accepted by the webhook handshake>
+  access_token=2959934047708039|<uudam-v2 App secret>
+```
+
+Then confirm with `GET /2959934047708039/subscriptions` and, after the next customer message, that
+`webhook.inbound_received` shows `deliveredBy: next` again.
+
+No other variable is needed. The second page (596733917653582, "Uudam travel - AI") has no NEXT entry.
+As of 2026-10-31 it is not in use: no customer message since receipts began (2026-10-30), no echo, its
+last customer document 2026-07-09; its token lost every page permission and Meta no longer shows the
+page to the app. It stays in `FACEBOOK_PAGES` unchanged (harmless); renew it only if the page is
+brought back. Vercel applies a variable only to NEW deployments: after every change, Deployments →
 latest Production → ⋯ → Redeploy. A bad value fails that build; the live deployment keeps serving.
 
 ## Stages (each one only after the previous is verified)

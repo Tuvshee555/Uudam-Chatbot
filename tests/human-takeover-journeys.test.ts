@@ -203,10 +203,106 @@ test("human takeover journeys", async (context) => {
       assert.equal(again.sends.length, 0, "no bot message over the consultant");
       assert.ok(again.history.some((row) => row.role === "user" && row.text === "Хүнтэй холбогдох"));
     });
+
+    // 14-day study of 300 real threads (2026-10-31): every Page message read as a consultant on a
+    // computer was Meta's own — a returning customer's welcome burst, inbox notices, a personalised
+    // automated reply 21 s after the customer. None of these may silence a customer.
+    await context.test("11. Meta's welcome burst for a returning customer — no customer message near it — is not a consultant", async () => {
+      tick(MIN);
+      await fb("returning", "Норвел хотын аялал үнэ");
+      harness.thread("returning", { messages: [
+        { from: "customer", text: "Норвел хотын аялал үнэ", agoMs: 18 * MIN },
+        { from: "page", text: "Бат Болд replied to your automated welcome message.", agoMs: 3_000, source: "web", id: "m_ret_notice" },
+        { from: "page", text: "Hi Бат! Please let us know how we can help you.", agoMs: 2_000, source: "web", id: "m_ret_greet" },
+        { from: "page", text: "", agoMs: 1_000, source: "web", id: "m_ret_card" },
+      ] });
+      await harness.echoTurn("returning", { appId: INBOX, mid: "m_ret_greet", text: "Hi Бат! Please let us know how we can help you." });
+      assert.equal(harness.echoes().at(-1)?.verdict, "automation", "a greeting a second after Meta's own notice");
+      await harness.echoTurn("returning", { appId: INBOX, mid: "m_ret_card", attachments: [{ type: "template" }] });
+      assert.equal(harness.echoes().at(-1)?.verdict, "automation", "the burst's card too");
+      assert.equal(harness.pauseState("returning"), null);
+    });
+
+    await context.test("12. Meta's inbox notices (lead stage, comment private reply) are not consultants", async () => {
+      tick(MIN);
+      await fb("noticed", "Норвел хотын аялал үнэ");
+      harness.thread("noticed", { messages: [
+        { from: "customer", text: "Норвел хотын аялал үнэ", agoMs: 3 * MIN },
+        { from: "page", text: "Lead stage set to Qualified", agoMs: 2 * MIN, source: "web", id: "m_lead_stage" },
+        { from: "page", text: "You are responding to a user comment to a post on your Page.", agoMs: MIN, source: "web", id: "m_comment_notice" },
+      ] });
+      const next = await fb("noticed", "Хүүхдийн үнэ хэд вэ?");
+      assert.equal(next.sends.length, 1, "no consultant wrote: the customer is answered");
+      assert.equal(harness.pauseState("noticed"), null);
+    });
+
+    await context.test("13. a long automated reply arriving faster than anyone types is not a consultant", async () => {
+      tick(MIN);
+      await fb("typed-fast", "Норвел хотын аялал үнэ");
+      const text = "Сайн байна уу Бат! Та сонирхож байгаа аяллынхаа нэрийг бичээд үлдээгээрэй. Манай зөвлөх тантай удахгүй "
+        + "холбогдох болно. Бүх аяллын хуваарийг манай вэбсайтаас харах боломжтой. Баярлалаа, сайхан өдөр!";
+      assert.ok(text.length / 21 > 6, "fixture: faster than 6 characters a second");
+      harness.thread("typed-fast", { messages: [
+        { from: "customer", text: "Норвел хотын аялал үнэ", agoMs: 21_000 },
+        { from: "page", text, agoMs: 0, source: "web", id: "m_typed_fast" },
+      ] });
+      await harness.echoTurn("typed-fast", { appId: INBOX, mid: "m_typed_fast", text });
+      assert.equal(harness.echoes().at(-1)?.verdict, "automation");
+      assert.equal(harness.pauseState("typed-fast"), null);
+    });
+
+    await context.test("14. a consultant on a computer answering soon after the BOT's reply is recognised", async () => {
+      // 22 s after the customer, 14 s after the bot: the bot's own reply opens no automation window
+      // (9% of real consultant take-overs come within 20 s of the bot's reply).
+      tick(MIN);
+      await fb("desk-fast", "Норвел хотын аялал үнэ");
+      harness.thread("desk-fast", { messages: [
+        { from: "customer", text: "Норвел хотын аялал үнэ", agoMs: 36_000 },
+        { from: "page", text: "НОРВЕЛ ХОТЫН АЯЛАЛ", agoMs: 28_000, source: "web", id: harness.botMids().at(-1) },
+        { from: "page", text: "Болд байна, хэдүүлээ явах вэ?", agoMs: 14_000, source: "web", id: "m_desk_fast" },
+      ] });
+      await harness.echoTurn("desk-fast", { appId: INBOX, mid: "m_desk_fast", text: "Болд байна, хэдүүлээ явах вэ?" });
+      assert.equal(harness.echoes().at(-1)?.verdict, "human");
+      assert.equal(harness.pauseState("desk-fast")?.pause_reason, "operator_reply");
+      assert.equal(harness.takeoverSource("desk-fast"), "staff_web");
+    });
+
+    // Owner, 2026-10-31: a consultant's conversation never returns to the bot by itself.
+    await context.test("15. a consultant's conversation stays with staff after three days, until «Ботод буцаах»", async () => {
+      tick(MIN);
+      await fb("owned", "Норвел хотын аялал үнэ");
+      harness.thread("owned", { messages: [
+        { from: "customer", text: "Норвел хотын аялал үнэ", agoMs: 5 * MIN },
+        { from: "page", text: "Сайн байна уу, Номин байна", agoMs: 0, source: "mobile", id: "m_owned_1" },
+      ] });
+      await harness.echoTurn("owned", { appId: INBOX, mid: "m_owned_1", text: "Сайн байна уу, Номин байна" });
+      const { UNTIL_RELEASED_AT } = await import("../src/lib/travelSessionDb");
+      assert.equal(harness.pauseState("owned")?.expires_at, UNTIL_RELEASED_AT, "no end date");
+      tick(4 * 86_400_000);
+      const later = await fb("owned", "Норвел аялал хэзээ гарах вэ?");
+      assert.equal(later.sends.length, 0, "four days later the consultant still has the conversation");
+      harness.resume("owned"); // staff press «Ботод буцаах»
+      tick(MIN);
+      harness.thread("owned", { messages: [
+        { from: "customer", text: "Норвел хотын аялал үнэ", agoMs: 4 * 86_400_000 + 6 * MIN },
+        { from: "page", text: "Сайн байна уу, Номин байна", agoMs: 4 * 86_400_000 + MIN, source: "mobile", id: "m_owned_1" },
+        { from: "customer", text: "Норвел аялал хэзээ гарах вэ?", agoMs: 2 * MIN },
+      ] });
+      const back = await fb("owned", "Норвел аяллын хүүхдийн үнэ хэд вэ?");
+      assert.equal(back.sends.length, 1, "«Ботод буцаах» hands the customer back to the bot");
+    });
   } finally {
     await harness.close();
   }
 });
+
+// Known gap (docs/chatbot-followups.md): Meta tags a consultant on a computer and Meta's own
+// automations alike (`source:web`, the inbox app id); timing is what tells them apart. A desktop
+// consultant's FIRST reply within 20 s of the customer's message is read as an automation, so the
+// bot can answer the customer's next message once — until that consultant's next message, or the
+// thread check, takes over. Phone replies are never affected. Not yet seen in production (no
+// desktop consultant in 14 days of threads); to be measured in the live desktop test.
+test.todo("a desktop consultant's first reply within 20 s of the customer's message takes the conversation over");
 
 test("takeover guard: only a person's pause blocks the bot's send; staff alerts always go", async (context) => {
   const harness = await conversationGateHarness(context);

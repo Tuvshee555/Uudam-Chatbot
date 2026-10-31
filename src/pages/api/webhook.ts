@@ -46,7 +46,7 @@ import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/c
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { buildContactReply, contactSettingsOf, isAddressRequest, isPhoneRequest, isRepeatOfLastReply } from "../../lib/contactReplies";
-import { detectStaffTakeover, fetchThreadMessages, markStaffReply, STAFF_TAKEOVER_MS, takeoverRisk, type TakeoverCheck } from "../../lib/staffTakeover";
+import { detectStaffTakeover, fetchThreadMessages, markStaffReply, takeoverRisk, type TakeoverCheck } from "../../lib/staffTakeover";
 import { isStaffTakeoverSendBlocked } from "../../lib/takeoverGuard";
 import { classifyEcho, echoEnforcementEnabled, recordEchoEvent, verifyHumanEcho, type EchoVerdict } from "../../lib/echoObserver";
 import { AI_OUTAGE_HANDOFF_REPLY, BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
@@ -338,8 +338,8 @@ async function handleMessageTurn(
     if (takeover.status === "checked" && takeover.staff) {
       const staffAt = takeover.staff.at;
       if (!attachmentReply) await appendMessage(senderId, "user", text);
-      const remainingMs = staffAt.getTime() + STAFF_TAKEOVER_MS - Date.now();
-      await pauseBot(senderId, remainingMs, "operator_reply").catch(() => {});
+      // The consultant owns the conversation until «Ботод буцаах» (no duration: travelSessionDb.ts).
+      await pauseBot(senderId, undefined, "operator_reply").catch(() => {});
       await markStaffReply(senderId, staffAt, takeover.staff.origin).catch(() => {});
       if (!attachmentReply && !isThanksOnly(text)) await recordPausedFollowup();
       noteInbound((outcome) => { outcome.silent = "staff_takeover"; });
@@ -2616,13 +2616,12 @@ export default async function handler(
                   }
                   continue;
                 }
-                // A consultant replied: the bot stays out of this conversation from now on
-                // (until "Ботод буцаах" or the takeover window ends), and any reply the bot is
-                // still composing is stopped at send time (takeoverGuard.ts).
-                const remainingMs = proven.at.getTime() + STAFF_TAKEOVER_MS - Date.now();
+                // A consultant replied: the bot stays out of this conversation until staff press
+                // «Ботод буцаах» (no duration: travelSessionDb.ts), and any reply the bot is still
+                // composing is stopped at send time (takeoverGuard.ts).
                 // A failed pause write must be visible, or the bot keeps answering a customer
                 // staff already took over with no error anywhere.
-                if (remainingMs > 0) await dbPauseSender(customerId, remainingMs, "operator_reply").catch((error) => {
+                await dbPauseSender(customerId, undefined, "operator_reply").catch((error) => {
                   logWarn("webhook.operator_echo_pause_failed", {
                     requestId: trace.requestId,
                     customerHash: hashIdentifier(customerId),
