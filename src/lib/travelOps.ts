@@ -46,7 +46,7 @@ export {
   dbTrackSender,
   createBroadcastRecord,
   createLead,
-  deleteAllTrips,
+  archiveTrips,
   deleteTrip,
   ensureTravelSchema,
   finalizeBroadcast,

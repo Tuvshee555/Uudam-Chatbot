@@ -1326,13 +1326,23 @@ export async function deleteTrip(id: string): Promise<boolean> {
   return Boolean(await patchTrip(id, { status: "archived", extra: { customer_visible: false } }));
 }
 
-export async function deleteAllTrips(): Promise<number> {
-  const ready = await ensureTravelSchema();
-  if (!ready) return 0;
-  const trips = await queryNeon<{ id: string }>("SELECT id FROM travel_trip_entries");
-  let deleted = 0;
-  for (const trip of trips?.rows || []) if (await deleteTrip(trip.id)) deleted++;
-  return deleted;
+/**
+ * Archives exactly the trips named, never "everything": the admin sends the ids
+ * it listed to the user. (An unscoped archive-all once sat behind a dialog that
+ * quoted the filtered count, so confirming "5 trips" hid the whole catalogue.)
+ */
+export async function archiveTrips(ids: readonly string[]): Promise<{ archived: string[]; failed: string[] }> {
+  const archived: string[] = [];
+  const failed: string[] = [];
+  for (const id of ids) {
+    try {
+      if (await deleteTrip(id)) archived.push(id);
+      else failed.push(id);
+    } catch {
+      failed.push(id);
+    }
+  }
+  return { archived, failed };
 }
 
 export async function resolveTripIdByMatch(match?: {

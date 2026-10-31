@@ -2,7 +2,85 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
 import { listTrips, upsertTrip, patchTrip } from "../../../lib/travelOps";
 import { beginRequestTrace, finishRequestTrace, logError } from "../../../lib/observability";
-import type { TripMutationFields } from "../../../lib/travelTypes";
+import type { TripMutationFields, TripStatus } from "../../../lib/travelTypes";
+import { TripDataValidationError } from "../../../lib/tripDataValidation";
+import {
+  JSON_EDITOR_EXTRA_FIELDS as EXTRA_FIELDS,
+  JSON_EDITOR_NUMBER_FIELDS as MONEY_FIELDS,
+  JSON_EDITOR_TEXT_FIELDS as TEXT_FIELDS,
+} from "../../../lib/jsonEditorPlan";
+
+const TRIP_STATUSES: readonly TripStatus[] = ["active", "paused", "cancelled", "sold_out", "draft", "archived"];
+
+export type BulkTripResult = { id: string; route_name: string; ok: boolean; created?: boolean; conflict?: boolean; error?: string };
+
+/** A whole number, a numeric string ("1 250 000", "1,250,000") or null; anything else is a typing mistake. */
+function wholeNumberOrNull(value: unknown, field: string): number | null {
+  if (value === null) return null;
+  if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
+  if (typeof value === "string") {
+    const digits = value.replace(/[\s,₮]/g, "");
+    if (digits === "") return null;
+    if (/^\d+$/.test(digits)) return Number(digits);
+  }
+  throw new Error(`${field}: тоо эсвэл null байх ёстой`);
+}
+
+/**
+ * Turns one pasted trip into a patch. Only keys present in the object are written:
+ * a field ChatGPT dropped stays as it is in the catalogue instead of being cleared
+ * (an absent departure_dates used to empty the schedule and auto-archive the trip).
+ * An explicit null still clears a value.
+ */
+export function bulkTripFields(trip: Record<string, unknown>, isNew: boolean): TripMutationFields {
+  const has = (key: string) => Object.prototype.hasOwnProperty.call(trip, key);
+  const fields: TripMutationFields = {};
+  if (has("route_name")) {
+    if (typeof trip.route_name !== "string" || !trip.route_name.trim()) throw new Error("route_name хоосон байна");
+    fields.route_name = trip.route_name.trim();
+  }
+  for (const key of TEXT_FIELDS) {
+    if (!has(key)) continue;
+    if (typeof trip[key] !== "string") throw new Error(`${key}: текст байх ёстой`);
+    fields[key] = trip[key] as string;
+  }
+  for (const key of MONEY_FIELDS) {
+    if (has(key)) fields[key] = wholeNumberOrNull(trip[key], key);
+  }
+  if (has("departure_dates")) {
+    const dates = trip.departure_dates;
+    if (!Array.isArray(dates) || dates.some((date) => typeof date !== "string")) {
+      throw new Error("departure_dates: текстэн огнооны жагсаалт байх ёстой");
+    }
+    fields.departure_dates = dates as string[];
+  }
+  if (has("has_food")) {
+    if (trip.has_food !== null && typeof trip.has_food !== "boolean") throw new Error("has_food: true, false эсвэл null");
+    fields.has_food = trip.has_food as boolean | null;
+  }
+  if (has("status")) {
+    if (!TRIP_STATUSES.includes(trip.status as TripStatus)) throw new Error(`status: «${String(trip.status)}» гэсэн төлөв байхгүй`);
+    fields.status = trip.status as TripStatus;
+  }
+  const extra: Record<string, unknown> = {};
+  for (const key of EXTRA_FIELDS) if (has(key)) extra[key] = trip[key];
+  if (has("customer_visible") && typeof trip.customer_visible !== "boolean") throw new Error("customer_visible: true эсвэл false");
+  if (Object.keys(extra).length) fields.extra = extra;
+  if (isNew) {
+    if (!fields.route_name) throw new Error("Шинэ аялалд route_name заавал хэрэгтэй");
+    fields.status ??= "draft";
+    fields.currency ??= "MNT";
+  }
+  return fields;
+}
+
+function errorText(error: unknown): string {
+  if (error instanceof Error && error.message === "trip_edit_conflict") {
+    return "Таныг ачаалснаас хойш энэ аяллыг өөр газраас өөрчилсөн тул хадгалсангүй. «Дахин татах» дараад засна уу.";
+  }
+  if (error instanceof TripDataValidationError) return error.message;
+  return error instanceof Error ? error.message : String(error);
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const trace = beginRequestTrace({
@@ -17,10 +95,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const allowed = await requireAdminAccess(req, res, "api.admin.trips-bulk");
     if (!allowed) return;
 
-    // GET — export all trips as JSON
+    // GET — export all non-archived trips as JSON, plus each one's saved version
+    // (kept outside the trip objects so ChatGPT never sees or rewrites it).
     if (req.method === "GET") {
       const trips = await listTrips({ limit: 5000 });
-      // Return a clean shape: all base fields + structured extra fields inlined
       const exported = trips.map((t) => {
         const extra = (t.extra || {}) as Record<string, unknown>;
         return {
@@ -31,6 +109,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           duration_text: t.duration_text,
           adult_price: t.adult_price,
           child_price: t.child_price,
+          infant_price: t.infant_price,
           currency: t.currency,
           departure_dates: t.departure_dates,
           seats_total: t.seats_total,
@@ -59,92 +138,57 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           review_reasons: Array.isArray(extra.review_reasons) ? extra.review_reasons : [],
         };
       });
-      return res.status(200).json({ trips: exported });
+      const versions = Object.fromEntries(trips.map((t) => [t.id, t.updated_at]));
+      return res.status(200).json({ trips: exported, versions });
     }
 
-    // POST — bulk upsert: accepts array of trip objects, upserts each by id or route_name
+    // POST — { trips: [...], versions?: { [id]: updated_at } }. A trip with an id is
+    // patched (only the keys it carries); one without an id is created as a draft.
     if (req.method === "POST") {
       const body = req.body as unknown;
       if (!body || typeof body !== "object" || !Array.isArray((body as Record<string, unknown>).trips)) {
         return res.status(400).json({ error: "Expected { trips: [...] }" });
       }
       const incoming = (body as { trips: unknown[] }).trips;
-      const results: { id: string; route_name: string; ok: boolean; error?: string }[] = [];
+      const rawVersions = (body as { versions?: unknown }).versions;
+      const versions = rawVersions && typeof rawVersions === "object" ? rawVersions as Record<string, unknown> : {};
+      const results: BulkTripResult[] = [];
 
       for (const raw of incoming) {
-        if (!raw || typeof raw !== "object") continue;
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+          results.push({ id: "", route_name: "", ok: false, error: "Аялал бүр { } объект байх ёстой" });
+          continue;
+        }
         const trip = raw as Record<string, unknown>;
         const routeName = typeof trip.route_name === "string" ? trip.route_name.trim() : "";
-        if (!routeName) continue;
-
-        // Build extra from inlined structured fields — normalizeExtra (called
-        // inside upsertTrip/patchTrip) will canonicalise keys and regenerate date_keys.
-        const extra: Record<string, unknown> = {
-          aliases: trip.aliases,
-          price_groups: trip.price_groups,
-          discounts: trip.discounts,
-          departure_date_groups: trip.departure_date_groups,
-          child_rules: trip.child_rules,
-          extra_fees: trip.extra_fees,
-          departure_rule: trip.departure_rule,
-          included_items: trip.included_items,
-          excluded_items: trip.excluded_items,
-          room_prices: trip.room_prices,
-          important_notes: trip.important_notes,
-          brochure_pdf_url: trip.brochure_pdf_url,
-          customer_visible: trip.customer_visible,
-          source_provenance: trip.source_provenance,
-          answer_hints: trip.answer_hints,
-          needs_human_review: trip.needs_human_review,
-          review_reasons: trip.review_reasons,
-        };
-
-        const fields: TripMutationFields = {
-          route_name: routeName,
-          operator_name: typeof trip.operator_name === "string" ? trip.operator_name : undefined,
-          category: typeof trip.category === "string" ? trip.category : undefined,
-          duration_text: typeof trip.duration_text === "string" ? trip.duration_text : undefined,
-          adult_price: typeof trip.adult_price === "number" ? trip.adult_price : null,
-          child_price: typeof trip.child_price === "number" ? trip.child_price : null,
-          currency: typeof trip.currency === "string" ? trip.currency : "MNT",
-          departure_dates: Array.isArray(trip.departure_dates)
-            ? (trip.departure_dates as unknown[]).filter((d) => typeof d === "string") as string[]
-            : [],
-          seats_total: typeof trip.seats_total === "number" ? trip.seats_total : null,
-          seats_left: typeof trip.seats_left === "number" ? trip.seats_left : null,
-          has_food: typeof trip.has_food === "boolean" ? trip.has_food : null,
-          status: (["active", "paused", "cancelled", "sold_out", "draft", "archived"].includes(String(trip.status))
-            ? trip.status
-            : "active") as "active" | "paused" | "cancelled" | "sold_out" | "draft" | "archived",
-          hotel: typeof trip.hotel === "string" ? trip.hotel : "",
-          notes: typeof trip.notes === "string" ? trip.notes : "",
-          source_description: typeof trip.source_description === "string" ? trip.source_description : "",
-          extra,
-        };
-
+        const existingId = typeof trip.id === "string" && trip.id.trim() ? trip.id.trim() : undefined;
         try {
-          const existingId = typeof trip.id === "string" && trip.id.trim() ? trip.id.trim() : undefined;
+          const fields = bulkTripFields(trip, !existingId);
           if (existingId) {
-            // Patch existing trip by ID (merges extra via JSONB ||)
-            await patchTrip(existingId, fields);
-            results.push({ id: existingId, route_name: routeName, ok: true });
+            const expected = typeof versions[existingId] === "string" ? versions[existingId] as string : undefined;
+            const saved = await patchTrip(existingId, fields, true, undefined, expected);
+            if (!saved) throw new Error("Ийм id-тай аялал олдсонгүй");
+            results.push({ id: existingId, route_name: saved.route_name || routeName, ok: true });
           } else {
-            // Insert new
             const saved = await upsertTrip({ fields });
-            results.push({ id: saved?.id ?? "", route_name: routeName, ok: true });
+            if (!saved) throw new Error("Хадгалж чадсангүй");
+            results.push({ id: saved.id, route_name: saved.route_name || routeName, ok: true, created: true });
           }
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          logError("trips-bulk.upsert_failed", { routeName, error: msg });
-          results.push({ id: "", route_name: routeName, ok: false, error: msg });
+          const conflict = err instanceof Error && err.message === "trip_edit_conflict";
+          const msg = errorText(err);
+          if (!conflict) logError("trips-bulk.upsert_failed", { routeName, error: msg });
+          results.push({ id: existingId || "", route_name: routeName, ok: false, conflict, error: msg });
         }
       }
 
       const failed = results.filter((r) => !r.ok);
       return res.status(200).json({
-        saved: results.filter((r) => r.ok).length,
+        saved: results.length - failed.length,
+        created: results.filter((r) => r.created).length,
         failed: failed.length,
-        errors: failed.map((r) => `${r.route_name}: ${r.error}`),
+        results,
+        errors: failed.map((r) => `${r.route_name || r.id || "—"}: ${r.error}`),
       });
     }
 

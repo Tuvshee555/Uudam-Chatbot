@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminAccess } from "../../../lib/adminAccess";
 import {
-  deleteAllTrips,
+  archiveTrips,
   deleteTrip,
   getBotControl,
   listTrips,
@@ -21,6 +21,8 @@ import { auditTripCatalog, auditTripFacts, TripDataValidationError } from "../..
 function asText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
+
+const MAX_BULK_ARCHIVE = 300;
 
 /**
  * How many photos each trip's poster holds. The gallery lives on the poster, so
@@ -160,8 +162,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (req.method === "DELETE") {
       if (req.query.all === "true") {
-        const count = await deleteAllTrips();
-        return res.status(200).json({ ok: true, deleted: count });
+        // An unscoped archive hid the whole live catalogue; callers name the trips instead.
+        return res.status(400).json({ error: "archive_all_removed", message: "Архивлах аяллуудын жагсаалтыг (ids) илгээнэ үү." });
+      }
+      const rawIds = (req.body || {}).ids;
+      if (Array.isArray(rawIds)) {
+        const ids = [...new Set(rawIds.filter((value): value is string => typeof value === "string").map(value => value.trim()).filter(Boolean))];
+        if (!ids.length || ids.length !== rawIds.length) return res.status(400).json({ error: "ids must be a non-empty list of distinct trip ids" });
+        if (ids.length > MAX_BULK_ARCHIVE) return res.status(400).json({ error: `at most ${MAX_BULK_ARCHIVE} trips per request` });
+        const result = await archiveTrips(ids);
+        return res.status(result.failed.length ? 207 : 200).json({ ok: result.failed.length === 0, ...result });
       }
       const id = asText(req.query.id) || asText((req.body || {}).id);
       if (!id) return res.status(400).json({ error: "id is required" });

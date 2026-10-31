@@ -9,6 +9,9 @@ import { blockingGaps, findTripGaps, tripCompletenessInput, type TripGap } from 
 import { WebsiteSyncStatus } from "./WebsiteSyncStatus";
 import { publishedTripWebsiteLink } from "@/lib/bookingWebsite";
 
+/** Typed to confirm a bulk archive, so it cannot happen from one stray click. */
+const ARCHIVE_CONFIRM_WORD = "архивлах";
+
 export function TripsTab({
   apiFetch,
   trips,
@@ -21,8 +24,9 @@ export function TripsTab({
   onCreate,
   onEdit,
   onDelete,
-  onDeleteAll,
+  onArchiveMany,
   onToggleVisible,
+  visibilityBusyId,
   onFetchAllTrips,
   businessName,
   onFixPhotosOnPoster,
@@ -39,8 +43,11 @@ export function TripsTab({
   onCreate: () => void;
   onEdit: (trip: TravelTrip) => void;
   onDelete: (trip: TravelTrip) => void;
-  onDeleteAll: () => void;
+  /** Archives exactly these trips; resolves true when every one was archived. */
+  onArchiveMany: (ids: string[]) => Promise<boolean>;
   onToggleVisible: (trip: TravelTrip) => void;
+  /** The trip whose hide/show request is in flight, so its button cannot fire twice. */
+  visibilityBusyId?: string;
   /** Loads every trip, ignoring the on-screen search/status filter. */
   onFetchAllTrips: () => Promise<TravelTrip[]>;
   /** Agency name for the brochure cover, from bot settings. */
@@ -50,7 +57,9 @@ export function TripsTab({
   /** Jumps to the AI туслах tab with this trip named in the instruction box. */
   onAskAi: (tripName: string) => void;
 }) {
-  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
+  const [confirmArchive, setConfirmArchive] = useState(false);
+  const [archiveConfirmText, setArchiveConfirmText] = useState("");
+  const [archiving, setArchiving] = useState(false);
   const [brochureFilter, setBrochureFilter] = useState<"all" | "with" | "without">("all");
   const [pdfProgress, setPdfProgress] = useState("");
   const toast = useToast();
@@ -67,6 +76,27 @@ export function TripsTab({
     brochureFilter === "without" ? tripsWithoutProgram :
     brochureFilter === "with" ? tripsWithProgram :
     trips;
+  // The bulk archive acts on what is listed on screen (search, status and programme
+  // filters applied), never on the whole catalogue.
+  const archivableTrips = visibleTrips.filter((trip) => trip.status !== "archived");
+  const archiveWordMatches = archiveConfirmText.trim().toLowerCase() === ARCHIVE_CONFIRM_WORD;
+
+  function closeArchiveDialog() {
+    if (archiving) return;
+    setConfirmArchive(false);
+    setArchiveConfirmText("");
+  }
+
+  async function archiveListedTrips() {
+    if (!archiveWordMatches || archivableTrips.length === 0 || archiving) return;
+    setArchiving(true);
+    const done = await onArchiveMany(archivableTrips.map((trip) => trip.id));
+    setArchiving(false);
+    if (done) {
+      setConfirmArchive(false);
+      setArchiveConfirmText("");
+    }
+  }
 
   /**
    * The brochure staff send a customer who asks to see the trips. Always pulls
@@ -103,7 +133,7 @@ export function TripsTab({
   }
 
   function handleExportJson() {
-    const data = trips.map((t) => ({
+    const data = visibleTrips.map((t) => ({
       id: t.id,
       operator_name: t.operator_name,
       route_name: t.route_name,
@@ -111,6 +141,7 @@ export function TripsTab({
       duration_text: t.duration_text,
       adult_price: t.adult_price,
       child_price: t.child_price,
+      infant_price: t.infant_price,
       currency: t.currency,
       departure_dates: t.departure_dates,
       seats_total: t.seats_total,
@@ -129,16 +160,16 @@ export function TripsTab({
     a.download = `uudam-trips-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    toast.success(`${data.length} аялал татаж авлаа`);
+    toast.success(`${data.length} аялал JSON татаж авлаа`);
   }
 
   function handleExportCsv() {
     const headers = [
       "id","operator_name","route_name","category","duration_text",
-      "adult_price","child_price","currency","departure_dates",
+      "adult_price","child_price","infant_price","currency","departure_dates",
       "seats_total","seats_left","has_food","status","hotel","notes","updated_at",
     ];
-    const rows = trips.map((t) => [
+    const rows = visibleTrips.map((t) => [
       t.id,
       t.operator_name,
       t.route_name,
@@ -146,6 +177,7 @@ export function TripsTab({
       t.duration_text,
       t.adult_price ?? "",
       t.child_price ?? "",
+      t.infant_price ?? "",
       t.currency,
       t.departure_dates.join("; "),
       t.seats_total ?? "",
@@ -164,50 +196,59 @@ export function TripsTab({
     a.download = `uudam-trips-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    toast.success(`${trips.length} аялал CSV татаж авлаа`);
+    toast.success(`${visibleTrips.length} аялал CSV татаж авлаа`);
   }
 
   return (
     <div className="space-y-3">
-      {/* Archiving retains linked records and history. */}
+      {/* Archiving retains linked records and history, but takes the trips off the
+          website and out of the bot's answers at once. */}
       <Modal
-        open={confirmDeleteAll}
-        onClose={() => setConfirmDeleteAll(false)}
-        title="Бүх аяллыг архивлах уу?"
+        open={confirmArchive}
+        onClose={closeArchiveDialog}
+        title={`Жагсаалтад буй ${archivableTrips.length} аяллыг архивлах уу?`}
+        description="Архивласан аялал сайт болон ботод харагдахгүй болно. Мэдээлэл, захиалга, түүх хадгалагдана."
       >
         <div className="space-y-4">
-          <p className="text-sm text-ink-muted">
-            Одоо байгаа <span className="font-semibold text-ink">{trips.length} аялал</span> бүгдийг нийтэд харагдахгүй болгоно. Аяллын мэдээлэл, захиалга болон түүх хадгалагдана.
-          </p>
-          <p className="text-sm text-ink-muted">
-            Доорх товчоор одоогийн мэдээллийг татаж авч болно.
-          </p>
+          <ul className="max-h-48 space-y-0.5 overflow-y-auto rounded-lg border border-line bg-surface-sunken px-3 py-2 text-sm text-ink">
+            {archivableTrips.map((trip) => (
+              <li key={trip.id} className="truncate">{trip.route_name || "—"}</li>
+            ))}
+          </ul>
           {/* Backups only. The PDF brochure is deliberately NOT offered here —
-              it drops hidden/inactive trips and every internal field, so it
-              would be a lossy backup of what is about to be deleted. */}
-          <div className="flex flex-wrap gap-2">
+              it drops hidden/inactive trips and every internal field. */}
+          <div className="flex flex-wrap items-center gap-2 text-sm text-ink-muted">
+            <span>Нөөц хуулбар:</span>
             <Button variant="secondary" size="sm" onClick={handleExportJson}>
               <Icons.download size={15} />
-              JSON татах
+              JSON
             </Button>
             <Button variant="secondary" size="sm" onClick={handleExportCsv}>
               <Icons.download size={15} />
-              CSV татах
+              CSV
             </Button>
           </div>
+          <label className="block text-sm text-ink">
+            Баталгаажуулахын тулд <span className="font-semibold">«{ARCHIVE_CONFIRM_WORD}»</span> гэж бичнэ үү
+            <input
+              value={archiveConfirmText}
+              onChange={(event) => setArchiveConfirmText(event.target.value)}
+              autoComplete="off"
+              className="mt-1.5 h-10 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-ink focus:border-brand"
+            />
+          </label>
           <div className="flex justify-end gap-2 border-t border-line pt-3">
-            <Button variant="secondary" onClick={() => setConfirmDeleteAll(false)}>
+            <Button variant="secondary" onClick={closeArchiveDialog} disabled={archiving}>
               Болих
             </Button>
             <Button
               variant="danger"
-              onClick={() => {
-                setConfirmDeleteAll(false);
-                onDeleteAll();
-              }}
+              loading={archiving}
+              disabled={!archiveWordMatches || archivableTrips.length === 0 || archiving}
+              onClick={() => void archiveListedTrips()}
             >
               <Icons.trash size={15} />
-              Бүгдийг архивлах
+              {archivableTrips.length} аялал архивлах
             </Button>
           </div>
         </div>
@@ -303,7 +344,7 @@ export function TripsTab({
           {/* JSON/CSV export the filtered list on screen. The full-catalogue PDF
               lives in the header instead, so the two are not mistaken for
               variants of the same export. */}
-          {trips.length > 0 && (
+          {visibleTrips.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 border-t border-line pt-2">
               <button
                 type="button"
@@ -321,14 +362,16 @@ export function TripsTab({
                 <Icons.download size={13} />
                 CSV
               </button>
-              <button
-                type="button"
-                onClick={() => setConfirmDeleteAll(true)}
-                className="ml-auto flex items-center gap-1.5 rounded-md border border-danger/30 bg-surface px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/5"
-              >
-                <Icons.trash size={13} />
-                Бүгдийг архивлах
-              </button>
+              {archivableTrips.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmArchive(true)}
+                  className="ml-auto flex items-center gap-1.5 rounded-md border border-danger/30 bg-surface px-3 py-1.5 text-xs font-medium text-danger hover:bg-danger/5"
+                >
+                  <Icons.trash size={13} />
+                  Жагсаалтыг архивлах ({archivableTrips.length})
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -364,6 +407,7 @@ export function TripsTab({
           onEdit={onEdit}
           onDelete={onDelete}
           onToggleVisible={onToggleVisible}
+          visibilityBusyId={visibilityBusyId}
           onFixPhotosOnPoster={onFixPhotosOnPoster}
           onAskAi={onAskAi}
         />
@@ -606,6 +650,7 @@ export function TripGroups({
   onEdit: (trip: TravelTrip) => void;
   onDelete: (trip: TravelTrip) => void;
   onToggleVisible: (trip: TravelTrip) => void;
+  visibilityBusyId?: string;
   onFixPhotosOnPoster: (posterId: string) => void;
   onAskAi: (tripName: string) => void;
 }) {
@@ -686,6 +731,7 @@ function CategoryGroups({
   onEdit,
   onDelete,
   onToggleVisible,
+  visibilityBusyId,
   onFixPhotosOnPoster,
   onAskAi,
 }: {
@@ -693,6 +739,7 @@ function CategoryGroups({
   onEdit: (trip: TravelTrip) => void;
   onDelete: (trip: TravelTrip) => void;
   onToggleVisible: (trip: TravelTrip) => void;
+  visibilityBusyId?: string;
   onFixPhotosOnPoster: (posterId: string) => void;
   onAskAi: (tripName: string) => void;
 }) {
@@ -759,6 +806,7 @@ function CategoryGroups({
                     onEdit={() => onEdit(trip)}
                     onDelete={() => onDelete(trip)}
                     onToggleVisible={() => onToggleVisible(trip)}
+                    visibilityBusy={visibilityBusyId === trip.id}
                     onFixPhotosOnPoster={onFixPhotosOnPoster}
                     onAskAi={() => onAskAi(trip.route_name)}
                   />
@@ -777,6 +825,7 @@ function TripCard({
   onEdit,
   onDelete,
   onToggleVisible,
+  visibilityBusy,
   onFixPhotosOnPoster,
   onAskAi,
 }: {
@@ -784,6 +833,7 @@ function TripCard({
   onEdit: () => void;
   onDelete: () => void;
   onToggleVisible: () => void;
+  visibilityBusy: boolean;
   onFixPhotosOnPoster: (posterId: string) => void;
   onAskAi: () => void;
 }) {
@@ -948,6 +998,8 @@ function TripCard({
             size="sm"
             variant="ghost"
             className={isHidden ? "text-success" : "text-ink-muted"}
+            loading={visibilityBusy}
+            disabled={visibilityBusy}
             onClick={onToggleVisible}
             title={
               isHidden

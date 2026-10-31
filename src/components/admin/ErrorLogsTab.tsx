@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Badge, Button, Card, EmptyState, Icons, Input, useToast } from "@/components/ui";
 import { LoadingPanel, SectionHeading, StatCard, TabHeader } from "./AdminShared";
-import { formatTime } from "@/lib/adminUtils";
+import { ensureOk, formatTime } from "@/lib/adminUtils";
 
 type LogLevel = "error" | "warn" | "info";
 
@@ -53,22 +53,26 @@ export function ErrorLogsTab({
   const [retentionDays, setRetentionDays] = useState(7);
   const [summary, setSummary] = useState<ErrorLogSummary[]>([]);
   const [rows, setRows] = useState<ErrorLogRow[]>([]);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadFailed(false);
     try {
       const params = new URLSearchParams({ hours: String(hours), limit: "200" });
       if (level) params.set("level", level);
       if (event) params.set("event", event);
       if (search) params.set("search", search);
-      const res = await apiFetch(`/api/admin/error-logs?${params.toString()}`);
-      const data = await res.json();
+      const data = await ensureOk<Record<string, unknown> & { summary?: unknown; rows?: unknown }>(await apiFetch(`/api/admin/error-logs?${params.toString()}`), "Алдааны бүртгэл ачаалж чадсангүй.");
       setConfigured(data?.configured !== false);
       setRetentionDays(typeof data?.retentionDays === "number" ? data.retentionDays : 7);
       setSummary(Array.isArray(data?.summary) ? data.summary : []);
       setRows(Array.isArray(data?.rows) ? data.rows : []);
-    } catch {
-      toast.error("Алдааны бүртгэл ачаалж чадсангүй.");
+    } catch (err) {
+      setRows([]);
+      setSummary([]);
+      setLoadFailed(true);
+      toast.error(err instanceof Error ? err.message : "Алдааны бүртгэл ачаалж чадсангүй.");
     } finally {
       setLoading(false);
     }
@@ -94,6 +98,12 @@ export function ErrorLogsTab({
           </Button>
         }
       />
+
+      {loadFailed && (
+        <Alert tone="danger">
+          Алдааны бүртгэлийг ачаалж чадсангүй — доорх жагсаалт хоосон байгаа нь алдаа байхгүй гэсэн үг биш. «Шинэчлэх» дарж дахин оролдоно уу.
+        </Alert>
+      )}
 
       {!configured && (
         <Alert tone="info">

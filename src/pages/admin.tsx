@@ -1658,6 +1658,59 @@ export default function AdminPage() {
     }
   }
   /**
+   * Hides or shows one trip. Only the flag travels, with the version on screen:
+   * the trips API merges extra key by key, and a stale copy of the whole extra
+   * (the old behaviour) reverted any price or itinerary saved in the meantime.
+   */
+  async function toggleTripVisibility(trip: TravelTrip) {
+    if (busyKey) return;
+    const show = (trip.extra as Record<string, unknown> | undefined)?.customer_visible === false;
+    setBusyKey(`visibility-${trip.id}`);
+    try {
+      const res = await fetchWithAdmin("/api/admin/trips", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: trip.id, fields: { extra: { customer_visible: show } }, expectedUpdatedAt: trip.updated_at }),
+      });
+      const json = await readJsonSafe(res);
+      if (!res.ok) {
+        throw new Error(res.status === 409
+          ? "Энэ аяллыг өөр газраас дөнгөж шинэчилсэн байна. Жагсаалт шинэчлэгдлээ, дахин оролдоно уу."
+          : String(json?.message || json?.error || "Өөрчилж чадсангүй."));
+      }
+      toast.success(show
+        ? "Аялал дахин харагдана. Бот энэ талаар хариулна."
+        : "Аялал нуугдлаа. Бот энэ аяллын талаар асуухад мэдэхгүй мэт хариулна.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Өөрчилж чадсангүй.");
+    } finally {
+      setBusyKey("");
+      void loadTrips(searchRef.current, statusFilterRef.current, { showLoading: false });
+    }
+  }
+  /** Archives exactly the trips the confirmation dialog listed. Resolves true when all were archived. */
+  async function archiveManyTrips(ids: string[]): Promise<boolean> {
+    try {
+      const res = await fetchWithAdmin("/api/admin/trips", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const json = await readJsonSafe(res) as { archived?: string[]; failed?: string[]; error?: string; message?: string };
+      if (!res.ok && res.status !== 207) throw new Error(json.message || json.error || "Архивлаж чадсангүй.");
+      const archived = json.archived?.length ?? 0;
+      const failed = json.failed?.length ?? 0;
+      if (failed > 0) toast.error(`${archived} аялал архивлагдлаа, ${failed} нь амжилтгүй. Дахин оролдоно уу.`);
+      else toast.success(`${archived} аялал архивлагдлаа.`);
+      return failed === 0;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Архивлаж чадсангүй.");
+      return false;
+    } finally {
+      void loadTrips(searchRef.current, statusFilterRef.current, { showLoading: true });
+    }
+  }
+  /**
    * Shortcut from a trip card/poster to the AI туслах tab: names the trip in
    * the instruction box so staff don't have to retype/search for it, and
    * leaves sending to them — the assistant's own propose → review → confirm
@@ -2027,52 +2080,9 @@ export default function AdminPage() {
               }}
               onAskAi={askAiAboutTrip}
               businessName={settings?.business_name || ""}
-              onToggleVisible={async (trip) => {
-                const currentlyHidden =
-                  (trip.extra as Record<string, unknown> | undefined)?.customer_visible === false;
-                try {
-                  // Send the trip's FULL existing extra with just customer_visible
-                  // flipped — normalizeExtra rebuilds every known field from
-                  // whatever "extra" it's given, so a bare
-                  // { customer_visible: true } would reset aliases, price_groups,
-                  // discounts, etc. back to empty and silently wipe real data.
-                  const res = await fetchWithAdmin(`/api/admin/trips`, {
-                    method: "PATCH",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      id: trip.id,
-                      fields: {
-                        extra: { ...(trip.extra || {}), customer_visible: currentlyHidden },
-                      },
-                    }),
-                  });
-                  const json = await res.json();
-                  if (!res.ok) throw new Error(json?.error || "failed");
-                  toast.success(
-                    currentlyHidden
-                      ? "Аялал дахин харагдана. Бот энэ талаар хариулна."
-                      : "Аялал нуугдлаа. Бот энэ аялалын талаар асуухад мэдэхгүй мэт хариулна.",
-                  );
-                  void loadTrips(searchRef.current, statusFilterRef.current, {
-                    showLoading: false,
-                  });
-                } catch {
-                  toast.error("Өөрчлөхөд алдаа гарлаа.");
-                }
-              }}
-              onDeleteAll={async () => {
-                try {
-                  const res = await fetchWithAdmin(`/api/admin/trips?all=true`, {
-                    method: "DELETE",
-                  });
-                  const json = await res.json();
-                  if (!res.ok) throw new Error(json?.error || "failed");
-                  toast.success(`${json.deleted ?? 0} аялал архивлагдлаа`);
-                  void loadTrips("", "", { showLoading: true });
-                } catch {
-                  toast.error("Устгахад алдаа гарлаа.");
-                }
-              }}
+              visibilityBusyId={busyKey.startsWith("visibility-") ? busyKey.slice(11) : ""}
+              onToggleVisible={(trip) => void toggleTripVisibility(trip)}
+              onArchiveMany={archiveManyTrips}
             />
           )}
           {tab === "calendar" && (

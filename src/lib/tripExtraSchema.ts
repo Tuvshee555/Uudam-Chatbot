@@ -43,6 +43,14 @@ const KNOWN_EXTRA_KEYS = new Set([
   "website_summary",
 ]);
 
+/**
+ * Display values the admin trips API adds to `extra` on every read (website
+ * delivery state, the linked poster's photo count). They are recomputed each
+ * time, so a client that sends a trip's extra back must never store them: a
+ * stored copy goes stale and the completeness check would trust it.
+ */
+const DERIVED_EXTRA_KEYS = new Set(["website_sync", "poster_photo_count"]);
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function asStringArray(v: unknown): string[] {
@@ -336,7 +344,7 @@ export function normalizeExtra(
   const warnings: string[] = [];
 
   // Detect unknown keys from AI output
-  const unknownKeys = Object.keys(raw).filter((k) => !KNOWN_EXTRA_KEYS.has(k));
+  const unknownKeys = Object.keys(raw).filter((k) => !KNOWN_EXTRA_KEYS.has(k) && !DERIVED_EXTRA_KEYS.has(k));
   if (unknownKeys.length > 0) {
     warnings.push(`Үл мэдэгдэх extra талбарууд (хадгалагдах боловч шалгана уу): ${unknownKeys.join(", ")}`);
   }
@@ -369,7 +377,7 @@ export function normalizeExtra(
   const extra: Record<string, unknown> = {
     // Pass through unknown keys so existing DB data isn't lost
     ...Object.fromEntries(
-      Object.entries(raw).filter(([k]) => !KNOWN_EXTRA_KEYS.has(k)),
+      Object.entries(raw).filter(([k]) => !KNOWN_EXTRA_KEYS.has(k) && !DERIVED_EXTRA_KEYS.has(k)),
     ),
     // Canonical known fields
     aliases: asStringArray(raw.aliases),
@@ -439,7 +447,7 @@ export function normalizeExtraPatch(raw: Record<string, unknown>): Record<string
   const normalized = normalizeExtra(raw).extra;
   const keys = new Set(Object.keys(raw));
   if (keys.has("departure_date_groups") && !keys.has("price_groups")) keys.add("price_groups");
-  keys.delete("website_sync");
+  for (const key of DERIVED_EXTRA_KEYS) keys.delete(key);
   return Object.fromEntries(Object.entries(normalized).filter(([key]) => keys.has(key)));
 }
 

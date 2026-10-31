@@ -4,7 +4,7 @@ import type { ControlState, CustomerDocument, PageControlState, PauseRow, Recent
 import { SectionHeading, TabHeader } from "./AdminShared";
 import { ContactInfoCard } from "./ContactInfoCard";
 import { contactSettingsOf } from "@/lib/contactReplies";
-import { DURATIONS, formatTime, shortId, timeLeft } from "@/lib/adminUtils";
+import { DURATIONS, ensureOk, formatTime, shortId, timeLeft } from "@/lib/adminUtils";
 
 function greetingEnabled(settings: TravelBotSettings | null): boolean {
   const g = (settings?.extra as Record<string, unknown>)?.greeting;
@@ -555,15 +555,17 @@ export function BotTab({
             onClick={async () => {
               setBackfilling(true);
               try {
-                const res = await apiFetch("/api/pause", {
+                // Without the JSON header the API never saw the action (400) while
+                // this button reported "0/0" as a success.
+                const d = await ensureOk<{ filled?: number; total?: number }>(await apiFetch("/api/pause", {
                   method: "POST",
+                  headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ action: "backfill_names" }),
-                });
-                const d = await res.json();
+                }), "Нэр татаж чадсангүй.");
                 toast.success(`Нэр татлаа: ${d.filled ?? 0}/${d.total ?? 0}`);
                 onConversationsChanged();
-              } catch {
-                toast.error("Алдаа гарлаа");
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : "Нэр татаж чадсангүй.");
               } finally {
                 setBackfilling(false);
               }
@@ -798,11 +800,11 @@ export function BotTab({
         busyId="greeting-toggle"
         onToggle={async (next) => {
           const prevGreeting = (settings?.extra as Record<string, unknown>)?.greeting as Record<string, unknown> | undefined;
-          await apiFetch("/api/admin/settings", {
+          await ensureOk(await apiFetch("/api/admin/settings", {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ fields: { extra: { greeting: { ...prevGreeting, enabled: next } } } }),
-          });
+          }), "Хадгалж чадсангүй.");
           onSettingsChanged();
         }}
       />
@@ -813,11 +815,11 @@ export function BotTab({
         enabled={seasonsEnabled(settings)}
         busyId="seasons-toggle"
         onToggle={async (next) => {
-          await apiFetch("/api/admin/settings", {
+          await ensureOk(await apiFetch("/api/admin/settings", {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ fields: { extra: { seasons_enabled: next } } }),
-          });
+          }), "Хадгалж чадсангүй.");
           onSettingsChanged();
         }}
       />
@@ -831,11 +833,11 @@ export function BotTab({
         busyId="goodbye-toggle"
         onToggle={async (next) => {
           const prevGoodbye = (settings?.extra as Record<string, unknown>)?.goodbye as Record<string, unknown> | undefined;
-          await apiFetch("/api/admin/settings", {
+          await ensureOk(await apiFetch("/api/admin/settings", {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ fields: { extra: { goodbye: { ...prevGoodbye, enabled: next } } } }),
-          });
+          }), "Хадгалж чадсангүй.");
           onSettingsChanged();
         }}
       />
@@ -846,11 +848,11 @@ export function BotTab({
         enabled={mimicMyselfEnabled(settings)}
         busyId="mimic-myself-toggle"
         onToggle={async (next) => {
-          await apiFetch("/api/admin/settings", {
+          await ensureOk(await apiFetch("/api/admin/settings", {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ fields: { extra: { mimic_myself_enabled: next } } }),
-          });
+          }), "Хадгалж чадсангүй.");
           onSettingsChanged();
         }}
       />
@@ -960,14 +962,14 @@ function ReminderCard({
   async function patchExtra(extra: Record<string, unknown>) {
     setBusy(true);
     try {
-      await apiFetch("/api/admin/settings", {
+      await ensureOk(await apiFetch("/api/admin/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fields: { extra } }),
-      });
+      }), "Хадгалж чадсангүй.");
       onSettingsChanged();
-    } catch {
-      toast.error("Хадгалахад алдаа гарлаа.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Хадгалахад алдаа гарлаа.");
     } finally {
       setBusy(false);
     }
@@ -976,17 +978,17 @@ function ReminderCard({
   async function saveText() {
     setBusy(true);
     try {
-      await apiFetch("/api/admin/settings", {
+      await ensureOk(await apiFetch("/api/admin/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fields: { extra: { reminder_text: textDraft.trim() } } }),
-      });
+      }), "Хадгалж чадсангүй.");
       savedTextRef.current = textDraft.trim();
       setTextDirty(false);
       onSettingsChanged();
       toast.success("Сануулгын текст хадгалагдлаа.");
-    } catch {
-      toast.error("Хадгалахад алдаа гарлаа.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Хадгалахад алдаа гарлаа.");
     } finally {
       setBusy(false);
     }
@@ -1173,8 +1175,8 @@ function QuickToggleCard({
     setBusy(true);
     try {
       await onToggle(!enabled);
-    } catch {
-      toast.error("Хадгалахад алдаа гарлаа.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Хадгалахад алдаа гарлаа.");
     } finally {
       setBusy(false);
     }

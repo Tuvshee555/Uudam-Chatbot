@@ -2638,7 +2638,12 @@ export default function PosterTab({
                   type="button"
                   className="flex items-center gap-1 rounded-md border border-line-strong px-2 py-1 text-xs font-medium text-ink-muted hover:border-brand hover:text-brand"
                   onClick={async () => {
-                    const res = await apiFetch("/api/admin/poster/export");
+                    const res = await apiFetch("/api/admin/poster/export").catch(() => null);
+                    // An error body must never be saved as if it were the backup file.
+                    if (!res?.ok) {
+                      setError(res?.status === 401 ? "Нэвтрэх эрх дууссан байна. Дахин нэвтэрнэ үү." : "Постеруудыг татаж чадсангүй. Дахин оролдоно уу.");
+                      return;
+                    }
                     const blob = await res.blob();
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement("a");

@@ -51,6 +51,29 @@ export const QUICK_ACTIONS: Array<{ label: string; prompt: string }> = [
   },
 ];
 
+/**
+ * Reads an admin API response and throws unless the server accepted the request,
+ * so a screen can only report "saved" for a save the backend actually confirmed.
+ * The error carries the server's own message when it sent one.
+ */
+export async function ensureOk<T = Record<string, unknown>>(res: Response, fallback: string): Promise<T> {
+  const raw = await res.text().catch(() => "");
+  let json: Record<string, unknown> = {};
+  try {
+    json = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+  } catch {
+    json = {};
+  }
+  if (!res.ok) {
+    const message = typeof json.message === "string" && json.message.trim() ? json.message
+      : res.status === 401 ? "Нэвтрэх эрх дууссан байна. Дахин нэвтэрнэ үү."
+      : typeof json.error === "string" && json.error.trim() && !/^[a-z_]+$/.test(json.error) ? json.error
+      : fallback;
+    throw new Error(message);
+  }
+  return json as T;
+}
+
 export function asInt(value: string): number | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
