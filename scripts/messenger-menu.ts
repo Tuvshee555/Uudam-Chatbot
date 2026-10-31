@@ -24,27 +24,31 @@ const fromRoster = (process.env.FACEBOOK_PAGES || "").split(",").map((entry) => 
 const token = process.env[`META_NEW_PAGE_TOKEN_${pageId}`] || fromRoster || "";
 if (!token) throw new Error(`no page token for ${pageId} in FACEBOOK_PAGES or META_NEW_PAGE_TOKEN_${pageId}`);
 
-const fields = "get_started,persistent_menu,ice_breakers,greeting";
-const current = await (await fetch(`${GRAPH_API_BASE}/me/messenger_profile?${new URLSearchParams({ fields, access_token: token })}`)).json() as
-  { data?: Array<Record<string, unknown>>; error?: { message?: string; code?: number } };
-if (current.error) throw new Error(`reading the profile failed: (${current.error.code}) ${current.error.message}`);
-const profile = current.data?.[0] ?? {};
-const menus = profile.persistent_menu as PersistentMenu[] | undefined;
-const titles = (list?: PersistentMenu[]) => (list ?? []).map((menu) => `${menu.locale}: ${(menu.call_to_actions ?? []).map((action) => action.title).join(" | ")}`);
-console.log("get_started:", JSON.stringify(profile.get_started ?? null));
-console.log("current menu:", titles(menus));
-const planned = withHumanRequestItem(menus);
-console.log("planned menu:", titles(planned.menus));
-if (!planned.changed) { console.log("Already present — nothing to do."); process.exit(0); }
-if (!profile.get_started) throw new Error("Meta requires a Get Started button before a persistent menu; none is set");
-if (!apply) { console.log("Dry run. Re-run with --apply --backup=<file.json> to write."); process.exit(0); }
+async function main() {
+  const fields = "get_started,persistent_menu,ice_breakers,greeting";
+  const current = await (await fetch(`${GRAPH_API_BASE}/me/messenger_profile?${new URLSearchParams({ fields, access_token: token })}`)).json() as
+    { data?: Array<Record<string, unknown>>; error?: { message?: string; code?: number } };
+  if (current.error) throw new Error(`reading the profile failed: (${current.error.code}) ${current.error.message}`);
+  const profile = current.data?.[0] ?? {};
+  const menus = profile.persistent_menu as PersistentMenu[] | undefined;
+  const titles = (list?: PersistentMenu[]) => (list ?? []).map((menu) => `${menu.locale}: ${(menu.call_to_actions ?? []).map((action) => action.title).join(" | ")}`);
+  console.log("get_started:", JSON.stringify(profile.get_started ?? null));
+  console.log("current menu:", titles(menus));
+  const planned = withHumanRequestItem(menus);
+  console.log("planned menu:", titles(planned.menus));
+  if (!planned.changed) { console.log("Already present — nothing to do."); process.exit(0); }
+  if (!profile.get_started) throw new Error("Meta requires a Get Started button before a persistent menu; none is set");
+  if (!apply) { console.log("Dry run. Re-run with --apply --backup=<file.json> to write."); process.exit(0); }
 
-writeFileSync(backup!, JSON.stringify({ pageId, savedAt: new Date().toISOString(), profile }, null, 2));
-const response = await fetch(`${GRAPH_API_BASE}/me/messenger_profile?${new URLSearchParams({ access_token: token })}`, {
-  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ persistent_menu: planned.menus }),
-});
-const result = await response.json() as { result?: string; error?: { message?: string; code?: number } };
-if (!response.ok || result.error) throw new Error(`setting the menu failed: (${result.error?.code}) ${result.error?.message}`);
-const after = await (await fetch(`${GRAPH_API_BASE}/me/messenger_profile?${new URLSearchParams({ fields: "persistent_menu", access_token: token })}`)).json() as
-  { data?: Array<{ persistent_menu?: PersistentMenu[] }> };
-console.log("menu now:", titles(after.data?.[0]?.persistent_menu));
+  writeFileSync(backup!, JSON.stringify({ pageId, savedAt: new Date().toISOString(), profile }, null, 2));
+  const response = await fetch(`${GRAPH_API_BASE}/me/messenger_profile?${new URLSearchParams({ access_token: token })}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ persistent_menu: planned.menus }),
+  });
+  const result = await response.json() as { result?: string; error?: { message?: string; code?: number } };
+  if (!response.ok || result.error) throw new Error(`setting the menu failed: (${result.error?.code}) ${result.error?.message}`);
+  const after = await (await fetch(`${GRAPH_API_BASE}/me/messenger_profile?${new URLSearchParams({ fields: "persistent_menu", access_token: token })}`)).json() as
+    { data?: Array<{ persistent_menu?: PersistentMenu[] }> };
+  console.log("menu now:", titles(after.data?.[0]?.persistent_menu));
+}
+
+main().catch((error) => { console.error(error instanceof Error ? error.message : String(error)); process.exit(1); });
