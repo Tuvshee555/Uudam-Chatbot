@@ -93,6 +93,23 @@ function money(value: unknown): number | null {
   return number;
 }
 
+/**
+ * Uudam sells the partner's tour above the partner's own fares (owner, 2026-10-31: every trip's
+ * passenger fares +100,000₮). Adult, child, infant and programme fares move; the single-room
+ * supplement is not a passenger fare and a missing fare stays missing. Applied when the tour is
+ * read, so the poster, trip, website and the parity check (scripts/verify-partner-sync.ts) all see it.
+ */
+export const PARTNER_FARE_MARKUP_MNT = 100_000;
+
+export function withPartnerMarkup(prices: PartnerPrices, markup = PARTNER_FARE_MARKUP_MNT): PartnerPrices {
+  const up = (fare: number | null) => (fare == null ? null : fare + markup);
+  return {
+    ...prices,
+    adult: up(prices.adult), child2to5: up(prices.child2to5), child6to11: up(prices.child6to11), infant: up(prices.infant),
+    programAdult: up(prices.programAdult), programChild2to5: up(prices.programChild2to5), programChild6to11: up(prices.programChild6to11),
+  };
+}
+
 function readPrices(raw: unknown): PartnerPrices {
   const p = record(raw);
   return {
@@ -185,7 +202,7 @@ export async function fetchGlobalTravelTour(slug: string, options: { timeoutMs?:
     getJson(`/tours/${encodeURIComponent(slug)}/price-table?audience=public&includeSoldOut=true`, timeoutMs),
   ]);
 
-  const rows = readRows(tableBody.data);
+  const rows = readRows(tableBody.data).map((row) => ({ ...row, prices: withPartnerMarkup(row.prices) }));
   if (!rows.length) throw new Error("GTC listed no priced departures");
   const days = readDays(itineraryBody.itineraryDays);
   if (!Array.isArray(tour.included_items) || !Array.isArray(tour.excluded_items) || !Array.isArray(tour.hotels)

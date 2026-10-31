@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readRows } from "../src/lib/partnerSync/globalTravel";
+import { readRows, withPartnerMarkup } from "../src/lib/partnerSync/globalTravel";
 import { buildPosterData, buildPriceTable, describeChanges, lowestAdultPrice, packageVariants } from "../src/lib/partnerSync/posterPayload";
 import { prices, row, tour } from "./fixtures/partner-tour";
 
@@ -68,4 +68,11 @@ test("change report detects infant-only and child-only price changes", () => {
   const report = describeChanges(tour([row()]), after).join("\n");
   assert.match(report, /320,000₮ → 350,000₮/);
   assert.match(report, /1,300,000₮ → 1,400,000₮/);
+});
+
+test("Uudam's markup raises every passenger fare of the partner tour, not the single-room supplement", () => {
+  const marked = withPartnerMarkup({ adult: 2_100_000, child2to5: 1_300_000, child6to11: null, infant: 320_000, single: 650_000,
+    programAdult: 2_400_000, programChild2to5: null, programChild6to11: 1_600_000 }, 100_000);
+  assert.deepEqual(marked, { adult: 2_200_000, child2to5: 1_400_000, child6to11: null, infant: 420_000, single: 650_000,
+    programAdult: 2_500_000, programChild2to5: null, programChild6to11: 1_700_000 });
 });
