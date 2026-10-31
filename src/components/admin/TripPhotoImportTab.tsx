@@ -36,7 +36,6 @@ export type TripPhotoImportTabProps = {
 };
 
 const MAX_FILE_SIZE_MB = 10;
-const ADMIN_SECRET_STORAGE_KEY = "travel_admin_secret";
 // Vercel rejects any serverless function request body over ~4.5MB with a
 // plain-text 413 before our handler runs. A folder of trip photos easily
 // exceeds that, so batches above this go browser -> Blob -> server instead.
@@ -57,11 +56,6 @@ function isLikelyZipFile(file: File): boolean {
 function isLocalDevHost(): boolean {
   if (typeof window === "undefined") return false;
   return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
-}
-
-function getStoredAdminSecret(): string {
-  if (typeof window === "undefined") return "";
-  return window.localStorage.getItem(ADMIN_SECRET_STORAGE_KEY) || "";
 }
 
 /** Reads a fetch response as text first so a non-JSON error body (Vercel's
@@ -325,7 +319,6 @@ export function TripPhotoImportTab({ trips, apiFetch, onComplete }: TripPhotoImp
             uploadToBlob(file.webkitRelativePath || file.name, file, {
               access: "public",
               handleUploadUrl: "/api/admin/trip-photos-upload",
-              clientPayload: JSON.stringify({ adminSecret: getStoredAdminSecret() }),
             }),
           ),
         );

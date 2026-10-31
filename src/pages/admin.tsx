@@ -37,12 +37,23 @@ import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLO
 const BLANK_TRIP_DRAFT: Record<string, string> = { category: "Аялал", operator_name: "UUDAM TRAVEL AGENCY", route_name: "", duration_text: "", adult_price: "", child_price: "", infant_price: "", child_price_free: "", infant_price_free: "", age_infant: "0-23 сар", age_child: "2-11 нас", age_adult: "12+ нас", currency: "MNT", seats_total: "", seats_left: "", seats_percent_left: "", sale_badge_enabled: "false", sale_badge_label: "ХЯМДРАЛ", sale_badge_ends: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
 const MAX_AI_SOURCE_TEXT_CHARS = 20_000;
 const TRIP_DATA_TABS = new Set<TabKey>(["assistant", "trips", "calendar", "greeting", "photos"]);
+const SYSTEM_CHECK_INTERVAL_MS = 5 * 60_000;
+const TAB_KEYS = new Set<string>(NAV_GROUPS.flatMap((group) => group.items.map((item) => item.key)));
+/** The section named in the URL (#leads), so a refresh or a shared link opens the same place. */
+function tabFromLocation(): TabKey | null {
+  if (typeof window === "undefined") return null;
+  const key = decodeURIComponent(window.location.hash.replace(/^#/, ""));
+  return TAB_KEYS.has(key) ? (key as TabKey) : null;
+}
 export default function AdminPage() {
   const toast = useToast();
-  const [secret, setSecret] = useState("");
+  // The session lives in an HttpOnly cookie (src/lib/adminSession.ts); the page only
+  // knows whether it is signed in. Nothing loads until it is.
+  const [authState, setAuthState] = useState<"checking" | "signed_in" | "signed_out">("checking");
+  const authRef = useRef(authState);
   const [secretDraft, setSecretDraft] = useState("");
-  const [requiresAuth, setRequiresAuth] = useState(false);
-  const [openAccess, setOpenAccess] = useState(false);
+  const [loginError, setLoginError] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
   const [dbInfo, setDbInfo] = useState<{
     configured: boolean;
     schemaReady: boolean;
@@ -52,14 +63,15 @@ export default function AdminPage() {
   const [driveSync, setDriveSync] = useState<DriveSyncDiagnostics | null>(null);
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
   const [systemLoaded, setSystemLoaded] = useState(false);
-  const [tab, setTab] = useState<TabKey>("analytics");
-  const tabRef = useRef<TabKey>("analytics");
+  // Nothing tab-specific renders before the sign-in check, so reading the URL here cannot
+  // change server-rendered markup.
+  const [tab, setTab] = useState<TabKey>(() => tabFromLocation() ?? "analytics");
+  const tabRef = useRef<TabKey>(tab);
   // Set by the trips tab's "Постерт зураг нэмэх" button — opens that exact
   // poster once the poster tab mounts, instead of leaving them to hunt for it.
   const [posterToOpen, setPosterToOpen] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [busyKey, setBusyKey] = useState("");
-  const [tick, setTick] = useState(0);
   const [trips, setTrips] = useState<TravelTrip[]>([]);
   const [tripsLoaded, setTripsLoaded] = useState(false);
   const [search, setSearch] = useState("");
@@ -131,13 +143,12 @@ export default function AdminPage() {
   const photoFileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const secretRef = useRef(secret);
   const searchRef = useRef(search);
   const tripLoadRevision = useRef(0);
   const statusFilterRef = useRef(statusFilter);
   useEffect(() => {
-    secretRef.current = secret;
-  }, [secret]);
+    authRef.current = authState;
+  }, [authState]);
   useEffect(() => {
     searchRef.current = search;
   }, [search]);
@@ -147,14 +158,10 @@ export default function AdminPage() {
   useEffect(() => {
     tabRef.current = tab;
   }, [tab]);
+  // Same-origin requests carry the session cookie; no secret travels from this page.
   const fetchWithAdmin = useCallback(
-    async (url: string, init?: RequestInit) => {
-      const headers = new Headers(init?.headers || {});
-      if (secretRef.current.trim()) {
-        headers.set("x-admin-secret", secretRef.current.trim());
-      }
-      return fetch(url, { ...init, headers, cache: init?.cache ?? "no-store" });
-    },
+    async (url: string, init?: RequestInit) =>
+      fetch(url, { ...init, credentials: "same-origin", cache: init?.cache ?? "no-store" }),
     [],
   );
   const readJsonSafe = useCallback(async (response: Response) => {
@@ -167,7 +174,8 @@ export default function AdminPage() {
     }
   }, []);
   const markAdminLocked = useCallback(() => {
-    setRequiresAuth(true);
+    authRef.current = "signed_out";
+    setAuthState("signed_out");
     setDbInfo(null);
     setDriveSync(null);
     setReadiness(null);
@@ -202,7 +210,6 @@ export default function AdminPage() {
         }
         const tripJson = await tripRes.json();
         if (revision !== tripLoadRevision.current) return;
-        setRequiresAuth(false);
         const nextTrips = Array.isArray(tripJson?.trips) ? tripJson.trips : [];
         setTrips(nextTrips);
         setTripsLoaded(true);
@@ -237,7 +244,6 @@ export default function AdminPage() {
         return false;
       }
       const pauseJson = await pauseRes.json().catch(() => ({}));
-      setRequiresAuth(false);
       setControl(pauseJson?.control || null);
       setPageControls(Array.isArray(pauseJson?.pages) ? pauseJson.pages : []);
       setPausedRows(Array.isArray(pauseJson?.paused) ? pauseJson.paused : []);
@@ -256,7 +262,6 @@ export default function AdminPage() {
         return false;
       }
       const settingsJson = await settingsRes.json().catch(() => ({}));
-      setRequiresAuth(false);
       if (settingsJson?.settings) {
         setSettings(settingsJson.settings as TravelBotSettings);
         setSettingsForm((prev) =>
@@ -278,7 +283,6 @@ export default function AdminPage() {
         return false;
       }
       const leadsJson = await leadsRes.json().catch(() => ({}));
-      setRequiresAuth(false);
       setLeads(Array.isArray(leadsJson?.leads) ? leadsJson.leads : []);
       setNewLeadCount(
         typeof leadsJson?.new_count === "number" ? leadsJson.new_count : 0,
@@ -307,14 +311,15 @@ export default function AdminPage() {
         return false;
       }
       const json = await res.json().catch(() => ({}));
-      setRequiresAuth(false);
       setDocumentUnreviewedCount(Number(json?.stats?.unreviewed_count || 0));
       return true;
     } catch {
       return false;
     }
   }, [fetchWithAdmin, markAdminLocked]);
+  const lastSystemCheckRef = useRef(0);
   const loadAll = useCallback(async () => {
+    if (authRef.current !== "signed_in") return;
     setLoading(true);
     try {
       // The data loads do not depend on the system check, which can take 10 s+
@@ -323,6 +328,7 @@ export default function AdminPage() {
       // Loading it on every dashboard visit made the lightweight overview wait
       // behind a large cross-database request even though that tab never reads
       // a trip row. Fetch it only for screens that actually render trip data.
+      // The lead list likewise only feeds the Leads tab; the nav badge has its own poll.
       const tripLoads = TRIP_DATA_TABS.has(tabRef.current)
         ? [loadTrips(searchRef.current, statusFilterRef.current)]
         : [];
@@ -330,28 +336,28 @@ export default function AdminPage() {
         ...tripLoads,
         loadPauseState(),
         loadSettingsState(),
-        loadLeadsState(),
+        ...(tabRef.current === "leads" ? [loadLeadsState()] : []),
         loadDocumentStats(),
       ]);
       dataLoads.catch(() => undefined);
-      const systemRes = await fetchWithAdmin("/api/admin/system");
-      if (systemRes.status === 401) {
-        markAdminLocked();
-        return;
+      // The readiness check reads several systems; every few minutes is enough for its banner.
+      if (Date.now() - lastSystemCheckRef.current >= SYSTEM_CHECK_INTERVAL_MS) {
+        const systemRes = await fetchWithAdmin("/api/admin/system");
+        if (systemRes.status === 401) {
+          markAdminLocked();
+          return;
+        }
+        const systemJson = await systemRes.json();
+        if (!systemJson?.authorized) {
+          markAdminLocked();
+          return;
+        }
+        lastSystemCheckRef.current = Date.now();
+        setDbInfo(systemJson?.db || null);
+        setDriveSync((systemJson?.drive_sync as DriveSyncDiagnostics) || null);
+        setReadiness((systemJson?.readiness as ReadinessReport) || null);
+        setSystemLoaded(true);
       }
-      const systemJson = await systemRes.json();
-      const nextOpenAccess = Boolean(systemJson?.open_access);
-      const authorized = Boolean(systemJson?.authorized);
-      setOpenAccess(nextOpenAccess);
-      if (!nextOpenAccess && !authorized) {
-        markAdminLocked();
-        return;
-      }
-      setRequiresAuth(false);
-      setDbInfo(systemJson?.db || null);
-      setDriveSync((systemJson?.drive_sync as DriveSyncDiagnostics) || null);
-      setReadiness((systemJson?.readiness as ReadinessReport) || null);
-      setSystemLoaded(true);
       await dataLoads;
     } catch {
       toast.error("Системийн өгөгдөл ачаалж чадсангүй.");
@@ -394,41 +400,65 @@ export default function AdminPage() {
       setBusyKey("");
     }
   }, [fetchWithAdmin, loadAll, readJsonSafe, toast]);
+  // Sign-in check on load. A browser signed in before sessions existed still holds the
+  // secret in localStorage: it is traded for a session once and then forgotten.
   useEffect(() => {
-    const storage = getSecretStorage();
-    if (!storage) return;
-    const stored = storage.getItem(SECRET_KEY) || "";
-    const ts = Number(storage.getItem(SECRET_TS_KEY) || "0");
-    if (stored && Date.now() - ts < SESSION_TTL_MS) {
-      secretRef.current = stored;
-      setSecret(stored);
-      setSecretDraft(stored);
-      storage.setItem(SECRET_TS_KEY, String(Date.now()));
-    } else if (stored) {
-      storage.removeItem(SECRET_KEY);
-      storage.removeItem(SECRET_TS_KEY);
-    }
+    let cancelled = false;
+    void (async () => {
+      const storage = getSecretStorage();
+      const legacySecret = storage?.getItem(SECRET_KEY) || "";
+      const legacyAge = Date.now() - Number(storage?.getItem(SECRET_TS_KEY) || "0");
+      storage?.removeItem(SECRET_KEY);
+      storage?.removeItem(SECRET_TS_KEY);
+      if (legacySecret && legacyAge < SESSION_TTL_MS) {
+        await fetch("/api/admin/session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ secret: legacySecret }),
+        }).catch(() => null);
+      }
+      const res = await fetch("/api/admin/session", { cache: "no-store" }).catch(() => null);
+      const json = res?.ok ? await res.json().catch(() => null) as { authorized?: boolean } | null : null;
+      if (cancelled) return;
+      const next = json?.authorized ? "signed_in" : "signed_out";
+      authRef.current = next;
+      setAuthState(next);
+    })();
+    return () => { cancelled = true; };
   }, []);
   useEffect(() => {
-    void loadAll();
-  }, [loadAll]);
+    if (authState === "signed_in") void loadAll();
+  }, [authState, loadAll]);
+  // The lead list is fetched for the Leads tab only (loadAll skips it elsewhere).
+  useEffect(() => {
+    if (tab !== "leads" || authState !== "signed_in") return;
+    void loadLeadsState({ showLoading: true });
+  }, [authState, loadLeadsState, tab]);
+  // Back/Forward between sections, and links that name one.
+  useEffect(() => {
+    const syncFromUrl = () => {
+      const next = tabFromLocation();
+      if (next) {
+        setTab(next);
+        setMobileNavOpen(false);
+      }
+    };
+    window.addEventListener("hashchange", syncFromUrl);
+    return () => window.removeEventListener("hashchange", syncFromUrl);
+  }, []);
   useEffect(() => {
     if (!TRIP_DATA_TABS.has(tab)) return;
-    if (requiresAuth || (!openAccess && !secret.trim())) return;
+    if (authState !== "signed_in") return;
     const timer = window.setTimeout(() => {
       void loadTrips(search, statusFilter, { showLoading: true });
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [loadTrips, openAccess, requiresAuth, search, secret, statusFilter, tab]);
-  useEffect(() => {
-    const timer = setInterval(() => setTick((n) => n + 1), 1000);
-    return () => clearInterval(timer);
-  }, []);
+  }, [authState, loadTrips, search, statusFilter, tab]);
   useEffect(() => {
     if (ADMIN_AUTO_REFRESH_MS <= 0) return;
     const refresh = setInterval(() => {
       if (typeof document !== "undefined" && document.hidden) return;
-      if (requiresAuth || (!openAccess && !secretRef.current.trim())) return;
+      if (authRef.current !== "signed_in") return;
       if (typeof document !== "undefined" && isEditableElement(document.activeElement)) {
         return;
       }
@@ -457,18 +487,18 @@ export default function AdminPage() {
     editingTrip,
     isNewTrip,
     loadAll,
-    openAccess,
-    requiresAuth,
   ]);
+  // Bot state drives the header badges everywhere and the live list on the bot tab:
+  // every 5 s there, every 20 s elsewhere (each poll is a database read).
   useEffect(() => {
-    const PAUSE_POLL_MS = 5_000;
+    const PAUSE_POLL_MS = tab === "bot" ? 5_000 : 20_000;
     const poll = setInterval(() => {
       if (typeof document !== "undefined" && document.hidden) return;
-      if (requiresAuth || (!openAccess && !secretRef.current.trim())) return;
+      if (authRef.current !== "signed_in") return;
       void loadPauseState();
     }, PAUSE_POLL_MS);
     return () => clearInterval(poll);
-  }, [loadPauseState, openAccess, requiresAuth]);
+  }, [loadPauseState, tab]);
   // Leads that need a person (leadAttention.ts), checked every 20 s even while this browser tab
   // is in the background. New activity raises a browser notification (when staff allowed it)
   // and a toast. Only an open dashboard is alerted: nothing is sent anywhere else from here.
@@ -476,7 +506,7 @@ export default function AdminPage() {
     const LEAD_POLL_MS = 20_000;
     let stopped = false;
     const check = async () => {
-      if (stopped || requiresAuth || (!openAccess && !secretRef.current.trim())) return;
+      if (stopped || authRef.current !== "signed_in") return;
       try {
         const res = await fetchWithAdmin("/api/admin/leads?summary=1");
         if (!res.ok) return;
@@ -502,7 +532,7 @@ export default function AdminPage() {
     void check();
     const poll = setInterval(() => void check(), LEAD_POLL_MS);
     return () => { stopped = true; clearInterval(poll); };
-  }, [fetchWithAdmin, loadLeadsState, openAccess, requiresAuth, toast]);
+  }, [authState, fetchWithAdmin, loadLeadsState, toast]);
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages]);
@@ -514,17 +544,40 @@ export default function AdminPage() {
     () => pausedRows.filter((row) => row.reason === "handoff"),
     [pausedRows],
   );
-  async function applySecret() {
-    const nextSecret = secretDraft.trim();
-    if (!nextSecret) return;
-    const storage = getSecretStorage();
-    if (storage) {
-      storage.setItem(SECRET_KEY, nextSecret);
-      storage.setItem(SECRET_TS_KEY, String(Date.now()));
+  /** Exchanges the typed secret for a session cookie; the secret itself is never stored. */
+  async function signIn() {
+    const typed = secretDraft.trim();
+    if (!typed || loginBusy) return;
+    setLoginBusy(true);
+    setLoginError("");
+    try {
+      const res = await fetch("/api/admin/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ secret: typed }),
+      });
+      if (res.ok) {
+        setSecretDraft("");
+        lastSystemCheckRef.current = 0;
+        authRef.current = "signed_in";
+        setAuthState("signed_in");
+        return;
+      }
+      setLoginError(res.status === 401
+        ? "Нууц үг буруу байна."
+        : res.status === 429
+          ? "Хэт олон удаа буруу оруулсан байна. 1 минутын дараа дахин оролдоно уу."
+          : "Нэвтэрч чадсангүй. Дахин оролдоно уу.");
+    } catch {
+      setLoginError("Сервертэй холбогдож чадсангүй. Интернэтээ шалгаад дахин оролдоно уу.");
+    } finally {
+      setLoginBusy(false);
     }
-    secretRef.current = nextSecret;
-    setSecret(nextSecret);
-    await loadAll();
+  }
+  async function signOut() {
+    await fetch("/api/admin/session", { method: "DELETE" }).catch(() => null);
+    setMobileNavOpen(false);
+    markAdminLocked();
   }
   function pushMessage(message: ChatMessage) {
     setChatMessages((prev) => [...prev, message]);
@@ -1718,7 +1771,7 @@ export default function AdminPage() {
    */
   function askAiAboutTrip(tripName: string) {
     setAiInput(`"${tripName}" аяллыг `);
-    setTab("assistant");
+    selectAdminTab("assistant");
     requestAnimationFrame(() => {
       const el = inputRef.current;
       if (!el) return;
@@ -1875,11 +1928,7 @@ export default function AdminPage() {
     tripsLoaded && statusFilter === ""
       ? `${liveTripCount} идэвхтэй${draftTripCount > 0 ? ` · ${draftTripCount} ноорог` : ""}`
       : `${headerTripCount} аялал`;
-  const headerTripLabel = requiresAuth
-    ? "Админ түгжээтэй"
-    : tripsLoaded || dbInfo
-      ? headerTripSummary
-      : "Аялал ачаалж байна";
+  const headerTripLabel = tripsLoaded || dbInfo ? headerTripSummary : "Аялал ачаалж байна";
   const navBadges: Partial<Record<TabKey, number>> = {
     bot: handoffRows.length || undefined,
     // Leads that need a person now, not every unread lead ever (172 on 2026-10-30).
@@ -1887,16 +1936,23 @@ export default function AdminPage() {
     documents: documentUnreviewedCount || undefined,
   };
   const currentSection = NAV_GROUPS.flatMap((group) => group.items).find((item) => item.key === tab);
+  /** Opens a section and records it in the URL (#trips), so refresh and Back keep the place. */
   function selectAdminTab(nextTab: TabKey) {
     setTab(nextTab);
     setMobileNavOpen(false);
+    if (typeof window !== "undefined" && window.location.hash !== `#${nextTab}`) {
+      window.location.hash = nextTab;
+    }
   }
-  if (requiresAuth || (!openAccess && !secret.trim())) {
+  if (authState !== "signed_in") {
     return (
       <AdminLoginGate
+        checking={authState === "checking"}
         secretDraft={secretDraft}
-        onSecretDraftChange={setSecretDraft}
-        onSubmit={() => void applySecret()}
+        onSecretDraftChange={(value) => { setSecretDraft(value); setLoginError(""); }}
+        onSubmit={() => void signIn()}
+        busy={loginBusy}
+        error={loginError}
       />
     );
   }
@@ -1916,6 +1972,7 @@ export default function AdminPage() {
         desktopHidden={sidebarHidden}
         onClose={() => setMobileNavOpen(false)}
         onSelect={selectAdminTab}
+        onSignOut={() => void signOut()}
       />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
       {/* Top bar */}
@@ -1960,7 +2017,7 @@ export default function AdminPage() {
           </Badge>
           <span className="hidden sm:inline-flex">
             <Badge
-              tone={requiresAuth || (systemLoaded && !dbInfo?.configured) ? "danger" : "neutral"}
+              tone={systemLoaded && !dbInfo?.configured ? "danger" : "neutral"}
               className="tabular-nums"
             >
               {headerTripLabel}
@@ -1983,7 +2040,7 @@ export default function AdminPage() {
                     </p>
                   </div>
                 </div>
-                <Button size="sm" variant="secondary" onClick={() => setTab("bot")}>
+                <Button size="sm" variant="secondary" onClick={() => selectAdminTab("bot")}>
                   Ботын хяналт нээх
                 </Button>
               </div>
@@ -2076,7 +2133,7 @@ export default function AdminPage() {
               onFetchAllTrips={fetchAllTrips}
               onFixPhotosOnPoster={(posterId) => {
                 setPosterToOpen(posterId);
-                setTab("poster");
+                selectAdminTab("poster");
               }}
               onAskAi={askAiAboutTrip}
               businessName={settings?.business_name || ""}
@@ -2099,7 +2156,6 @@ export default function AdminPage() {
               pausedRows={pausedRows}
               pausedIds={pausedIds}
               busyKey={busyKey}
-              tick={tick}
               apiFetch={fetchWithAdmin}
               onPauseAction={(action, senderId, ms, pageId) =>
                 void runPauseAction(action, senderId, ms, pageId)

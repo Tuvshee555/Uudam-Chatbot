@@ -1,6 +1,21 @@
 import type { NextConfig } from "next";
 
+// The admin panel is never framed (clickjacking), indexed or sent as a referrer.
+const ADMIN_SECURITY_HEADERS = [
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+  { key: "Referrer-Policy", value: "same-origin" },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "X-Robots-Tag", value: "noindex, nofollow" },
+];
+
 const nextConfig: NextConfig = {
+  async headers() {
+    return [
+      { source: "/admin", headers: ADMIN_SECURITY_HEADERS },
+      { source: "/api/admin/:path*", headers: ADMIN_SECURITY_HEADERS },
+    ];
+  },
   distDir: process.env.NEXT_DIST_DIR || ".next",
   reactStrictMode: true,
   // The dev-only "N" badge sat on the admin sidebar's last link ("JSON засвар").

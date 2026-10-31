@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Logo, Modal, cx } from "@/components/ui";
+import { Icons, Logo, Modal, cx } from "@/components/ui";
 import type { TabKey } from "@/lib/adminTypes";
 import { AdminSidebarItem, NAV_GROUPS } from "./AdminSidebarItem";
 
@@ -10,6 +10,7 @@ export function AdminNavigation({
   desktopHidden,
   onClose,
   onSelect,
+  onSignOut,
 }: {
   tab: TabKey;
   badges: Partial<Record<TabKey, number>>;
@@ -17,6 +18,7 @@ export function AdminNavigation({
   desktopHidden: boolean;
   onClose: () => void;
   onSelect: (tab: TabKey) => void;
+  onSignOut: () => void;
 }) {
   useEffect(() => {
     if (!mobileOpen) return;
@@ -55,6 +57,17 @@ export function AdminNavigation({
     );
   }
 
+  const signOutButton = (
+    <button
+      type="button"
+      onClick={onSignOut}
+      className="flex min-h-10 w-full items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink focus-visible:outline-brand"
+    >
+      <Icons.logout size={16} />
+      Гарах
+    </button>
+  );
+
   return (
     <>
       <aside
@@ -69,9 +82,7 @@ export function AdminNavigation({
           <Logo className="min-w-0" />
         </div>
         <div className="flex-1 px-3 py-5">{links()}</div>
-        <p className="shrink-0 border-t border-line px-5 py-3 text-[11px] text-ink-muted">
-          Uudam · Аялал ба харилцагчийн удирдлага
-        </p>
+        <div className="shrink-0 border-t border-line px-3 py-2">{signOutButton}</div>
       </aside>
       <Modal
         open={mobileOpen}
@@ -79,7 +90,10 @@ export function AdminNavigation({
         title="Удирдлагын цэс"
         panelClassName="max-w-sm"
       >
-        <div className="-m-1 rounded-xl bg-surface p-3">{links()}</div>
+        <div className="-m-1 space-y-3 rounded-xl bg-surface p-3">
+          {links()}
+          <div className="border-t border-line pt-2">{signOutButton}</div>
+        </div>
       </Modal>
     </>
   );

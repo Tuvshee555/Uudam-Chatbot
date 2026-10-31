@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button, Card, EmptyState, IconButton, Icons, Input, Spinner, Switch, Textarea, cx, useToast } from "@/components/ui";
 import type { ControlState, CustomerDocument, PageControlState, PauseRow, RecentRow, TravelBotSettings } from "@/lib/adminTypes";
 import { SectionHeading, TabHeader } from "./AdminShared";
@@ -96,7 +96,6 @@ export function BotTab({
   pausedRows,
   pausedIds,
   busyKey,
-  tick,
   apiFetch,
   onPauseAction,
   onSettingsChanged,
@@ -111,7 +110,6 @@ export function BotTab({
   pausedRows: PauseRow[];
   pausedIds: Set<string>;
   busyKey: string;
-  tick: number;
   apiFetch: (url: string, init?: RequestInit) => Promise<Response>;
   onPauseAction: (
     action:
@@ -130,6 +128,13 @@ export function BotTab({
   onSettingsChanged: () => void;
   onConversationsChanged: () => void;
 }) {
+  // Pause countdowns ("12 мин") refresh every second here, instead of the whole
+  // admin page re-rendering every second for them.
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => setTick((value) => value + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
   const handoffRows = pausedRows.filter((row) => row.reason === "handoff");
   const handoffIds = new Set(handoffRows.map((row) => row.sender_id));
   const [selectedSender, setSelectedSender] = useState<string | null>(null);

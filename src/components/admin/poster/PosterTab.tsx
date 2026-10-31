@@ -171,7 +171,6 @@ type PosterSyncPdfPayload = {
   filename: string;
 };
 
-const ADMIN_SECRET_STORAGE_KEY = "travel_admin_secret";
 const POSTER_WIDTH = 1080;
 const MESSENGER_SINGLE_IMAGE_MAX_HEIGHT = 1900;
 const MESSENGER_MAX_IMAGE_SLICES = 3;
@@ -225,11 +224,6 @@ const POSTER_STYLE_CONTROLS: Array<{
   { key: "dayTextScale", label: "Өдрийн тайлбар", min: 0.85, max: 1.32, step: 0.01 },
   { key: "photoScale", label: "Зургийн хэмжээ", min: 0.5, max: 1.05, step: 0.01 },
 ];
-
-function getStoredAdminSecret(): string {
-  if (typeof window === "undefined") return "";
-  return window.localStorage.getItem(ADMIN_SECRET_STORAGE_KEY) || "";
-}
 
 /** Sets a value at an arbitrary path inside a structured-clone of obj. Path segments are
  * property keys or array indices, matched 1:1 to the PosterTrip shape by the caller. */
@@ -949,7 +943,6 @@ export default function PosterTab({
             uploadToBlob(file.name, file, {
               access: "public",
               handleUploadUrl: "/api/admin/poster/upload",
-              clientPayload: JSON.stringify({ adminSecret: getStoredAdminSecret() }),
               abortSignal: controller.signal,
             }),
           ),
@@ -1006,7 +999,6 @@ export default function PosterTab({
     const blob = await uploadToBlob(filename, file, {
       access: "public",
       handleUploadUrl: "/api/admin/poster/upload",
-      clientPayload: JSON.stringify({ adminSecret: getStoredAdminSecret() }),
     });
     return blob.url;
   }
@@ -1032,7 +1024,6 @@ export default function PosterTab({
         const blob = await uploadToBlob(file.name, file, {
           access: "public",
           handleUploadUrl: "/api/admin/poster/upload",
-          clientPayload: JSON.stringify({ adminSecret: getStoredAdminSecret() }),
           abortSignal: controller.signal,
         });
         res = await apiFetch("/api/admin/poster/extract", {

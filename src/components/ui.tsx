@@ -211,6 +211,13 @@ export const Icons = {
       <path d="M4 20c0-4.4 3.6-8 8-8s8 3.6 8 8" />
     </>,
   ),
+  logout: makeIcon(
+    <>
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <path d="M16 17l5-5-5-5" />
+      <path d="M21 12H9" />
+    </>,
+  ),
   bot: makeIcon(
     <>
       <rect x="5" y="7" width="14" height="10" rx="2" />
