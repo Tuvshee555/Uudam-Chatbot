@@ -14,6 +14,7 @@ import { readRawBodyLimited } from "./webhookSecurity";
 
 const env = getEnv();
 const VERIFY_TOKEN = env.verifyToken;
+const VERIFY_TOKEN_NEXT = env.verifyTokenNext;
 
 export type Platform = "facebook" | "instagram";
 export type AttachmentReplyPayload = {
@@ -51,6 +52,18 @@ export type EventClaim = {
 };
 
 const PROCESSED_EVENT_TTL_MS = 2 * 60 * 1000;
+/**
+ * Events with a genuine Meta message id (`mid`) stay deduplicated for 48 hours: during the
+ * app migration both subscribed apps deliver the same message with the same mid, and Meta's
+ * own retries of a failed delivery can arrive hours later — the mid is globally unique, so a
+ * long memory can never swallow a NEW message. Events WITHOUT a mid (button taps, postbacks)
+ * keep the short window above: their key is only customer + button text, and a customer
+ * legitimately tapping the same menu button again tomorrow must be answered, not skipped.
+ */
+const PROCESSED_MID_EVENT_TTL_MS = 48 * 60 * 60 * 1000;
+export function processedEventTtlMs(key: string) {
+  return key.includes(":mid:") ? PROCESSED_MID_EVENT_TTL_MS : PROCESSED_EVENT_TTL_MS;
+}
 const EVENT_PROCESSING_TTL_MS = Math.max(env.redisLockTtlMs * 2, 60_000);
 const RECENT_TEXT_TTL_MS = 20 * 1000;
 const RECENT_REPLY_TTL_MS = 2 * 60 * 60 * 1000;
@@ -136,8 +149,10 @@ function recordConsistencyDegraded(
   logError("webhook.consistency_degraded", { domain, operation });
 }
 export function verifyToken(token: unknown) {
-  if (!VERIFY_TOKEN || typeof token !== "string") return false;
-  return token === VERIFY_TOKEN;
+  if (typeof token !== "string" || !token) return false;
+  // Either app may (re)subscribe during the migration; each has its own verify token.
+  return (Boolean(VERIFY_TOKEN) && token === VERIFY_TOKEN)
+    || (Boolean(VERIFY_TOKEN_NEXT) && token === VERIFY_TOKEN_NEXT);
 }
 export async function readRawBody(req: NextApiRequest): Promise<Buffer> {
   const contentLengthHeader = req.headers["content-length"];
@@ -149,7 +164,7 @@ export async function readRawBody(req: NextApiRequest): Promise<Buffer> {
 function pruneProcessedEvents() {
   const now = Date.now();
   for (const [key, timestamp] of processedEvents.entries()) {
-    if (now - timestamp > PROCESSED_EVENT_TTL_MS) {
+    if (now - timestamp > processedEventTtlMs(key)) {
       processedEvents.delete(key);
     }
   }
@@ -285,7 +300,7 @@ export async function claimEventForProcessingConsistent(key: string): Promise<Ev
             processedEventRedisKey(key),
             String(Date.now()),
             "PX",
-            PROCESSED_EVENT_TTL_MS,
+            processedEventTtlMs(key),
           );
           pipeline.eval(
             REDIS_CONVERSATION_UNLOCK_LUA,

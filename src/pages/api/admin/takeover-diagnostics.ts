@@ -147,8 +147,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   for (const record of unmatchedRecords) if (record.text && (texts.get(record.text) ?? 0) >= 3) signatures.get(record.signature)!.unmatchedRepeatedText += 1;
 
+  // The echo classification matrix: what each app id has actually sent (echoObserver.ts).
+  const echoMatrix = (await queryNeon<Record<string, unknown>>(
+    `SELECT app_id, classification, has_bot_metadata,
+            COUNT(*)::int AS events, COUNT(DISTINCT recipient_id)::int AS customers,
+            AVG(text_length)::int AS avg_text_length,
+            COUNT(*) FILTER (WHERE attachment_types <> '')::int AS with_attachments,
+            MIN(created_at) AS first_seen, MAX(created_at) AS last_seen
+       FROM travel_echo_events WHERE created_at > NOW() - INTERVAL '14 days'
+      GROUP BY app_id, classification, has_bot_metadata ORDER BY events DESC`,
+  ).catch(() => null))?.rows ?? [];
+
   return res.status(200).json({
     ok: true,
+    echoMatrix,
+    // Meta-app migration state (flags and ids only, never secret values).
+    migration: {
+      metaAppId: env.metaAppId || null,
+      metaAppSecretNextSet: Boolean(env.metaAppSecretNext),
+      verifyTokenNextSet: Boolean(env.verifyTokenNext),
+      pagesOnNextToken: env.facebookPagesNextIds.map((id) => `…${id.slice(-4)}`),
+      echoTakeoverMode: env.echoTakeoverMode,
+      echoHumanAppIds: env.echoHumanAppIds,
+    },
     pages: pageReports,
     threads: { sendersChecked: senders.length, threadsRead, threadFailures, messageIdPrefixes: [...idPrefixes] },
     pageMessageSignatures: Object.fromEntries([...signatures.entries()].sort((a, b) => b[1].total - a[1].total)),

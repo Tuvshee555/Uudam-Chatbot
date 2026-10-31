@@ -7,6 +7,18 @@ export type ValidatedEnv = {
   facebookPageId: string;
   facebookPages: Array<{ pageId: string; token: string }>;
   metaAppSecret: string;
+  /** Meta-app migration (docs/meta-app-migration.md): the new app's secret, verify token and
+   * page tokens run NEXT to the old app's until cutover. All optional; absent = old app only. */
+  metaAppSecretNext: string;
+  verifyTokenNext: string;
+  /** Page ids whose roster token was replaced from FACEBOOK_PAGES_NEXT (cutover switch). */
+  facebookPagesNextIds: string[];
+  /** The app the bot itself sends through, to recognise its own message echoes. */
+  metaAppId: string;
+  /** Echo-based takeover stays observe-only until real echoes prove the classification. */
+  echoTakeoverMode: "observe" | "enforce";
+  /** App ids proven to be a human inbox surface; only these may ever count as a consultant. */
+  echoHumanAppIds: string[];
   adminSecret: string;
   adminOpenAccess: boolean;
   allowAdminSecretQuery: boolean;
@@ -220,6 +232,62 @@ function parseFacebookPages(
   return pages;
 }
 
+/**
+ * Cutover switch for the Meta-app migration: `FACEBOOK_PAGES_NEXT=pageId:token,...` replaces
+ * that page's roster token with the NEW app's page token — every send, thread lookup and cron
+ * for that page moves to the new app in one deploy. A page id that is not already in the
+ * roster is a configuration mistake (a typo would silently leave the old token live), so it
+ * fails validation instead of being ignored. Requires META_APP_SECRET_NEXT, because
+ * `appsecret_proof` must be computed with the secret of the app that issued the token.
+ */
+function applyFacebookPagesNext(
+  source: NodeJS.ProcessEnv,
+  pages: Array<{ pageId: string; token: string }>,
+  metaAppSecretNext: string,
+  errors: string[],
+): string[] {
+  const raw = readOptionalString("FACEBOOK_PAGES_NEXT", source);
+  if (!raw) return [];
+  const overridden: string[] = [];
+  for (const entry of raw.split(",")) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const sep = trimmed.indexOf(":");
+    const pageId = sep > 0 ? trimmed.slice(0, sep).trim() : "";
+    const token = sep > 0 ? trimmed.slice(sep + 1).trim() : "";
+    if (!pageId || !token) {
+      errors.push(`FACEBOOK_PAGES_NEXT entry "${trimmed.slice(0, 20)}…" must be in the form pageId:token`);
+      continue;
+    }
+    const existing = pages.findIndex((page) => page.pageId === pageId);
+    if (existing < 0) {
+      errors.push(`FACEBOOK_PAGES_NEXT page ${pageId} is not in FACEBOOK_PAGES / the legacy pair; refusing a token for an unknown page`);
+      continue;
+    }
+    pages[existing] = { pageId, token };
+    overridden.push(pageId);
+  }
+  if (overridden.length && !metaAppSecretNext) {
+    errors.push("FACEBOOK_PAGES_NEXT requires META_APP_SECRET_NEXT (appsecret_proof must use the new app's secret)");
+  }
+  return overridden;
+}
+
+/**
+ * The app secret that matches this page token (`appsecret_proof` = HMAC(secret, token) is only
+ * valid with the secret of the app that issued the token). Unknown tokens get the primary
+ * secret; never throws, so pure classification tests run without a full environment.
+ */
+const tokenSecrets = new Map<string, string>();
+export function appSecretForToken(token: string): string {
+  try {
+    const env = getEnv();
+    return tokenSecrets.get(token) || env.metaAppSecret;
+  } catch {
+    return "";
+  }
+}
+
 function readBoolean(
   name: string,
   source: NodeJS.ProcessEnv,
@@ -297,16 +365,37 @@ export function getEnv(): ValidatedEnv {
     legacyTokenPage,
     errors,
   );
-  // Keep the singular fields populated (back-compat consumers, IG fallback, tests):
-  // prefer the explicit legacy vars, otherwise derive from the primary roster page.
-  const primaryPage = facebookPages[0];
-  const tokenPage = legacyTokenPage || primaryPage?.token || "";
-  const facebookPageId = legacyFacebookPageId || primaryPage?.pageId || "";
   const metaAppSecret = readRequiredStringFromNames(
     ["META_APP_SECRET", "FACEBOOK_APP_SECRET", "INSTAGRAM_APP_SECRET_KEY"],
     source,
     errors,
   );
+  const metaAppSecretNext = readOptionalString("META_APP_SECRET_NEXT", source) || "";
+  const verifyTokenNext = readOptionalString("VERIFY_TOKEN_NEXT", source) || "";
+  const metaAppId = readOptionalString("META_APP_ID", source) || "";
+  // Which tokens belong to which app, before the NEXT override rewrites the roster.
+  tokenSecrets.clear();
+  for (const page of facebookPages) tokenSecrets.set(page.token, metaAppSecret);
+  if (legacyTokenPage) tokenSecrets.set(legacyTokenPage, metaAppSecret);
+  const facebookPagesNextIds = applyFacebookPagesNext(source, facebookPages, metaAppSecretNext, errors);
+  for (const page of facebookPages) {
+    if (facebookPagesNextIds.includes(page.pageId)) tokenSecrets.set(page.token, metaAppSecretNext || metaAppSecret);
+  }
+  const echoTakeoverModeRaw = (readOptionalString("ECHO_TAKEOVER_MODE", source) || "observe").toLowerCase();
+  if (echoTakeoverModeRaw !== "observe" && echoTakeoverModeRaw !== "enforce") {
+    errors.push('ECHO_TAKEOVER_MODE must be "observe" or "enforce"');
+  }
+  const echoTakeoverMode: "observe" | "enforce" = echoTakeoverModeRaw === "enforce" ? "enforce" : "observe";
+  const echoHumanAppIds = (readOptionalString("ECHO_HUMAN_APP_IDS", source) || "")
+    .split(",").map((id) => id.trim()).filter(Boolean);
+  // Keep the singular fields populated (back-compat consumers, IG fallback, tests). The roster
+  // (NEXT override included) wins for the primary page's token, so staff alerts and the webhook
+  // fallback token follow the cutover; the legacy var only covers a page outside the roster.
+  const primaryPage = facebookPages[0];
+  const facebookPageId = legacyFacebookPageId || primaryPage?.pageId || "";
+  const tokenPage =
+    facebookPages.find((page) => page.pageId === facebookPageId)?.token ||
+    legacyTokenPage || primaryPage?.token || "";
   const adminSecret = readRequiredString("ADMIN_SECRET", source, errors);
   const adminOpenAccess = readBoolean(
     "ADMIN_OPEN_ACCESS",
@@ -656,6 +745,12 @@ export function getEnv(): ValidatedEnv {
     facebookPageId,
     facebookPages,
     metaAppSecret,
+    metaAppSecretNext,
+    verifyTokenNext,
+    facebookPagesNextIds,
+    metaAppId,
+    echoTakeoverMode,
+    echoHumanAppIds,
     adminSecret,
     adminOpenAccess,
     allowAdminSecretQuery,
@@ -718,6 +813,13 @@ export function getEnv(): ValidatedEnv {
     allowAdminSecretQuery: cachedEnv.allowAdminSecretQuery,
     facebookPageCount: cachedEnv.facebookPages.length,
     facebookPageIds: cachedEnv.facebookPages.map((p) => p.pageId),
+    // Meta-app migration state (names and flags only, never values).
+    facebookPagesNextIds: cachedEnv.facebookPagesNextIds,
+    metaAppSecretNextSet: Boolean(cachedEnv.metaAppSecretNext),
+    verifyTokenNextSet: Boolean(cachedEnv.verifyTokenNext),
+    metaAppIdSet: Boolean(cachedEnv.metaAppId),
+    echoTakeoverMode: cachedEnv.echoTakeoverMode,
+    echoHumanAppIdCount: cachedEnv.echoHumanAppIds.length,
     redisStateEnabled: cachedEnv.redisStateEnabled,
     redisRateLimitEnabled: cachedEnv.redisRateLimitEnabled,
     redisReplayEnabled: cachedEnv.redisReplayEnabled,
@@ -763,4 +865,5 @@ export function getEnv(): ValidatedEnv {
 
 export function resetEnvCacheForTests() {
   cachedEnv = null;
+  tokenSecrets.clear();
 }

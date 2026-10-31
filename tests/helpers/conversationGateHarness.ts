@@ -18,10 +18,10 @@ export type ModelOverride = Partial<{ tripId: string; place: string | null; date
   unavailable: boolean }>;
 
 /** The actual handler runs unchanged; only external SQL/provider transports are replaced. */
-export async function conversationGateHarness(context: TestContext) {
+export async function conversationGateHarness(context: TestContext, options: { env?: Record<string, string | undefined> } = {}) {
   applyTestEnv({ NEON_DATABASE_URL: "postgres://fixture:fixture@127.0.0.1:1/conversation-gate",
     BOOKING_DATABASE_URL: undefined, TRIP_UNDERSTANDING: "on", STAFF_NOTIFY_PSIDS: undefined,
-    TELEGRAM_BOT_TOKEN: undefined, TELEGRAM_STAFF_CHAT_IDS: undefined });
+    TELEGRAM_BOT_TOKEN: undefined, TELEGRAM_STAFF_CHAT_IDS: undefined, ...options.env });
   context.mock.timers.enable({ apis: ["Date"], now: new Date("2098-02-01T04:00:00Z") });
   const history: HistoryRow[] = [], leads: LeadRow[] = [], sends: Array<{ senderId: string; text: string }> = [];
   const pauses = new Map<string, { paused: boolean; expires_at: string | null; pause_reason: string }>();
@@ -39,6 +39,10 @@ export async function conversationGateHarness(context: TestContext) {
   const threads = new Map<string, ThreadScript>();
   const outbound = new Map<string, { recipient: string; at: number }>();
   const lastStaffReply = new Map<string, string>();
+  // When staff handed the conversation back to the bot (travel_senders.bot_released_at).
+  const released = new Map<string, string>();
+  // Echo observations (travel_echo_events): shape and app id, never text (echoObserver.ts).
+  const echoes: Array<{ recipient: string; appId: string; classification: string; hasBotMetadata: boolean }> = [];
   const result = (rows: unknown[] = []) => ({ rows, rowCount: rows.length });
   const query = async (sql: string, params: unknown[] = []) => {
     const sender = String(params[0] ?? "");
@@ -57,11 +61,20 @@ export async function conversationGateHarness(context: TestContext) {
       return result(history.filter((row) => row.sender_id === sender && row.role === "assistant").map((row) => ({ at: row.created_at, text: row.text })));
     }
     if (/UPDATE travel_senders SET last_staff_reply_at/i.test(sql)) { lastStaffReply.set(sender, String(params[1])); return result(); }
+    if (/SELECT bot_released_at AS released FROM travel_senders/i.test(sql)) {
+      return result([{ released: released.get(sender) ?? null }]);
+    }
+    if (/INSERT INTO travel_echo_events/i.test(sql)) {
+      echoes.push({ recipient: String(params[1]), appId: String(params[3]), hasBotMetadata: Boolean(params[4]), classification: String(params[5]) });
+      return result();
+    }
     if (/AS staff,[\s\S]*AS assigned,[\s\S]*AS open/i.test(sql)) {
       const staffAt = lastStaffReply.get(sender);
+      const releasedAt = released.get(sender);
       const open = leads.some((lead) => lead.sender_id === sender && ["new_lead", "contacted", "no_answer"].includes(lead.lead_status)
         && Date.now() - Date.parse(lead.created_at) < 3 * 86_400_000);
-      return result([{ staff: Boolean(staffAt && Date.now() - Date.parse(staffAt) < 7 * 86_400_000), assigned: false, open }]);
+      return result([{ staff: Boolean(staffAt && Date.now() - Date.parse(staffAt) < 7 * 86_400_000
+        && (!releasedAt || Date.parse(staffAt) > Date.parse(releasedAt))), assigned: false, open }]);
     }
     if (/SELECT[\s\S]*FROM travel_trip_entries/i.test(sql)) {
       if (/WHERE\s+id\s*=\s*\$1/i.test(sql)) return result(catalog.filter(trip => trip.id === sender));
@@ -189,22 +202,30 @@ export async function conversationGateHarness(context: TestContext) {
   const demo = await import("../../src/pages/api/demo");
   const { getTripSelection } = await import("../../src/lib/tripSelectionState");
   const { closeNeonPool } = await import("../../src/lib/neonDb");
-  const turn = async (senderId: string, text: string, model: ModelOverride = {}, eventId = `gate-event-${++serial}`,
-    options: { platform?: "facebook" | "instagram" } = {}) => {
-    override = model;
-    const beforeSend = sends.length, beforeLead = leads.length, beforeModel = models.length, beforeAnswerModel = answerModels.length;
-    // Facebook (the configured fixture page): the bot reads the Messenger thread before replying.
-    const payload = options.platform === "facebook"
-      ? { object: "page", entry: [{ id: "1234567890", time: Date.now(), messaging: [{ sender: { id: senderId }, recipient: { id: "1234567890" },
-        timestamp: Date.now(), message: { mid: eventId, text } }] }] }
-      : { object: "instagram", entry: [{ id: "gate-page", messaging: [{ sender: { id: senderId }, message: { mid: eventId, text } }] }] };
+  /** POST one signed webhook delivery and collect the handler's effects. */
+  const deliver = async (payload: unknown, signSecret = "test-meta-secret") => {
     const raw = Buffer.from(JSON.stringify(payload));
     const req = { method: "POST", url: "/api/webhook", query: {}, headers: { "content-type": "application/json", "content-length": String(raw.length),
-      "x-hub-signature-256": `sha256=${createHmac("sha256", "test-meta-secret").update(raw).digest("hex")}` },
+      "x-hub-signature-256": `sha256=${createHmac("sha256", signSecret).update(raw).digest("hex")}` },
       async *[Symbol.asyncIterator]() { yield raw; } };
     let status = 200;
     const res = { status(code: number) { status = code; return res; }, json() { return res; }, send() { return res; }, end() { return res; }, setHeader() {}, get statusCode() { return status; } };
     await webhook.default(req as never, res as never);
+    return status;
+  };
+  const turn = async (senderId: string, text: string, model: ModelOverride = {}, eventId = `gate-event-${++serial}`,
+    options: { platform?: "facebook" | "instagram"; signSecret?: string; postback?: boolean } = {}) => {
+    override = model;
+    const beforeSend = sends.length, beforeLead = leads.length, beforeModel = models.length, beforeAnswerModel = answerModels.length;
+    // A button tap: no message, no mid — only the postback's title (webhook derives the text).
+    const event = options.postback
+      ? { sender: { id: senderId }, recipient: { id: "1234567890" }, timestamp: Date.now(), postback: { title: text, payload: text } }
+      : { sender: { id: senderId }, recipient: { id: "1234567890" }, timestamp: Date.now(), message: { mid: eventId, text } };
+    // Facebook (the configured fixture page): the bot reads the Messenger thread before replying.
+    const payload = options.platform === "facebook"
+      ? { object: "page", entry: [{ id: "1234567890", time: Date.now(), messaging: [event] }] }
+      : { object: "instagram", entry: [{ id: "gate-page", messaging: [{ sender: { id: senderId }, message: { mid: eventId, text } }] }] };
+    const status = await deliver(payload, options.signSecret);
     if (process.env.CONVERSATION_GATE_TRACE === "1") console.log(`CONVERSATION_GATE_TURN ${JSON.stringify({ senderId, text, sends: sends.slice(beforeSend), selection: await getTripSelection(senderId) })}`);
     return { status, sends: sends.slice(beforeSend), leads: leads.slice(beforeLead), modelCalls: models.length - beforeModel, answerModelCalls: answerModels.length - beforeAnswerModel,
       selection: await getTripSelection(senderId), history: history.filter(row => row.sender_id === senderId) };
@@ -229,8 +250,25 @@ export async function conversationGateHarness(context: TestContext) {
     thread(senderId: string, script: ThreadScript) { threads.set(senderId, script); },
     /** Ids of the messages the bot sent (recorded at send time, staffTakeover.ts). */
     botMids() { return [...outbound.keys()]; },
-    /** A consultant hands the conversation back (admin "release"). */
-    resume(senderId: string) { pauses.delete(senderId); },
+    /** A consultant hands the conversation back ("Ботод буцаах"), as dbResumeSender writes it:
+     * the pause is cleared AND bot_released_at is set, so the old staff reply still visible in
+     * the thread no longer re-takes the conversation. */
+    resume(senderId: string) { pauses.delete(senderId); released.set(senderId, new Date().toISOString()); },
+    /** A message echo from Meta: the Page (any app) sent `customerId` a message. */
+    async echoTurn(customerId: string, echo: { appId?: string | number; metadata?: string; text?: string; mid?: string;
+      attachments?: Array<{ type?: string }> } = {}) {
+      const beforeSend = sends.length;
+      const status = await deliver({ object: "page", entry: [{ id: "1234567890", time: Date.now(), messaging: [{
+        sender: { id: "1234567890" }, recipient: { id: customerId }, timestamp: Date.now(),
+        message: { is_echo: true, mid: echo.mid ?? `m_echo_${++serial}`, ...(echo.appId === undefined ? {} : { app_id: echo.appId }),
+          ...(echo.metadata === undefined ? {} : { metadata: echo.metadata }), ...(echo.text === undefined ? {} : { text: echo.text }),
+          ...(echo.attachments === undefined ? {} : { attachments: echo.attachments }) } }] }] });
+      // recordEchoEvent is fire-and-forget; let it land before the test reads `echoes`.
+      await new Promise((resolve) => setImmediate(resolve));
+      return { status, sends: sends.slice(beforeSend) };
+    },
+    /** The echo observations recorded so far (travel_echo_events). */
+    echoes() { return [...echoes]; },
     pauseState(senderId: string) { return pauses.get(senderId) ?? null; },
     /** A staff member took this conversation over: the stored pause the webhook honours. */
     pause(senderId: string, until = new Date(Date.now() + 3 * 86_400_000).toISOString(), reason = "manual") { pauses.set(senderId, { paused: true, expires_at: until, pause_reason: reason }); },

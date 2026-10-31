@@ -474,6 +474,31 @@ export async function ensureTravelSchema() {
       await client.query(`
         ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS last_staff_reply_at TIMESTAMPTZ NULL;
       `);
+      // When staff last handed the conversation back to the bot ("Ботод буцаах"): consultant
+      // messages at or before this do not take the conversation over again (staffTakeover.ts).
+      await client.query(`
+        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS bot_released_at TIMESTAMPTZ NULL;
+      `);
+      // One row per message echo received during the Meta-app migration (echoObserver.ts):
+      // who sent a Page message, by app id — the evidence for echo-based takeover. Shapes and
+      // ids only; NEVER message text.
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS travel_echo_events (
+          id BIGSERIAL PRIMARY KEY,
+          page_id TEXT NOT NULL DEFAULT '',
+          recipient_id TEXT NOT NULL DEFAULT '',
+          mid TEXT NOT NULL DEFAULT '',
+          app_id TEXT NOT NULL DEFAULT '',
+          has_bot_metadata BOOLEAN NOT NULL DEFAULT FALSE,
+          classification TEXT NOT NULL DEFAULT '',
+          text_length INTEGER NOT NULL DEFAULT 0,
+          attachment_types TEXT NOT NULL DEFAULT '',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_travel_echo_events_created ON travel_echo_events (created_at DESC);
+      `);
       // One row per historical document moved from public Cloudinary to the private store
       // (documentMigration.ts): every step's result, so a run can be retried and audited.
       await client.query(`

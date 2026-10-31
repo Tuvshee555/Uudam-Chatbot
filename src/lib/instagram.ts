@@ -1,6 +1,6 @@
 import { tracedSend } from "./inboundTrace";
 import { createHmac } from "crypto";
-import { getEnv } from "./env";
+import { appSecretForToken, getEnv } from "./env";
 import { isMetaOutboundDisabled, logMetaOutboundSuppressed } from "./metaOutboundKillSwitch";
 import { logInfo } from "./observability";
 import { fetchWithRetry } from "./resilience";
@@ -11,10 +11,12 @@ const env = getEnv();
 
 function graphMessagesEndpoint(igUserId: string, token: string) {
   const params = new URLSearchParams({ access_token: token });
-  if (env.metaAppSecret) {
+  // env.ts maps each page token to its issuing app's secret (the app migration runs two apps).
+  const secret = appSecretForToken(token);
+  if (secret) {
     params.set(
       "appsecret_proof",
-      createHmac("sha256", env.metaAppSecret).update(token).digest("hex"),
+      createHmac("sha256", secret).update(token).digest("hex"),
     );
   }
   return `${GRAPH_API_BASE}/${igUserId}/messages?${params.toString()}`;

@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { askOpenAI } from "../../lib/openaiProvider";
 import { askOpenAIChatParts } from "../../lib/openaiFallback";
 import { matchFlow, findTriggeredFlow, getFlowState, setFlowState, clearFlowState, newRuntimeState, runFlowFrom, resumeFlowWithInput, type FlowRule, type FlowDoc, type FlowEffects, type FlowRuntimeState, type RunOutcome, } from "../../lib/flowEngine";
-import { BOT_MESSAGE_METADATA, replyToComment, sendImageMessage, sendQuickReplies } from "../../lib/messenger";
+import { replyToComment, sendImageMessage, sendQuickReplies } from "../../lib/messenger";
 import { sendQuickReplies as sendIgQuickReplies } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { getClarificationState, setClarificationState } from "../../lib/clarificationState";
@@ -47,6 +47,7 @@ import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { buildContactReply, contactSettingsOf, isAddressRequest, isPhoneRequest, isRepeatOfLastReply } from "../../lib/contactReplies";
 import { detectStaffTakeover, fetchThreadMessages, markStaffReply, STAFF_TAKEOVER_MS, takeoverRisk, type TakeoverCheck } from "../../lib/staffTakeover";
+import { classifyEcho, echoEnforcementEnabled, recordEchoEvent } from "../../lib/echoObserver";
 import { AI_OUTAGE_HANDOFF_REPLY, BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, markGetStarted, pauseBookedCustomer, pauseBot, pauseReason, trackSender } from "../../lib/pause";
@@ -75,7 +76,7 @@ import { continueBookingCollect, startBookingCollect, type BookingCollectContext
 import { getEnv } from "../../lib/env";
 import { isMetaOutboundDisabled } from "../../lib/metaOutboundKillSwitch";
 import { beginRequestTrace, classifyError, finishRequestTrace, hashIdentifier, logError, logInfo, logWarn, recordCounter, } from "../../lib/observability";
-import { parseWebhookJson, PayloadTooLargeError, verifyMetaSignature, } from "../../lib/webhookSecurity";
+import { parseWebhookJson, PayloadTooLargeError, verifyMetaSignatureAny, } from "../../lib/webhookSecurity";
 import {
   type Platform,
   type AttachmentReplyPayload,
@@ -2372,7 +2373,8 @@ export default async function handler(
         const signature = Array.isArray(signatureHeader)
           ? signatureHeader[0]
           : signatureHeader;
-        if (!verifyMetaSignature(rawBody, signature, META_APP_SECRET)) {
+        // Two apps deliver during the Meta-app migration, each signing with its own secret.
+        if (!verifyMetaSignatureAny(rawBody, signature, [META_APP_SECRET, env.metaAppSecretNext])) {
           recordCounter("abuse.webhook_invalid_signature_total", 1);
           return res.status(401).json({ error: "invalid_signature" });
         }
@@ -2520,15 +2522,44 @@ export default async function handler(
               : [];
             for (const event of messagingEvents) {
               if (!event?.sender?.id) continue;
-              // Echo = operator/page sent a message to a customer.
-              // Bot echoes carry our metadata; only pause for human/operator echoes.
+              // Echo = the Page sent a message to a customer: this bot, a consultant (desktop
+              // or phone), Meta's own automations, or another connected app — told apart by
+              // our send metadata and the echo's app_id (echoObserver.ts). Until real echoes
+              // prove that split, this branch OBSERVES and records; the thread lookup below
+              // remains what actually stops the bot when a consultant has replied. Without
+              // that gate, Meta's automated welcome greeting (an echo with no metadata) would
+              // re-create the 3-day false silence of 2026-10-30 on every new conversation.
               if (event?.message?.is_echo) {
                 const customerId = String(event.recipient?.id ?? "").trim();
-                const isBotEcho = event.message.metadata === BOT_MESSAGE_METADATA;
-                if (customerId && !isBotEcho) {
+                if (!customerId) continue;
+                const echoText = String(event.message.text ?? "").trim();
+                const echo = {
+                  pageId,
+                  recipientId: customerId,
+                  mid: String(event.message.mid ?? ""),
+                  appId: event.message.app_id === null || event.message.app_id === undefined ? "" : String(event.message.app_id),
+                  metadata: String(event.message.metadata ?? ""),
+                  textLength: echoText.length,
+                  attachmentTypes: Array.isArray(event.message?.attachments)
+                    ? event.message.attachments.map((a) => a?.type || "unknown")
+                    : [],
+                };
+                const echoClass = classifyEcho(echo);
+                // Fire-and-forget: the observation row must never delay the webhook.
+                void recordEchoEvent(echo, echoClass).catch(() => {});
+                if (echoClass === "bot") {
+                  logInfo("webhook.bot_echo_skip", {
+                    requestId: trace.requestId,
+                    customerHash: hashIdentifier(customerId),
+                    pageId,
+                  });
+                  continue;
+                }
+                // A proven human surface, with enforcement explicitly on: the consultant owns
+                // the conversation. An UNKNOWN app id never pauses — log + counter only.
+                if (echoClass === "human" && echoEnforcementEnabled()) {
                   const operatorPauseMs = AUTO_PAUSE_RESET_DAYS * 24 * 60 * 60 * 1000;
-                  // Was previously `.catch(() => {})` — a failed pause write
-                  // was invisible, and the bot would just keep answering a
+                  // A failed pause write must be visible, or the bot keeps answering a
                   // customer staff already took over with no error anywhere.
                   await dbPauseSender(customerId, operatorPauseMs, "operator_reply").catch(
                     (error) => {
@@ -2541,41 +2572,20 @@ export default async function handler(
                       });
                     },
                   );
-                  // "Mimic Myself" tone capture — captured unconditionally on every
-                  // human operator reply, regardless of the toggle (only the PROMPT
-                  // USE of these samples is gated by mimic_myself_enabled below).
-                  // This keeps the sample pool warm before an admin ever opts in.
-                  // Fire-and-forget: must never delay the webhook response.
-                  const operatorText = String(event.message.text ?? "").trim();
-                  if (operatorText.length >= 8) {
-                    void dbAppendAdminMessage(customerId, operatorText).catch(() => {});
-                  }
-                  // Diagnostic: attachment types on operator echoes are logged
-                  // so a report of "the bot kept answering after I sent a voice
-                  // note from the Page" can be checked against what Meta
-                  // actually sent, instead of guessing. Cheap — only runs on
-                  // human-sent echoes, which are low-volume.
-                  const echoAttachmentTypes = Array.isArray(event.message?.attachments)
-                    ? event.message.attachments.map((a) => a?.type || "unknown")
-                    : [];
-                  // appId identifies WHO sent it (Page inbox / Business Suite /
-                  // an automation / another app) — the field to check when a
-                  // pause looks like it was triggered by something that is not
-                  // a person typing.
+                  await markStaffReply(customerId, new Date()).catch(() => {});
                   logInfo("webhook.operator_echo_pause", {
                     requestId: trace.requestId,
                     customerHash: hashIdentifier(customerId),
                     pageId,
-                    appId: event.message.app_id ?? null,
-                    hasText: operatorText.length > 0,
-                    attachmentTypes: echoAttachmentTypes,
+                    appId: echo.appId || null,
+                    hasText: echoText.length > 0,
+                    attachmentTypes: echo.attachmentTypes,
                   });
-                } else if (customerId && isBotEcho) {
-                  logInfo("webhook.bot_echo_skip", {
-                    requestId: trace.requestId,
-                    customerHash: hashIdentifier(customerId),
-                    pageId,
-                  });
+                }
+                // "Mimic Myself" tone capture: only a PROVEN human surface feeds the sample
+                // pool — automations and unknown apps would poison the owner's voice.
+                if (echoClass === "human" && echoText.length >= 8) {
+                  void dbAppendAdminMessage(customerId, echoText).catch(() => {});
                 }
                 continue;
               }

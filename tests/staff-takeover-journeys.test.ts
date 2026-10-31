@@ -222,6 +222,53 @@ test("staff takeover journeys on Facebook", async (context) => {
       assert.equal(held.sends.length, 0, "the thread cannot be read and a consultant replied this week: no bot reply");
       assert.match(leadContext("recent-staff"), /Бот хариулаагүй — ажилтны хариуг шалгаж чадсангүй/);
     });
+    // Release after takeover (bot_released_at): "Ботод буцаах" must actually hand the
+    // conversation back — before the fix the next customer message re-read the thread, found
+    // the SAME old consultant reply inside the 3-day window and silently re-paused.
+    await context.test("18. after 'Ботод буцаах' the old consultant reply no longer re-pauses; a NEW one takes over again", async () => {
+      const botMid = await opened("released");
+      harness.thread("released", { messages: [
+        { from: "customer", text: "Норвел хотын аялал үнэ", agoMs: 10 * MIN },
+        { from: "page", id: botMid, source: "web", agoMs: 10 * MIN - 2_000 },
+        { from: "page", source: "mobile", text: "Сайн байна уу, зөвлөх байна", agoMs: 2 * MIN },
+      ] });
+      const silenced = await fb("released", "Ойлголоо", one);
+      assert.equal(silenced.sends.length, 0);
+      assert.equal(harness.pauseState("released")?.pause_reason, "operator_reply");
+      harness.resume("released"); // staff press "Ботод буцаах"
+      const answered = await fb("released", "Хүүхдийн үнэ хэд вэ?", one);
+      assert.equal(answered.sends.length, 1, "released: the old consultant reply does not re-silence the bot");
+      assert.match(answeredPrice(answered), /1,591,000₮/);
+      assert.equal(harness.pauseState("released"), null, "and no new pause was written");
+      tick(5 * MIN);
+      harness.thread("released", { messages: [
+        { from: "customer", text: "Норвел хотын аялал үнэ", agoMs: 20 * MIN },
+        { from: "page", id: botMid, source: "web", agoMs: 20 * MIN - 2_000 },
+        { from: "page", source: "mobile", text: "Сайн байна уу, зөвлөх байна", agoMs: 12 * MIN },
+        { from: "page", source: "mobile", text: "Би энэ харилцагчийг дахин авлаа", agoMs: 1 * MIN },
+      ] });
+      const retaken = await fb("released", "За", one);
+      assert.equal(retaken.sends.length, 0, "a consultant replying AFTER the release takes the conversation over again");
+      assert.equal(harness.pauseState("released")?.pause_reason, "operator_reply");
+    });
+
+    await context.test("19. after a release with the lead closed, a failed thread read answers as usual", async () => {
+      const botMid = await opened("released-closed");
+      harness.thread("released-closed", { messages: [
+        { from: "customer", text: "Норвел хотын аялал үнэ", agoMs: 10 * MIN },
+        { from: "page", id: botMid, source: "web", agoMs: 10 * MIN - 2_000 },
+        { from: "page", source: "mobile", text: "Зөвлөх байна", agoMs: 2 * MIN },
+      ] });
+      await fb("released-closed", "Ойлголоо", one); // silenced; the consultant's reply is recorded
+      for (const lead of harness.leads.filter((row) => row.sender_id === "released-closed")) {
+        harness.updateLead(lead.id, { lead_status: "closed" });
+      }
+      harness.resume("released-closed");
+      harness.thread("released-closed", { fail: "timeout" });
+      const answered = await fb("released-closed", "Хүүхдийн үнэ хэд вэ?", one);
+      assert.equal(answered.sends.length, 1,
+        "the release cleared the staff-risk hold: one failed lookup does not silence a handed-back customer");
+    });
   } finally {
     await harness.close();
   }
