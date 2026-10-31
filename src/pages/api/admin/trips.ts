@@ -17,6 +17,7 @@ import { queryNeon } from "../../../lib/neonDb";
 import { getTripById } from "../../../lib/travelDb";
 import type { TravelTrip } from "../../../lib/travelTypes";
 import { auditTripCatalog, auditTripFacts, TripDataValidationError } from "../../../lib/tripDataValidation";
+import { tripListProjection } from "../../../lib/tripListProjection";
 
 function asText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -88,10 +89,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ ok: true, factAudit: auditTripCatalog(rows.rows) });
     }
 
+    // ?id= — one trip in full, as the editor opens it (fresh, never a list projection).
+    if (req.method === "GET" && asText(req.query.id)) {
+      const id = asText(req.query.id);
+      const trip = await getTripById(id);
+      if (!trip) return res.status(404).json({ error: "trip_not_found", message: "Аялал олдсонгүй. Жагсаалтыг шинэчилнэ үү." });
+      const [connectionRows, posterPhotoCounts] = await Promise.all([
+        ensureConnectedTripSchema().then(() => websiteSyncStatus()),
+        posterPhotoCountsByTrip(),
+      ]);
+      return res.status(200).json({ ok: true, trip: { ...trip, extra: {
+        ...trip.extra,
+        website_sync: connectionRows.find(row => row.trip_id === id) || null,
+        poster_photo_count: posterPhotoCounts.get(id) || 0,
+      } } });
+    }
+
     if (req.method === "GET") {
       const search = asText(req.query.search);
       const status = asText(req.query.status);
       const limit = Number(req.query.limit || 200);
+      // ?view=list — the admin list's slim rows (src/lib/tripListProjection.ts).
+      const listView = asText(req.query.view) === "list";
 
       const [trips, control] = await Promise.all([
         listTrips({
@@ -110,18 +129,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const [connectionRows, posterPhotoCounts, rawTrips] = await Promise.all([
         ensureConnectedTripSchema().then(() => websiteSyncStatus()),
         posterPhotoCountsByTrip(),
-        trips.length ? queryNeon<Record<string, unknown>>(
+        trips.length && !listView ? queryNeon<Record<string, unknown>>(
           "SELECT * FROM travel_trip_entries WHERE id = ANY($1::text[])",
           [trips.map(trip => trip.id)],
         ) : Promise.resolve(null),
       ]);
       const connections = new Map(connectionRows.map(row => [row.trip_id, row]));
-      return res.status(200).json({ ok: true, trips: trips.map(trip => ({ ...trip,
+      const rows = trips.map(trip => ({ ...trip,
         extra: {
           ...trip.extra,
           website_sync: connections.get(trip.id) || null,
           poster_photo_count: posterPhotoCounts.get(trip.id) || 0,
-        } })), control, factAudit: auditTripCatalog(rawTrips?.rows || []) });
+        } }));
+      if (listView) return res.status(200).json({ ok: true, trips: rows.map(tripListProjection), control });
+      return res.status(200).json({ ok: true, trips: rows, control, factAudit: auditTripCatalog(rawTrips?.rows || []) });
     }
 
     if (req.method === "POST") {

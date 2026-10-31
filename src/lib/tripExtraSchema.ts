@@ -49,7 +49,7 @@ const KNOWN_EXTRA_KEYS = new Set([
  * time, so a client that sends a trip's extra back must never store them: a
  * stored copy goes stale and the completeness check would trust it.
  */
-const DERIVED_EXTRA_KEYS = new Set(["website_sync", "poster_photo_count"]);
+const DERIVED_EXTRA_KEYS = new Set(["website_sync", "poster_photo_count", "list_projection"]);
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 

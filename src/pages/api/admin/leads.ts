@@ -10,9 +10,11 @@ import {
 import type { LeadCrmStatus } from "../../../lib/travelOps";
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
 import { summarizeLeadAttention } from "../../../lib/leadAttention";
-import { assignLead } from "../../../lib/travelLeadsDb";
+import { assignLead, countLeads } from "../../../lib/travelLeadsDb";
 
 const VALID_CRM_STATUSES: LeadCrmStatus[] = ["new_lead", "contacted", "booked", "no_answer"];
+/** One page of the Leads tab, and the set the attention summary is computed over. */
+const LEAD_PAGE_SIZE = 200;
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const trace = beginRequestTrace({
@@ -31,19 +33,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // ?summary=1: the dashboard's background check — how many leads need a person now,
       // and when the newest activity was, so an open dashboard can alert (leadAttention.ts).
       if (req.query.summary) {
-        const attention = summarizeLeadAttention(await listLeads(200));
+        const attention = summarizeLeadAttention(await listLeads(LEAD_PAGE_SIZE));
         return res.status(200).json({ ok: true, attention });
       }
-      // ?stats=1 returns dashboard aggregates alongside the lead list.
+      // ?stats=1 returns dashboard aggregates alongside one page of the lead list.
+      // ?q= searches every lead (not only the loaded page); ?offset= pages on.
+      // The first unfiltered page is the same 200 leads ?summary=1 reads, so the
+      // tab's "needs attention" count and the nav badge always agree.
       if (req.query.stats) {
-        const [leads, newCount, stats] = await Promise.all([
-          listLeads(120),
+        const search = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 120) : "";
+        const offset = Math.max(0, Number.parseInt(String(req.query.offset ?? "0"), 10) || 0);
+        const [leads, total, newCount, stats] = await Promise.all([
+          listLeads(LEAD_PAGE_SIZE, { offset, search }),
+          countLeads(search),
           countNewLeads(),
           getLeadStats(),
         ]);
-        return res
-          .status(200)
-          .json({ ok: true, leads, new_count: newCount, stats, attention: summarizeLeadAttention(leads) });
+        const firstPage = !search && offset === 0;
+        return res.status(200).json({
+          ok: true, leads, total, offset, search, new_count: newCount, stats,
+          ...(firstPage ? { attention: summarizeLeadAttention(leads) } : {}),
+        });
       }
       const [leads, newCount] = await Promise.all([
         listLeads(80),

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Badge, Button, Icons, Spinner } from "@/components/ui";
+import { Badge, Button, Icons, Spinner, cx } from "@/components/ui";
 import { BOOKING_WEBSITE_URL } from "@/lib/bookingWebsite";
 import { formatTime } from "@/lib/adminUtils";
 import { hasWebsiteSyncConflict, parseWebsiteSyncStatus, summarizeWebsiteSync } from "@/lib/websiteSyncStatus";
@@ -50,27 +50,32 @@ export function WebsiteSyncStatus({ apiFetch, onReviewTrip }: {
     : !summary.total ? "Холбосон аяллын мэдээлэл хараахан алга."
     : "Вэбсайт руу бүх өөрчлөлт хүргэгдсэн.");
 
+  // All delivered: one quiet line. Anything pending, failed or in conflict: the full panel.
+  const healthy = Boolean(state?.configured) && !error && summary.total > 0 && issues.length === 0;
   return (
-    <section className="my-4 rounded-xl border border-line bg-canvas/60 p-4" aria-label="Вэбсайтын холболт">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 basis-52">
-          <h2 className="flex items-center gap-2 text-sm font-semibold text-ink"><Icons.refresh size={16} className="text-brand" />Вэбсайттай холболт</h2>
-          <p className="mt-1.5 text-sm leading-relaxed text-ink-muted" role="status">{message}</p>
+    <section className={cx("rounded-xl border px-4 py-3", healthy ? "border-line bg-surface" : "border-line bg-canvas/60")} aria-label="Вэбсайтын холболт">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <div className="flex min-w-0 flex-1 basis-60 flex-wrap items-center gap-x-2 gap-y-1">
+          <span className={cx("flex h-6 w-6 shrink-0 items-center justify-center rounded-full", healthy ? "bg-success-soft text-success" : "bg-brand-soft text-brand")}>
+            {healthy ? <Icons.check size={14} /> : <Icons.refresh size={14} />}
+          </span>
+          <h2 className="text-sm font-semibold text-ink">Вэбсайт</h2>
+          <p className="text-sm text-ink-muted" role="status">{message}</p>
           {state?.configured && (
-            <div className="mt-2.5 flex flex-wrap gap-2">
-              <Badge tone="neutral">{summary.total} холбосон аялал</Badge>
+            <span className="flex flex-wrap items-center gap-1.5">
+              <Badge tone="neutral">{summary.total} холбосон</Badge>
               {summary.pending > 0 && <Badge tone="warning">{summary.pending} хүлээгдэж буй</Badge>}
               {summary.failed > 0 && <Badge tone="danger">{summary.failed} хүргэсэнгүй</Badge>}
               {summary.conflicts > 0 && <Badge tone="warning">{summary.conflicts} хянах</Badge>}
-            </div>
+            </span>
           )}
+          {summary.lastSyncedAt && <span className="text-xs text-ink-muted">· Сүүлд {formatTime(summary.lastSyncedAt)}</span>}
         </div>
         <Button size="sm" variant="secondary" loading={busy} disabled={busy}
           onClick={() => void refresh(state?.configured ? "POST" : "GET")}>
           <Icons.refresh size={14} />{state?.configured ? "Дахин шинэчлэх" : "Төлөв шалгах"}
         </Button>
       </div>
-      {summary.lastSyncedAt && <p className="mt-3 text-xs text-ink-muted">Сүүлд хүргэсэн: {formatTime(summary.lastSyncedAt)}</p>}
       {issues.length > 0 && state?.configured && (
         <details className="mt-3 border-t border-line pt-3">
           <summary className="cursor-pointer rounded py-1 text-sm font-medium text-ink">Хүлээгдэж буй болон хянах аяллууд ({issues.length})</summary>

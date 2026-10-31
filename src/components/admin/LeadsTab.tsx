@@ -3,7 +3,7 @@ import { Badge, Button, Card, EmptyState, IconButton, Icons, Input, Select, Skel
 import { StatCard, TabHeader } from "./AdminShared";
 import type { LeadCrmStatus, LeadStats, TravelLead } from "@/lib/adminTypes";
 import { formatTime } from "@/lib/adminUtils";
-import { ATTENTION_DAYS, TIER_LABELS, compareLeadsByAttention, leadAttention, type LeadAttention } from "@/lib/leadAttention";
+import { ATTENTION_DAYS, TIER_LABELS, compareLeadsByAttention, leadAttention, type LeadAttention, type LeadAttentionSummary } from "@/lib/leadAttention";
 
 /** Browser notifications for this dashboard: only ever shown while it is open in a browser. */
 function NotificationToggle() {
@@ -22,37 +22,46 @@ function NotificationToggle() {
   );
 }
 
-export function LeadsDashboard({ stats }: { stats: LeadStats }) {
+/** Ulaanbaatar calendar date (YYYY-MM-DD), the day staff and the stats query count by. */
+function ulaanbaatarDay(date: Date): string {
+  return date.toLocaleDateString("en-CA", { timeZone: "Asia/Ulaanbaatar" });
+}
+
+export function LeadsDashboard({ stats, attention }: { stats: LeadStats; attention?: LeadAttentionSummary | null }) {
   const platformLabel = (p: string) =>
     p === "instagram" ? "Instagram" : p === "facebook" ? "Facebook" : p;
 
   // Build a continuous 7-day series (fill gaps with 0) for the mini bar chart.
   const days: Array<{ day: string; count: number; label: string }> = [];
   const byDay = new Map(stats.daily.map((d) => [d.day, d.count]));
+  const today = new Date();
   for (let i = 6; i >= 0; i -= 1) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const key = d.toISOString().slice(0, 10);
+    const key = ulaanbaatarDay(new Date(today.getTime() - i * 86_400_000));
+    const [, month, day] = key.split("-");
     days.push({
       day: key,
       count: byDay.get(key) ?? 0,
-      label: `${d.getMonth() + 1}/${d.getDate()}`,
+      label: `${Number(month)}/${Number(day)}`,
     });
   }
   const maxCount = Math.max(1, ...days.map((d) => d.count));
 
+  // The same "needs a person now" number as the nav badge, not every unread lead ever.
   const cards = [
-    { label: "Шинэ хүсэлт", value: stats.new_count, tone: "text-danger" },
-    { label: "Өнөөдөр", value: stats.today, tone: "text-brand" },
-    { label: "7 хоногт", value: stats.last7days, tone: "text-ink" },
-    { label: "Нийт", value: stats.total, tone: "text-ink" },
+    attention
+      ? { label: "Анхаарах", value: attention.needsAttention, tone: attention.waiting > 0 ? "text-danger" : "text-ink",
+        description: attention.waiting > 0 ? `${attention.waiting} нь хариу хүлээж байна` : "Сүүлийн хоногуудын үзээгүй хүсэлт" }
+      : { label: "Үзээгүй", value: stats.new_count, tone: "text-ink", description: "Бүх цаг үеийн" },
+    { label: "Өнөөдөр", value: stats.today, tone: "text-brand", description: "Улаанбаатарын цагаар" },
+    { label: "7 хоногт", value: stats.last7days, tone: "text-ink", description: undefined },
+    { label: "Нийт", value: stats.total, tone: "text-ink", description: undefined },
   ];
 
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         {cards.map((c) => (
-          <StatCard key={c.label} label={c.label} value={c.value} tone={c.tone} />
+          <StatCard key={c.label} label={c.label} value={c.value} tone={c.tone} description={c.description} />
         ))}
       </div>
 
@@ -120,8 +129,14 @@ export function LeadsDashboard({ stats }: { stats: LeadStats }) {
 
 export function LeadsTab({
   leads,
+  total,
+  loaded,
   stats,
+  attention,
   loading,
+  query,
+  onQueryChange,
+  onLoadMore,
   onRefresh,
   onMarkSeen,
   onUpdateStatus,
@@ -134,8 +149,18 @@ export function LeadsTab({
   onBroadcastSend,
 }: {
   leads: TravelLead[];
+  /** Leads on the server matching the search (all leads without one); `leads` is what is loaded. */
+  total: number;
+  /** False until the first page arrives, so "0" is never shown for "not loaded yet". */
+  loaded: boolean;
   stats: LeadStats | null;
+  /** The nav badge's summary, so the headline number matches it. */
+  attention?: LeadAttentionSummary | null;
   loading: boolean;
+  /** Server-side search over every lead (message, phone, sender, assignee, history). */
+  query: string;
+  onQueryChange: (value: string) => void;
+  onLoadMore: () => void;
   onRefresh: () => void;
   onMarkSeen: (lead: TravelLead) => void;
   onUpdateStatus: (lead: TravelLead, status: LeadCrmStatus) => void;
@@ -147,23 +172,22 @@ export function LeadsTab({
   onBroadcastChange: (msg: string) => void;
   onBroadcastSend: () => void;
 }) {
-  const [search, setSearch] = useState("");
   // Opens on what needs a person: the customer waiting on an answer first (leadAttention.ts).
   const [view, setView] = useState<"attention" | "all" | "unread" | "booking" | "human">("attention");
   const [status, setStatus] = useState<LeadCrmStatus | "all">("all");
+  const searching = Boolean(query.trim());
   const attentionById = useMemo(() => new Map(leads.map((lead) => [lead.id, leadAttention(lead)])), [leads]);
+  // Text search runs on the server over every lead; these chips narrow what is loaded.
   const filteredLeads = useMemo(() => {
-    const query = search.trim().toLocaleLowerCase("mn-MN");
     return leads.filter((lead) => {
       if (view === "attention" && !attentionById.get(lead.id)?.needsAttention) return false;
       if (view === "unread" && lead.status !== "new") return false;
       if (view === "booking" && lead.kind !== "booking") return false;
       if (view === "human" && lead.kind === "booking") return false;
-      if (status !== "all" && (lead.lead_status ?? "new_lead") !== status) return false;
-      return !query || [lead.customer_message, lead.contact_phone, lead.sender_id]
-        .some((value) => value?.toLocaleLowerCase("mn-MN").includes(query));
+      return status === "all" || (lead.lead_status ?? "new_lead") === status;
     }).sort((a, b) => compareLeadsByAttention(attentionById.get(a.id)!, attentionById.get(b.id)!));
-  }, [attentionById, leads, search, status, view]);
+  }, [attentionById, leads, status, view]);
+  const remaining = Math.max(0, total - leads.length);
   const views = [
     { value: "attention", label: "Анхаарах", count: leads.filter((lead) => attentionById.get(lead.id)?.needsAttention).length },
     { value: "all", label: "Бүгд", count: leads.length },
@@ -171,7 +195,7 @@ export function LeadsTab({
     { value: "booking", label: "Захиалга", count: leads.filter((lead) => lead.kind === "booking").length },
     { value: "human", label: "Зөвлөхтэй ярих", count: leads.filter((lead) => lead.kind !== "booking").length },
   ] as const;
-  const hasFilters = Boolean(search.trim()) || status !== "all" || (view !== "all" && view !== "attention");
+  const hasFilters = searching || status !== "all" || (view !== "all" && view !== "attention");
 
   return (
     <div className="space-y-5">
@@ -189,7 +213,7 @@ export function LeadsTab({
         }
       />
 
-      {stats && <LeadsDashboard stats={stats} />}
+      {stats && !searching && <LeadsDashboard stats={stats} attention={attention} />}
 
       <Card className="p-4 sm:p-5">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -198,7 +222,7 @@ export function LeadsTab({
             <p className="mt-1 text-sm text-ink-muted">Зурвасыг уншаад, холбогдсон эсэхийг тэмдэглээрэй.</p>
           </div>
           <p className="shrink-0 text-sm tabular-nums text-ink-muted" role="status">
-            {filteredLeads.length} / {leads.length} хүсэлт
+            {!loaded ? "Ачаалж байна…" : `${filteredLeads.length} харагдаж байна · ${leads.length < total ? `${leads.length} / ${total} ачааллаа` : `${total} ${searching ? "олдсон" : "нийт"}`}`}
           </p>
         </div>
         <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Хүсэлтийн төрөл">
@@ -222,11 +246,16 @@ export function LeadsTab({
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(11rem,14rem)]">
           <Input
-            label="Хүсэлт хайх"
+            label="Хүсэлт хайх (бүх хүсэлтээс)"
             type="search"
-            placeholder="Зурвас, утас эсвэл хэрэглэгчийн дугаар"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Зурвас, утас, хариуцагч эсвэл хэрэглэгчийн дугаар"
+            value={query}
+            onChange={(event) => {
+              const next = event.target.value;
+              onQueryChange(next);
+              // An old request is not "needing attention": a search shows every match.
+              if (next.trim() && view === "attention") setView("all");
+            }}
           />
           <Select label="Холбогдсон төлөв" value={status} onChange={(event) => setStatus(event.target.value as LeadCrmStatus | "all")}>
             <option value="all">Бүх төлөв</option>
@@ -237,7 +266,7 @@ export function LeadsTab({
         </div>
       </Card>
 
-      {loading && leads.length === 0 ? (
+      {!loaded || (loading && leads.length === 0) ? (
         <div className="space-y-3" role="status" aria-label="Хүсэлтүүдийг ачаалж байна">
           {[0, 1, 2].map((item) => (
             <Card key={item} className="space-y-4 p-5">
@@ -259,12 +288,17 @@ export function LeadsTab({
           />
           {hasFilters && (
             <div className="flex justify-center pb-4">
-              <Button variant="secondary" onClick={() => { setSearch(""); setStatus("all"); setView("all"); }}>Шүүлтүүр арилгах</Button>
+              <Button variant="secondary" onClick={() => { onQueryChange(""); setStatus("all"); setView("all"); }}>Шүүлтүүр арилгах</Button>
+            </div>
+          )}
+          {remaining > 0 && (
+            <div className="flex justify-center pb-4">
+              <Button variant="secondary" loading={loading} onClick={onLoadMore}>Өмнөх хүсэлтүүдээс хайх ({remaining})</Button>
             </div>
           )}
         </Card>
       ) : (
-        <div className="space-y-3" aria-busy={loading}>
+        <div className="space-y-2.5" aria-busy={loading}>
           {filteredLeads.map((lead) => (
             <LeadCard
               key={lead.id}
@@ -276,6 +310,14 @@ export function LeadsTab({
               onSetBotPaused={(paused) => onSetBotPaused(lead, paused)}
             />
           ))}
+          {remaining > 0 && (
+            <div className="flex flex-col items-center gap-1.5 py-2">
+              <Button variant="secondary" loading={loading} disabled={loading} onClick={onLoadMore}>
+                Цааш ачаалах ({remaining} үлдсэн)
+              </Button>
+              <p className="text-xs text-ink-muted">Шүүлтүүр зөвхөн ачаалсан хүсэлтүүдэд үйлчилнэ. Хайлт бүх хүсэлтээс хайна.</p>
+            </div>
+          )}
         </div>
       )}
 
@@ -375,7 +417,7 @@ function LeadCard({
   return (
     <Card
       className={cx(
-        "p-4 sm:p-5",
+        "p-3.5 sm:p-4",
         isNew && "border-brand-border",
         waiting && "border-danger",
       )}
@@ -402,18 +444,18 @@ function LeadCard({
       </div>
 
       {attention.latestNote && (
-        <p className={cx("mt-4 whitespace-pre-wrap break-words rounded-xl border px-4 py-3 text-sm font-medium leading-relaxed [overflow-wrap:anywhere]",
+        <p className={cx("mt-3 whitespace-pre-wrap break-words rounded-lg border px-3.5 py-2.5 text-sm font-medium leading-relaxed [overflow-wrap:anywhere]",
           waiting ? "border-danger bg-danger-soft text-ink" : "border-line bg-surface text-ink")}>
           Сүүлийн мессеж: {attention.latestNote}
         </p>
       )}
 
-      <p className="mt-4 whitespace-pre-wrap break-words rounded-xl bg-surface-sunken px-4 py-3 text-sm leading-relaxed text-ink [overflow-wrap:anywhere]">
+      <p className="mt-2.5 whitespace-pre-wrap break-words rounded-lg bg-surface-sunken px-3.5 py-2.5 text-sm leading-relaxed text-ink [overflow-wrap:anywhere]">
         {lead.customer_message || "Текст зурвас үлдээгээгүй байна."}
       </p>
 
       {lead.contact_phone && (
-        <p className="mt-3 text-sm font-medium text-ink">
+        <p className="mt-2 text-sm font-medium text-ink">
           Холбогдох утас:{" "}
           <a href={`tel:${lead.contact_phone}`} className="inline-flex min-h-10 items-center rounded-md px-2 font-semibold text-brand underline decoration-brand/30 underline-offset-4 hover:decoration-brand">
             {lead.contact_phone}
@@ -432,7 +474,7 @@ function LeadCard({
         </details>
       )}
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-3">
         <span className="text-xs leading-relaxed text-ink-muted">
           {formatTime(lead.created_at)}
           {attention.lastActivityAt > new Date(Date.parse(lead.created_at) + 60_000).toISOString() && ` · сүүлд ${formatTime(attention.lastActivityAt)}`}

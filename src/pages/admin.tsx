@@ -9,6 +9,7 @@ import { AdminNavigation } from "@/components/admin/AdminNavigation";
 import { NAV_GROUPS } from "@/components/admin/AdminSidebarItem";
 import { websiteDetailsPatch } from "@/lib/websiteTripDetails";
 import { sameParityValue } from "@/lib/tripWebsiteParityValue";
+import { isTripListProjection } from "@/lib/tripListProjection";
 import { AssistantTab } from "@/components/admin/AssistantTab";
 import { AnalyticsTab } from "@/components/admin/AnalyticsTab";
 import { BotTab } from "@/components/admin/BotTab";
@@ -38,6 +39,8 @@ const BLANK_TRIP_DRAFT: Record<string, string> = { category: "Аялал", opera
 const MAX_AI_SOURCE_TEXT_CHARS = 20_000;
 const TRIP_DATA_TABS = new Set<TabKey>(["assistant", "trips", "calendar", "greeting", "photos"]);
 const SYSTEM_CHECK_INTERVAL_MS = 5 * 60_000;
+/** Matches the leads API page (LEAD_PAGE_SIZE in /api/admin/leads). */
+const LEADS_PAGE_SIZE = 200;
 const TAB_KEYS = new Set<string>(NAV_GROUPS.flatMap((group) => group.items.map((item) => item.key)));
 /** The section named in the URL (#leads), so a refresh or a shared link opens the same place. */
 function tabFromLocation(): TabKey | null {
@@ -101,6 +104,7 @@ export default function AdminPage() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(false);
   const [editingTrip, setEditingTrip] = useState<TravelTrip | null>(null);
+  const [openingTripId, setOpeningTripId] = useState("");
   const [isNewTrip, setIsNewTrip] = useState(false);
   const [tripDraft, setTripDraft] = useState<Record<string, string>>(
     BLANK_TRIP_DRAFT,
@@ -129,6 +133,11 @@ export default function AdminPage() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [photoReplaceConfirm, setPhotoReplaceConfirm] = useState<{ files: File[] } | null>(null);
   const [leads, setLeads] = useState<TravelLead[]>([]);
+  const leadsRef = useRef<TravelLead[]>([]);
+  const [leadsTotal, setLeadsTotal] = useState(0);
+  const [leadsLoaded, setLeadsLoaded] = useState(false);
+  const [leadQuery, setLeadQuery] = useState("");
+  const leadQueryRef = useRef("");
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [leadStats, setLeadStats] = useState<LeadStats | null>(null);
   const [leadAttentionSummary, setLeadAttentionSummary] = useState<LeadAttentionSummary | null>(null);
@@ -187,6 +196,7 @@ export default function AdminPage() {
     setRecentRows([]);
     setLeads([]);
     setNewLeadCount(0);
+    setLeadsLoaded(false);
     setLeadStats(null);
     setDocumentUnreviewedCount(0);
   }, []);
@@ -202,7 +212,7 @@ export default function AdminPage() {
         const tripRes = await fetchWithAdmin(
           `/api/admin/trips?search=${encodeURIComponent(
             nextSearch,
-          )}&status=${encodeURIComponent(nextStatusFilter)}&limit=300`,
+          )}&status=${encodeURIComponent(nextStatusFilter)}&limit=300&view=list`,
         );
         if (tripRes.status === 401) {
           markAdminLocked();
@@ -274,16 +284,31 @@ export default function AdminPage() {
       return false;
     }
   }, [fetchWithAdmin, markAdminLocked, toast]);
-  const loadLeadsState = useCallback(async (options: { showLoading?: boolean } = {}) => {
+  /**
+   * One page of leads. A search covers every lead on the server; append loads the next page.
+   * A background refresh leaves a list the user has paged through alone.
+   */
+  const loadLeadsState = useCallback(async (options: { showLoading?: boolean; append?: boolean; background?: boolean } = {}) => {
+    if (options.background && leadsRef.current.length > LEADS_PAGE_SIZE) return true;
     if (options.showLoading) setLoading(true);
     try {
-      const leadsRes = await fetchWithAdmin("/api/admin/leads?stats=1");
+      const query = leadQueryRef.current.trim();
+      const offset = options.append ? leadsRef.current.length : 0;
+      const params = new URLSearchParams({ stats: "1", offset: String(offset) });
+      if (query) params.set("q", query);
+      const leadsRes = await fetchWithAdmin(`/api/admin/leads?${params.toString()}`);
       if (leadsRes.status === 401) {
         markAdminLocked();
         return false;
       }
       const leadsJson = await leadsRes.json().catch(() => ({}));
-      setLeads(Array.isArray(leadsJson?.leads) ? leadsJson.leads : []);
+      if (!leadsRes.ok) throw new Error("leads_failed");
+      // A newer search has started meanwhile: its answer, not this one, fills the list.
+      if (query !== leadQueryRef.current.trim()) return true;
+      const page: TravelLead[] = Array.isArray(leadsJson?.leads) ? leadsJson.leads : [];
+      setLeads((previous) => (options.append ? [...previous, ...page.filter((lead) => !previous.some((item) => item.id === lead.id))] : page));
+      setLeadsTotal(typeof leadsJson?.total === "number" ? leadsJson.total : page.length);
+      setLeadsLoaded(true);
       setNewLeadCount(
         typeof leadsJson?.new_count === "number" ? leadsJson.new_count : 0,
       );
@@ -336,7 +361,7 @@ export default function AdminPage() {
         ...tripLoads,
         loadPauseState(),
         loadSettingsState(),
-        ...(tabRef.current === "leads" ? [loadLeadsState()] : []),
+        ...(tabRef.current === "leads" ? [loadLeadsState({ background: true })] : []),
         loadDocumentStats(),
       ]);
       dataLoads.catch(() => undefined);
@@ -429,11 +454,17 @@ export default function AdminPage() {
   useEffect(() => {
     if (authState === "signed_in") void loadAll();
   }, [authState, loadAll]);
-  // The lead list is fetched for the Leads tab only (loadAll skips it elsewhere).
   useEffect(() => {
+    leadsRef.current = leads;
+  }, [leads]);
+  // The lead list is fetched for the Leads tab only (loadAll skips it elsewhere); a search
+  // waits for a pause in typing.
+  useEffect(() => {
+    leadQueryRef.current = leadQuery;
     if (tab !== "leads" || authState !== "signed_in") return;
-    void loadLeadsState({ showLoading: true });
-  }, [authState, loadLeadsState, tab]);
+    const timer = window.setTimeout(() => void loadLeadsState({ showLoading: true }), leadQuery.trim() ? 400 : 0);
+    return () => window.clearTimeout(timer);
+  }, [authState, leadQuery, loadLeadsState, tab]);
   // Back/Forward between sections, and links that name one.
   useEffect(() => {
     const syncFromUrl = () => {
@@ -526,7 +557,7 @@ export default function AdminPage() {
         if (typeof Notification !== "undefined" && Notification.permission === "granted") {
           new Notification("Уудам — шинэ хүсэлт", { body: message, tag: "uudam-leads" });
         }
-        if (tabRef.current === "leads") void loadLeadsState();
+        if (tabRef.current === "leads") void loadLeadsState({ background: true });
       } catch { /* the next check retries */ }
     };
     void check();
@@ -1405,7 +1436,30 @@ export default function AdminPage() {
     setTripSourceProvenance([]);
     setTripAnswerHints([]);
   }
-  function beginEditTrip(trip: TravelTrip) {
+  /**
+   * Opens the editor on the trip as saved now. The list holds slim rows (no website copy,
+   * itinerary text or conflict history) that may also be a refresh old; editing from them
+   * would show empty fields and lead to avoidable "changed elsewhere" conflicts.
+   */
+  async function beginEditTrip(trip: TravelTrip) {
+    if (openingTripId) return;
+    setOpeningTripId(trip.id);
+    try {
+      const res = await fetchWithAdmin(`/api/admin/trips?id=${encodeURIComponent(trip.id)}`);
+      if (res.status === 401) {
+        markAdminLocked();
+        return;
+      }
+      const json = await readJsonSafe(res) as { trip?: TravelTrip; message?: string };
+      if (!res.ok || !json.trip) throw new Error(json.message || "Аяллыг нээж чадсангүй. Дахин оролдоно уу.");
+      openTripEditor(json.trip);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Аяллыг нээж чадсангүй. Дахин оролдоно уу.");
+    } finally {
+      setOpeningTripId("");
+    }
+  }
+  function openTripEditor(trip: TravelTrip) {
     setIsNewTrip(false);
     setEditingTrip(trip);
     setTripDraft({
@@ -1564,6 +1618,11 @@ export default function AdminPage() {
   async function saveTrip(confirmIncomplete = false) {
     if (photoUploading.length > 0) {
       toast.error("Зураг байршуулж дуусаагүй байна. Дууссаны дараа хадгална уу.");
+      return;
+    }
+    // Defensive: the editor only ever opens on a full trip (beginEditTrip).
+    if (editingTrip && isTripListProjection(editingTrip)) {
+      toast.error("Аяллын бүрэн мэдээлэл ачаалагдаагүй байна. Цонхыг хаагаад дахин нээнэ үү.");
       return;
     }
 
@@ -2138,6 +2197,8 @@ export default function AdminPage() {
               onAskAi={askAiAboutTrip}
               businessName={settings?.business_name || ""}
               visibilityBusyId={busyKey.startsWith("visibility-") ? busyKey.slice(11) : ""}
+              openingTripId={openingTripId}
+              loaded={tripsLoaded}
               onToggleVisible={(trip) => void toggleTripVisibility(trip)}
               onArchiveMany={archiveManyTrips}
             />
@@ -2167,8 +2228,14 @@ export default function AdminPage() {
           {tab === "leads" && (
             <LeadsTab
               leads={leads}
+              total={leadsTotal}
+              loaded={leadsLoaded}
               stats={leadStats}
+              attention={leadAttentionSummary}
               loading={loading}
+              query={leadQuery}
+              onQueryChange={setLeadQuery}
+              onLoadMore={() => void loadLeadsState({ showLoading: true, append: true })}
               onRefresh={() => void loadLeadsState({ showLoading: true })}
               onMarkSeen={(lead) => void markLeadSeen(lead)}
               onUpdateStatus={(lead, status) => void updateLeadCrmStatus(lead, status)}

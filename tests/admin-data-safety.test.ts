@@ -22,6 +22,37 @@ test("a trip's extra never stores the admin list's display-only values", () => {
   assert.equal(full.custom_note, "kept", "genuine unknown keys still pass through");
 });
 
+test("the admin list's slim trip rows keep every fact the list shows and flag completeness the same", async () => {
+  const { tripListProjection, isTripListProjection } = await import("../src/lib/tripListProjection");
+  const { findTripGaps, tripCompletenessInput } = await import("../src/lib/tripCompleteness");
+  const full = {
+    id: "trip-velmor", category: "Аялал", operator_name: "", route_name: "Вэлмор нуурын аялал", duration_text: "5 өдөр",
+    adult_price: 1_200_000, child_price: null, infant_price: null, currency: "MNT", departure_dates: ["2027-06-12"],
+    seats_total: null, seats_left: null, has_food: true, status: "active", notes: "", hotel: "", source_description: "",
+    photo_urls: [], created_at: "", updated_at: "2027-01-01T00:00:00.000Z",
+    extra: {
+      poster_trip_id: "poster-velmor", price_groups: [{ dates: ["2027-06-12"], adult_price: 1_200_000 }],
+      itinerary_days: [{ day: 1, title: "Өдөр 1", text: "x".repeat(4000) }, { day: 2, title: "Өдөр 2", text: "y".repeat(4000) }],
+      website_details: { description: "z".repeat(20000) }, shared_conflicts: [{ field: "x" }], photo_credits: [{ url: "https://example.com/a.jpg" }],
+      customer_visible: true, departure_dates_resolved: [{ text: "2027-06-12", ymd: "2027-06-12" }],
+    },
+  } as never;
+  const slim = tripListProjection(full);
+  const extra = slim.extra as Record<string, unknown>;
+  assert.equal("website_details" in extra, false);
+  assert.equal("shared_conflicts" in extra, false);
+  assert.equal("photo_credits" in extra, false);
+  assert.deepEqual(extra.itinerary_days, [{}, {}], "the day count stays, the text goes");
+  assert.equal(extra.poster_trip_id, "poster-velmor");
+  assert.ok(Array.isArray(extra.price_groups) && extra.departure_dates_resolved);
+  assert.equal(isTripListProjection(slim), true);
+  assert.equal(isTripListProjection(full), false);
+  assert.deepEqual(findTripGaps(tripCompletenessInput(slim)), findTripGaps(tripCompletenessInput(full)));
+  assert.ok(JSON.stringify(slim).length < JSON.stringify(full).length / 5);
+  assert.deepEqual(normalizeExtraPatch({ list_projection: true, aliases: ["x"] }), { aliases: ["x"] },
+    "a slim row's marker can never be saved");
+});
+
 test("hiding a trip patches only the visibility flag", () => {
   assert.deepEqual(Object.keys(normalizeExtraPatch({ customer_visible: true })), ["customer_visible"]);
 });

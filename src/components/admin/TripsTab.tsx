@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Badge, Button, Card, EmptyState, IconButton, Icons, Modal, Spinner, cx, useToast } from "@/components/ui";
+import { Badge, Button, Card, EmptyState, IconButton, Icons, Modal, Skeleton, Spinner, cx, useToast } from "@/components/ui";
 import { TabHeader } from "./AdminShared";
 import type { TravelTrip } from "@/lib/adminTypes";
 import { STATUS_LABELS } from "@/lib/adminProposalUtils";
@@ -27,6 +27,8 @@ export function TripsTab({
   onArchiveMany,
   onToggleVisible,
   visibilityBusyId,
+  openingTripId,
+  loaded,
   onFetchAllTrips,
   businessName,
   onFixPhotosOnPoster,
@@ -48,6 +50,10 @@ export function TripsTab({
   onToggleVisible: (trip: TravelTrip) => void;
   /** The trip whose hide/show request is in flight, so its button cannot fire twice. */
   visibilityBusyId?: string;
+  /** The trip whose full record is being fetched for the editor. */
+  openingTripId?: string;
+  /** False until the first list arrives: an empty list before then is "loading", not "no trips". */
+  loaded: boolean;
   /** Loads every trip, ignoring the on-screen search/status filter. */
   onFetchAllTrips: () => Promise<TravelTrip[]>;
   /** Agency name for the brochure cover, from bot settings. */
@@ -393,12 +399,16 @@ export function TripsTab({
         </div>
       )}
 
-      {visibleTrips.length === 0 ? (
+      {!loaded ? (
+        <div className="space-y-2" role="status" aria-label="Аяллуудыг ачаалж байна">
+          {[0, 1, 2, 3].map((item) => <Skeleton key={item} className="h-24 rounded-lg" />)}
+        </div>
+      ) : visibleTrips.length === 0 ? (
         <Card className="p-4">
           <EmptyState
             icon={<Icons.trips size={26} />}
-            title="Аялал олдсонгүй"
-            description="Шинэ аялал нэмэх, эсвэл AI Туслахаар прайс жагсаалт оруулна уу."
+            title={search.trim() || statusFilter || brochureFilter !== "all" ? "Тохирох аялал олдсонгүй" : "Аялал алга"}
+            description={search.trim() || statusFilter || brochureFilter !== "all" ? "Хайлт, шүүлтүүрээ өөрчилж үзээрэй." : "Шинэ аялал нэмэх, эсвэл AI Туслахаар прайс жагсаалт оруулна уу."}
           />
         </Card>
       ) : (
@@ -408,6 +418,7 @@ export function TripsTab({
           onDelete={onDelete}
           onToggleVisible={onToggleVisible}
           visibilityBusyId={visibilityBusyId}
+          openingTripId={openingTripId}
           onFixPhotosOnPoster={onFixPhotosOnPoster}
           onAskAi={onAskAi}
         />
@@ -651,6 +662,7 @@ export function TripGroups({
   onDelete: (trip: TravelTrip) => void;
   onToggleVisible: (trip: TravelTrip) => void;
   visibilityBusyId?: string;
+  openingTripId?: string;
   onFixPhotosOnPoster: (posterId: string) => void;
   onAskAi: (tripName: string) => void;
 }) {
@@ -732,6 +744,7 @@ function CategoryGroups({
   onDelete,
   onToggleVisible,
   visibilityBusyId,
+  openingTripId,
   onFixPhotosOnPoster,
   onAskAi,
 }: {
@@ -740,6 +753,7 @@ function CategoryGroups({
   onDelete: (trip: TravelTrip) => void;
   onToggleVisible: (trip: TravelTrip) => void;
   visibilityBusyId?: string;
+  openingTripId?: string;
   onFixPhotosOnPoster: (posterId: string) => void;
   onAskAi: (tripName: string) => void;
 }) {
@@ -798,7 +812,7 @@ function CategoryGroups({
               />
             </button>
             {!isCollapsed && (
-              <div className="space-y-2 border-t border-line p-2.5">
+              <div className="space-y-1.5 border-t border-line p-2">
                 {items.map((trip) => (
                   <TripCard
                     key={trip.id}
@@ -807,6 +821,7 @@ function CategoryGroups({
                     onDelete={() => onDelete(trip)}
                     onToggleVisible={() => onToggleVisible(trip)}
                     visibilityBusy={visibilityBusyId === trip.id}
+                    opening={openingTripId === trip.id}
                     onFixPhotosOnPoster={onFixPhotosOnPoster}
                     onAskAi={() => onAskAi(trip.route_name)}
                   />
@@ -820,12 +835,36 @@ function CategoryGroups({
   );
 }
 
+/** Today in Ulaanbaatar (YYYY-MM-DD), the calendar the departure dates are written in. */
+function ulaanbaatarToday(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Ulaanbaatar" });
+}
+
+/**
+ * The next departure and how many follow, from the ISO dates frozen at save time
+ * (extra.departure_dates_resolved). Recurring rules ("Пүрэв гараг бүр") have no
+ * ymd and are left to the full calendar below the card.
+ */
+function upcomingDepartures(trip: TravelTrip): { next: string | null; more: number } {
+  const resolved = (trip.extra as Record<string, unknown> | undefined)?.departure_dates_resolved;
+  const today = ulaanbaatarToday();
+  const days = Array.isArray(resolved)
+    ? [...new Set(resolved
+      .map((entry) => (entry && typeof entry === "object" ? String((entry as { ymd?: unknown }).ymd ?? "") : ""))
+      .filter((ymd) => /^\d{4}-\d{2}-\d{2}$/.test(ymd) && ymd >= today))].sort()
+    : [];
+  if (days.length === 0) return { next: null, more: 0 };
+  const [, month, day] = days[0].split("-");
+  return { next: `${Number(month)}/${Number(day)}`, more: days.length - 1 };
+}
+
 function TripCard({
   trip,
   onEdit,
   onDelete,
   onToggleVisible,
   visibilityBusy,
+  opening,
   onFixPhotosOnPoster,
   onAskAi,
 }: {
@@ -834,20 +873,19 @@ function TripCard({
   onDelete: () => void;
   onToggleVisible: () => void;
   visibilityBusy: boolean;
+  opening: boolean;
   onFixPhotosOnPoster: (posterId: string) => void;
   onAskAi: () => void;
 }) {
-  const isHidden = (trip.extra as Record<string, unknown>)?.customer_visible === false;
+  const extra = (trip.extra || {}) as Record<string, unknown>;
+  const isHidden = extra.customer_visible === false;
   const isPosterSynced = isPosterSyncedTrip(trip);
   const connection = tripConnectionDetails(trip);
   const hasPdf = tripHasPdf(trip);
   const websiteLink = publishedTripWebsiteLink(trip);
-  const facts: string[] = [];
-  const marketingBadge = (trip.extra as Record<string, unknown> | undefined)?.marketing_badge as
-    | Record<string, unknown>
-    | undefined;
+  const marketingBadge = extra.marketing_badge as Record<string, unknown> | undefined;
   const saleEndsAt = typeof marketingBadge?.sale_ends_at === "string" ? marketingBadge.sale_ends_at : "";
-  const saleEnded = Boolean(saleEndsAt) && saleEndsAt < new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Ulaanbaatar" });
+  const saleEnded = Boolean(saleEndsAt) && saleEndsAt < ulaanbaatarToday();
   // An ended sale is no longer on the website, so this list must not show it as live.
   const saleEnabled = marketingBadge?.sale_enabled === true && !saleEnded;
   const saleLabel =
@@ -856,185 +894,124 @@ function TripCard({
       : "ХЯМДРАЛ";
   const seatsPercentLeft =
     typeof marketingBadge?.seats_percent_left === "number" ? marketingBadge.seats_percent_left : null;
-  if (trip.seats_left != null || trip.seats_total != null) {
-    facts.push(`Суудал: ${trip.seats_left ?? "?"}/${trip.seats_total ?? "?"}`);
-  }
-  if (seatsPercentLeft != null) {
-    facts.push(`Үлдсэн хувь: ${seatsPercentLeft}%`);
-  }
-  if (saleEnabled) {
-    facts.push(`Badge: ${saleLabel}${saleEndsAt ? ` (${saleEndsAt} хүртэл)` : ""}`);
-  } else if (marketingBadge?.sale_enabled === true && saleEnded) {
-    facts.push(`Badge дууссан: ${saleLabel} (${saleEndsAt})`);
-  }
   // A trip with date-specific price groups never actually quotes this flat
   // price to a customer (the nearest upcoming group's price wins) — label it
   // as the fallback here too, so this list can't read as "the live price"
   // when it may not be what the bot or website currently show.
-  const hasPriceGroups = Array.isArray((trip.extra as Record<string, unknown>)?.price_groups)
-    && ((trip.extra as Record<string, unknown>).price_groups as unknown[]).length > 0;
-  const pricePrefix = hasPriceGroups ? "Үндсэн " : "";
+  const hasPriceGroups = Array.isArray(extra.price_groups) && (extra.price_groups as unknown[]).length > 0;
+  const pricePrefix = hasPriceGroups ? "Үндсэн үнэ" : "Том хүн";
   const adultPrice = formatTripMoney(trip.adult_price, trip.currency);
   const childPrice = formatTripMoney(trip.child_price, trip.currency);
   const infantPrice = formatTripMoney(trip.infant_price, trip.currency);
-  if (adultPrice) facts.push(`${pricePrefix}Том хүн: ${adultPrice}`);
-  if (childPrice) facts.push(`${pricePrefix}Хүүхэд: ${childPrice}`);
-  if (infantPrice) facts.push(`${pricePrefix}Нярай: ${infantPrice}`);
-  if (trip.has_food != null) {
-    facts.push(`Хоол: ${trip.has_food ? "багтсан" : "багтаагүй"}`);
-  }
+  const upcoming = upcomingDepartures(trip);
+  const websiteSlug = (extra.website_sync as { website_slug?: string } | undefined)?.website_slug;
+  const contentConflict = Boolean((extra.website_sync as { content_conflict?: boolean } | undefined)?.content_conflict);
+
+  const facts: string[] = [];
   if (trip.duration_text) facts.push(trip.duration_text);
+  if (adultPrice) facts.push(`${pricePrefix} ${adultPrice}`);
+  if (childPrice) facts.push(`Хүүхэд ${childPrice}`);
+  if (infantPrice) facts.push(`Нярай ${infantPrice}`);
+  if (upcoming.next) facts.push(`Дараагийн гаралт ${upcoming.next}${upcoming.more ? ` (+${upcoming.more})` : ""}`);
+  if (trip.seats_left != null || trip.seats_total != null) facts.push(`Суудал ${trip.seats_left ?? "?"}/${trip.seats_total ?? "?"}`);
+  if (seatsPercentLeft != null) facts.push(`Үлдсэн ${seatsPercentLeft}%`);
+  if (trip.has_food != null) facts.push(`Хоол ${trip.has_food ? "багтсан" : "багтаагүй"}`);
+  if (marketingBadge?.sale_enabled === true && saleEnded) facts.push(`${saleLabel} дууссан (${saleEndsAt})`);
 
   const gaps = getTripGaps(trip);
   const blocking = blockingGaps(gaps);
+  const advisory = gaps.filter((gap) => gap.severity !== "blocking");
+  const archivedHint = trip.status === "archived" ? archivedReasonHint(trip) : null;
 
   return (
-    <Card className={cx("card-lift p-3.5", isHidden && "opacity-70")}>
-      <div className="flex gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-col items-start justify-between gap-2 sm:flex-row sm:gap-3">
-            <div className="min-w-0">
-              <p className="break-words text-sm font-semibold text-ink">{trip.route_name || "—"}</p>
-            </div>
-            <div className="flex max-w-full flex-wrap items-center gap-1.5">
-              {blocking.length > 0 && (
-                <Badge tone="warning">Шалгах</Badge>
-              )}
-              {isHidden && <Badge tone="neutral">Нуусан</Badge>}
-              {saleEnabled && <Badge tone="warning">{saleLabel}</Badge>}
-              {isPosterSynced && <Badge tone="brand">Постертой холбосон</Badge>}
-              <Badge tone={websiteLink || hasPdf ? "success" : "danger"}>
-                {websiteLink ? "Вэб хуудас бэлэн" : hasPdf ? "PDF бэлэн" : "Хөтөлбөр дутуу"}
-              </Badge>
-              <Badge tone={STATUS_TONE[trip.status]}>
-                {STATUS_LABELS[trip.status]}
-              </Badge>
-            </div>
-          </div>
-          {trip.status === "archived" && archivedReasonHint(trip) && (
-            <p className="mt-1.5 text-xs font-medium text-warning">{archivedReasonHint(trip)}</p>
-          )}
-          {facts.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {facts.map((fact, i) => (
-                <span key={i} className="rounded-md bg-surface-sunken px-2 py-0.5 text-xs tabular-nums text-ink-muted">
-                  {fact}
-                </span>
-              ))}
-            </div>
-          )}
-          <details className="mt-2 text-xs text-ink-muted"><summary className="cursor-pointer font-medium">Гарах огноо ({trip.departure_dates?.length || 0})</summary><DepartureCalendar dates={trip.departure_dates || []} /></details>
-          {isPosterSynced && (
-            <details className="mt-2 border-t border-line pt-2 text-xs text-ink-muted"><summary className="cursor-pointer font-medium">Холбоос, эх сурвалж</summary>
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="font-semibold">Холбоо:</span>
-                {Boolean((trip.extra.website_sync as { website_slug?: string } | undefined)?.website_slug) && (
-                  <a className="font-semibold underline" href={`https://uudamtravel.mn/mn/trips/${encodeURIComponent((trip.extra.website_sync as { website_slug: string }).website_slug)}`} target="_blank" rel="noopener noreferrer">Вэбсайт дээр үзэх</a>
-                )}
-                <span className="max-w-full break-all font-mono text-[11px]">{connection.posterId}</span>
-                {connection.sourceFile && <span className="truncate text-brand/80">эх: {connection.sourceFile}</span>}
-                {connection.pdfUrl && (
-                  <a
-                    href={connection.pdfUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="ml-auto rounded-[6px] bg-surface px-2 py-0.5 font-semibold hover:underline"
-                  >
-                    PDF нээх
-                  </a>
-                )}
-              </div>
-            </details>
-          )}
-          {Boolean((trip.extra.website_sync as { content_conflict?: boolean } | undefined)?.content_conflict) && (
-            <div className="mt-2 rounded-md border border-danger/30 bg-danger-soft px-2.5 py-2 text-xs text-danger">
-              <div className="flex items-center gap-1.5">
-                <Icons.alert size={14} className="shrink-0" />
-                <span className="font-semibold">Вебсайт ба chatbot мэдээлэл зөрүүтэй. Хоёр хувилбар хадгалагдсан.</span>
-              </div>
-            </div>
-          )}
-          {gaps.length > 0 && (
-            <div
-              className={cx(
-                "mt-2 rounded-md border px-2.5 py-2",
-                blocking.length > 0 ? "border-danger/30 bg-danger-soft" : "border-line bg-surface-sunken",
-              )}
-            >
-              <div className="flex items-center gap-1.5">
-                {blocking.length > 0 && <Icons.alert size={14} className="shrink-0 text-danger" />}
-                <span
-                  className={cx(
-                    "text-xs font-semibold",
-                    blocking.length > 0 ? "text-danger" : "text-ink-muted",
-                  )}
-                >
-                  {blocking.length > 0 ? `${blocking.length} заавал бөглөх талбар дутуу` : "Дутуу мэдээлэл"}
-                </span>
-              </div>
-              <p className="mt-1 text-xs text-ink-muted">
-                {gaps.map((gap) => gap.label).join(" · ")}
-              </p>
-              {blocking.some((gap) => gap.key === "photo_urls") && connection.posterId && (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  className="mt-2"
-                  onClick={() => onFixPhotosOnPoster(connection.posterId)}
-                >
-                  <Icons.image size={13} /> Постерт зураг нэмэх
-                </Button>
-              )}
-            </div>
-          )}
+    <article className={cx("rounded-lg border border-line bg-surface px-3.5 py-3 transition-colors hover:border-line-strong", isHidden && "bg-surface-sunken/70")}>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0">
+          <button type="button" onClick={onEdit} className="text-left text-sm font-semibold text-ink hover:text-brand hover:underline">
+            {trip.route_name || "—"}
+          </button>
+          {facts.length > 0 && <p className="mt-1 text-xs leading-5 text-ink-muted tabular-nums">{facts.join(" · ")}</p>}
+        </div>
+        <div className="flex max-w-full shrink-0 flex-wrap items-center gap-1.5 sm:justify-end">
+          {isHidden && <Badge tone="neutral">Нуусан</Badge>}
+          {saleEnabled && <Badge tone="warning">{saleLabel}{saleEndsAt ? ` · ${saleEndsAt} хүртэл` : ""}</Badge>}
+          <Badge tone={websiteLink || hasPdf ? "success" : "danger"}>
+            {websiteLink ? "Вэб хуудас бэлэн" : hasPdf ? "PDF бэлэн" : "Хөтөлбөр дутуу"}
+          </Badge>
+          <Badge tone={STATUS_TONE[trip.status]}>{STATUS_LABELS[trip.status]}</Badge>
         </div>
       </div>
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3">
-        <span className="text-xs text-ink-subtle">
-          Шинэчилсэн: {formatTime(trip.updated_at)}
-        </span>
-        <div className="flex flex-wrap gap-1.5">
-          <Button
-            size="sm"
-            variant="ghost"
-            className={isHidden ? "text-success" : "text-ink-muted"}
-            loading={visibilityBusy}
-            disabled={visibilityBusy}
-            onClick={onToggleVisible}
-            title={
-              isHidden
-                ? "Бот дахин энэ аяллын талаар хариулж эхэлнэ"
-                : "Бот энэ аяллыг огт мэдэхгүй мэт хариулна (харилцагчид харагдахгүй)"
-            }
-          >
-            {isHidden ? "Харуулах" : "Нуух"}
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={onAskAi}
-            title="Үнэ, огноо, хөтөлбөр өөрчлөх зааварчилгааг AI туслахад бичиж оруулна"
-          >
-            <Icons.bot size={15} />
-            AI-аар засах
-          </Button>
-          <Button size="sm" variant="secondary" onClick={onEdit}>
-            <Icons.edit size={15} />
+
+      {archivedHint && <p className="mt-1.5 text-xs font-medium text-warning">{archivedHint}</p>}
+      {contentConflict && (
+        <p className="mt-1.5 flex items-start gap-1.5 text-xs font-medium text-danger">
+          <Icons.alert size={13} className="mt-0.5 shrink-0" />
+          Вебсайт ба chatbot мэдээлэл зөрүүтэй. Хоёр хувилбар хадгалагдсан — засварлагчид харьцуулна уу.
+        </p>
+      )}
+      {blocking.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+          <span className="flex items-start gap-1.5 font-medium text-danger">
+            <Icons.alert size={13} className="mt-0.5 shrink-0" />
+            Заавал бөглөх: {blocking.map((gap) => gap.label).join(", ")}
+          </span>
+          {blocking.some((gap) => gap.key === "photo_urls") && connection.posterId && (
+            <button type="button" onClick={() => onFixPhotosOnPoster(connection.posterId)}
+              className="font-semibold text-brand underline decoration-brand/30 underline-offset-2 hover:decoration-brand">
+              Постерт зураг нэмэх
+            </button>
+          )}
+        </div>
+      )}
+      {advisory.length > 0 && (
+        <p className="mt-1 text-xs text-ink-muted">Нэмж болох: {advisory.map((gap) => gap.label).join(", ")}</p>
+      )}
+
+      <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2.5">
+        <details className="min-w-0 text-xs text-ink-muted">
+          <summary className="cursor-pointer select-none font-medium hover:text-ink">
+            Огноо ({trip.departure_dates?.length || 0}){isPosterSynced ? " · постер, холбоос" : ""} · {formatTime(trip.updated_at)}
+          </summary>
+          <DepartureCalendar dates={trip.departure_dates || []} />
+          {isPosterSynced && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {websiteSlug && (
+                <a className="font-semibold text-brand underline" href={`https://uudamtravel.mn/mn/trips/${encodeURIComponent(websiteSlug)}`} target="_blank" rel="noopener noreferrer">
+                  Вэбсайт дээр үзэх
+                </a>
+              )}
+              {connection.pdfUrl && (
+                <a href={connection.pdfUrl} target="_blank" rel="noopener noreferrer" className="font-semibold text-brand underline">PDF нээх</a>
+              )}
+              <span className="max-w-full break-all font-mono text-[11px]">Постер: {connection.posterId}</span>
+              {connection.sourceFile && <span className="truncate">эх: {connection.sourceFile}</span>}
+            </div>
+          )}
+        </details>
+        <div className="flex flex-wrap items-center gap-1">
+          <Button size="sm" variant="secondary" loading={opening} disabled={opening} onClick={onEdit}>
+            <Icons.edit size={14} />
             Засах
           </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-danger"
-            onClick={onDelete}
-            title="Аялал болон хувилбарын түүх хадгалагдана"
-          >
-            <Icons.trash size={15} />
-            Архивлах
+          <Button size="sm" variant="ghost" onClick={onAskAi}
+            title="Үнэ, огноо, хөтөлбөр өөрчлөх зааварчилгааг AI туслахад бичиж оруулна">
+            <Icons.bot size={14} />
+            AI-аар
           </Button>
+          <Button size="sm" variant="ghost" className={isHidden ? "text-success" : "text-ink-muted"}
+            loading={visibilityBusy} disabled={visibilityBusy} onClick={onToggleVisible}
+            title={isHidden ? "Бот, сайт дахин энэ аяллыг харуулна" : "Бот энэ аяллыг огт мэдэхгүй мэт хариулна (харилцагчид харагдахгүй)"}>
+            {isHidden ? "Харуулах" : "Нуух"}
+          </Button>
+          {trip.status !== "archived" && (
+            <Button size="sm" variant="ghost" className="text-danger" onClick={onDelete} title="Аялал болон хувилбарын түүх хадгалагдана">
+              <Icons.trash size={14} />
+              Архивлах
+            </Button>
+          )}
         </div>
       </div>
-    </Card>
+    </article>
   );
 }
 

@@ -181,10 +181,20 @@ export async function createLead(input: {
   return result?.rows?.[0] ? mapLeadRow(result.rows[0]) : null;
 }
 
-export async function listLeads(limit = 50): Promise<TravelLead[]> {
+/** Text staff can find a lead by: the message, phone, sender id, assignee or the stored context. */
+const LEAD_SEARCH_SQL = `($1::text IS NULL OR l.customer_message ILIKE $1 OR l.contact_phone ILIKE $1
+  OR l.sender_id ILIKE $1 OR COALESCE(l.assigned_to, '') ILIKE $1 OR COALESCE(l.context, '') ILIKE $1)`;
+
+function leadSearchPattern(search?: string): string | null {
+  const text = search?.trim();
+  return text ? `%${text.replace(/[\\%_]/g, (char) => `\\${char}`)}%` : null;
+}
+
+export async function listLeads(limit = 50, options: { offset?: number; search?: string } = {}): Promise<TravelLead[]> {
   const ready = await ensureTravelSchema();
   if (!ready) return [];
   const safeLimit = Math.min(Math.max(limit, 1), 200);
+  const offset = Math.max(0, Math.trunc(options.offset ?? 0));
   // A lead the customer just wrote to again comes first, not where its creation date puts it.
   const activity = await ensureLeadActivityColumn().then(() => "COALESCE(last_activity_at, created_at)", () => "created_at");
   // A consultant's reply seen in the thread after the lead (pause "operator_reply") tells the
@@ -196,13 +206,24 @@ export async function listLeads(limit = 50): Promise<TravelLead[]> {
              s.paused_at AS bot_paused_at, s.takeover_source AS bot_takeover_source
       FROM travel_leads l
       LEFT JOIN travel_senders s ON s.sender_id = l.sender_id
-      WHERE l.${REAL_SENDER}
-      ORDER BY (l.status = 'new') DESC, ${activity.replace(/(last_activity_at|created_at)/g, "l.$1")} DESC
-      LIMIT $1
+      WHERE l.${REAL_SENDER} AND ${LEAD_SEARCH_SQL}
+      ORDER BY (l.status = 'new') DESC, ${activity.replace(/(last_activity_at|created_at)/g, "l.$1")} DESC, l.id DESC
+      LIMIT $2 OFFSET $3
     `,
-    [safeLimit],
+    [leadSearchPattern(options.search), safeLimit, offset],
   );
   return result?.rows ? result.rows.map(mapLeadRow) : [];
+}
+
+/** How many real leads match the search (all of them without one): the Leads tab's "of N". */
+export async function countLeads(search?: string): Promise<number> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return 0;
+  const result = await queryNeon<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM travel_leads l WHERE l.${REAL_SENDER} AND ${LEAD_SEARCH_SQL}`,
+    [leadSearchPattern(search)],
+  );
+  return Number(result?.rows?.[0]?.count || 0);
 }
 
 export async function countNewLeads(): Promise<number> {
@@ -264,7 +285,7 @@ export async function getLeadStats(): Promise<LeadStats> {
       SELECT
         COUNT(*)::text AS total,
         COUNT(*) FILTER (WHERE status = 'new')::text AS new_count,
-        COUNT(*) FILTER (WHERE created_at >= date_trunc('day', NOW()))::text AS today,
+        COUNT(*) FILTER (WHERE (created_at AT TIME ZONE 'Asia/Ulaanbaatar')::date = (NOW() AT TIME ZONE 'Asia/Ulaanbaatar')::date)::text AS today,
         COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '7 days')::text AS last7days,
         COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days')::text AS last30days
       FROM travel_leads WHERE ${REAL_SENDER}
@@ -282,9 +303,12 @@ export async function getLeadStats(): Promise<LeadStats> {
       ORDER BY COUNT(*) DESC
     `),
     queryNeon<{ day: string; count: string }>(`
-      SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day, COUNT(*)::text AS count
+      -- Days are Ulaanbaatar calendar days, as staff read "today" (the server's UTC day
+      -- started at 08:00 local, so morning leads counted as yesterday).
+      SELECT to_char((created_at AT TIME ZONE 'Asia/Ulaanbaatar')::date, 'YYYY-MM-DD') AS day, COUNT(*)::text AS count
       FROM travel_leads
-      WHERE created_at >= NOW() - INTERVAL '7 days' AND ${REAL_SENDER}
+      WHERE (created_at AT TIME ZONE 'Asia/Ulaanbaatar')::date > (NOW() AT TIME ZONE 'Asia/Ulaanbaatar')::date - 7
+        AND ${REAL_SENDER}
       GROUP BY 1
       ORDER BY 1
     `),

@@ -313,8 +313,6 @@ export function AnalyticsTab({
         }
       />
 
-      <QualityPanel apiFetch={apiFetch} />
-
       {error && <Alert tone="danger">{error}{snapshot && " Доор хамгийн сүүлд ачаалсан мэдээллийг харуулж байна."}</Alert>}
       {Boolean(snapshot?.warnings?.length) && <Alert tone="warning">Тоймын зарим хэсгийг ачаалж чадсангүй. Шинэчилнэ үү.</Alert>}
       {overview && overview.aiOutages24h > 0 && (
@@ -345,6 +343,8 @@ export function AnalyticsTab({
                 detail={`Захиалгын хүсэлт ${number(overview.bookingRequests)}`} />
             </div>
           ) : <EmptyNote>Энэ хугацааны тоог ачаалж чадсангүй. Шинэчилнэ үү.</EmptyNote>}
+
+          <QualityPanel apiFetch={apiFetch} />
 
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
             <Card className="flex min-w-0 flex-col p-4 sm:p-5">
