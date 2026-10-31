@@ -1,0 +1,729 @@
+[
+ {
+  "n": 28,
+  "sourceTripId": "trip-poster-9ddfe6a5-894f-46b4-8c1d-c43aed973f55",
+  "posterId": "poster-9ddfe6a5-894f-46b4-8c1d-c43aed973f55",
+  "version": "2026-10-31 03:13:32.034087+00",
+  "photo_urls": [
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789882570/uudam-connected-trips/d5c740931f205f30efa5e4dc733fc16f42e0333143e194e65c31f4fd02d4216b.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789882570/uudam-connected-trips/b7d18e18840c65f780de9dc70b9437f171994293a0efd8d1b2a6e1b2eb986651.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789882570/uudam-connected-trips/02a73905ed5cbdf816780fff61b158fb0757b7f27d2507c7660d112a9081fdfa.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411386/uudam-connected-trips/5bfc879af3824ddb01fa639f6879e7806cd61a5065aa2cf604756400862a302b.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789882571/uudam-connected-trips/4c56ed7063cafdb70070a878ed5cc16090310e5cdf50e8b4ebad4fe845efbf47.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789882571/uudam-connected-trips/39b87e82846a7a41190bd7dbc9caef140f69b0ac52a599cd9f427a3277ecee33.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789882571/uudam-connected-trips/13ec7b5a1356a82fd7fb7b31d4fc4c8a1233cd34388c20e3a63240552beb8365.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789882571/uudam-connected-trips/e95a9277c088feda5816cbaf40bfb0507656ca8504d6f13cd6de4216a5f3a8b4.jpg"
+  ],
+  "photo_credits": {
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411386/uudam-connected-trips/5bfc879af3824ddb01fa639f6879e7806cd61a5065aa2cf604756400862a302b.jpg": {
+    "page": "https://commons.wikimedia.org/wiki/File:Civic_Center,_Shenzhen_Lianhuashan_Park_(2018.9)_Daytime.jpg",
+    "title": "Civic Center, Shenzhen Lianhuashan Park (2018.9) Daytime.jpg",
+    "author": "Sparktour",
+    "license": "CC BY-SA 4.0",
+    "subject": "Shenzhen Civic Center",
+    "provider": "Wikimedia Commons",
+    "sourceUrl": "https://thumb.wikimedia.org/wikipedia/commons/thumb/4/46/Civic_Center%2C_Shenzhen_Lianhuashan_Park_%282018.9%29_Daytime.jpg/3840px-Civic_Center%2C_Shenzhen_Lianhuashan_Park_%282018.9%29_Daytime.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0"
+   },
+   "https://upload.wikimedia.org/wikipedia/commons/d/d2/Huaqiangbei_July_2024_%282%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled": {
+    "page": "https://commons.wikimedia.org/wiki/File:Huaqiangbei_July_2024_(2).jpg",
+    "title": "Huaqiangbei July 2024 (2).jpg",
+    "author": "Lyg 2001",
+    "license": "CC BY-SA 4.0",
+    "subject": "Huaqiangbei electronics street, Shenzhen",
+    "provider": "Wikimedia Commons",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0"
+   },
+   "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/2f/Huaqiangbei_street.jpg/1024px-Huaqiangbei_street.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail": {
+    "page": "https://commons.wikimedia.org/wiki/File:Huaqiangbei_street.jpg",
+    "title": "Huaqiangbei street.jpg",
+    "author": "ShiyuZW",
+    "license": "CC BY-SA 4.0",
+    "subject": "Huaqiangbei electronics street, Shenzhen",
+    "provider": "Wikimedia Commons",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0"
+   },
+   "https://thumb.wikimedia.org/wikipedia/commons/thumb/4/4f/Shenzhen_Civic_Center-20110101-RM-125157.jpg/2400px-Shenzhen_Civic_Center-20110101-RM-125157.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail": {
+    "page": "https://commons.wikimedia.org/wiki/File:Shenzhen_Civic_Center-20110101-RM-125157.jpg",
+    "title": "Shenzhen Civic Center-20110101-RM-125157.jpg",
+    "author": "Ermell",
+    "license": "CC BY-SA 4.0",
+    "subject": "Shenzhen Civic Center",
+    "provider": "Wikimedia Commons",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0"
+   }
+  },
+  "photo_audit": [
+   {
+    "at": "2026-10-31T01:31:00.951Z",
+    "step": "apply",
+    "changes": [
+     "day:1",
+     "day:3",
+     "day:4 (cleared)",
+     "day:5",
+     "day:8"
+    ],
+    "version": "2026-10-31"
+   },
+   {
+    "at": "2026-10-31T01:46:53.973Z",
+    "step": "apply",
+    "changes": [
+     "day:5"
+    ],
+    "version": "2026-10-31-fix1"
+   },
+   {
+    "at": "2026-10-31T01:56:40.719Z",
+    "step": "rehost",
+    "changes": [
+     "day:5 rehosted"
+    ],
+    "version": "2026-10-31"
+   },
+   {
+    "at": "2026-10-31T03:11:29.567Z",
+    "step": "apply",
+    "changes": [
+     "day:8"
+    ],
+    "version": "2026-10-31-fix2"
+   }
+  ],
+  "poster": {
+   "days": [
+    {
+     "day": 1,
+     "bonus": [],
+     "hotel": null,
+     "meals": {
+      "lunch": false,
+      "dinner": false,
+      "breakfast": false
+     },
+     "photo": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789882570/uudam-connected-trips/d5c740931f205f30efa5e4dc733fc16f42e0333143e194e65c31f4fd02d4216b.jpg",
+     "route": "Улаанбаатар – Шэнжинь",
+     "flight": null,
+     "summary": "Аялагчид шөнийн 23:05 цагт УБ хотоос хөөрөөд үүрийн 03:05 цагт Шэнжинь хотод бууна.\nХил гааль нэвтрээд аяллын хөтөч тосон авна.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": ""
+    },
+    {
+     "day": 2,
+     "bonus": [],
+     "hotel": "***** эсвэл адил зэрэглэлтэй буудал",
+     "meals": {
+      "lunch": false,
+      "dinner": false,
+      "breakfast": true
+     },
+     "photo": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789882570/uudam-connected-trips/b7d18e18840c65f780de9dc70b9437f171994293a0efd8d1b2a6e1b2eb986651.jpg",
+     "route": "Шэнжинь чөлөөт өдөр",
+     "flight": null,
+     "summary": "Шэнжинь хотод ирээд хил гааль нэвтэрсэний дараа аялалын хөтөчтэйгээ уулзан буудалдаа\nирэн өрөөгөө хүлээн авч байрлах ба замын ядаргаагаа тайлан амарна.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": ""
+    },
+    {
+     "day": 3,
+     "bonus": [],
+     "hotel": "***** эсвэл адил зэрэглэлтэй буудал",
+     "meals": {
+      "lunch": false,
+      "dinner": true,
+      "breakfast": true
+     },
+     "photo": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789882570/uudam-connected-trips/02a73905ed5cbdf816780fff61b158fb0757b7f27d2507c7660d112a9081fdfa.jpg",
+     "route": "Шэнжинь хотын аялал",
+     "flight": null,
+     "summary": "Өглөөний цайны дараа “Дэлхийн цонх” (Window of the World) аялал жуулчлалын\nцогцолбороор зочилно.\nЭнд дэлхийн алдартай барилга байгууламж, соёлын өвүүдийн бяцхан загваруудыг үзэж, төрөл\nбүрийн сонирхолтой үзүүлбэрүүдийг сонирхоно.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": ""
+    },
+    {
+     "day": 4,
+     "bonus": [],
+     "hotel": "***** эсвэл адил зэрэглэлтэй буудал",
+     "meals": {
+      "lunch": false,
+      "dinner": true,
+      "breakfast": true
+     },
+     "route": "Шэньжэнь – Zhongshuge номын дэлгүүр – Авьяастны парк",
+     "flight": null,
+     "summary": "Өглөөний цайны дараа Zhongshuge номын дэлгүүрээр зочилно.\nҮдээс хойш Шэньжэний Авьяастны парк (Talent Park)-р зочилно.\nОрой нь хүссэнээрээ худалдааны төв, ресторан болон зугаа цэнгэлийн бүсээр чөлөөтэй \nүйлчлүүлж болно.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": ""
+    },
+    {
+     "day": 5,
+     "bonus": [],
+     "hotel": "***** эсвэл адил зэрэглэлтэй буудал",
+     "meals": {
+      "lunch": false,
+      "dinner": true,
+      "breakfast": true
+     },
+     "photo": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411386/uudam-connected-trips/5bfc879af3824ddb01fa639f6879e7806cd61a5065aa2cf604756400862a302b.jpg",
+     "route": "Шэнжинь хотын аялал",
+     "flight": null,
+     "summary": "Өглөөний цайны дараа Шэньжэний хотын төвөөр аялна. Энэ өдөр бид \n• Шэньжэнь хотын иргэдийн төв (Civic Center)\n• Хотын төв талбай\n• Орчин үеийн архитектурын бүс\n• Ляньхуа уулын парк\n• Дэн Сяопиний хүрэл хөшөө\nОрой Happy Coast / OCT Harbour бүсээр алхаж, орчин үеийн хотын шөнийн уур амьсгалыг мэдэрнэ.",
+     "activities": [
+      "Шэньжэнь хотын иргэдийн төв (Civic Center)",
+      "Хотын төв талбай",
+      "Орчин үеийн архитектурын бүс",
+      "Ляньхуа уулын парк",
+      "Дэн Сяопиний хүрэл хөшөө",
+      "Орой Happy Coast / OCT Harbour бүсээр алхаж, орчин үеийн хотын шөнийн уур амьсгалыг мэдэрнэ."
+     ],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": ""
+    },
+    {
+     "day": 6,
+     "bonus": [],
+     "hotel": "***** эсвэл адил зэрэглэлтэй буудал",
+     "meals": {
+      "lunch": false,
+      "dinner": true,
+      "breakfast": true
+     },
+     "photo": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789882571/uudam-connected-trips/4c56ed7063cafdb70070a878ed5cc16090310e5cdf50e8b4ebad4fe845efbf47.jpg",
+     "route": "Шэнжинь-Хонгконг  Avenue Stars",
+     "flight": null,
+     "summary": "Өглөөний цайны дараа Ляньтан боомт (Liantang Port)-оор дамжин Хонконгод нэвтэрнэ.\nЭнэ өдөр бид Викториа боомтын эрэг дагуу байрлах алдарт Оддын өргөн чөлөөгөөр \nалхаж, Хонконгийн кино урлагийн оддын дурсгал, гарын мөрүүдтэй танилцан, хотын \nгайхамшигт дүр төрхийг мэдэрнэ. Викториа боомт болон Хонконгийн тэнгэр баганадсан \nбарилгуудын үзэмжийг тольдон, дурсгалын зураг авахуулна. Урлаг, соёл, худалдаа, зугаа \nцэнгэлийг хослуулсан орчин үеийн алдартай цогцолбороор зочилно. Өвөрмөц архитектур, \nурлагийн бүтээлүүдийг сонирхон, дэлгүүр хэсэж, чөлөөт цагаа өнгөрөөнө.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": ""
+    },
+    {
+     "day": 7,
+     "bonus": [],
+     "hotel": null,
+     "meals": {
+      "lunch": false,
+      "dinner": true,
+      "breakfast": true
+     },
+     "photo": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789882571/uudam-connected-trips/39b87e82846a7a41190bd7dbc9caef140f69b0ac52a599cd9f427a3277ecee33.jpg",
+     "route": "Шэнжинь-Жухай- Макао хотын аялал",
+     "flight": null,
+     "summary": "Өглөөний цайны дараа бид Жухай хотоор дамжин Макао хотын түүх, соёл, орчин үеийн өнгө төрхийг хослуулсан аяллаа эхлүүлнэ.\nБид энэ өдөр Макаогийн хамгийн алдартай түүхэн дурсгалуудын нэг болох Сан-Паулын сүмийн туурийг үзэж, дурсгалын зураг авахуулна. Макаогийн түүхэн төвөөр аялж, Европ болон Хятадын соёлын хослолыг илтгэсэн өвөрмөц архитектур, чулуун зам талбайтай танилцана. Мөн Итали улсын Венец хотын өнгө аясыг шингээсэн алдарт Venetian Resort-оор зочилно. Алтан цэцгийн модыг үзэн тансаг худалдааны төвөөр дэлгүүр хэсэх, дурсгалын зураг авах боломжтой.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": ""
+    },
+    {
+     "day": 8,
+     "bonus": [],
+     "hotel": null,
+     "meals": {
+      "lunch": false,
+      "dinner": false,
+      "breakfast": true
+     },
+     "photo": "https://upload.wikimedia.org/wikipedia/commons/d/d2/Huaqiangbei_July_2024_%282%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+     "route": "Шэнжинь электрон худалдааны гудамж",
+     "flight": null,
+     "summary": "Өглөөний цайны дараа буудлын өрөөгөө хүлээлгэн өгөөд орчин үеийн хөгжил технологийн төв болох Шэнжинь хоттой танилцах аялалаа эхлүүлнэ. Дэлхийн хамгийн том электроникийн худалдааны бүсүүдийн төв болох Хуацянбэйгээр аялаж, гар утас, компьютерийн хэрэгсэл ухаалаг төхөөрөмж, дрон, камер, төрөл бүрйин электрон бүтээгдэхүүнтэй танилцан худалдан авалт хийх боломжтой. Орой 22:00 цагаас ажилладаг худалдааны гудамжаар үйлчлүүлнэ\nТоволсон цагтаа уулзаж буудлын өрөөгөө хүлээлгэн өгч нисэх онгоцны буудал явна. Бид Шэнжинь хотын онгоцны нисэх онгоцны буудал ороод шөнийн нислэгээр Улаанбаатар хотын зүг хөдлөх болно.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": ""
+    },
+    {
+     "day": 9,
+     "bonus": [],
+     "hotel": null,
+     "meals": {
+      "lunch": false,
+      "dinner": false,
+      "breakfast": false
+     },
+     "photo": null,
+     "route": "Шэнжин - Улаанбаатар",
+     "flight": null,
+     "summary": "Шэнжинь хотоос үүрийн 04:05 хөөрч 08:05минутанд Улаанбаатар хотод газардаснаар бидний аялал өндөрлөнө",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": ""
+    }
+   ],
+   "style": {
+    "infoScale": 1,
+    "photoScale": 0.72,
+    "dayTextScale": 1.12,
+    "dayTitleScale": 1,
+    "headlineScale": 1
+   },
+   "title": "ШЭНЬЖЭНЬ – ХОНКОНГ – ЖУХАЙ – МАКАО 8 ШӨНӨ 9 ӨДӨР",
+   "agency": "UUDAM TRAVEL AGENCY",
+   "flights": null,
+   "contacts": {
+    "email": "uudamtravel6@gmail.com",
+    "phones": [
+     "7713 6633",
+     "8913 6633",
+     "9117 2769",
+     "9924 8000"
+    ],
+    "address": "Чингэлтэй дүүрэг, 4-р хороо, Анхарагийн гудамж-23, \"Todtower\" офис, 701 тоот"
+   },
+   "excludes": [
+    "• Хөтөлбөрт заагдаагүй хоол",
+    "• Хувийн хэрэглээний зардал",
+    "• Чөлөөт өдрийн унаа тээврийн зардал"
+   ],
+   "includes": [
+    "• УБ-Шэнжинь-УБ, 2 талын нислэгийн тийз",
+    "• Аяллын турш байрлах буудал",
+    "• Хөтөлбөрт заагдсан үзвэр үйлчилгээний зардал",
+    "• Хөтөлбөрт заагдсан хоол",
+    "• Аяллын даатгал",
+    "• Аяллын хөтөч"
+   ],
+   "subtitle": "",
+   "departures": [
+    {
+     "date": "Лхагва гараг бүр"
+    },
+    {
+     "date": "9 сарын 30"
+    },
+    {
+     "date": "10 сарын 7"
+    },
+    {
+     "date": "10 сарын 14"
+    },
+    {
+     "date": "10 сарын 21"
+    },
+    {
+     "date": "10 сарын 28"
+    },
+    {
+     "date": "11 сарын 4"
+    },
+    {
+     "date": "11 сарын 11"
+    },
+    {
+     "date": "11 сарын 18"
+    },
+    {
+     "date": "11 сарын 25"
+    },
+    {
+     "date": "12 сарын 2"
+    },
+    {
+     "date": "12 сарын 9"
+    },
+    {
+     "date": "12 сарын 16"
+    },
+    {
+     "date": "12 сарын 23"
+    },
+    {
+     "date": "12 сарын 30"
+    },
+    {
+     "date": "1 сарын 6"
+    },
+    {
+     "date": "1 сарын 13"
+    },
+    {
+     "date": "1 сарын 20"
+    },
+    {
+     "date": "1 сарын 27"
+    }
+   ],
+   "price_note": "",
+   "price_table": {
+    "note": "",
+    "rows": [
+     {
+      "cells": [
+       "3,990,000₮",
+       "3.690.000₮"
+      ],
+      "dates": ""
+     }
+    ],
+    "columns": [
+     "Том хүн",
+     "Хүүхэд"
+    ]
+   },
+   "destinations": [
+    "Шэньжэнь",
+    "Хонконг",
+    "Жухай",
+    "Макао"
+   ],
+   "duration_days": 9,
+   "duration_nights": 8
+  }
+ },
+ {
+  "n": 47,
+  "sourceTripId": "trip-f20899c6-6b97-4606-833f-35aa4f4a20d3",
+  "posterId": "f20899c6-6b97-4606-833f-35aa4f4a20d3",
+  "version": "2026-10-31 03:17:15.653535+00",
+  "photo_urls": [
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033847/uudam-travel-trips/jfthbitn4qhq13hebtpx.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033850/uudam-travel-trips/qlsnus9wery4s57yai6s.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411378/uudam-connected-trips/53be53d6622d8c74db68690a2b3c843a08eec6a35cf9696357a6513541656a07.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411384/uudam-connected-trips/a82e86b27ebce3f1647842cf670fc38847b1c9d474f657925599c29af481f3f1.jpg",
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033862/uudam-travel-trips/lnlqox7naxfsdi9hiz5l.jpg"
+  ],
+  "photo_credits": {
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411378/uudam-connected-trips/53be53d6622d8c74db68690a2b3c843a08eec6a35cf9696357a6513541656a07.jpg": {
+    "page": "https://commons.wikimedia.org/wiki/File:Sheraton_Huzhou_Hot_Spring_Resort_1.jpg",
+    "title": "Sheraton Huzhou Hot Spring Resort 1.jpg",
+    "author": "钉钉",
+    "license": "CC BY-SA 4.0",
+    "subject": "Sheraton Huzhou on Taihu Lake, Huzhou",
+    "provider": "Wikimedia Commons",
+    "sourceUrl": "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/89/Sheraton_Huzhou_Hot_Spring_Resort_1.jpg/3840px-Sheraton_Huzhou_Hot_Spring_Resort_1.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0"
+   },
+   "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411384/uudam-connected-trips/a82e86b27ebce3f1647842cf670fc38847b1c9d474f657925599c29af481f3f1.jpg": {
+    "page": "https://commons.wikimedia.org/wiki/File:Tea_plantations_in_Longjing,_Hangzhou.jpg",
+    "title": "Tea plantations in Longjing, Hangzhou.jpg",
+    "author": "Wishva de Silva",
+    "license": "CC BY-SA 3.0",
+    "subject": "Longjing tea plantations, Hangzhou",
+    "provider": "Wikimedia Commons",
+    "sourceUrl": "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/8f/Tea_plantations_in_Longjing%2C_Hangzhou.jpg/3840px-Tea_plantations_in_Longjing%2C_Hangzhou.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0"
+   },
+   "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/6e/Puyuanbridge.png/2400px-Puyuanbridge.png?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail": {
+    "page": "https://commons.wikimedia.org/wiki/File:Puyuanbridge.png",
+    "title": "Puyuanbridge.png",
+    "author": "Praseodymium-141",
+    "license": "CC BY 4.0",
+    "subject": "Puyuan ancient town canal bridge",
+    "provider": "Wikimedia Commons",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0"
+   },
+   "https://thumb.wikimedia.org/wikipedia/commons/thumb/4/40/Dade_Bridge_05_2015-05.JPG/3840px-Dade_Bridge_05_2015-05.JPG?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail": {
+    "page": "https://commons.wikimedia.org/wiki/File:Dade_Bridge_05_2015-05.JPG",
+    "title": "Dade Bridge 05 2015-05.JPG",
+    "author": "猫猫的日记本",
+    "license": "CC BY-SA 4.0",
+    "subject": "Puyuan ancient town canal bridge",
+    "provider": "Wikimedia Commons",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0"
+   },
+   "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/89/Sheraton_Huzhou_Hot_Spring_Resort_1.jpg/2400px-Sheraton_Huzhou_Hot_Spring_Resort_1.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail": {
+    "page": "https://commons.wikimedia.org/wiki/File:Sheraton_Huzhou_Hot_Spring_Resort_1.jpg",
+    "title": "Sheraton Huzhou Hot Spring Resort 1.jpg",
+    "author": "钉钉",
+    "license": "CC BY-SA 4.0",
+    "subject": "Sheraton Huzhou on Taihu Lake, Huzhou",
+    "provider": "Wikimedia Commons",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0"
+   },
+   "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/8f/Tea_plantations_in_Longjing%2C_Hangzhou.jpg/2400px-Tea_plantations_in_Longjing%2C_Hangzhou.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail": {
+    "page": "https://commons.wikimedia.org/wiki/File:Tea_plantations_in_Longjing,_Hangzhou.jpg",
+    "title": "Tea plantations in Longjing, Hangzhou.jpg",
+    "author": "Wishva de Silva",
+    "license": "CC BY-SA 3.0",
+    "subject": "Longjing tea plantations, Hangzhou",
+    "provider": "Wikimedia Commons",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0"
+   }
+  },
+  "photo_audit": [
+   {
+    "at": "2026-10-31T01:31:26.534Z",
+    "step": "apply",
+    "changes": [
+     "day:3",
+     "day:4",
+     "day:5 (cleared)",
+     "day:6"
+    ],
+    "version": "2026-10-31"
+   },
+   {
+    "at": "2026-10-31T01:46:45.656Z",
+    "step": "apply",
+    "changes": [
+     "day:3",
+     "day:4",
+     "day:6"
+    ],
+    "version": "2026-10-31-fix1"
+   },
+   {
+    "at": "2026-10-31T01:57:01.247Z",
+    "step": "rehost",
+    "changes": [
+     "day:3 rehosted",
+     "day:6 rehosted"
+    ],
+    "version": "2026-10-31"
+   },
+   {
+    "at": "2026-10-31T03:17:14.057Z",
+    "step": "apply",
+    "changes": [
+     "day:4"
+    ],
+    "version": "2026-10-31-fix3"
+   }
+  ],
+  "poster": {
+   "days": [
+    {
+     "day": 1,
+     "bonus": [],
+     "hotel": "Shanghai Pudong Rezen Hotel",
+     "meals": {
+      "lunch": false,
+      "dinner": true,
+      "breakfast": false
+     },
+     "photo": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033847/uudam-travel-trips/jfthbitn4qhq13hebtpx.jpg",
+     "route": "Улаанбаатар – Шанхай",
+     "flight": null,
+     "summary": "Бид Улаанбаатар хотоос Спрингс Эйрлайнс авиа компанийн шууд нислэгээр 13:00-16:45 цагт Хятадын хамгийн хөгжингүй, орчин үеийн мегаполис хотуудын нэг болох Шанхай хотыг зорин ниснэ.  Хил гаалийн бүрдүүлэлтээ хийгээд нисэх буудал болон Дисней Лэнд паркын ойролцоо байх зочид буудалдаа буугаад оройн хоолоо идээд амарна.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": ""
+    },
+    {
+     "day": 2,
+     "bonus": [],
+     "hotel": "Shanghai Pudong Rezen Hotel",
+     "meals": {
+      "lunch": false,
+      "dinner": false,
+      "breakfast": true
+     },
+     "photo": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033850/uudam-travel-trips/qlsnus9wery4s57yai6s.jpg",
+     "route": "Диснейленд",
+     "flight": null,
+     "summary": "Өглөөний цайны дараа  бид Disneyland рүү автобусаар хүргүүлнэ. Аварга том үлгэрийн цайз, адал явдалт тоглоомууд, гайхамшигт парад, шоу тоглолтууд, гэр бүлийн бүх насныханд зориулсан үзвэрүүд таныг хүлээж байна. Та уг паркад бүтэн өдрийн тоглож наадан цагийг зугаатай өнгөрүүлээрэй.",
+     "activities": [
+      "Олон төрлийн үзүүлбэр",
+      "Экстрем тоглоомууд",
+      "Бүх насныханд зориулсан"
+     ],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": ""
+    },
+    {
+     "day": 3,
+     "bonus": [],
+     "hotel": "Taihu Longemont Diamond Hotel",
+     "meals": {
+      "lunch": true,
+      "dinner": true,
+      "breakfast": true
+     },
+     "photo": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411378/uudam-connected-trips/53be53d6622d8c74db68690a2b3c843a08eec6a35cf9696357a6513541656a07.jpg",
+     "route": "Шанхай-Хүжүө",
+     "flight": null,
+     "summary": "Өглөөний цайны дараа байгалийн үзэсгэлэнт орчин болох Тайху нуурын эрэг хөвөө, аялал жуулчлалын дэвшилтэт бүтээн байгуулалтаараа алдартай Хүжөү хотыг зорин хөдөлнө. Ойролцоогоор 2 цаг гаран явна. Өнөөдөр бид Лонжимонт усан паркт тоглож наадаж цагийг өнгөрүүлнэ. Уг усан парк нь битүү дээвэртэй аварга байгууламжтай ба бага насны хүүхдүүдэд хамгийн таатай орчин байдаг. Гадаа талбайн тоглоомуудын нэг онцлог бол маш олон тооны хоолой усан гулсууруудтай. Аяллын төгсгөлд нуурын эрэгт байрлах тансаг зэрэглэлийн 5 одтой буудалд байрлан амарна.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": ""
+    },
+    {
+     "day": 4,
+     "bonus": [],
+     "hotel": "Puyuan Fashion Resort-Meishang Resort",
+     "meals": {
+      "lunch": true,
+      "dinner": false,
+      "breakfast": true
+     },
+     "photo": "https://thumb.wikimedia.org/wikipedia/commons/thumb/4/40/Dade_Bridge_05_2015-05.JPG/3840px-Dade_Bridge_05_2015-05.JPG?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+     "route": "Пуфуан",
+     "flight": null,
+     "summary": "Өнөөдөр бид Хятадын 5А зэрэглэлийн аялал жуулчлалын бүс болох үзэсгэлэнт Пүюань хотыг зорин аялна. Сувгаар холбогдсон эртний чулуун байшингууд, жижиг гүүрнүүд, уламжлалт завинууд нь таныг яг л Италийн Венец хотод ирсэн мэт мэдрэмж төрүүлнэ. Усан хотын намуухан орчинд алхаж, гайхамшигт гэрэл зураг авах боломжтой.\nОрой нь усан хотын дунд байрлах тансаг 5 одны зэрэглэлийн амралтын газарт байрлана.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": ""
+    },
+    {
+     "day": 5,
+     "bonus": [],
+     "hotel": "Hangzhou Canal Haixin Hotel",
+     "meals": {
+      "lunch": true,
+      "dinner": false,
+      "breakfast": true
+     },
+     "route": "Пуфуан– ХанЖоү",
+     "flight": null,
+     "summary": "Өглөөний цайны дараа алдарт торгоны үйлдвэрлэлтэй танилцаж, хүр хорхойн торгоор хийсэн өндөр чанарын бүтээгдэхүүнүүдийг (ор хөнжлийн давуу, торгон алчуур хувцас гэх мэт) үзэж сонирхоно. Үүний дараа бид Хятадын хамгийн үзэсгэлэнтэй хотуудын нэг болох Ханжөүг зорин хөдөлнө. Бидний эхний зогсоол мянган жилийн түүхтэй эртний худалдааны, жуулчны гудамж болох Хефанг өргөн чөлөөгөөр явж аялагч нарт зориулсан дурсгалын бараа бүтээгдхүүн болон амттан гээд төрөл бүрийн зүйлс үзэж сонирхно. Орой нь аялагчид өөрсдөө хүсвэл дэлхийн хэмжээний томоохон тайзны бүтээлүүдийн нэг болох “Сүн улсын хайрын домог” шоу тоглолтыг үзэх боломжтой. Энэхүү гайхамшигт тоглолт нь орчин үеийн технологи, бүжиг, хөгжмийн урлагийг хослуулсан өвөрмөц бүтээл юм.\n\nНэг хүний (50$)",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": ""
+    },
+    {
+     "day": 6,
+     "bonus": [],
+     "hotel": "Hangzhou Canal Haixin Hotel",
+     "meals": {
+      "lunch": true,
+      "dinner": false,
+      "breakfast": true
+     },
+     "photo": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1793411384/uudam-connected-trips/a82e86b27ebce3f1647842cf670fc38847b1c9d474f657925599c29af481f3f1.jpg",
+     "route": "ХанЖоү",
+     "flight": null,
+     "summary": "Өнөөдөр өглөөний цайгаа уусны дараа бид Хятадын хамгийн алдартай цай болох Лууны худаг (Longjing) ногоон цайны тариалан-тай танилцана. Ногоон толгодыг бүрхсэн цайны талбайгаар зугаалж, шинэхэн цай амталж, боловсруулах технологитой танилцах болно. Үүний дараа ЮНЕСКО-ийн дэлхийн өвд бүртгэгдсэн Баруун нуурын завин аялал хийж, эртний павильонууд, ногоон уулс, усан мандлын гайхамшигт зохицлыг үзнэ. Орой нь гэрэлтсэн нуурын эргээр тайван алхаж, Ханжөү хотын романтик уур амьсгалыг мэдрэх боломжтой.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": ""
+    },
+    {
+     "day": 7,
+     "bonus": [],
+     "hotel": "Shanghai Pudong Rezen Hotel",
+     "meals": {
+      "lunch": true,
+      "dinner": false,
+      "breakfast": true
+     },
+     "photo": null,
+     "route": "Шанхай хотын аялал",
+     "flight": null,
+     "summary": "Өглөөний цайны дараа бид Шанхай хотруу хөдлөх ба Шанхай хотод ирээд хамгийн алдартай үзмэрүүдтэй танилцана. Юу гарден буюу Эртний бурхны сүм, Бунд буюу Хуанпу голын эрэг, Нанжин явган худалдааны гудамж, Орчин үеийн санхүүгийн дүүрэг\nОрой хүссэн аялагчид Хуанпу голын шөнийн круз аялалд оролцож, гэрлэн чимэглэлд умбасан Шанхай хотын гайхамшигт өнгө төрхийг усан дээрээс харах боломжтой. Мөн хотыг бүхэлд нь тольдох өндөр цамхгийн ажиглалтын тавцанд гарч мартагдашгүй зураг дурсгал үлдээх боломжтой..",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": ""
+    },
+    {
+     "day": 8,
+     "bonus": [],
+     "hotel": null,
+     "meals": {
+      "lunch": false,
+      "dinner": false,
+      "breakfast": true
+     },
+     "photo": null,
+     "route": "Шанхай – Улаанбаатар",
+     "flight": null,
+     "summary": "Энэ өдөр үүрээр онгоцны буудал явах бөгөөд 8.00 цагт Улаанбаатарын зүг нисээд 12.00 цагт газардаж орчин үеийн мегаполис, эртний усан хотууд, дэлхийн хэмжээний үзвэр үйлчилгээ, Хятадын соёлын өвтэй танилцсан гайхалтай дурсамжуудаа тээж эх орондоо ирснээр аялал өндөрлөнө.",
+     "activities": [],
+     "show_meals": true,
+     "distance_km": 0,
+     "photo_caption": "Энэ өдөр үүрээр онгоцны буудал явах бөгөөд 8.00 цагт Улаанбаатарын зүг нисээд 12.00 цагт газардаж орчин үеийн мегаполис, эртний усан хотууд, дэлхийн хэмжээний үзвэр үйлчилгээ, Хятадын соёлын өвтэй танилцсан гайхалтай дурсамжуудаа тээж эх орондоо ирснээр аялал өндөрлөнө."
+    }
+   ],
+   "title": "Улаанбаатар – Шанхай – Хүжөү – Пүюань – Ханжоу аялал",
+   "agency": "UUDAM TRAVEL AGENCY",
+   "flights": {
+    "return": "Шанхай-Улаанбаатар шууд нислэг 08:10-12:00",
+    "outbound": "Улаанбаатар-Шанхай шууд нислэг 13:00-16:45"
+   },
+   "contacts": {
+    "email": "uudamtravel6@gmail.com",
+    "phones": [
+     "7713 6633",
+     "8913 6633",
+     "9117 2769",
+     "9924 8000"
+    ],
+    "address": "Чингэлтэй дүүрэг, 4-р хороо, Анхарагийн гудамж-23, \"Todtower\" офис, 701 тоот"
+   },
+   "excludes": [
+    "Аяллын турш үйлчлэх унааны зардал гадна хувийн хэрэглээний зардал.",
+    "Аяллын үед анхаарах зүйлсэд заагдсан хувийн хэрэглээний зүйлс.",
+    "Олон төрлийн хувийн зардал.",
+    "Аяллын хөтөлбөрт ороогүй үзвэр үйлчилгээг үзэх зардал.",
+    "Архи согтууруулах ундаа хэрэглэх хориотой.",
+    "Хувийн хувцсаа бэлдэх, эм тариа авч явах шаардлага.",
+    "Пасспортны баталгаатай хугацаа шаардлага.",
+    "Бусад зохицуулалтын шаардлага"
+   ],
+   "includes": [
+    "Улаанбаатар-Шанхай-Улаанбаатар шууд нислэг.",
+    "5*одтой зочид буудал.",
+    "Шанхайн Диснейлэнд орох тасалбар",
+    "Аяллын турш үйлчлэх унааны зардал",
+    "Хөтөлбөрт заагдсан үзвэр үйлчилгээ",
+    "Өглөөний цайнаас гадна хөтөлбөрт заагдсан 7 удаагийн хоолны үйлчилгээ",
+    "Хятад Монгол хэлтэй хөтөч орчуулагч",
+    "Гадаад аяллын иж бүрэн даатгал",
+    "Хөтөч, жолоочийн гарын мөнгө"
+   ],
+   "subtitle": "",
+   "departures": [
+    {
+     "date": "2026-10-08"
+    },
+    {
+     "date": "2026-10-15"
+    }
+   ],
+   "hero_image": "https://res.cloudinary.com/dbzydfkhc/image/upload/v1789033847/uudam-travel-trips/jfthbitn4qhq13hebtpx.jpg",
+   "price_desc": "8 өдөр / 7 шөнө",
+   "price_note": "",
+   "text_scale": 1.11,
+   "price_table": {
+    "note": "",
+    "rows": [
+     {
+      "cells": [
+       "3.390.000₮",
+       "2.690.000₮"
+      ],
+      "dates": "9 сарын 10, 17, 10 сарын 15"
+     },
+     {
+      "cells": [
+       "3.490.000₮",
+       "2.790.000₮"
+      ],
+      "dates": "10 сарын 8"
+     }
+    ],
+    "columns": [
+     "Том хүн",
+     "ХҮҮХЭД 2-11 НАС"
+    ]
+   },
+   "destinations": [
+    "Шанхай",
+    "Хүжөү",
+    "Пүюань",
+    "Ханжоу"
+   ],
+   "duration_days": 8,
+   "transport_type": "direct_flight",
+   "duration_nights": 7
+  }
+ }
+]
