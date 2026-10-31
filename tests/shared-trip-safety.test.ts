@@ -26,7 +26,7 @@ test("both independently changed descriptions remain available for review", () =
   const current = { ...canonical(), notes: "Chatbot edit" };
   const patch = websiteTripPatch({ ...website, description: "Website edit" }, website, current);
   assert.equal(patch.notes, undefined);
-  assert.deepEqual(patch.extra?.shared_conflicts, [{ field: "notes", chatbot: "Chatbot edit", website: "Website edit", base: "Original" }]);
+  assert.deepEqual((patch.extra?.shared_conflicts as Array<Record<string, unknown>>).map(({ at, ...conflict }) => (assert.match(String(at), /^\d{4}-/), conflict)), [{ field: "notes", chatbot: "Chatbot edit", website: "Website edit", base: "Original" }]);
   assert.equal(current.notes, "Chatbot edit");
 });
 test("retrying an accepted website edit is idempotent", () => {

@@ -1209,7 +1209,12 @@ export async function upsertTrip(input: {
   return result?.rows?.[0] ? mapTripRow(result.rows[0]) : null;
 }
 
-export async function patchTrip(id: string, fields: TripMutationFields, syncPoster = true, posterWrite?: PosterWrite, expectedUpdatedAt?: string) {
+/**
+ * `flush: "background"` answers once the canonical row and poster are saved and
+ * leaves the website projection to the durable queue: the website bridge calls
+ * this under a 20 s client timeout, which the inline projection could exceed.
+ */
+export async function patchTrip(id: string, fields: TripMutationFields, syncPoster = true, posterWrite?: PosterWrite, expectedUpdatedAt?: string, options: { flush?: "inline" | "background" } = {}) {
   const ready = await ensureTravelSchema();
   if (!ready) return null;
 
@@ -1307,7 +1312,12 @@ export async function patchTrip(id: string, fields: TripMutationFields, syncPost
     posterWrite,
     String(previous.write_version),
   );
-  await flushWebsiteSync(id, 1);
+  if (options.flush === "background") {
+    const work = flushWebsiteSync(id, 1).catch(() => undefined);
+    try { waitUntil(work); } catch { void work; }
+  } else {
+    await flushWebsiteSync(id, 1);
+  }
   return result?.rows?.[0] ? mapTripRow(result.rows[0]) : null;
 }
 

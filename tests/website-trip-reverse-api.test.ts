@@ -50,7 +50,7 @@ test("reverse sync authenticates, rejects malformed facts before DB access, and 
     const retry = response();
     await handler(request({ trip: { sourceTripId: row.id, description: row.notes } }), retry as unknown as NextApiResponse);
     assert.equal(retry.statusCode, 200);
-    assert.deepEqual(retry.body, { ok: true, tripId: row.id });
+    assert.deepEqual(retry.body, { ok: true, tripId: row.id, applied: [], conflicts: [], ignored: [] });
     assert.equal(queries.length, 1);
 
     unavailable = true;

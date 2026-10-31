@@ -54,7 +54,7 @@ test("an empty website summary is an explicit removal", () => {
   assert.equal(result.fields.seats_left, undefined);
 });
 
-test("website-created incomplete trips sync without fake zero fares", () => {
+test("website-created incomplete trips sync without a fake zero adult fare; a typed 0 child/infant fare is free", () => {
   const result = websiteTripToCanonicalFields({
     sourceTripId: "trip-web-draft",
     title: "Шинэ аялал",
@@ -71,12 +71,13 @@ test("website-created incomplete trips sync without fake zero fares", () => {
   });
 
   assert.equal(result.fields.status, "draft");
+  // The website's adult 0 means "Үнэ лавлах"; a child/infant 0 is shown there as "Үнэгүй".
   assert.equal(result.fields.adult_price, null);
-  assert.equal(result.fields.child_price, null);
-  assert.equal(result.fields.infant_price, null);
+  assert.equal(result.fields.child_price, 0);
+  assert.equal(result.fields.infant_price, 0);
   assert.deepEqual(result.fields.photo_urls, []);
   assert.deepEqual(result.fields.extra?.price_groups, [
-    { dates: ["2026-12-01"], adult_price: null, child_price: null, infant_price: null },
+    { dates: ["2026-12-01"], adult_price: null, child_price: 0, infant_price: 0, child_price_free: true, infant_price_free: true },
   ]);
 });
 

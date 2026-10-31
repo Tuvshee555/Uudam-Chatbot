@@ -16,7 +16,7 @@ import { waitUntil } from "@vercel/functions";
 import { isNeonConfigured, queryNeon } from "./neonDb";
 import { shouldPersistLog } from "./observability";
 
-export const ERROR_LOG_RETENTION_DAYS = 7;
+export const ERROR_LOG_RETENTION_DAYS = 30;
 /** Hard ceiling on stored rows, so an error storm can't outgrow the week. */
 export const ERROR_LOG_MAX_ROWS = 20_000;
 const MAX_INSERTS_PER_MINUTE = 120;

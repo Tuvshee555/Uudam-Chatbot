@@ -70,7 +70,7 @@ test("new website age rules compare against the latest saved rules, preserving i
   assert.deepEqual(websiteTripPatch(incoming, old, canonical(old)).extra?.age_rules, { adult: "19+ нас" });
   const conflict = websiteTripPatch(incoming, old, { ...canonical(old), extra: { ...canonical(old).extra, age_rules: { adult: "20+ нас" } } });
   assert.equal(conflict.extra?.age_rules, undefined);
-  assert.deepEqual(conflict.extra?.shared_conflicts, [{ field: "extra.age_rules", chatbot: { adult: "20+ нас" }, website: { adult: "19+ нас" }, base: { adult: "18+ нас" } }]);
+  assert.deepEqual((conflict.extra?.shared_conflicts as Array<Record<string, unknown>>).map(({ at, ...entry }) => (assert.match(String(at), /^\d{4}-/), entry)), [{ field: "extra.age_rules", chatbot: { adult: "20+ нас" }, website: { adult: "19+ нас" }, base: { adult: "18+ нас" } }]);
 });
 
 test("repeated accepted and conflicting deliveries are true no-op patches", () => {

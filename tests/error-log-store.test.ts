@@ -138,8 +138,8 @@ test("persisting with no database configured is a silent no-op", async () => {
   assert.deepEqual(await summarizeErrorLogs(), []);
 });
 
-test("retention is a week, so old problems can never pile up", async () => {
+test("retention is 30 days (long enough to investigate a sync failure), still bounded by a row ceiling", async () => {
   const { ERROR_LOG_RETENTION_DAYS, ERROR_LOG_MAX_ROWS } = await loadStore();
-  assert.equal(ERROR_LOG_RETENTION_DAYS, 7);
+  assert.equal(ERROR_LOG_RETENTION_DAYS, 30);
   assert.ok(ERROR_LOG_MAX_ROWS > 0 && ERROR_LOG_MAX_ROWS <= 50_000);
 });

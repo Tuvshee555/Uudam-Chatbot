@@ -15,6 +15,8 @@ import { departureSeatsAfterTripEdit } from "./departureSeats";
 import type { WebsiteSyncRow } from "./websiteSyncStatus";
 import { websiteDepartureDateKey } from "./websiteDepartureDate";
 import { currentWebsiteDepartureRows } from "./websiteDepartureRows";
+import { BOOKING_WEBSITE_URL } from "./bookingWebsite";
+import { logWarn } from "./observability";
 
 let pool: Pool | undefined;
 function bookingPool() {
@@ -218,6 +220,29 @@ export async function materializePoster(input: unknown) {
   return data;
 }
 
+const NOT_HELD = new Set(["id", "createdAt", "updatedAt", "lastSyncedAt", "avgRating", "reviewCount", "salesCount", "weather", "sourceTripId", "slug", "sourceMetadata"]);
+
+/**
+ * Website fields with a staff edit the chatbot has not received yet (the
+ * website's delivery queue, src/server/tripSyncQueue.ts there). A projection
+ * keeps them as they are: preferring the chatbot's value used to wipe such an
+ * edit from the website while it waited for delivery. Queue entries from
+ * before 2026-10-31 carry a whole-trip baseline instead of named edits.
+ */
+export function heldWebsiteFields(sourceMetadata: unknown): Set<string> {
+  const pending = record(record(sourceMetadata).websiteSyncPending);
+  if (typeof pending.id !== "string" || pending.archive === true) return new Set();
+  const edits = record(pending.edits);
+  if (pending.edits && typeof pending.edits === "object") return new Set(Object.keys(edits));
+  const trip = record(pending.trip), previous = record(pending.previousTrip);
+  if (!Object.keys(previous).length) return new Set();
+  const held = new Set(Object.keys(trip).filter((key) => !NOT_HELD.has(key) && !sameParityValue(trip[key], previous[key])));
+  for (const key of ["price_groups", "age_rules", "hotel_profiles", "hotel_links", "canonicalExtraPatch"]) {
+    if (!sameParityValue(record(trip.sourceMetadata)[key], record(previous.sourceMetadata)[key])) held.add(`sourceMetadata.${key}`);
+  }
+  return held;
+}
+
 async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster: Record<string, unknown>) {
   // Stable source IDs, not titles, are the identity across both databases.
   await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [source.id]);
@@ -265,9 +290,13 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   const pdf = getPosterPdfPublicUrl(String(source.extra.poster_trip_id));
   if (!pdf) throw new Error("SITE_URL is required for the shared poster PDF");
   const marketingBadge = websiteMarketingBadge(source);
-  const metadata = { ...record(prior?.sourceMetadata), ...source.extra,
+  const held = heldWebsiteFields(prior?.sourceMetadata);
+  const metadata: Record<string, unknown> = { ...record(prior?.sourceMetadata), ...source.extra,
     price_groups: offering.priceGroups, canonicalOffers: offering.canonicalOffers,
     marketingBadge, connectedSource: { ...source, photos, poster, marketingBadge } };
+  for (const field of held) {
+    if (field.startsWith("sourceMetadata.")) metadata[field.slice("sourceMetadata.".length)] = record(prior?.sourceMetadata)[field.slice("sourceMetadata.".length)];
+  }
   // Never override a category staff picked by hand — only classify a trip
   // that has none yet (a brand-new sync, or one that predates this feature).
   const categoryId = prior?.categoryId
@@ -317,7 +346,7 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
     price: offering.price ?? 0, childPrice: offering.childPrice, infantPrice: offering.infantPrice,
     currency: source.currency || "MNT", foodIncluded: source.has_food, departureRule: source.extra.departure_rule || null,
   };
-  const mergedContent = prior ? mergeWebsiteContent(prior, { ...fallbackBaseline, ...baselineContent }, proposedContent, { preferIncoming: true }) : { data: proposedContent, conflicts: [] };
+  const mergedContent = prior ? mergeWebsiteContent(prior, { ...fallbackBaseline, ...baselineContent }, proposedContent, { preferIncoming: true, hold: held }) : { data: proposedContent, conflicts: [] };
   const details = applyWebsiteDetailsPatch(prior, source.extra.website_details_patch);
   const newConflicts = [...mergedContent.conflicts, ...details.conflicts];
   // Conflicts describe the current three-way merge only. Keeping historical
@@ -337,99 +366,109 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
     // about it, but every departure below reads as closed, not open.
     isPublished: (source.status === "active" || source.status === "sold_out" || source.status === "paused")
       && source.extra.customer_visible !== false,
-    lastSyncedAt: new Date(),
   };
+  if (prior) for (const field of held) if (field in data && field !== "sourceMetadata" && field in prior) data[field] = prior[field];
+  // Timestamps come from the database clock. A JS Date bound to these
+  // timestamp-without-time-zone columns is written in the process's local
+  // zone, which put lastSyncedAt 8 hours ahead whenever a sync ran from a
+  // machine on Ulaanbaatar time.
   if (prior) {
     const entries = Object.entries(data);
-    await client.query(`UPDATE "Trip" SET ${entries.map(([key], i) => `"${key}"=$${i + 2}${["sourceMetadata", "hotelMedia", "travelerMedia"].includes(key) ? "::jsonb" : ""}`).join(",")}, "updatedAt"=NOW() WHERE id=$1`,
+    await client.query(`UPDATE "Trip" SET ${entries.map(([key], i) => `"${key}"=$${i + 2}${["sourceMetadata", "hotelMedia", "travelerMedia"].includes(key) ? "::jsonb" : ""}`).join(",")}, "lastSyncedAt"=NOW(), "updatedAt"=NOW() WHERE id=$1`,
       [id, ...entries.map(([key, value]) => ["hotelMedia", "travelerMedia"].includes(key) ? JSON.stringify(value) : value)]);
   } else {
     const entries = Object.entries({ id, slug, sourceTripId: source.id, ...data, isFeatured: false });
-    await client.query(`INSERT INTO "Trip" (${entries.map(([key]) => `"${key}"`).join(",")})
-      VALUES (${entries.map(([key], i) => `$${i + 1}${["sourceMetadata", "hotelMedia", "travelerMedia"].includes(key) ? "::jsonb" : ""}`).join(",")})`, entries.map(([key, value]) => ["hotelMedia", "travelerMedia"].includes(key) ? JSON.stringify(value) : value));
+    await client.query(`INSERT INTO "Trip" (${entries.map(([key]) => `"${key}"`).join(",")},"lastSyncedAt")
+      VALUES (${entries.map(([key], i) => `$${i + 1}${["sourceMetadata", "hotelMedia", "travelerMedia"].includes(key) ? "::jsonb" : ""}`).join(",")},NOW())`, entries.map(([key, value]) => ["hotelMedia", "travelerMedia"].includes(key) ? JSON.stringify(value) : value));
   }
-  const days = records(poster.days);
-  const oldDays = (await client.query(`SELECT * FROM "ItineraryDay" WHERE "tripId"=$1 AND "dayNumber">0`, [id])).rows;
-  const previousDays = records(previousPoster.days);
-  const dayNumbers: number[] = [];
-  for (const [i, day] of days.entries()) {
-    // Photos are an independent gallery; photo-only slots are not itinerary days.
-    if (!day.route && !day.summary && !day.hotel) continue;
-    const number = Number(day.day) || i + 1;
-    if (dayNumbers.includes(number)) throw new Error("Duplicate itinerary day numbers require review");
-    dayNumbers.push(number);
-    const previousDay = previousDays.find((entry, index) => (Number(entry.day) || index + 1) === number);
-    if (prior && previousDay && sameParityValue(previousDay, day)) continue;
-    const meals = record(day.meals);
-    const dayFields = { title: String(day.route || `${number}-р өдөр`), description: day.summary || null, accommodation: day.hotel || null,
-      meals: [meals.breakfast ? "Өглөө" : "", meals.lunch ? "Өдөр" : "", meals.dinner ? "Орой" : ""].filter(Boolean), image: day.photo || null };
-    const oldDay = oldDays.find((entry) => entry.dayNumber === number);
-    if (oldDay) {
-      const oldMeals = record(previousDay?.meals);
-      const baseline = { title: previousDay?.route, description: previousDay?.summary || null, accommodation: previousDay?.hotel || null,
-        meals: [oldMeals.breakfast ? "Өглөө" : "", oldMeals.lunch ? "Өдөр" : "", oldMeals.dinner ? "Орой" : ""].filter(Boolean), image: previousDay?.photo || null };
-      const result = mergeWebsiteContent(oldDay, baseline, dayFields, { preferIncoming: true });
-      const entries = Object.entries(result.data);
-      if (entries.length) await client.query(`UPDATE "ItineraryDay" SET ${entries.map(([key], index) => `"${key}"=$${index + 2}`).join(",")} WHERE id=$1`, [oldDay.id, ...entries.map(([, value]) => value)]);
-      for (const conflict of result.conflicts) {
-        const entry = { ...conflict, field: `itinerary.${number}.${conflict.field}` };
+  // A website itinerary edit still on its way to the chatbot keeps its days.
+  if (!held.has("itinerary")) {
+    const days = records(poster.days);
+    const oldDays = (await client.query(`SELECT * FROM "ItineraryDay" WHERE "tripId"=$1 AND "dayNumber">0`, [id])).rows;
+    const previousDays = records(previousPoster.days);
+    const dayNumbers: number[] = [];
+    for (const [i, day] of days.entries()) {
+      // Photos are an independent gallery; photo-only slots are not itinerary days.
+      if (!day.route && !day.summary && !day.hotel) continue;
+      const number = Number(day.day) || i + 1;
+      if (dayNumbers.includes(number)) throw new Error("Duplicate itinerary day numbers require review");
+      dayNumbers.push(number);
+      const previousDay = previousDays.find((entry, index) => (Number(entry.day) || index + 1) === number);
+      if (prior && previousDay && sameParityValue(previousDay, day)) continue;
+      const meals = record(day.meals);
+      const dayFields = { title: String(day.route || `${number}-р өдөр`), description: day.summary || null, accommodation: day.hotel || null,
+        meals: [meals.breakfast ? "Өглөө" : "", meals.lunch ? "Өдөр" : "", meals.dinner ? "Орой" : ""].filter(Boolean), image: day.photo || null };
+      const oldDay = oldDays.find((entry) => entry.dayNumber === number);
+      if (oldDay) {
+        const oldMeals = record(previousDay?.meals);
+        const baseline = { title: previousDay?.route, description: previousDay?.summary || null, accommodation: previousDay?.hotel || null,
+          meals: [oldMeals.breakfast ? "Өглөө" : "", oldMeals.lunch ? "Өдөр" : "", oldMeals.dinner ? "Орой" : ""].filter(Boolean), image: previousDay?.photo || null };
+        const result = mergeWebsiteContent(oldDay, baseline, dayFields, { preferIncoming: true });
+        const entries = Object.entries(result.data);
+        if (entries.length) await client.query(`UPDATE "ItineraryDay" SET ${entries.map(([key], index) => `"${key}"=$${index + 2}`).join(",")} WHERE id=$1`, [oldDay.id, ...entries.map(([, value]) => value)]);
+        for (const conflict of result.conflicts) {
+          const entry = { ...conflict, field: `itinerary.${number}.${conflict.field}` };
+          newConflicts.push(entry);
+          if (!allConflicts.some((saved) => sameParityValue(saved, entry))) allConflicts.push(entry);
+        }
+      } else await client.query(`INSERT INTO "ItineraryDay" (id,"tripId","dayNumber",title,description,accommodation,meals,image)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [randomUUID(), id, number, dayFields.title, dayFields.description, dayFields.accommodation, dayFields.meals, dayFields.image]);
+    }
+    // Only archive removed source days when the website has no independent edits.
+    let archiveDayNumber = Math.min(0, Number((await client.query(`SELECT MIN("dayNumber") AS minimum FROM "ItineraryDay" WHERE "tripId"=$1`, [id])).rows[0]?.minimum) || 0) - 1;
+    for (const [index, previousDay] of previousDays.entries()) {
+      const number = Number(previousDay.day) || index + 1;
+      if (dayNumbers.includes(number)) continue;
+      const oldDay = oldDays.find((entry) => entry.dayNumber === number);
+      if (!oldDay) continue;
+      const meals = record(previousDay.meals);
+      const baseline = { title: String(previousDay.route || `${number}-р өдөр`), description: previousDay.summary || null, accommodation: previousDay.hotel || null,
+        meals: [meals.breakfast ? "Өглөө" : "", meals.lunch ? "Өдөр" : "", meals.dinner ? "Орой" : ""].filter(Boolean), image: previousDay.photo || null };
+      if (!mergeWebsiteContent(oldDay, baseline, baseline).conflicts.length) {
+        await client.query(`UPDATE "ItineraryDay" SET "dayNumber"=$2 WHERE id=$1`, [oldDay.id, archiveDayNumber--]);
+      } else {
+        const entry = { field: `itinerary.${number}.removed`, website: oldDay, chatbot: null, base: baseline };
         newConflicts.push(entry);
         if (!allConflicts.some((saved) => sameParityValue(saved, entry))) allConflicts.push(entry);
       }
-    } else await client.query(`INSERT INTO "ItineraryDay" (id,"tripId","dayNumber",title,description,accommodation,meals,image)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [randomUUID(), id, number, dayFields.title, dayFields.description, dayFields.accommodation, dayFields.meals, dayFields.image]);
-  }
-  // Only archive removed source days when the website has no independent edits.
-  let archiveDayNumber = Math.min(0, Number((await client.query(`SELECT MIN("dayNumber") AS minimum FROM "ItineraryDay" WHERE "tripId"=$1`, [id])).rows[0]?.minimum) || 0) - 1;
-  for (const [index, previousDay] of previousDays.entries()) {
-    const number = Number(previousDay.day) || index + 1;
-    if (dayNumbers.includes(number)) continue;
-    const oldDay = oldDays.find((entry) => entry.dayNumber === number);
-    if (!oldDay) continue;
-    const meals = record(previousDay.meals);
-    const baseline = { title: String(previousDay.route || `${number}-р өдөр`), description: previousDay.summary || null, accommodation: previousDay.hotel || null,
-      meals: [meals.breakfast ? "Өглөө" : "", meals.lunch ? "Өдөр" : "", meals.dinner ? "Орой" : ""].filter(Boolean), image: previousDay.photo || null };
-    if (!mergeWebsiteContent(oldDay, baseline, baseline).conflicts.length) {
-      await client.query(`UPDATE "ItineraryDay" SET "dayNumber"=$2 WHERE id=$1`, [oldDay.id, archiveDayNumber--]);
-    } else {
-      const entry = { field: `itinerary.${number}.removed`, website: oldDay, chatbot: null, base: baseline };
-      newConflicts.push(entry);
-      if (!allConflicts.some((saved) => sameParityValue(saved, entry))) allConflicts.push(entry);
     }
   }
-  const keep: string[] = [];
-  for (const dep of offering.departures) {
-    const old = currentDepartures.find(row => websiteDepartureDateKey(row.startDate) === dep.start.slice(0, 10));
-    const depId = old?.id || randomUUID();
-    keep.push(depId);
-    const status = dep.status;
-    if (old) {
-      const previousDeparture = previousOffering?.departures.find((entry) => entry.start.slice(0, 10) === dep.start.slice(0, 10));
-      const protectedFares = mergeWebsiteContent(old, {
-        price: previousDeparture?.price ?? null, childPrice: previousDeparture?.childPrice ?? null, infantPrice: previousDeparture?.infantPrice ?? null,
-        label: previousDeparture?.label ?? null, endDate: previousDeparture?.end ?? null,
-      }, { price: dep.price ?? null, childPrice: dep.childPrice ?? null, infantPrice: dep.infantPrice ?? null, label: dep.label, endDate: dep.end }, { preferIncoming: true });
-      for (const conflict of protectedFares.conflicts) {
-        const entry = { ...conflict, field: `departure.${dep.start.slice(0, 10)}.${conflict.field}` };
-        newConflicts.push(entry);
-        if (!allConflicts.some((saved) => sameParityValue(saved, entry))) allConflicts.push(entry);
+  // Same for departures: a queued website date or fare edit is not undone here.
+  if (!held.has("departures")) {
+    const keep: string[] = [];
+    for (const dep of offering.departures) {
+      const old = currentDepartures.find(row => websiteDepartureDateKey(row.startDate) === dep.start.slice(0, 10));
+      const depId = old?.id || randomUUID();
+      keep.push(depId);
+      const status = dep.status;
+      if (old) {
+        const previousDeparture = previousOffering?.departures.find((entry) => entry.start.slice(0, 10) === dep.start.slice(0, 10));
+        const protectedFares = mergeWebsiteContent(old, {
+          price: previousDeparture?.price ?? null, childPrice: previousDeparture?.childPrice ?? null, infantPrice: previousDeparture?.infantPrice ?? null,
+          label: previousDeparture?.label ?? null, endDate: previousDeparture?.end ?? null,
+        }, { price: dep.price ?? null, childPrice: dep.childPrice ?? null, infantPrice: dep.infantPrice ?? null, label: dep.label, endDate: dep.end }, { preferIncoming: true });
+        for (const conflict of protectedFares.conflicts) {
+          const entry = { ...conflict, field: `departure.${dep.start.slice(0, 10)}.${conflict.field}` };
+          newConflicts.push(entry);
+          if (!allConflicts.some((saved) => sameParityValue(saved, entry))) allConflicts.push(entry);
+        }
+        await client.query(`UPDATE "Departure" SET label=$2,"endDate"=$3,status=$4::"DepartureStatus",
+          "seatsTotal"=$5,"seatsLeft"=$6,price=$7,"childPrice"=$8,"infantPrice"=$9 WHERE id=$1`,
+          [depId, "label" in protectedFares.data ? protectedFares.data.label : old.label, "endDate" in protectedFares.data ? protectedFares.data.endDate : old.endDate, status,
+          seatsChanged ? source.seats_total : old.seatsTotal, dep.seatsLeft,
+          "price" in protectedFares.data ? protectedFares.data.price : old.price,
+          "childPrice" in protectedFares.data ? protectedFares.data.childPrice : old.childPrice,
+          "infantPrice" in protectedFares.data ? protectedFares.data.infantPrice : old.infantPrice]);
+      } else {
+        await client.query(`INSERT INTO "Departure" (id,"tripId",label,"startDate","endDate","seatsTotal","seatsLeft",price,"childPrice","infantPrice",status)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::"DepartureStatus")`,
+          [depId,id,dep.label,dep.start,dep.end,source.seats_total,dep.seatsLeft,
+          dep.price ?? null, dep.childPrice ?? null, dep.infantPrice ?? null,status]);
       }
-      await client.query(`UPDATE "Departure" SET label=$2,"endDate"=$3,status=$4::"DepartureStatus",
-        "seatsTotal"=$5,"seatsLeft"=$6,price=$7,"childPrice"=$8,"infantPrice"=$9 WHERE id=$1`,
-        [depId, "label" in protectedFares.data ? protectedFares.data.label : old.label, "endDate" in protectedFares.data ? protectedFares.data.endDate : old.endDate, status,
-        seatsChanged ? source.seats_total : old.seatsTotal, dep.seatsLeft,
-        "price" in protectedFares.data ? protectedFares.data.price : old.price,
-        "childPrice" in protectedFares.data ? protectedFares.data.childPrice : old.childPrice,
-        "infantPrice" in protectedFares.data ? protectedFares.data.infantPrice : old.infantPrice]);
-    } else {
-      await client.query(`INSERT INTO "Departure" (id,"tripId",label,"startDate","endDate","seatsTotal","seatsLeft",price,"childPrice","infantPrice",status)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::"DepartureStatus")`,
-        [depId,id,dep.label,dep.start,dep.end,source.seats_total,dep.seatsLeft,
-        dep.price ?? null, dep.childPrice ?? null, dep.infantPrice ?? null,status]);
     }
+    // Keep records referenced by bookings, but close removed dates to new bookings.
+    await client.query(`UPDATE "Departure" SET status='CANCELLED' WHERE "tripId"=$1 AND NOT(id=ANY($2::text[]))`, [id, keep]);
   }
-  // Keep records referenced by bookings, but close removed dates to new bookings.
-  await client.query(`UPDATE "Departure" SET status='CANCELLED' WHERE "tripId"=$1 AND NOT(id=ANY($2::text[]))`, [id, keep]);
   await client.query(`UPDATE "Trip" SET "sourceMetadata"=jsonb_set("sourceMetadata",'{contentConflicts}',$2::jsonb) WHERE id=$1`, [id, JSON.stringify(allConflicts)]);
   return { id, slug, contentConflict: newConflicts.length > 0 };
 }
@@ -466,6 +505,7 @@ export async function flushWebsiteSync(tripId?: string, limit = 5) {
   await ensureConnectedTripSchema();
   let processed = 0;
   const visited = new Set<string>();
+  const changedSlugs: string[] = [];
   const deadline = Date.now() + 40000;
   for (let i = 0; i < limit; i++) {
     if (Date.now() >= deadline) break;
@@ -507,6 +547,7 @@ export async function flushWebsiteSync(tripId?: string, limit = 5) {
           website_trip_id=$3,website_slug=$4,content_conflict=$5 WHERE trip_id=$1`,
           [job.trip_id,job.revision,linked?.id || null,linked?.slug || null,linked?.contentConflict || false]);
         await sourceDb.query("COMMIT");
+        if (linked?.slug) changedSlugs.push(linked.slug);
         return true;
       } catch (error) {
         await sourceDb.query("ROLLBACK");
@@ -521,7 +562,35 @@ export async function flushWebsiteSync(tripId?: string, limit = 5) {
     if (attempted === null) break;
     if (attempted) processed++;
   }
+  await notifyWebsiteTripsChanged(changedSlugs);
   return { processed };
+}
+
+/**
+ * The website caches trip pages for up to five minutes and only its own saves
+ * refresh them. After a projection writes its rows, ask it to refresh those
+ * pages so a chatbot edit is public as soon as the bot starts quoting it.
+ * Production only (or an explicit WEBSITE_REVALIDATE_URL): a local or test run
+ * must never touch the live site. Failure is logged, never thrown — the rows
+ * are already correct and the cache still expires on its own.
+ */
+export async function notifyWebsiteTripsChanged(slugs: string[]) {
+  const unique = [...new Set(slugs.filter(Boolean))];
+  const explicit = process.env.WEBSITE_REVALIDATE_URL?.trim();
+  if (!unique.length || (!explicit && process.env.VERCEL_ENV !== "production")) return;
+  const secret = process.env.WEBSITE_TRIP_SYNC_SECRET || getEnv().adminSecret;
+  if (!secret) return;
+  try {
+    const response = await fetch(`${(explicit || BOOKING_WEBSITE_URL).replace(/\/$/, "")}/api/internal/trip-changed`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-trip-sync-secret": secret },
+      body: JSON.stringify({ slugs: unique }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) logWarn("website_revalidate.failed", { status: response.status, slugs: unique.length });
+  } catch (error) {
+    logWarn("website_revalidate.failed", { message: error instanceof Error ? error.message.slice(0, 200) : String(error) });
+  }
 }
 
 export async function websiteSyncStatus() {

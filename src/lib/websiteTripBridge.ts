@@ -91,10 +91,45 @@ function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function fareOrNull(value: unknown, currency: unknown): number | null {
+type FareKind = "adult" | "child" | "infant";
+
+/**
+ * The website stores an adult fare of 0 for "Үнэ лавлах" (its column is not
+ * nullable), but a child or infant fare of 0 is a published free fare, shown
+ * there as "Үнэгүй". Only that zero survives; any other tugrik amount under
+ * 1,000 is a typo and stays unknown.
+ */
+function fareOrNull(value: unknown, currency: unknown, kind: FareKind = "adult"): number | null {
   const amount = numberOrNull(value);
   if (amount === null) return null;
+  if (amount === 0 && kind !== "adult") return 0;
   return String(currency || "MNT").toUpperCase() === "MNT" && amount < 1000 ? null : amount;
+}
+
+/** A tugrik fare the bridge cannot carry: 1-999₮, or an adult 0 meant as "ask us". */
+function droppedFare(value: unknown, currency: unknown, kind: FareKind): boolean {
+  const amount = numberOrNull(value);
+  return amount !== null && fareOrNull(amount, currency, kind) === null && !(kind === "adult" && amount === 0);
+}
+
+const FREE_LABEL: Record<"child" | "infant", string> = { child: "Хүүхэд", infant: "Нярай" };
+
+/**
+ * The bot reads a 0 fare as free only beside a documented "Үнэгүй" rule
+ * (isDocumentedFreeFare); a bare 0 means "not confirmed". This keeps the
+ * trip-wide free rule — the same entry deriveChildRules writes for the admin's
+ * "free" checkbox — in step with a 0 or a priced fare from the website.
+ */
+export function withBaseFreeFareRule(rules: unknown, kind: "child" | "infant", free: boolean): UnknownRecord[] {
+  const label = FREE_LABEL[kind];
+  const kept = (Array.isArray(rules) ? rules : []).map(record).filter((rule) =>
+    !(rule.price === 0 && /үнэгүй/i.test(text(rule.note)) && text(rule.label) === label && !text(rule.age_range)));
+  return free ? [...kept, { label, age_range: "", price: 0, currency: "MNT", note: "Үнэгүй" }] : kept;
+}
+
+function isBaseFreeFare(rules: unknown, kind: "child" | "infant"): boolean {
+  return (Array.isArray(rules) ? rules : []).map(record).some((rule) =>
+    rule.price === 0 && /үнэгүй/i.test(text(rule.note)) && text(rule.label) === FREE_LABEL[kind] && !text(rule.age_range));
 }
 
 function strings(value: unknown): string[] {
@@ -191,11 +226,15 @@ function mapWebsiteTrip(input: unknown): { sourceTripId: string; fields: TripMut
     .map(departure => {
       const date = dateKey(departure.startDate);
       if (!date) return null;
+      const childPrice = fareOrNull(departure.childPrice, trip.currency, "child");
+      const infantPrice = fareOrNull(departure.infantPrice, trip.currency, "infant");
       return {
         dates: [date],
         adult_price: fareOrNull(departure.price, trip.currency),
-        child_price: fareOrNull(departure.childPrice, trip.currency),
-        infant_price: fareOrNull(departure.infantPrice, trip.currency),
+        child_price: childPrice,
+        infant_price: infantPrice,
+        ...(childPrice === 0 ? { child_price_free: true } : {}),
+        ...(infantPrice === 0 ? { infant_price_free: true } : {}),
       };
     })
     .filter((group): group is NonNullable<typeof group> => Boolean(group));
@@ -233,8 +272,8 @@ function mapWebsiteTrip(input: unknown): { sourceTripId: string; fields: TripMut
       route_name: text(trip.title),
       duration_text: durationText(trip.durationDays, trip.durationNights),
       adult_price: fareOrNull(trip.price, trip.currency),
-      child_price: fareOrNull(trip.childPrice, trip.currency),
-      infant_price: fareOrNull(trip.infantPrice, trip.currency),
+      child_price: fareOrNull(trip.childPrice, trip.currency, "child"),
+      infant_price: fareOrNull(trip.infantPrice, trip.currency, "infant"),
       currency: text(trip.currency).toUpperCase() || "MNT",
       departure_dates: uniqueDates,
       has_food: typeof trip.foodIncluded === "boolean" ? trip.foodIncluded : null,
@@ -267,8 +306,43 @@ function mapWebsiteTrip(input: unknown): { sourceTripId: string; fields: TripMut
   return { sourceTripId, fields };
 }
 
+/** Canonical fields (or conflict paths) each website field writes. */
+const WEBSITE_FIELD_TARGETS: Record<string, string[]> = {
+  title: ["route_name"], description: ["notes"], hotel: ["hotel"], currency: ["currency"],
+  price: ["adult_price"], childPrice: ["child_price", "extra.child_rules"], infantPrice: ["infant_price", "extra.child_rules"],
+  durationDays: ["duration_text"], durationNights: ["duration_text"], foodIncluded: ["has_food"],
+  isPublished: ["status", "extra.customer_visible"], image: ["photo_urls"], extraImages: ["photo_urls"],
+  departures: ["departure_dates", "extra.website_departure_availability", "extra.price_groups", "departure."],
+  summary: ["extra.website_summary"], included: ["extra.included_items"], excluded: ["extra.excluded_items"],
+  importantNotes: ["extra.important_notes"], departureRule: ["extra.departure_rule"], itinerary: ["extra.itinerary_days"],
+  "sourceMetadata.price_groups": ["extra.price_groups"], "sourceMetadata.age_rules": ["extra.age_rules"],
+  "sourceMetadata.hotel_profiles": ["extra.hotel_profiles"], "sourceMetadata.hotel_links": ["extra.hotel_links"],
+};
+
+export type SharedConflict = { field: string; chatbot: unknown; website: unknown; base: unknown; at?: string };
+export type WebsiteTripPatchReport = {
+  fields: TripMutationFields;
+  /** Canonical paths this save changed ("route_name", "extra.included_items"). */
+  applied: string[];
+  /** Conflicts this save recorded; earlier ones are not repeated. */
+  conflicts: SharedConflict[];
+  /** Website fields the save changed that the canonical record did not take. */
+  ignored: Array<{ field: string; reason: string }>;
+};
+
 /** A reverse sync is a three-way edit, never a replacement of a stale snapshot. */
 export function websiteTripPatch(input: unknown, previousInput: unknown, canonicalInput: unknown): TripMutationFields {
+  return websiteTripPatchReport(input, previousInput, canonicalInput).fields;
+}
+
+/**
+ * websiteTripPatch plus an account of every website field the save changed:
+ * applied, recorded as a conflict, already equal, or ignored with a reason.
+ * `changedFields` is the website's own list of fields its staff edited; with
+ * it, a field that silently produced nothing is reported instead of read as a
+ * successful sync (a Чунчин title edit was lost that way on 2026-10-16).
+ */
+export function websiteTripPatchReport(input: unknown, previousInput: unknown, canonicalInput: unknown, changedFields?: readonly string[]): WebsiteTripPatchReport {
   validateWebsiteTripPayload(input);
   const canonical = record(canonicalInput);
   const canonicalExtra = record(canonical.extra);
@@ -304,15 +378,24 @@ export function websiteTripPatch(input: unknown, previousInput: unknown, canonic
   if (!owns(incoming, "currency") && !owns(previous, "currency")) delete next.currency;
   const before = Object.keys(previous).length ? mapWebsiteTrip(previous).fields : null;
   const baselineExtra = record(baselineSource.extra);
-  const conflicts = Array.isArray(canonicalExtra.shared_conflicts) ? [...canonicalExtra.shared_conflicts] : [];
+  const conflicts = (Array.isArray(canonicalExtra.shared_conflicts) ? [...canonicalExtra.shared_conflicts] : []) as SharedConflict[];
+  const priorConflicts = conflicts.length;
+  const recordedAt = new Date().toISOString();
+  const addConflict = (conflict: SharedConflict) => {
+    if (!conflicts.some((entry) => sameConflict(entry, conflict))) conflicts.push({ ...conflict, at: recordedAt });
+  };
   const fields: TripMutationFields = {};
   const extra: UnknownRecord = {};
   const accept = (path: string, current: unknown, base: unknown, incoming: unknown, set: () => void) => {
     if (sameParityValue(current, incoming)) return;
     if (sameParityValue(current, base)) { set(); return; }
-    const conflict = { field: path, chatbot: current ?? null, website: incoming ?? null, base: base ?? null };
-    if (!conflicts.some((entry) => sameParityValue(entry, conflict))) conflicts.push(conflict);
+    addConflict({ field: path, chatbot: current ?? null, website: incoming ?? null, base: base ?? null });
   };
+  // While the canonical notes are empty the website shows the poster subtitle
+  // (or the title) as its description, so that is what a website edit replaced.
+  // Comparing against the empty notes turned every description edit on such a
+  // trip into a conflict.
+  const descriptionFallbacks = [text(record(baselineSource.poster).subtitle), text(canonical.route_name), text(baselineSource.route_name)].filter(Boolean);
   for (const [key, value] of Object.entries(next)) {
     if (key === "extra" || key === "operator_name") continue;
     if (sameParityValue(canonical[key], value)) continue;
@@ -322,11 +405,16 @@ export function websiteTripPatch(input: unknown, previousInput: unknown, canonic
     if (key === "duration_text" && sameParityValue(duration(String(canonical[key] || "")), duration(String(baseValue || "")))) {
       Object.assign(fields, { [key]: value }); continue;
     }
-    accept(key, canonical[key], baseValue, value,
+    // Empty notes are the fallback text the website was showing.
+    const current = key === "notes" && !text(canonical.notes) && descriptionFallbacks.some((shown) => sameParityValue(baseValue, shown)) ? baseValue : canonical[key];
+    accept(key, current, baseValue, value,
       () => Object.assign(fields, { [key]: value }));
   }
   for (const [key, value] of Object.entries(next.extra || {})) {
     if (before && sameParityValue(value, before.extra?.[key])) continue;
+    // Seats and sold-out states belong to the website (bookings decrement them
+    // there); the canonical copy only mirrors them, so it never conflicts.
+    if (key === "website_departure_availability") { extra[key] = value; continue; }
     const base = before?.extra && owns(before.extra, key) ? before.extra[key] : baselineExtra[key];
     if (key === "itinerary_days" && before && Array.isArray(value)) {
       const facts = (raw: unknown) => (Array.isArray(raw) ? raw : []).map((item, index) => {
@@ -408,15 +496,56 @@ export function websiteTripPatch(input: unknown, previousInput: unknown, canonic
         const priceKey = fare === "price" ? "adult_price" : fare === "childPrice" ? "child_price" : "infant_price";
         const forDate = groups.filter((group) => [...strings(group.dates), ...strings(group.date_keys)].includes(date))
           .map((group) => ({ label: text(group.label) || text(group.hotel) || "Үнэ", [priceKey]: group[priceKey] ?? null }));
-        const conflict = { field: `departure.${date}.${fare}`, chatbot: forDate, website: typed, base: before };
-        if (!conflicts.some((entry) => sameParityValue(entry, conflict))) conflicts.push(conflict);
+        addConflict({ field: `departure.${date}.${fare}`, chatbot: forDate, website: typed, base: before });
       }
     }
+  }
+  // A free (0) child/infant fare is only read as free beside its "Үнэгүй" rule.
+  for (const kind of ["child", "infant"] as const) {
+    const key = kind === "child" ? "child_price" : "infant_price";
+    if (!owns(fields, key)) continue;
+    const rules = owns(extra, "child_rules") ? extra.child_rules : canonicalExtra.child_rules;
+    const updated = withBaseFreeFareRule(rules, kind, fields[key] === 0);
+    if (!sameParityValue(updated, Array.isArray(rules) ? rules : [])) extra.child_rules = updated;
   }
   if (!sameParityValue(conflicts, canonicalExtra.shared_conflicts || [])) extra.shared_conflicts = conflicts;
   for (const [key, value] of Object.entries(extra)) {
     if (sameParityValue(value, canonicalExtra[key])) delete extra[key];
   }
   if (Object.keys(extra).length) fields.extra = extra;
-  return fields;
+
+  const applied = [
+    ...Object.keys(fields).filter((key) => key !== "extra"),
+    ...Object.keys(extra).filter((key) => key !== "shared_conflicts").map((key) => `extra.${key}`),
+  ];
+  const recorded = conflicts.slice(priorConflicts);
+  const ignored: WebsiteTripPatchReport["ignored"] = [];
+  for (const field of changedFields || []) {
+    const targets = WEBSITE_FIELD_TARGETS[field];
+    if (!targets) continue;
+    const fare = field === "price" ? "adult" : field === "childPrice" ? "child" : field === "infantPrice" ? "infant" : null;
+    if (fare && droppedFare(incoming[field], nextInput.currency, fare)) {
+      ignored.push({ field, reason: "fare_below_1000" });
+      continue;
+    }
+    const landed = targets.some((target) => {
+      if (applied.includes(target) || recorded.some((conflict) => conflict.field === target || conflict.field.startsWith(target))) return true;
+      // Already the canonical value (an earlier delivery, or both sides agree).
+      const nextValue = target.startsWith("extra.") ? (next.extra as UnknownRecord | undefined)?.[target.slice(6)] : next[target as keyof TripMutationFields];
+      const current = target.startsWith("extra.") ? canonicalExtra[target.slice(6)] : canonical[target];
+      return nextValue !== undefined && sameParityValue(current, nextValue);
+    });
+    if (landed) continue;
+    // Blocked by a disagreement recorded by an earlier save, still unresolved.
+    if (conflicts.some((conflict) => targets.some((target) => conflict.field === target || conflict.field.startsWith(target)))) {
+      ignored.push({ field, reason: "open_conflict" });
+    } else ignored.push({ field, reason: "not_applied" });
+  }
+  return { fields, applied, conflicts: recorded, ignored };
+}
+
+/** Same disagreement, whenever it was recorded. */
+export function sameConflict(left: unknown, right: unknown): boolean {
+  const a = record(left), b = record(right);
+  return sameParityValue([a.field, a.chatbot ?? null, a.website ?? null, a.base ?? null], [b.field, b.chatbot ?? null, b.website ?? null, b.base ?? null]);
 }

@@ -69,9 +69,15 @@ export function applyWebsiteDetailsPatch(current: unknown, patch: unknown) {
 
 /** Existing differences stay separate unless the caller has already made the
  * incoming canonical record authoritative (the normal website sync path). */
-export function mergeWebsiteContent(current: Row, baseline: Row, incoming: Row, options?: { preferIncoming?: boolean }) {
+/**
+ * `hold` names website fields with a staff edit still on its way to the
+ * chatbot: they keep the website's value, so a projection never overwrites
+ * an edit the chatbot has not received yet.
+ */
+export function mergeWebsiteContent(current: Row, baseline: Row, incoming: Row, options?: { preferIncoming?: boolean; hold?: ReadonlySet<string> }) {
   const data: Row = {}, conflicts: Row[] = [];
   for (const [key, value] of Object.entries(incoming)) {
+    if (options?.hold?.has(key) && key in current) { data[key] = current[key]; continue; }
     if (options?.preferIncoming || sameParityValue(current[key], value) || sameParityValue(current[key], baseline[key])) data[key] = value;
     else conflicts.push({ field: key, website: current[key] ?? null, chatbot: value, base: baseline[key] ?? null });
   }
