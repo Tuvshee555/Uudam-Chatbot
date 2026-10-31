@@ -22,24 +22,87 @@ async function freshEnv(overrides: Record<string, string | undefined> = {}) {
   return env;
 }
 
-test("FACEBOOK_PAGES_NEXT replaces that page's token and maps it to the new app's secret", async () => {
+test("holding the new app's token changes nothing: the old app keeps every send until META_NEXT_SEND", async () => {
   const env = await freshEnv({ ...NEXT, FACEBOOK_PAGES_NEXT: "1234567890:next-page-token" });
   const parsed = env.getEnv();
-  assert.deepEqual(parsed.facebookPages, [{ pageId: "1234567890", token: "next-page-token" }]);
-  assert.deepEqual(parsed.facebookPagesNextIds, ["1234567890"]);
-  // Staff alerts and the webhook fallback token follow the cutover too.
-  assert.equal(parsed.tokenPage, "next-page-token");
+  assert.equal(parsed.metaNextSend, "off");
+  assert.deepEqual(parsed.facebookPages, [{ pageId: "1234567890", token: "test-page-token" }]);
+  assert.deepEqual(parsed.facebookPagesNext, [{ pageId: "1234567890", token: "next-page-token" }]);
+  assert.deepEqual(parsed.facebookPagesNextIds, []);
+  assert.equal(parsed.tokenPage, "test-page-token");
+  assert.equal(env.pageTokenForRecipient("1234567890", "1000000001"), "test-page-token");
   // appsecret_proof must be computed with the secret of the app that issued the token.
   assert.equal(env.appSecretForToken("next-page-token"), "next-meta-secret");
   assert.equal(env.appSecretForToken("test-page-token"), "test-meta-secret");
   assert.equal(env.appSecretForToken("a-token-nobody-issued"), "test-meta-secret");
 });
 
-test("a NEXT entry for an unknown page or without the new secret refuses to start", async () => {
-  const unknown = await freshEnv({ ...NEXT, FACEBOOK_PAGES_NEXT: "999999:next-page-token" });
-  assert.throws(() => unknown.getEnv(), /not in FACEBOOK_PAGES/);
-  const missingSecret = await freshEnv({ FACEBOOK_PAGES_NEXT: "1234567890:next-page-token" });
-  assert.throws(() => missingSecret.getEnv(), /requires META_APP_SECRET_NEXT/);
+test("META_NEXT_SEND=testers: only listed role users go through the new app", async () => {
+  const env = await freshEnv({ ...NEXT, FACEBOOK_PAGES_NEXT: "1234567890:next-page-token",
+    META_NEXT_SEND: "testers", META_NEXT_TESTER_IDS: "1000000001, 1000000002" });
+  const parsed = env.getEnv();
+  assert.equal(parsed.metaNextSend, "testers");
+  assert.deepEqual(parsed.metaMigrationIssues, []);
+  assert.equal(env.pageTokenForRecipient("1234567890", "1000000001"), "next-page-token");
+  assert.equal(env.pageTokenForRecipient("1234567890", "1000000002"), "next-page-token");
+  assert.equal(env.pageTokenForRecipient("1234567890", "9999999999"), "test-page-token", "a customer keeps the old app");
+  // Crons, alerts and broadcasts read the roster: unchanged in tester mode.
+  assert.deepEqual(parsed.facebookPages, [{ pageId: "1234567890", token: "test-page-token" }]);
+  assert.equal(parsed.tokenPage, "test-page-token");
+});
+
+test("META_NEXT_SEND=all (the cutover) moves the page's roster, alerts and fallback token to the new app", async () => {
+  const env = await freshEnv({ ...NEXT, FACEBOOK_PAGES_NEXT: "1234567890:next-page-token", META_NEXT_SEND: "all" });
+  const parsed = env.getEnv();
+  assert.deepEqual(parsed.facebookPages, [{ pageId: "1234567890", token: "next-page-token" }]);
+  assert.deepEqual(parsed.facebookPagesNextIds, ["1234567890"]);
+  assert.equal(parsed.tokenPage, "next-page-token", "staff alerts and the webhook fallback follow the cutover");
+  assert.equal(env.pageTokenForRecipient("1234567890", "9999999999"), "next-page-token");
+  assert.equal(env.appSecretForToken("next-page-token"), "next-meta-secret");
+});
+
+test("a second page without a NEXT token stays on the old app even at cutover", async () => {
+  const env = await freshEnv({ ...NEXT, FACEBOOK_PAGES: "1234567890:test-page-token,2222222222:second-page-token",
+    FACEBOOK_PAGES_NEXT: "1234567890:next-page-token", META_NEXT_SEND: "all" });
+  const parsed = env.getEnv();
+  assert.deepEqual(parsed.facebookPages.find((page) => page.pageId === "2222222222"), { pageId: "2222222222", token: "second-page-token" });
+  assert.equal(env.appSecretForToken("second-page-token"), "test-meta-secret");
+  assert.deepEqual(parsed.facebookPagesNextIds, ["1234567890"]);
+});
+
+test("an invalid NEXT setting fails SAFE: ignored as a whole, old tokens keep serving, issue listed, never quoted", async () => {
+  // Even with the cutover switch on, a bad setting never reaches a send.
+  const all = { ...NEXT, META_NEXT_SEND: "all" };
+  const cases: Array<[Record<string, string>, RegExp]> = [
+    [{ ...all, FACEBOOK_PAGES_NEXT: "999999:next-page-token" }, /page 999999 is not in FACEBOOK_PAGES/],
+    [{ META_NEXT_SEND: "all", FACEBOOK_PAGES_NEXT: "1234567890:next-page-token" }, /requires META_APP_SECRET_NEXT/],
+    // A bare token pasted without the page id: must not be applied, and must never be echoed.
+    [{ ...all, FACEBOOK_PAGES_NEXT: "EAAGsecretlookingtokenvalue" }, /entry #1 is not in the form pageId:token/],
+    // One good entry next to a bad one: all or nothing.
+    [{ ...all, FACEBOOK_PAGES_NEXT: "1234567890:next-page-token,999999:other" }, /page 999999/],
+    [{ ...all }, /META_NEXT_SEND=all needs a valid FACEBOOK_PAGES_NEXT/],
+    [{ ...NEXT, FACEBOOK_PAGES_NEXT: "1234567890:next-page-token", META_NEXT_SEND: "everyone" }, /META_NEXT_SEND must be/],
+    [{ ...NEXT, FACEBOOK_PAGES_NEXT: "1234567890:next-page-token", META_NEXT_SEND: "testers" }, /needs META_NEXT_TESTER_IDS/],
+    [{ ...NEXT, ECHO_TAKEOVER_MODE: "sometimes" }, /ECHO_TAKEOVER_MODE/],
+    [{ ...NEXT, META_APP_ID: "uudam-v2" }, /META_APP_ID must be the numeric app id/],
+  ];
+  for (const [vars, issue] of cases) {
+    const env = await freshEnv(vars);
+    const parsed = env.getEnv(); // never throws: a throw here would fail every webhook request
+    assert.deepEqual(parsed.facebookPages, [{ pageId: "1234567890", token: "test-page-token" }], JSON.stringify(vars));
+    assert.deepEqual(parsed.facebookPagesNextIds, []);
+    assert.equal(parsed.tokenPage, "test-page-token", "staff alerts stay on the working token");
+    assert.equal(parsed.echoTakeoverMode, "observe");
+    assert.ok(parsed.metaMigrationIssues.some((text) => issue.test(text)), `${issue}: ${parsed.metaMigrationIssues.join(" | ")}`);
+    const issueText = parsed.metaMigrationIssues.join(" ");
+    for (const secretish of ["next-page-token", "EAAGsecret", "other"]) assert.ok(!issueText.includes(secretish), "never quotes a token");
+  }
+  const valid = await freshEnv({ ...NEXT, FACEBOOK_PAGES_NEXT: "1234567890:next-page-token" });
+  assert.deepEqual(valid.getEnv().metaMigrationIssues, []);
+  // An invalid send mode never sends through the new app, for anyone.
+  const typo = await freshEnv({ ...NEXT, FACEBOOK_PAGES_NEXT: "1234567890:next-page-token", META_NEXT_SEND: "everyone" });
+  assert.equal(typo.getEnv().metaNextSend, "off");
+  assert.equal(typo.pageTokenForRecipient("1234567890", "1000000001"), "test-page-token");
 });
 
 test("without any _NEXT variable the environment is exactly the old app's", async () => {
@@ -64,6 +127,13 @@ test("a delivery signed by either app's secret verifies; anything else does not"
   // An unset next secret never widens the check (and never verifies an unsigned delivery).
   assert.equal(verifyMetaSignatureAny(body, sign(""), ["old-secret", ""]), false);
   assert.equal(verifyMetaSignatureAny(body, sign("old-secret"), ["old-secret", ""]), true);
+  // Which app signed it is named, for the receipt trail.
+  const { matchMetaSignature } = await import("../src/lib/webhookSecurity");
+  const labelled: Array<["current" | "next", string]> = [["current", "old-secret"], ["next", "next-secret"]];
+  assert.equal(matchMetaSignature(body, sign("old-secret"), labelled), "current");
+  assert.equal(matchMetaSignature(body, sign("next-secret"), labelled), "next");
+  assert.equal(matchMetaSignature(body, sign("wrong-secret"), labelled), null);
+  assert.equal(matchMetaSignature(body, sign(""), [["current", "old-secret"], ["next", ""]]), null);
 });
 
 test("the webhook handshake accepts either app's verify token", async () => {
@@ -99,8 +169,10 @@ test("echo classification: own metadata or own app id is the bot; only listed ap
   const enforce = await freshEnv({ ...NEXT, ECHO_TAKEOVER_MODE: "enforce" });
   enforce.getEnv();
   assert.equal(echoEnforcementEnabled(), true);
-  const invalid = await freshEnv({ ...NEXT, ECHO_TAKEOVER_MODE: "sometimes" });
-  assert.throws(() => invalid.getEnv(), /ECHO_TAKEOVER_MODE/);
+  // A typo never turns enforcement on.
+  const invalid = await freshEnv({ ...NEXT, ECHO_TAKEOVER_MODE: "Enforce!" });
+  invalid.getEnv();
+  assert.equal(echoEnforcementEnabled(), false);
 });
 
 test("an old consultant reply does not count after staff handed the conversation back", async () => {

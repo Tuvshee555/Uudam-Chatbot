@@ -1,69 +1,130 @@
-# Meta-app migration: moving the UUDAM Page to app `uudam-v2`
+# Meta-app migration: UUDAM Page → app `uudam-v2` (App ID 2959934047708039)
 
-The original Meta app is not in the owner's developer account: its ID is in no env var, its
-tokens hold only `pages_messaging` + `public_profile`, data access expired 2026-09-10, and
-`message_echoes` was never delivered. The new app **uudam-v2 (App ID 2959934047708039)** is
-owned by the owner; this code supports running BOTH apps against the same Page and the same
-deployment until an explicit cutover, with no change in behaviour while the `_NEXT` variables
-are unset.
+The original Meta app is outside the owner's control (its ID is in no env var, its token holds
+only `pages_messaging` + `public_profile`, data access expired 2026-09-10, and `message_echoes`
+was never delivered). This code lets the old app and `uudam-v2` serve the same Page from the
+same deployment, moving over in explicit, reversible stages. With no new variable set, the
+running behaviour is today's, except the two reviewed fixes listed under "On merge".
 
-## How dual-app support works (this code)
+## What the code does
 
-| Concern | Old app only (today) | During migration | After cutover |
+| Concern | Behaviour |
+|---|---|
+| Webhook signature | A delivery verifies with EITHER app secret; the receipt (`webhook.inbound_received`) records `deliveredBy: current \| next`. |
+| Webhook handshake | `VERIFY_TOKEN` or `VERIFY_TOKEN_NEXT`. |
+| Which app sends | `META_NEXT_SEND`: `off` (default) → old app for everyone; `testers` → new app ONLY for the PSIDs in `META_NEXT_TESTER_IDS`; `all` → new app for every customer of the pages in `FACEBOOK_PAGES_NEXT` (the cutover: sends, thread reads, alerts, crons). `appsecret_proof` always uses the secret of the app that issued the token. |
+| Duplicates | Both apps deliver every event with the same Meta `mid`. Events with a `mid` are remembered 48 h; button taps / events without a `mid` keep the 2-minute window, so a customer tapping the same menu button again is answered. |
+| Echoes | Recorded observe-only in `travel_echo_events` (app id, metadata flag, lengths, attachment types, delivering app — never text). The bot's own echoes are known by its send metadata or `META_APP_ID`. Unknown app ids NEVER count as a consultant. Echo-based takeover needs `ECHO_TAKEOVER_MODE=enforce` + proven `ECHO_HUMAN_APP_IDS`, a later decision. The thread lookup stays the enforcement path. |
+| `standby` events | Never answered (Meta: "Do not respond to standby messages"); counted as `webhook.standby_observed`. |
+| Bad settings | Fail SAFE: an invalid migration variable is ignored as a whole (old app keeps serving), logged as `env.meta_migration_settings_ignored`, shown in diagnostics — and the build preflight refuses to deploy it. |
+| Evidence | `GET /api/admin/takeover-diagnostics` → `migration` (flags, `nextTokens` = Meta's own check of the stored new token: valid, `appIdMatches`, `pageMatches`, `hasRequiredScopes`, expiry) and `echoMatrix` (what each app id actually sent). |
+
+**On merge (no variable set) two behaviours change immediately:** the 48-h `mid` memory, and
+"Ботод буцаах" now records `bot_released_at` so an old consultant reply still in the thread can
+no longer re-pause a conversation staff handed back. Everything else waits for the variables.
+
+## Vercel variables (Production scope ONLY — never Preview or Development)
+
+| Variable | Value | When | Sensitive |
 |---|---|---|---|
-| Webhook signature | `META_APP_SECRET` | either secret verifies (`verifyMetaSignatureAny`) | both until the old app is removed |
-| Webhook GET verify | `VERIFY_TOKEN` | either token (`VERIFY_TOKEN_NEXT`) | both |
-| Sends / thread reads | `FACEBOOK_PAGES` tokens | unchanged | `FACEBOOK_PAGES_NEXT` replaces that page's token; `appsecret_proof` follows the token's own app |
-| Duplicate deliveries | 2-min memory | events WITH a Meta `mid` are remembered 48 h (both apps deliver the same `mid`); button taps / mid-less events keep the 2-min window so a repeated legitimate tap is still answered | same |
-| Echoes | never delivered | recorded observe-only (`travel_echo_events`, no message text); unknown app ids never count as a consultant | enforcement only after the matrix proves the split (`ECHO_TAKEOVER_MODE=enforce` + `ECHO_HUMAN_APP_IDS`) |
-| Takeover enforcement | thread lookup | thread lookup (unchanged) | thread lookup until echo enforcement is proven |
+| `META_APP_ID` | `2959934047708039` | Stage 1 | no |
+| `META_APP_SECRET_NEXT` | uudam-v2 → App settings → Basic → App secret | Stage 1 | yes |
+| `VERIFY_TOKEN_NEXT` | a NEW random string, 32+ characters, used nowhere else | Stage 1 | yes |
+| `FACEBOOK_PAGES_NEXT` | `1010493442437235:<uudam-v2 page token>` | Stage 2 (holding it sends nothing) | yes |
+| `META_NEXT_TESTER_IDS` | the testers' page-scoped ids (PSIDs), comma-separated | Stage 4 | no |
+| `META_NEXT_SEND` | `testers` (Stage 4), then `all` (Stage 6) | Stage 4 / 6 | no |
+| `ECHO_TAKEOVER_MODE`, `ECHO_HUMAN_APP_IDS` | **do not set** — only after the echo matrix proves a split | later | no |
 
-New environment variables (all optional; nothing changes while unset):
+No other variable is needed. The second page (596733917653582) has no NEXT entry and stays on the
+old app. Vercel applies a variable only to NEW deployments: after every change, Deployments →
+latest Production → ⋯ → Redeploy. A bad value fails that build; the live deployment keeps serving.
 
-- `META_APP_ID` — `2959934047708039`; classifies the bot's own echoes, shown in diagnostics.
-- `META_APP_SECRET_NEXT` — the new app's App Secret (required before `FACEBOOK_PAGES_NEXT`).
-- `VERIFY_TOKEN_NEXT` — a NEW random string for the new app's webhook handshake.
-- `FACEBOOK_PAGES_NEXT` — `pageId:token` for the new app's Page token; **setting it IS the cutover**.
-- `ECHO_TAKEOVER_MODE` — `observe` (default) or `enforce`.
-- `ECHO_HUMAN_APP_IDS` — comma-separated app ids PROVEN to be human inbox surfaces.
+## Stages (each one only after the previous is verified)
 
-## Owner's sequence (each step gated on the one before)
+### Stage 0 — App setup in developers.facebook.com → uudam-v2
+1. App settings → Basic: app icon, category, Privacy Policy URL, User data deletion URL; link the
+   app to the business portfolio that owns the UUDAM Page. Do not share the App secret anywhere but
+   Vercel and the password manager.
+2. App settings → Advanced → Security: leave "Require app secret" OFF for now (parity with the old
+   app; a few page-token calls — customer names, PDF uploads — do not send `appsecret_proof` yet).
+3. Use cases → "Engage with customers on Messenger from Meta" → Customize → Permissions: add
+   `pages_messaging`, `pages_manage_metadata`, `pages_show_list`. Nothing else.
+4. App roles → Roles → add each tester (owner/staff accounts) as Tester; they accept at
+   developers.facebook.com/requests. While unpublished the app reaches ONLY these people.
+5. If not yet done: Business Settings → Security Center → start Business Verification (App Review
+   may ask for it).
 
-1. **Merge this branch** (no `_NEXT` vars set). Production behaviour changes only in two
-   reviewed ways: 48-h duplicate memory for `mid` events, and "Ботод буцаах" now also stops an
-   old consultant reply from re-pausing the conversation (`bot_released_at`).
-2. **App basics** (developers.facebook.com → uudam-v2): icon, category, privacy-policy URL,
-   data-deletion URL; link the app to the business portfolio that owns the Page; start
-   Business Verification. Messenger use case → add `pages_messaging`, `pages_manage_metadata`,
-   `pages_show_list`. Add a tester account (Roles).
-3. **Connect the Page and generate the token** (Messenger API settings → add Page
-   1010493442437235 → Generate token). In the Access Token Debugger confirm: App =
-   2959934047708039, Page = 1010493442437235, scopes include `pages_messaging` +
-   `pages_manage_metadata`, expires = Never. Store the token in the password manager only.
-4. **Vercel, webhook phase** (Production env): set `META_APP_ID`, `META_APP_SECRET_NEXT`,
-   `VERIFY_TOKEN_NEXT` (do NOT set `FACEBOOK_PAGES_NEXT` yet) → redeploy. Then in the app's
-   Messenger settings: callback `https://<production-host>/api/webhook`, verify token =
-   `VERIFY_TOKEN_NEXT`, Verify and save. Subscribe the Page to: `messages`,
-   `messaging_postbacks`, `messaging_referrals`, `message_echoes`, `message_reads`. Nothing
-   else.
-5. **Test-user check** (app still in Development mode; only role users reach it): the tester
-   messages the Page. Expect exactly ONE reply (both apps deliver; the 48-h `mid` memory
-   absorbs the second). The reply's echo carries the OLD app's id — the first hard
-   identification of the original app; note it down.
-6. **Echo matrix** (observe-only, 3–7 days): `/api/admin/takeover-diagnostics` → `echoMatrix`.
-   Collect at least: a bot reply, a desktop Business Suite reply, a phone-app reply, Meta's
-   welcome greeting in a brand-new chat, each app in the Page's Business-integrations list.
-   Only if human surfaces separate cleanly, set `ECHO_HUMAN_APP_IDS` and later
-   `ECHO_TAKEOVER_MODE=enforce` in a separate, reviewed deploy.
-7. **App Review + Live**: request Advanced Access for `pages_messaging` and
-   `pages_manage_metadata`; after approval and Business Verification, switch the app to Live.
-   An app in Development mode serves ONLY role users — never cut over before Live.
-8. **Cutover**: set `FACEBOOK_PAGES_NEXT=1010493442437235:<new token>` → redeploy. Verify:
-   replies arrive; echoes of bot replies carry `2959934047708039`; outbound ids recorded;
-   diagnostics token scopes include `pages_manage_metadata`; no double replies. Watch 3–7
-   days. The second page (…3582) is untouched unless it is given its own NEXT entry.
-9. **Rollback** (any time before the old app is removed): delete `FACEBOOK_PAGES_NEXT` (or all
-   `_NEXT` vars) and redeploy — or Vercel Instant Rollback. To silence the new app's
-   deliveries immediately, unsubscribe the Page in ITS Messenger settings. Removing the OLD
-   app from the Page's Business integrations is irreversible; do it only after a stable
-   period, then fold the `_NEXT` values into the primary names.
+### Stage 1 — Accept the new app's webhook (no token yet)
+6. Vercel: set `META_APP_ID`, `META_APP_SECRET_NEXT`, `VERIFY_TOKEN_NEXT` → Redeploy.
+7. Diagnostics → `migration`: `metaAppId` = 2959934047708039, `metaAppSecretNextSet` and
+   `verifyTokenNextSet` true, `ignoredSettingIssues` empty.
+
+### Stage 2 — Connect the Page and generate the token
+8. Messenger API Settings → "Generate access tokens" → connect Page **UUDAM Travel Agency
+   (1010493442437235)** with a Page admin account → Generate → copy the token once.
+   More durable (not tied to a person's login): Business Settings → System users → Admin system
+   user → assign uudam-v2 and the Page → Generate token (same three permissions) → Graph API
+   Explorer `GET /me/accounts` with it → the Page's `access_token`.
+9. Access Token Debugger (developers.facebook.com/tools/debug/accesstoken): App ID
+   2959934047708039, Type Page, Page 1010493442437235, scopes include `pages_messaging` and
+   `pages_manage_metadata`, Expires: Never. Anything else: regenerate, do not continue.
+10. Vercel: `FACEBOOK_PAGES_NEXT=1010493442437235:<token>` → Redeploy. Diagnostics →
+    `migration.nextTokens[0]`: `valid`, `appIdMatches`, `pageMatches`, `hasRequiredScopes` all true.
+    Customers are still answered by the old app (`nextSend: off`).
+
+### Stage 3 — Webhook and subscriptions for uudam-v2
+11. Messenger API Settings → "Configure webhooks": Callback URL
+    `https://uudam-chatbot.vercel.app/api/webhook`, Verify token = the `VERIFY_TOKEN_NEXT` value →
+    Verify and save.
+12. Subscribe Page 1010493442437235 (the page row's webhook subscriptions, or
+    `POST /v25.0/1010493442437235/subscribed_apps?subscribed_fields=messages,messaging_postbacks,messaging_referrals,message_echoes`
+    with the new page token) to exactly: **`messages`, `messaging_postbacks`,
+    `messaging_referrals`, `message_echoes`**. Not `message_reads` (the bot never uses it),
+    `message_deliveries`, `standby`, or `feed`. The old app's own subscription is untouched.
+13. Meta Business Suite → Settings → Conversation routing (or
+    facebook.com/settings?tab=msgr_conversation_routing): note whether a default app is set and
+    which. Meta: "Only the default app can send a message when the thread is idle" and other apps
+    then receive `standby` instead of messages. No default app = all connected apps receive and
+    may respond.
+
+### Stage 4 — Test users (app still in Development mode)
+14. A tester messages the Page. Expect exactly ONE reply (old app). Evidence (diagnostics / ask
+    Claude to read it): two `webhook.inbound_received` receipts, `deliveredBy` `current` and `next`,
+    one `webhook.inbound_duplicate`; an `echoMatrix` row from `delivered_by: next` with
+    `has_bot_metadata: true` and the OLD app's id — the first hard identification of the original
+    app. If no `next` receipt appears, the routing from step 13 gives the conversation to another
+    app: stop and report it.
+15. Vercel: `META_NEXT_TESTER_IDS=<tester PSIDs>` (Claude can read them from the database by the
+    tester's name), `META_NEXT_SEND=testers` → Redeploy. The tester messages again: the reply now
+    comes through uudam-v2 (echo row with app id 2959934047708039 + metadata). All other customers
+    stay on the old app.
+
+### Stage 5 — Echo matrix (observe only), App Review, Live
+16. In a tester's conversation produce one of each and note the time: a bot reply; a consultant
+    reply typed in Business Suite on a computer; a consultant reply from the phone app; Meta's
+    welcome greeting (a tester who never wrote to the Page); any away/instant reply; each app
+    listed in the Page's Business integrations. `echoMatrix` then shows which app id each origin
+    carries. Enforcement stays off unless the matrix shows human surfaces with app ids no
+    automation shares — a separate reviewed change.
+17. App Review → request Advanced Access for `pages_messaging` and `pages_manage_metadata`, with a
+    screencast of a tester receiving the bot's reply through uudam-v2 (Stage 4). The Page must be
+    published and the webhook answering 200. Meta's checklist also asks for a brief welcome on the
+    Get Started postback; the bot deliberately stays quiet there (the Page's own greeting covers
+    it) — mention this in the submission.
+18. After approval (and Business Verification if required): switch the app to Live.
+
+### Stage 6 — Cutover
+19. If step 13 showed a default app: set **uudam-v2** as the default app.
+20. Vercel: `META_NEXT_SEND=all` → Redeploy.
+21. Verify within 15 minutes: `migration.pagesOnNextToken` lists …7235; a non-tester account gets
+    a reply; new `echoMatrix` bot rows carry 2959934047708039; no `webhook.send.primary_failed`;
+    each message answered once. Watch 3–7 days.
+
+## Rollback (any stage, until the old app is removed)
+- Vercel: `META_NEXT_SEND=off` (or delete it) → Redeploy; or Deployments → the previous
+  Production deployment → Instant Rollback. If step 19 changed the default app, set it back.
+- To stop uudam-v2's deliveries entirely: unsubscribe the Page in uudam-v2's Messenger settings
+  (deliveries are harmless meanwhile — duplicates are absorbed).
+- Removing the OLD app from the Page's Business integrations is irreversible: only after a stable
+  period, and only from the UUDAM Page (the second page still uses it). Folding the `_NEXT` values
+  into the primary variable names is a separate, planned change.

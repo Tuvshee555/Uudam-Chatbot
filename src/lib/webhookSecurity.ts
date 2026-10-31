@@ -56,6 +56,18 @@ export function verifyMetaSignatureAny(
   return appSecrets.some((secret) => secret && verifyMetaSignature(rawBody, header, secret));
 }
 
+/** Which app signed this delivery (its label), or null when no configured secret verifies it. */
+export function matchMetaSignature<Label extends string>(
+  rawBody: Buffer,
+  header: string | undefined,
+  appSecrets: Array<[Label, string]>,
+): Label | null {
+  for (const [label, secret] of appSecrets) {
+    if (secret && verifyMetaSignature(rawBody, header, secret)) return label;
+  }
+  return null;
+}
+
 export async function readRawBodyLimited(
   stream: AsyncIterable<Buffer | string>,
   maxBytes: number,

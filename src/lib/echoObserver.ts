@@ -24,6 +24,8 @@ export type EchoClassification = "bot" | "human" | "unknown";
 
 export type EchoEvent = {
   pageId: string;
+  /** Which app's webhook delivered this echo (the old "current" app or the "next" one). */
+  deliveredBy: "current" | "next";
   /** The customer the Page message went to. */
   recipientId: string;
   mid: string;
@@ -55,6 +57,7 @@ export async function recordEchoEvent(event: EchoEvent, classification: EchoClas
   const log = classification === "unknown" ? logWarn : logInfo;
   log("webhook.echo_observed", {
     pageId: event.pageId,
+    deliveredBy: event.deliveredBy,
     customerHash: hashIdentifier(event.recipientId),
     appId: event.appId || null,
     hasBotMetadata: event.metadata === BOT_MESSAGE_METADATA,
@@ -69,10 +72,10 @@ export async function recordEchoEvent(event: EchoEvent, classification: EchoClas
     const { ensureTravelSchema } = await import("./travelSchema");
     if (!await ensureTravelSchema()) return;
     await queryNeon(
-      `INSERT INTO travel_echo_events (page_id, recipient_id, mid, app_id, has_bot_metadata, classification, text_length, attachment_types)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      `INSERT INTO travel_echo_events (page_id, recipient_id, mid, app_id, has_bot_metadata, classification, text_length, attachment_types, delivered_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [event.pageId, event.recipientId, event.mid, event.appId,
-        event.metadata === BOT_MESSAGE_METADATA, classification, event.textLength, event.attachmentTypes.join(",")],
+        event.metadata === BOT_MESSAGE_METADATA, classification, event.textLength, event.attachmentTypes.join(","), event.deliveredBy],
     );
   } catch (error) {
     logWarn("webhook.echo_record_failed", { classification, message: error instanceof Error ? error.name : "unknown" });

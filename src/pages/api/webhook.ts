@@ -73,10 +73,10 @@ import { ensureDurableLead } from "../../lib/durableLead";
 import { logInboundMessage } from "../../lib/travelMessages";
 import { getCollectState } from "../../lib/bookingCollect";
 import { continueBookingCollect, startBookingCollect, type BookingCollectContext } from "../../lib/bookingCollectFlow";
-import { getEnv } from "../../lib/env";
+import { getEnv, pageTokenForRecipient } from "../../lib/env";
 import { isMetaOutboundDisabled } from "../../lib/metaOutboundKillSwitch";
 import { beginRequestTrace, classifyError, finishRequestTrace, hashIdentifier, logError, logInfo, logWarn, recordCounter, } from "../../lib/observability";
-import { parseWebhookJson, PayloadTooLargeError, verifyMetaSignatureAny, } from "../../lib/webhookSecurity";
+import { matchMetaSignature, parseWebhookJson, PayloadTooLargeError, } from "../../lib/webhookSecurity";
 import {
   type Platform,
   type AttachmentReplyPayload,
@@ -116,6 +116,9 @@ import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
 const env = getEnv();
 const PAGE_TOKENS = new Map(env.facebookPages.map((p) => [p.pageId, p.token]));
 const FALLBACK_TOKEN = env.tokenPage;
+/** The token to answer this customer with: the roster token, or the new app's for a listed
+ * tester while the Meta-app migration sends META_NEXT_SEND=testers (env.ts). */
+const pageTokenFor = (pageId: string, senderId: string) => pageTokenForRecipient(pageId, senderId) ?? FALLBACK_TOKEN;
 const META_APP_SECRET = env.metaAppSecret;
 
 export function answerPlanHasCustomerEvidence(tripId: string, context: GroundingContext): boolean {
@@ -2241,7 +2244,7 @@ async function processConversationWithPendingQueue(
     // drained message comes back with token: null. Re-derive it from pageId
     // the same way the initial handler does — it's a cheap in-memory lookup,
     // not the queued value.
-    let current = { ...initial, token: initial.token ?? PAGE_TOKENS.get(initial.pageId) ?? FALLBACK_TOKEN };
+    let current = { ...initial, token: initial.token ?? pageTokenFor(initial.pageId, initial.senderId) };
     let head = initialHead;
     while (current) {
       const lockHealthy = await refreshConversationLockConsistent(
@@ -2289,7 +2292,7 @@ async function processConversationWithPendingQueue(
       if (checkpoint && current.eventKey === checkpoint.eventKey) await checkpoint.complete();
       const pending = await peekPendingConversationConsistent(conversationKey);
       if (!pending) break;
-      current = { ...pending.payload, token: pending.payload.token ?? PAGE_TOKENS.get(pending.payload.pageId) ?? FALLBACK_TOKEN };
+      current = { ...pending.payload, token: pending.payload.token ?? pageTokenFor(pending.payload.pageId, pending.payload.senderId) };
       head = pending;
       updateConcurrencyGauges();
     }
@@ -2373,8 +2376,10 @@ export default async function handler(
         const signature = Array.isArray(signatureHeader)
           ? signatureHeader[0]
           : signatureHeader;
-        // Two apps deliver during the Meta-app migration, each signing with its own secret.
-        if (!verifyMetaSignatureAny(rawBody, signature, [META_APP_SECRET, env.metaAppSecretNext])) {
+        // Two apps deliver during the Meta-app migration, each signing with its own secret; which
+        // one signed is recorded on every receipt, so "did the new app deliver this?" is evidence.
+        const deliveredBy = matchMetaSignature(rawBody, signature, [["current", META_APP_SECRET], ["next", env.metaAppSecretNext]]);
+        if (!deliveredBy) {
           recordCounter("abuse.webhook_invalid_signature_total", 1);
           return res.status(401).json({ error: "invalid_signature" });
         }
@@ -2416,6 +2421,7 @@ export default async function handler(
               postback?: { title?: string; payload?: string };
               referral?: Record<string, unknown>;
             }>;
+            standby?: unknown[];
           }>;
         };
         logInfo("webhook.received", {
@@ -2517,6 +2523,14 @@ export default async function handler(
                 },
               );
             }
+            // Conversation routing: an app that does not own the thread gets `standby` events
+            // instead of `messaging`. They are never answered (Meta: "Do not respond to standby
+            // messages") — only counted, as evidence of which app owns UUDAM's conversations.
+            const standbyCount = Array.isArray(entry?.standby) ? entry.standby.length : 0;
+            if (standbyCount) {
+              logInfo("webhook.standby_observed", { requestId: trace.requestId, pageId, deliveredBy, count: standbyCount });
+              recordCounter("webhook.standby_observed_total", standbyCount, { delivered_by: deliveredBy });
+            }
             const messagingEvents = Array.isArray(entry?.messaging)
               ? entry.messaging
               : [];
@@ -2535,6 +2549,7 @@ export default async function handler(
                 const echoText = String(event.message.text ?? "").trim();
                 const echo = {
                   pageId,
+                  deliveredBy,
                   recipientId: customerId,
                   mid: String(event.message.mid ?? ""),
                   appId: event.message.app_id === null || event.message.app_id === undefined ? "" : String(event.message.app_id),
@@ -2597,7 +2612,7 @@ export default async function handler(
               if (adReferral && senderId) {
                 await rememberAdReferral({
                   senderId, platform: payload.object === "instagram" ? "instagram" : "facebook", referral: adReferral,
-                  trips: await listTrips({ limit: 5000 }).catch(() => []), pageToken: PAGE_TOKENS.get(pageId) ?? FALLBACK_TOKEN,
+                  trips: await listTrips({ limit: 5000 }).catch(() => []), pageToken: pageTokenFor(pageId, senderId),
                 });
               }
               // Postback taps (Get Started button, persistent menu) carry no
@@ -2637,11 +2652,11 @@ export default async function handler(
               }
               const platform: Platform =
                 payload.object === "instagram" ? "instagram" : "facebook";
-              const token = PAGE_TOKENS.get(pageId) ?? FALLBACK_TOKEN;
+              const token = pageTokenFor(pageId, senderId);
               // Persisted receipt of every delivery (redeliveries included), keyed like the
               // outcome record, so "never received" can be told from "received and lost".
               logInfo("webhook.inbound_received", {
-                requestId: trace.requestId, correlationId: trace.correlationId, platform, pageId,
+                requestId: trace.requestId, correlationId: trace.correlationId, platform, pageId, deliveredBy,
                 senderHash: hashIdentifier(senderId),
                 eventKeyHash: hashIdentifier(text && !event?.message?.mid
                   ? buildEventKey(platform, senderId, { message: { text } }) : buildEventKey(platform, senderId, event)),

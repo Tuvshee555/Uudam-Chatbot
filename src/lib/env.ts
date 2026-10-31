@@ -1,4 +1,4 @@
-import { logStartupDiagnostics } from "./observability";
+import { logError, logStartupDiagnostics } from "./observability";
 
 export type ValidatedEnv = {
   openaiApiKey: string;
@@ -11,7 +11,12 @@ export type ValidatedEnv = {
    * page tokens run NEXT to the old app's until cutover. All optional; absent = old app only. */
   metaAppSecretNext: string;
   verifyTokenNext: string;
-  /** Page ids whose roster token was replaced from FACEBOOK_PAGES_NEXT (cutover switch). */
+  /** The new app's page tokens (FACEBOOK_PAGES_NEXT); held only, META_NEXT_SEND decides use. */
+  facebookPagesNext: Array<{ pageId: string; token: string }>;
+  /** Who is answered through the new app: nobody, listed role-user testers, or everyone. */
+  metaNextSend: "off" | "testers" | "all";
+  metaNextTesterIds: string[];
+  /** Page ids whose roster token is the new app's (META_NEXT_SEND=all: the cutover). */
   facebookPagesNextIds: string[];
   /** The app the bot itself sends through, to recognise its own message echoes. */
   metaAppId: string;
@@ -19,6 +24,8 @@ export type ValidatedEnv = {
   echoTakeoverMode: "observe" | "enforce";
   /** App ids proven to be a human inbox surface; only these may ever count as a consultant. */
   echoHumanAppIds: string[];
+  /** Invalid migration settings that were IGNORED (fail-safe); the build preflight fails on any. */
+  metaMigrationIssues: string[];
   adminSecret: string;
   adminOpenAccess: boolean;
   allowAdminSecretQuery: boolean;
@@ -233,44 +240,46 @@ function parseFacebookPages(
 }
 
 /**
- * Cutover switch for the Meta-app migration: `FACEBOOK_PAGES_NEXT=pageId:token,...` replaces
- * that page's roster token with the NEW app's page token — every send, thread lookup and cron
- * for that page moves to the new app in one deploy. A page id that is not already in the
- * roster is a configuration mistake (a typo would silently leave the old token live), so it
- * fails validation instead of being ignored. Requires META_APP_SECRET_NEXT, because
- * `appsecret_proof` must be computed with the secret of the app that issued the token.
+ * The NEW app's page tokens for the Meta-app migration: `FACEBOOK_PAGES_NEXT=pageId:token,...`.
+ * Holding them changes nothing; META_NEXT_SEND decides who is sent to with them (getEnv).
+ *
+ * All or nothing, and never fatal: a malformed entry, a page that is not in the roster, or a
+ * missing META_APP_SECRET_NEXT (appsecret_proof must use the issuing app's secret) leaves the
+ * whole list UNUSED — the old app's tokens keep serving — and is reported as an issue.
+ * Throwing here would take every webhook request down at runtime (the build preflight does
+ * not stop on env errors), so the build preflight fails on these issues instead and the
+ * running deployment only logs them. Issue texts never quote an entry: it may be a token.
  */
-function applyFacebookPagesNext(
+function parseFacebookPagesNext(
   source: NodeJS.ProcessEnv,
   pages: Array<{ pageId: string; token: string }>,
   metaAppSecretNext: string,
-  errors: string[],
-): string[] {
+  issues: string[],
+): Array<{ pageId: string; token: string }> {
   const raw = readOptionalString("FACEBOOK_PAGES_NEXT", source);
   if (!raw) return [];
-  const overridden: string[] = [];
-  for (const entry of raw.split(",")) {
+  const entries: Array<{ pageId: string; token: string }> = [];
+  const before = issues.length;
+  raw.split(",").forEach((entry, index) => {
     const trimmed = entry.trim();
-    if (!trimmed) continue;
+    if (!trimmed) return;
     const sep = trimmed.indexOf(":");
     const pageId = sep > 0 ? trimmed.slice(0, sep).trim() : "";
     const token = sep > 0 ? trimmed.slice(sep + 1).trim() : "";
-    if (!pageId || !token) {
-      errors.push(`FACEBOOK_PAGES_NEXT entry "${trimmed.slice(0, 20)}…" must be in the form pageId:token`);
-      continue;
+    if (!/^\d+$/.test(pageId) || !token) {
+      issues.push(`FACEBOOK_PAGES_NEXT entry #${index + 1} is not in the form pageId:token`);
+      return;
     }
-    const existing = pages.findIndex((page) => page.pageId === pageId);
-    if (existing < 0) {
-      errors.push(`FACEBOOK_PAGES_NEXT page ${pageId} is not in FACEBOOK_PAGES / the legacy pair; refusing a token for an unknown page`);
-      continue;
+    if (!pages.some((page) => page.pageId === pageId)) {
+      issues.push(`FACEBOOK_PAGES_NEXT page ${pageId} is not in FACEBOOK_PAGES / the legacy pair`);
+      return;
     }
-    pages[existing] = { pageId, token };
-    overridden.push(pageId);
+    entries.push({ pageId, token });
+  });
+  if (entries.length && !metaAppSecretNext) {
+    issues.push("FACEBOOK_PAGES_NEXT requires META_APP_SECRET_NEXT (appsecret_proof must use the new app's secret)");
   }
-  if (overridden.length && !metaAppSecretNext) {
-    errors.push("FACEBOOK_PAGES_NEXT requires META_APP_SECRET_NEXT (appsecret_proof must use the new app's secret)");
-  }
-  return overridden;
+  return issues.length > before ? [] : entries;
 }
 
 /**
@@ -286,6 +295,21 @@ export function appSecretForToken(token: string): string {
   } catch {
     return "";
   }
+}
+
+/**
+ * The page token to answer this customer with. META_NEXT_SEND=testers sends through the NEW
+ * app only to the listed role users (an app in Development mode can message nobody else);
+ * everyone else — and every page without a NEXT token — keeps the roster token. With
+ * META_NEXT_SEND=all the roster itself already holds the new tokens (getEnv).
+ */
+export function pageTokenForRecipient(pageId: string, recipientId: string): string | undefined {
+  const env = getEnv();
+  if (env.metaNextSend === "testers" && env.metaNextTesterIds.includes(recipientId)) {
+    const next = env.facebookPagesNext.find((page) => page.pageId === pageId)?.token;
+    if (next) return next;
+  }
+  return env.facebookPages.find((page) => page.pageId === pageId)?.token;
 }
 
 function readBoolean(
@@ -377,13 +401,43 @@ export function getEnv(): ValidatedEnv {
   tokenSecrets.clear();
   for (const page of facebookPages) tokenSecrets.set(page.token, metaAppSecret);
   if (legacyTokenPage) tokenSecrets.set(legacyTokenPage, metaAppSecret);
-  const facebookPagesNextIds = applyFacebookPagesNext(source, facebookPages, metaAppSecretNext, errors);
-  for (const page of facebookPages) {
-    if (facebookPagesNextIds.includes(page.pageId)) tokenSecrets.set(page.token, metaAppSecretNext || metaAppSecret);
+  // Migration settings are optional and fail SAFE: an invalid one is ignored (old app keeps
+  // serving) and listed here; the build preflight refuses to deploy while any is listed.
+  const metaMigrationIssues: string[] = [];
+  const facebookPagesNext = parseFacebookPagesNext(source, facebookPages, metaAppSecretNext, metaMigrationIssues);
+  for (const page of facebookPagesNext) tokenSecrets.set(page.token, metaAppSecretNext);
+  // Who is answered through the new app: off (default) → nobody; testers → only the listed role
+  // users; all → everyone on the pages that have a NEXT token (the cutover).
+  const metaNextSendRaw = (readOptionalString("META_NEXT_SEND", source) || "off").toLowerCase();
+  let metaNextSend: "off" | "testers" | "all" =
+    metaNextSendRaw === "testers" || metaNextSendRaw === "all" ? metaNextSendRaw : "off";
+  if (!["off", "testers", "all"].includes(metaNextSendRaw)) {
+    metaMigrationIssues.push('META_NEXT_SEND must be "off", "testers" or "all" (using off)');
   }
+  const metaNextTesterIds = (readOptionalString("META_NEXT_TESTER_IDS", source) || "")
+    .split(",").map((id) => id.trim()).filter(Boolean);
+  if (metaNextSend !== "off" && !facebookPagesNext.length) {
+    metaMigrationIssues.push(`META_NEXT_SEND=${metaNextSend} needs a valid FACEBOOK_PAGES_NEXT (using off)`);
+    metaNextSend = "off";
+  }
+  if (metaNextSend === "testers" && !metaNextTesterIds.length) {
+    metaMigrationIssues.push("META_NEXT_SEND=testers needs META_NEXT_TESTER_IDS (nobody is sent to via the new app)");
+  }
+  if (metaNextTesterIds.some((id) => !/^\d+$/.test(id))) {
+    metaMigrationIssues.push("META_NEXT_TESTER_IDS must be numeric page-scoped ids");
+  }
+  // The cutover: every send, thread lookup and cron for these pages moves to the new app.
+  const facebookPagesNextIds: string[] = [];
+  if (metaNextSend === "all") {
+    for (const next of facebookPagesNext) {
+      facebookPages[facebookPages.findIndex((page) => page.pageId === next.pageId)] = next;
+      facebookPagesNextIds.push(next.pageId);
+    }
+  }
+  if (metaAppId && !/^\d+$/.test(metaAppId)) metaMigrationIssues.push("META_APP_ID must be the numeric app id");
   const echoTakeoverModeRaw = (readOptionalString("ECHO_TAKEOVER_MODE", source) || "observe").toLowerCase();
   if (echoTakeoverModeRaw !== "observe" && echoTakeoverModeRaw !== "enforce") {
-    errors.push('ECHO_TAKEOVER_MODE must be "observe" or "enforce"');
+    metaMigrationIssues.push('ECHO_TAKEOVER_MODE must be "observe" or "enforce" (using observe)');
   }
   const echoTakeoverMode: "observe" | "enforce" = echoTakeoverModeRaw === "enforce" ? "enforce" : "observe";
   const echoHumanAppIds = (readOptionalString("ECHO_HUMAN_APP_IDS", source) || "")
@@ -747,10 +801,14 @@ export function getEnv(): ValidatedEnv {
     metaAppSecret,
     metaAppSecretNext,
     verifyTokenNext,
+    facebookPagesNext,
+    metaNextSend,
+    metaNextTesterIds,
     facebookPagesNextIds,
     metaAppId,
     echoTakeoverMode,
     echoHumanAppIds,
+    metaMigrationIssues,
     adminSecret,
     adminOpenAccess,
     allowAdminSecretQuery,
@@ -808,6 +866,10 @@ export function getEnv(): ValidatedEnv {
     qpayInvoiceCode,
   };
 
+  if (cachedEnv.metaMigrationIssues.length) {
+    // Persisted (error level): the setting was ignored and the OLD app is still serving.
+    logError("env.meta_migration_settings_ignored", { issues: cachedEnv.metaMigrationIssues });
+  }
   logStartupDiagnostics("env", {
     trustProxyHeaders: cachedEnv.trustProxyHeaders,
     allowAdminSecretQuery: cachedEnv.allowAdminSecretQuery,
@@ -815,11 +877,15 @@ export function getEnv(): ValidatedEnv {
     facebookPageIds: cachedEnv.facebookPages.map((p) => p.pageId),
     // Meta-app migration state (names and flags only, never values).
     facebookPagesNextIds: cachedEnv.facebookPagesNextIds,
+    facebookPagesNextCount: cachedEnv.facebookPagesNext.length,
+    metaNextSend: cachedEnv.metaNextSend,
+    metaNextTesterCount: cachedEnv.metaNextTesterIds.length,
     metaAppSecretNextSet: Boolean(cachedEnv.metaAppSecretNext),
     verifyTokenNextSet: Boolean(cachedEnv.verifyTokenNext),
     metaAppIdSet: Boolean(cachedEnv.metaAppId),
     echoTakeoverMode: cachedEnv.echoTakeoverMode,
     echoHumanAppIdCount: cachedEnv.echoHumanAppIds.length,
+    metaMigrationIssues: cachedEnv.metaMigrationIssues,
     redisStateEnabled: cachedEnv.redisStateEnabled,
     redisRateLimitEnabled: cachedEnv.redisRateLimitEnabled,
     redisReplayEnabled: cachedEnv.redisReplayEnabled,

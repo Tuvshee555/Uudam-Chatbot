@@ -44,10 +44,17 @@ test("dual-app migration journeys (observe mode)", async (context) => {
     });
 
     await context.test("2. the same message delivered by both apps — simultaneously or hours apart — is answered once", async () => {
+      const logsBefore = harness.logs.length;
       const first = await fb("both-apps", "Норвел хотын аялал үнэ", one, "mid-both-apps");
       assert.equal(first.sends.length, 1);
       const second = await fb("both-apps", "Норвел хотын аялал үнэ", one, "mid-both-apps", { signSecret: "next-meta-secret" });
       assert.equal(second.sends.length, 0, "the second app's delivery of the SAME mid is absorbed");
+      // The persisted trail is the owner's evidence in the test-user step: both apps delivered.
+      await new Promise((resolve) => setImmediate(resolve));
+      const trail = harness.logs.slice(logsBefore);
+      assert.deepEqual(trail.filter((log) => log.event === "webhook.inbound_received").map((log) => log.fields.deliveredBy),
+        ["current", "next"], "each delivery's receipt names the app that delivered it");
+      assert.equal(trail.filter((log) => log.event === "webhook.inbound_duplicate").length, 1, "the second is recorded as absorbed");
       tick(3 * 60 * MIN);
       const lateRetry = await fb("both-apps", "Норвел хотын аялал үнэ", one, "mid-both-apps");
       assert.equal(lateRetry.sends.length, 0, "a redelivery hours later is still absorbed (48-hour mid memory)");
@@ -83,6 +90,20 @@ test("dual-app migration journeys (observe mode)", async (context) => {
       const answered = await fb("echo-new", "Норвел хотын аялал үнэ", one);
       assert.equal(answered.sends.length, 1, "the brand-new customer is answered after the greeting echo");
       assert.equal(harness.echoes().at(-1)?.classification, "unknown");
+      // Echoes come through the NEW app (only it can hold message_echoes): recorded as such.
+      await harness.echoTurn("echo-new", { appId: 263902037430900, text: "", signSecret: "next-meta-secret" });
+      assert.equal(harness.echoes().at(-1)?.deliveredBy, "next");
+    });
+
+    await context.test("7. a `standby` delivery (this app does not own the thread) is never answered", async () => {
+      const standby = await harness.rawDelivery({ object: "page", entry: [{ id: "1234567890", time: Date.now(),
+        standby: [{ sender: { id: "standby-customer" }, recipient: { id: "1234567890" }, timestamp: Date.now(),
+          message: { mid: "mid-standby-1", text: "Норвел хотын аялал үнэ" } }] }] }, "next-meta-secret");
+      assert.equal(standby.status, 200, "accepted, so Meta does not redeliver");
+      assert.equal(standby.sends.length, 0, "Meta: do not respond to standby messages");
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.ok(harness.logs.some((log) => log.event === "webhook.standby_observed" && log.fields.deliveredBy === "next"),
+        "counted as routing evidence");
     });
 
     await context.test("6. observe mode: even a LISTED human app id only records — enforcement is a separate, explicit deploy", async () => {

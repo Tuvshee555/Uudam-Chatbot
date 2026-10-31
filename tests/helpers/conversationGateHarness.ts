@@ -41,8 +41,9 @@ export async function conversationGateHarness(context: TestContext, options: { e
   const lastStaffReply = new Map<string, string>();
   // When staff handed the conversation back to the bot (travel_senders.bot_released_at).
   const released = new Map<string, string>();
+  const graphAuth: Array<{ kind: "send" | "thread" | "other"; customer: string; token: string; proof: string }> = [];
   // Echo observations (travel_echo_events): shape and app id, never text (echoObserver.ts).
-  const echoes: Array<{ recipient: string; appId: string; classification: string; hasBotMetadata: boolean }> = [];
+  const echoes: Array<{ recipient: string; appId: string; classification: string; hasBotMetadata: boolean; deliveredBy: string }> = [];
   const result = (rows: unknown[] = []) => ({ rows, rowCount: rows.length });
   const query = async (sql: string, params: unknown[] = []) => {
     const sender = String(params[0] ?? "");
@@ -65,7 +66,8 @@ export async function conversationGateHarness(context: TestContext, options: { e
       return result([{ released: released.get(sender) ?? null }]);
     }
     if (/INSERT INTO travel_echo_events/i.test(sql)) {
-      echoes.push({ recipient: String(params[1]), appId: String(params[3]), hasBotMetadata: Boolean(params[4]), classification: String(params[5]) });
+      echoes.push({ recipient: String(params[1]), appId: String(params[3]), hasBotMetadata: Boolean(params[4]),
+        classification: String(params[5]), deliveredBy: String(params[8]) });
       return result();
     }
     if (/AS staff,[\s\S]*AS assigned,[\s\S]*AS open/i.test(sql)) {
@@ -168,6 +170,14 @@ export async function conversationGateHarness(context: TestContext, options: { e
       else if (prompt.includes("Reply rules:")) { answerModels.push(prompt); content = override.finalReply || "REFER"; }
       return new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: "stop" }] }), { status: 200 });
     }
+    if (/^https:\/\/graph\.facebook\.com\//.test(url)) {
+      // Which page token (and appsecret_proof) each Graph call used: the Meta-app migration sends
+      // through one app or the other per customer.
+      const { searchParams: params, pathname } = new URL(url);
+      graphAuth.push({ kind: pathname.endsWith("/me/conversations") ? "thread" : pathname.endsWith("/me/messages") ? "send" : "other",
+        customer: params.get("user_id") || String(body.recipient?.id || ""),
+        token: params.get("access_token") || "", proof: params.get("appsecret_proof") || "" });
+    }
     if (/^https:\/\/graph\.facebook\.com\/[^/]+\/me\/conversations\?platform=messenger&user_id=/.test(url)) {
       const customer = new URL(url).searchParams.get("user_id") || "";
       const script = threads.get(customer);
@@ -256,19 +266,27 @@ export async function conversationGateHarness(context: TestContext, options: { e
     resume(senderId: string) { pauses.delete(senderId); released.set(senderId, new Date().toISOString()); },
     /** A message echo from Meta: the Page (any app) sent `customerId` a message. */
     async echoTurn(customerId: string, echo: { appId?: string | number; metadata?: string; text?: string; mid?: string;
-      attachments?: Array<{ type?: string }> } = {}) {
+      attachments?: Array<{ type?: string }>; signSecret?: string } = {}) {
       const beforeSend = sends.length;
       const status = await deliver({ object: "page", entry: [{ id: "1234567890", time: Date.now(), messaging: [{
         sender: { id: "1234567890" }, recipient: { id: customerId }, timestamp: Date.now(),
         message: { is_echo: true, mid: echo.mid ?? `m_echo_${++serial}`, ...(echo.appId === undefined ? {} : { app_id: echo.appId }),
           ...(echo.metadata === undefined ? {} : { metadata: echo.metadata }), ...(echo.text === undefined ? {} : { text: echo.text }),
-          ...(echo.attachments === undefined ? {} : { attachments: echo.attachments }) } }] }] });
+          ...(echo.attachments === undefined ? {} : { attachments: echo.attachments }) } }] }] }, echo.signSecret);
       // recordEchoEvent is fire-and-forget; let it land before the test reads `echoes`.
       await new Promise((resolve) => setImmediate(resolve));
       return { status, sends: sends.slice(beforeSend) };
     },
     /** The echo observations recorded so far (travel_echo_events). */
     echoes() { return [...echoes]; },
+    /** Token and appsecret_proof of every Graph call (sends and thread reads), per customer. */
+    graphAuth() { return [...graphAuth]; },
+    /** A raw signed delivery (e.g. a `standby` entry); returns status and any sends it caused. */
+    async rawDelivery(payload: unknown, signSecret?: string) {
+      const beforeSend = sends.length;
+      const status = await deliver(payload, signSecret);
+      return { status, sends: sends.slice(beforeSend) };
+    },
     pauseState(senderId: string) { return pauses.get(senderId) ?? null; },
     /** A staff member took this conversation over: the stored pause the webhook honours. */
     pause(senderId: string, until = new Date(Date.now() + 3 * 86_400_000).toISOString(), reason = "manual") { pauses.set(senderId, { paused: true, expires_at: until, pause_reason: reason }); },

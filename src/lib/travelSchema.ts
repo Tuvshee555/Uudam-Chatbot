@@ -493,6 +493,7 @@ export async function ensureTravelSchema() {
           classification TEXT NOT NULL DEFAULT '',
           text_length INTEGER NOT NULL DEFAULT 0,
           attachment_types TEXT NOT NULL DEFAULT '',
+          delivered_by TEXT NOT NULL DEFAULT '',
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
       `);

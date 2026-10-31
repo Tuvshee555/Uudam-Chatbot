@@ -383,6 +383,8 @@ export const PERSISTED_INFO_EVENTS: ReadonlySet<string> = new Set([
   "webhook.get_started_silent",
   "webhook.booked_followup",
   "webhook.disabled",
+  // Meta-app migration: an app that does not own the conversation gets `standby`, never answered.
+  "webhook.standby_observed",
   // The private customer-image store's end-to-end check (customerImageStorage.ts): passes too,
   // so "it was working at …" can be shown, not only failures.
   "customer_documents.storage_check",
