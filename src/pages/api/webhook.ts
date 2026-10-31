@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { askOpenAI } from "../../lib/openaiProvider";
 import { askOpenAIChatParts } from "../../lib/openaiFallback";
 import { matchFlow, findTriggeredFlow, getFlowState, setFlowState, clearFlowState, newRuntimeState, runFlowFrom, resumeFlowWithInput, type FlowRule, type FlowDoc, type FlowEffects, type FlowRuntimeState, type RunOutcome, } from "../../lib/flowEngine";
-import { BOT_MESSAGE_METADATA, replyToComment, sendImageMessage, sendQuickReplies } from "../../lib/messenger";
+import { replyToComment, sendImageMessage, sendQuickReplies } from "../../lib/messenger";
 import { sendQuickReplies as sendIgQuickReplies } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { getClarificationState, setClarificationState } from "../../lib/clarificationState";
@@ -47,6 +47,7 @@ import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { buildContactReply, contactSettingsOf, isAddressRequest, isPhoneRequest, isRepeatOfLastReply } from "../../lib/contactReplies";
 import { detectStaffTakeover, fetchThreadMessages, markStaffReply, STAFF_TAKEOVER_MS, takeoverRisk, type TakeoverCheck } from "../../lib/staffTakeover";
+import { classifyEcho, echoEnforcementEnabled, recordEchoEvent } from "../../lib/echoObserver";
 import { AI_OUTAGE_HANDOFF_REPLY, BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, markGetStarted, pauseBookedCustomer, pauseBot, pauseReason, trackSender } from "../../lib/pause";
@@ -72,10 +73,10 @@ import { ensureDurableLead } from "../../lib/durableLead";
 import { logInboundMessage } from "../../lib/travelMessages";
 import { getCollectState } from "../../lib/bookingCollect";
 import { continueBookingCollect, startBookingCollect, type BookingCollectContext } from "../../lib/bookingCollectFlow";
-import { getEnv } from "../../lib/env";
+import { getEnv, pageTokenForRecipient } from "../../lib/env";
 import { isMetaOutboundDisabled } from "../../lib/metaOutboundKillSwitch";
 import { beginRequestTrace, classifyError, finishRequestTrace, hashIdentifier, logError, logInfo, logWarn, recordCounter, } from "../../lib/observability";
-import { parseWebhookJson, PayloadTooLargeError, verifyMetaSignature, } from "../../lib/webhookSecurity";
+import { matchMetaSignature, parseWebhookJson, PayloadTooLargeError, } from "../../lib/webhookSecurity";
 import {
   type Platform,
   type AttachmentReplyPayload,
@@ -115,6 +116,9 @@ import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
 const env = getEnv();
 const PAGE_TOKENS = new Map(env.facebookPages.map((p) => [p.pageId, p.token]));
 const FALLBACK_TOKEN = env.tokenPage;
+/** The token to answer this customer with: the roster token, or the new app's for a listed
+ * tester while the Meta-app migration sends META_NEXT_SEND=testers (env.ts). */
+const pageTokenFor = (pageId: string, senderId: string) => pageTokenForRecipient(pageId, senderId) ?? FALLBACK_TOKEN;
 const META_APP_SECRET = env.metaAppSecret;
 
 export function answerPlanHasCustomerEvidence(tripId: string, context: GroundingContext): boolean {
@@ -300,9 +304,10 @@ async function handleMessage(
     const lookup = (await staffThread) ?? { status: "unverified" as const, reason: "api_error" as const };
     const takeover: TakeoverCheck = await detectStaffTakeover({ lookup, pageId, senderId })
       .catch(() => ({ status: "unverified" as const, reason: "api_error" as const }));
-    // Consultant replies never reach this webhook (no echoes), so this thread read is the only
-    // place the bot sees them. Stored as role 'staff' for the admin inbox — AI and human replies
-    // stay tellable apart there; the model and routing never read 'staff' rows.
+    // Consultant replies are known from this thread read (echoes, once the new Meta app delivers
+    // them, are observe-only until their app ids are proven — echoObserver.ts). Stored as role
+    // 'staff' for the admin inbox — AI and human replies stay tellable apart there; the model and
+    // routing never read 'staff' rows.
     if (takeover.status === "checked" && takeover.staffMessages.length > 0) {
       await dbAppendStaffMessages(senderId, takeover.staffMessages).catch(() => {});
     }
@@ -2240,7 +2245,7 @@ async function processConversationWithPendingQueue(
     // drained message comes back with token: null. Re-derive it from pageId
     // the same way the initial handler does — it's a cheap in-memory lookup,
     // not the queued value.
-    let current = { ...initial, token: initial.token ?? PAGE_TOKENS.get(initial.pageId) ?? FALLBACK_TOKEN };
+    let current = { ...initial, token: initial.token ?? pageTokenFor(initial.pageId, initial.senderId) };
     let head = initialHead;
     while (current) {
       const lockHealthy = await refreshConversationLockConsistent(
@@ -2288,7 +2293,7 @@ async function processConversationWithPendingQueue(
       if (checkpoint && current.eventKey === checkpoint.eventKey) await checkpoint.complete();
       const pending = await peekPendingConversationConsistent(conversationKey);
       if (!pending) break;
-      current = { ...pending.payload, token: pending.payload.token ?? PAGE_TOKENS.get(pending.payload.pageId) ?? FALLBACK_TOKEN };
+      current = { ...pending.payload, token: pending.payload.token ?? pageTokenFor(pending.payload.pageId, pending.payload.senderId) };
       head = pending;
       updateConcurrencyGauges();
     }
@@ -2372,7 +2377,10 @@ export default async function handler(
         const signature = Array.isArray(signatureHeader)
           ? signatureHeader[0]
           : signatureHeader;
-        if (!verifyMetaSignature(rawBody, signature, META_APP_SECRET)) {
+        // Two apps deliver during the Meta-app migration, each signing with its own secret; which
+        // one signed is recorded on every receipt, so "did the new app deliver this?" is evidence.
+        const deliveredBy = matchMetaSignature(rawBody, signature, [["current", META_APP_SECRET], ["next", env.metaAppSecretNext]]);
+        if (!deliveredBy) {
           recordCounter("abuse.webhook_invalid_signature_total", 1);
           return res.status(401).json({ error: "invalid_signature" });
         }
@@ -2414,6 +2422,7 @@ export default async function handler(
               postback?: { title?: string; payload?: string };
               referral?: Record<string, unknown>;
             }>;
+            standby?: unknown[];
           }>;
         };
         logInfo("webhook.received", {
@@ -2515,20 +2524,58 @@ export default async function handler(
                 },
               );
             }
+            // Conversation routing: an app that does not own the thread gets `standby` events
+            // instead of `messaging`. They are never answered (Meta: "Do not respond to standby
+            // messages") — only counted, as evidence of which app owns UUDAM's conversations.
+            const standbyCount = Array.isArray(entry?.standby) ? entry.standby.length : 0;
+            if (standbyCount) {
+              logInfo("webhook.standby_observed", { requestId: trace.requestId, pageId, deliveredBy, count: standbyCount });
+              recordCounter("webhook.standby_observed_total", standbyCount, { delivered_by: deliveredBy });
+            }
             const messagingEvents = Array.isArray(entry?.messaging)
               ? entry.messaging
               : [];
             for (const event of messagingEvents) {
               if (!event?.sender?.id) continue;
-              // Echo = operator/page sent a message to a customer.
-              // Bot echoes carry our metadata; only pause for human/operator echoes.
+              // Echo = the Page sent a message to a customer: this bot, a consultant (desktop
+              // or phone), Meta's own automations, or another connected app — told apart by
+              // our send metadata and the echo's app_id (echoObserver.ts). Until real echoes
+              // prove that split, this branch OBSERVES and records; the thread lookup below
+              // remains what actually stops the bot when a consultant has replied. Without
+              // that gate, Meta's automated welcome greeting (an echo with no metadata) would
+              // re-create the 3-day false silence of 2026-10-30 on every new conversation.
               if (event?.message?.is_echo) {
                 const customerId = String(event.recipient?.id ?? "").trim();
-                const isBotEcho = event.message.metadata === BOT_MESSAGE_METADATA;
-                if (customerId && !isBotEcho) {
+                if (!customerId) continue;
+                const echoText = String(event.message.text ?? "").trim();
+                const echo = {
+                  pageId,
+                  deliveredBy,
+                  recipientId: customerId,
+                  mid: String(event.message.mid ?? ""),
+                  appId: event.message.app_id === null || event.message.app_id === undefined ? "" : String(event.message.app_id),
+                  metadata: String(event.message.metadata ?? ""),
+                  textLength: echoText.length,
+                  attachmentTypes: Array.isArray(event.message?.attachments)
+                    ? event.message.attachments.map((a) => a?.type || "unknown")
+                    : [],
+                };
+                const echoClass = classifyEcho(echo);
+                // Fire-and-forget: the observation row must never delay the webhook.
+                void recordEchoEvent(echo, echoClass).catch(() => {});
+                if (echoClass === "bot") {
+                  logInfo("webhook.bot_echo_skip", {
+                    requestId: trace.requestId,
+                    customerHash: hashIdentifier(customerId),
+                    pageId,
+                  });
+                  continue;
+                }
+                // A proven human surface, with enforcement explicitly on: the consultant owns
+                // the conversation. An UNKNOWN app id never pauses — log + counter only.
+                if (echoClass === "human" && echoEnforcementEnabled()) {
                   const operatorPauseMs = AUTO_PAUSE_RESET_DAYS * 24 * 60 * 60 * 1000;
-                  // Was previously `.catch(() => {})` — a failed pause write
-                  // was invisible, and the bot would just keep answering a
+                  // A failed pause write must be visible, or the bot keeps answering a
                   // customer staff already took over with no error anywhere.
                   await dbPauseSender(customerId, operatorPauseMs, "operator_reply").catch(
                     (error) => {
@@ -2541,41 +2588,20 @@ export default async function handler(
                       });
                     },
                   );
-                  // "Mimic Myself" tone capture — captured unconditionally on every
-                  // human operator reply, regardless of the toggle (only the PROMPT
-                  // USE of these samples is gated by mimic_myself_enabled below).
-                  // This keeps the sample pool warm before an admin ever opts in.
-                  // Fire-and-forget: must never delay the webhook response.
-                  const operatorText = String(event.message.text ?? "").trim();
-                  if (operatorText.length >= 8) {
-                    void dbAppendAdminMessage(customerId, operatorText).catch(() => {});
-                  }
-                  // Diagnostic: attachment types on operator echoes are logged
-                  // so a report of "the bot kept answering after I sent a voice
-                  // note from the Page" can be checked against what Meta
-                  // actually sent, instead of guessing. Cheap — only runs on
-                  // human-sent echoes, which are low-volume.
-                  const echoAttachmentTypes = Array.isArray(event.message?.attachments)
-                    ? event.message.attachments.map((a) => a?.type || "unknown")
-                    : [];
-                  // appId identifies WHO sent it (Page inbox / Business Suite /
-                  // an automation / another app) — the field to check when a
-                  // pause looks like it was triggered by something that is not
-                  // a person typing.
+                  await markStaffReply(customerId, new Date()).catch(() => {});
                   logInfo("webhook.operator_echo_pause", {
                     requestId: trace.requestId,
                     customerHash: hashIdentifier(customerId),
                     pageId,
-                    appId: event.message.app_id ?? null,
-                    hasText: operatorText.length > 0,
-                    attachmentTypes: echoAttachmentTypes,
+                    appId: echo.appId || null,
+                    hasText: echoText.length > 0,
+                    attachmentTypes: echo.attachmentTypes,
                   });
-                } else if (customerId && isBotEcho) {
-                  logInfo("webhook.bot_echo_skip", {
-                    requestId: trace.requestId,
-                    customerHash: hashIdentifier(customerId),
-                    pageId,
-                  });
+                }
+                // "Mimic Myself" tone capture: only a PROVEN human surface feeds the sample
+                // pool — automations and unknown apps would poison the owner's voice.
+                if (echoClass === "human" && echoText.length >= 8) {
+                  void dbAppendAdminMessage(customerId, echoText).catch(() => {});
                 }
                 continue;
               }
@@ -2587,7 +2613,7 @@ export default async function handler(
               if (adReferral && senderId) {
                 await rememberAdReferral({
                   senderId, platform: payload.object === "instagram" ? "instagram" : "facebook", referral: adReferral,
-                  trips: await listTrips({ limit: 5000 }).catch(() => []), pageToken: PAGE_TOKENS.get(pageId) ?? FALLBACK_TOKEN,
+                  trips: await listTrips({ limit: 5000 }).catch(() => []), pageToken: pageTokenFor(pageId, senderId),
                 });
               }
               // Postback taps (Get Started button, persistent menu) carry no
@@ -2627,11 +2653,11 @@ export default async function handler(
               }
               const platform: Platform =
                 payload.object === "instagram" ? "instagram" : "facebook";
-              const token = PAGE_TOKENS.get(pageId) ?? FALLBACK_TOKEN;
+              const token = pageTokenFor(pageId, senderId);
               // Persisted receipt of every delivery (redeliveries included), keyed like the
               // outcome record, so "never received" can be told from "received and lost".
               logInfo("webhook.inbound_received", {
-                requestId: trace.requestId, correlationId: trace.correlationId, platform, pageId,
+                requestId: trace.requestId, correlationId: trace.correlationId, platform, pageId, deliveredBy,
                 senderHash: hashIdentifier(senderId),
                 eventKeyHash: hashIdentifier(text && !event?.message?.mid
                   ? buildEventKey(platform, senderId, { message: { text } }) : buildEventKey(platform, senderId, event)),

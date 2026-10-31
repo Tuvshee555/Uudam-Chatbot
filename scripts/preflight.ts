@@ -72,6 +72,13 @@ async function run() {
     return;
   }
 
+  // Meta-app migration settings are optional, so the running deployment IGNORES an invalid one
+  // (the old app keeps serving, env.ts). That makes a typo silent — so a deploy carrying one
+  // stops here instead, and the deployment already live keeps serving.
+  if (env.metaMigrationIssues.length) {
+    throw new Error(`Preflight failed: invalid Meta-app migration settings: ${env.metaMigrationIssues.join("; ")}`);
+  }
+
   const observabilityModule = await import("../src/lib/observability");
   const readinessModule = await import("../src/lib/readiness");
   const redisModule = await import("../src/lib/redisState");

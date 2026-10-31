@@ -86,8 +86,10 @@ any other question is answered as usual and added to the lead. Only a consultant
 is tagged `source:mobile` (341 messages). The bot, a consultant in Business Suite on a computer and
 Meta's automations are all `source:web`, so the old rule (only `source:mobile` counts) never saw a
 desktop consultant. Meta's `message_echoes` webhook would say who sent each message, but the page token
-holds only `pages_messaging` and `public_profile`: no `pages_manage_metadata`, so the app cannot keep that
-subscription (echoes stopped after 2026-08-01). The token's data access expired 2026-09-10.
+holds only `pages_messaging` and `public_profile`: no `pages_manage_metadata`, so that subscription was
+never delivered — no echo has ever reached the webhook (correction 2026-10-31: the 250 admin-message rows
+of 2026-08-01 were written in 4 minutes by `scripts/backfill-admin-tone-samples.ts`, a backfill, not live
+echoes). The token's data access expired 2026-09-10.
 **Now (`staffTakeover.ts`).** The bot records the id Meta returns for every message it sends
 (`travel_outbound_messages`). In the thread, its own messages are known by that id (or by a reply it
 stored at that moment); `source:mobile` is a consultant; any other `source:web` Page message is a consultant
@@ -110,9 +112,11 @@ was cleared after `/api/admin/takeover-diagnostics?sender_id=` showed no consult
 Journeys 15–16 fail without it. **Still open (owner decision):** a desktop consultant replying within 20 s
 of the customer is read as Meta's automation; a Meta automation more than 20 s after the customer (or a bot
 message whose id was not recorded and that has no stored copy) is read as a consultant.
-**Owner action for the strongest signal.** Reconnect the Page to the Meta app with `pages_manage_metadata`
-and subscribe the app to `messages` and `message_echoes` (POST `/api/subscribe-feed`); echoes then name the
-sending app on every Page message.
+**Owner action for the strongest signal.** The Meta-app migration (`docs/meta-app-migration.md`) connects a
+new app the owner controls with `pages_manage_metadata` and subscribes it to `message_echoes`; echoes then
+name the sending app on every Page message. Echo-based takeover stays observe-only (`echoObserver.ts`,
+`ECHO_TAKEOVER_MODE`) until real echoes prove which app ids are human surfaces; an unknown app id is never
+treated as a consultant, and the thread check above remains the enforcement path meanwhile.
 
 ## P1-3 — Test traffic in the production conversation table — MITIGATED (2026-10-30)
 `demo:` sessions (87% of rows) are written beside real customers. Every analytics and quality query on

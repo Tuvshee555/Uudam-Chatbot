@@ -147,8 +147,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   for (const record of unmatchedRecords) if (record.text && (texts.get(record.text) ?? 0) >= 3) signatures.get(record.signature)!.unmatchedRepeatedText += 1;
 
+  // The NEW app's stored page tokens, checked before anything is sent with them: Meta's own
+  // debug_token, asked with the new app's app token (META_APP_ID|META_APP_SECRET_NEXT). Facts
+  // only — validity, owning app, page, scopes, expiry — never the token.
+  const nextTokens = [];
+  const appToken = env.metaAppId && env.metaAppSecretNext ? `${env.metaAppId}|${env.metaAppSecretNext}` : "";
+  for (const page of appToken ? env.facebookPagesNext : []) {
+    const debug = await graph(`debug_token?input_token=${encodeURIComponent(page.token)}`, appToken);
+    const data = (debug.body.data ?? {}) as { is_valid?: boolean; app_id?: string; profile_id?: string; type?: string;
+      scopes?: string[]; expires_at?: number; data_access_expires_at?: number };
+    nextTokens.push({
+      page: `…${page.pageId.slice(-4)}`, debugStatus: debug.status, valid: data.is_valid ?? null, type: data.type ?? null,
+      appIdMatches: data.app_id ? String(data.app_id) === env.metaAppId : null,
+      pageMatches: data.profile_id ? String(data.profile_id) === page.pageId : null,
+      scopes: data.scopes ?? [],
+      hasRequiredScopes: ["pages_messaging", "pages_manage_metadata"].every((scope) => (data.scopes ?? []).includes(scope)),
+      expiresAt: data.expires_at || null, dataAccessExpiresAt: data.data_access_expires_at || null,
+    });
+  }
+
+  // The echo classification matrix: what each app id has actually sent (echoObserver.ts).
+  const echoMatrix = (await queryNeon<Record<string, unknown>>(
+    `SELECT app_id, classification, has_bot_metadata, delivered_by,
+            COUNT(*)::int AS events, COUNT(DISTINCT recipient_id)::int AS customers,
+            AVG(text_length)::int AS avg_text_length,
+            COUNT(*) FILTER (WHERE attachment_types <> '')::int AS with_attachments,
+            MIN(created_at) AS first_seen, MAX(created_at) AS last_seen
+       FROM travel_echo_events WHERE created_at > NOW() - INTERVAL '14 days'
+      GROUP BY app_id, classification, has_bot_metadata, delivered_by ORDER BY events DESC`,
+  ).catch(() => null))?.rows ?? [];
+
   return res.status(200).json({
     ok: true,
+    echoMatrix,
+    // Meta-app migration state (flags and ids only, never secret values).
+    migration: {
+      metaAppId: env.metaAppId || null,
+      metaAppSecretNextSet: Boolean(env.metaAppSecretNext),
+      verifyTokenNextSet: Boolean(env.verifyTokenNext),
+      nextSend: env.metaNextSend,
+      nextTesterCount: env.metaNextTesterIds.length,
+      nextTokens,
+      pagesOnNextToken: env.facebookPagesNextIds.map((id) => `…${id.slice(-4)}`),
+      echoTakeoverMode: env.echoTakeoverMode,
+      echoHumanAppIds: env.echoHumanAppIds,
+      // Settings that were invalid and therefore IGNORED (the old app is still serving).
+      ignoredSettingIssues: env.metaMigrationIssues,
+    },
     pages: pageReports,
     threads: { sendersChecked: senders.length, threadsRead, threadFailures, messageIdPrefixes: [...idPrefixes] },
     pageMessageSignatures: Object.fromEntries([...signatures.entries()].sort((a, b) => b[1].total - a[1].total)),

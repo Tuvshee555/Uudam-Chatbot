@@ -625,9 +625,12 @@ export async function dbPauseSender(
 export async function dbResumeSender(senderId: string): Promise<void> {
   const ready = await ensureTravelSchema();
   if (!ready) return;
+  // bot_released_at: the takeover check ignores consultant messages from before this moment,
+  // so an old staff reply in the thread cannot re-pause a conversation staff just handed back.
   await queryNeon(
     `UPDATE travel_senders
-     SET paused = FALSE, pause_reason = '', paused_at = NULL, expires_at = NULL, msg_count = 0, updated_at = NOW()
+     SET paused = FALSE, pause_reason = '', paused_at = NULL, expires_at = NULL, msg_count = 0,
+         bot_released_at = NOW(), updated_at = NOW()
      WHERE sender_id = $1`,
     [senderId],
   );

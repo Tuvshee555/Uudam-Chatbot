@@ -43,6 +43,31 @@ export function verifyMetaSignature(
   return false;
 }
 
+/**
+ * During the Meta-app migration two apps deliver to this webhook, each signing with its own
+ * secret. A delivery is valid when ANY configured secret verifies it; empty secrets are
+ * skipped, so with only the old secret configured this is exactly the single-secret check.
+ */
+export function verifyMetaSignatureAny(
+  rawBody: Buffer,
+  header: string | undefined,
+  appSecrets: Array<string>,
+) {
+  return appSecrets.some((secret) => secret && verifyMetaSignature(rawBody, header, secret));
+}
+
+/** Which app signed this delivery (its label), or null when no configured secret verifies it. */
+export function matchMetaSignature<Label extends string>(
+  rawBody: Buffer,
+  header: string | undefined,
+  appSecrets: Array<[Label, string]>,
+): Label | null {
+  for (const [label, secret] of appSecrets) {
+    if (secret && verifyMetaSignature(rawBody, header, secret)) return label;
+  }
+  return null;
+}
+
 export async function readRawBodyLimited(
   stream: AsyncIterable<Buffer | string>,
   maxBytes: number,

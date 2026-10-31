@@ -2,9 +2,12 @@
  * Has a consultant replied to this customer, so the bot must stay out?
  *
  * Meta can tell the webhook through `message_echoes`, but the page tokens only hold
- * `pages_messaging` (no `pages_manage_metadata`), so the app cannot keep that subscription and
- * echoes stopped after 2026-08-01. The Conversations API is readable with the page token, so
- * the bot reads the thread before replying.
+ * `pages_messaging` (no `pages_manage_metadata`), so that subscription was never delivered —
+ * no echo has ever reached this webhook (the 2026-08-01 admin-message rows were a backfill
+ * script, not echoes; verified 2026-10-31). The Conversations API is readable with the page
+ * token, so the bot reads the thread before replying. The Meta-app migration
+ * (docs/meta-app-migration.md) adds real echoes in observe-only mode; this thread check stays
+ * the enforcement path until echo classification is proven on real events.
  *
  * Every Page message comes back "from" the Page — this bot, a consultant, Meta's automations
  * and inbox notices alike. Production threads (takeover diagnostics, 2026-10-30, 60 customers):
@@ -56,6 +59,13 @@ export type ClassifyContext = {
   recordingSince?: number | null;
   /** Replies the bot stored for this customer, the fallback for an unrecorded id. */
   botReplies?: Array<{ at: number; text: string; attachments?: number }>;
+  /**
+   * When staff last handed the conversation back to the bot ("Ботод буцаах"). Consultant
+   * messages at or before this moment do not take the conversation over again — without it,
+   * the next customer message re-reads the thread, finds the same old consultant reply inside
+   * the 3-day window and silently re-pauses the conversation staff just released.
+   */
+  botReleasedAt?: number | null;
 };
 
 /** Messages per thread lookup (fetchThreadMessages); a full page may not start at the beginning. */
@@ -103,8 +113,11 @@ export function latestStaffReply(input: {
   const now = (input.now ?? new Date()).getTime();
   const windowMs = input.windowMs ?? STAFF_TAKEOVER_MS;
   let latest: { at: Date; origin: "staff_mobile" | "staff_web" } | null = null;
+  const releasedAt = input.botReleasedAt ?? null;
   for (const { at, origin } of classifyThread(input.messages, input)) {
     if (now - at > windowMs) continue;
+    // Already handed back to the bot: only a NEWER consultant message takes over again.
+    if (releasedAt !== null && at <= releasedAt) continue;
     if ((origin === "staff_mobile" || origin === "staff_web") && (!latest || at > latest.at.getTime())) latest = { at: new Date(at), origin };
   }
   return latest;
@@ -149,8 +162,12 @@ export async function fetchThreadMessages(input: {
   senderId: string;
   timeoutMs: number;
 }): Promise<ThreadLookup> {
+  const { appSecretForToken } = await import("./env");
+  const { createHmac } = await import("node:crypto");
+  const secret = appSecretForToken(input.token);
+  const proof = secret ? `&appsecret_proof=${createHmac("sha256", secret).update(input.token).digest("hex")}` : "";
   const url = `${GRAPH_API_BASE}/me/conversations?platform=messenger&user_id=${encodeURIComponent(input.senderId)}`
-    + `&fields=messages.limit(${THREAD_LOOKUP_LIMIT}){id,from,message,created_time,tags}&access_token=${encodeURIComponent(input.token)}`;
+    + `&fields=messages.limit(${THREAD_LOOKUP_LIMIT}){id,from,message,created_time,tags}&access_token=${encodeURIComponent(input.token)}${proof}`;
   let response: Response;
   try {
     response = await fetch(url, { signal: AbortSignal.timeout(input.timeoutMs) });
@@ -197,7 +214,7 @@ export async function takeoverContext(input: { messages: ThreadMessage[]; pageId
   const pageMessages = input.messages.filter((message) => message.from?.id === input.pageId);
   const { knownOutboundMids, outboundRecordingSince } = await import("./outboundMessages");
   const { queryNeon } = await db();
-  const [botMids, recordingSince, replies] = await Promise.all([
+  const [botMids, recordingSince, replies, released] = await Promise.all([
     knownOutboundMids(pageMessages.map((message) => message.id ?? "").filter(Boolean)).catch(() => new Set<string>()),
     outboundRecordingSince().catch(() => null),
     queryNeon<{ at: string; text: string; attachments: number }>(
@@ -205,9 +222,18 @@ export async function takeoverContext(input: { messages: ThreadMessage[]; pageId
          FROM travel_conversations
         WHERE sender_id=$1 AND role='assistant' AND created_at > NOW() - INTERVAL '4 days'`, [input.senderId],
     ).catch(() => null),
+    // A failed read must NOT look like a release (null would re-honour an old consultant
+    // reply, never the other way round) — it only loses the release and errs towards holding.
+    queryNeon<{ released: string | null }>(
+      "SELECT bot_released_at AS released FROM travel_senders WHERE sender_id=$1", [input.senderId],
+    ).catch(() => null),
   ]);
   const botReplies = (replies?.rows ?? []).map((row) => ({ at: Date.parse(String(row.at)), text: String(row.text ?? ""), attachments: Number(row.attachments) || 0 }));
-  return { pageId: input.pageId, botMids, recordingSince, botReplies, threadComplete: input.messages.length < THREAD_LOOKUP_LIMIT };
+  const releasedRaw = released?.rows[0]?.released;
+  const botReleasedAt = releasedRaw ? Date.parse(String(releasedRaw)) : null;
+  return { pageId: input.pageId, botMids, recordingSince, botReplies,
+    botReleasedAt: Number.isFinite(botReleasedAt) ? botReleasedAt : null,
+    threadComplete: input.messages.length < THREAD_LOOKUP_LIMIT };
 }
 
 /** The thread, classified with the bot's recorded ids and stored replies. */
@@ -242,7 +268,9 @@ export async function takeoverRisk(senderId: string): Promise<"recent_staff_repl
   if (!isNeonConfigured()) return null;
   const result = await queryNeon<{ staff: boolean; assigned: boolean; open: boolean }>(
     `SELECT
-       COALESCE((SELECT last_staff_reply_at > NOW() - INTERVAL '7 days' FROM travel_senders WHERE sender_id=$1), FALSE) AS staff,
+       COALESCE((SELECT last_staff_reply_at > NOW() - INTERVAL '7 days'
+                   AND last_staff_reply_at > COALESCE(bot_released_at, '-infinity'::timestamptz)
+                  FROM travel_senders WHERE sender_id=$1), FALSE) AS staff,
        EXISTS (SELECT 1 FROM travel_leads WHERE sender_id=$1 AND assigned_to <> '' AND lead_status IN ('new_lead','contacted','no_answer')
                  AND COALESCE(last_activity_at, created_at) > NOW() - INTERVAL '14 days') AS assigned,
        EXISTS (SELECT 1 FROM travel_leads WHERE sender_id=$1 AND lead_status IN ('new_lead','contacted','no_answer')
