@@ -156,3 +156,37 @@ test("4. a consultant's photo (no text) right after a bot reply is a consultant,
       { at: new Date("2099-05-10T08:01:00Z"), origin: source === "mobile" ? "staff_mobile" : "staff_web" }, source);
   }
 });
+
+/*
+ * 2026-10-31: consultant replies are also stored as history rows (role 'staff') so the admin
+ * inbox can tell AI from human. Only genuine consultant messages with a Meta id are captured —
+ * the id is the dedupe key across repeated thread reads.
+ */
+test("consultant messages in the thread are captured; the bot, automations and legacy are not", async () => {
+  const { staffMessagesInThread } = await import("../src/lib/staffTakeover");
+  const messages = [
+    page("2099-04-30T10:00:00Z", "web", "хуучин веб зурвас"), // before ids were recorded: legacy
+    msg("customer", "2099-05-10T08:00:00Z", "mobile", "Үнэ хэд вэ"),
+    page("2099-05-10T08:00:02Z", "web", "Bat replied to your automated welcome message.", "m_notice"),
+    page("2099-05-10T08:00:05Z", "web", "НОРВЕЛ ХОТЫН АЯЛАЛ — үнэ", "m_bot1"),
+    page("2099-05-10T08:12:00Z", "web", "Сайн байна уу, би аяллын зөвлөх байна", "m_staff1"),
+    page("2099-05-10T09:30:00Z", "mobile", "Дансны дугаар: …", "m_staff2"),
+  ];
+  const captured = staffMessagesInThread(messages, { ...recorded, botMids: new Set(["m_bot1"]) });
+  assert.deepEqual(captured, [
+    { mid: "m_staff1", text: "Сайн байна уу, би аяллын зөвлөх байна", at: new Date("2099-05-10T08:12:00Z"), origin: "staff_web" },
+    { mid: "m_staff2", text: "Дансны дугаар: …", at: new Date("2099-05-10T09:30:00Z"), origin: "staff_mobile" },
+  ]);
+});
+
+test("a consultant message without a Meta id is not captured (no dedupe key), and detectStaffTakeover carries the captured list", async () => {
+  const { staffMessagesInThread, detectStaffTakeover } = await import("../src/lib/staffTakeover");
+  const noId = [msg("customer", "2099-05-10T08:00:00Z", "mobile", "Сайн уу"), msg(PAGE, "2099-05-10T09:00:00Z", "mobile", "Би зөвлөх")];
+  assert.deepEqual(staffMessagesInThread(noId, recorded), []);
+  // A thread with no Page message at all: checked, nothing captured.
+  const check = await detectStaffTakeover({
+    lookup: { status: "ok", messages: [msg("customer", "2099-05-10T08:00:00Z", "mobile", "Сайн уу")] },
+    pageId: PAGE, senderId: "fixture-customer",
+  });
+  assert.deepEqual(check, { status: "checked", staff: null, staffMessages: [] });
+});

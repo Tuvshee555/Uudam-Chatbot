@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { focusKnowledgeBase, tripsNamedInRecentMessages } from "./aiTripContext";
 import { buildTemporalPromptContext } from "./travelDates";
-import { dbGetHistory, dbAppendMessage, type ChatAttachment, type HistoryRow } from "./travelDb";
+import { dbGetConversationRows, dbGetHistory, dbAppendMessage, type ChatAttachment, type ConversationRow, type HistoryRow } from "./travelDb";
 import { CHATBOT_REPLY_RULES } from "./chatbotReplyPolicy";
 import { noteInbound } from "./inboundTrace";
 
@@ -34,8 +34,9 @@ export function historyRowToChatMessage(row: HistoryRow): ChatMessage {
   return { role: row.role, text: row.text };
 }
 
-export async function getFullHistory(id: string): Promise<HistoryRow[]> {
-  return dbGetHistory(id);
+/** The admin inbox's view: every stored row, consultant ('staff') replies included. */
+export async function getFullHistory(id: string): Promise<ConversationRow[]> {
+  return dbGetConversationRows(id);
 }
 
 export async function appendMessage(

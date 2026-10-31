@@ -170,9 +170,27 @@ export async function fetchThreadMessages(input: {
   return { status: "ok", messages: messages as ThreadMessage[] };
 }
 
+/** A consultant message found in the thread, with the id and time Meta gave it. */
+export type StaffMessage = { mid: string; text: string; at: Date; origin: "staff_mobile" | "staff_web" };
+
 export type TakeoverCheck =
-  | { status: "checked"; staff: { at: Date; origin: "staff_mobile" | "staff_web" } | null }
+  | { status: "checked"; staff: { at: Date; origin: "staff_mobile" | "staff_web" } | null; staffMessages: StaffMessage[] }
   | { status: "unverified"; reason: "timeout" | "permission" | "api_error" | "incomplete" };
+
+/**
+ * Every consultant message in the thread, any age — stored as history (role 'staff') so the
+ * admin inbox can tell AI from human. Only messages with an id are returned: the id is the
+ * dedupe key across repeated thread reads. 'legacy' stays out — it may be the bot.
+ */
+export function staffMessagesInThread(messages: ThreadMessage[], context: ClassifyContext): StaffMessage[] {
+  const staff: StaffMessage[] = [];
+  for (const { message, at, origin } of classifyThread(messages, context)) {
+    if (origin !== "staff_mobile" && origin !== "staff_web") continue;
+    if (!message.id) continue;
+    staff.push({ mid: message.id, text: String(message.message ?? ""), at: new Date(at), origin });
+  }
+  return staff;
+}
 
 /** What the classification needs besides the thread: the bot's recorded ids and stored replies. */
 export async function takeoverContext(input: { messages: ThreadMessage[]; pageId: string; senderId: string }): Promise<ClassifyContext> {
@@ -195,9 +213,13 @@ export async function takeoverContext(input: { messages: ThreadMessage[]; pageId
 /** The thread, classified with the bot's recorded ids and stored replies. */
 export async function detectStaffTakeover(input: { lookup: ThreadLookup; pageId: string; senderId: string; now?: Date }): Promise<TakeoverCheck> {
   if (input.lookup.status !== "ok") return input.lookup;
-  if (!input.lookup.messages.some((message) => message.from?.id === input.pageId)) return { status: "checked", staff: null };
+  if (!input.lookup.messages.some((message) => message.from?.id === input.pageId)) return { status: "checked", staff: null, staffMessages: [] };
   const context = await takeoverContext({ messages: input.lookup.messages, pageId: input.pageId, senderId: input.senderId });
-  return { status: "checked", staff: latestStaffReply({ messages: input.lookup.messages, now: input.now, ...context }) };
+  return {
+    status: "checked",
+    staff: latestStaffReply({ messages: input.lookup.messages, now: input.now, ...context }),
+    staffMessages: staffMessagesInThread(input.lookup.messages, context),
+  };
 }
 
 /** Records when a consultant last replied, so a later failed lookup still knows staff are involved. */

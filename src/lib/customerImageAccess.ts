@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { getEnv } from "./env";
 import type { CustomerDocument } from "./customerDocuments";
-import type { HistoryRow } from "./travelSessionDb";
+import type { ConversationRow } from "./travelSessionDb";
 
 const LINK_TTL_SECONDS = 60 * 60;
 
@@ -105,7 +105,7 @@ const withoutFileCdnUrls = (text: string) => text.replace(URL_IN_TEXT, (url) => 
  * Meta CDN, Cloudinary or Blob URL never reaches the browser. Only the bot's links to this
  * app's own public trip PDFs (/api/poster-pdf) are kept as they are.
  */
-export function adminConversationMessages(messages: HistoryRow[]): HistoryRow[] {
+export function adminConversationMessages(messages: ConversationRow[]): ConversationRow[] {
   return messages.map((message) => ({
     ...message,
     text: withoutFileCdnUrls(message.text ?? ""),

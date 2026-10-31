@@ -58,6 +58,7 @@ import { conversationLeadContext } from "../../lib/leadContext";
 import { withoutNegatedTrips } from "../../lib/negatedTrip";
 import { pickReferral, rememberAdReferral } from "../../lib/adReferral";
 import { AUTO_PAUSE_RESET_DAYS, dbAppendAdminMessage, dbClaimGoodbye, dbClaimQuickInfo, dbReleaseQuickInfo, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, isPagePaused, listTrips, } from "../../lib/travelOps";
+import { dbAppendStaffMessages } from "../../lib/travelDb";
 import { hasDepartureDateAvailabilityIntent, requestsDateWindow } from "../../lib/travelDates";
 import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply, } from "../../lib/travelFastPaths";
 import { buildHandoffReplyWithContact, claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
@@ -299,6 +300,12 @@ async function handleMessage(
     const lookup = (await staffThread) ?? { status: "unverified" as const, reason: "api_error" as const };
     const takeover: TakeoverCheck = await detectStaffTakeover({ lookup, pageId, senderId })
       .catch(() => ({ status: "unverified" as const, reason: "api_error" as const }));
+    // Consultant replies never reach this webhook (no echoes), so this thread read is the only
+    // place the bot sees them. Stored as role 'staff' for the admin inbox — AI and human replies
+    // stay tellable apart there; the model and routing never read 'staff' rows.
+    if (takeover.status === "checked" && takeover.staffMessages.length > 0) {
+      await dbAppendStaffMessages(senderId, takeover.staffMessages).catch(() => {});
+    }
     if (takeover.status === "checked" && takeover.staff) {
       const staffAt = takeover.staff.at;
       if (!attachmentReply) await appendMessage(senderId, "user", text);

@@ -135,7 +135,8 @@ export function BotTab({
   const [selectedSender, setSelectedSender] = useState<string | null>(null);
   type ChatAttachment = { type: "image" | "file"; url: string; caption?: string };
   type ChatHistoryMessage = {
-    role: "user" | "assistant";
+    // "staff": a consultant's own Messenger reply, read from the Page thread — a human, not AI.
+    role: "user" | "assistant" | "staff";
     text: string;
     attachments?: ChatAttachment[];
     created_at?: string;
@@ -383,29 +384,35 @@ export function BotTab({
                       "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border",
                       msg.role === "user"
                         ? "border-line bg-surface-sunken text-ink-muted"
-                        : "border-brand/30 bg-brand/10 text-brand",
+                        : msg.role === "staff"
+                          ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                          : "border-brand/30 bg-brand/10 text-brand",
                     )}
-                    title={msg.role === "user" ? "Хэрэглэгч" : "Бот"}
+                    title={msg.role === "user" ? "Хэрэглэгч" : msg.role === "staff" ? "Ажилтан (хүн)" : "AI бот"}
                   >
-                    {msg.role === "user" ? <Icons.user size={14} /> : <Icons.bot size={14} />}
+                    {msg.role === "assistant" ? <Icons.bot size={14} /> : <Icons.user size={14} />}
                   </div>
                   <div className="min-w-0 max-w-[85%] sm:max-w-[78%]">
-                    <p className={cx("mb-1.5 text-xs font-medium text-ink-muted", msg.role === "assistant" && "text-right")}>
-                      {msg.role === "user" ? "Хэрэглэгч" : "Бот"}
+                    <p className={cx("mb-1.5 text-xs font-medium", msg.role !== "user" && "text-right", msg.role === "staff" ? "text-emerald-700" : "text-ink-muted")}>
+                      {msg.role === "user" ? "Хэрэглэгч" : msg.role === "staff" ? "Ажилтан (хүн) 👤" : "AI бот 🤖"}
                     </p>
                     <div
                       className={cx(
                         "rounded-2xl px-4 py-3 text-sm leading-relaxed",
                         msg.role === "user"
                           ? "bg-surface-sunken text-ink"
-                          : "border border-brand-border bg-brand-soft/60 text-ink",
+                          : msg.role === "staff"
+                            ? "border border-emerald-200 bg-emerald-50 text-ink"
+                            : "border border-brand-border bg-brand-soft/60 text-ink",
                       )}
                     >
                       {msg.text ? (
                         <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.text}</p>
                       ) : (
                         <span className="opacity-75 italic">
-                          {msg.attachments?.some((att) => att.type === "file") ? "Файл" : "Зураг"}
+                          {msg.role === "staff"
+                            ? "Зураг/хавсралт — Мессенжер дээр харагдана"
+                            : msg.attachments?.some((att) => att.type === "file") ? "Файл" : "Зураг"}
                         </span>
                       )}
                       {msg.attachments && msg.attachments.length > 0 && (

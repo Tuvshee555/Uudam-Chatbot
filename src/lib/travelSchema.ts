@@ -338,10 +338,21 @@ export async function ensureTravelSchema() {
         ALTER TABLE travel_conversations
           ADD COLUMN IF NOT EXISTS attachments JSONB NOT NULL DEFAULT '[]'::jsonb;
       `);
+      // Migration: consultant replies read from the Page thread are stored as role 'staff' so
+      // the admin inbox can tell AI from human. The Meta message id keeps each one stored once
+      // across repeated thread reads; bot/model paths never read 'staff' rows (travelSessionDb).
+      await client.query(`
+        ALTER TABLE travel_conversations
+          ADD COLUMN IF NOT EXISTS mid TEXT;
+      `);
+      await client.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_travel_conversations_mid
+          ON travel_conversations (mid) WHERE mid IS NOT NULL;
+      `);
       // Admin's own Messenger replies (operator echoes), captured as a style
       // reference pool for the "Mimic Myself" tone toggle. Kept separate from
-      // travel_conversations — that table's role is hard-typed "user"|"assistant"
-      // and its rows feed turn-by-turn prompt history; this is a flat sample pool.
+      // travel_conversations — that table's rows feed turn-by-turn prompt history
+      // ('user'/'assistant') and the admin inbox ('staff'); this is a flat sample pool.
       await client.query(`
         CREATE TABLE IF NOT EXISTS travel_admin_messages (
           id BIGSERIAL PRIMARY KEY,

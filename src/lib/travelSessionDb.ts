@@ -12,6 +12,8 @@ import { queryNeon } from "./neonDb";
 import { ensureTravelSchema } from "./travelSchema";
 
 const MAX_HISTORY_ROWS = 50;
+// The admin inbox view also holds 'staff' rows, so it keeps more than the model's 50.
+const MAX_CONVERSATION_VIEW_ROWS = 200;
 const HISTORY_TTL_DAYS = 90;
 
 export type ChatAttachment = {
@@ -27,6 +29,14 @@ export type HistoryRow = {
   attachments: ChatAttachment[];
   created_at: string;
 };
+
+/**
+ * The admin inbox's view of one stored message. 'staff' rows are consultant replies captured
+ * from the Page thread (staffTakeover.ts) so a reviewer can tell AI from human; the model and
+ * every bot decision read only 'user'/'assistant' rows (dbGetHistory/dbGetHistorySince filter).
+ */
+export type ConversationRole = "user" | "assistant" | "staff";
+export type ConversationRow = Omit<HistoryRow, "role"> & { role: ConversationRole };
 
 export type CustomerMemoryRow = {
   sender_id: string;
@@ -49,6 +59,7 @@ export async function dbGetHistory(
   }>(
     `SELECT id, role, text, attachments, created_at FROM travel_conversations
      WHERE sender_id = $1
+       AND role IN ('user','assistant')
        AND created_at > NOW() - INTERVAL '${HISTORY_TTL_DAYS} days'
      ORDER BY id DESC
      LIMIT $2`,
@@ -81,6 +92,7 @@ export async function dbGetHistorySince(
   }>(
     `SELECT id, role, text, attachments, created_at FROM travel_conversations
      WHERE sender_id = $1
+       AND role IN ('user','assistant')
        AND id > $2
      ORDER BY id ASC
      LIMIT $3`,
@@ -94,6 +106,64 @@ export async function dbGetHistorySince(
     attachments: Array.isArray(r.attachments) ? (r.attachments as ChatAttachment[]) : [],
     created_at: r.created_at,
   }));
+}
+
+/**
+ * The whole stored conversation for the admin inbox, 'staff' rows included. Ordered by
+ * created_at (staff rows are back-dated to Meta's send time, so insertion order lies).
+ */
+export async function dbGetConversationRows(
+  senderId: string,
+): Promise<ConversationRow[]> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return [];
+  const result = await queryNeon<{
+    id: number;
+    role: string;
+    text: string;
+    attachments: unknown;
+    created_at: string;
+  }>(
+    `SELECT id, role, text, attachments, created_at FROM travel_conversations
+     WHERE sender_id = $1
+       AND created_at > NOW() - INTERVAL '${HISTORY_TTL_DAYS} days'
+     ORDER BY created_at DESC, id DESC
+     LIMIT $2`,
+    [senderId, MAX_CONVERSATION_VIEW_ROWS],
+  );
+  if (!result) return [];
+  return result.rows.reverse().map((r) => ({
+    id: Number(r.id),
+    role: (r.role === "staff" ? "staff" : r.role === "assistant" ? "assistant" : "user") as ConversationRole,
+    text: r.text,
+    attachments: Array.isArray(r.attachments) ? (r.attachments as ChatAttachment[]) : [],
+    created_at: r.created_at,
+  }));
+}
+
+export type StaffThreadMessage = { mid: string; text: string; at: Date };
+
+/**
+ * Consultant replies seen in the Page thread (staffTakeover.ts), stored as role 'staff' with
+ * Meta's message id and send time. The same thread is read on every inbound message, so the
+ * unique index on mid keeps each reply stored once. These rows feed only the admin inbox.
+ */
+export async function dbAppendStaffMessages(
+  senderId: string,
+  messages: StaffThreadMessage[],
+): Promise<void> {
+  if (messages.length === 0) return;
+  const ready = await ensureTravelSchema();
+  if (!ready) return;
+  for (const message of messages.slice(0, 50)) {
+    if (!message.mid || Number.isNaN(message.at.getTime())) continue;
+    await queryNeon(
+      `INSERT INTO travel_conversations (sender_id, role, text, attachments, created_at, mid)
+       VALUES ($1, 'staff', $2, '[]'::jsonb, $3, $4)
+       ON CONFLICT (mid) WHERE mid IS NOT NULL DO NOTHING`,
+      [senderId, message.text, message.at.toISOString(), message.mid],
+    );
+  }
 }
 
 export async function dbAppendMessage(
