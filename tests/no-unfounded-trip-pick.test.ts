@@ -33,6 +33,17 @@ test("a date or an everyday word does not pick a trip that only shares a number 
   assert.equal(findBestTripMatch("Тармиз аялал үнэ", CATALOG).best?.id, "tar");
 });
 
+// 2026-10-31: once a trip named "...ХАЛУУН РАШААН..." went live, "Haluun gazar baih" (is there
+// somewhere warm?) picked it on the single word "халуун". Warm is a guess, not that trip.
+test("'халуун' (hot/warm) alone does not pick a hot-spring trip; its own name still does", () => {
+  const catalog = [...CATALOG, trip("spring", "ВЭЛМОР ХАЛУУН РАШААН ЛУМИА ХОТ-ШИНЖИЛГЭЭТЭЙ АЯЛАЛ")];
+  for (const text of ["Haluun gazar baih", "Халуун газар явмаар байна", "халуун уу"]) {
+    assert.equal(resolveTripFromUserMessage(text, catalog).status, "not_found", text);
+  }
+  assert.equal(resolveTripFromUserMessage("Вэлмор халуун рашаан аялал", catalog).trip?.id, "spring");
+  assert.equal(findBestTripMatch("халуун рашаантай аялал", catalog).best?.id, "spring");
+});
+
 test("a message made only of describing words is not one trip, even when an alias contains it", () => {
   const catalog = [
     trip("peak", "Лумиа - Гортал аялал", { aliases: ["Лумиа - Гортал уулын аялал"] }),
