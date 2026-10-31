@@ -250,7 +250,9 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   const id = prior?.id || randomUUID();
   const slug = prior?.slug || `trip-${createHash("sha256").update(source.id).digest("hex").slice(0, 20)}`;
   const d = duration(source.duration_text);
-  const photos = [...new Set([...posterPhotos(poster), ...source.photo_urls])];
+  // Only photos the website can draw: a source photo that could not be copied to
+  // Cloudinary would be a broken image on every page showing the trip.
+  const photos = [...new Set([...posterPhotos(poster), ...source.photo_urls])].filter(isSitePhotoHost);
   const previousSnapshot = record(record(prior?.sourceMetadata).connectedSource);
   const now = new Date();
   const previousSource = previousSnapshot.id ? { ...previousSnapshot, extra: record(previousSnapshot.extra), photo_urls: strings(previousSnapshot.photo_urls), departure_dates: strings(previousSnapshot.departure_dates) } as unknown as TravelTrip : null;
@@ -397,7 +399,7 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
       if (prior && previousDay && sameParityValue(previousDay, day)) continue;
       const meals = record(day.meals);
       const dayFields = { title: String(day.route || `${number}-р өдөр`), description: day.summary || null, accommodation: day.hotel || null,
-        meals: [meals.breakfast ? "Өглөө" : "", meals.lunch ? "Өдөр" : "", meals.dinner ? "Орой" : ""].filter(Boolean), image: day.photo || null };
+        meals: [meals.breakfast ? "Өглөө" : "", meals.lunch ? "Өдөр" : "", meals.dinner ? "Орой" : ""].filter(Boolean), image: typeof day.photo === "string" && isSitePhotoHost(day.photo) ? day.photo : null };
       const oldDay = oldDays.find((entry) => entry.dayNumber === number);
       if (oldDay) {
         const oldMeals = record(previousDay?.meals);

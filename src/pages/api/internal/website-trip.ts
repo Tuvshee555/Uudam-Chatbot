@@ -9,7 +9,8 @@ import {
   WebsiteTripPayloadError, sameConflict, validateWebsiteTripPayload, websiteTripPatchReport, websiteTripSourceId,
   websiteTripToCanonicalFields, withBaseFreeFareRule, type SharedConflict,
 } from "@/lib/websiteTripBridge";
-import { withWebsiteDepartureAvailability } from "@/lib/websiteTripSync";
+import { flushWebsiteSync, withWebsiteDepartureAvailability } from "@/lib/websiteTripSync";
+import { waitUntil } from "@vercel/functions";
 import { TripDataValidationError } from "@/lib/tripDataValidation";
 
 type Row = Record<string, unknown>;
@@ -37,7 +38,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   let sourceTripId = "";
   try {
-    if (!req.body || typeof req.body !== "object" || Array.isArray(req.body) || (req.body.action !== undefined && !["delete", "resolve_conflict"].includes(req.body.action))) {
+    if (!req.body || typeof req.body !== "object" || Array.isArray(req.body) || (req.body.action !== undefined && !["delete", "resolve_conflict", "flush"].includes(req.body.action))) {
       return res.status(400).json({ error: "invalid_trip_sync_payload" });
     }
     if (req.body?.action === "delete") {
@@ -47,6 +48,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(deleted ? 200 : 404).json({ ok: deleted });
     }
     if (req.body.action === "resolve_conflict") return await resolveConflict(req, res);
+    // The website's retry sweep nudges this side's durable outbox too, so a
+    // chatbot edit whose projection failed is retried behind ordinary traffic
+    // instead of waiting for the daily cron (Vercel Hobby).
+    if (req.body.action === "flush") {
+      const work = flushWebsiteSync(undefined, 10).then(() => undefined, (error) => {
+        logError("website_trip_sync.flush_failed", { message: error instanceof Error ? error.message.slice(0, 300) : String(error) });
+      });
+      try { waitUntil(work); } catch { void work; }
+      return res.status(202).json({ ok: true });
+    }
 
     validateWebsiteTripPayload(req.body.trip);
     sourceTripId = websiteTripSourceId(req.body.trip);
