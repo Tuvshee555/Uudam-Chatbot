@@ -65,7 +65,8 @@ export function LeadsDashboard({ stats, attention }: { stats: LeadStats; attenti
         ))}
       </div>
 
-      <Card className="p-3.5">
+      {/* Phones go straight from the numbers to the list; the chart and channels are for desktop. */}
+      <Card className="hidden p-3.5 sm:block">
         <p className="mb-3 text-sm font-medium text-ink">
           Сүүлийн 7 хоногийн хүсэлт
         </p>
@@ -108,7 +109,7 @@ export function LeadsDashboard({ stats, attention }: { stats: LeadStats; attenti
       </Card>
 
       {stats.by_platform.length > 0 && (
-        <Card className="p-3.5">
+        <Card className="hidden p-3.5 sm:block">
           <p className="mb-2 text-sm font-medium text-ink">Сувгаар</p>
           <div className="flex flex-wrap gap-2">
             {stats.by_platform.map((p) => (
