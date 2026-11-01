@@ -4,6 +4,7 @@ import { DateSeatsEditor } from "./DateSeatsEditor";
 import { WebsiteTripFields, TripTextComparison } from "./WebsiteTripFields";
 import { Button, DatePicker, Icons, Input, Modal, Select, Spinner, Switch, Textarea, cx } from "@/components/ui";
 import { AmountInput, ChipsEditor, DurationField, EditorSection, FieldLabel, ListEditor, SaleBadgeFields, SeatsFields, displayDate, fieldCls } from "./TripEditorParts";
+import { TripDescriptionEditor } from "./TripDescriptionEditor";
 import { getPosterBrochureHref } from "@/lib/poster/pdfUrl";
 import { blockingGaps, documentedFreeFare, findTripGaps, type TripGap } from "@/lib/tripCompleteness";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
@@ -859,13 +860,11 @@ export function TripEditModal({
             </div>
           </EditorSection>
 
-          <EditorSection title="Аяллын тайлбар" hint="Вэбсайтын аяллын хуудсанд тайлбар болж харагдана. Бүтэн өгүүлбэрээр бичнэ.">
-            <Textarea
-              aria-label="Аяллын тайлбар"
-              rows={6}
-              className="[field-sizing:content] min-h-36"
-              value={tripDraft.notes}
-              onChange={(e) => setTripDraft((p) => ({ ...p, notes: e.target.value }))}
+          <EditorSection title="Аяллын тайлбар" hint="Вэбсайтын аяллын хуудсанд тайлбар болж харагдана. Бүтэн өгүүлбэрээр бичнэ. Шинжилгээтэй аялалд шинжилгээний жагсаалт вэбсайтын адил бүлгээрээ доор харагдана.">
+            <TripDescriptionEditor
+              key={editingTrip?.id ?? "new-trip"}
+              value={tripDraft.notes || ""}
+              onChange={(text) => setTripDraft((p) => ({ ...p, notes: text }))}
             />
           </EditorSection>
 
