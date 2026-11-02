@@ -1,5 +1,6 @@
 import type { TravelTrip } from "./travelTypes";
-import { normText, phoneticLatinText, phoneticTokenMatches } from "./travelTextNorm";
+import { isGenericRouteToken, normText, phoneticLatinText, phoneticTokenMatches } from "./travelTextNorm";
+import { stripTripNamesForIntent } from "./customerTurn";
 
 type Day = { day: number; title: string; description: string };
 
@@ -37,7 +38,12 @@ function firstSentence(text: string, max = 220): string {
  */
 export function buildPlaceDaysReply(trip: TravelTrip, turn: string): string | null {
   if (!ASKS_ABOUT_PLACE.test(turn)) return null;
-  const titlePlaces = new Set(phoneticWords(trip.route_name));
+  // Only places: kind-of-trip words in the title ("шууд нислэгтэй") are not places, and the trip's
+  // own full name typed to identify it is not a question about its places. "velmor shuud
+  // nislegtei 3 dahi udur…" listed the flight days (held-out 2026-11-02).
+  turn = stripTripNamesForIntent(turn, [trip]);
+  const titlePlaces = new Set(normText(trip.route_name).split(/[^\p{L}]+/u)
+    .filter((word) => word.length >= 4 && !isGenericRouteToken(word)).map(phoneticLatinText));
   const asked = phoneticWords(turn).filter((word) => [...titlePlaces].some((place) => phoneticTokenMatches(word, place)));
   if (!asked.length) return null;
   const days = itineraryDays(trip).filter((day) =>

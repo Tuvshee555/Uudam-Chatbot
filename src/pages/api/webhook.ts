@@ -45,6 +45,9 @@ import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { ACKNOWLEDGEMENT_REPLY, DEFERRAL_REPLY, isAcknowledgementOnly, isDeferralOnly } from "../../lib/acknowledgements";
 import { replyModel } from "../../lib/modelConfig";
+
+// A Messenger message holds 2,000 characters; 1,000 tokens is longer than any reply the rules allow.
+const REPLY_MAX_OUTPUT_TOKENS = 1_000;
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { buildContactReply, contactSettingsOf, isAddressRequest, isPhoneRequest, isRepeatOfLastReply } from "../../lib/contactReplies";
@@ -1943,6 +1946,8 @@ async function handleMessageTurn(
       systemInstruction: promptParts.system,
       openaiModel: replyModel(),
       preferOpenAI: true,
+      // Replies average a few dozen tokens; the cap only stops a runaway generation's cost.
+      maxOutputTokens: REPLY_MAX_OUTPUT_TOKENS,
     });
     aiReply = result.text;
   } catch (error) {
@@ -1958,6 +1963,7 @@ async function handleMessageTurn(
         correlationId: trace?.correlationId,
         model: replyModel(),
         systemText: promptParts.system,
+        maxOutputTokens: REPLY_MAX_OUTPUT_TOKENS,
       });
       fallbackText = fallback?.text?.trim() || "";
       if (!fallbackText) fallbackError = "retry returned no text";

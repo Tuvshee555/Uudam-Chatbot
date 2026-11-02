@@ -640,10 +640,17 @@ export function hasBudgetIntent(text: string): boolean {
 }
 
 function extractBudgetLimit(text: string): number | null {
-  const normalized = normText(text);
-  const million = /(\d+(?:[.,]\d+)?)\s*сая/.exec(normalized);
+  // Read from the customer's own text: normText turns "1.5" into "1 5", and "1.5 сая" became
+  // a 5-million ceiling that listed trips above the customer's budget (found 2026-11-02).
+  const million = /(\d+(?:[.,]\d+)?)\s*(?:сая|saya|say)(?!\p{L})|(\d+(?:[.,]\d+)?)\s*(?:сая|saya)\p{L}*/iu.exec(text.toLowerCase());
   if (million) {
-    const value = Number(million[1].replace(",", "."));
+    const value = Number((million[1] || million[2]).replace(",", "."));
+    if (Number.isFinite(value) && value > 0) return Math.round(value * 1_000_000);
+  }
+  const normalized = normText(text);
+  const millionNormalized = /(\d+(?:[.,]\d+)?)\s*сая/.exec(normalized);
+  if (millionNormalized) {
+    const value = Number(millionNormalized[1].replace(",", "."));
     if (Number.isFinite(value) && value > 0) return Math.round(value * 1_000_000);
   }
   const numeric = /(\d[\d\s,.]{4,})\s*(?:₮|mnt|төгрөг)/i.exec(text);
@@ -728,6 +735,17 @@ function lowestAdultFare(trip: TravelTrip): LowestAdultFare | null {
   return best;
 }
 
+/**
+ * The customer's own ceiling in words ("2 сая", "800 мянга"). Written as "2,000,000₮" it read as a
+ * fare no trip has, the exit check held the whole list back, and the customer heard nothing
+ * (held-out evaluation 2026-11-02).
+ */
+function budgetWords(limit: number | null): string {
+  if (!limit) return "";
+  if (limit >= 1_000_000) return `${Number((limit / 1_000_000).toFixed(2))} сая`;
+  return `${Math.round(limit / 1_000)} мянга`;
+}
+
 export function buildBudgetReply(
   text: string,
   trips: TravelTrip[],
@@ -773,7 +791,7 @@ export function buildBudgetReply(
 
   if (candidates.length === 0) {
     const directText = wantsDirect ? " шууд нислэгтэй" : "";
-    const budgetText = budgetLimit ? ` ${formatMoney(budgetLimit, "MNT")}-аас доош` : "";
+    const budgetText = budgetLimit ? ` ${budgetWords(budgetLimit)}-аас доош` : "";
     return `Одоогоор${budgetText}${directText} аялал тодорхой олдсонгүй. Аяллын зөвлөхөөр ойролцоо хувилбар шалгуулъя.`;
   }
 
@@ -781,7 +799,7 @@ export function buildBudgetReply(
     ? (wantsDirect ? "Хамгийн хямд шууд нислэгтэй аяллууд:" : "Хамгийн хямд аяллууд:")
     : wantsPriciest
       ? (wantsDirect ? "Хамгийн үнэтэй шууд нислэгтэй аяллууд:" : "Хамгийн үнэтэй аяллууд:")
-      : `${formatMoney(budgetLimit, "MNT")}-аас доош үнэтэй аяллууд:`;
+      : `${budgetWords(budgetLimit)}-аас доош үнэтэй аяллууд:`;
   const lines = [title];
   for (const { trip, fare } of candidates) {
     const parts = [`• ${trip.route_name}`];
@@ -797,9 +815,14 @@ export function buildBudgetReply(
     if (childText) parts.push(`хүүхэд ${childText}`);
     // Show only the departures the quoted fare covers. Listing every date beside
     // a cheaper tier's price under-quotes the dates that sell at the higher one.
-    const departures = fare.groupDates || trip.departure_dates;
+    // The dates the canonical offer resolver sells at exactly this fare. A base fare that only
+    // one per-date price row charges was listed with every departure; the exit check then held
+    // the whole list back as an under-quote and the customer heard nothing (held-out evaluation
+    // 2026-11-02). Weekly schedules have no dated offer and keep their own text.
+    const atFare = tripsAtPrice([trip], fare.price, now)[0]?.dates || [];
+    const departures = atFare.length ? atFare.map((date) => shortDate(date, now)) : fare.groupDates || trip.departure_dates;
     if (departures.length > 0) {
-      parts.push(`гарах: ${formatCompactDepartureList(departures)}`);
+      parts.push(`гарах: ${atFare.length ? departures.join(", ") : formatCompactDepartureList(departures)}`);
     }
     lines.push(parts.join(" — "));
   }

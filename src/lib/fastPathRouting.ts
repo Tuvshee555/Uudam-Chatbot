@@ -48,6 +48,7 @@ import { websiteTripLinksInText } from "./bookingWebsite";
 import { upcomingDepartures } from "./tripFareBlock";
 import { tripFromRecentMenu, tripMenuQuestionIndex } from "./tripMenuChoice";
 import { departureAvailability, departureIsClosed } from "./departureAvailability";
+import { normalizeTripOffers } from "./tripOffers";
 import { isGenericRouteToken } from "./travelTextNorm";
 
 /**
@@ -63,7 +64,10 @@ function hasClosedListedDeparture(trip: TravelTrip, dates: string[]): boolean {
 // Filler around a pick from the offered list: "шууд нислэгтэй нь", "газрын аялал нь", "тэр нэгийг".
 const PICK_FILLER = new Set(["нь", "ni", "тэр", "ter", "энэ", "ene", "нэг", "neg", "нэгийг", "negiig", "гэдэг", "gedeg", "гэсэн", "gesen",
   "сонирхож", "sonirhoj", "байна", "baina", "бна", "bna", "бн", "bn", "явъя", "явья", "yavya", "yavii", "авъя", "avya", "avii",
-  "болно", "bolno", "за", "za", "тийм", "tiim", "юм", "yum", "дээр", "deer", "аялал", "aylal", "ayalal", "хувилбар", "huvilbar"]);
+  "болно", "bolno", "за", "za", "тийм", "tiim", "юм", "yum", "дээр", "deer", "аялал", "aylal", "ayalal", "хувилбар", "huvilbar",
+  // "газраар явдаг нь", "gazraar yavdag ni" (held-out 2026-11-02).
+  "явдаг", "yavdag", "явах", "yavah", "гардаг", "gardag", "явдгийг", "yavdgiig",
+  "газраар", "gazraar", "нислэгээр", "nislegeer", "автобусаар", "avtobusaar", "онгоцоор", "ongotsoor"]);
 
 /**
  * "шууд нислэгтэй нь", "5 өдөр нь", "gazriin": the customer picks one of the offered trips by a
@@ -138,6 +142,26 @@ function addsNarrowing(text: string, candidates: TravelTrip[]): boolean {
 
 function looseNorm(value: string): string {
   return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+/**
+ * The one active trip that sells a hotel named in the message (two or more words, star rating
+ * ignored). Null when no hotel is named or the named hotels belong to several trips.
+ */
+export function tripByNamedHotel(text: string, trips: TravelTrip[], now = new Date()): TravelTrip | null {
+  const message = ` ${looseNorm(text)} `;
+  const key = (hotel: string) => looseNorm(hotel.replace(/\d\s*\*|\*|\d\s*(?:од\p{L}*|star\p{L}*)/giu, " "));
+  const owners = new Map<string, Set<string>>();
+  for (const trip of trips.filter((candidate) => candidate.status === "active")) {
+    const hotels = [trip.hotel, ...normalizeTripOffers(trip, now).map((offer) => offer.hotel)].filter((hotel): hotel is string => Boolean(hotel?.trim()));
+    for (const hotel of hotels) {
+      const name = key(hotel);
+      if (name.length < 6 || name.split(" ").length < 2) continue;
+      owners.set(name, (owners.get(name) || new Set()).add(trip.id));
+    }
+  }
+  const ids = new Set([...owners].filter(([name]) => message.includes(` ${name} `)).flatMap(([, owner]) => [...owner]));
+  return ids.size === 1 ? trips.find((trip) => ids.has(trip.id)) || null : null;
 }
 
 const NAME_WITH_EXTRA_WORDS = 4;
@@ -520,6 +544,18 @@ export async function routeFastPathText(input: {
     if (scoped.status === "verified") return chose(scoped.trip, undefined, true);
     const byAttribute = filterCandidatesByAttribute(text, pendingTrips);
     if (byAttribute.length === 1) return chose(byAttribute[0], undefined, true);
+    // "gazraar yavdag ni": the way of travel picks the one offered trip that travels that way.
+    const asksKind = queryWantsDirectFlight(text) || queryWantsLandFlightCombo(text) || queryWantsLandOnlyEnhanced(text);
+    const byTransport = asksKind ? filterTripsByTransportIntent(text, pendingTrips) : [];
+    if (byTransport.length === 1) return chose(byTransport[0], undefined, true);
+  }
+
+  // A catalogue hotel the customer names ("Velmor Plaza wifi bga yu") belongs to one trip: that is
+  // the trip asked about. The destination word inside the hotel name used to bring the whole
+  // destination's list, and the wifi question was never handed to staff (held-out 2026-11-02).
+  if (!pendingTrips.length && !choice && !tappedOwnButton) {
+    const byHotel = tripByNamedHotel(text, trips, now);
+    if (byHotel) return chose(byHotel);
   }
 
   // The customer typed (or tapped) one trip's full name, with at most a few words around it and
@@ -761,7 +797,8 @@ export async function routeFastPathText(input: {
   const followupRequest = previousSelection ? buildTripRequest(text, trips, undefined, now) : null;
   const passengerWords = text.toLowerCase().replace(/[^\p{L}]+/gu, " ").trim().split(/\s+/);
   const onlyPassengerQuestion = Boolean(followupRequest?.passengers.length) && passengerWords.every((word) =>
-    /^(?:том|хүн|хүүхэд|хүүхдүүд|нярай|настай|сартай|нийт|үнэ|хэд|хэдэн|төгрөг|вэ|ве|бид|явбал|байна|бна|бол|нэг|tom|hun|huuhed|nyarai|nastai|nas|niit|une|hed|heden|ve|adult|adults|child|children|infant|infants|years?|months?|old|total|price|how|much|for|and|with)$/iu.test(word));
+    // "одоо 3 том хүн болсон" (now three adults): a change to the party (held-out 2026-11-02).
+    /^(?:том|хүн|хүүхэд|хүүхдүүд|нярай|настай|сартай|нийт|үнэ|хэд|хэдэн|төгрөг|вэ|ве|бид|явбал|байна|бна|бол|нэг|одоо|болсон|болчихсон|болно|нэмэгдсэн|нэмэгдлээ|хасагдсан|tom|hun|huuhed|nyarai|nastai|nas|niit|une|hed|heden|ve|odoo|bolson|bolno|nemegdsen|hasagdsan|adult|adults|child|children|infant|infants|years?|months?|old|total|price|how|much|for|and|with|now)$/iu.test(word));
   if (previousSelection && direct.status === "not_found" && !isKnownGreetingPhrase(text)
     && (tappedOwnButton || Boolean(followupRequest?.hotel) || onlyPassengerQuestion
       || (isLikelyContextDependentText(text) && Boolean(followupRequest?.topics.length)))) {

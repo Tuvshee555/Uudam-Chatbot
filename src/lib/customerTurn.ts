@@ -18,6 +18,7 @@
 
 import type { TravelTrip } from "./travelTypes";
 import { websiteTripLinksInText } from "./bookingWebsite";
+import { phoneticLatinText } from "./travelTextNorm";
 
 /** U+2029 PARAGRAPH SEPARATOR — never typed by customers; whitespace to every matcher. */
 export const CUSTOMER_TURN_MARK = " ";
@@ -72,6 +73,27 @@ function tripNamePattern(name: string): RegExp | null {
   return pattern;
 }
 
+/**
+ * A trip name typed in Latin letters ("velmor shuud nislegtei 3 dahi udur…") is removed like the
+ * Cyrillic one: its words compared in one phonetic spelling. Left in, "nislegtei" read as a
+ * flight question and the whole reply was "Шууд нислэгтэй аялал." (held-out 2026-11-02).
+ * Names of one word are never removed this way.
+ */
+function stripLatinTripNames(line: string, names: string[]): string {
+  if (!/[a-z]/i.test(line)) return line;
+  const tokens = line.split(/\s+/).filter(Boolean);
+  const phonetic = tokens.map((token) => phoneticLatinText(token));
+  const drop = tokens.map(() => false);
+  for (const name of names) {
+    const target = phoneticLatinText(name).split(/\s+/).filter(Boolean);
+    if (target.length < 2) continue;
+    for (let start = 0; start + target.length <= tokens.length; start += 1) {
+      if (target.every((word, offset) => phonetic[start + offset] === word)) for (let offset = 0; offset < target.length; offset += 1) drop[start + offset] = true;
+    }
+  }
+  return drop.some(Boolean) ? tokens.filter((_, index) => !drop[index]).join(" ") : line;
+}
+
 /** "2. <first letters of a trip name>…" — one of our numbered trip buttons, possibly truncated. */
 const NUMBERED_BUTTON_LINE = /^\s*\d{1,2}\s*[.)]\s*(.+?)\s*(?:\.\.\.|…)?\s*$/u;
 
@@ -104,7 +126,7 @@ export function stripTripNamesForIntent(text: string, trips: TravelTrip[]): stri
         const pattern = tripNamePattern(name);
         if (pattern) stripped = stripped.replace(pattern, " ");
       }
-      return stripped.replace(/[ \t]{2,}/g, " ").trim();
+      return stripLatinTripNames(stripped, names).replace(/[ \t]{2,}/g, " ").trim();
     })
     .join("\n")
     .trim();

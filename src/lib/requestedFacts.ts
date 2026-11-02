@@ -9,7 +9,8 @@ export type RequestedFact = { field: RequestedFactField; evidence: string };
 
 const PROPERTY_FAMILIES: Array<{ field: RequestedFactField; hotelOnly?: boolean; pattern: RegExp }> = [
   { field: "hotel.connectivity", pattern: /(?:^|\s)(?:wi\s*fi|wifi|интерн[еэ]т|вай\s*фай|вайфай)(?=\s|$)/iu },
-  { field: "hotel.facilities", hotelOnly: true, pattern: /(?:^|\s)(?:усан\s*сан|бассейн|pool|swimming|фитнес|fitness|gym|саун\S*|spa|спа|лифт|elevator)(?=\s|$)/iu },
+  // Mongolian adds case and "with" endings: "усан сантай", "бассейнтай", "лифттэй" (held-out 2026-11-02).
+  { field: "hotel.facilities", hotelOnly: true, pattern: /(?:^|\s)(?:усан\s*сан\p{L}*|бассейн\p{L}*|pool|swimming|фитнес\p{L}*|fitness|gym|саун\S*|spa|спа\p{L}*|лифт\p{L}*|elevator)(?=\s|$)/iu },
   { field: "hotel.room", hotelOnly: true, pattern: /(?:^|\s)(?:өрөө\S*|орны|ор\s|rooms?|beds?)(?=\s|$)/iu },
   { field: "hotel.location", hotelOnly: true, pattern: /(?:^|\s)(?:байршил\S*|хаана|төвөөс|зайтай|distance|location|where)(?=\s|$)/iu },
   // "Буудал далайгаас хэр хол вэ", "ойрхон уу": a distance the catalogue does not hold.

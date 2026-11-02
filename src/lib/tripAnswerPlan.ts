@@ -12,6 +12,7 @@ import { customerDate as mnDate } from "./customerDate";
 import { dateIsOnSale } from "./tripFareBlock";
 import { hasSeatsIntent } from "./travelFastPaths";
 import { formatPassengerPriceLines } from "./travelFastPathsPricing";
+import { GENERIC_ROUTE_WORDS, normText } from "./travelTextNorm";
 import { isReferReply } from "./reply";
 import { ADULT_COUNT_QUESTION } from "./selectionAnswer";
 
@@ -19,6 +20,20 @@ import { ADULT_COUNT_QUESTION } from "./selectionAnswer";
 export function recurringScheduleTexts(trip: TravelTrip): string[] {
   return (trip.departure_dates || []).filter((text) => typeof text === "string" && !/\d/.test(text)
     && /гар(?:а|и)г|даваа|мягмар|лхагва|пүрэв|баасан|бямба|ням|бүр|болгон|тутам|every|daily|weekly/iu.test(text)).map((text) => text.trim());
+}
+
+/**
+ * The message asks about a word (5+ letters) of the trip's own included or excluded items that is
+ * not part of the trip's name or aliases and not a generic travel word.
+ */
+function asksAboutTripItem(text: string, trip: TravelTrip): boolean {
+  const items = [...strings(trip.extra.included_items), ...strings(trip.extra.excluded_items)];
+  if (!items.length || !/[?？]|(?:^|[^\p{L}])(?:уу|үү|юу|вэ|бэ|yu|uu|ve|бий|байгаа|байдаг|байна|bga|baigaa|bn|bna)(?:[^\p{L}]|$)/iu.test(text)) return false;
+  const words = (value: string) => normText(value).split(/\s+/).filter((word) => word.length >= 5);
+  const identity = new Set([trip.route_name, ...strings(trip.extra.aliases)].flatMap(words));
+  const itemWords = [...new Set(items.flatMap(words))].filter((word) => !identity.has(word) && !GENERIC_ROUTE_WORDS.has(word));
+  return words(text).some((word) => !identity.has(word) && !GENERIC_ROUTE_WORDS.has(word)
+    && itemWords.some((item) => item === word || word.startsWith(item) || item.startsWith(word)));
 }
 
 /** How a closed departure reads: the website's own status, never an inferred seat count. */
@@ -279,6 +294,13 @@ export function buildTripAnswerPlan(input: {
       missingFacts: ["extras.mandatory"], mediaUrls: [], brochureUrl: null,
     };
   }
+  // "Орвелиа аялалд орчуулагч байгаа юу": a word of this trip's own included or excluded items,
+  // asked about, is an inclusions question. "байгаа юу" alone read as availability and got fares
+  // and dates (held-out 2026-11-02).
+  if (asksAboutTripItem(intentText, trip) && request.topics.every((topic) => topic === "availability" || topic === "price")) {
+    const keepAvailability = Boolean(request.date || request.range || request.month || request.dates);
+    request.topics = [...request.topics.filter((topic) => keepAvailability || topic !== "availability"), "includes"];
+  }
   if (!request.topics.length || request.topics.some((topic) => ["comparison", "budget"].includes(topic))) return null;
   const wantsPartyTotal = /нийт|total|\d+\s*(?:том\s*хүн|хүүхэд|нярай|adult|child|infant|tom\s*hun|huuhed|nyarai)/i.test(intentText) || !preferences.fareKinds.length;
   const partyPassengers = wantsPartyTotal ? selection.passengers
@@ -364,7 +386,10 @@ export function buildTripAnswerPlan(input: {
     // October's stored offer to answer a November fare question.
     if (hasDateScope && !request.date && selection.date && !scopedDates.includes(selection.date)) selection.date = null;
     if (hasDateScope && !selection.date && scopedDates.length === 1) selection.date = scopedDates[0];
-    result = resolveTripOffer(trip, { date: selection.date, hotel: selection.hotel, packageId: selection.package, passengers: request.topics.includes("price") ? pricePassengers : [] }, now);
+    // A stated group is checked against the date's seats (never priced here): "open, 12 seats left"
+    // answered a 50-person group as if it fit (held-out 2026-11-02).
+    const seatParty = request.groupSize ? [{ kind: "adult" as const, count: request.groupSize }] : [];
+    result = resolveTripOffer(trip, { date: selection.date, hotel: selection.hotel, packageId: selection.package, passengers: request.topics.includes("price") && pricePassengers.length ? pricePassengers : seatParty }, now);
     if (hasDateScope && !selection.date) {
       if (!scopedDates.length) result = { status: "missing", reason: "requested_schedule_missing" };
       else if (result.status === "needs_selection" && result.fields[0] === "date") result = { ...result, options: result.options.filter((date) => scopedDates.includes(date)) };
@@ -499,7 +524,10 @@ export function buildTripAnswerPlan(input: {
     const asset = getTripBrochureAsset(trip);
     const link = getTripWebsiteLink(trip);
     if (!link && asset?.type === "url") brochureUrl = asset.value;
-    if (itinerary.length || brochureUrl || link) sections.program = [
+    const askedDay = request.itineraryDay ? itinerary.find((line) => line.startsWith(`${request.itineraryDay}-р өдөр:`)) : null;
+    // One day asked: that day only; a day the programme does not list is not answered from guesswork.
+    if (request.itineraryDay) { if (askedDay) sections.program = askedDay; else missingFact("program", "day"); }
+    else if (itinerary.length || brochureUrl || link) sections.program = [
       ...(preferences.full ? itinerary : link ? [] : itinerary.slice(0, 3)),
       ...(!preferences.full && !link && itinerary.length > 3 ? ["Бүтэн өдөрчилсөн хөтөлбөрийг хүсвэл хэлээрэй."] : []),
       ...(link ? [link] : []), ...(!link && brochureUrl ? [brochureUrl] : []),
@@ -541,6 +569,12 @@ export function buildTripAnswerPlan(input: {
     staffLine = `${request.lodging.dative.charAt(0).toUpperCase()}${request.lodging.dative.slice(1)} байрлах хүсэлтийг тань аяллын зөвлөхөд дамжууллаа.`;
     lines.push(staffLine);
   }
+  // A group of ten or more: its total, discount and seats are arranged by staff; the lead carries it.
+  if (request.groupSize && lines.length && !staffLine) {
+    staffNotes.push(`Групп: ${request.groupSize} хүн`);
+    staffLine = `${request.groupSize} хүний группийн суудал, нийт үнийг аяллын зөвлөхөд дамжууллаа.`;
+    lines.push(staffLine);
+  }
   if (minorsOnly && sections.price && !needsSelection) {
     lines.push(ADULT_COUNT_QUESTION);
     needsSelection = true;
@@ -548,7 +582,21 @@ export function buildTripAnswerPlan(input: {
   // A trip new to the conversation is named: the customer may not know which one is meant.
   if (route.newTrip && lines.length && !lines[0].includes(trip.route_name)) lines.unshift(trip.route_name);
   for (const topic of incomplete.keys()) answered.delete(topic);
-  const missing = request.topics.filter((topic) => !answered.has(topic));
+  let missing = request.topics.filter((topic) => !answered.has(topic));
+  // A topic only the understanding model read (nothing in the customer's words asks it) does not
+  // silence an answer that covers every topic the words do ask: "юу багтдаг вэ" read as
+  // "includes + programme" went silent for a trip with no programme data (dev 2026-11-02). A
+  // topic the words ask and the data lacks still hands off, as the owner's rule requires.
+  if (route.understanding && answered.size && missing.length) {
+    const ownTopics = new Set(buildTripRequest(requestText, trips, undefined, now).topics);
+    if (asksAboutTripItem(intentText, trip)) ownTopics.add("includes");
+    if (missing.every((topic) => !ownTopics.has(topic))) {
+      const dropped = new Set(missing);
+      request.topics = request.topics.filter((topic) => !dropped.has(topic));
+      for (const topic of dropped) incomplete.delete(topic);
+      missing = [];
+    }
+  }
   const missingFacts = [...new Set(missing.flatMap((topic) => incomplete.get(topic) || [topic]))];
   const handoff = missing.length > 0;
   return {

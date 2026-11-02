@@ -144,13 +144,13 @@ test("model names come from the environment only when they are known chat models
   try {
     delete process.env.OPENAI_REPLY_MODEL; delete process.env.TRIP_UNDERSTANDING_MODEL;
     assert.equal(replyModel(), "gpt-4o");
-    assert.equal(understandingModelName(), "gpt-4.1");
+    assert.equal(understandingModelName(), "gpt-4.1-mini");
     process.env.OPENAI_REPLY_MODEL = "gpt-4.1-mini"; process.env.TRIP_UNDERSTANDING_MODEL = "gpt-4o-2024-08-06";
     assert.equal(replyModel(), "gpt-4.1-mini");
     assert.equal(understandingModelName(), "gpt-4o-2024-08-06");
     process.env.OPENAI_REPLY_MODEL = "gpt4o"; process.env.TRIP_UNDERSTANDING_MODEL = "made-up-model";
     assert.equal(replyModel(), "gpt-4o", "a typo falls back instead of failing every reply");
-    assert.equal(understandingModelName(), "gpt-4.1");
+    assert.equal(understandingModelName(), "gpt-4.1-mini");
     assert.equal(isKnownChatModel("gpt-4.1-nano"), true);
   } finally {
     if (saved.reply === undefined) delete process.env.OPENAI_REPLY_MODEL; else process.env.OPENAI_REPLY_MODEL = saved.reply;

@@ -15,6 +15,8 @@ export type ThreadScript =
 export type ModelOverride = Partial<{ tripId: string; place: string | null; date: string | null; hotel: string | null;
   passengers: Array<{ kind: "adult" | "child"; count: number; age?: number }>; topics: string[]; certainty: string; intent: string; finalReply: string;
   requestedFacts: Array<{ field: string; evidence: string }>;
+  /** The understanding call returns this text as is (malformed JSON, an empty reply). */
+  rawUnderstanding: string;
   /** The provider refuses every call (HTTP 429 insufficient_quota), as during the 2026-10-30 credit outage. */
   unavailable: boolean }>;
 
@@ -218,8 +220,9 @@ export async function conversationGateHarness(context: TestContext, options: {
           ...override };
         delete (response as Record<string, unknown>).tripId;
         delete (response as Record<string, unknown>).finalReply;
+        delete (response as Record<string, unknown>).rawUnderstanding;
         models.push({ user: prompt, response: override });
-        content = JSON.stringify(response);
+        content = override.rawUnderstanding ?? JSON.stringify(response);
       } else if (prompt.includes("maintain long-term memory")) content = "";
       else if (prompt.includes("Reply rules:")) { answerModels.push(prompt); content = override.finalReply || "REFER"; }
       return new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: "stop" }] }), { status: 200 });

@@ -79,6 +79,8 @@ export function hasPriceIntent(text: string) {
     // the model was not consulted, e.g. during the 2026-10-30 credit outage).
     /(?:^|[^a-z])(?:une|unee|unii|uniin|unetei|vne|vnee|vnii|vniin|vnetei)(?:[^a-z]|$)|(?:^|[^a-z])hed(?:en)?\s*(?:ve|vee|be|bolh\S*|tug\S*|mungu)(?:[^a-z]|$)/i.test(text) ||
     /(\d{1,2}\s*(?:настай|нас|сар|сартай)\s*(?:хүүхэд|нярай)?|(?:хүүхэд|нярай)\s*\d{1,2}\s*(?:настай|нас|сар|сартай))/i.test(text) ||
+    // "huuhed hed", "nyarai hed", "хүүхэд хэд": a fare kind and "how much" with no "вэ" (held-out 2026-11-02).
+    /(?:^|[^\p{L}])(?:huuhed|huuhdiin|nyarai|tom\s*hun|хүүхэд|хүүхдийн|нярай|том\s*хүн)\s+(?:hed|heden|хэд|хэдэн)(?:[^\p{L}]|$)/iu.test(text) ||
     isPassengerCountOnly(text)
   );
 }

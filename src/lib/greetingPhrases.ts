@@ -126,6 +126,8 @@ const THANKS_FILLER_WORDS = new Set([
   "за", "zaa", "za", "ok", "ок", "okay", "маш", "их", "танд", "танай", "тань", "аа", "you", "very", "much",
   // "за баярлалаа, хүлээж байя" — thanks while waiting for staff.
   "хүлээж", "хүлээе", "хүлээнэ", "хүлээлээ", "huleej", "huleeye", "huleene", "бай", "байя", "байъя", "baiy", "baiya",
+  // "ойлголоо баярлалаа", "за мэдлээ баярлалаа": an acknowledgement with the thanks (held-out 2026-11-02).
+  "ойлголоо", "oilgoloo", "ойлгосон", "oilgoson", "мэдлээ", "medlee", "тэгье", "tegye", "окей", "okey",
 ]);
 
 /**

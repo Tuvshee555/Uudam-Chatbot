@@ -22,10 +22,10 @@ export function replyPreferences(text: string) {
   if (/нярай|infant|nyarai/i.test(text)) fareKinds.push("infant");
   const terms = [
     ["deposit", /урьдчилгаа|deposit|uridchilgaa|urdchilgaa/i],
-    ["payment", /төлбөр|төлөх|payment|pay\b|tulbur/i],
+    ["payment", /төлбөр|төлөх|үлдэгд|payment|pay\b|tulbur|tuluh|uldegd/i],
     ["documents", /паспорт|бичиг\s*баримт|passport|document|pasport|bichig\s*barimt/i],
     ["visa", /виз|visa|(?:^|[^a-z])viz(?:[^a-z]|$)/i],
-    ["cancellation", /цуцл|буцаалт|cancel|refund|tsutsl|butsaalt/i],
+    ["cancellation", /цуца?л|буцаалт|cancel|refund|tsutsa?l|butsaalt/i],
   ] as const;
   const includes = [
     // Breakfast is "өглөөний цай" (morning tea): a food question must find it among the inclusions.

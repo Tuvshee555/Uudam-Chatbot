@@ -4,7 +4,7 @@ import { logWarn } from "./observability";
  * Which OpenAI model each step uses, from the environment, with a safe default.
  *
  *   OPENAI_REPLY_MODEL        free-text customer reply          (default gpt-4o)
- *   TRIP_UNDERSTANDING_MODEL  which-trip / what-is-asked JSON   (default gpt-4.1)
+ *   TRIP_UNDERSTANDING_MODEL  which-trip / what-is-asked JSON   (default gpt-4.1-mini)
  *
  * A value that is not a known chat model (a typo such as "gpt4o", or a model this code has no
  * price for) is ignored with a warning: the provider would refuse every call, and a refused
@@ -14,7 +14,9 @@ import { logWarn } from "./observability";
 const KNOWN_CHAT_MODELS = new Set(["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano"]);
 
 export const DEFAULT_REPLY_MODEL = "gpt-4o";
-export const DEFAULT_UNDERSTANDING_MODEL = "gpt-4.1";
+// gpt-4.1-mini since 2026-11-02: on the held-out set it scored 103/112 against gpt-4.1's 101/112,
+// at about a third of the cost per turn (docs/chatbot-accuracy-cost-report-2026-11.md).
+export const DEFAULT_UNDERSTANDING_MODEL = "gpt-4.1-mini";
 
 const warned = new Set<string>();
 

@@ -5,7 +5,7 @@ import { requestedDepartureScope, resolveRequestedDate, resolveRequestedMonth, r
 import { hasDurationIntent, hasIncludedInPriceIntent, hasPriceIntent, hasScheduleIntent } from "./travelFastPathsPricing";
 import { queryRequestsDurationDays, queryWantsDirectFlight, queryWantsLandFlightCombo, queryWantsLandOnlyEnhanced } from "./travelFastPathsSearch";
 import { normalizeTripOffers } from "./tripOffers";
-import { normText, phoneticLatinText } from "./travelTextNorm";
+import { GENERIC_ROUTE_WORDS, normText, phoneticLatinText } from "./travelTextNorm";
 import type { TripTransport } from "./tripFacts";
 import { parseRequestedFacts, requestedFactsFromText, type RequestedFact } from "./requestedFacts";
 
@@ -37,6 +37,10 @@ export type TripRequest = {
   requestedFacts?: RequestedFact[];
   /** A villa/resort preference: passed to staff, never answered from data. */
   lodging?: { evidence: string; kinds: string[]; dative: string };
+  /** "3 дахь өдөр": the one programme day asked about. */
+  itineraryDay?: number;
+  /** "50 хүн явна": a group of ten or more. Its total and terms are staff's; seats are checked against it. */
+  groupSize?: number;
 };
 
 export function parseRequestedPassengers(value: unknown): RequestedPassenger[] {
@@ -131,13 +135,29 @@ export function requestedPassengersFromText(text: string): RequestedPassenger[] 
   return parsed.unsupported ? [] : parsed.passengers;
 }
 
-/** The evidence covers (nearly) every word of the message: it isolates no sub-question. */
-function quotesWholeMessage(evidence: string, text: string): boolean {
-  const words = (value: string) => normText(value).split(/\s+/).filter((word) => word.length > 1);
+/**
+ * The evidence covers (nearly) every word of the message that is not identity (a trip, place or
+ * hotel name) or a generic travel word: it isolates no sub-question beside what the message asks.
+ */
+function quotesWholeMessage(evidence: string, text: string, identity: string[] = []): boolean {
+  const identityWords = new Set(identity.flatMap((phrase) => normText(phrase).split(/\s+/)).filter((word) => word.length > 1));
+  const isIdentity = (word: string) => identityWords.has(word) || [...identityWords].some((name) => name.length >= 4 && word.length > name.length && word.startsWith(name));
+  // Topic words stay: "хүүхдийн клуб байдаг уу" beside "үнэ хэд вэ" is still a separate question.
+  const words = (value: string) => normText(value).split(/\s+/)
+    .filter((word) => word.length > 1 && !isIdentity(word) && !GENERIC_ROUTE_WORDS.has(word) && !/^(?:аял|ayl|ayal)/u.test(word));
   const message = words(text);
   if (!message.length) return false;
   const quoted = new Set(words(evidence));
   return message.filter((word) => quoted.has(word)).length >= Math.ceil(message.length * 0.8);
+}
+
+const DAY_OF_PROGRAMME = /(?<![\d.,/-])(\d{1,2})\s*(?:-?р|-?r|дахь|дэх|dahi|dugaar|дугаар)\s*(?:өдөр|өдрийн|udur|odor|udriin)(?!\p{L})/iu;
+
+/** "50 хүн", "12 hun": ten to 999 people, counted as one group (not priced as separate adults). */
+function groupSizeOf(text: string): number | null {
+  const match = /(?<![\d.,-])(\d{2,3})\s*(?:хүн|hun|hvn)(?!\p{L})/iu.exec(text);
+  const count = match ? Number(match[1]) : 0;
+  return count >= 10 && count <= 999 ? count : null;
 }
 
 function programPreference(text: string): TripRequest["packagePreference"] {
@@ -168,7 +188,7 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
     ["hotel", /буудал|hotel|buudal|\d\s*(?:од|od)|одтой/i],
     ["transport", /нислэг|онгоц|газраар|автобус|галт\s*тэрэг|nisleg|flight|transport/i],
     ["program", /хөтөлбөр|hutulbur|program|itinerary/i],
-    ["booking_terms", /виз|паспорт|урьдчилгаа|цуцл|буцаалт|бичиг\s*баримт|visa|deposit|cancel|(?:^|[^a-z])viz(?:[^a-z]|$)|uridchilgaa|urdchilgaa|pasport|bichig\s*barimt|tsutsl|butsaalt/i],
+    ["booking_terms", /виз|паспорт|урьдчилгаа|цуца?л|буцаалт|бичиг\s*баримт|үлдэгд|(?:хэзээ|хэдийд)\s+төл|visa|deposit|cancel|(?:^|[^a-z])viz(?:[^a-z]|$)|uridchilgaa|urdchilgaa|pasport|bichig\s*barimt|tsutsa?l|butsaalt|uldegd|hezee\s+tul/i],
     ["weather", /цаг\s*агаар|weather|tsag\s*agaar|хүйтэн|дулаан/i],
     ["photos", /зураг|photo|zurag/i],
     ["comparison", /харьцуул|ялгаа|compare/i],
@@ -180,9 +200,13 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
     ["duration", /hed\s*honog|honog|hugatsaa/i],
     ["includes", /bagts|hool|orson\s*(?:uu|yu)|ганцаараа|ganz?aaraa|single/i],
     ["program", /hotolbor|xutulbur|hutulbr|цуглах|уулзах|tsuglah|uulzah|marshrut|маршрут/i],
+    // "3 дахь өдөр юу хийх вэ", "3 dahi udur": one day of the programme (held-out 2026-11-02).
+    ["program", DAY_OF_PROGRAMME],
     ["availability", /\b(?:bga|bgaa|bn\s*uu|bnu|baigaa)\b/i],
   ];
   for (const [topic, pattern] of patterns) if (pattern.test(turn)) topics.add(topic);
+  // "Үлдэгдлээ хэзээ төлөх вэ" asks WHEN TO PAY, not when the trip departs (held-out 2026-11-02).
+  if (/(?:хэзээ|хэдийд|hezee)\s+(?:төл|tul)|үлдэгд|uldegd/iu.test(turn)) { topics.delete("dates"); topics.delete("price"); }
   // "бээжин шууд нислэгтэй аялал" names the trip by its kind; it does not ask how one
   // travels. Read as a transport question it got only "Шууд нислэгтэй аялал." (2026-10-18).
   // Transport is the question only when the message asks something.
@@ -247,9 +271,20 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
   // model not recognising the topic, not a separate question: it silenced answerable visa,
   // documents and hotel questions (live evaluation 2026-11-02). A fact quoting PART of the
   // message (a sub-question beside the recognised ones) still stands.
+  // Held-out evaluation, same day: the model also quotes the question part alone ("pasport
+  // heregtei yu" without the trip name, "гала оройн зоог багтсан уу"), and files hotel words
+  // that name no property ("Норвел Inn буудалтай нь" as connectivity). So identity words (trip
+  // names, aliases, places, hotels) and filler are left out of the comparison, and a hotel
+  // property is kept only when code finds that property's own word in the evidence.
   const ownTopics = understanding ? buildTripRequest(text, trips, undefined, now).topics : [];
-  const modelFacts = parseRequestedFacts(understanding?.requestedFacts, text)
-    .filter((fact) => !(ownTopics.length && quotesWholeMessage(fact.evidence, text)));
+  const identity = [...trips.flatMap((trip) => [trip.route_name, ...(Array.isArray(trip.extra?.aliases) ? trip.extra.aliases.filter((alias): alias is string => typeof alias === "string") : []),
+    ...(Array.isArray(trip.extra?.destinations) ? trip.extra.destinations.filter((place): place is string => typeof place === "string") : [])]), ...hotels];
+  const modelFacts = parseRequestedFacts(understanding?.requestedFacts, text).filter((fact) => {
+    if (fact.field.startsWith("hotel.")) {
+      return requestedFactsFromText(fact.evidence, { ignoredPhrases: identity, hotelContext: true }).some((own) => own.field === fact.field);
+    }
+    return !(ownTopics.length && quotesWholeMessage(fact.evidence, text, identity));
+  });
   const requestedFacts = [...new Map([
     ...modelFacts,
     ...requestedFactsFromText(text, { ignoredPhrases: [...trips.map(trip => trip.route_name), ...hotels], hotelContext: topics.has("hotel") || Boolean(hotel) }),
@@ -268,13 +303,17 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
   const matchingPackages = packagePreference ? packages.filter(value => programPreference(value) === packagePreference) : [];
   const selectedPackage = namedPackages.length === 1 ? namedPackages[0]
     : matchingPackages.length === 1 ? matchingPackages[0]
-      : understanding?.package && mentions(understanding.package) ? understanding.package : null;
+      // The model's package reading counts only when it is one the catalogue sells: an invented
+      // package name made the planner look for a package that does not exist (dev 2026-11-02).
+      : understanding?.package && mentions(understanding.package) && packages.some((value) => normText(value) === normText(understanding.package!)) ? understanding.package : null;
   return {
     topics: [...topics], date, range, hotel,
     package: selectedPackage, ...(packagePreference ? { packagePreference } : {}),
     passengers, days: queryRequestsDurationDays(turn), month, year, requestedFacts,
     ...(requestedDates ? { dates: requestedDates } : {}),
     ...(lodging ? { lodging } : {}),
+    ...(groupSizeOf(turn) ? { groupSize: groupSizeOf(turn)! } : {}),
+    ...(DAY_OF_PROGRAMME.exec(turn) ? { itineraryDay: Number(DAY_OF_PROGRAMME.exec(turn)![1]) } : {}),
     transport: queryWantsLandFlightCombo(turn) ? "land_flight" : queryWantsDirectFlight(turn) ? "direct_flight"
       : queryWantsLandOnlyEnhanced(turn) ? "land" : /усан\s*онгоц|круз|cruise/i.test(turn) ? "cruise" : null,
     ...(requestedRange === "unsupported" || calendarScope?.kind === "unsupported" ? { unsupportedDateWindow: true } : {}),

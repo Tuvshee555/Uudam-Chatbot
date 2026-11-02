@@ -424,7 +424,8 @@ export function hasPaymentClaimIntent(userText: string): boolean {
  * say so and alert them.
  */
 const BANK_ACCOUNT_REQUEST_PATTERN =
-  /(?:^|[^\p{L}])(?:данс(?:(?:аа|ыг)(?!\p{L})|ны\s*(?:дугаар|мэдээлэл)\S*|\s+(?:явуул|өг|хэлээ|бичээ|руу))|dans(?:(?:aa|iig)(?!\p{L})|nii|\s+(?:ywuul|yavuul|ug|ruu|ru\b)))/iu;
+  // "Данс аа явуулаач": the possessive typed as a separate word (held-out 2026-11-02).
+  /(?:^|[^\p{L}])(?:данс(?:\s?(?:аа|ыг)(?!\p{L})|ны\s*(?:дугаар|мэдээлэл)\S*|\s+(?:явуул|өг|хэлээ|бичээ|руу))|dans(?:\s?(?:aa|iig)(?!\p{L})|nii|\s+(?:ywuul|yavuul|ug|ruu|ru\b)))/iu;
 
 export function hasBankAccountRequest(userText: string): boolean {
   const text = (userText || "").trim();

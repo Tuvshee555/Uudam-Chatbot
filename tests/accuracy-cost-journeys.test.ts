@@ -155,6 +155,14 @@ test("accuracy and cost journeys on the invented catalogue", async (context) => 
       assert.doesNotMatch(text(month), /НОРВЕЛ|КАЛДОР/);
     });
 
+    await context.test("a malformed or empty understanding reply falls back to the catalogue matcher, never to silence or a guess", async () => {
+      for (const [sender, raw] of [["bad1", "{not json"], ["bad2", ""], ["bad3", "{\"trips\":[\"T99\"],\"certainty\":\"one\"}"]]) {
+        const turn = await say(sender, "Kaldor une", { rawUnderstanding: raw });
+        assert.ok(turn.modelCalls > 0, "the model was asked");
+        assert.match(text(turn), /2,890,000₮/, JSON.stringify(raw));
+      }
+    });
+
     await context.test("a message that is one trip's full name is answered without the understanding model; with a negation it is not", async () => {
       const named = await say("full1", "ВЭЛМОР ШУУД НИСЛЭГТЭЙ АЯЛАЛ үнэ хэд вэ", {});
       assert.equal(named.modelCalls, 0, "no understanding call");
@@ -162,6 +170,69 @@ test("accuracy and cost journeys on the invented catalogue", async (context) => 
       assert.match(text(named), /2,190,000₮/);
       const negated = await say("full2", "ВЭЛМОР ШУУД НИСЛЭГТЭЙ АЯЛАЛ биш газрын аялал", {});
       assert.ok(negated.modelCalls > 0, "a negation needs the full reading");
+    });
+
+    // ── Gaps the held-out set found (same shapes, different wording where possible) ──
+    await context.test("a budget question lists the trips under it instead of going silent", async () => {
+      const turn = await say("ho-budget", "1.5 саяд багтах аялал байна уу");
+      assert.match(text(turn), /СОЛМАР/);
+      assert.match(text(turn), /1\.5 сая/);
+      assert.doesNotMatch(text(turn), /КАЛДОР|1,500,000₮/);
+    });
+
+    await context.test("the model over-flagging an answerable sub-question or a hotel name does not silence it", async () => {
+      const passport = await say("ho-mf1", "kaldor pasport heregtei yu", { tripId: "kaldor-sea", topics: [], requestedFacts: [{ field: "other.unsupported", evidence: "pasport heregtei yu" }] });
+      assert.match(text(passport), /6 сарын хүчинтэй/);
+      const inn = await say("ho-mf2", "Норвел Inn буудалтай нь хэд вэ", { tripId: "norvel", requestedFacts: [{ field: "hotel.connectivity", evidence: "Норвел Inn буудалтай нь" }] });
+      assert.match(text(inn), /990,000₮/);
+    });
+
+    await context.test("cancellation, balance-payment and 'is X included' questions are answered from the trip", async () => {
+      assert.match(text(await say("ho-t1", "Калдор цуцалвал мөнгө буцаах уу")), /буцаагдахгүй/);
+      const balance = await say("ho-t2", "Калдор үлдэгдлээ хэзээ төлөх вэ");
+      assert.match(text(balance), /7 хоногийн өмнө/);
+      assert.doesNotMatch(text(balance), /Гарах өдрүүд/);
+      assert.match(text(await say("ho-t3", "Орвелиа аялалд орчуулагч байгаа юу")), /Орчуулагч/);
+    });
+
+    await context.test("hotel facilities the data does not hold go to staff, also with a suffix or under a hotel name", async () => {
+      for (const [sender, message] of [["ho-h1", "Калдор буудал усан сантай юу"], ["ho-h2", "Velmor Plaza wifi bga yu"]]) {
+        const turn = await say(sender, message);
+        assert.equal(turn.sends.length, 0, message);
+        assert.equal(turn.leads.length, 1, message);
+      }
+    });
+
+    await context.test("'данс аа', 'ойлголоо баярлалаа', Latin 'huuhed hed', a pick by way of travel and a party change need no model", async () => {
+      const bank = await say("ho-b", "Данс аа явуулаач");
+      assert.match(text(bank), /дансны мэдээлл/);
+      assert.equal(bank.leads.length, 1);
+      await say("ho-ack", "Kaldor une");
+      const thanks = await say("ho-ack", "ойлголоо баярлалаа");
+      assert.match(text(thanks), /Зүгээр/);
+      assert.equal(thanks.leads.length, 0);
+      await say("ho-child", "kaldor");
+      assert.match(text(await say("ho-child", "huuhed hed")), /2,490,000₮/);
+      await say("ho-way", "Вэлмор");
+      assert.match(text(await say("ho-way", "gazraar yavdag ni")), /1,290,000₮/);
+      await say("ho-party", "Вэлмор шууд нислэгтэй 2 том хүн");
+      assert.match(text(await say("ho-party", "одоо 3 том хүн болсон")), /6,570,000₮/);
+    });
+
+    await context.test("a group larger than the seats left is told so and handed to staff; one programme day is answered alone", async () => {
+      const group = await say("ho-g", "Калдор 3 сарын 6-нд 40 хүн явж болох уу");
+      assert.doesNotMatch(text(group), /захиалга нээлттэй/);
+      assert.match(text(group), /хүрэлцэх суудал үлдээгүй/);
+      assert.match(text(group), /40 хүний групп/);
+      assert.equal(group.leads.length, 1);
+      const day = await say("ho-d", "velmor shuud nislegtei 3 dahi udur yu hiih ve");
+      assert.match(text(day), /3-р өдөр: Далайн эрэг/);
+      assert.doesNotMatch(text(day), /1-р өдөр|Шууд нислэгтэй аялал\./);
+    });
+
+    await context.test("a package the model invents for a trip that sells none is ignored", async () => {
+      const turn = await say("ho-pkg", "Орвелиа шинжилгээтэй аялалд юу багтдаг вэ", { tripId: "orvelia-checkup", topics: ["program", "includes"], package: "Орвелиа эрүүл мэндийн шинжилгээтэй аялал" } as never);
+      assert.match(text(turn), /Орчуулагч/);
     });
 
     await context.test("catalogue questions — Latin, by price, for families, by land — list from the catalogue", async () => {

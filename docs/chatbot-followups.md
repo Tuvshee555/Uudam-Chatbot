@@ -194,3 +194,20 @@ reason `delivery_failed:*` → Meta refused the reply; any other reason → proc
 run against the production database with placeholder page ids from `.env.local`. Now only the production
 deployment seeds page rows (a missing row means "not paused"); the five fixture rows were deleted, the two
 real pages kept.
+
+## P2-6 — Accuracy and cost work (branch `work/chatbot-accuracy-cost`, 2026-11-02) — OPEN items
+Full results: `docs/chatbot-accuracy-cost-report-2026-11.md`. Still open after that work:
+- **Seat questions for a date with no seat data.** "<trip> <date>-нд суудал байна уу" for a listed
+  departure the website has no seat row for goes silent with a staff lead (owner's no-data rule). The
+  held-out set expected the date to be confirmed; staff may prefer "гарах хуваарьтай, суудлыг зөвлөх
+  тодруулна". Owner decision.
+- **Reply model choice is unproven.** After this work only 2–3 of ~110 evaluated turns reach the free-text
+  model, too few to compare gpt-4o with gpt-4.1-mini. It stays gpt-4o; compare again on a reply-focused
+  set before switching (`OPENAI_REPLY_MODEL`).
+- **Production numbers after deployment are not measured yet.** Cost and accuracy were measured on an
+  invented catalogue (`npm run eval:chatbot`) and prompt sizes on the live catalogue (read-only). Read
+  `travel_ai_usage` (environment `production`) for a week after deploying and compare with ≈ $1.05/day.
+- **Model over-flagging.** The understanding model files answerable questions as "unsupported facts". Code
+  now ignores a fact whose evidence is the whole question or a hotel property with no property word, and a
+  topic only the model read; a partial-span flag still hands off. Watch `answer_plan` hand-offs with
+  `other.unsupported` after deploying.
