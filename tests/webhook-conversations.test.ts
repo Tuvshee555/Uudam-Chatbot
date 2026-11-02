@@ -40,7 +40,9 @@ test("signed webhook conversation gate: catalog facts beat model guesses across 
       const sender = (name: string) => `conversation-${variant}-${name}`;
       await context.test(`catalog ${variant}: explicit trip survives valid but contradictory model identity`, async () => {
         metrics.conversations++; metrics.turns++;
-        const result = await harness.turn(sender("identity"), `${first.route_name} үнэ хэд вэ`, { tripId: other.id, place: other.route_name });
+        // More than a bare name: a message that is only a trip's full name is routed without the
+        // model since 2026-11-02, and this case exists to test the model boundary.
+        const result = await harness.turn(sender("identity"), `${first.route_name} аяллын нэг хүний үнэ хэд болох вэ`, { tripId: other.id, place: other.route_name });
         assert.equal(result.status, 200); expectedReply(result);
         assert.ok(result.modelCalls > 0, "the adversarial model boundary must actually execute");
         quote(result.sends[0].text, first, [sibling, other], result.selection?.tripId);

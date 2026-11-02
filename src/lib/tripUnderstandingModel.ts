@@ -1,4 +1,5 @@
 import { askOpenAIChatParts } from "./openaiFallback";
+import { understandingModelName } from "./modelConfig";
 import type { AskJson } from "./tripUnderstanding";
 
 const UNDERSTANDING_TIMEOUT_MS = 8_000;
@@ -12,7 +13,7 @@ export function understandingModel(trace?: { requestId?: string; correlationId?:
       temperature: 0,
       maxOutputTokens: 600,
       timeoutMs: UNDERSTANDING_TIMEOUT_MS,
-      model: process.env.TRIP_UNDERSTANDING_MODEL || "gpt-4.1",
+      model: understandingModelName(),
       source: "trip_understanding",
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,

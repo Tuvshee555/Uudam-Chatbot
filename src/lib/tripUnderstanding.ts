@@ -66,7 +66,10 @@ export type AskJson = (systemText: string, userText: string) => Promise<string |
 
 const HISTORY_TURNS = 6;
 const HISTORY_CHARS = 350;
-const DATES_SHOWN = 8;
+// The model reads the next few departures only to recognise a trip; code then checks every
+// stated date against the full schedule (rule 3 of SYSTEM_RULES says so). Eight dates per trip
+// were a quarter of the catalogue's tokens on every call (2026-11-02).
+const DATES_SHOWN = 4;
 const MAX_RANGE_DAYS = 62;
 const INTENTS: TripIntent[] = ["trip", "catalog", "booking", "human", "smalltalk", "other"];
 const TRANSPORTS: Transport[] = ["direct_flight", "land", "land_flight", "cruise"];

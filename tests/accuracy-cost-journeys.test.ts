@@ -135,6 +135,35 @@ test("accuracy and cost journeys on the invented catalogue", async (context) => 
       assert.equal(discount.modelCalls, 0);
     });
 
+    await context.test("a model that flags a whole answerable question as unsupported does not silence it; a flagged sub-question still goes to staff", async () => {
+      const visa = await say("mf1", "kaldor viz heregtei yu", { tripId: "kaldor-sea", topics: [], requestedFacts: [{ field: "other.unsupported", evidence: "kaldor viz heregtei yu" }] });
+      assert.match(text(visa), /Виз шаардлагагүй/);
+      const hotel = await say("mf2", "Kaldor buudal n ymr buudal we", { tripId: "kaldor-sea", topics: ["hotel"], requestedFacts: [{ field: "hotel.connectivity", evidence: "Kaldor buudal n ymr buudal we" }] });
+      assert.match(text(hotel), /Kaldor Bay Resort/);
+      const club = await say("mf3", "Калдор үнэ хэд вэ, хүүхдийн клуб байдаг уу", { tripId: "kaldor-sea", topics: ["price"], requestedFacts: [{ field: "other.unsupported", evidence: "хүүхдийн клуб байдаг уу" }] });
+      assert.equal(club.sends.length, 0, "the unsupported part is not answered by omission");
+      assert.equal(club.leads.length, 1);
+    });
+
+    await context.test("a pick by quality under a list never follows a model reading of a trip outside the list", async () => {
+      await say("mp", "Вэлмор");
+      const pick = await say("mp", "shuud nislegtei ni", { tripId: "norvel", certainty: "one" });
+      assert.match(text(pick), /ВЭЛМОР ШУУД НИСЛЭГТЭЙ АЯЛАЛ[\s\S]*2,190,000₮/);
+      assert.equal(pick.modelCalls, 0, "decided from the offered list");
+      const month = await say("mp", "ireh sard", {});
+      assert.match(text(month), /3 сарын 5/);
+      assert.doesNotMatch(text(month), /НОРВЕЛ|КАЛДОР/);
+    });
+
+    await context.test("a message that is one trip's full name is answered without the understanding model; with a negation it is not", async () => {
+      const named = await say("full1", "ВЭЛМОР ШУУД НИСЛЭГТЭЙ АЯЛАЛ үнэ хэд вэ", {});
+      assert.equal(named.modelCalls, 0, "no understanding call");
+      assert.equal(named.selection?.tripId, "vel-direct");
+      assert.match(text(named), /2,190,000₮/);
+      const negated = await say("full2", "ВЭЛМОР ШУУД НИСЛЭГТЭЙ АЯЛАЛ биш газрын аялал", {});
+      assert.ok(negated.modelCalls > 0, "a negation needs the full reading");
+    });
+
     await context.test("catalogue questions — Latin, by price, for families, by land — list from the catalogue", async () => {
       assert.match(text(await say("cat1", "ymar aylal bga we")), /ВЭЛМОР/);
       assert.match(text(await say("cat2", "Хямдхан аялал байна уу")), /1\. СОЛМАР/);

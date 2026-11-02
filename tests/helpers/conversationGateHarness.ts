@@ -14,11 +14,12 @@ export type ThreadScript =
   | { messages: Array<{ from: "customer" | "page"; text?: string; agoMs: number; source?: "mobile" | "web" | "pages:private_reply"; id?: string }> };
 export type ModelOverride = Partial<{ tripId: string; place: string | null; date: string | null; hotel: string | null;
   passengers: Array<{ kind: "adult" | "child"; count: number; age?: number }>; topics: string[]; certainty: string; intent: string; finalReply: string;
+  requestedFacts: Array<{ field: string; evidence: string }>;
   /** The provider refuses every call (HTTP 429 insufficient_quota), as during the 2026-10-30 credit outage. */
   unavailable: boolean }>;
 
 /** One real model completion made through the live pass-through (scripts/chatbot-eval.ts). */
-export type LiveModelCall = { model: string; promptTokens: number; completionTokens: number; kind: "understanding" | "reply" | "memory" | "other"; response: string };
+export type LiveModelCall = { model: string; promptTokens: number; completionTokens: number; cachedTokens: number; kind: "understanding" | "reply" | "memory" | "other"; response: string };
 
 /** The actual handler runs unchanged; only external SQL/provider transports are replaced. */
 export async function conversationGateHarness(context: TestContext, options: {
@@ -192,12 +193,13 @@ export async function conversationGateHarness(context: TestContext, options: {
       // Hard cap: a run that grows past its approved budget stops instead of draining the key.
       if (++liveCalls > options.liveModel.budget) throw new Error(`evaluation stopped: model call budget of ${options.liveModel.budget} reached`);
       const response = await realFetch(input as string, init);
-      const data = await response.clone().json().catch(() => null) as { usage?: { prompt_tokens?: number; completion_tokens?: number }; choices?: Array<{ message?: { content?: string } }> } | null;
+      const data = await response.clone().json().catch(() => null) as { usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } }; choices?: Array<{ message?: { content?: string } }> } | null;
       const messages = (body.messages || []) as Array<{ content: string | Array<{ text?: string }> }>;
       const prompt = messages.map(message => typeof message.content === "string" ? message.content : message.content.map(part => part.text || "").join("\n")).join("\n");
       options.liveModel.onCall?.({
         response: String(data?.choices?.[0]?.message?.content || ""),
         model: String(body.model || ""), promptTokens: Number(data?.usage?.prompt_tokens || 0), completionTokens: Number(data?.usage?.completion_tokens || 0),
+        cachedTokens: Number(data?.usage?.prompt_tokens_details?.cached_tokens || 0),
         kind: prompt.includes("Catalog (key | name | length | next departures):") ? "understanding" : prompt.includes("maintain long-term memory") ? "memory"
           : prompt.includes("Reply rules:") ? "reply" : "other",
       });

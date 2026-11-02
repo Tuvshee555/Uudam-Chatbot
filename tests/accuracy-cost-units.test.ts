@@ -137,3 +137,33 @@ test("catalogue questions in Latin letters, by price and for families list from 
   assert.ok(isGenericTripRequest("Gadaad aylal sonirhoj baina"));
   assert.ok(isGenericTripRequest("ene aylal dotor hool orson uu"));
 });
+
+test("model names come from the environment only when they are known chat models", async () => {
+  const { replyModel, understandingModelName, isKnownChatModel } = await import("../src/lib/modelConfig");
+  const saved = { reply: process.env.OPENAI_REPLY_MODEL, understanding: process.env.TRIP_UNDERSTANDING_MODEL };
+  try {
+    delete process.env.OPENAI_REPLY_MODEL; delete process.env.TRIP_UNDERSTANDING_MODEL;
+    assert.equal(replyModel(), "gpt-4o");
+    assert.equal(understandingModelName(), "gpt-4.1");
+    process.env.OPENAI_REPLY_MODEL = "gpt-4.1-mini"; process.env.TRIP_UNDERSTANDING_MODEL = "gpt-4o-2024-08-06";
+    assert.equal(replyModel(), "gpt-4.1-mini");
+    assert.equal(understandingModelName(), "gpt-4o-2024-08-06");
+    process.env.OPENAI_REPLY_MODEL = "gpt4o"; process.env.TRIP_UNDERSTANDING_MODEL = "made-up-model";
+    assert.equal(replyModel(), "gpt-4o", "a typo falls back instead of failing every reply");
+    assert.equal(understandingModelName(), "gpt-4.1");
+    assert.equal(isKnownChatModel("gpt-4.1-nano"), true);
+  } finally {
+    if (saved.reply === undefined) delete process.env.OPENAI_REPLY_MODEL; else process.env.OPENAI_REPLY_MODEL = saved.reply;
+    if (saved.understanding === undefined) delete process.env.TRIP_UNDERSTANDING_MODEL; else process.env.TRIP_UNDERSTANDING_MODEL = saved.understanding;
+  }
+});
+
+test("cached input tokens are charged at the provider's discounted share", async () => {
+  const { estimateCostUsd } = await import("../src/lib/aiUsage");
+  const full = estimateCostUsd("gpt-4o", { prompt_tokens: 10_000, completion_tokens: 0 })!;
+  const half = estimateCostUsd("gpt-4o", { prompt_tokens: 10_000, completion_tokens: 0, cached_tokens: 10_000 })!;
+  assert.ok(Math.abs(full - 0.025) < 1e-9 && Math.abs(half - 0.0125) < 1e-9, `${full} ${half}`);
+  const mini = estimateCostUsd("gpt-4.1-mini", { prompt_tokens: 1_000_000, completion_tokens: 0, cached_tokens: 1_000_000 })!;
+  assert.ok(Math.abs(mini - 0.1) < 1e-9, String(mini));
+  assert.equal(estimateCostUsd("unknown-model", { prompt_tokens: 1, completion_tokens: 1 }), null);
+});

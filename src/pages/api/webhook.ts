@@ -44,6 +44,7 @@ import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { ACKNOWLEDGEMENT_REPLY, DEFERRAL_REPLY, isAcknowledgementOnly, isDeferralOnly } from "../../lib/acknowledgements";
+import { replyModel } from "../../lib/modelConfig";
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { buildContactReply, contactSettingsOf, isAddressRequest, isPhoneRequest, isRepeatOfLastReply } from "../../lib/contactReplies";
@@ -1940,7 +1941,7 @@ async function handleMessageTurn(
       correlationId: trace?.correlationId,
       source: "api.webhook",
       systemInstruction: promptParts.system,
-      openaiModel: process.env.OPENAI_REPLY_MODEL || "gpt-4o",
+      openaiModel: replyModel(),
       preferOpenAI: true,
     });
     aiReply = result.text;
@@ -1955,7 +1956,7 @@ async function handleMessageTurn(
         timeoutMs: 20_000,
         requestId: trace?.requestId,
         correlationId: trace?.correlationId,
-        model: process.env.OPENAI_REPLY_MODEL || "gpt-4o",
+        model: replyModel(),
         systemText: promptParts.system,
       });
       fallbackText = fallback?.text?.trim() || "";

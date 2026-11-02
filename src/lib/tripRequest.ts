@@ -131,6 +131,15 @@ export function requestedPassengersFromText(text: string): RequestedPassenger[] 
   return parsed.unsupported ? [] : parsed.passengers;
 }
 
+/** The evidence covers (nearly) every word of the message: it isolates no sub-question. */
+function quotesWholeMessage(evidence: string, text: string): boolean {
+  const words = (value: string) => normText(value).split(/\s+/).filter((word) => word.length > 1);
+  const message = words(text);
+  if (!message.length) return false;
+  const quoted = new Set(words(evidence));
+  return message.filter((word) => quoted.has(word)).length >= Math.ceil(message.length * 0.8);
+}
+
 function programPreference(text: string): TripRequest["packagePreference"] {
   const normalized = normText(text);
   if (/хөтөлбөргүй|чөлөөт\s+аялал|hutulburgui|hotolborgui|chuluut\s+aylal|without\s+(?:a\s+)?(?:program|itinerary)/i.test(normalized)) return "without_program";
@@ -233,8 +242,16 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
   const lodging = lodgingPreferenceFromText(turn);
   // The model may file the lodging preference as an unsupported fact; it is a preference for
   // staff, not a question that silences the rest of the answer.
+  // A model-proposed "unsupported" fact whose evidence is the whole message, when the customer's
+  // own words already name a topic the data answers ("kaldor viz heregtei yu" → visa), is the
+  // model not recognising the topic, not a separate question: it silenced answerable visa,
+  // documents and hotel questions (live evaluation 2026-11-02). A fact quoting PART of the
+  // message (a sub-question beside the recognised ones) still stands.
+  const ownTopics = understanding ? buildTripRequest(text, trips, undefined, now).topics : [];
+  const modelFacts = parseRequestedFacts(understanding?.requestedFacts, text)
+    .filter((fact) => !(ownTopics.length && quotesWholeMessage(fact.evidence, text)));
   const requestedFacts = [...new Map([
-    ...parseRequestedFacts(understanding?.requestedFacts, text),
+    ...modelFacts,
     ...requestedFactsFromText(text, { ignoredPhrases: [...trips.map(trip => trip.route_name), ...hotels], hotelContext: topics.has("hotel") || Boolean(hotel) }),
   ].filter(fact => !(lodging && lodgingPreferenceFromText(fact.evidence)))
     .map(fact => [`${fact.field}:${normText(fact.evidence)}`, fact])).values()];

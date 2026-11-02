@@ -140,6 +140,26 @@ function looseNorm(value: string): string {
   return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+const NAME_WITH_EXTRA_WORDS = 4;
+const NEGATION_RE = /(?:^|[^\p{L}])(?:биш|bish|үгүй|ugui|бус|not|no)(?:[^\p{L}]|$)/iu;
+
+/**
+ * The one active trip whose full name (8+ letters) is in the message, when the message adds at
+ * most a few words and negates nothing ("<A> биш <B>" needs the full reading). A name inside a
+ * longer named trip's name is that longer trip. Null otherwise.
+ */
+export function tripNamedInFull(text: string, trips: TravelTrip[]): TravelTrip | null {
+  const message = looseNorm(text);
+  if (!message || NEGATION_RE.test(message)) return null;
+  const named = trips.filter((trip) => trip.status === "active" && looseNorm(trip.route_name).length >= 8
+    && ` ${message} `.includes(` ${looseNorm(trip.route_name)} `));
+  const distinct = named.filter((trip) => !named.some((other) => other !== trip
+    && looseNorm(other.route_name).length > looseNorm(trip.route_name).length && looseNorm(other.route_name).includes(looseNorm(trip.route_name))));
+  if (distinct.length !== 1 || trips.filter((trip) => looseNorm(trip.route_name) === looseNorm(distinct[0].route_name)).length !== 1) return null;
+  const rest = ` ${message} `.replace(` ${looseNorm(distinct[0].route_name)} `, " ").trim();
+  return rest.split(/\s+/).filter(Boolean).length <= NAME_WITH_EXTRA_WORDS ? distinct[0] : null;
+}
+
 /** Destination membership cannot establish where an itinerary starts. */
 export function hasUnsupportedOriginRequest(text: string): boolean {
   const normalized = text.normalize("NFKC");
@@ -489,6 +509,25 @@ export async function routeFastPathText(input: {
     && isGenericTripRequest(text) && !isKnownGreetingPhrase(text)) {
     const focused = trips.find((trip) => trip.id === previousSelection.tripId);
     if (focused && buildTripRequest(text, trips, undefined, now).topics.length) return chose(focused);
+  }
+
+  // A pick by quality under the offered list ("shuud nislegtei ni", "газрын нь") that fits exactly
+  // one offered trip is that trip, like a number. Read by the model, list position "1" was once
+  // returned as catalogue key "T1" — a different trip — and the customer got a category list
+  // instead of the trip (live evaluation 2026-11-02).
+  if (pendingTrips.length > 1 && !choice && !tappedOwnButton && isAttributePickOnly(text)) {
+    const scoped = resolve(text, pendingTrips);
+    if (scoped.status === "verified") return chose(scoped.trip, undefined, true);
+    const byAttribute = filterCandidatesByAttribute(text, pendingTrips);
+    if (byAttribute.length === 1) return chose(byAttribute[0], undefined, true);
+  }
+
+  // The customer typed (or tapped) one trip's full name, with at most a few words around it and
+  // no pending list: the name identifies the trip, so the understanding model is not asked. This
+  // is how most first messages from the website and ads arrive (2026-11-02, cost work).
+  if (!pendingTrips.length && !choice && !tappedOwnButton) {
+    const named = tripNamedInFull(text, trips);
+    if (named) return chose(named);
   }
 
   // --- 0. Understanding: one reading of the whole message decides the trip. ---

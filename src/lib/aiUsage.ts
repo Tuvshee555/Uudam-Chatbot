@@ -6,7 +6,16 @@ import type { ReadinessIssue } from "./readiness";
 // importable without a validated server env.
 const queryNeon: typeof QueryNeon = async (...args) => (await import("./neonDb")).queryNeon(...args);
 
-export type AiUsage = { prompt_tokens: number; completion_tokens: number; total_tokens?: number };
+/** `cached_tokens`: the part of `prompt_tokens` the provider served from its prompt cache. */
+export type AiUsage = { prompt_tokens: number; completion_tokens: number; total_tokens?: number; cached_tokens?: number };
+
+/**
+ * Share of the input price charged for a cached input token (OpenAI automatic prompt caching):
+ * gpt-4o family 50%, gpt-4.1 family 25%. Unknown models are charged in full.
+ */
+const CACHED_INPUT_SHARE: Record<string, number> = {
+  "gpt-4o": 0.5, "gpt-4o-mini": 0.5, "gpt-4.1": 0.25, "gpt-4.1-mini": 0.25, "gpt-4.1-nano": 0.25,
+};
 
 /**
  * Estimated USD per million tokens [input, output]. An estimate for spend tracking and alerts,
@@ -22,9 +31,12 @@ const PRICE_PER_MILLION_USD: Record<string, [number, number]> = {
 };
 
 export function estimateCostUsd(model: string, usage: AiUsage): number | null {
-  const price = PRICE_PER_MILLION_USD[model] ?? PRICE_PER_MILLION_USD[model.replace(/-\d{4}-\d{2}-\d{2}$/, "")];
+  const base = model.replace(/-\d{4}-\d{2}-\d{2}$/, "");
+  const price = PRICE_PER_MILLION_USD[model] ?? PRICE_PER_MILLION_USD[base];
   if (!price) return null;
-  return (usage.prompt_tokens * price[0] + usage.completion_tokens * price[1]) / 1_000_000;
+  const cached = Math.min(Math.max(usage.cached_tokens ?? 0, 0), usage.prompt_tokens);
+  const share = CACHED_INPUT_SHARE[model] ?? CACHED_INPUT_SHARE[base] ?? 1;
+  return ((usage.prompt_tokens - cached + cached * share) * price[0] + usage.completion_tokens * price[1]) / 1_000_000;
 }
 
 /**

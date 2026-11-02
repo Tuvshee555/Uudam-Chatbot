@@ -80,16 +80,22 @@ function formatKnowledgeBase(data: KnowledgeData) {
 
   lines.push("");
   lines.push("Modules:");
+  // One trip, one line. A description with line breaks (a pasted website text) spilled onto
+  // lines the catalogue summariser (aiTripContext.ts) does not recognise as a trip, so those
+  // trips went to the model in full on EVERY reply — about 19,000 of the 23,500 catalogue
+  // tokens of a call with no trip in focus (measured 2026-11-02). A blank line inside a
+  // description also ended the trip list early.
+  const oneLine = (value: string) => value.replace(/\s*[\r\n]+\s*/g, " / ").trim();
   for (const program of data.modules) {
-    const parts = [`- ${program.name}`];
-    if (program.duration) parts.push(`duration: ${program.duration}`);
+    const parts = [`- ${oneLine(program.name)}`];
+    if (program.duration) parts.push(`duration: ${oneLine(program.duration)}`);
     // formatPrice renders an unknown price as clean Mongolian ("Үнэ
     // тодорхойгүй"), never the NEEDS_MANUAL_FIX sentinel. Always shown so the
     // model has an explicit "price unknown → REFER" signal instead of a gap it
     // might fill with a guess.
     parts.push(`price: ${formatPrice(program.price)}`);
-    if (program.target) parts.push(`target: ${program.target}`);
-    if (program.description) parts.push(`description: ${program.description}`);
+    if (program.target) parts.push(`target: ${oneLine(program.target)}`);
+    if (program.description) parts.push(`description: ${oneLine(program.description)}`);
     lines.push(parts.join(" | "));
   }
 

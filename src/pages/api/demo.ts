@@ -43,6 +43,7 @@ import { extractTripPhotosForReply } from "../../lib/welcomeFlow";
 import { buildReplyMedia } from "../../lib/replyMediaPolicy";
 import { CONTACT_OPERATOR_LABEL, isContactOperatorTap, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
 import { getEnv } from "../../lib/env";
+import { replyModel } from "../../lib/modelConfig";
 import {
   beginRequestTrace,
   classifyError,
@@ -1037,7 +1038,7 @@ export default async function handler(
           correlationId: trace.correlationId,
           source: "api.demo",
           systemInstruction: systemInstructionText,
-          openaiModel: process.env.OPENAI_REPLY_MODEL || "gpt-4o",
+          openaiModel: replyModel(),
           preferOpenAI: true,
         });
         aiReplyText = result.text;
@@ -1049,7 +1050,7 @@ export default async function handler(
             timeoutMs: 20_000,
             requestId: trace.requestId,
             correlationId: trace.correlationId,
-            model: process.env.OPENAI_REPLY_MODEL || "gpt-4o",
+            model: replyModel(),
             systemText: systemInstructionText,
           });
           fallbackText = fallback?.text?.trim() || "";

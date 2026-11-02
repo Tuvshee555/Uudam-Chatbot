@@ -18,6 +18,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import test from "node:test";
 import { conversationGateHarness, type LiveModelCall } from "../tests/helpers/conversationGateHarness";
 import { evalCatalogue, evalSettings, EVAL_PHONES, EVAL_TODAY } from "../tests/eval/catalogue";
+import { estimateCostUsd } from "../src/lib/aiUsage";
 import type { EvalCase, EvalTurn } from "../tests/eval/dev.cases";
 
 const MODE = (process.env.EVAL_MODE || "rules") as "rules" | "live";
@@ -31,11 +32,9 @@ type TurnRow = { text: string; sends: string[]; leads: string[]; hard: string[];
   understanding?: string[] };
 type CaseRow = { id: string; category: string; script: string; turns: TurnRow[] };
 
-const PRICE_PER_MILLION: Record<string, [number, number]> = { "gpt-4o": [2.5, 10], "gpt-4o-mini": [0.15, 0.6], "gpt-4.1": [2, 8], "gpt-4.1-mini": [0.4, 1.6], "gpt-4.1-nano": [0.1, 0.4] };
-const cost = (call: LiveModelCall) => {
-  const price = PRICE_PER_MILLION[call.model.replace(/-\d{4}-\d{2}-\d{2}$/, "")];
-  return price ? (call.promptTokens * price[0] + call.completionTokens * price[1]) / 1_000_000 : 0;
-};
+// The same estimator production spend tracking uses (cached input billed at its discounted share).
+const cost = (call: LiveModelCall) =>
+  estimateCostUsd(call.model, { prompt_tokens: call.promptTokens, completion_tokens: call.completionTokens, cached_tokens: call.cachedTokens }) ?? 0;
 
 /** Every number and departure the catalogue holds, so a reply can be checked without the engine's own verifier. */
 function groundTruth() {
@@ -132,6 +131,8 @@ test(`chatbot evaluation (${LABEL})`, { timeout: 3_600_000 }, async (context) =>
     budget = evaluationCallBudget();
   }
   const calls: LiveModelCall[] = [];
+  // Spend by call type (understanding / reply / memory / other) across the whole run.
+  const byKind: Record<string, { calls: number; promptTokens: number; cachedTokens: number; completionTokens: number; costUsd: number }> = {};
   const harness = await conversationGateHarness(context, {
     settings: evalSettings,
     env: {
@@ -158,7 +159,12 @@ test(`chatbot evaluation (${LABEL})`, { timeout: 3_600_000 }, async (context) =>
         const leads = result.leads.map((lead) => `${lead.kind}: ${lead.context.slice(0, 160)}`);
         const made = calls.slice(before);
         const models: Record<string, number> = {};
-        for (const call of made) models[`${call.kind}:${call.model}`] = (models[`${call.kind}:${call.model}`] || 0) + 1;
+        for (const call of made) {
+          models[`${call.kind}:${call.model}`] = (models[`${call.kind}:${call.model}`] || 0) + 1;
+          const bucket = byKind[call.kind] ||= { calls: 0, promptTokens: 0, cachedTokens: 0, completionTokens: 0, costUsd: 0 };
+          bucket.calls += 1; bucket.promptTokens += call.promptTokens; bucket.cachedTokens += call.cachedTokens;
+          bucket.completionTokens += call.completionTokens; bucket.costUsd += cost(call);
+        }
         rows.push({
           text: turn.text, sends, leads, silent: sends.length === 0,
           hard: sends.flatMap((send) => hardChecks(send, turn.text)).concat(!sends.length && !leads.length && !turn.expect?.noLead ? ["silent without a lead"] : []),
@@ -197,12 +203,15 @@ test(`chatbot evaluation (${LABEL})`, { timeout: 3_600_000 }, async (context) =>
   mkdirSync("tmp", { recursive: true });
   const file = `tmp/eval-${LABEL}.json`;
   writeFileSync(file, JSON.stringify({ label: LABEL, mode: MODE, set: SET, summary: { turns: turns.length, passed: passed.length, hardOk: hardOk.length,
-    calls: totalCalls, promptTokens, completionTokens, costUsd, modelMix }, report }, null, 1));
+    calls: totalCalls, promptTokens, completionTokens, costUsd, modelMix, byKind }, report }, null, 1));
   console.log(`\n== chatbot eval ${LABEL}: ${passed.length}/${turns.length} turns correct (${(passed.length / Math.max(1, turns.length) * 100).toFixed(1)}%), hard rules ${hardOk.length}/${turns.length}`);
   console.log(`   by category: ${by("category")}`);
   console.log(`   by script: ${by("script")}`);
   console.log(`   model: ${totalCalls} calls, ${promptTokens} in / ${completionTokens} out tokens, $${costUsd.toFixed(4)} (${(costUsd / Math.max(1, turns.length)).toFixed(5)}/turn, ${(totalCalls / Math.max(1, turns.length)).toFixed(2)} calls/turn)`);
   if (Object.keys(modelMix).length) console.log(`   mix: ${Object.entries(modelMix).map(([key, count]) => `${key}=${count}`).join(" ")}`);
+  for (const [kind, value] of Object.entries(byKind)) {
+    console.log(`   ${kind}: ${value.calls} calls, ${Math.round(value.promptTokens / value.calls)} in (${Math.round(value.cachedTokens / Math.max(1, value.promptTokens) * 100)}% cached) / ${Math.round(value.completionTokens / value.calls)} out per call, ${value.costUsd.toFixed(4)}`);
+  }
   for (const turn of turns.filter((row) => row.hard.length || row.failures.length)) {
     console.log(`   ✗ ${turn.id} «${turn.text}» → ${[...turn.hard, ...turn.failures].join("; ")}${turn.sends.length ? `\n       bot: ${turn.sends.join(" ⏎ ").replace(/\n/g, " ⏎ ").slice(0, 220)}` : ""}${turn.understanding?.length ? `\n       understanding: ${turn.understanding.join(" | ").replace(/\s+/g, " ").slice(0, 300)}` : ""}`);
   }

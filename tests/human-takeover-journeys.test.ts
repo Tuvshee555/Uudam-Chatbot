@@ -156,12 +156,13 @@ test("human takeover journeys", async (context) => {
       await fb("race", "Норвел хотын аялал үнэ");
       // The consultant's echo lands (and pauses the customer) while the model is working.
       harness.duringNextModelCall(() => harness.pause("race", new Date(Date.now() + 3 * 86_400_000).toISOString(), "operator_reply"));
-      // The message names the trip so the understanding model is consulted while composing; a bare
-      // "Хүүхдийн үнэ хэд вэ?" under a selected trip is answered without any model call since 2026-11-02.
-      const turn = await fb("race", "Норвел хотын аялал хүүхдийн үнэ хэд вэ?");
+      // The message names the destination (not a trip's full name) so the understanding model is
+      // consulted while composing: since 2026-11-02 neither a bare "Хүүхдийн үнэ хэд вэ?" under a
+      // selected trip nor a trip's full name calls any model.
+      const turn = await fb("race", "Норвел хүүхдийн үнэ хэд вэ?");
       assert.equal(turn.status, 200, "not an error: Meta must not redeliver it");
       assert.equal(turn.sends.length, 0, "the bot never talks over the consultant");
-      assert.ok(turn.history.some((row) => row.role === "user" && row.text === "Норвел хотын аялал хүүхдийн үнэ хэд вэ?"), "the message is kept");
+      assert.ok(turn.history.some((row) => row.role === "user" && row.text === "Норвел хүүхдийн үнэ хэд вэ?"), "the message is kept");
       assert.ok(!turn.history.slice(-1).some((row) => row.role === "assistant"), "no undelivered reply is recorded as sent");
       // The log row is persisted fire-and-forget.
       await harness.settle(() => harness.logs.some((log) => log.event === "webhook.staff_takeover_mid_reply"));
