@@ -49,6 +49,7 @@ import { upcomingDepartures } from "./tripFareBlock";
 import { tripFromRecentMenu, tripMenuQuestionIndex } from "./tripMenuChoice";
 import { departureAvailability, departureIsClosed } from "./departureAvailability";
 import { normalizeTripOffers } from "./tripOffers";
+import { buildCatalogListingReply } from "./catalogListing";
 import { isGenericRouteToken } from "./travelTextNorm";
 
 /**
@@ -163,6 +164,9 @@ export function tripByNamedHotel(text: string, trips: TravelTrip[], now = new Da
   const ids = new Set([...owners].filter(([name]) => message.includes(` ${name} `)).flatMap(([, owner]) => [...owner]));
   return ids.size === 1 ? trips.find((trip) => ids.has(trip.id)) || null : null;
 }
+
+// "<kind> аялал байна уу / бий юу / bga yu", "<kind> аяллууд": whether trips of a kind exist.
+const ASKS_FOR_TRIP_KIND = /(?:аял\p{L}*|ayl\p{L}*|ayal\p{L}*)\s+(?:байна\s*уу|бна\s*уу|бну|бий\s*юу|байгаа\s*юу|бга\s*юу|байдаг\s*уу|bga\s*yu|bgaa\s*yu|bn\s*uu|bnuu|bnu|baigaa\s*yu|bii\s*yu)|(?:аяллууд|аялалууд|aylaluud)(?:[^\p{L}]|$)/iu;
 
 const NAME_WITH_EXTRA_WORDS = 4;
 const NEGATION_RE = /(?:^|[^\p{L}])(?:биш|bish|үгүй|ugui|бус|not|no)(?:[^\p{L}]|$)/iu;
@@ -522,6 +526,18 @@ export async function routeFastPathText(input: {
       && !filterTripsByTransportIntent(text, trips).some(trip => upcomingDepartures(trip, now)
       .some(date => departureMatchesScope(date, calendarScope)))) {
       return { matchText: markNoTrip(text), scopedClarify: null, unsupportedRequest: true };
+    }
+  }
+
+  // "Далайн аялал байна уу" with a trip already selected: asking whether a KIND of trip exists, and
+  // the selected trip is not of that kind, is a new catalogue question, not a follow-up on it.
+  // gpt-4.1-mini read it as the selected trip and answered with its date menu (live replay
+  // 2026-11-02); the catalogue's own kind filter decides now, without a model call.
+  if (previousSelection && !pendingTrips.length && !choice && !tappedOwnButton && ASKS_FOR_TRIP_KIND.test(text)
+    && resolve(text, trips).status === "not_found") {
+    const listing = buildCatalogListingReply(intentTextOf(text, trips), trips, now);
+    if (listing?.listed.length && !listing.listed.some((trip) => trip.id === previousSelection.tripId)) {
+      return { matchText: markNoTrip(text), scopedClarify: null };
     }
   }
 

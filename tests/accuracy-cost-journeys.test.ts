@@ -230,6 +230,17 @@ test("accuracy and cost journeys on the invented catalogue", async (context) => 
       assert.doesNotMatch(text(day), /1-р өдөр|Шууд нислэгтэй аялал\./);
     });
 
+    // Live replay shape (2026-11-02): "далайн аялал байна уу" after picking a land trip. The invented
+    // catalogue's sea trip carries "далайн" in its name, so the same switch is tested with a kind no
+    // trip name holds.
+    await context.test("asking whether trips of another kind exist while on a trip lists them, whatever the model reads", async () => {
+      await say("ho-kind", "Вэлмор газрын аялал");
+      const direct = await say("ho-kind", "шууд нислэгтэй аялал байна уу", { tripId: "vel-land", certainty: "one" });
+      assert.match(text(direct), /КАЛДОР|ВЭЛМОР ШУУД|ЛУНАРИА|НОРВЕЛ/);
+      assert.doesNotMatch(text(direct), /ВЭЛМОР ГАЗРЫН|Аль гарах өдрөөр/);
+      assert.equal(direct.modelCalls, 0, "decided from the catalogue");
+    });
+
     await context.test("a package the model invents for a trip that sells none is ignored", async () => {
       const turn = await say("ho-pkg", "Орвелиа шинжилгээтэй аялалд юу багтдаг вэ", { tripId: "orvelia-checkup", topics: ["program", "includes"], package: "Орвелиа эрүүл мэндийн шинжилгээтэй аялал" } as never);
       assert.match(text(turn), /Орчуулагч/);
