@@ -58,9 +58,12 @@ export function parseRequestedPassengers(value: unknown): RequestedPassenger[] {
 function parsePassengerText(text: string): { passengers: RequestedPassenger[]; unsupported: boolean } {
   const result: RequestedPassenger[] = [];
   let unsupported = false;
-  for (const match of text.matchAll(/(?<![\d.,-])(-?\d+(?:[.,]\d+)?)\s*(том\s*хүн|том|adult(?:s)?|tom\s*hun|хүүхэд|huuhed|child(?:ren)?|нярай|nyarai|infant(?:s)?)/gi)) {
-    const kind = /том|adult|tom/i.test(match[2]) ? "adult" : /нярай|nyarai|infant/i.test(match[2]) ? "infant" : "child";
+  for (const match of text.matchAll(/(?<![\d.,-])(-?\d+(?:[.,]\d+)?)\s*(том\s*хүн|том|adult(?:s)?|tom\s*hun|хүүхэд|huuhed|child(?:ren)?|нярай|nyarai|infant(?:s)?|(?:хүн|hun|hvn)(?!\p{L}))/giu)) {
+    const kind = /нярай|nyarai|infant/i.test(match[2]) ? "infant" : /хүүхэд|huuhed|child/i.test(match[2]) ? "child" : "adult";
     const count = Number(match[1]);
+    // "2 хүн явна" (two people): adult fares, as a consultant quotes them. Ten or more is a
+    // group whose total and discount staff work out (the group reply), so it is left unread.
+    if (/^(?:хүн|hun|hvn)$/i.test(match[2]) && !(Number.isInteger(count) && count >= 1 && count < 10)) continue;
     if (!Number.isInteger(count) || count < 1 || count > 100) unsupported = true;
     else result.push({ kind, count });
   }
@@ -156,12 +159,12 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
     ["hotel", /буудал|hotel|buudal|\d\s*(?:од|od)|одтой/i],
     ["transport", /нислэг|онгоц|газраар|автобус|галт\s*тэрэг|nisleg|flight|transport/i],
     ["program", /хөтөлбөр|hutulbur|program|itinerary/i],
-    ["booking_terms", /виз|паспорт|урьдчилгаа|цуцл|буцаалт|бичиг\s*баримт|visa|deposit|cancel/i],
+    ["booking_terms", /виз|паспорт|урьдчилгаа|цуцл|буцаалт|бичиг\s*баримт|visa|deposit|cancel|(?:^|[^a-z])viz(?:[^a-z]|$)|uridchilgaa|urdchilgaa|pasport|bichig\s*barimt|tsutsl|butsaalt/i],
     ["weather", /цаг\s*агаар|weather|tsag\s*agaar|хүйтэн|дулаан/i],
     ["photos", /зураг|photo|zurag/i],
     ["comparison", /харьцуул|ялгаа|compare/i],
     ["budget", /хамгийн\s*хямд|төсөв|budget|cheapest/i],
-    ["discount", /хямдрал|discount|promo/i],
+    ["discount", /хямдрал|discount|promo|хөнгөлөлт|hyamdral|hungulult|hungulolt|hongolol/i],
     // Latin-typed follow-ups ("hezee garah ve", "hool bagtsan uu") and the meeting point / solo
     // traveller questions found no topic and fell to silence when the model was not consulted.
     ["dates", /hezee|garah\s*(?:udur|odor|ognoo)|ogno|хэзээ|огноо/i],
@@ -175,6 +178,13 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
   // travels. Read as a transport question it got only "Шууд нислэгтэй аялал." (2026-10-18).
   // Transport is the question only when the message asks something.
   if (!/[?？]|(?:^|[^\p{L}])(?:уу|үү|юу|юү|вэ|бэ|yu|uu|ve|be|vee|ямар|хэд\p{L}*|хэзээ|яаж|хэрхэн|эсэх|how|what|which|when|does|is)(?:[^\p{L}]|$)/iu.test(turn)) topics.delete("transport");
+  // "1 сая төгрөгөөр болох уу": a bargain, not a transport question. The answer is the real fare
+  // and what the data says about discounts (nothing → said so), never a negotiated figure.
+  if (/(?<!\d)\d+(?:[.,]\d+)?\s*(?:сая|saya|мянга|myanga)?\s*(?:төгрөг\p{L}*|tugrug\p{L}*|tugrog\p{L}*|тугрик\p{L}*|₮|mnt)\s*(?:болох|болно|boloh|bolno|bolh|авч|avch|өгч|ugch|хийж|hiij|явж|yavj|явах|yavah)/iu.test(turn)) {
+    topics.add("price");
+    topics.add("discount");
+    topics.delete("transport");
+  }
   // Model fields supplement the customer's words; they never replace an
   // independently readable constraint or turn a span into one departure.
   const requestedRange = resolveRequestedRange(turn, now);
@@ -201,10 +211,19 @@ export function buildTripRequest(text: string, trips: TravelTrip[], understandin
     return normalized.length >= 3 && (normText(turn).includes(normalized)
       || phonetic.length >= 3 && phoneticLatinText(turn).includes(phonetic));
   };
-  const namedHotels = hotels.filter(mentions).sort((a, b) => b.length - a.length);
-  const distinctHotels = namedHotels.filter(hotel => !namedHotels.some(other => other !== hotel && normText(other).includes(normText(hotel))));
+  // "Norvel Grand" names the hotel sold as "Norvel Grand 5*": the star rating is not part of
+  // what customers type, so the name is matched without it (dev evaluation 2026-11-02).
+  const hotelKey = (hotel: string) => normText(hotel).replace(/(?:^|\s)\d\s*(?:\*|од(?:той|ны)?|star\w*)(?=\s|$)/giu, " ").replace(/\*/g, " ").replace(/\s+/g, " ").trim();
+  const mentionsHotel = (hotel: string) => mentions(hotel) || (hotelKey(hotel).length >= 4 && mentions(hotelKey(hotel)));
+  const namedHotels = hotels.filter(mentionsHotel).sort((a, b) => b.length - a.length);
+  const distinctHotels = namedHotels.filter(hotel => !namedHotels.some(other => other !== hotel && hotelKey(other).includes(hotelKey(hotel))));
+  // The model's hotel reading is kept only as the catalogue's own name for it, and only when the
+  // customer actually wrote it.
+  const modelHotel = understanding?.hotel && mentions(understanding.hotel)
+    ? hotels.filter((candidate) => hotelKey(candidate) === hotelKey(understanding.hotel!) || hotelKey(candidate).includes(hotelKey(understanding.hotel!)))
+    : [];
   const hotel = distinctHotels.length === 1 ? distinctHotels[0] : distinctHotels.length ? null
-    : understanding?.hotel && mentions(understanding.hotel) ? understanding.hotel : null;
+    : modelHotel.length === 1 ? modelHotel[0] : null;
   if (hotel) { topics.add("hotel"); topics.add("price"); }
   const month = requestedMonth?.month || null;
   const clock = new Date(now.getTime() + 8 * 3_600_000);

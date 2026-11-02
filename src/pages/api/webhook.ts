@@ -43,6 +43,7 @@ import { buildCatalogListingReply } from "../../lib/catalogListing";
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
+import { ACKNOWLEDGEMENT_REPLY, DEFERRAL_REPLY, isAcknowledgementOnly, isDeferralOnly } from "../../lib/acknowledgements";
 import { ensureTravelSchema } from "../../lib/travelSchema";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { buildContactReply, contactSettingsOf, isAddressRequest, isPhoneRequest, isRepeatOfLastReply } from "../../lib/contactReplies";
@@ -971,12 +972,11 @@ async function handleMessageTurn(
       }
     }
   }
-  if (
-    isContactOperatorTap(text) ||
-    (botSettings.handoff_enabled && isHandoffRequest(text, botSettings.handoff_keywords))
-  ) {
+  // The customer asked for a person: lead, confirmation, bot paused. Shared by the keyword check
+  // here and by the understanding step's reading further down.
+  const handOffToStaff = async (recordMessage: boolean, source: string) => {
     await captureLead({ kind: "handoff" }, "api.webhook.handoff");
-    await appendMessage(senderId, "user", text);
+    if (recordMessage) await appendMessage(senderId, "user", text);
     const handoffConfirmation =
       botSettings.handoff_reply ||
       "Таны хүсэлтийг хүлээн авлаа. Манай ажилтан удахгүй тантай холбогдоно.";
@@ -989,10 +989,28 @@ async function handleMessageTurn(
     await autoHandoffSender(senderId);
     const pauseMs = botSettings.handoff_pause_minutes > 0 ? botSettings.handoff_pause_minutes * 60_000 : undefined;
     await pauseBot(senderId, pauseMs, "handoff");
-    recordCounter("webhook.handoff_requested_total", 1, { platform });
+    recordCounter("webhook.handoff_requested_total", 1, { platform, source });
     logInfo("webhook.handoff_requested", {
-      requestId: trace?.requestId, correlationId: trace?.correlationId, platform,
+      requestId: trace?.requestId, correlationId: trace?.correlationId, platform, source,
       senderHash: hashIdentifier(senderId), pauseMinutes: botSettings.handoff_pause_minutes,
+    });
+  };
+  if (
+    isContactOperatorTap(text) ||
+    (botSettings.handoff_enabled && isHandoffRequest(text, botSettings.handoff_keywords))
+  ) {
+    await handOffToStaff(true, "keywords");
+    return;
+  }
+  // ── Acknowledgement / deferral ─────────────────────────────────────────────
+  // "за ok", "ойлголоо", "маргааш лавлая", "бодож үзье" ask nothing. They went to the free-text
+  // model, and when it said REFER staff were paged and the customer heard nothing (dev
+  // evaluation 2026-11-02). One short line, no lead, no phone request.
+  if (isAcknowledgementOnly(text) || isDeferralOnly(text)) {
+    await appendMessage(senderId, "user", text).catch(() => {});
+    await deliverFastPathReply({
+      reply: isDeferralOnly(text) ? DEFERRAL_REPLY : ACKNOWLEDGEMENT_REPLY,
+      failTag: "acknowledgement", rememberSource: "api.webhook.acknowledgement", counter: "webhook.acknowledgement_total",
     });
     return;
   }
@@ -1226,6 +1244,17 @@ async function handleMessageTurn(
     }
   }
 
+  // The understanding step read a request for a person in a spelling the keyword list lacks
+  // ("Хүнтэй ярьмаар байна" went silent, dev evaluation 2026-11-02). Only a short message that
+  // names no trip: a long message with a question in it is answered as a question.
+  {
+    const routed = await getRouted();
+    if (botSettings.handoff_enabled && routed.understanding?.intent === "human" && !routed.chosenTripId
+      && !routed.scopedClarify?.length && text.trim().split(/\s+/).length <= 8) {
+      await handOffToStaff(false, "understanding");
+      return;
+    }
+  }
   if ((await getRouted()).unsupportedRequest) {
     await deliverFastPathReply({ reply: "REFER", failTag: "unsupported_request",
       rememberSource: "api.webhook.unsupported_request" });

@@ -47,6 +47,35 @@ import { getTripSelection, setTripSelection } from "./tripSelectionState";
 import { websiteTripLinksInText } from "./bookingWebsite";
 import { upcomingDepartures } from "./tripFareBlock";
 import { tripFromRecentMenu, tripMenuQuestionIndex } from "./tripMenuChoice";
+import { departureAvailability, departureIsClosed } from "./departureAvailability";
+import { isGenericRouteToken } from "./travelTextNorm";
+
+/**
+ * The asked day is one of the trip's listed departures that staff closed (sold out, paused,
+ * cancelled). The customer-facing trip has that date removed, so the date matchers see no
+ * departure; the trip's own answer must say "суудал дүүрсэн" rather than "no trip then" with
+ * other dates (dev evaluation 2026-11-02).
+ */
+function hasClosedListedDeparture(trip: TravelTrip, dates: string[]): boolean {
+  return departureAvailability(trip).some((row) => dates.includes(row.date) && departureIsClosed(row));
+}
+
+// Filler around a pick from the offered list: "шууд нислэгтэй нь", "газрын аялал нь", "тэр нэгийг".
+const PICK_FILLER = new Set(["нь", "ni", "тэр", "ter", "энэ", "ene", "нэг", "neg", "нэгийг", "negiig", "гэдэг", "gedeg", "гэсэн", "gesen",
+  "сонирхож", "sonirhoj", "байна", "baina", "бна", "bna", "бн", "bn", "явъя", "явья", "yavya", "yavii", "авъя", "avya", "avii",
+  "болно", "bolno", "за", "za", "тийм", "tiim", "юм", "yum", "дээр", "deer", "аялал", "aylal", "ayalal", "хувилбар", "huvilbar"]);
+
+/**
+ * "шууд нислэгтэй нь", "5 өдөр нь", "gazriin": the customer picks one of the offered trips by a
+ * quality and asks nothing else. Answered like a tapped button — the trip's card — rather than
+ * as a question about that quality ("Шууд нислэгтэй аялал." was the whole reply, dev evaluation
+ * 2026-11-02).
+ */
+export function isAttributePickOnly(text: string): boolean {
+  const words = text.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim().split(/\s+/).filter(Boolean);
+  return words.length > 0 && words.length <= 5
+    && words.every((word) => /^\d+$/.test(word) || isGenericRouteToken(word) || PICK_FILLER.has(word));
+}
 
 /**
  * Did the customer tap one of OUR quick-reply buttons?
@@ -158,6 +187,8 @@ const CALENDAR_FOLLOWUP_WORDS = new Set([
   "хүн", "хүний", "hun", "huun", "humuus", "том", "tom", "хүүхэд", "хүүхдийн", "huuhed", "huuhdiin", "нярай", "nyarai",
   // A start-date constraint is not a destination either: "Хүүхдийн амралт 11.1-с эхлэх гээд бдаг...яах вэ".
   "с", "аас", "ээс", "оос", "өөс", "хойш", "хойшоо", "эхлэх", "эхлэн", "эхэлнэ", "эхэлдэг", "эхлэхээр", "hoish", "ehleh", "ehlen",
+  // "ireh sard", "дараа сард": next month, under a trip or a list.
+  "ирэх", "ireh", "irh", "дараа", "daraa", "дараагийн", "daraagiin", "гэсэн", "gesen", "юм", "yum",
   "амралт", "амралтаар", "амралтанд", "amralt", "сургууль", "хичээл", "гээд", "geed", "бдаг", "байдаг", "bdag", "яах", "yah",
 ]);
 
@@ -309,14 +340,15 @@ export async function routeFastPathText(input: {
     ? storedSelection : null;
   const resolve = (t: string, pool: TravelTrip[]) =>
     resolveTripFromUserMessage(t, pool, { allowLooseFallback: false });
-  const chose = async (trip: TravelTrip, understanding?: Understanding): Promise<FastPathRoute> => {
+  const chose = async (trip: TravelTrip, understanding?: Understanding, pickOnly = false): Promise<FastPathRoute> => {
     await clearClarificationState(senderId);
     const selection = mergeTripSelection(trip.id, buildTripRequest(requestText, trips, understanding, now), previousSelection);
     await setTripSelection(senderId, selection);
     // A typed "3" picks the trip exactly as tapping its "3. <name>…" button does. As a
     // bare digit the turn asked for nothing, so no card was built and the free-text
-    // model answered instead (or nothing was sent) — live replay 2026-10-30.
-    const turn = numericChoice && !numericChoice.namePrefix ? trip.route_name : websiteTripLinksInText(text).textWithoutUrls;
+    // model answered instead (or nothing was sent) — live replay 2026-10-30. A pick by
+    // quality ("шууд нислэгтэй нь") under a list is the same choice.
+    const turn = (numericChoice && !numericChoice.namePrefix) || pickOnly ? trip.route_name : websiteTripLinksInText(text).textWithoutUrls;
     // A trip that enters the conversation this turn is named in the answer: "tailand …" has several
     // trips, a pick by number names none, and a customer back after weeks may not remember. A follow-up
     // on the trip already selected stays compact (2026-10-30).
@@ -398,6 +430,7 @@ export async function routeFastPathText(input: {
   if (requestedFollowupDate && dateScope.length) {
     const departing = dateScope.filter(trip => trip.status === "active" && tripMatchesRequestedDate(trip, requestedFollowupDate, now));
     if (departing.length === 1) return chose(departing[0]);
+    if (!departing.length && dateScope.length === 1 && hasClosedListedDeparture(dateScope[0], [requestedFollowupDate])) return chose(dateScope[0]);
     const candidates = departing.length ? departing : dateScope;
     await setClarificationState(senderId, candidates.map(trip => trip.id));
     return { matchText: text, scopedClarify: candidates, unavailableDateWithinScope: departing.length === 0 };
@@ -429,6 +462,8 @@ export async function routeFastPathText(input: {
       const matching = ofKind.filter(trip => upcomingDepartures(trip, now).some(date => departureMatchesScope(date, calendarScope))
         || (calendarScope.kind === "dates" && calendarScope.dates.some(date => tripMatchesRequestedDate(trip, date, now))));
       if (matching.length === 1) return chose(matching[0]);
+      // One trip and the asked day is a listed departure staff closed: the trip's answer says so.
+      if (!matching.length && scope.length === 1 && calendarScope.kind === "dates" && hasClosedListedDeparture(scope[0], calendarScope.dates)) return chose(scope[0]);
       // One trip, nothing departing in the asked time, and the message asks more than the date
       // (the children's fares, the programme, the hotel): the trip's answer covers every part
       // and offers the nearest departures. "Not then, here are the dates" alone ignored the rest
@@ -444,6 +479,16 @@ export async function routeFastPathText(input: {
       .some(date => departureMatchesScope(date, calendarScope)))) {
       return { matchText: markNoTrip(text), scopedClarify: null, unsupportedRequest: true };
     }
+  }
+
+  // A generic follow-up on the selected trip ("хоол багтсан уу", "ene aylal dotor hool orson uu",
+  // "huuhded hungulult bga yu"): no trip name, no place word, a topic the data answers. The
+  // understanding model reaches the same conclusion (its rule 4) at the price of a model call
+  // and a round trip, so it is not asked. A pending "which trip?" list is handled above.
+  if (previousSelection && !pendingTrips.length && !choice && !tappedOwnButton
+    && isGenericTripRequest(text) && !isKnownGreetingPhrase(text)) {
+    const focused = trips.find((trip) => trip.id === previousSelection.tripId);
+    if (focused && buildTripRequest(text, trips, undefined, now).topics.length) return chose(focused);
   }
 
   // --- 0. Understanding: one reading of the whole message decides the trip. ---
@@ -465,7 +510,7 @@ export async function routeFastPathText(input: {
         };
       }
       if (understanding.certainty === "one") {
-        return { ...(await chose(understanding.trips[0], understanding)), understanding };
+        return { ...(await chose(understanding.trips[0], understanding, pendingTrips.length > 1 && isAttributePickOnly(text))), understanding };
       }
       if (understanding.certainty === "several" && understanding.intent !== "catalog") {
         // A question ABOUT the trips we just listed ("4 одтой юу?") is not a
@@ -553,14 +598,15 @@ export async function routeFastPathText(input: {
       await setClarificationState(senderId, pendingTrips.map((trip) => trip.id));
       return { matchText: text, scopedClarify: pendingTrips };
     }
+    const pickOnly = pendingTrips.length > 1 && isAttributePickOnly(text);
     const scoped = resolve(text, pendingTrips);
-    if (scoped.status === "verified") return chose(scoped.trip);
+    if (scoped.status === "verified") return chose(scoped.trip, undefined, pickOnly);
     // An attribute answer that fits exactly one offered trip ("<хот>-оос",
     // the departure city in one candidate's description) settles it before
     // the whole catalog gets a say — the catalog check below took that city
     // as an unrelated trip with the city in its NAME (2026-09-21).
     const byAttribute = filterCandidatesByAttribute(text, pendingTrips);
-    if (byAttribute.length === 1) return chose(byAttribute[0]);
+    if (byAttribute.length === 1) return chose(byAttribute[0], undefined, pickOnly);
     const catalogDirect = resolve(text, trips);
     if (
       catalogDirect.status === "verified" &&
@@ -632,7 +678,7 @@ export async function routeFastPathText(input: {
       // "5 өдөр нь" the resolver kept {4 өдөр, 5 өдөр} (digit-blind scoring),
       // but only one of them actually contains the customer's "5".
       const refined = filterCandidatesByAttribute(text, scoped.candidates);
-      if (refined.length === 1) return chose(refined[0]);
+      if (refined.length === 1) return chose(refined[0], undefined, pickOnly);
       const candidates = refined.length > 1 ? refined : scoped.candidates;
       await setClarificationState(senderId, candidates.map((trip) => trip.id));
       return { matchText: text, scopedClarify: candidates };

@@ -175,6 +175,10 @@ export const GENERIC_REQUEST_WORDS = new Set([
   // Questions about a trip the customer has not named yet ("Хүүхдийн үнэ хэд вэ", "Хоол багтсан уу"):
   // the answer is the question "which trip?", not a hand-off.
   "хүүхдийн", "нярайн", "болох", "урьдчилгаа", "нислэгийн", "цаг", "газар", "хаана", "зардал", "нэмэлт",
+  // "Гадаад аялал сонирхож байна" (interested in a trip abroad) names no trip: every trip is abroad.
+  "гадаад", "гадаадад", "gadaad",
+  // Follow-up words about the trip on screen: "энэ аялал дотор хоол орсон уу", "хүүхдэд хөнгөлөлт".
+  "дотор", "dotor", "орсон", "orson", "хүүхдэд", "хүүхэдтэй", "хүүхдүүд", "тусдаа", "багтдаг", "багтах", "энэ", "тэр", "ene", "ter", "өглөөний", "цай",
   "ганцаараа", "ганц", "нэг", "хүнээр", "явж", "даатгал", "хоол", "хоолны", "буудал", "буудлын", "одтой",
   "багтсан", "багтаа", "явахад", "аялах", "асуулт", "асуух", "үнийнмэдээлэл", "abiya", "aviya", "away", "medeell", "uniin", "ayliin", "aylliin", "uzej", "uzeh", "boloh", "asuult", "asuuh", "виз", "паспорт", "төлөх", "яаж", "данс", "хөнгөлөлт", "хямдрал", "групп", "бүлэг", "уулзах",
   // A first message in English ("Can you tell me more about your ad?") names no trip either.
@@ -257,6 +261,27 @@ const ALIAS_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bwithout ticket\b/gi, "тийзгүй"],
   [/\bticketless\b/gi, "тийзгүй"],
   [/\bticket included\b/gi, "тийзтэй"],
+  // Question and request words typed in Latin letters. Each one below is a word an intent
+  // pattern reads in Cyrillic, so the Latin spelling used to fall through to the model or to
+  // silence ("ymar aylal bga we", "gazraar yavdag aylal", "kaldor viz heregtei yu",
+  // "uridchilgaa hedn huvi", "ticket une tusdaa yu", "huuhded hungulult bga yu" — dev
+  // evaluation 2026-11-02). Only generic words: never a place or a trip name.
+  [/\b(?:ymar|yamar|yamr|ymr)\b/gi, "ямар"],
+  [/\bgazraar\b/gi, "газраар"],
+  [/\bgadaad\b/gi, "гадаад"],
+  [/\b(?:hyamdhan|hymdhan)\b/gi, "хямдхан"],
+  [/\b(?:hyamd|hymd)\b/gi, "хямд"],
+  [/\b(?:hamgiin|hamgin)\b/gi, "хамгийн"],
+  [/\b(?:viz|visa)\b/gi, "виз"],
+  [/\b(?:uridchilgaa|urdchilgaa|uridchilga|urichilgaa)\b/gi, "урьдчилгаа"],
+  [/\b(?:hungulult|hungulolt|hongolol|hongololt|hungulul)\b/gi, "хөнгөлөлт"],
+  [/\b(?:tusdaa|tusda)\b/gi, "тусдаа"],
+  [/\b(?:bagtsan|bagtsn)\b/gi, "багтсан"],
+  [/\b(?:bagtdag|bagtdg)\b/gi, "багтдаг"],
+  [/\b(?:bagtah|bagtana)\b/gi, "багтах"],
+  [/\b(?:heregtei|hergtei|heregtai|hergtai)\b/gi, "хэрэгтэй"],
+  [/\b(?:huuhded|huuhdd)\b/gi, "хүүхдэд"],
+  [/\b(?:huuhdiin|huuhdin)\b/gi, "хүүхдийн"],
 ];
 
 export function normText(text: string) {
@@ -363,6 +388,16 @@ export function phoneticLatinText(text: string) {
 const GENERIC_ROUTE_WORDS_PHONETIC = new Set(
   Array.from(GENERIC_ROUTE_WORDS, (word) => phoneticLatinText(word)).filter(Boolean),
 );
+
+/**
+ * A token that describes a KIND of trip or is filler ("шууд", "нислэгтэй", "газрын", "нь",
+ * "тэр"), in either script. Used to tell "шууд нислэгтэй нь" — a pick from a list — from a
+ * message that also asks something.
+ */
+export function isGenericRouteToken(token: string): boolean {
+  const word = token.toLowerCase();
+  return GENERIC_ROUTE_WORDS.has(word) || GENERIC_ROUTE_WORDS_PHONETIC.has(phoneticLatinText(word));
+}
 
 export function keywordTokens(text: string) {
   return normText(text)

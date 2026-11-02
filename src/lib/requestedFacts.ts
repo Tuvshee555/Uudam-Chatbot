@@ -12,7 +12,11 @@ const PROPERTY_FAMILIES: Array<{ field: RequestedFactField; hotelOnly?: boolean;
   { field: "hotel.facilities", hotelOnly: true, pattern: /(?:^|\s)(?:усан\s*сан|бассейн|pool|swimming|фитнес|fitness|gym|саун\S*|spa|спа|лифт|elevator)(?=\s|$)/iu },
   { field: "hotel.room", hotelOnly: true, pattern: /(?:^|\s)(?:өрөө\S*|орны|ор\s|rooms?|beds?)(?=\s|$)/iu },
   { field: "hotel.location", hotelOnly: true, pattern: /(?:^|\s)(?:байршил\S*|хаана|төвөөс|зайтай|distance|location|where)(?=\s|$)/iu },
+  // "Буудал далайгаас хэр хол вэ", "ойрхон уу": a distance the catalogue does not hold.
+  { field: "hotel.location", hotelOnly: true, pattern: /(?:^|\s)(?:хэр|hed|her|ямар)\s+(?:хол|ойр\S*|hol|oir\S*)(?=\s|$)|(?:^|\s)(?:хол|ойрхон|ойр|hol|oirhon)\s+(?:уу|юу|вэ|uu|yu|ve)(?=\s|$)|(?:^|\s)(?:далайгаас|далайн\s+эргээс|төвөөс|dalaigaas|tuvuus)(?=\s|$)/iu },
   { field: "hotel.rating", hotelOnly: true, pattern: /(?:^|\s)(?:одтой|одны|од|stars?|rating)(?=\s|$)/iu },
+  // "Хэдэн цаг нисэх вэ": flight time is not a trip field; it goes to staff, never guessed.
+  { field: "other.unsupported", pattern: /(?:^|\s)(?:хэдэн|хэд|heden|hed)\s+(?:цаг|tsag)\s*(?:нис\S*|яв\S*|nis\S*|yav\S*)|(?:^|\s)(?:нислэг\S*|нисэх|nisleg\S*|niseh)\s+(?:хэдэн\s+цаг|хугацаа\S*|heden\s+tsag|hugatsaa\S*)|flight\s+(?:time|hours|duration)/iu },
 ];
 
 const fieldSet = new Set<string>(REQUESTED_FACT_FIELDS);

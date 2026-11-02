@@ -18,21 +18,22 @@ export function replyPreferences(text: string) {
     || /(?:өдөр\s*бүр(?:ийн)?|every\s*day|day.by.day).{0,15}(?:хөтөлбөр|itinerary|program)|(?:хөтөлбөр\p{L}*|itinerary|program).{0,15}(?:өдөр\s*бүр|every\s*day|day.by.day)/iu.test(text);
   const fareKinds: PassengerKind[] = [];
   if (/том\s*хүн|насанд\s*хүрэгч|adult|tom\s*hun/i.test(text)) fareKinds.push("adult");
-  if (/хүүх(?:эд|дийн)|child|huuhed|huuhdiin/i.test(text)) fareKinds.push("child");
+  if (/хүүх(?:эд|дийн|дэд|дүүд)|child|huuhed|huuhdiin|huuhded/i.test(text)) fareKinds.push("child");
   if (/нярай|infant|nyarai/i.test(text)) fareKinds.push("infant");
   const terms = [
-    ["deposit", /урьдчилгаа|deposit|uridchilgaa/i],
+    ["deposit", /урьдчилгаа|deposit|uridchilgaa|urdchilgaa/i],
     ["payment", /төлбөр|төлөх|payment|pay\b|tulbur/i],
-    ["documents", /паспорт|бичиг\s*баримт|passport|document/i],
-    ["visa", /виз|visa/i],
-    ["cancellation", /цуцл|буцаалт|cancel|refund/i],
+    ["documents", /паспорт|бичиг\s*баримт|passport|document|pasport|bichig\s*barimt/i],
+    ["visa", /виз|visa|(?:^|[^a-z])viz(?:[^a-z]|$)/i],
+    ["cancellation", /цуцл|буцаалт|cancel|refund|tsutsl|butsaalt/i],
   ] as const;
   const includes = [
-    { label: "Хоол", pattern: /хоол|food|meal|hool/i },
+    // Breakfast is "өглөөний цай" (morning tea): a food question must find it among the inclusions.
+    { label: "Хоол", pattern: /хоол|food|meal|hool|цай|breakfast|өглөөний|хооллолт|tsai/i },
     { label: "Тийз", pattern: /тийз|тасалбар|ticket|tiiz|tiz/i },
     { label: "Буудал", pattern: /буудал|hotel|buudal/i },
     { label: "Даатгал", pattern: /даатгал|insurance|daatgal/i },
-    { label: "Виз", pattern: /виз|visa/i },
+    { label: "Виз", pattern: /виз|visa|(?:^|[^a-z])viz(?:[^a-z]|$)/i },
     { label: "Унаа", pattern: /унаа|transfer|тээвэр|transport|unaa/i },
   ].filter((target) => target.pattern.test(text));
   const termKeys = terms.filter(([, pattern]) => pattern.test(text)).map(([key]) => key);

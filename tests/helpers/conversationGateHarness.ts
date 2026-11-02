@@ -17,11 +17,25 @@ export type ModelOverride = Partial<{ tripId: string; place: string | null; date
   /** The provider refuses every call (HTTP 429 insufficient_quota), as during the 2026-10-30 credit outage. */
   unavailable: boolean }>;
 
+/** One real model completion made through the live pass-through (scripts/chatbot-eval.ts). */
+export type LiveModelCall = { model: string; promptTokens: number; completionTokens: number; kind: "understanding" | "reply" | "memory" | "other"; response: string };
+
 /** The actual handler runs unchanged; only external SQL/provider transports are replaced. */
-export async function conversationGateHarness(context: TestContext, options: { env?: Record<string, string | undefined> } = {}) {
+export async function conversationGateHarness(context: TestContext, options: {
+  env?: Record<string, string | undefined>;
+  /** Fixture bot settings merged over the defaults (hand-over keywords, contact details, quick info). */
+  settings?: Record<string, unknown>;
+  /**
+   * Evaluation only: OpenAI calls go to the real API (every other host stays blocked) under a hard
+   * call budget. Routine tests never set this, so `npm test` keeps running on the mocked model.
+   */
+  liveModel?: { budget: number; onCall?: (call: LiveModelCall) => void };
+} = {}) {
   applyTestEnv({ NEON_DATABASE_URL: "postgres://fixture:fixture@127.0.0.1:1/conversation-gate",
     BOOKING_DATABASE_URL: undefined, TRIP_UNDERSTANDING: "on", STAFF_NOTIFY_PSIDS: undefined,
     TELEGRAM_BOT_TOKEN: undefined, TELEGRAM_STAFF_CHAT_IDS: undefined, ...options.env });
+  const realFetch = globalThis.fetch;
+  let liveCalls = 0;
   context.mock.timers.enable({ apis: ["Date"], now: new Date("2098-02-01T04:00:00Z") });
   const history: HistoryRow[] = [], leads: LeadRow[] = [], sends: Array<{ senderId: string; text: string }> = [];
   const pauses = new Map<string, { paused: boolean; expires_at: string | null; pause_reason: string }>();
@@ -108,6 +122,7 @@ export async function conversationGateHarness(context: TestContext, options: { e
       business_name: "Fixture agency", system_prompt: "Use catalog facts only", handoff_enabled: true,
       handoff_keywords: [], quick_info_keywords: [], chat_buttons: [],
       extra: { greeting: { enabled: false }, goodbye: { enabled: false }, reminder_enabled: false },
+      ...(options.settings || {}),
     }]);
     if (/SELECT[\s\S]*FROM travel_(?:bot_control|page_control)/i.test(sql)) return result([{ bot_paused: false, photo_only: false }]);
     if (/INSERT INTO travel_conversations/i.test(sql)) {
@@ -172,6 +187,21 @@ export async function conversationGateHarness(context: TestContext, options: { e
     const body = JSON.parse(String(init?.body || "{}"));
     if (url === "https://api.openai.com/v1/chat/completions" && override.unavailable) {
       return new Response(JSON.stringify({ error: { message: "quota", type: "insufficient_quota", code: "insufficient_quota" } }), { status: 429 });
+    }
+    if (url === "https://api.openai.com/v1/chat/completions" && options.liveModel) {
+      // Hard cap: a run that grows past its approved budget stops instead of draining the key.
+      if (++liveCalls > options.liveModel.budget) throw new Error(`evaluation stopped: model call budget of ${options.liveModel.budget} reached`);
+      const response = await realFetch(input as string, init);
+      const data = await response.clone().json().catch(() => null) as { usage?: { prompt_tokens?: number; completion_tokens?: number }; choices?: Array<{ message?: { content?: string } }> } | null;
+      const messages = (body.messages || []) as Array<{ content: string | Array<{ text?: string }> }>;
+      const prompt = messages.map(message => typeof message.content === "string" ? message.content : message.content.map(part => part.text || "").join("\n")).join("\n");
+      options.liveModel.onCall?.({
+        response: String(data?.choices?.[0]?.message?.content || ""),
+        model: String(body.model || ""), promptTokens: Number(data?.usage?.prompt_tokens || 0), completionTokens: Number(data?.usage?.completion_tokens || 0),
+        kind: prompt.includes("Catalog (key | name | length | next departures):") ? "understanding" : prompt.includes("maintain long-term memory") ? "memory"
+          : prompt.includes("Reply rules:") ? "reply" : "other",
+      });
+      return response;
     }
     if (url === "https://api.openai.com/v1/chat/completions") {
       if (duringModel) { const hook = duringModel; duringModel = null; hook(); }

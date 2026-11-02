@@ -81,7 +81,14 @@ const NUMBERED_BUTTON_LINE = /^\s*\d{1,2}\s*[.)]\s*(.+?)\s*(?:\.\.\.|…)?\s*$/u
  * only — never for deciding which trip the message is about.
  */
 export function stripTripNamesForIntent(text: string, trips: TravelTrip[]): string {
-  const names = Array.from(new Set(trips.map((trip) => trip.route_name).filter(Boolean)))
+  // "Вэлмор шууд нислэгтэй 1 сая төгрөгөөр болох уу" names the trip without its last word "аялал";
+  // left in place, "нислэгтэй" read as a transport question (dev evaluation 2026-11-02).
+  const names = Array.from(new Set(trips.flatMap((trip) => {
+    const name = trip.route_name?.trim();
+    if (!name) return [];
+    const shortName = name.replace(/\s+(?:аялал|аяллын|tour|trip)$/iu, "");
+    return shortName !== name && shortName.split(/\s+/).length >= 2 ? [name, shortName] : [name];
+  })))
     .sort((a, b) => b.length - a.length);
   const looseNames = names.map(looseNorm);
   return websiteTripLinksInText(text).textWithoutUrls

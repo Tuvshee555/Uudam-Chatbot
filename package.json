@@ -30,7 +30,8 @@
     "preflight": "node --import tsx scripts/preflight.ts",
     "validate": "npm run lint && npm run typecheck && npm run test && npm run build",
     "fb:subscribe-page": "node scripts/subscribe-page-app.mjs",
-    "qa:live": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx --test scripts/live-replay.ts"
+    "qa:live": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx --test scripts/live-replay.ts",
+    "eval:chatbot": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx --test scripts/chatbot-eval.ts"
   },
   "dependencies": {
     "@sparticuz/chromium": "^149.0.0",

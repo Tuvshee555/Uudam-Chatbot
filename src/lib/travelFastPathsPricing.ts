@@ -756,7 +756,10 @@ export function buildPassengerTypePriceReply(
 }
 
 export function hasIncludedInPriceIntent(text: string): boolean {
-  return /багтсан\s+уу|орсон\s+уу|included|include|үнэд\s+.*багтсан/i.test(text);
+  // "Юу багтдаг вэ", "тийз тусдаа юу" (is the ticket separate), "hool orson uu", "bagtsan uu": every
+  // way of asking what the fare covers. Only the first two forms were read, so the rest got the
+  // whole card or the model (dev evaluation 2026-11-02).
+  return /багтсан\s+(?:уу|юу)|багтдаг|багтах\s+(?:уу|юу)|багтана\s+уу|багтаа\s+юу|орсон\s+(?:уу|юу)|included|include|үнэд\s+.*багтсан|юу\s+багт|тусдаа|bagtsan|bagtdag|bagtah|bagtana|orson\s*(?:uu|yu)|tusdaa/iu.test(text);
 }
 
 export function buildIncludedInPriceReply(trip: TravelTrip, text: string): string | null {

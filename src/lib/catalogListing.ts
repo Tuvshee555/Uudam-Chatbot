@@ -32,7 +32,17 @@ import { departureMatchesScope, hasCalendarWeekWindow, requestedDepartureScope, 
 import type { TravelTrip } from "./travelTypes";
 
 const WHOLE_CATALOG_RE =
-  /(?:^|\s)(?:бүх|bvh|buh|bukh|нийт)\s+(?:аял|ayl|ayal)|ямар\s+ямар\s+аял|yamar\s*yamar|(?:^|\s)(?:аяллууд|аялалууд|aylaluud|ayaluud)(?:\s|$)|аяллын\s+жагсаалт|all\s+(?:trips|tours)/i;
+  /(?:^|\s)(?:бүх|bvh|buh|bukh|нийт)\s+(?:аял|ayl|ayal)|ямар\s+ямар\s+аял|yamar\s*yamar|(?:^|\s)(?:аяллууд|аялалууд|aylaluud|ayaluud)(?:\s|$)|аяллын\s+жагсаалт|all\s+(?:trips|tours)|ямар\s+аял\p{L}*\s+(?:байгаа|байна|бга|бгаа|бна|бий|гардаг|байдаг|bga|bgaa|bn|bna|baina|baigaa|gardag|baidag)|(?:^|\s)гадаад\s+аял/iu;
+// "Хямдхан аялал байна уу", "hamgiin hyamd aylal ali ve": the cheapest trips. A price ceiling
+// ("2 саяд багтах") carries a number and is answered by the budget reply instead.
+const CHEAP_RE = /хямд|cheap|budget|төсөв\p{L}*\s+(?:бага|багатай)/iu;
+// "Хүүхэдтэй явахад тохиромжтой аялал", "гэр бүлээрээ": trips whose own text says family or children.
+const FAMILY_ASK_RE = /хүүхэдтэй|хүүхдүүдтэй|гэр\s*бүл|huuhedtei|ger\s*bul|family|kids?\b|children/iu;
+const FAMILY_TRIP_RE = /гэр\s*бүл|хүүхэд|family|парк|kids?\b|children/iu;
+
+function tripIsFamilyFriendly(trip: TravelTrip): boolean {
+  return FAMILY_TRIP_RE.test([trip.route_name, trip.category || "", trip.source_description || "", trip.notes || ""].join(" "));
+}
 const CRUISE_RE = /круз|усан\s+онгоц|cruise/i;
 const LUNAR_NEW_YEAR_RE = /сар\s*шин|sar\s*shin/i;
 const MAX_DETAILED = 8;
@@ -53,6 +63,17 @@ function nextDepartures(trip: TravelTrip, now: Date): string[] {
 
 function soonestKey(trip: TravelTrip, now: Date): string {
   return nextDepartures(trip, now)[0] || "9999";
+}
+
+/** The adult fare used to rank trips by price: the offer summary, or the trip's own figure for a weekly schedule with no dated offer. */
+function adultFareOf(trip: TravelTrip, now: Date): number | null {
+  const summary = summarizeTripOfferPrices(trip, {}, now);
+  if (summary.status === "ready") {
+    const fare = summary.summary.prices.adult;
+    if (fare?.kind === "exact") return fare.amount;
+    if (fare?.kind === "range") return fare.min;
+  }
+  return typeof trip.adult_price === "number" && trip.adult_price > 0 ? trip.adult_price : null;
 }
 
 function priceDetail(trip: TravelTrip, now: Date, date?: string): string {
@@ -396,6 +417,19 @@ export function buildCatalogListingReply(rawIntentText: string, trips: TravelTri
   }
   // "Өөр аялал байна уу": the customer wants to see more of what exists.
   if (OTHER_TRIPS_RE.test(normalized)) return renderListing(active.filter((trip) => bookableDates(trip, now).length > 0).sort((a, b) => soonestKey(a, now).localeCompare(soonestKey(b, now))), "✈️ Манай аяллууд", MAX_COMPACT, now);
+  // "Хүүхэдтэй явахад тохиромжтой аялал": trips whose own text says family / children / park. Only
+  // the catalogue's words decide; with none, the model (or staff) answers.
+  if (quiet && FAMILY_ASK_RE.test(normalized) && !wantsCategory) {
+    const family = active.filter(tripIsFamilyFriendly).sort((a, b) => soonestKey(a, now).localeCompare(soonestKey(b, now)));
+    if (family.length) return { ...renderListing(family, "👨‍👩‍👧 Гэр бүл, хүүхэдтэй явахад тохирсон аяллууд", full ? MAX_DETAILED : MAX_COMPACT, now), authoritative: true };
+  }
+  // "Хямдхан аялал байна уу", "hamgiin hyamd aylal ali ve" (no place, no amount): the trips with the
+  // lowest adult fare. These went to the model and came back as REFER (dev evaluation 2026-11-02).
+  if (quiet && CHEAP_RE.test(normalized) && !/\d|сая|төгрөг|мянга/u.test(normalized) && !wantsCategory) {
+    const priced = active.map((trip) => ({ trip, fare: adultFareOf(trip, now) })).filter((row): row is { trip: TravelTrip; fare: number } => row.fare !== null)
+      .sort((a, b) => a.fare - b.fare || soonestKey(a.trip, now).localeCompare(soonestKey(b.trip, now)));
+    if (priced.length) return { ...renderListing(priced.map((row) => row.trip), "💰 Хамгийн хямд аяллууд", full ? MAX_DETAILED : MAX_COMPACT, now), authoritative: true };
+  }
   if (!wantsAll && !wantsCategory) return null;
 
   const categoryPool = wantsCategory

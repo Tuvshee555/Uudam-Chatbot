@@ -1,7 +1,7 @@
 import type { TravelTrip } from "./travelTypes";
 import type { FastPathRoute } from "./fastPathRouting";
 import { buildTripRequest, mergeTripSelection, type TripRequest, type TripSelection, type TripTopic } from "./tripRequest";
-import { normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard, renderTripOfferReply, type TripOfferResult } from "./tripOffers";
+import { normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard, renderTripOfferReply, type PassengerKind, type TripOfferResult } from "./tripOffers";
 import { evaluateTripRequirement, tripTransport, type TripRequirement } from "./tripFacts";
 import { tripDurationDays, getTripBrochureAsset, getTripWebsiteLink } from "./travelFastPathsSearch";
 import { departureAvailability, departureIsClosed, departureIsLow, openDateWording } from "./departureAvailability";
@@ -11,8 +11,41 @@ import { isOptionalExtrasQuestion } from "./tripExtrasReply";
 import { customerDate as mnDate } from "./customerDate";
 import { dateIsOnSale } from "./tripFareBlock";
 import { hasSeatsIntent } from "./travelFastPaths";
+import { formatPassengerPriceLines } from "./travelFastPathsPricing";
 import { isReferReply } from "./reply";
 import { ADULT_COUNT_QUESTION } from "./selectionAnswer";
+
+/** "Баасан гараг бүр", "өдөр бүр": a recurring schedule written as text, with no calendar dates. */
+export function recurringScheduleTexts(trip: TravelTrip): string[] {
+  return (trip.departure_dates || []).filter((text) => typeof text === "string" && !/\d/.test(text)
+    && /гар(?:а|и)г|даваа|мягмар|лхагва|пүрэв|баасан|бямба|ням|бүр|болгон|тутам|every|daily|weekly/iu.test(text)).map((text) => text.trim());
+}
+
+/** How a closed departure reads: the website's own status, never an inferred seat count. */
+function closedDepartureWording(row: { status: string; seatsLeft: number | null }): string {
+  if (row.status === "PAUSED") return "захиалга түр хаалттай.";
+  if (row.status === "CANCELLED") return "гаралт цуцлагдсан.";
+  if (row.status === "DEPARTED") return "аялал хөдөлсөн.";
+  return "суудал дүүрсэн.";
+}
+
+/**
+ * A weekly-schedule trip has no dated offer, so the offer engine cannot price it. Its fares are
+ * the trip's own figures (the same ones the trip card prints), shown only when the trip has no
+ * per-date or per-hotel price rows that could contradict them.
+ */
+function recurringFareLines(trip: TravelTrip, fareKinds: readonly ("adult" | "child" | "infant")[]): string | null {
+  const groups = Array.isArray(trip.extra?.price_groups) ? trip.extra.price_groups : [];
+  if (groups.length) return null;
+  const ages = trip.extra?.age_rules && typeof trip.extra.age_rules === "object" ? trip.extra.age_rules as Record<string, unknown> : {};
+  const age = (kind: string) => (typeof ages[kind] === "string" ? ages[kind] as string : "");
+  const wanted = (kind: "adult" | "child" | "infant") => !fareKinds.length || fareKinds.includes(kind);
+  const lines = formatPassengerPriceLines({
+    adult: wanted("adult") ? trip.adult_price : null, child: wanted("child") ? trip.child_price : null, infant: wanted("infant") ? trip.infant_price : null,
+    childAge: age("child"), infantAge: age("infant"), currency: trip.currency || "MNT",
+  });
+  return lines.length ? lines.join("\n") : null;
+}
 
 export type TripAnswerPlan = {
   status: "answered" | "clarify" | "handoff";
@@ -112,11 +145,13 @@ function missingRequestedFares(result: TripOfferResult, kinds: ReturnType<typeof
   return kinds.filter(kind => !result.offer.fares.some(fare => fare.kind === kind && fare.fare.kind !== "unknown"));
 }
 
-function stableFarePreview(trip: TravelTrip, selection: TripSelection, result: TripOfferResult, now: Date, text: string): string | null {
+function stableFarePreview(trip: TravelTrip, selection: TripSelection, result: TripOfferResult, now: Date, text: string, fareKindsOverride?: PassengerKind[]): string | null {
   if (result.status !== "needs_selection" || result.fields[0] !== "date") return null;
   if (selection.passengers.length) return stablePartyTotal(trip, selection, result.options, now, text);
   const cards = result.options.map((date) => resolveTripOfferFareCard(trip, { date, hotel: selection.hotel, packageId: selection.package }, now));
-  const { fareKinds, requiredFareKinds } = replyPreferences(text);
+  const preferences = replyPreferences(text);
+  const fareKinds = fareKindsOverride ?? preferences.fareKinds;
+  const requiredFareKinds = fareKindsOverride ?? preferences.requiredFareKinds;
   if (cards.some(card => missingRequestedFares(card, requiredFareKinds).length)) return null;
   const signature = (card: TripOfferResult) => card.status === "ready" ? JSON.stringify({
     hotel: card.offer.hotel, package: card.offer.packageId, currency: card.offer.currency,
@@ -172,6 +207,21 @@ function hotelFarePreview(trip: TravelTrip, selection: TripSelection, result: Tr
   }
   if (blocks.length > 4) return null;
   return blocks.length ? [mnDate(selection.date), ...blocks].join("\n\n") : null;
+}
+
+/**
+ * The date is still open but every date sells the same per-hotel fares: the hotel fares, then the
+ * dates to choose from. Null when any date would price a hotel differently.
+ */
+function dateIndependentHotelPreview(trip: TravelTrip, selection: TripSelection, result: TripOfferResult, now: Date, text: string): string | null {
+  if (result.status !== "needs_selection" || result.fields[0] !== "date" || selection.hotel || result.options.length > 6) return null;
+  const previews = result.options.map((date) => {
+    const card = resolveTripOfferFareCard(trip, { date, hotel: null, packageId: selection.package }, now);
+    if (card.status !== "needs_selection" || card.fields[0] !== "hotel") return null;
+    return hotelFarePreview(trip, { ...selection, date }, card, now, text)?.split("\n").slice(1).join("\n").trim() || null;
+  });
+  if (!previews.length || previews.some((preview) => !preview || preview !== previews[0])) return null;
+  return [previews[0], "Аль гарах өдрөөр аялах вэ?", ...compactReplyOptions(result.options, text).map((option) => `• ${result.options.includes(option) ? mnDate(option) : option}`)].join("\n");
 }
 
 /** All factual sections are built from the same ID and offer selection. */
@@ -239,6 +289,9 @@ export function buildTripAnswerPlan(input: {
   // given and the one missing fact, the number of adults, is asked.
   const minorsOnly = request.topics.includes("price") && partyPassengers.length > 0 && !partyPassengers.some((passenger) => passenger.kind === "adult");
   const pricePassengers = minorsOnly ? [] : partyPassengers;
+  // "1 настай хүүхэд хэд вэ": the fare shown is the one the stated AGE falls in (нярай), not the
+  // one the word "хүүхэд" names — a one-year-old was quoted the child fare (dev evaluation 2026-11-02).
+  const minorKinds: PassengerKind[] | null = minorsOnly ? [...new Set(partyPassengers.map((passenger) => passenger.kind))] : null;
   const requirements: TripRequirement[] = [];
   if (request.days) requirements.push({ kind: "days", days: request.days });
   if (request.transport) requirements.push({ kind: "transport", transport: request.transport });
@@ -261,6 +314,7 @@ export function buildTripAnswerPlan(input: {
     && (!dateScope.range || (date >= dateScope.range[0] && date <= dateScope.range[1]))
     && (!dateScope.dates || dateScope.dates.includes(date)));
   const websiteAvailability = departureAvailability(trip);
+  const recurring = dates.length ? [] : recurringScheduleTexts(trip);
   const sections: Partial<Record<TripTopic, string>> = {};
   const incomplete = new Map<TripTopic, string[]>();
   const missingFact = (topic: TripTopic, field: string) => incomplete.set(topic, [...(incomplete.get(topic) || []), `${topic}.${field}`]);
@@ -284,15 +338,18 @@ export function buildTripAnswerPlan(input: {
     const wantsPrice = request.topics.includes("price");
     result = resolveTripOffer(trip, { date: nearest.length === 1 ? nearest[0] : null, hotel: selection.hotel, packageId: selection.package, passengers: wantsPrice ? pricePassengers : [] }, now);
     if (result.status === "needs_selection" && result.fields[0] === "date") result = { ...result, options: nearest };
-    lines.push([REQUESTED_TIME_NOT_SCHEDULED, "Ойрын гарах өдрүүд:", ...nearest.map((date) => `• ${mnDate(date)}`)].join("\n"));
+    // The asked day is a listed departure staff closed: say that ("2 сарын 15: суудал дүүрсэн."),
+    // not "no schedule then" (dev evaluation 2026-11-02). The open departures follow either way.
+    const closed = request.date ? websiteAvailability.find((row) => row.date === request.date && departureIsClosed(row)) : null;
+    lines.push([closed ? `${mnDate(closed.date)}: ${closedDepartureWording(closed)}` : REQUESTED_TIME_NOT_SCHEDULED, "Ойрын гарах өдрүүд:", ...nearest.map((date) => `• ${mnDate(date)}`)].join("\n"));
     answered.add("availability");
     answered.add("dates");
     if (wantsPrice) {
       // The departures are listed just above, so a fare valid for them does not restate a date.
       const price = result.status === "ready"
-        ? renderTripOfferReply(result, { fareKinds: [...(preferences.full || preferences.fareKinds.length || result.offer.passengerPrices.length ? preferences.fareKinds : ["adult", "child"] as const)], showTotal: wantsPartyTotal && !minorsOnly })
+        ? renderTripOfferReply(result, { fareKinds: minorKinds ?? [...(preferences.full || preferences.fareKinds.length || result.offer.passengerPrices.length ? preferences.fareKinds : ["adult", "child"] as const)], showTotal: wantsPartyTotal && !minorsOnly })
           ?.split("\n").filter((line) => line !== mnDate(nearest[0])).join("\n") || null
-        : stableFarePreview(trip, { ...selection, passengers: pricePassengers }, result, now, intentText);
+        : stableFarePreview(trip, { ...selection, passengers: pricePassengers }, result, now, intentText, minorKinds ?? undefined);
       if (price) sections.price = price;
       else if (result.status === "needs_selection") {
         // Fares differ by date: the date is chosen from the departures just listed.
@@ -319,15 +376,21 @@ export function buildTripAnswerPlan(input: {
       if (bookable.length && bookable.length < result.options.length) result = { ...result, options: bookable };
     }
     const unavailable = unavailableText(result);
+    const recurringFares = result.status === "missing" && result.reason === "departure_date_missing" && recurring.length && !pricePassengers.length
+      ? recurringFareLines(trip, preferences.full || preferences.fareKinds.length ? preferences.fareKinds : ["adult", "child"]) : null;
     if (unavailable) {
       sections.availability = unavailable;
       // A closed offer cannot be sold or priced as an available booking.
       if (request.topics.includes("price")) answered.add("price");
+    } else if (recurringFares) {
+      // "Солмар үнэ хэд вэ" for a trip that leaves every Friday: the fares and the schedule.
+      if (request.topics.includes("price")) sections.price = [trip.hotel ? `Буудал: ${trip.hotel}` : null, recurringFares].filter(Boolean).join("\n");
+      if (request.topics.includes("availability")) sections.availability = `Гарах өдрүүд: ${recurring.join(", ")}.`;
     } else if (result.status === "ready") {
       if (request.topics.includes("price")) {
         for (const kind of missingRequestedFares(result, preferences.requiredFareKinds, intentText)) missingFact("price", kind);
-        const fareKinds = preferences.full || preferences.fareKinds.length || result.offer.passengerPrices.length
-          ? preferences.fareKinds : ["adult", "child"] as const;
+        const fareKinds = minorKinds ?? (preferences.full || preferences.fareKinds.length || result.offer.passengerPrices.length
+          ? preferences.fareKinds : ["adult", "child"] as const);
         const reply = renderTripOfferReply(result, { fareKinds: [...fareKinds], showTotal: wantsPartyTotal && !minorsOnly });
         const baseHotel = !result.offer.hotel && offers.every((offer) => !offer.hotel) && trip.hotel;
         sections.price = reply ? [baseHotel ? `Буудал: ${baseHotel}` : null, reply].filter(Boolean).join("\n") : undefined;
@@ -350,8 +413,11 @@ export function buildTripAnswerPlan(input: {
       // "Is there a <trip>?" is answered with the fare as well as the date question when every date sells at one price.
       const wantsPreview = request.topics.includes("price") ? !request.topics.includes("availability") : request.topics.every((topic) => topic === "availability");
       // A party total depends on the hotel, so that question still asks for one first.
-      const hotelPreview = request.topics.includes("price") && !pricePassengers.length ? hotelFarePreview(trip, selection, result, now, intentText) : null;
-      const preview = hotelPreview || (wantsPreview ? stableFarePreview(trip, { ...selection, passengers: pricePassengers }, result, now, intentText) : null);
+      // Fares that differ by hotel but not by date ("Норвел үнэ"): each hotel's fare is shown
+      // before the date is asked, instead of a bare date menu (dev evaluation 2026-11-02).
+      const hotelPreview = request.topics.includes("price") && !pricePassengers.length
+        ? hotelFarePreview(trip, selection, result, now, intentText) || dateIndependentHotelPreview(trip, selection, result, now, intentText) : null;
+      const preview = hotelPreview || (wantsPreview ? stableFarePreview(trip, { ...selection, passengers: pricePassengers }, result, now, intentText, minorKinds ?? undefined) : null);
       if (preview) sections.price = preview;
       if (hotelPreview) {
         answered.add("price");
@@ -381,7 +447,9 @@ export function buildTripAnswerPlan(input: {
   }), intentText).join("\n")}`;
   if (request.topics.includes("dates") && !answered.has("dates")) {
     if (needsSelection && result?.status === "needs_selection" && result.fields[0] === "date") answered.add("dates");
-    else sections.dates = scopedDates.length ? datesSection(scopedDates) : undefined;
+    // A weekly schedule is the trip's own text ("Баасан гараг бүр"): it went out as silence when
+    // only calendar dates counted (dev evaluation 2026-11-02).
+    else sections.dates = scopedDates.length ? datesSection(scopedDates) : recurring.length && !askedWindow ? `Гарах өдрүүд: ${recurring.join(", ")}.` : undefined;
   }
   if (request.topics.includes("duration")) {
     const days = tripDurationDays(trip);
