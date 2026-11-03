@@ -2440,8 +2440,9 @@ export default async function handler(
                 text?: string;
                 quick_reply?: { payload?: string };
                 metadata?: string;
+                sticker_id?: number | string;
                 attachments?: Array<{ type?: string; id?: string; mime_type?: string;
-                  payload?: { url?: string; attachment_id?: string } }>;
+                  payload?: { url?: string; attachment_id?: string; sticker_id?: number | string } }>;
               };
               postback?: { title?: string; payload?: string };
               referral?: Record<string, unknown>;
@@ -2730,6 +2731,7 @@ export default async function handler(
                       timestamp: event.timestamp,
                       token,
                       attachments,
+                      stickerId: event?.message?.sticker_id,
                       deliverReply: reply => enqueueAttachmentReply({ platform, senderId, pageId, token,
                         trace: { requestId: trace.requestId, correlationId: trace.correlationId } }, reply),
                       trace: {

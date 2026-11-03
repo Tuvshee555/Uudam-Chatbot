@@ -29,6 +29,24 @@ const ATTACHMENT_LABELS: Record<string, string> = {
   file: "файл",
 };
 
+// Facebook serves every Messenger sticker from this CDN path.
+const STICKER_CDN_PATH = /\/t39\.1997-6\//;
+
+/**
+ * Messenger stickers (the 👍 "like" above all) arrive as an image plus a second
+ * non-image entry for the same picture, so they read as "зураг, файл": the bot
+ * answered a thumbs-up with "Файл хүлээн авлаа." and spent a vision run on it
+ * (32 of 42 real stickers got a "received" reply, 2026-09-16 → 11-03).
+ */
+export function isStickerAttachment(attachment: {
+  type?: string;
+  payload?: { url?: string; sticker_id?: unknown };
+}) {
+  return attachment?.type === "sticker"
+    || (attachment?.payload?.sticker_id !== undefined && attachment?.payload?.sticker_id !== null)
+    || STICKER_CDN_PATH.test(String(attachment?.payload?.url || ""));
+}
+
 export function extractImageAttachmentUrls(
   attachments: Array<{ type?: string; payload?: { url?: string } }>,
 ) {
@@ -270,11 +288,26 @@ export async function handleAttachmentOnlyMessage(input: {
   timestamp?: number;
   token?: string;
   attachments: Array<{ type?: string; id?: string; mime_type?: string;
-    payload?: { url?: string; attachment_id?: string } }>;
+    payload?: { url?: string; attachment_id?: string; sticker_id?: unknown } }>;
+  /** Messenger's message-level `sticker_id`, set when the whole message is a sticker. */
+  stickerId?: unknown;
   deliverReply: AttachmentDelivery;
   trace?: { requestId: string; correlationId: string };
 }) {
   const { platform, senderId, pageId, token, attachments, trace } = input;
+  // A sticker is a reaction ("ok", "thanks"), not a document and not a question:
+  // kept for the inbox, never acknowledged, never sent to the vision model.
+  const isSticker = (input.stickerId !== undefined && input.stickerId !== null)
+    || (attachments.length > 0 && attachments.every(isStickerAttachment));
+  if (isSticker) {
+    const stickerUrl = attachments
+      .map((a) => String(a?.payload?.url || "").trim())
+      .find((url) => url.startsWith("http"));
+    await appendMessage(senderId, "user", "[Хэрэглэгч стикер илгээсэн]",
+      stickerUrl ? [{ type: "image", url: stickerUrl }] : []);
+    recordCounter("webhook.sticker_only_total", 1, { platform });
+    return;
+  }
   const kinds = Array.from(
     new Set(attachments.map((a) => a?.mime_type?.startsWith("image/")
       ? "зураг" : ATTACHMENT_LABELS[a?.type || ""] || "файл")),

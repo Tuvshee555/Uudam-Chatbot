@@ -160,6 +160,12 @@ export async function conversationGateHarness(context: TestContext, options: { e
       seen.set(sender, (seen.get(sender) || 0) + 1);
       return result([{ msg_count: seen.get(sender), prev_msg_at: null, get_started_at: null }]);
     }
+    // A customer image is receipted before the webhook acks (customerImageIngest); classification
+    // itself never runs here — its claim UPDATE finds nothing.
+    if (/INSERT INTO travel_customer_documents/i.test(sql)) {
+      return result([{ id: ++serial, platform: params[0], sender_id: params[1], page_id: params[2], event_key: params[3],
+        attachment_index: params[4], attachment_id: params[5], source_url: params[6], ingest_status: "pending" }]);
+    }
     // Memory projections, document stores and nonessential claims start empty;
     // the full turn history above stays durable across handler invocations.
     return result();
