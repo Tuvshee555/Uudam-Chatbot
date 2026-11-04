@@ -105,6 +105,56 @@ test("customer turns from real conversations get grounded answers, not the free-
       assert.match(reply, /ВЭЛМОР ДАЛАЙН ЭРГИЙН АЯЛАЛ/);
       assert.doesNotMatch(reply, /ЛУМАРА/, "the ruled-out place's trips are left out");
     });
+
+    // Nov 4 shape: the agency's post advertised company New Year trips. "Sain bnuu ene shine jiliin
+    // ayalal haashaa be" reached the free-text model, which answered "no trip with that special name;
+    // which country?", and the customer's "<price> geed bga yum" (the post's price) ended in a
+    // staff hand-off. The catalogue holds both answers: the trips leaving over New Year, and the
+    // trip sold at exactly that price.
+    await context.test("a New Year trip question lists the New Year departures, and the post's price finds its trip", async () => {
+      harness.catalog([
+        trip("ny", "ЛУМАРА ХОТЫН АЯЛАЛ", ["2098-12-27", "2099-01-02"], { adult_price: 991_000, child_price: 891_000, duration_text: "4 өдөр 3 шөнө" }),
+        trip("dec", "ВЭЛМОР ДАЛАЙН ЭРГИЙН АЯЛАЛ", ["2098-12-05"], { adult_price: 1_991_000, child_price: 1_591_000 }),
+        trip("spring", "НОРВЕЛ ХОТЫН АЯЛАЛ", ["2098-03-15"])]);
+      const modelGuess = { certainty: "none", trips: [], unknown_destination: "шинэ жил", finalReply: "Шинэ жилийн аялал гэсэн тусгай нэртэй аялал байхгүй байна. Аль чиглэл, улс сонирхож байна вэ?" };
+      for (const [sender, text] of [["ny-latin", "Sain bnuu ene shine jiliin ayalal haashaa be"], ["ny-cyr", "Шинэ жилийн аяллын мэдээлэл авъя"], ["ny-where", "шинэ жилээр хаашаа явах вэ"]]) {
+        const asked = await harness.turn(sender, text, modelGuess);
+        const reply = asked.sends.map((send) => send.text).join("\n");
+        assert.equal(asked.sends.length, 1, `${text}: one reply`);
+        assert.equal(asked.answerModelCalls, 0, `${text}: answered from the catalogue, not the free-text model`);
+        assert.match(reply, /Шинэ жилийн үеэр/, `${text}: ${reply}`);
+        assert.match(reply, /ЛУМАРА ХОТЫН АЯЛАЛ/, `${text}: the trip leaving over New Year`);
+        assert.match(reply, /ВЭЛМОР ДАЛАЙН ЭРГИЙН АЯЛАЛ/, `${text}: the December trip`);
+        assert.doesNotMatch(reply, /НОРВЕЛ/, `${text}: a spring trip is not a New Year trip`);
+        assert.match(reply, /uudamtravel\.mn/, `${text}: and the website for the rest`);
+        assert.doesNotMatch(reply, /тусгай нэртэй|байхгүй байна/, `${text}: never 'no such trip'`);
+        assert.equal(asked.leads.length, 0, `${text}: no hand-off`);
+      }
+      // The price from the post, quoted in chat words: the trip that sells at it, by name.
+      for (const [sender, text] of [["ny-latin", "991000 geed bga yum"], ["ny-cyr", "991,000 гээд байгаа юм"], ["price-only", "991000 гэсэн үнэтэй аялал байна лээ"]]) {
+        const quoted = await harness.turn(sender, text, { certainty: "none", finalReply: "REFER" });
+        const reply = quoted.sends.map((send) => send.text).join("\n");
+        assert.equal(quoted.sends.length, 1, `${text}: one reply`);
+        assert.match(reply, /991,000₮ үнэтэй тохирох аяллууд/, `${text}: ${reply}`);
+        assert.match(reply, /ЛУМАРА ХОТЫН АЯЛАЛ — Том хүн/, `${text}: the trip at that price`);
+        assert.doesNotMatch(reply, /ВЭЛМОР|НОРВЕЛ/, `${text}: only the trip at that price`);
+        assert.equal(quoted.answerModelCalls, 0, `${text}: no free-text model`);
+        assert.equal(quoted.leads.length, 0, `${text}: no hand-off`);
+      }
+      // A quoted price no trip sells at is still not guessed: the conversation goes on as before.
+      const none = await harness.turn("ny-latin", "1234567 geed bga yum", { certainty: "none", finalReply: "REFER" });
+      assert.doesNotMatch(none.sends.map((send) => send.text).join("\n"), /ЛУМАРА|ВЭЛМОР|НОРВЕЛ/, "no near-price trip is offered");
+      // No trip leaves over New Year: say so, point to the website, and show the nearest departures.
+      harness.catalog([trip("spring", "НОРВЕЛ ХОТЫН АЯЛАЛ", ["2098-03-15"]), trip("sea", "ВЭЛМОР ДАЛАЙН ЭРГИЙН АЯЛАЛ", ["2098-04-10"])]);
+      const empty = await harness.turn("ny-empty", "шинэ жилийн аялал байна уу", modelGuess);
+      const emptyReply = empty.sends.map((send) => send.text).join("\n");
+      assert.equal(empty.sends.length, 1);
+      assert.match(emptyReply, /Шинэ жилийн үеэр[^\n]*одоогоор[^\n]*алга/, emptyReply);
+      assert.match(emptyReply, /uudamtravel\.mn/);
+      assert.match(emptyReply, /Ойрын гарах аяллууд/);
+      assert.match(emptyReply, /НОРВЕЛ ХОТЫН АЯЛАЛ/);
+      assert.equal(empty.answerModelCalls, 0);
+    });
   } finally {
     await harness.close();
   }

@@ -1478,7 +1478,10 @@ async function handleMessageTurn(
         !hasCompareIntent(intentText) &&
         !hasBudgetIntent(intentText) &&
         !hasDiscountIntent(intentText) &&
-        !hasSeatsIntent(intentText)
+        !hasSeatsIntent(intentText) &&
+        // "991000 гэсэн үнэтэй аялал байна лээ": a quoted price names no trip by word, but the
+        // bare-price path below finds the trip sold at it.
+        !isBarePriceMessage(text)
       ) {
         // No destination named at all ("Үнэ", "Хөтөлбөр", "Хэд хоногийн аялал
         // хэдэн төг вээ"): ask which trip. Handing this to staff and pausing

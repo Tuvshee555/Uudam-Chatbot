@@ -35,6 +35,17 @@ const WHOLE_CATALOG_RE =
   /(?:^|\s)(?:бүх|bvh|buh|bukh|нийт)\s+(?:аял|ayl|ayal)|ямар\s+ямар\s+аял|yamar\s*yamar|(?:^|\s)(?:аяллууд|аялалууд|aylaluud|ayaluud)(?:\s|$)|аяллын\s+жагсаалт|all\s+(?:trips|tours)/i;
 const CRUISE_RE = /круз|усан\s+онгоц|cruise/i;
 const LUNAR_NEW_YEAR_RE = /сар\s*шин|sar\s*shin/i;
+// "Шинэ жилийн аялал хаашаа вэ", "shine jiliin ayalal", "шинэ оны амралт", "new year trip": the
+// agency's own post advertises company New Year trips, so customers ask for "the New Year trip"
+// as if it were one named trip. No trip carries that name; the answer is the trips leaving over
+// New Year (December to the first days of January). Live 2026-11-04 this reached the free-text
+// model, which said no trip has that special name and asked for a country.
+// "жил" must end the word (with a case ending): "шинжилгээ" (a medical test) is not New Year.
+const NEW_YEAR_RE = /(?:шинэ|шин)\s*жил(?:ийн|ийг|ээрээ|ээр|дээ|д|тэй)?(?!\p{L})|shi?ne?\s*jill?(?:iin|iig|eer|d|tei)?(?![a-z])|new\s*year|шинэ\s*оны?(?!\p{L})/iu;
+// Words that, with "шинэ жил", make it a question about the trips even without a trip word
+// ("шинэ жилийн мэдээлэл авъя", "shine jil haashaa"); a greeting ("шинэ жилийн мэнд") is not one.
+const NEW_YEAR_ASK_RE = /мэдээл|үнэ|хуваар|хаашаа|хаана|хэзээ|байна|байгаа|бна|(?:^|\s)(?:юу|уу|вэ|бэ|medeel\S*|une|unetei|huvaar\S*|haashaa|haana|hezee|bain\S*|bga|bna|bn|yu|ve|be|uu|awii|avii|avya|avy|trips?|tours?|info|price)(?=\s|$)/iu;
+const NEW_YEAR_WINDOW = { from: "12-01", to: "01-10" } as const;
 const MAX_DETAILED = 8;
 const MAX_COMPACT = 3;
 // Keep this detector local: reply policy imports the reply/fast-path graph.
@@ -152,9 +163,26 @@ const SEASONS: Array<{ re: RegExp; months: number[]; heading: string }> = [
   { re: /наадм/u, months: [7], heading: "Наадмын үеэр (7 сард) гарах аяллууд" },
 ];
 
-type When = { months: number[]; heading: string; soonest?: boolean; span?: [string, string]; scope?: RequestedDepartureScope };
+type When = { months: number[]; heading: string; soonest?: boolean; span?: [string, string]; scope?: RequestedDepartureScope;
+  /** The New Year window: the website is always offered, and an empty window shows the nearest departures instead. */
+  newYear?: boolean };
+
+/** December 1 to January 10 around the next New Year (or the current one while it is still on). */
+export function newYearWindow(now: Date): [string, string] {
+  const today = todayInUb(now);
+  const year = Number(today.slice(0, 4));
+  const endThisYear = `${year}-${NEW_YEAR_WINDOW.to}`;
+  return today <= endThisYear ? [`${year - 1}-${NEW_YEAR_WINDOW.from}`, endThisYear] : [`${year}-${NEW_YEAR_WINDOW.from}`, `${year + 1}-${NEW_YEAR_WINDOW.to}`];
+}
+
+function askedNewYear(normalized: string, now: Date): When | null {
+  if (!NEW_YEAR_RE.test(normalized) || !(TRIP_WORD_RE.test(normalized) || NEW_YEAR_ASK_RE.test(normalized))) return null;
+  return { months: [], heading: "🎄 Шинэ жилийн үеэр гарах аяллууд (12 сар – 1 сарын эхээр):", span: newYearWindow(now), newYear: true };
+}
 
 function askedWhen(normalized: string, now: Date, raw = normalized): When | null {
+  const newYear = askedNewYear(normalized, now);
+  if (newYear) return newYear;
   const span = askedSpan(raw, now);
   if (span && (TRIP_WORD_RE.test(normalized) || /^[0-9\s/.,-]+$/.test(raw.trim()) || AFTER_RE.test(raw))) {
     return { months: [], heading: `${customerDate(span[0], now)} – ${customerDate(span[1], now)}-ны хооронд гарах аяллууд`, span };
@@ -255,11 +283,21 @@ function whenListing(pool: TravelTrip[], when: When, now: Date, limit = MAX_COMP
   }).filter((row) => row.dates.length > 0).sort((a, b) => a.dates[0].localeCompare(b.dates[0]));
   if (!rows.length) {
     if (when.scope && when.scope.kind !== "month") return { reply: "REFER", listed: [], authoritative: true };
+    if (when.newYear) {
+      // Nothing leaves over New Year yet: say so, send the customer to the website for the
+      // whole schedule, and show the nearest departures so they can still pick a trip.
+      const notice = `Шинэ жилийн үеэр (12 сар – 1 сарын эхээр) гарах аялал одоогоор хуваарьт алга байна. Бүх аяллыг эндээс харна уу: ${BOOKING_WEBSITE_URL}`;
+      const nearest = whenListing(pool, { months: [], heading: "Ойрын гарах аяллууд:", soonest: true }, now, limit);
+      if (!nearest || !nearest.listed.length) return { reply: notice, listed: [], authoritative: true };
+      return { ...nearest, reply: `${notice}\n\n${nearest.reply}` };
+    }
     return { reply: `${when.heading.replace(/ гарах аяллууд$/, " гарах аялал")} одоогоор алга байна. Бусад хуваарийг эндээс харна уу: ${BOOKING_WEBSITE_URL}`, listed: [], authoritative: true };
   }
   const listed: TravelTrip[] = [];
   const lines = [when.heading];
-  const footer = (count: number) => [...(rows.length > count ? ["", `Өөр ${rows.length - count} аялал бий.${limit > MAX_COMPACT ? ` ${BOOKING_WEBSITE_URL}` : ""}`] : []), "", ...tripChoiceFooter(count)];
+  const website = when.newYear ? ["", `Бүх аяллыг эндээс харна уу: ${BOOKING_WEBSITE_URL}`] : [];
+  const footer = (count: number) => [...(rows.length > count ? ["", `Өөр ${rows.length - count} аялал бий.${limit > MAX_COMPACT && !when.newYear ? ` ${BOOKING_WEBSITE_URL}` : ""}`] : []),
+    ...website, "", ...tripChoiceFooter(count)];
   for (const { trip, dates } of rows.slice(0, limit)) {
     const price = priceDetail(trip, now, when.scope && dates.length === 1 ? dates[0] : undefined);
     const shownDates = dates.slice(0, when.scope?.kind === "dates" ? when.scope.dates.length : limit > MAX_COMPACT ? 4 : 2);

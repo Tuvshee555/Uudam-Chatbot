@@ -167,6 +167,23 @@ alerts nobody (0 `demo:` leads exist). **Impact:** the endpoint serves this app'
 admin test chat, not the booking website; the last 30 days hold 0 landing-page/admin sessions (all `demo:`
 sessions were QA tooling), so no real customer was affected in that period.
 
+## P2-6 — "Шинэ жилийн аялал" from the agency's own post — FIXED (2026-11-04)
+The page posted "байгууллагын шинэ жилийн аялалаа энд хийгээрэй"; customers then asked for "the New Year
+trip" as if it were one named trip ("Sain bnuu ene shine jiliin ayalal haashaa be", "шинэ жилийн аяллын
+мэдээлэл авъя"). No trip carries that name, so the free-text model answered "no trip with that special
+name; which country?", and the follow-up quoting the post's price in chat words ("<price> geed bga yum")
+ended in a staff hand-off although the trip sold at exactly that price was in the catalogue.
+**Now.** "шинэ жил / shine jil / шинэ оны / new year" with a trip or information word is a catalogue
+question: the reply lists the trips leaving between December 1 and January 10 (the real departures and
+fares), always with the website for the full schedule, and asks the customer to pick one. When nothing
+leaves in that window the reply says so, gives the website, and shows the nearest departures instead.
+A quoted price wrapped in chat words ("гээд байгаа юм", "geed bga yum", "гэсэн үнэтэй аялал байна лээ")
+is read as the pasted price it is: the bare-price path names the trip sold at exactly that price (it is no
+longer mistaken for a price objection or a trip question with no trip). A price no trip sells at is still
+never matched to a near one. Journey `a New Year trip question lists the New Year departures…`
+(`tests/forensic-regressions.test.ts`) fails without the fix. `npm run gate` and `npm run qa:live` were
+not run for this change (no database or model key in the build environment).
+
 ## P2-3 — Look-alike destinations — OPEN
 Fuzzy matching can take a destination one letter away for another. Needs a data-side "not this place"
 field, not code.

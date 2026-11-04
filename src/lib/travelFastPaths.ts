@@ -274,6 +274,9 @@ export function hasDiscountIntent(text: string): boolean {
 export function hasPriceObjectionIntent(text: string): boolean {
   const normalized = normText(text);
   if (!normalized) return false;
+  // A quoted price with nothing but chat words around it ("991000 гэсэн үнэтэй аялал байна
+  // лээ") names an advertised fare, it does not call it expensive: the price lookup answers it.
+  if (isBarePriceMessage(text)) return false;
   if (
     /(?:үнэтэй|unetei).{0,24}(?:үнэгүй|unegui)|(?:үнэгүй|unegui).{0,24}(?:үнэтэй|unetei)/i.test(normalized) ||
     /төлбөртэй.{0,24}төлбөргүй|төлбөргүй.{0,24}төлбөртэй/i.test(normalized)
@@ -842,7 +845,13 @@ export function isBarePriceMessage(text: string): boolean {
     .filter((word) => !BARE_PRICE_FILLER.has(word));
   return rest.length === 0;
 }
-const BARE_PRICE_FILLER = new Set(["аялал", "аяллын", "аяллууд", "үнэ", "үнэтэй", "төгрөг", "мнт", "mnt", "сая", "саяын", "саяд", "aylal", "une"]);
+// Besides money words, the chat words a customer wraps a quoted price in: "991,000 гээд байгаа
+// юм", "991000 geed bga yum", "… гэсэн үнэтэй аялал байна лээ" (the price from the agency's
+// post). Live 2026-11-04 the Latin one ended in a staff hand-off while the trip at that price was
+// in the catalogue. A word that changes the meaning ("төлсөн", "2 хүн") is still not filler.
+const BARE_PRICE_FILLER = new Set(["аялал", "аяллын", "аяллууд", "үнэ", "үнэтэй", "төгрөг", "төгрөгийн", "мнт", "mnt", "сая", "саяын", "саяд", "мянга", "aylal", "ayalal", "une", "unetei",
+  "гээд", "гэсэн", "гэж", "гэдэг", "байгаа", "байна", "байсан", "бга", "бгаа", "бна", "юм", "юмаа", "юу", "уу", "үү", "вэ", "бэ", "лээ", "шүү", "л", "энэ", "тэр", "ийм", "дээр", "зар", "зарын", "зард", "пост", "постон", "бичсэн",
+  "geed", "gesen", "gej", "gedeg", "baigaa", "baina", "baisan", "bga", "bgaa", "bna", "bn", "yum", "ym", "yu", "uu", "ve", "be", "lee", "shuu", "l", "ene", "ter", "iim", "deer", "zar", "zariin", "post", "bichsen"]);
 
 /**
  * The trips that have exactly this price, or null. A bare price with no exact
