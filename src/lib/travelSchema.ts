@@ -471,20 +471,6 @@ export async function ensureTravelSchema() {
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_travel_outbound_messages_created ON travel_outbound_messages (created_at);
       `);
-      // When a consultant last replied in the Messenger thread (staffTakeover.ts).
-      await client.query(`
-        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS last_staff_reply_at TIMESTAMPTZ NULL;
-      `);
-      // When staff last handed the conversation back to the bot ("Ботод буцаах"): consultant
-      // messages at or before this do not take the conversation over again (staffTakeover.ts).
-      await client.query(`
-        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS bot_released_at TIMESTAMPTZ NULL;
-      `);
-      // Which surface the consultant took the conversation over from ("staff_mobile" = the phone
-      // app, "staff_web" = Business Suite on a computer), set with last_staff_reply_at.
-      await client.query(`
-        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS takeover_source TEXT NOT NULL DEFAULT '';
-      `);
       // One row per message echo received during the Meta-app migration (echoObserver.ts):
       // who sent a Page message, by app id — the evidence for echo-based takeover. Shapes and
       // ids only; NEVER message text.
@@ -593,6 +579,23 @@ export async function ensureTravelSchema() {
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_travel_senders_last_seen
           ON travel_senders (last_seen DESC);
+      `);
+      // These columns were added after the table existed in production; on a fresh database
+      // they must follow its CREATE (2026-11-04: a new database failed here, and every trip read
+      // then returned nothing).
+      // When a consultant last replied in the Messenger thread (staffTakeover.ts).
+      await client.query(`
+        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS last_staff_reply_at TIMESTAMPTZ NULL;
+      `);
+      // When staff last handed the conversation back to the bot ("Ботод буцаах"): consultant
+      // messages at or before this do not take the conversation over again (staffTakeover.ts).
+      await client.query(`
+        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS bot_released_at TIMESTAMPTZ NULL;
+      `);
+      // Which surface the consultant took the conversation over from ("staff_mobile" = the phone
+      // app, "staff_web" = Business Suite on a computer), set with last_staff_reply_at.
+      await client.query(`
+        ALTER TABLE travel_senders ADD COLUMN IF NOT EXISTS takeover_source TEXT NOT NULL DEFAULT '';
       `);
       // Model spend per day, environment, model and call site (aiUsage.ts): production and
       // testing are always counted apart.
