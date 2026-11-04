@@ -12,6 +12,7 @@ import type {
   TripStatus,
 } from "./adminTypes";
 import { TRANSPORT_CHOICE, TRANSPORT_LABELS, TRANSPORT_TYPES, isTransportType } from "./tripTransitDays";
+import { PRICE_MISSING, PRICE_QUESTION_MARK } from "./tripPriceRules";
 
 export const STATUS_LABELS: Record<TripStatus, string> = {
   active: "Идэвхтэй",
@@ -387,6 +388,22 @@ export function buildProposalClarifications(
         recommended: transport === current,
       })),
       allowCustom: false,
+    });
+  }
+
+  // A new trip with no tugrug price: the admin types it here (the server reads the amounts
+  // after the arrow) or chooses to add it later. Yuan and land prices are never offered.
+  for (const item of proposal.conflict_items || []) {
+    if (item.type !== PRICE_MISSING) continue;
+    const route = String(item.data?.route_name || "").trim();
+    if (!route) continue;
+    pushQuestion({
+      id: `price:${route}`,
+      prompt: `«${route}» аяллын ${PRICE_QUESTION_MARK} — том хүн, хүүхэд.`,
+      detail: "Файлд төгрөгийн зарах үнэ алга. Юань, ландын үнийг үнэ гэж авахгүй.",
+      options: [{ label: "Үнийг дараа нэмнэ", answer: "Үнийг дараа «Аяллууд» хэсгээс нэмнэ." }],
+      allowCustom: true,
+      customPlaceholder: "Ж: 3,290,000 / 2,590,000",
     });
   }
 

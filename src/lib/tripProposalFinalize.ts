@@ -11,6 +11,7 @@ import type { AIChangeProposal, AITripAction, ConflictItem } from "./travelTypes
 import { askOpenAIChatParts } from "./openaiFallback";
 import { logWarn } from "./observability";
 import { uploadImageToCloudinary } from "./tripPhotoImport/upload";
+import { MIN_TRIP_PRICE_MNT, PRICE_MISSING, PRICE_QUESTION_MARK, mentionsPartnerPrice, parseMntPrices, withoutPartnerPrices } from "./tripPriceRules";
 import {
   PHOTOS_PER_TRIP, collectPhotoCandidates, downloadPhoto, photoQueriesForTrip, rankPhotos, type FoundPhoto,
 } from "./tripPhotoFinder";
@@ -59,6 +60,78 @@ export function applyTransportChoice(clarification: string, proposal: AIChangePr
     fields.extra = { ...extra, transport_type: transport };
   }
   return targets.length > 0;
+}
+
+function dropConflictItem(proposal: AIChangeProposal, type: string, route: string) {
+  proposal.conflict_items = (proposal.conflict_items || []).filter((entry) => !(entry.type === type && sameRoute(record(entry.data).route_name, route)));
+}
+
+const PRICE_FIELDS = ["adult_price", "child_price", "infant_price"] as const;
+const PARTNER_DURATION = /\d+\s*өдөр[\s/,]*\d+\s*шөнө|\d+\s*шөнө[\s/,]*\d+\s*өдөр/gi;
+const PARTNER_PRICE_JSON = /юан|¥|\bCNY\b|\bRMB\b|ланд|лант|газрын\s+үнэ/i;
+const MODEL_PRICE_NOTICE = /төгрөгийн үнэ файлд байхгүй/i;
+
+/**
+ * Owner's rule (tripPriceRules.ts): no yuan or land price on a new trip — not as its fare,
+ * not in its notes, summary or price table, not in the proposal's one-line summary. A fare
+ * in another currency, or a "₮" figure too small to be a trip (a yuan amount misread), is
+ * cleared; the admin is then asked for the tugrug price.
+ */
+export function scrubPartnerPrices(proposal: AIChangeProposal): void {
+  if (typeof proposal.summary === "string" && proposal.summary.trim()) {
+    proposal.summary = withoutPartnerPrices(proposal.summary) || "Файлаас аяллын мэдээлэл уншлаа.";
+  }
+  const actions = newTripActions(proposal);
+  if (!actions.length) return;
+  for (const action of actions) {
+    const fields = action.fields as Row;
+    const currency = text(fields.currency).toUpperCase();
+    const foreign = Boolean(currency) && currency !== "MNT" && currency !== "₮";
+    for (const key of PRICE_FIELDS) {
+      const value = fields[key];
+      if (typeof value === "number" && (foreign ? value !== 0 : value > 0 && value < MIN_TRIP_PRICE_MNT)) fields[key] = null;
+    }
+    if (foreign) fields.currency = "MNT";
+    for (const key of ["notes", "source_description"]) if (typeof fields[key] === "string") fields[key] = withoutPartnerPrices(fields[key]);
+    const extra = record(fields.extra);
+    if (Object.keys(extra).length) {
+      const next: Row = { ...extra };
+      for (const key of ["website_summary", "description"]) if (typeof next[key] === "string") next[key] = withoutPartnerPrices(next[key]);
+      if (Array.isArray(next.price_groups)) next.price_groups = next.price_groups.filter((group) => !PARTNER_PRICE_JSON.test(JSON.stringify(group)));
+      fields.extra = next;
+    }
+  }
+  // The model's own "no tugrug price" notes and partner-price remarks: the price question replaces them.
+  proposal.conflict_items = (proposal.conflict_items || []).filter((item) => item.type === PRICE_MISSING
+    || !(MODEL_PRICE_NOTICE.test(item.text) || (item.severity !== "blocker" && mentionsPartnerPrice(item.text))));
+  proposal.conflicts = (proposal.conflicts || []).filter((item) => !MODEL_PRICE_NOTICE.test(item) && !mentionsPartnerPrice(item));
+}
+
+/**
+ * The tugrug price typed into the price question ("«trip» аяллын төгрөгийн үнийг бичнэ үү … →
+ * 3,290,000 / 2,590,000"): first amount adult, second child. True when a fare was set.
+ */
+export function applyPriceAnswer(clarification: string, proposal: AIChangeProposal): boolean {
+  let changed = false;
+  const actions = newTripActions(proposal);
+  for (const line of String(clarification || "").split(/\n/)) {
+    if (!line.includes(PRICE_QUESTION_MARK)) continue;
+    const arrow = line.lastIndexOf("→");
+    if (arrow < 0) continue;
+    const prices = parseMntPrices(line.slice(arrow + 1));
+    if (!prices.length) continue;
+    const route = /«([^»]+)»/.exec(line.slice(0, arrow))?.[1];
+    let targets = actions.filter((action) => route && sameRoute(routeName(action), route));
+    if (!targets.length && actions.length === 1) targets = actions;
+    for (const action of targets) {
+      const fields = action.fields as Row;
+      fields.adult_price = prices[0];
+      if (prices[1] != null) fields.child_price = prices[1];
+      fields.currency = "MNT";
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 function setConflictItem(proposal: AIChangeProposal, item: ConflictItem, route: string) {
@@ -152,6 +225,7 @@ async function fillPhotos(input: { action: AITripAction; route: string; days: It
  * initial proposal); a revision passes nothing and keeps the photos it carried over.
  */
 export async function finalizeNewTripActions(proposal: AIChangeProposal, options: { photos?: PhotoDeps; trace?: Trace } = {}): Promise<void> {
+  scrubPartnerPrices(proposal);
   for (const action of newTripActions(proposal)) {
     const fields = action.fields as Row;
     const route = routeName(action);
@@ -170,7 +244,15 @@ export async function finalizeNewTripActions(proposal: AIChangeProposal, options
         website_details_patch: { base: record(patch.base), values: { ...record(patch.values), transport: TRANSPORT_WEBSITE_TAGS[detected.transport] } },
         ...(built.added > 0 ? { duration_days: durationForDays(built.days.length).duration_days, duration_nights: durationForDays(built.days.length).duration_nights } : {}),
       };
-      if (built.added > 0) fields.duration_text = durationForDays(built.days.length).duration_text;
+      if (built.added > 0) {
+        // The partner's own length ("7 өдөр 6 шөнө") left in the summaries would contradict the
+        // door-to-door duration the trip now has (seen on a real file, 2026-11-04).
+        const total = durationForDays(built.days.length).duration_text;
+        fields.duration_text = total;
+        const current = record(fields.extra);
+        if (typeof current.website_summary === "string") fields.extra = { ...current, website_summary: current.website_summary.replace(PARTNER_DURATION, total) };
+        if (typeof proposal.summary === "string") proposal.summary = proposal.summary.replace(PARTNER_DURATION, total);
+      }
       const duration = durationForDays(built.days.length);
       setConflictItem(proposal, {
         text: `«${route}» — тээвэр: ${TRANSPORT_LABELS[detected.transport]}.${built.added > 0 ? ` Улаанбаатараас гарах, буцах өдрүүдийг стандартаар нэмсэн: нийт ${duration.duration_text}.` : ""} Буруу бол тээврийн төрлийг доороос сонгоно уу.`,
@@ -184,7 +266,10 @@ export async function finalizeNewTripActions(proposal: AIChangeProposal, options
       }
       // What the admin still has to add by hand, said once in the proposal.
       if (typeof fields.adult_price !== "number") {
-        setConflictItem(proposal, { text: `«${route}»: төгрөгийн үнэ файлд байхгүй — хадгалсны дараа «Аяллууд» хэсгээс үнээ нэмнэ үү (тэр хүртэл сайтад «Үнэ лавлах» гэж гарна).`, severity: "info", type: "price_missing", data: { route_name: route } }, route);
+        setConflictItem(proposal, { text: `«${route}»: файлд төгрөгийн зарах үнэ алга (юань, ландын үнийг үнэ гэж авахгүй). Үнээ бичнэ үү, эсвэл дараа «Аяллууд» хэсгээс нэмнэ — тэр хүртэл сайтад «Үнэ лавлах» гэж гарна.`, severity: "info", type: PRICE_MISSING, data: { route_name: route } }, route);
+        proposal.needs_confirmation = true;
+      } else {
+        dropConflictItem(proposal, PRICE_MISSING, route);
       }
       const dates = Array.isArray(fields.departure_dates) ? fields.departure_dates.filter((date) => text(date)) : [];
       if (!dates.length) {

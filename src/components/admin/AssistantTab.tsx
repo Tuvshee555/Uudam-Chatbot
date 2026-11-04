@@ -14,6 +14,7 @@ import {
   formatBytes,
 } from "@/lib/adminUtils";
 import { diffTripFields, type TripExtraDiff } from "@/lib/tripExtraSchema";
+import { TRANSPORT_LABELS, isTransportType } from "@/lib/tripTransitDays";
 
 function fileGlyph(file: AttachedFile): string {
   const name = file.name.toLowerCase();
@@ -24,6 +25,70 @@ function fileGlyph(file: AttachedFile): string {
   if (/\.(xlsx|xlsm|xls|csv)$/.test(name) || mime.includes("sheet")) return "📊";
   if (/\.(txt|text|md|log)$/.test(name) || mime.startsWith("text/")) return "📝";
   return "📎";
+}
+
+/** What reading one file does, in order, with the second it usually starts at. */
+const FILE_STAGES = [
+  { at: 0, label: "Файлыг нээж байна" },
+  { at: 5, label: "Аяллын хөтөлбөр, үнэ, огноог уншиж байна" },
+  { at: 30, label: "Улаанбаатарын өдрүүд, тээврийг тохируулж байна" },
+  { at: 42, label: "Аялалд тохирох зураг сонгож байна" },
+] as const;
+
+/**
+ * One file is one server request (about a minute), so its real progress is unknown until it
+ * answers. The bar follows the usual time and never claims to be finished before the answer;
+ * the stage list and the clock show that work is happening (it sat at "15%" before, 2026-11-04).
+ */
+function FileProgress({ label, reported }: { label: string; reported: number }) {
+  const [startedAt] = useState(() => Date.now());
+  const [now, setNow] = useState(startedAt);
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  const elapsed = Math.max(0, Math.floor((now - startedAt) / 1000));
+  const shown = Math.min(95, Math.max(reported, Math.round(92 * (1 - Math.exp(-elapsed / 28)))));
+  const current = FILE_STAGES.reduce((index, stage, i) => (elapsed >= stage.at ? i : index), 0);
+  const clock = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
+  return (
+    <div className="w-full max-w-md rounded-2xl rounded-bl-md border border-line bg-surface px-4 py-3.5 shadow-xs">
+      <div className="flex items-center justify-between gap-3">
+        <p className="min-w-0 truncate text-sm font-semibold text-ink">{label || "Файл уншиж байна"}</p>
+        <span className="shrink-0 font-mono text-xs text-ink-muted" aria-label="Өнгөрсөн хугацаа">{clock}</span>
+      </div>
+      <div
+        className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-surface-sunken"
+        role="progressbar"
+        aria-label="Файл боловсруулах явц"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={shown}
+      >
+        <div className="h-full rounded-full bg-brand transition-[width] duration-1000 ease-out" style={{ width: `${shown}%` }} />
+      </div>
+      <ol className="mt-3 space-y-1.5" aria-label="Алхамууд">
+        {FILE_STAGES.map((stage, index) => (
+          <li key={stage.label} className={cx("flex items-center gap-2 text-xs leading-5",
+            index < current ? "text-ink-muted" : index === current ? "font-medium text-ink" : "text-ink-subtle")}>
+            <span aria-hidden="true" className={cx("flex h-4 w-4 shrink-0 items-center justify-center rounded-full",
+              index < current ? "bg-success-soft text-success" : index === current ? "bg-brand-soft text-brand" : "bg-surface-sunken")}>
+              {index < current ? <Icons.check size={11} /> : index === current ? <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand" /> : null}
+            </span>
+            {stage.label}
+          </li>
+        ))}
+      </ol>
+      <p className="mt-2.5 text-[11px] leading-4 text-ink-subtle">Нэг файл ихэвчлэн 1 минут орчим. Энэ хуудсыг бүү хаагаарай.</p>
+    </div>
+  );
+}
+
+/** A small Cloudinary rendition for the proposal's photo strip (other hosts as they are). */
+function thumbnailUrl(url: string): string {
+  return url.includes("res.cloudinary.com/") && url.includes("/upload/")
+    ? url.replace("/upload/", "/upload/c_fill,w_240,h_180,q_auto,f_auto/")
+    : url;
 }
 
 function formatMoneyMnt(value: unknown): string {
@@ -253,29 +318,7 @@ export function AssistantTab({
         {busy && (
           <div className="flex justify-start">
             {progress != null ? (
-              <div className="w-full max-w-md rounded-2xl rounded-bl-md border border-line bg-surface px-4 py-3.5 shadow-xs">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="min-w-0 truncate text-sm font-medium text-ink">
-                    {busyLabel || "Файл уншиж байна"}
-                  </p>
-                  <span className="shrink-0 font-mono text-sm font-semibold text-brand">
-                    {Math.round(progress)}%
-                  </span>
-                </div>
-                <div
-                  className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-surface-sunken"
-                  role="progressbar"
-                  aria-label="Файл боловсруулах явц"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(progress)}
-                >
-                  <div
-                    className="h-full rounded-full bg-brand transition-[width] duration-500"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-              </div>
+              <FileProgress label={busyLabel} reported={Math.round(progress)} />
             ) : (
               <div
                 className="flex items-center gap-2.5 rounded-2xl rounded-bl-md border border-line bg-surface px-4 py-3 shadow-xs"
@@ -551,20 +594,30 @@ function ChatBubble({
     ? describedActions
     : describedActions.slice(0, 5);
   const hiddenActionCount = Math.max(0, describedActions.length - visibleActions.length);
+  // A notice that is being asked as a question below is not repeated above it.
+  const askedIds = new Set(message.clarifications.map((q) => q.id));
+  const askedAs = (item: ConflictItem) => {
+    const route = String(item.data?.route_name || "").trim();
+    return (item.type === "transport_choice" && askedIds.has(`transport:${route}`))
+      || (item.type === "price_missing" && askedIds.has(`price:${route}`));
+  };
   const hasStructuredItems = (proposal.conflict_items?.length ?? 0) > 0;
   const infoWarningItems: ConflictItem[] = hasStructuredItems
     ? (proposal.conflict_items ?? []).filter(
-        (item) => item.severity === "info" || item.severity === "warning",
+        (item) => (item.severity === "info" || item.severity === "warning") && !askedAs(item),
       )
     : [];
   const compactWarnings: string[] = hasStructuredItems
-    ? infoWarningItems.map((item) => item.text).slice(0, 3)
+    ? infoWarningItems.map((item) => item.text).slice(0, 4)
     : Array.from(
         new Set(proposal.conflicts.map(summarizeConflict).filter(Boolean)),
       ).slice(0, 3);
   const reviewCount = message.clarifications.length;
   const isPending = message.status === "pending";
   const isReadyToApply = isPending && reviewCount === 0;
+  // A new trip still without a tugrug price is not "ready to save" — say what is missing.
+  const priceMissing = proposal.actions.some((action, index) =>
+    describedActions[index]?.verb === "Шинэ аялал нэмэх" && !getField(index, "adult_price", action.fields?.adult_price).trim());
 
   const createActions = proposal.actions
     .map((a, i) => ({ action: a, index: i }))
@@ -598,10 +651,12 @@ function ChatBubble({
                 "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold",
                 reviewCount > 0
                   ? "bg-surface-sunken text-ink-muted"
-                  : "bg-success-soft text-success",
+                  : priceMissing
+                    ? "bg-warning-soft text-warning"
+                    : "bg-success-soft text-success",
               )}
             >
-              {reviewCount > 0 ? "Тодруулах зүйл байна" : "Хадгалахад бэлэн"}
+              {reviewCount > 0 ? "Тодруулах зүйл байна" : priceMissing ? "Төгрөгийн үнэ дутуу" : "Хадгалахад бэлэн"}
             </span>
           )}
         </div>
@@ -837,8 +892,14 @@ function ChatBubble({
                   const f = action.fields ?? {};
                   const editing = isEditorOpen(index);
                   const name = getField(index, "route_name", f.route_name).trim();
+                  const extra = (f.extra && typeof f.extra === "object" ? f.extra : {}) as Record<string, unknown>;
+                  const dayCount = Array.isArray(extra.itinerary_days) ? extra.itinerary_days.length : 0;
+                  const photos = (Array.isArray(f.photo_urls) ? (f.photo_urls as unknown[]) : [])
+                    .filter((url): url is string => typeof url === "string" && url.startsWith("https://"));
                   const summaryRows: Array<[string, string]> = [
                     ["Хугацаа", getField(index, "duration_text", f.duration_text)],
+                    ["Тээвэр", isTransportType(extra.transport_type) ? TRANSPORT_LABELS[extra.transport_type] : ""],
+                    ["Хөтөлбөр", dayCount ? `${dayCount} өдөр` : ""],
                     ["Том хүн", formatMoneyMnt(getField(index, "adult_price", f.adult_price))],
                     ["Хүүхэд", formatMoneyMnt(getField(index, "child_price", f.child_price))],
                     [
@@ -895,6 +956,18 @@ function ChatBubble({
                             </div>
                           ))}
                         </dl>
+                      )}
+                      {!editing && photos.length > 0 && (
+                        <div className="mt-3">
+                          <p className="text-xs text-ink-muted">Зураг · {photos.length}</p>
+                          <div className="mt-1.5 grid grid-cols-3 gap-1.5 sm:grid-cols-6">
+                            {photos.slice(0, 6).map((url) => (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img key={url} src={thumbnailUrl(url)} alt="" loading="lazy"
+                                className="aspect-[4/3] w-full rounded-md bg-surface object-cover" />
+                            ))}
+                          </div>
+                        </div>
                       )}
                       {!editing && summaryRows.length === 0 && (
                         <p className="mt-1.5 text-xs text-ink-muted">

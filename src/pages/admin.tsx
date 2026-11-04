@@ -894,7 +894,7 @@ export default function AdminPage() {
           parseUploadUnitWithRetry(
             unit,
             note,
-            `${files.length} файл уншиж байна… ${index + 1}/${uploadUnits.length}`,
+            uploadUnits.length > 1 ? `${files.length} файл уншиж байна… ${index + 1}/${uploadUnits.length}` : `«${unit.displayName}» уншиж байна…`,
           ).then((result) => {
             setAiBusyProgress(() => {
               doneIndexes.add(index);
@@ -1038,7 +1038,7 @@ export default function AdminPage() {
     );
     setAiBusyLabel(
       files.length > 0 || driveFileIds.length > 0
-        ? `${Math.max(1, sourceNames.length)} файл уншиж байна… (хэдэн секунд)`
+        ? (sourceNames.length > 1 ? `${sourceNames.length} файл уншиж байна…` : `«${sourceNames[0] || "Файл"}» уншиж байна…`)
         : "AI хариу бэлдэж байна…",
     );
     try {

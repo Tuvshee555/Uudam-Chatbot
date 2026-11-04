@@ -96,6 +96,16 @@ test("clicking another transport rebuilds the days and keeps the photos and cred
   assert.equal(applyTransportChoice("ямар нэг өөр хариулт", revised), false);
 });
 
+test("the partner's own length in the summaries becomes the door-to-door duration", async () => {
+  const { finalizeNewTripActions } = await import("../src/lib/tripProposalFinalize");
+  const p = proposal();
+  p.summary = "Норвел хотын аялал 3 өдөр 2 шөнө үргэлжилнэ.";
+  (p.actions[0].fields!.extra as Record<string, unknown>).website_summary = "Норвел хотын 2 шөнө / 3 өдөр аялал.";
+  await finalizeNewTripActions(p);
+  assert.equal(p.summary, "Норвел хотын аялал 5 өдөр 4 шөнө үргэлжилнэ.");
+  assert.equal((p.actions[0].fields!.extra as Record<string, unknown>).website_summary, "Норвел хотын 5 өдөр 4 шөнө аялал.");
+});
+
 test("a trip the program already writes from Ulaanbaatar is only tagged, never given train days", async () => {
   const { finalizeNewTripActions } = await import("../src/lib/tripProposalFinalize");
   const p = proposal();
@@ -103,6 +113,8 @@ test("a trip the program already writes from Ulaanbaatar is only tagged, never g
     { day: 1, title: "УЛААНБААТАР – НОРВЕЛ", description: "Чингис Хаан олон улсын нисэх буудалд цуглаж 23:05 цагт хөөрнө.", meals: {} },
     { day: 2, title: "НОРВЕЛ – УЛААНБААТАР", description: "Өглөө нисч Улаанбаатар хотод газардсанаар аялал өндөрлөнө.", meals: {} },
   ];
+  // Priced in tugrug: this test is about the days; a trip without a tugrug price is asked for it (trip-price-rules.test.ts).
+  p.actions[0].fields!.adult_price = 3_290_000;
   await finalizeNewTripActions(p);
   const extra = p.actions[0].fields!.extra as Record<string, unknown>;
   assert.equal((extra.itinerary_days as unknown[]).length, 2);
