@@ -1,4 +1,4 @@
-import { askOpenAIParts, type OpenAIPart } from "./openaiProvider";
+import { aiCallFailureKind, askOpenAIParts, type OpenAIPart } from "./openaiProvider";
 import {
   classifyError,
   logError,
@@ -8,7 +8,7 @@ import {
 } from "./observability";
 import { queryNeon } from "./neonDb";
 import type { AITripAction, ConflictSeverity, ConflictItem, AIChangeProposal } from "./travelTypes";
-import { wait, ensureTravelSchema, listTrips, getTripById, upsertTrip, patchTrip, deleteTrip, resolveTripIdByMatch, mapTripRow, normalizeProposal, parseJsonFromModel, proposalFallbackFromRawText, dedupeStrings, estimateInlineBytes } from "./travelDb";
+import { AI_BILLING_FAILURE_SUMMARY, AI_KEY_FAILURE_SUMMARY, wait, ensureTravelSchema, listTrips, getTripById, upsertTrip, patchTrip, deleteTrip, resolveTripIdByMatch, mapTripRow, normalizeProposal, parseJsonFromModel, proposalFallbackFromRawText, dedupeStrings, estimateInlineBytes } from "./travelDb";
 import type { TravelTrip } from "./travelTypes";
 import {
   AI_CHANGE_OPENAI_TIMEOUT_MS,
@@ -837,17 +837,24 @@ async function createProposal(opts: {
       classification,
       message,
     });
-    // Surface the real reason instead of a misleading "couldn't parse JSON".
-    const rateLimited = classification.category === "rate_limited";
+    // Surface the real reason instead of a misleading "couldn't parse JSON". An empty
+    // balance and a rejected key are not "temporarily rate limited": nothing will work
+    // until the owner acts, and the admin must be told that (2026-11-04).
+    const failureKind = aiCallFailureKind(error);
+    const rateLimited = classification.category === "rate_limited" || failureKind === "quota";
     const timedOut = classification.category === "timeout";
     const circuitOpen = classification.category === "circuit_open";
-    const failureSummary = rateLimited
-      ? "AI service is temporarily rate limited."
-      : timedOut
-        ? "AI service took too long to answer."
-        : circuitOpen
-          ? "AI service is temporarily unavailable."
-          : "AI service could not generate a proposal.";
+    const failureSummary = failureKind === "credits_exhausted"
+      ? AI_BILLING_FAILURE_SUMMARY
+      : failureKind === "unauthorized"
+        ? AI_KEY_FAILURE_SUMMARY
+        : rateLimited
+          ? "AI service is temporarily rate limited."
+          : timedOut
+            ? "AI service took too long to answer."
+            : circuitOpen
+              ? "AI service is temporarily unavailable."
+              : "AI service could not generate a proposal.";
     proposal = {
       summary: failureSummary,
       needs_confirmation: true,
@@ -1690,11 +1697,16 @@ export async function generateAIProposalFromContentBatched(input: {
             classification,
             message,
           });
-          const rateLimited = classification.category === "rate_limited";
+          const failureKind = aiCallFailureKind(error);
+          const rateLimited = classification.category === "rate_limited" || failureKind === "quota";
           proposals.push({
-            summary: rateLimited
-              ? `AI service is temporarily rate limited (429): ${batchLabels}`
-              : `Could not finish reading batch: ${batchLabels}`,
+            summary: failureKind === "credits_exhausted"
+              ? `${AI_BILLING_FAILURE_SUMMARY} (${batchLabels})`
+              : failureKind === "unauthorized"
+                ? `${AI_KEY_FAILURE_SUMMARY} (${batchLabels})`
+                : rateLimited
+                  ? `AI service is temporarily rate limited (429): ${batchLabels}`
+                  : `Could not finish reading batch: ${batchLabels}`,
             needs_confirmation: true,
             important_reason: rateLimited
               ? message

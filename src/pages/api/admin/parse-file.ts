@@ -348,6 +348,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
+    // A source with neither text nor an image would reach the model as nothing at all, and
+    // the model would answer from the instructions alone: a 200 with an empty proposal that
+    // looked like "nothing in the file". Say what happened instead.
+    const unreadable = parsedUploads.filter((parsed) => !parsed.text.trim() && !parsed.inline);
+    if (unreadable.length > 0 && unreadable.length === parsedUploads.length) {
+      return res.status(400).json({
+        error: "file_unreadable",
+        message: `${unreadable.map((parsed) => `«${parsed.label}»`).join(", ")}: уншигдах текст, зураг олдсонгүй. Сканнердсан PDF бол админ хуудаснаас шууд оруулбал хуудас бүрийг зураг болгон уншина; эсвэл текстийг хуулж бичнэ үү.`,
+      });
+    }
+    parsedUploads = parsedUploads.filter((parsed) => !unreadable.includes(parsed));
+
     // Upload PDFs to Facebook reusable attachment store in parallel so each
     // trip saved from this file can send the brochure back to customers.
     const fbAttachmentIds = await Promise.all(
@@ -421,6 +433,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(failure.statusCode).json({
         ok: false,
         error: failure.error,
+        message: failure.message,
         retry_after_ms: failure.retry_after_ms,
       });
     }

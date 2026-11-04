@@ -60,10 +60,16 @@ const FILE_PARSE_MODEL =
   process.env.OPENAI_FILE_PARSE_MODEL || "gpt-4o";
 const FILE_PARSE_VERIFY =
   (process.env.OPENAI_FILE_PARSE_VERIFY || "false").toLowerCase() === "true";
-// Cap each batch at 30s. With small (4-trip) chunks a healthy call returns in
-// ~15-20s; a 30s ceiling means a stuck batch fails fast and leaves budget for
-// the remaining chunks instead of eating 45s. Never exceed the env timeout.
-const FILE_PARSE_OPENAI_TIMEOUT_MS = Math.min(env.openaiTimeoutMs, 30_000);
+// One batch reads a whole trip document: name, dates, prices, every itinerary day,
+// hotel and meals, up to 16k output tokens. That takes gpt-4o well over a minute. The
+// old ceiling was min(env, 30s), and the env default is the 15s chat-reply timeout, so
+// every file batch died at 15s and the admin saw "could not fully read" (2026-11-04).
+// OPENAI_FILE_PARSE_TIMEOUT_MS overrides; the batch loop still trims it to the budget.
+const FILE_PARSE_OPENAI_TIMEOUT_MS = Math.max(
+  Number(process.env.OPENAI_FILE_PARSE_TIMEOUT_MS) || 0,
+  env.openaiTimeoutMs,
+  100_000,
+);
 // One retry max for file parsing — a 45s timeout retried twice burns 90s+
 // before falling back. Keep it to a single attempt per batch.
 const FILE_PARSE_OPENAI_MAX_RETRIES = 0;
@@ -1488,6 +1494,10 @@ export function normalizeProposal(input: AIChangeProposal | null): AIChangePropo
   };
 }
 
+/** Summaries the proposal carries when the provider refused for billing or key reasons. */
+export const AI_BILLING_FAILURE_SUMMARY = "AI billing: OpenAI credit balance exhausted.";
+export const AI_KEY_FAILURE_SUMMARY = "AI key: OpenAI API key rejected.";
+
 export function getAIProposalFailureResponse(
   proposal: AIChangeProposal | undefined,
 ): AIProposalFailureResponse | null {
@@ -1500,6 +1510,26 @@ export function getAIProposalFailureResponse(
   ]
     .join(" ")
     .toLowerCase();
+
+  // Checked before the rate-limit pattern: the provider's "insufficient_quota" contains
+  // "quota", and an empty balance must never be reported as a passing rate limit.
+  if (/credit balance exhausted|insufficient_quota|credit_balance_exhausted|billing_hard_limit/.test(text)) {
+    return {
+      statusCode: 402,
+      error: "ai_credits_exhausted",
+      message:
+        "OpenAI credit balance is exhausted. The AI cannot read files or write proposals until billing is topped up (platform.openai.com → Billing).",
+      retry_after_ms: 0,
+    };
+  }
+  if (/api key rejected|openai api key is invalid|returned 401|returned 403/.test(text)) {
+    return {
+      statusCode: 503,
+      error: "ai_unauthorized",
+      message: "The OpenAI API key was rejected. Check OPENAI_API_KEY in the deployment settings.",
+      retry_after_ms: 0,
+    };
+  }
 
   if (
     /\b429\b|rate.?limit|quota|resource.?exhausted/.test(text)

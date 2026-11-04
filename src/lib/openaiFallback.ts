@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { aiErrorCode, aiFailureKind, reportAiOutage } from "./aiHealth";
+import { aiErrorCode, aiFailureKind, reportAiOutage, type AiFailureKind } from "./aiHealth";
 import { aiEnvironment, recordAiUsage } from "./aiUsage";
 import { fixMojibake } from "./encoding";
 import { getEnv } from "./env";
@@ -42,6 +42,13 @@ export async function askOpenAIChatParts(
     alternateModelAttempted?: boolean;
     /** A reply cut off by maxOutputTokens is intended (a one-token liveness probe), not a failure. */
     truncationExpected?: boolean;
+    /** Attempts beyond the first for retryable failures; the env default when omitted. */
+    maxRetries?: number;
+    /**
+     * Told why the call failed (billing, key, rate limit, provider) when it returns null, so a
+     * caller that turns null into an error can say the real cause instead of "request failed".
+     */
+    onFailure?: (failure: { kind: AiFailureKind; code?: string; message: string }) => void;
   },
 ): Promise<OpenAIResult | null> {
   const key = env.openaiApiKey;
@@ -107,7 +114,7 @@ export async function askOpenAIChatParts(
       {
         upstream: "openai.chat",
         timeoutMs: options?.timeoutMs ?? env.openaiTimeoutMs,
-        maxRetries: env.openaiMaxRetries,
+        maxRetries: options?.maxRetries ?? env.openaiMaxRetries,
         retryBaseDelayMs: env.openaiRetryBaseDelayMs,
         // gpt-4o's 30k tokens/min fits two ~15k-token reply prompts. A 429 there
         // goes straight to gpt-4o-mini (its own, larger limit) below instead of
@@ -202,6 +209,11 @@ export async function askOpenAIChatParts(
       message: error instanceof Error ? error.message : String(error),
     });
     void reportAiOutage(failureKind);
+    options?.onFailure?.({
+      kind: failureKind,
+      code: aiErrorCode(error),
+      message: error instanceof Error ? error.message : String(error),
+    });
     return null;
   }
 }

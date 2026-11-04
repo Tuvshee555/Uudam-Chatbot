@@ -141,8 +141,11 @@ export type ProposalValidationReport = {
 };
 
 export type AIProposalFailureResponse = {
-  statusCode: 429 | 503 | 504;
+  statusCode: 402 | 429 | 503 | 504;
+  /** A stable code for the admin page ("ai_credits_exhausted") or an English sentence. */
   error: string;
+  /** A sentence for a person, when `error` is a code. */
+  message?: string;
   retry_after_ms: number;
 };
 

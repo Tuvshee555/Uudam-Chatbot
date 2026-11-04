@@ -555,10 +555,23 @@ function ChatBubble({
   }
 
   if (message.kind === "note") {
+    const tone = message.tone;
     return (
       <div className="animate-fade-up flex justify-start">
-        <div className="min-w-0 max-w-[92%] rounded-2xl rounded-bl-md border border-line bg-surface px-4 py-2.5 text-sm leading-6 text-ink shadow-xs sm:max-w-lg">
-          <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
+        <div
+          role={tone === "error" ? "alert" : undefined}
+          className={cx(
+            "flex min-w-0 max-w-[92%] items-start gap-2.5 rounded-2xl rounded-bl-md border px-4 py-2.5 text-sm leading-6 shadow-xs sm:max-w-lg",
+            tone === "error"
+              ? "border-danger/30 bg-danger-soft text-ink"
+              : tone === "success"
+                ? "border-success/30 bg-success-soft text-ink"
+                : "border-line bg-surface text-ink",
+          )}
+        >
+          {tone === "error" && <Icons.alert size={16} className="mt-1 shrink-0 text-danger" />}
+          {tone === "success" && <Icons.check size={16} className="mt-1 shrink-0 text-success" />}
+          <p className="min-w-0 whitespace-pre-wrap wrap-break-word">{message.text}</p>
         </div>
       </div>
     );

@@ -22,7 +22,7 @@ const nextConfig: NextConfig = {
   devIndicators: { position: "bottom-right" },
   // Poster extraction uses these node-only libs on the server; keep them out of
   // the bundle so their dynamic/subpath imports resolve at runtime.
-  serverExternalPackages: ["pdf-parse", "mammoth", "pdf-lib", "jpeg-js", "@sparticuz/chromium", "playwright-core"],
+  serverExternalPackages: ["pdf-parse", "pdfjs-dist", "mammoth", "pdf-lib", "jpeg-js", "@sparticuz/chromium", "playwright-core"],
   outputFileTracingIncludes: {
     "/api/poster-pdf": [
       "./src/styles/poster.css",

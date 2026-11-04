@@ -35,7 +35,7 @@ import { documentedFreeFare } from "@/lib/tripCompleteness";
 import { resolveAgeRules } from "@/lib/ageRules";
 import type { LeadAttentionSummary } from "@/lib/leadAttention";
 import { changedSettingsFields } from "@/lib/adminPageUtils";
-import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, emptyChunkResult, fileToDataUrl, getSecretStorage, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, mergeAIProposals, settingsToForm, shortId, uid } from "@/lib/adminPageUtils";
+import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, emptyChunkResult, isStaleBundleError, STALE_BUNDLE_MESSAGE, fileToDataUrl, getSecretStorage, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, mergeAIProposals, settingsToForm, shortId, uid } from "@/lib/adminPageUtils";
 const BLANK_TRIP_DRAFT: Record<string, string> = { category: "Аялал", operator_name: "UUDAM TRAVEL AGENCY", route_name: "", duration_text: "", adult_price: "", child_price: "", infant_price: "", child_price_free: "", infant_price_free: "", age_infant: "0-23 сар", age_child: "2-11 нас", age_adult: "12+ нас", currency: "MNT", seats_total: "", seats_left: "", seats_percent_left: "", sale_badge_enabled: "false", sale_badge_label: "ХЯМДРАЛ", sale_badge_ends: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
 const MAX_AI_SOURCE_TEXT_CHARS = 20_000;
 const TRIP_DATA_TABS = new Set<TabKey>(["assistant", "trips", "calendar", "greeting", "photos"]);
@@ -691,12 +691,17 @@ export default function AdminPage() {
       } catch {
         hardFailures += 1;
         if (hardFailures >= MAX_HARD_FAILURES) {
-          return emptyChunkResult(unit.displayName);
+          return emptyChunkResult(unit.displayName, "Сүлжээний алдаа: сервер хүрч чадсангүй.");
         }
         await waitWithCountdown(progressLabel, 15_000, ++waitAttempt);
         continue;
       }
       const json = (await readJsonSafe(res)) as AIProposalResponse;
+      // Billing and key failures stop everything at once: no unit can succeed, and
+      // waiting would only hide the cause. The thrown message becomes the chat note.
+      if (res.status === 402 || json.error === "ai_credits_exhausted" || json.error === "ai_unauthorized") {
+        throw new Error(apiErrorMessage(json, "AI үйлчилгээ ажиллахгүй байна."));
+      }
       const rateLimited = res.status === 429;
       const transientOk =
         res.ok &&
@@ -704,7 +709,7 @@ export default function AdminPage() {
         !json.proposal?.actions?.length;
       if (rateLimited || transientOk) {
         if (transientRetries >= MAX_TRANSIENT_RETRIES) {
-          return emptyChunkResult(unit.displayName);
+          return emptyChunkResult(unit.displayName, apiErrorMessage(json, "AI түр хязгаарлагдсан (rate limit). Хэдэн минутын дараа дахин оруулна уу."));
         }
         transientRetries += 1;
         const waitMs =
@@ -715,12 +720,14 @@ export default function AdminPage() {
         continue;
       }
       if (!res.ok) {
-        if (res.status === 413) {
-          return emptyChunkResult(unit.displayName);
+        // The server already said what is wrong with this file (unreadable, too large, a
+        // bad request): retrying the same bytes six times with 15s pauses changes nothing.
+        if (res.status >= 400 && res.status < 500) {
+          return emptyChunkResult(unit.displayName, apiErrorMessage(json, "Серверт файлыг уншиж чадсангүй."));
         }
         hardFailures += 1;
         if (hardFailures >= MAX_HARD_FAILURES) {
-          return emptyChunkResult(unit.displayName);
+          return emptyChunkResult(unit.displayName, apiErrorMessage(json, "AI сервер хариу өгсөнгүй."));
         }
         await waitWithCountdown(progressLabel, 15_000, ++waitAttempt);
         continue;
@@ -728,7 +735,7 @@ export default function AdminPage() {
       if (!json.proposal || !Array.isArray(json.proposal.actions)) {
         hardFailures += 1;
         if (hardFailures >= MAX_HARD_FAILURES) {
-          return emptyChunkResult(unit.displayName);
+          return emptyChunkResult(unit.displayName, "AI ойлгомжтой санал буцаасангүй.");
         }
         await waitWithCountdown(progressLabel, 10_000, ++waitAttempt);
         continue;
@@ -777,11 +784,14 @@ export default function AdminPage() {
         });
       } catch {
         hardFailures += 1;
-        if (hardFailures >= MAX_HARD_FAILURES) return emptyChunkResult(label);
+        if (hardFailures >= MAX_HARD_FAILURES) return emptyChunkResult(label, "Сүлжээний алдаа: сервер хүрч чадсангүй.");
         await waitWithCountdown(progressLabel, 15_000, ++waitAttempt);
         continue;
       }
       const json = (await readJsonSafe(res)) as AIProposalResponse;
+      if (res.status === 402 || json.error === "ai_credits_exhausted" || json.error === "ai_unauthorized") {
+        throw new Error(apiErrorMessage(json, "AI үйлчилгээ ажиллахгүй байна."));
+      }
       const rateLimited = res.status === 429;
       const transientOk =
         res.ok &&
@@ -789,7 +799,7 @@ export default function AdminPage() {
         !json.proposal?.actions?.length;
       if (rateLimited || transientOk) {
         if (transientRetries >= MAX_TRANSIENT_RETRIES) {
-          return emptyChunkResult(label);
+          return emptyChunkResult(label, apiErrorMessage(json, "AI түр хязгаарлагдсан (rate limit). Хэдэн минутын дараа дахин оруулна уу."));
         }
         transientRetries += 1;
         const waitMs =
@@ -800,14 +810,17 @@ export default function AdminPage() {
         continue;
       }
       if (!res.ok) {
+        if (res.status >= 400 && res.status < 500) {
+          return emptyChunkResult(label, apiErrorMessage(json, "Серверт файлыг уншиж чадсангүй."));
+        }
         hardFailures += 1;
-        if (hardFailures >= MAX_HARD_FAILURES) return emptyChunkResult(label);
+        if (hardFailures >= MAX_HARD_FAILURES) return emptyChunkResult(label, apiErrorMessage(json, "AI сервер хариу өгсөнгүй."));
         await waitWithCountdown(progressLabel, 15_000, ++waitAttempt);
         continue;
       }
       if (!json.proposal || !Array.isArray(json.proposal.actions)) {
         hardFailures += 1;
-        if (hardFailures >= MAX_HARD_FAILURES) return emptyChunkResult(label);
+        if (hardFailures >= MAX_HARD_FAILURES) return emptyChunkResult(label, "AI ойлгомжтой санал буцаасангүй.");
         await waitWithCountdown(progressLabel, 10_000, ++waitAttempt);
         continue;
       }
@@ -853,11 +866,14 @@ export default function AdminPage() {
       } catch (error) {
         // The reason used to be swallowed; "could not read" with no cause sent the
         // owner looking for a different file format (2026-11-04).
-        const reason = error instanceof Error && error.message ? error.message : "уншиж чадсангүй";
+        console.error("[assistant] could not prepare file", file.name, error);
+        const reason = isStaleBundleError(error)
+          ? STALE_BUNDLE_MESSAGE
+          : error instanceof Error && error.message ? error.message : "уншиж чадсангүй";
         skippedFiles.push(reason.includes(file.name) ? reason : `${file.name}: ${reason}`);
       }
     }
-    if (skippedFiles.length > 0) {
+    if (skippedFiles.length > 0 && uploadUnits.length > 0) {
       toast.error(
         `${skippedFiles.length} файлыг алгаслаа — ${skippedFiles
           .slice(0, 3)
@@ -874,12 +890,15 @@ export default function AdminPage() {
     }
     const sourceText = sourceParts.join("\n\n").slice(0, MAX_AI_SOURCE_TEXT_CHARS);
     if (uploadUnits.length === 0) {
+      // Nothing was sent anywhere. The note must say why, not "no readable file".
+      const reasons = skippedFiles.length ? skippedFiles : ["Файл уншигдах хэлбэрт хөрвөсөнгүй."];
       return {
         proposal: {
-          summary: "Уншигдах файл олдсонгүй.",
-          needs_confirmation: false,
-          important_reason: "",
-          conflicts: [],
+          summary: "Файлыг уншиж чадсангүй.",
+          needs_confirmation: true,
+          important_reason: reasons.join(" "),
+          conflicts: reasons,
+          conflict_items: reasons.map((text) => ({ text, severity: "blocker" as const, type: "file_unreadable" })),
           actions: [],
         },
         requestId: null,
@@ -1092,11 +1111,13 @@ export default function AdminPage() {
         );
       }
       if (proposal.actions.length === 0) {
+        const failed = (proposal.conflict_items || []).some((item) => item.severity === "blocker")
+          || proposal.needs_confirmation;
         pushMessage({
           id: uid(),
           role: "assistant",
           kind: "note",
-          tone: "info",
+          tone: failed ? "error" : "info",
           text:
             proposal.conflicts?.[0] ||
             proposal.important_reason ||

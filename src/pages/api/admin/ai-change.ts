@@ -160,6 +160,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(failure.statusCode).json({
         ok: false,
         error: failure.error,
+        message: failure.message,
         retry_after_ms: failure.retry_after_ms,
         proposal: proposal.proposal,
         request_id: proposal.request_id,

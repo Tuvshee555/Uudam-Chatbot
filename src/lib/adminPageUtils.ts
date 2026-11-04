@@ -257,6 +257,15 @@ function apiErrorMessage(
   const raw = String(data?.message || data?.error || "").trim();
   const wait = formatWaitMs(data?.retry_after_ms);
 
+  if (code === "ai_credits_exhausted" || /credit balance exhausted|insufficient_quota|credit_balance_exhausted|billing_hard_limit/i.test(raw)) {
+    return "OpenAI-ийн кредит дууссан тул AI файл уншиж, санал бэлдэж чадахгүй байна. platform.openai.com → Billing хэсэгт кредит нэмсний дараа дахин оруулна уу.";
+  }
+  if (code === "ai_unauthorized" || /api key rejected|returned 401|returned 403/i.test(raw)) {
+    return "OpenAI түлхүүр хүчингүй байна (OPENAI_API_KEY). Тохиргоог шалгаад дахин оролдоно уу.";
+  }
+  if (code === "file_unreadable") {
+    return raw || fallback;
+  }
   if (code === "rate_limited") {
     return `AI хэсэг түр хязгаарлагдлаа. ${wait} дахин оролдоно уу.`;
   }
@@ -1818,19 +1827,36 @@ export function mergeAIProposals(
 }
 
 /** A placeholder proposal for a file/chunk the parser could not read. Pure. */
-export function emptyChunkResult(displayName: string): {
+/**
+ * The result for one upload unit the server could not turn into a proposal. The reason
+ * travels with it: shown as the chat note when nothing else was read, and as a blocker
+ * on the merged proposal when other units did come through. "Recheck this part" with no
+ * cause sent the owner looking for a different file format (2026-11-04).
+ */
+export function emptyChunkResult(displayName: string, reason?: string): {
   proposal: AIProposal;
   requestId: number | null;
 } {
+  const why = reason?.trim() || "AI хариу өгсөнгүй.";
+  const text = `«${displayName}» хэсгийг уншиж чадсангүй: ${why}`;
   return {
     proposal: {
-      summary: `"${displayName}" хэсгийг бүрэн уншиж чадсангүй.`,
+      summary: text,
       needs_confirmation: true,
-      important_reason:
-        "Энэ хэсгийн мэдээлэл хадгалагдаагүй. Бусад уншигдсан файлын үр дүнг үргэлжлүүлэн бэлдлээ.",
-      conflicts: [`"${displayName}" хэсгийг дахин шалгах шаардлагатай.`],
+      important_reason: why,
+      conflicts: [text],
+      conflict_items: [{ text, severity: "blocker", type: "chunk_failed" }],
       actions: [],
     },
     requestId: null,
   };
 }
+
+/** A dynamically imported reader (pdf.js, JSZip, SheetJS) that no longer exists after a deploy. */
+export function isStaleBundleError(error: unknown): boolean {
+  const message = error instanceof Error ? `${error.name} ${error.message}` : String(error);
+  return /ChunkLoadError|Loading chunk|Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i.test(message);
+}
+
+export const STALE_BUNDLE_MESSAGE =
+  "Админ хуудасны шинэ хувилбар гарсан тул файл уншигч ачаалагдсангүй. Хуудсыг дахин ачаалаад (F5) файлаа дахин оруулна уу.";

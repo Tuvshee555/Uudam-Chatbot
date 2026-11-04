@@ -83,6 +83,27 @@ test("transient AI proposal failures map to retryable HTTP responses", async () 
   );
 });
 
+test("an empty OpenAI balance and a rejected key are reported as such, never as a passing rate limit", async () => {
+  const { getAIProposalFailureResponse, AI_BILLING_FAILURE_SUMMARY, AI_KEY_FAILURE_SUMMARY } = await loadTravelOps();
+  const base = { needs_confirmation: true, conflicts: [], actions: [] as AIChangeProposal["actions"] };
+  const billing = getAIProposalFailureResponse({
+    ...base,
+    summary: AI_BILLING_FAILURE_SUMMARY,
+    important_reason: "OpenAI credit balance exhausted (insufficient_quota): the provider refuses every request until billing is topped up.",
+  });
+  assert.equal(billing?.statusCode, 402);
+  assert.equal(billing?.error, "ai_credits_exhausted");
+  assert.match(billing?.message || "", /Billing/);
+
+  const key = getAIProposalFailureResponse({
+    ...base,
+    summary: AI_KEY_FAILURE_SUMMARY,
+    important_reason: "OpenAI API key rejected (unauthorized): check OPENAI_API_KEY.",
+  });
+  assert.equal(key?.statusCode, 503);
+  assert.equal(key?.error, "ai_unauthorized");
+});
+
 test("validation marks suspicious child pricing for confirmation", async () => {
   const { validateAIChangeProposal } = await loadTravelOps();
   const proposal: AIChangeProposal = {
