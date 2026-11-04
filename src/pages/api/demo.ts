@@ -2,7 +2,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { groundedTripIds, tripsNamedIn } from "../../lib/tripGrounding";
 import { displayedClarificationTrips } from "../../lib/clarificationOptions";
-import { askOpenAI } from "../../lib/openaiProvider";
+import { askOpenAI, REPLY_MODEL } from "../../lib/openaiProvider";
 import { askOpenAIChatParts } from "../../lib/openaiFallback";
 import {
   buildShardedRateLimitKey,
@@ -1037,7 +1037,7 @@ export default async function handler(
           correlationId: trace.correlationId,
           source: "api.demo",
           systemInstruction: systemInstructionText,
-          openaiModel: process.env.OPENAI_REPLY_MODEL || "gpt-4o",
+          openaiModel: process.env.OPENAI_REPLY_MODEL || REPLY_MODEL,
           preferOpenAI: true,
         });
         aiReplyText = result.text;
@@ -1049,7 +1049,7 @@ export default async function handler(
             timeoutMs: 20_000,
             requestId: trace.requestId,
             correlationId: trace.correlationId,
-            model: process.env.OPENAI_REPLY_MODEL || "gpt-4o",
+            model: process.env.OPENAI_REPLY_MODEL || REPLY_MODEL,
             systemText: systemInstructionText,
           });
           fallbackText = fallback?.text?.trim() || "";

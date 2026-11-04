@@ -142,7 +142,8 @@ export async function askOpenAIChatParts(
 
     const usage = data?.usage ?? {};
     recordCounter("openai.fallback_success_total", 1, { model, source });
-    recordAiUsage({ model, source, usage: { prompt_tokens: usage.prompt_tokens ?? 0, completion_tokens: usage.completion_tokens ?? 0 } });
+    recordAiUsage({ model, source, usage: { prompt_tokens: usage.prompt_tokens ?? 0, completion_tokens: usage.completion_tokens ?? 0,
+      cached_tokens: usage.prompt_tokens_details?.cached_tokens ?? 0 } });
     logInfo("openai.fallback_success", {
       source,
       model,

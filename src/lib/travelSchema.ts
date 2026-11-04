@@ -609,6 +609,11 @@ export async function ensureTravelSchema() {
           PRIMARY KEY (day, environment, model, source)
         );
       `);
+      // Input tokens OpenAI served from its prompt cache, billed at a fraction of the price.
+      await client.query(`
+        ALTER TABLE travel_ai_usage
+          ADD COLUMN IF NOT EXISTS cached_tokens BIGINT NOT NULL DEFAULT 0;
+      `);
       return true;
     });
 

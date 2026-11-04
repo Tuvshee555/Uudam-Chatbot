@@ -6,25 +6,27 @@ import type { ReadinessIssue } from "./readiness";
 // importable without a validated server env.
 const queryNeon: typeof QueryNeon = async (...args) => (await import("./neonDb")).queryNeon(...args);
 
-export type AiUsage = { prompt_tokens: number; completion_tokens: number; total_tokens?: number };
+/** `cached_tokens`: the part of prompt_tokens OpenAI served from its prompt cache. */
+export type AiUsage = { prompt_tokens: number; completion_tokens: number; total_tokens?: number; cached_tokens?: number };
 
 /**
- * Estimated USD per million tokens [input, output]. An estimate for spend tracking and alerts,
- * not billing: check the provider's pricing page when it changes. Unknown models are counted
- * in tokens with no cost.
+ * Estimated USD per million tokens [input, output, cached input]. An estimate for spend
+ * tracking and alerts, not billing: check the provider's pricing page when it changes.
+ * Unknown models are counted in tokens with no cost.
  */
-const PRICE_PER_MILLION_USD: Record<string, [number, number]> = {
-  "gpt-4o": [2.5, 10],
-  "gpt-4o-mini": [0.15, 0.6],
-  "gpt-4.1": [2, 8],
-  "gpt-4.1-mini": [0.4, 1.6],
-  "gpt-4.1-nano": [0.1, 0.4],
+const PRICE_PER_MILLION_USD: Record<string, [number, number, number]> = {
+  "gpt-4o": [2.5, 10, 1.25],
+  "gpt-4o-mini": [0.15, 0.6, 0.075],
+  "gpt-4.1": [2, 8, 0.5],
+  "gpt-4.1-mini": [0.4, 1.6, 0.1],
+  "gpt-4.1-nano": [0.1, 0.4, 0.025],
 };
 
 export function estimateCostUsd(model: string, usage: AiUsage): number | null {
   const price = PRICE_PER_MILLION_USD[model] ?? PRICE_PER_MILLION_USD[model.replace(/-\d{4}-\d{2}-\d{2}$/, "")];
   if (!price) return null;
-  return (usage.prompt_tokens * price[0] + usage.completion_tokens * price[1]) / 1_000_000;
+  const cached = Math.min(Math.max(usage.cached_tokens ?? 0, 0), usage.prompt_tokens);
+  return ((usage.prompt_tokens - cached) * price[0] + cached * price[2] + usage.completion_tokens * price[1]) / 1_000_000;
 }
 
 /**
@@ -58,15 +60,16 @@ export function recordAiUsage(input: { model: string; source: string; usage: AiU
   recordCounter("openai.usage_tokens_total", input.usage.prompt_tokens + input.usage.completion_tokens, { model: input.model, environment });
   if (environment === "test") return;
   void queryNeon(
-    `INSERT INTO travel_ai_usage (day, environment, model, source, calls, prompt_tokens, completion_tokens, est_cost_usd)
-     VALUES ((NOW() AT TIME ZONE 'Asia/Ulaanbaatar')::date, $1, $2, $3, 1, $4, $5, $6)
+    `INSERT INTO travel_ai_usage (day, environment, model, source, calls, prompt_tokens, completion_tokens, est_cost_usd, cached_tokens)
+     VALUES ((NOW() AT TIME ZONE 'Asia/Ulaanbaatar')::date, $1, $2, $3, 1, $4, $5, $6, $7)
      ON CONFLICT (day, environment, model, source) DO UPDATE SET
        calls = travel_ai_usage.calls + 1,
        prompt_tokens = travel_ai_usage.prompt_tokens + EXCLUDED.prompt_tokens,
        completion_tokens = travel_ai_usage.completion_tokens + EXCLUDED.completion_tokens,
        est_cost_usd = travel_ai_usage.est_cost_usd + EXCLUDED.est_cost_usd,
+       cached_tokens = travel_ai_usage.cached_tokens + EXCLUDED.cached_tokens,
        updated_at = NOW()`,
-    [environment, input.model, input.source.slice(0, 80), input.usage.prompt_tokens, input.usage.completion_tokens, costUsd],
+    [environment, input.model, input.source.slice(0, 80), input.usage.prompt_tokens, input.usage.completion_tokens, costUsd, input.usage.cached_tokens ?? 0],
   ).catch((error) => logError("ai_usage.record_failed", { message: error instanceof Error ? error.message : String(error) }));
 }
 

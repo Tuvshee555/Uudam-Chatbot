@@ -32,6 +32,15 @@ export type OpenAIPart =
   | { text: string }
   | { inlineData: { mimeType: string; data: string } };
 
+/**
+ * The model that writes customer replies when no rule-based path could (OPENAI_REPLY_MODEL
+ * overrides). gpt-4.1 since 2026-11-04, replacing gpt-4o: the same family the trip
+ * understanding step already runs on, a lower price, and a cached-prompt price a quarter of
+ * its normal one (gpt-4o: half) — the reply prompt is ~37k tokens, almost all of it the same
+ * from one message to the next. This call was two thirds of the OpenAI bill.
+ */
+export const REPLY_MODEL = "gpt-4.1";
+
 export async function askOpenAI(
   prompt: string,
   options?: AskOpenAIOptions,

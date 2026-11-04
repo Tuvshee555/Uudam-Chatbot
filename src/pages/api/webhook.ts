@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { askOpenAI } from "../../lib/openaiProvider";
+import { askOpenAI, REPLY_MODEL } from "../../lib/openaiProvider";
 import { askOpenAIChatParts } from "../../lib/openaiFallback";
 import { matchFlow, findTriggeredFlow, getFlowState, setFlowState, clearFlowState, newRuntimeState, runFlowFrom, resumeFlowWithInput, type FlowRule, type FlowDoc, type FlowEffects, type FlowRuntimeState, type RunOutcome, } from "../../lib/flowEngine";
 import { replyToComment, sendImageMessage, sendQuickReplies } from "../../lib/messenger";
@@ -1911,7 +1911,7 @@ async function handleMessageTurn(
       correlationId: trace?.correlationId,
       source: "api.webhook",
       systemInstruction: promptParts.system,
-      openaiModel: process.env.OPENAI_REPLY_MODEL || "gpt-4o",
+      openaiModel: process.env.OPENAI_REPLY_MODEL || REPLY_MODEL,
       preferOpenAI: true,
     });
     aiReply = result.text;
@@ -1926,7 +1926,7 @@ async function handleMessageTurn(
         timeoutMs: 20_000,
         requestId: trace?.requestId,
         correlationId: trace?.correlationId,
-        model: process.env.OPENAI_REPLY_MODEL || "gpt-4o",
+        model: process.env.OPENAI_REPLY_MODEL || REPLY_MODEL,
         systemText: promptParts.system,
       });
       fallbackText = fallback?.text?.trim() || "";
