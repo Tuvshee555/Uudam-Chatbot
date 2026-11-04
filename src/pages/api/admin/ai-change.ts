@@ -4,11 +4,11 @@ import { getClientKey, rateLimitAsync } from "../../../lib/rateLimit";
 import {
   applyAIProposalDirect,
   applyAIRequest,
-  generateAIProposal,
   getAIProposalFailureResponse,
   rollbackAIRequest,
   reviseAIRequest,
 } from "../../../lib/travelOps";
+import { generateAssistantReply } from "../../../lib/assistantReply";
 import { logAssistantEvent, recentAssistantContext } from "../../../lib/assistantLog";
 import { createQuickProposal, type QuickActionRequest } from "../../../lib/assistantQuickActions";
 import {
@@ -147,7 +147,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const context = await recentAssistantContext(session_id);
     await logAssistantEvent({ sessionId: session_id, role: "admin", kind: "instruction", text: trimmedInstruction });
-    const proposal = await generateAIProposal(trimmedInstruction, { context });
+    const reply = await generateAssistantReply(trimmedInstruction, { context });
+    if (reply.kind === "ask") {
+      // One question with real choices (which trip, which day, which amount); nothing is saved yet.
+      await logAssistantEvent({ sessionId: session_id, role: "assistant", kind: "ask",
+        text: [reply.ask.text, ...reply.ask.options.slice(0, 8).map((option) => `• ${option.label}`)].join("\n") });
+      return res.status(200).json({ ok: true, ask: reply.ask });
+    }
+    if (reply.kind === "note") {
+      await logAssistantEvent({ sessionId: session_id, role: "assistant", kind: "note", text: reply.text });
+      return res.status(200).json({ ok: true, note: reply.text });
+    }
+    const proposal = { proposal: reply.proposal, request_id: reply.request_id };
     await logAssistantEvent({
       sessionId: session_id,
       requestId: proposal.request_id,

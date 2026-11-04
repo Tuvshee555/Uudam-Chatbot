@@ -7,8 +7,8 @@ import {
   recordCounter,
 } from "./observability";
 import { queryNeon } from "./neonDb";
-import type { AITripAction, ConflictSeverity, ConflictItem, AIChangeProposal } from "./travelTypes";
-import { AI_BILLING_FAILURE_SUMMARY, AI_KEY_FAILURE_SUMMARY, wait, ensureTravelSchema, listTrips, getTripById, upsertTrip, patchTrip, deleteTrip, resolveTripIdByMatch, mapTripRow, normalizeProposal, parseJsonFromModel, proposalFallbackFromRawText, dedupeStrings, estimateInlineBytes } from "./travelDb";
+import type { AITripAction, ConflictSeverity, ConflictItem, AIChangeProposal, DateSeatState } from "./travelTypes";
+import { AI_BILLING_FAILURE_SUMMARY, AI_KEY_FAILURE_SUMMARY, wait, ensureTravelSchema, listTrips, getTripById, upsertTrip, patchTrip, deleteTrip, resolveTripIdByMatch, mapTripRow, normalizeProposal, parseJsonFromModel, proposalFallbackFromRawText, dedupeStrings, estimateInlineBytes, isDateSeatState } from "./travelDb";
 import type { TravelTrip } from "./travelTypes";
 import {
   AI_CHANGE_OPENAI_TIMEOUT_MS,
@@ -40,13 +40,17 @@ import {
 } from "./travelAIValidation";
 export * from "./travelAIValidation";
 // Prompt-string builders live in travelAIGuides.ts (kept this file under the cap).
-import { buildProposalGuide, buildProposalRepairGuide } from "./travelAIGuides";
+import { buildInstructionGuide, buildProposalGuide, buildProposalRepairGuide } from "./travelAIGuides";
+import { applyTripChoice, bindActionTargets, hasOpenQuestions, knownDepartureDays } from "./assistantBrain";
+import { houseRulesPrompt } from "./assistantHouseRules";
 
 type AIActionSnapshot = {
   action: AITripAction;
   trip_id: string;
   before: TravelTrip | null;
   after: TravelTrip | null;
+  /** set_date_state: the day's state before the change, so rollback can put it back. */
+  date_state_before?: DateSeatState | null;
 };
 
 type ProposalSource = {
@@ -665,11 +669,16 @@ async function requestProposalFromModel(opts: {
   repairTimeoutMs?: number;
   model?: string;
   verify?: boolean;
+  /** A typed instruction: the guide adds the house rules and the trips it most likely concerns. */
+  instruction?: { focusTrips: unknown[] };
 }) {
   // OpenAI handles all proposal extraction (file parsing + text instructions).
   // PDF inputs are rendered/extracted before reaching this path.
+  const guide = opts.instruction
+    ? buildInstructionGuide(opts.condensedTrips, { focusTrips: opts.instruction.focusTrips, houseRules: houseRulesPrompt() })
+    : buildProposalGuide(opts.condensedTrips);
   const result = await askOpenAIParts(
-    [{ text: buildProposalGuide(opts.condensedTrips) }, ...opts.userParts],
+    [{ text: guide }, ...opts.userParts],
     {
       source: opts.source,
       jsonMode: true,
@@ -772,6 +781,54 @@ async function requestProposalFromPrompt(opts: {
   return parsed ? normalizeProposal(parsed) : proposalFallbackFromRawText(result.text);
 }
 
+/** One trip as the model should see it when an instruction is about it: every fact it may need. */
+export function focusTripDetail(trip: TravelTrip, now = new Date()) {
+  const groups = Array.isArray(trip.extra?.price_groups) ? (trip.extra.price_groups as unknown[]) : [];
+  const row = (value: unknown): Record<string, unknown> => (value && typeof value === "object" ? (value as Record<string, unknown>) : {});
+  return {
+    id: trip.id,
+    route_name: trip.route_name,
+    aliases: Array.isArray(trip.extra?.aliases) ? trip.extra.aliases : [],
+    status: trip.status,
+    duration_text: trip.duration_text,
+    adult_price: trip.adult_price,
+    child_price: trip.child_price,
+    infant_price: trip.infant_price,
+    currency: trip.currency,
+    departure_dates: trip.departure_dates,
+    departure_days: knownDepartureDays(trip, now).map((day) => ({ date: day.date, state: day.state ?? "not_on_website" })),
+    price_rows: groups.slice(0, 24).map((group) => {
+      const value = row(group);
+      return { label: value.label, dates: value.dates, adult_price: value.adult_price, child_price: value.child_price, infant_price: value.infant_price,
+        passengers: Array.isArray(value.passenger_prices) ? value.passenger_prices.map((tier) => { const t = row(tier); return { label: t.label, age_range: t.age_range, price: t.price }; }) : [] };
+    }),
+    seats_total: trip.seats_total,
+    seats_left: trip.seats_left,
+    has_food: trip.has_food,
+    hotel: trip.hotel,
+    transport_type: trip.extra?.transport_type ?? null,
+    notes: String(trip.notes || "").slice(0, 600),
+  };
+}
+
+/**
+ * Saves a proposal built in code (the brain, a quick action) as a change request, so it
+ * can be applied, revised and rolled back like a model proposal.
+ */
+export async function persistProposal(instruction: string, proposal: AIChangeProposal): Promise<number | null> {
+  try {
+    const inserted = await queryNeon<{ id: number }>(
+      `INSERT INTO travel_ai_change_requests (instruction, proposal_json, conflicts, needs_confirmation, status)
+       VALUES ($1, $2::jsonb, $3::text[], $4, 'pending') RETURNING id`,
+      [instruction, JSON.stringify(proposal), proposal.conflicts || [], proposal.needs_confirmation],
+    );
+    return inserted?.rows?.[0]?.id ?? null;
+  } catch (error) {
+    logError("travel.ai.proposal_insert_failed", { source: "assistant.brain", message: error instanceof Error ? error.message : String(error) });
+    return null;
+  }
+}
+
 async function createProposal(opts: {
   instruction: string;
   source: string;
@@ -780,18 +837,26 @@ async function createProposal(opts: {
   maxRetries?: number;
   repairTimeoutMs?: number;
   buildProposal?: (condensedTrips: unknown) => Promise<AIChangeProposal>;
+  /** The catalogue as already read by the caller (saves a second read). */
+  trips?: TravelTrip[];
+  /** A typed instruction: which trips it most likely concerns, for the model's guide. */
+  focusTrips?: TravelTrip[];
 }) {
   const ready = await ensureTravelSchema();
   if (!ready) {
     return { proposal: normalizeProposal(null), request_id: null };
   }
 
-  const trips = await listTrips({ limit: 250 });
+  const trips = opts.trips ?? await listTrips({ limit: 250, includeArchived: true });
   const tripsInCreatedOrder = [...trips].sort((a, b) =>
     a.created_at.localeCompare(b.created_at),
   );
   let unnamedOrder = 0;
-  const condensedTrips = tripsInCreatedOrder.map((trip) => ({
+  const instructionMode = opts.focusTrips !== undefined;
+  const condensedTrips = instructionMode
+    // The guide carries the likely trips in full; the rest of the catalogue only has to be findable by name.
+    ? tripsInCreatedOrder.map((trip) => ({ id: trip.id, route_name: trip.route_name, status: trip.status, next_departure: trip.departure_dates[0] ?? null }))
+    : tripsInCreatedOrder.map((trip) => ({
     id: trip.id,
     category: trip.category,
     operator_name: trip.operator_name,
@@ -826,9 +891,13 @@ async function createProposal(opts: {
           timeoutMs: opts.timeoutMs,
           maxRetries: opts.maxRetries,
           repairTimeoutMs: opts.repairTimeoutMs,
+          ...(instructionMode ? { instruction: { focusTrips: (opts.focusTrips || []).map((trip) => focusTripDetail(trip)) } } : {}),
         }),
       );
     }
+    // An action that names its trip instead of identifying it is resolved the way the admin's
+    // own words are: one clear trip binds it, several become a question with choices.
+    bindActionTargets(proposal, trips);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const classification = classifyError(error);
@@ -920,7 +989,7 @@ function looksLikeBulkPaste(instruction: string): boolean {
   return priceCues >= 8;
 }
 
-export async function generateAIProposal(instruction: string, options?: { context?: string }) {
+export async function generateAIProposal(instruction: string, options?: { context?: string; trips?: TravelTrip[]; focusTrips?: TravelTrip[] }) {
   // Big pasted price lists go through the batched (chunk + merge) pipeline so a
   // single oversized prompt can't time out or get rate-limited. Normal short
   // commands keep the fast, direct single-request path.
@@ -936,6 +1005,8 @@ export async function generateAIProposal(instruction: string, options?: { contex
 
   return createProposal({
     instruction,
+    trips: options?.trips,
+    focusTrips: options?.focusTrips ?? [],
     userParts: [{ text: options?.context
       ? `Өмнөх яриа (зөвхөн ойлгоход; одоогийн хүсэлтийг биелүүл):
 ${options.context}
@@ -1881,7 +1952,22 @@ export async function reviseAIRequest(
   }
 
   const currentProposal = normalizeProposal(row.proposal_json);
-  const trips = await listTrips({ limit: 250 });
+  const trips = await listTrips({ limit: 250, includeArchived: true });
+
+  // A tapped trip answers its question in code. When nothing else is open, the proposal is
+  // complete as it stands and the model is not asked to "revise" what it never got wrong.
+  if (applyTripChoice(clarification, currentProposal, trips) && !hasOpenQuestions(currentProposal)) {
+    const settled = validateAIChangeProposal(currentProposal, trips, {
+      forbidCreate: instructionForbidsTripCreation(row.instruction),
+    }).proposal;
+    settled.photo_sources = currentProposal.photo_sources;
+    await queryNeon(
+      `UPDATE travel_ai_change_requests SET proposal_json = $2::jsonb, conflicts = $3::text[], needs_confirmation = $4 WHERE id = $1`,
+      [requestId, JSON.stringify(settled), settled.conflicts, settled.needs_confirmation],
+    );
+    return { ok: true, proposal: settled, request_id: requestId, requires_confirmation: Boolean(settled.needs_confirmation) };
+  }
+
   const condensedTrips = trips.map((trip) => ({
     id: trip.id,
     category: trip.category,
@@ -2044,6 +2130,54 @@ async function applyAIAction(action: AITripAction) {
   }
   if (!targetId) return { ok: false, message: "Target trip not found." };
 
+  if (verb === "set_date_state") {
+    const date = String(action.date || "").trim();
+    const state = action.state;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isDateSeatState(state)) {
+      return { ok: false, message: "Огноо эсвэл төлөв буруу байна." };
+    }
+    const before = await getTripById(targetId);
+    if (!before) return { ok: false, message: "Target trip not found." };
+    const previous = departureSeatStateOf(before, date);
+    const { setDepartureSeatState } = await import("./websiteTripSync");
+    let updated = false;
+    try {
+      updated = await setDepartureSeatState(targetId, date, state);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, message: /not configured/i.test(message)
+        ? "Вэбсайтын өгөгдлийн сан холбогдоогүй тул огнооны төлвийг өөрчилж чадсангүй."
+        : `Огнооны төлвийг өөрчилж чадсангүй: ${message}` };
+    }
+    if (!updated) {
+      return { ok: false, message: `"${before.route_name}" аялалд ${date} гарах өдөр вэбсайтад олдсонгүй.` };
+    }
+    return {
+      ok: true,
+      message: `"${before.route_name}" — ${date}: ${DATE_STATE_WORDS[state]}`,
+      snapshot: {
+        action,
+        trip_id: targetId,
+        before: null,
+        after: null,
+        date_state_before: previous,
+      } satisfies AIActionSnapshot,
+    };
+  }
+
+  if (verb === "delete") {
+    const before = await getTripById(targetId);
+    if (!before) return { ok: false, message: "Target trip not found." };
+    const archived = await deleteTrip(targetId);
+    if (!archived) return { ok: false, message: "Archive failed." };
+    const after = await getTripById(targetId);
+    return {
+      ok: true,
+      message: `Архивласан: "${before.route_name}"`,
+      snapshot: { action, trip_id: targetId, before, after } satisfies AIActionSnapshot,
+    };
+  }
+
   if (verb === "cancel") {
     const before = await getTripById(targetId);
     const updated = await patchTrip(targetId, {
@@ -2119,7 +2253,7 @@ export async function applyAIRequest(requestId: number) {
 
   const proposal = normalizeProposal(row.proposal_json);
   attachPersistedPhotoSources(proposal);
-  const trips = await listTrips({ limit: 250 });
+  const trips = await listTrips({ limit: 250, includeArchived: true });
   const validation = validateAIChangeProposal(proposal, trips, {
     forbidCreate: instructionForbidsTripCreation(row.instruction),
   });
@@ -2193,7 +2327,7 @@ export async function applyAIProposalDirect(
     return { ok: false, message: "Database is not configured.", results: [] as string[] };
   }
 
-  const trips = await listTrips({ limit: 250 });
+  const trips = await listTrips({ limit: 250, includeArchived: true });
   attachPersistedPhotoSources(proposal);
   const validation = validateAIChangeProposal(proposal, trips, {
     forbidCreate: instructionForbidsTripCreation(instruction),
@@ -2257,6 +2391,22 @@ export async function applyAIProposalDirect(
   };
 }
 
+const DATE_STATE_WORDS: Record<DateSeatState, string> = { open: "нээлттэй", low: "цөөн суудал", full: "дүүрсэн" };
+
+/** The website's current state for one departure day, read from the availability overlay. */
+function departureSeatStateOf(trip: TravelTrip, date: string): DateSeatState | null {
+  const rows = Array.isArray(trip.extra?.website_departure_availability) ? trip.extra.website_departure_availability : [];
+  for (const raw of rows) {
+    const row = raw as { date?: unknown; status?: unknown; seatsLeft?: unknown };
+    if (row.date !== date) continue;
+    const status = String(row.status || "").toUpperCase();
+    if (status === "ALMOST_FULL") return "low";
+    if (status === "SOLD_OUT" || row.seatsLeft === 0) return "full";
+    return "open";
+  }
+  return null;
+}
+
 function normalizeActionSnapshots(value: unknown): AIActionSnapshot[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -2265,11 +2415,11 @@ function normalizeActionSnapshots(value: unknown): AIActionSnapshot[] {
       const entry = item as Partial<AIActionSnapshot>;
       const tripId = String(entry.trip_id || "").trim();
       if (!tripId) return null;
-      return {
+      const snapshot: AIActionSnapshot = {
         action:
           entry.action && typeof entry.action === "object"
             ? (entry.action as AITripAction)
-            : { action: "unknown" },
+            : ({ action: "unknown" } as unknown as AITripAction),
         trip_id: tripId,
         before: entry.before
           ? mapTripRow(entry.before as unknown as Record<string, unknown>)
@@ -2277,7 +2427,9 @@ function normalizeActionSnapshots(value: unknown): AIActionSnapshot[] {
         after: entry.after
           ? mapTripRow(entry.after as unknown as Record<string, unknown>)
           : null,
+        date_state_before: isDateSeatState(entry.date_state_before) ? entry.date_state_before : null,
       };
+      return snapshot;
     })
     .filter((item): item is AIActionSnapshot => Boolean(item));
 }
@@ -2322,6 +2474,26 @@ export async function rollbackAIRequest(requestId: number) {
   let failed = false;
 
   for (const snapshot of [...snapshots].reverse()) {
+    // A day's availability is put back to what it was; it must never fall through to the
+    // "no before → remove the trip" branch below, which would archive a live trip.
+    if (String(snapshot.action?.action || "") === "set_date_state") {
+      const date = String(snapshot.action.date || "");
+      const previous = snapshot.date_state_before;
+      if (!previous || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        results.push(`Skipped ${snapshot.trip_id} ${date}: no earlier state recorded`);
+        continue;
+      }
+      try {
+        const { setDepartureSeatState } = await import("./websiteTripSync");
+        const restored = await setDepartureSeatState(snapshot.trip_id, date, previous);
+        if (restored) results.push(`Restored ${snapshot.trip_id} ${date} → ${DATE_STATE_WORDS[previous]}`);
+        else { failed = true; results.push(`Failed to restore ${snapshot.trip_id} ${date}`); }
+      } catch (error) {
+        failed = true;
+        results.push(`Failed to restore ${snapshot.trip_id} ${date}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      continue;
+    }
     if (snapshot.before) {
       const restored = await upsertTrip({
         id: snapshot.trip_id,

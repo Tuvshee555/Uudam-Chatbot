@@ -11,9 +11,11 @@ import {
 } from "./AssistantQuickActions";
 import { ProposalCard } from "./ProposalCard";
 import type {
+  AskMsg,
   AttachedFile,
   ChatMessage,
   ProposalMsg,
+  ProposalQuestionOption,
   TravelTrip,
 } from "@/lib/adminTypes";
 import {
@@ -143,6 +145,7 @@ export function AssistantTab({
   applyBusyId,
   clarifyBusyId,
   onSend,
+  onChooseOption,
   onQuickAction,
   onEditTripPrice,
   onNewTrip,
@@ -169,6 +172,8 @@ export function AssistantTab({
   applyBusyId: string;
   clarifyBusyId: string;
   onSend: () => void;
+  /** The admin tapped one of the choices the assistant offered. */
+  onChooseOption: (message: AskMsg, option: ProposalQuestionOption) => void;
   onQuickAction: (kind: QuickActionKind, trip: TravelTrip, value?: number | boolean) => void;
   onEditTripPrice: (trip: TravelTrip) => void;
   onNewTrip: () => void;
@@ -195,6 +200,16 @@ export function AssistantTab({
   const quick = useQuickAction({ trips: existingTrips, busy, onQuick: onQuickAction, onEditPrice: onEditTripPrice, onNewTrip });
   const { step } = quick;
   const stepPhase = step?.phase ?? null;
+  // A question the assistant asked that is still open: the composer answers it.
+  const openAsk = [...messages].reverse().find((message): message is AskMsg => "kind" in message && message.kind === "ask" && !message.answered) ?? null;
+  // Example instructions, on a real trip when there is one, so a tap is a real request.
+  const sampleName = existingTrips.find((trip) => trip.status === "active")?.route_name ?? "Аяллын нэр";
+  const examples = [
+    `«${sampleName}» 12/27 дүүрсэн`,
+    `«${sampleName}» хүүхэд 300 мянгаар бага`,
+    `«${sampleName}» 1/15 гаралт нэм`,
+    `«${sampleName}» буудал: A эсвэл B`,
+  ];
 
   // While a step is open the composer answers the step; the draft message is kept aside.
   const composerValue = step ? quick.input : aiInput;
@@ -208,7 +223,8 @@ export function AssistantTab({
     ? stepPhase === "trip" ? "Аяллын нэрийг бичиж хайх…"
       : stepPhase === "value" ? "Үлдсэн суудлын тоо…"
         : "Дээрх сонголтоос нэгийг нь дарна уу"
-    : attachedFiles.length ? "Файлаар юу хийхийг хэлээрэй…" : "Юуг өөрчлөх вэ? Бичээрэй…";
+    : openAsk ? (openAsk.customPlaceholder || "Хариултаа бичээрэй…")
+      : attachedFiles.length ? "Файлаар юу хийхийг хэлээрэй…" : "Юуг өөрчлөх вэ? Хамт ажилладаг хүндээ хэлдэг шигээ бичээрэй…";
 
   useEffect(() => {
     const input = inputRef.current;
@@ -289,12 +305,27 @@ export function AssistantTab({
               <Icons.ai size={22} />
             </span>
             <p className="mt-4 text-2xl font-extrabold tracking-tight text-ink sm:text-[28px]">
-              Юуг шинэчлэх вэ?
+              Юуг өөрчлөх вэ?
             </p>
             <p className="mt-2 max-w-md text-sm leading-6 text-ink-muted">
-              Постер, үнийн жагсаалтаа оруул, эсвэл доороос нэг зүйл сонго. Би саналаа харуулна.
-              Та зөвшөөрснийг л хадгална, буцаах боломжтой.
+              Хамт ажилладаг хүндээ хэлдэг шигээ бичээрэй. Би аяллыг нь олж, тодорхойгүйг нь асууж,
+              өөрчлөлтийг харуулна. Та зөвшөөрснийг л хадгална, буцаах боломжтой.
             </p>
+            <ul className="mt-5 flex w-full flex-wrap justify-center gap-2" aria-label="Жишээ заавар">
+              {examples.map((example) => (
+                <li key={example} className="min-w-0 max-w-full">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => { setAiInput(example); inputRef.current?.focus(); }}
+                    className="max-w-full truncate rounded-full border border-line bg-surface px-3.5 py-1.5 text-[13px] font-medium text-ink transition-colors hover:border-brand hover:bg-brand-soft hover:text-brand disabled:opacity-50"
+                    title={example}
+                  >
+                    {example}
+                  </button>
+                </li>
+              ))}
+            </ul>
             <button
               type="button"
               onClick={onPickFile}
@@ -332,12 +363,14 @@ export function AssistantTab({
               key={message.id}
               message={message}
               existingTrips={existingTrips}
+              busy={busy}
               applyBusy={applyBusyId === message.id}
               clarifyBusy={clarifyBusyId === message.id}
               onApply={onApply}
               onRollback={onRollback}
               onSubmitClarificationForm={onSubmitClarificationForm}
               onCancelProposal={onCancelProposal}
+              onChooseOption={onChooseOption}
             />
           ))}
           {step && <QuickActionStep controller={quick} busy={busy} />}
@@ -509,15 +542,18 @@ export function AssistantTab({
 function ChatBubble({
   message,
   existingTrips = [],
+  busy,
   applyBusy,
   clarifyBusy,
   onApply,
   onRollback,
   onSubmitClarificationForm,
   onCancelProposal,
+  onChooseOption,
 }: {
   message: ChatMessage;
   existingTrips?: TravelTrip[];
+  busy: boolean;
   applyBusy: boolean;
   clarifyBusy: boolean;
   onApply: (message: ProposalMsg) => void;
@@ -527,6 +563,7 @@ function ChatBubble({
     answers: Record<string, string>,
   ) => void;
   onCancelProposal: (id: string) => void;
+  onChooseOption: (message: AskMsg, option: ProposalQuestionOption) => void;
 }) {
   if (message.role === "admin") {
     const hasRealText = Boolean(message.text) && message.text !== "Файл орууллаа";
@@ -548,6 +585,57 @@ function ChatBubble({
             !hasRealText && (
               <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
             )
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (message.kind === "ask") {
+    const answered = message.answered;
+    return (
+      <div className="animate-fade-up flex justify-start" role="group" aria-label="Туслахын асуулт">
+        <div className="w-full min-w-0 max-w-3xl rounded-2xl rounded-bl-md border border-line bg-surface px-4 py-3.5 shadow-xs">
+          <p className="text-[15px] font-semibold leading-6 text-ink">{message.text}</p>
+          {message.options.length > 0 && (
+            <ul className={cx("mt-3 grid gap-1.5", message.options.length > 3 && "sm:grid-cols-2")} aria-label="Сонголтууд">
+              {message.options.map((option) => {
+                const chosen = answered === option.label;
+                return (
+                  <li key={option.answer} className="min-w-0">
+                    <button
+                      type="button"
+                      disabled={Boolean(answered) || busy}
+                      aria-pressed={chosen}
+                      onClick={() => onChooseOption(message, option)}
+                      className={cx(
+                        "flex min-h-11 w-full items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left text-sm transition-colors disabled:cursor-default",
+                        chosen
+                          ? "border-brand bg-brand-soft text-ink"
+                          : answered
+                            ? "border-line text-ink-subtle"
+                            : "border-line bg-surface text-ink hover:border-brand hover:bg-brand-soft",
+                      )}
+                    >
+                      <span className="min-w-0">
+                        <span className="block font-medium wrap-break-word">{option.label}</span>
+                        {option.hint && <span className="mt-0.5 block text-xs leading-4 text-ink-muted">{option.hint}</span>}
+                      </span>
+                      {chosen ? (
+                        <Icons.check size={15} className="shrink-0 text-brand" />
+                      ) : (
+                        !answered && <Icons.chevronRight size={14} className="shrink-0 text-ink-subtle" />
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {!answered && message.allowCustom && (
+            <p className="mt-2.5 text-xs leading-5 text-ink-muted">
+              {message.customPlaceholder ? `Эсвэл доор бичээрэй — ${message.customPlaceholder}` : "Эсвэл доор бичээрэй."}
+            </p>
           )}
         </div>
       </div>

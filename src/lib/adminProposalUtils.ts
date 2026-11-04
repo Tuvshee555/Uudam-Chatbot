@@ -272,6 +272,15 @@ export function compactWarnings(proposal: AIProposal): string[] {
   return proposal.conflicts.map(summarizeConflict).filter(Boolean);
 }
 
+export const DATE_STATE_LABELS: Record<string, string> = { open: "Нээлттэй", low: "Цөөн суудал", full: "Дүүрсэн" };
+
+/** "2026-12-27" → "12-р сарын 27"; other text stays itself. */
+export function formatDateMn(value: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return value;
+  return `${Number(match[2])}-р сарын ${Number(match[3])}`;
+}
+
 export function describeAction(action: AIAction): {
   verb: string;
   target: string;
@@ -281,13 +290,17 @@ export function describeAction(action: AIAction): {
   const verb =
     verbRaw === "cancel"
       ? "Цуцлах"
-      : verbRaw === "upsert"
-        ? action.trip_id
-          ? "Шинэчлэх"
-          : "Шинэ аялал нэмэх"
-        : verbRaw === "patch"
-          ? "Шинэчлэх"
-          : verbRaw || "Үйлдэл";
+      : verbRaw === "delete"
+        ? "Архивлах"
+        : verbRaw === "set_date_state"
+          ? "Огнооны төлөв"
+          : verbRaw === "upsert"
+            ? action.trip_id
+              ? "Шинэчлэх"
+              : "Шинэ аялал нэмэх"
+            : verbRaw === "patch"
+              ? "Шинэчлэх"
+              : verbRaw || "Үйлдэл";
   const target =
     action.match?.route_name ||
     action.fields?.route_name?.toString() ||
@@ -297,6 +310,9 @@ export function describeAction(action: AIAction): {
   const fields = action.fields || {};
   const changes: string[] = [];
   const targetNorm = String(target).trim().toLowerCase();
+  if (verbRaw === "set_date_state" && action.date) {
+    changes.push(`${formatDateMn(action.date)}: ${DATE_STATE_LABELS[String(action.state)] || String(action.state || "")}`);
+  }
   for (const [key, value] of Object.entries(fields)) {
     if (value == null || value === "") continue;
     // Skip values that add zero information — every skipped word here is one
@@ -369,6 +385,19 @@ export function buildProposalClarifications(
       question.detail = undefined;
     }
     questions.push(question);
+  }
+
+  // Questions the server built with real choices (which of several trips, which day) come
+  // first and as they are: the text patterns below exist for conflicts the model wrote free-form.
+  for (const question of proposal.questions || []) {
+    pushQuestion({
+      id: question.id,
+      prompt: question.prompt,
+      detail: question.detail,
+      options: question.options.map((option) => ({ label: option.hint ? `${option.label} · ${option.hint}` : option.label, answer: option.answer, recommended: option.recommended })),
+      allowCustom: question.allow_custom === true,
+      customPlaceholder: question.custom_placeholder,
+    });
   }
 
   // How a new trip leaves Ulaanbaatar (tripProposalFinalize.ts): one tap changes the

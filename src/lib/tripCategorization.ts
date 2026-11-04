@@ -69,6 +69,31 @@ async function fetchCategories(client: PoolClient): Promise<CategoryRow[]> {
   return res.rows;
 }
 
+// The website's own category names for each way a trip leaves Ulaanbaatar. Owner's rule
+// (2026-11-04): a trip that flies out of Ulaanbaatar — direct or with a connection — is a
+// "шууд нислэгтэй" trip; the train-and-flight combination is "хосолсон"; the train is
+// "газрын". When the transport type is known (tripTransitDays.ts sets it on every trip
+// the assistant adds), the category follows from it and the model is not asked.
+const TRANSPORT_CATEGORY_PATTERNS: Record<string, RegExp> = {
+  direct_flight: /шууд\s*нислэг|нислэгтэй(?!.*хосолсон)|\bflight\b(?!.*combined)/i,
+  land_flight: /хосолсон|газар\s*\+\s*нислэг|combined/i,
+  land: /газрын|газраар|\bland\b/i,
+  cruise: CRUISE_NAME_PATTERN,
+};
+
+export function categoryForTransport(transportType: unknown, categories: CategoryRow[]): CategoryRow | null {
+  if (typeof transportType !== "string") return null;
+  const pattern = TRANSPORT_CATEGORY_PATTERNS[transportType];
+  if (!pattern) return null;
+  const candidates = categories.filter((c) => pattern.test(c.categoryName));
+  if (transportType === "direct_flight") {
+    // "нислэгтэй" also appears inside "газар + нислэг хосолсон": the combined one is not a flight category.
+    const direct = candidates.filter((c) => !TRANSPORT_CATEGORY_PATTERNS.land_flight.test(c.categoryName));
+    return direct[0] ?? null;
+  }
+  return candidates[0] ?? null;
+}
+
 /** Deterministic pre-checks that don't need the model at all. */
 export function ruleBasedGuess(trip: TravelTrip, categories: CategoryRow[]): CategoryRow | null {
   const winterCategory = categories.find((c) => WINTER_NAME_PATTERN.test(c.categoryName));
@@ -79,6 +104,8 @@ export function ruleBasedGuess(trip: TravelTrip, categories: CategoryRow[]): Cat
     const cruise = categories.find((c) => CRUISE_NAME_PATTERN.test(c.categoryName));
     if (cruise) return cruise;
   }
+  const byTransport = categoryForTransport((trip.extra as Record<string, unknown> | undefined)?.transport_type, categories);
+  if (byTransport) return byTransport;
   return null;
 }
 
