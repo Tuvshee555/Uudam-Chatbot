@@ -184,6 +184,25 @@ never matched to a near one. Journey `a New Year trip question lists the New Yea
 (`tests/forensic-regressions.test.ts`) fails without the fix. `npm run gate` and `npm run qa:live` were
 not run for this change (no database or model key in the build environment).
 
+## P2-2b — The home city named a trip — FIXED (2026-11-04)
+Live 2026-11-04: "<border town>-аас Улаанбаатар орох хүн авах боломж байдаг уу" (a one-way pick-up the
+agency does not sell) was answered with the one flight trip whose title names the home city, listing its
+Ulaanbaatar days as the answer. Every trip leaves from and returns to the home city, so the word
+(any case ending, Cyrillic or Latin, "УБ") now counts as a generic route word: it never identifies a trip
+and is never "a place on the trip" for the day-list answer. "The two / three of us" words ("2 уулаа",
+"хоёулаа") are generic too; typed in Latin they were a letter away from a red-named stop. The pick-up
+question now gets silence plus a staff lead. Journey `the home city in a trip's title never picks that
+trip…` (`tests/forensic-regressions.test.ts`) fails without the fix. Gate replay: 12 decisions changed,
+all read (the home-city trip stops handicapping itself in the score, so pasted titles narrow from 6 to 3).
+
+## P2-2c — Two trips of one country both stop in the asked city — OPEN
+"<улс> аялал <хот>-д ямар буудалд буудаллах вэ": two tours of that country list the city among their
+aliases, and the score picks one (before 2026-11-04 it asked, but offered a tour that does not visit the
+city and left out the one named after it). The honest answer is "which of these two?". A rule
+"two or more trips cover every named place → ask" was tried and reverted: it also turned fully typed
+sibling names into questions (51 gate changes). Needs a rule that excludes names the customer typed
+in full or in order.
+
 ## P2-3 — Look-alike destinations — OPEN
 Fuzzy matching can take a destination one letter away for another. Needs a data-side "not this place"
 field, not code.

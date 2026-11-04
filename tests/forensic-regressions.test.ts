@@ -155,6 +155,30 @@ test("customer turns from real conversations get grounded answers, not the free-
       assert.match(emptyReply, /НОРВЕЛ ХОТЫН АЯЛАЛ/);
       assert.equal(empty.answerModelCalls, 0);
     });
+
+    // Live 2026-11-04: "<border town>-аас Улаанбаатар орох хүн авах боломж байдаг уу" (a one-way
+    // pick-up the agency does not sell) was answered with the flight trip whose TITLE names the
+    // home city, listing the days that touch Ulaanbaatar as if that were the answer. Every trip
+    // starts and ends in the home city, so the word names no trip; with no data, the bot is silent
+    // and staff get the lead.
+    await context.test("the home city in a trip's title never picks that trip; an unanswerable ask is silence plus a lead", async () => {
+      harness.catalog([
+        trip("fly", "СОЛМАРА – Улаанбаатар - Велтана нислэг", ["2098-03-07", "2098-03-14"], { duration_text: "8 өдөр 7 шөнө", extra: {
+          customer_visible: true, age_rules: { adult: "12+ нас", child: "2-11 нас", infant: "0-23 сар" },
+          itinerary_days: [{ day: 1, title: "Улаанбаатар – Велтана", description: "Улаанбаатараас Велтана хот руу шууд ниснэ." },
+            { day: 8, title: "Велтана – Улаанбаатар", description: "Улаанбаатарт буцаж ирнэ." }],
+        } }),
+        trip("land", "ДОРМАН ХОТЫН АЯЛАЛ", ["2098-03-10"], { extra: { customer_visible: true, aliases: ["Дорман"] } }),
+      ]);
+      await harness.turn("pickup", "Сайн байна уу");
+      const asked = await harness.turn("pickup", "Кервада Тальмараас Улаанбаатар орох хүн авах боломж байдаг уу", { certainty: "none" });
+      assert.deepEqual(asked.sends.map((send) => send.text), [], "no trip answers a question about a service we do not sell");
+      assert.equal(asked.leads.length, 1, "staff get the question");
+      assert.equal(asked.leads[0].kind, "handoff");
+      // The home city still works as a word inside a question about the trip on screen.
+      const card = await harness.turn("ub-word", "Солмара Велтана нислэг", { tripId: "fly", certainty: "one" });
+      assert.match(card.sends[0]?.text || "", /СОЛМАРА – Улаанбаатар - Велтана нислэг/);
+    });
   } finally {
     await harness.close();
   }

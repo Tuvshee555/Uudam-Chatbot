@@ -5,7 +5,7 @@ import { hasBankAccountRequest, hasPaymentClaimIntent, isReferReply } from "../s
 import { buildPlaceDaysReply } from "../src/lib/tripPlaceDaysReply";
 import { verifyTripReply } from "../src/lib/tripReplyVerification";
 import { buildAmbiguousTripReply } from "../src/lib/travelFastPathsPricing";
-import { buildStructuredTripReply } from "../src/lib/travelFastPaths";
+import { buildStructuredTripReply, resolveTripFromUserMessage } from "../src/lib/travelFastPaths";
 import { joinContextAndTurn } from "../src/lib/customerTurn";
 import type { TravelTrip } from "../src/lib/travelTypes";
 
@@ -50,6 +50,27 @@ test("a question about a place on the trip answers with the days that go there",
   assert.match(reply, /3-р өдөр — Зандан – Харсай/);
   assert.doesNotMatch(reply, /1-р өдөр/);
   assert.equal(buildPlaceDaysReply(base, "Харсай"), null, "a bare place name still gets the trip card");
+});
+
+// Live 2026-11-04: a flight trip titled "<country> – Улаанбаатар - <city> нислэг" answered a
+// one-way pick-up question ("…-аас Улаанбаатар орох хүн авах боломж байдаг уу") with its
+// Ulaanbaatar days. The home city is in every itinerary; it is never the place being asked about.
+test("the home city never identifies a trip, in the resolver or in the place-days answer", () => {
+  const flight: TravelTrip = { ...base, id: "fixture-fly", route_name: "СОЛМАРА – Улаанбаатар - Велтана нислэг", extra: { ...base.extra,
+    itinerary_days: [{ day: 1, title: "Улаанбаатар – Велтана", description: "Улаанбаатараас Велтана хот руу шууд ниснэ." },
+      { day: 8, title: "Велтана – Улаанбаатар", description: "Улаанбаатарт буцаж ирнэ." }] } };
+  const trips = [flight, { ...base, route_name: "ДОРМАН ХОТЫН АЯЛАЛ", id: "fixture-dorman" }];
+  const ask = "Кервада Тальмараас Улаанбаатар орох хүн авах боломж байдаг уу";
+  assert.equal(resolveTripFromUserMessage(ask, trips, { allowLooseFallback: false }).status, "not_found");
+  assert.equal(buildStructuredTripReply(ask, trips, now), null);
+  assert.equal(buildPlaceDaysReply(flight, ask), null);
+  assert.equal(buildPlaceDaysReply(flight, "Улаанбаатар орох уу"), null, "the home city is not a place on the trip");
+  assert.match(buildPlaceDaysReply(flight, "Велтана орох уу")!, /1-р өдөр — Улаанбаатар – Велтана/);
+  for (const text of ["УБ-аас гарах уу", "Ulaanbaataraas yavah uu", "Улаанбаатарт хэдэн цагт ирэх вэ"]) {
+    assert.equal(resolveTripFromUserMessage(text, trips, { allowLooseFallback: false }).status, "not_found", text);
+  }
+  const named = resolveTripFromUserMessage("Солмара Велтана нислэг", trips, { allowLooseFallback: false });
+  assert.equal(named.status === "verified" && named.trip.id, "fixture-fly", "its own place names still find the trip");
 });
 
 test("a fare labelled with an age band is not read as a passenger of the band's lowest age", () => {

@@ -1,5 +1,5 @@
 import type { TravelTrip } from "./travelTypes";
-import { normText, phoneticLatinText, phoneticTokenMatches } from "./travelTextNorm";
+import { keywordTokens, normText, phoneticLatinText, phoneticTokenMatches } from "./travelTextNorm";
 
 type Day = { day: number; title: string; description: string };
 
@@ -33,11 +33,14 @@ function firstSentence(text: string, max = 220): string {
  * answer is the day that goes there. The bot used to re-send the trip card,
  * which shows only the first days, so the customer concluded the city was
  * missing and the card came back a second time. Only place words from the
- * trip's own title count, so generic words ("аялал", "хөтөлбөр") never match.
+ * trip's own title count, so generic words ("аялал", "хөтөлбөр") never match — nor
+ * the home city, which flight titles name ("<улс> – Улаанбаатар - <хот> нислэг") and
+ * every first and last day mentions: "…Улаанбаатар орох…" is not a question about a
+ * place on the trip (live, 2026-11-04).
  */
 export function buildPlaceDaysReply(trip: TravelTrip, turn: string): string | null {
   if (!ASKS_ABOUT_PLACE.test(turn)) return null;
-  const titlePlaces = new Set(phoneticWords(trip.route_name));
+  const titlePlaces = new Set(keywordTokens(trip.route_name).filter((word) => word.length >= 4).map(phoneticLatinText));
   const asked = phoneticWords(turn).filter((word) => [...titlePlaces].some((place) => phoneticTokenMatches(word, place)));
   if (!asked.length) return null;
   const days = itineraryDays(trip).filter((day) =>

@@ -116,7 +116,39 @@ export const GENERIC_ROUTE_WORDS = new Set([
   "онгоцны",
   "онгоцоор",
   "онгоцтой",
+  // The home city, abbreviated. Every trip leaves from and returns to it, so it tells no
+  // trip apart (the full word and its case endings are caught by isHomeCityWord below).
+  "уб",
+  "ub",
+  // "The two / three / four of us" ("2 уулаа", "хоёулаа", "гурвуулаа"): a head count, never a
+  // place. Typed in Latin, "uulaa" is one letter from the phonetic form of a red-named stop
+  // in a trip title and picked that trip once nothing else competed (gate replay, 2026-11-04).
+  "уулаа",
+  "uulaa",
+  "хоёулаа",
+  "хоюулаа",
+  "hoyuulaa",
+  "hoyulaa",
+  "гурвуулаа",
+  "guruvuulaa",
+  "guravuulaa",
+  "дөрвүүлээ",
+  "durvuulee",
+  "тавуулаа",
+  "tavuulaa",
 ]);
+
+/**
+ * The home city in any case ending or spelling: "Улаанбаатар", "Улаанбаатараас",
+ * "Ulaanbaatart". It appears in flight-trip titles ("<улс> – Улаанбаатар - <хот> нислэг")
+ * and in every itinerary's first and last day, so it never identifies a trip. A live
+ * customer asking for a one-way pick-up "…-аас Улаанбаатар орох…" (2026-11-04) was given
+ * the one flight trip whose title names the home city, with its Ulaanbaatar days as the
+ * answer.
+ */
+export function isHomeCityWord(word: string): boolean {
+  return /^(?:улаанбаатар|ulaanbaatar|ulanbaatar|ulaanbatar|ulanbatar)/.test(word);
+}
 
 /**
  * Words that make up a price / programme / information request without naming
@@ -368,14 +400,14 @@ export function keywordTokens(text: string) {
   return normText(text)
     .split(/\s+/)
     .map((word) => word.trim())
-    .filter((word) => word.length >= 2 && !GENERIC_ROUTE_WORDS.has(word));
+    .filter((word) => word.length >= 2 && !GENERIC_ROUTE_WORDS.has(word) && !isHomeCityWord(word));
 }
 
 export function phoneticKeywordTokens(text: string) {
   return phoneticLatinText(text)
     .split(/\s+/)
     .map((word) => word.trim())
-    .filter((word) => word.length >= 2 && !GENERIC_ROUTE_WORDS_PHONETIC.has(word));
+    .filter((word) => word.length >= 2 && !GENERIC_ROUTE_WORDS_PHONETIC.has(word) && !isHomeCityWord(word));
 }
 
 export function unique<T>(values: T[]) {
