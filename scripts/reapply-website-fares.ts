@@ -14,6 +14,8 @@
  *   node --env-file=.env.local --import tsx scripts/reapply-website-fares.ts                     # dry run
  *   node --env-file=.env.local --import tsx scripts/reapply-website-fares.ts --apply --backup=<file.json>
  *   ... --only=<trip id>
+ *   ... --accept-open   also take the website's fare for every open per-date fare conflict
+ *                       (the newest one per date and fare; the owner confirmed them, 2026-11-04)
  * Undo: restore extra.price_groups / shared_conflicts / resolved_conflicts from the backup file.
  */
 import { writeFileSync } from "node:fs";
@@ -25,6 +27,7 @@ import { websiteDepartureDateKey } from "../src/lib/websiteDepartureDate";
 type Row = Record<string, unknown>;
 const arg = (name: string) => process.argv.find((value) => value.startsWith(`--${name}=`))?.split("=").slice(1).join("=");
 const apply = process.argv.includes("--apply");
+const acceptOpen = process.argv.includes("--accept-open");
 const only = arg("only");
 const backup = arg("backup");
 if (apply && !backup) throw new Error("--apply needs --backup=<file.json>");
@@ -39,6 +42,37 @@ const fares = (group: Row) => {
   return `${group.adult_price ?? "-"}/${child ? child.price : group.child_price ?? "-"}/${infant ? infant.price : group.infant_price ?? "-"}`;
 };
 const byDate = (groups: Row[]) => new Map(groups.flatMap((group) => (Array.isArray(group.dates) ? group.dates : []).map((date) => [String(date), fares(group)] as const)));
+
+/**
+ * The canonical groups with each open per-date conflict's website fare written into that
+ * date's only group (a date with several hotel/package options is left alone).
+ */
+function acceptedFares(canonical: Row[], open: Row[]): Row[] {
+  const groups = canonical.map((group) => ({ ...group }));
+  const newest = new Map<string, Row>();
+  for (const entry of open.filter((item) => /^departure\.\d{4}-\d{2}-\d{2}\./.test(String(item.field)))
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)))) newest.set(String(entry.field), entry);
+  for (const entry of newest.values()) {
+    const [, date, fare] = String(entry.field).split(".");
+    const owners = groups.filter((group) => Array.isArray(group.dates) && group.dates.includes(date));
+    if (owners.length !== 1 || typeof entry.website !== "number") continue;
+    const index = groups.indexOf(owners[0]);
+    const dates = owners[0].dates as unknown[];
+    const group: Row = { ...owners[0], dates: [date] };
+    if (dates.length > 1) {
+      groups[index] = { ...owners[0], dates: dates.filter((item) => item !== date) };
+      groups.push(group);
+    } else groups[index] = group;
+    const target = dates.length > 1 ? group : groups[index];
+    if (fare === "price") target.adult_price = entry.website;
+    else {
+      const infant = fare === "infantPrice";
+      target[infant ? "infant_price" : "child_price"] = entry.website;
+      target.passenger_prices = list(target.passenger_prices).map((band) => isInfant(band) === infant ? { ...band, price: entry.website } : band);
+    }
+  }
+  return groups;
+}
 
 async function main() {
   const result = await queryNeon<Row>(`SELECT * FROM travel_trip_entries
@@ -56,10 +90,11 @@ async function main() {
     const open = list(extra.shared_conflicts);
     const latest = open.filter((entry) => entry.field === "extra.price_groups").sort((a, b) => String(a.at).localeCompare(String(b.at))).at(-1);
     console.log(`\n${trip.route_name} (${trip.id}): ${open.length} open conflicts`);
-    if (!latest) { console.log("   no whole-list save recorded; left for the trip editor"); continue; }
     const canonical = list(extra.price_groups);
     const live = new Set((Array.isArray(trip.departure_dates) ? trip.departure_dates : []).map(websiteDepartureDateKey).filter(Boolean));
-    const merge = mergeWebsiteDateFares(canonical, canonical, latest.website, live);
+    const website = acceptOpen ? acceptedFares(canonical, open) : latest?.website;
+    if (!website) { console.log("   no whole-list save recorded; left for the trip editor"); continue; }
+    const merge = mergeWebsiteDateFares(canonical, canonical, website, live);
     if (!merge.groups) { console.log("   nothing to apply"); continue; }
     const before = byDate(canonical), after = byDate(merge.groups);
     for (const [date, value] of after) if (before.get(date) !== value) console.log(`   ${date}: ${before.get(date) ?? "(trip fare)"} -> ${value}`);
