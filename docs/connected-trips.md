@@ -50,6 +50,16 @@ rewrite the canonical trip or enqueue another update. Invalid facts and
 mismatched snapshot identities are rejected before writes; temporary delivery
 failures return a retryable response.
 
+Website schedules are compared by calendar day, not by spelling: the chatbot
+may keep "10 сарын 8" (and its write-time resolution) where the website keeps
+2026-10-08. A day added or removed on the website reaches the chatbot's list,
+keeping the chatbot's wording for the days both still have; a schedule kept as
+a weekly rule ("Пүрэв гараг бүр") stays the chatbot's, and the website is told
+(`ignored: recurring_schedule`). Per-date fares merge one cell at a time even
+when the chatbot has no fare table yet; the two lists are never compared as one
+value, so a label or ordering change is not a conflict and cannot block later
+fare saves. Past days never count as a change.
+
 Departure timestamps use the website's business day in both directions. SQL
 timestamps without a timezone and API timestamps ending in `Z` represent the
 same UTC instant; explicit date-only values already name the departure day.

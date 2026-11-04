@@ -4,6 +4,7 @@ import { duration } from "./connectedTripMapping";
 import { websiteDepartureDateKey } from "./websiteDepartureDate";
 import { currentWebsiteDepartureRows } from "./websiteDepartureRows";
 import { mergeWebsiteDateFares } from "./websiteDateFares";
+import { parseTripDepartureDateText } from "./travelDates";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -162,6 +163,37 @@ function canonicalDepartures(values: unknown[]): UnknownRecord[] {
     throw new WebsiteTripPayloadError("Invalid website trip field: departures.startDate");
   });
 }
+
+/** Today in Ulaanbaatar, "YYYY-MM-DD". */
+function mongoliaToday(now = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ulaanbaatar", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+}
+
+/**
+ * The calendar days a schedule names, read through the stored write-time
+ * resolution first ("10 сарын 8" → 2026-10-08) and the date parser otherwise.
+ * Null when an entry is a rule rather than a day ("Пүрэв гараг бүр") or cannot
+ * be read: such a schedule is the chatbot's to keep.
+ */
+function scheduleDays(values: unknown, resolved: unknown): Map<string, string> | null {
+  const known = new Map<string, string>();
+  for (const entry of Array.isArray(resolved) ? resolved.map(record) : []) {
+    if (typeof entry.text === "string" && typeof entry.ymd === "string" && /^\d{4}-\d{2}-\d{2}$/.test(entry.ymd)) known.set(entry.text.trim(), entry.ymd);
+  }
+  const days = new Map<string, string>();
+  for (const value of strings(values)) {
+    const iso = /^\d{4}-\d{2}-\d{2}$/.test(value) ? [value] : known.has(value) ? [known.get(value)!] : parseTripDepartureDateText(value);
+    if (iso.length !== 1) return null;
+    if (!days.has(iso[0])) days.set(iso[0], value);
+  }
+  return days;
+}
+
+function futureDays(days: Map<string, string>, today: string): string[] {
+  return [...days.keys()].filter((day) => day >= today).sort();
+}
+
+const sameDays = (left: string[], right: string[]) => left.length === right.length && left.every((day, index) => day === right[index]);
 
 function durationText(days: unknown, nights: unknown): string {
   const dayCount = Math.max(1, Math.trunc(numberOrNull(days) ?? 1));
@@ -397,12 +429,38 @@ export function websiteTripPatchReport(input: unknown, previousInput: unknown, c
   // Comparing against the empty notes turned every description edit on such a
   // trip into a conflict.
   const descriptionFallbacks = [text(record(baselineSource.poster).subtitle), text(canonical.route_name), text(baselineSource.route_name)].filter(Boolean);
+  // The website's schedule could not be taken because the chatbot keeps this trip's dates as a rule.
+  let scheduleIsRule = false;
   for (const [key, value] of Object.entries(next)) {
     if (key === "extra" || key === "operator_name") continue;
     if (sameParityValue(canonical[key], value)) continue;
     if (key === "status" && !["draft", "archived"].includes(String(canonical.status))) continue;
     if (before && sameParityValue(value, before[key as keyof TripMutationFields])) continue;
     const baseValue = before ? before[key as keyof TripMutationFields] : baselineSource[key];
+    if (key === "departure_dates") {
+      // The chatbot writes its dates as Mongolian text ("10 сарын 8"), the website as
+      // calendar days. Compared as text, a date added on the website turned into a
+      // conflict on every trip spelt that way, and the bot never offered the new date.
+      // Days are compared; the chatbot's spelling is kept for days both still have.
+      const today = mongoliaToday();
+      const current = scheduleDays(canonical.departure_dates, canonicalExtra.departure_dates_resolved);
+      const incoming = scheduleDays(value, null);
+      const base = scheduleDays(baseValue, canonicalExtra.departure_dates_resolved);
+      if (!current || !incoming) { scheduleIsRule = true; continue; }
+      const [currentDays, incomingDays] = [futureDays(current, today), futureDays(incoming, today)];
+      if (sameDays(currentDays, incomingDays)) continue;
+      const baseDays = base ? futureDays(base, today) : null;
+      if (baseDays && sameDays(baseDays, incomingDays)) continue;
+      if (baseDays && sameDays(currentDays, baseDays)) {
+        // Only the website changed the schedule: past entries stay as they are, days it
+        // still has keep the chatbot's wording, new days are added as calendar days.
+        const kept = [...current.entries()].filter(([day]) => day < today).map(([, spelling]) => spelling);
+        Object.assign(fields, { departure_dates: [...kept, ...incomingDays.map((day) => current.get(day) ?? day)] });
+        continue;
+      }
+      accept(key, currentDays, baseDays ?? baseValue, incomingDays, () => Object.assign(fields, { [key]: value }));
+      continue;
+    }
     if (key === "duration_text" && sameParityValue(duration(String(canonical[key] || "")), duration(String(baseValue || "")))) {
       Object.assign(fields, { [key]: value }); continue;
     }
@@ -414,6 +472,7 @@ export function websiteTripPatchReport(input: unknown, previousInput: unknown, c
   // The trip's departures after this save; a website fare for any other date creates nothing.
   const liveDates = new Set([...(next.departure_dates ?? []), ...strings(canonical.departure_dates)].map(dateKey).filter(Boolean));
   let fareDates = new Set<string>();
+  let priceGroupsMerged = false;
   for (const [key, value] of Object.entries(next.extra || {})) {
     if (before && sameParityValue(value, before.extra?.[key])) continue;
     // Seats and sold-out states belong to the website (bookings decrement them
@@ -422,15 +481,21 @@ export function websiteTripPatchReport(input: unknown, previousInput: unknown, c
     const base = before?.extra && owns(before.extra, key) ? before.extra[key] : baselineExtra[key];
     // Per-date fares merge one date and option at a time (websiteDateFares.ts); the two
     // stores never hold identical lists, so a whole-list comparison always conflicted.
-    if (key === "price_groups" && Array.isArray(value) && value.length
-      && Array.isArray(canonicalExtra.price_groups) && canonicalExtra.price_groups.length) {
-      const merge = mergeWebsiteDateFares(canonicalExtra.price_groups, base, value, liveDates);
-      if (merge.dates.size) {
-        fareDates = merge.dates;
-        if (merge.groups) extra.price_groups = merge.groups;
-        merge.conflicts.forEach(addConflict);
-        continue;
-      }
+    // A chatbot record with no fare table yet is the simplest case of the same merge:
+    // nothing on its side to overwrite, so the website's per-date fares are adopted.
+    // Compared as whole lists instead, every date or fare edit on such a trip became an
+    // "extra.price_groups" conflict and the edit never reached the bot.
+    if (key === "price_groups" && Array.isArray(value) && value.length) {
+      const merge = mergeWebsiteDateFares(canonicalExtra.price_groups ?? [], base, value, liveDates);
+      // Whatever the cells said, the two lists are never compared whole: a label, an
+      // ordering or a website-only key is not a fare, and comparing the lists as one
+      // value recorded an "extra.price_groups" conflict that then blocked every later
+      // fare save on the trip as "open_conflict" (2026-11-03).
+      fareDates = merge.dates;
+      priceGroupsMerged = true;
+      if (merge.groups) extra.price_groups = merge.groups;
+      merge.conflicts.forEach(addConflict);
+      continue;
     }
     if (key === "itinerary_days" && before && Array.isArray(value)) {
       const facts = (raw: unknown) => (Array.isArray(raw) ? raw : []).map((item, index) => {
@@ -547,11 +612,20 @@ export function websiteTripPatchReport(input: unknown, previousInput: unknown, c
     }
     const landed = targets.some((target) => {
       if (applied.includes(target) || recorded.some((conflict) => conflict.field === target || conflict.field.startsWith(target))) return true;
+      // The fare table was merged cell by cell: every fare this save typed was applied,
+      // recorded as a conflict above, or already the chatbot's own value.
+      if (target === "extra.price_groups" && priceGroupsMerged) return true;
       // Already the canonical value (an earlier delivery, or both sides agree).
       const nextValue = target.startsWith("extra.") ? (next.extra as UnknownRecord | undefined)?.[target.slice(6)] : next[target as keyof TripMutationFields];
       const current = target.startsWith("extra.") ? canonicalExtra[target.slice(6)] : canonical[target];
       return nextValue !== undefined && sameParityValue(current, nextValue);
     });
+    // Seats and statuses of a rule-scheduled trip still land; the website's new or
+    // removed days do not, and staff must hear that even though part of the save did.
+    if (field === "departures" && scheduleIsRule) {
+      ignored.push({ field, reason: "recurring_schedule" });
+      continue;
+    }
     if (landed) continue;
     // Blocked by a disagreement recorded by an earlier save, still unresolved.
     if (conflicts.some((conflict) => targets.some((target) => conflict.field === target || conflict.field.startsWith(target)))) {
