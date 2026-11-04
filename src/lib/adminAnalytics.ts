@@ -94,6 +94,13 @@ async function faqStats(query: AnalyticsQuery, now: string): Promise<FaqStatsDat
  * trip data covers, which trips people opened, and whether the AI was down. Counts and
  * stored system texts only; a customer's words appear only redacted, never who sent them.
  */
+const instant = (value: unknown) => (value instanceof Date ? value.getTime() : value ? Date.parse(String(value)) : NaN);
+/** True when a production model call succeeded after the last outage. */
+export function aiRecoveredAfter(lastOutage: unknown, lastSuccess: unknown): boolean {
+  const outage = instant(lastOutage), success = instant(lastSuccess);
+  return Number.isFinite(outage) && Number.isFinite(success) && success > outage;
+}
+
 async function overviewStats(query: AnalyticsQuery, period: AnalyticsPeriod, window: ReturnType<typeof analyticsWindow>, withWebsiteDetails: WebsiteDetailsReader): Promise<OverviewData> {
   const previousStart = new Date(Date.parse(window.start) - period * 86_400_000).toISOString();
   const [people, peopleDaily, leads, leadsDaily, silences, activeTrips, outages, demand] = await Promise.all([
@@ -121,7 +128,8 @@ async function overviewStats(query: AnalyticsQuery, period: AnalyticsPeriod, win
       ORDER BY created_at DESC LIMIT 500`, [window.start, window.end]),
     read(query, `/* overview:coverage */ SELECT id, adult_price, hotel, departure_dates, photo_urls, extra
       FROM travel_trip_entries WHERE status='active'`),
-    read(query, `/* overview:outages */ SELECT COUNT(*)::text AS outages, MAX(created_at) AS last_outage
+    read(query, `/* overview:outages */ SELECT COUNT(*)::text AS outages, MAX(created_at) AS last_outage,
+      (SELECT MAX(updated_at) FROM travel_ai_usage WHERE environment = 'production') AS last_ai_success
       FROM travel_leads WHERE context LIKE 'AI түр саатсан%'
       AND created_at >= $1::timestamptz - INTERVAL '24 hours' AND created_at < $1::timestamptz`, [window.end]),
     read(query, `/* overview:trip_demand */ SELECT t.route_name AS trip, COUNT(DISTINCT c.sender_id)::text AS customers
@@ -167,6 +175,9 @@ async function overviewStats(query: AnalyticsQuery, period: AnalyticsPeriod, win
     coverage: COVERAGE_TOPICS.map(topic => ({ topic, trips: coverageSets.filter(set => set.has(topic)).length, asked: askedByTopic.get(topic) ?? 0 })),
     activeTrips: activeTrips.length,
     aiOutages24h: count(outages[0]?.outages ?? 0), lastAiOutageAt: iso(outages[0]?.last_outage ?? null),
+    // A successful production model call after the last outage means it is over (credits topped
+    // up): the banner then stops telling staff to check billing.
+    aiRecovered: aiRecoveredAfter(outages[0]?.last_outage ?? null, outages[0]?.last_ai_success ?? null),
     tripDemand: demand.map(row => ({ trip: String(row.trip), customers: count(row.customers) })),
   };
 }

@@ -315,7 +315,7 @@ export function AnalyticsTab({
 
       {error && <Alert tone="danger">{error}{snapshot && " Доор хамгийн сүүлд ачаалсан мэдээллийг харуулж байна."}</Alert>}
       {Boolean(snapshot?.warnings?.length) && <Alert tone="warning">Тоймын зарим хэсгийг ачаалж чадсангүй. Шинэчилнэ үү.</Alert>}
-      {overview && overview.aiOutages24h > 0 && (
+      {overview && overview.aiOutages24h > 0 && !overview.aiRecovered && (
         <Alert tone="danger">
           Сүүлийн 24 цагт AI үйлчилгээ {number(overview.aiOutages24h)} удаа тасарч, бот хариулж чадаагүй
           {overview.lastAiOutageAt ? ` (сүүлд ${snapshotTime(overview.lastAiOutageAt)})` : ""}. OpenAI-ийн төлбөр, кредитийг шалгана уу.

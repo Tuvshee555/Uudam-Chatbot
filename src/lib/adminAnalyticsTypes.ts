@@ -41,6 +41,8 @@ export type OverviewData = {
   coverage: { topic: CoverageTopic; trips: number; asked: number }[];
   activeTrips: number;
   aiOutages24h: number; lastAiOutageAt: string | null;
+  /** True once a production model call succeeded after the last outage. */
+  aiRecovered?: boolean;
   tripDemand: { trip: string; customers: number }[];
 };
 export type AnalyticsResponse = {

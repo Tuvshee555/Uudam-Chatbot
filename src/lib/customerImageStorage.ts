@@ -63,7 +63,8 @@ export async function checkCustomerImageStorage(options: { force?: boolean; deps
   const finish = (error: string | null): StorageCheck => {
     const result = { ok: !error, configured: Boolean(deps.token), checkedAt: new Date(now).toISOString(), steps, error };
     if (!options.deps) cached = { at: now, result };
-    (error ? logError : logInfo)("customer_documents.storage_check", { ok: result.ok, configured: result.configured, ...steps, error });
+    // A local run has no store token by design; it must not write an error row into the shared log.
+    (error && process.env.VERCEL ? logError : logInfo)("customer_documents.storage_check", { ok: result.ok, configured: result.configured, ...steps, error });
     return result;
   };
   if (!deps.token) return finish("private_blob_not_configured");

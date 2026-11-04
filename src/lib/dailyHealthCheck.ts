@@ -26,7 +26,7 @@ export async function runDailyHealthCheck(): Promise<void> {
   try {
     const { checkCustomerImageStorage, customerImageStorageIssues } = await import("./customerImageStorage");
     const issues = await customerImageStorageIssues(await checkCustomerImageStorage({ force: true }));
-    if (issues.length) logError("daily_health_check.storage_issue", { message: issues[0].message });
+    if (issues.length && process.env.VERCEL) logError("daily_health_check.storage_issue", { message: issues[0].message });
   } catch (error) {
     logError("daily_health_check.storage_failed", { message: error instanceof Error ? error.name : "storage_check_failed" });
   }

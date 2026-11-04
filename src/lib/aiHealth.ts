@@ -109,7 +109,11 @@ export async function getOperationalIssues(): Promise<ReadinessIssue[]> {
   // Spend over the daily production budget is the warning that comes before an empty balance.
   issues.push(...await (await import("./aiUsage")).getAiSpendIssues());
   // Passports and payment slips are kept only in the private store: a broken store is critical.
-  issues.push(...await (await import("./customerImageStorage")).customerImageStorageIssues().catch(() => []));
+  // Only where customer images actually arrive (the deployed webhook): a local admin has no
+  // store token on purpose and showed a false critical "store not working" (2026-11-04).
+  if (process.env.VERCEL) {
+    issues.push(...await (await import("./customerImageStorage")).customerImageStorageIssues().catch(() => []));
+  }
   // A purge whose file could not be deleted is retried daily; until then it is visible here.
   issues.push(...await (await import("./customerDocumentPurge")).storageDeletionIssues().catch(() => []));
   return issues;
