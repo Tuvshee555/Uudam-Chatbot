@@ -231,70 +231,92 @@ export function AssistantTab({
         if (!busy) onDropFiles(files);
       }}
     >
-      <div className="flex items-center gap-3 border-b border-line px-4 py-3.5 sm:px-5">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand">
-          <Icons.ai size={19} />
+      <div className="flex items-center gap-3 border-b border-line px-4 py-3 sm:px-5">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand to-travel text-white shadow-xs">
+          <Icons.ai size={18} />
         </span>
-        <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-ink">Аяллын туслах</h2>
-          <p className="mt-0.5 text-xs leading-5 text-ink-muted">Би санал бэлдэнэ. Та хянаад хадгална.</p>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-sm font-semibold leading-5 text-ink">Аяллын туслах</h2>
+          <p className="text-xs leading-4 text-ink-muted">Би санал бэлдэнэ. Та хянаад хадгална.</p>
         </div>
+        {existingTrips.length > 0 && (
+          <span className="hidden shrink-0 items-center gap-1.5 rounded-full border border-line bg-canvas px-2.5 py-1 text-xs font-medium text-ink-muted sm:inline-flex">
+            <Icons.trips size={13} className="text-ink-subtle" />
+            {existingTrips.length} аялал
+          </span>
+        )}
       </div>
       {dragOver && !busy && (
         <div className="pointer-events-none absolute inset-2 z-10 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-brand bg-surface/95 p-5 text-center" role="status">
-          <Icons.upload size={28} className="text-brand" />
-          <p className="text-base font-semibold text-ink">Файлаа энд тавиарай</p>
+          <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-soft text-brand">
+            <Icons.upload size={26} />
+          </span>
+          <p className="mt-1 text-base font-semibold text-ink">Файлаа энд тавиарай</p>
           <p className="text-sm text-ink-muted">Уншаад өөрчлөлтийн санал бэлдье.</p>
         </div>
       )}
-      <div className="scroll-area max-h-[60dvh] min-h-[18rem] space-y-4 overflow-y-auto bg-canvas/40 p-3.5 sm:min-h-[22rem] sm:p-5" role="log" aria-label="Туслахтай ярилцсан түүх" aria-relevant="additions text">
+      <div
+        className={cx(
+          "scroll-area min-h-[18rem] space-y-4 overflow-y-auto bg-canvas/40 p-3.5 sm:min-h-[22rem] sm:p-5",
+          !isEmpty && "max-h-[60dvh]",
+        )}
+        role="log"
+        aria-label="Туслахтай ярилцсан түүх"
+        aria-relevant="additions text"
+      >
         {isEmpty ? (
-          <div className="mx-auto flex h-full min-h-[16rem] w-full max-w-3xl flex-col justify-center gap-6 px-1 py-4 sm:min-h-[20rem] sm:px-3">
-            <div>
-              <p className="text-2xl font-extrabold tracking-tight text-ink sm:text-[28px]">
-                Юуг шинэчлэх вэ?
-              </p>
-              <p className="mt-2 max-w-xl text-sm leading-6 text-ink-muted">
-                Постер, үнийн жагсаалтаа оруулаарай. Би уншаад юуг нэмэх, өөрчлөхийг санал болгоно.
-                Эсвэл{" "}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAiInput("[Аяллын нэр] аяллын мэдээллийг шинэчлэх");
-                    inputRef.current?.focus();
-                  }}
-                  className="rounded font-medium text-brand underline decoration-brand/30 underline-offset-2 hover:decoration-brand"
-                >
-                  хийх зүйлээ бичээрэй.
-                </button>
-              </p>
-            </div>
+          <div className="mx-auto flex w-full max-w-2xl flex-col items-center pt-3 pb-1 text-center sm:pt-5">
+            <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-brand to-travel text-white shadow-sm">
+              <Icons.ai size={22} />
+            </span>
+            <p className="mt-4 text-2xl font-extrabold tracking-tight text-ink sm:text-[28px]">
+              Юуг шинэчлэх вэ?
+            </p>
+            <p className="mt-2 max-w-md text-sm leading-6 text-ink-muted">
+              Постер, үнийн жагсаалтаа оруулаарай. Би уншаад юуг нэмэх, өөрчлөхийг санал болгоно.
+              Эсвэл{" "}
+              <button
+                type="button"
+                onClick={() => {
+                  setAiInput("[Аяллын нэр] аяллын мэдээллийг шинэчлэх");
+                  inputRef.current?.focus();
+                }}
+                className="rounded font-medium text-brand underline decoration-brand/30 underline-offset-2 hover:decoration-brand"
+              >
+                хийх зүйлээ бичээрэй.
+              </button>
+            </p>
             <button
               type="button"
               onClick={onPickFile}
               disabled={busy}
-              className="group flex w-full items-center gap-4 rounded-xl border border-dashed border-line-strong bg-surface px-5 py-5 text-left transition-colors hover:border-brand hover:bg-brand-soft/30 disabled:cursor-wait disabled:opacity-60"
+              className="group mt-6 flex w-full flex-col items-center gap-2.5 rounded-2xl border-2 border-dashed border-brand-border bg-brand-soft/40 px-5 py-6 text-center transition-colors hover:border-brand hover:bg-brand-soft disabled:cursor-wait disabled:opacity-60"
             >
-              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand transition-transform group-hover:-translate-y-0.5">
+              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-surface text-brand shadow-xs transition-transform group-hover:-translate-y-0.5">
                 <Icons.upload size={20} />
               </span>
-              <span className="min-w-0">
-                <span className="block text-sm font-bold text-ink">Файл сонгох эсвэл энд чирж тавих</span>
-                <span className="mt-0.5 block text-xs leading-5 text-ink-muted">
-                  Зураг · PDF · Excel · Word — олон файл зэрэг оруулж болно
-                </span>
+              <span>
+                <span className="block text-[15px] font-bold text-ink">Файл сонгох эсвэл энд чирж тавих</span>
+                <span className="mt-1 block text-xs leading-5 text-ink-muted">Олон файл зэрэг оруулж болно</span>
+              </span>
+              <span className="flex flex-wrap justify-center gap-1.5" aria-label="Дэмжигдэх файлын төрөл">
+                {["Зураг", "PDF", "Excel", "Word"].map((kind) => (
+                  <span key={kind} className="rounded-md border border-line bg-surface px-2 py-0.5 text-[11px] font-medium text-ink-muted">{kind}</span>
+                ))}
               </span>
             </button>
-            <ol className="grid gap-3 sm:grid-cols-3">
+            <ol className="mt-5 grid w-full gap-3 text-left sm:grid-cols-3 sm:gap-0 sm:divide-x sm:divide-line">
               {[
                 ["1", "Уншина", "Постер, үнийн жагсаалтаас аялал, үнэ, огноог гаргана."],
                 ["2", "Санал болгоно", "Юу өөрчлөгдөхийг өмнөх утгатай нь зэрэгцүүлж харуулна."],
                 ["3", "Та баталгаажуулна", "Та зөвшөөрөөгүй зүйл хадгалагдахгүй. Буцаах боломжтой."],
               ].map(([n, title, body]) => (
-                <li key={n} className="rounded-xl border border-line bg-surface p-3.5">
-                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-surface-sunken text-xs font-bold text-ink-muted">{n}</span>
-                  <p className="mt-2.5 text-sm font-semibold text-ink">{title}</p>
-                  <p className="mt-1 text-xs leading-5 text-ink-muted">{body}</p>
+                <li key={n} className="flex gap-3 sm:flex-col sm:gap-2.5 sm:px-4 first:sm:pl-0 last:sm:pr-0">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-soft text-xs font-bold text-brand">{n}</span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold text-ink">{title}</span>
+                    <span className="mt-0.5 block text-xs leading-5 text-ink-muted">{body}</span>
+                  </span>
                 </li>
               ))}
             </ol>
@@ -340,47 +362,50 @@ export function AssistantTab({
         <div ref={chatEndRef} />
       </div>
 
-      <div className="border-t border-line bg-surface">
+      <div className="border-t border-line bg-surface p-3 sm:p-4">
         <AssistantQuickActions
           trips={existingTrips}
           busy={busy}
           onQuick={onQuickAction}
           onEditPrice={onEditTripPrice}
           onNewTrip={onNewTrip}
+          onPickFile={onPickFile}
         />
 
-        {attachedFiles.length > 0 && (
-          <div className="px-3 pt-2.5">
-            <div className="mb-1.5 flex items-center justify-between">
-              <span className="text-xs font-medium text-ink-muted">
-                {attachedFiles.length} файл · {formatBytes(attachedTotalBytes)}
-              </span>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() =>
-                  attachedFiles.forEach((file) => onRemoveAttachedFile(file.id))
-                }
-                className="rounded px-1 py-1 text-xs font-medium text-brand hover:text-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Бүгдийг арилгах
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {attachedFiles.map((file) => (
-                <FileChip
-                  key={file.id}
-                  file={file}
+        <div className={cx(
+          "mt-2.5 rounded-2xl border border-line-strong bg-surface shadow-xs transition-shadow focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/10",
+          dragOver && "border-brand",
+        )}>
+          {attachedFiles.length > 0 && (
+            <div className="border-b border-line px-3 pt-2.5 pb-2">
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-xs font-medium text-ink-muted">
+                  {attachedFiles.length} файл · {formatBytes(attachedTotalBytes)}
+                </span>
+                <button
+                  type="button"
                   disabled={busy}
-                  onRemove={() => onRemoveAttachedFile(file.id)}
-                />
-              ))}
+                  onClick={() =>
+                    attachedFiles.forEach((file) => onRemoveAttachedFile(file.id))
+                  }
+                  className="rounded px-1 py-1 text-xs font-medium text-brand hover:text-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Бүгдийг арилгах
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {attachedFiles.map((file) => (
+                  <FileChip
+                    key={file.id}
+                    file={file}
+                    disabled={busy}
+                    onRemove={() => onRemoveAttachedFile(file.id)}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
-        )}
-
-        <div className="p-2.5 sm:p-3">
-          <div className="flex items-end gap-1 rounded-2xl border border-line-strong bg-surface p-1.5 shadow-xs transition-shadow focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/10">
+          )}
+          <div className="flex items-end gap-1 p-1.5">
             <button
               type="button"
               onClick={onPickFile}
@@ -412,7 +437,7 @@ export function AssistantTab({
               }}
               rows={1}
               placeholder={attachedFiles.length ? "Файлаар юу хийхийг хэлээрэй…" : "Аялал нэмэх, үнэ эсвэл суудал өөрчлөх…"}
-              className="scroll-area max-h-40 min-h-10 min-w-0 flex-1 resize-none border-0 bg-transparent px-1 py-2.5 text-sm leading-5 text-ink placeholder:text-ink-muted focus-visible:[box-shadow:none]"
+              className="scroll-area max-h-40 min-h-10 min-w-0 flex-1 resize-none border-0 bg-transparent px-1.5 py-2.5 text-sm leading-5 text-ink placeholder:text-ink-muted focus-visible:[box-shadow:none]"
             />
             <button
               type="button"
@@ -421,22 +446,26 @@ export function AssistantTab({
               aria-label="Илгээх"
               title="Илгээх"
               className={cx(
-                "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-colors",
+                "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all duration-150",
                 canSend
-                  ? "bg-brand text-white hover:bg-brand-hover"
-                  : "cursor-not-allowed bg-surface-sunken text-ink-muted",
+                  ? "bg-brand text-white shadow-xs hover:bg-brand-hover active:scale-[0.97]"
+                  : "cursor-not-allowed bg-surface-sunken text-ink-subtle",
               )}
             >
               <Icons.send size={16} />
             </button>
           </div>
-          <div id={`${composerId}-hint`} className="mt-2 flex items-center justify-between gap-3 px-1.5 text-[11px] leading-4 text-ink-muted">
-            <span className="hidden sm:inline">Enter — илгээх · Shift+Enter — шинэ мөр</span>
-            <span className="sm:hidden">Хадгалахаас өмнө саналаа хянаарай.</span>
-            {aiInput.length >= MAX_AI_INPUT_CHARS * 0.8 && (
-              <span className="shrink-0 font-mono" role="status">{aiInput.length.toLocaleString()} / {MAX_AI_INPUT_CHARS.toLocaleString()}</span>
-            )}
-          </div>
+        </div>
+        <div id={`${composerId}-hint`} className="mt-2 flex items-center justify-between gap-3 px-1.5 text-[11px] leading-4 text-ink-subtle">
+          <span className="hidden sm:inline">
+            <kbd className="rounded border border-line bg-canvas px-1 py-px font-sans text-[10px] font-medium text-ink-muted">Enter</kbd> илгээх
+            <span className="mx-1.5 text-line-strong">·</span>
+            <kbd className="rounded border border-line bg-canvas px-1 py-px font-sans text-[10px] font-medium text-ink-muted">Shift+Enter</kbd> шинэ мөр
+          </span>
+          <span className="sm:hidden">Хадгалахаас өмнө саналаа хянаарай.</span>
+          {aiInput.length >= MAX_AI_INPUT_CHARS * 0.8 && (
+            <span className="shrink-0 font-mono" role="status">{aiInput.length.toLocaleString()} / {MAX_AI_INPUT_CHARS.toLocaleString()}</span>
+          )}
         </div>
       </div>
     </Card>

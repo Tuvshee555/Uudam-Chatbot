@@ -6,16 +6,29 @@ export type QuickActionKind = "cancel" | "seats" | "food";
 
 type ActionKey = QuickActionKind | "price" | "new";
 
-const ACTIONS: Array<{ key: ActionKey; label: string; hint: string }> = [
-  { key: "new", label: "Шинэ аялал", hint: "Аяллаа хэрхэн нэмэх вэ?" },
-  { key: "price", label: "Үнэ өөрчлөх", hint: "Аль аяллын үнийг засах вэ?" },
-  { key: "seats", label: "Суудал шинэчлэх", hint: "Аль аяллын суудлыг шинэчлэх вэ?" },
-  { key: "food", label: "Хоол", hint: "Аль аяллын хоолны мэдээллийг засах вэ?" },
-  { key: "cancel", label: "Аялал цуцлах", hint: "Аль аяллыг цуцлах вэ?" },
+const ACTIONS: Array<{
+  key: ActionKey;
+  label: string;
+  hint: string;
+  icon: keyof typeof Icons;
+}> = [
+  { key: "new", label: "Шинэ аялал", hint: "Аяллаа хэрхэн нэмэх вэ?", icon: "plus" },
+  { key: "price", label: "Үнэ өөрчлөх", hint: "Аль аяллын үнийг засах вэ?", icon: "tag" },
+  { key: "seats", label: "Суудал шинэчлэх", hint: "Аль аяллын суудлыг шинэчлэх вэ?", icon: "users" },
+  { key: "food", label: "Хоол", hint: "Аль аяллын хоолны мэдээллийг засах вэ?", icon: "utensils" },
+  { key: "cancel", label: "Аялал цуцлах", hint: "Аль аяллыг цуцлах вэ?", icon: "ban" },
 ];
 
 const STATUS_LABEL: Record<string, string> = {
   active: "Идэвхтэй", sold_out: "Дүүрсэн", paused: "Түр зогссон", draft: "Ноорог", cancelled: "Цуцлагдсан",
+};
+
+const STATUS_TONE: Record<string, string> = {
+  active: "bg-success-soft text-success",
+  sold_out: "bg-warning-soft text-warning",
+  paused: "bg-warning-soft text-warning",
+  draft: "bg-surface-sunken text-ink-muted",
+  cancelled: "bg-danger-soft text-danger",
 };
 
 /**
@@ -29,12 +42,14 @@ export function AssistantQuickActions({
   onQuick,
   onEditPrice,
   onNewTrip,
+  onPickFile,
 }: {
   trips: TravelTrip[];
   busy: boolean;
   onQuick: (kind: QuickActionKind, trip: TravelTrip, value?: number | boolean) => void;
   onEditPrice: (trip: TravelTrip) => void;
   onNewTrip: () => void;
+  onPickFile?: () => void;
 }) {
   const panelId = useId();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -69,6 +84,7 @@ export function AssistantQuickActions({
     setSeats("");
   };
   const active = ACTIONS.find((entry) => entry.key === action);
+  const ActiveIcon = active ? Icons[active.icon] : null;
   const seatsNumber = seats.trim() === "" ? NaN : Number(seats);
   const seatsValid = Number.isInteger(seatsNumber) && seatsNumber >= 0 && seatsNumber <= 1000;
 
@@ -81,49 +97,80 @@ export function AssistantQuickActions({
     <div onKeyDown={(event) => {
       if (event.key === "Escape" && action) { event.preventDefault(); reset(); }
     }}>
-      <div className="scroll-area flex gap-1.5 overflow-x-auto px-3 pt-3 pb-0.5" role="group" aria-label="Аяллын түгээмэл өөрчлөлтүүд">
-        {ACTIONS.map((entry) => (
-          <button
-            key={entry.key}
-            type="button"
-            ref={(element) => { actionRefs.current[entry.key] = element; }}
-            disabled={busy}
-            onClick={() => choose(entry.key)}
-            aria-pressed={action === entry.key}
-            aria-expanded={action === entry.key}
-            aria-controls={action === entry.key ? panelId : undefined}
-            className={cx(
-              "flex min-h-8 shrink-0 items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50",
-              action === entry.key
-                ? "border-brand-border bg-brand-soft text-brand"
-                : "border-line bg-surface text-ink-muted hover:border-brand-border hover:bg-brand-soft hover:text-brand",
+      {active && ActiveIcon && (
+        <section
+          id={panelId}
+          className="animate-scale-in mb-3 overflow-hidden rounded-xl border border-line bg-surface shadow-sm"
+          aria-label={active.label}
+        >
+          <div className="flex items-center gap-3 border-b border-line bg-canvas/60 py-2.5 pl-3.5 pr-2">
+            {picked ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setPicked(null)}
+                aria-label="Өөр аялал сонгох"
+                title="Өөр аялал сонгох"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink disabled:opacity-50"
+              >
+                <Icons.arrowLeft size={16} />
+              </button>
+            ) : (
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-brand">
+                <ActiveIcon size={16} />
+              </span>
             )}
-          >
-            {entry.key === "new" && <Icons.plus size={12} />}
-            {entry.label}
-          </button>
-        ))}
-      </div>
-
-      {active && (
-        <section id={panelId} className="mx-3 mt-2 rounded-xl border border-line bg-canvas/60 p-3 sm:p-3.5" aria-label={active.label}>
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold leading-5 text-ink">{picked ? picked.route_name : active.hint}</p>
-            <button type="button" onClick={() => reset()} aria-label="Шуурхай өөрчлөлтийг хаах" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ink-muted hover:bg-surface-sunken hover:text-ink">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold leading-5 text-ink">{picked ? picked.route_name : active.hint}</p>
+              {picked && (
+                <p className="text-[11px] leading-4 text-ink-muted">{active.label} · {STATUS_LABEL[picked.status] || "Төлөв тодорхойгүй"}</p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => reset()}
+              aria-label="Шуурхай өөрчлөлтийг хаах"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink"
+            >
               <Icons.close size={15} />
             </button>
           </div>
+
           {action === "new" ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" disabled={busy} onClick={() => { reset(false); onNewTrip(); }}>
-                <Icons.plus size={14} /> Хоосон маягт нээх
-              </Button>
-              <span className="text-xs leading-5 text-ink-muted">Эсвэл постер, үнийн жагсаалтаа хавсаргаарай. Би уншаад санал бэлдье.</span>
+            <div className="grid gap-2 p-3 sm:grid-cols-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => { reset(false); onNewTrip(); }}
+                className="group flex items-start gap-3 rounded-xl border border-brand-border bg-brand-soft/50 p-3.5 text-left transition-colors hover:bg-brand-soft disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand text-white shadow-xs">
+                  <Icons.plus size={16} />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold text-ink">Хоосон маягт нээх</span>
+                  <span className="mt-0.5 block text-xs leading-5 text-ink-muted">Нэр, огноо, үнээ өөрөө бөглөнө.</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                disabled={busy || !onPickFile}
+                onClick={() => { reset(false); onPickFile?.(); }}
+                className="group flex items-start gap-3 rounded-xl border border-line bg-surface p-3.5 text-left transition-colors hover:border-brand-border hover:bg-brand-soft/40 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-sunken text-ink-muted transition-colors group-hover:bg-brand-soft group-hover:text-brand">
+                  <Icons.upload size={16} />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold text-ink">Постер, үнийн жагсаалт хавсаргах</span>
+                  <span className="mt-0.5 block text-xs leading-5 text-ink-muted">Би уншаад санал бэлдье. Та хянаад хадгална.</span>
+                </span>
+              </button>
             </div>
           ) : !picked ? (
-            <>
+            <div className="p-3">
               <label htmlFor={`${panelId}-search`} className="sr-only">Аяллын нэрээр хайх</label>
-              <div className="relative mb-2">
+              <div className="relative">
                 <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-ink-muted"><Icons.search size={15} /></span>
                 <input
                   ref={searchRef}
@@ -134,7 +181,7 @@ export function AssistantQuickActions({
                   className="h-10 w-full rounded-lg border border-line-strong bg-surface pl-9 pr-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand"
                 />
               </div>
-              <ul className="scroll-area max-h-52 space-y-1 overflow-y-auto" aria-label="Сонгох аяллууд">
+              <ul className="scroll-area mt-2 max-h-56 space-y-0.5 overflow-y-auto" aria-label="Сонгох аяллууд">
                 {candidates.slice(0, 40).map((trip) => (
                   <li key={trip.id}>
                     <button
@@ -145,63 +192,130 @@ export function AssistantQuickActions({
                         setPicked(trip);
                         setSeats(typeof trip.seats_left === "number" ? String(trip.seats_left) : "");
                       }}
-                      className="flex min-h-11 w-full items-center justify-between gap-3 rounded-lg px-2.5 py-2 text-left text-sm text-ink hover:bg-brand-soft disabled:cursor-not-allowed disabled:opacity-50"
+                      className="group flex min-h-11 w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-ink transition-colors hover:bg-brand-soft disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <span className="min-w-0 wrap-break-word font-medium">{trip.route_name}</span>
-                      <span className="shrink-0 rounded-full bg-surface px-2 py-0.5 text-[11px] text-ink-muted">{STATUS_LABEL[trip.status] || "Төлөв тодорхойгүй"}</span>
+                      <span className="flex shrink-0 items-center gap-2">
+                        <span className={cx("rounded-full px-2 py-0.5 text-[11px] font-medium", STATUS_TONE[trip.status] || STATUS_TONE.draft)}>
+                          {STATUS_LABEL[trip.status] || "Төлөв тодорхойгүй"}
+                        </span>
+                        <Icons.chevronRight size={14} className="text-ink-subtle opacity-0 transition-opacity group-hover:opacity-100" />
+                      </span>
                     </button>
                   </li>
                 ))}
-                {candidates.length === 0 && <li className="px-2.5 py-3 text-sm leading-6 text-ink-muted">{search.trim() ? "Ийм нэртэй аялал олдсонгүй. Нэрээ товчилж хайгаарай." : "Энэ өөрчлөлтийг хийх аялал алга. Эхлээд шинэ аялал нэмээрэй."}</li>}
+                {candidates.length === 0 && (
+                  <li className="px-3 py-5 text-center text-sm leading-6 text-ink-muted">
+                    {search.trim() ? "Ийм нэртэй аялал олдсонгүй. Нэрээ товчилж хайгаарай." : "Энэ өөрчлөлтийг хийх аялал алга. Эхлээд шинэ аялал нэмээрэй."}
+                  </li>
+                )}
               </ul>
-              {candidates.length > 40 && <p className="mt-2 text-xs leading-5 text-ink-muted">Эхний 40 аяллыг харууллаа. Нэрээр хайж сонголтоо нарийсгаарай.</p>}
-            </>
+              {candidates.length > 40 && <p className="mt-2 px-1 text-xs leading-5 text-ink-muted">Эхний 40 аяллыг харууллаа. Нэрээр хайж сонголтоо нарийсгаарай.</p>}
+            </div>
           ) : (
-            <div className="space-y-2.5">
-              <button type="button" disabled={busy} onClick={() => setPicked(null)} className="rounded text-xs font-medium text-brand hover:text-brand-hover disabled:opacity-50">Өөр аялал сонгох</button>
+            <div className="p-3.5 sm:p-4">
               {action === "cancel" && (
-                <Button size="sm" variant="secondary" disabled={busy} onClick={() => { onQuick("cancel", picked); reset(); }}>
-                  Цуцлах санал үүсгэх
-                </Button>
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button size="sm" variant="danger" disabled={busy} onClick={() => { onQuick("cancel", picked); reset(); }}>
+                    <Icons.ban size={14} /> Цуцлах санал үүсгэх
+                  </Button>
+                  <span className="text-xs leading-5 text-ink-muted">Хадгалахаас өмнө саналыг хянана.</span>
+                </div>
               )}
               {action === "seats" && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <label htmlFor={`${panelId}-seats`} className="text-sm text-ink-muted">Үлдсэн суудал</label>
-                  <input
-                    ref={seatsRef}
-                    id={`${panelId}-seats`}
-                    type="number"
-                    min={0}
-                    max={1000}
-                    step={1}
-                    disabled={busy}
-                    inputMode="numeric"
-                    value={seats}
-                    onChange={(event) => setSeats(event.target.value)}
-                    onKeyDown={(event) => { if (event.key === "Enter" && seatsValid && !busy) { onQuick("seats", picked, seatsNumber); reset(); } }}
-                    aria-label="Үлдсэн суудал"
-                    className="h-10 w-24 rounded-lg border border-line-strong bg-surface px-3 text-sm text-ink focus:border-brand"
-                  />
-                  <Button size="sm" disabled={busy || !seatsValid} onClick={() => { onQuick("seats", picked, seatsNumber); reset(); }}>
+                <div className="flex flex-wrap items-end gap-3">
+                  <div>
+                    <label htmlFor={`${panelId}-seats`} className="mb-1.5 block text-xs font-medium text-ink-muted">
+                      Үлдсэн суудал
+                      {typeof picked.seats_left === "number" && <span className="font-normal text-ink-subtle"> · одоо {picked.seats_left}</span>}
+                    </label>
+                    <input
+                      ref={seatsRef}
+                      id={`${panelId}-seats`}
+                      type="number"
+                      min={0}
+                      max={1000}
+                      step={1}
+                      disabled={busy}
+                      inputMode="numeric"
+                      value={seats}
+                      onChange={(event) => setSeats(event.target.value)}
+                      onKeyDown={(event) => { if (event.key === "Enter" && seatsValid && !busy) { onQuick("seats", picked, seatsNumber); reset(); } }}
+                      className="h-10 w-28 rounded-lg border border-line-strong bg-surface px-3 text-sm font-semibold tabular-nums text-ink focus:border-brand"
+                    />
+                  </div>
+                  <Button size="md" disabled={busy || !seatsValid} onClick={() => { onQuick("seats", picked, seatsNumber); reset(); }}>
                     Санал үүсгэх
                   </Button>
                 </div>
               )}
               {action === "food" && (
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant={picked.has_food ? "secondary" : "primary"} disabled={busy} onClick={() => { onQuick("food", picked, true); reset(); }}>
-                    Хоол багтсан
-                  </Button>
-                  <Button size="sm" variant={picked.has_food ? "primary" : "secondary"} disabled={busy} onClick={() => { onQuick("food", picked, false); reset(); }}>
-                    Хоол багтаагүй
-                  </Button>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {[
+                    { value: true, label: "Хоол багтсан", body: "Аяллын үнэд хоол орно." },
+                    { value: false, label: "Хоол багтаагүй", body: "Хоолыг тусад нь төлнө." },
+                  ].map((option) => {
+                    const current = Boolean(picked.has_food) === option.value;
+                    return (
+                      <button
+                        key={String(option.value)}
+                        type="button"
+                        disabled={busy}
+                        onClick={() => { onQuick("food", picked, option.value); reset(); }}
+                        className={cx(
+                          "flex items-start gap-3 rounded-xl border p-3.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+                          current
+                            ? "border-line bg-surface-sunken/60 hover:bg-surface-sunken"
+                            : "border-brand-border bg-brand-soft/50 hover:bg-brand-soft",
+                        )}
+                      >
+                        <span className={cx("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", current ? "bg-surface text-ink-muted" : "bg-brand text-white")}>
+                          <Icons.utensils size={15} />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-sm font-semibold text-ink">
+                            {option.label}
+                            {current && <span className="ml-1.5 text-[11px] font-medium text-ink-muted">· одоогийнх</span>}
+                          </span>
+                          <span className="mt-0.5 block text-xs leading-5 text-ink-muted">{option.body}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
-              <p className="text-xs leading-5 text-ink-muted">Саналыг хянаад хадгалахад аяллын мэдээлэл өөрчлөгдөнө.</p>
             </div>
           )}
         </section>
       )}
+
+      <div className="scroll-area flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Аяллын түгээмэл өөрчлөлтүүд">
+        {ACTIONS.map((entry) => {
+          const Icon = Icons[entry.icon];
+          const pressed = action === entry.key;
+          return (
+            <button
+              key={entry.key}
+              type="button"
+              ref={(element) => { actionRefs.current[entry.key] = element; }}
+              disabled={busy}
+              onClick={() => choose(entry.key)}
+              aria-pressed={pressed}
+              aria-expanded={pressed}
+              aria-controls={pressed ? panelId : undefined}
+              className={cx(
+                "group flex h-9 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-[13px] font-medium transition-all duration-150 active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100",
+                pressed
+                  ? "border-brand bg-brand text-white shadow-xs"
+                  : "border-line bg-surface text-ink shadow-xs hover:border-brand-border hover:bg-brand-soft hover:text-brand",
+              )}
+            >
+              <Icon size={14} className={pressed ? "text-white/90" : "text-ink-subtle transition-colors group-hover:text-brand"} />
+              {entry.label}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
