@@ -41,21 +41,34 @@ const CHAT_CHECK_TTL_MS = 30 * 60_000;
 const chatChecks = new Map<string, { at: number; result: TelegramChat }>();
 
 /**
+ * One Telegram call, tried again once when it timed out or the network dropped. A single
+ * slow answer used to fail the alert outright (2026-11-03/04: "telegram_unreachable").
+ */
+async function telegramFetch(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs * 2) });
+  }
+}
+
+/**
  * What kind of Telegram chat a staff alert would go to. Lead alerts carry customer messages
  * and phone numbers, so they go to a private chat or a group, never a broadcast channel
- * (whose audience can be public). Cached for 30 minutes; never throws.
+ * (whose audience can be public). Telegram's answer is cached for 30 minutes; an unreachable
+ * Telegram is not — caching it made every alert of the next half hour fail without trying.
+ * Never throws.
  */
 export async function telegramChatCheck(botToken: string, chatId: string, timeoutMs: number, now = Date.now()): Promise<TelegramChat> {
   const cached = chatChecks.get(chatId);
   if (cached && now - cached.at < CHAT_CHECK_TTL_MS) return cached.result;
   let result: TelegramChat;
   try {
-    const response = await fetch(`https://api.telegram.org/bot${botToken}/getChat?chat_id=${encodeURIComponent(chatId)}`,
-      { signal: AbortSignal.timeout(timeoutMs) });
+    const response = await telegramFetch(`https://api.telegram.org/bot${botToken}/getChat?chat_id=${encodeURIComponent(chatId)}`, {}, timeoutMs);
     const body = await response.json().catch(() => ({})) as { ok?: boolean; result?: { type?: string } };
     result = body.ok ? { ok: true, type: String(body.result?.type || "") } : { ok: false, error: `telegram_get_chat_${response.status}` };
   } catch {
-    result = { ok: false, error: "telegram_unreachable" };
+    return { ok: false, error: "telegram_unreachable" };
   }
   chatChecks.set(chatId, { at: now, result });
   return result;
@@ -76,14 +89,14 @@ async function sendTelegramMessage(
   const chat = await telegramChatCheck(botToken, chatId, timeoutMs);
   if (!chat.ok) throw new Error(chat.error || "telegram_chat_unavailable");
   if (chat.type === "channel") throw new Error("telegram_broadcast_channel_refused");
-  const response = await fetch(
+  const response = await telegramFetch(
     `https://api.telegram.org/bot${botToken}/sendMessage`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
-      signal: AbortSignal.timeout(timeoutMs),
     },
+    timeoutMs,
   );
   if (!response.ok) {
     throw new Error(`telegram_send_failed:${response.status}`);

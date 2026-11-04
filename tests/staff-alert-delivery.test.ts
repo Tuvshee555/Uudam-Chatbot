@@ -83,6 +83,27 @@ test("a broadcast channel or an unreachable chat never receives customer details
   assert.deepEqual(await telegramChatCheck("fixture-bot-token", "-100222", 1000), { ok: true, type: "channel" });
 });
 
+// 2026-11-03/04: one Telegram timeout was cached as "unreachable" for 30 minutes, so every
+// staff alert in that half hour failed without being tried.
+test("a Telegram timeout is retried once and never cached as an unreachable chat", async (context) => {
+  let getChatCalls = 0;
+  let failNext = 1;
+  context.mock.method(globalThis, "fetch", async (input: unknown) => {
+    if (String(input).includes("/getChat?")) {
+      getChatCalls += 1;
+      if (failNext-- > 0) throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+      return Response.json({ ok: true, result: { type: "group" } });
+    }
+    throw new Error("unexpected");
+  });
+  const { telegramChatCheck } = await import("../src/lib/staffAlerts");
+  assert.deepEqual(await telegramChatCheck("fixture-bot-token", "-100555", 1000), { ok: true, type: "group" }, "the retry reaches Telegram");
+  assert.equal(getChatCalls, 2);
+  failNext = 2;
+  assert.deepEqual(await telegramChatCheck("fixture-bot-token", "-100666", 1000), { ok: false, error: "telegram_unreachable" });
+  assert.deepEqual(await telegramChatCheck("fixture-bot-token", "-100666", 1000), { ok: true, type: "group" }, "the next alert tries again instead of reading a cached failure");
+});
+
 test("a failed delivery is recorded as failed and the lead stays in the Leads tab", async (context) => {
   const leads: Lead[] = [{ id: "9", sender_id: "fixture-other", notify_status: "", notified_at: null }];
   await install(context, leads);
