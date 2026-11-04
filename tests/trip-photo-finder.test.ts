@@ -55,7 +55,7 @@ test("candidates from several places are interleaved so one place cannot take ev
   assert.ok(searches[0].includes("Quality images") && !searches[1].includes("Quality images"), "quality images are searched first for each phrase");
 });
 
-test("the vision model's picks decide the order; without a usable answer the largest photos are used", async () => {
+test("the vision model's picks decide the order; without a usable answer no photo is used", async () => {
   const { rankPhotos, commonsRendition } = await import("../src/lib/tripPhotoFinder");
   const photo = (n: number) => ({ url: `https://thumb.example.test/x/1920px-${n}.jpg`, pageUrl: "", title: `Photo ${n}`, width: 3000 - n, height: 2000, license: "CC0", author: "", query: "q" });
   const candidates = [1, 2, 3, 4].map(photo);
@@ -68,7 +68,11 @@ test("the vision model's picks decide the order; without a usable answer the lar
     ask: (async () => ({ text: JSON.stringify({ picks: [2] }), usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } })) as never });
   assert.deepEqual(selective.map((p) => p.title), ["Photo 2"], "the model may return fewer than asked; nothing weak is topped up");
   const fallback = await rankPhotos(candidates, { subject: "Norvel", count: 2, fetchImpl: previews, ask: (async () => { throw new Error("model down"); }) as never });
-  assert.deepEqual(fallback.map((p) => p.title), ["Photo 1", "Photo 2"]);
+  // Changed 2026-11-04: the old fallback (largest unjudged photos) put a war map on a beach trip.
+  assert.deepEqual(fallback, [], "unjudged search results are never used");
+  const unreachable = (async () => new Response("<html>400</html>", { status: 400 })) as unknown as typeof fetch;
+  assert.deepEqual(await rankPhotos(candidates, { subject: "Norvel", count: 2, fetchImpl: unreachable,
+    ask: (async () => { throw new Error("must not be called"); }) as never }), [], "no preview reachable: nothing is used, no model call");
   const rejected = await rankPhotos(candidates.slice(0, 2), { subject: "Norvel", count: 2, fetchImpl: previews,
     ask: (async () => ({ text: JSON.stringify({ picks: [2] }), usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } })) as never });
   assert.deepEqual(rejected.map((p) => p.title), ["Photo 2"], "even a small pool is judged, so a weak photo can be rejected");

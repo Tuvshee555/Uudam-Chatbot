@@ -30,11 +30,14 @@ const COMMONS_API = "https://commons.wikimedia.org/w/api.php";
 export const MIN_PHOTO_WIDTH = 1600;
 export const PHOTOS_PER_TRIP = 6;
 const RENDITION_WIDTH = 1920;
-const PREVIEW_WIDTH = 480;
+// Commons serves only its standard thumbnail widths (… 250, 330, 500, 960, 1280, 1920); 480 is
+// refused with a 400 page, so the ranker never saw a preview and fell back to raw search order
+// (a war map was picked for a beach, 2026-11-04).
+const PREVIEW_WIDTH = 330;
 const MAX_DOWNLOAD_BYTES = 12 * 1024 * 1024;
 const ALLOWED_LICENSE = /^(cc0|public domain|cc[ -]by(-sa)?(\s|$)|copyrighted free use)/i;
 // Files that are not photographs of a place.
-const NOT_A_PHOTO = /\b(map|maps|logo|diagram|flag|coat of arms|plan|chart|satellite|screenshot|icon|seal|emblem|poster|banner|locator|svg|graph|table|sign|ticket|stamp|coin|banknote|menu|brochure|collage|panorama stitch|abandoned|derelict|ruins? of|demolition|construction site|accident|flood|protest|space station|from orbit|iss\d|zoo|hippopotamus|store|shop|supermarket|trading|rail transit|line \d|metro|subway|bus|taxi|toyota|honda|car|vehicle|truck|parking|street view|interior|office|factory|hospital|school|university campus)\b/i;
+const NOT_A_PHOTO = /\b(map|maps|logo|diagram|flag|coat of arms|plan|chart|satellite|screenshot|icon|seal|emblem|poster|banner|locator|svg|graph|table|sign|ticket|stamp|coin|banknote|menu|brochure|collage|panorama stitch|abandoned|derelict|ruins? of|demolition|construction site|accident|flood|protest|war|wars|military|army|soldiers?|space station|from orbit|iss\d|zoo|hippopotamus|store|shop|supermarket|trading|rail transit|line \d|metro|subway|bus|taxi|toyota|honda|car|vehicle|truck|parking|street view|interior|office|factory|hospital|school|university campus)\b/i;
 // Transit places on every train route: never a trip photo (the border town's gate was picked, 2026-11-04).
 const TRANSIT_PLACE = /erenhot|erlian|二连|zamyn|замын|эрээн|ulaanbaatar|улаанбаатар|border crossing|railway station|airport/i;
 
@@ -143,14 +146,19 @@ export async function rankPhotos(candidates: FoundPhoto[], input: { subject: str
     } catch { return null; }
   }));
   const usable = previews.filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-  if (!usable.length) return candidates.slice(0, count);
+  // Unjudged search results include unrelated files; no photo is better than a wrong one.
+  if (!usable.length) {
+    logWarn("trip_photos.no_previews", { candidates: candidates.length });
+    return [];
+  }
   const instruction = `You choose photographs for a travel agency's web page about: ${input.subject}.
 Pick up to ${count} of the ${usable.length} photos below, best first — only photos a travel agency would proudly put on the page: real scenery, famous landmarks, skylines and night views, beaches, old towns, famous streets, local food and culture of those places; sharp, well lit, inviting. Return fewer than ${count} rather than include a weak one. Reject: maps, satellite or aerial survey images, text overlays, logos, gates and signs, zoo animals, museum interiors, plain buildings, close-ups of people or selfies, derelict or under-construction places, bad weather, blurry or dark images, any other company's branding, border towns and railway or airport scenes, and photos that do not show these places.
 Answer with JSON only: {"picks":[photo numbers, best first]}.`;
   const parts: Parameters<typeof askOpenAIChatParts>[0] = [{ text: instruction }];
   usable.forEach((entry, index) => { parts.push({ text: `Photo ${index + 1}: ${entry.photo.title}` }); parts.push(entry.part); });
   try {
-    const result = await ask(parts, { model: "gpt-4o-mini", jsonMode: true, temperature: 0, maxOutputTokens: 200, timeoutMs: 30_000,
+    // Low detail: enough to tell a beach from a map, a third of the tokens (2026-11-04: ~148k → ~50k per trip).
+    const result = await ask(parts, { model: "gpt-4o-mini", jsonMode: true, temperature: 0, maxOutputTokens: 200, timeoutMs: 30_000, imageDetail: "low",
       source: "trip_photos.rank", requestId: input.trace?.requestId, correlationId: input.trace?.correlationId });
     const picks = (JSON.parse(result?.text || "{}") as { picks?: unknown }).picks;
     const chosen = (Array.isArray(picks) ? picks : []).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= usable.length)
@@ -160,7 +168,7 @@ Answer with JSON only: {"picks":[photo numbers, best first]}.`;
   } catch (error) {
     logWarn("trip_photos.rank_failed", { message: error instanceof Error ? error.message : String(error) });
   }
-  return usable.slice(0, count).map((entry) => entry.photo);
+  return [];
 }
 
 /** The photo as a JPEG no wider than 1920px (uploads over ~800 KB time out on the poster path). */

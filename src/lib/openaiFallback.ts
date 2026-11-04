@@ -36,6 +36,8 @@ export async function askOpenAIChatParts(
     model?: string;
     /** Rules/persona sent as an OpenAI system message. */
     systemText?: string;
+    /** OpenAI image detail for every image part; "low" costs about a third (judging small previews). */
+    imageDetail?: "low" | "high" | "auto";
     /** Internal recursion guard for the lower-cost alternate model. */
     alternateModelAttempted?: boolean;
     /** A reply cut off by maxOutputTokens is intended (a one-token liveness probe), not a failure. */
@@ -65,6 +67,7 @@ export async function askOpenAIChatParts(
         type: "image_url",
         image_url: {
           url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
+          ...(options?.imageDetail ? { detail: options.imageDetail } : {}),
         },
       };
     }
