@@ -5,6 +5,7 @@ import { tripDurationDays } from "./travelFastPathsSearch";
 import { tripTransport, isTripOfferPrice } from "./tripFacts";
 import { normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard, type PassengerKind } from "./tripOffers";
 import { parseDepartureDateText } from "./travelDates";
+import { withoutHolidaySpans } from "./holidayCalendar";
 import { departureAvailability, departureIsClosed } from "./departureAvailability";
 
 const AMOUNT = /(\d{1,3}(?:[.,]\d{3})+|\d+)\s*(?:₮|төгрөг|MNT)(?![\p{L}])/giu;
@@ -89,7 +90,7 @@ function withoutAddedUpTotals(text: string): string {
  * window phrase is dropped — every departure listed under it is still checked.
  */
 function withoutAskedWindows(text: string): string {
-  return text
+  return withoutHolidaySpans(text)
     .replace(/\d{1,2}\s*(?:-?\s*р)?\s*сарын\s*\d{1,2}\s*[–—-]\s*(?:\d{1,2}\s*(?:-?\s*р)?\s*сарын\s*)?\d{1,2}\s*(?:-?\s*(?:ны|ний|нд|ний))?\s*(?:хооронд|хүртэл)/giu, " ")
     .replace(/\d{1,2}\s*(?:-?\s*р)?\s*сарын\s*\d{1,2}\s*-?\s*(?:ны|ний)?\s*-?(?:аас|ээс|оос|өөс|наас|нээс)\s*(?:\d{1,2}\s*(?:-?\s*р)?\s*сарын\s*)?\d{1,2}\s*-?\s*(?:ны|ний)?\s*(?:хооронд|хүртэл)/giu, " ");
 }

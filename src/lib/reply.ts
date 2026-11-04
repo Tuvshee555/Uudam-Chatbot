@@ -1,5 +1,6 @@
 import type { TravelTrip } from "./travelTypes";
 import { parseDepartureDateText } from "./travelDates";
+import { withoutHolidaySpans } from "./holidayCalendar";
 import { mentionedOfferHotel, quotablePrices, tripBookingFacts, tripSupportsDate } from "./tripFacts";
 
 const WEBSITE_URL = "";
@@ -315,7 +316,7 @@ export function guardUnverifiedDates(
   if (candidateTrips.length === 0) return reply;
   if (!DATE_CLAIM_WORDS.test(reply)) return reply;
   let activeTrips = candidateTrips;
-  for (const line of reply.split(/\r?\n/)) {
+  for (const line of withoutHolidaySpans(reply).split(/\r?\n/)) {
     const named = replySectionTrips(line, candidateTrips);
     if (named.length) activeTrips = named;
     const dates = parseDepartureDateText(line, now);

@@ -47,6 +47,7 @@ import { getTripSelection, setTripSelection } from "./tripSelectionState";
 import { websiteTripLinksInText } from "./bookingWebsite";
 import { upcomingDepartures } from "./tripFareBlock";
 import { tripFromRecentMenu, tripMenuQuestionIndex } from "./tripMenuChoice";
+import { detectHoliday, withoutHolidayWords } from "./holidayCalendar";
 
 /**
  * Did the customer tap one of OUR quick-reply buttons?
@@ -159,11 +160,25 @@ const CALENDAR_FOLLOWUP_WORDS = new Set([
   // A start-date constraint is not a destination either: "Хүүхдийн амралт 11.1-с эхлэх гээд бдаг...яах вэ".
   "с", "аас", "ээс", "оос", "өөс", "хойш", "хойшоо", "эхлэх", "эхлэн", "эхэлнэ", "эхэлдэг", "эхлэхээр", "hoish", "ehleh", "ehlen",
   "амралт", "амралтаар", "амралтанд", "amralt", "сургууль", "хичээл", "гээд", "geed", "бдаг", "байдаг", "bdag", "яах", "yah",
+  // "Цагаан сараар хэдэнд гарах вэ" (on which days): a time question about the trips on screen.
+  "хэдэнд", "хэдний", "hedend", "hedenii", "хэзээ", "hezee",
 ]);
 
-function calendarWordsAreContextOnly(text: string): boolean {
-  const words = text.normalize("NFKC").toLowerCase().replace(/[^\p{L}]+/gu, " ").trim().split(/\s+/).filter(Boolean);
-  return words.every(word => CALENDAR_FOLLOWUP_WORDS.has(word));
+function calendarWordsAreContextOnly(text: string, extra: ReadonlySet<string> = new Set()): boolean {
+  // A holiday ("цагаан сарын үеэр") is a time, not a new destination (live replay 2026-11-04:
+  // under a trip list, its words read as an unknown place and the customer got silence).
+  const words = withoutHolidayWords(text).replace(/[^\p{L}]+/gu, " ").trim().split(/\s+/).filter(Boolean);
+  return words.every(word => CALENDAR_FOLLOWUP_WORDS.has(word) || extra.has(word));
+}
+
+// "Цагаан сарын үеэр ЯМАР аялалууд байна", "наадмаар ХААШАА явах вэ": a question about the whole
+// catalogue at that time, not about the trips on screen. It goes to the catalogue listing.
+const CATALOG_QUESTION_WORDS: ReadonlySet<string> = new Set(["ямар", "yamar", "хаашаа", "haashaa", "хаана", "haana",
+  "аялалууд", "аяллууд", "aylaluud", "ayaluud", "гадагшаа", "гадаад", "gadagshaa", "gadaad", "явж", "yavj", "бүх", "buh", "bvh"]);
+function isHolidayCatalogQuestion(text: string): boolean {
+  const lowered = text.normalize("NFKC").toLowerCase();
+  return detectHoliday(lowered) !== null && [...CATALOG_QUESTION_WORDS].some(word => new RegExp(`(?<![\\p{L}])${word}(?![\\p{L}])`, "u").test(lowered))
+    && calendarWordsAreContextOnly(text, CATALOG_QUESTION_WORDS);
 }
 
 /** A date and generic question words carry no new destination identity. */
@@ -408,7 +423,7 @@ export async function routeFastPathText(input: {
   // presentation uses the same constraint to select their displayed dates.
   const calendarScope = !tappedOwnButton && !(numericChoice && requestText !== text)
     ? requestedDepartureScope(intentTextOf(requestText, trips), now) : null;
-  if (calendarScope) {
+  if (calendarScope && !isHolidayCatalogQuestion(text)) {
     const current = resolve(text, trips);
     const named = current.status === "verified" ? [current.trip]
       : current.status === "ambiguous" ? current.candidates : [];

@@ -14,6 +14,7 @@ import {
 import { keywordTokens, normText, phoneticLatinText } from "./travelTextNorm";
 import { TRIP_TOPICS, buildTripRequest, parseRequestedPassengers, type RequestedPassenger, type TripSelection, type TripTopic } from "./tripRequest";
 import { websiteTripLinksInText } from "./bookingWebsite";
+import { holidayPromptLine } from "./holidayCalendar";
 import { isKnownGreetingPhrase, isThanksOnly } from "./greetingPhrases";
 import { REQUESTED_FACT_FIELDS, parseRequestedFacts, type RequestedFact } from "./requestedFacts";
 import {
@@ -153,8 +154,11 @@ export function buildUnderstandingPrompt(input: {
     return `${message.role === "user" ? "Customer" : "Bot"}: ${body}`;
   });
   const pending = (input.pendingTripIds || []).map((id) => keyOf.get(id)).filter(Boolean);
+  // Only when the customer names a holiday, so the prompt stays identical (cached) otherwise.
+  const holiday = holidayPromptLine(input.text, now);
   const user = [
     `Today: ${mongoliaToday(now)}`,
+    ...(holiday ? [holiday] : []),
     "",
     "Catalog (key | name | length | next departures):",
     ...lines,

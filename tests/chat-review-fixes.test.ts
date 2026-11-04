@@ -73,6 +73,20 @@ test("the home city never identifies a trip, in the resolver or in the place-day
   assert.equal(named.status === "verified" && named.trip.id, "fixture-fly", "its own place names still find the trip");
 });
 
+// Live 2026-11-04: a trip titled "<place> – … ШИНЭ ЖИЛИЙН АЯЛАЛ" (aliases "Шинэ жил", "Шинэ он")
+// was added, and "Шинэ аялал гарсан уу" (has a new trip come out?) and every New Year question
+// resolved to it alone. A holiday is a time; the holiday listing finds such a trip by its dates.
+test("a holiday or 'new' in a trip's title never picks that trip", () => {
+  const newYear: TravelTrip = { ...base, id: "fixture-ny", route_name: "ЗАНДАН – ДАМЖИН НИСЛЭГТЭЙ ШИНЭ ЖИЛИЙН АЯЛАЛ",
+    extra: { ...base.extra, aliases: ["Зандан", "Шинэ жил", "Шинэ он"] } };
+  const trips = [newYear, { ...base, route_name: "ДОРМАН ХОТЫН АЯЛАЛ", id: "fixture-dorman" }];
+  for (const text of ["Шинэ аялал гарсан уу", "Шинэ жилийн аялал", "Шинэ жилээр ямар аялал байна?", "shine jiliin ayalal haashaa be", "Шинэ он угтах аялал", "Цагаан сарын аялал байна уу"]) {
+    assert.equal(resolveTripFromUserMessage(text, trips, { allowLooseFallback: false }).status, "not_found", text);
+  }
+  const named = resolveTripFromUserMessage("Зандан шинэ жилийн аялал", trips, { allowLooseFallback: false });
+  assert.equal(named.status === "verified" && named.trip.id, "fixture-ny", "its place still finds it");
+});
+
 test("a fare labelled with an age band is not read as a passenger of the band's lowest age", () => {
   const reply = `✈️ ${base.route_name}\n• Том хүн: 1,500,000₮\n• Хүүхэд /2-11 нас/: 1,200,000₮`;
   assert.equal(verifyTripReply({ reply, trips: [base], now }), reply);

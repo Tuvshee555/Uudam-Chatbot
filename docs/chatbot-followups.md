@@ -195,6 +195,23 @@ question now gets silence plus a staff lead. Journey `the home city in a trip's 
 trip…` (`tests/forensic-regressions.test.ts`) fails without the fix. Gate replay: 12 decisions changed,
 all read (the home-city trip stops handicapping itself in the score, so pasted titles narrow from 6 to 3).
 
+## P2-2d — Holidays as travel dates — FIXED (2026-11-04)
+Live 2026-11-04: "цагаан сарын үейр ямар аялалууд байна" got the catalogue's soonest (November)
+departures. Nothing read "цагаан сар" as a time, and "аялалууд" made it a whole-catalogue question.
+**Now** (`src/lib/holidayCalendar.ts`): Цагаан сар (per-year table of the published days off, 2026–2030),
+Наадам (11–15 July) and Шинэ жил (the agency's December–early January window) resolve to real dates with
+the year, next occurrence first; "…дараа / өмнө" look 30 days after / before; "2028 оны цагаан сар" uses
+that year. The shared date parser returns the window, so the catalogue list, the per-trip date answer, the
+booking request and both model prompts all read it. The list puts trips whose days overlap the holiday
+first, then departures within 7 days; nothing then gives "одоогоор алга" plus the closest departures as
+nearby dates (or "хуваарь гараагүй" when they are months away). A year with no published Tsagaan Sar days
+is never guessed: silence plus a staff lead. "Баярын өдрүүдээр" asks which holiday; the holiday greeting
+("Сар шинэдээ сайхан шинэлж байна уу") is not answered with trips. Holiday names never identify a trip
+(a trip titled "… ШИНЭ ЖИЛИЙН АЯЛАЛ" added the same day had become the answer to every New Year question
+and to "Шинэ аялал гарсан уу"). **Maintenance:** add each new year's Tsagaan Sar days to the table when the
+government announces them (the table ends at 2030). Journeys: `a holiday is a time…`
+(`tests/forensic-regressions.test.ts`), rules in `tests/holiday-calendar.test.ts`; both fail without the fix.
+
 ## P2-2c — Two trips of one country both stop in the asked city — OPEN
 "<улс> аялал <хот>-д ямар буудалд буудаллах вэ": two tours of that country list the city among their
 aliases, and the score picks one (before 2026-11-04 it asked, but offered a tour that does not visit the

@@ -10,6 +10,7 @@ import { repairBirthYearAgeBands } from "./birthYearAgeBands";
 import { getPosterPdfPublicUrl, isUsableStoredPdfUrl } from "./poster/pdfUrl";
 import type { TravelTrip } from "./travelOps";
 import { isNoTripText } from "./customerTurn";
+import { withoutHolidayNames } from "./holidayCalendar";
 import { publishedTripWebsiteLink, storedWebsiteTripSlug, tripsForWebsiteReference, websiteTripLinksInText } from "./bookingWebsite";
 
 /**
@@ -755,8 +756,9 @@ function queryPlaceWords(queryWords: string[], vocabulary: CatalogVocabulary): s
 /** Catalog words a message names, split into places and occasions. */
 export function queryNamedPlaces(text: string, trips: TravelTrip[]): { places: string[]; occasions: string[] } {
   const vocabulary = catalogVocabulary(trips);
+  // A holiday or "шинэ" (new) in a trip title is not a place the customer named.
   const named = queryPlaceWords(
-    snapMisspelledWords(unique(keywordTokens(text)), [], vocabulary).words,
+    snapMisspelledWords(unique(keywordTokens(withoutHolidayNames(text))), [], vocabulary).words,
     vocabulary,
   );
   return {
@@ -1023,8 +1025,9 @@ export function resolveTripFromUserMessage(
       ? { status: "verified", trip: linkedTrips[0], candidates: [] }
       : { status: "ambiguous", trip: null, candidates: linkedTrips.slice(0, MAX_ROUTE_CANDIDATES) };
   }
-  // "Амралтын өдрүүдээр" means "at the weekend", not a school-holiday trip.
-  const text = website.textWithoutUrls.replace(/амралтын\s+өдр\S*/giu, " ");
+  // "Амралтын өдрүүдээр" means "at the weekend", not a school-holiday trip. A holiday
+  // ("шинэ жилийн", "цагаан сарын") is a time: the date paths read it, it names no trip.
+  const text = withoutHolidayNames(website.textWithoutUrls.replace(/амралтын\s+өдр\S*/giu, " "));
   const allowLooseFallback = options.allowLooseFallback === true;
   const matches = findTripMatches(text, trips, options);
   if (!matches.length) {

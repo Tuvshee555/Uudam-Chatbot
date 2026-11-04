@@ -1,4 +1,5 @@
 import type { TravelTrip } from "./travelOps";
+import { holidayPromptLine, resolveHoliday } from "./holidayCalendar";
 
 export const MONGOLIA_TIME_ZONE = "Asia/Ulaanbaatar";
 
@@ -896,7 +897,8 @@ const MONTH_PART_RE =
   /(\d{1,2})\s*(?:-?\s*[рr])?\s*(?:сарын|сар|sari{1,2}n|sar)\s*(эх\S*|ehe\S*|ehn\S*|дунд\S*|dund\S*|сүүл\S*|su{1,2}l\S*)/gi;
 const MAX_WINDOW_DAYS = 62;
 
-type RequestedRange = { startYmd: string; endYmd: string; label: string };
+/** `phrase` names a holiday window in customer words ("Цагаан сарын үеэр (…)"); used instead of "<label>-ны хооронд". */
+type RequestedRange = { startYmd: string; endYmd: string; label: string; phrase?: string };
 
 function lastDayOfMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
@@ -1003,6 +1005,17 @@ export function resolveRequestedRange(text: string, now: Date): RequestedRange |
     }).sort();
     if (bounds.length > 0) return buildRange(bounds[0], bounds[bounds.length - 1]);
   }
+  // "Цагаан сарын үеэр", "наадмаар", "шинэ жилийн дараа": the holiday's real dates, as a window
+  // (holidayCalendar.ts). A month the customer typed ("2 сард") is that month, never a holiday.
+  if (dates.length === 0 && !/\d{1,2}\s*(?:-?\s*[рr])?\s*(?:сарын|сард|сар|sard|sar(?:iin|in|yn|un)?)(?!\p{L})/iu.test(normalized)) {
+    const holiday = resolveHoliday(normalized, now);
+    // Dates not published for that year: never a guess.
+    if (holiday?.status === "unknown") return "unsupported";
+    if (holiday?.status === "resolved") {
+      const [startYmd, endYmd] = holiday.window;
+      return { startYmd, endYmd, label: rangeLabel(startYmd, endYmd), phrase: holiday.phrase };
+    }
+  }
   return null;
 }
 
@@ -1089,6 +1102,9 @@ export function buildTemporalPromptContext(userText: string, now = new Date()): 
   if (requested) {
     lines.push(`The user's requested date resolves to ${requested.ymd}.`);
   }
+  // A holiday named ("цагаан сарын үеэр"): its real dates, so the model never guesses them.
+  const holiday = holidayPromptLine(userText, now);
+  if (holiday) lines.push(holiday);
   return lines.join(" ");
 }
 
@@ -1156,13 +1172,14 @@ export function buildDepartureDateAvailabilityReply(input: {
   }
   if (range) {
     const rangeMatches = findRangeDepartures(scopedTrips, range.startYmd, range.endYmd, now);
+    const when = range.phrase ?? `${range.label}-ны хооронд`;
     if (rangeMatches.length > 0) {
       const intro = focusTrip
-        ? `Тийм ээ, ${tripPhrase(focusTrip)} ${range.label}-ны хооронд гарна 😊`
-        : `Тийм ээ, ${range.label}-ны хооронд гарах аяллууд байна 😊`;
+        ? `Тийм ээ, ${tripPhrase(focusTrip)} ${when} гарна 😊`
+        : `Тийм ээ, ${when} гарах аяллууд байна 😊`;
       return `${intro}\n\n${formatMonthDepartureOptions(rangeMatches, fareOn)}`;
     }
-    return nearestAfterMiss(`${range.label}-ны хооронд`, range.startYmd) ?? "REFER";
+    return nearestAfterMiss(when, range.startYmd) ?? "REFER";
   }
 
   if (!requested) {

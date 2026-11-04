@@ -179,6 +179,52 @@ test("customer turns from real conversations get grounded answers, not the free-
       const card = await harness.turn("ub-word", "Солмара Велтана нислэг", { tripId: "fly", certainty: "one" });
       assert.match(card.sends[0]?.text || "", /СОЛМАРА – Улаанбаатар - Велтана нислэг/);
     });
+
+    // Live 2026-11-04: after a trip list, "цагаан сарын үейр ямар аялалууд байна" got the
+    // catalogue's soonest (November) departures: the holiday was not read as a time at all.
+    // A holiday is a date window (holidayCalendar.ts). This calendar year (2098) has no published
+    // Tsagaan Sar days, so it must not be guessed: silence and a staff lead. Naadam is fixed
+    // (11–15 July): the trips leaving around it, and with a place named, only that place's.
+    await context.test("a holiday is a time: its own departures, never the soonest ones, never a guessed date", async () => {
+      harness.catalog([
+        trip("soon", "ЛУМАРА ХОТЫН АЯЛАЛ", ["2098-02-10", "2098-02-17"], { extra: { customer_visible: true, aliases: ["Лумара"] } }),
+        trip("summer", "ДОРМАН ХОТЫН АЯЛАЛ", ["2098-03-01", "2098-07-09"], { extra: { customer_visible: true, aliases: ["Дорман"] } }),
+        trip("sea", "ВЭЛМОР ДАЛАЙН ЭРГИЙН АЯЛАЛ", ["2098-07-12"], { extra: { customer_visible: true, aliases: ["Вэлмор"] } }),
+      ]);
+      await harness.turn("holiday", "Нислэг газар хосолсон", listAsk);
+      const lunar = await harness.turn("holiday", "цагаан сарын үейр ямар аялалууд байна", { certainty: "none" });
+      assert.deepEqual(lunar.sends.map((send) => send.text), [], "unknown holiday days are never guessed or replaced by the soonest trips");
+      assert.equal(lunar.leads.length, 1, "staff get the question");
+      const naadam = await harness.turn("naadam", "Наадмын үеэр ямар аялалууд байна", { certainty: "none" });
+      const listed = naadam.sends.map((send) => send.text).join("\n");
+      assert.match(listed, /Наадмын үеэр \(7 сарын 11–15\)/, listed);
+      assert.match(listed, /ДОРМАН ХОТЫН АЯЛАЛ/);
+      assert.match(listed, /ВЭЛМОР ДАЛАЙН ЭРГИЙН АЯЛАЛ/);
+      assert.doesNotMatch(listed, /ЛУМАРА|3\/1|2\/10/, "no departure outside the holiday");
+      assert.equal(naadam.answerModelCalls, 0, "answered from the catalogue");
+      const place = await harness.turn("naadam-place", "Наадмаар Дорман явж болох уу", { certainty: "none" });
+      const placed = place.sends.map((send) => send.text).join("\n");
+      assert.match(placed, /ДОРМАН ХОТЫН АЯЛАЛ/, placed);
+      assert.match(placed, /7\/9|7 сарын 9/);
+      assert.doesNotMatch(placed, /3\/1|3 сарын 1(?!\d)|ВЭЛМОР/, "only the named place, only around the holiday");
+      // Live replay 2026-11-04: under a trip list, the holiday's words read as an unknown place
+      // and both questions got silence. "Which trips" at the holiday asks the whole catalogue;
+      // a bare holiday follow-up asks about the trips on screen.
+      await harness.turn("naadam-list", "Нислэг газар хосолсон", listAsk);
+      const underList = await harness.turn("naadam-list", "Наадмын үеэр ямар аялалууд байна", { certainty: "none" });
+      const underListText = underList.sends.map((send) => send.text).join("\n");
+      assert.match(underListText, /Наадмын үеэр \(7 сарын 11–15\)/, underListText);
+      assert.match(underListText, /ДОРМАН ХОТЫН АЯЛАЛ[\s\S]*ВЭЛМОР ДАЛАЙН ЭРГИЙН АЯЛАЛ|ВЭЛМОР ДАЛАЙН ЭРГИЙН АЯЛАЛ[\s\S]*ДОРМАН ХОТЫН АЯЛАЛ/);
+      await harness.turn("naadam-followup", "Дорман", { tripId: "summer", certainty: "one" });
+      const followup = await harness.turn("naadam-followup", "Наадмаар гарах уу", { certainty: "none" });
+      const followupText = followup.sends.map((send) => send.text).join("\n");
+      assert.ok(followup.sends.length > 0, "a holiday follow-up about the trip on screen is answered");
+      assert.match(followupText, /7\/9|7 сарын 9/, followupText);
+      assert.doesNotMatch(followupText, /ВЭЛМОР/, "about the trip on screen only");
+      // The holiday greeting is not a trip question.
+      const greeting = await harness.turn("greet", "Сар шинэдээ сайхан шинэлж байна уу", { certainty: "none" });
+      assert.doesNotMatch(greeting.sends.map((send) => send.text).join("\n"), /ЛУМАРА|ДОРМАН|ВЭЛМОР/);
+    });
   } finally {
     await harness.close();
   }

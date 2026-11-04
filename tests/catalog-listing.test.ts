@@ -71,7 +71,14 @@ test("Lunar listings show three by default and eight for explicit full requests"
   assert.equal(compact.listed.length, 3); assert.equal(compact.authoritative, true);
   assert.match(compact.reply, /Өөр 7 сонголт бий/);
   assert.equal(listing("бүх Сар шинийн аялал", trips).listed.length, 8);
-  assert.equal(listing("Сар шинийн аялал", [trip()]).listed.length, 0);
+  // Changed 2026-11-04: with no trip named for the holiday and none leaving around it, the answer
+  // used to be "no special lunar trip is registered, a consultant will clarify" — a no-data
+  // deflection the owner forbids. It now says the holiday's schedule is not out and shows the
+  // closest departures under their own heading, never as holiday trips.
+  const none = listing("Сар шинийн аялал", [trip()]);
+  assert.match(none.reply, /^Цагаан сарын үеэр \(2027 оны 2 сарын 6–9 орчим\) гарах аяллын хуваарь одоогоор гараагүй/);
+  assert.match(none.reply, /Одоогийн хуваарьт хамгийн ойр гарах аяллууд:\n\n1\. Вэлмор0/);
+  assert.doesNotMatch(none.reply, /аялах боломжтой аяллууд/);
 });
 
 test("message-budget truncation returns only complete visible options, including grouped lists", () => {
