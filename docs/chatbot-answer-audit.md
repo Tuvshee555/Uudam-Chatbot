@@ -74,6 +74,5 @@ No live model replay or customer sends were performed. These checks establish
 the covered behavior, not a live-model accuracy percentage or a guarantee that
 every future answer is flawless. Historical replies were not rewritten.
 
-Retained diagnostics still report missing realtime staff-alert recipients. Leads
-remain durable in the admin inbox; external alerts require the owner's intended
-recipient configuration. This review does not invent that configuration.
+There is no realtime staff alert (removed at the owner's request, 2026-11-04).
+Leads remain durable in the admin Leads tab, which is where staff find them.

@@ -107,6 +107,8 @@ export type ConflictItem = {
   text: string;
   severity: ConflictSeverity;
   type?: string;
+  /** Structured facts behind the item (a transport choice's route and current type), for the admin UI. */
+  data?: Record<string, unknown>;
 };
 
 export type AIChangeProposal = {
@@ -177,9 +179,6 @@ export type TravelLead = {
   last_activity_at?: string | null;
   /** A consultant reply seen in the Messenger thread after the lead (operator_reply pause). */
   staff_replied_at?: string | null;
-  /** Staff ping for this lead (staffAlerts.ts): "sent", "failed", "no_channel" or "" (none yet). */
-  notify_status?: string;
-  notified_at?: string | null;
   /** The consultant who took the lead (free text, set in the Leads tab). */
   assigned_to?: string;
   /** The bot is stopped for this customer, and why ("manual", "operator_reply", "booked_customer", …). */

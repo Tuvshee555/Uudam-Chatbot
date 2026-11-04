@@ -41,8 +41,6 @@ export type UpstreamTraceOptions = {
   correlationId?: string;
   source?: string;
   deliveryKey?: string;
-  /** Staff alerts go to staff, not customers: a customer's takeover pause never applies. */
-  allowDuringTakeover?: boolean;
 };
 
 export const BOT_MESSAGE_METADATA = "uudam-bot-message";
@@ -67,7 +65,7 @@ async function postToMessenger(
   // A consultant took this customer over while the reply was being composed: the bot's message
   // must not land under theirs (takeoverGuard.ts). Throws StaffTakeoverSendBlocked.
   const recipientId = (body.recipient as { id?: string } | undefined)?.id ?? "";
-  if ((body.message as { metadata?: unknown } | undefined)?.metadata === BOT_MESSAGE_METADATA && !trace?.allowDuringTakeover) {
+  if ((body.message as { metadata?: unknown } | undefined)?.metadata === BOT_MESSAGE_METADATA) {
     await assertBotMaySend(recipientId, trace);
   }
 

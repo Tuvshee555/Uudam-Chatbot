@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { aiErrorCode, aiFailureKind, aiOutageAlertText } from "../src/lib/aiHealth";
+import { aiErrorCode, aiFailureKind } from "../src/lib/aiHealth";
 import { UpstreamHttpError, TimeoutError } from "../src/lib/resilience";
 
 const body = (code: string, type: string) => JSON.stringify({ error: { message: "x", type, code } });
@@ -17,11 +17,4 @@ test("a rejected key, a provider failure and a timeout are each told apart", () 
   assert.equal(aiFailureKind(new UpstreamHttpError("openai.chat", 503, "")), "provider");
   assert.equal(aiFailureKind(new TimeoutError("openai.chat", 15000)), "provider");
   assert.equal(aiFailureKind(new Error("boom")), "other");
-});
-
-test("the outage alert tells staff what to do and where the leads are", () => {
-  assert.match(aiOutageAlertText("credits_exhausted"), /кредит дууссан[\s\S]*Billing[\s\S]*Хүсэлтүүд/);
-  assert.match(aiOutageAlertText("unauthorized"), /OPENAI_API_KEY[\s\S]*Хүсэлтүүд/);
-  assert.match(aiOutageAlertText("quota"), /429[\s\S]*Limits[\s\S]*Хүсэлтүүд/);
-  assert.match(aiOutageAlertText("provider"), /status\.openai\.com[\s\S]*Хүсэлтүүд/);
 });

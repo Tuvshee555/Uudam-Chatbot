@@ -304,7 +304,7 @@ test("human takeover journeys", async (context) => {
 // desktop consultant in 14 days of threads); to be measured in the live desktop test.
 test.todo("a desktop consultant's first reply within 20 s of the customer's message takes the conversation over");
 
-test("takeover guard: only a person's pause blocks the bot's send; staff alerts always go", async (context) => {
+test("takeover guard: only a person's pause blocks the bot's send", async (context) => {
   const harness = await conversationGateHarness(context);
   const { sendTextMessage } = await import("../src/lib/messenger");
   const { isStaffTakeoverSendBlocked } = await import("../src/lib/takeoverGuard");
@@ -315,8 +315,6 @@ test("takeover guard: only a person's pause blocks the bot's send; staff alerts 
       harness.pause(`guard-${reason}`, until, reason);
       await assert.rejects(sendTextMessage(`guard-${reason}`, "Норвел — үнэ", "test-page-token"), isStaffTakeoverSendBlocked);
       assert.equal(sendsTo(`guard-${reason}`), 0, `${reason}: nothing reaches Meta`);
-      await sendTextMessage(`guard-${reason}`, "Шинэ лийд", "test-page-token", { allowDuringTakeover: true });
-      assert.equal(sendsTo(`guard-${reason}`), 1, "a staff alert is never held");
     }
     for (const reason of ["booked_customer", "handoff"]) {
       harness.pause(`guard-${reason}`, until, reason);

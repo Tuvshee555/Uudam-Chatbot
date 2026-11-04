@@ -151,7 +151,7 @@ function flatten(tour: PartnerTour) {
   return cells;
 }
 
-/** What changed between two copies of the GTC tour, one line each, for the Telegram message. */
+/** What changed between two copies of the GTC tour, one line each, for the sync result's record. */
 export function describeChanges(before: PartnerTour | null, after: PartnerTour): string[] {
   if (!before) return [`Анхны хуулалт: ${after.rows.length} огноо·буудал, ${after.dates.length} огноо.`];
   const lines: string[] = [];

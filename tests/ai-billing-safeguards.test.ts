@@ -61,33 +61,3 @@ test("live-model evaluation is opted in, capped, single-run and never aimed at p
   withEnv({ EVAL_MAX_MODEL_CALLS: undefined }, () => assert.equal(evaluationCallBudget(), 150));
   withEnv({ EVAL_MAX_MODEL_CALLS: "40" }, () => assert.equal(evaluationCallBudget(), 40));
 });
-
-test("billing failures alert at once; a provider failure only once it persists", async (context) => {
-  const { Pool } = await import("pg");
-  const queries: string[] = [];
-  let recentProviderFailures = 0;
-  context.mock.method(Pool.prototype, "query", (async (sql: string) => {
-    queries.push(sql.replace(/\s+/g, " ").trim());
-    if (/COUNT\(\*\)::int AS n FROM travel_error_logs/.test(sql)) return { rows: [{ n: recentProviderFailures }], rowCount: 1 };
-    return { rows: [], rowCount: 0 };
-  }) as unknown as typeof Pool.prototype.query);
-  const { applyTestEnv } = await import("./helpers/env");
-  applyTestEnv({ NEON_DATABASE_URL: "postgres://fixture:fixture@127.0.0.1:1/ai-alerts", STAFF_NOTIFY_PSIDS: undefined, TELEGRAM_BOT_TOKEN: undefined });
-  const { resetEnvCacheForTests } = await import("../src/lib/env");
-  resetEnvCacheForTests();
-  const { reportAiOutage } = await import("../src/lib/aiHealth");
-
-  await reportAiOutage("provider");
-  assert.ok(queries.some((sql) => /COUNT\(\*\)::int AS n/.test(sql)), "a provider failure first checks whether it persists");
-  assert.ok(!queries.some((sql) => /event = 'ai_outage.staff_alerted' AND fields->>'kind'/.test(sql)), "one blip raises no alert");
-
-  queries.length = 0;
-  await reportAiOutage("credits_exhausted");
-  assert.ok(!queries.some((sql) => /COUNT\(\*\)::int AS n/.test(sql)), "billing does not wait for repeats");
-  assert.ok(queries.some((sql) => /ai_outage.staff_alerted/.test(sql)), "billing goes straight to the alert");
-
-  queries.length = 0;
-  recentProviderFailures = 5;
-  await reportAiOutage("provider");
-  assert.ok(queries.some((sql) => /ai_outage.staff_alerted/.test(sql)), "a persisting provider failure is alerted");
-});

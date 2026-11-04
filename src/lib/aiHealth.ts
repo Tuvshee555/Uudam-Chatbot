@@ -3,9 +3,8 @@ import { logError, logWarn } from "./observability";
 import type { ReadinessIssue } from "./readiness";
 import { UpstreamHttpError } from "./resilience";
 
-// Loaded on first use: neonDb and the staff-alert sender validate the whole
-// server env at import, and the OpenAI client (which imports this module) must
-// stay importable without it.
+// Loaded on first use: neonDb validates the whole server env at import, and the
+// OpenAI client (which imports this module) must stay importable without it.
 const queryNeon: typeof QueryNeon = async (...args) => (await import("./neonDb")).queryNeon(...args);
 
 export type AiFailureKind = "credits_exhausted" | "unauthorized" | "quota" | "provider" | "other";
@@ -36,40 +35,26 @@ export function aiErrorCode(error: unknown): string | undefined {
   return /"code"\s*:\s*"([a-z_]+)"/.exec(error.bodySnippet)?.[1] || /"type"\s*:\s*"([a-z_]+)"/.exec(error.bodySnippet)?.[1];
 }
 
-/** Billing and a rejected key stop every answer at once; they are reported on the first failure. */
+/** Billing and a rejected key stop every answer at once; they are recorded on the first failure. */
 const IMMEDIATE_KINDS = new Set<AiFailureKind>(["credits_exhausted", "unauthorized"]);
-/** A rate limit or an unreachable provider is reported once it persists (not for one blip). */
+/** A rate limit or an unreachable provider is recorded once it persists (not for one blip). */
 const SUSTAINED_FAILURES = 3;
 const SUSTAINED_WINDOW_MINUTES = 10;
-const ALERT_INTERVAL_MINUTES = 60;
-const LEADS_PATH = "Энэ хооронд ирсэн хүсэлтүүд админ самбарын «Хүсэлтүүд» хэсэгт хадгалагдаж байна.";
+const REPORT_INTERVAL_MINUTES = 60;
 
-export function aiOutageAlertText(kind: Exclude<AiFailureKind, "other">): string {
-  switch (kind) {
-    case "credits_exhausted":
-      return `⚠️ Чатбот AI ашиглаж чадахгүй байна: OpenAI-ийн кредит дууссан.\nplatform.openai.com → Billing хэсэгт кредит нэмнэ үү. ${LEADS_PATH}`;
-    case "unauthorized":
-      return `⚠️ Чатбот AI ашиглаж чадахгүй байна: OpenAI түлхүүр хүчингүй эсвэл эрхгүй байна.\nVercel дээрх OPENAI_API_KEY-г шалгана уу. ${LEADS_PATH}`;
-    case "quota":
-      return `⚠️ Чатбот AI-ийн хүсэлт хязгаарт хүрсэн (OpenAI 429, rate limit).\nplatform.openai.com → Limits хэсгийг шалгана уу. ${LEADS_PATH}`;
-    case "provider":
-      return `⚠️ OpenAI үйлчилгээ хариу өгөхгүй байна (алдаа эсвэл хугацаа хэтэрсэн).\nstatus.openai.com-оос шалгана уу. ${LEADS_PATH}`;
-  }
-}
-
-const lastAlertAtMs = new Map<AiFailureKind, number>();
+const lastReportAtMs = new Map<AiFailureKind, number>();
 
 /**
- * Tells administrators the bot cannot use AI. Billing and key problems are reported on the first
- * failure, a rate limit or provider failure once it persists; each kind at most hourly across
- * instances. The admin dashboard shows it as a critical warning; staff channels get it when
- * configured. Never throws.
+ * Records that the bot cannot use AI. Billing and key problems are recorded on the first
+ * failure, a rate limit or provider failure once it persists; each kind at most hourly per
+ * instance. The admin system check (getOperationalIssues below) shows the outage as a critical
+ * issue; there is no realtime staff alert. Never throws.
  */
 export async function reportAiOutage(kind: AiFailureKind): Promise<void> {
   if (kind === "other") return;
   try {
     const now = Date.now();
-    if (now - (lastAlertAtMs.get(kind) ?? 0) < ALERT_INTERVAL_MINUTES * 60_000) return;
+    if (now - (lastReportAtMs.get(kind) ?? 0) < REPORT_INTERVAL_MINUTES * 60_000) return;
     if (!IMMEDIATE_KINDS.has(kind)) {
       const failures = (await queryNeon<{ n: number }>(
         `SELECT COUNT(*)::int AS n FROM travel_error_logs
@@ -79,19 +64,8 @@ export async function reportAiOutage(kind: AiFailureKind): Promise<void> {
       ))?.rows[0]?.n ?? 0;
       if (failures + 1 < SUSTAINED_FAILURES) return;
     }
-    lastAlertAtMs.set(kind, now);
-    const recent = await queryNeon(
-      `SELECT 1 FROM travel_error_logs
-        WHERE event = 'ai_outage.staff_alerted' AND fields->>'kind' = $1
-          AND created_at > NOW() - make_interval(mins => $2) LIMIT 1`,
-      [kind, ALERT_INTERVAL_MINUTES],
-    );
-    if (recent?.rows.length) return;
-    logWarn("ai_outage.staff_alerted", { kind });
-    // The admin system check shows the outage regardless; the message is only
-    // sent where a staff channel exists, instead of logging an error on every one.
-    const staff = await import("./staffAlerts");
-    if (staff.hasStaffAlertChannel()) await staff.notifyStaff(aiOutageAlertText(kind), "ai_outage");
+    lastReportAtMs.set(kind, now);
+    logWarn("ai_outage.reported", { kind });
   } catch (error) {
     logError("ai_outage.report_failed", { message: error instanceof Error ? error.message : String(error) });
   }
@@ -136,8 +110,6 @@ export async function getOperationalIssues(): Promise<ReadinessIssue[]> {
   issues.push(...await (await import("./aiUsage")).getAiSpendIssues());
   // Passports and payment slips are kept only in the private store: a broken store is critical.
   issues.push(...await (await import("./customerImageStorage")).customerImageStorageIssues().catch(() => []));
-  // New leads reach staff only through the Leads tab when no Telegram chat answers.
-  issues.push(...await (await import("./staffAlerts")).staffAlertIssues().catch(() => []));
   // A purge whose file could not be deleted is retried daily; until then it is visible here.
   issues.push(...await (await import("./customerDocumentPurge")).storageDeletionIssues().catch(() => []));
   return issues;

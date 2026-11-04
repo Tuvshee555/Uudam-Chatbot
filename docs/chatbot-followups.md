@@ -10,11 +10,11 @@ tagged f441aaf). Deterministic paths still answered; every AI-dependent turn end
 lead. Live replays run on the same key that day helped drain it. The balance was restored by 08:02 UTC
 (Messenger webhook AI calls succeeded again; one controlled demo test at 08:09 succeeded on all models).
 **Safeguards:** mocked CI, opted-in and capped evaluation runs (one at a time, never against the
-production site), spend tracking per environment with a daily budget alert, an outage notice to the
-customer instead of silence, immediate staff alerts on billing/key failures. The owner chose to keep one
-OpenAI key for production and testing.
-**Optional, not required:** a real-time staff channel (`STAFF_NOTIFY_PSIDS` or Telegram) so alerts are
-pushed, not only shown in admin.
+production site), spend tracking per environment with a daily budget warning in the admin system check,
+an outage notice to the customer instead of silence, and an `ai_outage` critical issue on the admin
+dashboard. The owner chose to keep one OpenAI key for production and testing.
+**No realtime staff alert (owner, 2026-11-04):** leads and outages live in the admin Leads tab and
+system check only; the Telegram / Messenger staff-ping system was removed.
 
 ## P1-0 — Latin-script month words — FIXED (deployed 2026-10-30)
 Production 2026-10-30: "<place> aylal neg sariin eheer sonirhoj bb" (early January, Latin script) got
@@ -127,7 +127,7 @@ answered, and the Messenger menu carries «Хүнтэй холбогдох» (`s
 «Ботод буцаах» (stored as a far-future expiry, `UNTIL_RELEASED_AT`; timed pauses keep their time). The
 45 conversations held at the switch were re-verified against Meta's threads and moved over (one false
 take-over — Meta's welcome burst — was released instead). Every customer message while held still
-reaches staff as a lead follow-up and a Telegram ping.
+reaches staff as a lead follow-up in the admin Leads tab (there is no realtime staff alert).
 **OPEN — desktop consultant within 20 s.** Meta tags a consultant on a computer and its own automations
 alike; a desktop consultant's FIRST reply within 20 s of the customer's message reads as an automation,
 so the bot may answer the customer's next message once (`test.todo`). 14 days of threads held no

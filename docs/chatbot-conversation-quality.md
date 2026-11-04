@@ -156,12 +156,12 @@ example a customer back after weeks), the answer now names that trip instead of 
 |---|---|---|---|
 | P1 | Model-only multi-constraint openings (dates + party + lodging + "send the programme") ignore all but the date | Oct 24 conversation; turn #12 | Lost family leads |
 | P1 | Test sessions write to the production conversation table | 87% of rows are `demo:` | Every dashboard and audit is skewed; add a flag or a separate table |
-| P1 | A booked customer asking a follow-up ("хэзээ холбогдох вэ") gets no reply until staff answer, and staff alerts have no channel | Live replay, booking journey | The customer can wait unanswered; add an alert channel or one acknowledgement |
+| P1 | A booked customer asking a follow-up ("хэзээ холбогдох вэ") gets no reply until staff answer; the follow-up only shows in the admin Leads tab (no realtime staff alert, by the owner's choice) | Live replay, booking journey | The customer can wait unanswered; one acknowledgement, or staff watching the Leads tab |
 | Done | Conversation-level gate in CI and Vercel prebuild; live replay workflow | §5b | — |
 | P2 | A fare-kind question under a fresh multi-trip list ("хүүхдийн үнэ") gets "Аль аялал вэ?" instead of that fare for the listed trips | Live replay, destination switch | One extra turn |
 | P2 | Fuzzy match crosses look-alike destinations (one letter apart) | One destination read as a look-alike other (earlier finding) | Wrong trip; needs a data-side "not this place" field |
 | P2 | Un-ingested messages are invisible | Oct 6 "Universal bagtsan vne" absent from the DB | Log every inbound event ID before routing |
-| P2 | Staff alerts have no channel | `staff_alert.no_channel_configured` | Leads wait until someone opens the Leads tab |
+| P2 | No realtime staff alert (removed at the owner's request, 2026-11-04) | Leads live only in the admin Leads tab | Leads wait until someone opens the Leads tab |
 | P3 | Free-text model still writes ISO dates and phone asks when it answers | Turn #21 on `main` | Now rarer; tighten its prompt or post-check |
 
 ## 7. Meta settings checklist (cannot be changed from code)

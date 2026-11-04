@@ -69,7 +69,6 @@ import {
   scheduleAttachmentDocumentPipeline,
   handleAttachmentOnlyMessage,
 } from "../../lib/webhookAttachments";
-import { notifyStaffOfLead } from "../../lib/staffAlerts";
 import { ensureDurableLead } from "../../lib/durableLead";
 import { logInboundMessage } from "../../lib/travelMessages";
 import { getCollectState } from "../../lib/bookingCollect";
@@ -283,8 +282,8 @@ async function handleMessageTurn(
     return;
   }
   // A message from a customer staff own is kept on their lead, which goes back to unread in the
-  // Leads tab (and pings staff when a channel is set): it used to be stored where nobody looked.
-  const recordPausedFollowup = async (label?: string, options: { notify?: boolean } = {}): Promise<TravelLead | null> => {
+  // Leads tab: it used to be stored where nobody looked.
+  const recordPausedFollowup = async (label?: string): Promise<TravelLead | null> => {
     const line = followupLeadLine(text, undefined, label);
     const lead = await latestCustomerLead(senderId).catch(() => null);
     const details = { platform, senderId, customerMessage: text, kind: lead?.kind || "handoff" as const, context: line };
@@ -293,9 +292,6 @@ async function handleMessageTurn(
     } else {
       const created = await ensureDurableLead(details).catch(() => null);
       if (!created?.lead) return null;
-    }
-    if (options.notify !== false) {
-      await notifyStaffOfLead(details, { requestId: trace?.requestId, correlationId: trace?.correlationId, source: "api.webhook.paused_followup" }).catch(() => {});
     }
     return lead || await latestCustomerLead(senderId).catch(() => null);
   };
@@ -356,7 +352,7 @@ async function handleMessageTurn(
       return;
     }
     // The thread could not be read: never taken as "no consultant". Where a consultant may own
-    // the conversation the message waits for staff (visible on the lead, staff pinged); any
+    // the conversation the message waits for staff (visible on the lead in the Leads tab); any
     // other customer is answered as usual, so one failed lookup does not silence the bot.
     if (takeover.status === "unverified") {
       const risk = await takeoverRisk(senderId);
@@ -416,16 +412,9 @@ async function handleMessageTurn(
    */
   const captureLead = async (
     input: Omit<Parameters<typeof ensureDurableLead>[0], "platform" | "senderId" | "customerMessage"> & { customerMessage?: string },
-    source: string,
   ) => {
     const details = { platform, senderId, customerMessage: text, ...input };
-    const result = await ensureDurableLead(details);
-    if (result.created) {
-      await notifyStaffOfLead(details, {
-        requestId: trace?.requestId, correlationId: trace?.correlationId, source,
-      });
-    }
-    return result;
+    return ensureDurableLead(details);
   };
   let pauseAfterContactCapture = false;
   let factualScope: TravelTrip[] | null = null;
@@ -499,12 +488,12 @@ async function handleMessageTurn(
       await captureLead({
         kind: "handoff",
         context: `Бот мэдээлэлгүй fast-path хариуг зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй: ${input.failTag}${input.decision?.missingFacts.length ? ` [${input.decision.missingFacts.join(", ")}]` : ""}${ungroundedTrip ? ` (харилцаанд дурдагдаагүй аялал: ${ungroundedTrip.route_name})` : ""}${ungroundedPlan ? ` [plan.trip=${input.decision!.plan.tripId}]` : ""}`,
-      }, "api.webhook.no_data_handoff");
+      });
       // The bot doesn't know the answer, so it says NOTHING to the customer (owner's
       // rule: an unknown answer is met with silence, never a "passed to a
       // consultant" notice). Staff got the lead above. The bot is NOT paused: one
-      // unknown answer used to silence every later message for an hour, and with no
-      // staff alert channel no human came — real customers asked answerable
+      // unknown answer used to silence every later message for an hour, and until
+      // someone opened the Leads tab no human came — real customers asked answerable
       // questions into that silence and left (2026-10-26..29). A staff reply in
       // the thread still pauses the bot (staff takeover check above).
       if (input.counter) recordCounter(input.counter, 1, { platform });
@@ -610,7 +599,7 @@ async function handleMessageTurn(
       }
       return;
     }
-    if (!isThanksOnly(text)) await recordPausedFollowup("Хүлээж байхдаа асуусан (бот хариулсан)", { notify: false });
+    if (!isThanksOnly(text)) await recordPausedFollowup("Хүлээж байхдаа асуусан (бот хариулсан)");
   }
 
   // Instagram (no thread check there): the bot's own pause after a booking gives one status reply
@@ -918,13 +907,6 @@ async function handleMessageTurn(
               failTag: "flow_quick", rememberSource: "api.webhook.flow_quick" }));
           }
         : undefined,
-      notifyOwner: async (msg: string) => {
-        if (flowWithheld) return;
-        await notifyStaffOfLead(
-          { kind: "handoff", platform, customerMessage: msg, senderId },
-          { requestId: trace?.requestId, correlationId: trace?.correlationId, source: "api.webhook.flow" },
-        ).catch(() => {});
-      },
       captureLead: async (state: FlowRuntimeState) => {
         if (flowWithheld) return;
         await ensureDurableLead({
@@ -975,7 +957,7 @@ async function handleMessageTurn(
     isContactOperatorTap(text) ||
     (botSettings.handoff_enabled && isHandoffRequest(text, botSettings.handoff_keywords))
   ) {
-    await captureLead({ kind: "handoff" }, "api.webhook.handoff");
+    await captureLead({ kind: "handoff" });
     await appendMessage(senderId, "user", text);
     const handoffConfirmation =
       botSettings.handoff_reply ||
@@ -1031,7 +1013,7 @@ async function handleMessageTurn(
   // ── Phone-number lead capture ───────────────────────────────────────────────
   // The AI's #1 rule asks the customer for a phone number; this is where the
   // answer is actually caught. Any message containing a Mongolian mobile
-  // number creates a lead + staff alert (once per open lead). A phone-only
+  // number creates a lead in the Leads tab (once per open lead). A phone-only
   // message gets a deterministic thank-you; a phone bundled with a question
   // falls through so the AI answers the question too.
   const detectedPhone = extractPhoneNumber(text);
@@ -1039,7 +1021,7 @@ async function handleMessageTurn(
     const note = (await conversationLeadNote().catch(() => null))?.context;
     const captured = await captureLead({
       kind: "booking", contactPhone: detectedPhone, context: note ? `Чатад утасны дугаараа үлдээсэн.\n${note}` : "Чатад утасны дугаараа үлдээсэн.",
-    }, "api.webhook.phone_capture");
+    });
     if (captured.created) recordCounter("webhook.phone_lead_captured_total", 1, { platform });
     if (isPhoneOnlyMessage(text)) {
       await appendMessage(senderId, "user", text);
@@ -1159,13 +1141,13 @@ async function handleMessageTurn(
   // Staff/catalog maintenance notes are not customer questions. They often
   // contain dates, "суудал дүүрсэн", and duration numbers; answering those as
   // prices or availability is exactly how a "5 шөнө" row turns into a bogus
-  // "5 сая" conversation. Save the inbound text for the inbox, alert staff,
+  // "5 сая" conversation. Save the inbound text for the inbox, record a lead,
   // and stay quiet to the customer.
   if (isLikelyCatalogMaintenanceText(text)) {
     await captureLead({
       kind: "handoff", contactPhone: detectedPhone || "",
       context: "Дотоод каталог/status тэмдэглэл шиг харагдсан тул бот автоматаар хариулаагүй.",
-    }, "api.webhook.catalog_note_suppressed");
+    });
     logInfo("webhook.catalog_note_suppressed", {
       requestId: trace?.requestId,
       correlationId: trace?.correlationId,
@@ -1189,16 +1171,16 @@ async function handleMessageTurn(
   const asksBankAccount = hasBankAccountRequest(text);
   if (hasPaymentClaimIntent(text) || asksBankAccount) {
     // The deferral reply PROMISES the customer a consultant will check and
-    // get back to them — that promise is only real if staff actually hear
-    // about it. A payment claim is the strongest buy signal there is; without
-    // this lead+alert, a paying customer would wait on a follow-up nobody
+    // get back to them — that promise is only real if staff actually see
+    // it in the Leads tab. A payment claim is the strongest buy signal there is;
+    // without this lead, a paying customer would wait on a follow-up nobody
     // knew to make.
     await captureLead({
       kind: "handoff", contactPhone: detectedPhone || "",
       context: asksBankAccount
         ? "Хэрэглэгч төлбөрийн дансны мэдээлэл асуусан — зөвлөх албан ёсоор илгээнэ үү."
         : "Төлбөр шилжүүлсэн гэж мэдэгдсэн — зөвлөх шалгаж баталгаажуулна уу.",
-    }, "api.webhook.payment_claim");
+    });
     await deliverFastPathReply({
       reply: asksBankAccount
         ? BANK_ACCOUNT_REQUEST_REPLY
@@ -1248,7 +1230,7 @@ async function handleMessageTurn(
       if (decision.outcome !== "handoff" && plan.staffLine && plan.staffNotes?.length) {
         const notes = plan.staffNotes.join("\n");
         // An open lead from the last hours is not duplicated: the note goes onto it instead.
-        const written = await captureLead({ kind: "handoff", contactPhone: detectedPhone || "", context: notes }, "api.webhook.answer_plan_preference")
+        const written = await captureLead({ kind: "handoff", contactPhone: detectedPhone || "", context: notes })
           .then(async (result) => {
             if (result.created) return true;
             const open = await latestCustomerLead(senderId);
@@ -1314,8 +1296,7 @@ async function handleMessageTurn(
       ? buildDateNotScheduledReply(routed.scopedClarify) : null;
     if (notScheduledReply && routed.scopedClarify) {
       await captureLead({ kind: "handoff", contactPhone: detectedPhone || "",
-        context: "Хэрэглэгчийн асуусан огноонд гарах аялал хуваарьт алга; бот бусад гарах өдрүүдийг хэлсэн." },
-      "api.webhook.date_not_scheduled");
+        context: "Хэрэглэгчийн асуусан огноонд гарах аялал хуваарьт алга; бот бусад гарах өдрүүдийг хэлсэн." });
       await deliverFastPathReply({
         reply: notScheduledReply,
         failTag: "date_not_scheduled",
@@ -1948,8 +1929,8 @@ async function handleMessageTurn(
     if (fallbackText) {
       aiReply = fallbackText;
     } else {
-      // Both models are down. Route to the REFER path so a lead is created and
-      // staff are alerted — never a fake customer-facing answer.
+      // Both models are down. Route to the REFER path so a lead is created for
+      // the Leads tab — never a fake customer-facing answer.
       aiOutage = true;
       aiReply = "REFER";
     }
@@ -1989,7 +1970,7 @@ async function handleMessageTurn(
     await captureLead({
       kind: "handoff", contactPhone: detectedPhone || "",
       context: aiOutage ? "AI түр саатсан тул зөвлөхөд шилжүүлэв." : "Бот мэдээлэлгүй асуулт тул зөвлөхөд шилжүүлэв.",
-    }, "api.webhook.ai_refer");
+    });
     // An AI outage is never unexplained silence (owner, 2026-10-30): once the lead above is
     // saved, the customer is told in one short line, at most once until the bot replies again.
     // The bot is not paused, so the customer is answered normally as soon as the AI recovers.
@@ -2108,7 +2089,7 @@ async function handleMessageTurn(
       context: wrongTripLeak
         ? `AI өөр аяллын (${wrongTripLeak.offendingTripName}) хариу өгөх гэсэн тул хэрэглэгчид илгээлгүй зөвлөхөд шилжүүлэв.`
         : "AI мэдээлэлгүй өгүүлбэр бичсэн тул зөвлөхөд шилжүүлж, хэрэглэгчид хариу илгээсэнгүй.",
-    }, "api.webhook.ai_no_data_handoff");
+    });
     // Silent: a reply the guards suppressed (no data / another trip's facts) is
     // never replaced by a notice to the customer. The lead is above; no pause,
     // so the customer's next, answerable question is still answered.

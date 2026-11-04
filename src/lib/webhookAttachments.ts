@@ -13,7 +13,6 @@ import { scheduleCustomerAttachmentProcessing, scheduleCustomerImageProcessing, 
 import { reserveCustomerImages, scheduleReservedCustomerImages } from "./customerImageIngest";
 import { isPaused } from "./pause";
 import { createLead, hasRecentOpenLead, isPagePaused, listTrips } from "./travelOps";
-import { notifyStaffOfLead } from "./staffAlerts";
 import type { AttachmentReplyPayload, Platform } from "./webhookDedup";
 import {
   classifyError,
@@ -188,10 +187,6 @@ async function leadForUnmatchedTripScreenshot(
       customerMessage: "[Аяллын зураг]",
       context: `Хэрэглэгч аяллын зураг илгээсэн${summary ? ` (${summary})` : ""}, аль аялал болохыг бот тогтоож чадсангүй — «Ирсэн зургууд»-аас үзээд хариулна уу.`,
     });
-    await notifyStaffOfLead(
-      { kind: "handoff", platform: input.platform, customerMessage: "[Аяллын зураг]", senderId: input.senderId },
-      { requestId: input.trace?.requestId, correlationId: input.trace?.correlationId, source: "api.webhook.trip_screenshot_unmatched" },
-    );
   } catch (error) {
     logWarn("webhook.trip_screenshot_lead_failed", {
       requestId: input.trace?.requestId,
@@ -354,7 +349,7 @@ export async function handleAttachmentOnlyMessage(input: {
 
   // The bot cannot listen to a voice note, but staff can. It used to get the
   // generic "write it in text" ack and nothing else — a paying customer sent a
-  // dozen voice notes over a week that no alert ever pointed staff to.
+  // dozen voice notes over a week that no lead ever showed staff.
   const isVoiceNote = attachments.some((attachment) => attachment?.type === "audio");
   if (isVoiceNote) {
     try {
@@ -366,10 +361,6 @@ export async function handleAttachmentOnlyMessage(input: {
           customerMessage: "[Дуут мессеж]",
           context: "Хэрэглэгч дуут мессеж илгээсэн — бот сонсож чадахгүй тул зөвлөх сонсоод хариулна уу.",
         });
-        await notifyStaffOfLead(
-          { kind: "handoff", platform, customerMessage: "[Дуут мессеж]", senderId },
-          { requestId: trace?.requestId, correlationId: trace?.correlationId, source: "api.webhook.voice_note" },
-        );
       }
     } catch (error) {
       logWarn("webhook.voice_note_lead_failed", {

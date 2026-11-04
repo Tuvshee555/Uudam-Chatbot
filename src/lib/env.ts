@@ -69,12 +69,6 @@ export type ValidatedEnv = {
   metaSubscribeMaxRetries: number;
   metaRetryBaseDelayMs: number;
   webhookMaxPendingConversations: number;
-  staffNotifyPsids: string[];
-  // Optional Telegram fallback for staff lead alerts. Telegram has no 24h
-  // messaging window, so it delivers even when the Messenger RESPONSE-type
-  // staff ping is blocked by Meta's policy. Off unless both are set.
-  telegramBotToken: string | null;
-  telegramStaffChatIds: string[];
   googleDriveSyncEnabled: boolean;
   googleDriveFolderId: string | null;
   googleDriveServiceAccountEmail: string | null;
@@ -449,8 +443,8 @@ export function getEnv(): ValidatedEnv {
   const echoHumanAppIds = (readOptionalString("ECHO_HUMAN_APP_IDS", source) || "")
     .split(",").map((id) => id.trim()).filter(Boolean);
   // Keep the singular fields populated (back-compat consumers, IG fallback, tests). The roster
-  // (NEXT override included) wins for the primary page's token, so staff alerts and the webhook
-  // fallback token follow the cutover; the legacy var only covers a page outside the roster.
+  // (NEXT override included) wins for the primary page's token, so the webhook fallback token
+  // follows the cutover; the legacy var only covers a page outside the roster.
   const primaryPage = facebookPages[0];
   const facebookPageId = legacyFacebookPageId || primaryPage?.pageId || "";
   const tokenPage =
@@ -713,17 +707,6 @@ export function getEnv(): ValidatedEnv {
     100_000,
     errors,
   );
-  const staffNotifyPsids = (readOptionalString("STAFF_NOTIFY_PSIDS", source) || "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const telegramBotToken = readOptionalString("TELEGRAM_BOT_TOKEN", source);
-  // TELEGRAM_CHAT_ID is the name Production has used since the start (the partner-sync notices
-  // went there until 2026-10-28); TELEGRAM_STAFF_CHAT_IDS, when set, takes precedence.
-  const telegramStaffChatIds = (readOptionalString("TELEGRAM_STAFF_CHAT_IDS", source) || readOptionalString("TELEGRAM_CHAT_ID", source) || "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
   const googleDriveSyncEnabled = readBoolean(
     "GOOGLE_DRIVE_SYNC_ENABLED",
     source,
@@ -860,9 +843,6 @@ export function getEnv(): ValidatedEnv {
     metaSubscribeMaxRetries,
     metaRetryBaseDelayMs,
     webhookMaxPendingConversations,
-    staffNotifyPsids,
-    telegramBotToken,
-    telegramStaffChatIds,
     googleDriveSyncEnabled,
     googleDriveFolderId,
     googleDriveServiceAccountEmail,

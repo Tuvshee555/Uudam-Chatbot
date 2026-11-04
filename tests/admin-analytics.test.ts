@@ -86,8 +86,8 @@ function fixtureQuery(fail?: "core" | "activity" | "faq" | "errors" | "overview"
     if (sql.includes("FROM travel_error_logs")) {
       if (fail === "errors") throw new Error("Fixture logs unavailable");
       return { rows: [
-        { event: "staff_alert.no_channel_configured", level: "error", count: "2", last_seen: now },
         { event: "webhook.staff_takeover_detected", level: "warn", count: "4", last_seen: now },
+        { event: "webhook.ai_refer_customer_silenced", level: "warn", count: "2", last_seen: now },
         { event: "openai.request_failed", level: "error", count: "1", last_seen: now },
       ] };
     }
@@ -109,7 +109,7 @@ test("overview aggregates actual schema counts and fills local calendar gaps wit
   assert.deepEqual(result.activity?.daily[0], { date: "2097-12-27", inboundMessages: 0, assistantMessages: 0 });
   assert.equal(result.attention?.pendingHandoffs, 4);
   assert.equal(result.attention?.newBookingRequests, 1);
-  assert.equal(result.attention?.errors24h, 1, "staff replying and the unused alert channel are not failures");
+  assert.equal(result.attention?.errors24h, 1, "staff replying and the bot's deliberate silences are not failures");
   assert.deepEqual(result.attention?.recentIssues.map((issue) => issue.event), ["openai.request_failed"]);
   assert.equal(result.attention?.oldestPendingHandoffAt, "2097-12-28T03:00:00.000Z");
   assert.deepEqual(result.warnings, []);

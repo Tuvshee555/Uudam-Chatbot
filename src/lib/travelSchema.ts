@@ -206,7 +206,8 @@ export async function ensureTravelSchema() {
         ALTER TABLE travel_leads
           ADD COLUMN IF NOT EXISTS lead_status TEXT NOT NULL DEFAULT 'new_lead';
       `);
-      // Whether staff were pinged for a lead (staffAlerts.ts) and who took it (Leads tab).
+      // Who took a lead (Leads tab). The notify_* columns are kept only so existing rows and
+      // the idempotent ALTER stay valid; nothing writes or reads them any more.
       await client.query(`
         ALTER TABLE travel_leads
           ADD COLUMN IF NOT EXISTS notify_status TEXT NOT NULL DEFAULT '',

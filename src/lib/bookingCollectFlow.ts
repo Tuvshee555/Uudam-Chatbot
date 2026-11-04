@@ -1,7 +1,7 @@
 /**
  * Webhook side of the booking collector (bookingCollect.ts holds the pure
  * rules): starting the flow on "Захиалах", validating each answer, and on
- * completion creating the lead, alerting staff and handing the chat to a
+ * completion creating the lead (Leads tab) and handing the chat to a
  * human. Extracted from webhook.ts, which is over the 2,000-line cap.
  */
 
@@ -20,7 +20,6 @@ import { appendMessage } from "./conversation";
 import { recordCounter } from "./observability";
 import { ensureDurableLead } from "./durableLead";
 import { autoHandoffSender, pauseBookedCustomer } from "./pause";
-import { notifyStaffOfLead } from "./staffAlerts";
 import { dbStoreSenderName, hasRecentOpenLead, listTrips } from "./travelOps";
 import { resolveTripFromUserMessage, sanitizeTripForCustomers } from "./travelFastPaths";
 import type { TravelTrip } from "./travelTypes";
@@ -148,16 +147,6 @@ export async function continueBookingCollect(ctx: BookingCollectContext): Promis
   // Only keep a validated, voluntarily supplied name.
   if (done.name.trim()) await dbStoreSenderName(ctx.senderId, done.name.trim()).catch(() => {});
   if (created) {
-    await notifyStaffOfLead(
-      {
-        kind: "booking",
-        platform: ctx.platform,
-        customerMessage: [done.name, done.phone, done.trip].filter(Boolean).join(" | "),
-        contactPhone: done.phone,
-        senderId: ctx.senderId,
-      },
-      { requestId: ctx.trace?.requestId, correlationId: ctx.trace?.correlationId, source: "api.webhook" },
-    );
     recordCounter("webhook.booking_collect_completed_total", 1, { platform: ctx.platform });
   }
   if (!done.confirmationSent) {
