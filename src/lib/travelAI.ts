@@ -57,6 +57,8 @@ type ProposalSource = {
   photoUrls?: string[];
 };
 
+import { applyTransportChoice, carryOverPhotoExtras, finalizeNewTripActions } from "./tripProposalFinalize";
+
 function buildBatchSourceParts(input: {
   note?: string;
   sources: ProposalSource[];
@@ -140,6 +142,12 @@ function buildBatchSourceParts(input: {
     "SEATS RULE: If the source does NOT state a seat count, set seats_total=null and seats_left=null. NEVER output seats_total=0 unless the source explicitly says '0 суудал' or 'sold out'. A 0 value means the tour is full, which is dangerous if invented.",
     "FLEXIBLE DEPARTURE RULE: If a tour says 'хүссэн өдрөө сонгоно', '15+ хүнтэй групп өдрөө сонгоно', 'group may choose date', or similar — the departure date is NOT fixed. In this case: leave departure_dates empty/null, store the rule text in notes and in extra.recurring_schedule. NEVER invent example dates like '2025-07-15' for a flexible tour.",
     "BOOKING TERMS RULE: if the source states any of deposit/prepayment (урьдчилгаа), payment method or timing (төлбөр), required documents (бүрдүүлэх бичиг баримт, паспорт, гэрэл зураг), visa (виз), or cancellation/refund policy (цуцлалт, буцаан олголт), put them in fields.extra.booking_terms as { deposit, payment, documents, visa, cancellation } — short Mongolian strings copied from the source. Leave any field that is NOT stated as an empty string; NEVER invent a deposit amount, document list, visa rule, or cancellation policy.",
+    "TRANSPORT TYPE: set fields.extra.transport_type from the program itself — land (bus/train only), land_flight (train or bus across the border plus flights inside the country), direct_flight (flies out of Ulaanbaatar / Чингис Хаан нисэх буудал), cruise (a ship). Never leave it empty.",
+    "PARTNER PROGRAM RULE: a program that starts or ends at the border (Эрээн / Erenhot bus station) is a partner's program. Copy its days exactly as written, beginning at Эрээн, with the partner's own day count and nights. Do NOT invent Ulaanbaatar train or border days and do not change the duration — the system adds the standard Ulaanbaatar days itself.",
+    "ITINERARY SHAPE: every fields.extra.itinerary_days entry is { day, title, description, hotel, meals }. title = the day's route in upper case joined with ' – ' (e.g. 'ЭРЭЭН – ХӨХ ХОТ'); description = full sentences keeping every stop, time, flight and meal note as written; hotel = the hotel named for that night or ''; meals = { breakfast, lunch, dinner } booleans. Never put meals or hotels anywhere else, never merge two days.",
+    "YUAN RULE (overrides any currency line above): a price written only in yuan (¥, юань, CNY) is the partner's cost, never the selling price. Leave adult_price/child_price/infant_price empty, set currency=MNT, write the yuan figures in notes as 'Ландын үнэ (юань): …' and add one conflict_items entry with severity=info: 'Төгрөгийн үнэ файлд байхгүй — админ үнээ нэмнэ'. Only a ₮ price goes into adult_price/child_price. A 'cancellation fee in yuan' line is a booking term, not a price.",
+    "WEBSITE FIELDS: also fill fields.hotel (hotel name and stars when given), fields.infant_price when stated, fields.extra.website_summary (one or two Mongolian sentences that sell the trip on its card), fields.extra.important_notes (deposit, cancellation fee, seat confirmation and similar warnings, one short line each), fields.extra.age_rules from the stated child/infant age or birth-year text, and fields.extra.destinations (the cities and places visited, as written).",
+    "DAY DATE RULE: a calendar date written next to a program day ('1-р өдөр | … 11/22', 'Өдөр 1 27') is a departure date: put the first day's date into departure_dates (month/day as written, no invented year) and add the other days' dates to notes. It is not a reason to say the date is unclear.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -1010,6 +1018,12 @@ export async function generateAIProposalFromContent(input: {
     "SEATS RULE: If the source does NOT state a seat count, set seats_total=null and seats_left=null. NEVER output seats_total=0 unless the source explicitly says '0 суудал' or 'sold out'. A 0 value means the tour is full, which is dangerous if invented.",
     "FLEXIBLE DEPARTURE RULE: If a tour says 'хүссэн өдрөө сонгоно', '15+ хүнтэй групп өдрөө сонгоно', 'group may choose date', or similar — the departure date is NOT fixed. In this case: leave departure_dates empty/null, store the rule text in notes and in extra.recurring_schedule. NEVER invent example dates like '2025-07-15' for a flexible tour.",
     "BOOKING TERMS RULE: if the source states any of deposit/prepayment (урьдчилгаа), payment method or timing (төлбөр), required documents (бүрдүүлэх бичиг баримт, паспорт, гэрэл зураг), visa (виз), or cancellation/refund policy (цуцлалт, буцаан олголт), put them in fields.extra.booking_terms as { deposit, payment, documents, visa, cancellation } — short Mongolian strings copied from the source. Leave any field that is NOT stated as an empty string; NEVER invent a deposit amount, document list, visa rule, or cancellation policy.",
+    "TRANSPORT TYPE: set fields.extra.transport_type from the program itself — land (bus/train only), land_flight (train or bus across the border plus flights inside the country), direct_flight (flies out of Ulaanbaatar / Чингис Хаан нисэх буудал), cruise (a ship). Never leave it empty.",
+    "PARTNER PROGRAM RULE: a program that starts or ends at the border (Эрээн / Erenhot bus station) is a partner's program. Copy its days exactly as written, beginning at Эрээн, with the partner's own day count and nights. Do NOT invent Ulaanbaatar train or border days and do not change the duration — the system adds the standard Ulaanbaatar days itself.",
+    "ITINERARY SHAPE: every fields.extra.itinerary_days entry is { day, title, description, hotel, meals }. title = the day's route in upper case joined with ' – ' (e.g. 'ЭРЭЭН – ХӨХ ХОТ'); description = full sentences keeping every stop, time, flight and meal note as written; hotel = the hotel named for that night or ''; meals = { breakfast, lunch, dinner } booleans. Never put meals or hotels anywhere else, never merge two days.",
+    "YUAN RULE (overrides any currency line above): a price written only in yuan (¥, юань, CNY) is the partner's cost, never the selling price. Leave adult_price/child_price/infant_price empty, set currency=MNT, write the yuan figures in notes as 'Ландын үнэ (юань): …' and add one conflict_items entry with severity=info: 'Төгрөгийн үнэ файлд байхгүй — админ үнээ нэмнэ'. Only a ₮ price goes into adult_price/child_price. A 'cancellation fee in yuan' line is a booking term, not a price.",
+    "WEBSITE FIELDS: also fill fields.hotel (hotel name and stars when given), fields.infant_price when stated, fields.extra.website_summary (one or two Mongolian sentences that sell the trip on its card), fields.extra.important_notes (deposit, cancellation fee, seat confirmation and similar warnings, one short line each), fields.extra.age_rules from the stated child/infant age or birth-year text, and fields.extra.destinations (the cities and places visited, as written).",
+    "DAY DATE RULE: a calendar date written next to a program day ('1-р өдөр | … 11/22', 'Өдөр 1 27') is a departure date: put the first day's date into departure_dates (month/day as written, no invented year) and add the other days' dates to notes. It is not a reason to say the date is unclear.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -1761,6 +1775,11 @@ export async function generateAIProposalFromContentBatched(input: {
           urls,
         }));
       }
+      // Standard Ulaanbaatar days, transport tags, the transport choice and the
+      // missing photos — what makes a file-created trip equal to one added on the web.
+      // The photo search only gets the time the batches left of the route's budget.
+      const remainingMs = FILE_PARSE_TOTAL_BUDGET_MS - (Date.now() - startedAt);
+      await finalizeNewTripActions(merged, { photos: remainingMs > 25_000 ? { budgetMs: remainingMs - 15_000 } : undefined });
 
       return merged;
     },
@@ -1899,6 +1918,11 @@ export async function reviseAIRequest(
     // Keep the inventory alive for the next clarification round.
     revisedProposal.photo_sources = photoSources;
   }
+  // A clicked transport type rebuilds the standard days; found photos and their
+  // credits are kept, never searched for a second time.
+  applyTransportChoice(clarification, revisedProposal);
+  carryOverPhotoExtras(currentProposal, revisedProposal);
+  await finalizeNewTripActions(revisedProposal);
 
   await queryNeon(
     `

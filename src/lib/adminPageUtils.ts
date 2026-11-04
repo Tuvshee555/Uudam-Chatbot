@@ -657,69 +657,53 @@ async function buildTextUploadUnits(file: File): Promise<ParseUploadUnit[]> {
   }));
 }
 
-/** Inflates a single entry from a ZIP (DOCX/XLSX) in the browser. */
-async function readZipEntryInBrowser(
-  buffer: ArrayBuffer,
-  entryName: string,
-): Promise<string | null> {
-  const view = new DataView(buffer);
-  const bytes = new Uint8Array(buffer);
-  const targetBytes = new TextEncoder().encode(entryName);
-  const matches = (start: number) => {
-    for (let i = 0; i < targetBytes.length; i += 1) {
-      if (bytes[start + i] !== targetBytes[i]) return false;
-    }
-    return true;
-  };
-
-  let offset = 0;
-  while (offset + 30 <= bytes.length) {
-    if (view.getUint32(offset, true) !== 0x04034b50) break;
-    const method = view.getUint16(offset + 8, true);
-    const compressedSize = view.getUint32(offset + 18, true);
-    const nameLength = view.getUint16(offset + 26, true);
-    const extraLength = view.getUint16(offset + 28, true);
-    const nameStart = offset + 30;
-    const dataStart = nameStart + nameLength + extraLength;
-    if (compressedSize === 0) break;
-
-    if (nameLength === targetBytes.length && matches(nameStart)) {
-      const data = bytes.subarray(dataStart, dataStart + compressedSize);
-      if (method === 0) return new TextDecoder().decode(data);
-      if (method === 8) {
-        const stream = new Response(
-          new Blob([data]).stream().pipeThrough(
-            new DecompressionStream("deflate-raw"),
-          ),
-        );
-        return await stream.text();
-      }
-      return null;
-    }
-    offset = dataStart + compressedSize;
-  }
-  return null;
-}
+// Pictures smaller than this inside a Word file are logos and icons, not trip photos.
+const MIN_DOCX_PHOTO_BYTES = 15_000;
 
 /**
  * Extracts text from an Office document (Excel .xlsx/.xlsm/.xls, Word .docx)
  * in the browser, then chunks it like plain text. This keeps upload size tied
- * to the *content*, so a heavy Office file (embedded fonts/images) never trips
- * the per-request size wall — only its readable text is sent.
+ * to the *content*, so a heavy Office file (embedded fonts) never trips the
+ * per-request size wall — only its readable text is sent, plus the photos a
+ * Word file embeds, each as its own image upload for the trip's gallery.
+ *
+ * The ZIP is read with JSZip (its central directory): a hand-rolled header walk
+ * used here before stopped at the first zero-size entry, and a Word file that
+ * begins with a folder entry was reported as unreadable (2026-11-04).
  */
 async function buildOfficeUploadUnits(file: File): Promise<ParseUploadUnit[]> {
   const lower = file.name.trim().toLowerCase();
   const buffer = await file.arrayBuffer();
   let text = "";
+  const photoUnits: ParseUploadUnit[] = [];
 
   if (lower.endsWith(".docx")) {
-    const xml = await readZipEntryInBrowser(buffer, "word/document.xml");
+    const JSZip = (await import("jszip")).default;
+    const zip = await JSZip.loadAsync(buffer);
+    const xml = await zip.file("word/document.xml")?.async("string");
     if (!xml) {
       throw new Error(
-        `"${file.name}" Word файлыг уншиж чадсангүй. PDF болгож хадгалаад дахин оруулна уу.`,
+        `"${file.name}" Word файл дотор уншигдах текст олдсонгүй (word/document.xml алга). PDF болгож хадгалаад дахин оруулна уу.`,
       );
     }
     text = docxDocumentXmlToText(xml);
+    const media = Object.values(zip.files)
+      .filter((entry) => !entry.dir && /^word\/media\/.+\.(png|jpe?g|webp)$/i.test(entry.name))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    for (const entry of media) {
+      const blob = await entry.async("blob");
+      if (blob.size < MIN_DOCX_PHOTO_BYTES) continue;
+      const cleanName = entry.name.split("/").pop() || entry.name;
+      const imageFile = new File([blob], `${file.name}/${cleanName}`, {
+        type: imageMimeFromName(cleanName),
+        lastModified: file.lastModified,
+      });
+      photoUnits.push({
+        ...(await buildImageUploadUnit(imageFile)),
+        displayName: `${file.name} / ${cleanName}`,
+        sourceGroup: file.name,
+      });
+    }
   } else {
     const XLSX = await import("xlsx");
     const workbook = XLSX.read(new Uint8Array(buffer), { type: "array" });
@@ -737,12 +721,13 @@ async function buildOfficeUploadUnits(file: File): Promise<ParseUploadUnit[]> {
     throw new Error(`"${file.name}" файлд текст өгөгдөл олдсонгүй.`);
   }
 
-  return chunkText(text).map((chunk, index, chunks) => ({
+  const textUnits = chunkText(text).map((chunk, index, chunks) => ({
     displayName: `${file.name} (${index + 1}/${chunks.length})`,
     filename: `${file.name}.part-${String(index + 1).padStart(3, "0")}-of-${String(chunks.length).padStart(3, "0")}.txt`,
     mimeType: "text/plain",
     dataUrl: textToDataUrl(chunk),
   }));
+  return [...textUnits, ...photoUnits];
 }
 
 async function buildImageUploadUnit(file: File): Promise<ParseUploadUnit> {

@@ -74,6 +74,12 @@ node --import tsx scripts/import-poster-trip-json.ts tmp/trip.json
 
 ## Standard itinerary for trips that leave Ulaanbaatar by train (Erenhot route)
 
+Since 2026-11-04 the days below are added by code, not by hand: `src/lib/tripTransitDays.ts`
+holds the exact wording, and `src/lib/tripProposalFinalize.ts` applies it to every new trip the
+AI assistant reads from a file (land, land+flight and cruise get the train days; a trip that flies
+out of Ulaanbaatar does not). The proposal shows the transport type as a clickable choice; picking
+another one rebuilds the first and last days. Change the wording in that module, not in a trip.
+
 Every trip that starts with the overnight train to the border and ends with the
 train home is written the same way. Do not shorten it to "Улаанбаатар - Эрээн":
 the train, the border and the arrival time are part of the product. Copy these

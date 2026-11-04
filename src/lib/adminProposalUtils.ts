@@ -11,6 +11,7 @@ import type {
   ConflictSeverity,
   TripStatus,
 } from "./adminTypes";
+import { TRANSPORT_CHOICE, TRANSPORT_LABELS, TRANSPORT_TYPES, isTransportType } from "./tripTransitDays";
 
 export const STATUS_LABELS: Record<TripStatus, string> = {
   active: "Идэвхтэй",
@@ -367,6 +368,26 @@ export function buildProposalClarifications(
       question.detail = undefined;
     }
     questions.push(question);
+  }
+
+  // How a new trip leaves Ulaanbaatar (tripProposalFinalize.ts): one tap changes the
+  // standard first and last days; the answer carries the type for the server to read.
+  for (const item of proposal.conflict_items || []) {
+    if (item.type !== TRANSPORT_CHOICE) continue;
+    const route = String(item.data?.route_name || "").trim();
+    const current = item.data?.transport_type;
+    if (!route || !isTransportType(current)) continue;
+    pushQuestion({
+      id: `transport:${route}`,
+      prompt: `«${route}» аялал ${TRANSPORT_LABELS[current].toLowerCase()} гэж уншлаа. Зөв үү?`,
+      detail: item.text,
+      options: TRANSPORT_TYPES.map((transport) => ({
+        label: TRANSPORT_LABELS[transport],
+        answer: `"${route}" аяллын тээврийн төрлийг "${TRANSPORT_LABELS[transport]}" болго (transport_type=${transport}).`,
+        recommended: transport === current,
+      })),
+      allowCustom: false,
+    });
   }
 
   proposal.actions.forEach((action, index) => {

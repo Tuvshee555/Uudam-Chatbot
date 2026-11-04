@@ -13,6 +13,8 @@ import { normalizePriceRange } from "./priceRange";
 
 // ─── known keys ──────────────────────────────────────────────────────────────
 
+import { isTransportType } from "./tripTransitDays";
+
 const KNOWN_EXTRA_KEYS = new Set([
   "aliases",
   "price_groups",
@@ -41,6 +43,13 @@ const KNOWN_EXTRA_KEYS = new Set([
   "age_rules",
   "marketing_badge",
   "website_summary",
+  // Set by the file-to-trip pipeline (tripProposalFinalize.ts) and the poster mapper.
+  "transport_type",
+  "duration_days",
+  "duration_nights",
+  "destinations",
+  "photo_credits",
+  "website_details_patch",
 ]);
 
 /**
@@ -409,9 +418,36 @@ export function normalizeExtra(
     age_rules: normalizeAgeRules(raw.age_rules),
     marketing_badge: normalizeMarketingBadge(raw.marketing_badge),
     website_summary: asString(raw.website_summary).trim(),
+    ...(isTransportType(raw.transport_type) ? { transport_type: raw.transport_type } : {}),
+    ...(asNumberOrNull(raw.duration_days) !== null ? { duration_days: asNumberOrNull(raw.duration_days) } : {}),
+    ...(asNumberOrNull(raw.duration_nights) !== null ? { duration_nights: asNumberOrNull(raw.duration_nights) } : {}),
+    ...(asStringArray(raw.destinations).length ? { destinations: asStringArray(raw.destinations) } : {}),
+    ...(Object.keys(normalizePhotoCredits(raw.photo_credits)).length ? { photo_credits: normalizePhotoCredits(raw.photo_credits) } : {}),
+    ...(raw.website_details_patch && typeof raw.website_details_patch === "object" && !Array.isArray(raw.website_details_patch)
+      ? { website_details_patch: raw.website_details_patch } : {}),
   };
 
   return { extra, warnings };
+}
+
+/**
+ * Where each photo came from, keyed by its URL — the website shows it as
+ * "Зургийн эх сурвалж" (photoCredits.ts there reads the same shape).
+ */
+function normalizePhotoCredits(raw: unknown): Record<string, Record<string, string>> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, Record<string, string>> = {};
+  for (const [url, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!/^https?:\/\//.test(url) || !value || typeof value !== "object" || Array.isArray(value)) continue;
+    const credit = value as Record<string, unknown>;
+    const entry: Record<string, string> = {};
+    for (const key of ["title", "subject", "author", "license", "licenseUrl", "page", "provider"]) {
+      const text = asString(credit[key]).trim();
+      if (text) entry[key] = text.slice(0, 300);
+    }
+    if (Object.keys(entry).length) out[url] = entry;
+  }
+  return out;
 }
 
 /**

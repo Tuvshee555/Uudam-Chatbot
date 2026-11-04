@@ -850,15 +850,18 @@ export default function AdminPage() {
             dataUrl: await fileToDataUrl(file.file),
           });
         }
-      } catch {
-        skippedFiles.push(file.name);
+      } catch (error) {
+        // The reason used to be swallowed; "could not read" with no cause sent the
+        // owner looking for a different file format (2026-11-04).
+        const reason = error instanceof Error && error.message ? error.message : "уншиж чадсангүй";
+        skippedFiles.push(reason.includes(file.name) ? reason : `${file.name}: ${reason}`);
       }
     }
     if (skippedFiles.length > 0) {
-      toast.info(
-        `${skippedFiles.length} файлыг уншиж чадсангүй тул алгаслаа: ${skippedFiles
+      toast.error(
+        `${skippedFiles.length} файлыг алгаслаа — ${skippedFiles
           .slice(0, 3)
-          .join(", ")}${skippedFiles.length > 3 ? "…" : ""}`,
+          .join("; ")}${skippedFiles.length > 3 ? "…" : ""}`,
       );
     }
     const sourceParts: string[] = [];

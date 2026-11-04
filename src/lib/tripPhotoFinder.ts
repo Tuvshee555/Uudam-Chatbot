@@ -1,0 +1,219 @@
+/**
+ * Photos for a trip that arrived without any (a partner's Word or PDF program):
+ * free, commercially usable photographs of the places it visits, found on
+ * Wikimedia Commons — CC0, public domain, CC BY or CC BY-SA, a credit line kept
+ * for each — filtered for size and subject, then ranked by a cheap vision model
+ * so the page never shows a map, a logo or a derelict building. Pinterest and
+ * the like are not sources: no API, and the pins are other people's copyrighted
+ * photos. Every function here is best-effort and keyless.
+ */
+import sharp from "sharp";
+import { askOpenAIChatParts } from "./openaiFallback";
+import { logWarn } from "./observability";
+
+export type FoundPhoto = {
+  /** A 1920px rendition, ready to download. */
+  url: string;
+  pageUrl: string;
+  title: string;
+  width: number;
+  height: number;
+  license: string;
+  author: string;
+  query: string;
+};
+
+export type PhotoCredit = { url: string; title: string; author: string; license: string; source: string };
+
+const USER_AGENT = "UudamTravelChatbot/1.0 (https://uudamtravel.mn; trip photos)";
+const COMMONS_API = "https://commons.wikimedia.org/w/api.php";
+export const MIN_PHOTO_WIDTH = 1600;
+export const PHOTOS_PER_TRIP = 6;
+const RENDITION_WIDTH = 1920;
+const PREVIEW_WIDTH = 480;
+const MAX_DOWNLOAD_BYTES = 12 * 1024 * 1024;
+const ALLOWED_LICENSE = /^(cc0|public domain|cc[ -]by(-sa)?(\s|$)|copyrighted free use)/i;
+// Files that are not photographs of a place.
+const NOT_A_PHOTO = /\b(map|maps|logo|diagram|flag|coat of arms|plan|chart|satellite|screenshot|icon|seal|emblem|poster|banner|locator|svg|graph|table|sign|ticket|stamp|coin|banknote|menu|brochure|collage|panorama stitch|abandoned|derelict|ruins? of|demolition|construction site|accident|flood|protest|space station|from orbit|iss\d|zoo|hippopotamus|store|shop|supermarket|trading|rail transit|line \d|metro|subway|bus|taxi|toyota|honda|car|vehicle|truck|parking|street view|interior|office|factory|hospital|school|university campus)\b/i;
+// Transit places on every train route: never a trip photo (the border town's gate was picked, 2026-11-04).
+const TRANSIT_PLACE = /erenhot|erlian|二连|zamyn|замын|эрээн|ulaanbaatar|улаанбаатар|border crossing|railway station|airport/i;
+
+type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+type CommonsPage = { title?: string; imageinfo?: Array<{ url?: string; thumburl?: string; descriptionurl?: string; width?: number; height?: number; mime?: string;
+  extmetadata?: Record<string, { value?: string }> }> };
+
+const plain = (html: string) => html.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+
+/** The same Commons rendition at another width (its thumbnail URLs carry the width in the path). */
+export function commonsRendition(url: string, width: number): string {
+  return url.replace(/\?.*$/, "").replace(/\/\d+px-/, `/${width}px-`);
+}
+
+function acceptable(page: CommonsPage): boolean {
+  const info = page.imageinfo?.[0];
+  if (!info || !info.width || !info.height || !info.thumburl) return false;
+  if (!/^image\/(jpeg|png)$/.test(info.mime || "")) return false;
+  if (info.width < MIN_PHOTO_WIDTH || info.width < info.height * 1.05) return false;
+  if (NOT_A_PHOTO.test(String(page.title || "")) || TRANSIT_PLACE.test(String(page.title || ""))) return false;
+  const license = plain(info.extmetadata?.LicenseShortName?.value || "");
+  return ALLOWED_LICENSE.test(license);
+}
+
+/**
+ * Commons photographs for one search phrase, largest first; never throws. With
+ * `quality`, only the files Commons reviewers rated "Quality images" — the best
+ * pool when a place has them.
+ */
+export async function searchCommonsPhotos(query: string, options: { limit?: number; fetchImpl?: FetchLike; quality?: boolean } = {}): Promise<FoundPhoto[]> {
+  const fetchImpl = options.fetchImpl || fetch;
+  const url = new URL(COMMONS_API);
+  for (const [key, value] of Object.entries({
+    action: "query", format: "json", generator: "search", gsrsearch: `${query} filetype:bitmap${options.quality ? ' incategory:"Quality images"' : ""}`, gsrnamespace: "6",
+    gsrlimit: String(options.limit ?? 30), prop: "imageinfo", iiprop: "url|size|mime|extmetadata", iiurlwidth: String(RENDITION_WIDTH),
+    iiextmetadatafilter: "LicenseShortName|Artist",
+  })) url.searchParams.set(key, value);
+  try {
+    const response = await fetchImpl(url.toString(), { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) return [];
+    const data = await response.json() as { query?: { pages?: Record<string, CommonsPage> } };
+    return Object.values(data.query?.pages || {})
+      .filter(acceptable)
+      .map((page) => {
+        const info = page.imageinfo![0];
+        return {
+          url: commonsRendition(info.thumburl!, RENDITION_WIDTH),
+          pageUrl: info.descriptionurl || `https://commons.wikimedia.org/wiki/${encodeURIComponent(String(page.title))}`,
+          title: String(page.title || "").replace(/^File:/, "").replace(/\.[a-z0-9]+$/i, ""),
+          width: info.width!, height: info.height!,
+          license: plain(info.extmetadata?.LicenseShortName?.value || ""),
+          author: plain(info.extmetadata?.Artist?.value || "").slice(0, 80),
+          query,
+        };
+      })
+      .sort((a, b) => b.width * b.height - a.width * a.height);
+  } catch (error) {
+    logWarn("trip_photos.commons_search_failed", { query, message: error instanceof Error ? error.message : String(error) });
+    return [];
+  }
+}
+
+/**
+ * Candidates for several phrases, round-robin so no single place dominates;
+ * duplicates dropped. Reviewer-rated "Quality images" come first for each
+ * phrase. Searches run one at a time: a burst of ten made Commons refuse some
+ * and left too few candidates to rank (2026-11-04).
+ */
+export async function collectPhotoCandidates(queries: string[], options: { perQuery?: number; fetchImpl?: FetchLike } = {}): Promise<FoundPhoto[]> {
+  const perQuery = options.perQuery ?? 8;
+  const lists: FoundPhoto[][] = [];
+  for (const query of queries) {
+    const quality = await searchCommonsPhotos(query, { fetchImpl: options.fetchImpl, quality: true, limit: 20 });
+    const plain = await searchCommonsPhotos(query, { fetchImpl: options.fetchImpl });
+    const urls = new Set(quality.map((photo) => photo.url));
+    lists.push([...quality, ...plain.filter((photo) => !urls.has(photo.url))]);
+  }
+  const seen = new Set<string>();
+  const out: FoundPhoto[] = [];
+  for (let round = 0; round < perQuery; round += 1) {
+    for (const list of lists) {
+      const photo = list[round];
+      if (photo && !seen.has(photo.url)) { seen.add(photo.url); out.push(photo); }
+    }
+  }
+  return out;
+}
+
+/**
+ * The best `count` of the candidates for a trip page, chosen by a vision model from
+ * small previews (a few hundred tokens per photo). The model also rejects, so it
+ * runs even on a small pool. Falls back to the largest ones when it cannot answer.
+ */
+export async function rankPhotos(candidates: FoundPhoto[], input: { subject: string; count?: number; fetchImpl?: FetchLike;
+  ask?: typeof askOpenAIChatParts; trace?: { requestId?: string; correlationId?: string } }): Promise<FoundPhoto[]> {
+  const count = input.count ?? PHOTOS_PER_TRIP;
+  if (!candidates.length) return [];
+  const fetchImpl = input.fetchImpl || fetch;
+  const ask = input.ask || askOpenAIChatParts;
+  const previews = await Promise.all(candidates.slice(0, 18).map(async (photo) => {
+    try {
+      const response = await fetchImpl(commonsRendition(photo.url, PREVIEW_WIDTH), { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.timeout(10_000) });
+      if (!response.ok) return null;
+      const bytes = Buffer.from(await response.arrayBuffer());
+      return { photo, part: { inlineData: { mimeType: response.headers.get("content-type")?.split(";")[0] || "image/jpeg", data: bytes.toString("base64") } } };
+    } catch { return null; }
+  }));
+  const usable = previews.filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+  if (!usable.length) return candidates.slice(0, count);
+  const instruction = `You choose photographs for a travel agency's web page about: ${input.subject}.
+Pick up to ${count} of the ${usable.length} photos below, best first — only photos a travel agency would proudly put on the page: real scenery, famous landmarks, skylines and night views, beaches, old towns, famous streets, local food and culture of those places; sharp, well lit, inviting. Return fewer than ${count} rather than include a weak one. Reject: maps, satellite or aerial survey images, text overlays, logos, gates and signs, zoo animals, museum interiors, plain buildings, close-ups of people or selfies, derelict or under-construction places, bad weather, blurry or dark images, any other company's branding, border towns and railway or airport scenes, and photos that do not show these places.
+Answer with JSON only: {"picks":[photo numbers, best first]}.`;
+  const parts: Parameters<typeof askOpenAIChatParts>[0] = [{ text: instruction }];
+  usable.forEach((entry, index) => { parts.push({ text: `Photo ${index + 1}: ${entry.photo.title}` }); parts.push(entry.part); });
+  try {
+    const result = await ask(parts, { model: "gpt-4o-mini", jsonMode: true, temperature: 0, maxOutputTokens: 200, timeoutMs: 30_000,
+      source: "trip_photos.rank", requestId: input.trace?.requestId, correlationId: input.trace?.correlationId });
+    const picks = (JSON.parse(result?.text || "{}") as { picks?: unknown }).picks;
+    const chosen = (Array.isArray(picks) ? picks : []).map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= usable.length)
+      .filter((n, i, all) => all.indexOf(n) === i).slice(0, count).map((n) => usable[n - 1].photo);
+    // Fewer good photos beat a full set with a weak one; the model's rejections stand.
+    if (chosen.length) return chosen;
+  } catch (error) {
+    logWarn("trip_photos.rank_failed", { message: error instanceof Error ? error.message : String(error) });
+  }
+  return usable.slice(0, count).map((entry) => entry.photo);
+}
+
+/** The photo as a JPEG no wider than 1920px (uploads over ~800 KB time out on the poster path). */
+export async function downloadPhoto(photo: FoundPhoto, fetchImpl: FetchLike = fetch): Promise<{ buffer: Buffer; mimeType: "image/jpeg" } | null> {
+  try {
+    const response = await fetchImpl(photo.url, { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.timeout(20_000) });
+    if (!response.ok) return null;
+    const raw = Buffer.from(await response.arrayBuffer());
+    if (!raw.length || raw.length > MAX_DOWNLOAD_BYTES) return null;
+    const buffer = await sharp(raw).rotate().resize({ width: RENDITION_WIDTH, withoutEnlargement: true }).jpeg({ quality: 82, mozjpeg: true }).toBuffer();
+    return { buffer, mimeType: "image/jpeg" };
+  } catch (error) {
+    logWarn("trip_photos.download_failed", { url: photo.url, message: error instanceof Error ? error.message : String(error) });
+    return null;
+  }
+}
+
+export function photoCredit(photo: FoundPhoto): PhotoCredit {
+  return { url: photo.url, title: photo.title, author: photo.author, license: photo.license, source: photo.pageUrl };
+}
+
+/**
+ * Short English search phrases for the places and sights of an itinerary — transit
+ * days (airports, trains, border towns) skipped. One small text call.
+ */
+export type PhotoQuery = { query: string; day: number | null };
+
+export async function photoQueriesForTrip(input: { title: string; days: Array<{ day?: number; title?: string; description?: string }>; destinations?: string[];
+  ask?: typeof askOpenAIChatParts; trace?: { requestId?: string; correlationId?: string } }): Promise<PhotoQuery[]> {
+  const ask = input.ask || askOpenAIChatParts;
+  const program = input.days.map((day, index) => `${day.day ?? index + 1}. ${String(day.title || "").trim()} — ${String(day.description || "").replace(/\s+/g, " ").trim().slice(0, 220)}`).join("\n");
+  const destinations = (input.destinations || []).filter((place) => !TRANSIT_PLACE.test(place));
+  const prompt = `Trip: ${input.title}${destinations.length ? `\nDestinations: ${destinations.join(", ")}` : ""}\nProgram:\n${program}\n\nList 4 to 8 short English search phrases (2-5 words each, landmark or place names as used in English, e.g. a park, a bridge, an old town, a beach, a famous street or dish of that city) for photographs of what this trip shows, each with the program day number it belongs to, plus the English names of the destination cities the trip is about. Never include Erenhot/Erlian, Zamyn-Uud, Ulaanbaatar, any border town, transfer city, airport, railway station, hotel or shopping centre, and skip days that are only travel. Answer with JSON only: {"queries":[{"q":"...","day":2}],"cities":["..."]}.`;
+  try {
+    const result = await ask([{ text: prompt }], { model: "gpt-4o-mini", jsonMode: true, temperature: 0, maxOutputTokens: 400, timeoutMs: 20_000,
+      source: "trip_photos.queries", requestId: input.trace?.requestId, correlationId: input.trace?.correlationId });
+    const parsed = JSON.parse(result?.text || "{}") as { queries?: unknown; cities?: unknown };
+    const valid = new Set(input.days.map((day, index) => day.day ?? index + 1));
+    const fromModel = (Array.isArray(parsed.queries) ? parsed.queries : [])
+      .map((item) => {
+        const entry: Record<string, unknown> = item && typeof item === "object" ? item as Record<string, unknown> : { q: item };
+        const day = Number(entry.day);
+        return { query: String(entry.q ?? entry.query ?? "").trim(), day: valid.has(day) ? day : null };
+      });
+    // A city's skyline and best-known landmark are what a trip card wants most; they are not tied to a day.
+    const cities = (Array.isArray(parsed.cities) ? parsed.cities : []).map((city) => String(city).trim()).filter((city) => city.length >= 3 && !TRANSIT_PLACE.test(city)).slice(0, 3);
+    const general = cities.flatMap((city) => [{ query: `${city} skyline`, day: null }, { query: `${city} famous landmark`, day: null }]);
+    return [...fromModel, ...general]
+      .filter((item) => item.query.length >= 3 && item.query.length <= 60 && !TRANSIT_PLACE.test(item.query))
+      .filter((item, index, all) => all.findIndex((other) => other.query.toLowerCase() === item.query.toLowerCase()) === index)
+      .slice(0, 10);
+  } catch (error) {
+    logWarn("trip_photos.queries_failed", { message: error instanceof Error ? error.message : String(error) });
+    return [];
+  }
+}
