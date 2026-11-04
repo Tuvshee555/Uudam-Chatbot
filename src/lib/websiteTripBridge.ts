@@ -3,6 +3,7 @@ import { sameParityValue } from "./tripWebsiteParityValue";
 import { duration } from "./connectedTripMapping";
 import { websiteDepartureDateKey } from "./websiteDepartureDate";
 import { currentWebsiteDepartureRows } from "./websiteDepartureRows";
+import { mergeWebsiteDateFares } from "./websiteDateFares";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -315,7 +316,7 @@ const WEBSITE_FIELD_TARGETS: Record<string, string[]> = {
   departures: ["departure_dates", "extra.website_departure_availability", "extra.price_groups", "departure."],
   summary: ["extra.website_summary"], included: ["extra.included_items"], excluded: ["extra.excluded_items"],
   importantNotes: ["extra.important_notes"], departureRule: ["extra.departure_rule"], itinerary: ["extra.itinerary_days"],
-  "sourceMetadata.price_groups": ["extra.price_groups"], "sourceMetadata.age_rules": ["extra.age_rules"],
+  "sourceMetadata.price_groups": ["extra.price_groups", "departure."], "sourceMetadata.age_rules": ["extra.age_rules"],
   "sourceMetadata.hotel_profiles": ["extra.hotel_profiles"], "sourceMetadata.hotel_links": ["extra.hotel_links"],
 };
 
@@ -410,12 +411,27 @@ export function websiteTripPatchReport(input: unknown, previousInput: unknown, c
     accept(key, current, baseValue, value,
       () => Object.assign(fields, { [key]: value }));
   }
+  // The trip's departures after this save; a website fare for any other date creates nothing.
+  const liveDates = new Set([...(next.departure_dates ?? []), ...strings(canonical.departure_dates)].map(dateKey).filter(Boolean));
+  let fareDates = new Set<string>();
   for (const [key, value] of Object.entries(next.extra || {})) {
     if (before && sameParityValue(value, before.extra?.[key])) continue;
     // Seats and sold-out states belong to the website (bookings decrement them
     // there); the canonical copy only mirrors them, so it never conflicts.
     if (key === "website_departure_availability") { extra[key] = value; continue; }
     const base = before?.extra && owns(before.extra, key) ? before.extra[key] : baselineExtra[key];
+    // Per-date fares merge one date and option at a time (websiteDateFares.ts); the two
+    // stores never hold identical lists, so a whole-list comparison always conflicted.
+    if (key === "price_groups" && Array.isArray(value) && value.length
+      && Array.isArray(canonicalExtra.price_groups) && canonicalExtra.price_groups.length) {
+      const merge = mergeWebsiteDateFares(canonicalExtra.price_groups, base, value, liveDates);
+      if (merge.dates.size) {
+        fareDates = merge.dates;
+        if (merge.groups) extra.price_groups = merge.groups;
+        merge.conflicts.forEach(addConflict);
+        continue;
+      }
+    }
     if (key === "itinerary_days" && before && Array.isArray(value)) {
       const facts = (raw: unknown) => (Array.isArray(raw) ? raw : []).map((item, index) => {
         const day = record(item), meals = record(day.meals);
@@ -487,7 +503,8 @@ export function websiteTripPatchReport(input: unknown, previousInput: unknown, c
     const groups = (Array.isArray(canonicalExtra.price_groups) ? canonicalExtra.price_groups : []).map(record);
     for (const row of currentWebsiteDepartureRows(incoming.departures.map(record))) {
       const date = dateKey(row.startDate);
-      if (!date) continue;
+      // The date-pricing editor writes each fare into the row too; its price groups already settled it.
+      if (!date || fareDates.has(date)) continue;
       for (const fare of ["price", "childPrice", "infantPrice"] as const) {
         if (!owns(row, fare)) continue;
         const typed = numberOrNull(row[fare]);
