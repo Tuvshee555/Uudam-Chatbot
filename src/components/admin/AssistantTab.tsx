@@ -1,6 +1,14 @@
 import { useEffect, useId, useState } from "react";
 import { Button, Card, Icons, cx } from "@/components/ui";
-import { AssistantQuickActions, type QuickActionKind } from "./AssistantQuickActions";
+import {
+  ActionGlyph,
+  ComposerActionMenu,
+  QuickActionList,
+  QuickActionStep,
+  useQuickAction,
+  type ActionKey,
+  type QuickActionKind,
+} from "./AssistantQuickActions";
 import type {
   AttachedFile,
   ChatMessage,
@@ -197,15 +205,44 @@ export function AssistantTab({
     0,
   );
   const isEmpty = messages.length === 0 || (messages.length === 1 && messages[0]?.id === "intro");
-  const canSend = !busy && (Boolean(aiInput.trim()) || attachedFiles.length > 0);
   const progress = busyProgress == null ? null : Math.min(100, Math.max(0, busyProgress));
+
+  const quick = useQuickAction({ trips: existingTrips, busy, onQuick: onQuickAction, onEditPrice: onEditTripPrice, onNewTrip });
+  const { step } = quick;
+  const stepPhase = step?.phase ?? null;
+
+  // While a step is open the composer answers the step; the draft message is kept aside.
+  const composerValue = step ? quick.input : aiInput;
+  const setComposerValue = step ? quick.setInput : setAiInput;
+  const canSend = !busy && (Boolean(aiInput.trim()) || attachedFiles.length > 0);
+  const submitLabel = step
+    ? stepPhase === "trip" ? "Эхний аяллыг сонгох" : stepPhase === "value" ? "Суудлыг баталгаажуулах" : "Дээрээс сонгоно уу"
+    : "Илгээх";
+  const submitEnabled = step ? Boolean(quick.enterAction) : canSend;
+  const placeholder = step
+    ? stepPhase === "trip" ? "Аяллын нэрийг бичиж хайх…"
+      : stepPhase === "value" ? "Үлдсэн суудлын тоо…"
+        : "Дээрх сонголтоос нэгийг нь дарна уу"
+    : attachedFiles.length ? "Файлаар юу хийхийг хэлээрэй…" : "Юуг өөрчлөх вэ? Бичээрэй…";
 
   useEffect(() => {
     const input = inputRef.current;
     if (!input) return;
     input.style.height = "auto";
     input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
-  }, [aiInput, inputRef]);
+  }, [composerValue, placeholder, inputRef]);
+
+  // A new step, or a new phase of one, scrolls into view and takes the keyboard.
+  useEffect(() => {
+    if (!stepPhase) return;
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    inputRef.current?.focus();
+  }, [stepPhase, chatEndRef, inputRef]);
+
+  const startAction = (key: ActionKey) => {
+    quick.start(key);
+    inputRef.current?.focus();
+  };
 
   return (
     <Card
@@ -265,7 +302,7 @@ export function AssistantTab({
         aria-relevant="additions text"
       >
         {isEmpty ? (
-          <div className="mx-auto flex w-full max-w-2xl flex-col items-center pt-3 pb-1 text-center sm:pt-5">
+          <div className="mx-auto flex w-full max-w-xl flex-col items-center pt-3 pb-1 text-center sm:pt-6">
             <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-brand to-travel text-white shadow-sm">
               <Icons.ai size={22} />
             </span>
@@ -273,53 +310,38 @@ export function AssistantTab({
               Юуг шинэчлэх вэ?
             </p>
             <p className="mt-2 max-w-md text-sm leading-6 text-ink-muted">
-              Постер, үнийн жагсаалтаа оруулаарай. Би уншаад юуг нэмэх, өөрчлөхийг санал болгоно.
-              Эсвэл{" "}
-              <button
-                type="button"
-                onClick={() => {
-                  setAiInput("[Аяллын нэр] аяллын мэдээллийг шинэчлэх");
-                  inputRef.current?.focus();
-                }}
-                className="rounded font-medium text-brand underline decoration-brand/30 underline-offset-2 hover:decoration-brand"
-              >
-                хийх зүйлээ бичээрэй.
-              </button>
+              Постер, үнийн жагсаалтаа оруул, эсвэл доороос нэг зүйл сонго. Би саналаа харуулна.
+              Та зөвшөөрснийг л хадгална, буцаах боломжтой.
             </p>
             <button
               type="button"
               onClick={onPickFile}
               disabled={busy}
-              className="group mt-6 flex w-full flex-col items-center gap-2.5 rounded-2xl border-2 border-dashed border-brand-border bg-brand-soft/40 px-5 py-6 text-center transition-colors hover:border-brand hover:bg-brand-soft disabled:cursor-wait disabled:opacity-60"
+              className="group mt-6 flex w-full items-center gap-4 rounded-2xl border-2 border-dashed border-brand-border bg-brand-soft/40 px-5 py-4 text-left transition-colors hover:border-brand hover:bg-brand-soft disabled:cursor-wait disabled:opacity-60"
             >
-              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-surface text-brand shadow-xs transition-transform group-hover:-translate-y-0.5">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-surface text-brand shadow-xs transition-transform group-hover:-translate-y-0.5">
                 <Icons.upload size={20} />
               </span>
-              <span>
-                <span className="block text-[15px] font-bold text-ink">Файл сонгох эсвэл энд чирж тавих</span>
-                <span className="mt-1 block text-xs leading-5 text-ink-muted">Олон файл зэрэг оруулж болно</span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[15px] font-bold text-ink">Постер, үнийн жагсаалт оруулах</span>
+                <span className="mt-0.5 block text-xs leading-5 text-ink-muted">Файл сонгох эсвэл энд чирж тавих. Олон файл зэрэг болно.</span>
               </span>
-              <span className="flex flex-wrap justify-center gap-1.5" aria-label="Дэмжигдэх файлын төрөл">
+              <span className="hidden shrink-0 flex-wrap justify-end gap-1.5 sm:flex" aria-label="Дэмжигдэх файлын төрөл">
                 {["Зураг", "PDF", "Excel", "Word"].map((kind) => (
                   <span key={kind} className="rounded-md border border-line bg-surface px-2 py-0.5 text-[11px] font-medium text-ink-muted">{kind}</span>
                 ))}
               </span>
             </button>
-            <ol className="mt-5 grid w-full gap-3 text-left sm:grid-cols-3 sm:gap-0 sm:divide-x sm:divide-line">
-              {[
-                ["1", "Уншина", "Постер, үнийн жагсаалтаас аялал, үнэ, огноог гаргана."],
-                ["2", "Санал болгоно", "Юу өөрчлөгдөхийг өмнөх утгатай нь зэрэгцүүлж харуулна."],
-                ["3", "Та баталгаажуулна", "Та зөвшөөрөөгүй зүйл хадгалагдахгүй. Буцаах боломжтой."],
-              ].map(([n, title, body]) => (
-                <li key={n} className="flex gap-3 sm:flex-col sm:gap-2.5 sm:px-4 first:sm:pl-0 last:sm:pr-0">
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-soft text-xs font-bold text-brand">{n}</span>
-                  <span className="min-w-0">
-                    <span className="block text-sm font-semibold text-ink">{title}</span>
-                    <span className="mt-0.5 block text-xs leading-5 text-ink-muted">{body}</span>
-                  </span>
-                </li>
-              ))}
-            </ol>
+            <div className="mt-6 flex w-full items-center gap-3" aria-hidden="true">
+              <span className="h-px flex-1 bg-line" />
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-subtle">
+                {step ? "өөрчлөлт хийж байна" : "эсвэл шууд өөрчлөх"}
+              </span>
+              <span className="h-px flex-1 bg-line" />
+            </div>
+            <div className="mt-3 w-full text-left">
+              {step ? <QuickActionStep controller={quick} busy={busy} /> : <QuickActionList onStart={startAction} busy={busy} />}
+            </div>
           </div>
         ) : (
           messages.map((message) => (
@@ -336,6 +358,8 @@ export function AssistantTab({
             />
           ))
         )}
+
+        {step && !isEmpty && <QuickActionStep controller={quick} busy={busy} />}
 
         {busy && (
           <div className="flex justify-start">
@@ -363,20 +387,13 @@ export function AssistantTab({
       </div>
 
       <div className="border-t border-line bg-surface p-3 sm:p-4">
-        <AssistantQuickActions
-          trips={existingTrips}
-          busy={busy}
-          onQuick={onQuickAction}
-          onEditPrice={onEditTripPrice}
-          onNewTrip={onNewTrip}
-          onPickFile={onPickFile}
-        />
-
         <div className={cx(
-          "mt-2.5 rounded-2xl border border-line-strong bg-surface shadow-xs transition-shadow focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/10",
-          dragOver && "border-brand",
+          "rounded-2xl border bg-surface shadow-xs transition-[border-color,box-shadow] duration-200 focus-within:ring-2",
+          step
+            ? "border-brand-border focus-within:border-brand focus-within:ring-brand/10"
+            : "border-line-strong focus-within:border-brand focus-within:ring-brand/10",
         )}>
-          {attachedFiles.length > 0 && (
+          {attachedFiles.length > 0 && !step && (
             <div className="border-b border-line px-3 pt-2.5 pb-2">
               <div className="mb-1.5 flex items-center justify-between">
                 <span className="text-xs font-medium text-ink-muted">
@@ -406,64 +423,95 @@ export function AssistantTab({
             </div>
           )}
           <div className="flex items-end gap-1 p-1.5">
-            <button
-              type="button"
-              onClick={onPickFile}
-              disabled={busy}
-              aria-label="Файл хавсаргах"
-              title="Файл хавсаргах"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-ink-muted transition-colors hover:bg-brand-soft hover:text-brand disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Icons.paperclip size={17} />
-            </button>
+            {step && quick.definition ? (
+              <span className="flex h-10 shrink-0 items-center gap-1.5 self-end rounded-xl bg-brand-soft pl-2.5 pr-1 text-xs font-semibold text-brand" aria-label={`Одоогийн үйлдэл: ${quick.definition.label}`}>
+                <ActionGlyph icon={quick.definition.icon} size={14} />
+                <span className="hidden sm:inline">{quick.definition.label}</span>
+                <button
+                  type="button"
+                  onClick={quick.cancel}
+                  aria-label="Үйлдлийг болих"
+                  title="Болих (Esc)"
+                  className="flex h-7 w-7 items-center justify-center rounded-lg text-brand/70 transition-colors hover:bg-brand/10 hover:text-brand"
+                >
+                  <Icons.close size={13} />
+                </button>
+              </span>
+            ) : (
+              <ComposerActionMenu busy={busy} onStart={startAction} onPickFile={onPickFile} menuId={`${composerId}-menu`} />
+            )}
             <textarea
               ref={inputRef}
               id={composerId}
-              aria-label="Туслахад илгээх мессеж"
+              aria-label={step ? submitLabel : "Туслахад илгээх мессеж"}
               aria-describedby={`${composerId}-hint`}
-              value={aiInput}
-              onChange={(e) => setAiInput(e.target.value)}
+              value={composerValue}
+              onChange={(e) => setComposerValue(e.target.value)}
               onPaste={(e) => {
                 if (!e.clipboardData.files.length) return;
                 e.preventDefault();
                 if (!busy) onDropFiles(e.clipboardData.files);
               }}
-              maxLength={MAX_AI_INPUT_CHARS}
+              maxLength={step ? 120 : MAX_AI_INPUT_CHARS}
+              inputMode={stepPhase === "value" ? "numeric" : undefined}
               onKeyDown={(e) => {
+                if (e.key === "Escape" && step) {
+                  e.preventDefault();
+                  quick.cancel();
+                  return;
+                }
                 if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
+                  if (step) { quick.enterAction?.(); return; }
                   if (canSend) onSend();
                 }
               }}
               rows={1}
-              placeholder={attachedFiles.length ? "Файлаар юу хийхийг хэлээрэй…" : "Аялал нэмэх, үнэ эсвэл суудал өөрчлөх…"}
+              placeholder={placeholder}
               className="scroll-area max-h-40 min-h-10 min-w-0 flex-1 resize-none border-0 bg-transparent px-1.5 py-2.5 text-sm leading-5 text-ink placeholder:text-ink-muted focus-visible:[box-shadow:none]"
             />
             <button
               type="button"
-              onClick={onSend}
-              disabled={!canSend}
-              aria-label="Илгээх"
-              title="Илгээх"
+              onClick={() => { if (step) quick.enterAction?.(); else onSend(); }}
+              disabled={!submitEnabled}
+              aria-label={submitLabel}
+              title={submitLabel}
               className={cx(
                 "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all duration-150",
-                canSend
+                submitEnabled
                   ? "bg-brand text-white shadow-xs hover:bg-brand-hover active:scale-[0.97]"
                   : "cursor-not-allowed bg-surface-sunken text-ink-subtle",
               )}
             >
-              <Icons.send size={16} />
+              {step ? <Icons.check size={17} /> : <Icons.send size={16} />}
             </button>
           </div>
         </div>
         <div id={`${composerId}-hint`} className="mt-2 flex items-center justify-between gap-3 px-1.5 text-[11px] leading-4 text-ink-subtle">
-          <span className="hidden sm:inline">
-            <kbd className="rounded border border-line bg-canvas px-1 py-px font-sans text-[10px] font-medium text-ink-muted">Enter</kbd> илгээх
-            <span className="mx-1.5 text-line-strong">·</span>
-            <kbd className="rounded border border-line bg-canvas px-1 py-px font-sans text-[10px] font-medium text-ink-muted">Shift+Enter</kbd> шинэ мөр
-          </span>
-          <span className="sm:hidden">Хадгалахаас өмнө саналаа хянаарай.</span>
-          {aiInput.length >= MAX_AI_INPUT_CHARS * 0.8 && (
+          {step ? (
+            <span>
+              {(stepPhase === "trip" || stepPhase === "value") && (
+                <>
+                  <kbd className="rounded border border-line bg-canvas px-1 py-px font-sans text-[10px] font-medium text-ink-muted">Enter</kbd>{" "}
+                  {stepPhase === "trip" ? "эхний аяллыг сонгох" : "баталгаажуулах"}
+                  <span className="mx-1.5 text-line-strong">·</span>
+                </>
+              )}
+              <kbd className="rounded border border-line bg-canvas px-1 py-px font-sans text-[10px] font-medium text-ink-muted">Esc</kbd> болих
+            </span>
+          ) : (
+            <>
+              <span className="hidden sm:inline">
+                <kbd className="rounded border border-line bg-canvas px-1 py-px font-sans text-[10px] font-medium text-ink-muted">Enter</kbd> илгээх
+                <span className="mx-1.5 text-line-strong">·</span>
+                <kbd className="rounded border border-line bg-canvas px-1 py-px font-sans text-[10px] font-medium text-ink-muted">Shift+Enter</kbd> шинэ мөр
+                <span className="mx-1.5 text-line-strong">·</span>
+                <kbd className="rounded border border-line bg-canvas px-1 py-px font-sans text-[10px] font-medium text-ink-muted">+</kbd> файл, үйлдэл
+              </span>
+              <span className="sm:hidden">Хадгалахаас өмнө саналаа хянаарай.</span>
+            </>
+          )}
+          {!step && aiInput.length >= MAX_AI_INPUT_CHARS * 0.8 && (
             <span className="shrink-0 font-mono" role="status">{aiInput.length.toLocaleString()} / {MAX_AI_INPUT_CHARS.toLocaleString()}</span>
           )}
         </div>
