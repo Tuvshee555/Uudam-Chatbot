@@ -22,8 +22,10 @@ const catalog = [
 ];
 
 test("a message that is only a price, as pasted from an advert, is recognised", () => {
-  for (const text of ["2,690,000", "2690000", "2,690,000₮", "2.69 сая", "2 сая 690", "2,690,000 аялал"]) assert.ok(isBarePriceMessage(text), text);
-  for (const text of ["Зандан 2,690,000", "10/15", "2 хүн 2,690,000", "2,690,000 шилжүүлсэн"]) assert.ok(!isBarePriceMessage(text), text);
+  for (const text of ["2,690,000", "2690000", "2,690,000₮", "2.69 сая", "2 сая 690", "2,690,000 аялал",
+    // The price from an advert, quoted in chat words (live 2026-11-04).
+    "2690000 geed bga yum", "2,690,000 гээд байгаа юм", "2690000 гэсэн үнэтэй аялал байна лээ", "2,690,000 байна уу"]) assert.ok(isBarePriceMessage(text), text);
+  for (const text of ["Зандан 2,690,000", "10/15", "2 хүн 2,690,000", "2,690,000 шилжүүлсэн", "2,690,000 төлсөн", "2690000 geed 2 hun"]) assert.ok(!isBarePriceMessage(text), text);
 });
 
 test("a pasted price lists the trips that sell at exactly that price, and the bot accepts its own answer", () => {
