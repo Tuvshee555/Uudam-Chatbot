@@ -1,4 +1,5 @@
 import { logError, logStartupDiagnostics } from "./observability";
+import { parseAllowedEmails } from "./adminGoogleAuth";
 
 export type ValidatedEnv = {
   openaiApiKey: string;
@@ -29,6 +30,11 @@ export type ValidatedEnv = {
   adminSecret: string;
   adminOpenAccess: boolean;
   allowAdminSecretQuery: boolean;
+  /** "Sign in with Google" for the admin panel: on only with a client id, secret and allowed emails. */
+  googleClientId: string | null;
+  googleClientSecret: string | null;
+  adminGoogleEmails: string[];
+  googleSignInEnabled: boolean;
   trustProxyHeaders: boolean;
   neonDatabaseUrl: string | null;
   redisStateEnabled: boolean;
@@ -457,6 +463,10 @@ export function getEnv(): ValidatedEnv {
     false,
     errors,
   );
+  const googleClientId = readOptionalString("GOOGLE_CLIENT_ID", source);
+  const googleClientSecret = readOptionalString("GOOGLE_CLIENT_SECRET", source);
+  const adminGoogleEmails = parseAllowedEmails(readOptionalString("ADMIN_GOOGLE_EMAILS", source));
+  const googleSignInEnabled = Boolean(googleClientId && googleClientSecret && adminGoogleEmails.length);
   const neonDatabaseUrl =
     readOptionalString("NEON_DATABASE_URL", source) ||
     readOptionalString("DATABASE_URL", source);
@@ -812,6 +822,10 @@ export function getEnv(): ValidatedEnv {
     adminSecret,
     adminOpenAccess,
     allowAdminSecretQuery,
+    googleClientId,
+    googleClientSecret,
+    adminGoogleEmails,
+    googleSignInEnabled,
     trustProxyHeaders,
     neonDatabaseUrl,
     redisStateEnabled,
@@ -923,6 +937,8 @@ export function getEnv(): ValidatedEnv {
       vercelEnv: source.VERCEL_ENV || null,
     },
     adminOpenAccess: cachedEnv.adminOpenAccess,
+    googleSignInEnabled: cachedEnv.googleSignInEnabled,
+    adminGoogleEmailCount: cachedEnv.adminGoogleEmails.length,
     neonDbConfigured: Boolean(cachedEnv.neonDatabaseUrl),
   });
 

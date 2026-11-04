@@ -4,7 +4,7 @@ import { Alert, Badge, Button, Icons, Logo, Modal, useToast } from "@/components
 import { extractGoogleDriveFileIds } from "@/lib/googleDriveLinks";
 import { buildProposalClarifications } from "@/lib/adminProposalUtils";
 import { AdminConfirmModals } from "@/components/admin/AdminConfirmModals";
-import { AdminLoginGate } from "@/components/admin/AdminLoginGate";
+import { AdminLoginGate, GOOGLE_LOGIN_ERRORS } from "@/components/admin/AdminLoginGate";
 import { AdminNavigation } from "@/components/admin/AdminNavigation";
 import { NAV_GROUPS } from "@/components/admin/AdminSidebarItem";
 import { websiteDetailsPatch } from "@/lib/websiteTripDetails";
@@ -58,6 +58,7 @@ export default function AdminPage() {
   const [secretDraft, setSecretDraft] = useState("");
   const [loginError, setLoginError] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
+  const [googleSignIn, setGoogleSignIn] = useState(false);
   const [dbInfo, setDbInfo] = useState<{
     configured: boolean;
     schemaReady: boolean;
@@ -450,8 +451,17 @@ export default function AdminPage() {
         }).catch(() => null);
       }
       const res = await fetch("/api/admin/session", { cache: "no-store" }).catch(() => null);
-      const json = res?.ok ? await res.json().catch(() => null) as { authorized?: boolean } | null : null;
+      const json = res?.ok ? await res.json().catch(() => null) as { authorized?: boolean; google_sign_in?: boolean } | null : null;
       if (cancelled) return;
+      // A refused Google sign-in comes back as ?login_error=<code>; show it once, drop it from the URL.
+      const url = new URL(window.location.href);
+      const googleError = url.searchParams.get("login_error");
+      if (googleError) {
+        setLoginError(GOOGLE_LOGIN_ERRORS[googleError] || "Нэвтэрч чадсангүй. Дахин оролдоно уу.");
+        url.searchParams.delete("login_error");
+        window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+      }
+      setGoogleSignIn(Boolean(json?.google_sign_in));
       const next = json?.authorized ? "signed_in" : "signed_out";
       authRef.current = next;
       setAuthState(next);
@@ -2001,6 +2011,7 @@ export default function AdminPage() {
     return (
       <AdminLoginGate
         checking={authState === "checking"}
+        googleSignIn={googleSignIn}
         secretDraft={secretDraft}
         onSecretDraftChange={(value) => { setSecretDraft(value); setLoginError(""); }}
         onSubmit={() => void signIn()}

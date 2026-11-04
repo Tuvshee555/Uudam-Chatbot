@@ -15,7 +15,7 @@ import { beginRequestTrace, finishRequestTrace } from "../../../lib/observabilit
 
 /**
  * Admin panel sign-in.
- *   GET    → { authorized, open_access, expires_at } (renews a session in use for a day)
+ *   GET    → { authorized, open_access, google_sign_in, expires_at } (renews a session in use for a day)
  *   POST   { secret } → sets the session cookie; 401 on a wrong secret, 429 when throttled
  *   DELETE → signs this browser out
  */
@@ -36,12 +36,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (expiresAt != null && shouldRenewAdminSession(expiresAt)) {
         const renewed = createAdminSessionToken(env.adminSecret);
         res.setHeader("Set-Cookie", adminSessionCookie(renewed.token, renewed.expiresAt));
-        return res.status(200).json({ ok: true, authorized: true, open_access: env.adminOpenAccess, expires_at: renewed.expiresAt });
+        return res.status(200).json({
+          ok: true,
+          authorized: true,
+          open_access: env.adminOpenAccess,
+          google_sign_in: env.googleSignInEnabled,
+          expires_at: renewed.expiresAt,
+        });
       }
       return res.status(200).json({
         ok: true,
         authorized: hasAdminAccess(req),
         open_access: env.adminOpenAccess,
+        google_sign_in: env.googleSignInEnabled,
         expires_at: expiresAt,
       });
     }
