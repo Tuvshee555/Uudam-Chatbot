@@ -140,8 +140,9 @@ test("an instruction the assistant does not understand goes to the model, with t
   assert.match(modelCalls[0].guide, /Холбогдох аяллын дэлгэрэнгүй/);
   assert.match(modelCalls[0].guide, /"id":"t-velmor"/, "the trip the instruction concerns is given in full");
   assert.match(modelCalls[0].guide, /set_date_state/, "the per-date action is offered");
-  const proposal = res.body.proposal as { actions: Array<{ trip_id: string }> };
+  const proposal = res.body.proposal as { actions: Array<{ trip_id: string; expected_updated_at?: string }> };
   assert.equal(proposal.actions[0].trip_id, "t-velmor");
+  assert.equal(proposal.actions[0].expected_updated_at, "2098-10-01T00:00:00Z", "a model action remembers the trip version too");
 });
 
 test("a proposal built on an older version of the trip is refused at apply, never written over the newer edit", async (context) => {

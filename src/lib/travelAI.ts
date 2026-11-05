@@ -914,6 +914,7 @@ async function createProposal(opts: {
     // An action that names its trip instead of identifying it is resolved the way the admin's
     // own words are: one clear trip binds it, several become a question with choices.
     bindActionTargets(proposal, trips);
+    stampTripVersions(proposal, trips);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const classification = classifyError(error);
@@ -2081,6 +2082,20 @@ function fieldsWithMergedPhotoUrls(
     ),
   ).slice(0, 20);
   return next;
+}
+
+/**
+ * A model action on an existing trip remembers the trip version the prompt was built from, as
+ * the brain's own actions do, so apply can refuse it once the trip has moved on.
+ */
+function stampTripVersions(proposal: AIChangeProposal, trips: TravelTrip[]): void {
+  const versions = new Map(trips.map((trip) => [trip.id, trip.updated_at]));
+  for (const action of proposal.actions) {
+    const verb = String(action.action || "").toLowerCase();
+    if (!action.trip_id || action.expected_updated_at || (verb !== "patch" && verb !== "cancel" && verb !== "delete")) continue;
+    const version = versions.get(action.trip_id);
+    if (version) action.expected_updated_at = version;
+  }
 }
 
 /**
