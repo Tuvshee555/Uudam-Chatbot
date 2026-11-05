@@ -321,7 +321,11 @@ export function describeAction(action: AIAction): {
     if (key === "operator_name" && /uudam\s*travel/i.test(String(value))) continue; // own agency, always identical
     if (key === "currency" && String(value).toUpperCase() === "MNT") continue; // the default
     const label = FIELD_LABELS[key] || key;
-    if (key === "has_food") {
+    if (key === "adult_price" || key === "child_price" || key === "infant_price") {
+      // After a save the before→after diff has nothing to compare any more; this line is
+      // what remains, so it reads as money, not as a raw number.
+      changes.push(`${label}: ${formatMoneyValue(typeof value === "number" ? value : Number(value), typeof fields.currency === "string" ? fields.currency : undefined)}`);
+    } else if (key === "has_food") {
       changes.push(`${label}: ${value ? "Байгаа" : "Байхгүй"}`);
     } else if (key === "status") {
       changes.push(`${label}: ${STATUS_LABELS[value as TripStatus] || String(value)}`);

@@ -812,6 +812,17 @@ export function focusTripDetail(trip: TravelTrip, now = new Date()) {
 }
 
 /**
+ * The change request's id as a number. The column is BIGSERIAL and the driver returns
+ * bigints as strings, so the admin page (which checks `typeof === "number"`) saw no id at
+ * all: every proposal was applied as a one-off copy, a pending row was left behind each
+ * time, and the Буцаах (rollback) button never appeared (live run, 2026-11-05).
+ */
+export function changeRequestId(row: { id?: unknown } | null | undefined): number | null {
+  const id = Number(row?.id);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+/**
  * Saves a proposal built in code (the brain, a quick action) as a change request, so it
  * can be applied, revised and rolled back like a model proposal.
  */
@@ -822,7 +833,7 @@ export async function persistProposal(instruction: string, proposal: AIChangePro
        VALUES ($1, $2::jsonb, $3::text[], $4, 'pending') RETURNING id`,
       [instruction, JSON.stringify(proposal), proposal.conflicts || [], proposal.needs_confirmation],
     );
-    return inserted?.rows?.[0]?.id ?? null;
+    return changeRequestId(inserted?.rows?.[0]);
   } catch (error) {
     logError("travel.ai.proposal_insert_failed", { source: "assistant.brain", message: error instanceof Error ? error.message : String(error) });
     return null;
@@ -968,7 +979,7 @@ async function createProposal(opts: {
 
   return {
     proposal,
-    request_id: inserted?.rows?.[0]?.id ?? null,
+    request_id: changeRequestId(inserted?.rows?.[0]),
   };
 }
 
@@ -2372,7 +2383,7 @@ export async function applyAIProposalDirect(
         JSON.stringify(snapshots),
       ],
     );
-    insertedRequestId = inserted?.rows?.[0]?.id ?? null;
+    insertedRequestId = changeRequestId(inserted?.rows?.[0]);
   } catch (insertError) {
     logError("travel.ai.direct_apply_insert_failed", {
       message:

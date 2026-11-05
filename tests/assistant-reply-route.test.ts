@@ -54,7 +54,8 @@ async function harness(context: import("node:test").TestContext) {
     }
     if (/INSERT INTO travel_ai_change_requests/i.test(sql)) {
       inserted.push({ instruction: String(params[0]), proposal: JSON.parse(String(params[1])) });
-      return { rows: [{ id: 70 + inserted.length }], rowCount: 1 };
+      // The real driver returns the BIGSERIAL id as a string.
+      return { rows: [{ id: String(70 + inserted.length) }], rowCount: 1 };
     }
     return { rows: [], rowCount: 0 };
   };
@@ -89,7 +90,7 @@ test("a clear instruction becomes an exact saved proposal with no model call", a
   assert.deepEqual(proposal.actions, [{ action: "patch", trip_id: "t-norvel", fields: { has_food: false } }]);
   assert.match(proposal.summary, /хоол багтаагүй/);
   assert.equal(proposal.needs_confirmation, true);
-  assert.equal(typeof res.body.request_id, "number", "the proposal is saved as a change request");
+  assert.equal(res.body.request_id, 71, "the proposal is saved as a change request and its id reaches the page as a number");
   assert.equal(inserted.length, 1);
   assert.equal(modelCalls.length, 0, "the model was not asked");
 });
