@@ -111,6 +111,11 @@ export type AITripAction = {
   date?: string;
   /** set_date_state: what that day becomes. */
   state?: DateSeatState;
+  /**
+   * The trip's updated_at when the proposal was built. Apply refuses the action when the
+   * trip changed in between (another admin, the website), so nobody's edit is overwritten.
+   */
+  expected_updated_at?: string;
 };
 
 /** One choice the admin can tap in a proposal question; `answer` is what is sent back. */

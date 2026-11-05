@@ -94,6 +94,20 @@ const RENAME = /нэр(?:ийг|ийн|ээ|тэй)?(?!\p{L})|\brename|\bname\b|
 const HOTEL = /зочид\s+буудал|буудал|буудлыг|буудлын|\bhotel|\bbuudal/iu;
 const PRONOUN = /(?<!\p{L})(?:энэ|үүнийг|үүний|энийг|түүнийг|тэр|мөн|бас|дээрх|сүүлийн|same|this|that|it)(?!\p{L})/iu;
 
+// "битгий цуцал", "цуцлахгүй", "дүүрсэн биш": an instruction that says what NOT to do is never
+// acted on from its verbs. Words that merely end in -гүй but name a state (хоолгүй, үнэгүй,
+// суудал байхгүй) are not negations.
+const NEGATION = /(?<!\p{L})(?:биш|битгий|бүү|хэрэггүй|болихгүй|болиод|боль|don'?t|do\s+not|never|not)(?!\p{L})|(?<!\p{L})(?!хоолгүй|үнэгүй|байхгүй|суудалгүй|огноогүй|өдөргүй|визгүй|нэмэлтгүй|татваргүй|хямдралгүй|зураггүй)\p{L}{3,}х?гүй(?!\p{L})/iu;
+// A question is answered with facts, never with a change.
+const QUESTION = /\?|(?<!\p{L})(?:үү|уу|вэ|бэ|юу|юү|хэд|хэдэн|хэзээ|хаана|ямар|хэн|аль\s+нь)(?!\p{L})/iu;
+// "мэдээлэл", "харуул": the admin wants to see a trip, not change it.
+const FACTS = /мэдээлэл|харуул|дэлгэрэнгүй|төлөв(?:ийг)?\s+хар|\binfo\b|\bshow\b|\bdetails?\b|\bstatus\b/iu;
+const NEW_TRIP = /шинэ\s+аялал|шинээр\s+(?:аялал\s+)?(?:нэм|үүсгэ|оруул)|аялал\s+(?:нэм|үүсгэ|шинээр)|\bnew\s+trip|\badd\s+(?:a\s+)?trip|\bcreate\s+(?:a\s+)?trip/iu;
+const GREETING = /^(?:сайн\s*(?:уу|байна\s*уу)?|сайн\s*байцгаана\s*уу|өглөөний\s+мэнд|hi|hello|hey|yo|sain\s*uu|sain\s*bainuu)[\s!.…]*$/iu;
+const THANKS = /^(?:баярлалаа|баярлaлаа|танд\s+баярлалаа|thanks?|thank\s+you|thx|ty|bayarlalaa|гоё|сайхан|супер|great|nice|good|🙏|👍|❤️|💯)[\s!.…👍🙏❤️💯]*$/iu;
+const ACK = /^(?:за|за\s*за|ок|окей|ok|okay|k|тийм|үгүй|yes|no|yep|nope|болно|болж\s+байна|зүгээр|за\s+болно|мэдлээ|ойлголоо|тэгье|тэгье\s+тэгье)[\s!.…]*$/iu;
+const HELP = /^(?:help|тусламж|туслаач|заавар|команд|чи\s+юу\s+(?:хийж\s+)?чад|юу\s+хийж\s+чад|чи\s+хэн\s+(?:бэ|вэ)|who\s+are\s+you|what\s+can\s+you)/iu;
+
 const STATUS_WORDS: Record<string, string> = {
   active: "идэвхтэй", paused: "түр зогссон", cancelled: "цуцлагдсан", sold_out: "дүүрсэн", draft: "ноорог", archived: "архивт",
 };
@@ -123,7 +137,20 @@ export type AssistantIntent =
   | { kind: "rename"; name: string }
   | { kind: "dates"; add: string[]; remove: string[] }
   | { kind: "hotel"; hotel: string }
+  /** A question or "show me": answered with the trip's facts, never a change. `maybe` is the change the words could also mean. */
+  | { kind: "facts"; maybe?: AssistantIntent }
+  /** "битгий цуцал", "дүүрсэн биш": the admin says what not to do; nothing is proposed. */
+  | { kind: "negated"; about: AssistantIntent }
+  /** A greeting, thanks, an acknowledgement, emoji, digits: answered in code, never sent to the model. */
+  | { kind: "chatter"; topic: ChatterTopic }
+  /** "12/27 дүүрсэн, 12/28 цөөн суудал": each day with its own state. */
+  | { kind: "date_states"; items: Array<{ date: string; state: DateSeatState }> }
+  /** Two states in one breath with no way to tell which day gets which. */
+  | { kind: "unclear_states" }
+  | { kind: "new_trip" }
   | { kind: "unknown" };
+
+export type ChatterTopic = "empty" | "greeting" | "thanks" | "ack" | "no" | "help" | "gibberish";
 
 type Amount = { value: number; index: number; end: number };
 
@@ -157,9 +184,14 @@ function datesIn(text: string, now: Date): string[] {
   return [...new Set(parseDepartureDateText(textForDates(text), now))];
 }
 
-function relativeOf(text: string, amount: Amount): "plus" | "minus" | "below" | null {
-  const before = text.slice(Math.max(0, amount.index - 18), amount.index);
-  const after = text.slice(amount.end, amount.end + 22);
+/**
+ * How an amount relates to the current fare: "+100k", "-200,000", "200,000-аар нэм", "300k бага".
+ * The words looked at stop at the neighbouring passenger words, so in "том хүн 4,290,000 хүүхэд
+ * 300k бага" the adult amount is not read as "below" because of the child's words.
+ */
+function relativeOf(text: string, amount: Amount, bounds: { start?: number; end?: number } = {}): "plus" | "minus" | "below" | null {
+  const before = text.slice(Math.max(0, amount.index - 18, bounds.start ?? 0), amount.index);
+  const after = text.slice(amount.end, Math.min(amount.end + 22, bounds.end ?? text.length));
   if (/[+]\s*$/.test(before) || /^\s*[+]/.test(after)) return "plus";
   // "-200,000" is a minus; "200,000-аар" is a case ending on the amount.
   if (/(?:^|\s)-\s*$/.test(before) || /^\s*-\s*(?![\p{L}\d])/u.test(after)) return "minus";
@@ -176,7 +208,11 @@ function parsePrice(text: string): AssistantIntent | null {
   const mentionsPrice = PRICE_WORD.test(text) || amounts.length > 0 || FREE.test(text);
   const mentionsPassenger = ADULT.test(text) || CHILD.test(text) || INFANT.test(text);
   if (!mentionsPrice && !mentionsPassenger) return null;
-  if (!mentionsPrice) return null;
+  if (!mentionsPrice) {
+    // "том хүн 0", "хүүхэд 50%": a passenger word with a number that is not a fare → ask the amount.
+    if (/\d/.test(text) && !SEATS.test(text) && !/\d{1,2}[./-]\d{1,2}/.test(text)) return { kind: "price", change: {}, mentioned: false };
+    return null;
+  }
 
   const change: FareChange = {};
   const keywords: Array<{ kind: FareKind; index: number }> = [];
@@ -197,7 +233,6 @@ function parsePrice(text: string): AssistantIntent | null {
   const everyone = EVERYONE.test(text) && !mentionsPassenger;
   const unassigned: Amount[] = [];
   for (const amount of amounts) {
-    const relative = relativeOf(text, amount);
     // "том хүн 4,290,000": the passenger word before an amount owns it; "4,290,000 том хүн"
     // only when no unclaimed word stands before it.
     const before = keywords
@@ -209,6 +244,8 @@ function parsePrice(text: string): AssistantIntent | null {
       .filter((entry) => !claimed.has(entry.position) && entry.distance >= 0 && entry.distance <= 28)
       .sort((a, b) => a.distance - b.distance);
     const owner = before[0] ?? after[0];
+    const nextKeyword = keywords.find((keyword) => keyword.index >= amount.end);
+    const relative = relativeOf(text, amount, { start: owner && owner === before[0] ? owner.keyword.index : undefined, end: nextKeyword?.index });
     if (everyone && relative && relative !== "below") {
       change.everyone = (change.everyone ?? 0) + (relative === "plus" ? amount.value : -amount.value);
       continue;
@@ -216,7 +253,8 @@ function parsePrice(text: string): AssistantIntent | null {
     if (!owner) { unassigned.push(amount); continue; }
     claimed.add(owner.position);
     const intent = intentFor(owner.keyword.kind);
-    if (relative === "below") intent.belowAdult = amount.value;
+    // Only a child or infant fare can be "below" the adult one.
+    if (relative === "below" && owner.keyword.kind !== "adult") intent.belowAdult = amount.value;
     else if (relative === "plus") intent.delta = amount.value;
     else if (relative === "minus") intent.delta = -amount.value;
     else intent.set = amount.value;
@@ -226,7 +264,8 @@ function parsePrice(text: string): AssistantIntent | null {
   for (const amount of unassigned) {
     const kind = order.find((candidate) => !change[candidate]);
     if (!kind) break;
-    const relative = relativeOf(text, amount);
+    const nextKeyword = keywords.find((keyword) => keyword.index >= amount.end);
+    const relative = relativeOf(text, amount, { end: nextKeyword?.index });
     const intent = intentFor(kind);
     if (relative === "plus") intent.delta = amount.value;
     else if (relative === "minus") intent.delta = -amount.value;
@@ -239,8 +278,57 @@ function quotedStrings(text: string): string[] {
   return [...text.matchAll(/«([^»]+)»|"([^"]+)"|“([^”]+)”/g)].map((match) => (match[1] || match[2] || match[3] || "").trim()).filter(Boolean);
 }
 
-/** What the admin wants done, read from the words alone (the trip is resolved separately). */
+/** Small talk and non-instructions, answered in code so the model is never paid for "за". */
+function chatterTopic(text: string): ChatterTopic | null {
+  const t = text.trim();
+  if (!t) return "empty";
+  if (GREETING.test(t)) return "greeting";
+  if (THANKS.test(t)) return "thanks";
+  if (/^[?？!]+$/.test(t)) return "help";
+  if (!/\p{L}/u.test(t)) return "gibberish";
+  if (/^(?:үгүй|no|nope|болохгүй|болиул|боль|битгий)[\s!.…]*$/iu.test(t)) return "no";
+  if (ACK.test(t)) return "ack";
+  if (HELP.test(t)) return "help";
+  // A keyboard run ("asdfghjkl", "qwerty"): one Latin word with at most one vowel, or a row of keys.
+  if (/^[a-z]{6,}$/i.test(t) && ((t.match(/[aeiouy]/gi) || []).length <= 1 || /asdf|qwer|zxcv|hjkl|uiop/i.test(t))) return "gibberish";
+  return null;
+}
+
+/** "12/27 дүүрсэн, 12/28 цөөн суудал": each part names its days and one state, or the message is unclear. */
+function pairedDateStates(text: string, now: Date): AssistantIntent {
+  const items: Array<{ date: string; state: DateSeatState }> = [];
+  for (const part of text.split(/[,;\n]|(?<!\p{L})(?:болон|бас|харин|мөн)(?!\p{L})/u)) {
+    const states: DateSeatState[] = [];
+    if (FULL.test(part)) states.push("full");
+    if (LOW.test(part)) states.push("low");
+    if (OPEN.test(part)) states.push("open");
+    if (!states.length) continue;
+    const dates = datesIn(part, now);
+    if (states.length !== 1 || !dates.length) return { kind: "unclear_states" };
+    for (const date of dates) items.push({ date, state: states[0] });
+  }
+  return items.length ? { kind: "date_states", items } : { kind: "unclear_states" };
+}
+
+/**
+ * What the admin wants done, read from the words alone (the trip is resolved separately).
+ * Small talk is answered, a question is answered with facts, a negated instruction is never
+ * acted on, and a new trip goes to the model.
+ */
 export function parseIntent(rawText: string, now = new Date()): AssistantIntent {
+  const text = stripAnswerTags(rawText);
+  const topic = chatterTopic(text);
+  if (topic) return { kind: "chatter", topic };
+  if (NEW_TRIP.test(text)) return { kind: "new_trip" };
+  const change = parseChangeIntent(rawText, now);
+  // "хоол ороогүй" is a fact about meals, not a refusal.
+  if (NEGATION.test(text) && !FOOD_NO.test(text)) return { kind: "negated", about: change };
+  if (FACTS.test(text) && (change.kind === "unknown" || (change.kind === "price" && !change.mentioned))) return { kind: "facts" };
+  if (QUESTION.test(text)) return { kind: "facts", maybe: change.kind === "unknown" ? undefined : change };
+  return change;
+}
+
+function parseChangeIntent(rawText: string, now: Date): AssistantIntent {
   const text = stripAnswerTags(rawText);
   const dates = datesIn(rawText, now);
   const taggedDates = dateTags(rawText);
@@ -252,6 +340,8 @@ export function parseIntent(rawText: string, now = new Date()): AssistantIntent 
     if (REMOVE.test(text) || CANCEL.test(text)) return { kind: "dates", add: [], remove: explicitDates };
     if (ADD.test(text) && !PRICE_WORD.test(text)) return { kind: "dates", add: explicitDates, remove: [] };
   }
+  const stateWords = [FULL.test(text), LOW.test(text), OPEN.test(text) && (explicitDates.length > 0 || taggedDates.length > 0 || DATE_WORD.test(text))].filter(Boolean).length;
+  if (stateWords >= 2) return pairedDateStates(text, now);
   if (FULL.test(text)) return { kind: "date_state", state: "full", dates: explicitDates, allDates, wholeTrip };
   if (LOW.test(text)) return { kind: "date_state", state: "low", dates: explicitDates, allDates, wholeTrip };
   if (OPEN.test(text) && (explicitDates.length || taggedDates.length || DATE_WORD.test(text))) {
@@ -260,7 +350,8 @@ export function parseIntent(rawText: string, now = new Date()): AssistantIntent 
 
   const price = parsePrice(text);
   if (price && price.kind === "price" && (price.mentioned || !SEATS.test(text))) {
-    if (price.mentioned || PRICE_WORD.test(text)) return price;
+    const passengerNumber = (ADULT.test(text) || CHILD.test(text) || INFANT.test(text)) && /\d/.test(text);
+    if (price.mentioned || PRICE_WORD.test(text) || passengerNumber) return price;
   }
 
   const seats = SEATS.exec(text);
@@ -350,7 +441,10 @@ export function resolveTrip(rawText: string, trips: TravelTrip[], options: { con
   // admin may mean any of them, so every trip is offered as active and mapped back.
   const byId = new Map(trips.map((trip) => [trip.id, trip]));
   const pool = trips.map((trip) => (trip.status === "active" ? trip : { ...trip, status: "active" as const }));
-  const matches = findTripMatches(text, pool).map((match) => ({ ...match, trip: byId.get(match.trip.id) ?? match.trip }));
+  // A year or a day number in a trip's name is never what finds it: "2026-12-01" names a date.
+  const matches = findTripMatches(text, pool)
+    .filter((match) => !match.matchedWords.length || match.matchedWords.some((word) => !/^\d+$/.test(word)))
+    .map((match) => ({ ...match, trip: byId.get(match.trip.id) ?? match.trip }));
   const contextTrip = tripFromContext(options.context, trips);
   if (!matches.length) {
     return contextTrip ? { kind: "certain", trip: contextTrip, how: "context" } : { kind: "none" };
@@ -368,8 +462,9 @@ export function resolveTrip(rawText: string, trips: TravelTrip[], options: { con
   // Several trips share the words typed. The customer matcher's weights (an alias spelling,
   // a longer name) must not decide for the admin: a trip is chosen only when a typed word
   // belongs to it alone, or when the typed date is a departure of exactly one of them.
-  const typedPlain = keywordTokens(text);
-  const typedPhonetic = phoneticKeywordTokens(text);
+  // A year or a day number is not a word of any trip's name.
+  const typedPlain = keywordTokens(text).filter((token) => !/^\d+$/.test(token));
+  const typedPhonetic = phoneticKeywordTokens(text).filter((token) => !/^\d+$/.test(token));
   const own = window.map((match) => {
     const aliases = Array.isArray(match.trip.extra?.aliases) ? (match.trip.extra.aliases as unknown[]).filter((alias): alias is string => typeof alias === "string") : [];
     const names = [match.trip.route_name, ...aliases];
@@ -413,7 +508,7 @@ export type BrainOutcome =
   | { kind: "note"; text: string; trip?: TravelTrip; intent: AssistantIntent }
   | { kind: "defer"; focus: TravelTrip[]; intent: AssistantIntent; resolution: TripResolution };
 
-export type KnownDepartureDay = { date: string; state: DateSeatState | null; onWebsite: boolean };
+export type KnownDepartureDay = { date: string; state: DateSeatState | null; onWebsite: boolean; seatsLeft?: number | null };
 
 /** The trip's coming departure days and what the website currently shows for each. */
 export function knownDepartureDays(trip: TravelTrip, now = new Date()): KnownDepartureDay[] {
@@ -424,7 +519,7 @@ export function knownDepartureDays(trip: TravelTrip, now = new Date()): KnownDep
     const status = row.status.toUpperCase();
     if (status === "CANCELLED" || status === "DEPARTED") continue;
     const state: DateSeatState = status === "ALMOST_FULL" ? "low" : status === "SOLD_OUT" || row.seatsLeft === 0 ? "full" : "open";
-    days.set(row.date, { date: row.date, state, onWebsite: true });
+    days.set(row.date, { date: row.date, state, onWebsite: true, seatsLeft: typeof row.seatsLeft === "number" ? row.seatsLeft : null });
   }
   const listed = (() => { try { return upcomingDepartures(trip, now); } catch { return []; } })();
   for (const date of listed) if (!days.has(date)) days.set(date, { date, state: null, onWebsite: false });
@@ -459,6 +554,14 @@ function askWhichTrip(instruction: string, candidates: TravelTrip[], intent: Ass
       custom_placeholder: "Аяллын нэрийг бичих…",
     },
   };
+}
+
+/**
+ * The trip version a proposal was built against. Apply refuses the change when the trip was
+ * edited in between (another admin, the website), instead of overwriting their work.
+ */
+function versionOf(trip: TravelTrip): Pick<AITripAction, "expected_updated_at"> {
+  return trip.updated_at ? { expected_updated_at: trip.updated_at } : {};
 }
 
 function baseProposal(summary: string, actions: AITripAction[], extras: Partial<AIChangeProposal> = {}): AIChangeProposal {
@@ -538,6 +641,33 @@ function buildDateState(trip: TravelTrip, intent: Extract<AssistantIntent, { kin
   return { kind: "proposal", proposal, trip, intent };
 }
 
+/** Several days, each with its own state, in one proposal. */
+function buildDateStates(trip: TravelTrip, intent: Extract<AssistantIntent, { kind: "date_states" }>, now: Date): BrainOutcome {
+  const known = knownDepartureDays(trip, now);
+  const unknown = intent.items.filter((item) => !known.some((day) => day.date === item.date));
+  if (unknown.length) {
+    return {
+      kind: "ask", intent, trip,
+      ask: {
+        id: "date",
+        text: `«${trip.route_name}» аялалд ${unknown.map((item) => formatDateMn(item.date)).join(", ")} гарах өдөр алга. Байгаа өдрүүд: ${known.map((day) => formatDateMn(day.date)).join(", ") || "—"}. Зөв огноогоор дахин бичнэ үү.`,
+        options: [],
+        allow_custom: true,
+        custom_placeholder: "Ж: 12/27 дүүрсэн, 12/28 цөөн суудал",
+      },
+    };
+  }
+  const same = intent.items.filter((item) => known.find((day) => day.date === item.date)?.state === item.state);
+  const changing = intent.items.filter((item) => !same.includes(item));
+  const describe = (items: typeof intent.items) => items.map((item) => `${formatDateMn(item.date)} → ${DATE_STATE_WORDS[item.state]}`).join(", ");
+  if (!changing.length) return { kind: "note", intent, trip, text: `«${trip.route_name}» — ${describe(same)}: аль хэдийн ийм байна.` };
+  const proposal = baseProposal(`«${trip.route_name}» — ${describe(changing)}.`,
+    changing.map((item) => ({ action: "set_date_state" as const, trip_id: trip.id, date: item.date, state: item.state })));
+  if (same.length) proposal.conflict_items!.push(info(`${describe(same)} аль хэдийн ийм байсан тул хөндөхгүй.`, "date_state_same", trip.route_name));
+  proposal.conflicts = proposal.conflict_items!.map((item) => item.text);
+  return { kind: "proposal", proposal, trip, intent };
+}
+
 function buildPrice(trip: TravelTrip, intent: Extract<AssistantIntent, { kind: "price" }>): BrainOutcome {
   const current = `одоо: том хүн ${formatMnt(trip.adult_price)}, хүүхэд ${formatMnt(trip.child_price)}, нярай ${formatMnt(trip.infant_price)}`;
   if (!intent.mentioned) {
@@ -567,10 +697,39 @@ function buildPrice(trip: TravelTrip, intent: Extract<AssistantIntent, { kind: "
     };
   }
   if (!result.changed) return { kind: "note", intent, trip, text: `«${trip.route_name}» аяллын үнэ аль хэдийн ийм байна (${current}).` };
-  const proposal = baseProposal(`«${trip.route_name}» — ${result.lines.join(", ")}.`, [{ action: "patch", trip_id: trip.id, fields: result.fields }]);
+  const proposal = baseProposal(`«${trip.route_name}» — ${result.lines.join(", ")}.`, [{ action: "patch", trip_id: trip.id, fields: result.fields, ...versionOf(trip) }]);
   for (const note of result.notes) proposal.conflict_items!.push(info(note, "fare_note", trip.route_name));
+  for (const warning of fareWarnings(trip, result.fields)) {
+    proposal.conflict_items!.push({ text: warning, severity: "warning", type: "fare_sanity", data: { route_name: trip.route_name } });
+  }
   proposal.conflicts = proposal.conflict_items!.map((item) => item.text);
   return { kind: "proposal", proposal, trip, intent };
+}
+
+const MIN_SANE_FARE = 100_000;
+
+/**
+ * A fare that looks like a slip of the keyboard: 42,900 for 42,900,000, ten times the old
+ * price, a child dearer than an adult. Warnings, not refusals — the admin may mean it.
+ */
+export function fareWarnings(trip: TravelTrip, fields: TripMutationFields): string[] {
+  const out: string[] = [];
+  const next: Record<FareKind, number | null | undefined> = { adult: fields.adult_price, child: fields.child_price, infant: fields.infant_price };
+  const current: Record<FareKind, number | null> = { adult: trip.adult_price, child: trip.child_price, infant: trip.infant_price };
+  for (const kind of ["adult", "child", "infant"] as FareKind[]) {
+    const value = next[kind];
+    if (typeof value !== "number") continue;
+    const before = current[kind];
+    if (value > 0 && value < MIN_SANE_FARE) out.push(`${FARE_WORDS[kind]} ${formatMnt(value)} — хэт бага харагдаж байна. ${formatMnt(value * 1000)} гэсэн үү?`);
+    else if (typeof before === "number" && before > 0 && value > 0 && (value >= before * 3 || value * 3 <= before)) {
+      out.push(`${FARE_WORDS[kind]} ${formatMnt(before)} → ${formatMnt(value)}: ${(Math.max(value, before) / Math.min(value, before)).toFixed(1)} дахин өөрчлөлт. Зөв үү?`);
+    }
+  }
+  const after = (kind: FareKind) => (typeof next[kind] === "number" ? (next[kind] as number) : current[kind]);
+  const adult = after("adult"); const child = after("child"); const infant = after("infant");
+  if (typeof child === "number" && typeof adult === "number" && child > adult) out.push(`Хүүхдийн үнэ (${formatMnt(child)}) том хүнийхээс (${formatMnt(adult)}) өндөр болно.`);
+  if (typeof infant === "number" && typeof child === "number" && child > 0 && infant > child) out.push(`Нярайн үнэ (${formatMnt(infant)}) хүүхдийнхээс (${formatMnt(child)}) өндөр болно.`);
+  return out;
 }
 
 function buildStatus(trip: TravelTrip, intent: Extract<AssistantIntent, { kind: "status" }>, instruction: string): BrainOutcome {
@@ -579,7 +738,9 @@ function buildStatus(trip: TravelTrip, intent: Extract<AssistantIntent, { kind: 
     return { kind: "note", intent, trip, text: `«${trip.route_name}» аль хэдийн ${STATUS_WORDS[intent.status]} байна.` };
   }
   const verb = intent.status === "cancelled" ? "цуцлана" : intent.status === "paused" ? "түр зогсооно" : intent.status === "sold_out" ? "бүхэлд нь дүүрсэн болгоно" : "идэвхжүүлнэ";
-  const action: AITripAction = intent.status === "cancelled" ? { action: "cancel", trip_id: trip.id } : { action: "patch", trip_id: trip.id, fields: { status: intent.status } };
+  const action: AITripAction = intent.status === "cancelled"
+    ? { action: "cancel", trip_id: trip.id, ...versionOf(trip) }
+    : { action: "patch", trip_id: trip.id, fields: { status: intent.status }, ...versionOf(trip) };
   const proposal = baseProposal(`«${trip.route_name}» аяллыг ${verb}.`, [action], {
     important_reason: intent.status === "cancelled" ? "Цуцалсан аялал сайт болон ботоос харагдахаа болино. Хэрэгтэй бол буцааж болно."
       : intent.status === "active" && trip.status === "archived" && !knownDepartureDays(trip).length ? "Ирэх гарах өдөргүй тул идэвхжүүлсэн ч дахин архивт орно — эхлээд огноо нэмээрэй." : "",
@@ -589,14 +750,14 @@ function buildStatus(trip: TravelTrip, intent: Extract<AssistantIntent, { kind: 
 
 function buildArchive(trip: TravelTrip, intent: AssistantIntent): BrainOutcome {
   if (trip.status === "archived") return { kind: "note", intent, trip, text: `«${trip.route_name}» аль хэдийн архивт байна.` };
-  const proposal = baseProposal(`«${trip.route_name}» аяллыг архивлана — сайт болон ботоос харагдахаа болино.`, [{ action: "delete", trip_id: trip.id }], {
+  const proposal = baseProposal(`«${trip.route_name}» аяллыг архивлана — сайт болон ботоос харагдахаа болино.`, [{ action: "delete", trip_id: trip.id, ...versionOf(trip) }], {
     important_reason: "Бичлэг, зураг, түүх хадгалагдана; буцаах боломжтой.",
   });
   return { kind: "proposal", proposal, trip, intent };
 }
 
 function buildPatch(trip: TravelTrip, intent: AssistantIntent, summary: string, fields: TripMutationFields, notes: string[] = []): BrainOutcome {
-  const proposal = baseProposal(summary, [{ action: "patch", trip_id: trip.id, fields }]);
+  const proposal = baseProposal(summary, [{ action: "patch", trip_id: trip.id, fields, ...versionOf(trip) }]);
   for (const note of notes) proposal.conflict_items!.push(info(note, "schedule_note", trip.route_name));
   proposal.conflicts = proposal.conflict_items!.map((item) => item.text);
   return { kind: "proposal", proposal, trip, intent };
@@ -605,6 +766,7 @@ function buildPatch(trip: TravelTrip, intent: AssistantIntent, summary: string, 
 function buildForTrip(trip: TravelTrip, intent: AssistantIntent, instruction: string, now: Date): BrainOutcome {
   switch (intent.kind) {
     case "date_state": return buildDateState(trip, intent, instruction, now);
+    case "date_states": return buildDateStates(trip, intent, now);
     case "price": return buildPrice(trip, intent);
     case "status": return buildStatus(trip, intent, instruction);
     case "archive": return buildArchive(trip, intent);
@@ -670,14 +832,184 @@ export function think(input: { text: string; trips: TravelTrip[]; now?: Date; co
   const now = input.now ?? new Date();
   const instruction = input.text.trim();
   const intent = parseIntent(instruction, now);
+  const plain = stripAnswerTags(instruction);
+  const sample = sampleName(input.trips);
+  if (intent.kind === "chatter") return { kind: "note", intent, text: chatterReply(intent.topic, sample) };
+  if (intent.kind === "new_trip") return { kind: "defer", focus: [], intent, resolution: { kind: "none" } };
   const resolution = resolveTrip(instruction, input.trips, { context: input.context, now });
+  const several = quotedTrips(plain, input.trips);
+  if (several.length >= 2) return buildForSeveral(several, intent, plain, now);
+  if (intent.kind === "negated") return buildNegated(resolution, intent, plain, now, sample);
+  if (intent.kind === "facts") {
+    if (resolution.kind === "certain") return buildFacts(resolution.trip, intent, plain, now);
+    if (resolution.kind === "ambiguous") return askWhichTrip(plain, resolution.candidates, intent, now);
+    return { kind: "note", intent, text: `Аль аяллын тухай асууж байна? Нэрийг бичээрэй (ж: «${sample}» мэдээлэл). Захиалга, төлбөр, тоо баримт админы бусад хэсэгт байна; би аяллын бүртгэлийг л засдаг.` };
+  }
+  if (intent.kind === "unclear_states") {
+    const trip = resolution.kind === "certain" ? resolution.trip : undefined;
+    return { kind: "note", intent, trip, text: `${trip ? `«${trip.route_name}» — ` : ""}аль өдөр ямар төлөвтэй болохыг салгаж бичээрэй, нэг өдөрт нэг төлөв. Ж: «12/27 дүүрсэн, 12/28 цөөн суудал».` };
+  }
   if (intent.kind === "unknown") {
     const focus = resolution.kind === "certain" ? [resolution.trip] : resolution.kind === "ambiguous" ? resolution.candidates.slice(0, 3) : [];
     return { kind: "defer", focus, intent, resolution };
   }
-  if (resolution.kind === "ambiguous") return askWhichTrip(stripAnswerTags(instruction), resolution.candidates, intent, now);
-  if (resolution.kind === "none") return askWhichTrip(stripAnswerTags(instruction), recentTrips(input.trips), intent, now, true);
-  return buildForTrip(resolution.trip, intent, stripAnswerTags(instruction), now);
+  if (resolution.kind === "ambiguous") return askWhichTrip(plain, resolution.candidates, intent, now);
+  if (resolution.kind === "none") return askWhichTrip(plain, recentTrips(input.trips), intent, now, true);
+  return buildForTrip(resolution.trip, intent, plain, now);
+}
+
+/** The most recently edited live trip, for examples in replies; a placeholder when there is none. */
+function sampleName(trips: TravelTrip[]): string {
+  return recentTrips(trips)[0]?.route_name || "Аяллын нэр";
+}
+
+function examples(sample: string): string {
+  return `Ж: «${sample}» 12/27 дүүрсэн · «${sample}» хүүхэд 300 мянгаар бага · «${sample}» цуцал`;
+}
+
+function chatterReply(topic: ChatterTopic, sample: string): string {
+  switch (topic) {
+    case "greeting": return `Сайн байна уу! Юуг өөрчлөх вэ? ${examples(sample)}`;
+    case "thanks": return "Зүгээр. Дараагийн өөрчлөлтөө бичээрэй.";
+    case "ack": return `За. Дээр асуулт байвал товчноос нь сонгоно уу; эсвэл юуг өөрчлөхийг бүтнээр бичээрэй (ж: «${sample}» 12/27 дүүрсэн).`;
+    case "no": return "За, юу ч өөрчлөхгүй.";
+    case "help": return [
+      "Би аяллын бүртгэлийг засдаг туслах. Чадах зүйлс:",
+      `• Нэг өдрийг дүүрсэн / цөөн суудал / нээлттэй болгох — «${sample}» 12/27 дүүрсэн`,
+      `• Үнэ — «${sample}» том хүн 4,290,000 · «${sample}» хүүхэд 300 мянгаар бага · «${sample}» нярай үнэгүй`,
+      `• Огноо нэмэх, хасах — «${sample}» 1/15 гаралт нэм`,
+      "• Цуцлах, түр зогсоох, идэвхжүүлэх, архивлах, нэр, буудал, хоол, суудал",
+      `• Мэдээлэл харах — «${sample}» мэдээлэл`,
+      "• Постер, PDF, Excel, Word оруулвал шинэ аялал нэмнэ, байгааг нь шинэчилнэ",
+      "Өөрчлөлт бүр санал болж гарна; та баталгаажуулсны дараа л хадгалагдана, буцаах боломжтой.",
+    ].join("\n");
+    case "gibberish": return `Ойлгосонгүй. Юуг өөрчлөх вэ? ${examples(sample)}`;
+    default: return `Юуг өөрчлөх вэ? ${examples(sample)}`;
+  }
+}
+
+/** Distinct trips named in «quotes» in one instruction. */
+function quotedTrips(text: string, trips: TravelTrip[]): TravelTrip[] {
+  const found = new Map<string, TravelTrip>();
+  for (const name of quotedStrings(text)) {
+    const named = tripsNamed(name, trips);
+    if (named.length === 1) found.set(named[0].id, named[0]);
+  }
+  return [...found.values()];
+}
+
+const SEVERAL_AT_ONCE = new Set<AssistantIntent["kind"]>(["status", "archive", "food", "price", "seats"]);
+
+/** "«A» болон «B» цуцал": the same simple change for each named trip, as one proposal. */
+function buildForSeveral(trips: TravelTrip[], intent: AssistantIntent, instruction: string, now: Date): BrainOutcome {
+  const names = trips.map((trip) => `«${trip.route_name}»`).join(", ");
+  if (intent.kind === "unknown") return { kind: "defer", focus: trips.slice(0, 3), intent, resolution: { kind: "ambiguous", candidates: trips } };
+  if (intent.kind === "facts") return { kind: "note", intent, text: trips.map((trip) => factsText(trip, now)).join("\n\n") };
+  if (!SEVERAL_AT_ONCE.has(intent.kind)) {
+    return { kind: "note", intent, text: `${names} — ${trips.length} аялал нэг дор. Огноо, нэр, буудлын өөрчлөлтийг аялал тутамд тусад нь бичээрэй.` };
+  }
+  const outcomes = trips.map((trip) => buildForTrip(trip, intent, instruction, now));
+  if (outcomes.some((outcome) => outcome.kind === "ask" || outcome.kind === "defer")) {
+    return { kind: "note", intent, text: `${names} — энэ зааврыг аялал тус бүрт тусад нь бичээрэй; нэг нь нэмэлт асуулт шаардаж байна.` };
+  }
+  const proposals = outcomes.filter((outcome): outcome is Extract<BrainOutcome, { kind: "proposal" }> => outcome.kind === "proposal");
+  const notes = outcomes.filter((outcome): outcome is Extract<BrainOutcome, { kind: "note" }> => outcome.kind === "note");
+  if (!proposals.length) return { kind: "note", intent, text: notes.map((note) => note.text).join(" ") };
+  const proposal = baseProposal(proposals.map((entry) => entry.proposal.summary).join(" "), proposals.flatMap((entry) => entry.proposal.actions), {
+    important_reason: proposals.map((entry) => entry.proposal.important_reason).find(Boolean) || "",
+  });
+  proposal.conflict_items = [
+    ...proposals.flatMap((entry) => entry.proposal.conflict_items || []),
+    ...notes.map((note) => info(note.text, "already", note.trip?.route_name || "")),
+  ];
+  proposal.conflicts = proposal.conflict_items.map((item) => item.text);
+  return { kind: "proposal", proposal, trip: proposals[0].trip, intent };
+}
+
+const STATE_COMMANDS: Record<DateSeatState, string> = { open: "нээлттэй", low: "цөөн суудал", full: "дүүрсэн" };
+
+/** "битгий цуцал", "дүүрсэн биш нээлттэй": nothing is done from the verbs; the admin picks the state or restates. */
+function buildNegated(resolution: TripResolution, intent: Extract<AssistantIntent, { kind: "negated" }>, instruction: string, now: Date, sample: string): BrainOutcome {
+  if (resolution.kind === "ambiguous") return askWhichTrip(instruction, resolution.candidates, intent, now);
+  const trip = resolution.kind === "certain" ? resolution.trip : undefined;
+  const about = intent.about;
+  const aboutDays = about.kind === "date_state" || about.kind === "date_states" || about.kind === "unclear_states";
+  if (trip && aboutDays) {
+    const dates = about.kind === "date_state" ? about.dates : about.kind === "date_states" ? about.items.map((item) => item.date) : datesIn(instruction, now);
+    const when = dates.length ? dates.map((date) => `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`).join(", ") : "гаралт";
+    return {
+      kind: "ask", intent, trip,
+      ask: {
+        id: "state",
+        text: `«${trip.route_name}» — ${dates.length ? dates.map((date) => formatDateMn(date)).join(", ") : "өдрийг"} аль төлөвт оруулах вэ?`,
+        options: (["open", "low", "full"] as DateSeatState[]).map((state) => ({ label: DATE_STATE_WORDS[state], answer: withTripTag(`«${trip.route_name}» ${when} ${STATE_COMMANDS[state]}`, trip) })),
+      },
+    };
+  }
+  const name = trip ? `«${trip.route_name}» дээр ` : "";
+  const example = trip?.route_name || sample;
+  return { kind: "note", intent, trip, text: `Ойлголоо — ${name}юу ч өөрчлөхгүй. Юу болгохыг шууд бичээрэй (ж: «${example}» 12/27 нээлттэй · «${example}» цуцал).` };
+}
+
+/** One line per fact about a trip: status, fares, coming days with their website state, seats, meals, hotel. */
+export function factsText(trip: TravelTrip, now = new Date(), asked: string[] = []): string {
+  const known = knownDepartureDays(trip, now);
+  const lines = [`«${trip.route_name}» — ${STATUS_WORDS[trip.status] || trip.status}${trip.duration_text ? ` · ${trip.duration_text}` : ""}`];
+  lines.push(`Үнэ: том хүн ${formatMnt(trip.adult_price)} · хүүхэд ${formatMnt(trip.child_price)} · нярай ${formatMnt(trip.infant_price)}`);
+  const dayLine = (day: KnownDepartureDay) => `${formatDateMn(day.date, true)} — ${day.state ? DATE_STATE_WORDS[day.state] : "сайтад хараахан алга"}${typeof day.seatsLeft === "number" ? ` (${day.seatsLeft} суудал)` : ""}`;
+  if (asked.length) {
+    for (const date of asked) {
+      const day = known.find((entry) => entry.date === date);
+      lines.push(day ? dayLine(day) : `${formatDateMn(date)} — энэ аялалд ийм гарах өдөр алга`);
+    }
+    const others = known.filter((day) => !asked.includes(day.date));
+    if (others.length) lines.push(`Бусад гаралт: ${others.map((day) => formatDateMn(day.date)).join(", ")}`);
+  } else {
+    lines.push(known.length ? `Гаралт: ${known.map(dayLine).join(" · ")}` : "Гаралт: ирэх өдөр бүртгэлгүй");
+  }
+  if (trip.seats_total != null || trip.seats_left != null) lines.push(`Суудал: нийт ${trip.seats_total ?? "—"}, үлдсэн ${trip.seats_left ?? "—"}`);
+  lines.push(`Хоол: ${trip.has_food == null ? "тодорхойгүй" : trip.has_food ? "багтсан" : "багтаагүй"}`);
+  if (trip.hotel) lines.push(`Буудал: ${trip.hotel}`);
+  if (typeof trip.extra?.website_published === "boolean") lines.push(`Сайт: ${trip.extra.website_published ? "нийтлэгдсэн" : "нийтлэгдээгүй"}`);
+  return lines.join("\n");
+}
+
+function describeIntent(intent: AssistantIntent): string {
+  switch (intent.kind) {
+    case "date_state": return `${intent.dates.map((date) => formatDateMn(date)).join(", ") || (intent.allDates ? "бүх өдөр" : "өдөр")} → ${DATE_STATE_WORDS[intent.state]}`;
+    case "date_states": return intent.items.map((item) => `${formatDateMn(item.date)} → ${DATE_STATE_WORDS[item.state]}`).join(", ");
+    case "price": return "үнэ өөрчлөх";
+    case "status": return intent.status === "cancelled" ? "цуцлах" : intent.status === "paused" ? "түр зогсоох" : intent.status === "sold_out" ? "бүхэлд нь дүүрсэн болгох" : "идэвхжүүлэх";
+    case "archive": return "архивлах";
+    case "seats": return "суудал өөрчлөх";
+    case "food": return intent.has_food ? "хоолтой болгох" : "хоолгүй болгох";
+    case "rename": return `нэрийг «${intent.name}» болгох`;
+    case "dates": return [intent.add.length ? `${intent.add.map((date) => formatDateMn(date)).join(", ")} нэмэх` : "", intent.remove.length ? `${intent.remove.map((date) => formatDateMn(date)).join(", ")} хасах` : ""].filter(Boolean).join(", ");
+    case "hotel": return `буудал: ${intent.hotel}`;
+    default: return "өөрчлөлт";
+  }
+}
+
+/**
+ * A question about a trip is answered with its facts. When the words could also be an
+ * instruction ("12/27 дүүрсэн үү?"), the change is offered as one tap — never done unasked.
+ */
+function buildFacts(trip: TravelTrip, intent: Extract<AssistantIntent, { kind: "facts" }>, instruction: string, now: Date): BrainOutcome {
+  const text = factsText(trip, now, datesIn(instruction, now));
+  if (intent.maybe && intent.maybe.kind !== "unknown") {
+    const command = instruction.replace(/[?？]/g, "").replace(/(?<!\p{L})(?:үү|уу|вэ|бэ|юу|юү)(?!\p{L})/giu, "").replace(/\s{2,}/g, " ").trim();
+    if (command && !QUESTION.test(command)) {
+      return {
+        kind: "ask", intent, trip,
+        ask: {
+          id: "facts_or_change",
+          text: `${text}\n\nӨөрчлөлт хийх үү?`,
+          options: [{ label: `Тийм: ${describeIntent(intent.maybe)}`, answer: withTripTag(command, trip) }],
+        },
+      };
+    }
+  }
+  return { kind: "note", intent, trip, text };
 }
 
 /* ------------------------------------------------------------------ */

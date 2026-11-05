@@ -660,6 +660,11 @@ async function verifyProposalAgainstSource(opts: {
   }
 }
 
+// A typed instruction is one short JSON extraction over an 8k-token guide that is mostly the
+// same every call: gpt-4.1 (cheaper input and cached-input than gpt-4o, same family as the
+// customer replies) since 2026-11-05. OPENAI_INSTRUCTION_MODEL overrides.
+const OPENAI_INSTRUCTION_MODEL = process.env.OPENAI_INSTRUCTION_MODEL || "gpt-4.1";
+
 async function requestProposalFromModel(opts: {
   condensedTrips: unknown;
   userParts: OpenAIPart[];
@@ -686,7 +691,7 @@ async function requestProposalFromModel(opts: {
       maxRetries: opts.maxRetries,
       model: opts.model,
       preferOpenAI: true,
-      openaiModel: OPENAI_FILE_PARSE_MODEL,
+      openaiModel: opts.instruction ? OPENAI_INSTRUCTION_MODEL : OPENAI_FILE_PARSE_MODEL,
       maxOutputTokens: 16_384,
     },
   );
@@ -703,7 +708,7 @@ async function requestProposalFromModel(opts: {
           maxRetries: 0,
           model: opts.model,
           preferOpenAI: true,
-          openaiModel: OPENAI_FILE_PARSE_MODEL,
+          openaiModel: opts.instruction ? OPENAI_INSTRUCTION_MODEL : OPENAI_FILE_PARSE_MODEL,
         },
       );
       parsed = parseJsonFromModel(repaired.text);
@@ -2078,6 +2083,22 @@ function fieldsWithMergedPhotoUrls(
   return next;
 }
 
+/**
+ * True when the trip was edited after the proposal was built (its updated_at moved). The
+ * change is then refused instead of overwriting the other edit; the admin re-sends the
+ * instruction and gets a proposal built on the current trip.
+ */
+function changedSinceProposal(before: TravelTrip | null, action: AITripAction): boolean {
+  if (!before || !action.expected_updated_at) return false;
+  const expected = new Date(action.expected_updated_at).getTime();
+  const actual = new Date(before.updated_at).getTime();
+  return Number.isFinite(expected) && Number.isFinite(actual) && expected !== actual;
+}
+
+function changedSinceMessage(before: TravelTrip | null): string {
+  return `«${before?.route_name || "Аялал"}» энэ саналыг гаргаснаас хойш өөрчлөгдсөн байна (өөр админ эсвэл сайт). Зааврыг дахин бичвэл одоогийн байдлаар нь шинэ санал гаргана.`;
+}
+
 async function applyAIAction(action: AITripAction) {
   if (!action || typeof action !== "object") {
     return { ok: false, message: "Invalid action payload." };
@@ -2179,6 +2200,7 @@ async function applyAIAction(action: AITripAction) {
   if (verb === "delete") {
     const before = await getTripById(targetId);
     if (!before) return { ok: false, message: "Target trip not found." };
+    if (changedSinceProposal(before, action)) return { ok: false, message: changedSinceMessage(before) };
     const archived = await deleteTrip(targetId);
     if (!archived) return { ok: false, message: "Archive failed." };
     const after = await getTripById(targetId);
@@ -2191,10 +2213,14 @@ async function applyAIAction(action: AITripAction) {
 
   if (verb === "cancel") {
     const before = await getTripById(targetId);
-    const updated = await patchTrip(targetId, {
-      status: "cancelled",
-      ...(action.fields || {}),
-    });
+    if (changedSinceProposal(before, action)) return { ok: false, message: changedSinceMessage(before) };
+    let updated: TravelTrip | null;
+    try {
+      updated = await patchTrip(targetId, { status: "cancelled", ...(action.fields || {}) }, true, undefined, action.expected_updated_at || undefined);
+    } catch (error) {
+      if (error instanceof Error && error.message === "trip_edit_conflict") return { ok: false, message: changedSinceMessage(before) };
+      throw error;
+    }
     if (!updated) return { ok: false, message: "Cancel update failed." };
     return {
       ok: true,
@@ -2210,10 +2236,14 @@ async function applyAIAction(action: AITripAction) {
 
   if (verb === "patch") {
     const before = await getTripById(targetId);
-    const updated = await patchTrip(
-      targetId,
-      fieldsWithMergedPhotoUrls(action.fields, before) || {},
-    );
+    if (changedSinceProposal(before, action)) return { ok: false, message: changedSinceMessage(before) };
+    let updated: TravelTrip | null;
+    try {
+      updated = await patchTrip(targetId, fieldsWithMergedPhotoUrls(action.fields, before) || {}, true, undefined, action.expected_updated_at || undefined);
+    } catch (error) {
+      if (error instanceof Error && error.message === "trip_edit_conflict") return { ok: false, message: changedSinceMessage(before) };
+      throw error;
+    }
     if (!updated) return { ok: false, message: "Patch update failed." };
     return {
       ok: true,

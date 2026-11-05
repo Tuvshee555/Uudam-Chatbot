@@ -19,6 +19,19 @@ function isProductionRuntime() {
   );
 }
 
+const COMMON_SECRETS = new Set([
+  "admin", "administrator", "password", "passw0rd", "secret", "123456", "12345678", "123456789", "1234567890",
+  "qwerty", "letmein", "changeme", "test", "admin123", "password123", "uudam", "uudamtravel", "travel", "root",
+]);
+
+/** Shorter than 16 characters, a dictionary word, or one character repeated. */
+export function isWeakAdminSecret(secret: string): boolean {
+  const value = String(secret || "").trim();
+  if (value.length < 16) return true;
+  if (COMMON_SECRETS.has(value.toLowerCase())) return true;
+  return /^(.)\1+$/.test(value);
+}
+
 export function getReadinessReport(env: ValidatedEnv, operationalIssues: ReadinessIssue[] = []): ReadinessReport {
   const production = isProductionRuntime();
   const issues: ReadinessIssue[] = [...operationalIssues];
@@ -33,6 +46,15 @@ export function getReadinessReport(env: ValidatedEnv, operationalIssues: Readine
   }
   if (env.adminOpenAccess) {
     add("critical", "admin_open_access", "Admin open access must never be enabled.");
+  }
+  // The admin secret is the only thing between the internet and the catalogue (and the AI
+  // spend). A short or dictionary secret is guessed in minutes.
+  if (isWeakAdminSecret(env.adminSecret)) {
+    add(
+      "critical",
+      "admin_secret_weak",
+      "ADMIN_SECRET хэт сул (16-аас цөөн тэмдэгт эсвэл нийтлэг үг). Санамсаргүй 24+ тэмдэгттэй нууц тавьж Vercel дээр шинэчилнэ үү — одоогийн нууцыг таасан хэн ч аяллыг засаж, AI зардал гаргаж чадна.",
+    );
   }
   if (env.allowAdminSecretQuery) {
     add("warning", "admin_secret_query", "Admin secret in query strings can leak via logs/history.");

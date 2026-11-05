@@ -53,6 +53,8 @@ const VELMOR = trip({
 });
 const GERMOL = trip({ id: "t-germol", route_name: "ГЭРМОЛ АЯЛАЛ", status: "archived", adult_price: null, child_price: null, infant_price: null });
 const TRIPS = [NORVEL, NORVEL_NY, VELMOR, GERMOL];
+// Every fixture trip was last saved at the same moment; a proposal's actions carry that version.
+const VERSION = { expected_updated_at: "2098-10-01T00:00:00Z" };
 
 test("the words of an instruction become one exact intent", async () => {
   const { parseIntent } = await import("../src/lib/assistantBrain");
@@ -170,7 +172,7 @@ test("a loose name shared by two trips: one question with both trips as choices,
   assert.equal(tripIdFromText(chosen.answer), "t-norvel");
   const next = think({ text: chosen.answer, trips: TRIPS, now: NOW });
   assert.equal(next.kind, "proposal");
-  if (next.kind === "proposal") assert.deepEqual(next.proposal.actions[0], { action: "patch", trip_id: "t-norvel", fields: { has_food: false } });
+  if (next.kind === "proposal") assert.deepEqual(next.proposal.actions[0], { action: "patch", trip_id: "t-norvel", fields: { has_food: false }, ...VERSION });
 });
 
 test("no trip named at all: the assistant asks for the trip, offering the recently edited ones", async () => {
@@ -291,4 +293,143 @@ test("a model action that only names its trip is bound in code, or turned into a
   assert.equal(applyTripChoice(option.answer, vague, TRIPS), true);
   assert.deepEqual(vague.actions, [{ action: "patch", trip_id: "t-norvel-ny", match: undefined, fields: { seats_left: 3 } }]);
   assert.equal(vague.questions, undefined);
+});
+
+test("small talk, emoji, digits and keyboard runs are answered in code, never sent to the model", async () => {
+  const { think } = await import("../src/lib/assistantBrain");
+  for (const text of ["сайн уу", "баярлалаа", "за", "ok", "👍", "1234567", "   ", "asdfghjkl", "?", "help", "юу хийж чадах вэ", "үгүй"]) {
+    const out = think({ text, trips: TRIPS, now: NOW });
+    assert.equal(out.kind, "note", text);
+  }
+  const hello = think({ text: "сайн уу", trips: TRIPS, now: NOW });
+  if (hello.kind === "note") assert.match(hello.text, /Юуг өөрчлөх вэ\? Ж: «НОРВЕЛ – ШИНЭ ЖИЛИЙН АЯЛАЛ» 12\/27 дүүрсэн/, "examples use the most recently edited live trip's real name");
+  const help = think({ text: "help", trips: TRIPS, now: NOW });
+  if (help.kind === "note") assert.match(help.text, /цөөн суудал \/ нээлттэй/);
+  const no = think({ text: "үгүй", trips: TRIPS, now: NOW });
+  if (no.kind === "note") assert.match(no.text, /юу ч өөрчлөхгүй/);
+});
+
+test("a question is answered with the trip's facts; the change it could also mean is one tap away, never done unasked", async () => {
+  const { think } = await import("../src/lib/assistantBrain");
+  const facts = think({ text: "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» хэд вэ?", trips: TRIPS, now: NOW });
+  assert.equal(facts.kind, "note");
+  if (facts.kind === "note") {
+    assert.match(facts.text, /том хүн 4,290,000₮/);
+    assert.match(facts.text, /12-р сарын 27 \(Бямба\) — Нээлттэй \(12 суудал\)/);
+    assert.match(facts.text, /12-р сарын 28 \(Ням\) — Дүүрсэн/);
+  }
+  const maybe = think({ text: "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» 12/27 дүүрсэн үү?", trips: TRIPS, now: NOW });
+  assert.equal(maybe.kind, "ask");
+  if (maybe.kind !== "ask") return;
+  assert.equal(maybe.ask.id, "facts_or_change");
+  assert.match(maybe.ask.text, /12-р сарын 27 \(Бямба\) — Нээлттэй/);
+  assert.equal(maybe.ask.options.length, 1);
+  assert.match(maybe.ask.options[0].label, /Дүүрсэн/);
+  const next = think({ text: maybe.ask.options[0].answer, trips: TRIPS, now: NOW });
+  assert.equal(next.kind, "proposal");
+  if (next.kind === "proposal") assert.deepEqual(next.proposal.actions, [{ action: "set_date_state", trip_id: "t-norvel", date: "2098-12-27", state: "full" }]);
+  const which = think({ text: "норвел хэдэн суудал үлдсэн бэ", trips: TRIPS, now: NOW });
+  assert.equal(which.kind, "ask");
+  if (which.kind === "ask") assert.equal(which.ask.id, "trip");
+  const none = think({ text: "захиалга хэд байна", trips: TRIPS, now: NOW });
+  assert.equal(none.kind, "note");
+  const show = think({ text: "Вэлмор мэдээлэл", trips: TRIPS, now: NOW });
+  assert.equal(show.kind, "note");
+  if (show.kind === "note") assert.match(show.text, /«ВЭЛМОР АРЛЫН АЯЛАЛ» — идэвхтэй/);
+});
+
+test("a negated instruction is never acted on: the state is asked with choices, or nothing is done", async () => {
+  const { think } = await import("../src/lib/assistantBrain");
+  const open = think({ text: "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» 12/28 дүүрсэн биш нээлттэй", trips: TRIPS, now: NOW });
+  assert.equal(open.kind, "ask");
+  if (open.kind !== "ask") return;
+  assert.equal(open.ask.id, "state");
+  assert.deepEqual(open.ask.options.map((o) => o.label), ["Нээлттэй", "Цөөн суудал", "Дүүрсэн"]);
+  const chosen = think({ text: open.ask.options[0].answer, trips: TRIPS, now: NOW });
+  assert.equal(chosen.kind, "proposal");
+  if (chosen.kind === "proposal") assert.deepEqual(chosen.proposal.actions, [{ action: "set_date_state", trip_id: "t-norvel", date: "2098-12-28", state: "open" }]);
+  for (const text of ["«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» битгий цуцал", "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» цуцлахгүй", "Вэлмор аяллыг устгахгүй"]) {
+    const out = think({ text, trips: TRIPS, now: NOW });
+    assert.equal(out.kind, "note", text);
+    if (out.kind === "note") assert.match(out.text, /юу ч өөрчлөхгүй/);
+  }
+  const meals = think({ text: "Вэлмор хоол ороогүй", trips: TRIPS, now: NOW });
+  assert.ok(meals.kind === "proposal" && meals.proposal.actions[0].fields?.has_food === false, "a fact about meals is not a refusal");
+});
+
+test("two days with two states in one message: each day gets its own; two states for one day is asked back", async () => {
+  const { think } = await import("../src/lib/assistantBrain");
+  const paired = think({ text: "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» 12/27 дүүрсэн, 12/28 цөөн суудал", trips: TRIPS, now: NOW });
+  assert.equal(paired.kind, "proposal");
+  if (paired.kind === "proposal") {
+    assert.deepEqual(paired.proposal.actions, [
+      { action: "set_date_state", trip_id: "t-norvel", date: "2098-12-27", state: "full" },
+      { action: "set_date_state", trip_id: "t-norvel", date: "2098-12-28", state: "low" },
+    ]);
+    assert.match(paired.proposal.summary, /12-р сарын 27 → Дүүрсэн, 12-р сарын 28 → Цөөн суудал/);
+  }
+  const unclear = think({ text: "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» 12/27 дүүрсэн цөөн суудал", trips: TRIPS, now: NOW });
+  assert.equal(unclear.kind, "note");
+  if (unclear.kind === "note") assert.match(unclear.text, /нэг өдөрт нэг төлөв/);
+});
+
+test("several trips named in quotes: the same simple change for each in one proposal; a per-day change is one trip at a time", async () => {
+  const { think } = await import("../src/lib/assistantBrain");
+  const both = think({ text: "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» болон «ВЭЛМОР АРЛЫН АЯЛАЛ» цуцал", trips: TRIPS, now: NOW });
+  assert.equal(both.kind, "proposal");
+  if (both.kind === "proposal") assert.deepEqual(both.proposal.actions.map((a) => [a.action, a.trip_id]), [["cancel", "t-norvel"], ["cancel", "t-velmor"]]);
+  const dates = think({ text: "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» болон «ВЭЛМОР АРЛЫН АЯЛАЛ» 12/27 дүүрсэн", trips: TRIPS, now: NOW });
+  assert.equal(dates.kind, "note");
+  if (dates.kind === "note") assert.match(dates.text, /аялал тутамд тусад нь/);
+});
+
+test("a new trip is the model's job, with no trip pre-selected", async () => {
+  const { think } = await import("../src/lib/assistantBrain");
+  const out = think({ text: "шинэ аялал нэм: Солтен 5 өдөр 1,500,000", trips: TRIPS, now: NOW });
+  assert.equal(out.kind, "defer");
+  if (out.kind === "defer") assert.deepEqual(out.focus, []);
+});
+
+test("an adult fare followed by a relative child fare reads right; a passenger word with no fare asks for it", async () => {
+  const { parseIntent, think } = await import("../src/lib/assistantBrain");
+  assert.deepEqual(parseIntent("Норвел том хүн 4,290,000 хүүхэд 300k бага", NOW), { kind: "price", change: { adult: { set: 4_290_000 }, child: { belowAdult: 300_000 } }, mentioned: true });
+  assert.deepEqual(parseIntent("Норвел том хүн 300k бага", NOW), { kind: "price", change: { adult: { set: 300_000 } }, mentioned: true }, "only a child or infant fare can be below the adult fare");
+  const zero = think({ text: "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» том хүн 0", trips: TRIPS, now: NOW });
+  assert.equal(zero.kind, "ask");
+  if (zero.kind === "ask") assert.equal(zero.ask.id, "amount");
+  const percent = think({ text: "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» хүүхэд 50%", trips: TRIPS, now: NOW });
+  assert.equal(percent.kind, "ask");
+});
+
+test("fares that look like slips of the keyboard are flagged, not refused", async () => {
+  const { think } = await import("../src/lib/assistantBrain");
+  const tiny = think({ text: "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» том хүн 42,900", trips: TRIPS, now: NOW });
+  assert.equal(tiny.kind, "proposal");
+  if (tiny.kind === "proposal") assert.ok(tiny.proposal.conflict_items?.some((item) => item.type === "fare_sanity" && /42,900,000₮ гэсэн үү/.test(item.text)), JSON.stringify(tiny.proposal.conflict_items));
+  const tenfold = think({ text: "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» том хүн 42,900,000", trips: TRIPS, now: NOW });
+  assert.equal(tenfold.kind, "proposal");
+  if (tenfold.kind === "proposal") assert.ok(tenfold.proposal.conflict_items?.some((item) => /10\.0 дахин/.test(item.text)));
+  const upside = think({ text: "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» хүүхэд 5,000,000", trips: TRIPS, now: NOW });
+  assert.equal(upside.kind, "proposal");
+  if (upside.kind === "proposal") assert.ok(upside.proposal.conflict_items?.some((item) => /Хүүхдийн үнэ .* том хүнийхээс/.test(item.text)));
+  const fine = think({ text: "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» том хүн 4,390,000", trips: TRIPS, now: NOW });
+  assert.equal(fine.kind, "proposal");
+  if (fine.kind === "proposal") assert.ok(!fine.proposal.conflict_items?.some((item) => item.type === "fare_sanity"));
+});
+
+test("a year or a day number is never the word that picks one trip over another", async () => {
+  const { resolveTrip } = await import("../src/lib/assistantBrain");
+  const dated = trip({ id: "t-solten-98", route_name: "СОЛТЕН АЯЛАЛ 2098" });
+  const other = trip({ id: "t-solten", route_name: "СОЛТЕН АРЛЫН АЯЛАЛ" });
+  assert.equal(resolveTrip("солтен 2098-12-01 цуцал", [dated, other], { now: NOW }).kind, "ambiguous");
+  assert.equal(resolveTrip("2098-12-01 цуцал", [dated, other], { now: NOW }).kind, "none", "a date alone names no trip");
+});
+
+test("every change the brain proposes remembers the trip version it saw", async () => {
+  const { think } = await import("../src/lib/assistantBrain");
+  for (const text of ["Вэлмор цуцал", "Вэлмор аяллыг устга", "Вэлмор үлдсэн суудал 5", "Вэлмор том хүн 5,390,000", "Вэлмор түр зогсоо"]) {
+    const out = think({ text, trips: TRIPS, now: NOW });
+    assert.equal(out.kind, "proposal", text);
+    if (out.kind === "proposal") assert.equal(out.proposal.actions[0].expected_updated_at, "2098-10-01T00:00:00Z", text);
+  }
 });

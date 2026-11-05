@@ -44,7 +44,41 @@ the last trip of the conversation ("бас 12/28-ийг…").
 
 Two trips that share the typed word (every «Хайнан» trip) are never decided by the customer
 matcher's weights: a word that belongs to one trip alone, or a typed date that is a departure of
-exactly one of them, decides; otherwise the assistant asks.
+exactly one of them, decides; otherwise the assistant asks. A year or a day number is never such a
+word.
+
+## What it refuses to guess (2026-11-05 audit)
+
+The stress run of 92 inputs against the live catalogue found the cases below going to the model
+or, worse, becoming a proposal. Each is now handled in code, for free:
+
+| Said | Done |
+| --- | --- |
+| сайн уу · баярлалаа · за · ok · 👍 · 1234567 · asdfghjkl · (empty) | a one-line note with examples written on a real trip; the model is never called |
+| help · ? · юу хийж чадах вэ · чи хэн бэ | the list of what the assistant does |
+| «Trip» хэд вэ? · «Trip» мэдээлэл · норвел хэдэн суудал үлдсэн бэ | the trip's facts (status, fares, each coming day with its website state and seats, meals, hotel); a shared name asks which trip |
+| «Trip» 12/27 дүүрсэн үү? | the facts, with the change the words could also mean offered as ONE tap — a question never changes anything by itself |
+| «Trip» 12/27 дүүрсэн биш нээлттэй · битгий цуцал · цуцлахгүй | nothing is done from the verbs: a day's state is asked with the three states as choices; otherwise "юу ч өөрчлөхгүй" |
+| «Trip» 12/27 дүүрсэн, 12/28 цөөн суудал | one proposal, one action per day |
+| «Trip» 12/27 дүүрсэн цөөн суудал | asked back: one state per day |
+| «A» болон «B» цуцал (also archive, meals, seats, fares) | one proposal with both trips; day, name and hotel changes are one trip at a time |
+| том хүн 0 · хүүхэд 50% | asks the amount, showing the current fares |
+| том хүн 4,290,000 хүүхэд 300k бага | adult set, child = adult − 300k (the child's words no longer leak onto the adult amount) |
+| том хүн 42,900 · 42,900,000 · хүүхэд dearer than adult | still a proposal, with a warning line ("42,900,000₮ гэсэн үү?", "10.0 дахин өөрчлөлт", "хүүхдийн үнэ том хүнийхээс өндөр") |
+| шинэ аялал нэм … | the model, with no trip pre-selected |
+| a paste of 1,500+ characters or 8+ lines | the model reads it whole (a price list goes through the batch pipeline); with no number in it at all, a note instead |
+
+Three stops in `generateAssistantReply` sit in front of the model: the database unreachable
+(one note, no proposal that could never be saved), the day's spend at `AI_DAILY_BUDGET_USD`
+(`aiBudgetState` in `src/lib/aiUsage.ts`; the exact edits keep working, the file parser answers
+402 `ai_budget_exceeded`), and the bulk paste above.
+
+## Nobody's edit is overwritten
+
+Every action the brain proposes carries `expected_updated_at`, the trip version it saw. Apply
+compares it with the trip's current `updated_at` (`changedSinceProposal` in `travelAI.ts`) and
+refuses with "энэ саналыг гаргаснаас хойш өөрчлөгдсөн байна" when the website editor or another
+admin saved in between; re-sending the instruction builds a proposal on the current trip.
 
 ## The owner's rules
 
@@ -63,7 +97,9 @@ day's state, not the trip's; when unsure, ask with choices.
 A model action that names its trip (`match`) is bound in code (`bindActionTargets`): one clear
 trip gets the id; several become a structured question (`proposal.questions`) whose tap answers
 it without another model call (`applyTripChoice` in `reviseAIRequest`). The model may use
-`set_date_state` and `delete` and may return `questions` itself.
+`set_date_state` and `delete` and may return `questions` itself. A typed instruction that reaches
+the model runs on `OPENAI_INSTRUCTION_MODEL` (default gpt-4.1); files keep `OPENAI_FILE_PARSE_MODEL`
+(default gpt-4o).
 
 ## Checks
 

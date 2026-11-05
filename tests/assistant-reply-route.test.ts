@@ -43,11 +43,20 @@ const ROWS = [
   row({ id: "t-velmor", route_name: "ВЭЛМОР АРЛЫН АЯЛАЛ", departure_dates: ["2098-11-18"] }),
 ];
 
-async function harness(context: import("node:test").TestContext) {
-  applyTestEnv({ NEON_DATABASE_URL: "postgres://fixture:fixture@127.0.0.1:1/assistant", BOOKING_DATABASE_URL: undefined });
+type HarnessOptions = {
+  /** Every connection attempt fails, as when Neon is unreachable. */
+  dbDown?: boolean;
+  /** What travel_ai_usage reports as today's spend for this environment. */
+  spentUsd?: number;
+  environment?: string;
+};
+
+async function harness(context: import("node:test").TestContext, options: HarnessOptions = {}) {
+  applyTestEnv({ NEON_DATABASE_URL: "postgres://fixture:fixture@127.0.0.1:1/assistant", BOOKING_DATABASE_URL: undefined, AI_USAGE_ENVIRONMENT: options.environment || "test" });
   const inserted: Array<{ instruction: string; proposal: Record<string, unknown> }> = [];
   const modelCalls: Array<{ guide: string; user: string }> = [];
   const query = async (sql: string, params: unknown[] = []) => {
+    if (options.dbDown) throw new Error("connect ECONNREFUSED 127.0.0.1:1");
     if (/SELECT[\s\S]*FROM travel_trip_entries/i.test(sql)) {
       if (/WHERE id\s*=\s*\$1/i.test(sql)) { const found = ROWS.filter((r) => r.id === params[0]); return { rows: found, rowCount: found.length }; }
       return { rows: ROWS, rowCount: ROWS.length };
@@ -57,10 +66,20 @@ async function harness(context: import("node:test").TestContext) {
       // The real driver returns the BIGSERIAL id as a string.
       return { rows: [{ id: String(70 + inserted.length) }], rowCount: 1 };
     }
+    if (/FROM travel_ai_change_requests/i.test(sql)) {
+      const saved = inserted[Number(params[0]) - 71];
+      return saved
+        ? { rows: [{ id: Number(params[0]), instruction: saved.instruction, proposal_json: saved.proposal, needs_confirmation: true, status: "pending" }], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
+    }
+    if (/FROM travel_ai_usage/i.test(sql)) return { rows: [{ cost: options.spentUsd ?? 0 }], rowCount: 1 };
     return { rows: [], rowCount: 0 };
   };
   context.mock.method(pg.Pool.prototype, "query", query as unknown as typeof pg.Pool.prototype.query);
-  context.mock.method(pg.Pool.prototype, "connect", (async () => ({ query, release() {} })) as unknown as typeof pg.Pool.prototype.connect);
+  context.mock.method(pg.Pool.prototype, "connect", (async () => {
+    if (options.dbDown) throw new Error("connect ECONNREFUSED 127.0.0.1:1");
+    return { query, release() {} };
+  }) as unknown as typeof pg.Pool.prototype.connect);
   context.mock.method(globalThis, "fetch", async (input: unknown, init?: RequestInit) => {
     const url = String(input);
     if (url.includes("api.openai.com")) {
@@ -87,7 +106,7 @@ test("a clear instruction becomes an exact saved proposal with no model call", a
   const res = await post({ instruction: "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» хоолгүй", session_id: "session-assistant-1" });
   assert.equal(res.statusCode, 200, JSON.stringify(res.body));
   const proposal = res.body.proposal as { actions: unknown[]; summary: string; needs_confirmation: boolean };
-  assert.deepEqual(proposal.actions, [{ action: "patch", trip_id: "t-norvel", fields: { has_food: false } }]);
+  assert.deepEqual(proposal.actions, [{ action: "patch", trip_id: "t-norvel", fields: { has_food: false }, expected_updated_at: "2098-10-01T00:00:00Z" }]);
   assert.match(proposal.summary, /хоол багтаагүй/);
   assert.equal(proposal.needs_confirmation, true);
   assert.equal(res.body.request_id, 71, "the proposal is saved as a change request and its id reaches the page as a number");
@@ -109,7 +128,7 @@ test("a name two trips share comes back as a question with both trips as choices
   const chosen = ask.options.find((option) => option.label === "НОРВЕЛ – ШИНЭ ЖИЛИЙН АЯЛАЛ")!;
   const next = await post({ instruction: chosen.answer, session_id: "session-assistant-2" });
   const proposal = next.body.proposal as { actions: Array<{ action: string; trip_id: string }> };
-  assert.deepEqual(proposal.actions, [{ action: "cancel", trip_id: "t-norvel-ny" }]);
+  assert.deepEqual(proposal.actions, [{ action: "cancel", trip_id: "t-norvel-ny", expected_updated_at: "2098-10-01T00:00:00Z" }]);
 });
 
 test("an instruction the assistant does not understand goes to the model, with the house rules and the likely trip", async (context) => {
@@ -123,4 +142,52 @@ test("an instruction the assistant does not understand goes to the model, with t
   assert.match(modelCalls[0].guide, /set_date_state/, "the per-date action is offered");
   const proposal = res.body.proposal as { actions: Array<{ trip_id: string }> };
   assert.equal(proposal.actions[0].trip_id, "t-velmor");
+});
+
+test("a proposal built on an older version of the trip is refused at apply, never written over the newer edit", async (context) => {
+  const { post, inserted } = await harness(context);
+  const res = await post({ instruction: "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» хоолгүй", session_id: "session-assistant-4" });
+  assert.equal(res.body.request_id, 71);
+  assert.equal((inserted[0].proposal.actions as Array<{ expected_updated_at: string }>)[0].expected_updated_at, "2098-10-01T00:00:00Z");
+  // Someone else saves the trip in between (the website editor, another admin tab).
+  const original = ROWS[0].updated_at;
+  ROWS[0].updated_at = "2098-10-01T00:05:00Z";
+  try {
+    const applied = await post({ request_id: 71, apply: true, confirm: true, session_id: "session-assistant-4" });
+    assert.equal(applied.statusCode, 409, JSON.stringify(applied.body));
+    assert.equal(applied.body.ok, false);
+    assert.match(String((applied.body.results as string[])[0]), /энэ саналыг гаргаснаас хойш өөрчлөгдсөн/);
+  } finally {
+    ROWS[0].updated_at = original;
+  }
+});
+
+test("a pasted list goes to the model whole instead of the brain reading its first line as the command", async (context) => {
+  const { post, modelCalls } = await harness(context);
+  const list = Array.from({ length: 9 }, (_, index) => `${index + 1}. Аялал ${index + 1} 1,${index}00,000₮ 2098-12-0${(index % 9) + 1}`).join("\n");
+  const res = await post({ instruction: list, session_id: "session-assistant-5" });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(modelCalls.length, 1, "the list is the model's job");
+  assert.equal(res.body.ask, undefined);
+});
+
+test("once the day's model budget is spent, the model is not called and the admin is told; exact edits still work", async (context) => {
+  const { post, modelCalls, inserted } = await harness(context, { spentUsd: 25, environment: "fixture" });
+  const deferred = await post({ instruction: "Вэлмор аяллын хөтөлбөрийн 3 дахь өдрийг дахин бич", session_id: "session-assistant-6" });
+  assert.equal(deferred.statusCode, 200, JSON.stringify(deferred.body));
+  assert.match(String(deferred.body.note), /өдрийн хязгаар \$20-д хүрсэн/);
+  assert.equal(modelCalls.length, 0);
+  const exact = await post({ instruction: "«ВЭЛМОР АРЛЫН АЯЛАЛ» үлдсэн суудал 5", session_id: "session-assistant-6" });
+  assert.equal(exact.statusCode, 200);
+  assert.equal(inserted.length, 1, "the deterministic edit is still saved");
+  applyTestEnv({ AI_USAGE_ENVIRONMENT: "test" });
+});
+
+test("with the database unreachable the admin gets one plain note, not a proposal that could never be saved", async (context) => {
+  const { post, modelCalls } = await harness(context, { dbDown: true });
+  const res = await post({ instruction: "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» хоолгүй", session_id: "session-assistant-7" });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.match(String(res.body.note), /Өгөгдлийн сан холбогдоогүй/);
+  assert.equal(res.body.proposal, undefined);
+  assert.equal(modelCalls.length, 0);
 });

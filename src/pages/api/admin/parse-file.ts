@@ -17,6 +17,7 @@ import {
   getAIProposalFailureResponse,
 } from "../../../lib/travelOps";
 import { uploadPdfToFacebook } from "../../../lib/fbAttachmentUpload";
+import { aiBudgetMessage, aiBudgetState } from "../../../lib/aiUsage";
 import {
   beginRequestTrace,
   finishRequestTrace,
@@ -400,6 +401,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           result.url,
         ]);
       }
+    }
+
+    // The day's model budget is spent: say so at once (the page stops its batch loop on 402)
+    // instead of running several more paid batches.
+    const budget = await aiBudgetState();
+    if (budget.exceeded) {
+      recordCounter("ai.budget_stop_total", 1, { route: "api.admin.parse_file" });
+      return res.status(402).json({ error: "ai_budget_exceeded", message: aiBudgetMessage(budget), retry_after_ms: 0 });
     }
 
     const result = await generateAIProposalFromContentBatched({

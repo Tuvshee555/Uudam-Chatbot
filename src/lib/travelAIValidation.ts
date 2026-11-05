@@ -460,6 +460,7 @@ export function validateAIChangeProposal(
       ...(tripId ? { trip_id: tripId } : {}),
       ...(match.operator_name || match.route_name ? { match } : {}),
       ...(Object.keys(cleanedFields).length > 0 ? { fields: cleanedFields } : {}),
+      ...(typeof rawAction.expected_updated_at === "string" && rawAction.expected_updated_at ? { expected_updated_at: rawAction.expected_updated_at } : {}),
     };
     sanitizedActions.push(sanitizedAction);
   }
