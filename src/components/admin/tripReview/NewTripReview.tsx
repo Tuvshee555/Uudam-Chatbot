@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Icons, cx } from "@/components/ui";
 import {
   addDaysYmd, applyTransport, checkDeparture, checkDuration, departureDays, formatYmd, hasPrice, itineraryOf, makeCover, priceRows,
-  removePhoto, setDepartureDays, transportOf, tripPhotos, withProgramDuration,
+  removePhoto, setDepartureDays, setProgramDays, transportOf, tripPhotos, withProgramDuration,
 } from "@/lib/tripReview";
 import { TRANSPORT_TYPES, isTransitDay, type TransportType } from "@/lib/tripTransitDays";
 import { MoneyField, TextArea, TextInput } from "../tripEditor/parts";
@@ -246,7 +246,7 @@ export function NewTripReview({
       <Section title="Өдөр тутмын хөтөлбөр" aside={itinerary.length ? `${itinerary.length} өдөр` : undefined}>
         {itinerary.length > 0 ? (
           <>
-            <DayCards days={itinerary} disabled={disabled} onChange={(days) => setExtra({ itinerary_days: days })} />
+            <DayCards days={itinerary} disabled={disabled} onChange={(days) => onChange(setProgramDays(fields, days))} />
             <Evidence quote={evidence.meals} />
           </>
         ) : (

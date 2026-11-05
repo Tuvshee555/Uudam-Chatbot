@@ -12,6 +12,7 @@ const ROUTE = "НОРВЕЛ ХОТЫН АЯЛАЛ";
 type Row = Record<string, unknown>;
 
 /** A partner's program: three days from the border town and back, dated day by day. */
+import { itineraryOf } from "../src/lib/tripReview";
 const borderProgram = () => [
   { day: 1, date: "5/12", title: "ЭРЭЭН – НОРВЕЛ", description: "Эрээн авто вокзал дээр аялагчдыг тосно. Норвел хотоос 22:05 цагт нисээд бууна.", meals: { breakfast: null, lunch: true, dinner: false }, meal_note: "Буфет — Лумиа хоолны газар" },
   { day: 2, date: "5/13", title: "НОРВЕЛ ХОТ", description: "Лумиа гүүр, хуучин хороолол.", hotel: "Норвел 4* буудал", meals: { breakfast: true, lunch: false, dinner: false } },
@@ -336,4 +337,60 @@ test("a partner's settlement price among the notes never reaches the trip's list
   const extra = p.actions[0].fields!.extra as Row;
   assert.deepEqual(extra.important_notes, ["Захиалга 5-р сарын 1-нд хаагдана.", "Цуцалбал 1400 юань хураамж авна."], "a cancellation fee is a condition and stays, in its own currency");
   assert.deepEqual(extra.included_items, ["Онгоцны тийз"]);
+});
+
+test("photos: one per day, never fewer than six; every program day gets one", async () => {
+  const { photosWantedFor } = await import("../src/lib/tripPhotoFinder");
+  assert.deepEqual([3, 4, 6, 7, 9, 30].map(photosWantedFor), [6, 6, 6, 7, 9, 12]);
+
+  const { finalizeNewTripActions } = await import("../src/lib/tripProposalFinalize");
+  const { isTransitDay } = await import("../src/lib/tripTransitDays");
+  const sharp = (await import("sharp")).default;
+  const jpeg = await sharp({ create: { width: 24, height: 16, channels: 3, background: "#7a8b9c" } }).jpeg().toBuffer();
+  const fetchImpl = (async (input: string) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/w/api.php")) {
+      const query = (url.searchParams.get("gsrsearch") || "").replace(" filetype:bitmap", "").replace(' incategory:"Quality images"', "");
+      const pages = Object.fromEntries([1, 2, 3, 4].map((n) => [`${query}-${n}`, { title: `File:${query} ${n}.jpg`, imageinfo: [{ url: `https://upload.example.test/${encodeURIComponent(query)}-${n}.jpg`,
+        thumburl: `https://thumb.example.test/${encodeURIComponent(query)}/1920px-${n}.jpg`, descriptionurl: "https://commons.example.test/x", width: 3000, height: 2000, mime: "image/jpeg",
+        extmetadata: { LicenseShortName: { value: "CC0" }, Artist: { value: "Fixture Author" } } }] }]));
+      return new Response(JSON.stringify({ query: { pages } }), { status: 200 });
+    }
+    return new Response(jpeg, { status: 200, headers: { "content-type": "image/jpeg" } });
+  }) as unknown as typeof fetch;
+  let asked = 0;
+  const ask = (async (parts: Array<{ text?: string }>) => {
+    const prompt = parts.map((part) => part.text || "").join("\n");
+    if (prompt.includes("search phrases")) {
+      return { text: JSON.stringify({ queries: [1, 2, 3, 4, 5, 6, 7].map((day) => ({ q: `Norvel sight ${day}`, day })), cities: [{ name: "Norvel", stopover: false }, { name: "Lumia", stopover: true }] }), usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
+    }
+    asked += 1;
+    const count = Number(/Aim for (\d+)/.exec(prompt)?.[1] || 0);
+    const offered = (prompt.match(/^Photo \d+ /gm) || []).length;
+    return { text: JSON.stringify({ picks: Array.from({ length: Math.min(count, offered) }, (_, i) => i + 1) }), usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
+  }) as never;
+  const uploads: string[] = [];
+  const upload = async (_buffer: Buffer, name: string) => { const url = `https://res.cloudinary.com/fixture/${uploads.length}-${name}`; uploads.push(url); return url; };
+  const program = Array.from({ length: 7 }, (_, i) => ({ day: i + 1, title: i === 0 ? "ЭРЭЭН – НОРВЕЛ" : i === 6 ? "НОРВЕЛ – ЭРЭЭН" : `НОРВЕЛ ${i + 1}`, description: i === 0 ? "Эрээн авто вокзал дээр тосно. Норвел руу ниснэ." : i === 6 ? "Өглөө нисээд Эрээнд ирнэ." : `Норвелийн үзвэр ${i + 1}.`, meals: {} }));
+  const p = proposalOf({ route_name: ROUTE, adult_price: 3_290_000, departure_dates: ["5 сарын 11"], extra: { itinerary_days: program } });
+  await finalizeNewTripActions(p, { photos: { fetchImpl, ask, upload }, now: NOW });
+  const fields = p.actions[0].fields as Row;
+  const days = itineraryOf(fields);
+  assert.equal(days.length, 9, "seven program days plus the two standard days");
+  assert.equal(uploads.length, 9, "a 9-day trip gets nine photos");
+  assert.deepEqual(days.filter((day) => !isTransitDay(day)).map((day) => Boolean(day.photo)), [true, true, true, true, true, true, true], "every program day has its photo");
+  assert.ok(days.filter(isTransitDay).every((day) => !day.photo), "the train days never get one");
+  assert.equal(asked, 1, "enough photos qualified: no second search");
+});
+
+test("adding or removing a day in the review keeps the duration in step", async () => {
+  const { applyTransport, setProgramDays, itineraryOf } = await import("../src/lib/tripReview");
+  const start = applyTransport(tripFields(), "land_flight").fields;
+  const days = itineraryOf(start);
+  const added = setProgramDays(start, [...days.slice(0, 4), { title: "НОРВЕЛ ЧӨЛӨӨТ", description: "", meals: {} }, ...days.slice(4)].map((day, i) => ({ ...day, day: i + 1 })));
+  assert.deepEqual([added.duration_text, (added.extra as Row).duration_days, (added.extra as Row).duration_nights], ["6 өдөр 5 шөнө", 6, 5]);
+  const removed = setProgramDays(added, itineraryOf(added).filter((_, i) => i !== 4));
+  assert.equal(removed.duration_text, "5 өдөр 4 шөнө");
+  const edited = setProgramDays(start, days.map((day) => ({ ...day, title: `${day.title}!` })));
+  assert.equal(edited.duration_text, start.duration_text, "editing a day's text changes nothing else");
 });

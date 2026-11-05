@@ -5,6 +5,7 @@ import { extractGoogleDriveFileIds } from "@/lib/googleDriveLinks";
 import { buildProposalClarifications } from "@/lib/adminProposalUtils";
 import { useProposalActions } from "@/components/admin/useProposalActions";
 import { AdminConfirmModals } from "@/components/admin/AdminConfirmModals";
+import { NewVersionBanner } from "@/components/admin/NewVersionBanner";
 import { AdminLoginGate, GOOGLE_LOGIN_ERRORS } from "@/components/admin/AdminLoginGate";
 import { AdminNavigation } from "@/components/admin/AdminNavigation";
 import { NAV_GROUPS } from "@/components/admin/AdminSidebarItem";
@@ -2190,6 +2191,7 @@ export default function AdminPage() {
           askAiAboutTrip(tripName);
         }}
       />
+      <NewVersionBanner />
       <AdminConfirmModals
         deletingTrip={deletingTrip}
         deleteBusy={busyKey.startsWith("delete-trip-")}

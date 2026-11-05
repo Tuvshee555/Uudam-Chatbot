@@ -2,7 +2,7 @@
  * What turns the model's reading of a file into a trip the website can show as if
  * staff had added it there: the standard Ulaanbaatar days for the trip's transport
  * type (tripTransitDays.ts), the website's transport tags, a clickable transport
- * choice in the proposal, and at least PHOTOS_PER_TRIP photos — the file's own, or
+ * choice in the proposal, and one photo per day (at least six, photosWantedFor) — the file's own, or
  * free ones found for the places the trip visits (tripPhotoFinder.ts), each with
  * its credit. Runs on every proposal: when it is first built and again after each
  * clarification answer, so choosing another transport rebuilds the days.
@@ -13,7 +13,7 @@ import { logWarn } from "./observability";
 import { uploadImageToCloudinary } from "./tripPhotoImport/upload";
 import { MIN_TRIP_PRICE_MNT, PARTNER_PRICE, PRICE_MISSING, PRICE_QUESTION_MARK, mentionsPartnerPrice, parseMntPrices, withoutPartnerPrices } from "./tripPriceRules";
 import {
-  PHOTOS_PER_TRIP, collectPhotoCandidates, downloadPhoto, photoQueriesForTrip, rankPhotos, type FoundPhoto,
+  collectPhotoCandidates, downloadPhoto, photoQueriesForTrip, photosWantedFor, rankPhotos, type FoundPhoto,
 } from "./tripPhotoFinder";
 import {
   TRANSPORT_CHOICE, TRANSPORT_LABELS, detectTransportType, durationForDays, isTransitDay, isTransportType,
@@ -223,44 +223,65 @@ async function fillPhotos(input: { action: AITripAction; route: string; days: It
   const fields = action.fields as Row;
   const extra = record(fields.extra);
   const have = countPhotos(fields, days);
-  const missing = PHOTOS_PER_TRIP - have;
+  // One photo per day, never fewer than six (photosWantedFor).
+  const missing = photosWantedFor(days.length) - have;
   if (missing <= 0) return { added: 0, message: null };
   const startedAt = Date.now();
   const budgetMs = deps.budgetMs ?? 60_000;
   const upload = deps.upload || uploadImageToCloudinary;
   const programDays = days.filter((day) => !isTransitDay(day));
-  const queries = await photoQueriesForTrip({ title: route, days: programDays,
-    destinations: Array.isArray(extra.destinations) ? extra.destinations.map(String) : undefined, ask: deps.ask, trace: input.trace });
+  const destinations = Array.isArray(extra.destinations) ? extra.destinations.map(String) : undefined;
+  const queries = await photoQueriesForTrip({ title: route, days: programDays, destinations, wanted: missing, ask: deps.ask, trace: input.trace });
   if (!queries.length) return { added: 0, message: null };
   const dayOfQuery = new Map(queries.map((query) => [query.query, query.day]));
+  const subject = (list: Array<{ query: string }>) => `${route}: ${list.map((query) => query.query).join(", ")}`;
   const candidates = await collectPhotoCandidates(queries.map((query) => query.query), { perQuery: 6, fetchImpl: deps.fetchImpl });
-  const chosen = await rankPhotos(candidates, { subject: `${route}: ${queries.map((query) => query.query).join(", ")}`, count: missing,
-    fetchImpl: deps.fetchImpl, ask: deps.ask, trace: input.trace });
-  const urls: string[] = [];
-  const credits = { ...record(extra.photo_credits) };
-  const placed: Array<{ photo: FoundPhoto; url: string }> = [];
-  for (const photo of chosen) {
-    if (Date.now() - startedAt > budgetMs) break;
-    const file = await downloadPhoto(photo, deps.fetchImpl);
-    if (!file) continue;
-    try {
-      const url = await upload(file.buffer, `${photo.title.replace(/[^\p{L}\p{N}]+/gu, "-").slice(0, 60) || "photo"}.jpg`, file.mimeType);
-      urls.push(url);
-      credits[url] = { title: photo.title, author: photo.author, license: photo.license, page: photo.pageUrl, provider: PHOTO_PROVIDER };
-      placed.push({ photo, url });
-    } catch (error) {
-      logWarn("trip_photos.upload_failed", { route, message: error instanceof Error ? error.message : String(error) });
+  const chosen = await rankPhotos(candidates, { subject: subject(queries), count: missing, fetchImpl: deps.fetchImpl, ask: deps.ask, trace: input.trace });
+  // Too few qualified: one broader search of the destination cities themselves.
+  if (chosen.length < missing && Date.now() - startedAt < budgetMs / 2) {
+    const cities = Array.from(new Set(queries.filter((query) => query.day === null).map((query) => query.query.replace(/\s+(skyline|famous landmark)$/i, "")))).slice(0, 3);
+    const broader = cities.flatMap((city) => [`${city} old town`, `${city} park`, `${city} panorama`, `${city} at night`]).map((query) => ({ query, day: null }));
+    if (broader.length) {
+      const seen = new Set([...candidates, ...chosen].map((photo) => photo.url));
+      const more = (await collectPhotoCandidates(broader.map((query) => query.query), { perQuery: 4, fetchImpl: deps.fetchImpl })).filter((photo) => !seen.has(photo.url));
+      chosen.push(...await rankPhotos(more, { subject: subject(broader), count: missing - chosen.length, fetchImpl: deps.fetchImpl, ask: deps.ask, trace: input.trace }));
     }
   }
-  if (!urls.length) return { added: 0, message: null };
+  const credits = { ...record(extra.photo_credits) };
+  const placed: Array<{ photo: FoundPhoto; url: string }> = [];
+  // Three at a time: nine photos one by one took most of the reading's time budget.
+  for (let index = 0; index < chosen.length; index += 3) {
+    if (Date.now() - startedAt > budgetMs) break;
+    const batch = await Promise.all(chosen.slice(index, index + 3).map(async (photo) => {
+      const file = await downloadPhoto(photo, deps.fetchImpl);
+      if (!file) return null;
+      try {
+        const url = await upload(file.buffer, `${photo.title.replace(/[^\p{L}\p{N}]+/gu, "-").slice(0, 60) || "photo"}.jpg`, file.mimeType);
+        return { photo, url };
+      } catch (error) {
+        logWarn("trip_photos.upload_failed", { route, message: error instanceof Error ? error.message : String(error) });
+        return null;
+      }
+    }));
+    for (const entry of batch) if (entry) placed.push(entry);
+  }
+  if (!placed.length) return { added: 0, message: null };
+  for (const { photo, url } of placed) credits[url] = { title: photo.title, author: photo.author, license: photo.license, page: photo.pageUrl, provider: PHOTO_PROVIDER };
+  const urls = placed.map((entry) => entry.url);
   const existing = (Array.isArray(fields.photo_urls) ? fields.photo_urls : []).filter((url): url is string => typeof url === "string");
   fields.photo_urls = Array.from(new Set([...existing, ...urls])).slice(0, 20);
-  // Each found photo goes onto the day whose sight it shows; transit days never get one.
+  // Each photo goes onto the day whose sight it shows; the rest fill the program days still
+  // without one, in order. Standard train days never get one.
   const withPhotos = days.map((day) => ({ ...day }));
+  const unplaced: string[] = [];
   for (const { photo, url } of placed) {
     const dayNumber = dayOfQuery.get(photo.query);
     const day = withPhotos.find((entry) => entry.day === dayNumber && !isTransitDay(entry) && !text(entry.photo));
-    if (day) day.photo = url;
+    if (day) day.photo = url; else unplaced.push(url);
+  }
+  for (const day of withPhotos) {
+    if (!unplaced.length) break;
+    if (!isTransitDay(day) && !text(day.photo)) day.photo = unplaced.shift();
   }
   fields.extra = { ...extra, itinerary_days: withPhotos, photo_credits: credits };
   return { added: urls.length, message: `«${route}»: ${PHOTO_PROVIDER}-оос ${urls.length} зураг нэмэв (зохиогч, лицензийг хадгалсан).` };

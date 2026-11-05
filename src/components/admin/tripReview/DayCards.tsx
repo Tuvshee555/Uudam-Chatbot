@@ -76,6 +76,30 @@ export function DayCards({ days, onChange, disabled }: { days: ItineraryDay[]; o
   const [open, setOpen] = useState<Record<number, boolean>>({});
   const patch = (index: number, next: Partial<ItineraryDay>) => onChange(days.map((day, i) => (i === index ? { ...day, ...next } : day)));
   const allOpen = days.length > 0 && days.every((_, index) => open[index]);
+  // Days are numbered by position: adding, moving or removing one renumbers the rest.
+  const renumber = (list: ItineraryDay[]) => list.map((day, index) => ({ ...day, day: index + 1 }));
+  const move = (index: number, delta: number) => {
+    const target = index + delta;
+    if (target < 0 || target >= days.length) return;
+    const next = [...days];
+    [next[index], next[target]] = [next[target], next[index]];
+    onChange(renumber(next));
+    setOpen((current) => ({ ...current, [index]: current[target], [target]: current[index] }));
+  };
+  const remove = (index: number) => {
+    onChange(renumber(days.filter((_, i) => i !== index)));
+    setOpen({});
+  };
+  const add = () => {
+    // A new day goes before the standard return days, so the trip still ends in Ulaanbaatar.
+    let at = days.length;
+    while (at > 0 && isTransitDay(days[at - 1])) at -= 1;
+    const next = [...days];
+    next.splice(at, 0, { title: "", description: "", meals: { breakfast: null, lunch: null, dinner: null } });
+    onChange(renumber(next));
+    setOpen({ [at]: true });
+  };
+  const iconButton = "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-subtle transition-colors hover:bg-surface-sunken hover:text-ink disabled:pointer-events-none disabled:opacity-30";
 
   return (
     <div>
@@ -98,8 +122,9 @@ export function DayCards({ days, onChange, disabled }: { days: ItineraryDay[]; o
           const number = day.day ?? index + 1;
           return (
             <li key={index}>
+              <div className="flex items-start">
               <button type="button" onClick={() => setOpen((current) => ({ ...current, [index]: !isOpen }))} aria-expanded={isOpen}
-                className="flex w-full items-start gap-3 px-3.5 py-3 text-left transition-colors hover:bg-canvas/60">
+                className="flex min-w-0 flex-1 items-start gap-3 py-3 pl-3.5 pr-2 text-left transition-colors hover:bg-canvas/60">
                 <span className={cx("mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold tabular-nums",
                   standard ? "bg-surface-sunken text-ink-muted" : "bg-brand text-white")}>{number}</span>
                 <span className="min-w-0 flex-1">
@@ -113,6 +138,20 @@ export function DayCards({ days, onChange, disabled }: { days: ItineraryDay[]; o
                 {!isOpen && <span className="mt-1 hidden shrink-0 sm:block"><MealSummary day={day} /></span>}
                 <Icons.chevronRight size={15} className={cx("mt-1.5 shrink-0 text-ink-subtle transition-transform", isOpen && "rotate-90")} />
               </button>
+              {!standard && (
+                <span className="flex shrink-0 items-center gap-0.5 py-2 pr-2">
+                  <button type="button" className={iconButton} disabled={disabled || index === 0 || isTransitDay(days[index - 1])} onClick={() => move(index, -1)} aria-label={`${number}-р өдрийг дээш`} title="Дээш">
+                    <Icons.chevronRight size={14} className="-rotate-90" />
+                  </button>
+                  <button type="button" className={iconButton} disabled={disabled || index === days.length - 1 || isTransitDay(days[index + 1])} onClick={() => move(index, 1)} aria-label={`${number}-р өдрийг доош`} title="Доош">
+                    <Icons.chevronRight size={14} className="rotate-90" />
+                  </button>
+                  <button type="button" className={cx(iconButton, "hover:bg-danger-soft hover:text-danger")} disabled={disabled} onClick={() => remove(index)} aria-label={`${number}-р өдрийг хасах`} title="Өдрийг хасах">
+                    <Icons.trash size={14} />
+                  </button>
+                </span>
+              )}
+              </div>
               {!isOpen && <div className="px-3.5 pb-2.5 pl-[3.25rem] sm:hidden"><MealSummary day={day} /></div>}
 
               {isOpen && (
@@ -153,6 +192,10 @@ export function DayCards({ days, onChange, disabled }: { days: ItineraryDay[]; o
           );
         })}
       </ol>
+      <button type="button" disabled={disabled} onClick={add}
+        className="mt-2 inline-flex h-9 items-center gap-1.5 rounded-md border border-dashed border-line-strong px-3 text-sm font-medium text-ink-muted transition-colors hover:border-brand hover:bg-brand-soft/40 hover:text-brand disabled:opacity-50">
+        <Icons.plus size={14} /> Өдөр нэмэх
+      </button>
     </div>
   );
 }

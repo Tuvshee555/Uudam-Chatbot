@@ -66,9 +66,10 @@ test("a partner program from a file becomes a complete website trip: standard da
   assert.deepEqual([choice?.severity, choice?.data?.route_name, choice?.data?.transport_type], ["info", ROUTE, "land_flight"]);
   assert.equal(p.needs_confirmation, true, "the admin sees the generated days before saving");
   assert.equal(uploads.length, 6, "six photos were found, downloaded and uploaded");
-  assert.deepEqual(fields.photo_urls, uploads);
+  // Uploads run three at a time, so their order is not the gallery order; the gallery keeps the ranking.
+  assert.deepEqual([...(fields.photo_urls as string[])].sort(), [...uploads].sort());
   const credits = extra.photo_credits as Record<string, Record<string, string>>;
-  assert.deepEqual(Object.keys(credits), uploads);
+  assert.deepEqual(Object.keys(credits).sort(), [...uploads].sort());
   assert.deepEqual([credits[uploads[0]].provider, credits[uploads[0]].license, credits[uploads[0]].author], ["Wikimedia Commons", "CC BY 4.0", "Fixture Author"]);
   assert.ok(uploads.includes(String(days[2].photo)), "the sight's photo sits on its program day");
   assert.ok(!days[0].photo && !days[4].photo, "transit days never get a photo");

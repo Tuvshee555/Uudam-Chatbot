@@ -282,6 +282,16 @@ export function checkDuration(fields: Row): DurationCheck {
   return { kind: "mismatch", written, writtenDays, programDays, byProgram: durationForDays(days.length).duration_text };
 }
 
+/**
+ * The trip with these program days. When a day is added or removed the length follows:
+ * the duration is never typed, so it must never go stale behind the days.
+ */
+export function setProgramDays(fields: Row, days: ItineraryDay[]): Row {
+  const before = itineraryOf(fields).length;
+  const next: Row = { ...fields, extra: { ...record(fields.extra), itinerary_days: days } };
+  return days.length && days.length !== before ? withProgramDuration(next) : next;
+}
+
 /** The trip with its length taken from the days of its program (the answer to a duration mismatch). */
 export function withProgramDuration(fields: Row): Row {
   const days = itineraryOf(fields);

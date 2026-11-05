@@ -29,6 +29,16 @@ const USER_AGENT = "UudamTravelChatbot/1.0 (https://uudamtravel.mn; trip photos)
 const COMMONS_API = "https://commons.wikimedia.org/w/api.php";
 export const MIN_PHOTO_WIDTH = 1600;
 export const PHOTOS_PER_TRIP = 6;
+/** Most photos a file-created trip gets from the search. */
+export const MAX_FOUND_PHOTOS = 12;
+
+/**
+ * Owner's rule (2026-11-05): a trip gets one photo per day, and never fewer than six —
+ * a 4-day trip 6, a 7-day trip 7, a 9-day trip 9.
+ */
+export function photosWantedFor(dayCount: number): number {
+  return Math.min(MAX_FOUND_PHOTOS, Math.max(PHOTOS_PER_TRIP, dayCount));
+}
 const RENDITION_WIDTH = 1920;
 // Commons serves only its standard thumbnail widths (… 250, 330, 500, 960, 1280, 1920); 480 is
 // refused with a 400 page, so the ranker never saw a preview and fell back to raw search order
@@ -141,7 +151,7 @@ export async function rankPhotos(candidates: FoundPhoto[], input: { subject: str
   if (!candidates.length) return [];
   const fetchImpl = input.fetchImpl || fetch;
   const ask = input.ask || askOpenAIChatParts;
-  const previews = await Promise.all(candidates.slice(0, 18).map(async (photo) => {
+  const previews = await Promise.all(candidates.slice(0, Math.min(30, Math.max(18, count * 3))).map(async (photo) => {
     try {
       const response = await fetchImpl(commonsRendition(photo.url, PREVIEW_WIDTH), { headers: { "user-agent": USER_AGENT }, signal: AbortSignal.timeout(10_000) });
       if (!response.ok) return null;
@@ -157,7 +167,7 @@ export async function rankPhotos(candidates: FoundPhoto[], input: { subject: str
   }
   const instruction = `You choose photographs for a travel agency's web page about: ${input.subject}.
 Each photo below is labelled with the place it was searched for. Pick up to ${count} of the ${usable.length} photos, best first. A photo qualifies only when a traveller would recognise in it the PLACE it is labelled with: that landmark, skyline or night view, beach, old town, famous street, bridge, park or natural scenery; sharp, well lit, inviting.
-Three excellent photos beat ${count} with a weak one: return fewer, or an empty list, rather than fill the number. Do not pick two photos of the same view.
+Aim for ${count} photos: cover as many different places from the list as you can, then add more views of the best places. Never pick a photo that fails the rules below just to reach the number, and never two photos of the same view.
 Reject every one of these, however good the picture: food, dishes, drinks, ingredients, spices, tables, menus and restaurant interiors; objects, products and souvenirs; maps, satellite or aerial survey images; text overlays, logos, gates and signs; zoo animals; museum or shop interiors; plain buildings; close-ups of people, portraits and selfies; derelict or under-construction places; bad weather, blurry or dark images; another company's branding; border towns, railway and airport scenes; and any photo that shows a different city or country, or where you cannot tell that it is the labelled place.
 Answer with JSON only: {"picks":[photo numbers, best first]}.`;
   const parts: Parameters<typeof askOpenAIChatParts>[0] = [{ text: instruction }];
@@ -202,12 +212,12 @@ export function photoCredit(photo: FoundPhoto): PhotoCredit {
  */
 export type PhotoQuery = { query: string; day: number | null };
 
-export async function photoQueriesForTrip(input: { title: string; days: Array<{ day?: number; title?: string; description?: string }>; destinations?: string[];
+export async function photoQueriesForTrip(input: { title: string; days: Array<{ day?: number; title?: string; description?: string }>; destinations?: string[]; wanted?: number;
   ask?: typeof askOpenAIChatParts; trace?: { requestId?: string; correlationId?: string } }): Promise<PhotoQuery[]> {
   const ask = input.ask || askOpenAIChatParts;
   const program = input.days.map((day, index) => `${day.day ?? index + 1}. ${String(day.title || "").trim()} — ${String(day.description || "").replace(/\s+/g, " ").trim().slice(0, 220)}`).join("\n");
   const destinations = (input.destinations || []).filter((place) => !TRANSIT_PLACE.test(place));
-  const prompt = `Trip: ${input.title}${destinations.length ? `\nDestinations: ${destinations.join(", ")}` : ""}\nProgram:\n${program}\n\nList 4 to 8 short English search phrases (2-5 words each) for photographs of the PLACES this trip visits: a named landmark, viewpoint, bridge, park, old town, beach, island, famous street or natural sight that the program itself mentions, written as it is known in English together with its city, each with the number of the program day that visits it. Only places: never a dish, food, drink, restaurant, market stall, shop, hotel, shopping centre, show, animal or activity. A free day with no named sight gets no phrase. Also list every city the program names, in English, each marked stopover true or false: a stopover is a city where the group only changes planes, or sleeps one night between two flights, with no sight visited there; a destination (stopover false) is where the trip's sights and free days are. A stopover city gets no phrase. Never include Erenhot/Erlian, Zamyn-Uud, Ulaanbaatar, any border town, transfer city, airport or railway station, and skip days that are only travel. Answer with JSON only: {"queries":[{"q":"...","day":2}],"cities":[{"name":"...","stopover":false}]}.`;
+  const prompt = `Trip: ${input.title}${destinations.length ? `\nDestinations: ${destinations.join(", ")}` : ""}\nProgram:\n${program}\n\nList ${Math.max(6, input.wanted ?? 6)} to ${Math.max(8, (input.wanted ?? 6) + 3)} short English search phrases (2-5 words each) — at least one for every program day that visits a named place — for photographs of the PLACES this trip visits: a named landmark, viewpoint, bridge, park, old town, beach, island, famous street or natural sight that the program itself mentions, written as it is known in English together with its city, each with the number of the program day that visits it. Only places: never a dish, food, drink, restaurant, market stall, shop, hotel, shopping centre, show, animal or activity. A free day with no named sight gets no phrase. Also list every city the program names, in English, each marked stopover true or false: a stopover is a city where the group only changes planes, or sleeps one night between two flights, with no sight visited there; a destination (stopover false) is where the trip's sights and free days are. A stopover city gets no phrase. Never include Erenhot/Erlian, Zamyn-Uud, Ulaanbaatar, any border town, transfer city, airport or railway station, and skip days that are only travel. Answer with JSON only: {"queries":[{"q":"...","day":2}],"cities":[{"name":"...","stopover":false}]}.`;
   try {
     const result = await ask([{ text: prompt }], { model: "gpt-4o-mini", jsonMode: true, temperature: 0, maxOutputTokens: 400, timeoutMs: 20_000,
       source: "trip_photos.queries", requestId: input.trace?.requestId, correlationId: input.trace?.correlationId });
@@ -231,7 +241,7 @@ export async function photoQueriesForTrip(input: { title: string; days: Array<{ 
       .filter((item) => item.query.length >= 3 && item.query.length <= 60 && !TRANSIT_PLACE.test(item.query) && !FOOD_OR_OBJECT.test(item.query))
       .filter((item) => !stopovers.some((city) => item.query.toLowerCase().includes(city)))
       .filter((item, index, all) => all.findIndex((other) => other.query.toLowerCase() === item.query.toLowerCase()) === index)
-      .slice(0, 10);
+      .slice(0, Math.max(10, (input.wanted ?? 6) + 4));
   } catch (error) {
     logWarn("trip_photos.queries_failed", { message: error instanceof Error ? error.message : String(error) });
     return [];
