@@ -326,7 +326,7 @@ export function AssistantTab({
             </div>
           </div>
         ) : (
-          <div className="mx-auto mt-auto w-full max-w-3xl space-y-4">
+          <div className="mx-auto mt-auto w-full max-w-4xl space-y-4">
           {messages.map((message) => (
             <ChatBubble
               key={message.id}
@@ -345,7 +345,7 @@ export function AssistantTab({
         )}
 
         {busy && (
-          <div className="mx-auto mt-4 flex w-full max-w-3xl justify-start">
+          <div className="mx-auto mt-4 flex w-full max-w-4xl justify-start">
             {progress != null ? (
               <FileProgress label={busyLabel} reported={Math.round(progress)} />
             ) : (

@@ -40,7 +40,12 @@ export type ItineraryDay = {
   description?: string;
   hotel?: string;
   photo?: string;
-  meals?: { breakfast?: boolean; lunch?: boolean; dinner?: boolean };
+  /** true = included in the price, false = at the traveller's own cost, null = the source does not say. */
+  meals?: { breakfast?: boolean | null; lunch?: boolean | null; dinner?: boolean | null };
+  /** Where and what the meals are, as the source words it (a restaurant, a buffet). */
+  meal_note?: string;
+  /** The calendar day the source writes beside this program day ("11/22"). Review evidence only; never saved. */
+  date?: string;
 };
 
 export const STANDARD_DAYS = {
@@ -94,7 +99,11 @@ export function detectTransportType(input: {
   const body = days.map(dayText).join("\n");
   const everything = `${head}\n${body}\n${text(input.notes)}\n${Array.isArray(input.transport) ? input.transport.join(" ") : ""}`;
   if (CRUISE.test(head)) return { transport: "cruise", sure: true };
-  if (CRUISE.test(everything)) return { transport: "cruise", sure: false };
+  // A cruise lives on its ship: a cabin, or the ship on two or more days. One boat ride on a
+  // river is a sight, not the trip's transport (a city program with an evening boat tour was
+  // read as a cruise, 2026-11-05).
+  const shipDays = days.filter((day) => CRUISE.test(dayText(day))).length;
+  if (/каюта|cabin/i.test(everything) || shipDays >= 2) return { transport: "cruise", sure: false };
   if (UB_AIRPORT.test(first) && !TRAIN_OR_LAND.test(first)) return { transport: "direct_flight", sure: true };
   const landStart = TRAIN_OR_LAND.test(first) || ERENHOT.test(first);
   const flightInside = FLIGHT.test(days.slice(1).map(dayText).join("\n")) || (landStart && FLIGHT.test(first));

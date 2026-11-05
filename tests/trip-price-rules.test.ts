@@ -56,28 +56,51 @@ test("a 'MNT' fare too small to be a trip is a misread yuan amount and is cleare
   assert.deepEqual([real.actions[0].fields!.adult_price, real.actions[0].fields!.child_price, real.actions[0].fields!.infant_price], [3_290_000, 2_590_000, 0]);
 });
 
-test("with no tugrug price the admin is asked for it; the typed amounts become the fares", async () => {
+test("a missing tugrug price is a note beside the price field, never a question; a typed price still sets the fares", async () => {
   const { applyPriceAnswer, finalizeNewTripActions } = await import("../src/lib/tripProposalFinalize");
   const { buildProposalClarifications } = await import("../src/lib/adminProposalUtils");
-  const { PRICE_MISSING } = await import("../src/lib/tripPriceRules");
+  const { PRICE_MISSING, PRICE_QUESTION_MARK } = await import("../src/lib/tripPriceRules");
+  const { reviewIssues } = await import("../src/lib/tripReview");
   const p = proposal();
   await finalizeNewTripActions(p);
-  assert.ok(p.conflict_items!.some((item) => item.type === PRICE_MISSING));
-  assert.equal(p.needs_confirmation, true);
-  const question = buildProposalClarifications(p as never).find((q) => q.id === `price:${ROUTE}`);
-  assert.ok(question, "the price question is asked");
-  assert.equal(question!.allowCustom, true);
-  assert.ok(question!.options.every((option) => !/юан|¥|ланд/i.test(option.label + option.answer)), "a yuan price is never offered");
+  const notice = p.conflict_items!.find((item) => item.type === PRICE_MISSING);
+  assert.equal(notice?.severity, "info", "said once, as information");
+  assert.doesNotMatch(notice!.text, /\d{3,}/, "the notice quotes no yuan figure");
+  assert.equal(p.needs_confirmation, true, "an automatic import still waits for a person");
+  assert.deepEqual(buildProposalClarifications(p as never), [], "no question, so no second model call");
+  const price = reviewIssues(p.actions[0].fields as Record<string, unknown>).find((issue) => issue.key === "price");
+  assert.equal(price?.blocks, null, "a trip without a price can be saved and published");
 
-  // What admin.tsx sends back: "<prompt> [Зөрчил: <detail>] → <answer>".
-  const answer = `${question!.prompt} [Зөрчил: ${question!.detail}] → 3,290,000 / 2,590,000`;
+  // The typed-answer path stays for a price sent as a chat message.
+  const answer = `«${ROUTE}» аяллын ${PRICE_QUESTION_MARK} → 3,290,000 / 2,590,000`;
   assert.equal(applyPriceAnswer(answer, p), true);
   assert.deepEqual([p.actions[0].fields!.adult_price, p.actions[0].fields!.child_price, p.actions[0].fields!.currency], [3_290_000, 2_590_000, "MNT"]);
   await finalizeNewTripActions(p);
   assert.ok(!p.conflict_items!.some((item) => item.type === PRICE_MISSING), "the notice goes once the price is there");
+  assert.equal(applyPriceAnswer(`«${ROUTE}» аяллын ${PRICE_QUESTION_MARK} → Үнийг дараа нэмнэ.`, proposal()), false, "'add later' sets no fare");
+});
 
-  const later = proposal();
-  assert.equal(applyPriceAnswer(`${question!.prompt} → Үнийг дараа «Аяллууд» хэсгээс нэмнэ.`, later), false, "'add later' sets no fare");
+test("a place name ending in -ланд is not a land price; a settlement price is a partner's cost", async () => {
+  const { mentionsPartnerPrice, withoutPartnerPrices } = await import("../src/lib/tripPriceRules");
+  assert.equal(withoutPartnerPrices("Норланд улсын далайн эрэг дээр амарна. Ланд үнэ 900 юань."), "Норланд улсын далайн эрэг дээр амарна.");
+  assert.equal(mentionsPartnerPrice("Норландын аялал"), false);
+  assert.equal(mentionsPartnerPrice("Ландын үнэ 1,600,000₮"), true);
+  assert.equal(mentionsPartnerPrice("Тооцоо нийлэх үнэ: 4,000,000"), true);
+  assert.equal(withoutPartnerPrices("Аяллын зарлах үнэ 4,290,000₮.\nТооцоо нийлэх үнэ: 4,000,000"), "Аяллын зарлах үнэ 4,290,000₮.");
+});
+
+test("a selling price printed beside a land price keeps its row; only the partner's row and remark go", async () => {
+  const { scrubPartnerPrices } = await import("../src/lib/tripProposalFinalize");
+  const p = proposal({ adult_price: 3_490_000, infant_price: 60_000 });
+  (p.actions[0].fields!.extra as Record<string, unknown>).departure_date_groups = [
+    { label: "A", dates: ["1 сарын 14"], adult_price: 3_590_000, child_price: 3_260_000, note: "Ланд үнэ 5980 юань." },
+    { label: "Ланд үнэ", dates: ["1 сарын 14"], adult_price: 5980, currency: "CNY" },
+  ];
+  scrubPartnerPrices(p);
+  const groups = (p.actions[0].fields!.extra as Record<string, unknown>).departure_date_groups as Array<Record<string, unknown>>;
+  assert.equal(groups.length, 1);
+  assert.deepEqual([groups[0].adult_price, groups[0].child_price, groups[0].note], [3_590_000, 3_260_000, ""]);
+  assert.equal(p.actions[0].fields!.infant_price, 60_000, "a small tugrug infant fare is a real fare");
 });
 
 test("tugrug amounts are read the way staff type them", async () => {

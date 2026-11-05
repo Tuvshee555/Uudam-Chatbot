@@ -11,8 +11,6 @@ import type {
   ConflictSeverity,
   TripStatus,
 } from "./adminTypes";
-import { TRANSPORT_CHOICE, TRANSPORT_LABELS, TRANSPORT_TYPES, isTransportType } from "./tripTransitDays";
-import { PRICE_MISSING, PRICE_QUESTION_MARK } from "./tripPriceRules";
 
 export const STATUS_LABELS: Record<TripStatus, string> = {
   active: "Идэвхтэй",
@@ -371,42 +369,8 @@ export function buildProposalClarifications(
     questions.push(question);
   }
 
-  // How a new trip leaves Ulaanbaatar (tripProposalFinalize.ts): one tap changes the
-  // standard first and last days; the answer carries the type for the server to read.
-  for (const item of proposal.conflict_items || []) {
-    if (item.type !== TRANSPORT_CHOICE) continue;
-    const route = String(item.data?.route_name || "").trim();
-    const current = item.data?.transport_type;
-    if (!route || !isTransportType(current)) continue;
-    pushQuestion({
-      id: `transport:${route}`,
-      prompt: `«${route}» аялал ${TRANSPORT_LABELS[current].toLowerCase()} гэж уншлаа. Зөв үү?`,
-      detail: item.text,
-      options: TRANSPORT_TYPES.map((transport) => ({
-        label: TRANSPORT_LABELS[transport],
-        answer: `"${route}" аяллын тээврийн төрлийг "${TRANSPORT_LABELS[transport]}" болго (transport_type=${transport}).`,
-        recommended: transport === current,
-      })),
-      allowCustom: false,
-    });
-  }
-
-  // A new trip with no tugrug price: the admin types it here (the server reads the amounts
-  // after the arrow) or chooses to add it later. Yuan and land prices are never offered.
-  for (const item of proposal.conflict_items || []) {
-    if (item.type !== PRICE_MISSING) continue;
-    const route = String(item.data?.route_name || "").trim();
-    if (!route) continue;
-    pushQuestion({
-      id: `price:${route}`,
-      prompt: `«${route}» аяллын ${PRICE_QUESTION_MARK} — том хүн, хүүхэд.`,
-      detail: "Файлд төгрөгийн зарах үнэ алга. Юань, ландын үнийг үнэ гэж авахгүй.",
-      options: [{ label: "Үнийг дараа нэмнэ", answer: "Үнийг дараа «Аяллууд» хэсгээс нэмнэ." }],
-      allowCustom: true,
-      customPlaceholder: "Ж: 3,290,000 / 2,590,000",
-    });
-  }
-
+  // A new trip's transport and its missing tugrug price are not questions any more: the
+  // review answers both in place (a switch and a price field), with no second model call.
   proposal.actions.forEach((action, index) => {
     const fields = action.fields || {};
     const routeName =
@@ -425,6 +389,8 @@ export function buildProposalClarifications(
             normalized.includes("child price") ||
             normalized.includes("том хүний үнэ")),
       );
+      // On a new trip both prices sit in the review, editable, with this said beside them.
+      if (String(action.action || "").toLowerCase() === "upsert" && !action.trip_id) return;
       pushQuestion({
         id: `child-price:${routeName}`,
         prompt: `"${routeName}" аяллын хүүхдийн үнэ ${formatMoneyValue(childPrice, currency)} байгаа ч том хүний үнэ ${formatMoneyValue(adultPrice, currency)} байна. Ингэж үлдээх үү?`,

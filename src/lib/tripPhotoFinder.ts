@@ -38,6 +38,9 @@ const MAX_DOWNLOAD_BYTES = 12 * 1024 * 1024;
 const ALLOWED_LICENSE = /^(cc0|public domain|cc[ -]by(-sa)?(\s|$)|copyrighted free use)/i;
 // Files that are not photographs of a place.
 const NOT_A_PHOTO = /\b(map|maps|logo|diagram|flag|coat of arms|plan|chart|satellite|screenshot|icon|seal|emblem|poster|banner|locator|svg|graph|table|sign|ticket|stamp|coin|banknote|menu|brochure|collage|panorama stitch|abandoned|derelict|ruins? of|demolition|construction site|accident|flood|protest|war|wars|military|army|soldiers?|space station|from orbit|iss\d|zoo|hippopotamus|store|shop|supermarket|trading|rail transit|line \d|metro|subway|bus|taxi|toyota|honda|car|vehicle|truck|parking|street view|interior|office|factory|hospital|school|university campus)\b/i;
+// Food and things on a table are not a destination: a bowl of hotpot spices was picked as a
+// city's fifth photo because the search phrase was a local dish (2026-11-05).
+const FOOD_OR_OBJECT = /\b(hot ?pot|hotpot|dish|dishes|cuisine|food|foods|noodles?|soup|spices?|chili|chilli|restaurant|meal|snack|dumplings?|dessert|ingredients?|recipe|bowl|souvenirs?|packaging|portrait|selfie)\b/i;
 // Transit places on every train route: never a trip photo (the border town's gate was picked, 2026-11-04).
 const TRANSIT_PLACE = /erenhot|erlian|二连|zamyn|замын|эрээн|ulaanbaatar|улаанбаатар|border crossing|railway station|airport/i;
 
@@ -57,7 +60,8 @@ function acceptable(page: CommonsPage): boolean {
   if (!info || !info.width || !info.height || !info.thumburl) return false;
   if (!/^image\/(jpeg|png)$/.test(info.mime || "")) return false;
   if (info.width < MIN_PHOTO_WIDTH || info.width < info.height * 1.05) return false;
-  if (NOT_A_PHOTO.test(String(page.title || "")) || TRANSIT_PLACE.test(String(page.title || ""))) return false;
+  const title = String(page.title || "");
+  if (NOT_A_PHOTO.test(title) || FOOD_OR_OBJECT.test(title) || TRANSIT_PLACE.test(title)) return false;
   const license = plain(info.extmetadata?.LicenseShortName?.value || "");
   return ALLOWED_LICENSE.test(license);
 }
@@ -152,10 +156,12 @@ export async function rankPhotos(candidates: FoundPhoto[], input: { subject: str
     return [];
   }
   const instruction = `You choose photographs for a travel agency's web page about: ${input.subject}.
-Pick up to ${count} of the ${usable.length} photos below, best first — only photos a travel agency would proudly put on the page: real scenery, famous landmarks, skylines and night views, beaches, old towns, famous streets, local food and culture of those places; sharp, well lit, inviting. Return fewer than ${count} rather than include a weak one. Reject: maps, satellite or aerial survey images, text overlays, logos, gates and signs, zoo animals, museum interiors, plain buildings, close-ups of people or selfies, derelict or under-construction places, bad weather, blurry or dark images, any other company's branding, border towns and railway or airport scenes, and photos that do not show these places.
+Each photo below is labelled with the place it was searched for. Pick up to ${count} of the ${usable.length} photos, best first. A photo qualifies only when a traveller would recognise in it the PLACE it is labelled with: that landmark, skyline or night view, beach, old town, famous street, bridge, park or natural scenery; sharp, well lit, inviting.
+Three excellent photos beat ${count} with a weak one: return fewer, or an empty list, rather than fill the number. Do not pick two photos of the same view.
+Reject every one of these, however good the picture: food, dishes, drinks, ingredients, spices, tables, menus and restaurant interiors; objects, products and souvenirs; maps, satellite or aerial survey images; text overlays, logos, gates and signs; zoo animals; museum or shop interiors; plain buildings; close-ups of people, portraits and selfies; derelict or under-construction places; bad weather, blurry or dark images; another company's branding; border towns, railway and airport scenes; and any photo that shows a different city or country, or where you cannot tell that it is the labelled place.
 Answer with JSON only: {"picks":[photo numbers, best first]}.`;
   const parts: Parameters<typeof askOpenAIChatParts>[0] = [{ text: instruction }];
-  usable.forEach((entry, index) => { parts.push({ text: `Photo ${index + 1}: ${entry.photo.title}` }); parts.push(entry.part); });
+  usable.forEach((entry, index) => { parts.push({ text: `Photo ${index + 1} — searched for "${entry.photo.query}": ${entry.photo.title}` }); parts.push(entry.part); });
   try {
     // Low detail: enough to tell a beach from a map, a third of the tokens (2026-11-04: ~148k → ~50k per trip).
     const result = await ask(parts, { model: "gpt-4o-mini", jsonMode: true, temperature: 0, maxOutputTokens: 200, timeoutMs: 30_000, imageDetail: "low",
@@ -201,7 +207,7 @@ export async function photoQueriesForTrip(input: { title: string; days: Array<{ 
   const ask = input.ask || askOpenAIChatParts;
   const program = input.days.map((day, index) => `${day.day ?? index + 1}. ${String(day.title || "").trim()} — ${String(day.description || "").replace(/\s+/g, " ").trim().slice(0, 220)}`).join("\n");
   const destinations = (input.destinations || []).filter((place) => !TRANSIT_PLACE.test(place));
-  const prompt = `Trip: ${input.title}${destinations.length ? `\nDestinations: ${destinations.join(", ")}` : ""}\nProgram:\n${program}\n\nList 4 to 8 short English search phrases (2-5 words each, landmark or place names as used in English, e.g. a park, a bridge, an old town, a beach, a famous street or dish of that city) for photographs of what this trip shows, each with the program day number it belongs to, plus the English names of the destination cities the trip is about. Never include Erenhot/Erlian, Zamyn-Uud, Ulaanbaatar, any border town, transfer city, airport, railway station, hotel or shopping centre, and skip days that are only travel. Answer with JSON only: {"queries":[{"q":"...","day":2}],"cities":["..."]}.`;
+  const prompt = `Trip: ${input.title}${destinations.length ? `\nDestinations: ${destinations.join(", ")}` : ""}\nProgram:\n${program}\n\nList 4 to 8 short English search phrases (2-5 words each) for photographs of the PLACES this trip visits: a named landmark, viewpoint, bridge, park, old town, beach, island, famous street or natural sight that the program itself mentions, written as it is known in English together with its city, each with the number of the program day that visits it. Only places: never a dish, food, drink, restaurant, market stall, shop, hotel, shopping centre, show, animal or activity. A free day with no named sight gets no phrase. Also list every city the program names, in English, each marked stopover true or false: a stopover is a city where the group only changes planes, or sleeps one night between two flights, with no sight visited there; a destination (stopover false) is where the trip's sights and free days are. A stopover city gets no phrase. Never include Erenhot/Erlian, Zamyn-Uud, Ulaanbaatar, any border town, transfer city, airport or railway station, and skip days that are only travel. Answer with JSON only: {"queries":[{"q":"...","day":2}],"cities":[{"name":"...","stopover":false}]}.`;
   try {
     const result = await ask([{ text: prompt }], { model: "gpt-4o-mini", jsonMode: true, temperature: 0, maxOutputTokens: 400, timeoutMs: 20_000,
       source: "trip_photos.queries", requestId: input.trace?.requestId, correlationId: input.trace?.correlationId });
@@ -214,10 +220,16 @@ export async function photoQueriesForTrip(input: { title: string; days: Array<{ 
         return { query: String(entry.q ?? entry.query ?? "").trim(), day: valid.has(day) ? day : null };
       });
     // A city's skyline and best-known landmark are what a trip card wants most; they are not tied to a day.
-    const cities = (Array.isArray(parsed.cities) ? parsed.cities : []).map((city) => String(city).trim()).filter((city) => city.length >= 3 && !TRANSIT_PLACE.test(city)).slice(0, 3);
+    // A city the trip only flies through is not what the trip looks like (a beach trip got three skylines of its stopover).
+    const listed = (Array.isArray(parsed.cities) ? parsed.cities : []).map((city) => (city && typeof city === "object"
+      ? { name: String((city as Record<string, unknown>).name ?? "").trim(), stopover: (city as Record<string, unknown>).stopover === true }
+      : { name: String(city).trim(), stopover: false }));
+    const stopovers = listed.filter((city) => city.stopover && city.name.length >= 3).map((city) => city.name.toLowerCase());
+    const cities = listed.filter((city) => !city.stopover).map((city) => city.name).filter((city) => city.length >= 3 && !TRANSIT_PLACE.test(city)).slice(0, 3);
     const general = cities.flatMap((city) => [{ query: `${city} skyline`, day: null }, { query: `${city} famous landmark`, day: null }]);
     return [...fromModel, ...general]
-      .filter((item) => item.query.length >= 3 && item.query.length <= 60 && !TRANSIT_PLACE.test(item.query))
+      .filter((item) => item.query.length >= 3 && item.query.length <= 60 && !TRANSIT_PLACE.test(item.query) && !FOOD_OR_OBJECT.test(item.query))
+      .filter((item) => !stopovers.some((city) => item.query.toLowerCase().includes(city)))
       .filter((item, index, all) => all.findIndex((other) => other.query.toLowerCase() === item.query.toLowerCase()) === index)
       .slice(0, 10);
   } catch (error) {

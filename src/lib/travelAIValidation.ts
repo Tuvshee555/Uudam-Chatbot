@@ -191,6 +191,7 @@ export function validateAIChangeProposal(
       !isDocumentedMealExceptionConflict(conflict),
   );
   const sanitizedActions: AITripAction[] = [];
+  const sameNameNotes: ConflictItem[] = [];
 
   for (const rawAction of normalized.actions) {
     if (!rawAction || typeof rawAction !== "object") continue;
@@ -356,9 +357,20 @@ export function validateAIChangeProposal(
       if (!tripId && !match.route_name && fieldsRoute && fieldsOperator) {
         const duplicateTrips = findTripMatches(existingTrips, fieldsOperator, fieldsRoute);
         if (duplicateTrips.length > 0) {
-          confirmationConflicts.push(
-            `${label}: an existing trip already matches this operator and route, so review before creating a duplicate.`,
-          );
+          const program = (cleanedFields.extra as Record<string, unknown> | undefined)?.itinerary_days;
+          if (Array.isArray(program) && program.length >= 2) {
+            // A whole program read from a file is a new trip (see keepFileProgramsNew): said in
+            // the review, in Mongolian, without a question that would cost another model call.
+            sameNameNotes.push({
+              text: `«${fieldsRoute}»: ижил нэртэй аялал бүртгэлд аль хэдийн байна («${duplicateTrips[0].route_name}»). Хадгалбал ШИНЭ аялал болж нэмэгдэнэ, одоо байгаа аялал өөрчлөгдөхгүй. Давхардуулахгүй бол «Болих» дарна уу.`,
+              severity: "warning",
+              type: "same_name_exists",
+            });
+          } else {
+            confirmationConflicts.push(
+              `${label}: an existing trip already matches this operator and route, so review before creating a duplicate.`,
+            );
+          }
         }
       }
     }
@@ -475,7 +487,11 @@ export function validateAIChangeProposal(
   const newBlockingItems: ConflictItem[] = blockingConflicts
     .filter((text) => !existingItemTexts.has(text))
     .map((text) => ({ text, severity: "blocker" as ConflictSeverity, type: "validation" }));
-  const finalConflictItems: ConflictItem[] = [...filteredItems, ...newBlockingItems];
+  const finalConflictItems: ConflictItem[] = [
+    ...filteredItems.filter((item) => item.type !== "same_name_exists"),
+    ...sameNameNotes.filter((note, index, all) => all.findIndex((other) => other.text === note.text) === index),
+    ...newBlockingItems,
+  ];
 
   const finalProposal: AIChangeProposal = {
     ...normalized,

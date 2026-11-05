@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Badge, Button, Icons, Logo, Modal, useToast } from "@/components/ui";
 import { extractGoogleDriveFileIds } from "@/lib/googleDriveLinks";
 import { buildProposalClarifications } from "@/lib/adminProposalUtils";
+import { useProposalActions } from "@/components/admin/useProposalActions";
 import { AdminConfirmModals } from "@/components/admin/AdminConfirmModals";
 import { AdminLoginGate, GOOGLE_LOGIN_ERRORS } from "@/components/admin/AdminLoginGate";
 import { AdminNavigation } from "@/components/admin/AdminNavigation";
@@ -28,14 +29,14 @@ import { JsonEditorTab } from "@/components/admin/JsonEditorTab";
 import { TripPhotoImportTab } from "@/components/admin/TripPhotoImportTab";
 import PosterTab from "@/components/admin/poster/PosterTab";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
-import type { AIProposal, AIProposalResponse, AttachedFile, BookingTerms, ChatMessage, ClarificationAnswer, ClarificationQuestion, ControlState, DiscountGroup, DriveSyncDiagnostics, ExtraFee, ItineraryDay, LeadCrmStatus, LeadStats, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalMsg, ReadinessReport, RecentRow, RoomPrice, SettingsForm, TabKey, TravelBotSettings, TravelLead, TravelTrip } from "@/lib/adminTypes";
+import type { AIProposal, AIProposalResponse, AttachedFile, BookingTerms, ChatMessage, ControlState, DiscountGroup, DriveSyncDiagnostics, ExtraFee, ItineraryDay, LeadCrmStatus, LeadStats, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ReadinessReport, RecentRow, RoomPrice, SettingsForm, TabKey, TravelBotSettings, TravelLead, TravelTrip } from "@/lib/adminTypes";
 import { emptyBookingTerms, toBookingTermsForm } from "@/lib/adminTypes";
 import { deriveChildRules, withDerivedSummaryFields } from "@/lib/priceGroups";
 import { documentedFreeFare } from "@/lib/tripCompleteness";
 import { resolveAgeRules } from "@/lib/ageRules";
 import type { LeadAttentionSummary } from "@/lib/leadAttention";
 import { changedSettingsFields } from "@/lib/adminPageUtils";
-import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, apiErrorMessage, asInt, buildImageUploadUnit, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, emptyChunkResult, isStaleBundleError, STALE_BUNDLE_MESSAGE, fileToDataUrl, getSecretStorage, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, mergeAIProposals, settingsToForm, shortId, uid } from "@/lib/adminPageUtils";
+import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, apiErrorMessage, asInt, buildImageUploadUnit, groupDocumentWithImages, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, emptyChunkResult, isStaleBundleError, STALE_BUNDLE_MESSAGE, fileToDataUrl, getSecretStorage, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, mergeAIProposals, settingsToForm, shortId, uid } from "@/lib/adminPageUtils";
 const BLANK_TRIP_DRAFT: Record<string, string> = { category: "Аялал", operator_name: "UUDAM TRAVEL AGENCY", route_name: "", duration_text: "", adult_price: "", child_price: "", infant_price: "", child_price_free: "", infant_price_free: "", age_infant: "0-23 сар", age_child: "2-11 нас", age_adult: "12+ нас", currency: "MNT", seats_total: "", seats_left: "", seats_percent_left: "", sale_badge_enabled: "false", sale_badge_label: "ХЯМДРАЛ", sale_badge_ends: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
 const MAX_AI_SOURCE_TEXT_CHARS = 20_000;
 const TRIP_DATA_TABS = new Set<TabKey>(["assistant", "trips", "calendar", "greeting", "photos"]);
@@ -581,8 +582,16 @@ export default function AdminPage() {
     const poll = setInterval(() => void check(), LEAD_POLL_MS);
     return () => { stopped = true; clearInterval(poll); };
   }, [authState, fetchWithAdmin, loadLeadsState, toast]);
+  const chatMessageCount = useRef(0);
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const grew = chatMessages.length > chatMessageCount.current;
+    chatMessageCount.current = chatMessages.length;
+    if (!grew) return;
+    // A proposal is read from its top: a new trip's review is long, and jumping to its last line hid the trip itself.
+    const last = chatMessages[chatMessages.length - 1];
+    const card = last && "kind" in last && last.kind === "proposal" ? document.getElementById(`proposal-${last.id}`) : null;
+    if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+    else chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages]);
   const pausedIds = useMemo(
     () => new Set(pausedRows.map((row) => row.sender_id)),
@@ -683,8 +692,11 @@ export default function AdminPage() {
                 filename: companion.filename,
                 mimeType: companion.mimeType,
                 dataBase64: companion.dataUrl,
+                ...(companion.photoOnly ? { photoOnly: true } : {}),
+                ...(companion.evidenceOnly ? { evidenceOnly: true } : {}),
               })),
             ],
+            ...(unit.sameTrip ? { sameTrip: true } : {}),
             note,
           }),
         });
@@ -880,6 +892,9 @@ export default function AdminPage() {
           .join("; ")}${skippedFiles.length > 3 ? "…" : ""}`,
       );
     }
+    // A program and its price picture sent together are one trip: one reading, not two proposals.
+    const grouped = groupDocumentWithImages(uploadUnits);
+    if (grouped !== uploadUnits) uploadUnits.splice(0, uploadUnits.length, ...grouped);
     const sourceParts: string[] = [];
     if (note.trim()) sourceParts.push(`Админы тэмдэглэл: ${note.trim()}`);
     for (const unit of uploadUnits) {
@@ -1167,255 +1182,9 @@ export default function AdminPage() {
       setAiBusyProgress(null);
     }
   }
-  function setProposalMessage(id: string, patch: Partial<ProposalMsg>) {
-    setChatMessages((prev) =>
-      prev.map((message) =>
-        message.id === id && "kind" in message && message.kind === "proposal"
-          ? { ...message, ...patch }
-          : message,
-      ),
-    );
-  }
-  async function answerClarification(
-    message: ProposalMsg,
-    question: ClarificationQuestion,
-    answer: string,
-    markAnsweredIds?: string[],
-    extraAnswers?: ClarificationAnswer[],
-  ) {
-    const trimmed = answer.trim();
-    if (!trimmed) return;
-    setBusyKey(`clarify-${message.id}`);
-    try {
-      let proposal: AIProposal | undefined;
-      let newRequestId: number | null = message.requestId;
-      if (message.requestId != null) {
-        const res = await fetchWithAdmin("/api/admin/ai-change", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            request_id: message.requestId,
-            clarification: trimmed,
-            session_id: assistantSession.current,
-          }),
-        });
-        const json = await readJsonSafe(res);
-        if (!res.ok) {
-          throw new Error(
-            apiErrorMessage(json as AIProposalResponse, "Саналыг засаж чадсангүй."),
-          );
-        }
-        proposal = json?.proposal as AIProposal | undefined;
-      } else {
-        const contextParts: string[] = [];
-        if (message.sourceText) {
-          contextParts.push(`Source text from uploaded files:\n${message.sourceText}`);
-        }
-        if (message.instruction) contextParts.push(message.instruction);
-        if (message.clarificationAnswers.length > 0) {
-          contextParts.push(
-            "Previous clarification answers:\n" +
-              message.clarificationAnswers
-                .map((qa) => `${qa.prompt}: ${qa.answer}`)
-                .join("\n"),
-          );
-        }
-        contextParts.push(`${question.prompt}: ${trimmed}`);
-        const instruction = contextParts.join("\n\n").slice(0, MAX_AI_INPUT_CHARS);
-        const res = await fetchWithAdmin("/api/admin/ai-change", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ instruction }),
-        });
-        const json = await readJsonSafe(res);
-        if (!res.ok) {
-          throw new Error(
-            apiErrorMessage(json as AIProposalResponse, "Саналыг засаж чадсангүй."),
-          );
-        }
-        proposal = json?.proposal as AIProposal | undefined;
-        if (typeof json?.request_id === "number") {
-          newRequestId = json.request_id as number;
-        }
-      }
-      if (!proposal || !Array.isArray(proposal.actions)) {
-        throw new Error("AI засварласан санал буцааж чадсангүй.");
-      }
-      if (!proposal.photo_sources?.length && message.proposal.photo_sources?.length) {
-        proposal.photo_sources = message.proposal.photo_sources;
-      }
-      const nextAnsweredIds = markAnsweredIds ?? [
-        ...message.answeredClarificationIds,
-        question.id,
-      ];
-      const nextAnswers = [
-        ...message.clarificationAnswers,
-        ...(extraAnswers ?? [
-          {
-            questionId: question.id,
-            prompt: question.prompt,
-            answer: trimmed,
-          },
-        ]),
-      ];
-      setProposalMessage(message.id, {
-        proposal,
-        requestId: newRequestId,
-        clarifications: buildProposalClarifications(proposal, nextAnsweredIds, message.sourceNames ?? []),
-        clarificationAnswers: nextAnswers,
-        answeredClarificationIds: nextAnsweredIds,
-        customReply: "",
-        confirmChecked: false,
-      });
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Саналыг засаж чадсангүй.",
-      );
-    } finally {
-      setBusyKey("");
-    }
-  }
-  async function applyProposal(message: ProposalMsg) {
-    setBusyKey(`apply-${message.id}`);
-    try {
-      const body =
-        message.requestId != null
-          ? { request_id: message.requestId, apply: true, confirm: true, session_id: assistantSession.current }
-          : {
-              session_id: assistantSession.current,
-              apply: true,
-              confirm: true,
-              proposal_direct: message.proposal,
-              instruction: message.instruction,
-            };
-      // Bounded so a stuck DB connection reads as a clear error the admin can
-      // retry, instead of the "Save" button spinning forever with no signal.
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 45_000);
-      let res: Response;
-      try {
-        res = await fetchWithAdmin("/api/admin/ai-change", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") {
-          throw new Error(
-            "Хадгалахад удаж байна — сүлжээ/сервер удаан хариулж байна. Дахин оролдоно уу.",
-          );
-        }
-        throw err;
-      } finally {
-        clearTimeout(timeout);
-      }
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json?.message || json?.error || "Хэрэгжүүлж чадсангүй.");
-      }
-      setProposalMessage(message.id, {
-        status: "applied",
-        requestId:
-          typeof json?.request_id === "number"
-            ? (json.request_id as number)
-            : message.requestId,
-        resultText: Array.isArray(json?.results)
-          ? json.results.join(" • ")
-          : json?.message || "Амжилттай.",
-      });
-      toast.success("Өөрчлөлт хадгалагдлаа. Бот шинэ мэдээллээр хариулна.");
-      await loadAll();
-    } catch (err) {
-      setProposalMessage(message.id, {
-        status: "error",
-        resultText: err instanceof Error ? err.message : "Алдаа гарлаа.",
-      });
-      toast.error("Хэрэгжүүлэхэд алдаа гарлаа.");
-    } finally {
-      setBusyKey("");
-    }
-  }
-  async function rollbackProposal(message: ProposalMsg) {
-    if (message.requestId == null) {
-      toast.error("Буцаах хадгалсан хүсэлтийн дугаар олдсонгүй.");
-      return;
-    }
-    if (
-      !window.confirm(
-        "Сүүлд хадгалсан AI өөрчлөлтийг буцаах уу? Энэ үйлдэл тухайн өөрчлөлтийн өмнөх аяллын мэдээллийг сэргээнэ.",
-      )
-    ) {
-      return;
-    }
-    setBusyKey(`rollback-${message.id}`);
-    try {
-      const res = await fetchWithAdmin("/api/admin/ai-change", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          request_id: message.requestId,
-          rollback: true,
-          confirm: true,
-          session_id: assistantSession.current,
-        }),
-      });
-      const json = await readJsonSafe(res);
-      if (!res.ok) {
-        throw new Error(
-          String(json?.message || json?.error || "Буцааж чадсангүй."),
-        );
-      }
-      setProposalMessage(message.id, {
-        status: "reverted",
-        resultText: Array.isArray(json?.results)
-          ? json.results.join(" • ")
-          : String(json?.message || "Буцаагдлаа."),
-      });
-      toast.success("AI өөрчлөлтийг буцаалаа.");
-      await loadAll();
-    } catch (err) {
-      setProposalMessage(message.id, {
-        status: "error",
-        resultText: err instanceof Error ? err.message : "Буцаахад алдаа гарлаа.",
-      });
-      toast.error("Буцаахад алдаа гарлаа.");
-    } finally {
-      setBusyKey("");
-    }
-  }
-  async function submitClarificationForm(
-    message: ProposalMsg,
-    answers: Record<string, string>,
-  ) {
-    const combined = message.clarifications
-      .map((q) => {
-        const answer = (answers[q.id] ?? "").trim();
-        if (!answer) return "";
-        const context = q.detail ? ` [Зөрчил: ${q.detail}]` : "";
-        return `${q.prompt}${context} → ${answer}`;
-      })
-      .filter(Boolean)
-      .join("\n");
-    if (!combined.trim()) return;
-    const allAnsweredIds = message.clarifications.map((q) => q.id);
-    const newAnswers = message.clarifications
-      .map((q) => {
-        const answer = (answers[q.id] ?? "").trim();
-        if (!answer) return null;
-        return { questionId: q.id, prompt: q.prompt, answer };
-      })
-      .filter(Boolean) as ClarificationAnswer[];
-    const firstQ = message.clarifications[0];
-    if (!firstQ) return;
-    await answerClarification(
-      message,
-      firstQ,
-      combined,
-      [...message.answeredClarificationIds, ...allAnsweredIds],
-      newAnswers,
-    );
-  }
+  const { setProposalMessage, applyProposal, rollbackProposal, submitClarificationForm } = useProposalActions({
+    fetchWithAdmin, readJsonSafe, toast, loadAll, setBusyKey, session: assistantSession, setChatMessages,
+  });
   async function runPauseAction(
     action:
       | "pause"

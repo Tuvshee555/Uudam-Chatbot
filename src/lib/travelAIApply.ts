@@ -8,6 +8,35 @@ import type { AIChangeProposal, AITripAction, TravelTrip } from "./travelTypes";
 import { ensureTravelSchema, listTrips, getTripById, upsertTrip, patchTrip, deleteTrip, resolveTripIdByMatch, mapTripRow, normalizeProposal } from "./travelDb";
 import { instructionForbidsTripCreation, validateAIChangeProposal } from "./travelAIValidation";
 import { attachPersistedPhotoSources } from "./travelAI";
+import { withoutReviewOnly } from "./tripReview";
+import { validateTripDataChange } from "./tripDataValidation";
+
+/**
+ * What would stop each new trip from being saved, found before anything is
+ * written. A proposal with several trips used to save the first ones and fail
+ * on a later one, and saving again then created the first ones twice.
+ */
+export function newTripSaveProblems(proposal: AIChangeProposal): string[] {
+  const problems: string[] = [];
+  for (const action of proposal.actions) {
+    // After validation every upsert without a trip id is a create (a matched one was turned into a patch).
+    if (String(action.action || "").toLowerCase() !== "upsert" || action.trip_id?.trim() || !action.fields) continue;
+    const fields = withoutReviewOnly(action.fields as Record<string, unknown>);
+    const name = String(fields.route_name || "").trim();
+    for (const issue of validateTripDataChange(fields).introducedErrors) problems.push(name ? `«${name}»: ${issue.message}` : issue.message);
+  }
+  return problems;
+}
+
+/** One action applied; a thrown save error becomes a failed result instead of a 500 with half the proposal saved. */
+async function applyActionSafely(action: AITripAction) {
+  try {
+    return await applyAIAction(action);
+  } catch (error) {
+    logError("travel.ai.apply_action_failed", { message: error instanceof Error ? error.message : String(error) });
+    return { ok: false as const, message: error instanceof Error ? error.message : "Хадгалахад алдаа гарлаа.", snapshot: undefined };
+  }
+}
 
 type AIActionSnapshot = {
   action: AITripAction;
@@ -34,10 +63,12 @@ function fieldsWithMergedPhotoUrls(
   return next;
 }
 
-async function applyAIAction(action: AITripAction) {
-  if (!action || typeof action !== "object") {
+async function applyAIAction(input: AITripAction) {
+  if (!input || typeof input !== "object") {
     return { ok: false, message: "Invalid action payload." };
   }
+  // The review's own evidence (source quotes, the date beside each program day) is never saved.
+  const action: AITripAction = input.fields ? { ...input, fields: withoutReviewOnly(input.fields as Record<string, unknown>) as AITripAction["fields"] } : input;
 
   const verb = String(action.action || "").trim().toLowerCase();
   if (!verb) return { ok: false, message: "Missing action verb." };
@@ -138,7 +169,13 @@ async function applyAIAction(action: AITripAction) {
   return { ok: false, message: `Unsupported action: ${verb}` };
 }
 
-export async function applyAIRequest(requestId: number) {
+/**
+ * Saves a stored proposal. `reviewed` is the proposal as the admin left it on
+ * the review page; it is what gets saved. Until 2026-11-05 only the request id
+ * travelled, so every correction made in the review (a price, a date, a name)
+ * was dropped and the assistant's first reading was saved instead.
+ */
+export async function applyAIRequest(requestId: number, reviewed?: AIChangeProposal) {
   const ready = await ensureTravelSchema();
   if (!ready) {
     return { ok: false, message: "Database is not configured." };
@@ -170,8 +207,9 @@ export async function applyAIRequest(requestId: number) {
     };
   }
 
-  const proposal = normalizeProposal(row.proposal_json);
-  attachPersistedPhotoSources(proposal);
+  const proposal = normalizeProposal(reviewed ?? row.proposal_json);
+  // A reviewed proposal already holds exactly the photos the admin kept.
+  if (!reviewed) attachPersistedPhotoSources(proposal);
   const trips = await listTrips({ limit: 250 });
   const validation = validateAIChangeProposal(proposal, trips, {
     forbidCreate: instructionForbidsTripCreation(row.instruction),
@@ -201,12 +239,19 @@ export async function applyAIRequest(requestId: number) {
     };
   }
 
+  // Nothing is written while any new trip would be refused: the request stays
+  // pending, so the admin corrects the review and saves again.
+  const problems = newTripSaveProblems(validation.proposal);
+  if (problems.length > 0) {
+    return { ok: false, message: "Хадгалахын өмнө засах зүйл байна.", results: problems, proposal: validation.proposal, retry: true };
+  }
+
   const results: string[] = [];
   const snapshots: AIActionSnapshot[] = [];
   let failed = false;
 
   for (const action of validation.proposal.actions) {
-    const result = await applyAIAction(action);
+    const result = await applyActionSafely(action);
     results.push(result.message);
     if (result.ok && result.snapshot) snapshots.push(result.snapshot);
     if (!result.ok) failed = true;
@@ -219,11 +264,12 @@ export async function applyAIRequest(requestId: number) {
       SET
         status = $2,
         rollback_json = $3::jsonb,
+        proposal_json = $4::jsonb,
         applied_at = CASE WHEN $2 = 'applied' THEN NOW() ELSE NULL END,
         reverted_at = NULL
       WHERE id = $1
     `,
-    [requestId, status, JSON.stringify(snapshots)],
+    [requestId, status, JSON.stringify(snapshots), JSON.stringify(validation.proposal)],
   );
 
   return {
@@ -260,12 +306,16 @@ export async function applyAIProposalDirect(
       proposal: normalised,
     };
   }
+  const problems = newTripSaveProblems(normalised);
+  if (problems.length > 0) {
+    return { ok: false, message: "Хадгалахын өмнө засах зүйл байна.", results: problems, proposal: normalised, retry: true };
+  }
   const results: string[] = [];
   const snapshots: AIActionSnapshot[] = [];
   let failed = false;
 
   for (const action of normalised.actions) {
-    const result = await applyAIAction(action);
+    const result = await applyActionSafely(action);
     results.push(result.message);
     if (result.ok && result.snapshot) snapshots.push(result.snapshot);
     if (!result.ok) failed = true;

@@ -43,12 +43,22 @@ type UploadPayload = {
   filename: string;
   mimeType: string;
   dataBase64: string;
+  /**
+   * A photo for the trip's gallery only (a picture embedded in a Word program). It is
+   * uploaded and attached to the trip the document describes; the model never sees it.
+   * Until 2026-11-05 each embedded picture was sent as a document of its own, and the
+   * model invented a trip for every one of them.
+   */
+  photoOnly?: boolean;
+  /** An image sent beside a document as evidence (a price table): read by the model, never a gallery photo. */
+  evidenceOnly?: boolean;
 };
 
 type PhotoUploadAsset = {
   label: string;
   buffer: Buffer;
   mimeType: string;
+  galleryOnly?: boolean;
 };
 
 type ParsedUploadWork = {
@@ -83,6 +93,8 @@ function collectUploads(body: Record<string, unknown>): UploadPayload[] {
             typeof (entry as Record<string, unknown>).dataBase64 === "string"
               ? String((entry as Record<string, unknown>).dataBase64)
               : "",
+          photoOnly: (entry as Record<string, unknown>).photoOnly === true,
+          evidenceOnly: (entry as Record<string, unknown>).evidenceOnly === true,
         };
       })
       .filter((item) => item.dataBase64);
@@ -162,6 +174,7 @@ function isZipUpload(upload: UploadPayload): boolean {
 }
 
 async function collectPhotoAssets(upload: UploadPayload): Promise<PhotoUploadAsset[]> {
+  if (upload.evidenceOnly) return [];
   const buffer = decodeUploadBuffer(upload.dataBase64);
   if (isImageUpload(upload)) {
     return [{
@@ -201,6 +214,9 @@ async function collectPhotoAssets(upload: UploadPayload): Promise<PhotoUploadAss
 
 async function parseUploadWithPhotoAssets(upload: UploadPayload): Promise<ParsedUploadWork> {
   const photoAssets = await collectPhotoAssets(upload);
+  if (upload.photoOnly && isImageUpload(upload)) {
+    return { photoAssets: photoAssets.map((asset) => ({ ...asset, galleryOnly: true })), parsedUploads: [] };
+  }
   if (isZipUpload(upload)) {
     return {
       photoAssets,
@@ -371,9 +387,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
 
     const photoUrlsByLabel = new Map<string, string[]>();
+    const galleryUrls: string[] = [];
     const photoUploadWarnings: string[] = [];
     if (photoAssets.length > 0) {
-      const uploadResults: Array<{ label?: string; url?: string; warning?: string }> = await Promise.all(
+      const uploadResults: Array<{ label?: string; url?: string; warning?: string; galleryOnly?: boolean }> = await Promise.all(
         photoAssets.map(async (asset) => {
           try {
             const url = await uploadImageToCloudinary(
@@ -381,7 +398,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               asset.label,
               asset.mimeType,
             );
-            return { label: asset.label, url };
+            return { label: asset.label, url, galleryOnly: asset.galleryOnly };
           } catch (error) {
             return {
               warning: `${asset.label}: ${error instanceof Error ? error.message : "upload failed"}`,
@@ -395,6 +412,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           continue;
         }
         if (!result.label || !result.url) continue;
+        if (result.galleryOnly) { galleryUrls.push(result.url); continue; }
         photoUrlsByLabel.set(result.label, [
           ...(photoUrlsByLabel.get(result.label) || []),
           result.url,
@@ -404,12 +422,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const result = await generateAIProposalFromContentBatched({
       note: note || undefined,
+      sameTrip: (body as Record<string, unknown>).sameTrip === true,
       sources: parsedUploads.map((parsed, i) => ({
         label: parsed.label,
         contentText: parsed.text || undefined,
         inline: parsed.inline,
         fbAttachmentId: fbAttachmentIds[i] ?? undefined,
-        photoUrls: photoUrlsByLabel.get(parsed.label),
+        // The document's own embedded photos belong to the trip the document describes.
+        photoUrls: galleryUrls.length ? [...(photoUrlsByLabel.get(parsed.label) || []), ...galleryUrls] : photoUrlsByLabel.get(parsed.label),
       })),
     });
 

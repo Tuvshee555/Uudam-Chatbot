@@ -89,10 +89,11 @@ export type RoomPrice = {
   note: string;
 };
 
+/** true = included, false = at the traveller's own cost, null = the source does not say. */
 export type ItineraryDayMeals = {
-  breakfast?: boolean;
-  lunch?: boolean;
-  dinner?: boolean;
+  breakfast?: boolean | null;
+  lunch?: boolean | null;
+  dinner?: boolean | null;
 };
 
 /**
@@ -328,6 +329,12 @@ export type ProposalMsg = {
   status: "pending" | "applied" | "reverted" | "cancelled" | "error";
   confirmChecked: boolean;
   resultText?: string;
+  /** True once the admin went through the review: `proposal` is then what must be saved, not the stored first reading. */
+  reviewed?: boolean;
+  /** How a reviewed new trip was saved: a draft stays off the website and out of the bot. */
+  savedAs?: "draft" | "publish";
+  /** Why the last save was refused; the proposal stays open so it can be corrected and saved again. */
+  saveError?: string;
   clarifications: ClarificationQuestion[];
   clarificationAnswers: ClarificationAnswer[];
   answeredClarificationIds: string[];
@@ -364,7 +371,13 @@ export type ParseUploadUnit = {
     filename: string;
     mimeType: string;
     dataUrl: string;
+    /** A photo for the trip's gallery only: uploaded and attached, never read as a document. */
+    photoOnly?: boolean;
+    /** An image read as evidence beside the document (a price table), never a gallery photo. */
+    evidenceOnly?: boolean;
   }>;
+  /** The unit's parts are one trip seen from several sides (a program and its price picture). */
+  sameTrip?: boolean;
 };
 
 export type TabKey =

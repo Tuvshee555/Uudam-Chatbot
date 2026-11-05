@@ -11,14 +11,17 @@ import type { AIChangeProposal, AITripAction, ConflictItem } from "./travelTypes
 import { askOpenAIChatParts } from "./openaiFallback";
 import { logWarn } from "./observability";
 import { uploadImageToCloudinary } from "./tripPhotoImport/upload";
-import { MIN_TRIP_PRICE_MNT, PRICE_MISSING, PRICE_QUESTION_MARK, mentionsPartnerPrice, parseMntPrices, withoutPartnerPrices } from "./tripPriceRules";
+import { MIN_TRIP_PRICE_MNT, PARTNER_PRICE, PRICE_MISSING, PRICE_QUESTION_MARK, mentionsPartnerPrice, parseMntPrices, withoutPartnerPrices } from "./tripPriceRules";
 import {
   PHOTOS_PER_TRIP, collectPhotoCandidates, downloadPhoto, photoQueriesForTrip, rankPhotos, type FoundPhoto,
 } from "./tripPhotoFinder";
 import {
-  TRANSPORT_CHOICE, TRANSPORT_LABELS, TRANSPORT_WEBSITE_TAGS, detectTransportType, durationForDays, isTransitDay, isTransportType,
-  withStandardTransitDays, type ItineraryDay, type TransportType,
+  TRANSPORT_CHOICE, TRANSPORT_LABELS, detectTransportType, durationForDays, isTransitDay, isTransportType,
+  type ItineraryDay, type TransportType,
 } from "./tripTransitDays";
+import { DEPARTURE_CONFLICT, DEPARTURE_SHIFT, applyTransport, checkDeparture, dayMeals, departureDays, deriveHasFood, formatYmd } from "./tripReview";
+
+export { DEPARTURE_CONFLICT, DEPARTURE_SHIFT };
 
 type Row = Record<string, unknown>;
 type Trace = { requestId?: string; correlationId?: string };
@@ -68,8 +71,39 @@ function dropConflictItem(proposal: AIChangeProposal, type: string, route: strin
 
 const PRICE_FIELDS = ["adult_price", "child_price", "infant_price"] as const;
 const PARTNER_DURATION = /\d+\s*өдөр[\s/,]*\d+\s*шөнө|\d+\s*шөнө[\s/,]*\d+\s*өдөр/gi;
-const PARTNER_PRICE_JSON = /юан|¥|\bCNY\b|\bRMB\b|ланд|лант|газрын\s+үнэ/i;
-const MODEL_PRICE_NOTICE = /төгрөгийн үнэ файлд байхгүй/i;
+// The model's own remarks that the file has no tugrug price: the review's price field says it once.
+// ("үнэ" declines to "үнийг", "үнийн": the stem is matched. A real file produced both
+// "үнийг төгрөгөөр тодорхойгүй" as a warning and "…тодруулах шаардлагатай" as a blocker.)
+const MODEL_PRICE_NOTICE = /үн[эи]\S*[^.]{0,40}төгрөг[^.]{0,40}(?:тодорхойгүй|байхгүй|алга|тодруул)|төгрөг[^.]{0,30}үн[эи]\S*[^.]{0,30}(?:тодорхойгүй|байхгүй|алга|тодруул)/i;
+// A card summary must sell the places; one that only restates when the trip starts and ends is dropped.
+const SCHEDULE_ONLY_SUMMARY = /\d{1,2}\s*-?\s*р?\s*сарын\s*\d{1,2}|эхэлж|эхэлнэ|дуусна|өндөрлөнө/i;
+
+const foreignCurrency = (value: unknown) => { const code = text(value).toUpperCase(); return Boolean(code) && code !== "MNT" && code !== "₮"; };
+// An infant fare can be small; anything under this is still a yuan amount misread.
+const MIN_INFANT_PRICE_MNT = 10_000;
+const misreadYuan = (key: string, value: unknown) => typeof value === "number" && value > 0 && value < (key === "infant_price" ? MIN_INFANT_PRICE_MNT : MIN_TRIP_PRICE_MNT);
+
+/**
+ * One row of a price table without the partner's figures. A row that IS the partner's price
+ * (labelled so, or in another currency) goes; a row with a real tugrug fare stays and only
+ * loses the yuan remark in its note. Until 2026-11-05 the whole row went when any of its
+ * text mentioned yuan, so a selling price printed beside the land price was lost with it.
+ */
+function scrubPriceRow(entry: unknown): Row | null {
+  const row = { ...record(entry) };
+  if (foreignCurrency(row.currency) || mentionsPartnerPrice(row.label)) return null;
+  for (const key of PRICE_FIELDS) if (misreadYuan(key, row[key])) row[key] = null;
+  for (const key of ["note", "notes", "label"]) if (typeof row[key] === "string") row[key] = withoutPartnerPrices(row[key]);
+  if (Array.isArray(row.passenger_prices)) {
+    row.passenger_prices = row.passenger_prices.filter((band) => {
+      const fare = record(band);
+      const amounts = Object.values(fare).filter((value): value is number => typeof value === "number" && value > 0);
+      return !foreignCurrency(fare.currency) && !PARTNER_PRICE.test(text(fare.label)) && !amounts.some((amount) => amount < MIN_INFANT_PRICE_MNT);
+    });
+  }
+  const fares = (Array.isArray(row.passenger_prices) ? row.passenger_prices.length : 0) + PRICE_FIELDS.filter((key) => typeof row[key] === "number").length;
+  return fares > 0 ? row : null;
+}
 
 /**
  * Owner's rule (tripPriceRules.ts): no yuan or land price on a new trip — not as its fare,
@@ -89,7 +123,7 @@ export function scrubPartnerPrices(proposal: AIChangeProposal): void {
     const foreign = Boolean(currency) && currency !== "MNT" && currency !== "₮";
     for (const key of PRICE_FIELDS) {
       const value = fields[key];
-      if (typeof value === "number" && (foreign ? value !== 0 : value > 0 && value < MIN_TRIP_PRICE_MNT)) fields[key] = null;
+      if (typeof value === "number" && (foreign ? value !== 0 : misreadYuan(key, value))) fields[key] = null;
     }
     if (foreign) fields.currency = "MNT";
     for (const key of ["notes", "source_description"]) if (typeof fields[key] === "string") fields[key] = withoutPartnerPrices(fields[key]);
@@ -97,7 +131,19 @@ export function scrubPartnerPrices(proposal: AIChangeProposal): void {
     if (Object.keys(extra).length) {
       const next: Row = { ...extra };
       for (const key of ["website_summary", "description"]) if (typeof next[key] === "string") next[key] = withoutPartnerPrices(next[key]);
-      if (Array.isArray(next.price_groups)) next.price_groups = next.price_groups.filter((group) => !PARTNER_PRICE_JSON.test(JSON.stringify(group)));
+      // A list line that is a partner's price (a settlement price among the notes) is not a condition of the trip.
+      for (const key of ["important_notes", "included_items", "excluded_items"]) {
+        if (Array.isArray(next[key])) next[key] = (next[key] as unknown[]).filter((line) => !mentionsPartnerPrice(line));
+      }
+      for (const key of ["price_groups", "departure_date_groups"]) {
+        if (Array.isArray(next[key])) next[key] = (next[key] as unknown[]).flatMap((group) => { const kept = scrubPriceRow(group); return kept ? [kept] : []; });
+      }
+      // The reader writes per-date fares under the older key, which is saved without its child
+      // bands (tripExtraSchema.ts). Under the canonical key every column of the row survives.
+      if (Array.isArray(next.departure_date_groups) && next.departure_date_groups.length && !(Array.isArray(next.price_groups) && next.price_groups.length)) {
+        next.price_groups = next.departure_date_groups;
+        next.departure_date_groups = [];
+      }
       fields.extra = next;
     }
   }
@@ -217,14 +263,34 @@ async function fillPhotos(input: { action: AITripAction; route: string; days: It
     if (day) day.photo = url;
   }
   fields.extra = { ...extra, itinerary_days: withPhotos, photo_credits: credits };
-  return { added: urls.length, message: `«${route}»: ${PHOTO_PROVIDER}-оос ${urls.length} зураг нэмэв (зохиогч, лицензийг хадгалсан). Таалагдахгүй зургийг хадгалсны дараа «Зураг оруулах» хэсгээс солино.` };
+  return { added: urls.length, message: `«${route}»: ${PHOTO_PROVIDER}-оос ${urls.length} зураг нэмэв (зохиогч, лицензийг хадгалсан).` };
+}
+
+const squash = (value: string) => value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+
+/**
+ * The short quotes the model gives for where it read the departure, the duration and the
+ * meals. Only a quote that really is in the source survives, so the review never shows
+ * an invented "the file says".
+ */
+export function keptEvidence(raw: unknown, sourceText?: string): { source_evidence?: Row } {
+  const quotes = record(raw);
+  const source = sourceText ? squash(sourceText) : "";
+  const kept: Row = {};
+  for (const key of ["departure", "duration", "meals"]) {
+    const quote = text(quotes[key]).slice(0, 200);
+    if (quote.length < 4 || mentionsPartnerPrice(quote)) continue;
+    if (source && !source.includes(squash(quote))) continue;
+    kept[key] = quote;
+  }
+  return Object.keys(kept).length ? { source_evidence: kept } : {};
 }
 
 /**
  * Finalises every new trip in the proposal. `photos` turns on the photo search (the
  * initial proposal); a revision passes nothing and keeps the photos it carried over.
  */
-export async function finalizeNewTripActions(proposal: AIChangeProposal, options: { photos?: PhotoDeps; trace?: Trace } = {}): Promise<void> {
+export async function finalizeNewTripActions(proposal: AIChangeProposal, options: { photos?: PhotoDeps; trace?: Trace; sourceText?: string; now?: Date } = {}): Promise<void> {
   scrubPartnerPrices(proposal);
   for (const action of newTripActions(proposal)) {
     const fields = action.fields as Row;
@@ -235,47 +301,61 @@ export async function finalizeNewTripActions(proposal: AIChangeProposal, options
     try {
       const detected = detectTransportType({ title: route, route: text(extra.route), notes: text(fields.notes), days,
         transportType: isTransportType(extra.transport_type) ? extra.transport_type : undefined, transport: extra.transport });
-      const built = withStandardTransitDays(days, detected.transport);
-      const patch = record(extra.website_details_patch);
-      fields.extra = {
-        ...extra,
-        itinerary_days: built.days,
-        transport_type: detected.transport,
-        website_details_patch: { base: record(patch.base), values: { ...record(patch.values), transport: TRANSPORT_WEBSITE_TAGS[detected.transport] } },
-        ...(built.added > 0 ? { duration_days: durationForDays(built.days.length).duration_days, duration_nights: durationForDays(built.days.length).duration_nights } : {}),
-      };
+      const rebuilt = applyTransport(fields, detected.transport);
+      Object.assign(fields, rebuilt.fields);
+      // Every day's meals as included / own cost / not stated, and the trip-level flag from them.
+      const built = { days: (record(fields.extra).itinerary_days as ItineraryDay[]).map((day) => ({ ...day, meals: dayMeals(day) })), added: rebuilt.added };
+      const { source_evidence: _unverified, ...withoutEvidence } = record(fields.extra);
+      void _unverified;
+      fields.extra = { ...withoutEvidence, itinerary_days: built.days, ...keptEvidence(extra.source_evidence, options.sourceText) };
+      const hasFood = deriveHasFood(built.days);
+      if (hasFood !== null) fields.has_food = hasFood;
+      const duration = durationForDays(built.days.length);
+      const programDuration = text(record(fields.extra).program_duration_text) || `${rebuilt.programDays} өдөр`;
       if (built.added > 0) {
         // The partner's own length ("7 өдөр 6 шөнө") left in the summaries would contradict the
         // door-to-door duration the trip now has (seen on a real file, 2026-11-04).
-        const total = durationForDays(built.days.length).duration_text;
-        fields.duration_text = total;
         const current = record(fields.extra);
-        if (typeof current.website_summary === "string") fields.extra = { ...current, website_summary: current.website_summary.replace(PARTNER_DURATION, total) };
-        if (typeof proposal.summary === "string") proposal.summary = proposal.summary.replace(PARTNER_DURATION, total);
+        if (typeof current.website_summary === "string") fields.extra = { ...current, website_summary: current.website_summary.replace(PARTNER_DURATION, duration.duration_text) };
+        if (typeof proposal.summary === "string") proposal.summary = proposal.summary.replace(PARTNER_DURATION, duration.duration_text);
       }
-      const duration = durationForDays(built.days.length);
+      if (SCHEDULE_ONLY_SUMMARY.test(text(record(fields.extra).website_summary))) fields.extra = { ...record(fields.extra), website_summary: "" };
+      // A condition listed under "Анхаарах зүйлс" is not repeated as the trip's note.
+      const important = new Set((Array.isArray(record(fields.extra).important_notes) ? record(fields.extra).important_notes as unknown[] : []).map((line) => squash(String(line))));
+      if (important.size && typeof fields.notes === "string") {
+        fields.notes = fields.notes.split(/\n/).filter((line) => !line.trim() || !important.has(squash(line))).join("\n").trim();
+      }
       setConflictItem(proposal, {
-        text: `«${route}» — тээвэр: ${TRANSPORT_LABELS[detected.transport]}.${built.added > 0 ? ` Улаанбаатараас гарах, буцах өдрүүдийг стандартаар нэмсэн: нийт ${duration.duration_text}.` : ""} Буруу бол тээврийн төрлийг доороос сонгоно уу.`,
+        text: `«${route}» — тээвэр: ${TRANSPORT_LABELS[detected.transport]}.${built.added > 0 ? ` Файлын хөтөлбөр (${programDuration}) дээр Улаанбаатараас гарах, буцах өдрүүд нэмэгдэж нийт ${duration.duration_text} болсон.` : ""}`,
         severity: "info",
         type: TRANSPORT_CHOICE,
-        data: { route_name: route, transport_type: detected.transport, sure: detected.sure, added: built.added },
+        data: { route_name: route, transport_type: detected.transport, sure: detected.sure, added: built.added, program_days: rebuilt.programDays },
       }, route);
-      if (built.added > 0 || !detected.sure) {
-        proposal.needs_confirmation = true;
-        if (!text(proposal.important_reason)) proposal.important_reason = "Тээврийн төрөл болон Улаанбаатараас гарах, буцах өдрүүдийг шалгана уу.";
-      }
-      // What the admin still has to add by hand, said once in the proposal.
+      // Nothing here stops the admin from saving; it only keeps an automatic import
+      // (Drive sync) from saving a trip nobody looked at.
+      if (built.added > 0 || !detected.sure || typeof fields.adult_price !== "number") proposal.needs_confirmation = true;
+      // What is still missing is said once, beside the field it belongs to (tripReview.ts).
       if (typeof fields.adult_price !== "number") {
-        setConflictItem(proposal, { text: `«${route}»: файлд төгрөгийн зарах үнэ алга (юань, ландын үнийг үнэ гэж авахгүй). Үнээ бичнэ үү, эсвэл дараа «Аяллууд» хэсгээс нэмнэ — тэр хүртэл сайтад «Үнэ лавлах» гэж гарна.`, severity: "info", type: PRICE_MISSING, data: { route_name: route } }, route);
-        proposal.needs_confirmation = true;
+        setConflictItem(proposal, { text: `«${route}»: файлд төгрөгийн зарах үнэ алга (юань, ландын үнийг үнэ гэж авахгүй). Үнэ оруулаагүй бол сайтад «Үнэ лавлах» гэж гарна.`, severity: "info", type: PRICE_MISSING, data: { route_name: route } }, route);
       } else {
         dropConflictItem(proposal, PRICE_MISSING, route);
       }
       const dates = Array.isArray(fields.departure_dates) ? fields.departure_dates.filter((date) => text(date)) : [];
+      for (const type of ["dates_missing", "dates_check", DEPARTURE_SHIFT, DEPARTURE_CONFLICT]) dropConflictItem(proposal, type, route);
       if (!dates.length) {
-        setConflictItem(proposal, { text: `«${route}»: гарах өдөр файлд олдсонгүй — огноо нэмтэл аялал архивт хадгалагдана.`, severity: "info", type: "dates_missing", data: { route_name: route } }, route);
-      } else if (built.added > 0) {
-        setConflictItem(proposal, { text: `«${route}»: файлын огноо (${dates.slice(0, 3).join(", ")}) хамтрагчийн хөтөлбөрийн Эрээн дэх эхний өдөр бол Улаанбаатараас нэг өдрийн өмнө гарна — гарах өдрийг шалгана уу.`, severity: "info", type: "dates_check", data: { route_name: route } }, route);
+        setConflictItem(proposal, { text: `«${route}»: гарах өдөр файлд олдсонгүй — календариас сонгоно уу.`, severity: "info", type: "dates_missing", data: { route_name: route } }, route);
+      } else {
+        // The dates the source writes beside its own days decide whether the departure is the
+        // day the train leaves Ulaanbaatar or the partner's first day at the border. Until
+        // 2026-11-05 every partner file got a "check the date" warning, right or not.
+        const check = checkDeparture(departureDays(dates, options.now).days, built.days);
+        if (check.kind === "shift") {
+          setConflictItem(proposal, { text: `«${route}»: файлд ${formatYmd(check.departure, options.now)} нь хөтөлбөрийн эхний өдөр (хил дээр). Улаанбаатараас галт тэргээр ${formatYmd(check.suggested, options.now)}-нд гарна — гарах өдрөө сонгоно уу.`,
+            severity: "info", type: DEPARTURE_SHIFT, data: { route_name: route, departure: check.departure, suggested: check.suggested } }, route);
+        } else if (check.kind === "conflict") {
+          setConflictItem(proposal, { text: `«${route}»: гарах өдөр ${formatYmd(check.departure, options.now)} боловч файлд хөтөлбөрийн эхний өдрийг ${formatYmd(check.programStart, options.now)} гэж бичсэн (${formatYmd(check.expected, options.now)} байх ёстой). Аль нь зөвийг шалгана уу.`,
+            severity: "warning", type: DEPARTURE_CONFLICT, data: { route_name: route, departure: check.departure, program_start: check.programStart, expected: check.expected } }, route);
+        }
       }
       if (options.photos) {
         const result = await fillPhotos({ action, route, days: built.days, deps: options.photos, trace: options.trace });

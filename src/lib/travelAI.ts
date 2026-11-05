@@ -49,7 +49,8 @@ type ProposalSource = {
   photoUrls?: string[];
 };
 
-import { applyPriceAnswer, applyTransportChoice, carryOverPhotoExtras, finalizeNewTripActions } from "./tripProposalFinalize";
+import { applyPriceAnswer, applyTransportChoice, carryOverPhotoExtras, finalizeNewTripActions, newTripActions } from "./tripProposalFinalize";
+import { applyPriceTable, readPriceTable, type PriceTable } from "./tripPriceTable";
 
 function buildBatchSourceParts(input: {
   note?: string;
@@ -74,6 +75,42 @@ function buildBatchSourceParts(input: {
 
   return { parts, sourceLabels };
 }
+
+/**
+ * A file that carries a whole day-by-day program is a NEW trip, whatever existing trip it
+ * resembles (owner's rule, 2026-10-31: "add trip" never revives or edits a same-name trip).
+ * The model read such a file as an edit of the live trip it matched, and saving it would
+ * have overwritten that trip's program, hotel wording and photos (seen 2026-11-05). A price
+ * list without a program still updates the trips it names.
+ */
+const ADD_OR_UPDATE_QUESTION = /шинэ аялал болгон нэмэх үү|одоо байгааг шинэчлэх үү/i;
+
+export function keepFileProgramsNew(proposal: AIChangeProposal): void {
+  let programs = 0;
+  for (const action of proposal.actions) {
+    const fields = action.fields as Record<string, unknown> | undefined;
+    const days = (fields?.extra as Record<string, unknown> | undefined)?.itinerary_days;
+    if (!Array.isArray(days) || days.length < 2 || action.action === "cancel") continue;
+    if (typeof fields?.route_name !== "string" || !fields.route_name.trim()) continue;
+    action.action = "upsert";
+    delete action.trip_id;
+    delete action.match;
+    programs += 1;
+  }
+  // The model's own "add as new or update the existing one?" is already answered for these.
+  if (programs > 0 && programs === proposal.actions.length) {
+    proposal.conflict_items = (proposal.conflict_items || []).filter((item) => item.type !== "duplicate_route" && !ADD_OR_UPDATE_QUESTION.test(item.text));
+    proposal.conflicts = (proposal.conflicts || []).filter((item) => !ADD_OR_UPDATE_QUESTION.test(item));
+  }
+}
+
+const SAME_TRIP_MAX_SOURCES = 6;
+const SAME_TRIP_NOTE = [
+  "These sources together describe ONE trip: the document is its day-by-day program, and each image is that same trip's departure schedule and price table (or its poster).",
+  "Return exactly one action for it. Take the name, days, meals, hotels and conditions from the document; take every departure date and the tugrug selling prices per date from the image (fields.departure_dates and fields.extra.departure_date_groups), and the year the image states.",
+  "A column of yuan or land prices in the image is the partner's cost and is left out; the tugrug 'зарах / зарлах үнэ' columns are the selling prices.",
+  "Read the price table row by row: one departure_date_groups entry per row, each with that row's own adult price and every child column of that row.",
+].join(" ");
 
 // Max chars per individual OpenAI call for text-only sources. JSON-mode
 // structured extraction can be slow, so keep each call small.
@@ -1370,6 +1407,12 @@ export async function generateAIProposalFromContentBatched(input: {
     fbAttachmentId?: string;
     photoUrls?: string[];
   }>;
+  /**
+   * The sources are one trip seen from several sides: a Word program and the picture of
+   * its departure and price table. They are read in one model call, as one trip, and what
+   * is read from the picture is not checked against the document's text.
+   */
+  sameTrip?: boolean;
 }) {
   const rawSources: ProposalSource[] =
     input.sources && input.sources.length > 0
@@ -1412,7 +1455,9 @@ export async function generateAIProposalFromContentBatched(input: {
   for (const s of sources) addPhotoUrls(s.label, s.photoUrls);
 
   const sourceLabels = rawSources.map((source) => source.label).join(", ");
-  const batches = chunkProposalSources(sources);
+  const sameTrip = Boolean(input.sameTrip) && sources.length > 1 && sources.length <= SAME_TRIP_MAX_SOURCES;
+  const batches = sameTrip ? [sources] : chunkProposalSources(sources);
+  const batchNote = sameTrip ? [input.note, SAME_TRIP_NOTE].filter(Boolean).join("\n") : input.note;
 
   return createProposal({
     instruction: input.note
@@ -1422,6 +1467,11 @@ export async function generateAIProposalFromContentBatched(input: {
     buildProposal: async (condensedTrips) => {
       const proposals: AIChangeProposal[] = [];
       const startedAt = Date.now();
+      // The price picture beside a program is read on its own, row by row, while the
+      // program is being read (tripPriceTable.ts).
+      const tableReads = sameTrip
+        ? Promise.all(sources.filter((source) => source.inline?.mimeType.startsWith("image/")).map((source) => readPriceTable(source.inline!)))
+        : null;
 
       for (let index = 0; index < batches.length; index += 1) {
         if (index > 0) {
@@ -1453,7 +1503,7 @@ export async function generateAIProposalFromContentBatched(input: {
         }
         const batch = batches[index];
         const { parts, sourceLabels: batchLabels } = buildBatchSourceParts({
-          note: input.note,
+          note: batchNote,
           sources: batch,
         });
         const batchTimeoutMs = Math.min(
@@ -1523,9 +1573,20 @@ export async function generateAIProposalFromContentBatched(input: {
 
       const merged = mergeBatchProposals(proposals, batches.length);
 
+      keepFileProgramsNew(merged);
       // One trip = one action, even when it arrived as several poster slices.
       mergeDuplicateTripActions(merged);
-      enforceTextSourceEvidence(merged, sources);
+      // A price or a year read from the picture is not in the document's text; the guard
+      // would delete it as invented (it did, on a real program + price table, 2026-11-05).
+      if (!sameTrip) enforceTextSourceEvidence(merged, sources);
+      if (tableReads) {
+        const tables = (await tableReads).filter((table): table is PriceTable => Boolean(table));
+        const created = newTripActions(merged);
+        if (tables.length && created.length === 1) {
+          const table: PriceTable = { year: tables.find((entry) => entry.year)?.year ?? null, rows: tables.flatMap((entry) => entry.rows) };
+          applyPriceTable(created[0].fields as Record<string, unknown>, table);
+        }
+      }
 
       // Code-side completeness check: count numbered trip markers in source text
       // and warn if the model returned far fewer actions than expected.
@@ -1590,7 +1651,7 @@ export async function generateAIProposalFromContentBatched(input: {
       // missing photos — what makes a file-created trip equal to one added on the web.
       // The photo search only gets the time the batches left of the route's budget.
       const remainingMs = FILE_PARSE_TOTAL_BUDGET_MS - (Date.now() - startedAt);
-      await finalizeNewTripActions(merged, { photos: remainingMs > 25_000 ? { budgetMs: remainingMs - 15_000 } : undefined });
+      await finalizeNewTripActions(merged, { photos: remainingMs > 25_000 ? { budgetMs: remainingMs - 15_000 } : undefined, sourceText: allSourceText });
 
       return merged;
     },

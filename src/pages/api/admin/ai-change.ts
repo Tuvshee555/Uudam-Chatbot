@@ -67,7 +67,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const { instruction, request_id, apply, rollback, confirm, clarification, proposal_direct, quick, session_id } =
+    const { instruction, request_id, apply, rollback, confirm, clarification, proposal_direct, proposal_edit, quick, session_id } =
       req.body || {};
     const resultText = (result: { results?: unknown; message?: unknown }) =>
       Array.isArray(result.results) ? result.results.join(" • ") : String(result.message || "");
@@ -104,7 +104,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           message: "Set confirm=true to apply stored AI proposal.",
         });
       }
-      const applied = await applyAIRequest(request_id);
+      // The proposal as the admin left it on the review page: that, not the stored first reading, is saved.
+      const reviewed = proposal_edit && typeof proposal_edit === "object" && Array.isArray(proposal_edit.actions) ? proposal_edit : undefined;
+      const applied = await applyAIRequest(request_id, reviewed);
       await logAssistantEvent({ sessionId: session_id, requestId: request_id, role: "assistant", kind: "applied", text: resultText(applied) || "Хэрэгжүүлсэн." });
       return res.status(applied.ok ? 200 : 409).json(applied);
     }

@@ -1,7 +1,8 @@
 /**
  * Owner's rule (2026-11-04): a trip's price is only the tugrug amount the customer pays.
- * A partner's price in yuan, and any "ланд / лант / газрын үнэ" (land price, even when it
- * is written in tugrug), is the partner's cost — never a price on a trip, and never copied
+ * A partner's price in yuan, any "ланд / лант / газрын үнэ" (land price, even when it is
+ * written in tugrug) and a "тооцоо нийлэх үнэ" (the price settled between agencies) is
+ * the partner's cost — never a price on a trip, and never copied
  * into its notes, summary or price table. When a file has no tugrug selling price, the
  * admin is asked for it instead. Browser-safe (the admin page builds the price question).
  */
@@ -13,7 +14,13 @@ export const PRICE_MISSING = "price_missing";
 /** Under this no Uudam trip is priced: a smaller "MNT" figure is a yuan amount misread. */
 export const MIN_TRIP_PRICE_MNT = 100_000;
 
-const PARTNER_PRICE = /ланд|лант|land\s*price|газрын\s+үнэ|юан|¥|\bCNY\b|\byuan\b|\bRMB\b/i;
+/**
+ * A partner's cost: a yuan amount, a "ланд / лант / газрын үнэ" (land price) or a
+ * "тооцоо нийлэх үнэ" (the net price two agencies settle at). "ланд" counts only as
+ * a word of its own — until 2026-11-05 it also matched inside a place name that ends
+ * in "-ланд", so a sentence naming such a country was cut out of a new trip's notes.
+ */
+export const PARTNER_PRICE = /(?<!\p{L})лан[дт](?:ын|ийн)?(?!\p{L})|land\s*price|газрын\s+үнэ|тооцоо\s+нийлэх|юан|¥|\bCNY\b|\byuan\b|\bRMB\b/iu;
 // A cancellation fee is a booking term the customer must know, not a trip price.
 const BOOKING_TERM = /цуцал|буцаан\s+олгол|хураамж|торгууль|cancel/i;
 

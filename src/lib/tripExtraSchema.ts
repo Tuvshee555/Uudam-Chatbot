@@ -300,6 +300,10 @@ function normalizeItineraryDays(raw: unknown): Record<string, unknown>[] {
       const hotel = asString(d.hotel);
       const photo = asString(d.photo).trim();
       const mealsRaw = d.meals && typeof d.meals === "object" ? (d.meals as Record<string, unknown>) : {};
+      const mealNote = asString(d.meal_note).trim();
+      // null = the source does not say whether the meal is included. It used to be
+      // coerced to false, which turned "not stated" into "not included" on save.
+      const meal = (value: unknown) => (value === null ? null : Boolean(value));
       return {
         day: index + 1,
         title,
@@ -307,10 +311,11 @@ function normalizeItineraryDays(raw: unknown): Record<string, unknown>[] {
         ...(hotel ? { hotel } : {}),
         ...(photo.startsWith("https://") ? { photo } : {}),
         meals: {
-          breakfast: Boolean(mealsRaw.breakfast),
-          lunch: Boolean(mealsRaw.lunch),
-          dinner: Boolean(mealsRaw.dinner),
+          breakfast: meal(mealsRaw.breakfast),
+          lunch: meal(mealsRaw.lunch),
+          dinner: meal(mealsRaw.dinner),
         },
+        ...(mealNote ? { meal_note: mealNote.slice(0, 300) } : {}),
       };
     });
 }

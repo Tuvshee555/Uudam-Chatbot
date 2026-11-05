@@ -708,7 +708,7 @@ async function buildOfficeUploadUnits(file: File): Promise<ParseUploadUnit[]> {
         lastModified: file.lastModified,
       });
       photoUnits.push({
-        ...(await buildImageUploadUnit(imageFile)),
+        ...(await buildImageUploadUnit(imageFile, DOCX_PHOTO_MAX_BYTES)),
         displayName: `${file.name} / ${cleanName}`,
         sourceGroup: file.name,
       });
@@ -736,11 +736,63 @@ async function buildOfficeUploadUnits(file: File): Promise<ParseUploadUnit[]> {
     mimeType: "text/plain",
     dataUrl: textToDataUrl(chunk),
   }));
-  return [...textUnits, ...photoUnits];
+  return attachGalleryPhotos(textUnits, photoUnits);
 }
 
-async function buildImageUploadUnit(file: File): Promise<ParseUploadUnit> {
-  if (file.size <= MAX_PARSE_UPLOAD_BYTES) {
+// A Word file's own pictures travel in the same request as its text (the request body is
+// capped at 4.5 MB): each is kept small, and only as many as fit are sent.
+const DOCX_PHOTO_MAX_BYTES = 280_000;
+const GALLERY_REQUEST_BYTES = MAX_PARSE_UPLOAD_BYTES * 3;
+const MAX_DOCX_GALLERY_PHOTOS = 12;
+
+/**
+ * The document's text units with its embedded photos riding on the first one as
+ * gallery-only companions. The photos are the trip's pictures, not documents: sent on
+ * their own (as they were until 2026-11-05) each one was read by the model as a trip.
+ */
+export function attachGalleryPhotos(textUnits: ParseUploadUnit[], photoUnits: ParseUploadUnit[]): ParseUploadUnit[] {
+  if (!textUnits.length || !photoUnits.length) return textUnits;
+  const [first, ...rest] = textUnits;
+  let bytes = dataUrlDecodedByteLength(first.dataUrl);
+  const companions = [...(first.companions || [])];
+  for (const photo of photoUnits.slice(0, MAX_DOCX_GALLERY_PHOTOS)) {
+    const size = dataUrlDecodedByteLength(photo.dataUrl);
+    if (bytes + size > GALLERY_REQUEST_BYTES) continue;
+    companions.push({ filename: photo.filename, mimeType: photo.mimeType, dataUrl: photo.dataUrl, photoOnly: true });
+    bytes += size;
+  }
+  return [{ ...first, companions }, ...rest];
+}
+
+/**
+ * One document (Word, Excel, text) sent together with loose images — a program and the
+ * picture of its price table — is read as ONE source set, so the result is one trip.
+ * Anything else (several documents, images alone, a set too big for one request) is left
+ * as it was: one request per unit.
+ */
+export function groupDocumentWithImages(units: ParseUploadUnit[]): ParseUploadUnit[] {
+  const isImage = (unit: ParseUploadUnit) => unit.mimeType.startsWith("image/") && !unit.sourceGroup;
+  const images = units.filter(isImage);
+  const documents = units.filter((unit) => !isImage(unit));
+  if (!images.length || images.length > 4 || documents.length !== 1) return units;
+  const [document] = documents;
+  const used = [document, ...(document.companions || [])].reduce((sum, part) => sum + dataUrlDecodedByteLength(part.dataUrl), 0);
+  const added = images.reduce((sum, image) => sum + dataUrlDecodedByteLength(image.dataUrl)
+    + (image.companions || []).reduce((n, part) => n + dataUrlDecodedByteLength(part.dataUrl), 0), 0);
+  if (used + added > GALLERY_REQUEST_BYTES) return units;
+  return [{
+    ...document,
+    sameTrip: true,
+    companions: [
+      ...(document.companions || []),
+      ...images.flatMap((image) => [{ filename: image.filename, mimeType: image.mimeType, dataUrl: image.dataUrl }, ...(image.companions || [])])
+        .map((part) => ({ ...part, evidenceOnly: true })),
+    ],
+  }];
+}
+
+async function buildImageUploadUnit(file: File, maxBytes = MAX_PARSE_UPLOAD_BYTES): Promise<ParseUploadUnit> {
+  if (file.size <= maxBytes) {
     return {
       displayName: file.name,
       filename: file.name,
@@ -766,7 +818,7 @@ async function buildImageUploadUnit(file: File): Promise<ParseUploadUnit> {
       if (!bestBytes || bytes.byteLength < bestBytes.byteLength) {
         bestBytes = bytes;
       }
-      if (bytes.byteLength <= MAX_PARSE_UPLOAD_BYTES) {
+      if (bytes.byteLength <= maxBytes) {
         return {
           displayName: file.name,
           filename: `${file.name}.compressed.jpg`,
