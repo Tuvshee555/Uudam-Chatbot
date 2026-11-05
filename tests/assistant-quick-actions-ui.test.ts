@@ -23,6 +23,7 @@ function renderTab(messages: unknown[] = []) {
     applyBusyId: "",
     clarifyBusyId: "",
     onSend: noop,
+    onChooseOption: noop,
     onQuickAction: noop,
     onEditTripPrice: noop,
     onNewTrip: noop,

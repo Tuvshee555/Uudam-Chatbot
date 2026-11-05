@@ -32,6 +32,8 @@ import {
   normalizeDateText,
   isRecurringDepartureText,
   isCompleteCleanAction,
+  isDateSeatState,
+  isIsoDate,
 } from "./travelDb";
 import { filterFutureDepartureDates } from "./travelDates";
 
@@ -227,17 +229,51 @@ export function validateAIChangeProposal(
       );
     }
 
-    if (verb !== "upsert" && verb !== "patch" && verb !== "cancel") {
+    if (verb !== "upsert" && verb !== "patch" && verb !== "cancel" && verb !== "set_date_state" && verb !== "delete") {
       blockingConflicts.push(`${label}: unsupported action "${verb || "unknown"}".`);
       continue;
     }
 
     if (
-      (verb === "patch" || verb === "cancel") &&
+      (verb === "patch" || verb === "cancel" || verb === "set_date_state" || verb === "delete") &&
       tripId &&
       !existingTrips.some((trip) => trip.id === tripId)
     ) {
       blockingConflicts.push(`${label}: target trip was not found.`);
+      continue;
+    }
+
+    // One departure day's availability: the day and the state must both be exact, and the
+    // trip must be known (resolved by id or an unambiguous name below).
+    if (verb === "set_date_state") {
+      const date = normalizeDateText(String(rawAction.date || ""));
+      if (!isIsoDate(date)) {
+        blockingConflicts.push(`${label}: огноо YYYY-MM-DD хэлбэрээр байх ёстой.`);
+        continue;
+      }
+      if (!isDateSeatState(rawAction.state)) {
+        blockingConflicts.push(`${label}: огнооны төлөв нээлттэй, цөөн суудал эсвэл дүүрсэн гэсэн гурвын нэг байна.`);
+        continue;
+      }
+      if (!tripId && !match.route_name && !match.operator_name) {
+        blockingConflicts.push(`${label}: аль аяллын огноо болохыг заагаагүй байна.`);
+        continue;
+      }
+      const target = tripId ? undefined : matchingTrips;
+      if (target && target.length === 0) {
+        blockingConflicts.push(`«${match.route_name || routeName}» гэдэг нэртэй аялал бүртгэлд алга байна.`);
+        continue;
+      }
+      if (target && target.length > 1) {
+        blockingConflicts.push(`«${match.route_name || routeName}» нэртэй төстэй ${target.length} аялал байгаа тул алийг нь өөрчлөхийг таамаглаж чадсангүй.`);
+        continue;
+      }
+      sanitizedActions.push({
+        action: "set_date_state",
+        trip_id: tripId || target?.[0]?.id,
+        date,
+        state: rawAction.state,
+      });
       continue;
     }
 
@@ -322,7 +358,7 @@ export function validateAIChangeProposal(
       }
     }
 
-    if ((verb === "patch" || verb === "cancel") && !tripId && !match.route_name && !match.operator_name) {
+    if ((verb === "patch" || verb === "cancel" || verb === "delete") && !tripId && !match.route_name && !match.operator_name) {
       blockingConflicts.push(`${label}: update/cancel actions must include trip_id or match fields.`);
       continue;
     }
@@ -355,7 +391,9 @@ export function validateAIChangeProposal(
       }
 
       if (!tripId && !match.route_name && fieldsRoute && fieldsOperator) {
-        const duplicateTrips = findTripMatches(existingTrips, fieldsOperator, fieldsRoute);
+        // An archived trip of the same name is not a duplicate: a new trip is always a new
+        // record (owner's rule), so only live trips are compared here.
+        const duplicateTrips = findTripMatches(existingTrips.filter((trip) => trip.status !== "archived"), fieldsOperator, fieldsRoute);
         if (duplicateTrips.length > 0) {
           const program = (cleanedFields.extra as Record<string, unknown> | undefined)?.itinerary_days;
           if (Array.isArray(program) && program.length >= 2) {
@@ -375,7 +413,7 @@ export function validateAIChangeProposal(
       }
     }
 
-    if ((verb === "patch" || verb === "cancel" || verb === "upsert") && !tripId && (match.route_name || match.operator_name)) {
+    if ((verb === "patch" || verb === "cancel" || verb === "delete" || verb === "upsert") && !tripId && (match.route_name || match.operator_name)) {
       const askedName = (match.route_name || routeName || "").trim();
       const askedTag = askedName ? `«${askedName}» ` : "";
       if (matchingTrips.length === 0 && verb !== "upsert") {
@@ -434,6 +472,7 @@ export function validateAIChangeProposal(
       ...(tripId ? { trip_id: tripId } : {}),
       ...(match.operator_name || match.route_name ? { match } : {}),
       ...(Object.keys(cleanedFields).length > 0 ? { fields: cleanedFields } : {}),
+      ...(typeof rawAction.expected_updated_at === "string" && rawAction.expected_updated_at ? { expected_updated_at: rawAction.expected_updated_at } : {}),
     };
     sanitizedActions.push(sanitizedAction);
   }

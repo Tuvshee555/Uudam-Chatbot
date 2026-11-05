@@ -4,10 +4,10 @@
  */
 import { logError } from "./observability";
 import { queryNeon } from "./neonDb";
-import type { AIChangeProposal, AITripAction, TravelTrip } from "./travelTypes";
-import { ensureTravelSchema, listTrips, getTripById, upsertTrip, patchTrip, deleteTrip, resolveTripIdByMatch, mapTripRow, normalizeProposal } from "./travelDb";
+import type { AIChangeProposal, AITripAction, DateSeatState, TravelTrip } from "./travelTypes";
+import { ensureTravelSchema, listTrips, getTripById, upsertTrip, patchTrip, deleteTrip, resolveTripIdByMatch, mapTripRow, normalizeProposal, isDateSeatState } from "./travelDb";
 import { instructionForbidsTripCreation, validateAIChangeProposal } from "./travelAIValidation";
-import { attachPersistedPhotoSources } from "./travelAI";
+import { attachPersistedPhotoSources, changeRequestId } from "./travelAI";
 import { withoutReviewOnly } from "./tripReview";
 import { validateTripDataChange } from "./tripDataValidation";
 
@@ -43,7 +43,41 @@ type AIActionSnapshot = {
   trip_id: string;
   before: TravelTrip | null;
   after: TravelTrip | null;
+  /** set_date_state: the day's state before the change, so rollback can put it back. */
+  date_state_before?: DateSeatState | null;
 };
+
+/**
+ * True when the trip was edited after the proposal was built (its updated_at moved). The
+ * change is then refused instead of overwriting the other edit; the admin re-sends the
+ * instruction and gets a proposal built on the current trip.
+ */
+function changedSinceProposal(before: TravelTrip | null, action: AITripAction): boolean {
+  if (!before || !action.expected_updated_at) return false;
+  const expected = new Date(action.expected_updated_at).getTime();
+  const actual = new Date(before.updated_at).getTime();
+  return Number.isFinite(expected) && Number.isFinite(actual) && expected !== actual;
+}
+
+function changedSinceMessage(before: TravelTrip | null): string {
+  return `«${before?.route_name || "Аялал"}» энэ саналыг гаргаснаас хойш өөрчлөгдсөн байна (өөр админ эсвэл сайт). Зааврыг дахин бичвэл одоогийн байдлаар нь шинэ санал гаргана.`;
+}
+
+const DATE_STATE_WORDS: Record<DateSeatState, string> = { open: "нээлттэй", low: "цөөн суудал", full: "дүүрсэн" };
+
+/** The website's current state for one departure day, read from the availability overlay. */
+function departureSeatStateOf(trip: TravelTrip, date: string): DateSeatState | null {
+  const rows = Array.isArray(trip.extra?.website_departure_availability) ? trip.extra.website_departure_availability : [];
+  for (const raw of rows) {
+    const row = raw as { date?: unknown; status?: unknown; seatsLeft?: unknown };
+    if (row.date !== date) continue;
+    const status = String(row.status || "").toUpperCase();
+    if (status === "ALMOST_FULL") return "low";
+    if (status === "SOLD_OUT" || row.seatsLeft === 0) return "full";
+    return "open";
+  }
+  return null;
+}
 
 function fieldsWithMergedPhotoUrls(
   fields: AITripAction["fields"] | undefined,
@@ -128,12 +162,65 @@ async function applyAIAction(input: AITripAction) {
   }
   if (!targetId) return { ok: false, message: "Target trip not found." };
 
+  if (verb === "set_date_state") {
+    const date = String(action.date || "").trim();
+    const state = action.state;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !isDateSeatState(state)) {
+      return { ok: false, message: "Огноо эсвэл төлөв буруу байна." };
+    }
+    const before = await getTripById(targetId);
+    if (!before) return { ok: false, message: "Target trip not found." };
+    const previous = departureSeatStateOf(before, date);
+    const { setDepartureSeatState } = await import("./websiteTripSync");
+    let updated = false;
+    try {
+      updated = await setDepartureSeatState(targetId, date, state);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, message: /not configured/i.test(message)
+        ? "Вэбсайтын өгөгдлийн сан холбогдоогүй тул огнооны төлвийг өөрчилж чадсангүй."
+        : `Огнооны төлвийг өөрчилж чадсангүй: ${message}` };
+    }
+    if (!updated) {
+      return { ok: false, message: `"${before.route_name}" аялалд ${date} гарах өдөр вэбсайтад олдсонгүй.` };
+    }
+    return {
+      ok: true,
+      message: `"${before.route_name}" — ${date}: ${DATE_STATE_WORDS[state]}`,
+      snapshot: {
+        action,
+        trip_id: targetId,
+        before: null,
+        after: null,
+        date_state_before: previous,
+      } satisfies AIActionSnapshot,
+    };
+  }
+
+  if (verb === "delete") {
+    const before = await getTripById(targetId);
+    if (!before) return { ok: false, message: "Target trip not found." };
+    if (changedSinceProposal(before, action)) return { ok: false, message: changedSinceMessage(before) };
+    const archived = await deleteTrip(targetId);
+    if (!archived) return { ok: false, message: "Archive failed." };
+    const after = await getTripById(targetId);
+    return {
+      ok: true,
+      message: `Архивласан: "${before.route_name}"`,
+      snapshot: { action, trip_id: targetId, before, after } satisfies AIActionSnapshot,
+    };
+  }
+
   if (verb === "cancel") {
     const before = await getTripById(targetId);
-    const updated = await patchTrip(targetId, {
-      status: "cancelled",
-      ...(action.fields || {}),
-    });
+    if (changedSinceProposal(before, action)) return { ok: false, message: changedSinceMessage(before) };
+    let updated: TravelTrip | null;
+    try {
+      updated = await patchTrip(targetId, { status: "cancelled", ...(action.fields || {}) }, true, undefined, action.expected_updated_at || undefined);
+    } catch (error) {
+      if (error instanceof Error && error.message === "trip_edit_conflict") return { ok: false, message: changedSinceMessage(before) };
+      throw error;
+    }
     if (!updated) return { ok: false, message: "Cancel update failed." };
     return {
       ok: true,
@@ -149,10 +236,14 @@ async function applyAIAction(input: AITripAction) {
 
   if (verb === "patch") {
     const before = await getTripById(targetId);
-    const updated = await patchTrip(
-      targetId,
-      fieldsWithMergedPhotoUrls(action.fields, before) || {},
-    );
+    if (changedSinceProposal(before, action)) return { ok: false, message: changedSinceMessage(before) };
+    let updated: TravelTrip | null;
+    try {
+      updated = await patchTrip(targetId, fieldsWithMergedPhotoUrls(action.fields, before) || {}, true, undefined, action.expected_updated_at || undefined);
+    } catch (error) {
+      if (error instanceof Error && error.message === "trip_edit_conflict") return { ok: false, message: changedSinceMessage(before) };
+      throw error;
+    }
     if (!updated) return { ok: false, message: "Patch update failed." };
     return {
       ok: true,
@@ -210,7 +301,7 @@ export async function applyAIRequest(requestId: number, reviewed?: AIChangePropo
   const proposal = normalizeProposal(reviewed ?? row.proposal_json);
   // A reviewed proposal already holds exactly the photos the admin kept.
   if (!reviewed) attachPersistedPhotoSources(proposal);
-  const trips = await listTrips({ limit: 250 });
+  const trips = await listTrips({ limit: 250, includeArchived: true });
   const validation = validateAIChangeProposal(proposal, trips, {
     forbidCreate: instructionForbidsTripCreation(row.instruction),
   });
@@ -292,7 +383,7 @@ export async function applyAIProposalDirect(
     return { ok: false, message: "Database is not configured.", results: [] as string[] };
   }
 
-  const trips = await listTrips({ limit: 250 });
+  const trips = await listTrips({ limit: 250, includeArchived: true });
   attachPersistedPhotoSources(proposal);
   const validation = validateAIChangeProposal(proposal, trips, {
     forbidCreate: instructionForbidsTripCreation(instruction),
@@ -341,7 +432,7 @@ export async function applyAIProposalDirect(
         JSON.stringify(snapshots),
       ],
     );
-    insertedRequestId = inserted?.rows?.[0]?.id ?? null;
+    insertedRequestId = changeRequestId(inserted?.rows?.[0]);
   } catch (insertError) {
     logError("travel.ai.direct_apply_insert_failed", {
       message:
@@ -368,11 +459,11 @@ function normalizeActionSnapshots(value: unknown): AIActionSnapshot[] {
       const entry = item as Partial<AIActionSnapshot>;
       const tripId = String(entry.trip_id || "").trim();
       if (!tripId) return null;
-      return {
+      const snapshot: AIActionSnapshot = {
         action:
           entry.action && typeof entry.action === "object"
             ? (entry.action as AITripAction)
-            : { action: "unknown" },
+            : ({ action: "unknown" } as unknown as AITripAction),
         trip_id: tripId,
         before: entry.before
           ? mapTripRow(entry.before as unknown as Record<string, unknown>)
@@ -380,7 +471,9 @@ function normalizeActionSnapshots(value: unknown): AIActionSnapshot[] {
         after: entry.after
           ? mapTripRow(entry.after as unknown as Record<string, unknown>)
           : null,
+        date_state_before: isDateSeatState(entry.date_state_before) ? entry.date_state_before : null,
       };
+      return snapshot;
     })
     .filter((item): item is AIActionSnapshot => Boolean(item));
 }
@@ -425,6 +518,26 @@ export async function rollbackAIRequest(requestId: number) {
   let failed = false;
 
   for (const snapshot of [...snapshots].reverse()) {
+    // A day's availability is put back to what it was; it must never fall through to the
+    // "no before → remove the trip" branch below, which would archive a live trip.
+    if (String(snapshot.action?.action || "") === "set_date_state") {
+      const date = String(snapshot.action.date || "");
+      const previous = snapshot.date_state_before;
+      if (!previous || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        results.push(`Skipped ${snapshot.trip_id} ${date}: no earlier state recorded`);
+        continue;
+      }
+      try {
+        const { setDepartureSeatState } = await import("./websiteTripSync");
+        const restored = await setDepartureSeatState(snapshot.trip_id, date, previous);
+        if (restored) results.push(`Restored ${snapshot.trip_id} ${date} → ${DATE_STATE_WORDS[previous]}`);
+        else { failed = true; results.push(`Failed to restore ${snapshot.trip_id} ${date}`); }
+      } catch (error) {
+        failed = true;
+        results.push(`Failed to restore ${snapshot.trip_id} ${date}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      continue;
+    }
     if (snapshot.before) {
       const restored = await upsertTrip({
         id: snapshot.trip_id,

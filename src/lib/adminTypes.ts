@@ -249,6 +249,27 @@ export type AIAction = {
   trip_id?: string;
   match?: { operator_name?: string; route_name?: string };
   fields?: Record<string, unknown>;
+  /** set_date_state: the departure day (YYYY-MM-DD) and what it becomes. */
+  date?: string;
+  state?: "open" | "low" | "full";
+};
+
+export type ProposalQuestionOption = {
+  label: string;
+  answer: string;
+  recommended?: boolean;
+  hint?: string;
+};
+
+/** A question the server built with real options (which trip, which day, which amount). */
+export type ProposalQuestion = {
+  id: string;
+  prompt: string;
+  detail?: string;
+  options: ProposalQuestionOption[];
+  allow_custom?: boolean;
+  custom_placeholder?: string;
+  data?: Record<string, unknown>;
 };
 
 export type ConflictSeverity = "info" | "warning" | "blocker";
@@ -269,10 +290,22 @@ export type AIProposal = {
   conflict_items?: ConflictItem[];
   actions: AIAction[];
   photo_sources?: Array<{ label: string; urls: string[] }>;
+  questions?: ProposalQuestion[];
+};
+
+/** The assistant needs one answer before it can propose anything: shown as a chat bubble with choices. */
+export type AssistantAsk = {
+  text: string;
+  options: ProposalQuestionOption[];
+  allow_custom?: boolean;
+  custom_placeholder?: string;
 };
 
 export type AIProposalResponse = {
   proposal?: AIProposal;
+  ask?: AssistantAsk;
+  /** Nothing to change (the value is already so): shown as a plain assistant line. */
+  note?: string;
   request_id?: number;
   error?: string;
   message?: string;
@@ -349,7 +382,19 @@ export type NoteMsg = {
   tone: "info" | "error" | "success";
 };
 
-export type ChatMessage = AdminMsg | ProposalMsg | NoteMsg;
+export type AskMsg = {
+  id: string;
+  role: "assistant";
+  kind: "ask";
+  text: string;
+  options: ProposalQuestionOption[];
+  allowCustom?: boolean;
+  customPlaceholder?: string;
+  /** The option label the admin chose, once answered (the chips then read as history). */
+  answered?: string;
+};
+
+export type ChatMessage = AdminMsg | ProposalMsg | NoteMsg | AskMsg;
 
 export type AttachedFile = {
   id: string;

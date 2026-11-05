@@ -87,6 +87,38 @@ export async function getAiUsageSummary(days = 30): Promise<AiUsageRow[]> {
   return result?.rows ?? [];
 }
 
+export type AiBudgetState = { exceeded: boolean; spentUsd: number; budgetUsd: number; environment: string };
+
+/**
+ * Today's estimated spend of THIS environment against AI_DAILY_BUDGET_USD (default 20). The
+ * admin assistant and the file parser stop calling the model once it is reached (the
+ * deterministic edits keep working); a failed check never blocks anything.
+ */
+export async function aiBudgetState(budgetUsd = Number(process.env.AI_DAILY_BUDGET_USD || 20)): Promise<AiBudgetState> {
+  const environment = aiEnvironment();
+  const state: AiBudgetState = { exceeded: false, spentUsd: 0, budgetUsd, environment };
+  if (!Number.isFinite(budgetUsd) || budgetUsd <= 0 || environment === "test") return state;
+  try {
+    const spent = (await queryNeon<{ cost: number | null }>(
+      `SELECT SUM(est_cost_usd)::float AS cost FROM travel_ai_usage
+        WHERE environment = $1 AND day = (NOW() AT TIME ZONE 'Asia/Ulaanbaatar')::date`,
+      [environment],
+    ))?.rows[0]?.cost ?? 0;
+    state.spentUsd = Number(spent) || 0;
+    state.exceeded = state.spentUsd >= budgetUsd;
+    if (state.exceeded) logWarn("ai_usage.daily_budget_stop", { costUsd: state.spentUsd, budgetUsd, environment });
+  } catch (error) {
+    logError("ai_usage.budget_check_failed", { message: error instanceof Error ? error.message : String(error) });
+  }
+  return state;
+}
+
+/** What the admin reads when the model is not called because of the budget. */
+export function aiBudgetMessage(state: AiBudgetState): string {
+  return `Өнөөдрийн AI зардал ойролцоогоор $${state.spentUsd.toFixed(2)} — өдрийн хязгаар $${state.budgetUsd}-д хүрсэн тул AI-д дамжуулахгүй. `
+    + "Энгийн заавар (огноо дүүрсэн, үнэ, цуцлах, архивлах) код дээр ажиллана. Маргааш (Улаанбаатарын цагаар) үргэлжилнэ, эсвэл AI_DAILY_BUDGET_USD-г өсгөнө үү.";
+}
+
 /** Today's estimated production spend against AI_DAILY_BUDGET_USD (default 20): an admin warning when over. */
 export async function getAiSpendIssues(budgetUsd = Number(process.env.AI_DAILY_BUDGET_USD || 20)): Promise<ReadinessIssue[]> {
   try {

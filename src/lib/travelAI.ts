@@ -7,7 +7,7 @@ import {
   recordCounter,
 } from "./observability";
 import { queryNeon } from "./neonDb";
-import type { AITripAction, ConflictSeverity, ConflictItem, AIChangeProposal } from "./travelTypes";
+import type { AITripAction, ConflictSeverity, ConflictItem, AIChangeProposal, TravelTrip } from "./travelTypes";
 import { AI_BILLING_FAILURE_SUMMARY, AI_KEY_FAILURE_SUMMARY, wait, ensureTravelSchema, listTrips, normalizeProposal, parseJsonFromModel, proposalFallbackFromRawText, dedupeStrings, estimateInlineBytes } from "./travelDb";
 import {
   AI_CHANGE_OPENAI_TIMEOUT_MS,
@@ -39,7 +39,9 @@ import {
 } from "./travelAIValidation";
 export * from "./travelAIValidation";
 // Prompt-string builders live in travelAIGuides.ts (kept this file under the cap).
-import { buildExtractionGuidance, buildProposalGuide, buildProposalRepairGuide } from "./travelAIGuides";
+import { buildExtractionGuidance, buildInstructionGuide, buildProposalGuide, buildProposalRepairGuide } from "./travelAIGuides";
+import { applyTripChoice, bindActionTargets, hasOpenQuestions, knownDepartureDays } from "./assistantBrain";
+import { houseRulesPrompt } from "./assistantHouseRules";
 
 type ProposalSource = {
   label: string;
@@ -600,6 +602,11 @@ async function verifyProposalAgainstSource(opts: {
   }
 }
 
+// A typed instruction is one short JSON extraction over an 8k-token guide that is mostly the
+// same every call: gpt-4.1 (cheaper input and cached-input than gpt-4o, same family as the
+// customer replies) since 2026-11-05. OPENAI_INSTRUCTION_MODEL overrides.
+const OPENAI_INSTRUCTION_MODEL = process.env.OPENAI_INSTRUCTION_MODEL || "gpt-4.1";
+
 async function requestProposalFromModel(opts: {
   condensedTrips: unknown;
   userParts: OpenAIPart[];
@@ -609,11 +616,16 @@ async function requestProposalFromModel(opts: {
   repairTimeoutMs?: number;
   model?: string;
   verify?: boolean;
+  /** A typed instruction: the guide adds the house rules and the trips it most likely concerns. */
+  instruction?: { focusTrips: unknown[] };
 }) {
   // OpenAI handles all proposal extraction (file parsing + text instructions).
   // PDF inputs are rendered/extracted before reaching this path.
+  const guide = opts.instruction
+    ? buildInstructionGuide(opts.condensedTrips, { focusTrips: opts.instruction.focusTrips, houseRules: houseRulesPrompt() })
+    : buildProposalGuide(opts.condensedTrips);
   const result = await askOpenAIParts(
-    [{ text: buildProposalGuide(opts.condensedTrips) }, ...opts.userParts],
+    [{ text: guide }, ...opts.userParts],
     {
       source: opts.source,
       jsonMode: true,
@@ -621,7 +633,7 @@ async function requestProposalFromModel(opts: {
       maxRetries: opts.maxRetries,
       model: opts.model,
       preferOpenAI: true,
-      openaiModel: OPENAI_FILE_PARSE_MODEL,
+      openaiModel: opts.instruction ? OPENAI_INSTRUCTION_MODEL : OPENAI_FILE_PARSE_MODEL,
       maxOutputTokens: 16_384,
     },
   );
@@ -638,7 +650,7 @@ async function requestProposalFromModel(opts: {
           maxRetries: 0,
           model: opts.model,
           preferOpenAI: true,
-          openaiModel: OPENAI_FILE_PARSE_MODEL,
+          openaiModel: opts.instruction ? OPENAI_INSTRUCTION_MODEL : OPENAI_FILE_PARSE_MODEL,
         },
       );
       parsed = parseJsonFromModel(repaired.text);
@@ -716,6 +728,65 @@ async function requestProposalFromPrompt(opts: {
   return parsed ? normalizeProposal(parsed) : proposalFallbackFromRawText(result.text);
 }
 
+/** One trip as the model should see it when an instruction is about it: every fact it may need. */
+export function focusTripDetail(trip: TravelTrip, now = new Date()) {
+  const groups = Array.isArray(trip.extra?.price_groups) ? (trip.extra.price_groups as unknown[]) : [];
+  const row = (value: unknown): Record<string, unknown> => (value && typeof value === "object" ? (value as Record<string, unknown>) : {});
+  return {
+    id: trip.id,
+    route_name: trip.route_name,
+    aliases: Array.isArray(trip.extra?.aliases) ? trip.extra.aliases : [],
+    status: trip.status,
+    duration_text: trip.duration_text,
+    adult_price: trip.adult_price,
+    child_price: trip.child_price,
+    infant_price: trip.infant_price,
+    currency: trip.currency,
+    departure_dates: trip.departure_dates,
+    departure_days: knownDepartureDays(trip, now).map((day) => ({ date: day.date, state: day.state ?? "not_on_website" })),
+    price_rows: groups.slice(0, 24).map((group) => {
+      const value = row(group);
+      return { label: value.label, dates: value.dates, adult_price: value.adult_price, child_price: value.child_price, infant_price: value.infant_price,
+        passengers: Array.isArray(value.passenger_prices) ? value.passenger_prices.map((tier) => { const t = row(tier); return { label: t.label, age_range: t.age_range, price: t.price }; }) : [] };
+    }),
+    seats_total: trip.seats_total,
+    seats_left: trip.seats_left,
+    has_food: trip.has_food,
+    hotel: trip.hotel,
+    transport_type: trip.extra?.transport_type ?? null,
+    notes: String(trip.notes || "").slice(0, 600),
+  };
+}
+
+/**
+ * The change request's id as a number. The column is BIGSERIAL and the driver returns
+ * bigints as strings, so the admin page (which checks `typeof === "number"`) saw no id at
+ * all: every proposal was applied as a one-off copy, a pending row was left behind each
+ * time, and the Буцаах (rollback) button never appeared (live run, 2026-11-05).
+ */
+export function changeRequestId(row: { id?: unknown } | null | undefined): number | null {
+  const id = Number(row?.id);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+/**
+ * Saves a proposal built in code (the brain, a quick action) as a change request, so it
+ * can be applied, revised and rolled back like a model proposal.
+ */
+export async function persistProposal(instruction: string, proposal: AIChangeProposal): Promise<number | null> {
+  try {
+    const inserted = await queryNeon<{ id: number }>(
+      `INSERT INTO travel_ai_change_requests (instruction, proposal_json, conflicts, needs_confirmation, status)
+       VALUES ($1, $2::jsonb, $3::text[], $4, 'pending') RETURNING id`,
+      [instruction, JSON.stringify(proposal), proposal.conflicts || [], proposal.needs_confirmation],
+    );
+    return changeRequestId(inserted?.rows?.[0]);
+  } catch (error) {
+    logError("travel.ai.proposal_insert_failed", { source: "assistant.brain", message: error instanceof Error ? error.message : String(error) });
+    return null;
+  }
+}
+
 async function createProposal(opts: {
   instruction: string;
   source: string;
@@ -724,18 +795,26 @@ async function createProposal(opts: {
   maxRetries?: number;
   repairTimeoutMs?: number;
   buildProposal?: (condensedTrips: unknown) => Promise<AIChangeProposal>;
+  /** The catalogue as already read by the caller (saves a second read). */
+  trips?: TravelTrip[];
+  /** A typed instruction: which trips it most likely concerns, for the model's guide. */
+  focusTrips?: TravelTrip[];
 }) {
   const ready = await ensureTravelSchema();
   if (!ready) {
     return { proposal: normalizeProposal(null), request_id: null };
   }
 
-  const trips = await listTrips({ limit: 250 });
+  const trips = opts.trips ?? await listTrips({ limit: 250, includeArchived: true });
   const tripsInCreatedOrder = [...trips].sort((a, b) =>
     a.created_at.localeCompare(b.created_at),
   );
   let unnamedOrder = 0;
-  const condensedTrips = tripsInCreatedOrder.map((trip) => ({
+  const instructionMode = opts.focusTrips !== undefined;
+  const condensedTrips = instructionMode
+    // The guide carries the likely trips in full; the rest of the catalogue only has to be findable by name.
+    ? tripsInCreatedOrder.map((trip) => ({ id: trip.id, route_name: trip.route_name, status: trip.status, next_departure: trip.departure_dates[0] ?? null }))
+    : tripsInCreatedOrder.map((trip) => ({
     id: trip.id,
     category: trip.category,
     operator_name: trip.operator_name,
@@ -770,9 +849,14 @@ async function createProposal(opts: {
           timeoutMs: opts.timeoutMs,
           maxRetries: opts.maxRetries,
           repairTimeoutMs: opts.repairTimeoutMs,
+          ...(instructionMode ? { instruction: { focusTrips: (opts.focusTrips || []).map((trip) => focusTripDetail(trip)) } } : {}),
         }),
       );
     }
+    // An action that names its trip instead of identifying it is resolved the way the admin's
+    // own words are: one clear trip binds it, several become a question with choices.
+    bindActionTargets(proposal, trips);
+    stampTripVersions(proposal, trips);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const classification = classifyError(error);
@@ -843,7 +927,7 @@ async function createProposal(opts: {
 
   return {
     proposal,
-    request_id: inserted?.rows?.[0]?.id ?? null,
+    request_id: changeRequestId(inserted?.rows?.[0]),
   };
 }
 
@@ -864,7 +948,7 @@ function looksLikeBulkPaste(instruction: string): boolean {
   return priceCues >= 8;
 }
 
-export async function generateAIProposal(instruction: string, options?: { context?: string }) {
+export async function generateAIProposal(instruction: string, options?: { context?: string; trips?: TravelTrip[]; focusTrips?: TravelTrip[] }) {
   // Big pasted price lists go through the batched (chunk + merge) pipeline so a
   // single oversized prompt can't time out or get rate-limited. Normal short
   // commands keep the fast, direct single-request path.
@@ -880,6 +964,8 @@ export async function generateAIProposal(instruction: string, options?: { contex
 
   return createProposal({
     instruction,
+    trips: options?.trips,
+    focusTrips: options?.focusTrips ?? [],
     userParts: [{ text: options?.context
       ? `Өмнөх яриа (зөвхөн ойлгоход; одоогийн хүсэлтийг биелүүл):
 ${options.context}
@@ -1741,7 +1827,22 @@ export async function reviseAIRequest(
   }
 
   const currentProposal = normalizeProposal(row.proposal_json);
-  const trips = await listTrips({ limit: 250 });
+  const trips = await listTrips({ limit: 250, includeArchived: true });
+
+  // A tapped trip answers its question in code. When nothing else is open, the proposal is
+  // complete as it stands and the model is not asked to "revise" what it never got wrong.
+  if (applyTripChoice(clarification, currentProposal, trips) && !hasOpenQuestions(currentProposal)) {
+    const settled = validateAIChangeProposal(currentProposal, trips, {
+      forbidCreate: instructionForbidsTripCreation(row.instruction),
+    }).proposal;
+    settled.photo_sources = currentProposal.photo_sources;
+    await queryNeon(
+      `UPDATE travel_ai_change_requests SET proposal_json = $2::jsonb, conflicts = $3::text[], needs_confirmation = $4 WHERE id = $1`,
+      [requestId, JSON.stringify(settled), settled.conflicts, settled.needs_confirmation],
+    );
+    return { ok: true, proposal: settled, request_id: requestId, requires_confirmation: Boolean(settled.needs_confirmation) };
+  }
+
   const condensedTrips = trips.map((trip) => ({
     id: trip.id,
     category: trip.category,
@@ -1821,4 +1922,19 @@ export async function reviseAIRequest(
     request_id: requestId,
     requires_confirmation: Boolean(revisedProposal.needs_confirmation),
   };
+}
+
+
+/**
+ * A model action on an existing trip remembers the trip version the prompt was built from, as
+ * the brain's own actions do, so apply can refuse it once the trip has moved on.
+ */
+function stampTripVersions(proposal: AIChangeProposal, trips: TravelTrip[]): void {
+  const versions = new Map(trips.map((trip) => [trip.id, trip.updated_at]));
+  for (const action of proposal.actions) {
+    const verb = String(action.action || "").toLowerCase();
+    if (!action.trip_id || action.expected_updated_at || (verb !== "patch" && verb !== "cancel" && verb !== "delete")) continue;
+    const version = versions.get(action.trip_id);
+    if (version) action.expected_updated_at = version;
+  }
 }

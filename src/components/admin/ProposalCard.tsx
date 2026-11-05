@@ -58,6 +58,8 @@ const STATE_TAG: Record<CardState, { label: string; className: string }> = {
 const VERB_DOT: Record<string, string> = {
   "Шинэ аялал нэмэх": "bg-success",
   "Цуцлах": "bg-danger",
+  "Архивлах": "bg-danger",
+  "Огнооны төлөв": "bg-sun",
 };
 
 /** A new trip in a few lines: shown while a question is open and after the save. */
@@ -124,7 +126,19 @@ export function ProposalCard({
   const openTrips = edits.proposal === proposal ? edits.open : {};
   const fieldsOf = (index: number): Row => drafts[index] ?? record(proposal.actions[index]?.fields);
   const setDraft = (index: number, next: Row) => setEdits({ proposal, drafts: { ...drafts, [index]: next }, open: openTrips });
-  const described = proposal.actions.map((action, index) => describeAction(isNewTripAction(action) ? { ...action, fields: fieldsOf(index) } : action));
+  // An action built from an id alone (a tapped choice, a per-date change) is shown under the
+  // trip's name, never its id.
+  const described = proposal.actions.map((action, index) => {
+    const info = describeAction(isNewTripAction(action) ? { ...action, fields: fieldsOf(index) } : action);
+    const trip = action.trip_id ? existingTrips.find((entry) => entry.id === action.trip_id) : undefined;
+    return trip && info.target === action.trip_id ? { ...info, target: trip.route_name } : info;
+  });
+  const websiteLink = (() => {
+    const id = proposal.actions.find((action) => action.trip_id)?.trip_id;
+    const trip = id ? existingTrips.find((entry) => entry.id === id) : undefined;
+    const slug = (trip?.extra?.website_sync as { website_slug?: string } | null | undefined)?.website_slug;
+    return slug ? `https://uudamtravel.mn/mn/trips/${encodeURIComponent(slug)}` : null;
+  })();
 
   function diffsFor(index: number): TripExtraDiff[] {
     const action = proposal.actions[index];
@@ -161,7 +175,8 @@ export function ProposalCard({
     ? (String(fieldsOf(0).route_name ?? "").trim() || described[0]?.target || "Аялал")
     : creates.length === proposal.actions.length ? `${creates.length} шинэ аялал` : `${proposal.actions.length} аяллын өөрчлөлт`;
   const eyebrow = single >= 0 ? described[0]?.verb ?? "Өөрчлөлт" : creates.length === proposal.actions.length ? "Шинэ аялал нэмэх" : "Хэд хэдэн өөрчлөлт";
-  const summary = proposal.summary.trim();
+  // The sentence under the title, without repeating the title ("«Trip» — 12-р сарын 27…" → "12-р сарын 27…").
+  const summary = stripSubject(proposal.summary.trim(), [title]);
   // In a review the name is the first field and the sections say the rest.
   const showTitle = !(reviewing && single >= 0);
   const showSummary = showTitle && !creates.length && summary && summary.toLowerCase() !== title.toLowerCase();
@@ -314,6 +329,9 @@ export function ProposalCard({
               )}
               {!create && diffs.length === 0 && info.changes.length === 0 && info.verb === "Цуцлах" && (
                 <p className="mt-1 text-sm text-ink-muted">Төлөв <span className="text-ink-subtle line-through">Идэвхтэй</span> <span aria-hidden="true">→</span> <span className="font-semibold text-danger">Цуцлагдсан</span></p>
+              )}
+              {!create && diffs.length === 0 && info.changes.length === 0 && info.verb === "Архивлах" && (
+                <p className="mt-1.5 text-sm text-ink-muted">Төлөв <span aria-hidden="true">→</span> <span className="font-semibold text-danger">Архив</span> · сайт болон ботоос харагдахгүй, буцаах боломжтой</p>
               )}
             </section>
           );
@@ -491,9 +509,16 @@ export function ProposalCard({
               </span>
             </span>
           </p>
-          {message.requestId != null && (
-            <Button size="sm" variant="secondary" loading={applyBusy} onClick={() => onRollback(message)}>Буцаах</Button>
-          )}
+          <span className="flex items-center gap-3">
+            {websiteLink && (
+              <a href={websiteLink} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-brand underline decoration-brand/40 underline-offset-4 hover:decoration-brand">
+                Сайтаас харах
+              </a>
+            )}
+            {message.requestId != null && (
+              <Button size="sm" variant="secondary" loading={applyBusy} onClick={() => onRollback(message)}>Буцаах</Button>
+            )}
+          </span>
         </footer>
       )}
       {state === "reverted" && (

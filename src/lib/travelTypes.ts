@@ -91,14 +91,57 @@ export type TripMutationFields = Partial<
   >
 >;
 
+/** How one departure day shows on the website and in the bot: open, few seats left, or sold out. */
+export type DateSeatState = "open" | "low" | "full";
+
 export type AITripAction = {
-  action: "upsert" | "patch" | "cancel";
+  /**
+   * upsert/patch/cancel edit the trip record. set_date_state changes ONE departure day's
+   * availability on the website (date + state), delete archives the trip (hidden from the
+   * website and the bot, the record and its history kept, restorable by rollback).
+   */
+  action: "upsert" | "patch" | "cancel" | "set_date_state" | "delete";
   trip_id?: string;
   match?: {
     operator_name?: string;
     route_name?: string;
   };
   fields?: TripMutationFields;
+  /** set_date_state: the departure day, YYYY-MM-DD. */
+  date?: string;
+  /** set_date_state: what that day becomes. */
+  state?: DateSeatState;
+  /**
+   * The trip's updated_at when the proposal was built. Apply refuses the action when the
+   * trip changed in between (another admin, the website), so nobody's edit is overwritten.
+   */
+  expected_updated_at?: string;
+};
+
+/** One choice the admin can tap in a proposal question; `answer` is what is sent back. */
+export type ProposalQuestionOption = {
+  label: string;
+  answer: string;
+  recommended?: boolean;
+  /** A short second line (the trip's status or next date). */
+  hint?: string;
+};
+
+/**
+ * A question the assistant needs answered before the change is exact: which of several
+ * trips, which departure day, a missing amount. Built in code with real options, so the
+ * admin taps instead of retyping a name, and answered in code when the answer is one of
+ * the options (the model is not consulted again).
+ */
+export type ProposalQuestion = {
+  id: string;
+  prompt: string;
+  detail?: string;
+  options: ProposalQuestionOption[];
+  allow_custom?: boolean;
+  custom_placeholder?: string;
+  /** What the answer resolves (for a "which trip" question: the action waiting for its trip). */
+  data?: Record<string, unknown>;
 };
 
 export type ConflictSeverity = "info" | "warning" | "blocker";
@@ -132,6 +175,8 @@ export type AIChangeProposal = {
    * sees or owns these URLs and therefore can never lose them.
    */
   photo_sources?: Array<{ label: string; urls: string[] }>;
+  /** Open questions with tappable options (see ProposalQuestion). Empty once everything is exact. */
+  questions?: ProposalQuestion[];
 };
 
 export type ProposalValidationReport = {

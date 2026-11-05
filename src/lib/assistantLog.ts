@@ -1,7 +1,7 @@
 import { queryNeon } from "./neonDb";
 import { logWarn } from "./observability";
 
-export type AssistantLogKind = "instruction" | "clarification" | "quick_action" | "proposal" | "applied" | "rolled_back" | "error";
+export type AssistantLogKind = "instruction" | "clarification" | "quick_action" | "proposal" | "ask" | "note" | "applied" | "rolled_back" | "error";
 
 const MAX_TEXT_CHARS = 4000;
 const CONTEXT_WINDOW_MINUTES = 30;
@@ -64,7 +64,7 @@ export async function recentAssistantContext(sessionId: unknown): Promise<string
       `SELECT role, kind, text FROM (
          SELECT id, role, kind, text FROM travel_assistant_log
           WHERE session_id = $1 AND created_at > NOW() - make_interval(mins => $2)
-            AND kind IN ('instruction', 'clarification', 'quick_action', 'proposal', 'applied')
+            AND kind IN ('instruction', 'clarification', 'quick_action', 'proposal', 'ask', 'note', 'applied')
           ORDER BY id DESC LIMIT $3
        ) recent ORDER BY id`,
       [sessionId, CONTEXT_WINDOW_MINUTES, CONTEXT_TURNS],

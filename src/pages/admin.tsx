@@ -30,7 +30,7 @@ import { JsonEditorTab } from "@/components/admin/JsonEditorTab";
 import { TripPhotoImportTab } from "@/components/admin/TripPhotoImportTab";
 import PosterTab from "@/components/admin/poster/PosterTab";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
-import type { AIProposal, AIProposalResponse, AttachedFile, BookingTerms, ChatMessage, ControlState, DiscountGroup, DriveSyncDiagnostics, ExtraFee, ItineraryDay, LeadCrmStatus, LeadStats, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ReadinessReport, RecentRow, RoomPrice, SettingsForm, TabKey, TravelBotSettings, TravelLead, TravelTrip } from "@/lib/adminTypes";
+import type { AIProposal, AIProposalResponse, AskMsg, AttachedFile, BookingTerms, ChatMessage, ControlState, DiscountGroup, DriveSyncDiagnostics, ExtraFee, ItineraryDay, LeadCrmStatus, LeadStats, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalQuestionOption, ReadinessReport, RecentRow, RoomPrice, SettingsForm, TabKey, TravelBotSettings, TravelLead, TravelTrip } from "@/lib/adminTypes";
 import { emptyBookingTerms, toBookingTermsForm } from "@/lib/adminTypes";
 import { deriveChildRules, withDerivedSummaryFields } from "@/lib/priceGroups";
 import { documentedFreeFare } from "@/lib/tripCompleteness";
@@ -1043,10 +1043,15 @@ export default function AdminPage() {
       setBusyKey("");
     }
   }
-  async function sendAssistant() {
-    const text = aiInput.trim();
-    const files = attachedFiles;
-    const driveFileIds = extractGoogleDriveFileIds(text);
+  /**
+   * Sends what is in the composer — or, from a tapped choice, that option's answer (the
+   * thread shows the option's label). Typed text goes to the assistant's own understanding
+   * first and reaches the model only when that does not know what to do.
+   */
+  async function sendAssistant(override?: { instruction: string; shown: string }) {
+    const text = override ? override.instruction.trim() : aiInput.trim();
+    const files = override ? [] : attachedFiles;
+    const driveFileIds = override ? [] : extractGoogleDriveFileIds(text);
     if (!text && files.length === 0 && driveFileIds.length === 0) return;
     if (busyKey === "ai-send") return;
     if (text.length > MAX_AI_INPUT_CHARS) {
@@ -1062,11 +1067,13 @@ export default function AdminPage() {
     pushMessage({
       id: uid(),
       role: "admin",
-      text: text || "Файл орууллаа",
+      text: override ? override.shown : text || "Файл орууллаа",
       fileNames: sourceNames,
     });
-    setAiInput("");
-    setAttachedFiles([]);
+    if (!override) {
+      setAiInput("");
+      setAttachedFiles([]);
+    }
     setBusyKey("ai-send");
     setAiBusyProgress(
       files.length > 0 || driveFileIds.length > 0 ? 3 : null,
@@ -1117,6 +1124,23 @@ export default function AdminPage() {
         const data = json as AIProposalResponse;
         if (!res.ok) {
           throw new Error(apiErrorMessage(data, "AI санал үүсгэж чадсангүй."));
+        }
+        // One question with choices (which trip, which day, which amount): nothing to save yet.
+        if (data.ask && typeof data.ask.text === "string") {
+          pushMessage({
+            id: uid(),
+            role: "assistant",
+            kind: "ask",
+            text: data.ask.text,
+            options: Array.isArray(data.ask.options) ? data.ask.options : [],
+            allowCustom: data.ask.allow_custom === true,
+            customPlaceholder: data.ask.custom_placeholder,
+          });
+          return;
+        }
+        if (typeof data.note === "string" && data.note.trim()) {
+          pushMessage({ id: uid(), role: "assistant", kind: "note", tone: "info", text: data.note });
+          return;
         }
         proposal = data.proposal;
         requestId = typeof data.request_id === "number" ? data.request_id : null;
@@ -1186,6 +1210,16 @@ export default function AdminPage() {
   const { setProposalMessage, applyProposal, rollbackProposal, submitClarificationForm } = useProposalActions({
     fetchWithAdmin, readJsonSafe, toast, loadAll, setBusyKey, session: assistantSession, setChatMessages,
   });
+  /** A tapped choice: the thread shows its label, the assistant gets its full answer. */
+  function chooseAskOption(message: AskMsg, option: ProposalQuestionOption) {
+    if (busyKey === "ai-send") return;
+    setChatMessages((prev) =>
+      prev.map((entry) =>
+        entry.id === message.id && "kind" in entry && entry.kind === "ask" ? { ...entry, answered: option.label } : entry,
+      ),
+    );
+    void sendAssistant({ instruction: option.answer, shown: option.label });
+  }
   async function runPauseAction(
     action:
       | "pause"
@@ -1954,6 +1988,7 @@ export default function AdminPage() {
                 busyKey.startsWith("clarify-") ? busyKey.slice(8) : ""
               }
               onSend={() => void sendAssistant()}
+              onChooseOption={chooseAskOption}
               onQuickAction={(kind, trip, value) => void sendQuickAction(kind, trip, value)}
               onEditTripPrice={(trip) => beginEditTrip(trip)}
               onNewTrip={() => beginCreateTrip()}

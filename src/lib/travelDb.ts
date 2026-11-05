@@ -50,6 +50,8 @@ import type {
   AIChangeProposal,
   AIProposalFailureResponse,
   BroadcastRecord,
+  ProposalQuestion,
+  DateSeatState,
 } from "./travelTypes";
 
 const env = getEnv();
@@ -1455,6 +1457,11 @@ export function normalizeProposal(input: AIChangeProposal | null): AIChangePropo
           type: typeof (item as Record<string, unknown>).type === "string"
             ? String((item as Record<string, unknown>).type)
             : undefined,
+          // The facts behind an item (the route a transport choice is about) must survive a
+          // database round trip, or a stored proposal's clickable choices lose their target.
+          ...(item.data && typeof item.data === "object" && !Array.isArray(item.data)
+            ? { data: item.data as Record<string, unknown> }
+            : {}),
         }))
         .filter((item) => item.text)
     : // No structured items — wrap flat conflicts as "blocker" so old behavior preserved.
@@ -1481,6 +1488,8 @@ export function normalizeProposal(input: AIChangeProposal | null): AIChangePropo
         .filter((s) => s.urls.length > 0)
     : undefined;
 
+  const questions = normalizeProposalQuestions(input.questions);
+
   return {
     summary: String(input.summary || "AI саналыг үүсгэлээ."),
     needs_confirmation: Boolean(input.needs_confirmation),
@@ -1491,7 +1500,45 @@ export function normalizeProposal(input: AIChangeProposal | null): AIChangePropo
       ? (input.actions as unknown[]).filter((action) => action && typeof action === "object") as AITripAction[]
       : [],
     ...(photo_sources && photo_sources.length > 0 ? { photo_sources } : {}),
+    ...(questions.length > 0 ? { questions } : {}),
   };
+}
+
+/** Structured questions as stored or as the model wrote them; anything malformed is dropped. */
+export function normalizeProposalQuestions(value: unknown): ProposalQuestion[] {
+  if (!Array.isArray(value)) return [];
+  const out: ProposalQuestion[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue;
+    const item = raw as Record<string, unknown>;
+    const prompt = typeof item.prompt === "string" ? item.prompt.trim() : "";
+    if (!prompt) continue;
+    const options = (Array.isArray(item.options) ? item.options : [])
+      .filter((option): option is Record<string, unknown> => Boolean(option) && typeof option === "object")
+      .map((option) => ({
+        label: String(option.label || option.answer || "").trim().slice(0, 160),
+        answer: String(option.answer || option.label || "").trim().slice(0, 2000),
+        ...(option.recommended === true ? { recommended: true } : {}),
+        ...(typeof option.hint === "string" && option.hint.trim() ? { hint: option.hint.trim().slice(0, 120) } : {}),
+      }))
+      .filter((option) => option.label && option.answer)
+      .slice(0, 12);
+    const allowCustom = item.allow_custom === true || (item as { allowCustom?: unknown }).allowCustom === true;
+    if (!options.length && !allowCustom) continue;
+    out.push({
+      id: String(item.id || `q-${out.length + 1}`).slice(0, 120),
+      prompt: prompt.slice(0, 400),
+      ...(typeof item.detail === "string" && item.detail.trim() ? { detail: item.detail.trim().slice(0, 600) } : {}),
+      options,
+      ...(allowCustom ? { allow_custom: true } : {}),
+      ...(typeof item.custom_placeholder === "string" && item.custom_placeholder.trim()
+        ? { custom_placeholder: item.custom_placeholder.trim().slice(0, 120) }
+        : {}),
+      ...(item.data && typeof item.data === "object" && !Array.isArray(item.data) ? { data: item.data as Record<string, unknown> } : {}),
+    });
+    if (out.length >= 6) break;
+  }
+  return out;
 }
 
 /** Summaries the proposal carries when the provider refused for billing or key reasons. */
@@ -1716,6 +1763,14 @@ export function findTripMatches(
     .map((m) => m.trip);
 }
 
+export function isIsoDate(value: unknown): value is string {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+export function isDateSeatState(value: unknown): value is DateSeatState {
+  return value === "open" || value === "low" || value === "full";
+}
+
 export function buildConflictLabel(routeName?: string, operatorName?: string): string {
   if (routeName && operatorName) return `"${routeName}" / "${operatorName}"`;
   if (routeName) return `"${routeName}"`;
@@ -1786,6 +1841,8 @@ export function isCompleteCleanAction(action: AITripAction): boolean {
   const fields = action.fields || {};
   const hasTarget = Boolean(action.trip_id || action.match?.route_name || action.match?.operator_name);
   if (verb === "patch") return hasTarget && Object.keys(fields).length > 0;
+  if (verb === "set_date_state") return hasTarget && isIsoDate(action.date) && isDateSeatState(action.state);
+  if (verb === "delete") return hasTarget;
   if (verb !== "upsert") return false;
 
   const routeName = fields.route_name?.trim() || action.match?.route_name?.trim() || "";

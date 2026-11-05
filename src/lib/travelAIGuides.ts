@@ -27,6 +27,35 @@ export function buildProposalRepairGuide(rawText: string): string {
   ].join("\n");
 }
 
+/**
+ * What the model is told when the admin TYPED an instruction (not a file): the owner's
+ * standing rules, the trips the instruction most likely concerns in full, the extra
+ * actions it may use, and that an open point is a question with choices — never a guess.
+ */
+export type InstructionGuideOptions = { focusTrips?: unknown[]; houseRules?: string };
+
+export function buildInstructionGuide(condensedTrips: unknown, options: InstructionGuideOptions): string {
+  const focus = Array.isArray(options.focusTrips) && options.focusTrips.length ? options.focusTrips : null;
+  return [
+    buildProposalGuide(condensedTrips),
+    "",
+    options.houseRules || "",
+    "",
+    "=== АДМИНЫ БИЧСЭН ЗААВАРТ (файл биш) ===",
+    "- Админ аяллын менежер шиг чөлөөтэй бичнэ: «Хайнан 12/27 дүүрсэн», «Бали хүүхэд 300 мянгаар бага», «энэ аяллыг цуцал». Үгийг нь биш, санааг нь гүйцэтгэ.",
+    "- Доорх «Холбогдох аяллын дэлгэрэнгүй» хэсэг бол заавар хамаарах магадлалтай аяллууд. Аль нь болохыг эндээс ол; trip_id-г заавал бич (match-аар биш).",
+    "- Нэг огнооны суудал дүүрсэн/цөөн/нээлттэй гэвэл бүх аяллыг биш, тэр огноог л өөрчил: { \"action\": \"set_date_state\", \"trip_id\": \"…\", \"date\": \"YYYY-MM-DD\", \"state\": \"open|low|full\" } (огноо тус бүрд нэг action).",
+    "- Аяллыг устгах, архивлах гэвэл { \"action\": \"delete\", \"trip_id\": \"…\" } (архивлана; буцаах боломжтой). Цуцлах гэвэл action=cancel.",
+    "- Үнэ өөрчлөхдөө adult_price/child_price/infant_price-г бич; харьцангуй өөрчлөлтийг (нэм, хас, бага) одоогийн үнээс тооцоол.",
+    "- Аль аялал, аль огноо, хэдэн төгрөг гэдэг нь тодорхойгүй бол ТААХГҮЙ: actions-ыг хоосон үлдээж, questions-д сонголттой асуулт тавь:",
+    '  "questions": [ { "id": "q1", "prompt": "монгол асуулт", "options": [ { "label": "Сонголтын нэр", "answer": "админы оронд илгээх бүтэн өгүүлбэр" } ], "allow_custom": true } ]',
+    "  Аялал сонгуулах бол option бүрийн answer-т аяллын нэрийг «хашилтанд» бичиж, ард нь [аялал: «нэр» trip_id=ID] гэж нэм.",
+    "- Өөрчлөх зүйл байхгүй (аль хэдийн тийм байгаа) бол actions хоосон, summary-д яагаад гэдгийг нэг өгүүлбэрээр бич, needs_confirmation=false.",
+    "- Шинэ аялал нэмэх хүсэлт бол файлаас уншсан мэт бүрэн бич (өдөр бүр, үнэ, огноо); мэдээлэл дутуу бол дутууг нь асуу.",
+    focus ? `Холбогдох аяллын дэлгэрэнгүй (JSON): ${JSON.stringify(focus)}` : "Холбогдох аялал урьдчилан олдсонгүй: доорх жагсаалтаас нэрээр нь ол, эргэлзвэл асуу.",
+  ].filter((line) => line !== null).join("\n");
+}
+
 export function buildProposalGuide(condensedTrips: unknown): string {
   return [
     "Та travel operations data assistant байна.",
