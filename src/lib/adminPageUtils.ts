@@ -562,6 +562,9 @@ async function buildPdfUploadUnits(file: File): Promise<ParseUploadUnit[]> {
       const first = pair[0];
       grouped.push({
         ...first,
+        // Pages of one PDF, not loose pictures: a scanned PDF sent beside a Word program is
+        // its own file, never folded into that program as its price picture.
+        sourceGroup: file.name,
         displayName: `${file.name} (pages ${index + 1}-${index + pair.length})`,
         companions: pair.slice(1).map((page) => ({
           filename: page.filename,
