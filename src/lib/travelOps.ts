@@ -77,15 +77,13 @@ export {
 } from "./travelDb";
 
 export {
-  applyAIProposalDirect,
-  applyAIRequest,
   generateAIProposal,
-  generateAIProposalFromContent,
   generateAIProposalFromContentBatched,
   instructionForbidsTripCreation,
   reviseAIRequest,
-  rollbackAIRequest,
   validateAIChangeProposal,
 } from "./travelAI";
+
+export { applyAIProposalDirect, applyAIRequest, rollbackAIRequest } from "./travelAIApply";
 
 export { getAIProposalFailureResponse, AI_BILLING_FAILURE_SUMMARY, AI_KEY_FAILURE_SUMMARY } from "./travelDb";
