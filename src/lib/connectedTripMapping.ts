@@ -6,6 +6,7 @@ import { normalizeTripOffers } from "./tripOffers";
 import { TRANSPORT_WEBSITE_TAGS, isTransportType } from "./tripTransitDays";
 import { statedDayMeals } from "./tripExtraSchema";
 import { getPosterPdfPublicUrl, isUsableStoredPdfUrl } from "./poster/pdfUrl";
+import { posterBaseFareRow } from "./poster/priceTableWrite";
 
 export function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -44,7 +45,13 @@ export function tripToPoster(trip: TravelTrip, prior: unknown, before?: TravelTr
     const table = record(data.price_table);
     const columns = strings(table.columns);
     const rows = records(table.rows);
-    if (rows.length <= 1) {
+    // A one-row table keeps its own columns (infant, age-banded child, single) and date text:
+    // only the adult and child cells follow. Rebuilding it from the two base fares dropped those
+    // columns, and the next Poster-tab save then wrote the trip's fares without them.
+    const inPlace = rows.length === 1 ? posterBaseFareRow(columns, rows[0], { adult: trip.adult_price, child: trip.child_price }) : null;
+    if (inPlace) {
+      data.price_table = { ...table, columns, rows: [inPlace] };
+    } else if (rows.length <= 1) {
       data.price_table = { columns: ["Том хүн", "Хүүхэд"], rows: [{
         dates: trip.departure_dates.join(", "),
         cells: [trip.adult_price, trip.child_price].map(n => n == null ? "Үнэ лавлах" : `${n.toLocaleString("en-US")}₮`),
@@ -59,7 +66,7 @@ export function tripToPoster(trip: TravelTrip, prior: unknown, before?: TravelTr
   if (extraChanged("excluded_items")) data.excludes = strings(trip.extra.excluded_items);
   if (extraChanged("itinerary_days")) {
     const oldDays = records(data.days);
-    data.days = records(trip.extra.itinerary_days).map((day, i) => {
+    const program = records(trip.extra.itinerary_days).map((day, i) => {
       const posterDay: Record<string, unknown> = {
         ...oldDays.find(old => old.day === (day.day ?? i + 1)),
         day: day.day ?? i + 1, route: day.title || "", summary: day.description || "",
@@ -73,6 +80,14 @@ export function tripToPoster(trip: TravelTrip, prior: unknown, before?: TravelTr
       else delete posterDay.meal_note;
       return posterDay;
     });
+    // Photo-only slots after the program hold gallery photos no day shows (photosOntoDays). A
+    // program edit used to drop them, and the next Poster-tab save then dropped those photos
+    // from the trip too (it rebuilds photo_urls from the poster).
+    const shown = new Set(program.map(day => day.photo).filter(Boolean));
+    const lastDay = program.reduce((max, day, i) => Math.max(max, Number(day.day) || i + 1), 0);
+    const slots = oldDays.filter(day => !day.route && !day.summary && !day.hotel
+      && typeof day.photo === "string" && day.photo && !shown.has(day.photo));
+    data.days = [...program, ...slots.map((day, i) => ({ ...day, day: lastDay + i + 1 }))];
   }
   if (changed("photo_urls")) {
     data.days = photosOntoDays(records(data.days), trip.photo_urls);

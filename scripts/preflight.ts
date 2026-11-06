@@ -42,6 +42,22 @@ function isStrictPreflightEnabled() {
 async function run() {
   loadLocalEnvFiles();
 
+  // The admin is Google-only and its session key is ADMIN_SESSION_SECRET. At runtime a missing
+  // or weak key only turns admin sign-in off (env.ts keeps the bot answering), so nothing would
+  // stop a production deploy that locks every staff member out of the admin. Stop the build
+  // here instead, strict mode or not: the deployment already live keeps serving until the key
+  // is set in Vercel (Production). Preview and local builds only warn (readiness).
+  if (String(process.env.VERCEL_ENV || "").trim().toLowerCase() === "production") {
+    const { isWeakAdminKey } = await import("../src/lib/adminSession");
+    if (isWeakAdminKey(process.env.ADMIN_SESSION_SECRET)) {
+      const state = String(process.env.ADMIN_SESSION_SECRET || "").trim() ? "too weak" : "not set";
+      throw new Error(
+        `Preflight failed: admin_session_secret_weak (ADMIN_SESSION_SECRET is ${state} in this production build; ` +
+          "set 48+ random characters, marked Sensitive, in Vercel Production, then redeploy)",
+      );
+    }
+  }
+
   // Env validation must never hard-fail the *build*. On Vercel the build step
   // may not see every runtime secret (e.g. Preview vs Production scope), but
   // the actual serverless functions do at request time. A missing var should

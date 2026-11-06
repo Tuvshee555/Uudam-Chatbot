@@ -382,6 +382,24 @@ type TripMatchOptions = {
   includeArchived?: boolean;
 };
 
+/**
+ * A trip staff hid from customers (the admin's "Харагдах эсэх" off, extra.customer_visible ===
+ * false): it is never offered, matched or quoted to a customer, whatever its status. The
+ * knowledge text already left it out; the fast-path lists did not (2026-11-06).
+ */
+export function isHiddenFromCustomers(trip: TravelTrip): boolean {
+  return trip.extra?.customer_visible === false;
+}
+
+/**
+ * The trips a customer may be offered: every trip but the ones staff hid. Applied where the
+ * customer catalogue is loaded (webhook), not in the matcher: the admin assistant finds trips
+ * with the same matcher, and it must still find a hidden one (to show it again).
+ */
+export function withoutHiddenTrips<T extends TravelTrip>(trips: T[]): T[] {
+  return trips.filter((trip) => !isHiddenFromCustomers(trip));
+}
+
 function canMatchTripStatus(trip: TravelTrip, options?: TripMatchOptions): boolean {
   if (trip.status === "active") return true;
   if (options?.includeArchived === true && trip.status === "archived") return true;

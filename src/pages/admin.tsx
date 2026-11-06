@@ -1,9 +1,7 @@
 ﻿import Head from "next/head";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Badge, Button, Icons, Logo, useToast } from "@/components/ui";
-import { extractGoogleDriveFileIds } from "@/lib/googleDriveLinks";
-import { buildProposalClarifications } from "@/lib/adminProposalUtils";
-import { useProposalActions } from "@/components/admin/useProposalActions";
+import { useAssistantChat } from "@/components/admin/useAssistantChat";
 import { AdminConfirmModals } from "@/components/admin/AdminConfirmModals";
 import { NewVersionBanner } from "@/components/admin/NewVersionBanner";
 import { AdminLoginGate, GOOGLE_LOGIN_ERRORS } from "@/components/admin/AdminLoginGate";
@@ -27,11 +25,10 @@ import { useTripEditor } from "@/components/admin/tripEditor/useTripEditor";
 import { JsonEditorTab } from "@/components/admin/JsonEditorTab";
 import { TripPhotoImportTab } from "@/components/admin/TripPhotoImportTab";
 import PosterTab from "@/components/admin/poster/PosterTab";
-import type { AIProposal, AIProposalResponse, AskMsg, AttachedFile, ChatMessage, ControlState, DriveSyncDiagnostics, LeadCrmStatus, LeadStats, PageControlState, ParseUploadUnit, PauseRow, ProposalQuestionOption, ReadinessReport, RecentRow, SettingsForm, TabKey, TravelBotSettings, TravelLead, TravelTrip } from "@/lib/adminTypes";
+import type { ControlState, DriveSyncDiagnostics, LeadCrmStatus, LeadStats, PageControlState, PauseRow, ReadinessReport, RecentRow, SettingsForm, TabKey, TravelBotSettings, TravelLead, TravelTrip } from "@/lib/adminTypes";
 import type { LeadAttentionSummary } from "@/lib/leadAttention";
 import { changedSettingsFields } from "@/lib/adminPageUtils";
-import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, apiErrorMessage, buildImageUploadUnit, groupDocumentWithImages, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, emptyChunkResult, isStaleBundleError, STALE_BUNDLE_MESSAGE, fileToDataUrl, getSecretStorage, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, mergeAIProposals, settingsToForm, shortId, uid } from "@/lib/adminPageUtils";
-const MAX_AI_SOURCE_TEXT_CHARS = 20_000;
+import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, SECRET_KEY, SECRET_TS_KEY, getSecretStorage, isEditableElement, settingsToForm } from "@/lib/adminPageUtils";
 const TRIP_DATA_TABS = new Set<TabKey>(["assistant", "trips", "calendar", "greeting", "photos"]);
 const SYSTEM_CHECK_INTERVAL_MS = 5 * 60_000;
 /** Matches the leads API page (LEAD_PAGE_SIZE in /api/admin/leads). */
@@ -49,9 +46,7 @@ export default function AdminPage() {
   // knows whether it is signed in. Nothing loads until it is.
   const [authState, setAuthState] = useState<"checking" | "signed_in" | "signed_out">("checking");
   const authRef = useRef(authState);
-  const [secretDraft, setSecretDraft] = useState("");
   const [loginError, setLoginError] = useState("");
-  const [loginBusy, setLoginBusy] = useState(false);
   const [googleSignIn, setGoogleSignIn] = useState(false);
   const [dbInfo, setDbInfo] = useState<{
     configured: boolean;
@@ -83,21 +78,6 @@ export default function AdminPage() {
   const [settings, setSettings] = useState<TravelBotSettings | null>(null);
   const [settingsForm, setSettingsForm] = useState<SettingsForm | null>(null);
   const settingsBaselineRef = useRef<TravelBotSettings | null>(null);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
-    {
-      id: "intro",
-      role: "assistant",
-      kind: "note",
-      tone: "info",
-      text:
-        "Сайн байна уу! Аяллын мэдээллээ энд шуурхай өөрчилнө. Бичгээр зааварчилж болно (ж: «<Аяллын нэр> аяллыг цуцал»), эсвэл прайс жагсаалт (Excel, PDF, зураг) хавсаргаарай. Би уншаад өөрчлөлтийг санал болгоно — та зөвшөөрвөл шууд хадгална.",
-    },
-  ]);
-  const [aiInput, setAiInput] = useState("");
-  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
-  const [dragOver, setDragOver] = useState(false);
-  const [aiBusyLabel, setAiBusyLabel] = useState("");
-  const [aiBusyProgress, setAiBusyProgress] = useState<number | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(false);
   const [deletingTrip, setDeletingTrip] = useState<TravelTrip | null>(null);
@@ -117,10 +97,6 @@ export default function AdminPage() {
   const [broadcastSending, setBroadcastSending] = useState(false);
   const [broadcastResult, setBroadcastResult] = useState<{ sent: number; failed: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // One id per page load: the server keeps this admin's assistant conversation (never shown here) and reads follow-ups against it.
-  const assistantSession = useRef(uid());
-  const chatEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
   const searchRef = useRef(search);
   const tripLoadRevision = useRef(0);
   const statusFilterRef = useRef(statusFilter);
@@ -379,6 +355,10 @@ export default function AdminPage() {
     markAdminLocked,
     toast,
   ]);
+  // The AI туслах conversation: send / answer / save / undo, files and photos, the thread kept
+  // across a reload (components/admin/useAssistantChat.ts).
+  const assistant = useAssistantChat({ fetchWithAdmin, readJsonSafe, toast, loadAll, busyKey, setBusyKey, trips });
+  const { aiInput, setAiInput, attachedFiles, dragOver, inputRef } = assistant;
   const syncDriveNow = useCallback(async () => {
     setBusyKey("drive-sync");
     try {
@@ -405,23 +385,15 @@ export default function AdminPage() {
       setBusyKey("");
     }
   }, [fetchWithAdmin, loadAll, readJsonSafe, toast]);
-  // Sign-in check on load. A browser signed in before sessions existed still holds the
-  // secret in localStorage: it is traded for a session once and then forgotten.
+  // Sign-in check on load (Google is the only way in). A browser from before sessions may
+  // still hold the old admin password in localStorage: it is forgotten, never sent.
+  // TODO(2026-12): drop these two removeItem calls one release after Google-only sign-in.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       const storage = getSecretStorage();
-      const legacySecret = storage?.getItem(SECRET_KEY) || "";
-      const legacyAge = Date.now() - Number(storage?.getItem(SECRET_TS_KEY) || "0");
       storage?.removeItem(SECRET_KEY);
       storage?.removeItem(SECRET_TS_KEY);
-      if (legacySecret && legacyAge < SESSION_TTL_MS) {
-        await fetch("/api/admin/session", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ secret: legacySecret }),
-        }).catch(() => null);
-      }
       const res = await fetch("/api/admin/session", { cache: "no-store" }).catch(() => null);
       const json = res?.ok ? await res.json().catch(() => null) as { authorized?: boolean; google_sign_in?: boolean } | null : null;
       if (cancelled) return;
@@ -433,7 +405,10 @@ export default function AdminPage() {
         url.searchParams.delete("login_error");
         window.history.replaceState(null, "", url.pathname + url.search + url.hash);
       }
-      setGoogleSignIn(Boolean(json?.google_sign_in));
+      // No answer at all: whether Google is set up is unknown, so keep the button and say why,
+      // rather than claiming sign-in is not set up.
+      setGoogleSignIn(json ? Boolean(json.google_sign_in) : true);
+      if (!json && !googleError) setLoginError("Сервертэй холбогдож чадсангүй. Интернэтээ шалгаад хуудсаа дахин ачаална уу.");
       const next = json?.authorized ? "signed_in" : "signed_out";
       authRef.current = next;
       setAuthState(next);
@@ -553,17 +528,6 @@ export default function AdminPage() {
     const poll = setInterval(() => void check(), LEAD_POLL_MS);
     return () => { stopped = true; clearInterval(poll); };
   }, [authState, fetchWithAdmin, loadLeadsState, toast]);
-  const chatMessageCount = useRef(0);
-  useEffect(() => {
-    const grew = chatMessages.length > chatMessageCount.current;
-    chatMessageCount.current = chatMessages.length;
-    if (!grew) return;
-    // A proposal is read from its top: a new trip's review is long, and jumping to its last line hid the trip itself.
-    const last = chatMessages[chatMessages.length - 1];
-    const card = last && "kind" in last && last.kind === "proposal" ? document.getElementById(`proposal-${last.id}`) : null;
-    if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
-    else chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages]);
   const pausedIds = useMemo(
     () => new Set(pausedRows.map((row) => row.sender_id)),
     [pausedRows],
@@ -572,623 +536,10 @@ export default function AdminPage() {
     () => pausedRows.filter((row) => row.reason === "handoff"),
     [pausedRows],
   );
-  /** Exchanges the typed secret for a session cookie; the secret itself is never stored. */
-  async function signIn() {
-    const typed = secretDraft.trim();
-    if (!typed || loginBusy) return;
-    setLoginBusy(true);
-    setLoginError("");
-    try {
-      const res = await fetch("/api/admin/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ secret: typed }),
-      });
-      if (res.ok) {
-        setSecretDraft("");
-        lastSystemCheckRef.current = 0;
-        authRef.current = "signed_in";
-        setAuthState("signed_in");
-        return;
-      }
-      setLoginError(res.status === 401
-        ? "Нууц үг буруу байна."
-        : res.status === 429
-          ? "Хэт олон удаа буруу оруулсан байна. 1 минутын дараа дахин оролдоно уу."
-          : "Нэвтэрч чадсангүй. Дахин оролдоно уу.");
-    } catch {
-      setLoginError("Сервертэй холбогдож чадсангүй. Интернэтээ шалгаад дахин оролдоно уу.");
-    } finally {
-      setLoginBusy(false);
-    }
-  }
   async function signOut() {
     await fetch("/api/admin/session", { method: "DELETE" }).catch(() => null);
     setMobileNavOpen(false);
     markAdminLocked();
-  }
-  function pushMessage(message: ChatMessage) {
-    setChatMessages((prev) => [...prev, message]);
-  }
-  async function readAttachedFile(file: File): Promise<AttachedFile> {
-    return {
-      id: `${file.name}:${file.size}:${file.lastModified}`,
-      name: file.name,
-      mimeType: file.type || "",
-      sizeBytes: file.size,
-      file,
-    };
-  }
-  async function attachFiles(files: FileList | File[]) {
-    const inputFiles = Array.from(files);
-    if (inputFiles.length === 0) return;
-    const limitedFiles = inputFiles;
-    try {
-      const nextFiles = await Promise.all(
-        limitedFiles.map((file) => readAttachedFile(file)),
-      );
-      setAttachedFiles((prev) => {
-        const existing = new Set(prev.map((file) => file.id));
-        const deduped = nextFiles.filter((file) => !existing.has(file.id));
-        return [...prev, ...deduped];
-      });
-    } catch {
-      toast.error("Нэг буюу хэд хэдэн файлыг уншиж чадсангүй.");
-    }
-  }
-  async function parseUploadUnitWithRetry(
-    unit: ParseUploadUnit,
-    note: string,
-    progressLabel: string,
-  ): Promise<{ proposal: AIProposal; requestId: number | null }> {
-    const MAX_HARD_FAILURES = 6; // consecutive non-rate-limit failures
-    const MAX_TRANSIENT_RETRIES = 1;
-    let hardFailures = 0;
-    let transientRetries = 0;
-    let waitAttempt = 0;
-    while (true) {
-      let res: Response;
-      try {
-        res = await fetchWithAdmin("/api/admin/parse-file", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            uploads: [
-              {
-                filename: unit.filename,
-                mimeType: unit.mimeType,
-                dataBase64: unit.dataUrl,
-              },
-              ...(unit.companions || []).map((companion) => ({
-                filename: companion.filename,
-                mimeType: companion.mimeType,
-                dataBase64: companion.dataUrl,
-                ...(companion.photoOnly ? { photoOnly: true } : {}),
-                ...(companion.evidenceOnly ? { evidenceOnly: true } : {}),
-              })),
-            ],
-            ...(unit.sameTrip ? { sameTrip: true } : {}),
-            note,
-          }),
-        });
-      } catch {
-        hardFailures += 1;
-        if (hardFailures >= MAX_HARD_FAILURES) {
-          return emptyChunkResult(unit.displayName, "Сүлжээний алдаа: сервер хүрч чадсангүй.");
-        }
-        await waitWithCountdown(progressLabel, 15_000, ++waitAttempt);
-        continue;
-      }
-      const json = (await readJsonSafe(res)) as AIProposalResponse;
-      // Billing and key failures stop everything at once: no unit can succeed, and
-      // waiting would only hide the cause. The thrown message becomes the chat note.
-      if (res.status === 402 || json.error === "ai_credits_exhausted" || json.error === "ai_unauthorized") {
-        throw new Error(apiErrorMessage(json, "AI үйлчилгээ ажиллахгүй байна."));
-      }
-      const rateLimited = res.status === 429;
-      const transientOk =
-        res.ok &&
-        isTransientAiFailure(json.proposal) &&
-        !json.proposal?.actions?.length;
-      if (rateLimited || transientOk) {
-        if (transientRetries >= MAX_TRANSIENT_RETRIES) {
-          return emptyChunkResult(unit.displayName, apiErrorMessage(json, "AI түр хязгаарлагдсан (rate limit). Хэдэн минутын дараа дахин оруулна уу."));
-        }
-        transientRetries += 1;
-        const waitMs =
-          typeof json.retry_after_ms === "number" && json.retry_after_ms > 0
-            ? json.retry_after_ms
-            : Math.min(60_000, 20_000 + waitAttempt * 10_000);
-        await waitWithCountdown(progressLabel, waitMs, ++waitAttempt);
-        continue;
-      }
-      if (!res.ok) {
-        // The server already said what is wrong with this file (unreadable, too large, a
-        // bad request): retrying the same bytes six times with 15s pauses changes nothing.
-        if (res.status >= 400 && res.status < 500) {
-          return emptyChunkResult(unit.displayName, apiErrorMessage(json, "Серверт файлыг уншиж чадсангүй."));
-        }
-        hardFailures += 1;
-        if (hardFailures >= MAX_HARD_FAILURES) {
-          return emptyChunkResult(unit.displayName, apiErrorMessage(json, "AI сервер хариу өгсөнгүй."));
-        }
-        await waitWithCountdown(progressLabel, 15_000, ++waitAttempt);
-        continue;
-      }
-      if (!json.proposal || !Array.isArray(json.proposal.actions)) {
-        hardFailures += 1;
-        if (hardFailures >= MAX_HARD_FAILURES) {
-          return emptyChunkResult(unit.displayName, "AI ойлгомжтой санал буцаасангүй.");
-        }
-        await waitWithCountdown(progressLabel, 10_000, ++waitAttempt);
-        continue;
-      }
-      return {
-        proposal: json.proposal,
-        requestId: typeof json.request_id === "number" ? json.request_id : null,
-      };
-    }
-  }
-  async function waitWithCountdown(
-    progressLabel: string,
-    totalMs: number,
-    attempt: number,
-  ) {
-    const stepMs = 1_000;
-    let remaining = Math.max(stepMs, Math.round(totalMs));
-    while (remaining > 0) {
-      const secs = Math.ceil(remaining / 1000);
-      setAiBusyLabel(
-        `${progressLabel} — AI түр завгүй байна, ${secs}с дараа үргэлжилнэ` +
-          (attempt > 3 ? ` (оролдлого ${attempt})` : ""),
-      );
-      await delayMs(Math.min(stepMs, remaining));
-      remaining -= stepMs;
-    }
-  }
-  async function parseDriveFileWithRetry(
-    fileId: string,
-    note: string,
-    progressLabel: string,
-  ): Promise<{ proposal: AIProposal; requestId: number | null }> {
-    const MAX_HARD_FAILURES = 6;
-    const MAX_TRANSIENT_RETRIES = 1;
-    let hardFailures = 0;
-    let transientRetries = 0;
-    let waitAttempt = 0;
-    const label = `Google Drive ${shortId(fileId)}`;
-    while (true) {
-      let res: Response;
-      try {
-        res = await fetchWithAdmin("/api/admin/parse-file", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ driveFileIds: [fileId], note }),
-        });
-      } catch {
-        hardFailures += 1;
-        if (hardFailures >= MAX_HARD_FAILURES) return emptyChunkResult(label, "Сүлжээний алдаа: сервер хүрч чадсангүй.");
-        await waitWithCountdown(progressLabel, 15_000, ++waitAttempt);
-        continue;
-      }
-      const json = (await readJsonSafe(res)) as AIProposalResponse;
-      if (res.status === 402 || json.error === "ai_credits_exhausted" || json.error === "ai_unauthorized") {
-        throw new Error(apiErrorMessage(json, "AI үйлчилгээ ажиллахгүй байна."));
-      }
-      const rateLimited = res.status === 429;
-      const transientOk =
-        res.ok &&
-        isTransientAiFailure(json.proposal) &&
-        !json.proposal?.actions?.length;
-      if (rateLimited || transientOk) {
-        if (transientRetries >= MAX_TRANSIENT_RETRIES) {
-          return emptyChunkResult(label, apiErrorMessage(json, "AI түр хязгаарлагдсан (rate limit). Хэдэн минутын дараа дахин оруулна уу."));
-        }
-        transientRetries += 1;
-        const waitMs =
-          typeof json.retry_after_ms === "number" && json.retry_after_ms > 0
-            ? json.retry_after_ms
-            : Math.min(60_000, 20_000 + waitAttempt * 10_000);
-        await waitWithCountdown(progressLabel, waitMs, ++waitAttempt);
-        continue;
-      }
-      if (!res.ok) {
-        if (res.status >= 400 && res.status < 500) {
-          return emptyChunkResult(label, apiErrorMessage(json, "Серверт файлыг уншиж чадсангүй."));
-        }
-        hardFailures += 1;
-        if (hardFailures >= MAX_HARD_FAILURES) return emptyChunkResult(label, apiErrorMessage(json, "AI сервер хариу өгсөнгүй."));
-        await waitWithCountdown(progressLabel, 15_000, ++waitAttempt);
-        continue;
-      }
-      if (!json.proposal || !Array.isArray(json.proposal.actions)) {
-        hardFailures += 1;
-        if (hardFailures >= MAX_HARD_FAILURES) return emptyChunkResult(label, "AI ойлгомжтой санал буцаасангүй.");
-        await waitWithCountdown(progressLabel, 10_000, ++waitAttempt);
-        continue;
-      }
-      return {
-        proposal: json.proposal,
-        requestId: typeof json.request_id === "number" ? json.request_id : null,
-      };
-    }
-  }
-  async function parseAttachedFiles(
-    files: AttachedFile[],
-    note: string,
-  ): Promise<{ proposal: AIProposal; requestId: number | null; sourceText: string }> {
-    const proposals: AIProposal[] = [];
-    setAiBusyProgress((current) => Math.max(current ?? 0, 8));
-    let singleRequestId: number | null = null;
-    const uploadUnits: ParseUploadUnit[] = [];
-    const skippedFiles: string[] = [];
-    for (const file of files) {
-      try {
-        if (isPdfFile(file.file)) {
-          uploadUnits.push(...(await buildPdfUploadUnits(file.file)));
-        } else if (isOfficeDocFile(file.file)) {
-          uploadUnits.push(...(await buildOfficeUploadUnits(file.file)));
-        } else if (isTextLikeFile(file.file)) {
-          uploadUnits.push(...(await buildTextUploadUnits(file.file)));
-        } else if (isImageFile(file.file)) {
-          uploadUnits.push(await buildImageUploadUnit(file.file));
-        } else if (isZipFile(file.file)) {
-          uploadUnits.push(...(await buildZipImageUploadUnits(file.file)));
-        } else {
-          if (file.file.size > MAX_PARSE_UPLOAD_BYTES) {
-            skippedFiles.push(file.name);
-            continue;
-          }
-          uploadUnits.push({
-            displayName: file.name,
-            filename: file.name,
-            mimeType: file.mimeType,
-            dataUrl: await fileToDataUrl(file.file),
-          });
-        }
-      } catch (error) {
-        // The reason used to be swallowed; "could not read" with no cause sent the
-        // owner looking for a different file format (2026-11-04).
-        console.error("[assistant] could not prepare file", file.name, error);
-        const reason = isStaleBundleError(error)
-          ? STALE_BUNDLE_MESSAGE
-          : error instanceof Error && error.message ? error.message : "уншиж чадсангүй";
-        skippedFiles.push(reason.includes(file.name) ? reason : `${file.name}: ${reason}`);
-      }
-    }
-    if (skippedFiles.length > 0 && uploadUnits.length > 0) {
-      toast.error(
-        `${skippedFiles.length} файлыг алгаслаа — ${skippedFiles
-          .slice(0, 3)
-          .join("; ")}${skippedFiles.length > 3 ? "…" : ""}`,
-      );
-    }
-    // A program and its price picture sent together are one trip: one reading, not two proposals.
-    const grouped = groupDocumentWithImages(uploadUnits);
-    if (grouped !== uploadUnits) uploadUnits.splice(0, uploadUnits.length, ...grouped);
-    const sourceParts: string[] = [];
-    if (note.trim()) sourceParts.push(`Админы тэмдэглэл: ${note.trim()}`);
-    for (const unit of uploadUnits) {
-      if (unit.mimeType === "text/plain" || unit.filename.endsWith(".txt")) {
-        const text = dataUrlToText(unit.dataUrl).trim();
-        if (text) sourceParts.push(`[${unit.displayName}]\n${text}`);
-      }
-    }
-    const sourceText = sourceParts.join("\n\n").slice(0, MAX_AI_SOURCE_TEXT_CHARS);
-    if (uploadUnits.length === 0) {
-      // Nothing was sent anywhere. The note must say why, not "no readable file".
-      const reasons = skippedFiles.length ? skippedFiles : ["Файл уншигдах хэлбэрт хөрвөсөнгүй."];
-      return {
-        proposal: {
-          summary: "Файлыг уншиж чадсангүй.",
-          needs_confirmation: true,
-          important_reason: reasons.join(" "),
-          conflicts: reasons,
-          conflict_items: reasons.map((text) => ({ text, severity: "blocker" as const, type: "file_unreadable" })),
-          actions: [],
-        },
-        requestId: null,
-        sourceText,
-      };
-    }
-    setAiBusyProgress((current) => Math.max(current ?? 0, 15));
-    const doneIndexes = new Set<number>();
-    const results = await Promise.all(
-      uploadUnits.map((unit, index) =>
-        delayMs(index * 400).then(() =>
-          parseUploadUnitWithRetry(
-            unit,
-            note,
-            uploadUnits.length > 1 ? `${files.length} файл уншиж байна… ${index + 1}/${uploadUnits.length}` : `«${unit.displayName}» уншиж байна…`,
-          ).then((result) => {
-            setAiBusyProgress(() => {
-              doneIndexes.add(index);
-              const completed = doneIndexes.size;
-              return Math.min(90, 15 + Math.round((completed / uploadUnits.length) * 75));
-            });
-            return result;
-          }),
-        ),
-      ),
-    );
-    for (const parsed of results) {
-      proposals.push(parsed.proposal);
-    }
-    if (uploadUnits.length === 1) {
-      singleRequestId = results[0]?.requestId ?? null;
-    }
-    return {
-      proposal:
-        proposals.length === 1
-          ? proposals[0]
-          : mergeAIProposals(
-              proposals,
-              files.map((file) => file.name),
-            ),
-      requestId: singleRequestId,
-      sourceText,
-    };
-  }
-  async function parseDriveFileIds(
-    fileIds: string[],
-    note: string,
-  ): Promise<{ proposal: AIProposal; requestId: number | null; sourceText: string }> {
-    const proposals: AIProposal[] = [];
-    let singleRequestId: number | null = null;
-    for (let index = 0; index < fileIds.length; index += 1) {
-      const fileId = fileIds[index];
-      const progressLabel = `${fileIds.length} Google Drive файл уншиж байна… ${index + 1}/${fileIds.length}`;
-      setAiBusyLabel(progressLabel);
-      const parsed = await parseDriveFileWithRetry(fileId, note, progressLabel);
-      proposals.push(parsed.proposal);
-      setAiBusyProgress(
-        Math.min(90, 15 + Math.round(((index + 1) / fileIds.length) * 75)),
-      );
-      if (fileIds.length === 1) {
-        singleRequestId = parsed.requestId;
-      }
-    }
-    return {
-      proposal:
-        proposals.length === 1
-          ? proposals[0]
-          : mergeAIProposals(
-              proposals,
-              fileIds.map((fileId) => `Google Drive ${shortId(fileId)}`),
-            ),
-      requestId: singleRequestId,
-      sourceText: "",
-    };
-  }
-  function removeAttachedFile(fileId: string) {
-    setAttachedFiles((prev) => prev.filter((file) => file.id !== fileId));
-  }
-  async function sendQuickAction(kind: "cancel" | "seats" | "food", trip: TravelTrip, value?: number | boolean) {
-    if (busyKey === "ai-send") return;
-    const label =
-      kind === "cancel"
-        ? "цуцлах"
-        : kind === "seats"
-          ? `үлдсэн суудал ${value}`
-          : value
-            ? "хоол багтсан"
-            : "хоол багтаагүй";
-    pushMessage({ id: uid(), role: "admin", text: `«${trip.route_name}» — ${label}` });
-    setBusyKey("ai-send");
-    setAiBusyProgress(null);
-    setAiBusyLabel("Санал бэлдэж байна…");
-    try {
-      const res = await fetchWithAdmin("/api/admin/ai-change", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ quick: { kind, trip_id: trip.id, value }, session_id: assistantSession.current }),
-      });
-      const data = (await readJsonSafe(res)) as AIProposalResponse;
-      if (!res.ok || !data.proposal) throw new Error(apiErrorMessage(data, "Санал үүсгэж чадсангүй."));
-      pushMessage({
-        id: uid(),
-        role: "assistant",
-        kind: "proposal",
-        proposal: data.proposal,
-        requestId: typeof data.request_id === "number" ? data.request_id : null,
-        instruction: `${trip.route_name} — ${label}`,
-        sourceNames: [],
-        sourceText: "",
-        status: "pending",
-        confirmChecked: false,
-        clarifications: [],
-        clarificationAnswers: [],
-        answeredClarificationIds: [],
-        customReply: "",
-      });
-    } catch (err) {
-      pushMessage({
-        id: uid(),
-        role: "assistant",
-        kind: "note",
-        tone: "error",
-        text: err instanceof Error ? err.message : "Алдаа гарлаа.",
-      });
-    } finally {
-      setBusyKey("");
-    }
-  }
-  /**
-   * Sends what is in the composer — or, from a tapped choice, that option's answer (the
-   * thread shows the option's label). Typed text goes to the assistant's own understanding
-   * first and reaches the model only when that does not know what to do.
-   */
-  async function sendAssistant(override?: { instruction: string; shown: string }) {
-    const text = override ? override.instruction.trim() : aiInput.trim();
-    const files = override ? [] : attachedFiles;
-    const driveFileIds = override ? [] : extractGoogleDriveFileIds(text);
-    if (!text && files.length === 0 && driveFileIds.length === 0) return;
-    if (busyKey === "ai-send") return;
-    if (text.length > MAX_AI_INPUT_CHARS) {
-      toast.error(
-        `AI заавар хэт урт байна. ${MAX_AI_INPUT_CHARS} тэмдэгтээс богино бичнэ үү.`,
-      );
-      return;
-    }
-    const sourceNames = [
-      ...files.map((file) => file.name),
-      ...driveFileIds.map((fileId) => `Google Drive ${shortId(fileId)}`),
-    ];
-    pushMessage({
-      id: uid(),
-      role: "admin",
-      text: override ? override.shown : text || "Файл орууллаа",
-      fileNames: sourceNames,
-    });
-    if (!override) {
-      setAiInput("");
-      setAttachedFiles([]);
-    }
-    setBusyKey("ai-send");
-    setAiBusyProgress(
-      files.length > 0 || driveFileIds.length > 0 ? 3 : null,
-    );
-    setAiBusyLabel(
-      files.length > 0 || driveFileIds.length > 0
-        ? (sourceNames.length > 1 ? `${sourceNames.length} файл уншиж байна…` : `«${sourceNames[0] || "Файл"}» уншиж байна…`)
-        : "AI хариу бэлдэж байна…",
-    );
-    try {
-      let proposal: AIProposal | undefined;
-      let requestId: number | null = null;
-      let sourceText = "";
-      if (files.length > 0 || driveFileIds.length > 0) {
-        const parsedProposals: AIProposal[] = [];
-        const parsedSourceNames: string[] = [];
-        if (files.length > 0) {
-          const parsed = await parseAttachedFiles(files, text);
-          parsedProposals.push(parsed.proposal);
-          parsedSourceNames.push(...files.map((file) => file.name));
-          requestId = parsed.requestId;
-          sourceText = parsed.sourceText;
-        }
-        if (driveFileIds.length > 0) {
-          const parsedDrive = await parseDriveFileIds(driveFileIds, text);
-          parsedProposals.push(parsedDrive.proposal);
-          parsedSourceNames.push(
-            ...driveFileIds.map((fileId) => `Google Drive ${shortId(fileId)}`),
-          );
-          requestId = files.length === 0 ? parsedDrive.requestId : null;
-          sourceText = sourceText
-            ? `${sourceText}\n\n${parsedDrive.sourceText}`.slice(0, MAX_AI_SOURCE_TEXT_CHARS)
-            : parsedDrive.sourceText;
-        }
-        proposal =
-          parsedProposals.length === 1
-            ? parsedProposals[0]
-            : mergeAIProposals(parsedProposals, parsedSourceNames);
-        setAiBusyLabel("Олдсон мэдээллийг нэгтгэж, шалгаж байна…");
-        setAiBusyProgress(96);
-      } else {
-        const res = await fetchWithAdmin("/api/admin/ai-change", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ instruction: text, session_id: assistantSession.current }),
-        });
-        const json = await readJsonSafe(res);
-        const data = json as AIProposalResponse;
-        if (!res.ok) {
-          throw new Error(apiErrorMessage(data, "AI санал үүсгэж чадсангүй."));
-        }
-        // One question with choices (which trip, which day, which amount): nothing to save yet.
-        if (data.ask && typeof data.ask.text === "string") {
-          pushMessage({
-            id: uid(),
-            role: "assistant",
-            kind: "ask",
-            text: data.ask.text,
-            options: Array.isArray(data.ask.options) ? data.ask.options : [],
-            allowCustom: data.ask.allow_custom === true,
-            customPlaceholder: data.ask.custom_placeholder,
-          });
-          return;
-        }
-        if (typeof data.note === "string" && data.note.trim()) {
-          pushMessage({ id: uid(), role: "assistant", kind: "note", tone: "info", text: data.note });
-          return;
-        }
-        proposal = data.proposal;
-        requestId = typeof data.request_id === "number" ? data.request_id : null;
-      }
-      if (!proposal || !Array.isArray(proposal.actions)) {
-        throw new Error(
-          "AI хэрэгжих санал буцааж чадсангүй. Илүү тодорхой зааварчилгаар дахин оролдоно уу.",
-        );
-      }
-      if (proposal.actions.length === 0) {
-        const failed = (proposal.conflict_items || []).some((item) => item.severity === "blocker")
-          || proposal.needs_confirmation;
-        pushMessage({
-          id: uid(),
-          role: "assistant",
-          kind: "note",
-          tone: failed ? "error" : "info",
-          text:
-            proposal.conflicts?.[0] ||
-            proposal.important_reason ||
-            proposal.summary ||
-            "Өөрчлөх зүйл олдсонгүй. Илүү дэлгэрэнгүй зааварчилга эсвэл өөр файл оруулна уу.",
-        });
-        return;
-      }
-      const fileInstruction =
-        sourceNames.length > 0
-          ? text
-            ? `[File] ${sourceNames.join(", ")} - ${text}`
-            : `[File] ${sourceNames.join(", ")}`
-          : text;
-      pushMessage({
-        id: uid(),
-        role: "assistant",
-        kind: "proposal",
-        proposal,
-        requestId,
-        instruction: fileInstruction,
-        sourceNames,
-        sourceText,
-        status: "pending",
-        confirmChecked: false,
-        clarifications: buildProposalClarifications(proposal, [], sourceNames),
-        clarificationAnswers: [],
-        answeredClarificationIds: [],
-        customReply: "",
-      });
-      setAiBusyProgress(100);
-    } catch (err) {
-      pushMessage({
-        id: uid(),
-        role: "assistant",
-        kind: "note",
-        tone: "error",
-        text:
-          err instanceof TypeError
-            ? "Сервер хариу өгөхөөс өмнө байршуулалт амжилтгүй болсон. Сүлжээ, браузер эсвэл платформын бодит request limit-д хүрсэн байж магадгүй."
-            : err instanceof Error
-              ? err.message
-              : "Алдаа гарлаа.",
-      });
-    } finally {
-      setBusyKey("");
-      setAiBusyProgress(null);
-    }
-  }
-  const { setProposalMessage, applyProposal, rollbackProposal, submitClarificationForm } = useProposalActions({
-    fetchWithAdmin, readJsonSafe, toast, loadAll, setBusyKey, session: assistantSession, setChatMessages,
-  });
-  /** A tapped choice: the thread shows its label, the assistant gets its full answer. */
-  function chooseAskOption(message: AskMsg, option: ProposalQuestionOption) {
-    if (busyKey === "ai-send") return;
-    setChatMessages((prev) =>
-      prev.map((entry) =>
-        entry.id === message.id && "kind" in entry && entry.kind === "ask" ? { ...entry, answered: option.label } : entry,
-      ),
-    );
-    void sendAssistant({ instruction: option.answer, shown: option.label });
   }
   async function runPauseAction(
     action:
@@ -1476,10 +827,6 @@ export default function AdminPage() {
       <AdminLoginGate
         checking={authState === "checking"}
         googleSignIn={googleSignIn}
-        secretDraft={secretDraft}
-        onSecretDraftChange={(value) => { setSecretDraft(value); setLoginError(""); }}
-        onSubmit={() => void signIn()}
-        busy={loginBusy}
         error={loginError}
       />
     );
@@ -1602,17 +949,19 @@ export default function AdminPage() {
           <div key={tab} className="animate-fade-up">
           {tab === "assistant" && (
             <AssistantTab
-              messages={chatMessages}
+              messages={assistant.messages}
               existingTrips={trips}
+              tripDetails={assistant.tripDetails}
               aiInput={aiInput}
               setAiInput={setAiInput}
               attachedFiles={attachedFiles}
-              onRemoveAttachedFile={removeAttachedFile}
+              onRemoveAttachedFile={assistant.removeAttachedFile}
               dragOver={dragOver}
-              setDragOver={setDragOver}
+              setDragOver={assistant.setDragOver}
               busy={busyKey === "ai-send"}
-              busyLabel={aiBusyLabel}
-              busyProgress={aiBusyProgress}
+              busyLabel={assistant.busyLabel}
+              busyProgress={assistant.busyProgress}
+              busyStages={assistant.busyStages}
               applyBusyId={
                 busyKey.startsWith("apply-")
                   ? busyKey.slice(6)
@@ -1623,23 +972,25 @@ export default function AdminPage() {
               clarifyBusyId={
                 busyKey.startsWith("clarify-") ? busyKey.slice(8) : ""
               }
-              onSend={() => void sendAssistant()}
-              onChooseOption={chooseAskOption}
-              onQuickAction={(kind, trip, value) => void sendQuickAction(kind, trip, value)}
+              onSend={() => void assistant.sendAssistant()}
+              onChooseOption={assistant.chooseAskOption}
+              onQuickAction={(kind, trip, value) => void assistant.sendQuickAction(kind, trip, value)}
               onEditTripPrice={(trip) => beginEditTrip(trip)}
               onNewTrip={() => beginCreateTrip()}
               onEditDraftTrip={openTripEditorForDraft}
-              onApply={(message) => void applyProposal(message)}
-              onRollback={(message) => void rollbackProposal(message)}
+              onApply={(message) => void assistant.applyProposal(message)}
+              onRollback={(message) => void assistant.rollbackProposal(message)}
               onSubmitClarificationForm={(message, answers) =>
-                void submitClarificationForm(message, answers)
+                void assistant.submitClarificationForm(message, answers)
               }
               onCancelProposal={(id) =>
-                setProposalMessage(id, { status: "cancelled" })
+                assistant.setProposalMessage(id, { status: "cancelled" })
               }
+              onResendInstruction={assistant.resendInstruction}
+              onNewConversation={assistant.newConversation}
               onPickFile={() => fileInputRef.current?.click()}
-              onDropFiles={(files) => void attachFiles(files)}
-              chatEndRef={chatEndRef}
+              onDropFiles={(files) => void assistant.attachFiles(files)}
+              chatEndRef={assistant.chatEndRef}
               inputRef={inputRef}
             />
           )}
@@ -1802,7 +1153,7 @@ export default function AdminPage() {
         className="hidden"
         onChange={(e) => {
           const files = e.target.files;
-          if (files?.length) void attachFiles(files);
+          if (files?.length) void assistant.attachFiles(files);
           e.target.value = "";
         }}
       />

@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import test from "node:test";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { applyTestEnv } from "./helpers/env";
+import { adminCookieHeaders } from "./helpers/adminAuth";
 
 type TestResponse = NextApiResponse & {
   statusCode: number;
@@ -84,7 +85,7 @@ function createAdminJsonRequest(
     method: "POST",
     url: path,
     headers: {
-      "x-admin-secret": "test-admin-secret",
+      ...adminCookieHeaders(),
       "x-forwarded-for": ip,
     },
     query: {},
@@ -107,7 +108,7 @@ function createAdminStreamRequest(
     headers: {
       "content-type": "application/json",
       "content-length": contentLength || String(Buffer.byteLength(raw)),
-      "x-admin-secret": "test-admin-secret",
+      ...adminCookieHeaders(),
       "x-forwarded-for": ip,
     },
     query: {},

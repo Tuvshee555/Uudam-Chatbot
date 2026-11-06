@@ -1,5 +1,5 @@
 import Head from "next/head";
-import { Button, Input, Logo, Spinner } from "@/components/ui";
+import { Logo, Spinner } from "@/components/ui";
 
 /** /api/admin/google/callback sends the browser back with ?login_error=<code>. */
 export const GOOGLE_LOGIN_ERRORS: Record<string, string> = {
@@ -12,23 +12,23 @@ export const GOOGLE_LOGIN_ERRORS: Record<string, string> = {
   google_email_not_allowed: "Энэ Google хаягаар нэвтрэх эрхгүй байна. Админд хандана уу.",
 };
 
+/** Shown instead of the button when the server has no working Google sign-in. */
+export const GOOGLE_SIGN_IN_OFF_MESSAGE =
+  "Нэвтрэх тохиргоо хийгдээгүй байна. Одоогоор хэн ч нэвтэрч чадахгүй — эзэмшигчид хандана уу.";
+
+/**
+ * The admin panel's only door: "Sign in with Google". An account on ADMIN_GOOGLE_EMAILS
+ * gets the session cookie; there is no password to type.
+ */
 export function AdminLoginGate({
   checking,
   googleSignIn,
-  secretDraft,
-  onSecretDraftChange,
-  onSubmit,
-  busy,
   error,
 }: {
   /** True while the page asks the server whether this browser is already signed in. */
   checking: boolean;
-  /** Shows "Sign in with Google" when the server has it configured. */
+  /** False when the server has no Google client or allow-list (or no signing key): nobody can sign in. */
   googleSignIn: boolean;
-  secretDraft: string;
-  onSecretDraftChange: (value: string) => void;
-  onSubmit: () => void;
-  busy: boolean;
   error: string;
 }) {
   return (
@@ -50,9 +50,9 @@ export function AdminLoginGate({
               Удирдлагын самбар
             </h1>
             <p className="mt-1.5 text-sm text-ink-muted">
-              Үргэлжлүүлэхийн тулд админ нууц үгээ оруулна уу.
+              Google хаягаараа нэвтэрнэ үү.
             </p>
-            {googleSignIn && (
+            {googleSignIn ? (
               <>
                 {/* An API route that redirects to Google: a full navigation, never a client-side <Link>. */}
                 {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
@@ -68,37 +68,17 @@ export function AdminLoginGate({
                   </svg>
                   Google-ээр нэвтрэх
                 </a>
-                <div className="my-5 flex items-center gap-3 text-xs text-ink-muted">
-                  <span className="h-px flex-1 bg-line" />
-                  эсвэл нууц үгээр
-                  <span className="h-px flex-1 bg-line" />
-                </div>
               </>
+            ) : (
+              <p role="alert" className="mt-5 rounded-lg border border-line bg-surface-sunken/60 p-3 text-sm text-ink">
+                {GOOGLE_SIGN_IN_OFF_MESSAGE}
+              </p>
             )}
-            <form className={googleSignIn ? "space-y-4" : "mt-5 space-y-4"} onSubmit={(event) => {
-              event.preventDefault();
-              onSubmit();
-            }}>
-              <Input
-                label="Админ нууц үг"
-                type="password"
-                autoComplete="current-password"
-                required
-                autoFocus={!googleSignIn}
-                value={secretDraft}
-                aria-invalid={error ? true : undefined}
-                aria-describedby={error ? "admin-login-error" : undefined}
-                onChange={(event) => onSecretDraftChange(event.target.value)}
-              />
-              {error && (
-                <p id="admin-login-error" role="alert" className="text-sm font-medium text-danger">
-                  {error}
-                </p>
-              )}
-              <Button block size="lg" type="submit" loading={busy} disabled={!secretDraft.trim() || busy}>
-                Нэвтрэх
-              </Button>
-            </form>
+            {error && (
+              <p id="admin-login-error" role="alert" className="mt-4 text-sm font-medium text-danger">
+                {error}
+              </p>
+            )}
             <p className="mt-4 text-xs text-ink-muted">
               Энэ төхөөрөмж 7 хоног нэвтэрсэн хэвээр байна. Нийтийн компьютер дээр ажлаа дуусгаад «Гарах» дарна уу.
             </p>

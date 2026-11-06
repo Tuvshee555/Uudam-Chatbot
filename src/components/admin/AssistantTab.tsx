@@ -11,10 +11,7 @@ import {
 } from "./AssistantQuickActions";
 import { ProposalCard, type EditDraftTrip } from "./ProposalCard";
 import type {
-  AskMsg,
   AttachedFile,
-  ChatMessage,
-  ProposalMsg,
   ProposalQuestionOption,
   TravelTrip,
 } from "@/lib/adminTypes";
@@ -22,6 +19,9 @@ import {
   MAX_AI_INPUT_CHARS,
   formatBytes,
 } from "@/lib/adminUtils";
+import { displayText, openAskOf, replyCaption, stageAt, type ProgressStage } from "./assistantChatLogic";
+import type { AssistantAskMsg, AssistantChatMessage, AssistantProposalMsg, ReplyMeta } from "./assistantChatTypes";
+import { thumb } from "./tripReview/photoThumb";
 
 function fileGlyph(file: AttachedFile): string {
   const name = file.name.toLowerCase();
@@ -91,6 +91,41 @@ function FileProgress({ label, reported }: { label: string; reported: number }) 
   );
 }
 
+/**
+ * The agent's work while it runs (about 3-15 s): the usual steps in order, by the clock, and
+ * how long it has taken once that is worth saying. The real steps come back with the answer.
+ */
+function AgentProgress({ stages }: { stages: ProgressStage[] }) {
+  const [startedAt] = useState(() => Date.now());
+  const [now, setNow] = useState(startedAt);
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(id);
+  }, []);
+  const seconds = Math.max(0, (now - startedAt) / 1000);
+  const label = stageAt(stages, seconds);
+  return (
+    <div className="flex items-center gap-2.5 rounded-2xl rounded-bl-md border border-line bg-surface px-4 py-3 shadow-xs" role="status" aria-live="polite" aria-label="Туслах ажиллаж байна">
+      <span className="flex items-center gap-1" aria-hidden="true">
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-brand [animation-delay:-0.32s]" />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-brand [animation-delay:-0.16s]" />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-brand" />
+      </span>
+      <span className="text-sm text-ink">{label}</span>
+      {seconds >= 8 && <span className="font-mono text-xs text-ink-subtle" aria-label="Өнгөрсөн хугацаа">{Math.floor(seconds)}с</span>}
+    </div>
+  );
+}
+
+/** One small line under a reply: how it was made (the agent's steps, or «энгийн горим»). */
+function ReplyCaption({ meta }: { meta?: ReplyMeta }) {
+  const caption = replyCaption(meta);
+  if (!caption) return null;
+  return (
+    <p className={cx("mt-1 px-1 text-[11px] leading-4", meta?.simple ? "text-warning" : "text-ink-subtle")}>{caption}</p>
+  );
+}
+
 /** A small Cloudinary rendition for the proposal's photo strip (other hosts as they are). */
 export function FileChip({
   file,
@@ -133,6 +168,7 @@ export function FileChip({
 export function AssistantTab({
   messages,
   existingTrips = [],
+  tripDetails,
   aiInput,
   setAiInput,
   attachedFiles,
@@ -142,6 +178,7 @@ export function AssistantTab({
   busy,
   busyLabel,
   busyProgress,
+  busyStages = null,
   applyBusyId,
   clarifyBusyId,
   onSend,
@@ -154,13 +191,17 @@ export function AssistantTab({
   onRollback,
   onSubmitClarificationForm,
   onCancelProposal,
+  onResendInstruction,
+  onNewConversation,
   onPickFile,
   onDropFiles,
   chatEndRef,
   inputRef,
 }: {
-  messages: ChatMessage[];
+  messages: AssistantChatMessage[];
   existingTrips?: TravelTrip[];
+  /** Trips loaded in full for the cards (a list row has no program text or day photos). */
+  tripDetails?: Record<string, TravelTrip>;
   aiInput: string;
   setAiInput: (value: string) => void;
   attachedFiles: AttachedFile[];
@@ -170,23 +211,29 @@ export function AssistantTab({
   busy: boolean;
   busyLabel: string;
   busyProgress: number | null;
+  /** The agent's usual steps while it works (null for files and quick actions). */
+  busyStages?: ProgressStage[] | null;
   applyBusyId: string;
   clarifyBusyId: string;
   onSend: () => void;
   /** The admin tapped one of the choices the assistant offered. */
-  onChooseOption: (message: AskMsg, option: ProposalQuestionOption) => void;
+  onChooseOption: (message: AssistantAskMsg, option: ProposalQuestionOption) => void;
   onQuickAction: (kind: QuickActionKind, trip: TravelTrip, value?: number | boolean) => void;
   onEditTripPrice: (trip: TravelTrip) => void;
   onNewTrip: () => void;
   /** Opens the full trip editor on a trip read from a file; its save returns the fields here. */
   onEditDraftTrip?: EditDraftTrip;
-  onApply: (message: ProposalMsg) => void;
-  onRollback: (message: ProposalMsg) => void;
+  onApply: (message: AssistantProposalMsg) => void;
+  onRollback: (message: AssistantProposalMsg) => void;
   onSubmitClarificationForm: (
-    message: ProposalMsg,
+    message: AssistantProposalMsg,
     answers: Record<string, string>,
   ) => void;
   onCancelProposal: (id: string) => void;
+  /** An expired proposal: its instruction sent again for a fresh one. */
+  onResendInstruction?: (message: AssistantProposalMsg) => void;
+  /** Clears the thread and starts a new conversation. */
+  onNewConversation?: () => void;
   onPickFile: () => void;
   onDropFiles: (files: FileList | File[]) => void;
   chatEndRef: React.RefObject<HTMLDivElement | null>;
@@ -203,15 +250,16 @@ export function AssistantTab({
   const quick = useQuickAction({ trips: existingTrips, busy, onQuick: onQuickAction, onEditPrice: onEditTripPrice, onNewTrip });
   const { step } = quick;
   const stepPhase = step?.phase ?? null;
-  // A question the assistant asked that is still open: the composer answers it.
-  const openAsk = [...messages].reverse().find((message): message is AskMsg => "kind" in message && message.kind === "ask" && !message.answered) ?? null;
+  // A question the assistant asked, still its latest word: the composer answers it.
+  const openAsk = openAskOf(messages);
   // Example instructions, on a real trip when there is one, so a tap is a real request.
   const sampleName = existingTrips.find((trip) => trip.status === "active")?.route_name ?? "Аяллын нэр";
   const examples = [
     `«${sampleName}» 12/27 дүүрсэн`,
+    `«${sampleName}» 12/27-ны үнийг 100 мянгаар нэм`,
     `«${sampleName}» хүүхэд 300 мянгаар бага`,
-    `«${sampleName}» 1/15 гаралт нэм`,
-    `«${sampleName}» буудал: A эсвэл B`,
+    `«${sampleName}» сайтаас нуу`,
+    `«${sampleName}» 3-р өдрийн хөтөлбөрийг «…» болго`,
   ];
 
   // While a step is open the composer answers the step; the draft message is kept aside.
@@ -227,7 +275,7 @@ export function AssistantTab({
       : stepPhase === "value" ? "Үлдсэн суудлын тоо…"
         : "Дээрх сонголтоос нэгийг нь дарна уу"
     : openAsk ? (openAsk.customPlaceholder || "Хариултаа бичээрэй…")
-      : attachedFiles.length ? "Файлаар юу хийхийг хэлээрэй…" : "Юуг өөрчлөх вэ? Хамт ажилладаг хүндээ хэлдэг шигээ бичээрэй…";
+      : attachedFiles.length ? "Файлаар юу хийхийг хэлээрэй (ж: «3-р өдрийн зургийг соль»)…" : "Юуг өөрчлөх вэ? Хамт ажилладаг хүндээ хэлдэг шигээ бичээрэй…";
 
   useEffect(() => {
     const input = inputRef.current;
@@ -286,6 +334,18 @@ export function AssistantTab({
             {existingTrips.length} аялал
           </span>
         )}
+        {!isEmpty && onNewConversation && (
+          <button
+            type="button"
+            onClick={onNewConversation}
+            disabled={busy}
+            title="Яриаг цэвэрлээд шинээр эхлэх (хадгалсан өөрчлөлт хэвээр)"
+            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 text-xs font-medium text-ink-muted transition-colors hover:border-brand hover:text-brand disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Icons.plus size={13} />
+            Шинэ яриа
+          </button>
+        )}
       </div>
       {dragOver && !busy && (
         <div className="pointer-events-none absolute inset-2 z-10 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-brand bg-surface/95 p-5 text-center" role="status">
@@ -329,6 +389,10 @@ export function AssistantTab({
                 </li>
               ))}
             </ul>
+            <p className="mt-3 max-w-md text-xs leading-5 text-ink-subtle">
+              Зураг солихдоо зургаа хавсаргаад «3-р өдрийн зургийг соль» гэж бичнэ. uudamtravel.mn эсвэл хамтрагчийн
+              хуудасны холбоосыг буулгаж болно. Нэг мессежид хэд хэдэн өөрчлөлт бичиж болно.
+            </p>
             <button
               type="button"
               onClick={onPickFile}
@@ -366,6 +430,7 @@ export function AssistantTab({
               key={message.id}
               message={message}
               existingTrips={existingTrips}
+              tripDetails={tripDetails}
               busy={busy}
               applyBusy={applyBusyId === message.id}
               clarifyBusy={clarifyBusyId === message.id}
@@ -373,6 +438,7 @@ export function AssistantTab({
               onRollback={onRollback}
               onSubmitClarificationForm={onSubmitClarificationForm}
               onCancelProposal={onCancelProposal}
+              onResendInstruction={onResendInstruction}
               onChooseOption={onChooseOption}
               onEditDraftTrip={onEditDraftTrip}
             />
@@ -385,6 +451,8 @@ export function AssistantTab({
           <div className="mx-auto mt-4 flex w-full max-w-4xl justify-start">
             {progress != null ? (
               <FileProgress label={busyLabel} reported={Math.round(progress)} />
+            ) : busyStages && busyStages.length > 0 && !busyLabel ? (
+              <AgentProgress key={busyStages.map((stage) => stage.label).join("|")} stages={busyStages} />
             ) : (
               <div
                 className="flex items-center gap-2.5 rounded-2xl rounded-bl-md border border-line bg-surface px-4 py-3 shadow-xs"
@@ -546,6 +614,7 @@ export function AssistantTab({
 function ChatBubble({
   message,
   existingTrips = [],
+  tripDetails,
   busy,
   applyBusy,
   clarifyBusy,
@@ -553,33 +622,46 @@ function ChatBubble({
   onRollback,
   onSubmitClarificationForm,
   onCancelProposal,
+  onResendInstruction,
   onChooseOption,
   onEditDraftTrip,
 }: {
-  message: ChatMessage;
+  message: AssistantChatMessage;
   existingTrips?: TravelTrip[];
+  tripDetails?: Record<string, TravelTrip>;
   busy: boolean;
   applyBusy: boolean;
   clarifyBusy: boolean;
-  onApply: (message: ProposalMsg) => void;
-  onRollback: (message: ProposalMsg) => void;
+  onApply: (message: AssistantProposalMsg) => void;
+  onRollback: (message: AssistantProposalMsg) => void;
   onSubmitClarificationForm: (
-    message: ProposalMsg,
+    message: AssistantProposalMsg,
     answers: Record<string, string>,
   ) => void;
   onCancelProposal: (id: string) => void;
-  onChooseOption: (message: AskMsg, option: ProposalQuestionOption) => void;
+  onResendInstruction?: (message: AssistantProposalMsg) => void;
+  onChooseOption: (message: AssistantAskMsg, option: ProposalQuestionOption) => void;
   onEditDraftTrip?: EditDraftTrip;
 }) {
   if (message.role === "admin") {
-    const hasRealText = Boolean(message.text) && message.text !== "Файл орууллаа";
+    // An option's answer carries the trip it chose as a tag: it travels to the server, never to the screen.
+    const shownText = displayText(message.text);
+    const hasRealText = Boolean(shownText) && shownText !== "Файл орууллаа";
+    const images = message.imageUrls || [];
     return (
       <div className="animate-fade-up flex justify-end">
         <div className="min-w-0 max-w-[92%] rounded-2xl rounded-br-md bg-brand px-3.5 py-2.5 text-sm leading-6 text-white shadow-xs sm:max-w-lg">
           {hasRealText && (
-            <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
+            <p className="whitespace-pre-wrap wrap-break-word">{shownText}</p>
           )}
-          {message.fileNames && message.fileNames.length > 0 ? (
+          {images.length > 0 ? (
+            <div className={cx("flex flex-wrap gap-1.5", hasRealText && "mt-2")} aria-label="Илгээсэн зураг">
+              {images.map((url) => (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img key={url} src={thumb(url, 160, 120)} alt="" loading="lazy" className="h-14 w-[4.5rem] rounded-lg bg-white/20 object-cover" />
+              ))}
+            </div>
+          ) : message.fileNames && message.fileNames.length > 0 ? (
             <div className={hasRealText ? "mt-2 border-t border-white/20 pt-2" : undefined}>
               {message.fileNames.map((name) => (
                 <p key={name} className="truncate text-xs text-white/90" title={name}>
@@ -589,7 +671,7 @@ function ChatBubble({
             </div>
           ) : (
             !hasRealText && (
-              <p className="whitespace-pre-wrap wrap-break-word">{message.text}</p>
+              <p className="whitespace-pre-wrap wrap-break-word">{shownText}</p>
             )
           )}
         </div>
@@ -600,9 +682,9 @@ function ChatBubble({
   if (message.kind === "ask") {
     const answered = message.answered;
     return (
-      <div className="animate-fade-up flex justify-start" role="group" aria-label="Туслахын асуулт">
+      <div className="animate-fade-up flex flex-col items-start" role="group" aria-label="Туслахын асуулт">
         <div className="w-full min-w-0 max-w-3xl rounded-2xl rounded-bl-md border border-line bg-surface px-4 py-3.5 shadow-xs">
-          <p className="text-[15px] font-semibold leading-6 text-ink">{message.text}</p>
+          <p className="whitespace-pre-line text-[15px] font-semibold leading-6 text-ink">{message.text}</p>
           {message.options.length > 0 && (
             <ul className={cx("mt-3 grid gap-1.5", message.options.length > 3 && "sm:grid-cols-2")} aria-label="Сонголтууд">
               {message.options.map((option) => {
@@ -640,10 +722,16 @@ function ChatBubble({
           )}
           {!answered && message.allowCustom && (
             <p className="mt-2.5 text-xs leading-5 text-ink-muted">
-              {message.customPlaceholder ? `Эсвэл доор бичээрэй — ${message.customPlaceholder}` : "Эсвэл доор бичээрэй."}
+              {message.options.length === 0
+                ? (message.customPlaceholder ? `Доор бичээрэй — ${message.customPlaceholder}` : "Хариултаа доор бичээрэй.")
+                : message.customPlaceholder ? `Эсвэл доор бичээрэй — ${message.customPlaceholder}` : "Эсвэл доор бичээрэй."}
             </p>
           )}
+          {answered && !message.options.some((option) => option.label === answered) && (
+            <p className="mt-2.5 text-xs leading-5 text-ink-muted">Таны хариулт: <span className="font-medium text-ink">{answered}</span></p>
+          )}
         </div>
+        <ReplyCaption meta={message.meta} />
       </div>
     );
   }
@@ -651,7 +739,7 @@ function ChatBubble({
   if (message.kind === "note") {
     const tone = message.tone;
     return (
-      <div className="animate-fade-up flex justify-start">
+      <div className="animate-fade-up flex flex-col items-start">
         <div
           role={tone === "error" ? "alert" : undefined}
           className={cx(
@@ -667,21 +755,27 @@ function ChatBubble({
           {tone === "success" && <Icons.check size={16} className="mt-1 shrink-0 text-success" />}
           <p className="min-w-0 whitespace-pre-wrap wrap-break-word">{message.text}</p>
         </div>
+        <ReplyCaption meta={message.meta} />
       </div>
     );
   }
 
   return (
-    <ProposalCard
-      message={message}
-      existingTrips={existingTrips}
-      applyBusy={applyBusy}
-      clarifyBusy={clarifyBusy}
-      onApply={onApply}
-      onRollback={onRollback}
-      onSubmitClarificationForm={onSubmitClarificationForm}
-      onCancelProposal={onCancelProposal}
-      onEditDraftTrip={onEditDraftTrip}
-    />
+    <div className="min-w-0">
+      <ProposalCard
+        message={message}
+        existingTrips={existingTrips}
+        tripDetails={tripDetails}
+        applyBusy={applyBusy}
+        clarifyBusy={clarifyBusy}
+        onApply={onApply}
+        onRollback={onRollback}
+        onSubmitClarificationForm={onSubmitClarificationForm}
+        onCancelProposal={onCancelProposal}
+        onResendInstruction={onResendInstruction}
+        onEditDraftTrip={onEditDraftTrip}
+      />
+      <ReplyCaption meta={message.meta} />
+    </div>
   );
 }

@@ -50,7 +50,7 @@ test("admin system hides diagnostics without admin access", async () => {
 
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.ok, true);
-  assert.equal(res.body.open_access, false);
+  assert.equal("open_access" in res.body, false, "there is no open-access mode to report");
   assert.equal(res.body.authorized, false);
   assert.equal("db" in res.body, false);
   assert.equal("drive_sync" in res.body, false);

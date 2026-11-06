@@ -119,15 +119,21 @@ function dateColumnIndex(columns: string[] | undefined): number {
   return (columns || []).findIndex((column) => /огноо|хугацаа|date|duration/i.test(column));
 }
 
-function priceCell(row: PosterPriceRow, columns: string[] | undefined, columnIndex: number): string | undefined {
+/** Where a column's value sits in one row's cells (a row may leave out the date column's cell); -1 for no column. */
+export function posterCellIndex(row: PosterPriceRow, columns: string[] | undefined, columnIndex: number): number {
   const cells = row.cells || [];
-  if (columnIndex < 0) return undefined;
-  if (!columns?.length || cells.length === columns.length) return cells[columnIndex];
+  if (columnIndex < 0) return -1;
+  if (!columns?.length || cells.length === columns.length) return columnIndex;
   const dateIdx = dateColumnIndex(columns);
   if (dateIdx >= 0 && cells.length === columns.length - 1) {
-    return cells[columnIndex > dateIdx ? columnIndex - 1 : columnIndex];
+    return columnIndex > dateIdx ? columnIndex - 1 : columnIndex;
   }
-  return cells[columnIndex];
+  return columnIndex;
+}
+
+function priceCell(row: PosterPriceRow, columns: string[] | undefined, columnIndex: number): string | undefined {
+  const at = posterCellIndex(row, columns, columnIndex);
+  return at < 0 ? undefined : (row.cells || [])[at];
 }
 
 function cleanColumnLabel(value: string): string {
@@ -245,26 +251,49 @@ function priceGroupDateScope(value: string | undefined): { dates: string[]; disp
   return { dates, display_dates };
 }
 
-function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup[] {
-  if (!priceTable?.rows?.length) return [];
-  const columns = priceTable.columns || [];
-  const singleIdx = columns.findIndex((column) => isSingleTravellerColumn(column));
+export type PosterFareColumns = {
+  /** Adult and per-occupancy fare columns; the row's adult fare is the lowest of them. */
+  adult: number[];
+  /** Child and infant columns with their cleaned header (a mapped passenger fare's label). */
+  passengers: Array<{ index: number; label: string; infant: boolean }>;
+  single: number;
+  accommodation: number;
+};
+
+/**
+ * Which column of a poster price table holds which fare, read exactly as a poster save reads
+ * them (mapPriceGroups below), so an in-place edit of one cell lands where the save looks.
+ */
+export function posterFareColumns(input: string[] | undefined): PosterFareColumns {
+  const columns = input || [];
+  const single = columns.findIndex((column) => isSingleTravellerColumn(column));
   const hotelIdx = findPriceColumnIndex(columns, ["буудал", "hotel"]);
   const roomLabelIdx = findPriceColumnIndex(columns, ["өрөө", "room"]);
-  const accommodationIdx = hotelIdx >= 0 ? hotelIdx : roomLabelIdx;
-  const adultIndexes = columns
+  const adult = columns
     .map((column, index) => ({ column, index }))
     .filter(({ column, index }) =>
-      index !== singleIdx && index !== hotelIdx && index !== roomLabelIdx &&
+      index !== single && index !== hotelIdx && index !== roomLabelIdx &&
       (isAdultColumn(column) || isOccupancyPriceColumn(column)),
     )
     .map(({ index }) => index);
   // Every non-adult passenger column, infants included — the infant one is
   // recognised by its own header ("Нярай") or an infant-shaped age band, not
   // guessed from being the last column.
-  const childColumns = columns
-    .map((column, index) => ({ column: cleanColumnLabel(column), index }))
-    .filter(({ column }) => isChildColumn(column) || isInfantColumn(column));
+  const passengers = columns
+    .map((column, index) => ({ label: cleanColumnLabel(column), index }))
+    .filter(({ label }) => isChildColumn(label) || isInfantColumn(label))
+    .map((entry) => ({ ...entry, infant: isInfantColumn(entry.label) }));
+  return { adult, passengers, single, accommodation: hotelIdx >= 0 ? hotelIdx : roomLabelIdx };
+}
+
+function mapPriceGroups(priceTable: PosterTrip["price_table"]): MappedPriceGroup[] {
+  if (!priceTable?.rows?.length) return [];
+  const columns = priceTable.columns || [];
+  const fareColumns = posterFareColumns(columns);
+  const singleIdx = fareColumns.single;
+  const accommodationIdx = fareColumns.accommodation;
+  const adultIndexes = fareColumns.adult;
+  const childColumns = fareColumns.passengers.map(({ label, index }) => ({ column: label, index }));
 
   return priceTable.rows
     .map((row) => {

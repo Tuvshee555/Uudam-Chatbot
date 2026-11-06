@@ -1,5 +1,6 @@
 import { logError, logStartupDiagnostics } from "./observability";
 import { parseAllowedEmails } from "./adminGoogleAuth";
+import { isWeakAdminKey } from "./adminSession";
 
 export type ValidatedEnv = {
   openaiApiKey: string;
@@ -27,10 +28,13 @@ export type ValidatedEnv = {
   echoHumanAppIds: string[];
   /** Invalid migration settings that were IGNORED (fail-safe); the build preflight fails on any. */
   metaMigrationIssues: string[];
-  adminSecret: string;
-  adminOpenAccess: boolean;
-  allowAdminSecretQuery: boolean;
-  /** "Sign in with Google" for the admin panel: on only with a client id, secret and allowed emails. */
+  /** ADMIN_SESSION_SECRET: signs admin session cookies and customer-file links. Nobody types it.
+   * Missing ("" here), short or guessable = admin sign-in off (adminSession.ts) while the bot,
+   * crons and website sync keep answering; a production build stops at preflight instead. */
+  adminSessionSecret: string;
+  /** ADMIN_API_TOKEN (optional): `Authorization: Bearer` read-only machine access, GET/HEAD only. */
+  adminApiToken: string | null;
+  /** "Sign in with Google" for the admin panel, the only way in: on only with a client id, secret and allowed emails. */
   googleClientId: string | null;
   googleClientSecret: string | null;
   adminGoogleEmails: string[];
@@ -450,13 +454,11 @@ export function getEnv(): ValidatedEnv {
   const tokenPage =
     facebookPages.find((page) => page.pageId === facebookPageId)?.token ||
     legacyTokenPage || primaryPage?.token || "";
-  const adminSecret = readRequiredString("ADMIN_SECRET", source, errors);
-  const adminOpenAccess = readBoolean(
-    "ADMIN_OPEN_ACCESS",
-    source,
-    false,
-    errors,
-  );
+  // Optional at runtime ON PURPOSE: a missing key must fail closed for the admin only (it is
+  // "weak", so no session or customer-file link is issued or accepted, and readiness says
+  // why), never throw here and take the Messenger webhook, crons and website sync down with it.
+  const adminSessionSecret = readOptionalString("ADMIN_SESSION_SECRET", source) ?? "";
+  const adminApiToken = readOptionalString("ADMIN_API_TOKEN", source);
   const googleClientId = readOptionalString("GOOGLE_CLIENT_ID", source);
   const googleClientSecret = readOptionalString("GOOGLE_CLIENT_SECRET", source);
   const adminGoogleEmails = parseAllowedEmails(readOptionalString("ADMIN_GOOGLE_EMAILS", source));
@@ -469,12 +471,6 @@ export function getEnv(): ValidatedEnv {
     "TRUST_PROXY_HEADERS",
     source,
     Boolean(source.VERCEL),
-    errors,
-  );
-  const allowAdminSecretQuery = readBoolean(
-    "ALLOW_ADMIN_SECRET_QUERY",
-    source,
-    false,
     errors,
   );
   const redisConfigured = Boolean(
@@ -763,11 +759,6 @@ export function getEnv(): ValidatedEnv {
       "REDIS_URL is required when any REDIS_*_ENABLED feature flag is true",
     );
   }
-  if (adminOpenAccess && source.NODE_ENV === "production") {
-    errors.push(
-      "ADMIN_OPEN_ACCESS cannot be true in production. Set ADMIN_OPEN_ACCESS=false and require authenticated admin access.",
-    );
-  }
   if (
     googleDriveSyncEnabled &&
     (!googleDriveFolderId ||
@@ -802,9 +793,8 @@ export function getEnv(): ValidatedEnv {
     echoTakeoverMode,
     echoHumanAppIds,
     metaMigrationIssues,
-    adminSecret,
-    adminOpenAccess,
-    allowAdminSecretQuery,
+    adminSessionSecret,
+    adminApiToken,
     googleClientId,
     googleClientSecret,
     adminGoogleEmails,
@@ -866,7 +856,6 @@ export function getEnv(): ValidatedEnv {
   }
   logStartupDiagnostics("env", {
     trustProxyHeaders: cachedEnv.trustProxyHeaders,
-    allowAdminSecretQuery: cachedEnv.allowAdminSecretQuery,
     facebookPageCount: cachedEnv.facebookPages.length,
     facebookPageIds: cachedEnv.facebookPages.map((p) => p.pageId),
     // Meta-app migration state (names and flags only, never values).
@@ -916,7 +905,9 @@ export function getEnv(): ValidatedEnv {
       vercel: Boolean(source.VERCEL),
       vercelEnv: source.VERCEL_ENV || null,
     },
-    adminOpenAccess: cachedEnv.adminOpenAccess,
+    // Admin sign-in state (flags and counts only, never values or addresses).
+    adminSessionSecretStrong: !isWeakAdminKey(cachedEnv.adminSessionSecret),
+    adminApiTokenSet: Boolean(cachedEnv.adminApiToken),
     googleSignInEnabled: cachedEnv.googleSignInEnabled,
     adminGoogleEmailCount: cachedEnv.adminGoogleEmails.length,
     neonDbConfigured: Boolean(cachedEnv.neonDatabaseUrl),

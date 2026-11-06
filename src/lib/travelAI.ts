@@ -1,3 +1,4 @@
+import { MAX_TRIP_PHOTOS } from "./tripPhotoEdit";
 import { aiCallFailureKind, askOpenAIParts, type OpenAIPart } from "./openaiProvider";
 import {
   classifyError,
@@ -799,6 +800,8 @@ async function createProposal(opts: {
   trips?: TravelTrip[];
   /** A typed instruction: which trips it most likely concerns, for the model's guide. */
   focusTrips?: TravelTrip[];
+  /** Runs on the validated proposal, before it is stored. */
+  afterValidation?: (proposal: AIChangeProposal, trips: TravelTrip[]) => AIChangeProposal;
 }) {
   const ready = await ensureTravelSchema();
   if (!ready) {
@@ -895,6 +898,7 @@ async function createProposal(opts: {
   proposal = validateAIChangeProposal(proposal, trips, {
     forbidCreate: instructionForbidsTripCreation(opts.instruction),
   }).proposal;
+  if (opts.afterValidation) proposal = opts.afterValidation(proposal, trips);
 
   let inserted: Awaited<ReturnType<typeof queryNeon<{ id: number }>>> = null;
   try {
@@ -1359,7 +1363,7 @@ export function attachPhotoUrlsToActions(
     if (!action.fields) (action as { fields?: Record<string, unknown> }).fields = {};
     (action.fields as Record<string, unknown>).photo_urls = Array.from(
       new Set([...existing, ...urls]),
-    ).slice(0, 20);
+    ).slice(0, MAX_TRIP_PHOTOS);
   };
 
   const actionTokens = actions.map((action) => {
@@ -1499,6 +1503,8 @@ export async function generateAIProposalFromContentBatched(input: {
    * is read from the picture is not checked against the document's text.
    */
   sameTrip?: boolean;
+  /** Runs on the validated proposal before it is stored (a web page's reading may only add trips). */
+  afterValidation?: (proposal: AIChangeProposal, trips: TravelTrip[]) => AIChangeProposal;
 }) {
   const rawSources: ProposalSource[] =
     input.sources && input.sources.length > 0
@@ -1550,6 +1556,7 @@ export async function generateAIProposalFromContentBatched(input: {
       ? `[File] ${sourceLabels} - ${input.note}`
       : `[File] ${sourceLabels}`,
     source: "travel.ops.file_parse",
+    afterValidation: input.afterValidation,
     buildProposal: async (condensedTrips) => {
       const proposals: AIChangeProposal[] = [];
       const startedAt = Date.now();
@@ -1784,7 +1791,7 @@ function buildProposalRevisionGuide(input: {
     '  "important_reason": "why confirmation is still needed",',
     '  "conflicts": ["remaining conflict"],',
     '  "actions": [',
-    '    { "action": "upsert|patch|cancel", "trip_id": "", "match": { "operator_name": "", "route_name": "" }, "fields": {} }',
+    '    { "action": "upsert|patch|cancel|delete|set_date_state", "trip_id": "", "match": { "operator_name": "", "route_name": "" }, "fields": {}, "date": "YYYY-MM-DD (set_date_state)", "state": "open|low|full|paused (set_date_state)", "expected_updated_at": "keep as given" }',
     "  ]",
     "}",
     "",
@@ -1898,6 +1905,13 @@ export async function reviseAIRequest(
   applyPriceAnswer(clarification, revisedProposal);
   carryOverPhotoExtras(currentProposal, revisedProposal);
   await finalizeNewTripActions(revisedProposal);
+  // A revised proposal is checked like a new one (B9): names bound to real trips, versions
+  // stamped, validated — never stored as the model wrote it.
+  bindActionTargets(revisedProposal, trips);
+  stampTripVersions(revisedProposal, trips);
+  const checked = validateAIChangeProposal(revisedProposal, trips, { forbidCreate: instructionForbidsTripCreation(row.instruction) }).proposal;
+  if (revisedProposal.photo_sources) checked.photo_sources = revisedProposal.photo_sources;
+  Object.assign(revisedProposal, checked);
 
   await queryNeon(
     `

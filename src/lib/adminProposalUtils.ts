@@ -11,6 +11,10 @@ import type {
   ConflictSeverity,
   TripStatus,
 } from "./adminTypes";
+import { describeChange } from "./assistantActionText";
+import { planTripEdit } from "./tripActionPlan";
+import { isTripListProjection } from "./tripListProjection";
+import type { AITripAction, TravelTrip as TripRecord } from "./travelTypes";
 
 export const STATUS_LABELS: Record<TripStatus, string> = {
   active: "Идэвхтэй",
@@ -270,7 +274,33 @@ export function compactWarnings(proposal: AIProposal): string[] {
   return proposal.conflicts.map(summarizeConflict).filter(Boolean);
 }
 
-export const DATE_STATE_LABELS: Record<string, string> = { open: "Нээлттэй", low: "Цөөн суудал", full: "Дүүрсэн" };
+export const DATE_STATE_LABELS: Record<string, string> = { open: "Нээлттэй", low: "Цөөн суудал", full: "Дүүрсэн", paused: "Түр хаасан" };
+
+/** The card's verb for each action the assistant can propose. */
+function actionVerb(action: AIAction): string {
+  const verb = String(action.action || "").toLowerCase();
+  const row = action as AIAction & { visible?: unknown; remove?: unknown };
+  switch (verb) {
+    case "cancel": return "Цуцлах";
+    case "delete": return "Архивлах";
+    case "set_date_state": return "Огнооны төлөв";
+    case "set_date_price": return "Огнооны үнэ";
+    case "set_visibility": return row.visible === true ? "Сайтад харуулах" : "Сайтаас нуух";
+    case "patch_itinerary_day": return "Хөтөлбөрийн өдөр";
+    case "set_age_bands": return "Насны ангилал";
+    case "replace_photo": return row.remove === true ? "Зураг хасах" : "Зураг солих";
+    case "fare_change_all": return "Олон аяллын үнэ";
+    case "upsert": return action.trip_id ? "Шинэчлэх" : "Шинэ аялал нэмэх";
+    case "patch": return "Шинэчлэх";
+    default: return verb || "Үйлдэл";
+  }
+}
+
+/** The trip a summary names ("«Name» — …"), for a card whose trip is not in the loaded list. */
+export function nameFromSummary(summary: unknown): string {
+  const match = /^«([^»]+)»/u.exec(typeof summary === "string" ? summary.trim() : "");
+  return match ? match[1].trim() : "";
+}
 
 /** "2026-12-27" → "12-р сарын 27"; other text stays itself. */
 export function formatDateMn(value: string): string {
@@ -285,24 +315,12 @@ export function describeAction(action: AIAction): {
   changes: string[];
 } {
   const verbRaw = String(action.action || "").toLowerCase();
-  const verb =
-    verbRaw === "cancel"
-      ? "Цуцлах"
-      : verbRaw === "delete"
-        ? "Архивлах"
-        : verbRaw === "set_date_state"
-          ? "Огнооны төлөв"
-          : verbRaw === "upsert"
-            ? action.trip_id
-              ? "Шинэчлэх"
-              : "Шинэ аялал нэмэх"
-            : verbRaw === "patch"
-              ? "Шинэчлэх"
-              : verbRaw || "Үйлдэл";
+  const verb = actionVerb(action);
   const target =
     action.match?.route_name ||
     action.fields?.route_name?.toString() ||
     action.match?.operator_name ||
+    nameFromSummary((action as AIAction & { summary?: unknown }).summary) ||
     action.trip_id ||
     "аялал";
   const fields = action.fields || {};
@@ -393,7 +411,13 @@ export function buildProposalClarifications(
   // review answers both in place (a switch and a price field), with no second model call.
   // Questions the server built with real choices (which of several trips, which day) come
   // first and as they are: the text patterns below exist for conflicts the model wrote free-form.
+  // The server's questions are the ones still open (it drops a question once answered), so an
+  // id answered before ("agent" asks again after a clarification) is never hidden.
+  const serverIds = new Set<string>();
   for (const question of proposal.questions || []) {
+    if (serverIds.has(question.id)) continue;
+    serverIds.add(question.id);
+    seen.delete(question.id);
     pushQuestion({
       id: question.id,
       prompt: question.prompt,
@@ -949,4 +973,109 @@ export function buildProposalClarifications(
   });
 
   return questions.slice(0, 4);
+}
+
+/* ----------------------------------------------------------------
+   The card's lines for one assistant action (2026-11-06).
+   The new actions (one date's price, a photo, a program day, age
+   bands, hide/show, one date's state) are described by the same
+   planner save uses (describeChange / planTripEdit), on the trip as
+   it is now, while the card is still open. Once saved or closed the
+   card keeps the lines the server wrote when it proposed them.
+   ---------------------------------------------------------------- */
+
+export type ActionView = {
+  lines: string[];
+  warnings: string[];
+  thumbs?: { before?: string; after?: string };
+};
+
+const PLANNED_VERBS = new Set(["set_date_price", "set_visibility", "patch_itinerary_day", "set_age_bands", "replace_photo"]);
+
+/** True for the actions whose card lines come from actionView (the rest keep the field diff). */
+export function hasPlannedLines(action: AIAction): boolean {
+  const verb = String(action.action || "").toLowerCase();
+  return PLANNED_VERBS.has(verb) || verb === "set_date_state" || verb === "fare_change_all";
+}
+
+/** "«Name» — 12/2: Том хүн 2,590,000₮ → 2,690,000₮; Бусад 3 огнооны үнэ хэвээр" → its lines, without the name. */
+export function summaryLines(summary: unknown): string[] {
+  const value = typeof summary === "string" ? summary.trim() : "";
+  if (!value) return [];
+  return value.replace(/^«[^»]*»\s*(?:—|–|-|:)?\s*/u, "").split(/;\s+/u).map((line) => line.trim()).filter(Boolean);
+}
+
+/** A list row only has the day count of the program, not its text or photos. */
+function needsFullTrip(action: AIAction & { day?: unknown }, trip: TravelTripLike): boolean {
+  if (!isTripListProjection(trip as never)) return false;
+  const verb = String(action.action || "").toLowerCase();
+  return verb === "patch_itinerary_day" || (verb === "replace_photo" && action.day !== undefined && action.day !== null);
+}
+
+type TravelTripLike = { id: string; photo_urls?: string[]; extra?: Record<string, unknown> | null };
+
+function photoThumbsOf(action: AIAction & { new_url?: unknown; old_url?: unknown; position?: unknown; remove?: unknown }, trip?: TravelTripLike | null) {
+  const after = action.remove === true ? undefined : typeof action.new_url === "string" ? action.new_url : undefined;
+  const position = typeof action.position === "number" ? action.position : null;
+  const before = typeof action.old_url === "string" ? action.old_url
+    : position && trip?.photo_urls ? trip.photo_urls[position - 1] : undefined;
+  return before || after ? { ...(before ? { before } : {}), ...(after ? { after } : {}) } : undefined;
+}
+
+/**
+ * The lines one action shows. `live` while the card is open (the trip is read now, so a change
+ * someone made meanwhile shows up); otherwise, or when the trip is not loaded in full, the
+ * summary the server wrote with the proposal.
+ */
+export function actionView(action: AIAction, trip: TravelTripLike | null | undefined, options: { live: boolean; now?: Date }): ActionView {
+  const verb = String(action.action || "").toLowerCase();
+  const row = action as AIAction & { summary?: unknown };
+  const now = options.now ?? new Date();
+  const stored = summaryLines(row.summary);
+  const split = (lines: string[]) => ({
+    lines: lines.filter((line) => !line.startsWith("Анхаар: ")),
+    warnings: lines.filter((line) => line.startsWith("Анхаар: ")).map((line) => line.slice("Анхаар: ".length)),
+  });
+  if (verb === "set_date_state") {
+    if (options.live && trip) return split(describeChange(action as unknown as AITripAction, trip as unknown as TripRecord, now).lines);
+    return { lines: stored.length ? stored : describeChange(action as unknown as AITripAction, null, now).lines, warnings: [] };
+  }
+  if (verb === "fare_change_all") {
+    return { ...split(describeChange(action as unknown as AITripAction, null, now).lines) };
+  }
+  const thumbsFallback = verb === "replace_photo" ? photoThumbsOf(action, trip) : undefined;
+  const fallback = (warnings: string[] = []): ActionView => ({
+    lines: stored.length ? stored : describeChange(action as unknown as AITripAction, null, now).lines,
+    warnings,
+    ...(thumbsFallback ? { thumbs: thumbsFallback } : {}),
+  });
+  if (!options.live || !trip || needsFullTrip(action, trip)) return fallback();
+  const planned = planTripEdit(trip as unknown as TripRecord, action as unknown as AITripAction, null, now);
+  if (!planned.ok) return fallback([`Одоогийн мэдээллээр: ${planned.reason}`]);
+  const thumbs = planned.plan.thumbs && (planned.plan.thumbs.before || planned.plan.thumbs.after) ? planned.plan.thumbs : thumbsFallback;
+  return { lines: planned.plan.lines.filter((line) => !isUnchangedLine(line)), warnings: planned.plan.warnings, ...(thumbs ? { thumbs } : {}) };
+}
+
+/** "Зургийн тоо: 6 → 6" says nothing: the value stays as it is. */
+function isUnchangedLine(line: string): boolean {
+  const match = /:\s+(.+?)\s+→\s+(.+)$/u.exec(line);
+  return Boolean(match && match[1].trim() === match[2].trim());
+}
+
+/** Warnings worth reading before saving, said plainly; "skipped" trips of a fare rule listed together. */
+export type ProposalWarnings = { warnings: string[]; skipped: string[]; notes: string[] };
+
+const WARNING_TYPES = new Set(["plan_warning", "date_state_refused", "agent_refused"]);
+
+export function proposalWarnings(proposal: AIProposal): ProposalWarnings {
+  const out: ProposalWarnings = { warnings: [], skipped: [], notes: [] };
+  for (const item of proposal.conflict_items || []) {
+    const text = String(item.text || "").trim();
+    if (!text || item.severity === "blocker" || item.type === "verify_mismatch") continue;
+    if (item.type === "fare_change_skipped") out.skipped.push(text);
+    else if (WARNING_TYPES.has(String(item.type || "")) || item.severity === "warning") out.warnings.push(text);
+    else out.notes.push(text);
+  }
+  const unique = (list: string[]) => Array.from(new Set(list));
+  return { warnings: unique(out.warnings), skipped: unique(out.skipped), notes: unique(out.notes) };
 }

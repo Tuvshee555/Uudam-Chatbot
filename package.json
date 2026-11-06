@@ -27,6 +27,7 @@
     "audit:self-consistency": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/audit-self-consistency.ts",
     "audit:trip-facts": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/audit-trip-facts.ts",
     "audit:website-parity": "node --import tsx scripts/audit-website-parity.ts",
+    "audit:parity": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/audit-parity.ts",
     "admin:shadow": "node scripts/admin-shadow.mjs",
     "preflight": "node --import tsx scripts/preflight.ts",
     "validate": "npm run lint && npm run typecheck && npm run test && npm run build",

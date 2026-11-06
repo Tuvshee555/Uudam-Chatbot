@@ -117,3 +117,57 @@ test("production readiness reaches 10 when critical hardening is configured", as
     else process.env.VERCEL_ENV = previousVercelEnv;
   }
 });
+
+async function productionReport(overrides: Record<string, string | undefined>) {
+  const previousVercelEnv = process.env.VERCEL_ENV;
+  process.env.VERCEL_ENV = "production";
+  try {
+    return await loadReadiness({
+      VERCEL_ENV: "production",
+      DATABASE_URL: "postgres://user:pass@example.com/db",
+      CRON_SECRET: "test-cron-secret",
+      REDIS_URL: "rediss://default:token@redis.example.com:6379",
+      REDIS_STATE_ENABLED: "true",
+      REDIS_RATE_LIMIT_ENABLED: "true",
+      REDIS_REPLAY_ENABLED: "true",
+      REDIS_CONVERSATION_ENABLED: "true",
+      REDIS_PAUSE_ENABLED: "true",
+      ...overrides,
+    });
+  } finally {
+    if (previousVercelEnv == null) delete process.env.VERCEL_ENV;
+    else process.env.VERCEL_ENV = previousVercelEnv;
+  }
+}
+
+test("a weak session signing key is critical (admin sign-in is off until it is replaced)", async () => {
+  for (const weak of ["admin", "short-session-key", "admin".repeat(8)]) {
+    const report = await productionReport({ ADMIN_SESSION_SECRET: weak });
+    const issue = report.issues.find((item) => item.key === "admin_session_secret_weak");
+    assert.equal(issue?.severity, "critical", weak.slice(0, 6));
+    assert.match(issue!.message, /ADMIN_SESSION_SECRET/);
+  }
+});
+
+test("missing Google sign-in is critical in production; one allowed account is a warning", async () => {
+  const off = await productionReport({ GOOGLE_CLIENT_ID: undefined });
+  assert.equal(off.issues.find((item) => item.key === "admin_google_sign_in_off")?.severity, "critical");
+  const single = await productionReport({ ADMIN_GOOGLE_EMAILS: "owner.test@example.test" });
+  assert.deepEqual(single.issues.map((item) => [item.key, item.severity]), [["admin_google_single_account", "warning"]]);
+  assert.equal(single.score, 9);
+});
+
+test("ADMIN_API_TOKEN is checked only when set: short or equal to the session key is critical", async () => {
+  assert.equal((await productionReport({ ADMIN_API_TOKEN: undefined })).issues.length, 0);
+  const short = await productionReport({ ADMIN_API_TOKEN: "short-token" });
+  assert.equal(short.issues.find((item) => item.key === "admin_api_token_weak")?.severity, "critical");
+  const { TEST_ADMIN_SESSION_SECRET } = await import("./helpers/env");
+  const reused = await productionReport({ ADMIN_API_TOKEN: TEST_ADMIN_SESSION_SECRET });
+  assert.equal(reused.issues.find((item) => item.key === "admin_api_token_weak")?.severity, "critical");
+});
+
+test("the retired admin_secret_* checks are gone", async () => {
+  const report = await productionReport({ ADMIN_SECRET: "admin", ALLOW_ADMIN_SECRET_QUERY: "true", ADMIN_OPEN_ACCESS: "true" });
+  assert.deepEqual(report.issues, []);
+  assert.equal(report.score, 10);
+});

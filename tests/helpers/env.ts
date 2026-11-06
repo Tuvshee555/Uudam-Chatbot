@@ -1,10 +1,16 @@
+/** Invented test values only. 32+ characters, so the strong-key checks treat them as real keys. */
+export const TEST_ADMIN_SESSION_SECRET = "test-session-key-7f3a9c1e5b2d8f40-6a1c9e7b3d5f2a8c";
+export const TEST_ADMIN_API_TOKEN = "test-api-token-2b8e4f6a0c9d1e3f-5a7c9e1b3d5f7a9c";
+/** The invented Google accounts on the test allow-list. */
+export const TEST_ADMIN_EMAILS = ["owner.test@example.test", "staff.test@example.test"];
+
 const REQUIRED_BASE_ENV: Record<string, string> = {
   OPENAI_API_KEY: "test-openai-key",
   VERIFY_TOKEN: "test-verify-token",
   TOKEN_PAGE: "test-page-token",
   FACEBOOK_PAGE_ID: "1234567890",
   META_APP_SECRET: "test-meta-secret",
-  ADMIN_SECRET: "test-admin-secret",
+  ADMIN_SESSION_SECRET: TEST_ADMIN_SESSION_SECRET,
 };
 
 const DEFAULT_NUMERIC_ENV: Record<string, string> = {
@@ -35,9 +41,7 @@ const DEFAULT_NUMERIC_ENV: Record<string, string> = {
 };
 
 const DEFAULT_BOOLEAN_ENV: Record<string, string> = {
-  ADMIN_OPEN_ACCESS: "false",
   TRUST_PROXY_HEADERS: "true",
-  ALLOW_ADMIN_SECRET_QUERY: "false",
   REDIS_STATE_ENABLED: "false",
   REDIS_RATE_LIMIT_ENABLED: "false",
   REDIS_REPLAY_ENABLED: "false",
@@ -49,6 +53,11 @@ const DEFAULT_BOOLEAN_ENV: Record<string, string> = {
 const DEFAULT_OPTIONAL_ENV: Record<string, string> = {
   NODE_ENV: "test",
   REDIS_KEY_PREFIX: "nexonbot-test",
+  // Google sign-in is the only way into the admin, so a complete deployment has it.
+  GOOGLE_CLIENT_ID: "123-test.apps.googleusercontent.com",
+  GOOGLE_CLIENT_SECRET: "test-google-client-secret",
+  ADMIN_GOOGLE_EMAILS: TEST_ADMIN_EMAILS.join(","),
+  ADMIN_API_TOKEN: TEST_ADMIN_API_TOKEN,
 };
 
 const RESET_ONLY_ENV_KEYS = [
@@ -73,6 +82,10 @@ const RESET_ONLY_ENV_KEYS = [
   "VERCEL",
   "VERCEL_ENV",
   "VERCEL_GIT_COMMIT_SHA",
+  // Retired admin settings: cleared so a value left in a developer's shell never leaks in.
+  "ADMIN_SECRET",
+  "ADMIN_OPEN_ACCESS",
+  "ALLOW_ADMIN_SECRET_QUERY",
 ];
 
 const KNOWN_TEST_ENV_KEYS = [

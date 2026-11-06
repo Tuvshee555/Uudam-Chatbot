@@ -34,11 +34,28 @@ on purpose. Recovery point before the work: tag `archive/2026-10-31/pre-admin-ov
   the website currently projects, 0 pending/failed deliveries. Live pages for four
   active trips showed the database price; an archived trip's page returned 404.
 
+### Update 2026-11-06: Google-only sign-in
+
+The sign-in row above is superseded. The admin secret is gone: no password form, no
+`POST /api/admin/session` (405), no `x-admin-secret` header, no `?secret=`, no
+`ADMIN_OPEN_ACCESS`, no secret in the Blob upload payload, and old browsers' stored
+secret is deleted, never sent. A person signs in only with Google (`ADMIN_GOOGLE_EMAILS`).
+The session token (v2) carries that address and is re-checked against the list on every
+request, so removing someone ends their access at the next redeploy. The cookie and the
+customer-file links are signed with `ADMIN_SESSION_SECRET` (48+ random characters; a
+missing or weak one turns admin sign-in off without stopping the bot, and a production
+build fails at preflight so the live deployment keeps serving). Scripts read with `Authorization: Bearer
+<ADMIN_API_TOKEN>`, GET/HEAD only. Local browser walks use `scripts/lib/devAdminCookie.mjs`.
+Readiness: `admin_session_secret_weak`, `admin_google_sign_in_off`,
+`admin_api_token_weak` (critical), `admin_google_single_account` (warning).
+
 ## Open items (not done here)
 
-- One shared admin secret: no per-person accounts, roles or "who changed what" trail.
-  Sessions are stateless: «Гарах» ends this browser's session; a copied cookie stays
-  valid until it expires unless `ADMIN_SECRET` is rotated.
+- ~~One shared admin secret~~ (fixed 2026-11-06: per-person Google accounts; the
+  `admin.google_sign_in` log names who signed in). Still no roles or per-change "who
+  changed what" trail. Sessions are stateless: «Гарах» ends this browser's session; a
+  copied cookie stays valid until it expires, its address leaves `ADMIN_GOOGLE_EMAILS`,
+  or `ADMIN_SESSION_SECRET` is rotated.
 - Production data left as found (each fix needs an owner-approved write):
   one trip still carries a stored `poster_photo_count` (harmless now, never written
   again); 31 `trip_website_sync` rows point at deleted trips whose website pages are
@@ -58,9 +75,10 @@ on purpose. Recovery point before the work: tag `archive/2026-10-31/pre-admin-ov
 ## Re-checking
 
 - `npm test`, `npm run typecheck`, `npm run build` (runs the conversation gates).
-- `ADMIN_SMOKE_SECRET_FILE=<file> node scripts/admin-smoke.mjs [baseUrl]` — read-only
-  browser run (sign-in, sections, editor, archive guard, lead search, JSON review,
-  sign-out); never saves.
+- `node scripts/admin-smoke.mjs [baseUrl]` — read-only browser run. Against production:
+  signed-out checks only (Google button, no password field, `POST /api/admin/session`
+  405). Against `http://localhost:…`: the full walk (sections, editor, archive guard,
+  lead search, JSON review, sign-out) signed in with the local dev cookie; never saves.
 - `npm run audit:website-parity` — read-only admin/website comparison.
 - Running `next dev` with `.env.local` uses the production database: browsing is
   reads plus routine schema/maintenance writes, and a local env without the Blob token

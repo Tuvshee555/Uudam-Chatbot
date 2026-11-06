@@ -62,7 +62,7 @@ import { pickReferral, rememberAdReferral } from "../../lib/adReferral";
 import { dbAppendAdminMessage, dbClaimGoodbye, dbClaimQuickInfo, dbReleaseQuickInfo, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { dbAppendStaffMessages } from "../../lib/travelDb";
 import { hasDepartureDateAvailabilityIntent, requestsDateWindow } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply, } from "../../lib/travelFastPaths";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply, withoutHiddenTrips, } from "../../lib/travelFastPaths";
 import { buildHandoffReplyWithContact, claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
@@ -384,7 +384,7 @@ async function handleMessageTurn(
   // trips are left out of this turn's catalogue (negatedTrip.ts).
   const excludedTripIds = new Set<string>();
   if (/биш|bish/iu.test(text)) {
-    const active = (await listTrips({ limit: 5000 })).filter((trip) => trip.status === "active").map(sanitizeTripForCustomers);
+    const active = withoutHiddenTrips(await listTrips({ limit: 5000 })).filter((trip) => trip.status === "active").map(sanitizeTripForCustomers);
     const resolve = (word: string) => resolveTripFromUserMessage(word, active, { allowLooseFallback: false });
     const corrected = withoutNegatedTrips(text, (word) => resolve(word).status !== "not_found");
     for (const word of corrected.negated) {
@@ -425,7 +425,7 @@ async function handleMessageTurn(
   let groundingTrips: TravelTrip[] | null = null;
   const getGroundingTrips = async (): Promise<TravelTrip[]> => {
     try {
-      groundingTrips ||= (await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers);
+      groundingTrips ||= withoutHiddenTrips(await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers);
       return groundingTrips;
     } catch (cause) {
       const error = new RetryableWebhookError("grounding_unavailable");
@@ -696,7 +696,7 @@ async function handleMessageTurn(
 
   if (platform === "facebook" && token && (isGreetingButton(text) || isSeasonButton)) {
     try {
-      const allTrips = await listTrips({ limit: 5000 });
+      const allTrips = withoutHiddenTrips(await listTrips({ limit: 5000 }));
       if (isAllTripsButton || isSeeAllButton) {
         const greeting = resolveGreetingConfig(botSettings.extra);
         let album: string[] = [];
@@ -1091,7 +1091,7 @@ async function handleMessageTurn(
   let cachedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
   const getTrips = async () => {
     if (cachedTrips) return cachedTrips;
-    cachedTrips = (await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers).filter((trip) => !excludedTripIds.has(trip.id));
+    cachedTrips = withoutHiddenTrips(await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers).filter((trip) => !excludedTripIds.has(trip.id));
     return cachedTrips;
   };
   // Only fetched on the miss path (nothing in the active catalogue matched),
@@ -1099,7 +1099,8 @@ async function handleMessageTurn(
   let cachedArchivedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
   const getArchivedTrips = async () => {
     if (cachedArchivedTrips) return cachedArchivedTrips;
-    cachedArchivedTrips = await listTrips({ status: "archived", limit: 500 });
+    // A hidden trip is not announced as "ended, will come back" either.
+    cachedArchivedTrips = withoutHiddenTrips(await listTrips({ status: "archived", limit: 500 }));
     return cachedArchivedTrips;
   };
   // Stateful routing for the deterministic matchers: answers to a
@@ -2645,7 +2646,7 @@ export default async function handler(
               if (adReferral && senderId) {
                 await rememberAdReferral({
                   senderId, platform: payload.object === "instagram" ? "instagram" : "facebook", referral: adReferral,
-                  trips: await listTrips({ limit: 5000 }).catch(() => []), pageToken: pageTokenFor(pageId, senderId),
+                  trips: withoutHiddenTrips(await listTrips({ limit: 5000 }).catch(() => [])), pageToken: pageTokenFor(pageId, senderId),
                 });
               }
               // Postback taps (Get Started button, persistent menu) carry no

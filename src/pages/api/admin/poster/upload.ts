@@ -1,26 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { hasAdminAccess } from "@/lib/adminAccess";
-import { safeSecretCompare } from "@/lib/adminAuth";
 import { getEnv } from "@/lib/env";
 import { getClientKey, rateLimitAsync } from "@/lib/rateLimit";
 import { recordCounter } from "@/lib/observability";
-
-function payloadHasAdminAccess(clientPayload: string | null): boolean {
-  const env = getEnv();
-  if (env.adminOpenAccess) return true;
-  if (!clientPayload) return false;
-  try {
-    const parsed = JSON.parse(clientPayload) as unknown;
-    const provided =
-      parsed && typeof parsed === "object"
-        ? String((parsed as Record<string, unknown>).adminSecret || "")
-        : "";
-    return safeSecretCompare(env.adminSecret, provided);
-  } catch {
-    return false;
-  }
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).end();
@@ -33,11 +16,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  // The admin secret can arrive inside the Blob client payload here rather than
-  // as a header, so this route can't use requireAdminAccess. It mirrors what
-  // that helper does by hand: throttle only the FAILURE path. Charging every
-  // call would cap legitimate bulk poster/photo imports at the auth-failure
-  // budget (20/min by default) and 429 a staff member mid-upload.
+  // Only the signed-in admin's session cookie opens an upload token (the old secret in the
+  // Blob client payload is gone). The check runs inside handleUpload, so this mirrors
+  // requireAdminAccess by hand: throttle only the FAILURE path. Charging every call would
+  // cap legitimate bulk poster/photo imports at the auth-failure budget (20/min by default)
+  // and 429 a staff member mid-upload.
   let denial: "unauthorized" | "rate_limited" | null = null;
   let rateLimitReset = 0;
 
@@ -45,8 +28,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const jsonResponse = await handleUpload({
       body: req.body as HandleUploadBody,
       request: req,
-      onBeforeGenerateToken: async (_pathname, clientPayload) => {
-        if (!hasAdminAccess(req) && !payloadHasAdminAccess(clientPayload)) {
+      onBeforeGenerateToken: async () => {
+        if (!hasAdminAccess(req)) {
           const attempt = await rateLimitAsync(
             `admin-auth:${getClientKey(req)}`,
             getEnv().adminAuthRateLimit,

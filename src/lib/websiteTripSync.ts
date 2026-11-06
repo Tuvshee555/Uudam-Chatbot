@@ -19,6 +19,9 @@ import { websiteDepartureDateKey } from "./websiteDepartureDate";
 import { currentWebsiteDepartureRows } from "./websiteDepartureRows";
 import { BOOKING_WEBSITE_URL } from "./bookingWebsite";
 import { logWarn } from "./observability";
+import { safeFetch, SafeFetchError } from "./safeFetch";
+import { isHostedPhotoUrl } from "./tripPhotoEdit";
+import type { DepartureDateState } from "./travelTypes";
 
 let pool: Pool | undefined;
 function bookingPool() {
@@ -133,12 +136,67 @@ async function uploadToCloudinary(file: string | Blob, hash: string): Promise<st
   return response.ok && typeof body.secure_url === "string" ? body.secure_url : null;
 }
 
+/**
+ * An outside photo's bytes, fetched through safeFetch: https only, every redirect hop and DNS
+ * answer checked against private addresses, 15 s and 12 MB. A refused or dead link is null.
+ */
 async function downloadRemotePhoto(url: string): Promise<Blob | null> {
-  const response = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 (compatible; UudamTravel/1.0)" }, redirect: "follow", signal: AbortSignal.timeout(15000) });
-  const type = response.headers.get("content-type") || "";
-  if (!response.ok || !type.startsWith("image/")) return null;
-  const bytes = await response.arrayBuffer();
-  return bytes.byteLength > 0 && bytes.byteLength <= MAX_REMOTE_PHOTO_BYTES ? new Blob([bytes], { type }) : null;
+  try {
+    const response = await safeFetch(url, { timeoutMs: 15000, maxBytes: MAX_REMOTE_PHOTO_BYTES, accept: "image/*" });
+    const type = response.contentType.split(";")[0].trim().toLowerCase();
+    if (response.status < 200 || response.status >= 300 || !type.startsWith("image/") || response.body.length === 0) return null;
+    return new Blob([new Uint8Array(response.body)], { type });
+  } catch (error) {
+    if (error instanceof SafeFetchError) return null;
+    throw error;
+  }
+}
+
+const DATA_IMAGE = /^data:(image\/(?:png|jpe?g|webp|gif|avif|heic|heif));base64,([a-z0-9+/=\s]+)$/i;
+
+/**
+ * One photo on OUR Cloudinary, for the assistant's photo actions: a photo already there is
+ * returned as it is; an attached image (data: URL) is uploaded; an outside https link is
+ * downloaded through safeFetch (never by an unchecked fetch, never by handing the raw link on)
+ * and its bytes uploaded. Same cache as the poster path (connected_trip_assets, keyed by the
+ * source). Throws an Error with a plain Mongolian message when the photo cannot be hosted.
+ */
+export async function hostImage(source: string): Promise<string> {
+  const value = String(source || "").trim();
+  if (isHostedPhotoUrl(value)) return value;
+  const env = getEnv();
+  if (!env.cloudinaryApiSecret || !env.cloudinaryCloudName || !env.cloudinaryApiKey) {
+    throw new Error("Зураг байршуулах (Cloudinary) тохиргоо хийгдээгүй байна.");
+  }
+  const hash = createHash("sha256").update(value).digest("hex");
+  const cached = await queryNeon<{ url: string }>("SELECT url FROM connected_trip_assets WHERE hash=$1", [hash]);
+  if (cached?.rows[0]?.url && isHostedPhotoUrl(cached.rows[0].url)) return cached.rows[0].url;
+  let blob: Blob;
+  const inline = value.match(DATA_IMAGE);
+  if (inline) {
+    const bytes = Buffer.from(inline[2].replace(/\s+/g, ""), "base64");
+    if (!bytes.length) throw new Error("Хавсаргасан зураг хоосон байна.");
+    if (bytes.length > MAX_REMOTE_PHOTO_BYTES) throw new Error("Зураг 12 MB-аас том байна.");
+    blob = new Blob([new Uint8Array(bytes)], { type: inline[1].toLowerCase() });
+  } else if (/^https:\/\//i.test(value)) {
+    let response: Awaited<ReturnType<typeof safeFetch>>;
+    try {
+      response = await safeFetch(value, { timeoutMs: 15000, maxBytes: MAX_REMOTE_PHOTO_BYTES, accept: "image/*" });
+    } catch (error) {
+      if (error instanceof SafeFetchError) throw new Error(`Зургийг татаж чадсангүй: ${error.reason}`);
+      throw error;
+    }
+    const type = response.contentType.split(";")[0].trim().toLowerCase();
+    if (response.status < 200 || response.status >= 300) throw new Error("Зургийн холбоос нээгдсэнгүй.");
+    if (!type.startsWith("image/") || !response.body.length) throw new Error("Холбоос зураг биш байна.");
+    blob = new Blob([new Uint8Array(response.body)], { type });
+  } else {
+    throw new Error("Зөвхөн https:// зургийн холбоос эсвэл хавсаргасан зураг байршуулна.");
+  }
+  const url = await uploadToCloudinary(blob, hash).catch(() => null);
+  if (!url) throw new Error("Зургийг Cloudinary руу хуулж чадсангүй.");
+  await queryNeon("INSERT INTO connected_trip_assets(hash,url) VALUES ($1,$2) ON CONFLICT(hash) DO NOTHING", [hash, url]);
+  return url;
 }
 
 async function hostedPhoto(photo: string): Promise<string> {
@@ -519,20 +577,119 @@ export type DateSeatState = "open" | "low" | "full";
  * on that date only. Returns false when the trip has no such live departure.
  */
 export async function setDepartureSeatState(sourceTripId: string, date: string, state: DateSeatState): Promise<boolean> {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
-  const status = state === "low" ? "ALMOST_FULL" : state === "full" ? "SOLD_OUT" : "OPEN";
-  const result = await bookingPool().query(
-    `UPDATE "Departure" d SET status=$3::"DepartureStatus",
-       -- a stale zero count would keep a reopened date sold out
-       "seatsLeft"=CASE WHEN $3 <> 'SOLD_OUT' AND d."seatsLeft"=0 THEN NULL ELSE d."seatsLeft" END
-     FROM "Trip" t
-     WHERE d."tripId"=t.id AND t."sourceTripId"=$1
-       AND (d."startDate" + interval '8 hours')::date = $2::date
-       AND d.status NOT IN ('CANCELLED','DEPARTED')
-     RETURNING d.id`,
-    [sourceTripId, date, status],
+  return (await changeDepartureState(sourceTripId, date, state)).rows.length > 0;
+}
+
+/** The website status each assistant date state writes. */
+export const DEPARTURE_STATUS_OF: Record<DepartureDateState, string> = { open: "OPEN", low: "ALMOST_FULL", full: "SOLD_OUT", paused: "PAUSED" };
+
+/** One website departure row as it was before a change and as the change left it. */
+export type DepartureStateRow = { id: string; status: string; seatsLeft: number | null; after_status: string; after_seats_left: number | null; date?: string };
+export type DepartureStateChange = { slug: string | null; rows: DepartureStateRow[] };
+/** One website departure row as it is now (raw status, PAUSED included). */
+export type DepartureRowState = { id: string; date: string; status: string; seatsLeft: number | null };
+
+/**
+ * Every website departure row of one chatbot trip, raw (the status the row holds, not the
+ * availability overlay's reading of it). Read before and after a trip-level status change
+ * (archive, cancel, pause) so its rollback can put each date back: re-activating a trip in the
+ * projection reopens every closed date (upsertWebsiteTrip), which on its own would turn a date
+ * that was sold out or paused before the change into a bookable one.
+ */
+export async function readDepartureRows(sourceTripId: string): Promise<{ slug: string | null; rows: DepartureRowState[] }> {
+  const result = await bookingPool().query<{ id: string; date: string; status: string; seats_left: number | null; slug: string | null }>(
+    `SELECT d.id, to_char((d."startDate" + interval '8 hours')::date, 'YYYY-MM-DD') AS date, d.status::text AS status,
+            d."seatsLeft" AS seats_left, t.slug
+       FROM "Departure" d JOIN "Trip" t ON d."tripId"=t.id
+      WHERE t."sourceTripId"=$1
+      ORDER BY d."startDate", d.id`,
+    [sourceTripId],
   );
-  return (result.rowCount ?? 0) > 0;
+  return {
+    slug: result.rows[0]?.slug ? String(result.rows[0].slug) : null,
+    rows: result.rows.map((row) => ({ id: String(row.id), date: String(row.date), status: String(row.status), seatsLeft: row.seats_left ?? null })),
+  };
+}
+
+/** True while the trip's latest save has not reached the website yet (its projection is queued). */
+export async function websiteSyncPending(tripId: string): Promise<boolean> {
+  const result = await queryNeon<{ pending: boolean }>("SELECT revision > synced_revision AS pending FROM trip_website_sync WHERE trip_id=$1", [tripId]);
+  return result?.rows[0]?.pending === true;
+}
+
+/**
+ * Sets one departure day's status (OPEN / ALMOST_FULL / SOLD_OUT / PAUSED) and returns every
+ * row it changed with its RAW earlier status and seat count, read in the same statement, so a
+ * rollback can put back exactly what was there (PAUSED included, which the availability
+ * overlay used to read as "open"). Reopening clears a stale zero seat count, as before.
+ */
+export async function changeDepartureState(sourceTripId: string, date: string, state: DepartureDateState): Promise<DepartureStateChange> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !(state in DEPARTURE_STATUS_OF)) return { slug: null, rows: [] };
+  const status = DEPARTURE_STATUS_OF[state];
+  const result = await bookingPool().query<{ id: string; status: string; seats_left: number | null; slug: string | null; after_status: string; after_seats_left: number | null }>(
+    `WITH target AS (
+       SELECT d.id, d.status::text AS status, d."seatsLeft" AS seats_left, t.slug
+         FROM "Departure" d JOIN "Trip" t ON d."tripId"=t.id
+        WHERE t."sourceTripId"=$1
+          AND (d."startDate" + interval '8 hours')::date = $2::date
+          AND d.status NOT IN ('CANCELLED','DEPARTED')
+        FOR UPDATE OF d
+     ), changed AS (
+       UPDATE "Departure" d SET status=$3::"DepartureStatus",
+         -- a stale zero count would keep a reopened date sold out
+         "seatsLeft"=CASE WHEN $4::text IN ('OPEN','ALMOST_FULL') AND d."seatsLeft"=0 THEN NULL ELSE d."seatsLeft" END
+         FROM target WHERE d.id=target.id
+       RETURNING d.id, d.status::text AS after_status, d."seatsLeft" AS after_seats_left
+     )
+     SELECT target.id, target.status, target.seats_left, target.slug, changed.after_status, changed.after_seats_left
+       FROM target JOIN changed ON changed.id=target.id`,
+    [sourceTripId, date, status, status],
+  );
+  const rows = result.rows.map((row) => ({
+    id: String(row.id), status: String(row.status), seatsLeft: row.seats_left ?? null,
+    after_status: String(row.after_status), after_seats_left: row.after_seats_left ?? null,
+  }));
+  return { slug: result.rows[0]?.slug ? String(result.rows[0].slug) : null, rows };
+}
+
+/**
+ * Puts departure rows back to the status and seat count recorded before an assistant change,
+ * but only while every row still has the status that change gave it: a date staff (or the
+ * website) changed since is left alone and reported, never overwritten.
+ */
+export async function restoreDepartureRows(rows: DepartureStateRow[]): Promise<{ restored: number; changedSince: string[] }> {
+  if (!rows.length) return { restored: 0, changedSince: [] };
+  const client = await bookingPool().connect();
+  try {
+    await client.query("BEGIN");
+    const current = await client.query<{ id: string; status: string; seats_left: number | null }>(
+      `SELECT id, status::text AS status, "seatsLeft" AS seats_left FROM "Departure" WHERE id=ANY($1::text[]) FOR UPDATE`, [rows.map((row) => row.id)]);
+    const now = new Map(current.rows.map((row) => [String(row.id), { status: String(row.status), seatsLeft: row.seats_left ?? null }]));
+    // Every row already back where it was (a rollback run a second time): nothing to write.
+    if (rows.every((row) => now.get(row.id)?.status === row.status && now.get(row.id)?.seatsLeft === row.seatsLeft)) {
+      await client.query("ROLLBACK");
+      return { restored: 0, changedSince: [] };
+    }
+    // A row gone, or with a status or seat count other than the change left, was edited since.
+    const changedSince = rows.filter((row) => {
+      const live = now.get(row.id);
+      return !live || live.status !== row.after_status || live.seatsLeft !== row.after_seats_left;
+    }).map((row) => row.id);
+    if (changedSince.length) {
+      await client.query("ROLLBACK");
+      return { restored: 0, changedSince };
+    }
+    for (const row of rows) {
+      await client.query(`UPDATE "Departure" SET status=$2::"DepartureStatus","seatsLeft"=$3 WHERE id=$1`, [row.id, row.status, row.seatsLeft]);
+    }
+    await client.query("COMMIT");
+    return { restored: rows.length, changedSince: [] };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function flushWebsiteSync(tripId?: string, limit = 5) {
@@ -615,8 +772,12 @@ export async function notifyWebsiteTripsChanged(slugs: string[]) {
   const unique = [...new Set(slugs.filter(Boolean))];
   const explicit = process.env.WEBSITE_REVALIDATE_URL?.trim();
   if (!unique.length || (!explicit && process.env.VERCEL_ENV !== "production")) return;
-  const secret = process.env.WEBSITE_TRIP_SYNC_SECRET || getEnv().adminSecret;
-  if (!secret) return;
+  // Its own secret only: the admin password must never travel to another service.
+  const secret = process.env.WEBSITE_TRIP_SYNC_SECRET?.trim();
+  if (!secret) {
+    logWarn("website_revalidate.skipped", { reason: "WEBSITE_TRIP_SYNC_SECRET is not set", slugs: unique.length });
+    return;
+  }
   try {
     const response = await fetch(`${(explicit || BOOKING_WEBSITE_URL).replace(/\/$/, "")}/api/internal/trip-changed`, {
       method: "POST",

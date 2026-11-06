@@ -119,7 +119,7 @@ test("one departure day sold out: an exact per-date action, never the whole trip
   const out = think({ text: "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» 12/27 дүүрсэн", trips: TRIPS, now: NOW });
   assert.equal(out.kind, "proposal");
   if (out.kind !== "proposal") return;
-  assert.deepEqual(out.proposal.actions, [{ action: "set_date_state", trip_id: "t-norvel", date: "2098-12-27", state: "full" }]);
+  assert.deepEqual(out.proposal.actions, [{ action: "set_date_state", trip_id: "t-norvel", date: "2098-12-27", state: "full", observed_status: "OPEN", ...VERSION }]);
   assert.match(out.proposal.summary, /12-р сарын 27.*Дүүрсэн/);
   assert.equal(out.proposal.needs_confirmation, true);
 });
@@ -147,7 +147,7 @@ test("no date named: the assistant asks which day, with the trip's real days and
   // Tapping a day carries the whole instruction back and yields the exact proposal.
   const next = think({ text: out.ask.options[0].answer, trips: TRIPS, now: NOW });
   assert.equal(next.kind, "proposal");
-  if (next.kind === "proposal") assert.deepEqual(next.proposal.actions[0], { action: "set_date_state", trip_id: "t-norvel", date: "2098-12-27", state: "full" });
+  if (next.kind === "proposal") assert.deepEqual(next.proposal.actions[0], { action: "set_date_state", trip_id: "t-norvel", date: "2098-12-27", state: "full", observed_status: "OPEN", ...VERSION });
 });
 
 test("a day the trip does not have: the assistant says so and offers the days it has", async () => {
@@ -327,7 +327,7 @@ test("a question is answered with the trip's facts; the change it could also mea
   assert.match(maybe.ask.options[0].label, /Дүүрсэн/);
   const next = think({ text: maybe.ask.options[0].answer, trips: TRIPS, now: NOW });
   assert.equal(next.kind, "proposal");
-  if (next.kind === "proposal") assert.deepEqual(next.proposal.actions, [{ action: "set_date_state", trip_id: "t-norvel", date: "2098-12-27", state: "full" }]);
+  if (next.kind === "proposal") assert.deepEqual(next.proposal.actions, [{ action: "set_date_state", trip_id: "t-norvel", date: "2098-12-27", state: "full", observed_status: "OPEN", ...VERSION }]);
   const which = think({ text: "норвел хэдэн суудал үлдсэн бэ", trips: TRIPS, now: NOW });
   assert.equal(which.kind, "ask");
   if (which.kind === "ask") assert.equal(which.ask.id, "trip");
@@ -347,7 +347,7 @@ test("a negated instruction is never acted on: the state is asked with choices, 
   assert.deepEqual(open.ask.options.map((o) => o.label), ["Нээлттэй", "Цөөн суудал", "Дүүрсэн"]);
   const chosen = think({ text: open.ask.options[0].answer, trips: TRIPS, now: NOW });
   assert.equal(chosen.kind, "proposal");
-  if (chosen.kind === "proposal") assert.deepEqual(chosen.proposal.actions, [{ action: "set_date_state", trip_id: "t-norvel", date: "2098-12-28", state: "open" }]);
+  if (chosen.kind === "proposal") assert.deepEqual(chosen.proposal.actions, [{ action: "set_date_state", trip_id: "t-norvel", date: "2098-12-28", state: "open", observed_status: "SOLD_OUT", ...VERSION }]);
   for (const text of ["«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» битгий цуцал", "«ТУРШИЛТ – НОРВЕЛ ХОТЫН АЯЛАЛ» цуцлахгүй", "Вэлмор аяллыг устгахгүй"]) {
     const out = think({ text, trips: TRIPS, now: NOW });
     assert.equal(out.kind, "note", text);
@@ -363,8 +363,8 @@ test("two days with two states in one message: each day gets its own; two states
   assert.equal(paired.kind, "proposal");
   if (paired.kind === "proposal") {
     assert.deepEqual(paired.proposal.actions, [
-      { action: "set_date_state", trip_id: "t-norvel", date: "2098-12-27", state: "full" },
-      { action: "set_date_state", trip_id: "t-norvel", date: "2098-12-28", state: "low" },
+      { action: "set_date_state", trip_id: "t-norvel", date: "2098-12-27", state: "full", observed_status: "OPEN", ...VERSION },
+      { action: "set_date_state", trip_id: "t-norvel", date: "2098-12-28", state: "low", observed_status: "SOLD_OUT", ...VERSION },
     ]);
     assert.match(paired.proposal.summary, /12-р сарын 27 → Дүүрсэн, 12-р сарын 28 → Цөөн суудал/);
   }

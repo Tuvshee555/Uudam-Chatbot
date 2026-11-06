@@ -11,6 +11,7 @@ import { sendImageMessage } from "./messenger";
 import { appendMessage } from "./conversation";
 import { listTrips } from "./travelOps";
 import { getTripBrochureAsset, getTripWebsiteLink, isPosterLinkedTrip, resolveTripFromUserMessage } from "./travelFastPaths";
+import { withoutHiddenTrips } from "./travelFastPathsSearch";
 import { isGenericOpener } from "./welcomeFlow";
 import { createPhotoOnlyState, getPhotoOnlyState, setPhotoOnlyState } from "./photoOnlyState";
 import {
@@ -41,7 +42,8 @@ export async function handlePhotoOnlyMode(input: {
 }): Promise<void> {
   const { platform, senderId, pageId, token, text, contextualUserText, trace, rememberTurn, deliverReply } =
     input;
-  const trips = await listTrips({ status: "active" });
+  // A trip staff hid from customers is never matched here, nor its photos/PDF sent (2026-11-06).
+  const trips = withoutHiddenTrips(await listTrips({ status: "active" }));
   const photoOnlyState = await getPhotoOnlyState(senderId);
   const pendingTrips = photoOnlyState ? pickTripsByIds(trips, photoOnlyState.pendingTripIds) : [];
   const activeTrip = photoOnlyState?.activeTripId

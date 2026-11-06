@@ -141,7 +141,8 @@ export async function ensureTravelSchema() {
       await client.query(`
         ALTER TABLE travel_ai_change_requests
           ADD COLUMN IF NOT EXISTS rollback_json JSONB NOT NULL DEFAULT '[]'::jsonb,
-          ADD COLUMN IF NOT EXISTS reverted_at TIMESTAMPTZ NULL;
+          ADD COLUMN IF NOT EXISTS reverted_at TIMESTAMPTZ NULL,
+          ADD COLUMN IF NOT EXISTS applying_at TIMESTAMPTZ NULL;
       `);
       await client.query(`
         CREATE TABLE IF NOT EXISTS travel_bot_settings (

@@ -11,12 +11,15 @@
 //          chatbot (no queued/ignored/conflicting fields) and that the website
 //          and chatbot quote the same per-date prices; its public page answers.
 //        - an AI file parse     → flags a parse that was never saved.
-//        - every chatbot admin screen they opened → is requested again with an
-//          admin session (GET only; website-sync is skipped because its GET
-//          flushes the queue) and must answer 200 in reasonable time.
+//        - every chatbot admin screen they opened → is requested again with the
+//          read-only machine token (GET only; the server refuses it for anything
+//          else; website-sync is skipped because its GET flushes the queue) and
+//          must answer 200 in reasonable time.
 //
 //   node scripts/admin-shadow.mjs [--since 24h] [--no-replay]
-//   ADMIN_SHADOW_SECRET=<chatbot admin secret> overrides ADMIN_SECRET from .env.local.
+//   The replay reads ADMIN_API_TOKEN from .env.local (the same value as in Vercel
+//   production; it can only read). ADMIN_SHADOW_TOKEN overrides it. Without one the
+//   replay is skipped with a warning; the log and DB checks still run.
 //   Needs the Vercel CLI login (npx vercel@latest) and NEON_DATABASE_URL in .env.local.
 //   Writes tmp/admin-shadow/<timestamp>.md and exits 1 when a check fails.
 import { execFileSync } from "node:child_process";
@@ -181,28 +184,29 @@ try {
   await pool.end();
 }
 
-// Replay the chatbot admin screens staff opened, as GETs with an admin session.
+// Replay the chatbot admin screens staff opened, as GETs with the read-only machine token
+// (`Authorization: Bearer <ADMIN_API_TOKEN>`): no sign-in, no session, never a write.
 if (replay && bot.length) {
   log("\n### Chatbot admin screens, opened again");
   const QUERIES = { "/api/admin/leads": "?summary=1", "/api/admin/trips": "?search=&status=&limit=300", "/api/admin/analytics": "?days=7", "/api/admin/customer-documents": "?stats=1" };
   const SKIP = new Set(["/api/admin/website-sync", "/api/admin/session", "/api/admin/customer-image", "/api/admin/conversation-attachment", "/api/admin/conversation", "/api/admin/google/start", "/api/admin/google/callback"]);
   const paths = [...new Set(bot.filter((r) => !isWrite(r) && r.requestPath.startsWith("/api/admin/")).map((r) => r.requestPath))].filter((p) => !SKIP.has(p));
-  const secret = (process.env.ADMIN_SHADOW_SECRET || env.ADMIN_SECRET || "").trim();
-  const signIn = await fetch(`${BOT.base}/api/admin/session`, {
-    method: "POST", headers: { "content-type": "application/json", origin: BOT.base, referer: `${BOT.base}/admin` }, body: JSON.stringify({ secret }),
-  }).catch(() => null);
-  const cookie = signIn?.headers.get("set-cookie")?.split(";")[0];
-  if (!signIn?.ok || !cookie) log(`- ⚠️ could not sign in to the chatbot admin (${signIn?.status ?? "no answer"}); set ADMIN_SHADOW_SECRET`);
+  const token = (process.env.ADMIN_SHADOW_TOKEN || env.ADMIN_API_TOKEN || "").trim();
+  const headers = { authorization: `Bearer ${token}` };
+  // One cheap check first, so a missing or wrong token is one warning, not a failure per screen.
+  const probe = token ? await fetch(`${BOT.base}/api/admin/system`, { headers }).catch(() => null) : null;
+  const probeBody = probe?.ok ? await probe.json().catch(() => null) : null;
+  if (!token) log("- ⚠️ replay skipped: set ADMIN_API_TOKEN in .env.local (read-only, same value as in Vercel)");
+  else if (!probeBody?.authorized) log(`- ⚠️ replay skipped: the chatbot refused ADMIN_API_TOKEN (${probe?.status ?? "no answer"}); check it matches Vercel and is 32+ characters`);
   else {
     for (const path of paths) {
       const started = Date.now();
-      const res = await fetch(`${BOT.base}${path}${QUERIES[path] || ""}`, { headers: { cookie } }).catch(() => null);
+      const res = await fetch(`${BOT.base}${path}${QUERIES[path] || ""}`, { headers }).catch(() => null);
       const ms = Date.now() - started;
       if (!res || res.status !== 200) fail(`${path} answered ${res?.status ?? "nothing"}`);
       else if (ms > 15000) fail(`${path} took ${(ms / 1000).toFixed(1)} s`);
       else pass(`${path} ${ms} ms`);
     }
-    await fetch(`${BOT.base}/api/admin/session`, { method: "DELETE", headers: { cookie, origin: BOT.base, referer: `${BOT.base}/admin` } }).catch(() => {});
   }
 }
 

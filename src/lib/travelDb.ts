@@ -6,6 +6,7 @@ import { recordCounter } from "./observability";
 import { queryNeon } from "./neonDb";
 import { connectedTripMutation, type PosterWrite } from "./connectedTripStore";
 import { flushWebsiteSync, withWebsiteDepartureAvailability } from "./websiteTripSync";
+import { MAX_TRIP_PHOTOS } from "./tripPhotoEdit";
 import { applyWebsiteDetailsPatch } from "./websiteTripDetails";
 import { sharedMap } from "./processState";
 import { ensureTravelSchema } from "./travelSchema";
@@ -115,7 +116,7 @@ function normalizeStoredUrlList(value: unknown): string[] {
       .filter((url): url is string => typeof url === "string")
       .map((url) => url.trim())
       .filter((url) => url.startsWith("https://"))
-      .slice(0, 20);
+      .slice(0, MAX_TRIP_PHOTOS);
 
   if (Array.isArray(value)) return toUrls(value);
   if (typeof value === "string") {
@@ -185,11 +186,12 @@ export function cleanFields(input: TripMutationFields, preserveExplicitYears = f
     cleaned.source_description = input.source_description.trim();
   }
   if (Array.isArray(input.photo_urls)) {
+    // Same cap as the editor, the bulk import and the read (it was 20 here, so a 21st photo vanished on save).
     cleaned.photo_urls = input.photo_urls
       .filter((url): url is string => typeof url === "string")
       .map((url) => url.trim())
       .filter((url) => url.startsWith("https://"))
-      .slice(0, 20);
+      .slice(0, MAX_TRIP_PHOTOS);
   }
   if (input.extra && typeof input.extra === "object" && !Array.isArray(input.extra)) {
     cleaned.extra = input.extra;
@@ -1026,7 +1028,7 @@ export async function upsertTrip(input: {
     hotel: cleaned.hotel || "",
     source_description: cleaned.source_description || "",
     photo_urls: Array.isArray(cleaned.photo_urls)
-      ? cleaned.photo_urls.filter((u) => typeof u === "string" && u.startsWith("https://")).slice(0, 20)
+      ? cleaned.photo_urls.filter((u) => typeof u === "string" && u.startsWith("https://")).slice(0, MAX_TRIP_PHOTOS)
       : [],
     extra: normalizeExtra({
       ...((cleaned.extra || {}) as Record<string, unknown>),
@@ -1742,7 +1744,7 @@ export function isCompleteCleanAction(action: AITripAction): boolean {
   const fields = action.fields || {};
   const hasTarget = Boolean(action.trip_id || action.match?.route_name || action.match?.operator_name);
   if (verb === "patch") return hasTarget && Object.keys(fields).length > 0;
-  if (verb === "set_date_state") return hasTarget && isIsoDate(action.date) && isDateSeatState(action.state);
+  if (verb === "set_date_state") return hasTarget && isIsoDate(action.date) && (isDateSeatState(action.state) || action.state === "paused");
   if (verb === "delete") return hasTarget;
   if (verb !== "upsert") return false;
 

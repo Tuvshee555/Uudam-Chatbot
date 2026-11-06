@@ -21,7 +21,7 @@ import { recordCounter } from "./observability";
 import { ensureDurableLead } from "./durableLead";
 import { autoHandoffSender, pauseBookedCustomer } from "./pause";
 import { dbStoreSenderName, hasRecentOpenLead, listTrips } from "./travelOps";
-import { resolveTripFromUserMessage, sanitizeTripForCustomers } from "./travelFastPaths";
+import { resolveTripFromUserMessage, sanitizeTripForCustomers, withoutHiddenTrips } from "./travelFastPaths";
 import type { TravelTrip } from "./travelTypes";
 import { extractPhoneNumber, isBookingIntent, normalizeLowerText } from "./webhookMedia";
 import type { Platform } from "./webhookDedup";
@@ -47,7 +47,8 @@ export type BookingCollectContext = {
 };
 
 async function loadTrips(): Promise<TravelTrip[]> {
-  return (await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers);
+  // A trip staff hid is never named back to a customer, here either.
+  return withoutHiddenTrips(await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers);
 }
 
 function verifiedTripName(text: string, trips: TravelTrip[]): string {

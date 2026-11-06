@@ -1,23 +1,20 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getEnv } from "../../../lib/env";
-import { safeSecretCompare } from "../../../lib/adminAuth";
-import { chargeFailedAdminAuth, hasAdminAccess } from "../../../lib/adminAccess";
+import { adminSignInAvailable, readAdminSession } from "../../../lib/adminAccess";
 import {
   adminSessionCookie,
   clearedAdminSessionCookie,
   createAdminSessionToken,
-  isSameOriginWrite,
-  readAdminSessionCookie,
   shouldRenewAdminSession,
-  verifyAdminSessionToken,
 } from "../../../lib/adminSession";
 import { beginRequestTrace, finishRequestTrace } from "../../../lib/observability";
 
 /**
- * Admin panel sign-in.
- *   GET    → { authorized, open_access, google_sign_in, expires_at } (renews a session in use for a day)
- *   POST   { secret } → sets the session cookie; 401 on a wrong secret, 429 when throttled
+ * Admin panel session. Signing in happens only through Google (./google/start → callback).
+ *   GET    → { authorized, google_sign_in, expires_at } (renews a session in use for a day).
+ *            google_sign_in is false when nobody can sign in (no Google setup or a weak key).
  *   DELETE → signs this browser out
+ * POST (the old password sign-in) is gone: 405.
  */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const env = getEnv();
@@ -31,40 +28,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
   try {
     if (req.method === "GET") {
-      const token = readAdminSessionCookie(req);
-      const expiresAt = token ? verifyAdminSessionToken(env.adminSecret, token) : null;
-      if (expiresAt != null && shouldRenewAdminSession(expiresAt)) {
-        const renewed = createAdminSessionToken(env.adminSecret);
-        res.setHeader("Set-Cookie", adminSessionCookie(renewed.token, renewed.expiresAt));
-        return res.status(200).json({
-          ok: true,
-          authorized: true,
-          open_access: env.adminOpenAccess,
-          google_sign_in: env.googleSignInEnabled,
-          expires_at: renewed.expiresAt,
-        });
+      const session = readAdminSession(req);
+      const googleSignIn = adminSignInAvailable(env);
+      if (session && shouldRenewAdminSession(session.expiresAt)) {
+        const renewed = createAdminSessionToken(env.adminSessionSecret, session.email);
+        if (renewed) {
+          res.setHeader("Set-Cookie", adminSessionCookie(renewed.token, renewed.expiresAt));
+          return res.status(200).json({ ok: true, authorized: true, google_sign_in: googleSignIn, expires_at: renewed.expiresAt });
+        }
       }
       return res.status(200).json({
         ok: true,
-        authorized: hasAdminAccess(req),
-        open_access: env.adminOpenAccess,
-        google_sign_in: env.googleSignInEnabled,
-        expires_at: expiresAt,
+        authorized: session != null,
+        google_sign_in: googleSignIn,
+        expires_at: session?.expiresAt ?? null,
       });
-    }
-
-    if (req.method === "POST") {
-      if (!isSameOriginWrite(req)) return res.status(403).json({ error: "cross_site_request" });
-      const secret = typeof req.body?.secret === "string" ? req.body.secret.trim() : "";
-      if (!safeSecretCompare(env.adminSecret, secret)) {
-        if (await chargeFailedAdminAuth(req, res, "api.admin.session")) {
-          res.status(401).json({ error: "wrong_secret" });
-        }
-        return;
-      }
-      const session = createAdminSessionToken(env.adminSecret);
-      res.setHeader("Set-Cookie", adminSessionCookie(session.token, session.expiresAt));
-      return res.status(200).json({ ok: true, authorized: true, expires_at: session.expiresAt });
     }
 
     if (req.method === "DELETE") {
@@ -72,7 +50,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ ok: true, authorized: false });
     }
 
-    res.setHeader("Allow", "GET, POST, DELETE");
+    res.setHeader("Allow", "GET, DELETE");
     return res.status(405).end();
   } finally {
     finishRequestTrace(trace, res.statusCode || 500);

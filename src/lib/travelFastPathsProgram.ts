@@ -3,10 +3,8 @@
  * "send me the program" reply builder.
  */
 
-import { filterFutureDepartureDates, sortDepartureDatesForDisplay, type ResolvedDepartureDate } from "./travelDates";
 import { TRIP_MEDIA_UNAVAILABLE_SILENT } from "./reply";
 import { buildFareSection } from "./tripFareBlock";
-import { customerDate } from "./customerDate";
 import { intentTextOf } from "./customerTurn";
 import type { TravelTrip } from "./travelOps";
 import {
@@ -32,7 +30,7 @@ import {
   type TripProgramReplyResult,
   type TripResolution,
 } from "./travelFastPathsSearch";
-import { buildAmbiguousTripReply, hasPriceIntent } from "./travelFastPathsPricing";
+import { buildAmbiguousTripReply, formatExtraFeesLine, hasPriceIntent } from "./travelFastPathsPricing";
 import { replyPreferences } from "./chatbotReplyPolicy";
 
 const PROGRAM_ONLY_QUERY_WORDS = new Set([
@@ -191,37 +189,17 @@ export function getTripItineraryLines(trip: TravelTrip): string[] {
   return lines;
 }
 
-function formatPrice(amount: number | null | undefined): string {
-  if (!amount) return "";
-  return amount.toLocaleString("mn-MN") + "₮";
-}
-
-function buildTripSummaryLines(trip: TravelTrip): string {
+function buildTripSummaryLines(trip: TravelTrip, now: Date): string {
   const lines: string[] = [];
   if (trip.duration_text && !isGenericConfirmationText(trip.duration_text)) {
     lines.push(`⏱ ${trip.duration_text}`);
   }
-  // The same fare and date lines as every other trip card: this card printed the trip's
-  // top-level price (can be stale against per-date fares) and the stored date text,
-  // so a customer read a raw ISO date under "Гарах өдрүүд" (2026-10-17).
-  const fareSection = buildFareSection(trip);
-  if (fareSection) {
-    lines.push(...fareSection);
-    return lines.join("\n");
-  }
-  const adult = formatPrice(trip.adult_price);
-  const child = formatPrice(trip.child_price);
-  if (adult && child) lines.push(`💰 Насанд хүрэгч: ${adult} | Хүүхэд: ${child}`);
-  else if (adult) lines.push(`💰 Үнэ: ${adult}`);
-  const resolvedDates = ((trip.extra || {}) as Record<string, unknown>).departure_dates_resolved as
-    | ResolvedDepartureDate[]
-    | undefined;
-  const dates = sortDepartureDatesForDisplay(
-    filterFutureDepartureDates(trip.departure_dates?.filter(Boolean) ?? [], new Date(), resolvedDates),
-    new Date(),
-    resolvedDates,
-  );
-  if (dates.length > 0) lines.push(`📅 Гарах өдрүүд: ${dates.slice(0, 5).map((date) => customerDate(date)).join(", ")}${dates.length > 5 ? "…" : ""}`);
+  // The same fare and date lines as every other trip card (tripFareBlock.ts), for every trip.
+  // This card used to fall back to the trip's top-level adult and child price, which dropped
+  // the other child bands and the free infant, and to say nothing about a trip with no fare.
+  // A trip with no fare now prints the no-data sentence: silence and a staff lead.
+  const fees = formatExtraFeesLine(trip);
+  lines.push(...buildFareSection(trip, now, fees ? [fees] : []));
   return lines.join("\n");
 }
 
@@ -232,6 +210,7 @@ function buildShortMediaReply(trip: TravelTrip): string {
 export function buildTripProgramReply(
   text: string,
   trips: TravelTrip[],
+  now = new Date(),
 ): TripProgramReplyResult | null {
   // Asked by the customer, not implied by a trip NAME: tapping a trip named
   // "<хот> [сар]-р сарын аяллын хөтөлбөр" is choosing it, not asking for its PDF.
@@ -392,7 +371,7 @@ export function buildTripProgramReply(
 
   // A program request does not request every hotel, fare and departure.
   const priceIntent = intentText.replace(/хөтөлбөр\p{L}*/giu, "");
-  const summary = hasPriceIntent(priceIntent) ? buildTripSummaryLines(best) : "";
+  const summary = hasPriceIntent(priceIntent) ? buildTripSummaryLines(best, now) : "";
   const summaryBlock = summary ? `\n${summary}` : "";
   const brochure = getTripBrochureAsset(best);
   // The owner's call (2026-10-02): a link to the live trip page, not the PDF

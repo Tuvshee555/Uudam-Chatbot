@@ -22,6 +22,7 @@ import {
   isPosterLinkedTrip,
   phoneticLatinText,
   resolveTripFromUserMessage,
+  withoutHiddenTrips,
 } from "./travelFastPathsSearch";
 import type { TravelTrip } from "./travelTypes";
 import { getEnv } from "./env";
@@ -282,7 +283,8 @@ export async function sendTripMediaForReply(
   recordCounter("webhook.trip_media_policy_total", 1, { platform, reason: policy.reason });
   if (!policy.allowed) return;
   try {
-    const tripsForPhotos = await listTrips({ limit: 5000 });
+    // A trip staff hid from customers never sends its photos, PDF or page link (2026-11-06).
+    const tripsForPhotos = withoutHiddenTrips(await listTrips({ limit: 5000 }));
     const activeTrips = tripsForPhotos.filter((trip) => trip.status === "active");
     const mediaResolution = resolveTripFromUserMessage(userText || replyText, activeTrips, {
       allowLooseFallback: false,

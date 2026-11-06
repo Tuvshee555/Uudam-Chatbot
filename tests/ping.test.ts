@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { applyTestEnv } from "./helpers/env";
+import { adminBearerHeaders } from "./helpers/adminAuth";
 
 function createResponse() {
   const response = {
@@ -60,7 +61,7 @@ test("admin ping exposes readiness diagnostics", async () => {
   const req = {
     method: "GET",
     url: "/api/ping",
-    headers: { "x-admin-secret": "test-admin-secret" },
+    headers: adminBearerHeaders(),
     query: {},
   } as unknown as NextApiRequest;
   const res = createResponse() as unknown as NextApiResponse & {

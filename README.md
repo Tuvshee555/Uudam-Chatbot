@@ -38,16 +38,25 @@ npm run dev                  # http://localhost:3004
 ### Minimum env vars
 
 `OPENAI_API_KEY`, `VERIFY_TOKEN`, `FACEBOOK_PAGES` (one or more `pageId:token`
-pairs, comma-separated), `META_APP_SECRET`, `ADMIN_SECRET`, `NEON_DATABASE_URL`.
+pairs, comma-separated), `META_APP_SECRET`, `ADMIN_SESSION_SECRET`, `NEON_DATABASE_URL`.
 Everything else has safe defaults — see [.env.example](.env.example).
+
+The admin panel (`/admin`) is **Google sign-in only**: set `GOOGLE_CLIENT_ID`,
+`GOOGLE_CLIENT_SECRET` and `ADMIN_GOOGLE_EMAILS` (the allowed accounts, re-checked
+on every request). There is no admin password. `ADMIN_SESSION_SECRET` (48+ random
+characters, never typed by anyone) signs the session cookie; a missing or short one
+turns admin sign-in off while the bot keeps answering, and a production build stops at
+preflight (the live deployment keeps serving) until it is set in Vercel. Scripts read with the optional `ADMIN_API_TOKEN`
+(`Authorization: Bearer …`, GET/HEAD only, never a write). Local browser walks sign
+in with `scripts/lib/devAdminCookie.mjs` (localhost only, local key).
 
 Redis is optional locally and **strongly recommended in production**: without
 it, webhook replay protection, conversation state, staff pause and rate limits
 all live in per-process memory, and Vercel runs several instances that share
 nothing — so a customer can receive the same reply twice and a staff pause set
 on one instance is invisible to the others. Configure `REDIS_URL` **or** the
-`UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN` pair. `GET /api/ping` (with
-the admin secret) reports this under `readiness`.
+`UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN` pair. `GET /api/ping` (signed
+in, or with `Authorization: Bearer <ADMIN_API_TOKEN>`) reports this under `readiness`.
 
 ## Scripts
 

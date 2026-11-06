@@ -7,6 +7,7 @@
  * its credit. Runs on every proposal: when it is first built and again after each
  * clarification answer, so choosing another transport rebuilds the days.
  */
+import { MAX_TRIP_PHOTOS } from "./tripPhotoEdit";
 import type { AIChangeProposal, AITripAction, ConflictItem } from "./travelTypes";
 import { askOpenAIChatParts } from "./openaiFallback";
 import { logWarn } from "./observability";
@@ -269,7 +270,7 @@ async function fillPhotos(input: { action: AITripAction; route: string; days: It
   for (const { photo, url } of placed) credits[url] = { title: photo.title, author: photo.author, license: photo.license, page: photo.pageUrl, provider: PHOTO_PROVIDER };
   const urls = placed.map((entry) => entry.url);
   const existing = (Array.isArray(fields.photo_urls) ? fields.photo_urls : []).filter((url): url is string => typeof url === "string");
-  fields.photo_urls = Array.from(new Set([...existing, ...urls])).slice(0, 20);
+  fields.photo_urls = Array.from(new Set([...existing, ...urls])).slice(0, MAX_TRIP_PHOTOS);
   // Each photo goes onto the day whose sight it shows; the rest fill the program days still
   // without one, in order. Standard train days never get one.
   const withPhotos = days.map((day) => ({ ...day }));

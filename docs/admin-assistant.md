@@ -1,111 +1,111 @@
-# Admin AI assistant — how it decides
+# Admin AI assistant ("AI туслах")
 
-The "AI туслах" tab is where staff change the catalogue by talking. Since 2026-11-04 a typed
-instruction is understood in code first (`src/lib/assistantBrain.ts`) and only reaches the model
-when the code does not know what to do. This is what makes it behave like a colleague who knows
-the business, rather than a form that guesses.
+The "AI туслах" tab is where staff change the catalogue by talking. Since 2026-11-06 a typed
+instruction goes to an agent (`src/lib/assistantAgent/`): the model looks trips up with read-only
+tools, keeps every part of a message, reads pasted links, and ends with **one** of three replies.
+Nothing it does is saved until the admin presses Save on the card, and every save can be undone.
 
-## One instruction, one of four replies
+## What it can do
 
-`generateAssistantReply` (`src/lib/assistantReply.ts`) reads the whole catalogue (archived trips
-included) and runs `think()`:
+Write the way you would tell a colleague, in Cyrillic or Latin-script Mongolian, several things in
+one message. Trip names below are placeholders.
 
-| Reply | When | What the admin sees |
-| --- | --- | --- |
-| **proposal** | the trip and the change are both exact | the proposal card: before → after, Save / Болих, rollback after saving |
-| **ask** | the trip, the day or the amount is missing or shared by several trips | one question with tappable choices (trip names with their status and next departure, the trip's real departure days with their current state, or a free field for an amount) |
-| **note** | nothing would change (the value is already so) | one plain line |
-| **defer** | the words are not one of the known edits | the model is asked, with the owner's rules and the likely trips in full |
-
-A tapped choice sends the original instruction back with a tag the server reads in code
-(`[аялал: «name» trip_id=…]`, `[огноо: YYYY-MM-DD]`), so the model is never asked to interpret an
-answer the admin already gave.
-
-## What the brain understands
-
-Mongolian and the usual Latin spellings. Trip names may be loose: aliases, Latin, a place word,
-the last trip of the conversation ("бас 12/28-ийг…").
-
-| Said | Done |
+| Said | Card shows |
 | --- | --- |
-| «Trip» 12/27 дүүрсэн / цөөн суудал / нээ | that one departure day's state on the website and in the bot (`set_date_state`); the trip itself is untouched |
-| «Trip» бүх өдөр дүүрсэн | every coming day; days already in that state are skipped and listed |
-| «Trip» дүүрсэн (no day) | asks which day, offering the trip's real days and their current state, plus «Бүх өдөр» |
-| том хүн 4,290,000 / хүүхэд 3,990,000 / нярай үнэгүй | base fares and every dated price row and passenger tier (`src/lib/tripFareChange.ts`); a row with two child age tiers is left for the editor and said so |
-| хүүхэд 300k бага | child = adult − 300,000 |
-| бүх үнэ +100k | every priced fare shifts; a free fare stays free |
-| цуцал / түр зогсоо / идэвхжүүл | status; a trip already in that state is a note |
-| устга / архивла | archive (`delete` action: hidden from the website and the bot, record kept, rollback restores it) |
-| үлдсэн суудал 5 / нийт 30 суудал | seats |
-| хоолгүй / хоол багтсан | meals |
-| нэрийг «…» болго | rename; the old name stays as an alias so the bot still finds it |
-| 12/30 гаралт нэм / 12/27-г хас | the day joins or leaves the trip's list and the price row of its nearest date (`src/lib/tripScheduleChange.ts`) |
-| буудал: A эсвэл B | hotel |
+| «Аялал А» 12/2 дүүрсэн · цөөн суудалтай · нээ · энэ өдрийг түр хаа | that one departure day's state (`set_date_state`: full / low / open / paused) |
+| «Аялал А» 12/2-ны үнийг 100 мянгаар нэм · 12/9 том хүн 2,590,000 болго | that one date's price, per passenger, before → after (`set_date_price`); other dates untouched; the poster's price table follows |
+| бүх аяллын үнийг 100,000-аар нэм | one change per trip (`fare_change_all`); partner and non-tugrik trips are listed as skipped |
+| «Аялал А» хүүхэд 300 мянгаар бага | child = adult − 300,000 |
+| a-g idvehgui bolgooch · сайтаас нуу · харагдах болго | hide / show on the website and in the bot (`set_visibility`) — not archive |
+| 3-р өдрийн хөтөлбөрийг «Чөлөөт өдөр» болго · 2-р өдрийн буудал … | that one program day only (`patch_itinerary_day`); the rest of the program stays |
+| хүүхдийн насыг 2-11 болго · нярай 0-23 сар | age bands (`set_age_bands`) |
+| photo attached + «3-р өдрийн зургийг энэ зургаар соль» · «2-р зургийг хас» | the exact photo swapped or removed (`replace_photo`), with both thumbnails |
+| uudamtravel.mn trip link + «устга» | archive of the linked trip only (`delete` = archive, undoable) |
+| partner / other website link + «манайд нэм» | the page is read and becomes the usual new-trip review card |
+| 1/15, 1/22 гаралт нэм · 11/18-ыг хас | departure dates added or removed |
 
-Two trips that share the typed word (every «Хайнан» trip) are never decided by the customer
-matcher's weights: a word that belongs to one trip alone, or a typed date that is a departure of
-exactly one of them, decides; otherwise the assistant asks. A year or a day number is never such a
-word.
+When anything is not certain — which trip, which date, which photo, how much — it asks one
+question with buttons (or asks you to type the amount). A typed answer while a question is open is
+sent with that question (`answer_to`), so "12/2" or "5,590,000" is read as the answer. It never
+guesses a trip, price, date, hotel or photo; a yuan / "land" price is never a selling price.
 
-## What it refuses to guess (2026-11-05 audit)
+## On the page
 
-The stress run of 92 inputs against the live catalogue found the cases below going to the model
-or, worse, becoming a proposal. Each is now handled in code, for free:
+- **Photos.** The agent gets an attachment only as a link — it can swap or remove a trip's photo
+  with it, but cannot read what is in it. So images go to the agent (put on our Cloudinary first,
+  `/api/admin/upload-image`, max 6) only for an explicit photo edit: a photo word (зураг, фото,
+  photo) together with what to do (соль/солих, хас, replace, remove) or which photo (нүүр зураг,
+  «3-р өдрийн», «2-р зураг», эхний зураг), and no reading words. Reading words — шинэ аялал,
+  аялал нэм/үүсгэ, үнэ, прайс, жагсаалт, хүснэгт, постер, хөтөлбөр, огноо, унш — keep the file →
+  trip reader, which reads the image («энэ зургаас шинэ аялал үүсгэ», «энэ зурган дээрх үнээр
+  шинэчил»). Documents (PDF, Word, Excel, zip), images with no words, and anything unsure keep the
+  file reader too (`isPhotoInstruction` in `assistantChatLogic.ts`).
+- **Progress.** While the agent works the thread shows «Ойлгож байна…», «Аяллыг шалгаж байна…»,
+  «Холбоосыг уншиж байна…» (when there is a link). Under each reply a small line says how it was
+  made («AI туслах · аялал хайсан · аяллыг шалгасан», or «Энгийн горим» when the model was not
+  available and the code-side brain read one change only).
+- **The card** says every change in plain Mongolian (date + passenger for a price, «Сайтаас нуух»,
+  «3-р өдөр …», age bands, photo before → after). Refused parts, plan warnings, skipped trips and
+  fare notes are listed plainly under «Анхаарах» / «Алгассан аялал» / «Туслахын тэмдэглэл».
+- **Save** waits up to 200 s (the route runs up to 180 s; many trips save one after another). Save
+  is locked from the moment the request goes out until a definite answer (`saveLockedUntil`, kept
+  with the thread). With no answer the card says, in amber and tagged «Тодорхойгүй», that it is
+  unknown whether the change was saved — never «Хадгалагдсангүй», which is only for a refusal that
+  left nothing saved — and Save stays off until the server has certainly stopped (the card says
+  until when); pressing it again then reports «Өмнө нь хадгалагдсан байна» instead of saving twice.
+  A proposal with no stored request is never saved again after an unknown outcome (check
+  «Аяллууд», send the instruction again if needed). A proposal older than 24 hours is refused
+  (409 `proposal_expired`) with a plain message and a «Дахин илгээх» button.
+- **The conversation** keeps its session id and visible thread in `sessionStorage`, so a reload
+  keeps both (for 6 hours, like the server's memory of the last 12 turns). «Шинэ яриа» starts over.
+  A card whose save was still running at the reload comes back as «Тодорхойгүй» with Save off
+  until the server has certainly stopped — the reload cannot send the same proposal a second time.
 
-| Said | Done |
-| --- | --- |
-| сайн уу · баярлалаа · за · ok · 👍 · 1234567 · asdfghjkl · (empty) | a one-line note with examples written on a real trip; the model is never called |
-| help · ? · юу хийж чадах вэ · чи хэн бэ | the list of what the assistant does |
-| «Trip» хэд вэ? · «Trip» мэдээлэл · норвел хэдэн суудал үлдсэн бэ | the trip's facts (status, fares, each coming day with its website state and seats, meals, hotel); a shared name asks which trip |
-| «Trip» 12/27 дүүрсэн үү? | the facts, with the change the words could also mean offered as ONE tap — a question never changes anything by itself |
-| «Trip» 12/27 дүүрсэн биш нээлттэй · битгий цуцал · цуцлахгүй | nothing is done from the verbs: a day's state is asked with the three states as choices; otherwise "юу ч өөрчлөхгүй" |
-| «Trip» 12/27 дүүрсэн, 12/28 цөөн суудал | one proposal, one action per day |
-| «Trip» 12/27 дүүрсэн цөөн суудал | asked back: one state per day |
-| «A» болон «B» цуцал (also archive, meals, seats, fares) | one proposal with both trips; day, name and hotel changes are one trip at a time |
-| том хүн 0 · хүүхэд 50% | asks the amount, showing the current fares |
-| том хүн 4,290,000 хүүхэд 300k бага | adult set, child = adult − 300k (the child's words no longer leak onto the adult amount) |
-| том хүн 42,900 · 42,900,000 · хүүхэд dearer than adult | still a proposal, with a warning line ("42,900,000₮ гэсэн үү?", "10.0 дахин өөрчлөлт", "хүүхдийн үнэ том хүнийхээс өндөр") |
-| шинэ аялал нэм … | the model, with no trip pre-selected |
-| a paste of 1,500+ characters or 8+ lines | the model reads it whole (a price list goes through the batch pipeline); with no number in it at all, a note instead |
+Code: `src/components/admin/useAssistantChat.ts` (send / answer / photos / thread),
+`assistantChatLogic.ts` (pure rules), `ProposalCard.tsx` with `actionView` in
+`src/lib/adminProposalUtils.ts` (card lines from `describeChange`), `useProposalActions.ts` +
+`applyOutcome` in `src/lib/adminProposalApply.ts` (save / undo).
 
-Three stops in `generateAssistantReply` sit in front of the model: the database unreachable
-(one note, no proposal that could never be saved), the day's spend at `AI_DAILY_BUDGET_USD`
-(`aiBudgetState` in `src/lib/aiUsage.ts`; the exact edits keep working, the file parser answers
-402 `ai_budget_exceeded`), and the bulk paste above.
+## Cost and time per instruction (gpt-4.1)
 
-## Nobody's edit is overwritten
+| Kind | Rounds | Cost | Time |
+| --- | --- | --- | --- |
+| tapped option, trip link + one change | 1 | ~$0.02 | 3-6 s |
+| trip name + one change | ~3 | $0.03-0.04 | 8-15 s |
+| several changes in one message | 4-5 | $0.05-0.07 | 15-25 s |
+| partner page → new trip | 1-2 + file reader | ~$0.04 + ~$0.07 | 40-60 s |
+| small talk («сайн уу», «за»), tapped brain option | 0 | $0 | instant |
 
-Every action the brain proposes carries `expected_updated_at`, the trip version it saw. Apply
-compares it with the trip's current `updated_at` (`changedSinceProposal` in `travelAI.ts`) and
-refuses with "энэ саналыг гаргаснаас хойш өөрчлөгдсөн байна" when the website editor or another
-admin saved in between; re-sending the instruction builds a proposal on the current trip.
+`AI_DAILY_BUDGET_USD` (default $20) stops model calls for the day; the code-side brain then still
+does exact single edits («Энгийн горим»). Tests never call the model.
+
+## Safety
+
+- Every change is a proposal the admin reviews; nothing is written by the model.
+- Every save carries the trip version it was built on (`expected_updated_at`): if someone else
+  changed the trip meanwhile, the save is refused instead of overwriting their edit. Every save can
+  be undone («Буцаах»), and undo restores only what that save changed.
+- Delete = archive (hidden, record and photos kept, restorable).
+- Partner-synced trips (`extra.partner_sync.source_url`) refuse hand price, date and per-date
+  edits — the 30-minute sync would undo them; photos, program text and visibility are fine.
+- Text from web pages and files is data, never instructions; a page is read only when its link is
+  in the admin's own message, and only our own hosted photos are stored.
+- No data → no answer: the assistant says what is missing instead of inventing it.
 
 ## The owner's rules
 
-`src/lib/assistantHouseRules.ts` holds them in Mongolian; they go into every model prompt for a
-typed instruction and are enforced in code where possible (`tripTransitDays.ts`,
-`tripPriceRules.ts`, `tripFareChange.ts`, `tripCategorization.ts`). In short: a new trip is a new
-record; prices are the source's tugrug selling price, never yuan or a "land" price, no +100k on
-new trips; infant 0–23 months, child from 2; no invented dates; the standard Ulaanbaatar train
-days for land, land+flight and cruise trips, none for a flight that already starts and ends in
-Ulaanbaatar; hotels "A эсвэл B"; flight trips in the website's "шууд нислэгтэй аялал" category;
-names in capitals with " – "; real credited photos on program days only; one day's seats are that
-day's state, not the trip's; when unsure, ask with choices.
-
-## Model proposals still get the same care
-
-A model action that names its trip (`match`) is bound in code (`bindActionTargets`): one clear
-trip gets the id; several become a structured question (`proposal.questions`) whose tap answers
-it without another model call (`applyTripChoice` in `reviseAIRequest`). The model may use
-`set_date_state` and `delete` and may return `questions` itself. A typed instruction that reaches
-the model runs on `OPENAI_INSTRUCTION_MODEL` (default gpt-4.1); files keep `OPENAI_FILE_PARSE_MODEL`
-(default gpt-4o).
+`src/lib/assistantHouseRules.ts` holds them in Mongolian; they go into every prompt and are enforced
+in code where possible (`tripTransitDays.ts`, `tripPriceRules.ts`, `tripFareChange.ts`,
+`tripCategorization.ts`). In short: a new trip is a new record; prices are the source's tugrug
+selling price, never yuan or a "land" price; infant 0–23 months, child from 2; no invented dates;
+hotels "A эсвэл B"; one day's seats are that day's state, not the trip's; when unsure, ask.
 
 ## Checks
 
 ```bash
-node --import tsx --test tests/assistant-brain.test.ts tests/assistant-reply-route.test.ts tests/assistant-ask-ui.test.ts
-npm run typecheck && npm run lint && npm test
+node --import tsx --test tests/assistant-chat-logic-ui.test.ts tests/assistant-proposal-card-ui.test.ts tests/assistant-ask-ui.test.ts
+node --import tsx --test tests/assistant-agent.test.ts tests/assistant-change-apply.test.ts tests/assistant-reply-route.test.ts
+npx tsc --noEmit -p . && node scripts/run-tests.mjs
 ```
 
 Trip names in tests and this file are invented; never write a real trip, place or price into

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { applyTestEnv } from "./helpers/env";
+import { adminCookieHeaders } from "./helpers/adminAuth";
 import { normalizeExtra, normalizeExtraPatch } from "../src/lib/tripExtraSchema";
 import { parseTripsJson, planJsonEditorSave, stableStringify } from "../src/lib/jsonEditorPlan";
 
@@ -156,7 +157,7 @@ test("trips API refuses an unscoped archive-all and archives only the ids it is 
       setHeader(name: string, value: unknown) { this.headers[name] = value; },
       status(code: number) { this.statusCode = code; return this; },
       json(value: Record<string, unknown>) { this.body = value; return this; }, end() { return this; } };
-    await handler({ method: "DELETE", headers: { "x-admin-secret": "test-admin-secret" }, query, body } as never, response as never);
+    await handler({ method: "DELETE", headers: adminCookieHeaders(), query, body } as never, response as never);
     return response;
   }
   try {

@@ -4,11 +4,11 @@ import { spawnSync } from "node:child_process";
 // mocked PG/provider transports; inherited production endpoints are removed.
 const env = { ...process.env };
 for (const key of Object.keys(env)) {
-  if (/TOKEN|SECRET|API_KEY|DATABASE_URL|^NEON_|^REDIS|^UPSTASH|^VERCEL|^BOOKING_|^STAFF_|^TELEGRAM_|_SINK_|^GOOGLE_DRIVE_|^FACEBOOK_PAGES$/i.test(key)) delete env[key];
+  if (/TOKEN|SECRET|API_KEY|DATABASE_URL|^NEON_|^REDIS|^UPSTASH|^VERCEL|^BOOKING_|^STAFF_|^TELEGRAM_|_SINK_|^GOOGLE_DRIVE_|^GOOGLE_CLIENT|^ADMIN_GOOGLE_|^FACEBOOK_PAGES$/i.test(key)) delete env[key];
 }
 Object.assign(env, { NODE_ENV: "test", OPENAI_API_KEY: "conversation-fixture-key", VERIFY_TOKEN: "conversation-fixture-token",
   TOKEN_PAGE: "conversation-fixture-token", FACEBOOK_PAGE_ID: "1234567890", META_APP_SECRET: "test-meta-secret",
-  ADMIN_SECRET: "conversation-fixture-secret", REDIS_STATE_ENABLED: "false", REDIS_RATE_LIMIT_ENABLED: "false",
+  ADMIN_SESSION_SECRET: "conversation-fixture-session-key-4a8c2e6f0b9d3f7a", REDIS_STATE_ENABLED: "false", REDIS_RATE_LIMIT_ENABLED: "false",
   REDIS_REPLAY_ENABLED: "false", REDIS_CONVERSATION_ENABLED: "false", REDIS_PAUSE_ENABLED: "false" });
 // Customer journeys come first: each is the shape of real conversations that failed in production
 // (docs/chatbot-forensic-audit.md). This gate runs in CI and in the Vercel prebuild, so a change that

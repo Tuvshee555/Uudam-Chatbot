@@ -32,6 +32,7 @@ import type { TravelTrip } from "../../lib/travelTypes";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
 import { analyzeBeforeReply, buildTripIndexLines, shouldAnalyzeBeforeReply } from "../../lib/replyReasoning";
 import { fixMojibake } from "../../lib/encoding";
+import { withoutHiddenTrips } from "../../lib/travelFastPathsSearch";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { buildContactReply, contactSettingsOf } from "../../lib/contactReplies";
 import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
@@ -386,7 +387,8 @@ export default async function handler(
       let cachedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
       const getTrips = async () => {
         if (cachedTrips) return cachedTrips;
-        cachedTrips = (await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers);
+        // The same customer list as the webhook: a trip staff hid is never offered (2026-11-06).
+        cachedTrips = withoutHiddenTrips(await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers);
         return cachedTrips;
       };
       // Only fetched on the miss path (nothing in the active catalogue
@@ -394,7 +396,7 @@ export default async function handler(
       let cachedArchivedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
       const getArchivedTrips = async () => {
         if (cachedArchivedTrips) return cachedArchivedTrips;
-        cachedArchivedTrips = await listTrips({ status: "archived", limit: 500 });
+        cachedArchivedTrips = withoutHiddenTrips(await listTrips({ status: "archived", limit: 500 }));
         return cachedArchivedTrips;
       };
       let routedCache: FastPathRoute | null = null;

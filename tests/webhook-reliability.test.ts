@@ -672,9 +672,8 @@ test("redis disconnect in replay/conversation mode fails closed with 503", async
       process.env.TOKEN_PAGE = "test-page-token";
       process.env.FACEBOOK_PAGE_ID = "1234567890";
       process.env.META_APP_SECRET = "test-meta-secret";
-      process.env.ADMIN_SECRET = "test-admin-secret";
+      process.env.ADMIN_SESSION_SECRET = "test-session-key-7f3a9c1e5b2d8f40-6a1c9e7b3d5f2a8c";
       process.env.TRUST_PROXY_HEADERS = "true";
-      process.env.ALLOW_ADMIN_SECRET_QUERY = "false";
       process.env.REDIS_STATE_ENABLED = "true";
       process.env.REDIS_REPLAY_ENABLED = "true";
       process.env.REDIS_CONVERSATION_ENABLED = "true";

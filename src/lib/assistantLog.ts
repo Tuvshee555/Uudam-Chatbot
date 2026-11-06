@@ -4,8 +4,14 @@ import { logWarn } from "./observability";
 export type AssistantLogKind = "instruction" | "clarification" | "quick_action" | "proposal" | "ask" | "note" | "applied" | "rolled_back" | "error";
 
 const MAX_TEXT_CHARS = 4000;
-const CONTEXT_WINDOW_MINUTES = 30;
-const CONTEXT_TURNS = 6;
+// A working session with the owner: the last dozen turns of the same page session, within
+// six hours (he comes back to a thread after lunch). The page keeps its session id across
+// reloads, so "энэ аялал" still means the trip he was editing.
+const CONTEXT_WINDOW_MINUTES = 6 * 60;
+const CONTEXT_TURNS = 12;
+const TURN_TEXT_CHARS = 600;
+
+export type AssistantTurn = { role: "admin" | "assistant"; text: string };
 
 let schemaReady: Promise<boolean> | null = null;
 
@@ -53,24 +59,33 @@ export async function logAssistantEvent(event: {
 }
 
 /**
- * The last few turns of this admin's conversation, so a follow-up such as
- * "same for the other one" or "make it 2.5 million" is read in context.
- * Only recent turns of the same session count; an empty string means none.
+ * The last turns of this admin's conversation, oldest first, so a follow-up such as
+ * "same for the other one" or "make it 2.5 million" is read in context. Only turns of
+ * the same session within the window count; none is an empty list.
  */
-export async function recentAssistantContext(sessionId: unknown): Promise<string> {
+export async function recentAssistantTurns(sessionId: unknown): Promise<AssistantTurn[]> {
   try {
-    if (typeof sessionId !== "string" || !/^[\w-]{8,64}$/.test(sessionId) || !(await ensureLogTable())) return "";
+    if (typeof sessionId !== "string" || !/^[\w-]{8,64}$/.test(sessionId) || !(await ensureLogTable())) return [];
     const rows = (await queryNeon<{ role: string; kind: string; text: string }>(
       `SELECT role, kind, text FROM (
          SELECT id, role, kind, text FROM travel_assistant_log
           WHERE session_id = $1 AND created_at > NOW() - make_interval(mins => $2)
-            AND kind IN ('instruction', 'clarification', 'quick_action', 'proposal', 'ask', 'note', 'applied')
+            AND kind IN ('instruction', 'clarification', 'quick_action', 'proposal', 'ask', 'note', 'applied', 'rolled_back')
           ORDER BY id DESC LIMIT $3
        ) recent ORDER BY id`,
       [sessionId, CONTEXT_WINDOW_MINUTES, CONTEXT_TURNS],
     ))?.rows || [];
-    return rows.map((row) => `${row.role === "admin" ? "Админ" : "AI"}: ${row.text.slice(0, 600)}`).join("\n");
+    return rows.map((row) => ({ role: row.role === "admin" ? "admin" as const : "assistant" as const, text: String(row.text || "").slice(0, TURN_TEXT_CHARS) }));
   } catch {
-    return "";
+    return [];
   }
+}
+
+/** The same turns as one text block ("Админ: …" / "AI: …"), as the brain reads them. */
+export function assistantContextText(turns: AssistantTurn[]): string {
+  return turns.map((turn) => `${turn.role === "admin" ? "Админ" : "AI"}: ${turn.text}`).join("\n");
+}
+
+export async function recentAssistantContext(sessionId: unknown): Promise<string> {
+  return assistantContextText(await recentAssistantTurns(sessionId));
 }

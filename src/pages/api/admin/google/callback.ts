@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getEnv } from "../../../../lib/env";
 import { pickFirst } from "../../../../lib/adminAuth";
-import { chargeFailedAdminAuth } from "../../../../lib/adminAccess";
+import { adminSignInAvailable, chargeFailedAdminAuth } from "../../../../lib/adminAccess";
 import { adminSessionCookie, createAdminSessionToken } from "../../../../lib/adminSession";
 import {
   GOOGLE_STATE_COOKIE,
@@ -34,7 +34,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.redirect(303, `/admin?login_error=${error}`);
   };
 
-  if (!env.googleSignInEnabled) return fail("google_not_configured");
+  // Off without Google setup, and also while ADMIN_SESSION_SECRET is weak (fail closed).
+  if (!adminSignInAvailable(env)) return fail("google_not_configured");
   const state = pickFirst(req.query.state as string | string[] | undefined);
   if (!statesMatch(req.cookies?.[GOOGLE_STATE_COOKIE] || "", state)) return fail("google_state_mismatch");
   const code = pickFirst(req.query.code as string | string[] | undefined);
@@ -48,8 +49,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return fail(checked.error);
   }
 
+  // The session carries the address; every request re-checks it against ADMIN_GOOGLE_EMAILS.
+  const session = createAdminSessionToken(env.adminSessionSecret, checked.email);
+  if (!session) return fail("google_not_configured");
   logInfo("admin.google_sign_in", { email: checked.email });
-  const session = createAdminSessionToken(env.adminSecret);
   res.setHeader("Set-Cookie", [adminSessionCookie(session.token, session.expiresAt), clearedGoogleStateCookie()]);
   return res.redirect(303, "/admin");
 }

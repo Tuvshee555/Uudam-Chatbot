@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { applyTestEnv } from "./helpers/env";
+import { adminCookieHeaders } from "./helpers/adminAuth";
 
 type TestResponse = NextApiResponse & {
   statusCode: number;
@@ -41,7 +42,7 @@ function createAdminJsonRequest(
     method: "POST",
     url: path,
     headers: {
-      "x-admin-secret": "test-admin-secret",
+      ...adminCookieHeaders(),
       "x-forwarded-for": ip,
     },
     query: {},
@@ -103,7 +104,7 @@ test("ai-change catches unhandled errors and returns 500", async () => {
         throw new Error("unexpected request failure");
       },
       url: "/api/admin/ai-change",
-      headers: { "x-admin-secret": "test-admin-secret" },
+      headers: adminCookieHeaders(),
       query: {},
       body: {},
       socket: { remoteAddress: "203.0.113.99" },

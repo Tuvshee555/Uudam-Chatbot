@@ -1,12 +1,22 @@
 /**
  * What the admin can do with one assistant proposal: answer its questions, save it,
  * undo the save. Moved out of pages/admin.tsx, which is over the 2,000-line cap.
+ *
+ * Save waits as long as the route may run (APPLY_WAIT_MS): a proposal over many trips saves
+ * one trip after another, and the old 45 s limit said "failed" while the server kept saving.
+ * Save is locked from the moment the request goes out until a definite answer, and the lock is
+ * kept with the thread, so a reload mid-save cannot send the same proposal again. With no answer
+ * at all the card says the outcome is unknown (never «Хадгалагдсангүй») and keeps Save off until
+ * the server has certainly stopped; a second Save of a stored request then reports "already
+ * saved" instead of saving twice.
  */
 import type { Dispatch, RefObject, SetStateAction } from "react";
-import { applyCanRetry, applyFailureText, proposalApplyBody } from "@/lib/adminProposalApply";
+import { APPLY_WAIT_MS, applyOutcome, proposalApplyBody } from "@/lib/adminProposalApply";
 import { buildProposalClarifications } from "@/lib/adminProposalUtils";
-import { MAX_AI_INPUT_CHARS, apiErrorMessage } from "@/lib/adminPageUtils";
-import type { AIProposal, AIProposalResponse, ChatMessage, ClarificationAnswer, ClarificationQuestion, ProposalMsg } from "@/lib/adminTypes";
+import { MAX_AI_INPUT_CHARS, apiErrorMessage, uid } from "@/lib/adminPageUtils";
+import type { AIProposal, AIProposalResponse, ClarificationAnswer, ClarificationQuestion } from "@/lib/adminTypes";
+import { isSaveLocked, replyToMessage, unlockSave } from "./assistantChatLogic";
+import type { AssistantChatMessage, AssistantProposalMsg, AssistantResponse } from "./assistantChatTypes";
 
 type Toast = { success: (message: string) => void; error: (message: string) => void };
 
@@ -18,19 +28,22 @@ export function useProposalActions({ fetchWithAdmin, readJsonSafe, toast, loadAl
   setBusyKey: (key: string) => void;
   /** The assistant conversation this page is in. */
   session: RefObject<string>;
-  setChatMessages: Dispatch<SetStateAction<ChatMessage[]>>;
+  setChatMessages: Dispatch<SetStateAction<AssistantChatMessage[]>>;
 }) {
-  function setProposalMessage(id: string, patch: Partial<ProposalMsg>) {
+  function setProposalMessage(id: string, patch: Partial<AssistantProposalMsg>) {
     setChatMessages((prev) =>
       prev.map((message) =>
-        message.id === id && "kind" in message && message.kind === "proposal"
+        message.id === id && message.role === "assistant" && message.kind === "proposal"
           ? { ...message, ...patch }
           : message,
       ),
     );
   }
+  function appendMessage(message: AssistantChatMessage) {
+    setChatMessages((prev) => [...prev, message]);
+  }
   async function answerClarification(
-    message: ProposalMsg,
+    message: AssistantProposalMsg,
     question: ClarificationQuestion,
     answer: string,
     markAnsweredIds?: string[],
@@ -58,6 +71,10 @@ export function useProposalActions({ fetchWithAdmin, readJsonSafe, toast, loadAl
             apiErrorMessage(json as AIProposalResponse, "Саналыг засаж чадсангүй."),
           );
         }
+        // The answer changed nothing on the card (the agent explained instead): say it plainly.
+        if (typeof json?.note === "string" && json.note.trim()) {
+          appendMessage({ id: uid(), role: "assistant", kind: "note", tone: "info", text: json.note });
+        }
         proposal = json?.proposal as AIProposal | undefined;
       } else {
         const contextParts: string[] = [];
@@ -78,7 +95,7 @@ export function useProposalActions({ fetchWithAdmin, readJsonSafe, toast, loadAl
         const res = await fetchWithAdmin("/api/admin/ai-change", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ instruction }),
+          body: JSON.stringify({ instruction, session_id: session.current }),
         });
         const json = await readJsonSafe(res);
         if (!res.ok) {
@@ -86,10 +103,15 @@ export function useProposalActions({ fetchWithAdmin, readJsonSafe, toast, loadAl
             apiErrorMessage(json as AIProposalResponse, "Саналыг засаж чадсангүй."),
           );
         }
-        proposal = json?.proposal as AIProposal | undefined;
-        if (typeof json?.request_id === "number") {
-          newRequestId = json.request_id as number;
+        const data = json as AssistantResponse;
+        // A new instruction may come back as a question or a note: shown in the thread as such.
+        if (data.ask || (typeof data.note === "string" && data.note.trim())) {
+          appendMessage(replyToMessage(data, { id: uid(), sent: instruction }));
+          setProposalMessage(message.id, { status: "cancelled" });
+          return;
         }
+        proposal = data.proposal;
+        if (typeof data.request_id === "number") newRequestId = data.request_id;
       }
       if (!proposal || !Array.isArray(proposal.actions)) {
         throw new Error("AI засварласан санал буцааж чадсангүй.");
@@ -128,15 +150,28 @@ export function useProposalActions({ fetchWithAdmin, readJsonSafe, toast, loadAl
       setBusyKey("");
     }
   }
-  async function applyProposal(message: ProposalMsg) {
+  /** Lets Save back on when the lock set at `until` is over (a newer save's lock is left alone). */
+  function unlockAt(id: string, until: number) {
+    const wait = until - Date.now();
+    if (wait <= 0) setChatMessages((prev) => unlockSave(prev, id, until));
+    else setTimeout(() => setChatMessages((prev) => unlockSave(prev, id, until)), wait + 250);
+  }
+  async function applyProposal(message: AssistantProposalMsg) {
+    if (isSaveLocked(message)) return;
+    const startedAt = Date.now();
+    const lockedUntil = startedAt + APPLY_WAIT_MS;
+    const stored = message.requestId != null;
     setBusyKey(`apply-${message.id}`);
-    setProposalMessage(message.id, { savedAs: message.savedAs, saveError: undefined });
+    // Locked before the request goes out and kept with the thread: if the page reloads while the
+    // server is still saving, the restored card keeps Save off (restoreThread) instead of sending
+    // the same proposal a second time.
+    setProposalMessage(message.id, { savedAs: message.savedAs, saveError: undefined, saveUnknown: undefined, saveLockedUntil: lockedUntil });
     try {
-      // Bounded so a stuck DB connection reads as a clear error the admin can
-      // retry, instead of the "Save" button spinning forever with no signal.
+      // Bounded past the route's own limit, so a stuck connection still ends with a clear
+      // message instead of the "Save" button spinning forever.
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 45_000);
-      let res: Response;
+      const timeout = setTimeout(() => controller.abort(), APPLY_WAIT_MS);
+      let res: Response | null = null;
       try {
         res = await fetchWithAdmin("/api/admin/ai-change", {
           method: "POST",
@@ -144,38 +179,58 @@ export function useProposalActions({ fetchWithAdmin, readJsonSafe, toast, loadAl
           body: JSON.stringify(proposalApplyBody(message, session.current)),
           signal: controller.signal,
         });
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") {
-          throw new Error("Хадгалахад удаж байна — сүлжээ/сервер удаан хариулж байна. Дахин оролдоно уу.");
-        }
-        throw err;
+      } catch {
+        res = null;
       } finally {
         clearTimeout(timeout);
       }
-      const json = await readJsonSafe(res);
-      if (!res.ok) {
-        // Nothing was saved: the proposal stays open with what the admin corrected, to fix and save again.
-        if (applyCanRetry(res.status, json)) {
-          setProposalMessage(message.id, { saveError: applyFailureText(json) });
-          toast.error("Хадгалагдсангүй. Засаад дахин хадгална уу.");
-          return;
-        }
-        throw new Error(applyFailureText(json));
+      const json = res ? await readJsonSafe(res) : {};
+      const outcome = applyOutcome(res ? res.status : null, json, { stored });
+      if (outcome.kind === "saved") {
+        setProposalMessage(message.id, {
+          status: "applied",
+          saveLockedUntil: undefined,
+          // What was saved is what the review showed, not the first reading.
+          proposal: message.proposal,
+          reviewed: message.reviewed,
+          savedAs: message.savedAs,
+          requestId: typeof json?.request_id === "number" ? (json.request_id as number) : message.requestId,
+          resultText: outcome.text,
+        });
+        toast.success(message.savedAs === "draft" ? "Ноорог болгон хадгаллаа. Сайтад гараагүй." : "Өөрчлөлт хадгалагдлаа. Бот шинэ мэдээллээр хариулна.");
+        await loadAll();
+        return;
       }
-      setProposalMessage(message.id, {
-        status: "applied",
-        // What was saved is what the review showed, not the first reading.
-        proposal: message.proposal,
-        reviewed: message.reviewed,
-        savedAs: message.savedAs,
-        requestId: typeof json?.request_id === "number" ? (json.request_id as number) : message.requestId,
-        resultText: Array.isArray(json?.results) ? json.results.join(" • ") : String(json?.message || "Амжилттай."),
-      });
-      toast.success(message.savedAs === "draft" ? "Ноорог болгон хадгаллаа. Сайтад гараагүй." : "Өөрчлөлт хадгалагдлаа. Бот шинэ мэдээллээр хариулна.");
-      await loadAll();
+      if (outcome.kind === "retry") {
+        // Nothing was saved: the proposal stays open with what the admin corrected, to fix and save again.
+        setProposalMessage(message.id, { saveError: outcome.text, saveLockedUntil: undefined });
+        toast.error("Хадгалагдсангүй. Засаад дахин хадгална уу.");
+        return;
+      }
+      if (outcome.kind === "expired") {
+        setProposalMessage(message.id, { status: "error", expired: true, resultText: outcome.text, saveLockedUntil: undefined });
+        toast.error("Санал хуучирсан байна.");
+        return;
+      }
+      if (outcome.kind === "unknown") {
+        if (!stored) {
+          // An unsaved proposal has no request to ask about: saving it again could save it twice.
+          setProposalMessage(message.id, { status: "error", saveUnknown: true, resultText: outcome.text, saveLockedUntil: undefined });
+        } else {
+          // Maybe saved, maybe not — never «Хадгалагдсангүй». The server may still be working on
+          // this save until its own limit has passed; Save stays off until then.
+          setProposalMessage(message.id, { saveUnknown: true, saveError: outcome.text });
+          unlockAt(message.id, lockedUntil);
+        }
+        toast.error("Сервер хариу өгсөнгүй — хадгалагдсан эсэх тодорхойгүй.");
+        return;
+      }
+      setProposalMessage(message.id, { status: "error", resultText: outcome.text, saveLockedUntil: undefined });
+      toast.error("Хэрэгжүүлэхэд алдаа гарлаа.");
     } catch (err) {
       setProposalMessage(message.id, {
         status: "error",
+        saveLockedUntil: undefined,
         resultText: err instanceof Error ? err.message : "Алдаа гарлаа.",
       });
       toast.error("Хэрэгжүүлэхэд алдаа гарлаа.");
@@ -183,7 +238,7 @@ export function useProposalActions({ fetchWithAdmin, readJsonSafe, toast, loadAl
       setBusyKey("");
     }
   }
-  async function rollbackProposal(message: ProposalMsg) {
+  async function rollbackProposal(message: AssistantProposalMsg) {
     if (message.requestId == null) {
       toast.error("Буцаах хадгалсан хүсэлтийн дугаар олдсонгүй.");
       return;
@@ -232,7 +287,7 @@ export function useProposalActions({ fetchWithAdmin, readJsonSafe, toast, loadAl
     }
   }
   async function submitClarificationForm(
-    message: ProposalMsg,
+    message: AssistantProposalMsg,
     answers: Record<string, string>,
   ) {
     const combined = message.clarifications

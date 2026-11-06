@@ -16,11 +16,10 @@ import { docxDocumentXmlToText } from "./docxText";
 /* ----------------------------------------------------------------
    Constants & helpers
    ---------------------------------------------------------------- */
+// Where browsers from before Google-only sign-in kept the old admin password. The panel
+// only deletes these keys now (admin.tsx); remove them one release later.
 const SECRET_KEY = "travel_admin_secret";
 const SECRET_TS_KEY = "travel_admin_secret_ts";
-// Remember the device for 7 days, sliding: the timer resets every time the
-// admin opens/uses the panel, so it only logs out after a full week of no use.
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const ADMIN_AUTO_REFRESH_MS =
   process.env.NODE_ENV === "development" ? 0 : 45_000;
 const MAX_PARSE_UPLOAD_BYTES = 850_000;
@@ -1799,7 +1798,7 @@ export {
   changedSettingsFields,
   ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, DURATIONS, FIELD_LABELS, MAX_PARSE_UPLOAD_BYTES,
   HANDOFF_DURATION_CUSTOM, HANDOFF_DURATION_OPTIONS, MAX_AI_INPUT_CHARS,
-  QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, STATUS_LABELS,
+  QUICK_ACTIONS, SECRET_KEY, SECRET_TS_KEY, STATUS_LABELS,
   STATUS_TONE, apiErrorMessage, asInt, buildImageUploadUnit,
   buildZipImageUploadUnits,
   buildOfficeUploadUnits, buildPdfUploadUnits, buildProposalClarifications,

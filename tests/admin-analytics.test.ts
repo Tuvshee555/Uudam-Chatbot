@@ -3,6 +3,7 @@ import test from "node:test";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { analyticsWindow, collectAdminAnalytics, type AnalyticsQuery, type WebsiteDetailsReader } from "../src/lib/adminAnalytics";
 import { applyTestEnv } from "./helpers/env";
+import { adminCookieHeaders } from "./helpers/adminAuth";
 
 const now = new Date("2098-01-01T17:00:00.000Z");
 const noWebsite: WebsiteDetailsReader = async (trips) => trips;
@@ -150,12 +151,12 @@ function response() {
 }
 
 test("analytics API protects access, rejects invalid periods and reports unavailable data honestly", async (context) => {
-  applyTestEnv({ ADMIN_SECRET: "analytics-fixture-secret", NEON_DATABASE_URL: "postgres://fixture:fixture@127.0.0.1:1/analytics-fixture" });
+  applyTestEnv({ NEON_DATABASE_URL: "postgres://fixture:fixture@127.0.0.1:1/analytics-fixture" });
   const { Pool } = await import("pg");
   let reads = 0;
   context.mock.method(Pool.prototype, "query", async () => { reads++; throw new Error("Fixture DB failure"); });
   const { default: handler } = await import("../src/pages/api/admin/analytics");
-  const request = (days?: unknown, authorized = true, method = "GET") => ({ method, headers: authorized ? { "x-admin-secret": "analytics-fixture-secret" } : {}, query: days === undefined ? {} : { days }, socket: {} }) as NextApiRequest;
+  const request = (days?: unknown, authorized = true, method = "GET") => ({ method, headers: authorized ? adminCookieHeaders() : {}, query: days === undefined ? {} : { days }, socket: {} }) as NextApiRequest;
   const run = async (req: NextApiRequest) => { const res = response(); await handler(req, res as unknown as NextApiResponse); return res; };
   try {
     assert.equal((await run(request(undefined, false))).statusCode, 401);

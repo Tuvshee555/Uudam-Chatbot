@@ -29,7 +29,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!authorized) {
       return res.status(200).json({
         ok: true,
-        open_access: env.adminOpenAccess,
         authorized: false,
       });
     }
@@ -44,7 +43,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ]);
     return res.status(200).json({
       ok: true,
-      open_access: env.adminOpenAccess,
       authorized: true,
       db: diagnostics,
       drive_sync: driveSync,

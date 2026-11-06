@@ -2,9 +2,9 @@ import crypto from "crypto";
 import type { NextApiRequest } from "next";
 
 /**
- * "Sign in with Google" for the admin panel (OAuth 2.0 authorization-code flow, no library).
- * Google only proves who the person is; ADMIN_GOOGLE_EMAILS decides who gets in. A
- * listed account receives the same session cookie the admin secret gives.
+ * "Sign in with Google" for the admin panel (OAuth 2.0 authorization-code flow, no library):
+ * the only way a person signs in. Google only proves who the person is; ADMIN_GOOGLE_EMAILS
+ * decides who gets in, at sign-in and again on every request (the session carries the address).
  */
 export const GOOGLE_STATE_COOKIE = "uudam_admin_oauth";
 const GOOGLE_STATE_PATH = "/api/admin/google";

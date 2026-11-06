@@ -493,22 +493,13 @@ function buildTripInfoReply(rawTrip: TravelTrip, now = new Date(), intentText = 
 
   // Prices and dates come from the canonical resolver (tripFareBlock.ts), the
   // same one the reply checker uses, so the card can no longer be rejected as
-  // contradicting itself. The raw-field block stays only for trips without
-  // dated fares (weekly "<гараг> бүр" schedules).
-  const fareSection = buildFareSection(rawTrip, now);
-  let showDepartureSection = false;
-  if (fareSection) {
-    lines.push(...fareSection);
-    showDepartureSection = fareSection.includes("📅 Гарах өдрүүд:");
-  } else {
-    const priceBlock = formatTripBasePricePremium(trip, now);
-    lines.push(priceBlock);
-    const departureText = formatCompactDepartureList(trip.departure_dates).trim();
-    showDepartureSection = Boolean(departureText && !priceBlock.includes(departureText));
-    if (showDepartureSection) {
-      lines.push("", `📅 Гарах өдрүүд:`, departureText);
-    }
-  }
+  // contradicting itself. Every trip gets it: a weekly "<гараг> бүр" schedule
+  // prints under its own text, and a trip with no fare prints the no-data
+  // sentence (silence and a staff lead). Mandatory extra fees sit under the prices.
+  const fees = formatExtraFeesLine(rawTrip);
+  const fareSection = buildFareSection(rawTrip, now, fees ? [fees] : []);
+  lines.push(...fareSection);
+  const showDepartureSection = fareSection.includes("📅 Гарах өдрүүд:");
 
   const seatMessage = getSeatSalesMessage(trip);
   if (seatMessage) {
@@ -1927,8 +1918,9 @@ export function buildStructuredTripReply(
 export function buildProgramOrStructuredReply(
   text: string,
   trips: TravelTrip[],
+  now = new Date(),
 ): TripProgramReplyResult | null {
-  const programReply = buildTripProgramReply(text, trips);
+  const programReply = buildTripProgramReply(text, trips, now);
   if (!programReply || programReply.reply !== TRIP_MEDIA_UNAVAILABLE_SILENT) {
     return programReply;
   }
@@ -1947,7 +1939,7 @@ export function buildProgramOrStructuredReply(
     hasDirectFlightIntent(intentText) ||
     hasExistenceIntent(intentText);
   if (!asksSomethingElse) return programReply;
-  const structuredReply = buildStructuredTripReply(text, trips);
+  const structuredReply = buildStructuredTripReply(text, trips, now);
   if (!structuredReply) return programReply;
   return {
     reply: structuredReply,

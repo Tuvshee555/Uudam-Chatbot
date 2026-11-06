@@ -1,18 +1,20 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Button, Icons, cx } from "@/components/ui";
 import type {
+  AIAction,
   AIProposal,
   ClarificationQuestion,
-  ProposalMsg,
   TravelTrip,
 } from "@/lib/adminTypes";
 import { isNewTripAction, reviewedProposal } from "@/lib/adminProposalApply";
-import { describeAction, isRedundantDetail, summarizeConflict } from "@/lib/adminProposalUtils";
+import { actionView, describeAction, hasPlannedLines, isRedundantDetail, proposalWarnings, summarizeConflict, summaryLines, type ActionView } from "@/lib/adminProposalUtils";
 import { diffTripFields, type TripExtraDiff } from "@/lib/tripExtraSchema";
 import { REVIEW_INLINE_ITEMS, departureDays, formatYmd, hasPrice, removePhoto, reviewFacts, reviewIssues, tripPhotos } from "@/lib/tripReview";
 import { NewTripReview } from "./tripReview/NewTripReview";
 import { mergeEditorResult } from "@/lib/tripEditorState";
 import { thumb } from "./tripReview/photoThumb";
+import { displayText, isSaveLocked } from "./assistantChatLogic";
+import type { AssistantProposalMsg } from "./assistantChatTypes";
 
 /* ----------------------------------------------------------------
    One proposal, read top to bottom:
@@ -44,7 +46,7 @@ function stripSubject(text: string, subjects: string[]): string {
   return out ? out.charAt(0).toUpperCase() + out.slice(1) : out;
 }
 
-type CardState = "answer" | "review" | "ready" | "applied" | "reverted" | "cancelled" | "error";
+type CardState = "answer" | "review" | "ready" | "applied" | "reverted" | "cancelled" | "error" | "empty";
 
 const STATE_TAG: Record<CardState, { label: string; className: string }> = {
   answer: { label: "Хариулт хэрэгтэй", className: "bg-warning-soft text-warning" },
@@ -54,13 +56,24 @@ const STATE_TAG: Record<CardState, { label: string; className: string }> = {
   reverted: { label: "Буцаасан", className: "bg-surface-sunken text-ink-muted" },
   cancelled: { label: "Цуцалсан", className: "bg-surface-sunken text-ink-muted" },
   error: { label: "Алдаа", className: "bg-danger-soft text-danger" },
+  empty: { label: "Өөрчлөлт алга", className: "bg-surface-sunken text-ink-muted" },
 };
+/** A save that got no answer: maybe saved, maybe not — never «Алдаа» or «Хадгалагдсангүй». */
+const UNKNOWN_TAG = { label: "Тодорхойгүй", className: "bg-warning-soft text-warning" };
+
+/** "14:35": the minute a save lock is certainly over (rounded up). */
+function clockOf(ms: number): string {
+  const at = new Date(Math.ceil(ms / 60_000) * 60_000);
+  return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+}
 
 const VERB_DOT: Record<string, string> = {
   "Шинэ аялал нэмэх": "bg-success",
   "Цуцлах": "bg-danger",
   "Архивлах": "bg-danger",
   "Огнооны төлөв": "bg-sun",
+  "Сайтаас нуух": "bg-sun",
+  "Зураг хасах": "bg-danger",
 };
 
 /** A new trip in a few lines: shown while a question is open and after the save. */
@@ -94,28 +107,122 @@ function TripSummary({ fields }: { fields: Row }) {
   );
 }
 
+const LABELED_LINE = /^([^:]{1,48}):\s+(.+)$/u;
+
+/** "12/2: Том хүн 2,590,000₮ → 2,690,000₮" as a label and a before → after value. */
+function ChangeLine({ line, alignValue = false }: { line: string; alignValue?: boolean }) {
+  const colon = LABELED_LINE.exec(line);
+  const label = colon ? colon[1] : "";
+  const value = colon ? colon[2] : line;
+  const arrow = value.lastIndexOf(" → ");
+  // An amount line with no label of its own ("Хүүхэд +100,000₮") sits under its labeled sibling.
+  const spacer = !label && alignValue && /₮|→/u.test(value);
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-sm">
+      {(label || spacer) && <dt className="w-28 shrink-0 text-xs text-ink-muted sm:w-36">{label}</dt>}
+      <dd className="min-w-0 flex-1 wrap-break-word text-ink">
+        {arrow > 0 ? (
+          <>
+            <span className="text-ink-muted">{value.slice(0, arrow)}</span>
+            <span aria-hidden="true" className="mx-1.5 text-ink-subtle">→</span>
+            <span className="sr-only">болно</span>
+            <span className="font-semibold">{value.slice(arrow + 3)}</span>
+          </>
+        ) : value}
+      </dd>
+    </div>
+  );
+}
+
+/** One photo of a before → after pair; an empty slot says what is there. */
+function PhotoThumb({ url, caption }: { url?: string; caption: string }) {
+  return (
+    <figure className="flex min-w-0 flex-col items-center gap-1">
+      {url ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={thumb(url, 320, 240)} alt={caption} loading="lazy" className="h-20 w-28 rounded-lg border border-line bg-surface-sunken object-cover sm:h-24 sm:w-32" />
+      ) : (
+        <span className="flex h-20 w-28 items-center justify-center rounded-lg border border-dashed border-line bg-canvas text-[11px] text-ink-subtle sm:h-24 sm:w-32">
+          <Icons.image size={18} />
+        </span>
+      )}
+      <figcaption className="text-[11px] text-ink-muted">{caption}</figcaption>
+    </figure>
+  );
+}
+
+/** The lines of one assistant action (a date's price, a photo, a program day, …). */
+function ActionLines({ view }: { view: ActionView }) {
+  const { thumbs } = view;
+  const labeled = view.lines.some((line) => LABELED_LINE.test(line));
+  return (
+    <div className="mt-1 space-y-2">
+      {view.lines.length > 0 && (
+        <dl className="space-y-1.5">
+          {view.lines.map((line, index) => <ChangeLine key={`${index}-${line}`} line={line} alignValue={labeled} />)}
+        </dl>
+      )}
+      {thumbs && (thumbs.before || thumbs.after) && (
+        <div className="flex items-center gap-2 pt-1" aria-label="Зургийн өөрчлөлт">
+          <PhotoThumb url={thumbs.before} caption={thumbs.before ? "Одоо" : "Зураггүй"} />
+          <Icons.chevronRight size={16} className="shrink-0 text-ink-subtle" />
+          <PhotoThumb url={thumbs.after} caption={thumbs.after ? "Шинэ" : "Хасагдана"} />
+        </div>
+      )}
+      {view.warnings.map((warning) => (
+        <p key={warning} className="flex items-start gap-1.5 text-[13px] leading-5 text-warning">
+          <Icons.alert size={13} className="mt-0.5 shrink-0" />
+          <span className="min-w-0">{warning}</span>
+        </p>
+      ))}
+    </div>
+  );
+}
+
+/** While a long save runs: after a few seconds, say that it is still working. */
+function SaveWaitHint() {
+  const [startedAt] = useState(() => Date.now());
+  const [now, setNow] = useState(startedAt);
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  const seconds = Math.floor((now - startedAt) / 1000);
+  if (seconds < 6) return null;
+  return (
+    <p className="text-xs leading-5 text-ink-muted" role="status">
+      Хадгалж байна… {seconds}с. Олон аялал бол 1-2 минут болж магадгүй — хуудсыг бүү хаагаарай.
+    </p>
+  );
+}
+
 /** Opens the full trip editor on an unsaved trip; the editor's save hands the fields back. */
 export type EditDraftTrip = (fields: Row, onDone: (fields: Row) => void) => void;
 
 export function ProposalCard({
   message,
   existingTrips = [],
+  tripDetails,
   applyBusy,
   clarifyBusy,
   onApply,
   onRollback,
   onSubmitClarificationForm,
   onCancelProposal,
+  onResendInstruction,
   onEditDraftTrip,
 }: {
-  message: ProposalMsg;
+  message: AssistantProposalMsg;
   existingTrips?: TravelTrip[];
+  /** Trips loaded in full (program days, day photos), by id; used while they are current. */
+  tripDetails?: Record<string, TravelTrip>;
   applyBusy: boolean;
   clarifyBusy: boolean;
-  onApply: (message: ProposalMsg) => void;
-  onRollback: (message: ProposalMsg) => void;
-  onSubmitClarificationForm: (message: ProposalMsg, answers: Record<string, string>) => void;
+  onApply: (message: AssistantProposalMsg) => void;
+  onRollback: (message: AssistantProposalMsg) => void;
+  onSubmitClarificationForm: (message: AssistantProposalMsg, answers: Record<string, string>) => void;
   onCancelProposal: (id: string) => void;
+  onResendInstruction?: (message: AssistantProposalMsg) => void;
   onEditDraftTrip?: EditDraftTrip;
 }) {
   const fieldId = useId();
@@ -146,16 +253,26 @@ export function ProposalCard({
       return mergeEditorResult(removed.reduce((fields, url) => removePhoto(fields, url), current), edited);
     }));
   };
+  /** The trip as it is now: the full copy while it is current, else the list row. */
+  const tripFor = (id?: string): TravelTrip | undefined => {
+    if (!id) return undefined;
+    const listed = existingTrips.find((entry) => entry.id === id);
+    const full = tripDetails?.[id];
+    return full && (!listed || listed.updated_at === full.updated_at) ? full : listed;
+  };
+  const isPending = message.status === "pending";
   // An action built from an id alone (a tapped choice, a per-date change) is shown under the
   // trip's name, never its id.
   const described = proposal.actions.map((action, index) => {
     const info = describeAction(isNewTripAction(action) ? { ...action, fields: fieldsOf(index) } : action);
-    const trip = action.trip_id ? existingTrips.find((entry) => entry.id === action.trip_id) : undefined;
+    const trip = tripFor(action.trip_id);
     return trip && info.target === action.trip_id ? { ...info, target: trip.route_name } : info;
   });
+  const views: Array<ActionView | null> = proposal.actions.map((action) =>
+    hasPlannedLines(action) ? actionView(action, tripFor(action.trip_id), { live: isPending }) : null);
   const websiteLink = (() => {
     const id = proposal.actions.find((action) => action.trip_id)?.trip_id;
-    const trip = id ? existingTrips.find((entry) => entry.id === id) : undefined;
+    const trip = tripFor(id);
     const slug = (trip?.extra?.website_sync as { website_slug?: string } | null | undefined)?.website_slug;
     return slug ? `https://uudamtravel.mn/mn/trips/${encodeURIComponent(slug)}` : null;
   })();
@@ -183,42 +300,62 @@ export function ProposalCard({
   /* ---- what the card is about ---- */
   const creates = proposal.actions.map((action, index) => (isNewTripAction(action) ? index : -1)).filter((index) => index >= 0);
   const single = proposal.actions.length === 1 ? 0 : -1;
+  const none = proposal.actions.length === 0;
   const questions = message.clarifications;
-  const isPending = message.status === "pending";
-  const canSave = isPending && questions.length === 0;
+  // Set while a save may still be running on the server (also across a reload); a timer clears it
+  // when that time is up, and the time itself is checked so a stale lock never keeps Save off.
+  const locked = isSaveLocked(message);
+  const canSave = isPending && questions.length === 0 && !none;
   const reviewing = canSave && creates.length > 0;
+  // The last save got no answer: said as unknown, in amber, with when Save comes back.
+  const unknownSave = Boolean(message.saveUnknown) && (canSave || message.status === "error");
+  const lockNote = unknownSave && locked && message.saveLockedUntil
+    ? `\nСервер өмнөх хадгалалтаа үргэлжлүүлж байж магадгүй тул товч ${clockOf(message.saveLockedUntil)} хүртэл идэвхгүй.`
+    : "";
   const state: CardState = !isPending
     ? (message.status as CardState)
-    : questions.length > 0 ? "answer" : reviewing ? "review" : "ready";
+    : questions.length > 0 ? "answer" : none ? "empty" : reviewing ? "review" : "ready";
 
-  const title = single >= 0
-    ? (String(fieldsOf(0).route_name ?? "").trim() || described[0]?.target || "Аялал")
-    : creates.length === proposal.actions.length ? `${creates.length} шинэ аялал` : `${proposal.actions.length} аяллын өөрчлөлт`;
-  const eyebrow = single >= 0 ? described[0]?.verb ?? "Өөрчлөлт" : creates.length === proposal.actions.length ? "Шинэ аялал нэмэх" : "Хэд хэдэн өөрчлөлт";
+  // Several changes to one trip ("12/2 дүүрсэн, 12/9-ний үнэ +100k, 3-р өдрийн зураг"): the trip is the title.
+  const tripIds = new Set(proposal.actions.map((action) => action.trip_id || ""));
+  const sameTrip = proposal.actions.length > 1 && tripIds.size === 1 && !tripIds.has("");
+  const title = none
+    ? "Тодруулах зүйл байна"
+    : single >= 0
+      ? (String(fieldsOf(0).route_name ?? "").trim() || described[0]?.target || "Аялал")
+      : sameTrip ? described[0]?.target || "Аялал"
+        : creates.length === proposal.actions.length ? `${creates.length} шинэ аялал` : `${tripIds.size} аяллын ${proposal.actions.length} өөрчлөлт`;
+  const eyebrow = none ? "Тодруулга" : single >= 0 ? described[0]?.verb ?? "Өөрчлөлт" : creates.length === proposal.actions.length ? "Шинэ аялал нэмэх" : sameTrip ? `${proposal.actions.length} өөрчлөлт` : "Хэд хэдэн өөрчлөлт";
   // The sentence under the title, without repeating the title ("«Trip» — 12-р сарын 27…" → "12-р сарын 27…").
   const summary = stripSubject(proposal.summary.trim(), [title]);
   // In a review the name is the first field and the sections say the rest.
   const showTitle = !(reviewing && single >= 0);
-  const showSummary = showTitle && !creates.length && summary && summary.toLowerCase() !== title.toLowerCase();
+  const showSummary = showTitle && !creates.length && summary && summary.toLowerCase() !== title.toLowerCase()
+    // One assistant change: its lines say it; the summary would repeat them.
+    && !(single >= 0 && views[0] && summaryLines(proposal.actions[0] && (proposal.actions[0] as AIAction & { summary?: string }).summary).join("; ") === summary);
 
   /* ---- notes: real doubts only; what a review section already states is left out ---- */
   const subjects = described.map((d) => d.target);
   const structured = proposal.conflict_items ?? [];
   const noteItems = structured.filter((item) => (item.severity === "info" || item.severity === "warning") && !(item.type && REVIEW_INLINE_ITEMS.has(item.type) && creates.length > 0));
-  const rawNotes = structured.length > 0
-    ? noteItems.map((item) => item.text)
-    : Array.from(new Set(proposal.conflicts.map(summarizeConflict).filter(Boolean)));
-  const notes = Array.from(new Set(rawNotes.map((text) => stripSubject(text, subjects)).filter(Boolean))).slice(0, 6);
-  const visibleNotes = showAllNotes ? notes : notes.slice(0, 2);
   /** The notes about one new trip (all of them when the proposal holds a single trip). */
+  const allNotes = Array.from(new Set((structured.length > 0 ? noteItems.map((item) => item.text) : proposal.conflicts.map(summarizeConflict).filter(Boolean))
+    .map((text) => stripSubject(text, subjects)).filter(Boolean))).slice(0, 6);
   const notesFor = (index: number): string[] => {
-    if (creates.length === 1) return notes;
+    if (creates.length === 1) return allNotes;
     const name = described[index]?.target || "";
     return Array.from(new Set(noteItems
       .filter((item) => String(record(item.data).route_name || "") === name || item.text.includes(`«${name}»`))
       .map((item) => stripSubject(item.text, [name])).filter(Boolean)));
   };
-  const showNotesSection = notes.length > 0 && !(reviewing && creates.length === proposal.actions.length);
+  // Changes to existing trips: what was refused or needs a look is said plainly, all of it.
+  const plain = creates.length ? null : proposalWarnings(proposal);
+  const strip = (list: string[]) => Array.from(new Set(list.map((text) => stripSubject(text, single >= 0 || sameTrip ? subjects : [])).filter(Boolean)));
+  const warnings = plain ? strip(plain.warnings) : [];
+  const skipped = plain ? plain.skipped : [];
+  const notes = plain ? strip(plain.notes) : allNotes;
+  const visibleNotes = showAllNotes || plain ? notes : notes.slice(0, 2);
+  const showNotesSection = (notes.length > 0 || warnings.length > 0 || skipped.length > 0) && !(reviewing && creates.length === proposal.actions.length);
 
   const visibleActionIndexes = (showAllActions ? proposal.actions : proposal.actions.slice(0, 5)).map((_, i) => i);
   const hiddenActions = proposal.actions.length - visibleActionIndexes.length;
@@ -240,6 +377,9 @@ export function ProposalCard({
     return value != null && value !== "" && !q.options.some((o) => o.answer === value);
   };
   const allAnswered = questions.every((q) => answerFor(q).trim());
+  // One question the server asked (which trip, which day): its choices are buttons, a tap answers.
+  const serverIds = new Set((proposal.questions || []).map((question) => question.id));
+  const tapQuestion = questions.length === 1 && serverIds.has(questions[0].id) ? questions[0] : null;
 
   function submitAnswers() {
     const effective = { ...formDraft };
@@ -252,10 +392,18 @@ export function ProposalCard({
     setFormDraft({});
     setCustomChosen({});
   }
+  function answerWith(q: ClarificationQuestion, answer: string) {
+    if (!answer.trim()) return;
+    onSubmitClarificationForm(message, { [q.id]: answer });
+    setFormDraft({});
+    setCustomChosen({});
+  }
 
-  const tag = state === "applied" && message.savedAs === "draft"
+  const tag = unknownSave ? UNKNOWN_TAG
+    : state === "applied" && message.savedAs === "draft"
     ? { label: "Ноорог хадгалсан", className: "bg-surface-sunken text-ink" }
-    : state === "applied" && message.savedAs === "publish" ? { label: "Нийтэлсэн", className: STATE_TAG.applied.className } : STATE_TAG[state];
+    : state === "applied" && message.savedAs === "publish" ? { label: "Нийтэлсэн", className: STATE_TAG.applied.className }
+      : state === "error" && message.expired ? { label: "Хуучирсан", className: "bg-surface-sunken text-ink-muted" } : STATE_TAG[state];
   const footerCls = "rounded-b-xl border-t border-line px-4 py-3 sm:px-6";
 
   return (
@@ -283,7 +431,7 @@ export function ProposalCard({
       </header>
 
       {/* ---------- body ---------- */}
-      <div className="mt-4 divide-y divide-line border-t border-line">
+      <div className={cx("mt-4 divide-y divide-line", (!none || showNotesSection || message.clarificationAnswers.length > 0) && "border-t border-line")}>
         {visibleActionIndexes.map((index) => {
           const action = proposal.actions[index];
           const info = described[index];
@@ -316,19 +464,24 @@ export function ProposalCard({
             );
           }
 
-          const diffs = diffsFor(index);
+          const view = views[index];
+          const diffs = view ? [] : diffsFor(index);
+          const fallbackLines = !view && !create && diffs.length === 0 && info.changes.length === 0
+            ? summaryLines((action as AIAction & { summary?: string }).summary) : [];
           return (
             <section key={index} className="px-4 py-3.5 sm:px-6" aria-label={`${info.verb}: ${info.target}`}>
               {single < 0 && (
                 <p className="mb-1.5 min-w-0 text-sm font-semibold text-ink">
-                  {info.target}
-                  <span className={cx("ml-2 rounded-md px-1.5 py-0.5 text-[11px] font-medium",
-                    info.verb === "Шинэ аялал нэмэх" ? "bg-success-soft text-success" : info.verb === "Цуцлах" ? "bg-danger-soft text-danger" : "bg-brand-soft text-brand")}>
+                  {!sameTrip && info.target}
+                  <span className={cx(!sameTrip && "ml-2", "whitespace-nowrap rounded-md px-1.5 py-0.5 text-[11px] font-medium",
+                    info.verb === "Шинэ аялал нэмэх" ? "bg-success-soft text-success" : info.verb === "Цуцлах" || info.verb === "Архивлах" ? "bg-danger-soft text-danger" : "bg-brand-soft text-brand")}>
                     {info.verb}
                   </span>
                 </p>
               )}
               {create && <TripSummary fields={fields} />}
+
+              {view && <ActionLines view={view} />}
 
               {/* an update: before → after */}
               {!create && diffs.length > 0 && (
@@ -345,13 +498,16 @@ export function ProposalCard({
                   ))}
                 </dl>
               )}
-              {!create && diffs.length === 0 && info.changes.length > 0 && (
+              {!view && !create && diffs.length === 0 && info.changes.length > 0 && (
                 <p className="mt-1 text-sm leading-6 text-ink-muted">{info.changes.slice(0, 6).join(" · ")}</p>
               )}
-              {!create && diffs.length === 0 && info.changes.length === 0 && info.verb === "Цуцлах" && (
+              {fallbackLines.length > 0 && info.verb !== "Цуцлах" && info.verb !== "Архивлах" && (
+                <dl className="mt-1 space-y-1.5">{fallbackLines.map((line, at) => <ChangeLine key={`${at}-${line}`} line={line} />)}</dl>
+              )}
+              {!view && !create && diffs.length === 0 && info.changes.length === 0 && info.verb === "Цуцлах" && (
                 <p className="mt-1 text-sm text-ink-muted">Төлөв <span className="text-ink-subtle line-through">Идэвхтэй</span> <span aria-hidden="true">→</span> <span className="font-semibold text-danger">Цуцлагдсан</span></p>
               )}
-              {!create && diffs.length === 0 && info.changes.length === 0 && info.verb === "Архивлах" && (
+              {!view && !create && diffs.length === 0 && info.changes.length === 0 && info.verb === "Архивлах" && (
                 <p className="mt-1.5 text-sm text-ink-muted">Төлөв <span aria-hidden="true">→</span> <span className="font-semibold text-danger">Архив</span> · сайт болон ботоос харагдахгүй, буцаах боломжтой</p>
               )}
             </section>
@@ -363,22 +519,49 @@ export function ProposalCard({
           </button>
         )}
 
-        {/* ---------- notes ---------- */}
+        {/* ---------- warnings and notes ---------- */}
         {showNotesSection && (
-          <section className="px-4 py-3.5 sm:px-6" aria-label="Тэмдэглэл">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Туслахын тэмдэглэл · {notes.length}</p>
-            <ul className="mt-1.5 space-y-1">
-              {visibleNotes.map((note) => (
-                <li key={note} className="flex gap-2 text-sm leading-6 text-ink-muted">
-                  <span aria-hidden="true" className="mt-[11px] h-1 w-1 shrink-0 rounded-full bg-ink-subtle" />
-                  <span className="min-w-0 whitespace-pre-line">{note}</span>
-                </li>
-              ))}
-            </ul>
-            {notes.length > 2 && (
-              <button type="button" onClick={() => setShowAllNotes((v) => !v)} aria-expanded={showAllNotes} className="mt-1 rounded text-xs font-medium text-brand hover:text-brand-hover">
-                {showAllNotes ? "Хураах" : `Бүгдийг харах (${notes.length})`}
-              </button>
+          <section className="space-y-3 px-4 py-3.5 sm:px-6" aria-label="Тэмдэглэл">
+            {warnings.length > 0 && (
+              <div className="rounded-lg border border-warning/30 bg-warning-soft/60 px-3 py-2.5" role="note">
+                <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-warning">
+                  <Icons.alert size={12} /> Анхаарах · {warnings.length}
+                </p>
+                <ul className="mt-1 space-y-1">
+                  {warnings.map((warning) => <li key={warning} className="text-sm leading-6 text-ink">{warning}</li>)}
+                </ul>
+              </div>
+            )}
+            {skipped.length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Алгассан аялал · {skipped.length}</p>
+                <ul className="mt-1 space-y-1">
+                  {skipped.map((line) => (
+                    <li key={line} className="flex gap-2 text-sm leading-6 text-ink-muted">
+                      <span aria-hidden="true" className="mt-[11px] h-1 w-1 shrink-0 rounded-full bg-ink-subtle" />
+                      <span className="min-w-0">{line}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {notes.length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Туслахын тэмдэглэл · {notes.length}</p>
+                <ul className="mt-1.5 space-y-1">
+                  {visibleNotes.map((note) => (
+                    <li key={note} className="flex gap-2 text-sm leading-6 text-ink-muted">
+                      <span aria-hidden="true" className="mt-[11px] h-1 w-1 shrink-0 rounded-full bg-ink-subtle" />
+                      <span className="min-w-0 whitespace-pre-line">{note}</span>
+                    </li>
+                  ))}
+                </ul>
+                {!plain && notes.length > 2 && (
+                  <button type="button" onClick={() => setShowAllNotes((v) => !v)} aria-expanded={showAllNotes} className="mt-1 rounded text-xs font-medium text-brand hover:text-brand-hover">
+                    {showAllNotes ? "Хураах" : `Бүгдийг харах (${notes.length})`}
+                  </button>
+                )}
+              </div>
             )}
           </section>
         )}
@@ -390,7 +573,7 @@ export function ProposalCard({
               {message.clarificationAnswers.map((item) => (
                 <div key={item.questionId} className="text-sm leading-6">
                   <dt className="text-xs text-ink-muted">{item.prompt}</dt>
-                  <dd className="font-medium text-ink">{item.answer}</dd>
+                  <dd className="font-medium text-ink">{displayText(item.answer)}</dd>
                 </div>
               ))}
             </dl>
@@ -399,7 +582,43 @@ export function ProposalCard({
       </div>
 
       {/* ---------- footer: the one decision ---------- */}
-      {state === "answer" && (
+      {state === "answer" && tapQuestion && (
+        <footer className={cx(footerCls, "bg-canvas/70 py-4")}>
+          <fieldset disabled={clarifyBusy} className="min-w-0">
+            <legend className="text-sm font-semibold leading-6 text-ink">{tapQuestion.prompt}</legend>
+            {tapQuestion.detail && !isRedundantDetail(tapQuestion.prompt, tapQuestion.detail) && <p className="mt-0.5 text-xs leading-5 text-ink-muted">{tapQuestion.detail}</p>}
+            {tapQuestion.options.length > 0 && (
+              <ul className={cx("mt-2.5 grid gap-1.5", tapQuestion.options.length > 3 && "sm:grid-cols-2")} aria-label="Сонголтууд">
+                {tapQuestion.options.map((option) => (
+                  <li key={option.answer} className="min-w-0">
+                    <button type="button" onClick={() => answerWith(tapQuestion, option.answer)}
+                      className="flex min-h-11 w-full items-center justify-between gap-3 rounded-xl border border-line bg-surface px-3 py-2 text-left text-sm text-ink transition-colors hover:border-brand hover:bg-brand-soft disabled:cursor-wait disabled:opacity-60">
+                      <span className="min-w-0 font-medium wrap-break-word">{option.label}</span>
+                      <Icons.chevronRight size={14} className="shrink-0 text-ink-subtle" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {tapQuestion.allowCustom && (
+              <form className="mt-2 flex items-center gap-2" onSubmit={(event) => { event.preventDefault(); answerWith(tapQuestion, formDraft[tapQuestion.id] ?? ""); }}>
+                <input
+                  aria-label={`${tapQuestion.prompt} Өөрийн хариулт`}
+                  value={formDraft[tapQuestion.id] ?? ""}
+                  onChange={(e) => setFormDraft((prev) => ({ ...prev, [tapQuestion.id]: e.target.value }))}
+                  placeholder={tapQuestion.customPlaceholder || "Эсвэл хариултаа бичнэ үү"}
+                  className="h-10 min-w-0 flex-1 rounded-lg border border-line bg-surface px-3 text-sm text-ink placeholder:text-ink-subtle focus:border-line-strong"
+                />
+                <Button size="sm" type="submit" loading={clarifyBusy} disabled={clarifyBusy || !(formDraft[tapQuestion.id] ?? "").trim()}>Илгээх</Button>
+              </form>
+            )}
+          </fieldset>
+          <div className="mt-3 flex justify-end">
+            <Button size="sm" variant="ghost" disabled={clarifyBusy} onClick={() => onCancelProposal(message.id)}>Болих</Button>
+          </div>
+        </footer>
+      )}
+      {state === "answer" && !tapQuestion && (
         <footer className={cx(footerCls, "bg-canvas/70 py-4")}>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-warning">
             {creates.length > 0 ? "Шалгахын өмнө" : "Хадгалахын өмнө"} {questions.length > 1 ? `· ${questions.length} асуулт` : ""}
@@ -468,12 +687,18 @@ export function ProposalCard({
       {reviewing && (
         // Stays in reach while the review scrolls; the negative offset is the conversation's own padding.
         <footer className={cx(footerCls, "sticky -bottom-3.5 z-10 bg-surface/95 shadow-[0_-8px_16px_-12px_rgb(0_0_0/0.25)] backdrop-blur-sm sm:-bottom-5")}>
-          {message.saveError && (
+          {message.saveError && (unknownSave ? (
+            <p role="status" className="mb-2.5 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-soft px-3 py-2 text-[13px] leading-5 text-ink">
+              <Icons.alert size={14} className="mt-0.5 shrink-0 text-warning" />
+              <span className="min-w-0 whitespace-pre-line">{message.saveError}{lockNote}</span>
+            </p>
+          ) : (
             <p role="alert" className="mb-2.5 flex items-start gap-2 rounded-lg border border-danger/25 bg-danger-soft px-3 py-2 text-[13px] leading-5 text-danger">
               <Icons.alert size={14} className="mt-0.5 shrink-0" />
               <span className="min-w-0 whitespace-pre-line">Хадгалагдсангүй: {message.saveError}</span>
             </p>
-          )}
+          ))}
+          {applyBusy && <div className="mb-2"><SaveWaitHint /></div>}
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5">
             <p className="min-w-0 flex-1 basis-56 text-xs leading-5" aria-live="polite">
               {publishBlock ? (
@@ -490,10 +715,10 @@ export function ProposalCard({
             </p>
             <div className="flex shrink-0 items-center gap-2">
               <Button size="sm" variant="ghost" disabled={applyBusy} onClick={() => onCancelProposal(message.id)}>Болих</Button>
-              <Button size="sm" variant="secondary" loading={applyBusy && message.savedAs === "draft"} disabled={applyBusy || Boolean(saveBlock)} onClick={() => save("draft")}>
+              <Button size="sm" variant="secondary" loading={applyBusy && message.savedAs === "draft"} disabled={applyBusy || locked || Boolean(saveBlock)} onClick={() => save("draft")}>
                 Ноорог хадгалах
               </Button>
-              <Button size="sm" loading={applyBusy && message.savedAs !== "draft"} disabled={applyBusy || Boolean(publishBlock)} onClick={() => save("publish")}>
+              <Button size="sm" loading={applyBusy && message.savedAs !== "draft"} disabled={applyBusy || locked || Boolean(publishBlock)} onClick={() => save("publish")}>
                 <Icons.check size={15} /> Нийтлэх
               </Button>
             </div>
@@ -502,19 +727,32 @@ export function ProposalCard({
       )}
 
       {canSave && !reviewing && (
-        <footer className={cx(footerCls, "flex flex-wrap items-center justify-between gap-3 bg-canvas/70")}>
-          <p className={cx("min-w-0 whitespace-pre-line text-xs leading-5", message.saveError ? "text-danger" : "text-ink-muted")}>
-            {message.saveError ? `Хадгалагдсангүй: ${message.saveError}` : "Хадгалсны дараа буцаах боломжтой."}
-          </p>
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="ghost" disabled={applyBusy} onClick={() => onCancelProposal(message.id)}>Болих</Button>
-            <Button size="sm" loading={applyBusy} disabled={applyBusy} onClick={() => onApply(message)}>
-              <Icons.check size={15} /> Хадгалах
-            </Button>
+        <footer className={cx(footerCls, "space-y-2 bg-canvas/70")}>
+          {applyBusy && <SaveWaitHint />}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            {message.saveError && unknownSave ? (
+              <p className="flex min-w-0 flex-1 basis-56 items-start gap-1.5 whitespace-pre-line text-xs leading-5 text-warning" role="status">
+                <Icons.alert size={13} className="mt-0.5 shrink-0" />
+                <span className="min-w-0">{message.saveError}{lockNote}</span>
+              </p>
+            ) : (
+              <p className={cx("min-w-0 flex-1 basis-56 whitespace-pre-line text-xs leading-5", message.saveError ? "text-danger" : "text-ink-muted")} role={message.saveError ? "alert" : undefined}>
+                {message.saveError ? `Хадгалагдсангүй: ${message.saveError}` : "Хадгалсны дараа буцаах боломжтой."}
+              </p>
+            )}
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="ghost" disabled={applyBusy} onClick={() => onCancelProposal(message.id)}>Болих</Button>
+              <Button size="sm" loading={applyBusy} disabled={applyBusy || locked} onClick={() => onApply(message)}>
+                <Icons.check size={15} /> {locked && !applyBusy ? "Хүлээж байна…" : "Хадгалах"}
+              </Button>
+            </div>
           </div>
         </footer>
       )}
 
+      {state === "empty" && (
+        <footer className={cx(footerCls, "bg-canvas/70 text-sm text-ink-muted")}>Хадгалах өөрчлөлт алга.</footer>
+      )}
       {state === "applied" && (
         <footer className={cx(footerCls, "flex flex-wrap items-center justify-between gap-3 bg-success-soft/50")}>
           <p className="flex min-w-0 flex-1 basis-56 items-start gap-2 text-sm leading-6 text-ink">
@@ -548,7 +786,23 @@ export function ProposalCard({
       {state === "cancelled" && (
         <footer className={cx(footerCls, "bg-canvas/70 text-sm text-ink-muted")}>Цуцлагдсан. Юу ч хадгалагдаагүй.</footer>
       )}
-      {state === "error" && (
+      {state === "error" && message.expired && (
+        <footer className={cx(footerCls, "flex flex-wrap items-center justify-between gap-3 bg-canvas/70")}>
+          <p className="min-w-0 flex-1 basis-56 text-sm leading-6 text-ink" role="alert">{message.resultText}</p>
+          {onResendInstruction && (
+            <Button size="sm" variant="secondary" onClick={() => onResendInstruction(message)}>
+              <Icons.refresh size={14} /> Дахин илгээх
+            </Button>
+          )}
+        </footer>
+      )}
+      {state === "error" && !message.expired && unknownSave && (
+        <footer className={cx(footerCls, "flex items-start gap-2 bg-warning-soft/50 text-sm leading-6 text-ink")} role="status">
+          <Icons.alert size={14} className="mt-1 shrink-0 text-warning" />
+          <span className="min-w-0 whitespace-pre-line">{message.resultText}</span>
+        </footer>
+      )}
+      {state === "error" && !message.expired && !unknownSave && (
         <footer className={cx(footerCls, "whitespace-pre-line bg-danger-soft/50 text-sm text-danger")}>{message.resultText || "Алдаа гарлаа."}</footer>
       )}
     </article>

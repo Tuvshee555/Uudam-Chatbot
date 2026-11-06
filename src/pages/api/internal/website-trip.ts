@@ -1,5 +1,4 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getEnv } from "@/lib/env";
 import { safeSecretCompare } from "@/lib/adminAuth";
 import { logError, logWarn } from "@/lib/observability";
 import { deleteTrip, getTripById, patchTrip, upsertTrip } from "@/lib/travelDb";
@@ -38,7 +37,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).end();
   }
 
-  const expected = process.env.WEBSITE_TRIP_SYNC_SECRET || getEnv().adminSecret;
+  // Its own secret only: unset = every call refused (no fallback to an admin credential).
+  const expected = process.env.WEBSITE_TRIP_SYNC_SECRET || "";
   const provided = typeof req.headers["x-trip-sync-secret"] === "string"
     ? req.headers["x-trip-sync-secret"]
     : "";

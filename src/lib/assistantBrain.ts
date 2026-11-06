@@ -18,7 +18,9 @@
  * Nothing here writes: a proposal still goes through review, apply and rollback.
  * Trip names in this file are never real — see tests for invented ones.
  */
+import { urlsInText, withoutUrls } from "./assistantAgent/links";
 import { departureAvailability } from "./departureAvailability";
+import { dateStateProblem, dateStatusOf, partnerEditProblem } from "./tripActionPlan";
 import { findTripMatches } from "./travelFastPathsSearch";
 import { parseDepartureDateText } from "./travelDates";
 import { keywordTokens, normText, phoneticKeywordTokens } from "./travelTextNorm";
@@ -84,7 +86,17 @@ const FREE = /үнэгүй|\bfree\b|\bunegui\b/iu;
 const PLUS = /нэм(?:эх|нэ|ж|ээд|ье)?(?!\p{L})|өсгө|нэмэгдүүл|өндөрсгө|\+|\bnem(?:eh|ne)?\b|\bincrease|\braise/iu;
 const MINUS = /хас(?:ах|на|ч|аад|ье)?(?!\p{L})|бууруул|буулга|хямдруул|багасга|\bdecrease|\breduce|\blower\b|\bhas(?:ah|na)?\b|\bbuuruul/iu;
 const BELOW = /доогуур|доош|бага|хямд|\bless\b|\blower\s+than|\bbelow|\bcheaper/iu;
-const EVERYONE = /бүх\s+(?:үнэ|аялал|аяллын)|бүгдийг|бүгд|бүх\s+төрөл|\ball\s+(?:prices?|fares?)/iu;
+const EVERYONE = /бүх\s+(?:үнэ|үнийг|үнийн|аялал|аяллын)|бүгдийг|бүгд|бүх\s+төрөл|\ball\s+(?:prices?|fares?)/iu;
+// "идэвхгүй болго", "idvehgui bolgooch", "сайтаас нуу": hide the trip from the website and the bot
+// (extra.customer_visible), never archive or cancel it.
+const HIDE = /(?<!\p{L})(?:идэвхгүй|харагдахгүй|харуулахгүй|нуу(?:х|ч|чих|чихаарай|гаарай|на)?)(?!\p{L})|\bid[ew]?[vw]?e?h?gui\b|\bidevhgui\b|\bharagdahgui\b|\bnuu(?:h|ch|chih)?\b|\bhide\b/iu;
+const SHOW = /харагд(?:ах|даг)\s+болго|ил\s+болго|сайтад\s+(?:гарга|харуул)|\bunhide\b|\bharagdah\s+bolgo/iu;
+// "…гүй болго" is a command ("make it not-…"), not a refusal.
+const GUI_COMMAND = /\p{L}{3,}гүй\s+болго\p{L}*|\b\p{L}{3,}gui\s+bolgo\p{L}*/giu;
+// One amount pattern for reading money and for hiding money from the date reader:
+// "1.2 сая", "4,290,000", "300k", "100к", "100 мянга", "100 мянгаар", "100 myangaar".
+const MONEY_WORD = "сая|sая|saya|mln|million";
+const THOUSAND_WORD = "k|к|мянг\\p{L}*|myang\\p{L}*|mynga\\p{L}*";
 
 const SEATS = /(\d{1,4})\s*(?:суудал|seats?|suudal)|(?:суудал|seats?|suudal)\D{0,16}?(\d{1,4})(?!\d)/iu;
 const SEATS_TOTAL = /нийт|total|багтаамж/iu;
@@ -137,6 +149,8 @@ export type AssistantIntent =
   | { kind: "rename"; name: string }
   | { kind: "dates"; add: string[]; remove: string[] }
   | { kind: "hotel"; hotel: string }
+  /** "идэвхгүй болго" / "сайтаас нуу" (false), "харагдах болго" (true): extra.customer_visible. */
+  | { kind: "visibility"; visible: boolean }
   /** A question or "show me": answered with the trip's facts, never a change. `maybe` is the change the words could also mean. */
   | { kind: "facts"; maybe?: AssistantIntent }
   /** "битгий цуцал", "дүүрсэн биш": the admin says what not to do; nothing is proposed. */
@@ -147,6 +161,8 @@ export type AssistantIntent =
   | { kind: "date_states"; items: Array<{ date: string; state: DateSeatState }> }
   /** Two states in one breath with no way to tell which day gets which. */
   | { kind: "unclear_states" }
+  /** "12/2 дүүрсэн, 12/9-ний үнийг 100k нэм": a day's state AND a price in one message — one at a time here. */
+  | { kind: "several_changes" }
   | { kind: "new_trip" }
   | { kind: "unknown" };
 
@@ -157,7 +173,7 @@ type Amount = { value: number; index: number; end: number };
 /** Tugrug amounts with where they sit in the text: "4,290,000", "4.29 сая", "300k", "300 мянга". */
 function amountsIn(text: string): Amount[] {
   const out: Amount[] = [];
-  const pattern = /(\d+(?:[.,]\d+)?)\s*(сая|sая|saya|mln|million)|(\d{1,3}(?:[ ,'’]\d{3})+|\d{5,})(?!\s*(?:нас|хүн|сар(?!ын)|он(?!гоц)))|(\d+(?:[.,]\d+)?)\s*(k|мянга|myanga)(?!\p{L})/giu;
+  const pattern = new RegExp(`(\\d+(?:[.,]\\d+)?)\\s*(${MONEY_WORD})|(\\d{1,3}(?:[ ,'’]\\d{3})+|\\d{5,})(?!\\s*(?:нас|хүн|сар(?!ын)|он(?!гоц)))|(\\d+(?:[.,]\\d+)?)\\s*(${THOUSAND_WORD})(?!\\p{L})`, "giu");
   for (const match of text.matchAll(pattern)) {
     let value: number | null = null;
     if (match[1]) value = Math.round(Number.parseFloat(match[1].replace(",", ".")) * 1_000_000);
@@ -174,14 +190,24 @@ function amountsIn(text: string): Amount[] {
  * and case endings split off a day ("12/27-г", "12/27-ны") so the date parser sees the day.
  */
 function textForDates(text: string): string {
-  return stripAnswerTags(text)
-    .replace(/(\d+(?:[.,]\d+)?)\s*(сая|sая|saya|mln|million|k|мянга|myanga)(?!\p{L})/giu, " ")
+  return withoutUrls(stripAnswerTags(text))
+    .replace(new RegExp(`(\\d+(?:[.,]\\d+)?)\\s*(${MONEY_WORD}|${THOUSAND_WORD})(?!\\p{L})`, "giu"), " ")
     .replace(/\d{1,3}(?:[ ,'’.]\d{3})+|\d{5,}/g, " ")
     .replace(/(\d)\s*-\s*(?:ийг|ыг|г|ийн|ын|ны|ний|нд|д|оос|өөс|аас|ээс|тай|тэй|той|руу|рүү)(?!\p{L})/giu, "$1 ");
 }
 
 function datesIn(text: string, now: Date): string[] {
   return [...new Set(parseDepartureDateText(textForDates(text), now))];
+}
+
+/** The days a message names (YYYY-MM-DD; money and links are never read as days), for the agent's hints. */
+export function datesInText(text: string, now = new Date()): string[] {
+  return datesIn(text, now);
+}
+
+/** The tugrug amounts a message names ("100 мянгаар", "1.2 сая", "300k", "2,590,000"), for the agent's hints. */
+export function amountsInText(text: string): number[] {
+  return amountsIn(withoutUrls(stripAnswerTags(text))).map((amount) => amount.value);
 }
 
 /**
@@ -316,31 +342,37 @@ function pairedDateStates(text: string, now: Date): AssistantIntent {
  * acted on, and a new trip goes to the model.
  */
 export function parseIntent(rawText: string, now = new Date()): AssistantIntent {
-  const text = stripAnswerTags(rawText);
+  // A link is identity, never words: its "?" is not a question, its digits are not a date.
+  const text = withoutUrls(stripAnswerTags(rawText));
   const topic = chatterTopic(text);
   if (topic) return { kind: "chatter", topic };
   if (NEW_TRIP.test(text)) return { kind: "new_trip" };
   const change = parseChangeIntent(rawText, now);
-  // "хоол ороогүй" is a fact about meals, not a refusal.
-  if (NEGATION.test(text) && !FOOD_NO.test(text)) return { kind: "negated", about: change };
+  // "хоол ороогүй" is a fact about meals, not a refusal; "идэвхгүй болго" is a command.
+  if (NEGATION.test(text.replace(GUI_COMMAND, " ")) && !FOOD_NO.test(text)) return { kind: "negated", about: change };
   if (FACTS.test(text) && (change.kind === "unknown" || (change.kind === "price" && !change.mentioned))) return { kind: "facts" };
-  if (QUESTION.test(text)) return { kind: "facts", maybe: change.kind === "unknown" ? undefined : change };
+  if (QUESTION.test(text)) return { kind: "facts", maybe: change.kind === "unknown" || change.kind === "several_changes" ? undefined : change };
   return change;
 }
 
 function parseChangeIntent(rawText: string, now: Date): AssistantIntent {
-  const text = stripAnswerTags(rawText);
+  const text = withoutUrls(stripAnswerTags(rawText));
   const dates = datesIn(rawText, now);
   const taggedDates = dateTags(rawText);
   const allDates = taggedDates.includes(ALL_DATES_WORD) || ALL_DATES.test(text);
   const wholeTrip = taggedDates.includes(WHOLE_TRIP_WORD);
   const explicitDates = [...new Set([...dates, ...taggedDates.filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))])];
+  // "12/2-ны үнийг 100 мянгаар хас" lowers a price; it never removes the 12/2 departure.
+  const aboutMoney = PRICE_WORD.test(text) || amountsIn(text).length > 0;
 
   if (explicitDates.length && !FULL.test(text) && !LOW.test(text) && !OPEN.test(text)) {
-    if (REMOVE.test(text) || CANCEL.test(text)) return { kind: "dates", add: [], remove: explicitDates };
+    if ((REMOVE.test(text) || CANCEL.test(text)) && !aboutMoney) return { kind: "dates", add: [], remove: explicitDates };
     if (ADD.test(text) && !PRICE_WORD.test(text)) return { kind: "dates", add: explicitDates, remove: [] };
   }
   const stateWords = [FULL.test(text), LOW.test(text), OPEN.test(text) && (explicitDates.length > 0 || taggedDates.length > 0 || DATE_WORD.test(text))].filter(Boolean).length;
+  // A day's state and a price in one message: read as one change, every date would get the
+  // state (12/9 "дүүрсэн" for "12/9-ний үнийг нэм"). The brain does one change at a time.
+  if (stateWords >= 1 && aboutMoney) return { kind: "several_changes" };
   if (stateWords >= 2) return pairedDateStates(text, now);
   if (FULL.test(text)) return { kind: "date_state", state: "full", dates: explicitDates, allDates, wholeTrip };
   if (LOW.test(text)) return { kind: "date_state", state: "low", dates: explicitDates, allDates, wholeTrip };
@@ -377,6 +409,8 @@ function parseChangeIntent(rawText: string, now: Date): AssistantIntent {
   }
 
   if (!explicitDates.length) {
+    if (SHOW.test(text)) return { kind: "visibility", visible: true };
+    if (HIDE.test(text)) return { kind: "visibility", visible: false };
     if (CANCEL.test(text)) return { kind: "status", status: "cancelled" };
     if (PAUSE.test(text)) return { kind: "status", status: "paused" };
     if (RESUME.test(text)) return { kind: "status", status: "active" };
@@ -431,7 +465,11 @@ export function resolveTrip(rawText: string, trips: TravelTrip[], options: { con
     const trip = trips.find((entry) => entry.id === id);
     if (trip) return { kind: "certain", trip, how: "id" };
   }
-  const text = stripAnswerTags(rawText);
+  // A pasted link names its trip by its slug (resolved by the router before the brain runs, as
+  // a trip_id token). Its words are never matched as a name, and a message with a link never
+  // falls back to the trip the conversation was about: that archived the wrong trip (B1).
+  const hasLink = urlsInText(rawText).length > 0;
+  const text = withoutUrls(stripAnswerTags(rawText));
   for (const name of quotedStrings(text)) {
     const found = tripsNamed(name, trips);
     if (found.length === 1) return { kind: "certain", trip: found[0], how: "quoted" };
@@ -445,7 +483,7 @@ export function resolveTrip(rawText: string, trips: TravelTrip[], options: { con
   const matches = findTripMatches(text, pool)
     .filter((match) => !match.matchedWords.length || match.matchedWords.some((word) => !/^\d+$/.test(word)))
     .map((match) => ({ ...match, trip: byId.get(match.trip.id) ?? match.trip }));
-  const contextTrip = tripFromContext(options.context, trips);
+  const contextTrip = hasLink ? null : tripFromContext(options.context, trips);
   if (!matches.length) {
     return contextTrip ? { kind: "certain", trip: contextTrip, how: "context" } : { kind: "none" };
   }
@@ -629,14 +667,18 @@ function buildDateState(trip: TravelTrip, intent: Extract<AssistantIntent, { kin
   if (!changing.length) {
     return { kind: "note", intent, trip, text: `«${trip.route_name}» — ${dates.map((date) => formatDateMn(date)).join(", ")} аль хэдийн «${label}» байна. Өөрчлөх зүйл алга.` };
   }
-  const actions: AITripAction[] = changing.map((date) => ({ action: "set_date_state", trip_id: trip.id, date, state: intent.state }));
+  // A day save would refuse (not on the website yet, cancelled, past, a partner trip) is said
+  // now, never promised "it will apply once published" (B8).
+  const refused = changing.map((date) => ({ date, problem: dateStateProblem(trip, date, intent.state, now) })).filter((entry) => entry.problem);
+  const doable = changing.filter((date) => !refused.some((entry) => entry.date === date));
+  if (!doable.length) return { kind: "note", intent, trip, text: refused.map((entry) => entry.problem).join(" ") };
+  const actions: AITripAction[] = doable.map((date) => ({ action: "set_date_state", trip_id: trip.id, date, state: intent.state, observed_status: dateStatusOf(trip, date), ...versionOf(trip) }));
   const proposal = baseProposal(
-    `«${trip.route_name}» — ${changing.map((date) => formatDateMn(date)).join(", ")}-ны өдрийг «${label}» болгоно.`,
+    `«${trip.route_name}» — ${doable.map((date) => formatDateMn(date)).join(", ")}-ны өдрийг «${label}» болгоно.`,
     actions,
   );
   if (already.length) proposal.conflict_items!.push(info(`${already.map((date) => formatDateMn(date)).join(", ")} аль хэдийн «${label}» байсан тул хөндөхгүй.`, "date_state_same", trip.route_name));
-  const offline = changing.filter((date) => !known.find((day) => day.date === date)?.onWebsite);
-  if (offline.length) proposal.conflict_items!.push(info(`${offline.map((date) => formatDateMn(date)).join(", ")} вэбсайтад хараахан нийтлэгдээгүй байна; нийтлэгдсэний дараа төлөв нь орно.`, "date_not_on_website", trip.route_name));
+  for (const entry of refused) proposal.conflict_items!.push({ text: entry.problem!, severity: "warning", type: "date_state_refused", data: { route_name: trip.route_name } });
   proposal.conflicts = proposal.conflict_items!.map((item) => item.text);
   return { kind: "proposal", proposal, trip, intent };
 }
@@ -661,14 +703,27 @@ function buildDateStates(trip: TravelTrip, intent: Extract<AssistantIntent, { ki
   const changing = intent.items.filter((item) => !same.includes(item));
   const describe = (items: typeof intent.items) => items.map((item) => `${formatDateMn(item.date)} → ${DATE_STATE_WORDS[item.state]}`).join(", ");
   if (!changing.length) return { kind: "note", intent, trip, text: `«${trip.route_name}» — ${describe(same)}: аль хэдийн ийм байна.` };
-  const proposal = baseProposal(`«${trip.route_name}» — ${describe(changing)}.`,
-    changing.map((item) => ({ action: "set_date_state" as const, trip_id: trip.id, date: item.date, state: item.state })));
+  const refused = changing.map((item) => ({ item, problem: dateStateProblem(trip, item.date, item.state, now) })).filter((entry) => entry.problem);
+  const doable = changing.filter((item) => !refused.some((entry) => entry.item === item));
+  if (!doable.length) return { kind: "note", intent, trip, text: refused.map((entry) => entry.problem).join(" ") };
+  const proposal = baseProposal(`«${trip.route_name}» — ${describe(doable)}.`,
+    doable.map((item) => ({ action: "set_date_state" as const, trip_id: trip.id, date: item.date, state: item.state, observed_status: dateStatusOf(trip, item.date), ...versionOf(trip) })));
   if (same.length) proposal.conflict_items!.push(info(`${describe(same)} аль хэдийн ийм байсан тул хөндөхгүй.`, "date_state_same", trip.route_name));
+  for (const entry of refused) proposal.conflict_items!.push({ text: entry.problem!, severity: "warning", type: "date_state_refused", data: { route_name: trip.route_name } });
   proposal.conflicts = proposal.conflict_items!.map((item) => item.text);
   return { kind: "proposal", proposal, trip, intent };
 }
 
+/** A partner-synced trip's prices, dates and seats come from the partner every 30 minutes: never hand-edited. */
+function partnerRefusal(trip: TravelTrip, intent: AssistantIntent, fields: TripMutationFields): BrainOutcome | null {
+  const problem = partnerEditProblem(trip, { action: "patch", fields });
+  return problem ? { kind: "note", intent, trip, text: problem } : null;
+}
+
 function buildPrice(trip: TravelTrip, intent: Extract<AssistantIntent, { kind: "price" }>): BrainOutcome {
+  // Said before asking an amount that could never be saved.
+  const partner = partnerRefusal(trip, intent, { adult_price: trip.adult_price });
+  if (partner) return partner;
   const current = `одоо: том хүн ${formatMnt(trip.adult_price)}, хүүхэд ${formatMnt(trip.child_price)}, нярай ${formatMnt(trip.infant_price)}`;
   if (!intent.mentioned) {
     return {
@@ -734,6 +789,19 @@ export function fareWarnings(trip: TravelTrip, fields: TripMutationFields): stri
 
 function buildStatus(trip: TravelTrip, intent: Extract<AssistantIntent, { kind: "status" }>, instruction: string): BrainOutcome {
   void instruction;
+  // "Идэвхжүүл" / "сэргээ" on a hidden trip means live again: shown on the site and in the bot
+  // (one action, so one save): an active hidden trip is shown, a paused or archived one also resumes.
+  const hidden = trip.extra?.customer_visible === false;
+  if (intent.status === "active" && hidden) {
+    const summary = "Сайт, ботод харуулах";
+    const action: AITripAction = trip.status === "active"
+      ? { action: "set_visibility", trip_id: trip.id, visible: true, summary, ...versionOf(trip) }
+      : { action: "patch", trip_id: trip.id, fields: { status: "active", extra: { customer_visible: true } }, ...versionOf(trip) };
+    const proposal = baseProposal(`«${trip.route_name}» аяллыг ${trip.status === "active" ? "сайт, ботод дахин харуулна" : "идэвхжүүлж, сайт, ботод дахин харуулна"}.`, [action], {
+      important_reason: trip.status === "archived" && !knownDepartureDays(trip).length ? "Ирэх гарах өдөргүй тул идэвхжүүлсэн ч дахин архивт орно — эхлээд огноо нэмээрэй." : "",
+    });
+    return { kind: "proposal", proposal, trip, intent };
+  }
   if (trip.status === intent.status) {
     return { kind: "note", intent, trip, text: `«${trip.route_name}» аль хэдийн ${STATUS_WORDS[intent.status]} байна.` };
   }
@@ -757,6 +825,8 @@ function buildArchive(trip: TravelTrip, intent: AssistantIntent): BrainOutcome {
 }
 
 function buildPatch(trip: TravelTrip, intent: AssistantIntent, summary: string, fields: TripMutationFields, notes: string[] = []): BrainOutcome {
+  const partner = partnerRefusal(trip, intent, fields);
+  if (partner) return partner;
   const proposal = baseProposal(summary, [{ action: "patch", trip_id: trip.id, fields, ...versionOf(trip) }]);
   for (const note of notes) proposal.conflict_items!.push(info(note, "schedule_note", trip.route_name));
   proposal.conflicts = proposal.conflict_items!.map((item) => item.text);
@@ -770,6 +840,17 @@ function buildForTrip(trip: TravelTrip, intent: AssistantIntent, instruction: st
     case "price": return buildPrice(trip, intent);
     case "status": return buildStatus(trip, intent, instruction);
     case "archive": return buildArchive(trip, intent);
+    case "visibility": {
+      const shown = trip.extra?.customer_visible !== false;
+      if (shown === intent.visible) return { kind: "note", intent, trip, text: `«${trip.route_name}» аль хэдийн ${intent.visible ? "сайт, ботод харагдаж" : "нуугдсан"} байна.` };
+      const summary = intent.visible ? "Сайт, ботод харуулах" : "Сайт, ботоос нуух (идэвхгүй)";
+      return {
+        kind: "proposal", intent, trip,
+        proposal: baseProposal(`«${trip.route_name}» — ${summary}.`, [{ action: "set_visibility", trip_id: trip.id, visible: intent.visible, summary, ...versionOf(trip) }], {
+          important_reason: intent.visible ? "" : "Аялал устахгүй, архивт орохгүй: зөвхөн сайт, ботоос харагдахаа болино. Буцааж харуулж болно.",
+        }),
+      };
+    }
     case "seats": {
       if (intent.seats_total != null) {
         if (trip.seats_total === intent.seats_total) return { kind: "note", intent, trip, text: `«${trip.route_name}» — нийт суудал аль хэдийн ${intent.seats_total}.` };
@@ -849,9 +930,18 @@ export function think(input: { text: string; trips: TravelTrip[]; now?: Date; co
     const trip = resolution.kind === "certain" ? resolution.trip : undefined;
     return { kind: "note", intent, trip, text: `${trip ? `«${trip.route_name}» — ` : ""}аль өдөр ямар төлөвтэй болохыг салгаж бичээрэй, нэг өдөрт нэг төлөв. Ж: «12/27 дүүрсэн, 12/28 цөөн суудал».` };
   }
+  if (intent.kind === "several_changes") {
+    const trip = resolution.kind === "certain" ? resolution.trip : undefined;
+    return { kind: "note", intent, trip, text: `${trip ? `«${trip.route_name}» — ` : ""}энэ мессежид огнооны төлөв ба үнийн өөрчлөлт хоёулаа байна. Энгийн горимд нэг мессежид нэг өөрчлөлт уншина — тусад нь бичээрэй. Ж: «12/2 дүүрсэн», дараа нь «12/9-ний үнийг 100 мянгаар нэм». Юу ч өөрчлөгдөөгүй.` };
+  }
   if (intent.kind === "unknown") {
     const focus = resolution.kind === "certain" ? [resolution.trip] : resolution.kind === "ambiguous" ? resolution.candidates.slice(0, 3) : [];
     return { kind: "defer", focus, intent, resolution };
+  }
+  // A price on one named date is a per-date edit the brain cannot build (it would move every
+  // date's fare): the model reads it, or the admin is told (B2).
+  if (intent.kind === "price" && datesIn(plain, now).length) {
+    return { kind: "defer", focus: resolution.kind === "certain" ? [resolution.trip] : [], intent, resolution };
   }
   if (resolution.kind === "ambiguous") return askWhichTrip(plain, resolution.candidates, intent, now);
   if (resolution.kind === "none") return askWhichTrip(plain, recentTrips(input.trips), intent, now, true);
@@ -878,7 +968,11 @@ function chatterReply(topic: ChatterTopic, sample: string): string {
       `• Нэг өдрийг дүүрсэн / цөөн суудал / нээлттэй болгох — «${sample}» 12/27 дүүрсэн`,
       `• Үнэ — «${sample}» том хүн 4,290,000 · «${sample}» хүүхэд 300 мянгаар бага · «${sample}» нярай үнэгүй`,
       `• Огноо нэмэх, хасах — «${sample}» 1/15 гаралт нэм`,
+      `• Нэг өдрийн үнэ — «${sample}» 12/27-ны үнийг 100 мянгаар нэм`,
+      "• Хөтөлбөрийн нэг өдөр, зураг солих, насны ангилал, сайтаас нуух — «3-р өдрийн зургийг энэ зургаар соль» (зураг хавсаргана)",
+      "• uudamtravel.mn эсвэл хамтрагчийн сайтын холбоос — «… устга», «энэ аяллыг манайд нэм»",
       "• Цуцлах, түр зогсоох, идэвхжүүлэх, архивлах, нэр, буудал, хоол, суудал",
+      "• Нэг мессежид хэд хэдэн өөрчлөлт бичиж болно",
       `• Мэдээлэл харах — «${sample}» мэдээлэл`,
       "• Постер, PDF, Excel, Word оруулвал шинэ аялал нэмнэ, байгааг нь шинэчилнэ",
       "Өөрчлөлт бүр санал болж гарна; та баталгаажуулсны дараа л хадгалагдана, буцаах боломжтой.",

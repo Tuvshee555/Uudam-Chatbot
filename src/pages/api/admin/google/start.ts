@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getEnv } from "../../../../lib/env";
+import { adminSignInAvailable } from "../../../../lib/adminAccess";
 import {
   buildGoogleAuthUrl,
   googleRedirectUri,
@@ -15,7 +16,8 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     res.setHeader("Allow", "GET");
     return res.status(405).end();
   }
-  if (!env.googleSignInEnabled) {
+  // Off without Google setup, and also while ADMIN_SESSION_SECRET is weak (fail closed).
+  if (!adminSignInAvailable(env)) {
     return res.redirect(303, "/admin?login_error=google_not_configured");
   }
   const state = newGoogleState();

@@ -31,7 +31,8 @@ jobs:
       VERIFY_TOKEN: ci-verify-token
       FACEBOOK_PAGES: "000000000000000:ci-not-a-real-token"
       META_APP_SECRET: ci-meta-secret
-      ADMIN_SECRET: ci-admin-secret
+      # Dummy, CI only: a 32+ character admin session key (env validation requires one).
+      ADMIN_SESSION_SECRET: ci-session-key-6b2f8d4a0e7c3f9b-1d5a9e3c7f2b6d0a
       REDIS_STATE_ENABLED: "false"
       REDIS_RATE_LIMIT_ENABLED: "false"
       REDIS_REPLAY_ENABLED: "false"
