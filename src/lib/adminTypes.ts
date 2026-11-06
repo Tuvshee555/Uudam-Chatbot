@@ -52,6 +52,8 @@ export type PriceGroup = {
   infant_age: string;
   passenger_prices: PassengerPrice[];
   note: string;
+  /** Extra for a single room on this departure (it differs by hotel). */
+  single_price?: number | null;
 };
 
 export type DiscountGroup = {
@@ -109,6 +111,18 @@ export type ItineraryDay = {
   meals?: ItineraryDayMeals;
   /** Shown in the editor; added or changed only in the Poster tab. */
   photo?: string;
+  /** Where and what the meals are, as the source words it (a restaurant, a buffet). */
+  meal_note?: string;
+  /** The calendar day a file writes beside this program day. Review evidence only; never saved. */
+  date?: string;
+};
+
+/** A hotel the trip sells, as the website shows it (name, link, description, photos). */
+export type HotelProfile = {
+  name: string;
+  url: string;
+  description: string;
+  media: Array<{ url: string; caption: string }>;
 };
 
 /** Booking terms a customer asks before committing. Freeform Mongolian strings. */

@@ -9,7 +9,7 @@ import {
   type ActionKey,
   type QuickActionKind,
 } from "./AssistantQuickActions";
-import { ProposalCard } from "./ProposalCard";
+import { ProposalCard, type EditDraftTrip } from "./ProposalCard";
 import type {
   AskMsg,
   AttachedFile,
@@ -149,6 +149,7 @@ export function AssistantTab({
   onQuickAction,
   onEditTripPrice,
   onNewTrip,
+  onEditDraftTrip,
   onApply,
   onRollback,
   onSubmitClarificationForm,
@@ -177,6 +178,8 @@ export function AssistantTab({
   onQuickAction: (kind: QuickActionKind, trip: TravelTrip, value?: number | boolean) => void;
   onEditTripPrice: (trip: TravelTrip) => void;
   onNewTrip: () => void;
+  /** Opens the full trip editor on a trip read from a file; its save returns the fields here. */
+  onEditDraftTrip?: EditDraftTrip;
   onApply: (message: ProposalMsg) => void;
   onRollback: (message: ProposalMsg) => void;
   onSubmitClarificationForm: (
@@ -371,6 +374,7 @@ export function AssistantTab({
               onSubmitClarificationForm={onSubmitClarificationForm}
               onCancelProposal={onCancelProposal}
               onChooseOption={onChooseOption}
+              onEditDraftTrip={onEditDraftTrip}
             />
           ))}
           {step && <QuickActionStep controller={quick} busy={busy} />}
@@ -550,6 +554,7 @@ function ChatBubble({
   onSubmitClarificationForm,
   onCancelProposal,
   onChooseOption,
+  onEditDraftTrip,
 }: {
   message: ChatMessage;
   existingTrips?: TravelTrip[];
@@ -564,6 +569,7 @@ function ChatBubble({
   ) => void;
   onCancelProposal: (id: string) => void;
   onChooseOption: (message: AskMsg, option: ProposalQuestionOption) => void;
+  onEditDraftTrip?: EditDraftTrip;
 }) {
   if (message.role === "admin") {
     const hasRealText = Boolean(message.text) && message.text !== "Файл орууллаа";
@@ -675,6 +681,7 @@ function ChatBubble({
       onRollback={onRollback}
       onSubmitClarificationForm={onSubmitClarificationForm}
       onCancelProposal={onCancelProposal}
+      onEditDraftTrip={onEditDraftTrip}
     />
   );
 }

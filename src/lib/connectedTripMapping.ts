@@ -3,6 +3,9 @@ import { parseTripDepartureDateText } from "./travelDates";
 import { formatPriceRange } from "./priceRange";
 import { websiteTripPayload } from "./websiteTripPayload";
 import { normalizeTripOffers } from "./tripOffers";
+import { TRANSPORT_WEBSITE_TAGS, isTransportType } from "./tripTransitDays";
+import { statedDayMeals } from "./tripExtraSchema";
+import { getPosterPdfPublicUrl, isUsableStoredPdfUrl } from "./poster/pdfUrl";
 
 export function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -13,6 +16,7 @@ export function records(value: unknown): Record<string, unknown>[] {
 export function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string" && Boolean(v.trim())) : [];
 }
+const text = (value: unknown) => typeof value === "string" ? value.trim() : "";
 export function duration(text: string) {
   const days = Number(text.match(/(\d+)\s*(?:өдөр|хоног)/i)?.[1] || 0);
   const nights = Number(text.match(/(\d+)\s*шөнө/i)?.[1] || Math.max(0, days - 1));
@@ -55,12 +59,20 @@ export function tripToPoster(trip: TravelTrip, prior: unknown, before?: TravelTr
   if (extraChanged("excluded_items")) data.excludes = strings(trip.extra.excluded_items);
   if (extraChanged("itinerary_days")) {
     const oldDays = records(data.days);
-    data.days = records(trip.extra.itinerary_days).map((day, i) => ({
-      ...oldDays.find(old => old.day === (day.day ?? i + 1)),
-      day: day.day ?? i + 1, route: day.title || "", summary: day.description || "",
-      hotel: day.hotel || null, meals: day.meals || {},
-      ...(day.photo ? { photo: day.photo } : {}),
-    }));
+    data.days = records(trip.extra.itinerary_days).map((day, i) => {
+      const posterDay: Record<string, unknown> = {
+        ...oldDays.find(old => old.day === (day.day ?? i + 1)),
+        day: day.day ?? i + 1, route: day.title || "", summary: day.description || "",
+        hotel: day.hotel || null, meals: day.meals || {},
+        ...(day.photo ? { photo: day.photo } : {}),
+      };
+      // The meal note ("буфет", a restaurant) belongs to the chatbot day: it
+      // travels to the website through the poster day, and a note removed in
+      // the chatbot must not survive from the old poster day.
+      if (text(day.meal_note)) posterDay.meal_note = text(day.meal_note);
+      else delete posterDay.meal_note;
+      return posterDay;
+    });
   }
   if (changed("photo_urls")) {
     data.days = photosOntoDays(records(data.days), trip.photo_urls);
@@ -97,6 +109,41 @@ export function posterPhotos(data: unknown): string[] {
   const p = record(data);
   return [...new Set([p.hero_image, ...records(p.days).map(d => d.photo)]
     .filter((v): v is string => typeof v === "string" && /^(https:\/\/|data:image\/)/.test(v)))];
+}
+
+const SINGLE_ROOM_LABEL = "Ганцаараа явах (өрөөндөө ганцаараа)";
+
+/**
+ * One solo-room line per hotel and price. Hotels with the same price on the
+ * same dates share a line; a hotel whose price differs by date lists them.
+ */
+function hotelSingleLines(
+  priceGroups: Record<string, unknown>[],
+  money: (amount: unknown, currency: unknown) => string,
+  currency: unknown,
+): string[] {
+  const byHotel = new Map<string, Map<number, string[]>>();
+  for (const group of priceGroups) {
+    if (typeof group.single_price !== "number" || !money(group.single_price, currency)) continue;
+    const hotel = text(group.hotel);
+    const prices = byHotel.get(hotel) || new Map<number, string[]>();
+    const dates = strings(group.display_dates).length ? strings(group.display_dates) : strings(group.dates);
+    prices.set(group.single_price, [...(prices.get(group.single_price) || []), ...dates]);
+    byHotel.set(hotel, prices);
+  }
+  const lines = new Map<string, { price: number; hotels: string[]; dates: string }>();
+  for (const [hotel, prices] of byHotel) {
+    for (const [price, dates] of prices) {
+      const shownDates = prices.size > 1 ? [...new Set(dates)].join(", ") : "";
+      const key = `${price}|${shownDates}`;
+      const line = lines.get(key) || { price, hotels: [], dates: shownDates };
+      if (hotel && !line.hotels.includes(hotel)) line.hotels.push(hotel);
+      lines.set(key, line);
+    }
+  }
+  return [...lines.values()]
+    .sort((a, b) => a.price - b.price)
+    .map(line => [SINGLE_ROOM_LABEL, line.hotels.join(", "), line.dates, money(line.price, currency)].filter(Boolean).join(" - "));
 }
 
 export function websiteExtraDetails(
@@ -199,20 +246,25 @@ export function websiteExtraDetails(
     ...groupLines,
   ].filter((value, index, all) => value && all.indexOf(value) === index);
   // A solo traveller's own-room price, once per distinct price with the
-  // departures it applies to.
-  const singleByPrice = new Map<number, string[]>();
-  for (const group of priceGroups) {
-    if (typeof group.single_price !== "number" || !money(group.single_price, fares?.currency)) continue;
-    const dates = strings(group.display_dates).length ? strings(group.display_dates) : strings(group.dates);
-    singleByPrice.set(group.single_price, [...(singleByPrice.get(group.single_price) || []), ...dates]);
-  }
-  const singleLines = [...singleByPrice.entries()]
-    .sort(([a], [b]) => a - b)
-    .map(([price, dates]) => join([
-      "Ганцаараа явах (өрөөндөө ганцаараа)",
-      singleByPrice.size > 1 ? [...new Set(dates)].join(", ") : "",
-      money(price, fares?.currency),
-    ]));
+  // departures it applies to. On a trip sold per hotel the price is the
+  // hotel's own (650,000₮ in one, 900,000₮ in the other), so each line names
+  // its hotel; dates are listed only where one hotel's price changes by date.
+  const singleLines = hasHotelChoices
+    ? hotelSingleLines(priceGroups, money, fares?.currency)
+    : (() => {
+      const singleByPrice = new Map<number, string[]>();
+      for (const group of priceGroups) {
+        if (typeof group.single_price !== "number" || !money(group.single_price, fares?.currency)) continue;
+        singleByPrice.set(group.single_price, [...(singleByPrice.get(group.single_price) || []), ...dateListOf(group)]);
+      }
+      return [...singleByPrice.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([price, dates]) => join([
+          SINGLE_ROOM_LABEL,
+          singleByPrice.size > 1 ? [...new Set(dates)].join(", ") : "",
+          money(price, fares?.currency),
+        ]));
+    })();
   return {
     extraFees: records(extra.extra_fees).map(f => join([f.label,money(f.amount,f.currency),f.applies_to,f.note])),
     roomPrices: [
@@ -221,6 +273,151 @@ export function websiteExtraDetails(
     ].filter(Boolean),
     childPriceNotes: childNotes,
   };
+}
+
+/**
+ * Booking terms staff enter in the chatbot (extra.booking_terms) as the
+ * website's two condition boxes. The bot reads those boxes back as "documents"
+ * and "cancellation" when its own term is empty (tripAnswerPlan.ts,
+ * travelDb.ts), so each box is only written from the term it stands for:
+ * "Шаардлага, бичиг баримт" exists only when documents are stated (visa joins
+ * it), "Цуцлалт, буцаалт" only when cancellation is (deposit and payment join
+ * it). A deposit alone never turns into a "documents" answer. Null = nothing
+ * to say: a box staff typed on the website is kept, one this projection wrote
+ * earlier is cleared (fillWebsiteFields).
+ */
+export function websiteBookingTerms(value: unknown): { requirements: string | null; cancellationPolicy: string | null } {
+  const terms = record(value);
+  // Labelled lines once a box holds more than its own term; its term alone reads as is.
+  const box = (anchor: string, rows: Array<[string, string]>) => {
+    if (!anchor) return null;
+    const filled = rows.filter(([, item]) => item);
+    return filled.length > 1 ? filled.map(([label, item]) => `${label}: ${item}`).join("\n") : anchor;
+  };
+  const documents = text(terms.documents), cancellation = text(terms.cancellation);
+  return {
+    requirements: box(documents, [["Бичиг баримт", documents], ["Виз", text(terms.visa)]]),
+    cancellationPolicy: box(cancellation, [["Урьдчилгаа", text(terms.deposit)], ["Төлбөр", text(terms.payment)], ["Цуцлалт", cancellation]]),
+  };
+}
+
+/** extra.transport_type ("direct_flight") as the website's transport tags (["Онгоц"]). */
+export function websiteTransportTags(value: unknown): string[] {
+  return isTransportType(value) ? [...TRANSPORT_WEBSITE_TAGS[value]] : [];
+}
+
+/**
+ * The new-trip review and the AI assistant (2026-11-04/05) wrote a transport
+ * type's tags into website_details_patch as if staff had typed them. That
+ * pinned them: a later change of transport_type never reached the website.
+ * Such a patch value is the projection's own when it is exactly the tags of
+ * the trip's transport type now or at the last sync, or the value an earlier
+ * sync already recognised (`recognised`, kept on the website because the
+ * stored patch is not rewritten). Returns that value, or null when the patch
+ * transport is a manual override (or absent) and stays the patch's.
+ */
+export function projectedPatchTransport(patchTransport: unknown, transportTypes: unknown[], recognised?: unknown): string[] | null {
+  const list = (value: unknown) => Array.isArray(value) && value.length > 0 && value.every(item => typeof item === "string")
+    ? value as string[] : null;
+  const patch = list(patchTransport);
+  if (!patch) return null;
+  const same = (tags: string[] | null) => Boolean(tags) && tags!.length === patch.length && tags!.every((tag, index) => tag === patch[index]);
+  return [...transportTypes.map(websiteTransportTags), list(recognised)].some(same) ? [...patch] : null;
+}
+
+/**
+ * The website's single trip-level solo-room supplement: only when every
+ * projected fare row states the same one. A trip whose hotels (or dates) have
+ * different supplements has no single number to show; the per-hotel lines in
+ * roomPrices carry them instead.
+ */
+export function websiteSingleSupplement(priceGroups: unknown): number | null {
+  const groups = records(priceGroups);
+  if (!groups.length) return null;
+  // Same placeholder threshold as the fare lines: "1₮" typed past a required field is not a price.
+  const real = (group: Record<string, unknown>) => {
+    const amount = group.single_price, currency = text(group.currency).toUpperCase() || "MNT";
+    return typeof amount === "number" && Number.isFinite(amount) && (currency === "MNT" ? amount >= 1000 : amount > 0) ? amount : null;
+  };
+  const prices = new Set(groups.map(real));
+  const [only] = [...prices];
+  return prices.size === 1 && typeof only === "number" ? only : null;
+}
+
+/**
+ * Website fields the projection fills from chatbot facts without ever
+ * overwriting a website edit (fillWebsiteFields in websiteTripDetails.ts).
+ * Transport and destinations are display tags there: a website-only
+ * difference is kept quietly instead of being reported as a conflict.
+ */
+export const WEBSITE_FILLED_QUIET: ReadonlySet<string> = new Set(["transport", "destinations"]);
+export const WEBSITE_FILLED_CLEARED: Record<string, unknown> = { transport: [], destinations: [] };
+export function websiteFilledFields(trip: TravelTrip, priceGroups: unknown) {
+  const terms = websiteBookingTerms(trip.extra.booking_terms);
+  return {
+    requirements: terms.requirements,
+    cancellationPolicy: terms.cancellationPolicy,
+    transport: websiteTransportTags(trip.extra.transport_type),
+    destinations: [...new Set(strings(trip.extra.destinations).map(item => item.trim()))],
+    // The website prints this number in tugrik.
+    singleSupplement: (text(trip.currency) || "MNT").toUpperCase() === "MNT" ? websiteSingleSupplement(priceGroups) : null,
+  };
+}
+
+export type MealState = boolean | null;
+/** true = included in the price, false = the traveller pays, anything else = the program does not say. */
+export function mealState(value: unknown): MealState {
+  return value === true ? true : value === false ? false : null;
+}
+
+const WEBSITE_MEAL_NAMES = [["breakfast", "Өглөө"], ["lunch", "Өдөр"], ["dinner", "Орой"]] as const;
+
+/**
+ * A day's meals as the website's ItineraryDay.meals list: only meals the
+ * program says are included. A meal it does not mention (null) is not listed,
+ * and it is not "excluded" either — that distinction travels in
+ * websiteItineraryMeals, because the list itself can only say "included".
+ */
+export function websiteDayMeals(meals: unknown): string[] {
+  const day = record(meals);
+  return WEBSITE_MEAL_NAMES.filter(([key]) => mealState(day[key]) === true).map(([, name]) => name);
+}
+
+export type WebsiteItineraryMeal = { dayNumber: number; breakfast: MealState; lunch: MealState; dinner: MealState; note?: string };
+
+/**
+ * Per website itinerary day (same dayNumber as the ItineraryDay rows the
+ * projection writes): each meal's three states and the day's meal note. The
+ * website draws ✓ for a meal in ItineraryDay.meals, and should draw ✗ only
+ * for a meal stated here as false — null means the program does not say.
+ * The note comes from the poster day, or the chatbot day of the same number
+ * while the poster has not been re-saved since notes started travelling.
+ * A day saved before "not stated" existed (all three false, no note) is sent
+ * as not stated (statedDayMeals), or the website drew ✗ on every meal.
+ */
+export function websiteItineraryMeals(posterDays: unknown, chatbotDays?: unknown): WebsiteItineraryMeal[] {
+  const sourceDays = records(chatbotDays);
+  const notes = new Map(sourceDays.map((day, index) => [Number(day.day) || index + 1, text(day.meal_note)]));
+  return records(posterDays).flatMap((day, index) => {
+    if (!day.route && !day.summary && !day.hotel) return [];
+    const dayNumber = Number(day.day) || index + 1;
+    const note = text(day.meal_note) || notes.get(dayNumber) || "";
+    const meals = statedDayMeals(day.meals, note);
+    return [{ dayNumber, breakfast: meals.breakfast, lunch: meals.lunch, dinner: meals.dinner, ...(note ? { note } : {}) }];
+  });
+}
+
+/**
+ * The brochure the website offers. The rendered poster is the live source of
+ * truth (getPosterBrochureHref says the same for the bot); a PDF staff
+ * uploaded is used only when there is no poster PDF to link to. "" = none.
+ */
+export function websiteBrochurePdfUrl(extra: Record<string, unknown>): string {
+  const posterId = text(extra.poster_trip_id);
+  const poster = posterId ? getPosterPdfPublicUrl(posterId) : "";
+  if (poster) return poster;
+  const uploaded = text(extra.brochure_pdf_url);
+  return isUsableStoredPdfUrl(uploaded) ? uploaded : "";
 }
 
 export function websiteMarketingBadge(trip: TravelTrip) {

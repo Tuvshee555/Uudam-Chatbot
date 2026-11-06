@@ -109,7 +109,8 @@ const fieldLabel = (key: string) => {
   // A fare typed on the website for one departure of a package-priced trip (websiteTripBridge.ts).
   const departure = /^departure\.(\d{4}-\d{2}-\d{2})\.(price|childPrice|infantPrice)$/.exec(key);
   if (departure) return `${departure[1]} гарах өдрийн ${DEPARTURE_FARE_LABEL[departure[2]]}`;
-  const bare = key.replace(/^(?:website|extra)\./, ""); return FIELD_LABEL[bare] || bare;
+  // Website-only fields (requirements, cancellation policy, transport…) use the labels of the website form.
+  const bare = key.replace(/^(?:website|extra)\./, ""); return FIELD_LABEL[bare] || websiteDetailFields.find((field) => field.key === bare)?.label || bare;
 };
 function valueText(value: unknown): string {
   if (value == null || value === "") return "—";

@@ -1,7 +1,7 @@
 import type { TravelTrip } from "./travelTypes";
 import type { FastPathRoute } from "./fastPathRouting";
 import { buildTripRequest, mergeTripSelection, type TripRequest, type TripSelection, type TripTopic } from "./tripRequest";
-import { normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard, renderTripOfferReply, type TripOfferResult } from "./tripOffers";
+import { normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard, type TripOfferResult } from "./tripOffers";
 import { evaluateTripRequirement, tripTransport, type TripRequirement } from "./tripFacts";
 import { tripDurationDays, getTripBrochureAsset, getTripWebsiteLink } from "./travelFastPathsSearch";
 import { departureAvailability, departureIsClosed, departureIsLow, openDateWording } from "./departureAvailability";
@@ -9,7 +9,8 @@ import { compactReplyOptions, presentAssistantReply, replyPreferences } from "./
 import { stripTripNamesForIntent } from "./customerTurn";
 import { isOptionalExtrasQuestion } from "./tripExtrasReply";
 import { customerDate as mnDate } from "./customerDate";
-import { dateIsOnSale } from "./tripFareBlock";
+import { dateIsOnSale, renderOfferReplyWithConditions } from "./tripFareBlock";
+import { formatTripHotel, tripHotels } from "./tripHotelReply";
 import { hasSeatsIntent } from "./travelFastPaths";
 import { isReferReply } from "./reply";
 import { ADULT_COUNT_QUESTION } from "./selectionAnswer";
@@ -68,7 +69,7 @@ function selectionFareQuote(trip: TravelTrip, selection: TripSelection, result: 
       packageId: result.fields[0] === "package" ? option : selection.package,
     }, now);
     if (card.status !== "ready" || missingRequestedFares(card, preferences.requiredFareKinds).length) return null;
-    return renderTripOfferReply(card, { fareKinds: [...fareKinds], showTotal: false })?.split("\n")
+    return renderOfferReplyWithConditions(trip, card, { fareKinds: [...fareKinds], showTotal: false })?.split("\n")
       .filter(line => line !== mnDate(card.offer.date)
         && line !== (result.fields[0] === "hotel" ? card.offer.hotel : card.offer.packageId)).join("\n") || null;
   };
@@ -126,7 +127,7 @@ function stableFarePreview(trip: TravelTrip, selection: TripSelection, result: T
   if (!cards.length || !signature(cards[0]) || cards.some((card) => signature(card) !== signature(cards[0]))) return null;
   const first = cards[0];
   if (first.status !== "ready") return null;
-  return renderTripOfferReply(first, { fareKinds })?.split("\n").filter((line) => line !== mnDate(first.offer.date)).join("\n") || null;
+  return renderOfferReplyWithConditions(trip, first, { fareKinds })?.split("\n").filter((line) => line !== mnDate(first.offer.date)).join("\n") || null;
 }
 
 /**
@@ -145,7 +146,7 @@ function stablePartyTotal(trip: TravelTrip, selection: TripSelection, dates: str
   if (offers.some((offer) => signature(offer) !== signature(offers[0]))) return null;
   const first = offers[0];
   if (first.status !== "ready") return null;
-  return renderTripOfferReply(first, { fareKinds: replyPreferences(text).fareKinds, showTotal: true })
+  return renderOfferReplyWithConditions(trip, first, { fareKinds: replyPreferences(text).fareKinds, showTotal: true })
     ?.split("\n").filter((line) => line !== mnDate(first.offer.date)).join("\n") || null;
 }
 
@@ -165,7 +166,7 @@ function hotelFarePreview(trip: TravelTrip, selection: TripSelection, result: Tr
     for (const packageId of packages) {
       const card = packageId ? resolveTripOfferFareCard(trip, { date: selection.date, hotel, packageId }, now) : first;
       if (card.status !== "ready" || missingRequestedFares(card, requiredFareKinds).length) return null;
-      const body = renderTripOfferReply(card, { fareKinds })?.split("\n").filter((line) => line !== mnDate(card.offer.date) && !/^Буудал:/.test(line) && ![hotel, packageId, `${hotel} · ${packageId}`].includes(line.trim())).join("\n");
+      const body = renderOfferReplyWithConditions(trip, card, { fareKinds })?.split("\n").filter((line) => line !== mnDate(card.offer.date) && !/^Буудал:/.test(line) && ![hotel, packageId, `${hotel} · ${packageId}`].includes(line.trim())).join("\n");
       if (!body) return null;
       blocks.push(`Буудал: ${hotel}${packageId ? ` · ${packageId}` : ""}\n${body}`);
     }
@@ -290,7 +291,7 @@ export function buildTripAnswerPlan(input: {
     if (wantsPrice) {
       // The departures are listed just above, so a fare valid for them does not restate a date.
       const price = result.status === "ready"
-        ? renderTripOfferReply(result, { fareKinds: [...(preferences.full || preferences.fareKinds.length || result.offer.passengerPrices.length ? preferences.fareKinds : ["adult", "child"] as const)], showTotal: wantsPartyTotal && !minorsOnly })
+        ? renderOfferReplyWithConditions(trip, result, { fareKinds: [...(preferences.full || preferences.fareKinds.length || result.offer.passengerPrices.length ? preferences.fareKinds : ["adult", "child"] as const)], showTotal: wantsPartyTotal && !minorsOnly })
           ?.split("\n").filter((line) => line !== mnDate(nearest[0])).join("\n") || null
         : stableFarePreview(trip, { ...selection, passengers: pricePassengers }, result, now, intentText);
       if (price) sections.price = price;
@@ -328,8 +329,11 @@ export function buildTripAnswerPlan(input: {
         for (const kind of missingRequestedFares(result, preferences.requiredFareKinds, intentText)) missingFact("price", kind);
         const fareKinds = preferences.full || preferences.fareKinds.length || result.offer.passengerPrices.length
           ? preferences.fareKinds : ["adult", "child"] as const;
-        const reply = renderTripOfferReply(result, { fareKinds: [...fareKinds], showTotal: wantsPartyTotal && !minorsOnly });
-        const baseHotel = !result.offer.hotel && offers.every((offer) => !offer.hotel) && trip.hotel;
+        const reply = renderOfferReplyWithConditions(trip, result, { fareKinds: [...fareKinds], showTotal: wantsPartyTotal && !minorsOnly });
+        // The trip's own hotel line, named (and linked) as every hotel answer names it.
+        const tripLevel = !result.offer.hotel && offers.every((offer) => !offer.hotel) && Boolean(trip.hotel);
+        const own = tripLevel ? tripHotels(trip, {}, now) : null;
+        const baseHotel = !tripLevel ? null : own?.source === "trip" ? own.hotels.map(formatTripHotel).join(", ") : trip.hotel;
         sections.price = reply ? [baseHotel ? `Буудал: ${baseHotel}` : null, reply].filter(Boolean).join("\n") : undefined;
       }
       if (request.topics.includes("availability")) {
@@ -384,18 +388,30 @@ export function buildTripAnswerPlan(input: {
     else sections.dates = scopedDates.length ? datesSection(scopedDates) : undefined;
   }
   if (request.topics.includes("duration")) {
-    const days = tripDurationDays(trip);
-    if (days !== null) sections.duration = `Хугацаа: ${days} өдөр.`;
+    const duration = tripDurationText(trip);
+    if (duration) sections.duration = `Хугацаа: ${duration}.`;
   }
   if (request.topics.includes("transport")) {
     const transport = tripTransport(trip);
     if (transport) sections.transport = TRANSPORT[transport];
   }
+  // A price above already names the hotel(s) as the resolver sells them ("Буудал: …", or a priced
+  // offer's own hotel line). The reply checker reads those names to scope the fares under them, so
+  // they stay as they are, and the hotel is not named a second, different way in the same message.
+  const priceNamesHotel = (said: Array<string | undefined>) => {
+    const text = said.filter(Boolean).join("\n");
+    const offerHotel = result?.status === "ready" ? result.offer.hotel : null;
+    return /(?:^|\n)Буудал:/.test(text) || Boolean(offerHotel && text.split("\n").some((line) => line.trim() === offerHotel));
+  };
   if (request.topics.includes("hotel")) {
-    const hotels = [...new Set(offers.filter((offer) => (!selection.date || !offer.dateScoped || offer.dates.includes(selection.date)) && (!selection.hotel || offer.hotel?.toLowerCase() === selection.hotel.toLowerCase())).map((offer) => offer.hotel).filter((hotel): hotel is string => Boolean(hotel)))];
-    if (hotels.length) sections.hotel = `Буудал:\n${compactReplyOptions(hotels, intentText).map((hotel) => `• ${hotel}`).join("\n")}`;
-    else if (trip.hotel && (!selection.hotel || selection.hotel.trim().toLowerCase() === trip.hotel.trim().toLowerCase())
-      && offers.every((offer) => !offer.hotel && !offer.hotelId)) sections.hotel = `Буудал: ${trip.hotel}`;
+    if (priceNamesHotel([sections.price, ...lines])) answered.add("hotel");
+    else {
+      // The same hotels the route-only hotel reply names (tripHotelReply.ts): price-row hotels
+      // with their profile name and link, else the trip's own line, else the itinerary's.
+      const found = tripHotels(trip, { date: selection.date, hotel: selection.hotel }, now);
+      if (found?.source === "trip" && found.hotels.length === 1) sections.hotel = `Буудал: ${formatTripHotel(found.hotels[0])}`;
+      else if (found) sections.hotel = `Буудал:\n${compactReplyOptions(found.hotels.map(formatTripHotel), intentText).map((hotel) => `• ${hotel}`).join("\n")}`;
+    }
   }
   if (request.topics.includes("includes")) {
     const included = strings(trip.extra.included_items).filter((item) => !preferences.includes.length || preferences.includes.some((target) => target.pattern.test(item)));
@@ -467,8 +483,8 @@ export function buildTripAnswerPlan(input: {
   let staffLine: string | undefined;
   const staffNotes: string[] = [];
   if (request.lodging && lines.length) {
-    const hotels = [...new Set([...offers.map((offer) => offer.hotel), trip.hotel].filter((hotel): hotel is string => Boolean(hotel?.trim())))];
-    if (hotels.length && hotels.length <= 4 && !lines.some((line) => /(?:^|\n)Буудал:/.test(line))) lines.push(`Буудал: ${hotels.join(", ")}`);
+    const hotels = priceNamesHotel(lines) ? [] : tripHotels(trip, { date: selection.date }, now)?.hotels.map((hotel) => hotel.name) || [];
+    if (hotels.length && hotels.length <= 4) lines.push(`Буудал: ${hotels.join(", ")}`);
     staffNotes.push(`Байрлах хүсэлт: ${request.lodging.evidence}`);
     staffLine = `${request.lodging.dative.charAt(0).toUpperCase()}${request.lodging.dative.slice(1)} байрлах хүсэлтийг тань аяллын зөвлөхөд дамжууллаа.`;
     lines.push(staffLine);
@@ -490,6 +506,29 @@ export function buildTripAnswerPlan(input: {
     mediaUrls: handoff ? [] : mediaUrls, brochureUrl: handoff ? null : brochureUrl,
     ...(staffLine && !handoff ? { staffNotes, staffLine } : {}),
   };
+}
+
+/**
+ * "9 өдөр 8 шөнө". The answer plan said "Хугацаа: 9 өдөр." and dropped the nights
+ * the trip card and the website both show (2026-11-05). The days are always the
+ * ones the reply checker reads (tripDurationDays); the nights come from the stored
+ * count or the trip's own wording, and are left out when the two disagree. The
+ * trip's wording is kept as written when it says nothing but the duration.
+ */
+export function tripDurationText(trip: TravelTrip): string | null {
+  const days = tripDurationDays(trip);
+  if (days === null) return null;
+  const text = (trip.duration_text || "").replace(/\s+/g, " ").trim();
+  const textDays = /(\d{1,2})\s*(?:өдөр|хоног)/i.exec(text);
+  const textNightsMatch = /(\d{1,2})\s*шөнө/i.exec(text);
+  // Nights written beside a different day count belong to a different reading.
+  const textNights = textNightsMatch && (!textDays || Number(textDays[1]) === days) ? Number(textNightsMatch[1]) : null;
+  const rawStored = trip.extra?.duration_nights;
+  const stored = typeof rawStored === "number" && Number.isInteger(rawStored) && rawStored >= 0 && rawStored <= days ? rawStored : null;
+  const nights = stored !== null && textNights !== null && stored !== textNights ? null : stored ?? (textNights !== null && textNights <= days ? textNights : null);
+  const onlyDuration = /^\d{1,2}\s*(?:өдөр|хоног)(?:\s*[/,·-]?\s*\d{1,2}\s*шөнө)?$/i.test(text);
+  if (onlyDuration && textDays && Number(textDays[1]) === days && (textNightsMatch ? textNights === nights : nights === null)) return text;
+  return nights !== null ? `${days} өдөр ${nights} шөнө` : `${days} өдөр`;
 }
 
 function midpoint([start, end]: [string, string]): string {

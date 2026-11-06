@@ -71,6 +71,13 @@ export type TripEditorProps = {
   setTripAnswerHints: React.Dispatch<React.SetStateAction<AnswerHint[]>>;
   /** Jumps to the AI туслах tab with this trip named; not offered for an unsaved trip. */
   onAskAi?: (tripName: string) => void;
+  /**
+   * The editor is open on a trip read from a file and not saved yet: its save hands
+   * the fields back to the AI review, which saves the trip as a draft or published.
+   */
+  draftMode?: boolean;
+  /** Changes for each trip opened in draft mode, so unsaved-work tracking starts afresh. */
+  draftKey?: number;
 };
 
 type SectionKey = "basics" | "pricing" | "itinerary" | "media" | "terms" | "website" | "settings";
@@ -123,7 +130,9 @@ export function TripEditor(props: TripEditorProps) {
   const contentRef = React.useRef<HTMLDivElement>(null);
   const gapsRef = React.useRef<HTMLDivElement>(null);
 
-  const openKey = open ? `${isNewTrip ? "new" : editingTrip?.id ?? ""}` : "";
+  const draftMode = Boolean(props.draftMode);
+  const openKey = open ? (draftMode ? `draft-${props.draftKey ?? 0}` : `${isNewTrip ? "new" : editingTrip?.id ?? ""}`) : "";
+  const saveLabel = draftMode ? "Шалгалт руу буцах" : isNewTrip ? "Аялал үүсгэх" : "Хадгалах";
   const current = serialize(props);
   // The state as it was when this trip opened; anything different is unsaved work.
   const [baseline, setBaseline] = React.useState<{ key: string; json: string }>({ key: "", json: "" });
@@ -208,6 +217,8 @@ export function TripEditor(props: TripEditorProps) {
     else onClose();
   }
   function handleSave() {
+    // Nothing is saved from here in draft mode: the review checks the trip and saves it.
+    if (draftMode) { onSave(true); return; }
     setAttempted(true);
     if (blocking.length > 0 && !confirmingIncomplete) {
       setConfirmingIncomplete(true);
@@ -299,15 +310,17 @@ export function TripEditor(props: TripEditorProps) {
           <Icons.chevronLeft size={18} />
         </button>
         <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-subtle">{isNewTrip ? "Шинэ аялал" : "Аялал засах"}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-subtle">{draftMode ? "Файлаас уншсан аялал · хадгалаагүй" : isNewTrip ? "Шинэ аялал" : "Аялал засах"}</p>
           <h1 className="truncate text-sm font-semibold leading-5 text-ink sm:text-[15px]">{title}</h1>
         </div>
 
         <div className="hidden items-center gap-2 md:flex">
           <label className="sr-only" htmlFor="trip-status">Төлөв</label>
-          <SelectInput id="trip-status" value={tripDraft.status} onChange={(e) => setTripDraft((d) => ({ ...d, status: e.target.value }))} className="h-9 w-44 text-[13px]" title={status.hint}>
-            {STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </SelectInput>
+          {!draftMode && (
+            <SelectInput id="trip-status" value={tripDraft.status} onChange={(e) => setTripDraft((d) => ({ ...d, status: e.target.value }))} className="h-9 w-44 text-[13px]" title={status.hint}>
+              {STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </SelectInput>
+          )}
 
           <div ref={gapsRef} className="relative">
             <button
@@ -352,12 +365,12 @@ export function TripEditor(props: TripEditorProps) {
 
         <div className="flex shrink-0 items-center gap-2">
           <span className={cx("hidden text-xs sm:inline", dirty ? "text-warning" : "text-ink-subtle")} role="status">
-            {saving ? "Хадгалж байна…" : dirty ? "Хадгалаагүй өөрчлөлт" : isNewTrip ? "" : "Өөрчлөлт алга"}
+            {saving ? "Хадгалж байна…" : draftMode ? (dirty ? "Засвар хийгдсэн" : "") : dirty ? "Хадгалаагүй өөрчлөлт" : isNewTrip ? "" : "Өөрчлөлт алга"}
           </span>
           <Button variant="ghost" size="sm" disabled={websiteMediaUploading} onClick={requestClose}>Болих</Button>
           <Button size="sm" disabled={locked} loading={saving} onClick={handleSave}>
             <Icons.check size={15} />
-            {isNewTrip ? "Аялал үүсгэх" : "Хадгалах"}
+            {saveLabel}
           </Button>
         </div>
       </header>
@@ -396,7 +409,7 @@ export function TripEditor(props: TripEditorProps) {
 
         <div ref={contentRef} className="scroll-area min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-8 sm:py-8">
-            <div className="mb-6 md:hidden">
+            <div className={cx("mb-6 md:hidden", draftMode && "hidden")}>
               <label htmlFor="trip-status-mobile" className="mb-1.5 block text-sm font-medium text-ink">Төлөв</label>
               <SelectInput id="trip-status-mobile" value={tripDraft.status} onChange={(e) => setTripDraft((d) => ({ ...d, status: e.target.value }))}>
                 {STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
@@ -429,7 +442,7 @@ export function TripEditor(props: TripEditorProps) {
                   Дараах: {next.label} <Icons.chevronRight size={15} />
                 </button>
               ) : (
-                <Button size="sm" disabled={locked} loading={saving} onClick={handleSave}><Icons.check size={15} />{isNewTrip ? "Аялал үүсгэх" : "Хадгалах"}</Button>
+                <Button size="sm" disabled={locked} loading={saving} onClick={handleSave}><Icons.check size={15} />{saveLabel}</Button>
               )}
             </div>
           </div>
@@ -449,7 +462,7 @@ export function TripEditor(props: TripEditorProps) {
           </>
         }
       >
-        <p className="text-sm text-ink-muted">Өөрчлөлтөө үлдээхийг хүсвэл буцаж очоод «{isNewTrip ? "Аялал үүсгэх" : "Хадгалах"}» дарна уу.</p>
+        <p className="text-sm text-ink-muted">Өөрчлөлтөө үлдээхийг хүсвэл буцаж очоод «{saveLabel}» дарна уу.</p>
       </Modal>
     </div>
   );

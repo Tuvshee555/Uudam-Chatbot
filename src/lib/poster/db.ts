@@ -13,6 +13,7 @@ import { materializePoster } from "@/lib/websiteTripSync";
 import { getPosterPdfPublicUrl } from "./pdfUrl";
 import { POSTER_PHOTO_COUNT_SQL } from "./photoCount";
 import { normalizePosterPriceTable } from "./priceTableNormalize";
+import { splitPackagedHotelRows } from "./packageRows";
 import {
   INCOMPLETE_REVIEW_PREFIX,
   blockingGaps,
@@ -180,6 +181,8 @@ function posterItineraryDays(data: Record<string, unknown>): Record<string, unkn
       const description = typeof day.summary === "string" ? day.summary.trim() : "";
       const hotel = typeof day.hotel === "string" ? day.hotel.trim() : "";
       const meals = day.meals && typeof day.meals === "object" ? day.meals : undefined;
+      // Where and what the meals are; a poster save used to drop the chatbot's notes.
+      const mealNote = typeof day.meal_note === "string" ? day.meal_note.trim() : "";
       // The day's photo travels with it so the chatbot's trip editor can show it.
       const photo = typeof day.photo === "string" && /^https:\/\//.test(day.photo) ? day.photo : "";
       if (!title && !description && !hotel) return null;
@@ -189,6 +192,7 @@ function posterItineraryDays(data: Record<string, unknown>): Record<string, unkn
         description,
         ...(hotel ? { hotel } : {}),
         ...(meals ? { meals } : {}),
+        ...(mealNote ? { meal_note: mealNote } : {}),
         ...(photo ? { photo } : {}),
       };
     })
@@ -240,6 +244,10 @@ async function syncPosterTrip(row: {
   const targetId = linked?.rows[0]?.id || linkedTripId(row.id);
   const existing = await getTripById(targetId);
   const existingExtra = (existing?.extra || {}) as Record<string, unknown>;
+  // "Hotel · Package" poster cells go back to the trip as a hotel and a package.
+  if (Array.isArray(fields.extra?.price_groups)) {
+    fields.extra = { ...fields.extra, price_groups: splitPackagedHotelRows(fields.extra.price_groups as Array<Record<string, unknown>>, existingExtra) };
+  }
   const preservedPdfUrl =
     typeof existingExtra.brochure_pdf_url === "string" ? existingExtra.brochure_pdf_url : "";
   const preservedAttachmentId =

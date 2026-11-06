@@ -114,6 +114,7 @@ export function verifyTripReply(input: {
   let date = selection?.date || null;
   let hotel = selection?.hotel || null;
   let packageId = selection?.package || null;
+  let packageFromLine = false;
   // A header listing several departures ("12/19, 12/22:") scopes the fare lines under it.
   let dateSet: string[] = [];
   for (const line of checked.split(/\r?\n|[|;]/)) {
@@ -123,6 +124,7 @@ export function verifyTripReply(input: {
       date = selection?.tripId === named[0].id ? selection.date : null;
       hotel = selection?.tripId === named[0].id ? selection.hotel : null;
       packageId = selection?.tripId === named[0].id ? selection.package || null : null;
+      packageFromLine = false;
       dateSet = [];
     }
     if (isReferReply(guardInventedBookingTerms(line, "", active))) return "REFER";
@@ -132,11 +134,17 @@ export function verifyTripReply(input: {
     const hotels = active.flatMap((trip) => normalizeTripOffers(trip, now).map((offer) => offer.hotel))
       .filter((value): value is string => Boolean(value)).sort((a, b) => b.length - a.length);
     const mentioned = hotels.find((value) => line.toLowerCase().includes(value.toLowerCase()));
+    // A newly named hotel starts its own block: a package an earlier line of this reply named
+    // belongs to the previous hotel, not this one (the customer's own choice still holds).
+    if (mentioned && packageFromLine && mentioned !== hotel) {
+      packageId = selection?.package || null;
+      packageFromLine = false;
+    }
     if (mentioned) hotel = mentioned;
     const packages = active.flatMap((trip) => normalizeTripOffers(trip, now).map((offer) => offer.packageId))
       .filter((value): value is string => Boolean(value)).sort((a, b) => b.length - a.length);
     const mentionedPackage = packages.find((value) => line.toLowerCase().includes(value.toLowerCase()));
-    if (mentionedPackage) packageId = mentionedPackage;
+    if (mentionedPackage) { packageId = mentionedPackage; packageFromLine = true; }
     for (const fragment of line.split(/(?=том\s*хүн|насанд\s*хүрэгч|adult|нярай|infant|хүүх(?:эд|дийн)|child)/i)) {
       const kind = /том\s*хүн|насанд\s*хүрэгч|adult/i.test(fragment) ? "adult" : /нярай|infant/i.test(fragment) ? "infant" : /хүүх(?:эд|дийн)|child/i.test(fragment) ? "child" : null;
       const amounts = [...fragment.matchAll(AMOUNT)].map((match) => Number(match[1].replace(/[.,]/g, "")));

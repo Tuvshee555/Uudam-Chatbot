@@ -606,18 +606,22 @@ export default function Poster({
                     ) : null}
 
                     {d.show_meals !== false ? (
-                      <div className="mealgrid">
+                      // A meal the program does not state (null) prints nothing on the brochure: printed as
+                      // "Багтаагүй" it said "not included" where the website and the bot say nothing.
+                      <div className={"mealgrid" + (MEAL_LABELS.every(([k]) => d.meals?.[k] == null) ? " editor-only" : "")}>
                         {MEAL_LABELS.map(([k, label]) => {
                           const on = d.meals?.[k];
+                          const stated = on === true || on === false;
                           return (
                             <button
                               key={k}
                               type="button"
-                              className={"mealcard " + (on ? "yes" : "no")}
-                              onClick={() => upd(["days", i, "meals", k], !on)}
+                              className={"mealcard " + (on === true ? "yes" : "no") + (stated ? "" : " editor-only")}
+                              // The trip editor's cycle: not stated → included → not included → included.
+                              onClick={() => upd(["days", i, "meals", k], on !== true)}
                             >
                               <span className="mealname">{label}</span>
-                              <span className="mealstate">{on ? "Багтсан" : "Багтаагүй"}</span>
+                              <span className="mealstate">{on === true ? "Багтсан" : on === false ? "Багтаагүй" : "Дурдаагүй"}</span>
                             </button>
                           );
                         })}

@@ -49,8 +49,9 @@ test("a hotel question gets the hotels by itinerary day, never an airport", () =
   const t = trip({ extra: { itinerary_days: [
     { day: 1, hotel: "Alpha Bay" }, { day: 2, hotel: "Alpha Bay" }, { day: 3, hotel: "Delta Cove" }, { day: 4, hotel: "Alpha Bay" }, { day: 5 },
   ] } });
+  // An en dash: "1-2, 4-р өдөр" reads as the departure 1/2 to the reply checker.
   assert.equal(buildHotelReply(t, "ямар буудалд буудаллах вэ"),
-    "🏨 Вэлмор – Кардан аялал — буудал:\n• 1-2, 4-р өдөр: Alpha Bay\n• 3-р өдөр: Delta Cove");
+    "🏨 Вэлмор – Кардан аялал — буудал:\n• 1–2, 4-р өдөр: Alpha Bay\n• 3-р өдөр: Delta Cove");
   assert.equal(isHotelQuestion("нисэх буудлаас хэдэн цагт гарах вэ"), false);
   assert.equal(isHotelQuestion("buudliin medeelel"), true);
 });

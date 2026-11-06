@@ -10,9 +10,10 @@
  * "Хоол: Багтсан", and whatever the admin corrected was dropped at save.
  */
 import { resolveDepartureDatesAtWrite } from "./travelDates";
+import { renamePricingDate, type PricingGroup } from "./adminDatePricing";
 import { itineraryEndsInUlaanbaatar, itineraryStartsInUlaanbaatar } from "./tripItineraryBoundaries";
 import {
-  TRANSPORT_WEBSITE_TAGS, durationForDays, isTransitDay, isTransportType, withStandardTransitDays,
+  durationForDays, isTransitDay, isTransportType, withStandardTransitDays,
   type ItineraryDay, type TransportType,
 } from "./tripTransitDays";
 
@@ -145,6 +146,21 @@ export function setDepartureDays(fields: Row, days: string[], now = new Date()):
   return { ...fields, departure_dates: [...Array.from(kept).sort(), ...other], ...(fields.extra ? { extra } : {}) };
 }
 
+/**
+ * One departure moved to another day (the file's border day → the evening the UB train leaves).
+ * Its price rows move with it. Through setDepartureDays the old day's row was dropped as
+ * "removed" and the new day had no fare, so a neighbour's price became the trip's price.
+ */
+export function shiftDepartureDay(fields: Row, from: string, to: string, now = new Date()): Row {
+  const extra = { ...record(fields.extra) };
+  for (const key of ["price_groups", "departure_date_groups"]) {
+    if (Array.isArray(extra[key])) extra[key] = renamePricingDate(extra[key] as PricingGroup[], from, to);
+  }
+  const { days, other } = departureDays(fields.departure_dates, now);
+  const moved = [...new Set(days.map((day) => (day === from ? to : day)))].sort();
+  return { ...fields, departure_dates: [...moved, ...other], ...(fields.extra ? { extra } : {}) };
+}
+
 /** The calendar day written beside a program day ("11/22", "11 сарын 22"), read in the year of the departure it follows. */
 export function programDayDate(written: unknown, departure: string): string | null {
   const source = text(written);
@@ -238,7 +254,9 @@ export function applyTransport(fields: Row, transport: TransportType): { fields:
       itinerary_days: built.days,
       transport_type: transport,
       program_duration_text: programDuration,
-      website_details_patch: { base: record(patch.base), values: { ...record(patch.values), transport: TRANSPORT_WEBSITE_TAGS[transport] } },
+      // The website's transport tags now follow transport_type through the sync. Writing them here as a
+      // manual website override pinned them: a later change of transport never reached the site.
+      ...(Object.keys(record(patch.values)).length ? { website_details_patch: { base: record(patch.base), values: withoutKey(record(patch.values), "transport") } } : {}),
       ...(duration ? { duration_days: duration.duration_days, duration_nights: duration.duration_nights } : programDurationParts(programDuration, built.days.length)),
     },
     duration_text: duration ? duration.duration_text : programDuration || durationForDays(built.days.length).duration_text,
@@ -253,6 +271,12 @@ function programDurationParts(written: string, dayCount: number): { duration_day
   const duration_days = days ? Number(days[1]) : fallback.duration_days;
   const duration_nights = nights ? Number(nights[1]) : Math.max(0, duration_days - 1);
   return { duration_days, duration_nights: Math.min(duration_nights, Math.max(0, duration_days - 1)) };
+}
+
+function withoutKey(row: Row, key: string): Row {
+  const { [key]: _drop, ...rest } = row;
+  void _drop;
+  return rest;
 }
 
 export function transportOf(fields: Row): TransportType | null {
@@ -288,8 +312,20 @@ export function checkDuration(fields: Row): DurationCheck {
  */
 export function setProgramDays(fields: Row, days: ItineraryDay[]): Row {
   const before = itineraryOf(fields).length;
-  const next: Row = { ...fields, extra: { ...record(fields.extra), itinerary_days: days } };
-  return days.length && days.length !== before ? withProgramDuration(next) : next;
+  const renumbered = days.map((day, index) => ({ ...day, day: index + 1 }));
+  const next: Row = { ...fields, extra: { ...record(fields.extra), itinerary_days: renumbered } };
+  if (!renumbered.length || renumbered.length === before) return next;
+  // Days and nights move together: a hand-set "9 өдөр 7 шөнө" plus one day is "10 өдөр 8 шөнө", not 10/9.
+  const delta = renumbered.length - before;
+  const nightsMatch = /(\d+)\s*шөнө/i.exec(text(fields.duration_text));
+  // Never as many nights as days: the save refuses it and the bot drops the nights.
+  const nights = nightsMatch ? Math.max(0, Math.min(Number(nightsMatch[1]) + delta, renumbered.length - 1)) : renumbered.length - 1;
+  const programDays = renumbered.filter((day) => !isTransitDay(day)).length;
+  return {
+    ...next,
+    duration_text: `${renumbered.length} өдөр ${nights} шөнө`,
+    extra: { ...record(next.extra), duration_days: renumbered.length, duration_nights: nights, program_duration_text: durationForDays(programDays).duration_text },
+  };
 }
 
 /** The trip with its length taken from the days of its program (the answer to a duration mismatch). */
@@ -457,7 +493,9 @@ export function reviewedFields(fields: Row, mode: "draft" | "publish", now = new
   const days = itineraryOf(next).map((day) => ({ ...day, meals: dayMeals(day), ...(text(day.meal_note) ? { meal_note: text(day.meal_note) } : {}) }));
   if (days.length) {
     next.extra = { ...record(next.extra), itinerary_days: days };
-    next.has_food = deriveHasFood(days);
+    // The days decide when they state meals; otherwise a general "meals included" the admin chose stays.
+    const derived = deriveHasFood(days);
+    if (derived !== null || fields.has_food == null) next.has_food = derived;
   }
   // Per-date fares carry the same calendar days as the trip, so a fare never points at another year.
   const extra = record(next.extra);

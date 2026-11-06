@@ -8,20 +8,35 @@
  * bot's own answer and the customer got silence: 75 of 233 answers for 12 of
  * 32 live trips on 2026-10-10. This block reads only the resolver, so what it
  * prints is, by construction, what the checker believes.
+ *
+ * Two labels are added beside the resolver's fares (2026-11-05), neither of them
+ * a new number: a row's single supplement (the resolver's own supplemental fare,
+ * which the checker accepts) and the condition a passenger label states when it
+ * is not an age ("1,2–1,4 м", "оргүй"), read from the raw row only to name a
+ * fare the resolver already priced.
  */
 import type { TravelTrip } from "./travelTypes";
 import { parseDepartureDateText } from "./travelDates";
+import { passengerLabelCondition } from "./passengerCondition";
 import { tripSupportsDate } from "./tripFacts";
 import { lowSeatDates } from "./departureAvailability";
-import { normalizeTripOffers, resolveTripOffer, resolveTripOfferFareCard, type NormalizedPassengerFare, type OfferFare, type PassengerKind } from "./tripOffers";
+import { normalizeTripOffers, renderTripOfferReply, resolveTripOffer, resolveTripOfferFareCard, type NormalizedPassengerFare, type OfferFare, type PassengerKind, type ResolvedTripOffer, type TripOfferResult, type TripOfferSelection } from "./tripOffers";
 
 const ORDER: PassengerKind[] = ["adult", "child", "infant"];
 const LABEL: Record<PassengerKind, string> = { adult: "Том хүн", child: "Хүүхэд", infant: "Нярай" };
 // A departure that is not on sale is not offered at any price.
 const NOT_ON_SALE = new Set(["sold_out", "paused", "cancelled", "unavailable", "departed"]);
 const MAX_PRICE_GROUPS = 3;
+/** The website's and the AI catalogue's own words for a price row's single_price. */
+export const SINGLE_FARE_LABEL = "Ганцаараа явах (өрөөндөө ганцаараа)";
 
-export type FareGroup = { dates: string[]; lines: string[] };
+/**
+ * Departures with identical passenger fares. `lines` are only those fares (and the
+ * hotel/package heading), so dates differing only by single supplement stay one group;
+ * `singles` holds each supplement with the dates it applies to.
+ */
+export type FareGroup = { dates: string[]; lines: string[]; singles?: Array<{ price: string; dates: string[] }> };
+type Row = Record<string, unknown>;
 
 function money(fare: OfferFare, currency: string): string | null {
   const fmt = (n: number) => `${n.toLocaleString("en-US")}${currency === "MNT" ? "₮" : ` ${currency}`}`;
@@ -35,21 +50,154 @@ function bandStart(fare: NormalizedPassengerFare): number {
   return fare.ageBand?.unit === "month" ? fare.ageBand.min : fare.ageBand?.unit === "birth_year" ? -fare.ageBand.max : 0;
 }
 
+const rowsOf = (value: unknown): Row[] => Array.isArray(value)
+  ? value.filter((item): item is Row => Boolean(item && typeof item === "object" && !Array.isArray(item))) : [];
+const textOf = (value: unknown): string => typeof value === "string" ? value.trim() : "";
+
+function fareKey(fare: OfferFare): string | null {
+  if (fare.kind === "exact") return `exact:${fare.amount}`;
+  if (fare.kind === "free") return "free";
+  if (fare.kind === "range") return `range:${fare.min}-${fare.max}`;
+  return null;
+}
+
+/** The fare a raw passenger row states, keyed like fareKey (the resolver's money() reading). */
+function rawFareKey(entry: Row): string | null {
+  const amount = entry.price ?? entry.amount;
+  const range = entry.price_range && typeof entry.price_range === "object" ? entry.price_range as Row : null;
+  if (range && typeof range.min === "number" && typeof range.max === "number") return range.min === range.max ? `exact:${range.min}` : `range:${range.min}-${range.max}`;
+  if (typeof amount === "number" && amount > 0) return `exact:${amount}`;
+  if (amount === 0 && (entry.free === true || /үнэгүй|\bfree\b/i.test(textOf(entry.note)))) return "free";
+  return null;
+}
+
+/** The passenger kind the resolver reads from a row's kind/category/label (tripOffers passengerKind). */
+function rawKind(entry: Row): PassengerKind | null {
+  const label = (textOf(entry.kind) || textOf(entry.category) || textOf(entry.label)).toLowerCase().replace(/\s+/g, " ");
+  if (/adult|том хүн|насанд хүр/.test(label)) return "adult";
+  if (/infant|нярай/.test(label)) return "infant";
+  if (/child|хүүхэд/.test(label)) return "child";
+  return null;
+}
+
+const conditionCache = new WeakMap<TravelTrip, Map<string, Set<string>>>();
+
+/** Conditions written in passenger labels that carry no age_range, by "<kind>|<fare>". */
+function passengerConditions(trip: TravelTrip): Map<string, Set<string>> {
+  const cached = conditionCache.get(trip);
+  if (cached) return cached;
+  const extra = (trip.extra || {}) as Row;
+  const conditions = new Map<string, Set<string>>();
+  const groups = [extra, ...rowsOf(extra.departure_date_groups), ...rowsOf(extra.price_groups), ...rowsOf(extra.discounts), ...rowsOf(extra.discount_groups)];
+  for (const group of groups) {
+    for (const entry of [...rowsOf(group.passenger_prices), ...rowsOf(group.child_rules), ...rowsOf(group.child_price_rules)]) {
+      if (textOf(entry.age_range)) continue;
+      const kind = rawKind(entry);
+      const fare = rawFareKey(entry);
+      if (!kind || !fare) continue;
+      const condition = passengerLabelCondition(textOf(entry.label), kind);
+      const key = `${kind}|${fare}`;
+      // A bare "Хүүхэд" row at the same fare makes the condition uncertain for that fare.
+      conditions.set(key, new Set([...(conditions.get(key) || []), condition || ""]));
+    }
+  }
+  conditionCache.set(trip, conditions);
+  return conditions;
+}
+
+/**
+ * The condition of a passenger fare whose label is not an age ("1,2–1,4 м", "оргүй").
+ * The resolver keeps only age_range, so such a fare printed as a bare "• Хүүхэд: …"
+ * and read as every child's price. Null unless exactly one condition is written
+ * for that kind at that fare. A condition the resolver itself carries wins.
+ */
+export function fareCondition(trip: TravelTrip, fare: Pick<NormalizedPassengerFare, "kind" | "ageRange" | "fare" | "priority"> & { condition?: string | null }): string | null {
+  // What the label says beside its age ("6-11 нас оргүй") is the resolver's to read.
+  if (typeof fare.condition === "string" && fare.condition) return fare.condition;
+  if (fare.ageRange || fare.priority <= 0) return null;
+  const key = fareKey(fare.fare);
+  const found = key ? passengerConditions(trip).get(`${fare.kind}|${key}`) : undefined;
+  return found && found.size === 1 ? [...found][0] || null : null;
+}
+
 /** "• Хүүхэд /2-11 нас/: 2,490,000₮" lines, one per distinct fare, adults first. */
-export function fareLines(fares: NormalizedPassengerFare[], currency: string): string[] {
+export function fareLines(fares: NormalizedPassengerFare[], currency: string, trip?: TravelTrip): string[] {
   const seen = new Set<string>();
   const lines: string[] = [];
   for (const kind of ORDER) {
     for (const fare of fares.filter((f) => f.kind === kind).sort((a, b) => bandStart(a) - bandStart(b))) {
       const price = money(fare.fare, fare.currency || currency);
       if (!price) continue;
-      // The adult band ("12+ нас") is implied by "Том хүн"; others name their band.
-      const band = kind !== "adult" && fare.ageRange ? ` /${fare.ageRange}/` : "";
+      // The adult band ("12+ нас") is implied by "Том хүн"; others name their band,
+      // or the condition their label states when it is not an age.
+      const condition = trip ? fareCondition(trip, fare) : null;
+      const scope = [kind !== "adult" ? fare.ageRange : "", condition].filter(Boolean).join(", ");
+      const band = scope ? ` /${scope}/` : "";
       const line = `• ${LABEL[kind]}${band}: ${price}`;
       if (!seen.has(line)) { seen.add(line); lines.push(line); }
     }
   }
   return lines;
+}
+
+/**
+ * The price row's single_price for this resolved offer ("1,111,111₮"), read from the
+ * rows the offer's fares came from, so a hotel's own supplement is printed under
+ * that hotel. The reply checker accepts the same rows' supplemental fares (tripFacts
+ * quotablePrices). Null when none, or when the rows disagree.
+ */
+function singleFarePrice(trip: TravelTrip, offer: Pick<ResolvedTripOffer, "id" | "sourceOfferIds" | "currency">, now: Date): string | null {
+  const ids = new Set([offer.id, ...offer.sourceOfferIds]);
+  const sources = normalizeTripOffers(trip, now).filter((source) => ids.has(source.id) && source.source !== "discount");
+  // A row's own supplement wins over one written on the whole trip.
+  const ranked = [sources.filter((source) => source.source !== "base"), sources.filter((source) => source.source === "base")];
+  for (const group of ranked) {
+    const prices = [...new Set(group.flatMap((source) => source.supplementalFares.filter((fare) => fare.label === "single"))
+      .map((fare) => money(fare.fare, fare.currency || offer.currency)).filter((price): price is string => Boolean(price) && price !== "Үнэгүй"))];
+    if (prices.length === 1) return prices[0];
+    if (prices.length > 1) return null;
+  }
+  return null;
+}
+
+/**
+ * A group's single supplement lines, after its passenger fares: one line when every date
+ * of the group has the same supplement, else one line per supplement naming its dates
+ * ("• Ганцаараа явах … — 12/2: 1,111,111₮"), as the website's room prices do.
+ */
+function singleLines(group: FareGroup, now: Date): string[] {
+  const singles = group.singles || [];
+  if (singles.length === 1 && singles[0].dates.length === group.dates.length) return [`• ${SINGLE_FARE_LABEL}: ${singles[0].price}`];
+  // The nearest dates' supplements only: one that changes every date made each of a 4-variant
+  // card's blocks 16 lines long, several Messenger messages for one card.
+  const nearest = [...singles].sort((a, b) => [...a.dates].sort()[0].localeCompare([...b.dates].sort()[0])).slice(0, MAX_SINGLE_LINES);
+  const lines = nearest.map((single) => `• ${SINGLE_FARE_LABEL} — ${single.dates.map((date) => shortDate(date, now)).join(", ")}: ${single.price}`);
+  return singles.length > nearest.length ? [...lines, "• Бусад өдрийн ганцаараа явах үнийг өдрөө бичвэл хэлье."] : lines;
+}
+const MAX_SINGLE_LINES = 2;
+
+/**
+ * renderTripOfferReply, with the condition of a passenger fare whose label is not an
+ * age ("Хүүхэд (1,2–1,4 м): …"), the same condition the trip card prints.
+ */
+export function renderOfferReplyWithConditions(trip: TravelTrip, result: TripOfferResult, options: Parameters<typeof renderTripOfferReply>[1] = {}): string | null {
+  const reply = renderTripOfferReply(result, options);
+  if (!reply || result.status !== "ready") return reply;
+  const conditioned = result.offer.fares.flatMap((fare) => {
+    const condition = fareCondition(trip, fare);
+    return condition ? [{ fare, condition }] : [];
+  });
+  if (!conditioned.length) return reply;
+  return reply.split("\n").map((line) => {
+    const match = /^(Том хүн|Хүүхэд|Нярай)((?: x \d+)?): (.+)$/u.exec(line);
+    if (!match) return line;
+    const amounts = (match[3].match(/\d[\d\s,.  ]*/g) || []).map((part) => Number(part.replace(/\D/g, ""))).filter((n) => n > 0);
+    const hit = conditioned.filter(({ fare }) => LABEL[fare.kind] === match[1] && (fare.fare.kind === "free" ? /Үнэгүй/.test(match[3])
+      : fare.fare.kind === "exact" ? amounts.length === 1 && amounts[0] === fare.fare.amount
+        : fare.fare.kind === "range" && amounts.length === 2 && amounts[0] === fare.fare.min && amounts[1] === fare.fare.max));
+    const conditions = [...new Set(hit.map(({ condition }) => condition))];
+    return conditions.length === 1 ? `${match[1]} (${conditions[0]})${match[2]}: ${match[3]}` : line;
+  }).join("\n");
 }
 
 /** "10/13"; a date a year or more away keeps its year ("2027.10.13") so it cannot be read as the nearer one. */
@@ -125,6 +273,7 @@ export function tripsAtPrice(trips: TravelTrip[], price: number, now = new Date(
     let label = "";
     const dates: string[] = [];
     for (const group of groups) {
+      // Passenger fares only: a single supplement (group.singles) is never "a trip at this price".
       const line = group.lines.find((entry) => entry.startsWith("• ") && entry.endsWith(`: ${amount}`));
       if (!line) continue;
       label ||= line.slice(2, line.lastIndexOf(":"));
@@ -166,9 +315,13 @@ export function buildFarePriceLines(trip: TravelTrip, now = new Date()): { lines
   const lines = ["💰 Үнэ:"];
   // The nearest prices only: a trip sold per hotel on 16 dates made a card
   // longer than one Messenger message. Later dates are listed below.
-  const shown = groups.slice(0, MAX_PRICE_GROUPS);
-  if (shown.length === 1) lines.push(...shown[0].lines);
-  else for (const group of shown) lines.push("", `${dateList(group.dates, trip, now)}:`, ...group.lines);
+  const shown = shownFareGroups(groups);
+  if (shown.length === 1) lines.push(...shown[0].lines, ...singleLines(shown[0], now));
+  else shown.forEach((group, index) => {
+    // Hotels and packages of the same dates share one date heading.
+    const sameDates = index > 0 && shown[index - 1].dates.join(",") === group.dates.join(",");
+    lines.push("", ...(sameDates ? [] : [`${dateList(group.dates, trip, now)}:`]), ...group.lines, ...singleLines(group, now));
+  });
   if (groups.length > shown.length) lines.push("", "Бусад гарах өдрийн үнийг хүсвэл өдрөө бичээрэй.");
   return { lines, onSale: [...new Set(groups.flatMap((group) => group.dates))].sort() };
 }
@@ -182,35 +335,77 @@ export function buildFareSection(trip: TravelTrip, now = new Date()): string[] |
   return [...block.lines, "", "📅 Гарах өдрүүд:", dateList(onSale.slice(0, 10), trip, now) + (onSale.length > 10 ? " …" : "")];
 }
 
+type FareVariant = { lines: string[]; single: string | null };
+
 /**
- * Upcoming departures that are on sale, grouped by identical fares, in date
- * order. A date sold per hotel gives one group per hotel, headed "Буудал: …".
+ * Upcoming departures that are on sale, grouped by identical passenger fares, in
+ * date order. A date sold per hotel gives one group per hotel, headed "Буудал: …".
+ * The single supplement is kept beside the group, not in its key: two dates at one
+ * fare with different supplements split into two groups, and the trip card took
+ * that for a fare table and dropped its prices (2026-11-05 review).
  */
 export function onSaleFareGroups(trip: TravelTrip, dates: string[], now = new Date()): FareGroup[] {
   const groups: FareGroup[] = [];
-  const add = (date: string, lines: string[]) => {
-    const same = groups.find((group) => group.lines.join("|") === lines.join("|"));
+  const add = (date: string, { lines, single }: FareVariant) => {
+    let group = groups.find((entry) => entry.lines.join("|") === lines.join("|"));
+    if (group) group.dates.push(date);
+    else groups.push(group = { dates: [date], lines, singles: [] });
+    if (!single) return;
+    const same = group.singles!.find((entry) => entry.price === single);
     if (same) same.dates.push(date);
-    else groups.push({ dates: [date], lines });
+    else group.singles!.push({ price: single, dates: [date] });
   };
   for (const date of dates) {
     const sale = resolveTripOffer(trip, { date }, now);
     if (sale.status === "unavailable" && NOT_ON_SALE.has(sale.reason)) continue;
-    const card = resolveTripOfferFareCard(trip, { date }, now);
-    if (card.status === "ready") {
-      const lines = fareLines(card.offer.fares, card.offer.currency);
-      if (lines.length) add(date, lines);
-    } else if (card.status === "needs_selection" && card.fields.includes("hotel")) {
-      for (const hotel of card.options) {
-        // A hotel can be full while the date still sells at another one.
-        const hotelSale = resolveTripOffer(trip, { date, hotel }, now);
-        if (hotelSale.status === "unavailable" && NOT_ON_SALE.has(hotelSale.reason)) continue;
-        const byHotel = resolveTripOfferFareCard(trip, { date, hotel }, now);
-        if (byHotel.status !== "ready") continue;
-        const lines = fareLines(byHotel.offer.fares, byHotel.offer.currency);
-        if (lines.length) add(date, [`Буудал: ${hotel}`, ...lines]);
-      }
-    }
+    for (const variant of dateVariants(trip, date, {}, [], now)) add(date, variant);
   }
   return groups;
+}
+
+/**
+ * One date's fare lines per hotel and package, headed "Буудал: …" / "Багц: …". The resolver
+ * asks hotel then package (or package then hotel); each choice is followed at most two levels
+ * deep. A hotel or package that is full is left out while the date still sells another one.
+ */
+function dateVariants(trip: TravelTrip, date: string, selection: TripOfferSelection, heading: string[], now: Date): FareVariant[] {
+  const card = resolveTripOfferFareCard(trip, { ...selection, date }, now);
+  if (card.status === "ready") {
+    const lines = fareLines(card.offer.fares, card.offer.currency, trip);
+    // A hotel sold in one package resolves without being asked for it: still name the package,
+    // or the block reads (to a customer and to the reply checker) as the previous block's package.
+    const named = card.offer.packageId && heading.length && !heading.some((line) => line.startsWith("Багц: "))
+      ? [...heading, `Багц: ${card.offer.packageId}`] : heading;
+    // Each hotel's (and package's) own single supplement sits under it.
+    return lines.length ? [{ lines: [...named, ...lines], single: singleFarePrice(trip, card.offer, now) }] : [];
+  }
+  if (card.status !== "needs_selection" || heading.length >= 2) return [];
+  const field = card.fields.includes("hotel") ? "hotel" : card.fields.includes("package") ? "package" : null;
+  if (!field) return [];
+  return card.options.flatMap((option) => {
+    const next: TripOfferSelection = field === "hotel" ? { ...selection, hotel: option } : { ...selection, packageId: option };
+    const sale = resolveTripOffer(trip, { ...next, date }, now);
+    if (sale.status === "unavailable" && NOT_ON_SALE.has(sale.reason)) return [];
+    return dateVariants(trip, date, next, [...heading, field === "hotel" ? `Буудал: ${option}` : `Багц: ${option}`], now);
+  });
+}
+
+/**
+ * The groups a card prints: every hotel/package of the nearest date (a 2 hotels × 2 packages
+ * trip has four, and a cap of three hid the fourth), then the next ones up to MAX_PRICE_GROUPS.
+ */
+function shownFareGroups(groups: FareGroup[]): FareGroup[] {
+  if (!groups.length) return groups;
+  const dates = [...new Set(groups.flatMap((group) => group.dates))].sort();
+  const nearest = groups.filter((group) => group.dates.includes(dates[0]));
+  const cap = Math.max(MAX_PRICE_GROUPS, nearest.length);
+  const picked = new Set(nearest);
+  // Whole dates only: a date whose hotels/packages do not all fit is left for "Бусад гарах өдөр…",
+  // never shown with one of its packages missing.
+  for (const date of dates.slice(1)) {
+    const missing = groups.filter((group) => group.dates.includes(date) && !picked.has(group));
+    if (picked.size + missing.length > cap) break;
+    missing.forEach((group) => picked.add(group));
+  }
+  return groups.filter((group) => picked.has(group));
 }

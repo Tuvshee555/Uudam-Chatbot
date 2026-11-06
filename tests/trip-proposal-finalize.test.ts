@@ -61,7 +61,10 @@ test("a partner program from a file becomes a complete website trip: standard da
   assert.equal(days[0].title, STANDARD_DAYS.departure.title);
   assert.equal(days[4].title, STANDARD_DAYS.arrival.title);
   assert.deepEqual([extra.transport_type, fields.duration_text, extra.duration_days, extra.duration_nights], ["land_flight", "5 өдөр 4 шөнө", 5, 4]);
-  assert.deepEqual((extra.website_details_patch as { values: Record<string, unknown> }).values.transport, ["Галт тэрэг", "Онгоц"]);
+  // The website's transport tags follow transport_type through the sync; never pinned as a manual override.
+  assert.equal((extra.website_details_patch as { values?: Record<string, unknown> } | undefined)?.values?.transport, undefined);
+  const { websiteTransportTags } = await import("../src/lib/connectedTripMapping");
+  assert.deepEqual(websiteTransportTags(extra.transport_type), ["Галт тэрэг", "Онгоц"]);
   const choice = p.conflict_items!.find((item) => item.type === TRANSPORT_CHOICE);
   assert.deepEqual([choice?.severity, choice?.data?.route_name, choice?.data?.transport_type], ["info", ROUTE, "land_flight"]);
   assert.equal(p.needs_confirmation, true, "the admin sees the generated days before saving");
@@ -91,7 +94,9 @@ test("clicking another transport rebuilds the days and keeps the photos and cred
   const days = extra.itinerary_days as Array<Record<string, unknown>>;
   assert.equal(days.length, 3, "no train days on a flight");
   assert.equal(extra.transport_type, "direct_flight");
-  assert.deepEqual((extra.website_details_patch as { values: Record<string, unknown> }).values.transport, ["Онгоц"]);
+  assert.equal((extra.website_details_patch as { values?: Record<string, unknown> } | undefined)?.values?.transport, undefined);
+  const { websiteTransportTags } = await import("../src/lib/connectedTripMapping");
+  assert.deepEqual(websiteTransportTags(extra.transport_type), ["Онгоц"]);
   assert.equal(Object.keys(extra.photo_credits as object).length, 6, "credits carried over, nothing searched again");
   assert.ok(days.some((day) => typeof day.photo === "string"), "the day photo followed its day");
   assert.equal(applyTransportChoice("ямар нэг өөр хариулт", revised), false);

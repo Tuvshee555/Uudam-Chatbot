@@ -1407,7 +1407,7 @@ function formatTripBasePricePremiumCore(trip: TravelTrip, now = new Date()) {
       if (!priceLines.length) continue;
       const hotel = typeof g.hotel === "string" ? g.hotel.trim() : "";
       // A hotel sold as several packages: without the package name the card
-      // showed the same hotel twice at two prices (Санья, 2026-10-16).
+      // showed the same hotel twice at two prices (a partner trip, 2026-10-16).
       const packageId = typeof g.package_id === "string" ? g.package_id.trim() : "";
       const priceKey = `${hotel}|${packageId}|${priceLines.join("|")}`;
       const rawDates = getPriceGroupDisplayDates(g);

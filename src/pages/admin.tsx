@@ -1,6 +1,6 @@
 ﻿import Head from "next/head";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Badge, Button, Icons, Logo, Modal, useToast } from "@/components/ui";
+import { Alert, Badge, Button, Icons, Logo, useToast } from "@/components/ui";
 import { extractGoogleDriveFileIds } from "@/lib/googleDriveLinks";
 import { buildProposalClarifications } from "@/lib/adminProposalUtils";
 import { useProposalActions } from "@/components/admin/useProposalActions";
@@ -9,9 +9,6 @@ import { NewVersionBanner } from "@/components/admin/NewVersionBanner";
 import { AdminLoginGate, GOOGLE_LOGIN_ERRORS } from "@/components/admin/AdminLoginGate";
 import { AdminNavigation } from "@/components/admin/AdminNavigation";
 import { NAV_GROUPS } from "@/components/admin/AdminSidebarItem";
-import { websiteDetailsPatch } from "@/lib/websiteTripDetails";
-import { sameParityValue } from "@/lib/tripWebsiteParityValue";
-import { isTripListProjection } from "@/lib/tripListProjection";
 import { AssistantTab } from "@/components/admin/AssistantTab";
 import { AnalyticsTab } from "@/components/admin/AnalyticsTab";
 import { BotTab } from "@/components/admin/BotTab";
@@ -26,19 +23,14 @@ import { SettingsTab } from "@/components/admin/SettingsTab";
 import { TripsTab } from "@/components/admin/TripsTab";
 import { TripCalendarTab } from "@/components/admin/TripCalendarTab";
 import { TripEditModal } from "@/components/admin/TripEditModal";
+import { useTripEditor } from "@/components/admin/tripEditor/useTripEditor";
 import { JsonEditorTab } from "@/components/admin/JsonEditorTab";
 import { TripPhotoImportTab } from "@/components/admin/TripPhotoImportTab";
 import PosterTab from "@/components/admin/poster/PosterTab";
-import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
-import type { AIProposal, AIProposalResponse, AskMsg, AttachedFile, BookingTerms, ChatMessage, ControlState, DiscountGroup, DriveSyncDiagnostics, ExtraFee, ItineraryDay, LeadCrmStatus, LeadStats, PageControlState, ParseUploadUnit, PauseRow, PriceGroup, ProposalQuestionOption, ReadinessReport, RecentRow, RoomPrice, SettingsForm, TabKey, TravelBotSettings, TravelLead, TravelTrip } from "@/lib/adminTypes";
-import { emptyBookingTerms, toBookingTermsForm } from "@/lib/adminTypes";
-import { deriveChildRules, withDerivedSummaryFields } from "@/lib/priceGroups";
-import { documentedFreeFare } from "@/lib/tripCompleteness";
-import { resolveAgeRules } from "@/lib/ageRules";
+import type { AIProposal, AIProposalResponse, AskMsg, AttachedFile, ChatMessage, ControlState, DriveSyncDiagnostics, LeadCrmStatus, LeadStats, PageControlState, ParseUploadUnit, PauseRow, ProposalQuestionOption, ReadinessReport, RecentRow, SettingsForm, TabKey, TravelBotSettings, TravelLead, TravelTrip } from "@/lib/adminTypes";
 import type { LeadAttentionSummary } from "@/lib/leadAttention";
 import { changedSettingsFields } from "@/lib/adminPageUtils";
-import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, apiErrorMessage, asInt, buildImageUploadUnit, groupDocumentWithImages, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, emptyChunkResult, isStaleBundleError, STALE_BUNDLE_MESSAGE, fileToDataUrl, getSecretStorage, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, mergeAIProposals, settingsToForm, shortId, uid } from "@/lib/adminPageUtils";
-const BLANK_TRIP_DRAFT: Record<string, string> = { category: "Аялал", operator_name: "UUDAM TRAVEL AGENCY", route_name: "", duration_text: "", adult_price: "", child_price: "", infant_price: "", child_price_free: "", infant_price_free: "", age_infant: "0-23 сар", age_child: "2-11 нас", age_adult: "12+ нас", currency: "MNT", seats_total: "", seats_left: "", seats_percent_left: "", sale_badge_enabled: "false", sale_badge_label: "ХЯМДРАЛ", sale_badge_ends: "", departure_dates: "", status: "active", has_food: "unknown", notes: "", hotel: "", source_description: "" };
+import { ACCEPT_FILES, ADMIN_AUTO_REFRESH_MS, MAX_AI_INPUT_CHARS, MAX_PARSE_UPLOAD_BYTES, SECRET_KEY, SECRET_TS_KEY, SESSION_TTL_MS, apiErrorMessage, buildImageUploadUnit, groupDocumentWithImages, buildOfficeUploadUnits, buildPdfUploadUnits, buildTextUploadUnits, buildZipImageUploadUnits, dataUrlToText, delayMs, emptyChunkResult, isStaleBundleError, STALE_BUNDLE_MESSAGE, fileToDataUrl, getSecretStorage, isEditableElement, isImageFile, isOfficeDocFile, isPdfFile, isTextLikeFile, isTransientAiFailure, isZipFile, mergeAIProposals, settingsToForm, shortId, uid } from "@/lib/adminPageUtils";
 const MAX_AI_SOURCE_TEXT_CHARS = 20_000;
 const TRIP_DATA_TABS = new Set<TabKey>(["assistant", "trips", "calendar", "greeting", "photos"]);
 const SYSTEM_CHECK_INTERVAL_MS = 5 * 60_000;
@@ -108,35 +100,8 @@ export default function AdminPage() {
   const [aiBusyProgress, setAiBusyProgress] = useState<number | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(false);
-  const [editingTrip, setEditingTrip] = useState<TravelTrip | null>(null);
-  const [openingTripId, setOpeningTripId] = useState("");
-  const [isNewTrip, setIsNewTrip] = useState(false);
-  const [tripDraft, setTripDraft] = useState<Record<string, string>>(
-    BLANK_TRIP_DRAFT,
-  );
-  const [tripPhotoUrls, setTripPhotoUrls] = useState<string[]>([]);
-  const [tripPhotoInput, setTripPhotoInput] = useState("");
-  const [photoDragging, setPhotoDragging] = useState(false);
-  const [photoUploading, setPhotoUploading] = useState<string[]>([]); // track uploading file names
-  const [tripAliases, setTripAliases] = useState<string[]>([]);
-  const [tripPriceGroups, setTripPriceGroups] = useState<PriceGroup[]>([]);
-  const [tripDiscounts, setTripDiscounts] = useState<DiscountGroup[]>([]);
-  const [tripExtraFees, setTripExtraFees] = useState<ExtraFee[]>([]);
-  const [tripDepartureRule, setTripDepartureRule] = useState("");
-  const [tripIncludedItems, setTripIncludedItems] = useState<string[]>([]);
-  const [tripExcludedItems, setTripExcludedItems] = useState<string[]>([]);
-  const [tripRoomPrices, setTripRoomPrices] = useState<RoomPrice[]>([]);
-  const [tripItineraryDays, setTripItineraryDays] = useState<ItineraryDay[]>([]);
-  const [tripImportantNotes, setTripImportantNotes] = useState<string[]>([]);
-  const [tripBookingTerms, setTripBookingTerms] = useState<BookingTerms>(emptyBookingTerms());
-  const [tripCustomerVisible, setTripCustomerVisible] = useState<boolean>(true);
-  const [tripNeedsHumanReview, setTripNeedsHumanReview] = useState<boolean>(false);
-  const [tripReviewReasons, setTripReviewReasons] = useState<string[]>([]);
-  const [tripSourceProvenance, setTripSourceProvenance] = useState<import("@/lib/adminTypes").SourceProvenance[]>([]);
-  const [tripAnswerHints, setTripAnswerHints] = useState<import("@/lib/adminTypes").AnswerHint[]>([]);
   const [deletingTrip, setDeletingTrip] = useState<TravelTrip | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
-  const [photoReplaceConfirm, setPhotoReplaceConfirm] = useState<{ files: File[] } | null>(null);
   const [leads, setLeads] = useState<TravelLead[]>([]);
   const leadsRef = useRef<TravelLead[]>([]);
   const [leadsTotal, setLeadsTotal] = useState(0);
@@ -154,7 +119,6 @@ export default function AdminPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   // One id per page load: the server keeps this admin's assistant conversation (never shown here) and reads follow-ups against it.
   const assistantSession = useRef(uid());
-  const photoFileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const searchRef = useRef(search);
@@ -239,6 +203,12 @@ export default function AdminPage() {
     },
     [fetchWithAdmin, markAdminLocked, toast],
   );
+  // The trip editor: its state and open / save / photo-upload handlers (tripEditor/useTripEditor.tsx).
+  const tripEditor = useTripEditor({
+    apiFetch: fetchWithAdmin, readJsonSafe, onLocked: markAdminLocked, trips, setBusyKey,
+    onSaved: () => loadTrips(searchRef.current, statusFilterRef.current, { showLoading: true }),
+  });
+  const { editingTrip, isNewTrip, openingTripId, beginCreateTrip, beginEditTrip, openTripEditorForDraft, closeTripModal } = tripEditor;
   /** Every trip, unfiltered and unpaginated — for the full-catalogue export.
    *  Deliberately ignores search/status so the downloaded file is the whole
    *  catalogue regardless of what the screen is filtered to. */
@@ -1258,340 +1228,6 @@ export default function AdminPage() {
       setBusyKey("");
     }
   }
-  function beginCreateTrip() {
-    setIsNewTrip(true);
-    setEditingTrip(null);
-    setTripDraft({ ...BLANK_TRIP_DRAFT });
-    setTripPhotoUrls([]);
-    setTripPhotoInput("");
-    setTripAliases([]);
-    setTripPriceGroups([]);
-    setTripDiscounts([]);
-    setTripExtraFees([]);
-    setTripDepartureRule("");
-    setTripIncludedItems([]);
-    setTripExcludedItems([]);
-    setTripRoomPrices([]);
-    setTripItineraryDays([]);
-    setTripImportantNotes([]);
-    setTripBookingTerms(emptyBookingTerms());
-    setTripCustomerVisible(true);
-    setTripNeedsHumanReview(false);
-    setTripReviewReasons([]);
-    setTripSourceProvenance([]);
-    setTripAnswerHints([]);
-  }
-  /**
-   * Opens the editor on the trip as saved now. The list holds slim rows (no website copy,
-   * itinerary text or conflict history) that may also be a refresh old; editing from them
-   * would show empty fields and lead to avoidable "changed elsewhere" conflicts.
-   */
-  async function beginEditTrip(trip: TravelTrip) {
-    if (openingTripId) return;
-    setOpeningTripId(trip.id);
-    try {
-      const res = await fetchWithAdmin(`/api/admin/trips?id=${encodeURIComponent(trip.id)}`);
-      if (res.status === 401) {
-        markAdminLocked();
-        return;
-      }
-      const json = await readJsonSafe(res) as { trip?: TravelTrip; message?: string };
-      if (!res.ok || !json.trip) throw new Error(json.message || "Аяллыг нээж чадсангүй. Дахин оролдоно уу.");
-      openTripEditor(json.trip);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Аяллыг нээж чадсангүй. Дахин оролдоно уу.");
-    } finally {
-      setOpeningTripId("");
-    }
-  }
-  function openTripEditor(trip: TravelTrip) {
-    setIsNewTrip(false);
-    setEditingTrip(trip);
-    setTripDraft({
-      category: trip.category || "",
-      operator_name: trip.operator_name || "",
-      route_name: trip.route_name || "",
-      duration_text: trip.duration_text || "",
-      adult_price: trip.adult_price == null ? "" : String(trip.adult_price),
-      child_price: trip.child_price == null ? "" : String(trip.child_price),
-      infant_price: trip.infant_price == null ? "" : String(trip.infant_price),
-      child_price_free: documentedFreeFare((trip.extra || {}) as Record<string, unknown>, "child") ? "true" : "",
-      infant_price_free: documentedFreeFare((trip.extra || {}) as Record<string, unknown>, "infant") ? "true" : "",
-      age_infant: resolveAgeRules(trip.extra).infant,
-      age_child: resolveAgeRules(trip.extra).child,
-      age_adult: resolveAgeRules(trip.extra).adult,
-      currency: trip.currency || "MNT",
-      seats_total: trip.seats_total == null ? "" : String(trip.seats_total),
-      seats_left: trip.seats_left == null ? "" : String(trip.seats_left),
-      seats_percent_left:
-        typeof (trip.extra?.marketing_badge as Record<string, unknown> | undefined)?.seats_percent_left === "number"
-          ? String((trip.extra.marketing_badge as Record<string, unknown>).seats_percent_left)
-          : "",
-      sale_badge_enabled:
-        (trip.extra?.marketing_badge as Record<string, unknown> | undefined)?.sale_enabled === true ? "true" : "false",
-      sale_badge_label:
-        typeof (trip.extra?.marketing_badge as Record<string, unknown> | undefined)?.sale_label === "string"
-          ? String((trip.extra.marketing_badge as Record<string, unknown>).sale_label)
-          : "ХЯМДРАЛ",
-      sale_badge_ends:
-        typeof (trip.extra?.marketing_badge as Record<string, unknown> | undefined)?.sale_ends_at === "string"
-          ? String((trip.extra.marketing_badge as Record<string, unknown>).sale_ends_at)
-          : "",
-      departure_dates: (trip.departure_dates || []).join(", "),
-      status: trip.status || "active",
-      has_food:
-        trip.has_food == null ? "unknown" : trip.has_food ? "true" : "false",
-      notes: trip.notes || "",
-      hotel: trip.hotel || "",
-      source_description: trip.source_description || "",
-    });
-    setTripPhotoUrls(trip.photo_urls || []);
-    setTripPhotoInput("");
-    setTripAliases(Array.isArray(trip.extra?.aliases) ? (trip.extra.aliases as string[]) : []);
-    setTripPriceGroups(Array.isArray(trip.extra?.price_groups) ? (trip.extra.price_groups as PriceGroup[]) : []);
-    setTripDiscounts(Array.isArray(trip.extra?.discounts) ? (trip.extra.discounts as DiscountGroup[]) : []);
-    setTripExtraFees(Array.isArray(trip.extra?.extra_fees) ? (trip.extra.extra_fees as ExtraFee[]) : []);
-    setTripDepartureRule(typeof trip.extra?.departure_rule === "string" ? trip.extra.departure_rule : "");
-    setTripIncludedItems(Array.isArray(trip.extra?.included_items) ? (trip.extra.included_items as string[]) : []);
-    setTripExcludedItems(Array.isArray(trip.extra?.excluded_items) ? (trip.extra.excluded_items as string[]) : []);
-    setTripRoomPrices(Array.isArray(trip.extra?.room_prices) ? (trip.extra.room_prices as RoomPrice[]) : []);
-    setTripItineraryDays(Array.isArray(trip.extra?.itinerary_days) ? (trip.extra.itinerary_days as ItineraryDay[]) : []);
-    setTripImportantNotes(Array.isArray(trip.extra?.important_notes) ? (trip.extra.important_notes as string[]) : []);
-    setTripBookingTerms(toBookingTermsForm(trip.extra?.booking_terms));
-    setTripCustomerVisible(typeof trip.extra?.customer_visible === "boolean" ? trip.extra.customer_visible : true);
-    setTripNeedsHumanReview(typeof trip.extra?.needs_human_review === "boolean" ? trip.extra.needs_human_review : false);
-    setTripReviewReasons(Array.isArray(trip.extra?.review_reasons) ? (trip.extra.review_reasons as string[]) : []);
-    setTripSourceProvenance(Array.isArray(trip.extra?.source_provenance) ? (trip.extra.source_provenance as import("@/lib/adminTypes").SourceProvenance[]) : []);
-    setTripAnswerHints(Array.isArray(trip.extra?.answer_hints) ? (trip.extra.answer_hints as import("@/lib/adminTypes").AnswerHint[]) : []);
-  }
-  const tripModalOpen = isNewTrip || editingTrip != null;
-  async function doUploadPhotoFiles(files: File[], replace: boolean) {
-    if (replace) setTripPhotoUrls([]);
-
-    const baseCount = replace ? 0 : tripPhotoUrls.length;
-    const availableSlots = Math.max(0, MAX_PHOTOS_PER_TRIP - baseCount);
-    if (availableSlots === 0) {
-      toast.error(`Нэг аялалд хамгийн ихдээ ${MAX_PHOTOS_PER_TRIP} зураг хадгална.`);
-      return;
-    }
-
-    const fileArray = files.slice(0, availableSlots);
-    if (fileArray.length < files.length) {
-      toast.error(`Зургийн дээд тоо ${MAX_PHOTOS_PER_TRIP} тул үлдсэн файлуудыг алгаслаа.`);
-    }
-    if (fileArray.length === 0) return;
-
-    const newNames = fileArray.map((file) => file.name);
-    setPhotoUploading((prev) => [...prev, ...newNames]);
-
-    const removeUploadingName = (names: string[], target: string) => {
-      const index = names.indexOf(target);
-      if (index === -1) return names;
-      return [...names.slice(0, index), ...names.slice(index + 1)];
-    };
-
-    const uploadedUrls = (
-      await Promise.all(
-        fileArray.map(async (file) => {
-          try {
-            const sigRes = await fetchWithAdmin("/api/admin/upload-image", { method: "POST" });
-            if (!sigRes.ok) {
-              const sigJson = (await sigRes.json().catch(() => ({}))) as { error?: string };
-              throw new Error(sigJson?.error ?? "Зураг оруулах тохиргоо олдсонгүй.");
-            }
-            const sigData = (await sigRes.json()) as {
-              signature: string;
-              timestamp: number;
-              cloudName: string;
-              apiKey: string;
-              folder: string;
-            };
-            const formData = new FormData();
-            formData.append("file", file);
-            formData.append("api_key", sigData.apiKey);
-            formData.append("timestamp", String(sigData.timestamp));
-            formData.append("signature", sigData.signature);
-            formData.append("folder", sigData.folder);
-            const uploadRes = await fetch(
-              `https://api.cloudinary.com/v1_1/${sigData.cloudName}/image/upload`,
-              { method: "POST", body: formData },
-            );
-            const uploadJson = (await uploadRes.json()) as {
-              secure_url?: string;
-              error?: { message?: string };
-            };
-            if (!uploadRes.ok || !uploadJson.secure_url) {
-              throw new Error(uploadJson?.error?.message ?? "Cloudinary upload амжилтгүй.");
-            }
-            return uploadJson.secure_url;
-          } catch (err) {
-            toast.error(
-              `"${file.name}" зураг оруулж чадсангүй: ${err instanceof Error ? err.message : "алдаа"}`,
-            );
-            return null;
-          } finally {
-            setPhotoUploading((prev) => removeUploadingName(prev, file.name));
-          }
-        }),
-      )
-    ).filter((url): url is string => Boolean(url));
-
-    if (uploadedUrls.length > 0) {
-      setTripPhotoUrls((prev) => {
-        const base = replace ? [] : prev;
-        return [...base, ...uploadedUrls].slice(0, MAX_PHOTOS_PER_TRIP);
-      });
-    }
-  }
-  function handlePhotoFiles(files: FileList | File[]) {
-    const validFiles = Array.from(files).filter((file) => file.size <= 10 * 1024 * 1024);
-    if (validFiles.length < Array.from(files).length) {
-      toast.error("10MB-ээс том зураг оруулах боломжгүй.");
-    }
-    if (validFiles.length === 0) return;
-    if (tripPhotoUrls.length > 0) {
-      setPhotoReplaceConfirm({ files: validFiles });
-    } else {
-      void doUploadPhotoFiles(validFiles, false);
-    }
-  }
-  function closeTripModal() {
-    setEditingTrip(null);
-    setIsNewTrip(false);
-  }
-  /** confirmIncomplete is set once the editor's "save anyway" prompt is accepted. */
-  async function saveTrip(confirmIncomplete = false) {
-    if (photoUploading.length > 0) {
-      toast.error("Зураг байршуулж дуусаагүй байна. Дууссаны дараа хадгална уу.");
-      return;
-    }
-    // Defensive: the editor only ever opens on a full trip (beginEditTrip).
-    if (editingTrip && isTripListProjection(editingTrip)) {
-      toast.error("Аяллын бүрэн мэдээлэл ачаалагдаагүй байна. Цонхыг хаагаад дахин нээнэ үү.");
-      return;
-    }
-
-    const fields = {
-      category: tripDraft.category || "Аялал",
-      operator_name: tripDraft.operator_name || "UUDAM TRAVEL AGENCY",
-      route_name: tripDraft.route_name || "",
-      duration_text: tripDraft.duration_text || "",
-      adult_price: asInt(tripDraft.adult_price || ""),
-      child_price: asInt(tripDraft.child_price || ""),
-      infant_price: asInt(tripDraft.infant_price || ""),
-      currency: tripDraft.currency || "MNT",
-      seats_total: asInt(tripDraft.seats_total || ""),
-      seats_left: asInt(tripDraft.seats_left || ""),
-      status: tripDraft.status || "active",
-      has_food:
-        tripDraft.has_food === "unknown"
-          ? null
-          : tripDraft.has_food === "true",
-      notes: tripDraft.notes || "",
-      hotel: tripDraft.hotel || "",
-      departure_dates: (tripDraft.departure_dates || "")
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean),
-      source_description: tripDraft.source_description || "",
-      photo_urls: tripPhotoUrls,
-      extra: {
-        ...(tripDraft.websiteDetails && editingTrip ? { website_details_patch: websiteDetailsPatch(editingTrip.extra.website_details, JSON.parse(tripDraft.websiteDetails)) } : {}),
-        aliases: tripAliases.filter(Boolean),
-        price_groups: tripPriceGroups.map(withDerivedSummaryFields),
-        discounts: tripDiscounts,
-        child_rules: deriveChildRules(tripPriceGroups, {
-          child: tripDraft.child_price_free === "true",
-          infant: tripDraft.infant_price_free === "true",
-        }),
-        extra_fees: tripExtraFees,
-        departure_rule: tripDepartureRule.trim(),
-        included_items: tripIncludedItems.filter(Boolean),
-        excluded_items: tripExcludedItems.filter(Boolean),
-        room_prices: tripRoomPrices,
-        itinerary_days: tripItineraryDays,
-        important_notes: tripImportantNotes.filter(Boolean),
-        booking_terms: tripBookingTerms,
-        customer_visible: tripCustomerVisible,
-        needs_human_review: tripNeedsHumanReview,
-        review_reasons: tripReviewReasons.filter(Boolean),
-        source_provenance: tripSourceProvenance,
-        answer_hints: tripAnswerHints,
-        age_rules: {
-          infant: (tripDraft.age_infant || "").trim(),
-          child: (tripDraft.age_child || "").trim(),
-          adult: (tripDraft.age_adult || "").trim(),
-        },
-        marketing_badge: {
-          sale_enabled: tripDraft.sale_badge_enabled === "true",
-          sale_label: (tripDraft.sale_badge_label || "ХЯМДРАЛ").trim(),
-          sale_ends_at: /^\d{4}-\d{2}-\d{2}$/.test(tripDraft.sale_badge_ends || "") ? tripDraft.sale_badge_ends : null,
-          seats_percent_left: (() => {
-            const value = asInt(tripDraft.seats_percent_left || "");
-            return value == null ? null : Math.max(0, Math.min(100, value));
-          })(),
-        },
-      },
-    };
-    if (!fields.route_name.trim()) {
-      toast.error("Аяллын нэр оруулна уу.");
-      return;
-    }
-    if (isNewTrip) {
-      const duplicate = trips.find(
-        (t) =>
-          t.operator_name.trim().toLowerCase() ===
-            fields.operator_name.trim().toLowerCase() &&
-          t.route_name.trim().toLowerCase() ===
-            fields.route_name.trim().toLowerCase(),
-      );
-      if (duplicate) {
-        toast.error(
-          `"${fields.operator_name} — ${fields.route_name}" нэртэй аялал аль хэдийн байна. Засах товч дарж шинэчилнэ үү.`,
-        );
-        return;
-      }
-    }
-    setBusyKey("save-trip");
-    try {
-      const changedExtra = editingTrip ? Object.fromEntries(Object.entries(fields.extra).filter(([key, value]) => {
-        const before = key === "price_groups" && Array.isArray(editingTrip.extra.price_groups)
-          ? (editingTrip.extra.price_groups as PriceGroup[]).map(withDerivedSummaryFields) : editingTrip.extra[key];
-        return !sameParityValue(before, value);
-      })) : fields.extra;
-      if (editingTrip && !("price_groups" in changedExtra)
-        && tripDraft.child_price_free !== "true" && tripDraft.infant_price_free !== "true") delete changedExtra.child_rules;
-      const patchFields = editingTrip ? {
-        ...Object.fromEntries(Object.entries(fields).filter(([key, value]) => key !== "extra" && !sameParityValue(editingTrip[key as keyof TravelTrip], value))),
-        ...(Object.keys(changedExtra).length ? { extra: changedExtra } : {}),
-      } : fields;
-      if (!Object.keys(patchFields).length) {
-        toast.success("Өөрчлөлт ороогүй байна.");
-        closeTripModal();
-        return;
-      }
-      const res = await fetchWithAdmin("/api/admin/trips", {
-        method: isNewTrip ? "POST" : "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          isNewTrip
-            ? { fields, confirmIncomplete }
-            : { id: editingTrip?.id, fields: patchFields, confirmIncomplete, expectedUpdatedAt: editingTrip?.updated_at },
-        ),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.message || json?.error || "Хадгалж чадсангүй.");
-      toast.success(isNewTrip ? "Шинэ аялал нэмэгдлээ." : "Аялал шинэчлэгдлээ.");
-      closeTripModal();
-      await loadTrips(searchRef.current, statusFilterRef.current, {
-        showLoading: true,
-      });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Хадгалж чадсангүй.");
-    } finally {
-      setBusyKey("");
-    }
-  }
   async function confirmDeleteTrip() {
     if (!deletingTrip) return;
     setBusyKey(`delete-trip-${deletingTrip.id}`);
@@ -1992,6 +1628,7 @@ export default function AdminPage() {
               onQuickAction={(kind, trip, value) => void sendQuickAction(kind, trip, value)}
               onEditTripPrice={(trip) => beginEditTrip(trip)}
               onNewTrip={() => beginCreateTrip()}
+              onEditDraftTrip={openTripEditorForDraft}
               onApply={(message) => void applyProposal(message)}
               onRollback={(message) => void rollbackProposal(message)}
               onSubmitClarificationForm={(message, answers) =>
@@ -2171,56 +1808,9 @@ export default function AdminPage() {
       />
       {/* Trip edit / create modal */}
       <TripEditModal
-        open={tripModalOpen}
-        isNewTrip={isNewTrip}
-        editingTrip={editingTrip}
-        tripDraft={tripDraft}
-        setTripDraft={setTripDraft}
-        tripPhotoUrls={tripPhotoUrls}
-        setTripPhotoUrls={setTripPhotoUrls}
-        tripPhotoInput={tripPhotoInput}
-        setTripPhotoInput={setTripPhotoInput}
-        photoDragging={photoDragging}
-        setPhotoDragging={setPhotoDragging}
-        photoUploading={photoUploading}
-        photoFileInputRef={photoFileInputRef}
-        saveDisabled={photoUploading.length > 0}
+        {...tripEditor.modalProps}
         busyKey={busyKey}
-        handlePhotoFiles={handlePhotoFiles}
         apiFetch={fetchWithAdmin}
-        onClose={closeTripModal}
-        onSave={(confirmIncomplete) => void saveTrip(confirmIncomplete)}
-        tripAliases={tripAliases}
-        setTripAliases={setTripAliases}
-        tripPriceGroups={tripPriceGroups}
-        setTripPriceGroups={setTripPriceGroups}
-        tripDiscounts={tripDiscounts}
-        setTripDiscounts={setTripDiscounts}
-        tripExtraFees={tripExtraFees}
-        setTripExtraFees={setTripExtraFees}
-        tripDepartureRule={tripDepartureRule}
-        setTripDepartureRule={setTripDepartureRule}
-        tripIncludedItems={tripIncludedItems}
-        setTripIncludedItems={setTripIncludedItems}
-        tripExcludedItems={tripExcludedItems}
-        setTripExcludedItems={setTripExcludedItems}
-        tripRoomPrices={tripRoomPrices}
-        setTripRoomPrices={setTripRoomPrices}
-        tripItineraryDays={tripItineraryDays}
-        setTripItineraryDays={setTripItineraryDays}
-        tripImportantNotes={tripImportantNotes}
-        setTripImportantNotes={setTripImportantNotes}
-        tripBookingTerms={tripBookingTerms}
-        setTripBookingTerms={setTripBookingTerms}
-        tripCustomerVisible={tripCustomerVisible}
-        setTripCustomerVisible={setTripCustomerVisible}
-        tripNeedsHumanReview={tripNeedsHumanReview}
-        setTripNeedsHumanReview={setTripNeedsHumanReview}
-        tripReviewReasons={tripReviewReasons}
-        setTripReviewReasons={setTripReviewReasons}
-        tripSourceProvenance={tripSourceProvenance}
-        tripAnswerHints={tripAnswerHints}
-        setTripAnswerHints={setTripAnswerHints}
         onAskAi={(tripName) => {
           closeTripModal();
           askAiAboutTrip(tripName);
@@ -2254,45 +1844,7 @@ export default function AdminPage() {
           );
         }}
       />
-      <Modal
-        open={photoReplaceConfirm != null}
-        onClose={() => setPhotoReplaceConfirm(null)}
-        title="Хуучин зургуудыг устгах уу?"
-      >
-        <div className="space-y-3">
-          <p className="text-sm text-ink-muted">
-            Энэ аялалд <span className="font-semibold text-ink">{tripPhotoUrls.length}</span> зураг байна.
-            Шинэ {photoReplaceConfirm?.files.length ?? 0} зурган дээр нэмэх үү, эсвэл хуучныг устгаад солих уу?
-          </p>
-          <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-            <Button variant="secondary" onClick={() => setPhotoReplaceConfirm(null)}>
-              Болих
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={() => {
-                const files = photoReplaceConfirm?.files ?? [];
-                setPhotoReplaceConfirm(null);
-                void doUploadPhotoFiles(files, false);
-              }}
-            >
-              <Icons.plus size={15} />
-              Нэмэх
-            </Button>
-            <Button
-              variant="danger"
-              onClick={() => {
-                const files = photoReplaceConfirm?.files ?? [];
-                setPhotoReplaceConfirm(null);
-                void doUploadPhotoFiles(files, true);
-              }}
-            >
-              <Icons.trash size={15} />
-              Хуучныг устгаад солих
-            </Button>
-          </div>
-        </div>
-      </Modal>
+      {tripEditor.photoReplaceModal}
     </div>
   );
 }

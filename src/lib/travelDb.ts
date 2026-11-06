@@ -7,22 +7,25 @@ import { queryNeon } from "./neonDb";
 import { connectedTripMutation, type PosterWrite } from "./connectedTripStore";
 import { flushWebsiteSync, withWebsiteDepartureAvailability } from "./websiteTripSync";
 import { applyWebsiteDetailsPatch } from "./websiteTripDetails";
-import { departureAvailability, departureIsClosed } from "./departureAvailability";
 import { sharedMap } from "./processState";
 import { ensureTravelSchema } from "./travelSchema";
 // Re-exported so existing importers (travelOps, googleDriveSync, travelAI, …)
 // that import ensureTravelSchema from ./travelDb keep working after the split.
 export { ensureTravelSchema } from "./travelSchema";
 import {
-  filterFutureDepartureDates,
   isPlaceholderDepartureText,
-  prunePastDepartureDates,
   resolveDepartureDatesAtWrite,
-  type ResolvedDepartureDate,
 } from "./travelDates";
+import {
+  persistTripScheduleMaintenance,
+  sanitizeTripScheduleForCurrentDate,
+  schedulePersistTripScheduleMaintenance,
+} from "./tripScheduleMaintenance";
+// Re-exported so existing importers of sanitizeTripScheduleForCurrentDate from ./travelDb keep working.
+export { sanitizeTripScheduleForCurrentDate } from "./tripScheduleMaintenance";
 import { normalizeExtra, normalizeExtraPatch } from "./tripExtraSchema";
 import { assertValidTripDataChange, type TripFactInput } from "./tripDataValidation";
-import { formatPriceRange } from "./priceRange";
+import { tripKnowledgeModule } from "./tripKnowledgeText";
 import {
   normalizeTripName,
   tokenCoverageScore,
@@ -705,107 +708,6 @@ export function mapTripRow(row: Record<string, unknown>): TravelTrip {
     created_at: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at || ""),
     updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at || ""),
   };
-}
-
-function cloneExtra(extra: Record<string, unknown>): Record<string, unknown> {
-  return JSON.parse(JSON.stringify(extra || {})) as Record<string, unknown>;
-}
-
-export function sanitizeTripScheduleForCurrentDate(
-  trip: TravelTrip,
-  now = new Date(),
-): { trip: TravelTrip; changed: boolean } {
-  const extra = cloneExtra((trip.extra || {}) as Record<string, unknown>);
-  const resolved = extra.departure_dates_resolved as ResolvedDepartureDate[] | undefined;
-  const pruned = prunePastDepartureDates(trip.departure_dates || [], now, resolved);
-  let nextExtra = extra;
-  let changed = false;
-
-  let nextStatus = trip.status;
-  const missingDepartureDates = (trip.departure_dates || []).length === 0;
-  if (trip.status === "active" && (pruned.shouldArchive || missingDepartureDates)) {
-    nextStatus = "archived";
-    nextExtra = {
-      ...nextExtra,
-      archived_reason: missingDepartureDates ? "no_departure_dates" : "all_departure_dates_passed",
-      archived_at: now.toISOString(),
-    };
-    changed = true;
-  }
-  if (
-    trip.status === "archived" &&
-    (extra.archived_reason === "all_departure_dates_passed" ||
-      extra.archived_reason === "no_departure_dates") &&
-    pruned.dates.length > 0
-  ) {
-    nextStatus = "active";
-    nextExtra = { ...nextExtra, reactivated_at: now.toISOString() };
-    delete nextExtra.archived_reason;
-    delete nextExtra.archived_at;
-    changed = true;
-  }
-
-  if (!changed) return { trip, changed: false };
-  return {
-    trip: {
-      ...trip,
-      status: nextStatus,
-      extra: normalizeExtra(nextExtra).extra,
-    },
-    changed: true,
-  };
-}
-
-async function persistTripScheduleMaintenance(trips: TravelTrip[]): Promise<void> {
-  if (trips.length === 0) return;
-
-  for (const trip of trips) {
-    try {
-      await queryNeon(
-        `
-          UPDATE travel_trip_entries
-          SET departure_dates = $1::text[], status = $2, extra = $3::jsonb
-          WHERE id = $4
-            AND (
-              departure_dates IS DISTINCT FROM $1::text[]
-              OR status IS DISTINCT FROM $2
-              OR extra IS DISTINCT FROM $3::jsonb
-            )
-        `,
-        [trip.departure_dates, trip.status, JSON.stringify(trip.extra || {}), trip.id],
-      );
-    } catch (error) {
-      console.error("Persisting trip schedule maintenance failed", error);
-      continue;
-    }
-    try {
-      await flushWebsiteSync(trip.id, 1);
-    } catch (error) {
-      console.error("Website sync after trip schedule maintenance failed", error);
-    }
-  }
-}
-
-/**
- * listTrips() runs on every customer message (fast-path + AI trip lookup), so
- * the DB write and cross-database website sync that make an auto-archive or
- * auto-reactivate durable must never block that reply — the caller already
- * has the correctly-sanitized trips in memory for this response regardless.
- * The daily reminder cron re-runs listTrips() independently as a backstop, so
- * a customer message that never lands (traffic dies right after this fires)
- * still gets the maintenance persisted within a day either way.
- */
-function schedulePersistTripScheduleMaintenance(trips: TravelTrip[]): void {
-  if (trips.length === 0) return;
-  const work = persistTripScheduleMaintenance(trips).catch((error) =>
-    console.error("Trip schedule maintenance failed", error),
-  );
-  try {
-    waitUntil(work);
-  } catch {
-    // Not running on Vercel (tests, local node) — detached execution is fine.
-    void work;
-  }
 }
 
 /**
@@ -1791,7 +1693,6 @@ export function isReasonableSeats(value: number | null | undefined) {
 // so fast-path reply builders can use the same check without pulling in the
 // database layer.
 export { isGenericConfirmationText } from "./travelFastPathsSearch";
-import { isGenericConfirmationText, sanitizeTripForCustomers } from "./travelFastPathsSearch";
 
 export function isOptionalAddOnCostConflict(value: string): boolean {
   const normalized = normalizeLookupText(value);
@@ -1890,273 +1791,10 @@ export async function readKnowledgeDataFromTrips(): Promise<KnowledgeData> {
     description: routes.join("; "),
   }));
 
-  // Keep-if-unsure staleness gate for date-keyed price/discount groups: a
-  // group whose every parseable date already passed must not be quoted to
-  // customers; groups with no parseable dates (labels, recurring text) stay.
-  const groupIsCurrent = (dates: unknown): boolean => {
-    const list = Array.isArray(dates)
-      ? dates.map((d) => String(d ?? "")).filter(Boolean)
-      : [];
-    if (list.length === 0) return true;
-    return filterFutureDepartureDates(list).length > 0;
-  };
-
-  const modules = visibleTrips
-    .map((rawTrip) => {
-    // Customer-facing view: fixes data-entry slips (infant band "0-23 нас",
-    // price-group dates that are not real departures) before the model sees them.
-    const trip = sanitizeTripForCustomers(rawTrip);
-    const details: string[] = [];
-    const closedDates = departureAvailability(trip).filter(departureIsClosed);
-    if (closedDates.length) details.push(`Unavailable departures (do not offer booking): ${closedDates.map((row) => `${row.date}: ${row.status === "SOLD_OUT" || row.seatsLeft === 0 ? "суудал дүүрсэн" : row.status}`).join(", ")}. Other dates retain their own availability.`);
-    // Category is the transport differentiator (газрын / шууд нислэгтэй /
-    // хосолсон) — without it the bot cannot distinguish the three "<хот>"
-    // trips when a customer names only the destination.
-    if (trip.category) {
-      details.push(`Ангилал: ${trip.category}`);
-    }
-    // Past departure dates are stripped so the bot can never quote a date
-    // that already happened. If nothing remains, the schedule is emitted as
-    // unknown and the REFER policy sends the customer to a consultant. The
-    // write-time resolved map (when present) freezes each date's year so a
-    // genuine next-season departure is not mistaken for a past one.
-    const resolvedDepartureDates = ((trip.extra || {}) as Record<string, unknown>)
-      .departure_dates_resolved as ResolvedDepartureDate[] | undefined;
-    const futureDepartureDates = filterFutureDepartureDates(
-      trip.departure_dates,
-      new Date(),
-      resolvedDepartureDates,
-    );
-    if (futureDepartureDates.length) {
-      // Annotate each date with its frozen ISO year (when known) so the model
-      // is not left guessing whether "1 сарын 15" means this January or next.
-      const resolvedMap = new Map<string, string | null>();
-      for (const entry of resolvedDepartureDates || []) {
-        if (entry && typeof entry.text === "string") resolvedMap.set(entry.text, entry.ymd ?? null);
-      }
-      const annotated = futureDepartureDates.map((text) => {
-        const ymd = resolvedMap.get(text);
-        return ymd ? `${text} (${ymd})` : text;
-      });
-      details.push(`Departure dates: ${annotated.join(", ")}`);
-    }
-    if (typeof trip.child_price === "number") {
-      details.push(`Child price: ${trip.child_price}`);
-    }
-    if (typeof trip.infant_price === "number") {
-      details.push(`Infant price: ${trip.infant_price}`);
-    }
-    // Emit structured price groups so the bot can answer per-date pricing questions
-    const extra = (trip.extra || {}) as Record<string, unknown>;
-    // Who counts as infant/child/adult on THIS trip — bands differ per trip.
-    {
-      const bands = (extra.age_rules && typeof extra.age_rules === "object"
-        ? extra.age_rules
-        : {}) as Record<string, unknown>;
-      const band = (key: string) => (typeof bands[key] === "string" ? (bands[key] as string).trim() : "");
-      const parts = [
-        band("infant") ? `infant ${band("infant")}` : "",
-        band("child") ? `child ${band("child")}` : "",
-        band("adult") ? `adult ${band("adult")}` : "",
-      ].filter(Boolean);
-      if (parts.length > 0) details.push(`Age bands: ${parts.join(" / ")}`);
-    }
-    const priceGroups = (Array.isArray(extra.departure_date_groups) ? extra.departure_date_groups : [])
-      .filter((g) => groupIsCurrent((g as Record<string, unknown>)?.dates));
-    if (priceGroups.length > 0) {
-      const groupText = (priceGroups as Array<Record<string, unknown>>)
-        .map((g) => {
-          const dates = Array.isArray(g.dates) ? (g.dates as string[]).join(", ") : String(g.dates ?? "");
-          const ap = typeof g.adult_price === "number" ? `adult ${g.adult_price}` : "";
-          const cp = typeof g.child_price === "number" ? `child ${g.child_price}` : "";
-          const ip = typeof g.infant_price === "number" ? `infant ${g.infant_price}` : "";
-          const notes = typeof g.notes === "string" && g.notes.trim() ? ` (${g.notes.trim()})` : "";
-          return `[${dates}: ${[ap, cp, ip].filter(Boolean).join(" / ")}${notes}]`;
-        })
-        .join("; ");
-      details.push(`Price groups: ${groupText}`);
-    }
-    // Emit discount groups if present
-    const discountGroups = (Array.isArray(extra.discount_groups) ? extra.discount_groups : [])
-      .filter((g) => groupIsCurrent((g as Record<string, unknown>)?.dates));
-    if (discountGroups.length > 0) {
-      const discountText = (discountGroups as Array<Record<string, unknown>>)
-        .map((g) => {
-          const dates = Array.isArray(g.dates) ? (g.dates as string[]).join(", ") : String(g.dates ?? "");
-          const ap = typeof g.adult_price === "number" ? `adult ${g.adult_price}` : "";
-          const cp = typeof g.child_price === "number" ? `child ${g.child_price}` : "";
-          const ip = typeof g.infant_price === "number" ? `infant ${g.infant_price}` : "";
-          return `[${dates}: ${[ap, cp, ip].filter(Boolean).join(" / ")}]`;
-        })
-        .join("; ");
-      details.push(`Discount groups: ${discountText}`);
-    }
-    // Emit child age range and infant age range if stored
-    if (typeof extra.child_age_range === "string" && extra.child_age_range) {
-      details.push(`Child age range: ${extra.child_age_range}`);
-    }
-    if (typeof extra.infant_age_range === "string" && extra.infant_age_range) {
-      details.push(`Infant age range: ${extra.infant_age_range}`);
-    }
-    // Emit admin-entered structured fields
-    const aliases = Array.isArray(extra.aliases) ? (extra.aliases as string[]).filter(Boolean) : [];
-    if (aliases.length > 0) details.push(`Өөр нэршил: ${aliases.join(", ")}`);
-    const pgNew = (Array.isArray(extra.price_groups) ? extra.price_groups as Array<Record<string, unknown>> : [])
-      .filter((g) => groupIsCurrent(g?.dates));
-    if (pgNew.length > 0) {
-      const pgText = pgNew.map((g) => {
-        const displayDates = Array.isArray(g.display_dates) && (g.display_dates as string[]).length > 0
-          ? (g.display_dates as string[]).join(", ")
-          : Array.isArray(g.dates) ? (g.dates as string[]).join(", ") : String(g.dates ?? "");
-        const label = typeof g.label === "string" && g.label ? `${g.label}: ` : "";
-        const hotel = typeof g.hotel === "string" && g.hotel.trim() ? `Буудал ${g.hotel.trim()}: ` : "";
-        // Use passenger_prices if present (more detailed), otherwise fallback to flat fields
-        const ppArr = Array.isArray(g.passenger_prices) ? g.passenger_prices as Array<Record<string, unknown>> : [];
-        let priceParts: string[];
-        if (ppArr.length > 0) {
-          priceParts = [
-            formatPriceRange(g.adult_price_range, "MNT")
-              ? `Том ${formatPriceRange(g.adult_price_range, "MNT")}`
-              : typeof g.adult_price === "number" ? `Том ${g.adult_price}₮` : "",
-            ...ppArr.map((pp) => {
-            const ppLabel = typeof pp.label === "string" && pp.label ? pp.label : "Зорчигч";
-            const ppAge = typeof pp.age_range === "string" && pp.age_range ? ` (${pp.age_range})` : "";
-            const ppPrice = typeof pp.price === "number" ? ` ${pp.price}₮` : "";
-            return `${ppLabel}${ppAge}${ppPrice}`;
-            }),
-          ].filter(Boolean);
-        } else {
-          priceParts = [
-            formatPriceRange(g.adult_price_range, "MNT")
-              ? `Том ${formatPriceRange(g.adult_price_range, "MNT")}`
-              : typeof g.adult_price === "number" ? `Том ${g.adult_price}₮` : "",
-            typeof g.child_price === "number" ? `Хүүхэд${g.child_age ? ` (${g.child_age})` : ""} ${g.child_price}₮` : "",
-            typeof g.infant_price === "number" ? `Нярай${g.infant_age ? ` (${g.infant_age})` : ""} ${g.infant_price}₮` : "",
-          ].filter(Boolean);
-        }
-        if (typeof g.single_price === "number" && g.single_price >= 1000) {
-          priceParts.push(`Ганцаараа явах (өрөөндөө ганцаараа) ${g.single_price}₮`);
-        }
-        const note = typeof g.note === "string" && g.note ? ` — ${g.note}` : "";
-        return `[${label}${displayDates}: ${hotel}${priceParts.filter(Boolean).join(" / ")}${note}]`;
-      }).join("; ");
-      details.push(`Огноо тус бүрийн үнэ: ${pgText}`);
-    }
-    const discNew = (Array.isArray(extra.discounts) ? extra.discounts as Array<Record<string, unknown>> : [])
-      .filter((g) => groupIsCurrent(g?.dates));
-    if (discNew.length > 0) {
-      const discText = discNew.map((g) => {
-        const dates = Array.isArray(g.dates) && (g.dates as string[]).length > 0 ? ` (${(g.dates as string[]).join(", ")})` : "";
-        const label = typeof g.label === "string" && g.label ? g.label : "Хямдрал";
-        const ap = typeof g.adult_price === "number" ? `Том ${g.adult_price}₮` : "";
-        const cp = typeof g.child_price === "number" ? `Хүүхэд ${g.child_price}₮` : "";
-        const ip = typeof g.infant_price === "number" ? `Нярай ${g.infant_price}₮` : "";
-        const cond = typeof g.condition === "string" && g.condition ? ` Нөхцөл: ${g.condition}` : "";
-        const note = typeof g.note === "string" && g.note ? ` — ${g.note}` : "";
-        return `[${label}${dates}: ${[ap, cp, ip].filter(Boolean).join(" / ")}${cond}${note}]`;
-      }).join("; ");
-      details.push(`Хямдрал: ${discText}`);
-    }
-    const childRules = Array.isArray(extra.child_rules) ? extra.child_rules as Array<Record<string, unknown>> : [];
-    if (childRules.length > 0) {
-      const crText = childRules.map((r) => {
-        const label = typeof r.label === "string" && r.label ? r.label : "";
-        const age = typeof r.age_range === "string" && r.age_range ? r.age_range : "";
-        const price = typeof r.price === "number" ? `${r.price}₮` : "";
-        return [label, age, price].filter(Boolean).join(" ");
-      }).join("; ");
-      details.push(`Хүүхдийн насны ангилал: ${crText}`);
-    }
-    const extraFees = Array.isArray(extra.extra_fees) ? extra.extra_fees as Array<Record<string, unknown>> : [];
-    if (extraFees.length > 0) {
-      const efText = extraFees.map((f) => {
-        const label = typeof f.label === "string" && f.label ? f.label : "Нэмэлт";
-        const amount = typeof f.amount === "number" ? `${f.amount}${typeof f.currency === "string" ? f.currency : ""}` : "";
-        return `${label}${amount ? `: ${amount}` : ""}`;
-      }).join("; ");
-      details.push(`Нэмэлт төлбөр: ${efText}`);
-    }
-    if (typeof extra.departure_rule === "string" && extra.departure_rule.trim()) {
-      details.push(`Гарах өдрийн дүрэм: ${extra.departure_rule.trim()}`);
-    }
-    const included = Array.isArray(extra.included_items) ? (extra.included_items as string[]).filter(Boolean) : [];
-    if (included.length > 0) details.push(`Багтсан: ${included.join(", ")}`);
-    const excluded = Array.isArray(extra.excluded_items) ? (extra.excluded_items as string[]).filter(Boolean) : [];
-    if (excluded.length > 0) details.push(`Багтаагүй: ${excluded.join(", ")}`);
-    const roomPrices = Array.isArray(extra.room_prices) ? extra.room_prices as Array<Record<string, unknown>> : [];
-    if (roomPrices.length > 0) {
-      const rpText = roomPrices.map((r) => {
-        const type = typeof r.room_type === "string" && r.room_type ? r.room_type : "Өрөө";
-        const price = typeof r.price === "number" ? `${r.price}${typeof r.currency === "string" ? r.currency : ""}` : "";
-        return `${type}${price ? `: ${price}` : ""}`;
-      }).join("; ");
-      details.push(`Өрөөний үнэ: ${rpText}`);
-    }
-    const impNotes = Array.isArray(extra.important_notes)
-      ? (extra.important_notes as string[]).filter(Boolean).filter((note) => !isGenericConfirmationText(note))
-      : [];
-    if (impNotes.length > 0) details.push(`Чухал тэмдэглэл: ${impNotes.join(" | ")}`);
-    // Booking terms — lets the bot answer deposit/payment/documents/visa/
-    // cancellation questions from stored data instead of REFER. Empty fields
-    // are omitted, so a field the trip lacks stays "unknown" → REFER.
-    const bookingTerms = (extra.booking_terms || {}) as Record<string, unknown>;
-    const website = extra.website_details && typeof extra.website_details === "object" ? extra.website_details as Record<string, unknown> : {};
-    const btParts: string[] = [];
-    if (typeof bookingTerms.deposit === "string" && bookingTerms.deposit.trim()) btParts.push(`Урьдчилгаа: ${bookingTerms.deposit.trim()}`);
-    if (typeof bookingTerms.payment === "string" && bookingTerms.payment.trim()) btParts.push(`Төлбөрийн нөхцөл: ${bookingTerms.payment.trim()}`);
-    if (typeof bookingTerms.documents === "string" && bookingTerms.documents.trim()) btParts.push(`Бүрдүүлэх бичиг баримт: ${bookingTerms.documents.trim()}`);
-    if (typeof bookingTerms.visa === "string" && bookingTerms.visa.trim()) btParts.push(`Виз: ${bookingTerms.visa.trim()}`);
-    if (typeof bookingTerms.cancellation === "string" && bookingTerms.cancellation.trim()) btParts.push(`Цуцлалт/буцаалт: ${bookingTerms.cancellation.trim()}`);
-    if (btParts.length > 0) details.push(`Захиалгын нөхцөл: ${btParts.join(" | ")}`);
-    if (!trip.notes && typeof website.description === "string" && website.description.trim()) details.push(`Вебсайтын аяллын тайлбар: ${website.description}`);
-    if (!bookingTerms.documents && typeof website.requirements === "string" && website.requirements.trim()) details.push(`Аяллын шаардлага: ${website.requirements}`);
-    if (!bookingTerms.cancellation && typeof website.cancellationPolicy === "string" && website.cancellationPolicy.trim()) details.push(`Аяллын цуцлалтын нөхцөл: ${website.cancellationPolicy}`);
-    if (!extra.destinations && Array.isArray(website.destinations) && website.destinations.length) details.push(`Веб аяллын очих газрууд: ${website.destinations.join(", ")}`);
-    if (Array.isArray(website.highlights) && website.highlights.length) details.push(`Веб аяллын онцлох зүйлс: ${website.highlights.join(" | ")}`);
-    if (typeof website.meetingPoint === "string" && website.meetingPoint.trim()) details.push(`Цугларах газар: ${website.meetingPoint}`);
-    if (!extra.transport_type && Array.isArray(website.transport) && website.transport.length) details.push(`Веб аяллын тээвэр: ${website.transport.join(", ")}`);
-    if (Array.isArray(website.languages) && website.languages.length) details.push(`Хөтчийн хэл: ${website.languages.join(", ")}`);
-    // Emit answer_hints so the bot gets explicit expected answers per intent
-    const answerHints = Array.isArray(extra.answer_hints) ? extra.answer_hints as Array<Record<string, unknown>> : [];
-    if (answerHints.length > 0) {
-      const hintText = answerHints.map((h) => {
-        const intent = typeof h.intent === "string" ? h.intent : "";
-        const qp = typeof h.question_pattern === "string" ? h.question_pattern : "";
-        const expected = typeof h.expected_answer_summary === "string" ? h.expected_answer_summary : "";
-        return `[${intent}: "${qp}" → ${expected}]`;
-      }).join("; ");
-      details.push(`Хариултын заавар: ${hintText}`);
-    }
-    // seats: only emit if actually known (null = unknown, 0 = sold out)
-    if (trip.seats_left != null) {
-      details.push(`Seats left: ${trip.seats_left}`);
-    }
-    if (trip.seats_total != null) {
-      details.push(`Seats total: ${trip.seats_total}`);
-    }
-    if (trip.has_food != null) {
-      details.push(`Food: ${trip.has_food ? "yes" : "no"}`);
-    }
-    if (trip.status !== "active") {
-      details.push(`Status: ${trip.status}`);
-    }
-    if (trip.hotel) details.push(`Hotel: ${trip.hotel}`);
-    if (trip.notes && !isGenericConfirmationText(trip.notes)) details.push(`Notes: ${trip.notes}`);
-
-    return {
-      name: trip.route_name,
-      duration: isGenericConfirmationText(trip.duration_text) ? "" : trip.duration_text || "",
-      price:
-        typeof trip.adult_price === "number"
-          ? trip.adult_price
-          : ("NEEDS_MANUAL_FIX" as ProgramPrice),
-      target: trip.operator_name,
-      description: [trip.source_description, ...details]
-        .filter(Boolean)
-        .filter((value) => !isGenericConfirmationText(value))
-        .join(" | "),
-    };
-  });
+  // Each trip's text (dates, fares, hotels, packages, meals, terms) is built in
+  // tripKnowledgeText.ts, where it is tested without a database.
+  const now = new Date();
+  const modules = visibleTrips.map((trip) => tripKnowledgeModule(trip, now));
 
   return {
     packages,

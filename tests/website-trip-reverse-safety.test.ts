@@ -37,7 +37,21 @@ test("partial cover and duration edits retain the unchanged gallery and night co
   const patch = websiteTripPatch({ sourceTripId: old.sourceTripId, image: "https://example.com/new-cover.webp", durationDays: 7 }, old, canonical(old));
   assert.deepEqual(patch.photo_urls, ["https://example.com/new-cover.webp", ...old.extraImages]);
   assert.equal(patch.duration_text, "7 өдөр 5 шөнө");
-  assert.equal(patch.extra, undefined);
+  // The stored length numbers follow (the bot and the next sync read them first); nothing else does.
+  assert.deepEqual(patch.extra, { duration_days: 7 });
+});
+
+test("a website length edit reaches the stored day and night numbers, so the next sync does not undo it", () => {
+  const old = { ...website(), durationDays: 8, durationNights: 7 };
+  const current = canonical(old);
+  assert.equal((current.extra as Record<string, unknown>).duration_days, 8);
+  const patch = websiteTripPatch({ ...old, durationDays: 9, durationNights: 8 }, old, current);
+  assert.equal(patch.duration_text, "9 өдөр 8 шөнө");
+  assert.deepEqual(patch.extra, { duration_days: 9, duration_nights: 8 });
+  // A chatbot that changed its own length meanwhile is not overwritten.
+  const changed = { ...current, duration_text: "10 өдөр 9 шөнө", extra: { ...(current.extra as Record<string, unknown>), duration_days: 10, duration_nights: 9 } };
+  const report = websiteTripPatch({ ...old, durationDays: 9, durationNights: 8 }, old, changed);
+  assert.notEqual((report.extra as Record<string, unknown> | undefined)?.duration_days, 9);
 });
 
 test("a fare-only patch uses the saved currency rather than assuming local currency", () => {

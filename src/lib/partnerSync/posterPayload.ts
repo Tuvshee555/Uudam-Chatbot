@@ -28,9 +28,11 @@ export const PACKAGE_FREE = "Хөтөлбөргүй";
 export const PACKAGE_PROGRAM = "Хөтөлбөртэй";
 
 /**
- * The hotel label the rest of the system keys fares on. GTC sells each hotel at two prices (with and
- * without the daily programme), and the validator rejects two different adult fares for one hotel,
- * date and passenger category, so the package is part of the label.
+ * The poster table's "Буудал" cell and the change report's key: GTC sells each hotel at two prices
+ * (with and without the daily programme), and one poster row is one hotel and package, so the
+ * poster shows both. The trip does NOT keep this text as its hotel: tripPayload.ts splits it back
+ * into `hotel` and `package_id`, so the website and the chatbot offer hotel and package as two
+ * separate choices.
  */
 export const accommodationLabel = (hotel: string, packageLabel: string) => `${hotel} · ${packageLabel}`;
 
@@ -92,7 +94,7 @@ function mergeDays(existing: unknown, days: PartnerDay[]): Existing[] {
       meals: day.meals,
       show_meals: true,
       // GTC names a hotel only on the arrival day. Another day keeps no old hotel text of Uudam's, or
-      // a hotel GTC does not offer would still be quoted (the old poster named Gentle Grown here).
+      // a hotel GTC does not offer would still be quoted (the old poster named such a hotel here).
       hotel: day.accommodation ?? "",
     };
   });
@@ -175,5 +177,7 @@ export function describeChanges(before: PartnerTour | null, after: PartnerTour):
   if (!isDeepStrictEqual(before.days, after.days) && before.days.length === after.days.length) lines.push("📝 Хөтөлбөрийн текст өөрчлөгдсөн");
   if (!isDeepStrictEqual(before.includes, after.includes)) lines.push(`📝 Үнэд багтсан: ${before.includes.length} → ${after.includes.length} зүйл`);
   if (!isDeepStrictEqual(before.excludes, after.excludes)) lines.push(`📝 Үнэд багтаагүй: ${before.excludes.length} → ${after.excludes.length} зүйл`);
+  const hotelFacts = (tour: PartnerTour) => (tour.hotels ?? []).map((hotel) => ({ id: hotel.id ?? null, name: hotel.name, stars: hotel.stars, description: hotel.description, url: hotel.url ?? "" }));
+  if (!isDeepStrictEqual(hotelFacts(before), hotelFacts(after))) lines.push(`📝 Буудлын мэдээлэл: ${(before.hotels ?? []).length} → ${after.hotels.length} буудал`);
   return lines;
 }

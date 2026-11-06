@@ -2,14 +2,16 @@ import { createHash, randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 import { queryNeon, withNeonClient } from "./neonDb";
 import { ensureConnectedTripSchema } from "./connectedTripStore";
-import { duration, posterPhotos, record, records, strings, websiteDepartureSchedule, websiteExtraDetails, websiteMarketingBadge } from "./connectedTripMapping";
+import {
+  WEBSITE_FILLED_CLEARED, WEBSITE_FILLED_QUIET, duration, posterPhotos, projectedPatchTransport, record, records, strings, websiteBrochurePdfUrl,
+  websiteDayMeals, websiteDepartureSchedule, websiteExtraDetails, websiteFilledFields, websiteItineraryMeals, websiteMarketingBadge,
+} from "./connectedTripMapping";
 import { websiteAvailabilityForResync, websiteTripPayload } from "./websiteTripPayload";
 import { getEnv } from "./env";
-import { getPosterPdfPublicUrl } from "./poster/pdfUrl";
 import { classifyTripCategory } from "./tripCategorization";
 import type { TravelTrip } from "./travelTypes";
 import { sameDatabase, websiteProjectionTransaction } from "./websiteSyncTransaction";
-import { applyWebsiteDetailsPatch, mergeWebsiteContent, websiteDetailsSnapshot } from "./websiteTripDetails";
+import { applyWebsiteDetailsPatch, fillWebsiteFields, mergeWebsiteContent, websiteDetailsSnapshot } from "./websiteTripDetails";
 import { sameParityValue } from "./tripWebsiteParityValue";
 import { departureSeatsAfterTripEdit } from "./departureSeats";
 import type { WebsiteSyncRow } from "./websiteSyncStatus";
@@ -289,13 +291,18 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   const offering = websiteTripPayload(liveSource, websiteDepartureSchedule(source, now), now);
   const hadSourcePhotos = strings(previousSnapshot.photos).length > 0;
   const image = photos[0] || (hadSourcePhotos ? "" : prior?.image || "");
-  const pdf = getPosterPdfPublicUrl(String(source.extra.poster_trip_id));
-  if (!pdf) throw new Error("SITE_URL is required for the shared poster PDF");
+  // The rendered poster first; a brochure staff uploaded when there is no poster PDF.
+  const pdf = websiteBrochurePdfUrl(source.extra);
+  if (!pdf) throw new Error("SITE_URL is required for the shared poster PDF (the trip has no usable uploaded brochure_pdf_url)");
   const marketingBadge = websiteMarketingBadge(source);
   const held = heldWebsiteFields(prior?.sourceMetadata);
   const metadata: Record<string, unknown> = { ...record(prior?.sourceMetadata), ...source.extra,
     price_groups: offering.priceGroups, canonicalOffers: offering.canonicalOffers,
-    marketingBadge, connectedSource: { ...source, photos, poster, marketingBadge } };
+    marketingBadge, connectedSource: { ...source, photos, poster, marketingBadge },
+    // Included / own cost / not stated per website day, and the day's meal
+    // note: ItineraryDay.meals can only list included meals. A website
+    // itinerary edit still on its way here keeps the states it was drawn with.
+    ...(held.has("itinerary") ? {} : { itineraryMeals: websiteItineraryMeals(poster.days, source.extra.itinerary_days) }) };
   for (const field of held) {
     if (field.startsWith("sourceMetadata.")) metadata[field.slice("sourceMetadata.".length)] = record(prior?.sourceMetadata)[field.slice("sourceMetadata.".length)];
   }
@@ -349,8 +356,33 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
     currency: source.currency || "MNT", foodIncluded: source.has_food, departureRule: source.extra.departure_rule || null,
   };
   const mergedContent = prior ? mergeWebsiteContent(prior, { ...fallbackBaseline, ...baselineContent }, proposedContent, { preferIncoming: true, hold: held }) : { data: proposedContent, conflicts: [] };
-  const details = applyWebsiteDetailsPatch(prior, source.extra.website_details_patch);
-  const newConflicts = [...mergedContent.conflicts, ...details.conflicts];
+  // Transport tags the new-trip review wrote into the patch for the projection
+  // are not a manual override: they follow transport_type like any filled
+  // field. Until a sync has stored its own transport baseline, that patch
+  // value is what the projection last put on the website.
+  const patch = record(source.extra.website_details_patch);
+  const patchTransport = projectedPatchTransport(record(patch.values).transport,
+    [source.extra.transport_type, previousExtra.transport_type], record(prior?.sourceMetadata).projectedPatchTransport);
+  const manualPatch = patchTransport
+    ? { ...patch, values: Object.fromEntries(Object.entries(record(patch.values)).filter(([key]) => key !== "transport")) }
+    : patch;
+  const details = applyWebsiteDetailsPatch(prior, manualPatch);
+  // Booking terms, transport, destinations and the solo supplement: staff type
+  // these on the website too and it never sends them back, so the chatbot's
+  // value fills an empty field or one it wrote itself, never a website edit.
+  // A field the admin's own website_details_patch sets is that patch's; once
+  // the patch stops naming it, the value it wrote is a website edit (kept).
+  const filledProposal = websiteFilledFields(source, offering.priceGroups);
+  const filledBaseline = patchTransport && !("transport" in baselineContent) ? { ...baselineContent, transport: patchTransport } : baselineContent;
+  const filled = fillWebsiteFields(prior, filledBaseline, filledProposal, {
+    hold: held, skip: new Set(Object.keys(record(manualPatch.values))),
+    quiet: WEBSITE_FILLED_QUIET, cleared: WEBSITE_FILLED_CLEARED,
+  });
+  // The stored patch keeps that transport until staff save website details
+  // again; remembering it keeps it the projection's after transport_type moves on.
+  if (patchTransport) metadata.projectedPatchTransport = patchTransport;
+  else delete metadata.projectedPatchTransport;
+  const newConflicts = [...mergedContent.conflicts, ...filled.conflicts, ...details.conflicts];
   // Conflicts describe the current three-way merge only. Keeping historical
   // conflicts here made an already-resolved trip look permanently divergent.
   const allConflicts = newConflicts.filter((conflict, index, entries) =>
@@ -359,10 +391,14 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
   const contentFields = mergedContent.data;
   const data: Record<string, unknown> = {
     ...contentFields,
+    ...filled.data,
     ...(categoryId !== undefined ? { categoryId } : {}),
     brochurePdfUrl: pdf,
     ...details.data,
-    sourceMetadata: JSON.stringify({ ...metadata, contentHash, contentSnapshot: proposedContent, contentConflicts: allConflicts }),
+    // The filled fields' proposal is the next sync's "did anyone edit it there"
+    // baseline — also for a held or patch-set field, whose website value is
+    // then a website edit, never something the next sync may overwrite.
+    sourceMetadata: JSON.stringify({ ...metadata, contentHash, contentSnapshot: { ...proposedContent, ...filledProposal }, contentConflicts: allConflicts }),
     // "paused" behaves exactly like sold_out here: visible, just not
     // bookable — the trip stays on the site so customers can still ask
     // about it, but every departure below reads as closed, not open.
@@ -397,14 +433,14 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
       dayNumbers.push(number);
       const previousDay = previousDays.find((entry, index) => (Number(entry.day) || index + 1) === number);
       if (prior && previousDay && sameParityValue(previousDay, day)) continue;
-      const meals = record(day.meals);
+      // Only meals the program says are included are listed; a meal it does not
+      // mention stays unlisted and its "not stated" lives in itineraryMeals.
       const dayFields = { title: String(day.route || `${number}-р өдөр`), description: day.summary || null, accommodation: day.hotel || null,
-        meals: [meals.breakfast ? "Өглөө" : "", meals.lunch ? "Өдөр" : "", meals.dinner ? "Орой" : ""].filter(Boolean), image: typeof day.photo === "string" && isSitePhotoHost(day.photo) ? day.photo : null };
+        meals: websiteDayMeals(day.meals), image: typeof day.photo === "string" && isSitePhotoHost(day.photo) ? day.photo : null };
       const oldDay = oldDays.find((entry) => entry.dayNumber === number);
       if (oldDay) {
-        const oldMeals = record(previousDay?.meals);
         const baseline = { title: previousDay?.route, description: previousDay?.summary || null, accommodation: previousDay?.hotel || null,
-          meals: [oldMeals.breakfast ? "Өглөө" : "", oldMeals.lunch ? "Өдөр" : "", oldMeals.dinner ? "Орой" : ""].filter(Boolean), image: previousDay?.photo || null };
+          meals: websiteDayMeals(previousDay?.meals), image: previousDay?.photo || null };
         const result = mergeWebsiteContent(oldDay, baseline, dayFields, { preferIncoming: true });
         const entries = Object.entries(result.data);
         if (entries.length) await client.query(`UPDATE "ItineraryDay" SET ${entries.map(([key], index) => `"${key}"=$${index + 2}`).join(",")} WHERE id=$1`, [oldDay.id, ...entries.map(([, value]) => value)]);
@@ -423,9 +459,8 @@ async function upsertWebsiteTrip(client: PoolClient, source: TravelTrip, poster:
       if (dayNumbers.includes(number)) continue;
       const oldDay = oldDays.find((entry) => entry.dayNumber === number);
       if (!oldDay) continue;
-      const meals = record(previousDay.meals);
       const baseline = { title: String(previousDay.route || `${number}-р өдөр`), description: previousDay.summary || null, accommodation: previousDay.hotel || null,
-        meals: [meals.breakfast ? "Өглөө" : "", meals.lunch ? "Өдөр" : "", meals.dinner ? "Орой" : ""].filter(Boolean), image: previousDay.photo || null };
+        meals: websiteDayMeals(previousDay.meals), image: previousDay.photo || null };
       if (!mergeWebsiteContent(oldDay, baseline, baseline).conflicts.length) {
         await client.query(`UPDATE "ItineraryDay" SET "dayNumber"=$2 WHERE id=$1`, [oldDay.id, archiveDayNumber--]);
       } else {

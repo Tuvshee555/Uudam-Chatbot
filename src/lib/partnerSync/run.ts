@@ -57,8 +57,10 @@ async function syncLocked(config: TourConfig, flags: Flags): Promise<SyncResult>
   const before = stored && Array.isArray(stored.rows) ? stored : null;
   const queue = await queryNeon<{ synced: boolean }>("SELECT revision=synced_revision AS synced FROM trip_website_sync WHERE trip_id=$1", [config.tripId]);
   const posterData = buildPosterData(tour, existing.data);
-  const desired = buildTripFields(tour, posterData);
   const canonical = linked.rows[0];
+  // The stored extra keeps the hotel photos, links, descriptions and hotels staff added; posterData
+  // still holds the stored partner_snapshot, which tells a staff edit from the partner's older value.
+  const desired = buildTripFields(tour, posterData, canonical.extra);
   const matches = Object.entries(desired).every(([key, value]) => key === "extra"
     ? Object.entries(normalizeExtraPatch(record(value))).every(([name, fact]) => isDeepStrictEqual(canonical.extra[name], fact))
     : value === undefined || isDeepStrictEqual(canonical[key], value));

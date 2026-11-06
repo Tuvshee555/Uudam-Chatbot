@@ -542,7 +542,7 @@ export function sanitizeAssistantReply(text: string) {
     // within their own block only; everything else across the whole reply.
     // The same holds for a section's own headings: a second "Буудал: …" or
     // "11 сарын 4-ний гаралт" deleted from a later section left its fares under
-    // the previous hotel (Санья, 2026-10-16).
+    // the previous hotel (a partner trip, 2026-10-16).
     const seenPriceLinesInBlock = new Set<string>();
     for (const line of lines) {
       const norm = /https?:\/\//i.test(line) ? line.trim() : normalizeForCompare(line);

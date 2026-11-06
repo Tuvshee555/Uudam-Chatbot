@@ -4,14 +4,18 @@
  */
 import React from "react";
 import { Button, Icons, Spinner, Switch, cx } from "@/components/ui";
-import { DayMealToggles, DayPhotoPreview } from "../ItineraryDayControls";
 import { DateSeatsEditor } from "../DateSeatsEditor";
+import { DurationSteppers, shiftDuration } from "./DurationSteppers";
+import { ItineraryTimeline } from "./ItineraryTimeline";
+import { HotelProfilesEditor, hotelNamesOf } from "./HotelProfilesEditor";
+import { parseHotelProfiles } from "@/lib/tripEditorState";
+import { isTransitDay } from "@/lib/tripTransitDays";
 import { WebsiteTripFields, TripTextComparison } from "../WebsiteTripFields";
-import { ChipsEditor, ListEditor, SaleBadgeFields, formatDuration, parseDuration } from "../TripEditorParts";
+import { ChipsEditor, ListEditor, SaleBadgeFields, parseDuration } from "../TripEditorParts";
 import { TripDescriptionEditor } from "../TripDescriptionEditor";
 import { MAX_PHOTOS_PER_TRIP } from "@/lib/tripPhotoImport/types";
 import { reconcilePricingDates, type PricingGroup } from "@/lib/adminDatePricing";
-import type { AnswerHint, DiscountGroup, ExtraFee, ItineraryDay, PriceGroup, RoomPrice } from "@/lib/adminTypes";
+import type { AnswerHint, DiscountGroup, ExtraFee, PriceGroup, RoomPrice } from "@/lib/adminTypes";
 import type { TripEditorProps } from "./TripEditor";
 import { AddRowButton, Checkbox, CountInput, EmptyHint, Field, Group, MoneyField, RemoveButton, RowCard, SectionHeader, SelectInput, SwitchRow, TextArea, TextInput } from "./parts";
 import { DateChips, TripDatePriceEditor, emptyPriceGroup, joinDepartureDraft, splitDepartureDraft } from "./PricingEditor";
@@ -44,13 +48,7 @@ export function BasicsSection(p: SectionProps) {
           </Field>
           <Field label="Хугацаа" required missing={durationMissing} anchor="duration_text"
             hint={unreadable ? `Одоо бичигдсэн: «${tripDraft.duration_text}». Тоогоор нь дахин оруулна уу.` : days != null && nights != null && nights > days ? "Шөнө өдрөөс олон байна. Шалгана уу." : "Өдрийг оруулахад шөнө нэгээр цөөн гэж өөрөө бөглөгдөнө."}>
-            <div className="grid grid-cols-2 gap-2">
-              <CountInput ariaLabel="Өдөр" unit="өдөр" min={1} max={60} value={days} missing={durationMissing} onChange={(next) => {
-                const nightsFollowed = nights == null || days == null || nights === days - 1;
-                setTripDraft((d) => ({ ...d, duration_text: formatDuration(next, nightsFollowed && next != null ? Math.max(0, next - 1) : nights) }));
-              }} />
-              <CountInput ariaLabel="Шөнө" unit="шөнө" min={0} max={60} value={nights} missing={durationMissing} onChange={(next) => setTripDraft((d) => ({ ...d, duration_text: formatDuration(days, next) }))} />
-            </div>
+            <DurationSteppers value={tripDraft.duration_text || ""} missing={durationMissing} onChange={(text) => setTripDraft((d) => ({ ...d, duration_text: text }))} />
           </Field>
           <Field id="trip-food" label="Хоол">
             <SelectInput id="trip-food" value={tripDraft.has_food} onChange={(e) => setTripDraft((d) => ({ ...d, has_food: e.target.value }))}>
@@ -63,6 +61,14 @@ export function BasicsSection(p: SectionProps) {
             <TextInput id="trip-hotel" value={tripDraft.hotel} placeholder="ж: 4* зочид буудал, 2 хүний өрөө" onChange={(e) => setTripDraft((d) => ({ ...d, hotel: e.target.value }))} />
           </Field>
         </div>
+      </Group>
+
+      <Group title="Зочид буудлууд" hint="Буудал бүрийн холбоос, тайлбар, зураг. Вэбсайтын «Байрлах буудал» картанд болон хөтөлбөрийн буудлын холбоосонд харагдана.">
+        <HotelProfilesEditor
+          profiles={parseHotelProfiles(tripDraft.hotelProfiles)}
+          suggestions={hotelNamesOf(p.tripPriceGroups, tripDraft.hotel || "")}
+          onChange={(profiles) => setTripDraft((d) => ({ ...d, hotelProfiles: JSON.stringify(profiles) }))}
+        />
       </Group>
 
       <Group title="Тайлбар" hint="Вэбсайтын аяллын хуудсанд тайлбар болж харагдана. Бүтэн өгүүлбэрээр бичнэ. Шинжилгээтэй аялалд шинжилгээний жагсаалт бүлгээрээ доор харагдана.">
@@ -225,68 +231,27 @@ function emptyExtraFee(): ExtraFee {
 function emptyRoomPrice(): RoomPrice {
   return { room_type: "", price: null, currency: "MNT", note: "" };
 }
-function emptyItineraryDay(dayNumber: number): ItineraryDay {
-  return { day: dayNumber, title: "", description: "", hotel: "", meals: { breakfast: false, lunch: false, dinner: false } };
-}
 
 /* --------------------------------------------------------------- itinerary */
 export function ItinerarySection(p: SectionProps) {
   const days = p.tripItineraryDays;
-  const setDays = p.setTripItineraryDays;
-  const [open, setOpen] = React.useState<Record<number, boolean>>({});
-  const isOpen = (idx: number) => open[idx] ?? (idx === 0 || !days[idx]?.title);
-  const moveDay = (from: number, to: number) => setDays((prev) => {
-    if (to < 0 || to >= prev.length) return prev;
-    const next = [...prev];
-    [next[from], next[to]] = [next[to], next[from]];
-    return next;
-  });
-  const addDay = () => { setDays((prev) => [...prev, emptyItineraryDay(prev.length + 1)]); setOpen((o) => ({ ...o, [days.length]: true })); };
   return (
     <>
       <SectionHeader title="Өдрийн хөтөлбөр" description="Өдөр бүр юу болохыг дарааллаар нь бичнэ. Постер болон вэбсайтын аяллын хуудсанд өдрөөр харагдана. Өдрийн зургийг Постер хэсгээс солино." audiences={["website", "poster"]} />
-      <Group action={<AddRowButton label="Өдөр нэмэх" onClick={addDay} />} title={`${days.length} өдөр`}>
-        {days.length === 0 ? <EmptyHint>Хөтөлбөр оруулаагүй байна. «Өдөр нэмэх» дарж эхлээрэй.</EmptyHint> : (
-          <ol className="relative space-y-2 before:absolute before:bottom-6 before:left-4 before:top-6 before:w-px before:bg-line" aria-label="Өдрүүд">
-            {days.map((d, idx) => {
-              const patch = (next: Partial<ItineraryDay>) => setDays((prev) => prev.map((v, i) => i === idx ? { ...v, ...next } : v));
-              const expanded = isOpen(idx);
-              return (
-                <li key={idx} className="relative pl-12">
-                  <span className="absolute left-0 top-2.5 flex h-8 w-8 items-center justify-center rounded-full border border-line bg-surface text-sm font-bold text-brand">{idx + 1}</span>
-                  <div className="rounded-lg border border-line bg-surface">
-                    <div className="flex items-center gap-2 py-2 pl-4 pr-2">
-                      <button type="button" aria-expanded={expanded} onClick={() => setOpen((o) => ({ ...o, [idx]: !expanded }))} className="flex min-w-0 flex-1 items-center gap-3 text-left">
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-semibold text-ink">{d.title || "Гарчиггүй өдөр"}</span>
-                          {!expanded && <span className="block truncate text-xs text-ink-muted">{(d.description || "").replace(/\s+/g, " ").slice(0, 140) || "Тайлбаргүй"}</span>}
-                        </span>
-                        <Icons.chevronRight size={16} className={cx("shrink-0 text-ink-subtle transition-transform", expanded ? "-rotate-90" : "rotate-90")} />
-                      </button>
-                      <span className="flex shrink-0 items-center border-l border-line pl-1">
-                        <button type="button" className="rounded-md p-1.5 text-ink-subtle hover:bg-surface-sunken hover:text-ink disabled:opacity-30" disabled={idx === 0} title="Дээш зөөх" aria-label={`${idx + 1}-р өдрийг дээш зөөх`} onClick={() => moveDay(idx, idx - 1)}><Icons.chevronRight size={14} className="-rotate-90" /></button>
-                        <button type="button" className="rounded-md p-1.5 text-ink-subtle hover:bg-surface-sunken hover:text-ink disabled:opacity-30" disabled={idx === days.length - 1} title="Доош зөөх" aria-label={`${idx + 1}-р өдрийг доош зөөх`} onClick={() => moveDay(idx, idx + 1)}><Icons.chevronRight size={14} className="rotate-90" /></button>
-                        <RemoveButton label={`${idx + 1}-р өдрийг хасах`} onClick={() => { if (window.confirm(`${idx + 1}-р өдрийг хасах уу?`)) setDays((prev) => prev.filter((_, i) => i !== idx)); }} />
-                      </span>
-                    </div>
-                    {expanded && (
-                      <div className="space-y-4 border-t border-line px-4 pb-4 pt-4">
-                        <div className="grid gap-4 sm:grid-cols-2">
-                          <Field label="Гарчиг, чиглэл"><TextInput value={d.title} placeholder="ж: НИЙСЛЭЛ – ХИЛИЙН БООМТ" onChange={(e) => patch({ title: e.target.value })} /></Field>
-                          <Field label="Хоноглох газар"><TextInput value={d.hotel || ""} placeholder="Буудал, галт тэрэг…" onChange={(e) => patch({ hotel: e.target.value })} /></Field>
-                        </div>
-                        <Field label="Тайлбар"><TextArea rows={4} className="min-h-28" value={d.description} placeholder="Энэ өдөр юу хийх вэ…" onChange={(e) => patch({ description: e.target.value })} /></Field>
-                        <DayPhotoPreview photo={d.photo} title={d.title || `Өдөр ${idx + 1}`} />
-                        <DayMealToggles meals={d.meals} onToggle={(key) => setDays((prev) => prev.map((v, i) => i === idx ? { ...v, meals: { ...v.meals, [key]: !v.meals?.[key] } } : v))} />
-                      </div>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-        )}
-      </Group>
+      <ItineraryTimeline
+        days={days}
+        // Standard UB days follow the transport switch, which only the file review has; on a saved
+        // trip staff must still be able to fix a train time or a meal on them.
+        locked={p.draftMode ? isTransitDay : undefined}
+        showSourceDates
+        showMealNotes
+        onChange={(next) => {
+          const delta = next.length - days.length;
+          p.setTripItineraryDays(next);
+          // The length follows the days: a day added or removed moves "N өдөр M шөнө" with it.
+          if (delta !== 0 && next.length > 0) p.setTripDraft((d) => ({ ...d, duration_text: shiftDuration(d.duration_text || "", next.length, delta) }));
+        }}
+      />
     </>
   );
 }

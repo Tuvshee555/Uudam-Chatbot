@@ -34,7 +34,9 @@ function isFreeFare(price: PassengerPrice) {
  * downstream reader (isInfantShapedAge and friends) tells the two apart by
  * checking for the literal substring "сар", so the unit must round-trip
  * exactly, never default silently to years. */
-export function parseAgeRange(value: string): { min: string; max: string; unit: "сар" | "нас" } {
+export function parseAgeRange(input: string | null | undefined): { min: string; max: string; unit: "сар" | "нас" } {
+  // A band read from a file can have no age range at all (a height band, "оргүй"): never crash on it.
+  const value = typeof input === "string" ? input : "";
   const unit: "сар" | "нас" = /сар/i.test(value) ? "сар" : "нас";
   const range = value.match(/(\d{1,3})\s*[-–—]\s*(\d{1,3})/);
   if (range) return { min: range[1], max: range[2], unit };
@@ -159,7 +161,14 @@ export function TripDatePriceEditor({ groups, onChange }: { groups: PriceGroup[]
     setSearch("");
   };
   const rowTitle = (row: typeof rows[number]) => row.date ? displayDate(row.date) : "Огноогүй гаралт";
-  const rowMeta = (row: typeof rows[number]) => String(records[row.groupIndex].package_id || records[row.groupIndex].hotel || records[row.groupIndex].note || records[row.groupIndex].label || "");
+  // Hotel and package side by side ("Буудал · Багц"); a hotel string that already carries the package is shown once.
+  const rowMeta = (row: typeof rows[number]) => {
+    const item = records[row.groupIndex];
+    const hotel = String(item.hotel || "").trim();
+    const pack = String(item.package_id || "").trim();
+    const both = pack && !hotel.includes(pack) ? [hotel, pack].filter(Boolean).join(" · ") : hotel || pack;
+    return both || String(item.note || item.label || "");
+  };
 
   return (
     <div className="grid min-w-0 gap-6 md:grid-cols-[16rem_minmax(0,1fr)]">
@@ -242,13 +251,14 @@ export function TripDatePriceEditor({ groups, onChange }: { groups: PriceGroup[]
             </div>
           </div>
 
-          <details className="mt-4 border-t border-line pt-4" open={!selected.date}>
-            <summary className="cursor-pointer text-sm font-medium text-ink-muted hover:text-ink">Багц, буудал, тэмдэглэл</summary>
+          <details key={key(selected)} className="mt-4 border-t border-line pt-4" open={!selected.date || Boolean(group.hotel || group.package_id || group.note)}>
+            <summary className="cursor-pointer text-sm font-medium text-ink-muted hover:text-ink">Буудал, багц, тэмдэглэл</summary>
             <div className="mt-3 grid gap-4 sm:grid-cols-2">
+              <Field label="Буудал" hint="Энэ гаралтын буудал. Холбоос, зургийг «Үндсэн» → «Зочид буудлууд»-д нэмнэ."><TextInput value={group.hotel || ""} placeholder="ж: Далайн эргийн 5* буудал" onChange={(e) => update({ hotel: e.target.value })} /></Field>
+              <Field label="Багц" hint="Ижил өдөр хэд хэдэн сонголт байвал, ж: Хөтөлбөртэй / Хөтөлбөргүй."><TextInput value={group.package_id || ""} placeholder="ж: Хөтөлбөртэй" onChange={(e) => update({ package_id: e.target.value })} /></Field>
+              <Field label="Ганц өрөөний нэмэлт"><MoneyField ariaLabel="Ганц өрөөний нэмэлт төлбөр" value={group.single_price != null ? String(group.single_price) : ""} placeholder="заавал биш" onChange={(digits) => update({ single_price: digits === "" ? null : Number(digits) })} /></Field>
               <Field label="Үнийн нэр"><TextInput value={group.label} onChange={(e) => update({ label: e.target.value })} placeholder="ж: Стандарт" /></Field>
-              <Field label="Аяллын төрөл"><TextInput value={group.package_id || ""} onChange={(e) => update({ package_id: e.target.value })} /></Field>
-              <Field label="Буудал"><TextInput value={group.hotel || ""} onChange={(e) => update({ hotel: e.target.value })} /></Field>
-              <Field label="Тэмдэглэл"><TextInput value={group.note} onChange={(e) => update({ note: e.target.value })} /></Field>
+              <Field label="Тэмдэглэл" className="sm:col-span-2"><TextInput value={group.note} onChange={(e) => update({ note: e.target.value })} /></Field>
             </div>
           </details>
         </div>

@@ -9,9 +9,10 @@ import type {
 import { isNewTripAction, reviewedProposal } from "@/lib/adminProposalApply";
 import { describeAction, isRedundantDetail, summarizeConflict } from "@/lib/adminProposalUtils";
 import { diffTripFields, type TripExtraDiff } from "@/lib/tripExtraSchema";
-import { REVIEW_INLINE_ITEMS, departureDays, formatYmd, hasPrice, reviewFacts, reviewIssues, tripPhotos } from "@/lib/tripReview";
+import { REVIEW_INLINE_ITEMS, departureDays, formatYmd, hasPrice, removePhoto, reviewFacts, reviewIssues, tripPhotos } from "@/lib/tripReview";
 import { NewTripReview } from "./tripReview/NewTripReview";
-import { thumb } from "./tripReview/DayCards";
+import { mergeEditorResult } from "@/lib/tripEditorState";
+import { thumb } from "./tripReview/photoThumb";
 
 /* ----------------------------------------------------------------
    One proposal, read top to bottom:
@@ -93,6 +94,9 @@ function TripSummary({ fields }: { fields: Row }) {
   );
 }
 
+/** Opens the full trip editor on an unsaved trip; the editor's save hands the fields back. */
+export type EditDraftTrip = (fields: Row, onDone: (fields: Row) => void) => void;
+
 export function ProposalCard({
   message,
   existingTrips = [],
@@ -102,6 +106,7 @@ export function ProposalCard({
   onRollback,
   onSubmitClarificationForm,
   onCancelProposal,
+  onEditDraftTrip,
 }: {
   message: ProposalMsg;
   existingTrips?: TravelTrip[];
@@ -111,6 +116,7 @@ export function ProposalCard({
   onRollback: (message: ProposalMsg) => void;
   onSubmitClarificationForm: (message: ProposalMsg, answers: Record<string, string>) => void;
   onCancelProposal: (id: string) => void;
+  onEditDraftTrip?: EditDraftTrip;
 }) {
   const fieldId = useId();
   const [formDraft, setFormDraft] = useState<Record<string, string>>({});
@@ -125,7 +131,21 @@ export function ProposalCard({
   const drafts = edits.proposal === proposal ? edits.drafts : {};
   const openTrips = edits.proposal === proposal ? edits.open : {};
   const fieldsOf = (index: number): Row => drafts[index] ?? record(proposal.actions[index]?.fields);
-  const setDraft = (index: number, next: Row) => setEdits({ proposal, drafts: { ...drafts, [index]: next }, open: openTrips });
+  // Functional: the full editor answers later, after other edits may have landed.
+  const setDraft = (index: number, next: Row | ((current: Row) => Row)) => setEdits((prev) => {
+    const base = prev.proposal === proposal ? prev : { proposal, drafts: {}, open: {} };
+    const current = base.drafts[index] ?? record(proposal.actions[index]?.fields);
+    return { ...base, drafts: { ...base.drafts, [index]: typeof next === "function" ? next(current) : next } };
+  });
+  const openFullEditor = (index: number) => {
+    const opened = fieldsOf(index);
+    onEditDraftTrip?.(opened, (edited) => setDraft(index, (current) => {
+      // A photo removed in the editor also leaves its day and its credit: tripPhotos would add a day photo back.
+      const kept = Array.isArray(edited.photo_urls) ? new Set(edited.photo_urls as string[]) : null;
+      const removed = kept ? (Array.isArray(opened.photo_urls) ? (opened.photo_urls as string[]) : []).filter((url) => !kept.has(url)) : [];
+      return mergeEditorResult(removed.reduce((fields, url) => removePhoto(fields, url), current), edited);
+    }));
+  };
   // An action built from an id alone (a tapped choice, a per-date change) is shown under the
   // trip's name, never its id.
   const described = proposal.actions.map((action, index) => {
@@ -288,7 +308,8 @@ export function ProposalCard({
                 )}
                 {open && (
                   <div className={cx(single < 0 && "border-t border-line")}>
-                    <NewTripReview fields={fields} onChange={(next) => setDraft(index, next)} warnings={notesFor(index)} disabled={applyBusy} />
+                    <NewTripReview fields={fields} onChange={(next) => setDraft(index, next)} warnings={notesFor(index)} disabled={applyBusy}
+                      onOpenEditor={onEditDraftTrip ? () => openFullEditor(index) : undefined} />
                   </div>
                 )}
               </section>
