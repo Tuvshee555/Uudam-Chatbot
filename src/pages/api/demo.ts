@@ -22,6 +22,7 @@ import { hasUnsupportedOriginRequest, routeFastPathText, type FastPathRoute } fr
 import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
+import { soldOutNamedReply } from "../../lib/soldOutNamed";
 import { decideTripAnswer } from "../../lib/tripAnswerDecision";
 import { getRecentTripIds, getTripSelection, setTripSelection } from "../../lib/tripSelectionState";
 import { verifyTripReply } from "../../lib/tripReplyVerification";
@@ -494,6 +495,17 @@ export default async function handler(
         if (route.unsupportedRequest) {
           await appendMessage(sessionId, "user", normalizedText);
           return returnHandoff();
+        }
+        // Mirrors the webhook: a trip the customer named that is sold out or paused is announced
+        // as such before an answer plan prices it or a list of its siblings stands in for it.
+        const soldOutNamed = soldOutNamedReply({ routed: route, text: normalizedText, trips: await getTrips() });
+        if (soldOutNamed) {
+          const safeReply = appendLeadCaptureCta(enforceWebsiteForPayment(sanitizeAssistantReply(soldOutNamed)), phoneAlreadyRequested);
+          factualScope = tripsNamedIn(safeReply, await getTrips());
+          await appendMessage(sessionId, "user", normalizedText);
+          await appendMessage(sessionId, "assistant", safeReply);
+          await rememberTurn();
+          return res.status(200).json({ reply: safeReply, buttons: [] });
         }
         const plan = await buildTripAnswerRuntime({ text: normalizedText, trips: await getTrips(), route });
         if (plan) {

@@ -82,3 +82,18 @@ test("case 13 positives: an open named trip is answered, and a bare list is stil
     await harness.close();
   }
 });
+
+test("case 13: the demo chat says the same as Messenger", async (context: TestContext) => {
+  const harness = await conversationGateHarness(context);
+  harness.catalog(namedFullCatalog("SOLD_OUT"));
+  try {
+    const model: ModelOverride = { certainty: "one", tripId: "named", topics: ["price", "program"] };
+    const webhook = await harness.turn("rt-c13-parity-webhook", ASK, model);
+    const demo = await harness.demoTurn("rt-c13-parity-demo", ASK, model);
+    assert.equal(webhook.sends.length, 1);
+    assert.equal(demo.body.reply, webhook.sends[0].text);
+    assert.match(String(demo.body.reply), /дууссан|дүүрсэн/);
+  } finally {
+    await harness.close();
+  }
+});
