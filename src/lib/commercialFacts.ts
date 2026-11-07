@@ -25,7 +25,16 @@ export function commercialFactsText(
     const badge = extra.marketing_badge as Record<string, unknown> | undefined;
     if (badge?.sale_enabled === true && typeof badge.sale_label === "string") parts.push(badge.sale_label);
   }
-  for (const row of [...(settings.special_offers || []), ...(settings.discount_policies || [])]) parts.push(...values(row));
+  for (const row of settings.special_offers || []) {
+    const texts = values(row).filter((value) => value.trim());
+    // An entered offer is a promotion by definition, whatever words its fields use.
+    if (texts.length) parts.push(...texts, "урамшуулал");
+  }
+  for (const row of settings.discount_policies || []) {
+    const texts = values(row).filter((value) => value.trim());
+    // An entered discount policy is a discount by definition, whatever words its fields use.
+    if (texts.length) parts.push(...texts, "хямдрал");
+  }
   for (const item of settings.faq || []) parts.push(item.question || "", item.answer || "");
   return parts.filter(Boolean).join("\n");
 }

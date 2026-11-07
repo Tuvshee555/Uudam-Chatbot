@@ -305,6 +305,27 @@ export function needCueMatches(need: MessageNeed, span: string, wholeText = span
   }
 }
 
+/**
+ * Do the owner's own words (the FAQ, special offers and discount policies entered in the admin) already cover the
+ * commercial term the customer asked about? Then "no data, no answer" does not apply and the gate steps aside, so
+ * the model can answer from that text (and reply.ts guardInventedCommercialClaims checks it against the same text).
+ */
+export function commercialSignalCovered(signals: readonly string[], ownerText: string): boolean {
+  const p = prepare(ownerText);
+  if (!p.norm) return false;
+  return signals.some((signal) => {
+    switch (signal) {
+      case "barter": return BARTER.test(p.norm);
+      case "invoice": return INVOICE.test(p.norm);
+      case "contract": return CONTRACT.test(p.norm);
+      case "instalment": return INSTALMENT.test(p.norm);
+      case "card": return CARD_PAY.test(p.norm);
+      case "group_discount": return DISCOUNT_CUE.test(p.norm);
+      default: return false;
+    }
+  });
+}
+
 // ── the classifier ───────────────────────────────────────────────────────────────────────────────
 
 /** An organisation or team of 10+ that wants to travel: this outranks every commercial term it also mentions. */

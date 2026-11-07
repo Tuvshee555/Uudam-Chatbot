@@ -7,7 +7,7 @@ import { guardInventedCommercialClaims, GROUP_INQUIRY_REPLY } from "../src/lib/r
 import { commercialFactsText } from "../src/lib/commercialFacts";
 import { buildPromptParts } from "../src/lib/conversation";
 import { dispatchNeed, catalogPlaceWordsIn } from "../src/lib/needDispatch";
-import { classifyMessageNeed } from "../src/lib/messageNeed";
+import { classifyMessageNeed, commercialSignalCovered } from "../src/lib/messageNeed";
 import { joinContextAndTurn } from "../src/lib/customerTurn";
 import type { TravelTrip } from "../src/lib/travelTypes";
 
@@ -190,4 +190,34 @@ test("destination words are recognised from the catalogue as typed, in either sc
   assert.deepEqual(catalogPlaceWordsIn("Dorvel hotruu 30 hun", trips), ["dorvel"]);
   assert.deepEqual(catalogPlaceWordsIn("Калдор руу явна", trips), ["калдор"]);
   assert.deepEqual(catalogPlaceWordsIn("30 хүн явна", trips), []);
+});
+
+test("an entered discount policy or offer is a fact whatever words its fields use; commercial terms in the owner's text step the gate aside", () => {
+  const policyOnly = commercialFactsText([aTrip()], { discount_policies: [{ name: "Групп", discount: "5%", applies_to: "15+", eligibility: "", description: "", verification: "" }] });
+  assert.equal(guardInventedCommercialClaims("Тийм, 15+ хүнд хямдрал бий.", policyOnly), "Тийм, 15+ хүнд хямдрал бий.");
+  const offerOnly = commercialFactsText([aTrip()], { special_offers: [{ name: "Өвлийн", description: "Эрт захиалгын тусгай санал" }] as never });
+  assert.equal(guardInventedCommercialClaims("Одоогоор урамшуулал байна.", offerOnly), "Одоогоор урамшуулал байна.");
+  // A blank row is no policy.
+  const blank = commercialFactsText([aTrip()], { discount_policies: [{ name: "", discount: " ", applies_to: "", eligibility: "", description: "", verification: "" }] });
+  assert.equal(guardInventedCommercialClaims("Хямдрал байна.", blank), "REFER");
+  // The gate steps aside only for the term the owner's text holds.
+  const faq = commercialFactsText([], { faq: [{ question: "Бартераар аялж болох уу?", answer: "Болно." }] });
+  assert.ok(commercialSignalCovered(["barter"], faq));
+  assert.ok(commercialSignalCovered(["contract", "barter"], faq), "one covered term is enough: the model and the guard take it from there");
+  assert.ok(!commercialSignalCovered(["invoice"], faq));
+  assert.ok(!commercialSignalCovered(["instalment"], faq));
+  assert.ok(!commercialSignalCovered(["barter"], ""));
+  assert.ok(commercialSignalCovered(["group_discount"], policyOnly));
+});
+
+test("dispatch: with owner text covering the asked term the commercial gate does nothing; without it, silence plus a lead", async () => {
+  const text = "barter awdag u";
+  const hit = classifyMessageNeed(text)!;
+  const covered = stub({ hit, text, configuredFacts: "Бартераар аялж болох уу? Болно." });
+  assert.equal(await dispatchNeed(covered.input), false);
+  assert.deepEqual(covered.delivered, []);
+  assert.deepEqual(covered.leads, [], "left entirely to the ordinary path");
+  const uncovered = stub({ hit, text, configuredFacts: "Нэхэмжлэх гаргана." });
+  assert.equal(await dispatchNeed(uncovered.input), true);
+  assert.equal(uncovered.leads.length, 1);
 });

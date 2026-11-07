@@ -21,7 +21,7 @@ import { noteInbound } from "./inboundTrace";
 import { PRAISE_REPLY, THANKS_REPLY } from "./greetingPhrases";
 import { hasBankAccountRequest, hasPaymentClaimIntent } from "./reply";
 import { buildGroupInquiryReply } from "./groupInquiry";
-import { socialKindOfText, type MessageNeed, type MessageNeedResult, type NeedConstraints } from "./messageNeed";
+import { commercialSignalCovered, socialKindOfText, type MessageNeed, type MessageNeedResult, type NeedConstraints } from "./messageNeed";
 import { getAliases } from "./travelFastPathsSearch";
 import { GENERIC_ROUTE_WORDS, normText, phoneticLatinText } from "./travelTextNorm";
 
@@ -57,6 +57,8 @@ export type NeedDispatchInput = {
   handoff?: (context: string) => Promise<void>;
   /** Active catalogue, only read to recognise the destination words a customer typed. */
   trips: () => Promise<TravelTrip[]>;
+  /** What the owner entered as offers, discount policies and FAQ (commercialFacts.ts): when it covers the asked term, the gate steps aside. */
+  configuredFacts?: string;
 };
 
 const STATUS_QUESTION = /баталгаажс|баталгаажл|баталгаажуулс|юу\s+болсон|яасан|хаана\s+явна|төлөв|batalgaajs|yu\s+bolson/iu;
@@ -124,6 +126,12 @@ export async function dispatchNeed(input: NeedDispatchInput): Promise<boolean> {
   // A payment claim or a bank-account request has its own fixed reply, lead and pause (webhook.ts).
   if (hasPaymentClaimIntent(text) || hasBankAccountRequest(text)) return false;
   const base = { requestId: input.trace?.requestId, correlationId: input.trace?.correlationId, platform: input.platform, senderHash: hashIdentifier(senderId) };
+  // "No data, no answer" applies only when there is no data: a barter / contract / instalment / discount term the owner
+  // wrote in the admin is answered from it by the ordinary path (and the output guard checks the claim against it).
+  if (hit.need === "commercial_policy" && input.configuredFacts && commercialSignalCovered(hit.signals, input.configuredFacts)) {
+    logInfo("webhook.need_data_covers", { ...base, need: hit.need, signals: hit.signals });
+    return false;
+  }
   const classified = () => {
     logInfo("webhook.need_classified", { ...base, need: hit.need, source: input.source, signals: hit.signals, ...(hit.social ? { social: hit.social } : {}) });
     recordCounter("webhook.need_classified_total", 1, { need: hit.need, source: input.source });

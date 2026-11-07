@@ -35,6 +35,8 @@ export async function conversationGateHarness(context: TestContext, options: { e
   const blockedNetwork: string[] = [];
   let catalog: FixtureTrip[] = [];
   let override: ModelOverride = {};
+  // Owner-entered bot settings (faq, special_offers, discount_policies ...) layered over the fixture row.
+  let settingsOverride: Record<string, unknown> = {};
   let serial = 0;
   // Staff takeover (staffTakeover.ts): the scripted Meta thread per customer, the ids the bot
   // recorded for its own sends, and when a consultant last replied.
@@ -110,6 +112,7 @@ export async function conversationGateHarness(context: TestContext, options: { e
       business_name: "Fixture agency", system_prompt: "Use catalog facts only", handoff_enabled: true,
       handoff_keywords: [], quick_info_keywords: [], chat_buttons: [],
       extra: { greeting: { enabled: false }, goodbye: { enabled: false }, reminder_enabled: false },
+      ...settingsOverride,
     }]);
     if (/SELECT[\s\S]*FROM travel_(?:bot_control|page_control)/i.test(sql)) return result([{ bot_paused: false, photo_only: false }]);
     if (/INSERT INTO travel_conversations/i.test(sql)) {
@@ -286,6 +289,8 @@ export async function conversationGateHarness(context: TestContext, options: { e
     /** Meta rejects every message to this customer (as the over-long replies of 2026-10-24). */
     failSends(senderId: string, failing = true) { if (failing) failingRecipients.add(senderId); else failingRecipients.delete(senderId); },
     catalog(value: FixtureTrip[]) { catalog = value; webhook.resetWebhookStateForTests(); },
+    /** Owner-entered settings the bot reads (faq, special_offers, discount_policies ...); the 5 s settings cache is expired. */
+    settings(value: Record<string, unknown>) { settingsOverride = value; context.mock.timers.tick(6_000); },
     /** The Messenger thread Meta returns for this customer (or how reading it fails). */
     thread(senderId: string, script: ThreadScript) { threads.set(senderId, script); },
     /** Ids of the messages the bot sent (recorded at send time, staffTakeover.ts). */

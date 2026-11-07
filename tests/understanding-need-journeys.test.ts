@@ -322,6 +322,29 @@ test("the need gate: what the customer needs is read before any trip is looked u
       }
     });
 
+    // ── owner-entered data: "no data, no answer" applies only when there is no data ─────────────────────────
+    await context.test("a barter term or discount policy the owner entered in the admin is answered from it; a term it does not hold stays silence plus a lead", async () => {
+      harness.settings({
+        faq: [{ question: "Бартераар аялж болох уу?", answer: "Бартераар аялах боломжтой. Нөхцөлийг аяллын зөвлөх тохирно." }],
+        discount_policies: [{ name: "Групп", discount: "5%", applies_to: "15+ хүн", eligibility: "", description: "", verification: "" }],
+      });
+      try {
+        const barter = await say("owner-barter", "barter awdag u", { intent: "other", certainty: "none", topics: [], finalReply: "Тийм, бартераар аялах боломжтой. Нөхцөлийг аяллын зөвлөх тохирно." });
+        assert.equal(barter.answerModelCalls, 1, "the gate stepped aside for the reply model");
+        assert.deepEqual(barter.sends.map((send) => send.text), ["Тийм, бартераар аялах боломжтой. Нөхцөлийг аяллын зөвлөх тохирно."]);
+        // The same model, asked about something the owner's text does not hold, is still held back by the output guard.
+        const contract = await say("owner-contract", "Нэхэмжлэх гаргаж өгөх үү", { intent: "other", certainty: "none", topics: [], finalReply: "Тийм, нэхэмжлэх гаргаж өгнө." });
+        assert.deepEqual(contract.sends, [], "an invoice is not in the owner's text: silence");
+        assert.equal(contract.answerModelCalls, 0, "and the gate did not step aside");
+        assert.ok(leadOf("owner-contract")!.context.startsWith("[need:commercial_policy]"));
+        // Without any owner policy the same question is silence plus a typed lead (the commercial-policy paraphrases above);
+        // with one, the gate steps aside and the ordinary path answers (here: it asks which trip the discount is for).
+        const groupDiscount = await say("owner-discount", "Групп хямдрал байдаг уу", { intent: "other", certainty: "none", topics: [] });
+        assert.equal(groupDiscount.sends.length, 1, "the ordinary path answers");
+        assert.ok(!harness.leads.some((lead) => lead.sender_id === "owner-discount" && lead.context.startsWith("[need:")), "the gate did not claim it");
+      } finally { harness.settings({}); }
+    });
+
     // ── the model's proposed need (observe by default, enforce on request) ───────────────────────────────
     // A relatives' trip of 14: no organisation word, so the rules name no need; the model may. NEED_MODEL is read
     // per message, so one harness serves both modes.

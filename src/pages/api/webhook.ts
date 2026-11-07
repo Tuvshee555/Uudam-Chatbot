@@ -1106,7 +1106,7 @@ async function handleMessageTurn(
   // a booking already made. Decided from the customer's own words, before the booking collector and before
   // any trip is looked up; no model call.
   const dispatchFor = (hit: NonNullable<typeof needHit>, source: "rule" | "model") => dispatchNeed({
-    hit, source, text, senderId, platform, lastBotReply, trace, trips: getTrips,
+    hit, source, text, senderId, platform, lastBotReply, trace, trips: getTrips, configuredFacts: commercialFactsText([], knowledge),
     // A complaint about a service already received goes to a person the same way (when hand-off is on).
     handoff: botSettings.handoff_enabled ? performHandoff : undefined,
     deliver: (input) => deliverFastPathReply(input), captureLead: (input) => captureLead(input),
