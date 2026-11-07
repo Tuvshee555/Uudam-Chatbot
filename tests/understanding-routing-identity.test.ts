@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyTestEnv } from "./helpers/env";
+import "./helpers/understandingRoutingEnv";
 import { correctionsCatalog, landFamily } from "./helpers/understandingRoutingCatalogs";
 import { contrastCandidates, detectContrastCue } from "../src/lib/tripContrast";
 import { identityWordsOf, isBareMention, pointsBackAtTrip, verdictAgainstAnchor } from "../src/lib/tripIdentity";
@@ -8,7 +8,6 @@ import { customerTripEvidence } from "../src/lib/tripUnderstanding";
 import { getRecentTripIds, getTripSelection, setTripSelection } from "../src/lib/tripSelectionState";
 import type { TravelTrip } from "../src/lib/travelTypes";
 
-applyTestEnv({ REDIS_STATE_ENABLED: "false" });
 
 /**
  * The pieces behind "keep answering about the trip the customer is on": what counts as a NEW trip
@@ -106,4 +105,10 @@ test("the recent-trips stack: last three, newest first, never the selected trip"
   assert.deepEqual(await getRecentTripIds(sender), ["e", "d", "b"]);
   await setTripSelection(sender, null);
   assert.deepEqual(await getRecentTripIds(sender), []);
+  // A trip picked from a list: the others were shown too, and the first listed is the oldest entry.
+  const listed = "identity-stack-list";
+  await setTripSelection(listed, sel("b"), ["a", "b", "c"]);
+  assert.deepEqual(await getRecentTripIds(listed), ["c", "a"]);
+  await setTripSelection(listed, sel("d"), ["d", "e"]);
+  assert.deepEqual(await getRecentTripIds(listed), ["b", "c", "a"]);
 });

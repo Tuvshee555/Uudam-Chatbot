@@ -35,18 +35,21 @@ export async function getRecentTripIds(senderId: string): Promise<string[]> {
   return state ? (state.recent || []).filter((id) => id !== state.selection.tripId).slice(0, RECENT_TRIPS_MAX) : [];
 }
 
-export async function setTripSelection(senderId: string, selection: TripSelection | null): Promise<void> {
+/**
+ * `offeredTripIds` = the list the customer picked this trip from. Its other members were SHOWN to the
+ * customer, so "the other one" can mean them; the first listed is the oldest entry of the stack.
+ */
+export async function setTripSelection(senderId: string, selection: TripSelection | null, offeredTripIds: string[] = []): Promise<void> {
   const previous = selection ? await loadState(senderId) : null;
   store.delete(senderId);
   if (!selection) {
     await withRedis("trip_selection.clear", (redis) => redis.del(`trip_selection:${senderId}`));
     return;
   }
-  const recent = previous
-    ? [previous.selection.tripId, ...(previous.recent || [])]
-        .filter((id, index, all) => id !== selection.tripId && all.indexOf(id) === index)
-        .slice(0, RECENT_TRIPS_MAX)
-    : [];
+  const chain = previous ? [previous.selection.tripId, ...(previous.recent || [])] : [];
+  const recent = [...chain, ...[...offeredTripIds].reverse()]
+    .filter((id, index, all) => id !== selection.tripId && all.indexOf(id) === index)
+    .slice(0, RECENT_TRIPS_MAX);
   const state: SelectionState = { selection, updatedAt: Date.now(), ...(recent.length ? { recent } : {}) };
   const saved = await withRedis("trip_selection.set", async (redis) => {
     await redis.set(`trip_selection:${senderId}`, JSON.stringify(state), "EX", TTL_SEC);

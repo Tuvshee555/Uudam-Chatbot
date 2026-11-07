@@ -327,6 +327,7 @@ export async function routeFastPathText(input: {
   const resolve = (t: string, pool: TravelTrip[]) =>
     resolveTripFromUserMessage(t, pool, { allowLooseFallback: false });
   const chose = async (trip: TravelTrip, understanding?: Understanding): Promise<FastPathRoute> => {
+    const offered = (await getClarificationState(senderId))?.candidateTripIds || [];
     await clearClarificationState(senderId);
     const selection = mergeTripSelection(trip.id, buildTripRequest(requestText, trips, understanding, now), previousSelection);
     // The party belongs to the customer, not to one trip: a switch that states no head count keeps the
@@ -335,7 +336,7 @@ export async function routeFastPathText(input: {
     if (previousSelection && previousSelection.tripId !== trip.id && !selection.passengers.length && previousSelection.passengers.length) {
       selection.passengers = previousSelection.passengers;
     }
-    await setTripSelection(senderId, selection);
+    await setTripSelection(senderId, selection, offered);
     // A typed "3" picks the trip exactly as tapping its "3. <name>…" button does. As a
     // bare digit the turn asked for nothing, so no card was built and the free-text
     // model answered instead (or nothing was sent) — live replay 2026-10-30.

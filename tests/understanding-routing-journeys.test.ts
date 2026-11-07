@@ -134,6 +134,29 @@ test("corrections: 'not the previous one, the other one with the sea' never answ
       const back = await harness.turn(sender, text, { topics: ["price"] });
       assert.ok(!textOf(back.sends).includes("1,791,000"), `"${text}" must not answer with the city trip: ${textOf(back.sends)}`);
     }
+    // The customer picked the city trip from ONE list that also held both sea trips (nothing was shown before).
+    for (const [label, model] of readings) {
+      const sender = `rt-corr-list-${label}`;
+      await harness.turn(sender, "Норвел Вэлмор Тарсис аялал", list(3));
+      const picked = await harness.turn(sender, "1", {});
+      assert.equal(picked.selection?.tripId, "city", "setup: the city trip is selected from the list");
+      const corrected = await harness.turn(sender, fix, model);
+      const said = textOf(corrected.sends);
+      assert.ok(!said.includes("1,791,000"), `${label} (list): the city trip's fare must not answer the correction: ${said}`);
+      assert.ok(/ВЭЛМОР|ТАРСИС/.test(said), `${label} (list): the sea trips are offered: ${said}`);
+    }
+    // Two trips were listed, the customer picked the second: "the other one" is the first, which was shown.
+    const two = "rt-corr-two";
+    await harness.turn(two, "Вэлмор Тарсис аялал", { certainty: "several", trips: ["T2", "T3"], intent: "trip", topics: ["price"] } as ModelOverride);
+    const second = await harness.turn(two, "2", {});
+    assert.equal(second.selection?.tripId, "seaB", "setup: the second listed trip is selected");
+    const otherOne = await harness.turn(two, "Нөгөө аялал нь хэд вэ", { topics: ["price"] });
+    assert.ok(textOf(otherOne.sends).includes("1,391,000") && !textOf(otherOne.sends).includes("2,291,000"), `the other listed trip's fare: ${textOf(otherOne.sends)}`);
+    // "Not this one" with nothing else to point at: the refused trip is not quoted again.
+    const refused = "rt-corr-refused";
+    await harness.turn(refused, "НОРВЕЛ ХОТЫН АЯЛАЛ", one("city", { topics: ["price"] }));
+    const none = await harness.turn(refused, "Энэ аялал биш", { topics: ["price"] });
+    assert.ok(!textOf(none.sends).includes("1,791,000"), `the refused trip's card is not repeated: ${textOf(none.sends)}`);
     // A negated trip named in the message still works: not A, but B.
     const sender = "rt-corr-negated";
     await harness.turn(sender, "ВЕРДАН ХОТЫН АЯЛАЛ", one("verdan", { topics: ["price"] }));
@@ -213,3 +236,9 @@ test("a list answers 'which trip?', not a question none of the listed trips can 
     await harness.close();
   }
 });
+
+// Known open failures of this stream (kept visible, owner's rule): none of them is a wrong confident answer.
+test.todo("a bare alias shared by a full trip and an open sibling is announced as 'one is full, one is open' (today the open sibling is named alone)");
+test.todo("model unavailable: a genuine switch to a trip named by one destination word is offered as a menu of ONE trip instead of being chosen");
+test.todo("an existing customer who names one trip and a date it does not depart on still gets the nearest departures from the answer plan (only the multi-trip date miss is silent)");
+test.todo("Instagram threads carry no consultant rows, so the existing-customer signal is Facebook-only");

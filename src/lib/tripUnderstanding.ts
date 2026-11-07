@@ -16,7 +16,7 @@ import { TRIP_TOPICS, buildTripRequest, parseRequestedPassengers, type Requested
 import { websiteTripLinksInText } from "./bookingWebsite";
 import { holidayPromptLine } from "./holidayCalendar";
 import { isKnownGreetingPhrase, isThanksOnly } from "./greetingPhrases";
-import { contrastCandidates } from "./tripContrast";
+import { contrastCandidates, detectContrastCue } from "./tripContrast";
 import { isBareMention, pointsBackAtTrip, verdictAgainstAnchor } from "./tripIdentity";
 import { REQUESTED_FACT_FIELDS, parseRequestedFacts, type RequestedFact } from "./requestedFacts";
 import {
@@ -500,6 +500,9 @@ export function customerTripEvidence(input: {
   if (!switched && (selected.length || (input.recentTripIds || []).length)) {
     const contrast = contrastCandidates({ text: input.text, catalog, selectedIds: selected.map(trip => trip.id), stack: input.recentTripIds || [] });
     if (contrast) return { source: "current", tripIds: contrast.tripIds };
+    // "Not this one" with no other trip to point at: the trip on screen is exactly what was refused,
+    // so it is not the answer either. No trip is evidenced and nothing is quoted from it.
+    if (selected.length && detectContrastCue(input.text) === "not_this") return { source: "none", tripIds: [] };
   }
   if (wordsEvidence) return wordsEvidence;
   if (websiteTripLinksInText(input.text).slugs.length || isKnownGreetingPhrase(input.text) || isThanksOnly(input.text)) {
