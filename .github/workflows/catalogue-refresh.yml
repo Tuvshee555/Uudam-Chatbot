@@ -1,0 +1,30 @@
+name: Catalogue refresh
+
+on:
+  schedule:
+    - cron: '22,52 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+concurrency:
+  group: catalogue-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Regenerate and publish the catalogues when they are out of date
+        env:
+          PARTNER_SYNC_URL: ${{ vars.PARTNER_SYNC_URL }}
+          CRON_SECRET: ${{ secrets.PARTNER_SYNC_CRON_SECRET }}
+        run: |
+          test -n "$PARTNER_SYNC_URL" && test -n "$CRON_SECRET"
+          URL="${PARTNER_SYNC_URL%/api/cron/partner-sync}/api/cron/catalogue-refresh"
+          curl --fail-with-body --silent --show-error --retry 1 --retry-delay 20 \
+            --max-time 330 --request POST \
+            --header "Authorization: Bearer $CRON_SECRET" "$URL" \
+            --output "$RUNNER_TEMP/catalogue-refresh.json"
+          jq -e '.ok == true' "$RUNNER_TEMP/catalogue-refresh.json"
+          jq '{ok, results}' "$RUNNER_TEMP/catalogue-refresh.json"

@@ -35,6 +35,7 @@ const nextConfig: NextConfig = {
     // Corporate catalogue renderer (src/lib/catalogue/render): fonts, the repo-approved logo and the
     // headless Chromium it prints with, for every admin route that can render a PDF.
     "/api/admin/catalogue/generate": CATALOGUE_RENDER_FILES,
+    "/api/cron/catalogue-refresh": CATALOGUE_RENDER_FILES,
     "/api/admin/catalogue/preview": CATALOGUE_RENDER_FILES,
     "/api/admin/catalogue/preview-sample": CATALOGUE_RENDER_FILES,
     // The readiness checklist only checks that the fonts and the logo exist (no browser is started).
