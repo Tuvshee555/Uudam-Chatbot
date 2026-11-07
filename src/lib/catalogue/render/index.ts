@@ -10,6 +10,7 @@ import { prepareArt } from "./art";
 import { defaultImageFetcher } from "./images";
 import { planPages } from "./layout";
 import { stampPdf } from "./pdfMeta";
+import { auditNavigation, readPdfNavigation } from "./pdfNav";
 import { CatalogueRenderError, type RenderAssets, type RenderCatalogueOptions } from "./renderTypes";
 
 export { buildCatalogueHtml, catalogueDocumentTitle, escapeHtml, CATALOGUE_TITLE } from "./html";
@@ -51,6 +52,11 @@ export async function renderCatalogue(snapshot: CatalogueSnapshot, opts: RenderC
   const stamped = await stampPdf(rendered.pdf, snapshot, versionLabel);
 
   const warnings: CatalogueWarning[] = [...art.warnings, ...auditWarnings(rendered.audit)];
+  try {
+    warnings.push(...auditNavigation(await readPdfNavigation(stamped.pdf), snapshot, plan));
+  } catch {
+    /* a PDF whose links cannot be read is reported by the page-count check below or by the admin preview */
+  }
   const expected = plan.totalPages;
   if (stamped.pageCount !== expected) {
     warnings.push({

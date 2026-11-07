@@ -110,8 +110,15 @@ export function recommendShortlist(cards: readonly CatalogueTripCard[], opts: { 
   const size = Math.max(CATALOGUE_QUICK_MIN_TRIPS, Math.min(CATALOGUE_QUICK_MAX_TRIPS, Math.round(opts.size ?? DEFAULT_SHORTLIST_SIZE)));
   // A premium shortlist shows a real starting price: trips that can only say "Үнэ лавлах" are held back
   // unless there are too few priced ones to fill a book.
-  const priced = cards.filter((card) => bookable(card) && card.price.kind === "from");
-  const sellable = priced.length >= CATALOGUE_QUICK_MIN_TRIPS ? priced : cards.filter(bookable);
+  // A trip whose hero is weak or missing is never recommended while enough trips with a real photograph remain
+  // (a thin photo opening a page spoils a premium book). Price is the softer preference.
+  const photoReady = (card: CatalogueTripCard) => card.heroQuality === "excellent" || card.heroQuality === "good";
+  const withPrice = (list: readonly CatalogueTripCard[]) => list.filter((card) => card.price.kind === "from");
+  const open = cards.filter(bookable);
+  const ready = open.filter(photoReady);
+  const sellable = withPrice(ready).length >= CATALOGUE_QUICK_MIN_TRIPS ? withPrice(ready)
+    : ready.length >= CATALOGUE_QUICK_MIN_TRIPS ? ready
+      : withPrice(open).length >= CATALOGUE_QUICK_MIN_TRIPS ? withPrice(open) : open;
   const tierOf = tierFinder(sellable);
   const toPool = (card: CatalogueTripCard): Pool => ({ card, tier: tierOf(card), base: appealOf(card) });
   const byBase = (a: Pool, b: Pool) => b.base - a.base || tie(a.card, b.card);

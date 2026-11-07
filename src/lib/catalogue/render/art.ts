@@ -17,14 +17,15 @@ import sharp from "sharp";
 import type { CatalogueSnapshot, CatalogueTripCard, CatalogueWarning, CataloguePhoto, PhotoFocal } from "../types";
 import { assignCompositions, orderTrips, planPages, type CompositionFit, type PagePlan } from "./layout";
 import { defaultImageFetcher } from "./images";
+import { COLORS } from "./theme";
 import type { CatalogueImageFetcher, RenderAssets, RenderImage, TripArt } from "./renderTypes";
 
 /** Photo box shapes, height / width. The CSS in theme.ts uses the same boxes (in pt). */
 export const ASPECT = {
   /** Whole page. */
   page: 960 / 540,
-  /** Cover when the photo cannot carry a whole page: photo on top, deep panel below. */
-  coverPlate: 640 / 540,
+  /** Cover when the photo cannot carry a whole page: a tall photo that fades into the deep panel. */
+  coverPlate: 700 / 540,
   plate: 1,
   panorama: 400 / 540,
   diptych: 500 / 540,
@@ -45,6 +46,14 @@ const OPENER_MIN_CROP_PX = 640;
 const WORK_LONG_EDGE = 2400;
 const FETCH_CONCURRENCY = 4;
 const SCRIM_RGB = "13,22,32";
+const hexRgb = (hex: string) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)).join(",");
+/** The cover panel's colour: a "solid" fade ends exactly here, so photo and panel are one surface. */
+const PANEL_RGB = hexRgb(COLORS.ink);
+/** Cover thresholds (source pixels across the crop): the cover is the page everyone sees first. */
+const COVER_FULL_MIN_PX = 820;
+const COVER_PLATE_MIN_PX = 760;
+/** At or below this width/height a photo counts as portrait/square and may carry the whole cover page. */
+const COVER_PORTRAIT_MAX_ASPECT = 1.15;
 
 export type EncodeProfile = {
   /** Output width for a 540pt-wide photo box. */
@@ -134,6 +143,8 @@ export type Scrim = {
   from: number;
   /** Peak opacity at the bottom edge. */
   strength: number;
+  /** Fade to the opaque panel colour instead of a translucent scrim (cover plate). */
+  solid?: boolean;
 };
 
 /** Opacity needed under light type for a lower region of mean luminance `luma` (0 dark .. 1 bright). */
@@ -143,11 +154,14 @@ export function scrimStrength(luma: number): number {
 
 function scrimSvg(w: number, h: number, scrim: Scrim): Buffer {
   const mid = scrim.from + (1 - scrim.from) * 0.45;
+  const rgb = scrim.solid ? PANEL_RGB : SCRIM_RGB;
+  const strength = scrim.solid ? 1 : scrim.strength;
+  const midOpacity = scrim.solid ? 0.5 : scrim.strength * 0.66;
   return Buffer.from(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">` +
-      `<stop offset="${scrim.from}" stop-color="rgb(${SCRIM_RGB})" stop-opacity="0"/>` +
-      `<stop offset="${mid.toFixed(3)}" stop-color="rgb(${SCRIM_RGB})" stop-opacity="${(scrim.strength * 0.66).toFixed(3)}"/>` +
-      `<stop offset="1" stop-color="rgb(${SCRIM_RGB})" stop-opacity="${scrim.strength}"/></linearGradient></defs>` +
+      `<stop offset="${scrim.from}" stop-color="rgb(${rgb})" stop-opacity="0"/>` +
+      `<stop offset="${mid.toFixed(3)}" stop-color="rgb(${rgb})" stop-opacity="${midOpacity.toFixed(3)}"/>` +
+      `<stop offset="1" stop-color="rgb(${rgb})" stop-opacity="${strength}"/></linearGradient></defs>` +
       `<rect width="${w}" height="${h}" fill="url(#g)"/></svg>`,
   );
 }
@@ -160,7 +174,7 @@ export type CropSpec = {
   focal?: PhotoFocal | null;
   zoom?: number | null;
   /** Bake a bottom scrim; strength follows the measured luminance when `auto`. */
-  scrim?: { from: number } | null;
+  scrim?: { from: number; solid?: boolean } | null;
   /** Progressive JPEG (smaller). Baseline is used for the tiny thumbnails. */
   progressive?: boolean;
 };
@@ -181,7 +195,7 @@ export async function cropImage(work: Work, spec: CropSpec): Promise<RenderImage
       pipeline = pipeline.resize({ width: outW, height: outH, fit: "cover", position: sharp.strategy.attention });
     }
     if (spec.scrim) {
-      pipeline = pipeline.composite([{ input: scrimSvg(outW, outH, { from: spec.scrim.from, strength: scrimStrength(luma) }), top: 0, left: 0 }]);
+      pipeline = pipeline.composite([{ input: scrimSvg(outW, outH, { from: spec.scrim.from, strength: scrimStrength(luma), solid: spec.scrim.solid }), top: 0, left: 0 }]);
     }
     const out = await pipeline
       .toColorspace("srgb")
@@ -200,6 +214,18 @@ export async function cropImage(work: Work, spec: CropSpec): Promise<RenderImage
 }
 
 // --- which compositions a photo can carry -------------------------------------------------------
+
+/**
+ * How the cover can use a photo: "full" (the whole page, text over a navy scrim) needs a portrait or
+ * square photograph with enough pixels; otherwise "plate" (a tall crop that fades into the navy
+ * panel, cinematic rather than boxed) needs a smaller but still crisp crop. null = not good enough.
+ */
+export function coverModeFor(work: Pick<Work, "width" | "height">, photo?: { focal?: PhotoFocal | null; zoom?: number | null } | null): "full" | "plate" | null {
+  const zoom = photo?.zoom;
+  if (work.width / work.height <= COVER_PORTRAIT_MAX_ASPECT && cropPixels(work, ASPECT.page, zoom) >= COVER_FULL_MIN_PX) return "full";
+  if (cropPixels(work, ASPECT.coverPlate, zoom) >= COVER_PLATE_MIN_PX) return "plate";
+  return null;
+}
 
 /** Photo-quality rank used to order candidates for the cover and the chapter openers. */
 export function qualityRank(card: CatalogueTripCard, work: Work | null): number {
@@ -231,7 +257,10 @@ export function compositionFit(card: CatalogueTripCard, hero: Work | null, secon
 
 // --- the whole book's art ------------------------------------------------------------------------
 
-export type PreparedArt = Pick<RenderAssets, "trips" | "cover" | "chapters" | "closing"> & { warnings: CatalogueWarning[] };
+/** Which page printed which source photograph (thumbnails excluded). A URL listed twice is a visible repeat. */
+export type PhotoUse = { url: string; role: string };
+
+export type PreparedArt = Pick<RenderAssets, "trips" | "cover" | "chapters" | "closing"> & { warnings: CatalogueWarning[]; uses: PhotoUse[] };
 
 async function pool<T>(items: T[], limit: number, work: (item: T) => Promise<void>): Promise<void> {
   let next = 0;
@@ -314,29 +343,59 @@ export async function prepareArt(
     loaded.set(card.tripId, { card, hero, gallery });
   });
 
-  // 2. cover: the data layer's pick when printable, else the best hero available.
+  // 2. cover: an INVITATION, never a second copy of a trip page. In order of preference:
+  //    (a) the staff / data layer's cover photograph (snapshot.coverPhoto, used by no trip page);
+  //    (b) another good photograph of the cover trip (its gallery) that can carry the whole page;
+  //    (c) the cover trip's hero, or the best hero available.
   const printable = (l: Loaded | undefined): l is Loaded & { hero: Work } => !!l && isUsableHero(l.card, l.hero);
-  const coverCandidates = [
+  const heroUrls = new Set<string>();
+  for (const l of loaded.values()) if (l.card.photo?.url) heroUrls.add(l.card.photo.url);
+  const sourceUrls = new Map<string, string>(); // url -> what it was used for, so no photo opens two spreads
+  const uses: PhotoUse[] = [];
+  const claim = (url: string, role: string) => {
+    sourceUrls.set(url, role);
+    uses.push({ url, role });
+  };
+  type CoverSrc = { work: Work; photo: Pick<CataloguePhoto, "url" | "focal" | "zoom" | "credit">; tripId: string | null; source: "cover_photo" | "gallery" | "hero" };
+  const coverSources: CoverSrc[] = [];
+  const dedicated = snapshot.coverPhoto?.url ? snapshot.coverPhoto : null;
+  if (dedicated && !heroUrls.has(dedicated.url)) {
+    const work = await load(dedicated.url);
+    if (work) coverSources.push({ work, photo: dedicated, tripId: null, source: "cover_photo" });
+  }
+  const tripOrder = [
     ...(snapshot.coverTripId ? [loaded.get(snapshot.coverTripId)] : []),
     ...[...loaded.values()].sort((a, b) => qualityRank(b.card, b.hero) - qualityRank(a.card, a.hero) || (b.hero?.height ?? 0) - (a.hero?.height ?? 0)),
-  ];
-  const coverSrc = coverCandidates.find(printable) ?? null;
-  const sourceUrls = new Map<string, string>(); // url -> what it was used for, so no photo opens two spreads
+  ].filter((l): l is Loaded => !!l);
+  for (const l of tripOrder) {
+    if (l.card.heroQuality === "weak" || l.card.heroQuality === "missing") continue;
+    for (const g of l.gallery) {
+      if (!heroUrls.has(g.photo.url)) coverSources.push({ work: g.work, photo: g.photo, tripId: l.card.tripId, source: "gallery" });
+    }
+    if (printable(l) && l.card.photo) coverSources.push({ work: l.hero, photo: l.card.photo, tripId: l.card.tripId, source: "hero" });
+  }
+  // The dedicated photograph wins. Otherwise: a photograph that can carry the whole page beats one that
+  // only fits the plate, another photograph of the cover trip beats its hero (no duplicate on its own
+  // page), and the cover trip beats any other trip. Ties keep the order above (stable sort).
+  const modeOf = (c: CoverSrc) => coverModeFor(c.work, c.photo);
+  const coverScore = (c: CoverSrc) =>
+    (c.source === "cover_photo" ? 0 : 10) + (modeOf(c) === "full" ? 0 : 4) + (c.source === "hero" ? 2 : 0) + (c.tripId !== null && c.tripId !== snapshot.coverTripId ? 6 : 0);
+  const pickedCover = coverSources.filter(c => modeOf(c) !== null).sort((x, y) => coverScore(x) - coverScore(y))[0] ?? null;
   let cover: PreparedArt["cover"] = null;
-  if (coverSrc) {
-    const p = coverSrc.card.photo!;
-    const fullOk = cropPixels(coverSrc.hero, ASPECT.page, p.zoom) >= 820 && (!!p.focal || coverSrc.hero.width / coverSrc.hero.height <= 1.05 || coverSrc.hero.height >= 1500);
-    const image = await cropImage(coverSrc.hero, fullOk
-      ? { aspect: ASPECT.page, outWidth: profile.fullWidth + 120, quality: profile.quality + 2, focal: p.focal, zoom: p.zoom, scrim: { from: 0.5 } }
-      : { aspect: ASPECT.coverPlate, outWidth: profile.width, quality: profile.quality + 2, focal: p.focal, zoom: p.zoom });
+  if (pickedCover) {
+    const p = pickedCover.photo;
+    const mode = coverModeFor(pickedCover.work, p)!;
+    const image = await cropImage(pickedCover.work, mode === "full"
+      ? { aspect: ASPECT.page, outWidth: profile.fullWidth + 140, quality: profile.quality + 4, focal: p.focal, zoom: p.zoom, scrim: { from: 0.46 } }
+      : { aspect: ASPECT.coverPlate, outWidth: profile.width + 80, quality: profile.quality + 4, focal: p.focal, zoom: p.zoom, scrim: { from: 0.5, solid: true } });
     if (image) {
-      cover = { tripId: coverSrc.card.tripId, mode: fullOk ? "full" : "plate", image, credit: p.credit?.trim() || null };
-      sourceUrls.set(p.url, "cover");
+      cover = { tripId: pickedCover.tripId, mode, image, credit: p.credit?.trim() || null, source: pickedCover.source };
+      claim(p.url, "cover");
     }
   }
 
-  // 3. chapter openers: a photo no other opener uses; gallery photos preferred so the opener and
-  //    the trip's own page do not show the same picture.
+  // 3. chapter openers: a gallery photograph no other page uses, so an opener never repeats a trip
+  //    page's picture. A chapter without one gets the typographic opener.
   const chapters: PreparedArt["chapters"] = {};
   const openerUsedHero = new Set<string>();
   if (plan.hasOpeners) {
@@ -347,13 +406,12 @@ export async function prepareArt(
       chapter.trips.forEach((t, pos) => {
         const l = loaded.get(t.card.tripId);
         if (!l) return;
-        if (printable(l) && l.card.photo) cands.push({ tripId: t.card.tripId, work: l.hero, photo: l.card.photo, isGallery: false, rank: qualityRank(l.card, l.hero), pos });
-        if (l.hero && (l.card.heroQuality ?? "good") !== "weak" && (l.card.heroQuality ?? "good") !== "missing") {
+        if ((l.card.heroQuality ?? "good") !== "weak" && (l.card.heroQuality ?? "good") !== "missing") {
           for (const g of l.gallery) cands.push({ tripId: t.card.tripId, work: g.work, photo: g.photo, isGallery: true, rank: 2, pos });
         }
       });
       const scored = cands
-        .filter(c => !sourceUrls.has(c.photo.url) && cropPixels(c.work, ASPECT.page, c.photo.zoom) >= OPENER_MIN_CROP_PX)
+        .filter(c => !sourceUrls.has(c.photo.url) && !heroUrls.has(c.photo.url) && cropPixels(c.work, ASPECT.page, c.photo.zoom) >= OPENER_MIN_CROP_PX)
         .map(c => ({ c, score: c.rank * 10_000 + (c.isGallery ? 6_000 : Math.min(c.pos, 3) * 700) + Math.min(cropPixels(c.work, ASPECT.page, c.photo.zoom), 1400) }))
         .sort((a, b) => b.score - a.score);
       const pick = scored[0]?.c;
@@ -361,12 +419,13 @@ export async function prepareArt(
       const image = await cropImage(pick.work, { aspect: ASPECT.page, outWidth: profile.fullWidth, quality: profile.quality, focal: pick.photo.focal, zoom: pick.photo.zoom, scrim: { from: 0.4 } });
       if (image) {
         chapters[chapter.index] = { tripId: pick.tripId, image, credit: pick.photo.credit?.trim() || null };
-        sourceUrls.set(pick.photo.url, `chapter-${chapter.index}`);
-        if (!pick.isGallery) openerUsedHero.add(pick.tripId);
+        claim(pick.photo.url, `chapter-${chapter.index}`);
       }
     }
   }
-  if (cover) openerUsedHero.add(cover.tripId);
+  if (cover?.source === "hero" && cover.tripId) openerUsedHero.add(cover.tripId);
+  // A gallery photograph already printed (cover, opener) must not come back as a trip's inset.
+  for (const l of loaded.values()) l.gallery = l.gallery.filter(g => !sourceUrls.has(g.photo.url) && !heroUrls.has(g.photo.url));
 
   // 4. compositions for the trips, in book order, then each trip's crops.
   const fits: CompositionFit[] = plan.trips.map(t => {
@@ -406,31 +465,30 @@ export async function prepareArt(
       trips[card.tripId] = { composition: "type", hero: null, second: null, thumb };
       return;
     }
+    uses.push({ url: p.url, role: `trip-${card.code}` });
+    if (second && g) claim(g.photo.url, `inset-${card.code}`);
     trips[card.tripId] = { composition: composition === "diptych" && !second ? "plate" : composition, hero: heroImage, second, thumb } satisfies TripArt;
   });
 
-  // 5. closing band: a calm wide crop of a gallery photo no page has used (the cover trip's first),
-  //    else the cover photo again as a bookend.
+  // 5. closing band: a calm wide crop of a gallery photograph no page has used. No such photograph
+  //    means a plain brand band, never a repeat of the cover or a trip page.
   let closing: RenderImage | null = null;
-  const galleryPool: { work: Work; photo: CataloguePhoto }[] = [];
-  const closingOrder = [...loaded.values()].sort((x, y) => Number(y.card.tripId === coverSrc?.card.tripId) - Number(x.card.tripId === coverSrc?.card.tripId));
+  const galleryPool: { work: Work; photo: CataloguePhoto; tripId: string }[] = [];
+  const closingOrder = [...loaded.values()].sort((x, y) => Number(y.card.tripId === cover?.tripId) - Number(x.card.tripId === cover?.tripId));
   for (const l of closingOrder) {
     if (l.card.heroQuality === "weak" || l.card.heroQuality === "missing") continue;
     for (const g of l.gallery) {
-      const usedAsInset = Object.values(trips).length > 0 && plan.trips.some(t => t.card.tripId === l.card.tripId && trips[l.card.tripId]?.second && l.gallery[0] === g);
-      if (!sourceUrls.has(g.photo.url) && !usedAsInset && cropPixels(g.work, ASPECT.closing, g.photo.zoom) >= 900) galleryPool.push({ work: g.work, photo: g.photo });
+      if (!sourceUrls.has(g.photo.url) && cropPixels(g.work, ASPECT.closing, g.photo.zoom) >= 900) galleryPool.push({ work: g.work, photo: g.photo, tripId: l.card.tripId });
     }
   }
   const band = galleryPool[0];
   if (band) {
     closing = await cropImage(band.work, { aspect: ASPECT.closing, outWidth: profile.width, quality: profile.quality, focal: band.photo.focal, zoom: band.photo.zoom });
-  } else if (coverSrc?.card.photo) {
-    const p = coverSrc.card.photo;
-    closing = await cropImage(coverSrc.hero, { aspect: ASPECT.closing, outWidth: profile.width, quality: profile.quality, focal: p.focal, zoom: p.zoom });
+    if (closing) claim(band.photo.url, "closing");
   }
 
   // Deterministic warning order regardless of fetch completion order.
   const order = new Map(ordered.map((c, i) => [c.tripId, i] as const));
   warnings.sort((a, b) => (order.get(a.tripId ?? "") ?? 0) - (order.get(b.tripId ?? "") ?? 0));
-  return { trips, cover, chapters, closing, warnings };
+  return { trips, cover, chapters, closing, warnings, uses };
 }

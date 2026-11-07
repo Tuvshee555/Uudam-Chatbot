@@ -28,6 +28,10 @@ const COVER_TITLE_LINES = ["ХАМТ ОЛНЫ", "АЯЛЛЫН СОНГОЛТ"] a
 const RUNNING_TITLE = "Байгууллагын аяллын сонголт";
 const SAMPLE_SIZE_AND_MONTH = "25 хүн, 1-р сар";
 const MAX_PHONES = 3;
+const MAX_CORPORATE_NOTES = 3;
+const MAX_NOTE_CHARS = 150;
+/** The cover's one warm line: addressed to the team, an invitation rather than a slogan. */
+export const COVER_INVITE = "Баг хамт олныхоо дараагийн мартагдашгүй аяллыг эндээс эхлүүлээрэй.";
 
 const dispTitle = (t: OrderedTrip) => displayTitle(cardTitle(t.card));
 
@@ -35,27 +39,24 @@ const dispTitle = (t: OrderedTrip) => displayTitle(cardTitle(t.card));
 
 export function coverPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets: RenderAssets): string {
   const cover = assets.cover;
-  const coverCard = cover ? snapshot.trips.find(t => t.tripId === cover.tripId) : undefined;
   const count = snapshot.trips.length;
-  const invite = "Хамт олноороо хамт аялах газраа энэхүү номоос сонгоорой.";
-  const issue = [snapshot.seasonLabel, `Дугаар ${snapshot.issueLabel}`, count > 0 ? `${count} санал` : ""].filter(Boolean).map(escapeHtml).join(" · ");
-  const caption = cover
-    ? `<div class="caption"><span>${escapeHtml(coverCard ? displayTitle(cardTitle(coverCard)) : "")}</span><span>${cover.credit ? `Фото: ${escapeHtml(cover.credit)}` : ""}</span></div>`
-    : "";
+  const issue = [snapshot.seasonLabel, count > 0 ? `${count} аяллын санал` : "", snapshot.issueLabel].filter(Boolean).map(escapeHtml).join(" · ");
+  // Credit on the left, the way into the book on the right (a small link, not a button).
+  const caption = `<div class="caption"><span>${cover?.credit ? `Фото: ${escapeHtml(cover.credit)}` : ""}</span><a class="go" href="#contents">Агуулга</a></div>`;
   const block = `<div class="block">
     <div class="eyebrow">UUDAM Travel · Байгууллагын аялал</div>
     <h1 data-fit-min="${px(26)}" data-fit-maxh="${px(37 * 1.14 * 2 + 2)}">${COVER_TITLE_LINES.map(escapeHtml).join("<br>")}</h1>
     <div class="rule"></div>
-    <p class="invite">${escapeHtml(invite)}</p>
+    <p class="invite">${escapeHtml(COVER_INVITE)}</p>
     <div class="issue">${issue}</div>
   </div>`;
   const tile = logoTile(assets);
   if (!cover) {
-    return `<section class="page cover bare dark" id="cover" data-page="1">${tile}${block}</section>`;
+    return `<section class="page cover bare dark" id="cover" data-page="1">${tile}${block}${caption}</section>`;
   }
   if (cover.mode === "plate") {
     return `<section class="page cover coverplate dark" id="cover" data-page="1">
-  <div class="panelbg" style="top:640pt"></div>
+  <div class="panelbg" style="top:700pt"></div>
   <div class="photo">${imageTag(cover.image, "")}</div>
   ${tile}${block}${caption}
 </section>`;
@@ -140,6 +141,20 @@ export function contentsPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets
 
 // --- closing ------------------------------------------------------------------------------------------
 
+/** Staff-approved company-group statements: trimmed, de-duplicated, at most three short lines. */
+export function corporateNotesOf(snapshot: CatalogueSnapshot): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of snapshot.contact.corporateNotes ?? []) {
+    const line = String(raw ?? "").replace(/\s+/g, " ").trim();
+    if (!line || line.length > MAX_NOTE_CHARS || seen.has(line)) continue;
+    seen.add(line);
+    out.push(line);
+    if (out.length >= MAX_CORPORATE_NOTES) break;
+  }
+  return out;
+}
+
 export function closingPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets: RenderAssets): string {
   const exampleCode = plan.trips[0]?.card.code ?? "A01";
   const phones = snapshot.contact.phones.map(p => p.trim()).filter(Boolean).slice(0, MAX_PHONES);
@@ -152,15 +167,20 @@ export function closingPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets:
     ["03", "Хүссэн сар", "Ойролцоо сар ч хангалттай"],
   ];
   const band = assets.closing && safeImageSrc(assets.closing.dataUri);
-  return `<section class="page closing" id="closing" data-page="${plan.closingPage}">
-  ${band ? `<div class="band">${imageTag(assets.closing, "")}</div>` : ""}
+  const notes = corporateNotesOf(snapshot);
+  const notesHtml = notes.length
+    ? `<div class="corp"><span class="kick">Байгууллага, хамт олонд</span><ul>${notes.map(n => `<li>${escapeHtml(n)}</li>`).join("")}</ul></div>`
+    : "";
+  return `<section class="page closing${notes.length || !band ? " compact" : ""}" id="closing" data-page="${plan.closingPage}">
+  <div class="band${band ? "" : " plain"}">${band ? imageTag(assets.closing, "") : `<span class="bk">UUDAM Travel · Байгууллагын аялал</span>`}</div>
   ${logoTile(assets)}
-  <div class="body${band ? "" : " nophoto"}">
-    <span class="kick">Хамт олныхоо аяллыг эхлүүлэх</span>
+  <div class="body">
+    <span class="kick">Хамт олондоо зориулсан санал</span>
     <h2 data-fit-min="${px(28)}" data-fit-maxh="${px(40 * 1.08 * 2)}">Үнийн санал авах</h2>
-    <p class="intro">Сонирхсон аяллаа сонгоод доорх гурван зүйлийг бидэнд бичээрэй. Манай ажилтан таны хүсэлтэд тохирсон үнийн санал бэлтгэж хариулна.</p>
+    <p class="intro">Сонирхсон аяллынхаа код, хүний тоо, хүссэн сараа бидэнд бичээрэй. Манай ажилтан таны багийн хэмжээ, сард тохирсон үнийн санал бэлтгэж хариулна.</p>
     <div class="steps">${steps.map(([n, t, s]) => `<div class="step"><span class="n">${n}</span><div class="t">${escapeHtml(t)}<span>${escapeHtml(s)}</span></div></div>`).join("")}</div>
     <div class="reply"><span class="rl">Мессежийн жишээ</span><span class="sample">${escapeHtml(exampleCode)}, ${SAMPLE_SIZE_AND_MONTH}</span></div>
+    ${notesHtml}
     <div class="contact"><div><span class="kick">Холбоо барих</span><div class="phones">${phones.map(p => `<span>${escapeHtml(p)}</span>`).join("")}</div></div>${
       siteLabel ? `<div class="site">${siteHref ? `<a href="${escapeHtml(siteHref)}">${escapeHtml(siteLabel)}</a>` : escapeHtml(siteLabel)}</div>` : ""
     }</div>

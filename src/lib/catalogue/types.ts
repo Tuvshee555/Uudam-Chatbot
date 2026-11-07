@@ -34,6 +34,8 @@ export type CatalogueWarningCode =
   | "internal_copy_dropped" //  staff/bot instruction text removed from customer copy
   | "stale_published" //        published version no longer matches live data
   | "code_collision"
+  | "transport_conflict" //     title/program wording contradicts the structured transport field
+  | "duration_conflict" //      title/program days contradict the structured duration
   | "category_unknown"
   | "other";
 
@@ -153,6 +155,12 @@ export type CatalogueContact = {
   phones: string[];
   siteLabel: string;
   siteUrl: string;
+  /**
+   * Optional, staff-approved one-line statements about company groups for the closing page (for
+   * example what staff can arrange for a company). Each line must come from UUDAM's own settings; the
+   * renderer prints at most three and prints nothing extra when this is absent.
+   */
+  corporateNotes?: string[];
 };
 
 export type CatalogueSnapshot = {
@@ -167,6 +175,8 @@ export type CatalogueSnapshot = {
   trips: CatalogueTripCard[];
   /** Trip chosen for the cover: best hero quality + visual appeal, never "most recently edited". */
   coverTripId: string | null;
+  /** Photograph for the cover: staff choice, else the strongest approved photo no page uses. null = use the cover trip's hero. */
+  coverPhoto?: CataloguePhoto | null;
   groups: CatalogueGroup[];
   contact: CatalogueContact;
   /** Collection-level warnings plus every trip warning, flattened, for the admin. */
@@ -192,6 +202,10 @@ export type CatalogueConfig = {
   heroByTripId: Record<string, CatalogueHeroChoice>;
   /** Staff display-title overrides per trip id (display only). */
   titleOverrides: Record<string, string>;
+  /** Staff-chosen COVER photograph (any approved photo; independent of every trip page's hero). */
+  coverPhoto?: CatalogueHeroChoice | null;
+  /** Supported statements about company/group services printed on the closing page (staff-approved, <= 3 short lines). */
+  corporateNotes?: string[];
   quick: CatalogueEditionConfig;
   complete: CatalogueEditionConfig;
   preview: CatalogueEditionConfig;
@@ -210,6 +224,8 @@ export type SnapshotInput = {
   config: CatalogueEditionConfig;
   heroByTripId?: Record<string, CatalogueHeroChoice>;
   titleOverrides?: Record<string, string>;
+  coverPhoto?: CatalogueHeroChoice | null;
+  corporateNotes?: string[];
   /** Measured photo stats by URL (width/height always; sharpness/flat when measured). Absent = only URL hints are known. */
   photoSizes?: Record<string, { width: number; height: number; sharpness?: number; flat?: number; colorful?: number }>;
   codeMap: Record<string, string>;

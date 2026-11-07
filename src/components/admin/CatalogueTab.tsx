@@ -5,6 +5,7 @@ import type { CatalogueEdition } from "@/lib/catalogue/types";
 import { CurationPanel } from "./catalogue/CurationPanel";
 import { GenerateFlow } from "./catalogue/GenerateFlow";
 import { PhotosPanel } from "./catalogue/PhotosPanel";
+import { ReadinessPanel } from "./catalogue/ReadinessPanel";
 import { ReviewPanel } from "./catalogue/ReviewPanel";
 import { StatsPanel } from "./catalogue/StatsPanel";
 import { TestSendPanel } from "./catalogue/TestSendPanel";
@@ -83,6 +84,7 @@ export function CatalogueTab({ apiFetch }: { apiFetch: (url: string, init?: Requ
         <LoadingPanel />
       ) : !admin.state ? null : (
         <>
+          {admin.state.readiness && <ReadinessPanel readiness={admin.state.readiness} />}
           <SubTabs tabs={SECTIONS} value={section} onChange={setSection} label="Каталогийн хэсгүүд" idPrefix={ID_PREFIX} />
           <TabPanel idPrefix={ID_PREFIX} tabKey={section}>
             {section === "versions" && <VersionsPanel admin={admin} onPreview={previewVersion} onGenerate={goGenerate} />}

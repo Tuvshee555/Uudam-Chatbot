@@ -13,6 +13,9 @@
  *
  * --pick keeps those codes (in that order, regrouped by the snapshot's groups); --cover sets the
  * cover trip. Nothing is stored, published or sent.
+ *
+ * Fixture mode also takes --cover-photo tall|ok (a dedicated portrait / landscape cover photograph) and
+ * --notes (two invented company-group lines on the closing page).
  */
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -31,6 +34,8 @@ const positional = args.filter((a, i) => !a.startsWith("--") && !(i > 0 && args[
 const outDir = path.resolve(positional[0] || "catalogue-sample-out");
 const snapshotFile = flag("--snapshot");
 const tripCount = Number(positional[1] || 8);
+const coverPhotoShape = flag("--cover-photo") as "tall" | "ok" | null;
+const sampleNotes = args.includes("--notes");
 
 async function cachedFetcher(cacheDir: string) {
   await mkdir(cacheDir, { recursive: true });
@@ -48,7 +53,14 @@ async function cachedFetcher(cacheDir: string) {
 }
 
 async function loadSnapshot(): Promise<CatalogueSnapshot> {
-  if (!snapshotFile) return sampleSnapshot({ trips: tripCount, edition: tripCount > 12 ? "complete" : "quick" });
+  if (!snapshotFile) {
+    return sampleSnapshot({
+      trips: tripCount,
+      edition: tripCount > 12 ? "complete" : "quick",
+      coverPhoto: coverPhotoShape ?? undefined,
+      corporateNotes: sampleNotes ? ["Жишиг мөр нэг: байгууллагад зориулсан тусгай хөтөлбөрийг ажилтан бэлтгэнэ.", "Жишиг мөр хоёр: хамт олны хэмжээнээс хамаарч санал өөр байна."] : undefined,
+    });
+  }
   const snap = JSON.parse(await readFile(path.resolve(snapshotFile), "utf8")) as CatalogueSnapshot;
   const pick = (flag("--pick") || "").split(",").map(s => s.trim()).filter(Boolean);
   const edition = (flag("--edition") as CatalogueSnapshot["edition"] | null) ?? (pick.length ? "quick" : snap.edition);
@@ -59,8 +71,10 @@ async function loadSnapshot(): Promise<CatalogueSnapshot> {
     .map(g => ({ ...g, codes: (pick.length ? pick : g.codes).filter(c => g.codes.includes(c) && codes.has(c)) }))
     .filter(g => g.codes.length > 0);
   const cover = flag("--cover");
+  const coverUrl = flag("--cover-url");
   return {
     ...snap,
+    ...(coverUrl ? { coverPhoto: { url: coverUrl, width: null, height: null, credit: null, source: "trip_photo" as const } } : {}),
     edition,
     trips,
     groups,

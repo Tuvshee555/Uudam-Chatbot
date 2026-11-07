@@ -58,8 +58,12 @@ export type RenderAssets = {
   logoDataUri: string;
   /** Per trip id: the composition and the crops of its photos. Missing id = typographic page. */
   trips: Record<string, TripArt>;
-  /** Full-page cover photo (or the photo plate variant) and the trip it was taken from. */
-  cover: { tripId: string; mode: "full" | "plate"; image: RenderImage; credit: string | null } | null;
+  /**
+   * The cover photograph. "full" = whole page under a navy scrim; "plate" = a tall crop that fades into
+   * the navy panel. tripId is the trip it was taken from (null for the dedicated cover photograph);
+   * source says which kind of photograph it is.
+   */
+  cover: { tripId: string | null; mode: "full" | "plate"; image: RenderImage; credit: string | null; source: "cover_photo" | "gallery" | "hero" } | null;
   /** Chapter opener photos by chapter index (0-based). Missing = typographic opener. */
   chapters: Record<number, { tripId: string; image: RenderImage; credit: string | null } | undefined>;
   /** Calm photo band on the closing page. */

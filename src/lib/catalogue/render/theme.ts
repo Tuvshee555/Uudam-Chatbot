@@ -77,7 +77,7 @@ ul{list-style:none}
 /* cover -------------------------------------------------------------------------------------- */
 .cover .tile{left:0;top:0;width:118pt;height:118pt;padding:15pt}
 .coverplate .panelbg{position:absolute;left:0;right:0;bottom:0;background:var(--ink)}
-.cover .photo{position:absolute;left:0;top:0;width:100%;height:640pt;overflow:hidden}
+.cover .photo{position:absolute;left:0;top:0;width:100%;height:700pt;overflow:hidden}
 .cover .photo img{width:100%;height:100%;object-fit:cover}
 .cover .block{position:absolute;left:var(--m);right:var(--m);bottom:58pt;color:var(--on)}
 .cover .eyebrow{font-weight:500;font-size:10.5pt;letter-spacing:0.2em;text-transform:uppercase;color:var(--on-2)}
@@ -85,7 +85,8 @@ ul{list-style:none}
 .cover .rule{width:44pt;margin:20pt 0 16pt;border-top:1pt solid var(--gold)}
 .cover .invite{font-family:'${SERIF}',serif;font-style:italic;font-weight:300;font-size:17pt;line-height:1.4;color:var(--on);max-width:420pt;text-wrap:pretty}
 .cover .issue{margin-top:20pt;font-weight:500;font-size:9.5pt;letter-spacing:0.18em;text-transform:uppercase;color:var(--on-3)}
-.cover .caption{position:absolute;left:var(--m);right:var(--m);bottom:26pt;display:flex;justify-content:space-between;gap:16pt;font-size:8.5pt;letter-spacing:0.06em;color:var(--on-3)}
+.cover .caption{position:absolute;left:var(--m);right:var(--m);bottom:26pt;display:flex;justify-content:space-between;align-items:baseline;gap:16pt;font-size:8.5pt;letter-spacing:0.06em;color:var(--on-3)}
+.cover .caption .go{font-weight:500;letter-spacing:0.18em;text-transform:uppercase;color:var(--on-2)}
 .cover.bare .block{bottom:auto;top:200pt}
 
 /* chapter opener ----------------------------------------------------------------------------- */
@@ -215,9 +216,19 @@ ul{list-style:none}
 /* closing ------------------------------------------------------------------------------------ */
 .closing .band{position:absolute;left:0;top:0;width:100%;height:230pt;overflow:hidden;background:var(--ink)}
 .closing .band img{width:100%;height:100%;object-fit:cover}
+.closing .band.plain{background:var(--ink)}
+.closing .band.plain .bk{position:absolute;left:var(--m);top:48pt;font-weight:500;font-size:10.5pt;letter-spacing:0.2em;text-transform:uppercase;color:var(--on-2)}
+.closing .band.plain::after{content:"";position:absolute;left:var(--m);right:var(--m);bottom:0;border-top:1pt solid var(--gold)}
 .closing .tile{left:var(--m);top:182pt;width:96pt;height:96pt;padding:12pt}
 .closing .body{position:absolute;left:var(--m);right:var(--m);top:306pt;bottom:62pt;display:flex;flex-direction:column}
-.closing .body.nophoto{top:150pt}
+.closing.compact .band{height:176pt}
+.closing.compact .tile{top:130pt;width:88pt;height:88pt;padding:11pt}
+.closing.compact .body{top:244pt}
+.closing.compact .step{padding:6pt 0}
+.closing.compact .reply{margin-top:14pt}
+.closing .corp{margin-top:16pt;padding-top:12pt;border-top:0.6pt solid var(--rule)}
+.closing .corp li{position:relative;padding-left:14pt;margin-top:5pt;font-size:12.5pt;line-height:1.45;color:var(--ink-2);text-wrap:pretty}
+.closing .corp li::before{content:"";position:absolute;left:0;top:0.62em;width:7pt;border-top:1pt solid var(--teal)}
 .closing h2{margin-top:10pt;font-size:40pt;line-height:1.08;color:var(--ink)}
 .closing .intro{margin-top:12pt;font-size:13.5pt;line-height:1.55;color:var(--ink-2);max-width:440pt;text-wrap:pretty}
 .closing .steps{margin-top:18pt;border-top:0.6pt solid var(--rule)}

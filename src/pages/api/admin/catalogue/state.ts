@@ -1,4 +1,4 @@
-import { CATALOGUE_QUICK_MAX_TRIPS, CATALOGUE_QUICK_MIN_TRIPS, type CatalogueEdition } from "../../../../lib/catalogue/types";
+import { CATALOGUE_QUICK_MAX_TRIPS, CATALOGUE_QUICK_MIN_TRIPS, type CatalogueConfig, type CatalogueEdition } from "../../../../lib/catalogue/types";
 import { getDeps, recipientLabel, recipientRef, type LazyDeps } from "../../../../lib/catalogue/admin/deps";
 import { CATALOGUE_MAX_AGE_DAYS } from "../../../../lib/catalogue/freshness";
 import { TESTER_CODE_TTL_MS, type CatalogueTesterView } from "../../../../lib/catalogue/testers";
@@ -10,6 +10,46 @@ import {
   type CatalogueEditionState,
 } from "../../../../lib/catalogue/admin/types";
 import { computeFreshness, toVersionView } from "../../../../lib/catalogue/admin/views";
+import { loadReview } from "../../../../lib/catalogue/admin/review";
+import { buildReadiness, tripFactsFromReview, type ReadinessTripFacts } from "../../../../lib/catalogue/admin/readiness";
+
+/** The trip review behind the readiness checklist must never hold the whole screen hostage. */
+const READINESS_TRIPS_BUDGET_MS = 25_000;
+
+async function readTripFacts(deps: LazyDeps, config: CatalogueConfig): Promise<ReadinessTripFacts | null> {
+  try {
+    const now = deps.now();
+    const [data, activeTrips] = await Promise.all([deps.data(), deps.listActiveTrips()]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), READINESS_TRIPS_BUDGET_MS);
+    });
+    const review = await Promise.race([
+      loadReview({
+        edition: "complete",
+        nowIso: now.toISOString(),
+        today: ulaanbaatarDay(now),
+        activeTrips,
+        editionConfig: config.complete,
+        heroByTripId: config.heroByTripId,
+        titleOverrides: config.titleOverrides,
+        data,
+      }),
+      timeout,
+    ]).finally(() => clearTimeout(timer));
+    return review ? tripFactsFromReview(review, config.quick) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function missingAssets(deps: LazyDeps): Promise<string[] | null> {
+  try {
+    return await deps.rendererAssetsMissing();
+  } catch {
+    return null;
+  }
+}
 
 async function editionState(deps: LazyDeps, edition: "quick" | "complete"): Promise<CatalogueEditionState> {
   const store = await deps.store();
@@ -33,8 +73,8 @@ export default catalogueRoute({
     const store = await deps.store();
     await store.ensureCatalogueSchema();
     const now = deps.now();
-    const [config, quick, complete, metaOutboundDisabled, testerList] = await Promise.all([
-      store.getCatalogueConfig(),
+    const config = await store.getCatalogueConfig();
+    const [quick, complete, metaOutboundDisabled, testerList, assetsMissing, tripFacts] = await Promise.all([
       editionState(deps, "quick"),
       editionState(deps, "complete"),
       deps.metaOutboundDisabled(),
@@ -42,11 +82,13 @@ export default catalogueRoute({
         (testers): { testers: CatalogueTesterView[]; error: string | null } => ({ testers, error: null }),
         (): { testers: CatalogueTesterView[]; error: string | null } => ({ testers: [], error: "Туршигчийн жагсаалтыг ачаалж чадсангүй." }),
       ),
+      missingAssets(deps),
+      readTripFacts(deps, config),
     ]);
     const recipients = deps.testRecipientPsids().map((psid) => ({ ref: recipientRef(psid), label: recipientLabel(psid) }));
     const reachable = testerList.testers.some((tester) => tester.windowOpen) || recipients.length > 0;
     const blockedReason = metaOutboundDisabled
-      ? "Meta-д илгээх үйлдэл унтраалттай байна (kill switch эсвэл Vercel preview). Зөвхөн дээж (dry-run) ажиллана."
+      ? "Meta руу илгээх түр унтраалттай байна (өөрөө унтрааснаас эсвэл туршилтын орчин байгаагаас). Одоохондоо зөвхөн дээж харах боломжтой."
       : testerList.testers.length === 0 && recipients.length === 0
         ? "Баталгаажсан туршигч алга. Нэг удаа: «Тестер холбох» дарж гарсан кодыг өөрийн Messenger-ээс манай Page руу бичнэ үү. Тэр болтол зөвхөн дээж (dry-run) ажиллана."
         : !reachable
@@ -74,6 +116,17 @@ export default catalogueRoute({
         blockedReason,
       },
       config,
+      readiness: buildReadiness({
+        database: { ok: true }, // ensureCatalogueSchema above reached the database; a failure there is a 503, not a green light
+        missingAssets: assetsMissing,
+        editions: { quick, complete },
+        testers: testerList.testers,
+        testersError: testerList.error !== null,
+        envRecipients: recipients.length,
+        metaOutboundDisabled,
+        config,
+        trips: tripFacts,
+      }),
     };
     res.status(200).json(body);
   },

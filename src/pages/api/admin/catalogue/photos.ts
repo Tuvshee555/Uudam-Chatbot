@@ -1,6 +1,7 @@
 import { getDeps } from "../../../../lib/catalogue/admin/deps";
-import { CatalogueHttpError, catalogueRoute } from "../../../../lib/catalogue/admin/route";
-import type { CataloguePhotosResponse } from "../../../../lib/catalogue/admin/types";
+import { CatalogueHttpError, catalogueRoute, ulaanbaatarDay } from "../../../../lib/catalogue/admin/route";
+import type { CatalogueCoverCandidatesResponse, CataloguePhotosResponse } from "../../../../lib/catalogue/admin/types";
+import { loadCoverPools, rankCoverCandidates } from "../../../../lib/catalogue/admin/cover";
 import { firstQuery, isValidTripId } from "../../../../lib/catalogue/admin/validation";
 import { parsePhotoUpdate } from "../../../../lib/catalogue/admin/validationPhotos";
 import type { CatalogueConfig, CatalogueHeroChoice } from "../../../../lib/catalogue/types";
@@ -9,6 +10,8 @@ import { logInfo, recordCounter } from "../../../../lib/observability";
 /**
  * The hero photo picker and the printed display title of ONE trip.
  *   GET  ?tripId=...  every selectable photo with its measured size, score and issues, plus the staff choice.
+ *   GET  ?cover=1  the best approved photos no trip page uses (bounded search) for the cover chooser; the choice is
+ *        saved through PUT /config { coverPhoto }.
  *   PUT  { tripId, hero?, titleOverride? }  stores heroByTripId[tripId] = {url, focal, zoom} and/or
  *        titleOverrides[tripId] in the catalogue config. `hero.url` MUST be one of that trip's own photo
  *        candidates; null clears the choice. The trip's price, dates and title of record are never touched.
@@ -19,6 +22,29 @@ export default catalogueRoute({
   rateLimit: { limit: 60, windowMs: 60_000 },
   async handle({ req, res, actor, trace }) {
     const deps = getDeps();
+
+    if (req.method === "GET" && firstQuery(req.query.cover) === "1") {
+      const [store, data, trips] = await Promise.all([deps.store(), deps.data(), deps.listActiveTrips()]);
+      await store.ensureCatalogueSchema();
+      const config = await store.getCatalogueConfig();
+      const codes = store.getTripCodeMap ? await store.getTripCodeMap().catch(() => ({})) : {};
+      const { pools, truncated, searched } = await loadCoverPools({
+        data,
+        activeTrips: trips,
+        config,
+        today: ulaanbaatarDay(deps.now()),
+        codes,
+        now: () => Date.now(),
+      });
+      const body: CatalogueCoverCandidatesResponse = {
+        ok: true,
+        current: config.coverPhoto ?? null,
+        candidates: rankCoverCandidates(pools, config),
+        truncated,
+        searchedTrips: searched,
+      };
+      return void res.status(200).json(body);
+    }
 
     if (req.method === "GET") {
       const tripId = firstQuery(req.query.tripId);

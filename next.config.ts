@@ -37,6 +37,8 @@ const nextConfig: NextConfig = {
     "/api/admin/catalogue/generate": CATALOGUE_RENDER_FILES,
     "/api/admin/catalogue/preview": CATALOGUE_RENDER_FILES,
     "/api/admin/catalogue/preview-sample": CATALOGUE_RENDER_FILES,
+    // The readiness checklist only checks that the fonts and the logo exist (no browser is started).
+    "/api/admin/catalogue/state": ["./public/fonts/*.ttf", "./public/poster/uudam-logo.jpg"],
     "/api/poster-pdf": [
       "./src/styles/poster.css",
       "./public/fonts/*.ttf",

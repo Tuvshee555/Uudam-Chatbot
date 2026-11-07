@@ -573,9 +573,67 @@ test("catalogue tester pairing journeys", async (context) => {
       assert.equal((await paired()).includes("…-001"), false);
     });
 
+    await context.test("the admin flow end to end: code -> polls -> the message -> paired and selected; expiry; re-pairing a known device; revoke", async () => {
+      const flow = await import("../src/components/admin/catalogue/pairingFlow");
+      const poll = async (state: import("../src/components/admin/catalogue/pairingFlow").PairingState) =>
+        flow.reducePairing(state, { type: "polled", testers: await testers.listTesters(), nowMs: Date.now() });
+      advance(1000);
+
+      // 1. A new device: press the button, get a code, nothing happens until the message arrives.
+      let state = flow.reducePairing(flow.initialPairing, { type: "request", testers: await testers.listTesters() });
+      assert.equal(state.phase, "issuing");
+      const first = await issue("UUDAM-TEST-Z9Y8X7", "Миний шинэ утас");
+      state = flow.reducePairing(state, { type: "issued", response: first, nowMs: Date.now() });
+      assert.equal(state.phase, "waiting");
+      assert.equal(state.code, "UUDAM-TEST-Z9Y8X7");
+      assert.equal(flow.shouldPoll(state, false), true);
+      assert.equal(flow.shouldPoll(state, true), false, "no polling while the tab is hidden");
+      assert.equal(flow.formatCountdown(flow.remainingMs(state, Date.now())), "30:00");
+      advance(3000);
+      state = await poll(state);
+      assert.equal(state.phase, "waiting", "a poll before the message changes nothing");
+
+      const turn = await say("tester-psid-flow", first.code);
+      assert.deepEqual(texts(turn.sends), [ACK]);
+      advance(3000);
+      state = await poll(state);
+      assert.equal(state.phase, "paired", "the next poll sees the new tester");
+      const pairedTester = (await testers.listTesters()).find((tester) => tester.masked === "…flow")!;
+      assert.equal(state.testerId, pairedTester.id, "and selects exactly that tester");
+      assert.equal(flow.shouldPoll(state, false), false, "polling stops once paired");
+      assert.deepEqual(flow.testReadiness({ testers: await testers.listTesters(), selectedId: state.testerId, metaOutboundDisabled: false }), { kind: "ready", testerId: pairedTester.id });
+
+      // 2. A code nobody uses expires on the countdown, and the polling stops with it.
+      state = flow.reducePairing(flow.initialPairing, { type: "request", testers: await testers.listTesters() });
+      state = flow.reducePairing(state, { type: "issued", response: await issue("UUDAM-TEST-E1E2E3"), nowMs: Date.now() });
+      advance(31 * 60_000);
+      state = flow.reducePairing(state, { type: "tick", nowMs: Date.now() });
+      assert.equal(state.phase, "expired");
+      assert.equal(flow.shouldPoll(state, false), false);
+      assert.ok(!texts((await say("tester-psid-flow", "UUDAM-TEST-E1E2E3")).sends).includes(ACK), "the expired code is refused");
+      assert.equal((await testers.listTesters()).filter((tester) => tester.masked === "…flow").length, 1, "an expired code registers nobody new");
+
+      // 3. Pairing the SAME device again registers no new tester but still counts as paired.
+      advance(1000);
+      state = flow.reducePairing(flow.initialPairing, { type: "request", testers: await testers.listTesters() });
+      state = flow.reducePairing(state, { type: "issued", response: await issue("UUDAM-TEST-R4R5R6"), nowMs: Date.now() });
+      advance(2000);
+      state = await poll(state);
+      assert.equal(state.phase, "waiting");
+      advance(1000);
+      assert.deepEqual(texts((await say("tester-psid-flow", "UUDAM-TEST-R4R5R6")).sends), [ACK]);
+      advance(1000);
+      state = await poll(state);
+      assert.deepEqual([state.phase, state.testerId], ["paired", pairedTester.id], "the known device is recognised by its fresh message");
+
+      // 4. Revoked afterwards: the button explains it instead of sending.
+      assert.equal(await testers.revokeTester(pairedTester.id, "owner.test@example.test"), true);
+      assert.deepEqual(flow.testReadiness({ testers: await testers.listTesters(), selectedId: pairedTester.id, metaOutboundDisabled: false }), { kind: "revoked" });
+    });
+
     await context.test("neither the raw PSID of a tester nor a pairing code reached any log", async () => {
       const text = lines.join("\n");
-      for (const secret of ["tester-psid-001", "tester-psid-002", "tester-psid-003", "customer-stranger", "UUDAM-TEST-7K3Q9X", "UUDAM-TEST-ABCD23", "UUDAM-TEST-K2M3N4", "UUDAM-TEST-V3W4X5"]) {
+      for (const secret of ["tester-psid-001", "tester-psid-002", "tester-psid-003", "tester-psid-flow", "customer-stranger", "UUDAM-TEST-7K3Q9X", "UUDAM-TEST-ABCD23", "UUDAM-TEST-K2M3N4", "UUDAM-TEST-V3W4X5", "UUDAM-TEST-Z9Y8X7", "UUDAM-TEST-R4R5R6"]) {
         assert.equal(text.includes(secret), false, `${secret} must not be logged`);
       }
       assert.ok(lines.some((line) => line.includes("catalogue.tester_pairing")), "pairing outcomes are logged (hashed sender, status only)");

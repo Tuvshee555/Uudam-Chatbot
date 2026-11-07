@@ -23,7 +23,7 @@ const SOURCE_LABEL: Record<string, string> = {
 };
 
 /** The page-shaped (9:16) box with the photo cropped exactly as the book crops it. */
-function CropPreview({ url, focal, zoom, label }: { url: string; focal: PhotoFocal; zoom: number; label: string }) {
+export function CropPreview({ url, focal, zoom, label }: { url: string; focal: PhotoFocal; zoom: number; label: string }) {
   return (
     <div className="w-36 shrink-0">
       <p className="mb-1.5 text-xs font-semibold text-ink-muted">{label}</p>
@@ -36,7 +36,7 @@ function CropPreview({ url, focal, zoom, label }: { url: string; focal: PhotoFoc
 }
 
 /** The whole photo: press or drag on it to choose the point the crop keeps in view. */
-function FocalFrame({ url, focal, onChange }: { url: string; focal: PhotoFocal; onChange: (next: PhotoFocal) => void }) {
+export function FocalFrame({ url, focal, onChange }: { url: string; focal: PhotoFocal; onChange: (next: PhotoFocal) => void }) {
   const dragging = useRef(false);
   const update = (event: PointerEvent<HTMLDivElement>) => onChange(focalFromPointer(event.currentTarget.getBoundingClientRect(), event.clientX, event.clientY));
   return (
@@ -73,7 +73,7 @@ function FocalFrame({ url, focal, onChange }: { url: string; focal: PhotoFocal; 
   );
 }
 
-function Slider({ label, value, min, max, step, onChange, format }: {
+export function Slider({ label, value, min, max, step, onChange, format }: {
   label: string; value: number; min: number; max: number; step: number; onChange: (value: number) => void; format: (value: number) => string;
 }) {
   return (

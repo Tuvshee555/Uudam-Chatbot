@@ -1,6 +1,6 @@
 import { useRef, type KeyboardEvent, type ReactNode } from "react";
 import { Badge, cx } from "@/components/ui";
-import type { CatalogueEdition, CataloguePhotoQuality, CatalogueVersionStatus } from "@/lib/catalogue/types";
+import type { CatalogueEdition, CataloguePhotoQuality, CatalogueVersionStatus, CatalogueWarningCode } from "@/lib/catalogue/types";
 import type { CatalogueFreshnessView, CatalogueReviewRow } from "@/lib/catalogue/admin/types";
 
 export const EDITION_LABEL: Record<CatalogueEdition, string> = {
@@ -36,6 +36,27 @@ const SEVERITY_LABEL: Record<CatalogueReviewRow["severity"], string> = {
 export function SeverityChip({ severity, className }: { severity: CatalogueReviewRow["severity"]; className?: string }) {
   const tone = severity === "blocking" ? "danger" : severity === "warning" ? "warning" : severity === "ok" ? "success" : "neutral";
   return <Badge tone={tone} className={className}>{SEVERITY_LABEL[severity]}</Badge>;
+}
+
+/** Plain-language chip + explanation for the warnings that need staff to look at the trip itself. */
+export const WARNING_HELP: Partial<Record<CatalogueWarningCode, { label: string; help: string }>> = {
+  transport_conflict: {
+    label: "Тээвэр зөрсөн",
+    help: "Гарчиг эсвэл програм нэг тээврийг, бүртгэл өөр тээврийг заасан байна (жишээ нь гарчиг «дамжин нислэг», бүртгэл «шууд нислэг») — аялал засварлагч дээр шалгана уу. Зөрсөн тээврийг PDF-д хэвлэхгүй.",
+  },
+  duration_conflict: {
+    label: "Хугацаа зөрсөн",
+    help: "Гарчиг эсвэл програмын өдрийн тоо бүртгэлийн хоногтой таарахгүй байна — аялал засварлагч дээр шалгана уу.",
+  },
+  price_conflict: {
+    label: "Үнэ зөрсөн",
+    help: "Тайлбар дахь үнэ огнооны үнээс өөр байна. Каталог огнооны үнийг хэвлэнэ — аялал засварлагч дээр тайлбарыг засна уу.",
+  },
+};
+
+export function WarningChip({ code }: { code: CatalogueWarningCode }) {
+  const known = WARNING_HELP[code];
+  return known ? <Badge tone="warning">{known.label}</Badge> : null;
 }
 
 export function HeroQualityChip({ quality, className }: { quality: CataloguePhotoQuality; className?: string }) {

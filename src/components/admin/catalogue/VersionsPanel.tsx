@@ -6,6 +6,7 @@ import type { CatalogueEdition } from "@/lib/catalogue/types";
 import type { CatalogueEditionState, CatalogueVersionView } from "@/lib/catalogue/admin/types";
 import type { CatalogueAdmin } from "./useCatalogueAdmin";
 import { EDITION_LABEL, FreshnessBadge, VersionStatusBadge, formatStamp } from "./shared";
+import { VersionTripCodes } from "./VersionTripCodes";
 
 const LINK_BUTTON =
   "inline-flex min-h-9 items-center gap-2 rounded-lg border border-line-strong bg-surface px-3 text-[13px] font-semibold text-ink transition-colors hover:bg-surface-sunken focus-visible:outline-brand";
@@ -188,6 +189,7 @@ export function VersionsPanel({
                     <td className="max-w-[240px] break-words px-3 py-3 align-top text-xs text-ink">
                       {version.fileName}
                       <span className="block text-ink-muted">{version.pageCount} хуудас · {version.tripCount} аялал</span>
+                      <VersionTripCodes admin={admin} version={version} />
                     </td>
                     <td className="px-3 py-3 align-top tabular-nums">{formatBytes(version.sizeBytes)}</td>
                     <td className="px-3 py-3 align-top text-xs">

@@ -1119,7 +1119,7 @@ test("state: with no tester and no env recipient it names the one live-device st
   await useFakes(makeFakes({ testers: standardTesters(), metaDisabled: true }));
   const killed = (await call(r.state)).body as unknown as { testSend: { realSendPossible: boolean; blockedReason: string } };
   assert.equal(killed.testSend.realSendPossible, false);
-  assert.match(killed.testSend.blockedReason, /kill switch/);
+  assert.match(killed.testSend.blockedReason, /унтраалттай/);
 });
 
 test("test-send to a verified tester: dry-run addresses nobody; the real send is masked, confirmed and window-checked", async () => {
@@ -1309,4 +1309,256 @@ test("the review rows carry hero quality, a clear reason for weak heroes, and th
   assert.equal(by("test-good").titleOverride, "Миний гарчиг");
   assert.equal(by("test-good").editorialTitle, "Жишиг test-good");
   assert.equal(by("test-weak").heroChosen, false);
+});
+
+// ── Readiness checklist ──────────────────────────────────────────────────────────────────────────
+
+type ReadinessBody = { readiness: { overall: string; items: Array<{ id: string; status: string; label: string; detail: string; next: string | null }>; counts: Record<string, number | null> } };
+const itemOf = (body: ReadinessBody, id: string) => body.readiness.items.find((item) => item.id === id)!;
+
+test("state carries the readiness checklist: every item has a status, what was found and the next step; no id leaks", async () => {
+  await useFakes(makeFakes({ allowlist: [TEST_PSID], liveDrift: true, testers: standardTesters() }));
+  const r = await routes();
+  const res = await call(r.state);
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const body = res.body as unknown as ReadinessBody;
+  const ids = body.readiness.items.map((item) => item.id);
+  assert.deepEqual(ids, ["database", "renderer", "published_quick", "published_complete", "testers", "meta_switch", "heroes", "cover", "codes", "data_conflicts"]);
+  for (const item of body.readiness.items) {
+    assert.ok(["green", "amber", "red"].includes(item.status));
+    assert.ok(item.detail.length > 0, `${item.id} says what it found`);
+    if (item.status !== "green") assert.ok(item.next && item.next.length > 0, `${item.id} names the next step`);
+  }
+  assert.equal(itemOf(body, "database").status, "green");
+  assert.equal(itemOf(body, "renderer").status, "green", "the repo's fonts and logo are on disk; nothing launched a browser");
+  assert.equal(itemOf(body, "published_quick").status, "red", "a stale published file must be replaced");
+  assert.match(itemOf(body, "published_quick").detail, /өөрчлөгдсөн/);
+  assert.equal(itemOf(body, "published_complete").status, "amber", "nothing published yet");
+  assert.equal(itemOf(body, "testers").status, "green", "a tester with an open window exists");
+  assert.equal(itemOf(body, "meta_switch").status, "green");
+  assert.equal(itemOf(body, "cover").status, "amber", "no cover chosen yet");
+  assert.equal(body.readiness.overall, "red");
+  assert.equal(body.readiness.counts.verifiedTesters, 2, "revoked testers are not counted");
+  assert.equal(body.readiness.counts.openWindowTesters, 1);
+  const json = JSON.stringify(res.body);
+  assert.equal(json.includes(TESTER_PSID) || json.includes(TEST_PSID) || json.includes(PAIRING_CODE), false);
+  assert.doesNotMatch(JSON.stringify(body.readiness), /PSID|kill switch|dry-run/i, "no technical vocabulary reaches the checklist");
+});
+
+test("state readiness: no tester asks to connect one, a closed window asks to write to the Page, the Meta switch is amber", async () => {
+  const r = await routes();
+  const none = (await call(r.state)).body as unknown as ReadinessBody;
+  assert.equal(itemOf(none, "testers").status, "amber");
+  assert.match(itemOf(none, "testers").next ?? "", /Тестер холбох/);
+
+  await useFakes(makeFakes({ testers: [testerTarget({ id: CLOSED_TESTER_ID, psid: "70000000000557", lastInboundAt: new Date(NOW.getTime() - 30 * 3_600_000).toISOString() })], metaDisabled: true }));
+  const closed = (await call(r.state)).body as unknown as ReadinessBody;
+  assert.equal(itemOf(closed, "testers").status, "amber");
+  assert.match(itemOf(closed, "testers").next ?? "", /дахин бичнэ үү/);
+  assert.equal(itemOf(closed, "meta_switch").status, "amber");
+  assert.match(itemOf(closed, "meta_switch").detail, /унтраалттай/);
+});
+
+test("state readiness: missing renderer files are red and named; a check that fails is amber, never green", async () => {
+  const r = await routes();
+  await useFakes(makeFakes());
+  const { setCatalogueAdminDepsForTests } = await import("../src/lib/catalogue/admin/deps");
+  fakes.deps.rendererAssetsMissing = async () => ["public/fonts/Missing-Face.ttf"];
+  setCatalogueAdminDepsForTests(fakes.deps);
+  const missing = (await call(r.state)).body as unknown as ReadinessBody;
+  assert.equal(itemOf(missing, "renderer").status, "red");
+  assert.match(itemOf(missing, "renderer").detail, /Missing-Face\.ttf/);
+  fakes.deps.rendererAssetsMissing = async () => {
+    throw new Error("disk error");
+  };
+  const broken = (await call(r.state)).body as unknown as ReadinessBody;
+  assert.equal(itemOf(broken, "renderer").status, "amber");
+});
+
+test("readiness builder: heroes, codes and data conflicts are graded from the review rows", async () => {
+  const { buildReadiness, tripFactsFromReview, worstStatus } = await import("../src/lib/catalogue/admin/readiness");
+  const { buildReviewRows } = await import("../src/lib/catalogue/admin/review");
+  const weak = { ...card("test-weak", 0, [{ code: "transport_conflict" as const, severity: "warning" as const, message: "x" }]), heroQuality: "weak" as const };
+  const missing = { ...card("test-missing", 1, [{ code: "duration_conflict" as const, severity: "warning" as const, message: "y" }]), heroQuality: "missing" as const, photo: null };
+  const good = { ...card("test-good", 2), heroQuality: "excellent" as const };
+  const quickConfig = { tripIds: ["test-good"], groupOverrides: {}, featuredTripIds: [], excludedTripIds: [] };
+  const elig = (id: string) => [id, { eligible: true, reason: null }] as const;
+  const review = buildReviewRows({
+    edition: "quick",
+    today: "2026-06-15",
+    activeTrips: [trip("test-weak"), trip("test-missing"), trip("test-good")],
+    snapshot: { edition: "complete", generatedAt: NOW.toISOString(), asOfDay: "2026-06-15", issueLabel: "x", seasonLabel: "x", trips: [weak, missing, good], coverTripId: null, groups: [], contact: { phones: [], siteLabel: "", siteUrl: "" }, warnings: [], contentHash: "h" },
+    eligibility: new Map([elig("test-weak"), elig("test-missing"), elig("test-good")]),
+    config: quickConfig,
+    codeMap: { "test-weak": "A01", "test-missing": "A02" },
+  });
+  const facts = tripFactsFromReview(review, quickConfig);
+  assert.deepEqual(facts, { eligible: 3, heroWeak: 1, heroMissing: 1, quickHeroesFlagged: 0, codesAllocated: 3, transportConflicts: 1, durationConflicts: 1, priceConflicts: 0 });
+
+  const none = { status: "none" as const, ageDays: null, reasons: [] as string[] };
+  const base = {
+    database: { ok: true },
+    missingAssets: [] as string[] | null,
+    editions: { quick: { published: null, latestDraft: null, freshness: none }, complete: { published: null, latestDraft: null, freshness: none } },
+    testers: [],
+    testersError: false,
+    envRecipients: 0,
+    metaOutboundDisabled: false,
+    config: { heroByTripId: {}, coverPhoto: null },
+  };
+  // Flagged heroes in the Quick selection are red; elsewhere they are only amber.
+  const redHeroes = buildReadiness({ ...base, trips: { ...facts, quickHeroesFlagged: 2 } });
+  assert.equal(redHeroes.items.find((item) => item.id === "heroes")!.status, "red");
+  const amberHeroes = buildReadiness({ ...base, trips: facts });
+  assert.equal(amberHeroes.items.find((item) => item.id === "heroes")!.status, "amber");
+  assert.equal(amberHeroes.items.find((item) => item.id === "data_conflicts")!.status, "amber", "title/program conflicts are looked at, not blocking");
+  assert.match(amberHeroes.items.find((item) => item.id === "data_conflicts")!.detail, /тээвэр 1, хугацаа 1/);
+  const priceRed = buildReadiness({ ...base, trips: { ...facts, priceConflicts: 1 } });
+  assert.equal(priceRed.items.find((item) => item.id === "data_conflicts")!.status, "red");
+  const allGood = buildReadiness({
+    ...base,
+    config: { heroByTripId: { a: { url: "https://x.test/a.jpg" } }, coverPhoto: { url: "https://x.test/c.jpg" } },
+    trips: { eligible: 3, heroWeak: 0, heroMissing: 0, quickHeroesFlagged: 0, codesAllocated: 3, transportConflicts: 0, durationConflicts: 0, priceConflicts: 0 },
+  });
+  assert.equal(allGood.items.find((item) => item.id === "heroes")!.status, "green");
+  assert.equal(allGood.items.find((item) => item.id === "cover")!.status, "green");
+  assert.equal(allGood.items.find((item) => item.id === "codes")!.detail, "3/3 аялалд байнгын код олгосон. Хэвлэл бүрт ижил.");
+  const unreadable = buildReadiness({ ...base, trips: null, missingAssets: null });
+  assert.equal(unreadable.items.find((item) => item.id === "heroes")!.status, "amber", "an unreadable review is never reported as fine");
+  assert.equal(unreadable.counts.eligibleTrips, null);
+  const codesMissing = buildReadiness({ ...base, trips: { ...facts, codesAllocated: 1 } });
+  assert.match(codesMissing.items.find((item) => item.id === "codes")!.detail, /1\/3/);
+  assert.equal(worstStatus(["green", "amber"]), "amber");
+  assert.equal(worstStatus([]), "green");
+});
+
+// ── Cover photo ──────────────────────────────────────────────────────────────────────────────────
+
+import type { CataloguePhotoCandidate } from "../src/lib/catalogue/types";
+
+function pooled(base: string, scores: number[]): CataloguePhotoCandidate[] {
+  return scores.map((score, index) => ({ url: `https://img.example.test/${base}-${index}.jpg`, width: 2400, height: 1600, source: "trip_photo" as const, score, issues: [] as string[], credit: null }));
+}
+
+function useCoverPools(extra: Record<string, CataloguePhotoCandidate[]>) {
+  const data = fakes.deps.data!;
+  const original = data.listPhotoCandidates.bind(data);
+  data.listPhotoCandidates = async (tripId: string) => {
+    if (extra[tripId]) {
+      fakes.calls.candidateQueries.push(tripId);
+      return { trip: { id: tripId }, candidates: extra[tripId], chosen: null };
+    }
+    return original(tripId);
+  };
+}
+
+test("cover candidates: only approved photos no page prints, a poster layout or a weak file never, the same picture once, best first", async () => {
+  const r = await routes();
+  const poster = { url: "https://img.example.test/poster-layout.jpg", width: 3000, height: 2000, source: "poster_hero" as const, score: 99, issues: [] as string[], credit: null };
+  const weak = { url: "https://img.example.test/soft.jpg", width: 640, height: 480, source: "trip_photo" as const, score: 30, issues: ["нягтрал бага (640px)"], credit: null };
+  const a = [...pooled("a", [92, 90, 85, 80, 70]), poster, weak];
+  const b = pooled("b", [91, 89, 84, 78]);
+  const c = [...pooled("c", [95, 94, 93]), a[3]!]; // the very same picture stored under a third trip, which prints c-0..2
+  useCoverPools({ "test-trip-1": a, "test-trip-2": b, "test-trip-3": c });
+  const res = await call(r.photos, { query: { cover: "1" }, headers: adminBearerHeaders() });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const body = res.body as unknown as { current: unknown; truncated: boolean; candidates: Array<{ url: string; tripId: string; score: number }> };
+  const urls = body.candidates.map((candidate) => candidate.url);
+  // test-trip-1 prints a-0 (hero) + a-1, a-2 (gallery); test-trip-2 prints b-0, b-1, b-2.
+  assert.deepEqual(urls, ["https://img.example.test/a-3.jpg", "https://img.example.test/b-3.jpg", "https://img.example.test/a-4.jpg"], "unused, approved, de-duplicated, best score first");
+  assert.equal(urls.includes(poster.url), false, "a poster layout is not a cover photograph");
+  assert.equal(urls.includes(weak.url), false, "a soft file never opens the book");
+  assert.equal(body.candidates[0]!.tripId, "test-trip-1");
+  assert.equal(body.current, null);
+  assert.equal(body.truncated, false);
+  assert.equal(fakes.calls.saved.length, 0, "searching saves nothing");
+  assert.ok(fakes.calls.candidateQueries.length <= 14, "the search is bounded to 14 trips");
+});
+
+test("cover candidates: a staff hero choice moves a photo onto its page, so it stops being offered as the cover", async () => {
+  const r = await routes();
+  useCoverPools({ "test-trip-1": pooled("a", [92, 90, 85, 80, 70]) });
+  const chosen = "https://img.example.test/a-3.jpg";
+  fakes.setConfig({ ...(await fakes.deps.store!.getCatalogueConfig()), heroByTripId: { "test-trip-1": { url: chosen } } });
+  const res = await call(r.photos, { query: { cover: "1" }, headers: adminBearerHeaders() });
+  const urls = (res.body.candidates as Array<{ url: string }>).map((candidate) => candidate.url);
+  assert.equal(urls.includes(chosen), false, "now the hero of its page");
+  assert.ok(urls.includes("https://img.example.test/a-2.jpg"), "and the photo that left the gallery is free again");
+});
+
+test("cover candidates: the bounded search stops at its time budget and says so", async () => {
+  const { loadCoverPools, COVER_MAX_TRIPS } = await import("../src/lib/catalogue/admin/cover");
+  let clock = 0;
+  const result = await loadCoverPools({
+    data: fakes.deps.data!,
+    activeTrips: TRIP_IDS.map(trip),
+    config: await fakes.deps.store!.getCatalogueConfig(),
+    today: "2026-06-15",
+    codes: {},
+    now: () => (clock += 400),
+    budgetMs: 1000,
+  });
+  assert.equal(result.truncated, true);
+  assert.ok(result.searched < COVER_MAX_TRIPS, "stopped before covering every trip");
+  assert.ok(result.searched >= 1);
+});
+
+test("config PUT saves the cover photo for one of the trip's own candidates and keeps everything else", async () => {
+  const r = await routes();
+  const url = "https://img.example.test/hero-1.jpg";
+  fakes.setConfig({
+    quick: { tripIds: QUICK_EIGHT, groupOverrides: {}, featuredTripIds: [], excludedTripIds: [] },
+    complete: { tripIds: [], groupOverrides: {}, featuredTripIds: [], excludedTripIds: [] },
+    preview: { tripIds: [], groupOverrides: {}, featuredTripIds: [], excludedTripIds: [] },
+    heroByTripId: { "test-trip-2": { url: "https://img.example.test/hero-2.jpg" } },
+    titleOverrides: { "test-trip-2": "Нэр" },
+    updatedAt: "2026-06-14T00:00:00.000Z",
+    updatedBy: "someone@example.test",
+  });
+  const res = await call(r.config, { method: "PUT", body: { coverPhoto: { url, tripId: "test-trip-1", focal: { x: 0.25, y: 0.6 }, zoom: 1.4 }, expectedUpdatedAt: "2026-06-14T00:00:00.000Z" } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const saved = fakes.calls.saved[0]!;
+  assert.deepEqual(saved.next.coverPhoto, { url, focal: { x: 0.25, y: 0.6 }, zoom: 1.4 });
+  assert.deepEqual(saved.next.quick.tripIds, QUICK_EIGHT, "the editions are untouched");
+  assert.ok(saved.next.heroByTripId["test-trip-2"] && saved.next.titleOverrides["test-trip-2"], "hero choices and titles survive");
+  assert.deepEqual(saved.opts, { expectedUpdatedAt: "2026-06-14T00:00:00.000Z" }, "the concurrency guard applies");
+
+  const cleared = await call(r.config, { method: "PUT", body: { coverPhoto: null } });
+  assert.equal(cleared.statusCode, 200);
+  assert.equal(fakes.calls.saved[1]!.next.coverPhoto, null, "back to the automatic cover");
+});
+
+test("config PUT refuses a cover photo that is not the named trip's own, bad crops, unknown keys, and a read-only caller", async () => {
+  const r = await routes();
+  const url = "https://img.example.test/hero-1.jpg";
+  const bad: Array<[number, unknown, string]> = [
+    [422, { coverPhoto: { url: "https://evil.example.test/x.jpg", tripId: "test-trip-1" } }, "a photo of some other site"],
+    [404, { coverPhoto: { url, tripId: "ghost-trip" } }, "unknown trip"],
+    [400, { coverPhoto: { url, tripId: "test-trip-1", focal: { x: 2, y: 0 } } }, "focal out of range"],
+    [400, { coverPhoto: { url, tripId: "test-trip-1", zoom: 9 } }, "zoom out of range"],
+    [400, { coverPhoto: { url: "http://img.example.test/hero-1.jpg", tripId: "test-trip-1" } }, "plain http"],
+    [400, { coverPhoto: { url } }, "no trip named"],
+    [400, { coverPhoto: { url, tripId: "test-trip-1", price: 1 } }, "unknown key"],
+    [400, { coverPhoto: null, edition: "quick" }, "a cover body carries no edition"],
+    [400, { coverPhoto: "x" }, "not an object"],
+  ];
+  for (const [status, body, why] of bad) {
+    assert.equal((await call(r.config, { method: "PUT", body })).statusCode, status, why);
+  }
+  assert.equal(fakes.calls.saved.length, 0, "nothing was stored");
+  const readOnly = await call(r.config, { method: "PUT", body: { coverPhoto: null }, headers: adminBearerHeaders() });
+  assert.ok([401, 403].includes(readOnly.statusCode), "the read-only token cannot write");
+  assert.equal(fakes.calls.saved.length, 0);
+});
+
+test("version trips: the codes a version printed come from its own snapshot, never recomputed", async () => {
+  const route = (await import("../src/pages/api/admin/catalogue/version/[id]/trips")).default as Handler;
+  const res = await call(route, { query: { id: VERSION_LIVE }, headers: adminBearerHeaders() });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const trips = res.body.trips as Array<{ code: string; tripId: string; title: string }>;
+  assert.deepEqual(trips.slice(0, 3).map((entry) => entry.code), ["A01", "A02", "A03"]);
+  assert.equal(trips[0]!.tripId, "test-trip-1");
+  assert.equal((await call(route, { query: { id: "bad id!" } })).statusCode, 400);
+  assert.equal((await call(route, { query: { id: "99999999-9999-4999-8999-999999999999" } })).statusCode, 404);
+  assert.equal(fakes.calls.loadInput.length, 0, "nothing was loaded or allocated");
 });

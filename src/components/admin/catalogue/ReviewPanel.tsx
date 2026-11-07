@@ -4,7 +4,7 @@ import { SectionHeading } from "../AdminShared";
 import type { CatalogueEdition } from "@/lib/catalogue/types";
 import type { CatalogueReviewRow } from "@/lib/catalogue/admin/types";
 import type { CatalogueAdmin } from "./useCatalogueAdmin";
-import { EditionPicker, HeroQualityChip, SeverityChip, formatMnt } from "./shared";
+import { EditionPicker, HeroQualityChip, SeverityChip, WARNING_HELP, WarningChip, formatMnt } from "./shared";
 
 function PhotoCell({ row }: { row: CatalogueReviewRow }) {
   const [failed, setFailed] = useState(false);
@@ -71,7 +71,10 @@ function Row({ row }: { row: CatalogueReviewRow }) {
             {row.warnings.map((warning, index) => (
               <li key={`${warning.code}-${index}`} className="flex items-start gap-2 text-xs text-ink">
                 <SeverityChip severity={warning.severity} className="shrink-0" />
-                <span>{warning.message}</span>
+                <span>
+                  <WarningChip code={warning.code} /> {warning.message}
+                  {WARNING_HELP[warning.code] && <span className="mt-0.5 block text-ink-muted">{WARNING_HELP[warning.code]?.help}</span>}
+                </span>
               </li>
             ))}
           </ul>

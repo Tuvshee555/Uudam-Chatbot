@@ -86,6 +86,57 @@ export type CatalogueAdminState = {
     pairingCodeTtlMinutes: number;
   };
   config: CatalogueConfig;
+  /** The "before publishing" checklist: every item green / amber / red with a one-line Mongolian next step. */
+  readiness: CatalogueReadiness;
+};
+
+export type CatalogueReadinessStatus = "green" | "amber" | "red";
+
+export type CatalogueReadinessId =
+  | "database"
+  | "renderer"
+  | "published_quick"
+  | "published_complete"
+  | "testers"
+  | "meta_switch"
+  | "heroes"
+  | "cover"
+  | "codes"
+  | "data_conflicts";
+
+export type CatalogueReadinessItem = {
+  id: CatalogueReadinessId;
+  status: CatalogueReadinessStatus;
+  /** Short Mongolian name of the check. */
+  label: string;
+  /** One line: what was found. */
+  detail: string;
+  /** One line: what to do next; null when nothing is needed. */
+  next: string | null;
+};
+
+/** Counts behind the checklist, so the UI and the docs can quote them. All are read live; none is stored. */
+export type CatalogueReadinessCounts = {
+  eligibleTrips: number | null;
+  verifiedTesters: number;
+  openWindowTesters: number;
+  heroesConfigured: number;
+  heroesWeak: number;
+  heroesMissing: number;
+  /** Weak or missing heroes among the trips the Quick edition would print. */
+  quickHeroesFlagged: number;
+  codesAllocated: number | null;
+  transportConflicts: number;
+  durationConflicts: number;
+  priceConflicts: number;
+  staleEditions: number;
+};
+
+export type CatalogueReadiness = {
+  /** The worst item. "red" = something must be fixed before publishing. */
+  overall: CatalogueReadinessStatus;
+  items: CatalogueReadinessItem[];
+  counts: CatalogueReadinessCounts;
 };
 
 export type CatalogueReviewWarning = {
@@ -222,6 +273,31 @@ export type CataloguePhotosResponse = {
   /** The staff choice stored in the catalogue config, or null when the automatic hero is used. */
   chosen: CatalogueHeroChoice | null;
   titleOverride: string | null;
+};
+
+/** One approved, unused photograph that could open the book. Not tied to a page: it belongs to a trip's pool only. */
+export type CatalogueCoverCandidate = CataloguePhotoCandidate & {
+  tripId: string;
+  /** Persistent trip code, or null when the trip has none yet. */
+  code: string | null;
+  tripTitle: string;
+};
+
+export type CatalogueCoverCandidatesResponse = {
+  ok: true;
+  /** The staff cover choice stored in the catalogue config, or null (automatic). */
+  current: CatalogueHeroChoice | null;
+  candidates: CatalogueCoverCandidate[];
+  /** True when the bounded search stopped early (time budget or trip cap): there may be more photos. */
+  truncated: boolean;
+  searchedTrips: number;
+};
+
+/** Trips printed in one stored version, with the persistent code each one carries. */
+export type CatalogueVersionTripsResponse = {
+  ok: true;
+  versionId: string;
+  trips: Array<{ code: string; tripId: string; title: string }>;
 };
 
 export type CatalogueRecommendResponse = {

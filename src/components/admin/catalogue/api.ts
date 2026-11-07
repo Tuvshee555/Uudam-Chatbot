@@ -2,6 +2,8 @@ import { ensureOk } from "@/lib/adminUtils";
 import { CATALOGUE_ADMIN_API, type CatalogueConfig, type CatalogueEdition, type CatalogueEditionConfig, type CatalogueHeroChoice } from "@/lib/catalogue/types";
 import type {
   CatalogueAdminState,
+  CatalogueCoverCandidatesResponse,
+  CatalogueVersionTripsResponse,
   CataloguePairingResponse,
   CataloguePhotosResponse,
   CatalogueRecommendResponse,
@@ -95,6 +97,23 @@ export function createCatalogueApi(apiFetch: ApiFetch) {
       ensureOk<{ config: CatalogueConfig; chosen: CatalogueHeroChoice | null; titleOverride: string | null }>(
         await post(apiFetch, "photos", input, "PUT"),
         "Зургийг хадгалж чадсангүй.",
+      ),
+
+    /** The best approved photos no trip page uses (bounded server-side search), for the cover chooser. */
+    coverCandidates: async () =>
+      ensureOk<CatalogueCoverCandidatesResponse>(
+        await apiFetch(`${CATALOGUE_ADMIN_API}/photos?cover=1`),
+        "Нүүр зургийн жагсаалтыг ачаалж чадсангүй.",
+      ),
+
+    /** The cover photograph: a trip's own photo (tripId names the trip) or null for the automatic one. */
+    saveCover: async (input: { coverPhoto: { url: string; tripId: string; focal?: { x: number; y: number }; zoom?: number } | null; expectedUpdatedAt: string | null }) =>
+      ensureOk<{ config: CatalogueConfig }>(await post(apiFetch, "config", input, "PUT"), "Нүүр зургийг хадгалж чадсангүй."),
+
+    versionTrips: async (versionId: string) =>
+      ensureOk<CatalogueVersionTripsResponse>(
+        await apiFetch(`${CATALOGUE_ADMIN_API}/version/${encodeURIComponent(versionId)}/trips`),
+        "Хувилбарын аяллын жагсаалтыг ачаалж чадсангүй.",
       ),
 
     recommend: async () =>

@@ -1151,3 +1151,264 @@ test("liveDrift ignores a photo or display-title change but still catches the ti
   const repriced = buildCatalogueSnapshot(inputOf([datedTrip("dr1", [["2027-01-09", 3_500_000]], { route_name: "Тестград аялал", photo_urls: t.photo_urls })]));
   assert.equal(liveDrift(published, repriced).drifted, true);
 });
+
+/* ================================================================ V3: consistency, codes, weak heroes, cover, picks */
+
+import { checkTripConsistency, parseDuration } from "../src/lib/catalogue/consistency";
+import { codeAllocationOrder, resolveCoverPhoto } from "../src/lib/catalogue/tripData";
+
+const fareOnce: Array<[string, number]> = [["2027-01-09", 3_000_000]];
+const withProgram = (id: string, days: Array<{ title: string; description: string }>, over: TripOverrides = {}) =>
+  datedTrip(id, fareOnce, { ...over, extra: { transport_type: "direct_flight", duration_days: 8, duration_nights: 7, itinerary_days: days.map((d, i) => ({ day: i + 1, ...d })), ...(over.extra ?? {}) } });
+
+test("V3 consistency: a title that says 'дамжин нислэг' against a structured direct flight is a transport_conflict and the label is printed as nothing", () => {
+  const t = withProgram("cx1", [
+    { title: "УБ – ЖИШИГ", description: "Нисэх буудалд цуглана." },
+    { title: "ЖИШИГ – ТЕСТ", description: "Нислэгээр Тест хот руу." },
+    { title: "ТЕСТ – ЖИШИГ – УБ", description: "Жишиг хотод газардаж дамжин нислэгт бэлтгэнэ." },
+  ], { route_name: "ТЕСТ ХОТ – ДАМЖИН НИСЛЭГТЭЙ ЖИЛИЙН АЯЛАЛ" });
+  const result = checkTripConsistency(t);
+  assert.equal(result.transportConflict, true);
+  const w = result.warnings.find((x) => x.code === "transport_conflict")!;
+  assert.equal(w.severity, "warning");
+  assert.deepEqual(w.detail, { structured: "Шууд нислэг", wording: "Дамжин нислэг" });
+  assert.match(result.transport[0].evidence, /ДАМЖИН НИСЛЭГТЭЙ/);
+
+  const snap = buildCatalogueSnapshot(inputOf([t]));
+  assert.equal(snap.trips[0].transportLabel, "", "a possibly wrong label is never printed");
+  assert.ok(snap.warnings.some((x) => x.code === "transport_conflict" && x.tripId === "cx1"));
+  assert.ok(!snap.warnings.some((x) => x.code === "other" && /Тээврийн төрөл тодорхойгүй/.test(x.message) && x.tripId === "cx1"), "the conflict is the reason, not 'unknown'");
+});
+
+test("V3 consistency: agreeing wording, a local bus in a flight program, and a land+flight combo title are not conflicts", () => {
+  const fine = withProgram("cx2", [{ title: "ДАЛАЙ", description: "Аяллын автобусаар далайн эрэг рүү. Оройн хоолны дараа буцна." }], { route_name: "ТЕСТ ДАЛАЙ ШУУД НИСЛЭГТЭЙ АЯЛАЛ" });
+  assert.equal(checkTripConsistency(fine).transportConflict, false);
+  const combo = datedTrip("cx3", fareOnce, { route_name: "ТЕСТ ГАЗАР НИСЛЭГ ХОСОЛСОН, ШУУД НИСЛЭГТЭЙ БУЦАЛТ", extra: { transport_type: "land_flight" } });
+  assert.equal(checkTripConsistency(combo).transportConflict, false, "a title that openly mixes land and air makes no direct-flight claim");
+  assert.equal(buildCatalogueSnapshot(inputOf([fine])).trips[0].transportLabel, "Шууд нислэг");
+});
+
+test("V3 consistency: land structured but sold as a direct flight, and flight structured but sold as a land trip, both conflict", () => {
+  const land = datedTrip("cx4", fareOnce, { route_name: "ТЕСТ-ХӨДӨӨ ШУУД НИСЛЭГТЭЙ АЯЛАЛ", extra: { transport_type: "land" } });
+  assert.equal(checkTripConsistency(land).transport[0]?.likely, "Шууд нислэг");
+  const air = datedTrip("cx5", fareOnce, { route_name: "ТЕСТ-ХӨДӨӨ ГАЗРЫН АЯЛАЛ", extra: { transport_type: "direct_flight" } });
+  assert.equal(checkTripConsistency(air).transport[0]?.likely, "Газрын аялал");
+  const train = datedTrip("cx6", fareOnce, { route_name: "ТЕСТ-ХӨДӨӨ ГАЛТ ТЭРЭГТЭЙ АЯЛАЛ", extra: { transport_type: "direct_flight" } });
+  assert.equal(checkTripConsistency(train).transportConflict, true);
+});
+
+test("V3 consistency: a guessed transport (no structured field) that the wording contradicts is blanked too", () => {
+  const t = datedTrip("cx7", fareOnce, { route_name: "ТЕСТ ДАМЖИН НИСЛЭГТЭЙ АЯЛАЛ" });
+  assert.equal(checkTripConsistency(t, { guessedTransport: "direct_flight" }).transportConflict, true);
+  assert.equal(checkTripConsistency(t, { guessedTransport: null }).transportConflict, false, "nothing printed, nothing contradicted");
+});
+
+test("V3 consistency: duration wording against duration_days / duration_nights / duration_text / the program length", () => {
+  assert.deepEqual(parseDuration("4 шөнө, 5 өдөр"), { days: 5, nights: 4 });
+  assert.deepEqual(parseDuration("9 өдөр 8 шөнө"), { days: 9, nights: 8 });
+  assert.deepEqual(parseDuration("5 шөнө / 6 өдөр"), { days: 6, nights: 5 });
+  assert.deepEqual(parseDuration("8 өдөр"), { days: 8, nights: null });
+  const ok = datedTrip("cd1", fareOnce, { route_name: "ТЕСТ АЯЛАЛ (4 шөнө, 5 өдөр)", duration_text: "5 өдөр 4 шөнө", extra: { duration_days: 5, duration_nights: 4 } });
+  assert.equal(checkTripConsistency(ok).durationConflict, false);
+  const titleBad = datedTrip("cd2", fareOnce, { route_name: "ТЕСТ АЯЛАЛ (4 шөнө, 5 өдөр)", duration_text: "6 өдөр 5 шөнө", extra: { duration_days: 6, duration_nights: 5 } });
+  const r = checkTripConsistency(titleBad);
+  assert.equal(r.durationConflict, true);
+  assert.equal(r.warnings[0].code, "duration_conflict");
+  assert.equal(r.warnings[0].severity, "warning");
+  assert.deepEqual(r.warnings[0].detail, { structured: "6 өдөр 5 шөнө", wording: "5 өдөр 4 шөнө" });
+  const fieldsDisagree = datedTrip("cd3", fareOnce, { duration_text: "8 өдөр 7 шөнө", extra: { duration_days: 9, duration_nights: 8 } });
+  assert.equal(checkTripConsistency(fieldsDisagree).durationConflict, true);
+  const programShort = withProgram("cd4", [{ title: "1", description: "a" }, { title: "2", description: "b" }, { title: "3", description: "c" }], { duration_text: "8 өдөр 7 шөнө" });
+  assert.equal(checkTripConsistency(programShort).durationConflict, true, "a 3-day program for an 8-day trip");
+  // Duration conflicts warn but never blank the printed duration (it is the stored text).
+  const snap = buildCatalogueSnapshot(inputOf([titleBad]));
+  assert.equal(snap.trips[0].durationText, "6 өдөр 5 шөнө");
+  assert.ok(snap.trips[0].warnings.some((w) => w.code === "duration_conflict"));
+});
+
+/* ---- trip codes: one code per trip id in every edition, first-use order, never reused */
+
+function memoryCodeStore() {
+  const rows: Array<{ id: string; code: string }> = [];
+  let calls = 0;
+  return {
+    rows,
+    get calls() { return calls; },
+    async getTripCodeMap() { return Object.fromEntries(rows.map((r) => [r.id, r.code])); },
+    async assignTripCodes(ids: string[]) {
+      calls += 1;
+      for (const id of ids) if (!rows.some((r) => r.id === id)) rows.push({ id, code: `A${String(rows.length + 1).padStart(2, "0")}` });
+      return Object.fromEntries(ids.map((id) => [id, rows.find((r) => r.id === id)!.code]));
+    },
+  };
+}
+
+/** Ten eligible trips of three themes; created_at descending with the id so "oldest first" is distinguishable. */
+function liveTen(): TravelTrip[] {
+  const themes = ["Далайн амралт", "Хот соёл", "Байгаль нуур"];
+  return Array.from({ length: 10 }, (_, i) => datedTrip(`lt${i}`, [["2027-01-09", 2_000_000 + i * 300_000]], {
+    route_name: `Тест-${["Аа", "Бб", "Вв", "Гг", "Дд", "Ее", "Жж", "Зз", "Ии", "Кк"][i]}ланд ${themes[i % 3]} аялал`,
+    created_at: `2026-0${(i % 9) + 1}-01T00:00:00.000Z`,
+    extra: { transport_type: "direct_flight", website_details: { country: themes[i % 3] } },
+  }));
+}
+
+test("V3 codes: the allocation order is the Quick book in print order, then the other trips by group and age, and never depends on the order trips arrive in", () => {
+  const trips = liveTen();
+  const quick = emptyConfig({ tripIds: ["lt7", "lt2", "lt5"] });
+  const a = codeAllocationOrder({ trips, quick }, TODAY);
+  assert.deepEqual(a.slice(0, 3), ["lt7", "lt2", "lt5"], "the staff Quick list first, in its order (the cover is not forced to A01)");
+  assert.equal(new Set(a).size, 10);
+  assert.equal(a.length, 10, "every eligible trip is numbered");
+  assert.deepEqual(codeAllocationOrder({ trips: [...trips].reverse(), quick }, TODAY), a, "arrival order is irrelevant");
+  const closed = datedTrip("lt-closed", [["2026-10-01", 1_000_000]]);
+  assert.ok(!codeAllocationOrder({ trips: [...trips, closed], quick }, TODAY).includes("lt-closed"), "an ineligible trip takes no number");
+  const excluded = codeAllocationOrder({ trips, quick: emptyConfig({ tripIds: ["lt7"], excludedTripIds: ["lt3"] }) }, TODAY);
+  assert.ok(excluded.includes("lt3"), "a trip hidden from a book still has a code (the code belongs to the trip)");
+});
+
+test("V3 codes: with no staff list the recommended shortlist is numbered first; quick and complete read the same code for every shared trip, whatever the call order", async () => {
+  const trips = liveTen();
+  const config = emptyConfig();
+  const order = () => codeAllocationOrder({ trips, quick: config }, TODAY);
+  const shortlistIds = planEdition({ edition: "quick", trips, config }, TODAY).trips.map((t) => t.id);
+  assert.ok(shortlistIds.length >= CATALOGUE_QUICK_MIN_TRIPS);
+
+  for (const firstEdition of ["complete", "quick", "preview"] as const) {
+    const store = memoryCodeStore();
+    const planned = (edition: "quick" | "complete" | "preview") => planEdition({ edition, trips, config }, TODAY).trips;
+    const first = await resolveCodeMap(planned(firstEdition), store, { allocate: true, order });
+    const quickMap = await resolveCodeMap(planned("quick"), store, { allocate: true, order });
+    const completeMap = await resolveCodeMap(planned("complete"), store, { allocate: true, order });
+    for (const id of shortlistIds) assert.equal(quickMap[id], completeMap[id], `${id} reads one code in both editions (first used: ${firstEdition})`);
+    assert.deepEqual(shortlistIds.map((id) => completeMap[id]), shortlistIds.map((_, i) => `A${String(i + 1).padStart(2, "0")}`), "the Quick book owns A01.. in its own order");
+    if (Object.keys(first).length) assert.equal(first[shortlistIds[0]], "A01", "whichever edition is used first, the Quick book still owns A01");
+    assert.equal(new Set(Object.values(completeMap)).size, 10);
+
+    const quickSnap = buildCatalogueSnapshot(inputOf(trips, { edition: "quick", codeMap: quickMap, config }));
+    const completeSnap = buildCatalogueSnapshot(inputOf(trips, { edition: "complete", codeMap: completeMap, config }));
+    const completeById = new Map(completeSnap.trips.map((c) => [c.tripId, c]));
+    for (const card of quickSnap.trips) {
+      const other = completeById.get(card.tripId)!;
+      assert.equal(card.code, other.code);
+      assert.equal(card.editorialTitle, other.editorialTitle, "a trip reads the same title in both books");
+      assert.equal(card.transportLabel, other.transportLabel);
+      assert.equal(card.price.display, other.price.display);
+    }
+    const writes = store.calls;
+    await resolveCodeMap(planned("complete"), store, { allocate: true, order });
+    assert.equal(store.calls, writes, "when every planned trip already has a code nothing is written");
+  }
+});
+
+test("V3 codes: a trip the order function missed is still numbered, oldest first, after the canonical ones; a read-only load never allocates", async () => {
+  const trips = liveTen();
+  const store = memoryCodeStore();
+  const map = await resolveCodeMap(trips.slice(0, 3), store, { allocate: true, order: () => ["lt9"] });
+  assert.equal(map.lt9, "A01");
+  assert.deepEqual([map.lt0, map.lt1, map.lt2].every(Boolean), true);
+  const before = store.calls;
+  await resolveCodeMap(trips, store, { allocate: false, provisional: true });
+  assert.equal(store.calls, before);
+});
+
+/* ---- weak or missing heroes and the Quick book */
+
+test("V3 quick: weak and missing heroes are never recommended while enough strong ones remain; a thin pool still fills the book", () => {
+  const strong = manyCards().filter((c) => c.heroQuality !== "weak");
+  const weakOne = card("wk1", { heroQuality: "weak", groupKey: "city", destinationKey: "kwk", destinationKeys: ["kwk"] });
+  const missingOne = card("ms1", { heroQuality: "missing", photo: null, groupKey: "nature", destinationKey: "kms", destinationKeys: ["kms"] });
+  const a = recommendShortlist([...strong, weakOne, missingOne]);
+  assert.ok(!a.tripIds.includes("wk1") && !a.tripIds.includes("ms1"));
+  const thin = [...strong.filter((c) => c.groupKey === "beach").slice(0, 3), weakOne, missingOne, card("wk2", { heroQuality: "weak" }), card("wk3", { heroQuality: "weak" }), card("wk4", { heroQuality: "weak" }), card("wk5", { heroQuality: "weak" })];
+  assert.ok(recommendShortlist(thin).tripIds.length >= CATALOGUE_QUICK_MIN_TRIPS, "fewer than MIN strong trips: the weak ones fill the book rather than leave it thin");
+});
+
+test("V3 quick: a staff-configured Quick list that keeps a weak or missing hero is blocking (listing the codes); a clean list is not", () => {
+  const ids = Array.from({ length: 8 }, (_, i) => `q${i}`);
+  const trips = ids.map((id, i) => datedTrip(id, fareOnce, { route_name: `Тест-${id}`, photo_urls: i === 0 ? [] : [`${IMG}/${id}-2400x1600.jpg`] }));
+  const sizes = Object.fromEntries(ids.slice(1).map((id) => [`${IMG}/${id}-2400x1600.jpg`, { width: 2400, height: 1600, colorful: 80, sharpness: 500 }]));
+  const bad = buildCatalogueSnapshot(inputOf(trips, { edition: "quick", config: emptyConfig({ tripIds: ids }), photoSizes: sizes }));
+  const block = bad.warnings.find((w) => w.code === "photo_missing" && w.severity === "blocking" && !w.tripId);
+  assert.ok(block, "blocking until the photo is replaced");
+  assert.equal(block!.detail?.codes, "A01");
+  const fixed = buildCatalogueSnapshot(inputOf(trips, {
+    edition: "quick", config: emptyConfig({ tripIds: ids }), photoSizes: sizes,
+    heroByTripId: { q0: { url: `${IMG}/q0-chosen-2400x1600.jpg`, quality: "good" } },
+  }));
+  assert.ok(!fixed.warnings.some((w) => w.code === "photo_missing" && w.severity === "blocking" && !w.tripId));
+  const complete = buildCatalogueSnapshot(inputOf(trips, { edition: "complete", photoSizes: sizes }));
+  assert.ok(!complete.warnings.some((w) => w.code === "photo_missing" && w.severity === "blocking" && !w.tripId), "only the Quick book is held back");
+});
+
+/* ---- the cover photograph */
+
+const big = (n: string) => `${IMG}/${n}-2400x1800.jpg`;
+const vivid = { width: 2400, height: 1800, colorful: 80, sharpness: 500 };
+
+test("V3 cover: the staff choice wins; otherwise the strongest excellent, tall photo no trip page uses; never a hero; none when nothing qualifies", () => {
+  const a = datedTrip("cv1", fareOnce, { route_name: "Тест-Нэгт", photo_urls: [big("a1"), big("a2")] });
+  const b = datedTrip("cv2", fareOnce, { route_name: "Тест-Хоёрт", photo_urls: [big("b1"), `${IMG}/b2-1200x800.jpg`] });
+  const photoSizes = { [big("a1")]: vivid, [big("a2")]: { ...vivid, colorful: 60 }, [big("b1")]: vivid, [`${IMG}/b2-1200x800.jpg`]: { width: 1200, height: 800 } };
+  const base = inputOf([a, b], { photoSizes });
+  const auto = buildCatalogueSnapshot(base);
+  const heroes = new Set(auto.trips.map((c) => c.photo?.url));
+  assert.ok(auto.coverPhoto, "an unused excellent photograph exists");
+  assert.ok(!heroes.has(auto.coverPhoto!.url), "no trip page uses the cover photograph");
+  assert.ok((auto.coverPhoto!.height ?? 0) >= 1200);
+  assert.ok(auto.coverTripId === "cv1" || auto.coverTripId === "cv2");
+  assert.deepEqual(buildCatalogueSnapshot(base).coverPhoto, auto.coverPhoto, "deterministic");
+
+  const staff = buildCatalogueSnapshot({ ...base, coverPhoto: { url: big("b1"), focal: { x: 0.3, y: 0.6 }, zoom: 1.4 } });
+  assert.equal(staff.coverPhoto?.url, big("b1"));
+  assert.deepEqual(staff.coverPhoto?.focal, { x: 0.3, y: 0.6 });
+  assert.equal(staff.coverPhoto?.zoom, 1.4);
+  assert.notEqual(staff.contentHash, auto.contentHash, "the cover is part of what is printed");
+
+  const clash = buildCatalogueSnapshot({ ...base, coverPhoto: { url: auto.trips[0].photo!.url } });
+  assert.ok(clash.warnings.some((w) => w.code === "other" && w.severity === "warning" && /нүүр хуудасны зураг/i.test(w.message)), "a cover that repeats a page's hero is flagged");
+
+  const lone = datedTrip("cv3", fareOnce, { route_name: "Тест-Гуравт", photo_urls: [big("c1")] });
+  const none = buildCatalogueSnapshot(inputOf([lone], { photoSizes: { [big("c1")]: vivid } }));
+  assert.equal(none.coverPhoto, null, "its only photo is its own hero");
+  assert.equal(resolveCoverPhoto({ cards: [], trips: [], posterByTripId: {} }).photo, null);
+});
+
+/* ---- apply-picks planner */
+
+test("V3 picks: only a trip's own candidates, focal 0..1, zoom 1..3; staff choices are kept unless --overwrite; a second run changes nothing", async () => {
+  const { planPicks, validatePick } = await import("../scripts/catalogue-apply-picks");
+  const own = new Set([photoKey(big("p1")), photoKey(big("p2"))]);
+  assert.equal(validatePick({ url: big("p1"), focal: { x: 0.5, y: 0.4 }, zoom: 1.2, quality: "good" }, own, "t").choice?.url, big("p1"));
+  assert.deepEqual(validatePick({ url: big("p1"), focal: [0.2, 0.8] }, own, "t").choice?.focal, { x: 0.2, y: 0.8 }, "the editor's [x, y] form");
+  for (const bad of [{ url: `${IMG}/other.jpg` }, { url: big("p1"), focal: { x: 1.2, y: 0.5 } }, { url: big("p1"), zoom: 3.5 }, { url: big("p1"), zoom: 0.5 }, { url: big("p1"), quality: "great" }]) {
+    const r = validatePick(bad as never, own, "t");
+    assert.equal(r.choice, null);
+    assert.ok(r.issues.length === 1, JSON.stringify(bad));
+  }
+  assert.deepEqual(validatePick({ note: "needs a replacement" }, own, "t"), { choice: null, issues: [] }, "no url is skipped, not refused");
+
+  const input = {
+    config: { heroByTripId: { t2: { url: big("p2") } }, coverPhoto: null },
+    picks: { t1: { url: big("p1"), focal: { x: 0.5, y: 0.5 } }, t2: { url: big("p1") } },
+    cover: { tripId: "t1", url: big("p2"), focal: { x: 0.5, y: 0.5 }, zoom: 1 },
+    candidatesByTrip: { t1: own, t2: own },
+    titleByTrip: { t1: "Нэг", t2: "Хоёр" },
+    overwrite: false,
+  };
+  const plan = planPicks(input);
+  assert.deepEqual(plan.issues, []);
+  assert.equal(plan.heroByTripId.t1.url, big("p1"));
+  assert.equal(plan.heroByTripId.t2.url, big("p2"), "a hero staff already chose is kept");
+  assert.deepEqual(plan.diffs.map((d) => d.action), ["add", "keep-staff"]);
+  assert.equal(plan.coverPhoto?.url, big("p2"));
+  assert.equal(plan.changed, true);
+  assert.equal(planPicks({ ...input, overwrite: true }).heroByTripId.t2.url, big("p1"));
+
+  const again = planPicks({ ...input, config: { heroByTripId: plan.heroByTripId, coverPhoto: plan.coverPhoto } });
+  assert.equal(again.changed, false, "idempotent: nothing left to write");
+  assert.deepEqual(again.diffs.map((d) => d.action), ["same", "keep-staff"]);
+
+  const refused = planPicks({ ...input, picks: { t1: { url: `${IMG}/elsewhere.jpg` }, ghost: { url: big("p1") } } });
+  assert.equal(refused.issues.length, 2, "an unknown url and an unknown trip are both refused");
+});

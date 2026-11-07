@@ -87,7 +87,7 @@ export default catalogueRoute({
         throw new CatalogueHttpError(
           409,
           "meta_outbound_disabled",
-          "Meta-д илгээх үйлдэл унтраалттай байна (kill switch эсвэл Vercel preview). Илгээхгүй.",
+          "Meta руу илгээх түр унтраалттай байна (өөрөө унтрааснаас эсвэл туршилтын орчин байгаагаас). Илгээхгүй.",
         );
       }
     }

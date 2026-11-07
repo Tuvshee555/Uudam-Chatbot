@@ -4,6 +4,7 @@ import { SectionHeading } from "../AdminShared";
 import type { CatalogueEdition } from "@/lib/catalogue/types";
 import type { CatalogueReviewRow } from "@/lib/catalogue/admin/types";
 import type { CatalogueAdmin } from "./useCatalogueAdmin";
+import { CoverPhotoChooser } from "./CoverPhotoChooser";
 import { HeroEditor } from "./HeroEditor";
 import { needsNewPhoto } from "./heroCrop";
 import { EditionPicker, HeroQualityChip } from "./shared";
@@ -58,6 +59,7 @@ export function PhotosPanel({ admin }: { admin: CatalogueAdmin }) {
         title="Зураг ба гарчиг"
         description="Аялал бүрийн гол зургийг тухайн аяллын өөрийн зургуудаас сонгоно. Зөвхөн зураг, хэвлэгдэх гарчиг хадгалагдана: үнэ, огноо, аяллын нэр өөрчлөгдөхгүй."
       />
+      <CoverPhotoChooser admin={admin} />
       {reviewError && <Alert tone="danger">{reviewError}</Alert>}
 
       {flagged.length > 0 && (

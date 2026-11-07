@@ -121,3 +121,45 @@ export function parsePhotoUpdate(raw: unknown): Parsed<PhotoUpdate> {
   }
   return { ok: true, value: { tripId: body.tripId, hero, titleOverride, expectedUpdatedAt } };
 }
+
+// ── Cover photo ──────────────────────────────────────────────────────────────────────────────────
+
+export type CoverUpdate = {
+  /** null = back to the automatic cover photo. */
+  coverPhoto: { url: string; tripId: string; focal: { x: number; y: number } | null; zoom: number | null } | null;
+  expectedUpdatedAt: string | null | undefined;
+};
+
+/** True when a config PUT body is a cover update ({ coverPhoto, ... }) instead of an edition curation. */
+export function isCoverUpdateBody(raw: unknown): boolean {
+  return isPlainObject(raw) && "coverPhoto" in raw;
+}
+
+/**
+ * PUT /config body for the cover: { coverPhoto: { url, tripId, focal?, zoom? } | null, expectedUpdatedAt? }.
+ * `tripId` names the trip whose own photos contain the url; the route checks that against the live candidates, so a
+ * cover can only ever be a photo that already belongs to a trip.
+ */
+export function parseCoverUpdate(raw: unknown): Parsed<CoverUpdate> {
+  const body = readBody(raw);
+  if (!body) return fail("Хүсэлтийн бүтэц буруу байна.");
+  const extra = unknownKeys(body, ["coverPhoto", "expectedUpdatedAt"]);
+  if (extra.length) return fail(`Үл мэдэгдэх талбар: ${extra.join(", ")}.`);
+  let expectedUpdatedAt: string | null | undefined;
+  if (body.expectedUpdatedAt !== undefined) {
+    if (body.expectedUpdatedAt === null) expectedUpdatedAt = null;
+    else if (typeof body.expectedUpdatedAt === "string" && !Number.isNaN(Date.parse(body.expectedUpdatedAt)) && body.expectedUpdatedAt.length <= 40) {
+      expectedUpdatedAt = body.expectedUpdatedAt;
+    } else return fail('"expectedUpdatedAt" огноо байх ёстой.');
+  }
+  if (body.coverPhoto === null) return { ok: true, value: { coverPhoto: null, expectedUpdatedAt } };
+  if (!isPlainObject(body.coverPhoto)) return fail('"coverPhoto" объект эсвэл null байх ёстой.');
+  const photo = body.coverPhoto;
+  const photoExtra = unknownKeys(photo, ["url", "tripId", "focal", "zoom"]);
+  if (photoExtra.length) return fail(`Үл мэдэгдэх талбар: ${photoExtra.join(", ")}.`);
+  // Reuse the hero parser for url / focal / zoom so both pickers obey the same bounds.
+  const hero = parsePhotoUpdate({ tripId: photo.tripId, hero: { url: photo.url, focal: photo.focal, zoom: photo.zoom } });
+  if (!hero.ok) return hero;
+  if (!hero.value.hero) return fail("Зургийн хаяг буруу байна.");
+  return { ok: true, value: { coverPhoto: { url: hero.value.hero.url, tripId: hero.value.tripId, focal: hero.value.hero.focal, zoom: hero.value.hero.zoom }, expectedUpdatedAt } };
+}

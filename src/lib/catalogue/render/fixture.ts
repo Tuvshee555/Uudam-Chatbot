@@ -93,7 +93,14 @@ const SPECS: Spec[] = [
   { title: "Загвар-Аралын Намар", editorial: "Загвар-Аралын Намар", kicker: "Загвар арал", groupKey: "city", duration: "7 өдөр · 6 шөнө", transport: "Шууд нислэг", highlights: ["Алтан навчтай нурууны замаар алхана", "Орон нутгийн гал тогооны хичээл"], price: 3560000, dates: ["2027-04-10", "2027-04-24"], photo: "tall", quality: "excellent", gallery: true },
 ];
 
-export type SampleOptions = { trips?: number; edition?: CatalogueSnapshot["edition"] };
+export type SampleOptions = {
+  trips?: number;
+  edition?: CatalogueSnapshot["edition"];
+  /** A dedicated cover photograph no trip page uses: portrait (carries the whole page) or landscape (cinematic plate). */
+  coverPhoto?: "tall" | "ok";
+  /** Optional company-group statements for the closing page (invented text only). */
+  corporateNotes?: string[];
+};
 
 export function sampleSnapshot(opts: SampleOptions = {}): CatalogueSnapshot {
   const count = opts.trips ?? SPECS.length;
@@ -144,8 +151,9 @@ export function sampleSnapshot(opts: SampleOptions = {}): CatalogueSnapshot {
     seasonLabel: "2026 / 2027",
     trips,
     coverTripId: trips[0]?.tripId ?? null,
+    ...(opts.coverPhoto ? { coverPhoto: { url: `https://photos.example.test/${opts.coverPhoto}/900.jpg`, width: null, height: null, credit: "Жишиг нүүр зураг", source: "trip_photo" as const } } : {}),
     groups,
-    contact: { phones: ["7700 0001", "9900 0002"], siteLabel: "example.test", siteUrl: "https://example.test" },
+    contact: { phones: ["7700 0001", "9900 0002"], siteLabel: "example.test", siteUrl: "https://example.test", ...(opts.corporateNotes ? { corporateNotes: opts.corporateNotes } : {}) },
     warnings: [],
     contentHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   };

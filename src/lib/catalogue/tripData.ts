@@ -32,11 +32,12 @@ import {
 } from "./types";
 import { buildContact, parsePhones } from "./contact";
 import { PROVISIONAL_CODE_PREFIX, customerText, dedupeWarnings, row, strList, text, warn } from "./diagnostics";
-import { buildGroups, classifyTrips } from "./groups";
+import { buildGroups, classifyTrips, GROUP_DEFS } from "./groups";
+import { checkTripConsistency } from "./consistency";
 import { deriveHighlights } from "./highlights";
 import { deriveKicker } from "./kicker";
 import { destinationKeys, editorialParts, editorialTitle } from "./editorial";
-import { longEdgeOf, measurePhotoSizes, photoKey, photoSizeFromUrl, rankPhotoCandidates, selectHero, type HeroSelection, type PhotoSizes } from "./photos";
+import { assessHero, longEdgeOf, measurePhotoSizes, photoKey, photoSizeFromUrl, rankPhotoCandidates, selectHero, type HeroSelection, type PhotoSizes } from "./photos";
 import { pickCoverTrip, recommendShortlist, type Shortlist } from "./curation";
 import { deriveDateInfo, deriveStartingPrice, dotDay, findOverviewPriceConflicts, isTripEligible, ubDay } from "./pricing";
 
@@ -242,6 +243,11 @@ export type RecommendContext = {
   photoSizes?: PhotoSizes;
   groupOverrides?: Record<string, string>;
   siteBaseUrl?: string;
+  /**
+   * Eligible trips this book does NOT print. They still count when two trips would print the same display title, so
+   * a trip reads the same in the Quick and the Complete book ("Шанхай хот · 11-р сар" in both, never bare in one).
+   */
+  siblings?: ReadonlyArray<{ trip: TravelTrip; code: string }>;
 };
 
 type CardParts = { trip: TravelTrip; code: string };
@@ -294,10 +300,12 @@ export function buildCards(parts: readonly CardParts[], today: IsoDay, ctx: Reco
     const { highlights, warnings: highlightWarnings } = deriveHighlights(trip);
     const picked = pickPhoto(trip, poster, { choice: ctx.heroByTripId?.[trip.id], sizes: ctx.photoSizes });
     const dates = deriveDateInfo(trip, today);
-    const transportLabel = transportLabelOf(trip);
+    // A transport the title or program contradicts is printed as NOTHING (never a possibly wrong label); staff are told why.
+    const consistency = checkTripConsistency(trip, { guessedTransport: tripTransport(trip) });
+    const transportLabel = consistency.transportConflict ? "" : transportLabelOf(trip);
     const durationText = durationTextOf(trip);
-    const extraWarnings: CatalogueWarning[] = [];
-    if (!transportLabel) extraWarnings.push(warn("other", "info", "Тээврийн төрөл тодорхойгүй тул хуудсан дээр харуулахгүй.", trip.id));
+    const extraWarnings: CatalogueWarning[] = [...consistency.warnings];
+    if (!transportLabel && !consistency.transportConflict) extraWarnings.push(warn("other", "info", "Тээврийн төрөл тодорхойгүй тул хуудсан дээр харуулахгүй.", trip.id));
     if (!durationText) extraWarnings.push(warn("other", "info", "Аяллын хугацаа бөглөгдөөгүй тул хуудсан дээр харуулахгүй.", trip.id));
     return {
       trip, code, price, dates, highlights, picked, transportLabel, durationText,
@@ -367,7 +375,18 @@ export function buildCards(parts: readonly CardParts[], today: IsoDay, ctx: Reco
       warnings: dedupeWarnings([...p.warnings, ...decision.warnings]),
     };
   });
-  disambiguateTitles(cards, qualifiers, overridden);
+  // Trips the book does not print still decide whether a title needs a tell-apart: stand-in cards, never returned.
+  const standIns: CatalogueTripCard[] = [];
+  const printed = new Set(cards.map((card) => card.tripId));
+  for (const { trip, code } of ctx.siblings ?? []) {
+    if (printed.has(trip.id)) continue;
+    const title = text(trip.route_name);
+    const override = text(ctx.titleOverrides?.[trip.id]);
+    if (override) overridden.add(trip.id);
+    qualifiers.set(trip.id, editorialParts(title).qualifier);
+    standIns.push({ tripId: trip.id, code, title, editorialTitle: editorialTitle(title, { destinations: destinationsOf(trip) }, override), durationText: durationTextOf(trip) } as CatalogueTripCard);
+  }
+  disambiguateTitles([...cards, ...standIns], qualifiers, overridden);
   return cards;
 }
 
@@ -392,6 +411,67 @@ export function recommendedShortlistFor(trips: readonly TravelTrip[], today: Iso
 /** Automatic secondary photos are off: a subject-blind ranking cannot tell a beach from a billboard. */
 const AUTO_GALLERY = false;
 
+/** A cover photograph fills a whole tall page: its short side must survive the crop. */
+export const COVER_MIN_HEIGHT = 1200;
+
+export type CoverPick = { photo: CataloguePhoto | null; ownerTripId: string | null; warnings: CatalogueWarning[] };
+
+/**
+ * The cover photograph. Staff's choice (config.coverPhoto: any approved photo) wins; otherwise the
+ * strongest stored photo of a PRINTED trip that no trip page uses (excellent quality, tall enough),
+ * best score first, ties by url. null = the renderer falls back to the cover trip's own hero.
+ * `ownerTripId` is the printed trip the photograph belongs to (the trip whose theme the cover evokes).
+ * A cover photograph that is also a trip page's hero is allowed for a staff choice but flagged.
+ */
+export function resolveCoverPhoto(args: {
+  cards: readonly CatalogueTripCard[];
+  trips: readonly TravelTrip[];
+  posterByTripId: Record<string, unknown>;
+  sizes?: PhotoSizes;
+  choice?: CatalogueHeroChoice | null;
+}): CoverPick {
+  const { cards, sizes } = args;
+  const byId = new Map(args.trips.map((trip) => [trip.id, trip]));
+  const used = new Set<string>();
+  for (const card of cards) {
+    if (card.photo) used.add(photoKey(card.photo.url));
+    for (const photo of card.gallery) used.add(photoKey(photo.url));
+  }
+  const pools = cards.map((card) => {
+    const trip = byId.get(card.tripId);
+    return { card, candidates: trip ? rankPhotoCandidates(trip, args.posterByTripId[card.tripId], { sizes }) : [] };
+  });
+  const warnings: CatalogueWarning[] = [];
+
+  const choice = args.choice;
+  if (choice?.url) {
+    const key = photoKey(choice.url);
+    const owner = pools.find((pool) => pool.candidates.some((c) => photoKey(c.url) === key));
+    const known = owner?.candidates.find((c) => photoKey(c.url) === key);
+    const stats = sizes?.[choice.url] ?? sizes?.[known?.url ?? ""];
+    const hint = photoSizeFromUrl(choice.url);
+    const base: CataloguePhotoCandidate = known
+      ? { ...known, url: choice.url, width: stats?.width ?? known.width, height: stats?.height ?? known.height }
+      : { url: choice.url, width: stats?.width ?? hint.width, height: stats?.height ?? hint.height, source: "trip_photo", score: 60, issues: [], credit: null };
+    const clash = cards.find((card) => card.photo && photoKey(card.photo.url) === key);
+    if (clash) {
+      warnings.push(warn("other", "warning", `Нүүр хуудасны зураг ${clash.code} аяллын хуудсанд бас хэвлэгдэнэ — нэг зураг хоёр хуудсанд давтагдахгүйн тулд нүүр зургийг солино уу.`, clash.tripId));
+    }
+    return { photo: toCataloguePhoto(base, { focal: choice.focal ?? null, zoom: choice.zoom ?? null }), ownerTripId: owner?.card.tripId ?? null, warnings };
+  }
+
+  let best: { candidate: CataloguePhotoCandidate; card: CatalogueTripCard } | null = null;
+  for (const { card, candidates } of pools) {
+    for (const candidate of candidates) {
+      if (used.has(photoKey(candidate.url)) || assessHero(candidate) !== "excellent") continue;
+      if (candidate.height === null || candidate.height < COVER_MIN_HEIGHT) continue;
+      const better = !best || candidate.score > best.candidate.score || (candidate.score === best.candidate.score && candidate.url < best.candidate.url);
+      if (better) best = { candidate, card };
+    }
+  }
+  return best ? { photo: toCataloguePhoto(best.candidate), ownerTripId: best.card.tripId, warnings } : { photo: null, ownerTripId: null, warnings };
+}
+
 export function buildCatalogueSnapshot(input: SnapshotInput): CatalogueSnapshot {
   const today = ubDay(input.nowIso);
   const config: CatalogueEditionConfig = {
@@ -400,7 +480,8 @@ export function buildCatalogueSnapshot(input: SnapshotInput): CatalogueSnapshot 
     featuredTripIds: input.config?.featuredTripIds ?? [],
     excludedTripIds: input.config?.excludedTripIds ?? [],
   };
-  const contact = buildContact(input.contactPhones, input.siteBaseUrl || BOOKING_WEBSITE_URL);
+  const notes = (input.corporateNotes ?? []).map((line) => line.trim()).filter(Boolean).slice(0, 3);
+  const contact = { ...buildContact(input.contactPhones, input.siteBaseUrl || BOOKING_WEBSITE_URL), ...(notes.length ? { corporateNotes: notes } : {}) };
   const recommend: RecommendContext = {
     posterByTripId: input.posterByTripId, heroByTripId: input.heroByTripId, titleOverrides: input.titleOverrides,
     photoSizes: input.photoSizes, groupOverrides: config.groupOverrides, siteBaseUrl: input.siteBaseUrl,
@@ -426,10 +507,17 @@ export function buildCatalogueSnapshot(input: SnapshotInput): CatalogueSnapshot 
     printable.push({ trip, code });
   }
 
-  const cards = buildCards(printable, today, { ...recommend, uniquePhotos: true, siteUrl: contact.siteUrl });
+  const printedIds = new Set(printable.map((part) => part.trip.id));
+  const siblings = input.trips
+    .filter((trip) => !printedIds.has(trip.id) && isTripEligible(trip, today).eligible)
+    .map((trip) => ({ trip, code: text(input.codeMap?.[trip.id]) }));
+  const cards = buildCards(printable, today, { ...recommend, uniquePhotos: true, siteUrl: contact.siteUrl, siblings });
   // Cover: staff's first featured trip when it has a hero; otherwise the best hero + most inviting subject.
   const featuredCover = (config.featuredTripIds ?? []).map((id) => cards.find((card) => card.tripId === id)).find((card) => card && card.photo && card.heroQuality !== "missing");
-  const coverTripId = featuredCover?.tripId ?? pickCoverTrip(cards);
+  // The cover photograph is one no trip page uses; the cover trip is the one whose theme that photograph evokes.
+  const cover = resolveCoverPhoto({ cards, trips: input.trips, posterByTripId: input.posterByTripId, sizes: input.photoSizes, choice: input.coverPhoto });
+  collection.push(...cover.warnings);
+  const coverTripId = featuredCover?.tripId ?? cover.ownerTripId ?? pickCoverTrip(cards);
 
   if (!cards.length) {
     collection.push(warn("other", "blocking", input.edition === "complete" ? "Каталогт оруулах боломжтой идэвхтэй аялал алга." : "Каталогт оруулах аялал сонгогдоогүй эсвэл сонгосон аялал бүгд хаалттай байна."));
@@ -439,7 +527,17 @@ export function buildCatalogueSnapshot(input: SnapshotInput): CatalogueSnapshot 
   if (!contact.phones.length) {
     collection.push(warn("other", "blocking", "Холбоо барих утас тохируулаагүй тул хаалтын хуудас утасгүй гарна. Админы «Холбоо барих мэдээлэл»-д утсаа оруулна уу."));
   }
-  const weakHeroes = cards.filter((card) => card.photo && card.heroQuality === "weak");
+  // "Weak" blocks only when the photo sizes were really measured (generate / preview): without measurements a photo is
+  // merely "unverified" and stays an information line, so a check that does not download images never blocks a book.
+  const measured = input.photoSizes !== undefined;
+  const needsPhoto = cards.filter((card) => card.heroQuality === "missing" || (measured && card.heroQuality === "weak"));
+  if (input.edition === "quick" && needsPhoto.length) {
+    // A recommended shortlist avoids such trips; a staff list may keep them, but the book is not publishable until they are replaced.
+    collection.push(warn("photo_missing", "blocking",
+      `Хурдан каталогийн ${needsPhoto.length} аялалд нүүр зураг сул эсвэл дутуу байна (${needsPhoto.map((card) => card.code).join(", ")}) — зургийг солих эсвэл эдгээр аяллыг жагсаалтаас хасна уу.`,
+      undefined, { count: needsPhoto.length, codes: needsPhoto.map((card) => card.code).join(",") }));
+  }
+  const weakHeroes = cards.filter((card) => card.photo && card.heroQuality === "weak" && !(input.edition === "quick" && measured));
   if (weakHeroes.length) {
     collection.push(warn("other", "info", `${weakHeroes.length} аялалд нүүр зураг дунд зэрэг (${weakHeroes.map((card) => card.code).join(", ")}) — зургийг солихыг зөвлөж байна.`, undefined, { count: weakHeroes.length }));
   }
@@ -452,6 +550,7 @@ export function buildCatalogueSnapshot(input: SnapshotInput): CatalogueSnapshot 
     issueLabel,
     seasonLabel,
     coverTripId,
+    coverPhoto: cover.photo ? { url: cover.photo.url, focal: cover.photo.focal ?? null, zoom: cover.photo.zoom ?? null } : null,
     trips: cards.map(({ warnings: _warnings, ...printedCard }) => printedCard),
     groups,
     contact,
@@ -464,6 +563,7 @@ export function buildCatalogueSnapshot(input: SnapshotInput): CatalogueSnapshot 
     seasonLabel,
     trips: cards,
     coverTripId,
+    coverPhoto: cover.photo,
     groups,
     contact,
     warnings: dedupeWarnings([...collection, ...cards.flatMap((card) => card.warnings)]),
@@ -524,24 +624,63 @@ export type CodeStorePort = {
 };
 
 /**
+ * The ONE order in which trips receive their permanent codes the first time any edition needs them,
+ * so every edition (and the admin, the follow-up on Messenger, a saved test) reads the same number:
+ *   1. the QUICK book in print order (the staff's list, else the recommended shortlist: cover first);
+ *   2. every other eligible trip by group (display order), then oldest first, then id.
+ * Pure. A trip that is excluded from a book still gets a code (the code belongs to the trip, not
+ * to a book). Once allocated a code never moves, so this order only matters on first use.
+ */
+export function codeAllocationOrder(
+  input: { trips: readonly TravelTrip[]; quick: CatalogueEditionConfig; recommend?: RecommendContext },
+  today: IsoDay,
+): string[] {
+  const eligible = input.trips.filter((trip) => isTripEligible(trip, today).eligible);
+  const book = planEdition({ edition: "quick", trips: eligible, config: input.quick, recommend: input.recommend }, today).trips;
+  const taken = new Set(book.map((trip) => trip.id));
+  const rest = eligible.filter((trip) => !taken.has(trip.id));
+  const decisions = classifyTrips(
+    rest.map((trip) => {
+      const { price } = deriveStartingPrice(trip, today);
+      return { trip, priceMnt: price.kind === "from" ? price.amountMnt : null };
+    }),
+    input.quick.groupOverrides ?? {},
+  );
+  const rank = (trip: TravelTrip) => {
+    const index = GROUP_DEFS.findIndex((def) => def.key === decisions.get(trip.id)?.groupKey);
+    return index < 0 ? GROUP_DEFS.length : index;
+  };
+  rest.sort((a, b) => rank(a) - rank(b) || a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+  return [...book.map((trip) => trip.id), ...rest.map((trip) => trip.id)];
+}
+
+/**
  * trip id -> code for the planned trips.
- *   allocate  -> permanent codes are allocated for any trip without one (oldest trip first);
+ *   allocate  -> trips without a stored code get permanent ones, in `order()` (codeAllocationOrder: the
+ *                recommended Quick book first, then the rest), so no edition's first use can renumber
+ *                another's; a trip `order()` missed is appended oldest first. Nothing is written when every
+ *                planned trip already has a code;
  *   otherwise -> the stored map is only READ. With `provisional`, a trip without a stored code gets
  *                an in-memory placeholder (never stored) so a read-only review can still show it.
  */
 export async function resolveCodeMap(
   planned: readonly TravelTrip[],
   store: CodeStorePort,
-  mode: { allocate: boolean; provisional?: boolean },
+  mode: { allocate: boolean; provisional?: boolean; order?: () => Promise<readonly string[]> | readonly string[] },
 ): Promise<Record<string, string>> {
   if (!planned.length) return {};
-  const order = [...planned].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
-  if (mode.allocate) return store.assignTripCodes(order.map((trip) => trip.id));
+  const oldestFirst = [...planned].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+  if (mode.allocate) {
+    const known = await store.getTripCodeMap();
+    if (planned.every((trip) => text(known[trip.id]))) return known;
+    const canonical = mode.order ? await mode.order() : [];
+    return store.assignTripCodes(unique([...canonical, ...oldestFirst.map((trip) => trip.id)]));
+  }
   const stored = await store.getTripCodeMap();
   if (!mode.provisional) return stored;
   const out = { ...stored };
   let next = 0;
-  for (const trip of order) {
+  for (const trip of oldestFirst) {
     if (!text(out[trip.id])) out[trip.id] = `${PROVISIONAL_CODE_PREFIX}${String(++next).padStart(3, "0")}`;
   }
   return out;
@@ -586,6 +725,8 @@ export async function loadSnapshotInput(
   const config: CatalogueEditionConfig = override ? { ...saved[edition], tripIds: override } : saved[edition];
   const heroByTripId = saved.heroByTripId ?? {};
   const titleOverrides = saved.titleOverrides ?? {};
+  const coverPhoto = saved.coverPhoto ?? null;
+  const corporateNotes = saved.corporateNotes ?? [];
 
   // A quick edition without a staff list recommends from every eligible trip, so their photos are needed up front.
   const recommending = edition === "quick" && !(config.tripIds ?? []).some((id) => !(config.excludedTripIds ?? []).includes(id));
@@ -607,7 +748,20 @@ export async function loadSnapshotInput(
   const planned = planEdition({ edition, trips, config, recommend }, today).trips;
   const readOnly = opts.readOnlyCodes === true;
   const mayAllocate = !readOnly && (!override || edition === "preview");
-  const codeMap = await resolveCodeMap(planned, store, { allocate: mayAllocate, provisional: readOnly });
+  // First use allocates in ONE canonical order for every edition (codeAllocationOrder: the Quick book first, then the rest),
+  // computed over ALL live trips, never over just the trips of the edition being built.
+  const order = async () => {
+    const staffList = (saved.quick.tripIds ?? []).some((id) => !(saved.quick.excludedTripIds ?? []).includes(id));
+    let ctx: RecommendContext = { heroByTripId, titleOverrides, groupOverrides: saved.quick.groupOverrides };
+    if (!staffList) {
+      const eligibleLive = live.filter((trip) => isTripEligible(trip, today).eligible);
+      const posters = recommending ? posterByTripId : await loadPosterRows(eligibleLive);
+      const sizes = !opts.measurePhotos ? {} : recommending ? photoSizes : await measurePhotoSizes(candidateUrlsToMeasure(eligibleLive, posters, 5));
+      ctx = { ...ctx, posterByTripId: posters, photoSizes: sizes };
+    }
+    return codeAllocationOrder({ trips: live, quick: saved.quick, recommend: ctx }, today);
+  };
+  const codeMap = await resolveCodeMap(planned, store, { allocate: mayAllocate, provisional: readOnly, order });
   if (!recommending) posterByTripId = await loadPosterRows(planned);
   if (opts.measurePhotos) {
     const wanted = candidateUrlsToMeasure(planned, posterByTripId, 8).filter((url) => !photoSizes[url]);
@@ -621,6 +775,8 @@ export async function loadSnapshotInput(
     config,
     heroByTripId,
     titleOverrides,
+    coverPhoto,
+    corporateNotes,
     ...(opts.measurePhotos ? { photoSizes } : {}),
     codeMap,
     contactPhones: parsePhones(contactSettingsOf(settings.extra).phones),

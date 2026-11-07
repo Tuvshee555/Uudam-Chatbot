@@ -16,9 +16,11 @@ import {
   type RenderAssets,
 } from "../src/lib/catalogue/render";
 import { defaultImageFetcher } from "../src/lib/catalogue/render/images";
-import { ASPECT, cropImage, cropWindow, encodeProfileFor, loadWork, prepareArt, scrimStrength } from "../src/lib/catalogue/render/art";
+import { ASPECT, coverModeFor, cropImage, cropWindow, encodeProfileFor, loadWork, prepareArt, scrimStrength } from "../src/lib/catalogue/render/art";
 import type { TripArt } from "../src/lib/catalogue/render";
 import { outlineFor } from "../src/lib/catalogue/render/pdfMeta";
+import { auditNavigation, expectedDestinations, readPdfNavigation, type PdfNavigation } from "../src/lib/catalogue/render/pdfNav";
+import { COVER_INVITE, corporateNotesOf } from "../src/lib/catalogue/render/pages";
 import { assignCompositions, clipHighlight, departureLine, headlineSizePt, orderTrips, priceParts, UNGROUPED_LABEL } from "../src/lib/catalogue/render/layout";
 import { emptyArt } from "../src/lib/catalogue/render/renderTypes";
 import { LOGO_FILE, loadStaticAssets } from "../src/lib/catalogue/render/assets";
@@ -406,10 +408,146 @@ test("art pipeline: weak, missing and failed photos become typographic pages plu
   const got = art.warnings.map(w => w.tripId!);
   assert.deepEqual(got, [...got].sort((a, b) => bookOrder.indexOf(a) - bookOrder.indexOf(b)), "warnings come in book order");
   assert.ok(art.cover && art.cover.tripId === snap.coverTripId, "the cover is the data layer's pick when it prints well");
-  assert.ok(art.closing);
+  assert.deepEqual(duplicateUses(art.uses), [], "no photograph is printed on two pages (the closing band is then a photo nobody used, or a plain band)");
   const compositions = new Set(Object.values(art.trips).filter(t => t.composition !== "type").map(t => t.composition));
   assert.ok(compositions.size >= 3, `at least three compositions, got ${[...compositions].join(",")}`);
   assert.ok(Object.values(art.trips).some(t => t.composition === "diptych" && t.second), "a diptych carries its second photo");
+});
+
+// ---------------------------------------------------------------------------------------------
+// Cover, closing, repeated photographs, navigation (V3)
+// ---------------------------------------------------------------------------------------------
+
+function duplicateUses(uses: { url: string; role: string }[]): string[] {
+  const seen = new Map<string, string>();
+  const dup: string[] = [];
+  for (const u of uses) {
+    const first = seen.get(u.url);
+    if (first) dup.push(`${first} + ${u.role}`);
+    else seen.set(u.url, u.role);
+  }
+  return dup;
+}
+
+test("coverModeFor: portrait with pixels carries the whole page, landscape gets the cinematic plate, small is refused", () => {
+  assert.equal(coverModeFor({ width: 1500, height: 2400 }), "full");
+  assert.equal(coverModeFor({ width: 2000, height: 2000 }), "full");
+  assert.equal(coverModeFor({ width: 1920, height: 1440 }), "plate", "4:3 is not portrait");
+  assert.equal(coverModeFor({ width: 2400, height: 1600 }), "plate");
+  assert.equal(coverModeFor({ width: 500, height: 400 }), null);
+  assert.equal(coverModeFor({ width: 1500, height: 2400 }, { zoom: 1.7 }), "plate", "a zoom leaves too few pixels for the full page but enough for the plate");
+  assert.equal(coverModeFor({ width: 1500, height: 2400 }, { zoom: 3 }), null, "a deep zoom leaves too few pixels for any cover");
+});
+
+test("cover: the dedicated cover photograph is used, no trip page repeats it, and nothing in the book prints one photograph twice", async () => {
+  for (const shape of ["tall", "ok"] as const) {
+    const snap = sampleSnapshot({ trips: 8, edition: "quick", coverPhoto: shape });
+    const art = await prepareArt(snap, planPages(snap), sampleImageFetcher());
+    assert.ok(art.cover, shape);
+    assert.equal(art.cover!.source, "cover_photo");
+    assert.equal(art.cover!.tripId, null);
+    assert.equal(art.cover!.mode, shape === "tall" ? "full" : "plate");
+    assert.equal(art.cover!.credit, "Жишиг нүүр зураг");
+    assert.deepEqual(duplicateUses(art.uses), [], `${shape}: a photograph is printed on two pages`);
+    assert.ok(art.uses.some(u => u.role === "cover") && art.uses.some(u => u.role.startsWith("trip-")));
+  }
+});
+
+test("cover: the landscape plate fades into the panel colour, so the photo and the navy panel are one surface", async () => {
+  const snap = sampleSnapshot({ trips: 3, edition: "quick", coverPhoto: "ok" });
+  const art = await prepareArt(snap, planPages(snap), sampleImageFetcher());
+  const bytes = Buffer.from(art.cover!.image.dataUri.split(",")[1]!, "base64");
+  const { width, height } = await sharp(bytes).metadata();
+  const edge = await sharp(bytes).extract({ left: 0, top: height! - 4, width: width!, height: 4 }).resize(1, 1).raw().toBuffer();
+  const [r, g, b] = [edge[0]!, edge[1]!, edge[2]!];
+  assert.ok(Math.abs(r - 0x14) <= 6 && Math.abs(g - 0x20) <= 6 && Math.abs(b - 0x2e) <= 6, `bottom edge ${r},${g},${b} should be the panel navy`);
+  const html = buildCatalogueHtml(snap, assetsFor(snap, { cover: art.cover }));
+  assert.ok(html.includes("coverplate") && html.includes('style="top:700pt"'));
+});
+
+test("cover: without a dedicated photograph the cover trip's other photograph is preferred over its hero; the hero is the last resort", async () => {
+  const snap = sampleSnapshot({ trips: 8, edition: "quick" });
+  const art = await prepareArt(snap, planPages(snap), sampleImageFetcher());
+  assert.equal(art.cover!.source, "gallery");
+  assert.equal(art.cover!.tripId, snap.coverTripId);
+  assert.deepEqual(duplicateUses(art.uses), []);
+  const noGallery = { ...snap, trips: snap.trips.map(t => ({ ...t, gallery: [] })) };
+  const art2 = await prepareArt(noGallery, planPages(noGallery), sampleImageFetcher());
+  assert.equal(art2.cover!.source, "hero");
+  assert.equal(art2.cover!.tripId, snap.coverTripId);
+});
+
+test("cover: a cover photograph that is also a trip page hero is ignored; a missing or unreadable one falls back quietly", async () => {
+  const base = sampleSnapshot({ trips: 8, edition: "quick" });
+  const same = { ...base, coverPhoto: { ...base.trips[1]!.photo!, credit: null } };
+  const art = await prepareArt(same, planPages(same), sampleImageFetcher());
+  assert.notEqual(art.cover!.source, "cover_photo");
+  assert.deepEqual(duplicateUses(art.uses), []);
+  const broken = { ...base, coverPhoto: { url: "https://photos.example.test/fail/1.jpg", width: null, height: null, credit: null, source: "trip_photo" as const } };
+  const art2 = await prepareArt(broken, planPages(broken), sampleImageFetcher());
+  assert.ok(art2.cover, "falls back to a trip photograph");
+  assert.notEqual(art2.cover!.source, "cover_photo");
+});
+
+test("closing band: only a photograph no page uses; none left means a plain brand band, never a repeat of the cover or a trip", async () => {
+  const snap = sampleSnapshot({ trips: 8, edition: "quick", coverPhoto: "tall" });
+  const noGallery = { ...snap, trips: snap.trips.map(t => ({ ...t, gallery: [] })) };
+  const art = await prepareArt(noGallery, planPages(noGallery), sampleImageFetcher());
+  assert.equal(art.closing, null);
+  const html = buildCatalogueHtml(noGallery, assetsFor(noGallery, art));
+  assert.ok(html.includes('class="band plain"'));
+  assert.ok(html.includes("page closing compact"));
+  assert.deepEqual(duplicateUses(art.uses), []);
+});
+
+test("cover copy: a warm line addressed to the team, issue line with season, count and date, link into the contents, original logo only", () => {
+  const snap = snapshotOf([card({ n: 1 }), card({ n: 2 })]);
+  const html = buildCatalogueHtml(snap, assetsFor(snap));
+  const cover = html.slice(html.indexOf('id="cover"'), html.indexOf("</section>", html.indexOf('id="cover"')));
+  assert.ok(cover.includes(escapeHtml(COVER_INVITE)) && /Баг хамт олныхоо/.test(COVER_INVITE));
+  assert.ok(cover.includes("2026 / 2027 · 2 аяллын санал · 2026.11.06"), cover);
+  assert.ok(cover.includes('href="#contents"'));
+  assert.ok(cover.includes('class="tile"') && !cover.includes("filter") && !cover.includes("box-shadow"));
+});
+
+test("closing: staff-approved company notes are printed (max 3, trimmed, unique, escaped, long ones dropped); absent notes print nothing extra", () => {
+  const snap = snapshotOf([card({ n: 1 })]);
+  const plain = buildCatalogueHtml(snap, assetsFor(snap));
+  assert.ok(!plain.includes('class="corp"'));
+  assert.ok(plain.includes("Эцсийн үнэ, суудал, огноо, нөхцөлийг ажилтан баталгаажуулна"));
+  const long = "х".repeat(200);
+  const withNotes = { ...snap, contact: { ...snap.contact, corporateNotes: ["  Жишиг <b>нэг</b>  мөр ", "Жишиг <b>нэг</b> мөр", long, "Хоёр", "Гурав", "Дөрөв"] } };
+  assert.deepEqual(corporateNotesOf(withNotes), ["Жишиг <b>нэг</b> мөр", "Хоёр", "Гурав"]);
+  const html = buildCatalogueHtml(withNotes, assetsFor(withNotes));
+  assert.ok(html.includes("Жишиг &lt;b&gt;нэг&lt;/b&gt; мөр") && !html.includes("<b>нэг</b>"));
+  assert.ok(html.includes("<li>Гурав</li>") && !html.includes("Дөрөв") && !html.includes(long));
+  assert.ok(html.includes("Эцсийн үнэ, суудал, огноо, нөхцөлийг ажилтан баталгаажуулна"), "the disclaimer stays");
+});
+
+test("navigation audit: names a destination on the wrong page, a contents row that goes elsewhere, a missing back link and a missing bookmark", () => {
+  const snap = snapshotOf([card({ n: 1 }), card({ n: 2 })]);
+  const plan = planPages(snap);
+  const rect: [number, number, number, number] = [0, 0, 1, 1];
+  const good: PdfNavigation = {
+    pageCount: plan.totalPages,
+    destinations: { ...expectedDestinations(plan) },
+    links: [
+      { page: 1, rect, target: plan.firstContentsPage, dest: "contents", uri: null },
+      ...plan.trips.map(t => ({ page: plan.firstContentsPage, rect, target: t.page, dest: `trip-${t.card.code}`, uri: null })),
+      ...plan.trips.map(t => ({ page: t.page, rect, target: plan.firstContentsPage, dest: "contents", uri: null })),
+      { page: plan.closingPage, rect, target: plan.firstContentsPage, dest: "contents", uri: null },
+    ],
+    outline: plan.trips.map(t => ({ title: `${t.card.code} · ${t.card.editorialTitle}`, page: t.page, depth: 1 })),
+  };
+  assert.deepEqual(auditNavigation(good, snap, plan), []);
+  const wrongDest = { ...good, destinations: { ...good.destinations, "trip-A02": 2 } };
+  assert.ok(auditNavigation(wrongDest, snap, plan).some(w => w.message.includes("зөв хуудас руу заахгүй")));
+  const wrongRow = { ...good, links: good.links.map(l => (l.dest === "trip-A01" ? { ...l, target: 99 } : l)) };
+  assert.ok(auditNavigation(wrongRow, snap, plan).some(w => w.message.startsWith("A01: агуулгын мөр")));
+  const noBack = { ...good, links: good.links.filter(l => !(l.dest === "contents" && l.page === plan.closingPage)) };
+  assert.ok(auditNavigation(noBack, snap, plan).some(w => w.message.includes("буцах холбоос")));
+  const noMark = { ...good, outline: good.outline.slice(1) };
+  assert.ok(auditNavigation(noMark, snap, plan).some(w => w.message.startsWith("A01: хавчуургад")));
 });
 
 test("default fetcher refuses non-https, private and credentialed URLs without touching the network", async () => {
@@ -444,7 +582,7 @@ describe("browser render", () => {
   const pageItems: TextItem[][] = [];
 
   before(async () => {
-    snapshot = sampleSnapshot({ trips: 8, edition: "quick" });
+    snapshot = sampleSnapshot({ trips: 8, edition: "quick", coverPhoto: "tall", corporateNotes: ["Жишиг мөр: байгууллагад зориулсан тусгай хөтөлбөрийг ажилтан бэлтгэнэ."] });
     // one extreme title, in its own group, to prove "never clip"
     const long = { ...snapshot.trips[0]!, tripId: "fx-long", code: "A09", title: LONG_TITLE, editorialTitle: LONG_TITLE, kicker: "Урт жишиг муж / Урт жишиг улс" };
     snapshot = { ...snapshot, trips: [...snapshot.trips, long], groups: [...snapshot.groups, { key: "long", label: "Урт нэрийн туршилт", codes: ["A09"] }] };
@@ -595,6 +733,40 @@ describe("browser render", () => {
     assert.ok(dest, "named destination exists");
     const pageIndex = await doc.getPageIndex(dest![0] as { num: number; gen: number });
     assert.equal(pageIndex + 1, planPages(snapshot).trips.find(x => x.card.code === "A01")!.page);
+  });
+
+  test("navigation: every contents row opens the page that shows that trip's code; every page leads back; bookmarks list every trip", async t => {
+    const r = need(t);
+    if (!r) return;
+    const plan = planPages(snapshot);
+    // letter-spaced type reaches the text layer as "A 0 1" and "0 5 / 1 6", hence squash()
+    const nav = await readPdfNavigation(r.pdf);
+    assert.equal(nav.pageCount, plan.totalPages);
+    assert.ok(nav.links.length >= snapshot.trips.length, `${nav.links.length} link annotations for ${snapshot.trips.length} trips`);
+    const contentsPages = new Set(plan.contentsPages.map((_, i) => plan.firstContentsPage + i));
+    for (const trip of plan.trips) {
+      const code = trip.card.code;
+      const row = nav.links.find(l => contentsPages.has(l.page) && l.dest === `trip-${code}`);
+      assert.ok(row, `${code}: contents row has a link`);
+      assert.equal(row!.target, trip.page, `${code}: link goes to the planned page`);
+      assert.ok(squash(pageText[row!.target! - 1] ?? "").includes(code), `${code}: the page it opens shows that trip's code`);
+      const bookmark = nav.outline.find(o => o.title.startsWith(`${code} ·`));
+      assert.ok(bookmark, `${code}: bookmark`);
+      assert.equal(bookmark!.page, trip.page);
+    }
+    assert.equal(nav.outline.filter(o => o.depth === 1).length, snapshot.trips.length, "one bookmark per trip");
+    for (const trip of plan.trips) {
+      assert.ok(nav.links.some(l => l.page === trip.page && l.dest === "contents" && l.target === plan.firstContentsPage), `${trip.card.code}: back to contents`);
+    }
+    assert.ok(nav.links.some(l => l.page === 1 && l.dest === "contents" && l.target === plan.firstContentsPage), "cover links into the contents");
+    assert.ok(nav.links.some(l => l.page === plan.closingPage && l.dest === "contents"), "closing leads back");
+    assert.ok(nav.links.some(l => l.page === plan.closingPage && (l.uri ?? "").startsWith("https://")), "closing links to the site");
+    // page numbers: every page after the cover prints "NN / total" with its own number
+    const total = String(plan.totalPages).padStart(2, "0");
+    for (let page = 2; page <= plan.totalPages; page++) {
+      assert.ok(squash(pageText[page - 1]!).includes(`${String(page).padStart(2, "0")}/${total}`), `page ${page} label`);
+    }
+    assert.deepEqual(r.warnings.filter(w => /холбоос|хавчуур|агуулгын мөр/.test(w.message)), [], "the render's own navigation audit is clean");
   });
 
   test("size budget: the quick book stays under 6 MB", async t => {

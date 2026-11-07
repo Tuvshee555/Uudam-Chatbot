@@ -54,6 +54,8 @@ export type CatalogueStorePort = {
   rollbackTo(id: string, actor: string | null): Promise<CatalogueVersionMeta>;
   getPublished(edition: CatalogueEdition): Promise<CatalogueVersionMeta | null>;
   deliveryStats(days: number): Promise<Omit<CatalogueStatsResponse, "ok">>;
+  /** Persistent trip code per trip id (read only). Optional so a fake store may omit it. */
+  getTripCodeMap?(): Promise<Record<string, string>>;
 };
 
 export type CatalogueDataPort = {
@@ -110,6 +112,11 @@ export type CatalogueAdminDeps = {
   testRecipientPsids(): string[];
   /** The Meta kill switch / Vercel-preview suppression (metaOutboundKillSwitch.ts). */
   metaOutboundDisabled(): boolean;
+  /**
+   * Repo files the PDF renderer needs (fonts + the approved logo) that are NOT on disk, as repo-relative paths.
+   * Empty = all present. Only checks files exist: Chromium is never launched from the admin state.
+   */
+  rendererAssetsMissing(): Promise<string[]>;
   now(): Date;
 };
 
@@ -150,6 +157,21 @@ async function listActiveTripsFromStore(): Promise<TravelTrip[]> {
   return listTrips({ status: "active", limit: 5000 });
 }
 
+/** Existence check of the renderer's static files (render/assets.ts lists them). Reads no bytes, starts no browser. */
+async function missingRendererAssets(): Promise<string[]> {
+  const [{ access }, path, assets] = await Promise.all([import("node:fs/promises"), import("node:path"), import("../render/assets")]);
+  const wanted = [assets.LOGO_FILE, ...assets.FONT_FILES.map((font) => `public/fonts/${font.file}`)];
+  const missing: string[] = [];
+  for (const rel of wanted) {
+    try {
+      await access(path.join(/*turbopackIgnore: true*/ process.cwd(), rel));
+    } catch {
+      missing.push(rel);
+    }
+  }
+  return missing;
+}
+
 /**
  * Lazy, per-key resolution: only the dependency a route actually touches is imported.
  * Each getter is memoised, so one request never imports twice.
@@ -163,6 +185,7 @@ export type LazyDeps = {
   listActiveTrips(): Promise<TravelTrip[]>;
   testRecipientPsids(): string[];
   metaOutboundDisabled(): Promise<boolean>;
+  rendererAssetsMissing(): Promise<string[]>;
   now(): Date;
 };
 
@@ -184,6 +207,7 @@ export function getDeps(): LazyDeps {
     metaOutboundDisabled: o?.metaOutboundDisabled
       ? async () => (o.metaOutboundDisabled as () => boolean)()
       : async () => (await import("../../metaOutboundKillSwitch")).isMetaOutboundDisabled(),
+    rendererAssetsMissing: o?.rendererAssetsMissing ?? missingRendererAssets,
     now: o?.now ?? (() => new Date()),
   };
 }

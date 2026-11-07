@@ -1440,3 +1440,61 @@ test("actors are cleaned before they are stored", async () => {
   const nobody = await S.saveDraftVersion({ edition: "quick", snapshot: snapshot(), rendered: rendered(), actor: null });
   assert.equal(nobody.generatedBy, null);
 });
+
+// ---------------------------------------------------------------------------------------------
+// V3: one persistent code per trip id across editions, first-use order, never reused
+// ---------------------------------------------------------------------------------------------
+
+function liveTrip(id: string, createdAt: string, dest: string) {
+  return {
+    id, category: "газрын аялал", operator_name: "", route_name: `Тест-${dest}`, duration_text: "5 өдөр 4 шөнө", adult_price: null, child_price: null,
+    infant_price: null, currency: "MNT", departure_dates: ["2027-01-09"], seats_total: null, seats_left: null, has_food: null, status: "active",
+    notes: "", hotel: "", source_description: "", photo_urls: [], created_at: createdAt, updated_at: createdAt,
+    extra: { transport_type: "direct_flight", price_groups: [{ label: "x", dates: ["2027-01-09"], display_dates: ["2027-01-09"], date_keys: ["2027-01-09"], adult_price: 3_000_000, adult_price_range: null, child_price: null, infant_price: null, child_age: "", infant_age: "", passenger_prices: [], note: "" }] },
+  } as any;
+}
+
+test("V3 codes: two editions allocating at the same moment, in different call orders, agree on every trip and never collide", async () => {
+  const { resolveCodeMap, codeAllocationOrder } = await import("../src/lib/catalogue/tripData");
+  const trips = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet"].map((d, i) => liveTrip(`trip-${d}`, `2026-0${(i % 9) + 1}-01T00:00:00.000Z`, `${d}-land`));
+  const quickConfig = { tripIds: ["trip-golf", "trip-bravo", "trip-juliet"], groupOverrides: {}, featuredTripIds: [], excludedTripIds: [] };
+  const order = () => codeAllocationOrder({ trips, quick: quickConfig }, "2026-11-06");
+  const quickTrips = ["trip-golf", "trip-bravo", "trip-juliet"].map((id) => trips.find((t: any) => t.id === id)!);
+  const results = await Promise.all([
+    resolveCodeMap(trips, S, { allocate: true, order }),
+    resolveCodeMap(quickTrips, S, { allocate: true, order }),
+    resolveCodeMap([...trips].reverse(), S, { allocate: true, order }),
+    resolveCodeMap(quickTrips.slice(1), S, { allocate: true, order }),
+  ]);
+  const final = await S.getTripCodeMap();
+  assert.equal(Object.keys(final).length, 10);
+  assert.equal(new Set(Object.values(final)).size, 10, "unique codes");
+  for (const result of results) for (const [id, code] of Object.entries(result)) assert.equal(final[id], code, "every edition saw the final code");
+  assert.deepEqual([final["trip-golf"], final["trip-bravo"], final["trip-juliet"]], ["A01", "A02", "A03"], "the Quick list owns the first codes, in its order");
+  const writes = db.queries.filter((q: string) => q === "codes_insert").length;
+  await resolveCodeMap(trips, S, { allocate: true, order });
+  assert.equal(db.queries.filter((q: string) => q === "codes_insert").length, writes, "later calls only read");
+});
+
+test("V3 codes: a trip that is archived or deleted keeps its code reserved; the next new trip gets a fresh one and the old code resolves to the old trip only", async () => {
+  assert.deepEqual(await S.assignTripCodes(["trip-old", "trip-keep"]), { "trip-old": "A01", "trip-keep": "A02" });
+  assert.deepEqual(await S.assignTripCodes(["trip-keep", "trip-new"]), { "trip-keep": "A02", "trip-new": "A03" });
+  assert.equal(await S.resolveTripCode("A01"), "trip-old", "a code saved by a customer still names the same trip");
+  assert.equal(await S.resolveTripCode("A03"), "trip-new");
+  assert.deepEqual(await S.assignTripCodes(["trip-old"]), { "trip-old": "A01" }, "it comes back with its own code");
+  const all = Object.values(await S.getTripCodeMap());
+  assert.equal(new Set(all).size, all.length);
+});
+
+test("V3 config: the cover photograph is saved with the curation, sanitised and read back; a bad one is dropped", async () => {
+  const saved = await S.saveCatalogueConfig({
+    quick: { tripIds: ["trip-a"] },
+    coverPhoto: { url: "https://img.example.test/cover.jpg", focal: { x: 0.4, y: 2 }, zoom: 9 },
+  }, "editorial-audit");
+  assert.deepEqual(saved.coverPhoto, { url: "https://img.example.test/cover.jpg", focal: { x: 0.4, y: 1 }, zoom: 3 });
+  assert.deepEqual((await S.getCatalogueConfig()).coverPhoto, saved.coverPhoto);
+  assert.equal(S.sanitizeCatalogueConfig({ coverPhoto: { url: "http://insecure.example.test/c.jpg" } }).coverPhoto, null);
+  assert.equal(S.defaultCatalogueConfig().coverPhoto, null);
+  const again = await S.saveCatalogueConfig({ ...saved, quick: { tripIds: ["trip-b"] } }, "editorial-audit", { expectedUpdatedAt: saved.updatedAt });
+  assert.deepEqual(again.coverPhoto, saved.coverPhoto);
+});
