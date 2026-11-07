@@ -57,8 +57,6 @@ function prepare(text: string): Prepared {
   return { raw, norm, tokens: norm ? norm.split(" ") : [] };
 }
 
-const has = (pattern: RegExp, value: string) => pattern.test(value);
-
 // ── shared building blocks ───────────────────────────────────────────────────────────────────────
 
 /** Question particles and interrogatives, Cyrillic and Latin ("u" is the typed "уу"). */
