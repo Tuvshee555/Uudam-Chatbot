@@ -1117,8 +1117,8 @@ async function handleMessageTurn(
       history,
       trips: await getTrips(),
       understand: tripUnderstandingEnabled()
-        ? async (pendingTripIds, selection) =>
-            understandTripMessage({ text, history, trips: await getTrips(), pendingTripIds, selection, ask: understandingModel(trace) })
+        ? async (pendingTripIds, selection, recentTripIds) =>
+            understandTripMessage({ text, history, trips: await getTrips(), pendingTripIds, selection, recentTripIds, ask: understandingModel(trace) })
         : undefined,
     });
     currentSelection = routedCache.selection || null;
