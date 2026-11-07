@@ -12,6 +12,7 @@ import type { TravelTrip } from "./travelOps";
 import { isNoTripText } from "./customerTurn";
 import { withoutHolidayNames } from "./holidayCalendar";
 import { publishedTripWebsiteLink, storedWebsiteTripSlug, tripsForWebsiteReference, websiteTripLinksInText } from "./bookingWebsite";
+import { aliasOccursInQuery } from "./aliasMatch";
 
 /**
  * Returns a copy of the trip with past departure dates stripped, so every
@@ -895,16 +896,14 @@ export function findTripMatches(text: string, trips: TravelTrip[], options?: Tri
     const distinctQuery = queryWords.some((word) => word.length >= 3 && !DESCRIPTIVE_NOUN_RE.test(word));
     for (const alias of aliases) {
       const aliasNorm = normText(alias);
-      if (query.includes(aliasNorm) || (distinctQuery && aliasNorm.includes(query))) {
+      // An alias counts as a WORD of the message (aliasMatch.ts): inside a longer word it named
+      // trips by accident ("санал" held a four-letter alias and a thanks got a trip list).
+      if (aliasOccursInQuery(alias, query, queryPhonetic) || (distinctQuery && aliasNorm.includes(query))) {
         aliasHit = 1;
         break;
       }
       const aliasPhonetic = phoneticLatinText(alias);
-      if (
-        aliasPhonetic &&
-        queryPhonetic &&
-        (queryPhonetic.includes(aliasPhonetic) || (distinctQuery && aliasPhonetic.includes(queryPhonetic)))
-      ) {
+      if (aliasPhonetic && queryPhonetic && distinctQuery && aliasPhonetic.includes(queryPhonetic)) {
         aliasHit = 1;
         break;
       }
@@ -1233,14 +1232,10 @@ function hasLooseAliasMatch(
   queryPhoneticKeywords: string[] = [],
 ): boolean {
   const aliasNorm = normText(alias);
-  if (query.includes(aliasNorm) || aliasNorm.includes(query)) return true;
+  if (aliasOccursInQuery(alias, query, queryPhonetic) || aliasNorm.includes(query)) return true;
 
   const aliasPhonetic = phoneticLatinText(alias);
-  if (
-    aliasPhonetic &&
-    queryPhonetic &&
-    (queryPhonetic.includes(aliasPhonetic) || aliasPhonetic.includes(queryPhonetic))
-  ) {
+  if (aliasPhonetic && queryPhonetic && aliasPhonetic.includes(queryPhonetic)) {
     return true;
   }
 
@@ -1765,11 +1760,7 @@ function findLooseTripMatch(text: string, trips: TravelTrip[], options?: { hasBr
     const matchedWordCount = routeKeywords.filter((word) => queryKeywords.includes(word)).length;
     const phoneticMatchedWordCount = routePhoneticKeywords.filter((word) => queryPhoneticKeywords.includes(word)).length;
     const aliases = getAliases(trip);
-    const aliasExactHit = aliases.some((alias) => {
-      const aliasNorm = normText(alias);
-      const aliasPhonetic = phoneticLatinText(alias);
-      return query.includes(aliasNorm) || (aliasPhonetic.length > 0 && queryPhonetic.includes(aliasPhonetic));
-    }) ? 1 : 0;
+    const aliasExactHit = aliases.some((alias) => aliasOccursInQuery(alias, query, queryPhonetic)) ? 1 : 0;
     const aliasTokenHit = aliases.some((alias) =>
       hasLooseAliasMatch(query, queryKeywords, alias, queryPhonetic, queryPhoneticKeywords),
     ) ? 1 : 0;

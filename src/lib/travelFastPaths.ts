@@ -64,6 +64,7 @@ import {
 } from "./travelFastPathsSearch";
 import { buildTripProgramReply } from "./travelFastPathsProgram";
 import { phoneticTokenMatches } from "./travelTextNorm";
+import { aliasOccursInText } from "./aliasMatch";
 import { CUSTOMER_TURN_MARK, customerTurn, intentTextOf, joinContextAndTurn } from "./customerTurn";
 import { TRIP_MEDIA_UNAVAILABLE_SILENT } from "./reply";
 import {
@@ -1176,7 +1177,7 @@ function findCombinedDatePriceMatches(
     if (bestForTrip) {
       const finalMatch = bestForTrip as CombinedDatePriceMatch;
       if (query.includes(normText(trip.route_name))) finalMatch.score += 8;
-      if (getAliases(trip).some((alias) => query.includes(normText(alias)))) finalMatch.score += 5;
+      if (getAliases(trip).some((alias) => aliasOccursInText(alias, query))) finalMatch.score += 5;
       matches.push(finalMatch);
     }
   }
