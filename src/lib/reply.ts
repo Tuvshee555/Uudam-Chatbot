@@ -62,6 +62,28 @@ export function buildHandoffAcknowledgement(options: { aiOutage?: boolean } = {}
   return options.aiOutage ? AI_OUTAGE_HANDOFF_REPLY : NO_DATA_HANDOFF_REPLY;
 }
 
+/**
+ * An organisation, a team or a group of colleagues asking for travel, or a customer asking for a
+ * route / quote outside the standard programmes (needDispatch.ts). Only what the company itself
+ * publishes on its custom-trip page: trips on the customer's own dates exist for family, friends and
+ * colleagues; staff prepare a programme and a price offer once the customer gives the destination,
+ * approximate dates and number of travellers; a booking is confirmed only after the terms are agreed.
+ * It must never mention a discount, free seats, barter or a guaranteed price: none of that is data.
+ */
+export const GROUP_INQUIRY_REPLY =
+  "Манайд гэр бүл, найз нөхөд, хамт олны хүссэн өдрөөр тусгай аялал зохион байгуулах боломж бий. Та чиглэл, ойролцоо огноо, аялагчдын тоогоо хэлбэл аяллын зөвлөх хөтөлбөр, үнийн санал бэлтгэнэ. Захиалга нь нөхцөл тохирсны дараа баталгаажна.";
+
+/** Added only after the staff lead was saved: it states a fact that is then true. */
+export const GROUP_INQUIRY_HANDOFF_LINE = "Таны хүсэлтийг аяллын зөвлөхөд дамжууллаа.";
+
+/** The ONE detail asked next, in this order of usefulness; never all of them at once. */
+export const GROUP_INQUIRY_QUESTIONS = {
+  groupSize: "Нийт хэдэн хүн явах вэ?",
+  destination: "Аль чиглэлд явахыг хүсэж байна вэ?",
+  month: "Аль сард явахыг хүсэж байна вэ?",
+  budget: "Нэг хүнд ногдох төсөв хэд орчим вэ?",
+} as const;
+
 const PAYMENT_LEAK_PATTERNS: RegExp[] = [
   /\/register/i,
   /регистер\s*хуудас/i,
@@ -205,6 +227,27 @@ export function guardInventedBookingTerms(
   const invented = BOOKING_TERM_TOPICS.some(
     (topic) => topic.reply.test(reply) && !topic.context.test(relevantContext),
   );
+  return invented ? "REFER" : reply;
+}
+
+// Commercial terms are company policy, not something a model may infer: a reply may state a
+// discount, a group price, barter or a contract / corporate benefit only when the trip data or the
+// configured settings (discount_policies, special_offers, faq) hold it. A real reply on 2026-11-05
+// answered "Тийм. 40-45 хүнтэй группт тусгай хямдрал санал болгодог" with every one of those empty.
+const COMMERCIAL_CLAIM_TOPICS: Array<{ reply: RegExp; fact: RegExp }> = [
+  { reply: /хямдр|хөнгөлөлт|урамшуул|hongolt|discount|promotion|\bpromo\b|2\+1|5\+1/iu, fact: /хямдр|хөнгөлөлт|урамшуул|discount|promo|2\+1|5\+1|bonus|бонус|үнэгүй/iu },
+  { reply: /групп\p{L}*\s+(?:үнэ|тариф|нөхцөл)|group\s+(?:price|rate|terms)|хамт\s*олн\p{L}*\s+(?:үнэ|тариф|нөхцөл)|тусгай\s+үнэ/iu, fact: /групп|group|хамт\s*олон|тусгай\s+үнэ/iu },
+  { reply: /бартер|barter/iu, fact: /бартер|barter/iu },
+  { reply: /байгууллагын\s+(?:гэрээ|үнэ|хөнгөл|хямдр)|корпорат|corporate|нэхэмжлэ[хл]|гэрээгээр/iu, fact: /байгууллагын\s+(?:гэрээ|үнэ|хөнгөл|хямдр)|корпорат|corporate|нэхэмжлэ[хл]|гэрээгээр/iu },
+];
+
+/**
+ * `commercialFacts` is the text a reply may rely on for commercial terms (commercialFacts.ts: the
+ * candidate trips' own notes and discount data, plus the configured offers, policies and FAQ). A
+ * claim the facts do not contain becomes REFER: staff answer it, the bot does not invent policy.
+ */
+export function guardInventedCommercialClaims(reply: string, commercialFacts: string): string {
+  const invented = COMMERCIAL_CLAIM_TOPICS.some((topic) => topic.reply.test(reply) && !topic.fact.test(commercialFacts));
   return invented ? "REFER" : reply;
 }
 

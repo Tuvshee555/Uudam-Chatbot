@@ -28,6 +28,8 @@ import {
 import { adultCountAnswer, optionChosenByNumber } from "../../lib/selectionAnswer";
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
+import { classifyMessageNeed, extractNeedConstraints, isSocialMessage } from "../../lib/messageNeed";
+import { dispatchNeed, needModelMode, typedLeadContext } from "../../lib/needDispatch";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
 import { decideTripAnswer, type TripAnswerDecision } from "../../lib/tripAnswerDecision";
@@ -49,7 +51,7 @@ import { buildContactReply, contactSettingsOf, isAddressRequest, isPhoneRequest,
 import { detectStaffTakeover, fetchThreadMessages, markStaffReply, takeoverRisk, type TakeoverCheck } from "../../lib/staffTakeover";
 import { isStaffTakeoverSendBlocked } from "../../lib/takeoverGuard";
 import { classifyEcho, echoEnforcementEnabled, recordEchoEvent, verifyHumanEcho, type EchoVerdict } from "../../lib/echoObserver";
-import { AI_OUTAGE_HANDOFF_REPLY, BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
+import { AI_OUTAGE_HANDOFF_REPLY, BANK_ACCOUNT_REQUEST_REPLY, enforcePaymentNeverSelfConfirmed, enforceWebsiteForPayment, extractButtons, guardInventedBookingTerms, guardInventedCommercialClaims, guardUnverifiedDates, guardUnverifiedPrices, hasBankAccountRequest, hasPaymentClaimIntent, isReferReply, PAYMENT_VERIFICATION_DEFERRAL_REPLY, reconcilePhotoAttachmentReply, rewriteRepeatedGenericClarifier, sanitizeAssistantReply, shouldSilenceNoDataReply, stripRepeatedGreeting, whichTripClarifyReply } from "../../lib/reply";
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { autoHandoffSender, markGetStarted, pauseBookedCustomer, pauseBot, pauseReason, trackSender } from "../../lib/pause";
 import { BOOKED_STATUS_HEADING, bookedFollowupReply, bookedStatusTurn, followupLeadLine, isBookingStatusQuestion } from "../../lib/bookedFollowup";
@@ -57,6 +59,7 @@ import { inboundStatus, newInboundOutcome, noteInbound, traceInbound, type Inbou
 import { latestCustomerLead, recordLeadFollowup } from "../../lib/travelLeadsDb";
 import { buildDateNotScheduledReply } from "../../lib/travelFastPathsPricing";
 import { conversationLeadContext } from "../../lib/leadContext";
+import { commercialFactsText } from "../../lib/commercialFacts";
 import { withoutNegatedTrips } from "../../lib/negatedTrip";
 import { pickReferral, rememberAdReferral } from "../../lib/adReferral";
 import { dbAppendAdminMessage, dbClaimGoodbye, dbClaimQuickInfo, dbReleaseQuickInfo, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, isPagePaused, listTrips, } from "../../lib/travelOps";
@@ -305,7 +308,7 @@ async function handleMessageTurn(
   // the bot stays out.
   if (activePause && !waitingForConsultant && (activePause !== "booked_customer" || attachmentReply)) {
     if (!attachmentReply) await appendMessage(senderId, "user", text);
-    const followup = !attachmentReply && !isThanksOnly(text) ? await recordPausedFollowup() : null;
+    const followup = !attachmentReply && !isSocialMessage(text) ? await recordPausedFollowup() : null;
     noteInbound((outcome) => { outcome.silent = `paused:${activePause}`; });
     logInfo("webhook.sender_paused", {
       requestId: trace?.requestId,
@@ -337,7 +340,7 @@ async function handleMessageTurn(
       // The consultant owns the conversation until «Ботод буцаах» (no duration: travelSessionDb.ts).
       await pauseBot(senderId, undefined, "operator_reply").catch(() => {});
       await markStaffReply(senderId, staffAt, takeover.staff.origin).catch(() => {});
-      if (!attachmentReply && !isThanksOnly(text)) await recordPausedFollowup();
+      if (!attachmentReply && !isSocialMessage(text)) await recordPausedFollowup();
       noteInbound((outcome) => { outcome.silent = "staff_takeover"; });
       logInfo("webhook.staff_takeover_detected", {
         requestId: trace?.requestId,
@@ -394,6 +397,9 @@ async function handleMessageTurn(
     text = corrected.text;
   }
   const contextualUserText = buildContextualUserText(history, text);  const sessionId = `${platform}:${pageId}:${senderId}`;
+  // What the customer needs, read from their own words before any catalogue lookup (messageNeed.ts).
+  const lastBotReply = history.findLast((message) => message.role === "assistant")?.text ?? null;
+  const needHit = attachmentReply ? null : classifyMessageNeed(text, { lastBotReply });
   // Non-blocking: the memory merge continues after the response via waitUntil.
   // It used to be awaited inline while holding the conversation lock, which
   // serialized a long model call behind every reply.
@@ -599,7 +605,7 @@ async function handleMessageTurn(
       }
       return;
     }
-    if (!isThanksOnly(text)) await recordPausedFollowup("Хүлээж байхдаа асуусан (бот хариулсан)");
+    if (!isSocialMessage(text)) await recordPausedFollowup("Хүлээж байхдаа асуусан (бот хариулсан)");
   }
 
   // Instagram (no thread check there): the bot's own pause after a booking gives one status reply
@@ -607,7 +613,7 @@ async function handleMessageTurn(
   // reopens the lead for staff). Never a confirmation or a call time (bookedFollowup.ts).
   if (activePause === "booked_customer" && !waitingForConsultant) {
     await appendMessage(senderId, "user", text);
-    const lead = isThanksOnly(text) ? null : await recordPausedFollowup();
+    const lead = isSocialMessage(text) ? null : await recordPausedFollowup();
     const alreadyTold = Boolean(history.findLast((message) => message.role === "assistant")?.text.startsWith(BOOKED_STATUS_HEADING));
     const reply = lead && !alreadyTold ? bookedFollowupReply(lead) : null;
     if (!reply) noteInbound((outcome) => { outcome.silent = lead ? "booked_followup_already_told" : "booked_followup_thanks_or_unrecorded"; });
@@ -953,11 +959,8 @@ async function handleMessageTurn(
       }
     }
   }
-  if (
-    isContactOperatorTap(text) ||
-    (botSettings.handoff_enabled && isHandoffRequest(text, botSettings.handoff_keywords))
-  ) {
-    await captureLead({ kind: "handoff" });
+  const performHandoff = async (context?: string) => {
+    await captureLead({ kind: "handoff", ...(context ? { context } : {}) });
     await appendMessage(senderId, "user", text);
     const handoffConfirmation =
       botSettings.handoff_reply ||
@@ -976,6 +979,15 @@ async function handleMessageTurn(
       requestId: trace?.requestId, correlationId: trace?.correlationId, platform,
       senderHash: hashIdentifier(senderId), pauseMinutes: botSettings.handoff_pause_minutes,
     });
+  };
+  // A complaint about a service already received goes to a person the same way (needDispatch.ts).
+  const complaintHit = botSettings.handoff_enabled && needHit?.need === "complaint" ? needHit : null;
+  if (
+    isContactOperatorTap(text) ||
+    (botSettings.handoff_enabled && isHandoffRequest(text, botSettings.handoff_keywords)) ||
+    complaintHit
+  ) {
+    await performHandoff(complaintHit ? typedLeadContext("complaint", complaintHit.constraints, text) : undefined);
     return;
   }
   const contactReply = buildContactReply(text, contactSettingsOf(botSettings.extra));
@@ -1071,7 +1083,7 @@ async function handleMessageTurn(
   scheduleDriveAutoSync({ source: "api.webhook" });
   // The catalog is focused on the trips this message is about inside
   // buildPromptParts (aiTripContext.ts) — shared with the demo endpoint.
-  const { systemPrompt: fileSystemPrompt, business, pinnedButtonLabels } = await readBusinessData();
+  const { systemPrompt: fileSystemPrompt, business, pinnedButtonLabels, knowledge } = await readBusinessData();
   await assertLockHealthy();
   const lastReply = await getLastReplyConsistent(sessionId);
   // Phone already given this conversation (current message or history). Every
@@ -1084,16 +1096,25 @@ async function handleMessageTurn(
       (message) => message.role === "user" && extractPhoneNumber(message.text),
     );
   const phoneAlreadyRequested = phoneCollected || hasAskedForPhone(history);
+  // A payment claim or a bank-account ask is answered by its own branch below, never by the booking collector.
   const customerWantsToBook =
-    botSettings.handoff_enabled && isBookingIntent(text);
-  if (customerWantsToBook && (await startBookingCollect(bookingCtx))) return;
-  await appendMessage(senderId, "user", text);
+    botSettings.handoff_enabled && isBookingIntent(text) && !hasPaymentClaimIntent(text) && !hasBankAccountRequest(text);
   let cachedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
   const getTrips = async () => {
     if (cachedTrips) return cachedTrips;
     cachedTrips = withoutHiddenTrips(await listTrips({ limit: 5000 })).map(sanitizeTripForCustomers).filter((trip) => !excludedTripIds.has(trip.id));
     return cachedTrips;
   };
+  // The need gate (needDispatch.ts): thanks, an organisation or group, barter / contract, a ticket-only wish,
+  // a booking already made. Decided from the customer's own words, before the booking collector and before
+  // any trip is looked up; no model call.
+  const dispatchFor = (hit: NonNullable<typeof needHit>, source: "rule" | "model") => dispatchNeed({
+    hit, source, text, senderId, platform, lastBotReply, trace, trips: getTrips, handoff: performHandoff,
+    deliver: (input) => deliverFastPathReply(input), captureLead: (input) => captureLead(input),
+  });
+  if (needHit && needHit.need !== "complaint" && (await dispatchFor(needHit, "rule"))) return;
+  if (customerWantsToBook && (await startBookingCollect(bookingCtx))) return;
+  await appendMessage(senderId, "user", text);
   // Only fetched on the miss path (nothing in the active catalogue matched),
   // so a normal message never pays for this extra query.
   let cachedArchivedTrips: Awaited<ReturnType<typeof listTrips>> | null = null;
@@ -1209,6 +1230,17 @@ async function handleMessageTurn(
     }
   }
 
+  // The one understanding call may also name a non-trip need. Logged always; it acts only with NEED_MODEL=enforce
+  // and only when the rules above named none (tripUnderstanding.ts validates it against the customer's own words).
+  {
+    const modelNeed = (await getRouted()).understanding?.need;
+    if (modelNeed && needModelMode() !== "off") {
+      logInfo("webhook.need_observed", { requestId: trace?.requestId, correlationId: trace?.correlationId, platform, senderHash: hashIdentifier(senderId),
+        need: modelNeed.need, source: "model", agreesWithRule: modelNeed.need === (needHit?.need ?? null), mode: needModelMode() });
+      if (needModelMode() === "enforce" && !needHit && (modelNeed.need !== "complaint" || botSettings.handoff_enabled)
+        && (await dispatchFor({ need: modelNeed.need, signals: ["model"], constraints: extractNeedConstraints(text) }, "model"))) return;
+    }
+  }
   if ((await getRouted()).unsupportedRequest) {
     await deliverFastPathReply({ reply: "REFER", failTag: "unsupported_request",
       rememberSource: "api.webhook.unsupported_request" });
@@ -1946,6 +1978,8 @@ async function handleMessageTurn(
   // outage.
   const guardCandidateTrips = factualScope || reasoningTrips.filter((trip) => relevantTripNames.includes(trip.route_name));
   aiReply = guardInventedBookingTerms(aiReply, promptParts.user, guardCandidateTrips);
+  // A discount, group price, barter or contract the data does not hold is never stated (reply.ts).
+  aiReply = guardInventedCommercialClaims(aiReply, commercialFactsText(guardCandidateTrips, knowledge));
   if ((isReferReply(aiReply) || shouldSilenceNoDataReply(aiReply)) && isGenericTripRequest(text)) {
     // "Aylaluud", "Medeelel avay": no destination named, so the model had
     // nothing to look up and said REFER. Ask which trip rather than paging staff.

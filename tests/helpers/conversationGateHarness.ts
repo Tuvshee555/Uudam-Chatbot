@@ -14,6 +14,8 @@ export type ThreadScript =
   | { messages: Array<{ from: "customer" | "page"; text?: string; agoMs: number; source?: "mobile" | "web" | "pages:private_reply"; id?: string }> };
 export type ModelOverride = Partial<{ tripId: string; place: string | null; date: string | null; hotel: string | null;
   passengers: Array<{ kind: "adult" | "child"; count: number; age?: number }>; topics: string[]; certainty: string; intent: string; finalReply: string;
+  /** A non-trip need the understanding call proposes, with the exact words that show it (tripUnderstanding.ts). */
+  need: string | null; need_evidence: string | null;
   /** The provider refuses every call (HTTP 429 insufficient_quota), as during the 2026-10-30 credit outage. */
   unavailable: boolean }>;
 

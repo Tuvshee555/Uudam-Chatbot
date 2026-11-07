@@ -264,11 +264,18 @@ export function buildAmbiguousPassengerTotalReply(
   ].join("\n");
 }
 
+// "тусгай" (special) is in DISCOUNT_KEYWORDS_MN for ranking, but as an intent it turned "тусгай маршрут" (a
+// bespoke route) into a discount question. The Latin spellings customers type ("hymdral", "hyamdral",
+// "hongololt", "uramshuulal") are read in phonetic space, as Cyrillic is.
+const DISCOUNT_INTENT_MN = DISCOUNT_KEYWORDS_MN.filter((keyword) => keyword !== "тусгай");
+const DISCOUNT_INTENT_EN = DISCOUNT_KEYWORDS_EN.filter((keyword) => keyword !== "special");
+const DISCOUNT_INTENT_PHONETIC = /h[iy]?[ae]?m?dral|h[ou]ng[ou]l(?:[ou]l)?t|uram?sulal|urimsulal/;
+
 export function hasDiscountIntent(text: string): boolean {
   const normalized = normText(text);
-  const hasMn = DISCOUNT_KEYWORDS_MN.some((keyword) => normalized.includes(keyword));
-  const hasEn = DISCOUNT_KEYWORDS_EN.some((keyword) => normalized.includes(keyword));
-  return hasMn || hasEn || /хямдрах|хямдруул|hyamdrah|hyamdruul/i.test(normalized);
+  const hasMn = DISCOUNT_INTENT_MN.some((keyword) => normalized.includes(keyword));
+  const hasEn = DISCOUNT_INTENT_EN.some((keyword) => normalized.includes(keyword));
+  return hasMn || hasEn || /хямдрах|хямдруул|hyamdrah|hyamdruul/i.test(normalized) || DISCOUNT_INTENT_PHONETIC.test(phoneticLatinText(text));
 }
 
 export function hasPriceObjectionIntent(text: string): boolean {
@@ -1004,7 +1011,7 @@ export function buildGroupSizeReply(matchText: string, trips: TravelTrip[]): str
   const price = formatPassengerMoney(trip.adult_price, trip.currency || "MNT");
   const lines = [`✈️ ${formatRouteName(trip.route_name)}`];
   if (price) lines.push(`💰 Том хүн: ${price} (нэг хүний үнэ)`);
-  lines.push("", `${label} хүний группийн нийт үнэ, хөнгөлөлтийг манай аяллын зөвлөх тооцоод хэлж өгнө.`);
+  lines.push("", `${label} хүний группийн нийт үнийг манай аяллын зөвлөх тооцоод хэлж өгнө.`);
   return lines.join("\n");
 }
 
