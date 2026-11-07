@@ -76,7 +76,7 @@ const BARE_VERB_ENDING = /(?:маар|мээр|моор|мөөр|хаар|хээ
 const REFLEXIVE_ENDING = /(?:(?:тай|тэй|той|төй)(?:гаа|гээ|гоо|гөө)|аараа|ээрээ|оороо|өөрөө|тайгаа|тэйгээ)$/u;
 const COMITATIVE_ENDING = /(?:тай|тэй|той|төй|tai|tei)$/u;
 
-function isVerbOrFunctionWord(word: string): boolean {
+export function isVerbOrFunctionWord(word: string): boolean {
   if (FUNCTION_WORDS.has(word) || CALENDAR_FOLLOWUP_WORDS.has(word)) return true;
   // "аялал" in any case ("аяллыг", "аялалд") and its Latin spellings: the word for a trip is never a place.
   if (/^(?:аял|ayal|ayl)/u.test(word)) return true;
@@ -135,6 +135,8 @@ const MAX_PLACE_CANDIDATES = 2;
  */
 export function unknownPlaceTokens(text: string, trips: TravelTrip[], options: { corroborated?: boolean } = {}): string[] {
   const cleaned = withoutHolidayWords(text)
+    // A year and its marker, however typed: "2027 оны", "2027 ионы", "2027 ioni" are a time, not a place.
+    .replace(/(?<!\d)20\d{2}\s*(?:ионы|ионии|ioni|iony|ionii|оны|онд|ony|onii|он|жилийн|жил|jiliin|jil)?(?![\p{L}])/giu, " ")
     // A token that starts with a digit is a number, a date or a count: "30-нд", "2-р", "990k", "12/30".
     .replace(/(?<![\p{L}\d])\d[\p{L}\d./:-]*/gu, " ");
   const all = cleaned.split(/[^\p{L}]+/u).filter(Boolean);

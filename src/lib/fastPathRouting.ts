@@ -396,7 +396,9 @@ export async function routeFastPathText(input: {
     // named, the departures nearest to it), with or without a place — unless it only follows up on the
     // trip(s) in scope ("тэгвэл цагаан сараар гарах уу"). Asking what exists, naming several trips' place
     // or a place nothing holds is a new question, not a follow-up.
-    if (holidayWindowOf(intentTextOf(requestText, trips), now)
+    // The holiday must be in THIS message: one carried over from an earlier turn (requestText) is a window
+    // for the trips this message names, answered below with that window named.
+    if (holidayWindowOf(intentTextOf(text, trips), now)
       && (named.length > 1 || newPlace || (!named.length && dateScope.length > 0 && asksWhatExists(intentTextOf(text, trips))))) {
       await clearClarificationState(senderId);
       await setTripSelection(senderId, null);
@@ -421,11 +423,16 @@ export async function routeFastPathText(input: {
       // (the children's fares, the programme, the hotel): the trip's answer covers every part
       // and offers the nearest departures. "Not then, here are the dates" alone ignored the rest
       // of a family's opening message (Oct 24 shape).
-      if (!matching.length && scope.length === 1 && asksBeyondDate(requestText, trips, now)) return chose(scope[0]);
+      // "…цагаан сар тааруулсан ийм хөтөлбөртэй аялал": beside a holiday "хөтөлбөр" describes the trip
+      // the customer wants, it is not a second question; the window answer covers the ask.
+      const beyondText = holidayWindowOf(intentTextOf(requestText, trips), now) ? requestText.replace(/хөтөлбөр\p{L}*/giu, " ") : requestText;
+      if (!matching.length && scope.length === 1 && asksBeyondDate(beyondText, trips, now)) return chose(scope[0]);
       const candidates = matching.length ? matching : scope;
       await setClarificationState(senderId, candidates.map(trip => trip.id));
       return { matchText: requestText, scopedClarify: candidates, unavailableDateWithinScope: matching.length === 0,
-        ...(requestText !== text ? { requestText, ...(matching.length ? {} : { unsupportedRequest: true }) } : {}) };
+        // A window carried over from an earlier turn that none of the trips leaves in is not claimed as "no
+        // departure then" - except a holiday's, whose reply names the window it assumed (dateNotScheduled.ts).
+        ...(requestText !== text ? { requestText, ...(matching.length || holidayWindowOf(intentTextOf(requestText, trips), now) ? {} : { unsupportedRequest: true }) } : {}) };
     }
     if (calendarScope.kind === "dates" && hasDepartureDateAvailabilityIntent(text, now)
       && !filterTripsByTransportIntent(text, trips).some(trip => upcomingDepartures(trip, now)

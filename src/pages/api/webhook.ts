@@ -62,7 +62,7 @@ import { pickReferral, rememberAdReferral } from "../../lib/adReferral";
 import { dbAppendAdminMessage, dbClaimGoodbye, dbClaimQuickInfo, dbReleaseQuickInfo, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, isPagePaused, listTrips, } from "../../lib/travelOps";
 import { dbAppendStaffMessages } from "../../lib/travelDb";
 import { hasDepartureDateAvailabilityIntent, requestsDateWindow } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply, withoutHiddenTrips, } from "../../lib/travelFastPaths";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceOrBudgetReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply, withoutHiddenTrips, } from "../../lib/travelFastPaths";
 import { buildHandoffReplyWithContact, claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
 import { handlePhotoOnlyMode } from "../../lib/webhookPhotoOnly";
 import {
@@ -1603,7 +1603,7 @@ async function handleMessageTurn(
   // nothing — it carries on to the other paths rather than being handed to staff.
   if (isBarePriceMessage(text)) {
     const trips = await getTrips();
-    const barePriceReply = buildBarePriceReply(text, trips);
+    const barePriceReply = buildBarePriceOrBudgetReply(text, trips);
     if (barePriceReply) {
       await deliverFastPathReply({
         reply: appendLeadCaptureCta(

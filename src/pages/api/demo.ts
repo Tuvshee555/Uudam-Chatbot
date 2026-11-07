@@ -39,7 +39,7 @@ import { buildHandoffAcknowledgement, enforcePaymentNeverSelfConfirmed, enforceW
 import { findWrongTripReference } from "../../lib/tripConsistency";
 import { dbGetRecentAdminMessages, getTravelBotSettings, listTrips } from "../../lib/travelOps";
 import { hasDepartureDateAvailabilityIntent, requestsDateWindow } from "../../lib/travelDates";
-import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply } from "../../lib/travelFastPaths";
+import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceOrBudgetReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply } from "../../lib/travelFastPaths";
 import { extractTripPhotosForReply } from "../../lib/welcomeFlow";
 import { buildReplyMedia } from "../../lib/replyMediaPolicy";
 import { CONTACT_OPERATOR_LABEL, isContactOperatorTap, extractPhoneNumber, isBookingIntent, isHandoffRequest, isPhoneOnlyMessage, isQuickInfoKeyword } from "../../lib/webhookMedia";
@@ -607,6 +607,8 @@ export default async function handler(
             await setClarificationState(sessionId, listing!.listed.map((trip) => trip.id));
           }
           const safeReply = enforceWebsiteForPayment(sanitizeAssistantReply(soldOutReply || listing!.reply));
+          // A place no trip goes to is silence plus a staff lead here too (the webhook's rule).
+          if (listingApplies && isReferReply(safeReply)) return returnHandoff();
           await appendMessage(sessionId, "user", normalizedText);
           await appendMessage(sessionId, "assistant", safeReply);
           await rememberTurn();
@@ -806,7 +808,7 @@ export default async function handler(
       // A message that is only a price pasted from an advert: same as the webhook.
       if (isBarePriceMessage(normalizedText)) {
         const trips = await getTrips();
-        const barePriceReply = buildBarePriceReply(normalizedText, trips);
+        const barePriceReply = buildBarePriceOrBudgetReply(normalizedText, trips);
         if (barePriceReply) {
           const safeReply = appendLeadCaptureCta(
             enforceWebsiteForPayment(sanitizeAssistantReply(barePriceReply)),
