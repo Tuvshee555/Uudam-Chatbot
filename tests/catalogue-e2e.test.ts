@@ -366,7 +366,9 @@ async function runFlow(rendered: RenderedCatalogue) {
   const early = await deliver("cust-early", "mid-early", {}, earlyLeads);
   assert.equal(early.status, "no_published_version");
   assert.equal(early.fileAccepted, false);
-  assert.equal(meta.calls.length, 0, "a draft is never sent and no apology text is invented");
+  // Owner, launch 2026-11-07: never unanswered. A draft is never sent as a file; the customer gets the safe website text.
+  assert.equal(meta.calls.filter((call) => call.kind !== "text").length, 0, "no file, no upload: a draft is never sent");
+  assert.deepEqual(texts("cust-early").map((call) => call.text), [MESSAGES.catalogueStaleText(SITE)], "the safe website text, once");
   assert.equal(earlyLeads.length, 1, "staff see that a catalogue was asked for and nothing was published");
 
   // 3. Publish. The public token addresses the stored bytes.
@@ -382,10 +384,15 @@ async function runFlow(rendered: RenderedCatalogue) {
   assert.equal(first.fileAccepted, true);
   assert.match(String(first.metaMessageId), /^m_file_/);
   assert.deepEqual(leads, [], "a clean send needs no staff lead");
-  assert.deepEqual(meta.calls.map((call) => call.kind), ["upload", "text", "file"], "upload, then the caption, then the file");
+  // (the earlier unpublished request, cust-early, got its own safe text before this send)
+  const firstSend = meta.calls.slice(1).map((call) => call.kind); // call 0 is that early safe text
+  assert.deepEqual(firstSend, ["upload", "text", "file"], "upload, then the caption, then the file");
   assert.deepEqual(uploads()[0], { kind: "upload", fileName: draft.fileName, bytes: rendered.pdf.length, reusable: true });
   assert.deepEqual(texts("cust-1").map((call) => call.text), [caption]);
-  assert.deepEqual(files("cust-1"), [{ kind: "file", recipient: "cust-1", attachmentType: "file", attachmentId: "att-1", accepted: true }]);
+  // The id is whatever the single upload returned (the early unpublished text is call 0, so it is not "att-1").
+  const uploadedId = String(uploads()[0] ? files("cust-1")[0]?.attachmentId : "");
+  assert.match(uploadedId, /^att-\d+$/);
+  assert.deepEqual(files("cust-1"), [{ kind: "file", recipient: "cust-1", attachmentType: "file", attachmentId: uploadedId, accepted: true }]);
   assert.ok(!JSON.stringify(meta.bodies).includes('"type":"image"'), "no image attachment, ever");
   assert.ok(!JSON.stringify(meta.bodies).includes('"template"'), "no carousel, no template");
 
@@ -409,7 +416,7 @@ async function runFlow(rendered: RenderedCatalogue) {
   assert.equal(resent.status, "sent");
   assert.equal(uploads().length, 1, "the Meta attachment id is reused, the bytes are not uploaded again");
   assert.deepEqual(texts("cust-1").map((call) => call.text), [caption, caption]);
-  assert.deepEqual(files("cust-1").map((call) => call.attachmentId), ["att-1", "att-1"]);
+  assert.deepEqual(files("cust-1").map((call) => call.attachmentId), [uploadedId, uploadedId]);
 
   // 7. Meta refuses the file: the caption already went, ONE link text follows, the file is not claimed sent.
   const failLeads: Lead[] = [];
@@ -417,7 +424,7 @@ async function runFlow(rendered: RenderedCatalogue) {
   const refused = await deliver("cust-fail", "mid-f1", {}, failLeads);
   assert.equal(refused.status, "sent_link_fallback");
   assert.equal(refused.fileAccepted, false);
-  assert.deepEqual(files("cust-fail"), [{ kind: "file", recipient: "cust-fail", attachmentType: "file", attachmentId: "att-1", accepted: false }]);
+  assert.deepEqual(files("cust-fail"), [{ kind: "file", recipient: "cust-fail", attachmentType: "file", attachmentId: uploadedId, accepted: false }]);
   const refusedTexts = texts("cust-fail").map((call) => call.text);
   assert.equal(refusedTexts.length, 2);
   assert.equal(refusedTexts[0], caption);
@@ -447,8 +454,8 @@ async function runFlow(rendered: RenderedCatalogue) {
   // 9. The send log kept one row per outcome, none of them with a customer id.
   assert.deepEqual(
     db.sends.map((row) => row.status).sort(),
-    ["no_published_version", "sent", "sent", "sent_link_fallback", "stale_fallback"],
-    "the asks that were suppressed are counted on their row, not sent",
+    ["sent", "sent", "sent_link_fallback", "stale_fallback", "stale_fallback"],
+    "the unpublished ask is logged like the stale one (safe website text), not as a file send",
   );
   assert.ok(db.sends.every((row) => !String(row.sender_hash).includes("cust-")), "sender ids are hashed in the send log");
 }

@@ -323,8 +323,8 @@ export async function deliverCatalogue(input: DeliverCatalogueInput): Promise<Ca
   };
 
   if (!plan.ready) {
-    if (plan.status === "stale_fallback" && !input.dryRun) {
-      // Never the stale file. The live site, once (the claim makes a double tap silent), and a person follows up.
+    if ((plan.status === "stale_fallback" || plan.status === "no_published_version") && !input.dryRun) {
+      // Never the stale file, and never silence when nothing is published (owner, launch 2026-11-07). The live site, once (the claim makes a double tap silent), and a person follows up.
       const claim = await deps.store.claimSend({ senderId: input.senderId, edition: input.edition, versionId: plan.version?.id ?? null, explicitResend: input.explicitResend, dedupeKey: input.dedupeKey ?? input.trace?.deliveryKey ?? null })
         .catch(() => null);
       if (claim && !claim.claimed) return answerRepeat(claim, plan.version, false);
@@ -335,10 +335,10 @@ export async function deliverCatalogue(input: DeliverCatalogueInput): Promise<Ca
         if (claim) await deps.store.finishSend(claim.sendId, { status: "failed", reason: "stale_text_delivery_failed" }).catch(() => false);
         throw error;
       }
-      const outcome = outcomeOf(input, "stale_fallback", { versionId: plan.version?.id ?? null, reason: plan.reason });
+      const outcome = outcomeOf(input, plan.status, { versionId: plan.version?.id ?? null, reason: plan.reason });
       if (claim) await deps.store.finishSend(claim.sendId, { status: sent ? "stale_fallback" : "failed", reason: sent ? plan.reason : "stale_text_withheld" }).catch(() => false);
       logOutcome(input, outcome, { staleReasons: plan.freshness?.reasons.length ?? 0, ageDays: plan.freshness?.ageDays ?? null });
-      await lead("stale_fallback", plan.reason, plan.version, plan.freshness?.reasons.join("; ") || null);
+      await lead(plan.status === "no_published_version" ? "no_published_version" : "stale_fallback", plan.reason, plan.version, plan.freshness?.reasons.join("; ") || null);
       return outcome;
     }
     const outcome = outcomeOf(input, plan.status, { versionId: plan.version?.id ?? null, reason: plan.reason });

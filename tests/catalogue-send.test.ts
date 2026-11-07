@@ -57,10 +57,12 @@ test("customer copy is short, plain Mongolian, promises nothing and survives the
     tripCodeAckText({ code: "A01", title: "ТЕСТ-ДАЛАЙ АЯЛАЛ", groupSize: 25, month: 1 }), tripCodeAckText({ code: "A02", title: "ЖИШИГ-ХӨДӨӨ", groupSize: null, month: null }),
     catalogueRepeatText({ url: publicUrlOf("t"), linkOnly: false }), catalogueRepeatText({ url: "", linkOnly: false }), catalogueRepeatText({ url: publicUrlOf("t"), linkOnly: true })];
   for (const text of texts) {
-    assert.doesNotMatch(text, /\p{Extended_Pictographic}/u, `no emoji: ${text}`);
+    // Only the owner's own launch caption carries an emoji (one 📖); every other line stays plain.
+    if (text !== catalogueCaption("quick") && text !== catalogueCaption("complete")) assert.doesNotMatch(text, /\p{Extended_Pictographic}/u, `no emoji: ${text}`);
     assert.doesNotMatch(text, /баталгаатай|баталгаажсан|захиалга баталгаажлаа|суудал (?:бий|байна)|үнэ \d|хямдрал|мөнгө төл/i, `no promise: ${text}`);
     assert.equal(shouldSilenceNoDataReply(text), false, `the no-data filter would silence: ${text}`);
-    assert.equal(presentAssistantReply({ reply: text, userText: "каталог явуул", hasPriorReply: false }), text, `the reply policy must not rewrite: ${text}`);
+    // The presenter may drop only the leading greeting (house style: greet back only if the customer greeted).
+    assert.equal(presentAssistantReply({ reply: text, userText: "каталог явуул", hasPriorReply: false }), text.replace(/^Сайн байна уу! /, ""), `the reply policy must not rewrite beyond the greeting: ${text}`);
     assert.ok(text.length <= 420, `short: ${text.length}`);
   }
   assert.equal(catalogueEditionOfCaption(catalogueCaption("quick")), "quick");
@@ -318,7 +320,9 @@ test("blocked and unpublished requests send nothing, are logged in the send log 
   const none = harness();
   const missing = await deliverCatalogue(none.request());
   assert.equal(missing.status, "no_published_version");
-  assert.equal(none.texts.length, 0, "no published version: the customer gets nothing");
+  // Owner, launch 2026-11-07: never unanswered - the safe website text goes out, and staff get the lead.
+  assert.deepEqual(none.texts, [catalogueStaleText("https://site.example.test")], "no published version: the safe website text, no file");
+  assert.equal(none.meta.files.length, 0);
   assert.match(none.leads[0].context, /нийтлэгдсэн каталог байхгүй/);
 });
 

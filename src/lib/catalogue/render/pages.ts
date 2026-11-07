@@ -160,7 +160,7 @@ export function closingPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets:
   const phones = snapshot.contact.phones.map(p => p.trim()).filter(Boolean).slice(0, MAX_PHONES);
   const siteHref = safeHref(snapshot.contact.siteUrl);
   const siteLabel = snapshot.contact.siteLabel || snapshot.contact.siteUrl;
-  const stamp = `Хувилбар: ${escapeHtml(assets.versionLabel)} · Үүсгэсэн: ${escapeHtml(ulaanbaatarStamp(snapshot.generatedAt))} (Улаанбаатар) · Огноо: ${escapeHtml(dotDay(snapshot.asOfDay))}`;
+  const stamp = `Хувилбар ${escapeHtml(assets.versionLabel)} · ${escapeHtml(ulaanbaatarStamp(snapshot.generatedAt))}`;
   const steps: [string, string, string][] = [
     ["01", "Аяллын код", `Жишээ нь ${exampleCode}`],
     ["02", "Аялах хүний тоо", "Нийт хэдэн хүн явах вэ"],

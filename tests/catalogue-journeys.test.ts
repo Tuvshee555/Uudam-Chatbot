@@ -4,6 +4,13 @@ import { conversationGateHarness, type FixtureTrip } from "./helpers/conversatio
 import { DAY, fakeMeta, fakeSendStore, makeVersion, noDrift, publicUrlOf } from "./helpers/catalogueSendFakes";
 import { catalogueCaption, catalogueLinkFollowupText, catalogueRepeatText, catalogueStaleText, groupQuoteText, tripCodeAckText } from "../src/lib/catalogue/messages";
 
+
+/**
+ * What the customer actually reads: the webhook's presenter drops a leading "Сайн байна уу!" unless the
+ * customer greeted first (the bot's house style), so the owner-approved caption loses only that greeting.
+ */
+const sentCaption = (edition: "quick" | "complete") => catalogueCaption(edition).replace(/^Сайн байна уу! /, "");
+
 /**
  * The corporate catalogue through the real signed webhook (CI gate: npm run qa:conversations).
  * Only the outside world is replaced: the catalogue store and Meta's file API are in-memory fakes,
@@ -61,15 +68,16 @@ test("corporate catalogue journeys", async (context) => {
     await context.test("a company asks for its trips: exactly ONE PDF and ONE short text, no model call", async () => {
       const turn = await say("corp-1", "байгууллагын аяллуудаа харуулаач");
       assert.equal(turn.status, 200);
-      assert.deepEqual(texts(turn.sends), [catalogueCaption("quick")], "one short text");
+      assert.deepEqual(texts(turn.sends), [sentCaption("quick")], "one short text");
       assert.equal(meta.files.length, 1, "one file attachment");
       assert.equal(meta.files[0].recipientId, "corp-1");
       assert.equal(stored.cached(quick.id, "1234567890"), meta.files[0].attachmentId, "uploaded once, id cached for the next customer");
       assert.equal(turn.modelCalls + turn.answerModelCalls, 0, "no AI spend");
       assert.equal(turn.leads.length, 0, "a clean send needs no staff lead");
-      assert.doesNotMatch(turn.sends[0].text, /\p{Extended_Pictographic}|баталгаа|₮|\d{3}/u, "no emoji, no price, no guarantee");
+      // The owner-approved launch wording carries one 📖; still no price and no guarantee.
+      assert.doesNotMatch(turn.sends[0].text, /баталгаа|₮|\d{3}/u, "no price, no guarantee");
       const rows = turn.history.filter((row) => row.role === "assistant");
-      assert.equal(rows[0].text, catalogueCaption("quick"), "the caption is in the history before the file row");
+      assert.equal(rows[0].text, sentCaption("quick"), "the caption is in the history before the file row");
       assert.equal(rows.length, 2);
       assert.equal(rows[1].text, "", "and the file row follows it");
       assert.equal(stored.last()!.status, "sent");
@@ -79,7 +87,7 @@ test("corporate catalogue journeys", async (context) => {
     await context.test("Latin and mistyped spellings get the same PDF", async () => {
       const before = meta.files.length;
       const turn = await say("corp-latin", "baiguullagiin aylaliin songoltuud harulaach");
-      assert.deepEqual(texts(turn.sends), [catalogueCaption("quick")]);
+      assert.deepEqual(texts(turn.sends), [sentCaption("quick")]);
       assert.equal(meta.files.length, before + 1);
       assert.equal(meta.uploads.length, 1, "the cached attachment id is reused");
     });
@@ -98,7 +106,7 @@ test("corporate catalogue journeys", async (context) => {
 
     await context.test("'бүх аяллаа' asks for the Complete catalogue", async () => {
       const turn = await say("all-1", "бүх аяллаа харуулаач");
-      assert.deepEqual(texts(turn.sends), [catalogueCaption("complete")]);
+      assert.deepEqual(texts(turn.sends), [sentCaption("complete")]);
       assert.equal(stored.claims.find((claim) => claim.senderId === "all-1")!.versionId, complete.id);
     });
 
@@ -109,7 +117,7 @@ test("corporate catalogue journeys", async (context) => {
       assert.equal(tooSoon.sends.length, 0, "a resend seconds later is a double click");
       context.mock.timers.setTime(Date.now() + 3 * 60_000);
       const later = await say("again-1", "дахин явуул");
-      assert.deepEqual(texts(later.sends), [catalogueCaption("complete")], "repeats the edition it sent: a bare каталог is the complete one");
+      assert.deepEqual(texts(later.sends), [sentCaption("complete")], "repeats the edition it sent: a bare каталог is the complete one");
       assert.equal(meta.files.length, before + 1);
       await say("again-2", "дахин явуул");
       assert.equal(meta.files.length, before + 1, "nothing to resend to a customer who never had a catalogue: no file");
@@ -154,16 +162,18 @@ test("corporate catalogue journeys", async (context) => {
       assert.match(harness.leads.find((row) => row.sender_id === "blocked-3")!.context, /A01, 25 хүн, 1-р сар/);
     });
 
-    await context.test("no published version: nothing to the customer, a lead for staff; vague asks fall through to the trip flow", async () => {
+    await context.test("no published version: the customer is never left unanswered (website text) and staff get a lead; vague asks fall through to the trip flow", async () => {
+      // Owner, launch 2026-11-07: an unavailable catalogue is acknowledged with the safe website text, not silence.
       stored.unpublish("quick"); stored.unpublish("complete");
       const explicit = await say("none-1", "байгууллагын аяллын каталог");
-      assert.equal(explicit.sends.length, 0, "no data, no answer");
+      assert.deepEqual(texts(explicit.sends), [catalogueStaleText("https://site.example.test")]);
+      assert.equal(meta.files.filter((file) => file.recipientId === "none-1").length, 0, "no file to send");
       assert.equal(explicit.leads.length, 1);
       assert.match(explicit.leads[0].context, /нийтлэгдсэн каталог байхгүй/);
-      assert.equal(stored.claims.at(-1)!.status, "no_published_version");
+      assert.equal(stored.claims.at(-1)!.status, "stale_fallback");
       const vague = await say("none-2", "бүх аяллаа");
       assert.equal(vague.leads.filter((lead) => /Байгууллагын каталог/.test(lead.context)).length, 0, "the trip flow answers a vague ask");
-      assert.ok(!texts(vague.sends).includes(catalogueCaption("complete")));
+      assert.ok(!texts(vague.sends).includes(sentCaption("complete")));
       stored.publish(quick); stored.publish(complete);
     });
 
@@ -181,25 +191,25 @@ test("corporate catalogue journeys", async (context) => {
       assert.deepEqual(texts(drifted.sends), [catalogueStaleText("https://site.example.test")], "live prices moved: same safe fallback");
       world.failDrift();
       const unverified = await say("stale-3", "байгууллагын аялал");
-      assert.deepEqual(texts(unverified.sends), [catalogueCaption("quick")], "an unreadable comparison does not silence the bot");
+      assert.deepEqual(texts(unverified.sends), [sentCaption("quick")], "an unreadable comparison does not silence the bot");
       world.driftWith([]);
     });
 
     await context.test("a specific-trip question is never turned into the catalogue", async () => {
       const files = meta.files.length;
       const price = await say("spec-1", "Тест-далай аяллын үнэ хэд вэ");
-      assert.ok(!texts(price.sends).includes(catalogueCaption("quick")));
+      assert.ok(!texts(price.sends).includes(sentCaption("quick")));
       assert.match(price.sends.map((send) => send.text).join("\n"), /ТЕСТ-ДАЛАЙ/, "the existing flow answered about that trip");
       const named = await say("spec-2", "Жишиг-хөдөө аяллын брошюр явуулаач");
-      assert.ok(!texts(named.sends).includes(catalogueCaption("complete")), "a named trip's brochure is the trip flow's");
+      assert.ok(!texts(named.sends).includes(sentCaption("complete")), "a named trip's brochure is the trip flow's");
       assert.equal(meta.files.length, files, "no catalogue file");
       // A trip is already under discussion: 'брошюр' means that trip's, unless the customer says company or all.
       await say("spec-3", "Тест-далай аяллын үнэ хэд вэ");
       const brochure = await say("spec-3", "брошюр явуулаач");
-      assert.ok(!texts(brochure.sends).includes(catalogueCaption("complete")));
+      assert.ok(!texts(brochure.sends).includes(sentCaption("complete")));
       assert.equal(meta.files.length, files);
       const company = await say("spec-3", "байгууллагын аяллын каталог");
-      assert.deepEqual(texts(company.sends), [catalogueCaption("quick")], "an explicit company request still gets the catalogue");
+      assert.deepEqual(texts(company.sends), [sentCaption("quick")], "an explicit company request still gets the catalogue");
     });
 
     await context.test("a trip-code reply selects the trip, writes a structured lead and answers once, without price, date or booking", async () => {
@@ -286,7 +296,7 @@ test("corporate catalogue journeys", async (context) => {
       meta.failFileOnce({ status: 400, errorCode: 100, errorMessage: "Invalid attachment id" });
       const files = meta.files.length;
       const turn = await say("reject-1", "хамт олны аяллын сонголтууд");
-      assert.deepEqual(texts(turn.sends), [catalogueCaption("quick"), catalogueLinkFollowupText(publicUrlOf(quick.publicToken))]);
+      assert.deepEqual(texts(turn.sends), [sentCaption("quick"), catalogueLinkFollowupText(publicUrlOf(quick.publicToken))]);
       assert.equal(meta.files.length, files + 2, "tried the cached id, then the fresh upload");
       assert.equal(turn.history.filter((row) => row.role === "assistant" && row.text === "").length, 0, "no file row for a file that was not sent");
       assert.equal(stored.claims.find((claim) => claim.senderId === "reject-1")!.status, "sent_link_fallback");
@@ -305,11 +315,11 @@ test("corporate catalogue journeys", async (context) => {
       harness.failSends("retry-1", false);
       const retried = await say("retry-1", "байгууллагын аялал", "mid-retry-1");
       assert.equal(retried.status, 200);
-      assert.deepEqual(texts(retried.sends), [catalogueCaption("quick")]);
+      assert.deepEqual(texts(retried.sends), [sentCaption("quick")]);
       assert.equal(meta.files.length, files + 1);
     });
 
-    const captions = [catalogueCaption("quick"), catalogueCaption("complete")];
+    const captions = [sentCaption("quick"), sentCaption("complete")];
     const tookCatalogue = (turn: { sends: Array<{ text: string }> }) => texts(turn.sends).some((text) => captions.includes(text));
     const catalogueLeads = (turn: { leads: Array<{ context: string }> }) => turn.leads.filter((lead) => /Байгууллагын каталог|Каталогийн код|каталогоос үнийн санал/.test(lead.context));
 
@@ -329,8 +339,8 @@ test("corporate catalogue journeys", async (context) => {
       }
       assert.equal(meta.files.length, files, "no file for an ordinary question");
       // Recall is kept: listing every trip is a catalogue request even mid-conversation, and so is the usual spelling of "corporate".
-      assert.deepEqual(texts((await say("fp-1", "бүх аяллаа харуулаач")).sends), [catalogueCaption("complete")]);
-      assert.deepEqual(texts((await say("fp-3", "Корпорэйт аялал")).sends), [catalogueCaption("quick")]);
+      assert.deepEqual(texts((await say("fp-1", "бүх аяллаа харуулаач")).sends), [sentCaption("complete")]);
+      assert.deepEqual(texts((await say("fp-3", "Корпорэйт аялал")).sends), [sentCaption("quick")]);
     });
 
     await context.test("'again' beside thanks, a question or another thing is not a request to send the file again", async () => {
@@ -368,7 +378,7 @@ test("corporate catalogue journeys", async (context) => {
       const fresh = stored.publish(makeVersion({ edition: "quick", id: "00000000-0000-4000-8000-0000000000a2", versionNo: 4, fileName: "UUDAM_Corporate_2098-01-31_v4.pdf", publicToken: "tok_quick_000000000002" }));
       const files = meta.files.length;
       const second = await say("fresh-1", "байгууллагын аяллын каталог явуулаач");
-      assert.deepEqual(texts(second.sends), [catalogueCaption("quick")], "the stale notice does not hold the new version back for six hours");
+      assert.deepEqual(texts(second.sends), [sentCaption("quick")], "the stale notice does not hold the new version back for six hours");
       assert.equal(meta.files.length, files + 1);
       assert.deepEqual(stored.claims.filter((claim) => claim.senderId === "fresh-1").map((claim) => [claim.versionId, claim.status]), [[quick.id, "stale_fallback"], [fresh.id, "sent"]]);
       stored.publish(quick);
@@ -414,7 +424,7 @@ test("corporate catalogue journeys", async (context) => {
       const files = meta.files.length;
       for (const text of ["Сайн байна уу", "Тест-далай хэд хоног вэ", "гэр бүлийн аялал байна уу", "утасны дугаар хэд вэ"]) {
         const turn = await say("plain-1", text);
-        assert.ok(!texts(turn.sends).includes(catalogueCaption("quick")) && !texts(turn.sends).includes(catalogueCaption("complete")), text);
+        assert.ok(!texts(turn.sends).includes(sentCaption("quick")) && !texts(turn.sends).includes(sentCaption("complete")), text);
         assert.equal(turn.leads.filter((lead) => /Байгууллагын каталог|Каталогийн код/.test(lead.context)).length, 0, text);
       }
       assert.equal(meta.files.length, files);

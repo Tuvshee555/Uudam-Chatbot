@@ -11,15 +11,14 @@ import type { CatalogueEdition } from "./types";
 const ASK_FOR_QUOTE =
   "Сонирхсон аяллынхаа код, хэдэн хүн, хэдэн сард аялахаа бичвэл манай ажилтан үнийн санал бэлтгэж өгнө.";
 
+// Wording approved by the owner for launch (2026-11-07). The emoji is the owner's own.
+const CAPTION_BODY =
+  "Доорх PDF файлыг утсандаа татаж аваад интернэтгүй үед ч үзэж, хамт олонтойгоо хуваалцах боломжтой.\n\n"
+  + "Сонирхсон аяллын код, аялах хүний тоо, хүссэн сараа бичвэл манай ажилтан танд тохирсон үнийн санал гаргаж өгнө.";
+
 const CAPTION: Record<"quick" | "complete", string> = {
-  quick:
-    "Байгууллага, хамт олны аяллын сонголтуудыг нэг PDF каталогт багтаалаа. "
-    + "Доорх файлыг утсандаа хадгалж, хамт олондоо хуваалцаарай. "
-    + ASK_FOR_QUOTE,
-  complete:
-    "Манай аяллуудыг нэг PDF каталогт нэгтгэлээ. "
-    + "Доорх файлыг утсандаа хадгалж, хамт олондоо хуваалцаарай. "
-    + ASK_FOR_QUOTE,
+  quick: "Сайн байна уу! Манай байгууллага, хамт олны аяллын сонголтуудыг нэг каталогт багтаалаа. 📖\n\n" + CAPTION_BODY,
+  complete: "Сайн байна уу! Манай бүх аяллын сонголтуудыг нэг каталогт нэгтгэлээ. 📖\n\n" + CAPTION_BODY,
 };
 
 /** The one short text that comes with the PDF. The preview edition (a sample) reads as the quick one. */
@@ -29,9 +28,12 @@ export function catalogueCaption(edition: CatalogueEdition): string {
 
 /** True when `text` is one of the captions above: how a later "дахин явуул" finds the edition it repeats. */
 export function catalogueEditionOfCaption(text: string): "quick" | "complete" | null {
-  const value = String(text || "").trim();
-  if (value === CAPTION.quick) return "quick";
-  if (value === CAPTION.complete) return "complete";
+  // The bot's presenter drops a leading "Сайн байна уу!" when the customer did not greet, so the stored
+  // history line may lack it: compare without the greeting.
+  const bare = (value: string) => value.trim().replace(/^Сайн байна уу!\s*/, "");
+  const value = bare(String(text || ""));
+  if (value === bare(CAPTION.quick)) return "quick";
+  if (value === bare(CAPTION.complete)) return "complete";
   return null;
 }
 
