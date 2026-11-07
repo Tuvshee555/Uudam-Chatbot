@@ -135,6 +135,29 @@ desktop consultant at all (1,261 phone replies, which are never affected), and t
 pending. If desktop use grows, the fix is a memory of Meta's automation texts (the same text sent to
 many customers), which would let a unique message within 20 s count as a person.
 
+## P1-6 — Messages with no trip in them were forced through the trip pipeline — FIXED on branch `fix/understanding-need` (not deployed)
+Real shapes (2026-10-31 .. 2026-11-05): an organisation of 50-60 got "the system is down" (credit outage) or a
+per-person fare card; "organisation of 40-45, any discount?" got an invented "Тийм, тусгай хямдрал"; "barter?"
+re-sent a trip list; a ticket-only wish or a border pick-up with a place word got a trip list or an itinerary; a long
+thank-you naming "хөтөлбөр" / "санал" got a programme; "ok" under a price got "Ямар аялал сонирхож байна?";
+"захиалгаа цуцлах боломжтой юу" got "Утасны дугаараа бичнэ үү." and no lead.
+**Now.** `messageNeed.ts` names the need from the customer's own words BEFORE any trip is looked up
+(social, business_group, commercial_policy, transport_only, existing_booking, complaint) and `needDispatch.ts`
+acts on it with no model call: thanks / praise get one warm line, an acknowledgement is silent; a group or
+organisation gets a typed lead (`[need:business_group]`, head count, destination words, month, the customer's
+words; an open lead gets the new message appended) and ONE reply made only of the company's published custom-trip
+wording plus ONE question (the "passed to the consultant" sentence only when the lead was really saved);
+barter / contract / instalments and ticket-only or pick-up wishes are a typed lead and silence; a booking
+question is never the collector's phone ask. Owner-entered discount policies, offers and FAQ make the commercial gate
+step aside so the model can answer from them; a reply that states a discount, group price, barter or contract the data does
+not hold becomes REFER (`guardInventedCommercialClaims`). Journeys: `tests/understanding-need-journeys.test.ts`.
+**Rollout knob:** `NEED_MODEL` = `observe` (default; the understanding call's own `need` is only logged as
+`webhook.need_observed`, no behaviour change), `enforce` (a validated model need acts like a rule need), `off`.
+Compare `webhook.need_observed.agreesWithRule` in the admin logs for several days before choosing `enforce`.
+**Still open:** `demo.ts` does not mirror the gate (a tester sees the old answers); the booking-collector start
+still answers "how do I book?"; destination-free weather and the constraint ledger (month / party carried across a
+trip switch) are separate work.
+
 ## P1-3 — Test traffic in the production conversation table — MITIGATED (2026-10-30)
 `demo:` sessions (87% of rows) are written beside real customers. Every analytics and quality query on
 conversations excludes `demo:` senders, the Leads tab does too, and the demo path writes no leads

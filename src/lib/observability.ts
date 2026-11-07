@@ -384,6 +384,10 @@ export const PERSISTED_INFO_EVENTS: ReadonlySet<string> = new Set([
   "webhook.inbound_outcome",
   "webhook.get_started_silent",
   "webhook.booked_followup",
+  // The need gate (needDispatch.ts): which class a message was read as, and what the model proposed in
+  // observe mode (no customer text). Low volume; the Vercel log window is too short to compare rule and model.
+  "webhook.need_classified",
+  "webhook.need_observed",
   "webhook.disabled",
   // Meta-app migration: an app that does not own the conversation gets `standby`, never answered.
   "webhook.standby_observed",

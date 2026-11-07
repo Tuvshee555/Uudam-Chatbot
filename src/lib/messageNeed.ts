@@ -83,7 +83,7 @@ const NUMBER_WORDS: Record<string, number> = {
 /** "50-60 хүн", "40-45 hun", "20s 25 hun", "35 ажилтан", "хорин хүн": the largest head count, or null. */
 export function headcountIn(text: string): number | null {
   const raw = (text || "").toLowerCase().normalize("NFKC");
-  const people = "(?:хүн(?!с)|хүний|хүнтэй|хүнээр|hun(?!s)|huntei|huniii?|ажилт\\p{L}*|ажилч\\p{L}*|ajilt\\p{L}*|ajilch\\p{L}*|сурагч|surag|оюутан|oyutan|pax|people|persons?|tourists?)";
+  const people = "(?:хүн(?!с)|хүний|хүнтэй|хүнээр|hun(?!s)|huntei|huniii?|ажилт\\p{L}*|ажилч\\p{L}*|ajilt\\p{L}*|ajilch\\p{L}*|сурагч|surag|оюутан|oyutan|багш\\p{L}*|bagsh\\p{L}*|гишүү\\p{L}*|аялагч\\p{L}*|pax|people|persons?|tourists?)";
   let best: number | null = null;
   const numeric = new RegExp(`(\\d{1,3})\\s*(?:[a-zа-я]{0,2}\\s*[-–—~]\\s*|[a-zа-я]{1,2}\\s+)?(\\d{1,3})?\\s*${people}`, "giu");
   for (const match of raw.matchAll(numeric)) {
@@ -158,7 +158,7 @@ const BARTER = /бартер|barter|барте|солилцож\s+(?:аял|яв
 const INVOICE = /нэхэмжлэ[хл]|nehemjle|и-?баримт|e-?barimt|ebarimt|ибаримт/u;
 const CONTRACT = /гэрээ\p{L}*|geree\p{L}*/u;
 const CONTRACT_CONTEXT = /байгууллаг|baig|төл|tol|tul|нэхэмж|компани|kompani|корпорат/u;
-const INSTALMENT = /хэсэгчлэн|хуваан\s+төл|хуваж\s+төл|сараар\s+төл|зээл|лизинг|рассрочк|storepay|pocket|монпай|monpay|кредит|hesegcleen|hesegchlen/u;
+const INSTALMENT = /хэсэгчлэн|хуваа[жн]?\s+төл|хуваж\s+төл|сараар\s+(?:хуваа[жн]?\s+)?төл|зээл|лизинг|рассрочк|storepay|pocket|монпай|monpay|кредит|hesegcleen|hesegchlen/u;
 const PAY_CUE = /төл|tol|tul|pay|авах|аял/u;
 const CARD_PAY = /карт(?:аар|ыг|ны)?\s+(?:төл|tul)|kart(?:aar)?\s+(?:tul|tol)/u;
 const GROUP_WORD = /(?:^|\s)(?:групп\p{L}*|group|олуулаа|олон\s+хүн)(?=\s|$)/u;
@@ -166,7 +166,7 @@ const GROUP_WORD = /(?:^|\s)(?:групп\p{L}*|group|олуулаа|олон\s+
 // ── transport / pick-up / ticket only ────────────────────────────────────────────────────────────
 
 const TICKET_TOKEN = /^(?:тийз|тийзээ|тийзийг|тийзний|тийзнээс|тийзэнд|тасалбар|тасалбараа|билет|билетээ|билетийг|билетүүд|ticket|tickets|tiiz|tiz|tizee|bilet|biletee)$/u;
-const TICKET_ONLY_MARK = /(?:^|\s)(?:л|зөвхөн|only|тусад|тусдаа|нэг\s+тал(?:ын|даа)|буцах|буцахдаа|одоо\s+л)(?=\s|$)|аялал\s+биш|аялалгүй|tusad|tusdaa/u;
+const TICKET_ONLY_MARK = /(?:^|\s)(?:л|l|зөвхөн|only|тусад|тусдаа|нэг\s+тал(?:ын|даа)|буцах|буцахдаа|одоо\s+л)(?=\s|$)|аялал\s+биш|аялалгүй|ayl?al\s+bish|ayl?al\s+bui|tusad|tusdaa/u;
 const PICKUP = /хүн\s+(?:авах|авдаг|авна|авч\s+(?:болох|чадах))|хүн\s+хүргэ|хүн\s+тээв|ачаа\s+тээв|hun\s+(?:avah|avdag|avna)|угтан\s+авах|угтаж\s+авах|тосож\s+авах|нисэх\s+буудл\p{L}*\s+(?:аас|ээс|оос|өөс)?\s*(?:авах|угт|авч)|airport\s+(?:pick\s?up|transfer)|\bpick\s?-?up\b/u;
 const DELIVER = /хүргэж\s+(?:өг|өгч|өгөх|өгөөч)|hurgej\s+ug/u;
 const MOVEMENT = /(?:^|\s)\p{L}*(?:хүртэл|руу|луу|рүү|хилээс|орох|ирэх|буцах|гарах|aas|ees|ruu|luu|hurtel|orah|irah|butsah)(?=\s|$)|\p{L}+(?:аас|ээс|оос|өөс)(?=\s|$)/u;
@@ -175,7 +175,7 @@ const HOTEL_ONLY = /буудал\s+(?:захиал|авах)|buudal\s+(?:zahial|
 // ── existing booking ─────────────────────────────────────────────────────────────────────────────
 
 const OWN_BOOKING = /захиалгаа|захиалга\s*(?:маань|минь|чинь)|миний\s+захиалга|захиалсан|захиалчихсан|захиалж\s+авсан|захиалгын\s+(?:дугаар|төлөв|мэдээлэл)|zahialgaa|zahialga\s*(?:maani|mini|minii)|minii\s+zahialga|zahialsan|zahialchihsan|my\s+(?:booking|reservation|order)/u;
-const BOOKING_ACTION = /цуцл|цуцал|cuclah|cancel|буцаан\s+(?:ав|олго)\p{L}*|буцаалт|мөнгө\s+буцаа|refund|өөрчил|өөрчл|хойшлуул|шилжүүл|reschedule|баталгаажс|баталгаажл|баталгаажуулс|юу\s+болсон|яасан|хаана\s+явна|ямар\s+байдалтай|төлөв|batalgaajs|yu\s+bolson|status/u;
+const BOOKING_ACTION = /цуцл|цуцал|cuclah|cancel|буцаан\s+(?:ав|олго)\p{L}*|буцаалт|мөнгө\s+буцаа|refund|өөрчил|өөрчл|хойшлуул|шилжүүл|reschedule|баталгаажс|баталгаажл|баталгаажуулс|батлагд|батлуулс|юу\s+болсон|яасан|хаана\s+явна|ямар\s+байдалтай|төлөв|batalgaajs|batlagd|yu\s+bolson|uurchl|oorchl|urchl|hoishluul|status/u;
 
 // ── complaint ────────────────────────────────────────────────────────────────────────────────────
 
@@ -202,7 +202,9 @@ const CONTENT_NOUN = /(?:^|\s)(?:үнэ|хөтөлбөр\p{L}*|огноо|зур
 
 function socialKind(p: Prepared): SocialKind | null {
   const text = p.norm;
-  if (!text || text.length > 900 || asksSomething(p)) return null;
+  // "thank u": the "u" is not the question particle "уу".
+  const unthanked = prepare(p.raw.replace(/\bthank(?:s)?\s+(?:you|u|ya)\b/giu, "thanks"));
+  if (!text || text.length > 900 || asksSomething(unthanked)) return null;
   const withoutFarewell = text.replace(FAREWELL, " ").replace(/\s+/g, " ").trim();
   if (REQUEST_VERB.test(withoutFarewell)) return null;
   const thanked = p.tokens.some((token) => THANKS_TOKEN.test(token));
@@ -227,7 +229,10 @@ function socialKind(p: Prepared): SocialKind | null {
 /** A bare acknowledgement is only a close when the bot did not just ask the customer something. */
 function botAskedSomething(last: string | null | undefined): boolean {
   const value = (last || "").trim();
-  return /[?？]\s*(?:[\p{Extended_Pictographic}️\s]*)$/u.test(value) || /(?:уу|үү|вэ|юу)\s*$/u.test(value);
+  // The question mark may sit above a list of options ("Аль өдрөөр аялах вэ?\n• 3/15\n• 3/29"), so the closing
+  // 240 characters are read, not just the last one.
+  return /[?？]/.test(value.slice(-240)) || /(?:уу|үү|вэ|юу)[\s\p{Extended_Pictographic}️]*$/u.test(value)
+    || /(?:бичээрэй|бичнэ\s+үү|хэлнэ\s+үү|сонгоно\s+уу|сонгоорой|илгээнэ\s+үү)[\s.!\p{Extended_Pictographic}️]*$/u.test(value);
 }
 
 // ── constraints ──────────────────────────────────────────────────────────────────────────────────
@@ -398,7 +403,7 @@ export function classifyMessageNeed(text: string, context: NeedContext = {}): Me
   const social = socialKind(p) ?? (isThanksOnly(text) ? "thanks" : null);
   if (social) {
     // "ok" right after a question from the bot may be the answer to it: leave it to the pipeline.
-    if ((social === "ack" || social === "farewell") && botAskedSomething(context.lastBotReply)) return null;
+    if (social === "ack" && botAskedSomething(context.lastBotReply)) return null;
     return finish("social", [`social:${social}`], social);
   }
   if (isGroupInquiryReply(context.lastBotReply) && looksLikeInquiryAnswer(p)) return finish("business_group", ["inquiry_answer"]);

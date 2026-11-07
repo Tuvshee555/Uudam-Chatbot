@@ -301,3 +301,69 @@ test("a model-proposed need is kept only with evidence in the customer's words a
   assert.ok(needCueMatches("transport_only", "онгоцны тийз л авъя"));
   assert.ok(!needCueMatches("transport_only", "үнэ хэд вэ"));
 });
+
+// Paraphrases written AFTER the classifier existed and never tuned one by one: Cyrillic, Latin transliteration,
+// typos and a different word order. A miss here means a word FAMILY is missing, not that a sentence needs an entry.
+const UNSEEN: Array<[string, MessageNeed | "social" | null]> = [
+  ["Манай хамт олон 25 хүнтэй, хаврын амралтаар Азийн орон руу явмаар байна", "business_group"],
+  ["Бид нийт 18 ажилтантай компани, жилийн эцэст нэг аялал хийхсэн", "business_group"],
+  ["hamt olonoor 30 hun ywmaar bn, tusgai tsag zuuhii ve", "business_group"],
+  ["Манай байгууллагын 45 хүнд зориулсан аялал байдаг уу", "business_group"],
+  ["albanii baiguullaga aylal zohion baiguulj ugdug uu", "business_group"],
+  ["Манай сургуулийн 40 багшийн аялал зохион байгуулах уу", "business_group"],
+  ["Бидэнд өөрсдийн хүссэн маршрутаар аялмаар байна, санал өгч чадах уу", "business_group"],
+  ["Байгууллагын гэрээ хийж аялуулдаг уу", "business_group"],
+  ["Компаниас нь нэхэмжлэх гаргаад төлбөр хийж болох уу", "commercial_policy"],
+  ["Бартераар аялж болдог уу", "commercial_policy"],
+  ["barteraar aylj bolh uu", "commercial_policy"],
+  ["Сараар хувааж төлж болох уу", "commercial_policy"],
+  ["Группт хөнгөлөлт үзүүлдэг үү", "commercial_policy"],
+  ["Онгоцны билет л хэрэгтэй байна, аялал авахгүй", "transport_only"],
+  ["Хилээс нисэх буудал хүртэл хүн хүргэж өгдөг үү", "transport_only"],
+  ["tiz l avmaar bna aylal bish", "transport_only"],
+  ["Миний захиалсан аяллыг хойшлуулж болох уу", "existing_booking"],
+  ["zahialgaa uurchluh bolomjtoi yu", "existing_booking"],
+  ["Захиалга маань батлагдсан уу", "existing_booking"],
+  ["Хөтөч нь хоцорсон, үйлчилгээнд сэтгэл дундуур байна", "complaint"],
+  ["Маш муу үйлчилгээ байсан, гомдолтой байна", "complaint"],
+  ["gomdol baina", "complaint"],
+  ["Аяллын хөтөлбөр гайхалтай байлаа, баярлалаа", "social"],
+  ["Маш их баярлалаа, амжилт хүсье", "social"],
+  ["thank u", "social"],
+  ["bayrlalaa", "social"],
+  ["За ойлголоо баярлалаа", "social"],
+  ["Ок, баярлалаа", "social"],
+  ["okey", "social"],
+  // positive controls: ordinary questions that merely share a word with a class
+  ["Нисэх буудалд угтаж авах үйлчилгээ байдаг уу", null],
+  ["Төлбөр төлсөн, захиалга ороод байгаа юу", null],
+  ["Норвел хотын аялал хэдэн өдөр вэ", null],
+  ["Калдор руу 3 сард явах аялал байна уу", null],
+  ["Хүүхдийн нас хэд хүртэл хөнгөлөлттэй вэ", null],
+  ["Хоолны мэдээлэл өгөөч", null],
+  ["Баярлалаа, хөтөлбөрийг нь илгээгээрэй", null],
+  ["10 хүн явахад үнэ хэд болох вэ", null],
+  ["Төлбөрөө хэрхэн хийх вэ", null],
+  ["Виз хэрэгтэй юу", null],
+  ["Буудал нь хэдэн одтой вэ", null],
+  ["Манай гэр бүл 5 хүнтэй, 3 сард явмаар байна", null],
+];
+
+test("unseen paraphrases are classified by word family, and ordinary questions stay unclassified", () => {
+  const wrong: string[] = [];
+  for (const [text, want] of UNSEEN) {
+    const hit = classifyMessageNeed(text, { lastBotReply: "Үнэ 1,000,000₮." });
+    const got = hit ? hit.need : null;
+    if (got !== want) wrong.push(`${text} -> ${got} (wanted ${want})`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test("an acknowledgement under a question that sits above a list of options is left to the pipeline", () => {
+  const asked = "Норвел\n\nАль гарах өдрөөр аялах вэ?\n• 3 сарын 15\n• 3 сарын 29";
+  assert.equal(classifyMessageNeed("ok", { lastBotReply: asked }), null);
+  assert.equal(classifyMessageNeed("ок", { lastBotReply: "Аль аяллыг нь сонирхож байна вэ?\n1, 2 эсвэл 3 гэж бичээрэй 😊" }), null);
+  // A farewell is a close wherever it comes.
+  assert.equal(classifyMessageNeed("Баяртай", { lastBotReply: asked })?.social, "farewell");
+  assert.equal(classifyMessageNeed("ok", { lastBotReply: "Норвел\nТом хүн: 1,791,000₮" })?.social, "ack");
+});

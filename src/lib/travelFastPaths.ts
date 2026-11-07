@@ -269,7 +269,7 @@ export function buildAmbiguousPassengerTotalReply(
 // "hongololt", "uramshuulal") are read in phonetic space, as Cyrillic is.
 const DISCOUNT_INTENT_MN = DISCOUNT_KEYWORDS_MN.filter((keyword) => keyword !== "тусгай");
 const DISCOUNT_INTENT_EN = DISCOUNT_KEYWORDS_EN.filter((keyword) => keyword !== "special");
-const DISCOUNT_INTENT_PHONETIC = /h[iy]?[ae]?m?dral|h[ou]ng[ou]l(?:[ou]l)?t|uram?sulal|urimsulal/;
+const DISCOUNT_INTENT_PHONETIC = /\bh[iy]?[ae]?m?dral|\bh[ou]ng[ou]l(?:[ou]l)?t|\buram?sulal|\burimsulal/;
 
 export function hasDiscountIntent(text: string): boolean {
   const normalized = normText(text);

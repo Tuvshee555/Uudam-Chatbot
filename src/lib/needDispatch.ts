@@ -50,8 +50,11 @@ export type NeedDispatchInput = {
   deliver: (input: { reply: string; failTag: string; rememberSource: string; counter?: string }) => Promise<boolean>;
   /** The webhook's captureLead (ensureDurableLead: throws when the lead cannot be persisted). */
   captureLead: (input: { kind: "handoff" | "booking"; context?: string }) => Promise<{ created: boolean; lead: TravelLead | null }>;
-  /** The existing hand-off branch (confirmation, pause), for a complaint. */
-  handoff: (context: string) => Promise<void>;
+  /**
+   * The existing hand-off branch (confirmation, pause), for a complaint. Absent when the page has hand-off
+   * switched off: the complaint then becomes a typed staff lead and silence, never a trip answer.
+   */
+  handoff?: (context: string) => Promise<void>;
   /** Active catalogue, only read to recognise the destination words a customer typed. */
   trips: () => Promise<TravelTrip[]>;
 };
@@ -128,7 +131,13 @@ export async function dispatchNeed(input: NeedDispatchInput): Promise<boolean> {
 
   if (hit.need === "complaint") {
     classified();
-    await input.handoff(typedLeadContext("complaint", hit.constraints, text, input.source));
+    if (input.handoff) {
+      await input.handoff(typedLeadContext("complaint", hit.constraints, text, input.source));
+      return true;
+    }
+    await appendMessage(senderId, "user", text).catch(() => {});
+    await holdForStaff(input, hit.constraints, { catchFailure: false });
+    silent(input, "need:complaint");
     return true;
   }
 

@@ -29,7 +29,7 @@ import { adultCountAnswer, optionChosenByNumber } from "../../lib/selectionAnswe
 import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting";
 import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { classifyMessageNeed, extractNeedConstraints, isSocialMessage } from "../../lib/messageNeed";
-import { dispatchNeed, needModelMode, typedLeadContext } from "../../lib/needDispatch";
+import { dispatchNeed, needModelMode } from "../../lib/needDispatch";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
 import { decideTripAnswer, type TripAnswerDecision } from "../../lib/tripAnswerDecision";
@@ -980,14 +980,11 @@ async function handleMessageTurn(
       senderHash: hashIdentifier(senderId), pauseMinutes: botSettings.handoff_pause_minutes,
     });
   };
-  // A complaint about a service already received goes to a person the same way (needDispatch.ts).
-  const complaintHit = botSettings.handoff_enabled && needHit?.need === "complaint" ? needHit : null;
   if (
     isContactOperatorTap(text) ||
-    (botSettings.handoff_enabled && isHandoffRequest(text, botSettings.handoff_keywords)) ||
-    complaintHit
+    (botSettings.handoff_enabled && isHandoffRequest(text, botSettings.handoff_keywords))
   ) {
-    await performHandoff(complaintHit ? typedLeadContext("complaint", complaintHit.constraints, text) : undefined);
+    await performHandoff();
     return;
   }
   const contactReply = buildContactReply(text, contactSettingsOf(botSettings.extra));
@@ -1109,10 +1106,12 @@ async function handleMessageTurn(
   // a booking already made. Decided from the customer's own words, before the booking collector and before
   // any trip is looked up; no model call.
   const dispatchFor = (hit: NonNullable<typeof needHit>, source: "rule" | "model") => dispatchNeed({
-    hit, source, text, senderId, platform, lastBotReply, trace, trips: getTrips, handoff: performHandoff,
+    hit, source, text, senderId, platform, lastBotReply, trace, trips: getTrips,
+    // A complaint about a service already received goes to a person the same way (when hand-off is on).
+    handoff: botSettings.handoff_enabled ? performHandoff : undefined,
     deliver: (input) => deliverFastPathReply(input), captureLead: (input) => captureLead(input),
   });
-  if (needHit && needHit.need !== "complaint" && (await dispatchFor(needHit, "rule"))) return;
+  if (needHit && (await dispatchFor(needHit, "rule"))) return;
   if (customerWantsToBook && (await startBookingCollect(bookingCtx))) return;
   await appendMessage(senderId, "user", text);
   // Only fetched on the miss path (nothing in the active catalogue matched),
@@ -1237,7 +1236,7 @@ async function handleMessageTurn(
     if (modelNeed && needModelMode() !== "off") {
       logInfo("webhook.need_observed", { requestId: trace?.requestId, correlationId: trace?.correlationId, platform, senderHash: hashIdentifier(senderId),
         need: modelNeed.need, source: "model", agreesWithRule: modelNeed.need === (needHit?.need ?? null), mode: needModelMode() });
-      if (needModelMode() === "enforce" && !needHit && (modelNeed.need !== "complaint" || botSettings.handoff_enabled)
+      if (needModelMode() === "enforce" && !needHit
         && (await dispatchFor({ need: modelNeed.need, signals: ["model"], constraints: extractNeedConstraints(text) }, "model"))) return;
     }
   }
