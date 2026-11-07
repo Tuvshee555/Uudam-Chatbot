@@ -19,7 +19,7 @@ const result = spawnSync(process.execPath, ["--import", "tsx", "--test", "--test
   "tests/webhook-conversations.test.ts", "tests/demo-conversation-parity.test.ts", "tests/webhook-durable-handoff.test.ts", "tests/website-chat-webhook.test.ts",
   "tests/staff-takeover-journeys.test.ts", "tests/webhook-echo-journeys.test.ts", "tests/webhook-echo-enforce-journeys.test.ts",
   "tests/human-takeover-journeys.test.ts", "tests/sticker-reaction-journeys.test.ts",
-  "tests/meta-next-send-testers.test.ts", "tests/meta-next-send-all.test.ts"],
+  "tests/meta-next-send-testers.test.ts", "tests/meta-next-send-all.test.ts", "tests/catalogue-journeys.test.ts"],
 { cwd: process.cwd(), env, stdio: "inherit" });
 if (result.error) console.error(result.error.message);
 process.exit(result.status ?? 1);

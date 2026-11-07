@@ -455,6 +455,7 @@ export type TabKey =
   | "poster"
   | "documents"
   | "errors"
+  | "catalogue"
   | "json";
 
 export type FlowRule = {

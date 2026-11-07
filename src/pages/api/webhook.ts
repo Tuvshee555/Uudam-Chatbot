@@ -113,6 +113,7 @@ import { rememberSenderName } from "../../lib/senderNames";
 import { sendPlatformMessage, recordImageMessage, recordFileMessage, sendPhotoAlbum, sendTripMediaForReply, sendFacebookTypingIndicator, normalizeLowerText, isQuickInfoKeyword, isHandoffRequest, isContactOperatorTap, isBookingIntent, extractPhoneNumber, isPhoneOnlyMessage, isCommentTriggerMatch } from "../../lib/webhookMedia";
 import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
 import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
+import { catalogueFollowupLabel, handleCatalogueTurn, noteBlockedCatalogueRequest } from "../../lib/webhookCatalogue";
 const env = getEnv();
 const PAGE_TOKENS = new Map(env.facebookPages.map((p) => [p.pageId, p.token]));
 const FALLBACK_TOKEN = env.tokenPage;
@@ -271,6 +272,8 @@ async function handleMessageTurn(
   staffThread.catch(() => {});
   if (await isPagePaused(pageId)) {
     if (!attachmentReply) await appendMessage(senderId, "user", text);
+    // A catalogue request is not dropped while the page is paused: staff see it as a lead.
+    if (!attachmentReply) await noteBlockedCatalogueRequest({ platform, senderId, text, reason: "page_paused" });
     noteInbound((outcome) => { outcome.silent = "page_paused"; });
     logInfo("webhook.page_pause_active", {
       requestId: trace?.requestId,
@@ -284,7 +287,7 @@ async function handleMessageTurn(
   // A message from a customer staff own is kept on their lead, which goes back to unread in the
   // Leads tab: it used to be stored where nobody looked.
   const recordPausedFollowup = async (label?: string): Promise<TravelLead | null> => {
-    const line = followupLeadLine(text, undefined, label);
+    const line = followupLeadLine(text, undefined, label ?? catalogueFollowupLabel(text));
     const lead = await latestCustomerLead(senderId).catch(() => null);
     const details = { platform, senderId, customerMessage: text, kind: lead?.kind || "handoff" as const, context: line };
     if (lead) {
@@ -667,6 +670,7 @@ async function handleMessageTurn(
     recordCounter("webhook.reengagement_contact_sent_total", 1, { platform });
   }
   if (botControl.photo_only && platform === "facebook" && token) {
+    await noteBlockedCatalogueRequest({ platform, senderId, text, reason: "photo_only" });
     await handlePhotoOnlyMode({
       platform,
       senderId,
@@ -953,6 +957,10 @@ async function handleMessageTurn(
       }
     }
   }
+  // Corporate catalogue, trip-code replies ("A01, 25 хүн, 1-р сар") and group quotations: webhookCatalogue.ts.
+  // One PDF + one short text, or a staff lead; a specific-trip question is left to the flow below.
+  if (await handleCatalogueTurn({ platform, senderId, pageId, token, text, trace, history, getTrips: getGroundingTrips, deliver: deliverFastPathReply, captureLead,
+    hasTripContext: Boolean(groundingSelection?.tripId) || Boolean(groundingPending?.candidateTripIds?.length) })) return;
   if (
     isContactOperatorTap(text) ||
     (botSettings.handoff_enabled && isHandoffRequest(text, botSettings.handoff_keywords))
