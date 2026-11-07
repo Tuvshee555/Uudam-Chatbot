@@ -275,3 +275,12 @@ test("trip codes: a code inside a short sentence is a candidate, a question abou
   assert.deepEqual(ageOf("A04 25 3-р сард"), [25, 3]);
   assert.deepEqual(ageOf("A04 3-р сард 25"), [25, 3]);
 });
+
+test("the way customers really type 'байгууллагын аялал' (baigulgin, baiguulgiin) asks for the catalogue; look-alikes do not", () => {
+  for (const text of ["baigulgin aylal hari", "baigulgin aylal", "baiguulgiin aylal hari", "baigulgiin aylal", "байгулгин аялал харуул"]) {
+    assert.equal(detectCatalogueIntent(text).kind, "catalogue", text);
+  }
+  for (const text of ["zohion baiguulah aylal", "baiguulsan hun", "baigal aylal", "tailand aylal hed ve"]) {
+    assert.equal(detectCatalogueIntent(text).kind, "none", text);
+  }
+});

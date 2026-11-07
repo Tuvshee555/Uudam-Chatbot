@@ -72,6 +72,8 @@ const words = (...values: string[]): Set<string> => new Set(values.map((value) =
 /** Words that name the customer's own side whatever stands next to them. */
 const CORPORATE_STEMS = stems(
   "байгууллага", "baiguullaga", "baigullaga", "organization", "organisation",
+  // The way people really type "байгууллагын": baigulgin, baiguulgiin, байгулгин (phonetic "baigulgin").
+  "baigulgi", "байгулги",
   "corporate", "korporate", "корпорат", "корпорэйт", "корпорейт", "korporeit", "корпоратив",
   "ажилчид", "ажилчдын", "ajilchid", "teambuilding", "тимбилдинг",
 );
