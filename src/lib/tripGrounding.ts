@@ -46,7 +46,8 @@ export function tripsNamedIn(text: string, trips: TravelTrip[]): TravelTrip[] {
 function tripsFromWords(text: string, trips: TravelTrip[]): TravelTrip[] {
   if (!text.trim()) return [];
   const website = websiteTripLinksInText(text);
-  const resolution = resolveTripFromUserMessage(text, trips, { allowLooseFallback: false });
+  // A fully booked trip the customer names is still the trip their words point to.
+  const resolution = resolveTripFromUserMessage(text, trips, { allowLooseFallback: false, includeSoldOut: true });
   const resolved = resolution.status === "verified" && resolution.trip ? [resolution.trip]
     : resolution.status === "ambiguous" ? resolution.candidates : [];
   if (website.slugs.length > 0) return resolved;

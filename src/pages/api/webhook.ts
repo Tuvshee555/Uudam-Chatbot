@@ -30,6 +30,9 @@ import { routeFastPathText, type FastPathRoute } from "../../lib/fastPathRouting
 import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripUnderstanding";
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
+import { soldOutNamedReply } from "../../lib/soldOutNamed";
+import { judgeDateMiss } from "../../lib/dateMiss";
+import { unanswerableForList } from "../../lib/listCompleteness";
 import { decideTripAnswer, type TripAnswerDecision } from "../../lib/tripAnswerDecision";
 import { verifyTripReply } from "../../lib/tripReplyVerification";
 import { presentAssistantReply, replyPreferences } from "../../lib/chatbotReplyPolicy";
@@ -60,7 +63,7 @@ import { conversationLeadContext } from "../../lib/leadContext";
 import { withoutNegatedTrips } from "../../lib/negatedTrip";
 import { pickReferral, rememberAdReferral } from "../../lib/adReferral";
 import { dbAppendAdminMessage, dbClaimGoodbye, dbClaimQuickInfo, dbReleaseQuickInfo, dbGetRecentAdminMessages, dbPauseSender, getBotControl, getTravelBotSettings, isPagePaused, listTrips, } from "../../lib/travelOps";
-import { dbAppendStaffMessages } from "../../lib/travelDb";
+import { dbAppendStaffMessages, dbHasRecentStaffMessage } from "../../lib/travelDb";
 import { hasDepartureDateAvailabilityIntent, requestsDateWindow } from "../../lib/travelDates";
 import { AMBIGUOUS_REPLY_MARKER, appendLeadCaptureCta, buildAmbiguousPassengerTotalReply, buildAmbiguousTripReply, buildArchivedTripNotice, buildBudgetReply, buildClarificationButtons, buildCompareReply, buildDiscountReply, buildPriceObjectionReply, buildProgramOrStructuredReply, buildSeatsReply, buildSmartButtons, buildStandalonePriceLookupReply, buildBarePriceReply, isBarePriceMessage, buildStructuredTripReply, buildDateQuestionReply, buildGroupSizeReply, hasBudgetIntent, hasCompareIntent, hasDiscountIntent, hasSeatsIntent, hasStandalonePriceLookupIntent, hasProgramIntent, isGenericTripRequest, isStructuredTripQuestion, resolveTripFromUserMessage, sanitizeTripForCustomers, buildSoldOutPrecedenceReply, withoutHiddenTrips, } from "../../lib/travelFastPaths";
 import { buildHandoffReplyWithContact, claimSeasonSend, extractTripPhotosForReply, getActiveSeason, GREETING_BUTTONS, hasTripPhotoIntent, isFirstMessage, isGreetingButton, matchSeasonByText, resolveGoodbyeContactText, resolveGoodbyeEnabled, resolveGreetingConfig, resolveSeasons, sampleWelcomePhotos, } from "../../lib/welcomeFlow";
@@ -419,6 +422,7 @@ async function handleMessageTurn(
   };
   let pauseAfterContactCapture = false;
   let factualScope: TravelTrip[] | null = null;
+  let existingCustomer: boolean | undefined;
   // The exit check every reply passes (tripGrounding.ts): named trips must be supported by
   // trip this conversation points to — the customer's words, an open list, the selected trip, an
   // earlier turn. Freeze that evidence before routing: a newly selected model ID cannot
@@ -1129,6 +1133,18 @@ async function handleMessageTurn(
     return routedCache;
   };
   const getFastPathText = async (): Promise<string> => (await getRouted()).matchText;
+  /** Delivers "this trip is full / paused, these are open"; false = there was nothing to say. */
+  const deliverSoldOutNamed = async (soldOutReply: string | null): Promise<boolean> => {
+    if (!soldOutReply) return false;
+    await deliverFastPathReply({
+      reply: appendLeadCaptureCta(enforceWebsiteForPayment(sanitizeAssistantReply(soldOutReply)), phoneAlreadyRequested),
+      failTag: "sold_out_named",
+      catalogTripIds: tripsNamedIn(soldOutReply, await getTrips()).map(trip => trip.id),
+      rememberSource: "api.webhook.sold_out_named",
+      counter: "webhook.sold_out_named_total",
+    });
+    return true;
+  };
   // What is being ASKED: the customer's words with trip names removed. A tapped
   // "…шууд нислэгтэй аялал" button is a choice of trip, not a flight question.
   const intentText = stripTripNamesForIntent(text, await getTrips());
@@ -1216,6 +1232,10 @@ async function handleMessageTurn(
     return;
   }
 
+  // The customer named a trip that is sold out or paused: say so (soldOutNamed.ts) before an answer
+  // plan prices it as open or a list of its siblings stands in for it.
+  if (await deliverSoldOutNamed(soldOutNamedReply({ routed: await getRouted(), text, trips: await getTrips() }))) return;
+
   // Compare questions intentionally mention multiple destinations/products.
   // Answer them as comparisons before scoped clarification narrows the message
   // to one destination family and asks the wrong follow-up.
@@ -1297,6 +1317,21 @@ async function handleMessageTurn(
     const notScheduledReply = routed.unavailableDateWithinScope && routed.scopedClarify?.length
       ? buildDateNotScheduledReply(routed.scopedClarify) : null;
     if (notScheduledReply && routed.scopedClarify) {
+      // Not "no trip then" for a departure that exists and is closed, and no alternatives sold to a
+      // customer a consultant is already working with (dateMiss.ts).
+      const miss = await judgeDateMiss({ text, scope: routed.scopedClarify, trips: await getTrips(), loadArchived: getArchivedTrips,
+        isExistingCustomer: async () => (existingCustomer ??= await dbHasRecentStaffMessage(senderId).catch(() => false)) });
+      if (miss) {
+        await captureLead({ kind: "handoff", contactPhone: detectedPhone || "", context: miss.context });
+        await deliverFastPathReply({
+          reply: miss.kind === "closed" ? miss.reply : "REFER",
+          failTag: miss.kind === "closed" ? "departure_closed" : "existing_customer_date_miss",
+          catalogTripIds: miss.kind === "closed" ? miss.tripIds : undefined,
+          rememberSource: `api.webhook.${miss.kind === "closed" ? "departure_closed" : "existing_customer_date_miss"}`,
+          counter: "webhook.date_miss_total",
+        });
+        return;
+      }
       await captureLead({ kind: "handoff", contactPhone: detectedPhone || "",
         context: "Хэрэглэгчийн асуусан огноонд гарах аялал хуваарьт алга; бот бусад гарах өдрүүдийг хэлсэн." });
       await deliverFastPathReply({
@@ -1317,6 +1352,13 @@ async function handleMessageTurn(
   {
     const routed = await getRouted();
     if (routed.scopedClarify && routed.scopedClarify.length > 0 && !wantsDateAvailability) {
+      // A list answers "which trip?", not a question none of these trips can answer (listCompleteness.ts).
+      const unanswerable = unanswerableForList({ text: routed.requestText || text, trips: await getTrips(), understanding: routed.understanding });
+      if (unanswerable.length) {
+        await deliverFastPathReply({ reply: "REFER", failTag: `scoped_clarify_unanswerable:${unanswerable.join(",")}`,
+          rememberSource: "api.webhook.scoped_clarify_unanswerable", counter: "webhook.scoped_clarify_unanswerable_total" });
+        return;
+      }
       const totalReply = buildAmbiguousPassengerTotalReply(await getFastPathText(), routed.scopedClarify);
       const clarifyBody = routed.scopedClarifyNote
         ? totalReply
@@ -1375,22 +1417,7 @@ async function handleMessageTurn(
   }
   // The customer named a trip that is sold out: say so (and offer the same
   // destination's open trips) instead of quoting a near-name sibling's price.
-  {
-    const soldOutReply = buildSoldOutPrecedenceReply(text, await getTrips());
-    if (soldOutReply) {
-      await deliverFastPathReply({
-        reply: appendLeadCaptureCta(
-          enforceWebsiteForPayment(sanitizeAssistantReply(soldOutReply)),
-          phoneAlreadyRequested,
-        ),
-        failTag: "sold_out_named",
-        catalogTripIds: tripsNamedIn(soldOutReply, await getTrips()).map(trip => trip.id),
-        rememberSource: "api.webhook.sold_out_named",
-        counter: "webhook.sold_out_named_total",
-      });
-      return;
-    }
-  }
+  if (await deliverSoldOutNamed(buildSoldOutPrecedenceReply(text, await getTrips()))) return;
   // A question about the catalog ("шууд нислэгтэй аялал байна уу", "бүх
   // аяллын хуваарь") when neither the message nor the context names a trip:
   // list it from the DB instead of a silent no-data handoff.

@@ -1373,7 +1373,16 @@ function buildUnavailableTripReply(
     ].join("\n");
   }
   if (!best) return null;
+  return buildUnavailableReplyForTrip(best, trips, status);
+}
 
+/**
+ * "This trip is full / paused" for a trip already identified (by the customer's words or by the
+ * router), with the open trips of the same destination. soldOutNamed.ts uses it when the router has
+ * chosen the unavailable trip itself.
+ */
+export function buildUnavailableReplyForTrip(best: TravelTrip, trips: TravelTrip[], status: "sold_out" | "paused"): string {
+  const wording = UNAVAILABLE_STATUS_WORDING[status];
   // An unavailable answer that stops there buries the sellable catalog: a
   // generic "<хот>" question was leading with the dead <city> trip while
   // three bookable <city> trips went unmentioned. Pitch ACTIVE trips that

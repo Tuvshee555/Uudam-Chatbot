@@ -12,6 +12,7 @@
 import type { TravelTrip } from "./travelTypes";
 import { getAliases } from "./travelFastPathsSearch";
 import { keywordTokens, normText, phoneticLatinText, phoneticTokenMatches } from "./travelTextNorm";
+import { hasReferentialHint } from "./contextualText";
 
 /** How a trip travels or what kind it is: never a place, so never identity. */
 const ATTRIBUTE_WORDS: RegExp[] = [
@@ -132,4 +133,16 @@ export function isBareMention(text: string, catalog: TravelTrip[]): boolean {
   return words.every((word) => word.length < 3 || /^\d/.test(word) || BARE_FILLERS.has(word)
     || (!isAttributeWord(word) && keywordTokens(word).length > 0 && matchesAny(phoneticLatinText(word), known))
     || (!isAttributeWord(word) && keywordTokens(word).length === 0 && /^(?:аялал|аяллын|хот)/u.test(word)));
+}
+
+/** "Can I ...?" ("төлж болох уу", "bolno") is a modal, not a word pointing at a trip. */
+const MODAL = /болох(?:гүй)?|болно|болохгүй|bolno|boloh|bolohgui/gu;
+
+/**
+ * Does the message point back at something already on screen ("тэр", "үнэ", "нь", "өөр")? The shared
+ * list also holds "болох", which sits in every "can I ...?" question and turned a payment question
+ * ("барт ... төлж болох уу") into a follow-up about the last trips; the modal is removed first.
+ */
+export function pointsBackAtTrip(text: string): boolean {
+  return hasReferentialHint(normText(text).replace(MODAL, " "));
 }

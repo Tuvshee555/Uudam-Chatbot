@@ -45,7 +45,7 @@ import { SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
 import { buildTripRequest, mergeTripSelection, type TripSelection } from "./tripRequest";
 import { getRecentTripIds, getTripSelection, setTripSelection } from "./tripSelectionState";
 import { contrastCandidates } from "./tripContrast";
-import { verdictAgainstAnchor } from "./tripIdentity";
+import { pointsBackAtTrip, verdictAgainstAnchor } from "./tripIdentity";
 import { websiteTripLinksInText } from "./bookingWebsite";
 import { upcomingDepartures } from "./tripFareBlock";
 import { tripFromRecentMenu, tripMenuQuestionIndex } from "./tripMenuChoice";
@@ -697,7 +697,7 @@ export async function routeFastPathText(input: {
     ? trips.find((trip) => trip.id === previousSelection.tripId) : undefined;
   if (selectedTrip && direct.status !== "not_found") {
     const named = direct.status === "verified" ? [direct.trip] : direct.candidates;
-    const followsUp = buildTripRequest(text, trips, undefined, now).topics.length > 0 || hasReferentialHint(text);
+    const followsUp = buildTripRequest(text, trips, undefined, now).topics.length > 0 || pointsBackAtTrip(text);
     if (followsUp && verdictAgainstAnchor(text, named, [selectedTrip], trips).kind === "stay") return chose(selectedTrip);
   }
   // Our own button label never names a trip, however well it scores against

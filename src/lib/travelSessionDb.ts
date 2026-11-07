@@ -167,6 +167,25 @@ export async function dbAppendStaffMessages(
   }
 }
 
+/**
+ * Has a consultant written to this customer within `days` days? ('staff' rows, stored from the Page
+ * thread and from echoes.) Such a customer is not a prospect: the bot does not try to sell them
+ * alternatives (existingCustomer.ts). False when the database is unavailable.
+ */
+export async function dbHasRecentStaffMessage(senderId: string, days = 30): Promise<boolean> {
+  const ready = await ensureTravelSchema();
+  if (!ready) return false;
+  const horizon = Math.max(1, Math.trunc(days));
+  const result = await queryNeon<{ role: string; created_at: string }>(
+    `SELECT role, created_at FROM travel_conversations
+     WHERE sender_id = $1 AND role = 'staff' AND created_at > NOW() - INTERVAL '${horizon} days'
+     ORDER BY created_at DESC LIMIT 1`,
+    [senderId],
+  );
+  const cutoff = Date.now() - horizon * 86_400_000;
+  return Boolean(result?.rows.some((row) => row.role === "staff" && Date.parse(row.created_at) > cutoff));
+}
+
 export async function dbAppendMessage(
   senderId: string,
   role: "user" | "assistant",

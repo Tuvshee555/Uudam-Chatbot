@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { conversationGateHarness, type ModelOverride as BaseOverride } from "./helpers/conversationGateHarness";
-import { correctionsCatalog, landFamily } from "./helpers/understandingRoutingCatalogs";
+import { closedDepartureCatalog, correctionsCatalog, landFamily, siblingIslandsCatalog } from "./helpers/understandingRoutingCatalogs";
 import { TRIP_LIST_MARKERS, textOf } from "./helpers/understandingRoutingFixtures";
 
 /**
@@ -12,7 +12,9 @@ import { TRIP_LIST_MARKERS, textOf } from "./helpers/understandingRoutingFixture
  * a thank-you that got a trip list, "barter?" that re-sent a list, and corrections.
  */
 /** The harness passes extra keys (the numbered `trips` of the model's reading) straight through. */
-type ModelOverride = BaseOverride & { trips?: string[] };
+type ModelOverride = BaseOverride & { trips?: string[]; requestedFacts?: Array<{ field: string; evidence: string }> };
+/** The two-trip reading the model gives a destination ask. */
+const listOf2 = (intent: "catalog" | "trip"): ModelOverride => ({ certainty: "several", trips: ["T1", "T2"], intent, topics: ["price"] });
 const list = (n: number): ModelOverride => ({ certainty: "several", trips: Array.from({ length: n }, (_, i) => `T${i + 1}`), intent: "trip", topics: ["price"] });
 const one = (tripId: string, extra: ModelOverride = {}): ModelOverride => ({ certainty: "one", tripId, ...extra });
 
@@ -142,6 +144,71 @@ test("corrections: 'not the previous one, the other one with the sea' never answ
     await harness.turn(control, "НОРВЕЛ ХОТЫН АЯЛАЛ", one("city", { topics: ["price"] }));
     const stays = await harness.turn(control, "нөгөө 2 хүн болон 1 хүүхдийн үнэ хэд вэ", { topics: ["price"], passengers: [{ kind: "adult", count: 2 }, { kind: "child", count: 1 }] });
     assert.equal(stays.selection?.tripId, "city", `an everyday "нөгөө" does not leave the trip: ${textOf(stays.sends)}`);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("barter after a list: a follow-up with no topic, no place and no pointing word never re-lists the trips (case 8)", async (context: TestContext) => {
+  const harness = await conversationGateHarness(context);
+  harness.catalog(siblingIslandsCatalog);
+  try {
+    // The shape of the real thread: a two-trip list, a free-text answer to a group question (the list is
+    // now stale), then a business-policy question the model mislabels as a trip follow-up.
+    const labels: ModelOverride[] = [
+      { intent: "trip", certainty: "none", topics: [] },
+      { intent: "trip", certainty: "several", trips: ["T1", "T2"], topics: [] },
+      { intent: "other", certainty: "none", topics: [] },
+    ];
+    for (const [index, label] of labels.entries()) {
+      for (const text of ["barter awdag u", "Бартер авдаг уу", "Бартер эсвэл гэрээгээр төлж болох уу"]) {
+        const sender = `rt-barter-${index}-${text}`;
+        const listed = await harness.turn(sender, "sain baina uu dorman 2 aylalin tlr medeelel awy", listOf2("catalog"));
+        assert.ok(TRIP_LIST_MARKERS.some((marker) => textOf(listed.sends).includes(marker)), "setup: the list was sent");
+        await harness.turn(sender, "baiguullagara 40-45 hun ywah bol hymdral uzuuldeg uu", { intent: "other", certainty: "none", topics: [], finalReply: "Манай аяллын зөвлөх тантай холбогдож тодруулна." });
+        const asked = await harness.turn(sender, text, label);
+        const said = textOf(asked.sends);
+        for (const marker of TRIP_LIST_MARKERS) assert.ok(!said.includes(marker), `"${text}" (${JSON.stringify(label)}) must not re-list trips: ${said}`);
+        for (const name of siblingIslandsCatalog.map((value) => value.route_name)) assert.ok(!said.includes(name), `"${text}" names no trip: ${said}`);
+      }
+    }
+    // Positive controls: the list is still the answer to a fare question, and a number still picks.
+    const sender = "rt-barter-control";
+    await harness.turn(sender, "sain baina uu dorman 2 aylalin tlr medeelel awy", listOf2("catalog"));
+    const picked = await harness.turn(sender, "2", {});
+    assert.equal(picked.selection?.tripId, "isl-b", `a number picks from the list: ${textOf(picked.sends)}`);
+    const other = "rt-barter-control-price";
+    await harness.turn(other, "sain baina uu dorman 2 aylalin tlr medeelel awy", listOf2("catalog"));
+    const fares = await harness.turn(other, "Үнэ хэд вэ", listOf2("trip"));
+    assert.ok(/2,291,000|2,491,000/.test(textOf(fares.sends)), `a price question under the list is answered with the listed fares: ${textOf(fares.sends)}`);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("a list answers 'which trip?', not a question none of the listed trips can answer", async (context: TestContext) => {
+  const harness = await conversationGateHarness(context);
+  harness.catalog(closedDepartureCatalog);
+  try {
+    const both: ModelOverride = { certainty: "several", trips: ["T2", "T3"], intent: "trip", topics: ["price"] };
+    // A typed requested fact the catalogue has no source for (wi-fi, a property of the room, another unsupported question).
+    const unanswerable: Array<[string, ModelOverride]> = [
+      ["Вердан аялал wifi байна уу", both],
+      ["Вердан аяллын өрөө том уу, буудлын одтой юу", both],
+      ["Вердан аялал дээр хүнсний хориотой хүн явж болох уу", { ...both, requestedFacts: [{ field: "other.unsupported", evidence: "хүнсний хориотой" }] }],
+      ["verdan aylal wifi bn uu", both],
+    ];
+    for (const [index, [text, model]] of unanswerable.entries()) {
+      const result = await harness.turn(`rt-list-hand-${index}`, text, model);
+      for (const marker of TRIP_LIST_MARKERS) assert.ok(!textOf(result.sends).includes(marker), `"${text}" must not be answered with a list: ${textOf(result.sends)}`);
+      assert.deepEqual(result.sends, [], `"${text}": no data, no answer: ${textOf(result.sends)}`);
+      assert.ok(result.leads.length > 0, `"${text}": staff get the lead`);
+    }
+    // Positive controls: the same destination with an ordinary question is still listed.
+    for (const [index, text] of ["Вердан аялал байна уу", "Вердан аяллын үнэ хэд вэ", "Вердан аяллууд хэзээ гарах вэ"].entries()) {
+      const result = await harness.turn(`rt-list-control-${index}`, text, both);
+      assert.ok(TRIP_LIST_MARKERS.some((marker) => textOf(result.sends).includes(marker)) || /2,990,000/.test(textOf(result.sends)), `"${text}" is still answered with its trips: ${textOf(result.sends)}`);
+    }
   } finally {
     await harness.close();
   }

@@ -69,3 +69,42 @@ export const namedFullCatalog = (state: "SOLD_OUT" | "OPEN") => [
   trip("sea", "ЛАГУНА АРЛЫН АЯЛАЛ", ["2098-02-15", "2098-03-06"], [1_391_000, 1_191_000, null],
     { extra: { transport_type: "direct_flight", destinations: ["Лагуна"], aliases: [] } }),
 ];
+
+const flightDays = [
+  day(1, "УЛААНБААТАР - ВЕРДАН", "Нисэх онгоцны буудал руу явж Улаанбаатараас Вердан руу ниснэ. УБ хотоос 13:00 цагт нисээд 16:45 цагт Вердан хотод буулна."),
+  day(2, "ВЕРДАН", "Өглөөний цайны дараа амьтны хүрээлэнд зочилно."),
+  day(3, "ВЕРДАН", "Хотын аялал."),
+  day(4, "ВЕРДАН", "Чөлөөт цаг."),
+  day(5, "ВЕРДАН - УЛААНБААТАР", "07:50 цагт Вердан хотоос нисээд 12:00 цагт Улаанбаатарт ирнэ."),
+];
+const timelessDays = [1, 2, 3].map((n) => day(n, `ӨДӨР ${n}`, `Өдөр ${n}-ийн хөтөлбөр (invented).`));
+
+/**
+ * Case 16 shape: the customer's own departure (11/3) is a CLOSED, archived departure of a destination;
+ * the open trips of that destination are named by month, so "11.3" also matches the "11-р сар" title.
+ */
+export const closedDepartureCatalog = [
+  trip("own", "ВЕРДАН - ПАРКЛЭНД - сурагчдын амралт - 11/3", ["2098-11-03"], [3_590_000, 3_150_000, null], {
+    status: "archived", duration_text: "5 өдөр 4 шөнө",
+    extra: { transport_type: "direct_flight", destinations: ["Вердан", "Парклэнд"], aliases: ["Verdan", "Парклэнд"], itinerary_days: flightDays,
+      website_departure_availability: [{ date: "2098-11-03", status: "SOLD_OUT", seatsLeft: 0 }] } }),
+  trip("nov", "УБ-Вердан хотын 11-р сарын аяллын хөтөлбөр", ["2098-11-12", "2098-11-26"], [2_990_000, 2_390_000, null], {
+    duration_text: "6 өдөр 5 шөнө", extra: { transport_type: "direct_flight", destinations: ["Вердан"], aliases: ["Verdan"], itinerary_days: flightDays } }),
+  trip("dec", "УБ-Вердан хотын 12-р сарын аяллын хөтөлбөр", ["2098-12-22"], [2_990_000, 2_590_000, null], {
+    duration_text: "5 өдөр 4 шөнө", extra: { transport_type: "direct_flight", destinations: ["Вердан"], aliases: ["Verdan"], itinerary_days: flightDays } }),
+  trip("sea", "ЛАГУНА АРЛЫН АЯЛАЛ", ["2098-02-15", "2098-03-06"], [1_391_000, 1_191_000, null],
+    { extra: { transport_type: "direct_flight", destinations: ["Лагуна"], aliases: [] } }),
+  // Same destination, itinerary without any clock time: a time question has no answer here.
+  trip("plain", "УБ-Мирель хотын аяллын хөтөлбөр", ["2098-03-10", "2098-03-24"], [2_100_000, 1_800_000, null], {
+    duration_text: "5 өдөр 4 шөнө", extra: { transport_type: "direct_flight", destinations: ["Мирель"], aliases: ["Mirel"], itinerary_days: timelessDays } }),
+];
+
+/** Two sibling island trips that share an alias, plus a city trip: the barter / policy follow-up shape. */
+export const siblingIslandsCatalog = [
+  trip("isl-a", "ДОРМАН – КЕЛСАРИЯ АЯЛАЛ-Лхагва", ["2098-02-15", "2098-03-01"], [2_291_000, 1_891_000, null], {
+    extra: { transport_type: "direct_flight", destinations: ["Дорман"], aliases: ["Dorman", "Kelsaria"], itinerary_days: timelessDays } }),
+  trip("isl-b", "ДОРМАН – ЛУНДИН НИСЛЭГТЭЙ АЯЛАЛ", ["2098-03-05", "2098-03-12"], [2_491_000, 2_091_000, null], {
+    extra: { transport_type: "direct_flight", destinations: ["Дорман"], aliases: ["Дорман", "Dorman"], itinerary_days: timelessDays } }),
+  trip("city", "НОРВЕЛ ХОТЫН АЯЛАЛ", ["2098-03-15", "2098-03-29"], [1_791_000, 1_591_000, null],
+    { extra: { transport_type: "land", destinations: ["Норвел"], aliases: ["Норвел"], itinerary_days: timelessDays } }),
+];

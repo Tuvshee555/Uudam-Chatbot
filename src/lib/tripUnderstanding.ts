@@ -16,9 +16,8 @@ import { TRIP_TOPICS, buildTripRequest, parseRequestedPassengers, type Requested
 import { websiteTripLinksInText } from "./bookingWebsite";
 import { holidayPromptLine } from "./holidayCalendar";
 import { isKnownGreetingPhrase, isThanksOnly } from "./greetingPhrases";
-import { hasReferentialHint } from "./contextualText";
 import { contrastCandidates } from "./tripContrast";
-import { isBareMention, verdictAgainstAnchor } from "./tripIdentity";
+import { isBareMention, pointsBackAtTrip, verdictAgainstAnchor } from "./tripIdentity";
 import { REQUESTED_FACT_FIELDS, parseRequestedFacts, type RequestedFact } from "./requestedFacts";
 import {
   evaluateTripRequirement,
@@ -421,7 +420,7 @@ export async function understandTripMessage(input: {
     if (evidence.source !== "current" && parsed.intent !== "trip" && parsed.intent !== "booking" && !hasTopic()) {
       evidence = { source: "none", tripIds: [] };
     } else if (evidence.source === "current" && (parsed.intent === "smalltalk" || parsed.intent === "other")
-      && !hasTopic() && !hasReferentialHint(input.text) && !isBareMention(input.text, [...keys.values()])) {
+      && !hasTopic() && !pointsBackAtTrip(input.text) && !isBareMention(input.text, [...keys.values()])) {
       evidence = { source: "none", tripIds: [] };
     }
     const allowed = new Set(evidence.tripIds);
@@ -518,7 +517,7 @@ export function customerTripEvidence(input: {
   // Earlier messages name a trip only for a follow-up: a question about a trip, or a word pointing
   // back at one ("тэр", "үнэ"). A message with neither ("barter awdag u") asks nothing a trip answers,
   // and re-reading the old request turned it into the old trip list.
-  const followsUp = buildTripRequest(input.text, catalog, undefined).topics.length > 0 || hasReferentialHint(input.text);
+  const followsUp = buildTripRequest(input.text, catalog, undefined).topics.length > 0 || pointsBackAtTrip(input.text);
   const prior = input.history.at(-1)?.role === "user" && input.history.at(-1)?.text.trim() === input.text.trim()
     ? input.history.slice(0, -1) : input.history;
   for (const message of followsUp ? prior.slice(-HISTORY_TURNS).reverse() : []) {
