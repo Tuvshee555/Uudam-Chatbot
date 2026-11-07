@@ -87,7 +87,13 @@ export type CataloguePhotoCandidate = {
 };
 
 /** Staff choice of the hero for one trip. Touches no price, date or title of the trip. */
-export type CatalogueHeroChoice = { url: string; focal?: PhotoFocal | null; zoom?: number | null };
+export type CatalogueHeroChoice = {
+  url: string;
+  focal?: PhotoFocal | null;
+  zoom?: number | null;
+  /** The photo editor's rating of the chosen photo; the card's heroQuality never exceeds it. */
+  quality?: CataloguePhotoQuality | null;
+};
 
 export type CataloguePhoto = {
   /** https URL the renderer may fetch. Approved, destination-relevant trip photo already stored for the trip. */
@@ -112,6 +118,8 @@ export type CatalogueTripCard = {
   editorialTitle: string;
   /** Destination identity used for diversity ("one place, one slot"): a normalised destination name, "" when unknown. */
   destinationKey: string;
+  /** Every place the trip is about (the main one first), same normalisation: two trips sharing one are "the same destination" for the shortlist. */
+  destinationKeys?: string[];
   /** How good the chosen hero is for a premium book. "weak"/"missing" => flagged for replacement. */
   heroQuality: CataloguePhotoQuality;
   /** Up to two extra GOOD photos of this same trip for secondary compositions (never the hero). */
@@ -202,6 +210,8 @@ export type SnapshotInput = {
   config: CatalogueEditionConfig;
   heroByTripId?: Record<string, CatalogueHeroChoice>;
   titleOverrides?: Record<string, string>;
+  /** Measured photo stats by URL (width/height always; sharpness/flat when measured). Absent = only URL hints are known. */
+  photoSizes?: Record<string, { width: number; height: number; sharpness?: number; flat?: number; colorful?: number }>;
   codeMap: Record<string, string>;
   contactPhones: string[];
   siteBaseUrl: string;

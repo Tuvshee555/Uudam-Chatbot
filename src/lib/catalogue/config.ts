@@ -1,12 +1,15 @@
 /**
  * What staff curate in the admin: which trips go in which edition, in what order, featured and
- * excluded trips, and group overrides. It never holds a title, price or date: those are read live
- * from the canonical trip store every time a snapshot is built.
+ * excluded trips, group overrides, and (display only) the hero photo + crop and a display title per
+ * trip. It never holds a price, a date or a canonical title: those are read live from the canonical
+ * trip store every time a snapshot is built. A stored row from before the photo / title overrides
+ * existed has neither key and reads as "no overrides".
  *
  * One row (id = 1) of JSONB. Every read and write passes through sanitizeCatalogueConfig, so a
  * hand-edited or half-valid row can never break snapshot building.
  */
-import type { CatalogueConfig, CatalogueEdition, CatalogueEditionConfig } from "./types";
+import { MAX_TITLE_OVERRIDE_CHARS } from "./editorial";
+import type { CatalogueConfig, CatalogueEdition, CatalogueEditionConfig, CatalogueHeroChoice, CataloguePhotoQuality } from "./types";
 import {
   CATALOGUE_EDITIONS,
   CatalogueStoreError,
@@ -22,6 +25,13 @@ const MAX_TRIP_IDS = 500;
 const MAX_OVERRIDES = 500;
 const TRIP_ID_RE = /^[^\s\u0000-\u001f\u007f]{1,160}$/u;
 const GROUP_KEY_RE = /^[A-Za-z0-9_-]{1,48}$/;
+const MAX_HEROES = 500;
+const MAX_TITLE_OVERRIDES = 500;
+const MAX_URL_CHARS = 2048;
+export const MIN_HERO_ZOOM = 1;
+export const MAX_HERO_ZOOM = 3;
+const HTTPS_URL_RE = /^https:\/\/[^\s\u0000-\u001f\u007f]+$/i;
+const QUALITIES = new Set<string>(["excellent", "good", "weak", "missing"]);
 
 export function emptyEditionConfig(): CatalogueEditionConfig {
   return { tripIds: [], groupOverrides: {}, featuredTripIds: [], excludedTripIds: [] };
@@ -29,6 +39,8 @@ export function emptyEditionConfig(): CatalogueEditionConfig {
 
 export function defaultCatalogueConfig(): CatalogueConfig {
   return {
+    heroByTripId: {},
+    titleOverrides: {},
     quick: emptyEditionConfig(),
     complete: emptyEditionConfig(),
     preview: emptyEditionConfig(),
@@ -75,9 +87,59 @@ export function sanitizeEditionConfig(value: unknown): CatalogueEditionConfig {
   return { tripIds, groupOverrides, featuredTripIds, excludedTripIds };
 }
 
+const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
+const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
+/** One staff hero choice: https url, focal point inside the frame (0..1), zoom 1..3, optional editorial quality. Null when unusable. */
+export function sanitizeHeroChoice(value: unknown): CatalogueHeroChoice | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const url = typeof raw.url === "string" ? raw.url.trim() : "";
+  if (!url || url.length > MAX_URL_CHARS || !HTTPS_URL_RE.test(url)) return null;
+  const choice: CatalogueHeroChoice = { url };
+  const focal = raw.focal && typeof raw.focal === "object" ? (raw.focal as Record<string, unknown>) : null;
+  if (focal && finite(focal.x) && finite(focal.y)) choice.focal = { x: clamp(focal.x, 0, 1), y: clamp(focal.y, 0, 1) };
+  if (finite(raw.zoom)) choice.zoom = clamp(raw.zoom, MIN_HERO_ZOOM, MAX_HERO_ZOOM);
+  if (typeof raw.quality === "string" && QUALITIES.has(raw.quality)) choice.quality = raw.quality as CataloguePhotoQuality;
+  return choice;
+}
+
+export function sanitizeHeroByTripId(value: unknown): Record<string, CatalogueHeroChoice> {
+  const out: Record<string, CatalogueHeroChoice> = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return out;
+  let count = 0;
+  for (const [tripId, choice] of Object.entries(value as Record<string, unknown>)) {
+    if (count >= MAX_HEROES) break;
+    if (!TRIP_ID_RE.test(tripId)) continue;
+    const clean = sanitizeHeroChoice(choice);
+    if (!clean) continue;
+    out[tripId] = clean;
+    count++;
+  }
+  return out;
+}
+
+/** Display-title overrides: trimmed, single-spaced, at most 80 characters; empty ones are dropped. */
+export function sanitizeTitleOverrides(value: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return out;
+  let count = 0;
+  for (const [tripId, title] of Object.entries(value as Record<string, unknown>)) {
+    if (count >= MAX_TITLE_OVERRIDES) break;
+    if (!TRIP_ID_RE.test(tripId) || typeof title !== "string") continue;
+    const clean = title.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+    if (!clean) continue;
+    out[tripId] = [...clean].slice(0, MAX_TITLE_OVERRIDE_CHARS).join("").trim();
+    count++;
+  }
+  return out;
+}
+
 export function sanitizeCatalogueConfig(value: unknown): CatalogueConfig {
   const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   return {
+    heroByTripId: sanitizeHeroByTripId(raw.heroByTripId),
+    titleOverrides: sanitizeTitleOverrides(raw.titleOverrides),
     quick: sanitizeEditionConfig(raw.quick),
     complete: sanitizeEditionConfig(raw.complete),
     preview: sanitizeEditionConfig(raw.preview),
@@ -151,7 +213,7 @@ export async function saveCatalogueConfig(
        VALUES (1, $1::jsonb, $2::timestamptz, $3)
        ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at,
          updated_by = EXCLUDED.updated_by`,
-      [JSON.stringify(editions), savedAt, by],
+      [JSON.stringify({ ...editions, heroByTripId: clean.heroByTripId, titleOverrides: clean.titleOverrides }), savedAt, by],
     );
     await writeAudit(query, {
       action: "config_save",

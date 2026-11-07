@@ -4,6 +4,7 @@ import { LoadingPanel, TabHeader } from "./AdminShared";
 import type { CatalogueEdition } from "@/lib/catalogue/types";
 import { CurationPanel } from "./catalogue/CurationPanel";
 import { GenerateFlow } from "./catalogue/GenerateFlow";
+import { PhotosPanel } from "./catalogue/PhotosPanel";
 import { ReviewPanel } from "./catalogue/ReviewPanel";
 import { StatsPanel } from "./catalogue/StatsPanel";
 import { TestSendPanel } from "./catalogue/TestSendPanel";
@@ -11,11 +12,12 @@ import { VersionsPanel } from "./catalogue/VersionsPanel";
 import { SubTabs, TabPanel, type SubTab } from "./catalogue/shared";
 import { useCatalogueAdmin } from "./catalogue/useCatalogueAdmin";
 
-type SectionKey = "versions" | "curation" | "review" | "publish" | "test" | "stats";
+type SectionKey = "versions" | "curation" | "photos" | "review" | "publish" | "test" | "stats";
 
 const SECTIONS: Array<SubTab<SectionKey>> = [
   { key: "versions", label: "Хувилбарууд" },
   { key: "curation", label: "Сонголт" },
+  { key: "photos", label: "Зураг ба гарчиг" },
   { key: "review", label: "Шалгалт" },
   { key: "publish", label: "Үүсгэх ба нийтлэх" },
   { key: "test", label: "Туршилтын илгээлт" },
@@ -85,6 +87,7 @@ export function CatalogueTab({ apiFetch }: { apiFetch: (url: string, init?: Requ
           <TabPanel idPrefix={ID_PREFIX} tabKey={section}>
             {section === "versions" && <VersionsPanel admin={admin} onPreview={previewVersion} onGenerate={goGenerate} />}
             {section === "curation" && <CurationPanel admin={admin} />}
+            {section === "photos" && <PhotosPanel admin={admin} />}
             {section === "review" && <ReviewPanel admin={admin} />}
             {section === "publish" && <GenerateFlow admin={admin} focusVersionId={focusVersionId} initialEdition={generateEdition} onPublished={() => setSection("versions")} />}
             {section === "test" && <TestSendPanel admin={admin} />}

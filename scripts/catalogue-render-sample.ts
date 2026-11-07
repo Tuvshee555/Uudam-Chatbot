@@ -3,21 +3,79 @@
  * (no network, no database, no model), renders it and writes the PDF plus one JPEG per page.
  *
  *   node --import tsx scripts/catalogue-render-sample.ts <outDir> [tripCount]
+ *
+ * For design review with real photos, render a snapshot saved as JSON (for example from
+ * scripts/catalogue-live-sample.ts) and keep the downloaded photos in a local cache folder so
+ * every iteration renders offline:
+ *
+ *   node --import tsx scripts/catalogue-render-sample.ts <outDir> --snapshot snap.json \
+ *        [--pick A01,A04,...] [--edition quick|complete] [--cache <folder>] [--cover A04]
+ *
+ * --pick keeps those codes (in that order, regrouped by the snapshot's groups); --cover sets the
+ * cover trip. Nothing is stored, published or sent.
  */
-import { mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { renderCatalogue } from "../src/lib/catalogue/render";
+import { defaultImageFetcher } from "../src/lib/catalogue/render/images";
 import { sampleImageFetcher, sampleSnapshot } from "../src/lib/catalogue/render/fixture";
+import type { CatalogueSnapshot } from "../src/lib/catalogue/types";
 
-const outDir = path.resolve(process.argv[2] || "catalogue-sample-out");
-const tripCount = Number(process.argv[3] || 6);
+const args = process.argv.slice(2);
+const flag = (name: string): string | null => {
+  const i = args.indexOf(name);
+  return i >= 0 && args[i + 1] && !args[i + 1]!.startsWith("--") ? args[i + 1]! : null;
+};
+const positional = args.filter((a, i) => !a.startsWith("--") && !(i > 0 && args[i - 1]!.startsWith("--")));
+const outDir = path.resolve(positional[0] || "catalogue-sample-out");
+const snapshotFile = flag("--snapshot");
+const tripCount = Number(positional[1] || 8);
+
+async function cachedFetcher(cacheDir: string) {
+  await mkdir(cacheDir, { recursive: true });
+  return async (url: string): Promise<Buffer | null> => {
+    const file = path.join(cacheDir, `${createHash("sha1").update(url).digest("hex")}.bin`);
+    try {
+      return await readFile(file);
+    } catch {
+      /* not cached yet */
+    }
+    const bytes = await defaultImageFetcher(url);
+    if (bytes) await writeFile(file, bytes);
+    return bytes ? Buffer.from(bytes) : null;
+  };
+}
+
+async function loadSnapshot(): Promise<CatalogueSnapshot> {
+  if (!snapshotFile) return sampleSnapshot({ trips: tripCount, edition: tripCount > 12 ? "complete" : "quick" });
+  const snap = JSON.parse(await readFile(path.resolve(snapshotFile), "utf8")) as CatalogueSnapshot;
+  const pick = (flag("--pick") || "").split(",").map(s => s.trim()).filter(Boolean);
+  const edition = (flag("--edition") as CatalogueSnapshot["edition"] | null) ?? (pick.length ? "quick" : snap.edition);
+  let trips = snap.trips;
+  if (pick.length) trips = pick.map(code => snap.trips.find(t => t.code === code)).filter((t): t is NonNullable<typeof t> => !!t);
+  const codes = new Set(trips.map(t => t.code));
+  const groups = snap.groups
+    .map(g => ({ ...g, codes: (pick.length ? pick : g.codes).filter(c => g.codes.includes(c) && codes.has(c)) }))
+    .filter(g => g.codes.length > 0);
+  const cover = flag("--cover");
+  return {
+    ...snap,
+    edition,
+    trips,
+    groups,
+    coverTripId: cover ? (trips.find(t => t.code === cover)?.tripId ?? null) : (snap.coverTripId ?? null),
+  };
+}
 
 async function main() {
   await mkdir(outDir, { recursive: true });
-  const snapshot = sampleSnapshot({ trips: tripCount, edition: tripCount > 12 ? "complete" : "quick" });
+  const snapshot = await loadSnapshot();
+  const fetcher = snapshotFile ? await cachedFetcher(path.resolve(flag("--cache") || path.join(outDir, "..", "photo-cache"))) : sampleImageFetcher();
   const started = Date.now();
-  const rendered = await renderCatalogue(snapshot, { pageImages: true, imageFetcher: sampleImageFetcher(), versionLabel: "v-sample" });
-  await writeFile(path.join(outDir, "sample.pdf"), rendered.pdf);
+  const rendered = await renderCatalogue(snapshot, { pageImages: true, imageFetcher: fetcher, versionLabel: "v-sample" });
+  const pdfName = snapshotFile ? `${snapshot.edition}.pdf` : "sample.pdf";
+  await writeFile(path.join(outDir, pdfName), rendered.pdf);
   for (let i = 0; i < rendered.pageImages.length; i++) {
     await writeFile(path.join(outDir, `page-${String(i + 1).padStart(2, "0")}.jpg`), rendered.pageImages[i]!);
   }

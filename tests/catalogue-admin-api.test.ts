@@ -14,11 +14,17 @@ import type {
   SnapshotInput,
 } from "../src/lib/catalogue/types";
 import type { CatalogueAdminDeps } from "../src/lib/catalogue/admin/deps";
+import type { TesterLookup, TesterSendTarget } from "../src/lib/catalogue/testers";
 
 // Invented data only: no real trip, place, price or date appears in this file.
 const NOW = new Date("2026-06-15T05:00:00.000Z");
 const TEST_PSID = "70000000000001";
 const OTHER_PSID = "70000000000099";
+const TESTER_PSID = "70000000000555";
+const TESTER_ID = "11111111-1111-4111-8111-111111111111";
+const REVOKED_TESTER_ID = "22222222-2222-4222-8222-222222222222";
+const CLOSED_TESTER_ID = "33333333-3333-4333-8333-333333333333";
+const PAIRING_CODE = "UUDAM-TEST-ABC234";
 
 const VERSION_DRAFT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const VERSION_BLOCKING = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -58,6 +64,10 @@ function card(id: string, index: number, warnings: CatalogueWarning[] = []): Cat
     tripId: id,
     code: `A${String(index + 1).padStart(2, "0")}`,
     title: `Жишиг-аялал ${id}`,
+    editorialTitle: `Жишиг ${id}`,
+    destinationKey: `dest-${id}`,
+    heroQuality: "good",
+    gallery: [],
     kicker: "Жишиг / Тест",
     groupKey: "rest",
     durationText: "5 өдөр",
@@ -104,7 +114,23 @@ const BLOCKING: CatalogueWarning = {
 
 type Fakes = ReturnType<typeof makeFakes>;
 
-function makeFakes(options: { allowlist?: string[]; metaDisabled?: boolean; renderFails?: boolean; liveDrift?: boolean } = {}) {
+function testerTarget(overrides: Partial<TesterSendTarget> & { id: string }): TesterSendTarget {
+  return {
+    psid: TESTER_PSID, pageId: "1234567890", label: "Миний утас", masked: "…0555", verifiedAt: "2026-06-14T00:00:00.000Z",
+    lastInboundAt: new Date(NOW.getTime() - 3_600_000).toISOString(), revokedAt: null, ...overrides,
+  };
+}
+
+/** An open-window tester, a revoked one, and one whose 24 h window closed. */
+function standardTesters(): TesterSendTarget[] {
+  return [
+    testerTarget({ id: TESTER_ID }),
+    testerTarget({ id: REVOKED_TESTER_ID, psid: "70000000000556", revokedAt: "2026-06-14T12:00:00.000Z" }),
+    testerTarget({ id: CLOSED_TESTER_ID, psid: "70000000000557", masked: "…0557", label: "", lastInboundAt: new Date(NOW.getTime() - 30 * 3_600_000).toISOString() }),
+  ];
+}
+
+function makeFakes(options: { allowlist?: string[]; metaDisabled?: boolean; renderFails?: boolean; liveDrift?: boolean; testers?: TesterSendTarget[] } = {}) {
   const calls = {
     schema: 0,
     loadInput: [] as Array<{ edition: CatalogueEdition; opts: unknown }>,
@@ -113,12 +139,28 @@ function makeFakes(options: { allowlist?: string[]; metaDisabled?: boolean; rend
     saved: [] as Array<{ next: CatalogueConfig; actor: string | null; opts: unknown }>,
     published: [] as Array<{ id: string; actor: string | null; acknowledgeWarnings: boolean }>,
     rolledBack: [] as string[],
-    sends: [] as Array<{ recipientPsid: string; edition: CatalogueEdition; dryRun: boolean; versionId: string | null }>,
+    sends: [] as Array<{ recipientPsid: string; edition: CatalogueEdition; dryRun: boolean; versionId: string | null; testerId?: string }>,
+    pairing: [] as Array<{ actor: string | null; label: unknown }>,
+    revoked: [] as string[],
+    candidateQueries: [] as string[],
   };
+  const testers = new Map<string, TesterSendTarget>(
+    (options.testers ?? []).map((target) => [target.id, target]),
+  );
+  const lookupOf = (id: string): TesterLookup => {
+    const found = testers.get(id);
+    return !found ? { status: "not_found" } : found.revokedAt ? { status: "revoked" } : { status: "ok", target: found };
+  };
+  const PHOTO_CANDIDATES = [
+    { url: "https://img.example.test/hero-1.jpg", width: 2400, height: 1600, source: "poster_hero" as const, score: 88, issues: [], credit: null },
+    { url: "https://img.example.test/hero-2.jpg", width: 640, height: 480, source: "trip_photo" as const, score: 31, issues: ["нягтрал бага (640px)"], credit: null },
+  ];
   let config: CatalogueConfig = {
     quick: { tripIds: [], groupOverrides: {}, featuredTripIds: [], excludedTripIds: [] },
     complete: { tripIds: [], groupOverrides: {}, featuredTripIds: [], excludedTripIds: [] },
     preview: { tripIds: [], groupOverrides: {}, featuredTripIds: [], excludedTripIds: [] },
+    heroByTripId: {},
+    titleOverrides: {},
     updatedAt: null,
     updatedBy: null,
   };
@@ -142,6 +184,7 @@ function makeFakes(options: { allowlist?: string[]; metaDisabled?: boolean; rend
       issueLabel: "2026.06.15",
       seasonLabel: "2026",
       trips: eligible.map((id, i) => card(id, i, id === "test-trip-2" ? [BLOCKING] : [])),
+      coverTripId: eligible[0] ?? null,
       groups: [{ key: "rest", label: "Амралт", codes: [] }],
       contact: { phones: ["99990000"], siteLabel: "example.test", siteUrl: "https://example.test" },
       warnings: [],
@@ -233,6 +276,34 @@ function makeFakes(options: { allowlist?: string[]; metaDisabled?: boolean; rend
       liveDrift() {
         return options.liveDrift ? { drifted: true, reasons: ["Нэг аяллын үнэ өөрчлөгдсөн"] } : { drifted: false, reasons: [] };
       },
+      async listPhotoCandidates(tripId) {
+        calls.candidateQueries.push(tripId);
+        return TRIP_IDS.includes(tripId)
+          ? { trip: { id: tripId }, candidates: PHOTO_CANDIDATES, chosen: config.heroByTripId[tripId] ?? null }
+          : { trip: null, candidates: [], chosen: null };
+      },
+      async recommendedQuick() {
+        const tripIds = TRIP_IDS.slice(0, 10);
+        return { tripIds, reasons: Object.fromEntries(tripIds.map((id, i) => [id, `Өөр чиглэл ${i + 1}`])), cover: tripIds[0] };
+      },
+    },
+    testers: {
+      async listTesters() {
+        const { viewOfTarget } = await import("../src/lib/catalogue/testers");
+        return [...testers.values()].filter((target) => !target.revokedAt).map((target) => viewOfTarget(target, NOW));
+      },
+      async createPairingCode(input) {
+        calls.pairing.push({ actor: input.actor, label: input.label });
+        return { code: PAIRING_CODE, expiresAt: new Date(NOW.getTime() + 30 * 60_000).toISOString(), ttlMinutes: 30 };
+      },
+      async revokeTester(id) {
+        const found = testers.get(id);
+        if (!found || found.revokedAt) return false;
+        testers.set(id, { ...found, revokedAt: NOW.toISOString() });
+        calls.revoked.push(id);
+        return true;
+      },
+      async getTesterForSend(id) { return lookupOf(id); },
     },
     render: {
       async renderCatalogue() {
@@ -244,9 +315,10 @@ function makeFakes(options: { allowlist?: string[]; metaDisabled?: boolean; rend
     send: {
       async sendCatalogueTest(input) {
         const dryRun = input.dryRun !== false;
-        calls.sends.push({ recipientPsid: input.recipientPsid, edition: input.edition, dryRun, versionId: input.versionId ?? null });
+        calls.sends.push({ recipientPsid: input.recipientPsid, edition: input.edition, dryRun, versionId: input.versionId ?? null, ...(input.testerId ? { testerId: input.testerId } : {}) });
         const version = versions.get(input.versionId ?? "") ?? versions.get(VERSION_LIVE)!;
-        const recipientId = input.recipientPsid || "<test recipient>";
+        const testerPsid = input.testerId && !dryRun ? testers.get(input.testerId)?.psid ?? "" : "";
+        const recipientId = input.recipientPsid || testerPsid || "<test recipient>";
         return {
           status: dryRun ? "dry_run" : "sent",
           versionId: version.id,
@@ -338,7 +410,7 @@ async function call(
 }
 
 async function routes() {
-  const [state, config, trips, generate, versions, publish, rollback, testSend, stats, pdf, page] = await Promise.all([
+  const [state, config, trips, generate, versions, publish, rollback, testSend, stats, pdf, page, testers, revoke, photos, recommend] = await Promise.all([
     import("../src/pages/api/admin/catalogue/state"),
     import("../src/pages/api/admin/catalogue/config"),
     import("../src/pages/api/admin/catalogue/trips"),
@@ -350,6 +422,10 @@ async function routes() {
     import("../src/pages/api/admin/catalogue/stats"),
     import("../src/pages/api/admin/catalogue/version/[id]/pdf"),
     import("../src/pages/api/admin/catalogue/version/[id]/page/[n]"),
+    import("../src/pages/api/admin/catalogue/testers/index"),
+    import("../src/pages/api/admin/catalogue/testers/revoke"),
+    import("../src/pages/api/admin/catalogue/photos"),
+    import("../src/pages/api/admin/catalogue/recommend"),
   ]);
   return {
     state: state.default as Handler,
@@ -363,6 +439,10 @@ async function routes() {
     stats: stats.default as Handler,
     pdf: pdf.default as Handler,
     page: page.default as Handler,
+    testers: testers.default as Handler,
+    revoke: revoke.default as Handler,
+    photos: photos.default as Handler,
+    recommend: recommend.default as Handler,
   };
 }
 
@@ -417,6 +497,12 @@ test("unauthorized callers get 401 and reach no catalogue module", async () => {
     ["stats", r.stats, {}],
     ["pdf", r.pdf, { query: { id: VERSION_DRAFT } }],
     ["page", r.page, { query: { id: VERSION_DRAFT, n: "1" } }],
+    ["testers GET", r.testers, {}],
+    ["testers POST", r.testers, { method: "POST", body: {} }],
+    ["testers revoke", r.revoke, { method: "POST", body: { testerId: TESTER_ID } }],
+    ["photos GET", r.photos, { query: { tripId: "test-trip-1" } }],
+    ["photos PUT", r.photos, { method: "PUT", body: { tripId: "test-trip-1", hero: null } }],
+    ["recommend", r.recommend, {}],
   ];
   for (const [name, handler, init] of jobs) {
     const res = await call(handler, { ...init, headers: null });
@@ -439,6 +525,9 @@ test("the read-only API token reads but can never write, and a cross-site write 
     [r.rollback, "POST", { versionId: VERSION_OLD }],
     [r.testSend, "POST", { edition: "quick" }],
     [r.config, "PUT", { edition: "quick", config: { tripIds: [] } }],
+    [r.testers, "POST", {}],
+    [r.revoke, "POST", { testerId: TESTER_ID }],
+    [r.photos, "PUT", { tripId: "test-trip-1", hero: null }],
   ] as Array<[Handler, string, unknown]>) {
     const res = await call(handler, { method, body, headers: adminBearerHeaders() });
     assert.equal(res.statusCode, 401);
@@ -651,18 +740,20 @@ test("test-send: dry-run works with no recipient configured and addresses nobody
   assert.equal(fetchCalls, 0);
 });
 
-test("test-send can dry-run a draft before it is published, but not history or the sample", async () => {
+test("test-send can dry-run a draft or the sample before they are published, but not history", async () => {
   const r = await routes();
   const draft = await call(r.testSend, { method: "POST", body: { versionId: VERSION_DRAFT } });
   assert.equal(draft.statusCode, 200, JSON.stringify(draft.body));
   assert.equal(draft.body.versionId, VERSION_DRAFT);
   assert.deepEqual(fakes.calls.sends, [{ recipientPsid: "", edition: "quick", dryRun: true, versionId: VERSION_DRAFT }]);
   assert.equal((await call(r.testSend, { method: "POST", body: { versionId: VERSION_OLD } })).statusCode, 409);
-  assert.equal((await call(r.testSend, { method: "POST", body: { versionId: VERSION_PREVIEW } })).statusCode, 422);
+  const sample = await call(r.testSend, { method: "POST", body: { versionId: VERSION_PREVIEW } });
+  assert.equal(sample.statusCode, 200, "the preview sample can be looked at (dry-run)");
+  assert.equal(sample.body.edition, "preview");
   assert.equal((await call(r.testSend, { method: "POST", body: { versionId: VERSION_DRAFT, edition: "complete" } })).statusCode, 400);
   assert.equal((await call(r.testSend, { method: "POST", body: { versionId: "../x" } })).statusCode, 400);
   assert.equal((await call(r.testSend, { method: "POST", body: { versionId: "99999999-9999-4999-8999-999999999999" } })).statusCode, 404);
-  assert.equal(fakes.calls.sends.length, 1, "refused requests never reached the sender");
+  assert.equal(fakes.calls.sends.length, 2, "refused requests never reached the sender (draft and sample only)");
 });
 
 test("test-send: a non-allowlisted PSID is refused in both modes", async () => {
@@ -748,7 +839,8 @@ test("state: no allowlist disables real sending and says why; an old version is 
   const body = res.body as unknown as { testSend: { realSendPossible: boolean; blockedReason: string; recipients: unknown[] }; editions: { quick: { freshness: { status: string; ageDays: number } } } };
   assert.equal(body.testSend.realSendPossible, false);
   assert.equal(body.testSend.recipients.length, 0);
-  assert.match(body.testSend.blockedReason, /CATALOGUE_TEST_RECIPIENT_PSIDS/);
+  assert.match(body.testSend.blockedReason, /Тестер холбох/);
+  assert.doesNotMatch(body.testSend.blockedReason, /Vercel|CATALOGUE_TEST_RECIPIENT_PSIDS/, "no hunting for ids, no variables to edit");
   assert.equal(body.editions.quick.freshness.status, "fresh", "6 days old with unchanged data");
 
   fakes.versions.set(VERSION_LIVE, meta({ id: VERSION_LIVE, versionNo: 2, status: "published", generatedAt: "2026-05-01T00:00:00.000Z" }));
@@ -895,6 +987,7 @@ test("the review table surfaces the overview-vs-dated price conflict as a blocki
     issueLabel: "2026.06.15",
     seasonLabel: "2026",
     trips: [{ ...card("test-dalai", 0, [conflict]), price: { kind: "from", amountMnt: 3_980_000, date: "2026-09-01", display: "3,980,000₮-с" } }, photoless],
+    coverTripId: "test-dalai",
     groups: [{ key: "rest", label: "Амралт", codes: ["A01", "A02"] }],
     contact: { phones: [], siteLabel: "", siteUrl: "" },
     warnings: [],
@@ -951,4 +1044,269 @@ test("curation draft helpers keep the Quick selection inside its bounds and in o
   assert.deepEqual(config.featuredTripIds, ["a"]);
   assert.deepEqual(config.excludedTripIds, ["z"], "a selected trip is never also excluded");
   assert.equal(draftLib.isDirty(draftLib.draftFromConfig(config), draftLib.draftFromConfig(config)), false);
+});
+
+// ── Verified testers: "Тестер холбох" ─────────────────────────────────────────────────────────────
+
+test("pairing: a signed-in admin gets a one-time code; the read-only token and strangers cannot", async () => {
+  const r = await routes();
+  const res = await call(r.testers, { method: "POST", body: { label: "Миний утас" } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(res.body.code, PAIRING_CODE);
+  assert.equal(res.body.ttlMinutes, 30);
+  assert.match(String(res.body.instruction), /Messenger/);
+  assert.equal(fakes.calls.pairing.length, 1);
+  assert.equal(fakes.calls.pairing[0].label, "Миний утас");
+  assert.match(String(fakes.calls.pairing[0].actor), /@/, "the code is tied to the signed-in staff member");
+  assert.equal((await call(r.testers, { method: "POST", body: {}, headers: adminBearerHeaders() })).statusCode, 401, "the read-only token cannot mint a code");
+  assert.equal((await call(r.testers, { method: "POST", body: { label: "x".repeat(41) } })).statusCode, 400, "labels are short");
+  assert.equal((await call(r.testers, { method: "POST", body: { label: "a", extra: 1 } })).statusCode, 400);
+  assert.equal(fakes.calls.pairing.length, 1);
+});
+
+test("pairing: the list shows label, masked tail and window state; no PSID and no code ever reaches the browser", async () => {
+  await useFakes(makeFakes({ testers: standardTesters() }));
+  const r = await routes();
+  const res = await call(r.testers, { headers: adminBearerHeaders() });
+  assert.equal(res.statusCode, 200);
+  const testers = res.body.testers as Array<{ id: string; label: string; masked: string; windowOpen: boolean; windowClosesAt: string | null; verifiedAt: string }>;
+  assert.deepEqual(testers.map((t) => t.id).sort(), [CLOSED_TESTER_ID, TESTER_ID].sort(), "revoked testers are not listed");
+  const open = testers.find((t) => t.id === TESTER_ID)!;
+  assert.equal(open.label, "Миний утас");
+  assert.equal(open.masked, "…0555");
+  assert.equal(open.windowOpen, true);
+  assert.ok(open.windowClosesAt && Date.parse(open.windowClosesAt) > NOW.getTime());
+  const closed = testers.find((t) => t.id === CLOSED_TESTER_ID)!;
+  assert.equal(closed.windowOpen, false);
+  assert.equal(closed.windowClosesAt, null);
+  const text = JSON.stringify(res.body);
+  for (const secret of [TESTER_PSID, "70000000000557", "psid"]) assert.equal(text.includes(secret), false, `${secret} must not reach the browser`);
+  assert.equal(text.includes(PAIRING_CODE), false);
+});
+
+test("revoking a tester is a signed-in write and the tester is gone", async () => {
+  await useFakes(makeFakes({ testers: standardTesters() }));
+  const r = await routes();
+  assert.equal((await call(r.revoke, { method: "POST", body: { testerId: TESTER_ID }, headers: adminBearerHeaders() })).statusCode, 401);
+  assert.equal((await call(r.revoke, { method: "POST", body: { testerId: "not-a-uuid" } })).statusCode, 400);
+  assert.equal((await call(r.revoke, { method: "POST", body: { testerId: TESTER_ID } })).statusCode, 200);
+  assert.deepEqual(fakes.calls.revoked, [TESTER_ID]);
+  assert.equal((await call(r.revoke, { method: "POST", body: { testerId: TESTER_ID } })).statusCode, 404, "already revoked");
+  const list = await call(r.testers);
+  assert.equal((list.body.testers as Array<{ id: string }>).some((t) => t.id === TESTER_ID), false);
+});
+
+test("state: with no tester and no env recipient it names the one live-device step; with a tester the window decides", async () => {
+  const r = await routes();
+  const none = (await call(r.state)).body as unknown as { testSend: { testers: unknown[]; realSendPossible: boolean; blockedReason: string; pairingCodeTtlMinutes: number } };
+  assert.equal(none.testSend.testers.length, 0);
+  assert.equal(none.testSend.realSendPossible, false);
+  assert.match(none.testSend.blockedReason, /«Тестер холбох»/);
+  assert.match(none.testSend.blockedReason, /Messenger-ээс манай Page руу/);
+  assert.equal(none.testSend.pairingCodeTtlMinutes, 30);
+
+  await useFakes(makeFakes({ testers: standardTesters() }));
+  const ready = (await call(r.state)).body as unknown as { testSend: { testers: Array<{ windowOpen: boolean }>; realSendPossible: boolean; blockedReason: string | null } };
+  assert.equal(ready.testSend.realSendPossible, true);
+  assert.equal(ready.testSend.blockedReason, null);
+  assert.equal(ready.testSend.testers.length, 2);
+
+  await useFakes(makeFakes({ testers: [standardTesters()[2]] }));
+  const closed = (await call(r.state)).body as unknown as { testSend: { realSendPossible: boolean; blockedReason: string } };
+  assert.equal(closed.testSend.realSendPossible, false);
+  assert.match(closed.testSend.blockedReason, /24 цагийн цонх/);
+
+  await useFakes(makeFakes({ testers: standardTesters(), metaDisabled: true }));
+  const killed = (await call(r.state)).body as unknown as { testSend: { realSendPossible: boolean; blockedReason: string } };
+  assert.equal(killed.testSend.realSendPossible, false);
+  assert.match(killed.testSend.blockedReason, /kill switch/);
+});
+
+test("test-send to a verified tester: dry-run addresses nobody; the real send is masked, confirmed and window-checked", async () => {
+  await useFakes(makeFakes({ testers: standardTesters() }));
+  const r = await routes();
+  const dry = await call(r.testSend, { method: "POST", body: { edition: "quick", testerId: TESTER_ID } });
+  assert.equal(dry.statusCode, 200, JSON.stringify(dry.body));
+  assert.deepEqual(fakes.calls.sends, [{ recipientPsid: "", edition: "quick", dryRun: true, versionId: VERSION_LIVE, testerId: TESTER_ID }]);
+  const dryPayload = dry.body.payload as { messages: Array<{ kind: string }> };
+  assert.deepEqual(dryPayload.messages.map((m) => m.kind), ["text", "file"], "exactly one text and one file");
+  const testerView = dry.body.tester as { id: string; label: string; masked: string; windowOpen: boolean };
+  assert.deepEqual([testerView.id, testerView.label, testerView.masked, testerView.windowOpen], [TESTER_ID, "Миний утас", "…0555", true]);
+
+  const unconfirmed = await call(r.testSend, { method: "POST", body: { edition: "quick", dryRun: false, testerId: TESTER_ID } });
+  assert.equal(unconfirmed.statusCode, 400);
+  const sent = await call(r.testSend, { method: "POST", body: { edition: "quick", dryRun: false, confirm: true, testerId: TESTER_ID } });
+  assert.equal(sent.statusCode, 200, JSON.stringify(sent.body));
+  assert.deepEqual(fakes.calls.sends[1], { recipientPsid: "", edition: "quick", dryRun: false, versionId: VERSION_LIVE, testerId: TESTER_ID }, "the raw PSID is resolved server-side, not passed by the route");
+  const text = JSON.stringify(sent.body);
+  assert.equal(text.includes(TESTER_PSID), false, "the raw PSID is masked even though the sender put it in the payload");
+  assert.match(text, /Туршигч Миний утас/);
+  assert.equal((sent.body.outcome as { metaMessageId: string }).metaMessageId, "m_test_1");
+  assert.equal(fetchCalls, 0);
+});
+
+test("test-send to a tester is refused when it is unknown, revoked, outside the 24 h window or the kill switch is on", async () => {
+  await useFakes(makeFakes({ testers: standardTesters() }));
+  const r = await routes();
+  const real = (testerId: string) => call(r.testSend, { method: "POST", body: { edition: "quick", dryRun: false, confirm: true, testerId } });
+  const unknown = await real("99999999-9999-4999-8999-999999999999");
+  assert.equal(unknown.statusCode, 404);
+  assert.equal(unknown.body.error, "tester_not_found");
+  const revoked = await real(REVOKED_TESTER_ID);
+  assert.equal(revoked.statusCode, 409);
+  assert.equal(revoked.body.error, "tester_revoked");
+  const closed = await real(CLOSED_TESTER_ID);
+  assert.equal(closed.statusCode, 409);
+  assert.equal(closed.body.error, "tester_window_closed");
+  assert.match(String(closed.body.message), /24 цагийн цонх/);
+  assert.equal((await call(r.testSend, { method: "POST", body: { edition: "quick", testerId: "nope" } })).statusCode, 400);
+  assert.equal((await call(r.testSend, { method: "POST", body: { edition: "quick", testerId: TESTER_ID, recipientRef: "0123456789abcdef" } })).statusCode, 400, "one way to name a recipient");
+  assert.deepEqual(fakes.calls.sends, [], "nothing reached the sender");
+
+  await useFakes(makeFakes({ testers: standardTesters(), metaDisabled: true }));
+  const killed = await real(TESTER_ID);
+  assert.equal(killed.statusCode, 409);
+  assert.equal(killed.body.error, "meta_outbound_disabled");
+  assert.deepEqual(fakes.calls.sends, []);
+});
+
+test("test-send: the preview sample goes only to a verified tester, never to an env recipient", async () => {
+  await useFakes(makeFakes({ allowlist: [TEST_PSID], testers: standardTesters() }));
+  const r = await routes();
+  const { recipientRef } = await import("../src/lib/catalogue/admin/deps");
+  const env = await call(r.testSend, { method: "POST", body: { versionId: VERSION_PREVIEW, dryRun: false, confirm: true, recipientRef: recipientRef(TEST_PSID) } });
+  assert.equal(env.statusCode, 422);
+  assert.equal(env.body.error, "preview_not_publishable");
+  const tester = await call(r.testSend, { method: "POST", body: { versionId: VERSION_PREVIEW, dryRun: false, confirm: true, testerId: TESTER_ID } });
+  assert.equal(tester.statusCode, 200, JSON.stringify(tester.body));
+  assert.equal(tester.body.edition, "preview");
+});
+
+// ── Hero photo picker, display title and the recommended shortlist ───────────────────────────────
+
+test("photos GET lists candidates with real size, score and issues, and the current choice", async () => {
+  const r = await routes();
+  const res = await call(r.photos, { query: { tripId: "test-trip-1" }, headers: adminBearerHeaders() });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const candidates = res.body.candidates as Array<{ url: string; width: number; score: number; issues: string[] }>;
+  assert.equal(candidates.length, 2);
+  assert.equal(candidates[0].width, 2400);
+  assert.deepEqual(candidates[1].issues, ["нягтрал бага (640px)"]);
+  assert.equal(res.body.chosen, null);
+  assert.equal(res.body.titleOverride, null);
+  assert.equal(res.body.title, "Жишиг-аялал test-trip-1");
+  assert.equal((await call(r.photos, { query: { tripId: "not a trip!" } })).statusCode, 400);
+  assert.equal((await call(r.photos, { query: { tripId: "ghost-trip" } })).statusCode, 404);
+});
+
+test("photos PUT stores the hero choice and title override in the catalogue config only", async () => {
+  const r = await routes();
+  const url = "https://img.example.test/hero-1.jpg";
+  const res = await call(r.photos, { method: "PUT", body: { tripId: "test-trip-1", hero: { url, focal: { x: 0.3333333, y: 0.6 }, zoom: 1.5 }, titleOverride: "  Богино   гарчиг  " } });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(fakes.calls.saved.length, 1);
+  const saved = fakes.calls.saved[0].next;
+  assert.deepEqual(saved.heroByTripId["test-trip-1"], { url, focal: { x: 0.333, y: 0.6 }, zoom: 1.5 });
+  assert.equal(saved.titleOverrides["test-trip-1"], "Богино гарчиг");
+  assert.deepEqual(Object.keys(saved).sort(), ["complete", "heroByTripId", "preview", "quick", "titleOverrides", "updatedAt", "updatedBy"], "nothing but curation is stored: no price, date or trip title");
+  assert.match(String(fakes.calls.saved[0].actor), /@/);
+  assert.deepEqual(res.body.chosen, { url, focal: { x: 0.333, y: 0.6 }, zoom: 1.5 });
+
+  const again = await call(r.photos, { query: { tripId: "test-trip-1" } });
+  assert.deepEqual(again.body.chosen, { url, focal: { x: 0.333, y: 0.6 }, zoom: 1.5 });
+  assert.equal(again.body.titleOverride, "Богино гарчиг");
+
+  const cleared = await call(r.photos, { method: "PUT", body: { tripId: "test-trip-1", hero: null, titleOverride: null } });
+  assert.equal(cleared.statusCode, 200);
+  const after = fakes.calls.saved[1].next;
+  assert.deepEqual(after.heroByTripId, {});
+  assert.deepEqual(after.titleOverrides, {});
+});
+
+test("photos PUT refuses a photo that is not one of the trip's candidates, bad crops and bad titles", async () => {
+  const r = await routes();
+  const url = "https://img.example.test/hero-1.jpg";
+  const bad: Array<[number, unknown, string]> = [
+    [422, { tripId: "test-trip-1", hero: { url: "https://evil.example.test/other.jpg" } }, "a photo of some other trip or site"],
+    [400, { tripId: "test-trip-1", hero: { url: "http://img.example.test/hero-1.jpg" } }, "plain http"],
+    [400, { tripId: "test-trip-1", hero: { url, focal: { x: 1.2, y: 0.5 } } }, "focal above 1"],
+    [400, { tripId: "test-trip-1", hero: { url, focal: { x: -0.1, y: 0.5 } } }, "focal below 0"],
+    [400, { tripId: "test-trip-1", hero: { url, focal: { x: "0.5", y: 0.5 } } }, "focal as text"],
+    [400, { tripId: "test-trip-1", hero: { url, zoom: 0.9 } }, "zoom below 1"],
+    [400, { tripId: "test-trip-1", hero: { url, zoom: 3.1 } }, "zoom above 3"],
+    [400, { tripId: "test-trip-1", hero: { url, zoom: Number.NaN } }, "zoom NaN"],
+    [400, { tripId: "test-trip-1", hero: { url, price: 1 } }, "unknown hero key"],
+    [400, { tripId: "test-trip-1", titleOverride: "я".repeat(81) }, "title over 80"],
+    [400, { tripId: "test-trip-1", titleOverride: 42 }, "title not text"],
+    [400, { tripId: "test-trip-1" }, "nothing to change"],
+    [400, { tripId: "test-trip-1", hero: null, price: 1 }, "price is not accepted"],
+    [400, { tripId: "test-trip-1", hero: null, title: "Нэр" }, "the trip's own title is not accepted"],
+    [404, { tripId: "ghost-trip", hero: null }, "unknown trip"],
+  ];
+  for (const [status, body, why] of bad) {
+    const res = await call(r.photos, { method: "PUT", body });
+    assert.equal(res.statusCode, status, why);
+  }
+  assert.equal(fakes.calls.saved.length, 0, "nothing was stored");
+  const exactly80 = await call(r.photos, { method: "PUT", body: { tripId: "test-trip-1", titleOverride: "я".repeat(80) } });
+  assert.equal(exactly80.statusCode, 200, "80 characters is fine");
+});
+
+test("photos PUT keeps the other editions' curation and other trips' choices, and passes the concurrency guard", async () => {
+  const r = await routes();
+  fakes.setConfig({
+    quick: { tripIds: QUICK_EIGHT, groupOverrides: {}, featuredTripIds: [], excludedTripIds: [] },
+    complete: { tripIds: [], groupOverrides: {}, featuredTripIds: [], excludedTripIds: [] },
+    preview: { tripIds: [], groupOverrides: {}, featuredTripIds: [], excludedTripIds: [] },
+    heroByTripId: { "test-trip-2": { url: "https://img.example.test/hero-2.jpg", focal: null, zoom: null } },
+    titleOverrides: {},
+    updatedAt: "2026-06-14T00:00:00.000Z",
+    updatedBy: "someone@example.test",
+  });
+  const res = await call(r.photos, { method: "PUT", body: { tripId: "test-trip-1", hero: null, titleOverride: "Шинэ", expectedUpdatedAt: "2026-06-14T00:00:00.000Z" } });
+  assert.equal(res.statusCode, 200);
+  const next = fakes.calls.saved[0].next;
+  assert.deepEqual(next.quick.tripIds, QUICK_EIGHT);
+  assert.ok(next.heroByTripId["test-trip-2"], "another trip's choice survives");
+  assert.deepEqual(fakes.calls.saved[0].opts, { expectedUpdatedAt: "2026-06-14T00:00:00.000Z" });
+});
+
+test("recommend returns the diverse shortlist with reasons and a cover, and saves nothing", async () => {
+  const r = await routes();
+  const res = await call(r.recommend, { headers: adminBearerHeaders() });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const body = res.body as unknown as { tripIds: string[]; reasons: Record<string, string>; cover: string };
+  assert.equal(body.tripIds.length, 10);
+  assert.equal(body.cover, body.tripIds[0]);
+  assert.match(body.reasons[body.tripIds[0]], /Өөр чиглэл/);
+  assert.equal(fakes.calls.saved.length, 0, "a suggestion is never auto-saved");
+  assert.equal((await call(r.recommend, { method: "POST" })).statusCode, 405);
+});
+
+test("the review rows carry hero quality, a clear reason for weak heroes, and the staff overrides", async () => {
+  const { buildReviewRows } = await import("../src/lib/catalogue/admin/review");
+  const weak = { ...card("test-weak", 0), heroQuality: "weak" as const, photo: { url: "https://img.example.test/w.jpg", width: 640, height: 480, credit: null, source: "trip_photo" as const } };
+  const missing = { ...card("test-missing", 1), heroQuality: "missing" as const, photo: null };
+  const good = { ...card("test-good", 2), heroQuality: "excellent" as const };
+  const review = buildReviewRows({
+    edition: "quick",
+    today: "2026-06-15",
+    activeTrips: [trip("test-weak"), trip("test-missing"), trip("test-good")],
+    snapshot: { edition: "complete", generatedAt: NOW.toISOString(), asOfDay: "2026-06-15", issueLabel: "x", seasonLabel: "x", trips: [weak, missing, good], coverTripId: "test-good", groups: [], contact: { phones: [], siteLabel: "", siteUrl: "" }, warnings: [], contentHash: "h" },
+    eligibility: new Map([["test-weak", { eligible: true, reason: null }], ["test-missing", { eligible: true, reason: null }], ["test-good", { eligible: true, reason: null }]]),
+    config: { tripIds: ["test-weak", "test-missing", "test-good"], groupOverrides: {}, featuredTripIds: [], excludedTripIds: [] },
+    codeMap: {},
+    heroByTripId: { "test-good": { url: "https://img.example.test/g.jpg" } },
+    titleOverrides: { "test-good": "Миний гарчиг" },
+  });
+  const by = (id: string) => review.rows.find((row) => row.tripId === id)!;
+  assert.equal(by("test-weak").heroQuality, "weak");
+  assert.match(by("test-weak").heroReason ?? "", /Хуучин эсвэл сул зураг \(640×480px\)/);
+  assert.equal(by("test-missing").heroQuality, "missing");
+  assert.match(by("test-missing").heroReason ?? "", /Зураг олдсонгүй/);
+  assert.equal(by("test-good").heroReason, null);
+  assert.equal(by("test-good").heroChosen, true);
+  assert.equal(by("test-good").titleOverride, "Миний гарчиг");
+  assert.equal(by("test-good").editorialTitle, "Жишиг test-good");
+  assert.equal(by("test-weak").heroChosen, false);
 });

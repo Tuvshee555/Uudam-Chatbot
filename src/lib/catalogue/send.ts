@@ -70,6 +70,8 @@ export type SendDeps = {
   store: CatalogueSendStore;
   /** Is this conversation owned by a person, or is the bot paused? null = the bot may send. */
   gate: (senderId: string, pageId: string) => Promise<GateVerdict>;
+  /** Page-level stops only (page paused, photo-only mode): they hold even for a verified test recipient. */
+  pageGate: (pageId: string) => Promise<GateVerdict>;
   killSwitch: () => boolean;
   /** Live-vs-published comparison; null when it could not be made. */
   checkDrift: (published: CatalogueVersionMeta, nowIso: string) => Promise<LiveDrift | null>;
@@ -116,6 +118,12 @@ export function defaultSendDeps(): SendDeps {
       if (reason && HUMAN_OWNER_REASONS.has(reason)) return { status: "blocked_staff_owned", reason };
       // The bot's own marker after a booking request does not silence it (webhook.ts waitingForConsultant).
       if (reason && reason !== "booked_customer") return { status: "blocked_paused", reason };
+      if (await ops.isPagePaused(pageId).catch(() => false)) return { status: "blocked_paused", reason: "page_paused" };
+      if ((await ops.getBotControl().catch(() => null))?.photo_only) return { status: "blocked_paused", reason: "photo_only" };
+      return null;
+    },
+    pageGate: async (pageId) => {
+      const ops = await import("../travelOps");
       if (await ops.isPagePaused(pageId).catch(() => false)) return { status: "blocked_paused", reason: "page_paused" };
       if ((await ops.getBotControl().catch(() => null))?.photo_only) return { status: "blocked_paused", reason: "photo_only" };
       return null;
@@ -169,6 +177,11 @@ export type DeliverCatalogueInput = {
   versionId?: string | null;
   /** Admin test to an allowlisted tester: no claim, no pause / window checks. The kill switch still applies. */
   testSend?: boolean;
+  /**
+   * A REAL test to a verified tester (testers.ts): the 24 h window is judged on the tester's last message and the
+   * page-level stops apply. A sender-level pause on the tester's own conversation does not (testers.ts, "Decision").
+   */
+  testerGate?: { lastInboundAt: Date | string | number | null };
   sendText?: SendText;
   /** Staff lead for any outcome a person must see (not called on a clean send). */
   captureLead?: CaptureCatalogueLead;
@@ -195,7 +208,15 @@ export async function planCatalogueDelivery(input: DeliverCatalogueInput, deps: 
   const now = deps.now();
   // A dry run sends nothing, so the kill switch does not hide what WOULD be sent.
   if (!input.dryRun && deps.killSwitch()) return notReady("blocked_killswitch", "meta_outbound_disabled");
-  if (!input.testSend) {
+  if (input.testSend) {
+    if (input.testerGate && !input.dryRun) {
+      const lastInbound = toMillis(input.testerGate.lastInboundAt);
+      if (lastInbound === null) return notReady("blocked_window", "no_inbound_timestamp");
+      if (now.getTime() - lastInbound > MESSAGING_WINDOW_MS) return notReady("blocked_window", "outside_24h_window");
+      const pageStop = await deps.pageGate(input.pageId);
+      if (pageStop) return notReady(pageStop.status, pageStop.reason);
+    }
+  } else {
     const lastInbound = toMillis(input.lastInboundAt);
     if (lastInbound === null) return notReady("blocked_window", "no_inbound_timestamp");
     if (now.getTime() - lastInbound > MESSAGING_WINDOW_MS) return notReady("blocked_window", "outside_24h_window");
@@ -401,7 +422,8 @@ export async function deliverCatalogue(input: DeliverCatalogueInput): Promise<Ca
     let fileResult: FbSendDetail | null = null;
     let fileFailure: string | null = null;
     const sendTheFile = async () => {
-      await deps.assertMaySend(input.senderId, input.trace); // a person who took over meanwhile wins
+      // A person who took over meanwhile wins. Not for a verified tester: that conversation is staff's own account (testers.ts).
+      if (!input.testerGate) await deps.assertMaySend(input.senderId, input.trace);
       let result = await deps.sendFile(input.senderId, attachmentId!, input.pageToken);
       let failure = result.ok ? null : classifyFbFailure(result);
       if (!result.ok && failure === "attachment_rejected") {
@@ -488,6 +510,10 @@ export type CatalogueTestInput = {
   pageId?: string;
   env?: Partial<NodeJS.ProcessEnv>;
   deps?: Partial<SendDeps>;
+  /** A verified tester (testers.ts) instead of a PSID: the raw id is looked up here and never leaves the server. */
+  testerId?: string | null;
+  /** Tests only: replaces the tester lookup. */
+  testerLookup?: (id: string) => Promise<import("./testers").TesterLookup>;
 };
 
 /**
@@ -497,7 +523,7 @@ export type CatalogueTestInput = {
 export type CatalogueTestResult = CatalogueDeliveryOutcome & {
   ok: boolean;
   dryRun: boolean;
-  /** The recipient is listed in CATALOGUE_TEST_RECIPIENT_PSIDS. */
+  /** The recipient is a verified tester, or is listed in CATALOGUE_TEST_RECIPIENT_PSIDS. */
   allowlisted: boolean;
   recipientMasked: string;
   payload: CatalogueTestPayload | null;
@@ -536,26 +562,39 @@ export async function buildDeliveryPayload(input: { recipientId: string; version
 export async function sendCatalogueTest(input: CatalogueTestInput): Promise<CatalogueTestResult> {
   const env = input.env || process.env;
   const dryRun = input.dryRun !== false;
-  const recipient = String(input.recipientPsid || "").trim();
-  const allowlisted = recipient !== "" && testRecipientAllowlist(env).includes(recipient);
-  const result = (ok: boolean, outcome: CatalogueDeliveryOutcome, payload: CatalogueTestPayload | null, error: string | null): CatalogueTestResult =>
-    ({ ...outcome, ok, dryRun, allowlisted, recipientMasked: recipient ? maskPsid(recipient) : "", payload, error });
+  const deps = resolveSendDeps(input.deps);
   const none = (status: CatalogueDeliveryStatus, reason: string) => outcomeOf({ edition: input.edition } as DeliverCatalogueInput, status, { reason });
+
+  // A verified tester is looked up by id; its raw PSID is used only to address the send and is never returned.
+  let tester: import("./testers").TesterSendTarget | null = null;
+  if (input.testerId) {
+    const testers = await import("./testers");
+    const lookup = await (input.testerLookup ?? testers.getTesterForSend)(input.testerId);
+    if (lookup.status !== "ok") {
+      const reason = lookup.status === "revoked" ? "tester_revoked" : "tester_not_found";
+      return { ...none("failed", reason), ok: false, dryRun, allowlisted: false, recipientMasked: "", payload: null, error: reason };
+    }
+    tester = lookup.target;
+  }
+  const recipient = tester ? (dryRun ? "" : tester.psid) : String(input.recipientPsid || "").trim();
+  const allowlisted = tester ? true : recipient !== "" && testRecipientAllowlist(env).includes(recipient);
+  const result = (ok: boolean, outcome: CatalogueDeliveryOutcome, payload: CatalogueTestPayload | null, error: string | null): CatalogueTestResult =>
+    ({ ...outcome, ok, dryRun, allowlisted, recipientMasked: tester ? tester.masked : recipient ? maskPsid(recipient) : "", payload, error });
   if (!dryRun && !allowlisted) {
     const reason = recipient ? "recipient_not_allowlisted" : "recipient_required";
     return result(false, none("failed", reason), null, reason);
   }
 
-  const deps = resolveSendDeps(input.deps);
   const { getEnv, pageTokenForRecipient } = await import("../env");
   const facebookPages = getEnv().facebookPages;
-  const pageId = input.pageId || facebookPages[0]?.pageId || "";
+  const pageId = tester?.pageId || input.pageId || facebookPages[0]?.pageId || "";
   const pageToken = (pageId && recipient && pageTokenForRecipient(pageId, recipient)) || facebookPages.find((page) => page.pageId === pageId)?.token || "";
   if (!dryRun && (!pageId || !pageToken)) return result(false, none("failed", "page_token_missing"), null, "page_token_missing");
 
   const request: DeliverCatalogueInput = {
     senderId: recipient || "dry-run", pageId, pageToken, edition: input.edition, explicitResend: true, lastInboundAt: null,
     dryRun, testSend: true, versionId: input.versionId ?? null, deps: input.deps,
+    ...(tester ? { testerGate: { lastInboundAt: tester.lastInboundAt } } : {}),
   };
   const plan = await planCatalogueDelivery(request, deps);
   if (!plan.ready) {

@@ -1,6 +1,6 @@
 /**
- * Photos: fetch in Node (guarded), crop to the page's aspect with an attention-weighted window,
- * resample to ~1200px, JPEG q~80, and hand the page a data: URI. Chromium never fetches anything.
+ * Guarded photo fetch for the catalogue: https only, public addresses only, bounded size and time.
+ * Cropping and encoding live in art.ts. Chromium never fetches anything: pages carry data: URIs.
  */
 import dns from "node:dns";
 import http from "node:http";
@@ -8,31 +8,11 @@ import https from "node:https";
 import net from "node:net";
 import type { IncomingHttpHeaders } from "node:http";
 import type { Readable } from "node:stream";
-import sharp from "sharp";
-import type { CatalogueSnapshot, CatalogueWarning } from "../types";
 import { isAllowedPosterPdfImageUrl, isPublicIpAddress, normalizedUrlHost } from "../../poster/pdfImagePolicy";
-import { orderTrips } from "./layout";
-import type { CatalogueImageFetcher, RenderImage } from "./renderTypes";
-
-/** Hero box on a trip page is 540pt wide and roughly 560pt tall at the default text load. */
-export const TRIP_HERO_ASPECT = 1.04; // height / width
-/** Cover hero box is 540pt wide and roughly 520pt tall. */
-export const COVER_HERO_ASPECT = 0.96;
+import type { CatalogueImageFetcher } from "./renderTypes";
 
 const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 12_000;
-const FETCH_CONCURRENCY = 4;
-/** Below this many source pixels across the crop the photo looks soft on a phone. */
-export const LOW_RESOLUTION_CROP_PX = 800;
-
-export type EncodeProfile = { width: number; quality: number };
-
-/** Big editions trade a little resolution for file size so the book stays easy to forward. */
-export function encodeProfileFor(tripCount: number): EncodeProfile {
-  if (tripCount > 30) return { width: 960, quality: 74 };
-  if (tripCount > 18) return { width: 1080, quality: 77 };
-  return { width: 1200, quality: 80 };
-}
 
 function cloudinaryFriendly(value: string): string {
   try {
@@ -250,124 +230,3 @@ export function createGuardedImageFetcher(overrides: Partial<ImageGuardDeps> = {
 }
 
 export const defaultImageFetcher: CatalogueImageFetcher = createGuardedImageFetcher();
-
-/**
- * Crop `source` to `aspect` (height/width) around the most attention-grabbing region, resample and
- * encode. Never upscales: a small photo stays small and is reported through sourceCropWidth.
- */
-export async function prepareImage(source: Buffer | Uint8Array, aspect: number, profile: EncodeProfile): Promise<RenderImage | null> {
-  const input = Buffer.isBuffer(source) ? source : Buffer.from(source);
-  try {
-    const base = sharp(input, { failOn: "none", limitInputPixels: 120_000_000 }).rotate();
-    const meta = await base.metadata();
-    const rotated = (meta.orientation ?? 1) >= 5; // EXIF 5-8 swap the axes
-    const srcW = (rotated ? meta.height : meta.width) ?? 0;
-    const srcH = (rotated ? meta.width : meta.height) ?? 0;
-    if (srcW < 64 || srcH < 64) return null;
-    // Largest window of the wanted aspect that fits inside the source.
-    const cropW = Math.min(srcW, srcH / aspect);
-    const outW = Math.max(2, Math.floor(Math.min(profile.width, cropW) / 2) * 2);
-    const outH = Math.max(2, Math.round(outW * aspect));
-    const out = await base
-      .flatten({ background: "#F6F1E7" })
-      .resize({ width: outW, height: outH, fit: "cover", position: sharp.strategy.attention })
-      .toColorspace("srgb")
-      .jpeg({ quality: profile.quality, mozjpeg: true, progressive: false, chromaSubsampling: "4:2:0" })
-      .toBuffer();
-    return {
-      dataUri: `data:image/jpeg;base64,${out.toString("base64")}`,
-      width: outW,
-      height: outH,
-      sourceCropWidth: Math.round(cropW),
-      bytes: out.length,
-    };
-  } catch {
-    return null;
-  }
-}
-
-export type PreparedPhotos = {
-  heroes: Record<string, RenderImage | null>;
-  warnings: CatalogueWarning[];
-};
-
-async function pool<T>(items: T[], limit: number, work: (item: T) => Promise<void>): Promise<void> {
-  let next = 0;
-  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const item = items[next++]!;
-      await work(item);
-    }
-  });
-  await Promise.all(runners);
-}
-
-/** One hero crop per trip. Failures become placeholders plus a warning, never an exception. */
-export async function prepareTripPhotos(snapshot: CatalogueSnapshot, fetcher: CatalogueImageFetcher = defaultImageFetcher): Promise<PreparedPhotos> {
-  const profile = encodeProfileFor(snapshot.trips.length);
-  const heroes: Record<string, RenderImage | null> = {};
-  const warnings: CatalogueWarning[] = [];
-  const ordered = orderTrips(snapshot).map(o => o.card);
-
-  await pool(ordered, FETCH_CONCURRENCY, async card => {
-    if (!card.photo?.url) {
-      heroes[card.tripId] = null;
-      warnings.push({
-        code: "photo_missing",
-        severity: "warning",
-        tripId: card.tripId,
-        message: `${card.code}: батлагдсан зураг алга, хуудсанд зургийн оронд бичвэрийн загвар тавилаа. Зураг нэмж дахин үүсгэнэ үү.`,
-        detail: { code: card.code },
-      });
-      return;
-    }
-    let bytes: Buffer | Uint8Array | null = null;
-    try {
-      bytes = await fetcher(card.photo.url);
-    } catch {
-      bytes = null;
-    }
-    const image = bytes ? await prepareImage(bytes, TRIP_HERO_ASPECT, profile) : null;
-    heroes[card.tripId] = image;
-    if (!image) {
-      warnings.push({
-        code: "photo_fetch_failed",
-        severity: "warning",
-        tripId: card.tripId,
-        message: `${card.code}: зургийг татаж эсвэл боловсруулж чадсангүй, хуудсанд зургийн оронд бичвэрийн загвар тавилаа.`,
-        detail: { code: card.code },
-      });
-    } else if (image.sourceCropWidth < LOW_RESOLUTION_CROP_PX) {
-      warnings.push({
-        code: "photo_low_resolution",
-        severity: "warning",
-        tripId: card.tripId,
-        message: `${card.code}: зургийн нягтрал бага (${image.sourceCropWidth}px өргөн), утсан дээр бүдэгхэн харагдаж болно.`,
-        detail: { code: card.code, cropWidthPx: image.sourceCropWidth },
-      });
-    }
-  });
-
-  // Deterministic warning order regardless of fetch completion order.
-  const order = new Map(ordered.map((c, i) => [c.tripId, i] as const));
-  warnings.sort((a, b) => (order.get(a.tripId ?? "") ?? 0) - (order.get(b.tripId ?? "") ?? 0));
-  return { heroes, warnings };
-}
-
-/** A dedicated, differently cropped copy of one trip's photo for the cover. */
-export async function prepareCoverImage(
-  snapshot: CatalogueSnapshot,
-  tripId: string,
-  fetcher: CatalogueImageFetcher = defaultImageFetcher,
-): Promise<RenderImage | null> {
-  const card = snapshot.trips.find(t => t.tripId === tripId);
-  if (!card?.photo?.url) return null;
-  try {
-    const bytes = await fetcher(card.photo.url);
-    if (!bytes) return null;
-    const profile = encodeProfileFor(snapshot.trips.length);
-    return await prepareImage(bytes, COVER_HERO_ASPECT, { width: Math.max(profile.width, 1200), quality: Math.max(profile.quality, 80) });
-  } catch {
-    return null;
-  }
-}

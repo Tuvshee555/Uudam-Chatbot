@@ -1,6 +1,7 @@
 import { CATALOGUE_QUICK_MAX_TRIPS, CATALOGUE_QUICK_MIN_TRIPS, type CatalogueEdition } from "../../../../lib/catalogue/types";
 import { getDeps, recipientLabel, recipientRef, type LazyDeps } from "../../../../lib/catalogue/admin/deps";
 import { CATALOGUE_MAX_AGE_DAYS } from "../../../../lib/catalogue/freshness";
+import { TESTER_CODE_TTL_MS, type CatalogueTesterView } from "../../../../lib/catalogue/testers";
 import { catalogueRoute, ulaanbaatarDay } from "../../../../lib/catalogue/admin/route";
 import {
   CATALOGUE_PREVIEW_MAX_TRIPS,
@@ -32,18 +33,25 @@ export default catalogueRoute({
     const store = await deps.store();
     await store.ensureCatalogueSchema();
     const now = deps.now();
-    const [config, quick, complete, metaOutboundDisabled] = await Promise.all([
+    const [config, quick, complete, metaOutboundDisabled, testerList] = await Promise.all([
       store.getCatalogueConfig(),
       editionState(deps, "quick"),
       editionState(deps, "complete"),
       deps.metaOutboundDisabled(),
+      deps.testers().then((port) => port.listTesters()).then(
+        (testers): { testers: CatalogueTesterView[]; error: string | null } => ({ testers, error: null }),
+        (): { testers: CatalogueTesterView[]; error: string | null } => ({ testers: [], error: "Туршигчийн жагсаалтыг ачаалж чадсангүй." }),
+      ),
     ]);
     const recipients = deps.testRecipientPsids().map((psid) => ({ ref: recipientRef(psid), label: recipientLabel(psid) }));
-    const blockedReason = recipients.length === 0
-      ? "CATALOGUE_TEST_RECIPIENT_PSIDS тохируулаагүй тул жинхэнэ туршилтын илгээлт хаалттай. Зөвхөн дээж (dry-run) ажиллана."
-      : metaOutboundDisabled
-        ? "Meta-д илгээх үйлдэл унтраалттай байна (kill switch эсвэл Vercel preview). Зөвхөн дээж (dry-run) ажиллана."
-        : null;
+    const reachable = testerList.testers.some((tester) => tester.windowOpen) || recipients.length > 0;
+    const blockedReason = metaOutboundDisabled
+      ? "Meta-д илгээх үйлдэл унтраалттай байна (kill switch эсвэл Vercel preview). Зөвхөн дээж (dry-run) ажиллана."
+      : testerList.testers.length === 0 && recipients.length === 0
+        ? "Баталгаажсан туршигч алга. Нэг удаа: «Тестер холбох» дарж гарсан кодыг өөрийн Messenger-ээс манай Page руу бичнэ үү. Тэр болтол зөвхөн дээж (dry-run) ажиллана."
+        : !reachable
+          ? "Бүх туршигчийн Messenger-ийн 24 цагийн цонх хаагдсан байна. Туршигч өөрийн Messenger-ээс манай Page руу дурын мессеж бичээд шинэчилнэ үү."
+          : null;
     const body: CatalogueAdminState = {
       ok: true,
       serverTime: now.toISOString(),
@@ -57,6 +65,9 @@ export default catalogueRoute({
       },
       editions: { quick, complete },
       testSend: {
+        testers: testerList.testers,
+        testersError: testerList.error,
+        pairingCodeTtlMinutes: TESTER_CODE_TTL_MS / 60_000,
         recipients,
         metaOutboundDisabled,
         realSendPossible: blockedReason === null,

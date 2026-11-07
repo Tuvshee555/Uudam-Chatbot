@@ -10,6 +10,7 @@ import type { TravelTrip } from "../../travelTypes";
 import type {
   CatalogueEdition,
   CatalogueEditionConfig,
+  CatalogueHeroChoice,
   CatalogueSnapshot,
   CatalogueTripCard,
   CatalogueWarning,
@@ -56,6 +57,16 @@ function priceSource(card: CatalogueTripCard): Pick<CatalogueReviewRow, "priceSo
   return { priceSource: "trip_price", priceSourceLabel: "Аяллын үндсэн үнэ (огноогүй)" };
 }
 
+/** Mongolian reason a hero must be replaced; null when the hero is good enough. */
+function heroReason(card: CatalogueTripCard | undefined): string | null {
+  if (!card) return null;
+  if (card.heroQuality === "missing") return "Зураг олдсонгүй: өөр зураг сонгох эсвэл аяллын зураг нэмэх шаардлагатай.";
+  if (card.heroQuality !== "weak") return null;
+  const { width, height } = card.photo ?? { width: null, height: null };
+  const size = width && height ? ` (${width}×${height}px)` : "";
+  return `Хуучин эсвэл сул зураг${size}: нүүрэнд хэвлэхэд нягтрал, чанар хүрэлцэхгүй тул солих шаардлагатай.`;
+}
+
 /** A stored trip code, or null for a missing one or an in-memory placeholder of a read-only load. */
 function realCode(code: string | null | undefined): string | null {
   return code && !isProvisionalCode(code) ? code : null;
@@ -70,6 +81,9 @@ export type ReviewInput = {
   eligibility: Map<string, { eligible: boolean; reason: string | null }>;
   config: CatalogueEditionConfig;
   codeMap: Record<string, string>;
+  /** Staff hero choices and display-title overrides (catalogue config), for the picker columns. */
+  heroByTripId?: Record<string, CatalogueHeroChoice>;
+  titleOverrides?: Record<string, string>;
 };
 
 /** Pure: same input, same rows. */
@@ -116,6 +130,11 @@ export function buildReviewRows(input: ReviewInput): CatalogueReviewResponse {
         ? { url: card.photo.url, source: card.photo.source, width: card.photo.width, height: card.photo.height }
         : null,
       photoSourceLabel: card?.photo ? PHOTO_SOURCE_LABEL[card.photo.source] ?? card.photo.source : "Зураггүй: орлуулагч хэрэглэнэ",
+      heroQuality: card?.heroQuality ?? "missing",
+      heroReason: heroReason(card),
+      heroChosen: Boolean(input.heroByTripId?.[trip.id]),
+      editorialTitle: card?.editorialTitle ?? null,
+      titleOverride: input.titleOverrides?.[trip.id] ?? null,
       warnings,
       severity: worstSeverity(warnings),
       selected: isComplete ? eligible && !isExcluded : position !== null,
@@ -163,6 +182,8 @@ export async function loadReview(params: {
   activeTrips: TravelTrip[];
   /** The staff curation of the requested edition (from the store's config). */
   editionConfig: CatalogueEditionConfig;
+  heroByTripId?: Record<string, CatalogueHeroChoice>;
+  titleOverrides?: Record<string, string>;
   data: CatalogueDataPort;
 }): Promise<CatalogueReviewResponse> {
   const { data, activeTrips, today } = params;
@@ -185,5 +206,7 @@ export async function loadReview(params: {
     eligibility,
     config: params.editionConfig,
     codeMap: base.codeMap,
+    heroByTripId: params.heroByTripId,
+    titleOverrides: params.titleOverrides,
   });
 }

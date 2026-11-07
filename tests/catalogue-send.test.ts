@@ -10,7 +10,7 @@ import {
 import { checkLiveDrift, evaluateFreshness, resetFreshnessCacheForTests, type DriftDeps } from "../src/lib/catalogue/freshness";
 import type { CatalogueSnapshot } from "../src/lib/catalogue/types";
 import {
-  REPEAT_ANSWERED_REASON, REPEAT_FOLLOWUP_REASON, deliverCatalogue, planCatalogueDelivery, sendCatalogueTest, testRecipientAllowlist,
+  MESSAGING_WINDOW_MS, REPEAT_ANSWERED_REASON, REPEAT_FOLLOWUP_REASON, deliverCatalogue, planCatalogueDelivery, sendCatalogueTest, testRecipientAllowlist,
   type DeliverCatalogueInput, type GateVerdict, type SendDeps,
 } from "../src/lib/catalogue/send";
 import { buildFbFileMessageBody, classifyFbFailure } from "../src/lib/fbAttachmentUpload";
@@ -18,11 +18,12 @@ import { presentAssistantReply } from "../src/lib/chatbotReplyPolicy";
 import { shouldSilenceNoDataReply } from "../src/lib/reply";
 import { RetryableWebhookError } from "../src/lib/webhookDedup";
 import { StaffTakeoverSendBlocked } from "../src/lib/takeoverGuard";
+import { TESTER_WINDOW_MS, type TesterLookup, type TesterSendTarget } from "../src/lib/catalogue/testers";
 
 const NOW = Date.parse("2098-02-01T04:00:00Z");
 
 /** One send, wired to fakes. `timeline` records every customer-visible thing in order. */
-function harness(options: { gate?: GateVerdict; kill?: boolean; drift?: SendDeps["checkDrift"]; url?: boolean; assertMaySend?: SendDeps["assertMaySend"]; now?: number } = {}) {
+function harness(options: { gate?: GateVerdict; pageGate?: GateVerdict; kill?: boolean; drift?: SendDeps["checkDrift"]; url?: boolean; assertMaySend?: SendDeps["assertMaySend"]; now?: number } = {}) {
   const now = options.now ?? NOW;
   let clock = now; // moves with advance(): a customer who asks again minutes later
   const stored = fakeSendStore(() => clock);
@@ -32,7 +33,7 @@ function harness(options: { gate?: GateVerdict; kill?: boolean; drift?: SendDeps
   const leads: Array<{ status: string; reason: string; context: string }> = [];
   const recorded: { files: string[]; outbound: string[] } = { files: [], outbound: [] };
   const deps: Partial<SendDeps> = {
-    now: () => new Date(clock), store: stored.store, gate: async () => options.gate ?? null, killSwitch: () => Boolean(options.kill),
+    now: () => new Date(clock), store: stored.store, gate: async () => options.gate ?? null, pageGate: async () => options.pageGate ?? null, killSwitch: () => Boolean(options.kill),
     checkDrift: options.drift ?? noDrift,
     upload: async (...args) => { timeline.push("upload"); return meta.deps.upload(...args); },
     sendFile: async (...args) => { timeline.push("file"); return meta.deps.sendFile(...args); },
@@ -511,4 +512,80 @@ test("the test recipient allowlist reads a comma/space separated list", () => {
   assert.deepEqual(testRecipientAllowlist({ CATALOGUE_TEST_RECIPIENT_PSIDS: " a1 ,b2;c3  d4 " }), ["a1", "b2", "c3", "d4"]);
   assert.deepEqual(testRecipientAllowlist({}), []);
   assert.ok(SITE.startsWith("https://"));
+});
+
+// ── Verified testers (catalogue/testers.ts) ──────────────────────────────────────────────────────
+
+const TESTER_PSID = "psid-verified-tester-1";
+const testerOf = (overrides: Partial<TesterSendTarget> = {}): TesterLookup => ({
+  status: "ok",
+  target: {
+    id: "11111111-1111-4111-8111-111111111111", psid: TESTER_PSID, pageId: "1234567890", label: "Миний утас", masked: "…er-1",
+    verifiedAt: new Date(NOW - 5 * DAY).toISOString(), lastInboundAt: new Date(NOW - 3_600_000).toISOString(), revokedAt: null, ...overrides,
+  },
+});
+const TESTER_ID = "11111111-1111-4111-8111-111111111111";
+
+test("tester window constant is the same 24h-minus-5-minutes margin the customer path uses", () => {
+  assert.equal(TESTER_WINDOW_MS, MESSAGING_WINDOW_MS);
+});
+
+test("tester test send: a verified tester with an open window gets ONE text and ONE file, addressed by the server-side PSID, no customer claim", async () => {
+  applyTestEnv({});
+  const run = harness();
+  run.stored.publish(makeVersion());
+  const sent = await sendCatalogueTest({ recipientPsid: "", testerId: TESTER_ID, testerLookup: async () => testerOf(), edition: "quick", dryRun: false, env: {}, deps: run.deps });
+  assert.deepEqual([sent.ok, sent.status, sent.allowlisted], [true, "sent", true]);
+  assert.deepEqual([run.texts.length, run.meta.files.length], [1, 1]);
+  assert.equal(run.meta.files[0].recipientId, TESTER_PSID);
+  assert.equal(run.stored.claims.length, 0, "a test uses no customer send slot");
+  assert.equal(sent.recipientMasked, "…er-1", "only the masked tail is reported");
+  assert.equal(JSON.stringify({ ...sent, payload: null }).includes(TESTER_PSID), false);
+});
+
+test("tester test send: the tester's own conversation being staff-owned or paused does not block it, but a paused PAGE does", async () => {
+  applyTestEnv({});
+  const takeover = async () => { throw new StaffTakeoverSendBlocked("operator_reply"); };
+  const owned = harness({ gate: { status: "blocked_staff_owned", reason: "operator_reply" }, assertMaySend: takeover });
+  owned.stored.publish(makeVersion());
+  const sent = await sendCatalogueTest({ recipientPsid: "", testerId: TESTER_ID, testerLookup: async () => testerOf(), edition: "quick", dryRun: false, env: {}, deps: owned.deps });
+  assert.equal(sent.status, "sent", "the staff member's own account is theirs to test with");
+  assert.equal(owned.meta.files.length, 1);
+
+  const paused = harness({ pageGate: { status: "blocked_paused", reason: "page_paused" } });
+  paused.stored.publish(makeVersion());
+  const held = await sendCatalogueTest({ recipientPsid: "", testerId: TESTER_ID, testerLookup: async () => testerOf(), edition: "quick", dryRun: false, env: {}, deps: paused.deps });
+  assert.deepEqual([held.ok, held.status, held.reason], [false, "blocked_paused", "page_paused"]);
+  assert.deepEqual([paused.texts.length, paused.meta.files.length, paused.meta.uploads.length], [0, 0, 0]);
+});
+
+test("tester test send is refused outside the 24h window, when revoked, unknown, or with the kill switch on", async () => {
+  applyTestEnv({});
+  const closed = harness();
+  closed.stored.publish(makeVersion());
+  const old = await sendCatalogueTest({ recipientPsid: "", testerId: TESTER_ID, testerLookup: async () => testerOf({ lastInboundAt: new Date(NOW - 25 * 3_600_000).toISOString() }), edition: "quick", dryRun: false, env: {}, deps: closed.deps });
+  assert.deepEqual([old.ok, old.status, old.reason], [false, "blocked_window", "outside_24h_window"]);
+  const never = await sendCatalogueTest({ recipientPsid: "", testerId: TESTER_ID, testerLookup: async () => testerOf({ lastInboundAt: null }), edition: "quick", dryRun: false, env: {}, deps: closed.deps });
+  assert.deepEqual([never.status, never.reason], ["blocked_window", "no_inbound_timestamp"]);
+  const revoked = await sendCatalogueTest({ recipientPsid: "", testerId: TESTER_ID, testerLookup: async () => ({ status: "revoked" }), edition: "quick", dryRun: false, env: {}, deps: closed.deps });
+  assert.deepEqual([revoked.ok, revoked.error], [false, "tester_revoked"]);
+  const unknown = await sendCatalogueTest({ recipientPsid: "", testerId: TESTER_ID, testerLookup: async () => ({ status: "not_found" }), edition: "quick", dryRun: false, env: {}, deps: closed.deps });
+  assert.deepEqual([unknown.ok, unknown.error], [false, "tester_not_found"]);
+  assert.deepEqual([closed.texts.length, closed.meta.files.length, closed.meta.uploads.length], [0, 0, 0]);
+
+  const killed = harness({ kill: true });
+  killed.stored.publish(makeVersion());
+  const off = await sendCatalogueTest({ recipientPsid: "", testerId: TESTER_ID, testerLookup: async () => testerOf(), edition: "quick", dryRun: false, env: {}, deps: killed.deps });
+  assert.deepEqual([off.status, killed.meta.files.length], ["blocked_killswitch", 0]);
+});
+
+test("tester dry run: exactly one text and one file attachment, nobody is addressed, nothing is sent", async () => {
+  applyTestEnv({});
+  const run = harness();
+  run.stored.publish(makeVersion());
+  const dry = await sendCatalogueTest({ recipientPsid: "", testerId: TESTER_ID, testerLookup: async () => testerOf({ lastInboundAt: null }), edition: "quick", env: {}, deps: run.deps });
+  assert.deepEqual([dry.ok, dry.dryRun, dry.status], [true, true, "dry_run"]);
+  assert.deepEqual(dry.payload?.messages.map((message) => message.kind), ["text", "file"]);
+  assert.equal(JSON.stringify(dry).includes(TESTER_PSID), false, "a dry run never carries the PSID");
+  assert.deepEqual([run.texts.length, run.meta.files.length, run.meta.uploads.length, run.stored.claims.length], [0, 0, 0, 0]);
 });

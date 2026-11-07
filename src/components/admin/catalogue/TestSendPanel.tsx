@@ -5,6 +5,7 @@ import { formatBytes } from "@/lib/adminUtils";
 import type { CatalogueTestSendResponse } from "@/lib/catalogue/admin/types";
 import type { CatalogueAdmin } from "./useCatalogueAdmin";
 import { EDITION_LABEL, formatStamp } from "./shared";
+import { TesterPairing } from "./TesterPairing";
 
 const OUTCOME_LABEL: Record<string, string> = {
   dry_run: "Дээж: илгээгээгүй",
@@ -14,18 +15,19 @@ const OUTCOME_LABEL: Record<string, string> = {
   duplicate_suppressed: "Давхардал тул илгээгээгүй",
   blocked_staff_owned: "Ажилтан яриаг эзэмшсэн тул илгээгээгүй",
   blocked_paused: "Бот түр зогссон тул илгээгээгүй",
-  blocked_window: "24 цагийн цонх хаагдсан тул илгээгээгүй",
+  blocked_window: "24 цагийн цонх хаагдсан тул илгээгээгүй (туршигч Page руу дахин бичнэ үү)",
   blocked_killswitch: "Meta унтраалттай тул илгээгээгүй",
   no_published_version: "Нийтлэгдсэн хувилбар алга",
   failed: "Амжилтгүй",
 };
 
-/** Dry-run by default: shows the exact Messenger requests. A real send reaches only the env allowlist. */
+/** Dry-run by default: shows the exact Messenger requests. A real send reaches only a verified tester (or an env recipient). */
 export function TestSendPanel({ admin }: { admin: CatalogueAdmin }) {
   const toast = useToast();
   const { state, api } = admin;
   // "published:quick" | "published:complete" | "version:<id>" (a draft can be tested before it is published)
   const [target, setTarget] = useState("published:quick");
+  // "tester:<id>" | "env:<ref>" | "" (first reachable)
   const [recipient, setRecipient] = useState("");
   const [armed, setArmed] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -35,11 +37,20 @@ export function TestSendPanel({ admin }: { admin: CatalogueAdmin }) {
 
   if (!state) return null;
   const { testSend } = state;
-  const testable = admin.versions.filter((candidate) => candidate.edition !== "preview" && candidate.status !== "superseded");
+  const testable = admin.versions.filter((candidate) => candidate.status !== "superseded");
   const chosenVersion = target.startsWith("version:") ? testable.find((candidate) => candidate.id === target.slice(8)) ?? null : null;
   const publishedEdition = target === "published:complete" ? "complete" : "quick";
   const file = chosenVersion ?? state.editions[publishedEdition].published;
-  const recipientRef = recipient || testSend.recipients[0]?.ref;
+  // The recipients a REAL send can reach right now: a verified tester with an open window, or an env recipient.
+  const options = [
+    ...testSend.testers.map((tester) => ({ value: `tester:${tester.id}`, label: `${tester.label || "Нэргүй туршигч"} ${tester.masked}${tester.windowOpen ? "" : " (цонх хаагдсан)"}`, usable: tester.windowOpen })),
+    ...testSend.recipients.map((entry) => ({ value: `env:${entry.ref}`, label: `Туршигч ${entry.label}`, usable: true })),
+  ];
+  const chosen = options.find((option) => option.value === recipient) ?? options.find((option) => option.usable) ?? options[0] ?? null;
+  const recipientArgs = chosen
+    ? chosen.value.startsWith("tester:") ? { testerId: chosen.value.slice(7) } : { recipientRef: chosen.value.slice(4) }
+    : {};
+  const canSendReal = testSend.realSendPossible && Boolean(chosen?.usable);
 
   async function run(dryRun: boolean) {
     setBusy(dryRun ? "dry" : "real");
@@ -48,7 +59,7 @@ export function TestSendPanel({ admin }: { admin: CatalogueAdmin }) {
       const response = await api.testSend({
         ...(chosenVersion ? { versionId: chosenVersion.id } : { edition: publishedEdition }),
         dryRun,
-        ...(recipientRef ? { recipientRef } : {}),
+        ...recipientArgs,
       });
       setResult(response);
       if (!dryRun) {
@@ -68,8 +79,9 @@ export function TestSendPanel({ admin }: { admin: CatalogueAdmin }) {
     <div className="space-y-5">
       <SectionHeading
         title="Туршилтын илгээлт"
-        description="Жинхэнэ хэрэглэгчид хэзээ ч очихгүй. Дээж нь юу илгээгдэхийг үзүүлнэ; жинхэнэ илгээлт зөвхөн серверт тохируулсан туршилтын хүлээн авагчид явна."
+        description="Жинхэнэ хэрэглэгчид хэзээ ч очихгүй. Дээж нь юу илгээгдэхийг үзүүлнэ; жинхэнэ илгээлт зөвхөн өөрөө код бичиж баталгаажуулсан туршигчид явна."
       />
+      <TesterPairing admin={admin} />
       <div className="max-w-xl">
         <Select label="Туршах файл" value={target} onChange={(event) => setTarget(event.target.value)}>
           <option value="published:quick">Нийтлэгдсэн · {EDITION_LABEL.quick}</option>
@@ -103,10 +115,10 @@ export function TestSendPanel({ admin }: { admin: CatalogueAdmin }) {
             <Badge tone={testSend.realSendPossible ? "success" : "neutral"} dot>{testSend.realSendPossible ? "Боломжтой" : "Хаалттай"}</Badge>
           </div>
           {testSend.blockedReason && <Alert tone="info">{testSend.blockedReason}</Alert>}
-          {testSend.recipients.length > 0 && (
-            <Select label="Хүлээн авагч (туршилтын жагсаалт)" value={recipient || testSend.recipients[0].ref} onChange={(event) => setRecipient(event.target.value)} disabled={!testSend.realSendPossible}>
-              {testSend.recipients.map((entry) => (
-                <option key={entry.ref} value={entry.ref}>{`Туршигч ${entry.label}`}</option>
+          {options.length > 0 && (
+            <Select label="Хүлээн авагч (баталгаажсан туршигч)" value={chosen?.value ?? ""} onChange={(event) => setRecipient(event.target.value)} disabled={!testSend.realSendPossible}>
+              {options.map((option) => (
+                <option key={option.value} value={option.value} disabled={!option.usable}>{option.label}</option>
               ))}
             </Select>
           )}
@@ -114,13 +126,13 @@ export function TestSendPanel({ admin }: { admin: CatalogueAdmin }) {
             <input
               type="checkbox"
               checked={armed}
-              disabled={!testSend.realSendPossible || !file}
+              disabled={!canSendReal || !file}
               onChange={(event) => setArmed(event.target.checked)}
               className="mt-0.5 h-4 w-4"
             />
-            <span>Дээрх туршигчид PDF-г жинхэнээр илгээнэ. Тэр сүүлийн 24 цагт хуудас руу мессеж бичсэн байх ёстой.</span>
+            <span>Дээрх туршигчид PDF-г жинхэнээр илгээнэ. Тэр сүүлийн 24 цагт Page руу мессеж бичсэн (цонх нээлттэй) байх ёстой.</span>
           </label>
-          <Button variant="secondary" onClick={() => setConfirmOpen(true)} disabled={!armed || !testSend.realSendPossible || !file || busy !== null}>
+          <Button variant="secondary" onClick={() => setConfirmOpen(true)} disabled={!armed || !canSendReal || !file || busy !== null}>
             Туршилтаар илгээх
           </Button>
         </Card>
@@ -140,7 +152,7 @@ export function TestSendPanel({ admin }: { admin: CatalogueAdmin }) {
           {result.payload ? (
             <>
               <p className="text-sm text-ink-muted">
-                Хүлээн авагч: {result.payload.recipient} · Файл: {result.payload.file.name} ({formatBytes(result.payload.file.sizeBytes)}{result.payload.file.pages ? `, ${result.payload.file.pages} хуудас` : ""}) · {result.payload.attachmentSource === "cached_attachment_id" ? "Meta-д өмнө нь байршсан файл дахин ашиглана" : "Илгээх үед Meta-д байршуулна"}
+                Хүлээн авагч: {result.tester ? `${result.tester.label || "Нэргүй туршигч"} ${result.tester.masked}` : result.payload.recipient} · Файл: {result.payload.file.name} ({formatBytes(result.payload.file.sizeBytes)}{result.payload.file.pages ? `, ${result.payload.file.pages} хуудас` : ""}) · {result.payload.attachmentSource === "cached_attachment_id" ? "Meta-д өмнө нь байршсан файл дахин ашиглана" : "Илгээх үед Meta-д байршуулна"}
               </p>
               <p className="text-xs font-semibold uppercase tracking-[0.06em] text-ink-muted">Messenger Send API: {result.payload.messages.length} хүсэлт, илгээх дарааллаар (1 текст, 1 файл)</p>
               <ol className="space-y-3" aria-label="Messenger хүсэлтүүд">
@@ -171,7 +183,7 @@ export function TestSendPanel({ admin }: { admin: CatalogueAdmin }) {
         open={confirmOpen}
         onClose={() => (busy ? undefined : setConfirmOpen(false))}
         title="Туршилтын PDF илгээх үү?"
-        description="Зөвхөн туршилтын жагсаалтад буй нэг хүнд, нэг файл ба нэг текст илгээнэ."
+        description="Зөвхөн баталгаажсан нэг туршигчид, нэг файл ба нэг текст илгээнэ."
         footer={
           <>
             <Button variant="secondary" onClick={() => setConfirmOpen(false)} disabled={busy !== null}>Цуцлах</Button>

@@ -60,29 +60,37 @@ export async function makeSyntheticPhoto(seed: number, width = 2000, height = 15
 
 type Spec = {
   title: string;
+  editorial: string;
   kicker: string;
   groupKey: string;
   duration: string;
   transport: string;
   highlights: string[];
   price: number | null;
-  date: string | null;
-  photo: "ok" | "none" | "fail" | "small";
+  /** Offered departures, ascending ISO days. */
+  dates: string[];
+  /** Photo behaviour: ok = landscape, tall = portrait, small = low resolution, none = no photo, fail = fetch fails. */
+  photo: "ok" | "tall" | "none" | "fail" | "small";
+  quality: "excellent" | "good" | "weak" | "missing";
+  gallery: boolean;
 };
 
 export const SAMPLE_GROUPS: { key: string; label: string }[] = [
   { key: "sea", label: "Далайн амралт" },
   { key: "nature", label: "Байгаль, адал явдал" },
+  { key: "city", label: "Хот, соёл" },
   { key: "budget", label: "Хямд төсвийн аялал" },
 ];
 
 const SPECS: Spec[] = [
-  { title: "Тест-Далай", kicker: "Жишиг муж / Тест улс", groupKey: "sea", duration: "9 өдөр · 8 шөнө", transport: "Шууд нислэг", highlights: ["Жишиг-Эргийн зочид буудалд байрлана", "Тест-Далайн эрэг дээрх чөлөөт өдрүүд", "Загвар-Парк болон орон нутгийн зах"], price: 3740000, date: "2027-02-13", photo: "ok" },
-  { title: "Жишиг-Хөдөө Нутгийн Өвөл", kicker: "Өвөр Жишиг / Тест улс", groupKey: "nature", duration: "5 өдөр · 4 шөнө", transport: "Газрын аялал", highlights: ["Тест-Гүүрэн дээрх алхалт", "Халуун рашаан, усан амралтын цогцолбор", "Хөх хотын аялал, шинжилгээ"], price: 870000, date: "2026-12-19", photo: "ok" },
-  { title: "Загвар-Хот ба Туршилтын Нуурын эргийн урт нэртэй есөн өдрийн ихэр аялал", kicker: "Хоёр хот / Жишиг улс", groupKey: "nature", duration: "9 өдөр · 8 шөнө", transport: "Галт тэрэг", highlights: ["Нэг маш урт онцлог мөр нь хоёр, гурван мөр болтлоо үргэлжилж болох бөгөөд хуудас хэзээ ч таслагдахгүй байх ёстой", "Богино онцлог", "Ө, Ү, ө, ү үсэг бүхий мөр ба ₮ тэмдэгт"], price: 2450000, date: "2027-03-20", photo: "ok" },
-  { title: "Туршилт-Арал", kicker: "Тест арал", groupKey: "sea", duration: "6 өдөр · 5 шөнө", transport: "Шууд нислэг", highlights: ["Усан доорх жишиг аялал"], price: 4620000, date: "2027-02-06", photo: "small" },
-  { title: "Хөдөө-Хуурай", kicker: "Хуурай муж", groupKey: "budget", duration: "4 өдөр · 3 шөнө", transport: "Газрын аялал", highlights: ["Зураг байхгүй тохиолдлын туршилт", "Хоёр дахь онцлог"], price: 690000, date: null, photo: "none" },
-  { title: "Зураг-Алдаа", kicker: "Алдаа муж", groupKey: "budget", duration: "3 өдөр · 2 шөнө", transport: "Газрын аялал", highlights: ["Зураг татагдахгүй тохиолдол"], price: null, date: null, photo: "fail" },
+  { title: "Тест-Далай", editorial: "Тест-Далай", kicker: "Жишиг муж / Тест улс", groupKey: "sea", duration: "9 өдөр · 8 шөнө", transport: "Шууд нислэг", highlights: ["Эргийн зочид буудалд байрлан, далайн эрэг дээр амарна", "Жишиг-Эргийн чөлөөт өдрүүд", "Загвар-Парк болон орон нутгийн зах"], price: 3740000, dates: ["2027-02-13", "2027-02-27", "2027-03-13", "2027-03-27"], photo: "ok", quality: "excellent", gallery: true },
+  { title: "ЖИШИГ-ХӨДӨӨ НУТГИЙН ӨВӨЛ", editorial: "Жишиг-Хөдөө Нутгийн Өвөл", kicker: "Өвөр Жишиг / Тест улс", groupKey: "nature", duration: "5 өдөр · 4 шөнө", transport: "Газрын аялал", highlights: ["Тест-Гүүрэн дээрх алхалт", "Халуун рашаан, усан амралтын цогцолбор", "Хөх хотын аялал, шинжилгээ"], price: 870000, dates: ["2026-12-19", "2027-01-09"], photo: "tall", quality: "good", gallery: false },
+  { title: "Загвар-Хот ба Туршилтын Нуурын эргийн урт нэртэй есөн өдрийн ихэр аялал", editorial: "Загвар-Хот ба Туршилтын Нуур", kicker: "Хоёр хот / Жишиг улс", groupKey: "nature", duration: "9 өдөр · 8 шөнө", transport: "Галт тэрэг", highlights: ["Нэг маш урт онцлог мөр нь хоёр, гурван мөр болтлоо үргэлжилж болох бөгөөд хуудас хэзээ ч таслагдахгүй байх ёстой", "Богино онцлог", "Ө, Ү, ө, ү үсэг бүхий мөр ба ₮ тэмдэгт"], price: 2450000, dates: ["2027-03-20"], photo: "ok", quality: "good", gallery: false },
+  { title: "ТУРШИЛТ-АРАЛ", editorial: "Туршилт-Арал", kicker: "Тест арал", groupKey: "sea", duration: "6 өдөр · 5 шөнө", transport: "Шууд нислэг", highlights: ["Усан доорх жишиг аялал"], price: 4620000, dates: ["2027-02-06"], photo: "small", quality: "weak", gallery: false },
+  { title: "Хөдөө-Хуурай", editorial: "Хөдөө-Хуурай", kicker: "Хуурай муж", groupKey: "budget", duration: "4 өдөр · 3 шөнө", transport: "Газрын аялал", highlights: ["Зураг байхгүй тохиолдлын туршилт", "Хоёр дахь онцлог"], price: 690000, dates: [], photo: "none", quality: "missing", gallery: false },
+  { title: "Зураг-Алдаа", editorial: "Зураг-Алдаа", kicker: "Алдаа муж", groupKey: "budget", duration: "3 өдөр · 2 шөнө", transport: "Газрын аялал", highlights: ["Зураг татагдахгүй тохиолдол"], price: null, dates: [], photo: "fail", quality: "good", gallery: false },
+  { title: "ЖИШИГ-ХОТЫН ТЭНГЭР", editorial: "Жишиг-Хотын Тэнгэр", kicker: "Тэнгэр хот / Жишиг улс", groupKey: "city", duration: "6 өдөр · 5 шөнө", transport: "Шууд нислэг", highlights: ["Тэнгэрийн цамхагаас хотыг харна", "Орой болгон гэрэлт гудамжаар зугаалана"], price: 3190000, dates: ["2026-11-14", "2026-11-28", "2026-12-12", "2027-01-16"], photo: "ok", quality: "excellent", gallery: true },
+  { title: "Загвар-Аралын Намар", editorial: "Загвар-Аралын Намар", kicker: "Загвар арал", groupKey: "city", duration: "7 өдөр · 6 шөнө", transport: "Шууд нислэг", highlights: ["Алтан навчтай нурууны замаар алхана", "Орон нутгийн гал тогооны хичээл"], price: 3560000, dates: ["2027-04-10", "2027-04-24"], photo: "tall", quality: "excellent", gallery: true },
 ];
 
 export type SampleOptions = { trips?: number; edition?: CatalogueSnapshot["edition"] };
@@ -95,21 +103,33 @@ export function sampleSnapshot(opts: SampleOptions = {}): CatalogueSnapshot {
     const n = i + 1;
     const code = `${i < 99 ? "A" : "B"}${String((i % 99) + 1).padStart(2, "0")}`;
     const priced = s.price !== null;
+    const next = s.dates[0] ?? null;
+    const label =
+      s.dates.length === 0
+        ? "Явах огноог лавлана"
+        : s.dates.length === 1
+          ? `${s.dates[0]!.replace(/-/g, ".")}-ний хөдлөлт`
+          : `Ойрын огноо: ${s.dates.slice(0, 3).map(d => d.replace(/-/g, ".")).join(", ")}${s.dates.length > 3 ? ` болон өөр ${s.dates.length - 3} огноо` : ""}`;
     trips.push({
       tripId: `fx-trip-${n}`,
       code,
       title: i < SPECS.length ? s.title : `${s.title} ${n}`,
+      editorialTitle: i < SPECS.length ? s.editorial : `${s.editorial} ${n}`,
+      destinationKey: `fx-dest-${n}`,
+      heroQuality: s.photo === "none" ? "missing" : s.quality,
+      gallery:
+        s.gallery && s.photo !== "none" && s.photo !== "fail"
+          ? [{ url: `https://photos.example.test/${s.photo === "tall" ? "ok" : "tall"}/${n}-g.jpg`, width: null, height: null, credit: "Жишиг зураглаач", source: "poster_day" }]
+          : [],
       kicker: s.kicker,
       groupKey: s.groupKey,
       durationText: s.duration,
       transportLabel: s.transport,
       highlights: s.highlights,
       price: priced
-        ? { kind: "from", amountMnt: s.price!, date: s.date, display: `${s.price!.toLocaleString("en-US")}₮-с` }
+        ? { kind: "from", amountMnt: s.price!, date: next, display: `${s.price!.toLocaleString("en-US")}₮-с` }
         : { kind: "inquire", display: "Үнэ лавлах" },
-      dates: s.date
-        ? { nextDeparture: s.date, departures: [s.date], label: `${s.date.replace(/-/g, ".")}-ний хөдлөлт` }
-        : { nextDeparture: null, departures: [], label: "Явах огноог лавлана" },
+      dates: { nextDeparture: next, departures: s.dates, label },
       detailUrl: `https://example.test/trips/fx-trip-${n}`,
       photo: s.photo === "none" ? null : { url: `https://photos.example.test/${s.photo}/${n}.jpg`, width: null, height: null, credit: n % 2 === 0 ? "Жишиг зураг" : null, source: "poster_hero" },
       warnings: [],
@@ -123,6 +143,7 @@ export function sampleSnapshot(opts: SampleOptions = {}): CatalogueSnapshot {
     issueLabel: "2026.11.06",
     seasonLabel: "2026 / 2027",
     trips,
+    coverTripId: trips[0]?.tripId ?? null,
     groups,
     contact: { phones: ["7700 0001", "9900 0002"], siteLabel: "example.test", siteUrl: "https://example.test" },
     warnings: [],
@@ -130,15 +151,17 @@ export function sampleSnapshot(opts: SampleOptions = {}): CatalogueSnapshot {
   };
 }
 
-/** Fetcher that serves the synthetic photos by URL shape: /ok/, /small/ resolve, /fail/ does not. */
+/** Fetcher that serves the synthetic photos by URL shape: /ok/ (landscape), /tall/ (portrait) and /small/ resolve, /fail/ does not. */
 export function sampleImageFetcher(): (url: string) => Promise<Buffer | null> {
   const cache = new Map<string, Promise<Buffer | null>>();
   return url => {
     let hit = cache.get(url);
     if (!hit) {
-      const m = /\/(ok|small|fail)\/(\d+)\.jpg$/.exec(url);
+      const m = /\/(ok|tall|small|fail)\/(\d+)(?:-g)?\.jpg$/.exec(url);
       if (!m || m[1] === "fail") hit = Promise.resolve(null);
-      else hit = makeSyntheticPhoto(Number(m[2]), m[1] === "small" ? 640 : 2000, m[1] === "small" ? 480 : 1500);
+      else if (m[1] === "small") hit = makeSyntheticPhoto(Number(m[2]), 640, 480);
+      else if (m[1] === "tall") hit = makeSyntheticPhoto(Number(m[2]), 1500, 2400);
+      else hit = makeSyntheticPhoto(Number(m[2]), 2400, 1600);
       cache.set(url, hit);
     }
     return hit;

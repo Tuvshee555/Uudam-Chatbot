@@ -21,15 +21,49 @@ export type RenderImage = {
   bytes: number;
 };
 
+/**
+ * The page compositions of a trip. Chosen per trip from the photo's shape, resolution and the
+ * rhythm of the pages around it (see assignCompositions in layout.ts).
+ *
+ *  cinema    full-bleed photo, the title set directly on it (a scrim is baked into the JPEG)
+ *  plate     large photo on top, ivory editorial panel below
+ *  panorama  headline on ivory, a wide photo band through the middle, details below
+ *  diptych   large photo plus one carefully placed second photo of the same trip
+ *  type      no usable photo: a typographic page (never a stretched or soft picture)
+ */
+export type TripComposition = "cinema" | "plate" | "panorama" | "diptych" | "type";
+
+/** Everything a trip page needs from its photos. */
+export type TripArt = {
+  composition: TripComposition;
+  /** Cropped to the composition's photo box. null for "type". */
+  hero: RenderImage | null;
+  /** The inset photo of a diptych. */
+  second: RenderImage | null;
+  /** Square crop for the contents list. null = monogram tile. */
+  thumb: RenderImage | null;
+};
+
+export type PhotoStats = {
+  width: number;
+  height: number;
+  /** Mean luminance 0..1 of the lower 45% of the frame (where a title on the photo would sit). */
+  lowerLuma: number;
+};
+
 export type RenderAssets = {
   /** Empty in unit tests that never open a browser. */
   fonts: RenderFontFace[];
   /** The agency's original logo file, byte for byte, as a data URI. */
   logoDataUri: string;
-  /** Per trip id: the hero crop for the trip page, or null when the photo is missing/unusable. */
-  heroes: Record<string, RenderImage | null>;
-  /** Optional dedicated crop for the cover and the trip it was taken from. */
-  cover: { tripId: string; image: RenderImage } | null;
+  /** Per trip id: the composition and the crops of its photos. Missing id = typographic page. */
+  trips: Record<string, TripArt>;
+  /** Full-page cover photo (or the photo plate variant) and the trip it was taken from. */
+  cover: { tripId: string; mode: "full" | "plate"; image: RenderImage; credit: string | null } | null;
+  /** Chapter opener photos by chapter index (0-based). Missing = typographic opener. */
+  chapters: Record<number, { tripId: string; image: RenderImage; credit: string | null } | undefined>;
+  /** Calm photo band on the closing page. */
+  closing: RenderImage | null;
   /** Printed discreetly on the closing page and written to the PDF info. */
   versionLabel: string;
 };
@@ -52,4 +86,9 @@ export class CatalogueRenderError extends Error {
     this.name = "CatalogueRenderError";
     this.code = code;
   }
+}
+
+/** An empty art set: every trip falls back to its typographic page. Used by browser-free tests. */
+export function emptyArt(): Pick<RenderAssets, "trips" | "cover" | "chapters" | "closing"> {
+  return { trips: {}, cover: null, chapters: {}, closing: null };
 }

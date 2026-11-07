@@ -1,7 +1,11 @@
 import { ensureOk } from "@/lib/adminUtils";
-import { CATALOGUE_ADMIN_API, type CatalogueConfig, type CatalogueEdition, type CatalogueEditionConfig } from "@/lib/catalogue/types";
+import { CATALOGUE_ADMIN_API, type CatalogueConfig, type CatalogueEdition, type CatalogueEditionConfig, type CatalogueHeroChoice } from "@/lib/catalogue/types";
 import type {
   CatalogueAdminState,
+  CataloguePairingResponse,
+  CataloguePhotosResponse,
+  CatalogueRecommendResponse,
+  CatalogueTestersResponse,
   CatalogueReviewResponse,
   CatalogueStatsResponse,
   CatalogueTestSendResponse,
@@ -16,6 +20,8 @@ export type GenerateSummary = {
   trips: number;
   blocking: number;
   warnings: number;
+  /** Trips whose hero photo is weak or missing (to replace in the photo picker). */
+  weakHeroes?: number;
   renderMs: number;
   durationMs: number;
 };
@@ -68,7 +74,33 @@ export function createCatalogueApi(apiFetch: ApiFetch) {
         "Өмнөх хувилбар руу буцааж чадсангүй.",
       ),
 
-    testSend: async (input: { edition?: CatalogueEdition; versionId?: string; dryRun: boolean; recipientRef?: string }) =>
+    testers: async () =>
+      ensureOk<CatalogueTestersResponse>(await apiFetch(`${CATALOGUE_ADMIN_API}/testers`), "Туршигчдын жагсаалтыг ачаалж чадсангүй."),
+
+    /** "Тестер холбох": a one-time code to send to the Page from the staff member's own Messenger. */
+    pairTester: async (label: string) =>
+      ensureOk<CataloguePairingResponse>(await post(apiFetch, "testers", { label }), "Холбох код үүсгэж чадсангүй."),
+
+    revokeTester: async (testerId: string) =>
+      ensureOk<{ ok: true }>(await post(apiFetch, "testers/revoke", { testerId }), "Туршигчийн эрхийг цуцалж чадсангүй."),
+
+    photos: async (tripId: string) =>
+      ensureOk<CataloguePhotosResponse>(
+        await apiFetch(`${CATALOGUE_ADMIN_API}/photos?tripId=${encodeURIComponent(tripId)}`),
+        "Зургийн жагсаалтыг ачаалж чадсангүй.",
+      ),
+
+    /** hero: undefined leaves it, null clears the staff choice. titleOverride likewise. */
+    savePhoto: async (input: { tripId: string; hero?: CatalogueHeroChoice | null; titleOverride?: string | null; expectedUpdatedAt: string | null }) =>
+      ensureOk<{ config: CatalogueConfig; chosen: CatalogueHeroChoice | null; titleOverride: string | null }>(
+        await post(apiFetch, "photos", input, "PUT"),
+        "Зургийг хадгалж чадсангүй.",
+      ),
+
+    recommend: async () =>
+      ensureOk<CatalogueRecommendResponse>(await apiFetch(`${CATALOGUE_ADMIN_API}/recommend`), "Санал болгосон жагсаалтыг ачаалж чадсангүй."),
+
+    testSend: async (input: { edition?: CatalogueEdition; versionId?: string; dryRun: boolean; recipientRef?: string; testerId?: string }) =>
       ensureOk<CatalogueTestSendResponse>(
         await post(apiFetch, "test-send", { ...input, ...(input.dryRun ? {} : { confirm: true }) }),
         "Туршилтын илгээлт амжилтгүй боллоо.",

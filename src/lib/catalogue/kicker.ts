@@ -67,6 +67,11 @@ function titleMention(title: string, name: string): "absent" | "origin" | "named
   return ORIGIN_ENDING.test(found[1]!.toLowerCase()) ? "origin" : "named";
 }
 
+/** True when `name` is one of the agency's own departure / border points (a leg, never a destination). */
+export function isAgencyFixedPoint(name: string): boolean {
+  return isFixedPoint(name, FIXED_POINTS);
+}
+
 /** Up to two destination names, title-anchored and without departure / border legs. */
 export function titleAnchoredPlaces(title: string, destinations: readonly string[], fixedPoints?: readonly string[]): string[] {
   if (!title.trim()) return [];

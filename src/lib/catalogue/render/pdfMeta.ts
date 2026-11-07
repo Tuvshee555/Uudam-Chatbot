@@ -7,6 +7,7 @@ import { PDFDict, PDFDocument, PDFHexString, PDFName, PDFNumber, PDFString, type
 import type { CatalogueSnapshot } from "../types";
 import { catalogueDocumentTitle } from "./html";
 import { planPages, type PagePlan } from "./layout";
+import { cardTitle } from "./layout";
 import { displayTitle } from "./titleCase";
 
 export type StampedPdf = {
@@ -41,15 +42,12 @@ export function outlineFor(plan: PagePlan): OutlineNode[] {
     { title: "Нүүр", page: 1, children: [] },
     { title: "Агуулга", page: plan.firstContentsPage, children: [] },
   ];
-  let current: OutlineNode | null = null;
-  let currentLabel: string | null = null;
-  for (const t of plan.trips) {
-    if (t.groupLabel !== currentLabel) {
-      current = { title: t.groupLabel, page: t.page, children: [] };
-      currentLabel = t.groupLabel;
-      nodes.push(current);
-    }
-    current!.children.push({ title: `${t.card.code} · ${displayTitle(t.card.title)}`, page: t.page, children: [] });
+  for (const chapter of plan.chapters) {
+    nodes.push({
+      title: chapter.label,
+      page: chapter.firstPage,
+      children: chapter.trips.map(t => ({ title: `${t.card.code} · ${displayTitle(cardTitle(t.card))}`, page: t.page, children: [] })),
+    });
   }
   nodes.push({ title: "Үнийн санал авах", page: plan.closingPage, children: [] });
   return nodes;

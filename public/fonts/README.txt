@@ -8,8 +8,10 @@ subsets in the PDF.
   NotoSans-Regular.ttf     body text (poster + catalogue)
   NotoSans-Medium.ttf      labels, titles in lists (catalogue)
   NotoSans-Bold.ttf        poster
-  NotoSerif-SemiBold.ttf   catalogue headlines, prices, trip codes
-  NotoSerif-Italic.ttf     catalogue captions and the "no price" wording
+  NotoSerif-Light.ttf      catalogue display type (headlines, prices, chapter titles)
+  NotoSerif-LightItalic.ttf catalogue standfirsts and the cover invitation
+  NotoSerif-Regular.ttf    catalogue reading-size serif (contents titles, dates)
+  NotoSerif-Italic.ttf     catalogue standfirst lines and the "no price" wording
 
 Glyph coverage was checked for the Cyrillic letters used in Mongolian (including Ө ө Ү ү) and the
 tugrik sign. tests/catalogue-render.test.ts re-checks it from the font files themselves.

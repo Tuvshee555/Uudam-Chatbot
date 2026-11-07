@@ -113,7 +113,7 @@ import { rememberSenderName } from "../../lib/senderNames";
 import { sendPlatformMessage, recordImageMessage, recordFileMessage, sendPhotoAlbum, sendTripMediaForReply, sendFacebookTypingIndicator, normalizeLowerText, isQuickInfoKeyword, isHandoffRequest, isContactOperatorTap, isBookingIntent, extractPhoneNumber, isPhoneOnlyMessage, isCommentTriggerMatch } from "../../lib/webhookMedia";
 import { sendFbFileAttachment, sendFbFileByUrl } from "../../lib/fbAttachmentUpload";
 import { buildTripWeatherReply, isWeatherTurn } from "../../lib/tripWeather";
-import { catalogueFollowupLabel, handleCatalogueTurn, noteBlockedCatalogueRequest } from "../../lib/webhookCatalogue";
+import { catalogueFollowupLabel, handleCatalogueTurn, handleTesterPairingTurn, noteBlockedCatalogueRequest } from "../../lib/webhookCatalogue";
 const env = getEnv();
 const PAGE_TOKENS = new Map(env.facebookPages.map((p) => [p.pageId, p.token]));
 const FALLBACK_TOKEN = env.tokenPage;
@@ -581,6 +581,10 @@ async function handleMessageTurn(
     if (input.counter) recordCounter(input.counter, 1, { platform });
     return true;
   };
+
+  // Staff pairing a test device for the catalogue ("Тестер холбох"): the message is exactly a one-time code.
+  // After the paused-page / paused-sender / staff-takeover checks above, before any routing below.
+  if (!attachmentReply && await handleTesterPairingTurn({ platform, senderId, pageId, text, deliver: deliverFastPathReply, trace })) return;
 
   // Facebook: a customer waiting for a consultant after a booking request, and no consultant
   // reply in the thread. A status question gets the lead's real status (deterministic, never a

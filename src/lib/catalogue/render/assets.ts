@@ -14,7 +14,9 @@ export const LOGO_FILE = "public/poster/uudam-logo.jpg";
 export const FONT_FILES: { file: string; family: string; weight: number; style: "normal" | "italic" }[] = [
   { file: "NotoSans-Regular.ttf", family: SANS, weight: 400, style: "normal" },
   { file: "NotoSans-Medium.ttf", family: SANS, weight: 500, style: "normal" },
-  { file: "NotoSerif-SemiBold.ttf", family: SERIF, weight: 600, style: "normal" },
+  { file: "NotoSerif-Light.ttf", family: SERIF, weight: 300, style: "normal" },
+  { file: "NotoSerif-Regular.ttf", family: SERIF, weight: 400, style: "normal" },
+  { file: "NotoSerif-LightItalic.ttf", family: SERIF, weight: 300, style: "italic" },
   { file: "NotoSerif-Italic.ttf", family: SERIF, weight: 400, style: "italic" },
 ];
 

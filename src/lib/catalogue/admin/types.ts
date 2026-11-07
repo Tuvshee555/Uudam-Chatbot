@@ -9,11 +9,17 @@
 import type {
   CatalogueConfig,
   CatalogueEdition,
+  CatalogueHeroChoice,
+  CataloguePhotoCandidate,
+  CataloguePhotoQuality,
   CatalogueVersionMeta,
   CatalogueWarningCode,
   CatalogueWarningSeverity,
   IsoDay,
 } from "../types";
+import type { CatalogueTesterView } from "../testers";
+
+export type { CatalogueTesterView } from "../testers";
 
 /** Editions staff can generate. "preview" is the admin-selected 2-trip sample. */
 export const ADMIN_EDITIONS: readonly CatalogueEdition[] = ["quick", "complete", "preview"];
@@ -66,11 +72,18 @@ export type CatalogueAdminState = {
   };
   editions: { quick: CatalogueEditionState; complete: CatalogueEditionState };
   testSend: {
+    /** Verified testers (paired with a one-time code): label, masked tail, window state. Never a PSID. */
+    testers: CatalogueTesterView[];
+    /** Optional extra recipients from the CATALOGUE_TEST_RECIPIENT_PSIDS environment variable. */
     recipients: CatalogueTestRecipient[];
     metaOutboundDisabled: boolean;
-    /** True only when a real send could actually leave (allowlist set, kill switch off). */
+    /** True only when a real send could actually leave (a recipient with an open window, kill switch off). */
     realSendPossible: boolean;
+    /** Mongolian: why a real send is closed, including the one live-device step still needed. */
     blockedReason: string | null;
+    /** Set when the tester list itself could not be read. */
+    testersError: string | null;
+    pairingCodeTtlMinutes: number;
   };
   config: CatalogueConfig;
 };
@@ -104,6 +117,15 @@ export type CatalogueReviewRow = {
   dateLabel: string | null;
   photo: { url: string; source: string; width: number | null; height: number | null } | null;
   photoSourceLabel: string;
+  /** How good the hero is for a premium book. */
+  heroQuality: CataloguePhotoQuality;
+  /** Mongolian reason a weak / missing hero must be replaced, else null. */
+  heroReason: string | null;
+  /** Staff chose this hero (photo picker), so the automatic choice is not used. */
+  heroChosen: boolean;
+  /** Concise display title the book prints, and the staff override behind it, if any. */
+  editorialTitle: string | null;
+  titleOverride: string | null;
   warnings: CatalogueReviewWarning[];
   severity: "blocking" | "warning" | "info" | "ok";
   /** Curation state for the requested edition. */
@@ -164,6 +186,8 @@ export type CatalogueTestSendResponse = {
   versionId: string | null;
   versionNo: number | null;
   fileName: string | null;
+  /** The verified tester the send was addressed to (masked); null for a dry run with no tester or an env recipient. */
+  tester: { id: string; label: string; masked: string; windowOpen: boolean; windowClosesAt: string | null } | null;
   /** What the delivery module reported ("dry_run" when nothing was sent). */
   outcome: { status: string; reason: string | null; fileAccepted: boolean; metaMessageId: string | null };
   /** The exact Messenger requests a real send makes: one text and one file attachment, in send order. */
@@ -175,4 +199,35 @@ export type CatalogueTestSendResponse = {
     publicUrl: string;
     fallbackText: string;
   } | null;
+};
+
+export type CatalogueTestersResponse = { ok: true; testers: CatalogueTesterView[] };
+
+/** The one-time pairing code. It is shown once, in the browser of the staff member who asked for it. */
+export type CataloguePairingResponse = {
+  ok: true;
+  code: string;
+  expiresAt: string;
+  ttlMinutes: number;
+  /** Mongolian: what to do with the code. */
+  instruction: string;
+};
+
+/** Photo picker data for one trip: every candidate with its real size, the current choice and title override. */
+export type CataloguePhotosResponse = {
+  ok: true;
+  tripId: string;
+  title: string | null;
+  candidates: CataloguePhotoCandidate[];
+  /** The staff choice stored in the catalogue config, or null when the automatic hero is used. */
+  chosen: CatalogueHeroChoice | null;
+  titleOverride: string | null;
+};
+
+export type CatalogueRecommendResponse = {
+  ok: true;
+  tripIds: string[];
+  /** Mongolian reason per recommended trip id. */
+  reasons: Record<string, string>;
+  cover: string | null;
 };

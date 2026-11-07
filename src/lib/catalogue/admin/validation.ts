@@ -28,6 +28,7 @@ const VERSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const GROUP_KEY_PATTERN = /^[a-z0-9][a-z0-9_-]{0,39}$/;
 const PSID_PATTERN = /^\d{5,32}$/;
 const REF_PATTERN = /^[a-f0-9]{16}$/;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const MAX_COMPLETE_ORDER_IDS = 500;
 export const MAX_GROUP_OVERRIDES = 500;
@@ -47,6 +48,10 @@ export function isValidPsid(value: unknown): value is string {
 
 export function isValidRecipientRef(value: unknown): value is string {
   return typeof value === "string" && REF_PATTERN.test(value);
+}
+
+export function isValidTesterId(value: unknown): value is string {
+  return typeof value === "string" && UUID_PATTERN.test(value);
 }
 
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -228,12 +233,14 @@ export type TestSendRequest = {
   dryRun: boolean;
   recipientPsid: string | null;
   recipientRef: string | null;
+  /** A verified tester (paired with a one-time code), by opaque id. */
+  testerId: string | null;
 };
 
 export function parseTestSendBody(raw: unknown): Parsed<TestSendRequest> {
   const body = readBody(raw);
   if (!body) return fail("Хүсэлтийн бүтэц буруу байна.");
-  const extra = unknownKeys(body, ["edition", "versionId", "dryRun", "recipientPsid", "recipientRef", "confirm"]);
+  const extra = unknownKeys(body, ["edition", "versionId", "dryRun", "recipientPsid", "recipientRef", "testerId", "confirm"]);
   if (extra.length) return fail(`Үл мэдэгдэх талбар: ${extra.join(", ")}.`);
   let versionId: string | null = null;
   if (body.versionId !== undefined && body.versionId !== null && body.versionId !== "") {
@@ -257,12 +264,17 @@ export function parseTestSendBody(raw: unknown): Parsed<TestSendRequest> {
     if (!isValidRecipientRef(body.recipientRef)) return fail("Хүлээн авагчийн лавлагаа буруу байна.");
     recipientRef = body.recipientRef;
   }
-  if (recipientPsid && recipientRef) return fail("Хүлээн авагчийг нэг л аргаар заана.");
+  let testerId: string | null = null;
+  if (body.testerId !== undefined && body.testerId !== null && body.testerId !== "") {
+    if (!isValidTesterId(body.testerId)) return fail("Туршигчийн дугаар буруу байна.");
+    testerId = body.testerId;
+  }
+  if ([recipientPsid, recipientRef, testerId].filter(Boolean).length > 1) return fail("Хүлээн авагчийг нэг л аргаар заана.");
   if (!dryRun) {
     if (body.confirm !== true) return fail("Жинхэнэ илгээлтийн өмнө баталгаажуулалт шаардлагатай.");
-    if (!recipientPsid && !recipientRef) return fail("Жинхэнэ илгээлтэд хүлээн авагч заавал шаардлагатай.");
+    if (!recipientPsid && !recipientRef && !testerId) return fail("Жинхэнэ илгээлтэд хүлээн авагч заавал шаардлагатай.");
   }
-  return { ok: true, value: { edition, versionId, dryRun, recipientPsid, recipientRef } };
+  return { ok: true, value: { edition, versionId, dryRun, recipientPsid, recipientRef, testerId } };
 }
 
 /** Query value that may arrive as string | string[] | undefined. */

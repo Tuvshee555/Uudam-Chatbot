@@ -1,6 +1,6 @@
 import { useRef, type KeyboardEvent, type ReactNode } from "react";
 import { Badge, cx } from "@/components/ui";
-import type { CatalogueEdition, CatalogueVersionStatus } from "@/lib/catalogue/types";
+import type { CatalogueEdition, CataloguePhotoQuality, CatalogueVersionStatus } from "@/lib/catalogue/types";
 import type { CatalogueFreshnessView, CatalogueReviewRow } from "@/lib/catalogue/admin/types";
 
 export const EDITION_LABEL: Record<CatalogueEdition, string> = {
@@ -36,6 +36,12 @@ const SEVERITY_LABEL: Record<CatalogueReviewRow["severity"], string> = {
 export function SeverityChip({ severity, className }: { severity: CatalogueReviewRow["severity"]; className?: string }) {
   const tone = severity === "blocking" ? "danger" : severity === "warning" ? "warning" : severity === "ok" ? "success" : "neutral";
   return <Badge tone={tone} className={className}>{SEVERITY_LABEL[severity]}</Badge>;
+}
+
+export function HeroQualityChip({ quality, className }: { quality: CataloguePhotoQuality; className?: string }) {
+  const tone = quality === "missing" ? "danger" : quality === "weak" ? "warning" : "success";
+  const label = quality === "excellent" ? "Маш сайн зураг" : quality === "good" ? "Сайн зураг" : quality === "weak" ? "Сул зураг" : "Зураггүй";
+  return <Badge tone={tone} className={className}>{label}</Badge>;
 }
 
 export function FreshnessBadge({ freshness }: { freshness: CatalogueFreshnessView }) {

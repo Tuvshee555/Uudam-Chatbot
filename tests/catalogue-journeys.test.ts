@@ -423,3 +423,165 @@ test("corporate catalogue journeys", async (context) => {
     await world.close();
   }
 });
+
+/**
+ * "Тестер холбох": a staff member proves their own Messenger account by sending a one-time code to the
+ * Page. Through the real signed webhook; storage and Meta are in-memory fakes. The code is the only
+ * thing that registers a tester: a sentence, a near miss, an expired, used or stranger's code, a
+ * guesser, and a conversation staff own all register nobody.
+ */
+test("catalogue tester pairing journeys", async (context) => {
+  const world = await setup(context);
+  const { harness, meta, stored, say, texts } = world;
+  const testers = await import("../src/lib/catalogue/testers");
+  const { memoryTesterStore } = await import("./helpers/testerFakes");
+  const { sendCatalogueTest } = await import("../src/lib/catalogue/send");
+  const mem = memoryTesterStore(() => Date.now());
+  const codes: string[] = [];
+  testers.setTesterRuntimeForTests({ store: mem.store, code: () => codes.shift()! });
+  const lines: string[] = [];
+  for (const level of ["log", "info", "warn", "error", "debug"] as const) {
+    context.mock.method(console, level, (...args: unknown[]) => { lines.push(args.map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg))).join(" ")); });
+  }
+  const issue = async (code: string, label = "Миний утас") => {
+    codes.push(code);
+    return testers.createPairingCode({ actor: "owner.test@example.test", label });
+  };
+  const paired = async () => (await testers.listTesters()).map((tester) => tester.masked).sort();
+  const advance = (ms: number) => context.mock.timers.setTime(Date.now() + ms);
+  const ACK = testers.TESTER_PAIRED_TEXT;
+  try {
+    await context.test("the staff member's own account is registered by the exact code: one short acknowledgement, nothing else", async () => {
+      const { code } = await issue("UUDAM-TEST-7K3Q9X");
+      const turn = await say("tester-psid-001", code);
+      assert.deepEqual(texts(turn.sends), [ACK]);
+      assert.equal(ACK, "Тестийн бүртгэл амжилттай. Админ дээрээс каталогийг илгээж болно.");
+      assert.equal(turn.modelCalls + turn.answerModelCalls, 0, "no AI spend");
+      assert.equal(turn.leads.length, 0, "a pairing is not a customer lead");
+      assert.equal(meta.files.length, 0, "no catalogue is sent by a pairing");
+      assert.equal(turn.history.some((row) => row.text.includes(code)), false, "the one-time code is never written to the conversation history");
+      const [tester] = await testers.listTesters();
+      assert.equal(tester.label, "Миний утас");
+      assert.equal(tester.masked, "…-001");
+      assert.equal(tester.windowOpen, true, "they just wrote to the Page");
+      assert.deepEqual(Object.keys(tester).sort(), ["id", "label", "lastInboundAt", "masked", "verifiedAt", "windowClosesAt", "windowOpen"], "the browser view has no PSID field");
+      assert.equal(mem.codes.get(testers.hashTesterCode(code))?.consumedAt !== null, true, "the code is burnt");
+    });
+
+    await context.test("phone autocorrect (lower case, spaces) is forgiven", async () => {
+      const { code } = await issue("UUDAM-TEST-ABCD23", "Хоёр дахь утас");
+      const turn = await say("tester-psid-002", `  ${code.toLowerCase()} `);
+      assert.deepEqual(texts(turn.sends), [ACK]);
+      assert.deepEqual(await paired(), ["…-001", "…-002"]);
+    });
+
+    await context.test("a replayed code, and a second account using the same code, register nobody", async () => {
+      const again = await say("tester-psid-001", "UUDAM-TEST-7K3Q9X");
+      assert.ok(!texts(again.sends).includes(ACK), "a burnt code is not acknowledged again");
+      const stranger = await say("customer-stranger", "UUDAM-TEST-7K3Q9X");
+      assert.ok(!texts(stranger.sends).includes(ACK));
+      assert.deepEqual(await paired(), ["…-001", "…-002"], "still the two original accounts");
+    });
+
+    await context.test("a customer typing something code-like is not registered, and the live code is not burnt by them", async () => {
+      const { code } = await issue("UUDAM-TEST-K2M3N4");
+      for (const text of [`${code} байна уу`, `миний код ${code}`, "UUDAM-TEST-K2M3N", `${code}9`, "UUDAM-TEST-K2M3N0", "uudam test K2M3N4", `${code}\nA01`]) {
+        const turn = await say("customer-curious", text);
+        assert.ok(!texts(turn.sends).includes(ACK), `${JSON.stringify(text)} is not a pairing`);
+      }
+      assert.deepEqual(await paired(), ["…-001", "…-002"]);
+      assert.equal(mem.codes.get(testers.hashTesterCode(code))?.consumedAt, null, "the code is still unused");
+      const real = await say("tester-psid-003", code);
+      assert.deepEqual(texts(real.sends), [ACK], "the real owner of the code can still use it");
+    });
+
+    await context.test("an expired code registers nobody", async () => {
+      const { code } = await issue("UUDAM-TEST-P5Q6R7");
+      advance(31 * 60_000);
+      const turn = await say("tester-psid-late", code);
+      assert.ok(!texts(turn.sends).includes(ACK));
+      assert.equal((await paired()).includes("…late"), false);
+    });
+
+    await context.test("a conversation staff own never reaches the pairing, and the code stays live", async () => {
+      const { code } = await issue("UUDAM-TEST-S8T9U2");
+      harness.pause("tester-owned", undefined, "operator_reply");
+      const turn = await say("tester-owned", code);
+      assert.equal(turn.sends.length, 0);
+      assert.equal(mem.codes.get(testers.hashTesterCode(code))?.consumedAt, null);
+      assert.equal((await paired()).includes("…wned"), false);
+    });
+
+    await context.test("a guesser is stopped after five code-shaped tries, even with the right code, until the window passes", async () => {
+      const { code } = await issue("UUDAM-TEST-V3W4X5");
+      for (const wrong of ["UUDAM-TEST-AAAAA2", "UUDAM-TEST-AAAAA3", "UUDAM-TEST-AAAAA4", "UUDAM-TEST-AAAAA5", "UUDAM-TEST-AAAAA6"]) await say("tester-guesser", wrong);
+      const blocked = await say("tester-guesser", code);
+      assert.ok(!texts(blocked.sends).includes(ACK), "the sixth try is refused even though the code is right");
+      advance(11 * 60_000);
+      const later = await say("tester-guesser", code);
+      assert.deepEqual(texts(later.sends), [ACK]);
+    });
+
+    await context.test("a real test send reaches only the verified tester: one text, one file, window, revoke and kill switch honoured", async () => {
+      const [first] = (await testers.listTesters()).filter((tester) => tester.masked === "…-001");
+      const direct: Array<{ recipient: string; text: string }> = [];
+      let kill = false;
+      let pageStop: { status: "blocked_paused"; reason: string } | null = null;
+      const deps = {
+        sendDirectText: async (recipient: string, text: string) => { direct.push({ recipient, text }); return true; },
+        gate: async () => ({ status: "blocked_staff_owned" as const, reason: "operator_reply" }),
+        pageGate: async () => pageStop,
+        killSwitch: () => kill,
+        assertMaySend: async () => { throw new Error("a verified tester's own conversation is not checked for staff takeover"); },
+      };
+      const send = (dryRun: boolean) => sendCatalogueTest({ recipientPsid: "", testerId: first.id, edition: "quick", dryRun, env: {}, deps });
+
+      const dry = await send(true);
+      assert.deepEqual(dry.payload?.messages.map((message) => message.kind), ["text", "file"], "exactly one text and one file");
+      assert.equal(JSON.stringify(dry).includes("tester-psid-001"), false);
+      assert.equal(direct.length + meta.files.length, 0, "a dry run sends nothing");
+
+      const before = meta.files.length;
+      const sent = await send(false);
+      assert.deepEqual([sent.ok, sent.status], [true, "sent"]);
+      assert.deepEqual(direct, [{ recipient: "tester-psid-001", text: catalogueCaption("quick") }]);
+      assert.equal(meta.files.length, before + 1);
+      assert.equal(meta.files.at(-1)!.recipientId, "tester-psid-001");
+      assert.equal(stored.claims.some((claim) => claim.senderId === "tester-psid-001"), false, "a test takes no customer send slot");
+
+      pageStop = { status: "blocked_paused", reason: "page_paused" };
+      assert.equal((await send(false)).status, "blocked_paused");
+      pageStop = null;
+      kill = true;
+      assert.equal((await send(false)).status, "blocked_killswitch");
+      kill = false;
+      const filesNow = meta.files.length;
+
+      advance(25 * 3_600_000);
+      const closed = await send(false);
+      assert.deepEqual([closed.status, closed.reason], ["blocked_window", "outside_24h_window"]);
+      assert.equal(meta.files.length, filesNow, "nothing leaves outside the 24 h window");
+      assert.equal((await testers.listTesters()).find((tester) => tester.id === first.id)!.windowOpen, false);
+
+      mem.wroteToPage("tester-psid-001");
+      assert.equal((await testers.listTesters()).find((tester) => tester.id === first.id)!.windowOpen, true, "the webhook's last-seen reopens the window");
+      assert.equal((await send(false)).status, "sent");
+
+      assert.equal(await testers.revokeTester(first.id, "owner.test@example.test"), true);
+      const revoked = await send(false);
+      assert.deepEqual([revoked.ok, revoked.error], [false, "tester_revoked"]);
+      assert.equal((await paired()).includes("…-001"), false);
+    });
+
+    await context.test("neither the raw PSID of a tester nor a pairing code reached any log", async () => {
+      const text = lines.join("\n");
+      for (const secret of ["tester-psid-001", "tester-psid-002", "tester-psid-003", "customer-stranger", "UUDAM-TEST-7K3Q9X", "UUDAM-TEST-ABCD23", "UUDAM-TEST-K2M3N4", "UUDAM-TEST-V3W4X5"]) {
+        assert.equal(text.includes(secret), false, `${secret} must not be logged`);
+      }
+      assert.ok(lines.some((line) => line.includes("catalogue.tester_pairing")), "pairing outcomes are logged (hashed sender, status only)");
+    });
+  } finally {
+    testers.setTesterRuntimeForTests(null);
+    await world.close();
+  }
+});

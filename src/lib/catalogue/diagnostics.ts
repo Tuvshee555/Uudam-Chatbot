@@ -231,6 +231,9 @@ function priceSignature(card: CatalogueTripCard): string {
  * - a departure the published copy shows is no longer offered -> drift;
  * - its title, duration or transport label changed -> drift;
  * - a weekly trip's schedule line ("Пүрэв гараг бүр") changed -> drift (it has no calendar dates to compare).
+ * DISPLAY-ONLY differences are not drift: the chosen photo, its crop, the editorial display title,
+ * the group and the highlights can change without the published file saying anything untrue; only
+ * the title of record (card.title), prices, dates, status, duration and transport are compared.
  * A trip that only appears in the live snapshot is not drift: the published file is merely
  * older, nothing in it is false. Pure; the caller builds `live` with the same edition and config.
  */

@@ -15,12 +15,15 @@ import type { CatalogueTestResult } from "../send";
 import type {
   CatalogueConfig,
   CatalogueEdition,
+  CatalogueHeroChoice,
+  CataloguePhotoCandidate,
   CatalogueSnapshot,
   CatalogueVersionMeta,
   IsoDay,
   RenderedCatalogue,
   SnapshotInput,
 } from "../types";
+import type { CatalogueTesterView, PairingCodeIssued, TesterLookup } from "../testers";
 import type { CatalogueStatsResponse } from "./types";
 import { parsePsidAllowlist } from "./validation";
 
@@ -56,11 +59,19 @@ export type CatalogueStorePort = {
 export type CatalogueDataPort = {
   loadSnapshotInput(
     edition: CatalogueEdition,
-    options?: { nowIso?: string; tripIdsOverride?: string[]; readOnlyCodes?: boolean },
+    options?: { nowIso?: string; tripIdsOverride?: string[]; readOnlyCodes?: boolean; measurePhotos?: boolean },
   ): Promise<SnapshotInput>;
   buildCatalogueSnapshot(input: SnapshotInput): CatalogueSnapshot;
   isTripEligible(trip: TravelTrip, today: IsoDay): { eligible: boolean; reason: string | null };
   liveDrift(published: CatalogueSnapshot, live: CatalogueSnapshot): { drifted: boolean; reasons: string[] };
+  /** Every selectable hero photo of one trip with its measured size, score and issues, plus the staff choice. */
+  listPhotoCandidates(tripId: string): Promise<{
+    trip: { id: string } | null;
+    candidates: CataloguePhotoCandidate[];
+    chosen: CatalogueHeroChoice | null;
+  }>;
+  /** The diverse shortlist the "Санал болгосон" button fills into the Quick selection. */
+  recommendedQuick(): Promise<{ tripIds: string[]; reasons: Record<string, string>; cover: string | null }>;
 };
 
 export type CatalogueRenderPort = {
@@ -74,7 +85,17 @@ export type CatalogueSendPort = {
     dryRun?: boolean;
     /** Test this exact version (a draft awaiting review) instead of the published one. */
     versionId?: string | null;
+    /** A verified tester (catalogue/testers.ts): the raw PSID is resolved inside the send, never here. */
+    testerId?: string | null;
   }): Promise<CatalogueTestResult>;
+};
+
+export type CatalogueTestersPort = {
+  listTesters(): Promise<CatalogueTesterView[]>;
+  createPairingCode(input: { actor: string | null; label?: unknown }): Promise<PairingCodeIssued>;
+  revokeTester(id: string, actor: string | null): Promise<boolean>;
+  /** Server-only: carries the raw PSID. Routes use it to decide, never to answer. */
+  getTesterForSend(id: string): Promise<TesterLookup>;
 };
 
 export type CatalogueAdminDeps = {
@@ -82,6 +103,7 @@ export type CatalogueAdminDeps = {
   data: CatalogueDataPort;
   render: CatalogueRenderPort;
   send: CatalogueSendPort;
+  testers: CatalogueTestersPort;
   /** Every trip in status "active", straight from the chatbot's trip store. */
   listActiveTrips(): Promise<TravelTrip[]>;
   /** Env allowlist of test PSIDs (CATALOGUE_TEST_RECIPIENT_PSIDS); empty when unset. */
@@ -118,6 +140,11 @@ async function loadSend(): Promise<CatalogueSendPort> {
   return send;
 }
 
+async function loadTesters(): Promise<CatalogueTestersPort> {
+  const testers: CatalogueTestersPort = await import("../testers");
+  return testers;
+}
+
 async function listActiveTripsFromStore(): Promise<TravelTrip[]> {
   const { listTrips } = await import("../../travelOps");
   return listTrips({ status: "active", limit: 5000 });
@@ -132,6 +159,7 @@ export type LazyDeps = {
   data(): Promise<CatalogueDataPort>;
   render(): Promise<CatalogueRenderPort>;
   send(): Promise<CatalogueSendPort>;
+  testers(): Promise<CatalogueTestersPort>;
   listActiveTrips(): Promise<TravelTrip[]>;
   testRecipientPsids(): string[];
   metaOutboundDisabled(): Promise<boolean>;
@@ -150,6 +178,7 @@ export function getDeps(): LazyDeps {
     data: o?.data ? async () => o.data as CatalogueDataPort : once(loadData),
     render: o?.render ? async () => o.render as CatalogueRenderPort : once(loadRender),
     send: o?.send ? async () => o.send as CatalogueSendPort : once(loadSend),
+    testers: o?.testers ? async () => o.testers as CatalogueTestersPort : once(loadTesters),
     listActiveTrips: o?.listActiveTrips ?? listActiveTripsFromStore,
     testRecipientPsids: o?.testRecipientPsids ?? (() => parsePsidAllowlist(process.env.CATALOGUE_TEST_RECIPIENT_PSIDS)),
     metaOutboundDisabled: o?.metaOutboundDisabled

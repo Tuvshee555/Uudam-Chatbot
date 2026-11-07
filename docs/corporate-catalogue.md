@@ -17,6 +17,8 @@ trip, place, price or date in code, tests or docs; no model call anywhere in thi
 - [7. Operator guide: Generate, Preview, Publish, Rollback](#7-operator-guide-generate---preview---publish---rollback)
 - [8. Messenger flow and safeguards](#8-messenger-flow-and-safeguards)
 - [9. Environment variables](#9-environment-variables)
+- [9a. Test recipients: «Тестер холбох»](#9a-test-recipients-тестер-холбох)
+- [9b. Hero photo picker, display titles and the recommended shortlist](#9b-hero-photo-picker-display-titles-and-the-recommended-shortlist)
 - [10. Testing and scripts](#10-testing-and-scripts)
 - [11. Known limits](#11-known-limits)
 - [12. Data inconsistencies found so far](#12-data-inconsistencies-found-so-far)
@@ -50,7 +52,7 @@ trip, place, price or date in code, tests or docs; no model call anywhere in thi
 ```
 
 Admin UI: `src/components/admin/CatalogueTab.tsx` and `src/components/admin/catalogue/*`. Admin API:
-`/api/admin/catalogue/{state,config,trips,generate,versions,version/*,publish,rollback,test-send,stats}`.
+`/api/admin/catalogue/{state,config,trips,generate,versions,version/*,publish,rollback,test-send,stats,testers,testers/revoke,photos,recommend}`.
 Shared contract (types, constants, edition names): `src/lib/catalogue/types.ts`.
 
 Editions:
@@ -101,7 +103,12 @@ Pure functions in `src/lib/catalogue/pricing.ts` and friends; "today" is always 
   office address. No phone configured is a **blocking** warning.
 - **Photos**: an approved photo already stored for the trip (poster hero, trip photo, poster day photo). None, or
   one that cannot be fetched, gives a clean text placeholder and a `photo_missing` / `photo_fetch_failed`
-  warning; a small one raises `photo_low_resolution`. A stand-in picture is never used.
+  warning; a small one raises `photo_low_resolution`. A stand-in picture is never used. Staff may choose which of a
+  trip's own photos is the hero, where the crop is centred and how far to zoom (§9b); the choice is stored in the
+  catalogue config only, never on the trip. Every card carries a `heroQuality` (excellent, good, weak, missing); weak
+  and missing heroes are listed in the admin as «солих шаардлагатай».
+- **Display titles**: the book prints a concise editorial title derived from the trip's title of record; staff can
+  override that display title (80 characters at most). Identity (the title in the trip store) is never changed.
 
 Warning severities: `info` (FYI), `warning` (publishable, read it), `blocking` (publish refuses until the editor
 explicitly acknowledges it: no phone, no trips, a code collision).
@@ -161,32 +168,39 @@ all resolve (`normalizeTripCode`). A card without a code is not printed (blockin
 ## 7. Operator guide: Generate -> Preview -> Publish -> Rollback
 
 Admin sidebar **«Аяллын каталог»**. Light theme, Mongolian UI. Trip facts are read live; only staff curation is
-stored. Sections: **Хувилбарууд** (versions), **Сонголт** (selection), **Шалгалт** (review), **Үүсгэх ба нийтлэх**,
+stored. Sections: **Хувилбарууд** (versions), **Сонголт** (selection), **Зураг ба гарчиг** (photos and titles), **Шалгалт** (review), **Үүсгэх ба нийтлэх**,
 **Туршилтын илгээлт** (test send), **Статистик**.
 
 1. **Сонголт (Selection).** Quick: pick 8 to 12 trips and their order, mark featured trips (shown first), exclude
    trips, override a trip's group. Complete: every eligible trip prints automatically; you can only reorder or
    exclude. The admin enforces 8 to 12 for quick (selection, generate and publish).
-2. **Шалгалт (Review).** Computed live, before anything is generated: per trip, what will print (price and the
-   date it belongs to, dates, highlights, photo) and its warnings. Nothing is stored. Fix the cause in the trip
-   itself (dates, fares, photos, description) and it shows on the next Generate; nothing is edited in the catalogue.
-3. **Үүсгэх (Generate).** Choose the edition and press **Үүсгэх**. One consistent snapshot of the live trips is built,
+   For Quick, **«Санал болгосон 10-г ашиглах»** fills the selection with a diverse shortlist (one slot per
+   destination, balanced themes, premium photos first) with a reason per trip. It only fills the draft: nothing is
+   saved until you press **Хадгалах**.
+2. **Зураг ба гарчиг (Photos and titles).** Section «Зураг ба гарчиг»: the list «Хуучин/сул зураг — солих шаардлагатай»
+   (weak or missing heroes, each with its reason), and the per-trip picker (§9b).
+3. **Шалгалт (Review).** Computed live, before anything is generated: per trip, what will print (price and the
+   date it belongs to, dates, highlights, photo and its quality chip, the display title) and its warnings. Nothing is
+   stored. Fix the cause in the trip itself (dates, fares, photos, description) and it shows on the next Generate;
+   nothing is edited in the catalogue.
+4. **Үүсгэх (Generate).** Choose the edition and press **Үүсгэх**. One consistent snapshot of the live trips is built,
    rendered once and stored as a **DRAFT** with its page images. Nothing is published or sent. It usually takes
    under a minute (the route budget is 60 s); a second click while it runs is refused.
-4. **Урьдчилан харах (Preview).** Page-by-page images of the exact PDF. Check the cover, each trip page, the
+5. **Урьдчилан харах (Preview).** Page-by-page images of the exact PDF. Check the cover, each trip page, the
    contents/group page and the closing page (phones, site). Read the **warnings list**. **Open** or **download**
-   the real PDF from the version row. «Туршилтын илгээлт» can send a draft to an allowlisted tester (§9).
-5. **Нийтлэх (Publish).** Press publish and confirm. If the version carries **blocking** warnings the button stays
+   the real PDF from the version row. «Туршилтын илгээлт» can send a draft (or the preview sample) to a verified
+   tester (§9a).
+6. **Нийтлэх (Publish).** Press publish and confirm. If the version carries **blocking** warnings the button stays
    off until you tick the acknowledgement; a quick version outside 8 to 12 trips cannot be published. The previous
    published version becomes «хуучирсан» (superseded) in the same moment. From here the bot sends this file.
-6. **Rollback.** In **Хувилбарын түүх**, pick a previously published (superseded) version and press **Буцаах**. Only
+7. **Rollback.** In **Хувилбарын түүх**, pick a previously published (superseded) version and press **Буцаах**. Only
    versions that were published before can be restored; the bytes never changed, so it is exactly the old file.
    Rolling back to a version older than 21 days, or one whose live data has since changed, makes it stale again
    immediately (§8), so prefer generating a new version.
-7. **Stale banner.** The versions tab and a banner on the other sections show when a published version is stale
+8. **Stale banner.** The versions tab and a banner on the other sections show when a published version is stale
    (older than 21 days, or a trip is no longer bookable, a dated fare or the next date changed, a printed
    departure was removed, a title changed) with the reasons. Generate and publish again.
-8. **Статистик.** Delivery counts by status and version for the last days (sent, link fallback, stale fallback,
+9. **Статистик.** Delivery counts by status and version for the last days (sent, link fallback, stale fallback,
    suppressed, blocked, failed), unique recipients. Watch it after the first sends.
 
 Every admin route is behind the same auth as the rest of the admin (signed-in same-origin session for writes, the
@@ -254,15 +268,69 @@ Safeguards:
 | Variable | Needed | Purpose |
 |---|---|---|
 | `NEON_DATABASE_URL` | yes (already set) | trips, posters and every `catalogue_*` table |
-| `CATALOGUE_TEST_RECIPIENT_PSIDS` | to test for real | comma-separated PSIDs the admin «Туршилтын илгээлт» may send to. Empty: only the dry run («Дээж харах») works. A tester must have written to the page in the last 24 hours. |
+| `CATALOGUE_TEST_RECIPIENT_PSIDS` | **optional extra** | comma-separated PSIDs the admin may ALSO send tests to. Not needed: verified testers (§9a) replace it. A recipient must have written to the page in the last 24 hours. |
 | `CATALOGUE_PUBLIC_BASE_URL` | optional | host of the public file link; falls back to `NEXT_PUBLIC_SITE_URL`, `SITE_URL`, then the Vercel production URL |
 | `WEBHOOK_BOT_DISABLED` | existing | kill switch; also honoured by test sends |
 | `BLOB_READ_WRITE_TOKEN` | **not needed** | the catalogue stores nothing in Vercel Blob |
 | `CHROME_EXECUTABLE_PATH` | local only | a local Chrome or Edge for rendering; on Vercel `@sparticuz/chromium` is used |
 
 Test send rules (`/api/admin/catalogue/test-send`): dry run is the default and sends nothing; a real send needs
-`dryRun=false` **and** an explicit confirmation **and** a PSID on the allowlist **and** the kill switch off; the
-browser never holds a full PSID (only masked labels).
+`dryRun=false` **and** an explicit confirmation **and** a verified tester (§9a) with an open Messenger window (or a
+PSID on the optional env list) **and** the Meta kill switch / Vercel Preview rule off **and** the page not paused; the
+browser never holds a full PSID (only labels and a masked tail). The file may be a draft, the published version or
+the preview sample (the sample only to a verified tester).
+
+## 9a. Test recipients: «Тестер холбох»
+
+Nobody hunts for a Messenger id or edits a Vercel variable any more, and a test can never reach a customer: identity
+is **proven by a one-time code**.
+
+1. In **Аяллын каталог -> Туршилтын илгээлт** a signed-in staff member presses **«Тестер холбох»** (optionally naming
+   the device). The server mints a code like `UUDAM-TEST-7K3Q9X` (no 0/O/1/I/L), keeps only its SHA-256, and shows it once.
+   It is valid for **30 minutes** and works **once**; pressing the button again retires the previous unused code. A
+   read-only API token cannot mint one.
+2. The staff member sends **exactly that code, as the whole message,** to the Page from their **own Messenger
+   account**. This is the one unavoidable live-device step; the screen says so while no tester exists.
+3. The webhook (`handleTesterPairingTurn` in `webhookCatalogue.ts`, called by `webhook.ts` after the paused-page,
+   paused-sender and staff-takeover checks and before any routing) recognises a message that **is** an active code
+   (upper/lower case and surrounding spaces forgiven; a sentence, a near miss, an expired, used or stranger's code is
+   ignored and answered by the normal flow). It burns the code in one atomic `UPDATE ... RETURNING`, registers THAT
+   sender in `catalogue_testers` and replies one short acknowledgement through `deliverFastPathReply`:
+   «Тестийн бүртгэл амжилттай. Админ дээрээс каталогийг илгээж болно.» The code is never written to the conversation
+   history or the logs. A sender gets five code-shaped tries per ten minutes.
+4. The tester appears in the admin as **label + masked tail + verified time + «Messenger цонх нээлттэй / хаагдсан»**
+   and a **Цуцлах** (revoke) button. The 24 h window is the later of the tester's own last message and
+   `travel_senders.last_seen`, which `trackSender` refreshes on every inbound message, so writing to the Page again
+   reopens it. Up to 10 active testers.
+
+Tables (created lazily by `src/lib/catalogue/testers.ts`, not part of the shared schema): `catalogue_tester_codes`
+(code hash, label, creator, expiry, consumed marker) and `catalogue_testers` (raw PSID server-side only because
+sending needs it, a PSID hash, page id, label, masked tail, verified / last inbound / revoked stamps, creator). The raw
+PSID never leaves the server: every admin response and log carries only the label, the masked tail and an opaque id.
+
+What a real send to a tester checks, all of it: the tester is verified and not revoked; the window is open (else
+`tester_window_closed`, with the instruction to write to the Page again); `dryRun=false` and `confirm=true`; the Meta
+kill switch / Vercel Preview rule is off; the **page** is not paused and photo-only mode is off. **Decision:** a
+sender-level pause or staff takeover on the tester's OWN conversation does not block a test. That conversation is the
+staff member's own account, verified by a code only a signed-in admin could mint; staff "owning" it is exactly what they
+are doing. No customer send slot is claimed. The payload is always one text and one file attachment.
+
+## 9b. Hero photo picker, display titles and the recommended shortlist
+
+Section **«Зураг ба гарчиг»** (`GET|PUT /api/admin/catalogue/photos`, `GET /api/admin/catalogue/recommend`).
+
+- **Per trip**: every photo the trip owns appears as a candidate with its **real measured size**, a 0-100 score and
+  issue chips (low resolution, text or poster risk, ...). Choose one, then click or drag on the full photo (or use the
+  sliders) to set the **focal point**, and set the **zoom** (1 to 3). The 9:16 preview is the same CSS the book uses
+  (`object-fit: cover`, `object-position` at the focal point, `transform: scale` around it).
+- **Server rules**: the chosen url must be one of that trip's own candidates (a photo of another trip or site is
+  refused, 422); focal in 0..1, zoom in 1..3; `null` clears the choice. Stored as `heroByTripId[tripId] = {url, focal, zoom}`
+  in the catalogue config, together with `titleOverrides[tripId]` (display only, at most 80 characters). Neither
+  touches a price, a date or the trip's own title. Writes need a signed-in same-origin session; the bearer token reads only.
+- **«Хуучин/сул зураг — солих шаардлагатай»**: trips whose hero quality is weak or missing, each with a plain reason
+  (resolution, no photo). The review table shows the same quality chip and reason.
+- **Recommended shortlist**: `GET /recommend` returns trip ids with a reason each plus the trip best suited to the cover.
+  The Quick tab's button fills the draft; nothing is saved without **Хадгалах**.
 
 ## 10. Testing and scripts
 
@@ -332,15 +400,16 @@ Described as classes of problem, not as trips. The catalogue prints the dated fa
 
 Do these in order. Nothing here messages a real customer until step 6.
 
-1. **Set test recipients.** Put your own PSID (and a colleague's) in `CATALOGUE_TEST_RECIPIENT_PSIDS` in Vercel
-   (Production), redeploy. Check the contact phones in the admin «Холбоо барих мэдээлэл» (up to three are printed).
+1. **Pair your test device.** In the admin: «Туршилтын илгээлт» -> **«Тестер холбох»**, then send the code it shows,
+   exactly, from your own Messenger to the Page (§9a). No PSID to find, no Vercel variable. Check the contact phones in
+   the admin «Холбоо барих мэдээлэл» (up to three are printed).
 2. **Dry run.** `npm run catalogue:dry-run -- --edition quick --out tmp/dry-run`. Expect: delivery `sent`, **1 text, 1
    file attachment, 0 image attachments**, freshness FRESH, no blocking warnings. Open the PDF; read every warning
    (§12 classes) and fix the trips, not the catalogue.
 3. **Generate and Preview in the admin.** Generate **Хурдан** (and **Бүрэн**), page through the preview on a phone
    width, check codes, prices, dates, phones, site.
-4. **Send a test to yourself.** Message the page from your own account, then «Туршилтын илгээлт» -> pick the draft
-   -> «Дээж харах» (dry) -> tick the confirmation -> «Туршилтаар илгээх». Confirm on your phone: one caption, one PDF
+4. **Send a test to yourself.** Pick your tester (its «Messenger цонх» must be open; write anything to the page if not),
+   then «Туршилтын илгээлт» -> pick the draft -> «Дээж харах» (dry) -> tick the confirmation -> «Туршилтаар илгээх». Confirm on your phone: one caption, one PDF
    that opens, selectable text, Ө Ү ₮ rendering. Reply «A01, 25 хүн, 1-р сар» and confirm exactly one acknowledgement.
 5. **Publish.** «Нийтлэх» the version you tested. Open the public link in a browser and on a phone (§11).
 6. **Watch the first real asks.** Keep «Аяллын каталог» -> «Статистик» and the **Leads tab** open: every blocked,

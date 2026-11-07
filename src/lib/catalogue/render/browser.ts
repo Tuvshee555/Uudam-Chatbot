@@ -130,21 +130,34 @@ const FIT_AND_AUDIT = `(() => {
     if (!what && page.scrollWidth > page.clientWidth + tol) what = 'width';
     if (!what) {
       const walker = document.createTreeWalker(page, NodeFilter.SHOW_TEXT);
+      const boxes = [];
       let node;
       while ((node = walker.nextNode())) {
         if (!node.textContent || !node.textContent.trim()) continue;
         const el = node.parentElement;
         if (!el || el.closest('.ph')) continue;
+        const inFoot = !!el.closest('.foot,.caption');
         const range = document.createRange();
         range.selectNodeContents(node);
         for (const b of range.getClientRects()) {
           if (b.width === 0 || b.height === 0) continue;
-          if (b.left < r.left + 20 || b.right > r.right - 20 || b.bottom > r.bottom - 8 || b.top < r.top) {
+          // body text keeps clear of the footer line (52px = 39pt from the bottom edge)
+          if (b.left < r.left + 20 || b.right > r.right - 20 || b.bottom > r.bottom - 8 || b.top < r.top || (!inFoot && b.bottom > r.bottom - 52)) {
             what = 'text outside margins: ' + node.textContent.trim().slice(0, 40);
             break;
           }
+          boxes.push({ b, el, t: node.textContent.trim().slice(0, 28) });
         }
         if (what) break;
+      }
+      for (let x = 0; !what && x < boxes.length; x++) {
+        for (let y = x + 1; y < boxes.length; y++) {
+          const p = boxes[x], q = boxes[y];
+          if (p.el === q.el) continue;
+          const ix = Math.min(p.b.right, q.b.right) - Math.max(p.b.left, q.b.left);
+          const iy = Math.min(p.b.bottom, q.b.bottom) - Math.max(p.b.top, q.b.top);
+          if (ix > 3 && iy > 4) { what = 'text overlaps: ' + p.t + ' / ' + q.t; break; }
+        }
       }
     }
     if (what) overflowPages.push({ page: i + 1, what });

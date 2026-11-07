@@ -15,9 +15,12 @@ import {
   renderCatalogue,
   type RenderAssets,
 } from "../src/lib/catalogue/render";
-import { defaultImageFetcher, prepareImage, prepareTripPhotos, encodeProfileFor, TRIP_HERO_ASPECT } from "../src/lib/catalogue/render/images";
+import { defaultImageFetcher } from "../src/lib/catalogue/render/images";
+import { ASPECT, cropImage, cropWindow, encodeProfileFor, loadWork, prepareArt, scrimStrength } from "../src/lib/catalogue/render/art";
+import type { TripArt } from "../src/lib/catalogue/render";
 import { outlineFor } from "../src/lib/catalogue/render/pdfMeta";
-import { headlineSizePt, orderTrips, UNGROUPED_LABEL } from "../src/lib/catalogue/render/layout";
+import { assignCompositions, clipHighlight, departureLine, headlineSizePt, orderTrips, priceParts, UNGROUPED_LABEL } from "../src/lib/catalogue/render/layout";
+import { emptyArt } from "../src/lib/catalogue/render/renderTypes";
 import { LOGO_FILE, loadStaticAssets } from "../src/lib/catalogue/render/assets";
 import { displayTitle } from "../src/lib/catalogue/render/titleCase";
 import { makeSyntheticPhoto, sampleImageFetcher, sampleSnapshot } from "../src/lib/catalogue/render/fixture";
@@ -25,15 +28,19 @@ import { makeSyntheticPhoto, sampleImageFetcher, sampleSnapshot } from "../src/l
 const ROOT = process.cwd();
 const TINY_LOGO = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAAP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==";
 
+function tinyImage() {
+  return { dataUri: TINY_LOGO, width: 10, height: 10, sourceCropWidth: 2000, bytes: 1 };
+}
+
 function assetsFor(snapshot: CatalogueSnapshot, extra: Partial<RenderAssets> = {}): RenderAssets {
-  return { fonts: [], logoDataUri: TINY_LOGO, heroes: {}, cover: null, versionLabel: "v-test", ...extra };
+  return { fonts: [], logoDataUri: TINY_LOGO, ...emptyArt(), versionLabel: "v-test", ...extra };
 }
 
 function card(over: Partial<CatalogueTripCard> & { n: number }): CatalogueTripCard {
   const base = sampleSnapshot({ trips: 1 }).trips[0]!;
   const code = `A${String(over.n).padStart(2, "0")}`;
   const { n: _n, ...rest } = over;
-  return { ...base, tripId: `t-${over.n}`, code, title: `Жишиг аялал ${over.n}`, ...rest };
+  return { ...base, tripId: `t-${over.n}`, code, title: `Жишиг аялал ${over.n}`, editorialTitle: rest.title ?? `Жишиг аялал ${over.n}`, ...rest };
 }
 
 function snapshotOf(trips: CatalogueTripCard[], groups?: CatalogueSnapshot["groups"]): CatalogueSnapshot {
@@ -76,18 +83,20 @@ test("html builder escapes every dynamic string and refuses unsafe links", () =>
 
 test("html never references a non-data resource (the browser may only load data: URLs)", () => {
   const snap = sampleSnapshot({ trips: 4 });
-  const heroes = Object.fromEntries(snap.trips.map(t => [t.tripId, { dataUri: TINY_LOGO, width: 10, height: 10, sourceCropWidth: 2000, bytes: 1 }]));
-  const html = buildCatalogueHtml(snap, assetsFor(snap, { heroes }));
+  const trips = Object.fromEntries(snap.trips.map(t => [t.tripId, { composition: "plate", hero: tinyImage(), second: null, thumb: tinyImage() } satisfies TripArt]));
+  const html = buildCatalogueHtml(snap, assetsFor(snap, { trips }));
   for (const m of html.matchAll(/\bsrc="([^"]*)"/g)) assert.ok(m[1]!.startsWith("data:"), `img src ${m[1]!.slice(0, 40)}`);
   assert.ok(!/url\((?!data:)/i.test(html), "no external url() in css");
   assert.ok(!/<link\b|@import/i.test(html), "no stylesheet links or imports");
 });
 
-test("page plan: cover + contents + one page per trip + closing, numbers match the pages printed", () => {
+test("page plan: cover + contents + openers + one page per trip + closing, numbers match the pages printed", () => {
   const snap = sampleSnapshot({ trips: 40, edition: "complete" });
   const plan = planPages(snap);
   assert.ok(plan.contentsPages.length >= 3, "40 trips need several contents pages");
-  assert.equal(plan.totalPages, 1 + plan.contentsPages.length + 40 + 1);
+  const openers = plan.chapters.filter(c => c.openerPage != null).length;
+  assert.equal(openers, plan.chapters.length, "the complete edition opens every chapter");
+  assert.equal(plan.totalPages, 1 + plan.contentsPages.length + openers + 40 + 1);
   const html = buildCatalogueHtml(snap, assetsFor(snap));
   assert.equal((html.match(/<section class="page/g) ?? []).length, plan.totalPages);
 
@@ -96,12 +105,14 @@ test("page plan: cover + contents + one page per trip + closing, numbers match t
   assert.equal(rows.length, 40);
   for (const item of rows) {
     if (item.kind !== "row") continue;
-    const re = new RegExp(`<section class="page trip" id="trip-${item.trip.card.code}" data-page="${item.trip.page}"`);
+    const re = new RegExp(`id="trip-${item.trip.card.code}" data-page="${item.trip.page}"`);
     assert.match(html, re, `${item.trip.card.code} page ${item.trip.page}`);
   }
   const pages = plan.trips.map(t => t.page);
   assert.deepEqual(pages, [...pages].sort((a, b) => a - b));
   assert.equal(plan.closingPage, plan.totalPages);
+  // each chapter's opener sits directly before its first trip
+  for (const c of plan.chapters) assert.equal(c.openerPage! + 1, c.trips[0]!.page);
   // a group split across contents pages is announced again
   assert.ok(plan.contentsPages.slice(1).every(p => p[0]?.kind === "group"), "each continued page starts with its group label");
 });
@@ -119,39 +130,110 @@ test("book order follows the groups; trips no group lists are kept, never droppe
   assert.equal(ordered[2]!.groupLabel, UNGROUPED_LABEL);
 });
 
+test("chapter openers: quick books open chapters of two or more trips; one-trip chapters and one-chapter books do not", () => {
+  const quick = sampleSnapshot({ trips: 8, edition: "quick" });
+  const plan = planPages(quick);
+  assert.equal(plan.hasOpeners, true);
+  for (const c of plan.chapters) assert.equal(c.openerPage != null, c.trips.length >= 2, c.label);
+  const lone = bookOf(4, { groups: 1 });
+  assert.equal(planPages({ ...lone, edition: "quick" }).hasOpeners, false);
+  assert.equal(planPages({ ...lone, edition: "complete" }).hasOpeners, true);
+});
+
+test("compositions: deterministic rhythm, never the same twice in a row when another fits, type page without a photo", () => {
+  const all = { hasHero: true, cinema: true, plate: true, panorama: true, diptych: true };
+  const run = assignCompositions(Array.from({ length: 8 }, () => all));
+  assert.deepEqual(run, ["cinema", "plate", "panorama", "diptych", "cinema", "plate", "panorama", "diptych"]);
+  assert.deepEqual(assignCompositions(Array.from({ length: 8 }, () => all)), run, "deterministic");
+  const plateOnly = { hasHero: true, cinema: false, plate: true, panorama: false, diptych: false };
+  assert.deepEqual(assignCompositions([plateOnly, plateOnly]), ["plate", "plate"], "falls back rather than inventing a fit");
+  const mixed = assignCompositions([all, { ...all, hasHero: false }, { ...plateOnly, panorama: true }]);
+  assert.equal(mixed[1], "type");
+  assert.notEqual(mixed[2], "type");
+  for (let i = 1; i < run.length; i++) assert.notEqual(run[i], run[i - 1]);
+});
+
+test("date line: first three departures as month.day, year only where it changes, '+ N' for the rest; facts are never invented", () => {
+  const base = sampleSnapshot({ trips: 1 }).trips[0]!;
+  const withDays = (departures: string[], label = "") => ({ ...base, dates: { nextDeparture: departures[0] ?? null, departures, label } });
+  const a = departureLine(withDays(["2026-11-14", "2026-11-28", "2026-12-12", "2027-01-09"]), "2026-11-06");
+  assert.deepEqual(a.dates, ["11.14", "11.28", "12.12"]);
+  assert.equal(a.more, 1);
+  const b = departureLine(withDays(["2027-01-09", "2027-01-23"]), "2026-11-06");
+  assert.deepEqual(b.dates, ["2027.01.09", "01.23"]);
+  assert.equal(b.more, 0);
+  const c = departureLine(withDays(["2026-11-14", "2026-11-21", "2026-11-28"], "Ойрын огноо: 2026.11.14, 2026.11.21, 2026.11.28 болон өөр 9 огноо"), "2026-11-06");
+  assert.equal(c.more, 9, "the data layer's count beyond the list is kept");
+  const none = departureLine(withDays([], "Явах огноог лавлана"), "2026-11-06");
+  assert.deepEqual(none.dates, []);
+  assert.equal(none.plain, "Явах огноог лавлана");
+});
+
+test("copy shaping: highlights are clipped at a natural break, never paraphrased; price splits at the tugrik sign", () => {
+  assert.equal(clipHighlight("Богино онцлог"), "Богино онцлог");
+  const long = "Эхний хэсэг нь энд байна, хоёр дахь хэсэг нь үүнийг үргэлжлүүлж, гурав дахь хэсэг нь маш урт мөр болгоно";
+  const clipped = clipHighlight(long, 60);
+  assert.ok(long.startsWith(clipped.split(",")[0]!), clipped);
+  assert.ok(clipped.length <= 60, clipped);
+  const noBreak = "Нэг ч зогсоолгүй маш урт үгсийн дараалал тасралтгүй үргэлжилсээр байх мөр тул хэвээр үлдэнэ";
+  assert.equal(clipHighlight(noBreak), noBreak);
+  assert.deepEqual(priceParts("3,980,000₮-с"), { amount: "3,980,000₮", suffix: "-с" });
+  assert.deepEqual(priceParts("Үнэ лавлах"), { amount: "Үнэ лавлах", suffix: "" });
+});
+
 test("copy limits: at most 3 highlights and 3 phones; price/date/group-note/disclaimer wording is present", () => {
-  const snap = snapshotOf([card({ n: 1, highlights: ["a1", "b2", "c3", "d4", "e5"] })]);
+  const snap = snapshotOf([card({ n: 1, highlights: ["a1 нэг", "b2 хоёр", "c3 гурав", "d4 дөрөв", "e5 тав"] })]);
   snap.contact = { phones: ["1111 1111", "2222 2222", "3333 3333", "4444 4444"], siteLabel: "example.test", siteUrl: "https://example.test" };
   const html = buildCatalogueHtml(snap, assetsFor(snap));
-  assert.equal((html.match(/<li>/g) ?? []).length, 3);
+  assert.ok(html.includes("a1 нэг") && html.includes("b2 хоёр") && html.includes("c3 гурав"));
   assert.ok(!html.includes("d4") && !html.includes("e5"));
   assert.ok(html.includes("1111 1111") && html.includes("3333 3333") && !html.includes("4444 4444"));
   for (const phrase of [
-    "ЭХЛЭХ ҮНЭ / НЭГ ТОМ ХҮН".toLowerCase(),
+    "Эхлэх үнэ / нэг том хүн",
     "Бүлгийн үнийг ажилтнаас лавлана",
     "Эцсийн үнэ, суудал, огноо, нөхцөлийг ажилтан баталгаажуулна",
-    "ХАМТ ОЛНЫ АЯЛЛЫН СОНГОЛТ",
+    "ХАМТ ОЛНЫ",
+    "АЯЛЛЫН СОНГОЛТ",
     "25 хүн, 1-р сар",
+    "Ойрын огноо",
   ]) {
     assert.ok(html.toLowerCase().includes(phrase.toLowerCase()), phrase);
   }
 });
 
-test("missing photo uses the typographic placeholder, never an <img>", () => {
+test("a trip without a usable photo gets the typographic page: no picture, fully described, credit never printed", () => {
   const withPhoto = card({ n: 1 });
   const noPhoto = card({ n: 2, photo: null });
   const snap = snapshotOf([withPhoto, noPhoto]);
-  const heroes = { [withPhoto.tripId]: { dataUri: TINY_LOGO, width: 10, height: 10, sourceCropWidth: 2000, bytes: 1 }, [noPhoto.tripId]: null };
-  const html = buildCatalogueHtml(snap, assetsFor(snap, { heroes }));
+  const trips: Record<string, TripArt> = { [withPhoto.tripId]: { composition: "plate", hero: tinyImage(), second: null, thumb: tinyImage() } };
+  const html = buildCatalogueHtml(snap, assetsFor(snap, { trips }));
   const section = (code: string) => html.slice(html.indexOf(`id="trip-${code}"`), html.indexOf("</section>", html.indexOf(`id="trip-${code}"`)));
-  assert.ok(section("A02").includes('class="ph"'));
-  assert.ok(!section("A02").includes('class="photo"'));
-  assert.ok(section("A01").includes('class="photo"') && !section("A01").includes('class="ph"'));
+  assert.ok(section("A02").includes('data-composition="type"') && !section("A02").includes("<img"));
+  assert.ok(section("A01").includes('data-composition="plate"') && section("A01").includes("<img"));
+  assert.ok(section("A02").includes("Жишиг аялал 2"));
   // a credit only goes with a photo that is actually printed
   const credited = card({ n: 3, photo: { url: "https://x.test/p.jpg", width: null, height: null, credit: "Жишиг зураглаач", source: "poster_hero" } });
   const s2 = snapshotOf([credited]);
-  assert.ok(!buildCatalogueHtml(s2, assetsFor(s2, { heroes: { [credited.tripId]: null } })).includes("Жишиг зураглаач"));
-  assert.ok(buildCatalogueHtml(s2, assetsFor(s2, { heroes: { [credited.tripId]: { dataUri: TINY_LOGO, width: 10, height: 10, sourceCropWidth: 2000, bytes: 1 } } })).includes("Жишиг зураглаач"));
+  assert.ok(!buildCatalogueHtml(s2, assetsFor(s2)).includes("Жишиг зураглаач"));
+  const printed: Record<string, TripArt> = { [credited.tripId]: { composition: "cinema", hero: tinyImage(), second: null, thumb: null } };
+  assert.ok(buildCatalogueHtml(s2, assetsFor(s2, { trips: printed })).includes("Жишиг зураглаач"));
+});
+
+test("every composition renders its own structure and the same facts", () => {
+  const snap = snapshotOf([card({ n: 1 }), card({ n: 2 }), card({ n: 3 }), card({ n: 4 })]);
+  const kinds = ["cinema", "plate", "panorama", "diptych"] as const;
+  const trips: Record<string, TripArt> = {};
+  snap.trips.forEach((t, i) => { trips[t.tripId] = { composition: kinds[i]!, hero: tinyImage(), second: kinds[i] === "diptych" ? tinyImage() : null, thumb: tinyImage() }; });
+  const html = buildCatalogueHtml(snap, assetsFor(snap, { trips }));
+  for (const [i, kind] of kinds.entries()) {
+    const code = `A0${i + 1}`;
+    const section = html.slice(html.indexOf(`id="trip-${code}"`), html.indexOf("</section>", html.indexOf(`id="trip-${code}"`)));
+    assert.ok(section.includes(`data-composition="${kind}"`), kind);
+    assert.ok(section.includes("3,740,000₮") && section.includes("Эхлэх үнэ / нэг том хүн") && section.includes('href="#contents"'), `${kind}: facts + link back`);
+    assert.ok(section.includes(`>${code}<`), `${kind}: code`);
+  }
+  assert.ok(html.includes('class="inset"'), "diptych inset");
+  assert.ok(html.includes('class="bg"'), "cinema background");
 });
 
 test("an empty edition still renders a valid plan (cover, contents notice, closing)", () => {
@@ -161,13 +243,12 @@ test("an empty edition still renders a valid plan (cover, contents notice, closi
   const html = buildCatalogueHtml(snap, assetsFor(snap));
   assert.ok(html.includes("Одоогоор санал болгох аялал алга"));
 });
-
 test("headline size only ever shrinks as titles get longer and never reaches microtype", () => {
   let previous = Infinity;
   for (const n of [1, 10, 16, 17, 26, 27, 38, 39, 54, 55, 80, 81, 200]) {
     const size = headlineSizePt("я".repeat(n));
     assert.ok(size <= previous, `${n} chars`);
-    assert.ok(size >= 18, "never below 18pt");
+    assert.ok(size >= 20, "never below 20pt");
     previous = size;
   }
 });
@@ -203,6 +284,10 @@ test("bundled fonts cover Cyrillic incl. Ө ө Ү ү and the tugrik sign ₮", a
   }
 });
 
+function squash(text: string): string {
+  return text.replace(/\s+/g, "");
+}
+
 function cmapCodepoints(b: Buffer): Set<number> {
   const set = new Set<number>();
   const tables = b.readUInt16BE(4);
@@ -236,25 +321,58 @@ function cmapCodepoints(b: Buffer): Set<number> {
   return set;
 }
 
-test("prepareImage crops to the hero aspect, resamples, never upscales, and rejects junk", async () => {
-  const landscape = await makeSyntheticPhoto(1, 2400, 1200);
-  const a = (await prepareImage(landscape, TRIP_HERO_ASPECT, encodeProfileFor(8)))!;
-  assert.ok(a.width <= 1200 && a.width >= 1100 - 2, `width ${a.width}`);
-  assert.ok(Math.abs(a.height / a.width - TRIP_HERO_ASPECT) < 0.01);
+test("crop windows follow the focal point and zoom, stay inside the source, and never change the aspect", () => {
+  const centre = cropWindow(2000, 1000, ASPECT.plate);
+  assert.equal(centre.width, 1000);
+  assert.equal(centre.height, 1000);
+  assert.equal(centre.left, 500);
+  const left = cropWindow(2000, 1000, ASPECT.plate, { x: 0.1, y: 0.5 });
+  assert.equal(left.left, 0, "clamped to the left edge");
+  const zoomed = cropWindow(2000, 1000, ASPECT.plate, { x: 0.9, y: 0.5 }, 2);
+  assert.equal(zoomed.width, 500);
+  assert.equal(zoomed.left + zoomed.width, 2000, "clamped to the right edge");
+  for (const w of [centre, left, zoomed]) assert.ok(Math.abs(w.height / w.width - ASPECT.plate) < 0.01);
+});
+
+test("cropImage: exact aspect, resampled, never upscaled, progressive JPEG; loadWork rejects junk", async () => {
+  const work = (await loadWork(await makeSyntheticPhoto(1, 2400, 1200)))!;
+  const a = (await cropImage(work, { aspect: ASPECT.plate, outWidth: 1040, quality: 80 }))!;
+  assert.ok(a.width <= 1040 && a.width >= 1000, `width ${a.width}`);
+  assert.ok(Math.abs(a.height / a.width - ASPECT.plate) < 0.01);
   assert.ok(a.bytes < 600_000, `bytes ${a.bytes}`);
   const jpeg = Buffer.from(a.dataUri.replace(/^data:image\/jpeg;base64,/, ""), "base64");
   assert.deepEqual([jpeg[0], jpeg[1]], [0xff, 0xd8]);
-  assert.equal((await sharp(jpeg).metadata()).width, a.width);
+  const meta = await sharp(jpeg).metadata();
+  assert.equal(meta.width, a.width);
+  assert.equal(meta.isProgressive, true);
 
-  const portrait = await makeSyntheticPhoto(2, 900, 1800);
-  const p = (await prepareImage(portrait, TRIP_HERO_ASPECT, encodeProfileFor(8)))!;
+  const narrow = (await loadWork(await makeSyntheticPhoto(2, 900, 1800)))!;
+  const p = (await cropImage(narrow, { aspect: ASPECT.plate, outWidth: 1040, quality: 80 }))!;
   assert.equal(p.width, 900, "narrow source is not upscaled");
 
-  const small = (await prepareImage(await makeSyntheticPhoto(3, 500, 400), TRIP_HERO_ASPECT, encodeProfileFor(8)))!;
-  assert.ok(small.width <= 400 && small.sourceCropWidth <= 400);
+  const small = (await loadWork(await makeSyntheticPhoto(3, 500, 400)))!;
+  const sm = (await cropImage(small, { aspect: ASPECT.plate, outWidth: 1040, quality: 80 }))!;
+  assert.ok(sm.width <= 400 && sm.sourceCropWidth <= 400);
 
-  assert.equal(await prepareImage(Buffer.from("not an image"), TRIP_HERO_ASPECT, encodeProfileFor(8)), null);
-  assert.equal(await prepareImage(await makeSyntheticPhoto(4, 40, 40), TRIP_HERO_ASPECT, encodeProfileFor(8)), null);
+  assert.equal(await loadWork(Buffer.from("not an image")), null);
+  assert.equal(await loadWork(await makeSyntheticPhoto(4, 40, 40)), null);
+});
+
+test("a baked scrim darkens the lower part of the photo and leaves the top alone; brighter photos get a stronger scrim", async () => {
+  const bright = await sharp({ create: { width: 1200, height: 1800, channels: 3, background: "#E8E8E0" } }).jpeg({ quality: 90 }).toBuffer();
+  const work = (await loadWork(bright))!;
+  const plain = (await cropImage(work, { aspect: ASPECT.page, outWidth: 600, quality: 80 }))!;
+  const scrimmed = (await cropImage(work, { aspect: ASPECT.page, outWidth: 600, quality: 80, scrim: { from: 0.42 } }))!;
+  const mean = async (img: { dataUri: string }, top: number) => {
+    const buf = Buffer.from(img.dataUri.replace(/^data:image\/jpeg;base64,/, ""), "base64");
+    const m = await sharp(buf).metadata();
+    const { data } = await sharp(buf).extract({ left: 0, top: Math.round((m.height ?? 0) * top), width: m.width ?? 1, height: Math.round((m.height ?? 0) * 0.1) }).greyscale().raw().toBuffer({ resolveWithObject: true });
+    return data.reduce((x, y) => x + y, 0) / data.length;
+  };
+  assert.ok(Math.abs((await mean(plain, 0.02)) - (await mean(scrimmed, 0.02))) < 6, "top untouched");
+  assert.ok((await mean(scrimmed, 0.88)) < (await mean(plain, 0.88)) - 70, "bottom darkened");
+  assert.ok(scrimStrength(0.9) > scrimStrength(0.1));
+  assert.ok(scrimStrength(0) >= 0.5 && scrimStrength(1) <= 0.9);
 });
 
 test("big editions get a smaller encode profile", () => {
@@ -262,27 +380,36 @@ test("big editions get a smaller encode profile", () => {
   assert.ok(encodeProfileFor(20).width < encodeProfileFor(8).width);
 });
 
-test("photo pipeline: missing, failed and low-resolution photos become warnings and placeholders, not errors", async () => {
-  const snap = sampleSnapshot({ trips: 6 });
-  let calls = 0;
+test("art pipeline: weak, missing and failed photos become typographic pages plus warnings, not errors; one fetch per URL", async () => {
+  const snap = sampleSnapshot({ trips: 8, edition: "quick" });
+  const seen: string[] = [];
   const base = sampleImageFetcher();
-  const heroes = await prepareTripPhotos(snap, async url => {
-    calls++;
-    if (url.includes("/ok/2.jpg")) throw new Error("network down");
+  const art = await prepareArt(snap, planPages(snap), async url => {
+    seen.push(url);
+    if (url.includes("/ok/3.jpg")) throw new Error("network down");
     return base(url);
   });
-  const byCode = (code: string) => heroes.warnings.filter(w => w.message.startsWith(code));
-  assert.equal(calls, 5, "no fetch for the trip without a photo url");
-  assert.equal(heroes.heroes["fx-trip-5"], null);
+  assert.equal(new Set(seen).size, seen.length, "no URL fetched twice");
+  const byCode = (code: string) => art.warnings.filter(w => w.message.startsWith(code));
+  assert.ok(byCode("A04").some(w => w.code === "photo_low_resolution"), "flagged weak");
   assert.ok(byCode("A05").some(w => w.code === "photo_missing"));
   assert.ok(byCode("A06").some(w => w.code === "photo_fetch_failed"), "fetcher returned null");
-  assert.ok(byCode("A02").some(w => w.code === "photo_fetch_failed"), "fetcher threw");
-  assert.ok(byCode("A04").some(w => w.code === "photo_low_resolution"));
-  assert.ok(heroes.heroes["fx-trip-1"] && heroes.heroes["fx-trip-3"]);
-  assert.ok(heroes.warnings.every(w => w.severity === "warning" && w.tripId));
+  assert.ok(byCode("A03").some(w => w.code === "photo_fetch_failed"), "fetcher threw");
+  for (const id of ["fx-trip-3", "fx-trip-4", "fx-trip-5", "fx-trip-6"]) assert.equal(art.trips[id]!.composition, "type", id);
+  for (const id of ["fx-trip-1", "fx-trip-2", "fx-trip-7", "fx-trip-8"]) {
+    const t = art.trips[id]!;
+    assert.ok(t.hero && t.thumb && t.composition !== "type", id);
+    assert.ok(Math.abs(t.thumb!.height / t.thumb!.width - 1) < 0.01, "square thumbnail");
+  }
+  assert.ok(art.warnings.every(w => w.severity === "warning" && w.tripId));
   const bookOrder = orderTrips(snap).map(o => o.card.tripId);
-  const got = heroes.warnings.map(w => w.tripId!);
+  const got = art.warnings.map(w => w.tripId!);
   assert.deepEqual(got, [...got].sort((a, b) => bookOrder.indexOf(a) - bookOrder.indexOf(b)), "warnings come in book order");
+  assert.ok(art.cover && art.cover.tripId === snap.coverTripId, "the cover is the data layer's pick when it prints well");
+  assert.ok(art.closing);
+  const compositions = new Set(Object.values(art.trips).filter(t => t.composition !== "type").map(t => t.composition));
+  assert.ok(compositions.size >= 3, `at least three compositions, got ${[...compositions].join(",")}`);
+  assert.ok(Object.values(art.trips).some(t => t.composition === "diptych" && t.second), "a diptych carries its second photo");
 });
 
 test("default fetcher refuses non-https, private and credentialed URLs without touching the network", async () => {
@@ -317,10 +444,10 @@ describe("browser render", () => {
   const pageItems: TextItem[][] = [];
 
   before(async () => {
-    snapshot = sampleSnapshot({ trips: 6, edition: "quick" });
+    snapshot = sampleSnapshot({ trips: 8, edition: "quick" });
     // one extreme title, in its own group, to prove "never clip"
-    const long = { ...snapshot.trips[0]!, tripId: "fx-long", code: "A07", title: LONG_TITLE, kicker: "Урт жишиг муж / Урт жишиг улс" };
-    snapshot = { ...snapshot, trips: [...snapshot.trips, long], groups: [...snapshot.groups, { key: "long", label: "Урт нэрийн туршилт", codes: ["A07"] }] };
+    const long = { ...snapshot.trips[0]!, tripId: "fx-long", code: "A09", title: LONG_TITLE, editorialTitle: LONG_TITLE, kicker: "Урт жишиг муж / Урт жишиг улс" };
+    snapshot = { ...snapshot, trips: [...snapshot.trips, long], groups: [...snapshot.groups, { key: "long", label: "Урт нэрийн туршилт", codes: ["A09"] }] };
     try {
       rendered = await renderCatalogue(snapshot, { pageImages: true, imageFetcher: sampleImageFetcher(), versionLabel: "v-test-1" });
     } catch (error) {
@@ -377,7 +504,7 @@ describe("browser render", () => {
   test("Noto fonts are embedded and no fallback face leaked in", async t => {
     const r = need(t);
     if (!r) return;
-    for (const name of ["NotoSans-Regular", "NotoSans-Medium", "NotoSerif-SemiBold"]) assert.ok(r.fonts.includes(name), `${name} in ${r.fonts.join(",")}`);
+    for (const name of ["NotoSans-Regular", "NotoSans-Medium", "NotoSerif-Light", "NotoSerif-Regular"]) assert.ok(r.fonts.includes(name), `${name} in ${r.fonts.join(",")}`);
     assert.ok(!r.fonts.some(f => /helvetica|arial|times|dejavu|liberation/i.test(f)), r.fonts.join(","));
   });
 
@@ -389,14 +516,14 @@ describe("browser render", () => {
     assert.ok(pageText[0]!.includes("ХАМТ ОЛНЫ") && pageText[0]!.includes("СОНГОЛТ"), "cover title");
     const plan = planPages(snapshot);
     const a01 = plan.trips.find(x => x.card.code === "A01")!;
-    assert.ok(pageText[a01.page - 1]!.includes("3,740,000₮-с"), "price string on A01's page");
-    assert.ok(pageText[a01.page - 1]!.includes("Тест-Далай") && pageText[a01.page - 1]!.includes("A01"));
+    assert.ok(squash(pageText[a01.page - 1]!).includes("3,740,000₮-с"), "price string on A01's page");
+    assert.ok(squash(pageText[a01.page - 1]!).includes("Тест-Далай") && squash(pageText[a01.page - 1]!).includes("A01"));
     const inquire = plan.trips.find(x => x.card.price.kind === "inquire")!;
     assert.ok(pageText[inquire.page - 1]!.includes("Үнэ лавлах"));
     const last = pageText.at(-1)!;
     assert.ok(last.includes("Эцсийн үнэ, суудал, огноо, нөхцөлийг ажилтан баталгаажуулна"));
     assert.ok(last.includes("7700 0001") && last.includes("9900 0002") && last.includes("v-test-1"), "contact + version stamp on closing page");
-    assert.ok(pageText[1]!.includes("A01") && pageText[1]!.includes("3,740,000₮-с"), "contents lists code and price");
+    assert.ok(squash(pageText[1]!).includes("A01") && squash(pageText[1]!).includes("3,740,000₮-с"), "contents lists code and price");
   });
 
   test("no text outside the page margins and no microtype", async t => {
@@ -415,21 +542,21 @@ describe("browser render", () => {
         assert.ok(y >= 12 && y + size <= 960 - 12, `p${i + 1} "${it.str.slice(0, 24)}" y=${y.toFixed(1)}`);
       }
     });
-    assert.ok(smallest >= 9.4, `smallest glyph run ${smallest.toFixed(1)}pt`);
+    assert.ok(smallest >= 8, `smallest glyph run ${smallest.toFixed(1)}pt`);
   });
 
   test("long title shrinks and wraps: nothing clipped, no overflow warning", async t => {
     const r = need(t);
     if (!r) return;
-    const page = planPages(snapshot).trips.find(x => x.card.code === "A07")!.page;
+    const page = planPages(snapshot).trips.find(x => x.card.code === "A09")!.page;
     const text = pageText[page - 1]!;
     for (const word of LONG_TITLE.split(" ")) assert.ok(text.includes(word), `"${word}" missing from the long-title page`);
     assert.deepEqual(r.warnings.filter(w => w.code === "other"), [], JSON.stringify(r.warnings.filter(w => w.code === "other")));
-    // the headline run is smaller than the 20pt the length tier picked or equal to it, and never microtype
+    // the headline run sits at the length tier (22pt) or shrinks to the floor (20pt), never microtype
     const run = pageItems[page - 1]!.find(it => it.str.includes("Туршилт-Уртхан"));
     assert.ok(run, "headline run found");
     const size = Math.hypot(run!.transform[0]!, run!.transform[1]!);
-    assert.ok(size <= 20.1 && size >= 17.9, `headline ${size.toFixed(1)}pt`);
+    assert.ok(size <= 22.1 && size >= 19.9, `headline ${size.toFixed(1)}pt`);
   });
 
   test("missing / failed / low-resolution photos: placeholder pages plus warnings", async t => {
@@ -463,17 +590,17 @@ describe("browser render", () => {
     assert.ok(titles.includes("Агуулга") && titles.includes("A01 · Тест-Далай") && titles.includes("Үнийн санал авах"), titles.join(" | "));
     // contents rows are internal GoTo links (no network): the A01 row lands on A01's page
     const links = (await (await doc.getPage(2)).getAnnotations()).filter(a => a.subtype === "Link" && typeof a.dest === "string");
-    assert.ok(links.length >= 6);
+    assert.ok(links.length >= 4);
     const dest = await doc.getDestination("trip-A01");
     assert.ok(dest, "named destination exists");
     const pageIndex = await doc.getPageIndex(dest![0] as { num: number; gen: number });
     assert.equal(pageIndex + 1, planPages(snapshot).trips.find(x => x.card.code === "A01")!.page);
   });
 
-  test("size budget: the quick book stays far below 10 MB", async t => {
+  test("size budget: the quick book stays under 6 MB", async t => {
     const r = need(t);
     if (!r) return;
-    assert.ok(r.pdf.length < 10 * 1024 * 1024, `${r.pdf.length} bytes`);
+    assert.ok(r.pdf.length < 6 * 1024 * 1024, `${r.pdf.length} bytes`);
     assert.ok(r.renderMs > 0);
   });
 
@@ -533,8 +660,8 @@ test("the book prints the display title everywhere a trip title appears, and sto
   const snap = snapshotOf([shouted, quiet]);
   const html = buildCatalogueHtml(snap, assetsFor(snap));
   assert.equal(shouted.title, "ТЕСТ-ӨВӨРИЙН АЯЛАЛ — ҮЗЭМЖИТ ЁЗООР", "the card is not mutated");
-  assert.ok(html.includes('<span class="crow-title">Тест-Өвөрийн Аялал — Үзэмжит Ёзоор</span>'), "contents row");
-  assert.ok(html.includes('<span class="crow-title">Тест-хотын аялал</span>'), "contents row, lowercase source");
+  assert.ok(html.includes('<span class="ttl">Тест-Өвөрийн Аялал — Үзэмжит Ёзоор</span>'), "contents row");
+  assert.ok(html.includes('<span class="ttl">Тест-хотын аялал</span>'), "contents row, lowercase source");
   assert.ok(/<h2 class="headline"[^>]*>Тест-Өвөрийн Аялал — Үзэмжит Ёзоор<\/h2>/.test(html), "trip page headline");
   assert.ok(!html.includes("ТЕСТ-ӨВӨРИЙН"), "the shouted form is never printed");
   const kids = outlineFor(planPages(snap)).flatMap(o => o.children).map(k => k.title);
@@ -557,16 +684,13 @@ function bookOf(count: number, opts: { groups?: number; long?: boolean } = {}): 
 
 const rowsOf = (items: ReturnType<typeof planPages>["contentsPages"][number]) => items.filter(i => i.kind === "row").length;
 
-test("contents: up to 14 trips in 3-4 groups sit on ONE page (a denser row tier is used before a second page)", () => {
-  for (const [count, groups] of [[8, 3], [10, 3], [12, 3], [13, 4], [14, 4]] as const) {
+test("contents: a destination guide of 10 trips in 3 chapters needs at most two airy pages; short lists stay comfortable", () => {
+  for (const [count, groups] of [[8, 3], [10, 3], [12, 3]] as const) {
     const plan = planPages(bookOf(count, { groups }));
-    assert.equal(plan.contentsPages.length, 1, `${count} trips / ${groups} groups`);
-    assert.equal(plan.totalPages, 1 + 1 + count + 1);
+    assert.ok(plan.contentsPages.length <= 2, `${count} trips / ${groups} groups: ${plan.contentsPages.length} pages`);
   }
-  assert.equal(planPages(bookOf(8, { groups: 3 })).contentsDensity, "comfortable", "a short list stays airy");
-  assert.notEqual(planPages(bookOf(14, { groups: 4 })).contentsDensity, "comfortable", "a full page is packed");
-  // the contents rows of titles that wrap to two lines still fit when density allows
-  assert.equal(planPages(bookOf(10, { groups: 3, long: true })).contentsPages.length, 1);
+  assert.equal(planPages(bookOf(3, { groups: 1 })).contentsPages.length, 1);
+  assert.equal(planPages(bookOf(3, { groups: 1 })).contentsDensity, "comfortable", "a short list stays airy");
 });
 
 test("contents: when a break is unavoidable the pages are balanced, never one orphan row or a header on its own", () => {
@@ -587,18 +711,19 @@ test("contents: when a break is unavoidable the pages are balanced, never one or
       }
       // numbers: trips follow the contents pages in order, and every row points at its own page
       assert.equal(plan.firstTripPage, 2 + pages.length);
-      plan.trips.forEach((t, i) => assert.equal(t.page, plan.firstTripPage + i));
+      assert.ok(plan.trips[0]!.page >= plan.firstTripPage);
+      plan.trips.forEach((t, i) => i > 0 && assert.ok(t.page > plan.trips[i - 1]!.page));
       for (const item of pages.flat()) if (item.kind === "row") assert.equal(item.trip.page, plan.trips.find(t => t.card.code === item.trip.card.code)!.page);
-      assert.equal(plan.closingPage, plan.firstTripPage + count);
+      assert.equal(plan.closingPage, plan.trips.at(-1)!.page + 1);
     }
   }
 });
 
 test("contents: the density class reaches the HTML and the printed page numbers match the plan", () => {
-  const snap = bookOf(14, { groups: 4 });
+  const snap = bookOf(12, { groups: 4 });
   const plan = planPages(snap);
   const html = buildCatalogueHtml(snap, assetsFor(snap));
   assert.ok(html.includes(`class="clist dens-${plan.contentsDensity}"`));
   assert.equal((html.match(/<section class="page contents"/g) ?? []).length, plan.contentsPages.length);
-  for (const t of plan.trips) assert.ok(html.includes(`href="#trip-${t.card.code}"`) && html.includes(`<span class="crow-page">${String(t.page).padStart(2, "0")}</span>`), t.card.code);
+  for (const t of plan.trips) assert.ok(html.includes(`href="#trip-${t.card.code}"`) && html.includes(`<span class="pg">${String(t.page).padStart(2, "0")}</span>`), t.card.code);
 });

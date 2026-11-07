@@ -5,8 +5,9 @@
 import type { CatalogueSnapshot, CatalogueWarning, RenderedCatalogue } from "../types";
 import { loadStaticAssets } from "./assets";
 import { auditWarnings, renderHtml } from "./browser";
-import { buildCatalogueHtml, pickCoverTripId } from "./html";
-import { defaultImageFetcher, prepareCoverImage, prepareTripPhotos } from "./images";
+import { buildCatalogueHtml } from "./html";
+import { prepareArt } from "./art";
+import { defaultImageFetcher } from "./images";
 import { planPages } from "./layout";
 import { stampPdf } from "./pdfMeta";
 import { CatalogueRenderError, type RenderAssets, type RenderCatalogueOptions } from "./renderTypes";
@@ -14,7 +15,8 @@ import { CatalogueRenderError, type RenderAssets, type RenderCatalogueOptions } 
 export { buildCatalogueHtml, catalogueDocumentTitle, escapeHtml, CATALOGUE_TITLE } from "./html";
 export { isRenderBrowserAvailable } from "./browser";
 export { planPages, PAGE_WIDTH_PT, PAGE_HEIGHT_PT } from "./layout";
-export type { RenderAssets, RenderCatalogueOptions, CatalogueImageFetcher, RenderImage, RenderFontFace } from "./renderTypes";
+export { prepareArt } from "./art";
+export type { TripArt, TripComposition, RenderAssets, RenderCatalogueOptions, CatalogueImageFetcher, RenderImage, RenderFontFace } from "./renderTypes";
 export { CatalogueRenderError } from "./renderTypes";
 
 /** Above this the book is awkward to forward (Messenger accepts 25 MB; phones on mobile data prefer less). */
@@ -32,14 +34,15 @@ export async function renderCatalogue(snapshot: CatalogueSnapshot, opts: RenderC
   const fetcher = opts.imageFetcher ?? defaultImageFetcher;
   const versionLabel = opts.versionLabel?.trim() || defaultVersionLabel(snapshot);
 
-  const [statics, photos] = await Promise.all([loadStaticAssets(), prepareTripPhotos(snapshot, fetcher)]);
-  const coverTripId = pickCoverTripId(snapshot, photos.heroes);
-  const coverImage = coverTripId ? await prepareCoverImage(snapshot, coverTripId, fetcher) : null;
+  const plan = planPages(snapshot);
+  const [statics, art] = await Promise.all([loadStaticAssets(), prepareArt(snapshot, plan, fetcher)]);
   const assets: RenderAssets = {
     fonts: statics.fonts,
     logoDataUri: statics.logoDataUri,
-    heroes: photos.heroes,
-    cover: coverTripId && coverImage ? { tripId: coverTripId, image: coverImage } : null,
+    trips: art.trips,
+    cover: art.cover,
+    chapters: art.chapters,
+    closing: art.closing,
     versionLabel,
   };
 
@@ -47,8 +50,8 @@ export async function renderCatalogue(snapshot: CatalogueSnapshot, opts: RenderC
   const rendered = await renderHtml(html, { pageImages: opts.pageImages === true });
   const stamped = await stampPdf(rendered.pdf, snapshot, versionLabel);
 
-  const warnings: CatalogueWarning[] = [...photos.warnings, ...auditWarnings(rendered.audit)];
-  const expected = planPages(snapshot).totalPages;
+  const warnings: CatalogueWarning[] = [...art.warnings, ...auditWarnings(rendered.audit)];
+  const expected = plan.totalPages;
   if (stamped.pageCount !== expected) {
     warnings.push({
       code: "other",

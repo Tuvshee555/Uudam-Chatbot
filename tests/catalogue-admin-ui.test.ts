@@ -7,6 +7,7 @@ import type {
   CatalogueAdminState,
   CatalogueReviewResponse,
   CatalogueReviewRow,
+  CatalogueTesterView,
   CatalogueVersionView,
 } from "../src/lib/catalogue/admin/types";
 import type { CatalogueAdmin } from "../src/components/admin/catalogue/useCatalogueAdmin";
@@ -52,6 +53,8 @@ const config: CatalogueConfig = {
   quick: { tripIds: quickIds.slice(0, 3), groupOverrides: {}, featuredTripIds: [], excludedTripIds: [] },
   complete: { tripIds: [], groupOverrides: {}, featuredTripIds: [], excludedTripIds: [] },
   preview: { tripIds: [], groupOverrides: {}, featuredTripIds: [], excludedTripIds: [] },
+  heroByTripId: {},
+  titleOverrides: {},
   updatedAt: "2026-06-14T00:00:00.000Z",
   updatedBy: "owner.test@example.test",
 };
@@ -66,7 +69,10 @@ function adminState(overrides: Partial<CatalogueAdminState> = {}): CatalogueAdmi
       quick: { published: view({ id: "q1" }), latestDraft: null, freshness: { status: "fresh", ageDays: 1, reasons: [] } },
       complete: { published: null, latestDraft: null, freshness: { status: "none", ageDays: null, reasons: [] } },
     },
-    testSend: { recipients: [], metaOutboundDisabled: false, realSendPossible: false, blockedReason: "CATALOGUE_TEST_RECIPIENT_PSIDS тохируулаагүй тул жинхэнэ туршилтын илгээлт хаалттай." },
+    testSend: {
+      testers: [], recipients: [], metaOutboundDisabled: false, realSendPossible: false, testersError: null, pairingCodeTtlMinutes: 30,
+      blockedReason: "Баталгаажсан туршигч алга. Нэг удаа: «Тестер холбох» дарж гарсан кодыг өөрийн Messenger-ээс манай Page руу бичнэ үү.",
+    },
     config: structuredClone(config),
     ...overrides,
   };
@@ -99,6 +105,11 @@ function row(overrides: Partial<CatalogueReviewRow> & { tripId: string }): Catal
     dateLabel: "2026.09.01-ний хөдлөлт",
     photo: { url: "https://img.example.test/a.jpg", source: "poster_hero", width: 1600, height: 1000 },
     photoSourceLabel: "Постерын гол зураг",
+    heroQuality: "good",
+    heroReason: null,
+    heroChosen: false,
+    editorialTitle: null,
+    titleOverride: null,
     warnings: [],
     severity: "ok",
     selected: true,
@@ -185,9 +196,13 @@ test("review panel prints the exact price, date, source and every warning", asyn
   assert.match(html, /<caption class="sr-only">/, "the table has an accessible caption");
 });
 
-test("test-send panel: with no allowlist the real send is disabled and the reason is shown", async () => {
+test("test-send panel: with no verified tester the real send is disabled and the one live-device step is named", async () => {
   const html = await render(() => import("../src/components/admin/catalogue/TestSendPanel"), "TestSendPanel", { admin: fakeAdmin() });
-  assert.match(html, /CATALOGUE_TEST_RECIPIENT_PSIDS/);
+  assert.doesNotMatch(html, /CATALOGUE_TEST_RECIPIENT_PSIDS|Vercel/, "no ids to hunt for, no variables to edit");
+  assert.match(html, /Баталгаажсан туршигч алга/);
+  assert.match(html, /«Тестер холбох» дарж гарсан кодыг өөрийн Messenger-ээс манай Page руу бичнэ үү/);
+  assert.ok(buttonWithText(html, "Тестер холбох"), "the pairing control is always there");
+  assert.equal(isDisabled(buttonWithText(html, "Тестер холбох")), false);
   assert.match(html, /Дээж \(dry-run\)/);
   const real = buttonWithText(html, "Туршилтаар илгээх");
   assert.ok(real, "the real-send control exists");
@@ -198,9 +213,9 @@ test("test-send panel: with no allowlist the real send is disabled and the reaso
   assert.equal(isDisabled(dry), false, "the dry-run stays available");
 });
 
-test("test-send panel: with a recipient the real send still needs the explicit checkbox", async () => {
+test("test-send panel: with an env recipient the real send still needs the explicit checkbox", async () => {
   const state = adminState({
-    testSend: { recipients: [{ ref: "0123456789abcdef", label: "…0001" }], metaOutboundDisabled: false, realSendPossible: true, blockedReason: null },
+    testSend: { testers: [], recipients: [{ ref: "0123456789abcdef", label: "…0001" }], metaOutboundDisabled: false, realSendPossible: true, blockedReason: null, testersError: null, pairingCodeTtlMinutes: 30 },
   });
   const html = await render(() => import("../src/components/admin/catalogue/TestSendPanel"), "TestSendPanel", { admin: fakeAdmin({ state }) });
   assert.match(html, /Туршигч …0001/);
@@ -265,4 +280,148 @@ test("the whole tab opens in its loading state and stays in the light theme", as
   assert.match(html, /Аяллын каталог/);
   assert.match(html, /Мэдээлэл ачаалж байна/);
   assert.doesNotMatch(html, /dark:/, "the admin stays in the light theme");
+});
+
+// ── Verified testers ─────────────────────────────────────────────────────────────────────────────
+
+const openTester: CatalogueTesterView = { id: "11111111-1111-4111-8111-111111111111", label: "Миний утас", masked: "…0555", verifiedAt: "2026-06-14T01:00:00.000Z", lastInboundAt: "2026-06-15T04:00:00.000Z", windowOpen: true, windowClosesAt: "2026-06-16T03:55:00.000Z" };
+const closedTester: CatalogueTesterView = { id: "33333333-3333-4333-8333-333333333333", label: "", masked: "…0557", verifiedAt: "2026-06-10T01:00:00.000Z", lastInboundAt: "2026-06-12T04:00:00.000Z", windowOpen: false, windowClosesAt: null };
+
+function stateWithTesters(testers: CatalogueTesterView[]): CatalogueAdminState {
+  const open = testers.some((tester) => tester.windowOpen);
+  return adminState({
+    testSend: {
+      testers, recipients: [], metaOutboundDisabled: false, realSendPossible: open, testersError: null, pairingCodeTtlMinutes: 30,
+      blockedReason: open ? null : "Бүх туршигчийн Messenger-ийн 24 цагийн цонх хаагдсан байна.",
+    },
+  });
+}
+
+test("test-send panel lists verified testers masked, with the live Messenger window and a revoke control", async () => {
+  const html = await render(() => import("../src/components/admin/catalogue/TestSendPanel"), "TestSendPanel", { admin: fakeAdmin({ state: stateWithTesters([openTester, closedTester]) }) });
+  assert.match(html, /Баталгаажсан туршигчид/);
+  assert.match(html, /Миний утас/);
+  assert.match(html, /…0555/);
+  assert.match(html, /Messenger цонх нээлттэй/);
+  assert.match(html, /Messenger цонх хаагдсан/);
+  assert.match(html, /aria-label="Миний утас: эрхийг цуцлах"/);
+  assert.match(html, /aria-label="Нэргүй туршигч: эрхийг цуцлах"/);
+  assert.doesNotMatch(html, /70000000000555|70000000000557/, "no PSID in the page");
+  assert.match(html, /<option[^>]*value="tester:11111111-1111-4111-8111-111111111111"[^>]*>Миний утас …0555<\/option>/, "the open tester is selectable");
+  assert.match(html, /<option[^>]*disabled=""[^>]*>[^<]*…0557 \(цонх хаагдсан\)<\/option>|<option[^>]*value="tester:33333333[^"]*"[^>]*disabled=""/, "a closed window cannot be chosen");
+  assert.equal(isDisabled(buttonWithText(html, "Туршилтаар илгээх")), true, "still needs the explicit checkbox");
+  assert.doesNotMatch(html, /<input type="checkbox"[^>]*\sdisabled=""/, "an open window makes the real send armable");
+});
+
+test("test-send panel: when every tester's window is closed the real send cannot be armed and the reason is shown", async () => {
+  const html = await render(() => import("../src/components/admin/catalogue/TestSendPanel"), "TestSendPanel", { admin: fakeAdmin({ state: stateWithTesters([closedTester]) }) });
+  assert.match(html, /Messenger цонх хаагдсан/);
+  assert.match(html, /<input type="checkbox"[^>]*\sdisabled=""/);
+  assert.equal(isDisabled(buttonWithText(html, "Туршилтаар илгээх")), true);
+  assert.equal(isDisabled(buttonWithText(html, "Дээж харах")), false, "the dry run needs no window");
+});
+
+// ── Photo picker ─────────────────────────────────────────────────────────────────────────────────
+
+test("photos panel lists weak and missing heroes first with a clear reason and a way to replace them", async () => {
+  const rows = [
+    row({ tripId: "test-weak", code: "A01", heroQuality: "weak", heroReason: "Хуучин эсвэл сул зураг (640×480px): нүүрэнд хэвлэхэд нягтрал, чанар хүрэлцэхгүй тул солих шаардлагатай." }),
+    row({ tripId: "test-missing", code: "A02", photo: null, heroQuality: "missing", heroReason: "Зураг олдсонгүй: өөр зураг сонгох эсвэл аяллын зураг нэмэх шаардлагатай." }),
+    row({ tripId: "test-good", code: "A03", heroQuality: "excellent", heroChosen: true, editorialTitle: "Богино нэр", titleOverride: "Миний гарчиг" }),
+  ];
+  const html = await render(() => import("../src/components/admin/catalogue/PhotosPanel"), "PhotosPanel", { admin: fakeAdmin({ reviews: { quick: review(rows) } }) });
+  assert.match(html, /Хуучин\/сул зураг — солих шаардлагатай \(2\)/);
+  assert.match(html, /нүүрэнд хэвлэхэд нягтрал, чанар хүрэлцэхгүй/);
+  assert.match(html, /Зураг олдсонгүй: өөр зураг сонгох/);
+  assert.match(html, /aria-label="Жишиг-аялал test-weak: зураг солих"/);
+  assert.match(html, /Сул зураг/);
+  assert.match(html, /Зураггүй/);
+  assert.match(html, /Маш сайн зураг/);
+  assert.match(html, /Гараар сонгосон/);
+  assert.match(html, /Миний гарчиг/, "the staff display title is what the list shows");
+  assert.match(html, /Аялал сонгоно уу/, "nothing is open until a trip is picked");
+  assert.doesNotMatch(html, /dark:/);
+});
+
+test("photos panel with only good heroes shows no replacement list", async () => {
+  const html = await render(() => import("../src/components/admin/catalogue/PhotosPanel"), "PhotosPanel", { admin: fakeAdmin({ reviews: { quick: review([row({ tripId: "test-good" })]) } }) });
+  assert.doesNotMatch(html, /солих шаардлагатай \(/);
+});
+
+test("the hero picker form shows each candidate's real size, score and issues, a 9:16 preview, sliders and a title input capped at 80", async () => {
+  const data = {
+    ok: true as const, tripId: "test-trip-1", title: "Жишиг-аялал", titleOverride: "Миний гарчиг", chosen: null,
+    candidates: [
+      { url: "https://img.example.test/hero-1.jpg", width: 2400, height: 1600, source: "poster_hero" as const, score: 88.4, issues: [], credit: null },
+      { url: "https://img.example.test/hero-2.jpg", width: 640, height: 480, source: "trip_photo" as const, score: 31, issues: ["нягтрал бага (640px)"], credit: "Тест зураглаач" },
+    ],
+  };
+  const html = await render(() => import("../src/components/admin/catalogue/HeroEditor"), "HeroEditorForm", {
+    tripId: "test-trip-1", data, draft: { url: data.candidates[0].url, focal: { x: 0.25, y: 0.75 }, zoom: 1.5, title: "Миний гарчиг" },
+    onDraft: () => undefined, saving: false, dirty: false, titleTooLong: false, onSave: () => undefined, onClear: () => undefined, onReset: () => undefined,
+  });
+  assert.match(html, /2400×1600px/);
+  assert.match(html, /640×480px/);
+  assert.match(html, /Оноо 88/);
+  assert.match(html, /нягтрал бага \(640px\)/);
+  assert.match(html, /Тест зураглаач/);
+  assert.equal((html.match(/type="radio"/g) ?? []).length, 2, "one real radio per candidate");
+  assert.match(html, /<input type="radio"[^>]*aria-label="Зураг, 2400×1600px, оноо 88"[^>]*checked=""/, "the current hero is the checked one");
+  assert.match(html, /aspect-ratio:\s*9\s*\/\s*16/, "a 9:16 preview");
+  assert.match(html, /object-position:\s*25\.0% 75\.0%/, "the preview crops with the same CSS the render uses");
+  assert.match(html, /transform:\s*scale\(1\.5\)/);
+  assert.match(html, /data-testid="focal-frame"/);
+  assert.equal((html.match(/type="range"/g) ?? []).length, 3, "x, y and zoom are real keyboard-operable sliders");
+  assert.match(html, /type="range"[^>]*min="1"[^>]*max="3"|min="1"[^>]*max="3"[^>]*type="range"/);
+  assert.match(html, /Хэвлэгдэх гарчиг/);
+  assert.match(html, /value="Миний гарчиг"/);
+  assert.equal(isDisabled(buttonWithText(html, "Хадгалах")), true, "nothing to save yet");
+  assert.equal(isDisabled(buttonWithText(html, "Автомат руу буцаах")), true, "no stored choice to undo");
+});
+
+test("hero picker helpers: pointer to focal point, CSS crop, dirty checks", async () => {
+  const crop = await import("../src/components/admin/catalogue/heroCrop");
+  const rect = { left: 100, top: 50, width: 200, height: 100 };
+  assert.deepEqual(crop.focalFromPointer(rect, 200, 100), { x: 0.5, y: 0.5 });
+  assert.deepEqual(crop.focalFromPointer(rect, 0, 1000), { x: 0, y: 1 }, "clamped inside the photo");
+  assert.deepEqual(crop.focalFromPointer({ ...rect, width: 0 }, 5, 5), crop.FOCAL_CENTER, "a collapsed frame falls back to the centre");
+  const style = crop.cropStyle({ x: 0.2, y: 0.9 }, 2);
+  assert.equal(style.objectPosition, "20.0% 90.0%");
+  assert.equal(style.transform, "scale(2)");
+  assert.equal(crop.cropStyle(null, 1).transform, undefined, "no zoom, no transform");
+  assert.equal(crop.cropStyle({ x: 0.5, y: 0.5 }, 9).transform, "scale(3)", "zoom is capped at 3");
+
+  const stored = { url: "https://img.example.test/a.jpg", focal: { x: 0.4, y: 0.4 }, zoom: 1.2 };
+  const same = crop.draftOf(stored, "Гарчиг", null);
+  assert.equal(crop.heroChanged(same, stored), false);
+  assert.equal(crop.heroChanged({ ...same, zoom: 1.5 }, stored), true);
+  assert.equal(crop.heroChanged({ ...same, focal: { x: 0.41, y: 0.4 } }, stored), true);
+  const automatic = crop.draftOf(null, null, "https://img.example.test/first.jpg");
+  assert.equal(crop.heroChanged(automatic, null, "https://img.example.test/first.jpg"), false, "the automatic first candidate is not a change");
+  assert.equal(crop.heroChanged({ ...automatic, url: "https://img.example.test/other.jpg" }, null, "https://img.example.test/first.jpg"), true);
+  assert.equal(crop.titleChanged(same, "Гарчиг"), false);
+  assert.equal(crop.titleChanged({ ...same, title: "  Гарчиг  " }, "Гарчиг"), false);
+  assert.equal(crop.titleChanged({ ...same, title: "" }, "Гарчиг"), true);
+  assert.equal(crop.needsNewPhoto("weak"), true);
+  assert.equal(crop.needsNewPhoto("missing"), true);
+  assert.equal(crop.needsNewPhoto("good"), false);
+});
+
+test("review panel shows the hero quality chip, the reason and the staff display title", async () => {
+  const flagged = row({ tripId: "test-weak", heroQuality: "weak", heroReason: "Хуучин эсвэл сул зураг: солих шаардлагатай.", heroChosen: true, editorialTitle: "Автомат нэр", titleOverride: "Миний гарчиг" });
+  const html = await render(() => import("../src/components/admin/catalogue/ReviewPanel"), "ReviewPanel", { admin: fakeAdmin({ reviews: { quick: review([flagged]) } }) });
+  assert.match(html, /Сул зураг/);
+  assert.match(html, /Хуучин эсвэл сул зураг: солих шаардлагатай\./);
+  assert.match(html, /гараар сонгосон/);
+  assert.match(html, /Хэвлэгдэх гарчиг: Миний гарчиг \(гараар\)/);
+});
+
+test("curation panel offers the recommended shortlist for Quick without selecting it for you", async () => {
+  const rows = quickIds.map((id, i) => row({ tripId: id, code: `A0${i + 1}`, position: i < 3 ? i + 1 : null, selected: i < 3 }));
+  const html = await render(() => import("../src/components/admin/catalogue/CurationPanel"), "CurationPanel", { admin: fakeAdmin({ reviews: { quick: review(rows) } }) });
+  const recommend = buttonWithText(html, "Санал болгосон 10-г ашиглах");
+  assert.ok(recommend, "the control exists");
+  assert.equal(isDisabled(recommend), false);
+  assert.match(html, /3 \/ 8–12 аялал сонгосон/, "rendering it changes nothing");
+  assert.equal(isDisabled(buttonWithText(html, "Хадгалах")), true, "and nothing is saved");
 });

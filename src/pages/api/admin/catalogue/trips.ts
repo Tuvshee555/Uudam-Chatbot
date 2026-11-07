@@ -21,6 +21,8 @@ export default catalogueRoute({
       today: ulaanbaatarDay(now),
       activeTrips,
       editionConfig: config[edition],
+      heroByTripId: config.heroByTripId,
+      titleOverrides: config.titleOverrides,
       data,
     });
     res.status(200).json(review);

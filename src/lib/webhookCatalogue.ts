@@ -30,6 +30,7 @@ import { analyzeCatalogueText, detectCatalogueIntent, isBareResendRequest, isSof
 import { extractGroupSize, extractMonth, parseAllTripCodes, parseTripCodeRequest, readTripCode, type TripCodeReading } from "./catalogue/tripCodeRequest";
 import { CATALOGUE_BLOCK_REASON_TEXT, catalogueEditionOfCaption, catalogueLeadContext, groupQuoteLeadContext, groupQuoteText, tripCodeAckText, tripCodeLeadContext } from "./catalogue/messages";
 import { REPEAT_ANSWERED_REASON, deliverCatalogue, planCatalogueDelivery, resolveSendDeps, type SendDeps } from "./catalogue/send";
+import { TESTER_PAIRED_TEXT, readTesterCode, tryRegisterTester } from "./catalogue/testers";
 import type { CatalogueDeliveryStatus } from "./catalogue/types";
 import type { TravelTrip } from "./travelTypes";
 
@@ -113,6 +114,43 @@ async function namesASpecificTrip(ctx: CatalogueTurnContext): Promise<boolean> {
 
 function logTurn(ctx: CatalogueTurnContext, event: string, fields: Record<string, unknown> = {}) {
   logInfo(event, { requestId: ctx.trace?.requestId, correlationId: ctx.trace?.correlationId, platform: ctx.platform, senderHash: hashIdentifier(ctx.senderId), ...fields });
+}
+
+export type TesterPairingContext = {
+  platform: "facebook" | "instagram";
+  senderId: string;
+  pageId: string;
+  text: string;
+  /** webhook.ts deliverFastPathReply: the acknowledgement leaves through the same grounded, logged door. */
+  deliver: (input: Reply) => Promise<boolean>;
+  trace?: CatalogueTurnContext["trace"];
+};
+
+/**
+ * "Тестер холбох": a message that is EXACTLY a live one-time pairing code, sent from the staff member's own
+ * Messenger account, registers that sender as a verified catalogue tester (catalogue/testers.ts) and gets one
+ * short acknowledgement. Called by webhook.ts AFTER the paused-page, paused-sender and staff-takeover checks, so a
+ * conversation staff own never reaches it; and before any other routing, so no flow can swallow the code.
+ *
+ * Returns true only when a tester was registered (the turn is over). Everything else returns false and the normal
+ * flow answers: a message that is not code-shaped costs nothing (no storage is touched), and a code-shaped one that
+ * is unknown, expired, used or over the attempt limit consumes nothing and reveals nothing. Facebook only.
+ */
+export async function handleTesterPairingTurn(ctx: TesterPairingContext): Promise<boolean> {
+  if (ctx.platform !== "facebook" || !readTesterCode(ctx.text)) return false;
+  try {
+    const result = await tryRegisterTester({ text: ctx.text, senderId: ctx.senderId, pageId: ctx.pageId });
+    logInfo("catalogue.tester_pairing", { requestId: ctx.trace?.requestId, senderHash: hashIdentifier(ctx.senderId), status: result.status });
+    recordCounter("catalogue.tester_pairing_total", 1, { status: result.status });
+    if (result.status !== "registered") return false;
+    // The code itself is never written to the conversation history; only the acknowledgement is.
+    await ctx.deliver({ reply: TESTER_PAIRED_TEXT, failTag: "catalogue_tester_paired", rememberSource: "api.webhook.catalogue_tester_paired", counter: "webhook.catalogue_tester_paired_total" });
+    return true;
+  } catch (error) {
+    if (isRetryableWebhookError(error) || isStaffTakeoverSendBlocked(error)) throw error;
+    logError("catalogue.tester_pairing_failed", { requestId: ctx.trace?.requestId, senderHash: hashIdentifier(ctx.senderId), classification: classifyError(error) });
+    return false;
+  }
 }
 
 const SILENT_STATUSES: ReadonlySet<CatalogueDeliveryStatus> = new Set([

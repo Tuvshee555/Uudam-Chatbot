@@ -4,7 +4,7 @@ import { SectionHeading } from "../AdminShared";
 import type { CatalogueEdition } from "@/lib/catalogue/types";
 import type { CatalogueReviewRow } from "@/lib/catalogue/admin/types";
 import type { CatalogueAdmin } from "./useCatalogueAdmin";
-import { EditionPicker, SeverityChip, formatMnt } from "./shared";
+import { EditionPicker, HeroQualityChip, SeverityChip, formatMnt } from "./shared";
 
 function PhotoCell({ row }: { row: CatalogueReviewRow }) {
   const [failed, setFailed] = useState(false);
@@ -28,8 +28,10 @@ function PhotoCell({ row }: { row: CatalogueReviewRow }) {
         </span>
       )}
       <span className="text-xs text-ink-muted">
-        {row.photoSourceLabel}
+        <HeroQualityChip quality={row.heroQuality} className="mb-1" />
+        <span className="block">{row.photoSourceLabel}{row.heroChosen ? " · гараар сонгосон" : ""}</span>
         {row.photo?.width && row.photo.height ? <span className="block tabular-nums">{row.photo.width}×{row.photo.height}</span> : null}
+        {row.heroReason && <span className="mt-0.5 block max-w-[220px] text-warning">{row.heroReason}</span>}
       </span>
     </div>
   );
@@ -43,6 +45,9 @@ function Row({ row }: { row: CatalogueReviewRow }) {
       </td>
       <td className="min-w-[180px] px-3 py-3 align-top">
         <span className="text-sm font-semibold text-ink">{row.title}</span>
+        {(row.titleOverride ?? row.editorialTitle) && (row.titleOverride ?? row.editorialTitle) !== row.title && (
+          <span className="block text-xs text-ink">Хэвлэгдэх гарчиг: {row.titleOverride ?? row.editorialTitle}{row.titleOverride ? " (гараар)" : ""}</span>
+        )}
         <span className="block text-xs text-ink-muted">
           {[row.durationText, row.transportLabel, row.groupLabel].filter(Boolean).join(" · ")}
         </span>
@@ -156,7 +161,7 @@ export function ReviewPanel({ admin }: { admin: CatalogueAdmin }) {
                   <th scope="col" className="px-4 py-2.5">Код</th>
                   <th scope="col" className="px-3 py-2.5">Аялал</th>
                   <th scope="col" className="px-3 py-2.5">Үнэ ба огноо</th>
-                  <th scope="col" className="px-3 py-2.5">Зураг</th>
+                  <th scope="col" className="px-3 py-2.5">Зураг ба чанар</th>
                   <th scope="col" className="px-3 py-2.5">Анхааруулга</th>
                   <th scope="col" className="px-3 py-2.5">Төлөв</th>
                 </tr>

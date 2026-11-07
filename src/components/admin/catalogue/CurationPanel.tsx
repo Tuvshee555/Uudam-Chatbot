@@ -30,6 +30,8 @@ export function CurationPanel({ admin }: { admin: CatalogueAdmin }) {
   const [saving, setSaving] = useState(false);
   const [query, setQuery] = useState("");
   const [onlyEligible, setOnlyEligible] = useState(true);
+  const [reasons, setReasons] = useState<Record<string, string>>({});
+  const [recommending, setRecommending] = useState(false);
 
   useEffect(() => {
     void loadReview(edition);
@@ -76,6 +78,27 @@ export function CurationPanel({ admin }: { admin: CatalogueAdmin }) {
       toast.error(err instanceof Error ? err.message : "Хадгалж чадсангүй.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  /** Fills the selection with the recommended diverse shortlist. Nothing is saved until «Хадгалах». */
+  async function applyRecommended() {
+    if (!draft) return;
+    setRecommending(true);
+    try {
+      const picked = await api.recommend();
+      const ids = picked.tripIds.slice(0, max);
+      if (ids.length === 0) {
+        toast.info("Санал болгох аялал одоогоор алга.");
+        return;
+      }
+      setDraft({ ...draft, tripIds: ids, featured: draft.featured.filter((id) => ids.includes(id)), excluded: draft.excluded.filter((id) => !ids.includes(id)) });
+      setReasons(picked.reasons);
+      toast.info(`${ids.length} аялал санал болголоо. Шалгаад «Хадгалах» дарна уу.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Санал болгосон жагсаалтыг ачаалж чадсангүй.");
+    } finally {
+      setRecommending(false);
     }
   }
 
@@ -127,6 +150,14 @@ export function CurationPanel({ admin }: { admin: CatalogueAdmin }) {
       <div className="grid gap-4 xl:grid-cols-2">
         <Card className="p-4">
           <SectionHeading title="Сонгосон аялал" description="Дараалал нь PDF-ийн дараалал. Онцлох аялал нүүр хуудсанд гарна." />
+          {edition === "quick" && (
+            <div className="mt-3">
+              <Button variant="secondary" size="sm" onClick={() => void applyRecommended()} loading={recommending} disabled={saving}>
+                Санал болгосон 10-г ашиглах
+              </Button>
+              <p className="mt-1.5 text-xs text-ink-muted">Өөр өөр чиглэлээс сонгосон жагсаалт. Хадгалахаас өмнө өөрчилж болно.</p>
+            </div>
+          )}
           {draft.tripIds.length === 0 ? (
             <div className="mt-4">
               <EmptyState icon={<Icons.trips size={20} />} title="Аялал сонгоогүй байна" description="Баруун талын жагсаалтаас «Нэмэх» дарна." />
@@ -138,6 +169,7 @@ export function CurationPanel({ admin }: { admin: CatalogueAdmin }) {
                   <span className="w-6 shrink-0 text-center text-sm font-bold tabular-nums text-ink-muted">{index + 1}</span>
                   <span className="min-w-0 flex-1">
                     {row ? <TripLine row={row} /> : <span className="text-sm text-danger">{id} — олдсонгүй</span>}
+                    {reasons[id] && <span className="mt-0.5 block text-xs text-brand">Санал болгосон шалтгаан: {reasons[id]}</span>}
                   </span>
                   {row && <SeverityChip severity={row.severity} />}
                   <span className="flex flex-wrap items-center gap-1">

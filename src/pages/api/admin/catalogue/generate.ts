@@ -39,7 +39,8 @@ export default catalogueRoute({
       await store.ensureCatalogueSchema();
 
       const nowIso = deps.now().toISOString();
-      const input = await data.loadSnapshotInput(edition, { nowIso });
+      // Generating is the moment photos are measured for real (sizes drive hero ranking); the review table stays cheap.
+      const input = await data.loadSnapshotInput(edition, { nowIso, measurePhotos: true });
       const snapshot = data.buildCatalogueSnapshot(input);
 
       if (edition === "complete" && snapshot.trips.length < 1) {
@@ -97,6 +98,7 @@ export default catalogueRoute({
           trips: meta.tripCount,
           blocking,
           warnings,
+          weakHeroes: snapshot.trips.filter((card) => card.heroQuality === "weak" || card.heroQuality === "missing").length,
           renderMs: rendered.renderMs,
           durationMs,
         },

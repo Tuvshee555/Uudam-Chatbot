@@ -386,7 +386,7 @@ beforeEach(() => {
 
 function trip(id: string, title: string): CatalogueTripCard {
   return {
-    tripId: id, code: "A01", title, kicker: "Жишиг", groupKey: "beach", durationText: "5 өдөр / 4 шөнө", transportLabel: "Газрын аялал",
+    tripId: id, code: "A01", title, editorialTitle: title, destinationKey: "", heroQuality: "missing", gallery: [], kicker: "Жишиг", groupKey: "beach", durationText: "5 өдөр / 4 шөнө", transportLabel: "Газрын аялал",
     highlights: ["Жишиг онцлог"], price: { kind: "from", amountMnt: 1_000_000, date: "2027-01-09", display: "1,000,000₮-с" },
     dates: { nextDeparture: "2027-01-09", departures: ["2027-01-09"], label: "2027.01.09-ний хөдлөлт" }, detailUrl: null, photo: null, warnings: [],
   };
@@ -395,7 +395,7 @@ function trip(id: string, title: string): CatalogueTripCard {
 function snapshot(edition: CatalogueEdition = "quick", warnings: CatalogueWarning[] = []): CatalogueSnapshot {
   return {
     edition, generatedAt: new Date(nowMs).toISOString(), asOfDay: "2026-11-06", issueLabel: "2026.11.06", seasonLabel: "2026 / 2027",
-    trips: [trip("trip-dalai", "Тест-Далай"), trip("trip-hodoo", "Жишиг-Хөдөө")], groups: [], contact: { phones: ["99990000"], siteLabel: "example.test", siteUrl: "https://example.test" },
+    trips: [trip("trip-dalai", "Тест-Далай"), trip("trip-hodoo", "Жишиг-Хөдөө")], coverTripId: null, groups: [], contact: { phones: ["99990000"], siteLabel: "example.test", siteUrl: "https://example.test" },
     warnings, contentHash: `hash-${edition}`,
   };
 }
@@ -566,6 +566,48 @@ test("config: sanitising drops junk, dedupes, and lets exclusion win", () => {
   assert.deepEqual(clean.quick.groupOverrides, { a: "beach" });
   assert.deepEqual(clean.complete, S.emptyEditionConfig());
   assert.deepEqual(S.sanitizeCatalogueConfig(null).preview, S.emptyEditionConfig());
+});
+
+test("config: hero choices and display titles are normalised; a stored config from before they existed still reads", () => {
+  const clean = S.sanitizeCatalogueConfig({
+    heroByTripId: {
+      a: { url: "https://img.example.test/a.jpg", focal: { x: 2, y: -1 }, zoom: 9, quality: "excellent" },
+      b: { url: "http://insecure.example.test/b.jpg" },
+      c: { url: "https://img.example.test/c.jpg", focal: { x: 0.3, y: 0.4 }, zoom: 0.2, quality: "stellar" },
+      d: { url: "https://img.example.test/d.jpg", focal: { x: "left", y: 0.5 } },
+      "has space": { url: "https://img.example.test/e.jpg" },
+      f: "nonsense",
+    },
+    titleOverrides: { a: "  Жишиг    гарчиг  ", b: "   ", c: "x".repeat(200), d: 5, "has space": "no" },
+  });
+  assert.deepEqual(clean.heroByTripId.a, { url: "https://img.example.test/a.jpg", focal: { x: 1, y: 0 }, zoom: 3, quality: "excellent" }, "focal clamped to 0..1, zoom to 1..3");
+  assert.equal(clean.heroByTripId.b, undefined, "only https urls");
+  assert.deepEqual(clean.heroByTripId.c, { url: "https://img.example.test/c.jpg", focal: { x: 0.3, y: 0.4 }, zoom: 1 }, "an unknown quality is dropped, a tiny zoom is lifted to 1");
+  assert.deepEqual(clean.heroByTripId.d, { url: "https://img.example.test/d.jpg" }, "a broken focal point is dropped, the photo kept");
+  assert.deepEqual(Object.keys(clean.heroByTripId).sort(), ["a", "c", "d"]);
+  assert.equal(clean.titleOverrides.a, "Жишиг гарчиг", "trimmed and single-spaced");
+  assert.equal([...clean.titleOverrides.c].length, 80);
+  assert.deepEqual(Object.keys(clean.titleOverrides).sort(), ["a", "c"]);
+
+  // A row saved before heroByTripId / titleOverrides existed: no overrides, nothing breaks.
+  const legacy = S.sanitizeCatalogueConfig({ quick: { tripIds: ["a"] }, complete: {}, preview: {} });
+  assert.deepEqual(legacy.heroByTripId, {});
+  assert.deepEqual(legacy.titleOverrides, {});
+  assert.deepEqual(legacy.quick.tripIds, ["a"]);
+  assert.deepEqual(S.sanitizeCatalogueConfig(null).heroByTripId, {});
+});
+
+test("config: hero choices and titles are saved with the curation and read back", async () => {
+  const saved = await S.saveCatalogueConfig({
+    quick: { tripIds: ["trip-a"] },
+    heroByTripId: { "trip-a": { url: "https://img.example.test/a.jpg", focal: { x: 0.25, y: 0.75 }, zoom: 1.4 } },
+    titleOverrides: { "trip-a": "Миний нэр" },
+  }, "boss@example.test");
+  assert.deepEqual(saved.heroByTripId["trip-a"], { url: "https://img.example.test/a.jpg", focal: { x: 0.25, y: 0.75 }, zoom: 1.4 });
+  const loaded = await S.getCatalogueConfig();
+  assert.deepEqual(loaded.heroByTripId, saved.heroByTripId);
+  assert.equal(loaded.titleOverrides["trip-a"], "Миний нэр");
+  assert.deepEqual(loaded.quick.tripIds, ["trip-a"]);
 });
 
 test("config: empty before the first save, then round-trips with actor and time, and audits", async () => {
