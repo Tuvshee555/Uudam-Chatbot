@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isBookingIntent, isQuestionAboutBooking } from "../src/lib/webhookMedia";
 import { GENERIC_OPENERS, isKnownGreetingPhrase, isThanksOnly } from "../src/lib/greetingPhrases";
 import { buildGroupSizeReply, hasDiscountIntent } from "../src/lib/travelFastPaths";
 import { guardInventedCommercialClaims, GROUP_INQUIRY_REPLY } from "../src/lib/reply";
 import { commercialFactsText } from "../src/lib/commercialFacts";
-import { buildPromptParts } from "../src/lib/conversation";
-import { dispatchNeed, catalogPlaceWordsIn } from "../src/lib/needDispatch";
+import type { NeedDispatchInput } from "../src/lib/needDispatch";
+import { applyTestEnv } from "./helpers/env";
 import { classifyMessageNeed, commercialSignalCovered } from "../src/lib/messageNeed";
 import { joinContextAndTurn } from "../src/lib/customerTurn";
 import type { TravelTrip } from "../src/lib/travelTypes";
@@ -17,13 +16,23 @@ import type { TravelTrip } from "../src/lib/travelTypes";
  * the data does not hold is never stated, a group head count never implies a discount, and the dispatcher
  * promises "passed to the consultant" only when the lead was really saved.
  */
+// needDispatch reaches the database layer, which reads the server environment when it is first imported. The
+// full suite (scripts/run-tests.mjs) sets none, so the environment is applied first and the module loaded lazily.
+const withEnv = () => applyTestEnv({});
+const needDispatchModule = async () => { withEnv(); return import("../src/lib/needDispatch"); };
+const webhookMediaModule = async () => { withEnv(); return import("../src/lib/webhookMedia"); };
+const conversationModule = async () => { withEnv(); return import("../src/lib/conversation"); };
+const dispatchNeed = async (input: NeedDispatchInput) => (await needDispatchModule()).dispatchNeed(input);
+const catalogPlaceWordsIn = async (text: string, trips: TravelTrip[]) => (await needDispatchModule()).catalogPlaceWordsIn(text, trips);
+
 const aTrip = (fields: Record<string, unknown> = {}) => ({
   id: "t1", route_name: "ДОРВЕЛ ХОТЫН АЯЛАЛ", operator_name: "Fixture agency", category: "Аялал", adult_price: 1_791_000, child_price: 1_591_000,
   infant_price: 381_000, currency: "MNT", status: "active", duration_text: "6 өдөр 5 шөнө", departure_dates: ["2098-03-15"], seats_total: 20, seats_left: 10,
   has_food: null, hotel: "", photo_urls: [], notes: "", source_description: "", extra: { customer_visible: true, aliases: ["Дорвел"] }, ...fields,
 } as unknown as TravelTrip);
 
-test("a booking word inside a question ABOUT a booking is not a booking request", () => {
+test("a booking word inside a question ABOUT a booking is not a booking request", async () => {
+  const { isBookingIntent, isQuestionAboutBooking } = await webhookMediaModule();
   for (const text of [
     "захиалгаа цуцлах боломжтой юу", "Захиалгаа цуцалбал мөнгө буцаан авч болох уу", "миний захиалга баталгаажсан уу",
     "төлбөрөө хийсэн захиалга баталгаажсан уу", "захиалгаа өөрчилж болох уу", "захиалбал урьдчилгаа хэд вэ", "урьдчилгаа яаж захиалга өгдөг вэ",
@@ -91,7 +100,8 @@ test("a commercial claim the data does not hold becomes REFER; one the data hold
   assert.equal(guardInventedCommercialClaims("Хямдрал байна.", structured), "Хямдрал байна.");
 });
 
-test("the reply model is told to REFER when no discount text is in Context, not to answer 'Тийм'", () => {
+test("the reply model is told to REFER when no discount text is in Context, not to answer 'Тийм'", async () => {
+  const { buildPromptParts } = await conversationModule();
   const system = buildPromptParts({ systemPrompt: "Fixture assistant", business: {}, history: [], userText: "хямдрал байна уу" }).system;
   assert.match(system, /NO DISCOUNT TEXT IN CONTEXT → REFER/);
   assert.match(system, /ONLY when a discount IS written in Context/);
@@ -109,10 +119,10 @@ test("the group-inquiry wording says only what the company's custom-trip page sa
 
 type Delivered = { reply: string; failTag: string };
 const groupHit = () => classifyMessageNeed("50-60хүнтэй байгууллага байгаа юм")!;
-const stub = (overrides: Partial<Parameters<typeof dispatchNeed>[0]> = {}) => {
+const stub = (overrides: Partial<NeedDispatchInput> = {}) => {
   const delivered: Delivered[] = [];
   const leads: Array<{ kind: string; context?: string }> = [];
-  const input: Parameters<typeof dispatchNeed>[0] = {
+  const input: NeedDispatchInput = {
     hit: groupHit(), source: "rule", text: "50-60хүнтэй байгууллага байгаа юм", senderId: "stub-sender", platform: "facebook", lastBotReply: null,
     trips: async () => [aTrip()],
     deliver: async (value) => { delivered.push({ reply: value.reply, failTag: value.failTag }); return true; },
@@ -185,11 +195,11 @@ test("dispatch: social closes answer thanks and praise, and stay silent for an a
   }
 });
 
-test("destination words are recognised from the catalogue as typed, in either script", () => {
+test("destination words are recognised from the catalogue as typed, in either script", async () => {
   const trips = [aTrip(), aTrip({ id: "t2", route_name: "КАЛДОР ПАРК", extra: { customer_visible: true, aliases: ["Калдор", "Kaldor"] } })];
-  assert.deepEqual(catalogPlaceWordsIn("Dorvel hotruu 30 hun", trips), ["dorvel"]);
-  assert.deepEqual(catalogPlaceWordsIn("Калдор руу явна", trips), ["калдор"]);
-  assert.deepEqual(catalogPlaceWordsIn("30 хүн явна", trips), []);
+  assert.deepEqual(await catalogPlaceWordsIn("Dorvel hotruu 30 hun", trips), ["dorvel"]);
+  assert.deepEqual(await catalogPlaceWordsIn("Калдор руу явна", trips), ["калдор"]);
+  assert.deepEqual(await catalogPlaceWordsIn("30 хүн явна", trips), []);
 });
 
 test("an entered discount policy or offer is a fact whatever words its fields use; commercial terms in the owner's text step the gate aside", () => {
