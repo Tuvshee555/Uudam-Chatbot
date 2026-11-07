@@ -6,7 +6,7 @@ import { replyToComment, sendImageMessage, sendQuickReplies } from "../../lib/me
 import { sendQuickReplies as sendIgQuickReplies } from "../../lib/instagram";
 import { rateLimitAsync } from "../../lib/rateLimit";
 import { getClarificationState, setClarificationState } from "../../lib/clarificationState";
-import { getTripSelection, setTripSelection } from "../../lib/tripSelectionState";
+import { getRecentTripIds, getTripSelection, setTripSelection } from "../../lib/tripSelectionState";
 import { groundedTripIds, tripsNamedIn, ungroundedTripInReply, type GroundingContext } from "../../lib/tripGrounding";
 import { isLikelyCatalogMaintenanceText } from "../../lib/customerTextClassification";
 import { readBusinessData } from "../../lib/businessData";
@@ -372,11 +372,12 @@ async function handleMessageTurn(
   await assertLockHealthy();
   // Read history and pre-routing identity evidence together.
   const replyStartedAt = Date.now();
-  const [history, customerMemory, groundingPending, groundingSelection] = await Promise.all([
+  const [history, customerMemory, groundingPending, groundingSelection, groundingRecent] = await Promise.all([
     getHistory(senderId),
     getCustomerMemoryText(senderId),
     getClarificationState(senderId),
     getTripSelection(senderId),
+    getRecentTripIds(senderId),
   ]);
   // "1" under a bulleted hotel / package / date question is that option, not a number with no list.
   text = adultCountAnswer(history, text) ?? optionChosenByNumber(history, text) ?? text;
@@ -436,7 +437,7 @@ async function handleMessageTurn(
   const findUngroundedTrip = async (reply: string, catalogTripIds?: string[]): Promise<TravelTrip | null> =>
     ungroundedTripInReply(reply, {
       customerText: text, history, pendingTripIds: groundingPending?.candidateTripIds || [],
-      selectionTripId: groundingSelection?.tripId || null, catalogTripIds, trips: await getGroundingTrips(),
+      selectionTripId: groundingSelection?.tripId || null, recentTripIds: groundingRecent, catalogTripIds, trips: await getGroundingTrips(),
     });
   let currentSelection: TripSelection | null = null;
   const deliverFastPathReply = async (input: {
@@ -464,7 +465,7 @@ async function handleMessageTurn(
     // against evidence frozen before routing, not the newly written selection.
     const ungroundedPlan = !missingData && input.decision && !answerPlanHasCustomerEvidence(input.decision.plan.tripId, {
       customerText: text, history, pendingTripIds: groundingPending?.candidateTripIds || [],
-      selectionTripId: groundingSelection?.tripId || null, catalogTripIds: input.catalogTripIds,
+      selectionTripId: groundingSelection?.tripId || null, recentTripIds: groundingRecent, catalogTripIds: input.catalogTripIds,
       trips: await getGroundingTrips(),
     });
     const ungroundedTrip = missingData ? null : await findUngroundedTrip(reply, input.catalogTripIds);

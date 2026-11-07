@@ -23,7 +23,7 @@ import { tripUnderstandingEnabled, understandTripMessage } from "../../lib/tripU
 import { understandingModel } from "../../lib/tripUnderstandingModel";
 import { buildTripAnswerRuntime } from "../../lib/tripAnswerRuntime";
 import { decideTripAnswer } from "../../lib/tripAnswerDecision";
-import { getTripSelection, setTripSelection } from "../../lib/tripSelectionState";
+import { getRecentTripIds, getTripSelection, setTripSelection } from "../../lib/tripSelectionState";
 import { verifyTripReply } from "../../lib/tripReplyVerification";
 import { presentAssistantReply } from "../../lib/chatbotReplyPolicy";
 import { recordReplyPresentation } from "../../lib/chatbotReplyTelemetry";
@@ -243,8 +243,8 @@ export default async function handler(
         return sendJson(body);
       };
       const history = await getHistory(sessionId);
-      const [groundingSelection, groundingClarification] = await Promise.all([
-        getTripSelection(sessionId), getClarificationState(sessionId),
+      const [groundingSelection, groundingClarification, groundingRecent] = await Promise.all([
+        getTripSelection(sessionId), getClarificationState(sessionId), getRecentTripIds(sessionId),
       ]);
       const detectedPhone = extractPhoneNumber(normalizedText);
       const phoneCollected =
@@ -409,8 +409,8 @@ export default async function handler(
           history,
           trips: await getTrips(),
           understand: tripUnderstandingEnabled()
-            ? async (pendingTripIds, selection) =>
-                understandTripMessage({ text: normalizedText, history, trips: await getTrips(), pendingTripIds, selection, ask: understandingModel(trace) })
+            ? async (pendingTripIds, selection, recentTripIds) =>
+                understandTripMessage({ text: normalizedText, history, trips: await getTrips(), pendingTripIds, selection, recentTripIds, ask: understandingModel(trace) })
             : undefined,
         });
         currentSelection = routedCache.selection || null;
@@ -503,7 +503,7 @@ export default async function handler(
           // A short answer may omit the trip name; validate its hidden identity
           // against customer evidence captured before the router selected it.
           const allowed = groundedTripIds({ customerText: normalizedText, history,
-            selectionTripId: groundingSelection?.tripId,
+            selectionTripId: groundingSelection?.tripId, recentTripIds: groundingRecent,
             pendingTripIds: groundingClarification?.candidateTripIds,
             trips: await getTrips() });
           currentSelection = plan.selection;

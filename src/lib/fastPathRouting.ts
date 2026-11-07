@@ -44,6 +44,8 @@ import { isKnownGreetingPhrase } from "./greetingPhrases";
 import { SMART_BUTTON_LABEL_LIST } from "./smartButtonLabels";
 import { buildTripRequest, mergeTripSelection, type TripSelection } from "./tripRequest";
 import { getRecentTripIds, getTripSelection, setTripSelection } from "./tripSelectionState";
+import { contrastCandidates } from "./tripContrast";
+import { verdictAgainstAnchor } from "./tripIdentity";
 import { websiteTripLinksInText } from "./bookingWebsite";
 import { upcomingDepartures } from "./tripFareBlock";
 import { tripFromRecentMenu, tripMenuQuestionIndex } from "./tripMenuChoice";
@@ -688,11 +690,31 @@ export async function routeFastPathText(input: {
   if (contextualUserText !== text && direct.status === "not_found" && isKnownGreetingPhrase(text)) {
     return { matchText: text, scopedClarify: null };
   }
+  // The model could not read the message, so the customer's own words decide. They still do not
+  // leave the trip they are on for a place word it contains or a transport word ("<хот>-оос нисэх
+  // үү" matched a sibling's TITLE), the same rule the model path applies (tripIdentity.ts).
+  const selectedTrip = previousSelection && !tappedOwnButton && !choice
+    ? trips.find((trip) => trip.id === previousSelection.tripId) : undefined;
+  if (selectedTrip && direct.status !== "not_found") {
+    const named = direct.status === "verified" ? [direct.trip] : direct.candidates;
+    const followsUp = buildTripRequest(text, trips, undefined, now).topics.length > 0 || hasReferentialHint(text);
+    if (followsUp && verdictAgainstAnchor(text, named, [selectedTrip], trips).kind === "stay") return chose(selectedTrip);
+  }
   // Our own button label never names a trip, however well it scores against
   // one — skip straight to context so the tap applies to the trip the
   // customer was actually looking at.
   if (direct.status === "verified" && !tappedOwnButton) {
     return { ...(await chose(direct.trip)), matchText: text };
+  }
+  // "Not that one, the other": the trip on screen is NOT the answer (tripContrast.ts).
+  if (selectedTrip) {
+    const contrast = contrastCandidates({ text, catalog: trips, selectedIds: [selectedTrip.id], stack: await getRecentTripIds(senderId) });
+    const meant = (contrast?.tripIds || []).map((id) => trips.find((trip) => trip.id === id)).filter((trip): trip is TravelTrip => Boolean(trip));
+    if (meant.length === 1) return chose(meant[0]);
+    if (meant.length > 1) {
+      await setClarificationState(senderId, meant.map((trip) => trip.id));
+      return { matchText: text, scopedClarify: meant };
+    }
   }
   const followupRequest = previousSelection ? buildTripRequest(text, trips, undefined, now) : null;
   const passengerWords = text.toLowerCase().replace(/[^\p{L}]+/gu, " ").trim().split(/\s+/);

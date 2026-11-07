@@ -4,6 +4,7 @@ import { normText } from "./travelTextNorm";
 import { queryNamedPlaces, resolveTripFromUserMessage, tripMentionsAllPlaces } from "./travelFastPathsSearch";
 import { websiteTripLinksInText } from "./bookingWebsite";
 import { tripFromRecentMenu, tripMenuQuestionIndex } from "./tripMenuChoice";
+import { detectContrastCue } from "./tripContrast";
 
 export type GroundingContext = {
   /** The customer's message this turn. */
@@ -14,6 +15,11 @@ export type GroundingContext = {
   pendingTripIds?: string[];
   /** The trip the customer is on (picked earlier, or opened from an ad / the website). */
   selectionTripId?: string | null;
+  /**
+   * The trips the customer was on before the selected one (tripSelectionState.ts). They count as
+   * evidence only for a message that points BACK at one ("not that one, the other one").
+   */
+  recentTripIds?: string[];
   /** Legacy caller field. A router's newly selected IDs cannot authorize themselves. */
   routedTripIds?: string[];
   /** Explicit alternatives produced by a deterministic catalog/clarification builder. */
@@ -84,8 +90,9 @@ export function groundedTripIds(context: GroundingContext): Set<string> {
     const trip = tripFromRecentMenu(context.customerText, context.history, context.trips);
     return new Set(trip ? [trip.id] : []);
   }
-  if (context.pendingTripIds?.length) return new Set([...context.pendingTripIds, ...catalog]);
-  if (context.selectionTripId) return new Set([context.selectionTripId, ...catalog]);
+  const back = detectContrastCue(context.customerText) ? context.recentTripIds || [] : [];
+  if (context.pendingTripIds?.length) return new Set([...context.pendingTripIds, ...back, ...catalog]);
+  if (context.selectionTripId) return new Set([context.selectionTripId, ...back, ...catalog]);
   const recent = context.history.slice(-RECENT_TURNS).reverse();
   for (const role of ["user", "assistant"] as const) {
     for (const message of recent) {
