@@ -151,6 +151,10 @@ barter / contract / instalments and ticket-only or pick-up wishes are a typed le
 question is never the collector's phone ask. Owner-entered discount policies, offers and FAQ make the commercial gate
 step aside so the model can answer from them; a reply that states a discount, group price, barter or contract the data does
 not hold becomes REFER (`guardInventedCommercialClaims`). Journeys: `tests/understanding-need-journeys.test.ts`.
+**Measured on real traffic (read-only, `scripts/replay-needs.ts`, 2026-11-07):** of 1,760 distinct customer texts of the
+last 60 days the gate names 66 (3.8%): 28 group / organisation / custom-route, 8 barter / invoice / instalments, 4 ticket-only or
+pick-up or hotel-only, 15 thanks, 11 acknowledgements, 0 booking questions, 0 complaints. The first pass wrongly took another
+agency's company, a pasted advertisement and a 565-character thank-you for groups; those are fixed and have tests.
 **Rollout knob:** `NEED_MODEL` = `observe` (default; the understanding call's own `need` is only logged as
 `webhook.need_observed`, no behaviour change), `enforce` (a validated model need acts like a rule need), `off`.
 Compare `webhook.need_observed.agreesWithRule` in the admin logs for several days before choosing `enforce`.

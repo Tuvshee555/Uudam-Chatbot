@@ -71,7 +71,13 @@ function asksSomething(p: Prepared): boolean {
 }
 
 /** Imperative / optative requests ("илгээнэ үү", "өгөөч", "захиалъя"); past participles ("өгсөнд") are thanks, not requests. */
-const REQUEST_VERB = /(?:^|\s)(?:илгээ|явуул|өг|хэл|мэдэгд|үзүүл|тайлбарл|тодруул|шалга|холбогд|залга|захиал|бүртгэ|сонирхо|авъя|авья|хүс(?!эл))(?!сэн|сөн|сан|сон|эн|өн|аад|ээд|оод|өөд|лаа|лээ|лоо|сөнд|сэнд)\p{L}*|(?:^|\s)(?:ilge|yavuul|ywuul|ugooc|ugnu|hel(?:eec|nu)|medegd|zahial|burtg|avya|avii)\p{L}*/u;
+const REQUEST_VERB = /(?:^|\s)(?:илгээ|явуул|өг|хэл|мэдэгд|үзүүл|тайлбарл|тодруул|шалга|холбогд|залга|захиал|бүртгэ|сонирхо|авъя|авья|хүс(?!эл))(?!сэн|сөн|сан|сон|эн|өн|аад|ээд|оод|өөд|лаа|лээ|лоо|сөнд|сэнд|лөө)\p{L}*|(?:^|\s)(?:ilge|yavuul|ywuul|ugooc|ugnu|hel(?:eec|nu)|medegd|zahial|burtg|avya|avii)\p{L}*/u;
+
+/**
+ * In a long narrative (a thank-you of several sentences) "хэлэх" (to say) or "хүсье" (we wish) is no request: only a
+ * request FORM counts there (a polite imperative or "…нэ үү"), not any word that starts with a request verb.
+ */
+const REQUEST_FORM = /(?:^|\s)\p{L}*?(?:илгээ|явуул|өг|хэл|мэдэгд|үзүүл|тайлбарл|тодруул|шалга|холбогд|залга|захиал|бүртгэ)\p{L}*?(?:аарай|ээрэй|оорой|өөрэй|аач|ээч|өөч|нэ\s+(?:үү|уу)|на\s+уу)(?=\s|$)|(?:^|\s)(?:ilge|yavuul|ywuul|ugooc|ugnu|medegd|zahial|burtg)\p{L}*(?=\s|$)/u;
 
 const NUMBER_WORDS: Record<string, number> = {
   арван: 10, хорин: 20, гучин: 30, дөчин: 40, тавин: 50, жаран: 60, далан: 70, наян: 80, ерөн: 90, зуун: 100,
@@ -108,7 +114,8 @@ const ORG_STRONG: RegExp[] = [
   /^байг[уү]+л+аг\p{L}*$/u, /^baig?u+l+a?g\p{L}*$/u, /^baig[uü]+l+\p{L}*$/u,
   /^компани\p{L}*$/u, /^kompani\p{L}*$/u, /^(?:company|companies|corporate|corporation)$/u, /^корпорат\p{L}*$/u,
 ];
-const ORG_BIGRAM = /(?:^|\s)(?:хамт|hamt)\s?(?:ол(?:он|ны|но)|olo?n|olni)\p{L}*|(?:^|\s)(?:албан|alban)\s+(?:хаагч|haagc)\p{L}*|team\s?building|тим\s?билдинг/u;
+// Tested against the tokens from each position on (so a leading "танай" / "бусад" can be seen), anchored at the start.
+const ORG_BIGRAM = /^(?:(?:хамт|hamt)\s?(?:ол(?:он|ны|но)|olo?n|olni)\p{L}*|(?:албан|alban)\s+(?:хаагч|haagc)\p{L}*|team\s?building|тим\s?билдинг)/u;
 /** Count only with a head count of 10+: these words are everyday ("ажилтантай холбогдох"). */
 const ORG_WEAK: RegExp[] = [
   /^(?:ажилт|ажилч)\p{L}*$/u, /^(?:ajilt|ajilch|ajilcd)\p{L}*$/u,
@@ -116,13 +123,16 @@ const ORG_WEAK: RegExp[] = [
   /^(?:сургуул|сурагч|оюутн|клуб|холбоо|хороо|нийгэмлэг)\p{L}*$/u, /^(?:surguul|surag|oyutan|club|holboo)\p{L}*$/u,
 ];
 const YOUR = new Set(["танай", "таны", "танайх", "танд", "tanai", "tanii", "tani", "tanaih", "your"]);
+/** "Busad aylal kompani": other agencies, not the customer's own organisation. */
+const OTHER_ORG = new Set(["бусад", "бусдын", "өөр", "ондоо", "busad", "busdiin", "uur", "other", "others"]);
 
 function orgHits(p: Prepared): { strong: boolean; weak: boolean } {
-  let strong = ORG_BIGRAM.test(p.norm);
+  let strong = false;
   let weak = false;
   p.tokens.forEach((token, index) => {
-    // "Танай байгууллага" is the agency's own organisation, not the customer's.
-    if (p.tokens.slice(Math.max(0, index - 2), index).some((prior) => YOUR.has(prior))) return;
+    // "Танай байгууллага" is the agency's own organisation and "бусад компани" other agencies, not the customer's.
+    if (p.tokens.slice(Math.max(0, index - 2), index).some((prior) => YOUR.has(prior) || OTHER_ORG.has(prior))) return;
+    if (ORG_BIGRAM.test(p.tokens.slice(index, index + 3).join(" "))) strong = true;
     if (ORG_STRONG.some((pattern) => pattern.test(token))) strong = true;
     else if (ORG_WEAK.some((pattern) => pattern.test(token))) weak = true;
   });
@@ -204,7 +214,7 @@ function socialKind(p: Prepared): SocialKind | null {
   const unthanked = prepare(p.raw.replace(/\bthank(?:s)?\s+(?:you|u|ya)\b/giu, "thanks"));
   if (!text || text.length > 900 || asksSomething(unthanked)) return null;
   const withoutFarewell = text.replace(FAREWELL, " ").replace(/\s+/g, " ").trim();
-  if (REQUEST_VERB.test(withoutFarewell)) return null;
+  if ((p.tokens.length > 12 ? REQUEST_FORM : REQUEST_VERB).test(withoutFarewell)) return null;
   const thanked = p.tokens.some((token) => THANKS_TOKEN.test(token));
   const past = PAST_MARK.test(text) || THANKS_FOR.test(text);
   if (thanked) {
@@ -327,11 +337,14 @@ export function commercialSignalCovered(signals: readonly string[], ownerText: s
 // ── the classifier ───────────────────────────────────────────────────────────────────────────────
 
 /** An organisation or team of 10+ that wants to travel: this outranks every commercial term it also mentions. */
+const ORG_TRAVEL_MAX_TOKENS = 40;
+
 function organisedGroup(p: Prepared, size: number | null): string[] | null {
   const org = orgHits(p);
   if (org.strong) {
     if (size !== null && size >= 10) return ["org", `headcount:${size}`];
-    if (TRAVEL_CUE.test(p.norm)) return ["org", "travel"];
+    // A pasted advertisement or a long story that merely contains an organisation word is not an organisation asking.
+    if (TRAVEL_CUE.test(p.norm) && p.tokens.length <= ORG_TRAVEL_MAX_TOKENS) return ["org", "travel"];
   }
   if (org.weak && size !== null && size >= 10) return ["weak_org", `headcount:${size}`];
   return null;
@@ -341,7 +354,7 @@ function organisedGroup(p: Prepared, size: number | null): string[] | null {
 function bespokeTravel(p: Prepared): string[] | null {
   const org = orgHits(p);
   if (org.strong) {
-    if (DISCOUNT_CUE.test(p.norm)) return ["org", "discount"];
+    if (DISCOUNT_CUE.test(p.norm) && p.tokens.length <= ORG_TRAVEL_MAX_TOKENS) return ["org", "discount"];
     if (p.tokens.length <= 3 && !asksSomething(p)) return ["org", "org_only"];
   }
   const services = SERVICE_FAMILIES.filter((pattern) => pattern.test(p.norm)).length;

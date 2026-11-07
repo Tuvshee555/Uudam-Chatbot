@@ -367,3 +367,36 @@ test("an acknowledgement under a question that sits above a list of options is l
   assert.equal(classifyMessageNeed("Баяртай", { lastBotReply: asked })?.social, "farewell");
   assert.equal(classifyMessageNeed("ok", { lastBotReply: "Норвел\nТом хүн: 1,791,000₮" })?.social, "ack");
 });
+
+// Found by replaying 60 days of real customer texts through the classifier (read-only): a company or team word is the
+// customer's own organisation only when it is theirs.
+test("a company or team word that is the agency's, another agency's, or part of a pasted advertisement is not an organisation asking", () => {
+  const notAGroup = [
+    "Танай хамт олонд баярлалаа",
+    "Танай компанийн хамт олонд ажлын амжилт хүсье, хөтөч нартаа баярлалаа",
+    "Busad aylal kompani dandaa ijil gazar yavuuldag bn lee",
+    "Бусад аяллын компани бүгд ижил газраар явуулдаг",
+    "tanai hamt olond bayarlalaa",
+    // A pasted advertisement: long, mentions a team and a discount, but nobody is asking.
+    "🌍 ДОРВЕЛ шууд нислэгтэй аялал ✈️ 🎯 Аяллын хөтөлбөрт багтсан үйлчилгээ 🔹 Нисэх буудлын шилжүүлэг 🔹 Хотын аялал 🔹 Далайн эрэг 🔹 Үдийн хоол 🔹 Хөтөч 🎯 Аяллын үнэ 🔹 Том хүн 1.990.000₮ 🔹 Хүүхэд 1.790.000₮ 🎯 Хугацаа 5 шөнө 6 өдөр 🎁 Гэр бүл, хамт олон, найзуудын хөнгөлөлт үзүүлнэ. Холбоо барих утас 99000000 Хаяг Ulaanbaatar Mongolia",
+  ];
+  for (const text of notAGroup) {
+    const hit = classifyMessageNeed(text, { lastBotReply: "Үнэ 1,000,000₮." });
+    assert.notEqual(hit?.need, "business_group", text);
+  }
+  // Positive controls: the customer's own organisation, even beside thanks, is still an organisation.
+  for (const text of ["Баярлалаа, манай компани 30 хүнтэй аялах гэсэн юм", "Баярлалаа, манай компани явмаар байна", "bayarlalaa manai kompani 25 hun aylah bolomjtoi yu"]) {
+    assert.equal(classifyMessageNeed(text, { lastBotReply: "Үнэ 1,000,000₮." })?.need, "business_group", text);
+  }
+});
+
+test("a long thank-you is a thank-you even though it says 'to say' and 'we wish' (request verbs are matched as forms in a narrative)", () => {
+  const long = "Өглөөний мэнд танай компанид баярлалаа гэж хэлэх гээд завгүй заримдаа мартаж явсаар одоо бичиж байна. Бидний аялалд сэтгэлээрээ хандаж бүх боломжоороо үйлчилсэн танд болон танай компанийн хамт олон, хөтөч нартаа баярлалаа 😊 Хөтөлбөрт нэмэх хасах санал хүсэлт болгоныг хүлээж авч шийдвэрлэсэн танд баярлалаа. Олон зүйл шаардаж төвөг удсанд уучлаарай. Танай хамт олонд ажлын амжилт хүсье 😊";
+  assert.equal(classifyMessageNeed(long)?.social, "thanks");
+  assert.ok(isSocialMessage(long));
+  // Short messages keep the strict reading: a thanks beside a request is not swallowed.
+  assert.equal(classifyMessageNeed("Баярлалаа мэдээлэл илгээнэ үү"), null);
+  assert.equal(classifyMessageNeed("Өглөөний мэнд, баярлалаа")?.social, "thanks");
+  // A long thanks that ends in a real polite request still goes to the pipeline.
+  assert.equal(classifyMessageNeed(`${long} Дараагийн аяллын хөтөлбөрийг илгээгээрэй`), null);
+});
