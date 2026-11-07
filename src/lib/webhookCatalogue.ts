@@ -12,6 +12,9 @@
  *       -> a staff lead and ONE text asking what staff need; the PDF is not the end of the sale
  *   - anything else -> false: the existing flow answers
  *
+ *   - a trip NAME reply after a catalogue ("Бали 25 хүн 1-р сард"), handled exactly like the code reply
+ *       when a head count or month is stated, a catalogue was sent in the last 14 days and the name is ONE trip
+ *
  * Owner's rules kept here: a specific-trip question is never hijacked (named trip, or a trip
  * already under discussion); unknown data means silence + a staff lead; nothing here books,
  * quotes or promises; every customer-facing word leaves through deliverFastPathReply.
@@ -27,7 +30,7 @@ import { resolveTripFromUserMessage } from "./travelFastPathsSearch";
 import { setTripSelection } from "./tripSelectionState";
 import { extractPhoneNumber } from "./webhookMedia";
 import { analyzeCatalogueText, detectCatalogueIntent, isBareResendRequest, isSoftCatalogueRequest } from "./catalogue/intent";
-import { extractGroupSize, extractMonth, parseAllTripCodes, parseTripCodeRequest, readTripCode, type TripCodeReading } from "./catalogue/tripCodeRequest";
+import { extractGroupSize, extractMonth, parseAllTripCodes, parseTripCodeRequest, readTripCode, withoutQuoteDetails, type TripCodeReading } from "./catalogue/tripCodeRequest";
 import { CATALOGUE_BLOCK_REASON_TEXT, catalogueEditionOfCaption, catalogueLeadContext, groupQuoteLeadContext, groupQuoteText, tripCodeAckText, tripCodeLeadContext } from "./catalogue/messages";
 import { REPEAT_ANSWERED_REASON, deliverCatalogue, planCatalogueDelivery, resolveSendDeps, type SendDeps } from "./catalogue/send";
 import { TESTER_PAIRED_TEXT, readTesterCode, tryRegisterTester } from "./catalogue/testers";
@@ -102,6 +105,61 @@ function lastCatalogueEdition(history: CatalogueTurnContext["history"]): "quick"
   return null;
 }
 
+/** A name reply counts only this long after a catalogue was sent to the customer. */
+export const NAME_REPLY_WINDOW_MS = 14 * 86_400_000;
+
+/**
+ * Did this customer receive a catalogue (any edition) in the last 14 days? The send log answers when the store
+ * can; if it cannot (or says nothing), the bot's own caption in the recent conversation is the evidence.
+ */
+async function receivedCatalogueRecently(ctx: CatalogueTurnContext, now: Date): Promise<boolean> {
+  const deps = resolveSendDeps(webDeps().send);
+  if (deps.store.hasDeliveredCatalogueSince) {
+    try {
+      return await deps.store.hasDeliveredCatalogueSince(ctx.senderId, new Date(now.getTime() - NAME_REPLY_WINDOW_MS).toISOString());
+    } catch (error) {
+      logWarn("catalogue.name_reply_log_failed", { requestId: ctx.trace?.requestId, classification: classifyError(error) });
+    }
+  }
+  return lastCatalogueEdition(ctx.history) !== null;
+}
+
+/**
+ * "Бали 25 хүн 1-р сард" after the catalogue: the customer names the trip instead of typing its code. Taken
+ * ONLY when (a) a head count or month is stated, (b) a catalogue reached the customer in the last 14 days and
+ * (c) the name resolves to exactly one active trip. Anything else returns false and the normal flow answers
+ * untouched (an unknown or ambiguous name is never guessed, a message without a count or month is just a message).
+ * The rest is the code reply: trip selected, one durable staff lead, ONE acknowledgement, nothing promised.
+ */
+async function handleNameReply(ctx: CatalogueTurnContext): Promise<boolean> {
+  const groupSize = extractGroupSize(ctx.text);
+  const month = extractMonth(ctx.text);
+  if (groupSize === null && month === null) return false;
+  let trip: TravelTrip | null = null;
+  try {
+    if (!(await receivedCatalogueRecently(ctx, ctx.now ? ctx.now() : new Date()))) return false;
+    const resolved = resolveTripFromUserMessage(withoutQuoteDetails(ctx.text), await ctx.getTrips(), { allowLooseFallback: false });
+    if (resolved.status !== "verified" || !resolved.trip || resolved.trip.status !== "active") return false;
+    trip = resolved.trip;
+  } catch (error) {
+    if (isRetryableWebhookError(error)) throw error;
+    return false;
+  }
+
+  await appendMessage(ctx.senderId, "user", ctx.text).catch(() => {});
+  await recordLead(ctx, tripCodeLeadContext({
+    code: null, tripTitle: trip.route_name, tripId: trip.id, groupSize, month, note: null, customerText: ctx.text, identifiedBy: "name",
+  }));
+  recordCounter("catalogue.code_reply_total", 1, { platform: ctx.platform, result: "matched_by_name" });
+  await setTripSelection(ctx.senderId, { tripId: trip.id, date: null, hotel: null, package: null, passengers: [] });
+  await ctx.deliver({
+    reply: tripCodeAckText({ code: null, title: trip.route_name, groupSize, month }),
+    failTag: "catalogue_code_request", rememberSource: "api.webhook.catalogue_code_request", counter: "webhook.catalogue_code_request_total", catalogTripIds: [trip.id],
+  });
+  logTurn(ctx, "catalogue.name_request", { tripId: trip.id, groupSize, month });
+  return true;
+}
+
 /** True when the customer names a trip: the existing trip flow answers that, not the catalogue. */
 async function namesASpecificTrip(ctx: CatalogueTurnContext): Promise<boolean> {
   try {
@@ -169,6 +227,7 @@ export async function handleCatalogueTurn(ctx: CatalogueTurnContext): Promise<bo
   // the code. A question about a coded trip, or a code the store does not know, stays with the flow.
   const reading = readTripCode(text, { loose: true });
   if (reading && (await handleCodeReply(ctx, reading))) return true;
+  if (!reading && (await handleNameReply(ctx))) return true;
 
   let intent = detectCatalogueIntent(text);
   if (intent.kind === "none" && isBareResendRequest(text)) {
@@ -265,7 +324,7 @@ async function handleCodeReply(ctx: CatalogueTurnContext, request: TripCodeReadi
     extraCodes.length ? `Бусад код: ${extraCodes.join(", ")}` : "",
     !trip ? (lookupFailed ? "Кодыг шалгаж чадсангүй (системийн алдаа)." : tripId ? "Код байгаа ч аялал одоо идэвхгүй эсвэл нуугдсан." : "Каталогид ийм код байхгүй.") : "",
   ].filter(Boolean).join("\n") || null;
-  const base = { code: request.code, tripTitle: trip?.route_name ?? null, tripId, groupSize: request.groupSize, month: request.month, note, customerText: ctx.text };
+  const base = { code: request.code, tripTitle: trip?.route_name ?? null, tripId, groupSize: request.groupSize, month: request.month, note, customerText: ctx.text, identifiedBy: "code" as const };
   await recordLead(ctx, tripCodeLeadContext(base));
   recordCounter("catalogue.code_reply_total", 1, { platform: ctx.platform, result: trip ? "matched" : lookupFailed ? "lookup_failed" : tripId ? "inactive" : "unknown" });
   if (!trip) {

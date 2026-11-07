@@ -22,12 +22,14 @@ import {
   type ResolvedTripOffer,
   type TripOfferSelection,
 } from "../tripOffers";
-import type { CatalogueDateInfo, CataloguePrice, CatalogueWarning, IsoDay } from "./types";
+import type { CatalogueDateInfo, CatalogueDeparture, CataloguePrice, CatalogueWarning, IsoDay } from "./types";
 import { customerText, extractMntAmounts, finiteNumber, formatMnt, row, rows, text, warn } from "./diagnostics";
 
 /** Same floor as the resolver and the bot: under 1,000₮ is a placeholder, never a fare. */
 export const MIN_REAL_FARE_MNT = 1000;
 export const MAX_DEPARTURES_SHOWN = 12;
+/** Length of the rolling "next departures" window printed on the catalogue page. */
+export const DEPARTURE_WINDOW_DAYS = 90;
 
 const UB_DAY = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ulaanbaatar", year: "numeric", month: "2-digit", day: "2-digit" });
 
@@ -283,6 +285,28 @@ export function deriveStartingPrice(trip: TravelTrip, today: IsoDay): { price: C
 
 /* ------------------------------------------------------------------ dates */
 
+/** `day` plus `n` calendar days (UTC arithmetic on a plain YYYY-MM-DD, no clock, no zone drift). */
+export function addDays(day: IsoDay, n: number): IsoDay {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
+/**
+ * EVERY future, on-sale departure (uncapped, ascending) with THAT date's adult fare: the minimum adult fare the
+ * dated fare table holds for the date (the same fares the "from" price is the minimum of), or null when the date
+ * has none recorded. Past, today, sold-out, closed and cancelled dates never appear; nothing is invented.
+ */
+export function deriveSchedule(trip: TravelTrip, today: IsoDay): CatalogueDeparture[] {
+  const scan = scanTripFares(trip, today);
+  const cheapest = new Map<IsoDay, number>();
+  for (const fare of scan.fares) {
+    if (fare.date === null) continue;
+    const known = cheapest.get(fare.date);
+    if (known === undefined || fare.mnt < known) cheapest.set(fare.date, fare.mnt);
+  }
+  return [...new Set(scan.dates)].sort().map((date) => ({ date, adultMnt: cheapest.get(date) ?? null }));
+}
+
 /** Future on-sale departures and the one line the card prints. Never an invented schedule. */
 export function deriveDateInfo(trip: TravelTrip, today: IsoDay): CatalogueDateInfo {
   const scan = scanTripFares(trip, today);
@@ -295,7 +319,15 @@ export function deriveDateInfo(trip: TravelTrip, today: IsoDay): CatalogueDateIn
     const rest = all.length - 3;
     label = `Ойрын огноо: ${departures.slice(0, 3).map(dotDay).join(", ")}${rest > 0 ? ` болон өөр ${rest} огноо` : ""}`;
   } else if (scan.recurringLabel) label = scan.recurringLabel;
-  return { nextDeparture: departures[0] ?? null, departures, label };
+  const schedule = deriveSchedule(trip, today);
+  const last = addDays(today, DEPARTURE_WINDOW_DAYS);
+  const window = schedule.filter((entry) => entry.date > today && entry.date <= last);
+  const known = schedule.map((entry) => entry.adultMnt).filter((v): v is number => v !== null);
+  return {
+    nextDeparture: departures[0] ?? null, departures, label,
+    schedule, window, windowDays: DEPARTURE_WINDOW_DAYS,
+    priceVaries: new Set(known).size > 1,
+  };
 }
 
 /* ------------------------------------------------------------------ overview vs dated fare */

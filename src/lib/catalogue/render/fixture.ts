@@ -4,7 +4,13 @@
  * names a real trip, place, price or date.
  */
 import sharp from "sharp";
-import type { CatalogueGroup, CatalogueSnapshot, CatalogueTripCard } from "../types";
+import type { CatalogueDeparture, CatalogueGroup, CatalogueSnapshot, CatalogueTripCard } from "../types";
+import { addDays, DEFAULT_WINDOW_DAYS, distinctFares } from "./dates";
+
+/** The fixture book is issued on this day (asOfDay below). */
+const FIXTURE_AS_OF = "2026-11-06";
+/** Invented departure runs: `count` dates `step` days apart from `start`. */
+const run = (start: string, count: number, step: number): string[] => Array.from({ length: count }, (_, i) => addDays(start, i * step));
 
 type Palette = { sky1: string; sky2: string; far: string; mid: string; near: string; water?: string; sun: string };
 
@@ -67,8 +73,12 @@ type Spec = {
   transport: string;
   highlights: string[];
   price: number | null;
-  /** Offered departures, ascending ISO days. */
+  /** Offered departures, ascending ISO days (the nearest ones; `schedule` carries the full list when given). */
   dates: string[];
+  /** Every future departure with its own adult fare, when it differs from the single `price` (invented). */
+  schedule?: [string, number | null][];
+  /** The data layer's wording for a recurring trip (invented). */
+  recurring?: string;
   /** Photo behaviour: ok = landscape, tall = portrait, small = low resolution, none = no photo, fail = fetch fails. */
   photo: "ok" | "tall" | "none" | "fail" | "small";
   quality: "excellent" | "good" | "weak" | "missing";
@@ -82,6 +92,17 @@ export const SAMPLE_GROUPS: { key: string; label: string }[] = [
   { key: "budget", label: "Хямд төсвийн аялал" },
 ];
 
+const WEEKLY = run("2026-11-13", 30, 7);
+const TWICE_WEEKLY = run("2026-11-09", 30, 3).concat(run("2027-03-01", 12, 3));
+const FARE_STEPS: [string, number][] = [
+  ["2026-11-21", 3990000],
+  ["2026-11-28", 3990000],
+  ["2026-12-05", 4190000],
+  ["2026-12-19", 4190000],
+  ["2027-01-09", 4590000],
+  ["2027-03-06", 4390000],
+];
+
 const SPECS: Spec[] = [
   { title: "Тест-Далай", editorial: "Тест-Далай", kicker: "Жишиг муж / Тест улс", groupKey: "sea", duration: "9 өдөр · 8 шөнө", transport: "Шууд нислэг", highlights: ["Эргийн зочид буудалд байрлан, далайн эрэг дээр амарна", "Жишиг-Эргийн чөлөөт өдрүүд", "Загвар-Парк болон орон нутгийн зах"], price: 3740000, dates: ["2027-02-13", "2027-02-27", "2027-03-13", "2027-03-27"], photo: "ok", quality: "excellent", gallery: true },
   { title: "ЖИШИГ-ХӨДӨӨ НУТГИЙН ӨВӨЛ", editorial: "Жишиг-Хөдөө Нутгийн Өвөл", kicker: "Өвөр Жишиг / Тест улс", groupKey: "nature", duration: "5 өдөр · 4 шөнө", transport: "Газрын аялал", highlights: ["Тест-Гүүрэн дээрх алхалт", "Халуун рашаан, усан амралтын цогцолбор", "Хөх хотын аялал, шинжилгээ"], price: 870000, dates: ["2026-12-19", "2027-01-09"], photo: "tall", quality: "good", gallery: false },
@@ -91,7 +112,14 @@ const SPECS: Spec[] = [
   { title: "Зураг-Алдаа", editorial: "Зураг-Алдаа", kicker: "Алдаа муж", groupKey: "budget", duration: "3 өдөр · 2 шөнө", transport: "Газрын аялал", highlights: ["Зураг татагдахгүй тохиолдол"], price: null, dates: [], photo: "fail", quality: "good", gallery: false },
   { title: "ЖИШИГ-ХОТЫН ТЭНГЭР", editorial: "Жишиг-Хотын Тэнгэр", kicker: "Тэнгэр хот / Жишиг улс", groupKey: "city", duration: "6 өдөр · 5 шөнө", transport: "Шууд нислэг", highlights: ["Тэнгэрийн цамхагаас хотыг харна", "Орой болгон гэрэлт гудамжаар зугаалана"], price: 3190000, dates: ["2026-11-14", "2026-11-28", "2026-12-12", "2027-01-16"], photo: "ok", quality: "excellent", gallery: true },
   { title: "Загвар-Аралын Намар", editorial: "Загвар-Аралын Намар", kicker: "Загвар арал", groupKey: "city", duration: "7 өдөр · 6 шөнө", transport: "Шууд нислэг", highlights: ["Алтан навчтай нурууны замаар алхана", "Орон нутгийн гал тогооны хичээл"], price: 3560000, dates: ["2027-04-10", "2027-04-24"], photo: "tall", quality: "excellent", gallery: true },
+  { title: "Тест-Ойн Баасан", editorial: "Тест-Ойн Баасан", kicker: "Ойн муж / Тест улс", groupKey: "nature", duration: "4 өдөр · 3 шөнө", transport: "Газрын аялал", highlights: ["Долоо хоног бүр хөдөлдөг жишиг аялал", "Тогтмол хөдөлгөөн"], price: 1290000, dates: WEEKLY.slice(0, 12), schedule: WEEKLY.map(d => [d, 1290000] as [string, number]), recurring: "Долоо хоног бүрийн баасан гарагт", photo: "ok", quality: "good", gallery: false },
+  { title: "Тест-Хойд Нуур", editorial: "Тест-Хойд Нуур", kicker: "Хойд муж / Тест улс", groupKey: "sea", duration: "8 өдөр · 7 шөнө", transport: "Шууд нислэг", highlights: ["Эхний хөдөлгөөн 90 хоногоос хойно", "Нуурын эрэг дээрх амралт"], price: 5120000, dates: ["2027-03-06", "2027-03-20", "2027-04-03"], photo: "ok", quality: "excellent", gallery: true },
+  { title: "Тест-Тарифт Аялал", editorial: "Тест-Тарифт Аялал", kicker: "Тариф муж / Тест улс", groupKey: "city", duration: "6 өдөр · 5 шөнө", transport: "Шууд нислэг", highlights: ["Огноо бүр өөр үнэтэй жишиг аялал", "Үнэ огнооноос хамаарна"], price: 3990000, dates: FARE_STEPS.map(([d]) => d), schedule: FARE_STEPS, photo: "tall", quality: "good", gallery: false },
+  { title: "Тест-Олон Огноот Аялал", editorial: "Тест-Олон Огноот Аялал", kicker: "Олон огноо / Тест улс", groupKey: "city", duration: "3 өдөр · 2 шөнө", transport: "Газрын аялал", highlights: ["Долоо хоногт хоёр удаа хөдөлдөг", "Олон огнооны жишиг"], price: 990000, dates: TWICE_WEEKLY.slice(0, 12), schedule: TWICE_WEEKLY.map(d => [d, 990000] as [string, number]), photo: "ok", quality: "good", gallery: true },
 ];
+
+/** Number of invented trips sampleSnapshot builds by default; the later specs (weekly, far-away, per-date fares, many dates) are opt-in by count. */
+const DEFAULT_TRIP_COUNT = 8;
 
 export type SampleOptions = {
   trips?: number;
@@ -103,7 +131,7 @@ export type SampleOptions = {
 };
 
 export function sampleSnapshot(opts: SampleOptions = {}): CatalogueSnapshot {
-  const count = opts.trips ?? SPECS.length;
+  const count = opts.trips ?? DEFAULT_TRIP_COUNT;
   const trips: CatalogueTripCard[] = [];
   for (let i = 0; i < count; i++) {
     const s = SPECS[i % SPECS.length]!;
@@ -111,8 +139,11 @@ export function sampleSnapshot(opts: SampleOptions = {}): CatalogueSnapshot {
     const code = `${i < 99 ? "A" : "B"}${String((i % 99) + 1).padStart(2, "0")}`;
     const priced = s.price !== null;
     const next = s.dates[0] ?? null;
-    const label =
-      s.dates.length === 0
+    const schedule: CatalogueDeparture[] = s.schedule ? s.schedule.map(([date, adultMnt]) => ({ date, adultMnt })) : s.dates.map(date => ({ date, adultMnt: s.price }));
+    const windowEnd = addDays(FIXTURE_AS_OF, DEFAULT_WINDOW_DAYS);
+    const label = s.recurring
+      ? s.recurring
+      : s.dates.length === 0
         ? "Явах огноог лавлана"
         : s.dates.length === 1
           ? `${s.dates[0]!.replace(/-/g, ".")}-ний хөдлөлт`
@@ -136,7 +167,15 @@ export function sampleSnapshot(opts: SampleOptions = {}): CatalogueSnapshot {
       price: priced
         ? { kind: "from", amountMnt: s.price!, date: next, display: `${s.price!.toLocaleString("en-US")}₮-с` }
         : { kind: "inquire", display: "Үнэ лавлах" },
-      dates: { nextDeparture: next, departures: s.dates, label },
+      dates: {
+        nextDeparture: next,
+        departures: s.dates,
+        label,
+        schedule,
+        window: schedule.filter(d => d.date <= windowEnd),
+        windowDays: DEFAULT_WINDOW_DAYS,
+        priceVaries: distinctFares(schedule) > 1,
+      },
       detailUrl: `https://example.test/trips/fx-trip-${n}`,
       photo: s.photo === "none" ? null : { url: `https://photos.example.test/${s.photo}/${n}.jpg`, width: null, height: null, credit: n % 2 === 0 ? "Жишиг зураг" : null, source: "poster_hero" },
       warnings: [],

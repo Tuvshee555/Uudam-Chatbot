@@ -15,7 +15,7 @@ import {
   type PDFObject,
 } from "pdf-lib";
 import type { CatalogueSnapshot, CatalogueWarning } from "../types";
-import { anchorId, planPages, type PagePlan } from "./layout";
+import { GUIDE_ANCHOR, INDEX_ANCHOR, SCHEDULE_ANCHOR, anchorId, chapterAnchorId, planPages, scheduleBlockId, type PagePlan } from "./layout";
 
 export type PdfLink = {
   /** 1-based page the link sits on. */
@@ -148,17 +148,23 @@ export async function readPdfNavigation(pdf: Uint8Array | Buffer): Promise<PdfNa
 
 /** What the plan promises: where each linked destination must land (the browser only writes destinations something links to). */
 export function expectedDestinations(plan: PagePlan): Record<string, number> {
-  const out: Record<string, number> = { contents: plan.firstContentsPage };
+  const out: Record<string, number> = { [GUIDE_ANCHOR]: plan.firstGuidePage };
   for (const t of plan.trips) out[anchorId(t.card.code)] = t.page;
+  for (const c of plan.chapters) if (c.openerPage != null) out[chapterAnchorId(c.index)] = c.openerPage;
+  if (plan.firstSchedulePage != null) out[SCHEDULE_ANCHOR] = plan.firstSchedulePage;
+  if (plan.firstIndexPage != null) out[INDEX_ANCHOR] = plan.firstIndexPage;
+  for (const [code, page] of Object.entries(plan.schedulePageByCode)) out[scheduleBlockId(code)] = page;
   return out;
 }
 
 const warn = (message: string, detail?: CatalogueWarning["detail"]): CatalogueWarning => ({ code: "other", severity: "warning", message, ...(detail ? { detail } : {}) });
 
 /**
- * Compare the finished PDF's navigation with the page plan: every trip has a destination on its
- * own page, every contents row and every trip page link where they should, bookmarks list every
- * trip. Returns staff-facing warnings (empty when everything is in order).
+ * Compare the finished PDF's navigation with the page plan: every trip has a destination on its own
+ * page; every guide link (chapter, destination name), every index row and every schedule block goes
+ * where it should; every trip page leads back to the guide and to its schedule block; bookmarks list
+ * the guide, the chapters, every trip, the schedule and the index. Returns staff-facing warnings (empty
+ * when everything is in order).
  */
 export function auditNavigation(nav: PdfNavigation, snapshot: CatalogueSnapshot, plan: PagePlan = planPages(snapshot)): CatalogueWarning[] {
   const warnings: CatalogueWarning[] = [];
@@ -167,16 +173,50 @@ export function auditNavigation(nav: PdfNavigation, snapshot: CatalogueSnapshot,
   if (missing.length > 0) {
     warnings.push(warn(`PDF доторх холбоос зөв хуудас руу заахгүй байна (${missing.length}): ${missing.slice(0, 4).map(([n]) => n).join(", ")}.`, { broken: missing.length }));
   }
-  const rowPages = new Set(plan.contentsPages.map((_, i) => plan.firstContentsPage + i));
-  for (const t of plan.trips) {
-    const row = nav.links.find(l => rowPages.has(l.page) && l.dest === anchorId(t.card.code));
-    if (!row || row.target !== t.page) warnings.push({ ...warn(`${t.card.code}: агуулгын мөр аяллын хуудас руу заахгүй байна.`, { code: t.card.code }), tripId: t.card.tripId });
+  const guidePageNos = new Set(plan.guidePages.map((_, i) => plan.firstGuidePage + i));
+  const indexPageNos = new Set(plan.indexPages.map((_, i) => (plan.firstIndexPage ?? 0) + i));
+  const schedPageNos = new Set(plan.schedulePages.map((_, i) => (plan.firstSchedulePage ?? 0) + i));
+  const linkOn = (pages: Set<number>, dest: string) => nav.links.find(l => pages.has(l.page) && l.dest === dest);
+  for (const entry of plan.guidePages.flat()) {
+    const chapter = plan.chapters[entry.chapter]!;
+    const dest = chapter.openerPage != null ? chapterAnchorId(chapter.index) : anchorId(chapter.trips[0]?.card.code ?? "");
+    const link = linkOn(guidePageNos, dest);
+    if (!link || link.target !== chapter.firstPage) warnings.push(warn(`${chapter.label}: агуулгын бүлгийн холбоос буруу хуудас руу заав.`, { chapter: chapter.index }));
+    for (const n of entry.names) {
+      const l = linkOn(guidePageNos, anchorId(n.code));
+      if (!l || l.target !== n.page) warnings.push(warn(`${n.code}: агуулга дахь нэрийн холбоос аяллын хуудас руу заахгүй байна.`, { code: n.code }));
+    }
   }
-  // Every page after the contents leads back to it; the cover leads into it.
-  const backPages = [1, ...plan.trips.map(t => t.page), ...plan.chapters.flatMap(c => (c.openerPage != null ? [c.openerPage] : [])), plan.closingPage];
-  const noBack = backPages.filter(page => !nav.links.some(l => l.page === page && l.dest === "contents" && l.target === plan.firstContentsPage));
+  for (const t of plan.trips) {
+    const row = nav.links.find(l => indexPageNos.has(l.page) && l.dest === anchorId(t.card.code));
+    if (!row || row.target !== t.page) warnings.push({ ...warn(`${t.card.code}: жагсаалтын мөр аяллын хуудас руу заахгүй байна.`, { code: t.card.code }), tripId: t.card.tripId });
+    const blockPage = plan.schedulePageByCode[t.card.code];
+    if (blockPage != null) {
+      const toBlock = nav.links.find(l => l.page === t.page && l.dest === scheduleBlockId(t.card.code));
+      if (!toBlock || toBlock.target !== blockPage) warnings.push({ ...warn(`${t.card.code}: аяллын хуудас огнооны товлол руу заахгүй байна.`, { code: t.card.code }), tripId: t.card.tripId });
+      const back = nav.links.find(l => schedPageNos.has(l.page) && l.dest === anchorId(t.card.code));
+      if (!back || back.target !== t.page) warnings.push({ ...warn(`${t.card.code}: товлолын блок аяллын хуудас руу буцахгүй байна.`, { code: t.card.code }), tripId: t.card.tripId });
+    }
+  }
+  // Every page after the guide leads back to it; the cover leads into it.
+  const backPages = [
+    1,
+    ...plan.trips.map(t => t.page),
+    ...plan.chapters.flatMap(c => (c.openerPage != null ? [c.openerPage] : [])),
+    ...schedPageNos,
+    ...indexPageNos,
+    plan.closingPage,
+  ];
+  const noBack = backPages.filter(page => !nav.links.some(l => l.page === page && l.dest === GUIDE_ANCHOR && l.target === plan.firstGuidePage));
   if (noBack.length > 0) warnings.push(warn(`Агуулга руу буцах холбоос байхгүй хуудас: ${noBack.slice(0, 6).join(", ")}.`, { pages: noBack.length }));
   const bookmarkTitles = nav.outline.map(o => o.title);
+  const need: [string, boolean][] = [
+    ["Агуулга", true],
+    ["Хавсралт · Хөдөлгөөний товлол", plan.firstSchedulePage != null],
+    ["Хавсралт · Кодын жагсаалт", plan.firstIndexPage != null],
+  ];
+  for (const [title, wanted] of need) if (wanted && !bookmarkTitles.includes(title)) warnings.push(warn(`Хавчуурга алга: ${title}.`));
+  for (const c of plan.chapters) if (!bookmarkTitles.includes(c.label)) warnings.push(warn(`${c.label}: бүлгийн хавчуурга алга.`, { chapter: c.index }));
   for (const t of plan.trips) {
     if (!bookmarkTitles.some(title => title.startsWith(`${t.card.code} ·`))) warnings.push({ ...warn(`${t.card.code}: хавчуургад алга.`, { code: t.card.code }), tripId: t.card.tripId });
   }

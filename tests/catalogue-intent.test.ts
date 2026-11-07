@@ -14,12 +14,15 @@ const quick = (text: string) => edition(text, "quick");
 const complete = (text: string) => edition(text, "complete");
 const none = (text: string) => assert.deepEqual(kind(text), { kind: "none" }, text);
 
-test("company, team and group trip phrasing asks for the Quick catalogue (Cyrillic)", () => {
+// Owner decision 2026-11-07: every broad catalogue ask (company, team, group, "all trips", a bare "каталог")
+// gets the COMPLETE edition. These tables used to expect Quick for company phrasing; recall is unchanged, only the
+// edition moved. Quick is sent only when the customer asks for a short selection in words (see the quick tests below).
+test("company, team and group trip phrasing asks for the Complete catalogue (Cyrillic)", () => {
   for (const text of [
     "байгууллагын аяллуудаа харуул", "Байгууллагын аялал", "байгууллагын аяллын сонголтууд", "хамт олны аялал", "хамт олноороо аялах сонголт",
     "компанийн аялал байна уу", "Манай компани аялал хийх гэсэн юм", "багийн аялал", "ажилчдын аялал", "бүлгийн аялал",
     "байгууллагын аяллын санал өгөөч", "хамт олны аяллын сонголтууд",
-  ]) quick(text);
+  ]) complete(text);
 });
 
 test("Latin, transliterated and mistyped spellings reach the same decision", () => {
@@ -27,14 +30,38 @@ test("Latin, transliterated and mistyped spellings reach the same decision", () 
     "baiguullagiin aylal", "hamt olnii aylal", "baiguullagiin aylaliin songoltuud", "baigulagiin ayal", "baiguulagiin aylaluud harulaach",
     "hamt olnoor aylah", "hamtolnii aylal", "kompaniin aylal", "BAIGUULLAGIIN AYLAL", "bayguullagiin aylal", "baiguulagin aylal haruul",
     "aylaliin songoltuud", "хамт олнй аялал", "байгууллагийн аялал",
+  ]) complete(text);
+});
+
+test("an explicit ask for the short selection gets the Quick catalogue (Cyrillic, Latin, English)", () => {
+  for (const text of [
+    "байгууллагын аяллын товч каталог", "товч жагсаалт явуул", "товчхон аяллууд харуулаач", "богино жагсаалт өгөөч", "сонгосон аяллуудаа явуулаач",
+    "шилдэг аяллуудаа харуул", "хураангуй каталог", "байгууллагын аялал товчхон", "tovch katalog", "tovchhon baiguullagiin aylal",
+    "shortlist of corporate trips", "quick catalogue", "quick trip list please", "send top trips", "show me top 5 trips", "short list of trips",
+    "company trips shortlist", "baiguullagiin aylal tovch",
   ]) quick(text);
+  // The same words that are not a request for the short list stay out.
+  none("богино аялал байна уу");
+  none("шилдэг аялал юу вэ");
+  none("товч мэдээлэл өгөөч");
+  none("top level domain");
+});
+
+test("a broad ask spelled any way gets the Complete edition; a resend repeats the edition last sent", () => {
+  for (const text of [
+    "аяллын мэдээлэл", "аяллуудаа явуулаач", "аяллуудаа явуул", "ayaluudaa yavuul", "trip info", "байгууллагын аялал", "baigulgin aylal haruul",
+    "baiguulgiin aylal hari", "baigulgin aylal", "корпорат аялал", "all trips", "бүх аялал", "хамт олны аялал", "company trip", "corporate trip", "каталог",
+  ]) complete(text);
+  // Pointing at one trip keeps the existing flow: never the catalogue.
+  none("энэ аяллын мэдээлэл");
+  none("тэр аяллуудыг явуул");
 });
 
 test("English phrasing", () => {
-  quick("corporate trip catalog");
-  quick("company trips brochure please");
-  quick("team building trips");
-  quick("Corporate travel options");
+  complete("corporate trip catalog");
+  complete("company trips brochure please");
+  complete("team building trips");
+  complete("Corporate travel options");
   complete("trip brochure");
   complete("all tours");
   complete("all trips please");
@@ -165,15 +192,15 @@ const decide = (text: string): Decision => {
 };
 
 const POSITIVES: Array<[string, Decision]> = [
-  ["байгууллагын аяллуудаа харуул", "quick"], ["байгууллагын аяллуудаа явуулаач", "quick"], ["хамт олноороо аялах сонголт", "quick"],
-  ["baiguullagiin aylal", "quick"], ["corporate trip catalog", "quick"], ["hamt olnii aylal", "quick"],
-  ["baiguullagiin aylaliin songoltuud", "quick"], ["Корпорэйт аялал", "quick"], ["корпорейт аялал", "quick"],
-  ["Корпорэйт аялал үнэ", "quick"], ["корпоратив аялал", "quick"], ["korporeit aylal", "quick"],
-  ["компанийн аялал байна уу", "quick"], ["Манай компани аялал хийх гэсэн юм", "quick"], ["kompaniin aylal", "quick"],
-  ["company trip", "quick"], ["company trips brochure please", "quick"], ["багийн аялал", "quick"], ["бүлгийн аялал", "quick"],
-  ["ажилчдын аялал", "quick"], ["team building trips", "quick"], ["Corporate travel options", "quick"],
-  ["хамт олны аяллын сонголтууд", "quick"], ["baigulagiin ayal", "quick"], ["bayguullagiin aylal", "quick"],
-  ["corporate tour", "quick"], ["our team trip", "quick"], ["BAIGUULLAGIIN AYLAL", "quick"],
+  ["байгууллагын аяллуудаа харуул", "complete"], ["байгууллагын аяллуудаа явуулаач", "complete"], ["хамт олноороо аялах сонголт", "complete"],
+  ["baiguullagiin aylal", "complete"], ["corporate trip catalog", "complete"], ["hamt olnii aylal", "complete"],
+  ["baiguullagiin aylaliin songoltuud", "complete"], ["Корпорэйт аялал", "complete"], ["корпорейт аялал", "complete"],
+  ["Корпорэйт аялал үнэ", "complete"], ["корпоратив аялал", "complete"], ["korporeit aylal", "complete"],
+  ["компанийн аялал байна уу", "complete"], ["Манай компани аялал хийх гэсэн юм", "complete"], ["kompaniin aylal", "complete"],
+  ["company trip", "complete"], ["company trips brochure please", "complete"], ["багийн аялал", "complete"], ["бүлгийн аялал", "complete"],
+  ["ажилчдын аялал", "complete"], ["team building trips", "complete"], ["Corporate travel options", "complete"],
+  ["хамт олны аяллын сонголтууд", "complete"], ["baigulagiin ayal", "complete"], ["bayguullagiin aylal", "complete"],
+  ["corporate tour", "complete"], ["our team trip", "complete"], ["BAIGUULLAGIIN AYLAL", "complete"],
   ["каталог явуул", "complete"], ["katalog yavuul", "complete"], ["бүх аяллаа", "complete"], ["бүх аялал", "complete"],
   ["бүх аяллаа харуулаач", "complete"], ["бүх аяллуудаа явуулаач", "complete"], ["бүх аяллыг харуулаач", "complete"],
   ["bvh aylal", "complete"], ["buh ayalaa haruul", "complete"], ["all tours", "complete"], ["all trips please", "complete"],
@@ -283,4 +310,16 @@ test("the way customers really type 'байгууллагын аялал' (baigu
   for (const text of ["zohion baiguulah aylal", "baiguulsan hun", "baigal aylal", "tailand aylal hed ve"]) {
     assert.equal(detectCatalogueIntent(text).kind, "none", text);
   }
+});
+
+test("a trip name with a head count or month: the details are read, and taken out before the name is resolved", async () => {
+  const { withoutQuoteDetails } = await import("../src/lib/catalogue/tripCodeRequest");
+  assert.deepEqual([extractGroupSize("Тест 25 хүн 1-р сард"), extractMonth("Тест 25 хүн 1-р сард")], [25, 1]);
+  assert.deepEqual([extractGroupSize("Tailand 15 humn 3 sar"), extractMonth("Tailand 15 humn 3 sar")], [15, 3]);
+  assert.deepEqual([extractGroupSize("Хайнан 10 хүн"), extractMonth("Хайнан 10 хүн")], [10, null]);
+  assert.deepEqual([extractGroupSize("Хайнан 2 сар"), extractMonth("Хайнан 2 сар")], [null, 2]);
+  assert.equal(withoutQuoteDetails("Тест 25 хүн 1-р сард"), "Тест");
+  assert.equal(withoutQuoteDetails("Tailand 15 humn 3 sar"), "Tailand");
+  assert.equal(withoutQuoteDetails("Тест 8 хүнтэй нэгдүгээр сард"), "Тест нэгдүгээр");
+  assert.equal(withoutQuoteDetails("Тест March 12 people"), "Тест");
 });

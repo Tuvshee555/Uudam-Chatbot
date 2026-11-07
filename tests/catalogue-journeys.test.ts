@@ -44,8 +44,14 @@ async function setup(context: import("node:test").TestContext) {
   const stored = fakeSendStore(() => Date.now());
   const meta = fakeMeta();
   let drift = noDrift as () => Promise<{ drifted: boolean; reasons: string[] } | null>;
+  // The send log read the webhook uses to know a catalogue reached this customer (sendLog.hasDeliveredCatalogueSince).
+  const storeWithLog = {
+    ...stored.store,
+    hasDeliveredCatalogueSince: async (senderId: string, sinceIso: string) =>
+      stored.claims.some((claim) => claim.senderId === senderId && ["sent", "sent_link_fallback"].includes(claim.status) && claim.at > Date.parse(sinceIso)),
+  };
   setSendDepsForTests({
-    store: stored.store, upload: meta.deps.upload, sendFile: meta.deps.sendFile, checkDrift: () => drift(),
+    store: storeWithLog, upload: meta.deps.upload, sendFile: meta.deps.sendFile, checkDrift: () => drift(),
     publicFileUrl: publicUrlOf, websiteUrl: () => "https://site.example.test",
   });
   setCatalogueWebDepsForTests({ resolveTripCode: async (code) => CODES[code] ?? null });
@@ -65,29 +71,31 @@ test("corporate catalogue journeys", async (context) => {
   const world = await setup(context);
   const { harness, stored, meta, quick, complete, say, texts, noteBlockedCatalogueRequest } = world;
   try {
+    // Owner decision 2026-11-07: a broad company ask gets the COMPLETE edition. The journeys below that exercise
+    // the Quick version's own handling (stale file, link fallback, repeat pointer) now ask for it in words ("товч").
     await context.test("a company asks for its trips: exactly ONE PDF and ONE short text, no model call", async () => {
       const turn = await say("corp-1", "байгууллагын аяллуудаа харуулаач");
       assert.equal(turn.status, 200);
-      assert.deepEqual(texts(turn.sends), [sentCaption("quick")], "one short text");
+      assert.deepEqual(texts(turn.sends), [sentCaption("complete")], "one short text");
       assert.equal(meta.files.length, 1, "one file attachment");
       assert.equal(meta.files[0].recipientId, "corp-1");
-      assert.equal(stored.cached(quick.id, "1234567890"), meta.files[0].attachmentId, "uploaded once, id cached for the next customer");
+      assert.equal(stored.cached(complete.id, "1234567890"), meta.files[0].attachmentId, "uploaded once, id cached for the next customer");
       assert.equal(turn.modelCalls + turn.answerModelCalls, 0, "no AI spend");
       assert.equal(turn.leads.length, 0, "a clean send needs no staff lead");
       // The owner-approved launch wording carries one 📖; still no price and no guarantee.
       assert.doesNotMatch(turn.sends[0].text, /баталгаа|₮|\d{3}/u, "no price, no guarantee");
       const rows = turn.history.filter((row) => row.role === "assistant");
-      assert.equal(rows[0].text, sentCaption("quick"), "the caption is in the history before the file row");
+      assert.equal(rows[0].text, sentCaption("complete"), "the caption is in the history before the file row");
       assert.equal(rows.length, 2);
       assert.equal(rows[1].text, "", "and the file row follows it");
       assert.equal(stored.last()!.status, "sent");
-      assert.equal(stored.last()!.versionId, quick.id);
+      assert.equal(stored.last()!.versionId, complete.id);
     });
 
     await context.test("Latin and mistyped spellings get the same PDF", async () => {
       const before = meta.files.length;
       const turn = await say("corp-latin", "baiguullagiin aylaliin songoltuud harulaach");
-      assert.deepEqual(texts(turn.sends), [sentCaption("quick")]);
+      assert.deepEqual(texts(turn.sends), [sentCaption("complete")]);
       assert.equal(meta.files.length, before + 1);
       assert.equal(meta.uploads.length, 1, "the cached attachment id is reused");
     });
@@ -179,7 +187,7 @@ test("corporate catalogue journeys", async (context) => {
 
     await context.test("a stale published file is not sent: one text with the website, a lead, flagged", async () => {
       const old = stored.publish({ ...quick, generatedAt: new Date(Date.now() - 30 * DAY).toISOString() });
-      const turn = await say("stale-1", "байгууллагын аялал");
+      const turn = await say("stale-1", "байгууллагын аялал товчхон");
       assert.deepEqual(texts(turn.sends), [catalogueStaleText("https://site.example.test")]);
       assert.equal(meta.files.filter((file) => file.recipientId === "stale-1").length, 0);
       assert.equal(turn.leads.length, 1);
@@ -187,10 +195,10 @@ test("corporate catalogue journeys", async (context) => {
       assert.equal(stored.claims.find((claim) => claim.senderId === "stale-1")!.status, "stale_fallback");
       stored.publish({ ...old, generatedAt: quick.generatedAt });
       world.driftWith(["ТЕСТ-ДАЛАЙ — огноот үнэ өөрчлөгдсөн"]);
-      const drifted = await say("stale-2", "байгууллагын аялал");
+      const drifted = await say("stale-2", "байгууллагын аялал товчхон");
       assert.deepEqual(texts(drifted.sends), [catalogueStaleText("https://site.example.test")], "live prices moved: same safe fallback");
       world.failDrift();
-      const unverified = await say("stale-3", "байгууллагын аялал");
+      const unverified = await say("stale-3", "байгууллагын аялал товчхон");
       assert.deepEqual(texts(unverified.sends), [sentCaption("quick")], "an unreadable comparison does not silence the bot");
       world.driftWith([]);
     });
@@ -208,7 +216,7 @@ test("corporate catalogue journeys", async (context) => {
       const brochure = await say("spec-3", "брошюр явуулаач");
       assert.ok(!texts(brochure.sends).includes(sentCaption("complete")));
       assert.equal(meta.files.length, files);
-      const company = await say("spec-3", "байгууллагын аяллын каталог");
+      const company = await say("spec-3", "байгууллагын аяллын товч каталог");
       assert.deepEqual(texts(company.sends), [sentCaption("quick")], "an explicit company request still gets the catalogue");
     });
 
@@ -279,6 +287,130 @@ test("corporate catalogue journeys", async (context) => {
       assert.equal(turn.selection, null);
     });
 
+    await context.test("owner decision 2026-11-07: every broad ask gets the COMPLETE catalogue; the Quick one only when asked for in words", async () => {
+      const broad = ["аяллын мэдээлэл", "аяллуудаа явуул", "baigulgin aylal haruul", "baiguulgiin aylal hari", "корпорат аяллын каталог", "хамт олны аялал", "corporate trip", "company trip", "all trips", "бүх аялал", "каталог"];
+      for (const [index, text] of broad.entries()) {
+        const turn = await say(`broad-${index}`, text);
+        assert.deepEqual(texts(turn.sends), [sentCaption("complete")], text);
+        assert.equal(stored.claims.find((claim) => claim.senderId === `broad-${index}`)!.versionId, complete.id, text);
+        assert.equal(turn.modelCalls + turn.answerModelCalls, 0);
+      }
+      const asked = ["товч жагсаалт явуул", "байгууллагын аяллын товч каталог", "шилдэг аяллуудаа харуул", "company trips shortlist", "quick catalogue", "tovch baiguullagiin aylal"];
+      for (const [index, text] of asked.entries()) {
+        const turn = await say(`short-${index}`, text);
+        assert.deepEqual(texts(turn.sends), [sentCaption("quick")], text);
+        assert.equal(stored.claims.find((claim) => claim.senderId === `short-${index}`)!.versionId, quick.id, text);
+      }
+      // A resend repeats the edition last sent, in either direction.
+      await say("rs-quick", "байгууллагын аялал товчхон");
+      await say("rs-complete", "байгууллагын аялал");
+      context.mock.timers.setTime(Date.now() + 3 * 60_000);
+      assert.deepEqual(texts((await say("rs-quick", "дахин явуул")).sends), [sentCaption("quick")]);
+      assert.deepEqual(texts((await say("rs-complete", "дахин явуул")).sends), [sentCaption("complete")]);
+    });
+
+    const leadShape = (leadContext: string) => JSON.parse(leadContext.split("\n").pop()!) as Record<string, unknown>;
+    const NAME_ACK = (groupSize: number | null, month: number | null) => tripCodeAckText({ code: null, title: "ТЕСТ-ДАЛАЙ ЭРГИЙН АЯЛАЛ", groupSize, month });
+
+    await context.test("a trip NAME reply after the catalogue resolves to the same trip and the same lead shape as the code reply", async () => {
+      await say("nm-code", "каталог");
+      const viaCode = await say("nm-code", "A01, 25 хүн, 1-р сар");
+      await say("nm-name", "каталог");
+      const viaName = await say("nm-name", "Тест-далай 25 хүн 1-р сард");
+      assert.deepEqual(texts(viaName.sends), [NAME_ACK(25, 1)], "ONE short acknowledgement through the bot's own door");
+      assert.equal(viaName.selection?.tripId, viaCode.selection?.tripId, "the same canonical trip is selected");
+      assert.equal(viaName.leads.length, 1);
+      const fromCode = leadShape(viaCode.leads[0].context);
+      const fromName = leadShape(viaName.leads[0].context);
+      assert.equal(fromName.tripId, "t-dalai");
+      for (const key of ["tripId", "groupSize", "month"]) assert.equal(fromName[key], fromCode[key], key);
+      assert.equal(fromCode.identifiedBy, "code");
+      assert.equal(fromName.identifiedBy, "name");
+      assert.match(viaName.leads[0].context, /Аялал: ТЕСТ-ДАЛАЙ ЭРГИЙН АЯЛАЛ/);
+      assert.match(viaName.leads[0].context, /Хүний тоо: 25/);
+      assert.match(viaName.leads[0].context, /Сар: 1-р сар/);
+      assert.doesNotMatch(viaName.sends[0].text, /₮|\d{1,3},\d{3}|2098|баталгаажлаа|захиалга авлаа|суудал/, "no price, availability or booking promise");
+      assert.equal(viaName.modelCalls + viaName.answerModelCalls, 0);
+    });
+
+    await context.test("a name reply works with only a head count, only a month, Latin spelling and a typo'd unit", async () => {
+      for (const [sender, text, size, month] of [
+        ["nm-a", "Жишиг-хөдөө 10 хүн", 10, null], ["nm-b", "Жишиг-хөдөө 2 сар", null, 2], ["nm-c", "test dalai 15 humn 3 sar", 15, 3], ["nm-d", "Жишиг-хөдөө 8 хүнтэй нэгдүгээр сард", 8, 1],
+      ] as const) {
+        await say(sender, "байгууллагын аялал");
+        const turn = await say(sender, text);
+        const title = text.startsWith("test") ? "ТЕСТ-ДАЛАЙ ЭРГИЙН АЯЛАЛ" : "ЖИШИГ-ХӨДӨӨ НУТГИЙН АЯЛАЛ";
+        assert.deepEqual(texts(turn.sends), [tripCodeAckText({ code: null, title, groupSize: size, month })], text);
+        assert.equal(leadShape(turn.leads[0].context).identifiedBy, "name", text);
+      }
+    });
+
+    await context.test("a name with a count but NO catalogue sent is not intercepted: no name lead, no acknowledgement", async () => {
+      const turn = await say("nm-nocat", "Тест-далай 25 хүн 1-р сард");
+      assert.ok(!texts(turn.sends).includes(NAME_ACK(25, 1)));
+      assert.ok(!turn.leads.some((lead) => lead.context.includes("catalogue_name")));
+    });
+
+    await context.test("a message with a name but no head count or month is not intercepted", async () => {
+      await say("nm-plain", "каталог");
+      for (const text of ["Тест-далай", "Тест-далай аяллын тухай хэлээч"]) {
+        const turn = await say("nm-plain", text);
+        assert.ok(!texts(turn.sends).includes(NAME_ACK(null, null)), text);
+        assert.ok(!turn.leads.some((lead) => lead.context.includes("catalogue_name")), text);
+      }
+    });
+
+    await context.test("an unknown name after the catalogue falls through untouched: no catalogue lead, no wrong trip", async () => {
+      await say("nm-unknown", "каталог");
+      const turn = await say("nm-unknown", "Нэргүй-газар 10 хүн 2 сар");
+      assert.ok(!turn.leads.some((lead) => lead.context.includes("catalogue_name")));
+      assert.notEqual(turn.selection?.tripId, "t-dalai");
+      assert.notEqual(turn.selection?.tripId, "t-khudoo");
+    });
+
+    await context.test("an ambiguous name (two trips share it) falls through: never a guessed trip", async () => {
+      const twin = (id: string, days: string) => trip(id, `ЭМХ-ТЕСТ ТАЛБАЙ ${days}`, ["2098-04-02"], 1_000_000, { extra: { customer_visible: true, aliases: ["Эмх-тест"] } });
+      harness.catalog([...catalog, twin("t-twin-a", "4 ӨДӨР"), twin("t-twin-b", "6 ӨДӨР")]);
+      try {
+        await say("nm-amb", "каталог");
+        const turn = await say("nm-amb", "Эмх-тест 10 хүн 2 сар");
+        assert.ok(!turn.leads.some((lead) => lead.context.includes("catalogue_name")), "no catalogue lead for a name that is two trips");
+        assert.ok(!texts(turn.sends).some((text) => text.includes("гэж бүртгэлээ")), "no acknowledgement naming either trip");
+      } finally {
+        harness.catalog(catalog);
+      }
+    });
+
+    await context.test("the same name reply delivered twice gives ONE acknowledgement and ONE lead", async () => {
+      await say("nm-dup", "каталог");
+      const first = await say("nm-dup", "Тест-далай 25 хүн 1-р сард", "mid-nm-dup");
+      const again = await say("nm-dup", "Тест-далай 25 хүн 1-р сард", "mid-nm-dup");
+      assert.deepEqual(texts(first.sends), [NAME_ACK(25, 1)]);
+      assert.equal(again.sends.length, 0);
+      assert.equal(harness.leads.filter((row) => row.sender_id === "nm-dup" && row.context.includes("catalogue_name")).length, 1);
+    });
+
+    await context.test("a name reply while staff own the chat is kept for them, not answered", async () => {
+      await say("nm-owned", "каталог");
+      harness.pause("nm-owned", undefined, "operator_reply");
+      const turn = await say("nm-owned", "Тест-далай 25 хүн 1-р сард");
+      assert.equal(turn.sends.length, 0);
+      assert.equal(turn.selection, null);
+    });
+
+    await context.test("a name reply more than 14 days after the catalogue is not taken as a catalogue reply", async () => {
+      const start = Date.now();
+      await say("nm-old", "каталог");
+      context.mock.timers.setTime(start + 15 * DAY);
+      try {
+        const turn = await say("nm-old", "Тест-далай 25 хүн 1-р сард");
+        assert.ok(!texts(turn.sends).includes(NAME_ACK(25, 1)));
+        assert.ok(!turn.leads.some((lead) => lead.context.includes("catalogue_name")));
+      } finally {
+        context.mock.timers.setTime(start);
+      }
+    });
+
     await context.test("a group quotation is handed to staff with what is known; the PDF is not the end of the sale", async () => {
       const before = meta.files.length;
       const turn = await say("quote-1", "30 хүнтэй байгууллагын аялалд үнийн санал гаргаж өгөөч");
@@ -295,7 +427,7 @@ test("corporate catalogue journeys", async (context) => {
       meta.rejectAttachmentOnce();
       meta.failFileOnce({ status: 400, errorCode: 100, errorMessage: "Invalid attachment id" });
       const files = meta.files.length;
-      const turn = await say("reject-1", "хамт олны аяллын сонголтууд");
+      const turn = await say("reject-1", "хамт олны аяллын товч сонголтууд");
       assert.deepEqual(texts(turn.sends), [sentCaption("quick"), catalogueLinkFollowupText(publicUrlOf(quick.publicToken))]);
       assert.equal(meta.files.length, files + 2, "tried the cached id, then the fresh upload");
       assert.equal(turn.history.filter((row) => row.role === "assistant" && row.text === "").length, 0, "no file row for a file that was not sent");
@@ -308,12 +440,12 @@ test("corporate catalogue journeys", async (context) => {
     await context.test("Meta is down for the caption: the webhook retries and the redelivery sends the catalogue once", async () => {
       const files = meta.files.length;
       harness.failSends("retry-1");
-      const failed = await say("retry-1", "байгууллагын аялал", "mid-retry-1");
+      const failed = await say("retry-1", "байгууллагын аялал товчхон", "mid-retry-1");
       assert.notEqual(failed.status, 200, "Meta is told to redeliver");
       assert.equal(failed.sends.length, 0);
       assert.equal(meta.files.length, files, "no file without its caption");
       harness.failSends("retry-1", false);
-      const retried = await say("retry-1", "байгууллагын аялал", "mid-retry-1");
+      const retried = await say("retry-1", "байгууллагын аялал товчхон", "mid-retry-1");
       assert.equal(retried.status, 200);
       assert.deepEqual(texts(retried.sends), [sentCaption("quick")]);
       assert.equal(meta.files.length, files + 1);
@@ -340,7 +472,7 @@ test("corporate catalogue journeys", async (context) => {
       assert.equal(meta.files.length, files, "no file for an ordinary question");
       // Recall is kept: listing every trip is a catalogue request even mid-conversation, and so is the usual spelling of "corporate".
       assert.deepEqual(texts((await say("fp-1", "бүх аяллаа харуулаач")).sends), [sentCaption("complete")]);
-      assert.deepEqual(texts((await say("fp-3", "Корпорэйт аялал")).sends), [sentCaption("quick")]);
+      assert.deepEqual(texts((await say("fp-3", "Корпорэйт аялал")).sends), [sentCaption("complete")]);
     });
 
     await context.test("'again' beside thanks, a question or another thing is not a request to send the file again", async () => {
@@ -358,26 +490,26 @@ test("corporate catalogue journeys", async (context) => {
     });
 
     await context.test("a customer who asks again minutes later is pointed at the file they already have: not silence, not a second file", async () => {
-      await say("rep-1", "байгууллагын аялал");
+      await say("rep-1", "байгууллагын аялал товчхон");
       const files = meta.files.length;
-      assert.equal((await say("rep-1", "байгууллагын аялал")).sends.length, 0, "a double tap seconds later stays silent");
+      assert.equal((await say("rep-1", "байгууллагын аялал товчхон")).sends.length, 0, "a double tap seconds later stays silent");
       context.mock.timers.setTime(Date.now() + 10 * 60_000);
-      const again = await say("rep-1", "байгууллагын аяллын каталог явуулаач", "mid-rep-2");
+      const again = await say("rep-1", "байгууллагын аяллын товч каталог явуулаач", "mid-rep-2");
       assert.deepEqual(texts(again.sends), [catalogueRepeatText({ url: publicUrlOf(quick.publicToken), linkOnly: false })]);
       assert.equal(meta.files.length, files, "never a second file");
       assert.equal(catalogueLeads(again).length, 0, "answered in the chat");
       assert.equal(stored.claims.filter((claim) => claim.senderId === "rep-1").length, 1, "the repeat took no send slot");
-      assert.equal((await say("rep-1", "байгууллагын аяллын каталог явуулаач", "mid-rep-2")).sends.length, 0, "the same message redelivered is not answered twice");
+      assert.equal((await say("rep-1", "байгууллагын аяллын товч каталог явуулаач", "mid-rep-2")).sends.length, 0, "the same message redelivered is not answered twice");
     });
 
     await context.test("after the website notice, a freshly published file reaches the customer who asked again", async () => {
       stored.publish({ ...quick, generatedAt: new Date(Date.now() - 30 * DAY).toISOString() });
-      const first = await say("fresh-1", "байгууллагын аялал");
+      const first = await say("fresh-1", "байгууллагын аялал товчхон");
       assert.deepEqual(texts(first.sends), [catalogueStaleText("https://site.example.test")]);
       context.mock.timers.setTime(Date.now() + 10 * 60_000);
       const fresh = stored.publish(makeVersion({ edition: "quick", id: "00000000-0000-4000-8000-0000000000a2", versionNo: 4, fileName: "UUDAM_Corporate_2098-01-31_v4.pdf", publicToken: "tok_quick_000000000002" }));
       const files = meta.files.length;
-      const second = await say("fresh-1", "байгууллагын аяллын каталог явуулаач");
+      const second = await say("fresh-1", "байгууллагын аяллын товч каталог явуулаач");
       assert.deepEqual(texts(second.sends), [sentCaption("quick")], "the stale notice does not hold the new version back for six hours");
       assert.equal(meta.files.length, files + 1);
       assert.deepEqual(stored.claims.filter((claim) => claim.senderId === "fresh-1").map((claim) => [claim.versionId, claim.status]), [[quick.id, "stale_fallback"], [fresh.id, "sent"]]);

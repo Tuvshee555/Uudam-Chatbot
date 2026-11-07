@@ -188,6 +188,21 @@ export async function claimSend(input: ClaimSendInput): Promise<ClaimSendResult>
   });
 }
 
+/**
+ * Did this person receive a catalogue (any edition, as a file or as the link) since `sinceIso`? A read only:
+ * the webhook uses it to know a "<trip name>, 25 хүн, 1-р сар" reply answers a catalogue we sent (webhookCatalogue.ts).
+ * A stale-site notice or a blocked/failed attempt is not a catalogue the customer holds.
+ */
+export async function hasDeliveredCatalogueSince(senderId: string, sinceIso: string): Promise<boolean> {
+  if (typeof senderId !== "string" || !senderId.trim() || !Number.isFinite(new Date(sinceIso).getTime())) return false;
+  const result = await catalogueQuery<{ id: string }>(
+    `/* cat:send_delivered_since */ SELECT id FROM catalogue_sends
+     WHERE sender_hash = $1 AND status IN ('sent','sent_link_fallback') AND created_at > $2::timestamptz LIMIT 1`,
+    [hashCatalogueSender(senderId.trim()), new Date(sinceIso).toISOString()],
+  );
+  return result.rows.length > 0;
+}
+
 /** Phone-number-sized and longer digit runs (a PSID, a phone) never belong in a reason. */
 function cleanReason(reason: string | null | undefined): string | null {
   if (typeof reason !== "string") return null;

@@ -593,3 +593,10 @@ test("tester dry run: exactly one text and one file attachment, nobody is addres
   assert.equal(JSON.stringify(dry).includes(TESTER_PSID), false, "a dry run never carries the PSID");
   assert.deepEqual([run.texts.length, run.meta.files.length, run.meta.uploads.length, run.stored.claims.length], [0, 0, 0, 0]);
 });
+
+test("owner decision 2026-11-07: the Complete caption fits the broad request; a name-identified reply is acknowledged without a code", () => {
+  assert.ok(catalogueCaption("complete").startsWith("Сайн байна уу! Манай байгууллага, хамт олны аяллын бүх сонголтуудыг нэг каталогт багтаалаа. 📖"));
+  assert.equal(catalogueEditionOfCaption(catalogueCaption("complete")), "complete");
+  assert.equal(catalogueEditionOfCaption(catalogueCaption("quick")), "quick");
+  assert.equal(tripCodeAckText({ code: null, title: "ТЕСТ-АЯЛАЛ", groupSize: 25, month: 1 }), "ТЕСТ-АЯЛАЛ (25 хүн, 1-р сар) гэж бүртгэлээ. Манай ажилтан үнийн санал бэлтгэж, тантай холбогдоно.");
+});

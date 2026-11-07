@@ -10,14 +10,15 @@ import {
   HEADLINE_MIN_PT,
   PRICE_LABEL,
   anchorId,
+  scheduleBlockId,
   cardTitle,
   clipHighlight,
-  departureLine,
   headlineSizePt,
   priceParts,
   type OrderedTrip,
   type PagePlan,
 } from "./layout";
+import { NEXT_DEPARTURE_LABEL, PRICE_VARIES_NOTE, TRIP_GRID_DENSE_DATES, TRIP_GRID_MAX_ROWS, tripDates, type MonthLine } from "./dates";
 import { creditLine, escapeHtml, footHtml, imageTag, px } from "./htmlParts";
 import type { RenderAssets, TripArt, TripComposition } from "./renderTypes";
 import { displayTitle } from "./titleCase";
@@ -55,15 +56,42 @@ function highlightsHtml(card: CatalogueTripCard): { lede: string; notes: string 
   return { lede, notes };
 }
 
-function pricerow(card: CatalogueTripCard, asOfDay: string): string {
+function monthRowHtml(line: MonthLine, chips: boolean): string {
+  const name = `<span class="mn">${escapeHtml(line.label)}:</span>`;
+  if (!chips) return `<div class="ml">${name}<span class="md">${line.days.join(" · ")}</span></div>`;
+  return `<div class="ml">${name}<span class="md chips">${line.days.map(d => `<span class="chip">${d}</span>`).join("")}</span></div>`;
+}
+
+/** Price (starting fare, never implied for every date) and the departures of the next 90 days. */
+function priceAndDates(card: CatalogueTripCard, asOfDay: string, plan: PagePlan): string {
   const inq = card.price.kind === "inquire";
   const parts = priceParts(card.price.display);
   const priceHtml = inq ? `<span class="price inq">${escapeHtml(card.price.display)}</span>` : `<span class="price">${escapeHtml(parts.amount)}${parts.suffix ? `<small>${escapeHtml(parts.suffix)}</small>` : ""}</span>`;
-  const dep = departureLine(card, asOfDay);
-  const dateHtml = dep.dates.length
-    ? `<span class="dlab">${dep.dates.length === 1 && dep.more === 0 ? "Хөдлөх огноо" : "Ойрын огноо"}</span><span class="dval">${dep.dates.map(escapeHtml).join(" · ")}${dep.more > 0 ? ` <em>+ ${dep.more}</em>` : ""}</span>`
-    : `<span class="dlab">Явах огноо</span><span class="dval plain">${escapeHtml(dep.plain)}</span>`;
-  return `<div class="pricerow"><div class="pl"><span class="plab">${escapeHtml(PRICE_LABEL)}</span>${priceHtml}</div><div class="dl">${dateHtml}</div></div>`;
+  const d = tripDates(card, asOfDay);
+  const note = d.priceVaries && !inq ? `<span class="pnote">${escapeHtml(PRICE_VARIES_NOTE)}</span>` : "";
+  const pricerow = `<div class="pricerow"><div class="pl"><span class="plab">${escapeHtml(PRICE_LABEL)}</span>${priceHtml}</div>${note}</div>`;
+
+  const blockPage = plan.schedulePageByCode[card.code];
+  const all = blockPage != null ? `<a class="dall" href="#${scheduleBlockId(card.code)}">Бүх огноо · ${blockPage}-р хуудас</a>` : "";
+  let label: string;
+  let body: string;
+  if (d.kind === "lines" || d.kind === "grid") {
+    const chips = d.kind === "grid";
+    const dense = d.windowCount > TRIP_GRID_DENSE_DATES;
+    const rows = dense ? d.lines.slice(0, TRIP_GRID_MAX_ROWS - 1) : d.lines;
+    label = d.windowCount === 1 && !all ? "Хөдлөх огноо" : "Ойрын 90 хоногийн огноо";
+    body = rows.map(l => monthRowHtml(l, chips)).join("");
+    if (dense) body += `<div class="ml more"><span class="mn">Цаашид:</span><span class="md">${all ? "бүх огноог товлолоос харна уу" : "огноог ажилтнаас лавлана"}</span></div>`;
+  } else if (d.kind === "next") {
+    label = `${NEXT_DEPARTURE_LABEL}:`;
+    body = `<div class="ml next"><span class="md">${escapeHtml(d.nextFull ?? "")}</span></div>`;
+  } else {
+    label = "Явах огноо";
+    body = `<div class="ml plain"><span class="md">${escapeHtml(d.plain)}</span></div>`;
+  }
+  const rec = d.recurring ? `<p class="drec">${escapeHtml(d.recurring)}</p>` : "";
+  const dates = `<div class="dates"><div class="dhead"><span class="dlab">${escapeHtml(label)}</span>${all}</div>${body}${rec}</div>`;
+  return `<div class="pd">${pricerow}${dates}</div>`;
 }
 
 function credits(card: CatalogueTripCard, art: TripArt): string {
@@ -80,7 +108,7 @@ export function tripPage(snapshot: CatalogueSnapshot, plan: PagePlan, assets: Re
   const eye = eyebrow(card, t.groupLabel, title);
   const meta = metaLine(card);
   const { lede, notes } = highlightsHtml(card);
-  const price = pricerow(card, snapshot.asOfDay);
+  const price = priceAndDates(card, snapshot.asOfDay, plan);
   const foot = footHtml({ page: t.page, total: plan.totalPages, back: true, credit: credits(card, art) });
   const open = `<section class="page trip ${composition}${composition === "cinema" || composition === "type" ? " on-dark" : ""}${composition === "type" ? " dark" : ""}" id="${anchorId(card.code)}" data-page="${t.page}" data-code="${escapeHtml(card.code)}" data-composition="${composition}">`;
 

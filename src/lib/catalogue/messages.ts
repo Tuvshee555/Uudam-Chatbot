@@ -18,7 +18,8 @@ const CAPTION_BODY =
 
 const CAPTION: Record<"quick" | "complete", string> = {
   quick: "Сайн байна уу! Манай байгууллага, хамт олны аяллын сонголтуудыг нэг каталогт багтаалаа. 📖\n\n" + CAPTION_BODY,
-  complete: "Сайн байна уу! Манай бүх аяллын сонголтуудыг нэг каталогт нэгтгэлээ. 📖\n\n" + CAPTION_BODY,
+  // Owner decision 2026-11-07: the Complete edition answers every broad ask ("байгууллагын аялал", "каталог").
+  complete: "Сайн байна уу! Манай байгууллага, хамт олны аяллын бүх сонголтуудыг нэг каталогт багтаалаа. 📖\n\n" + CAPTION_BODY,
 };
 
 /** The one short text that comes with the PDF. The preview edition (a sample) reads as the quick one. */
@@ -83,11 +84,12 @@ export function groupQuoteText(known: { groupSize: number | null; month: number 
 }
 
 /** One acknowledgement for a "A01, 25 хүн, 1-р сар" reply. States what was understood, promises nothing. */
-export function tripCodeAckText(input: { code: string; title: string; groupSize: number | null; month: number | null }): string {
+export function tripCodeAckText(input: { code: string | null; title: string; groupSize: number | null; month: number | null }): string {
   const parts: string[] = [];
   if (input.groupSize !== null) parts.push(`${input.groupSize} хүн`);
   if (input.month !== null) parts.push(`${input.month}-р сар`);
-  const head = `${input.code} · ${input.title}${parts.length ? ` (${parts.join(", ")})` : ""} гэж бүртгэлээ.`;
+  // A reply that named the trip instead of typing its code (code = null) is acknowledged in the same words.
+  const head = `${input.code ? `${input.code} · ` : ""}${input.title}${parts.length ? ` (${parts.join(", ")})` : ""} гэж бүртгэлээ.`;
   const missing: string[] = [];
   if (input.groupSize === null) missing.push("хэдэн хүн");
   if (input.month === null) missing.push("хэдэн сард");
@@ -133,23 +135,29 @@ export const CATALOGUE_BLOCK_REASON_TEXT: Record<string, string> = {
 
 /** A trip-code reply as one structured lead: staff read the lines, the last line is for tools. */
 export function tripCodeLeadContext(input: {
-  code: string;
+  /** The catalogue code the customer typed; null when the trip was named instead (identifiedBy "name"). */
+  code: string | null;
   tripTitle: string | null;
   tripId: string | null;
   groupSize: number | null;
   month: number | null;
   note?: string | null;
   customerText: string;
+  identifiedBy?: "code" | "name";
 }): string {
+  const identifiedBy = input.identifiedBy ?? "code";
   const lines = [
     "Байгууллагын каталогоос үнийн санал хүссэн.",
-    `Код: ${input.code}`,
+    identifiedBy === "name" ? "Аяллыг нэрээр нь танисан (кодгүй)." : `Код: ${input.code}`,
     input.tripTitle ? `Аялал: ${input.tripTitle}` : "Аялал: олдсонгүй",
     `Хүний тоо: ${input.groupSize ?? "бичээгүй"}`,
     `Сар: ${input.month !== null ? `${input.month}-р сар` : "бичээгүй"}`,
     input.note ? input.note : "",
     `Хэрэглэгчийн бичсэн: ${input.customerText.replace(/\s+/g, " ").trim().slice(0, 200)}`,
-    JSON.stringify({ source: "catalogue_code", code: input.code, tripId: input.tripId, groupSize: input.groupSize, month: input.month }),
+    JSON.stringify({
+      source: identifiedBy === "name" ? "catalogue_name" : "catalogue_code", code: input.code, tripId: input.tripId,
+      groupSize: input.groupSize, month: input.month, identifiedBy,
+    }),
   ];
   return lines.filter(Boolean).join("\n");
 }

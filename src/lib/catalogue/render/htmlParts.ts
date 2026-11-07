@@ -41,10 +41,14 @@ export function imageTag(img: RenderImage | null | undefined, alt: string, cls =
   return src ? `<img${cls ? ` class="${cls}"` : ""} src="${src}" width="${img.width}" height="${img.height}" alt="${escapeHtml(alt)}">` : "";
 }
 
-/** The agency's original logo, untouched, on a clean paper tile. */
-export function logoTile(assets: RenderAssets, extraClass = ""): string {
+/**
+ * The agency's approved logo file, byte for byte, flush in the top-left corner of the page at its own
+ * square aspect ratio: no container, no padding, no recolouring. Its own navy field reads as a deliberate
+ * brand corner; nothing else is drawn around it.
+ */
+export function logoCorner(assets: RenderAssets, size: "cover" | "closing" | "guide"): string {
   const src = safeImageSrc(assets.logoDataUri);
-  return `<div class="tile${extraClass ? ` ${extraClass}` : ""}">${src ? `<img class="logo" src="${src}" alt="UUDAM Travel Agency">` : ""}</div>`;
+  return `<div class="logo ${size}">${src ? `<img src="${src}" alt="UUDAM Travel Agency">` : ""}</div>`;
 }
 
 export type FootOptions = {

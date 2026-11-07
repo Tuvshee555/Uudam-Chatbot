@@ -21,7 +21,8 @@ import type { TripArt } from "../src/lib/catalogue/render";
 import { outlineFor } from "../src/lib/catalogue/render/pdfMeta";
 import { auditNavigation, expectedDestinations, readPdfNavigation, type PdfNavigation } from "../src/lib/catalogue/render/pdfNav";
 import { COVER_INVITE, corporateNotesOf } from "../src/lib/catalogue/render/pages";
-import { assignCompositions, clipHighlight, departureLine, headlineSizePt, orderTrips, priceParts, UNGROUPED_LABEL } from "../src/lib/catalogue/render/layout";
+import { assignCompositions, clipHighlight, compareCodes, headlineSizePt, orderTrips, planGuide, priceParts, scheduleBlockId, UNGROUPED_LABEL } from "../src/lib/catalogue/render/layout";
+import { fullDate, groupDatesByMonth, tripDates } from "../src/lib/catalogue/render/dates";
 import { emptyArt } from "../src/lib/catalogue/render/renderTypes";
 import { LOGO_FILE, loadStaticAssets } from "../src/lib/catalogue/render/assets";
 import { displayTitle } from "../src/lib/catalogue/render/titleCase";
@@ -92,31 +93,45 @@ test("html never references a non-data resource (the browser may only load data:
   assert.ok(!/<link\b|@import/i.test(html), "no stylesheet links or imports");
 });
 
-test("page plan: cover + contents + openers + one page per trip + closing, numbers match the pages printed", () => {
+test("page plan: cover + guide + openers + one page per trip + schedule + index + closing, numbers match the pages printed", () => {
   const snap = sampleSnapshot({ trips: 40, edition: "complete" });
   const plan = planPages(snap);
-  assert.ok(plan.contentsPages.length >= 3, "40 trips need several contents pages");
+  assert.equal(plan.guidePages.length, 1, "the chapter guide is ONE page for a book of this size");
   const openers = plan.chapters.filter(c => c.openerPage != null).length;
   assert.equal(openers, plan.chapters.length, "the complete edition opens every chapter");
-  assert.equal(plan.totalPages, 1 + plan.contentsPages.length + openers + 40 + 1);
+  const scheduleCount = plan.schedulePages.length;
+  const indexCount = plan.indexPages.length;
+  assert.ok(scheduleCount >= 1 && scheduleCount <= 4, `schedule appendix ${scheduleCount} pages`);
+  assert.ok(indexCount >= 1 && indexCount <= 3, `index appendix ${indexCount} pages`);
+  assert.equal(plan.totalPages, 1 + plan.guidePages.length + openers + 40 + scheduleCount + indexCount + 1);
   const html = buildCatalogueHtml(snap, assetsFor(snap));
   assert.equal((html.match(/<section class="page/g) ?? []).length, plan.totalPages);
 
-  // every trip listed exactly once in the contents, pointing at the page its section carries
-  const rows = plan.contentsPages.flat().filter(i => i.kind === "row");
-  assert.equal(rows.length, 40);
-  for (const item of rows) {
-    if (item.kind !== "row") continue;
-    const re = new RegExp(`id="trip-${item.trip.card.code}" data-page="${item.trip.page}"`);
-    assert.match(html, re, `${item.trip.card.code} page ${item.trip.page}`);
+  // order: cover, guide, [opener + trips]..., schedule, index, closing
+  assert.equal(plan.firstGuidePage, 2);
+  assert.equal(plan.firstTripPage, 2 + plan.guidePages.length);
+  assert.equal(plan.firstSchedulePage, plan.trips.at(-1)!.page + 1);
+  assert.equal(plan.firstIndexPage, plan.firstSchedulePage! + scheduleCount);
+  assert.equal(plan.closingPage, plan.firstIndexPage! + indexCount);
+  assert.equal(plan.closingPage, plan.totalPages);
+
+  // every trip is printed exactly once, on the page the plan says, and listed once in the index
+  for (const t of plan.trips) {
+    assert.match(html, new RegExp(`id="trip-${t.card.code}" data-page="${t.page}"`), `${t.card.code} page ${t.page}`);
   }
+  const indexRows = plan.indexPages.flat();
+  assert.equal(indexRows.length, 40);
+  assert.deepEqual(indexRows.map(r => r.card.code), [...indexRows.map(r => r.card.code)].sort(compareCodes), "index is in code order");
   const pages = plan.trips.map(t => t.page);
   assert.deepEqual(pages, [...pages].sort((a, b) => a - b));
-  assert.equal(plan.closingPage, plan.totalPages);
   // each chapter's opener sits directly before its first trip
   for (const c of plan.chapters) assert.equal(c.openerPage! + 1, c.trips[0]!.page);
-  // a group split across contents pages is announced again
-  assert.ok(plan.contentsPages.slice(1).every(p => p[0]?.kind === "group"), "each continued page starts with its group label");
+  // every guide block names real trips of its chapter, with the page they sit on
+  for (const e of plan.guidePages.flat()) {
+    assert.ok(e.names.length >= 1 && e.names.length <= 6);
+    for (const n of e.names) assert.equal(n.page, plan.trips.find(t => t.card.code === n.code)!.page);
+    assert.equal(e.count, plan.chapters[e.chapter]!.trips.length);
+  }
 });
 
 test("book order follows the groups; trips no group lists are kept, never dropped", () => {
@@ -155,20 +170,114 @@ test("compositions: deterministic rhythm, never the same twice in a row when ano
   for (let i = 1; i < run.length; i++) assert.notEqual(run[i], run[i - 1]);
 });
 
-test("date line: first three departures as month.day, year only where it changes, '+ N' for the rest; facts are never invented", () => {
+test("groupDatesByMonth: month lines in Mongolian numeric style; the year shows only when it differs from the issue year; days are two digits", () => {
+  const lines = groupDatesByMonth(["2026-11-24", "2026-11-10", "2026-11-17", "2027-01-05", "2027-01-12", "2026-11-10"], "2026");
+  assert.deepEqual(lines.map(l => l.text), ["11-р сар: 10 · 17 · 24", "2027 оны 1-р сар: 05 · 12"], "sorted, de-duplicated, year only on 2027");
+  assert.deepEqual(lines.map(l => l.label), ["11-р сар", "2027 оны 1-р сар"]);
+  // the same month number in a later year is its own line with the year, never merged
+  const wrap = groupDatesByMonth(["2026-12-05", "2027-12-04", "2028-01-08"], "2026");
+  assert.deepEqual(wrap.map(l => l.text), ["12-р сар: 05", "2027 оны 12-р сар: 04", "2028 оны 1-р сар: 08"]);
+  // a book issued in 2027 prints 2027 dates without the year
+  assert.deepEqual(groupDatesByMonth(["2027-03-06"], "2027").map(l => l.text), ["3-р сар: 06"]);
+  assert.deepEqual(groupDatesByMonth([], "2026"), []);
+  assert.deepEqual(groupDatesByMonth(["not-a-date", "2026-13-40x", ""], "2026"), [], "junk is dropped, never printed");
+  assert.equal(fullDate("2027-01-09"), "2027 оны 1-р сарын 09");
+});
+
+test("groupDatesByMonth with fares: one line per month and fare run, the fare after a dash; no fare on a plain schedule", () => {
+  const dep = (date: string, adultMnt: number | null) => ({ date, adultMnt });
+  const lines = groupDatesByMonth([dep("2026-11-10", 3990000), dep("2026-11-17", 3990000), dep("2026-11-24", 4190000), dep("2026-12-01", 4190000), dep("2027-01-05", null)], "2026", { fares: true });
+  assert.deepEqual(lines.map(l => l.text), [
+    "11-р сар: 10 · 17 — 3,990,000₮",
+    "11-р сар: 24 — 4,190,000₮",
+    "12-р сар: 01 — 4,190,000₮",
+    "2027 оны 1-р сар: 05 — үнэ лавлах",
+  ]);
+  assert.deepEqual(groupDatesByMonth([dep("2026-11-10", 3990000), dep("2026-11-17", 4190000)], "2026").map(l => l.text), ["11-р сар: 10 · 17"], "no fares unless asked");
+});
+
+test("trip dates: window lines, compact grid beyond 12 dates or 3 months, nearest departure when the window is empty, safe labels; facts are never invented", () => {
   const base = sampleSnapshot({ trips: 1 }).trips[0]!;
-  const withDays = (departures: string[], label = "") => ({ ...base, dates: { nextDeparture: departures[0] ?? null, departures, label } });
-  const a = departureLine(withDays(["2026-11-14", "2026-11-28", "2026-12-12", "2027-01-09"]), "2026-11-06");
-  assert.deepEqual(a.dates, ["11.14", "11.28", "12.12"]);
-  assert.equal(a.more, 1);
-  const b = departureLine(withDays(["2027-01-09", "2027-01-23"]), "2026-11-06");
-  assert.deepEqual(b.dates, ["2027.01.09", "01.23"]);
-  assert.equal(b.more, 0);
-  const c = departureLine(withDays(["2026-11-14", "2026-11-21", "2026-11-28"], "Ойрын огноо: 2026.11.14, 2026.11.21, 2026.11.28 болон өөр 9 огноо"), "2026-11-06");
-  assert.equal(c.more, 9, "the data layer's count beyond the list is kept");
-  const none = departureLine(withDays([], "Явах огноог лавлана"), "2026-11-06");
-  assert.deepEqual(none.dates, []);
+  const withDates = (dates: Partial<CatalogueTripCard["dates"]>) => ({ ...base, dates: { nextDeparture: null, departures: [], label: "Явах огноог лавлана", ...dates } });
+  const dep = (date: string, adultMnt: number | null = 1000000) => ({ date, adultMnt });
+  const asOf = "2026-11-06";
+  const few = tripDates(withDates({ departures: ["2026-11-14", "2027-01-09"], schedule: [dep("2026-11-14"), dep("2027-01-09"), dep("2027-03-06")], window: [dep("2026-11-14"), dep("2027-01-09")], label: "Ойрын огноо: 2026.11.14, 2027.01.09" }), asOf);
+  assert.equal(few.kind, "lines");
+  assert.deepEqual(few.lines.map(l => l.text), ["11-р сар: 14", "2027 оны 1-р сар: 09"]);
+  assert.equal(few.scheduleCount, 3);
+  assert.equal(few.recurring, null, "a generated date list is not a recurring rule");
+  assert.equal(few.hasSchedule, true);
+
+  const weekly = Array.from({ length: 13 }, (_, i) => dep(new Date(Date.UTC(2026, 10, 13 + i * 7)).toISOString().slice(0, 10)));
+  const dense = tripDates(withDates({ schedule: weekly, window: weekly, departures: weekly.slice(0, 12).map(d => d.date), nextDeparture: "2026-11-13", label: "Долоо хоног бүрийн баасан гарагт" }), asOf);
+  assert.equal(dense.kind, "grid", "more than 12 dates -> compact grid");
+  assert.equal(dense.recurring, "Долоо хоног бүрийн баасан гарагт", "the safe label of a recurring trip is kept");
+  const fourMonths = [dep("2026-11-20"), dep("2026-12-18"), dep("2027-01-15"), dep("2027-02-02")];
+  assert.equal(tripDates(withDates({ schedule: fourMonths, window: fourMonths, departures: fourMonths.map(d => d.date) }), asOf).kind, "grid", "more than 3 month lines -> grid");
+
+  const later = tripDates(withDates({ schedule: [dep("2027-03-06")], window: [], departures: ["2027-03-06"], nextDeparture: "2027-03-06", label: "2027.03.06-ний хөдлөлт" }), asOf);
+  assert.equal(later.kind, "next");
+  assert.equal(later.nextFull, "2027 оны 3-р сарын 06", "never made to look unavailable");
+  const none = tripDates(withDates({}), asOf);
+  assert.equal(none.kind, "plain");
   assert.equal(none.plain, "Явах огноог лавлана");
+  assert.equal(none.hasSchedule, false);
+
+  // old snapshots without schedule/window: the departures list (<= 12) stands in, filtered to the 90-day window
+  const legacy = tripDates(withDates({ departures: ["2026-11-14", "2027-03-06"], nextDeparture: "2026-11-14" }), asOf);
+  assert.deepEqual(legacy.lines.map(l => l.text), ["11-р сар: 14"]);
+  assert.equal(legacy.scheduleCount, 2);
+  // past days are never printed
+  assert.equal(tripDates(withDates({ departures: ["2026-10-01"], schedule: [dep("2026-10-01")], window: [dep("2026-10-01")] }), asOf).kind, "plain");
+
+  // fares: the data layer's flag wins; absent flag is derived from the dated fares
+  assert.equal(tripDates(withDates({ schedule: [dep("2026-11-14", 1000000), dep("2026-11-21", 1200000)], priceVaries: undefined }), asOf).priceVaries, true);
+  assert.equal(tripDates(withDates({ schedule: [dep("2026-11-14", 1000000), dep("2026-11-21", 1000000)], priceVaries: false }), asOf).priceVaries, false);
+});
+
+test("trip page prints the window by month, the starting price labelled as such, a fare note and the link to the schedule block", () => {
+  const snap = sampleSnapshot({ trips: 12, edition: "complete" });
+  const plan = planPages(snap);
+  const html = buildCatalogueHtml(snap, assetsFor(snap));
+  const sectionOf = (code: string) => html.slice(html.indexOf(`id="trip-${code}"`), html.indexOf("</section>", html.indexOf(`id="trip-${code}"`)));
+  const lines = sectionOf("A07"); // four departures inside 90 days across two years
+  assert.ok(lines.includes("<span class=\"mn\">11-р сар:</span>") && lines.includes("14 · 28") && lines.includes("2027 оны 1-р сар:"), lines.slice(0, 100));
+  assert.ok(lines.includes(`href="#${scheduleBlockId("A07")}"`) && lines.includes(`${plan.schedulePageByCode["A07"]}-р хуудас`), "link to the schedule block");
+  assert.ok(lines.includes("Эхлэх үнэ / нэг том хүн") && !lines.includes("Үнэ огнооноос хамаарна"), "one fare: no 'varies' note");
+  const grid = sectionOf("A12"); // many dates -> grid
+  assert.ok(grid.includes('class="chip"'), "dense window -> day grid");
+  const fares = sectionOf("A11");
+  assert.ok(fares.includes("Үнэ огнооноос хамаарна") && fares.includes("Эхлэх үнэ / нэг том хүн"), "fares differ by date: the note and the starting-price label");
+  const far = sectionOf("A10");
+  assert.ok(far.includes("Хамгийн ойрын хөдөлгөөн") && far.includes("2027 оны 3-р сарын 06"), "empty window still shows the nearest departure");
+  const weekly = sectionOf("A09");
+  assert.ok(weekly.includes("Долоо хоног бүрийн баасан гарагт"), "recurring trips show their safe label");
+  const empty = sectionOf("A05");
+  assert.ok(empty.includes("Явах огноог лавлана") && !empty.includes("sched-"), "no dates, no schedule link");
+});
+
+test("schedule appendix: every future departure per trip (beyond 90 days too), month lines with the year, fares by date where they differ, links both ways", () => {
+  const snap = sampleSnapshot({ trips: 12, edition: "complete" });
+  const plan = planPages(snap);
+  const html = buildCatalogueHtml(snap, assetsFor(snap));
+  const blockOf = (code: string) => {
+    const at = html.indexOf(`id="${scheduleBlockId(code)}"`);
+    return html.slice(at, html.indexOf("</div></div>", at) + 12);
+  };
+  const dated = plan.trips.filter(t => (t.card.dates.schedule ?? []).length > 0);
+  assert.equal(Object.keys(plan.schedulePageByCode).length, dated.length, "a block for every trip with a future departure, none for the others");
+  for (const t of dated) {
+    const block = blockOf(t.card.code);
+    assert.ok(block.includes(`href="#trip-${t.card.code}"`), `${t.card.code}: block links back to its page`);
+    assert.ok(block.includes(`<span class="sp">${t.page}</span>`), `${t.card.code}: block prints its page number`);
+    assert.ok(block.includes(escapeHtml(t.card.editorialTitle)) || block.includes(t.card.editorialTitle.slice(0, 6)), `${t.card.code}: title`);
+  }
+  assert.ok(blockOf("A10").includes("2027 оны 3-р сар: 06 · 20") && blockOf("A10").includes("2027 оны 4-р сар: 03"), "dates beyond the 90-day window are all listed");
+  const fares = blockOf("A11");
+  assert.ok(fares.includes("11-р сар: 21 · 28") && fares.includes("3,990,000₮") && fares.includes("4,190,000₮") && fares.includes("4,590,000₮"), "date-specific fares");
+  assert.ok(!blockOf("A01").includes("₮"), "one fare for every date: no per-date fares");
+  assert.ok(blockOf("A09").includes("2027 оны 6-р сар: 04"), "a long weekly schedule is printed in full");
+  assert.ok(html.includes('id="schedule"') && html.includes('id="index"'));
 });
 
 test("copy shaping: highlights are clipped at a natural break, never paraphrased; price splits at the tugrik sign", () => {
@@ -197,7 +306,7 @@ test("copy limits: at most 3 highlights and 3 phones; price/date/group-note/disc
     "ХАМТ ОЛНЫ",
     "АЯЛЛЫН СОНГОЛТ",
     "25 хүн, 1-р сар",
-    "Ойрын огноо",
+    "Хамгийн ойрын хөдөлгөөн",
   ]) {
     assert.ok(html.toLowerCase().includes(phrase.toLowerCase()), phrase);
   }
@@ -238,10 +347,12 @@ test("every composition renders its own structure and the same facts", () => {
   assert.ok(html.includes('class="bg"'), "cinema background");
 });
 
-test("an empty edition still renders a valid plan (cover, contents notice, closing)", () => {
+test("an empty edition still renders a valid plan (cover, guide notice, closing; no appendices)", () => {
   const snap = snapshotOf([], []);
   const plan = planPages(snap);
   assert.equal(plan.totalPages, 3);
+  assert.equal(plan.firstSchedulePage, null);
+  assert.equal(plan.firstIndexPage, null);
   const html = buildCatalogueHtml(snap, assetsFor(snap));
   assert.ok(html.includes("Одоогоор санал болгох аялал алга"));
 });
@@ -255,12 +366,17 @@ test("headline size only ever shrinks as titles get longer and never reaches mic
   }
 });
 
-test("outline: cover, contents, grouped 'code · title' bookmarks, quotation page", () => {
+test("outline: cover, guide, chapters with 'code · title' bookmarks, schedule and index appendices, quotation page", () => {
   const snap = sampleSnapshot({ trips: 6 });
   const plan = planPages(snap);
   const outline = outlineFor(plan);
   assert.deepEqual(outline.slice(0, 2).map(o => [o.title, o.page]), [["Нүүр", 1], ["Агуулга", 2]]);
   assert.equal(outline.at(-1)!.page, plan.closingPage);
+  assert.deepEqual(outline.filter(o => o.title.startsWith("Хавсралт")).map(o => [o.title, o.page]), [
+    ["Хавсралт · Хөдөлгөөний товлол", plan.firstSchedulePage],
+    ["Хавсралт · Кодын жагсаалт", plan.firstIndexPage],
+  ]);
+  assert.deepEqual(outline.filter(o => o.children.length > 0).map(o => o.title), plan.chapters.map(c => c.label), "a bookmark per chapter");
   const kids = outline.flatMap(o => o.children);
   assert.equal(kids.length, 6);
   assert.ok(kids.some(k => k.title === "A01 · Тест-Далай"));
@@ -507,7 +623,8 @@ test("cover copy: a warm line addressed to the team, issue line with season, cou
   assert.ok(cover.includes(escapeHtml(COVER_INVITE)) && /Баг хамт олныхоо/.test(COVER_INVITE));
   assert.ok(cover.includes("2026 / 2027 · 2 аяллын санал · 2026.11.06"), cover);
   assert.ok(cover.includes('href="#contents"'));
-  assert.ok(cover.includes('class="tile"') && !cover.includes("filter") && !cover.includes("box-shadow"));
+  assert.ok(cover.includes('class="logo cover"') && cover.includes("alt=\"UUDAM Travel Agency\"") && !cover.includes('class="tile"'), "the logo sits flush in the corner, never in a tile");
+  assert.ok(!cover.includes("filter") && !cover.includes("box-shadow"));
 });
 
 test("closing: staff-approved company notes are printed (max 3, trimmed, unique, escaped, long ones dropped); absent notes print nothing extra", () => {
@@ -524,30 +641,57 @@ test("closing: staff-approved company notes are printed (max 3, trimmed, unique,
   assert.ok(html.includes("Эцсийн үнэ, суудал, огноо, нөхцөлийг ажилтан баталгаажуулна"), "the disclaimer stays");
 });
 
-test("navigation audit: names a destination on the wrong page, a contents row that goes elsewhere, a missing back link and a missing bookmark", () => {
-  const snap = snapshotOf([card({ n: 1 }), card({ n: 2 })]);
+test("navigation audit: names a destination on the wrong page, a guide/index/schedule link that goes elsewhere, a missing back link and a missing bookmark", () => {
+  const snap = sampleSnapshot({ trips: 4, edition: "complete" });
   const plan = planPages(snap);
   const rect: [number, number, number, number] = [0, 0, 1, 1];
+  const guide = new Set(plan.guidePages.map((_, i) => plan.firstGuidePage + i));
+  const sched = plan.schedulePages.map((_, i) => plan.firstSchedulePage! + i);
+  const index = plan.indexPages.map((_, i) => plan.firstIndexPage! + i);
+  const back = (page: number) => ({ page, rect, target: plan.firstGuidePage, dest: "contents", uri: null });
+  const chapterDest = (c: (typeof plan.chapters)[number]) => (c.openerPage != null ? `chapter-${c.index + 1}` : `trip-${c.trips[0]!.card.code}`);
   const good: PdfNavigation = {
     pageCount: plan.totalPages,
     destinations: { ...expectedDestinations(plan) },
     links: [
-      { page: 1, rect, target: plan.firstContentsPage, dest: "contents", uri: null },
-      ...plan.trips.map(t => ({ page: plan.firstContentsPage, rect, target: t.page, dest: `trip-${t.card.code}`, uri: null })),
-      ...plan.trips.map(t => ({ page: t.page, rect, target: plan.firstContentsPage, dest: "contents", uri: null })),
-      { page: plan.closingPage, rect, target: plan.firstContentsPage, dest: "contents", uri: null },
+      back(1),
+      ...plan.chapters.map(c => ({ page: plan.firstGuidePage, rect, target: c.firstPage, dest: chapterDest(c), uri: null })),
+      ...plan.guidePages.flat().flatMap(e => e.names.map(n => ({ page: plan.firstGuidePage, rect, target: n.page, dest: `trip-${n.code}`, uri: null }))),
+      ...plan.trips.map(t => ({ page: index[0]!, rect, target: t.page, dest: `trip-${t.card.code}`, uri: null })),
+      ...plan.trips.filter(t => plan.schedulePageByCode[t.card.code] != null).flatMap(t => [
+        { page: t.page, rect, target: plan.schedulePageByCode[t.card.code]!, dest: scheduleBlockId(t.card.code), uri: null },
+        { page: sched[0]!, rect, target: t.page, dest: `trip-${t.card.code}`, uri: null },
+      ]),
+      ...[...plan.trips.map(t => t.page), ...plan.chapters.flatMap(c => (c.openerPage != null ? [c.openerPage] : [])), ...sched, ...index, plan.closingPage].map(back),
     ],
-    outline: plan.trips.map(t => ({ title: `${t.card.code} · ${t.card.editorialTitle}`, page: t.page, depth: 1 })),
+    outline: [
+      { title: "Агуулга", page: plan.firstGuidePage, depth: 0 },
+      { title: "Хавсралт · Хөдөлгөөний товлол", page: plan.firstSchedulePage, depth: 0 },
+      { title: "Хавсралт · Кодын жагсаалт", page: plan.firstIndexPage, depth: 0 },
+      ...plan.chapters.map(c => ({ title: c.label, page: c.firstPage, depth: 0 })),
+      ...plan.trips.map(t => ({ title: `${t.card.code} · ${t.card.editorialTitle}`, page: t.page, depth: 1 })),
+    ],
   };
   assert.deepEqual(auditNavigation(good, snap, plan), []);
+  assert.ok(guide.size >= 1);
   const wrongDest = { ...good, destinations: { ...good.destinations, "trip-A02": 2 } };
   assert.ok(auditNavigation(wrongDest, snap, plan).some(w => w.message.includes("зөв хуудас руу заахгүй")));
-  const wrongRow = { ...good, links: good.links.map(l => (l.dest === "trip-A01" ? { ...l, target: 99 } : l)) };
-  assert.ok(auditNavigation(wrongRow, snap, plan).some(w => w.message.startsWith("A01: агуулгын мөр")));
+  const wrongIndex = { ...good, links: good.links.map(l => (l.dest === "trip-A01" && index.includes(l.page) ? { ...l, target: 99 } : l)) };
+  assert.ok(auditNavigation(wrongIndex, snap, plan).some(w => w.message.startsWith("A01: жагсаалтын мөр")));
+  const wrongGuide = { ...good, links: good.links.map(l => (l.page === plan.firstGuidePage && l.dest === `trip-${plan.guidePages[0]![0]!.names[0]!.code}` ? { ...l, target: 99 } : l)) };
+  assert.ok(auditNavigation(wrongGuide, snap, plan).some(w => w.message.includes("агуулга дахь нэрийн холбоос")));
+  const noChapter = { ...good, links: good.links.filter(l => !(l.page === plan.firstGuidePage && l.dest === chapterDest(plan.chapters[0]!))) };
+  assert.ok(auditNavigation(noChapter, snap, plan).some(w => w.message.includes("бүлгийн холбоос")));
+  const noSchedLink = { ...good, links: good.links.filter(l => !(l.dest === scheduleBlockId("A01"))) };
+  assert.ok(auditNavigation(noSchedLink, snap, plan).some(w => w.message.startsWith("A01: аяллын хуудас огнооны товлол")));
+  const noSchedBack = { ...good, links: good.links.filter(l => !(sched.includes(l.page) && l.dest === "trip-A01")) };
+  assert.ok(auditNavigation(noSchedBack, snap, plan).some(w => w.message.startsWith("A01: товлолын блок")));
   const noBack = { ...good, links: good.links.filter(l => !(l.dest === "contents" && l.page === plan.closingPage)) };
   assert.ok(auditNavigation(noBack, snap, plan).some(w => w.message.includes("буцах холбоос")));
-  const noMark = { ...good, outline: good.outline.slice(1) };
+  const noMark = { ...good, outline: good.outline.filter(o => !o.title.startsWith("A01 ·")) };
   assert.ok(auditNavigation(noMark, snap, plan).some(w => w.message.startsWith("A01: хавчуургад")));
+  const noIndexMark = { ...good, outline: good.outline.filter(o => o.title !== "Хавсралт · Кодын жагсаалт") };
+  assert.ok(auditNavigation(noIndexMark, snap, plan).some(w => w.message.includes("Хавчуурга алга")));
 });
 
 test("default fetcher refuses non-https, private and credentialed URLs without touching the network", async () => {
@@ -661,7 +805,10 @@ describe("browser render", () => {
     const last = pageText.at(-1)!;
     assert.ok(last.includes("Эцсийн үнэ, суудал, огноо, нөхцөлийг ажилтан баталгаажуулна"));
     assert.ok(last.includes("7700 0001") && last.includes("9900 0002") && last.includes("v-test-1"), "contact + version stamp on closing page");
-    assert.ok(squash(pageText[1]!).includes("A01") && squash(pageText[1]!).includes("3,740,000₮-с"), "contents lists code and price");
+    const planIdx = planPages(snapshot);
+    const idxText = squash(pageText[planIdx.firstIndexPage! - 1]!);
+    assert.ok(idxText.includes("A01") && idxText.includes("3,740,000₮-с"), "the index lists code and price");
+    assert.ok(squash(pageText[1]!).includes("Хаашаа"), "the guide is page 2");
   });
 
   test("no text outside the page margins and no microtype", async t => {
@@ -726,7 +873,8 @@ describe("browser render", () => {
     const outline = (await doc.getOutline()) ?? [];
     const titles = outline.flatMap(o => [o.title, ...(o.items ?? []).map(i => i.title)]);
     assert.ok(titles.includes("Агуулга") && titles.includes("A01 · Тест-Далай") && titles.includes("Үнийн санал авах"), titles.join(" | "));
-    // contents rows are internal GoTo links (no network): the A01 row lands on A01's page
+    assert.ok(titles.includes("Хавсралт · Хөдөлгөөний товлол") && titles.includes("Хавсралт · Кодын жагсаалт"), titles.join(" | "));
+    // guide links are internal GoTo links (no network): the A01 row lands on A01's page
     const links = (await (await doc.getPage(2)).getAnnotations()).filter(a => a.subtype === "Link" && typeof a.dest === "string");
     assert.ok(links.length >= 4);
     const dest = await doc.getDestination("trip-A01");
@@ -735,7 +883,7 @@ describe("browser render", () => {
     assert.equal(pageIndex + 1, planPages(snapshot).trips.find(x => x.card.code === "A01")!.page);
   });
 
-  test("navigation: every contents row opens the page that shows that trip's code; every page leads back; bookmarks list every trip", async t => {
+  test("navigation: every guide link, index row and schedule block opens the page that shows that trip; every page leads back; bookmarks cover guide, chapters, trips and appendices", async t => {
     const r = need(t);
     if (!r) return;
     const plan = planPages(snapshot);
@@ -743,22 +891,48 @@ describe("browser render", () => {
     const nav = await readPdfNavigation(r.pdf);
     assert.equal(nav.pageCount, plan.totalPages);
     assert.ok(nav.links.length >= snapshot.trips.length, `${nav.links.length} link annotations for ${snapshot.trips.length} trips`);
-    const contentsPages = new Set(plan.contentsPages.map((_, i) => plan.firstContentsPage + i));
+    const guidePages = new Set(plan.guidePages.map((_, i) => plan.firstGuidePage + i));
+    const indexPages = new Set(plan.indexPages.map((_, i) => plan.firstIndexPage! + i));
+    const schedPages = new Set(plan.schedulePages.map((_, i) => plan.firstSchedulePage! + i));
+    assert.ok(plan.guidePages.length === 1 && plan.indexPages.length >= 1 && plan.schedulePages.length >= 1);
+    const showsCode = (page: number, code: string) => squash(pageText[page - 1] ?? "").includes(code);
     for (const trip of plan.trips) {
       const code = trip.card.code;
-      const row = nav.links.find(l => contentsPages.has(l.page) && l.dest === `trip-${code}`);
-      assert.ok(row, `${code}: contents row has a link`);
+      const row = nav.links.find(l => indexPages.has(l.page) && l.dest === `trip-${code}`);
+      assert.ok(row, `${code}: index row has a link`);
       assert.equal(row!.target, trip.page, `${code}: link goes to the planned page`);
-      assert.ok(squash(pageText[row!.target! - 1] ?? "").includes(code), `${code}: the page it opens shows that trip's code`);
+      assert.ok(showsCode(row!.target!, code), `${code}: the page it opens shows that trip's code`);
       const bookmark = nav.outline.find(o => o.title.startsWith(`${code} ·`));
       assert.ok(bookmark, `${code}: bookmark`);
       assert.equal(bookmark!.page, trip.page);
+      assert.ok(nav.links.some(l => l.page === trip.page && l.dest === "contents" && l.target === plan.firstGuidePage), `${code}: back to the guide`);
+      const blockPage = plan.schedulePageByCode[code];
+      if (blockPage != null) {
+        const to = nav.links.find(l => l.page === trip.page && l.dest === scheduleBlockId(code));
+        assert.ok(to && to.target === blockPage && schedPages.has(blockPage), `${code}: trip page links to its schedule block`);
+        assert.ok(showsCode(blockPage, code), `${code}: the schedule page shows the code`);
+        const back = nav.links.find(l => schedPages.has(l.page) && l.dest === `trip-${code}`);
+        assert.ok(back && back.target === trip.page, `${code}: the schedule block links back`);
+      }
+    }
+    for (const chapter of plan.chapters) {
+      const dest = chapter.openerPage != null ? `chapter-${chapter.index + 1}` : `trip-${chapter.trips[0]!.card.code}`;
+      const link = nav.links.find(l => guidePages.has(l.page) && l.dest === dest);
+      assert.ok(link && link.target === chapter.firstPage, `${chapter.label}: guide link opens the chapter`);
+      assert.ok(nav.outline.some(o => o.title === chapter.label && o.page === chapter.firstPage), `${chapter.label}: bookmark`);
+    }
+    for (const entry of plan.guidePages.flat()) {
+      for (const n of entry.names) {
+        const link = nav.links.find(l => guidePages.has(l.page) && l.dest === `trip-${n.code}`);
+        assert.ok(link && link.target === n.page, `${n.code}: destination name in the guide opens its page`);
+        assert.ok(showsCode(n.page, n.code));
+      }
     }
     assert.equal(nav.outline.filter(o => o.depth === 1).length, snapshot.trips.length, "one bookmark per trip");
-    for (const trip of plan.trips) {
-      assert.ok(nav.links.some(l => l.page === trip.page && l.dest === "contents" && l.target === plan.firstContentsPage), `${trip.card.code}: back to contents`);
-    }
-    assert.ok(nav.links.some(l => l.page === 1 && l.dest === "contents" && l.target === plan.firstContentsPage), "cover links into the contents");
+    assert.ok(nav.links.some(l => l.page === 1 && l.dest === "contents" && l.target === plan.firstGuidePage), "cover links into the guide");
+    assert.ok(nav.links.some(l => guidePages.has(l.page) && l.dest === "schedule" && l.target === plan.firstSchedulePage), "guide links to the schedule appendix");
+    assert.ok(nav.links.some(l => guidePages.has(l.page) && l.dest === "index" && l.target === plan.firstIndexPage), "guide links to the index");
+    for (const page of [...schedPages, ...indexPages]) assert.ok(nav.links.some(l => l.page === page && l.dest === "contents"), `appendix page ${page} leads back`);
     assert.ok(nav.links.some(l => l.page === plan.closingPage && l.dest === "contents"), "closing leads back");
     assert.ok(nav.links.some(l => l.page === plan.closingPage && (l.uri ?? "").startsWith("https://")), "closing links to the site");
     // page numbers: every page after the cover prints "NN / total" with its own number
@@ -766,7 +940,26 @@ describe("browser render", () => {
     for (let page = 2; page <= plan.totalPages; page++) {
       assert.ok(squash(pageText[page - 1]!).includes(`${String(page).padStart(2, "0")}/${total}`), `page ${page} label`);
     }
-    assert.deepEqual(r.warnings.filter(w => /холбоос|хавчуур|агуулгын мөр/.test(w.message)), [], "the render's own navigation audit is clean");
+    assert.deepEqual(r.warnings.filter(w => /холбоос|хавчуур|агуулгын|жагсаалтын|товлол/.test(w.message)), [], "the render's own navigation audit is clean");
+  });
+
+  test("the closing page's version stamp fits: no overflow warning anywhere in the book, appendices included", async t => {
+    const r = need(t);
+    if (!r) return;
+    assert.deepEqual(r.warnings.filter(w => w.code === "other" && /багтсангүй/.test(w.message)), []);
+    assert.ok(pageText.at(-1)!.includes("v-test-1"));
+  });
+
+  test("the logo on the cover is the approved file, flush in the corner at its square ratio, with no container around it", async t => {
+    const r = need(t);
+    if (!r) return;
+    const meta = await sharp(r.pageImages[0]!).metadata();
+    // top-left 8px of the rendered cover are the logo's own navy field, not paper or photo
+    const corner = await sharp(r.pageImages[0]!).extract({ left: 0, top: 0, width: 8, height: 8 }).resize(1, 1).raw().toBuffer();
+    assert.ok(corner[2]! > corner[0]! + 20 && corner[0]! < 60, `corner pixel rgb(${corner[0]},${corner[1]},${corner[2]}) is the logo's navy`);
+    assert.equal(meta.width, 810);
+    const html = buildCatalogueHtml(snapshot, { fonts: [], logoDataUri: TINY_LOGO, ...emptyArt(), versionLabel: "v" });
+    assert.ok(!html.includes('class="tile"') && html.includes('class="logo cover"'));
   });
 
   test("size budget: the quick book stays under 6 MB", async t => {
@@ -832,15 +1025,15 @@ test("the book prints the display title everywhere a trip title appears, and sto
   const snap = snapshotOf([shouted, quiet]);
   const html = buildCatalogueHtml(snap, assetsFor(snap));
   assert.equal(shouted.title, "ТЕСТ-ӨВӨРИЙН АЯЛАЛ — ҮЗЭМЖИТ ЁЗООР", "the card is not mutated");
-  assert.ok(html.includes('<span class="ttl">Тест-Өвөрийн Аялал — Үзэмжит Ёзоор</span>'), "contents row");
-  assert.ok(html.includes('<span class="ttl">Тест-хотын аялал</span>'), "contents row, lowercase source");
+  assert.ok(html.includes('<span class="it">Тест-Өвөрийн Аялал — Үзэмжит Ёзоор</span>'), "index row");
+  assert.ok(html.includes('<span class="it">Тест-хотын аялал</span>'), "index row, lowercase source");
   assert.ok(/<h2 class="headline"[^>]*>Тест-Өвөрийн Аялал — Үзэмжит Ёзоор<\/h2>/.test(html), "trip page headline");
   assert.ok(!html.includes("ТЕСТ-ӨВӨРИЙН"), "the shouted form is never printed");
   const kids = outlineFor(planPages(snap)).flatMap(o => o.children).map(k => k.title);
   assert.deepEqual(kids, ["A01 · Тест-Өвөрийн Аялал — Үзэмжит Ёзоор", "A02 · Тест-хотын аялал"], "bookmarks");
 });
 
-/** `count` trips in `groups` contiguous groups; `long` titles wrap to two lines in a contents row. */
+/** `count` trips in `groups` contiguous groups; `long` titles wrap to two lines in a row. */
 function bookOf(count: number, opts: { groups?: number; long?: boolean } = {}): CatalogueSnapshot {
   const groupCount = opts.groups ?? 3;
   const trips = Array.from({ length: count }, (_, i) =>
@@ -854,48 +1047,61 @@ function bookOf(count: number, opts: { groups?: number; long?: boolean } = {}): 
   return snapshotOf(trips, groups);
 }
 
-const rowsOf = (items: ReturnType<typeof planPages>["contentsPages"][number]) => items.filter(i => i.kind === "row").length;
-
-test("contents: a destination guide of 10 trips in 3 chapters needs at most two airy pages; short lists stay comfortable", () => {
-  for (const [count, groups] of [[8, 3], [10, 3], [12, 3]] as const) {
-    const plan = planPages(bookOf(count, { groups }));
-    assert.ok(plan.contentsPages.length <= 2, `${count} trips / ${groups} groups: ${plan.contentsPages.length} pages`);
+test("guide: one page for a normal book, two at most for a long one; blocks never overflow their budget", () => {
+  for (const chapters of [1, 3, 5, 8, 9]) {
+    const g = planGuide(chapters);
+    assert.equal(g.perPage.length, 1, `${chapters} chapters fit one page`);
+    assert.equal(g.perPage[0], chapters);
+    assert.ok(g.rowHeightPt >= 72 && g.rowHeightPt <= 104);
   }
-  assert.equal(planPages(bookOf(3, { groups: 1 })).contentsPages.length, 1);
-  assert.equal(planPages(bookOf(3, { groups: 1 })).contentsDensity, "comfortable", "a short list stays airy");
+  for (const chapters of [10, 14, 17]) {
+    const g = planGuide(chapters);
+    assert.equal(g.perPage.length, 2, `${chapters} chapters take two pages`);
+    assert.equal(g.perPage.reduce((a, b) => a + b, 0), chapters);
+    assert.ok(Math.min(...g.perPage) >= 3, "no orphan page");
+  }
+  assert.equal(planGuide(0).perPage.length, 1);
+  assert.equal(planPages(bookOf(30, { groups: 6 })).guidePages.length, 1);
+  assert.equal(planPages(bookOf(60, { groups: 12 })).guidePages.length, 2);
 });
 
-test("contents: when a break is unavoidable the pages are balanced, never one orphan row or a header on its own", () => {
-  for (const long of [false, true]) {
-    for (let count = 1; count <= 60; count++) {
-      const plan = planPages(bookOf(count, { groups: count > 30 ? 5 : 3, long }));
-      const pages = plan.contentsPages;
-      const label = `${count} trips${long ? " (long titles)" : ""}`;
-      const sizes = pages.map(rowsOf);
-      assert.equal(sizes.reduce((a, b) => a + b, 0), count, `${label}: every trip listed once`);
-      for (const [i, items] of pages.entries()) {
-        assert.equal(items[0]?.kind, "group", `${label}: page ${i + 1} starts with a group label`);
-        assert.equal(items.at(-1)?.kind, "row", `${label}: page ${i + 1} does not end on a header`);
-      }
-      if (pages.length > 1) {
-        assert.ok(Math.min(...sizes) >= 3, `${label}: no orphan page (${sizes.join("/")})`);
-        assert.ok(Math.min(...sizes) >= Math.max(...sizes) * 0.55, `${label}: balanced (${sizes.join("/")})`);
-      }
-      // numbers: trips follow the contents pages in order, and every row points at its own page
-      assert.equal(plan.firstTripPage, 2 + pages.length);
-      assert.ok(plan.trips[0]!.page >= plan.firstTripPage);
-      plan.trips.forEach((t, i) => i > 0 && assert.ok(t.page > plan.trips[i - 1]!.page));
-      for (const item of pages.flat()) if (item.kind === "row") assert.equal(item.trip.page, plan.trips.find(t => t.card.code === item.trip.card.code)!.page);
-      assert.equal(plan.closingPage, plan.trips.at(-1)!.page + 1);
-    }
+test("guide: one photo per chapter taken from that chapter's own trips (strongest hero), a monogram when none; links to the chapter and to destination names", () => {
+  const snap = bookOf(6, { groups: 3 });
+  snap.trips[2] = { ...snap.trips[2]!, heroQuality: "excellent" };
+  const trips: Record<string, TripArt> = {};
+  snap.trips.forEach(t => { trips[t.tripId] = { composition: "plate", hero: tinyImage(), second: null, thumb: { ...tinyImage(), dataUri: TINY_LOGO } }; });
+  delete (trips as Record<string, TripArt | undefined>)[snap.trips[4]!.tripId];
+  delete (trips as Record<string, TripArt | undefined>)[snap.trips[5]!.tripId];
+  const html = buildCatalogueHtml(snap, assetsFor(snap, { trips }));
+  const guide = html.slice(html.indexOf('<section class="page guide"'), html.indexOf("</section>", html.indexOf('<section class="page guide"')));
+  assert.equal((guide.match(/class="grow"/g) ?? []).length, 3, "one block per chapter");
+  assert.equal((guide.match(/class="gth"/g) ?? []).length, 2, "two chapters have a photo");
+  assert.equal((guide.match(/class="gth mono"/g) ?? []).length, 1, "the chapter without a photo gets a monogram tile");
+  const plan = planPages(snap);
+  for (const c of plan.chapters) {
+    const dest = c.openerPage != null ? `#chapter-${c.index + 1}` : `#trip-${c.trips[0]!.card.code}`;
+    assert.ok(guide.includes(`href="${dest}"`), `${c.label}: link`);
   }
+  for (const n of plan.guidePages.flat().flatMap(e => e.names)) assert.ok(guide.includes(`href="#trip-${n.code}"`), n.code);
 });
 
-test("contents: the density class reaches the HTML and the printed page numbers match the plan", () => {
-  const snap = bookOf(12, { groups: 4 });
+test("index appendix: code, title, starting price and page for every trip, each row a link; fares are never invented", () => {
+  const snap = sampleSnapshot({ trips: 12, edition: "complete" });
   const plan = planPages(snap);
   const html = buildCatalogueHtml(snap, assetsFor(snap));
-  assert.ok(html.includes(`class="clist dens-${plan.contentsDensity}"`));
-  assert.equal((html.match(/<section class="page contents"/g) ?? []).length, plan.contentsPages.length);
-  for (const t of plan.trips) assert.ok(html.includes(`href="#trip-${t.card.code}"`) && html.includes(`<span class="pg">${String(t.page).padStart(2, "0")}</span>`), t.card.code);
+  const index = html.slice(html.indexOf('id="index"'));
+  for (const t of plan.trips) {
+    assert.ok(index.includes(`<a class="irow" href="#trip-${t.card.code}"><span class="ic">${t.card.code}</span>`), t.card.code);
+    assert.ok(index.includes(`<span class="ip${t.card.price.kind === "inquire" ? " inq" : ""}">${escapeHtml(t.card.price.display)}</span><span class="ipg">${t.page}</span>`), `${t.card.code}: price and page`);
+  }
+  assert.ok(index.includes("Үнэ лавлах"));
+});
+
+test("the guide at the start is not the dense listing any more: no per-trip rows, prices or codes before the first trip page", () => {
+  const snap = sampleSnapshot({ trips: 40, edition: "complete" });
+  const plan = planPages(snap);
+  const html = buildCatalogueHtml(snap, assetsFor(snap));
+  const before = html.slice(0, html.indexOf(`id="trip-${plan.trips[0]!.card.code}"`));
+  assert.ok(!before.includes('class="crow"') && !before.includes('class="irow"') && !before.includes("₮"), "no trip rows or prices ahead of the trips");
+  assert.equal(plan.firstTripPage, 3, "cover, one guide page, then the book");
 });

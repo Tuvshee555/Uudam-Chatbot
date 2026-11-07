@@ -26,12 +26,24 @@ const IMPLICIT_GROUP_MAX = 500;
 const CODE_RE = /(?<![\p{L}\p{N}])([ABCDАВС])(?:[-_.]?(\d{1,2})|\s0(\d))(?![\p{L}\p{N}])/giu;
 
 const CODE_WORD_RE = /(?<![\p{L}])(?:код|kod|code)(?![\p{L}])/iu;
-const COUNT_UNIT = "(?:hun|хүн|хун|huntei|хүнтэй|human|people|pax|persons?|ppl|хүний|hunii|ажилтан|ажилчин|ajilchin)";
+const COUNT_UNIT = "(?:hun|humn|humun|hmn|хүн|хун|huntei|хүнтэй|human|people|pax|persons?|ppl|хүний|hunii|ажилтан|ажилчин|ajilchin)";
 const GROUP_SIZE_AFTER = new RegExp(`(?<![\\p{L}\\p{N}./-])(\\d{1,4})\\s*(?:-?\\s*(?:н|ны|ний|ын))?\\s*${COUNT_UNIT}(?![\\p{L}])`, "iu");
 const GROUP_SIZE_BEFORE = new RegExp(`(?<![\\p{L}])${COUNT_UNIT}\\s*[:=-]?\\s*(\\d{1,4})(?![\\p{L}\\p{N}./-])`, "iu");
 const MONTH_DIGITS = /(?<![\p{N}./-])(\d{1,2})\s*(?:-?\s*(?:р|r|дугаар|дүгээр|dugaar))?\s*-?\s*(?:сар|sar)/iu;
 /** The same phrase with its case ending, to tell "3-р сарын 15" (a date follows) from "3-р сард" (in March). */
 const MONTH_PHRASE = /(?<![\p{N}./-])\d{1,2}\s*(?:-?\s*(?:р|r|дугаар|дүгээр|dugaar))?\s*-?\s*(?:сар|sar)(\p{L}*)/giu;
+
+/**
+ * The message with its head count and month taken out, so what is left can be read for a trip NAME
+ * ("Бали 25 хүн 1-р сард" -> "Бали"). Used only to resolve a name; never to decide what the customer asked.
+ */
+export function withoutQuoteDetails(text: string): string {
+  let rest = String(text || "").normalize("NFKC");
+  rest = rest.replace(new RegExp(GROUP_SIZE_AFTER.source, "giu"), " ").replace(new RegExp(GROUP_SIZE_BEFORE.source, "giu"), " ");
+  rest = rest.replace(MONTH_PHRASE, " ").replace(/(?<![\p{L}])(?:сар|sar)\p{L}*/giu, " ");
+  rest = rest.replace(/\p{L}+/gu, (word) => (ENGLISH_MONTHS.some(([pattern]) => pattern.test(word.toLowerCase())) ? " " : word));
+  return rest.replace(/\s+/g, " ").trim();
+}
 
 /** A head count when the message states one ("25 хүн", "25 people", "хүн 25"), else null. */
 export function extractGroupSize(text: string): number | null {

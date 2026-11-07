@@ -48,6 +48,10 @@ export type CatalogueSignals = {
   groupSize: boolean;
   /** a list word that is not a catalogue on its own: жагсаалт, list */
   list: boolean;
+  /** an explicit ask for the SHORT selection: товч, шилдэг, сонгосон, quick, shortlist, top trips, хураангуй */
+  quick: boolean;
+  /** "мэдээлэл", "info": the customer wants information about the trips in general */
+  info: boolean;
   /** number of words, to tell a short request from a long story */
   words: number;
 };
@@ -113,6 +117,18 @@ const OTHER_OBJECT_EN = words("price", "prices", "program", "programme", "photo"
 const POLITE = words("pls", "plz", "please");
 const DEMONSTRATIVE = words("энэ", "энэхүү", "энийг", "тэр", "тэрийг", "уг", "this", "that");
 const QUOTE = stems("quote", "quotation", "pricing");
+/**
+ * Owner decision 2026-11-07: every broad catalogue ask gets the COMPLETE edition; the quick one is sent only
+ * when the customer asks for a short selection in so many words. "богино" / "short" is only that beside a list
+ * word ("богино аялал" is a short trip), "top" only beside a trip word.
+ */
+const QUICK_STEMS = stems(
+  "товч", "tovch", "шилдэг", "shildeg", "сонгосон", "songoson", "хураангуй", "huraanguy", "huraangui",
+  "shortlist", { stem: "quick", exact: true },
+);
+const INFO = stems("мэдээлэл", "medeelel", "medelel", "information", { stem: "info", exact: true });
+const SHORT_WORD = words("богино", "bogino", "short");
+const QUICK_LIST_NEXT = words("жагсаалт", "jagsaalt", "list", "каталог", "catalog", "catalogue");
 
 /** Levenshtein distance, capped: only "is it within tol" matters. */
 export function editWithin(a: string, b: string, tol: number): boolean {
@@ -203,6 +219,15 @@ function isAllListingAt(tokens: string[], index: number): boolean {
   return tokenIs(word, TRAVEL_MN) && !/(?:n|ld|aas|aar|ees|eer|oor|tai|tei)$/.test(word);
 }
 
+/** "товч", "quick", "shortlist", "top trips", "богино жагсаалт": the customer asks for the short selection. */
+function isQuickAt(tokens: string[], index: number): boolean {
+  const token = tokens[index];
+  const next = tokens[index + 1] ?? "";
+  if (SHORT_WORD.has(token)) return QUICK_LIST_NEXT.has(next);
+  if (token === "top") return isTripWord(next) || (/^\d+$/.test(next) && isTripWord(tokens[index + 2]));
+  return tokenIs(token, QUICK_STEMS);
+}
+
 const GROUP_SIZE = /(?<![\p{L}\p{N}])\d{1,4}\s*(?:-?\s*(?:н|ны|ний|ын))?\s*(?:hun|хүн|хун|huntei|хүнтэй|human|people|pax|persons?|ppl|хүний|hunii|ажилтан|ажилчин|ajilchin)(?![\p{L}])/iu;
 
 /** Which words the message holds. */
@@ -212,7 +237,7 @@ export function analyzeCatalogueText(text: string): CatalogueSignals {
   const signals: CatalogueSignals = {
     corporate: false, travel: false, catalogue: false, options: false, all: false, allListing: false, resend: false, sendVerb: false,
     demonstrative: false, thanks: false, otherObject: false, resendOnly: tokens.length > 0, quote: false,
-    groupSize: GROUP_SIZE.test(raw), list: false, words: tokens.length,
+    groupSize: GROUP_SIZE.test(raw), list: false, quick: false, info: false, words: tokens.length,
   };
   tokens.forEach((token, index) => {
     if (isCorporateAt(tokens, index)) signals.corporate = true;
@@ -220,6 +245,8 @@ export function analyzeCatalogueText(text: string): CatalogueSignals {
     if (tokenIs(token, CATALOGUE)) signals.catalogue = true;
     if (tokenIs(token, OPTIONS)) signals.options = true;
     if (tokenIs(token, LIST)) signals.list = true;
+    if (isQuickAt(tokens, index)) signals.quick = true;
+    if (tokenIs(token, INFO)) signals.info = true;
     if (tokenIs(token, ALL)) signals.all = true;
     if (isAllListingAt(tokens, index)) signals.allListing = true;
     const resendWord = tokenIs(token, RESEND) || (token === "re" && tokens[index + 1] === "send");
@@ -257,23 +284,34 @@ export function detectCatalogueIntent(text: string): CatalogueIntent {
   // 1. The catalogue by name: "каталог явуул", "trip brochure", "corporate trip catalog".
   //    Long messages that merely contain the word are not requests.
   if (s.catalogue && (s.travel || s.corporate || s.all || s.options || short)) {
-    const edition = s.all || !s.corporate ? "complete" : "quick";
+    // Owner decision 2026-11-07: a broad ask gets the Complete edition; Quick only when asked for in words.
+    const edition = s.quick ? "quick" : "complete";
     return { kind: "catalogue", edition, resend, matched: label([s.corporate, "corporate"], [s.travel, "travel"], [true, "catalogue"], [s.all, "all"]) };
   }
   // 2. The whole offer: "бүх аяллаа", "all tours". "All" directly in front of a trip word, asked
   //    for in a few words or with a send/show word. "бүх зардал", "бүтэн өдрийн аялал", "full day
   //    tour" and "do all tours include lunch" are questions about trips, not requests for the list.
   if (s.allListing && !s.demonstrative && s.words <= 8 && (s.words <= 4 || s.sendVerb)) {
-    return { kind: "catalogue", edition: "complete", resend, matched: label([true, "all"], [true, "travel"]) };
+    return { kind: "catalogue", edition: s.quick ? "quick" : "complete", resend, matched: label([true, "all"], [true, "travel"]) };
   }
   // 3. Company / team / group trips: "байгууллагын аялал", "hamt olnii aylal". "Энэ аяллыг
   //    байгууллагаар явж болох уу" asks about the one trip it points at.
   if (s.corporate && s.travel && !s.demonstrative) {
-    return { kind: "catalogue", edition: "quick", resend, matched: label([true, "corporate"], [true, "travel"], [s.options || s.list, "options"]) };
+    return { kind: "catalogue", edition: s.quick ? "quick" : "complete", resend, matched: label([true, "corporate"], [true, "travel"], [s.options || s.list, "options"]) };
   }
   // 4. "аяллын сонголтууд": the selection the catalogue is titled after. Needs a trip word.
   if (s.travel && s.options && s.words <= 5) {
-    return { kind: "catalogue", edition: "quick", resend, matched: "travel+options" };
+    return { kind: "catalogue", edition: s.quick ? "quick" : "complete", resend, matched: "travel+options" };
+  }
+  // 5. An explicit ask for the short selection with a trip word: "шилдэг аяллуудаа явуул", "top trips list".
+  //    Needs a send / list word so "шилдэг аялал юу вэ" (a question about trips) stays with the trip flow.
+  if (s.quick && (s.travel || s.list || s.options) && !s.demonstrative && s.words <= 6 && (s.sendVerb || s.list || s.options)) {
+    return { kind: "catalogue", edition: "quick", resend, matched: "quick" };
+  }
+  // 6. A broad ask for the trips themselves: "аяллуудаа явуул", "аяллын мэдээлэл", "trip info". Few words, a trip
+  //    word with a send word or "information", nothing pointing at one trip. Owner decision 2026-11-07: Complete.
+  if (s.travel && !s.demonstrative && !s.otherObject && s.words <= 3 && (s.sendVerb || s.info)) {
+    return { kind: "catalogue", edition: "complete", resend, matched: "travel+broad" };
   }
   return { kind: "none" };
 }

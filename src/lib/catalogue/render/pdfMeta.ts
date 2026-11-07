@@ -33,14 +33,14 @@ export function embeddedFontNames(doc: PDFDocument): string[] {
 export type OutlineNode = { title: string; page: number; children: OutlineNode[] };
 
 /**
- * Bookmarks the reader's viewer shows as a table of contents: cover, contents, the trips grouped by
- * use-case ("A01 · title"), and the quotation page. Built here rather than by Chromium because
+ * Bookmarks the reader's viewer shows as a table of contents: cover, the guide, the chapters with every
+ * trip ("A01 · title"), the schedule and index appendices, and the quotation page. Built here rather than by Chromium because
  * Chromium drops the space at every soft line wrap of a heading.
  */
 export function outlineFor(plan: PagePlan): OutlineNode[] {
   const nodes: OutlineNode[] = [
     { title: "Нүүр", page: 1, children: [] },
-    { title: "Агуулга", page: plan.firstContentsPage, children: [] },
+    { title: "Агуулга", page: plan.firstGuidePage, children: [] },
   ];
   for (const chapter of plan.chapters) {
     nodes.push({
@@ -49,6 +49,8 @@ export function outlineFor(plan: PagePlan): OutlineNode[] {
       children: chapter.trips.map(t => ({ title: `${t.card.code} · ${displayTitle(cardTitle(t.card))}`, page: t.page, children: [] })),
     });
   }
+  if (plan.firstSchedulePage != null) nodes.push({ title: "Хавсралт · Хөдөлгөөний товлол", page: plan.firstSchedulePage, children: [] });
+  if (plan.firstIndexPage != null) nodes.push({ title: "Хавсралт · Кодын жагсаалт", page: plan.firstIndexPage, children: [] });
   nodes.push({ title: "Үнийн санал авах", page: plan.closingPage, children: [] });
   return nodes;
 }

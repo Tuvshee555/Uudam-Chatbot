@@ -450,7 +450,7 @@ export async function prepareArt(
     const common = { focal: p.focal, zoom: p.zoom, quality: profile.quality };
     const heroImage =
       composition === "cinema"
-        ? await cropImage(hero, { ...common, aspect: ASPECT.page, outWidth: profile.fullWidth, scrim: { from: 0.42 } })
+        ? await cropImage(hero, { ...common, aspect: ASPECT.page, outWidth: profile.fullWidth, scrim: { from: 0.34 } })
         : composition === "panorama"
           ? await cropImage(hero, { ...common, aspect: ASPECT.panorama, outWidth: profile.width })
           : composition === "diptych"

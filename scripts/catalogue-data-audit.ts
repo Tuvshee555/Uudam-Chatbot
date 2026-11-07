@@ -21,9 +21,10 @@ import path from "node:path";
 import { listTrips } from "../src/lib/travelDb";
 import * as store from "../src/lib/catalogue/store";
 import { buildCatalogueSnapshot, loadPosterRows, transportLabelOf } from "../src/lib/catalogue/tripData";
-import { findOverviewPriceConflicts, isTripEligible, scanTripFares, ubDay } from "../src/lib/catalogue/pricing";
+import { dayAsNow, deriveSchedule, findOverviewPriceConflicts, isTripEligible, scanTripFares, ubDay } from "../src/lib/catalogue/pricing";
+import { pricingDays } from "../src/lib/adminDatePricing";
 import { checkTripConsistency, flightLegEvidence, structuredDuration } from "../src/lib/catalogue/consistency";
-import { isProvisionalCode, PROVISIONAL_CODE_PREFIX, row, text } from "../src/lib/catalogue/diagnostics";
+import { isProvisionalCode, PROVISIONAL_CODE_PREFIX, row, rows, text } from "../src/lib/catalogue/diagnostics";
 import { GROUP_DEFS } from "../src/lib/catalogue/groups";
 import { sanitizeHeroByTripId, sanitizeHeroChoice } from "../src/lib/catalogue/config";
 import { tripTransport } from "../src/lib/tripFacts";
@@ -177,6 +178,43 @@ async function main() {
     ].join(" | "));
   }
 
+  /* ---- per-date adult fares next to the raw stored fare table (6 diverse trips) */
+  const withSchedule = eligibleTrips.map((trip) => ({ trip, schedule: deriveSchedule(trip, today) })).filter((x) => x.schedule.length);
+  const fares = (x: { schedule: { adultMnt: number | null }[] }) => new Set(x.schedule.map((e) => e.adultMnt).filter((v) => v !== null));
+  const picked: typeof withSchedule = [];
+  const take = (list: typeof withSchedule, n: number) => { for (const x of list) { if (picked.length >= 6 || n <= 0) break; if (!picked.includes(x)) { picked.push(x); n -= 1; } } };
+  const byLen = [...withSchedule].sort((a, b) => b.schedule.length - a.schedule.length);
+  take(withSchedule.filter((x) => x.schedule.some((e) => e.adultMnt === null) && x.schedule.some((e) => e.adultMnt !== null)), 1); // gaps
+  take(byLen.filter((x) => fares(x).size > 1), 2); // varying fares
+  take(byLen.filter((x) => fares(x).size === 1), 1); // flat fare, many dates
+  take([...byLen].reverse().filter((x) => x.schedule.length <= 2), 1); // few dates
+  take(byLen, 6 - picked.length);
+  const dateAudit: string[] = ["", "## Per-date adult fares vs the raw stored fare table (6 diverse trips)", ""];
+  const missingFlags: string[] = [];
+  for (const { trip, schedule } of picked) {
+    const extra = row(trip.extra);
+    dateAudit.push(`### ${cell(trip.route_name)} (\`${trip.id}\`)`, "");
+    dateAudit.push(`base adult_price=${trip.adult_price ?? "—"}, departure_dates=${(trip.departure_dates || []).length}, price_groups=${rows(extra.price_groups).length}`, "");
+    dateAudit.push("Catalogue schedule (date: adult fare):", "");
+    dateAudit.push(schedule.map((e) => `${e.date}: ${e.adultMnt === null ? "NO FARE" : mnt(e.adultMnt)}`).join(" · "), "");
+    dateAudit.push("Raw price_groups (days -> adult_price / passenger tiers):", "");
+    for (const [i, g] of rows(extra.price_groups).entries()) {
+      const days = pricingDays(g, dayAsNow(today));
+      dateAudit.push(`- group ${i + 1} [${text(g.hotel) || text(g.package_name) || text(g.name) || "-"}]: ${days.length ? days.join(", ") : "(no dates)"} -> adult_price=${g.adult_price ?? "—"}`);
+    }
+    dateAudit.push("");
+    const has = schedule.some((e) => e.adultMnt !== null);
+    const lacking = schedule.filter((e) => e.adultMnt === null).map((e) => e.date);
+    if (has && lacking.length) missingFlags.push(`${trip.route_name}: no adult fare on ${lacking.join(", ")} while other dates have one`);
+  }
+  // The flag applies to EVERY eligible trip, not only the sample.
+  for (const { trip, schedule } of withSchedule) {
+    const lacking = schedule.filter((e) => e.adultMnt === null).map((e) => e.date);
+    if (lacking.length && lacking.length < schedule.length && !missingFlags.some((f) => f.startsWith(`${trip.route_name}:`))) missingFlags.push(`${trip.route_name}: no adult fare on ${lacking.join(", ")} while other dates have one`);
+  }
+  dateAudit.push("### Dates with a missing adult fare while other dates have one (all eligible trips)", "", ...(missingFlags.length ? missingFlags.map((f) => `- ${cell(f)}`) : ["None."]), "");
+  for (const f of missingFlags) console.log("MISSING DATE FARE:", f);
+
   const byKind = new Map<string, number>();
   for (const i of issues.filter((x) => x.severity === "contradiction")) byKind.set(i.kind, (byKind.get(i.kind) ?? 0) + 1);
   const lines: string[] = [];
@@ -204,6 +242,7 @@ async function main() {
   lines.push("|---|---|---|---|---|---|---|---|---|---|---|");
   for (const r of rowsOut) lines.push(`| ${r} |`);
   lines.push("");
+  lines.push(...dateAudit);
   await mkdir(path.dirname(outFile), { recursive: true });
   await writeFile(outFile, lines.join("\n"), "utf8");
   console.log(`wrote ${outFile}: ${eligibleTrips.length} trips, ${[...byKind.values()].reduce((a, b) => a + b, 0)} contradictions`, Object.fromEntries(byKind));

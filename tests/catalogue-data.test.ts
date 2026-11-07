@@ -1412,3 +1412,101 @@ test("V3 picks: only a trip's own candidates, focal 0..1, zoom 1..3; staff choic
   const refused = planPicks({ ...input, picks: { t1: { url: `${IMG}/elsewhere.jpg` }, ghost: { url: big("p1") } } });
   assert.equal(refused.issues.length, 2, "an unknown url and an unknown trip are both refused");
 });
+
+/* ---------------------------------------------------------------- V4: full schedule, per-date fares, rolling window */
+
+test("schedule: EVERY future departure (uncapped, ascending) with its own adult fare; window cut at 90 days incl. the boundary day", () => {
+  // TODAY 2026-11-06 -> window is 2026-11-07 .. 2027-02-04 (90 days, boundary inclusive).
+  const days = ["2026-11-07", "2026-11-20", "2026-12-04", "2026-12-18", "2027-01-01", "2027-01-08", "2027-01-15", "2027-01-22",
+    "2027-01-29", "2027-02-04", "2027-02-05", "2027-02-12", "2027-02-19", "2027-02-26", "2027-03-05"];
+  const t = datedTrip("sch1", days.map((d, i) => [d, 2_000_000 + i * 10_000] as [string, number]));
+  const info = deriveDateInfo(t, TODAY);
+  assert.equal(info.schedule?.length, 15, "uncapped: more than the 12 shown in `departures`");
+  assert.equal(info.departures.length, 12);
+  assert.deepEqual(info.schedule?.map((e) => e.date), days, "ascending, nothing invented");
+  assert.deepEqual(info.schedule?.[3], { date: "2026-12-18", adultMnt: 2_030_000 }, "each date carries its own fare");
+  assert.equal(info.windowDays, 90);
+  assert.equal(info.window?.at(-1)?.date, "2027-02-04", "the boundary day (today + 90) is inside the window");
+  assert.ok(!info.window?.some((e) => e.date === "2027-02-05"), "day 91 is outside");
+  assert.equal(info.window?.length, 10);
+  assert.equal(info.priceVaries, true);
+});
+
+test("schedule: past, today, sold-out and closed dates never appear; a date without a recorded adult fare has null", () => {
+  const t = datedTrip("sch2", [["2026-10-01", 1_000_000], ["2026-11-06", 1_000_000], ["2026-12-04", 1_500_000], ["2027-01-09", 1_700_000], ["2027-02-06", 1_900_000], ["2027-03-06", null]], {
+    extra: { website_departure_availability: [
+      { date: "2027-01-09", status: "SOLD_OUT", seatsLeft: 0 },
+      { date: "2027-02-06", status: "CLOSED", seatsLeft: 4 },
+    ] },
+  });
+  const info = deriveDateInfo(t, TODAY);
+  assert.deepEqual(info.schedule?.map((e) => e.date), ["2026-12-04", "2027-03-06"].filter((d) => info.schedule?.some((e) => e.date === d)));
+  assert.ok(!info.schedule?.some((e) => ["2026-10-01", "2026-11-06", "2027-01-09", "2027-02-06"].includes(e.date)));
+  assert.equal(info.schedule?.find((e) => e.date === "2026-12-04")?.adultMnt, 1_500_000);
+  const missing = info.schedule?.find((e) => e.date === "2027-03-06");
+  if (missing) assert.equal(missing.adultMnt, null, "no recorded fare -> null, never 0 or a copy of another date");
+  assert.deepEqual(info.nextDeparture, "2026-12-04");
+});
+
+test("schedule: the first departure beyond 90 days leaves the window empty but nextDeparture and schedule set", () => {
+  const t = datedTrip("sch3", [["2027-04-10", 2_500_000], ["2027-05-08", 2_600_000]]);
+  const info = deriveDateInfo(t, TODAY);
+  assert.deepEqual(info.window, []);
+  assert.equal(info.nextDeparture, "2027-04-10");
+  assert.deepEqual(info.schedule, [{ date: "2027-04-10", adultMnt: 2_500_000 }, { date: "2027-05-08", adultMnt: 2_600_000 }]);
+  assert.equal(info.label, "Хөдлөх огноо: 2027.04.10, 2027.05.08");
+});
+
+test("schedule: priceVaries is false when every listed fare is equal, and a hotel date takes its cheapest fare", () => {
+  const flat = deriveDateInfo(datedTrip("sch4", [["2026-12-04", 1_500_000], ["2026-12-11", 1_500_000], ["2026-12-18", 1_500_000]]), TODAY);
+  assert.equal(flat.priceVaries, false);
+  const hotels = trip("sch5", {
+    departure_dates: ["2026-12-04", "2026-12-11"],
+    extra: { price_groups: [
+      priceRow("2026-12-04", 3_000_000, { hotel: "Тест Резорт А" }), priceRow("2026-12-04", 2_400_000, { hotel: "Тест Резорт Б" }),
+      priceRow("2026-12-11", 2_400_000, { hotel: "Тест Резорт Б" }),
+    ] },
+  });
+  const info = deriveDateInfo(hotels, TODAY);
+  assert.equal(info.schedule?.[0].adultMnt, 2_400_000);
+  assert.equal(info.priceVaries, false);
+});
+
+test("schedule: a weekly-rule trip keeps its safe label and has an empty schedule", () => {
+  const weekly = trip("sch6", { departure_dates: ["Пүрэв гараг бүр"], adult_price: 1_200_000, extra: { price_groups: [priceRow("", 1_200_000, { dates: [], display_dates: [], date_keys: [] })] } });
+  const info = deriveDateInfo(weekly, TODAY);
+  assert.equal(info.label, "Пүрэв гараг бүр");
+  assert.deepEqual(info.schedule, []);
+  assert.deepEqual(info.window, []);
+  assert.equal(info.priceVaries, false);
+});
+
+test("schedule: the snapshot carries it per card, deterministically, and the content hash covers it", () => {
+  const fares: Array<[string, number]> = [["2026-12-04", 1_500_000], ["2026-12-11", 1_600_000]];
+  const a = buildCatalogueSnapshot(inputOf([datedTrip("sch7", fares)]));
+  const b = buildCatalogueSnapshot(inputOf([datedTrip("sch7", fares)]));
+  assert.deepEqual(a.trips[0].dates.schedule, [{ date: "2026-12-04", adultMnt: 1_500_000 }, { date: "2026-12-11", adultMnt: 1_600_000 }]);
+  assert.equal(a.contentHash, b.contentHash, "same data -> same hash");
+  const priced = buildCatalogueSnapshot(inputOf([datedTrip("sch7", [["2026-12-04", 1_500_000], ["2026-12-11", 1_650_000]])]));
+  assert.notEqual(priced.contentHash, a.contentHash, "a non-minimum date's fare changes the printed schedule, hence the hash");
+});
+
+test("liveDrift: a changed schedule or any date's adult fare is drift; the window moving with time is not", () => {
+  const fares: Array<[string, number]> = [["2026-12-04", 1_500_000], ["2026-12-11", 1_600_000], ["2027-02-06", 1_700_000], ["2027-04-09", 1_800_000]];
+  const published = buildCatalogueSnapshot(inputOf([datedTrip("dr1", fares)]));
+  // Three days later the 90-day window starts and ends later, but the schedule is the same: not drift.
+  const later = buildCatalogueSnapshot(inputOf([datedTrip("dr1", fares)], { nowIso: "2026-11-09T04:00:00.000Z" }));
+  assert.notDeepEqual(later.trips[0].dates.window, published.trips[0].dates.window, "the window itself did move");
+  assert.deepEqual(liveDrift(published, later), { drifted: false, reasons: [] });
+  // A far-future (outside the window) date's fare changed: drift, although the price-from and the window are untouched.
+  const farFare = buildCatalogueSnapshot(inputOf([datedTrip("dr1", [fares[0], fares[1], fares[2], ["2027-04-09", 1_900_000]])]));
+  assert.equal(liveDrift(published, farFare).drifted, true);
+  assert.match(liveDrift(published, farFare).reasons.join(" "), /үнэ өөрчлөгдсөн/);
+  // A date sold out / removed: drift.
+  const removed = buildCatalogueSnapshot(inputOf([datedTrip("dr1", [fares[0], fares[2], fares[3]])]));
+  assert.equal(liveDrift(published, removed).drifted, true);
+  // A date added: drift.
+  const added = buildCatalogueSnapshot(inputOf([datedTrip("dr1", [...fares, ["2027-05-14", 1_900_000]])]));
+  assert.equal(liveDrift(published, added).drifted, true);
+  assert.match(liveDrift(published, added).reasons.join(" "), /шинэ огноо/);
+});

@@ -14,7 +14,8 @@
  * --pick keeps those codes (in that order, regrouped by the snapshot's groups); --cover sets the
  * cover trip. Nothing is stored, published or sent.
  *
- * Fixture mode also takes --cover-photo tall|ok (a dedicated portrait / landscape cover photograph) and
+ * Fixture mode with 9+ trips adds invented schedule cases (weekly rule, first departure beyond 90 days, per-date
+ * fares, many dates). It also takes --cover-photo tall|ok (a dedicated portrait / landscape cover photograph) and
  * --notes (two invented company-group lines on the closing page).
  */
 import { createHash } from "node:crypto";

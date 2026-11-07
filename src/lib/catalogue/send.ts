@@ -61,6 +61,8 @@ export type CatalogueSendStore = {
   getCachedFbAttachment(versionId: string, pageId: string): Promise<string | null>;
   cacheFbAttachment(versionId: string, pageId: string, attachmentId: string): Promise<void>;
   clearCachedFbAttachment?(versionId: string, pageId: string): Promise<void>;
+  /** Did this sender receive a catalogue (file or link) since this time? Optional: callers fall back to the conversation. */
+  hasDeliveredCatalogueSince?(senderId: string, sinceIso: string): Promise<boolean>;
 };
 
 export type GateVerdict = { status: "blocked_staff_owned" | "blocked_paused"; reason: string } | null;
@@ -111,6 +113,7 @@ export function defaultSendDeps(): SendDeps {
       getCachedFbAttachment: async (versionId, pageId) => (await import("./store")).getCachedFbAttachment(versionId, pageId),
       cacheFbAttachment: async (versionId, pageId, attachmentId) => (await import("./store")).cacheFbAttachment(versionId, pageId, attachmentId),
       clearCachedFbAttachment: async (versionId, pageId) => (await import("./store")).clearCachedFbAttachment(versionId, pageId),
+      hasDeliveredCatalogueSince: async (senderId, sinceIso) => (await import("./sendLog")).hasDeliveredCatalogueSince(senderId, sinceIso),
     },
     gate: async (senderId, pageId) => {
       const [{ pauseReason }, { HUMAN_OWNER_REASONS }, ops] = await Promise.all([import("../pause"), import("../takeoverGuard"), import("../travelOps")]);

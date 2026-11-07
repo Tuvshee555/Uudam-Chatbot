@@ -68,7 +68,21 @@ export type CatalogueDateInfo = {
   departures: IsoDay[];
   /** Human line for the card, e.g. "2027.01.09-ний хөдлөлт" or "Явах огноог лавлана". Never invented. */
   label: string;
+  /**
+   * EVERY future, bookable departure of the trip (uncapped), ascending, each with its own adult fare when
+   * the dated fare table has one. Sold-out / closed / past dates never appear. Absent on old snapshots.
+   */
+  schedule?: CatalogueDeparture[];
+  /** The subset of `schedule` inside the rolling window (asOfDay .. asOfDay + windowDays), same order. */
+  window?: CatalogueDeparture[];
+  /** Window length in days (90). */
+  windowDays?: number;
+  /** True when the listed departures do not all share one adult fare: the page must not imply one price for every date. */
+  priceVaries?: boolean;
 };
+
+/** One bookable departure: a calendar day and that day's adult fare (null = no dated fare recorded). */
+export type CatalogueDeparture = { date: IsoDay; adultMnt: number | null };
 
 /** Focal point of a photo, 0..1 from the top-left. Used for the crop; never changes the file. */
 export type PhotoFocal = { x: number; y: number };
