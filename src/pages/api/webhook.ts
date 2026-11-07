@@ -39,7 +39,7 @@ import { getReplyMediaPolicy, limitReplyPhotos, recordReplyMediaDelivery } from 
 import type { TripSelection } from "../../lib/tripRequest";
 import type { TravelLead, TravelTrip } from "../../lib/travelTypes";
 import { stripTripNamesForIntent } from "../../lib/customerTurn";
-import { buildCatalogListingReply } from "../../lib/catalogListing";
+import { buildCatalogListingReply, listingAnswersDespitePlace, withEndedTripNotice } from "../../lib/catalogListing";
 import { fixMojibake } from "../../lib/encoding";
 import { scheduleDriveAutoSync } from "../../lib/googleDriveSync";
 import { getCustomerMemoryText, scheduleCustomerMemoryUpdate } from "../../lib/conversationMemory";
@@ -55,7 +55,7 @@ import { autoHandoffSender, markGetStarted, pauseBookedCustomer, pauseBot, pause
 import { BOOKED_STATUS_HEADING, bookedFollowupReply, bookedStatusTurn, followupLeadLine, isBookingStatusQuestion } from "../../lib/bookedFollowup";
 import { inboundStatus, newInboundOutcome, noteInbound, traceInbound, type InboundOutcome } from "../../lib/inboundTrace";
 import { latestCustomerLead, recordLeadFollowup } from "../../lib/travelLeadsDb";
-import { buildDateNotScheduledReply } from "../../lib/travelFastPathsPricing";
+import { buildScopedNotScheduledReply } from "../../lib/dateNotScheduled";
 import { conversationLeadContext } from "../../lib/leadContext";
 import { withoutNegatedTrips } from "../../lib/negatedTrip";
 import { pickReferral, rememberAdReferral } from "../../lib/adReferral";
@@ -1294,7 +1294,7 @@ async function handleMessageTurn(
   {
     const routed = await getRouted();
     const notScheduledReply = routed.unavailableDateWithinScope && routed.scopedClarify?.length
-      ? buildDateNotScheduledReply(routed.scopedClarify) : null;
+      ? buildScopedNotScheduledReply(routed.scopedClarify, routed.requestText || intentText) : null;
     if (notScheduledReply && routed.scopedClarify) {
       await captureLead({ kind: "handoff", contactPhone: detectedPhone || "",
         context: "Хэрэглэгчийн асуусан огноонд гарах аялал хуваарьт алга; бот бусад гарах өдрүүдийг хэлсэн." });
@@ -1343,7 +1343,7 @@ async function handleMessageTurn(
     // "далайтай нь" is a kind of trip the catalogue lists (sea, direct flight, a month),
     // not an unknown place: the model's place reading must not silence that list.
     const categoryListing = routed.notInCatalog ? buildCatalogListingReply(intentText, await getTrips()) : null;
-    if (routed.notInCatalog && !(categoryListing?.authoritative && categoryListing.listed.length)) {
+    if (routed.notInCatalog && !listingAnswersDespitePlace(categoryListing, routed.notInCatalog, intentText, await getTrips())) {
       // A place no trip goes to is a question the bot cannot answer: silence and a staff
       // lead, never "Уучлаарай, «<газар>» чиглэлийн аялал манайд байхгүй" (owner's rule;
       // the place reading is a guess — ordinary words were read as destinations).
@@ -1394,7 +1394,8 @@ async function handleMessageTurn(
   // аяллын хуваарь") when neither the message nor the context names a trip:
   // list it from the DB instead of a silent no-data handoff.
   {
-    const listing = buildCatalogListingReply(intentText, await getTrips());
+    let listing = buildCatalogListingReply(intentText, await getTrips());
+    if (listing?.unknownPlace) listing = withEndedTripNotice(listing, intentText, await getArchivedTrips());
     if (listing && (
       listing.authoritative === true ||
       resolveTripFromUserMessage(await getFastPathText(), await getTrips(), { allowLooseFallback: false }).status === "not_found"

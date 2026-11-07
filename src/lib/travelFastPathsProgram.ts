@@ -547,13 +547,10 @@ export function buildArchivedTripNotice(
       ),
   );
   if (unavailable.length === 0) return null;
-  const exactNameMatches = unavailable.filter((trip) => {
-    const normalizedText = normText(text);
-    const route = normText(trip.route_name || "");
-    return route.length >= 8 && normalizedText.includes(route);
-  });
-  if (exactNameMatches.length === 0) return null;
-  const resolution = resolveTripFromUserMessage(text, exactNameMatches, {
+  // The trip is named by its full name, an alias or the part of its name the customer uses
+  // ("Манжуурын аялал" for "<ХОТ>-ын … АЯЛАЛ"): the resolver verifies ONE trip, the same strength that
+  // picks an active trip. Several ended trips sharing the word, or a word they only resemble, name none.
+  const resolution = resolveTripFromUserMessage(text, unavailable, {
     allowLooseFallback: false,
     includeArchived: true,
   });

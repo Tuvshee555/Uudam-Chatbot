@@ -12,6 +12,7 @@
 import { BOOKING_WEBSITE_URL } from "./bookingCollect";
 import {
   AMBIGUOUS_REPLY_MARKER,
+  buildArchivedTripNotice,
   formatTripListCard,
   tripChoiceFooter,
   filterTripsByTransportIntent,
@@ -29,7 +30,9 @@ import {
 import { normalizeTripOffers, resolveTripOfferFareCard, summarizeTripOfferPrices } from "./tripOffers";
 import { customerDate } from "./customerDate";
 import { departureMatchesScope, hasCalendarWeekWindow, requestedDepartureScope, type RequestedDepartureScope } from "./travelDates";
-import { detectHoliday, NEW_YEAR_RE, resolveHoliday, upcomingHolidays, withoutHolidayNames, type HolidayAsk } from "./holidayCalendar";
+import { detectHoliday, NEW_YEAR_RE, resolveHoliday, upcomingHolidays, withoutHolidayNames, type HolidayAsk, type HolidayResolution } from "./holidayCalendar";
+import { holidayWindowOf } from "./askedWindow";
+import { reportedPlaceIsInMessage, unknownPlaceTokens } from "./placeLikeTokens";
 import type { TravelTrip } from "./travelTypes";
 
 const WHOLE_CATALOG_RE =
@@ -47,6 +50,10 @@ const CRUISE_RE = /круз|усан\s+онгоц|cruise/i;
 const HOLIDAY_ASK_RE = /мэдээл|үнэ|хуваар|хаашаа|хаана|хэзээ|хэдэнд|ямар|гадагш|явж|medeel|une|huvaar|haashaa|haana|hezee|yamar|gadagsh|yavj|trips?|tours?/iu;
 // The customer asks what the catalogue holds, so the answer does not depend on a trip on screen.
 const CATALOG_WIDE_RE = /ямар|хаашаа|хаана|аяллууд|аялалууд|бүх|гадагш|yamar|haashaa|haana|aylaluud|ayaluud|gadagsh/iu;
+/** The customer asks what the catalogue holds ("ямар аялал байна", "хаашаа явж болох вэ"), not about the trip on screen. */
+export function asksWhatExists(text: string): boolean {
+  return CATALOG_WIDE_RE.test(normText(text));
+}
 const HOLIDAY_FOLLOWUP_RE = /гарах|гарна|гардаг|хэдэнд|хэзээ|garah|garna|hedend|hezee/iu;
 // Words that, with "шинэ жил", make it a question about the trips even without a trip word
 // ("шинэ жилийн мэдээлэл авъя", "shine jil haashaa"); a greeting ("шинэ жилийн мэнд") is not one.
@@ -58,7 +65,19 @@ const MAX_COMPACT = 3;
 const FULL_LIST_RE = /(?:^|\s)(?:бүх|бүгд\S*|нийт|bvh|buh|bukh|bugd\S*|all|full)(?:\s|$)|бүтэн|дэлгэрэнгүй|buten|delgerengui|complete\s+list/i;
 const MAX_MESSAGE_CHARS = 1800;
 
-type Listing = { reply: string; listed: TravelTrip[]; authoritative?: boolean };
+export type Listing = {
+  reply: string;
+  listed: TravelTrip[];
+  authoritative?: boolean;
+  /**
+   * What the list is made of. "category": a KIND of trip (sea, direct flight, cruise), which a place
+   * the model could not read must not silence. "time": only the customer's dates, which never
+   * stand in for a place that was named.
+   */
+  kind?: "category" | "time";
+  /** The message names a place no catalogue trip goes to (the reply is then REFER). */
+  unknownPlace?: string[];
+};
 
 function nextDepartures(trip: TravelTrip, now: Date): string[] {
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ulaanbaatar", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
@@ -280,9 +299,9 @@ function inMonths(dates: string[], months: number[], now: Date): string[] {
   return dates.filter((date) => wanted.has(date.slice(0, 7)));
 }
 
-function whenListing(pool: TravelTrip[], when: When, now: Date, limit = MAX_COMPACT): Listing | null {
+function whenListing(pool: TravelTrip[], when: When, now: Date, limit = MAX_COMPACT, keep?: (trip: TravelTrip, date: string) => boolean): Listing | null {
   const rows = pool.map((trip) => {
-    const all = bookableDates(trip, now);
+    const all = bookableDates(trip, now).filter((date) => !keep || keep(trip, date));
     const dates = when.scope ? all.filter(date => departureMatchesScope(date, when.scope!))
       : when.span ? all.filter((date) => date >= when.span![0] && date <= when.span![1]) : when.soonest ? all : inMonths(all, when.months, now);
     return { trip, dates };
@@ -344,13 +363,137 @@ function daysApart(a: string, b: string): number {
 }
 
 /**
- * "Цагаан сарын үеэр ямар аялал байна", "наадмаар Тайланд явж болох уу", "цагаан сарын
- * дараа": the trips that travel over the holiday, from the catalogue. A trip whose days
- * overlap the holiday comes first, then those leaving within a week of it (holidayCalendar.ts
- * sets the window). Nothing then: say so, and show the departures closest to the holiday as
- * nearby dates — never as holiday departures.
+ * "Аяллыг 12 сарын 30-нд эхлээд шинэ он гарсны дараа буцахаар": a date or span the customer typed is
+ * the window; the holiday only says what the trip is around. "…дараа буцах" keeps the trips that
+ * are back after the holiday's last day. Null when the holiday's own window is the only one.
  */
-function holidayReply(intentText: string, normalized: string, ask: HolidayAsk | "unspecified", active: TravelTrip[], now: Date, full: boolean): Listing | null {
+function explicitDateWithHoliday(raw: string, normalized: string, active: TravelTrip[], now: Date, full: boolean): Listing | null {
+  const scope = requestedDepartureScope(raw, now);
+  if (!scope || scope.kind === "unsupported" || holidayWindowOf(raw, now)) return null;
+  const resolved = resolveHoliday(normalized, now);
+  const backAfter = resolved?.status === "resolved" && resolved.ask.relation === "after" ? resolved.period.endYmd : null;
+  const heading = scope.kind === "dates" ? `${scope.dates.map((date) => customerDate(date, now)).join(", ")}-нд гарах аяллууд`
+    : scope.kind === "range" ? `${customerDate(scope.startYmd, now)} – ${customerDate(scope.endYmd, now)}-ны хооронд гарах аяллууд`
+      : `${scope.month} сард гарах аяллууд`;
+  const keep = backAfter ? (trip: TravelTrip, date: string) => addDays(date, (tripDays(trip) ?? 1) - 1) > backAfter : undefined;
+  const listing = whenListing(active, { months: [], heading, scope }, now, full ? MAX_DETAILED : MAX_COMPACT, keep);
+  return listing && { ...listing, kind: "time" };
+}
+
+/** How far from the holiday a departure may be and still be offered as "nearby dates". */
+const HOLIDAY_NEARBY_DAYS = 21;
+
+type ResolvedHoliday = Extract<HolidayResolution, { status: "resolved" }>;
+
+/**
+ * A medical check-up trip is not what a family asking for "a trip over the holidays" means. It is
+ * left out of a holiday list that names no place, unless the customer asked for check-ups.
+ */
+const CHECKUP_RE = /шинжилгээ|эрүүл\s*мэнд|үзлэг|checkup|check-up|shinjilgee|jinjilgee/iu;
+function isCheckupTrip(trip: TravelTrip): boolean {
+  return CHECKUP_RE.test(`${trip.route_name} ${trip.category || ""}`);
+}
+
+/**
+ * The departure dates of one trip for a holiday window, most relevant first: the days that touch the
+ * holiday itself (the trip is on the road during it), then the other days inside the search window
+ * (a trip named for the holiday keeps all of its dates). Pure dates, no wording.
+ */
+export function holidayDatesFor(trip: TravelTrip, resolution: ResolvedHoliday, now: Date): { hits: string[]; near: string[]; extra: string[]; all: string[]; namedFor: boolean } {
+  const { period, window, ask } = resolution;
+  const all = bookableDates(trip, now);
+  const length = tripDays(trip) ?? 1;
+  const around = ask.relation === "around";
+  const namedFor = around && ask.holiday.re.test(getTripNameHaystack(trip));
+  const hits = around ? all.filter((date) => date <= period.endYmd && addDays(date, length - 1) >= period.startYmd) : [];
+  const near = all.filter((date) => date >= window[0] && date <= window[1] && !hits.includes(date));
+  // Named for the holiday ("Цагаан сарын аялал"): its departures are the holiday's.
+  const extra = namedFor ? all.filter((date) => !hits.includes(date) && !near.includes(date)) : [];
+  return { hits, near, extra, all, namedFor };
+}
+
+export type HolidayWindowListing = Listing & { matched: boolean };
+
+/**
+ * The trips of `pool` that travel over a holiday's window, as numbered cards: a trip whose days
+ * overlap the holiday first (labelled), then those leaving within the search window around it
+ * (labelled before / after). Nothing in the window: said plainly, and the departures NEAREST TO THE
+ * WINDOW (not the soonest) are shown as nearby dates, or as "the schedule is not out yet" when the
+ * nearest is months away. Null when the pool has no bookable departure at all.
+ *
+ * One function for every holiday question: with or without a place, a catalogue-wide ask, or a
+ * follow-up about the trip(s) on screen (`choice: false` drops the "which one?" footer).
+ */
+export function holidayWindowListing(input: { pool: TravelTrip[]; resolution: ResolvedHoliday; now: Date; where?: string; full?: boolean; choice?: boolean;
+  /** New Year with no place keeps its own heading and points to the website. */
+  seasonHeading?: boolean }): HolidayWindowListing | null {
+  const { pool, resolution, now } = input;
+  const { period, window, phrase, ask } = resolution;
+  const around = ask.relation === "around";
+  const limit = input.full ? MAX_DETAILED : MAX_COMPACT;
+  const where = input.where || "";
+  const genitive = ask.holiday.genitive;
+  const rows = pool.map((trip) => {
+    const found = holidayDatesFor(trip, resolution, now);
+    const ranked = [...found.hits, ...found.near, ...found.extra];
+    return { trip, ...found, ranked, overlaps: found.hits.length > 0 || (found.namedFor && ranked.length > 0) };
+  });
+  const matching = rows.filter((row) => row.ranked.length > 0)
+    .sort((a, b) => Number(b.overlaps) - Number(a.overlaps) || [...a.ranked].sort()[0].localeCompare([...b.ranked].sort()[0]));
+  const note = (row: typeof rows[number]): string => {
+    if (!around) return "";
+    if (row.hits.length) return `✅ ${genitive} өдрүүдийг хамарна`;
+    if (!row.near.length) return "";
+    const before = row.near.every((date) => date < period.startYmd);
+    const after = row.near.every((date) => date > period.endYmd);
+    return `↔ ${genitive} өдрүүдээс ${before ? "өмнө гарна" : after ? "хойш гарна" : "ойролцоо гарна"}`;
+  };
+  const cards = (list: Array<{ trip: TravelTrip; dates: string[]; note?: string }>, heading: string[], footerLead: string[] = []) => {
+    const lines = [...heading];
+    const listed: TravelTrip[] = [];
+    const footer = (count: number) => [...(list.length > count ? ["", `Өөр ${list.length - count} сонголт бий.`] : []), ...footerLead,
+      ...(input.choice === false ? [] : ["", ...tripChoiceFooter(count)])];
+    for (const { trip, dates, note: line } of list.slice(0, limit)) {
+      const price = priceDetail(trip, now, dates.length === 1 ? dates[0] : undefined);
+      const card = formatTripListCard(listed.length + 1, trip, {
+        duration: trip.duration_text, fare: price ? price[0].toUpperCase() + price.slice(1) : "", dates: dates.slice(0, limit > MAX_COMPACT ? 4 : 2), note: line || "",
+      }, now);
+      if ([...lines, "", card, ...footer(listed.length + 1)].join("\n").length > MAX_MESSAGE_CHARS) break;
+      lines.push("", card);
+      listed.push(trip);
+    }
+    return { reply: [...lines, ...footer(listed.length)].join("\n"), listed };
+  };
+  if (matching.length) {
+    const verb = around ? "аялах боломжтой" : "гарах";
+    const heading = input.seasonHeading ? ["🎄 Шинэ жилийн үеэр гарах аяллууд (12 сар – 1 сарын эхээр):"] : [`${ask.holiday.emoji} ${phrase} ${where}${verb} аяллууд:`];
+    const footerLead = input.seasonHeading ? ["", `Бүх аяллыг эндээс харна уу: ${BOOKING_WEBSITE_URL}`] : [];
+    // Dates shown: the holiday-touching ones first, then the rest of the window, in calendar order.
+    const list = matching.map((row) => ({ trip: row.trip, dates: [...row.ranked].slice(0, limit > MAX_COMPACT ? 4 : 2).sort(), note: note(row) }));
+    return { ...cards(list, heading, footerLead), authoritative: true, matched: true };
+  }
+  // Nothing over the holiday: the departures closest to it, labelled as nearby dates.
+  const anchor = ask.relation === "after" ? period.endYmd : period.startYmd;
+  const nearest = rows.filter((row) => row.all.length > 0).map((row) => {
+    const dates = [...row.all].sort((a, b) => daysApart(a, anchor) - daysApart(b, anchor)).slice(0, 2).sort();
+    return { trip: row.trip, dates, distance: daysApart(dates[0], anchor) };
+  }).sort((a, b) => a.distance - b.distance).slice(0, MAX_COMPACT);
+  if (!nearest.length) return null;
+  // Months away is not "nearby": that season's schedule is simply not out yet.
+  const close = nearest[0].distance <= HOLIDAY_NEARBY_DAYS;
+  const heading = close
+    ? [`Одоогоор ${phrase} ${where}гарах аялал хуваарьт алга байна.`, "", "Гэхдээ ойролцоо өдрүүдэд гарах аяллууд:"]
+    : [`${phrase} ${where}гарах аяллын хуваарь одоогоор гараагүй байна 🙏 Шинэ хуваарийг эндээс харна уу: ${BOOKING_WEBSITE_URL}`, "",
+      "Одоогийн хуваарьт хамгийн ойр гарах аяллууд:"];
+  return { ...cards(nearest, heading), authoritative: true, matched: false };
+}
+
+/**
+ * "Цагаан сарын үеэр ямар аялал байна", "наадмаар Тайланд явж болох уу", "цагаан сарын
+ * дараа": the trips that travel over the holiday, from the catalogue (holidayWindowListing).
+ * A place the catalogue does not hold is a constraint, not a word to drop: that is REFER.
+ */
+function holidayReply(intentText: string, normalized: string, ask: HolidayAsk | "unspecified", active: TravelTrip[], trips: TravelTrip[], now: Date, full: boolean): Listing | null {
   if (ask === "unspecified") {
     // "Баярын өдрүүдээр аялмаар байна": which holiday is not said. Ask, with the dates.
     const upcoming = upcomingHolidays(now);
@@ -359,71 +502,55 @@ function holidayReply(intentText: string, normalized: string, ask: HolidayAsk | 
   }
   const withoutHoliday = intentText.replace(new RegExp(ask.holiday.re.source, `${ask.holiday.re.flags.replace("g", "")}g`), " ");
   const destinations = namedDestinations(withoutHoliday, active);
-  // New Year with no place named keeps its own listing (askedWhen below).
-  if (ask.holiday.key === "new_year" && destinations.length === 0) return null;
+  const noPlace = destinations.length === 0;
   const resolution = resolveHoliday(normalized, now);
   // That year's dates are not published: staff answer, the bot never guesses.
   if (!resolution || resolution.status === "unknown") return { reply: "REFER", listed: [], authoritative: true };
+  // A place no trip goes to is part of the question: no list of other places' trips.
+  const unknown = noPlace ? unknownPlaceTokens(withoutHoliday, trips) : [];
+  if (unknown.length) return unknownPlaceListing(unknown);
   const wantsCategory = CRUISE_RE.test(normalized) || queryWantsDirectFlight(intentText) || queryWantsLandFlightCombo(intentText) || queryWantsLandOnlyEnhanced(intentText);
   const kindPool = wantsCategory ? (CRUISE_RE.test(normalized) ? active.filter(tripIsCruise) : filterTripsByTransportIntent(intentText, active)) : active;
-  const pool = destinations.length ? kindPool.filter((trip) => nameHasAny(trip, destinations)) : kindPool;
-  if (!pool.length) return null;
-  const { period, window, phrase } = resolution;
-  const limit = full ? MAX_DETAILED : MAX_COMPACT;
-  const where = destinations.length ? `${destinations.map(titleCase).join(", ")} чиглэлд ` : "";
-  const rows = pool.map((trip) => {
-    const all = bookableDates(trip, now);
-    const length = tripDays(trip) ?? 1;
-    // Named for the holiday ("Цагаан сарын аялал"): its departures are the holiday's.
-    const namedFor = ask.holiday.re.test(getTripNameHaystack(trip));
-    const overlap = resolution.ask.relation === "around"
-      ? all.filter((date) => namedFor || (date <= period.endYmd && addDays(date, length - 1) >= period.startYmd)) : [];
-    const near = all.filter((date) => date >= window[0] && date <= window[1]);
-    return { trip, all, overlaps: overlap.length > 0, dates: [...new Set([...overlap, ...near])].sort() };
-  });
-  const matching = rows.filter((row) => row.dates.length > 0)
-    .sort((a, b) => Number(b.overlaps) - Number(a.overlaps) || a.dates[0].localeCompare(b.dates[0]));
-  const cards = (list: Array<{ trip: TravelTrip; dates: string[] }>, heading: string[], footerLead: string[] = []) => {
-    const lines = [...heading];
-    const listed: TravelTrip[] = [];
-    const footer = (count: number) => [...(list.length > count ? ["", `Өөр ${list.length - count} сонголт бий.`] : []), ...footerLead, "", ...tripChoiceFooter(count)];
-    for (const { trip, dates } of list.slice(0, limit)) {
-      const price = priceDetail(trip, now, dates.length === 1 ? dates[0] : undefined);
-      const card = formatTripListCard(listed.length + 1, trip, {
-        duration: trip.duration_text, fare: price ? price[0].toUpperCase() + price.slice(1) : "", dates: dates.slice(0, limit > MAX_COMPACT ? 4 : 2),
-      }, now);
-      if ([...lines, "", card, ...footer(listed.length + 1)].join("\n").length > MAX_MESSAGE_CHARS) break;
-      lines.push("", card);
-      listed.push(trip);
-    }
-    return { reply: [...lines, ...footer(listed.length)].join("\n"), listed };
-  };
+  const askedCheckup = CHECKUP_RE.test(intentText);
+  const seaPool = queryWantsSeaBeach(intentText) && !wantsCategory ? kindPool.filter(tripHasSeaBeach) : kindPool;
+  const pool = noPlace ? seaPool.filter((trip) => askedCheckup || !isCheckupTrip(trip)) : seaPool.filter((trip) => nameHasAny(trip, destinations));
+  if (!pool.length) return noPlace && seaPool !== kindPool ? { reply: "REFER", listed: [], authoritative: true } : null;
+  const where = noPlace ? "" : `${destinations.map(titleCase).join(", ")} чиглэлд `;
+  const newYearSeason = ask.holiday.key === "new_year" && noPlace && resolution.ask.relation === "around";
+  const listing = holidayWindowListing({ pool, resolution, now, where, full, choice: true, seasonHeading: newYearSeason });
+  // New Year with nothing leaving in its window keeps its own notice (whenListing, below).
+  if (!listing) return newYearSeason ? null : { reply: "REFER", listed: [], authoritative: true };
+  if (newYearSeason && !listing.matched) return null;
   // A holiday trip question stands on its own; "…гарах уу / хэдэнд" may be about the trip on screen,
   // so then the conversation's trip (if any) wins and the date path answers for it.
-  const authoritative = destinations.length > 0 || CATALOG_WIDE_RE.test(normalized) || !HOLIDAY_FOLLOWUP_RE.test(normalized);
-  const emoji = ask.holiday.emoji;
-  if (matching.length) {
-    const verb = resolution.ask.relation === "around" ? "аялах боломжтой" : "гарах";
-    return { ...cards(matching, [`${emoji} ${phrase} ${where}${verb} аяллууд:`]), authoritative };
-  }
-  // Nothing over the holiday: the departures closest to it, labelled as nearby dates.
-  const anchor = resolution.ask.relation === "after" ? period.endYmd : period.startYmd;
-  const nearest = rows.filter((row) => row.all.length > 0).map((row) => {
-    const dates = [...row.all].sort((a, b) => daysApart(a, anchor) - daysApart(b, anchor)).slice(0, 2).sort();
-    return { trip: row.trip, dates, distance: daysApart(dates[0], anchor) };
-  }).sort((a, b) => a.distance - b.distance).slice(0, MAX_COMPACT);
-  if (!nearest.length) return { reply: "REFER", listed: [], authoritative: true };
-  // Months away is not "nearby": that season's schedule is simply not out yet.
-  const close = nearest[0].distance <= HOLIDAY_NEARBY_DAYS;
-  const heading = close
-    ? [`Одоогоор ${phrase} ${where}гарах аялал хуваарьт алга байна.`, "", "Гэхдээ ойролцоо өдрүүдэд гарах аяллууд:"]
-    : [`${phrase} ${where}гарах аяллын хуваарь одоогоор гараагүй байна 🙏 Шинэ хуваарийг эндээс харна уу: ${BOOKING_WEBSITE_URL}`, "",
-      "Одоогийн хуваарьт хамгийн ойр гарах аяллууд:"];
-  return { ...cards(nearest, heading), authoritative };
+  const authoritative = newYearSeason || destinations.length > 0 || CATALOG_WIDE_RE.test(normalized) || !HOLIDAY_FOLLOWUP_RE.test(normalized);
+  return { reply: listing.reply, listed: listing.listed, authoritative, kind: wantsCategory ? "category" : "time" };
 }
 
-/** How far from the holiday a departure may be and still be offered as "nearby dates". */
-const HOLIDAY_NEARBY_DAYS = 21;
+/**
+ * The model read a place the catalogue does not hold. A list of a KIND of trip (sea, direct flight,
+ * cruise) still answers: "далайтай нь" is not a place. A list made only of the customer's dates
+ * never stands in for a place they named, unless that "place" is no word of the message beyond its
+ * time words (a model once read "шинэ жил" as a destination).
+ */
+export function listingAnswersDespitePlace(listing: Listing | null, place: string, intentText: string, trips: TravelTrip[]): boolean {
+  if (!listing?.authoritative || listing.listed.length === 0) return false;
+  return listing.kind === "category" || !reportedPlaceIsInMessage(place, intentText, trips);
+}
+
+/**
+ * A place no active trip goes to may still be the name of a trip that has ended: then the customer
+ * is told that (travelFastPathsProgram.ts buildArchivedTripNotice), otherwise the listing stays REFER.
+ */
+export function withEndedTripNotice(listing: Listing, intentText: string, archived: TravelTrip[]): Listing {
+  const notice = listing.unknownPlace ? buildArchivedTripNotice(intentText, archived) : null;
+  return notice ? { reply: notice.reply, listed: [], authoritative: true, kind: "time" } : listing;
+}
+
+/** A place the catalogue does not hold: the listing says nothing (REFER = silence and a staff lead). */
+function unknownPlaceListing(tokens: string[]): Listing {
+  return { reply: "REFER", listed: [], authoritative: true, unknownPlace: tokens, kind: "time" };
+}
 
 // "арай бага хоногтой нь байхгүй юу": the model answered with whichever trip
 // it liked (a 6-day one while 5-day trips existed). Sort the catalog instead.
@@ -478,8 +605,13 @@ export function buildCatalogListingReply(rawIntentText: string, trips: TravelTri
   const active = trips.filter((trip) => trip.status === "active");
   const full = FULL_LIST_RE.test(normalized);
   const holiday = detectHoliday(normalized);
-  if (holiday && (TRIP_WORD_RE.test(normalized) || HOLIDAY_ASK_RE.test(normalized))) {
-    const answer = holidayReply(intentText, normalized, holiday, active, now, full);
+  const asksTrips = TRIP_WORD_RE.test(normalized) || HOLIDAY_ASK_RE.test(normalized)
+    || (holiday !== null && holiday !== "unspecified" && holiday.holiday.key === "new_year" && NEW_YEAR_ASK_RE.test(normalized));
+  if (holiday && asksTrips) {
+    // A date or span typed beside the holiday is the window; the holiday only says what it is around.
+    const explicit = holiday === "unspecified" ? null : explicitDateWithHoliday(rawIntentText, normalized, active, now, full);
+    if (explicit) return explicit;
+    const answer = holidayReply(intentText, normalized, holiday, active, trips, now, full);
     if (answer) return answer;
   }
   const wantsAll = WHOLE_CATALOG_RE.test(normalized);
@@ -505,19 +637,25 @@ export function buildCatalogListingReply(rawIntentText: string, trips: TravelTri
   const quiet = namedDestinations(intentText, active).length === 0;
   const when = quiet ? askedWhen(normalized, now, rawIntentText) : null;
   if (when) {
+    // "12 сард Лондон явах аялал байна уу": a place no trip goes to is a constraint, not a word to drop.
+    const unknown = unknownPlaceTokens(intentText, trips);
+    if (unknown.length) return unknownPlaceListing(unknown);
     const pool = wantsCategory ? (wantsCruise ? active.filter(tripIsCruise) : filterTripsByTransportIntent(intentText, active)) : active;
-    return whenListing(pool, when, now, full ? MAX_DETAILED : MAX_COMPACT);
+    const listing = whenListing(pool, when, now, full ? MAX_DETAILED : MAX_COMPACT);
+    return listing && { ...listing, kind: wantsCategory ? "category" : "time" };
   }
   // A discount asked with no trip named: nothing is advertised to quote, and a group or family price is
   // agreed with staff (one ad promises it). Ask for the trip and head count instead of going silent.
   // "Далайтай аялал байна уу", "халуун газар": the trips whose own text says sea or beach.
   if (quiet && queryWantsSeaBeach(intentText) && !wantsCategory) {
     const sea = active.filter((trip) => tripHasSeaBeach(trip) && bookableDates(trip, now).length > 0).sort((a, b) => soonestKey(a, now).localeCompare(soonestKey(b, now)));
-    if (sea.length) return { ...renderListing(sea, "✈️ Далайн амралтын аяллууд", MAX_COMPACT, now), authoritative: true };
+    if (sea.length) return { ...renderListing(sea, "✈️ Далайн амралтын аяллууд", MAX_COMPACT, now), authoritative: true, kind: "category" };
   }
   // "10 хоногийн аялал байна уу" (a length, no month, no place).
   const length = DURATION_ASK_RE.exec(normalized);
   if (quiet && length && TRIP_WORD_RE.test(normalized) && !/сар/u.test(normalized)) {
+    const unknown = unknownPlaceTokens(intentText, trips);
+    if (unknown.length) return unknownPlaceListing(unknown);
     return durationListing(active, Number(length[1]), now, full);
   }
   // "Өөр аялал байна уу": the customer wants to see more of what exists.
@@ -553,7 +691,7 @@ export function buildCatalogListingReply(rawIntentText: string, trips: TravelTri
     const heading = destinations.length > 0 && destinationCategoryPool.length === 0
       ? `${destinations.map(titleCase).join(", ")} чиглэлийн аяллууд`
       : wantsCategory ? categoryHeading(intentText) : "Манай аяллууд";
-    return renderListing(listed, `✈️ ${heading}`, full ? MAX_DETAILED : MAX_COMPACT, now);
+    return { ...renderListing(listed, `✈️ ${heading}`, full ? MAX_DETAILED : MAX_COMPACT, now), ...(wantsCategory ? { kind: "category" as const } : {}) };
   }
 
   // The whole catalog does not fit one message with prices: names grouped by
