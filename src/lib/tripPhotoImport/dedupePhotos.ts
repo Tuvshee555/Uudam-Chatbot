@@ -63,7 +63,7 @@ export async function dedupePhotoUrlsByContent(
   return kept.sort((a, b) => a.index - b.index).map((e) => e.url);
 }
 
-function isSameImage(a: { byteHash: string | null; fingerprint: string | null; ratio: number | null },
+export function isSameImage(a: { byteHash: string | null; fingerprint: string | null; ratio: number | null },
                      b: { byteHash: string | null; fingerprint: string | null; ratio: number | null }): boolean {
   if (a.byteHash && b.byteHash && a.byteHash === b.byteHash) return true;
   if (!a.fingerprint || !b.fingerprint) return false;
@@ -82,28 +82,39 @@ async function describeRemoteImage(url: string, timeoutMs: number) {
     if (!res.ok) return { bytes: 0, byteHash: null, fingerprint: null, ratio: null };
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length === 0) return { bytes: 0, byteHash: null, fingerprint: null, ratio: null };
-    const byteHash = createHash("md5").update(buf).digest("hex");
-    let fingerprint: string | null = null;
-    let ratio: number | null = null;
-    try {
-      const image = sharp(buf);
-      const meta = await image.metadata();
-      if (meta.width && meta.height) ratio = meta.width / meta.height;
-      // 8x8 average hash: survives re-encoding and rescaling, differs for
-      // genuinely different pages.
-      const raw = await image.greyscale().resize(8, 8, { fit: "fill" }).raw().toBuffer();
-      const mean = raw.reduce((sum, v) => sum + v, 0) / raw.length;
-      fingerprint = Array.from(raw).map((v) => (v >= mean ? "1" : "0")).join("");
-    } catch {
-      fingerprint = null;
-    }
-    return { bytes: buf.length, byteHash, fingerprint, ratio };
+    return await describeImageBuffer(buf);
   } catch {
     return { bytes: 0, byteHash: null, fingerprint: null, ratio: null };
   } finally {
     clearTimeout(timer);
   }
 }
+
+/**
+ * The marks that tell two pictures apart without comparing pixels: byte hash, shape and
+ * an 8x8 average hash. Also used on a photo already in memory (the new-trip photo finder),
+ * so a file found twice under different names is kept once.
+ */
+export async function describeImageBuffer(buf: Buffer): Promise<ImageMarks> {
+  const byteHash = createHash("md5").update(buf).digest("hex");
+  let fingerprint: string | null = null;
+  let ratio: number | null = null;
+  try {
+    const image = sharp(buf);
+    const meta = await image.metadata();
+    if (meta.width && meta.height) ratio = meta.width / meta.height;
+    // 8x8 average hash: survives re-encoding and rescaling, differs for
+    // genuinely different pages.
+    const raw = await image.greyscale().resize(8, 8, { fit: "fill" }).raw().toBuffer();
+    const mean = raw.reduce((sum, v) => sum + v, 0) / raw.length;
+    fingerprint = Array.from(raw).map((v) => (v >= mean ? "1" : "0")).join("");
+  } catch {
+    fingerprint = null;
+  }
+  return { bytes: buf.length, byteHash, fingerprint, ratio };
+}
+
+export type ImageMarks = { bytes: number; byteHash: string | null; fingerprint: string | null; ratio: number | null };
 
 function hammingDistance(a: string, b: string): number {
   if (a.length !== b.length) return Number.MAX_SAFE_INTEGER;

@@ -87,13 +87,13 @@ export function DateChips({
   );
 }
 
-function AgeRangePicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+function AgeRangePicker({ value, onChange, missing }: { value: string; onChange: (value: string) => void; missing?: boolean }) {
   const { min, max, unit } = parseAgeRange(value);
   const setPart = (next: Partial<{ min: string; max: string; unit: "сар" | "нас" }>) => {
     const merged = { min, max, unit, ...next };
     onChange(formatAgeRange(merged.min, merged.max, merged.unit));
   };
-  const small = cx(controlCls, borderFor(false), "h-10 w-full min-w-0 px-2 text-center");
+  const small = cx(controlCls, borderFor(missing, true), "h-10 w-full min-w-0 px-2 text-center");
   return (
     <div className="grid grid-cols-[1fr_auto_1fr_4.5rem] items-center gap-1.5">
       <input className={small} aria-label="Насны доод хязгаар" inputMode="numeric" value={min} placeholder="0" onChange={(e) => setPart({ min: e.target.value.replace(/[^\d]/g, "") })} />
@@ -107,15 +107,20 @@ function AgeRangePicker({ value, onChange }: { value: string; onChange: (value: 
   );
 }
 
-function PassengerBandRow({ price, onChange, onRemove }: { price: PassengerPrice; onChange: (next: PassengerPrice) => void; onRemove: () => void }) {
+/** One extra passenger band (an age or height tier): name, age range, one-person price, free. Also used by the new-trip review. */
+export function PassengerBandRow({ price, onChange, onRemove, problem }: {
+  price: PassengerPrice; onChange: (next: PassengerPrice) => void; onRemove: () => void;
+  /** Why this band cannot be saved as it is (the review): shown in red under the row, the age range turns red. */
+  problem?: string;
+}) {
   const free = isFreeFare(price);
   return (
     <div className="grid min-w-0 gap-3 border-t border-line py-4 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,1fr)_2rem] sm:items-end">
       <Field label="Зорчигчийн нэр">
         <TextInput aria-label="Зорчигчийн ангилал" value={passengerName(price as PassengerPrice & PricingGroup)} placeholder="ж: Хүүхэд, Нярай" onChange={(e) => onChange({ ...price, label: e.target.value })} />
       </Field>
-      <Field label="Насны хүрээ">
-        <AgeRangePicker value={price.age_range} onChange={(age_range) => onChange({ ...price, label: passengerName(price as PassengerPrice & PricingGroup), age_range })} />
+      <Field label="Насны хүрээ" required={Boolean(problem)} missing={Boolean(problem)} danger>
+        <AgeRangePicker missing={Boolean(problem)} value={price.age_range} onChange={(age_range) => onChange({ ...price, label: passengerName(price as PassengerPrice & PricingGroup), age_range })} />
       </Field>
       <Field label="Нэг хүний үнэ">
         <MoneyField
@@ -130,7 +135,12 @@ function PassengerBandRow({ price, onChange, onRemove }: { price: PassengerPrice
           <Checkbox label="Үнэгүй" checked={free} onChange={(next) => onChange(next ? { ...price, price: 0, note: FREE_FARE_NOTE } : { ...price, price: null, note: "" })} />
         </div>
       </Field>
-      <RemoveButton label="Насны ангилал хасах" onClick={onRemove} className="mb-7 justify-self-end" />
+      <RemoveButton label="Насны ангилал хасах" onClick={onRemove} className="justify-self-end sm:mb-7" />
+      {problem && (
+        <p className="flex items-start gap-2 text-xs leading-5 text-danger sm:col-span-full" role="status">
+          <Icons.alert size={13} className="mt-0.5 shrink-0" /> {problem}
+        </p>
+      )}
     </div>
   );
 }

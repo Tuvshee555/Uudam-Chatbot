@@ -68,6 +68,27 @@ export type CatalogueDateInfo = {
   label: string;
 };
 
+/** Focal point of a photo, 0..1 from the top-left. Used for the crop; never changes the file. */
+export type PhotoFocal = { x: number; y: number };
+
+export type CataloguePhotoQuality = "excellent" | "good" | "weak" | "missing";
+
+/** One selectable photo for a trip, with the real measured size and why it was (not) ranked high. */
+export type CataloguePhotoCandidate = {
+  url: string;
+  width: number | null;
+  height: number | null;
+  source: "poster_hero" | "trip_photo" | "poster_day";
+  /** 0..100, higher = better hero. Resolution, aspect/crop headroom, source, text-overlay risk. */
+  score: number;
+  /** Mongolian, staff-facing: "нягтрал бага (640px)", "текст/постер байж магадгүй", ... */
+  issues: string[];
+  credit: string | null;
+};
+
+/** Staff choice of the hero for one trip. Touches no price, date or title of the trip. */
+export type CatalogueHeroChoice = { url: string; focal?: PhotoFocal | null; zoom?: number | null };
+
 export type CataloguePhoto = {
   /** https URL the renderer may fetch. Approved, destination-relevant trip photo already stored for the trip. */
   url: string;
@@ -76,13 +97,25 @@ export type CataloguePhoto = {
   credit: string | null;
   /** Where it came from, for the admin's "image source" column. */
   source: "poster_hero" | "trip_photo" | "poster_day";
+  /** Crop focal point (staff choice or detected). null = centre/attention crop. */
+  focal?: PhotoFocal | null;
+  zoom?: number | null;
 };
 
 export type CatalogueTripCard = {
   tripId: string;
   /** Stable code ("A01"). Persisted per trip id in the store; never reused, never renumbered. */
   code: string;
+  /** Canonical trip title exactly as stored (identity). Never shortened here. */
   title: string;
+  /** Concise editorial display title derived from the canonical one (or a staff override). Display only. */
+  editorialTitle: string;
+  /** Destination identity used for diversity ("one place, one slot"): a normalised destination name, "" when unknown. */
+  destinationKey: string;
+  /** How good the chosen hero is for a premium book. "weak"/"missing" => flagged for replacement. */
+  heroQuality: CataloguePhotoQuality;
+  /** Up to two extra GOOD photos of this same trip for secondary compositions (never the hero). */
+  gallery: CataloguePhoto[];
   /** Short human-friendly line above the title, e.g. "<region> / <country>". Derived from trip data. */
   kicker: string;
   /** Group key (see CatalogueGroup). From trip metadata + admin curation, never hardcoded per destination. */
@@ -124,6 +157,8 @@ export type CatalogueSnapshot = {
   /** Season/year line, e.g. "2026 / 2027". Derived from asOfDay and departures. */
   seasonLabel: string;
   trips: CatalogueTripCard[];
+  /** Trip chosen for the cover: best hero quality + visual appeal, never "most recently edited". */
+  coverTripId: string | null;
   groups: CatalogueGroup[];
   contact: CatalogueContact;
   /** Collection-level warnings plus every trip warning, flattened, for the admin. */
@@ -145,6 +180,10 @@ export type CatalogueEditionConfig = {
 };
 
 export type CatalogueConfig = {
+  /** Staff-picked hero photo + crop per trip id (shared by every edition). */
+  heroByTripId: Record<string, CatalogueHeroChoice>;
+  /** Staff display-title overrides per trip id (display only). */
+  titleOverrides: Record<string, string>;
   quick: CatalogueEditionConfig;
   complete: CatalogueEditionConfig;
   preview: CatalogueEditionConfig;
@@ -161,6 +200,8 @@ export type SnapshotInput = {
   /** Poster data per trip id (hero photo, day photos), when linked. */
   posterByTripId: Record<string, unknown>;
   config: CatalogueEditionConfig;
+  heroByTripId?: Record<string, CatalogueHeroChoice>;
+  titleOverrides?: Record<string, string>;
   codeMap: Record<string, string>;
   contactPhones: string[];
   siteBaseUrl: string;

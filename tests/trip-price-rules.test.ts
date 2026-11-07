@@ -69,7 +69,8 @@ test("a missing tugrug price is a note beside the price field, never a question;
   assert.equal(p.needs_confirmation, true, "an automatic import still waits for a person");
   assert.deepEqual(buildProposalClarifications(p as never), [], "no question, so no second model call");
   const price = reviewIssues(p.actions[0].fields as Record<string, unknown>).find((issue) => issue.key === "price");
-  assert.equal(price?.blocks, null, "a trip without a price can be saved and published");
+  // Owner's rule since 2026-11-06: a draft may wait for the price; publishing needs the adult and child fares.
+  assert.equal(price?.blocks, "publish", "a trip without a price is saved as a draft, never published");
 
   // The typed-answer path stays for a price sent as a chat message.
   const answer = `«${ROUTE}» аяллын ${PRICE_QUESTION_MARK} → 3,290,000 / 2,590,000`;

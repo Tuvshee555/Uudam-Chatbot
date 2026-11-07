@@ -12,6 +12,9 @@
 import { resolveDepartureDatesAtWrite } from "./travelDates";
 import { renamePricingDate, type PricingGroup } from "./adminDatePricing";
 import { itineraryEndsInUlaanbaatar, itineraryStartsInUlaanbaatar } from "./tripItineraryBoundaries";
+// A cycle by nature: the price cards read the calendar helpers here, and what is saved is shaped by the cards.
+// Each side calls the other only inside functions, never while loading.
+import { normalizePriceRows, priceProblems } from "./tripReviewPrices";
 import {
   durationForDays, isTransitDay, isTransportType, withStandardTransitDays,
   type ItineraryDay, type TransportType,
@@ -421,7 +424,7 @@ export function makeCover(fields: Row, url: string): Row {
 /* ---------------------------------------------------------------- issues */
 
 export type ReviewIssue = {
-  key: "name" | "dates" | "past_dates" | "price" | "program" | "boundary";
+  key: "name" | "dates" | "past_dates" | "price" | "fares" | "program" | "boundary";
   text: string;
   /** "save": nothing can be saved; "publish": a draft can; null: only a note. */
   blocks: "save" | "publish" | null;
@@ -431,7 +434,76 @@ export function hasPrice(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-/** What is still missing, in the order the admin would fix it. A missing price never blocks. */
+// A per-date child fare is the row's child price or any passenger band that is not the adult's or an infant's.
+const NOT_CHILD_BAND = /нярай|infant|baby|том\s*хүн|adult/i;
+
+function hasChildFare(group: Row): boolean {
+  if (hasPrice(group.child_price)) return true;
+  return (Array.isArray(group.passenger_prices) ? group.passenger_prices : []).map(record)
+    .some((band) => hasPrice(band.price) && !NOT_CHILD_BAND.test(`${text(band.label)} ${text(band.age_range)}`));
+}
+
+export type PublishPriceGap = {
+  /** No adult fare: the trip-level one, or on an upcoming per-date row. */
+  adult: boolean;
+  /** No child fare: the trip-level one, or on an upcoming per-date row. */
+  child: boolean;
+  /** Indexes of the upcoming per-date rows (extra.price_groups) that lack either. */
+  rows: number[];
+};
+
+export const PUBLISH_PRICE_TEXT = "Нийтлэхийн өмнө том хүн, хүүхдийн үнийг оруулна уу.";
+
+/**
+ * Upcoming departures that no price row names (a row without any date names every departure):
+ * they are sold at the trip's own fare, so that fare must exist before publishing, and
+ * it is never guessed from another date's row. Same cover rule as the review's «all» card
+ * (tripReviewPrices.ts priceModel).
+ */
+export function unpricedDepartures(fields: Row, now = new Date()): { days: string[]; other: string[] } {
+  const rows = priceGroups(fields).map((group) => departureDays(group.dates, now));
+  if (rows.some((row) => !row.days.length && !row.other.length)) return { days: [], other: [] };
+  const today = mongoliaToday(now);
+  const named = new Set(rows.flatMap((row) => row.days));
+  const namedOther = new Set(rows.flatMap((row) => row.other));
+  const trip = departureDays(fields.departure_dates, now);
+  return {
+    days: trip.days.filter((day) => day >= today && !named.has(day)),
+    other: trip.other.filter((entry) => !namedOther.has(entry)),
+  };
+}
+
+const hasUnpricedDeparture = (fields: Row, now: Date): boolean => {
+  const open = unpricedDepartures(fields, now);
+  return open.days.length > 0 || open.other.length > 0;
+};
+
+/**
+ * Owner's rule (2026-11-06): a trip is published only with its adult and its child fare; the
+ * infant fare stays optional and a draft needs neither. A trip priced per date is priced when
+ * every upcoming row (a departure not yet past, or a row named by hotel or package) has both.
+ * Before, a trip without any price was published as «Үнэ лавлах».
+ */
+export function publishPriceGap(fields: Row, now = new Date()): PublishPriceGap {
+  const today = mongoliaToday(now);
+  const upcoming = priceGroups(fields).map((group, index) => ({ group, index })).filter(({ group }) => {
+    const { days, other } = departureDays(group.dates, now);
+    return !days.length || other.length > 0 || days.some((day) => day >= today);
+  });
+  if (upcoming.length) {
+    const rows = upcoming.filter(({ group }) => !hasPrice(group.adult_price) || !hasChildFare(group));
+    // A departure in no row is sold at the trip's own fare: that fare is needed too.
+    const openDays = hasUnpricedDeparture(fields, now);
+    return {
+      adult: rows.some(({ group }) => !hasPrice(group.adult_price)) || (openDays && !hasPrice(fields.adult_price)),
+      child: rows.some(({ group }) => !hasChildFare(group)) || (openDays && !hasPrice(fields.child_price)),
+      rows: rows.map(({ index }) => index),
+    };
+  }
+  return { adult: !hasPrice(fields.adult_price), child: !hasPrice(fields.child_price), rows: [] };
+}
+
+/** What is still missing, in the order the admin would fix it. A missing adult or child price stops publishing, not a draft. */
 export function reviewIssues(fields: Row, now = new Date()): ReviewIssue[] {
   const issues: ReviewIssue[] = [];
   if (!text(fields.route_name)) issues.push({ key: "name", text: "Аяллын нэр хоосон байна.", blocks: "save" });
@@ -442,7 +514,12 @@ export function reviewIssues(fields: Row, now = new Date()): ReviewIssue[] {
   } else if (days.length && !other.length && days.every((day) => day < today)) {
     issues.push({ key: "past_dates", text: "Сонгосон гарах өдрүүд бүгд өнгөрсөн байна.", blocks: "publish" });
   }
-  if (!hasPrice(fields.adult_price) && !priceRows(fields, now).length) issues.push({ key: "price", text: "Үнэ оруулаагүй — сайтад «Үнэ лавлах» гэж гарна.", blocks: null });
+  const gap = publishPriceGap(fields, now);
+  if (gap.adult || gap.child) {
+    issues.push({ key: "price", text: gap.rows.length ? `${PUBLISH_PRICE_TEXT} ${gap.rows.length} гаралтад дутуу.` : PUBLISH_PRICE_TEXT, blocks: "publish" });
+  }
+  // Fares the save itself refuses (two child tiers of one name at two prices ...): said here, in plain words, before the save.
+  for (const problem of priceProblems(fields, now)) issues.push({ key: "fares", text: problem, blocks: "save" });
   const program = itineraryOf(fields);
   if (!program.length) issues.push({ key: "program", text: "Өдөр тутмын хөтөлбөр алга.", blocks: null });
   // The save check itself (tripDataValidation.ts): said here, before the save, not as an error after it.
@@ -497,6 +574,9 @@ export function reviewedFields(fields: Row, mode: "draft" | "publish", now = new
     const derived = deriveHasFood(days);
     if (derived !== null || fields.has_food == null) next.has_food = derived;
   }
+  // The price rows as the review shows them: rows with the same price are one row listing their days, and a
+  // row that only repeats the trip's own fares is left to them (tripReviewPrices.ts).
+  Object.assign(next, normalizePriceRows(next, now));
   // Per-date fares carry the same calendar days as the trip, so a fare never points at another year.
   const extra = record(next.extra);
   for (const key of ["price_groups", "departure_date_groups"]) {
@@ -514,7 +594,8 @@ export function reviewedFields(fields: Row, mode: "draft" | "publish", now = new
     };
   }
   // A trip priced only per date still needs its "from" price: the lowest adult fare and that row's child fare.
-  if (!hasPrice(next.adult_price)) {
+  // Only when every upcoming departure has its row: a date with no row is not sold at another date's fare.
+  if (!hasPrice(next.adult_price) && !hasUnpricedDeparture(next, now)) {
     const cheapest = priceRows(next, now).filter((row) => row.adult !== null).sort((a, b) => (a.adult as number) - (b.adult as number))[0];
     if (cheapest) {
       next.adult_price = cheapest.adult;

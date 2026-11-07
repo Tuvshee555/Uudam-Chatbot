@@ -104,18 +104,20 @@ test("the stated length is compared with the program's days; the admin can take 
   assert.equal(checkDuration(tripFields({}, { itinerary_days: [], source_evidence: {} })).kind, "unknown");
 });
 
-test("what is missing: a name stops saving, dates stop publishing, a price stops nothing", async () => {
+test("what is missing: a name stops saving; dates and the adult and child prices stop publishing", async () => {
   const { applyTransport, reviewIssues } = await import("../src/lib/tripReview");
   const ready = applyTransport(tripFields(), "land_flight").fields;
-  assert.deepEqual(reviewIssues(ready, NOW).map((issue) => [issue.key, issue.blocks]), [["price", null]]);
-  assert.deepEqual(reviewIssues({ ...ready, adult_price: 3_290_000 }, NOW), []);
+  assert.deepEqual(reviewIssues(ready, NOW).map((issue) => [issue.key, issue.blocks]), [["price", "publish"]]);
+  assert.equal(reviewIssues(ready, NOW)[0].text, "Нийтлэхийн өмнө том хүн, хүүхдийн үнийг оруулна уу.");
+  assert.equal(reviewIssues({ ...ready, adult_price: 3_290_000 }, NOW)[0]?.key, "price", "an adult fare alone is not enough");
+  assert.deepEqual(reviewIssues({ ...ready, adult_price: 3_290_000, child_price: 2_590_000 }, NOW), [], "the infant fare stays optional");
   assert.deepEqual(reviewIssues({ ...ready, route_name: " " }, NOW)[0], { key: "name", text: "Аяллын нэр хоосон байна.", blocks: "save" });
   assert.equal(reviewIssues({ ...ready, departure_dates: [] }, NOW).find((issue) => issue.key === "dates")?.blocks, "publish");
   assert.equal(reviewIssues({ ...ready, departure_dates: ["2098-02-01"] }, NOW).find((issue) => issue.key === "past_dates")?.blocks, "publish");
-  assert.equal(reviewIssues({ ...ready, departure_dates: ["Пүрэв гараг бүр"] }, NOW).some((issue) => issue.blocks === "publish"), false, "a weekly schedule is a departure");
+  assert.equal(reviewIssues({ ...ready, adult_price: 3_290_000, child_price: 2_590_000, departure_dates: ["Пүрэв гараг бүр"] }, NOW).some((issue) => issue.blocks === "publish"), false, "a weekly schedule is a departure");
   assert.equal(reviewIssues(tripFields(), NOW).find((issue) => issue.key === "boundary")?.blocks, "save",
     "a program that never leaves from Ulaanbaatar is said before the save, not as an error after it");
-  const perDate = { ...ready, extra: { ...(ready.extra as Row), departure_date_groups: [{ dates: ["5 сарын 11"], adult_price: 3_590_000 }] } };
+  const perDate = { ...ready, extra: { ...(ready.extra as Row), departure_date_groups: [{ dates: ["5 сарын 11"], adult_price: 3_590_000, child_price: 2_990_000 }] } };
   assert.equal(reviewIssues(perDate, NOW).some((issue) => issue.key === "price"), false, "a trip priced per date is priced");
 });
 
@@ -345,24 +347,25 @@ test("photos: one per day, never fewer than six; every program day gets one", as
 
   const { finalizeNewTripActions } = await import("../src/lib/tripProposalFinalize");
   const { isTransitDay } = await import("../src/lib/tripTransitDays");
-  const sharp = (await import("sharp")).default;
-  const jpeg = await sharp({ create: { width: 24, height: 16, channels: 3, background: "#7a8b9c" } }).jpeg().toBuffer();
+  const { pictureFor } = await import("./helpers/photoFixtures");
   const fetchImpl = (async (input: string) => {
     const url = new URL(String(input));
     if (url.pathname.endsWith("/w/api.php")) {
       const query = (url.searchParams.get("gsrsearch") || "").replace(" filetype:bitmap", "").replace(' incategory:"Quality images"', "");
-      const pages = Object.fromEntries([1, 2, 3, 4].map((n) => [`${query}-${n}`, { title: `File:${query} ${n}.jpg`, imageinfo: [{ url: `https://upload.example.test/${encodeURIComponent(query)}-${n}.jpg`,
+      // Each file a different view: two files whose titles differ only by a number are one picture (samePicture).
+      const pages = Object.fromEntries([1, 2, 3, 4].map((n) => [`${query}-${n}`, { title: `File:${query} ${["at dawn", "from the hill", "in spring", "at night"][n - 1]}.jpg`, imageinfo: [{ url: `https://upload.example.test/${encodeURIComponent(query)}-${n}.jpg`,
         thumburl: `https://thumb.example.test/${encodeURIComponent(query)}/1920px-${n}.jpg`, descriptionurl: "https://commons.example.test/x", width: 3000, height: 2000, mime: "image/jpeg",
         extmetadata: { LicenseShortName: { value: "CC0" }, Artist: { value: "Fixture Author" } } }] }]));
       return new Response(JSON.stringify({ query: { pages } }), { status: 200 });
     }
-    return new Response(jpeg, { status: 200, headers: { "content-type": "image/jpeg" } });
+    // A different picture per file: the photo finder keeps one copy of an identical picture.
+    return new Response(await pictureFor(String(input)), { status: 200, headers: { "content-type": "image/jpeg" } });
   }) as unknown as typeof fetch;
   let asked = 0;
   const ask = (async (parts: Array<{ text?: string }>) => {
     const prompt = parts.map((part) => part.text || "").join("\n");
     if (prompt.includes("search phrases")) {
-      return { text: JSON.stringify({ queries: [1, 2, 3, 4, 5, 6, 7].map((day) => ({ q: `Norvel sight ${day}`, day })), cities: [{ name: "Norvel", stopover: false }, { name: "Lumia", stopover: true }] }), usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
+      return { text: JSON.stringify({ queries: [1, 2, 3, 4, 5, 6, 7].map((day) => ({ q: `Norvel ${["harbour", "tower", "garden", "lake", "bridge", "temple", "square"][day - 1]}`, day })), cities: [{ name: "Norvel", stopover: false }, { name: "Lumia", stopover: true }] }), usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
     }
     asked += 1;
     const count = Number(/Aim for (\d+)/.exec(prompt)?.[1] || 0);

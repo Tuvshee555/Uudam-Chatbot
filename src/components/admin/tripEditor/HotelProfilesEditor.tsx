@@ -5,31 +5,19 @@
  * could fill it, so every hotel link on the site was empty.
  *
  * Hotels named in the price rows or on the trip but not described yet are
- * offered as one-click additions.
+ * offered as one-click additions. A new trip read from a file already has them
+ * as profiles (withSuggestedHotelProfiles, at the file reading).
  */
 import { Icons } from "@/components/ui";
 import type { HotelProfile } from "@/lib/adminTypes";
+import { hotelNamesOf, squashHotelName } from "@/lib/tripHotelNames";
 import { ListEditor } from "../TripEditorParts";
 import { AddRowButton, EmptyHint, Field, RowCard, TextArea, TextInput } from "./parts";
 
-const squash = (value: string) => value.toLowerCase().normalize("NFKC").replace(/[^\p{L}\p{N}]+/gu, "");
+const squash = squashHotelName;
 
-/** Hotel names a trip mentions: price rows ("Hotel · Package" keeps the hotel part) and the trip's hotel line. */
-export function hotelNamesOf(priceGroups: Array<{ hotel?: string | null }>, tripHotel: string): string[] {
-  const names = [
-    ...priceGroups.map((group) => String(group.hotel || "").split(" · ")[0]),
-    ...String(tripHotel || "").split(/,|\s+эсвэл\s+|\s+or\s+|\//i),
-  ].map((name) => name.trim())
-    // "Норвел хотын буудал, 4 од": the part after the comma is the hotel's stars, not another hotel.
-    .filter((name) => name.length >= 2 && !/^(\d+\s*(?:од(?:той)?|\*|star)s?|\d+\*)$/iu.test(name) && /\p{L}{3,}/u.test(name));
-  const seen = new Set<string>();
-  return names.filter((name) => {
-    const key = squash(name);
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
+/** Hotel names a trip mentions (tripHotelNames.ts): the suggestions offered below. */
+export { hotelNamesOf };
 
 function validUrl(value: string): boolean {
   if (!value.trim()) return true;

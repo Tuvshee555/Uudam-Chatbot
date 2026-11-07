@@ -196,6 +196,7 @@ export function useProposalActions({ fetchWithAdmin, readJsonSafe, toast, loadAl
           savedAs: message.savedAs,
           requestId: typeof json?.request_id === "number" ? (json.request_id as number) : message.requestId,
           resultText: outcome.text,
+          savedLinks: outcome.links,
         });
         toast.success(message.savedAs === "draft" ? "Ноорог болгон хадгаллаа. Сайтад гараагүй." : "Өөрчлөлт хадгалагдлаа. Бот шинэ мэдээллээр хариулна.");
         await loadAll();

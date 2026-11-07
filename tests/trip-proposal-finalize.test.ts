@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import sharp from "sharp";
 import { applyTestEnv } from "./helpers/env";
 import type { AIChangeProposal } from "../src/lib/travelTypes";
 
@@ -21,21 +20,23 @@ const proposal = (): AIChangeProposal => ({
 });
 
 async function photoDeps() {
-  const jpeg = await sharp({ create: { width: 24, height: 16, channels: 3, background: "#7a8b9c" } }).jpeg().toBuffer();
+  const { pictureFor } = await import("./helpers/photoFixtures");
   const uploads: string[] = [];
   const fetchImpl = (async (input: string) => {
     const url = new URL(String(input));
     if (url.pathname.endsWith("/w/api.php")) {
       const query = (url.searchParams.get("gsrsearch") || "").replace(" filetype:bitmap", "");
       const pages = Object.fromEntries([1, 2, 3, 4, 5, 6].map((n) => [`${query}-${n}`, {
-        title: `File:${query} ${n}.jpg`,
+        // Six different views: titles that differ only by a number are one picture (samePicture).
+        title: `File:${query} ${["at dawn", "from the river", "in spring", "at night", "rooftops", "lanterns"][n - 1]}.jpg`,
         imageinfo: [{ url: `https://upload.example.test/${n}.jpg`, thumburl: `https://thumb.example.test/${encodeURIComponent(query)}/1920px-${n}.jpg`,
           descriptionurl: `https://commons.example.test/wiki/File:${n}.jpg`, width: 3000, height: 2000, mime: "image/jpeg",
           extmetadata: { LicenseShortName: { value: "CC BY 4.0" }, Artist: { value: "Fixture Author" } } }],
       }]));
       return new Response(JSON.stringify({ query: { pages } }), { status: 200 });
     }
-    return new Response(jpeg, { status: 200, headers: { "content-type": "image/jpeg" } });
+    // A different picture per file: the photo finder keeps one copy of an identical picture.
+    return new Response(await pictureFor(String(input)), { status: 200, headers: { "content-type": "image/jpeg" } });
   }) as unknown as typeof fetch;
   const ask = (async (parts: Array<{ text?: string }>) => {
     const prompt = parts.map((part) => part.text || "").join("\n");

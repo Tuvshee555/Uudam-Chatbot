@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Button, Icons, cx } from "@/components/ui";
 import type {
   AIAction,
@@ -12,6 +12,7 @@ import { diffTripFields, type TripExtraDiff } from "@/lib/tripExtraSchema";
 import { REVIEW_INLINE_ITEMS, departureDays, formatYmd, hasPrice, removePhoto, reviewFacts, reviewIssues, tripPhotos } from "@/lib/tripReview";
 import { NewTripReview } from "./tripReview/NewTripReview";
 import { mergeEditorResult } from "@/lib/tripEditorState";
+import { withSuggestedHotelProfiles } from "@/lib/tripHotelNames";
 import { thumb } from "./tripReview/photoThumb";
 import { displayText, isSaveLocked } from "./assistantChatLogic";
 import type { AssistantProposalMsg } from "./assistantChatTypes";
@@ -237,11 +238,15 @@ export function ProposalCard({
   const { proposal } = message;
   const drafts = edits.proposal === proposal ? edits.drafts : {};
   const openTrips = edits.proposal === proposal ? edits.open : {};
-  const fieldsOf = (index: number): Row => drafts[index] ?? record(proposal.actions[index]?.fields);
+  // A new trip opens with the hotels its file names already listed (name only), once per reading:
+  // a hotel the admin then removes stays removed. The file reader does the same (tripProposalFinalize.ts).
+  const opening = useMemo(() => proposal.actions.map((action) => (isNewTripAction(action)
+    ? withSuggestedHotelProfiles(record(action.fields)) : record(action.fields))), [proposal]);
+  const fieldsOf = (index: number): Row => drafts[index] ?? opening[index] ?? {};
   // Functional: the full editor answers later, after other edits may have landed.
   const setDraft = (index: number, next: Row | ((current: Row) => Row)) => setEdits((prev) => {
     const base = prev.proposal === proposal ? prev : { proposal, drafts: {}, open: {} };
-    const current = base.drafts[index] ?? record(proposal.actions[index]?.fields);
+    const current = base.drafts[index] ?? opening[index] ?? {};
     return { ...base, drafts: { ...base.drafts, [index]: typeof next === "function" ? next(current) : next } };
   });
   const openFullEditor = (index: number) => {
@@ -270,10 +275,15 @@ export function ProposalCard({
   });
   const views: Array<ActionView | null> = proposal.actions.map((action) =>
     hasPlannedLines(action) ? actionView(action, tripFor(action.trip_id), { live: isPending }) : null);
+  // The public pages the server read after the save (savedTripLinks.ts); a draft or hidden trip has none.
+  const savedLinks = (message.savedLinks || []).filter((link) => link.url);
+  // A card saved before the server sent links: the slug the trip list holds, if any.
   const websiteLink = (() => {
+    if (message.savedLinks) return null;
     const id = proposal.actions.find((action) => action.trip_id)?.trip_id;
-    const trip = tripFor(id);
-    const slug = (trip?.extra?.website_sync as { website_slug?: string } | null | undefined)?.website_slug;
+    const extra = tripFor(id)?.extra;
+    const slug = (typeof extra?.website_slug === "string" ? extra.website_slug : "")
+      || (extra?.website_sync as { website_slug?: string } | null | undefined)?.website_slug;
     return slug ? `https://uudamtravel.mn/mn/trips/${encodeURIComponent(slug)}` : null;
   })();
 
@@ -364,9 +374,9 @@ export function ProposalCard({
   const issues = creates.flatMap((index) => reviewIssues(fieldsOf(index)).map((issue) => ({ ...issue, index })));
   const saveBlock = issues.find((issue) => issue.blocks === "save");
   const publishBlock = saveBlock ?? issues.find((issue) => issue.blocks === "publish");
-  const priceless = issues.some((issue) => issue.key === "price");
   const tripTag = (index: number) => (creates.length > 1 ? `«${described[index]?.target || `Аялал ${index + 1}`}»: ` : "");
-  const save = (mode: "draft" | "publish") => onApply({ ...message, proposal: reviewedProposal(proposal, drafts, mode), reviewed: true, savedAs: mode });
+  // What is on screen is what is saved, the opening hotels included.
+  const save = (mode: "draft" | "publish") => onApply({ ...message, proposal: reviewedProposal(proposal, Object.fromEntries(creates.map((index) => [index, fieldsOf(index)])), mode), reviewed: true, savedAs: mode });
 
   /* ---- clarification drafts ---- */
   const answerFor = (q: ClarificationQuestion) =>
@@ -704,12 +714,12 @@ export function ProposalCard({
               {publishBlock ? (
                 <span className="flex items-start gap-1.5 font-medium text-warning">
                   <Icons.alert size={13} className="mt-0.5 shrink-0" />
-                  <span>{tripTag(publishBlock.index)}{publishBlock.text}</span>
+                  <span>{tripTag(publishBlock.index)}{publishBlock.text}{publishBlock.blocks === "publish" && !saveBlock ? " Ноорог болгон хадгалж болно." : ""}</span>
                 </span>
               ) : (
                 <span className="flex items-start gap-1.5 text-ink-muted">
                   <Icons.check size={13} className="mt-0.5 shrink-0 text-success" />
-                  <span>Нийтлэхэд бэлэн.{priceless ? " Үнэ оруулаагүй тул сайтад «Үнэ лавлах» гэж гарна." : ""} Ноорог нь сайтад гарахгүй, бот хариулахгүй.</span>
+                  <span>Нийтлэхэд бэлэн. Ноорог нь сайтад гарахгүй, бот хариулахгүй.</span>
                 </span>
               )}
             </p>
@@ -755,19 +765,35 @@ export function ProposalCard({
       )}
       {state === "applied" && (
         <footer className={cx(footerCls, "flex flex-wrap items-center justify-between gap-3 bg-success-soft/50")}>
-          <p className="flex min-w-0 flex-1 basis-56 items-start gap-2 text-sm leading-6 text-ink">
+          <div className="flex min-w-0 flex-1 basis-56 items-start gap-2 text-sm leading-6 text-ink">
             <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-success text-white"><Icons.check size={12} /></span>
-            <span className="min-w-0">
-              <span className="font-semibold text-success">
-                {message.savedAs === "draft" ? "Ноорог болгон хадгаллаа." : message.savedAs === "publish" ? "Нийтлэгдлээ." : "Хадгалагдлаа."}
-              </span>{" "}
-              <span className="text-ink-muted">
-                {message.savedAs === "draft"
-                  ? "Сайтад гараагүй, бот хариулахгүй. «Аяллууд» хэсгээс нээж засаад нийтэлнэ."
-                  : message.savedAs === "publish" ? "Сайт болон чатботод орлоо." : message.resultText}
-              </span>
-            </span>
-          </p>
+            <div className="min-w-0">
+              <p>
+                <span className="font-semibold text-success">
+                  {message.savedAs === "draft" ? "Ноорог болгон хадгаллаа." : message.savedAs === "publish" ? "Нийтлэгдлээ." : "Хадгалагдлаа."}
+                </span>{" "}
+                <span className="text-ink-muted">
+                  {message.savedAs === "draft"
+                    ? "Ноорог — сайтад гараагүй, бот хариулахгүй. «Аяллууд» хэсгээс нээж засаад нийтэлнэ."
+                    : message.savedAs === "publish" ? "Сайт болон чатботод орлоо." : message.resultText}
+                </span>
+              </p>
+              {savedLinks.length > 0 && (
+                <ul className="mt-1 space-y-0.5" aria-label="Сайт дээрх хуудас">
+                  {savedLinks.map((link) => (
+                    <li key={link.trip_id} className="min-w-0 text-[13px] leading-5">
+                      {savedLinks.length > 1 && link.route_name && <span className="text-ink-muted">«{link.route_name}»: </span>}
+                      <a href={link.url!} target="_blank" rel="noopener noreferrer"
+                        className="break-all font-medium text-brand underline decoration-brand/40 underline-offset-4 hover:decoration-brand">
+                        {link.url!.replace(/^https:\/\//, "")}
+                      </a>
+                      {link.pending && <span className="text-ink-subtle"> · сайтад орж байна, хэдэн секундын дараа нээгдэнэ</span>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
           <span className="flex items-center gap-3">
             {websiteLink && (
               <a href={websiteLink} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-brand underline decoration-brand/40 underline-offset-4 hover:decoration-brand">

@@ -5,6 +5,7 @@
  */
 import type { AIProposal, ProposalMsg } from "./adminTypes";
 import { reviewedFields } from "./tripReview";
+import type { SavedTripLink } from "./savedTripLinks";
 
 type Row = Record<string, unknown>;
 
@@ -66,8 +67,8 @@ export const EXPIRED_SAVE_TEXT =
   "Энэ санал 24 цагаас хуучирсан тул хадгалахгүй — аяллын мэдээлэл тэр хооронд өөрчлөгдсөн байж магадгүй. Зааврыг дахин илгээнэ үү.";
 
 export type ApplyOutcome =
-  /** Saved; `text` is the server's per-trip lines (Mongolian). */
-  | { kind: "saved"; text: string }
+  /** Saved; `text` is the server's per-trip lines (Mongolian), `links` each saved trip's public page. */
+  | { kind: "saved"; text: string; links: SavedTripLink[] }
   /** Nothing saved: the proposal stays open to correct and save again. */
   | { kind: "retry"; text: string }
   /** The stored proposal is older than a day (409 proposal_expired): ask again. */
@@ -75,6 +76,23 @@ export type ApplyOutcome =
   /** No answer (network, gateway timeout): it may or may not have been saved. */
   | { kind: "unknown"; text: string }
   | { kind: "failed"; text: string };
+
+/** The links the save answer carries, each checked: only an https page on the trip website is kept. */
+export function savedLinksOf(value: unknown): SavedTripLink[] {
+  return (Array.isArray(value) ? value : []).flatMap((entry) => {
+    const link = (entry && typeof entry === "object" ? entry : {}) as Row;
+    const tripId = typeof link.trip_id === "string" ? link.trip_id : "";
+    if (!tripId) return [];
+    const url = typeof link.url === "string" && /^https:\/\/uudamtravel\.mn\/mn\/trips\/[^/\s]+$/.test(link.url) ? link.url : null;
+    return [{
+      trip_id: tripId,
+      route_name: typeof link.route_name === "string" ? link.route_name : "",
+      status: typeof link.status === "string" ? link.status : "",
+      url,
+      ...(url && link.pending === true ? { pending: true } : {}),
+    }];
+  });
+}
 
 /**
  * What one save answer means. `status` is null when no answer arrived at all. A repeated save
@@ -90,9 +108,9 @@ export function applyOutcome(status: number | null, json: unknown, options: { st
     return { kind: "expired", text: typeof body.message === "string" && body.message.trim() ? body.message : EXPIRED_SAVE_TEXT };
   }
   if (status >= 200 && status < 300 && body.ok !== false) {
-    if (body.message === "Request already applied.") return { kind: "saved", text: "Өмнө нь хадгалагдсан байна." };
+    if (body.message === "Request already applied.") return { kind: "saved", text: "Өмнө нь хадгалагдсан байна.", links: [] };
     const results = Array.isArray(body.results) ? body.results.map(String).filter(Boolean) : [];
-    return { kind: "saved", text: results.join(" • ") || "Хадгалагдлаа." };
+    return { kind: "saved", text: results.join(" • ") || "Хадгалагдлаа.", links: savedLinksOf(body.links) };
   }
   if (applyCanRetry(status, body)) return { kind: "retry", text: applyFailureText(body) };
   return { kind: "failed", text: applyFailureText(body) };
